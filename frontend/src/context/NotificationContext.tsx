@@ -1,0 +1,179 @@
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { playNotificationPing } from '@/lib/notification-sound';
+
+// NotificationKind mirrors backend service.NotificationKind. Adding a new
+// kind here is the single client-side place where a new alert flavor is
+// recognized — keep this in lockstep with the Go side.
+export type NotificationKind = 'message' | 'mention' | 'thread_reply';
+
+export interface NotificationPayload {
+  kind: NotificationKind;
+  title: string;
+  body: string;
+  deepLink: string;
+  parentID: string;
+  parentType: 'channel' | 'conversation';
+  messageID?: string;
+  createdAt: string;
+}
+
+type Permission = NotificationPermission | 'unsupported';
+
+interface NotificationPrefs {
+  // User-facing toggles persisted to localStorage. Independent of OS
+  // permission so a user can keep notifications enabled but silenced.
+  soundEnabled: boolean;
+  browserEnabled: boolean;
+}
+
+interface NotificationContextValue {
+  prefs: NotificationPrefs;
+  setSoundEnabled: (v: boolean) => void;
+  setBrowserEnabled: (v: boolean) => void;
+  permission: Permission;
+  requestPermission: () => Promise<Permission>;
+  // Called by the WebSocket handler when a notification.new event arrives.
+  // The context decides whether to play sound / show OS popup based on the
+  // current view (suppress alerts for the channel/conversation already on
+  // screen) and the user prefs.
+  dispatch: (n: NotificationPayload) => void;
+  // Routes used by the page-on-screen suppression. ChatPage calls these.
+  setActiveParent: (parentID: string | null) => void;
+}
+
+const STORAGE_KEY = 'ex.notifications.prefs.v1';
+
+function loadPrefs(): NotificationPrefs {
+  if (typeof localStorage === 'undefined') {
+    return { soundEnabled: true, browserEnabled: true };
+  }
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return { soundEnabled: true, browserEnabled: true };
+    const parsed = JSON.parse(raw) as Partial<NotificationPrefs>;
+    return {
+      soundEnabled: parsed.soundEnabled ?? true,
+      browserEnabled: parsed.browserEnabled ?? true,
+    };
+  } catch {
+    return { soundEnabled: true, browserEnabled: true };
+  }
+}
+
+function savePrefs(p: NotificationPrefs) {
+  if (typeof localStorage === 'undefined') return;
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(p));
+  } catch {
+    // ignore
+  }
+}
+
+function readPermission(): Permission {
+  if (typeof window === 'undefined' || !('Notification' in window)) return 'unsupported';
+  return Notification.permission;
+}
+
+const NotificationContext = createContext<NotificationContextValue | undefined>(undefined);
+
+export function NotificationProvider({ children }: { children: ReactNode }) {
+  const [prefs, setPrefs] = useState<NotificationPrefs>(loadPrefs);
+  const [permission, setPermission] = useState<Permission>(readPermission);
+  const activeParentRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    savePrefs(prefs);
+  }, [prefs]);
+
+  const setSoundEnabled = useCallback((v: boolean) => {
+    setPrefs((p) => ({ ...p, soundEnabled: v }));
+  }, []);
+
+  const setBrowserEnabled = useCallback((v: boolean) => {
+    setPrefs((p) => ({ ...p, browserEnabled: v }));
+  }, []);
+
+  const requestPermission = useCallback(async (): Promise<Permission> => {
+    if (typeof window === 'undefined' || !('Notification' in window)) {
+      return 'unsupported';
+    }
+    const result = await Notification.requestPermission();
+    setPermission(result);
+    return result;
+  }, []);
+
+  const setActiveParent = useCallback((id: string | null) => {
+    activeParentRef.current = id;
+  }, []);
+
+  const dispatch = useCallback(
+    (n: NotificationPayload) => {
+      // Don't alert when the user is staring at the conversation/channel
+      // the message landed in — they already see it.
+      if (activeParentRef.current && activeParentRef.current === n.parentID) {
+        return;
+      }
+      if (prefs.soundEnabled) {
+        playNotificationPing();
+      }
+      if (
+        prefs.browserEnabled &&
+        typeof window !== 'undefined' &&
+        'Notification' in window &&
+        Notification.permission === 'granted' &&
+        document.visibilityState !== 'visible'
+      ) {
+        try {
+          const note = new Notification(n.title, {
+            body: n.body,
+            tag: `${n.parentType}:${n.parentID}`,
+            silent: prefs.soundEnabled, // OS sound off when we already played our own
+          });
+          note.onclick = () => {
+            window.focus();
+            if (n.deepLink) window.location.href = n.deepLink;
+            note.close();
+          };
+        } catch {
+          // Notification constructor can throw on some embedded browsers;
+          // ignore — sound + in-app indicators are still in play.
+        }
+      }
+    },
+    [prefs.soundEnabled, prefs.browserEnabled],
+  );
+
+  const value = useMemo(
+    () => ({
+      prefs,
+      setSoundEnabled,
+      setBrowserEnabled,
+      permission,
+      requestPermission,
+      dispatch,
+      setActiveParent,
+    }),
+    [prefs, permission, requestPermission, dispatch, setActiveParent, setSoundEnabled, setBrowserEnabled],
+  );
+
+  return <NotificationContext.Provider value={value}>{children}</NotificationContext.Provider>;
+}
+
+// noopValue is returned when useNotifications is called outside a provider.
+// This keeps test setups simple — a component that only *consumes* the
+// dispatch (e.g. for active-parent tracking) shouldn't force every test
+// to wrap in NotificationProvider just to render. Throwing here was the
+// original posture but made unrelated layout tests fail noisily.
+const noopValue: NotificationContextValue = {
+  prefs: { soundEnabled: false, browserEnabled: false },
+  setSoundEnabled: () => {},
+  setBrowserEnabled: () => {},
+  permission: 'unsupported',
+  requestPermission: async () => 'unsupported',
+  dispatch: () => {},
+  setActiveParent: () => {},
+};
+
+export function useNotifications(): NotificationContextValue {
+  return useContext(NotificationContext) ?? noopValue;
+}

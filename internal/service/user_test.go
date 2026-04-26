@@ -1,0 +1,482 @@
+package service
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	"github.com/alicebob/miniredis/v2"
+	"github.com/DigitalTolk/ex/internal/cache"
+	"github.com/DigitalTolk/ex/internal/model"
+)
+
+// fakeAvatarSigner returns a deterministic URL so we can verify it ends up on
+// the user struct after the cache round-trip.
+type fakeAvatarSigner struct{}
+
+func (fakeAvatarSigner) PresignedGetURL(_ context.Context, key string, _ time.Duration) (string, error) {
+	return "https://signed.example/" + key, nil
+}
+
+func TestNewUserService(t *testing.T) {
+	users := newMockUserStore()
+	cache := newMockCache()
+	svc := NewUserService(users, cache, nil, nil)
+	if svc == nil {
+		t.Fatal("expected non-nil UserService")
+	}
+}
+
+func TestUserService_GetByID_CacheHit(t *testing.T) {
+	users := newMockUserStore()
+	cache := newMockCache()
+	svc := NewUserService(users, cache, nil, nil)
+
+	user := &model.User{
+		ID:          "u1",
+		Email:       "u1@example.com",
+		DisplayName: "User One",
+		SystemRole:  model.SystemRoleMember,
+	}
+	cache.users[user.ID] = user
+
+	got, err := svc.GetByID(context.Background(), "u1")
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if got.ID != user.ID {
+		t.Errorf("ID = %q, want %q", got.ID, user.ID)
+	}
+}
+
+func TestUserService_GetByID_CacheMiss(t *testing.T) {
+	users := newMockUserStore()
+	cache := newMockCache()
+	svc := NewUserService(users, cache, nil, nil)
+
+	user := &model.User{
+		ID:          "u2",
+		Email:       "u2@example.com",
+		DisplayName: "User Two",
+		SystemRole:  model.SystemRoleMember,
+	}
+	users.users[user.ID] = user
+
+	got, err := svc.GetByID(context.Background(), "u2")
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if got.ID != user.ID {
+		t.Errorf("ID = %q, want %q", got.ID, user.ID)
+	}
+
+	// Should now be cached.
+	if _, ok := cache.users["u2"]; !ok {
+		t.Error("expected user to be cached after store fetch")
+	}
+}
+
+func TestUserService_GetByID_NotFound(t *testing.T) {
+	users := newMockUserStore()
+	cache := newMockCache()
+	svc := NewUserService(users, cache, nil, nil)
+
+	_, err := svc.GetByID(context.Background(), "nonexistent")
+	if err == nil {
+		t.Fatal("expected error for non-existent user")
+	}
+}
+
+func TestUserService_GetByID_NilCache(t *testing.T) {
+	users := newMockUserStore()
+	svc := NewUserService(users, nil, nil, nil)
+
+	user := &model.User{
+		ID:          "u3",
+		Email:       "u3@example.com",
+		DisplayName: "User Three",
+		SystemRole:  model.SystemRoleMember,
+	}
+	users.users[user.ID] = user
+
+	got, err := svc.GetByID(context.Background(), "u3")
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if got.ID != "u3" {
+		t.Errorf("ID = %q, want %q", got.ID, "u3")
+	}
+}
+
+func TestUserService_GetByEmail(t *testing.T) {
+	users := newMockUserStore()
+	svc := NewUserService(users, nil, nil, nil)
+
+	user := &model.User{
+		ID:          "u4",
+		Email:       "u4@example.com",
+		DisplayName: "User Four",
+		SystemRole:  model.SystemRoleMember,
+	}
+	users.users[user.ID] = user
+	users.emailIndex[user.Email] = user
+
+	got, err := svc.GetByEmail(context.Background(), "u4@example.com")
+	if err != nil {
+		t.Fatalf("GetByEmail: %v", err)
+	}
+	if got.ID != user.ID {
+		t.Errorf("ID = %q, want %q", got.ID, user.ID)
+	}
+}
+
+func TestUserService_GetByEmail_NotFound(t *testing.T) {
+	users := newMockUserStore()
+	svc := NewUserService(users, nil, nil, nil)
+
+	_, err := svc.GetByEmail(context.Background(), "noone@example.com")
+	if err == nil {
+		t.Fatal("expected error for non-existent email")
+	}
+}
+
+func TestUserService_Update(t *testing.T) {
+	users := newMockUserStore()
+	cache := newMockCache()
+	svc := NewUserService(users, cache, nil, nil)
+
+	user := &model.User{
+		ID:          "u5",
+		Email:       "u5@example.com",
+		DisplayName: "Old Name",
+		SystemRole:  model.SystemRoleMember,
+	}
+	users.users[user.ID] = user
+	users.emailIndex[user.Email] = user
+
+	newName := "New Name"
+	newKey := "avatars/u5/some-id"
+	updated, err := svc.Update(context.Background(), "u5", &newName, &newKey)
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if updated.DisplayName != newName {
+		t.Errorf("DisplayName = %q, want %q", updated.DisplayName, newName)
+	}
+	if updated.AvatarKey != newKey {
+		t.Errorf("AvatarKey = %q, want %q", updated.AvatarKey, newKey)
+	}
+}
+
+func TestUserService_Update_OIDCUserCannotChangeDisplayName(t *testing.T) {
+	users := newMockUserStore()
+	svc := NewUserService(users, nil, nil, nil)
+
+	user := &model.User{
+		ID:           "u-sso",
+		Email:        "sso@example.com",
+		DisplayName:  "Upstream Name",
+		SystemRole:   model.SystemRoleMember,
+		AuthProvider: model.AuthProviderOIDC,
+	}
+	users.users[user.ID] = user
+	users.emailIndex[user.Email] = user
+
+	newName := "Local Override"
+	if _, err := svc.Update(context.Background(), "u-sso", &newName, nil); err == nil {
+		t.Fatal("expected error when OIDC user tries to rename themselves")
+	}
+	if user.DisplayName != "Upstream Name" {
+		t.Errorf("DisplayName changed despite SSO lock: %q", user.DisplayName)
+	}
+}
+
+func TestUserService_Update_OIDCUserSameDisplayNameAllowed(t *testing.T) {
+	// Sending the unchanged displayName should be a no-op and must not
+	// trigger the SSO guard — otherwise PATCHing other fields with the
+	// existing name in the payload would fail.
+	users := newMockUserStore()
+	svc := NewUserService(users, nil, nil, nil)
+
+	user := &model.User{
+		ID:           "u-sso2",
+		Email:        "sso2@example.com",
+		DisplayName:  "Upstream Name",
+		AvatarKey:    "avatars/u-sso2/old",
+		SystemRole:   model.SystemRoleMember,
+		AuthProvider: model.AuthProviderOIDC,
+	}
+	users.users[user.ID] = user
+	users.emailIndex[user.Email] = user
+
+	same := "Upstream Name"
+	newKey := "avatars/u-sso2/new"
+	if _, err := svc.Update(context.Background(), "u-sso2", &same, &newKey); err != nil {
+		t.Fatalf("Update with unchanged name should succeed: %v", err)
+	}
+	if user.AvatarKey != newKey {
+		t.Errorf("AvatarKey not updated: %q", user.AvatarKey)
+	}
+}
+
+func TestUserService_Update_NotFound(t *testing.T) {
+	users := newMockUserStore()
+	svc := NewUserService(users, nil, nil, nil)
+
+	name := "X"
+	_, err := svc.Update(context.Background(), "nonexistent", &name, nil)
+	if err == nil {
+		t.Fatal("expected error for non-existent user")
+	}
+}
+
+func TestUserService_Update_PartialFields(t *testing.T) {
+	users := newMockUserStore()
+	svc := NewUserService(users, nil, nil, nil)
+
+	user := &model.User{
+		ID:          "u6",
+		Email:       "u6@example.com",
+		DisplayName: "Original",
+		AvatarKey:   "avatars/u6/old",
+		SystemRole:  model.SystemRoleMember,
+	}
+	users.users[user.ID] = user
+	users.emailIndex[user.Email] = user
+
+	// Only update display name.
+	newName := "Updated"
+	updated, err := svc.Update(context.Background(), "u6", &newName, nil)
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if updated.DisplayName != "Updated" {
+		t.Errorf("DisplayName = %q, want %q", updated.DisplayName, "Updated")
+	}
+	if updated.AvatarKey != "avatars/u6/old" {
+		t.Errorf("AvatarKey should remain unchanged, got %q", updated.AvatarKey)
+	}
+}
+
+func TestUserService_GetBatch(t *testing.T) {
+	users := newMockUserStore()
+	cache := newMockCache()
+	svc := NewUserService(users, cache, nil, nil)
+
+	users.users["b1"] = &model.User{ID: "b1", DisplayName: "Alice"}
+	users.users["b2"] = &model.User{ID: "b2", DisplayName: "Bob"}
+
+	got, err := svc.GetBatch(context.Background(), []string{"b1", "b2", "missing"})
+	if err != nil {
+		t.Fatalf("GetBatch: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("expected 2 users, got %d", len(got))
+	}
+}
+
+func TestUserService_GetBatch_Empty(t *testing.T) {
+	users := newMockUserStore()
+	svc := NewUserService(users, nil, nil, nil)
+
+	got, err := svc.GetBatch(context.Background(), []string{})
+	if err != nil {
+		t.Fatalf("GetBatch: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("expected 0 users, got %d", len(got))
+	}
+}
+
+func TestUserService_List(t *testing.T) {
+	users := newMockUserStore()
+	svc := NewUserService(users, nil, nil, nil)
+
+	_, _, err := svc.List(context.Background(), 50, "")
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+}
+
+func TestUserService_Search(t *testing.T) {
+	users := newMockUserStore()
+	svc := NewUserService(users, nil, nil, nil)
+
+	users.users["s1"] = &model.User{ID: "s1", Email: "alice@example.com", DisplayName: "Alice Smith"}
+	users.users["s2"] = &model.User{ID: "s2", Email: "bob@example.com", DisplayName: "Bob Jones"}
+	users.users["s3"] = &model.User{ID: "s3", Email: "charlie@example.com", DisplayName: "Charlie Smith"}
+
+	// Search by display name.
+	results, err := svc.Search(context.Background(), "smith", 10)
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(results) != 2 {
+		t.Errorf("expected 2 results for 'smith', got %d", len(results))
+	}
+
+	// Search by email.
+	results, err = svc.Search(context.Background(), "bob@", 10)
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(results) != 1 {
+		t.Errorf("expected 1 result for 'bob@', got %d", len(results))
+	}
+
+	// Search with limit.
+	results, err = svc.Search(context.Background(), "example", 1)
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(results) != 1 {
+		t.Errorf("expected 1 result with limit=1, got %d", len(results))
+	}
+
+	// Search with no matches.
+	results, err = svc.Search(context.Background(), "zzz", 10)
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(results) != 0 {
+		t.Errorf("expected 0 results for 'zzz', got %d", len(results))
+	}
+}
+
+func TestUserService_UpdateRole(t *testing.T) {
+	users := newMockUserStore()
+	cache := newMockCache()
+	svc := NewUserService(users, cache, nil, nil)
+
+	user := &model.User{
+		ID:          "role-u",
+		Email:       "role@example.com",
+		DisplayName: "Role User",
+		SystemRole:  model.SystemRoleMember,
+	}
+	users.users[user.ID] = user
+	users.emailIndex[user.Email] = user
+
+	updated, err := svc.UpdateRole(context.Background(), "actor", "role-u", model.SystemRoleAdmin)
+	if err != nil {
+		t.Fatalf("UpdateRole: %v", err)
+	}
+	if updated.SystemRole != model.SystemRoleAdmin {
+		t.Errorf("SystemRole = %q, want %q", updated.SystemRole, model.SystemRoleAdmin)
+	}
+	if users.users["role-u"].SystemRole != model.SystemRoleAdmin {
+		t.Error("expected role to persist in store")
+	}
+}
+
+func TestUserService_UpdateRole_NotFound(t *testing.T) {
+	users := newMockUserStore()
+	svc := NewUserService(users, nil, nil, nil)
+
+	_, err := svc.UpdateRole(context.Background(), "actor", "missing", model.SystemRoleAdmin)
+	if err == nil {
+		t.Fatal("expected error for non-existent user")
+	}
+}
+
+func TestUserService_Search_CaseInsensitive(t *testing.T) {
+	users := newMockUserStore()
+	svc := NewUserService(users, nil, nil, nil)
+
+	users.users["ci1"] = &model.User{ID: "ci1", Email: "UPPER@EXAMPLE.COM", DisplayName: "Upper Case"}
+
+	results, err := svc.Search(context.Background(), "upper", 10)
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(results) != 1 {
+		t.Errorf("expected 1 result, got %d", len(results))
+	}
+}
+
+// TestUserService_AvatarPersistsAcrossCacheRoundTrip is a regression test for
+// the bug where avatars vanished on hard refresh. The public model.User hides
+// AvatarKey from JSON, but the Redis cache marshals to JSON — so naive
+// caching would strip the key, leaving resolveAvatar with nothing to sign.
+// This test uses the real RedisCache (backed by miniredis) plus a real-shaped
+// avatar signer to prove the full GetMe → cache hit → resolved-URL flow.
+func TestUserService_AvatarPersistsAcrossCacheRoundTrip(t *testing.T) {
+	mr := miniredis.RunT(t)
+	c, err := cache.NewRedisCache("redis://" + mr.Addr())
+	if err != nil {
+		t.Fatalf("NewRedisCache: %v", err)
+	}
+
+	users := newMockUserStore()
+	users.users["u1"] = &model.User{
+		ID:          "u1",
+		Email:       "u1@x.com",
+		DisplayName: "U1",
+		AvatarKey:   "avatars/u1/abc",
+		SystemRole:  model.SystemRoleMember,
+	}
+
+	svc := NewUserService(users, c, fakeAvatarSigner{}, nil)
+
+	// First call: cache miss → loads from store → caches → resolves URL.
+	first, err := svc.GetByID(context.Background(), "u1")
+	if err != nil {
+		t.Fatalf("first GetByID: %v", err)
+	}
+	if first.AvatarURL != "https://signed.example/avatars/u1/abc" {
+		t.Fatalf("first AvatarURL = %q, want signed URL", first.AvatarURL)
+	}
+
+	// Second call: cache hit. Without the AvatarKey-preserving cache record,
+	// resolveAvatar would have nothing to sign and AvatarURL would be empty.
+	second, err := svc.GetByID(context.Background(), "u1")
+	if err != nil {
+		t.Fatalf("second GetByID: %v", err)
+	}
+	if second.AvatarKey != "avatars/u1/abc" {
+		t.Errorf("AvatarKey lost across cache round-trip: got %q", second.AvatarKey)
+	}
+	if second.AvatarURL != "https://signed.example/avatars/u1/abc" {
+		t.Errorf("AvatarURL not regenerated on cache hit: got %q", second.AvatarURL)
+	}
+}
+
+// TestUserService_UpdateAvatarKey_RegeneratesURLAfterRefresh simulates the
+// post-upload flow: PATCH /users/me with new avatarKey → cache invalidated →
+// next GetByID hits store, caches, regenerates URL. Hard refresh should
+// continue to show the avatar.
+func TestUserService_UpdateAvatarKey_RegeneratesURLAfterRefresh(t *testing.T) {
+	mr := miniredis.RunT(t)
+	c, err := cache.NewRedisCache("redis://" + mr.Addr())
+	if err != nil {
+		t.Fatalf("NewRedisCache: %v", err)
+	}
+
+	users := newMockUserStore()
+	users.users["u1"] = &model.User{
+		ID: "u1", Email: "u1@x.com", DisplayName: "U1", SystemRole: model.SystemRoleMember,
+	}
+
+	svc := NewUserService(users, c, fakeAvatarSigner{}, nil)
+
+	// Upload sets the new key.
+	newKey := "avatars/u1/new-upload"
+	if _, err := svc.Update(context.Background(), "u1", nil, &newKey); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	// Simulate hard refresh: cache was invalidated by Update; first GetByID
+	// reloads from store. Subsequent calls hit cache.
+	for i := 0; i < 3; i++ {
+		got, err := svc.GetByID(context.Background(), "u1")
+		if err != nil {
+			t.Fatalf("GetByID #%d: %v", i, err)
+		}
+		if got.AvatarKey != newKey {
+			t.Errorf("call %d: AvatarKey = %q, want %q", i, got.AvatarKey, newKey)
+		}
+		if got.AvatarURL != "https://signed.example/"+newKey {
+			t.Errorf("call %d: AvatarURL = %q, want signed URL with new key", i, got.AvatarURL)
+		}
+	}
+}

@@ -1,0 +1,177 @@
+import { useState, useEffect, useMemo } from 'react';
+import { useParams } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
+import { Header } from '@/components/layout/Header';
+import { MessageList } from './MessageList';
+import { MessageInput } from './MessageInput';
+import { MemberList } from './MemberList';
+import { ThreadPanel } from './ThreadPanel';
+import { useConversation } from '@/hooks/useConversations';
+import {
+  useConversationMessages,
+  useSendConversationMessage,
+} from '@/hooks/useMessages';
+import { useAuth } from '@/context/AuthContext';
+import { useUnread } from '@/context/UnreadContext';
+import { usePresence } from '@/context/PresenceContext';
+import { useNotifications } from '@/context/NotificationContext';
+import { apiFetch } from '@/lib/api';
+import type { User } from '@/types';
+import type { UserMapEntry } from './MessageList';
+
+export function ConversationView() {
+  const { id } = useParams<{ id: string }>();
+  const { user } = useAuth();
+  const { clearConversationUnread, setActiveConversation } = useUnread();
+  const { online } = usePresence();
+  const { setActiveParent } = useNotifications();
+  const { data: conversation } = useConversation(id);
+  const {
+    data,
+    hasNextPage,
+    isFetchingNextPage,
+    isLoading,
+    fetchNextPage,
+  } = useConversationMessages(id);
+  const sendMessage = useSendConversationMessage(id);
+
+  useEffect(() => {
+    if (!id) return;
+    clearConversationUnread(id);
+    setActiveConversation(id);
+    setActiveParent(id);
+    return () => {
+      setActiveConversation(null);
+      setActiveParent(null);
+    };
+  }, [id, clearConversationUnread, setActiveConversation, setActiveParent]);
+
+  const [showMembers, setShowMembers] = useState(false);
+  const [threadRootID, setThreadRootID] = useState<string | null>(null);
+
+  const openMembers = () => { setShowMembers(true); setThreadRootID(null); };
+  const closeMembers = () => setShowMembers(false);
+  const openThread = (rid: string) => { setThreadRootID(rid); setShowMembers(false); };
+  const closeThread = () => setThreadRootID(null);
+
+  // Reset thread when the conversation changes; this is a deliberate
+  // synchronous reset, not a sync between external state and React.
+  // eslint-disable-next-line react-hooks/set-state-in-effect
+  useEffect(() => setThreadRootID(null), [id]);
+
+  // Collect all user IDs (participants + authors)
+  const userIDs = useMemo(() => {
+    const ids = new Set<string>();
+    conversation?.participantIDs?.forEach((pid) => ids.add(pid));
+    for (const page of data?.pages ?? []) {
+      for (const msg of page.items) ids.add(msg.authorID);
+    }
+    return Array.from(ids).sort();
+  }, [conversation?.participantIDs, data]);
+
+  const { data: usersData } = useQuery({
+    queryKey: ['users-batch', userIDs],
+    queryFn: () =>
+      apiFetch<User[]>('/api/v1/users/batch', {
+        method: 'POST',
+        body: JSON.stringify({ ids: userIDs }),
+      }),
+    enabled: userIDs.length > 0,
+  });
+
+  const userMap = useMemo(() => {
+    const m: Record<string, UserMapEntry> = {};
+    if (user) m[user.id] = { displayName: user.displayName, avatarURL: user.avatarURL, online: true };
+    if (usersData) {
+      for (const u of usersData) {
+        m[u.id] = { displayName: u.displayName || 'Unknown', avatarURL: u.avatarURL, online: online.has(u.id) };
+      }
+    }
+    return m;
+  }, [user, usersData, online]);
+
+  if (!id) {
+    return (
+      <div className="flex flex-1 items-center justify-center text-muted-foreground">
+        Select a conversation
+      </div>
+    );
+  }
+
+  // Derive title from conversation type and participant names
+  let title = conversation?.name || 'Direct Message';
+  let dmOtherUserAvatar: string | undefined;
+
+  if (conversation?.type === 'dm') {
+    const otherID = conversation.participantIDs?.find((pid) => pid !== user?.id);
+    if (otherID && userMap[otherID]) {
+      title = userMap[otherID].displayName;
+      dmOtherUserAvatar = userMap[otherID].avatarURL;
+    }
+  } else if (conversation?.type === 'group') {
+    const others = (conversation.participantIDs ?? [])
+      .filter((pid) => pid !== user?.id)
+      .map((pid) => userMap[pid]?.displayName)
+      .filter(Boolean) as string[];
+    if (others.length > 0) {
+      title = others.join(', ');
+    } else if (conversation?.name) {
+      title = conversation.name;
+    }
+  }
+
+  const memberList = (conversation?.participantIDs ?? []).map((pid) => ({
+    userID: pid,
+    displayName: userMap[pid]?.displayName ?? 'Unknown',
+    channelID: '',
+    role: 'member' as const,
+    joinedAt: '',
+  }));
+
+  return (
+    <div className="flex flex-1 overflow-hidden">
+      <div className="flex flex-1 flex-col overflow-hidden">
+        <Header
+          title={title}
+          avatarURL={conversation?.type === 'dm' ? dmOtherUserAvatar : undefined}
+          memberCount={conversation?.type === 'group' ? conversation?.participantIDs?.length : undefined}
+          onMembersClick={conversation?.type === 'group' ? () => (showMembers ? closeMembers() : openMembers()) : undefined}
+        />
+        <MessageList
+          pages={data?.pages ?? []}
+          hasNextPage={hasNextPage}
+          isFetchingNextPage={isFetchingNextPage}
+          isLoading={isLoading}
+          fetchNextPage={fetchNextPage}
+          currentUserId={user?.id}
+          conversationId={id}
+          userMap={userMap}
+          onReplyInThread={openThread}
+        />
+        <MessageInput
+          onSend={sendMessage.mutate}
+          disabled={sendMessage.isPending}
+          placeholder={`Message ${title}`}
+          focusKey={id}
+        />
+      </div>
+      {threadRootID && (
+        <ThreadPanel
+          conversationId={id}
+          threadRootID={threadRootID}
+          onClose={closeThread}
+          userMap={userMap}
+          currentUserId={user?.id}
+        />
+      )}
+      {showMembers && !threadRootID && conversation?.type === 'group' && (
+        <MemberList
+          members={memberList}
+          userMap={userMap}
+          currentUserId={user?.id}
+          onClose={closeMembers}
+        />
+      )}
+    </div>
+  );
+}

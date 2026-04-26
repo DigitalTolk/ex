@@ -1,0 +1,111 @@
+package service
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"regexp"
+	"time"
+
+	"github.com/DigitalTolk/ex/internal/events"
+	"github.com/DigitalTolk/ex/internal/model"
+	"github.com/DigitalTolk/ex/internal/pubsub"
+	"github.com/DigitalTolk/ex/internal/store"
+)
+
+// EmojiStore defines the persistence operations the EmojiService depends on.
+type EmojiStore interface {
+	Create(ctx context.Context, e *model.CustomEmoji) error
+	GetByName(ctx context.Context, name string) (*model.CustomEmoji, error)
+	List(ctx context.Context) ([]*model.CustomEmoji, error)
+	Delete(ctx context.Context, name string) error
+}
+
+// EmojiService manages workspace custom emojis.
+type EmojiService struct {
+	emojis    EmojiStore
+	users     UserStore
+	publisher Publisher
+}
+
+// NewEmojiService constructs an EmojiService.
+func NewEmojiService(emojis EmojiStore, users UserStore, publisher Publisher) *EmojiService {
+	return &EmojiService{emojis: emojis, users: users, publisher: publisher}
+}
+
+var emojiNameRE = regexp.MustCompile(`^[a-z0-9_+-]{1,32}$`)
+
+// ValidateName returns an error if name is not a valid emoji shortcode.
+func ValidateEmojiName(name string) error {
+	if !emojiNameRE.MatchString(name) {
+		return errors.New("emoji name must be 1-32 chars of [a-z0-9_+-]")
+	}
+	return nil
+}
+
+// Create stores a new custom emoji and publishes a global event so connected
+// clients can refresh their emoji catalog.
+func (s *EmojiService) Create(ctx context.Context, userID, name, imageURL string) (*model.CustomEmoji, error) {
+	if err := ValidateEmojiName(name); err != nil {
+		return nil, err
+	}
+	if imageURL == "" {
+		return nil, errors.New("emoji: imageURL is required")
+	}
+
+	u, err := s.users.GetUser(ctx, userID)
+	if err != nil {
+		return nil, fmt.Errorf("emoji: get user: %w", err)
+	}
+	if u.SystemRole == model.SystemRoleGuest {
+		return nil, errors.New("emoji: guests cannot upload emojis")
+	}
+
+	e := &model.CustomEmoji{
+		Name:      name,
+		ImageURL:  imageURL,
+		CreatedBy: userID,
+		CreatedAt: time.Now(),
+	}
+	if err := s.emojis.Create(ctx, e); err != nil {
+		if errors.Is(err, store.ErrAlreadyExists) {
+			return nil, errors.New("emoji: name already taken")
+		}
+		return nil, fmt.Errorf("emoji: create: %w", err)
+	}
+
+	events.Publish(ctx, s.publisher, pubsub.GlobalEmojiEvents(), events.EventEmojiAdded, e)
+	return e, nil
+}
+
+// List returns all custom emojis.
+func (s *EmojiService) List(ctx context.Context) ([]*model.CustomEmoji, error) {
+	list, err := s.emojis.List(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("emoji: list: %w", err)
+	}
+	return list, nil
+}
+
+// Delete removes a custom emoji. Only admins or the creator may delete.
+func (s *EmojiService) Delete(ctx context.Context, userID, name string) error {
+	u, err := s.users.GetUser(ctx, userID)
+	if err != nil {
+		return fmt.Errorf("emoji: get user: %w", err)
+	}
+	existing, err := s.emojis.GetByName(ctx, name)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return errors.New("emoji: not found")
+		}
+		return fmt.Errorf("emoji: lookup: %w", err)
+	}
+	if u.SystemRole != model.SystemRoleAdmin && existing.CreatedBy != userID {
+		return errors.New("emoji: not authorized")
+	}
+	if err := s.emojis.Delete(ctx, name); err != nil {
+		return fmt.Errorf("emoji: delete: %w", err)
+	}
+	events.Publish(ctx, s.publisher, pubsub.GlobalEmojiEvents(), events.EventEmojiRemoved, map[string]string{"name": name})
+	return nil
+}
