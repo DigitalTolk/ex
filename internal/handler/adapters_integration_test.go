@@ -73,9 +73,13 @@ func setupDynamoForAdapters(t *testing.T) *store.DB {
 	}
 	ctx := context.Background()
 
+	// Retry generously — GH Actions occasionally TCP-resets connections
+	// to the local container under load and the SDK's default 3-attempt
+	// limit is too tight for that environment.
 	awsCfg, err := awsconfig.LoadDefaultConfig(ctx,
 		awsconfig.WithRegion("us-east-1"),
 		awsconfig.WithCredentialsProvider(credentials.NewStaticCredentialsProvider("dummy", "dummy", "dummy")),
+		awsconfig.WithRetryMaxAttempts(10),
 	)
 	if err != nil {
 		t.Fatalf("load aws config: %v", err)
