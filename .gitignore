@@ -28,7 +28,11 @@ Thumbs.db
 
 # Frontend
 /frontend/node_modules/
-/frontend/dist/
+# Ignore dist *contents* (build artifacts) but keep the directory
+# itself tracked so frontend.go's //go:embed has something to match
+# on a fresh checkout. The dist/.gitignore file is the placeholder.
+/frontend/dist/*
+!/frontend/dist/.gitignore
 /frontend/.vite/
 
 # Build

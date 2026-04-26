@@ -6,6 +6,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
+	"os"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -19,8 +22,20 @@ import (
 	"github.com/DigitalTolk/ex/internal/model"
 )
 
-func setupDynamoDB(t *testing.T) *DB {
-	t.Helper()
+// One DynamoDB Local container is shared by every test in this package.
+// Spinning up a fresh container per test (the original pattern) used to
+// take 60s+ on CI runners and produced flaky "connection reset by peer"
+// failures when the OS killed containers under resource pressure. With a
+// single shared container plus a unique table per test, the run is both
+// faster and isolated — the in-memory data lives only for the binary's
+// lifetime so leaks are bounded.
+var (
+	sharedEndpoint  string
+	sharedAvailable bool
+	tableCounter    atomic.Uint64
+)
+
+func TestMain(m *testing.M) {
 	ctx := context.Background()
 
 	req := testcontainers.ContainerRequest{
@@ -34,21 +49,32 @@ func setupDynamoDB(t *testing.T) *DB {
 		Started:          true,
 	})
 	if err != nil {
-		t.Skipf("skipping: Docker not available: %v", err)
+		// No Docker available — let individual tests skip themselves.
+		log.Printf("integration tests will skip: docker unavailable: %v", err)
+		os.Exit(m.Run())
 	}
-	t.Cleanup(func() { container.Terminate(ctx) })
 
 	host, err := container.Host(ctx)
-	if err != nil {
-		t.Fatalf("get container host: %v", err)
+	if err == nil {
+		port, perr := container.MappedPort(ctx, "8000")
+		if perr == nil {
+			sharedEndpoint = fmt.Sprintf("http://%s:%s", host, port.Port())
+			sharedAvailable = true
+		}
 	}
-	port, err := container.MappedPort(ctx, "8000")
-	if err != nil {
-		t.Fatalf("get mapped port: %v", err)
-	}
-	endpoint := fmt.Sprintf("http://%s:%s", host, port.Port())
 
-	// Use static dummy credentials for DynamoDB Local.
+	code := m.Run()
+	_ = container.Terminate(ctx)
+	os.Exit(code)
+}
+
+// dynamoClient builds an AWS SDK client pointed at the shared DynamoDB
+// Local container. Returns nil + skip-friendly bool if unavailable.
+func dynamoClient(ctx context.Context, t *testing.T) (*dynamodb.Client, bool) {
+	t.Helper()
+	if !sharedAvailable {
+		t.Skip("skipping: Docker / DynamoDB Local not available")
+	}
 	awsCfg, err := awsconfig.LoadDefaultConfig(ctx,
 		awsconfig.WithRegion("us-east-1"),
 		awsconfig.WithCredentialsProvider(credentials.NewStaticCredentialsProvider("dummy", "dummy", "dummy")),
@@ -56,14 +82,25 @@ func setupDynamoDB(t *testing.T) *DB {
 	if err != nil {
 		t.Fatalf("load aws config: %v", err)
 	}
-
 	client := dynamodb.NewFromConfig(awsCfg, func(o *dynamodb.Options) {
-		o.BaseEndpoint = aws.String(endpoint)
+		o.BaseEndpoint = aws.String(sharedEndpoint)
 	})
+	return client, true
+}
 
+func setupDynamoDB(t *testing.T) *DB {
+	t.Helper()
+	ctx := context.Background()
+	client, ok := dynamoClient(ctx, t)
+	if !ok {
+		return nil
+	}
+	// Each test gets a unique table. With -sharedDb the data file is
+	// shared across credentials, so we rely on table-name isolation
+	// instead of separate DynamoDB instances.
 	db := &DB{
 		Client: client,
-		Table:  "test-table",
+		Table:  fmt.Sprintf("test-table-%d", tableCounter.Add(1)),
 	}
 	if err := db.EnsureTable(ctx); err != nil {
 		t.Fatalf("ensure table: %v", err)
@@ -1220,36 +1257,22 @@ func TestEnsureTable_Idempotent(t *testing.T) {
 }
 
 func TestNew_WithEndpoint(t *testing.T) {
-	// Get a DynamoDB Local container to test the New() constructor directly.
+	// Exercises the New() constructor with an endpoint URL. Reuses the
+	// package-shared DynamoDB Local container so we don't pay another
+	// cold-start.
+	if !sharedAvailable {
+		t.Skip("skipping: Docker / DynamoDB Local not available")
+	}
 	ctx := context.Background()
 
-	req := testcontainers.ContainerRequest{
-		Image:        "amazon/dynamodb-local:latest",
-		ExposedPorts: []string{"8000/tcp"},
-		WaitingFor:   wait.ForListeningPort("8000/tcp").WithStartupTimeout(60 * time.Second),
-		Cmd:          []string{"-jar", "DynamoDBLocal.jar", "-inMemory", "-sharedDb"},
-	}
-	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
-		ContainerRequest: req,
-		Started:          true,
-	})
-	if err != nil {
-		t.Skipf("skipping: Docker not available: %v", err)
-	}
-	t.Cleanup(func() { container.Terminate(ctx) })
-
-	host, _ := container.Host(ctx)
-	port, _ := container.MappedPort(ctx, "8000")
-	endpoint := fmt.Sprintf("http://%s:%s", host, port.Port())
-
-	// Set AWS env vars for static credentials so New() works.
 	t.Setenv("AWS_ACCESS_KEY_ID", "dummy")
 	t.Setenv("AWS_SECRET_ACCESS_KEY", "dummy")
 
+	tableName := fmt.Sprintf("test-new-table-%d", tableCounter.Add(1))
 	db, err := New(ctx, DBConfig{
 		Region:   "us-east-1",
-		Endpoint: endpoint,
-		Table:    "test-new-table",
+		Endpoint: sharedEndpoint,
+		Table:    tableName,
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -1257,8 +1280,8 @@ func TestNew_WithEndpoint(t *testing.T) {
 	if db == nil {
 		t.Fatal("expected non-nil DB")
 	}
-	if db.Table != "test-new-table" {
-		t.Errorf("Table = %q, want %q", db.Table, "test-new-table")
+	if db.Table != tableName {
+		t.Errorf("Table = %q, want %q", db.Table, tableName)
 	}
 	if db.Client == nil {
 		t.Fatal("expected non-nil Client")

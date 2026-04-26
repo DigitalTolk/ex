@@ -11,6 +11,9 @@ linters:
     - unused
     - ineffassign
 
-issues:
-  exclude-dirs:
-    - frontend
+  exclusions:
+    paths:
+      - .claude
+      - .github
+      - frontend
+      - node_modules
