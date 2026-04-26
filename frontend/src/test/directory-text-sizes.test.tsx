@@ -63,7 +63,8 @@ describe('DirectoriesPage — readable text sizes', () => {
     expect(email.className).toContain('text-sm');
     expect(email.className).not.toContain('text-xs');
 
-    const role = screen.getByText('member');
+    const role = screen.getByTestId('role-pill-u-1');
+    expect(role.textContent).toBe('Member');
     expect(role.className).toContain('text-sm');
     expect(role.className).not.toContain('text-[10px]');
   });

@@ -69,6 +69,6 @@ describe('ConversationView — self-DM header', () => {
     );
 
     expect(screen.queryByText('Direct Message')).toBeNull();
-    expect(screen.getByText('Günter Self')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 1, name: 'Günter Self' })).toBeInTheDocument();
   });
 });

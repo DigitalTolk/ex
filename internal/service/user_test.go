@@ -497,6 +497,62 @@ func TestUserService_UpdateRole_NotFound(t *testing.T) {
 	}
 }
 
+func TestUserService_SetStatus_DeactivateAndReactivateGuest(t *testing.T) {
+	users := newMockUserStore()
+	svc := NewUserService(users, nil, nil, nil)
+
+	guest := &model.User{
+		ID:           "u-guest-x",
+		Email:        "x@example.com",
+		DisplayName:  "Guest X",
+		SystemRole:   model.SystemRoleGuest,
+		AuthProvider: model.AuthProviderGuest,
+		PasswordHash: "$2a$bcrypt",
+		Status:       "active",
+	}
+	users.users[guest.ID] = guest
+
+	out, err := svc.SetStatus(context.Background(), guest.ID, true)
+	if err != nil {
+		t.Fatalf("deactivate: %v", err)
+	}
+	if out.Status != "deactivated" {
+		t.Errorf("Status = %q, want deactivated", out.Status)
+	}
+
+	out, err = svc.SetStatus(context.Background(), guest.ID, false)
+	if err != nil {
+		t.Fatalf("reactivate: %v", err)
+	}
+	if out.Status != "active" {
+		t.Errorf("Status = %q, want active", out.Status)
+	}
+}
+
+func TestUserService_SetStatus_RejectsNonGuest(t *testing.T) {
+	users := newMockUserStore()
+	svc := NewUserService(users, nil, nil, nil)
+
+	member := &model.User{
+		ID:           "u-mem-y",
+		AuthProvider: model.AuthProviderOIDC,
+		Status:       "active",
+	}
+	users.users[member.ID] = member
+
+	if _, err := svc.SetStatus(context.Background(), member.ID, true); err == nil {
+		t.Fatal("expected SSO/member to be rejected")
+	}
+}
+
+func TestUserService_SetStatus_NotFound(t *testing.T) {
+	users := newMockUserStore()
+	svc := NewUserService(users, nil, nil, nil)
+	if _, err := svc.SetStatus(context.Background(), "missing", true); err == nil {
+		t.Fatal("expected not-found error")
+	}
+}
+
 func TestUserService_Search_CaseInsensitive(t *testing.T) {
 	users := newMockUserStore()
 	svc := NewUserService(users, nil, nil, nil)

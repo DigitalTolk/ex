@@ -13,6 +13,8 @@ import { ChannelView } from '@/components/chat/ChannelView';
 import { ConversationView } from '@/components/chat/ConversationView';
 import DirectoriesPage from '@/pages/DirectoriesPage';
 import AdminPage from '@/pages/AdminPage';
+import NewConversationPage from '@/pages/NewConversationPage';
+import ThreadsPage from '@/pages/ThreadsPage';
 import type { ReactNode } from 'react';
 
 const queryClient = new QueryClient({
@@ -65,8 +67,10 @@ function AppRoutes() {
           }
         />
         <Route path="directory" element={<DirectoriesPage />} />
+        <Route path="threads" element={<ThreadsPage />} />
         <Route path="admin" element={<AdminPage />} />
         <Route path="channel/:id" element={<ChannelView />} />
+        <Route path="conversations/new" element={<NewConversationPage />} />
         <Route path="conversation/:id" element={<ConversationView />} />
       </Route>
     </Routes>

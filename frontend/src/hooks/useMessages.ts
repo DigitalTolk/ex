@@ -119,9 +119,11 @@ interface MessageMutationVars {
 function invalidateMessages(qc: ReturnType<typeof useQueryClient>, vars: MessageMutationVars) {
   if (vars.channelId) {
     qc.invalidateQueries({ queryKey: ['channelMessages', vars.channelId] });
+    qc.invalidateQueries({ queryKey: ['pinned', `channels/${vars.channelId}`] });
   }
   if (vars.conversationId) {
     qc.invalidateQueries({ queryKey: ['conversationMessages', vars.conversationId] });
+    qc.invalidateQueries({ queryKey: ['pinned', `conversations/${vars.conversationId}`] });
   }
 }
 

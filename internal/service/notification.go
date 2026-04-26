@@ -51,6 +51,7 @@ type Notification struct {
 	ParentID   string           `json:"parentID"`   // channel/conversation ID
 	ParentType string           `json:"parentType"` // "channel" | "conversation"
 	MessageID  string           `json:"messageID,omitempty"`
+	AuthorID   string           `json:"authorID,omitempty"` // for client-side own-author suppression
 	CreatedAt  time.Time        `json:"createdAt"`
 }
 
@@ -104,6 +105,7 @@ func (s *NotificationService) NotifyForMessage(ctx context.Context, msg *model.M
 		ParentID:   msg.ParentID,
 		ParentType: parentType,
 		MessageID:  msg.ID,
+		AuthorID:   msg.AuthorID,
 		CreatedAt:  time.Now(),
 	}
 	for _, uid := range recipients {

@@ -58,7 +58,7 @@ export default function AdminPage() {
 
   return (
     <div className="flex-1 overflow-y-auto">
-      <div className="mx-auto max-w-2xl p-6 space-y-6">
+      <div className="p-6 space-y-6">
         <div>
           <h1 className="text-xl font-bold">Workspace settings</h1>
           <p className="mt-1 text-sm text-muted-foreground">

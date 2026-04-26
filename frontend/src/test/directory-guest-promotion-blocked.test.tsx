@@ -65,7 +65,7 @@ describe('DirectoriesPage — guest promotion blocked', () => {
 
     renderWithProviders();
     fireEvent.click(screen.getByRole('tab', { name: 'Members' }));
-    await waitFor(() => screen.getByText('Guest'));
+    await waitFor(() => screen.getByTestId('directory-user-card'));
 
     const items = screen.getAllByTestId('dropdown-item');
     const promote = items.find((b) => b.textContent?.includes('Promote to Admin')) as HTMLButtonElement;
@@ -85,7 +85,7 @@ describe('DirectoriesPage — guest promotion blocked', () => {
 
     renderWithProviders();
     fireEvent.click(screen.getByRole('tab', { name: 'Members' }));
-    await waitFor(() => screen.getByText('Member'));
+    await waitFor(() => screen.getByTestId('directory-user-card'));
 
     const items = screen.getAllByTestId('dropdown-item');
     const promote = items.find((b) => b.textContent?.includes('Promote to Admin')) as HTMLButtonElement;

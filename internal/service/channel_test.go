@@ -937,6 +937,86 @@ func TestRemoveMember_PublishesUserEvent(t *testing.T) {
 	}
 }
 
+// Archive must remove every membership for the channel — both the channel-
+// side row (so the member list of the archived channel comes back empty)
+// and the user-side row (so it disappears from owner and member sidebars
+// alike). Regression: archive previously only flipped the Archived flag,
+// leaving stale memberships behind.
+func TestArchive_RemovesAllMemberships(t *testing.T) {
+	svc, channels, memberships, _, _ := setupChannelService()
+	ctx := context.Background()
+
+	channels.channels["ch-arx"] = &model.Channel{
+		ID:   "ch-arx",
+		Name: "to-archive",
+		Type: model.ChannelTypePublic,
+	}
+	memberships.memberships["ch-arx#owner"] = &model.ChannelMembership{
+		ChannelID: "ch-arx", UserID: "owner", Role: model.ChannelRoleOwner,
+	}
+	memberships.memberships["ch-arx#m1"] = &model.ChannelMembership{
+		ChannelID: "ch-arx", UserID: "m1", Role: model.ChannelRoleMember,
+	}
+	memberships.memberships["ch-arx#m2"] = &model.ChannelMembership{
+		ChannelID: "ch-arx", UserID: "m2", Role: model.ChannelRoleMember,
+	}
+
+	if err := svc.Archive(ctx, "owner", "ch-arx"); err != nil {
+		t.Fatalf("Archive: %v", err)
+	}
+
+	// Channel is marked archived.
+	if !channels.channels["ch-arx"].Archived {
+		t.Error("expected channel to be archived")
+	}
+	// Member-side rows are gone — listing returns nothing.
+	if got, _ := memberships.ListMembers(ctx, "ch-arx"); len(got) != 0 {
+		t.Errorf("expected zero members after archive; got %d", len(got))
+	}
+	// And the per-user keys are wiped — none of the three users still has
+	// the membership row.
+	for _, key := range []string{"ch-arx#owner", "ch-arx#m1", "ch-arx#m2"} {
+		if _, ok := memberships.memberships[key]; ok {
+			t.Errorf("membership %s persisted after archive", key)
+		}
+	}
+}
+
+// After archive, no user — including the owner — should see the channel
+// returned from ListUserChannels. Owner-side persistence was a leftover
+// from when archive was reversible; the new behaviour is destructive.
+func TestArchive_HidesChannelFromOwnerSidebar(t *testing.T) {
+	svc, channels, memberships, _, _ := setupChannelService()
+	ctx := context.Background()
+
+	channels.channels["ch-arx-2"] = &model.Channel{
+		ID:   "ch-arx-2",
+		Name: "to-arch-2",
+		Type: model.ChannelTypePublic,
+	}
+	memberships.userChannels = []*model.UserChannel{
+		{UserID: "owner-2", ChannelID: "ch-arx-2", ChannelName: "to-arch-2", Role: model.ChannelRoleOwner},
+	}
+	memberships.memberships["ch-arx-2#owner-2"] = &model.ChannelMembership{
+		ChannelID: "ch-arx-2", UserID: "owner-2", Role: model.ChannelRoleOwner,
+	}
+
+	if err := svc.Archive(ctx, "owner-2", "ch-arx-2"); err != nil {
+		t.Fatalf("Archive: %v", err)
+	}
+
+	// Sidebar query must not include the archived channel for the owner.
+	out, err := svc.ListUserChannels(ctx, "owner-2")
+	if err != nil {
+		t.Fatalf("ListUserChannels: %v", err)
+	}
+	for _, uc := range out {
+		if uc.ChannelID == "ch-arx-2" {
+			t.Error("owner still sees archived channel in sidebar")
+		}
+	}
+}
+
 // Archive publishes channel.archived to the channel topic AND to every
 // member's personal channel so all sidebars update.
 func TestArchive_PublishesToAllMembers(t *testing.T) {

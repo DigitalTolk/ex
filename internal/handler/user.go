@@ -219,6 +219,38 @@ func (h *UserHandler) UpdateUserRole(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, user)
 }
 
+// SetUserStatus deactivates or reactivates a guest user account. Admin-only.
+func (h *UserHandler) SetUserStatus(w http.ResponseWriter, r *http.Request) {
+	if !requireAdmin(w, r) {
+		return
+	}
+	targetID := pathParam(r, "id")
+	if targetID == "" {
+		writeError(w, http.StatusBadRequest, "missing_id", "user ID is required")
+		return
+	}
+
+	var body struct {
+		Deactivated bool `json:"deactivated"`
+	}
+	if err := readJSON(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", err.Error())
+		return
+	}
+
+	user, err := h.userSvc.SetStatus(r.Context(), targetID, body.Deactivated)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "not_found", "user not found")
+			return
+		}
+		writeError(w, http.StatusBadRequest, "status_error", err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, user)
+}
+
 // CreateAvatarUploadURL returns a presigned PUT URL the browser can use to
 // upload an avatar directly to S3 without the bytes passing through this
 // server. The browser then PATCHes /users/me with the returned key to

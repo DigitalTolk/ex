@@ -116,7 +116,7 @@ describe('ConversationView - DM title', () => {
   it('shows other participant name as title for DM', async () => {
     renderConversationView();
     await waitFor(() => {
-      expect(screen.getByText('Bob')).toBeInTheDocument();
+      expect(screen.getByRole('heading', { level: 1, name: 'Bob' })).toBeInTheDocument();
     });
   });
 

@@ -113,7 +113,7 @@ describe('ChannelView', () => {
 
   it('renders channel name in header', () => {
     renderChannelView();
-    expect(screen.getByText('general')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'general' })).toBeInTheDocument();
   });
 
   it('renders message input with channel placeholder', () => {
@@ -122,7 +122,7 @@ describe('ChannelView', () => {
     // the contentEditable surface (no native placeholder attribute).
     expect(
       screen.getByLabelText('Message input').getAttribute('data-placeholder'),
-    ).toBe('Message #general');
+    ).toBe('Write to #general');
   });
 
   it('shows "No messages yet" when there are no messages', () => {
@@ -139,5 +139,16 @@ describe('ChannelView', () => {
   it('renders public channel icon', () => {
     renderChannelView();
     expect(screen.getByLabelText('Public channel')).toBeInTheDocument();
+  });
+
+  it('toggles the pinned messages sidebar when the header pin button is clicked', async () => {
+    const { default: userEvent } = await import('@testing-library/user-event');
+    const u = userEvent.setup();
+    renderChannelView();
+    expect(screen.queryByLabelText('Pinned messages')).toBeNull();
+    await u.click(screen.getByTestId('pinned-toggle'));
+    expect(screen.getByLabelText('Pinned messages')).toBeInTheDocument();
+    await u.click(screen.getByTestId('pinned-toggle'));
+    expect(screen.queryByLabelText('Pinned messages')).toBeNull();
   });
 });

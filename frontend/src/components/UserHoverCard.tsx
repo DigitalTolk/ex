@@ -1,13 +1,14 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useMutation } from '@tanstack/react-query';
+import { useMutation, useQuery } from '@tanstack/react-query';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { MessageSquare } from 'lucide-react';
 import { apiFetch } from '@/lib/api';
 import { getInitials } from '@/lib/format';
 import { PopoverPortal } from '@/components/PopoverPortal';
-import type { Conversation } from '@/types';
+import type { Conversation, User } from '@/types';
 
 interface UserHoverCardProps {
   userId: string;
@@ -46,6 +47,18 @@ export function UserHoverCard({
       setOpen(false);
     },
   });
+
+  // Fetch user details lazily on first open. Non-admin viewers receive a
+  // limited payload (status, displayName, avatarURL); admins get the full
+  // record including authProvider — both paths are sufficient to render
+  // the inactive badge correctly.
+  const { data: userDetails } = useQuery<Partial<User>>({
+    queryKey: ['user', userId],
+    queryFn: () => apiFetch<Partial<User>>(`/api/v1/users/${userId}`),
+    enabled: open,
+    staleTime: 30_000,
+  });
+  const inactive = userDetails?.status === 'deactivated';
 
   function clearTimers() {
     if (showTimer.current) clearTimeout(showTimer.current);
@@ -106,7 +119,14 @@ export function UserHoverCard({
               )}
             </div>
             <div className="flex-1 min-w-0">
-              <p className="truncate text-sm font-semibold">{displayName}</p>
+              <div className="flex items-center gap-1.5">
+                <p className="truncate text-sm font-semibold">{displayName}</p>
+                {inactive && (
+                  <Badge variant="destructive" data-testid="hover-status-inactive">
+                    Inactive
+                  </Badge>
+                )}
+              </div>
               <p className="text-xs text-muted-foreground">
                 {online === undefined ? '' : online ? 'Online' : 'Offline'}
               </p>

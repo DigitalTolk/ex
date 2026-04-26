@@ -24,6 +24,7 @@ func NewRouter(
 	presenceH *PresenceHandler,
 	attachmentH *AttachmentHandler,
 	adminH *AdminHandler,
+	threadH *ThreadHandler,
 	jwtMgr *auth.JWTManager,
 	frontendFS fs.FS,
 	allowOrigin string,
@@ -55,6 +56,7 @@ func NewRouter(
 	mux.Handle("POST /api/v1/users/batch", middleware.WrapFunc(userH.BatchGetUsers, authMW))
 	mux.Handle("GET /api/v1/users/{id}", middleware.WrapFunc(userH.GetUser, authMW))
 	mux.Handle("PATCH /api/v1/users/{id}/role", middleware.WrapFunc(userH.UpdateUserRole, authMW))
+	mux.Handle("PATCH /api/v1/users/{id}/status", middleware.WrapFunc(userH.SetUserStatus, authMW))
 	mux.Handle("GET /api/v1/users", middleware.WrapFunc(userH.ListUsers, authMW))
 
 	// ------------------------------------------------------------------ Channels
@@ -81,6 +83,7 @@ func NewRouter(
 	mux.Handle("GET /api/v1/channels/{id}/messages/{msgId}/thread", middleware.WrapFunc(channelH.GetThread, authMW))
 	mux.Handle("POST /api/v1/channels/{id}/messages/{msgId}/reactions", middleware.WrapFunc(channelH.ToggleReaction, authMW))
 	mux.Handle("PUT /api/v1/channels/{id}/messages/{msgId}/pinned", middleware.WrapFunc(channelH.SetPinned, authMW))
+	mux.Handle("GET /api/v1/channels/{id}/pinned", middleware.WrapFunc(channelH.ListPinned, authMW))
 
 	// ------------------------------------------------------------------ Conversations
 	mux.Handle("POST /api/v1/conversations", middleware.WrapFunc(convH.Create, authMW))
@@ -94,6 +97,12 @@ func NewRouter(
 	mux.Handle("GET /api/v1/conversations/{id}/messages/{msgId}/thread", middleware.WrapFunc(convH.GetThread, authMW))
 	mux.Handle("POST /api/v1/conversations/{id}/messages/{msgId}/reactions", middleware.WrapFunc(convH.ToggleReaction, authMW))
 	mux.Handle("PUT /api/v1/conversations/{id}/messages/{msgId}/pinned", middleware.WrapFunc(convH.SetPinned, authMW))
+	mux.Handle("GET /api/v1/conversations/{id}/pinned", middleware.WrapFunc(convH.ListPinned, authMW))
+
+	// ------------------------------------------------------------------ Threads (cross-parent)
+	if threadH != nil {
+		mux.Handle("GET /api/v1/threads", middleware.WrapFunc(threadH.List, authMW))
+	}
 
 	// ------------------------------------------------------------------ Uploads
 	if uploadH != nil {

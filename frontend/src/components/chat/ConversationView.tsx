@@ -1,11 +1,13 @@
 import { useState, useEffect, useMemo } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, useSearchParams } from 'react-router-dom';
 import { useUsersBatch } from '@/hooks/useUsersBatch';
 import { Header } from '@/components/layout/Header';
 import { MessageList } from './MessageList';
 import { MessageInput } from './MessageInput';
 import { MemberList } from './MemberList';
 import { ThreadPanel } from './ThreadPanel';
+import { PinnedPanel } from './PinnedPanel';
+import { DMIntro, SelfDMIntro, GroupIntro } from './ConversationIntro';
 import { useConversation } from '@/hooks/useConversations';
 import {
   useConversationMessages,
@@ -15,10 +17,12 @@ import { useAuth } from '@/context/AuthContext';
 import { useUnread } from '@/context/UnreadContext';
 import { usePresence } from '@/context/PresenceContext';
 import { useNotifications } from '@/context/NotificationContext';
+import { markThreadSeen } from '@/hooks/useThreads';
 import type { UserMapEntry } from './MessageList';
 
 export function ConversationView() {
   const { id } = useParams<{ id: string }>();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { user } = useAuth();
   const { clearConversationUnread, setActiveConversation } = useUnread();
   const { online } = usePresence();
@@ -46,16 +50,36 @@ export function ConversationView() {
 
   const [showMembers, setShowMembers] = useState(false);
   const [threadRootID, setThreadRootID] = useState<string | null>(null);
+  const [showPinned, setShowPinned] = useState(false);
 
-  const openMembers = () => { setShowMembers(true); setThreadRootID(null); };
+  const openMembers = () => { setShowMembers(true); setThreadRootID(null); setShowPinned(false); };
   const closeMembers = () => setShowMembers(false);
-  const openThread = (rid: string) => { setThreadRootID(rid); setShowMembers(false); };
+  const openThread = (rid: string) => { setThreadRootID(rid); setShowMembers(false); setShowPinned(false); };
   const closeThread = () => setThreadRootID(null);
+  const togglePinned = () => {
+    setShowPinned((v) => {
+      const next = !v;
+      if (next) { setThreadRootID(null); setShowMembers(false); }
+      return next;
+    });
+  };
 
   // Reset thread when the conversation changes; this is a deliberate
   // synchronous reset, not a sync between external state and React.
   // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => setThreadRootID(null), [id]);
+
+  // Honor a ?thread=... deep link from the Threads page.
+  const threadParam = searchParams.get('thread');
+  useEffect(() => {
+    if (!threadParam) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setThreadRootID(threadParam);
+    markThreadSeen(threadParam);
+    const next = new URLSearchParams(searchParams);
+    next.delete('thread');
+    setSearchParams(next, { replace: true });
+  }, [threadParam, searchParams, setSearchParams]);
 
   // Collect all user IDs (participants + authors)
   const userIDs = useMemo(() => {
@@ -119,6 +143,43 @@ export function ConversationView() {
     }
   }
 
+  // Build the appropriate intro variant for the conversation kind. We render
+  // *something* once the conversation record loads — the empty-list state
+  // alone isn't enough to signal "this is the start" for chats with the
+  // user's first message already drafted in.
+  let intro = null;
+  if (conversation && user) {
+    if (conversation.type === 'group') {
+      const participants = (conversation.participantIDs ?? [])
+        .filter((pid) => pid !== user.id)
+        .map((pid) => ({
+          id: pid,
+          displayName: userMap[pid]?.displayName ?? 'Unknown',
+          avatarURL: userMap[pid]?.avatarURL,
+        }));
+      intro = <GroupIntro participants={participants} />;
+    } else {
+      const otherID = conversation.participantIDs?.find((pid) => pid !== user.id);
+      if (!otherID) {
+        intro = (
+          <SelfDMIntro
+            selfDisplayName={user.displayName}
+            selfAvatarURL={user.avatarURL}
+          />
+        );
+      } else {
+        const other = userMap[otherID];
+        intro = (
+          <DMIntro
+            otherDisplayName={other?.displayName ?? 'Unknown'}
+            otherAvatarURL={other?.avatarURL}
+            online={other?.online}
+          />
+        );
+      }
+    }
+  }
+
   const memberList = (conversation?.participantIDs ?? []).map((pid) => ({
     userID: pid,
     displayName: userMap[pid]?.displayName ?? 'Unknown',
@@ -135,6 +196,8 @@ export function ConversationView() {
           avatarURL={conversation?.type === 'dm' ? dmOtherUserAvatar : undefined}
           memberCount={conversation?.type === 'group' ? conversation?.participantIDs?.length : undefined}
           onMembersClick={conversation?.type === 'group' ? () => (showMembers ? closeMembers() : openMembers()) : undefined}
+          onPinnedClick={togglePinned}
+          pinnedActive={showPinned}
         />
         <MessageList
           pages={data?.pages ?? []}
@@ -146,11 +209,12 @@ export function ConversationView() {
           conversationId={id}
           userMap={userMap}
           onReplyInThread={openThread}
+          intro={intro ?? undefined}
         />
         <MessageInput
           onSend={sendMessage.mutate}
           disabled={sendMessage.isPending}
-          placeholder={`Message ${title}`}
+          placeholder={`Write to ${title}`}
           focusKey={id}
         />
       </div>
@@ -163,7 +227,15 @@ export function ConversationView() {
           currentUserId={user?.id}
         />
       )}
-      {showMembers && !threadRootID && conversation?.type === 'group' && (
+      {showPinned && !threadRootID && (
+        <PinnedPanel
+          conversationId={id}
+          onClose={() => setShowPinned(false)}
+          userMap={userMap}
+          currentUserId={user?.id}
+        />
+      )}
+      {showMembers && !threadRootID && !showPinned && conversation?.type === 'group' && (
         <MemberList
           members={memberList}
           userMap={userMap}

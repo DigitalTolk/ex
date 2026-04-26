@@ -171,6 +171,135 @@ func (s *MessageService) ListThreadMessages(ctx context.Context, userID, parentI
 	return thread, nil
 }
 
+// ThreadSummary describes a thread the user has participated in. It carries
+// the metadata the sidebar needs (where to navigate, what to show, when the
+// last activity was) without forcing the client to make N follow-up queries.
+type ThreadSummary struct {
+	ParentID         string    `json:"parentID"`
+	ParentType       string    `json:"parentType"`
+	ThreadRootID     string    `json:"threadRootID"`
+	RootAuthorID     string    `json:"rootAuthorID"`
+	RootBody         string    `json:"rootBody"`
+	RootCreatedAt    time.Time `json:"rootCreatedAt"`
+	ReplyCount       int       `json:"replyCount"`
+	LatestActivityAt time.Time `json:"latestActivityAt"`
+}
+
+// ListUserThreads returns thread summaries for every thread the given user has
+// participated in (authored the root or any reply). Sorted by latest activity,
+// newest first.
+//
+// This walks the parents the user has access to (channels they're a member of
+// and conversations they participate in) and inspects recent messages — the
+// app targets small workspaces so this is acceptable. For larger scale this
+// would move to a dedicated thread-participation index.
+func (s *MessageService) ListUserThreads(ctx context.Context, userID string) ([]*ThreadSummary, error) {
+	type parentRef struct {
+		id  string
+		typ string
+	}
+	parents := make([]parentRef, 0, 32)
+
+	if s.memberships != nil {
+		channels, err := s.memberships.ListUserChannels(ctx, userID)
+		if err != nil {
+			return nil, fmt.Errorf("threads: list channels: %w", err)
+		}
+		for _, c := range channels {
+			parents = append(parents, parentRef{id: c.ChannelID, typ: ParentChannel})
+		}
+	}
+	if s.conversations != nil {
+		convs, err := s.conversations.ListUserConversations(ctx, userID)
+		if err != nil {
+			return nil, fmt.Errorf("threads: list conversations: %w", err)
+		}
+		for _, c := range convs {
+			parents = append(parents, parentRef{id: c.ConversationID, typ: ParentConversation})
+		}
+	}
+
+	out := make([]*ThreadSummary, 0)
+	seen := make(map[string]bool)
+
+	for _, p := range parents {
+		msgs, _, err := s.messages.ListMessages(ctx, p.id, "", 1000)
+		if err != nil {
+			continue
+		}
+		// Index messages by ID so we can resolve thread roots without a second fetch.
+		byID := make(map[string]*model.Message, len(msgs))
+		for _, m := range msgs {
+			byID[m.ID] = m
+		}
+		// Collect thread roots the user participates in for this parent.
+		participated := make(map[string]bool)
+		for _, m := range msgs {
+			if m.AuthorID != userID {
+				continue
+			}
+			if m.ParentMessageID != "" {
+				participated[m.ParentMessageID] = true
+			} else if m.ReplyCount > 0 {
+				participated[m.ID] = true
+			}
+		}
+		// Build summaries.
+		for rootID := range participated {
+			key := p.id + "#" + rootID
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			root := byID[rootID]
+			if root == nil {
+				continue
+			}
+			latest := root.CreatedAt
+			for _, m := range msgs {
+				if m.ParentMessageID == rootID && m.CreatedAt.After(latest) {
+					latest = m.CreatedAt
+				}
+			}
+			out = append(out, &ThreadSummary{
+				ParentID:         p.id,
+				ParentType:       p.typ,
+				ThreadRootID:     rootID,
+				RootAuthorID:     root.AuthorID,
+				RootBody:         root.Body,
+				RootCreatedAt:    root.CreatedAt,
+				ReplyCount:       root.ReplyCount,
+				LatestActivityAt: latest,
+			})
+		}
+	}
+
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].LatestActivityAt.After(out[j].LatestActivityAt)
+	})
+	return out, nil
+}
+
+// ListPinned returns all currently-pinned messages for a parent in
+// reverse-chronological order (newest pin first by message ID). Membership
+// is checked via the parent's access guard.
+func (s *MessageService) ListPinned(ctx context.Context, userID, parentID, parentType string) ([]*model.Message, error) {
+	if err := s.checkAccess(ctx, userID, parentID, parentType); err != nil {
+		return nil, err
+	}
+	msgs, _, err := s.messages.ListMessages(ctx, parentID, "", 1000)
+	if err != nil {
+		return nil, fmt.Errorf("message: list pinned: %w", err)
+	}
+	pinned := make([]*model.Message, 0)
+	for _, m := range msgs {
+		if m.Pinned {
+			pinned = append(pinned, m)
+		}
+	}
+	return pinned, nil
+}
+
 // List returns messages for a parent with cursor-based pagination.
 // It returns the messages, a boolean indicating whether there are more
 // results, and any error.

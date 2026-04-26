@@ -104,7 +104,7 @@ describe('DirectoriesPage - members tab', () => {
       expect(screen.getByText('(you)')).toBeInTheDocument();
     });
     expect(screen.getByLabelText('Open notes-to-self')).toBeInTheDocument();
-    expect(screen.queryByLabelText('Change role for Admin')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Manage Admin')).not.toBeInTheDocument();
   });
 
   it('switches to members tab and lists users', async () => {
@@ -123,7 +123,7 @@ describe('DirectoriesPage - members tab', () => {
     });
   });
 
-  it('shows Change role button for admin viewer', async () => {
+  it('shows Manage button for admin viewer', async () => {
     mockApiFetch.mockResolvedValue([
       { id: 'u-1', email: 'alice@x.com', displayName: 'Alice', systemRole: 'member', status: 'active' },
     ]);
@@ -132,11 +132,11 @@ describe('DirectoriesPage - members tab', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'Members' }));
 
     await waitFor(() => {
-      expect(screen.getByLabelText('Change role for Alice')).toBeInTheDocument();
+      expect(screen.getByLabelText('Manage Alice')).toBeInTheDocument();
     });
   });
 
-  it('does not show Change role button for non-admin viewer', async () => {
+  it('does not show Manage button for non-admin viewer', async () => {
     mockSystemRole = 'member';
     mockApiFetch.mockResolvedValue([
       { id: 'u-1', email: 'alice@x.com', displayName: 'Alice', systemRole: 'member', status: 'active' },
@@ -148,7 +148,7 @@ describe('DirectoriesPage - members tab', () => {
     await waitFor(() => {
       expect(screen.getByText('Alice')).toBeInTheDocument();
     });
-    expect(screen.queryByLabelText('Change role for Alice')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Manage Alice')).not.toBeInTheDocument();
   });
 
   it('searches users when query is typed', async () => {

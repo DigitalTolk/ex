@@ -326,6 +326,22 @@ func (h *ConversationHandler) SetPinned(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, msg)
 }
 
+// ListPinned returns the conversation's currently-pinned messages.
+func (h *ConversationHandler) ListPinned(w http.ResponseWriter, r *http.Request) {
+	userID := middleware.UserIDFromContext(r.Context())
+	id := pathParam(r, "id")
+	if id == "" {
+		writeError(w, http.StatusBadRequest, "missing_id", "conversation ID is required")
+		return
+	}
+	pinned, err := h.messageSvc.ListPinned(r.Context(), userID, id, service.ParentConversation)
+	if err != nil {
+		writeError(w, http.StatusForbidden, "list_pinned_error", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, pinned)
+}
+
 // DeleteMessage removes a message from a conversation.
 func (h *ConversationHandler) DeleteMessage(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserIDFromContext(r.Context())

@@ -14,6 +14,7 @@ vi.mock('@/context/NotificationContext', () => ({
     setBrowserEnabled: vi.fn(),
     dispatch: vi.fn(),
     setActiveParent: vi.fn(),
+    setCurrentUserID: vi.fn(),
   }),
 }));
 

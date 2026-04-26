@@ -162,9 +162,9 @@ describe('DirectoriesPage - Members tab', () => {
       );
     });
 
-    // Optimistic update: role label flips to "admin"
+    // Optimistic update: role pill flips to capitalized "Admin"
     await waitFor(() => {
-      expect(screen.getByText('admin')).toBeInTheDocument();
+      expect(screen.getByTestId('role-pill-u-1')).toHaveTextContent('Admin');
     });
   });
 

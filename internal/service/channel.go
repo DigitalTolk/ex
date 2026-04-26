@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -231,8 +232,14 @@ func (s *ChannelService) Update(ctx context.Context, actorID, channelID string, 
 	return ch, nil
 }
 
-// Archive marks a channel as archived. Only the owner or a system admin may archive.
-// The well-known #general channel cannot be archived.
+// Archive marks a channel as archived AND removes every membership row,
+// channel-side and user-side. Archive is destructive: the channel
+// disappears from every sidebar (owner included) and its member list
+// becomes empty. The Channel record itself is kept (with Archived=true)
+// so historical messages continue to resolve their parent.
+//
+// Only the owner or a system admin may archive. The well-known #general
+// channel cannot be archived.
 func (s *ChannelService) Archive(ctx context.Context, actorID, channelID string) error {
 	if channelID == generalChannelID {
 		return errors.New("channel: cannot archive the general channel")
@@ -246,19 +253,32 @@ func (s *ChannelService) Archive(ctx context.Context, actorID, channelID string)
 		return fmt.Errorf("channel: get: %w", err)
 	}
 
+	// Snapshot members before mutating anything so we can both remove their
+	// rows and target their personal pubsub channels for the event.
+	members, listErr := s.memberships.ListMembers(ctx, channelID)
+
 	ch.Archived = true
 	ch.UpdatedAt = time.Now()
-
 	if err := s.channels.UpdateChannel(ctx, ch); err != nil {
 		return fmt.Errorf("channel: archive: %w", err)
+	}
+
+	// Wipe memberships (both sides). Failures here are logged but do not
+	// abort the archive — the channel is already flagged archived and the
+	// membership store is dual-write so a partial failure can be retried by
+	// re-archiving without violating any invariant.
+	if listErr == nil {
+		for _, m := range members {
+			if rmErr := s.memberships.RemoveMember(ctx, channelID, m.UserID); rmErr != nil {
+				slog.Warn("archive: remove member failed", "channelID", channelID, "userID", m.UserID, "error", rmErr)
+			}
+		}
 	}
 
 	if s.publisher == nil {
 		return nil
 	}
-	members, err := s.memberships.ListMembers(ctx, channelID)
-	if err != nil {
-		// Still notify the channel topic even if we can't enumerate members.
+	if listErr != nil {
 		events.Publish(ctx, s.publisher, pubsub.ChannelName(channelID), events.EventChannelArchived, map[string]any{
 			"channelID": channelID,
 		})

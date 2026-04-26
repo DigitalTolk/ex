@@ -1,13 +1,6 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { X } from 'lucide-react';
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogFooter,
-} from '@/components/ui/dialog';
+import { ArrowLeft, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -15,15 +8,7 @@ import { Badge } from '@/components/ui/badge';
 import { useCreateConversation, useSearchUsers } from '@/hooks/useConversations';
 import { useAuth } from '@/context/AuthContext';
 
-interface NewConversationDialogProps {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-}
-
-export function NewConversationDialog({
-  open,
-  onOpenChange,
-}: NewConversationDialogProps) {
+export default function NewConversationPage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedUsers, setSelectedUsers] = useState<
     { id: string; displayName: string }[]
@@ -33,29 +18,20 @@ export function NewConversationDialog({
   const navigate = useNavigate();
   const { user } = useAuth();
 
-  // Self-DM is allowed (a personal notes-to-self channel). Multi-participant
-  // groups still strip self in the handler. Search results show everyone
-  // including the current user with a "(you)" hint.
   const filteredResults = searchResults ?? [];
-
   const isGroup = selectedUsers.length > 1;
 
-  function addUser(user: { id: string; displayName: string }) {
-    if (selectedUsers.some((u) => u.id === user.id)) return;
-    setSelectedUsers((prev) => [...prev, user]);
+  function addUser(u: { id: string; displayName: string }) {
+    if (selectedUsers.some((s) => s.id === u.id)) return;
+    setSelectedUsers((prev) => [...prev, u]);
     setSearchQuery('');
   }
 
   function removeUser(userId: string) {
-    setSelectedUsers((prev) => prev.filter((u) => u.id !== userId));
+    setSelectedUsers((prev) => prev.filter((s) => s.id !== userId));
   }
 
-  function reset() {
-    setSearchQuery('');
-    setSelectedUsers([]);
-  }
-
-  async function handleCreate() {
+  function handleCreate() {
     if (selectedUsers.length === 0) return;
     createConversation.mutate(
       {
@@ -64,20 +40,27 @@ export function NewConversationDialog({
       },
       {
         onSuccess: (conversation) => {
-          reset();
-          onOpenChange(false);
-          navigate(`/conversation/${conversation.id}`);
+          navigate(`/conversation/${conversation.id}`, { replace: true });
         },
       },
     );
   }
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-lg">
-        <DialogHeader>
-          <DialogTitle>New conversation</DialogTitle>
-        </DialogHeader>
+    <div className="flex-1 overflow-y-auto">
+      <div className="mx-auto max-w-2xl p-6">
+        <div className="mb-4 flex items-center gap-2">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8"
+            onClick={() => navigate(-1)}
+            aria-label="Back"
+          >
+            <ArrowLeft className="h-4 w-4" />
+          </Button>
+          <h1 className="text-xl font-bold">New conversation</h1>
+        </div>
 
         <div className="space-y-4">
           <div className="space-y-2">
@@ -91,21 +74,20 @@ export function NewConversationDialog({
             />
           </div>
 
-          {/* Selected users */}
           {selectedUsers.length > 0 && (
             <div className="flex flex-wrap gap-1">
-              {selectedUsers.map((user) => (
+              {selectedUsers.map((u) => (
                 <Badge
-                  key={user.id}
+                  key={u.id}
                   variant="secondary"
                   data-testid="participant-pill"
                   className="gap-1 text-sm h-auto py-1 px-2"
                 >
-                  {user.displayName}
+                  {u.displayName}
                   <button
-                    onClick={() => removeUser(user.id)}
+                    onClick={() => removeUser(u.id)}
                     className="ml-0.5 rounded-full hover:bg-muted"
-                    aria-label={`Remove ${user.displayName}`}
+                    aria-label={`Remove ${u.displayName}`}
                   >
                     <X className="h-3 w-3" />
                   </button>
@@ -114,8 +96,6 @@ export function NewConversationDialog({
             </div>
           )}
 
-          {/* Search results — reserved fixed height so the modal doesn't
-              jump as the autocomplete list grows or empties. */}
           <div
             data-testid="results-region"
             className="h-72 overflow-y-auto rounded-md border"
@@ -147,24 +127,23 @@ export function NewConversationDialog({
             )}
           </div>
 
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="ghost" onClick={() => navigate(-1)}>
+              Cancel
+            </Button>
+            <Button
+              onClick={handleCreate}
+              disabled={selectedUsers.length === 0 || createConversation.isPending}
+            >
+              {createConversation.isPending
+                ? 'Creating...'
+                : isGroup
+                  ? 'Create Group'
+                  : 'Start Conversation'}
+            </Button>
+          </div>
         </div>
-
-        <DialogFooter>
-          <Button variant="ghost" onClick={() => onOpenChange(false)}>
-            Cancel
-          </Button>
-          <Button
-            onClick={handleCreate}
-            disabled={selectedUsers.length === 0 || createConversation.isPending}
-          >
-            {createConversation.isPending
-              ? 'Creating...'
-              : isGroup
-                ? 'Create Group'
-                : 'Start Conversation'}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+      </div>
+    </div>
   );
 }

@@ -23,7 +23,7 @@ import { useEmojiMap } from '@/hooks/useEmoji';
 import { renderMarkdown } from '@/lib/markdown';
 import { EmojiGlyph } from '@/components/EmojiGlyph';
 import { MessageAttachments } from '@/components/chat/MessageAttachments';
-import { getInitials } from '@/lib/format';
+import { getInitials, formatLongDateTime } from '@/lib/format';
 import type { Message } from '@/types';
 
 interface MessageItemProps {
@@ -219,7 +219,7 @@ export function MessageItem({
               {formatTime(message.createdAt)}
             </TooltipTrigger>
             <TooltipContent>
-              {new Date(message.createdAt).toLocaleString()}
+              {formatLongDateTime(message.createdAt)}
             </TooltipContent>
           </Tooltip>
           {message.editedAt && (
@@ -271,15 +271,16 @@ export function MessageItem({
                       key={emoji}
                       type="button"
                       role="listitem"
+                      data-testid="reaction-badge"
                       onClick={() => handleReact(emoji)}
-                      className={`flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-xs hover:bg-muted ${
+                      className={`flex items-center gap-1 rounded-full border px-2 py-0.5 text-sm hover:bg-muted ${
                         reactedByMe ? 'border-primary bg-primary/10' : 'bg-background'
                       }`}
                       aria-label={`${renderReactionLabel(emoji)} ${users.length}, ${reactedByMe ? 'reacted' : 'react'}`}
                       aria-pressed={reactedByMe}
                     >
                       {renderReactionVisual(emoji)}
-                      <span className="text-muted-foreground">{users.length}</span>
+                      <span className="text-sm text-muted-foreground">{users.length}</span>
                     </button>
                   );
                 })}

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Hash, Lock, Users, ChevronDown, LogOut, Archive, Pencil, Bell, BellOff } from 'lucide-react';
+import { Hash, Lock, Users, ChevronDown, LogOut, Archive, Pencil, Bell, BellOff, Pin } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -34,6 +34,8 @@ interface HeaderProps {
   onLeave?: () => void;
   muted?: boolean;
   onToggleMute?: () => void;
+  onPinnedClick?: () => void;
+  pinnedActive?: boolean;
 }
 
 export function Header({
@@ -51,6 +53,8 @@ export function Header({
   onLeave,
   muted,
   onToggleMute,
+  onPinnedClick,
+  pinnedActive,
 }: HeaderProps) {
   const displayTitle = channel?.name ?? title ?? '';
   const isPrivate = channel?.type === 'private';
@@ -161,6 +165,20 @@ export function Header({
       )}
 
       <div className="ml-auto flex items-center gap-2">
+        {onPinnedClick && (
+          <button
+            onClick={onPinnedClick}
+            aria-label="View pinned messages"
+            aria-pressed={pinnedActive}
+            data-testid="pinned-toggle"
+            className={
+              'flex h-7 w-7 items-center justify-center rounded-md hover:bg-muted ' +
+              (pinnedActive ? 'bg-muted text-foreground' : 'text-muted-foreground')
+            }
+          >
+            <Pin className="h-4 w-4" />
+          </button>
+        )}
         {memberCount !== undefined && (
           <button
             onClick={onMembersClick}

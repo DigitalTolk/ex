@@ -14,6 +14,7 @@ export interface NotificationPayload {
   parentID: string;
   parentType: 'channel' | 'conversation';
   messageID?: string;
+  authorID?: string;
   createdAt: string;
 }
 
@@ -39,6 +40,9 @@ interface NotificationContextValue {
   dispatch: (n: NotificationPayload) => void;
   // Routes used by the page-on-screen suppression. ChatPage calls these.
   setActiveParent: (parentID: string | null) => void;
+  // Current viewer's user id, used for own-author suppression so a user
+  // doesn't get pinged by their own messages echoed back over the socket.
+  setCurrentUserID: (id: string | null) => void;
 }
 
 const STORAGE_KEY = 'ex.notifications.prefs.v1';
@@ -80,6 +84,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   const [prefs, setPrefs] = useState<NotificationPrefs>(loadPrefs);
   const [permission, setPermission] = useState<Permission>(readPermission);
   const activeParentRef = useRef<string | null>(null);
+  const currentUserIDRef = useRef<string | null>(null);
 
   useEffect(() => {
     savePrefs(prefs);
@@ -106,8 +111,18 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     activeParentRef.current = id;
   }, []);
 
+  const setCurrentUserID = useCallback((id: string | null) => {
+    currentUserIDRef.current = id;
+  }, []);
+
   const dispatch = useCallback(
     (n: NotificationPayload) => {
+      // Never alert for messages the viewer authored — their own send shouldn't
+      // ping them. Server-side recipient filtering already excludes the author,
+      // but echoes via shared subscriptions can slip through.
+      if (n.authorID && currentUserIDRef.current && n.authorID === currentUserIDRef.current) {
+        return;
+      }
       // Don't alert for the parent the user is currently looking at.
       if (activeParentRef.current && activeParentRef.current === n.parentID) {
         return;
@@ -150,8 +165,9 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       requestPermission,
       dispatch,
       setActiveParent,
+      setCurrentUserID,
     }),
-    [prefs, permission, requestPermission, dispatch, setActiveParent, setSoundEnabled, setBrowserEnabled],
+    [prefs, permission, requestPermission, dispatch, setActiveParent, setCurrentUserID, setSoundEnabled, setBrowserEnabled],
   );
 
   return <NotificationContext.Provider value={value}>{children}</NotificationContext.Provider>;
@@ -170,6 +186,7 @@ const noopValue: NotificationContextValue = {
   requestPermission: async () => 'unsupported',
   dispatch: () => {},
   setActiveParent: () => {},
+  setCurrentUserID: () => {},
 };
 
 export function useNotifications(): NotificationContextValue {

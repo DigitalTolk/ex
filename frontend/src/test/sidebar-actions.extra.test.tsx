@@ -126,11 +126,10 @@ describe('Sidebar - extra actions', () => {
     expect(screen.getByText('Create a channel')).toBeInTheDocument();
   });
 
-  it('opens NewConversationDialog when New direct message button is clicked', () => {
+  it('navigates to /conversations/new when New direct message button is clicked', () => {
     renderSidebar();
     fireEvent.click(screen.getByLabelText('New direct message'));
-
-    expect(screen.getByText('New conversation')).toBeInTheDocument();
+    expect(window.location.pathname).toBe('/conversations/new');
   });
 
   it('hides a conversation when its X button is clicked', () => {

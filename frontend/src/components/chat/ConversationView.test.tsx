@@ -110,7 +110,7 @@ describe('ConversationView', () => {
     renderConversationView();
     expect(
       screen.getByLabelText('Message input').getAttribute('data-placeholder'),
-    ).toBe('Message Chat with Bob');
+    ).toBe('Write to Chat with Bob');
   });
 
   it('shows "No messages yet" when there are no messages', () => {

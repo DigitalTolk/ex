@@ -1,11 +1,13 @@
 import { useState, useEffect, useMemo } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { Header } from '@/components/layout/Header';
 import { MessageList } from './MessageList';
 import { MessageInput } from './MessageInput';
 import { MemberList } from './MemberList';
 import { ThreadPanel } from './ThreadPanel';
+import { PinnedPanel } from './PinnedPanel';
+import { ChannelIntro } from './ConversationIntro';
 import { useChannelBySlug, useChannelMembers, useMuteChannel, useUserChannels } from '@/hooks/useChannels';
 import {
   useChannelMessages,
@@ -16,12 +18,14 @@ import { useUnread } from '@/context/UnreadContext';
 import { usePresence } from '@/context/PresenceContext';
 import { useNotifications } from '@/context/NotificationContext';
 import { canEditChannel, canArchiveChannel, canLeaveChannel, roleNumber } from '@/lib/roles';
+import { markThreadSeen } from '@/hooks/useThreads';
 import { apiFetch } from '@/lib/api';
 import { useUsersBatch } from '@/hooks/useUsersBatch';
 import type { UserMapEntry } from './MessageList';
 
 export function ChannelView() {
   const { id: slug } = useParams<{ id: string }>();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { user } = useAuth();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -30,11 +34,19 @@ export function ChannelView() {
   const { online } = usePresence();
   const [showMembers, setShowMembers] = useState(false);
   const [threadRootID, setThreadRootID] = useState<string | null>(null);
+  const [showPinned, setShowPinned] = useState(false);
 
-  const openMembers = () => { setShowMembers(true); setThreadRootID(null); };
+  const openMembers = () => { setShowMembers(true); setThreadRootID(null); setShowPinned(false); };
   const closeMembers = () => setShowMembers(false);
-  const openThread = (id: string) => { setThreadRootID(id); setShowMembers(false); };
+  const openThread = (id: string) => { setThreadRootID(id); setShowMembers(false); setShowPinned(false); };
   const closeThread = () => setThreadRootID(null);
+  const togglePinned = () => {
+    setShowPinned((v) => {
+      const next = !v;
+      if (next) { setThreadRootID(null); setShowMembers(false); }
+      return next;
+    });
+  };
   const { data: channel } = useChannelBySlug(slug);
   const { data: members } = useChannelMembers(channel?.id);
   const {
@@ -59,6 +71,20 @@ export function ChannelView() {
   // Reset thread when the channel changes; deliberate synchronous reset.
   // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => setThreadRootID(null), [channel?.id]);
+
+  // Honor a ?thread=... deep link from the Threads page. We pull the param
+  // once and clear it immediately so back/forward and tab switches don't keep
+  // re-opening it. The setState here is a deliberate URL → component sync.
+  const threadParam = searchParams.get('thread');
+  useEffect(() => {
+    if (!threadParam) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setThreadRootID(threadParam);
+    markThreadSeen(threadParam);
+    const next = new URLSearchParams(searchParams);
+    next.delete('thread');
+    setSearchParams(next, { replace: true });
+  }, [threadParam, searchParams, setSearchParams]);
 
   // If the current user is no longer a member of the open channel (e.g.
   // they were just removed by an admin), boot them back to the placeholder
@@ -158,6 +184,8 @@ export function ChannelView() {
           onLeave={handleLeave}
           muted={muted}
           onToggleMute={handleToggleMute}
+          onPinnedClick={togglePinned}
+          pinnedActive={showPinned}
         />
         <MessageList
           pages={data?.pages ?? []}
@@ -170,11 +198,19 @@ export function ChannelView() {
           channelSlug={channel?.slug}
           userMap={userMap}
           onReplyInThread={openThread}
+          intro={
+            channel ? (
+              <ChannelIntro
+                channel={channel}
+                creatorName={userMap[channel.createdBy]?.displayName}
+              />
+            ) : undefined
+          }
         />
         <MessageInput
           onSend={sendMessage.mutate}
           disabled={sendMessage.isPending}
-          placeholder={`Message #${channel?.name ?? '...'}`}
+          placeholder={`Write to #${channel?.name ?? '...'}`}
           focusKey={channel?.id}
         />
       </div>
@@ -187,7 +223,16 @@ export function ChannelView() {
           currentUserId={user?.id}
         />
       )}
-      {showMembers && !threadRootID && members && (
+      {showPinned && !threadRootID && (
+        <PinnedPanel
+          channelId={channel?.id}
+          channelSlug={channel?.slug}
+          onClose={() => setShowPinned(false)}
+          userMap={userMap}
+          currentUserId={user?.id}
+        />
+      )}
+      {showMembers && !threadRootID && !showPinned && members && (
         <MemberList
           members={members}
           channelId={channel?.id}

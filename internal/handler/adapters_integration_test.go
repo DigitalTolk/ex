@@ -242,6 +242,10 @@ func TestMembershipStoreAdapter(t *testing.T) {
 		t.Fatalf("UpdateMemberRole: %v", err)
 	}
 
+	if err := adapter.SetMute(ctx, "ch-ma-1", "u-ma-1", true); err != nil {
+		t.Fatalf("SetMute: %v", err)
+	}
+
 	if err := adapter.RemoveMember(ctx, "ch-ma-1", "u-ma-1"); err != nil {
 		t.Fatalf("RemoveMember: %v", err)
 	}
@@ -282,6 +286,10 @@ func TestConversationStoreAdapter(t *testing.T) {
 	}
 	if len(userConvs) != 1 {
 		t.Errorf("expected 1 user conversation, got %d", len(userConvs))
+	}
+
+	if err := adapter.ActivateConversation(ctx, "conv-adapt", []string{"u-ca1", "u-ca2"}); err != nil {
+		t.Fatalf("ActivateConversation: %v", err)
 	}
 }
 

@@ -505,6 +505,22 @@ func (h *ChannelHandler) SetPinned(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, msg)
 }
 
+// ListPinned returns the channel's currently-pinned messages.
+func (h *ChannelHandler) ListPinned(w http.ResponseWriter, r *http.Request) {
+	userID := middleware.UserIDFromContext(r.Context())
+	id := pathParam(r, "id")
+	if id == "" {
+		writeError(w, http.StatusBadRequest, "missing_id", "channel ID is required")
+		return
+	}
+	pinned, err := h.messageSvc.ListPinned(r.Context(), userID, id, service.ParentChannel)
+	if err != nil {
+		writeError(w, http.StatusForbidden, "list_pinned_error", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, pinned)
+}
+
 // DeleteMessage removes a message from a channel.
 func (h *ChannelHandler) DeleteMessage(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserIDFromContext(r.Context())

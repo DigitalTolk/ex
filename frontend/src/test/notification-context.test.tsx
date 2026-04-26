@@ -25,15 +25,17 @@ const samplePayload: NotificationPayload = {
 
 let dispatchSpy: ((n: NotificationPayload) => void) | null = null;
 let setActiveSpy: ((id: string | null) => void) | null = null;
+let setUserSpy: ((id: string | null) => void) | null = null;
 let permissionSpy: string | null = null;
 
 function Probe() {
-  const { dispatch, setActiveParent, permission } = useNotifications();
+  const { dispatch, setActiveParent, setCurrentUserID, permission } = useNotifications();
   useEffect(() => {
     dispatchSpy = dispatch;
     setActiveSpy = setActiveParent;
+    setUserSpy = setCurrentUserID;
     permissionSpy = permission;
-  }, [dispatch, setActiveParent, permission]);
+  }, [dispatch, setActiveParent, setCurrentUserID, permission]);
   return <div data-testid="probe">{permission}</div>;
 }
 
@@ -53,6 +55,7 @@ describe('NotificationProvider', () => {
     playMock.mockReset();
     dispatchSpy = null;
     setActiveSpy = null;
+    setUserSpy = null;
     permissionSpy = null;
     localStorage.clear();
     sessionStorage.clear();
@@ -113,6 +116,26 @@ describe('NotificationProvider', () => {
     renderProbe();
     expect(screen.getByTestId('probe').textContent).toBe('granted');
     expect(permissionSpy).toBe('granted');
+  });
+
+  it('suppresses notifications for the viewer\'s own messages echoed back', () => {
+    renderProbe();
+    act(() => {
+      setUserSpy!('u-me');
+      dispatchSpy!({ ...samplePayload, authorID: 'u-me' });
+    });
+    expect(playMock).not.toHaveBeenCalled();
+    expect(notificationCtor).not.toHaveBeenCalled();
+  });
+
+  it('still fires when authorID does not match the current user', () => {
+    renderProbe();
+    act(() => {
+      setUserSpy!('u-me');
+      dispatchSpy!({ ...samplePayload, authorID: 'u-other' });
+    });
+    expect(playMock).toHaveBeenCalledTimes(1);
+    expect(notificationCtor).toHaveBeenCalledTimes(1);
   });
 
   it('falls back to no-op when used outside the provider', () => {

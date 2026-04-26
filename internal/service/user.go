@@ -212,6 +212,44 @@ func (s *UserService) UpdateRole(ctx context.Context, _, targetID string, role m
 	return user, nil
 }
 
+// SetStatus marks a user active or deactivated. Only guest accounts can be
+// deactivated this way — SSO-managed users are governed by the upstream IdP.
+// The handler enforces actor admin rights; this performs the mutation and
+// emits a user.updated event so connected clients refresh.
+func (s *UserService) SetStatus(ctx context.Context, targetID string, deactivated bool) (*model.User, error) {
+	user, err := s.users.GetUser(ctx, targetID)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, fmt.Errorf("user: not found: %w", err)
+		}
+		return nil, fmt.Errorf("user: get: %w", err)
+	}
+	backfillAuthProvider(user)
+	if user.AuthProvider != model.AuthProviderGuest {
+		return nil, errors.New("user: only guest accounts can be deactivated")
+	}
+	if deactivated {
+		user.Status = "deactivated"
+	} else {
+		user.Status = "active"
+	}
+	user.UpdatedAt = time.Now()
+	if err := s.users.UpdateUser(ctx, user); err != nil {
+		return nil, fmt.Errorf("user: update status: %w", err)
+	}
+	if s.cache != nil {
+		_ = s.cache.Delete(ctx, "user:"+targetID)
+	}
+	s.resolveAvatar(ctx, user)
+
+	events.Publish(ctx, s.publisher, pubsub.UserEvents(), events.EventUserUpdated, map[string]any{
+		"id":     user.ID,
+		"status": user.Status,
+	})
+
+	return user, nil
+}
+
 // List returns a paginated list of users.
 func (s *UserService) List(ctx context.Context, limit int, cursor string) ([]*model.User, string, error) {
 	users, nextCursor, err := s.users.ListUsers(ctx, limit, cursor)

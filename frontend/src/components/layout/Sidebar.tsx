@@ -15,6 +15,7 @@ import {
   BellOff,
   Settings,
   Info,
+  MessagesSquare,
 } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
@@ -33,11 +34,11 @@ import { useAuth } from '@/context/AuthContext';
 import { useUnread } from '@/context/UnreadContext';
 import { useUserChannels } from '@/hooks/useChannels';
 import { useUserConversations } from '@/hooks/useConversations';
+import { useUserThreads, hasUnreadActivity } from '@/hooks/useThreads';
 import { CreateChannelDialog } from '@/components/channels/CreateChannelDialog';
 import { InviteDialog } from '@/components/InviteDialog';
 import { EditProfileDialog } from '@/components/EditProfileDialog';
 import { AboutDialog } from '@/components/AboutDialog';
-import { NewConversationDialog } from '@/components/conversations/NewConversationDialog';
 import { EmojiManagerDialog } from '@/components/EmojiManagerDialog';
 
 interface SidebarProps {
@@ -49,15 +50,16 @@ export function Sidebar({ onClose }: SidebarProps) {
   const { unreadChannels, unreadConversations, hiddenConversations, hideConversation } = useUnread();
   const { data: channels } = useUserChannels();
   const { data: conversations } = useUserConversations();
+  const { data: threads } = useUserThreads();
   const navigate = useNavigate();
   const [createChannelOpen, setCreateChannelOpen] = useState(false);
   const [inviteOpen, setInviteOpen] = useState(false);
   const [editProfileOpen, setEditProfileOpen] = useState(false);
-  const [newConvoOpen, setNewConvoOpen] = useState(false);
   const [emojiManagerOpen, setEmojiManagerOpen] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
 
   const visibleConversations = conversations?.filter(c => !hiddenConversations.has(c.conversationID));
+  const hasThreadUpdates = (threads ?? []).some((t) => hasUnreadActivity(t));
 
   // Fetch the other participant for every DM in one batch so the sidebar
   // can render real avatars instead of just initials. Group DMs use a
@@ -161,6 +163,28 @@ export function Sidebar({ onClose }: SidebarProps) {
             <span>Directory</span>
           </NavLink>
 
+          <NavLink
+            to="/threads"
+            onClick={onClose}
+            className={({ isActive }) =>
+              `flex items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors mb-2 ${
+                isActive
+                  ? 'bg-white/15 text-white font-semibold'
+                  : 'text-gray-300 hover:bg-white/10 hover:text-white'
+              }`
+            }
+          >
+            <MessagesSquare className="h-4 w-4 shrink-0" aria-hidden="true" />
+            <span>Threads</span>
+            {hasThreadUpdates && (
+              <span
+                data-testid="threads-unread-dot"
+                className="ml-auto h-2 w-2 rounded-full bg-white"
+                aria-label="Unread thread activity"
+              />
+            )}
+          </NavLink>
+
           {/* Admin link — only visible to admins. Workspace settings
               (upload limits, etc.) live on this page. */}
           {isAdmin(user?.systemRole) && (
@@ -255,7 +279,7 @@ export function Sidebar({ onClose }: SidebarProps) {
                 variant="ghost"
                 size="icon"
                 className="h-6 w-6 text-gray-400 hover:bg-white/10 hover:text-white"
-                onClick={() => setNewConvoOpen(true)}
+                onClick={() => navigate('/conversations/new')}
                 aria-label="New direct message"
               >
                 <Plus className="h-4 w-4" />
@@ -327,7 +351,6 @@ export function Sidebar({ onClose }: SidebarProps) {
       />
       <InviteDialog open={inviteOpen} onOpenChange={setInviteOpen} />
       <EditProfileDialog open={editProfileOpen} onOpenChange={setEditProfileOpen} />
-      <NewConversationDialog open={newConvoOpen} onOpenChange={setNewConvoOpen} />
       <EmojiManagerDialog open={emojiManagerOpen} onOpenChange={setEmojiManagerOpen} />
       <AboutDialog open={aboutOpen} onOpenChange={setAboutOpen} />
     </div>

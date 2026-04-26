@@ -87,7 +87,7 @@ func TestNewRouterWithFrontendFS(t *testing.T) {
 	var frontendFS fs.FS = memFS
 
 	jwtMgr := setupJWTManager()
-	router := NewRouter(&AuthHandler{}, &UserHandler{}, &ChannelHandler{}, &ConversationHandler{}, &WSHandler{}, nil, nil, nil, nil, nil, jwtMgr, frontendFS, "*")
+	router := NewRouter(&AuthHandler{}, &UserHandler{}, &ChannelHandler{}, &ConversationHandler{}, &WSHandler{}, nil, nil, nil, nil, nil, nil, jwtMgr, frontendFS, "*")
 
 	// SPA route should return index.html.
 	req := httptest.NewRequest(http.MethodGet, "/some-spa-route", nil)
