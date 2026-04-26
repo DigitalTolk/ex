@@ -134,7 +134,7 @@ jobs:
       - uses: actions/checkout@v6
 
       - uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
 
       # Only authenticate with GHCR when we intend to push — i.e. on a
       # version tag like v1.2.3. PR builds verify the Dockerfile compiles
