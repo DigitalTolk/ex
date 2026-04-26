@@ -12,7 +12,10 @@ permissions:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+  # IMAGE_NAME is computed inside each Docker job because GHCR rejects
+  # mixed-case repository paths and there's no expression-level lowercase
+  # in GitHub Actions. ${{ github.repository }} preserves the configured
+  # case (e.g. DigitalTolk/ex) so we lowercase it via tr in setup steps.
   GO_VERSION: '1.26.2'
   NODE_VERSION: '24'
 
@@ -157,6 +160,9 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - name: Lowercase image name
+        run: echo "IMAGE_NAME=$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_ENV"
+
       - uses: docker/setup-buildx-action@v4
 
       - name: Log in to GHCR
@@ -211,6 +217,9 @@ jobs:
       contents: read
       packages: write
     steps:
+      - name: Lowercase image name
+        run: echo "IMAGE_NAME=$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_ENV"
+
       - uses: docker/setup-buildx-action@v4
 
       - name: Log in to GHCR
