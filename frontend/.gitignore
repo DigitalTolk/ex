@@ -8,7 +8,11 @@ pnpm-debug.log*
 lerna-debug.log*
 
 node_modules
-dist
+# Ignore dist *contents* but not the directory itself — keeping it
+# tracked (via dist/.gitignore) means the //go:embed in frontend.go
+# always has something to match on a fresh checkout.
+dist/*
+!dist/.gitignore
 dist-ssr
 *.local
 

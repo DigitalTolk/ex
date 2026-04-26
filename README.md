@@ -1,6 +1,8 @@
-# Ex
+# ex
 
-A Slack-like team messaging application built with Go and React.
+[![Coverage Status](https://coveralls.io/repos/github/DigitalTolk/ex/badge.svg)](https://coveralls.io/github/DigitalTolk/ex)
+
+A team messaging application built with Go and React.
 
 ## Tech Stack
 
