@@ -162,9 +162,9 @@ describe('DirectoriesPage - Members tab', () => {
       );
     });
 
-    // Optimistic update: role label flips to "admin"
+    // Optimistic update: role pill flips to capitalized "Admin"
     await waitFor(() => {
-      expect(screen.getByText('admin')).toBeInTheDocument();
+      expect(screen.getByTestId('role-pill-u-1')).toHaveTextContent('Admin');
     });
   });
 
@@ -195,9 +195,12 @@ describe('DirectoriesPage - Members tab', () => {
     });
   });
 
-  it('admin can set member as member via role dropdown', async () => {
+  it('admin can demote a fellow admin to member via role dropdown', async () => {
+    // Promotions to member/admin are SSO-only: a guest target would have
+    // both options disabled. To exercise the Set-as-Member happy path we
+    // demote an existing admin instead.
     mockApiFetch.mockResolvedValueOnce([
-      { id: 'u-3', email: 'c@x.com', displayName: 'Charlie', systemRole: 'guest', status: 'active' },
+      { id: 'u-3', email: 'c@x.com', displayName: 'Charlie', systemRole: 'admin', authProvider: 'oidc', status: 'active' },
     ]);
     mockApiFetch.mockResolvedValueOnce({});
 

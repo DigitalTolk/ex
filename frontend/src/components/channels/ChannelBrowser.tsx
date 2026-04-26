@@ -24,11 +24,13 @@ export function ChannelBrowser({ open, onOpenChange }: ChannelBrowserProps) {
 
   const joinedIds = new Set(userChannels?.map((c) => c.channelID) ?? []);
 
-  function handleJoin(channelId: string) {
+  function handleJoin(channelId: string, channelSlug: string) {
+    // Routes use slug — passing the id would land on a 404 since
+    // ChannelView resolves :id as a slug.
     joinChannel.mutate(channelId, {
       onSuccess: () => {
         onOpenChange(false);
-        navigate(`/channel/${channelId}`);
+        navigate(`/channel/${channelSlug}`);
       },
     });
   }
@@ -82,7 +84,7 @@ export function ChannelBrowser({ open, onOpenChange }: ChannelBrowserProps) {
                         size="sm"
                         onClick={() => {
                           onOpenChange(false);
-                          navigate(`/channel/${channel.id}`);
+                          navigate(`/channel/${channel.slug}`);
                         }}
                       >
                         Open
@@ -90,7 +92,7 @@ export function ChannelBrowser({ open, onOpenChange }: ChannelBrowserProps) {
                     ) : (
                       <Button
                         size="sm"
-                        onClick={() => handleJoin(channel.id)}
+                        onClick={() => handleJoin(channel.id, channel.slug)}
                         disabled={joinChannel.isPending}
                       >
                         Join

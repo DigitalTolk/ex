@@ -119,9 +119,11 @@ interface MessageMutationVars {
 function invalidateMessages(qc: ReturnType<typeof useQueryClient>, vars: MessageMutationVars) {
   if (vars.channelId) {
     qc.invalidateQueries({ queryKey: ['channelMessages', vars.channelId] });
+    qc.invalidateQueries({ queryKey: ['pinned', `channels/${vars.channelId}`] });
   }
   if (vars.conversationId) {
     qc.invalidateQueries({ queryKey: ['conversationMessages', vars.conversationId] });
+    qc.invalidateQueries({ queryKey: ['pinned', `conversations/${vars.conversationId}`] });
   }
 }
 
@@ -156,6 +158,18 @@ export function useToggleReaction() {
       apiFetch<Message>(`${messagePath(vars)}/reactions`, {
         method: 'POST',
         body: JSON.stringify({ emoji: vars.emoji }),
+      }),
+    onSuccess: (_data, vars) => invalidateMessages(queryClient, vars),
+  });
+}
+
+export function useSetPinned() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: MessageMutationVars & { pinned: boolean }) =>
+      apiFetch<Message>(`${messagePath(vars)}/pinned`, {
+        method: 'PUT',
+        body: JSON.stringify({ pinned: vars.pinned }),
       }),
     onSuccess: (_data, vars) => invalidateMessages(queryClient, vars),
   });

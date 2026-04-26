@@ -34,16 +34,27 @@ type AttachmentSigner interface {
 // AttachmentService manages message attachments: dedup-by-hash uploads, signed
 // URL resolution, refcount tracking, and S3 GC when the last reference is
 // dropped.
+type uploadLimits interface {
+	AllowsExtension(ctx context.Context, filename string) bool
+	AllowsSize(ctx context.Context, size int64) bool
+}
+
 type AttachmentService struct {
 	attachments AttachmentStore
 	signer      AttachmentSigner
 	publisher   Publisher
+	limits      uploadLimits
 }
 
 // NewAttachmentService constructs an AttachmentService.
 func NewAttachmentService(attachments AttachmentStore, signer AttachmentSigner, publisher Publisher) *AttachmentService {
 	return &AttachmentService{attachments: attachments, signer: signer, publisher: publisher}
 }
+
+// SetUploadLimits wires the settings-based limit checker. Optional —
+// when unset, no extra validation runs (useful for unit tests of the
+// other paths). Production wiring always passes the SettingsService.
+func (s *AttachmentService) SetUploadLimits(l uploadLimits) { s.limits = l }
 
 // AttachmentURLTTL is how long signed GET URLs remain valid. Frontend resolves
 // URLs on demand via the API so this can be relatively short.
@@ -71,6 +82,14 @@ func (s *AttachmentService) CreateUploadURL(ctx context.Context, userID, filenam
 	}
 	if s.signer == nil {
 		return nil, errors.New("attachment: storage not configured")
+	}
+	if s.limits != nil {
+		if !s.limits.AllowsExtension(ctx, filename) {
+			return nil, errors.New("attachment: file extension not allowed by workspace settings")
+		}
+		if !s.limits.AllowsSize(ctx, size) {
+			return nil, errors.New("attachment: file exceeds the workspace upload size limit")
+		}
 	}
 
 	if existing, err := s.attachments.GetByHash(ctx, sha256); err == nil && existing != nil {

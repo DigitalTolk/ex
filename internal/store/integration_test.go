@@ -70,6 +70,11 @@ func TestMain(m *testing.M) {
 
 // dynamoClient builds an AWS SDK client pointed at the shared DynamoDB
 // Local container. Returns nil + skip-friendly bool if unavailable.
+//
+// Retries are bumped to 10 (default 3) because GitHub Actions runners
+// occasionally reset the TCP connection to the container under load —
+// the original 3-attempt default was insufficient and produced flakes
+// like "request send failed: connection reset by peer".
 func dynamoClient(ctx context.Context, t *testing.T) (*dynamodb.Client, bool) {
 	t.Helper()
 	if !sharedAvailable {
@@ -78,6 +83,7 @@ func dynamoClient(ctx context.Context, t *testing.T) (*dynamodb.Client, bool) {
 	awsCfg, err := awsconfig.LoadDefaultConfig(ctx,
 		awsconfig.WithRegion("us-east-1"),
 		awsconfig.WithCredentialsProvider(credentials.NewStaticCredentialsProvider("dummy", "dummy", "dummy")),
+		awsconfig.WithRetryMaxAttempts(10),
 	)
 	if err != nil {
 		t.Fatalf("load aws config: %v", err)

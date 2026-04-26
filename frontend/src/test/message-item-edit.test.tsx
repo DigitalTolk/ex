@@ -10,6 +10,7 @@ vi.mock('@/hooks/useMessages', () => ({
   useEditMessage: () => ({ mutate: editMutate, isPending: false }),
   useDeleteMessage: () => ({ mutate: vi.fn(), isPending: false }),
   useToggleReaction: () => ({ mutate: vi.fn(), isPending: false }),
+  useSetPinned: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 
 vi.mock('@/hooks/useEmoji', () => ({
@@ -74,8 +75,12 @@ describe('MessageItem inline edit', () => {
     await waitFor(() => {
       expect(screen.getByTestId('inline-edit')).toBeInTheDocument();
     });
-    const ta = screen.getByLabelText('Message input') as HTMLTextAreaElement;
-    expect(ta.value).toBe('hello *world*');
+    const editor = screen.getByLabelText('Message input');
+    // The WYSIWYG editor is contentEditable — initialBody is converted to
+    // HTML on mount; verify the visible text matches the source markdown
+    // content (italic markers turn into an <em>, but textContent is flat).
+    expect(editor.textContent ?? '').toContain('hello');
+    expect(editor.textContent ?? '').toContain('world');
     // Formatting toolbar from MessageInput must be present
     expect(screen.getByLabelText('Bold (Ctrl+B)')).toBeInTheDocument();
     // Save and Cancel actions
@@ -94,8 +99,9 @@ describe('MessageItem inline edit', () => {
       />,
     );
     fireEvent.click(screen.getByText('Edit'));
-    const ta = await screen.findByLabelText('Message input');
-    fireEvent.change(ta, { target: { value: 'updated body' } });
+    const editor = await screen.findByLabelText('Message input');
+    editor.textContent = 'updated body';
+    fireEvent.input(editor);
     fireEvent.click(screen.getByLabelText('Save'));
     expect(editMutate).toHaveBeenCalledTimes(1);
     expect(editMutate.mock.calls[0][0]).toMatchObject({
@@ -117,26 +123,10 @@ describe('MessageItem inline edit', () => {
       />,
     );
     fireEvent.click(screen.getByText('Edit'));
-    const ta = await screen.findByLabelText('Message input');
-    fireEvent.keyDown(ta, { key: 'Escape' });
+    const editor = await screen.findByLabelText('Message input');
+    fireEvent.keyDown(editor, { key: 'Escape' });
     await waitFor(() => {
       expect(screen.queryByTestId('inline-edit')).toBeNull();
     });
-  });
-
-  it('shows a live preview while editing markdown', async () => {
-    renderWithProviders(
-      <MessageItem
-        message={makeMessage({ body: 'plain' })}
-        authorName="Alice"
-        isOwn
-        channelId="ch-1"
-        currentUserId="u-1"
-      />,
-    );
-    fireEvent.click(screen.getByText('Edit'));
-    const ta = await screen.findByLabelText('Message input');
-    fireEvent.change(ta, { target: { value: '**bold**' } });
-    expect(screen.getByTestId('message-input-preview').querySelector('strong')?.textContent).toBe('bold');
   });
 });

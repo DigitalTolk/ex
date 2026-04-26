@@ -72,6 +72,7 @@ vi.mock('@/hooks/useMessages', () => ({
   useEditMessage: () => ({ mutate: vi.fn(), isPending: false }),
   useDeleteMessage: () => ({ mutate: vi.fn(), isPending: false }),
   useToggleReaction: () => ({ mutate: vi.fn(), isPending: false }),
+  useSetPinned: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 
 vi.mock('@/hooks/useWebSocket', () => ({
@@ -115,7 +116,7 @@ describe('ConversationView - DM title', () => {
   it('shows other participant name as title for DM', async () => {
     renderConversationView();
     await waitFor(() => {
-      expect(screen.getByText('Bob')).toBeInTheDocument();
+      expect(screen.getByRole('heading', { level: 1, name: 'Bob' })).toBeInTheDocument();
     });
   });
 

@@ -52,14 +52,24 @@ describe('MessageInput - file upload', () => {
   });
 
   it('shows a draft chip after a successful upload', async () => {
-    mockUploadAttachment.mockResolvedValueOnce({
+    const init = {
       id: 'att-99',
       uploadURL: 'http://s3/u',
       alreadyExists: false,
       filename: 'pic.png',
       contentType: 'image/png',
       size: 1,
-    });
+    };
+    mockUploadAttachment.mockImplementationOnce(
+      async (
+        _file: File,
+        cb?: { onInit?: (i: typeof init) => void; onProgress?: (n: number) => void },
+      ) => {
+        cb?.onInit?.(init);
+        cb?.onProgress?.(1);
+        return init;
+      },
+    );
 
     render(<MessageInput onSend={vi.fn()} />);
     const fileInput = screen.getByLabelText('File input') as HTMLInputElement;

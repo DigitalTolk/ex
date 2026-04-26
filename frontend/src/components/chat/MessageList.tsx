@@ -2,6 +2,8 @@ import { useRef, useCallback, type ReactNode } from 'react';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { MessageItem } from './MessageItem';
+import { useMessageDeepLinkHighlight } from '@/hooks/useMessageDeepLinkHighlight';
+import { dayKey, formatDayHeading } from '@/lib/format';
 import type { Message } from '@/types';
 
 export interface UserMapEntry {
@@ -18,25 +20,14 @@ interface MessageListProps {
   fetchNextPage: () => void;
   currentUserId?: string;
   channelId?: string;
+  channelSlug?: string;
   conversationId?: string;
   userMap: Record<string, UserMapEntry>;
   onReplyInThread?: (messageID: string) => void;
-}
-
-function formatDateSeparator(dateStr: string): string {
-  const date = new Date(dateStr);
-  const today = new Date();
-  const yesterday = new Date();
-  yesterday.setDate(yesterday.getDate() - 1);
-
-  if (date.toDateString() === today.toDateString()) return 'Today';
-  if (date.toDateString() === yesterday.toDateString()) return 'Yesterday';
-
-  return date.toLocaleDateString(undefined, {
-    weekday: 'long',
-    month: 'long',
-    day: 'numeric',
-  });
+  // Rendered at the top of the list once we've paged back to the very first
+  // message (hasNextPage is false). Owners pass the variant that matches the
+  // parent kind: ChannelIntro / DMIntro / SelfDMIntro / GroupIntro.
+  intro?: ReactNode;
 }
 
 export function MessageList({
@@ -47,10 +38,13 @@ export function MessageList({
   fetchNextPage,
   currentUserId,
   channelId,
+  channelSlug,
   conversationId,
   userMap,
   onReplyInThread,
+  intro,
 }: MessageListProps) {
+  useMessageDeepLinkHighlight([channelId, conversationId, isLoading, pages.length]);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const handleScroll = useCallback(() => {
@@ -79,22 +73,31 @@ export function MessageList({
   let lastDate = '';
   const elements: ReactNode[] = [];
 
+  // The intro renders at the very top of the message list — but only once
+  // we've paged back to the start (no older messages remaining). This
+  // mirrors how chat apps reveal "this is the beginning of …" only when
+  // the user actually reaches the beginning.
+  if (intro && !hasNextPage) {
+    elements.push(<div key="intro">{intro}</div>);
+  }
+
   for (const msg of allMessages) {
     // Skip thread replies in the main list (they live in the ThreadPanel)
     if (msg.parentMessageID) continue;
 
-    const msgDate = new Date(msg.createdAt).toDateString();
+    const msgDate = dayKey(msg.createdAt);
     if (msgDate !== lastDate) {
       lastDate = msgDate;
       elements.push(
         <div
           key={`date-${msgDate}`}
+          data-testid="day-divider"
           className="flex items-center gap-3 py-2"
           role="separator"
         >
           <div className="flex-1 border-t border-border" />
           <span className="text-xs font-medium text-muted-foreground">
-            {formatDateSeparator(msg.createdAt)}
+            {formatDayHeading(msg.createdAt)}
           </span>
           <div className="flex-1 border-t border-border" />
         </div>,
@@ -124,6 +127,7 @@ export function MessageList({
           authorOnline={u?.online}
           isOwn={msg.authorID === currentUserId}
           channelId={channelId}
+          channelSlug={channelSlug}
           conversationId={conversationId}
           currentUserId={currentUserId}
           onReplyInThread={onReplyInThread}

@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { Outlet, useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { AppLayout } from '@/components/layout/AppLayout';
@@ -12,9 +13,14 @@ export default function ChatPage() {
   const { markChannelUnread, markConversationUnread, unhideConversation } = useUnread();
   const { user } = useAuth();
   const { setUserOnline } = usePresence();
-  const { dispatch: dispatchNotification } = useNotifications();
+  const { dispatch: dispatchNotification, setCurrentUserID } = useNotifications();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
+
+  useEffect(() => {
+    setCurrentUserID(user?.id ?? null);
+    return () => setCurrentUserID(null);
+  }, [user?.id, setCurrentUserID]);
 
   useWebSocket({
     onMessageNew: (data: unknown) => {
@@ -33,12 +39,15 @@ export default function ChatPage() {
       // Invalidate message queries so open views refresh
       queryClient.invalidateQueries({ queryKey: ['channelMessages', parentID] });
       queryClient.invalidateQueries({ queryKey: ['conversationMessages', parentID] });
-      // If this is a thread reply, refresh the open ThreadPanel for everyone.
+      // If this is a thread reply, refresh the open ThreadPanel for everyone
+      // and bump the cross-parent threads list so the sidebar's unread dot
+      // reflects the new activity.
       if (parentMessageID) {
         const path = `channels/${parentID}`;
         const altPath = `conversations/${parentID}`;
         queryClient.invalidateQueries({ queryKey: ['thread', path, parentMessageID] });
         queryClient.invalidateQueries({ queryKey: ['thread', altPath, parentMessageID] });
+        queryClient.invalidateQueries({ queryKey: ['userThreads'] });
       }
     },
     onMessageEdited: (data: unknown) => {
@@ -104,6 +113,10 @@ export default function ChatPage() {
       const open = userChannels?.find((c) => c.channelID === channelID);
       queryClient.invalidateQueries({ queryKey: ['userChannels'] });
       queryClient.invalidateQueries({ queryKey: ['channelMembers', channelID] });
+      // The directory's BrowsePublic results are guest-scoped (only joined
+      // channels), so a kicked-out guest must refetch to drop the channel
+      // they no longer belong to from the listing.
+      queryClient.invalidateQueries({ queryKey: ['browseChannels'] });
       if (open && window.location.pathname.endsWith(`/channel/${slugify(open.channelName)}`)) {
         navigate('/', { replace: true });
       }

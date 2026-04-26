@@ -302,6 +302,46 @@ func (h *ConversationHandler) ToggleReaction(w http.ResponseWriter, r *http.Requ
 	writeJSON(w, http.StatusOK, msg)
 }
 
+// SetPinned pins or unpins a message in a conversation.
+func (h *ConversationHandler) SetPinned(w http.ResponseWriter, r *http.Request) {
+	userID := middleware.UserIDFromContext(r.Context())
+	id := pathParam(r, "id")
+	msgID := pathParam(r, "msgId")
+	if id == "" || msgID == "" {
+		writeError(w, http.StatusBadRequest, "missing_id", "conversation ID and message ID are required")
+		return
+	}
+	var body struct {
+		Pinned bool `json:"pinned"`
+	}
+	if err := readJSON(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", err.Error())
+		return
+	}
+	msg, err := h.messageSvc.SetPinned(r.Context(), userID, id, service.ParentConversation, msgID, body.Pinned)
+	if err != nil {
+		writeError(w, http.StatusForbidden, "pin_error", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, msg)
+}
+
+// ListPinned returns the conversation's currently-pinned messages.
+func (h *ConversationHandler) ListPinned(w http.ResponseWriter, r *http.Request) {
+	userID := middleware.UserIDFromContext(r.Context())
+	id := pathParam(r, "id")
+	if id == "" {
+		writeError(w, http.StatusBadRequest, "missing_id", "conversation ID is required")
+		return
+	}
+	pinned, err := h.messageSvc.ListPinned(r.Context(), userID, id, service.ParentConversation)
+	if err != nil {
+		writeError(w, http.StatusForbidden, "list_pinned_error", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, pinned)
+}
+
 // DeleteMessage removes a message from a conversation.
 func (h *ConversationHandler) DeleteMessage(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserIDFromContext(r.Context())

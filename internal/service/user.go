@@ -49,10 +49,27 @@ func (s *UserService) resolveAvatar(ctx context.Context, user *model.User) {
 	}
 }
 
+// backfillAuthProvider derives the auth provider for users created before the
+// field was introduced. The rule mirrors how new users are created: any user
+// with a stored password came in via invite acceptance (guest); everyone
+// else logged in via OIDC. Without this, legacy SSO users would slip past
+// the display-name lock because their AuthProvider is empty.
+func backfillAuthProvider(user *model.User) {
+	if user == nil || user.AuthProvider != "" {
+		return
+	}
+	if user.PasswordHash != "" {
+		user.AuthProvider = model.AuthProviderGuest
+	} else {
+		user.AuthProvider = model.AuthProviderOIDC
+	}
+}
+
 // GetByID returns a user by ID, checking the cache first.
 func (s *UserService) GetByID(ctx context.Context, id string) (*model.User, error) {
 	if s.cache != nil {
 		if user, err := s.cache.GetUser(ctx, id); err == nil {
+			backfillAuthProvider(user)
 			s.resolveAvatar(ctx, user)
 			return user, nil
 		}
@@ -62,6 +79,7 @@ func (s *UserService) GetByID(ctx context.Context, id string) (*model.User, erro
 	if err != nil {
 		return nil, fmt.Errorf("user: get by id: %w", err)
 	}
+	backfillAuthProvider(user)
 
 	if s.cache != nil {
 		_ = s.cache.SetUser(ctx, user)
@@ -165,6 +183,11 @@ func (s *UserService) Search(ctx context.Context, query string, limit int) ([]*m
 // UpdateRole sets the system role on a user. The handler is responsible for
 // enforcing that the actor is a system admin; this function performs the
 // underlying mutation and invalidates the user cache.
+//
+// Guest accounts (created via invite acceptance) cannot be promoted to
+// member or admin — those roles are reserved for SSO-authenticated
+// employees. A guest must re-onboard through SSO to gain a non-guest
+// role. Demotions to "guest" remain allowed.
 func (s *UserService) UpdateRole(ctx context.Context, _, targetID string, role model.SystemRole) (*model.User, error) {
 	user, err := s.users.GetUser(ctx, targetID)
 	if err != nil {
@@ -172,6 +195,10 @@ func (s *UserService) UpdateRole(ctx context.Context, _, targetID string, role m
 			return nil, fmt.Errorf("user: not found: %w", err)
 		}
 		return nil, fmt.Errorf("user: get: %w", err)
+	}
+	backfillAuthProvider(user)
+	if user.AuthProvider == model.AuthProviderGuest && role != model.SystemRoleGuest {
+		return nil, errors.New("user: guests cannot be promoted; member and admin roles are SSO-only")
 	}
 	user.SystemRole = role
 	user.UpdatedAt = time.Now()
@@ -182,6 +209,44 @@ func (s *UserService) UpdateRole(ctx context.Context, _, targetID string, role m
 		_ = s.cache.Delete(ctx, "user:"+targetID)
 	}
 	s.resolveAvatar(ctx, user)
+	return user, nil
+}
+
+// SetStatus marks a user active or deactivated. Only guest accounts can be
+// deactivated this way — SSO-managed users are governed by the upstream IdP.
+// The handler enforces actor admin rights; this performs the mutation and
+// emits a user.updated event so connected clients refresh.
+func (s *UserService) SetStatus(ctx context.Context, targetID string, deactivated bool) (*model.User, error) {
+	user, err := s.users.GetUser(ctx, targetID)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, fmt.Errorf("user: not found: %w", err)
+		}
+		return nil, fmt.Errorf("user: get: %w", err)
+	}
+	backfillAuthProvider(user)
+	if user.AuthProvider != model.AuthProviderGuest {
+		return nil, errors.New("user: only guest accounts can be deactivated")
+	}
+	if deactivated {
+		user.Status = "deactivated"
+	} else {
+		user.Status = "active"
+	}
+	user.UpdatedAt = time.Now()
+	if err := s.users.UpdateUser(ctx, user); err != nil {
+		return nil, fmt.Errorf("user: update status: %w", err)
+	}
+	if s.cache != nil {
+		_ = s.cache.Delete(ctx, "user:"+targetID)
+	}
+	s.resolveAvatar(ctx, user)
+
+	events.Publish(ctx, s.publisher, pubsub.UserEvents(), events.EventUserUpdated, map[string]any{
+		"id":     user.ID,
+		"status": user.Status,
+	})
+
 	return user, nil
 }
 

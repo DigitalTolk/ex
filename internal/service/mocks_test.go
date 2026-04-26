@@ -205,6 +205,18 @@ func (m *mockMembershipStore) RemoveMember(_ context.Context, channelID, userID 
 		return m.removeErr
 	}
 	delete(m.memberships, channelID+"#"+userID)
+	// Keep the userChannels override in sync so ListUserChannels reflects
+	// the removal — otherwise tests that pre-seed both maps see stale rows.
+	if m.userChannels != nil {
+		filtered := m.userChannels[:0]
+		for _, uc := range m.userChannels {
+			if uc.UserID == userID && uc.ChannelID == channelID {
+				continue
+			}
+			filtered = append(filtered, uc)
+		}
+		m.userChannels = filtered
+	}
 	return nil
 }
 
@@ -328,7 +340,13 @@ func (m *mockChannelStore) ListPublicChannels(_ context.Context, _ int, _ string
 	if m.listErr != nil {
 		return nil, "", m.listErr
 	}
-	return nil, "", nil
+	out := make([]*model.Channel, 0, len(m.channels))
+	for _, c := range m.channels {
+		if c.Type == model.ChannelTypePublic {
+			out = append(out, c)
+		}
+	}
+	return out, "", nil
 }
 
 // --- Mock Cache ---

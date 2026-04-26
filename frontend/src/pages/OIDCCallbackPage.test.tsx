@@ -79,7 +79,7 @@ describe('OIDCCallbackPage', () => {
     renderPage();
 
     await vi.waitFor(() => {
-      expect(mockNavigate).toHaveBeenCalledWith('/', { replace: true });
+      expect(mockNavigate).toHaveBeenCalledWith('/channel/general', { replace: true });
     });
   });
 });

@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import { Badge } from '@/components/ui/badge';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -20,6 +21,11 @@ import { getInitials } from '@/lib/format';
 import type { User } from '@/types';
 
 type Tab = 'channels' | 'members';
+
+function capitalize(s: string): string {
+  if (!s) return '';
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
 
 export default function DirectoriesPage() {
   const [tab, setTab] = useState<Tab>('channels');
@@ -72,19 +78,45 @@ function ChannelsTab() {
   const { data: userChannels } = useUserChannels();
   const joinChannel = useJoinChannel();
   const navigate = useNavigate();
+  const [query, setQuery] = useState('');
 
   const joinedIds = new Set(userChannels?.map((c) => c.channelID) ?? []);
 
-  function handleJoin(channelId: string, channelName: string) {
+  const q = query.trim().toLowerCase();
+  const visible = (allChannels ?? [])
+    .filter((ch) => ch.type === 'public')
+    .filter((ch) => {
+      if (!q) return true;
+      return (
+        ch.name.toLowerCase().includes(q) ||
+        (ch.description ?? '').toLowerCase().includes(q)
+      );
+    });
+
+  function handleJoin(channelId: string, channelSlug: string) {
+    // Routes are keyed by slug (ChannelView resolves the slug back to a
+    // channel record). Use the slug from the channel record rather than
+    // the raw name so we always land on the right URL.
     joinChannel.mutate(channelId, {
       onSuccess: () => {
-        navigate(`/channel/${channelName}`);
+        navigate(`/channel/${channelSlug}`);
       },
     });
   }
 
   return (
     <>
+      <div className="relative mb-4">
+        <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+        <Input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search channels..."
+          aria-label="Search channels"
+          className="pl-9"
+        />
+      </div>
+
       {isLoading && (
         <div className="space-y-3">
           {Array.from({ length: 6 }).map((_, i) => (
@@ -93,14 +125,14 @@ function ChannelsTab() {
         </div>
       )}
 
-      {!isLoading && allChannels?.length === 0 && (
-        <p className="py-12 text-center text-muted-foreground">No channels available</p>
+      {!isLoading && visible.length === 0 && (
+        <p className="py-12 text-center text-muted-foreground">
+          {q ? 'No matching channels' : 'No channels available'}
+        </p>
       )}
 
       <div className="space-y-1">
-        {allChannels
-          ?.filter((ch) => ch.type === 'public')
-          .map((channel) => {
+        {!isLoading && visible.map((channel) => {
             const alreadyJoined = joinedIds.has(channel.id);
             return (
               <div
@@ -122,14 +154,14 @@ function ChannelsTab() {
                   <Button
                     variant="outline"
                     size="sm"
-                    onClick={() => navigate(`/channel/${channel.name}`)}
+                    onClick={() => navigate(`/channel/${channel.slug}`)}
                   >
                     Open
                   </Button>
                 ) : (
                   <Button
                     size="sm"
-                    onClick={() => handleJoin(channel.id, channel.name)}
+                    onClick={() => handleJoin(channel.id, channel.slug)}
                     disabled={joinChannel.isPending}
                   >
                     Join
@@ -197,6 +229,22 @@ function MembersTab({ isAdmin, currentUserId }: MembersTabProps) {
     }
   }
 
+  async function setStatus(userId: string, deactivated: boolean) {
+    setError('');
+    try {
+      await apiFetch(`/api/v1/users/${userId}/status`, {
+        method: 'PATCH',
+        body: JSON.stringify({ deactivated }),
+      });
+      const newStatus = deactivated ? 'deactivated' : 'active';
+      setUsers((prev) =>
+        prev.map((u) => (u.id === userId ? { ...u, status: newStatus } : u)),
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to update status');
+    }
+  }
+
   function handleMessage(userId: string) {
     createConversation.mutate(
       { type: 'dm', participantIDs: [userId] },
@@ -244,14 +292,14 @@ function MembersTab({ isAdmin, currentUserId }: MembersTabProps) {
       )}
 
       <div className="grid gap-3 sm:grid-cols-2">
-        {users.map((u) => {
+        {!isLoading && users.map((u) => {
           const online = isOnline(u.id);
           const isSelf = u.id === currentUserId;
           return (
             <div
               key={u.id}
               data-testid="directory-user-card"
-              className="group flex items-center gap-3 rounded-lg border bg-card p-3 transition-colors hover:bg-muted/40"
+              className="group flex items-start gap-3 rounded-lg border bg-card p-3 transition-colors hover:bg-muted/40"
             >
               <span className="relative inline-block shrink-0">
                 <Avatar className="h-11 w-11">
@@ -275,12 +323,27 @@ function MembersTab({ isAdmin, currentUserId }: MembersTabProps) {
                     <span className="text-[10px] text-muted-foreground">(you)</span>
                   )}
                 </div>
-                <p className="text-xs text-muted-foreground truncate">{u.email}</p>
-                <p className="mt-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
-                  {u.systemRole}
-                </p>
+                <p className="text-sm text-muted-foreground truncate">{u.email}</p>
+                <div className="mt-1 flex flex-wrap items-center gap-1">
+                  <Badge
+                    variant={u.systemRole === 'admin' ? 'default' : 'secondary'}
+                    data-testid={`role-pill-${u.id}`}
+                    className="text-sm h-auto py-0.5"
+                  >
+                    {capitalize(u.systemRole)}
+                  </Badge>
+                  {u.status === 'deactivated' && (
+                    <Badge
+                      variant="destructive"
+                      data-testid={`status-pill-${u.id}`}
+                      className="text-sm h-auto py-0.5"
+                    >
+                      Inactive
+                    </Badge>
+                  )}
+                </div>
               </div>
-              <div className="flex flex-col items-end gap-1.5 shrink-0">
+              <div className="flex flex-col items-end gap-1.5 shrink-0" data-testid="directory-card-actions">
                 <Button
                   size="sm"
                   variant="outline"
@@ -296,20 +359,20 @@ function MembersTab({ isAdmin, currentUserId }: MembersTabProps) {
                   <DropdownMenu>
                     <DropdownMenuTrigger
                       className="inline-flex items-center justify-center rounded-md border border-input bg-background px-2 h-7 text-xs font-medium hover:bg-accent hover:text-accent-foreground"
-                      aria-label={`Change role for ${u.displayName}`}
+                      aria-label={`Manage ${u.displayName}`}
                     >
-                      Role
+                      Manage
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="end">
                       <DropdownMenuItem
                         onClick={() => changeRole(u.id, 'admin')}
-                        disabled={u.systemRole === 'admin'}
+                        disabled={u.systemRole === 'admin' || u.systemRole === 'guest' || u.authProvider === 'guest'}
                       >
                         Promote to Admin
                       </DropdownMenuItem>
                       <DropdownMenuItem
                         onClick={() => changeRole(u.id, 'member')}
-                        disabled={u.systemRole === 'member'}
+                        disabled={u.systemRole === 'member' || u.systemRole === 'guest' || u.authProvider === 'guest'}
                       >
                         Set as Member
                       </DropdownMenuItem>
@@ -319,6 +382,23 @@ function MembersTab({ isAdmin, currentUserId }: MembersTabProps) {
                       >
                         Set as Guest
                       </DropdownMenuItem>
+                      {u.authProvider === 'guest' && (
+                        u.status === 'deactivated' ? (
+                          <DropdownMenuItem
+                            onClick={() => setStatus(u.id, false)}
+                            data-testid={`reactivate-${u.id}`}
+                          >
+                            Reactivate guest
+                          </DropdownMenuItem>
+                        ) : (
+                          <DropdownMenuItem
+                            onClick={() => setStatus(u.id, true)}
+                            data-testid={`deactivate-${u.id}`}
+                          >
+                            Disable guest
+                          </DropdownMenuItem>
+                        )
+                      )}
                     </DropdownMenuContent>
                   </DropdownMenu>
                 )}

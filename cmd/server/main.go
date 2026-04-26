@@ -133,6 +133,8 @@ func main() {
 	messageSvc.SetAttachmentManager(attachmentSvc)
 	notificationSvc := service.NewNotificationService(redisPubSub, membershipStore, conversationStore, channelStore, userStore)
 	messageSvc.SetNotifier(notificationSvc)
+	settingsSvc := service.NewSettingsService(store.NewSettingsStore(db))
+	attachmentSvc.SetUploadLimits(settingsSvc)
 
 	// ------------------------------------------------------------------ Handlers
 	authH := handler.NewAuthHandler(authSvc, jwtMgr)
@@ -144,6 +146,8 @@ func main() {
 	emojiH := handler.NewEmojiHandler(emojiSvc)
 	presenceH := handler.NewPresenceHandler(presenceSvc)
 	attachmentH := handler.NewAttachmentHandler(attachmentSvc)
+	adminH := handler.NewAdminHandler(settingsSvc)
+	threadH := handler.NewThreadHandler(messageSvc)
 
 	// ------------------------------------------------------------------ Frontend FS
 	var frontendDist fs.FS
@@ -158,7 +162,7 @@ func main() {
 	if !cfg.IsDev() {
 		allowOrigin = cfg.BaseURL
 	}
-	router := handler.NewRouter(authH, userH, channelH, convH, wsH, uploadH, emojiH, presenceH, attachmentH, jwtMgr, frontendDist, allowOrigin)
+	router := handler.NewRouter(authH, userH, channelH, convH, wsH, uploadH, emojiH, presenceH, attachmentH, adminH, threadH, jwtMgr, frontendDist, allowOrigin)
 
 	// ------------------------------------------------------------------ Server
 	srv := &http.Server{

@@ -20,6 +20,104 @@ func setupChannelService() (*ChannelService, *mockChannelStore, *mockMembershipS
 	return svc, channels, memberships, broker, publisher
 }
 
+// setupChannelServiceWithUsers is the same as setupChannelService but also
+// surfaces the mock UserStore so guest-related tests can prepare the actor.
+func setupChannelServiceWithUsers() (*ChannelService, *mockChannelStore, *mockMembershipStore, *mockUserStore, *mockBroker, *mockPublisher) {
+	channels := newMockChannelStore()
+	memberships := newMockMembershipStore()
+	users := newMockUserStore()
+	messages := newMockMessageStore()
+	cache := newMockCache()
+	broker := newMockBroker()
+	publisher := newMockPublisher()
+	svc := NewChannelService(channels, memberships, users, messages, cache, broker, publisher)
+	return svc, channels, memberships, users, broker, publisher
+}
+
+func TestChannelService_Create_GuestRejected(t *testing.T) {
+	svc, _, _, users, _, _ := setupChannelServiceWithUsers()
+	users.users["g-1"] = &model.User{ID: "g-1", SystemRole: model.SystemRoleGuest}
+	if _, err := svc.Create(context.Background(), "g-1", "secret", model.ChannelTypePublic, ""); err == nil {
+		t.Fatal("expected guest-create rejection")
+	}
+}
+
+func TestChannelService_Create_MemberAllowed(t *testing.T) {
+	svc, _, _, users, _, _ := setupChannelServiceWithUsers()
+	users.users["m-1"] = &model.User{ID: "m-1", SystemRole: model.SystemRoleMember}
+	if _, err := svc.Create(context.Background(), "m-1", "team-room", model.ChannelTypePublic, ""); err != nil {
+		t.Fatalf("member should be allowed to create a channel: %v", err)
+	}
+}
+
+func TestChannelService_Join_GuestBlockedOnNonGeneral(t *testing.T) {
+	svc, channels, _, users, _, _ := setupChannelServiceWithUsers()
+	users.users["g-1"] = &model.User{ID: "g-1", SystemRole: model.SystemRoleGuest}
+	channels.channels["random"] = &model.Channel{
+		ID: "random", Name: "random", Type: model.ChannelTypePublic,
+	}
+	if err := svc.Join(context.Background(), "g-1", "random"); err == nil {
+		t.Fatal("expected guest to be blocked from joining a non-general channel")
+	}
+}
+
+func TestChannelService_BrowsePublic_GuestFilteredToInvitedChannels(t *testing.T) {
+	svc, channels, memberships, users, _, _ := setupChannelServiceWithUsers()
+	users.users["g-1"] = &model.User{ID: "g-1", SystemRole: model.SystemRoleGuest}
+
+	// Three public channels exist in the workspace.
+	channels.channels["ch-general"] = &model.Channel{ID: "ch-general", Name: "general", Slug: "general", Type: model.ChannelTypePublic}
+	channels.channels["ch-invited"] = &model.Channel{ID: "ch-invited", Name: "invited", Slug: "invited", Type: model.ChannelTypePublic}
+	channels.channels["ch-private-to-me"] = &model.Channel{ID: "ch-private-to-me", Name: "secret", Slug: "secret", Type: model.ChannelTypePublic}
+
+	// Guest is a member of two of them.
+	memberships.userChannels = []*model.UserChannel{
+		{UserID: "g-1", ChannelID: "ch-general", ChannelName: "general"},
+		{UserID: "g-1", ChannelID: "ch-invited", ChannelName: "invited"},
+	}
+
+	got, _, err := svc.BrowsePublic(context.Background(), "g-1", 50, "")
+	if err != nil {
+		t.Fatalf("BrowsePublic: %v", err)
+	}
+	gotIDs := map[string]bool{}
+	for _, c := range got {
+		gotIDs[c.ID] = true
+	}
+	if !gotIDs["ch-general"] || !gotIDs["ch-invited"] {
+		t.Errorf("guest should see invited channels: got %v", gotIDs)
+	}
+	if gotIDs["ch-private-to-me"] {
+		t.Errorf("guest should NOT see channels they aren't a member of: got %v", gotIDs)
+	}
+}
+
+func TestChannelService_BrowsePublic_MembersSeeAll(t *testing.T) {
+	svc, channels, _, users, _, _ := setupChannelServiceWithUsers()
+	users.users["m-1"] = &model.User{ID: "m-1", SystemRole: model.SystemRoleMember}
+	channels.channels["ch-a"] = &model.Channel{ID: "ch-a", Name: "a", Type: model.ChannelTypePublic}
+	channels.channels["ch-b"] = &model.Channel{ID: "ch-b", Name: "b", Type: model.ChannelTypePublic}
+
+	got, _, err := svc.BrowsePublic(context.Background(), "m-1", 50, "")
+	if err != nil {
+		t.Fatalf("BrowsePublic: %v", err)
+	}
+	if len(got) != 2 {
+		t.Errorf("members should see every public channel; got %d", len(got))
+	}
+}
+
+func TestChannelService_Join_GuestAllowedOnGeneral(t *testing.T) {
+	svc, channels, _, users, _, _ := setupChannelServiceWithUsers()
+	users.users["g-1"] = &model.User{ID: "g-1", SystemRole: model.SystemRoleGuest}
+	channels.channels[generalChannelID] = &model.Channel{
+		ID: generalChannelID, Name: "general", Type: model.ChannelTypePublic,
+	}
+	if err := svc.Join(context.Background(), "g-1", generalChannelID); err != nil {
+		t.Fatalf("guest should be allowed to join #general: %v", err)
+	}
+}
+
 func TestChannelService_Create(t *testing.T) {
 	svc, channels, memberships, broker, _ := setupChannelService()
 	ctx := context.Background()
@@ -449,7 +547,7 @@ func TestChannelService_BrowsePublic(t *testing.T) {
 	svc, _, _, _, _ := setupChannelService()
 	ctx := context.Background()
 
-	_, _, err := svc.BrowsePublic(ctx, 50, "")
+	_, _, err := svc.BrowsePublic(ctx, "", 50, "")
 	if err != nil {
 		t.Fatalf("BrowsePublic: %v", err)
 	}
@@ -836,6 +934,86 @@ func TestRemoveMember_PublishesUserEvent(t *testing.T) {
 	}
 	if personal == nil {
 		t.Fatal("expected channel.removed event on user:target")
+	}
+}
+
+// Archive must remove every membership for the channel — both the channel-
+// side row (so the member list of the archived channel comes back empty)
+// and the user-side row (so it disappears from owner and member sidebars
+// alike). Regression: archive previously only flipped the Archived flag,
+// leaving stale memberships behind.
+func TestArchive_RemovesAllMemberships(t *testing.T) {
+	svc, channels, memberships, _, _ := setupChannelService()
+	ctx := context.Background()
+
+	channels.channels["ch-arx"] = &model.Channel{
+		ID:   "ch-arx",
+		Name: "to-archive",
+		Type: model.ChannelTypePublic,
+	}
+	memberships.memberships["ch-arx#owner"] = &model.ChannelMembership{
+		ChannelID: "ch-arx", UserID: "owner", Role: model.ChannelRoleOwner,
+	}
+	memberships.memberships["ch-arx#m1"] = &model.ChannelMembership{
+		ChannelID: "ch-arx", UserID: "m1", Role: model.ChannelRoleMember,
+	}
+	memberships.memberships["ch-arx#m2"] = &model.ChannelMembership{
+		ChannelID: "ch-arx", UserID: "m2", Role: model.ChannelRoleMember,
+	}
+
+	if err := svc.Archive(ctx, "owner", "ch-arx"); err != nil {
+		t.Fatalf("Archive: %v", err)
+	}
+
+	// Channel is marked archived.
+	if !channels.channels["ch-arx"].Archived {
+		t.Error("expected channel to be archived")
+	}
+	// Member-side rows are gone — listing returns nothing.
+	if got, _ := memberships.ListMembers(ctx, "ch-arx"); len(got) != 0 {
+		t.Errorf("expected zero members after archive; got %d", len(got))
+	}
+	// And the per-user keys are wiped — none of the three users still has
+	// the membership row.
+	for _, key := range []string{"ch-arx#owner", "ch-arx#m1", "ch-arx#m2"} {
+		if _, ok := memberships.memberships[key]; ok {
+			t.Errorf("membership %s persisted after archive", key)
+		}
+	}
+}
+
+// After archive, no user — including the owner — should see the channel
+// returned from ListUserChannels. Owner-side persistence was a leftover
+// from when archive was reversible; the new behaviour is destructive.
+func TestArchive_HidesChannelFromOwnerSidebar(t *testing.T) {
+	svc, channels, memberships, _, _ := setupChannelService()
+	ctx := context.Background()
+
+	channels.channels["ch-arx-2"] = &model.Channel{
+		ID:   "ch-arx-2",
+		Name: "to-arch-2",
+		Type: model.ChannelTypePublic,
+	}
+	memberships.userChannels = []*model.UserChannel{
+		{UserID: "owner-2", ChannelID: "ch-arx-2", ChannelName: "to-arch-2", Role: model.ChannelRoleOwner},
+	}
+	memberships.memberships["ch-arx-2#owner-2"] = &model.ChannelMembership{
+		ChannelID: "ch-arx-2", UserID: "owner-2", Role: model.ChannelRoleOwner,
+	}
+
+	if err := svc.Archive(ctx, "owner-2", "ch-arx-2"); err != nil {
+		t.Fatalf("Archive: %v", err)
+	}
+
+	// Sidebar query must not include the archived channel for the owner.
+	out, err := svc.ListUserChannels(ctx, "owner-2")
+	if err != nil {
+		t.Fatalf("ListUserChannels: %v", err)
+	}
+	for _, uc := range out {
+		if uc.ChannelID == "ch-arx-2" {
+			t.Error("owner still sees archived channel in sidebar")
+		}
 	}
 }
 

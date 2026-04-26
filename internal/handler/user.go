@@ -159,6 +159,7 @@ func (h *UserHandler) ListUsers(w http.ResponseWriter, r *http.Request) {
 				"id":          u.ID,
 				"displayName": u.DisplayName,
 				"email":       u.Email,
+				"avatarURL":   u.AvatarURL,
 			})
 		}
 		writeJSON(w, http.StatusOK, result)
@@ -182,9 +183,7 @@ func (h *UserHandler) ListUsers(w http.ResponseWriter, r *http.Request) {
 
 // UpdateUserRole changes a user's system role. Admin-only.
 func (h *UserHandler) UpdateUserRole(w http.ResponseWriter, r *http.Request) {
-	claims := middleware.ClaimsFromContext(r.Context())
-	if claims == nil || claims.SystemRole != model.SystemRoleAdmin {
-		writeError(w, http.StatusForbidden, "forbidden", "admin only")
+	if !requireAdmin(w, r) {
 		return
 	}
 	targetID := pathParam(r, "id")
@@ -207,13 +206,45 @@ func (h *UserHandler) UpdateUserRole(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, err := h.userSvc.UpdateRole(r.Context(), claims.UserID, targetID, role)
+	user, err := h.userSvc.UpdateRole(r.Context(), middleware.UserIDFromContext(r.Context()), targetID, role)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			writeError(w, http.StatusNotFound, "not_found", "user not found")
 			return
 		}
 		writeError(w, http.StatusInternalServerError, "update_error", err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, user)
+}
+
+// SetUserStatus deactivates or reactivates a guest user account. Admin-only.
+func (h *UserHandler) SetUserStatus(w http.ResponseWriter, r *http.Request) {
+	if !requireAdmin(w, r) {
+		return
+	}
+	targetID := pathParam(r, "id")
+	if targetID == "" {
+		writeError(w, http.StatusBadRequest, "missing_id", "user ID is required")
+		return
+	}
+
+	var body struct {
+		Deactivated bool `json:"deactivated"`
+	}
+	if err := readJSON(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", err.Error())
+		return
+	}
+
+	user, err := h.userSvc.SetStatus(r.Context(), targetID, body.Deactivated)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "not_found", "user not found")
+			return
+		}
+		writeError(w, http.StatusBadRequest, "status_error", err.Error())
 		return
 	}
 

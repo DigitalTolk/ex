@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+
+	"github.com/DigitalTolk/ex/internal/middleware"
+	"github.com/DigitalTolk/ex/internal/model"
 )
 
 // JSON is a convenience type for building JSON response objects.
@@ -51,6 +54,17 @@ func queryParam(r *http.Request, name, fallback string) string {
 		return fallback
 	}
 	return v
+}
+
+// requireAdmin writes a 403 to w and returns false unless the request is
+// authenticated as a system admin. Use at the top of admin-only handlers.
+func requireAdmin(w http.ResponseWriter, r *http.Request) bool {
+	claims := middleware.ClaimsFromContext(r.Context())
+	if claims == nil || claims.SystemRole != model.SystemRoleAdmin {
+		writeError(w, http.StatusForbidden, "forbidden", "admin only")
+		return false
+	}
+	return true
 }
 
 // queryInt returns a query string parameter as an integer, or the fallback on

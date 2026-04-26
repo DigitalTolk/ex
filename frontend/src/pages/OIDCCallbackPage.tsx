@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '@/context/AuthContext';
 import { setAccessToken, apiFetch } from '@/lib/api';
+import { GENERAL_CHANNEL_SLUG } from '@/lib/roles';
 import type { User } from '@/types';
 
 export default function OIDCCallbackPage() {
@@ -45,7 +46,7 @@ export default function OIDCCallbackPage() {
         try {
           const user = await apiFetch<User>('/api/v1/users/me');
           setAuth(token, user);
-          navigate('/', { replace: true });
+          navigate(`/channel/${GENERAL_CHANNEL_SLUG}`, { replace: true });
           return;
         } catch {
           // fall through to error

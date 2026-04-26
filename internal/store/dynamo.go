@@ -197,3 +197,9 @@ func chanGSI1SK(id string) string       { return "CHAN#" + id }
 
 func publicChanGSI2PK() string { return "PUBLIC_CHANNELS" }
 func allUsersGSI2PK() string   { return "ALL_USERS" }
+
+// settingsPK is the singleton key for workspace-wide configuration.
+// One record exists at (settingsPK, settingsSK) — written by admins via
+// the admin endpoint and read on every upload to enforce limits.
+func settingsPK() string { return "SETTINGS" }
+func settingsSK() string { return "WORKSPACE" }

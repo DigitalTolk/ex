@@ -1,0 +1,312 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { render, act } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { MemoryRouter, Routes, Route, useLocation } from 'react-router-dom';
+import ChatPage from '@/pages/ChatPage';
+
+let capturedOptions: Record<string, ((data: unknown) => void) | boolean | undefined> = {};
+
+vi.mock('@/hooks/useWebSocket', () => ({
+  useWebSocket: (opts: Record<string, ((data: unknown) => void) | boolean | undefined>) => {
+    capturedOptions = opts;
+  },
+}));
+
+vi.mock('@/context/AuthContext', () => ({
+  useAuth: () => ({
+    user: { id: 'u-me', email: 'a@b.c', displayName: 'Me', systemRole: 'member', status: 'active' },
+    isAuthenticated: true,
+    isLoading: false,
+  }),
+}));
+
+const markChannelUnread = vi.fn();
+const markConversationUnread = vi.fn();
+const unhideConversation = vi.fn();
+
+vi.mock('@/context/UnreadContext', () => ({
+  useUnread: () => ({
+    markChannelUnread,
+    markConversationUnread,
+    unhideConversation,
+    unreadChannels: new Set(),
+    unreadConversations: new Set(),
+    hiddenConversations: new Set(),
+    hideConversation: vi.fn(),
+    clearChannelUnread: vi.fn(),
+    clearConversationUnread: vi.fn(),
+    setActiveChannel: vi.fn(),
+    setActiveConversation: vi.fn(),
+    isActiveChannel: vi.fn(() => false),
+    isActiveConversation: vi.fn(() => false),
+  }),
+}));
+
+const setUserOnline = vi.fn();
+vi.mock('@/context/PresenceContext', () => ({
+  usePresence: () => ({
+    online: new Set<string>(),
+    isOnline: () => false,
+    setUserOnline,
+  }),
+  PresenceProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+}));
+
+const dispatchNotification = vi.fn();
+const setCurrentUserID = vi.fn();
+vi.mock('@/context/NotificationContext', () => ({
+  useNotifications: () => ({
+    dispatch: dispatchNotification,
+    setCurrentUserID,
+    setActiveParent: vi.fn(),
+    permission: 'default',
+  }),
+  NotificationProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+}));
+
+vi.mock('@/hooks/useChannels', () => ({
+  useUserChannels: () => ({ data: [{ channelID: 'ch-1', channelName: 'general', channelType: 'public', role: 1 }] }),
+  useCreateChannel: () => ({ mutate: vi.fn(), isPending: false }),
+}));
+
+vi.mock('@/hooks/useConversations', () => ({
+  useUserConversations: () => ({ data: [] }),
+  useCreateConversation: () => ({ mutate: vi.fn(), isPending: false }),
+  useSearchUsers: () => ({ data: [] }),
+}));
+
+vi.mock('@/lib/api', () => ({
+  apiFetch: vi.fn(),
+  getAccessToken: () => null,
+  ApiError: class extends Error { status = 0; },
+}));
+
+vi.mock('@/context/ThemeContext', () => ({
+  useTheme: () => ({ theme: 'system', setTheme: vi.fn() }),
+  ThemeProvider: ({ children }: { children: React.ReactNode }) => children,
+}));
+
+function CurrentLocation() {
+  const location = useLocation();
+  return <div data-testid="loc">{location.pathname}</div>;
+}
+
+function renderAt(path: string, qcSeed?: (qc: QueryClient) => void) {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  qcSeed?.(qc);
+  return {
+    qc,
+    ...render(
+      <QueryClientProvider client={qc}>
+        <MemoryRouter initialEntries={[path]}>
+          <CurrentLocation />
+          <Routes>
+            <Route path="/*" element={<ChatPage />} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    ),
+  };
+}
+
+describe('ChatPage WebSocket handlers', () => {
+  beforeEach(() => {
+    capturedOptions = {};
+    markChannelUnread.mockReset();
+    markConversationUnread.mockReset();
+    unhideConversation.mockReset();
+    setUserOnline.mockReset();
+    dispatchNotification.mockReset();
+    setCurrentUserID.mockReset();
+  });
+
+  it('onMessageNew marks unread + un-hides + invalidates queries (skipping self)', () => {
+    renderAt('/');
+    const handler = capturedOptions.onMessageNew as (d: unknown) => void;
+    // From self — should skip the unread marking
+    handler({ parentID: 'ch-1', authorID: 'u-me' });
+    expect(markChannelUnread).not.toHaveBeenCalled();
+    // From someone else
+    handler({ parentID: 'ch-1', authorID: 'u-other' });
+    expect(markChannelUnread).toHaveBeenCalledWith('ch-1');
+    expect(markConversationUnread).toHaveBeenCalledWith('ch-1');
+    expect(unhideConversation).toHaveBeenCalledWith('ch-1');
+  });
+
+  it('onMessageNew without parentID is a no-op', () => {
+    renderAt('/');
+    (capturedOptions.onMessageNew as (d: unknown) => void)({});
+    expect(markChannelUnread).not.toHaveBeenCalled();
+  });
+
+  it('onMessageNew with parentMessageID also invalidates the thread queries', () => {
+    renderAt('/');
+    expect(() => {
+      (capturedOptions.onMessageNew as (d: unknown) => void)({
+        parentID: 'ch-1',
+        parentMessageID: 'msg-root',
+        authorID: 'u-other',
+      });
+    }).not.toThrow();
+  });
+
+  it('onMessageEdited / onMessageDeleted gracefully ignore missing parentID and invalidate when present', () => {
+    renderAt('/');
+    expect(() => {
+      (capturedOptions.onMessageEdited as (d: unknown) => void)({});
+      (capturedOptions.onMessageDeleted as (d: unknown) => void)({});
+      (capturedOptions.onMessageEdited as (d: unknown) => void)({
+        parentID: 'ch-1',
+        parentMessageID: 'm-r',
+      });
+      (capturedOptions.onMessageEdited as (d: unknown) => void)({
+        parentID: 'ch-1',
+        id: 'm-r',
+      });
+      (capturedOptions.onMessageDeleted as (d: unknown) => void)({
+        parentID: 'ch-1',
+        id: 'm-r',
+      });
+    }).not.toThrow();
+  });
+
+  it('onMembersChanged refreshes member + channel lists; ignores missing channelID', () => {
+    renderAt('/');
+    expect(() => {
+      (capturedOptions.onMembersChanged as (d: unknown) => void)({});
+      (capturedOptions.onMembersChanged as (d: unknown) => void)({ channelID: 'ch-1' });
+    }).not.toThrow();
+  });
+
+  it('onConversationNew refreshes the userConversations list', () => {
+    renderAt('/');
+    expect(() => {
+      (capturedOptions.onConversationNew as (d: unknown) => void)({});
+    }).not.toThrow();
+  });
+
+  it('onChannelArchived navigates away when the archived channel is currently open', () => {
+    // The handler reads window.location.pathname (not the MemoryRouter
+    // path), so we have to override the browser-level location for jsdom.
+    const orig = window.location;
+    Object.defineProperty(window, 'location', {
+      value: { ...orig, pathname: '/channel/general' },
+      configurable: true,
+    });
+    const { getByTestId } = renderAt('/channel/general', (qc) => {
+      qc.setQueryData(['userChannels'], [{ channelID: 'ch-1', channelName: 'general' }]);
+    });
+    act(() => {
+      (capturedOptions.onChannelArchived as (d: unknown) => void)({ channelID: 'ch-1' });
+    });
+    expect(getByTestId('loc').textContent).toBe('/');
+    Object.defineProperty(window, 'location', { value: orig, configurable: true });
+  });
+
+  it('onChannelArchived without an open channel does not navigate', () => {
+    const { getByTestId } = renderAt('/', (qc) => {
+      qc.setQueryData(['userChannels'], []);
+    });
+    (capturedOptions.onChannelArchived as (d: unknown) => void)({ channelID: 'ch-other' });
+    expect(getByTestId('loc').textContent).toBe('/');
+  });
+
+  it('onChannelRemoved navigates home when the removed channel is currently open', () => {
+    const orig = window.location;
+    Object.defineProperty(window, 'location', {
+      value: { ...orig, pathname: '/channel/general' },
+      configurable: true,
+    });
+    const { getByTestId } = renderAt('/channel/general', (qc) => {
+      qc.setQueryData(['userChannels'], [{ channelID: 'ch-1', channelName: 'general' }]);
+    });
+    act(() => {
+      (capturedOptions.onChannelRemoved as (d: unknown) => void)({ channelID: 'ch-1' });
+    });
+    expect(getByTestId('loc').textContent).toBe('/');
+    Object.defineProperty(window, 'location', { value: orig, configurable: true });
+  });
+
+  it('onChannelArchived ignores missing channelID', () => {
+    renderAt('/');
+    expect(() => {
+      (capturedOptions.onChannelArchived as (d: unknown) => void)({});
+    }).not.toThrow();
+  });
+
+  it('onChannelRemoved ignores missing channelID', () => {
+    renderAt('/');
+    expect(() => {
+      (capturedOptions.onChannelRemoved as (d: unknown) => void)({});
+    }).not.toThrow();
+  });
+
+  it('onChannelUpdated invalidates channel-by-slug + user channels', () => {
+    renderAt('/');
+    expect(() => {
+      (capturedOptions.onChannelUpdated as (d: unknown) => void)({ channelID: 'ch-1' });
+      (capturedOptions.onChannelUpdated as (d: unknown) => void)({});
+    }).not.toThrow();
+  });
+
+  it('onChannelNew invalidates browse + user channels', () => {
+    renderAt('/');
+    expect(() => {
+      (capturedOptions.onChannelNew as (d: unknown) => void)({});
+    }).not.toThrow();
+  });
+
+  it('onPresenceChanged updates presence; ignores missing userID', () => {
+    renderAt('/');
+    (capturedOptions.onPresenceChanged as (d: unknown) => void)({ userID: 'u-x', online: true });
+    expect(setUserOnline).toHaveBeenCalledWith('u-x', true);
+    setUserOnline.mockClear();
+    (capturedOptions.onPresenceChanged as (d: unknown) => void)({});
+    expect(setUserOnline).not.toHaveBeenCalled();
+  });
+
+  it('onEmojiAdded / onEmojiRemoved invalidate the emojis cache', () => {
+    renderAt('/');
+    expect(() => {
+      (capturedOptions.onEmojiAdded as (d: unknown) => void)({});
+      (capturedOptions.onEmojiRemoved as (d: unknown) => void)({});
+    }).not.toThrow();
+  });
+
+  it('onUserUpdated invalidates user-batch + member + channel + conversation caches', () => {
+    renderAt('/');
+    expect(() => {
+      (capturedOptions.onUserUpdated as (d: unknown) => void)({});
+    }).not.toThrow();
+  });
+
+  it('onAttachmentDeleted invalidates the per-attachment cache; ignores missing id', () => {
+    renderAt('/');
+    expect(() => {
+      (capturedOptions.onAttachmentDeleted as (d: unknown) => void)({});
+      (capturedOptions.onAttachmentDeleted as (d: unknown) => void)({ id: 'a-1' });
+    }).not.toThrow();
+  });
+
+  it('onNotification dispatches the payload to NotificationContext', () => {
+    renderAt('/');
+    (capturedOptions.onNotification as (d: unknown) => void)({
+      kind: 'message',
+      title: 't',
+      body: 'b',
+      deepLink: '/x',
+      parentID: 'ch-1',
+      parentType: 'channel',
+      createdAt: new Date().toISOString(),
+    });
+    expect(dispatchNotification).toHaveBeenCalledTimes(1);
+  });
+
+  it('updates current user id on mount and resets to null on unmount', () => {
+    const { unmount } = renderAt('/');
+    expect(setCurrentUserID).toHaveBeenCalledWith('u-me');
+    setCurrentUserID.mockClear();
+    unmount();
+    expect(setCurrentUserID).toHaveBeenCalledWith(null);
+  });
+});

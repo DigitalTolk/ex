@@ -4,6 +4,7 @@ import { Input } from '@/components/ui/input';
 import { useEmojis } from '@/hooks/useEmoji';
 import { COMMON_EMOJI_SHORTCODES } from '@/lib/emoji-shortcodes';
 import { PopoverPortal } from '@/components/PopoverPortal';
+import { EmojiGlyph } from '@/components/EmojiGlyph';
 
 type SelectMode = 'shortcode' | 'reaction';
 
@@ -75,11 +76,11 @@ export function EmojiPicker({ onSelect, onClose, trigger, ariaLabel = 'Emoji pic
         triggerRef={triggerRef}
         onDismiss={close}
         estimatedHeight={360}
-        estimatedWidth={288}
+        estimatedWidth={336}
         preferredSide="bottom"
         preferredAlign="end"
         ariaLabel={ariaLabel}
-        className="w-72 rounded-md border bg-popover p-2 shadow-md"
+        className="w-[336px] rounded-md border bg-popover p-3 shadow-md"
       >
         <Input
           ref={inputRef}
@@ -87,46 +88,52 @@ export function EmojiPicker({ onSelect, onClose, trigger, ariaLabel = 'Emoji pic
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Search emojis..."
           aria-label="Search emojis"
-          className="mb-2 h-8 text-xs"
+          className="mb-2 h-9 text-sm"
         />
         {filteredCustom.length > 0 && (
           <div className="mb-2">
-            <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+            <div className="mb-1.5 text-sm font-semibold uppercase tracking-wider text-muted-foreground">
               Custom
             </div>
-            <div className="grid grid-cols-8 gap-0.5" role="list" aria-label="Custom emojis">
+            <div className="grid grid-cols-7 gap-1" role="list" aria-label="Custom emojis">
               {filteredCustom.map((e) => (
                 <button
                   key={e.name}
                   type="button"
                   role="listitem"
+                  data-testid="emoji-picker-tile"
                   onClick={() => handlePick(`:${e.name}:`)}
-                  className="h-7 w-7 rounded hover:bg-muted flex items-center justify-center"
+                  className="h-9 w-9 rounded hover:bg-muted flex items-center justify-center"
                   aria-label={`React with :${e.name}:`}
                   title={`:${e.name}:`}
                 >
-                  <img src={e.imageURL} alt={`:${e.name}:`} className="h-3.5 w-3.5" />
+                  <EmojiGlyph
+                    emoji={`:${e.name}:`}
+                    customMap={{ [e.name]: e.imageURL }}
+                    size="lg"
+                  />
                 </button>
               ))}
             </div>
           </div>
         )}
         <div>
-          <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+          <div className="mb-1.5 text-sm font-semibold uppercase tracking-wider text-muted-foreground">
             Standard
           </div>
-          <div className="grid grid-cols-8 gap-0.5 max-h-56 overflow-y-auto" role="list" aria-label="Standard emojis">
+          <div className="grid grid-cols-7 gap-1 max-h-64 overflow-y-auto" role="list" aria-label="Standard emojis">
             {filteredStandard.map((e) => (
               <button
                 key={e.name}
                 type="button"
                 role="listitem"
+                data-testid="emoji-picker-tile"
                 onClick={() => handlePick(`:${e.name}:`)}
-                className="h-7 w-7 rounded hover:bg-muted flex items-center justify-center text-sm"
+                className="h-9 w-9 rounded hover:bg-muted flex items-center justify-center"
                 aria-label={`React with :${e.name}:`}
                 title={`:${e.name}:`}
               >
-                {e.unicode}
+                <EmojiGlyph emoji={e.unicode} size="lg" />
               </button>
             ))}
           </div>

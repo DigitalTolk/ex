@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/DigitalTolk/ex/internal/model"
 )
@@ -276,6 +277,151 @@ func TestMessageService_Edit_RejectsEmptyBodyAndNoAttachments(t *testing.T) {
 
 	if _, err := svc.Edit(ctx, "user-1", "ch1", ParentChannel, "msg-1", "", []string{}); err == nil {
 		t.Error("expected error when body and attachmentIDs are both empty")
+	}
+}
+
+func TestMessageService_SetPinned_TogglesAndPublishesEvents(t *testing.T) {
+	svc, messages, memberships, _, publisher := setupMessageService()
+	ctx := context.Background()
+	memberships.memberships["ch1#u-1"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u-1", Role: model.ChannelRoleMember}
+	messages.messages["ch1#m-1"] = &model.Message{ID: "m-1", ParentID: "ch1", AuthorID: "u-1"}
+
+	pinned, err := svc.SetPinned(ctx, "u-1", "ch1", ParentChannel, "m-1", true)
+	if err != nil {
+		t.Fatalf("SetPinned: %v", err)
+	}
+	if !pinned.Pinned {
+		t.Error("expected message to be pinned")
+	}
+	if pinned.PinnedBy != "u-1" {
+		t.Errorf("PinnedBy = %q, want u-1", pinned.PinnedBy)
+	}
+	if pinned.PinnedAt == nil {
+		t.Error("expected PinnedAt to be set")
+	}
+
+	// One message.edited event carrying the updated message — re-uses the
+	// existing client-side invalidation path.
+	if len(publisher.published) != 1 || publisher.published[0].event.Type != "message.edited" {
+		t.Errorf("expected 1 message.edited event; got %d (%v)", len(publisher.published), publisher.published)
+	}
+
+	// Idempotent: calling SetPinned(true) again is a no-op (no extra events).
+	if _, err := svc.SetPinned(ctx, "u-1", "ch1", ParentChannel, "m-1", true); err != nil {
+		t.Fatalf("idempotent SetPinned: %v", err)
+	}
+	if len(publisher.published) != 1 {
+		t.Errorf("idempotent toggle should not republish; total events = %d", len(publisher.published))
+	}
+
+	// Unpin clears the metadata.
+	unp, err := svc.SetPinned(ctx, "u-1", "ch1", ParentChannel, "m-1", false)
+	if err != nil {
+		t.Fatalf("unpin: %v", err)
+	}
+	if unp.Pinned || unp.PinnedAt != nil || unp.PinnedBy != "" {
+		t.Error("expected unpin to clear all pin metadata")
+	}
+}
+
+func TestMessageService_ListUserThreads(t *testing.T) {
+	svc, messages, memberships, _, _ := setupMessageService()
+	ctx := context.Background()
+
+	// User is a member of one channel; populate userChannels override on the
+	// membership mock so ListUserChannels returns it.
+	memberships.userChannels = []*model.UserChannel{
+		{UserID: "u-me", ChannelID: "ch-1"},
+	}
+
+	now := time.Now()
+	root := &model.Message{
+		ID: "m-root", ParentID: "ch-1", AuthorID: "u-me",
+		Body: "starting a thread", CreatedAt: now.Add(-time.Hour), ReplyCount: 1,
+	}
+	reply1 := &model.Message{
+		ID: "m-reply1", ParentID: "ch-1", AuthorID: "u-other",
+		Body: "first reply", CreatedAt: now.Add(-30 * time.Minute), ParentMessageID: "m-root",
+	}
+	noisyOtherThreadRoot := &model.Message{
+		ID: "m-other-root", ParentID: "ch-1", AuthorID: "u-other",
+		Body: "other thread", CreatedAt: now.Add(-2 * time.Hour), ReplyCount: 2,
+	}
+	// User replied to the other thread → still counts as participation.
+	userReply := &model.Message{
+		ID: "m-user-reply", ParentID: "ch-1", AuthorID: "u-me",
+		Body: "I jumped in", CreatedAt: now.Add(-15 * time.Minute), ParentMessageID: "m-other-root",
+	}
+	otherReply := &model.Message{
+		ID: "m-other-reply", ParentID: "ch-1", AuthorID: "u-other",
+		Body: "later", CreatedAt: now.Add(-10 * time.Minute), ParentMessageID: "m-other-root",
+	}
+	// A thread the user has nothing to do with.
+	stranger := &model.Message{
+		ID: "m-stranger", ParentID: "ch-1", AuthorID: "u-other",
+		Body: "stranger", CreatedAt: now.Add(-5 * time.Minute), ReplyCount: 1,
+	}
+	for _, m := range []*model.Message{root, reply1, noisyOtherThreadRoot, userReply, otherReply, stranger} {
+		messages.messages["ch-1#"+m.ID] = m
+	}
+
+	got, err := svc.ListUserThreads(ctx, "u-me")
+	if err != nil {
+		t.Fatalf("ListUserThreads: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("expected 2 thread summaries (root + replied-to), got %d", len(got))
+	}
+	roots := map[string]bool{got[0].ThreadRootID: true, got[1].ThreadRootID: true}
+	if !roots["m-root"] || !roots["m-other-root"] {
+		t.Errorf("expected both thread roots; got %+v", roots)
+	}
+	// Sorted by latest activity desc — m-other-root has otherReply at -10min;
+	// m-root has reply1 at -30min — so m-other-root should be first.
+	if got[0].ThreadRootID != "m-other-root" {
+		t.Errorf("expected m-other-root first by latest activity; got %q", got[0].ThreadRootID)
+	}
+}
+
+func TestMessageService_ListPinned(t *testing.T) {
+	svc, messages, memberships, _, _ := setupMessageService()
+	ctx := context.Background()
+	memberships.memberships["ch1#u-1"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u-1", Role: model.ChannelRoleMember}
+	messages.messages["ch1#m-1"] = &model.Message{ID: "m-1", ParentID: "ch1", AuthorID: "u-1", Pinned: true}
+	messages.messages["ch1#m-2"] = &model.Message{ID: "m-2", ParentID: "ch1", AuthorID: "u-1", Pinned: false}
+	messages.messages["ch1#m-3"] = &model.Message{ID: "m-3", ParentID: "ch1", AuthorID: "u-1", Pinned: true}
+
+	pinned, err := svc.ListPinned(ctx, "u-1", "ch1", ParentChannel)
+	if err != nil {
+		t.Fatalf("ListPinned: %v", err)
+	}
+	if len(pinned) != 2 {
+		t.Fatalf("expected 2 pinned, got %d", len(pinned))
+	}
+	for _, m := range pinned {
+		if !m.Pinned {
+			t.Errorf("ListPinned returned non-pinned message %s", m.ID)
+		}
+	}
+}
+
+func TestMessageService_ListPinned_NotMemberRejected(t *testing.T) {
+	svc, messages, _, _, _ := setupMessageService()
+	ctx := context.Background()
+	messages.messages["ch1#m-1"] = &model.Message{ID: "m-1", ParentID: "ch1", AuthorID: "u-1", Pinned: true}
+
+	if _, err := svc.ListPinned(ctx, "stranger", "ch1", ParentChannel); err == nil {
+		t.Fatal("expected ListPinned to reject non-members")
+	}
+}
+
+func TestMessageService_SetPinned_NotMemberRejected(t *testing.T) {
+	svc, messages, _, _, _ := setupMessageService()
+	ctx := context.Background()
+	messages.messages["ch1#m-1"] = &model.Message{ID: "m-1", ParentID: "ch1", AuthorID: "u-1"}
+
+	if _, err := svc.SetPinned(ctx, "stranger", "ch1", ParentChannel, "m-1", true); err == nil {
+		t.Fatal("expected SetPinned to reject non-members")
 	}
 }
 

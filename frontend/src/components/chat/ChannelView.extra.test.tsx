@@ -105,7 +105,47 @@ vi.mock('@/hooks/useMessages', () => ({
   useEditMessage: () => ({ mutate: vi.fn(), isPending: false }),
   useDeleteMessage: () => ({ mutate: vi.fn(), isPending: false }),
   useToggleReaction: () => ({ mutate: vi.fn(), isPending: false }),
+  useSetPinned: () => ({ mutate: vi.fn(), isPending: false }),
 }));
+
+// The real WysiwygEditor is contentEditable; tests that just need to drive
+// a "type and submit" interaction stub it with a plain textarea so the
+// existing user-event API works.
+vi.mock('@/components/chat/WysiwygEditor', async () => {
+  const React = await import('react');
+  return {
+    WysiwygEditor: React.forwardRef(function StubEditor(
+      props: { onSubmit?: (md: string) => void; onChange?: (md: string) => void; placeholder?: string; ariaLabel?: string },
+      ref,
+    ) {
+      const taRef = React.useRef<HTMLTextAreaElement>(null);
+      React.useImperativeHandle(ref, () => ({
+        applyMark: () => {},
+        applyBlock: () => {},
+        applyLink: () => {},
+        insertText: (t: string) => { if (taRef.current) taRef.current.value += t; },
+        getMarkdown: () => taRef.current?.value ?? '',
+        setMarkdown: (md: string) => { if (taRef.current) taRef.current.value = md; },
+        focus: () => taRef.current?.focus(),
+      }), []);
+      return (
+        <textarea
+          ref={taRef}
+          aria-label={props.ariaLabel ?? 'Message input'}
+          placeholder={props.placeholder}
+          data-placeholder={props.placeholder ?? ''}
+          onChange={(e) => props.onChange?.(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+              e.preventDefault();
+              props.onSubmit?.(taRef.current?.value ?? '');
+            }
+          }}
+        />
+      );
+    }),
+  };
+});
 
 vi.mock('@/hooks/useWebSocket', () => ({
   useWebSocket: vi.fn(),
@@ -171,7 +211,7 @@ describe('ChannelView - actions', () => {
     const user = userEvent.setup();
     renderChannelView();
 
-    const input = screen.getByPlaceholderText('Message #general');
+    const input = screen.getByLabelText('Message input');
     await user.type(input, 'hello world{enter}');
 
     expect(mockSendMutate).toHaveBeenCalledWith({ body: 'hello world', attachmentIDs: [] });

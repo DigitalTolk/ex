@@ -20,10 +20,15 @@ async function sha256Hex(buf: ArrayBuffer): Promise<string> {
   return out;
 }
 
-// uploadAttachment computes SHA256, asks the server for an upload slot, and
-// performs the PUT only when the server reports it's a new file. Returns the
-// server-side attachment id which can be referenced from a sent message.
-export async function uploadAttachment(file: File): Promise<UploadInitResponse> {
+interface UploadCallbacks {
+  onInit?: (init: UploadInitResponse) => void;
+  onProgress?: (fraction: number) => void;
+}
+
+export async function uploadAttachment(
+  file: File,
+  callbacks: UploadCallbacks = {},
+): Promise<UploadInitResponse> {
   const buf = await file.arrayBuffer();
   const sha = await sha256Hex(buf);
   const init = await apiFetch<UploadInitResponse>('/api/v1/attachments/url', {
@@ -35,15 +40,49 @@ export async function uploadAttachment(file: File): Promise<UploadInitResponse> 
       sha256: sha,
     }),
   });
-  if (!init.alreadyExists) {
-    const put = await fetch(init.uploadURL, {
-      method: 'PUT',
-      body: file,
-      headers: { 'Content-Type': file.type || 'application/octet-stream' },
-    });
-    if (!put.ok) throw new Error(`Upload failed: ${put.status}`);
+  callbacks.onInit?.(init);
+  if (init.alreadyExists) {
+    callbacks.onProgress?.(1);
+    return init;
   }
+  await uploadWithProgress(init.uploadURL, file, callbacks.onProgress);
   return init;
+}
+
+function uploadWithProgress(
+  url: string,
+  file: File,
+  onProgress?: (fraction: number) => void,
+): Promise<void> {
+  // XHR instead of fetch — fetch has no upload-progress event.
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('PUT', url, true);
+    xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
+    if (onProgress && xhr.upload) {
+      // Drop subsequent ticks unless the integer-percent changed —
+      // every emitted update walks the draft list in MessageInput, so
+      // for a 50 MiB upload this avoids ~hundreds of no-op renders.
+      let lastPct = -1;
+      xhr.upload.onprogress = (e) => {
+        if (!e.lengthComputable) return;
+        const pct = Math.floor((e.loaded / e.total) * 100);
+        if (pct === lastPct) return;
+        lastPct = pct;
+        onProgress(e.loaded / e.total);
+      };
+    }
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        onProgress?.(1);
+        resolve();
+      } else {
+        reject(new Error(`Upload failed: ${xhr.status}`));
+      }
+    };
+    xhr.onerror = () => reject(new Error('Upload network error'));
+    xhr.send(file);
+  });
 }
 
 export function useAttachment(id: string | undefined) {

@@ -73,12 +73,14 @@ func (h *ChannelHandler) List(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, channels)
 }
 
-// BrowsePublic returns a paginated list of public channels.
+// BrowsePublic returns a paginated list of public channels visible to
+// the authenticated user. Guests get only the channels they belong to.
 func (h *ChannelHandler) BrowsePublic(w http.ResponseWriter, r *http.Request) {
+	userID := middleware.UserIDFromContext(r.Context())
 	limit := queryInt(r, "limit", 50)
 	cursor := queryParam(r, "cursor", "")
 
-	channels, _, err := h.channelSvc.BrowsePublic(r.Context(), limit, cursor)
+	channels, _, err := h.channelSvc.BrowsePublic(r.Context(), userID, limit, cursor)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "browse_error", err.Error())
 		return
@@ -477,6 +479,46 @@ func (h *ChannelHandler) ToggleReaction(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	writeJSON(w, http.StatusOK, msg)
+}
+
+// SetPinned pins or unpins a message in a channel. Body: { "pinned": bool }.
+func (h *ChannelHandler) SetPinned(w http.ResponseWriter, r *http.Request) {
+	userID := middleware.UserIDFromContext(r.Context())
+	id := pathParam(r, "id")
+	msgID := pathParam(r, "msgId")
+	if id == "" || msgID == "" {
+		writeError(w, http.StatusBadRequest, "missing_id", "channel ID and message ID are required")
+		return
+	}
+	var body struct {
+		Pinned bool `json:"pinned"`
+	}
+	if err := readJSON(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", err.Error())
+		return
+	}
+	msg, err := h.messageSvc.SetPinned(r.Context(), userID, id, service.ParentChannel, msgID, body.Pinned)
+	if err != nil {
+		writeError(w, http.StatusForbidden, "pin_error", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, msg)
+}
+
+// ListPinned returns the channel's currently-pinned messages.
+func (h *ChannelHandler) ListPinned(w http.ResponseWriter, r *http.Request) {
+	userID := middleware.UserIDFromContext(r.Context())
+	id := pathParam(r, "id")
+	if id == "" {
+		writeError(w, http.StatusBadRequest, "missing_id", "channel ID is required")
+		return
+	}
+	pinned, err := h.messageSvc.ListPinned(r.Context(), userID, id, service.ParentChannel)
+	if err != nil {
+		writeError(w, http.StatusForbidden, "list_pinned_error", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, pinned)
 }
 
 // DeleteMessage removes a message from a channel.

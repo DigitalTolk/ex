@@ -82,9 +82,31 @@ function renderAt(path: string) {
   );
 }
 
+// Track invalidateQueries calls so we can assert which caches the WS
+// handlers refresh. Each call is captured as a queryKey JSON string.
+const invalidatedKeys: string[] = [];
+function renderWithSpyClient(path: string) {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const original = qc.invalidateQueries.bind(qc);
+  qc.invalidateQueries = ((args: { queryKey: unknown[] }) => {
+    invalidatedKeys.push(JSON.stringify(args.queryKey));
+    return original(args as Parameters<typeof original>[0]);
+  }) as typeof qc.invalidateQueries;
+  return render(
+    <QueryClientProvider client={qc}>
+      <MemoryRouter initialEntries={[path]}>
+        <Routes>
+          <Route path="/*" element={<ChatPage />} />
+        </Routes>
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+}
+
 describe('ChatPage - channel removed/archived', () => {
   beforeEach(() => {
     capturedOptions = {};
+    invalidatedKeys.length = 0;
   });
 
   it('exposes onChannelRemoved handler', () => {
@@ -102,6 +124,13 @@ describe('ChatPage - channel removed/archived', () => {
     expect(() => {
       (capturedOptions.onChannelRemoved as (data: unknown) => void)({ channelID: 'ch-1' });
     }).not.toThrow();
+  });
+
+  it('onChannelRemoved invalidates browseChannels so kicked-out guests no longer see the channel in the directory', () => {
+    renderWithSpyClient('/');
+    (capturedOptions.onChannelRemoved as (data: unknown) => void)({ channelID: 'ch-kicked' });
+    expect(invalidatedKeys).toContain(JSON.stringify(['browseChannels']));
+    expect(invalidatedKeys).toContain(JSON.stringify(['userChannels']));
   });
 
   it('exposes onChannelMuted handler', () => {

@@ -78,7 +78,7 @@ describe('OIDCCallbackPage - extra coverage', () => {
 
     await vi.waitFor(() => {
       expect(mockSetAccessToken).toHaveBeenCalledWith('hashtok');
-      expect(mockNavigate).toHaveBeenCalledWith('/', { replace: true });
+      expect(mockNavigate).toHaveBeenCalledWith('/channel/general', { replace: true });
     });
   });
 

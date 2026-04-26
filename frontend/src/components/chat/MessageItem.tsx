@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Pencil, Trash2, Smile, MessageSquareReply, MoreHorizontal } from 'lucide-react';
+import { Pencil, Trash2, Smile, MessageSquareReply, MoreHorizontal, Pin, PinOff, Link as LinkIcon } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import { MessageInput, type MessageInputValue } from '@/components/chat/MessageInput';
@@ -18,12 +18,12 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { EmojiPicker } from '@/components/EmojiPicker';
 import { UserHoverCard } from '@/components/UserHoverCard';
-import { useEditMessage, useDeleteMessage, useToggleReaction } from '@/hooks/useMessages';
+import { useEditMessage, useDeleteMessage, useToggleReaction, useSetPinned } from '@/hooks/useMessages';
 import { useEmojiMap } from '@/hooks/useEmoji';
 import { renderMarkdown } from '@/lib/markdown';
-import { shortcodeToUnicode } from '@/lib/emoji-shortcodes';
+import { EmojiGlyph } from '@/components/EmojiGlyph';
 import { MessageAttachments } from '@/components/chat/MessageAttachments';
-import { getInitials } from '@/lib/format';
+import { getInitials, formatLongDateTime } from '@/lib/format';
 import type { Message } from '@/types';
 
 interface MessageItemProps {
@@ -33,6 +33,7 @@ interface MessageItemProps {
   authorOnline?: boolean;
   isOwn: boolean;
   channelId?: string;
+  channelSlug?: string;
   conversationId?: string;
   currentUserId?: string;
   inThread?: boolean;
@@ -53,16 +54,59 @@ export function MessageItem({
   authorOnline,
   isOwn,
   channelId,
+  channelSlug,
   conversationId,
   currentUserId,
   inThread,
   onReplyInThread,
 }: MessageItemProps) {
   const [isEditing, setIsEditing] = useState(false);
+  const [linkCopied, setLinkCopied] = useState(false);
   const editMessage = useEditMessage();
   const deleteMessage = useDeleteMessage();
   const toggleReaction = useToggleReaction();
+  const setPinned = useSetPinned();
   const { data: emojiMap } = useEmojiMap();
+
+  function buildMessageLink(): string {
+    // Channels resolve URLs by slug; conversations have no slug so the ID
+    // is used. The fragment is the deep-link target read by MessageList.
+    const origin = typeof window !== 'undefined' ? window.location.origin : '';
+    const path = channelSlug
+      ? `/channel/${channelSlug}`
+      : channelId
+        ? `/channel/${channelId}`
+        : conversationId
+          ? `/conversation/${conversationId}`
+          : '/';
+    return `${origin}${path}#msg-${message.id}`;
+  }
+
+  async function handleCopyLink() {
+    const link = buildMessageLink();
+    try {
+      await navigator.clipboard.writeText(link);
+    } catch {
+      // Fallback for environments without async clipboard (jsdom, older browsers).
+      const ta = document.createElement('textarea');
+      ta.value = link;
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand('copy'); } catch { /* swallow */ }
+      ta.remove();
+    }
+    setLinkCopied(true);
+    setTimeout(() => setLinkCopied(false), 1500);
+  }
+
+  function handleTogglePin() {
+    setPinned.mutate({
+      messageId: message.id,
+      pinned: !message.pinned,
+      channelId,
+      conversationId,
+    });
+  }
 
   // When entering edit mode, hydrate the existing attachments so the
   // MessageInput can render them as draft chips (and let the user remove
@@ -130,22 +174,17 @@ export function MessageItem({
   }
 
   function renderReactionVisual(emoji: string) {
-    if (emoji.startsWith(':') && emoji.endsWith(':')) {
-      const name = emoji.slice(1, -1);
-      const url = emojiMap?.[name];
-      if (url) {
-        return <img src={url} alt={emoji} title={emoji} className="h-3.5 w-3.5 inline-block" />;
-      }
-      const unicode = shortcodeToUnicode(emoji);
-      if (unicode !== emoji) {
-        return <span title={emoji} className="text-sm leading-none">{unicode}</span>;
-      }
-    }
-    return <span className="text-sm leading-none">{emoji}</span>;
+    return <EmojiGlyph emoji={emoji} customMap={emojiMap} />;
   }
 
   return (
-    <div className="group relative flex items-start gap-3 rounded-md px-2 py-1.5 hover:bg-muted/50">
+    <div
+      id={`msg-${message.id}`}
+      data-message-id={message.id}
+      className={`group relative flex items-start gap-3 rounded-md px-2 py-1.5 hover:bg-muted/50 ${
+        message.pinned ? 'border-l-2 border-amber-500 pl-2' : ''
+      }`}
+    >
       <UserHoverCard
         userId={message.authorID}
         displayName={authorName}
@@ -180,11 +219,20 @@ export function MessageItem({
               {formatTime(message.createdAt)}
             </TooltipTrigger>
             <TooltipContent>
-              {new Date(message.createdAt).toLocaleString()}
+              {formatLongDateTime(message.createdAt)}
             </TooltipContent>
           </Tooltip>
           {message.editedAt && (
             <span className="text-xs text-muted-foreground">(edited)</span>
+          )}
+          {message.pinned && (
+            <span
+              className="inline-flex items-center gap-0.5 text-xs text-amber-600"
+              aria-label="Pinned"
+            >
+              <Pin className="h-3 w-3" />
+              Pinned
+            </span>
           )}
         </div>
 
@@ -223,15 +271,16 @@ export function MessageItem({
                       key={emoji}
                       type="button"
                       role="listitem"
+                      data-testid="reaction-badge"
                       onClick={() => handleReact(emoji)}
-                      className={`flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-xs hover:bg-muted ${
+                      className={`flex items-center gap-1 rounded-full border px-2 py-0.5 text-sm hover:bg-muted ${
                         reactedByMe ? 'border-primary bg-primary/10' : 'bg-background'
                       }`}
                       aria-label={`${renderReactionLabel(emoji)} ${users.length}, ${reactedByMe ? 'reacted' : 'react'}`}
                       aria-pressed={reactedByMe}
                     >
                       {renderReactionVisual(emoji)}
-                      <span className="text-muted-foreground">{users.length}</span>
+                      <span className="text-sm text-muted-foreground">{users.length}</span>
                     </button>
                   );
                 })}
@@ -275,24 +324,47 @@ export function MessageItem({
               <MessageSquareReply className="h-3.5 w-3.5" />
             </Button>
           )}
-          {isOwn && (
-            <DropdownMenu>
-              <DropdownMenuTrigger
-                className="h-7 w-7 flex items-center justify-center rounded-md hover:bg-accent"
-                aria-label="More actions"
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              className="h-7 w-7 flex items-center justify-center rounded-md hover:bg-accent"
+              aria-label="More actions"
+            >
+              <MoreHorizontal className="h-3.5 w-3.5" />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-44">
+              <DropdownMenuItem
+                onClick={handleCopyLink}
+                aria-label="Copy link to message"
               >
-                <MoreHorizontal className="h-3.5 w-3.5" />
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-32">
-                <DropdownMenuItem onClick={() => setIsEditing(true)}>
-                  <Pencil className="mr-2 h-4 w-4" /> Edit
-                </DropdownMenuItem>
-                <DropdownMenuItem variant="destructive" onClick={handleDelete}>
-                  <Trash2 className="mr-2 h-4 w-4" /> Delete
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          )}
+                <LinkIcon className="mr-2 h-4 w-4" />
+                {linkCopied ? 'Link copied' : 'Copy link'}
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={handleTogglePin}
+                aria-label={message.pinned ? 'Unpin message' : 'Pin message'}
+              >
+                {message.pinned ? (
+                  <>
+                    <PinOff className="mr-2 h-4 w-4" /> Unpin
+                  </>
+                ) : (
+                  <>
+                    <Pin className="mr-2 h-4 w-4" /> Pin
+                  </>
+                )}
+              </DropdownMenuItem>
+              {isOwn && (
+                <>
+                  <DropdownMenuItem onClick={() => setIsEditing(true)}>
+                    <Pencil className="mr-2 h-4 w-4" /> Edit
+                  </DropdownMenuItem>
+                  <DropdownMenuItem variant="destructive" onClick={handleDelete}>
+                    <Trash2 className="mr-2 h-4 w-4" /> Delete
+                  </DropdownMenuItem>
+                </>
+              )}
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       )}
     </div>

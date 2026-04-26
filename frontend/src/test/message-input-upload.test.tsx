@@ -38,14 +38,26 @@ describe('MessageInput - file upload', () => {
   });
 
   it('uploads via uploadAttachment and shows a draft chip; sends attachmentID with the message', async () => {
-    mockUploadAttachment.mockResolvedValueOnce({
+    const init = {
       id: 'att-1',
       uploadURL: 'http://upload.test/url?sig=abc',
       alreadyExists: false,
       filename: 'myfile.txt',
       contentType: 'text/plain',
       size: 7,
-    });
+    };
+    // The new uploadAttachment signature takes a callbacks bag — fire
+    // onInit + a final onProgress(1) the way the real impl does.
+    mockUploadAttachment.mockImplementationOnce(
+      async (
+        _file: File,
+        cb?: { onInit?: (i: typeof init) => void; onProgress?: (n: number) => void },
+      ) => {
+        cb?.onInit?.(init);
+        cb?.onProgress?.(1);
+        return init;
+      },
+    );
 
     const onSend = vi.fn();
     render(<MessageInput onSend={onSend} />);
@@ -55,7 +67,8 @@ describe('MessageInput - file upload', () => {
     fireEvent.change(fileInput, { target: { files: [file] } });
 
     await waitFor(() => {
-      expect(mockUploadAttachment).toHaveBeenCalledWith(file);
+      expect(mockUploadAttachment).toHaveBeenCalled();
+      expect(mockUploadAttachment.mock.calls[0][0]).toBe(file);
     });
 
     // The draft chip shows the filename
@@ -63,9 +76,12 @@ describe('MessageInput - file upload', () => {
       expect(screen.getByText('myfile.txt')).toBeInTheDocument();
     });
 
-    // Sending now includes the attachment ID
-    const textarea = screen.getByLabelText('Message input') as HTMLTextAreaElement;
-    fireEvent.change(textarea, { target: { value: 'see file' } });
+    // Sending now includes the attachment ID. The composer is a
+    // contentEditable WYSIWYG, so we set textContent + fire the input
+    // event the editor listens to.
+    const editor = screen.getByLabelText('Message input');
+    editor.textContent = 'see file';
+    fireEvent.input(editor);
     fireEvent.click(screen.getByLabelText('Send message'));
 
     expect(onSend).toHaveBeenCalledWith({ body: 'see file', attachmentIDs: ['att-1'] });

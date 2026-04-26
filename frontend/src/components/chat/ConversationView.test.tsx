@@ -108,7 +108,9 @@ describe('ConversationView', () => {
 
   it('renders message input with conversation placeholder', () => {
     renderConversationView();
-    expect(screen.getByPlaceholderText('Message Chat with Bob')).toBeInTheDocument();
+    expect(
+      screen.getByLabelText('Message input').getAttribute('data-placeholder'),
+    ).toBe('Write to Chat with Bob');
   });
 
   it('shows "No messages yet" when there are no messages', () => {
