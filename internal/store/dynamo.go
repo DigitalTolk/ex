@@ -203,3 +203,7 @@ func allUsersGSI2PK() string   { return "ALL_USERS" }
 // the admin endpoint and read on every upload to enforce limits.
 func settingsPK() string { return "SETTINGS" }
 func settingsSK() string { return "WORKSPACE" }
+
+// User-defined sidebar categories: rows live under the user's PK so a
+// single Query returns every category the user owns.
+func categorySK(id string) string { return "CATEGORY#" + id }

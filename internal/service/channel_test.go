@@ -239,6 +239,91 @@ func TestChannelService_Update_Forbidden(t *testing.T) {
 	}
 }
 
+func TestChannelService_SetFavorite(t *testing.T) {
+	svc, _, memberships, _, publisher := setupChannelService()
+	ctx := context.Background()
+
+	memberships.memberships["ch-fav#u-1"] = &model.ChannelMembership{
+		ChannelID: "ch-fav", UserID: "u-1", Role: model.ChannelRoleMember,
+	}
+	memberships.userChannels = []*model.UserChannel{
+		{UserID: "u-1", ChannelID: "ch-fav"},
+	}
+
+	if err := svc.SetFavorite(ctx, "u-1", "ch-fav", true); err != nil {
+		t.Fatalf("SetFavorite: %v", err)
+	}
+	if !memberships.userChannels[0].Favorite {
+		t.Error("expected user-side favorite=true after toggle")
+	}
+	if len(publisher.published) != 1 {
+		t.Fatalf("expected 1 publish; got %d", len(publisher.published))
+	}
+	if publisher.published[0].event.Type != "userchannel.updated" {
+		t.Errorf("event type = %q, want userchannel.updated", publisher.published[0].event.Type)
+	}
+}
+
+func TestChannelService_SetFavorite_RejectsNonMember(t *testing.T) {
+	svc, _, _, _, _ := setupChannelService()
+	ctx := context.Background()
+	if err := svc.SetFavorite(ctx, "u-stranger", "ch-fav", true); err == nil {
+		t.Fatal("expected error for non-member")
+	}
+}
+
+func TestChannelService_SetCategory(t *testing.T) {
+	svc, _, memberships, _, publisher := setupChannelService()
+	ctx := context.Background()
+
+	memberships.memberships["ch-cat#u-1"] = &model.ChannelMembership{
+		ChannelID: "ch-cat", UserID: "u-1", Role: model.ChannelRoleMember,
+	}
+	memberships.userChannels = []*model.UserChannel{
+		{UserID: "u-1", ChannelID: "ch-cat"},
+	}
+
+	if err := svc.SetCategory(ctx, "u-1", "ch-cat", "cat-eng"); err != nil {
+		t.Fatalf("SetCategory: %v", err)
+	}
+	if memberships.userChannels[0].CategoryID != "cat-eng" {
+		t.Errorf("CategoryID = %q, want cat-eng", memberships.userChannels[0].CategoryID)
+	}
+	if len(publisher.published) != 1 {
+		t.Fatalf("expected 1 publish; got %d", len(publisher.published))
+	}
+}
+
+func TestChannelService_SetCategory_RejectsNonMember(t *testing.T) {
+	svc, _, _, _, _ := setupChannelService()
+	ctx := context.Background()
+	if err := svc.SetCategory(ctx, "u-stranger", "ch-cat", "cat-x"); err == nil {
+		t.Fatal("expected error for non-member")
+	}
+}
+
+func TestChannelService_IsMember(t *testing.T) {
+	svc, _, memberships, _, _ := setupChannelService()
+	ctx := context.Background()
+
+	memberships.memberships["ch-im#u-1"] = &model.ChannelMembership{
+		ChannelID: "ch-im", UserID: "u-1", Role: model.ChannelRoleMember,
+	}
+
+	if !svc.IsMember(ctx, "u-1", "ch-im") {
+		t.Error("expected member to be reported")
+	}
+	if svc.IsMember(ctx, "u-2", "ch-im") {
+		t.Error("non-member must not be reported")
+	}
+	if svc.IsMember(ctx, "", "ch-im") {
+		t.Error("empty userID must short-circuit to false")
+	}
+	if svc.IsMember(ctx, "u-1", "") {
+		t.Error("empty channelID must short-circuit to false")
+	}
+}
+
 func TestChannelService_Archive(t *testing.T) {
 	svc, channels, memberships, _, _ := setupChannelService()
 	ctx := context.Background()

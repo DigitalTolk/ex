@@ -136,6 +136,13 @@ func (s *MessageService) Send(ctx context.Context, userID, parentID, parentType,
 		s.notifier.NotifyForMessage(ctx, msg, parentType)
 	}
 
+	// Mentioning a user who isn't yet in the channel surfaces a system
+	// message inviting whoever can to add them. Channel-only — DMs and
+	// groups can't mention "outsiders" since there's no concept of one.
+	if parentType == ParentChannel {
+		s.flagNonMemberMentions(ctx, msg)
+	}
+
 	// If this is a thread reply, bump the root message's ReplyCount and emit
 	// an edited event so subscribed clients update the count.
 	if parentMessageID != "" {
@@ -589,6 +596,53 @@ func (s *MessageService) releaseAttachments(ctx context.Context, msgID string, i
 		}(aid)
 	}
 	wg.Wait()
+}
+
+// flagNonMemberMentions inspects the message body for @[id|name] markers
+// and, for each mentioned user who is NOT a member of the channel, posts
+// a system message in the channel announcing it so an admin can decide
+// to invite them. No-op when nothing matches. Errors are swallowed —
+// the user's send already succeeded and a missing audit message must
+// not be allowed to cascade into a failed publish.
+//
+// We do per-mention GetMembership rather than scanning the whole channel
+// (ListMembers): a typical message has 0–2 mentions, so 0–2 point reads
+// is cheaper than one channel-wide scan. The notifier already pays for
+// the channel-wide load on a different code path; reusing it would
+// require cross-cutting plumbing not worth the few RCUs saved.
+func (s *MessageService) flagNonMemberMentions(ctx context.Context, msg *model.Message) {
+	if s.memberships == nil {
+		return
+	}
+	mentions := ParseMentions(msg.Body)
+	if len(mentions.Users) == 0 {
+		return
+	}
+	for _, mention := range mentions.Users {
+		if _, err := s.memberships.GetMembership(ctx, msg.ParentID, mention.UserID); err == nil {
+			continue
+		}
+		body := "@" + mention.DisplayName + " was mentioned but isn't a member of this channel — an admin can invite them via the channel members list."
+		s.postSystemMessage(ctx, msg.ParentID, body)
+	}
+}
+
+// postSystemMessage persists a synthetic message attributed to "system" and
+// publishes a message.new event so connected clients render it inline.
+// Used for join/leave/audit-style notices and the non-member-mention flag.
+func (s *MessageService) postSystemMessage(ctx context.Context, channelID, body string) {
+	sysMsg := &model.Message{
+		ID:        store.NewID(),
+		ParentID:  channelID,
+		AuthorID:  "system",
+		Body:      body,
+		System:    true,
+		CreatedAt: time.Now(),
+	}
+	if err := s.messages.CreateMessage(ctx, sysMsg); err != nil {
+		return
+	}
+	events.Publish(ctx, s.publisher, pubsub.ChannelName(channelID), events.EventMessageNew, sysMsg)
 }
 
 // publishEvent sends a real-time event to the appropriate pub/sub channel.

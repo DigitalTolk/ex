@@ -9,11 +9,21 @@ import (
 
 	"github.com/coder/websocket"
 
+	"github.com/DigitalTolk/ex/internal/events"
 	"github.com/DigitalTolk/ex/internal/middleware"
 	"github.com/DigitalTolk/ex/internal/pubsub"
 	"github.com/DigitalTolk/ex/internal/service"
-	"github.com/DigitalTolk/ex/internal/events"
 )
+
+// inboundMessage is the shape of a client → server WebSocket frame. Only
+// "typing" is currently understood; anything else is dropped. We keep
+// the shape small and JSON-tolerant — unknown fields are ignored so the
+// protocol can grow without breaking older clients.
+type inboundMessage struct {
+	Type           string `json:"type"`
+	ParentID       string `json:"parentID"`
+	ParentType     string `json:"parentType"` // "channel" | "conversation"
+}
 
 const wsKeepAliveInterval = 30 * time.Second
 
@@ -23,12 +33,17 @@ type WSHandler struct {
 	chanSvc     *service.ChannelService
 	convSvc     *service.ConversationService
 	presenceSvc *service.PresenceService
+	publisher   service.Publisher
 }
 
 // NewWSHandler creates a WSHandler.
 func NewWSHandler(broker *pubsub.Broker, chanSvc *service.ChannelService, convSvc *service.ConversationService, presenceSvc *service.PresenceService) *WSHandler {
 	return &WSHandler{broker: broker, chanSvc: chanSvc, convSvc: convSvc, presenceSvc: presenceSvc}
 }
+
+// SetPublisher wires a publisher for inbound ephemeral events (typing
+// indicator). Optional — when nil, inbound typing is dropped.
+func (h *WSHandler) SetPublisher(p service.Publisher) { h.publisher = p }
 
 // Connect upgrades the HTTP connection to a WebSocket for the authenticated
 // user. Authentication is handled via the "token" query parameter by the auth
@@ -130,14 +145,17 @@ func (h *WSHandler) Connect(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
 
-	// Read loop: drain incoming messages (we don't use them), detect close.
+	// Read loop: parse incoming JSON frames so the typing indicator can
+	// fan out via the same pubsub fabric as ordinary events. Unknown
+	// frames are silently dropped — the protocol is forward-compatible.
 	go func() {
 		defer cancel()
 		for {
-			_, _, err := conn.Read(ctx)
+			_, data, err := conn.Read(ctx)
 			if err != nil {
 				return
 			}
+			h.handleInbound(ctx, userID, data)
 		}
 	}()
 
@@ -170,4 +188,58 @@ func writePing(ctx context.Context, conn *websocket.Conn) error {
 	evt, _ := events.NewEvent(events.EventPing, map[string]int64{"ts": time.Now().UnixMilli()})
 	data, _ := json.Marshal(evt)
 	return conn.Write(ctx, websocket.MessageText, data)
+}
+
+// handleInbound dispatches a single client → server frame. Currently
+// only the "typing" event is recognised; everything else is ignored.
+func (h *WSHandler) handleInbound(ctx context.Context, userID string, raw []byte) {
+	var msg inboundMessage
+	if err := json.Unmarshal(raw, &msg); err != nil {
+		return
+	}
+	switch msg.Type {
+	case "typing":
+		h.publishTyping(ctx, userID, msg)
+	}
+}
+
+// publishTyping broadcasts a typing event to the parent's pubsub topic
+// after verifying the sender is a member. Membership check prevents a
+// stranger from spamming a channel they can't read.
+func (h *WSHandler) publishTyping(ctx context.Context, userID string, msg inboundMessage) {
+	if h.publisher == nil || msg.ParentID == "" {
+		return
+	}
+	var topic string
+	switch msg.ParentType {
+	case service.ParentChannel:
+		if h.chanSvc == nil {
+			return
+		}
+		// CheckAccess silently no-ops if the membership exists; an error
+		// means the user isn't allowed in this channel — drop the event.
+		if !h.chanSvc.IsMember(ctx, userID, msg.ParentID) {
+			return
+		}
+		topic = pubsub.ChannelName(msg.ParentID)
+	case service.ParentConversation:
+		if h.convSvc == nil {
+			return
+		}
+		if !h.convSvc.IsParticipant(ctx, userID, msg.ParentID) {
+			return
+		}
+		topic = pubsub.ConversationName(msg.ParentID)
+	default:
+		return
+	}
+	evt, err := events.NewEvent(events.EventTyping, map[string]any{
+		"userID":     userID,
+		"parentID":   msg.ParentID,
+		"parentType": msg.ParentType,
+	})
+	if err != nil {
+		return
+	}
+	_ = h.publisher.Publish(ctx, topic, evt)
 }

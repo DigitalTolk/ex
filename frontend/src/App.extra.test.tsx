@@ -12,18 +12,17 @@ describe('App - authenticated route', () => {
   beforeEach(() => {
     // First call: refresh returns access token
     // Subsequent calls: /api/v1/users/me returns user
-    let call = 0;
+    // Route by URL so fetch order can change without breaking the test.
     globalThis.fetch = vi.fn().mockImplementation((url: string) => {
-      call++;
-      if (call === 1) {
+      const u = String(url);
+      if (u.includes('/auth/token/refresh')) {
         return Promise.resolve({
           ok: true,
           status: 200,
           json: () => Promise.resolve({ accessToken: 'tok' }),
         } as Response);
       }
-      // /api/v1/users/me
-      if (typeof url === 'string' && url.includes('/users/me')) {
+      if (u.includes('/users/me')) {
         return Promise.resolve({
           ok: true,
           status: 200,
@@ -35,6 +34,14 @@ describe('App - authenticated route', () => {
             systemRole: 'admin',
             status: 'active',
           }),
+        } as Response);
+      }
+      if (u.includes('/api/v1/version')) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'content-type': 'application/json' }),
+          json: () => Promise.resolve({ version: 'test' }),
         } as Response);
       }
       return Promise.resolve({

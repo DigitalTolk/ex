@@ -24,7 +24,9 @@ const (
 	EventUserUpdated     = "user.updated"
 	EventAttachmentDeleted = "attachment.deleted"
 	EventChannelMuted      = "channel.muted"
+	EventUserChannelUpdated = "userchannel.updated" // per-user user-side state changed (favorite/category)
 	EventNotificationNew   = "notification.new"
+	EventTyping          = "typing" // ephemeral typing indicator — published when a user starts typing in a parent
 	EventPing            = "ping"
 )
 

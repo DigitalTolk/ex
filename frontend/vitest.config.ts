@@ -4,6 +4,11 @@ import path from 'path';
 
 export default defineConfig({
   plugins: [react()],
+  define: {
+    // Mirror the production define so version-aware code gets a
+    // deterministic constant under tests instead of a ReferenceError.
+    __BUILD_VERSION__: JSON.stringify('test'),
+  },
   test: {
     globals: true,
     environment: 'jsdom',

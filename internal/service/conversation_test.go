@@ -17,6 +17,99 @@ func setupConversationService() (*ConversationService, *mockConversationStore, *
 	return svc, convs, users, broker, publisher
 }
 
+func TestConversationService_SetFavorite(t *testing.T) {
+	svc, conversations, _, _, publisher := setupConversationService()
+	ctx := context.Background()
+
+	conversations.conversations["c-fav"] = &model.Conversation{
+		ID:             "c-fav",
+		Type:           model.ConversationTypeDM,
+		ParticipantIDs: []string{"u-1", "u-2"},
+	}
+	conversations.userConvs["u-1"] = []*model.UserConversation{
+		{UserID: "u-1", ConversationID: "c-fav"},
+	}
+
+	if err := svc.SetFavorite(ctx, "u-1", "c-fav", true); err != nil {
+		t.Fatalf("SetFavorite: %v", err)
+	}
+	if !conversations.userConvs["u-1"][0].Favorite {
+		t.Error("expected user-side favorite=true")
+	}
+	if len(publisher.published) != 1 || publisher.published[0].event.Type != "userchannel.updated" {
+		t.Errorf("expected userchannel.updated; got %+v", publisher.published)
+	}
+}
+
+func TestConversationService_SetFavorite_RejectsNonParticipant(t *testing.T) {
+	svc, conversations, _, _, _ := setupConversationService()
+	ctx := context.Background()
+	conversations.conversations["c-fav"] = &model.Conversation{
+		ID:             "c-fav",
+		Type:           model.ConversationTypeDM,
+		ParticipantIDs: []string{"u-1"},
+	}
+	if err := svc.SetFavorite(ctx, "u-stranger", "c-fav", true); err == nil {
+		t.Fatal("expected non-participant rejection")
+	}
+}
+
+func TestConversationService_SetCategory(t *testing.T) {
+	svc, conversations, _, _, _ := setupConversationService()
+	ctx := context.Background()
+	conversations.conversations["c-cat"] = &model.Conversation{
+		ID:             "c-cat",
+		Type:           model.ConversationTypeGroup,
+		ParticipantIDs: []string{"u-1", "u-2"},
+	}
+	conversations.userConvs["u-1"] = []*model.UserConversation{
+		{UserID: "u-1", ConversationID: "c-cat"},
+	}
+	if err := svc.SetCategory(ctx, "u-1", "c-cat", "cat-eng"); err != nil {
+		t.Fatalf("SetCategory: %v", err)
+	}
+	if conversations.userConvs["u-1"][0].CategoryID != "cat-eng" {
+		t.Errorf("CategoryID = %q, want cat-eng", conversations.userConvs["u-1"][0].CategoryID)
+	}
+}
+
+func TestConversationService_SetCategory_RejectsNonParticipant(t *testing.T) {
+	svc, conversations, _, _, _ := setupConversationService()
+	ctx := context.Background()
+	conversations.conversations["c-cat"] = &model.Conversation{
+		ID:             "c-cat",
+		Type:           model.ConversationTypeGroup,
+		ParticipantIDs: []string{"u-1"},
+	}
+	if err := svc.SetCategory(ctx, "u-stranger", "c-cat", "cat"); err == nil {
+		t.Fatal("expected non-participant rejection")
+	}
+}
+
+func TestConversationService_IsParticipant(t *testing.T) {
+	svc, conversations, _, _, _ := setupConversationService()
+	ctx := context.Background()
+
+	conversations.conversations["c-ip"] = &model.Conversation{
+		ID:             "c-ip",
+		Type:           model.ConversationTypeGroup,
+		ParticipantIDs: []string{"u-a", "u-b"},
+	}
+
+	if !svc.IsParticipant(ctx, "u-a", "c-ip") {
+		t.Error("expected participant to be reported")
+	}
+	if svc.IsParticipant(ctx, "u-c", "c-ip") {
+		t.Error("non-participant must not be reported")
+	}
+	if svc.IsParticipant(ctx, "u-a", "missing") {
+		t.Error("missing conversation must report false")
+	}
+	if svc.IsParticipant(ctx, "", "c-ip") || svc.IsParticipant(ctx, "u-a", "") {
+		t.Error("blank inputs must short-circuit to false")
+	}
+}
+
 func TestConversationService_GetOrCreateDM(t *testing.T) {
 	svc, _, users, broker, _ := setupConversationService()
 	ctx := context.Background()

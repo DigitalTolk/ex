@@ -25,6 +25,8 @@ func NewRouter(
 	attachmentH *AttachmentHandler,
 	adminH *AdminHandler,
 	threadH *ThreadHandler,
+	versionH *VersionHandler,
+	sidebarH *SidebarHandler,
 	jwtMgr *auth.JWTManager,
 	frontendFS fs.FS,
 	allowOrigin string,
@@ -37,6 +39,13 @@ func NewRouter(
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, JSON{"status": "ok"})
 	})
+
+	// ------------------------------------------------------------------ Version
+	// Public — the frontend polls this to detect deploys (the JS bundle
+	// pins the version it shipped with; mismatch → reload banner).
+	if versionH != nil {
+		mux.HandleFunc("GET /api/v1/version", versionH.Get)
+	}
 
 	// ------------------------------------------------------------------ Auth (public)
 	mux.HandleFunc("GET /auth/oidc/login", authH.OIDCLogin)
@@ -102,6 +111,18 @@ func NewRouter(
 	// ------------------------------------------------------------------ Threads (cross-parent)
 	if threadH != nil {
 		mux.Handle("GET /api/v1/threads", middleware.WrapFunc(threadH.List, authMW))
+	}
+
+	// ------------------------------------------------------------------ Sidebar (per-user)
+	if sidebarH != nil {
+		mux.Handle("PUT /api/v1/channels/{id}/favorite", middleware.WrapFunc(sidebarH.SetFavorite, authMW))
+		mux.Handle("PUT /api/v1/channels/{id}/category", middleware.WrapFunc(sidebarH.SetCategory, authMW))
+		mux.Handle("PUT /api/v1/conversations/{id}/favorite", middleware.WrapFunc(sidebarH.SetConversationFavorite, authMW))
+		mux.Handle("PUT /api/v1/conversations/{id}/category", middleware.WrapFunc(sidebarH.SetConversationCategory, authMW))
+		mux.Handle("GET /api/v1/sidebar/categories", middleware.WrapFunc(sidebarH.ListCategories, authMW))
+		mux.Handle("POST /api/v1/sidebar/categories", middleware.WrapFunc(sidebarH.CreateCategory, authMW))
+		mux.Handle("PATCH /api/v1/sidebar/categories/{id}", middleware.WrapFunc(sidebarH.UpdateCategory, authMW))
+		mux.Handle("DELETE /api/v1/sidebar/categories/{id}", middleware.WrapFunc(sidebarH.DeleteCategory, authMW))
 	}
 
 	// ------------------------------------------------------------------ Uploads

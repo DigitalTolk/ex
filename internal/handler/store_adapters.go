@@ -94,6 +94,12 @@ func (a *MembershipStoreAdapter) ListUserChannels(ctx context.Context, userID st
 func (a *MembershipStoreAdapter) SetMute(ctx context.Context, channelID, userID string, muted bool) error {
 	return a.s.SetUserChannelMute(ctx, channelID, userID, muted)
 }
+func (a *MembershipStoreAdapter) SetFavorite(ctx context.Context, channelID, userID string, favorite bool) error {
+	return a.s.SetUserChannelFavorite(ctx, channelID, userID, favorite)
+}
+func (a *MembershipStoreAdapter) SetCategory(ctx context.Context, channelID, userID, categoryID string) error {
+	return a.s.SetUserChannelCategory(ctx, channelID, userID, categoryID)
+}
 
 // ConversationStoreAdapter wraps store.ConversationStoreImpl to satisfy service.ConversationStore.
 type ConversationStoreAdapter struct {
@@ -115,6 +121,12 @@ func (a *ConversationStoreAdapter) ListUserConversations(ctx context.Context, us
 }
 func (a *ConversationStoreAdapter) ActivateConversation(ctx context.Context, convID string, participantIDs []string) error {
 	return a.s.Activate(ctx, convID, participantIDs)
+}
+func (a *ConversationStoreAdapter) SetFavorite(ctx context.Context, convID, userID string, favorite bool) error {
+	return a.s.SetUserConversationFavorite(ctx, convID, userID, favorite)
+}
+func (a *ConversationStoreAdapter) SetCategory(ctx context.Context, convID, userID, categoryID string) error {
+	return a.s.SetUserConversationCategory(ctx, convID, userID, categoryID)
 }
 
 // MessageStoreAdapter wraps store.MessageStoreImpl to satisfy service.MessageStore.

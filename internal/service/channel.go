@@ -383,6 +383,44 @@ func (s *ChannelService) SetMute(ctx context.Context, userID, channelID string, 
 	return nil
 }
 
+// SetFavorite pins or unpins a channel in the user's sidebar. Per-user.
+// The user must already be a member — pinning a channel you can't see
+// would create an orphan row in the user-side index.
+func (s *ChannelService) SetFavorite(ctx context.Context, userID, channelID string, favorite bool) error {
+	if _, err := s.memberships.GetMembership(ctx, channelID, userID); err != nil {
+		return fmt.Errorf("channel: get membership: %w", err)
+	}
+	if err := s.memberships.SetFavorite(ctx, channelID, userID, favorite); err != nil {
+		return fmt.Errorf("channel: set favorite: %w", err)
+	}
+	events.Publish(ctx, s.publisher, pubsub.UserChannel(userID), events.EventUserChannelUpdated, map[string]any{
+		"channelID": channelID,
+		"userID":    userID,
+		"favorite":  favorite,
+	})
+	return nil
+}
+
+// SetCategory assigns a channel to one of the user's sidebar categories
+// (or clears the assignment when categoryID is empty). Same per-user
+// semantics as SetFavorite. Validation that the categoryID actually
+// belongs to this user is the caller's responsibility — handlers do
+// that check before invoking.
+func (s *ChannelService) SetCategory(ctx context.Context, userID, channelID, categoryID string) error {
+	if _, err := s.memberships.GetMembership(ctx, channelID, userID); err != nil {
+		return fmt.Errorf("channel: get membership: %w", err)
+	}
+	if err := s.memberships.SetCategory(ctx, channelID, userID, categoryID); err != nil {
+		return fmt.Errorf("channel: set category: %w", err)
+	}
+	events.Publish(ctx, s.publisher, pubsub.UserChannel(userID), events.EventUserChannelUpdated, map[string]any{
+		"channelID":  channelID,
+		"userID":     userID,
+		"categoryID": categoryID,
+	})
+	return nil
+}
+
 // AddMember adds a user to a channel with the specified role. The actor must
 // be an admin or higher.
 func (s *ChannelService) AddMember(ctx context.Context, actorID, channelID, userID string, role model.ChannelRole) error {
@@ -588,6 +626,18 @@ func (s *ChannelService) guestBrowse(ctx context.Context, userID string) ([]*mod
 		out = append(out, ch)
 	}
 	return out, "", nil
+}
+
+// IsMember reports whether the user has a membership row in the channel.
+// Used by the WebSocket handler to gate inbound ephemeral events (typing
+// indicator) — the same membership check that any persistent action has
+// to pass on the write path.
+func (s *ChannelService) IsMember(ctx context.Context, userID, channelID string) bool {
+	if userID == "" || channelID == "" {
+		return false
+	}
+	_, err := s.memberships.GetMembership(ctx, channelID, userID)
+	return err == nil
 }
 
 // checkPermission verifies that the actor has at least minRole in the channel,

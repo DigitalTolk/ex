@@ -8,6 +8,7 @@ import { MemberList } from './MemberList';
 import { ThreadPanel } from './ThreadPanel';
 import { PinnedPanel } from './PinnedPanel';
 import { ChannelIntro } from './ConversationIntro';
+import { TypingIndicator } from './TypingIndicator';
 import { useChannelBySlug, useChannelMembers, useMuteChannel, useUserChannels } from '@/hooks/useChannels';
 import {
   useChannelMessages,
@@ -207,11 +208,14 @@ export function ChannelView() {
             ) : undefined
           }
         />
+        <TypingIndicator parentID={channel?.id} userMap={userMap} />
         <MessageInput
           onSend={sendMessage.mutate}
           disabled={sendMessage.isPending}
           placeholder={`Write to #${channel?.name ?? '...'}`}
           focusKey={channel?.id}
+          typingParentID={channel?.id}
+          typingParentType="channel"
         />
       </div>
       {threadRootID && (

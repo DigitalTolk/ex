@@ -255,10 +255,30 @@ func (s *MembershipStoreImpl) UpdateChannelRole(ctx context.Context, channelID, 
 // record. Mute is a per-user preference, so unlike role changes we do not
 // need to dual-write the channel-side membership.
 func (s *MembershipStoreImpl) SetUserChannelMute(ctx context.Context, channelID, userID string, muted bool) error {
-	upd := expression.Set(expression.Name("muted"), expression.Value(muted))
+	return s.setUserChannelAttribute(ctx, channelID, userID, "muted", muted)
+}
+
+// SetUserChannelFavorite flips the favorite flag on the user-side
+// UserChannel — used to pin a channel to the "Favorites" sidebar section.
+func (s *MembershipStoreImpl) SetUserChannelFavorite(ctx context.Context, channelID, userID string, favorite bool) error {
+	return s.setUserChannelAttribute(ctx, channelID, userID, "favorite", favorite)
+}
+
+// SetUserChannelCategory assigns the channel to a user-defined sidebar
+// category. Empty string clears the assignment.
+func (s *MembershipStoreImpl) SetUserChannelCategory(ctx context.Context, channelID, userID, categoryID string) error {
+	return s.setUserChannelAttribute(ctx, channelID, userID, "categoryID", categoryID)
+}
+
+// setUserChannelAttribute is a small helper for the family of single-
+// attribute updates on the user-side UserChannel row. Each one needs the
+// same condition-exists guard so a missing membership maps to
+// ErrNotFound instead of silently creating an orphan row.
+func (s *MembershipStoreImpl) setUserChannelAttribute(ctx context.Context, channelID, userID, attr string, value any) error {
+	upd := expression.Set(expression.Name(attr), expression.Value(value))
 	expr, err := expression.NewBuilder().WithUpdate(upd).Build()
 	if err != nil {
-		return fmt.Errorf("store: build user channel mute expression: %w", err)
+		return fmt.Errorf("store: build user channel %s expression: %w", attr, err)
 	}
 
 	_, err = s.Client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
@@ -273,7 +293,7 @@ func (s *MembershipStoreImpl) SetUserChannelMute(ctx context.Context, channelID,
 		if isConditionCheckFailed(err) {
 			return ErrNotFound
 		}
-		return fmt.Errorf("store: set user channel mute: %w", err)
+		return fmt.Errorf("store: set user channel %s: %w", attr, err)
 	}
 	return nil
 }

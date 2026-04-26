@@ -99,7 +99,7 @@ When SMTP is not configured, invite links are logged to the server console.
 | `OIDC_CLIENT_SECRET` | - | OIDC client secret |
 | `JWT_SECRET` | `dev-secret-change-me` (dev only) | JWT signing secret |
 | `AWS_REGION` | `us-east-1` | AWS region |
-| `DYNAMODB_TABLE` | `ex` | DynamoDB table name |
+| `DYNAMODB_TABLE` | `ex` | DynamoDB table name (single-table design — see below) |
 | `DYNAMODB_ENDPOINT` | - | DynamoDB endpoint (set for local dev) |
 | `REDIS_URL` | `redis://localhost:6379` | Redis connection URL |
 | `SMTP_HOST` | - | SMTP server hostname |
@@ -117,6 +117,61 @@ make build
 # Build Docker image
 make docker
 ```
+
+## DynamoDB
+
+Despite the name, `DYNAMODB_TABLE` configures **a single table**, not a prefix. The app follows the [DynamoDB single-table design](https://aws.amazon.com/blogs/compute/creating-a-single-table-design-with-amazon-dynamodb/): every entity (users, channels, conversations, messages, memberships, invites, refresh tokens, settings, …) lives in one table, distinguished by composite `PK`/`SK` prefixes (`USER#`, `CHAN#`, `MSG#`, …) plus two GSIs.
+
+### Local development
+
+The dev stack creates the table for you on first start — `EnsureTable` runs only when `ENV=development` and is a no-op when the table already exists.
+
+### Production — pre-create the table
+
+In production the binary will **not** create or modify the table; that responsibility lives with your infrastructure tooling so the running app needs only `dynamodb:GetItem`, `dynamodb:Query`, `dynamodb:PutItem`, `dynamodb:UpdateItem`, `dynamodb:DeleteItem`, `dynamodb:TransactWriteItems`, `dynamodb:BatchWriteItem` — never `CreateTable`.
+
+Create the table once with the AWS CLI (replace `ex` with your `DYNAMODB_TABLE` value if different):
+
+```bash
+aws dynamodb create-table \
+  --table-name ex \
+  --billing-mode PAY_PER_REQUEST \
+  --attribute-definitions \
+      AttributeName=PK,AttributeType=S \
+      AttributeName=SK,AttributeType=S \
+      AttributeName=GSI1PK,AttributeType=S \
+      AttributeName=GSI1SK,AttributeType=S \
+      AttributeName=GSI2PK,AttributeType=S \
+      AttributeName=GSI2SK,AttributeType=S \
+  --key-schema \
+      AttributeName=PK,KeyType=HASH \
+      AttributeName=SK,KeyType=RANGE \
+  --global-secondary-indexes '[
+    {
+      "IndexName": "GSI1",
+      "KeySchema": [
+        {"AttributeName": "GSI1PK", "KeyType": "HASH"},
+        {"AttributeName": "GSI1SK", "KeyType": "RANGE"}
+      ],
+      "Projection": {"ProjectionType": "ALL"}
+    },
+    {
+      "IndexName": "GSI2",
+      "KeySchema": [
+        {"AttributeName": "GSI2PK", "KeyType": "HASH"},
+        {"AttributeName": "GSI2SK", "KeyType": "RANGE"}
+      ],
+      "Projection": {"ProjectionType": "ALL"}
+    }
+  ]'
+
+# Enable TTL so expired refresh tokens / invites are auto-evicted.
+aws dynamodb update-time-to-live \
+  --table-name ex \
+  --time-to-live-specification "Enabled=true, AttributeName=ttl"
+```
+
+If you prefer Terraform / CloudFormation / CDK, replicate the same shape: `PK`+`SK` primary key, two GSIs (`GSI1`/`GSI2`) each with `*PK`+`*SK` and `ProjectionType=ALL`, and a TTL on the `ttl` attribute.
 
 ## Architecture
 

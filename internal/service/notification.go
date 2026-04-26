@@ -55,6 +55,13 @@ type Notification struct {
 	CreatedAt  time.Time        `json:"createdAt"`
 }
 
+// PresenceLookup is the slice of PresenceService NotificationService cares
+// about. Defined as an interface so the dependency is explicit and tests
+// can stub it without instantiating the real presence tracker.
+type PresenceLookup interface {
+	IsOnline(userID string) bool
+}
+
 // NotificationService dispatches notifications to interested users while
 // honoring per-user mute preferences. It is intentionally tiny and parallel
 // to the events package: events update *every* connected client; this fans
@@ -66,11 +73,70 @@ type NotificationService struct {
 	conv      ConversationStore
 	channels  ChannelStore
 	users     UserStore
+	presence  PresenceLookup
 }
 
 // NewNotificationService builds a NotificationService.
 func NewNotificationService(p Publisher, m MembershipStore, c ConversationStore, ch ChannelStore, u UserStore) *NotificationService {
 	return &NotificationService{publisher: p, members: m, conv: c, channels: ch, users: u}
+}
+
+// SetPresence wires a presence lookup so the @here mention can target only
+// currently-online members. Optional — when nil, @here falls through to
+// "no recipients" (better than spamming the whole channel).
+func (s *NotificationService) SetPresence(p PresenceLookup) { s.presence = p }
+
+// memberSnapshot is everything NotifyForMessage and its helpers need to
+// reason about a parent's audience: the IDs of every recipient (author
+// excluded) and which of them muted the channel. Loading it once per
+// message keeps the hot path to a single ListMembers + a single mute
+// scan even when the body contains @all/@here.
+type memberSnapshot struct {
+	memberIDs []string        // every parent member except the author
+	muted     map[string]bool // userID → true if muted (channels only; empty for conversations)
+	deepLink  string
+}
+
+// loadMemberSnapshot resolves the audience for a single message. Empty
+// memberIDs is a valid result (e.g., empty channel) and signals "nobody
+// to notify by default" — a direct @-mention can still reach a muted
+// member via the mentions path.
+func (s *NotificationService) loadMemberSnapshot(ctx context.Context, msg *model.Message, parentType, parentName string) memberSnapshot {
+	switch parentType {
+	case ParentChannel:
+		members, err := s.members.ListMembers(ctx, msg.ParentID)
+		if err != nil {
+			return memberSnapshot{}
+		}
+		ids := make([]string, 0, len(members))
+		for _, m := range members {
+			if m.UserID == msg.AuthorID {
+				continue
+			}
+			ids = append(ids, m.UserID)
+		}
+		muted := make(map[string]bool, len(ids))
+		for _, uid := range ids {
+			if s.userMutedChannel(ctx, uid, msg.ParentID) {
+				muted[uid] = true
+			}
+		}
+		return memberSnapshot{memberIDs: ids, muted: muted, deepLink: "/channel/" + parentName}
+	case ParentConversation:
+		c, err := s.conv.GetConversation(ctx, msg.ParentID)
+		if err != nil || c == nil {
+			return memberSnapshot{}
+		}
+		ids := make([]string, 0, len(c.ParticipantIDs))
+		for _, p := range c.ParticipantIDs {
+			if p == msg.AuthorID {
+				continue
+			}
+			ids = append(ids, p)
+		}
+		return memberSnapshot{memberIDs: ids, muted: map[string]bool{}, deepLink: "/conversation/" + msg.ParentID}
+	}
+	return memberSnapshot{}
 }
 
 // NotifyForMessage emits a notification to every channel/conversation member
@@ -91,72 +157,91 @@ func (s *NotificationService) NotifyForMessage(ctx context.Context, msg *model.M
 
 	parentName := s.parentDisplayName(ctx, msg.ParentID, parentType)
 	authorName := s.userDisplayName(ctx, msg.AuthorID)
-
-	recipients, deepLink := s.recipientsAndLink(ctx, msg, parentType, parentName)
-	if len(recipients) == 0 {
-		return
-	}
+	snap := s.loadMemberSnapshot(ctx, msg, parentType, parentName)
 
 	notif := Notification{
 		Kind:       kind,
 		Title:      titleFor(kind, parentType, parentName, authorName),
 		Body:       previewBody(msg.Body),
-		DeepLink:   deepLink,
+		DeepLink:   snap.deepLink,
 		ParentID:   msg.ParentID,
 		ParentType: parentType,
 		MessageID:  msg.ID,
 		AuthorID:   msg.AuthorID,
 		CreatedAt:  time.Now(),
 	}
-	for _, uid := range recipients {
+
+	// A direct @-mention bypasses mute; @all/@here respect it. The
+	// mentions path therefore needs the audience snapshot too — passing
+	// it in keeps both paths to a single ListMembers + mute scan.
+	mentions := ParseMentions(msg.Body)
+	mentionRecipients := s.resolveMentionRecipients(msg, parentType, mentions, snap)
+
+	mentionedSet := make(map[string]bool, len(mentionRecipients))
+	for _, uid := range mentionRecipients {
+		mentionedSet[uid] = true
+	}
+
+	// Regular message notification: every member who didn't mute and
+	// isn't already getting a higher-priority mention.
+	for _, uid := range snap.memberIDs {
+		if mentionedSet[uid] || snap.muted[uid] {
+			continue
+		}
 		events.Publish(ctx, s.publisher, pubsub.UserChannel(uid), events.EventNotificationNew, notif)
+	}
+
+	if len(mentionRecipients) > 0 {
+		mentionNotif := notif
+		mentionNotif.Kind = NotificationKindMention
+		mentionNotif.Title = titleFor(NotificationKindMention, parentType, parentName, authorName)
+		for _, uid := range mentionRecipients {
+			events.Publish(ctx, s.publisher, pubsub.UserChannel(uid), events.EventNotificationNew, mentionNotif)
+		}
 	}
 }
 
-// recipientsAndLink resolves who should receive an alert and where the
-// notification click should land them. Author is always excluded; muted
-// channel members are excluded for channel notifications.
-func (s *NotificationService) recipientsAndLink(ctx context.Context, msg *model.Message, parentType, parentName string) ([]string, string) {
-	switch parentType {
-	case ParentChannel:
-		members, err := s.members.ListMembers(ctx, msg.ParentID)
-		if err != nil {
-			return nil, ""
-		}
-		// Look up each member's UserChannel to honor mute. ListUserChannels
-		// is per-user, so we walk it once for each member — fine for the
-		// small workspaces this app targets. For larger scale this would
-		// move to a single batched query.
-		out := make([]string, 0, len(members))
-		for _, m := range members {
-			if m.UserID == msg.AuthorID {
-				continue
-			}
-			if s.userMutedChannel(ctx, m.UserID, msg.ParentID) {
-				continue
-			}
-			out = append(out, m.UserID)
-		}
-		// channelName is the slug-ish display; the frontend route uses slug
-		// derived from name, but ParentID is also accepted as a fallback.
-		link := "/channel/" + parentName
-		return out, link
-	case ParentConversation:
-		c, err := s.conv.GetConversation(ctx, msg.ParentID)
-		if err != nil || c == nil {
-			return nil, ""
-		}
-		out := make([]string, 0, len(c.ParticipantIDs))
-		for _, p := range c.ParticipantIDs {
-			if p == msg.AuthorID {
-				continue
-			}
-			out = append(out, p)
-		}
-		link := "/conversation/" + msg.ParentID
-		return out, link
+// resolveMentionRecipients fans the parsed mentions out to user IDs:
+//   - explicit user mentions → that user (regardless of mute, but never
+//     the author themselves)
+//   - @all → every channel/conversation member except the author (respects mute)
+//   - @here → online subset of @all (respects mute)
+//
+// Returned IDs are de-duplicated; ordering is stable: explicit mentions
+// first, then @all/@here members in member-list order.
+func (s *NotificationService) resolveMentionRecipients(msg *model.Message, parentType string, mentions ParsedMentions, snap memberSnapshot) []string {
+	if mentions.Empty() {
+		return nil
 	}
-	return nil, ""
+
+	out := make([]string, 0)
+	seen := make(map[string]bool)
+	add := func(uid string) {
+		if uid == "" || uid == msg.AuthorID || seen[uid] {
+			return
+		}
+		seen[uid] = true
+		out = append(out, uid)
+	}
+
+	for _, m := range mentions.Users {
+		add(m.UserID)
+	}
+
+	if !mentions.All && !mentions.Here {
+		return out
+	}
+
+	for _, uid := range snap.memberIDs {
+		if parentType == ParentChannel && snap.muted[uid] {
+			continue
+		}
+		if mentions.Here && (s.presence == nil || !s.presence.IsOnline(uid)) {
+			continue
+		}
+		add(uid)
+	}
+	return out
 }
 
 // parentDisplayName resolves a human-readable name for the parent (channel
@@ -220,6 +305,11 @@ func titleFor(kind NotificationKind, parentType, parentName, authorName string) 
 			return authorName + " in #" + parentName
 		}
 		return authorName
+	case NotificationKindMention:
+		if parentType == ParentChannel {
+			return authorName + " mentioned you in #" + parentName
+		}
+		return authorName + " mentioned you"
 	default:
 		return authorName
 	}

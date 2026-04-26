@@ -279,6 +279,26 @@ func (m *mockMembershipStore) SetMute(_ context.Context, channelID, userID strin
 	return nil
 }
 
+func (m *mockMembershipStore) SetFavorite(_ context.Context, channelID, userID string, favorite bool) error {
+	for _, uc := range m.userChannels {
+		if uc.UserID == userID && uc.ChannelID == channelID {
+			uc.Favorite = favorite
+			return nil
+		}
+	}
+	return store.ErrNotFound
+}
+
+func (m *mockMembershipStore) SetCategory(_ context.Context, channelID, userID, categoryID string) error {
+	for _, uc := range m.userChannels {
+		if uc.UserID == userID && uc.ChannelID == channelID {
+			uc.CategoryID = categoryID
+			return nil
+		}
+	}
+	return store.ErrNotFound
+}
+
 // --- Mock ChannelStore ---
 
 type mockChannelStore struct {
@@ -552,6 +572,26 @@ func (m *mockConversationStore) ActivateConversation(_ context.Context, convID s
 		}
 	}
 	return nil
+}
+
+func (m *mockConversationStore) SetFavorite(_ context.Context, convID, userID string, favorite bool) error {
+	for _, uc := range m.userConvs[userID] {
+		if uc.ConversationID == convID {
+			uc.Favorite = favorite
+			return nil
+		}
+	}
+	return store.ErrNotFound
+}
+
+func (m *mockConversationStore) SetCategory(_ context.Context, convID, userID, categoryID string) error {
+	for _, uc := range m.userConvs[userID] {
+		if uc.ConversationID == convID {
+			uc.CategoryID = categoryID
+			return nil
+		}
+	}
+	return store.ErrNotFound
 }
 
 // --- Mock MessageStore ---

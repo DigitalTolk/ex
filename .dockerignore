@@ -1,0 +1,42 @@
+# VCS / dev tooling — never needed inside the image.
+.git
+.github
+.gitignore
+.gitattributes
+.editorconfig
+.idea
+.vscode
+.claude
+
+# Documentation / project meta.
+README.md
+LICENSE
+CLAUDE.md
+*.md
+
+# CI / coverage / test artefacts.
+*.out
+coverage*
+.golangci.yml
+Makefile
+
+# Local env files — secrets must never end up in the image.
+.env
+.env.*
+
+# Compose config — we build the production image, not the local dev stack.
+docker-compose.yml
+docker-compose.*.yml
+
+# Frontend build artefacts and dependencies — both stages reinstall and
+# rebuild from source.
+frontend/node_modules
+frontend/dist
+frontend/coverage
+
+# Top-level node_modules from any tooling installed at repo root.
+node_modules
+
+# Pre-built local binaries.
+bin
+/ex

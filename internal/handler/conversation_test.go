@@ -66,6 +66,26 @@ func (s *dataConversationStore) ActivateConversation(_ context.Context, convID s
 	return nil
 }
 
+func (s *dataConversationStore) SetFavorite(_ context.Context, convID, userID string, favorite bool) error {
+	for _, uc := range s.userConvs[userID] {
+		if uc.ConversationID == convID {
+			uc.Favorite = favorite
+			return nil
+		}
+	}
+	return store.ErrNotFound
+}
+
+func (s *dataConversationStore) SetCategory(_ context.Context, convID, userID, categoryID string) error {
+	for _, uc := range s.userConvs[userID] {
+		if uc.ConversationID == convID {
+			uc.CategoryID = categoryID
+			return nil
+		}
+	}
+	return store.ErrNotFound
+}
+
 // dataUserStoreForConv stores users for conversation tests.
 type dataUserStoreForConv struct {
 	users      map[string]*model.User

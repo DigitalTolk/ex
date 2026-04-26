@@ -1,0 +1,196 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { render, screen, fireEvent } from '@testing-library/react';
+import { BrowserRouter } from 'react-router-dom';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import type { UserChannel, SidebarCategory } from '@/types';
+
+// --- mocks ---------------------------------------------------------------
+
+const favoriteMutate = vi.fn();
+const setCategoryMutate = vi.fn();
+const createCategoryMutate = vi.fn();
+
+let categoriesData: SidebarCategory[] = [];
+
+vi.mock('@/hooks/useSidebar', () => ({
+  useFavoriteChannel: () => ({ mutate: favoriteMutate }),
+  useSetCategory: () => ({ mutate: setCategoryMutate }),
+  useCategories: () => ({ data: categoriesData }),
+  useCreateCategory: () => ({ mutate: createCategoryMutate }),
+}));
+
+// Render dropdown contents inline so we can interact with menu items.
+vi.mock('@/components/ui/dropdown-menu', () => ({
+  DropdownMenu: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  DropdownMenuTrigger: ({ children, ...props }: { children: React.ReactNode; [k: string]: unknown }) => (
+    <button {...props}>{children}</button>
+  ),
+  DropdownMenuContent: ({ children }: { children: React.ReactNode }) => (
+    <div data-testid="row-menu-content">{children}</div>
+  ),
+  DropdownMenuItem: ({
+    children,
+    onClick,
+    disabled,
+  }: {
+    children: React.ReactNode;
+    onClick?: () => void;
+    disabled?: boolean;
+  }) => (
+    <button data-testid="dropdown-item" onClick={onClick} disabled={disabled}>
+      {children}
+    </button>
+  ),
+}));
+
+import { ChannelRow } from '@/components/layout/ChannelRow';
+
+// --- helpers -------------------------------------------------------------
+
+function makeChannel(overrides: Partial<UserChannel> = {}): UserChannel {
+  return {
+    channelID: 'ch-1',
+    channelName: 'general',
+    channelType: 'public',
+    role: 1,
+    ...overrides,
+  };
+}
+
+function renderRow(channel: UserChannel, hasUnread = false) {
+  const onClose = vi.fn();
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return {
+    ...render(
+      <QueryClientProvider client={qc}>
+        <BrowserRouter>
+          <ChannelRow channel={channel} hasUnread={hasUnread} onClose={onClose} />
+        </BrowserRouter>
+      </QueryClientProvider>,
+    ),
+    onClose,
+  };
+}
+
+// --- tests ---------------------------------------------------------------
+
+describe('ChannelRow', () => {
+  beforeEach(() => {
+    favoriteMutate.mockReset();
+    setCategoryMutate.mockReset();
+    createCategoryMutate.mockReset();
+    categoriesData = [];
+  });
+
+  it('renders the channel name', () => {
+    renderRow(makeChannel({ channelName: 'general' }));
+    expect(screen.getByText('general')).toBeInTheDocument();
+  });
+
+  it('toggles favorite via the star button', () => {
+    renderRow(makeChannel({ channelID: 'ch-1', favorite: false }));
+    const star = screen.getByTestId('fav-toggle-ch-1');
+    fireEvent.click(star);
+    expect(favoriteMutate).toHaveBeenCalledWith({ channelID: 'ch-1', favorite: true });
+  });
+
+  it('toggles favorite off when channel is already favorited', () => {
+    renderRow(makeChannel({ channelID: 'ch-1', favorite: true }));
+    const star = screen.getByTestId('fav-toggle-ch-1');
+    fireEvent.click(star);
+    expect(favoriteMutate).toHaveBeenCalledWith({ channelID: 'ch-1', favorite: false });
+  });
+
+  it('uses Lock icon and shows mute indicator for muted private channels', () => {
+    renderRow(makeChannel({ channelType: 'private', muted: true }));
+    expect(screen.getByLabelText('Muted')).toBeInTheDocument();
+  });
+
+  it('"Move to Other" calls setCategory with empty categoryID', () => {
+    renderRow(makeChannel({ channelID: 'ch-1' }));
+    const items = screen.getAllByTestId('dropdown-item');
+    const moveToOther = items.find((b) => b.textContent === 'Move to Other');
+    fireEvent.click(moveToOther!);
+    expect(setCategoryMutate).toHaveBeenCalledWith({ channelID: 'ch-1', categoryID: '' });
+  });
+
+  it('"Move to <category>" calls setCategory with the category id', () => {
+    categoriesData = [
+      { id: 'cat-A', name: 'Alpha', position: 0 },
+      { id: 'cat-B', name: 'Beta', position: 1 },
+    ];
+    renderRow(makeChannel({ channelID: 'ch-1' }));
+    const items = screen.getAllByTestId('dropdown-item');
+    const moveToBeta = items.find((b) => b.textContent === 'Move to Beta');
+    fireEvent.click(moveToBeta!);
+    expect(setCategoryMutate).toHaveBeenCalledWith({ channelID: 'ch-1', categoryID: 'cat-B' });
+  });
+
+  it('disables the "Move to <category>" entry for the current category', () => {
+    categoriesData = [{ id: 'cat-A', name: 'Alpha', position: 0 }];
+    renderRow(makeChannel({ channelID: 'ch-1', categoryID: 'cat-A' }));
+    const items = screen.getAllByTestId('dropdown-item');
+    const moveToAlpha = items.find((b) => b.textContent === 'Move to Alpha') as HTMLButtonElement;
+    expect(moveToAlpha).toBeTruthy();
+    expect(moveToAlpha.disabled).toBe(true);
+  });
+
+  it('"+ New category…" reveals an input', () => {
+    renderRow(makeChannel({ channelID: 'ch-1' }));
+    expect(screen.queryByTestId('new-category-input')).not.toBeInTheDocument();
+
+    const items = screen.getAllByTestId('dropdown-item');
+    const addNew = items.find((b) => b.textContent?.includes('New category'));
+    fireEvent.click(addNew!);
+
+    expect(screen.getByTestId('new-category-input')).toBeInTheDocument();
+  });
+
+  it('Enter on the new-category input creates the category and assigns the channel', () => {
+    renderRow(makeChannel({ channelID: 'ch-1' }));
+    const items = screen.getAllByTestId('dropdown-item');
+    const addNew = items.find((b) => b.textContent?.includes('New category'));
+    fireEvent.click(addNew!);
+
+    const input = screen.getByTestId('new-category-input') as HTMLInputElement;
+    fireEvent.change(input, { target: { value: 'Side projects' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+
+    expect(createCategoryMutate).toHaveBeenCalledTimes(1);
+    expect(createCategoryMutate.mock.calls[0][0]).toBe('Side projects');
+
+    // Drive the optimistic onSuccess to verify the channel is then assigned.
+    const opts = createCategoryMutate.mock.calls[0][1] as {
+      onSuccess: (cat: SidebarCategory) => void;
+    };
+    opts.onSuccess({ id: 'cat-new', name: 'Side projects', position: 0 });
+    expect(setCategoryMutate).toHaveBeenCalledWith({ channelID: 'ch-1', categoryID: 'cat-new' });
+  });
+
+  it('does nothing when the new-category name is blank', () => {
+    renderRow(makeChannel({ channelID: 'ch-1' }));
+    const items = screen.getAllByTestId('dropdown-item');
+    const addNew = items.find((b) => b.textContent?.includes('New category'));
+    fireEvent.click(addNew!);
+
+    const input = screen.getByTestId('new-category-input') as HTMLInputElement;
+    fireEvent.change(input, { target: { value: '   ' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+
+    expect(createCategoryMutate).not.toHaveBeenCalled();
+    expect(setCategoryMutate).not.toHaveBeenCalled();
+  });
+
+  it('Escape on the new-category input cancels and hides it', () => {
+    renderRow(makeChannel({ channelID: 'ch-1' }));
+    const items = screen.getAllByTestId('dropdown-item');
+    const addNew = items.find((b) => b.textContent?.includes('New category'));
+    fireEvent.click(addNew!);
+
+    const input = screen.getByTestId('new-category-input') as HTMLInputElement;
+    fireEvent.keyDown(input, { key: 'Escape' });
+
+    expect(screen.queryByTestId('new-category-input')).not.toBeInTheDocument();
+    expect(createCategoryMutate).not.toHaveBeenCalled();
+  });
+});

@@ -6,6 +6,7 @@ import { useUnread } from '@/context/UnreadContext';
 import { useAuth } from '@/context/AuthContext';
 import { usePresence } from '@/context/PresenceContext';
 import { useNotifications, type NotificationPayload } from '@/context/NotificationContext';
+import { useTyping } from '@/context/TypingContext';
 import { useWebSocket } from '@/hooks/useWebSocket';
 import { slugify } from '@/lib/format';
 
@@ -14,13 +15,18 @@ export default function ChatPage() {
   const { user } = useAuth();
   const { setUserOnline } = usePresence();
   const { dispatch: dispatchNotification, setCurrentUserID } = useNotifications();
+  const { recordTyping, setSelfUserID } = useTyping();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
 
   useEffect(() => {
     setCurrentUserID(user?.id ?? null);
-    return () => setCurrentUserID(null);
-  }, [user?.id, setCurrentUserID]);
+    setSelfUserID(user?.id ?? null);
+    return () => {
+      setCurrentUserID(null);
+      setSelfUserID(null);
+    };
+  }, [user?.id, setCurrentUserID, setSelfUserID]);
 
   useWebSocket({
     onMessageNew: (data: unknown) => {
@@ -165,6 +171,11 @@ export default function ChatPage() {
       const n = data as NotificationPayload | undefined;
       if (!n || !n.kind) return;
       dispatchNotification(n);
+    },
+    onTyping: (data: unknown) => {
+      const evt = data as { userID?: string; parentID?: string } | undefined;
+      if (!evt?.parentID || !evt.userID) return;
+      recordTyping(evt.parentID, evt.userID);
     },
     enabled: !!user,
   });
