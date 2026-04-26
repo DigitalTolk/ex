@@ -118,7 +118,11 @@ describe('ChannelView', () => {
 
   it('renders message input with channel placeholder', () => {
     renderChannelView();
-    expect(screen.getByPlaceholderText('Message #general')).toBeInTheDocument();
+    // The WysiwygEditor exposes its placeholder as `data-placeholder` on
+    // the contentEditable surface (no native placeholder attribute).
+    expect(
+      screen.getByLabelText('Message input').getAttribute('data-placeholder'),
+    ).toBe('Message #general');
   });
 
   it('shows "No messages yet" when there are no messages', () => {

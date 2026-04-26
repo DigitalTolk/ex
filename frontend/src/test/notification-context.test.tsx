@@ -95,15 +95,18 @@ describe('NotificationProvider', () => {
     expect(notificationCtor).not.toHaveBeenCalled();
   });
 
-  it('skips browser notification when document is visible', () => {
+  it('still fires browser notification when document is visible (regression: previously gated)', () => {
+    // The old behavior suppressed popups whenever the tab was focused,
+    // which made users believe notifications were broken — they only
+    // heard the sound. Now the popup always fires while permission is
+    // granted; active-parent suppression alone handles the on-screen case.
     Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
     renderProbe();
     act(() => {
       dispatchSpy!(samplePayload);
     });
-    // Sound still plays so the user notices in-tab; OS popup is suppressed.
     expect(playMock).toHaveBeenCalledTimes(1);
-    expect(notificationCtor).not.toHaveBeenCalled();
+    expect(notificationCtor).toHaveBeenCalledTimes(1);
   });
 
   it('reports permission=granted when Notification.permission is granted', () => {

@@ -283,7 +283,7 @@ func TestBrowsePublic_Error(t *testing.T) {
 	svc, channels, _, _, _ := setupChannelService()
 	channels.listErr = errors.New("list public boom")
 
-	if _, _, err := svc.BrowsePublic(context.Background(), 50, ""); err == nil {
+	if _, _, err := svc.BrowsePublic(context.Background(), "", 50, ""); err == nil {
 		t.Fatal("expected error")
 	}
 }

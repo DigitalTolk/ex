@@ -82,7 +82,8 @@ describe('ChannelBrowser - extra coverage', () => {
 
     expect(mockJoinMutate).toHaveBeenCalledWith('ch-2', expect.anything());
     expect(onOpenChange).toHaveBeenCalledWith(false);
-    expect(mockNavigate).toHaveBeenCalledWith('/channel/ch-2');
+    // URLs use slug — passing the id would land on a 404.
+    expect(mockNavigate).toHaveBeenCalledWith('/channel/random');
   });
 
   it('navigates to channel and closes when Open is clicked on already-joined', async () => {
@@ -93,6 +94,6 @@ describe('ChannelBrowser - extra coverage', () => {
     await user.click(screen.getByText('Open'));
 
     expect(onOpenChange).toHaveBeenCalledWith(false);
-    expect(mockNavigate).toHaveBeenCalledWith('/channel/ch-1');
+    expect(mockNavigate).toHaveBeenCalledWith('/channel/general');
   });
 });

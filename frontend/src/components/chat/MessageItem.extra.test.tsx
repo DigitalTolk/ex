@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { BrowserRouter } from 'react-router-dom';
@@ -13,6 +13,7 @@ vi.mock('@/hooks/useMessages', () => ({
   useEditMessage: () => ({ mutate: mockEditMutate, isPending: false }),
   useDeleteMessage: () => ({ mutate: mockDeleteMutate, isPending: false }),
   useToggleReaction: () => ({ mutate: vi.fn(), isPending: false }),
+  useSetPinned: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 
 vi.mock('@/hooks/useEmoji', () => ({
@@ -72,8 +73,8 @@ describe('MessageItem - editing', () => {
 
     await user.click(screen.getByText('Edit'));
 
-    // Textarea should appear with the message body
-    expect(screen.getByRole('textbox')).toHaveValue('Hello world');
+    // The editor is contentEditable — body shows up as textContent.
+    expect(screen.getByLabelText('Message input').textContent).toContain('Hello world');
     // Save and cancel buttons should appear
     expect(screen.getByLabelText('Save')).toBeInTheDocument();
     expect(screen.getByLabelText('Cancel')).toBeInTheDocument();
@@ -92,9 +93,9 @@ describe('MessageItem - editing', () => {
 
     await user.click(screen.getByText('Edit'));
 
-    const textarea = screen.getByRole('textbox');
-    await user.clear(textarea);
-    await user.type(textarea, 'Updated message');
+    const editor = screen.getByLabelText('Message input');
+    editor.textContent = 'Updated message';
+    fireEvent.input(editor);
     await user.click(screen.getByLabelText('Save'));
 
     expect(mockEditMutate).toHaveBeenCalledWith(
@@ -114,10 +115,10 @@ describe('MessageItem - editing', () => {
     );
 
     await user.click(screen.getByText('Edit'));
-    expect(screen.getByRole('textbox')).toBeInTheDocument();
+    expect(screen.getByTestId('inline-edit')).toBeInTheDocument();
 
     await user.click(screen.getByLabelText('Cancel'));
-    expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('inline-edit')).not.toBeInTheDocument();
     expect(screen.getByText('Hello world')).toBeInTheDocument();
   });
 
@@ -133,10 +134,10 @@ describe('MessageItem - editing', () => {
     );
 
     await user.click(screen.getByText('Edit'));
-    const textarea = screen.getByRole('textbox');
-    await user.clear(textarea);
-    await user.type(textarea, 'New body');
-    await user.keyboard('{Enter}');
+    const editor = screen.getByLabelText('Message input');
+    editor.textContent = 'New body';
+    fireEvent.input(editor);
+    fireEvent.keyDown(editor, { key: 'Enter' });
 
     expect(mockEditMutate).toHaveBeenCalled();
   });
@@ -152,10 +153,10 @@ describe('MessageItem - editing', () => {
     );
 
     await user.click(screen.getByText('Edit'));
-    expect(screen.getByRole('textbox')).toBeInTheDocument();
+    expect(screen.getByTestId('inline-edit')).toBeInTheDocument();
 
-    await user.keyboard('{Escape}');
-    expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
+    fireEvent.keyDown(screen.getByLabelText('Message input'), { key: 'Escape' });
+    expect(screen.queryByTestId('inline-edit')).not.toBeInTheDocument();
   });
 
   it('does not save if body is unchanged', async () => {

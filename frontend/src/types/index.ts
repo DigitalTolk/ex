@@ -33,6 +33,9 @@ export interface Message {
   replyCount?: number;
   reactions?: Record<string, string[]>; // emoji -> user IDs
   attachmentIDs?: string[];
+  pinned?: boolean;
+  pinnedAt?: string;
+  pinnedBy?: string;
 }
 
 export interface Attachment {
@@ -60,6 +63,11 @@ export interface ChannelMembership {
   role: 'owner' | 'admin' | 'member';
   displayName: string;
   joinedAt: string;
+}
+
+export interface WorkspaceSettings {
+  maxUploadBytes: number;
+  allowedExtensions: string[];
 }
 
 export interface UserChannel {

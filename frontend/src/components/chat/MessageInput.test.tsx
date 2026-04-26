@@ -61,16 +61,21 @@ describe('MessageInput', () => {
     const onSend = vi.fn();
     render(<MessageInput onSend={onSend} />);
 
-    const textarea = screen.getByLabelText('Message input');
-    await user.type(textarea, 'Hello{Enter}');
+    const editor = screen.getByLabelText('Message input');
+    await user.type(editor, 'Hello{Enter}');
 
-    expect(textarea).toHaveValue('');
+    // contentEditable carries text in textContent, not value.
+    expect(editor.textContent ?? '').toBe('');
   });
 
   it('uses custom placeholder', () => {
     render(<MessageInput onSend={vi.fn()} placeholder="Write here..." />);
 
-    expect(screen.getByPlaceholderText('Write here...')).toBeInTheDocument();
+    // The editor is contentEditable — placeholder is exposed as
+    // data-placeholder, not the native HTML placeholder attribute.
+    expect(
+      screen.getByLabelText('Message input').getAttribute('data-placeholder'),
+    ).toBe('Write here...');
   });
 
   it('only disables send button (not textarea) when disabled prop is true', () => {

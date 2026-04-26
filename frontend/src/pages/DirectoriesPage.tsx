@@ -75,10 +75,13 @@ function ChannelsTab() {
 
   const joinedIds = new Set(userChannels?.map((c) => c.channelID) ?? []);
 
-  function handleJoin(channelId: string, channelName: string) {
+  function handleJoin(channelId: string, channelSlug: string) {
+    // Routes are keyed by slug (ChannelView resolves the slug back to a
+    // channel record). Use the slug from the channel record rather than
+    // the raw name so we always land on the right URL.
     joinChannel.mutate(channelId, {
       onSuccess: () => {
-        navigate(`/channel/${channelName}`);
+        navigate(`/channel/${channelSlug}`);
       },
     });
   }
@@ -122,14 +125,14 @@ function ChannelsTab() {
                   <Button
                     variant="outline"
                     size="sm"
-                    onClick={() => navigate(`/channel/${channel.name}`)}
+                    onClick={() => navigate(`/channel/${channel.slug}`)}
                   >
                     Open
                   </Button>
                 ) : (
                   <Button
                     size="sm"
-                    onClick={() => handleJoin(channel.id, channel.name)}
+                    onClick={() => handleJoin(channel.id, channel.slug)}
                     disabled={joinChannel.isPending}
                   >
                     Join
@@ -251,7 +254,7 @@ function MembersTab({ isAdmin, currentUserId }: MembersTabProps) {
             <div
               key={u.id}
               data-testid="directory-user-card"
-              className="group flex items-center gap-3 rounded-lg border bg-card p-3 transition-colors hover:bg-muted/40"
+              className="group flex items-start gap-3 rounded-lg border bg-card p-3 transition-colors hover:bg-muted/40"
             >
               <span className="relative inline-block shrink-0">
                 <Avatar className="h-11 w-11">
@@ -275,12 +278,12 @@ function MembersTab({ isAdmin, currentUserId }: MembersTabProps) {
                     <span className="text-[10px] text-muted-foreground">(you)</span>
                   )}
                 </div>
-                <p className="text-xs text-muted-foreground truncate">{u.email}</p>
-                <p className="mt-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
+                <p className="text-sm text-muted-foreground truncate">{u.email}</p>
+                <p className="mt-0.5 text-sm uppercase tracking-wide text-muted-foreground">
                   {u.systemRole}
                 </p>
               </div>
-              <div className="flex flex-col items-end gap-1.5 shrink-0">
+              <div className="flex flex-col items-end gap-1.5 shrink-0" data-testid="directory-card-actions">
                 <Button
                   size="sm"
                   variant="outline"
@@ -303,13 +306,13 @@ function MembersTab({ isAdmin, currentUserId }: MembersTabProps) {
                     <DropdownMenuContent align="end">
                       <DropdownMenuItem
                         onClick={() => changeRole(u.id, 'admin')}
-                        disabled={u.systemRole === 'admin'}
+                        disabled={u.systemRole === 'admin' || u.systemRole === 'guest' || u.authProvider === 'guest'}
                       >
                         Promote to Admin
                       </DropdownMenuItem>
                       <DropdownMenuItem
                         onClick={() => changeRole(u.id, 'member')}
-                        disabled={u.systemRole === 'member'}
+                        disabled={u.systemRole === 'member' || u.systemRole === 'guest' || u.authProvider === 'guest'}
                       >
                         Set as Member
                       </DropdownMenuItem>

@@ -59,7 +59,7 @@ describe('NewConversationDialog - group flow', () => {
     expect(screen.getByText('Create Group')).toBeInTheDocument();
   });
 
-  it('shows group name input when multiple users selected', async () => {
+  it('does not show a group name input — names are derived from participants', async () => {
     const user = userEvent.setup();
     renderDialog(true);
 
@@ -69,7 +69,9 @@ describe('NewConversationDialog - group flow', () => {
     await user.type(screen.getByLabelText('Search users'), 'Di');
     await user.click(screen.getByText('Diana Prince'));
 
-    expect(screen.getByLabelText(/group name/i)).toBeInTheDocument();
+    expect(screen.queryByLabelText(/group name/i)).toBeNull();
+    // The Create Group affordance still flips on for 2+ participants.
+    expect(screen.getByText('Create Group')).toBeInTheDocument();
   });
 
   it('allows removing a selected user', async () => {

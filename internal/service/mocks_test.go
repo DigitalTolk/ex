@@ -328,7 +328,13 @@ func (m *mockChannelStore) ListPublicChannels(_ context.Context, _ int, _ string
 	if m.listErr != nil {
 		return nil, "", m.listErr
 	}
-	return nil, "", nil
+	out := make([]*model.Channel, 0, len(m.channels))
+	for _, c := range m.channels {
+		if c.Type == model.ChannelTypePublic {
+			out = append(out, c)
+		}
+	}
+	return out, "", nil
 }
 
 // --- Mock Cache ---

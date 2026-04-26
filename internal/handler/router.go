@@ -23,6 +23,7 @@ func NewRouter(
 	emojiH *EmojiHandler,
 	presenceH *PresenceHandler,
 	attachmentH *AttachmentHandler,
+	adminH *AdminHandler,
 	jwtMgr *auth.JWTManager,
 	frontendFS fs.FS,
 	allowOrigin string,
@@ -79,6 +80,7 @@ func NewRouter(
 	mux.Handle("DELETE /api/v1/channels/{id}/messages/{msgId}", middleware.WrapFunc(channelH.DeleteMessage, authMW))
 	mux.Handle("GET /api/v1/channels/{id}/messages/{msgId}/thread", middleware.WrapFunc(channelH.GetThread, authMW))
 	mux.Handle("POST /api/v1/channels/{id}/messages/{msgId}/reactions", middleware.WrapFunc(channelH.ToggleReaction, authMW))
+	mux.Handle("PUT /api/v1/channels/{id}/messages/{msgId}/pinned", middleware.WrapFunc(channelH.SetPinned, authMW))
 
 	// ------------------------------------------------------------------ Conversations
 	mux.Handle("POST /api/v1/conversations", middleware.WrapFunc(convH.Create, authMW))
@@ -91,6 +93,7 @@ func NewRouter(
 	mux.Handle("DELETE /api/v1/conversations/{id}/messages/{msgId}", middleware.WrapFunc(convH.DeleteMessage, authMW))
 	mux.Handle("GET /api/v1/conversations/{id}/messages/{msgId}/thread", middleware.WrapFunc(convH.GetThread, authMW))
 	mux.Handle("POST /api/v1/conversations/{id}/messages/{msgId}/reactions", middleware.WrapFunc(convH.ToggleReaction, authMW))
+	mux.Handle("PUT /api/v1/conversations/{id}/messages/{msgId}/pinned", middleware.WrapFunc(convH.SetPinned, authMW))
 
 	// ------------------------------------------------------------------ Uploads
 	if uploadH != nil {
@@ -115,6 +118,15 @@ func NewRouter(
 	// ------------------------------------------------------------------ Presence
 	if presenceH != nil {
 		mux.Handle("GET /api/v1/presence", middleware.WrapFunc(presenceH.List, authMW))
+	}
+
+	// ------------------------------------------------------------------ Admin / settings
+	if adminH != nil {
+		// GET is open to any authenticated user — the upload UI shows
+		// the current limits before posting. PUT enforces admin-only
+		// inside the handler.
+		mux.Handle("GET /api/v1/admin/settings", middleware.WrapFunc(adminH.GetSettings, authMW))
+		mux.Handle("PUT /api/v1/admin/settings", middleware.WrapFunc(adminH.UpdateSettings, authMW))
 	}
 
 	// ------------------------------------------------------------------ WebSocket

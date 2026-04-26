@@ -9,6 +9,7 @@ vi.mock('@/hooks/useMessages', () => ({
   useEditMessage: () => ({ mutate: vi.fn(), isPending: false }),
   useDeleteMessage: () => ({ mutate: vi.fn(), isPending: false }),
   useToggleReaction: () => ({ mutate: vi.fn(), isPending: false }),
+  useSetPinned: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 
 vi.mock('@/hooks/useEmoji', () => ({
@@ -60,7 +61,7 @@ describe('MessageItem - hover bar and avatar', () => {
     expect(screen.getByLabelText('Add reaction')).toBeInTheDocument();
   });
 
-  it('shows edit/delete only when isOwn', () => {
+  it('shows edit/delete only when isOwn (Pin and Copy link are always present)', () => {
     renderWithProviders(
       <MessageItem
         message={makeMessage()}
@@ -68,7 +69,8 @@ describe('MessageItem - hover bar and avatar', () => {
         isOwn={false}
       />,
     );
-    expect(screen.queryByLabelText('More actions')).not.toBeInTheDocument();
+    // Menu remains accessible to everyone for Copy link / Pin actions.
+    expect(screen.getByLabelText('More actions')).toBeInTheDocument();
     expect(screen.queryByText('Edit')).not.toBeInTheDocument();
     expect(screen.queryByText('Delete')).not.toBeInTheDocument();
   });

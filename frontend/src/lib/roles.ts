@@ -43,6 +43,30 @@ export function canArchiveChannel(role: ChannelRoleLike): boolean {
 // round-trip. The backend enforces the same rule authoritatively.
 export const GENERAL_CHANNEL_SLUG = 'general';
 
+// System-wide role mirrored from internal/model/user.go SystemRole.
+export const SystemRole = {
+  Admin: 'admin',
+  Member: 'member',
+  Guest: 'guest',
+} as const;
+export type SystemRoleStr = (typeof SystemRole)[keyof typeof SystemRole];
+
+// Auth provider mirrored from internal/model/user.go AuthProvider. Empty /
+// undefined is treated as OIDC for legacy accounts (server backfills too).
+export const AuthProvider = {
+  OIDC: 'oidc',
+  Guest: 'guest',
+} as const;
+export type AuthProviderStr = (typeof AuthProvider)[keyof typeof AuthProvider];
+
+export function isAdmin(role?: SystemRoleStr | string): boolean {
+  return role === SystemRole.Admin;
+}
+
+export function isGuest(role?: SystemRoleStr | string): boolean {
+  return role === SystemRole.Guest;
+}
+
 // Owners cannot leave their own channel; nobody can leave #general; everyone
 // else can.
 export function canLeaveChannel(role: ChannelRoleLike, channelSlug?: string): boolean {

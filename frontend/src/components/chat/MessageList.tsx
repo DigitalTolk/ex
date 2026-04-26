@@ -2,6 +2,7 @@ import { useRef, useCallback, type ReactNode } from 'react';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { MessageItem } from './MessageItem';
+import { useMessageDeepLinkHighlight } from '@/hooks/useMessageDeepLinkHighlight';
 import type { Message } from '@/types';
 
 export interface UserMapEntry {
@@ -18,6 +19,7 @@ interface MessageListProps {
   fetchNextPage: () => void;
   currentUserId?: string;
   channelId?: string;
+  channelSlug?: string;
   conversationId?: string;
   userMap: Record<string, UserMapEntry>;
   onReplyInThread?: (messageID: string) => void;
@@ -47,10 +49,12 @@ export function MessageList({
   fetchNextPage,
   currentUserId,
   channelId,
+  channelSlug,
   conversationId,
   userMap,
   onReplyInThread,
 }: MessageListProps) {
+  useMessageDeepLinkHighlight([channelId, conversationId, isLoading, pages.length]);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const handleScroll = useCallback(() => {
@@ -124,6 +128,7 @@ export function MessageList({
           authorOnline={u?.online}
           isOwn={msg.authorID === currentUserId}
           channelId={channelId}
+          channelSlug={channelSlug}
           conversationId={conversationId}
           currentUserId={currentUserId}
           onReplyInThread={onReplyInThread}

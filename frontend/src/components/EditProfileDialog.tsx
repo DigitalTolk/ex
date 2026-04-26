@@ -13,6 +13,7 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { useAuth } from '@/context/AuthContext';
 import { useTheme } from '@/context/ThemeContext';
 import { apiFetch, getAccessToken } from '@/lib/api';
+import { AuthProvider } from '@/lib/roles';
 import { getInitials } from '@/lib/format';
 import type { User } from '@/types';
 
@@ -100,7 +101,15 @@ function EditProfileBody({ onOpenChange }: { onOpenChange: (open: boolean) => vo
     setIsSaving(true);
     try {
       const body: Record<string, string> = {};
-      if (displayName.trim() && displayName.trim() !== user?.displayName) {
+      // Only include displayName if the user is allowed to change it.
+      // SSO-managed users have it disabled in the input, but a tampered
+      // or stale form must not slip a rename through here either.
+      const canRename = user?.authProvider === AuthProvider.Guest;
+      if (
+        canRename &&
+        displayName.trim() &&
+        displayName.trim() !== user?.displayName
+      ) {
         body.displayName = displayName.trim();
       }
       if (avatarKey) {
@@ -178,23 +187,15 @@ function EditProfileBody({ onOpenChange }: { onOpenChange: (open: boolean) => vo
           value={displayName}
           onChange={(e) => setDisplayName(e.target.value)}
           placeholder="Your name"
-          readOnly={user.authProvider === 'oidc'}
-          disabled={user.authProvider === 'oidc'}
-          className={user.authProvider === 'oidc' ? 'bg-muted' : undefined}
+          readOnly={user.authProvider !== AuthProvider.Guest}
+          disabled={user.authProvider !== AuthProvider.Guest}
+          className={user.authProvider !== AuthProvider.Guest ? 'bg-muted' : undefined}
         />
-        {user.authProvider === 'oidc' && (
-          <p className="text-xs text-muted-foreground">
-            Display name is managed by your SSO provider and cannot be changed here.
-          </p>
-        )}
       </div>
 
       <div className="space-y-2">
         <Label htmlFor="email">Email</Label>
         <Input id="email" value={user.email} readOnly disabled className="bg-muted" />
-        <p className="text-xs text-muted-foreground">
-          Email comes from your SSO provider and cannot be changed.
-        </p>
       </div>
 
       <div className="space-y-2">

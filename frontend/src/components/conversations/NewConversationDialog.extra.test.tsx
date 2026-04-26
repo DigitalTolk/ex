@@ -83,7 +83,9 @@ describe('NewConversationDialog - extra coverage', () => {
     expect(screen.queryByRole('button', { name: /remove charlie brown/i })).not.toBeInTheDocument();
   });
 
-  it('shows group name input when 2+ users selected and edits it', async () => {
+  it('does not show a group name input even with 2+ users selected', async () => {
+    // Group naming was removed — display is derived from participant
+    // count + names everywhere, no custom title to drift out of sync.
     const user = userEvent.setup();
     renderDialog(true);
 
@@ -92,11 +94,9 @@ describe('NewConversationDialog - extra coverage', () => {
     await user.type(screen.getByLabelText('Search users'), 'Ca');
     await user.click(screen.getByText('Carol Danvers'));
 
-    const groupInput = screen.getByLabelText(/Group name/);
-    await user.type(groupInput, 'My Crew');
-    expect(groupInput).toHaveValue('My Crew');
-
-    // Button label flips to Create Group
+    expect(screen.queryByLabelText(/Group name/i)).toBeNull();
+    // Submit button text still flips for the group case — we keep the
+    // affordance, just not the freeform title.
     expect(screen.getByText('Create Group')).toBeInTheDocument();
   });
 
@@ -130,15 +130,17 @@ describe('NewConversationDialog - extra coverage', () => {
       expect.objectContaining({
         type: 'dm',
         participantIDs: ['u-10'],
-        name: undefined,
       }),
       expect.anything(),
     );
+    // No name field — group naming was removed.
+    const payload = mockMutate.mock.calls[0][0] as Record<string, unknown>;
+    expect(payload.name).toBeUndefined();
     expect(onOpenChange).toHaveBeenCalledWith(false);
     expect(mockNavigate).toHaveBeenCalledWith('/conversation/conv-99');
   });
 
-  it('creates group conversation with trimmed name', async () => {
+  it('creates group conversation without a name field in the payload', async () => {
     const user = userEvent.setup();
     renderDialog(true);
 
@@ -146,17 +148,19 @@ describe('NewConversationDialog - extra coverage', () => {
     await user.click(screen.getByText('Charlie Brown'));
     await user.type(screen.getByLabelText('Search users'), 'Ca');
     await user.click(screen.getByText('Carol Danvers'));
-    await user.type(screen.getByLabelText(/Group name/), '  squad  ');
     await user.click(screen.getByText('Create Group'));
 
     expect(mockMutate).toHaveBeenCalledWith(
       expect.objectContaining({
         type: 'group',
         participantIDs: ['u-10', 'u-11'],
-        name: 'squad',
       }),
       expect.anything(),
     );
+    // No `name` field — the server (and downstream UI) renders the group
+    // from the participant list.
+    const payload = mockMutate.mock.calls[0][0] as Record<string, unknown>;
+    expect(payload.name).toBeUndefined();
   });
 
   it('does not call mutate when no users selected', async () => {

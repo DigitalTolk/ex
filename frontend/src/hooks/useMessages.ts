@@ -160,3 +160,15 @@ export function useToggleReaction() {
     onSuccess: (_data, vars) => invalidateMessages(queryClient, vars),
   });
 }
+
+export function useSetPinned() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: MessageMutationVars & { pinned: boolean }) =>
+      apiFetch<Message>(`${messagePath(vars)}/pinned`, {
+        method: 'PUT',
+        body: JSON.stringify({ pinned: vars.pinned }),
+      }),
+    onSuccess: (_data, vars) => invalidateMessages(queryClient, vars),
+  });
+}

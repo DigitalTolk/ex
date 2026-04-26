@@ -12,6 +12,9 @@ type Message struct {
 	ReplyCount      int                 `json:"replyCount,omitempty" dynamodbav:"replyCount,omitempty"`           // count of replies (only set on root messages)
 	Reactions       map[string][]string `json:"reactions,omitempty" dynamodbav:"reactions,omitempty"`             // emoji -> userIDs that reacted
 	AttachmentIDs   []string            `json:"attachmentIDs,omitempty" dynamodbav:"attachmentIDs,omitempty"`     // ordered list of attachments referenced by this message
+	Pinned          bool                `json:"pinned,omitempty" dynamodbav:"pinned,omitempty"`                   // pinned to the parent (channel/conversation)
+	PinnedAt        *time.Time          `json:"pinnedAt,omitempty" dynamodbav:"pinnedAt,omitempty"`
+	PinnedBy        string              `json:"pinnedBy,omitempty" dynamodbav:"pinnedBy,omitempty"`
 	CreatedAt       time.Time           `json:"createdAt" dynamodbav:"createdAt"`
 	EditedAt        *time.Time          `json:"editedAt,omitempty" dynamodbav:"editedAt,omitempty"`
 }

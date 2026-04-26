@@ -108,8 +108,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
 
   const dispatch = useCallback(
     (n: NotificationPayload) => {
-      // Don't alert when the user is staring at the conversation/channel
-      // the message landed in — they already see it.
+      // Don't alert for the parent the user is currently looking at.
       if (activeParentRef.current && activeParentRef.current === n.parentID) {
         return;
       }
@@ -120,8 +119,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
         prefs.browserEnabled &&
         typeof window !== 'undefined' &&
         'Notification' in window &&
-        Notification.permission === 'granted' &&
-        document.visibilityState !== 'visible'
+        Notification.permission === 'granted'
       ) {
         try {
           const note = new Notification(n.title, {

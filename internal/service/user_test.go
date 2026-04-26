@@ -87,6 +87,74 @@ func TestUserService_GetByID_NotFound(t *testing.T) {
 	}
 }
 
+func TestUserService_GetByID_BackfillsAuthProviderForLegacyUsers(t *testing.T) {
+	// Users created before the AuthProvider field existed have it empty.
+	// Without the backfill, the frontend's SSO lock would silently leave
+	// their display name editable. This test pins the backfill rule:
+	//   PasswordHash present  → guest (invite-acceptance flow)
+	//   PasswordHash empty    → oidc  (everyone else)
+	users := newMockUserStore()
+	svc := NewUserService(users, nil, nil, nil)
+	ctx := context.Background()
+
+	legacySSO := &model.User{
+		ID:          "u-legacy-sso",
+		Email:       "sso@example.com",
+		DisplayName: "Legacy SSO",
+		SystemRole:  model.SystemRoleMember,
+		// No AuthProvider, no PasswordHash.
+	}
+	legacyGuest := &model.User{
+		ID:           "u-legacy-guest",
+		Email:        "guest@example.com",
+		DisplayName:  "Legacy Guest",
+		SystemRole:   model.SystemRoleGuest,
+		PasswordHash: "$2a$bcrypt-fake",
+	}
+	users.users[legacySSO.ID] = legacySSO
+	users.users[legacyGuest.ID] = legacyGuest
+
+	got, err := svc.GetByID(ctx, legacySSO.ID)
+	if err != nil {
+		t.Fatalf("GetByID(sso): %v", err)
+	}
+	if got.AuthProvider != model.AuthProviderOIDC {
+		t.Errorf("legacy SSO user backfill: AuthProvider = %q, want %q", got.AuthProvider, model.AuthProviderOIDC)
+	}
+
+	got, err = svc.GetByID(ctx, legacyGuest.ID)
+	if err != nil {
+		t.Fatalf("GetByID(guest): %v", err)
+	}
+	if got.AuthProvider != model.AuthProviderGuest {
+		t.Errorf("legacy guest user backfill: AuthProvider = %q, want %q", got.AuthProvider, model.AuthProviderGuest)
+	}
+}
+
+func TestUserService_GetByID_DoesNotOverwriteExistingAuthProvider(t *testing.T) {
+	users := newMockUserStore()
+	svc := NewUserService(users, nil, nil, nil)
+	ctx := context.Background()
+
+	user := &model.User{
+		ID:           "u-explicit-guest",
+		Email:        "g@example.com",
+		DisplayName:  "Guest",
+		SystemRole:   model.SystemRoleGuest,
+		AuthProvider: model.AuthProviderGuest,
+		// Even with no password the explicit AuthProvider must win.
+	}
+	users.users[user.ID] = user
+
+	got, err := svc.GetByID(ctx, user.ID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if got.AuthProvider != model.AuthProviderGuest {
+		t.Errorf("explicit AuthProvider was overwritten: %q", got.AuthProvider)
+	}
+}
+
 func TestUserService_GetByID_NilCache(t *testing.T) {
 	users := newMockUserStore()
 	svc := NewUserService(users, nil, nil, nil)
@@ -366,6 +434,56 @@ func TestUserService_UpdateRole(t *testing.T) {
 	}
 	if users.users["role-u"].SystemRole != model.SystemRoleAdmin {
 		t.Error("expected role to persist in store")
+	}
+}
+
+func TestUserService_UpdateRole_GuestCannotBePromoted(t *testing.T) {
+	// Member and admin are SSO-only. An account that came in via the
+	// invite-acceptance flow (AuthProvider=guest) must not be promoted
+	// without going through SSO first.
+	users := newMockUserStore()
+	svc := NewUserService(users, nil, nil, nil)
+
+	guest := &model.User{
+		ID:           "u-guest",
+		Email:        "g@example.com",
+		DisplayName:  "Guest",
+		SystemRole:   model.SystemRoleGuest,
+		AuthProvider: model.AuthProviderGuest,
+		PasswordHash: "$2a$bcrypt-fake",
+	}
+	users.users[guest.ID] = guest
+
+	if _, err := svc.UpdateRole(context.Background(), "admin", guest.ID, model.SystemRoleMember); err == nil {
+		t.Fatal("expected guest→member promotion to fail")
+	}
+	if _, err := svc.UpdateRole(context.Background(), "admin", guest.ID, model.SystemRoleAdmin); err == nil {
+		t.Fatal("expected guest→admin promotion to fail")
+	}
+	if guest.SystemRole != model.SystemRoleGuest {
+		t.Errorf("guest's role was changed despite the guard: %q", guest.SystemRole)
+	}
+}
+
+func TestUserService_UpdateRole_DemotionToGuestAllowed(t *testing.T) {
+	users := newMockUserStore()
+	svc := NewUserService(users, nil, nil, nil)
+
+	member := &model.User{
+		ID:           "u-mem",
+		Email:        "m@example.com",
+		DisplayName:  "Member",
+		SystemRole:   model.SystemRoleMember,
+		AuthProvider: model.AuthProviderOIDC,
+	}
+	users.users[member.ID] = member
+
+	updated, err := svc.UpdateRole(context.Background(), "admin", member.ID, model.SystemRoleGuest)
+	if err != nil {
+		t.Fatalf("member→guest demotion should succeed: %v", err)
+	}
+	if updated.SystemRole != model.SystemRoleGuest {
+		t.Errorf("SystemRole = %q, want guest", updated.SystemRole)
 	}
 }
 

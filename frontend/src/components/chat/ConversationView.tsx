@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useParams } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
+import { useUsersBatch } from '@/hooks/useUsersBatch';
 import { Header } from '@/components/layout/Header';
 import { MessageList } from './MessageList';
 import { MessageInput } from './MessageInput';
@@ -15,8 +15,6 @@ import { useAuth } from '@/context/AuthContext';
 import { useUnread } from '@/context/UnreadContext';
 import { usePresence } from '@/context/PresenceContext';
 import { useNotifications } from '@/context/NotificationContext';
-import { apiFetch } from '@/lib/api';
-import type { User } from '@/types';
 import type { UserMapEntry } from './MessageList';
 
 export function ConversationView() {
@@ -66,18 +64,10 @@ export function ConversationView() {
     for (const page of data?.pages ?? []) {
       for (const msg of page.items) ids.add(msg.authorID);
     }
-    return Array.from(ids).sort();
+    return Array.from(ids);
   }, [conversation?.participantIDs, data]);
 
-  const { data: usersData } = useQuery({
-    queryKey: ['users-batch', userIDs],
-    queryFn: () =>
-      apiFetch<User[]>('/api/v1/users/batch', {
-        method: 'POST',
-        body: JSON.stringify({ ids: userIDs }),
-      }),
-    enabled: userIDs.length > 0,
-  });
+  const { data: usersData } = useUsersBatch(userIDs);
 
   const userMap = useMemo(() => {
     const m: Record<string, UserMapEntry> = {};
@@ -104,9 +94,18 @@ export function ConversationView() {
 
   if (conversation?.type === 'dm') {
     const otherID = conversation.participantIDs?.find((pid) => pid !== user?.id);
-    if (otherID && userMap[otherID]) {
-      title = userMap[otherID].displayName;
-      dmOtherUserAvatar = userMap[otherID].avatarURL;
+    if (otherID) {
+      // DM with someone else — use their name once the user batch loads.
+      if (userMap[otherID]) {
+        title = userMap[otherID].displayName;
+        dmOtherUserAvatar = userMap[otherID].avatarURL;
+      }
+    } else if (user) {
+      // Self-DM (notes-to-self) — the only participant is the current
+      // user. Show their own display name + avatar instead of the
+      // generic "Direct Message" fallback.
+      title = user.displayName;
+      dmOtherUserAvatar = user.avatarURL;
     }
   } else if (conversation?.type === 'group') {
     const others = (conversation.participantIDs ?? [])

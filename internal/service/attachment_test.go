@@ -122,6 +122,36 @@ func TestAttachmentService_CreateUploadURL_NewUpload(t *testing.T) {
 	}
 }
 
+type fakeUploadLimits struct {
+	allowExt  bool
+	allowSize bool
+}
+
+func (f *fakeUploadLimits) AllowsExtension(_ context.Context, _ string) bool { return f.allowExt }
+func (f *fakeUploadLimits) AllowsSize(_ context.Context, _ int64) bool       { return f.allowSize }
+
+func TestAttachmentService_CreateUploadURL_RejectsDisallowedExtension(t *testing.T) {
+	storeM := newMockAttachmentStore()
+	signer := &fakeAttachmentSigner{}
+	svc := NewAttachmentService(storeM, signer, newMockPublisher())
+	svc.SetUploadLimits(&fakeUploadLimits{allowExt: false, allowSize: true})
+
+	if _, err := svc.CreateUploadURL(context.Background(), "u1", "exec.exe", "application/octet-stream", "abc", 100); err == nil {
+		t.Fatal("expected disallowed extension to be rejected")
+	}
+}
+
+func TestAttachmentService_CreateUploadURL_RejectsOversize(t *testing.T) {
+	storeM := newMockAttachmentStore()
+	signer := &fakeAttachmentSigner{}
+	svc := NewAttachmentService(storeM, signer, newMockPublisher())
+	svc.SetUploadLimits(&fakeUploadLimits{allowExt: true, allowSize: false})
+
+	if _, err := svc.CreateUploadURL(context.Background(), "u1", "big.png", "image/png", "abc", 999_999_999); err == nil {
+		t.Fatal("expected oversize upload to be rejected")
+	}
+}
+
 func TestAttachmentService_CreateUploadURL_DedupeByHash(t *testing.T) {
 	storeM := newMockAttachmentStore()
 	signer := &fakeAttachmentSigner{}

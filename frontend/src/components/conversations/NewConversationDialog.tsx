@@ -28,7 +28,6 @@ export function NewConversationDialog({
   const [selectedUsers, setSelectedUsers] = useState<
     { id: string; displayName: string }[]
   >([]);
-  const [groupName, setGroupName] = useState('');
   const { data: searchResults } = useSearchUsers(searchQuery);
   const createConversation = useCreateConversation();
   const navigate = useNavigate();
@@ -54,17 +53,14 @@ export function NewConversationDialog({
   function reset() {
     setSearchQuery('');
     setSelectedUsers([]);
-    setGroupName('');
   }
 
   async function handleCreate() {
     if (selectedUsers.length === 0) return;
-
     createConversation.mutate(
       {
         type: isGroup ? 'group' : 'dm',
         participantIDs: selectedUsers.map((u) => u.id),
-        name: isGroup ? groupName.trim() || undefined : undefined,
       },
       {
         onSuccess: (conversation) => {
@@ -99,7 +95,12 @@ export function NewConversationDialog({
           {selectedUsers.length > 0 && (
             <div className="flex flex-wrap gap-1">
               {selectedUsers.map((user) => (
-                <Badge key={user.id} variant="secondary" className="gap-1">
+                <Badge
+                  key={user.id}
+                  variant="secondary"
+                  data-testid="participant-pill"
+                  className="gap-1 text-sm h-auto py-1 px-2"
+                >
                   {user.displayName}
                   <button
                     onClick={() => removeUser(user.id)}
@@ -113,10 +114,20 @@ export function NewConversationDialog({
             </div>
           )}
 
-          {/* Search results */}
-          {filteredResults.length > 0 && (
-            <div className="rounded-md border">
-              {filteredResults
+          {/* Search results — reserved fixed height so the modal doesn't
+              jump as the autocomplete list grows or empties. */}
+          <div
+            data-testid="results-region"
+            className="h-72 overflow-y-auto rounded-md border"
+          >
+            {filteredResults.length === 0 ? (
+              <p className="flex h-full items-center justify-center px-3 text-sm text-muted-foreground">
+                {searchQuery.trim().length < 2
+                  ? 'Start typing to search for users'
+                  : 'No users found'}
+              </p>
+            ) : (
+              filteredResults
                 .filter((u) => !selectedUsers.some((s) => s.id === u.id))
                 .map((u) => (
                   <button
@@ -132,25 +143,10 @@ export function NewConversationDialog({
                     )}
                     <span className="text-muted-foreground">{u.email}</span>
                   </button>
-                ))}
-            </div>
-          )}
+                ))
+            )}
+          </div>
 
-          {/* Group name */}
-          {isGroup && (
-            <div className="space-y-2">
-              <Label htmlFor="group-name">
-                Group name{' '}
-                <span className="text-muted-foreground">(optional)</span>
-              </Label>
-              <Input
-                id="group-name"
-                value={groupName}
-                onChange={(e) => setGroupName(e.target.value)}
-                placeholder="Name this group conversation"
-              />
-            </div>
-          )}
         </div>
 
         <DialogFooter>

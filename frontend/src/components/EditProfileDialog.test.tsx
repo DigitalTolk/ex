@@ -15,6 +15,9 @@ const mockUser = {
   displayName: 'Alice',
   avatarURL: 'https://example.com/avatar.png',
   systemRole: 'member' as const,
+  // authProvider must be 'guest' for these tests — display-name editing is
+  // only permitted for guests now (SSO users are locked).
+  authProvider: 'guest' as const,
   status: 'active',
 };
 

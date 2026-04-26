@@ -13,6 +13,7 @@ vi.mock('@/hooks/useMessages', () => ({
   useEditMessage: () => ({ mutate: mockEditMutate, isPending: false }),
   useDeleteMessage: () => ({ mutate: mockDeleteMutate, isPending: false }),
   useToggleReaction: () => ({ mutate: mockReactMutate, isPending: false }),
+  useSetPinned: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 
 vi.mock('@/hooks/useEmoji', () => ({
@@ -27,8 +28,8 @@ vi.mock('@/components/ui/dropdown-menu', () => ({
     <button {...props}>{children}</button>
   ),
   DropdownMenuContent: ({ children }: { children: React.ReactNode }) => <div data-testid="dropdown-content">{children}</div>,
-  DropdownMenuItem: ({ children, onClick }: { children: React.ReactNode; onClick?: () => void; variant?: string }) => (
-    <button data-testid="dropdown-item" onClick={onClick}>{children}</button>
+  DropdownMenuItem: ({ children, onClick, ...rest }: { children: React.ReactNode; onClick?: () => void; variant?: string; 'aria-label'?: string }) => (
+    <button data-testid="dropdown-item" onClick={onClick} aria-label={rest['aria-label']}>{children}</button>
   ),
 }));
 
@@ -129,8 +130,16 @@ describe('MessageItem', () => {
       />,
     );
 
-    // The "More actions" dropdown is only rendered for own messages
-    expect(screen.queryByLabelText('More actions')).not.toBeInTheDocument();
+    // The "More actions" menu is rendered for everyone now (Copy link
+    // and Pin work on any message), but Edit/Delete remain own-only.
+    expect(screen.getByLabelText('More actions')).toBeInTheDocument();
+    // Mocked DropdownMenuContent renders all items inline — we check
+    // by presence of the labels themselves.
+    expect(screen.queryByText('Edit')).not.toBeInTheDocument();
+    expect(screen.queryByText('Delete')).not.toBeInTheDocument();
+    // Pin and Copy link are still available.
+    expect(screen.getByLabelText('Pin message')).toBeInTheDocument();
+    expect(screen.getByLabelText('Copy link to message')).toBeInTheDocument();
   });
 
   it('renders author initials in avatar', () => {

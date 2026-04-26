@@ -15,6 +15,7 @@ const mockUser = {
   displayName: 'Alice',
   avatarURL: 'https://example.com/avatar.png',
   systemRole: 'member' as const,
+  authProvider: 'guest' as const,
   status: 'active',
 };
 

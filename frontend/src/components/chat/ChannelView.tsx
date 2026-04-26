@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQueryClient } from '@tanstack/react-query';
 import { Header } from '@/components/layout/Header';
 import { MessageList } from './MessageList';
 import { MessageInput } from './MessageInput';
@@ -17,7 +17,7 @@ import { usePresence } from '@/context/PresenceContext';
 import { useNotifications } from '@/context/NotificationContext';
 import { canEditChannel, canArchiveChannel, canLeaveChannel, roleNumber } from '@/lib/roles';
 import { apiFetch } from '@/lib/api';
-import type { User } from '@/types';
+import { useUsersBatch } from '@/hooks/useUsersBatch';
 import type { UserMapEntry } from './MessageList';
 
 export function ChannelView() {
@@ -45,7 +45,6 @@ export function ChannelView() {
     fetchNextPage,
   } = useChannelMessages(channel?.id);
   const sendMessage = useSendChannelMessage(channel?.id);
-
   useEffect(() => {
     if (!channel?.id) return;
     clearChannelUnread(channel.id);
@@ -79,18 +78,10 @@ export function ChannelView() {
     for (const page of data?.pages ?? []) {
       for (const msg of page.items) ids.add(msg.authorID);
     }
-    return Array.from(ids).sort();
+    return Array.from(ids);
   }, [members, data]);
 
-  const { data: usersData } = useQuery({
-    queryKey: ['users-batch', userIDs],
-    queryFn: () =>
-      apiFetch<User[]>('/api/v1/users/batch', {
-        method: 'POST',
-        body: JSON.stringify({ ids: userIDs }),
-      }),
-    enabled: userIDs.length > 0,
-  });
+  const { data: usersData } = useUsersBatch(userIDs);
 
   const userMap = useMemo(() => {
     const m: Record<string, UserMapEntry> = {};
@@ -176,6 +167,7 @@ export function ChannelView() {
           fetchNextPage={fetchNextPage}
           currentUserId={user?.id}
           channelId={channel?.id}
+          channelSlug={channel?.slug}
           userMap={userMap}
           onReplyInThread={openThread}
         />

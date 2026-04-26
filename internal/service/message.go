@@ -352,6 +352,39 @@ func (s *MessageService) ToggleReaction(ctx context.Context, userID, parentID, p
 	return msg, nil
 }
 
+// SetPinned toggles the pinned state of a message. Any participant in the
+// channel/conversation may pin or unpin — pin authorship is captured on
+// the message itself and serves as the audit trail.
+func (s *MessageService) SetPinned(ctx context.Context, userID, parentID, parentType, msgID string, pinned bool) (*model.Message, error) {
+	if err := s.checkAccess(ctx, userID, parentID, parentType); err != nil {
+		return nil, err
+	}
+	msg, err := s.messages.GetMessage(ctx, parentID, msgID)
+	if err != nil {
+		return nil, fmt.Errorf("message: get: %w", err)
+	}
+	if msg.Pinned == pinned {
+		return msg, nil
+	}
+	msg.Pinned = pinned
+	if pinned {
+		now := time.Now()
+		msg.PinnedAt = &now
+		msg.PinnedBy = userID
+	} else {
+		msg.PinnedAt = nil
+		msg.PinnedBy = ""
+	}
+	if err := s.messages.UpdateMessage(ctx, msg); err != nil {
+		return nil, fmt.Errorf("message: update pinned: %w", err)
+	}
+	// Re-use message.edited so existing message-list invalidation paths
+	// pick up the change without a new event handler. Pin is rare enough
+	// that a dedicated event would be over-engineered.
+	s.publishEvent(ctx, parentID, parentType, events.EventMessageEdited, msg)
+	return msg, nil
+}
+
 // checkAccess verifies the user is a member of the channel or a participant
 // in the conversation.
 func (s *MessageService) checkAccess(ctx context.Context, userID, parentID, parentType string) error {

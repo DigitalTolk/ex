@@ -1,5 +1,6 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
+import { useUsersBatch } from '@/hooks/useUsersBatch';
 import {
   Hash,
   Lock,
@@ -12,10 +13,13 @@ import {
   User as UserIcon,
   Smile,
   BellOff,
+  Settings,
+  Info,
 } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { getInitials, slugify } from '@/lib/format';
+import { isAdmin, isGuest } from '@/lib/roles';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -32,6 +36,7 @@ import { useUserConversations } from '@/hooks/useConversations';
 import { CreateChannelDialog } from '@/components/channels/CreateChannelDialog';
 import { InviteDialog } from '@/components/InviteDialog';
 import { EditProfileDialog } from '@/components/EditProfileDialog';
+import { AboutDialog } from '@/components/AboutDialog';
 import { NewConversationDialog } from '@/components/conversations/NewConversationDialog';
 import { EmojiManagerDialog } from '@/components/EmojiManagerDialog';
 
@@ -50,8 +55,27 @@ export function Sidebar({ onClose }: SidebarProps) {
   const [editProfileOpen, setEditProfileOpen] = useState(false);
   const [newConvoOpen, setNewConvoOpen] = useState(false);
   const [emojiManagerOpen, setEmojiManagerOpen] = useState(false);
+  const [aboutOpen, setAboutOpen] = useState(false);
 
   const visibleConversations = conversations?.filter(c => !hiddenConversations.has(c.conversationID));
+
+  // Fetch the other participant for every DM in one batch so the sidebar
+  // can render real avatars instead of just initials. Group DMs use a
+  // participant-count badge instead and don't need user lookups.
+  const dmOtherUserIDs = useMemo(() => {
+    const ids: string[] = [];
+    const seen = new Set<string>();
+    for (const c of visibleConversations ?? []) {
+      if (c.type !== 'dm') continue;
+      const other = (c.participantIDs ?? []).find((p) => p !== user?.id) ?? c.participantIDs?.[0];
+      if (other && !seen.has(other)) {
+        seen.add(other);
+        ids.push(other);
+      }
+    }
+    return ids;
+  }, [visibleConversations, user?.id]);
+  const { map: dmUserMap } = useUsersBatch(dmOtherUserIDs);
 
   const initials = user?.displayName
     ?.split(' ')
@@ -83,7 +107,7 @@ export function Sidebar({ onClose }: SidebarProps) {
               <span className="flex-1 truncate text-sm font-semibold text-white">
                 {user?.displayName}
               </span>
-              {user?.systemRole === 'admin' && (
+              {isAdmin(user?.systemRole) && (
                 <Badge variant="secondary" className="ml-1 text-[10px] px-1 py-0 bg-white/20 text-white border-0">
                   Admin
                 </Badge>
@@ -91,7 +115,7 @@ export function Sidebar({ onClose }: SidebarProps) {
               <ChevronDown className="h-4 w-4 text-gray-400" />
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start" className="w-48">
-            {user?.systemRole === 'admin' && (
+            {isAdmin(user?.systemRole) && (
               <DropdownMenuItem onClick={() => setInviteOpen(true)}>
                 <UserPlus className="mr-2 h-4 w-4" />
                 Invite people
@@ -101,12 +125,16 @@ export function Sidebar({ onClose }: SidebarProps) {
               <UserIcon className="mr-2 h-4 w-4" />
               Edit profile
             </DropdownMenuItem>
-            {user?.systemRole !== 'guest' && (
+            {!isGuest(user?.systemRole) && (
               <DropdownMenuItem onClick={() => setEmojiManagerOpen(true)}>
                 <Smile className="mr-2 h-4 w-4" />
                 Custom emojis
               </DropdownMenuItem>
             )}
+            <DropdownMenuItem onClick={() => setAboutOpen(true)}>
+              <Info className="mr-2 h-4 w-4" />
+              About
+            </DropdownMenuItem>
             <DropdownMenuItem onClick={handleLogout}>
               <LogOut className="mr-2 h-4 w-4" />
               Sign out
@@ -133,21 +161,45 @@ export function Sidebar({ onClose }: SidebarProps) {
             <span>Directory</span>
           </NavLink>
 
+          {/* Admin link — only visible to admins. Workspace settings
+              (upload limits, etc.) live on this page. */}
+          {isAdmin(user?.systemRole) && (
+            <NavLink
+              to="/admin"
+              onClick={onClose}
+              className={({ isActive }) =>
+                `flex items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors mb-2 ${
+                  isActive
+                    ? 'bg-white/15 text-white font-semibold'
+                    : 'text-gray-300 hover:bg-white/10 hover:text-white'
+                }`
+              }
+            >
+              <Settings className="h-4 w-4 shrink-0" aria-hidden="true" />
+              <span>Admin</span>
+            </NavLink>
+          )}
+
           {/* Channels section */}
           <div className="mb-1">
             <div className="flex items-center justify-between px-2 py-1">
               <span className="text-xs font-semibold uppercase tracking-wider text-gray-400">
                 Channels
               </span>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-6 w-6 text-gray-400 hover:bg-white/10 hover:text-white"
-                onClick={() => setCreateChannelOpen(true)}
-                aria-label="Create channel"
-              >
-                <Plus className="h-4 w-4" />
-              </Button>
+              {/* Guests are confined to #general and explicitly-invited
+                  channels — hide the Create button for them so the UI
+                  matches the server-side guard. */}
+              {!isGuest(user?.systemRole) && (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-6 w-6 text-gray-400 hover:bg-white/10 hover:text-white"
+                  onClick={() => setCreateChannelOpen(true)}
+                  aria-label="Create channel"
+                >
+                  <Plus className="h-4 w-4" />
+                </Button>
+              )}
             </div>
 
             <nav aria-label="Channels">
@@ -215,6 +267,10 @@ export function Sidebar({ onClose }: SidebarProps) {
                 const hasUnread = unreadConversations.has(conv.conversationID);
                 const isGroup = conv.type === 'group';
                 const participantCount = isGroup ? (conv.participantIDs?.length ?? 0) : 0;
+                const otherID = !isGroup
+                  ? ((conv.participantIDs ?? []).find((p) => p !== user?.id) ?? conv.participantIDs?.[0])
+                  : undefined;
+                const dmAvatarURL = otherID ? dmUserMap.get(otherID)?.avatarURL : undefined;
                 return (
                   <div key={conv.conversationID} className="group relative">
                     <NavLink
@@ -240,6 +296,7 @@ export function Sidebar({ onClose }: SidebarProps) {
                         </Badge>
                       ) : (
                         <Avatar className="h-5 w-5 shrink-0">
+                          {dmAvatarURL && <AvatarImage src={dmAvatarURL} alt="" />}
                           <AvatarFallback className="text-[10px] bg-emerald-700 text-white">
                             {getInitials(conv.displayName || '??')}
                           </AvatarFallback>
@@ -272,6 +329,7 @@ export function Sidebar({ onClose }: SidebarProps) {
       <EditProfileDialog open={editProfileOpen} onOpenChange={setEditProfileOpen} />
       <NewConversationDialog open={newConvoOpen} onOpenChange={setNewConvoOpen} />
       <EmojiManagerDialog open={emojiManagerOpen} onOpenChange={setEmojiManagerOpen} />
+      <AboutDialog open={aboutOpen} onOpenChange={setAboutOpen} />
     </div>
   );
 }

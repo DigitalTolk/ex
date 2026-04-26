@@ -279,6 +279,60 @@ func TestMessageService_Edit_RejectsEmptyBodyAndNoAttachments(t *testing.T) {
 	}
 }
 
+func TestMessageService_SetPinned_TogglesAndPublishesEvents(t *testing.T) {
+	svc, messages, memberships, _, publisher := setupMessageService()
+	ctx := context.Background()
+	memberships.memberships["ch1#u-1"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u-1", Role: model.ChannelRoleMember}
+	messages.messages["ch1#m-1"] = &model.Message{ID: "m-1", ParentID: "ch1", AuthorID: "u-1"}
+
+	pinned, err := svc.SetPinned(ctx, "u-1", "ch1", ParentChannel, "m-1", true)
+	if err != nil {
+		t.Fatalf("SetPinned: %v", err)
+	}
+	if !pinned.Pinned {
+		t.Error("expected message to be pinned")
+	}
+	if pinned.PinnedBy != "u-1" {
+		t.Errorf("PinnedBy = %q, want u-1", pinned.PinnedBy)
+	}
+	if pinned.PinnedAt == nil {
+		t.Error("expected PinnedAt to be set")
+	}
+
+	// One message.edited event carrying the updated message — re-uses the
+	// existing client-side invalidation path.
+	if len(publisher.published) != 1 || publisher.published[0].event.Type != "message.edited" {
+		t.Errorf("expected 1 message.edited event; got %d (%v)", len(publisher.published), publisher.published)
+	}
+
+	// Idempotent: calling SetPinned(true) again is a no-op (no extra events).
+	if _, err := svc.SetPinned(ctx, "u-1", "ch1", ParentChannel, "m-1", true); err != nil {
+		t.Fatalf("idempotent SetPinned: %v", err)
+	}
+	if len(publisher.published) != 1 {
+		t.Errorf("idempotent toggle should not republish; total events = %d", len(publisher.published))
+	}
+
+	// Unpin clears the metadata.
+	unp, err := svc.SetPinned(ctx, "u-1", "ch1", ParentChannel, "m-1", false)
+	if err != nil {
+		t.Fatalf("unpin: %v", err)
+	}
+	if unp.Pinned || unp.PinnedAt != nil || unp.PinnedBy != "" {
+		t.Error("expected unpin to clear all pin metadata")
+	}
+}
+
+func TestMessageService_SetPinned_NotMemberRejected(t *testing.T) {
+	svc, messages, _, _, _ := setupMessageService()
+	ctx := context.Background()
+	messages.messages["ch1#m-1"] = &model.Message{ID: "m-1", ParentID: "ch1", AuthorID: "u-1"}
+
+	if _, err := svc.SetPinned(ctx, "stranger", "ch1", ParentChannel, "m-1", true); err == nil {
+		t.Fatal("expected SetPinned to reject non-members")
+	}
+}
+
 func TestMessageService_Edit_NotAuthor(t *testing.T) {
 	svc, messages, memberships, _, _ := setupMessageService()
 	ctx := context.Background()
