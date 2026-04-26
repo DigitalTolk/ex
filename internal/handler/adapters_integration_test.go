@@ -5,6 +5,9 @@ package handler
 import (
 	"context"
 	"fmt"
+	"log"
+	"os"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -19,8 +22,19 @@ import (
 	"github.com/DigitalTolk/ex/internal/store"
 )
 
-func setupDynamoForAdapters(t *testing.T) *store.DB {
-	t.Helper()
+// One DynamoDB Local container is shared by every adapter integration test
+// in this package. The original setup spun up a fresh container per test —
+// fine when there were two of them, but flaky once the suite grew to 8+
+// (Docker resource pressure produces "EOF" / "StatusCode: 0" errors mid-
+// DescribeTable). Mirroring the pattern in internal/store, each test now
+// gets a uniquely-named table inside the shared container.
+var (
+	adapterEndpoint  string
+	adapterAvailable bool
+	adapterTableSeq  atomic.Uint64
+)
+
+func TestMain(m *testing.M) {
 	ctx := context.Background()
 
 	req := testcontainers.ContainerRequest{
@@ -34,13 +48,30 @@ func setupDynamoForAdapters(t *testing.T) *store.DB {
 		Started:          true,
 	})
 	if err != nil {
-		t.Skipf("skipping: Docker not available: %v", err)
+		log.Printf("adapter integration tests will skip: docker unavailable: %v", err)
+		os.Exit(m.Run())
 	}
-	t.Cleanup(func() { container.Terminate(ctx) })
 
-	host, _ := container.Host(ctx)
-	port, _ := container.MappedPort(ctx, "8000")
-	endpoint := fmt.Sprintf("http://%s:%s", host, port.Port())
+	host, herr := container.Host(ctx)
+	if herr == nil {
+		port, perr := container.MappedPort(ctx, "8000")
+		if perr == nil {
+			adapterEndpoint = fmt.Sprintf("http://%s:%s", host, port.Port())
+			adapterAvailable = true
+		}
+	}
+
+	code := m.Run()
+	_ = container.Terminate(ctx)
+	os.Exit(code)
+}
+
+func setupDynamoForAdapters(t *testing.T) *store.DB {
+	t.Helper()
+	if !adapterAvailable {
+		t.Skip("skipping: Docker / DynamoDB Local not available")
+	}
+	ctx := context.Background()
 
 	awsCfg, err := awsconfig.LoadDefaultConfig(ctx,
 		awsconfig.WithRegion("us-east-1"),
@@ -51,12 +82,12 @@ func setupDynamoForAdapters(t *testing.T) *store.DB {
 	}
 
 	client := dynamodb.NewFromConfig(awsCfg, func(o *dynamodb.Options) {
-		o.BaseEndpoint = aws.String(endpoint)
+		o.BaseEndpoint = aws.String(adapterEndpoint)
 	})
 
 	db := &store.DB{
 		Client: client,
-		Table:  "test-adapters",
+		Table:  fmt.Sprintf("test-adapters-%d", adapterTableSeq.Add(1)),
 	}
 
 	if err := db.EnsureTable(ctx); err != nil {
