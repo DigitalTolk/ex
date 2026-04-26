@@ -19,6 +19,9 @@ import { AttachmentChip, type DraftAttachment } from '@/components/chat/Attachme
 import { uploadAttachment, useDeleteDraftAttachment } from '@/hooks/useAttachments';
 import { isImageContentType } from '@/lib/file-helpers';
 import { WysiwygEditor, type WysiwygEditorHandle } from '@/components/chat/WysiwygEditor';
+import { sendWS } from '@/lib/ws-sender';
+
+const TYPING_PING_INTERVAL_MS = 3000;
 
 export interface MessageInputValue {
   body: string;
@@ -40,6 +43,12 @@ interface MessageInputProps {
   // changes — used to re-focus the composer after the user navigates to a
   // different channel/conversation/group without unmounting the component.
   focusKey?: string;
+  // When set, the composer emits "typing" frames over the WebSocket
+  // (throttled to once every 3s) so other clients can render a "<user>
+  // is typing" indicator. Inline edit doesn't pass this — typing while
+  // editing an existing message is private.
+  typingParentID?: string;
+  typingParentType?: 'channel' | 'conversation';
 }
 
 export function MessageInput({
@@ -52,6 +61,8 @@ export function MessageInput({
   submitLabel,
   variant = 'composer',
   focusKey,
+  typingParentID,
+  typingParentType,
 }: MessageInputProps) {
   const [body, setBody] = useState(initialBody);
   const [drafts, setDrafts] = useState<DraftAttachment[]>(initialDrafts);
@@ -59,7 +70,20 @@ export function MessageInput({
   const [uploadError, setUploadError] = useState('');
   const editorRef = useRef<WysiwygEditorHandle>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const lastTypingPingRef = useRef(0);
   const deleteDraft = useDeleteDraftAttachment();
+
+  // Throttled typing emit. Other clients show "<user> is typing" for 5s
+  // after the most recent ping; we re-ping every 3s while the user is
+  // still composing. We deliberately don't ping on every keystroke —
+  // that would flood the WebSocket on long messages.
+  const emitTyping = useCallback(() => {
+    if (!typingParentID || !typingParentType) return;
+    const now = Date.now();
+    if (now - lastTypingPingRef.current < TYPING_PING_INTERVAL_MS) return;
+    lastTypingPingRef.current = now;
+    sendWS({ type: 'typing', parentID: typingParentID, parentType: typingParentType });
+  }, [typingParentID, typingParentType]);
 
   const canSend = (body.trim() !== '' || drafts.length > 0) && !disabled && !isUploading;
 
@@ -202,7 +226,10 @@ export function MessageInput({
           <WysiwygEditor
             ref={editorRef}
             initialBody={initialBody}
-            onChange={setBody}
+            onChange={(md) => {
+              setBody(md);
+              emitTyping();
+            }}
             onSubmit={handleSend}
             onCancel={onCancel}
             placeholder={isUploading ? 'Uploading…' : placeholder}

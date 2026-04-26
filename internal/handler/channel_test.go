@@ -117,6 +117,12 @@ func (s *dataMembershipStore) ListUserChannels(_ context.Context, _ string) ([]*
 func (s *dataMembershipStore) SetMute(_ context.Context, _, _ string, _ bool) error {
 	return nil
 }
+func (s *dataMembershipStore) SetFavorite(_ context.Context, _, _ string, _ bool) error {
+	return nil
+}
+func (s *dataMembershipStore) SetCategory(_ context.Context, _, _, _ string) error {
+	return nil
+}
 
 // dataMessageStore stores messages. Used for handler integration tests.
 type dataMessageStore struct {

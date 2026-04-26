@@ -257,7 +257,20 @@ export function MessageItem({
         ) : (
           <>
             <div className="text-sm prose-message">
-              {renderMarkdown(message.body, { emojiMap })}
+              {renderMarkdown(message.body, {
+                emojiMap,
+                currentUserId,
+                renderUserMention: (userId, displayName, _isSelf, pill) => (
+                  <UserHoverCard
+                    key={`mention-${userId}-${message.id}`}
+                    userId={userId}
+                    displayName={displayName}
+                    currentUserId={currentUserId}
+                  >
+                    {pill}
+                  </UserHoverCard>
+                ),
+              })}
             </div>
             {message.attachmentIDs && message.attachmentIDs.length > 0 && (
               <MessageAttachments ids={message.attachmentIDs} />

@@ -140,14 +140,16 @@ describe('Sidebar', () => {
     expect(screen.getByText('secret')).toBeInTheDocument();
   });
 
-  it('renders Channels heading', () => {
+  it('renders the unified Browse header for channels and DMs', () => {
     renderSidebar();
-    expect(screen.getByText('Channels')).toBeInTheDocument();
+    expect(screen.getByText('Browse')).toBeInTheDocument();
   });
 
-  it('renders Direct Messages heading', () => {
+  it('renders default Channels and Direct Messages section headers when both have items', () => {
     renderSidebar();
-    expect(screen.getByText('Direct Messages')).toBeInTheDocument();
+    // The grouped sidebar still renders these as default-section headers.
+    expect(screen.getAllByText('Channels').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Direct Messages').length).toBeGreaterThan(0);
   });
 
   it('renders conversation list', () => {
@@ -174,7 +176,7 @@ describe('Sidebar', () => {
   it('shows unread indicator for channels', () => {
     mockUnreadChannels.add('ch-1');
     renderSidebar();
-    const nav = screen.getByLabelText('Channels');
+    const nav = screen.getByLabelText('Channels and direct messages');
     const dots = nav.querySelectorAll('span.ml-auto');
     expect(dots.length).toBeGreaterThanOrEqual(1);
   });
@@ -182,7 +184,7 @@ describe('Sidebar', () => {
   it('shows unread indicator for conversations', () => {
     mockUnreadConversations.add('conv-1');
     renderSidebar();
-    const nav = screen.getByLabelText('Direct messages');
+    const nav = screen.getByLabelText('Channels and direct messages');
     const dots = nav.querySelectorAll('span.ml-auto');
     expect(dots.length).toBeGreaterThanOrEqual(1);
   });
@@ -214,7 +216,7 @@ describe('Sidebar', () => {
 
   it('uses slugified channel name in NavLink href', () => {
     renderSidebar();
-    const nav = screen.getByLabelText('Channels');
+    const nav = screen.getByLabelText('Channels and direct messages');
     const links = nav.querySelectorAll('a');
     const hrefs = Array.from(links).map(a => a.getAttribute('href'));
     expect(hrefs).toContain('/channel/general');

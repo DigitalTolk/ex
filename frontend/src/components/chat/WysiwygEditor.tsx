@@ -1,5 +1,6 @@
-import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { htmlToMarkdown, markdownToEditableHtml } from '@/lib/wysiwyg';
+import { MentionAutocomplete, type MentionSuggestion } from './MentionAutocomplete';
 
 export interface WysiwygEditorHandle {
   /** Apply a formatting command to the current selection. */
@@ -41,6 +42,15 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, Props>(function Wys
   const elRef = useRef<HTMLDivElement>(null);
   const lastEmittedMarkdownRef = useRef<string>('');
 
+  // Mention autocomplete state. The trigger range is captured at the
+  // moment the user typed "@" so we can replace the typed query atomically
+  // when they pick a suggestion.
+  const [mentionState, setMentionState] = useState<{
+    query: string;
+    anchorRect: DOMRect | null;
+    range: Range;
+  } | null>(null);
+
   useEffect(() => {
     if (!elRef.current) return;
     elRef.current.innerHTML = markdownToEditableHtml(initialBody);
@@ -56,7 +66,107 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, Props>(function Wys
     onChange?.(md);
   }
 
+  // Detect a "@<query>" segment immediately preceding the caret. Returns
+  // the query text + a Range covering the @ trigger and everything typed
+  // since, OR null if the caret isn't currently in a mention context.
+  function detectMentionTrigger(): { query: string; range: Range } | null {
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0 || !sel.isCollapsed) return null;
+    const focus = sel.getRangeAt(0);
+    if (!elRef.current?.contains(focus.startContainer)) return null;
+    if (focus.startContainer.nodeType !== Node.TEXT_NODE) return null;
+
+    const text = (focus.startContainer.textContent ?? '').slice(0, focus.startOffset);
+    const at = text.lastIndexOf('@');
+    if (at < 0) return null;
+
+    // Reject when the @ is in the middle of a word (e.g. an email local-
+    // part) — only trigger when @ stands alone or follows whitespace.
+    if (at > 0 && /\S/.test(text.charAt(at - 1))) return null;
+
+    const query = text.slice(at + 1);
+    // Whitespace inside the query closes the popover — single names only.
+    if (/\s/.test(query)) return null;
+
+    const range = document.createRange();
+    range.setStart(focus.startContainer, at);
+    range.setEnd(focus.startContainer, focus.startOffset);
+    return { query, range };
+  }
+
+  function refreshMention() {
+    const trig = detectMentionTrigger();
+    if (!trig) {
+      setMentionState((prev) => (prev === null ? prev : null));
+      return;
+    }
+    // jsdom doesn't always implement Range.getBoundingClientRect — guard
+    // so the popover still opens (just unanchored) in test environments.
+    let rect: DOMRect | null;
+    try {
+      rect = trig.range.getBoundingClientRect();
+    } catch {
+      rect = null;
+    }
+    setMentionState({ query: trig.query, anchorRect: rect, range: trig.range });
+  }
+
+  function pickMention(s: MentionSuggestion) {
+    if (!mentionState || !elRef.current) return;
+    const range = mentionState.range;
+    range.deleteContents();
+    if (s.kind === 'user') {
+      const span = document.createElement('span');
+      span.className = 'mention';
+      span.setAttribute('data-user-id', s.id);
+      span.setAttribute('data-mention-name', s.displayName);
+      span.setAttribute('contenteditable', 'false');
+      span.textContent = `@${s.displayName}`;
+      range.insertNode(span);
+      // Drop a trailing space and place the caret after it so typing
+      // resumes naturally.
+      const tail = document.createTextNode(' ');
+      span.parentNode?.insertBefore(tail, span.nextSibling);
+      const sel = window.getSelection();
+      if (sel) {
+        const r = document.createRange();
+        r.setStartAfter(tail);
+        r.collapse(true);
+        sel.removeAllRanges();
+        sel.addRange(r);
+      }
+    } else {
+      // Group mention is plain text — the renderer turns it into a pill.
+      const tail = document.createTextNode(`@${s.group} `);
+      range.insertNode(tail);
+      const sel = window.getSelection();
+      if (sel) {
+        const r = document.createRange();
+        r.setStartAfter(tail);
+        r.collapse(true);
+        sel.removeAllRanges();
+        sel.addRange(r);
+      }
+    }
+    setMentionState(null);
+    emitChange();
+  }
+
   function handleKeyDown(e: React.KeyboardEvent<HTMLDivElement>) {
+    // While the mention popover is open it owns Up/Down/Enter/Tab/Escape —
+    // those keys must not fall through to the editor (no submit-on-Enter
+    // while picking a name, no blur-on-Escape).
+    if (mentionState) {
+      if (
+        e.key === 'ArrowUp' ||
+        e.key === 'ArrowDown' ||
+        e.key === 'Enter' ||
+        e.key === 'Tab' ||
+        e.key === 'Escape'
+      ) {
+        return;
+      }
+    }
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       const md = elRef.current ? htmlToMarkdown(elRef.current) : '';
@@ -166,21 +276,36 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, Props>(function Wys
 
   // Help avoid the "void" of an empty contentEditable showing nothing —
   return (
-    <div
-      ref={elRef}
-      role="textbox"
-      contentEditable={!disabled}
-      suppressContentEditableWarning
-      aria-label={ariaLabel}
-      data-placeholder={placeholder ?? ''}
-      onInput={emitChange}
-      onKeyDown={handleKeyDown}
-      tabIndex={0}
-      className={
-        'wysiwyg-editor min-h-[60px] max-h-[200px] overflow-y-auto whitespace-pre-wrap break-words text-sm focus:outline-none ' +
-        (disabled ? 'opacity-50 cursor-not-allowed ' : '') +
-        className
-      }
-    />
+    <>
+      <div
+        ref={elRef}
+        role="textbox"
+        contentEditable={!disabled}
+        suppressContentEditableWarning
+        aria-label={ariaLabel}
+        data-placeholder={placeholder ?? ''}
+        onInput={() => {
+          emitChange();
+          refreshMention();
+        }}
+        onKeyUp={refreshMention}
+        onKeyDown={handleKeyDown}
+        onBlur={() => setMentionState(null)}
+        tabIndex={0}
+        className={
+          'wysiwyg-editor min-h-[60px] max-h-[200px] overflow-y-auto whitespace-pre-wrap break-words text-sm focus:outline-none ' +
+          (disabled ? 'opacity-50 cursor-not-allowed ' : '') +
+          className
+        }
+      />
+      {mentionState && (
+        <MentionAutocomplete
+          query={mentionState.query}
+          anchorRect={mentionState.anchorRect}
+          onPick={pickMention}
+          onDismiss={() => setMentionState(null)}
+        />
+      )}
+    </>
   );
 });

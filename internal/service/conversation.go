@@ -274,6 +274,61 @@ func (s *ConversationService) Activate(ctx context.Context, convID string) error
 	return nil
 }
 
+// IsParticipant reports whether the user appears in the conversation's
+// participant list. Used by the WebSocket handler to gate inbound
+// ephemeral events (typing indicator).
+func (s *ConversationService) IsParticipant(ctx context.Context, userID, convID string) bool {
+	if userID == "" || convID == "" {
+		return false
+	}
+	conv, err := s.conversations.GetConversation(ctx, convID)
+	if err != nil || conv == nil {
+		return false
+	}
+	for _, id := range conv.ParticipantIDs {
+		if id == userID {
+			return true
+		}
+	}
+	return false
+}
+
+// SetFavorite pins the DM/group to the user's "Favorites" sidebar
+// section. Caller must be a participant — pinning a conversation you
+// can't see would create an orphan user-side row.
+func (s *ConversationService) SetFavorite(ctx context.Context, userID, convID string, favorite bool) error {
+	if !s.IsParticipant(ctx, userID, convID) {
+		return errors.New("conversation: not a participant")
+	}
+	if err := s.conversations.SetFavorite(ctx, convID, userID, favorite); err != nil {
+		return fmt.Errorf("conversation: set favorite: %w", err)
+	}
+	events.Publish(ctx, s.publisher, pubsub.UserChannel(userID), events.EventUserChannelUpdated, map[string]any{
+		"conversationID": convID,
+		"userID":         userID,
+		"favorite":       favorite,
+	})
+	return nil
+}
+
+// SetCategory assigns the DM/group to one of the user's sidebar
+// categories (or clears it when categoryID is empty). Validation that
+// the categoryID belongs to the user is the handler's responsibility.
+func (s *ConversationService) SetCategory(ctx context.Context, userID, convID, categoryID string) error {
+	if !s.IsParticipant(ctx, userID, convID) {
+		return errors.New("conversation: not a participant")
+	}
+	if err := s.conversations.SetCategory(ctx, convID, userID, categoryID); err != nil {
+		return fmt.Errorf("conversation: set category: %w", err)
+	}
+	events.Publish(ctx, s.publisher, pubsub.UserChannel(userID), events.EventUserChannelUpdated, map[string]any{
+		"conversationID": convID,
+		"userID":         userID,
+		"categoryID":     categoryID,
+	})
+	return nil
+}
+
 // GetByID returns a conversation if the requesting user is a participant.
 func (s *ConversationService) GetByID(ctx context.Context, userID, convID string) (*model.Conversation, error) {
 	conv, err := s.conversations.GetConversation(ctx, convID)

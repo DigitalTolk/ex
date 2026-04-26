@@ -1,3 +1,5 @@
+import { USER_MENTION_RE_GLOBAL } from './mention-syntax';
+
 // Minimal markdown ↔ HTML bridge for the message composer.
 //
 // The editor is a contentEditable div: the user types and applies marks
@@ -31,6 +33,17 @@ function escapeAttr(s: string): string {
 // already HTML-escaped text. The replacements run in priority order so a
 // link's text isn't accidentally interpreted as italic, etc.
 function inlineMd(s: string): string {
+  // @[id|name] → mention pill (must come BEFORE the link rule so the
+  // bracket pair isn't interpreted as a link's [text]).
+  s = s.replace(USER_MENTION_RE_GLOBAL, (_m, id: string, name: string) => {
+    const safeID = escapeAttr(id.trim());
+    const safeName = name.trim();
+    // The pill is contenteditable=false so the cursor steps over it as
+    // an atomic token instead of letting the user split it character by
+    // character. The trailing zero-width space (\u200B) gives the editor
+    // a position to land the caret right after the pill.
+    return `<span class="mention" data-user-id="${safeID}" data-mention-name="${escapeAttr(safeName)}" contenteditable="false">@${escapeHtml(safeName)}</span>`;
+  });
   // [text](url)
   s = s.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (_m, text, url) =>
     `<a href="${escapeAttr(url)}">${text}</a>`,
@@ -221,6 +234,25 @@ function appendNode(node: Node, out: string[], marks: Mark[]): void {
     case 'code':
       for (const c of Array.from(el.childNodes)) appendNode(c, out, [...marks, 'code']);
       return;
+    case 'span': {
+      // Mention pill: <span class="mention" data-user-id="X" data-mention-name="Bob">
+      // The textContent ("@Bob") is for display only — we serialise from
+      // the data attributes so a user editing the visible name (which
+      // contenteditable shouldn't allow but might via paste) can't
+      // desync the routing identifier.
+      if (el.classList.contains('mention')) {
+        const id = el.getAttribute('data-user-id') ?? '';
+        const name =
+          el.getAttribute('data-mention-name') ??
+          (el.textContent ?? '').replace(/^@/, '');
+        if (id) {
+          out.push(`@[${id}|${name}]`);
+          return;
+        }
+      }
+      for (const c of Array.from(el.childNodes)) appendNode(c, out, marks);
+      return;
+    }
     default:
       // Unknown element — recurse into children, drop the wrapper.
       for (const c of Array.from(el.childNodes)) appendNode(c, out, marks);

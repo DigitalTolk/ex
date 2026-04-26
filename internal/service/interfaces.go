@@ -36,6 +36,8 @@ type MembershipStore interface {
 	ListMembers(ctx context.Context, channelID string) ([]*model.ChannelMembership, error)
 	ListUserChannels(ctx context.Context, userID string) ([]*model.UserChannel, error)
 	SetMute(ctx context.Context, channelID, userID string, muted bool) error
+	SetFavorite(ctx context.Context, channelID, userID string, favorite bool) error
+	SetCategory(ctx context.Context, channelID, userID, categoryID string) error
 }
 
 // ConversationStore defines persistence operations for conversations.
@@ -44,6 +46,8 @@ type ConversationStore interface {
 	GetConversation(ctx context.Context, id string) (*model.Conversation, error)
 	ListUserConversations(ctx context.Context, userID string) ([]*model.UserConversation, error)
 	ActivateConversation(ctx context.Context, convID string, participantIDs []string) error
+	SetFavorite(ctx context.Context, convID, userID string, favorite bool) error
+	SetCategory(ctx context.Context, convID, userID, categoryID string) error
 }
 
 // MessageStore defines persistence operations for messages.

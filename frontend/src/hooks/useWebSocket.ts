@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { getAccessToken } from '@/lib/api';
 import { EventType } from '@/lib/event-types';
+import { setWSSender } from '@/lib/ws-sender';
 
 type WSCallback = (data: unknown) => void;
 
@@ -21,6 +22,7 @@ interface UseWebSocketOptions {
   onAttachmentDeleted?: WSCallback;
   onChannelMuted?: WSCallback;
   onNotification?: WSCallback;
+  onTyping?: WSCallback;
   enabled?: boolean;
 }
 
@@ -50,6 +52,9 @@ export function useWebSocket(options: UseWebSocketOptions) {
 
       ws.onopen = () => {
         retryCountRef.current = 0;
+        // Expose the live socket's send to other components (typing
+        // indicator and similar ephemera) without prop-drilling.
+        setWSSender((frame) => ws.send(frame));
       };
 
       ws.onmessage = (event) => {
@@ -105,6 +110,9 @@ export function useWebSocket(options: UseWebSocketOptions) {
             case EventType.NotificationNew:
               callbacksRef.current.onNotification?.(payload);
               break;
+            case 'typing':
+              callbacksRef.current.onTyping?.(payload);
+              break;
           }
         } catch {
           // ignore parse errors
@@ -113,6 +121,7 @@ export function useWebSocket(options: UseWebSocketOptions) {
 
       ws.onclose = () => {
         wsRef.current = null;
+        setWSSender(null);
         if (!enabledRef.current) return;
         const backoff = Math.min(1000 * Math.pow(2, retryCountRef.current), 30000);
         retryCountRef.current++;
@@ -132,6 +141,7 @@ export function useWebSocket(options: UseWebSocketOptions) {
         wsRef.current.close();
         wsRef.current = null;
       }
+      setWSSender(null);
     };
   }, [options.enabled]);
 }

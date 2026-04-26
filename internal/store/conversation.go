@@ -232,6 +232,46 @@ func (s *ConversationStoreImpl) Activate(ctx context.Context, convID string, par
 	return nil
 }
 
+// SetUserConversationFavorite flips the favorite flag on the user-side
+// UserConversation row. Per-user — pinning the DM doesn't affect the
+// other participants' views.
+func (s *ConversationStoreImpl) SetUserConversationFavorite(ctx context.Context, convID, userID string, favorite bool) error {
+	return s.setUserConversationAttribute(ctx, convID, userID, "favorite", favorite)
+}
+
+// SetUserConversationCategory assigns the DM/group to a sidebar category
+// (or clears it when categoryID is empty).
+func (s *ConversationStoreImpl) SetUserConversationCategory(ctx context.Context, convID, userID, categoryID string) error {
+	return s.setUserConversationAttribute(ctx, convID, userID, "categoryID", categoryID)
+}
+
+// setUserConversationAttribute is the shared helper for one-attribute
+// updates to the user-side UserConversation. The attribute_exists guard
+// turns a missing row into ErrNotFound rather than silently writing an
+// orphan.
+func (s *ConversationStoreImpl) setUserConversationAttribute(ctx context.Context, convID, userID, attr string, value any) error {
+	upd := expression.Set(expression.Name(attr), expression.Value(value))
+	expr, err := expression.NewBuilder().WithUpdate(upd).Build()
+	if err != nil {
+		return fmt.Errorf("store: build user conv %s expression: %w", attr, err)
+	}
+	_, err = s.Client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName:                 aws.String(s.Table),
+		Key:                       compositeKey(userPK(userID), convSK(convID)),
+		UpdateExpression:          expr.Update(),
+		ExpressionAttributeNames:  expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
+		ConditionExpression:       aws.String("attribute_exists(PK)"),
+	})
+	if err != nil {
+		if isConditionCheckFailed(err) {
+			return ErrNotFound
+		}
+		return fmt.Errorf("store: set user conv %s: %w", attr, err)
+	}
+	return nil
+}
+
 func (s *ConversationStoreImpl) IsMember(ctx context.Context, convID, userID string) (bool, error) {
 	out, err := s.Client.GetItem(ctx, &dynamodb.GetItemInput{
 		TableName: aws.String(s.Table),

@@ -1,9 +1,33 @@
 import type { ReactNode } from 'react';
 import { shortcodeToUnicode } from './emoji-shortcodes';
+import { USER_MENTION_RE, GROUP_MENTION_RE } from './mention-syntax';
 
 export interface RenderOpts {
   emojiMap?: Record<string, string>;
+  // currentUserId enables the "you" highlight on @-mentions that target
+  // the viewer — same behaviour as Slack/Teams (yellow pill instead of
+  // the default mute pill).
+  currentUserId?: string;
+  // renderUserMention wraps the rendered mention pill — typically with
+  // UserHoverCard so hovering the @-name shows a profile popover.
+  // When unset, the pill renders as a plain highlighted span.
+  renderUserMention?: (
+    userId: string,
+    displayName: string,
+    isSelf: boolean,
+    pill: ReactNode,
+  ) => ReactNode;
 }
+
+const MENTION_PILL_BASE =
+  'inline-block rounded px-1 text-sm font-medium leading-tight';
+const MENTION_PILL_OTHER =
+  ' bg-primary/10 text-primary hover:bg-primary/20';
+// "You" mentions and group mentions (@all/@here) share the same amber
+// highlight — both are calls to action that should stand out from the
+// muted color used for ordinary user mentions.
+const MENTION_PILL_HIGHLIGHT =
+  ' bg-amber-200 text-amber-900 dark:bg-amber-500/30 dark:text-amber-100';
 
 interface Match {
   index: number;
@@ -21,6 +45,46 @@ function findInline(src: string, opts: RenderOpts | undefined, keyPrefix: string
       earliest = { index: idx, length: m[0].length, node: build(m) };
     }
   };
+
+  // user mention: @[USER_ID|Display Name]
+  // Must come before the link matcher so "@[id|name]" isn't mistaken for
+  // "@" followed by a [link](url).
+  tryMatch(USER_MENTION_RE, (m) => {
+    const userId = m[1].trim();
+    const name = m[2].trim();
+    const isSelf = !!opts?.currentUserId && opts.currentUserId === userId;
+    const pill = (
+      <span
+        key={`${keyPrefix}-mu-${m.index}`}
+        data-testid="mention-pill"
+        data-mention-user-id={userId}
+        data-mention-self={isSelf ? 'true' : 'false'}
+        className={MENTION_PILL_BASE + (isSelf ? MENTION_PILL_HIGHLIGHT : MENTION_PILL_OTHER)}
+      >
+        @{name}
+      </span>
+    );
+    if (opts?.renderUserMention) {
+      return opts.renderUserMention(userId, name, isSelf, pill);
+    }
+    return pill;
+  });
+
+  tryMatch(GROUP_MENTION_RE, (m) => {
+    const lead = m[1] ?? '';
+    return (
+      <span key={`${keyPrefix}-mg-${m.index}`}>
+        {lead}
+        <span
+          data-testid="mention-pill"
+          data-mention-group={m[2]}
+          className={MENTION_PILL_BASE + MENTION_PILL_HIGHLIGHT}
+        >
+          @{m[2]}
+        </span>
+      </span>
+    );
+  });
 
   // image: ![alt](url)
   tryMatch(/!\[([^\]]*)\]\(([^)\s]+)\)/, (m) => (

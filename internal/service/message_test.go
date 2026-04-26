@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -321,6 +322,88 @@ func TestMessageService_SetPinned_TogglesAndPublishesEvents(t *testing.T) {
 	}
 	if unp.Pinned || unp.PinnedAt != nil || unp.PinnedBy != "" {
 		t.Error("expected unpin to clear all pin metadata")
+	}
+}
+
+func TestMessageService_Send_NonMemberMention_PostsSystemMessage(t *testing.T) {
+	svc, messages, memberships, _, _ := setupMessageService()
+	ctx := context.Background()
+
+	// Author is a member, the mentioned user is NOT.
+	memberships.memberships["ch1#u-author"] = &model.ChannelMembership{
+		ChannelID: "ch1", UserID: "u-author", Role: model.ChannelRoleMember,
+	}
+
+	_, err := svc.Send(ctx, "u-author", "ch1", ParentChannel, "hi @[u-outsider|Outsider Sue]", "")
+	if err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+
+	// Two messages should now exist: the user's send + the system message.
+	gotSystem := 0
+	for _, m := range messages.messages {
+		if m.System && m.ParentID == "ch1" {
+			gotSystem++
+			if !strings.Contains(m.Body, "Outsider Sue") {
+				t.Errorf("system body should name the mentioned user; got %q", m.Body)
+			}
+			if !strings.Contains(m.Body, "isn't a member") {
+				t.Errorf("system body should explain non-membership; got %q", m.Body)
+			}
+		}
+	}
+	if gotSystem != 1 {
+		t.Errorf("expected exactly 1 system message; got %d", gotSystem)
+	}
+}
+
+func TestMessageService_Send_MentionedMemberDoesNotProduceSystemMessage(t *testing.T) {
+	// If the mentioned user IS already a channel member, no audit message
+	// is posted — the mention is a normal interaction.
+	svc, messages, memberships, _, _ := setupMessageService()
+	ctx := context.Background()
+
+	memberships.memberships["ch1#u-author"] = &model.ChannelMembership{
+		ChannelID: "ch1", UserID: "u-author", Role: model.ChannelRoleMember,
+	}
+	memberships.memberships["ch1#u-bob"] = &model.ChannelMembership{
+		ChannelID: "ch1", UserID: "u-bob", Role: model.ChannelRoleMember,
+	}
+
+	_, err := svc.Send(ctx, "u-author", "ch1", ParentChannel, "@[u-bob|Bob] hi", "")
+	if err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+
+	for _, m := range messages.messages {
+		if m.System {
+			t.Errorf("unexpected system message: %q", m.Body)
+		}
+	}
+}
+
+func TestMessageService_Send_ConversationMention_NoSystemMessage(t *testing.T) {
+	// Non-member-mention checks are channel-only; mentioning an outsider
+	// in a DM/group should not surface anything (no concept of outsider).
+	svc, messages, memberships, conversations, _ := setupMessageService()
+	ctx := context.Background()
+
+	conversations.conversations["c1"] = &model.Conversation{
+		ID: "c1", Type: model.ConversationTypeGroup,
+		ParticipantIDs: []string{"u-author", "u-other"},
+	}
+	memberships.memberships["c1#u-author"] = &model.ChannelMembership{
+		ChannelID: "c1", UserID: "u-author", Role: model.ChannelRoleMember,
+	}
+
+	_, err := svc.Send(ctx, "u-author", "c1", ParentConversation, "hi @[u-outsider|Stranger]", "")
+	if err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	for _, m := range messages.messages {
+		if m.System {
+			t.Errorf("conversation parent should not produce non-member-mention audit; got %q", m.Body)
+		}
 	}
 }
 

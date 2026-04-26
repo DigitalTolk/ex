@@ -22,6 +22,11 @@ import (
 	"github.com/DigitalTolk/ex/internal/store"
 )
 
+// Version is the build identifier of the running binary. CI overrides
+// this via -ldflags "-X main.Version=$VERSION" so a deploy bumps the
+// value the frontend compares against. Defaults to "dev" for local runs.
+var Version = "dev"
+
 func main() {
 	ctx := context.Background()
 
@@ -132,6 +137,7 @@ func main() {
 	attachmentSvc := service.NewAttachmentService(attachmentStore, attachmentSigner, redisPubSub)
 	messageSvc.SetAttachmentManager(attachmentSvc)
 	notificationSvc := service.NewNotificationService(redisPubSub, membershipStore, conversationStore, channelStore, userStore)
+	notificationSvc.SetPresence(presenceSvc)
 	messageSvc.SetNotifier(notificationSvc)
 	settingsSvc := service.NewSettingsService(store.NewSettingsStore(db))
 	attachmentSvc.SetUploadLimits(settingsSvc)
@@ -142,12 +148,16 @@ func main() {
 	channelH := handler.NewChannelHandler(channelSvc, messageSvc)
 	convH := handler.NewConversationHandler(convSvc, messageSvc)
 	wsH := handler.NewWSHandler(broker, channelSvc, convSvc, presenceSvc)
+	wsH.SetPublisher(redisPubSub)
 	uploadH := handler.NewUploadHandler(s3Client)
 	emojiH := handler.NewEmojiHandler(emojiSvc)
 	presenceH := handler.NewPresenceHandler(presenceSvc)
 	attachmentH := handler.NewAttachmentHandler(attachmentSvc)
 	adminH := handler.NewAdminHandler(settingsSvc)
 	threadH := handler.NewThreadHandler(messageSvc)
+	versionH := handler.NewVersionHandler(Version)
+	categorySvc := service.NewCategoryService(store.NewCategoryStore(db), redisPubSub)
+	sidebarH := handler.NewSidebarHandler(channelSvc, convSvc, categorySvc)
 
 	// ------------------------------------------------------------------ Frontend FS
 	var frontendDist fs.FS
@@ -162,7 +172,7 @@ func main() {
 	if !cfg.IsDev() {
 		allowOrigin = cfg.BaseURL
 	}
-	router := handler.NewRouter(authH, userH, channelH, convH, wsH, uploadH, emojiH, presenceH, attachmentH, adminH, threadH, jwtMgr, frontendDist, allowOrigin)
+	router := handler.NewRouter(authH, userH, channelH, convH, wsH, uploadH, emojiH, presenceH, attachmentH, adminH, threadH, versionH, sidebarH, jwtMgr, frontendDist, allowOrigin)
 
 	// ------------------------------------------------------------------ Server
 	srv := &http.Server{

@@ -8,6 +8,7 @@ import { MemberList } from './MemberList';
 import { ThreadPanel } from './ThreadPanel';
 import { PinnedPanel } from './PinnedPanel';
 import { DMIntro, SelfDMIntro, GroupIntro } from './ConversationIntro';
+import { TypingIndicator } from './TypingIndicator';
 import { useConversation } from '@/hooks/useConversations';
 import {
   useConversationMessages,
@@ -211,11 +212,14 @@ export function ConversationView() {
           onReplyInThread={openThread}
           intro={intro ?? undefined}
         />
+        <TypingIndicator parentID={id} userMap={userMap} />
         <MessageInput
           onSend={sendMessage.mutate}
           disabled={sendMessage.isPending}
           placeholder={`Write to ${title}`}
           focusKey={id}
+          typingParentID={id}
+          typingParentType="conversation"
         />
       </div>
       {threadRootID && (

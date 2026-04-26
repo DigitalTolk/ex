@@ -2,24 +2,19 @@ import { useState, useMemo } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import { useUsersBatch } from '@/hooks/useUsersBatch';
 import {
-  Hash,
-  Lock,
   Plus,
   ChevronDown,
   LogOut,
   BookUser,
   UserPlus,
-  X,
   User as UserIcon,
   Smile,
-  BellOff,
   Settings,
   Info,
   MessagesSquare,
 } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
-import { getInitials, slugify } from '@/lib/format';
 import { isAdmin, isGuest } from '@/lib/roles';
 import {
   DropdownMenu,
@@ -29,12 +24,15 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Separator } from '@/components/ui/separator';
 import { useAuth } from '@/context/AuthContext';
 import { useUnread } from '@/context/UnreadContext';
 import { useUserChannels } from '@/hooks/useChannels';
 import { useUserConversations } from '@/hooks/useConversations';
 import { useUserThreads, hasUnreadActivity } from '@/hooks/useThreads';
+import { useCategories, useCreateCategory } from '@/hooks/useSidebar';
+import { groupSidebarItems, SidebarSectionKeys } from '@/lib/sidebar-groups';
+import { ChannelRow } from './ChannelRow';
+import { ConversationRow } from './ConversationRow';
 import { CreateChannelDialog } from '@/components/channels/CreateChannelDialog';
 import { InviteDialog } from '@/components/InviteDialog';
 import { EditProfileDialog } from '@/components/EditProfileDialog';
@@ -51,6 +49,11 @@ export function Sidebar({ onClose }: SidebarProps) {
   const { data: channels } = useUserChannels();
   const { data: conversations } = useUserConversations();
   const { data: threads } = useUserThreads();
+  const { data: categories } = useCategories();
+  const createCategory = useCreateCategory();
+  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
+  const [creatingCategory, setCreatingCategory] = useState(false);
+  const [newCategoryName, setNewCategoryName] = useState('');
   const navigate = useNavigate();
   const [createChannelOpen, setCreateChannelOpen] = useState(false);
   const [inviteOpen, setInviteOpen] = useState(false);
@@ -58,8 +61,16 @@ export function Sidebar({ onClose }: SidebarProps) {
   const [emojiManagerOpen, setEmojiManagerOpen] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
 
-  const visibleConversations = conversations?.filter(c => !hiddenConversations.has(c.conversationID));
+  const visibleConversations = useMemo(
+    () => conversations?.filter((c) => !hiddenConversations.has(c.conversationID)) ?? [],
+    [conversations, hiddenConversations],
+  );
   const hasThreadUpdates = (threads ?? []).some((t) => hasUnreadActivity(t));
+
+  const sidebarSections = useMemo(
+    () => groupSidebarItems(channels ?? [], visibleConversations, categories ?? []),
+    [channels, visibleConversations, categories],
+  );
 
   // Fetch the other participant for every DM in one batch so the sidebar
   // can render real avatars instead of just initials. Group DMs use a
@@ -204,138 +215,144 @@ export function Sidebar({ onClose }: SidebarProps) {
             </NavLink>
           )}
 
-          {/* Channels section */}
+          {/* Unified sidebar list: Favorites (mixed) → user categories
+              (mixed) → Channels (uncategorised) → Direct Messages
+              (uncategorised). Both channels and DMs/groups can live in
+              any user-defined category; favorites mix everything pinned
+              by the user at the top. */}
           <div className="mb-1">
             <div className="flex items-center justify-between px-2 py-1">
               <span className="text-xs font-semibold uppercase tracking-wider text-gray-400">
-                Channels
+                Browse
               </span>
-              {/* Guests are confined to #general and explicitly-invited
-                  channels — hide the Create button for them so the UI
-                  matches the server-side guard. */}
-              {!isGuest(user?.systemRole) && (
+              <div className="flex items-center gap-1">
                 <Button
                   variant="ghost"
                   size="icon"
                   className="h-6 w-6 text-gray-400 hover:bg-white/10 hover:text-white"
-                  onClick={() => setCreateChannelOpen(true)}
-                  aria-label="Create channel"
+                  onClick={() => setCreatingCategory(true)}
+                  aria-label="New category"
+                  data-testid="new-category-button"
+                  title="New category"
                 >
-                  <Plus className="h-4 w-4" />
+                  <BookUser className="h-4 w-4" />
                 </Button>
-              )}
-            </div>
-
-            <nav aria-label="Channels">
-              {channels?.map((ch) => {
-                const hasUnread = unreadChannels.has(ch.channelID);
-                return (
-                  <NavLink
-                    key={ch.channelID}
-                    to={`/channel/${slugify(ch.channelName)}`}
-                    onClick={onClose}
-                    className={({ isActive }) =>
-                      `flex items-center gap-2 rounded-md px-2 py-1 text-sm transition-colors ${
-                        isActive
-                          ? 'bg-white/15 text-white font-semibold'
-                          : hasUnread
-                            ? 'font-bold text-white hover:bg-white/10'
-                            : 'text-gray-300 hover:bg-white/10 hover:text-white'
-                      }`
-                    }
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-6 w-6 text-gray-400 hover:bg-white/10 hover:text-white"
+                  onClick={() => navigate('/conversations/new')}
+                  aria-label="New direct message"
+                  title="New direct message"
+                >
+                  <UserPlus className="h-4 w-4" />
+                </Button>
+                {!isGuest(user?.systemRole) && (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-6 w-6 text-gray-400 hover:bg-white/10 hover:text-white"
+                    onClick={() => setCreateChannelOpen(true)}
+                    aria-label="Create channel"
+                    title="Create channel"
                   >
-                    {ch.channelType === 'private' ? (
-                      <Lock className="h-4 w-4 shrink-0" aria-hidden="true" />
-                    ) : (
-                      <Hash className="h-4 w-4 shrink-0" aria-hidden="true" />
-                    )}
-                    <span className={`truncate ${ch.muted ? 'text-gray-500' : ''}`}>
-                      {ch.channelName}
-                    </span>
-                    {ch.muted && (
-                      <BellOff
-                        className="ml-auto h-3 w-3 shrink-0 text-gray-500"
-                        aria-label="Muted"
-                      />
-                    )}
-                    {hasUnread && !ch.muted && (
-                      <span className="ml-auto h-2 w-2 rounded-full bg-white" />
-                    )}
-                  </NavLink>
-                );
-              })}
-            </nav>
-          </div>
-
-          <Separator className="my-2 bg-white/10" />
-
-          {/* Direct Messages section */}
-          <div>
-            <div className="flex items-center justify-between px-2 py-1">
-              <span className="text-xs font-semibold uppercase tracking-wider text-gray-400">
-                Direct Messages
-              </span>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-6 w-6 text-gray-400 hover:bg-white/10 hover:text-white"
-                onClick={() => navigate('/conversations/new')}
-                aria-label="New direct message"
-              >
-                <Plus className="h-4 w-4" />
-              </Button>
+                    <Plus className="h-4 w-4" />
+                  </Button>
+                )}
+              </div>
             </div>
 
-            <nav aria-label="Direct messages">
-              {visibleConversations?.map((conv) => {
-                const hasUnread = unreadConversations.has(conv.conversationID);
-                const isGroup = conv.type === 'group';
-                const participantCount = isGroup ? (conv.participantIDs?.length ?? 0) : 0;
-                const otherID = !isGroup
-                  ? ((conv.participantIDs ?? []).find((p) => p !== user?.id) ?? conv.participantIDs?.[0])
-                  : undefined;
-                const dmAvatarURL = otherID ? dmUserMap.get(otherID)?.avatarURL : undefined;
+            {creatingCategory && (
+              <div className="px-2 py-1">
+                <input
+                  autoFocus
+                  value={newCategoryName}
+                  onChange={(e) => setNewCategoryName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      const name = newCategoryName.trim();
+                      if (!name) return;
+                      createCategory.mutate(name, {
+                        onSuccess: () => {
+                          setNewCategoryName('');
+                          setCreatingCategory(false);
+                        },
+                      });
+                    }
+                    if (e.key === 'Escape') setCreatingCategory(false);
+                  }}
+                  placeholder="Category name…"
+                  data-testid="sidebar-new-category-input"
+                  className="w-full rounded-md bg-white/10 px-2 py-1 text-sm text-white placeholder:text-gray-400 focus:outline-none focus:ring-1 focus:ring-white/40"
+                />
+              </div>
+            )}
+
+            <nav aria-label="Channels and direct messages">
+              {sidebarSections.map((section) => {
+                // Hide truly-empty default sections (Favorites/Channels/
+                // Direct Messages) so the sidebar doesn't show a wall of
+                // empty headers. User-defined categories always render
+                // so the user can drop items into them.
+                const isDefault =
+                  section.key === SidebarSectionKeys.Favorites ||
+                  section.key === SidebarSectionKeys.Channels ||
+                  section.key === SidebarSectionKeys.DirectMessages;
+                if (isDefault && section.items.length === 0) return null;
+                const collapsed = !!collapsedGroups[section.key];
                 return (
-                  <div key={conv.conversationID} className="group relative">
-                    <NavLink
-                      to={`/conversation/${conv.conversationID}`}
-                      onClick={onClose}
-                      className={({ isActive }) =>
-                        `flex items-center gap-2 rounded-md px-2 py-1 text-sm transition-colors ${
-                          isActive
-                            ? 'bg-white/15 text-white font-semibold'
-                            : hasUnread
-                              ? 'font-bold text-white hover:bg-white/10'
-                              : 'text-gray-300 hover:bg-white/10 hover:text-white'
-                        }`
-                      }
-                    >
-                      {isGroup ? (
-                        <Badge
-                          variant="secondary"
-                          className="shrink-0 h-5 min-w-5 px-1.5 bg-white/20 text-white border-0 text-[10px]"
-                          aria-label={`${participantCount} participants`}
-                        >
-                          {participantCount}
-                        </Badge>
-                      ) : (
-                        <Avatar className="h-5 w-5 shrink-0">
-                          {dmAvatarURL && <AvatarImage src={dmAvatarURL} alt="" />}
-                          <AvatarFallback className="text-[10px] bg-emerald-700 text-white">
-                            {getInitials(conv.displayName || '??')}
-                          </AvatarFallback>
-                        </Avatar>
-                      )}
-                      <span className="truncate">{conv.displayName}</span>
-                      {hasUnread && <span className="ml-auto h-2 w-2 rounded-full bg-white" />}
-                    </NavLink>
+                  <div key={section.key} className="mt-1" data-testid={`sidebar-group-${section.key}`}>
                     <button
-                      onClick={(e) => { e.preventDefault(); hideConversation(conv.conversationID); }}
-                      className="absolute right-1 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 h-5 w-5 flex items-center justify-center rounded hover:bg-white/20 text-gray-400 hover:text-white"
-                      aria-label="Close conversation"
+                      onClick={() =>
+                        setCollapsedGroups((prev) => ({ ...prev, [section.key]: !collapsed }))
+                      }
+                      aria-expanded={!collapsed}
+                      data-testid={`sidebar-group-toggle-${section.key}`}
+                      className="w-full flex items-center gap-1 rounded-md px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-gray-400 hover:bg-white/5"
                     >
-                      <X className="h-3 w-3" />
+                      <ChevronDown
+                        className={`h-3 w-3 transition-transform ${collapsed ? '-rotate-90' : ''}`}
+                      />
+                      <span className="flex items-center gap-1">
+                        {section.key === SidebarSectionKeys.Favorites && (
+                          <BookUser className="h-3 w-3 text-amber-300" aria-hidden="true" />
+                        )}
+                        {section.title}
+                      </span>
+                      <span className="ml-auto opacity-70">{section.items.length}</span>
                     </button>
+                    {!collapsed && (
+                      <div>
+                        {section.items.map((item) => {
+                          if (item.kind === 'channel') {
+                            return (
+                              <ChannelRow
+                                key={`ch-${item.channel.channelID}`}
+                                channel={item.channel}
+                                hasUnread={unreadChannels.has(item.channel.channelID)}
+                                onClose={onClose}
+                              />
+                            );
+                          }
+                          const conv = item.conversation;
+                          const isGroup = conv.type === 'group';
+                          const otherID = !isGroup
+                            ? ((conv.participantIDs ?? []).find((p) => p !== user?.id) ?? conv.participantIDs?.[0])
+                            : undefined;
+                          const dmAvatarURL = otherID ? dmUserMap.get(otherID)?.avatarURL : undefined;
+                          return (
+                            <ConversationRow
+                              key={`conv-${conv.conversationID}`}
+                              conversation={conv}
+                              hasUnread={unreadConversations.has(conv.conversationID)}
+                              dmAvatarURL={dmAvatarURL}
+                              onClose={onClose}
+                              onHide={hideConversation}
+                            />
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
                 );
               })}

@@ -131,6 +131,12 @@ func (m *mockMembershipStore) ListUserChannels(_ context.Context, _ string) ([]*
 func (m *mockMembershipStore) SetMute(_ context.Context, _, _ string, _ bool) error {
 	return nil
 }
+func (m *mockMembershipStore) SetFavorite(_ context.Context, _, _ string, _ bool) error {
+	return nil
+}
+func (m *mockMembershipStore) SetCategory(_ context.Context, _, _, _ string) error {
+	return nil
+}
 
 type mockChannelStore struct{}
 

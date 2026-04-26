@@ -5,7 +5,9 @@ import { AuthProvider, useAuth } from '@/context/AuthContext';
 import { UnreadProvider } from '@/context/UnreadContext';
 import { PresenceProvider } from '@/context/PresenceContext';
 import { NotificationProvider } from '@/context/NotificationContext';
+import { TypingProvider } from '@/context/TypingContext';
 import { ThemeProvider } from '@/context/ThemeContext';
+import { UpdateBanner } from '@/components/UpdateBanner';
 import LoginPage from '@/pages/LoginPage';
 import OIDCCallbackPage from '@/pages/OIDCCallbackPage';
 import ChatPage from '@/pages/ChatPage';
@@ -86,9 +88,12 @@ export default function App() {
             <UnreadProvider>
               <PresenceProvider>
                 <NotificationProvider>
-                  <TooltipProvider>
-                    <AppRoutes />
-                  </TooltipProvider>
+                  <TypingProvider>
+                    <TooltipProvider>
+                      <UpdateBanner />
+                      <AppRoutes />
+                    </TooltipProvider>
+                  </TypingProvider>
                 </NotificationProvider>
               </PresenceProvider>
             </UnreadProvider>
