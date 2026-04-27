@@ -100,17 +100,19 @@ export function useThreadMessages(opts: {
   });
 }
 
-// threadDeepLink builds the URL a thread title points to. Channels
-// resolve by slug; conversations by id. Lives in this module so the
-// component file (ThreadCard) only exports components — Vite's
-// react-refresh plugin needs that separation.
+// threadDeepLink builds the URL a thread title points to. The query
+// `?thread=<id>` is consumed by Channel/ConversationView to open the
+// side panel; the `#msg-<id>` fragment is picked up by
+// useMessageDeepLinkHighlight to scroll the root into view and flash
+// the highlight ring. Both effects need to fire for the click to feel
+// like a proper "jump to thread" action.
 export function threadDeepLink(
   summary: ThreadSummary,
   channelName: string,
 ): string {
-  if (summary.parentType === 'channel') {
-    const slug = slugify(channelName);
-    return `/channel/${slug || summary.parentID}?thread=${summary.threadRootID}`;
-  }
-  return `/conversation/${summary.parentID}?thread=${summary.threadRootID}`;
+  const base =
+    summary.parentType === 'channel'
+      ? `/channel/${slugify(channelName) || summary.parentID}`
+      : `/conversation/${summary.parentID}`;
+  return `${base}?thread=${summary.threadRootID}#msg-${summary.threadRootID}`;
 }

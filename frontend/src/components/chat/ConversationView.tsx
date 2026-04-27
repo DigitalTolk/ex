@@ -79,7 +79,7 @@ export function ConversationView() {
     markThreadSeen(threadParam);
     const next = new URLSearchParams(searchParams);
     next.delete('thread');
-    setSearchParams(next, { replace: true });
+    setSearchParams(next, { replace: true, preventScrollReset: true });
   }, [threadParam, searchParams, setSearchParams]);
 
   // Collect all user IDs (participants + authors)

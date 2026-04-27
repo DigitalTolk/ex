@@ -45,7 +45,15 @@ services:
       start_period: 10s
 
   app:
-    build: .
+    build:
+      context: .
+      args:
+        # VERSION must be a unique-per-deploy identifier (git sha or
+        # release tag) so the upgrade banner fires on tabs left open
+        # across rebuilds. The Makefile sets this from `git rev-parse
+        # --short HEAD` before `docker compose up`; CI should set it
+        # explicitly. Defaults to "dev" — banner stays silent.
+        VERSION: ${VERSION:-dev}
     ports:
       - "8080:8080"
     restart: on-failure

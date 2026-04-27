@@ -92,7 +92,7 @@ function renderCard(summary: ThreadSummary) {
         <ThreadCard
           summary={summary}
           title="#general"
-          deepLink="/channel/general?thread=msg-root"
+          deepLink="/channel/general?thread=msg-root#msg-msg-root"
           currentUserId="u-me"
         />
       </MemoryRouter>
@@ -124,7 +124,7 @@ describe('ThreadCard', () => {
     renderCard(makeSummary());
     const link = await screen.findByTestId('thread-card-title');
     expect(link.tagName).toBe('A');
-    expect(link.getAttribute('href')).toBe('/channel/general?thread=msg-root');
+    expect(link.getAttribute('href')).toBe('/channel/general?thread=msg-root#msg-msg-root');
     expect(link.textContent).toBe('#general');
   });
 
@@ -316,7 +316,7 @@ describe('threadDeepLink', () => {
       { parentID: 'ch-1', parentType: 'channel', threadRootID: 'r1' } as ThreadSummary,
       'general',
     );
-    expect(url).toBe('/channel/general?thread=r1');
+    expect(url).toBe('/channel/general?thread=r1#msg-r1');
   });
 
   it('falls back to the channel id when the slug is unknown', () => {
@@ -324,7 +324,7 @@ describe('threadDeepLink', () => {
       { parentID: 'ch-X', parentType: 'channel', threadRootID: 'r1' } as ThreadSummary,
       '',
     );
-    expect(url).toBe('/channel/ch-X?thread=r1');
+    expect(url).toBe('/channel/ch-X?thread=r1#msg-r1');
   });
 
   it('builds an id-based URL for conversation threads', () => {
@@ -332,6 +332,19 @@ describe('threadDeepLink', () => {
       { parentID: 'conv-1', parentType: 'conversation', threadRootID: 'r1' } as ThreadSummary,
       '',
     );
-    expect(url).toBe('/conversation/conv-1?thread=r1');
+    expect(url).toBe('/conversation/conv-1?thread=r1#msg-r1');
+  });
+
+  it('includes a #msg-<rootID> fragment so the message highlights AND the thread panel opens', () => {
+    // Regression: the `?thread=...` query alone opens the panel but
+    // doesn't scroll/flash the root in the message list. Both signals
+    // must travel together so clicking a thread title feels like a
+    // proper "jump to thread".
+    const url = threadDeepLink(
+      { parentID: 'ch-1', parentType: 'channel', threadRootID: 'rootABC' } as ThreadSummary,
+      'general',
+    );
+    expect(url).toMatch(/\?thread=rootABC/);
+    expect(url).toMatch(/#msg-rootABC$/);
   });
 });
