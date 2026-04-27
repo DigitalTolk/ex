@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 
 	"github.com/DigitalTolk/ex/internal/model"
@@ -39,6 +41,34 @@ func TestChannelService_Create_GuestRejected(t *testing.T) {
 	users.users["g-1"] = &model.User{ID: "g-1", SystemRole: model.SystemRoleGuest}
 	if _, err := svc.Create(context.Background(), "g-1", "secret", model.ChannelTypePublic, ""); err == nil {
 		t.Fatal("expected guest-create rejection")
+	}
+}
+
+func TestChannelService_Create_RejectsInvalidName(t *testing.T) {
+	svc, _, _, users, _, _ := setupChannelServiceWithUsers()
+	users.users["m-1"] = &model.User{ID: "m-1", SystemRole: model.SystemRoleMember}
+	for _, name := range []string{"Has Space", "WithCaps", "weird!", "-leading"} {
+		if _, err := svc.Create(context.Background(), "m-1", name, model.ChannelTypePublic, ""); !errors.Is(err, ErrChannelNameInvalid) {
+			t.Errorf("name %q: got %v, want ErrChannelNameInvalid", name, err)
+		}
+	}
+}
+
+func TestChannelService_Create_RejectsOverLongName(t *testing.T) {
+	svc, _, _, users, _, _ := setupChannelServiceWithUsers()
+	users.users["m-1"] = &model.User{ID: "m-1", SystemRole: model.SystemRoleMember}
+	long := strings.Repeat("a", MaxChannelNameLen+1)
+	if _, err := svc.Create(context.Background(), "m-1", long, model.ChannelTypePublic, ""); !errors.Is(err, ErrChannelNameTooLong) {
+		t.Errorf("got %v, want ErrChannelNameTooLong", err)
+	}
+}
+
+func TestChannelService_Create_RejectsOverLongDescription(t *testing.T) {
+	svc, _, _, users, _, _ := setupChannelServiceWithUsers()
+	users.users["m-1"] = &model.User{ID: "m-1", SystemRole: model.SystemRoleMember}
+	desc := strings.Repeat("a", MaxChannelDescriptionLen+1)
+	if _, err := svc.Create(context.Background(), "m-1", "team", model.ChannelTypePublic, desc); !errors.Is(err, ErrChannelDescriptionTooLong) {
+		t.Errorf("got %v, want ErrChannelDescriptionTooLong", err)
 	}
 }
 

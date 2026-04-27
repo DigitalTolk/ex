@@ -129,6 +129,18 @@ func (m *mockTokenStore) DeleteRefreshToken(_ context.Context, hash string) erro
 	return nil
 }
 
+func (m *mockTokenStore) DeleteAllRefreshTokensForUser(_ context.Context, userID string) error {
+	if m.deleteErr != nil {
+		return m.deleteErr
+	}
+	for hash, rt := range m.tokens {
+		if rt.UserID == userID {
+			delete(m.tokens, hash)
+		}
+	}
+	return nil
+}
+
 // --- Mock InviteStore ---
 
 type mockInviteStore struct {

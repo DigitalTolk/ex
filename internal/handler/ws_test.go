@@ -122,3 +122,127 @@ func TestWSHandler_Connect_FullFlow(t *testing.T) {
 
 	_ = conn.Close(websocket.StatusNormalClosure, "")
 }
+
+// Connecting clients should receive a "server.version" frame on connect
+// when SetVersion has been called — that's how the frontend learns the
+// running build without polling /api/v1/version once a minute per user.
+func TestWSHandler_Connect_SendsServerVersionOnHandshake(t *testing.T) {
+	mr := miniredis.RunT(t)
+	ps, err := pubsub.NewRedisPubSub("redis://" + mr.Addr())
+	if err != nil {
+		t.Fatalf("pubsub: %v", err)
+	}
+	broker := pubsub.NewBroker(ps)
+	t.Cleanup(func() { _ = broker.Close() })
+
+	channels := newDataChannelStore()
+	memberships := newDataMembershipStore()
+	convs := newDataConversationStore()
+	users := newDataUserStoreForConv()
+	bAdapter := NewBrokerAdapter(broker)
+	chanSvc := service.NewChannelService(channels, memberships, users, nil, nil, bAdapter, nil)
+	convSvc := service.NewConversationService(convs, users, nil, bAdapter, nil)
+	presenceSvc := service.NewPresenceService(nil, nil)
+
+	h := NewWSHandler(broker, chanSvc, convSvc, presenceSvc)
+	h.SetVersion("v1.2.3")
+
+	jwtMgr := auth.NewJWTManager("ws-version-secret", 15*time.Minute, 720*time.Hour)
+	user := &model.User{ID: "u-vws", Email: "v@test.com", SystemRole: model.SystemRoleMember}
+	token := makeTokenForUser(jwtMgr, user)
+
+	srv := httptest.NewServer(middleware.Auth(jwtMgr)(http.HandlerFunc(h.Connect)))
+	defer srv.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/?token=" + token
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	conn, _, err := websocket.Dial(ctx, wsURL, nil)
+	if err != nil {
+		t.Fatalf("ws dial: %v", err)
+	}
+	defer func() { _ = conn.Close(websocket.StatusNormalClosure, "") }()
+
+	// First frame must be the server.version handshake — read with a
+	// short loop in case ping ordering ever changes; but the version
+	// frame is always written before the read loop starts, so it should
+	// arrive first deterministically.
+	_, data, err := conn.Read(ctx)
+	if err != nil {
+		t.Fatalf("ws read: %v", err)
+	}
+	var evt struct {
+		Type string          `json:"type"`
+		Data json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal(data, &evt); err != nil {
+		t.Fatalf("decode: %v (%q)", err, data)
+	}
+	if evt.Type != "server.version" {
+		t.Fatalf("first event type = %q, want server.version (data=%q)", evt.Type, data)
+	}
+	var payload struct {
+		Version string `json:"version"`
+	}
+	if err := json.Unmarshal(evt.Data, &payload); err != nil {
+		t.Fatalf("decode payload: %v", err)
+	}
+	if payload.Version != "v1.2.3" {
+		t.Errorf("version = %q, want v1.2.3", payload.Version)
+	}
+}
+
+// When SetVersion is not called, the WS handshake skips the version
+// frame so a stripped/unset build doesn't ship a misleading "version=''".
+// First frame should be the ping.
+func TestWSHandler_Connect_OmitsServerVersionWhenUnset(t *testing.T) {
+	mr := miniredis.RunT(t)
+	ps, err := pubsub.NewRedisPubSub("redis://" + mr.Addr())
+	if err != nil {
+		t.Fatalf("pubsub: %v", err)
+	}
+	broker := pubsub.NewBroker(ps)
+	t.Cleanup(func() { _ = broker.Close() })
+
+	channels := newDataChannelStore()
+	memberships := newDataMembershipStore()
+	convs := newDataConversationStore()
+	users := newDataUserStoreForConv()
+	bAdapter := NewBrokerAdapter(broker)
+	chanSvc := service.NewChannelService(channels, memberships, users, nil, nil, bAdapter, nil)
+	convSvc := service.NewConversationService(convs, users, nil, bAdapter, nil)
+	presenceSvc := service.NewPresenceService(nil, nil)
+	h := NewWSHandler(broker, chanSvc, convSvc, presenceSvc) // no SetVersion call
+
+	jwtMgr := auth.NewJWTManager("ws-noversion-secret", 15*time.Minute, 720*time.Hour)
+	user := &model.User{ID: "u-nv", Email: "nv@test.com", SystemRole: model.SystemRoleMember}
+	token := makeTokenForUser(jwtMgr, user)
+
+	srv := httptest.NewServer(middleware.Auth(jwtMgr)(http.HandlerFunc(h.Connect)))
+	defer srv.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/?token=" + token
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	conn, _, err := websocket.Dial(ctx, wsURL, nil)
+	if err != nil {
+		t.Fatalf("ws dial: %v", err)
+	}
+	defer func() { _ = conn.Close(websocket.StatusNormalClosure, "") }()
+
+	_, data, err := conn.Read(ctx)
+	if err != nil {
+		t.Fatalf("ws read: %v", err)
+	}
+	var evt struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(data, &evt); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if evt.Type != "ping" {
+		t.Errorf("first event type = %q, want ping (no version frame)", evt.Type)
+	}
+}

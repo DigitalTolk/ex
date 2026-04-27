@@ -6,6 +6,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
+import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -30,6 +31,7 @@ export function EmojiManagerDialog({ open, onOpenChange }: Props) {
   const [file, setFile] = useState<File | null>(null);
   const [previewURL, setPreviewURL] = useState<string | null>(null);
   const [error, setError] = useState('');
+  const [emojiToDelete, setEmojiToDelete] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
   function reset() {
@@ -73,8 +75,7 @@ export function EmojiManagerDialog({ open, onOpenChange }: Props) {
     }
   }
 
-  async function handleDelete(n: string) {
-    if (!window.confirm(`Delete :${n}:?`)) return;
+  async function performDelete(n: string) {
     try {
       await remove.mutateAsync(n);
     } catch (err) {
@@ -207,7 +208,7 @@ export function EmojiManagerDialog({ open, onOpenChange }: Props) {
                     {canDelete(e.createdBy) && (
                       <button
                         type="button"
-                        onClick={() => handleDelete(e.name)}
+                        onClick={() => setEmojiToDelete(e.name)}
                         aria-label={`Delete :${e.name}:`}
                         className="text-muted-foreground hover:text-destructive"
                       >
@@ -226,6 +227,20 @@ export function EmojiManagerDialog({ open, onOpenChange }: Props) {
           </section>
         </div>
       </DialogContent>
+      <ConfirmDialog
+        open={emojiToDelete !== null}
+        onOpenChange={(o) => {
+          if (!o) setEmojiToDelete(null);
+        }}
+        title="Delete emoji?"
+        description={emojiToDelete ? `:${emojiToDelete}: will no longer be available.` : undefined}
+        confirmLabel="Delete emoji"
+        destructive
+        onConfirm={() => {
+          if (emojiToDelete) void performDelete(emojiToDelete);
+        }}
+        testIDPrefix="delete-emoji"
+      />
     </Dialog>
   );
 }

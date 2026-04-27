@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { PageContainer } from '@/components/layout/PageContainer';
 import { useAuth } from '@/context/AuthContext';
 import { useUpdateWorkspaceSettings, useWorkspaceSettings } from '@/hooks/useSettings';
 import { isAdmin } from '@/lib/roles';
@@ -57,15 +58,10 @@ export default function AdminPage() {
   }
 
   return (
-    <div className="flex-1 overflow-y-auto">
-      <div className="p-6 space-y-6">
-        <div>
-          <h1 className="text-xl font-bold">Workspace settings</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Limits and policies that apply to every member.
-          </p>
-        </div>
-
+    <PageContainer
+      title="Workspace settings"
+      description="Limits and policies that apply to every member."
+    >
         <section className="space-y-4 rounded-lg border bg-card p-5">
           <div>
             <h2 className="text-base font-semibold">Attachment uploads</h2>
@@ -119,7 +115,6 @@ export default function AdminPage() {
             )}
           </div>
         </section>
-      </div>
-    </div>
+    </PageContainer>
   );
 }

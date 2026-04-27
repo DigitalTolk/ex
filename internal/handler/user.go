@@ -37,6 +37,15 @@ func (h *UserHandler) GetMe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A deactivated user must not be able to act on the API. The JWT itself
+	// is still cryptographically valid until expiry, so the handler is the
+	// gate that turns it into a 401 — combined with refresh-token wipe in
+	// SetStatus, this ends the session immediately.
+	if user.Status == "deactivated" {
+		writeError(w, http.StatusUnauthorized, "deactivated", "account has been deactivated")
+		return
+	}
+
 	writeJSON(w, http.StatusOK, user)
 }
 

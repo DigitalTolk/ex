@@ -108,7 +108,7 @@ export function MentionAutocomplete({ query, anchorRect, onPick, onDismiss }: Pr
       role="listbox"
       aria-label="Mention suggestions"
       style={style}
-      className="w-72 rounded-md border bg-popover p-1 shadow-lg"
+      className="w-[28rem] max-w-[90vw] rounded-md border bg-popover p-1 shadow-lg"
     >
       {items.map((it, i) => {
         const isActive = i === active;
@@ -135,12 +135,16 @@ export function MentionAutocomplete({ query, anchorRect, onPick, onDismiss }: Pr
             }}
             onMouseEnter={() => setActive(i)}
             className={
-              'flex w-full items-center justify-between gap-2 rounded px-2 py-1.5 text-left text-sm ' +
+              'flex w-full items-center gap-2 whitespace-nowrap rounded px-2 py-1.5 text-left text-sm ' +
               (isActive ? 'bg-muted' : 'hover:bg-muted/50')
             }
           >
-            <span className="font-medium">{label}</span>
-            {sub && <span className="ml-auto truncate text-xs text-muted-foreground">{sub}</span>}
+            <span className="truncate font-medium">{label}</span>
+            {sub && (
+              <span className="ml-auto shrink-0 truncate text-xs text-muted-foreground">
+                {sub}
+              </span>
+            )}
           </button>
         );
       })}

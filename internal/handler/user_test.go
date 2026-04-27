@@ -65,6 +65,37 @@ func TestGetMe(t *testing.T) {
 	}
 }
 
+// A deactivated user must be locked out at /users/me so AuthContext on the
+// frontend gets a 401 → falls back to /login. The JWT itself is still
+// cryptographically valid (we don't have a JWT denylist), so the handler
+// is the gate that enforces this immediately.
+func TestGetMe_DeactivatedUserReturns401(t *testing.T) {
+	h, userStore, jwtMgr := setupUserHandler(t)
+
+	user := &model.User{
+		ID:           "me-deact",
+		Email:        "d@x.com",
+		DisplayName:  "Deact",
+		SystemRole:   model.SystemRoleGuest,
+		AuthProvider: model.AuthProviderGuest,
+		Status:       "deactivated",
+	}
+	userStore.users[user.ID] = user
+	userStore.emailIndex[user.Email] = user
+
+	token := makeTokenForUser(jwtMgr, user)
+	handler := middleware.Auth(jwtMgr)(http.HandlerFunc(h.GetMe))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/users/me", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want %d; body: %s", rec.Code, http.StatusUnauthorized, rec.Body.String())
+	}
+}
+
 func TestGetMe_Unauthenticated(t *testing.T) {
 	h, _, _ := setupUserHandler(t)
 

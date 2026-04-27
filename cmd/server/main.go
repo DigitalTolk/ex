@@ -123,6 +123,7 @@ func main() {
 		avatarSigner = s3Client
 	}
 	userSvc := service.NewUserService(userStore, redisCache, avatarSigner, redisPubSub)
+	userSvc.SetTokenStore(tokenStore)
 	channelSvc := service.NewChannelService(channelStore, membershipStore, userStore, messageStore, redisCache, brokerAdapter, redisPubSub)
 	authSvc.SetChannelJoiner(channelSvc)
 	convSvc := service.NewConversationService(conversationStore, userStore, redisCache, brokerAdapter, redisPubSub)
@@ -149,6 +150,7 @@ func main() {
 	convH := handler.NewConversationHandler(convSvc, messageSvc)
 	wsH := handler.NewWSHandler(broker, channelSvc, convSvc, presenceSvc)
 	wsH.SetPublisher(redisPubSub)
+	wsH.SetVersion(Version)
 	uploadH := handler.NewUploadHandler(s3Client)
 	emojiH := handler.NewEmojiHandler(emojiSvc)
 	presenceH := handler.NewPresenceHandler(presenceSvc)

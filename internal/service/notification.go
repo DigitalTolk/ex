@@ -317,8 +317,12 @@ func titleFor(kind NotificationKind, parentType, parentName, authorName string) 
 
 // previewBody clamps a message body to a sane length for a notification
 // preview and strips newlines so the OS-level popup renders on one line.
+// Mentions in their wire form `@[userID|DisplayName]` are flattened to
+// `@DisplayName` so the popup reads "Alice mentioned: hi @Bob" rather
+// than "hi @[U-2|Bob]".
 func previewBody(body string) string {
 	const max = 140
+	body = userMentionPattern.ReplaceAllString(body, "@$2")
 	body = strings.ReplaceAll(body, "\n", " ")
 	if len(body) > max {
 		return body[:max-1] + "…"

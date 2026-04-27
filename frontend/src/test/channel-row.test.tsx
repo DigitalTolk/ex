@@ -8,7 +8,6 @@ import type { UserChannel, SidebarCategory } from '@/types';
 
 const favoriteMutate = vi.fn();
 const setCategoryMutate = vi.fn();
-const createCategoryMutate = vi.fn();
 
 let categoriesData: SidebarCategory[] = [];
 
@@ -16,7 +15,6 @@ vi.mock('@/hooks/useSidebar', () => ({
   useFavoriteChannel: () => ({ mutate: favoriteMutate }),
   useSetCategory: () => ({ mutate: setCategoryMutate }),
   useCategories: () => ({ data: categoriesData }),
-  useCreateCategory: () => ({ mutate: createCategoryMutate }),
 }));
 
 // Render dropdown contents inline so we can interact with menu items.
@@ -78,7 +76,6 @@ describe('ChannelRow', () => {
   beforeEach(() => {
     favoriteMutate.mockReset();
     setCategoryMutate.mockReset();
-    createCategoryMutate.mockReset();
     categoriesData = [];
   });
 
@@ -106,12 +103,32 @@ describe('ChannelRow', () => {
     expect(screen.getByLabelText('Muted')).toBeInTheDocument();
   });
 
-  it('"Move to Other" calls setCategory with empty categoryID', () => {
+  it('"Move to Channels" calls setCategory with empty categoryID', () => {
+    // The default uncategorised section is "Channels" — the menu copy
+    // matches the section title so the action reads as "put it back where
+    // an unassigned channel naturally belongs".
+    renderRow(makeChannel({ channelID: 'ch-1', categoryID: 'cat-A' }));
+    const items = screen.getAllByTestId('dropdown-item');
+    const moveBack = items.find((b) => b.textContent === 'Move to Channels');
+    fireEvent.click(moveBack!);
+    expect(setCategoryMutate).toHaveBeenCalledWith({ channelID: 'ch-1', categoryID: '' });
+  });
+
+  it('disables "Move to Channels" when channel is already in the default section', () => {
+    // No-op moves are pointless — disable the entry so the user knows
+    // they're already there, rather than firing a redundant API call.
     renderRow(makeChannel({ channelID: 'ch-1' }));
     const items = screen.getAllByTestId('dropdown-item');
-    const moveToOther = items.find((b) => b.textContent === 'Move to Other');
-    fireEvent.click(moveToOther!);
-    expect(setCategoryMutate).toHaveBeenCalledWith({ channelID: 'ch-1', categoryID: '' });
+    const moveBack = items.find((b) => b.textContent === 'Move to Channels') as HTMLButtonElement;
+    expect(moveBack.disabled).toBe(true);
+  });
+
+  it('does not offer a "New category" option in the row menu', () => {
+    // Creating a new category lives in the sidebar header now; the row
+    // menu only moves between existing buckets.
+    renderRow(makeChannel({ channelID: 'ch-1' }));
+    const items = screen.getAllByTestId('dropdown-item');
+    expect(items.find((b) => b.textContent?.includes('New category'))).toBeUndefined();
   });
 
   it('"Move to <category>" calls setCategory with the category id', () => {
@@ -135,62 +152,4 @@ describe('ChannelRow', () => {
     expect(moveToAlpha.disabled).toBe(true);
   });
 
-  it('"+ New category…" reveals an input', () => {
-    renderRow(makeChannel({ channelID: 'ch-1' }));
-    expect(screen.queryByTestId('new-category-input')).not.toBeInTheDocument();
-
-    const items = screen.getAllByTestId('dropdown-item');
-    const addNew = items.find((b) => b.textContent?.includes('New category'));
-    fireEvent.click(addNew!);
-
-    expect(screen.getByTestId('new-category-input')).toBeInTheDocument();
-  });
-
-  it('Enter on the new-category input creates the category and assigns the channel', () => {
-    renderRow(makeChannel({ channelID: 'ch-1' }));
-    const items = screen.getAllByTestId('dropdown-item');
-    const addNew = items.find((b) => b.textContent?.includes('New category'));
-    fireEvent.click(addNew!);
-
-    const input = screen.getByTestId('new-category-input') as HTMLInputElement;
-    fireEvent.change(input, { target: { value: 'Side projects' } });
-    fireEvent.keyDown(input, { key: 'Enter' });
-
-    expect(createCategoryMutate).toHaveBeenCalledTimes(1);
-    expect(createCategoryMutate.mock.calls[0][0]).toBe('Side projects');
-
-    // Drive the optimistic onSuccess to verify the channel is then assigned.
-    const opts = createCategoryMutate.mock.calls[0][1] as {
-      onSuccess: (cat: SidebarCategory) => void;
-    };
-    opts.onSuccess({ id: 'cat-new', name: 'Side projects', position: 0 });
-    expect(setCategoryMutate).toHaveBeenCalledWith({ channelID: 'ch-1', categoryID: 'cat-new' });
-  });
-
-  it('does nothing when the new-category name is blank', () => {
-    renderRow(makeChannel({ channelID: 'ch-1' }));
-    const items = screen.getAllByTestId('dropdown-item');
-    const addNew = items.find((b) => b.textContent?.includes('New category'));
-    fireEvent.click(addNew!);
-
-    const input = screen.getByTestId('new-category-input') as HTMLInputElement;
-    fireEvent.change(input, { target: { value: '   ' } });
-    fireEvent.keyDown(input, { key: 'Enter' });
-
-    expect(createCategoryMutate).not.toHaveBeenCalled();
-    expect(setCategoryMutate).not.toHaveBeenCalled();
-  });
-
-  it('Escape on the new-category input cancels and hides it', () => {
-    renderRow(makeChannel({ channelID: 'ch-1' }));
-    const items = screen.getAllByTestId('dropdown-item');
-    const addNew = items.find((b) => b.textContent?.includes('New category'));
-    fireEvent.click(addNew!);
-
-    const input = screen.getByTestId('new-category-input') as HTMLInputElement;
-    fireEvent.keyDown(input, { key: 'Escape' });
-
-    expect(screen.queryByTestId('new-category-input')).not.toBeInTheDocument();
-    expect(createCategoryMutate).not.toHaveBeenCalled();
-  });
 });

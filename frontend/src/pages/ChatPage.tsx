@@ -8,14 +8,15 @@ import { usePresence } from '@/context/PresenceContext';
 import { useNotifications, type NotificationPayload } from '@/context/NotificationContext';
 import { useTyping } from '@/context/TypingContext';
 import { useWebSocket } from '@/hooks/useWebSocket';
+import { setServerVersion } from '@/hooks/useServerVersion';
 import { slugify } from '@/lib/format';
 
 export default function ChatPage() {
   const { markChannelUnread, markConversationUnread, unhideConversation } = useUnread();
-  const { user } = useAuth();
+  const { user, logout } = useAuth();
   const { setUserOnline } = usePresence();
   const { dispatch: dispatchNotification, setCurrentUserID } = useNotifications();
-  const { recordTyping, setSelfUserID } = useTyping();
+  const { recordTyping, clearTyping, setSelfUserID } = useTyping();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
 
@@ -35,6 +36,10 @@ export default function ChatPage() {
       const parentMessageID = msg?.parentMessageID as string | undefined;
       const authorID = msg?.authorID as string | undefined;
       if (!parentID) return;
+      // The author has finished typing the moment their message lands;
+      // drop them from the indicator immediately rather than waiting
+      // up to 6s for the expiry to tick.
+      if (authorID) clearTyping(parentID, authorID);
       // Only mark as unread if the message is from someone else
       if (authorID !== user?.id) {
         markChannelUnread(parentID);
@@ -156,6 +161,10 @@ export default function ChatPage() {
       queryClient.invalidateQueries({ queryKey: ['channelMembers'] });
       queryClient.invalidateQueries({ queryKey: ['userChannels'] });
       queryClient.invalidateQueries({ queryKey: ['userConversations'] });
+      // The Directory page's Members tab fetches users into local
+      // useState (not React Query), so cache invalidation isn't enough
+      // — broadcast a DOM event the page listens to and refetches on.
+      window.dispatchEvent(new CustomEvent('ex:user-updated'));
     },
     onAttachmentDeleted: (data: unknown) => {
       const evt = data as { id?: string } | undefined;
@@ -171,6 +180,17 @@ export default function ChatPage() {
       const n = data as NotificationPayload | undefined;
       if (!n || !n.kind) return;
       dispatchNotification(n);
+    },
+    onServerVersion: (data: unknown) => {
+      const v = (data as { version?: string } | undefined)?.version;
+      if (v) setServerVersion(v);
+    },
+    onForceLogout: () => {
+      // Server tells us this session must end (admin disabled the account
+      // mid-session). Wipe local auth state and bounce to /login so the
+      // user sees the same screen they'd hit after a normal logout —
+      // refresh tokens were already wiped server-side.
+      void logout().finally(() => navigate('/login', { replace: true }));
     },
     onTyping: (data: unknown) => {
       const evt = data as { userID?: string; parentID?: string } | undefined;

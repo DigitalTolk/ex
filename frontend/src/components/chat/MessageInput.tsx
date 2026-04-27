@@ -20,6 +20,11 @@ import { uploadAttachment, useDeleteDraftAttachment } from '@/hooks/useAttachmen
 import { isImageContentType } from '@/lib/file-helpers';
 import { WysiwygEditor, type WysiwygEditorHandle } from '@/components/chat/WysiwygEditor';
 import { sendWS } from '@/lib/ws-sender';
+import {
+  MAX_ATTACHMENTS_PER_MESSAGE,
+  MAX_MESSAGE_BODY_CHARS,
+  countCodepoints,
+} from '@/lib/limits';
 
 const TYPING_PING_INTERVAL_MS = 3000;
 
@@ -85,7 +90,19 @@ export function MessageInput({
     sendWS({ type: 'typing', parentID: typingParentID, parentType: typingParentType });
   }, [typingParentID, typingParentType]);
 
-  const canSend = (body.trim() !== '' || drafts.length > 0) && !disabled && !isUploading;
+  // Codepoint cap mirrors the backend rule: the user pastes "🚀🚀🚀…",
+  // each emoji is one user-visible char, and we count it as one — not
+  // as four bytes or two UTF-16 units.
+  const bodyCodepoints = countCodepoints(body);
+  const bodyOverLimit = bodyCodepoints > MAX_MESSAGE_BODY_CHARS;
+  const attachmentsOverLimit = drafts.length > MAX_ATTACHMENTS_PER_MESSAGE;
+
+  const canSend =
+    (body.trim() !== '' || drafts.length > 0) &&
+    !disabled &&
+    !isUploading &&
+    !bodyOverLimit &&
+    !attachmentsOverLimit;
 
   const handleSend = useCallback(() => {
     if (!canSend) return;
@@ -115,10 +132,24 @@ export function MessageInput({
   }
 
   async function handleFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
-    const files = Array.from(e.target.files ?? []);
+    const allFiles = Array.from(e.target.files ?? []);
     e.target.value = '';
+    if (allFiles.length === 0) return;
+    // Trim to the per-message cap before uploading. Surface a friendly
+    // warning if the user tried to attach more — better UX than letting
+    // the upload finish and then 400-ing on send.
+    const remaining = Math.max(0, MAX_ATTACHMENTS_PER_MESSAGE - drafts.length);
+    const files = allFiles.slice(0, remaining);
+    if (allFiles.length > remaining) {
+      setUploadError(
+        `Up to ${MAX_ATTACHMENTS_PER_MESSAGE} attachments per message. Skipped ${
+          allFiles.length - remaining
+        }.`,
+      );
+    } else {
+      setUploadError('');
+    }
     if (files.length === 0) return;
-    setUploadError('');
     setIsUploading(true);
     try {
       await Promise.all(
@@ -176,6 +207,24 @@ export function MessageInput({
       {uploadError && (
         <div className="mb-2 rounded-md bg-destructive/10 p-2 text-xs text-destructive" role="alert">
           {uploadError}
+        </div>
+      )}
+      {bodyOverLimit && (
+        <div
+          className="mb-2 rounded-md bg-destructive/10 p-2 text-xs text-destructive"
+          role="alert"
+          data-testid="message-body-too-long"
+        >
+          Message is {bodyCodepoints}/{MAX_MESSAGE_BODY_CHARS} characters. Trim it down to send.
+        </div>
+      )}
+      {attachmentsOverLimit && (
+        <div
+          className="mb-2 rounded-md bg-destructive/10 p-2 text-xs text-destructive"
+          role="alert"
+          data-testid="message-attachments-too-many"
+        >
+          Up to {MAX_ATTACHMENTS_PER_MESSAGE} attachments per message — remove a few to send.
         </div>
       )}
       <div className="rounded-lg border bg-muted/40 dark:bg-input/30 focus-within:ring-1 focus-within:ring-ring">

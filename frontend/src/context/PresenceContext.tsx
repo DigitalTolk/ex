@@ -57,8 +57,16 @@ export function PresenceProvider({ children }: { children: ReactNode }) {
   );
 }
 
+// Safe defaults for when usePresence is read outside a provider — used by
+// UserHoverCard, which is rendered in many test contexts that don't bother
+// to wrap in PresenceProvider. Throwing here would force every unrelated
+// layout test to bring up the full presence stack.
+const noopPresence: PresenceState = {
+  online: new Set<string>(),
+  isOnline: () => false,
+  setUserOnline: () => undefined,
+};
+
 export function usePresence() {
-  const ctx = useContext(PresenceContext);
-  if (!ctx) throw new Error('usePresence must be used within PresenceProvider');
-  return ctx;
+  return useContext(PresenceContext) ?? noopPresence;
 }

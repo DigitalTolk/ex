@@ -200,19 +200,21 @@ export function ConversationView() {
           onPinnedClick={togglePinned}
           pinnedActive={showPinned}
         />
-        <MessageList
-          pages={data?.pages ?? []}
-          hasNextPage={hasNextPage}
-          isFetchingNextPage={isFetchingNextPage}
-          isLoading={isLoading}
-          fetchNextPage={fetchNextPage}
-          currentUserId={user?.id}
-          conversationId={id}
-          userMap={userMap}
-          onReplyInThread={openThread}
-          intro={intro ?? undefined}
-        />
-        <TypingIndicator parentID={id} userMap={userMap} />
+        <div className="relative flex flex-1 flex-col min-h-0">
+          <MessageList
+            pages={data?.pages ?? []}
+            hasNextPage={hasNextPage}
+            isFetchingNextPage={isFetchingNextPage}
+            isLoading={isLoading}
+            fetchNextPage={fetchNextPage}
+            currentUserId={user?.id}
+            conversationId={id}
+            userMap={userMap}
+            onReplyInThread={openThread}
+            intro={intro ?? undefined}
+          />
+          <TypingIndicator parentID={id} userMap={userMap} />
+        </div>
         <MessageInput
           onSend={sendMessage.mutate}
           disabled={sendMessage.isPending}

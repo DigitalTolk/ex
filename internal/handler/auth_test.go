@@ -102,6 +102,15 @@ func (m *mockTokenStore) DeleteRefreshToken(_ context.Context, hash string) erro
 	return nil
 }
 
+func (m *mockTokenStore) DeleteAllRefreshTokensForUser(_ context.Context, userID string) error {
+	for h, rt := range m.tokens {
+		if rt.UserID == userID {
+			delete(m.tokens, h)
+		}
+	}
+	return nil
+}
+
 type mockInviteStore struct{}
 
 func (m *mockInviteStore) CreateInvite(_ context.Context, _ *model.Invite) error { return nil }

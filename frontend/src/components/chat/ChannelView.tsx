@@ -188,27 +188,29 @@ export function ChannelView() {
           onPinnedClick={togglePinned}
           pinnedActive={showPinned}
         />
-        <MessageList
-          pages={data?.pages ?? []}
-          hasNextPage={hasNextPage}
-          isFetchingNextPage={isFetchingNextPage}
-          isLoading={isLoading}
-          fetchNextPage={fetchNextPage}
-          currentUserId={user?.id}
-          channelId={channel?.id}
-          channelSlug={channel?.slug}
-          userMap={userMap}
-          onReplyInThread={openThread}
-          intro={
-            channel ? (
-              <ChannelIntro
-                channel={channel}
-                creatorName={userMap[channel.createdBy]?.displayName}
-              />
-            ) : undefined
-          }
-        />
-        <TypingIndicator parentID={channel?.id} userMap={userMap} />
+        <div className="relative flex flex-1 flex-col min-h-0">
+          <MessageList
+            pages={data?.pages ?? []}
+            hasNextPage={hasNextPage}
+            isFetchingNextPage={isFetchingNextPage}
+            isLoading={isLoading}
+            fetchNextPage={fetchNextPage}
+            currentUserId={user?.id}
+            channelId={channel?.id}
+            channelSlug={channel?.slug}
+            userMap={userMap}
+            onReplyInThread={openThread}
+            intro={
+              channel ? (
+                <ChannelIntro
+                  channel={channel}
+                  creatorName={userMap[channel.createdBy]?.displayName}
+                />
+              ) : undefined
+            }
+          />
+          <TypingIndicator parentID={channel?.id} userMap={userMap} />
+        </div>
         <MessageInput
           onSend={sendMessage.mutate}
           disabled={sendMessage.isPending}

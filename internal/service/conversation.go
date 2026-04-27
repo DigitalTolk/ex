@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/DigitalTolk/ex/internal/events"
@@ -128,23 +130,53 @@ func (s *ConversationService) GetOrCreateDM(ctx context.Context, userA, userB st
 	return conv, nil
 }
 
-// CreateGroup creates a new group conversation with the given participants.
-// A group requires the creator plus at least one other unique participant.
-func (s *ConversationService) CreateGroup(ctx context.Context, creatorID string, participantIDs []string, name string) (*model.Conversation, error) {
-	seen := make(map[string]bool, len(participantIDs)+1)
-	deduped := make([]string, 0, len(participantIDs)+1)
-	for _, id := range participantIDs {
+// normalizeParticipantSet dedupes the supplied participant IDs (dropping
+// empties), guarantees the creator appears in the result, and preserves
+// caller-supplied order with the creator appended last when they weren't
+// already in the input. Shared by CreateGroup and GetOrCreateGroup so
+// both paths agree on the canonical set.
+func normalizeParticipantSet(creatorID string, ids []string) []string {
+	seen := make(map[string]bool, len(ids)+1)
+	out := make([]string, 0, len(ids)+1)
+	for _, id := range ids {
 		if id == "" || seen[id] {
 			continue
 		}
 		seen[id] = true
-		deduped = append(deduped, id)
+		out = append(out, id)
 	}
 	if !seen[creatorID] {
-		seen[creatorID] = true
-		deduped = append(deduped, creatorID)
+		out = append(out, creatorID)
 	}
-	participantIDs = deduped
+	return out
+}
+
+// GetOrCreateGroup returns an existing group whose participant set is the
+// same constellation (creator + the supplied others), or creates a new
+// one if none matches. Re-messaging the same set of people forwards
+// into the prior group instead of spawning duplicates. Group name is
+// ignored when matching — constellation is the identity.
+//
+// The lookup is a single GetItem keyed by a deterministic group ID
+// derived from the sorted participant set (groupConversationID), so
+// the cost is constant regardless of how many groups the creator is in.
+func (s *ConversationService) GetOrCreateGroup(ctx context.Context, creatorID string, participantIDs []string, name string) (*model.Conversation, error) {
+	canonical := normalizeParticipantSet(creatorID, participantIDs)
+	id := groupConversationID(canonical)
+
+	if conv, err := s.conversations.GetConversation(ctx, id); err == nil && conv != nil {
+		return conv, nil
+	} else if err != nil && !errors.Is(err, store.ErrNotFound) {
+		return nil, fmt.Errorf("conversation: get group: %w", err)
+	}
+
+	return s.CreateGroup(ctx, creatorID, participantIDs, name)
+}
+
+// CreateGroup creates a new group conversation with the given participants.
+// A group requires the creator plus at least one other unique participant.
+func (s *ConversationService) CreateGroup(ctx context.Context, creatorID string, participantIDs []string, name string) (*model.Conversation, error) {
+	participantIDs = normalizeParticipantSet(creatorID, participantIDs)
 
 	otherCount := 0
 	for _, id := range participantIDs {
@@ -156,24 +188,20 @@ func (s *ConversationService) CreateGroup(ctx context.Context, creatorID string,
 		return nil, errors.New("conversation: group requires at least 1 other participant")
 	}
 
-	// Single pass: validate participants exist AND collect display names so we
-	// can derive a per-recipient label when the user didn't supply a name.
-	participantNames := make(map[string]string, len(participantIDs))
-	for _, id := range participantIDs {
-		u, err := s.users.GetUser(ctx, id)
-		if err != nil {
-			if errors.Is(err, store.ErrNotFound) {
-				return nil, fmt.Errorf("conversation: participant %s not found", id)
-			}
-			return nil, fmt.Errorf("conversation: validate participant: %w", err)
-		}
-		if u != nil {
-			participantNames[id] = u.DisplayName
-		}
+	// Validate participants exist and collect display names in parallel
+	// so a 10-participant group doesn't sit through 10 sequential
+	// DynamoDB GetItems before the user sees their group appear.
+	participantNames, err := s.fetchParticipantNames(ctx, participantIDs)
+	if err != nil {
+		return nil, err
 	}
 
 	now := time.Now()
-	convID := store.NewID()
+	// Deterministic ID derived from the sorted participant set so two
+	// concurrent calls with the same constellation collide on the
+	// store's attribute_not_exists guard rather than spawning duplicate
+	// groups, and GetOrCreateGroup can find this row with one GetItem.
+	convID := groupConversationID(participantIDs)
 	conv := &model.Conversation{
 		ID:             convID,
 		Type:           model.ConversationTypeGroup,
@@ -213,6 +241,11 @@ func (s *ConversationService) CreateGroup(ctx context.Context, creatorID string,
 	}
 
 	if err := s.conversations.CreateConversation(ctx, conv, userConvs); err != nil {
+		// Concurrent GetOrCreateGroup calls may race here — return the
+		// existing row instead of erroring.
+		if errors.Is(err, store.ErrAlreadyExists) {
+			return s.conversations.GetConversation(ctx, convID)
+		}
 		return nil, fmt.Errorf("conversation: create group: %w", err)
 	}
 
@@ -351,4 +384,60 @@ func dmConversationID(a, b string) string {
 		a, b = b, a
 	}
 	return store.DeriveID(a + ":" + b)
+}
+
+// groupConversationID derives a deterministic group ID from its
+// participant set so two attempts to chat with the same constellation
+// land on the same conversation. participants must already be the
+// canonical set (creator included, deduped) — see normalizeParticipantSet.
+// The hash is order-independent: we sort before joining.
+func groupConversationID(participants []string) string {
+	sorted := make([]string, len(participants))
+	copy(sorted, participants)
+	sort.Strings(sorted)
+	return store.DeriveID("group:" + strings.Join(sorted, ":"))
+}
+
+// fetchParticipantNames concurrently resolves the supplied user IDs to
+// their display names. Returns ErrNotFound-wrapped errors if any
+// participant doesn't exist, mirroring the previous serial behaviour.
+func (s *ConversationService) fetchParticipantNames(ctx context.Context, ids []string) (map[string]string, error) {
+	type result struct {
+		id   string
+		name string
+		err  error
+	}
+	results := make(chan result, len(ids))
+	var wg sync.WaitGroup
+	wg.Add(len(ids))
+	for _, id := range ids {
+		go func(id string) {
+			defer wg.Done()
+			u, err := s.users.GetUser(ctx, id)
+			if err != nil {
+				if errors.Is(err, store.ErrNotFound) {
+					results <- result{id: id, err: fmt.Errorf("conversation: participant %s not found", id)}
+					return
+				}
+				results <- result{id: id, err: fmt.Errorf("conversation: validate participant: %w", err)}
+				return
+			}
+			name := ""
+			if u != nil {
+				name = u.DisplayName
+			}
+			results <- result{id: id, name: name}
+		}(id)
+	}
+	wg.Wait()
+	close(results)
+
+	out := make(map[string]string, len(ids))
+	for r := range results {
+		if r.err != nil {
+			return nil, r.err
+		}
+		out[r.id] = r.name
+	}
+	return out, nil
 }

@@ -152,45 +152,48 @@ describe('EmojiManagerDialog', () => {
     expect(screen.queryByText('x.png', { exact: false })).toBeNull();
   });
 
-  it('delete row prompts for confirmation and then removes the emoji', async () => {
+  it('delete row opens a ConfirmDialog (not window.confirm) and removes on Confirm', async () => {
     useEmojisMock.mockReturnValue({
       data: [{ name: 'parrot', imageURL: 'https://cdn/p.gif', createdBy: 'u-me' }],
     });
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const confirmSpy = vi.spyOn(window, 'confirm');
     removeMutateAsync.mockResolvedValueOnce(undefined);
 
     renderDialog();
     fireEvent.click(screen.getByLabelText('Delete :parrot:'));
+    expect(confirmSpy).not.toHaveBeenCalled();
+    expect(screen.getByTestId('delete-emoji')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('delete-emoji-confirm'));
+
     await waitFor(() => {
       expect(removeMutateAsync).toHaveBeenCalledWith('parrot');
     });
     confirmSpy.mockRestore();
   });
 
-  it('delete row aborts when confirm() is cancelled', () => {
+  it('Cancel in the delete-emoji dialog aborts without firing the mutation', () => {
     useEmojisMock.mockReturnValue({
       data: [{ name: 'parrot', imageURL: 'https://cdn/p.gif', createdBy: 'u-me' }],
     });
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
 
     renderDialog();
     fireEvent.click(screen.getByLabelText('Delete :parrot:'));
+    fireEvent.click(screen.getByTestId('delete-emoji-cancel'));
     expect(removeMutateAsync).not.toHaveBeenCalled();
-    confirmSpy.mockRestore();
+    expect(screen.queryByTestId('delete-emoji')).toBeNull();
   });
 
   it('shows delete error in the alert', async () => {
     useEmojisMock.mockReturnValue({
       data: [{ name: 'parrot', imageURL: 'https://cdn/p.gif', createdBy: 'u-me' }],
     });
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
     removeMutateAsync.mockRejectedValueOnce(new Error('forbidden'));
 
     renderDialog();
     fireEvent.click(screen.getByLabelText('Delete :parrot:'));
+    fireEvent.click(screen.getByTestId('delete-emoji-confirm'));
     await waitFor(() => {
       expect(screen.getByRole('alert')).toHaveTextContent('forbidden');
     });
-    confirmSpy.mockRestore();
   });
 });

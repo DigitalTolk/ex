@@ -24,6 +24,7 @@ type UserService struct {
 	cache     Cache
 	avatars   AvatarSigner
 	publisher Publisher
+	tokens    TokenStore // optional: when set, deactivation invalidates refresh tokens
 }
 
 // NewUserService creates a UserService with the given dependencies.
@@ -32,6 +33,10 @@ type UserService struct {
 func NewUserService(users UserStore, cache Cache, avatars AvatarSigner, publisher Publisher) *UserService {
 	return &UserService{users: users, cache: cache, avatars: avatars, publisher: publisher}
 }
+
+// SetTokenStore wires a TokenStore so deactivating a user invalidates every
+// outstanding refresh token they hold — kicking them out of any open session.
+func (s *UserService) SetTokenStore(t TokenStore) { s.tokens = t }
 
 // avatarURLTTL is how long avatar presigned URLs remain valid. Frontend
 // caches user data via React Query, so this can be short.
@@ -241,6 +246,21 @@ func (s *UserService) SetStatus(ctx context.Context, targetID string, deactivate
 		_ = s.cache.Delete(ctx, "user:"+targetID)
 	}
 	s.resolveAvatar(ctx, user)
+
+	// Deactivation must end any active session. Wipe every refresh token so
+	// the user can't silently re-acquire an access token, and broadcast a
+	// targeted force-logout to the user's personal channel so any open tab
+	// disconnects right now instead of waiting for its short-lived JWT to
+	// expire.
+	if deactivated {
+		if s.tokens != nil {
+			_ = s.tokens.DeleteAllRefreshTokensForUser(ctx, targetID)
+		}
+		events.Publish(ctx, s.publisher, pubsub.UserChannel(targetID), events.EventForceLogout, map[string]any{
+			"userID": targetID,
+			"reason": "deactivated",
+		})
+	}
 
 	events.Publish(ctx, s.publisher, pubsub.UserEvents(), events.EventUserUpdated, map[string]any{
 		"id":     user.ID,

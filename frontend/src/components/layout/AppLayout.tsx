@@ -2,7 +2,6 @@ import { useState, type ReactNode } from 'react';
 import { Sidebar } from './Sidebar';
 import { Button } from '@/components/ui/button';
 import { Menu, X } from 'lucide-react';
-import { NotificationPrompt } from '@/components/NotificationPrompt';
 
 interface AppLayoutProps {
   children: ReactNode;
@@ -50,7 +49,6 @@ export function AppLayout({ children }: AppLayoutProps) {
             )}
           </Button>
         </div>
-        <NotificationPrompt />
         {children}
       </main>
     </div>

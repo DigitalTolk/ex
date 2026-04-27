@@ -180,6 +180,35 @@ func TestNotificationService_PreviewBody_ClampsAndStripsNewlines(t *testing.T) {
 	}
 }
 
+// previewBody must flatten the wire-form mention `@[id|name]` into the
+// readable `@name` so the OS popup reads naturally. Without this, the
+// user would see "Alice mentioned: hi @[U-2|Bob]" — completely opaque.
+func TestNotificationService_PreviewBody_ResolvesUserMentions(t *testing.T) {
+	in := "hi @[U-2|Bob], can you take a look? cc @[U-3|Carol Q.]"
+	out := previewBody(in)
+	if strings.Contains(out, "@[") {
+		t.Errorf("previewBody did not flatten user mentions: %q", out)
+	}
+	if !strings.Contains(out, "@Bob") {
+		t.Errorf("previewBody missing @Bob: %q", out)
+	}
+	if !strings.Contains(out, "@Carol Q.") {
+		t.Errorf("previewBody missing @Carol Q.: %q", out)
+	}
+}
+
+// Group mentions (@all / @here) are NOT in `@[id|name]` form, so they
+// flow through unchanged. Lock that down so a future regex tweak can't
+// accidentally munge them.
+func TestNotificationService_PreviewBody_LeavesGroupMentionsAlone(t *testing.T) {
+	if got := previewBody("attention @all please"); got != "attention @all please" {
+		t.Errorf("@all changed: %q", got)
+	}
+	if got := previewBody("@here check this"); got != "@here check this" {
+		t.Errorf("@here changed: %q", got)
+	}
+}
+
 func TestIsNotifiable(t *testing.T) {
 	for _, k := range []NotificationKind{NotificationKindMessage, NotificationKindMention, NotificationKindThreadReply} {
 		if !IsNotifiable(k) {

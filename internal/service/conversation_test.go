@@ -270,6 +270,124 @@ func TestCreateGroup_DerivesNameFromParticipants(t *testing.T) {
 	}
 }
 
+// CreateGroup must derive its ID deterministically from the participant
+// set so concurrent calls collide rather than spawning duplicates. The
+// ID is order-independent — Alice→Bob→Carol must hash the same as
+// Carol→Alice→Bob.
+func TestConversationService_CreateGroup_DeterministicID(t *testing.T) {
+	svc, _, users, _, _ := setupConversationService()
+	ctx := context.Background()
+
+	users.users["u1"] = &model.User{ID: "u1", DisplayName: "Alice"}
+	users.users["u2"] = &model.User{ID: "u2", DisplayName: "Bob"}
+	users.users["u3"] = &model.User{ID: "u3", DisplayName: "Carol"}
+
+	first, err := svc.CreateGroup(ctx, "u1", []string{"u2", "u3"}, "")
+	if err != nil {
+		t.Fatalf("CreateGroup: %v", err)
+	}
+
+	// Same constellation submitted in a different order — deterministic
+	// ID matches, store rejects with ErrAlreadyExists, and CreateGroup
+	// resolves to the existing row.
+	second, err := svc.CreateGroup(ctx, "u3", []string{"u1", "u2"}, "")
+	if err != nil {
+		t.Fatalf("CreateGroup (reordered): %v", err)
+	}
+	if second.ID != first.ID {
+		t.Errorf("reordered CreateGroup got %q, want %q", second.ID, first.ID)
+	}
+}
+
+// GetOrCreateGroup must forward into an existing group whose participant
+// constellation matches, ignoring the supplied group name. This is what
+// keeps the "New conversation" flow from spawning a duplicate group when
+// the user re-messages the same set of people.
+func TestConversationService_GetOrCreateGroup_ReusesExistingConstellation(t *testing.T) {
+	svc, _, users, _, _ := setupConversationService()
+	ctx := context.Background()
+
+	users.users["u1"] = &model.User{ID: "u1", DisplayName: "Alice"}
+	users.users["u2"] = &model.User{ID: "u2", DisplayName: "Bob"}
+	users.users["u3"] = &model.User{ID: "u3", DisplayName: "Carol"}
+
+	first, err := svc.CreateGroup(ctx, "u1", []string{"u2", "u3"}, "First")
+	if err != nil {
+		t.Fatalf("CreateGroup: %v", err)
+	}
+
+	// Same constellation, different (or no) name: must return the same
+	// conversation, not create a new one.
+	second, err := svc.GetOrCreateGroup(ctx, "u1", []string{"u2", "u3"}, "Different name")
+	if err != nil {
+		t.Fatalf("GetOrCreateGroup: %v", err)
+	}
+	if second.ID != first.ID {
+		t.Errorf("GetOrCreateGroup returned a new group %q, want existing %q", second.ID, first.ID)
+	}
+
+	// Order independence: caller-supplied participant order shouldn't
+	// matter — sets are equality.
+	third, err := svc.GetOrCreateGroup(ctx, "u1", []string{"u3", "u2"}, "")
+	if err != nil {
+		t.Fatalf("GetOrCreateGroup (reordered): %v", err)
+	}
+	if third.ID != first.ID {
+		t.Errorf("reordered GetOrCreateGroup returned %q, want existing %q", third.ID, first.ID)
+	}
+}
+
+func TestConversationService_GetOrCreateGroup_CreatesNewWhenNoMatch(t *testing.T) {
+	svc, _, users, _, _ := setupConversationService()
+	ctx := context.Background()
+
+	users.users["u1"] = &model.User{ID: "u1", DisplayName: "Alice"}
+	users.users["u2"] = &model.User{ID: "u2", DisplayName: "Bob"}
+	users.users["u3"] = &model.User{ID: "u3", DisplayName: "Carol"}
+	users.users["u4"] = &model.User{ID: "u4", DisplayName: "Dan"}
+
+	first, err := svc.CreateGroup(ctx, "u1", []string{"u2", "u3"}, "")
+	if err != nil {
+		t.Fatalf("CreateGroup: %v", err)
+	}
+
+	// A different constellation (extra participant) must spawn a fresh
+	// group rather than reusing the smaller one.
+	second, err := svc.GetOrCreateGroup(ctx, "u1", []string{"u2", "u3", "u4"}, "")
+	if err != nil {
+		t.Fatalf("GetOrCreateGroup: %v", err)
+	}
+	if second.ID == first.ID {
+		t.Errorf("GetOrCreateGroup reused %q for a different constellation", first.ID)
+	}
+}
+
+// A subset constellation (fewer participants than the existing group) is
+// NOT a match — the smaller group is its own thing.
+func TestConversationService_GetOrCreateGroup_DoesNotMatchSubset(t *testing.T) {
+	svc, _, users, _, _ := setupConversationService()
+	ctx := context.Background()
+
+	users.users["u1"] = &model.User{ID: "u1", DisplayName: "Alice"}
+	users.users["u2"] = &model.User{ID: "u2", DisplayName: "Bob"}
+	users.users["u3"] = &model.User{ID: "u3", DisplayName: "Carol"}
+
+	big, err := svc.CreateGroup(ctx, "u1", []string{"u2", "u3"}, "")
+	if err != nil {
+		t.Fatalf("CreateGroup: %v", err)
+	}
+	small, err := svc.GetOrCreateGroup(ctx, "u1", []string{"u2"}, "")
+	// Note: a single-other "group" is normally routed to a DM in the
+	// handler, but the service-level call accepts it as a group. The
+	// invariant we care about: it is NOT the same as the bigger group.
+	if err != nil {
+		t.Fatalf("GetOrCreateGroup: %v", err)
+	}
+	if small.ID == big.ID {
+		t.Errorf("GetOrCreateGroup reused %q for a subset constellation", big.ID)
+	}
+}
+
 func TestConversationService_CreateGroup_CreatorAlreadyIncluded(t *testing.T) {
 	svc, _, users, _, _ := setupConversationService()
 	ctx := context.Background()

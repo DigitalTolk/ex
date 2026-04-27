@@ -30,9 +30,10 @@ describe('EmojiPicker — readable sizes', () => {
     expect(tile.className).toContain('h-9');
     expect(tile.className).toContain('w-9');
 
-    // Glyph inside should use text-2xl (lg size).
+    // Glyph inside should use text-[22px] (lg size — 2px less than text-2xl
+    // so the picker doesn't feel cluttered).
     const glyph = tile.querySelector('span');
-    expect(glyph?.className).toContain('text-2xl');
+    expect(glyph?.className).toContain('text-[22px]');
   });
 
   it('Search input is text-sm not text-xs', async () => {

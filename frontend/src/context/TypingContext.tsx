@@ -2,9 +2,9 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 
 // EXPIRY_MS is how long an entry survives without a refresh ping. The
 // client sends "typing" every 3s while the user is actively composing;
-// 5s gives one missed ping of slack before the indicator clears, which
-// matches Slack/Teams behaviour.
-const EXPIRY_MS = 5000;
+// 6s gives two missed pings of slack before the indicator clears so a
+// brief network hiccup doesn't blink the indicator off and back on.
+const EXPIRY_MS = 6000;
 
 interface TypingEntry {
   userID: string;
@@ -15,6 +15,11 @@ interface TypingEntry {
 interface TypingContextValue {
   typingByParent: Record<string, string[]>;
   recordTyping: (parentID: string, userID: string) => void;
+  // clearTyping drops a single (parentID, userID) entry immediately —
+  // used by the message.new WS handler so a user stops appearing as
+  // "typing" the instant their message lands, without waiting for the
+  // expiry to tick.
+  clearTyping: (parentID: string, userID: string) => void;
   setSelfUserID: (id: string | null) => void;
 }
 
@@ -105,6 +110,19 @@ export function TypingProvider({ children }: { children: ReactNode }) {
     [rebuild],
   );
 
+  const clearTyping = useCallback(
+    (parentID: string, userID: string) => {
+      if (!parentID || !userID) return;
+      const idx = entriesRef.current.findIndex(
+        (e) => e.parentID === parentID && e.userID === userID,
+      );
+      if (idx < 0) return;
+      entriesRef.current.splice(idx, 1);
+      rebuild();
+    },
+    [rebuild],
+  );
+
   useEffect(() => {
     return () => {
       if (timerRef.current) {
@@ -118,8 +136,8 @@ export function TypingProvider({ children }: { children: ReactNode }) {
   // actually changes (the rebuild() bailout above keeps typingByParent
   // referentially stable across no-op ticks).
   const value = useMemo<TypingContextValue>(
-    () => ({ typingByParent, recordTyping, setSelfUserID }),
-    [typingByParent, recordTyping, setSelfUserID],
+    () => ({ typingByParent, recordTyping, clearTyping, setSelfUserID }),
+    [typingByParent, recordTyping, clearTyping, setSelfUserID],
   );
 
   return <TypingContext.Provider value={value}>{children}</TypingContext.Provider>;
@@ -128,6 +146,7 @@ export function TypingProvider({ children }: { children: ReactNode }) {
 const noopValue: TypingContextValue = {
   typingByParent: {},
   recordTyping: () => {},
+  clearTyping: () => {},
   setSelfUserID: () => {},
 };
 

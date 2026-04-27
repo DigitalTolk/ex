@@ -18,15 +18,11 @@ function ensureContext(): AudioContext | null {
   return ctx;
 }
 
-export function playNotificationPing(): void {
-  const c = ensureContext();
-  if (!c) return;
-  // If the context was suspended by the browser autoplay policy, kick it.
-  // resume() returns a Promise we don't await — the worst case is one
-  // dropped tone, which is preferable to logging spam.
-  if (c.state === 'suspended') {
-    void c.resume();
-  }
+// scheduleTone wires the oscillator + envelope onto a *running*
+// AudioContext. Scheduling onto a suspended context drops the tone:
+// the start time sits at currentTime=0 while the clock is paused, and
+// once the clock advances the scheduled time is already in the past.
+function scheduleTone(c: AudioContext): void {
   const now = c.currentTime;
 
   // Two-tone "subtle" ping: short rise from 660Hz to 880Hz with an
@@ -44,4 +40,19 @@ export function playNotificationPing(): void {
   osc.connect(gain).connect(c.destination);
   osc.start(now);
   osc.stop(now + 0.4);
+}
+
+export function playNotificationPing(): void {
+  const c = ensureContext();
+  if (!c) return;
+  // Suspended context (browser autoplay policy / fresh ctx pre-gesture)
+  // must finish resume() before we can schedule — see scheduleTone.
+  if (c.state === 'suspended') {
+    c.resume().then(
+      () => scheduleTone(c),
+      () => undefined,
+    );
+    return;
+  }
+  scheduleTone(c);
 }

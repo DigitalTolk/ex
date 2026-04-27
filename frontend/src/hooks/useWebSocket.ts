@@ -22,6 +22,8 @@ interface UseWebSocketOptions {
   onAttachmentDeleted?: WSCallback;
   onChannelMuted?: WSCallback;
   onNotification?: WSCallback;
+  onForceLogout?: WSCallback;
+  onServerVersion?: WSCallback;
   onTyping?: WSCallback;
   enabled?: boolean;
 }
@@ -109,6 +111,12 @@ export function useWebSocket(options: UseWebSocketOptions) {
               break;
             case EventType.NotificationNew:
               callbacksRef.current.onNotification?.(payload);
+              break;
+            case EventType.ForceLogout:
+              callbacksRef.current.onForceLogout?.(payload);
+              break;
+            case EventType.ServerVersion:
+              callbacksRef.current.onServerVersion?.(payload);
               break;
             case 'typing':
               callbacksRef.current.onTyping?.(payload);

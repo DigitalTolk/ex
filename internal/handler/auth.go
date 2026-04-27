@@ -79,7 +79,10 @@ func (h *AuthHandler) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.setRefreshCookie(w, refreshToken, h.jwt.RefreshTTL())
-	http.Redirect(w, r, "/#/auth/callback?token="+accessToken, http.StatusFound)
+	// /oidc/callback (not /auth/callback) — the SPA fallback explicitly 404s
+	// the /auth/ namespace to avoid shadowing real auth endpoints, so the
+	// callback page lives outside that prefix.
+	http.Redirect(w, r, "/oidc/callback?token="+accessToken, http.StatusFound)
 }
 
 // RefreshToken exchanges a refresh token cookie for a new access token.

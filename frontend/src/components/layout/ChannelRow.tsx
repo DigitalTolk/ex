@@ -1,4 +1,3 @@
-import { useState } from 'react';
 import { NavLink } from 'react-router-dom';
 import { Hash, Lock, Star, BellOff, MoreVertical } from 'lucide-react';
 import {
@@ -8,7 +7,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { slugify } from '@/lib/format';
-import { useFavoriteChannel, useSetCategory, useCategories, useCreateCategory } from '@/hooks/useSidebar';
+import { useFavoriteChannel, useSetCategory, useCategories } from '@/hooks/useSidebar';
 import type { UserChannel, SidebarCategory } from '@/types';
 
 interface Props {
@@ -19,14 +18,12 @@ interface Props {
 
 // ChannelRow is one row in the sidebar's channels list. It owns the
 // per-row interactions: the star (favorite toggle) and the kebab menu
-// for moving the channel between categories or creating a new one.
+// for moving the channel between existing categories. Creating a new
+// category lives in the sidebar header so the row menu stays terse.
 export function ChannelRow({ channel, hasUnread, onClose }: Props) {
   const favorite = useFavoriteChannel();
   const setCategory = useSetCategory();
   const { data: categories } = useCategories();
-  const createCategory = useCreateCategory();
-  const [creatingNewCategory, setCreatingNewCategory] = useState(false);
-  const [newCategoryName, setNewCategoryName] = useState('');
 
   const isFav = !!channel.favorite;
 
@@ -38,18 +35,6 @@ export function ChannelRow({ channel, hasUnread, onClose }: Props) {
 
   function moveToCategory(categoryID: string) {
     setCategory.mutate({ channelID: channel.channelID, categoryID });
-  }
-
-  function handleCreateAndAssign() {
-    const name = newCategoryName.trim();
-    if (!name) return;
-    createCategory.mutate(name, {
-      onSuccess: (cat) => {
-        setCategory.mutate({ channelID: channel.channelID, categoryID: cat.id });
-        setNewCategoryName('');
-        setCreatingNewCategory(false);
-      },
-    });
   }
 
   return (
@@ -76,10 +61,13 @@ export function ChannelRow({ channel, hasUnread, onClose }: Props) {
           {channel.channelName}
         </span>
         {channel.muted && (
-          <BellOff className="ml-auto h-3 w-3 shrink-0 text-gray-500" aria-label="Muted" />
+          <BellOff className="ml-auto h-3 w-3 shrink-0 text-gray-500 group-hover/row:hidden" aria-label="Muted" />
         )}
         {hasUnread && !channel.muted && (
-          <span className="ml-auto h-2 w-2 rounded-full bg-white" />
+          <span
+            data-testid="unread-dot"
+            className="ml-auto h-2 w-2 rounded-full bg-white group-hover/row:hidden"
+          />
         )}
       </NavLink>
       {/* Star — visible on hover; persistent yellow when favorited. */}
@@ -103,8 +91,11 @@ export function ChannelRow({ channel, hasUnread, onClose }: Props) {
           <MoreVertical className="h-3.5 w-3.5" />
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-56">
-          <DropdownMenuItem onClick={() => moveToCategory('')}>
-            Move to Other
+          <DropdownMenuItem
+            onClick={() => moveToCategory('')}
+            disabled={!channel.categoryID}
+          >
+            Move to Channels
           </DropdownMenuItem>
           {(categories ?? []).map((c: SidebarCategory) => (
             <DropdownMenuItem
@@ -115,27 +106,6 @@ export function ChannelRow({ channel, hasUnread, onClose }: Props) {
               Move to {c.name}
             </DropdownMenuItem>
           ))}
-          <div className="my-1 h-px bg-border" />
-          {creatingNewCategory ? (
-            <div className="px-2 py-1.5">
-              <input
-                autoFocus
-                value={newCategoryName}
-                onChange={(e) => setNewCategoryName(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') handleCreateAndAssign();
-                  if (e.key === 'Escape') setCreatingNewCategory(false);
-                }}
-                placeholder="Category name"
-                className="w-full rounded-md border bg-background px-2 py-1 text-sm text-foreground"
-                data-testid="new-category-input"
-              />
-            </div>
-          ) : (
-            <DropdownMenuItem onClick={() => setCreatingNewCategory(true)}>
-              + New category…
-            </DropdownMenuItem>
-          )}
         </DropdownMenuContent>
       </DropdownMenu>
     </div>

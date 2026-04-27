@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, within, act } from '@testing-library/react';
-import { BrowserRouter } from 'react-router-dom';
+import { BrowserRouter, MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { User, UserChannel, UserConversation, SidebarCategory } from '@/types';
 
@@ -29,6 +29,7 @@ const mockCategories: SidebarCategory[] = [
 const mockConversations: UserConversation[] = [];
 
 const createCategoryMutate = vi.fn();
+const deleteCategoryMutate = vi.fn();
 
 vi.mock('@/context/AuthContext', () => ({
   useAuth: () => ({
@@ -78,6 +79,7 @@ vi.mock('@/hooks/useThreads', () => ({
 vi.mock('@/hooks/useSidebar', () => ({
   useCategories: () => ({ data: mockCategories }),
   useCreateCategory: () => ({ mutate: createCategoryMutate }),
+  useDeleteCategory: () => ({ mutate: deleteCategoryMutate }),
   useFavoriteChannel: () => ({ mutate: vi.fn() }),
   useSetCategory: () => ({ mutate: vi.fn() }),
   useFavoriteConversation: () => ({ mutate: vi.fn() }),
@@ -101,12 +103,14 @@ vi.mock('@/components/ui/dropdown-menu', () => ({
     children,
     onClick,
     disabled,
+    'data-testid': testid,
   }: {
     children: React.ReactNode;
     onClick?: () => void;
     disabled?: boolean;
+    'data-testid'?: string;
   }) => (
-    <button data-testid="dropdown-item" onClick={onClick} disabled={disabled}>
+    <button data-testid={testid ?? 'dropdown-item'} onClick={onClick} disabled={disabled}>
       {children}
     </button>
   ),
@@ -127,11 +131,23 @@ function renderSidebar() {
   );
 }
 
+function renderSidebarAt(path: string) {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(
+    <QueryClientProvider client={qc}>
+      <MemoryRouter initialEntries={[path]}>
+        <Sidebar onClose={vi.fn()} />
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+}
+
 // --- tests ---------------------------------------------------------------
 
 describe('Sidebar grouped rendering', () => {
   beforeEach(() => {
     createCategoryMutate.mockReset();
+    deleteCategoryMutate.mockReset();
   });
 
   it('renders Favorites group with the favorited channel', () => {
@@ -189,13 +205,13 @@ describe('Sidebar grouped rendering', () => {
     renderSidebar();
     expect(screen.queryByTestId('sidebar-new-category-input')).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByTestId('new-category-button'));
+    fireEvent.click(screen.getByTestId('sidebar-add-category'));
     expect(screen.getByTestId('sidebar-new-category-input')).toBeInTheDocument();
   });
 
   it('Enter on the inline input creates the category', () => {
     renderSidebar();
-    fireEvent.click(screen.getByTestId('new-category-button'));
+    fireEvent.click(screen.getByTestId('sidebar-add-category'));
     const input = screen.getByTestId('sidebar-new-category-input') as HTMLInputElement;
     fireEvent.change(input, { target: { value: 'Side projects' } });
     fireEvent.keyDown(input, { key: 'Enter' });
@@ -205,7 +221,7 @@ describe('Sidebar grouped rendering', () => {
 
   it('Enter with whitespace-only input is a no-op', () => {
     renderSidebar();
-    fireEvent.click(screen.getByTestId('new-category-button'));
+    fireEvent.click(screen.getByTestId('sidebar-add-category'));
     const input = screen.getByTestId('sidebar-new-category-input') as HTMLInputElement;
     fireEvent.change(input, { target: { value: '   ' } });
     fireEvent.keyDown(input, { key: 'Enter' });
@@ -214,7 +230,7 @@ describe('Sidebar grouped rendering', () => {
 
   it('Escape on the inline input cancels and hides it', () => {
     renderSidebar();
-    fireEvent.click(screen.getByTestId('new-category-button'));
+    fireEvent.click(screen.getByTestId('sidebar-add-category'));
     const input = screen.getByTestId('sidebar-new-category-input') as HTMLInputElement;
     fireEvent.keyDown(input, { key: 'Escape' });
     expect(screen.queryByTestId('sidebar-new-category-input')).not.toBeInTheDocument();
@@ -223,7 +239,7 @@ describe('Sidebar grouped rendering', () => {
 
   it('inline input clears and hides on successful create', () => {
     renderSidebar();
-    fireEvent.click(screen.getByTestId('new-category-button'));
+    fireEvent.click(screen.getByTestId('sidebar-add-category'));
     const input = screen.getByTestId('sidebar-new-category-input') as HTMLInputElement;
     fireEvent.change(input, { target: { value: 'Side projects' } });
     fireEvent.keyDown(input, { key: 'Enter' });
@@ -237,5 +253,102 @@ describe('Sidebar grouped rendering', () => {
       opts.onSuccess({ id: 'cat-new', name: 'Side projects', position: 99 });
     });
     expect(screen.queryByTestId('sidebar-new-category-input')).not.toBeInTheDocument();
+  });
+
+  it('does not render an item-count next to section titles', () => {
+    // The header counter ("3" beside "Channels") was visual noise — the
+    // group is collapsible, so users see the actual rows. The toggle
+    // button must not contain any text outside the section title.
+    renderSidebar();
+    const work = screen.getByTestId('sidebar-group-cat-work');
+    const toggle = within(work).getByTestId('sidebar-group-toggle-cat-work');
+    // Two channels live in this section; the count "2" must not appear.
+    expect(toggle.textContent).toBe('Work');
+  });
+
+  it('renders the divider between top-level pages and the channel list', () => {
+    renderSidebar();
+    expect(screen.getByTestId('sidebar-top-divider')).toBeInTheDocument();
+  });
+
+  it('Directory + Threads links use the same vertical padding as channel rows', () => {
+    // Channel rows use px-2 py-1; Directory and Threads must match so
+    // the eye doesn't catch on a height bump between the top-level
+    // links and the channel list. Margin-bottom (mb-*) is the
+    // separator's job now, not per-row spacing.
+    renderSidebar();
+    const directory = screen.getByText('Directory').closest('a');
+    const threads = screen.getByText('Threads').closest('a');
+    expect(directory?.className).toMatch(/\bpy-1\b/);
+    expect(directory?.className).not.toMatch(/\bpy-1\.5\b/);
+    expect(directory?.className).not.toMatch(/\bmb-2\b/);
+    expect(threads?.className).toMatch(/\bpy-1\b/);
+    expect(threads?.className).not.toMatch(/\bpy-1\.5\b/);
+    expect(threads?.className).not.toMatch(/\bmb-2\b/);
+  });
+
+  it('keeps the currently-viewed channel visible even when its category is collapsed', () => {
+    // Bug: collapsing a category hid the channel the user was actively
+    // looking at, so a click on the chevron made the row vanish out from
+    // under them. The active row must stay visible while the user is on
+    // it; once they navigate elsewhere it hides again.
+    const { unmount } = renderSidebarAt('/channel/work-room');
+    const work = screen.getByTestId('sidebar-group-cat-work');
+    // Collapse the section.
+    fireEvent.click(within(work).getByTestId('sidebar-group-toggle-cat-work'));
+    expect(within(work).getByText('work-room')).toBeInTheDocument();
+    // The other channel in the same category is hidden — only the active
+    // one survives the fold.
+    expect(within(work).queryByText('roadmap')).not.toBeInTheDocument();
+    unmount();
+  });
+
+  it('hides the channel again once the user navigates away (collapsed section)', () => {
+    // Same fixture, different URL — the active-survival rule must NOT
+    // pin a row globally; it follows the location.
+    renderSidebarAt('/channel/somewhere-else');
+    const work = screen.getByTestId('sidebar-group-cat-work');
+    fireEvent.click(within(work).getByTestId('sidebar-group-toggle-cat-work'));
+    expect(within(work).queryByText('work-room')).not.toBeInTheDocument();
+    expect(within(work).queryByText('roadmap')).not.toBeInTheDocument();
+  });
+
+  it('places the "Add category" affordance ABOVE the channel sections', () => {
+    // Order matters — users discover the action before scrolling. The
+    // Add-category button must appear in the DOM before the first
+    // section header.
+    renderSidebar();
+    const add = screen.getByTestId('sidebar-add-category');
+    const firstSection = screen.getAllByTestId(/^sidebar-group-/)[0];
+    expect(
+      add.compareDocumentPosition(firstSection) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it('opens a modal (not window.confirm) when Delete category is clicked', () => {
+    // Spy in case the dialog wasn't wired and the code falls back to
+    // window.confirm — that would be the regression we want to catch.
+    const confirmSpy = vi.spyOn(window, 'confirm');
+    renderSidebar();
+    fireEvent.click(screen.getByTestId('sidebar-category-delete-cat-work'));
+    expect(confirmSpy).not.toHaveBeenCalled();
+    expect(screen.getByTestId('delete-category')).toBeInTheDocument();
+    confirmSpy.mockRestore();
+  });
+
+  it('Cancel in the delete-category dialog closes without firing the mutation', () => {
+    renderSidebar();
+    fireEvent.click(screen.getByTestId('sidebar-category-delete-cat-work'));
+    fireEvent.click(screen.getByTestId('delete-category-cancel'));
+    expect(deleteCategoryMutate).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('delete-category')).toBeNull();
+  });
+
+  it('Confirm in the delete-category dialog fires the mutation with the category id', () => {
+    renderSidebar();
+    fireEvent.click(screen.getByTestId('sidebar-category-delete-cat-work'));
+    fireEvent.click(screen.getByTestId('delete-category-confirm'));
+    expect(deleteCategoryMutate).toHaveBeenCalledWith('cat-work');
+    expect(screen.queryByTestId('delete-category')).toBeNull();
   });
 });
