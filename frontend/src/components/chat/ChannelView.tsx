@@ -75,7 +75,8 @@ export function ChannelView() {
 
   // Honor a ?thread=... deep link from the Threads page. We pull the param
   // once and clear it immediately so back/forward and tab switches don't keep
-  // re-opening it. The setState here is a deliberate URL → component sync.
+  // re-opening it. The hash (e.g. #msg-<id> for the deep-link highlight)
+  // must survive — setSearchParams replaces only the search portion.
   const threadParam = searchParams.get('thread');
   useEffect(() => {
     if (!threadParam) return;
@@ -84,7 +85,7 @@ export function ChannelView() {
     markThreadSeen(threadParam);
     const next = new URLSearchParams(searchParams);
     next.delete('thread');
-    setSearchParams(next, { replace: true });
+    setSearchParams(next, { replace: true, preventScrollReset: true });
   }, [threadParam, searchParams, setSearchParams]);
 
   // If the current user is no longer a member of the open channel (e.g.

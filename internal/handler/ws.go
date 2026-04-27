@@ -153,13 +153,18 @@ func (h *WSHandler) Connect(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
 
-	// Write failure isn't fatal — the keep-alive ping below surfaces a
-	// broken connection on its own.
-	if h.version != "" {
-		if evt, err := events.NewEvent(events.EventServerVersion, map[string]string{"version": h.version}); err == nil {
-			if data, err := json.Marshal(evt); err == nil {
-				_ = conn.Write(ctx, websocket.MessageText, data)
-			}
+	// Always emit a version frame on connect. A missing version (CI
+	// build forgot to set ldflags, etc.) defaults to "dev" so the
+	// client lands in a deterministic state — outdated stays false
+	// when both sides are "dev". Write failure is non-fatal: the
+	// keep-alive ping below catches a broken connection.
+	version := h.version
+	if version == "" {
+		version = "dev"
+	}
+	if evt, err := events.NewEvent(events.EventServerVersion, map[string]string{"version": version}); err == nil {
+		if data, err := json.Marshal(evt); err == nil {
+			_ = conn.Write(ctx, websocket.MessageText, data)
 		}
 	}
 

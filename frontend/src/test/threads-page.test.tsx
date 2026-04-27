@@ -101,8 +101,8 @@ describe('ThreadsPage', () => {
     renderPage();
     const cards = await screen.findAllByTestId('thread-card');
     const links = cards.map((c) => c.getAttribute('data-deep-link'));
-    expect(links).toContain('/channel/general?thread=msg-root-1');
-    expect(links).toContain('/conversation/conv-1?thread=msg-root-2');
+    expect(links).toContain('/channel/general?thread=msg-root-1#msg-msg-root-1');
+    expect(links).toContain('/conversation/conv-1?thread=msg-root-2#msg-msg-root-2');
   });
 
   it('shows an empty state when no threads exist', async () => {

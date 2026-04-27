@@ -1,5 +1,12 @@
 .PHONY: dev dev-up dev-down dev-logs build frontend run docker clean deps check
 
+# VERSION is the build identifier baked into both the Go binary
+# (-ldflags -X main.Version) and the Vite bundle (VITE_BUILD_VERSION).
+# Derived from git so each new build differs — that's what makes the
+# in-app upgrade banner fire on tabs left open across rebuilds.
+VERSION ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo dev)
+export VERSION
+
 # Start the full local environment
 dev:
 	docker compose up --build
@@ -18,19 +25,19 @@ dev-logs:
 
 # Build production binary (includes embedded frontend)
 build: frontend
-	go build -o bin/ex ./cmd/server
+	go build -ldflags "-X main.Version=$(VERSION)" -o bin/ex ./cmd/server
 
 # Build frontend assets
 frontend:
-	cd frontend && npm ci && npm run build
+	cd frontend && npm ci && VITE_BUILD_VERSION=$(VERSION) npm run build
 
 # Run Go server directly (requires DynamoDB + Redis already running)
 run:
-	go run ./cmd/server
+	go run -ldflags "-X main.Version=$(VERSION)" ./cmd/server
 
 # Build production Docker image
 docker:
-	docker build -t ex:latest .
+	docker build --build-arg VERSION=$(VERSION) -t ex:latest .
 
 # Clean build artifacts
 clean:

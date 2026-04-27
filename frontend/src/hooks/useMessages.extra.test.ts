@@ -58,6 +58,45 @@ describe('useSendChannelMessage', () => {
       body: JSON.stringify({ body: 'hello', parentMessageID: '', attachmentIDs: [] }),
     });
   });
+
+  it('posting a thread reply invalidates userThreads so the /threads count refreshes immediately', async () => {
+    // Without this invalidation the sender sees their own reply count
+    // stay stale until the WS round-trip lands. The /threads page
+    // user-reported "only updates after page refresh" was this exact
+    // gap.
+    const reply = { id: 'r-1', parentID: 'ch-1', parentMessageID: 'root', authorID: 'u-1', body: 'r', createdAt: '' };
+    vi.mocked(apiFetch).mockResolvedValue(reply);
+
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const spy = vi.spyOn(queryClient, 'invalidateQueries');
+    const wrapper = ({ children }: { children: ReactNode }) =>
+      createElement(QueryClientProvider, { client: queryClient }, children);
+
+    const { result } = renderHook(() => useSendChannelMessage('ch-1'), { wrapper });
+    result.current.mutate({ body: 'r', attachmentIDs: [], parentMessageID: 'root' });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    const keys = spy.mock.calls.map((c) => (c[0] as { queryKey?: unknown[] }).queryKey);
+    expect(keys).toContainEqual(['userThreads']);
+    expect(keys).toContainEqual(['thread', 'channels/ch-1', 'root']);
+  });
+
+  it('non-thread send does NOT invalidate userThreads (avoids needless /threads refetches)', async () => {
+    const msg = { id: 'msg-x', parentID: 'ch-1', authorID: 'u-1', body: 'hi', createdAt: '' };
+    vi.mocked(apiFetch).mockResolvedValue(msg);
+
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const spy = vi.spyOn(queryClient, 'invalidateQueries');
+    const wrapper = ({ children }: { children: ReactNode }) =>
+      createElement(QueryClientProvider, { client: queryClient }, children);
+
+    const { result } = renderHook(() => useSendChannelMessage('ch-1'), { wrapper });
+    result.current.mutate({ body: 'hi', attachmentIDs: [] });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    const keys = spy.mock.calls.map((c) => (c[0] as { queryKey?: unknown[] }).queryKey);
+    expect(keys).not.toContainEqual(['userThreads']);
+  });
 });
 
 describe('useSendConversationMessage', () => {

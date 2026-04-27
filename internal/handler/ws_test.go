@@ -88,19 +88,22 @@ func TestWSHandler_Connect_FullFlow(t *testing.T) {
 		t.Fatalf("ws dial: %v", err)
 	}
 
-	// Read the initial ping.
-	_, data, err := conn.Read(ctx)
-	if err != nil {
-		t.Fatalf("ws read: %v", err)
-	}
+	// First two frames are the version handshake then the keep-alive
+	// ping. Read both before moving on to assert message delivery.
 	var evt struct {
 		Type string `json:"type"`
 	}
-	if err := json.Unmarshal(data, &evt); err != nil {
-		t.Fatalf("decode initial event: %v (%q)", err, data)
+	for i := 0; i < 2; i++ {
+		_, data, err := conn.Read(ctx)
+		if err != nil {
+			t.Fatalf("ws read: %v", err)
+		}
+		if err := json.Unmarshal(data, &evt); err != nil {
+			t.Fatalf("decode initial event: %v (%q)", err, data)
+		}
 	}
 	if evt.Type != "ping" {
-		t.Errorf("initial event type = %q, want ping", evt.Type)
+		t.Errorf("second event type = %q, want ping", evt.Type)
 	}
 
 	// Publish a message on a Redis channel the user is subscribed to (their
@@ -110,7 +113,7 @@ func TestWSHandler_Connect_FullFlow(t *testing.T) {
 		_ = ps.Client().Publish(context.Background(), pubsub.UserChannel("u-ws"), `{"type":"test","data":{}}`).Err()
 	}()
 	for i := 0; i < 5; i++ {
-		_, data, err = conn.Read(ctx)
+		_, data, err := conn.Read(ctx)
 		if err != nil {
 			t.Fatalf("ws read 2: %v", err)
 		}
@@ -193,10 +196,11 @@ func TestWSHandler_Connect_SendsServerVersionOnHandshake(t *testing.T) {
 	}
 }
 
-// When SetVersion is not called, the WS handshake skips the version
-// frame so a stripped/unset build doesn't ship a misleading "version=''".
-// First frame should be the ping.
-func TestWSHandler_Connect_OmitsServerVersionWhenUnset(t *testing.T) {
+// When SetVersion is not called the handler still sends a version frame
+// — defaulted to "dev" — so the frontend lands in a deterministic state
+// regardless of whether ldflags wired the build identifier through. The
+// frontend's outdated check stays false when both sides are "dev".
+func TestWSHandler_Connect_DefaultsServerVersionToDevWhenUnset(t *testing.T) {
 	mr := miniredis.RunT(t)
 	ps, err := pubsub.NewRedisPubSub("redis://" + mr.Addr())
 	if err != nil {
@@ -237,12 +241,22 @@ func TestWSHandler_Connect_OmitsServerVersionWhenUnset(t *testing.T) {
 		t.Fatalf("ws read: %v", err)
 	}
 	var evt struct {
-		Type string `json:"type"`
+		Type string          `json:"type"`
+		Data json.RawMessage `json:"data"`
 	}
 	if err := json.Unmarshal(data, &evt); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if evt.Type != "ping" {
-		t.Errorf("first event type = %q, want ping (no version frame)", evt.Type)
+	if evt.Type != "server.version" {
+		t.Fatalf("first event type = %q, want server.version", evt.Type)
+	}
+	var payload struct {
+		Version string `json:"version"`
+	}
+	if err := json.Unmarshal(evt.Data, &payload); err != nil {
+		t.Fatalf("decode payload: %v", err)
+	}
+	if payload.Version != "dev" {
+		t.Errorf("default version = %q, want dev", payload.Version)
 	}
 }

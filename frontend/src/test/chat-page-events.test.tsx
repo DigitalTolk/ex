@@ -141,15 +141,17 @@ describe('ChatPage WebSocket handlers', () => {
     expect(markChannelUnread).not.toHaveBeenCalled();
   });
 
-  it('onMessageNew with parentMessageID also invalidates the thread queries', () => {
-    renderAt('/');
-    expect(() => {
-      (capturedOptions.onMessageNew as (d: unknown) => void)({
-        parentID: 'ch-1',
-        parentMessageID: 'msg-root',
-        authorID: 'u-other',
-      });
-    }).not.toThrow();
+  it('onMessageNew with parentMessageID invalidates thread + userThreads (so the /threads count updates live)', () => {
+    const { qc } = renderAt('/');
+    const spy = vi.spyOn(qc, 'invalidateQueries');
+    (capturedOptions.onMessageNew as (d: unknown) => void)({
+      parentID: 'ch-1',
+      parentMessageID: 'msg-root',
+      authorID: 'u-other',
+    });
+    const calls = spy.mock.calls.map((c) => (c[0] as { queryKey?: unknown[] }).queryKey);
+    expect(calls).toContainEqual(['thread', 'channels/ch-1', 'msg-root']);
+    expect(calls).toContainEqual(['userThreads']);
   });
 
   it('onMessageEdited / onMessageDeleted gracefully ignore missing parentID and invalidate when present', () => {

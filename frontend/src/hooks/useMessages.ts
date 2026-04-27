@@ -95,6 +95,10 @@ export function useSendMessage(scope: SendMessageScope) {
       if (input.parentMessageID) {
         const parentPath = channelId ? `channels/${channelId}` : `conversations/${conversationId}`;
         queryClient.invalidateQueries({ queryKey: ['thread', parentPath, input.parentMessageID] });
+        // Bump the cross-parent threads list too so the /threads page
+        // and the sidebar's thread-unread dot reflect the new reply
+        // count immediately, without waiting on the WS round-trip.
+        queryClient.invalidateQueries({ queryKey: ['userThreads'] });
       }
     },
   });
