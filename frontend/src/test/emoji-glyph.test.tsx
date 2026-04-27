@@ -35,15 +35,17 @@ describe('EmojiGlyph (shared 14px renderer)', () => {
   });
 
   it('size="lg" upsizes both image and unicode glyphs for the picker', () => {
+    // 22px is the picker glyph size — 2px smaller than the previous text-2xl
+    // baseline so the picker grid feels less heavy without losing readability.
     const imgRender = render(
       <EmojiGlyph emoji=":party:" size="lg" customMap={{ party: 'http://x/p.png' }} />,
     );
     const img = imgRender.container.querySelector('img');
-    expect(img?.className).toContain('h-6');
-    expect(img?.className).toContain('w-6');
+    expect(img?.className).toContain('h-[22px]');
+    expect(img?.className).toContain('w-[22px]');
 
     const unicodeRender = render(<EmojiGlyph emoji="🎉" size="lg" />);
     const span = unicodeRender.container.querySelector('span');
-    expect(span?.className).toContain('text-2xl');
+    expect(span?.className).toContain('text-[22px]');
   });
 });

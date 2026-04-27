@@ -1,11 +1,9 @@
-import { useQuery } from '@tanstack/react-query';
-import { apiFetch } from '@/lib/api';
 import { MessageItem } from './MessageItem';
 import { MessageInput } from './MessageInput';
 import { Button } from '@/components/ui/button';
 import { X } from 'lucide-react';
 import { useSendMessage, type SendMessageInput } from '@/hooks/useMessages';
-import type { Message } from '@/types';
+import { useThreadMessages } from '@/hooks/useThreads';
 import type { UserMapEntry } from './MessageList';
 
 interface ThreadPanelProps {
@@ -25,16 +23,7 @@ export function ThreadPanel({
   userMap,
   currentUserId,
 }: ThreadPanelProps) {
-  const parentPath = channelId
-    ? `channels/${channelId}`
-    : `conversations/${conversationId}`;
-
-  const { data, isLoading } = useQuery({
-    queryKey: ['thread', parentPath, threadRootID],
-    queryFn: () =>
-      apiFetch<Message[]>(`/api/v1/${parentPath}/messages/${threadRootID}/thread`),
-    enabled: !!(channelId || conversationId) && !!threadRootID,
-  });
+  const { data, isLoading } = useThreadMessages({ channelId, conversationId, threadRootID });
 
   const send = useSendMessage({ channelId, conversationId });
 

@@ -21,6 +21,8 @@ export const EventType = {
   AttachmentDeleted: 'attachment.deleted',
   ChannelMuted: 'channel.muted',
   NotificationNew: 'notification.new',
+  ForceLogout: 'auth.force_logout',
+  ServerVersion: 'server.version',
   Ping: 'ping',
 } as const;
 

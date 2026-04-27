@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { BrowserRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -114,24 +114,20 @@ describe('Sidebar', () => {
 
   it('shows Admin badge for admin users', () => {
     renderSidebar();
-    // Two "Admin" texts now exist: the role badge in the user header
-    // and the Admin nav link. Both should appear for admin users.
+    // Admin role badge shows in the user header. The Admin entry was moved
+    // from a sidebar nav link into the user-menu DropdownMenuItem, but
+    // because the dropdown content stays mounted (Radix), its label is
+    // queryable here too.
     const matches = screen.getAllByText('Admin');
-    expect(matches.length).toBeGreaterThanOrEqual(2);
+    expect(matches.length).toBeGreaterThanOrEqual(1);
   });
 
-  it('does not show the Admin nav link for non-admins', () => {
-    // The Sidebar test fixture uses a member role override; this test
-    // verifies the Admin NavLink is gated behind systemRole === admin.
-    // Achieved via existing role-based mock pattern would require a
-    // test re-render with member; we keep this assertion simple by
-    // confirming the link target is unique in the admin case so a
-    // hardening regression would surface as a duplicate count drop.
+  it('exposes an Admin entry in the user menu for admins', async () => {
+    // Admin used to be a top-level sidebar nav link, but it now lives in
+    // the user dropdown — open the menu before asserting on the item.
     renderSidebar();
-    const adminLinks = screen
-      .queryAllByRole('link')
-      .filter((a) => a.getAttribute('href') === '/admin');
-    expect(adminLinks.length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByLabelText('User menu'));
+    expect(await screen.findByTestId('user-menu-admin')).toBeInTheDocument();
   });
 
   it('renders channel list', () => {
@@ -140,9 +136,12 @@ describe('Sidebar', () => {
     expect(screen.getByText('secret')).toBeInTheDocument();
   });
 
-  it('renders the unified Browse header for channels and DMs', () => {
+  it('does not render a "Browse" header above the channel groups', () => {
+    // The "Browse" wrapper header was dropped — sections (Favorites,
+    // Channels, DMs, user categories) render directly with their own
+    // chevron header, so the bridge label became visual noise.
     renderSidebar();
-    expect(screen.getByText('Browse')).toBeInTheDocument();
+    expect(screen.queryByText('Browse')).not.toBeInTheDocument();
   });
 
   it('renders default Channels and Direct Messages section headers when both have items', () => {
@@ -189,15 +188,18 @@ describe('Sidebar', () => {
     expect(dots.length).toBeGreaterThanOrEqual(1);
   });
 
-  it('calls hideConversation when close button is clicked', async () => {
+  it('calls hideConversation when "Close conversation" menu item is clicked', async () => {
+    // Closing a DM moved from a dedicated X button into the row's kebab
+    // menu so DM rows match the channel-row layout exactly. Open the
+    // kebab first (Radix only renders the menu items on click), then
+    // pick the menu entry by its per-row data-testid.
     const user = userEvent.setup();
     renderSidebar();
 
     expect(screen.getByText('Bob Jones')).toBeInTheDocument();
 
-    const closeButtons = screen.getAllByLabelText('Close conversation');
-    await user.click(closeButtons[0]);
-
+    await user.click(screen.getByTestId('conv-row-menu-conv-1'));
+    await user.click(await screen.findByTestId('conv-close-conv-1'));
     expect(mockHideConversation).toHaveBeenCalledWith('conv-1');
   });
 

@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/DigitalTolk/ex/internal/middleware"
@@ -46,11 +47,40 @@ func (h *ChannelHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 	ch, err := h.channelSvc.Create(r.Context(), userID, body.Name, body.Type, body.Description)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "create_error", err.Error())
+		writeServiceError(w, err, http.StatusInternalServerError, "create_error")
 		return
 	}
 
 	writeJSON(w, http.StatusCreated, ch)
+}
+
+// isValidationError reports whether err is one of the named validation
+// errors from service/limits.go.
+func isValidationError(err error) bool {
+	switch {
+	case err == nil:
+		return false
+	case errors.Is(err, service.ErrMessageTooLong),
+		errors.Is(err, service.ErrTooManyAttachments),
+		errors.Is(err, service.ErrTooManyReactions),
+		errors.Is(err, service.ErrChannelNameInvalid),
+		errors.Is(err, service.ErrChannelNameTooLong),
+		errors.Is(err, service.ErrChannelDescriptionTooLong):
+		return true
+	}
+	return false
+}
+
+// writeServiceError maps a service-layer error to an HTTP response: a
+// validation error becomes 400, anything else uses the supplied
+// fallback. Centralized so a typo in user input doesn't surface as a
+// scary 500.
+func writeServiceError(w http.ResponseWriter, err error, fallbackStatus int, fallbackCode string) {
+	if isValidationError(err) {
+		writeError(w, http.StatusBadRequest, "invalid_body", err.Error())
+		return
+	}
+	writeError(w, fallbackStatus, fallbackCode, err.Error())
 }
 
 // List returns all channels the authenticated user belongs to.
@@ -149,7 +179,7 @@ func (h *ChannelHandler) Update(w http.ResponseWriter, r *http.Request) {
 
 	ch, err := h.channelSvc.Update(r.Context(), userID, id, body.Name, body.Description)
 	if err != nil {
-		writeError(w, http.StatusForbidden, "update_error", err.Error())
+		writeServiceError(w, err, http.StatusForbidden, "update_error")
 		return
 	}
 
@@ -383,7 +413,7 @@ func (h *ChannelHandler) SendMessage(w http.ResponseWriter, r *http.Request) {
 
 	msg, err := h.messageSvc.Send(r.Context(), userID, id, service.ParentChannel, body.Body, body.ParentMessageID, body.AttachmentIDs...)
 	if err != nil {
-		writeError(w, http.StatusForbidden, "send_error", err.Error())
+		writeServiceError(w, err, http.StatusForbidden, "send_error")
 		return
 	}
 
@@ -444,7 +474,7 @@ func (h *ChannelHandler) EditMessage(w http.ResponseWriter, r *http.Request) {
 	}
 	msg, err := h.messageSvc.Edit(r.Context(), userID, id, service.ParentChannel, msgID, body.Body, attIDs)
 	if err != nil {
-		writeError(w, http.StatusForbidden, "edit_error", err.Error())
+		writeServiceError(w, err, http.StatusForbidden, "edit_error")
 		return
 	}
 
@@ -475,7 +505,7 @@ func (h *ChannelHandler) ToggleReaction(w http.ResponseWriter, r *http.Request) 
 
 	msg, err := h.messageSvc.ToggleReaction(r.Context(), userID, id, service.ParentChannel, msgID, body.Emoji)
 	if err != nil {
-		writeError(w, http.StatusForbidden, "reaction_error", err.Error())
+		writeServiceError(w, err, http.StatusForbidden, "reaction_error")
 		return
 	}
 	writeJSON(w, http.StatusOK, msg)

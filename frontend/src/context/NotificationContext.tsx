@@ -1,4 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { toast } from 'sonner';
 import { playNotificationPing } from '@/lib/notification-sound';
 
 // NotificationKind mirrors backend service.NotificationKind. Adding a new
@@ -123,13 +124,44 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       if (n.authorID && currentUserIDRef.current && n.authorID === currentUserIDRef.current) {
         return;
       }
-      // Don't alert for the parent the user is currently looking at.
-      if (activeParentRef.current && activeParentRef.current === n.parentID) {
+      // Suppress only regular-message popups for the parent the user is
+      // currently viewing — those land in the visible message list, no
+      // popup adds value. Mentions and thread replies escalate and should
+      // alert even when the parent is on screen: a mention in a long
+      // channel might scroll out of view, and a thread reply lives in a
+      // panel the user hasn't opened.
+      if (
+        n.kind === 'message' &&
+        activeParentRef.current &&
+        activeParentRef.current === n.parentID
+      ) {
         return;
       }
       if (prefs.soundEnabled) {
         playNotificationPing();
       }
+      // In-app toast — the primary popup. Always fires regardless of OS
+      // permission so the user sees alerts even if they never granted
+      // browser notifications, dismissed the prompt, or are on a browser
+      // that suppresses Notification API while the tab is focused
+      // (e.g. Safari ≥16). Click to deep-link to the message.
+      toast(n.title, {
+        description: n.body,
+        duration: 6000,
+        onAutoClose: () => undefined,
+        action: n.deepLink
+          ? {
+              label: 'Open',
+              onClick: () => {
+                window.location.href = n.deepLink;
+              },
+            }
+          : undefined,
+      });
+      // OS-level popup is the bonus path — only fires when the user has
+      // explicitly granted permission AND the browser is willing to show
+      // it. Failures here are silent because the toast already covered
+      // the user-visible alert.
       if (
         prefs.browserEnabled &&
         typeof window !== 'undefined' &&
@@ -149,7 +181,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
           };
         } catch {
           // Notification constructor can throw on some embedded browsers;
-          // ignore — sound + in-app indicators are still in play.
+          // the toast above is still showing.
         }
       }
     },

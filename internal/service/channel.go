@@ -140,6 +140,12 @@ func (s *ChannelService) Create(ctx context.Context, userID, name string, chanTy
 			}
 		}
 	}
+	if err := ValidateChannelName(name); err != nil {
+		return nil, err
+	}
+	if err := ValidateChannelDescription(description); err != nil {
+		return nil, err
+	}
 	now := time.Now()
 	ch := &model.Channel{
 		ID:          store.NewID(),
@@ -212,9 +218,15 @@ func (s *ChannelService) Update(ctx context.Context, actorID, channelID string, 
 	}
 
 	if name != nil {
+		if err := ValidateChannelName(*name); err != nil {
+			return nil, err
+		}
 		ch.Name = *name
 	}
 	if description != nil {
+		if err := ValidateChannelDescription(*description); err != nil {
+			return nil, err
+		}
 		ch.Description = *description
 	}
 	ch.UpdatedAt = time.Now()

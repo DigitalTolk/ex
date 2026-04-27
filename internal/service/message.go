@@ -99,6 +99,12 @@ func (s *MessageService) Send(ctx context.Context, userID, parentID, parentType,
 	if body == "" && len(attachmentIDs) == 0 {
 		return nil, errors.New("message: body or attachments required")
 	}
+	if err := ValidateMessageBody(body); err != nil {
+		return nil, err
+	}
+	if err := ValidateAttachmentCount(len(attachmentIDs)); err != nil {
+		return nil, err
+	}
 
 	now := time.Now()
 	msg := &model.Message{
@@ -347,6 +353,12 @@ func (s *MessageService) Edit(ctx context.Context, userID, parentID, parentType,
 	if newBody == "" && len(finalAttachments) == 0 {
 		return nil, errors.New("message: body or attachments required")
 	}
+	if err := ValidateMessageBody(newBody); err != nil {
+		return nil, err
+	}
+	if err := ValidateAttachmentCount(len(finalAttachments)); err != nil {
+		return nil, err
+	}
 
 	msg.Body = newBody
 	now := time.Now()
@@ -474,6 +486,12 @@ func (s *MessageService) ToggleReaction(ctx context.Context, userID, parentID, p
 			msg.Reactions[emoji] = users
 		}
 	} else {
+		// Distinct-emoji cap. Adding a brand new emoji to a message that
+		// already has the maximum is rejected; toggling an existing emoji
+		// (path above) always works since it doesn't grow the map.
+		if _, exists := msg.Reactions[emoji]; !exists && len(msg.Reactions) >= MaxDistinctReactions {
+			return nil, ErrTooManyReactions
+		}
 		msg.Reactions[emoji] = append(users, userID)
 	}
 	if len(msg.Reactions) == 0 {

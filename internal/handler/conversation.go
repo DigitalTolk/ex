@@ -101,7 +101,11 @@ func (h *ConversationHandler) Create(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusCreated, conv)
 			return
 		}
-		conv, err := h.convSvc.CreateGroup(r.Context(), userID, others, body.Name)
+		// Forward into an existing group with the same participant set
+		// when one exists, so re-opening "New conversation" with the
+		// same people lands in the prior chat instead of spawning a
+		// duplicate group.
+		conv, err := h.convSvc.GetOrCreateGroup(r.Context(), userID, others, body.Name)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, "group_error", err.Error())
 			return
@@ -204,7 +208,7 @@ func (h *ConversationHandler) SendMessage(w http.ResponseWriter, r *http.Request
 
 	msg, err := h.messageSvc.Send(r.Context(), userID, id, service.ParentConversation, body.Body, body.ParentMessageID, body.AttachmentIDs...)
 	if err != nil {
-		writeError(w, http.StatusForbidden, "send_error", err.Error())
+		writeServiceError(w, err, http.StatusForbidden, "send_error")
 		return
 	}
 
@@ -265,7 +269,7 @@ func (h *ConversationHandler) EditMessage(w http.ResponseWriter, r *http.Request
 	}
 	msg, err := h.messageSvc.Edit(r.Context(), userID, id, service.ParentConversation, msgID, body.Body, attIDs)
 	if err != nil {
-		writeError(w, http.StatusForbidden, "edit_error", err.Error())
+		writeServiceError(w, err, http.StatusForbidden, "edit_error")
 		return
 	}
 
@@ -296,7 +300,7 @@ func (h *ConversationHandler) ToggleReaction(w http.ResponseWriter, r *http.Requ
 
 	msg, err := h.messageSvc.ToggleReaction(r.Context(), userID, id, service.ParentConversation, msgID, body.Emoji)
 	if err != nil {
-		writeError(w, http.StatusForbidden, "reaction_error", err.Error())
+		writeServiceError(w, err, http.StatusForbidden, "reaction_error")
 		return
 	}
 	writeJSON(w, http.StatusOK, msg)

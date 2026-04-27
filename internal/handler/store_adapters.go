@@ -191,3 +191,6 @@ func (a *TokenStoreAdapter) GetRefreshToken(ctx context.Context, tokenHash strin
 func (a *TokenStoreAdapter) DeleteRefreshToken(ctx context.Context, tokenHash string) error {
 	return a.s.Delete(ctx, tokenHash)
 }
+func (a *TokenStoreAdapter) DeleteAllRefreshTokensForUser(ctx context.Context, userID string) error {
+	return a.s.DeleteAllForUser(ctx, userID)
+}

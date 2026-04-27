@@ -3,11 +3,13 @@ import type { UserMapEntry } from './MessageList';
 
 interface Props {
   parentID?: string;
-  // Optional userMap to resolve userIDs → display names. Falls back to
-  // raw IDs when a name isn't in the map (loading state).
   userMap?: Record<string, UserMapEntry>;
 }
 
+// TypingIndicator is rendered as an overlay at the bottom of the message
+// area so flipping its visibility doesn't push messages up/down. Owners
+// place it inside a `relative` container that wraps MessageList; the
+// indicator absolute-positions to the bottom-left of that wrapper.
 export function TypingIndicator({ parentID, userMap }: Props) {
   const { typingByParent } = useTyping();
   if (!parentID) return null;
@@ -15,12 +17,12 @@ export function TypingIndicator({ parentID, userMap }: Props) {
   if (ids.length === 0) return null;
   const names = ids.map((id) => userMap?.[id]?.displayName ?? id);
   return (
-    <p
+    <div
       data-testid="typing-indicator"
-      className="px-4 pb-1 text-xs italic text-muted-foreground"
       aria-live="polite"
+      className="pointer-events-none absolute inset-x-0 bottom-0 px-4 pt-3 pb-1 text-xs italic text-muted-foreground bg-gradient-to-t from-background via-background/90 to-transparent"
     >
       {formatTypingPhrase(names)}
-    </p>
+    </div>
   );
 }

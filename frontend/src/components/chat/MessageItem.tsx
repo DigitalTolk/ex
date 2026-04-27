@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Pencil, Trash2, Smile, MessageSquareReply, MoreHorizontal, Pin, PinOff, Link as LinkIcon } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
@@ -25,6 +25,18 @@ import { EmojiGlyph } from '@/components/EmojiGlyph';
 import { MessageAttachments } from '@/components/chat/MessageAttachments';
 import { getInitials, formatLongDateTime } from '@/lib/format';
 import type { Message } from '@/types';
+
+// Module-level Set so MessageList/ThreadPanel don't need to thread a
+// context through every callsite. Listeners are MessageItems with an
+// open kebab menu; on mouseEnter another row, every other listener
+// closes itself. mouseleave on the row doesn't work — Radix portals
+// the menu outside the row's DOM, so moving cursor from kebab to a
+// menu item would slam the menu shut before the user could click.
+type MessageHoverListener = (activeMessageID: string) => void;
+const messageHoverListeners = new Set<MessageHoverListener>();
+function notifyMessageHovered(id: string) {
+  for (const cb of messageHoverListeners) cb(id);
+}
 
 interface MessageItemProps {
   message: Message;
@@ -62,6 +74,27 @@ export function MessageItem({
 }: MessageItemProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [linkCopied, setLinkCopied] = useState(false);
+  // Visibility tracked in JS (not Tailwind group-hover) because Radix's
+  // open dropdown changes pointer-events/focus and breaks CSS :hover
+  // propagation on the row.
+  const [hovered, setHovered] = useState(false);
+  const [actionsMenuOpen, setActionsMenuOpen] = useState(false);
+  const toolbarVisible = hovered || actionsMenuOpen;
+
+  useEffect(() => {
+    if (!actionsMenuOpen) return;
+    const ownID = message.id;
+    const onHover = (activeID: string) => {
+      if (activeID !== ownID) {
+        setActionsMenuOpen(false);
+        setHovered(false);
+      }
+    };
+    messageHoverListeners.add(onHover);
+    return () => {
+      messageHoverListeners.delete(onHover);
+    };
+  }, [actionsMenuOpen, message.id]);
   const editMessage = useEditMessage();
   const deleteMessage = useDeleteMessage();
   const toggleReaction = useToggleReaction();
@@ -181,7 +214,12 @@ export function MessageItem({
     <div
       id={`msg-${message.id}`}
       data-message-id={message.id}
-      className={`group relative flex items-start gap-3 rounded-md px-2 py-1.5 hover:bg-muted/50 ${
+      onMouseEnter={() => {
+        setHovered(true);
+        notifyMessageHovered(message.id);
+      }}
+      onMouseLeave={() => setHovered(false)}
+      className={`relative flex items-start gap-3 rounded-md px-2 py-1.5 hover:bg-muted/50 ${
         message.pinned ? 'border-l-2 border-amber-500 pl-2' : ''
       }`}
     >
@@ -314,7 +352,10 @@ export function MessageItem({
 
       {!isEditing && (
         <div
-          className="absolute right-2 -top-3 flex items-center gap-0.5 bg-background border rounded-md shadow-sm opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity"
+          className="absolute right-2 -top-3 flex items-center gap-0.5 bg-background border rounded-md shadow-sm transition-opacity"
+          style={{ opacity: toolbarVisible ? 1 : 0 }}
+          data-actions-pinned={actionsMenuOpen ? 'true' : 'false'}
+          data-actions-visible={toolbarVisible ? 'true' : 'false'}
           role="toolbar"
           aria-label="Message actions"
         >
@@ -337,10 +378,14 @@ export function MessageItem({
               <MessageSquareReply className="h-3.5 w-3.5" />
             </Button>
           )}
-          <DropdownMenu>
+          {/* modal={false} so other rows still receive mouseEnter while
+              this menu is open — needed by the close-on-hover listener
+              and the row's own :hover state. */}
+          <DropdownMenu modal={false} open={actionsMenuOpen} onOpenChange={setActionsMenuOpen}>
             <DropdownMenuTrigger
               className="h-7 w-7 flex items-center justify-center rounded-md hover:bg-accent"
               aria-label="More actions"
+              data-testid="message-actions-trigger"
             >
               <MoreHorizontal className="h-3.5 w-3.5" />
             </DropdownMenuTrigger>

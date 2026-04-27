@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Hash, Search, MessageSquare } from 'lucide-react';
+import { PageContainer } from '@/components/layout/PageContainer';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -33,43 +34,36 @@ export default function DirectoriesPage() {
   const isAdmin = user?.systemRole === 'admin';
 
   return (
-    <div className="flex-1 overflow-y-auto">
-      <div className="mx-auto max-w-4xl p-6">
-        <h1 className="text-xl font-bold mb-1">Directory</h1>
-        <p className="text-sm text-muted-foreground mb-4">
-          Browse channels and members in your workspace
-        </p>
-
-        <div role="tablist" aria-label="Directory sections" className="flex gap-1 border-b mb-4">
-          <button
-            role="tab"
-            aria-selected={tab === 'channels'}
-            onClick={() => setTab('channels')}
-            className={`px-3 py-2 text-sm font-medium border-b-2 -mb-px ${
-              tab === 'channels'
-                ? 'border-primary text-foreground'
-                : 'border-transparent text-muted-foreground hover:text-foreground'
-            }`}
-          >
-            Channels
-          </button>
-          <button
-            role="tab"
-            aria-selected={tab === 'members'}
-            onClick={() => setTab('members')}
-            className={`px-3 py-2 text-sm font-medium border-b-2 -mb-px ${
-              tab === 'members'
-                ? 'border-primary text-foreground'
-                : 'border-transparent text-muted-foreground hover:text-foreground'
-            }`}
-          >
-            Members
-          </button>
-        </div>
-
-        {tab === 'channels' ? <ChannelsTab /> : <MembersTab isAdmin={isAdmin} currentUserId={user?.id} />}
+    <PageContainer title="Directory" description="Browse channels and members in your workspace">
+      <div role="tablist" aria-label="Directory sections" className="flex gap-1 border-b">
+        <button
+          role="tab"
+          aria-selected={tab === 'channels'}
+          onClick={() => setTab('channels')}
+          className={`px-3 py-2 text-sm font-medium border-b-2 -mb-px ${
+            tab === 'channels'
+              ? 'border-primary text-foreground'
+              : 'border-transparent text-muted-foreground hover:text-foreground'
+          }`}
+        >
+          Channels
+        </button>
+        <button
+          role="tab"
+          aria-selected={tab === 'members'}
+          onClick={() => setTab('members')}
+          className={`px-3 py-2 text-sm font-medium border-b-2 -mb-px ${
+            tab === 'members'
+              ? 'border-primary text-foreground'
+              : 'border-transparent text-muted-foreground hover:text-foreground'
+          }`}
+        >
+          Members
+        </button>
       </div>
-    </div>
+
+      {tab === 'channels' ? <ChannelsTab /> : <MembersTab isAdmin={isAdmin} currentUserId={user?.id} />}
+    </PageContainer>
   );
 }
 
@@ -185,13 +179,21 @@ function MembersTab({ isAdmin, currentUserId }: MembersTabProps) {
   const [users, setUsers] = useState<User[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
+  // refreshKey is bumped by the WS user.updated bridge below so the
+  // members list re-fetches when an avatar / display name changes
+  // anywhere in the app.
+  const [refreshKey, setRefreshKey] = useState(0);
   const { isOnline } = usePresence();
   const createConversation = useCreateConversation();
   const navigate = useNavigate();
 
   useEffect(() => {
-    // setError/setIsLoading are wrapped in queueMicrotask so the effect
-    // doesn't cascade into a synchronous re-render before the timer fires.
+    const onUpdate = () => setRefreshKey((k) => k + 1);
+    window.addEventListener('ex:user-updated', onUpdate);
+    return () => window.removeEventListener('ex:user-updated', onUpdate);
+  }, []);
+
+  useEffect(() => {
     queueMicrotask(() => {
       setError('');
       setIsLoading(true);
@@ -211,7 +213,7 @@ function MembersTab({ isAdmin, currentUserId }: MembersTabProps) {
       }
     }, 250);
     return () => clearTimeout(timer);
-  }, [query]);
+  }, [query, refreshKey]);
 
   async function changeRole(userId: string, newRole: 'admin' | 'member' | 'guest') {
     setError('');

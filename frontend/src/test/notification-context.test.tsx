@@ -12,6 +12,11 @@ vi.mock('@/lib/notification-sound', () => ({
   playNotificationPing: () => playMock(),
 }));
 
+const toastMock = vi.fn();
+vi.mock('sonner', () => ({
+  toast: (...args: unknown[]) => toastMock(...args),
+}));
+
 const samplePayload: NotificationPayload = {
   kind: 'message',
   title: 'Alice in #general',
@@ -53,6 +58,7 @@ describe('NotificationProvider', () => {
 
   beforeEach(() => {
     playMock.mockReset();
+    toastMock.mockReset();
     dispatchSpy = null;
     setActiveSpy = null;
     setUserSpy = null;
@@ -136,6 +142,78 @@ describe('NotificationProvider', () => {
     });
     expect(playMock).toHaveBeenCalledTimes(1);
     expect(notificationCtor).toHaveBeenCalledTimes(1);
+  });
+
+  it('still fires popups for mentions even when on the active parent', () => {
+    // Mentions are personal — a user might be on the channel but scrolled
+    // far away, or have it open in a background tab. They should always
+    // hear/see a mention popup so the alert isn't silently dropped.
+    renderProbe();
+    act(() => {
+      setActiveSpy!('ch-1');
+      dispatchSpy!({ ...samplePayload, kind: 'mention' });
+    });
+    expect(playMock).toHaveBeenCalledTimes(1);
+    expect(notificationCtor).toHaveBeenCalledTimes(1);
+  });
+
+  it('still fires popups for thread replies even when on the active parent', () => {
+    // Thread replies live in a side panel that may not be open. Suppressing
+    // them just because the parent channel is on screen made replies
+    // invisible — fire popups regardless of active parent.
+    renderProbe();
+    act(() => {
+      setActiveSpy!('ch-1');
+      dispatchSpy!({ ...samplePayload, kind: 'thread_reply' });
+    });
+    expect(playMock).toHaveBeenCalledTimes(1);
+    expect(notificationCtor).toHaveBeenCalledTimes(1);
+  });
+
+  it('always fires an in-app toast on dispatch (popup that works without OS permission)', () => {
+    // The OS Notification API has many barriers (default-permission,
+    // focus rules on Safari, OS DnD). The in-app toast is the primary
+    // popup so the user always sees something — the OS popup is a bonus.
+    renderProbe();
+    act(() => {
+      dispatchSpy!(samplePayload);
+    });
+    expect(toastMock).toHaveBeenCalledTimes(1);
+    expect(toastMock.mock.calls[0][0]).toBe('Alice in #general');
+    const opts = toastMock.mock.calls[0][1] as { description: string; action?: { label: string } };
+    expect(opts.description).toBe('hello there');
+    expect(opts.action?.label).toBe('Open');
+  });
+
+  it('still fires the in-app toast when OS permission is "default" (never granted)', () => {
+    // If the user never clicked "Enable" on the prompt, Notification
+    // permission stays "default" and the OS popup is silent. The toast
+    // must still appear so the user gets feedback.
+    Object.defineProperty(window, 'Notification', {
+      value: Object.assign(vi.fn(), {
+        permission: 'default',
+        requestPermission: vi.fn().mockResolvedValue('default'),
+      }),
+      configurable: true,
+      writable: true,
+    });
+    renderProbe();
+    act(() => {
+      dispatchSpy!(samplePayload);
+    });
+    expect(toastMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not fire a toast when the active parent suppresses the notification', () => {
+    // Active-parent suppression for a regular message also drops the
+    // toast — the user is already looking at the message; doubling up
+    // with a popup is noise.
+    renderProbe();
+    act(() => {
+      setActiveSpy!('ch-1');
+      dispatchSpy!(samplePayload);
+    });
+    expect(toastMock).not.toHaveBeenCalled();
   });
 
   it('falls back to no-op when used outside the provider', () => {

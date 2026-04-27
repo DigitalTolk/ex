@@ -34,6 +34,7 @@ type WSHandler struct {
 	convSvc     *service.ConversationService
 	presenceSvc *service.PresenceService
 	publisher   service.Publisher
+	version     string
 }
 
 // NewWSHandler creates a WSHandler.
@@ -44,6 +45,13 @@ func NewWSHandler(broker *pubsub.Broker, chanSvc *service.ChannelService, convSv
 // SetPublisher wires a publisher for inbound ephemeral events (typing
 // indicator). Optional — when nil, inbound typing is dropped.
 func (h *WSHandler) SetPublisher(p service.Publisher) { h.publisher = p }
+
+// SetVersion records the running build version so each newly-connected
+// client receives a "server.version" frame as part of the handshake. The
+// browser uses this to decide if its bundle is outdated — sending it on
+// the WS instead of polling /api/v1/version every minute keeps a chatty
+// pinger off the HTTP fast path even with many connected users.
+func (h *WSHandler) SetVersion(v string) { h.version = v }
 
 // Connect upgrades the HTTP connection to a WebSocket for the authenticated
 // user. Authentication is handled via the "token" query parameter by the auth
@@ -144,6 +152,16 @@ func (h *WSHandler) Connect(w http.ResponseWriter, r *http.Request) {
 
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
+
+	// Write failure isn't fatal — the keep-alive ping below surfaces a
+	// broken connection on its own.
+	if h.version != "" {
+		if evt, err := events.NewEvent(events.EventServerVersion, map[string]string{"version": h.version}); err == nil {
+			if data, err := json.Marshal(evt); err == nil {
+				_ = conn.Write(ctx, websocket.MessageText, data)
+			}
+		}
+	}
 
 	// Read loop: parse incoming JSON frames so the typing indicator can
 	// fan out via the same pubsub fabric as ordinary events. Unknown

@@ -553,6 +553,82 @@ func TestUserService_SetStatus_NotFound(t *testing.T) {
 	}
 }
 
+// Deactivating a guest must wipe every refresh token they hold so the
+// session truly ends — otherwise the user could refresh into a new
+// access token until the refresh expires naturally.
+func TestUserService_SetStatus_Deactivate_InvalidatesRefreshTokens(t *testing.T) {
+	users := newMockUserStore()
+	tokens := newMockTokenStore()
+	pub := &mockPublisher{}
+	svc := NewUserService(users, nil, nil, pub)
+	svc.SetTokenStore(tokens)
+
+	guest := &model.User{
+		ID: "u-guest-tok", Email: "g@x.com", SystemRole: model.SystemRoleGuest,
+		AuthProvider: model.AuthProviderGuest, Status: "active",
+	}
+	users.users[guest.ID] = guest
+
+	tokens.tokens["h1"] = &model.RefreshToken{TokenHash: "h1", UserID: guest.ID}
+	tokens.tokens["h2"] = &model.RefreshToken{TokenHash: "h2", UserID: guest.ID}
+	tokens.tokens["other"] = &model.RefreshToken{TokenHash: "other", UserID: "someone-else"}
+
+	if _, err := svc.SetStatus(context.Background(), guest.ID, true); err != nil {
+		t.Fatalf("deactivate: %v", err)
+	}
+
+	if _, ok := tokens.tokens["h1"]; ok {
+		t.Error("guest refresh token h1 should be wiped")
+	}
+	if _, ok := tokens.tokens["h2"]; ok {
+		t.Error("guest refresh token h2 should be wiped")
+	}
+	if _, ok := tokens.tokens["other"]; !ok {
+		t.Error("unrelated user's refresh token must not be touched")
+	}
+
+	// A force-logout event should be published to the user's personal
+	// channel so any open browser tab disconnects right now.
+	var sawForceLogout bool
+	for _, p := range pub.published {
+		if p.event.Type == "auth.force_logout" {
+			sawForceLogout = true
+			break
+		}
+	}
+	if !sawForceLogout {
+		t.Error("expected auth.force_logout to be published on deactivate")
+	}
+}
+
+func TestUserService_SetStatus_Reactivate_DoesNotPublishForceLogout(t *testing.T) {
+	users := newMockUserStore()
+	tokens := newMockTokenStore()
+	pub := &mockPublisher{}
+	svc := NewUserService(users, nil, nil, pub)
+	svc.SetTokenStore(tokens)
+
+	guest := &model.User{
+		ID: "u-react", SystemRole: model.SystemRoleGuest,
+		AuthProvider: model.AuthProviderGuest, Status: "deactivated",
+	}
+	users.users[guest.ID] = guest
+	tokens.tokens["k"] = &model.RefreshToken{TokenHash: "k", UserID: guest.ID}
+
+	if _, err := svc.SetStatus(context.Background(), guest.ID, false); err != nil {
+		t.Fatalf("reactivate: %v", err)
+	}
+
+	if _, ok := tokens.tokens["k"]; !ok {
+		t.Error("reactivation must not invalidate tokens")
+	}
+	for _, p := range pub.published {
+		if p.event.Type == "auth.force_logout" {
+			t.Error("force_logout must not be published on reactivation")
+		}
+	}
+}
+
 func TestUserService_Search_CaseInsensitive(t *testing.T) {
 	users := newMockUserStore()
 	svc := NewUserService(users, nil, nil, nil)

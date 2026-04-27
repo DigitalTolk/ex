@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import ThreadsPage from '@/pages/ThreadsPage';
@@ -20,6 +20,26 @@ vi.mock('@/hooks/useConversations', () => ({
   useUserConversations: () => ({
     data: [{ conversationID: 'conv-1', type: 'dm', displayName: 'Bob' }],
   }),
+}));
+
+vi.mock('@/context/AuthContext', () => ({
+  useAuth: () => ({ user: { id: 'u-me', displayName: 'Me' } }),
+}));
+
+// Stub ThreadCard so this test focuses on the page-level orchestration:
+// one card per summary, correct title and deep-link, empty state, loading.
+// ThreadCard's own behavior (snippet rendering, collapse, reply composer)
+// is covered in thread-card.test.tsx.
+vi.mock('@/components/threads/ThreadCard', () => ({
+  ThreadCard: ({ summary, title, deepLink }: { summary: ThreadSummary; title: string; deepLink: string }) => (
+    <article
+      data-testid="thread-card"
+      data-thread-root-id={summary.threadRootID}
+      data-deep-link={deepLink}
+    >
+      <span data-testid="thread-card-title">{title}</span>
+    </article>
+  ),
 }));
 
 const sample: ThreadSummary[] = [
@@ -63,19 +83,26 @@ function renderPage() {
 describe('ThreadsPage', () => {
   beforeEach(() => {
     apiFetchMock.mockReset();
-    localStorage.clear();
   });
 
-  it('renders thread rows with parent label and reply count', async () => {
+  it('renders one ThreadCard per summary with the channel/conversation label as title', async () => {
     apiFetchMock.mockResolvedValueOnce(sample);
     renderPage();
     await waitFor(() => {
-      expect(screen.getAllByTestId('thread-row')).toHaveLength(2);
+      expect(screen.getAllByTestId('thread-card')).toHaveLength(2);
     });
-    expect(screen.getByText('#general')).toBeInTheDocument();
-    expect(screen.getByText('Bob')).toBeInTheDocument();
-    expect(screen.getByText('3 replies')).toBeInTheDocument();
-    expect(screen.getByText('1 reply')).toBeInTheDocument();
+    const titles = screen.getAllByTestId('thread-card-title').map((el) => el.textContent);
+    expect(titles).toContain('#general');
+    expect(titles).toContain('Bob');
+  });
+
+  it('builds correct deep-links for channel vs conversation threads', async () => {
+    apiFetchMock.mockResolvedValueOnce(sample);
+    renderPage();
+    const cards = await screen.findAllByTestId('thread-card');
+    const links = cards.map((c) => c.getAttribute('data-deep-link'));
+    expect(links).toContain('/channel/general?thread=msg-root-1');
+    expect(links).toContain('/conversation/conv-1?thread=msg-root-2');
   });
 
   it('shows an empty state when no threads exist', async () => {
@@ -84,35 +111,13 @@ describe('ThreadsPage', () => {
     await waitFor(() => {
       expect(screen.getByTestId('threads-empty')).toBeInTheDocument();
     });
+    expect(screen.queryByTestId('thread-card')).toBeNull();
   });
 
-  it('marks every thread unread when nothing is in the seen map', async () => {
-    apiFetchMock.mockResolvedValueOnce(sample);
+  it('renders loading skeletons while threads are still being fetched', () => {
+    // Never-resolving fetch — first render shows the loading state.
+    apiFetchMock.mockReturnValueOnce(new Promise(() => undefined));
     renderPage();
-    await waitFor(() => {
-      expect(screen.getAllByTestId('thread-unread')).toHaveLength(2);
-    });
-  });
-
-  it('drops the unread dot once a thread has been seen at-or-after its latest activity', async () => {
-    localStorage.setItem(
-      'ex.threads.seen.v1',
-      JSON.stringify({ 'msg-root-1': '2026-04-26T11:00:01Z' }),
-    );
-    apiFetchMock.mockResolvedValueOnce(sample);
-    renderPage();
-    await waitFor(() => {
-      expect(screen.getAllByTestId('thread-row')).toHaveLength(2);
-    });
-    // Only the conv thread should still be unread (msg-root-2 has no seen entry).
-    expect(screen.getAllByTestId('thread-unread')).toHaveLength(1);
-  });
-
-  it('navigates to channel?thread=… when a channel thread row is clicked', async () => {
-    apiFetchMock.mockResolvedValueOnce(sample);
-    renderPage();
-    const rows = await screen.findAllByTestId('thread-row');
-    fireEvent.click(rows[0]);
-    expect(screen.getByTestId('channel-page')).toBeInTheDocument();
+    expect(screen.getByTestId('threads-loading')).toBeInTheDocument();
   });
 });

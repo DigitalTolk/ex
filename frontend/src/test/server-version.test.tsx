@@ -1,19 +1,23 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { useEffect } from 'react';
-import { render, screen, act, waitFor, fireEvent } from '@testing-library/react';
-import { useServerVersion, BUILD_VERSION } from '@/hooks/useServerVersion';
+import { act, fireEvent, render, screen } from '@testing-library/react';
+import {
+  BUILD_VERSION,
+  setServerVersion,
+  useServerVersion,
+} from '@/hooks/useServerVersion';
 import { UpdateBanner } from '@/components/UpdateBanner';
 
-const apiFetchMock = vi.fn();
-vi.mock('@/lib/api', () => ({
-  apiFetch: (...args: unknown[]) => apiFetchMock(...args),
-}));
+// The version state lives in a module-level store so a "reset" between
+// tests means clobbering it back to null. We can't import a private
+// resetter — setServerVersion(null) won't work because the setter ignores
+// empty strings — so each test pushes a sentinel that's distinct from any
+// other test's, then asserts on its own value. The first test seeds it
+// once; the others rely on subsequent setServerVersion calls overwriting.
 
 let captured: ReturnType<typeof useServerVersion> | null = null;
 function Probe() {
   const v = useServerVersion();
-  // Surface state to the test through a ref-style mutable so tests can
-  // assert without depending on rendering.
   useEffect(() => {
     captured = v;
   }, [v]);
@@ -22,7 +26,6 @@ function Probe() {
 
 describe('useServerVersion', () => {
   beforeEach(() => {
-    apiFetchMock.mockReset();
     captured = null;
   });
 
@@ -30,109 +33,90 @@ describe('useServerVersion', () => {
     vi.useRealTimers();
   });
 
-  it('reports outdated=false on initial mount before the first fetch resolves', () => {
-    apiFetchMock.mockReturnValue(new Promise(() => {})); // never resolves
+  it('reports outdated=false before the server reports a version', () => {
+    // Render before any setServerVersion in this test. The previous test's
+    // value may still be in the store, so we explicitly assert behavior:
+    // until BUILD_VERSION (test) and serverVersion mismatch, banner stays
+    // hidden. We seed serverVersion = BUILD_VERSION below to make this
+    // test independent of suite order.
+    act(() => setServerVersion(BUILD_VERSION));
     render(<Probe />);
     expect(screen.getByTestId('probe').textContent).toBe('false');
   });
 
-  it('reports outdated=true once the server reports a newer version (vs build)', async () => {
-    apiFetchMock.mockResolvedValue({ version: 'v2.0.0' });
+  it('reports outdated=true once the server reports a newer version (vs build)', () => {
     render(<Probe />);
-    await waitFor(() => {
-      expect(captured?.serverVersion).toBe('v2.0.0');
-    });
-    // Test bundle is built with __BUILD_VERSION__ === 'test', so v2.0.0 differs.
+    act(() => setServerVersion('v2.0.0'));
+    expect(captured?.serverVersion).toBe('v2.0.0');
     expect(captured?.outdated).toBe(true);
     expect(BUILD_VERSION).toBe('test');
   });
 
-  it('keeps outdated=false when server returns the same version', async () => {
-    apiFetchMock.mockResolvedValue({ version: 'test' });
+  it('keeps outdated=false when server reports the same version as the build', () => {
     render(<Probe />);
-    await waitFor(() => {
-      expect(captured?.serverVersion).toBe('test');
-    });
+    act(() => setServerVersion(BUILD_VERSION));
+    expect(captured?.serverVersion).toBe(BUILD_VERSION);
     expect(captured?.outdated).toBe(false);
   });
 
-  it('does not flag outdated when running in dev mode regardless of server version', async () => {
-    // Simulate a dev build by stubbing BUILD_VERSION via Object.defineProperty.
-    // We can't reassign the const so this test instead verifies the hook
-    // explicitly: when BUILD_VERSION === 'dev', outdated must remain false.
-    // Re-reading the source: only the `BUILD_VERSION !== 'dev'` guard
-    // gates the assignment, so this case is exercised by the build-config
-    // setting __BUILD_VERSION__ = 'test' (non-'dev') — sufficient to
-    // confirm the gate works for the production flow we ship.
-    expect(BUILD_VERSION).not.toBe('dev');
+  it('subscribers are notified across multiple Probes for the same version event', () => {
+    let aCaptured: ReturnType<typeof useServerVersion> | null = null;
+    let bCaptured: ReturnType<typeof useServerVersion> | null = null;
+    function A() {
+      const v = useServerVersion();
+      useEffect(() => {
+        aCaptured = v;
+      }, [v]);
+      return null;
+    }
+    function B() {
+      const v = useServerVersion();
+      useEffect(() => {
+        bCaptured = v;
+      }, [v]);
+      return null;
+    }
+    render(
+      <>
+        <A />
+        <B />
+      </>,
+    );
+    act(() => setServerVersion('v3.0.0'));
+    expect(aCaptured?.serverVersion).toBe('v3.0.0');
+    expect(bCaptured?.serverVersion).toBe('v3.0.0');
   });
 
-  it('re-fetches on window focus once the focus throttle has elapsed', async () => {
-    vi.useFakeTimers();
-    apiFetchMock.mockResolvedValue({ version: 'test' });
+  it('ignores duplicate version pushes (no spurious re-renders / state churn)', () => {
+    // Set initial. Then re-set with the same value. The setter must early-
+    // return — we can't easily count renders here, but we can confirm the
+    // captured state didn't change identity-wise across a noop call.
+    act(() => setServerVersion('v4.0.0'));
     render(<Probe />);
-    await vi.advanceTimersByTimeAsync(0);
-    expect(apiFetchMock).toHaveBeenCalledTimes(1);
-    // Sub-throttle focus is dropped to avoid bursts on rapid alt-tab.
-    act(() => {
-      window.dispatchEvent(new Event('focus'));
-    });
-    expect(apiFetchMock).toHaveBeenCalledTimes(1);
-    // After the throttle window, focus triggers a fresh check.
-    await vi.advanceTimersByTimeAsync(6000);
-    act(() => {
-      window.dispatchEvent(new Event('focus'));
-    });
-    await vi.advanceTimersByTimeAsync(0);
-    expect(apiFetchMock).toHaveBeenCalledTimes(2);
-  });
-
-  it('re-fetches every 60s', async () => {
-    vi.useFakeTimers();
-    apiFetchMock.mockResolvedValue({ version: 'test' });
-    render(<Probe />);
-    // Allow the initial fetch's Promise microtask to flush.
-    await vi.advanceTimersByTimeAsync(0);
-    expect(apiFetchMock).toHaveBeenCalledTimes(1);
-    await vi.advanceTimersByTimeAsync(60_000);
-    expect(apiFetchMock).toHaveBeenCalledTimes(2);
-  });
-
-  it('swallows fetch errors quietly (no banner unless we get a confirmed mismatch)', async () => {
-    apiFetchMock.mockRejectedValue(new Error('offline'));
-    render(<Probe />);
-    // No throw, no state update.
-    await waitFor(() => expect(apiFetchMock).toHaveBeenCalled());
-    expect(captured?.outdated).toBe(false);
+    const before = captured;
+    act(() => setServerVersion('v4.0.0'));
+    expect(captured?.serverVersion).toBe('v4.0.0');
+    expect(captured?.outdated).toBe(before?.outdated);
   });
 });
 
 describe('UpdateBanner', () => {
-  beforeEach(() => {
-    apiFetchMock.mockReset();
-  });
-
-  it('does not render while versions match', async () => {
-    apiFetchMock.mockResolvedValue({ version: 'test' });
+  it('does not render while versions match', () => {
+    act(() => setServerVersion(BUILD_VERSION));
     render(<UpdateBanner />);
-    await waitFor(() => expect(apiFetchMock).toHaveBeenCalled());
     expect(screen.queryByTestId('update-banner')).toBeNull();
   });
 
-  it('renders when the server reports a different version', async () => {
-    apiFetchMock.mockResolvedValue({ version: 'v9.9.9' });
+  it('renders when the server reports a different version', () => {
+    act(() => setServerVersion('v9.9.9'));
     render(<UpdateBanner />);
-    await waitFor(() => {
-      expect(screen.getByTestId('update-banner')).toBeInTheDocument();
-    });
+    expect(screen.getByTestId('update-banner')).toBeInTheDocument();
     expect(screen.getByTestId('update-banner-reload')).toBeInTheDocument();
   });
 
-  it('the reload button cache-busts the location', async () => {
-    apiFetchMock.mockResolvedValue({ version: 'v9.9.9' });
+  it('the reload button cache-busts the location', () => {
+    act(() => setServerVersion('v9.9.9'));
 
-    // Replace window.location with a writable stub so we can capture the
-    // assignment without actually navigating jsdom.
     const orig = window.location;
     let assigned = '';
     Object.defineProperty(window, 'location', {
@@ -152,7 +136,7 @@ describe('UpdateBanner', () => {
 
     try {
       render(<UpdateBanner />);
-      const btn = await screen.findByTestId('update-banner-reload');
+      const btn = screen.getByTestId('update-banner-reload');
       fireEvent.click(btn);
       expect(assigned).toMatch(/^\/chat\?foo=1&v=\d+$/);
     } finally {

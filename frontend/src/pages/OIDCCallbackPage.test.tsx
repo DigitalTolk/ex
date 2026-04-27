@@ -70,7 +70,7 @@ describe('OIDCCallbackPage', () => {
     });
   });
 
-  it('navigates to / when token refresh succeeds', async () => {
+  it('navigates to /channel/general when token refresh succeeds', async () => {
     globalThis.fetch = vi.fn().mockResolvedValue({
       ok: true,
       json: () => Promise.resolve({ accessToken: 'tok-abc' }),

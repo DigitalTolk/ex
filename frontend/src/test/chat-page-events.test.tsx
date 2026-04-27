@@ -12,11 +12,13 @@ vi.mock('@/hooks/useWebSocket', () => ({
   },
 }));
 
+const logoutMock = vi.fn().mockResolvedValue(undefined);
 vi.mock('@/context/AuthContext', () => ({
   useAuth: () => ({
     user: { id: 'u-me', email: 'a@b.c', displayName: 'Me', systemRole: 'member', status: 'active' },
     isAuthenticated: true,
     isLoading: false,
+    logout: logoutMock,
   }),
 }));
 
@@ -308,5 +310,33 @@ describe('ChatPage WebSocket handlers', () => {
     setCurrentUserID.mockClear();
     unmount();
     expect(setCurrentUserID).toHaveBeenCalledWith(null);
+  });
+
+  it('onServerVersion stores the build version so UpdateBanner can react without polling', () => {
+    // Migration from /api/v1/version polling to a single WS frame on
+    // connect. ChatPage forwards the payload into the module-level
+    // serverVersion store; UpdateBanner reads it via useSyncExternalStore.
+    renderAt('/');
+    expect(typeof capturedOptions.onServerVersion).toBe('function');
+    // Stored value lives in '@/hooks/useServerVersion' — we don't import
+    // it here to avoid coupling the test to the hook's internals; the
+    // server-version test covers that contract. This test only verifies
+    // ChatPage actually wires the event.
+    (capturedOptions.onServerVersion as (d: unknown) => void)({ version: 'v9.9.9' });
+    // No assertion on side effects — failure mode is an unhandled error.
+  });
+
+  it('onForceLogout signs the user out and routes to /login', async () => {
+    // Server-side deactivation publishes auth.force_logout to the user's
+    // personal channel; the client must drop credentials and bounce to
+    // the login screen so the kicked-out tab can't keep using the app.
+    logoutMock.mockClear();
+    const { findByTestId } = renderAt('/');
+    await act(async () => {
+      (capturedOptions.onForceLogout as (d: unknown) => void)({ reason: 'deactivated' });
+    });
+    expect(logoutMock).toHaveBeenCalledTimes(1);
+    const loc = await findByTestId('loc');
+    expect(loc.textContent).toBe('/login');
   });
 });

@@ -2,12 +2,18 @@ package service
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/DigitalTolk/ex/internal/model"
 )
+
+// errorsIs is a thin wrapper so the new validation tests don't have to
+// import errors at every callsite. The full path is exercised once
+// elsewhere in the file.
+func errorsIs(err, target error) bool { return errors.Is(err, target) }
 
 func setupMessageService() (*MessageService, *mockMessageStore, *mockMembershipStore, *mockConversationStore, *mockPublisher) {
 	messages := newMockMessageStore()
@@ -58,6 +64,37 @@ func TestMessageService_Send_Channel(t *testing.T) {
 	// Event should be published.
 	if len(publisher.published) != 1 {
 		t.Errorf("expected 1 published event, got %d", len(publisher.published))
+	}
+}
+
+// Send must reject bodies past the codepoint cap with the named error
+// so handlers can map it to a 400.
+func TestMessageService_Send_RejectsBodyOverLimit(t *testing.T) {
+	svc, _, memberships, _, _ := setupMessageService()
+	memberships.memberships["ch1#user-1"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "user-1", Role: model.ChannelRoleMember}
+	body := strings.Repeat("a", MaxMessageBodyChars+1)
+	_, err := svc.Send(context.Background(), "user-1", "ch1", ParentChannel, body, "")
+	if err == nil {
+		t.Fatal("expected error for over-cap body")
+	}
+	if !errorsIs(err, ErrMessageTooLong) {
+		t.Errorf("got %v, want ErrMessageTooLong", err)
+	}
+}
+
+func TestMessageService_Send_RejectsTooManyAttachments(t *testing.T) {
+	svc, _, memberships, _, _ := setupMessageService()
+	memberships.memberships["ch1#user-1"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "user-1", Role: model.ChannelRoleMember}
+	atts := make([]string, MaxAttachmentsPerMessage+1)
+	for i := range atts {
+		atts[i] = "att-" + string(rune('a'+i))
+	}
+	_, err := svc.Send(context.Background(), "user-1", "ch1", ParentChannel, "hi", "", atts...)
+	if err == nil {
+		t.Fatal("expected error for too many attachments")
+	}
+	if !errorsIs(err, ErrTooManyAttachments) {
+		t.Errorf("got %v, want ErrTooManyAttachments", err)
 	}
 }
 
@@ -804,6 +841,38 @@ func TestMessageService_ToggleReaction_Add(t *testing.T) {
 	// Event published.
 	if len(publisher.published) != 1 {
 		t.Errorf("expected 1 published event, got %d", len(publisher.published))
+	}
+}
+
+// Adding a 17th distinct emoji to a message must be rejected. Toggling
+// an emoji that's already on the message (whether the user reacted with
+// it or not) must still work — the cap is on distinct *kinds* of
+// reactions, not on the number of users.
+func TestMessageService_ToggleReaction_DistinctEmojiCap(t *testing.T) {
+	svc, messages, memberships, _, _ := setupMessageService()
+	ctx := context.Background()
+
+	memberships.memberships["ch1#user-1"] = &model.ChannelMembership{
+		ChannelID: "ch1", UserID: "user-1", Role: model.ChannelRoleMember,
+	}
+	// Pre-fill 16 distinct reactions from another user.
+	existing := map[string][]string{}
+	for i := 0; i < MaxDistinctReactions; i++ {
+		existing[string(rune('a'+i))] = []string{"user-2"}
+	}
+	messages.messages["ch1#m1"] = &model.Message{
+		ID: "m1", ParentID: "ch1", AuthorID: "user-2", Body: "hi", Reactions: existing,
+	}
+
+	// 17th distinct emoji from a third party → rejected.
+	if _, err := svc.ToggleReaction(ctx, "user-1", "ch1", ParentChannel, "m1", "👍"); !errorsIs(err, ErrTooManyReactions) {
+		t.Errorf("got %v, want ErrTooManyReactions", err)
+	}
+
+	// Toggling an existing emoji (joining or leaving the group) is
+	// always allowed — it doesn't grow the distinct-set.
+	if _, err := svc.ToggleReaction(ctx, "user-1", "ch1", ParentChannel, "m1", "a"); err != nil {
+		t.Errorf("toggling existing emoji rejected: %v", err)
 	}
 }
 

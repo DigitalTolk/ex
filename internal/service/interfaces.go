@@ -71,6 +71,7 @@ type TokenStore interface {
 	StoreRefreshToken(ctx context.Context, rt *model.RefreshToken) error
 	GetRefreshToken(ctx context.Context, tokenHash string) (*model.RefreshToken, error)
 	DeleteRefreshToken(ctx context.Context, tokenHash string) error
+	DeleteAllRefreshTokensForUser(ctx context.Context, userID string) error
 }
 
 // Cache defines cache operations used by the service layer.

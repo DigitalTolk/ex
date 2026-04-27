@@ -8,6 +8,7 @@ import { MessageSquare } from 'lucide-react';
 import { apiFetch } from '@/lib/api';
 import { getInitials } from '@/lib/format';
 import { PopoverPortal } from '@/components/PopoverPortal';
+import { usePresence } from '@/context/PresenceContext';
 import type { Conversation, User } from '@/types';
 
 interface UserHoverCardProps {
@@ -35,6 +36,11 @@ export function UserHoverCard({
   const hideTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const triggerRef = useRef<HTMLSpanElement>(null);
   const navigate = useNavigate();
+  // Mention hovers know only userId; author hovers pass `online` and
+  // `avatarURL` from their userMap. Fall back to global presence and
+  // the lazy /users fetch so both paths render identical chrome.
+  const presence = usePresence();
+  const effectiveOnline = online ?? presence.isOnline(userId);
 
   const startDM = useMutation({
     mutationFn: () =>
@@ -59,6 +65,7 @@ export function UserHoverCard({
     staleTime: 30_000,
   });
   const inactive = userDetails?.status === 'deactivated';
+  const effectiveAvatar = avatarURL ?? userDetails?.avatarURL;
 
   function clearTimers() {
     if (showTimer.current) clearTimeout(showTimer.current);
@@ -104,19 +111,18 @@ export function UserHoverCard({
           <div className="flex items-center gap-3">
             <div className="relative">
               <Avatar className="h-12 w-12">
-                {avatarURL && <AvatarImage src={avatarURL} alt="" />}
+                {effectiveAvatar && <AvatarImage src={effectiveAvatar} alt="" />}
                 <AvatarFallback className="bg-primary/10 text-sm">
                   {getInitials(displayName)}
                 </AvatarFallback>
               </Avatar>
-              {online !== undefined && (
-                <span
-                  className={`absolute bottom-0 right-0 h-3 w-3 rounded-full ring-2 ring-popover ${
-                    online ? 'bg-emerald-500' : 'bg-muted-foreground/40'
-                  }`}
-                  aria-label={online ? 'Online' : 'Offline'}
-                />
-              )}
+              <span
+                data-testid="hover-online-dot"
+                className={`absolute bottom-0 right-0 h-3 w-3 rounded-full ring-2 ring-popover ${
+                  effectiveOnline ? 'bg-emerald-500' : 'bg-muted-foreground/40'
+                }`}
+                aria-label={effectiveOnline ? 'Online' : 'Offline'}
+              />
             </div>
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-1.5">
@@ -128,7 +134,7 @@ export function UserHoverCard({
                 )}
               </div>
               <p className="text-xs text-muted-foreground">
-                {online === undefined ? '' : online ? 'Online' : 'Offline'}
+                {effectiveOnline ? 'Online' : 'Offline'}
               </p>
             </div>
           </div>

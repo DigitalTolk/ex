@@ -8,6 +8,7 @@ import { NotificationProvider } from '@/context/NotificationContext';
 import { TypingProvider } from '@/context/TypingContext';
 import { ThemeProvider } from '@/context/ThemeContext';
 import { UpdateBanner } from '@/components/UpdateBanner';
+import { Toaster } from '@/components/ui/sonner';
 import LoginPage from '@/pages/LoginPage';
 import OIDCCallbackPage from '@/pages/OIDCCallbackPage';
 import ChatPage from '@/pages/ChatPage';
@@ -51,7 +52,7 @@ function AppRoutes() {
     <Routes>
       <Route path="/login" element={<LoginPage />} />
       <Route path="/invite/:token" element={<LoginPage />} />
-      <Route path="/auth/callback" element={<OIDCCallbackPage />} />
+      <Route path="/oidc/callback" element={<OIDCCallbackPage />} />
       <Route
         path="/"
         element={
@@ -92,6 +93,7 @@ export default function App() {
                     <TooltipProvider>
                       <UpdateBanner />
                       <AppRoutes />
+                      <Toaster position="top-right" richColors />
                     </TooltipProvider>
                   </TypingProvider>
                 </NotificationProvider>

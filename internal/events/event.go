@@ -26,6 +26,8 @@ const (
 	EventChannelMuted      = "channel.muted"
 	EventUserChannelUpdated = "userchannel.updated" // per-user user-side state changed (favorite/category)
 	EventNotificationNew   = "notification.new"
+	EventForceLogout       = "auth.force_logout" // sent to a user's personal channel when their session must end (e.g. deactivation)
+	EventServerVersion     = "server.version"    // sent once on connect so clients can detect deploys without polling
 	EventTyping          = "typing" // ephemeral typing indicator — published when a user starts typing in a parent
 	EventPing            = "ping"
 )

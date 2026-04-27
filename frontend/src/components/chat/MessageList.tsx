@@ -139,12 +139,15 @@ export function MessageList({
   return (
     <div className="flex-1 overflow-y-auto flex flex-col-reverse" ref={scrollRef} onScroll={handleScroll}>
       <div className="p-4 space-y-1">
+        {elements}
         {allMessages.length === 0 && (
-          <p className="py-8 text-center text-muted-foreground">
+          <p
+            data-testid="empty-message-list"
+            className="py-8 text-center text-muted-foreground"
+          >
             No messages yet. Start the conversation!
           </p>
         )}
-        {elements}
       </div>
       {hasNextPage && (
         <div className="flex justify-center py-2">
