@@ -41,6 +41,13 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, Props>(function Wys
 ) {
   const elRef = useRef<HTMLDivElement>(null);
   const lastEmittedMarkdownRef = useRef<string>('');
+  // Mirror of the in-editor caret/selection captured while the editor
+  // has focus. The toolbar buttons (emoji picker, file attach,
+  // formatting) take focus when clicked, which clears the live
+  // window.getSelection() inside the editor — execCommand and
+  // Range-based mutations would silently no-op without this. We
+  // restore from the ref before any imperative method runs.
+  const lastRangeRef = useRef<Range | null>(null);
 
   // Mention autocomplete state. The trigger range is captured at the
   // moment the user typed "@" so we can replace the typed query atomically
@@ -57,6 +64,46 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, Props>(function Wys
     lastEmittedMarkdownRef.current = initialBody;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Capture the live caret while it lives inside the editor. We
+  // listen on document because selection events don't bubble through
+  // a normal DOM listener — `selectionchange` fires on document only.
+  useEffect(() => {
+    function track() {
+      const sel = window.getSelection();
+      if (!sel || sel.rangeCount === 0) return;
+      const range = sel.getRangeAt(0);
+      if (!elRef.current?.contains(range.startContainer)) return;
+      lastRangeRef.current = range.cloneRange();
+    }
+    document.addEventListener('selectionchange', track);
+    return () => document.removeEventListener('selectionchange', track);
+  }, []);
+
+  // restoreEditorSelection focuses the editor and re-applies the last
+  // captured caret. Falls back to "caret at the end of the editor"
+  // when the user has never put their cursor in the editor — that's
+  // what the user expects when they click the emoji button on a
+  // freshly-mounted composer.
+  function restoreEditorSelection() {
+    const el = elRef.current;
+    if (!el) return;
+    el.focus();
+    const sel = window.getSelection();
+    if (!sel) return;
+    const range = lastRangeRef.current;
+    if (range && el.contains(range.startContainer)) {
+      sel.removeAllRanges();
+      sel.addRange(range);
+      return;
+    }
+    // No prior caret in the editor — drop it at the end.
+    const fallback = document.createRange();
+    fallback.selectNodeContents(el);
+    fallback.collapse(false);
+    sel.removeAllRanges();
+    sel.addRange(fallback);
+  }
 
   function emitChange() {
     if (!elRef.current) return;
@@ -255,6 +302,10 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, Props>(function Wys
       emitChange();
     },
     insertText(text) {
+      // Toolbar buttons (emoji picker etc.) take focus before this
+      // runs. Restore the editor's caret first so execCommand
+      // actually has a target to insert into.
+      restoreEditorSelection();
       document.execCommand('insertText', false, text);
       emitChange();
     },
