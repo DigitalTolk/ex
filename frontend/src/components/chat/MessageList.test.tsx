@@ -98,7 +98,7 @@ describe('MessageList', () => {
     expect(separators.length).toBeGreaterThanOrEqual(1);
   });
 
-  it('shows "Load earlier messages" when hasNextPage is true', () => {
+  it('renders an auto-load sentinel when hasNextPage is true', () => {
     renderWithProviders(
       <MessageList
         {...defaultProps}
@@ -107,10 +107,10 @@ describe('MessageList', () => {
       />,
     );
 
-    expect(screen.getByText('Load earlier messages')).toBeInTheDocument();
+    expect(screen.getByTestId('message-list-load-more')).toBeInTheDocument();
   });
 
-  it('does not show "Load earlier messages" when hasNextPage is false', () => {
+  it('does not render the sentinel when hasNextPage is false', () => {
     renderWithProviders(
       <MessageList
         {...defaultProps}
@@ -119,7 +119,19 @@ describe('MessageList', () => {
       />,
     );
 
-    expect(screen.queryByText('Load earlier messages')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('message-list-load-more')).not.toBeInTheDocument();
+  });
+
+  it('shows "Loading earlier messages…" status while fetching the next page', () => {
+    renderWithProviders(
+      <MessageList
+        {...defaultProps}
+        pages={[{ items: [makeMessage()] }]}
+        hasNextPage={true}
+        isFetchingNextPage={true}
+      />,
+    );
+    expect(screen.getByText(/Loading earlier messages/i)).toBeInTheDocument();
   });
 
   it('shows loading skeletons when isLoading is true', () => {
@@ -136,7 +148,7 @@ describe('MessageList', () => {
     expect(skeletons.length).toBeGreaterThan(0);
   });
 
-  it('shows "Loading..." when fetching next page', () => {
+  it('shows the loading status text when fetching next page', () => {
     renderWithProviders(
       <MessageList
         {...defaultProps}
@@ -146,7 +158,53 @@ describe('MessageList', () => {
       />,
     );
 
-    expect(screen.getByText('Loading...')).toBeInTheDocument();
+    expect(screen.getByText(/Loading earlier messages/i)).toBeInTheDocument();
+  });
+
+  it('auto-fetches the next page when the load-more sentinel scrolls into view', () => {
+    let triggerIntersect: (() => void) | null = null;
+    const original = globalThis.IntersectionObserver;
+    class FakeObserver {
+      private cb: IntersectionObserverCallback;
+      constructor(cb: IntersectionObserverCallback) {
+        this.cb = cb;
+      }
+      observe(el: Element) {
+        triggerIntersect = () =>
+          this.cb(
+            [{ isIntersecting: true, target: el } as IntersectionObserverEntry],
+            this as unknown as IntersectionObserver,
+          );
+      }
+      disconnect() {
+        triggerIntersect = null;
+      }
+      unobserve() {}
+      takeRecords() {
+        return [];
+      }
+      root = null;
+      rootMargin = '';
+      thresholds: number[] = [];
+    }
+    globalThis.IntersectionObserver = FakeObserver as unknown as typeof IntersectionObserver;
+
+    try {
+      const fetchNextPage = vi.fn();
+      renderWithProviders(
+        <MessageList
+          {...defaultProps}
+          fetchNextPage={fetchNextPage}
+          pages={[{ items: [makeMessage()] }]}
+          hasNextPage={true}
+        />,
+      );
+      expect(triggerIntersect).not.toBeNull();
+      triggerIntersect?.();
+      expect(fetchNextPage).toHaveBeenCalledTimes(1);
+    } finally {
+      globalThis.IntersectionObserver = original;
+    }
   });
 
   it('uses userMap to display author names', () => {

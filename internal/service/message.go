@@ -149,11 +149,14 @@ func (s *MessageService) Send(ctx context.Context, userID, parentID, parentType,
 		s.flagNonMemberMentions(ctx, msg)
 	}
 
-	// If this is a thread reply, bump the root message's ReplyCount and emit
-	// an edited event so subscribed clients update the count.
+	// Thread reply: refresh the root's reply metadata so the action bar
+	// (avatar stack + last-reply tooltip) updates without a re-fetch.
 	if parentMessageID != "" {
 		if parent, err := s.messages.GetMessage(ctx, parentID, parentMessageID); err == nil && parent != nil {
 			parent.ReplyCount++
+			lastReplyAt := msg.CreatedAt
+			parent.LastReplyAt = &lastReplyAt
+			parent.RecentReplyAuthorIDs = updateRecentAuthors(parent.RecentReplyAuthorIDs, userID)
 			if err := s.messages.UpdateMessage(ctx, parent); err == nil {
 				s.publishEvent(ctx, parentID, parentType, events.EventMessageEdited, parent)
 			}
@@ -675,4 +678,23 @@ func (s *MessageService) publishEvent(ctx context.Context, parentID, parentType,
 		return
 	}
 	events.Publish(ctx, s.publisher, channel, eventType, data)
+}
+
+// updateRecentAuthors prepends authorID to the list, deduping, and trims
+// to at most maxAuthors entries newest-first. Drives the thread-action
+// avatar stack without a per-render thread fetch.
+func updateRecentAuthors(prev []string, authorID string) []string {
+	const maxAuthors = 3
+	out := make([]string, 0, maxAuthors)
+	out = append(out, authorID)
+	for _, id := range prev {
+		if id == authorID {
+			continue
+		}
+		out = append(out, id)
+		if len(out) >= maxAuthors {
+			break
+		}
+	}
+	return out
 }

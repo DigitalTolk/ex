@@ -17,7 +17,12 @@ export function useUsersBatch(ids: string[]) {
         body: JSON.stringify({ ids: sortedIDs }),
       }),
     enabled: sortedIDs.length > 0,
-    staleTime: 60_000,
+    // User records (display name, avatar URL) change rarely. Cache for
+    // 5 minutes and skip the window-focus refetch — every alt-tab back
+    // would otherwise re-issue this and cause every Avatar on screen to
+    // briefly flash a fallback while the new <img> loads.
+    staleTime: 5 * 60_000,
+    refetchOnWindowFocus: false,
   });
   const map = useMemo(() => {
     const m = new Map<string, User>();

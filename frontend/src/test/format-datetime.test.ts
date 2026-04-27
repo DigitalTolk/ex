@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { ordinalSuffix, formatLongDateTime, formatDayHeading, dayKey } from '@/lib/format';
+import { ordinalSuffix, formatLongDateTime, formatDayHeading, formatRelative, dayKey } from '@/lib/format';
 
 describe('ordinalSuffix', () => {
   it('handles 1, 2, 3, 4 correctly', () => {
@@ -61,6 +61,36 @@ describe('formatDayHeading', () => {
   it('includes the year for older dates', () => {
     const now = new Date(2026, 3, 26);
     expect(formatDayHeading(new Date(2025, 11, 31), now)).toBe('Dec 31st, 2025');
+  });
+});
+
+describe('formatRelative', () => {
+  const now = new Date(2026, 3, 26, 14, 0, 0);
+
+  it('returns "just now" for very recent timestamps', () => {
+    expect(formatRelative(new Date(now.getTime() - 5_000), now)).toBe('just now');
+  });
+
+  it('returns minutes-ago for sub-hour gaps', () => {
+    expect(formatRelative(new Date(now.getTime() - 5 * 60_000), now)).toBe('5 minutes ago');
+    expect(formatRelative(new Date(now.getTime() - 60_000), now)).toBe('1 minute ago');
+  });
+
+  it('returns hours-ago for sub-day gaps', () => {
+    expect(formatRelative(new Date(now.getTime() - 2 * 3_600_000), now)).toBe('2 hours ago');
+    expect(formatRelative(new Date(now.getTime() - 3_600_000), now)).toBe('1 hour ago');
+  });
+
+  it('returns days-ago for sub-month gaps', () => {
+    expect(formatRelative(new Date(now.getTime() - 3 * 86_400_000), now)).toBe('3 days ago');
+  });
+
+  it('returns months-ago for sub-year gaps', () => {
+    expect(formatRelative(new Date(now.getTime() - 90 * 86_400_000), now)).toBe('3 months ago');
+  });
+
+  it('returns years-ago for older timestamps', () => {
+    expect(formatRelative(new Date(now.getTime() - 400 * 86_400_000), now)).toBe('1 year ago');
   });
 });
 

@@ -31,6 +31,8 @@ export interface Message {
   editedAt?: string;
   parentMessageID?: string;
   replyCount?: number;
+  lastReplyAt?: string;
+  recentReplyAuthorIDs?: string[];
   reactions?: Record<string, string[]>; // emoji -> user IDs
   attachmentIDs?: string[];
   pinned?: boolean;

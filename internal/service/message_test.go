@@ -15,6 +15,35 @@ import (
 // elsewhere in the file.
 func errorsIs(err, target error) bool { return errors.Is(err, target) }
 
+// updateRecentAuthors backs the thread-action-bar avatar stack — at
+// most 3 entries, newest first, deduped on every reply.
+func TestUpdateRecentAuthors(t *testing.T) {
+	cases := []struct {
+		name string
+		prev []string
+		next string
+		want []string
+	}{
+		{"empty", nil, "u1", []string{"u1"}},
+		{"prepend", []string{"u1"}, "u2", []string{"u2", "u1"}},
+		{"trim to three", []string{"u1", "u2", "u3"}, "u4", []string{"u4", "u1", "u2"}},
+		{"dedup duplicate front", []string{"u1", "u2"}, "u1", []string{"u1", "u2"}},
+		{"dedup duplicate middle", []string{"u1", "u2", "u3"}, "u2", []string{"u2", "u1", "u3"}},
+	}
+	for _, tc := range cases {
+		got := updateRecentAuthors(tc.prev, tc.next)
+		if len(got) != len(tc.want) {
+			t.Errorf("%s: len(got)=%d want %d (got=%v)", tc.name, len(got), len(tc.want), got)
+			continue
+		}
+		for i := range got {
+			if got[i] != tc.want[i] {
+				t.Errorf("%s: got[%d]=%q want %q (full got=%v)", tc.name, i, got[i], tc.want[i], got)
+			}
+		}
+	}
+}
+
 func setupMessageService() (*MessageService, *mockMessageStore, *mockMembershipStore, *mockConversationStore, *mockPublisher) {
 	messages := newMockMessageStore()
 	memberships := newMockMembershipStore()

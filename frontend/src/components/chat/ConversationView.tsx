@@ -19,6 +19,7 @@ import { useUnread } from '@/context/UnreadContext';
 import { usePresence } from '@/context/PresenceContext';
 import { useNotifications } from '@/context/NotificationContext';
 import { markThreadSeen } from '@/hooks/useThreads';
+import { collectMessageUserIDs } from '@/lib/message-users';
 import type { UserMapEntry } from './MessageList';
 
 export function ConversationView() {
@@ -82,12 +83,11 @@ export function ConversationView() {
     setSearchParams(next, { replace: true, preventScrollReset: true });
   }, [threadParam, searchParams, setSearchParams]);
 
-  // Collect all user IDs (participants + authors)
   const userIDs = useMemo(() => {
     const ids = new Set<string>();
     conversation?.participantIDs?.forEach((pid) => ids.add(pid));
     for (const page of data?.pages ?? []) {
-      for (const msg of page.items) ids.add(msg.authorID);
+      for (const id of collectMessageUserIDs(page.items)) ids.add(id);
     }
     return Array.from(ids);
   }, [conversation?.participantIDs, data]);
@@ -194,6 +194,7 @@ export function ConversationView() {
       <div className="flex flex-1 flex-col overflow-hidden">
         <Header
           title={title}
+          showAvatar={conversation?.type === 'dm'}
           avatarURL={conversation?.type === 'dm' ? dmOtherUserAvatar : undefined}
           memberCount={conversation?.type === 'group' ? conversation?.participantIDs?.length : undefined}
           onMembersClick={conversation?.type === 'group' ? () => (showMembers ? closeMembers() : openMembers()) : undefined}

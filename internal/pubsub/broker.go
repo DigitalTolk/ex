@@ -10,15 +10,13 @@ import (
 )
 
 // Broker manages real-time clients and their Redis pub/sub channel subscriptions.
-// It maintains a single Redis PubSub connection that dynamically subscribes
-// and unsubscribes as clients connect/disconnect.
+// Multiple concurrent clients per user are supported so multiple tabs/devices
+// don't flap presence on reconnect — redis subscriptions are torn down only
+// when the user's last client disconnects.
 type Broker struct {
-	// clients maps userID -> connected client
-	clients map[string]*events.Client
-	// userSubs maps userID -> set of Redis channel names
-	userSubs map[string]map[string]bool
-	// redisSubs maps Redis channel name -> set of userIDs
-	redisSubs map[string]map[string]bool
+	clients   map[string]map[*events.Client]struct{} // userID → set of clients
+	userSubs  map[string]map[string]bool             // userID → set of redis channels
+	redisSubs map[string]map[string]bool             // redis channel → set of userIDs
 	mu        sync.RWMutex
 
 	pubsub     *RedisPubSub
@@ -31,46 +29,52 @@ type Broker struct {
 func NewBroker(redisPubSub *RedisPubSub) *Broker {
 	ctx, cancel := context.WithCancel(context.Background())
 	b := &Broker{
-		clients:   make(map[string]*events.Client),
-		userSubs:  make(map[string]map[string]bool),
-		redisSubs: make(map[string]map[string]bool),
-		pubsub:    redisPubSub,
+		clients:    make(map[string]map[*events.Client]struct{}),
+		userSubs:   make(map[string]map[string]bool),
+		redisSubs:  make(map[string]map[string]bool),
+		pubsub:     redisPubSub,
 		subscriber: redisPubSub.Client().Subscribe(ctx),
-		ctx:       ctx,
-		cancel:    cancel,
+		ctx:        ctx,
+		cancel:     cancel,
 	}
 	go b.listen()
 	return b
 }
 
-// RegisterClient creates and stores a client for the given user.
-// If a client already exists for this user, it is closed and replaced.
+// RegisterClient creates and tracks a new event client for the given user.
+// Pass the returned client back to UnregisterClient to deregister it.
 func (b *Broker) RegisterClient(userID string) *events.Client {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	if existing, ok := b.clients[userID]; ok {
-		existing.Close()
-	}
-
 	client := events.NewClient(userID)
-	b.clients[userID] = client
+	if b.clients[userID] == nil {
+		b.clients[userID] = make(map[*events.Client]struct{})
+	}
+	b.clients[userID][client] = struct{}{}
 	return client
 }
 
-// UnregisterClient removes a client and cleans up its subscriptions.
-func (b *Broker) UnregisterClient(userID string) {
+// UnregisterClient removes a specific client. The user's redis subscriptions
+// are torn down only when the LAST client for that user disconnects, so
+// a refreshing tab doesn't briefly drop the user's whole subscription set.
+func (b *Broker) UnregisterClient(userID string, client *events.Client) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	client, ok := b.clients[userID]
+	set, ok := b.clients[userID]
 	if !ok {
 		return
 	}
-	client.Close()
+	if _, present := set[client]; present {
+		client.Close()
+		delete(set, client)
+	}
+	if len(set) > 0 {
+		return
+	}
 	delete(b.clients, userID)
 
-	// Clean up subscriptions for this user.
 	channels := b.userSubs[userID]
 	delete(b.userSubs, userID)
 
@@ -185,7 +189,7 @@ func (b *Broker) dispatch(msg *redis.Message) {
 	}
 	targets := make([]*events.Client, 0, len(users))
 	for userID := range users {
-		if client, exists := b.clients[userID]; exists {
+		for client := range b.clients[userID] {
 			targets = append(targets, client)
 		}
 	}
@@ -203,8 +207,10 @@ func (b *Broker) Close() error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	for _, client := range b.clients {
-		client.Close()
+	for _, set := range b.clients {
+		for client := range set {
+			client.Close()
+		}
 	}
 	return b.subscriber.Close()
 }

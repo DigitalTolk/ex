@@ -42,13 +42,53 @@ func TestBrokerRegisterUnregister(t *testing.T) {
 		t.Fatal("expected user1 to be registered")
 	}
 
-	b.UnregisterClient("user1")
+	b.UnregisterClient("user1", client)
 
 	b.mu.RLock()
 	_, exists = b.clients["user1"]
 	b.mu.RUnlock()
 	if exists {
 		t.Fatal("expected user1 to be unregistered")
+	}
+}
+
+// Concurrent clients per user must coexist — closing one tab/connection
+// does not deregister the others, and a fast reconnect doesn't briefly
+// flap presence offline. Both legs of this guarantee live in the
+// broker; the WS handler relies on it for OnConnect/OnDisconnect order.
+func TestBrokerMultipleClientsPerUser(t *testing.T) {
+	b, _, _ := setupTestBroker(t)
+
+	a := b.RegisterClient("user1")
+	c := b.RegisterClient("user1")
+	if a == c {
+		t.Fatal("expected two distinct clients")
+	}
+
+	b.mu.RLock()
+	count := len(b.clients["user1"])
+	b.mu.RUnlock()
+	if count != 2 {
+		t.Fatalf("expected 2 active clients for user1, got %d", count)
+	}
+
+	// Removing one leaves the other active.
+	b.UnregisterClient("user1", a)
+	b.mu.RLock()
+	_, stillRegistered := b.clients["user1"]
+	count = len(b.clients["user1"])
+	b.mu.RUnlock()
+	if !stillRegistered || count != 1 {
+		t.Fatalf("expected 1 remaining client, got registered=%v count=%d", stillRegistered, count)
+	}
+
+	// Removing the second drops the user entirely.
+	b.UnregisterClient("user1", c)
+	b.mu.RLock()
+	_, stillRegistered = b.clients["user1"]
+	b.mu.RUnlock()
+	if stillRegistered {
+		t.Fatal("expected user1 to be fully unregistered")
 	}
 }
 
@@ -214,9 +254,9 @@ func TestBroker_UnregisterCleansUpSubscriptions(t *testing.T) {
 	b := NewBroker(ps)
 	defer func() { _ = b.Close() }()
 
-	_ = b.RegisterClient("u-clean")
+	c := b.RegisterClient("u-clean")
 	b.Subscribe("u-clean", []string{"chan:only"})
-	b.UnregisterClient("u-clean")
+	b.UnregisterClient("u-clean", c)
 
 	// Re-register and re-subscribe should work without error.
 	_ = b.RegisterClient("u-clean")
@@ -233,10 +273,13 @@ func TestBroker_UnregisterMissing(t *testing.T) {
 	b := NewBroker(ps)
 	defer func() { _ = b.Close() }()
 	// no-op: should not panic.
-	b.UnregisterClient("never-registered")
+	b.UnregisterClient("never-registered", nil)
 }
 
-func TestBroker_RegisterReplacesExisting(t *testing.T) {
+// Concurrent registers for the same user must NOT close prior clients
+// — multi-tab presence and a fast tab refresh both rely on the old
+// connection living until its own defer fires.
+func TestBroker_RegisterPreservesExisting(t *testing.T) {
 	mr, _ := miniredis.RunT(t), (*Broker)(nil)
 	defer mr.Close()
 	ps, err := NewRedisPubSub("redis://" + mr.Addr())
@@ -253,9 +296,9 @@ func TestBroker_RegisterReplacesExisting(t *testing.T) {
 	}
 	select {
 	case <-first.Done():
-		// expected: first was closed when replaced
+		t.Error("first client should NOT be closed when a second registers")
 	default:
-		t.Error("first client should be closed when replaced")
+		// expected: both alive
 	}
 }
 

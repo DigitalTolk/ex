@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { UserHoverCard } from '@/components/UserHoverCard';
@@ -40,42 +40,51 @@ function renderCard(opts: {
   );
 }
 
-describe('UserHoverCard — DM action and presence', () => {
+describe('UserHoverCard — click-to-open + DM action', () => {
   beforeEach(() => {
     apiFetchMock.mockReset();
-    vi.useFakeTimers();
   });
 
-  it('renders the popover after the show delay and queries the user record', async () => {
+  it('opens on click and queries the user record', async () => {
     apiFetchMock.mockResolvedValue({
       id: 'u-other',
       displayName: 'Bob',
       status: 'active',
     });
     renderCard({ online: true });
-    fireEvent.mouseEnter(screen.getByText('trigger'));
-    act(() => {
-      vi.advanceTimersByTime(500);
-    });
-    vi.useRealTimers();
+    fireEvent.click(screen.getByText('trigger'));
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /Direct message/i })).toBeInTheDocument();
     });
     expect(apiFetchMock).toHaveBeenCalledWith('/api/v1/users/u-other');
-    // Online indicator appears
     expect(screen.getByLabelText('Online')).toBeInTheDocument();
+  });
+
+  it('does not open on mouseEnter (hover-to-open is disabled)', () => {
+    apiFetchMock.mockResolvedValue({ id: 'u-other', displayName: 'Bob', status: 'active' });
+    renderCard();
+    fireEvent.mouseEnter(screen.getByText('trigger'));
+    expect(screen.queryByRole('button', { name: /Direct message/i })).toBeNull();
+    // /api/v1/users is gated on `open`, so the absence of any fetch is
+    // also a strong signal that the popover stayed closed.
+    expect(apiFetchMock).not.toHaveBeenCalled();
+  });
+
+  it('toggles closed when the trigger is clicked a second time', async () => {
+    apiFetchMock.mockResolvedValue({ id: 'u-other', displayName: 'Bob', status: 'active' });
+    renderCard();
+    fireEvent.click(screen.getByText('trigger'));
+    await screen.findByRole('button', { name: /Direct message/i });
+    fireEvent.click(screen.getByText('trigger'));
+    await waitFor(() => {
+      expect(screen.queryByRole('button', { name: /Direct message/i })).toBeNull();
+    });
   });
 
   it('hides the Direct message button when viewing your own card', async () => {
     apiFetchMock.mockResolvedValue({ id: 'u-me', displayName: 'Bob', status: 'active' });
     renderCard({ userId: 'u-me', currentUserId: 'u-me' });
-    fireEvent.mouseEnter(screen.getByText('trigger'));
-    act(() => {
-      vi.advanceTimersByTime(500);
-    });
-    vi.useRealTimers();
-    // Wait until the avatar fallback (initials of displayName) shows up,
-    // which only happens once the popover has rendered.
+    fireEvent.click(screen.getByText('trigger'));
     await waitFor(() => {
       expect(document.querySelector('[class*="bg-popover"]')).not.toBeNull();
     });
@@ -87,52 +96,17 @@ describe('UserHoverCard — DM action and presence', () => {
       .mockResolvedValueOnce({ id: 'u-other', displayName: 'Bob', status: 'active' })
       .mockResolvedValueOnce({ id: 'conv-77' });
     renderCard();
-    fireEvent.mouseEnter(screen.getByText('trigger'));
-    act(() => {
-      vi.advanceTimersByTime(500);
-    });
-    vi.useRealTimers();
+    fireEvent.click(screen.getByText('trigger'));
     const dm = await screen.findByRole('button', { name: /Direct message/i });
     fireEvent.click(dm);
     await waitFor(() => {
       expect(screen.getByTestId('conv-page')).toBeInTheDocument();
     });
-    // Verify the POST body shape
     const postCall = apiFetchMock.mock.calls.find((c) => c[0] === '/api/v1/conversations');
     expect(postCall).toBeDefined();
     expect(JSON.parse(postCall![1].body)).toEqual({
       type: 'dm',
       participantIDs: ['u-other'],
-    });
-  });
-
-  it('mouseLeave before the show delay never opens the popover', () => {
-    apiFetchMock.mockResolvedValue({ id: 'u-other', displayName: 'Bob', status: 'active' });
-    renderCard();
-    fireEvent.mouseEnter(screen.getByText('trigger'));
-    fireEvent.mouseLeave(screen.getByText('trigger'));
-    act(() => {
-      vi.advanceTimersByTime(1000);
-    });
-    vi.useRealTimers();
-    expect(screen.queryByRole('button', { name: /Direct message/i })).toBeNull();
-  });
-
-  it('hovering off after open closes the popover after the hide delay', async () => {
-    apiFetchMock.mockResolvedValue({ id: 'u-other', displayName: 'Bob', status: 'active' });
-    renderCard();
-    fireEvent.mouseEnter(screen.getByText('trigger'));
-    act(() => {
-      vi.advanceTimersByTime(500);
-    });
-    // Now hovered open — leaving fires the hide timer.
-    fireEvent.mouseLeave(screen.getByText('trigger'));
-    act(() => {
-      vi.advanceTimersByTime(500);
-    });
-    vi.useRealTimers();
-    await waitFor(() => {
-      expect(screen.queryByRole('button', { name: /Direct message/i })).toBeNull();
     });
   });
 });

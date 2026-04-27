@@ -1,6 +1,6 @@
 import { shortcodeToUnicode } from '@/lib/emoji-shortcodes';
 
-type EmojiGlyphSize = 'sm' | 'lg';
+type EmojiGlyphSize = 'sm' | 'lg' | 'xl';
 
 interface EmojiGlyphProps {
   emoji: string;
@@ -10,11 +10,12 @@ interface EmojiGlyphProps {
 }
 
 export function EmojiGlyph({ emoji, customMap, size = 'sm', className = '' }: EmojiGlyphProps) {
-  // 'lg' is what the picker grid renders; the user asked for −2px so we
-  // use arbitrary 22px instead of text-2xl (24px) and matching pixel
-  // dimensions for the custom-emoji image variant.
-  const imgCls = size === 'lg' ? 'h-[22px] w-[22px]' : 'h-3.5 w-3.5';
-  const textCls = size === 'lg' ? 'text-[22px]' : 'text-sm';
+  // 'lg' is sized at −2px from text-2xl to match the picker grid's
+  // visual rhythm; 'xl' is the hero size used in tooltips and intros.
+  const imgCls =
+    size === 'xl' ? 'h-10 w-10' : size === 'lg' ? 'h-[22px] w-[22px]' : 'h-3.5 w-3.5';
+  const textCls =
+    size === 'xl' ? 'text-[40px]' : size === 'lg' ? 'text-[22px]' : 'text-sm';
 
   if (emoji.startsWith(':') && emoji.endsWith(':') && emoji.length > 2) {
     const name = emoji.slice(1, -1);

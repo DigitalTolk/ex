@@ -159,11 +159,16 @@ func (s *NotificationService) NotifyForMessage(ctx context.Context, msg *model.M
 	authorName := s.userDisplayName(ctx, msg.AuthorID)
 	snap := s.loadMemberSnapshot(ctx, msg, parentType, parentName)
 
+	deepLink := snap.deepLink
+	if kind == NotificationKindThreadReply {
+		deepLink = deepLink + "?thread=" + msg.ParentMessageID + "#msg-" + msg.ParentMessageID
+	}
+
 	notif := Notification{
 		Kind:       kind,
 		Title:      titleFor(kind, parentType, parentName, authorName),
 		Body:       previewBody(msg.Body),
-		DeepLink:   snap.deepLink,
+		DeepLink:   deepLink,
 		ParentID:   msg.ParentID,
 		ParentType: parentType,
 		MessageID:  msg.ID,

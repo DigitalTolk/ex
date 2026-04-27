@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { BrowserRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { UserHoverCard } from '@/components/UserHoverCard';
@@ -25,7 +25,6 @@ function renderCard(userId: string) {
 describe('UserHoverCard — inactive guest indicator', () => {
   beforeEach(() => {
     apiFetchMock.mockReset();
-    vi.useFakeTimers();
   });
 
   it('shows the Inactive badge when the fetched user has status=deactivated', async () => {
@@ -35,12 +34,7 @@ describe('UserHoverCard — inactive guest indicator', () => {
       status: 'deactivated',
     });
     renderCard('u-disabled');
-    fireEvent.mouseEnter(screen.getByText('trigger'));
-    // Show delay
-    act(() => {
-      vi.advanceTimersByTime(500);
-    });
-    vi.useRealTimers();
+    fireEvent.click(screen.getByText('trigger'));
     await waitFor(() => {
       expect(screen.getByTestId('hover-status-inactive')).toBeInTheDocument();
     });
@@ -53,13 +47,8 @@ describe('UserHoverCard — inactive guest indicator', () => {
       status: 'active',
     });
     renderCard('u-active');
-    fireEvent.mouseEnter(screen.getByText('trigger'));
-    act(() => {
-      vi.advanceTimersByTime(500);
-    });
-    vi.useRealTimers();
+    fireEvent.click(screen.getByText('trigger'));
     await waitFor(() => {
-      // Wait for the popover to render.
       expect(apiFetchMock).toHaveBeenCalledWith('/api/v1/users/u-active');
     });
     expect(screen.queryByTestId('hover-status-inactive')).toBeNull();

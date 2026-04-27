@@ -23,6 +23,7 @@ import { useEmojiMap } from '@/hooks/useEmoji';
 import { renderMarkdown } from '@/lib/markdown';
 import { EmojiGlyph } from '@/components/EmojiGlyph';
 import { MessageAttachments } from '@/components/chat/MessageAttachments';
+import { ThreadActionBar } from '@/components/chat/ThreadActionBar';
 import { getInitials, formatLongDateTime } from '@/lib/format';
 import type { Message } from '@/types';
 
@@ -50,6 +51,10 @@ interface MessageItemProps {
   currentUserId?: string;
   inThread?: boolean;
   onReplyInThread?: (messageID: string) => void;
+  // Optional pre-resolved user lookup. When supplied, ThreadActionBar
+  // reads display names + avatars from here instead of issuing its own
+  // /users/batch fetch — avoids N+1 batches across many thread bars.
+  userMap?: { get(id: string): { displayName: string; avatarURL?: string } | undefined };
 }
 
 function formatTime(dateStr: string): string {
@@ -71,6 +76,7 @@ export function MessageItem({
   currentUserId,
   inThread,
   onReplyInThread,
+  userMap,
 }: MessageItemProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [linkCopied, setLinkCopied] = useState(false);
@@ -210,6 +216,17 @@ export function MessageItem({
     return <EmojiGlyph emoji={emoji} customMap={emojiMap} />;
   }
 
+  const REACTOR_LIST_MAX = 20;
+  function formatReactors(userIDs: string[]): string {
+    const head = userIDs.slice(0, REACTOR_LIST_MAX);
+    const names = head.map((id) => {
+      if (id === currentUserId) return 'You';
+      return userMap?.get(id)?.displayName ?? 'Unknown';
+    });
+    const extra = userIDs.length - head.length;
+    return extra > 0 ? `${names.join(', ')} and ${extra} more` : names.join(', ');
+  }
+
   return (
     <div
       id={`msg-${message.id}`}
@@ -318,33 +335,50 @@ export function MessageItem({
                 {reactionEntries.map(([emoji, users]) => {
                   const reactedByMe = currentUserId ? users.includes(currentUserId) : false;
                   return (
-                    <button
-                      key={emoji}
-                      type="button"
-                      role="listitem"
-                      data-testid="reaction-badge"
-                      onClick={() => handleReact(emoji)}
-                      className={`flex items-center gap-1 rounded-full border px-2 py-0.5 text-sm hover:bg-muted ${
-                        reactedByMe ? 'border-primary bg-primary/10' : 'bg-background'
-                      }`}
-                      aria-label={`${renderReactionLabel(emoji)} ${users.length}, ${reactedByMe ? 'reacted' : 'react'}`}
-                      aria-pressed={reactedByMe}
-                    >
-                      {renderReactionVisual(emoji)}
-                      <span className="text-sm text-muted-foreground">{users.length}</span>
-                    </button>
+                    <Tooltip key={emoji}>
+                      <TooltipTrigger
+                        render={
+                          <button
+                            type="button"
+                            role="listitem"
+                            data-testid="reaction-badge"
+                            onClick={() => handleReact(emoji)}
+                            className={`flex items-center gap-1 rounded-full border px-2 py-0.5 text-sm hover:bg-muted ${
+                              reactedByMe ? 'border-primary bg-primary/10' : 'bg-background'
+                            }`}
+                            aria-label={`${renderReactionLabel(emoji)} ${users.length}, ${reactedByMe ? 'reacted' : 'react'}`}
+                            aria-pressed={reactedByMe}
+                          />
+                        }
+                      >
+                        {renderReactionVisual(emoji)}
+                        <span className="text-sm text-muted-foreground">{users.length}</span>
+                      </TooltipTrigger>
+                      <TooltipContent
+                        data-testid="reaction-tooltip"
+                        className="flex max-w-[16rem] flex-col items-center gap-1.5 px-4 py-3 text-center"
+                      >
+                        <EmojiGlyph emoji={emoji} customMap={emojiMap} size="xl" />
+                        <span className="text-xs leading-snug">
+                          <span className="font-medium">{formatReactors(users)}</span>
+                          <span className="text-muted-foreground"> reacted with </span>
+                          <span className="font-medium">{renderReactionLabel(emoji)}</span>
+                        </span>
+                      </TooltipContent>
+                    </Tooltip>
                   );
                 })}
               </div>
             )}
             {!inThread && message.replyCount !== undefined && message.replyCount > 0 && (
-              <button
-                onClick={() => onReplyInThread?.(message.id)}
-                className="text-xs text-primary mt-1 hover:underline"
-                aria-label={`View ${message.replyCount} ${message.replyCount === 1 ? 'reply' : 'replies'}`}
-              >
-                {message.replyCount} {message.replyCount === 1 ? 'reply' : 'replies'}
-              </button>
+              <ThreadActionBar
+                rootMessageID={message.id}
+                replyCount={message.replyCount}
+                recentReplyAuthorIDs={message.recentReplyAuthorIDs}
+                lastReplyAt={message.lastReplyAt}
+                onClick={(id) => onReplyInThread?.(id)}
+                userMap={userMap}
+              />
             )}
           </>
         )}

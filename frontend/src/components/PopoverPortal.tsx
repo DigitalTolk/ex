@@ -78,7 +78,17 @@ export function PopoverPortal({
       data-testid="popover-portal"
       data-popover-side={pos.side}
       data-popover-align={pos.align}
-      style={{ position: 'fixed', top: pos.top, left: pos.left, zIndex: 1000 }}
+      data-popover-measured={pos.measured ? 'true' : 'false'}
+      // Hide until measured — seeded (0,0) would otherwise flash in the
+      // top-left corner before the position effect commits.
+      style={{
+        position: 'fixed',
+        top: pos.top,
+        left: pos.left,
+        zIndex: 1000,
+        opacity: pos.measured ? 1 : 0,
+        pointerEvents: pos.measured ? 'auto' : 'none',
+      }}
       className={className}
     >
       {children}
