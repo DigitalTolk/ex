@@ -95,8 +95,12 @@ func main() {
 	}
 
 	// ------------------------------------------------------------------ S3 (avatars)
+	// Init when ANY S3 setting is in play: a custom endpoint (minio in
+	// dev), an explicit access key (CI / static creds), or just a
+	// bucket name (the AWS-prod path with role-based credentials, where
+	// neither endpoint nor static keys are set).
 	var s3Client *storage.S3Client
-	if cfg.S3Endpoint != "" || cfg.S3AccessKey != "" {
+	if cfg.S3Endpoint != "" || cfg.S3AccessKey != "" || cfg.S3Bucket != "" {
 		s3Client, err = storage.NewS3Client(ctx, storage.S3Config{
 			Endpoint:       cfg.S3Endpoint,
 			PublicEndpoint: cfg.S3PublicEndpoint,
