@@ -40,10 +40,20 @@ type S3Client struct {
 // URLs. This allows backend → MinIO traffic to use a Docker hostname while
 // browser-bound presigned URLs use a host-reachable address.
 func NewS3Client(ctx context.Context, cfg S3Config) (*S3Client, error) {
-	awsCfg, err := awsconfig.LoadDefaultConfig(ctx,
+	// Only override the credentials chain when both static keys are
+	// supplied. Empty AccessKey/SecretKey on a real AWS deploy means
+	// "use the default chain" (env vars → IAM role → IRSA → instance
+	// metadata). Pinning a static provider with empty strings would
+	// shadow the role and break IAM-role-only deployments.
+	loadOpts := []func(*awsconfig.LoadOptions) error{
 		awsconfig.WithRegion(cfg.Region),
-		awsconfig.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(cfg.AccessKey, cfg.SecretKey, "")),
-	)
+	}
+	if cfg.AccessKey != "" && cfg.SecretKey != "" {
+		loadOpts = append(loadOpts,
+			awsconfig.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(cfg.AccessKey, cfg.SecretKey, "")),
+		)
+	}
+	awsCfg, err := awsconfig.LoadDefaultConfig(ctx, loadOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("s3: load config: %w", err)
 	}

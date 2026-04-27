@@ -89,24 +89,24 @@ When SMTP is not configured, invite links are logged to the server console.
 
 ## Configuration
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `PORT` | `8080` | HTTP server port |
-| `ENV` | `development` | `development` or `production` |
-| `BASE_URL` | `http://localhost:8080` | Application base URL (used to derive OIDC redirect URL) |
-| `OIDC_ISSUER` | - | OIDC provider issuer URL |
-| `OIDC_CLIENT_ID` | - | OIDC client ID |
-| `OIDC_CLIENT_SECRET` | - | OIDC client secret |
-| `JWT_SECRET` | `dev-secret-change-me` (dev only) | JWT signing secret |
-| `AWS_REGION` | `us-east-1` | AWS region |
-| `DYNAMODB_TABLE` | `ex` | DynamoDB table name (single-table design — see below) |
-| `DYNAMODB_ENDPOINT` | - | DynamoDB endpoint (set for local dev) |
-| `REDIS_URL` | `redis://localhost:6379` | Redis connection URL |
-| `SMTP_HOST` | - | SMTP server hostname |
-| `SMTP_PORT` | `587` | SMTP server port |
-| `SMTP_USER` | - | SMTP username |
-| `SMTP_PASS` | - | SMTP password |
-| `SMTP_FROM` | - | Sender email address for invites |
+| Variable             | Default                           | Description                                             |
+|----------------------|-----------------------------------|---------------------------------------------------------|
+| `PORT`               | `8080`                            | HTTP server port                                        |
+| `ENV`                | `development`                     | `development` or `production`                           |
+| `BASE_URL`           | `http://localhost:8080`           | Application base URL (used to derive OIDC redirect URL) |
+| `OIDC_ISSUER`        | -                                 | OIDC provider issuer URL                                |
+| `OIDC_CLIENT_ID`     | -                                 | OIDC client ID                                          |
+| `OIDC_CLIENT_SECRET` | -                                 | OIDC client secret                                      |
+| `JWT_SECRET`         | `dev-secret-change-me` (dev only) | JWT signing secret (`openssl rand -base64 48`)          |
+| `AWS_REGION`         | `us-east-1`                       | AWS region                                              |
+| `DYNAMODB_TABLE`     | `ex`                              | DynamoDB table name (single-table design — see below)   |
+| `DYNAMODB_ENDPOINT`  | -                                 | DynamoDB endpoint (set for local dev)                   |
+| `REDIS_URL`          | `redis://localhost:6379`          | Redis connection URL                                    |
+| `SMTP_HOST`          | -                                 | SMTP server hostname                                    |
+| `SMTP_PORT`          | `587`                             | SMTP server port                                        |
+| `SMTP_USER`          | -                                 | SMTP username                                           |
+| `SMTP_PASS`          | -                                 | SMTP password                                           |
+| `SMTP_FROM`          | -                                 | Sender email address for invites                        |
 
 ## Build
 
