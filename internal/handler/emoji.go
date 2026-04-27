@@ -42,12 +42,13 @@ func (h *EmojiHandler) Create(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Name     string `json:"name"`
 		ImageURL string `json:"imageURL"`
+		ImageKey string `json:"imageKey"`
 	}
 	if err := readJSON(r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_body", err.Error())
 		return
 	}
-	emoji, err := h.emojiSvc.Create(r.Context(), userID, body.Name, body.ImageURL)
+	emoji, err := h.emojiSvc.Create(r.Context(), userID, body.Name, body.ImageURL, body.ImageKey)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "create_error", err.Error())
 		return

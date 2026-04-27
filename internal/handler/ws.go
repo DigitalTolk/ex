@@ -79,7 +79,7 @@ func (h *WSHandler) Connect(w http.ResponseWriter, r *http.Request) {
 		if dropped := client.DropCount(); dropped > 0 {
 			slog.Warn("ws: events dropped", "userID", userID, "dropped", dropped)
 		}
-		h.broker.UnregisterClient(userID)
+		h.broker.UnregisterClient(userID, client)
 		if h.presenceSvc != nil {
 			h.presenceSvc.OnDisconnect(context.Background(), userID)
 		}
@@ -143,9 +143,8 @@ func (h *WSHandler) Connect(w http.ResponseWriter, r *http.Request) {
 		h.broker.Subscribe(userID, channels)
 	}
 
-	// Mark the user online AFTER subscribing to PresenceEvents so the publish
-	// reaches the user's own client (and all other connected clients) instead
-	// of being dispatched before any subscriber is wired up.
+	// Must come after Subscribe so the presence event reaches the
+	// user's own browser. PresenceService dedupes by connection count.
 	if h.presenceSvc != nil {
 		h.presenceSvc.OnConnect(r.Context(), userID)
 	}

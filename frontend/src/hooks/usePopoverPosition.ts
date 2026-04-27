@@ -11,6 +11,11 @@ export interface PopoverPosition {
   // overflow:hidden ancestor and any z-index stacking context.
   top: number;
   left: number;
+  // True once compute() has run at least once for the current `open=true`
+  // session. The portal hides the popover (opacity-0) until this flips
+  // to avoid the (0,0)-flash that React's "render with state, then
+  // schedule effect" cycle would otherwise produce.
+  measured: boolean;
 }
 
 interface Options {
@@ -53,11 +58,17 @@ export function usePopoverPosition(
     align: preferredAlign,
     top: 0,
     left: 0,
+    measured: false,
   });
   const rafRef = useRef(0);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      // Reset measured on close so the next open starts hidden again.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setPos((prev) => (prev.measured ? { ...prev, measured: false } : prev));
+      return;
+    }
     function compute() {
       const el = triggerRef.current;
       if (!el) return;
@@ -97,12 +108,13 @@ export function usePopoverPosition(
       // Same-shape fast-path so React skips the re-render when nothing
       // changed; otherwise every scroll tick triggers a popover repaint.
       setPos((prev) =>
+        prev.measured &&
         prev.side === side &&
         prev.align === align &&
         Math.round(prev.top) === Math.round(top) &&
         Math.round(prev.left) === Math.round(left)
           ? prev
-          : { side, align, top, left },
+          : { side, align, top, left, measured: true },
       );
     }
     function schedule() {

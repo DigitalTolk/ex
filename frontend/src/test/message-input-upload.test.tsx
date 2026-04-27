@@ -100,4 +100,66 @@ describe('MessageInput - file upload', () => {
       expect(screen.getByRole('alert')).toHaveTextContent('Network error');
     });
   });
+
+  it('uploads files pasted from the clipboard as attachments', async () => {
+    const init = {
+      id: 'att-paste-1',
+      uploadURL: 'http://upload.test/x',
+      alreadyExists: false,
+      filename: 'screenshot.png',
+      contentType: 'image/png',
+      size: 1234,
+    };
+    mockUploadAttachment.mockImplementationOnce(
+      async (
+        _file: File,
+        cb?: { onInit?: (i: typeof init) => void; onProgress?: (n: number) => void },
+      ) => {
+        cb?.onInit?.(init);
+        cb?.onProgress?.(1);
+        return init;
+      },
+    );
+
+    render(<MessageInput onSend={vi.fn()} />);
+    const editor = screen.getByLabelText('Message input');
+    const pasted = new File(['png-bytes'], 'screenshot.png', { type: 'image/png' });
+
+    // Construct a paste event whose clipboardData.items reports a file —
+    // that's the path browsers use for clipboard images and copied files.
+    const event = new Event('paste', { bubbles: true, cancelable: true });
+    Object.defineProperty(event, 'clipboardData', {
+      value: {
+        items: [
+          {
+            kind: 'file',
+            type: 'image/png',
+            getAsFile: () => pasted,
+          },
+        ],
+      },
+    });
+    editor.dispatchEvent(event);
+
+    await waitFor(() => {
+      expect(mockUploadAttachment).toHaveBeenCalled();
+      expect(mockUploadAttachment.mock.calls[0][0]).toBe(pasted);
+    });
+    await waitFor(() => {
+      expect(screen.getByText('screenshot.png')).toBeInTheDocument();
+    });
+  });
+
+  it('ignores text-only paste events (does not call uploadAttachment)', () => {
+    render(<MessageInput onSend={vi.fn()} />);
+    const editor = screen.getByLabelText('Message input');
+
+    const event = new Event('paste', { bubbles: true, cancelable: true });
+    Object.defineProperty(event, 'clipboardData', {
+      value: { items: [{ kind: 'string', type: 'text/plain', getAsFile: () => null }] },
+    });
+    editor.dispatchEvent(event);
+
+    expect(mockUploadAttachment).not.toHaveBeenCalled();
+  });
 });

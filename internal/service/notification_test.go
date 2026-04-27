@@ -180,6 +180,46 @@ func TestNotificationService_PreviewBody_ClampsAndStripsNewlines(t *testing.T) {
 	}
 }
 
+// Thread-reply notifications must include the thread query + #msg-
+// fragment so clicking the popup opens the thread panel and highlights
+// the root, not just the parent channel scrolled to the bottom.
+func TestNotifyForMessage_ThreadReply_DeepLinkOpensThread(t *testing.T) {
+	svc, pub, members, _, channels, users := setupNotifier(t)
+	channels.channels["ch-thr"] = &model.Channel{ID: "ch-thr", Slug: "thr-room", Name: "thr-room"}
+	members.memberships["ch-thr#u-author"] = &model.ChannelMembership{ChannelID: "ch-thr", UserID: "u-author"}
+	members.memberships["ch-thr#u-recip"] = &model.ChannelMembership{ChannelID: "ch-thr", UserID: "u-recip"}
+	users.users["u-author"] = &model.User{ID: "u-author", DisplayName: "A"}
+	users.users["u-recip"] = &model.User{ID: "u-recip", DisplayName: "R"}
+
+	msg := &model.Message{
+		ID:              "m-reply",
+		ParentID:        "ch-thr",
+		AuthorID:        "u-author",
+		ParentMessageID: "root-XYZ",
+		Body:            "hi",
+	}
+	svc.NotifyForMessage(context.Background(), msg, ParentChannel)
+
+	var deepLink string
+	for _, p := range pub.published {
+		if p.event.Type != events.EventNotificationNew {
+			continue
+		}
+		var n Notification
+		if err := json.Unmarshal(p.event.Data, &n); err != nil {
+			continue
+		}
+		deepLink = n.DeepLink
+		break
+	}
+	if !strings.Contains(deepLink, "?thread=root-XYZ") {
+		t.Errorf("deepLink missing ?thread=root-XYZ: %q", deepLink)
+	}
+	if !strings.Contains(deepLink, "#msg-root-XYZ") {
+		t.Errorf("deepLink missing #msg-root-XYZ: %q", deepLink)
+	}
+}
+
 // previewBody must flatten the wire-form mention `@[id|name]` into the
 // readable `@name` so the OS popup reads naturally. Without this, the
 // user would see "Alice mentioned: hi @[U-2|Bob]" — completely opaque.

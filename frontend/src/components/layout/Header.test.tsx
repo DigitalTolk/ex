@@ -89,4 +89,23 @@ describe('Header', () => {
 
     expect(screen.getByText('General discussion')).toBeInTheDocument();
   });
+
+  it('renders the fallback avatar with initials when showAvatar is true and avatarURL is missing', () => {
+    const { container } = render(<Header title="Alice" showAvatar />);
+    const fallback = container.querySelector('[data-slot="avatar-fallback"]');
+    expect(fallback).not.toBeNull();
+    expect(fallback?.textContent).toBe('A');
+  });
+
+  it('omits the avatar slot when showAvatar is false (group conversations)', () => {
+    const { container } = render(<Header title="Alice, Bob" />);
+    expect(container.querySelector('[data-slot="avatar"]')).toBeNull();
+  });
+
+  it('renders the avatar image when showAvatar is true and avatarURL is provided', () => {
+    const { container } = render(
+      <Header title="Alice" showAvatar avatarURL="https://example.com/a.png" />,
+    );
+    expect(container.querySelector('[data-slot="avatar"]')).not.toBeNull();
+  });
 });

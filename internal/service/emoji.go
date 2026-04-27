@@ -21,17 +21,34 @@ type EmojiStore interface {
 	Delete(ctx context.Context, name string) error
 }
 
+// EmojiURLSigner re-signs short-lived GET URLs from a stored S3 key.
+// AttachmentSigner already implements this shape; the narrower interface
+// here just documents what EmojiService actually uses.
+type EmojiURLSigner interface {
+	PresignedGetURL(ctx context.Context, key string, expires time.Duration) (string, error)
+}
+
+// EmojiURLTTL is how long re-signed emoji GET URLs remain valid. Short
+// enough that a stale URL never lingers in caches forever, long enough
+// to amortize the presign cost across a typical user session.
+const EmojiURLTTL = 6 * time.Hour
+
 // EmojiService manages workspace custom emojis.
 type EmojiService struct {
 	emojis    EmojiStore
 	users     UserStore
 	publisher Publisher
+	signer    EmojiURLSigner
 }
 
 // NewEmojiService constructs an EmojiService.
 func NewEmojiService(emojis EmojiStore, users UserStore, publisher Publisher) *EmojiService {
 	return &EmojiService{emojis: emojis, users: users, publisher: publisher}
 }
+
+// SetSigner wires the URL re-signer. Optional — when unset, List returns
+// stored URLs as-is. Production wiring always passes the S3 client.
+func (s *EmojiService) SetSigner(signer EmojiURLSigner) { s.signer = signer }
 
 var emojiNameRE = regexp.MustCompile(`^[a-z0-9_+-]{1,32}$`)
 
@@ -44,8 +61,10 @@ func ValidateEmojiName(name string) error {
 }
 
 // Create stores a new custom emoji and publishes a global event so connected
-// clients can refresh their emoji catalog.
-func (s *EmojiService) Create(ctx context.Context, userID, name, imageURL string) (*model.CustomEmoji, error) {
+// clients can refresh their emoji catalog. The imageKey is the persistent
+// S3 key used for re-signing on List; imageURL is the initial presigned
+// URL the client already has on hand.
+func (s *EmojiService) Create(ctx context.Context, userID, name, imageURL, imageKey string) (*model.CustomEmoji, error) {
 	if err := ValidateEmojiName(name); err != nil {
 		return nil, err
 	}
@@ -64,6 +83,7 @@ func (s *EmojiService) Create(ctx context.Context, userID, name, imageURL string
 	e := &model.CustomEmoji{
 		Name:      name,
 		ImageURL:  imageURL,
+		ImageKey:  imageKey,
 		CreatedBy: userID,
 		CreatedAt: time.Now(),
 	}
@@ -78,11 +98,27 @@ func (s *EmojiService) Create(ctx context.Context, userID, name, imageURL string
 	return e, nil
 }
 
-// List returns all custom emojis.
+// List returns all custom emojis with freshly signed image URLs. Without
+// re-signing, the stored URLs would expire after 7 days and every
+// emoji on the workspace would silently break. Emojis missing ImageKey
+// (created before the field existed) keep their stored URL — they'll
+// need a one-time re-upload to self-heal.
 func (s *EmojiService) List(ctx context.Context) ([]*model.CustomEmoji, error) {
 	list, err := s.emojis.List(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("emoji: list: %w", err)
+	}
+	if s.signer != nil {
+		for _, e := range list {
+			if e.ImageKey == "" {
+				continue
+			}
+			url, err := s.signer.PresignedGetURL(ctx, e.ImageKey, EmojiURLTTL)
+			if err != nil {
+				continue
+			}
+			e.ImageURL = url
+		}
 	}
 	return list, nil
 }

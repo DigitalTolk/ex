@@ -25,6 +25,7 @@ import {
   MAX_MESSAGE_BODY_CHARS,
   countCodepoints,
 } from '@/lib/limits';
+import { normalizeEmojiInBody } from '@/lib/emoji-shortcodes';
 
 const TYPING_PING_INTERVAL_MS = 3000;
 
@@ -106,7 +107,8 @@ export function MessageInput({
 
   const handleSend = useCallback(() => {
     if (!canSend) return;
-    onSend({ body: body.trim(), attachmentIDs: drafts.map((d) => d.id) });
+    const normalized = normalizeEmojiInBody(body.trim());
+    onSend({ body: normalized, attachmentIDs: drafts.map((d) => d.id) });
     if (variant === 'inline') return; // parent unmounts the inline edit
     drafts.forEach((d) => d.localURL && URL.revokeObjectURL(d.localURL));
     setBody('');
@@ -131,9 +133,7 @@ export function MessageInput({
     editorRef.current?.insertText(emoji + ' ');
   }
 
-  async function handleFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
-    const allFiles = Array.from(e.target.files ?? []);
-    e.target.value = '';
+  async function uploadFiles(allFiles: File[]) {
     if (allFiles.length === 0) return;
     // Trim to the per-message cap before uploading. Surface a friendly
     // warning if the user tried to attach more — better UX than letting
@@ -188,6 +188,12 @@ export function MessageInput({
     } finally {
       setIsUploading(false);
     }
+  }
+
+  async function handleFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(e.target.files ?? []);
+    e.target.value = '';
+    await uploadFiles(files);
   }
 
   async function removeDraft(id: string) {
@@ -281,6 +287,7 @@ export function MessageInput({
             }}
             onSubmit={handleSend}
             onCancel={onCancel}
+            onPasteFiles={uploadFiles}
             placeholder={isUploading ? 'Uploading…' : placeholder}
             disabled={disabled || isUploading}
             ariaLabel="Message input"

@@ -24,6 +24,12 @@ interface HeaderProps {
   title?: string;
   subtitle?: string;
   avatarURL?: string;
+  // When true, always render an Avatar in non-channel mode — falling
+  // back to initials when avatarURL is missing. Without this, switching
+  // from a DM whose partner has an avatar to a DM whose partner has
+  // none leaves the avatar slot blank. Pass false (the default) for
+  // group conversations where no single avatar represents the room.
+  showAvatar?: boolean;
   onMembersClick?: () => void;
   channelId?: string;
   canEdit?: boolean;
@@ -44,6 +50,7 @@ export function Header({
   title,
   subtitle,
   avatarURL,
+  showAvatar,
   onMembersClick,
   canEdit,
   onDescriptionSave,
@@ -118,10 +125,14 @@ export function Header({
           </DropdownMenu>
         ) : (
           <div className="flex items-center gap-2">
-            {avatarURL !== undefined && (
-              <Avatar className="h-7 w-7">
-                <AvatarImage src={avatarURL} alt="" />
-                <AvatarFallback className="bg-primary/10 text-[10px]">
+            {showAvatar && (
+              // Keyed on avatarURL so AvatarImage's internal load state
+              // resets when switching between DMs — otherwise a previous
+              // load can keep the fallback hidden when the new partner
+              // has no image.
+              <Avatar key={avatarURL ?? '__none__'} className="h-7 w-7">
+                {avatarURL && <AvatarImage src={avatarURL} alt="" />}
+                <AvatarFallback className="bg-muted text-[10px] text-muted-foreground">
                   {getInitials(displayTitle || '??')}
                 </AvatarFallback>
               </Avatar>

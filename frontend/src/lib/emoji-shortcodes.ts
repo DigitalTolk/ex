@@ -86,3 +86,76 @@ export function shortcodeToUnicode(shortcode: string): string {
   if (!m) return shortcode;
   return NAME_TO_UNICODE[m[1]] ?? shortcode;
 }
+
+// Inverse map for normalizing user-typed unicode emoji back to the
+// `:shortcode:` form the API stores. Built from the same table so
+// adding to COMMON_EMOJI_SHORTCODES keeps both directions in sync.
+const UNICODE_TO_NAME: Record<string, string> = (() => {
+  const map: Record<string, string> = {};
+  for (const e of COMMON_EMOJI_SHORTCODES) {
+    if (!(e.unicode in map)) map[e.unicode] = e.name;
+  }
+  return map;
+})();
+
+// unicodeToShortcode returns `:name:` for a single emoji codepoint
+// sequence, or the input unchanged if no shortcode is known. Used by
+// normalizeEmojiInBody to flatten device-picker emojis at send time.
+export function unicodeToShortcode(unicode: string): string {
+  const name = UNICODE_TO_NAME[unicode];
+  return name ? `:${name}:` : unicode;
+}
+
+// Build a regex that matches any known emoji unicode sequence. Sorted by
+// length (longest first) so a multi-codepoint sequence like 👍🏽 wins
+// over the base 👍.
+const ALL_EMOJI_RE = (() => {
+  const sequences = COMMON_EMOJI_SHORTCODES
+    .map((e) => e.unicode)
+    .sort((a, b) => b.length - a.length)
+    .map((u) => u.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  return new RegExp(`(${sequences.join('|')})`, 'g');
+}) ();
+
+// normalizeEmojiInBody replaces every standalone unicode emoji in the
+// body with its `:shortcode:` form, leaving unknown emoji untouched.
+// Skips text inside fenced code blocks and inline `code` spans —
+// nobody wants `console.log("🎉")` rewritten on the wire.
+export function normalizeEmojiInBody(body: string): string {
+  let out = '';
+  let i = 0;
+  while (i < body.length) {
+    // Fenced code block — copy verbatim until the closing fence.
+    if (body.startsWith('```', i)) {
+      const end = body.indexOf('```', i + 3);
+      if (end === -1) {
+        out += body.slice(i);
+        break;
+      }
+      out += body.slice(i, end + 3);
+      i = end + 3;
+      continue;
+    }
+    // Inline code — copy verbatim until the closing backtick.
+    if (body[i] === '`') {
+      const end = body.indexOf('`', i + 1);
+      if (end === -1) {
+        out += body.slice(i);
+        break;
+      }
+      out += body.slice(i, end + 1);
+      i = end + 1;
+      continue;
+    }
+    // Find the next code-fence/backtick boundary so we only run the
+    // emoji regex over plain prose.
+    let next = body.length;
+    const fence = body.indexOf('```', i);
+    if (fence !== -1 && fence < next) next = fence;
+    const tick = body.indexOf('`', i);
+    if (tick !== -1 && tick < next) next = tick;
+    out += body.slice(i, next).replace(ALL_EMOJI_RE, (m) => unicodeToShortcode(m));
+    i = next;
+  }
+  return out;
+}

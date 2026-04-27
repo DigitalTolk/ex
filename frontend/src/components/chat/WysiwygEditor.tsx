@@ -1,6 +1,47 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { htmlToMarkdown, markdownToEditableHtml } from '@/lib/wysiwyg';
 import { MentionAutocomplete, type MentionSuggestion } from './MentionAutocomplete';
+import { EmojiAutocomplete, type EmojiSuggestion } from './EmojiAutocomplete';
+
+// detectAutocompleteTrigger scans backward from the caret in the focused
+// text node for the nearest occurrence of `trigger`, then asks the
+// caller's predicate whether the typed query is still valid (e.g. no
+// whitespace for mentions, shortcode-character only for emoji). Returns
+// the query and the Range covering trigger+query so a pick can replace
+// it atomically. Reuses host across @mention and :emoji autocompletes.
+function detectAutocompleteTrigger(
+  host: HTMLElement | null,
+  trigger: string,
+  isValidQuery: (query: string) => boolean,
+): { query: string; range: Range } | null {
+  const sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0 || !sel.isCollapsed) return null;
+  const focus = sel.getRangeAt(0);
+  if (!host?.contains(focus.startContainer)) return null;
+  if (focus.startContainer.nodeType !== Node.TEXT_NODE) return null;
+
+  const text = (focus.startContainer.textContent ?? '').slice(0, focus.startOffset);
+  const triggerAt = text.lastIndexOf(trigger);
+  if (triggerAt < 0) return null;
+  // Reject mid-word triggers ("a@b" email parts, "http://", "8:30 am" …).
+  if (triggerAt > 0 && /\S/.test(text.charAt(triggerAt - 1))) return null;
+
+  const query = text.slice(triggerAt + 1);
+  if (!isValidQuery(query)) return null;
+
+  const range = document.createRange();
+  range.setStart(focus.startContainer, triggerAt);
+  range.setEnd(focus.startContainer, focus.startOffset);
+  return { query, range };
+}
+
+// Whitespace closes the @ popover — single names only.
+const isValidMentionQuery = (query: string) => !/\s/.test(query);
+
+// Emoji shortcodes are alphanumeric/_/+/-; a second `:` would close one.
+const EMOJI_SHORTCODE_RE = /^[a-z0-9_+-]+$/i;
+const isValidEmojiQuery = (query: string) =>
+  !query.includes(':') && EMOJI_SHORTCODE_RE.test(query);
 
 export interface WysiwygEditorHandle {
   /** Apply a formatting command to the current selection. */
@@ -30,13 +71,16 @@ interface Props {
   // ariaLabel for the editable region — keep stable so tests can latch on.
   ariaLabel?: string;
   className?: string;
+  // Receives File items from a paste event (screenshots, Finder copies).
+  // When present, file pastes suppress the default text-paste path.
+  onPasteFiles?: (files: File[]) => void;
 }
 
 // We use document.execCommand for inline marks: deprecated in the spec
 // but universally implemented and the simplest way to get correct
 // selection-aware toggling without a full editor framework like Lexical.
 export const WysiwygEditor = forwardRef<WysiwygEditorHandle, Props>(function WysiwygEditor(
-  { initialBody = '', onChange, onSubmit, onCancel, placeholder, disabled, ariaLabel = 'Message input', className = '' },
+  { initialBody = '', onChange, onSubmit, onCancel, placeholder, disabled, ariaLabel = 'Message input', className = '', onPasteFiles },
   ref,
 ) {
   const elRef = useRef<HTMLDivElement>(null);
@@ -53,6 +97,11 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, Props>(function Wys
   // moment the user typed "@" so we can replace the typed query atomically
   // when they pick a suggestion.
   const [mentionState, setMentionState] = useState<{
+    query: string;
+    anchorRect: DOMRect | null;
+    range: Range;
+  } | null>(null);
+  const [emojiState, setEmojiState] = useState<{
     query: string;
     anchorRect: DOMRect | null;
     range: Range;
@@ -113,36 +162,8 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, Props>(function Wys
     onChange?.(md);
   }
 
-  // Detect a "@<query>" segment immediately preceding the caret. Returns
-  // the query text + a Range covering the @ trigger and everything typed
-  // since, OR null if the caret isn't currently in a mention context.
-  function detectMentionTrigger(): { query: string; range: Range } | null {
-    const sel = window.getSelection();
-    if (!sel || sel.rangeCount === 0 || !sel.isCollapsed) return null;
-    const focus = sel.getRangeAt(0);
-    if (!elRef.current?.contains(focus.startContainer)) return null;
-    if (focus.startContainer.nodeType !== Node.TEXT_NODE) return null;
-
-    const text = (focus.startContainer.textContent ?? '').slice(0, focus.startOffset);
-    const at = text.lastIndexOf('@');
-    if (at < 0) return null;
-
-    // Reject when the @ is in the middle of a word (e.g. an email local-
-    // part) — only trigger when @ stands alone or follows whitespace.
-    if (at > 0 && /\S/.test(text.charAt(at - 1))) return null;
-
-    const query = text.slice(at + 1);
-    // Whitespace inside the query closes the popover — single names only.
-    if (/\s/.test(query)) return null;
-
-    const range = document.createRange();
-    range.setStart(focus.startContainer, at);
-    range.setEnd(focus.startContainer, focus.startOffset);
-    return { query, range };
-  }
-
   function refreshMention() {
-    const trig = detectMentionTrigger();
+    const trig = detectAutocompleteTrigger(elRef.current, '@', isValidMentionQuery);
     if (!trig) {
       setMentionState((prev) => (prev === null ? prev : null));
       return;
@@ -156,6 +177,39 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, Props>(function Wys
       rect = null;
     }
     setMentionState({ query: trig.query, anchorRect: rect, range: trig.range });
+  }
+
+  function refreshEmoji() {
+    const trig = detectAutocompleteTrigger(elRef.current, ':', isValidEmojiQuery);
+    if (!trig) {
+      setEmojiState((prev) => (prev === null ? prev : null));
+      return;
+    }
+    let rect: DOMRect | null;
+    try {
+      rect = trig.range.getBoundingClientRect();
+    } catch {
+      rect = null;
+    }
+    setEmojiState({ query: trig.query, anchorRect: rect, range: trig.range });
+  }
+
+  function pickEmoji(s: EmojiSuggestion) {
+    if (!emojiState || !elRef.current) return;
+    const range = emojiState.range;
+    range.deleteContents();
+    const tail = document.createTextNode(`:${s.name}: `);
+    range.insertNode(tail);
+    const sel = window.getSelection();
+    if (sel) {
+      const r = document.createRange();
+      r.setStartAfter(tail);
+      r.collapse(true);
+      sel.removeAllRanges();
+      sel.addRange(r);
+    }
+    setEmojiState(null);
+    emitChange();
   }
 
   function pickMention(s: MentionSuggestion) {
@@ -200,10 +254,10 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, Props>(function Wys
   }
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLDivElement>) {
-    // While the mention popover is open it owns Up/Down/Enter/Tab/Escape —
-    // those keys must not fall through to the editor (no submit-on-Enter
-    // while picking a name, no blur-on-Escape).
-    if (mentionState) {
+    // Mention and emoji popovers each own Up/Down/Enter/Tab/Escape
+    // while open — those keys must not fall through to the editor
+    // (no submit-on-Enter while picking a suggestion).
+    if (mentionState || emojiState) {
       if (
         e.key === 'ArrowUp' ||
         e.key === 'ArrowDown' ||
@@ -338,10 +392,34 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, Props>(function Wys
         onInput={() => {
           emitChange();
           refreshMention();
+          refreshEmoji();
         }}
-        onKeyUp={refreshMention}
+        onKeyUp={() => {
+          refreshMention();
+          refreshEmoji();
+        }}
         onKeyDown={handleKeyDown}
-        onBlur={() => setMentionState(null)}
+        onPaste={(e) => {
+          if (!onPasteFiles) return;
+          const items = e.clipboardData?.items;
+          if (!items) return;
+          const files: File[] = [];
+          for (let i = 0; i < items.length; i++) {
+            const it = items[i];
+            if (it.kind !== 'file') continue;
+            const f = it.getAsFile();
+            if (f) files.push(f);
+          }
+          if (files.length === 0) return;
+          // Some clipboards pair the file with text/html (alt text from
+          // a screenshot tool). preventDefault keeps that out of the body.
+          e.preventDefault();
+          onPasteFiles(files);
+        }}
+        onBlur={() => {
+          setMentionState(null);
+          setEmojiState(null);
+        }}
         tabIndex={0}
         className={
           'wysiwyg-editor min-h-[60px] max-h-[200px] overflow-y-auto whitespace-pre-wrap break-words text-sm focus:outline-none ' +
@@ -355,6 +433,14 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, Props>(function Wys
           anchorRect={mentionState.anchorRect}
           onPick={pickMention}
           onDismiss={() => setMentionState(null)}
+        />
+      )}
+      {emojiState && (
+        <EmojiAutocomplete
+          query={emojiState.query}
+          anchorRect={emojiState.anchorRect}
+          onPick={pickEmoji}
+          onDismiss={() => setEmojiState(null)}
         />
       )}
     </>

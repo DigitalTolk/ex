@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useRef, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
@@ -20,9 +20,6 @@ interface UserHoverCardProps {
   children: ReactNode;
 }
 
-const SHOW_DELAY = 350;
-const HIDE_DELAY = 150;
-
 export function UserHoverCard({
   userId,
   displayName,
@@ -32,8 +29,6 @@ export function UserHoverCard({
   children,
 }: UserHoverCardProps) {
   const [open, setOpen] = useState(false);
-  const showTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const hideTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const triggerRef = useRef<HTMLSpanElement>(null);
   const navigate = useNavigate();
   // Mention hovers know only userId; author hovers pass `online` and
@@ -67,32 +62,18 @@ export function UserHoverCard({
   const inactive = userDetails?.status === 'deactivated';
   const effectiveAvatar = avatarURL ?? userDetails?.avatarURL;
 
-  function clearTimers() {
-    if (showTimer.current) clearTimeout(showTimer.current);
-    if (hideTimer.current) clearTimeout(hideTimer.current);
-  }
-
-  function handleEnter() {
-    clearTimers();
-    showTimer.current = setTimeout(() => setOpen(true), SHOW_DELAY);
-  }
-
-  function handleLeave() {
-    clearTimers();
-    hideTimer.current = setTimeout(() => setOpen(false), HIDE_DELAY);
-  }
-
-  useEffect(() => () => clearTimers(), []);
-
   const isSelf = currentUserId === userId;
 
   return (
     <>
       <span
         ref={triggerRef}
-        className="inline-block"
-        onMouseEnter={handleEnter}
-        onMouseLeave={handleLeave}
+        className="inline-block cursor-pointer"
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          setOpen((v) => !v);
+        }}
       >
         {children}
       </span>
@@ -107,7 +88,7 @@ export function UserHoverCard({
         role="tooltip"
         className="w-64 rounded-md border bg-popover p-3 shadow-lg"
       >
-        <div onMouseEnter={handleEnter} onMouseLeave={handleLeave}>
+        <div>
           <div className="flex items-center gap-3">
             <div className="relative">
               <Avatar className="h-12 w-12">

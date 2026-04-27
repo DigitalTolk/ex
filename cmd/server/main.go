@@ -134,6 +134,9 @@ func main() {
 	messageSvc := service.NewMessageService(messageStore, membershipStore, conversationStore, redisPubSub, brokerAdapter)
 	messageSvc.SetActivator(convSvc)
 	emojiSvc := service.NewEmojiService(emojiStore, userStore, redisPubSub)
+	if s3Client != nil {
+		emojiSvc.SetSigner(s3Client)
+	}
 	presenceSvc := service.NewPresenceService(broker, redisPubSub)
 	var attachmentSigner service.AttachmentSigner
 	if s3Client != nil {

@@ -27,22 +27,25 @@ export function useUploadEmoji() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async ({ name, file }: { name: string; file: File }) => {
-      const { uploadURL, fileURL } = await apiFetch<{ uploadURL: string; fileURL: string }>(
-        '/api/v1/uploads/url',
-        {
-          method: 'POST',
-          body: JSON.stringify({ filename: file.name, contentType: file.type }),
-        },
-      );
+      const { uploadURL, fileURL, key } = await apiFetch<{
+        uploadURL: string;
+        fileURL: string;
+        key: string;
+      }>('/api/v1/uploads/url', {
+        method: 'POST',
+        body: JSON.stringify({ filename: file.name, contentType: file.type }),
+      });
       const put = await fetch(uploadURL, {
         method: 'PUT',
         body: file,
         headers: { 'Content-Type': file.type },
       });
       if (!put.ok) throw new Error(`Upload failed: ${put.status}`);
+      // imageKey lets the server re-sign a fresh URL on every list so
+      // the catalog never goes dark when the original presign expires.
       return apiFetch<CustomEmoji>('/api/v1/emojis', {
         method: 'POST',
-        body: JSON.stringify({ name, imageURL: fileURL }),
+        body: JSON.stringify({ name, imageURL: fileURL, imageKey: key }),
       });
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ['emojis'] }),

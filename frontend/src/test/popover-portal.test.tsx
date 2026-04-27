@@ -182,6 +182,23 @@ describe('PopoverPortal', () => {
     expect(onDismiss).toHaveBeenCalled();
   });
 
+  it('flips data-popover-measured to "true" only after compute() runs (no top-left flash)', () => {
+    // The bug: the popover briefly rendered at (0,0) — the seeded
+    // initial state — before the position effect committed. The fix
+    // hides it via opacity-0 until pos.measured flips true. After the
+    // synchronous compute() in usePopoverPosition's effect, the
+    // attribute is "true" and the inline style has opacity:1.
+    render(
+      <Harness
+        open
+        triggerRect={{ top: 100, bottom: 120, left: 100, right: 200 }}
+      />,
+    );
+    const portal = screen.getByTestId('popover-portal');
+    expect(portal.getAttribute('data-popover-measured')).toBe('true');
+    expect(portal.style.opacity).toBe('1');
+  });
+
   it('does not call onDismiss when clicking inside the popover', () => {
     const onDismiss = vi.fn();
     render(

@@ -178,7 +178,7 @@ export function Sidebar({ onClose }: SidebarProps) {
       </div>
 
       <ScrollArea className="flex-1">
-        <div className="p-2">
+        <div className="space-y-px p-2">
           {/* Directories link — same row geometry (px-2 py-1) as channel
               rows below so the eye doesn't catch on a height bump. */}
           <NavLink
@@ -363,7 +363,7 @@ export function Sidebar({ onClose }: SidebarProps) {
                       </DropdownMenu>
                     )}
                   </div>
-                  <div>
+                  <div className="space-y-px">
                     {visibleItems.map((item) => {
                       if (item.kind === 'channel') {
                         return (

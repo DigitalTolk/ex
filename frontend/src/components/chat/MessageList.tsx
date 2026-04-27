@@ -1,9 +1,9 @@
-import { useRef, useCallback, type ReactNode } from 'react';
-import { Button } from '@/components/ui/button';
+import { useEffect, useMemo, useRef, type ReactNode } from 'react';
 import { Skeleton } from '@/components/ui/skeleton';
 import { MessageItem } from './MessageItem';
 import { useMessageDeepLinkHighlight } from '@/hooks/useMessageDeepLinkHighlight';
 import { dayKey, formatDayHeading } from '@/lib/format';
+import { deriveThreadMeta } from '@/lib/message-users';
 import type { Message } from '@/types';
 
 export interface UserMapEntry {
@@ -46,10 +46,44 @@ export function MessageList({
 }: MessageListProps) {
   useMessageDeepLinkHighlight([channelId, conversationId, isLoading, pages.length]);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const loadMoreRef = useRef<HTMLDivElement>(null);
 
-  const handleScroll = useCallback(() => {
-    // placeholder for future scroll-based logic (e.g. mark-as-read)
-  }, []);
+  // Adapter so each ThreadActionBar can read user records from the
+  // single userMap we already have, instead of issuing its own
+  // /users/batch fetch per thread.
+  const userLookup = useMemo(
+    () => ({ get: (id: string) => userMap[id] }),
+    [userMap],
+  );
+
+  const allMessages = useMemo(
+    () => pages.flatMap((p) => p.items).reverse(),
+    [pages],
+  );
+
+  // Backfill thread metadata from sibling replies — covers messages whose
+  // stored RecentReplyAuthorIDs / LastReplyAt fields predate that feature.
+  const threadMeta = useMemo(() => deriveThreadMeta(allMessages), [allMessages]);
+
+  useEffect(() => {
+    const node = loadMoreRef.current;
+    const root = scrollRef.current;
+    if (!node || !root || !hasNextPage) return;
+    if (typeof IntersectionObserver === 'undefined') return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting && !isFetchingNextPage) {
+            fetchNextPage();
+            return;
+          }
+        }
+      },
+      { root, rootMargin: '300px' },
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [hasNextPage, isFetchingNextPage, fetchNextPage, pages.length]);
 
   if (isLoading) {
     return (
@@ -66,8 +100,6 @@ export function MessageList({
       </div>
     );
   }
-
-  const allMessages = pages.flatMap((p) => p.items).reverse();
 
   // Group by date for separators
   let lastDate = '';
@@ -118,10 +150,27 @@ export function MessageList({
       );
     } else {
       const u = userMap[msg.authorID];
+      // Server data is authoritative once populated (Send updates the
+      // root and broadcasts message.edited). Only fall through to
+      // page-derived metadata when the server fields are missing —
+      // covers thread roots that predate the feature.
+      const derived = threadMeta.get(msg.id);
+      const needsBackfill =
+        derived &&
+        ((msg.recentReplyAuthorIDs?.length ?? 0) === 0 || !msg.lastReplyAt);
+      const augmented: Message = needsBackfill
+        ? {
+            ...msg,
+            recentReplyAuthorIDs: msg.recentReplyAuthorIDs?.length
+              ? msg.recentReplyAuthorIDs
+              : derived.authors,
+            lastReplyAt: msg.lastReplyAt ?? derived.lastReplyAt,
+          }
+        : msg;
       elements.push(
         <MessageItem
           key={msg.id}
-          message={msg}
+          message={augmented}
           authorName={u?.displayName ?? 'Unknown'}
           authorAvatarURL={u?.avatarURL}
           authorOnline={u?.online}
@@ -131,13 +180,14 @@ export function MessageList({
           conversationId={conversationId}
           currentUserId={currentUserId}
           onReplyInThread={onReplyInThread}
+          userMap={userLookup}
         />,
       );
     }
   }
 
   return (
-    <div className="flex-1 overflow-y-auto flex flex-col-reverse" ref={scrollRef} onScroll={handleScroll}>
+    <div className="flex-1 overflow-y-auto flex flex-col-reverse" ref={scrollRef}>
       <div className="p-4 space-y-1">
         {elements}
         {allMessages.length === 0 && (
@@ -150,10 +200,12 @@ export function MessageList({
         )}
       </div>
       {hasNextPage && (
-        <div className="flex justify-center py-2">
-          <Button variant="ghost" size="sm" onClick={fetchNextPage} disabled={isFetchingNextPage}>
-            {isFetchingNextPage ? 'Loading...' : 'Load earlier messages'}
-          </Button>
+        <div
+          ref={loadMoreRef}
+          data-testid="message-list-load-more"
+          className="flex justify-center py-2 text-xs text-muted-foreground"
+        >
+          {isFetchingNextPage ? 'Loading earlier messages…' : ''}
         </div>
       )}
     </div>

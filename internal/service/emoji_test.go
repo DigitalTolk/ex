@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/DigitalTolk/ex/internal/events"
 	"github.com/DigitalTolk/ex/internal/model"
@@ -89,7 +90,7 @@ func TestEmojiService_Create_Member(t *testing.T) {
 	svc, _, users, pub := setupEmojiSvc()
 	users.users["u1"] = &model.User{ID: "u1", SystemRole: model.SystemRoleMember}
 
-	e, err := svc.Create(context.Background(), "u1", "fire", "https://example.com/fire.png")
+	e, err := svc.Create(context.Background(), "u1", "fire", "https://example.com/fire.png", "uploads/u1/fire.png")
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -115,7 +116,7 @@ func TestEmojiService_Create_GuestForbidden(t *testing.T) {
 	svc, _, users, _ := setupEmojiSvc()
 	users.users["g1"] = &model.User{ID: "g1", SystemRole: model.SystemRoleGuest}
 
-	if _, err := svc.Create(context.Background(), "g1", "fire", "https://x/x.png"); err == nil {
+	if _, err := svc.Create(context.Background(), "g1", "fire", "https://x/x.png", "k"); err == nil {
 		t.Fatal("expected guest error")
 	}
 }
@@ -124,7 +125,7 @@ func TestEmojiService_Create_InvalidName(t *testing.T) {
 	svc, _, users, _ := setupEmojiSvc()
 	users.users["u1"] = &model.User{ID: "u1", SystemRole: model.SystemRoleMember}
 
-	if _, err := svc.Create(context.Background(), "u1", "BAD NAME", "https://x"); err == nil {
+	if _, err := svc.Create(context.Background(), "u1", "BAD NAME", "https://x", "k"); err == nil {
 		t.Fatal("expected invalid name error")
 	}
 }
@@ -134,7 +135,7 @@ func TestEmojiService_Create_DuplicateName(t *testing.T) {
 	users.users["u1"] = &model.User{ID: "u1", SystemRole: model.SystemRoleMember}
 	store.items["dupe"] = &model.CustomEmoji{Name: "dupe"}
 
-	if _, err := svc.Create(context.Background(), "u1", "dupe", "https://x"); err == nil {
+	if _, err := svc.Create(context.Background(), "u1", "dupe", "https://x", "k"); err == nil {
 		t.Fatal("expected duplicate error")
 	}
 }
@@ -143,7 +144,7 @@ func TestEmojiService_Create_EmptyURL(t *testing.T) {
 	svc, _, users, _ := setupEmojiSvc()
 	users.users["u1"] = &model.User{ID: "u1", SystemRole: model.SystemRoleMember}
 
-	if _, err := svc.Create(context.Background(), "u1", "fire", ""); err == nil {
+	if _, err := svc.Create(context.Background(), "u1", "fire", "", "k"); err == nil {
 		t.Fatal("expected url error")
 	}
 }
@@ -168,6 +169,77 @@ func TestEmojiService_List_StoreError(t *testing.T) {
 
 	if _, err := svc.List(context.Background()); err == nil {
 		t.Fatal("expected error")
+	}
+}
+
+type fakeEmojiSigner struct {
+	urls map[string]string
+	err  error
+}
+
+func (f *fakeEmojiSigner) PresignedGetURL(_ context.Context, key string, _ time.Duration) (string, error) {
+	if f.err != nil {
+		return "", f.err
+	}
+	return f.urls[key], nil
+}
+
+func TestEmojiService_List_RefreshesPresignedURLs(t *testing.T) {
+	svc, store, _, _ := setupEmojiSvc()
+	store.items["fire"] = &model.CustomEmoji{
+		Name:     "fire",
+		ImageURL: "https://expired.example/fire.png?expired=true",
+		ImageKey: "uploads/u1/fire.png",
+	}
+	signer := &fakeEmojiSigner{urls: map[string]string{
+		"uploads/u1/fire.png": "https://fresh.example/fire.png?sig=new",
+	}}
+	svc.SetSigner(signer)
+
+	out, err := svc.List(context.Background())
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(out) != 1 {
+		t.Fatalf("got %d emojis, want 1", len(out))
+	}
+	if out[0].ImageURL != "https://fresh.example/fire.png?sig=new" {
+		t.Errorf("ImageURL=%q, want re-signed url", out[0].ImageURL)
+	}
+}
+
+func TestEmojiService_List_KeepsLegacyURLWhenKeyMissing(t *testing.T) {
+	svc, store, _, _ := setupEmojiSvc()
+	store.items["fire"] = &model.CustomEmoji{
+		Name:     "fire",
+		ImageURL: "https://stored.example/fire.png?sig=old",
+	}
+	svc.SetSigner(&fakeEmojiSigner{urls: map[string]string{}})
+
+	out, err := svc.List(context.Background())
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if out[0].ImageURL != "https://stored.example/fire.png?sig=old" {
+		t.Errorf("ImageURL=%q changed despite missing ImageKey", out[0].ImageURL)
+	}
+}
+
+func TestEmojiService_List_FallsBackOnSignerError(t *testing.T) {
+	svc, store, _, _ := setupEmojiSvc()
+	store.items["fire"] = &model.CustomEmoji{
+		Name:     "fire",
+		ImageURL: "https://stored.example/fire.png?sig=stale",
+		ImageKey: "uploads/u1/fire.png",
+	}
+	svc.SetSigner(&fakeEmojiSigner{err: errors.New("aws down")})
+
+	out, err := svc.List(context.Background())
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if out[0].ImageURL != "https://stored.example/fire.png?sig=stale" {
+		t.Errorf("ImageURL=%q, expected stored fallback when signer errored", out[0].ImageURL)
 	}
 }
 

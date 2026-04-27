@@ -73,6 +73,24 @@ export function formatLongDateTime(input: Date | string | number): string {
   return `${month} ${day}${ordinalSuffix(day)} at ${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
 }
 
+// formatRelative renders a "time ago" style label — "just now", "2 hours ago",
+// "3 days ago" — for tooltips where a precise timestamp would be too noisy.
+export function formatRelative(input: Date | string | number, now: Date = new Date()): string {
+  const d = input instanceof Date ? input : new Date(input);
+  const diffSec = Math.round((now.getTime() - d.getTime()) / 1000);
+  if (diffSec < 45) return 'just now';
+  const diffMin = Math.round(diffSec / 60);
+  if (diffMin < 60) return `${diffMin} minute${diffMin === 1 ? '' : 's'} ago`;
+  const diffHour = Math.round(diffMin / 60);
+  if (diffHour < 24) return `${diffHour} hour${diffHour === 1 ? '' : 's'} ago`;
+  const diffDay = Math.round(diffHour / 24);
+  if (diffDay < 30) return `${diffDay} day${diffDay === 1 ? '' : 's'} ago`;
+  const diffMonth = Math.round(diffDay / 30);
+  if (diffMonth < 12) return `${diffMonth} month${diffMonth === 1 ? '' : 's'} ago`;
+  const diffYear = Math.round(diffMonth / 12);
+  return `${diffYear} year${diffYear === 1 ? '' : 's'} ago`;
+}
+
 // formatDayHeading renders a calendar-day divider label: "Today", "Yesterday",
 // or a date like "Mar 26th, 2026" once we cross a year boundary, "Mar 26th"
 // within the current year. Used by the day-grouping divider in message lists.

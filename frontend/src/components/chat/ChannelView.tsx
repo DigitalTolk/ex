@@ -22,6 +22,7 @@ import { canEditChannel, canArchiveChannel, canLeaveChannel, roleNumber } from '
 import { markThreadSeen } from '@/hooks/useThreads';
 import { apiFetch } from '@/lib/api';
 import { useUsersBatch } from '@/hooks/useUsersBatch';
+import { collectMessageUserIDs } from '@/lib/message-users';
 import type { UserMapEntry } from './MessageList';
 
 export function ChannelView() {
@@ -99,12 +100,11 @@ export function ChannelView() {
     if (!stillMember) navigate('/', { replace: true });
   }, [channel?.id, user?.id, members, navigate]);
 
-  // Collect all user IDs we need (members + message authors)
   const userIDs = useMemo(() => {
     const ids = new Set<string>();
     members?.forEach((m) => ids.add(m.userID));
     for (const page of data?.pages ?? []) {
-      for (const msg of page.items) ids.add(msg.authorID);
+      for (const id of collectMessageUserIDs(page.items)) ids.add(id);
     }
     return Array.from(ids);
   }, [members, data]);
