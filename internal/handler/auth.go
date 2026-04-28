@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"fmt"
+	"html"
 	"net/http"
 	"strings"
 	"time"
@@ -53,7 +55,13 @@ func (h *AuthHandler) OIDCLogin(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	http.Redirect(w, r, authURL, http.StatusFound)
+	// Use a JS redirect instead of 302 so the browser commits the cookies
+	// before navigating away. WebKit (Tauri/Linux) drops Set-Cookie headers
+	// from 302 responses, causing the state cookie to be missing on callback.
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	fmt.Fprintf(w, `<!doctype html><html><head><meta http-equiv="refresh" content="0;url=%s"><script>window.location.replace(%q)</script></head></html>`,
+		html.EscapeString(authURL), authURL)
 }
 
 // OIDCCallback handles the identity provider redirect after authentication.
