@@ -2,6 +2,7 @@ package handler
 
 import (
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/DigitalTolk/ex/internal/auth"
@@ -21,6 +22,8 @@ func NewAuthHandler(authSvc *service.AuthService, jwt *auth.JWTManager) *AuthHan
 }
 
 // OIDCLogin initiates the OIDC login flow by redirecting to the identity provider.
+// An optional ?redirect_to=<url> query parameter overrides where the browser is
+// sent after a successful callback (must be a localhost or tauri:// URL).
 func (h *AuthHandler) OIDCLogin(w http.ResponseWriter, r *http.Request) {
 	authURL, state, err := h.authSvc.HandleOIDCLogin()
 	if err != nil {
@@ -37,6 +40,18 @@ func (h *AuthHandler) OIDCLogin(w http.ResponseWriter, r *http.Request) {
 		Secure:   true,
 		SameSite: http.SameSiteLaxMode,
 	})
+
+	if redirectTo := r.URL.Query().Get("redirect_to"); isAllowedOIDCRedirect(redirectTo) {
+		http.SetCookie(w, &http.Cookie{
+			Name:     "oauth_redirect",
+			Value:    redirectTo,
+			Path:     "/auth",
+			MaxAge:   600,
+			HttpOnly: true,
+			Secure:   true,
+			SameSite: http.SameSiteLaxMode,
+		})
+	}
 
 	http.Redirect(w, r, authURL, http.StatusFound)
 }
@@ -79,10 +94,32 @@ func (h *AuthHandler) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.setRefreshCookie(w, refreshToken, h.jwt.RefreshTTL())
-	// /oidc/callback (not /auth/callback) — the SPA fallback explicitly 404s
-	// the /auth/ namespace to avoid shadowing real auth endpoints, so the
-	// callback page lives outside that prefix.
-	http.Redirect(w, r, "/oidc/callback?token="+accessToken, http.StatusFound)
+
+	// Default redirect: the SPA lives outside /auth/ to avoid the namespace
+	// the router 404s for unknown /auth/** paths.
+	finalRedirect := "/oidc/callback?token=" + accessToken
+	if redirectCookie, err := r.Cookie("oauth_redirect"); err == nil && isAllowedOIDCRedirect(redirectCookie.Value) {
+		finalRedirect = redirectCookie.Value + "?token=" + accessToken
+		http.SetCookie(w, &http.Cookie{
+			Name:     "oauth_redirect",
+			Value:    "",
+			Path:     "/auth",
+			MaxAge:   -1,
+			HttpOnly: true,
+			Secure:   true,
+			SameSite: http.SameSiteLaxMode,
+		})
+	}
+
+	http.Redirect(w, r, finalRedirect, http.StatusFound)
+}
+
+// isAllowedOIDCRedirect permits localhost (dev) and tauri:// (desktop) redirect
+// targets; all other URLs are rejected to prevent open redirect attacks.
+func isAllowedOIDCRedirect(u string) bool {
+	return u != "" && (strings.HasPrefix(u, "http://localhost") ||
+		strings.HasPrefix(u, "https://localhost") ||
+		strings.HasPrefix(u, "tauri://localhost"))
 }
 
 // RefreshToken exchanges a refresh token cookie for a new access token.
