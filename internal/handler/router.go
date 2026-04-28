@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"bytes"
+	"io"
 	"io/fs"
 	"net/http"
 	"strings"
@@ -12,7 +14,9 @@ import (
 // NewRouter builds the application HTTP handler, registering all routes.
 //
 // frontendFS should be the frontend/dist subtree (already sub-rooted); pass nil
-// to disable the embedded SPA.
+// to disable the embedded SPA. appVersion is the build identifier the SPA
+// embeds in its `<meta name="app-version">` tag — main computes it once
+// and forwards the same value here to avoid re-hashing index.html.
 func NewRouter(
 	authH *AuthHandler,
 	userH *UserHandler,
@@ -29,6 +33,7 @@ func NewRouter(
 	sidebarH *SidebarHandler,
 	jwtMgr *auth.JWTManager,
 	frontendFS fs.FS,
+	appVersion string,
 	allowOrigin string,
 ) http.Handler {
 	mux := http.NewServeMux()
@@ -93,6 +98,7 @@ func NewRouter(
 	mux.Handle("POST /api/v1/channels/{id}/messages/{msgId}/reactions", middleware.WrapFunc(channelH.ToggleReaction, authMW))
 	mux.Handle("PUT /api/v1/channels/{id}/messages/{msgId}/pinned", middleware.WrapFunc(channelH.SetPinned, authMW))
 	mux.Handle("GET /api/v1/channels/{id}/pinned", middleware.WrapFunc(channelH.ListPinned, authMW))
+	mux.Handle("GET /api/v1/channels/{id}/files", middleware.WrapFunc(channelH.ListFiles, authMW))
 
 	// ------------------------------------------------------------------ Conversations
 	mux.Handle("POST /api/v1/conversations", middleware.WrapFunc(convH.Create, authMW))
@@ -107,6 +113,7 @@ func NewRouter(
 	mux.Handle("POST /api/v1/conversations/{id}/messages/{msgId}/reactions", middleware.WrapFunc(convH.ToggleReaction, authMW))
 	mux.Handle("PUT /api/v1/conversations/{id}/messages/{msgId}/pinned", middleware.WrapFunc(convH.SetPinned, authMW))
 	mux.Handle("GET /api/v1/conversations/{id}/pinned", middleware.WrapFunc(convH.ListPinned, authMW))
+	mux.Handle("GET /api/v1/conversations/{id}/files", middleware.WrapFunc(convH.ListFiles, authMW))
 
 	// ------------------------------------------------------------------ Threads (cross-parent)
 	if threadH != nil {
@@ -164,8 +171,8 @@ func NewRouter(
 
 	// ------------------------------------------------------------------ SPA
 	if frontendFS != nil {
-		spa := spaHandler{fs: http.FS(frontendFS), fileServer: http.FileServer(http.FS(frontendFS))}
-		mux.Handle("/", &spa)
+		spa := newSPAHandler(frontendFS, appVersion)
+		mux.Handle("/", spa)
 	}
 
 	// Apply global middleware: CORS, RequestID, Logging.
@@ -178,11 +185,36 @@ func NewRouter(
 	return handler
 }
 
-// spaHandler serves static files from the embedded filesystem and falls back
-// to index.html for client-side routing.
+// spaHandler serves the embedded SPA. Static asset requests pass through
+// to http.FileServer; navigations land on a pre-built index.html that has
+// been augmented with `<meta name="app-version">` so the loaded SPA can
+// recognise its own deploy and detect a newer one via /api/v1/version.
 type spaHandler struct {
 	fs         http.FileSystem
 	fileServer http.Handler
+	indexHTML  []byte
+}
+
+func newSPAHandler(frontendFS fs.FS, version string) *spaHandler {
+	httpFS := http.FS(frontendFS)
+	h := &spaHandler{fs: httpFS, fileServer: http.FileServer(httpFS)}
+
+	if f, err := frontendFS.Open("index.html"); err == nil {
+		defer func() { _ = f.Close() }()
+		if raw, err := io.ReadAll(f); err == nil {
+			meta := []byte(`<meta name="` + AppVersionMetaName + `" content="` + version + `">`)
+			// Insert just before </head>; if the marker isn't present
+			// (extremely unlikely with Vite output) fall back to the
+			// untouched bytes — the API endpoint still reports the
+			// version and polling alone is enough for detection.
+			if i := bytes.Index(raw, []byte("</head>")); i >= 0 {
+				h.indexHTML = append(append(append([]byte{}, raw[:i]...), meta...), raw[i:]...)
+			} else {
+				h.indexHTML = raw
+			}
+		}
+	}
+	return h
 }
 
 func (h *spaHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -192,19 +224,31 @@ func (h *spaHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Try to serve the file directly.
 	path := r.URL.Path
 	if path == "/" {
 		path = "/index.html"
 	}
 
-	_, err := h.fs.Open(strings.TrimPrefix(path, "/"))
-	if err != nil {
-		// File not found: serve index.html for SPA client-side routing.
-		r.URL.Path = "/"
-		h.fileServer.ServeHTTP(w, r)
-		return
+	// SPA navigations (root or unknown route) get the version-augmented
+	// index.html. Static assets pass through to http.FileServer so its
+	// caching headers and range support stay intact.
+	if path == "/index.html" || isUnknown(h.fs, path) {
+		if h.indexHTML != nil {
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.Header().Set("Cache-Control", "no-store")
+			_, _ = w.Write(h.indexHTML)
+			return
+		}
 	}
 
 	h.fileServer.ServeHTTP(w, r)
+}
+
+func isUnknown(httpFS http.FileSystem, path string) bool {
+	f, err := httpFS.Open(strings.TrimPrefix(path, "/"))
+	if err != nil {
+		return true
+	}
+	_ = f.Close()
+	return false
 }

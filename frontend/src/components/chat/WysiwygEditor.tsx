@@ -2,6 +2,7 @@ import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 're
 import { htmlToMarkdown, markdownToEditableHtml } from '@/lib/wysiwyg';
 import { MentionAutocomplete, type MentionSuggestion } from './MentionAutocomplete';
 import { EmojiAutocomplete, type EmojiSuggestion } from './EmojiAutocomplete';
+import { ChannelAutocomplete, type ChannelSuggestion } from './ChannelAutocomplete';
 
 // detectAutocompleteTrigger scans backward from the caret in the focused
 // text node for the nearest occurrence of `trigger`, then asks the
@@ -42,6 +43,10 @@ const isValidMentionQuery = (query: string) => !/\s/.test(query);
 const EMOJI_SHORTCODE_RE = /^[a-z0-9_+-]+$/i;
 const isValidEmojiQuery = (query: string) =>
   !query.includes(':') && EMOJI_SHORTCODE_RE.test(query);
+
+// Channel slugs are lowercase alphanumeric + hyphens; whitespace closes.
+const CHANNEL_QUERY_RE = /^[a-z0-9-]*$/;
+const isValidChannelQuery = (query: string) => CHANNEL_QUERY_RE.test(query);
 
 export interface WysiwygEditorHandle {
   /** Apply a formatting command to the current selection. */
@@ -102,6 +107,11 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, Props>(function Wys
     range: Range;
   } | null>(null);
   const [emojiState, setEmojiState] = useState<{
+    query: string;
+    anchorRect: DOMRect | null;
+    range: Range;
+  } | null>(null);
+  const [channelState, setChannelState] = useState<{
     query: string;
     anchorRect: DOMRect | null;
     range: Range;
@@ -194,6 +204,46 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, Props>(function Wys
     setEmojiState({ query: trig.query, anchorRect: rect, range: trig.range });
   }
 
+  function refreshChannel() {
+    const trig = detectAutocompleteTrigger(elRef.current, '~', isValidChannelQuery);
+    if (!trig) {
+      setChannelState((prev) => (prev === null ? prev : null));
+      return;
+    }
+    let rect: DOMRect | null;
+    try {
+      rect = trig.range.getBoundingClientRect();
+    } catch {
+      rect = null;
+    }
+    setChannelState({ query: trig.query, anchorRect: rect, range: trig.range });
+  }
+
+  function pickChannel(s: ChannelSuggestion) {
+    if (!channelState || !elRef.current) return;
+    const range = channelState.range;
+    range.deleteContents();
+    const span = document.createElement('span');
+    span.className = 'mention channel-mention';
+    span.setAttribute('data-channel-id', s.id);
+    span.setAttribute('data-channel-slug', s.slug);
+    span.setAttribute('contenteditable', 'false');
+    span.textContent = `~${s.slug}`;
+    range.insertNode(span);
+    const tail = document.createTextNode(' ');
+    span.parentNode?.insertBefore(tail, span.nextSibling);
+    const sel = window.getSelection();
+    if (sel) {
+      const r = document.createRange();
+      r.setStartAfter(tail);
+      r.collapse(true);
+      sel.removeAllRanges();
+      sel.addRange(r);
+    }
+    setChannelState(null);
+    emitChange();
+  }
+
   function pickEmoji(s: EmojiSuggestion) {
     if (!emojiState || !elRef.current) return;
     const range = emojiState.range;
@@ -254,10 +304,10 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, Props>(function Wys
   }
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLDivElement>) {
-    // Mention and emoji popovers each own Up/Down/Enter/Tab/Escape
+    // Mention/emoji/channel popovers each own Up/Down/Enter/Tab/Escape
     // while open — those keys must not fall through to the editor
     // (no submit-on-Enter while picking a suggestion).
-    if (mentionState || emojiState) {
+    if (mentionState || emojiState || channelState) {
       if (
         e.key === 'ArrowUp' ||
         e.key === 'ArrowDown' ||
@@ -393,10 +443,7 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, Props>(function Wys
           emitChange();
           refreshMention();
           refreshEmoji();
-        }}
-        onKeyUp={() => {
-          refreshMention();
-          refreshEmoji();
+          refreshChannel();
         }}
         onKeyDown={handleKeyDown}
         onPaste={(e) => {
@@ -419,6 +466,7 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, Props>(function Wys
         onBlur={() => {
           setMentionState(null);
           setEmojiState(null);
+          setChannelState(null);
         }}
         tabIndex={0}
         className={
@@ -441,6 +489,14 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, Props>(function Wys
           anchorRect={emojiState.anchorRect}
           onPick={pickEmoji}
           onDismiss={() => setEmojiState(null)}
+        />
+      )}
+      {channelState && (
+        <ChannelAutocomplete
+          query={channelState.query}
+          anchorRect={channelState.anchorRect}
+          onPick={pickChannel}
+          onDismiss={() => setChannelState(null)}
         />
       )}
     </>

@@ -121,8 +121,8 @@ describe('Reaction tooltip — list of reactors', () => {
   it('renders a large hero emoji glyph in the tooltip', () => {
     renderItem({ reactors: ['u-a'], emoji: '🎉' });
     const tip = screen.getByTestId('reaction-tooltip');
-    // EmojiGlyph at size="xl" uses the text-[40px] hero size class.
-    const glyph = tip.querySelector('.text-\\[40px\\]');
+    // EmojiGlyph at size="xl" uses the text-[64px] hero size class.
+    const glyph = tip.querySelector('.text-\\[64px\\]');
     expect(glyph).not.toBeNull();
     expect(glyph?.textContent).toBe('🎉');
   });

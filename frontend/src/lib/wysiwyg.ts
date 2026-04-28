@@ -1,4 +1,4 @@
-import { USER_MENTION_RE_GLOBAL } from './mention-syntax';
+import { USER_MENTION_RE_GLOBAL, CHANNEL_MENTION_RE_GLOBAL } from './mention-syntax';
 
 // Minimal markdown ↔ HTML bridge for the message composer.
 //
@@ -38,11 +38,13 @@ function inlineMd(s: string): string {
   s = s.replace(USER_MENTION_RE_GLOBAL, (_m, id: string, name: string) => {
     const safeID = escapeAttr(id.trim());
     const safeName = name.trim();
-    // The pill is contenteditable=false so the cursor steps over it as
-    // an atomic token instead of letting the user split it character by
-    // character. The trailing zero-width space (\u200B) gives the editor
-    // a position to land the caret right after the pill.
     return `<span class="mention" data-user-id="${safeID}" data-mention-name="${escapeAttr(safeName)}" contenteditable="false">@${escapeHtml(safeName)}</span>`;
+  });
+  // ~[id|slug] → channel pill (same pre-link priority).
+  s = s.replace(CHANNEL_MENTION_RE_GLOBAL, (_m, id: string, slug: string) => {
+    const safeID = escapeAttr(id.trim());
+    const safeSlug = slug.trim();
+    return `<span class="mention channel-mention" data-channel-id="${safeID}" data-channel-slug="${escapeAttr(safeSlug)}" contenteditable="false">~${escapeHtml(safeSlug)}</span>`;
   });
   // [text](url)
   s = s.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (_m, text, url) =>
@@ -241,6 +243,14 @@ function appendNode(node: Node, out: string[], marks: Mark[]): void {
       // contenteditable shouldn't allow but might via paste) can't
       // desync the routing identifier.
       if (el.classList.contains('mention')) {
+        const channelID = el.getAttribute('data-channel-id');
+        if (channelID) {
+          const slug =
+            el.getAttribute('data-channel-slug') ??
+            (el.textContent ?? '').replace(/^~/, '');
+          out.push(`~[${channelID}|${slug}]`);
+          return;
+        }
         const id = el.getAttribute('data-user-id') ?? '';
         const name =
           el.getAttribute('data-mention-name') ??

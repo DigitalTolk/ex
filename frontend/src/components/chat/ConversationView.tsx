@@ -1,12 +1,14 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
 import { useUsersBatch } from '@/hooks/useUsersBatch';
 import { Header } from '@/components/layout/Header';
 import { MessageList } from './MessageList';
-import { MessageInput } from './MessageInput';
+import { MessageInput, type MessageInputHandle } from './MessageInput';
+import { MessageDropZone } from './MessageDropZone';
 import { MemberList } from './MemberList';
 import { ThreadPanel } from './ThreadPanel';
 import { PinnedPanel } from './PinnedPanel';
+import { FilesPanel } from './FilesPanel';
 import { DMIntro, SelfDMIntro, GroupIntro } from './ConversationIntro';
 import { TypingIndicator } from './TypingIndicator';
 import { useConversation } from '@/hooks/useConversations';
@@ -20,6 +22,7 @@ import { usePresence } from '@/context/PresenceContext';
 import { useNotifications } from '@/context/NotificationContext';
 import { markThreadSeen } from '@/hooks/useThreads';
 import { collectMessageUserIDs } from '@/lib/message-users';
+import { useSidePanels } from '@/hooks/useSidePanels';
 import type { UserMapEntry } from './MessageList';
 
 export function ConversationView() {
@@ -50,21 +53,19 @@ export function ConversationView() {
     };
   }, [id, clearConversationUnread, setActiveConversation, setActiveParent]);
 
-  const [showMembers, setShowMembers] = useState(false);
   const [threadRootID, setThreadRootID] = useState<string | null>(null);
-  const [showPinned, setShowPinned] = useState(false);
+  const inputRef = useRef<MessageInputHandle>(null);
+  const panels = useSidePanels<'members' | 'pinned' | 'files'>();
 
-  const openMembers = () => { setShowMembers(true); setThreadRootID(null); setShowPinned(false); };
-  const closeMembers = () => setShowMembers(false);
-  const openThread = (rid: string) => { setThreadRootID(rid); setShowMembers(false); setShowPinned(false); };
+  const openMembers = () => { setThreadRootID(null); panels.open('members'); };
+  const closeMembers = panels.close;
+  const openThread = (rid: string) => { setThreadRootID(rid); panels.close(); };
   const closeThread = () => setThreadRootID(null);
-  const togglePinned = () => {
-    setShowPinned((v) => {
-      const next = !v;
-      if (next) { setThreadRootID(null); setShowMembers(false); }
-      return next;
-    });
-  };
+  const togglePinned = () => { setThreadRootID(null); panels.toggle('pinned'); };
+  const toggleFiles = () => { setThreadRootID(null); panels.toggle('files'); };
+  const showMembers = panels.isActive('members');
+  const showPinned = panels.isActive('pinned');
+  const showFiles = panels.isActive('files');
 
   // Reset thread when the conversation changes; this is a deliberate
   // synchronous reset, not a sync between external state and React.
@@ -200,8 +201,10 @@ export function ConversationView() {
           onMembersClick={conversation?.type === 'group' ? () => (showMembers ? closeMembers() : openMembers()) : undefined}
           onPinnedClick={togglePinned}
           pinnedActive={showPinned}
+          onFilesClick={toggleFiles}
+          filesActive={showFiles}
         />
-        <div className="relative flex flex-1 flex-col min-h-0">
+        <MessageDropZone onFiles={(files) => void inputRef.current?.uploadFiles(files)}>
           <MessageList
             pages={data?.pages ?? []}
             hasNextPage={hasNextPage}
@@ -215,15 +218,16 @@ export function ConversationView() {
             intro={intro ?? undefined}
           />
           <TypingIndicator parentID={id} userMap={userMap} />
-        </div>
-        <MessageInput
-          onSend={sendMessage.mutate}
-          disabled={sendMessage.isPending}
-          placeholder={`Write to ${title}`}
-          focusKey={id}
-          typingParentID={id}
-          typingParentType="conversation"
-        />
+          <MessageInput
+            ref={inputRef}
+            onSend={sendMessage.mutate}
+            disabled={sendMessage.isPending}
+            placeholder={`Write to ${title}`}
+            focusKey={id}
+            typingParentID={id}
+            typingParentType="conversation"
+          />
+        </MessageDropZone>
       </div>
       {threadRootID && (
         <ThreadPanel
@@ -237,12 +241,19 @@ export function ConversationView() {
       {showPinned && !threadRootID && (
         <PinnedPanel
           conversationId={id}
-          onClose={() => setShowPinned(false)}
+          onClose={panels.close}
           userMap={userMap}
           currentUserId={user?.id}
         />
       )}
-      {showMembers && !threadRootID && !showPinned && conversation?.type === 'group' && (
+      {showFiles && !threadRootID && (
+        <FilesPanel
+          conversationId={id}
+          onClose={panels.close}
+          userMap={userMap}
+        />
+      )}
+      {showMembers && !threadRootID && conversation?.type === 'group' && (
         <MemberList
           members={memberList}
           userMap={userMap}

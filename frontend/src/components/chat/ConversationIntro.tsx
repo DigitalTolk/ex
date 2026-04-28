@@ -1,5 +1,5 @@
-import { Hash, Lock } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import { ChannelIcon } from '@/components/ChannelIcon';
 import { getInitials, formatLongDate } from '@/lib/format';
 import type { Channel } from '@/types';
 
@@ -14,7 +14,6 @@ interface ChannelIntroProps extends BaseProps {
 }
 
 export function ChannelIntro({ channel, creatorName, className }: ChannelIntroProps) {
-  const Icon = channel.type === 'private' ? Lock : Hash;
   const who = creatorName ? `@${creatorName}` : 'Someone';
   return (
     <div
@@ -24,7 +23,7 @@ export function ChannelIntro({ channel, creatorName, className }: ChannelIntroPr
     >
       <div className="mb-2 flex items-center gap-2">
         <span className="flex h-9 w-9 items-center justify-center rounded-md bg-muted">
-          <Icon className="h-5 w-5 text-muted-foreground" />
+          <ChannelIcon type={channel.type} className="h-5 w-5 text-muted-foreground" ariaLabel="" />
         </span>
         <h2 className="text-base font-semibold">
           {channel.type === 'private' ? channel.name : `#${channel.name}`}

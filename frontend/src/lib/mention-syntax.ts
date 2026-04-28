@@ -17,3 +17,9 @@ export const USER_MENTION_RE_GLOBAL = /@\[([^|\]]+)\|([^\]]+)\]/g;
 // a word char or another @). Avoids eating email local-parts like
 // "user@all-hands.example.com".
 export const GROUP_MENTION_RE = /(^|[^\w@])@(all|here)\b/;
+
+// CHANNEL_MENTION_RE matches "~[<channelID>|<slug>]". The slug shows in
+// rendered text; the ID is what survives renames so the link still
+// resolves. Mirrors USER_MENTION_RE's structural rules.
+export const CHANNEL_MENTION_RE = /~\[([^|\]]+)\|([^\]]+)\]/;
+export const CHANNEL_MENTION_RE_GLOBAL = /~\[([^|\]]+)\|([^\]]+)\]/g;

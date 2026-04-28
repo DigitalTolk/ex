@@ -564,6 +564,42 @@ func TestMessageService_ListPinned_NotMemberRejected(t *testing.T) {
 	}
 }
 
+func TestMessageService_ListFiles(t *testing.T) {
+	svc, messages, memberships, _, _ := setupMessageService()
+	ctx := context.Background()
+	memberships.memberships["ch1#u-1"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u-1", Role: model.ChannelRoleMember}
+	now := time.Now()
+	messages.messages["ch1#m-1"] = &model.Message{ID: "m-1", ParentID: "ch1", AuthorID: "u-1", AttachmentIDs: []string{"a-1", "a-2"}, CreatedAt: now.Add(-2 * time.Hour)}
+	messages.messages["ch1#m-2"] = &model.Message{ID: "m-2", ParentID: "ch1", AuthorID: "u-2", CreatedAt: now.Add(-1 * time.Hour)} // no attachments
+	messages.messages["ch1#m-3"] = &model.Message{ID: "m-3", ParentID: "ch1", AuthorID: "u-3", AttachmentIDs: []string{"a-3"}, CreatedAt: now}
+
+	files, err := svc.ListFiles(ctx, "u-1", "ch1", ParentChannel)
+	if err != nil {
+		t.Fatalf("ListFiles: %v", err)
+	}
+	if len(files) != 3 {
+		t.Fatalf("expected 3 file entries, got %d", len(files))
+	}
+	if files[0].AttachmentID != "a-3" {
+		t.Errorf("expected newest first; got %q", files[0].AttachmentID)
+	}
+	// Two attachments from m-1 should both be present.
+	got := map[string]bool{}
+	for _, f := range files {
+		got[f.AttachmentID] = true
+	}
+	if !got["a-1"] || !got["a-2"] || !got["a-3"] {
+		t.Errorf("missing entries; got %+v", got)
+	}
+}
+
+func TestMessageService_ListFiles_NotMemberRejected(t *testing.T) {
+	svc, _, _, _, _ := setupMessageService()
+	if _, err := svc.ListFiles(context.Background(), "stranger", "ch1", ParentChannel); err == nil {
+		t.Fatal("expected ListFiles to reject non-members")
+	}
+}
+
 func TestMessageService_SetPinned_NotMemberRejected(t *testing.T) {
 	svc, messages, _, _, _ := setupMessageService()
 	ctx := context.Background()

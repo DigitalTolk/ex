@@ -813,3 +813,76 @@ func TestConversationHandler_Create_BadJSON(t *testing.T) {
 		t.Errorf("status = %d, want %d", rec.Code, http.StatusBadRequest)
 	}
 }
+
+func TestConvHandlerFull_ListFiles(t *testing.T) {
+	env := setupConversationHandlerFull(t)
+	user := &model.User{ID: "u-files", Email: "f@test.com", SystemRole: model.SystemRoleMember}
+	token := makeTokenForUser(env.jwtMgr, user)
+
+	env.convs.conversations["conv-files"] = &model.Conversation{
+		ID:             "conv-files",
+		Type:           model.ConversationTypeDM,
+		ParticipantIDs: []string{"u-files", "other"},
+	}
+	env.messages.messages["conv-files#m-1"] = &model.Message{
+		ID: "m-1", ParentID: "conv-files", AuthorID: "u-files",
+		AttachmentIDs: []string{"a-1"}, CreatedAt: time.Now(),
+	}
+
+	handler := middleware.Auth(env.jwtMgr)(http.HandlerFunc(env.handler.ListFiles))
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/conversations/conv-files/files", nil)
+	req.SetPathValue("id", "conv-files")
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"a-1"`) {
+		t.Errorf("body missing attachment id; got %s", rec.Body.String())
+	}
+}
+
+func TestConvHandlerFull_ListFiles_MissingID(t *testing.T) {
+	env := setupConversationHandlerFull(t)
+	user := &model.User{ID: "u", Email: "u@test.com", SystemRole: model.SystemRoleMember}
+	token := makeTokenForUser(env.jwtMgr, user)
+	handler := middleware.Auth(env.jwtMgr)(http.HandlerFunc(env.handler.ListFiles))
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/conversations//files", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", rec.Code)
+	}
+}
+
+func TestChannelHandlerFull_ListFiles_MissingID(t *testing.T) {
+	env := setupChannelHandlerFull(t)
+	user := &model.User{ID: "u", Email: "u@test.com", SystemRole: model.SystemRoleMember}
+	token := makeTokenForUser(env.jwtMgr, user)
+	handler := middleware.Auth(env.jwtMgr)(http.HandlerFunc(env.handler.ListFiles))
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/channels//files", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", rec.Code)
+	}
+}
+
+func TestChannelHandlerFull_ListFiles_NotMember(t *testing.T) {
+	env := setupChannelHandlerFull(t)
+	user := &model.User{ID: "stranger", Email: "s@test.com", SystemRole: model.SystemRoleMember}
+	token := makeTokenForUser(env.jwtMgr, user)
+	handler := middleware.Auth(env.jwtMgr)(http.HandlerFunc(env.handler.ListFiles))
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/channels/private/files", nil)
+	req.SetPathValue("id", "private")
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want 403", rec.Code)
+	}
+}

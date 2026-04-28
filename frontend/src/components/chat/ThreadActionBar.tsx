@@ -44,7 +44,7 @@ export function ThreadActionBar({
       onClick={() => onClick(rootMessageID)}
       data-testid="thread-action-bar"
       aria-label={`View ${replyCount} ${replyCount === 1 ? 'reply' : 'replies'}`}
-      className="mt-1.5 inline-flex max-w-full items-center gap-2 rounded-md border border-transparent py-1 pl-1 pr-2.5 text-sm hover:border-border hover:bg-muted/60"
+      className="mt-1.5 inline-flex max-w-full items-center gap-2 rounded-md border border-transparent py-1 pl-1 pr-2.5 text-xs hover:border-border hover:bg-muted/60"
     >
       {/* Avatar stack — overlap by negative margin so the row stays
           compact even with three avatars. Most-recent author first

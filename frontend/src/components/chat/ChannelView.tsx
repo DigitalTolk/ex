@@ -1,12 +1,14 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { Header } from '@/components/layout/Header';
 import { MessageList } from './MessageList';
-import { MessageInput } from './MessageInput';
+import { MessageInput, type MessageInputHandle } from './MessageInput';
+import { MessageDropZone } from './MessageDropZone';
 import { MemberList } from './MemberList';
 import { ThreadPanel } from './ThreadPanel';
 import { PinnedPanel } from './PinnedPanel';
+import { FilesPanel } from './FilesPanel';
 import { ChannelIntro } from './ConversationIntro';
 import { TypingIndicator } from './TypingIndicator';
 import { useChannelBySlug, useChannelMembers, useMuteChannel, useUserChannels } from '@/hooks/useChannels';
@@ -23,6 +25,7 @@ import { markThreadSeen } from '@/hooks/useThreads';
 import { apiFetch } from '@/lib/api';
 import { useUsersBatch } from '@/hooks/useUsersBatch';
 import { collectMessageUserIDs } from '@/lib/message-users';
+import { useSidePanels } from '@/hooks/useSidePanels';
 import type { UserMapEntry } from './MessageList';
 
 export function ChannelView() {
@@ -34,21 +37,19 @@ export function ChannelView() {
   const { clearChannelUnread, setActiveChannel } = useUnread();
   const { setActiveParent } = useNotifications();
   const { online } = usePresence();
-  const [showMembers, setShowMembers] = useState(false);
+  const inputRef = useRef<MessageInputHandle>(null);
   const [threadRootID, setThreadRootID] = useState<string | null>(null);
-  const [showPinned, setShowPinned] = useState(false);
+  const panels = useSidePanels<'members' | 'pinned' | 'files'>();
 
-  const openMembers = () => { setShowMembers(true); setThreadRootID(null); setShowPinned(false); };
-  const closeMembers = () => setShowMembers(false);
-  const openThread = (id: string) => { setThreadRootID(id); setShowMembers(false); setShowPinned(false); };
+  const openMembers = () => { setThreadRootID(null); panels.open('members'); };
+  const closeMembers = panels.close;
+  const openThread = (id: string) => { setThreadRootID(id); panels.close(); };
   const closeThread = () => setThreadRootID(null);
-  const togglePinned = () => {
-    setShowPinned((v) => {
-      const next = !v;
-      if (next) { setThreadRootID(null); setShowMembers(false); }
-      return next;
-    });
-  };
+  const togglePinned = () => { setThreadRootID(null); panels.toggle('pinned'); };
+  const toggleFiles = () => { setThreadRootID(null); panels.toggle('files'); };
+  const showMembers = panels.isActive('members');
+  const showPinned = panels.isActive('pinned');
+  const showFiles = panels.isActive('files');
   const { data: channel } = useChannelBySlug(slug);
   const { data: members } = useChannelMembers(channel?.id);
   const {
@@ -188,8 +189,10 @@ export function ChannelView() {
           onToggleMute={handleToggleMute}
           onPinnedClick={togglePinned}
           pinnedActive={showPinned}
+          onFilesClick={toggleFiles}
+          filesActive={showFiles}
         />
-        <div className="relative flex flex-1 flex-col min-h-0">
+        <MessageDropZone onFiles={(files) => void inputRef.current?.uploadFiles(files)}>
           <MessageList
             pages={data?.pages ?? []}
             hasNextPage={hasNextPage}
@@ -211,15 +214,16 @@ export function ChannelView() {
             }
           />
           <TypingIndicator parentID={channel?.id} userMap={userMap} />
-        </div>
-        <MessageInput
-          onSend={sendMessage.mutate}
-          disabled={sendMessage.isPending}
-          placeholder={`Write to #${channel?.name ?? '...'}`}
-          focusKey={channel?.id}
-          typingParentID={channel?.id}
-          typingParentType="channel"
-        />
+          <MessageInput
+            ref={inputRef}
+            onSend={sendMessage.mutate}
+            disabled={sendMessage.isPending}
+            placeholder={`Write to #${channel?.name ?? '...'}`}
+            focusKey={channel?.id}
+            typingParentID={channel?.id}
+            typingParentType="channel"
+          />
+        </MessageDropZone>
       </div>
       {threadRootID && (
         <ThreadPanel
@@ -234,12 +238,19 @@ export function ChannelView() {
         <PinnedPanel
           channelId={channel?.id}
           channelSlug={channel?.slug}
-          onClose={() => setShowPinned(false)}
+          onClose={panels.close}
           userMap={userMap}
           currentUserId={user?.id}
         />
       )}
-      {showMembers && !threadRootID && !showPinned && members && (
+      {showFiles && !threadRootID && (
+        <FilesPanel
+          channelId={channel?.id}
+          onClose={panels.close}
+          userMap={userMap}
+        />
+      )}
+      {showMembers && !threadRootID && members && (
         <MemberList
           members={members}
           channelId={channel?.id}

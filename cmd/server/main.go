@@ -22,11 +22,6 @@ import (
 	"github.com/DigitalTolk/ex/internal/store"
 )
 
-// Version is the build identifier of the running binary. CI overrides
-// this via -ldflags "-X main.Version=$VERSION" so a deploy bumps the
-// value the frontend compares against. Defaults to "dev" for local runs.
-var Version = "dev"
-
 func main() {
 	ctx := context.Background()
 
@@ -157,14 +152,12 @@ func main() {
 	convH := handler.NewConversationHandler(convSvc, messageSvc)
 	wsH := handler.NewWSHandler(broker, channelSvc, convSvc, presenceSvc)
 	wsH.SetPublisher(redisPubSub)
-	wsH.SetVersion(Version)
 	uploadH := handler.NewUploadHandler(s3Client)
 	emojiH := handler.NewEmojiHandler(emojiSvc)
 	presenceH := handler.NewPresenceHandler(presenceSvc)
 	attachmentH := handler.NewAttachmentHandler(attachmentSvc)
 	adminH := handler.NewAdminHandler(settingsSvc)
 	threadH := handler.NewThreadHandler(messageSvc)
-	versionH := handler.NewVersionHandler(Version)
 	categorySvc := service.NewCategoryService(store.NewCategoryStore(db), redisPubSub)
 	sidebarH := handler.NewSidebarHandler(channelSvc, convSvc, categorySvc)
 
@@ -176,12 +169,18 @@ func main() {
 		frontendDist = nil
 	}
 
+	// Derived from the embedded index.html so a rebuild changes the
+	// version automatically — no ldflags or env vars to wire up.
+	appVersion := handler.AppVersion(frontendDist)
+	versionH := handler.NewVersionHandler(appVersion)
+	wsH.SetVersion(appVersion)
+
 	// ------------------------------------------------------------------ Router
 	allowOrigin := "*"
 	if !cfg.IsDev() {
 		allowOrigin = cfg.BaseURL
 	}
-	router := handler.NewRouter(authH, userH, channelH, convH, wsH, uploadH, emojiH, presenceH, attachmentH, adminH, threadH, versionH, sidebarH, jwtMgr, frontendDist, allowOrigin)
+	router := handler.NewRouter(authH, userH, channelH, convH, wsH, uploadH, emojiH, presenceH, attachmentH, adminH, threadH, versionH, sidebarH, jwtMgr, frontendDist, appVersion, allowOrigin)
 
 	// ------------------------------------------------------------------ Server
 	srv := &http.Server{

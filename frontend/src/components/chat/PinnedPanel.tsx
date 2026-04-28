@@ -1,8 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { apiFetch } from '@/lib/api';
 import { MessageItem } from './MessageItem';
-import { Button } from '@/components/ui/button';
-import { X } from 'lucide-react';
+import { SidePanel } from './SidePanel';
 import type { Message } from '@/types';
 import type { UserMapEntry } from './MessageList';
 
@@ -34,25 +33,18 @@ export function PinnedPanel({
   });
 
   return (
-    <aside className="w-[28rem] border-l flex flex-col" aria-label="Pinned messages">
-      <div className="flex items-center justify-between border-b px-4 py-3">
-        <h2 className="text-sm font-semibold">Pinned messages</h2>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-7 w-7"
-          onClick={onClose}
-          aria-label="Close pinned messages"
-        >
-          <X className="h-4 w-4" />
-        </Button>
-      </div>
-      <div className="flex-1 overflow-y-auto p-2 space-y-2">
+    <SidePanel
+      title="Pinned messages"
+      ariaLabel="Pinned messages"
+      closeLabel="Close pinned messages"
+      onClose={onClose}
+    >
+      <div className="space-y-2">
         {isLoading && (
-          <p className="text-xs text-muted-foreground p-2">Loading pinned messages...</p>
+          <p className="p-2 text-xs text-muted-foreground">Loading pinned messages...</p>
         )}
         {!isLoading && (data?.length ?? 0) === 0 && (
-          <p data-testid="pinned-empty" className="text-xs text-muted-foreground p-2">
+          <p data-testid="pinned-empty" className="p-2 text-xs text-muted-foreground">
             Nothing pinned yet. Pin a message to keep it handy.
           </p>
         )}
@@ -74,6 +66,6 @@ export function PinnedPanel({
           );
         })}
       </div>
-    </aside>
+    </SidePanel>
   );
 }

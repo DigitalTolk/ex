@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useImperativeHandle, forwardRef } from 'react';
 import {
   Send,
   Paperclip,
@@ -34,6 +34,13 @@ export interface MessageInputValue {
   attachmentIDs: string[];
 }
 
+// Imperative API exposed via forwardRef so the surrounding chat view can
+// route drag-and-dropped files through the same upload pipeline as the
+// paperclip button.
+export interface MessageInputHandle {
+  uploadFiles: (files: File[]) => Promise<void>;
+}
+
 interface MessageInputProps {
   onSend: (value: MessageInputValue) => void;
   onCancel?: () => void;
@@ -57,7 +64,7 @@ interface MessageInputProps {
   typingParentType?: 'channel' | 'conversation';
 }
 
-export function MessageInput({
+export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(function MessageInput({
   onSend,
   onCancel,
   disabled = false,
@@ -69,7 +76,7 @@ export function MessageInput({
   focusKey,
   typingParentID,
   typingParentType,
-}: MessageInputProps) {
+}, ref) {
   const [body, setBody] = useState(initialBody);
   const [drafts, setDrafts] = useState<DraftAttachment[]>(initialDrafts);
   const [isUploading, setIsUploading] = useState(false);
@@ -196,6 +203,8 @@ export function MessageInput({
     await uploadFiles(files);
   }
 
+  useImperativeHandle(ref, () => ({ uploadFiles }));
+
   async function removeDraft(id: string) {
     const target = drafts.find((d) => d.id === id);
     if (target?.localURL) URL.revokeObjectURL(target.localURL);
@@ -319,7 +328,7 @@ export function MessageInput({
       </div>
     </div>
   );
-}
+});
 
 function ToolbarBtn({
   label,

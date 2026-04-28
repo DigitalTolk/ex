@@ -1,4 +1,17 @@
 import '@testing-library/jest-dom/vitest';
+import { APP_VERSION_META } from '@/lib/version-meta';
+
+// Seed the version meta tag so useServerVersion's BUILD_VERSION resolves
+// to a stable, non-dev value across the suite. The hook reads this once
+// on module load — vitest setupFiles run before module imports.
+if (typeof document !== 'undefined') {
+  if (!document.querySelector(`meta[name="${APP_VERSION_META}"]`)) {
+    const meta = document.createElement('meta');
+    meta.setAttribute('name', APP_VERSION_META);
+    meta.setAttribute('content', 'test');
+    document.head.appendChild(meta);
+  }
+}
 
 // jsdom doesn't ship matchMedia, but Sonner (and other libs that adapt to
 // the user's color-scheme preference) read it during render. A null-safe
