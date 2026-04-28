@@ -280,6 +280,34 @@ describe('MessageAttachments', () => {
     expect(screen.queryByTestId('image-lightbox')).toBeNull();
   });
 
+  it('Escape blurs the active element so the attachment trigger does not pick up a focus-visible ring after closing', () => {
+    // Regression: pressing Esc to close the lightbox is a keyboard
+    // interaction, which flips the browser's :focus-visible heuristic
+    // on. The attachment-trigger button (still focused after the
+    // lightbox unmounts) would then sit highlighted with the keyboard
+    // focus ring even though the user just closed a modal. Blur on
+    // close so the trigger drops focus entirely.
+    const att: Attachment = {
+      id: 'a-blur',
+      filename: 'pic.png',
+      contentType: 'image/png',
+      size: 100,
+      url: 'https://cdn/pic.png',
+    };
+    useAttachmentsBatchMock.mockReturnValue({
+      map: new Map([['a-blur', att]]),
+      isLoading: false,
+    });
+    render(<MessageAttachments {...baseProps} ids={['a-blur']} />);
+    const trigger = screen.getByLabelText('Open image pic.png');
+    fireEvent.click(trigger);
+    trigger.focus();
+    expect(document.activeElement).toBe(trigger);
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(document.activeElement).not.toBe(trigger);
+  });
+
   it('clicking the X button closes the lightbox', () => {
     const att: Attachment = {
       id: 'a-7',

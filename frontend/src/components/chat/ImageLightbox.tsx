@@ -48,6 +48,14 @@ export function ImageLightbox({
     function onKey(e: KeyboardEvent) {
       if (e.key === 'Escape') {
         onClose();
+        // Esc is a keyboard interaction, which flips :focus-visible on
+        // for whatever element holds focus next — usually the
+        // attachment-trigger button that opened the lightbox. Blur it
+        // so the trigger doesn't end up wearing a keyboard-focus ring
+        // after a mouse-click → Esc round-trip.
+        if (document.activeElement instanceof HTMLElement) {
+          document.activeElement.blur();
+        }
         return;
       }
       if (total <= 1) return;
