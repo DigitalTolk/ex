@@ -1253,7 +1253,7 @@ func TestMessageService_Delete_GetMessageError(t *testing.T) {
 	}
 }
 
-func TestMessageService_Delete_StoreDeleteError(t *testing.T) {
+func TestMessageService_Delete_StoreUpdateError(t *testing.T) {
 	svc, messages, memberships, _, _ := setupMessageService()
 	memberships.memberships["ch1#user-1"] = &model.ChannelMembership{
 		ChannelID: "ch1",
@@ -1261,9 +1261,11 @@ func TestMessageService_Delete_StoreDeleteError(t *testing.T) {
 		Role:      model.ChannelRoleMember,
 	}
 	messages.messages["ch1#m1"] = &model.Message{ID: "m1", ParentID: "ch1", AuthorID: "user-1", Body: "x"}
-	messages.deleteErr = errors.New("delete boom")
+	// Soft-delete is implemented via UpdateMessage; persistence failure
+	// surfaces as an error from svc.Delete.
+	messages.updateErr = errors.New("update boom")
 	if err := svc.Delete(context.Background(), "user-1", "ch1", ParentChannel, "m1"); err == nil {
-		t.Fatal("expected error from DeleteMessage")
+		t.Fatal("expected error from UpdateMessage")
 	}
 }
 

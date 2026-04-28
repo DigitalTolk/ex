@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { ordinalSuffix, formatLongDateTime, formatDayHeading, formatRelative, dayKey } from '@/lib/format';
+import { ordinalSuffix, formatLongDateTime, formatDayHeading, formatRelative, firstNamesOnly, dayKey } from '@/lib/format';
 
 describe('ordinalSuffix', () => {
   it('handles 1, 2, 3, 4 correctly', () => {
@@ -104,5 +104,32 @@ describe('dayKey', () => {
     const a = new Date(2026, 3, 26, 0, 0, 1);
     const b = new Date(2026, 3, 26, 23, 59, 59);
     expect(dayKey(a)).toBe(dayKey(b));
+  });
+});
+
+describe('firstNamesOnly', () => {
+  it('collapses each comma-separated entry to its first word', () => {
+    expect(firstNamesOnly('Alice Smith, Bob Jones, Charlie Brown')).toBe('Alice, Bob, Charlie');
+  });
+
+  it('passes through single-word entries unchanged', () => {
+    expect(firstNamesOnly('Alice, Bob')).toBe('Alice, Bob');
+  });
+
+  it('trims whitespace around commas', () => {
+    expect(firstNamesOnly('Alice Smith ,  Bob Jones')).toBe('Alice, Bob');
+  });
+
+  it('returns empty string for empty input', () => {
+    expect(firstNamesOnly('')).toBe('');
+    expect(firstNamesOnly(undefined)).toBe('');
+  });
+
+  it('drops blank entries entirely', () => {
+    expect(firstNamesOnly('Alice, , Bob Jones')).toBe('Alice, Bob');
+  });
+
+  it('leaves a single-token custom label alone (no comma → not a name list)', () => {
+    expect(firstNamesOnly('Project Team')).toBe('Project Team');
   });
 });

@@ -24,6 +24,7 @@ import { markThreadSeen } from '@/hooks/useThreads';
 import { collectMessageUserIDs } from '@/lib/message-users';
 import { useSidePanels } from '@/hooks/useSidePanels';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
+import { firstName } from '@/lib/format';
 import type { Conversation } from '@/types';
 import type { UserMapEntry } from './MessageList';
 
@@ -47,7 +48,10 @@ function deriveConversationTitle(
       .filter((pid) => pid !== selfID)
       .map((pid) => userMap[pid]?.displayName)
       .filter(Boolean) as string[];
-    if (others.length > 0) return others.join(', ');
+    // First names only — a comma-joined list of full names doesn't
+    // scale past two or three members. Custom group names (set via
+    // conv.name) bypass this branch entirely and stay unchanged.
+    if (others.length > 0) return others.map(firstName).join(', ');
   }
   return conv.name || 'Direct Message';
 }
@@ -133,7 +137,11 @@ export function ConversationView() {
     return m;
   }, [user, usersData, online]);
 
-  useDocumentTitle(deriveConversationTitle(conversation, user?.id, userMap));
+  const derivedTitle = useMemo(
+    () => deriveConversationTitle(conversation, user?.id, userMap),
+    [conversation, user?.id, userMap],
+  );
+  useDocumentTitle(derivedTitle);
 
   if (!id) {
     return (
@@ -143,7 +151,7 @@ export function ConversationView() {
     );
   }
 
-  const title = deriveConversationTitle(conversation, user?.id, userMap) ?? 'Direct Message';
+  const title = derivedTitle ?? 'Direct Message';
   let dmOtherUserAvatar: string | undefined;
   if (conversation?.type === 'dm') {
     const otherID = conversation.participantIDs?.find((pid) => pid !== user?.id);

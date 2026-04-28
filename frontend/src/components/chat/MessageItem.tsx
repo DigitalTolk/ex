@@ -24,6 +24,7 @@ import { renderMarkdown } from '@/lib/markdown';
 import { EmojiGlyph } from '@/components/EmojiGlyph';
 import { MessageAttachments } from '@/components/chat/MessageAttachments';
 import { ThreadActionBar } from '@/components/chat/ThreadActionBar';
+import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { getInitials, formatLongDateTime } from '@/lib/format';
 import type { Message } from '@/types';
 
@@ -197,7 +198,8 @@ export function MessageItem({
     );
   }
 
-  function handleDelete() {
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  function confirmDelete() {
     deleteMessage.mutate({ messageId: message.id, channelId, conversationId });
   }
 
@@ -309,6 +311,13 @@ export function MessageItem({
           ) : (
             <p className="mt-1 text-xs text-muted-foreground">Loading…</p>
           )
+        ) : message.deleted ? (
+          <p
+            data-testid="message-deleted-placeholder"
+            className="mt-0.5 text-sm italic text-muted-foreground"
+          >
+            (Message deleted)
+          </p>
         ) : (
           <>
             <div className="text-sm prose-message">
@@ -384,7 +393,7 @@ export function MessageItem({
         )}
       </div>
 
-      {!isEditing && (
+      {!isEditing && !message.deleted && (
         <div
           className="absolute right-2 -top-3 flex items-center gap-0.5 bg-background border rounded-md shadow-sm transition-opacity"
           style={{ opacity: toolbarVisible ? 1 : 0 }}
@@ -450,7 +459,10 @@ export function MessageItem({
                   <DropdownMenuItem onClick={() => setIsEditing(true)}>
                     <Pencil className="mr-2 h-4 w-4" /> Edit
                   </DropdownMenuItem>
-                  <DropdownMenuItem variant="destructive" onClick={handleDelete}>
+                  <DropdownMenuItem
+                    variant="destructive"
+                    onClick={() => setDeleteConfirmOpen(true)}
+                  >
                     <Trash2 className="mr-2 h-4 w-4" /> Delete
                   </DropdownMenuItem>
                 </>
@@ -459,6 +471,16 @@ export function MessageItem({
           </DropdownMenu>
         </div>
       )}
+      <ConfirmDialog
+        open={deleteConfirmOpen}
+        onOpenChange={setDeleteConfirmOpen}
+        title="Delete message?"
+        description="This message will be removed for everyone. Attachments stop being shared too. This can't be undone."
+        confirmLabel="Delete"
+        destructive
+        onConfirm={confirmDelete}
+        testIDPrefix="message-delete-confirm"
+      />
     </div>
   );
 }

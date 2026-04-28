@@ -38,6 +38,7 @@ export interface Message {
   pinned?: boolean;
   pinnedAt?: string;
   pinnedBy?: string;
+  deleted?: boolean;
 }
 
 export interface Attachment {

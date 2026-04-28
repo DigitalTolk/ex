@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Globe, MessageSquare } from 'lucide-react';
 import { MessageItem } from '@/components/chat/MessageItem';
@@ -9,7 +9,9 @@ import { useUsersBatch } from '@/hooks/useUsersBatch';
 import { useSendMessage, type SendMessageInput } from '@/hooks/useMessages';
 import { useInView } from '@/hooks/useInView';
 import { usePresence } from '@/context/PresenceContext';
+import { collectMessageUserIDs } from '@/lib/message-users';
 import {
+  hasUnreadActivity,
   markThreadSeen,
   useThreadMessages,
   type ThreadSummary,
@@ -47,6 +49,16 @@ export function ThreadCard({ summary, title, deepLink, currentUserId }: ThreadCa
   // /thread requests on first render.
   const { ref, inView } = useInView<HTMLElement>();
   const inputRef = useRef<MessageInputHandle>(null);
+
+  // Capture the unread state on first render — once we mark this thread
+  // seen below the card would otherwise lose its highlight mid-frame.
+  const [wasUnread] = useState(() => hasUnreadActivity(summary));
+
+  // Mark seen the first time the card actually scrolls into view.
+  useEffect(() => {
+    if (!inView) return;
+    markThreadSeen(summary.threadRootID);
+  }, [inView, summary.threadRootID]);
   const { data: messages, isLoading } = useThreadMessages({
     channelId,
     conversationId,
@@ -68,14 +80,14 @@ export function ThreadCard({ summary, title, deepLink, currentUserId }: ThreadCa
   const hiddenCount = isLong ? replies.length - TAIL_LENGTH : 0;
   const visibleReplies = expanded || !isLong ? replies : tail;
 
-  // Author lookup. Root + replies authors all appear in this card, so we
-  // batch them into a single request.
-  const authorIDs = useMemo(() => {
-    const ids = new Set<string>();
-    for (const m of messages ?? []) ids.add(m.authorID);
-    return [...ids];
-  }, [messages]);
-  const { map: userMap } = useUsersBatch(authorIDs);
+  // User lookup covering authors + reactors so the reaction tooltip
+  // doesn't fall back to "Unknown" when someone reacts who isn't an
+  // author in this thread.
+  const userIDs = useMemo(
+    () => collectMessageUserIDs(messages ?? []),
+    [messages],
+  );
+  const { map: userMap } = useUsersBatch(userIDs);
   const presence = usePresence();
 
   // useSendMessage invalidates the same ['thread', parentPath, rootID]
@@ -96,7 +108,11 @@ export function ThreadCard({ summary, title, deepLink, currentUserId }: ThreadCa
       data-testid="thread-card"
       data-thread-root-id={summary.threadRootID}
       data-in-view={inView ? 'true' : 'false'}
-      className="rounded-lg border bg-card overflow-hidden"
+      data-unread={wasUnread ? 'true' : 'false'}
+      className={
+        'rounded-lg border bg-card overflow-hidden ' +
+        (wasUnread ? 'border-primary/40 bg-primary/5' : '')
+      }
     >
       {/* Title — same shape as a channel/conversation header. Clicking
           opens the thread in its parent view. */}
@@ -141,6 +157,7 @@ export function ThreadCard({ summary, title, deepLink, currentUserId }: ThreadCa
               channelId={channelId}
               conversationId={conversationId}
               currentUserId={currentUserId}
+              userMap={userMap}
               inThread
             />
           )}
@@ -168,6 +185,7 @@ export function ThreadCard({ summary, title, deepLink, currentUserId }: ThreadCa
                 channelId={channelId}
                 conversationId={conversationId}
                 currentUserId={currentUserId}
+                userMap={userMap}
                 inThread
               />
             ))}

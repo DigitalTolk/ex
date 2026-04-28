@@ -11,6 +11,27 @@ export function getInitials(name: string): string {
     .slice(0, 2);
 }
 
+// firstName returns the first whitespace-separated token of a display
+// name ("Alice Smith" → "Alice"). Used by the group-label collapse in
+// both ConversationRow (string input) and ConversationView (array of
+// names) so the reduction lives in one place.
+export function firstName(name: string): string {
+  return name.trim().split(/\s+/)[0] ?? '';
+}
+
+// firstNamesOnly takes a comma-joined list of full names and returns the
+// same list with each entry collapsed to its first word. Used in group
+// conversation labels — "Alice Smith, Bob Jones" → "Alice, Bob" — so the
+// sidebar / header doesn't overflow on groups with several members.
+//
+// Single-token labels (no comma) are returned unchanged so custom group
+// names like "Project Team" don't get clipped to "Project".
+export function firstNamesOnly(label: string | undefined): string {
+  if (!label) return '';
+  if (!label.includes(',')) return label;
+  return label.split(',').map(firstName).filter(Boolean).join(', ');
+}
+
 export const KIB = 1024;
 export const MIB = 1024 * 1024;
 

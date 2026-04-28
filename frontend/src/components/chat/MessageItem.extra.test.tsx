@@ -179,7 +179,31 @@ describe('MessageItem - editing', () => {
 });
 
 describe('MessageItem - delete', () => {
-  it('calls deleteMessage.mutate when delete button is clicked', async () => {
+  it('opens a confirmation dialog and only deletes after confirm', async () => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <MessageItem
+        message={makeMessage()}
+        authorName="Alice"
+        isOwn={true}
+        channelId="ch-1"
+      />,
+    );
+
+    // Clicking the menu item alone must NOT delete — it opens the modal.
+    await user.click(screen.getByText('Delete'));
+    expect(mockDeleteMutate).not.toHaveBeenCalled();
+    expect(screen.getByTestId('message-delete-confirm')).toBeInTheDocument();
+
+    // Confirming fires the mutation.
+    await user.click(screen.getByTestId('message-delete-confirm-confirm'));
+    expect(mockDeleteMutate).toHaveBeenCalledWith(
+      expect.objectContaining({ messageId: 'msg-1', channelId: 'ch-1' }),
+    );
+  });
+
+  it('Cancel keeps the message and closes the dialog', async () => {
+    mockDeleteMutate.mockClear();
     const user = userEvent.setup();
     renderWithProviders(
       <MessageItem
@@ -191,8 +215,7 @@ describe('MessageItem - delete', () => {
     );
 
     await user.click(screen.getByText('Delete'));
-    expect(mockDeleteMutate).toHaveBeenCalledWith(
-      expect.objectContaining({ messageId: 'msg-1', channelId: 'ch-1' }),
-    );
+    await user.click(screen.getByTestId('message-delete-confirm-cancel'));
+    expect(mockDeleteMutate).not.toHaveBeenCalled();
   });
 });

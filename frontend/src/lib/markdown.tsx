@@ -157,7 +157,9 @@ function findInline(src: string, opts: RenderOpts | undefined, keyPrefix: string
   ));
 
   // emoji :name: — try custom map first, then standard shortcode unicode,
-  // otherwise render the literal :name:.
+  // otherwise render the literal :name:. Body emojis render at ~1.5x the
+  // surrounding text (Slack-style) so they're legible without dwarfing
+  // the line.
   tryMatch(/:([a-z0-9_+-]+):/i, (m) => {
     const name = m[1];
     const url = opts?.emojiMap?.[name];
@@ -168,13 +170,21 @@ function findInline(src: string, opts: RenderOpts | undefined, keyPrefix: string
           src={url}
           alt={`:${name}:`}
           title={`:${name}:`}
-          className="inline-block h-3.5 w-3.5 align-text-bottom"
+          className="inline-block h-[20px] w-[20px] align-text-bottom"
         />
       );
     }
     const unicode = shortcodeToUnicode(`:${name}:`);
     if (unicode !== `:${name}:`) {
-      return <span key={`${keyPrefix}-eu-${m.index}`} title={`:${name}:`}>{unicode}</span>;
+      return (
+        <span
+          key={`${keyPrefix}-eu-${m.index}`}
+          title={`:${name}:`}
+          className="text-[20px] leading-none align-text-bottom"
+        >
+          {unicode}
+        </span>
+      );
     }
     return <span key={`${keyPrefix}-eu-${m.index}`}>{`:${name}:`}</span>;
   });
