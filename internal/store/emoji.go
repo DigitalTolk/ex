@@ -8,6 +8,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/expression"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/DigitalTolk/ex/internal/model"
 )
 
@@ -91,23 +92,37 @@ func (s *EmojiStoreImpl) List(ctx context.Context) ([]*model.CustomEmoji, error)
 	if err != nil {
 		return nil, fmt.Errorf("store: build expression: %w", err)
 	}
-	out, err := s.Client.Query(ctx, &dynamodb.QueryInput{
-		TableName:                 aws.String(s.Table),
-		KeyConditionExpression:    expr.KeyCondition(),
-		ExpressionAttributeNames:  expr.Names(),
-		ExpressionAttributeValues: expr.Values(),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("store: list emojis: %w", err)
-	}
-	emojis := make([]*model.CustomEmoji, 0, len(out.Items))
-	for _, item := range out.Items {
-		var ei emojiItem
-		if err := attributevalue.UnmarshalMap(item, &ei); err != nil {
-			return nil, fmt.Errorf("store: unmarshal emoji: %w", err)
+	// Page through every Query response. DynamoDB caps each Query at
+	// ~1MB or a default item count regardless of how many records
+	// exist; without LastEvaluatedKey iteration the catalog silently
+	// truncates as soon as the workspace has enough emojis to spill
+	// past one page, and any reaction whose emoji didn't make the
+	// returned page renders as text on the client.
+	emojis := make([]*model.CustomEmoji, 0)
+	var startKey map[string]types.AttributeValue
+	for {
+		out, err := s.Client.Query(ctx, &dynamodb.QueryInput{
+			TableName:                 aws.String(s.Table),
+			KeyConditionExpression:    expr.KeyCondition(),
+			ExpressionAttributeNames:  expr.Names(),
+			ExpressionAttributeValues: expr.Values(),
+			ExclusiveStartKey:         startKey,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("store: list emojis: %w", err)
 		}
-		ec := ei.CustomEmoji
-		emojis = append(emojis, &ec)
+		for _, item := range out.Items {
+			var ei emojiItem
+			if err := attributevalue.UnmarshalMap(item, &ei); err != nil {
+				return nil, fmt.Errorf("store: unmarshal emoji: %w", err)
+			}
+			ec := ei.CustomEmoji
+			emojis = append(emojis, &ec)
+		}
+		if len(out.LastEvaluatedKey) == 0 {
+			break
+		}
+		startKey = out.LastEvaluatedKey
 	}
 	return emojis, nil
 }
