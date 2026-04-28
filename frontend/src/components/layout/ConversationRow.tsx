@@ -8,7 +8,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { getInitials } from '@/lib/format';
+import { getInitials, firstNamesOnly } from '@/lib/format';
 import {
   useFavoriteConversation,
   useSetConversationCategory,
@@ -54,7 +54,7 @@ export function ConversationRow({ conversation, hasUnread, dmAvatarURL, onClose,
         to={`/conversation/${conversation.conversationID}`}
         onClick={onClose}
         className={({ isActive }) =>
-          `flex flex-1 items-center gap-2 rounded-md px-2 py-1 text-sm transition-colors ${
+          `flex flex-1 min-w-0 items-center gap-2 rounded-md py-1 pl-2 pr-12 text-sm transition-colors ${
             isActive
               ? 'bg-white/15 text-white font-semibold'
               : hasUnread
@@ -79,7 +79,14 @@ export function ConversationRow({ conversation, hasUnread, dmAvatarURL, onClose,
             </AvatarFallback>
           </Avatar>
         )}
-        <span className="truncate">{conversation.displayName}</span>
+        {/* DMs keep the full name; group rows show first-names only
+            because the comma-joined list of full names ("Alice Smith,
+            Bob Jones, Charlie Brown") immediately overflows. */}
+        <span className="truncate">
+          {isGroup
+            ? firstNamesOnly(conversation.displayName)
+            : conversation.displayName}
+        </span>
         {hasUnread && (
           <span
             data-testid="unread-dot"

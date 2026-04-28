@@ -1,4 +1,4 @@
-import { useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { MessageItem } from './MessageItem';
 import { MessageInput, type MessageInputHandle } from './MessageInput';
 import { MessageDropZone } from './MessageDropZone';
@@ -54,6 +54,24 @@ export function ThreadPanel({
 
   const send = useSendMessage({ channelId, conversationId });
   const inputRef = useRef<MessageInputHandle>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  // Auto-stick to the bottom when a new reply arrives, but only if the
+  // user is already near the bottom — someone scrolled up reading older
+  // replies shouldn't be yanked back down by a new post (Slack-style).
+  const prevLengthRef = useRef(0);
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const len = data?.length ?? 0;
+    const grew = len > prevLengthRef.current;
+    prevLengthRef.current = len;
+    if (!grew) return;
+    const distanceFromBottom = el.scrollHeight - (el.scrollTop + el.clientHeight);
+    if (distanceFromBottom < 120) {
+      el.scrollTop = el.scrollHeight;
+    }
+  }, [data?.length]);
 
   function handleReply(input: SendMessageInput) {
     send.mutate({ ...input, parentMessageID: threadRootID });
@@ -74,7 +92,7 @@ export function ThreadPanel({
         </Button>
       </div>
       <MessageDropZone onFiles={(files) => void inputRef.current?.uploadFiles(files)}>
-        <div className="flex-1 overflow-y-auto p-2 space-y-2">
+        <div ref={scrollRef} className="flex-1 overflow-y-auto p-2 space-y-2">
           {isLoading && (
             <p className="text-xs text-muted-foreground p-2">Loading replies...</p>
           )}

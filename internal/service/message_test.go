@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -685,8 +686,65 @@ func TestMessageService_Delete_ByAuthor(t *testing.T) {
 		t.Fatalf("Delete: %v", err)
 	}
 
-	if _, ok := messages.messages["ch1#msg-del"]; ok {
-		t.Error("message should have been deleted")
+	// Soft delete: row stays so threads still resolve, but the body and
+	// any attachments / reactions are cleared and the Deleted flag is set.
+	stored, ok := messages.messages["ch1#msg-del"]
+	if !ok {
+		t.Fatal("expected soft-deleted message to remain in the store")
+	}
+	if !stored.Deleted {
+		t.Error("expected stored.Deleted = true")
+	}
+	if stored.Body != "" {
+		t.Errorf("expected body cleared, got %q", stored.Body)
+	}
+	if len(stored.AttachmentIDs) != 0 {
+		t.Errorf("expected attachments cleared, got %v", stored.AttachmentIDs)
+	}
+	if stored.Reactions != nil {
+		t.Errorf("expected reactions cleared, got %v", stored.Reactions)
+	}
+}
+
+func TestMessageService_Delete_ThreadReplyEventCarriesParentMessageID(t *testing.T) {
+	svc, messages, memberships, _, publisher := setupMessageService()
+	memberships.memberships["ch1#user-1"] = &model.ChannelMembership{
+		ChannelID: "ch1", UserID: "user-1", Role: model.ChannelRoleMember,
+	}
+	// Deleting a reply (parentMessageID set) must surface that ID in
+	// the event so the client can invalidate the right thread query —
+	// otherwise the thread sidebar / /threads page show stale data.
+	messages.messages["ch1#m-reply"] = &model.Message{
+		ID: "m-reply", ParentID: "ch1", AuthorID: "user-1",
+		ParentMessageID: "m-root", Body: "in thread",
+	}
+	if err := svc.Delete(context.Background(), "user-1", "ch1", ParentChannel, "m-reply"); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if len(publisher.published) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(publisher.published))
+	}
+	ev := publisher.published[0].event
+	if ev.Type != "message.deleted" {
+		t.Fatalf("event type = %q, want message.deleted", ev.Type)
+	}
+	raw, err := json.Marshal(ev.Data)
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	var payload struct {
+		ID              string `json:"id"`
+		ParentID        string `json:"parentID"`
+		ParentMessageID string `json:"parentMessageID"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		t.Fatalf("decode payload: %v", err)
+	}
+	if payload.ParentMessageID != "m-root" {
+		t.Errorf("parentMessageID = %q, want m-root", payload.ParentMessageID)
+	}
+	if payload.ID != "m-reply" || payload.ParentID != "ch1" {
+		t.Errorf("payload = %+v, expected id=m-reply parentID=ch1", payload)
 	}
 }
 

@@ -89,6 +89,9 @@ export default function ChatPage() {
         queryClient.invalidateQueries({ queryKey: ['thread', `channels/${parentID}`, threadRoot] });
         queryClient.invalidateQueries({ queryKey: ['thread', `conversations/${parentID}`, threadRoot] });
       }
+      // /threads page reads body + replyCount via the userThreads list;
+      // a deletion can change either, so refresh the list too.
+      queryClient.invalidateQueries({ queryKey: ['userThreads'] });
     },
     onMembersChanged: (data: unknown) => {
       const evt = data as Record<string, unknown> | undefined;

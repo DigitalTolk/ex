@@ -47,4 +47,39 @@ describe('normalizeEmojiInBody', () => {
   it('returns the input unchanged when there are no emojis', () => {
     expect(normalizeEmojiInBody('plain text only')).toBe('plain text only');
   });
+
+  it('converts standalone ASCII emoticons to their :shortcode: form', () => {
+    expect(normalizeEmojiInBody('hi :)')).toBe('hi :smile:');
+    expect(normalizeEmojiInBody(';) cool')).toBe(':wink: cool');
+    expect(normalizeEmojiInBody('we love this <3 keep going')).toBe(
+      'we love this :heart: keep going',
+    );
+    expect(normalizeEmojiInBody('that was funny xD')).toBe('that was funny :laughing:');
+    expect(normalizeEmojiInBody(":D so happy")).toBe(':smiley: so happy');
+    expect(normalizeEmojiInBody('whoops :-(.')).toBe('whoops :disappointed:.');
+  });
+
+  it('does NOT convert emoticon-like sequences embedded in non-whitespace context', () => {
+    // The colon at the end of a URL must not be rewritten.
+    expect(normalizeEmojiInBody('see http://example.com:)')).toBe('see http://example.com:)');
+    // Adjacent to a word — not a real emoticon.
+    expect(normalizeEmojiInBody('list:price:)')).toBe('list:price:)');
+  });
+
+  it('does NOT touch emoticons inside code spans', () => {
+    expect(normalizeEmojiInBody('use `if (a) :)` carefully')).toBe(
+      'use `if (a) :)` carefully',
+    );
+  });
+
+  it('handles emoticon followed by punctuation', () => {
+    expect(normalizeEmojiInBody('great :), thanks!')).toBe('great :smile:, thanks!');
+    expect(normalizeEmojiInBody('done :)!')).toBe('done :smile:!');
+  });
+
+  it('prefers the longer emoticon variant when both could match', () => {
+    // The trailing `)` of `:-)` would also match `:)` — sort by length
+    // ensures `:-)` wins.
+    expect(normalizeEmojiInBody('hi :-)')).toBe('hi :smile:');
+  });
 });

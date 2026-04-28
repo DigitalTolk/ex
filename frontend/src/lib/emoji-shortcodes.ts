@@ -71,6 +71,14 @@ export const COMMON_EMOJI_SHORTCODES: EmojiShortcode[] = [
   { name: 'key', unicode: '🔑' },
   { name: 'mag', unicode: '🔍' },
   { name: 'thumbsup_skin', unicode: '👍🏽' },
+  // Emoticon stand-ins — surfaced via the text-emoji auto-convert pass
+  // (`:)` → `:smile:` etc.), kept as separate names so the picker shows
+  // them with the right semantic label.
+  { name: 'smiley', unicode: '😀' },
+  { name: 'disappointed', unicode: '😞', keywords: ['sad'] },
+  { name: 'stuck_out_tongue', unicode: '😛', keywords: ['tongue'] },
+  { name: 'laughing', unicode: '😆', keywords: ['lol'] },
+  { name: 'neutral_face', unicode: '😐' },
 ];
 
 const NAME_TO_UNICODE: Record<string, string> = (() => {
@@ -106,21 +114,71 @@ export function unicodeToShortcode(unicode: string): string {
   return name ? `:${name}:` : unicode;
 }
 
-// Build a regex that matches any known emoji unicode sequence. Sorted by
-// length (longest first) so a multi-codepoint sequence like 👍🏽 wins
-// over the base 👍.
-const ALL_EMOJI_RE = (() => {
-  const sequences = COMMON_EMOJI_SHORTCODES
+// Escape a literal string for safe inclusion in a `RegExp(...)` source.
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// Map ASCII emoticons to the wrapped shortcode form they expand to,
+// e.g. `:)` → `:smile:`. Storing the wrapped value (not just the name)
+// lets the replace callback emit the result without an extra concat.
+// Covered tokens are the classic IRC/messenger set; new entries auto-
+// pick up the same boundary rules below.
+const TEXT_EMOJI_TO_SHORTCODE: Record<string, string> = {
+  ':)': ':smile:',
+  ':-)': ':smile:',
+  ':D': ':smiley:',
+  ':-D': ':smiley:',
+  ';)': ':wink:',
+  ';-)': ':wink:',
+  ':(': ':disappointed:',
+  ':-(': ':disappointed:',
+  ':P': ':stuck_out_tongue:',
+  ':p': ':stuck_out_tongue:',
+  ':-P': ':stuck_out_tongue:',
+  ':-p': ':stuck_out_tongue:',
+  ':o': ':open_mouth:',
+  ':O': ':open_mouth:',
+  ':-o': ':open_mouth:',
+  ':-O': ':open_mouth:',
+  ':|': ':neutral_face:',
+  ':-|': ':neutral_face:',
+  '<3': ':heart:',
+  ":'(": ':cry:',
+  'xD': ':laughing:',
+  'XD': ':laughing:',
+};
+
+// Single-pass replace covering both classes of replacement on prose
+// segments: known unicode emoji (group 1) and ASCII emoticons (group 3,
+// preceded by group 2's leading boundary). Combining them halves the
+// per-segment regex work compared to two sequential `.replace()` calls.
+//
+// The emoticon arm requires the token stand alone — preceded by start-
+// of-line or whitespace, followed by end-of-line, whitespace, or
+// punctuation. Without that guard, `http://example.com:)` or
+// `done; :)` adjacent to URLs / quoted text would silently rewrite.
+const NORMALIZE_EMOJI_RE = (() => {
+  const unicodeAlternation = COMMON_EMOJI_SHORTCODES
     .map((e) => e.unicode)
     .sort((a, b) => b.length - a.length)
-    .map((u) => u.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-  return new RegExp(`(${sequences.join('|')})`, 'g');
-}) ();
+    .map(escapeRegex)
+    .join('|');
+  const emoticonAlternation = Object.keys(TEXT_EMOJI_TO_SHORTCODE)
+    .sort((a, b) => b.length - a.length)
+    .map(escapeRegex)
+    .join('|');
+  return new RegExp(
+    `(${unicodeAlternation})|(^|\\s)(${emoticonAlternation})(?=$|\\s|[.,!?;:])`,
+    'g',
+  );
+})();
 
 // normalizeEmojiInBody replaces every standalone unicode emoji in the
-// body with its `:shortcode:` form, leaving unknown emoji untouched.
-// Skips text inside fenced code blocks and inline `code` spans —
-// nobody wants `console.log("🎉")` rewritten on the wire.
+// body with its `:shortcode:` form AND auto-converts ASCII emoticons
+// (`:)` `;)` `<3` …) to the same shortcode form. Skips text inside
+// fenced code blocks and inline `code` spans — nobody wants
+// `console.log("🎉")` or `if (x) :)` rewritten on the wire.
 export function normalizeEmojiInBody(body: string): string {
   let out = '';
   let i = 0;
@@ -154,7 +212,13 @@ export function normalizeEmojiInBody(body: string): string {
     if (fence !== -1 && fence < next) next = fence;
     const tick = body.indexOf('`', i);
     if (tick !== -1 && tick < next) next = tick;
-    out += body.slice(i, next).replace(ALL_EMOJI_RE, (m) => unicodeToShortcode(m));
+    out += body.slice(i, next).replace(
+      NORMALIZE_EMOJI_RE,
+      (_m, unicodeToken: string | undefined, lead: string | undefined, emoticon: string | undefined) => {
+        if (unicodeToken) return unicodeToShortcode(unicodeToken);
+        return `${lead ?? ''}${TEXT_EMOJI_TO_SHORTCODE[emoticon ?? '']}`;
+      },
+    );
     i = next;
   }
   return out;

@@ -24,17 +24,29 @@ export function useUserThreads() {
 
 const SEEN_KEY = 'ex.threads.seen.v1';
 
+// Cached parse of the seen-map. /threads can mount 50+ ThreadCards in
+// one render, each calling hasUnreadActivity → loadSeen — without the
+// cache that's 50 JSON.parse calls on a map that grows unbounded with
+// every viewed thread. Invalidated whenever saveSeen runs.
+let seenCache: Record<string, string> | null = null;
+
 function loadSeen(): Record<string, string> {
-  if (typeof localStorage === 'undefined') return {};
+  if (seenCache) return seenCache;
+  if (typeof localStorage === 'undefined') {
+    seenCache = {};
+    return seenCache;
+  }
   try {
     const raw = localStorage.getItem(SEEN_KEY);
-    return raw ? (JSON.parse(raw) as Record<string, string>) : {};
+    seenCache = raw ? (JSON.parse(raw) as Record<string, string>) : {};
   } catch {
-    return {};
+    seenCache = {};
   }
+  return seenCache;
 }
 
 function saveSeen(map: Record<string, string>) {
+  seenCache = map;
   if (typeof localStorage === 'undefined') return;
   try {
     localStorage.setItem(SEEN_KEY, JSON.stringify(map));

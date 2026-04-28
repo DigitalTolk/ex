@@ -472,8 +472,11 @@ func (s *MessageService) Edit(ctx context.Context, userID, parentID, parentType,
 	return msg, nil
 }
 
-// Delete removes a message. The author or a channel admin (for channel
-// messages) may delete.
+// Delete soft-deletes a message: the row stays in the list (so replies
+// referencing it can still resolve their thread root) but Body /
+// AttachmentIDs / Reactions are cleared and the row is flagged
+// Deleted=true so clients render a "(Message deleted)" placeholder.
+// The author or a channel admin (for channel messages) may delete.
 func (s *MessageService) Delete(ctx context.Context, userID, parentID, parentType, msgID string) error {
 	if err := s.checkAccess(ctx, userID, parentID, parentType); err != nil {
 		return err
@@ -485,7 +488,6 @@ func (s *MessageService) Delete(ctx context.Context, userID, parentID, parentTyp
 	}
 
 	if msg.AuthorID != userID {
-		// For channel messages, allow admins to delete.
 		if parentType == ParentChannel {
 			mem, err := s.memberships.GetMembership(ctx, parentID, userID)
 			if err != nil || mem.Role < model.ChannelRoleAdmin {
@@ -496,16 +498,25 @@ func (s *MessageService) Delete(ctx context.Context, userID, parentID, parentTyp
 		}
 	}
 
-	if err := s.messages.DeleteMessage(ctx, parentID, msgID); err != nil {
-		return fmt.Errorf("message: delete: %w", err)
+	originalAttachments := msg.AttachmentIDs
+	msg.Deleted = true
+	msg.Body = ""
+	msg.AttachmentIDs = nil
+	msg.Reactions = nil
+	if err := s.messages.UpdateMessage(ctx, msg); err != nil {
+		return fmt.Errorf("message: soft-delete: %w", err)
 	}
 
-	s.releaseAttachments(ctx, msgID, msg.AttachmentIDs)
+	s.releaseAttachments(ctx, msgID, originalAttachments)
 
+	// parentMessageID is the field clients use to invalidate the right
+	// thread query. Without it, deleting a reply leaves the thread
+	// sidebar and /threads page showing the message as if still present.
 	payload := struct {
-		ID       string `json:"id"`
-		ParentID string `json:"parentID"`
-	}{ID: msgID, ParentID: parentID}
+		ID              string `json:"id"`
+		ParentID        string `json:"parentID"`
+		ParentMessageID string `json:"parentMessageID,omitempty"`
+	}{ID: msgID, ParentID: parentID, ParentMessageID: msg.ParentMessageID}
 	s.publishEvent(ctx, parentID, parentType, events.EventMessageDeleted, payload)
 
 	return nil

@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Globe, MessageSquare } from 'lucide-react';
 import { MessageItem } from '@/components/chat/MessageItem';
@@ -11,6 +11,7 @@ import { useInView } from '@/hooks/useInView';
 import { usePresence } from '@/context/PresenceContext';
 import { collectMessageUserIDs } from '@/lib/message-users';
 import {
+  hasUnreadActivity,
   markThreadSeen,
   useThreadMessages,
   type ThreadSummary,
@@ -48,6 +49,16 @@ export function ThreadCard({ summary, title, deepLink, currentUserId }: ThreadCa
   // /thread requests on first render.
   const { ref, inView } = useInView<HTMLElement>();
   const inputRef = useRef<MessageInputHandle>(null);
+
+  // Capture the unread state on first render — once we mark this thread
+  // seen below the card would otherwise lose its highlight mid-frame.
+  const [wasUnread] = useState(() => hasUnreadActivity(summary));
+
+  // Mark seen the first time the card actually scrolls into view.
+  useEffect(() => {
+    if (!inView) return;
+    markThreadSeen(summary.threadRootID);
+  }, [inView, summary.threadRootID]);
   const { data: messages, isLoading } = useThreadMessages({
     channelId,
     conversationId,
@@ -97,7 +108,11 @@ export function ThreadCard({ summary, title, deepLink, currentUserId }: ThreadCa
       data-testid="thread-card"
       data-thread-root-id={summary.threadRootID}
       data-in-view={inView ? 'true' : 'false'}
-      className="rounded-lg border bg-card overflow-hidden"
+      data-unread={wasUnread ? 'true' : 'false'}
+      className={
+        'rounded-lg border bg-card overflow-hidden ' +
+        (wasUnread ? 'border-primary/40 bg-primary/5' : '')
+      }
     >
       {/* Title — same shape as a channel/conversation header. Clicking
           opens the thread in its parent view. */}

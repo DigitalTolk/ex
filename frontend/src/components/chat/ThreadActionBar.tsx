@@ -59,7 +59,7 @@ export function ThreadActionBar({
               data-testid={`thread-action-avatar-${id}`}
             >
               {u?.avatarURL && <AvatarImage src={u.avatarURL} alt="" />}
-              <AvatarFallback className="rounded-md bg-muted text-[10px] font-medium text-muted-foreground">
+              <AvatarFallback className="rounded-md text-[10px] font-medium">
                 {getInitials(u?.displayName ?? '?')}
               </AvatarFallback>
             </Avatar>

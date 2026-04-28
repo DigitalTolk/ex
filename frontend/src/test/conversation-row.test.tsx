@@ -150,4 +150,32 @@ describe('ConversationRow', () => {
     renderRow(sampleConv);
     expect(screen.queryByText(/New category/)).not.toBeInTheDocument();
   });
+
+  it('truncates long DM names with `truncate` and reserves room for the kebab', () => {
+    const longConv: UserConversation = {
+      ...sampleConv,
+      displayName: 'Bartholomew Christopherson III von Habsburg',
+    };
+    renderRow(longConv);
+    // Full text is in the DOM (not clipped server-side); CSS truncate
+    // adds the ellipsis at render time.
+    const span = screen.getByText(longConv.displayName);
+    expect(span.className).toContain('truncate');
+    // The link reserves space for the absolute-positioned star + kebab
+    // so the text never runs underneath them.
+    const link = span.closest('a');
+    expect(link?.className).toContain('pr-12');
+    expect(link?.className).toContain('min-w-0');
+  });
+
+  it('groups collapse a comma-joined list to first names; custom group names stay intact', () => {
+    const groupConv: UserConversation = {
+      conversationID: 'g-1',
+      type: 'group',
+      displayName: 'Alice Smith, Bob Jones, Charlie Brown',
+      participantIDs: ['u-me', 'a', 'b', 'c'],
+    };
+    renderRow(groupConv);
+    expect(screen.getByText('Alice, Bob, Charlie')).toBeInTheDocument();
+  });
 });

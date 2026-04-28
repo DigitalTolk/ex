@@ -56,11 +56,12 @@ export function DMIntro({ otherDisplayName, otherAvatarURL, online, className }:
       className={`mb-4 flex items-start gap-3 rounded-lg border bg-muted/20 p-4 ${className ?? ''}`}
     >
       <span className="relative inline-block shrink-0">
-        <Avatar className="h-12 w-12">
+        {/* Keyed on the URL so AvatarImage's load state resets when
+            switching to a partner without an avatar — otherwise the
+            previous successful image keeps the fallback hidden. */}
+        <Avatar key={otherAvatarURL ?? '__none__'} className="h-12 w-12">
           {otherAvatarURL && <AvatarImage src={otherAvatarURL} alt="" />}
-          <AvatarFallback className="bg-primary/10 text-sm">
-            {getInitials(otherDisplayName)}
-          </AvatarFallback>
+          <AvatarFallback>{getInitials(otherDisplayName)}</AvatarFallback>
         </Avatar>
         {online !== undefined && (
           <span
@@ -96,11 +97,9 @@ export function SelfDMIntro({ selfDisplayName, selfAvatarURL, className }: SelfD
       data-intro-kind="self-dm"
       className={`mb-4 flex items-start gap-3 rounded-lg border bg-muted/20 p-4 ${className ?? ''}`}
     >
-      <Avatar className="h-12 w-12 shrink-0">
+      <Avatar key={selfAvatarURL ?? '__none__'} className="h-12 w-12 shrink-0">
         {selfAvatarURL && <AvatarImage src={selfAvatarURL} alt="" />}
-        <AvatarFallback className="bg-primary/10 text-sm">
-          {getInitials(selfDisplayName)}
-        </AvatarFallback>
+        <AvatarFallback>{getInitials(selfDisplayName)}</AvatarFallback>
       </Avatar>
       <div className="min-w-0">
         <h2 className="text-base font-semibold">{selfDisplayName}</h2>

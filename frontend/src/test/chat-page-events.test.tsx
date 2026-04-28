@@ -154,6 +154,36 @@ describe('ChatPage WebSocket handlers', () => {
     expect(calls).toContainEqual(['userThreads']);
   });
 
+  it('onMessageDeleted on a thread reply invalidates that thread + userThreads', () => {
+    // Regression: the backend now ships parentMessageID in the deleted
+    // payload, and the client routes it to the thread query. Without
+    // this, deleting a reply leaves the sidebar / /threads page stale.
+    const { qc } = renderAt('/');
+    const spy = vi.spyOn(qc, 'invalidateQueries');
+    (capturedOptions.onMessageDeleted as (d: unknown) => void)({
+      parentID: 'ch-1',
+      parentMessageID: 'msg-root',
+      id: 'msg-reply',
+    });
+    const calls = spy.mock.calls.map((c) => (c[0] as { queryKey?: unknown[] }).queryKey);
+    expect(calls).toContainEqual(['channelMessages', 'ch-1']);
+    expect(calls).toContainEqual(['thread', 'channels/ch-1', 'msg-root']);
+    expect(calls).toContainEqual(['thread', 'conversations/ch-1', 'msg-root']);
+    expect(calls).toContainEqual(['userThreads']);
+  });
+
+  it('onMessageDeleted on a thread root falls back to id when parentMessageID is absent', () => {
+    const { qc } = renderAt('/');
+    const spy = vi.spyOn(qc, 'invalidateQueries');
+    (capturedOptions.onMessageDeleted as (d: unknown) => void)({
+      parentID: 'ch-1',
+      id: 'msg-root',
+    });
+    const calls = spy.mock.calls.map((c) => (c[0] as { queryKey?: unknown[] }).queryKey);
+    expect(calls).toContainEqual(['thread', 'channels/ch-1', 'msg-root']);
+    expect(calls).toContainEqual(['userThreads']);
+  });
+
   it('onMessageEdited / onMessageDeleted gracefully ignore missing parentID and invalidate when present', () => {
     renderAt('/');
     expect(() => {

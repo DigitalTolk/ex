@@ -23,4 +23,9 @@ type Message struct {
 	PinnedBy        string              `json:"pinnedBy,omitempty" dynamodbav:"pinnedBy,omitempty"`
 	CreatedAt       time.Time           `json:"createdAt" dynamodbav:"createdAt"`
 	EditedAt        *time.Time          `json:"editedAt,omitempty" dynamodbav:"editedAt,omitempty"`
+	// Deleted is set on soft-delete: the row stays in the list so the
+	// thread structure (replies referencing this ID) is preserved, but
+	// Body / AttachmentIDs / Reactions are cleared and the client
+	// renders a "(Message deleted)" placeholder.
+	Deleted bool `json:"deleted,omitempty" dynamodbav:"deleted,omitempty"`
 }

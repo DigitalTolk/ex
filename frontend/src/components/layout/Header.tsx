@@ -132,7 +132,7 @@ export function Header({
               // has no image.
               <Avatar key={avatarURL ?? '__none__'} className="h-7 w-7">
                 {avatarURL && <AvatarImage src={avatarURL} alt="" />}
-                <AvatarFallback className="bg-muted text-[10px] text-muted-foreground">
+                <AvatarFallback className="text-[10px]">
                   {getInitials(displayTitle || '??')}
                 </AvatarFallback>
               </Avatar>
