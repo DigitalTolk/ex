@@ -122,7 +122,7 @@ describe('ChannelView', () => {
     // the contentEditable surface (no native placeholder attribute).
     expect(
       screen.getByLabelText('Message input').getAttribute('data-placeholder'),
-    ).toBe('Write to #general');
+    ).toBe('Write to ~general');
   });
 
   it('shows "No messages yet" when there are no messages', () => {

@@ -17,7 +17,7 @@ import {
 
 interface ThreadCardProps {
   summary: ThreadSummary;
-  // Title text (e.g. "#general" or "Bob"). The page resolves it from
+  // Title text (e.g. "~general" or "Bob"). The page resolves it from
   // userChannels / userConversations and passes it in so each card
   // doesn't have to re-derive it.
   title: string;

@@ -53,7 +53,7 @@ export function ChannelView() {
   const showFiles = panels.isActive('files');
   const { data: channel } = useChannelBySlug(slug);
   const { data: members } = useChannelMembers(channel?.id);
-  useDocumentTitle(channel ? `#${channel.name}` : null);
+  useDocumentTitle(channel ? `~${channel.name}` : null);
   const {
     data,
     hasNextPage,
@@ -220,7 +220,7 @@ export function ChannelView() {
             ref={inputRef}
             onSend={sendMessage.mutate}
             disabled={sendMessage.isPending}
-            placeholder={`Write to #${channel?.name ?? '...'}`}
+            placeholder={`Write to ~${channel?.name ?? '...'}`}
             focusKey={channel?.id}
             typingParentID={channel?.id}
             typingParentType="channel"

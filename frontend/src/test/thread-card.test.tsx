@@ -91,7 +91,7 @@ function renderCard(summary: ThreadSummary) {
       <MemoryRouter>
         <ThreadCard
           summary={summary}
-          title="#general"
+          title="~general"
           deepLink="/channel/general?thread=msg-root#msg-msg-root"
           currentUserId="u-me"
         />
@@ -125,7 +125,7 @@ describe('ThreadCard', () => {
     const link = await screen.findByTestId('thread-card-title');
     expect(link.tagName).toBe('A');
     expect(link.getAttribute('href')).toBe('/channel/general?thread=msg-root#msg-msg-root');
-    expect(link.textContent).toBe('#general');
+    expect(link.textContent).toBe('~general');
   });
 
   it('renders root + all replies when the thread is below the collapse threshold', async () => {

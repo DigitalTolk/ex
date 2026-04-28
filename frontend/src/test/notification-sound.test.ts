@@ -198,7 +198,7 @@ describe('NotificationContext.dispatch — sound regression', () => {
     act(() => {
       dispatchRef!({
         kind: 'message',
-        title: 'Alice in #general',
+        title: 'Alice in ~general',
         body: 'hello',
         deepLink: '/channel/general',
         parentID: 'ch-1',

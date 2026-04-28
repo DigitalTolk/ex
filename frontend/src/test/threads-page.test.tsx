@@ -92,7 +92,7 @@ describe('ThreadsPage', () => {
       expect(screen.getAllByTestId('thread-card')).toHaveLength(2);
     });
     const titles = screen.getAllByTestId('thread-card-title').map((el) => el.textContent);
-    expect(titles).toContain('#general');
+    expect(titles).toContain('~general');
     expect(titles).toContain('Bob');
   });
 

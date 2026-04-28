@@ -46,7 +46,7 @@ export default function ThreadsPage() {
           threads?.map((t) => {
             const where =
               t.parentType === 'channel'
-                ? `#${channelName(t.parentID) || 'channel'}`
+                ? `~${channelName(t.parentID) || 'channel'}`
                 : conversationName(t.parentID);
             return (
               <ThreadCard
