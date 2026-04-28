@@ -610,6 +610,31 @@ func (s *MessageService) SetPinned(ctx context.Context, userID, parentID, parent
 	return msg, nil
 }
 
+// SetNoUnfurl toggles the per-message link-preview suppression flag.
+// Only the author may dismiss — the unfurl is content the author
+// effectively chose to show, so they own the dismissal.
+func (s *MessageService) SetNoUnfurl(ctx context.Context, userID, parentID, parentType, msgID string, noUnfurl bool) (*model.Message, error) {
+	if err := s.checkAccess(ctx, userID, parentID, parentType); err != nil {
+		return nil, err
+	}
+	msg, err := s.messages.GetMessage(ctx, parentID, msgID)
+	if err != nil {
+		return nil, fmt.Errorf("message: get: %w", err)
+	}
+	if msg.AuthorID != userID {
+		return nil, errors.New("message: only the author can dismiss the link preview")
+	}
+	if msg.NoUnfurl == noUnfurl {
+		return msg, nil
+	}
+	msg.NoUnfurl = noUnfurl
+	if err := s.messages.UpdateMessage(ctx, msg); err != nil {
+		return nil, fmt.Errorf("message: update no-unfurl: %w", err)
+	}
+	s.publishEvent(ctx, parentID, parentType, events.EventMessageEdited, msg)
+	return msg, nil
+}
+
 // checkAccess verifies the user is a member of the channel or a participant
 // in the conversation.
 func (s *MessageService) checkAccess(ctx context.Context, userID, parentID, parentType string) error {

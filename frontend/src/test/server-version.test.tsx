@@ -143,4 +143,42 @@ describe('UpdateBanner', () => {
       Object.defineProperty(window, 'location', { configurable: true, value: orig });
     }
   });
+
+  it('the reload button replaces a prior v= param instead of appending another one', () => {
+    // Regression: the banner used to do `${search}${sep}v=…` which kept
+    // tacking on a fresh v= each reload. After several rolls the URL
+    // ended up like `?v=1&v=2&v=3&v=4&v=5`. Replace, don't append.
+    act(() => setServerVersion('v9.9.9'));
+
+    const orig = window.location;
+    let assigned = '';
+    Object.defineProperty(window, 'location', {
+      configurable: true,
+      value: {
+        ...orig,
+        pathname: '/channel/general',
+        search: '?v=111&v=222&foo=bar',
+        get href() {
+          return assigned || '/channel/general';
+        },
+        set href(v: string) {
+          assigned = v;
+        },
+      },
+    });
+
+    try {
+      render(<UpdateBanner />);
+      fireEvent.click(screen.getByTestId('update-banner-reload'));
+      // Exactly one v= and the original foo=bar must survive.
+      expect(assigned).toMatch(/^\/channel\/general\?/);
+      const qs = assigned.split('?')[1];
+      const params = new URLSearchParams(qs);
+      expect(params.getAll('v')).toHaveLength(1);
+      expect(params.get('foo')).toBe('bar');
+      expect(Number(params.get('v'))).toBeGreaterThan(0);
+    } finally {
+      Object.defineProperty(window, 'location', { configurable: true, value: orig });
+    }
+  });
 });

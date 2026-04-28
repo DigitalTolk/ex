@@ -24,8 +24,9 @@ import { renderMarkdown } from '@/lib/markdown';
 import { EmojiGlyph } from '@/components/EmojiGlyph';
 import { MessageAttachments } from '@/components/chat/MessageAttachments';
 import { ThreadActionBar } from '@/components/chat/ThreadActionBar';
+import { UnfurlCard } from '@/components/chat/UnfurlCard';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
-import { getInitials, formatLongDateTime } from '@/lib/format';
+import { extractURLs, getInitials, formatLongDateTime } from '@/lib/format';
 import type { Message } from '@/types';
 
 // Module-level Set so MessageList/ThreadPanel don't need to thread a
@@ -336,8 +337,35 @@ export function MessageItem({
                 ),
               })}
             </div>
+            {(() => {
+              if (message.noUnfurl) return null;
+              // First URL in the body (skipping code) gets a preview
+              // card. Capped at one to keep messages compact.
+              const urls = extractURLs(message.body);
+              return urls[0] ? (
+                <UnfurlCard
+                  url={urls[0]}
+                  messageId={message.id}
+                  channelId={channelId}
+                  conversationId={conversationId}
+                  isAuthor={isOwn}
+                />
+              ) : null;
+            })()}
             {message.attachmentIDs && message.attachmentIDs.length > 0 && (
-              <MessageAttachments ids={message.attachmentIDs} />
+              <MessageAttachments
+                ids={message.attachmentIDs}
+                authorName={authorName}
+                authorAvatarURL={authorAvatarURL}
+                postedIn={
+                  channelSlug
+                    ? `~${channelSlug}`
+                    : conversationId
+                      ? 'Direct message'
+                      : undefined
+                }
+                postedAt={message.createdAt}
+              />
             )}
             {reactionEntries.length > 0 && (
               <div className="mt-1 flex flex-wrap gap-1" role="list" aria-label="Reactions">

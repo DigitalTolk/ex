@@ -126,13 +126,21 @@ func (rw *responseWriter) WriteHeader(code int) {
 	rw.ResponseWriter.WriteHeader(code)
 }
 
-// Logging is middleware that logs every request with method, path, status, and duration.
+// Logging is middleware that logs every request with method, path,
+// status, and duration. /healthz is suppressed when it returns 2xx —
+// orchestrators (Docker, k8s) hit it every few seconds and the noise
+// drowns out signal in the access log. Non-2xx still logs so a flapping
+// healthcheck stays visible.
 func Logging(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		rw := &responseWriter{ResponseWriter: w, statusCode: http.StatusOK}
 
 		next.ServeHTTP(rw, r)
+
+		if r.URL.Path == "/healthz" && rw.statusCode >= 200 && rw.statusCode < 300 {
+			return
+		}
 
 		slog.Info("request",
 			"method", r.Method,

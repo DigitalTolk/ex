@@ -29,9 +29,11 @@ export function UpdateBanner() {
         onClick={() => {
           // Cache-busting the document URL forces the browser to fetch
           // a fresh index.html instead of reusing whatever the back/
-          // forward cache holds.
-          const sep = window.location.search ? '&' : '?';
-          window.location.href = `${window.location.pathname}${window.location.search}${sep}v=${Date.now()}`;
+          // forward cache holds. Replace any prior `v=…` so repeated
+          // reloads don't append v=…&v=…&v=… each time.
+          const params = new URLSearchParams(window.location.search);
+          params.set('v', String(Date.now()));
+          window.location.href = `${window.location.pathname}?${params.toString()}`;
         }}
         data-testid="update-banner-reload"
       >

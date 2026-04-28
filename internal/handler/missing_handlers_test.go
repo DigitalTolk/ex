@@ -229,6 +229,9 @@ type fakeSigner struct{}
 func (f *fakeSigner) PresignedGetURL(_ context.Context, key string, _ time.Duration) (string, error) {
 	return "https://signed.test/get/" + key, nil
 }
+func (f *fakeSigner) PresignedDownloadURL(_ context.Context, key, filename string, _ time.Duration) (string, error) {
+	return "https://signed.test/get/" + key + "?dl=" + filename, nil
+}
 func (f *fakeSigner) PresignedPutURL(_ context.Context, key, _ string, _ time.Duration) (string, error) {
 	return "https://signed.test/put/" + key, nil
 }

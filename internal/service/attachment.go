@@ -27,6 +27,7 @@ type AttachmentStore interface {
 // and removes objects when GC'd.
 type AttachmentSigner interface {
 	PresignedGetURL(ctx context.Context, key string, expires time.Duration) (string, error)
+	PresignedDownloadURL(ctx context.Context, key, filename string, expires time.Duration) (string, error)
 	PresignedPutURL(ctx context.Context, key, contentType string, expires time.Duration) (string, error)
 	DeleteObject(ctx context.Context, key string) error
 }
@@ -129,9 +130,11 @@ func (s *AttachmentService) Get(ctx context.Context, id string) (*model.Attachme
 		return nil, fmt.Errorf("attachment: get: %w", err)
 	}
 	if s.signer != nil && a.S3Key != "" {
-		url, err := s.signer.PresignedGetURL(ctx, a.S3Key, AttachmentURLTTL)
-		if err == nil {
+		if url, err := s.signer.PresignedGetURL(ctx, a.S3Key, AttachmentURLTTL); err == nil {
 			a.URL = url
+		}
+		if dl, err := s.signer.PresignedDownloadURL(ctx, a.S3Key, a.Filename, AttachmentURLTTL); err == nil {
+			a.DownloadURL = dl
 		}
 	}
 	return a, nil

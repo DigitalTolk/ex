@@ -141,6 +141,34 @@ describe('ChannelView', () => {
     expect(screen.getByLabelText('Public channel')).toBeInTheDocument();
   });
 
+  it('typing indicator renders between the message list and the message input (not under the input)', () => {
+    // Regression: TypingIndicator was `absolute bottom-0` of its
+    // nearest positioned ancestor. That ancestor was MessageDropZone,
+    // which wraps the MessageInput too — so the indicator anchored to
+    // the dropzone's bottom edge, *below* the input. The fix puts it
+    // in normal flow as a sibling of MessageList, sitting naturally
+    // above the input.
+    //
+    // Earlier attempts to wrap MessageList + indicator in their own
+    // `relative` flex-1 container broke MessageList's overflow scroll
+    // (DMs stopped scrolling, channels drifted on send), so we keep
+    // the surrounding DOM flat and just rely on DOM order.
+    const { container } = renderChannelView();
+    const dropzone = container.querySelector('div.flex.flex-1.flex-col.min-h-0');
+    expect(dropzone).not.toBeNull();
+    const children = Array.from(dropzone!.children);
+    const inputIdx = children.findIndex((c) =>
+      c.querySelector('[aria-label="Message input"]'),
+    );
+    const messagesIdx = children.findIndex((c) => c.classList.contains('overflow-y-auto'));
+    expect(messagesIdx).toBeGreaterThanOrEqual(0);
+    expect(inputIdx).toBeGreaterThan(messagesIdx);
+    // No nested `relative flex-1 flex-col min-h-0` wrapper between
+    // MessageList and the dropzone — that one broke scroll heights.
+    const messages = children[messagesIdx] as HTMLElement;
+    expect(messages.parentElement).toBe(dropzone);
+  });
+
   it('toggles the pinned messages sidebar when the header pin button is clicked', async () => {
     const { default: userEvent } = await import('@testing-library/user-event');
     const u = userEvent.setup();

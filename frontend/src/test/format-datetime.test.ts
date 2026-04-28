@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { ordinalSuffix, formatLongDateTime, formatDayHeading, formatRelative, firstNamesOnly, dayKey } from '@/lib/format';
+import { ordinalSuffix, formatLongDateTime, formatDayHeading, formatRelative, firstNamesOnly, extractURLs, dayKey } from '@/lib/format';
 
 describe('ordinalSuffix', () => {
   it('handles 1, 2, 3, 4 correctly', () => {
@@ -131,5 +131,37 @@ describe('firstNamesOnly', () => {
 
   it('leaves a single-token custom label alone (no comma → not a name list)', () => {
     expect(firstNamesOnly('Project Team')).toBe('Project Team');
+  });
+});
+
+describe('extractURLs', () => {
+  it('returns the URL when one is present in plain prose', () => {
+    expect(extractURLs('see https://example.com for details')).toEqual(['https://example.com']);
+  });
+
+  it('returns multiple URLs in source order', () => {
+    expect(
+      extractURLs('first http://a.test then https://b.test/path'),
+    ).toEqual(['http://a.test', 'https://b.test/path']);
+  });
+
+  it('strips trailing sentence punctuation', () => {
+    expect(extractURLs('check https://example.com.')).toEqual(['https://example.com']);
+    expect(extractURLs('great link (https://example.com)?')).toEqual(['https://example.com']);
+  });
+
+  it('skips URLs inside fenced code blocks', () => {
+    const md = 'paste this\n```\ncurl https://hidden.test\n```\nand visit https://shown.test';
+    expect(extractURLs(md)).toEqual(['https://shown.test']);
+  });
+
+  it('skips URLs inside inline code spans', () => {
+    expect(
+      extractURLs('use `curl https://hidden.test` then https://shown.test'),
+    ).toEqual(['https://shown.test']);
+  });
+
+  it('returns an empty array when there are no URLs', () => {
+    expect(extractURLs('plain text only')).toEqual([]);
   });
 });

@@ -636,6 +636,45 @@ func TestMessageService_SetPinned_NotMemberRejected(t *testing.T) {
 	}
 }
 
+func TestMessageService_SetNoUnfurl_AuthorTogglesAndPublishes(t *testing.T) {
+	svc, messages, memberships, _, publisher := setupMessageService()
+	ctx := context.Background()
+	memberships.memberships["ch1#u-1"] = &model.ChannelMembership{
+		ChannelID: "ch1", UserID: "u-1", Role: model.ChannelRoleMember,
+	}
+	messages.messages["ch1#m-1"] = &model.Message{ID: "m-1", ParentID: "ch1", AuthorID: "u-1"}
+
+	got, err := svc.SetNoUnfurl(ctx, "u-1", "ch1", ParentChannel, "m-1", true)
+	if err != nil {
+		t.Fatalf("SetNoUnfurl: %v", err)
+	}
+	if !got.NoUnfurl {
+		t.Error("expected NoUnfurl=true after dismiss")
+	}
+	if len(publisher.published) != 1 || publisher.published[0].event.Type != "message.edited" {
+		t.Errorf("expected one message.edited event; got %d (%v)", len(publisher.published), publisher.published)
+	}
+
+	// Idempotent — toggling to the same value publishes nothing more.
+	if _, err := svc.SetNoUnfurl(ctx, "u-1", "ch1", ParentChannel, "m-1", true); err != nil {
+		t.Fatalf("idempotent SetNoUnfurl: %v", err)
+	}
+	if len(publisher.published) != 1 {
+		t.Errorf("idempotent dismiss republished; total events = %d", len(publisher.published))
+	}
+}
+
+func TestMessageService_SetNoUnfurl_NonAuthorRejected(t *testing.T) {
+	svc, messages, memberships, _, _ := setupMessageService()
+	memberships.memberships["ch1#stranger"] = &model.ChannelMembership{
+		ChannelID: "ch1", UserID: "stranger", Role: model.ChannelRoleMember,
+	}
+	messages.messages["ch1#m-1"] = &model.Message{ID: "m-1", ParentID: "ch1", AuthorID: "u-1"}
+	if _, err := svc.SetNoUnfurl(context.Background(), "stranger", "ch1", ParentChannel, "m-1", true); err == nil {
+		t.Fatal("expected non-author to be rejected")
+	}
+}
+
 func TestMessageService_Edit_NotAuthor(t *testing.T) {
 	svc, messages, memberships, _, _ := setupMessageService()
 	ctx := context.Background()

@@ -27,10 +27,6 @@ export function useChannelMessages(channelId: string | undefined) {
     getNextPageParam: (lastPage) =>
       lastPage.hasMore ? lastPage.nextCursor : undefined,
     enabled: !!channelId,
-    select: (data) => ({
-      pages: [...data.pages].reverse(),
-      pageParams: [...data.pageParams].reverse(),
-    }),
   });
 }
 
@@ -49,10 +45,6 @@ export function useConversationMessages(conversationId: string | undefined) {
     getNextPageParam: (lastPage) =>
       lastPage.hasMore ? lastPage.nextCursor : undefined,
     enabled: !!conversationId,
-    select: (data) => ({
-      pages: [...data.pages].reverse(),
-      pageParams: [...data.pageParams].reverse(),
-    }),
   });
 }
 
@@ -174,6 +166,21 @@ export function useSetPinned() {
       apiFetch<Message>(`${messagePath(vars)}/pinned`, {
         method: 'PUT',
         body: JSON.stringify({ pinned: vars.pinned }),
+      }),
+    onSuccess: (_data, vars) => invalidateMessages(queryClient, vars),
+  });
+}
+
+// useSetNoUnfurl flips the per-message link-preview suppression flag.
+// Author-only on the server side; the UI gates the X button to the
+// author too.
+export function useSetNoUnfurl() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: MessageMutationVars & { noUnfurl: boolean }) =>
+      apiFetch<Message>(`${messagePath(vars)}/no-unfurl`, {
+        method: 'PUT',
+        body: JSON.stringify({ noUnfurl: vars.noUnfurl }),
       }),
     onSuccess: (_data, vars) => invalidateMessages(queryClient, vars),
   });

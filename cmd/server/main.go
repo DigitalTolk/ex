@@ -139,7 +139,7 @@ func main() {
 	}
 	attachmentSvc := service.NewAttachmentService(attachmentStore, attachmentSigner, redisPubSub)
 	messageSvc.SetAttachmentManager(attachmentSvc)
-	notificationSvc := service.NewNotificationService(redisPubSub, membershipStore, conversationStore, channelStore, userStore)
+	notificationSvc := service.NewNotificationService(redisPubSub, membershipStore, conversationStore, channelStore, userStore, messageStore)
 	notificationSvc.SetPresence(presenceSvc)
 	messageSvc.SetNotifier(notificationSvc)
 	settingsSvc := service.NewSettingsService(store.NewSettingsStore(db))
@@ -180,7 +180,9 @@ func main() {
 	if !cfg.IsDev() {
 		allowOrigin = cfg.BaseURL
 	}
-	router := handler.NewRouter(authH, userH, channelH, convH, wsH, uploadH, emojiH, presenceH, attachmentH, adminH, threadH, versionH, sidebarH, jwtMgr, frontendDist, appVersion, allowOrigin)
+	unfurlSvc := service.NewUnfurlService(redisCache)
+	unfurlH := handler.NewUnfurlHandler(unfurlSvc)
+	router := handler.NewRouter(authH, userH, channelH, convH, wsH, uploadH, emojiH, presenceH, attachmentH, adminH, threadH, versionH, unfurlH, sidebarH, jwtMgr, frontendDist, appVersion, allowOrigin)
 
 	// ------------------------------------------------------------------ Server
 	srv := &http.Server{
