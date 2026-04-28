@@ -7,8 +7,10 @@ import { useAuth } from '@/context/AuthContext';
 import { useUpdateWorkspaceSettings, useWorkspaceSettings } from '@/hooks/useSettings';
 import { isAdmin } from '@/lib/roles';
 import { bytesToMib, mibToBytes } from '@/lib/format';
+import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 
 export default function AdminPage() {
+  useDocumentTitle('Admin');
   const { user } = useAuth();
   const { data, isLoading } = useWorkspaceSettings();
   const update = useUpdateWorkspaceSettings();

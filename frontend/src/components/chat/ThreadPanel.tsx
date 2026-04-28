@@ -1,5 +1,7 @@
+import { useRef } from 'react';
 import { MessageItem } from './MessageItem';
-import { MessageInput } from './MessageInput';
+import { MessageInput, type MessageInputHandle } from './MessageInput';
+import { MessageDropZone } from './MessageDropZone';
 import { Button } from '@/components/ui/button';
 import { X } from 'lucide-react';
 import { useSendMessage, type SendMessageInput } from '@/hooks/useMessages';
@@ -26,6 +28,7 @@ export function ThreadPanel({
   const { data, isLoading } = useThreadMessages({ channelId, conversationId, threadRootID });
 
   const send = useSendMessage({ channelId, conversationId });
+  const inputRef = useRef<MessageInputHandle>(null);
 
   function handleReply(input: SendMessageInput) {
     send.mutate({ ...input, parentMessageID: threadRootID });
@@ -45,36 +48,40 @@ export function ThreadPanel({
           <X className="h-4 w-4" />
         </Button>
       </div>
-      <div className="flex-1 overflow-y-auto p-2 space-y-2">
-        {isLoading && (
-          <p className="text-xs text-muted-foreground p-2">Loading replies...</p>
-        )}
-        {data?.length === 0 && (
-          <p className="text-xs text-muted-foreground p-2">No replies yet. Start the thread!</p>
-        )}
-        {data?.map((msg) => {
-          const u = userMap[msg.authorID];
-          return (
-            <MessageItem
-              key={msg.id}
-              message={msg}
-              authorName={u?.displayName ?? 'Unknown'}
-              authorAvatarURL={u?.avatarURL}
-              authorOnline={u?.online}
-              isOwn={msg.authorID === currentUserId}
-              channelId={channelId}
-              conversationId={conversationId}
-              currentUserId={currentUserId}
-              inThread
-            />
-          );
-        })}
-      </div>
-      <MessageInput
-        onSend={handleReply}
-        disabled={send.isPending}
-        placeholder="Reply..."
-      />
+      <MessageDropZone onFiles={(files) => void inputRef.current?.uploadFiles(files)}>
+        <div className="flex-1 overflow-y-auto p-2 space-y-2">
+          {isLoading && (
+            <p className="text-xs text-muted-foreground p-2">Loading replies...</p>
+          )}
+          {data?.length === 0 && (
+            <p className="text-xs text-muted-foreground p-2">No replies yet. Start the thread!</p>
+          )}
+          {data?.map((msg) => {
+            const u = userMap[msg.authorID];
+            return (
+              <MessageItem
+                key={msg.id}
+                message={msg}
+                authorName={u?.displayName ?? 'Unknown'}
+                authorAvatarURL={u?.avatarURL}
+                authorOnline={u?.online}
+                isOwn={msg.authorID === currentUserId}
+                channelId={channelId}
+                conversationId={conversationId}
+                currentUserId={currentUserId}
+                inThread
+              />
+            );
+          })}
+        </div>
+        <MessageInput
+          ref={inputRef}
+          onSend={handleReply}
+          disabled={send.isPending}
+          placeholder="Reply..."
+          focusKey={threadRootID}
+        />
+      </MessageDropZone>
     </aside>
   );
 }

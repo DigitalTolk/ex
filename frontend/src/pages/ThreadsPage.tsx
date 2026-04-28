@@ -5,8 +5,10 @@ import { useUserChannels } from '@/hooks/useChannels';
 import { useUserConversations } from '@/hooks/useConversations';
 import { useAuth } from '@/context/AuthContext';
 import { ThreadCard } from '@/components/threads/ThreadCard';
+import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 
 export default function ThreadsPage() {
+  useDocumentTitle('Threads');
   const { data: threads, isLoading } = useUserThreads();
   const { data: userChannels } = useUserChannels();
   const { data: userConvs } = useUserConversations();
@@ -44,7 +46,7 @@ export default function ThreadsPage() {
           threads?.map((t) => {
             const where =
               t.parentType === 'channel'
-                ? `#${channelName(t.parentID) || 'channel'}`
+                ? `~${channelName(t.parentID) || 'channel'}`
                 : conversationName(t.parentID);
             return (
               <ThreadCard

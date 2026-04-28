@@ -19,7 +19,7 @@ vi.mock('sonner', () => ({
 
 const samplePayload: NotificationPayload = {
   kind: 'message',
-  title: 'Alice in #general',
+  title: 'Alice in ~general',
   body: 'hello there',
   deepLink: '/channel/general',
   parentID: 'ch-1',
@@ -91,7 +91,7 @@ describe('NotificationProvider', () => {
     });
     expect(playMock).toHaveBeenCalledTimes(1);
     expect(notificationCtor).toHaveBeenCalledTimes(1);
-    expect(notificationCtor.mock.calls[0][0]).toBe('Alice in #general');
+    expect(notificationCtor.mock.calls[0][0]).toBe('Alice in ~general');
   });
 
   it('suppresses notifications for the active parent (already on screen)', () => {
@@ -179,7 +179,7 @@ describe('NotificationProvider', () => {
       dispatchSpy!(samplePayload);
     });
     expect(toastMock).toHaveBeenCalledTimes(1);
-    expect(toastMock.mock.calls[0][0]).toBe('Alice in #general');
+    expect(toastMock.mock.calls[0][0]).toBe('Alice in ~general');
     const opts = toastMock.mock.calls[0][1] as { description: string; action?: { label: string } };
     expect(opts.description).toBe('hello there');
     expect(opts.action?.label).toBe('Open');

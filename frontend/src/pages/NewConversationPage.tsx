@@ -6,6 +6,7 @@ import { MessageInput, type MessageInputValue } from '@/components/chat/MessageI
 import { useCreateConversation, useSearchUsers } from '@/hooks/useConversations';
 import { apiFetch } from '@/lib/api';
 import { useAuth } from '@/context/AuthContext';
+import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import type { Message } from '@/types';
 
 interface PickedUser {
@@ -14,6 +15,7 @@ interface PickedUser {
 }
 
 export default function NewConversationPage() {
+  useDocumentTitle('New message');
   const [query, setQuery] = useState('');
   const [picked, setPicked] = useState<PickedUser[]>([]);
   const [activeIndex, setActiveIndex] = useState(0);

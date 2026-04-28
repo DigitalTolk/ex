@@ -164,10 +164,10 @@ func (h *ConversationHandler) ListMessages(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	before := queryParam(r, "before", "")
+	cursor := queryParam(r, "cursor", "")
 	limit := queryInt(r, "limit", 50)
 
-	msgs, hasMore, err := h.messageSvc.List(r.Context(), userID, id, service.ParentConversation, before, limit)
+	msgs, hasMore, err := h.messageSvc.List(r.Context(), userID, id, service.ParentConversation, cursor, limit)
 	if err != nil {
 		writeError(w, http.StatusForbidden, "list_error", err.Error())
 		return
@@ -177,9 +177,15 @@ func (h *ConversationHandler) ListMessages(w http.ResponseWriter, r *http.Reques
 		msgs = []*model.Message{}
 	}
 
+	var nextCursor string
+	if hasMore && len(msgs) > 0 {
+		nextCursor = msgs[len(msgs)-1].ID
+	}
+
 	writeJSON(w, http.StatusOK, JSON{
-		"items":   msgs,
-		"hasMore": hasMore,
+		"items":      msgs,
+		"hasMore":    hasMore,
+		"nextCursor": nextCursor,
 	})
 }
 

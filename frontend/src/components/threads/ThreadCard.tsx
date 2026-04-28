@@ -1,8 +1,9 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Globe, MessageSquare } from 'lucide-react';
 import { MessageItem } from '@/components/chat/MessageItem';
-import { MessageInput } from '@/components/chat/MessageInput';
+import { MessageInput, type MessageInputHandle } from '@/components/chat/MessageInput';
+import { MessageDropZone } from '@/components/chat/MessageDropZone';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useUsersBatch } from '@/hooks/useUsersBatch';
 import { useSendMessage, type SendMessageInput } from '@/hooks/useMessages';
@@ -16,7 +17,7 @@ import {
 
 interface ThreadCardProps {
   summary: ThreadSummary;
-  // Title text (e.g. "#general" or "Bob"). The page resolves it from
+  // Title text (e.g. "~general" or "Bob"). The page resolves it from
   // userChannels / userConversations and passes it in so each card
   // doesn't have to re-derive it.
   title: string;
@@ -45,6 +46,7 @@ export function ThreadCard({ summary, title, deepLink, currentUserId }: ThreadCa
   // /threads with 50+ entries would otherwise fan out 50 parallel
   // /thread requests on first render.
   const { ref, inView } = useInView<HTMLElement>();
+  const inputRef = useRef<MessageInputHandle>(null);
   const { data: messages, isLoading } = useThreadMessages({
     channelId,
     conversationId,
@@ -117,66 +119,72 @@ export function ThreadCard({ summary, title, deepLink, currentUserId }: ThreadCa
         </span>
       </header>
 
-      <div className="p-2">
-        {isLoading && (
-          <div className="space-y-2 p-2">
-            <Skeleton className="h-12 w-full" />
-            <Skeleton className="h-8 w-3/4" />
-          </div>
-        )}
+      <MessageDropZone
+        className="relative"
+        onFiles={(files) => void inputRef.current?.uploadFiles(files)}
+      >
+        <div className="p-2">
+          {isLoading && (
+            <div className="space-y-2 p-2">
+              <Skeleton className="h-12 w-full" />
+              <Skeleton className="h-8 w-3/4" />
+            </div>
+          )}
 
-        {!isLoading && root && (
-          <MessageItem
-            message={root}
-            authorName={userMap.get(root.authorID)?.displayName ?? 'Unknown'}
-            authorAvatarURL={userMap.get(root.authorID)?.avatarURL}
-            authorOnline={presence.isOnline(root.authorID)}
-            isOwn={root.authorID === currentUserId}
-            channelId={channelId}
-            conversationId={conversationId}
-            currentUserId={currentUserId}
-            inThread
-          />
-        )}
-
-        {!isLoading && isLong && !expanded && (
-          <button
-            type="button"
-            onClick={() => setExpanded(true)}
-            data-testid="thread-card-expand"
-            className="my-1 ml-12 block text-xs font-medium text-primary hover:underline"
-          >
-            Show {hiddenCount} more {hiddenCount === 1 ? 'reply' : 'replies'}
-          </button>
-        )}
-
-        {!isLoading &&
-          visibleReplies.map((msg) => (
+          {!isLoading && root && (
             <MessageItem
-              key={msg.id}
-              message={msg}
-              authorName={userMap.get(msg.authorID)?.displayName ?? 'Unknown'}
-              authorAvatarURL={userMap.get(msg.authorID)?.avatarURL}
-              authorOnline={presence.isOnline(msg.authorID)}
-              isOwn={msg.authorID === currentUserId}
+              message={root}
+              authorName={userMap.get(root.authorID)?.displayName ?? 'Unknown'}
+              authorAvatarURL={userMap.get(root.authorID)?.avatarURL}
+              authorOnline={presence.isOnline(root.authorID)}
+              isOwn={root.authorID === currentUserId}
               channelId={channelId}
               conversationId={conversationId}
               currentUserId={currentUserId}
               inThread
             />
-          ))}
-      </div>
+          )}
 
-      {/* Reply composer — sends with parentMessageID set so the post
-          lands as a thread reply. Disabled while the previous reply is
-          still in flight so a stuttering double-Enter can't double-post. */}
-      <div className="border-t bg-background">
-        <MessageInput
-          onSend={handleReply}
-          disabled={send.isPending}
-          placeholder="Reply…"
-        />
-      </div>
+          {!isLoading && isLong && !expanded && (
+            <button
+              type="button"
+              onClick={() => setExpanded(true)}
+              data-testid="thread-card-expand"
+              className="my-1 ml-12 block text-xs font-medium text-primary hover:underline"
+            >
+              Show {hiddenCount} more {hiddenCount === 1 ? 'reply' : 'replies'}
+            </button>
+          )}
+
+          {!isLoading &&
+            visibleReplies.map((msg) => (
+              <MessageItem
+                key={msg.id}
+                message={msg}
+                authorName={userMap.get(msg.authorID)?.displayName ?? 'Unknown'}
+                authorAvatarURL={userMap.get(msg.authorID)?.avatarURL}
+                authorOnline={presence.isOnline(msg.authorID)}
+                isOwn={msg.authorID === currentUserId}
+                channelId={channelId}
+                conversationId={conversationId}
+                currentUserId={currentUserId}
+                inThread
+              />
+            ))}
+        </div>
+
+        {/* Reply composer — sends with parentMessageID set so the post
+            lands as a thread reply. Disabled while the previous reply is
+            still in flight so a stuttering double-Enter can't double-post. */}
+        <div className="border-t bg-background">
+          <MessageInput
+            ref={inputRef}
+            onSend={handleReply}
+            disabled={send.isPending}
+            placeholder="Reply…"
+          />
+        </div>
+      </MessageDropZone>
     </article>
   );
 }

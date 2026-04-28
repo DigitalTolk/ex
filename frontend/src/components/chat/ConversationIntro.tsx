@@ -26,7 +26,7 @@ export function ChannelIntro({ channel, creatorName, className }: ChannelIntroPr
           <ChannelIcon type={channel.type} className="h-5 w-5 text-muted-foreground" ariaLabel="" />
         </span>
         <h2 className="text-base font-semibold">
-          {channel.type === 'private' ? channel.name : `#${channel.name}`}
+          ~{channel.name}
         </h2>
       </div>
       <p className="text-sm text-muted-foreground">

@@ -302,17 +302,17 @@ func titleFor(kind NotificationKind, parentType, parentName, authorName string) 
 	switch kind {
 	case NotificationKindThreadReply:
 		if parentType == ParentChannel {
-			return authorName + " replied in #" + parentName
+			return authorName + " replied in ~" + parentName
 		}
 		return authorName + " replied"
 	case NotificationKindMessage:
 		if parentType == ParentChannel {
-			return authorName + " in #" + parentName
+			return authorName + " in ~" + parentName
 		}
 		return authorName
 	case NotificationKindMention:
 		if parentType == ParentChannel {
-			return authorName + " mentioned you in #" + parentName
+			return authorName + " mentioned you in ~" + parentName
 		}
 		return authorName + " mentioned you"
 	default:
