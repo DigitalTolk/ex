@@ -94,6 +94,9 @@ type fakeAttachmentSigner struct {
 func (s *fakeAttachmentSigner) PresignedGetURL(_ context.Context, key string, _ time.Duration) (string, error) {
 	return "https://signed.test/" + key, nil
 }
+func (s *fakeAttachmentSigner) PresignedDownloadURL(_ context.Context, key, filename string, _ time.Duration) (string, error) {
+	return "https://signed.test/" + key + "?download=" + filename, nil
+}
 func (s *fakeAttachmentSigner) PresignedPutURL(_ context.Context, key string, _ string, _ time.Duration) (string, error) {
 	return "https://upload.test/" + key, nil
 }
@@ -275,6 +278,12 @@ func TestAttachmentService_Get_ResolvesSignedURL(t *testing.T) {
 	}
 	if got.URL == "" {
 		t.Error("expected signed URL on returned attachment")
+	}
+	if got.DownloadURL == "" {
+		t.Error("expected forced-download URL on returned attachment")
+	}
+	if got.URL == got.DownloadURL {
+		t.Error("download URL should differ from inline URL (different Content-Disposition)")
 	}
 }
 

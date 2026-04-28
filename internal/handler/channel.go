@@ -543,6 +543,31 @@ func (h *ChannelHandler) SetPinned(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, msg)
 }
 
+// SetNoUnfurl flips the link-preview suppression flag on a channel
+// message. Body: { "noUnfurl": bool }. Author-only.
+func (h *ChannelHandler) SetNoUnfurl(w http.ResponseWriter, r *http.Request) {
+	userID := middleware.UserIDFromContext(r.Context())
+	id := pathParam(r, "id")
+	msgID := pathParam(r, "msgId")
+	if id == "" || msgID == "" {
+		writeError(w, http.StatusBadRequest, "missing_id", "channel ID and message ID are required")
+		return
+	}
+	var body struct {
+		NoUnfurl bool `json:"noUnfurl"`
+	}
+	if err := readJSON(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", err.Error())
+		return
+	}
+	msg, err := h.messageSvc.SetNoUnfurl(r.Context(), userID, id, service.ParentChannel, msgID, body.NoUnfurl)
+	if err != nil {
+		writeError(w, http.StatusForbidden, "no_unfurl_error", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, msg)
+}
+
 // ListPinned returns the channel's currently-pinned messages.
 func (h *ChannelHandler) ListPinned(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserIDFromContext(r.Context())

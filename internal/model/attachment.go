@@ -13,7 +13,8 @@ type Attachment struct {
 	ContentType string    `json:"contentType" dynamodbav:"contentType"`
 	Filename    string    `json:"filename" dynamodbav:"filename"`
 	S3Key       string    `json:"-" dynamodbav:"s3Key"`
-	URL         string    `json:"url,omitempty" dynamodbav:"-"` // resolved at fetch time
+	URL         string    `json:"url,omitempty" dynamodbav:"-"`         // resolved at fetch time, inline (used by <img>/preview)
+	DownloadURL string    `json:"downloadURL,omitempty" dynamodbav:"-"` // resolved at fetch time, forces Content-Disposition: attachment
 	CreatedBy   string    `json:"createdBy" dynamodbav:"createdBy"`
 	CreatedAt   time.Time `json:"createdAt" dynamodbav:"createdAt"`
 	// MessageIDs is the set of message IDs currently referencing this

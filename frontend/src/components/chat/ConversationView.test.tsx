@@ -122,4 +122,28 @@ describe('ConversationView', () => {
     renderConversationView();
     expect(screen.queryByLabelText('Toggle member list')).not.toBeInTheDocument();
   });
+
+  it('keeps MessageList as a direct child of MessageDropZone (no nested wrapper) — broke DM scrolling when wrapped', () => {
+    // Regression: an earlier attempt to fix typing-indicator
+    // positioning wrapped MessageList inside an extra
+    // `relative flex-1 flex-col min-h-0` container. That nested flex
+    // layer broke the height-propagation chain so MessageList stopped
+    // scrolling in DMs and drifted on send in channels. The typing
+    // indicator now uses normal-flow positioning instead.
+    const { container } = renderConversationView();
+    const dropzone = container.querySelector('div.flex.flex-1.flex-col.min-h-0');
+    expect(dropzone).not.toBeNull();
+    const messages = container.querySelector('div.overflow-y-auto') as HTMLElement;
+    expect(messages.parentElement).toBe(dropzone);
+
+    // DOM order: messages → input. Anything between (e.g., the typing
+    // indicator when it's visible) renders here in normal flow.
+    const children = Array.from(dropzone!.children);
+    const inputIdx = children.findIndex((c) =>
+      c.querySelector('[aria-label="Message input"]'),
+    );
+    const messagesIdx = children.indexOf(messages);
+    expect(messagesIdx).toBeGreaterThanOrEqual(0);
+    expect(inputIdx).toBeGreaterThan(messagesIdx);
+  });
 });

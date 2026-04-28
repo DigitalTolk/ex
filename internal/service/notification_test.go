@@ -19,8 +19,23 @@ func setupNotifier(t *testing.T) (*NotificationService, *mockPublisher, *mockMem
 	conv := newMockConversationStore()
 	chans := newMockChannelStore()
 	users := newMockUserStore()
-	svc := NewNotificationService(pub, members, conv, chans, users)
+	msgs := newMockMessageStore()
+	svc := NewNotificationService(pub, members, conv, chans, users, msgs)
 	return svc, pub, members, conv, chans, users
+}
+
+// setupNotifierWithMessages exposes the message store too so tests can
+// pre-seed thread structure and assert the scoped fanout.
+func setupNotifierWithMessages(t *testing.T) (*NotificationService, *mockPublisher, *mockMembershipStore, *mockChannelStore, *mockUserStore, *mockMessageStore) {
+	t.Helper()
+	pub := newMockPublisher()
+	members := newMockMembershipStore()
+	conv := newMockConversationStore()
+	chans := newMockChannelStore()
+	users := newMockUserStore()
+	msgs := newMockMessageStore()
+	svc := NewNotificationService(pub, members, conv, chans, users, msgs)
+	return svc, pub, members, chans, users, msgs
 }
 
 // stubPresence is a tiny PresenceLookup implementation: any userID listed
@@ -75,6 +90,98 @@ func TestNotificationService_NotifyForMessage_ChannelFanout(t *testing.T) {
 	}
 	if gotChannels[pubsub.UserChannel("u-author")] {
 		t.Error("author should be excluded from notification fanout")
+	}
+}
+
+func TestNotificationService_NotifyForMessage_ThreadReply_OnlyParticipantsAndRootAuthor(t *testing.T) {
+	// Regression: thread replies used to fan out to every channel
+	// member. They should be scoped to the thread root author + the
+	// users who have already replied in this thread (plus explicit
+	// @-mentions, which keep working through their own path).
+	svc, pub, members, chans, users, msgs := setupNotifierWithMessages(t)
+	ctx := context.Background()
+
+	chans.channels["ch1"] = &model.Channel{ID: "ch1", Name: "general", Slug: "general"}
+	users.users["u-root"] = &model.User{ID: "u-root", DisplayName: "Alice"}
+	users.users["u-replier"] = &model.User{ID: "u-replier", DisplayName: "Bob"}
+	users.users["u-replier2"] = &model.User{ID: "u-replier2", DisplayName: "Eve"}
+	users.users["u-bystander"] = &model.User{ID: "u-bystander", DisplayName: "Carol"}
+	members.memberships["ch1#u-root"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u-root"}
+	members.memberships["ch1#u-replier"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u-replier"}
+	members.memberships["ch1#u-replier2"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u-replier2"}
+	members.memberships["ch1#u-bystander"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u-bystander"}
+
+	// Thread structure: u-root posted m-root; u-replier replied with
+	// m-r1; now u-replier2 is posting m-r2. m-r1 is the prior reply
+	// already in the store.
+	msgs.messages["ch1#m-root"] = &model.Message{ID: "m-root", ParentID: "ch1", AuthorID: "u-root", Body: "ask"}
+	msgs.messages["ch1#m-r1"] = &model.Message{ID: "m-r1", ParentID: "ch1", AuthorID: "u-replier", ParentMessageID: "m-root", Body: "first"}
+
+	msg := &model.Message{ID: "m-r2", ParentID: "ch1", AuthorID: "u-replier2", ParentMessageID: "m-root", Body: "second"}
+	svc.NotifyForMessage(ctx, msg, ParentChannel)
+
+	// Expected recipients: u-root (thread root author) + u-replier
+	// (prior participant). u-replier2 is excluded as the sending author.
+	// u-bystander never participated → no notification.
+	gotChannels := map[string]bool{}
+	for _, p := range pub.published {
+		gotChannels[p.channel] = true
+	}
+	if !gotChannels[pubsub.UserChannel("u-root")] {
+		t.Error("expected thread-root author to be notified")
+	}
+	if !gotChannels[pubsub.UserChannel("u-replier")] {
+		t.Error("expected prior thread participant to be notified")
+	}
+	if gotChannels[pubsub.UserChannel("u-bystander")] {
+		t.Error("bystander (never in thread) must NOT be notified for a thread reply")
+	}
+	if gotChannels[pubsub.UserChannel("u-replier2")] {
+		t.Error("author of the new reply must not notify themselves")
+	}
+	if got := len(pub.published); got != 2 {
+		t.Errorf("publish count = %d, want 2 (root author + prior replier)", got)
+	}
+	for _, p := range pub.published {
+		var n Notification
+		if err := json.Unmarshal(p.event.Data, &n); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if n.Kind != NotificationKindThreadReply {
+			t.Errorf("kind = %q, want thread_reply", n.Kind)
+		}
+	}
+}
+
+func TestNotificationService_NotifyForMessage_ThreadReply_StillNotifiesExplicitMentions(t *testing.T) {
+	// Mentions cut across thread scope: even if the mentioned user
+	// has never participated in the thread, an @-mention should reach
+	// them so they can hop in.
+	svc, pub, members, chans, users, msgs := setupNotifierWithMessages(t)
+	ctx := context.Background()
+
+	chans.channels["ch1"] = &model.Channel{ID: "ch1", Name: "general", Slug: "general"}
+	users.users["u-root"] = &model.User{ID: "u-root", DisplayName: "Alice"}
+	users.users["u-replier"] = &model.User{ID: "u-replier", DisplayName: "Bob"}
+	users.users["u-mentioned"] = &model.User{ID: "u-mentioned", DisplayName: "Dave"}
+	members.memberships["ch1#u-root"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u-root"}
+	members.memberships["ch1#u-replier"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u-replier"}
+	members.memberships["ch1#u-mentioned"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u-mentioned"}
+
+	msgs.messages["ch1#m-root"] = &model.Message{ID: "m-root", ParentID: "ch1", AuthorID: "u-root", Body: "ask"}
+
+	msg := &model.Message{
+		ID: "m-r1", ParentID: "ch1", AuthorID: "u-replier", ParentMessageID: "m-root",
+		Body: "hey @[u-mentioned|Dave] take a look",
+	}
+	svc.NotifyForMessage(ctx, msg, ParentChannel)
+
+	got := publishedKinds(pub)
+	if got[pubsub.UserChannel("u-root")] != NotificationKindThreadReply {
+		t.Errorf("root author should get thread_reply, got %q", got[pubsub.UserChannel("u-root")])
+	}
+	if got[pubsub.UserChannel("u-mentioned")] != NotificationKindMention {
+		t.Errorf("mentioned user should get a mention, got %q", got[pubsub.UserChannel("u-mentioned")])
 	}
 }
 
@@ -137,15 +244,25 @@ func TestNotificationService_NotifyForMessage_Conversation(t *testing.T) {
 }
 
 func TestNotificationService_NotifyForMessage_ThreadReplyKind(t *testing.T) {
-	svc, pub, _, conv, _, users := setupNotifier(t)
+	pub := newMockPublisher()
+	members := newMockMembershipStore()
+	conv := newMockConversationStore()
+	chans := newMockChannelStore()
+	users := newMockUserStore()
+	msgs := newMockMessageStore()
+	svc := NewNotificationService(pub, members, conv, chans, users, msgs)
 	ctx := context.Background()
 
 	users.users["u-author"] = &model.User{ID: "u-author", DisplayName: "Alice"}
+	users.users["u-other"] = &model.User{ID: "u-other", DisplayName: "Bob"}
 	conv.conversations["c1"] = &model.Conversation{
 		ID:             "c1",
 		Type:           model.ConversationTypeDM,
 		ParticipantIDs: []string{"u-author", "u-other"},
 	}
+	// Thread root authored by u-other so they get the thread_reply
+	// notification when u-author replies.
+	msgs.messages["c1#m1"] = &model.Message{ID: "m1", ParentID: "c1", AuthorID: "u-other", Body: "ask"}
 
 	msg := &model.Message{
 		ID:              "m2",
@@ -159,7 +276,6 @@ func TestNotificationService_NotifyForMessage_ThreadReplyKind(t *testing.T) {
 	if len(pub.published) != 1 {
 		t.Fatalf("publish count = %d, want 1", len(pub.published))
 	}
-	// Decode payload kind via the JSON path.
 	body := string(pub.published[0].event.Data)
 	if !strings.Contains(body, `"kind":"thread_reply"`) {
 		t.Errorf("expected kind=thread_reply, got body %s", body)
@@ -184,12 +300,16 @@ func TestNotificationService_PreviewBody_ClampsAndStripsNewlines(t *testing.T) {
 // fragment so clicking the popup opens the thread panel and highlights
 // the root, not just the parent channel scrolled to the bottom.
 func TestNotifyForMessage_ThreadReply_DeepLinkOpensThread(t *testing.T) {
-	svc, pub, members, _, channels, users := setupNotifier(t)
+	svc, pub, members, channels, users, msgs := setupNotifierWithMessages(t)
 	channels.channels["ch-thr"] = &model.Channel{ID: "ch-thr", Slug: "thr-room", Name: "thr-room"}
 	members.memberships["ch-thr#u-author"] = &model.ChannelMembership{ChannelID: "ch-thr", UserID: "u-author"}
 	members.memberships["ch-thr#u-recip"] = &model.ChannelMembership{ChannelID: "ch-thr", UserID: "u-recip"}
 	users.users["u-author"] = &model.User{ID: "u-author", DisplayName: "A"}
 	users.users["u-recip"] = &model.User{ID: "u-recip", DisplayName: "R"}
+	// Seed the thread root authored by u-recip so the thread fanout
+	// has someone to notify; otherwise no notification is emitted and
+	// there's no deep link to inspect.
+	msgs.messages["ch-thr#root-XYZ"] = &model.Message{ID: "root-XYZ", ParentID: "ch-thr", AuthorID: "u-recip", Body: "ask"}
 
 	msg := &model.Message{
 		ID:              "m-reply",

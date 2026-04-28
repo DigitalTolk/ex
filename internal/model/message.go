@@ -28,4 +28,9 @@ type Message struct {
 	// Body / AttachmentIDs / Reactions are cleared and the client
 	// renders a "(Message deleted)" placeholder.
 	Deleted bool `json:"deleted,omitempty" dynamodbav:"deleted,omitempty"`
+	// NoUnfurl suppresses the link-preview card the client would
+	// otherwise render below the body. Set when the author dismisses
+	// the unfurl — the suppression is global (every viewer sees it
+	// off), which is what authors expect when the preview is wrong.
+	NoUnfurl bool `json:"noUnfurl,omitempty" dynamodbav:"noUnfurl,omitempty"`
 }

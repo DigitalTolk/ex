@@ -60,6 +60,7 @@ export function ChannelView() {
     isFetchingNextPage,
     isLoading,
     fetchNextPage,
+    refetch,
   } = useChannelMessages(channel?.id);
   const sendMessage = useSendChannelMessage(channel?.id);
   useEffect(() => {
@@ -201,6 +202,7 @@ export function ChannelView() {
             isFetchingNextPage={isFetchingNextPage}
             isLoading={isLoading}
             fetchNextPage={fetchNextPage}
+            refetch={refetch}
             currentUserId={user?.id}
             channelId={channel?.id}
             channelSlug={channel?.slug}
@@ -250,6 +252,7 @@ export function ChannelView() {
           channelId={channel?.id}
           onClose={panels.close}
           userMap={userMap}
+          postedIn={channel ? `~${channel.name}` : undefined}
         />
       )}
       {showMembers && !threadRootID && members && (

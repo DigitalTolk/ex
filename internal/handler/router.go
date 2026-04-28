@@ -30,6 +30,7 @@ func NewRouter(
 	adminH *AdminHandler,
 	threadH *ThreadHandler,
 	versionH *VersionHandler,
+	unfurlH *UnfurlHandler,
 	sidebarH *SidebarHandler,
 	jwtMgr *auth.JWTManager,
 	frontendFS fs.FS,
@@ -50,6 +51,9 @@ func NewRouter(
 	// pins the version it shipped with; mismatch → reload banner).
 	if versionH != nil {
 		mux.HandleFunc("GET /api/v1/version", versionH.Get)
+	}
+	if unfurlH != nil {
+		mux.Handle("GET /api/v1/unfurl", middleware.WrapFunc(unfurlH.Get, authMW))
 	}
 
 	// ------------------------------------------------------------------ Auth (public)
@@ -97,6 +101,7 @@ func NewRouter(
 	mux.Handle("GET /api/v1/channels/{id}/messages/{msgId}/thread", middleware.WrapFunc(channelH.GetThread, authMW))
 	mux.Handle("POST /api/v1/channels/{id}/messages/{msgId}/reactions", middleware.WrapFunc(channelH.ToggleReaction, authMW))
 	mux.Handle("PUT /api/v1/channels/{id}/messages/{msgId}/pinned", middleware.WrapFunc(channelH.SetPinned, authMW))
+	mux.Handle("PUT /api/v1/channels/{id}/messages/{msgId}/no-unfurl", middleware.WrapFunc(channelH.SetNoUnfurl, authMW))
 	mux.Handle("GET /api/v1/channels/{id}/pinned", middleware.WrapFunc(channelH.ListPinned, authMW))
 	mux.Handle("GET /api/v1/channels/{id}/files", middleware.WrapFunc(channelH.ListFiles, authMW))
 
@@ -112,6 +117,7 @@ func NewRouter(
 	mux.Handle("GET /api/v1/conversations/{id}/messages/{msgId}/thread", middleware.WrapFunc(convH.GetThread, authMW))
 	mux.Handle("POST /api/v1/conversations/{id}/messages/{msgId}/reactions", middleware.WrapFunc(convH.ToggleReaction, authMW))
 	mux.Handle("PUT /api/v1/conversations/{id}/messages/{msgId}/pinned", middleware.WrapFunc(convH.SetPinned, authMW))
+	mux.Handle("PUT /api/v1/conversations/{id}/messages/{msgId}/no-unfurl", middleware.WrapFunc(convH.SetNoUnfurl, authMW))
 	mux.Handle("GET /api/v1/conversations/{id}/pinned", middleware.WrapFunc(convH.ListPinned, authMW))
 	mux.Handle("GET /api/v1/conversations/{id}/files", middleware.WrapFunc(convH.ListFiles, authMW))
 

@@ -298,6 +298,9 @@ type fakeAttachmentSignerH struct{}
 func (fakeAttachmentSignerH) PresignedGetURL(_ context.Context, key string, _ time.Duration) (string, error) {
 	return "https://signed/" + key, nil
 }
+func (fakeAttachmentSignerH) PresignedDownloadURL(_ context.Context, key, _ string, _ time.Duration) (string, error) {
+	return "https://signed/" + key + "?dl=1", nil
+}
 func (fakeAttachmentSignerH) PresignedPutURL(_ context.Context, key, _ string, _ time.Duration) (string, error) {
 	return "https://upload/" + key, nil
 }

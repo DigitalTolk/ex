@@ -115,7 +115,9 @@ func (s *MessageStoreImpl) List(ctx context.Context, parentID string, before str
 
 	var keyCond expression.KeyConditionBuilder
 	if before != "" {
-		// SK < MSG#<before> to paginate backwards.
+		// SK BETWEEN MSG# AND MSG#<before>. BETWEEN is inclusive on both
+		// ends, so the cursor message itself comes back as the first
+		// item — we strip it below to keep pages disjoint.
 		keyCond = expression.KeyAnd(
 			expression.Key("PK").Equal(expression.Value(pk)),
 			expression.Key("SK").Between(
@@ -135,8 +137,12 @@ func (s *MessageStoreImpl) List(ctx context.Context, parentID string, before str
 		return nil, false, fmt.Errorf("store: build expression: %w", err)
 	}
 
-	// Fetch limit+1 to determine if there are more results.
+	// Fetch one extra to detect "has more"; one more than that when
+	// paginating because the inclusive cursor item gets stripped below.
 	fetchLimit := int32(limit + 1)
+	if before != "" {
+		fetchLimit++
+	}
 
 	out, err := s.Client.Query(ctx, &dynamodb.QueryInput{
 		TableName:                 aws.String(s.Table),
@@ -157,6 +163,15 @@ func (s *MessageStoreImpl) List(ctx context.Context, parentID string, before str
 			return nil, false, fmt.Errorf("store: unmarshal message: %w", err)
 		}
 		messages = append(messages, &mi.Message)
+	}
+
+	// Strip the cursor message from the head — DDB's BETWEEN is
+	// inclusive on the upper bound, so when paginating it comes back
+	// as a duplicate of the previous page's last item. We only strip
+	// when we actually see it (cursor message could have been deleted
+	// since the prior page was fetched).
+	if before != "" && len(messages) > 0 && messages[0].ID == before {
+		messages = messages[1:]
 	}
 
 	hasMore := len(messages) > limit

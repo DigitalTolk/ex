@@ -70,6 +70,7 @@ export function ConversationView() {
     isFetchingNextPage,
     isLoading,
     fetchNextPage,
+    refetch,
   } = useConversationMessages(id);
   const sendMessage = useSendConversationMessage(id);
 
@@ -228,6 +229,7 @@ export function ConversationView() {
             isFetchingNextPage={isFetchingNextPage}
             isLoading={isLoading}
             fetchNextPage={fetchNextPage}
+            refetch={refetch}
             currentUserId={user?.id}
             conversationId={id}
             userMap={userMap}
@@ -268,6 +270,7 @@ export function ConversationView() {
           conversationId={id}
           onClose={panels.close}
           userMap={userMap}
+          postedIn={title}
         />
       )}
       {showMembers && !threadRootID && conversation?.type === 'group' && (

@@ -212,6 +212,21 @@ describe('ChatPage WebSocket handlers', () => {
     }).not.toThrow();
   });
 
+  it('onMembersChanged also invalidates messages so the "X was added" line shows even if message.new is missed', () => {
+    // Regression: AddMember posts a system message via a separate
+    // message.new event. If that event is dropped (WS reconnect race,
+    // transient disconnect), the membership-changed signal must still
+    // refresh the open message view so the system line appears.
+    const { qc } = renderAt('/');
+    const spy = vi.spyOn(qc, 'invalidateQueries');
+    (capturedOptions.onMembersChanged as (d: unknown) => void)({ channelID: 'ch-1' });
+    const calls = spy.mock.calls.map((c) => (c[0] as { queryKey?: unknown[] }).queryKey);
+    expect(calls).toContainEqual(['channelMembers', 'ch-1']);
+    expect(calls).toContainEqual(['userChannels']);
+    expect(calls).toContainEqual(['channelMessages', 'ch-1']);
+    expect(calls).toContainEqual(['conversationMessages', 'ch-1']);
+  });
+
   it('onConversationNew refreshes the userConversations list', () => {
     renderAt('/');
     expect(() => {

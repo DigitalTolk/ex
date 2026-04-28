@@ -39,6 +39,7 @@ export interface Message {
   pinnedAt?: string;
   pinnedBy?: string;
   deleted?: boolean;
+  noUnfurl?: boolean;
 }
 
 export interface Attachment {
@@ -47,7 +48,8 @@ export interface Attachment {
   size: number;
   contentType: string;
   filename: string;
-  url?: string; // resolved presigned GET URL
+  url?: string; // resolved presigned GET URL — inline (used by <img>/preview)
+  downloadURL?: string; // presigned GET URL with forced Content-Disposition: attachment
   createdBy: string;
   createdAt: string;
 }

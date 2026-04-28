@@ -3,6 +3,8 @@ package storage
 import (
 	"context"
 	"fmt"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -98,6 +100,51 @@ func (c *S3Client) PresignedGetURL(ctx context.Context, key string, expires time
 		return "", fmt.Errorf("s3: presign get: %w", err)
 	}
 	return req.URL, nil
+}
+
+// PresignedDownloadURL generates a pre-signed GET URL whose response carries a
+// `Content-Disposition: attachment; filename=...` header. Browsers honor this
+// even for cross-origin links — the plain <a download> attribute does not —
+// so this is what the UI's "Download" buttons should hit.
+func (c *S3Client) PresignedDownloadURL(ctx context.Context, key, filename string, expires time.Duration) (string, error) {
+	req, err := c.presigner.PresignGetObject(ctx, &s3.GetObjectInput{
+		Bucket:                     aws.String(c.bucket),
+		Key:                        aws.String(key),
+		ResponseContentDisposition: aws.String(contentDispositionAttachment(filename)),
+	}, s3.WithPresignExpires(expires))
+	if err != nil {
+		return "", fmt.Errorf("s3: presign download: %w", err)
+	}
+	return req.URL, nil
+}
+
+// contentDispositionAttachment builds an RFC 6266 / RFC 5987 compliant
+// Content-Disposition header value. The plain `filename=` parameter handles
+// ASCII clients; `filename*=UTF-8''…` carries the original UTF-8 name for
+// modern browsers without breaking older parsers on quoted-string limits.
+func contentDispositionAttachment(filename string) string {
+	if filename == "" {
+		return "attachment"
+	}
+	// Strip CR/LF and quotes from the ASCII fallback so the header stays
+	// well-formed, then percent-encode for the UTF-8 variant.
+	asciiSafe := strings.Map(func(r rune) rune {
+		switch r {
+		case '"', '\r', '\n':
+			return '_'
+		}
+		if r > 0x7e || r < 0x20 {
+			return '_'
+		}
+		return r
+	}, filename)
+	// url.QueryEscape over-encodes a few RFC 5987 unreserved chars (e.g.
+	// `!`, `#`), but over-encoding is always valid — the recipient
+	// decodes the same UTF-8 bytes either way. The one fix-up we need
+	// is space: QueryEscape emits `+` (form-urlencoded), RFC 5987 wants
+	// `%20`.
+	encoded := strings.ReplaceAll(url.QueryEscape(filename), "+", "%20")
+	return fmt.Sprintf(`attachment; filename="%s"; filename*=UTF-8''%s`, asciiSafe, encoded)
 }
 
 // PresignedPutURL generates a pre-signed PUT URL for uploading an object with

@@ -88,6 +88,84 @@ describe('ThreadPanel autoscroll', () => {
     );
   }
 
+  it('scrolls to the newest reply when the thread opens', () => {
+    // Regression: opening a thread used to leave the user at the
+    // OLDEST reply because the auto-stick effect only fired on
+    // length growth (new reply), not on initial mount.
+    threadDataState.current = [
+      { id: 'r-1', authorID: 'u-1', body: 'first' },
+      { id: 'r-2', authorID: 'u-2', body: 'second' },
+      { id: 'r-3', authorID: 'u-1', body: 'third' },
+    ];
+    // Provide a non-zero scrollHeight so the synchronous pin has
+    // somewhere to scroll to under jsdom (which doesn't lay out).
+    Object.defineProperty(HTMLElement.prototype, 'scrollHeight', {
+      configurable: true,
+      get() {
+        return 800;
+      },
+    });
+    try {
+      renderPanel();
+      const list = screen.getByLabelText('Thread').querySelector('.overflow-y-auto') as HTMLElement;
+      expect(list.scrollTop).toBe(800);
+    } finally {
+      Object.defineProperty(HTMLElement.prototype, 'scrollHeight', {
+        configurable: true,
+        get() {
+          return 0;
+        },
+      });
+    }
+  });
+
+  it('re-arms initial scroll-to-bottom when the user opens a different thread', () => {
+    const desc = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollHeight');
+    let mockHeight = 0;
+    Object.defineProperty(HTMLElement.prototype, 'scrollHeight', {
+      configurable: true,
+      get() {
+        return mockHeight;
+      },
+    });
+    try {
+      threadDataState.current = [{ id: 'r-1', authorID: 'u-1', body: 'first' }];
+      mockHeight = 600;
+      const { rerender } = renderPanel();
+      let list = screen.getByLabelText('Thread').querySelector('.overflow-y-auto') as HTMLElement;
+      expect(list.scrollTop).toBe(600);
+
+      // User opens a DIFFERENT thread root (threadRootID changes).
+      // The new thread has its own data; the scroll must re-pin to
+      // the bottom of THAT thread, not stay at the previous offset.
+      threadDataState.current = [
+        { id: 'r-99', authorID: 'u-2', body: 'first reply of thread B' },
+        { id: 'r-100', authorID: 'u-3', body: 'newer reply of thread B' },
+      ];
+      mockHeight = 1200;
+      const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      rerender(
+        <QueryClientProvider client={qc}>
+          <BrowserRouter>
+            <TooltipProvider>
+              <ThreadPanel
+                channelId="ch-1"
+                threadRootID="root-2"
+                onClose={vi.fn()}
+                userMap={{}}
+                currentUserId="me"
+              />
+            </TooltipProvider>
+          </BrowserRouter>
+        </QueryClientProvider>,
+      );
+      list = screen.getByLabelText('Thread').querySelector('.overflow-y-auto') as HTMLElement;
+      expect(list.scrollTop).toBe(1200);
+    } finally {
+      if (desc) Object.defineProperty(HTMLElement.prototype, 'scrollHeight', desc);
+    }
+  });
+
   it('scrolls to the bottom when a new reply arrives and the user is already near the bottom', () => {
     const { rerender } = renderPanel();
     const list = screen.getByLabelText('Thread').querySelector('.overflow-y-auto') as HTMLElement;

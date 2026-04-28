@@ -97,9 +97,14 @@ export default function ChatPage() {
       const evt = data as Record<string, unknown> | undefined;
       const channelID = evt?.channelID as string | undefined;
       if (!channelID) return;
-      // Refresh member list and channel list (member count changed)
       queryClient.invalidateQueries({ queryKey: ['channelMembers', channelID] });
       queryClient.invalidateQueries({ queryKey: ['userChannels'] });
+      // Membership changes always post a "X was added/removed" system
+      // message. Invalidate the message list here too so the system
+      // line shows up even if the separate message.new event is dropped
+      // (WS reconnect race, transient disconnect, etc.).
+      queryClient.invalidateQueries({ queryKey: ['channelMessages', channelID] });
+      queryClient.invalidateQueries({ queryKey: ['conversationMessages', channelID] });
     },
     onConversationNew: () => {
       // Refresh conversation list in sidebar

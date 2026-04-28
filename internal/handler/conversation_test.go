@@ -886,3 +886,46 @@ func TestChannelHandlerFull_ListFiles_NotMember(t *testing.T) {
 		t.Errorf("status = %d, want 403", rec.Code)
 	}
 }
+
+func TestConvHandlerFull_SetNoUnfurl(t *testing.T) {
+	env := setupConversationHandlerFull(t)
+	user := &model.User{ID: "u-nu", Email: "n@test.com", SystemRole: model.SystemRoleMember}
+	token := makeTokenForUser(env.jwtMgr, user)
+	env.convs.conversations["conv-nu"] = &model.Conversation{
+		ID: "conv-nu", Type: model.ConversationTypeDM, ParticipantIDs: []string{"u-nu", "other"},
+	}
+	env.messages.messages["conv-nu#m-1"] = &model.Message{
+		ID: "m-1", ParentID: "conv-nu", AuthorID: "u-nu", Body: "see https://x",
+	}
+	handler := middleware.Auth(env.jwtMgr)(http.HandlerFunc(env.handler.SetNoUnfurl))
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/conversations/conv-nu/messages/m-1/no-unfurl",
+		strings.NewReader(`{"noUnfurl": true}`))
+	req.SetPathValue("id", "conv-nu")
+	req.SetPathValue("msgId", "m-1")
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if !env.messages.messages["conv-nu#m-1"].NoUnfurl {
+		t.Error("expected NoUnfurl=true after handler call")
+	}
+}
+
+func TestConvHandlerFull_SetNoUnfurl_MissingIDs(t *testing.T) {
+	env := setupConversationHandlerFull(t)
+	user := &model.User{ID: "u", Email: "u@test.com", SystemRole: model.SystemRoleMember}
+	token := makeTokenForUser(env.jwtMgr, user)
+	handler := middleware.Auth(env.jwtMgr)(http.HandlerFunc(env.handler.SetNoUnfurl))
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/conversations//messages//no-unfurl",
+		strings.NewReader(`{"noUnfurl": true}`))
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", rec.Code)
+	}
+}

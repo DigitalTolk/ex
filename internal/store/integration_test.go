@@ -1340,14 +1340,72 @@ func TestMessageStore_ListWithBefore(t *testing.T) {
 		}
 	}
 
-	// List with "before" cursor (messages before bmsg-04).
+	// List with "before" cursor must EXCLUDE the cursor message —
+	// otherwise paginated reads duplicate the boundary item across
+	// adjacent pages.
 	messages, _, err := ms.List(ctx, "ch-before", "bmsg-04", 10)
 	if err != nil {
 		t.Fatalf("List with before: %v", err)
 	}
-	// Should include messages bmsg-00 through bmsg-04 (range is inclusive of before).
-	if len(messages) < 1 {
-		t.Error("expected at least 1 message before bmsg-04")
+	for _, m := range messages {
+		if m.ID == "bmsg-04" {
+			t.Errorf("List(before=bmsg-04) returned the cursor itself; pages must be disjoint")
+		}
+	}
+	// We expect bmsg-00 through bmsg-03 to come back (the four
+	// strictly older than bmsg-04).
+	if len(messages) != 4 {
+		t.Errorf("got %d messages, want 4 (bmsg-00..bmsg-03)", len(messages))
+	}
+}
+
+// Regression: two adjacent pages must not duplicate the boundary
+// message. Previously DDB's BETWEEN was inclusive on the upper bound,
+// so each page-2-onwards request started with the previous page's
+// last item, painting it twice in the UI.
+func TestMessageStore_ListPagination_PagesAreDisjoint(t *testing.T) {
+	db := setupDynamoDB(t)
+	ms := NewMessageStore(db)
+	ctx := context.Background()
+
+	for i := 0; i < 7; i++ {
+		msg := &model.Message{
+			ID:        fmt.Sprintf("dmsg-%02d", i),
+			ParentID:  "ch-disjoint",
+			AuthorID:  "u-author",
+			Body:      fmt.Sprintf("disjoint %d", i),
+			CreatedAt: time.Now().Truncate(time.Millisecond),
+		}
+		if err := ms.Create(ctx, msg); err != nil {
+			t.Fatalf("Create %d: %v", i, err)
+		}
+	}
+
+	page1, hasMore, err := ms.List(ctx, "ch-disjoint", "", 3)
+	if err != nil {
+		t.Fatalf("List page1: %v", err)
+	}
+	if len(page1) != 3 {
+		t.Fatalf("page1 len = %d, want 3", len(page1))
+	}
+	if !hasMore {
+		t.Fatal("page1 hasMore = false, want true (4 more messages remaining)")
+	}
+	cursor := page1[len(page1)-1].ID
+
+	page2, _, err := ms.List(ctx, "ch-disjoint", cursor, 3)
+	if err != nil {
+		t.Fatalf("List page2: %v", err)
+	}
+
+	seen := map[string]bool{}
+	for _, m := range page1 {
+		seen[m.ID] = true
+	}
+	for _, m := range page2 {
+		if seen[m.ID] {
+			t.Errorf("page2 contains %q which was already in page1 — pages overlap", m.ID)
+		}
 	}
 }
 

@@ -73,12 +73,16 @@ type NotificationService struct {
 	conv      ConversationStore
 	channels  ChannelStore
 	users     UserStore
+	messages  MessageStore
 	presence  PresenceLookup
 }
 
-// NewNotificationService builds a NotificationService.
-func NewNotificationService(p Publisher, m MembershipStore, c ConversationStore, ch ChannelStore, u UserStore) *NotificationService {
-	return &NotificationService{publisher: p, members: m, conv: c, channels: ch, users: u}
+// NewNotificationService builds a NotificationService. messages is used
+// only for thread-reply scoping (looking up the root author + prior
+// participants). Pass nil and the thread path will degrade gracefully
+// to "no recipients beyond explicit @-mentions".
+func NewNotificationService(p Publisher, m MembershipStore, c ConversationStore, ch ChannelStore, u UserStore, msgs MessageStore) *NotificationService {
+	return &NotificationService{publisher: p, members: m, conv: c, channels: ch, users: u, messages: msgs}
 }
 
 // SetPresence wires a presence lookup so the @here mention can target only
@@ -187,9 +191,21 @@ func (s *NotificationService) NotifyForMessage(ctx context.Context, msg *model.M
 		mentionedSet[uid] = true
 	}
 
-	// Regular message notification: every member who didn't mute and
-	// isn't already getting a higher-priority mention.
-	for _, uid := range snap.memberIDs {
+	// Audience differs by kind:
+	//   - Regular message: every member who didn't mute and isn't
+	//     already getting a higher-priority mention.
+	//   - Thread reply: scoped to the root author + everyone who has
+	//     replied earlier in the thread. A bystander who never opened
+	//     the thread does NOT get pinged when an unrelated thread
+	//     bubbles new replies — that was a regression where channel
+	//     members were being woken up for conversations they're not in.
+	var audience []string
+	if kind == NotificationKindThreadReply {
+		audience = s.resolveThreadRecipients(ctx, msg)
+	} else {
+		audience = snap.memberIDs
+	}
+	for _, uid := range audience {
 		if mentionedSet[uid] || snap.muted[uid] {
 			continue
 		}
@@ -245,6 +261,47 @@ func (s *NotificationService) resolveMentionRecipients(msg *model.Message, paren
 			continue
 		}
 		add(uid)
+	}
+	return out
+}
+
+// resolveThreadRecipients returns the user IDs that should receive a
+// thread-reply notification: the thread root's author plus everyone
+// who has already replied in this thread. The current message's author
+// is excluded; duplicates are removed; ordering is stable (root author
+// first, then participants in chronological order).
+func (s *NotificationService) resolveThreadRecipients(ctx context.Context, msg *model.Message) []string {
+	if s.messages == nil || msg.ParentMessageID == "" {
+		return nil
+	}
+	// Pull every message under the parent and filter for the thread.
+	// 1000 matches the cap ListThreadMessages uses; threads larger
+	// than that are vanishingly rare and the worst case is just that
+	// the longest tail of replies doesn't get notified — acceptable
+	// while we don't have a parent-message-indexed store query.
+	all, _, err := s.messages.ListMessages(ctx, msg.ParentID, "", 1000)
+	if err != nil {
+		return nil
+	}
+	out := make([]string, 0)
+	seen := make(map[string]bool)
+	add := func(uid string) {
+		if uid == "" || uid == msg.AuthorID || seen[uid] {
+			return
+		}
+		seen[uid] = true
+		out = append(out, uid)
+	}
+	for _, m := range all {
+		if m.ID == msg.ParentMessageID {
+			add(m.AuthorID) // root author first
+			break
+		}
+	}
+	for _, m := range all {
+		if m.ParentMessageID == msg.ParentMessageID && m.ID != msg.ID {
+			add(m.AuthorID)
+		}
 	}
 	return out
 }

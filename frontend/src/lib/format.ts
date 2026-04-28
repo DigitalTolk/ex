@@ -11,6 +11,44 @@ export function getInitials(name: string): string {
     .slice(0, 2);
 }
 
+// extractURLs returns http(s) URLs that appear in plain text — used by
+// the link-unfurl renderer. Skips fenced code blocks and inline code
+// spans (devs paste real URLs there and a preview would be noise) and
+// strips trailing sentence punctuation that's almost never part of the
+// URL itself. The first URL only is enough for our preview UX, but we
+// return all matches so the caller can de-dupe / cap.
+const URL_RE = /https?:\/\/[^\s<>"`]+/g;
+const TRAILING_PUNCT_RE = /[.,!?;:)\]]+$/;
+export function extractURLs(body: string): string[] {
+  const urls: string[] = [];
+  let i = 0;
+  while (i < body.length) {
+    if (body.startsWith('```', i)) {
+      const end = body.indexOf('```', i + 3);
+      if (end === -1) break;
+      i = end + 3;
+      continue;
+    }
+    if (body[i] === '`') {
+      const end = body.indexOf('`', i + 1);
+      if (end === -1) break;
+      i = end + 1;
+      continue;
+    }
+    let next = body.length;
+    const fence = body.indexOf('```', i);
+    if (fence !== -1 && fence < next) next = fence;
+    const tick = body.indexOf('`', i);
+    if (tick !== -1 && tick < next) next = tick;
+    const segment = body.slice(i, next);
+    for (const m of segment.matchAll(URL_RE)) {
+      urls.push(m[0].replace(TRAILING_PUNCT_RE, ''));
+    }
+    i = next;
+  }
+  return urls;
+}
+
 // firstName returns the first whitespace-separated token of a display
 // name ("Alice Smith" → "Alice"). Used by the group-label collapse in
 // both ConversationRow (string input) and ConversationView (array of
