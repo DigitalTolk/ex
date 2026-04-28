@@ -9,6 +9,7 @@ import { useUsersBatch } from '@/hooks/useUsersBatch';
 import { useSendMessage, type SendMessageInput } from '@/hooks/useMessages';
 import { useInView } from '@/hooks/useInView';
 import { usePresence } from '@/context/PresenceContext';
+import { collectMessageUserIDs } from '@/lib/message-users';
 import {
   markThreadSeen,
   useThreadMessages,
@@ -68,14 +69,14 @@ export function ThreadCard({ summary, title, deepLink, currentUserId }: ThreadCa
   const hiddenCount = isLong ? replies.length - TAIL_LENGTH : 0;
   const visibleReplies = expanded || !isLong ? replies : tail;
 
-  // Author lookup. Root + replies authors all appear in this card, so we
-  // batch them into a single request.
-  const authorIDs = useMemo(() => {
-    const ids = new Set<string>();
-    for (const m of messages ?? []) ids.add(m.authorID);
-    return [...ids];
-  }, [messages]);
-  const { map: userMap } = useUsersBatch(authorIDs);
+  // User lookup covering authors + reactors so the reaction tooltip
+  // doesn't fall back to "Unknown" when someone reacts who isn't an
+  // author in this thread.
+  const userIDs = useMemo(
+    () => collectMessageUserIDs(messages ?? []),
+    [messages],
+  );
+  const { map: userMap } = useUsersBatch(userIDs);
   const presence = usePresence();
 
   // useSendMessage invalidates the same ['thread', parentPath, rootID]
@@ -141,6 +142,7 @@ export function ThreadCard({ summary, title, deepLink, currentUserId }: ThreadCa
               channelId={channelId}
               conversationId={conversationId}
               currentUserId={currentUserId}
+              userMap={userMap}
               inThread
             />
           )}
@@ -168,6 +170,7 @@ export function ThreadCard({ summary, title, deepLink, currentUserId }: ThreadCa
                 channelId={channelId}
                 conversationId={conversationId}
                 currentUserId={currentUserId}
+                userMap={userMap}
                 inThread
               />
             ))}

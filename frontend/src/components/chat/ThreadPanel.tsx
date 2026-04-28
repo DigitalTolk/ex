@@ -1,4 +1,4 @@
-import { useRef } from 'react';
+import { useMemo, useRef } from 'react';
 import { MessageItem } from './MessageItem';
 import { MessageInput, type MessageInputHandle } from './MessageInput';
 import { MessageDropZone } from './MessageDropZone';
@@ -6,6 +6,8 @@ import { Button } from '@/components/ui/button';
 import { X } from 'lucide-react';
 import { useSendMessage, type SendMessageInput } from '@/hooks/useMessages';
 import { useThreadMessages } from '@/hooks/useThreads';
+import { useUsersBatch } from '@/hooks/useUsersBatch';
+import { collectMessageUserIDs } from '@/lib/message-users';
 import type { UserMapEntry } from './MessageList';
 
 interface ThreadPanelProps {
@@ -26,6 +28,29 @@ export function ThreadPanel({
   currentUserId,
 }: ThreadPanelProps) {
   const { data, isLoading } = useThreadMessages({ channelId, conversationId, threadRootID });
+
+  // Authors + reactors of thread messages may not be in the parent
+  // userMap (which was built from the channel page, not the thread).
+  // Fetch any missing IDs so reaction tooltips don't show "Unknown".
+  const missingUserIDs = useMemo(() => {
+    const ids = collectMessageUserIDs(data ?? []);
+    return ids.filter((id) => !userMap[id]);
+  }, [data, userMap]);
+  const { data: extras } = useUsersBatch(missingUserIDs);
+  const mergedUserMap = useMemo(() => {
+    if (!extras || extras.length === 0) return userMap;
+    const m: Record<string, UserMapEntry> = { ...userMap };
+    for (const u of extras) {
+      m[u.id] = { displayName: u.displayName || 'Unknown', avatarURL: u.avatarURL };
+    }
+    return m;
+  }, [userMap, extras]);
+  // Adapter for MessageItem — its userMap prop is the .get-style lookup
+  // ThreadActionBar / reaction tooltip both consume.
+  const userLookup = useMemo(
+    () => ({ get: (id: string) => mergedUserMap[id] }),
+    [mergedUserMap],
+  );
 
   const send = useSendMessage({ channelId, conversationId });
   const inputRef = useRef<MessageInputHandle>(null);
@@ -57,7 +82,7 @@ export function ThreadPanel({
             <p className="text-xs text-muted-foreground p-2">No replies yet. Start the thread!</p>
           )}
           {data?.map((msg) => {
-            const u = userMap[msg.authorID];
+            const u = mergedUserMap[msg.authorID];
             return (
               <MessageItem
                 key={msg.id}
@@ -69,6 +94,7 @@ export function ThreadPanel({
                 channelId={channelId}
                 conversationId={conversationId}
                 currentUserId={currentUserId}
+                userMap={userLookup}
                 inThread
               />
             );
