@@ -60,7 +60,7 @@ func (h *AuthHandler) OIDCLogin(w http.ResponseWriter, r *http.Request) {
 	// from 302 responses, causing the state cookie to be missing on callback.
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
-	fmt.Fprintf(w, `<!doctype html><html><head><meta http-equiv="refresh" content="0;url=%s"><script>window.location.replace(%q)</script></head></html>`,
+	_, _ = fmt.Fprintf(w, `<!doctype html><html><head><meta http-equiv="refresh" content="0;url=%s"><script>window.location.replace(%q)</script></head></html>`,
 		html.EscapeString(authURL), authURL)
 }
 
