@@ -268,8 +268,7 @@ func (s *NotificationService) resolveMentionRecipients(msg *model.Message, paren
 // resolveThreadRecipients returns the user IDs that should receive a
 // thread-reply notification: the thread root's author plus everyone
 // who has already replied in this thread. The current message's author
-// is excluded; duplicates are removed; ordering is stable (root author
-// first, then participants in chronological order).
+// is excluded; duplicates are removed.
 func (s *NotificationService) resolveThreadRecipients(ctx context.Context, msg *model.Message) []string {
 	if s.messages == nil || msg.ParentMessageID == "" {
 		return nil
@@ -283,27 +282,31 @@ func (s *NotificationService) resolveThreadRecipients(ctx context.Context, msg *
 	if err != nil {
 		return nil
 	}
-	out := make([]string, 0)
+	var rootAuthor string
+	repliers := make([]string, 0)
 	seen := make(map[string]bool)
-	add := func(uid string) {
+	add := func(dst *[]string, uid string) {
 		if uid == "" || uid == msg.AuthorID || seen[uid] {
 			return
 		}
 		seen[uid] = true
-		out = append(out, uid)
+		*dst = append(*dst, uid)
 	}
 	for _, m := range all {
-		if m.ID == msg.ParentMessageID {
-			add(m.AuthorID) // root author first
-			break
+		switch {
+		case m.ID == msg.ParentMessageID:
+			if rootAuthor == "" && m.AuthorID != "" && m.AuthorID != msg.AuthorID {
+				rootAuthor = m.AuthorID
+				seen[m.AuthorID] = true
+			}
+		case m.ParentMessageID == msg.ParentMessageID && m.ID != msg.ID:
+			add(&repliers, m.AuthorID)
 		}
 	}
-	for _, m := range all {
-		if m.ParentMessageID == msg.ParentMessageID && m.ID != msg.ID {
-			add(m.AuthorID)
-		}
+	if rootAuthor == "" {
+		return repliers
 	}
-	return out
+	return append([]string{rootAuthor}, repliers...)
 }
 
 // parentDisplayName resolves a human-readable name for the parent (channel

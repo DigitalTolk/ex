@@ -54,10 +54,26 @@ function installFakeIntersectionObserver(): {
 } {
   const original = globalThis.IntersectionObserver;
   let trigger: (() => void) | null = null;
+  // Match the real IntersectionObserver constructor signature
+  // (callback, options?) so production callers passing options
+  // aren't flagged as supplying superfluous arguments.
   class FakeObserver {
     private cb: IntersectionObserverCallback;
-    constructor(cb: IntersectionObserverCallback) {
+    root: Element | Document | null = null;
+    rootMargin = '';
+    thresholds: number[] = [];
+    constructor(cb: IntersectionObserverCallback, options?: IntersectionObserverInit) {
       this.cb = cb;
+      if (options?.root instanceof Element || options?.root instanceof Document) {
+        this.root = options.root;
+      }
+      if (options?.rootMargin !== undefined) this.rootMargin = options.rootMargin;
+      const thresholds = options?.threshold;
+      this.thresholds = Array.isArray(thresholds)
+        ? thresholds
+        : thresholds !== undefined
+          ? [thresholds]
+          : [];
     }
     observe(el: Element) {
       trigger = () =>
@@ -69,9 +85,6 @@ function installFakeIntersectionObserver(): {
     disconnect() { trigger = null; }
     unobserve() {}
     takeRecords() { return []; }
-    root = null;
-    rootMargin = '';
-    thresholds: number[] = [];
   }
   globalThis.IntersectionObserver = FakeObserver as unknown as typeof IntersectionObserver;
   return {

@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, type ReactNode } from 'react';
 import { Skeleton } from '@/components/ui/skeleton';
 import { MessageItem } from './MessageItem';
+import { useAtBottomRef } from '@/hooks/useAtBottomRef';
 import { useMessageDeepLinkHighlight } from '@/hooks/useMessageDeepLinkHighlight';
 import { dayKey, formatDayHeading } from '@/lib/format';
 import { deriveThreadMeta } from '@/lib/message-users';
@@ -70,23 +71,10 @@ export function MessageList({
   // stored RecentReplyAuthorIDs / LastReplyAt fields predate that feature.
   const threadMeta = useMemo(() => deriveThreadMeta(allMessages), [allMessages]);
 
-  // Track whether the user is "at the bottom" of the messages so we
-  // know whether new arrivals or settling async content should pull
-  // them down or stay put. Threshold of 120px gives a little slack so
-  // a click that scrolls 1-2 messages up doesn't flip them out of
-  // "at bottom" mode.
-  const wasAtBottomRef = useRef(true);
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    const update = () => {
-      wasAtBottomRef.current =
-        el.scrollHeight - el.scrollTop - el.clientHeight < 120;
-    };
-    update();
-    el.addEventListener('scroll', update, { passive: true });
-    return () => el.removeEventListener('scroll', update);
-  }, []);
+  // Tracks whether the user is at the bottom of the message list so
+  // new arrivals + settling async content can follow them only when
+  // they're keeping up with the conversation.
+  const wasAtBottomRef = useAtBottomRef(scrollRef);
 
   // Stick to the bottom on initial load and whenever the user switches
   // channels/conversations. We do not just set scrollTop once: avatars,

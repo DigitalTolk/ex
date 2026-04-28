@@ -4,6 +4,7 @@ import { MessageInput, type MessageInputHandle } from './MessageInput';
 import { MessageDropZone } from './MessageDropZone';
 import { Button } from '@/components/ui/button';
 import { X } from 'lucide-react';
+import { useAtBottomRef } from '@/hooks/useAtBottomRef';
 import { useSendMessage, type SendMessageInput } from '@/hooks/useMessages';
 import { useThreadMessages } from '@/hooks/useThreads';
 import { useUsersBatch } from '@/hooks/useUsersBatch';
@@ -55,23 +56,7 @@ export function ThreadPanel({
   const send = useSendMessage({ channelId, conversationId });
   const inputRef = useRef<MessageInputHandle>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
-  const innerRef = useRef<HTMLDivElement>(null);
-
-  // Track whether the user is at the bottom so async-loading content
-  // (avatars, attachments) and new replies follow them down only when
-  // they're already keeping up with the conversation.
-  const wasAtBottomRef = useRef(true);
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    const update = () => {
-      wasAtBottomRef.current =
-        el.scrollHeight - el.scrollTop - el.clientHeight < 120;
-    };
-    update();
-    el.addEventListener('scroll', update, { passive: true });
-    return () => el.removeEventListener('scroll', update);
-  }, []);
+  const wasAtBottomRef = useAtBottomRef(scrollRef);
 
   // Snap to the bottom on open, follow new replies while at the
   // bottom, and keep re-pinning while async content settles. The
@@ -105,7 +90,7 @@ export function ThreadPanel({
       stickyDoneRef.current = true;
       prevLenRef.current = len;
       if (typeof ResizeObserver !== 'undefined') {
-        const inner = innerRef.current;
+        const inner = el.lastElementChild;
         if (inner) {
           const ro = new ResizeObserver(() => {
             if (wasAtBottomRef.current) stick();
@@ -158,7 +143,7 @@ export function ThreadPanel({
       </div>
       <MessageDropZone onFiles={(files) => void inputRef.current?.uploadFiles(files)}>
         <div ref={scrollRef} className="flex-1 overflow-y-auto">
-          <div ref={innerRef} className="p-2 space-y-2">
+          <div className="p-2 space-y-2">
             {isLoading && (
               <p className="text-xs text-muted-foreground p-2">Loading replies...</p>
             )}
