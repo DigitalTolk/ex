@@ -6,10 +6,12 @@ import { Label } from '@/components/ui/label';
 import { useAuth } from '@/context/AuthContext';
 import { apiFetch, setAccessToken } from '@/lib/api';
 import { GENERAL_CHANNEL_SLUG } from '@/lib/roles';
+import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import type { User } from '@/types';
 
 export default function LoginPage() {
   const { token: inviteToken } = useParams<{ token: string }>();
+  useDocumentTitle(inviteToken ? 'Accept invite' : 'Sign in');
   const navigate = useNavigate();
   const { login, setAuth } = useAuth();
   const [email, setEmail] = useState('');

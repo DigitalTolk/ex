@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -152,14 +153,35 @@ func (s *dataMessageStore) DeleteMessage(_ context.Context, parentID, msgID stri
 	delete(s.messages, parentID+"#"+msgID)
 	return nil
 }
-func (s *dataMessageStore) ListMessages(_ context.Context, parentID string, _ string, _ int) ([]*model.Message, bool, error) {
+func (s *dataMessageStore) ListMessages(_ context.Context, parentID string, before string, limit int) ([]*model.Message, bool, error) {
 	var result []*model.Message
 	for _, msg := range s.messages {
 		if msg.ParentID == parentID {
 			result = append(result, msg)
 		}
 	}
-	return result, false, nil
+	// Sort newest-first by ID (ULIDs sort lexicographically by time).
+	sort.Slice(result, func(i, j int) bool { return result[i].ID > result[j].ID })
+	if before != "" {
+		idx := -1
+		for i, m := range result {
+			if m.ID == before {
+				idx = i
+				break
+			}
+		}
+		if idx >= 0 {
+			result = result[idx+1:]
+		}
+	}
+	if limit <= 0 {
+		return result, false, nil
+	}
+	hasMore := len(result) > limit
+	if hasMore {
+		result = result[:limit]
+	}
+	return result, hasMore, nil
 }
 
 type channelHandlerEnv struct {
@@ -1068,6 +1090,70 @@ func TestChannelHandlerFull_ListMessages(t *testing.T) {
 	}
 	if resp["items"] == nil {
 		t.Error("expected items in response")
+	}
+}
+
+func TestChannelHandlerFull_ListMessages_Pagination(t *testing.T) {
+	env := setupChannelHandlerFull(t)
+	env.memberships.memberships["ch-pg#u"] = &model.ChannelMembership{
+		ChannelID: "ch-pg", UserID: "u", Role: model.ChannelRoleMember,
+	}
+	// Three messages, descending IDs (newest first by ULID convention).
+	for _, id := range []string{"01-c", "01-b", "01-a"} {
+		env.messages.messages["ch-pg#"+id] = &model.Message{
+			ID: id, ParentID: "ch-pg", AuthorID: "u", Body: id,
+		}
+	}
+	user := &model.User{ID: "u", Email: "u@test.com", SystemRole: model.SystemRoleMember}
+	token := makeTokenForUser(env.jwtMgr, user)
+	handler := middleware.Auth(env.jwtMgr)(http.HandlerFunc(env.handler.ListMessages))
+
+	// First page (limit=2): expect items + hasMore=true + nextCursor pointing
+	// at the oldest message in this page.
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/channels/ch-pg/messages?limit=2", nil)
+	req.SetPathValue("id", "ch-pg")
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var p1 struct {
+		Items      []model.Message `json:"items"`
+		HasMore    bool            `json:"hasMore"`
+		NextCursor string          `json:"nextCursor"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &p1); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !p1.HasMore {
+		t.Errorf("hasMore = false, want true")
+	}
+	if p1.NextCursor == "" {
+		t.Errorf("nextCursor missing on a paginated response")
+	}
+
+	// Second page using the cursor must skip the items already returned.
+	req2 := httptest.NewRequest(http.MethodGet, "/api/v1/channels/ch-pg/messages?limit=2&cursor="+p1.NextCursor, nil)
+	req2.SetPathValue("id", "ch-pg")
+	req2.Header.Set("Authorization", "Bearer "+token)
+	rec2 := httptest.NewRecorder()
+	handler.ServeHTTP(rec2, req2)
+	var p2 struct {
+		Items      []model.Message `json:"items"`
+		HasMore    bool            `json:"hasMore"`
+		NextCursor string          `json:"nextCursor"`
+	}
+	if err := json.Unmarshal(rec2.Body.Bytes(), &p2); err != nil {
+		t.Fatalf("decode page 2: %v", err)
+	}
+	for _, m := range p2.Items {
+		for _, p1m := range p1.Items {
+			if m.ID == p1m.ID {
+				t.Errorf("page 2 returned a message already on page 1: %q", m.ID)
+			}
+		}
 	}
 }
 

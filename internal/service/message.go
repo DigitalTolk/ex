@@ -330,6 +330,11 @@ type FileEntry struct {
 // reverse-chronological order (newest first). The frontend hydrates the
 // Attachment records via the existing batch endpoint.
 //
+// Re-shares of the same physical file collapse to one row keyed on the
+// AttachmentID — the AttachmentService dedupes uploads by SHA-256, so
+// the same content always resolves to the same ID, and the user only
+// sees the latest message that referenced it.
+//
 // Like ListPinned, this walks recent messages — small workspaces only.
 // At larger scale this would move to a dedicated index of attachments
 // per parent.
@@ -341,19 +346,26 @@ func (s *MessageService) ListFiles(ctx context.Context, userID, parentID, parent
 	if err != nil {
 		return nil, fmt.Errorf("message: list files: %w", err)
 	}
-	files := make([]*FileEntry, 0)
+	latest := make(map[string]*FileEntry)
 	for _, m := range msgs {
 		for _, aid := range m.AttachmentIDs {
 			if aid == "" {
 				continue
 			}
-			files = append(files, &FileEntry{
+			if cur, ok := latest[aid]; ok && cur.CreatedAt.After(m.CreatedAt) {
+				continue
+			}
+			latest[aid] = &FileEntry{
 				AttachmentID: aid,
 				MessageID:    m.ID,
 				AuthorID:     m.AuthorID,
 				CreatedAt:    m.CreatedAt,
-			})
+			}
 		}
+	}
+	files := make([]*FileEntry, 0, len(latest))
+	for _, f := range latest {
+		files = append(files, f)
 	}
 	sort.Slice(files, func(i, j int) bool {
 		return files[i].CreatedAt.After(files[j].CreatedAt)

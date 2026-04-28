@@ -369,10 +369,10 @@ func (h *ChannelHandler) ListMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	before := queryParam(r, "before", "")
+	cursor := queryParam(r, "cursor", "")
 	limit := queryInt(r, "limit", 50)
 
-	msgs, hasMore, err := h.messageSvc.List(r.Context(), userID, id, service.ParentChannel, before, limit)
+	msgs, hasMore, err := h.messageSvc.List(r.Context(), userID, id, service.ParentChannel, cursor, limit)
 	if err != nil {
 		writeError(w, http.StatusForbidden, "list_error", err.Error())
 		return
@@ -382,9 +382,17 @@ func (h *ChannelHandler) ListMessages(w http.ResponseWriter, r *http.Request) {
 		msgs = []*model.Message{}
 	}
 
+	// nextCursor is the ID of the oldest message in this page; the next
+	// `?cursor=…` request reads "messages older than that".
+	var nextCursor string
+	if hasMore && len(msgs) > 0 {
+		nextCursor = msgs[len(msgs)-1].ID
+	}
+
 	writeJSON(w, http.StatusOK, JSON{
-		"items":   msgs,
-		"hasMore": hasMore,
+		"items":      msgs,
+		"hasMore":    hasMore,
+		"nextCursor": nextCursor,
 	})
 }
 

@@ -3,15 +3,21 @@ import { useRef, useState, type ReactNode } from 'react';
 interface MessageDropZoneProps {
   onFiles: (files: File[]) => void;
   disabled?: boolean;
+  // Layout classes for the wrapper. Defaults to the chat-column shape
+  // (flex-1 + min-h-0) used by ChannelView / ConversationView; thread
+  // contexts that aren't growing flex children pass `relative` only.
+  className?: string;
   children: ReactNode;
 }
+
+const DEFAULT_CLASSNAME = 'relative flex flex-1 flex-col min-h-0';
 
 // Wraps a chat surface (channel/dm/group) so files dropped anywhere
 // inside route through the active MessageInput's upload pipeline.
 // Tracks drag depth via a counter — onDragLeave fires whenever the
 // pointer crosses any descendant boundary, so a single boolean would
 // flicker the overlay constantly while moving over child elements.
-export function MessageDropZone({ onFiles, disabled, children }: MessageDropZoneProps) {
+export function MessageDropZone({ onFiles, disabled, className, children }: MessageDropZoneProps) {
   const depth = useRef(0);
   const [over, setOver] = useState(false);
 
@@ -31,7 +37,7 @@ export function MessageDropZone({ onFiles, disabled, children }: MessageDropZone
 
   return (
     <div
-      className="relative flex flex-1 flex-col min-h-0"
+      className={className ?? DEFAULT_CLASSNAME}
       onDragEnter={(e) => {
         if (disabled || !hasFiles(e)) return;
         depth.current += 1;

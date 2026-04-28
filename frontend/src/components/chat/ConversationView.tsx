@@ -23,7 +23,34 @@ import { useNotifications } from '@/context/NotificationContext';
 import { markThreadSeen } from '@/hooks/useThreads';
 import { collectMessageUserIDs } from '@/lib/message-users';
 import { useSidePanels } from '@/hooks/useSidePanels';
+import { useDocumentTitle } from '@/hooks/useDocumentTitle';
+import type { Conversation } from '@/types';
 import type { UserMapEntry } from './MessageList';
+
+// Resolves a human-readable label for the conversation header, document
+// title, and intro card. Returns null when the conversation isn't
+// loaded yet so the document title falls through to the bare app name
+// instead of a flash of "Direct Message".
+function deriveConversationTitle(
+  conv: Conversation | undefined,
+  selfID: string | undefined,
+  userMap: Record<string, UserMapEntry>,
+): string | null {
+  if (!conv) return null;
+  if (conv.type === 'dm') {
+    const otherID = conv.participantIDs?.find((pid) => pid !== selfID);
+    if (otherID) return userMap[otherID]?.displayName ?? conv.name ?? 'Direct Message';
+    return userMap[selfID ?? '']?.displayName ?? conv.name ?? 'Direct Message';
+  }
+  if (conv.type === 'group') {
+    const others = (conv.participantIDs ?? [])
+      .filter((pid) => pid !== selfID)
+      .map((pid) => userMap[pid]?.displayName)
+      .filter(Boolean) as string[];
+    if (others.length > 0) return others.join(', ');
+  }
+  return conv.name || 'Direct Message';
+}
 
 export function ConversationView() {
   const { id } = useParams<{ id: string }>();
@@ -106,6 +133,8 @@ export function ConversationView() {
     return m;
   }, [user, usersData, online]);
 
+  useDocumentTitle(deriveConversationTitle(conversation, user?.id, userMap));
+
   if (!id) {
     return (
       <div className="flex flex-1 items-center justify-center text-muted-foreground">
@@ -114,34 +143,14 @@ export function ConversationView() {
     );
   }
 
-  // Derive title from conversation type and participant names
-  let title = conversation?.name || 'Direct Message';
+  const title = deriveConversationTitle(conversation, user?.id, userMap) ?? 'Direct Message';
   let dmOtherUserAvatar: string | undefined;
-
   if (conversation?.type === 'dm') {
     const otherID = conversation.participantIDs?.find((pid) => pid !== user?.id);
     if (otherID) {
-      // DM with someone else — use their name once the user batch loads.
-      if (userMap[otherID]) {
-        title = userMap[otherID].displayName;
-        dmOtherUserAvatar = userMap[otherID].avatarURL;
-      }
+      dmOtherUserAvatar = userMap[otherID]?.avatarURL;
     } else if (user) {
-      // Self-DM (notes-to-self) — the only participant is the current
-      // user. Show their own display name + avatar instead of the
-      // generic "Direct Message" fallback.
-      title = user.displayName;
       dmOtherUserAvatar = user.avatarURL;
-    }
-  } else if (conversation?.type === 'group') {
-    const others = (conversation.participantIDs ?? [])
-      .filter((pid) => pid !== user?.id)
-      .map((pid) => userMap[pid]?.displayName)
-      .filter(Boolean) as string[];
-    if (others.length > 0) {
-      title = others.join(', ');
-    } else if (conversation?.name) {
-      title = conversation.name;
     }
   }
 

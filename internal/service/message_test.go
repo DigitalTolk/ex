@@ -600,6 +600,31 @@ func TestMessageService_ListFiles_NotMemberRejected(t *testing.T) {
 	}
 }
 
+func TestMessageService_ListFiles_DedupesByAttachmentID(t *testing.T) {
+	svc, messages, memberships, _, _ := setupMessageService()
+	memberships.memberships["ch1#u-1"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u-1", Role: model.ChannelRoleMember}
+	now := time.Now()
+	// Same physical attachment shared in three messages — only the
+	// newest one should appear in the file browser.
+	messages.messages["ch1#m-1"] = &model.Message{ID: "m-1", ParentID: "ch1", AuthorID: "u-1", AttachmentIDs: []string{"a-1"}, CreatedAt: now.Add(-3 * time.Hour)}
+	messages.messages["ch1#m-2"] = &model.Message{ID: "m-2", ParentID: "ch1", AuthorID: "u-2", AttachmentIDs: []string{"a-1"}, CreatedAt: now.Add(-1 * time.Hour)}
+	messages.messages["ch1#m-3"] = &model.Message{ID: "m-3", ParentID: "ch1", AuthorID: "u-3", AttachmentIDs: []string{"a-1"}, CreatedAt: now.Add(-2 * time.Hour)}
+
+	files, err := svc.ListFiles(context.Background(), "u-1", "ch1", ParentChannel)
+	if err != nil {
+		t.Fatalf("ListFiles: %v", err)
+	}
+	if len(files) != 1 {
+		t.Fatalf("expected 1 deduped file, got %d", len(files))
+	}
+	if files[0].MessageID != "m-2" {
+		t.Errorf("expected newest message m-2, got %q", files[0].MessageID)
+	}
+	if files[0].AuthorID != "u-2" {
+		t.Errorf("expected newest author u-2, got %q", files[0].AuthorID)
+	}
+}
+
 func TestMessageService_SetPinned_NotMemberRejected(t *testing.T) {
 	svc, messages, _, _, _ := setupMessageService()
 	ctx := context.Background()

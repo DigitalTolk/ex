@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { Globe, Search, MessageSquare } from 'lucide-react';
 import { PageContainer } from '@/components/layout/PageContainer';
 import { Button } from '@/components/ui/button';
@@ -29,6 +30,7 @@ function capitalize(s: string): string {
 }
 
 export default function DirectoriesPage() {
+  useDocumentTitle('Directory');
   const [tab, setTab] = useState<Tab>('channels');
   const { user } = useAuth();
   const isAdmin = user?.systemRole === 'admin';
@@ -365,7 +367,7 @@ function MembersTab({ isAdmin, currentUserId }: MembersTabProps) {
                     >
                       Manage
                     </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end">
+                    <DropdownMenuContent align="end" className="w-52">
                       <DropdownMenuItem
                         onClick={() => changeRole(u.id, 'admin')}
                         disabled={u.systemRole === 'admin' || u.systemRole === 'guest' || u.authProvider === 'guest'}

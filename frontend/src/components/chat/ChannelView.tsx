@@ -26,6 +26,7 @@ import { apiFetch } from '@/lib/api';
 import { useUsersBatch } from '@/hooks/useUsersBatch';
 import { collectMessageUserIDs } from '@/lib/message-users';
 import { useSidePanels } from '@/hooks/useSidePanels';
+import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import type { UserMapEntry } from './MessageList';
 
 export function ChannelView() {
@@ -52,6 +53,7 @@ export function ChannelView() {
   const showFiles = panels.isActive('files');
   const { data: channel } = useChannelBySlug(slug);
   const { data: members } = useChannelMembers(channel?.id);
+  useDocumentTitle(channel ? `#${channel.name}` : null);
   const {
     data,
     hasNextPage,

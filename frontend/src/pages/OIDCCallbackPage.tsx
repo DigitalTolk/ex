@@ -3,9 +3,11 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '@/context/AuthContext';
 import { setAccessToken, apiFetch } from '@/lib/api';
 import { GENERAL_CHANNEL_SLUG } from '@/lib/roles';
+import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import type { User } from '@/types';
 
 export default function OIDCCallbackPage() {
+  useDocumentTitle('Signing in…');
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const { setAuth } = useAuth();
