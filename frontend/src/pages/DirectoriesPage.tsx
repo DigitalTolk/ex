@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Hash, Search, MessageSquare } from 'lucide-react';
+import { Globe, Search, MessageSquare } from 'lucide-react';
 import { PageContainer } from '@/components/layout/PageContainer';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -134,7 +134,7 @@ function ChannelsTab() {
                 className="flex items-center gap-3 rounded-lg border p-3 hover:bg-muted/50"
               >
                 <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-muted">
-                  <Hash className="h-5 w-5 text-muted-foreground" />
+                  <Globe className="h-5 w-5 text-muted-foreground" />
                 </div>
                 <div className="flex-1 min-w-0">
                   <p className="font-medium truncate">{channel.name}</p>
@@ -276,7 +276,7 @@ function MembersTab({ isAdmin, currentUserId }: MembersTabProps) {
       )}
 
       {isLoading && (
-        <div className="grid gap-3 sm:grid-cols-2">
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {Array.from({ length: 6 }).map((_, i) => (
             <Skeleton key={i} className="h-24 w-full" />
           ))}
@@ -293,7 +293,7 @@ function MembersTab({ isAdmin, currentUserId }: MembersTabProps) {
         </p>
       )}
 
-      <div className="grid gap-3 sm:grid-cols-2">
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
         {!isLoading && users.map((u) => {
           const online = isOnline(u.id);
           const isSelf = u.id === currentUserId;

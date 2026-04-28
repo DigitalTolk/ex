@@ -184,4 +184,45 @@ describe('WysiwygEditor — mention integration', () => {
     expect(span?.getAttribute('data-user-id')).toBe('u-9');
     expect(span?.textContent).toBe('@Bob');
   });
+
+  it('opens the channel popover when the user types ~', async () => {
+    apiFetchMock.mockResolvedValue([
+      { id: 'c1', slug: 'general', name: 'general', type: 'public', archived: false },
+    ]);
+    renderEditor();
+    const editor = screen.getByLabelText('Message input');
+    act(() => {
+      typeInto(editor, '~');
+    });
+    await waitFor(() => expect(screen.getByTestId('channel-popup')).toBeInTheDocument());
+  });
+
+  it('inserts a channel mention as a contenteditable=false pill on Enter', async () => {
+    apiFetchMock.mockResolvedValue([
+      { id: 'c1', slug: 'general', name: 'general', type: 'public', archived: false },
+    ]);
+    const onChange = vi.fn();
+    renderEditor('', onChange);
+    const editor = screen.getByLabelText('Message input');
+    act(() => {
+      typeInto(editor, '~gen');
+    });
+    await waitFor(() => expect(screen.getByTestId('channel-popup')).toBeInTheDocument());
+
+    fireEvent.keyDown(window, { key: 'Enter' });
+
+    const span = editor.querySelector('span.channel-mention');
+    expect(span?.getAttribute('data-channel-id')).toBe('c1');
+    expect(span?.textContent).toBe('~general');
+    const lastCall = onChange.mock.calls[onChange.mock.calls.length - 1][0];
+    expect(lastCall).toContain('~[c1|general]');
+  });
+
+  it('hydrates an initial body with ~[id|slug] into a channel pill', () => {
+    renderEditor('check ~[c-1|general]');
+    const editor = screen.getByLabelText('Message input');
+    const span = editor.querySelector('span.channel-mention');
+    expect(span?.getAttribute('data-channel-id')).toBe('c-1');
+    expect(span?.textContent).toBe('~general');
+  });
 });

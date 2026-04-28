@@ -316,6 +316,51 @@ func (s *MessageService) ListPinned(ctx context.Context, userID, parentID, paren
 	return pinned, nil
 }
 
+// FileEntry is the per-attachment record returned by ListFiles. It
+// captures who shared the file and when, plus the routing info the
+// client needs to deep-link back into the originating message.
+type FileEntry struct {
+	AttachmentID string    `json:"attachmentID"`
+	MessageID    string    `json:"messageID"`
+	AuthorID     string    `json:"authorID"`
+	CreatedAt    time.Time `json:"createdAt"`
+}
+
+// ListFiles returns every attachment shared in the parent in
+// reverse-chronological order (newest first). The frontend hydrates the
+// Attachment records via the existing batch endpoint.
+//
+// Like ListPinned, this walks recent messages — small workspaces only.
+// At larger scale this would move to a dedicated index of attachments
+// per parent.
+func (s *MessageService) ListFiles(ctx context.Context, userID, parentID, parentType string) ([]*FileEntry, error) {
+	if err := s.checkAccess(ctx, userID, parentID, parentType); err != nil {
+		return nil, err
+	}
+	msgs, _, err := s.messages.ListMessages(ctx, parentID, "", 1000)
+	if err != nil {
+		return nil, fmt.Errorf("message: list files: %w", err)
+	}
+	files := make([]*FileEntry, 0)
+	for _, m := range msgs {
+		for _, aid := range m.AttachmentIDs {
+			if aid == "" {
+				continue
+			}
+			files = append(files, &FileEntry{
+				AttachmentID: aid,
+				MessageID:    m.ID,
+				AuthorID:     m.AuthorID,
+				CreatedAt:    m.CreatedAt,
+			})
+		}
+	}
+	sort.Slice(files, func(i, j int) bool {
+		return files[i].CreatedAt.After(files[j].CreatedAt)
+	})
+	return files, nil
+}
+
 // List returns messages for a parent with cursor-based pagination.
 // It returns the messages, a boolean indicating whether there are more
 // results, and any error.

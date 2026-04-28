@@ -1,6 +1,7 @@
 import { useState } from 'react';
-import { Hash, Lock, Users, ChevronDown, LogOut, Archive, Pencil, Bell, BellOff, Pin } from 'lucide-react';
+import { Users, ChevronDown, LogOut, Archive, Pencil, Bell, BellOff, Pin, Paperclip } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import { ChannelIcon } from '@/components/ChannelIcon';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { getInitials } from '@/lib/format';
@@ -42,6 +43,8 @@ interface HeaderProps {
   onToggleMute?: () => void;
   onPinnedClick?: () => void;
   pinnedActive?: boolean;
+  onFilesClick?: () => void;
+  filesActive?: boolean;
 }
 
 export function Header({
@@ -62,9 +65,10 @@ export function Header({
   onToggleMute,
   onPinnedClick,
   pinnedActive,
+  onFilesClick,
+  filesActive,
 }: HeaderProps) {
   const displayTitle = channel?.name ?? title ?? '';
-  const isPrivate = channel?.type === 'private';
 
   const [isEditingDesc, setIsEditingDesc] = useState(false);
   const [descDraft, setDescDraft] = useState('');
@@ -76,11 +80,7 @@ export function Header({
         {channel ? (
           <DropdownMenu>
             <DropdownMenuTrigger className="flex items-center gap-1 hover:bg-muted/50 rounded-md px-1 -ml-1">
-              {isPrivate ? (
-                <Lock className="h-5 w-5 text-muted-foreground" aria-label="Private channel" />
-              ) : (
-                <Hash className="h-5 w-5 text-muted-foreground" aria-label="Public channel" />
-              )}
+              <ChannelIcon type={channel.type} className="h-5 w-5 text-muted-foreground" />
               <h1 className="text-lg font-semibold">{displayTitle}</h1>
               <ChevronDown className="h-4 w-4 text-muted-foreground" />
             </DropdownMenuTrigger>
@@ -188,6 +188,20 @@ export function Header({
             }
           >
             <Pin className="h-4 w-4" />
+          </button>
+        )}
+        {onFilesClick && (
+          <button
+            onClick={onFilesClick}
+            aria-label="View shared files"
+            aria-pressed={filesActive}
+            data-testid="files-toggle"
+            className={
+              'flex h-7 w-7 items-center justify-center rounded-md hover:bg-muted ' +
+              (filesActive ? 'bg-muted text-foreground' : 'text-muted-foreground')
+            }
+          >
+            <Paperclip className="h-4 w-4" />
           </button>
         )}
         {memberCount !== undefined && (

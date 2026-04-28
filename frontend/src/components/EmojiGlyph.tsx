@@ -13,9 +13,9 @@ export function EmojiGlyph({ emoji, customMap, size = 'sm', className = '' }: Em
   // 'lg' is sized at −2px from text-2xl to match the picker grid's
   // visual rhythm; 'xl' is the hero size used in tooltips and intros.
   const imgCls =
-    size === 'xl' ? 'h-10 w-10' : size === 'lg' ? 'h-[22px] w-[22px]' : 'h-3.5 w-3.5';
+    size === 'xl' ? 'h-16 w-16' : size === 'lg' ? 'h-[22px] w-[22px]' : 'h-3.5 w-3.5';
   const textCls =
-    size === 'xl' ? 'text-[40px]' : size === 'lg' ? 'text-[22px]' : 'text-sm';
+    size === 'xl' ? 'text-[64px]' : size === 'lg' ? 'text-[22px]' : 'text-sm';
 
   if (emoji.startsWith(':') && emoji.endsWith(':') && emoji.length > 2) {
     const name = emoji.slice(1, -1);

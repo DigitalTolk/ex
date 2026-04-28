@@ -1,5 +1,6 @@
 import { NavLink } from 'react-router-dom';
-import { Hash, Lock, Star, BellOff, MoreVertical } from 'lucide-react';
+import { Star, BellOff, MoreVertical } from 'lucide-react';
+import { ChannelIcon } from '@/components/ChannelIcon';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -52,11 +53,7 @@ export function ChannelRow({ channel, hasUnread, onClose }: Props) {
           }`
         }
       >
-        {channel.channelType === 'private' ? (
-          <Lock className="h-4 w-4 shrink-0" aria-hidden="true" />
-        ) : (
-          <Hash className="h-4 w-4 shrink-0" aria-hidden="true" />
-        )}
+        <ChannelIcon type={channel.channelType} className="h-4 w-4 shrink-0" ariaLabel="" />
         <span className={`truncate ${channel.muted ? 'text-gray-500' : ''}`}>
           {channel.channelName}
         </span>

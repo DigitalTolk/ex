@@ -1472,3 +1472,43 @@ func TestChannelHandler_ListMessages_Forbidden(t *testing.T) {
 		t.Errorf("status = %d, want %d", rec.Code, http.StatusForbidden)
 	}
 }
+
+func TestChannelHandlerFull_ListFiles(t *testing.T) {
+	env := setupChannelHandlerFull(t)
+	user := &model.User{ID: "u-files", Email: "f@test.com", SystemRole: model.SystemRoleMember}
+	token := makeTokenForUser(env.jwtMgr, user)
+
+	env.memberships.memberships["ch-files#u-files"] = &model.ChannelMembership{
+		ChannelID: "ch-files", UserID: "u-files", Role: model.ChannelRoleMember,
+	}
+	now := time.Now()
+	env.messages.messages["ch-files#m-1"] = &model.Message{
+		ID: "m-1", ParentID: "ch-files", AuthorID: "u-files",
+		AttachmentIDs: []string{"a-1", "a-2"}, CreatedAt: now.Add(-time.Hour),
+	}
+	env.messages.messages["ch-files#m-2"] = &model.Message{
+		ID: "m-2", ParentID: "ch-files", AuthorID: "u-files",
+		AttachmentIDs: []string{"a-3"}, CreatedAt: now,
+	}
+
+	handler := middleware.Auth(env.jwtMgr)(http.HandlerFunc(env.handler.ListFiles))
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/channels/ch-files/files", nil)
+	req.SetPathValue("id", "ch-files")
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	var got []service.FileEntry
+	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(got) != 3 {
+		t.Errorf("expected 3 files, got %d", len(got))
+	}
+	if got[0].AttachmentID != "a-3" {
+		t.Errorf("expected newest first; got %q", got[0].AttachmentID)
+	}
+}

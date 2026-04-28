@@ -66,4 +66,12 @@ describe('renderMarkdown — mentions', () => {
     // The plain link still renders as an anchor.
     expect(screen.getByRole('link', { name: 'docs' })).toBeInTheDocument();
   });
+
+  it('renders ~[id|slug] as a clickable channel pill linking to /channel/<slug>', () => {
+    render(<>{renderMarkdown('see ~[c-1|general] for details')}</>);
+    const pill = screen.getByTestId('channel-mention-pill');
+    expect(pill).toHaveTextContent('~general');
+    expect(pill.getAttribute('href')).toBe('/channel/general');
+    expect(pill.getAttribute('data-channel-id')).toBe('c-1');
+  });
 });

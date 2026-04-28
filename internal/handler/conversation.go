@@ -346,6 +346,26 @@ func (h *ConversationHandler) ListPinned(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, pinned)
 }
 
+// ListFiles returns every attachment ever shared in the conversation,
+// newest first.
+func (h *ConversationHandler) ListFiles(w http.ResponseWriter, r *http.Request) {
+	userID := middleware.UserIDFromContext(r.Context())
+	id := pathParam(r, "id")
+	if id == "" {
+		writeError(w, http.StatusBadRequest, "missing_id", "conversation ID is required")
+		return
+	}
+	files, err := h.messageSvc.ListFiles(r.Context(), userID, id, service.ParentConversation)
+	if err != nil {
+		writeError(w, http.StatusForbidden, "list_files_error", err.Error())
+		return
+	}
+	if files == nil {
+		files = []*service.FileEntry{}
+	}
+	writeJSON(w, http.StatusOK, files)
+}
+
 // DeleteMessage removes a message from a conversation.
 func (h *ConversationHandler) DeleteMessage(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserIDFromContext(r.Context())

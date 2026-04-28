@@ -3,18 +3,15 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 
-// __BUILD_VERSION__ is baked into the bundle so the running app can detect
-// when the server has been deployed with a newer build. CI exports
-// VITE_BUILD_VERSION (defaulting to git short-sha or tag) before `npm run
-// build`; locally the value falls back to "dev".
-const BUILD_VERSION = process.env.VITE_BUILD_VERSION || 'dev';
+// The build version is derived at runtime from the SHA-256 of the served
+// index.html (Vite already cache-busts asset filenames into it, so any
+// source change yields a different document hash). The server injects
+// `<meta name="app-version">` into the served HTML and exposes the same
+// hash via /api/v1/version — no Vite-side env var to keep in sync.
 
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react(), tailwindcss()],
-  define: {
-    __BUILD_VERSION__: JSON.stringify(BUILD_VERSION),
-  },
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),

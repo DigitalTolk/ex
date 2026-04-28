@@ -13,17 +13,14 @@ import (
 )
 
 // TestSpaHandler_ServesIndexHTML verifies that the SPA handler serves index.html
-// for unknown paths (client-side routing fallback).
+// for unknown paths (client-side routing fallback) and injects the version meta.
 func TestSpaHandler_ServesIndexHTML(t *testing.T) {
 	memFS := fstest.MapFS{
-		"index.html": &fstest.MapFile{Data: []byte("<html>app</html>")},
+		"index.html":     &fstest.MapFile{Data: []byte("<html><head><title>app</title></head></html>")},
 		"assets/main.js": &fstest.MapFile{Data: []byte("console.log('ok')")},
 	}
 
-	spa := &spaHandler{
-		fs:         http.FS(memFS),
-		fileServer: http.FileServer(http.FS(memFS)),
-	}
+	spa := newSPAHandler(memFS, "abc123")
 
 	tests := []struct {
 		name       string
@@ -31,9 +28,9 @@ func TestSpaHandler_ServesIndexHTML(t *testing.T) {
 		wantStatus int
 		wantBody   string
 	}{
-		{"root serves index", "/", http.StatusOK, "<html>app</html>"},
+		{"root serves index with injected meta", "/", http.StatusOK, `<meta name="app-version" content="abc123">`},
 		{"static file served directly", "/assets/main.js", http.StatusOK, "console.log('ok')"},
-		{"unknown path falls back to index", "/some/route", http.StatusOK, ""},
+		{"unknown path falls back to index", "/some/route", http.StatusOK, `<meta name="app-version" content="abc123">`},
 	}
 
 	for _, tt := range tests {
@@ -59,10 +56,7 @@ func TestSpaHandler_APIRoutesReturn404(t *testing.T) {
 		"index.html": &fstest.MapFile{Data: []byte("<html>app</html>")},
 	}
 
-	spa := &spaHandler{
-		fs:         http.FS(memFS),
-		fileServer: http.FileServer(http.FS(memFS)),
-	}
+	spa := newSPAHandler(memFS, "v1")
 
 	paths := []string{"/api/v1/users", "/api/v1/channels", "/auth/login"}
 	for _, path := range paths {
@@ -87,7 +81,7 @@ func TestNewRouterWithFrontendFS(t *testing.T) {
 	var frontendFS fs.FS = memFS
 
 	jwtMgr := setupJWTManager()
-	router := NewRouter(&AuthHandler{}, &UserHandler{}, &ChannelHandler{}, &ConversationHandler{}, &WSHandler{}, nil, nil, nil, nil, nil, nil, nil, nil, jwtMgr, frontendFS, "*")
+	router := NewRouter(&AuthHandler{}, &UserHandler{}, &ChannelHandler{}, &ConversationHandler{}, &WSHandler{}, nil, nil, nil, nil, nil, nil, nil, nil, jwtMgr, frontendFS, "test", "*")
 
 	// SPA route should return index.html.
 	req := httptest.NewRequest(http.MethodGet, "/some-spa-route", nil)

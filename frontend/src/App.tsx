@@ -91,8 +91,15 @@ export default function App() {
                 <NotificationProvider>
                   <TypingProvider>
                     <TooltipProvider>
-                      <UpdateBanner />
-                      <AppRoutes />
+                      {/* h-dvh + flex-col viewport constraint so the
+                          UpdateBanner sits as a normal block above the
+                          app and never has to overlay scrolling content. */}
+                      <div className="flex h-dvh flex-col">
+                        <UpdateBanner />
+                        <div className="min-h-0 flex-1">
+                          <AppRoutes />
+                        </div>
+                      </div>
                       <Toaster position="top-right" richColors />
                     </TooltipProvider>
                   </TypingProvider>

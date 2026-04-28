@@ -1,5 +1,5 @@
 import { useNavigate } from 'react-router-dom';
-import { Hash } from 'lucide-react';
+import { Globe } from 'lucide-react';
 import {
   Dialog,
   DialogContent,
@@ -67,7 +67,7 @@ export function ChannelBrowser({ open, onOpenChange }: ChannelBrowserProps) {
                     key={channel.id}
                     className="flex items-center gap-3 rounded-md p-2 hover:bg-muted/50"
                   >
-                    <Hash className="h-5 w-5 text-muted-foreground shrink-0" />
+                    <Globe className="h-5 w-5 text-muted-foreground shrink-0" />
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-medium truncate">
                         {channel.name}

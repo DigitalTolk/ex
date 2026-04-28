@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Hash, MessageSquare } from 'lucide-react';
+import { Globe, MessageSquare } from 'lucide-react';
 import { MessageItem } from '@/components/chat/MessageItem';
 import { MessageInput } from '@/components/chat/MessageInput';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -100,7 +100,7 @@ export function ThreadCard({ summary, title, deepLink, currentUserId }: ThreadCa
           opens the thread in its parent view. */}
       <header className="flex items-center gap-2 border-b px-4 py-2.5">
         {summary.parentType === 'channel' ? (
-          <Hash className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
+          <Globe className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
         ) : (
           <MessageSquare className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
         )}

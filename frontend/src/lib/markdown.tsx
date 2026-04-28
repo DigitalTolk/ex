@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { shortcodeToUnicode } from './emoji-shortcodes';
-import { USER_MENTION_RE, GROUP_MENTION_RE } from './mention-syntax';
+import { USER_MENTION_RE, GROUP_MENTION_RE, CHANNEL_MENTION_RE } from './mention-syntax';
 
 export interface RenderOpts {
   emojiMap?: Record<string, string>;
@@ -68,6 +68,24 @@ function findInline(src: string, opts: RenderOpts | undefined, keyPrefix: string
       return opts.renderUserMention(userId, name, isSelf, pill);
     }
     return pill;
+  });
+
+  // channel mention: ~[CHANNEL_ID|slug] → clickable pill that navigates.
+  // Channels are addressed by slug in URLs but the ID survives renames so
+  // we route by ID and let the route resolver redirect.
+  tryMatch(CHANNEL_MENTION_RE, (m) => {
+    const slug = m[2].trim();
+    return (
+      <a
+        key={`${keyPrefix}-mc-${m.index}`}
+        href={`/channel/${slug}`}
+        data-testid="channel-mention-pill"
+        data-channel-id={m[1].trim()}
+        className={MENTION_PILL_BASE + MENTION_PILL_OTHER}
+      >
+        ~{slug}
+      </a>
+    );
   });
 
   tryMatch(GROUP_MENTION_RE, (m) => {
