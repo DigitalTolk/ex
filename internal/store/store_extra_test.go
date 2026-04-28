@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -331,6 +332,56 @@ func TestEmojiStore_List(t *testing.T) {
 	}
 	if len(all) < 3 {
 		t.Errorf("expected at least 3 emojis, got %d", len(all))
+	}
+}
+
+// TestEmojiStore_List_PaginatesAcrossDDBPages verifies List doesn't
+// silently drop emojis when DynamoDB returns more than one Query
+// page. We force pagination by creating enough rows that a single
+// Query response will be split — the bug manifested in production as
+// reactions rendering as text because the catalog returned without
+// the matching shortcode. Setting the test ExclusiveStartKey-style
+// pagination directly is brittle; the pragmatic check is to insert a
+// large catalog and assert all rows come back.
+func TestEmojiStore_List_PaginatesAcrossDDBPages(t *testing.T) {
+	db := setupDynamoDB(t)
+	s := NewEmojiStore(db)
+	ctx := context.Background()
+
+	const total = 250
+	for i := 0; i < total; i++ {
+		// Long padded body so each item is several KB, pushing the
+		// total comfortably beyond DDB's per-page response cap when
+		// repeated across the catalog.
+		e := makeEmoji(fmt.Sprintf("paginated-emoji-%04d", i))
+		e.ImageURL = fmt.Sprintf("https://example.test/%s/%s", e.Name,
+			strings.Repeat("x", 4096))
+		if err := s.Create(ctx, e); err != nil {
+			t.Fatalf("Create %d: %v", i, err)
+		}
+	}
+
+	all, err := s.List(ctx)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	got := 0
+	seen := make(map[string]bool, len(all))
+	for _, e := range all {
+		if strings.HasPrefix(e.Name, "paginated-emoji-") {
+			got++
+			seen[e.Name] = true
+		}
+	}
+	if got != total {
+		t.Errorf("List returned %d paginated emojis, want %d", got, total)
+	}
+	for i := 0; i < total; i++ {
+		name := fmt.Sprintf("paginated-emoji-%04d", i)
+		if !seen[name] {
+			t.Errorf("emoji %q missing from List result — pagination dropped it", name)
+			break
+		}
 	}
 }
 
