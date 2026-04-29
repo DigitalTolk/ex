@@ -1347,6 +1347,202 @@ describe('MessageList', () => {
       }
     });
 
+    it('preserves the reader\'s visible message when the scroller width changes (regression: closing the thread panel reflowed and dragged to the latest message)', () => {
+      // The browser's overflow-anchor: auto doesn't reliably handle
+      // scroller width changes — when the right panel closes, the
+      // main column widens, content re-wraps with shorter messages,
+      // scrollHeight drops, and if the reader was past the new max
+      // scrollTop the browser clamps them down. Manual anchoring:
+      // remember the top-visible message before the reflow, then
+      // adjust scrollTop so its post-reflow viewport offset matches.
+      let resizeCallback: (() => void) | null = null;
+      const origRO = globalThis.ResizeObserver;
+      globalThis.ResizeObserver = class {
+        cb: () => void;
+        constructor(cb: () => void) { this.cb = cb; resizeCallback = cb; }
+        observe() {}
+        disconnect() { resizeCallback = null; }
+        unobserve() {}
+      } as unknown as typeof ResizeObserver;
+      try {
+        const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+        const Tree = (
+          <QueryClientProvider client={qc}>
+            <BrowserRouter>
+              <MessageList
+                {...defaultProps}
+                pages={[{ items: [
+                  makeMessage({ id: 'm-3', authorID: 'user-2', body: 'three' }),
+                  makeMessage({ id: 'm-2', authorID: 'user-2', body: 'two' }),
+                  makeMessage({ id: 'm-1', authorID: 'user-2', body: 'one' }),
+                ] }]}
+              />
+            </BrowserRouter>
+          </QueryClientProvider>
+        );
+        const { container } = render(Tree);
+        const scroller = container.querySelector('div.overflow-y-auto') as HTMLDivElement;
+        Object.defineProperty(scroller, 'clientHeight', { value: 800, configurable: true });
+        Object.defineProperty(scroller, 'scrollHeight', { value: 2400, configurable: true });
+        Object.defineProperty(scroller, 'clientWidth', { value: 600, configurable: true });
+
+        // Reader scrolls to msg-2. Mock its position to be at the
+        // top of viewport offset by 0px in the pre-reflow layout.
+        const target = document.getElementById('msg-m-2') as HTMLElement;
+        const scrollerRectBefore = { top: 100, bottom: 900 };
+        scroller.getBoundingClientRect = () =>
+          ({ ...scrollerRectBefore } as DOMRect);
+        target.getBoundingClientRect = () =>
+          ({ top: 100, bottom: 200 } as DOMRect);
+        scroller.scrollTop = 1200;
+        scroller.dispatchEvent(new Event('scroll'));
+        // visibleAnchorRef now records msg-m-2 at offset=0.
+
+        // Side panel closes — scroller widens (600 → 1000), content
+        // re-wraps with less wrapping, target message is now at a
+        // SHORTER offset from the inner top because content above
+        // shrank. Without preservation, scrollTop stays 1200 but
+        // target moved up to a NEGATIVE offset — invisible.
+        Object.defineProperty(scroller, 'clientWidth', { value: 1000, configurable: true });
+        Object.defineProperty(scroller, 'scrollHeight', { value: 1800, configurable: true });
+        target.getBoundingClientRect = () =>
+          ({ top: -200, bottom: -100 } as DOMRect);
+        resizeCallback?.();
+        // Adjustment: delta = -300 (currentOffset) - 0 (anchor.offset) = -300.
+        // scrollTop should decrease by 300.
+        expect(scroller.scrollTop).toBe(900);
+      } finally {
+        globalThis.ResizeObserver = origRO;
+      }
+    });
+
+    it('persistent bottom-stick RO does NOT yank to bottom on content shrinkage (regression: closing the thread panel jumped the main list to the latest message)', () => {
+      // Closing a side panel widens the main column → content
+      // re-wraps with less line-wrapping → scrollHeight drops → the
+      // browser clamps scrollTop within reach of the bottom →
+      // useAtBottomRef flips wasAtBottomRef=true on the resulting
+      // scroll event. The bottom-stick RO would then stick to the
+      // new (smaller) bottom, yanking the reader from the older
+      // message they had been reading.
+      let resizeCallback: (() => void) | null = null;
+      const origRO = globalThis.ResizeObserver;
+      globalThis.ResizeObserver = class {
+        cb: () => void;
+        constructor(cb: () => void) { this.cb = cb; resizeCallback = cb; }
+        observe() {}
+        disconnect() { resizeCallback = null; }
+        unobserve() {}
+      } as unknown as typeof ResizeObserver;
+      try {
+        const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+        const Tree = (
+          <QueryClientProvider client={qc}>
+            <BrowserRouter>
+              <MessageList
+                {...defaultProps}
+                pages={[{ items: [makeMessage({ id: 'm-1', authorID: 'user-2' })] }]}
+              />
+            </BrowserRouter>
+          </QueryClientProvider>
+        );
+        const { container } = render(Tree);
+        const scroller = container.querySelector('div.overflow-y-auto') as HTMLDivElement;
+        Object.defineProperty(scroller, 'clientHeight', { value: 800, configurable: true });
+
+        // Reader is at the live tail. Initial mount: scrollHeight is
+        // 2500. The bottom-stick layout effect ran, marked
+        // wasAtBottomRef=true on stick(). RO now installed.
+        Object.defineProperty(scroller, 'scrollHeight', { value: 2500, configurable: true });
+        // Prime the RO's lastScrollHeight by firing once at the
+        // current size — first fire is a no-op for the growth check.
+        resizeCallback?.();
+
+        // Reader scrolls up to read an older message. atBottomRef
+        // flips false via the scroll listener. (Skip dispatching a
+        // real scroll event; just set scrollTop and assert that the
+        // RO doesn't move it on the subsequent shrinkage.)
+        scroller.scrollTop = 800;
+
+        // Side panel closes — main column widens, content re-wraps
+        // with less wrapping, scrollHeight DROPS to 2000.
+        Object.defineProperty(scroller, 'scrollHeight', { value: 2000, configurable: true });
+        resizeCallback?.();
+
+        // Reader's scroll position must be untouched. Without the
+        // growth-only guard, the RO would have stuck to scrollHeight
+        // (2000) — yanking them to the latest of the (newly-shorter)
+        // main list.
+        expect(scroller.scrollTop).toBe(800);
+      } finally {
+        globalThis.ResizeObserver = origRO;
+      }
+    });
+
+    it('persistent bottom-stick RO stays a no-op while in deep-link mode, even if the anchor lands within the at-bottom threshold (regression: thread action bar click yanked to live tail)', () => {
+      // Recent threads (the typical /threads-page deep link) land
+      // near the bottom of the loaded around-window. After
+      // scrollIntoView, useAtBottomRef.update() flips
+      // wasAtBottomRef=true on its mount-time read AND on the
+      // post-scroll event. A later RO fire (from any settling
+      // content) would then yank the reader to the live tail. The
+      // gate keeps the bottom-stick RO a no-op until the reader has
+      // actually moved the scroll themselves.
+      //
+      // useAtBottomRef defaults its ref to TRUE and its mount-time
+      // update() reads the prototype-defined scrollHeight=1000 etc.
+      // below, which computes to "at bottom" (negative distance).
+      // That gives the bottom-stick RO the worst-case input;
+      // verifying scrollTop doesn't move proves the gate is in place.
+      withScrollIntoViewSpy(() => {
+        let bottomStickRO: (() => void) | null = null;
+        const origRO = globalThis.ResizeObserver;
+        globalThis.ResizeObserver = class {
+          cb: () => void;
+          constructor(cb: () => void) {
+            this.cb = cb;
+            // The bottom-stick RO is the FIRST one set up
+            // (declaration order; runs before the anchor effect).
+            if (!bottomStickRO) bottomStickRO = cb;
+          }
+          observe() {}
+          disconnect() {}
+          unobserve() {}
+        } as unknown as typeof ResizeObserver;
+        const heightDesc = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollHeight');
+        const clientDesc = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientHeight');
+        Object.defineProperty(HTMLElement.prototype, 'scrollHeight', {
+          configurable: true,
+          get() { return 1000; },
+        });
+        Object.defineProperty(HTMLElement.prototype, 'clientHeight', {
+          configurable: true,
+          get() { return 1200; },
+        });
+        try {
+          const { container } = renderWithProviders(
+            <MessageList
+              {...defaultProps}
+              pages={[{ items: [makeMessage({ id: 'm-1', body: 'target' })] }]}
+              anchorMsgId="m-1"
+            />,
+          );
+          const scroller = container.querySelector('div.overflow-y-auto') as HTMLDivElement;
+          // wasAtBottomRef is now true (1000 - 0 - 1200 = -200 < 120
+          // → "at bottom"). Simulate content settling — bottom-stick
+          // RO must NOT yank because anchor is set and the user
+          // hasn't scrolled.
+          bottomStickRO?.();
+          expect(scroller.scrollTop).toBe(0);
+        } finally {
+          if (heightDesc) Object.defineProperty(HTMLElement.prototype, 'scrollHeight', heightDesc);
+          else delete (HTMLElement.prototype as unknown as { scrollHeight?: unknown }).scrollHeight;
+          if (clientDesc) Object.defineProperty(HTMLElement.prototype, 'clientHeight', clientDesc);
+          else delete (HTMLElement.prototype as unknown as { clientHeight?: unknown }).clientHeight;
+          globalThis.ResizeObserver = origRO;
+        }
+      });
+    });
+
     it('does NOT auto-scroll to bottom when load-newer fetches a page whose bottom is the user\'s own (regression: jumps to latest while paging through newer messages)', () => {
       // In deep-link mode, scrolling down triggers fetchPreviousPage
       // which APPENDS a newer page. The previous bottom message

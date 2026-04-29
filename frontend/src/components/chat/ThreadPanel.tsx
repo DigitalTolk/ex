@@ -74,6 +74,12 @@ export function ThreadPanel({
   const innerRef = useRef<HTMLDivElement>(null);
   const wasAtBottomRef = useAtBottomRef(scrollRef);
 
+  // userHasScrolledRef is shared with the anchor effect below. Once
+  // the user takes control of the scroll, the bottom-stick RO can
+  // engage even in deep-link mode — but until then it stays a no-op
+  // so an anchor that landed near the bottom doesn't get yanked by
+  // settling avatars / attachments.
+  const userHasScrolledRef = useRef(false);
   // Snap to the bottom on open, follow new replies while at the
   // bottom, and keep re-pinning while async content settles. The
   // ResizeObserver lives for the duration of the open thread (gated
@@ -113,7 +119,15 @@ export function ThreadPanel({
       if (typeof ResizeObserver !== 'undefined') {
         const inner = innerRef.current;
         if (inner) {
+          // See MessageList for the rationale on the growth check
+          // and the deep-link gate.
+          let lastScrollHeight = el.scrollHeight;
           const ro = new ResizeObserver(() => {
+            const height = el.scrollHeight;
+            const grew = height > lastScrollHeight + 0.5;
+            lastScrollHeight = height;
+            if (anchorMsgId && !userHasScrolledRef.current) return;
+            if (!grew) return;
             if (wasAtBottomRef.current) stick();
           });
           ro.observe(inner);
@@ -143,7 +157,6 @@ export function ThreadPanel({
   // MessageList.tsx for the StrictMode/page-fetch invariants this
   // shape preserves.
   const anchorAppliedRef = useRef<string | null>(null);
-  const userHasScrolledRef = useRef(false);
   const followDeadlineRef = useRef<number>(0);
   useLayoutEffect(() => {
     if (!anchorMsgId) {

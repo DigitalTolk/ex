@@ -34,7 +34,7 @@ import type { UserMapEntry } from './MessageList';
 
 export function ChannelView() {
   const { id: slug } = useParams<{ id: string }>();
-  const [searchParams, setSearchParams] = useSearchParams();
+  const [searchParams] = useSearchParams();
   const { user } = useAuth();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -43,30 +43,36 @@ export function ChannelView() {
   const { online } = usePresence();
   const inputRef = useRef<MessageInputHandle>(null);
   const [threadRootID, setThreadRootID] = useState<string | null>(null);
+  // Tracks a URL-driven thread the user has explicitly dismissed in
+  // this view. Closing a thread that came from ?thread= used to
+  // strip the URL — but that flips location.key (navKey), which
+  // re-fires the deep-link anchor effect AND collides with the panel-
+  // removal reflow, dragging the reader to the live tail. Keeping
+  // the URL untouched and using a local override keeps everything
+  // stable. The dismissal is keyed to navKey so it auto-expires the
+  // moment the user navigates anywhere (back/forward, sidebar click,
+  // /threads click, …) — no useEffect/setState needed for that.
+  const [dismissed, setDismissed] = useState<{ navKey?: string; thread: string } | null>(null);
   const panels = useSidePanels<'members' | 'pinned' | 'files'>();
   // Tag panel takes the same right-rail slot as thread/pinned/files.
   // Opening any of those closes a tag, and opening a tag closes them.
   const { activeTag, closeTag } = useTagState();
+  const { data: channel } = useChannelBySlug(slug);
+  const { data: members } = useChannelMembers(channel?.id);
+  useDocumentTitle(channel ? `~${channel.name}` : null);
+  const { mainAnchor, threadAnchor, threadParam, navKey } = useDeepLinkAnchor(channel?.id);
 
-  // Closing a thread (or replacing it with another panel) must also
-  // strip ?thread= from the URL when one is set, so that the URL stops
-  // representing "thread X is open". Otherwise the panel state and the
-  // URL would diverge — refresh would reopen, back/forward would loop.
-  const stripThreadParam = () => {
-    if (!searchParams.get('thread')) return;
-    const next = new URLSearchParams(searchParams);
-    next.delete('thread');
-    setSearchParams(next, { replace: true, preventScrollReset: true });
+  const dismissedThreadParam =
+    dismissed && dismissed.navKey === navKey ? dismissed.thread : null;
+  const dismissThread = () => {
+    setThreadRootID(null);
+    const urlThread = searchParams.get('thread');
+    if (urlThread) setDismissed({ navKey, thread: urlThread });
   };
-  const dismissThread = () => { setThreadRootID(null); stripThreadParam(); };
   const openMembers = () => { dismissThread(); closeTag(); panels.open('members'); };
   const closeMembers = panels.close;
   const openThread = (id: string) => {
     setThreadRootID(id);
-    // Clear any URL-driven thread so this local choice wins
-    // unambiguously (otherwise effectiveThreadRootID would still
-    // resolve to the URL value).
-    stripThreadParam();
     closeTag();
     panels.close();
   };
@@ -76,10 +82,6 @@ export function ChannelView() {
   const showMembers = panels.isActive('members');
   const showPinned = panels.isActive('pinned');
   const showFiles = panels.isActive('files');
-  const { data: channel } = useChannelBySlug(slug);
-  const { data: members } = useChannelMembers(channel?.id);
-  useDocumentTitle(channel ? `~${channel.name}` : null);
-  const { mainAnchor, threadAnchor, threadParam, navKey } = useDeepLinkAnchor(channel?.id);
   const {
     data,
     hasNextPage,
@@ -114,8 +116,9 @@ export function ChannelView() {
   // and reload keep working); local state is only used when the user
   // manually opens a thread by clicking "Reply in thread" on a
   // message. The displayed thread is the local one if set, otherwise
-  // the URL-driven one.
-  const effectiveThreadRootID = threadRootID ?? threadParam ?? null;
+  // the URL-driven one — unless the user has dismissed it.
+  const urlThreadActive = !!threadParam && threadParam !== dismissedThreadParam;
+  const effectiveThreadRootID = threadRootID ?? (urlThreadActive ? threadParam : null) ?? null;
 
   // Mark URL-driven threads as seen exactly once per change.
   useEffect(() => {

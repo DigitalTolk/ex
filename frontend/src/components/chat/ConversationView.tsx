@@ -61,7 +61,7 @@ function deriveConversationTitle(
 
 export function ConversationView() {
   const { id } = useParams<{ id: string }>();
-  const [searchParams, setSearchParams] = useSearchParams();
+  const [searchParams] = useSearchParams();
   const { user } = useAuth();
   const { clearConversationUnread, setActiveConversation } = useUnread();
   const { online } = usePresence();
@@ -97,21 +97,23 @@ export function ConversationView() {
   const panels = useSidePanels<'members' | 'pinned' | 'files'>();
   const { activeTag, closeTag } = useTagState();
 
-  // Closing a thread (or replacing it with another panel) must also
-  // strip ?thread= from the URL when one is set, so the panel state
-  // and URL stay in sync.
-  const stripThreadParam = () => {
-    if (!searchParams.get('thread')) return;
-    const next = new URLSearchParams(searchParams);
-    next.delete('thread');
-    setSearchParams(next, { replace: true, preventScrollReset: true });
+  // Tracks a URL-driven thread the user has dismissed. See
+  // ChannelView for the full rationale — stripping the URL on close
+  // collides with the deep-link anchor effect and yanks scroll.
+  // The dismissal is keyed to the navKey so it auto-expires when
+  // the user navigates anywhere.
+  const [dismissed, setDismissed] = useState<{ navKey?: string; thread: string } | null>(null);
+  const dismissedThreadParam =
+    dismissed && dismissed.navKey === navKey ? dismissed.thread : null;
+  const dismissThread = () => {
+    setThreadRootID(null);
+    const urlThread = searchParams.get('thread');
+    if (urlThread) setDismissed({ navKey, thread: urlThread });
   };
-  const dismissThread = () => { setThreadRootID(null); stripThreadParam(); };
   const openMembers = () => { dismissThread(); closeTag(); panels.open('members'); };
   const closeMembers = panels.close;
   const openThread = (rid: string) => {
     setThreadRootID(rid);
-    stripThreadParam();
     closeTag();
     panels.close();
   };
@@ -127,8 +129,9 @@ export function ConversationView() {
   useEffect(() => setThreadRootID(null), [id]);
 
   // The displayed thread is the local one if set, otherwise the URL-
-  // driven one. URL is the source of truth for deep-linked threads.
-  const effectiveThreadRootID = threadRootID ?? threadParam ?? null;
+  // driven one — unless the user has dismissed it.
+  const urlThreadActive = !!threadParam && threadParam !== dismissedThreadParam;
+  const effectiveThreadRootID = threadRootID ?? (urlThreadActive ? threadParam : null) ?? null;
 
   // Mark URL-driven threads as seen exactly once per change.
   useEffect(() => {

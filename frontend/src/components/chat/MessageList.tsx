@@ -117,6 +117,12 @@ export function MessageList({
   // observer also handles "follow live conversation": when a new
   // message lands at the bottom while the reader is still at the
   // bottom, the height change triggers stick() and the view follows.
+  // userHasScrolledRef is shared with the deep-link anchor effect
+  // below — once the user has taken control of the scroll, follow-
+  // anchor stops, AND the bottom-stick RO is allowed to fire even in
+  // deep-link mode. Declared up here because the bottom-stick effect
+  // needs to reference it from its RO callback.
+  const userHasScrolledRef = useRef(false);
   const stickyBottomDoneRef = useRef(false);
   const stickyROrRef = useRef<ResizeObserver | null>(null);
   useLayoutEffect(() => {
@@ -143,8 +149,8 @@ export function MessageList({
     // Deep-link mode: the anchor effect below controls the initial
     // scroll position. We still install the ResizeObserver so that
     // once the user reaches the live tail (atBottomRef flips true),
-    // settling content keeps following along — the gating ensures
-    // the observer is a no-op until then.
+    // settling content keeps following along — the gating below
+    // ensures the observer is a no-op until then.
     if (!anchorMsgId) {
       stick();
     }
@@ -152,7 +158,61 @@ export function MessageList({
     if (typeof ResizeObserver === 'undefined') return;
     const inner = innerRef.current;
     if (!inner) return;
+    // The bottom-stick RO is meant to follow new content arriving at
+    // the bottom (a message lands, an avatar finishes loading). It
+    // is NOT meant to fire on:
+    //   1. Shrinkage (closing a side panel re-wraps content with
+    //      less line-wrapping → scrollHeight drops). The browser
+    //      may then clamp scrollTop and useAtBottomRef.update() can
+    //      read "at bottom" on the post-clamp scroll event, after
+    //      which sticking would yank the reader away from the older
+    //      message they had been reading.
+    //   2. Width changes (panel toggle, window resize). These reflow
+    //      the content but no new content arrived; the reader's
+    //      position should be preserved.
+    let lastScrollHeight = el.scrollHeight;
+    let lastClientWidth = el.clientWidth;
     const ro = new ResizeObserver(() => {
+      const width = el.clientWidth;
+      const height = el.scrollHeight;
+      const widthChanged = width !== lastClientWidth;
+      const grew = height > lastScrollHeight + 0.5;
+      lastClientWidth = width;
+      lastScrollHeight = height;
+      // Width changed = the scroller itself was resized (panel
+      // toggle, window resize). Restore the reader's visible anchor
+      // so the browser's clamp-on-shrink doesn't drag them to the
+      // live tail and content reflow doesn't shift their reading
+      // position. Skip this in deep-link mode (the anchor effect
+      // controls position) and when the user is following the live
+      // tail (sticking handles them).
+      if (widthChanged) {
+        const anchor = visibleAnchorRef.current;
+        if (
+          anchor &&
+          !(anchorMsgId && !userHasScrolledRef.current) &&
+          !wasAtBottomRef.current
+        ) {
+          const msg = document.getElementById(`msg-${anchor.id}`);
+          if (msg) {
+            const scrollerTop = el.getBoundingClientRect().top;
+            const currentOffset = msg.getBoundingClientRect().top - scrollerTop;
+            const delta = currentOffset - anchor.offset;
+            if (Math.abs(delta) > 0.5) {
+              el.scrollTop += delta;
+            }
+          }
+        }
+        return;
+      }
+      // In deep-link mode, hold off bottom-stick until the user has
+      // intentionally moved the scroll. Otherwise an anchor that
+      // happens to land within 120px of the bottom (recent threads
+      // are common deep-link targets) gets read as "at bottom" by
+      // useAtBottomRef on the post-scrollIntoView scroll event, and
+      // the next content resize yanks the reader to the live tail.
+      if (anchorMsgId && !userHasScrolledRef.current) return;
+      if (!grew) return;
       if (wasAtBottomRef.current) stick();
     });
     ro.observe(inner);
@@ -167,6 +227,39 @@ export function MessageList({
     },
     [],
   );
+
+  // Scroll anchoring: track the top-most visible message on every
+  // scroll. The bottom-stick RO above will use this to preserve
+  // reading position when the scroller's WIDTH changes (panel toggle,
+  // window resize) — the browser's overflow-anchor: auto doesn't
+  // reliably handle that case and can clamp scrollTop, dragging the
+  // reader to the live tail.
+  const visibleAnchorRef = useRef<{ id: string; offset: number } | null>(null);
+  const messagesEmpty = allMessages.length === 0;
+  useEffect(() => {
+    const scroller = scrollRef.current;
+    const inner = innerRef.current;
+    if (!scroller || !inner) return;
+    const captureTopVisible = () => {
+      const scrollerTop = scroller.getBoundingClientRect().top;
+      const messages = inner.querySelectorAll<HTMLElement>('[data-message-id]');
+      for (const m of messages) {
+        const rect = m.getBoundingClientRect();
+        if (rect.bottom > scrollerTop) {
+          visibleAnchorRef.current = {
+            id: m.dataset.messageId ?? '',
+            offset: rect.top - scrollerTop,
+          };
+          return;
+        }
+      }
+      visibleAnchorRef.current = null;
+    };
+    const onScroll = () => captureTopVisible();
+    scroller.addEventListener('scroll', onScroll, { passive: true });
+    captureTopVisible();
+    return () => scroller.removeEventListener('scroll', onScroll);
+  }, [messagesEmpty]);
 
   // Deep-link landing: when anchorMsgId is set, scroll the matching
   // message into view exactly once per (parent, anchor) and apply a
@@ -197,7 +290,6 @@ export function MessageList({
   //    regardless. Survives StrictMode's cleanup/re-setup so the
   //    1.5s window is wall-clock, not per-mount.
   const anchorAppliedRef = useRef<string | null>(null);
-  const userHasScrolledRef = useRef(false);
   const followDeadlineRef = useRef<number>(0);
   useLayoutEffect(() => {
     if (!anchorMsgId) {
