@@ -11,6 +11,8 @@ package search
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,6 +20,10 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
 )
 
 // Client talks to Elasticsearch. Construction is intentionally
@@ -41,6 +47,99 @@ func NewClient(baseURL string) *Client {
 		http:    &http.Client{Timeout: 30 * time.Second},
 	}
 }
+
+// AWSSigning configures SigV4 signing for managed AWS OpenSearch.
+// Service is "es" for OpenSearch Service domains and "aoss" for
+// OpenSearch Serverless collections. Credentials are loaded from the
+// SDK's default chain (env vars → IRSA → EC2/ECS task role → shared
+// config) so callers running on AWS just supply the region.
+type AWSSigning struct {
+	Region  string
+	Service string
+}
+
+// NewAWSClient returns a Client whose http transport signs every
+// request with SigV4 against the configured AWS region/service. Same
+// nil-on-empty-URL contract as NewClient. service defaults to "es".
+func NewAWSClient(ctx context.Context, baseURL string, signing AWSSigning) (*Client, error) {
+	if strings.TrimSpace(baseURL) == "" {
+		return nil, nil
+	}
+	service := signing.Service
+	if service == "" {
+		service = "es"
+	}
+	awsCfg, err := awsconfig.LoadDefaultConfig(ctx, awsconfig.WithRegion(signing.Region))
+	if err != nil {
+		return nil, fmt.Errorf("search: load aws config: %w", err)
+	}
+	httpClient := &http.Client{
+		Timeout: 30 * time.Second,
+		Transport: &sigV4Transport{
+			inner:   http.DefaultTransport,
+			signer:  v4.NewSigner(),
+			creds:   awsCfg.Credentials,
+			region:  signing.Region,
+			service: service,
+		},
+	}
+	return &Client{
+		baseURL: strings.TrimRight(baseURL, "/"),
+		http:    httpClient,
+	}, nil
+}
+
+// sigV4Transport signs each outbound request with AWS SigV4 before
+// delegating to inner. Signing requires the SHA256 of the body, so we
+// drain it once, hash, and reseat a Reader of the same bytes for the
+// downstream RoundTripper to send.
+type sigV4Transport struct {
+	inner   http.RoundTripper
+	signer  *v4.Signer
+	creds   aws.CredentialsProvider
+	region  string
+	service string
+}
+
+func (t *sigV4Transport) RoundTrip(req *http.Request) (*http.Response, error) {
+	payloadHash, err := hashAndResetBody(req)
+	if err != nil {
+		return nil, fmt.Errorf("search: sigv4 hash body: %w", err)
+	}
+	// Setting the header explicitly (rather than letting the signer
+	// fold the hash only into the canonical request) makes the wire
+	// shape match what AWS expects for managed OpenSearch — and gives
+	// operators something to grep for in the proxy logs.
+	req.Header.Set("X-Amz-Content-Sha256", payloadHash)
+	creds, err := t.creds.Retrieve(req.Context())
+	if err != nil {
+		return nil, fmt.Errorf("search: sigv4 retrieve credentials: %w", err)
+	}
+	if err := t.signer.SignHTTP(req.Context(), creds, req, payloadHash, t.service, t.region, time.Now()); err != nil {
+		return nil, fmt.Errorf("search: sigv4 sign: %w", err)
+	}
+	return t.inner.RoundTrip(req)
+}
+
+func hashAndResetBody(req *http.Request) (string, error) {
+	if req.Body == nil {
+		return emptyPayloadHash, nil
+	}
+	b, err := io.ReadAll(req.Body)
+	if err != nil {
+		return "", err
+	}
+	_ = req.Body.Close()
+	req.Body = io.NopCloser(bytes.NewReader(b))
+	req.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(b)), nil }
+	req.ContentLength = int64(len(b))
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:]), nil
+}
+
+// SigV4 of an empty body uses the SHA256 of the empty string, which
+// is constant — pre-computing it skips an allocation on every GET.
+const emptyPayloadHash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 
 // EnsureIndices creates each indexed-resource mapping if missing.
 // Existing indices are left as-is; reindexing is a separate flow. Safe

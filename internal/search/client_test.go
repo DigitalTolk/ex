@@ -8,6 +8,11 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
+	"github.com/aws/aws-sdk-go-v2/credentials"
 )
 
 func TestClient_Search_DecodesAggregationBuckets(t *testing.T) {
@@ -455,5 +460,154 @@ func TestClient_Search_4xxReturnsError(t *testing.T) {
 	c := NewClient(srv.URL)
 	if _, err := c.Search(context.Background(), IndexUsers, nil); err == nil {
 		t.Fatal("expected error from 400")
+	}
+}
+
+func TestNewAWSClient_EmptyURLReturnsNil(t *testing.T) {
+	c, err := NewAWSClient(context.Background(), "", AWSSigning{Region: "us-east-1"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if c != nil {
+		t.Fatal("empty URL must return nil client (opt-out parity with NewClient)")
+	}
+}
+
+// awsSignedClient builds a Client whose transport is the SigV4 signer
+// pointed at srv, using static test credentials so the test is fully
+// hermetic (no env-var lookup, no IMDS calls).
+func awsSignedClient(srv *httptest.Server, service string) *Client {
+	creds := credentials.NewStaticCredentialsProvider("AKIATESTACCESS", "secretkeydonotuse", "")
+	return &Client{
+		baseURL: strings.TrimRight(srv.URL, "/"),
+		http: &http.Client{
+			Timeout: 5 * time.Second,
+			Transport: &sigV4Transport{
+				inner:   http.DefaultTransport,
+				signer:  v4.NewSigner(),
+				creds:   aws.CredentialsProvider(creds),
+				region:  "us-east-1",
+				service: service,
+			},
+		},
+	}
+}
+
+func TestSigV4Transport_AddsAuthorizationAndPayloadHeaders(t *testing.T) {
+	var captured *http.Request
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		captured = r.Clone(context.Background())
+		_, _ = w.Write([]byte(`{"hits":{"total":{"value":0},"hits":[]}}`))
+	}))
+	defer srv.Close()
+
+	c := awsSignedClient(srv, "es")
+	if _, err := c.Search(context.Background(), IndexUsers, map[string]any{"query": map[string]any{"match_all": map[string]any{}}}); err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+
+	if captured == nil {
+		t.Fatal("server did not receive the request")
+	}
+	authz := captured.Header.Get("Authorization")
+	if !strings.HasPrefix(authz, "AWS4-HMAC-SHA256 ") {
+		t.Errorf("Authorization = %q, want AWS4-HMAC-SHA256 prefix", authz)
+	}
+	if !strings.Contains(authz, "Credential=AKIATESTACCESS/") {
+		t.Errorf("Authorization missing credential scope: %q", authz)
+	}
+	if !strings.Contains(authz, "/us-east-1/es/aws4_request") {
+		t.Errorf("Authorization missing region/service scope: %q", authz)
+	}
+	if captured.Header.Get("X-Amz-Date") == "" {
+		t.Error("X-Amz-Date header missing")
+	}
+	if got := captured.Header.Get("X-Amz-Content-Sha256"); got == "" {
+		t.Error("X-Amz-Content-Sha256 header missing — body must be hashed for SigV4")
+	}
+}
+
+func TestSigV4Transport_GETUsesEmptyPayloadHash(t *testing.T) {
+	// SigV4 of GET (no body) hashes the empty string. Confirm we send
+	// that exact constant — drift here would invalidate every signed
+	// HEAD/GET call (EnsureIndices, GetDoc, IndexStats, ClusterHealth).
+	const wantEmptyHash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+	var got string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.Header.Get("X-Amz-Content-Sha256")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+
+	c := awsSignedClient(srv, "es")
+	if _, err := c.ClusterHealth(context.Background()); err != nil {
+		t.Fatalf("ClusterHealth: %v", err)
+	}
+	if got != wantEmptyHash {
+		t.Errorf("X-Amz-Content-Sha256 = %q, want %q", got, wantEmptyHash)
+	}
+}
+
+func TestSigV4Transport_BodyArrivesIntactAfterSigning(t *testing.T) {
+	// Signing reads the body to compute the SHA256, then must reseat
+	// it — otherwise the downstream RoundTripper sends a request with
+	// no body and the cluster rejects with a 400.
+	var receivedBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		receivedBody = string(b)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+
+	c := awsSignedClient(srv, "es")
+	doc := map[string]any{"id": "u-1", "displayName": "Alice"}
+	if err := c.IndexDoc(context.Background(), IndexUsers, "u-1", doc); err != nil {
+		t.Fatalf("IndexDoc: %v", err)
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(receivedBody), &parsed); err != nil {
+		t.Fatalf("body not valid JSON %q: %v", receivedBody, err)
+	}
+	if parsed["id"] != "u-1" || parsed["displayName"] != "Alice" {
+		t.Errorf("body = %+v, want id=u-1 displayName=Alice", parsed)
+	}
+}
+
+func TestSigV4Transport_DefaultsServiceToES(t *testing.T) {
+	c, err := NewAWSClient(context.Background(), "https://example.test", AWSSigning{Region: "us-east-1"})
+	if err != nil {
+		t.Fatalf("NewAWSClient: %v", err)
+	}
+	if c == nil {
+		t.Fatal("expected client, got nil")
+	}
+	transport, ok := c.http.Transport.(*sigV4Transport)
+	if !ok {
+		t.Fatalf("transport = %T, want *sigV4Transport", c.http.Transport)
+	}
+	if transport.service != "es" {
+		t.Errorf("default service = %q, want es", transport.service)
+	}
+	if transport.region != "us-east-1" {
+		t.Errorf("region = %q", transport.region)
+	}
+}
+
+func TestSigV4Transport_HonoursAOSSService(t *testing.T) {
+	var got string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.Header.Get("Authorization")
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+
+	c := awsSignedClient(srv, "aoss")
+	if _, err := c.ClusterHealth(context.Background()); err != nil {
+		t.Fatalf("ClusterHealth: %v", err)
+	}
+	if !strings.Contains(got, "/us-east-1/aoss/aws4_request") {
+		t.Errorf("Authorization scope = %q, want aoss service in scope", got)
 	}
 }

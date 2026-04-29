@@ -164,8 +164,23 @@ func main() {
 
 	// ------------------------------------------------------------------ Search
 	// NewClient returns nil for an empty URL; downstream wiring degrades
-	// to no-ops when the search package isn't configured.
-	searchClient := search.NewClient(cfg.OpenSearchURL)
+	// to no-ops when the search package isn't configured. Setting
+	// OPENSEARCH_AWS_REGION switches to a SigV4-signing client backed by
+	// the SDK's default credential chain — that's the IAM-role path on
+	// AWS-hosted deployments (managed OpenSearch / Serverless).
+	var searchClient *search.Client
+	if cfg.OpenSearchAWSRegion != "" {
+		searchClient, err = search.NewAWSClient(ctx, cfg.OpenSearchURL, search.AWSSigning{
+			Region:  cfg.OpenSearchAWSRegion,
+			Service: cfg.OpenSearchAWSService,
+		})
+		if err != nil {
+			slog.Error("failed to init AWS-signed OpenSearch client", "error", err)
+			os.Exit(1)
+		}
+	} else {
+		searchClient = search.NewClient(cfg.OpenSearchURL)
+	}
 	if searchClient != nil {
 		if err := searchClient.EnsureIndices(ctx); err != nil {
 			slog.Warn("search: ensure indices failed", "error", err)
