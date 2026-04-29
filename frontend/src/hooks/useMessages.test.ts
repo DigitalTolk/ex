@@ -135,7 +135,7 @@ describe('useChannelMessages', () => {
     expect(url).toContain('after=msg-anchor');
   });
 
-  it('re-mount after fetchPreviousPage refetches the around-page too (regression: v5 stale-refetch on mount only walks pages[0]→getNextPageParam; pages[0] is the newer-window after a fetchPreviousPage, so the older around-window never re-runs and the cache decays toward the newer-page-only state the user hit on the /search → DM hop)', async () => {
+  it('re-mount with a deep-link anchor re-fires ?around= even after a prior fetchPreviousPage (v5 stale-refetch regression)', async () => {
     // Mirrors the user-reported flow:
     //   1. /conversation/X#msg-Y hard-refresh fires ?around=Y → 33 items
     //   2. user scrolls, fetchPreviousPage fires ?after=newestID → 2 newer items

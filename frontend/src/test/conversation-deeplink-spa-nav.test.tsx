@@ -45,13 +45,10 @@ vi.mock('@/context/UnreadContext', () => ({
   useUnread: () => ({
     unreadChannels: new Set(),
     unreadConversations: new Set(),
-    hiddenConversations: new Set(),
     markChannelUnread: vi.fn(),
     markConversationUnread: vi.fn(),
     clearChannelUnread: vi.fn(),
     clearConversationUnread: vi.fn(),
-    hideConversation: vi.fn(),
-    unhideConversation: vi.fn(),
     setActiveChannel: vi.fn(),
     setActiveConversation: vi.fn(),
     isActiveChannel: vi.fn(() => false),
@@ -241,17 +238,8 @@ describe('ConversationView — SPA navigation with deep-link anchor', () => {
     expect(secondWaveCalls.some((u) => u.includes('around=b'))).toBe(true);
   });
 
-  it('renders top-level messages from the around-window even when the conversation has many thread replies (regression: DM deep-link from /search showed only 2 messages because thread replies dominated the window and were hidden by the main list)', async () => {
-    // The user's DM has ~35 messages; most are thread replies. Before
-    // the backend-side filter, ListAround returned every message in
-    // the SK range (top-level + replies). The frontend then hid all
-    // the replies and the user landed on a list with 1–2 visible rows.
-    // The fix is to filter on the server so the around-window's items
-    // are guaranteed top-level — the page-level limit then maps 1:1
-    // onto what the user actually sees.
+  it('renders every top-level message from the around-window even when thread replies dominate the payload (replies belong to the thread panel, not the main list)', async () => {
     const aroundItems = [];
-    // Anchor + 5 top-level "neighbours", interleaved with 27 replies.
-    // Mirrors the user's actual data: 33 returned, ~6 visible.
     for (let i = 5; i >= 1; i--) {
       aroundItems.push({
         id: `reply-newer-${i}`,

@@ -289,13 +289,10 @@ function FilterChip({ label, onClear }: { label: string; onClear: () => void }) 
 }
 
 function FileHitRow({ hit, query }: { hit: SearchHit; query: string }) {
-  // ex_files (v2) docs carry: filename, parentIds (string[]),
-  // messageIds (string[]), parentMessageIds (string[], parallel to
-  // messageIds — empty string for top-level, thread-root ID for
-  // replies), createdAt. Pick the first allowed parent + its
-  // matching messageId/parentMessageID so the click deep-links into
-  // the right context. Legacy v1 docs without parentMessageIds get
-  // an undefined threadRoot → top-level link, the previous behavior.
+  // ex_files docs carry parallel parentIds / messageIds /
+  // parentMessageIds slices — pick the first allowed parent and use
+  // the matching slice entries so the click deep-links into the
+  // right context (top-level message vs. thread reply).
   const filename = String(hit._source.filename ?? '');
   const parentIds = (hit._source.parentIds as string[] | undefined) ?? [];
   const messageIds = (hit._source.messageIds as string[] | undefined) ?? [];

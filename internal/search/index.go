@@ -10,10 +10,7 @@ const (
 	IndexUsers    = "ex_users"
 	IndexChannels = "ex_channels"
 	IndexMessages = "ex_messages"
-	// v2: filename uses the `simple` analyzer (so "chat-icon" matches
-	// "chat-icon.png"); files docs include parentMessageIds parallel
-	// to messageIds so file hits in thread replies link correctly.
-	IndexFiles = "ex_files_v2"
+	IndexFiles    = "ex_files"
 )
 
 // indexMappings is the mapping JSON used at index-creation time. The
