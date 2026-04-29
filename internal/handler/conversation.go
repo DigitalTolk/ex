@@ -155,38 +155,15 @@ func (h *ConversationHandler) Get(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, conv)
 }
 
-// ListMessages returns messages for a conversation with cursor-based pagination.
+// ListMessages returns messages for a conversation. Supports
+// ?cursor= (older), ?after= (newer), and ?around=<msgId> (window).
 func (h *ConversationHandler) ListMessages(w http.ResponseWriter, r *http.Request) {
-	userID := middleware.UserIDFromContext(r.Context())
 	id := pathParam(r, "id")
 	if id == "" {
 		writeError(w, http.StatusBadRequest, "missing_id", "conversation ID is required")
 		return
 	}
-
-	cursor := queryParam(r, "cursor", "")
-	limit := queryInt(r, "limit", 50)
-
-	msgs, hasMore, err := h.messageSvc.List(r.Context(), userID, id, service.ParentConversation, cursor, limit)
-	if err != nil {
-		writeError(w, http.StatusForbidden, "list_error", err.Error())
-		return
-	}
-
-	if msgs == nil {
-		msgs = []*model.Message{}
-	}
-
-	var nextCursor string
-	if hasMore && len(msgs) > 0 {
-		nextCursor = msgs[len(msgs)-1].ID
-	}
-
-	writeJSON(w, http.StatusOK, JSON{
-		"items":      msgs,
-		"hasMore":    hasMore,
-		"nextCursor": nextCursor,
-	})
+	listMessages(w, r, service.ParentConversation, id, h.messageSvc)
 }
 
 // SendMessage creates a new message in a conversation.

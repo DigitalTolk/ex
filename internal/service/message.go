@@ -43,6 +43,11 @@ type MessageNotifier interface {
 	NotifyForMessage(ctx context.Context, msg *model.Message, parentType string)
 }
 
+type MessageIndexer interface {
+	IndexMessage(ctx context.Context, msg *model.Message, parentType string) error
+	DeleteMessage(ctx context.Context, id string) error
+}
+
 // MessageService handles sending, editing, deleting, and listing messages.
 type MessageService struct {
 	messages      MessageStore
@@ -53,6 +58,7 @@ type MessageService struct {
 	activator     ConversationActivator
 	attachments   AttachmentRefManager
 	notifier      MessageNotifier
+	indexer       MessageIndexer
 }
 
 // NewMessageService creates a MessageService with the given dependencies.
@@ -83,6 +89,33 @@ func (s *MessageService) SetAttachmentManager(a AttachmentRefManager) { s.attach
 // SetNotifier wires the notification dispatcher. Optional — when nil, no
 // alerts are produced and message sends still complete normally.
 func (s *MessageService) SetNotifier(n MessageNotifier) { s.notifier = n }
+
+func (s *MessageService) SetIndexer(i MessageIndexer) { s.indexer = i }
+
+// indexMessage / deleteFromIndex dispatch on a detached goroutine so a
+// slow OpenSearch never adds to user-perceived send latency. Failures
+// are logged; the admin reindex is the recovery path.
+func (s *MessageService) indexMessage(ctx context.Context, m *model.Message, parentType string) {
+	if s.indexer == nil || m == nil {
+		return
+	}
+	go func() {
+		if err := s.indexer.IndexMessage(context.WithoutCancel(ctx), m, parentType); err != nil {
+			slog.Warn("search index message failed", "id", m.ID, "error", err)
+		}
+	}()
+}
+
+func (s *MessageService) deleteFromIndex(ctx context.Context, id string) {
+	if s.indexer == nil {
+		return
+	}
+	go func() {
+		if err := s.indexer.DeleteMessage(context.WithoutCancel(ctx), id); err != nil {
+			slog.Warn("search delete message failed", "id", id, "error", err)
+		}
+	}()
+}
 
 // Send creates a new message in the given parent (channel or conversation).
 // If parentMessageID is non-empty, the message is a thread reply: the root
@@ -141,6 +174,8 @@ func (s *MessageService) Send(ctx context.Context, userID, parentID, parentType,
 	if s.notifier != nil {
 		s.notifier.NotifyForMessage(ctx, msg, parentType)
 	}
+
+	s.indexMessage(ctx, msg, parentType)
 
 	// Mentioning a user who isn't yet in the channel surfaces a system
 	// message inviting whoever can to add them. Channel-only — DMs and
@@ -388,6 +423,35 @@ func (s *MessageService) List(ctx context.Context, userID, parentID, parentType,
 	return msgs, hasMore, nil
 }
 
+// ListAfter returns messages strictly newer than `after`. Used by the
+// frontend's bidirectional paginator when a deep-link anchored the
+// message list mid-history and the user scrolls down toward the live
+// tail.
+func (s *MessageService) ListAfter(ctx context.Context, userID, parentID, parentType, after string, limit int) ([]*model.Message, bool, error) {
+	if err := s.checkAccess(ctx, userID, parentID, parentType); err != nil {
+		return nil, false, err
+	}
+	msgs, hasMore, err := s.messages.ListMessagesAfter(ctx, parentID, after, limit)
+	if err != nil {
+		return nil, false, fmt.Errorf("message: list after: %w", err)
+	}
+	return msgs, hasMore, nil
+}
+
+// ListAround returns a window centered on msgID so a deep-link can
+// load only the messages near the target instead of paging back from
+// the live tail.
+func (s *MessageService) ListAround(ctx context.Context, userID, parentID, parentType, msgID string, before, after int) ([]*model.Message, bool, bool, error) {
+	if err := s.checkAccess(ctx, userID, parentID, parentType); err != nil {
+		return nil, false, false, err
+	}
+	msgs, hasMoreOlder, hasMoreNewer, err := s.messages.ListMessagesAround(ctx, parentID, msgID, before, after)
+	if err != nil {
+		return nil, false, false, fmt.Errorf("message: list around: %w", err)
+	}
+	return msgs, hasMoreOlder, hasMoreNewer, nil
+}
+
 // Edit updates the body and (optionally) the attachment list of an existing
 // message. Only the original author may edit. If attachmentIDs is nil, the
 // existing attachments are preserved; if non-nil (even an empty slice) the
@@ -469,6 +533,8 @@ func (s *MessageService) Edit(ctx context.Context, userID, parentID, parentType,
 
 	s.publishEvent(ctx, parentID, parentType, events.EventMessageEdited, msg)
 
+	s.indexMessage(ctx, msg, parentType)
+
 	return msg, nil
 }
 
@@ -518,6 +584,8 @@ func (s *MessageService) Delete(ctx context.Context, userID, parentID, parentTyp
 		ParentMessageID string `json:"parentMessageID,omitempty"`
 	}{ID: msgID, ParentID: parentID, ParentMessageID: msg.ParentMessageID}
 	s.publishEvent(ctx, parentID, parentType, events.EventMessageDeleted, payload)
+
+	s.deleteFromIndex(ctx, msgID)
 
 	return nil
 }
@@ -574,6 +642,7 @@ func (s *MessageService) ToggleReaction(ctx context.Context, userID, parentID, p
 	}
 
 	s.publishEvent(ctx, parentID, parentType, events.EventMessageEdited, msg)
+	s.indexMessage(ctx, msg, parentType)
 	return msg, nil
 }
 

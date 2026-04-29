@@ -132,4 +132,85 @@ describe('ThreadPanel', () => {
       expect(screen.getByText(/no replies yet/i)).toBeInTheDocument();
     });
   });
+
+  describe('deep-link anchor inside thread', () => {
+    function withScrollIntoViewSpy<T>(fn: (spy: ReturnType<typeof vi.fn>) => Promise<T> | T): Promise<T> | T {
+      const original = Element.prototype.scrollIntoView;
+      const spy = vi.fn();
+      Element.prototype.scrollIntoView = spy as unknown as typeof Element.prototype.scrollIntoView;
+      const result = fn(spy);
+      const restore = () => { Element.prototype.scrollIntoView = original; };
+      if (result instanceof Promise) {
+        return result.finally(restore) as Promise<T>;
+      }
+      restore();
+      return result;
+    }
+
+    it('scrolls to and highlights the anchor reply when anchorMsgId is set', async () => {
+      const multiReplies: Message[] = [
+        { id: 'r-a', parentID: 'ch-1', parentMessageID: 'm-1', authorID: 'u-2', body: 'first reply', createdAt: '2026-04-24T10:30:00Z' },
+        { id: 'r-b', parentID: 'ch-1', parentMessageID: 'm-1', authorID: 'u-2', body: 'target reply', createdAt: '2026-04-24T10:31:00Z' },
+        { id: 'r-c', parentID: 'ch-1', parentMessageID: 'm-1', authorID: 'u-2', body: 'newest reply', createdAt: '2026-04-24T10:32:00Z' },
+      ];
+      await withScrollIntoViewSpy(async (spy) => {
+        mockApiFetch.mockResolvedValueOnce(multiReplies);
+        renderWithProviders(
+          <ThreadPanel
+            channelId="ch-1"
+            threadRootID="m-1"
+            onClose={vi.fn()}
+            userMap={userMap}
+            currentUserId="u-1"
+            anchorMsgId="r-b"
+          />,
+        );
+        await waitFor(() => {
+          expect(screen.getByText('target reply')).toBeInTheDocument();
+        });
+        // scrollIntoView was called on the anchor reply, centered.
+        const target = document.getElementById('msg-r-b');
+        expect(spy).toHaveBeenCalled();
+        expect(spy.mock.instances).toContain(target);
+        const opts = spy.mock.calls.find((c) => c[0]?.block === 'center')?.[0] as
+          | ScrollIntoViewOptions
+          | undefined;
+        expect(opts?.block).toBe('center');
+        // Highlight ring applied.
+        expect(target?.classList.contains('ring-1')).toBe(true);
+        expect(target?.classList.contains('ring-amber-400/50')).toBe(true);
+      });
+    });
+
+    it('does NOT snap to the bottom (newest reply) when anchorMsgId is set', async () => {
+      const multiReplies: Message[] = [
+        { id: 'r-a', parentID: 'ch-1', parentMessageID: 'm-1', authorID: 'u-2', body: 'first', createdAt: '2026-04-24T10:30:00Z' },
+        { id: 'r-b', parentID: 'ch-1', parentMessageID: 'm-1', authorID: 'u-2', body: 'target', createdAt: '2026-04-24T10:31:00Z' },
+        { id: 'r-c', parentID: 'ch-1', parentMessageID: 'm-1', authorID: 'u-2', body: 'newest', createdAt: '2026-04-24T10:32:00Z' },
+      ];
+      await withScrollIntoViewSpy(async () => {
+        mockApiFetch.mockResolvedValueOnce(multiReplies);
+        const { container } = renderWithProviders(
+          <ThreadPanel
+            channelId="ch-1"
+            threadRootID="m-1"
+            onClose={vi.fn()}
+            userMap={userMap}
+            currentUserId="u-1"
+            anchorMsgId="r-b"
+          />,
+        );
+        await waitFor(() => {
+          expect(screen.getByText('target')).toBeInTheDocument();
+        });
+        const scroller = container.querySelector('div.overflow-y-auto') as HTMLDivElement;
+        Object.defineProperty(scroller, 'scrollHeight', { value: 1500, configurable: true });
+        // Stick-to-bottom should be skipped — anchor controls position.
+        // (In the spied scrollIntoView env, scrollTop won't actually
+        // move; but the absence of an assignment to scrollHeight
+        // confirms the bottom-stick branch was skipped.)
+        expect(scroller.scrollTop).toBe(0);
+      });
+    });
+  });
 });

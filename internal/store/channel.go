@@ -21,6 +21,7 @@ type ChannelStore interface {
 	GetBySlug(ctx context.Context, slug string) (*model.Channel, error)
 	Update(ctx context.Context, ch *model.Channel) error
 	ListPublic(ctx context.Context, limit int, lastKey string) ([]*model.Channel, string, error)
+	ListAll(ctx context.Context) ([]*model.Channel, error)
 }
 
 // ChannelStoreImpl implements ChannelStore backed by DynamoDB.
@@ -253,4 +254,46 @@ func (s *ChannelStoreImpl) ListPublic(ctx context.Context, limit int, lastKey st
 	}
 
 	return channels, nextKey, nil
+}
+
+// ListAll walks every channel in the workspace via Scan with a
+// PK-prefix filter. Used only by admin maintenance flows (search
+// reindex, etc.) — the per-user / per-public Query paths cover the
+// hot read paths. Pages through Scan's LastEvaluatedKey so private
+// channels are included regardless of cluster size.
+func (s *ChannelStoreImpl) ListAll(ctx context.Context) ([]*model.Channel, error) {
+	channels := make([]*model.Channel, 0)
+	expr, err := expression.NewBuilder().WithFilter(
+		expression.Name("PK").BeginsWith("CHAN#").And(
+			expression.Name("SK").Equal(expression.Value("META")),
+		),
+	).Build()
+	if err != nil {
+		return nil, fmt.Errorf("store: build channels-scan expression: %w", err)
+	}
+	var startKey map[string]types.AttributeValue
+	for {
+		out, err := s.Client.Scan(ctx, &dynamodb.ScanInput{
+			TableName:                 aws.String(s.Table),
+			FilterExpression:          expr.Filter(),
+			ExpressionAttributeNames:  expr.Names(),
+			ExpressionAttributeValues: expr.Values(),
+			ExclusiveStartKey:         startKey,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("store: scan channels: %w", err)
+		}
+		for _, item := range out.Items {
+			var ci channelItem
+			if err := attributevalue.UnmarshalMap(item, &ci); err != nil {
+				return nil, fmt.Errorf("store: unmarshal channel: %w", err)
+			}
+			channels = append(channels, &ci.Channel)
+		}
+		if len(out.LastEvaluatedKey) == 0 {
+			break
+		}
+		startKey = out.LastEvaluatedKey
+	}
+	return channels, nil
 }

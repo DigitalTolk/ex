@@ -4,7 +4,24 @@ import {
   useQueryClient,
 } from '@tanstack/react-query';
 import { apiFetch } from '@/lib/api';
-import type { Message, PaginatedResponse } from '@/types';
+import type { Message } from '@/types';
+
+export interface MessageWindow {
+  items: Message[];
+  hasMoreOlder: boolean;
+  hasMoreNewer: boolean;
+  oldestID?: string;
+  newestID?: string;
+}
+
+// PageParam encodes which direction (and from which cursor) to fetch.
+// `kind: 'tail'` is the initial latest-first page; `around` seeds a
+// window centred on a deep-link target.
+export type MessagePageParam =
+  | { kind: 'tail' }
+  | { kind: 'older'; cursor: string }
+  | { kind: 'newer'; after: string }
+  | { kind: 'around'; msgId: string; before: number; after: number };
 
 function messagePath(opts: { channelId?: string; conversationId?: string; messageId: string }): string {
   if (opts.channelId) return `/api/v1/channels/${opts.channelId}/messages/${opts.messageId}`;
@@ -12,40 +29,78 @@ function messagePath(opts: { channelId?: string; conversationId?: string; messag
   throw new Error('messagePath: channelId or conversationId is required');
 }
 
-export function useChannelMessages(channelId: string | undefined) {
-  return useInfiniteQuery({
-    queryKey: ['channelMessages', channelId],
-    queryFn: ({ pageParam }) => {
-      const params = new URLSearchParams();
-      if (pageParam) params.set('cursor', pageParam);
+function fetchMessageWindow(basePath: string, p: MessagePageParam): Promise<MessageWindow> {
+  const params = new URLSearchParams();
+  switch (p.kind) {
+    case 'tail':
       params.set('limit', '50');
-      return apiFetch<PaginatedResponse<Message>>(
-        `/api/v1/channels/${channelId}/messages?${params}`,
-      );
-    },
-    initialPageParam: undefined as string | undefined,
-    getNextPageParam: (lastPage) =>
-      lastPage.hasMore ? lastPage.nextCursor : undefined,
-    enabled: !!channelId,
+      break;
+    case 'older':
+      params.set('cursor', p.cursor);
+      params.set('limit', '50');
+      break;
+    case 'newer':
+      params.set('after', p.after);
+      params.set('limit', '50');
+      break;
+    case 'around':
+      params.set('around', p.msgId);
+      params.set('before', String(p.before));
+      params.set('after_count', String(p.after));
+      break;
+  }
+  return apiFetch<MessageWindow>(`${basePath}?${params.toString()}`);
+}
+
+// `anchorMsgId` seeds the initial fetch with a centred window instead
+// of the latest tail (deep-link path).
+function useMessagesInfinite(opts: {
+  scope: 'channel' | 'conversation';
+  id: string | undefined;
+  anchorMsgId?: string;
+}) {
+  const { scope, id, anchorMsgId } = opts;
+  const basePath =
+    scope === 'channel'
+      ? `/api/v1/channels/${id}/messages`
+      : `/api/v1/conversations/${id}/messages`;
+  return useInfiniteQuery({
+    queryKey: [`${scope}Messages`, id, anchorMsgId ?? null],
+    queryFn: ({ pageParam }) => fetchMessageWindow(basePath, pageParam),
+    initialPageParam: anchorMsgId
+      ? ({ kind: 'around', msgId: anchorMsgId, before: 25, after: 25 } as MessagePageParam)
+      : ({ kind: 'tail' } as MessagePageParam),
+    getNextPageParam: (lastPage): MessagePageParam | undefined =>
+      lastPage.hasMoreOlder && lastPage.oldestID
+        ? { kind: 'older', cursor: lastPage.oldestID }
+        : undefined,
+    getPreviousPageParam: (firstPage): MessagePageParam | undefined =>
+      firstPage.hasMoreNewer && firstPage.newestID
+        ? { kind: 'newer', after: firstPage.newestID }
+        : undefined,
+    enabled: !!id,
+    // v5's stale-refetch (mount, WS-driven invalidate) walks forward
+    // from pages[0] via getNextPageParam. After a fetchPreviousPage,
+    // pages[0] is the newer-window — and our after-fetch responses
+    // come back with hasMoreOlder=false, so the walk stops at page 0
+    // and the older around-window stays cached but never re-runs.
+    // Re-mounting the same queryKey then sees that stale shape and
+    // fires only `?after=<newestID>`, leaving the user staring at a
+    // 2-message slice of a 35-message conversation. Wiping anchored
+    // caches on unmount sidesteps the whole walk: each /search → DM
+    // hop starts from initialPageParam and cleanly re-fires
+    // `?around=…`. Tail-mode queries never hit this shape (no
+    // bidirectional pages), so they keep the default 5-minute cache.
+    gcTime: anchorMsgId ? 0 : undefined,
   });
 }
 
-export function useConversationMessages(conversationId: string | undefined) {
-  return useInfiniteQuery({
-    queryKey: ['conversationMessages', conversationId],
-    queryFn: ({ pageParam }) => {
-      const params = new URLSearchParams();
-      if (pageParam) params.set('cursor', pageParam);
-      params.set('limit', '50');
-      return apiFetch<PaginatedResponse<Message>>(
-        `/api/v1/conversations/${conversationId}/messages?${params}`,
-      );
-    },
-    initialPageParam: undefined as string | undefined,
-    getNextPageParam: (lastPage) =>
-      lastPage.hasMore ? lastPage.nextCursor : undefined,
-    enabled: !!conversationId,
-  });
+export function useChannelMessages(channelId: string | undefined, anchorMsgId?: string) {
+  return useMessagesInfinite({ scope: 'channel', id: channelId, anchorMsgId });
+}
+
+export function useConversationMessages(conversationId: string | undefined, anchorMsgId?: string) {
+  return useMessagesInfinite({ scope: 'conversation', id: conversationId, anchorMsgId });
 }
 
 export interface SendMessageInput {

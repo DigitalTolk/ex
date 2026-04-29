@@ -161,17 +161,7 @@ func (h *UserHandler) ListUsers(w http.ResponseWriter, r *http.Request) {
 		if users == nil {
 			users = []*model.User{}
 		}
-		// Return limited fields.
-		result := make([]JSON, 0, len(users))
-		for _, u := range users {
-			result = append(result, JSON{
-				"id":          u.ID,
-				"displayName": u.DisplayName,
-				"email":       u.Email,
-				"avatarURL":   u.AvatarURL,
-			})
-		}
-		writeJSON(w, http.StatusOK, result)
+		writeJSON(w, http.StatusOK, users)
 		return
 	}
 

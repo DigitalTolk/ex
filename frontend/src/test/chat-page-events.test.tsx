@@ -68,6 +68,7 @@ vi.mock('@/context/NotificationContext', () => ({
 
 vi.mock('@/hooks/useChannels', () => ({
   useUserChannels: () => ({ data: [{ channelID: 'ch-1', channelName: 'general', channelType: 'public', role: 1 }] }),
+  useChannelBySlug: () => ({ data: undefined }),
   useCreateChannel: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 

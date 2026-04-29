@@ -184,6 +184,15 @@ func (s *dataMessageStore) ListMessages(_ context.Context, parentID string, befo
 	return result, hasMore, nil
 }
 
+func (s *dataMessageStore) ListMessagesAfter(ctx context.Context, parentID, _ string, limit int) ([]*model.Message, bool, error) {
+	return s.ListMessages(ctx, parentID, "", limit)
+}
+
+func (s *dataMessageStore) ListMessagesAround(ctx context.Context, parentID, _ string, _ int, _ int) ([]*model.Message, bool, bool, error) {
+	msgs, _, err := s.ListMessages(ctx, parentID, "", 0)
+	return msgs, false, false, err
+}
+
 type channelHandlerEnv struct {
 	handler     *ChannelHandler
 	channels    *dataChannelStore
@@ -1120,30 +1129,30 @@ func TestChannelHandlerFull_ListMessages_Pagination(t *testing.T) {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
 	var p1 struct {
-		Items      []model.Message `json:"items"`
-		HasMore    bool            `json:"hasMore"`
-		NextCursor string          `json:"nextCursor"`
+		Items        []model.Message `json:"items"`
+		HasMoreOlder bool            `json:"hasMoreOlder"`
+		OldestID     string          `json:"oldestID"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &p1); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if !p1.HasMore {
-		t.Errorf("hasMore = false, want true")
+	if !p1.HasMoreOlder {
+		t.Errorf("hasMoreOlder = false, want true")
 	}
-	if p1.NextCursor == "" {
-		t.Errorf("nextCursor missing on a paginated response")
+	if p1.OldestID == "" {
+		t.Errorf("oldestID missing on a paginated response")
 	}
 
 	// Second page using the cursor must skip the items already returned.
-	req2 := httptest.NewRequest(http.MethodGet, "/api/v1/channels/ch-pg/messages?limit=2&cursor="+p1.NextCursor, nil)
+	req2 := httptest.NewRequest(http.MethodGet, "/api/v1/channels/ch-pg/messages?limit=2&cursor="+p1.OldestID, nil)
 	req2.SetPathValue("id", "ch-pg")
 	req2.Header.Set("Authorization", "Bearer "+token)
 	rec2 := httptest.NewRecorder()
 	handler.ServeHTTP(rec2, req2)
 	var p2 struct {
-		Items      []model.Message `json:"items"`
-		HasMore    bool            `json:"hasMore"`
-		NextCursor string          `json:"nextCursor"`
+		Items        []model.Message `json:"items"`
+		HasMoreOlder bool            `json:"hasMoreOlder"`
+		OldestID     string          `json:"oldestID"`
 	}
 	if err := json.Unmarshal(rec2.Body.Bytes(), &p2); err != nil {
 		t.Fatalf("decode page 2: %v", err)
@@ -1153,6 +1162,44 @@ func TestChannelHandlerFull_ListMessages_Pagination(t *testing.T) {
 			if m.ID == p1m.ID {
 				t.Errorf("page 2 returned a message already on page 1: %q", m.ID)
 			}
+		}
+	}
+}
+
+func TestChannelHandlerFull_ListMessages_AcceptsAroundAndAfterParams(t *testing.T) {
+	// dataMessageStore returns the full unsorted list for both helpers
+	// (it's a stub), so the assertion focuses on the response shape.
+	env := setupChannelHandlerFull(t)
+	env.memberships.memberships["ch-w#u"] = &model.ChannelMembership{
+		ChannelID: "ch-w", UserID: "u", Role: model.ChannelRoleMember,
+	}
+	for _, id := range []string{"01-a", "01-b", "01-c"} {
+		env.messages.messages["ch-w#"+id] = &model.Message{
+			ID: id, ParentID: "ch-w", AuthorID: "u", Body: id,
+		}
+	}
+	user := &model.User{ID: "u", Email: "u@test.com", SystemRole: model.SystemRoleMember}
+	token := makeTokenForUser(env.jwtMgr, user)
+	handler := middleware.Auth(env.jwtMgr)(http.HandlerFunc(env.handler.ListMessages))
+
+	for _, qs := range []string{"around=01-b&before=1&after_count=1", "after=01-a"} {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/channels/ch-w/messages?"+qs, nil)
+		req.SetPathValue("id", "ch-w")
+		req.Header.Set("Authorization", "Bearer "+token)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+		}
+		var resp map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if _, ok := resp["hasMoreOlder"]; !ok {
+			t.Errorf("response missing hasMoreOlder key: %v", resp)
+		}
+		if _, ok := resp["hasMoreNewer"]; !ok {
+			t.Errorf("response missing hasMoreNewer key: %v", resp)
 		}
 	}
 }

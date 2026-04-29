@@ -38,6 +38,7 @@ type AuthService struct {
 	jwt         JWTProvider
 	oidc        OIDCProvider // may be nil when OIDC is not configured
 	cache       Cache
+	indexer     UserIndexer
 }
 
 // NewAuthService creates an AuthService with the given dependencies.
@@ -68,6 +69,12 @@ func NewAuthService(
 // Called from main wiring after ChannelService is constructed (avoids
 // constructor cycle).
 func (s *AuthService) SetChannelJoiner(j ChannelJoiner) { s.joiner = j }
+
+func (s *AuthService) SetIndexer(i UserIndexer) { s.indexer = i }
+
+func (s *AuthService) indexUser(ctx context.Context, u *model.User) {
+	indexUser(ctx, s.indexer, u)
+}
 
 // HandleOIDCLogin generates a random state string and returns the OIDC
 // provider's authorization URL. The caller is responsible for storing the
@@ -132,6 +139,7 @@ func (s *AuthService) HandleOIDCCallback(ctx context.Context, code, state string
 		if err := s.users.CreateUser(ctx, user); err != nil {
 			return "", "", nil, fmt.Errorf("auth: create user: %w", err)
 		}
+		s.indexUser(ctx, user)
 	} else {
 		// Update profile fields from the identity provider.
 		now := time.Now()
@@ -142,6 +150,7 @@ func (s *AuthService) HandleOIDCCallback(ctx context.Context, code, state string
 		if err := s.users.UpdateUser(ctx, user); err != nil {
 			return "", "", nil, fmt.Errorf("auth: update user: %w", err)
 		}
+		s.indexUser(ctx, user)
 	}
 
 	// Ensure #general exists and the user is a member.
@@ -259,6 +268,7 @@ func (s *AuthService) AcceptInvite(ctx context.Context, token, displayName, pass
 	if err := s.users.CreateUser(ctx, user); err != nil {
 		return "", "", nil, fmt.Errorf("auth: create guest user: %w", err)
 	}
+	s.indexUser(ctx, user)
 
 	// Add the guest to the channels listed on the invite. AutoJoinChannel
 	// publishes member.joined + a system message and is idempotent.

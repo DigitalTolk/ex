@@ -3,6 +3,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { PageContainer } from '@/components/layout/PageContainer';
+import { SearchAdminPanel } from '@/components/admin/SearchAdminPanel';
 import { useAuth } from '@/context/AuthContext';
 import { useUpdateWorkspaceSettings, useWorkspaceSettings } from '@/hooks/useSettings';
 import { isAdmin } from '@/lib/roles';
@@ -117,6 +118,8 @@ export default function AdminPage() {
             )}
           </div>
         </section>
+
+        <SearchAdminPanel />
     </PageContainer>
   );
 }

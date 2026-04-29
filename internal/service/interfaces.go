@@ -57,6 +57,13 @@ type MessageStore interface {
 	UpdateMessage(ctx context.Context, msg *model.Message) error
 	DeleteMessage(ctx context.Context, parentID, msgID string) error
 	ListMessages(ctx context.Context, parentID string, before string, limit int) ([]*model.Message, bool, error)
+	// ListMessagesAfter returns messages strictly newer than the given
+	// cursor, oldest-first within the page but with the same
+	// newest-first ordering as ListMessages overall.
+	ListMessagesAfter(ctx context.Context, parentID, after string, limit int) ([]*model.Message, bool, error)
+	// ListMessagesAround returns a window centered on msgID: up to
+	// `before` older + the target + up to `after` newer, newest-first.
+	ListMessagesAround(ctx context.Context, parentID, msgID string, before, after int) ([]*model.Message, bool, bool, error)
 }
 
 // InviteStore defines persistence operations for invitations.

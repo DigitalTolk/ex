@@ -213,6 +213,48 @@ func TestMessageService_List(t *testing.T) {
 	}
 }
 
+func TestMessageService_ListAround_DelegatesAfterAccessCheck(t *testing.T) {
+	svc, _, memberships, _, _ := setupMessageService()
+	memberships.memberships["ch1#u"] = &model.ChannelMembership{
+		ChannelID: "ch1", UserID: "u", Role: model.ChannelRoleMember,
+	}
+	_, hasMoreOlder, hasMoreNewer, err := svc.ListAround(context.Background(), "u", "ch1", ParentChannel, "anchor", 10, 10)
+	if err != nil {
+		t.Fatalf("ListAround: %v", err)
+	}
+	// mockMessageStore.ListMessagesAround returns both has-mores=false.
+	if hasMoreOlder || hasMoreNewer {
+		t.Errorf("hasMoreOlder=%v hasMoreNewer=%v, want both false from mock", hasMoreOlder, hasMoreNewer)
+	}
+}
+
+func TestMessageService_ListAround_RejectsNonMember(t *testing.T) {
+	svc, _, _, _, _ := setupMessageService()
+	if _, _, _, err := svc.ListAround(context.Background(), "stranger", "ch1", ParentChannel, "anchor", 10, 10); err == nil {
+		t.Fatal("expected access error for non-member")
+	}
+}
+
+func TestMessageService_ListAfter_RejectsNonMember(t *testing.T) {
+	svc, _, _, _, _ := setupMessageService()
+	if _, _, err := svc.ListAfter(context.Background(), "stranger", "ch1", ParentChannel, "cursor", 10); err == nil {
+		t.Fatal("expected access error for non-member")
+	}
+}
+
+func TestMessageService_ListAfter_DelegatesToStore(t *testing.T) {
+	svc, messages, memberships, _, _ := setupMessageService()
+	memberships.memberships["ch1#u"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u", Role: model.ChannelRoleMember}
+	messages.messages["ch1#m1"] = &model.Message{ID: "m1", ParentID: "ch1", AuthorID: "u", Body: "hi"}
+	got, _, err := svc.ListAfter(context.Background(), "u", "ch1", ParentChannel, "cursor", 10)
+	if err != nil {
+		t.Fatalf("ListAfter: %v", err)
+	}
+	if len(got) != 1 || got[0].ID != "m1" {
+		t.Fatalf("got %+v, want [m1]", got)
+	}
+}
+
 func TestMessageService_Edit(t *testing.T) {
 	svc, messages, memberships, _, _ := setupMessageService()
 	ctx := context.Background()

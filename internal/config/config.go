@@ -45,6 +45,18 @@ type Config struct {
 
 	// App
 	BaseURL string
+
+	// OpenSearch — leave empty to disable search features. (The wire
+	// protocol is ES-compatible for the operations we use, so the
+	// underlying client is unchanged from when this was Elasticsearch.)
+	OpenSearchURL string
+	// Set OpenSearchAWSRegion to the AWS region of a managed OpenSearch
+	// domain or Serverless collection to enable SigV4 signing — the
+	// client then authenticates via the SDK's default credential chain
+	// (env vars, IRSA, EC2/ECS task role). Leave empty for self-hosted
+	// OpenSearch / Elasticsearch reachable without AWS auth.
+	OpenSearchAWSRegion  string
+	OpenSearchAWSService string // "es" (default) or "aoss" for Serverless
 }
 
 func Load() (*Config, error) {
@@ -70,7 +82,10 @@ func Load() (*Config, error) {
 		S3AccessKey:      os.Getenv("S3_ACCESS_KEY"),
 		S3SecretKey:      os.Getenv("S3_SECRET_KEY"),
 		S3Region:         envOr("S3_REGION", "us-east-1"),
-		BaseURL:          envOr("BASE_URL", "http://localhost:8080"),
+		BaseURL:              envOr("BASE_URL", "http://localhost:8080"),
+		OpenSearchURL:        os.Getenv("OPENSEARCH_URL"),
+		OpenSearchAWSRegion:  os.Getenv("OPENSEARCH_AWS_REGION"),
+		OpenSearchAWSService: envOr("OPENSEARCH_AWS_SERVICE", "es"),
 	}
 
 	accessTTL := envOr("JWT_ACCESS_TTL", "15m")
