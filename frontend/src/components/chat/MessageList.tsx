@@ -125,6 +125,11 @@ export function MessageList({
   const userHasScrolledRef = useRef(false);
   const stickyBottomDoneRef = useRef(false);
   const stickyROrRef = useRef<ResizeObserver | null>(null);
+  // Tracks the ID of the bottom message in allMessages. Updated by
+  // the lastBottom layout effect below, but DECLARED here so the
+  // bottom-stick RO can read it from its closure: the RO uses a
+  // change in this value as the "new message arrived" signal.
+  const lastBottomIdRef = useRef<string | null | undefined>(undefined);
   useLayoutEffect(() => {
     // Channel/DM switch — or transitioning into/out of deep-link
     // mode within the same parent — re-arms initial scroll-to-bottom
@@ -158,41 +163,53 @@ export function MessageList({
     if (typeof ResizeObserver === 'undefined') return;
     const inner = innerRef.current;
     if (!inner) return;
-    // The bottom-stick RO is meant to follow new content arriving at
-    // the bottom (a message lands, an avatar finishes loading). It
-    // is NOT meant to fire on:
-    //   1. Shrinkage (closing a side panel re-wraps content with
-    //      less line-wrapping → scrollHeight drops). The browser
-    //      may then clamp scrollTop and useAtBottomRef.update() can
-    //      read "at bottom" on the post-clamp scroll event, after
-    //      which sticking would yank the reader away from the older
-    //      message they had been reading.
-    //   2. Width changes (panel toggle, window resize). These reflow
-    //      the content but no new content arrived; the reader's
-    //      position should be preserved.
+    // The bottom-stick RO follows live conversation: when a NEW
+    // MESSAGE lands at the bottom and the reader is already at the
+    // bottom, stick to the new bottom so the new message comes into
+    // view. It does NOT fire on:
+    //   1. Same-bottom resizes (avatar/attachment loading, reaction
+    //      added) — these change scrollHeight but the bottom message
+    //      ID stays the same. Following them would yank readers who
+    //      happen to be near the bottom (e.g., a deep-link landing
+    //      that the browser clamped to within 120px) on every settling
+    //      image, making the list feel "locked at the bottom".
+    //   2. Scroller width changes (panel toggle, window resize).
+    //      Visible-anchor preservation kicks in for that case so the
+    //      reader's current message stays visually pinned.
+    //
+    // The "new message added at the bottom" signal comes from the
+    // lastBottomIdRef that the lastBottom layout effect maintains —
+    // it's updated synchronously when allMessages's last item changes,
+    // before this RO callback fires. We compare against the bottom ID
+    // we last SAW here (in this RO's closure), so any RO fire where
+    // the bottom didn't change is treated as a no-op resize.
+    // The lastBottom layout effect (which populates lastBottomIdRef)
+    // runs AFTER this effect, so on first fire the ref may still be
+    // undefined. Detect that and treat it as the initial snapshot —
+    // not a "new message arrived".
     let lastScrollHeight = el.scrollHeight;
     let lastClientWidth = el.clientWidth;
     const ro = new ResizeObserver(() => {
       const width = el.clientWidth;
       const height = el.scrollHeight;
-      const widthChanged = width !== lastClientWidth;
+      const widthDelta = Math.abs(width - lastClientWidth);
+      const heightDelta = Math.abs(height - lastScrollHeight);
+      // True layout reflow = both width AND height change (panel
+      // toggle, window resize). Width-only changes come from overlay-
+      // scrollbar appearance during scroll on some platforms.
+      const reflow = widthDelta > 24 && heightDelta > 0.5;
       const grew = height > lastScrollHeight + 0.5;
       lastClientWidth = width;
       lastScrollHeight = height;
-      // Width changed = the scroller itself was resized (panel
-      // toggle, window resize). Restore the reader's visible anchor
-      // so the browser's clamp-on-shrink doesn't drag them to the
-      // live tail and content reflow doesn't shift their reading
-      // position. Skip this in deep-link mode (the anchor effect
-      // controls position) and when the user is following the live
-      // tail (sticking handles them).
-      if (widthChanged) {
+      if (reflow) {
+        // Layout reflow → preserve the reader's visible-anchor
+        // position so the browser's clamp-on-shrink doesn't drag
+        // them and reflow doesn't shift their reading position.
+        // Skipped when the reader is at the live tail (sticking
+        // handles them) and in deep-link mode (the anchor effect
+        // controls position).
         const anchor = visibleAnchorRef.current;
-        if (
-          anchor &&
-          !(anchorMsgId && !userHasScrolledRef.current) &&
-          !wasAtBottomRef.current
-        ) {
+        if (anchor && !wasAtBottomRef.current) {
           const msg = document.getElementById(`msg-${anchor.id}`);
           if (msg) {
             const scrollerTop = el.getBoundingClientRect().top;
@@ -205,13 +222,12 @@ export function MessageList({
         }
         return;
       }
-      // In deep-link mode, hold off bottom-stick until the user has
-      // intentionally moved the scroll. Otherwise an anchor that
-      // happens to land within 120px of the bottom (recent threads
-      // are common deep-link targets) gets read as "at bottom" by
-      // useAtBottomRef on the post-scrollIntoView scroll event, and
-      // the next content resize yanks the reader to the live tail.
-      if (anchorMsgId && !userHasScrolledRef.current) return;
+      // Live-tail follow: only in non-anchor mode and only when the
+      // reader is already at the live tail. In deep-link mode the
+      // reader explicitly went to a specific message — they never
+      // opted into live-tail follow, so we never auto-yank them
+      // (even when a new message arrives in the loaded set).
+      if (anchorMsgId) return;
       if (!grew) return;
       if (wasAtBottomRef.current) stick();
     });
@@ -396,7 +412,6 @@ export function MessageList({
   // and forcing them to re-scroll everything they just scrolled past.
   // A real send always lands at the bottom; an older-page prepend
   // never touches it.
-  const lastBottomIdRef = useRef<string | null | undefined>(undefined);
   useLayoutEffect(() => {
     const len = allMessages.length;
     const bottom = allMessages[len - 1];

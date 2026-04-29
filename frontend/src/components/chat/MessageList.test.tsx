@@ -1347,6 +1347,73 @@ describe('MessageList', () => {
       }
     });
 
+    it('does NOT auto-stick to the live tail in deep-link mode even when a new message arrives at the bottom (regression: DM deep-link from /search yanked reader away from anchor)', () => {
+      // In deep-link mode the reader explicitly went to a specific
+      // message — they never opted into live-tail follow. Auto-
+      // sticking on every new message arrival would yank them away
+      // from the anchor whenever fetchPreviousPage adds a newer
+      // page or a WebSocket invalidation refetches.
+      let bottomStickCB: (() => void) | null = null;
+      const origRO = globalThis.ResizeObserver;
+      globalThis.ResizeObserver = class {
+        cb: () => void;
+        constructor(cb: () => void) {
+          this.cb = cb;
+          if (bottomStickCB === null) bottomStickCB = cb;
+        }
+        observe() {}
+        disconnect() {}
+        unobserve() {}
+      } as unknown as typeof ResizeObserver;
+      try {
+        withScrollIntoViewSpy(() => {
+          const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+          const wrap = (props: Partial<React.ComponentProps<typeof MessageList>>) => (
+            <QueryClientProvider client={qc}>
+              <BrowserRouter>
+                <MessageList {...defaultProps} {...props} />
+              </BrowserRouter>
+            </QueryClientProvider>
+          );
+          const initialPages = [{ items: [
+            makeMessage({ id: 'm-target', authorID: 'user-2', body: 'target' }),
+            makeMessage({ id: 'm-old', authorID: 'user-2', body: 'old' }),
+          ] }];
+          const { rerender, container } = render(
+            wrap({ pages: initialPages, anchorMsgId: 'm-target' }),
+          );
+          const scroller = container.querySelector('div.overflow-y-auto') as HTMLDivElement;
+          Object.defineProperty(scroller, 'clientHeight', { value: 800, configurable: true });
+
+          // Reader was scrolled near the bottom of the loaded set.
+          Object.defineProperty(scroller, 'scrollHeight', { value: 1500, configurable: true });
+          scroller.scrollTop = 700;
+          scroller.dispatchEvent(new Event('scroll'));
+
+          // fetchPreviousPage adds a newer page. innerRef grows.
+          // wasAtBottomRef may be true (clamp / reader near bottom).
+          // In deep-link mode, the bottom-stick RO must NOT engage —
+          // the reader never asked to follow the live tail.
+          rerender(
+            wrap({
+              pages: [{ items: [
+                makeMessage({ id: 'm-new', authorID: 'user-2', body: 'incoming' }),
+                makeMessage({ id: 'm-target', authorID: 'user-2', body: 'target' }),
+                makeMessage({ id: 'm-old', authorID: 'user-2', body: 'old' }),
+              ] }],
+              anchorMsgId: 'm-target',
+            }),
+          );
+          Object.defineProperty(scroller, 'scrollHeight', { value: 1700, configurable: true });
+          bottomStickCB?.();
+          // scrollTop unchanged — the reader stays where they were.
+          expect(scroller.scrollTop).toBe(700);
+        });
+      } finally {
+        globalThis.ResizeObserver = origRO;
+      }
+    });
+
     it('preserves the reader\'s visible message when the scroller width changes (regression: closing the thread panel reflowed and dragged to the latest message)', () => {
       // The browser's overflow-anchor: auto doesn't reliably handle
       // scroller width changes — when the right panel closes, the

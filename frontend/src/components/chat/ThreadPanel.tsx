@@ -119,14 +119,16 @@ export function ThreadPanel({
       if (typeof ResizeObserver !== 'undefined') {
         const inner = innerRef.current;
         if (inner) {
-          // See MessageList for the rationale on the growth check
-          // and the deep-link gate.
-          let lastScrollHeight = el.scrollHeight;
+          // See MessageList: in deep-link mode (anchor set) we never
+          // auto-stick — the reader went to a specific reply and
+          // didn't opt into live-tail follow. In live-tail mode we
+          // follow growth while the reader is at the bottom.
+          let lastHeight = el.scrollHeight;
           const ro = new ResizeObserver(() => {
             const height = el.scrollHeight;
-            const grew = height > lastScrollHeight + 0.5;
-            lastScrollHeight = height;
-            if (anchorMsgId && !userHasScrolledRef.current) return;
+            const grew = height > lastHeight + 0.5;
+            lastHeight = height;
+            if (anchorMsgId) return;
             if (!grew) return;
             if (wasAtBottomRef.current) stick();
           });

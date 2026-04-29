@@ -79,6 +79,19 @@ function useMessagesInfinite(opts: {
         ? { kind: 'newer', after: firstPage.newestID }
         : undefined,
     enabled: !!id,
+    // v5's stale-refetch (mount, WS-driven invalidate) walks forward
+    // from pages[0] via getNextPageParam. After a fetchPreviousPage,
+    // pages[0] is the newer-window — and our after-fetch responses
+    // come back with hasMoreOlder=false, so the walk stops at page 0
+    // and the older around-window stays cached but never re-runs.
+    // Re-mounting the same queryKey then sees that stale shape and
+    // fires only `?after=<newestID>`, leaving the user staring at a
+    // 2-message slice of a 35-message conversation. Wiping anchored
+    // caches on unmount sidesteps the whole walk: each /search → DM
+    // hop starts from initialPageParam and cleanly re-fires
+    // `?around=…`. Tail-mode queries never hit this shape (no
+    // bidirectional pages), so they keep the default 5-minute cache.
+    gcTime: anchorMsgId ? 0 : undefined,
   });
 }
 
