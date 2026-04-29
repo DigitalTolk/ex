@@ -105,10 +105,26 @@ func (h *ChannelHandler) List(w http.ResponseWriter, r *http.Request) {
 
 // BrowsePublic returns a paginated list of public channels visible to
 // the authenticated user. Guests get only the channels they belong to.
+// When a `q` query param is supplied and OpenSearch is configured, the
+// handler routes the query through it; otherwise it falls back to the
+// paginated DDB scan so the directory's client-side filter still works.
 func (h *ChannelHandler) BrowsePublic(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserIDFromContext(r.Context())
 	limit := queryInt(r, "limit", 50)
 	cursor := queryParam(r, "cursor", "")
+	q := queryParam(r, "q", "")
+
+	if q != "" {
+		hits, err := h.channelSvc.SearchPublic(r.Context(), userID, q, limit)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "browse_error", err.Error())
+			return
+		}
+		if hits != nil {
+			writeJSON(w, http.StatusOK, hits)
+			return
+		}
+	}
 
 	channels, _, err := h.channelSvc.BrowsePublic(r.Context(), userID, limit, cursor)
 	if err != nil {
@@ -360,40 +376,16 @@ func (h *ChannelHandler) UpdateMemberRole(w http.ResponseWriter, r *http.Request
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// ListMessages returns messages for a channel with cursor-based pagination.
+// ListMessages returns messages for a channel. Supports ?cursor= for
+// older pagination, ?after= for newer pagination, and ?around=<msgId>
+// for a centred window (used by deep-link search results).
 func (h *ChannelHandler) ListMessages(w http.ResponseWriter, r *http.Request) {
-	userID := middleware.UserIDFromContext(r.Context())
 	id := pathParam(r, "id")
 	if id == "" {
 		writeError(w, http.StatusBadRequest, "missing_id", "channel ID is required")
 		return
 	}
-
-	cursor := queryParam(r, "cursor", "")
-	limit := queryInt(r, "limit", 50)
-
-	msgs, hasMore, err := h.messageSvc.List(r.Context(), userID, id, service.ParentChannel, cursor, limit)
-	if err != nil {
-		writeError(w, http.StatusForbidden, "list_error", err.Error())
-		return
-	}
-
-	if msgs == nil {
-		msgs = []*model.Message{}
-	}
-
-	// nextCursor is the ID of the oldest message in this page; the next
-	// `?cursor=…` request reads "messages older than that".
-	var nextCursor string
-	if hasMore && len(msgs) > 0 {
-		nextCursor = msgs[len(msgs)-1].ID
-	}
-
-	writeJSON(w, http.StatusOK, JSON{
-		"items":      msgs,
-		"hasMore":    hasMore,
-		"nextCursor": nextCursor,
-	})
+	listMessages(w, r, service.ParentChannel, id, h.messageSvc)
 }
 
 // SendMessage creates a new message in a channel.

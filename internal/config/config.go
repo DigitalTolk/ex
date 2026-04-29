@@ -45,6 +45,11 @@ type Config struct {
 
 	// App
 	BaseURL string
+
+	// OpenSearch — leave empty to disable search features. (The wire
+	// protocol is ES-compatible for the operations we use, so the
+	// underlying client is unchanged from when this was Elasticsearch.)
+	OpenSearchURL string
 }
 
 func Load() (*Config, error) {
@@ -71,6 +76,7 @@ func Load() (*Config, error) {
 		S3SecretKey:      os.Getenv("S3_SECRET_KEY"),
 		S3Region:         envOr("S3_REGION", "us-east-1"),
 		BaseURL:          envOr("BASE_URL", "http://localhost:8080"),
+		OpenSearchURL: os.Getenv("OPENSEARCH_URL"),
 	}
 
 	accessTTL := envOr("JWT_ACCESS_TTL", "15m")

@@ -36,10 +36,20 @@ export function useChannelMembers(channelId: string | undefined) {
   });
 }
 
-export function useBrowseChannels() {
+// useBrowseChannels lists public channels for the directory. When `q`
+// is non-empty the backend routes the call through OpenSearch (when
+// configured) and returns matched channels; otherwise it returns the
+// full paginated browse so the UI can filter client-side as before.
+export function useBrowseChannels(q?: string) {
+  const trimmed = (q ?? '').trim();
   return useQuery({
-    queryKey: ['browseChannels'],
-    queryFn: () => apiFetch<Channel[]>('/api/v1/channels/browse'),
+    queryKey: ['browseChannels', trimmed],
+    queryFn: () => {
+      const url = trimmed
+        ? `/api/v1/channels/browse?q=${encodeURIComponent(trimmed)}`
+        : '/api/v1/channels/browse';
+      return apiFetch<Channel[]>(url);
+    },
   });
 }
 

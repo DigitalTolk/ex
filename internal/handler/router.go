@@ -32,6 +32,7 @@ func NewRouter(
 	versionH *VersionHandler,
 	unfurlH *UnfurlHandler,
 	sidebarH *SidebarHandler,
+	searchH *SearchHandler,
 	jwtMgr *auth.JWTManager,
 	frontendFS fs.FS,
 	appVersion string,
@@ -163,6 +164,14 @@ func NewRouter(
 		mux.Handle("GET /api/v1/presence", middleware.WrapFunc(presenceH.List, authMW))
 	}
 
+	// ------------------------------------------------------------------ Search
+	if searchH != nil {
+		mux.Handle("GET /api/v1/search/users", middleware.WrapFunc(searchH.SearchUsers, authMW))
+		mux.Handle("GET /api/v1/search/channels", middleware.WrapFunc(searchH.SearchChannels, authMW))
+		mux.Handle("GET /api/v1/search/messages", middleware.WrapFunc(searchH.SearchMessages, authMW))
+		mux.Handle("GET /api/v1/search/files", middleware.WrapFunc(searchH.SearchFiles, authMW))
+	}
+
 	// ------------------------------------------------------------------ Admin / settings
 	if adminH != nil {
 		// GET is open to any authenticated user — the upload UI shows
@@ -170,6 +179,8 @@ func NewRouter(
 		// inside the handler.
 		mux.Handle("GET /api/v1/admin/settings", middleware.WrapFunc(adminH.GetSettings, authMW))
 		mux.Handle("PUT /api/v1/admin/settings", middleware.WrapFunc(adminH.UpdateSettings, authMW))
+		mux.Handle("GET /api/v1/admin/search/status", middleware.WrapFunc(adminH.SearchStatus, authMW))
+		mux.Handle("POST /api/v1/admin/search/reindex", middleware.WrapFunc(adminH.StartSearchReindex, authMW))
 	}
 
 	// ------------------------------------------------------------------ WebSocket

@@ -218,6 +218,14 @@ func TestChannelStoreAdapter(t *testing.T) {
 	if len(channels) < 1 {
 		t.Error("expected at least 1 public channel")
 	}
+
+	all, err := adapter.ListAllChannels(ctx)
+	if err != nil {
+		t.Fatalf("ListAllChannels: %v", err)
+	}
+	if len(all) < 1 {
+		t.Error("expected ListAllChannels to return at least 1 channel")
+	}
 }
 
 func TestMembershipStoreAdapter(t *testing.T) {
@@ -281,6 +289,13 @@ func TestMembershipStoreAdapter(t *testing.T) {
 		t.Fatalf("SetMute: %v", err)
 	}
 
+	if err := adapter.SetFavorite(ctx, "ch-ma-1", "u-ma-1", true); err != nil {
+		t.Fatalf("SetFavorite: %v", err)
+	}
+	if err := adapter.SetCategory(ctx, "ch-ma-1", "u-ma-1", "cat-1"); err != nil {
+		t.Fatalf("SetCategory: %v", err)
+	}
+
 	if err := adapter.RemoveMember(ctx, "ch-ma-1", "u-ma-1"); err != nil {
 		t.Fatalf("RemoveMember: %v", err)
 	}
@@ -325,6 +340,21 @@ func TestConversationStoreAdapter(t *testing.T) {
 
 	if err := adapter.ActivateConversation(ctx, "conv-adapt", []string{"u-ca1", "u-ca2"}); err != nil {
 		t.Fatalf("ActivateConversation: %v", err)
+	}
+
+	if err := adapter.SetFavorite(ctx, "conv-adapt", "u-ca1", true); err != nil {
+		t.Fatalf("SetFavorite: %v", err)
+	}
+	if err := adapter.SetCategory(ctx, "conv-adapt", "u-ca1", "cat-conv"); err != nil {
+		t.Fatalf("SetCategory: %v", err)
+	}
+
+	all, err := adapter.ListAllConversations(ctx)
+	if err != nil {
+		t.Fatalf("ListAllConversations: %v", err)
+	}
+	if len(all) < 1 {
+		t.Error("expected ListAllConversations to return at least 1 conversation")
 	}
 }
 
@@ -427,5 +457,18 @@ func TestTokenStoreAdapter(t *testing.T) {
 
 	if err := adapter.DeleteRefreshToken(ctx, "rt-adapt-1"); err != nil {
 		t.Fatalf("DeleteRefreshToken: %v", err)
+	}
+
+	// Re-store + bulk-delete path covers the deactivation flow that
+	// invalidates every outstanding token for a user.
+	rt2 := &model.RefreshToken{
+		TokenHash: "rt-adapt-2", UserID: "u-rt",
+		ExpiresAt: now.Add(720 * time.Hour), CreatedAt: now,
+	}
+	if err := adapter.StoreRefreshToken(ctx, rt2); err != nil {
+		t.Fatalf("StoreRefreshToken (rt2): %v", err)
+	}
+	if err := adapter.DeleteAllRefreshTokensForUser(ctx, "u-rt"); err != nil {
+		t.Fatalf("DeleteAllRefreshTokensForUser: %v", err)
 	}
 }

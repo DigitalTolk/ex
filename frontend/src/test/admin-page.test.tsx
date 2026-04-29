@@ -42,9 +42,17 @@ describe('AdminPage', () => {
   });
 
   it('renders form fields seeded with current settings', async () => {
-    mockApiFetch.mockResolvedValueOnce({
-      maxUploadBytes: 50 * 1024 * 1024,
-      allowedExtensions: ['png', 'jpg'],
+    mockApiFetch.mockImplementation((path: string) => {
+      if (path === '/api/v1/admin/settings') {
+        return Promise.resolve({
+          maxUploadBytes: 50 * 1024 * 1024,
+          allowedExtensions: ['png', 'jpg'],
+        });
+      }
+      if (path === '/api/v1/admin/search/status') {
+        return Promise.resolve({ configured: false });
+      }
+      return Promise.resolve({});
     });
     renderPage();
 
@@ -59,6 +67,9 @@ describe('AdminPage', () => {
 
   it('PUTs converted bytes + cleaned extension list on save', async () => {
     mockApiFetch.mockImplementation((path: string, init?: { method?: string; body?: string }) => {
+      if (path === '/api/v1/admin/search/status') {
+        return Promise.resolve({ configured: false });
+      }
       if (path === '/api/v1/admin/settings' && (!init || init.method !== 'PUT')) {
         return Promise.resolve({ maxUploadBytes: 50 * 1024 * 1024, allowedExtensions: ['png'] });
       }

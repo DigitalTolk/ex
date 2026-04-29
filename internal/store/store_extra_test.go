@@ -385,6 +385,65 @@ func TestEmojiStore_List_PaginatesAcrossDDBPages(t *testing.T) {
 	}
 }
 
+func TestChannelStore_ListAll_ReturnsPublicAndPrivate(t *testing.T) {
+	db := setupDynamoDB(t)
+	s := NewChannelStore(db)
+	ctx := context.Background()
+
+	pub := &model.Channel{ID: "ch-listall-pub", Name: "pub", Slug: "pub", Type: model.ChannelTypePublic, CreatedAt: time.Now()}
+	priv := &model.Channel{ID: "ch-listall-priv", Name: "priv", Slug: "priv", Type: model.ChannelTypePrivate, CreatedAt: time.Now()}
+	if err := s.Create(ctx, pub); err != nil {
+		t.Fatalf("Create pub: %v", err)
+	}
+	if err := s.Create(ctx, priv); err != nil {
+		t.Fatalf("Create priv: %v", err)
+	}
+	all, err := s.ListAll(ctx)
+	if err != nil {
+		t.Fatalf("ListAll: %v", err)
+	}
+	seen := map[string]bool{}
+	for _, c := range all {
+		seen[c.ID] = true
+	}
+	if !seen[pub.ID] || !seen[priv.ID] {
+		t.Errorf("ListAll missed channel(s): seen=%v", seen)
+	}
+}
+
+func TestConversationStore_ListAll(t *testing.T) {
+	db := setupDynamoDB(t)
+	s := NewConversationStore(db)
+	ctx := context.Background()
+	conv := &model.Conversation{
+		ID:             "conv-listall-1",
+		Type:           model.ConversationTypeDM,
+		ParticipantIDs: []string{"u-1", "u-2"},
+		CreatedAt:      time.Now(),
+	}
+	members := []*model.UserConversation{
+		{UserID: "u-1", ConversationID: conv.ID, JoinedAt: time.Now()},
+		{UserID: "u-2", ConversationID: conv.ID, JoinedAt: time.Now()},
+	}
+	if err := s.Create(ctx, conv, members); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	all, err := s.ListAll(ctx)
+	if err != nil {
+		t.Fatalf("ListAll: %v", err)
+	}
+	found := false
+	for _, c := range all {
+		if c.ID == conv.ID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("ListAll missed conversation %q", conv.ID)
+	}
+}
+
 func TestEmojiStore_List_Empty(t *testing.T) {
 	db := setupDynamoDB(t)
 	s := NewEmojiStore(db)

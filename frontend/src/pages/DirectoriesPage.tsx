@@ -70,11 +70,11 @@ export default function DirectoriesPage() {
 }
 
 function ChannelsTab() {
+  const [query, setQuery] = useState('');
   const { data: allChannels, isLoading } = useBrowseChannels();
   const { data: userChannels } = useUserChannels();
   const joinChannel = useJoinChannel();
   const navigate = useNavigate();
-  const [query, setQuery] = useState('');
 
   const joinedIds = new Set(userChannels?.map((c) => c.channelID) ?? []);
 

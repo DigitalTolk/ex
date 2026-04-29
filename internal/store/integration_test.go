@@ -761,6 +761,79 @@ func TestMessageStore_ListWithPagination(t *testing.T) {
 	}
 }
 
+func TestMessageStore_ListAround_ReturnsCenteredWindow(t *testing.T) {
+	db := setupDynamoDB(t)
+	ms := NewMessageStore(db)
+	ctx := context.Background()
+
+	// Create 10 messages with sortable IDs (ULID-shape lex order).
+	ids := make([]string, 10)
+	for i := 0; i < 10; i++ {
+		id := fmt.Sprintf("msg-around-%02d", i)
+		ids[i] = id
+		msg := &model.Message{
+			ID: id, ParentID: "ch-around", AuthorID: "u-1",
+			Body: fmt.Sprintf("m %d", i), CreatedAt: time.Now().Truncate(time.Millisecond),
+		}
+		if err := ms.Create(ctx, msg); err != nil {
+			t.Fatalf("Create %d: %v", i, err)
+		}
+	}
+
+	// Anchor on msg #5, ask for 2 before + 2 after.
+	got, hasMoreOlder, hasMoreNewer, err := ms.ListAround(ctx, "ch-around", ids[5], 2, 2)
+	if err != nil {
+		t.Fatalf("ListAround: %v", err)
+	}
+	// Expect 5 messages: ids[7], ids[6], ids[5], ids[4], ids[3] (newest-first).
+	wantOrder := []string{ids[7], ids[6], ids[5], ids[4], ids[3]}
+	if len(got) != len(wantOrder) {
+		t.Fatalf("len = %d, want %d", len(got), len(wantOrder))
+	}
+	for i, m := range got {
+		if m.ID != wantOrder[i] {
+			t.Errorf("[%d] = %s, want %s", i, m.ID, wantOrder[i])
+		}
+	}
+	if !hasMoreOlder || !hasMoreNewer {
+		t.Errorf("hasMoreOlder=%v hasMoreNewer=%v, want both true", hasMoreOlder, hasMoreNewer)
+	}
+}
+
+func TestMessageStore_ListAfter_ReturnsNewerMessages(t *testing.T) {
+	db := setupDynamoDB(t)
+	ms := NewMessageStore(db)
+	ctx := context.Background()
+
+	for i := 0; i < 5; i++ {
+		id := fmt.Sprintf("msg-after-%02d", i)
+		msg := &model.Message{
+			ID: id, ParentID: "ch-after", AuthorID: "u-1",
+			Body: fmt.Sprintf("a %d", i), CreatedAt: time.Now().Truncate(time.Millisecond),
+		}
+		if err := ms.Create(ctx, msg); err != nil {
+			t.Fatalf("Create %d: %v", i, err)
+		}
+	}
+	// "After msg-after-01": expect [04, 03, 02] newest-first, hasMore=false.
+	got, hasMore, err := ms.ListAfter(ctx, "ch-after", "msg-after-01", 10)
+	if err != nil {
+		t.Fatalf("ListAfter: %v", err)
+	}
+	wantOrder := []string{"msg-after-04", "msg-after-03", "msg-after-02"}
+	if len(got) != len(wantOrder) {
+		t.Fatalf("len = %d, want %d", len(got), len(wantOrder))
+	}
+	for i, m := range got {
+		if m.ID != wantOrder[i] {
+			t.Errorf("[%d] = %s, want %s", i, m.ID, wantOrder[i])
+		}
+	}
+	if hasMore {
+		t.Errorf("hasMore = true, want false")
+	}
+}
+
 func TestMessageStore_GetByID(t *testing.T) {
 	db := setupDynamoDB(t)
 	ms := NewMessageStore(db)

@@ -672,3 +672,12 @@ func (m *mockMessageStore) ListMessages(_ context.Context, parentID string, _ st
 	}
 	return result, false, nil
 }
+
+func (m *mockMessageStore) ListMessagesAfter(ctx context.Context, parentID, _ string, limit int) ([]*model.Message, bool, error) {
+	return m.ListMessages(ctx, parentID, "", limit)
+}
+
+func (m *mockMessageStore) ListMessagesAround(ctx context.Context, parentID, _ string, _ int, _ int) ([]*model.Message, bool, bool, error) {
+	msgs, _, err := m.ListMessages(ctx, parentID, "", 0)
+	return msgs, false, false, err
+}

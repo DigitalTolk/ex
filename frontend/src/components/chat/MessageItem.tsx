@@ -21,6 +21,7 @@ import { UserHoverCard } from '@/components/UserHoverCard';
 import { useEditMessage, useDeleteMessage, useToggleReaction, useSetPinned } from '@/hooks/useMessages';
 import { useEmojiMap } from '@/hooks/useEmoji';
 import { renderMarkdown } from '@/lib/markdown';
+import { useTagOpen } from '@/context/TagSearchContext';
 import { EmojiGlyph } from '@/components/EmojiGlyph';
 import { MessageAttachments } from '@/components/chat/MessageAttachments';
 import { ThreadActionBar } from '@/components/chat/ThreadActionBar';
@@ -108,6 +109,7 @@ export function MessageItem({
   const toggleReaction = useToggleReaction();
   const setPinned = useSetPinned();
   const { data: emojiMap } = useEmojiMap();
+  const { openTag } = useTagOpen();
 
   function buildMessageLink(): string {
     // Channels resolve URLs by slug; conversations have no slug so the ID
@@ -325,6 +327,7 @@ export function MessageItem({
               {renderMarkdown(message.body, {
                 emojiMap,
                 currentUserId,
+                onTagClick: openTag,
                 renderUserMention: (userId, displayName, _isSelf, pill) => (
                   <UserHoverCard
                     key={`mention-${userId}-${message.id}`}

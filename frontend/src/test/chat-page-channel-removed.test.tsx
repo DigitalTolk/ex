@@ -49,6 +49,7 @@ vi.mock('@/context/PresenceContext', () => ({
 
 vi.mock('@/hooks/useChannels', () => ({
   useUserChannels: () => ({ data: [] }),
+  useChannelBySlug: () => ({ data: undefined }),
   useCreateChannel: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 

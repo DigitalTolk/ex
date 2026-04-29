@@ -18,6 +18,7 @@ import DirectoriesPage from '@/pages/DirectoriesPage';
 import AdminPage from '@/pages/AdminPage';
 import NewConversationPage from '@/pages/NewConversationPage';
 import ThreadsPage from '@/pages/ThreadsPage';
+import SearchResultsPage from '@/pages/SearchResultsPage';
 import type { ReactNode } from 'react';
 
 const queryClient = new QueryClient({
@@ -70,6 +71,7 @@ function AppRoutes() {
           }
         />
         <Route path="directory" element={<DirectoriesPage />} />
+        <Route path="search" element={<SearchResultsPage />} />
         <Route path="threads" element={<ThreadsPage />} />
         <Route path="admin" element={<AdminPage />} />
         <Route path="channel/:id" element={<ChannelView />} />

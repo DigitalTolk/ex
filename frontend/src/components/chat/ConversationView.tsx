@@ -23,7 +23,10 @@ import { useNotifications } from '@/context/NotificationContext';
 import { markThreadSeen } from '@/hooks/useThreads';
 import { collectMessageUserIDs } from '@/lib/message-users';
 import { useSidePanels } from '@/hooks/useSidePanels';
+import { useTagState } from '@/context/TagSearchContext';
+import { TagSearchPanel } from '@/components/TagSearchPanel';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
+import { useDeepLinkAnchor } from '@/hooks/useDeepLinkAnchor';
 import { firstName } from '@/lib/format';
 import type { Conversation } from '@/types';
 import type { UserMapEntry } from './MessageList';
@@ -64,14 +67,18 @@ export function ConversationView() {
   const { online } = usePresence();
   const { setActiveParent } = useNotifications();
   const { data: conversation } = useConversation(id);
+  const { mainAnchor, threadAnchor, threadParam } = useDeepLinkAnchor(id);
   const {
     data,
     hasNextPage,
     isFetchingNextPage,
     isLoading,
     fetchNextPage,
+    hasPreviousPage,
+    isFetchingPreviousPage,
+    fetchPreviousPage,
     refetch,
-  } = useConversationMessages(id);
+  } = useConversationMessages(id, mainAnchor);
   const sendMessage = useSendConversationMessage(id);
 
   useEffect(() => {
@@ -88,33 +95,45 @@ export function ConversationView() {
   const [threadRootID, setThreadRootID] = useState<string | null>(null);
   const inputRef = useRef<MessageInputHandle>(null);
   const panels = useSidePanels<'members' | 'pinned' | 'files'>();
+  const { activeTag, closeTag } = useTagState();
 
-  const openMembers = () => { setThreadRootID(null); panels.open('members'); };
+  // Closing a thread (or replacing it with another panel) must also
+  // strip ?thread= from the URL when one is set, so the panel state
+  // and URL stay in sync.
+  const stripThreadParam = () => {
+    if (!searchParams.get('thread')) return;
+    const next = new URLSearchParams(searchParams);
+    next.delete('thread');
+    setSearchParams(next, { replace: true, preventScrollReset: true });
+  };
+  const dismissThread = () => { setThreadRootID(null); stripThreadParam(); };
+  const openMembers = () => { dismissThread(); closeTag(); panels.open('members'); };
   const closeMembers = panels.close;
-  const openThread = (rid: string) => { setThreadRootID(rid); panels.close(); };
-  const closeThread = () => setThreadRootID(null);
-  const togglePinned = () => { setThreadRootID(null); panels.toggle('pinned'); };
-  const toggleFiles = () => { setThreadRootID(null); panels.toggle('files'); };
+  const openThread = (rid: string) => {
+    setThreadRootID(rid);
+    stripThreadParam();
+    closeTag();
+    panels.close();
+  };
+  const closeThread = dismissThread;
+  const togglePinned = () => { dismissThread(); closeTag(); panels.toggle('pinned'); };
+  const toggleFiles = () => { dismissThread(); closeTag(); panels.toggle('files'); };
   const showMembers = panels.isActive('members');
   const showPinned = panels.isActive('pinned');
   const showFiles = panels.isActive('files');
 
-  // Reset thread when the conversation changes; this is a deliberate
-  // synchronous reset, not a sync between external state and React.
+  // Reset locally-opened thread when the conversation changes.
   // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => setThreadRootID(null), [id]);
 
-  // Honor a ?thread=... deep link from the Threads page.
-  const threadParam = searchParams.get('thread');
+  // The displayed thread is the local one if set, otherwise the URL-
+  // driven one. URL is the source of truth for deep-linked threads.
+  const effectiveThreadRootID = threadRootID ?? threadParam ?? null;
+
+  // Mark URL-driven threads as seen exactly once per change.
   useEffect(() => {
-    if (!threadParam) return;
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setThreadRootID(threadParam);
-    markThreadSeen(threadParam);
-    const next = new URLSearchParams(searchParams);
-    next.delete('thread');
-    setSearchParams(next, { replace: true, preventScrollReset: true });
-  }, [threadParam, searchParams, setSearchParams]);
+    if (threadParam) markThreadSeen(threadParam);
+  }, [threadParam]);
 
   const userIDs = useMemo(() => {
     const ids = new Set<string>();
@@ -229,11 +248,15 @@ export function ConversationView() {
             isFetchingNextPage={isFetchingNextPage}
             isLoading={isLoading}
             fetchNextPage={fetchNextPage}
+            hasPreviousPage={hasPreviousPage}
+            isFetchingPreviousPage={isFetchingPreviousPage}
+            fetchPreviousPage={fetchPreviousPage}
             refetch={refetch}
             currentUserId={user?.id}
             conversationId={id}
             userMap={userMap}
             onReplyInThread={openThread}
+            anchorMsgId={mainAnchor}
             intro={intro ?? undefined}
           />
           <TypingIndicator parentID={id} userMap={userMap} />
@@ -248,39 +271,41 @@ export function ConversationView() {
           />
         </MessageDropZone>
       </div>
-      {threadRootID && (
+      {activeTag ? (
+        <TagSearchPanel />
+      ) : effectiveThreadRootID ? (
         <ThreadPanel
           conversationId={id}
-          threadRootID={threadRootID}
+          threadRootID={effectiveThreadRootID}
           onClose={closeThread}
           userMap={userMap}
           currentUserId={user?.id}
+          anchorMsgId={
+            effectiveThreadRootID === threadParam ? threadAnchor : undefined
+          }
         />
-      )}
-      {showPinned && !threadRootID && (
+      ) : showPinned ? (
         <PinnedPanel
           conversationId={id}
           onClose={panels.close}
           userMap={userMap}
           currentUserId={user?.id}
         />
-      )}
-      {showFiles && !threadRootID && (
+      ) : showFiles ? (
         <FilesPanel
           conversationId={id}
           onClose={panels.close}
           userMap={userMap}
           postedIn={title}
         />
-      )}
-      {showMembers && !threadRootID && conversation?.type === 'group' && (
+      ) : showMembers && conversation?.type === 'group' ? (
         <MemberList
           members={memberList}
           userMap={userMap}
           currentUserId={user?.id}
           onClose={closeMembers}
         />
-      )}
+      ) : null}
     </div>
   );
 }

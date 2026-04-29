@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -12,6 +13,18 @@ import (
 	"github.com/DigitalTolk/ex/internal/pubsub"
 	"github.com/DigitalTolk/ex/internal/store"
 )
+
+type UserIndexer interface {
+	IndexUser(ctx context.Context, u *model.User) error
+	DeleteUser(ctx context.Context, id string) error
+}
+
+// UserSearcher returns matching user IDs; the service hydrates them
+// against the user store so the response shape matches the legacy
+// in-memory path (avatar URL, status, role, etc.).
+type UserSearcher interface {
+	Users(ctx context.Context, q string, limit int) ([]string, error)
+}
 
 // AvatarSigner generates time-limited GET URLs for avatar storage keys.
 type AvatarSigner interface {
@@ -25,6 +38,8 @@ type UserService struct {
 	avatars   AvatarSigner
 	publisher Publisher
 	tokens    TokenStore // optional: when set, deactivation invalidates refresh tokens
+	indexer   UserIndexer
+	searcher  UserSearcher
 }
 
 // NewUserService creates a UserService with the given dependencies.
@@ -37,6 +52,25 @@ func NewUserService(users UserStore, cache Cache, avatars AvatarSigner, publishe
 // SetTokenStore wires a TokenStore so deactivating a user invalidates every
 // outstanding refresh token they hold — kicking them out of any open session.
 func (s *UserService) SetTokenStore(t TokenStore) { s.tokens = t }
+
+func (s *UserService) SetIndexer(i UserIndexer) { s.indexer = i }
+
+func (s *UserService) SetSearcher(sr UserSearcher) { s.searcher = sr }
+
+func (s *UserService) indexUser(ctx context.Context, u *model.User) {
+	indexUser(ctx, s.indexer, u)
+}
+
+// indexUser is the nil-safe hook used by both UserService (profile
+// edits) and AuthService (signup / invite acceptance).
+func indexUser(ctx context.Context, idx UserIndexer, u *model.User) {
+	if idx == nil || u == nil {
+		return
+	}
+	if err := idx.IndexUser(ctx, u); err != nil {
+		slog.Warn("search index user failed", "id", u.ID, "error", err)
+	}
+}
 
 // avatarURLTTL is how long avatar presigned URLs remain valid. Frontend
 // caches user data via React Query, so this can be short.
@@ -146,6 +180,8 @@ func (s *UserService) Update(ctx context.Context, userID string, displayName, av
 		"avatarURL":   user.AvatarURL,
 	})
 
+	s.indexUser(ctx, user)
+
 	return user, nil
 }
 
@@ -163,9 +199,30 @@ func (s *UserService) GetBatch(ctx context.Context, ids []string) ([]*model.User
 	return users, nil
 }
 
-// Search returns users whose display name or email contains the query string.
-// It filters in memory, which is acceptable for small teams.
+// Search returns users whose display name or email matches the query.
+// When an OpenSearch searcher is wired, the query is routed there and
+// hits are hydrated from the user store so the response carries the
+// full model (avatar, role, status). Otherwise it falls back to a
+// substring scan over the first page of ListUsers — fine for small
+// teams, and the same behaviour the app shipped with.
 func (s *UserService) Search(ctx context.Context, query string, limit int) ([]*model.User, error) {
+	if s.searcher != nil {
+		ids, err := s.searcher.Users(ctx, query, limit)
+		if err == nil {
+			out := make([]*model.User, 0, len(ids))
+			for _, id := range ids {
+				u, err := s.users.GetUser(ctx, id)
+				if err != nil || u == nil {
+					continue
+				}
+				s.resolveAvatar(ctx, u)
+				out = append(out, u)
+			}
+			return out, nil
+		}
+		// Fall through on searcher error so a transient ES outage
+		// degrades to "slower" rather than "broken".
+	}
 	all, _, err := s.users.ListUsers(ctx, 200, "")
 	if err != nil {
 		return nil, err
@@ -214,6 +271,7 @@ func (s *UserService) UpdateRole(ctx context.Context, _, targetID string, role m
 		_ = s.cache.Delete(ctx, "user:"+targetID)
 	}
 	s.resolveAvatar(ctx, user)
+	s.indexUser(ctx, user)
 	return user, nil
 }
 
@@ -266,6 +324,8 @@ func (s *UserService) SetStatus(ctx context.Context, targetID string, deactivate
 		"id":     user.ID,
 		"status": user.Status,
 	})
+
+	s.indexUser(ctx, user)
 
 	return user, nil
 }

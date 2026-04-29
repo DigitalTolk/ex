@@ -17,7 +17,15 @@ export interface RenderOpts {
     isSelf: boolean,
     pill: ReactNode,
   ) => ReactNode;
+  // onTagClick turns `#tag` tokens into clickable buttons that surface
+  // the tag-search side panel. Without it, hashtags render as plain text.
+  onTagClick?: (tag: string) => void;
 }
+
+// The leading-char class excludes `/` so URL fragments like
+// `/path#anchor` don't render as a hashtag pill. The body regex
+// mirrors `internal/search/indexer.go` hashtagPattern.
+const HASHTAG_RE = /(^|[^\w/])#([\p{L}\p{N}_-]{2,64})/u;
 
 const MENTION_PILL_BASE =
   'inline-block rounded px-1 text-sm font-medium leading-tight';
@@ -103,6 +111,28 @@ function findInline(src: string, opts: RenderOpts | undefined, keyPrefix: string
       </span>
     );
   });
+
+  // hashtag: #tag — only when an onTagClick handler is wired.
+  if (opts?.onTagClick) {
+    tryMatch(HASHTAG_RE, (m) => {
+      const lead = m[1] ?? '';
+      const tag = m[2];
+      return (
+        <span key={`${keyPrefix}-tag-${m.index}`}>
+          {lead}
+          <button
+            type="button"
+            data-testid="hashtag-pill"
+            data-tag={tag.toLowerCase()}
+            onClick={() => opts.onTagClick?.(tag.toLowerCase())}
+            className={MENTION_PILL_BASE + MENTION_PILL_OTHER + ' cursor-pointer'}
+          >
+            #{tag}
+          </button>
+        </span>
+      );
+    });
+  }
 
   // image: ![alt](url)
   tryMatch(/!\[([^\]]*)\]\(([^)\s]+)\)/, (m) => (

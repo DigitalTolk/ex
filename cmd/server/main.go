@@ -17,6 +17,7 @@ import (
 	"github.com/DigitalTolk/ex/internal/config"
 	"github.com/DigitalTolk/ex/internal/handler"
 	"github.com/DigitalTolk/ex/internal/pubsub"
+	"github.com/DigitalTolk/ex/internal/search"
 	"github.com/DigitalTolk/ex/internal/service"
 	"github.com/DigitalTolk/ex/internal/storage"
 	"github.com/DigitalTolk/ex/internal/store"
@@ -161,6 +162,40 @@ func main() {
 	categorySvc := service.NewCategoryService(store.NewCategoryStore(db), redisPubSub)
 	sidebarH := handler.NewSidebarHandler(channelSvc, convSvc, categorySvc)
 
+	// ------------------------------------------------------------------ Search
+	// NewClient returns nil for an empty URL; downstream wiring degrades
+	// to no-ops when the search package isn't configured.
+	searchClient := search.NewClient(cfg.OpenSearchURL)
+	if searchClient != nil {
+		if err := searchClient.EnsureIndices(ctx); err != nil {
+			slog.Warn("search: ensure indices failed", "error", err)
+		}
+	}
+	reindexSrc := newReindexSources(userStore, channelStore, conversationStore, messageStore)
+	searchReindexer := search.NewReindexer(searchClient, reindexSrc)
+	if searchClient != nil && searchReindexer != nil {
+		searchReindexer.SetAttachmentResolver(newAttachmentResolver(attachmentStore))
+		adminH.SetSearch(searchClient, searchReindexer)
+	}
+	if searchClient != nil {
+		idx := search.NewIndexer(searchClient)
+		if live, ok := idx.(*search.LiveIndexer); ok {
+			live.SetAttachmentResolver(newAttachmentResolver(attachmentStore))
+		}
+		messageSvc.SetIndexer(idx)
+		channelSvc.SetIndexer(idx)
+		userSvc.SetIndexer(idx)
+		authSvc.SetIndexer(idx)
+	}
+	searcher := search.NewService(searchClient)
+	searchAccess := newSearchAccess(membershipStore, conversationStore)
+	searchH := handler.NewSearchHandler(searcher, searchAccess)
+	if searchClient != nil {
+		ids := newIDSearcher(searcher)
+		userSvc.SetSearcher(ids)
+		channelSvc.SetSearcher(ids)
+	}
+
 	// ------------------------------------------------------------------ Frontend FS
 	var frontendDist fs.FS
 	frontendDist, err = fs.Sub(ex.FrontendFS, "frontend/dist")
@@ -182,7 +217,7 @@ func main() {
 	}
 	unfurlSvc := service.NewUnfurlService(redisCache)
 	unfurlH := handler.NewUnfurlHandler(unfurlSvc)
-	router := handler.NewRouter(authH, userH, channelH, convH, wsH, uploadH, emojiH, presenceH, attachmentH, adminH, threadH, versionH, unfurlH, sidebarH, jwtMgr, frontendDist, appVersion, allowOrigin)
+	router := handler.NewRouter(authH, userH, channelH, convH, wsH, uploadH, emojiH, presenceH, attachmentH, adminH, threadH, versionH, unfurlH, sidebarH, searchH, jwtMgr, frontendDist, appVersion, allowOrigin)
 
 	// ------------------------------------------------------------------ Server
 	srv := &http.Server{

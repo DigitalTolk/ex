@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
@@ -180,6 +181,104 @@ func (s *MessageStoreImpl) List(ctx context.Context, parentID string, before str
 	}
 
 	return messages, hasMore, nil
+}
+
+// ListAfter returns up to `limit` messages strictly newer than the
+// `after` cursor (a message ID), ordered newest-first like List.
+// Used by the bidirectional message paginator when a user is anchored
+// in mid-history and scrolls down toward the live tail.
+func (s *MessageStoreImpl) ListAfter(ctx context.Context, parentID, after string, limit int) ([]*model.Message, bool, error) {
+	if after == "" {
+		return nil, false, nil
+	}
+	pk := parentPK(parentID)
+	keyCond := expression.KeyAnd(
+		expression.Key("PK").Equal(expression.Value(pk)),
+		expression.Key("SK").Between(
+			expression.Value(msgSK(after)),
+			expression.Value("MSG#~"), // upper bound past any ULID
+		),
+	)
+	expr, err := expression.NewBuilder().WithKeyCondition(keyCond).Build()
+	if err != nil {
+		return nil, false, fmt.Errorf("store: build expression: %w", err)
+	}
+	// `after` is exclusive but BETWEEN is inclusive; fetch one extra to
+	// strip the cursor below, plus one more for has-more detection.
+	fetchLimit := int32(limit + 2)
+	out, err := s.Client.Query(ctx, &dynamodb.QueryInput{
+		TableName:                 aws.String(s.Table),
+		KeyConditionExpression:    expr.KeyCondition(),
+		ExpressionAttributeNames:  expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
+		ScanIndexForward:          aws.Bool(true),
+		Limit:                     aws.Int32(fetchLimit),
+	})
+	if err != nil {
+		return nil, false, fmt.Errorf("store: list messages after: %w", err)
+	}
+	messages := make([]*model.Message, 0, len(out.Items))
+	for _, item := range out.Items {
+		var mi messageItem
+		if err := attributevalue.UnmarshalMap(item, &mi); err != nil {
+			return nil, false, fmt.Errorf("store: unmarshal message: %w", err)
+		}
+		messages = append(messages, &mi.Message)
+	}
+	if len(messages) > 0 && messages[0].ID == after {
+		messages = messages[1:]
+	}
+	hasMore := len(messages) > limit
+	if hasMore {
+		messages = messages[:limit]
+	}
+	// Reverse to newest-first to match List's contract.
+	for i, j := 0, len(messages)-1; i < j; i, j = i+1, j-1 {
+		messages[i], messages[j] = messages[j], messages[i]
+	}
+	return messages, hasMore, nil
+}
+
+// ListAround returns a window centered on `msgID`: up to `before`
+// older messages, the message itself (if it still exists), and up to
+// `after` newer messages — newest-first. The three DDB calls
+// (target Get, older Query, newer Query) are independent and run
+// concurrently; ListAround is on the user-perceived path for every
+// "Jump to message" so latency multiplies if they serialize.
+func (s *MessageStoreImpl) ListAround(ctx context.Context, parentID, msgID string, before, after int) ([]*model.Message, bool, bool, error) {
+	var (
+		wg                                   sync.WaitGroup
+		target                               *model.Message
+		older, newer                         []*model.Message
+		hasMoreOlder, hasMoreNewer           bool
+		errTarget, errOlder, errNewer        error
+	)
+	wg.Add(3)
+	go func() {
+		defer wg.Done()
+		target, errTarget = s.GetByID(ctx, parentID, msgID)
+	}()
+	go func() {
+		defer wg.Done()
+		older, hasMoreOlder, errOlder = s.List(ctx, parentID, msgID, before)
+	}()
+	go func() {
+		defer wg.Done()
+		newer, hasMoreNewer, errNewer = s.ListAfter(ctx, parentID, msgID, after)
+	}()
+	wg.Wait()
+	for _, err := range []error{errTarget, errOlder, errNewer} {
+		if err != nil {
+			return nil, false, false, err
+		}
+	}
+	out := make([]*model.Message, 0, len(older)+len(newer)+1)
+	out = append(out, newer...)
+	if target != nil {
+		out = append(out, target)
+	}
+	out = append(out, older...)
+	return out, hasMoreOlder, hasMoreNewer, nil
 }
 
 func (s *MessageStoreImpl) Update(ctx context.Context, parentID string, msg *model.Message) error {

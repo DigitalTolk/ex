@@ -60,6 +60,14 @@ func (a *ChannelStoreAdapter) ListPublicChannels(ctx context.Context, limit int,
 	return a.s.ListPublic(ctx, limit, cursor)
 }
 
+// ListAllChannels exposes the underlying store's full Scan for use by
+// admin maintenance flows (search reindex). Not part of the service-
+// layer ChannelStore interface — only the search reindex pipeline
+// reaches for it via the search-source adapter in main.
+func (a *ChannelStoreAdapter) ListAllChannels(ctx context.Context) ([]*model.Channel, error) {
+	return a.s.ListAll(ctx)
+}
+
 // MembershipStoreAdapter wraps store.MembershipStoreImpl to satisfy service.MembershipStore.
 type MembershipStoreAdapter struct {
 	s *store.MembershipStoreImpl
@@ -129,6 +137,13 @@ func (a *ConversationStoreAdapter) SetCategory(ctx context.Context, convID, user
 	return a.s.SetUserConversationCategory(ctx, convID, userID, categoryID)
 }
 
+// ListAllConversations exposes the full conversation Scan to admin
+// maintenance flows (search reindex). Same rationale as
+// ListAllChannels above — not service-layer surface.
+func (a *ConversationStoreAdapter) ListAllConversations(ctx context.Context) ([]*model.Conversation, error) {
+	return a.s.ListAll(ctx)
+}
+
 // MessageStoreAdapter wraps store.MessageStoreImpl to satisfy service.MessageStore.
 type MessageStoreAdapter struct {
 	s *store.MessageStoreImpl
@@ -149,6 +164,12 @@ func (a *MessageStoreAdapter) UpdateMessage(ctx context.Context, msg *model.Mess
 }
 func (a *MessageStoreAdapter) DeleteMessage(ctx context.Context, parentID, msgID string) error {
 	return a.s.Delete(ctx, parentID, msgID)
+}
+func (a *MessageStoreAdapter) ListMessagesAfter(ctx context.Context, parentID, after string, limit int) ([]*model.Message, bool, error) {
+	return a.s.ListAfter(ctx, parentID, after, limit)
+}
+func (a *MessageStoreAdapter) ListMessagesAround(ctx context.Context, parentID, msgID string, before, after int) ([]*model.Message, bool, bool, error) {
+	return a.s.ListAround(ctx, parentID, msgID, before, after)
 }
 func (a *MessageStoreAdapter) ListMessages(ctx context.Context, parentID string, before string, limit int) ([]*model.Message, bool, error) {
 	return a.s.List(ctx, parentID, before, limit)

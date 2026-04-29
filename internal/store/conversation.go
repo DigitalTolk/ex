@@ -20,6 +20,7 @@ type ConversationStore interface {
 	ListUserConversations(ctx context.Context, userID string) ([]*model.UserConversation, error)
 	IsMember(ctx context.Context, convID, userID string) (bool, error)
 	Activate(ctx context.Context, convID string, participantIDs []string) error
+	ListAll(ctx context.Context) ([]*model.Conversation, error)
 }
 
 // ConversationStoreImpl implements ConversationStore backed by DynamoDB.
@@ -281,4 +282,44 @@ func (s *ConversationStoreImpl) IsMember(ctx context.Context, convID, userID str
 		return false, fmt.Errorf("store: check conv membership: %w", err)
 	}
 	return out.Item != nil, nil
+}
+
+// ListAll walks every conversation in the workspace via Scan with a
+// PK-prefix + SK=META filter. Used only by admin maintenance flows
+// (search reindex). Pages through Scan's LastEvaluatedKey.
+func (s *ConversationStoreImpl) ListAll(ctx context.Context) ([]*model.Conversation, error) {
+	convs := make([]*model.Conversation, 0)
+	expr, err := expression.NewBuilder().WithFilter(
+		expression.Name("PK").BeginsWith("CONV#").And(
+			expression.Name("SK").Equal(expression.Value("META")),
+		),
+	).Build()
+	if err != nil {
+		return nil, fmt.Errorf("store: build conversations-scan expression: %w", err)
+	}
+	var startKey map[string]types.AttributeValue
+	for {
+		out, err := s.Client.Scan(ctx, &dynamodb.ScanInput{
+			TableName:                 aws.String(s.Table),
+			FilterExpression:          expr.Filter(),
+			ExpressionAttributeNames:  expr.Names(),
+			ExpressionAttributeValues: expr.Values(),
+			ExclusiveStartKey:         startKey,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("store: scan conversations: %w", err)
+		}
+		for _, item := range out.Items {
+			var ci conversationItem
+			if err := attributevalue.UnmarshalMap(item, &ci); err != nil {
+				return nil, fmt.Errorf("store: unmarshal conversation: %w", err)
+			}
+			convs = append(convs, &ci.Conversation)
+		}
+		if len(out.LastEvaluatedKey) == 0 {
+			break
+		}
+		startKey = out.LastEvaluatedKey
+	}
+	return convs, nil
 }

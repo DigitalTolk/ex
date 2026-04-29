@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { render } from '@testing-library/react';
+import { describe, it, expect, vi } from 'vitest';
+import { fireEvent, render } from '@testing-library/react';
 import { renderMarkdown } from '@/lib/markdown';
 
 describe('renderMarkdown', () => {
@@ -68,5 +68,24 @@ describe('renderMarkdown', () => {
     const { container } = render(<>{renderMarkdown('# Title\nbody text')}</>);
     expect(container.querySelector('h1')?.textContent).toBe('Title');
     expect(container.querySelector('p')?.textContent).toContain('body text');
+  });
+
+  it('renders #tag tokens as clickable buttons when onTagClick is set', () => {
+    const onTagClick = vi.fn();
+    const { container } = render(
+      <>{renderMarkdown('hello #BugFix world #other-tag', { onTagClick })}</>,
+    );
+    const pills = container.querySelectorAll('[data-testid="hashtag-pill"]');
+    expect(pills.length).toBe(2);
+    expect(pills[0].getAttribute('data-tag')).toBe('bugfix');
+    expect(pills[1].getAttribute('data-tag')).toBe('other-tag');
+    fireEvent.click(pills[0]);
+    expect(onTagClick).toHaveBeenCalledWith('bugfix');
+  });
+
+  it('leaves #tag tokens as plain text when no onTagClick is provided', () => {
+    const { container } = render(<>{renderMarkdown('hello #plain world')}</>);
+    expect(container.querySelector('[data-testid="hashtag-pill"]')).toBeNull();
+    expect(container.querySelector('p')?.textContent).toContain('#plain');
   });
 });

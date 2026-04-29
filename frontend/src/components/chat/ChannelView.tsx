@@ -27,6 +27,9 @@ import { useUsersBatch } from '@/hooks/useUsersBatch';
 import { collectMessageUserIDs } from '@/lib/message-users';
 import { useSidePanels } from '@/hooks/useSidePanels';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
+import { useDeepLinkAnchor } from '@/hooks/useDeepLinkAnchor';
+import { useTagState } from '@/context/TagSearchContext';
+import { TagSearchPanel } from '@/components/TagSearchPanel';
 import type { UserMapEntry } from './MessageList';
 
 export function ChannelView() {
@@ -41,27 +44,53 @@ export function ChannelView() {
   const inputRef = useRef<MessageInputHandle>(null);
   const [threadRootID, setThreadRootID] = useState<string | null>(null);
   const panels = useSidePanels<'members' | 'pinned' | 'files'>();
+  // Tag panel takes the same right-rail slot as thread/pinned/files.
+  // Opening any of those closes a tag, and opening a tag closes them.
+  const { activeTag, closeTag } = useTagState();
 
-  const openMembers = () => { setThreadRootID(null); panels.open('members'); };
+  // Closing a thread (or replacing it with another panel) must also
+  // strip ?thread= from the URL when one is set, so that the URL stops
+  // representing "thread X is open". Otherwise the panel state and the
+  // URL would diverge — refresh would reopen, back/forward would loop.
+  const stripThreadParam = () => {
+    if (!searchParams.get('thread')) return;
+    const next = new URLSearchParams(searchParams);
+    next.delete('thread');
+    setSearchParams(next, { replace: true, preventScrollReset: true });
+  };
+  const dismissThread = () => { setThreadRootID(null); stripThreadParam(); };
+  const openMembers = () => { dismissThread(); closeTag(); panels.open('members'); };
   const closeMembers = panels.close;
-  const openThread = (id: string) => { setThreadRootID(id); panels.close(); };
-  const closeThread = () => setThreadRootID(null);
-  const togglePinned = () => { setThreadRootID(null); panels.toggle('pinned'); };
-  const toggleFiles = () => { setThreadRootID(null); panels.toggle('files'); };
+  const openThread = (id: string) => {
+    setThreadRootID(id);
+    // Clear any URL-driven thread so this local choice wins
+    // unambiguously (otherwise effectiveThreadRootID would still
+    // resolve to the URL value).
+    stripThreadParam();
+    closeTag();
+    panels.close();
+  };
+  const closeThread = dismissThread;
+  const togglePinned = () => { dismissThread(); closeTag(); panels.toggle('pinned'); };
+  const toggleFiles = () => { dismissThread(); closeTag(); panels.toggle('files'); };
   const showMembers = panels.isActive('members');
   const showPinned = panels.isActive('pinned');
   const showFiles = panels.isActive('files');
   const { data: channel } = useChannelBySlug(slug);
   const { data: members } = useChannelMembers(channel?.id);
   useDocumentTitle(channel ? `~${channel.name}` : null);
+  const { mainAnchor, threadAnchor, threadParam } = useDeepLinkAnchor(channel?.id);
   const {
     data,
     hasNextPage,
     isFetchingNextPage,
     isLoading,
     fetchNextPage,
+    fetchPreviousPage,
+    hasPreviousPage,
+    isFetchingPreviousPage,
     refetch,
-  } = useChannelMessages(channel?.id);
+  } = useChannelMessages(channel?.id, mainAnchor);
   const sendMessage = useSendChannelMessage(channel?.id);
   useEffect(() => {
     if (!channel?.id) return;
@@ -74,24 +103,24 @@ export function ChannelView() {
     };
   }, [channel?.id, clearChannelUnread, setActiveChannel, setActiveParent]);
 
-  // Reset thread when the channel changes; deliberate synchronous reset.
+  // Reset locally-opened thread when the channel changes; deliberate
+  // synchronous reset. URL-driven thread state (?thread=…) doesn't need
+  // resetting here — it's pulled fresh from the new URL on every render.
   // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => setThreadRootID(null), [channel?.id]);
 
-  // Honor a ?thread=... deep link from the Threads page. We pull the param
-  // once and clear it immediately so back/forward and tab switches don't keep
-  // re-opening it. The hash (e.g. #msg-<id> for the deep-link highlight)
-  // must survive — setSearchParams replaces only the search portion.
-  const threadParam = searchParams.get('thread');
+  // Local "open thread via UI button" state. The URL ?thread= param
+  // is the source of truth for deep-linked threads (so back/forward
+  // and reload keep working); local state is only used when the user
+  // manually opens a thread by clicking "Reply in thread" on a
+  // message. The displayed thread is the local one if set, otherwise
+  // the URL-driven one.
+  const effectiveThreadRootID = threadRootID ?? threadParam ?? null;
+
+  // Mark URL-driven threads as seen exactly once per change.
   useEffect(() => {
-    if (!threadParam) return;
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setThreadRootID(threadParam);
-    markThreadSeen(threadParam);
-    const next = new URLSearchParams(searchParams);
-    next.delete('thread');
-    setSearchParams(next, { replace: true, preventScrollReset: true });
-  }, [threadParam, searchParams, setSearchParams]);
+    if (threadParam) markThreadSeen(threadParam);
+  }, [threadParam]);
 
   // If the current user is no longer a member of the open channel (e.g.
   // they were just removed by an admin), boot them back to the placeholder
@@ -202,12 +231,16 @@ export function ChannelView() {
             isFetchingNextPage={isFetchingNextPage}
             isLoading={isLoading}
             fetchNextPage={fetchNextPage}
+            hasPreviousPage={hasPreviousPage}
+            isFetchingPreviousPage={isFetchingPreviousPage}
+            fetchPreviousPage={fetchPreviousPage}
             refetch={refetch}
             currentUserId={user?.id}
             channelId={channel?.id}
             channelSlug={channel?.slug}
             userMap={userMap}
             onReplyInThread={openThread}
+            anchorMsgId={mainAnchor}
             intro={
               channel ? (
                 <ChannelIntro
@@ -229,16 +262,20 @@ export function ChannelView() {
           />
         </MessageDropZone>
       </div>
-      {threadRootID && (
+      {activeTag ? (
+        <TagSearchPanel />
+      ) : effectiveThreadRootID ? (
         <ThreadPanel
           channelId={channel?.id}
-          threadRootID={threadRootID}
+          threadRootID={effectiveThreadRootID}
           onClose={closeThread}
           userMap={userMap}
           currentUserId={user?.id}
+          anchorMsgId={
+            effectiveThreadRootID === threadParam ? threadAnchor : undefined
+          }
         />
-      )}
-      {showPinned && !threadRootID && (
+      ) : showPinned ? (
         <PinnedPanel
           channelId={channel?.id}
           channelSlug={channel?.slug}
@@ -246,16 +283,14 @@ export function ChannelView() {
           userMap={userMap}
           currentUserId={user?.id}
         />
-      )}
-      {showFiles && !threadRootID && (
+      ) : showFiles ? (
         <FilesPanel
           channelId={channel?.id}
           onClose={panels.close}
           userMap={userMap}
           postedIn={channel ? `~${channel.name}` : undefined}
         />
-      )}
-      {showMembers && !threadRootID && members && (
+      ) : showMembers && members ? (
         <MemberList
           members={members}
           channelId={channel?.id}
@@ -264,7 +299,7 @@ export function ChannelView() {
           userMap={userMap}
           onClose={closeMembers}
         />
-      )}
+      ) : null}
     </div>
   );
 }

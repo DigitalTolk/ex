@@ -114,10 +114,10 @@ export function useThreadMessages(opts: {
 
 // threadDeepLink builds the URL a thread title points to. The query
 // `?thread=<id>` is consumed by Channel/ConversationView to open the
-// side panel; the `#msg-<id>` fragment is picked up by
-// useMessageDeepLinkHighlight to scroll the root into view and flash
-// the highlight ring. Both effects need to fire for the click to feel
-// like a proper "jump to thread" action.
+// side panel; the `#msg-<id>` fragment is read by useDeepLinkAnchor
+// and passed to MessageList as anchorMsgId, which scrolls the root
+// into view and flashes the highlight ring. Both effects need to
+// fire for the click to feel like a proper "jump to thread" action.
 export function threadDeepLink(
   summary: ThreadSummary,
   channelName: string,

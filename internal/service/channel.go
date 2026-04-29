@@ -16,6 +16,18 @@ import (
 	"github.com/DigitalTolk/ex/internal/store"
 )
 
+type ChannelIndexer interface {
+	IndexChannel(ctx context.Context, ch *model.Channel) error
+	DeleteChannel(ctx context.Context, id string) error
+}
+
+// ChannelSearcher returns matching channel IDs; SearchPublic hydrates
+// and applies guest-visibility rules so the UI never has to see
+// archived or out-of-scope hits.
+type ChannelSearcher interface {
+	Channels(ctx context.Context, q string, limit int) ([]string, error)
+}
+
 // ChannelService manages channels and channel memberships.
 type ChannelService struct {
 	channels    ChannelStore
@@ -25,6 +37,8 @@ type ChannelService struct {
 	cache       Cache
 	broker      Broker
 	publisher   Publisher
+	indexer     ChannelIndexer
+	searcher    ChannelSearcher
 }
 
 // NewChannelService creates a ChannelService with the given dependencies.
@@ -38,6 +52,19 @@ func NewChannelService(channels ChannelStore, memberships MembershipStore, users
 		cache:       cache,
 		broker:      broker,
 		publisher:   publisher,
+	}
+}
+
+func (s *ChannelService) SetIndexer(i ChannelIndexer) { s.indexer = i }
+
+func (s *ChannelService) SetSearcher(sr ChannelSearcher) { s.searcher = sr }
+
+func (s *ChannelService) indexChannel(ctx context.Context, ch *model.Channel) {
+	if s.indexer == nil || ch == nil {
+		return
+	}
+	if err := s.indexer.IndexChannel(ctx, ch); err != nil {
+		slog.Warn("search index channel failed", "id", ch.ID, "error", err)
 	}
 }
 
@@ -193,6 +220,8 @@ func (s *ChannelService) Create(ctx context.Context, userID, name string, chanTy
 		"type":      ch.Type,
 	})
 
+	s.indexChannel(ctx, ch)
+
 	return ch, nil
 }
 
@@ -241,6 +270,8 @@ func (s *ChannelService) Update(ctx context.Context, actorID, channelID string, 
 		"description": ch.Description,
 	})
 
+	s.indexChannel(ctx, ch)
+
 	return ch, nil
 }
 
@@ -286,6 +317,8 @@ func (s *ChannelService) Archive(ctx context.Context, actorID, channelID string)
 			}
 		}
 	}
+
+	s.indexChannel(ctx, ch)
 
 	if s.publisher == nil {
 		return nil
@@ -600,6 +633,48 @@ func (s *ChannelService) ListUserChannels(ctx context.Context, userID string) ([
 		}
 	}
 	return filtered, nil
+}
+
+// SearchPublic returns matched public channels visible to the caller
+// via OpenSearch. Returns (nil, nil) when no searcher is configured so
+// the handler can fall back to BrowsePublic.
+func (s *ChannelService) SearchPublic(ctx context.Context, userID, q string, limit int) ([]*model.Channel, error) {
+	if s.searcher == nil {
+		return nil, nil
+	}
+	ids, err := s.searcher.Channels(ctx, q, limit)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*model.Channel, 0, len(ids))
+	guestOnly := s.isGuest(ctx, userID)
+	for _, id := range ids {
+		ch, err := s.channels.GetChannel(ctx, id)
+		if err != nil || ch == nil {
+			continue
+		}
+		if ch.Archived || ch.Type != model.ChannelTypePublic {
+			continue
+		}
+		if guestOnly {
+			if _, err := s.memberships.GetMembership(ctx, ch.ID, userID); err != nil {
+				continue
+			}
+		}
+		out = append(out, ch)
+	}
+	return out, nil
+}
+
+func (s *ChannelService) isGuest(ctx context.Context, userID string) bool {
+	if s.users == nil || userID == "" {
+		return false
+	}
+	u, err := s.users.GetUser(ctx, userID)
+	if err != nil || u == nil {
+		return false
+	}
+	return u.SystemRole == model.SystemRoleGuest
 }
 
 // BrowsePublic returns a paginated list of public channels visible to the
