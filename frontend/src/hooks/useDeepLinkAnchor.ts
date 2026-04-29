@@ -22,8 +22,14 @@ export function useDeepLinkAnchor(_parentKey: string | undefined): {
   // Convenience: the raw `?thread=` value, so the caller can decide
   // whether to auto-open the thread panel without re-parsing the URL.
   threadParam?: string;
+  // Per-navigation token. Changes on EVERY navigation, including
+  // re-clicking a Link that points at the current URL. Consumers use
+  // it as part of their dedup key so re-clicks re-fire the anchor
+  // scroll/highlight even though the anchor itself didn't change.
+  navKey?: string;
 } {
-  const { hash } = useLocation();
+  const location = useLocation();
+  const { hash, key } = location;
   const [searchParams] = useSearchParams();
   const hashMsg = parseHash(hash);
   const threadParam = searchParams.get('thread') || undefined;
@@ -32,9 +38,13 @@ export function useDeepLinkAnchor(_parentKey: string | undefined): {
       mainAnchor: threadParam,
       threadAnchor: hashMsg && hashMsg !== threadParam ? hashMsg : undefined,
       threadParam,
+      navKey: key,
     };
   }
-  return { mainAnchor: hashMsg };
+  if (hashMsg) {
+    return { mainAnchor: hashMsg, navKey: key };
+  }
+  return {};
 }
 
 function parseHash(hash: string): string | undefined {

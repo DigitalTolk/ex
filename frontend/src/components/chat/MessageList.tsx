@@ -44,6 +44,11 @@ interface MessageListProps {
   // (centered, with a brief highlight) instead of pinning to the
   // bottom, and does not re-scroll on subsequent page fetches.
   anchorMsgId?: string;
+  // Per-navigation revision token (from useLocation().key). Changes
+  // on every navigation including re-clicking a Link to the current
+  // URL — used in the dedup key so re-clicks re-trigger the scroll
+  // even when anchorMsgId is unchanged.
+  anchorRevision?: string;
 }
 
 export function MessageList({
@@ -64,6 +69,7 @@ export function MessageList({
   onReplyInThread,
   intro,
   anchorMsgId,
+  anchorRevision,
 }: MessageListProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   // Tracks the inner messages container — the element whose height
@@ -206,11 +212,16 @@ export function MessageList({
     const el = document.getElementById(`msg-${anchorMsgId}`);
     if (!el) return;
 
-    // First land for this anchor: scroll, mark applied, reset
-    // user-scrolled flag, and start the wall-clock follow window.
-    if (anchorAppliedRef.current !== anchorMsgId) {
+    // The dedup key combines the anchor with the per-navigation
+    // revision. A re-click of the SAME search hit pushes a new
+    // history entry with a fresh location.key, so anchorRevision
+    // changes — that flips this key and re-fires the scroll +
+    // highlight, matching user expectation that "click the result
+    // again to jump back".
+    const dedupKey = anchorRevision ? `${anchorMsgId}@${anchorRevision}` : anchorMsgId;
+    if (anchorAppliedRef.current !== dedupKey) {
       el.scrollIntoView({ block: 'center' });
-      anchorAppliedRef.current = anchorMsgId;
+      anchorAppliedRef.current = dedupKey;
       wasAtBottomRef.current = false;
       userHasScrolledRef.current = false;
       followDeadlineRef.current = Date.now() + 1500;
@@ -253,13 +264,14 @@ export function MessageList({
     const remaining = Math.max(0, followDeadlineRef.current - Date.now());
     const timeoutId = window.setTimeout(stopFollowing, remaining);
     return stopFollowing;
-  }, [anchorMsgId, allMessages.length, wasAtBottomRef]);
+  }, [anchorMsgId, anchorRevision, allMessages.length, wasAtBottomRef]);
 
   // Cosmetic highlight ring on the anchor. Separate from the scroll
   // effect so it can run as a normal effect (with a setTimeout) and
   // so its dependency on `allMessages.length === 0` (a boolean) means
   // it fires once when messages first appear, not on every later page
-  // fetch.
+  // fetch. anchorRevision is included so re-clicking the same hit
+  // re-triggers the highlight flash.
   const messagesHaveLoaded = allMessages.length > 0;
   useEffect(() => {
     if (!anchorMsgId || !messagesHaveLoaded) return;
@@ -273,7 +285,7 @@ export function MessageList({
       window.clearTimeout(t);
       el.classList.remove(...ANCHOR_HIGHLIGHT_CLASSES);
     };
-  }, [anchorMsgId, messagesHaveLoaded]);
+  }, [anchorMsgId, anchorRevision, messagesHaveLoaded]);
 
   // Snap to the bottom when the bottom of the chat changes (a new
   // message landed at the end). The persistent bottom-stick observer
@@ -294,7 +306,8 @@ export function MessageList({
   // never touches it.
   const lastBottomIdRef = useRef<string | null | undefined>(undefined);
   useLayoutEffect(() => {
-    const bottom = allMessages[allMessages.length - 1];
+    const len = allMessages.length;
+    const bottom = allMessages[len - 1];
     const bottomId = bottom?.id ?? null;
     const wasFirstRun = lastBottomIdRef.current === undefined;
     const prevBottomId = lastBottomIdRef.current;
@@ -303,13 +316,16 @@ export function MessageList({
     if (wasFirstRun) return;
     // Skip when transitioning OUT OF an empty state. That's a query
     // refetch (parent change, anchor change) populating, NOT a fresh
-    // send. Without this guard, deep-link landings get yanked to the
-    // bottom of the around-window whenever the latest message in
-    // that window happens to be the user's own — and then the
-    // persistent bottom-stick RO keeps re-yanking on every avatar /
-    // attachment that finishes loading. ("Scrolls and scrolls back
-    // to the latest message" — exactly that cascade.)
+    // send.
     if (prevBottomId === null) return;
+    // Skip page loads. A fresh send appends exactly one message at
+    // the end, so the previous bottom is now at index len-2. A
+    // load-newer page-fetch shifts the previous bottom several
+    // positions up. Without this guard, paging through newer messages
+    // in deep-link mode gets yanked to the latest as soon as the new
+    // page's bottom happens to be the user's own message.
+    const secondToLast = len >= 2 ? allMessages[len - 2] : undefined;
+    if (secondToLast?.id !== prevBottomId) return;
     if (!bottom || bottom.parentMessageID) return;
     if (bottom.authorID !== currentUserId) return;
     const el = scrollRef.current;

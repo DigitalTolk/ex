@@ -67,7 +67,7 @@ export function ConversationView() {
   const { online } = usePresence();
   const { setActiveParent } = useNotifications();
   const { data: conversation } = useConversation(id);
-  const { mainAnchor, threadAnchor, threadParam } = useDeepLinkAnchor(id);
+  const { mainAnchor, threadAnchor, threadParam, navKey } = useDeepLinkAnchor(id);
   const {
     data,
     hasNextPage,
@@ -257,6 +257,7 @@ export function ConversationView() {
             userMap={userMap}
             onReplyInThread={openThread}
             anchorMsgId={mainAnchor}
+            anchorRevision={navKey}
             intro={intro ?? undefined}
           />
           <TypingIndicator parentID={id} userMap={userMap} />
@@ -283,6 +284,7 @@ export function ConversationView() {
           anchorMsgId={
             effectiveThreadRootID === threadParam ? threadAnchor : undefined
           }
+          anchorRevision={navKey}
         />
       ) : showPinned ? (
         <PinnedPanel

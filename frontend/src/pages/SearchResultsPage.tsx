@@ -289,16 +289,21 @@ function FilterChip({ label, onClear }: { label: string; onClear: () => void }) 
 }
 
 function FileHitRow({ hit, query }: { hit: SearchHit; query: string }) {
-  // ex_files docs carry: filename (string), parentIds (string[]),
-  // messageIds (string[]), createdAt. Pick the first allowed parent +
-  // its first messageId so the click lands in a context the user can
-  // actually see.
+  // ex_files (v2) docs carry: filename, parentIds (string[]),
+  // messageIds (string[]), parentMessageIds (string[], parallel to
+  // messageIds — empty string for top-level, thread-root ID for
+  // replies), createdAt. Pick the first allowed parent + its
+  // matching messageId/parentMessageID so the click deep-links into
+  // the right context. Legacy v1 docs without parentMessageIds get
+  // an undefined threadRoot → top-level link, the previous behavior.
   const filename = String(hit._source.filename ?? '');
   const parentIds = (hit._source.parentIds as string[] | undefined) ?? [];
   const messageIds = (hit._source.messageIds as string[] | undefined) ?? [];
+  const parentMessageIds = (hit._source.parentMessageIds as string[] | undefined) ?? [];
   const created = hit._source.createdAt ? formatLongDateTime(String(hit._source.createdAt)) : '';
   const targetMsgId = messageIds[0];
-  const parent = useMessageParent(parentIds[0] ?? '', targetMsgId);
+  const targetThreadRoot = parentMessageIds[0] || undefined;
+  const parent = useMessageParent(parentIds[0] ?? '', targetMsgId, targetThreadRoot);
 
   const inner = (
     <div className="flex items-start gap-3 rounded-lg border bg-card p-3 transition-colors hover:bg-muted/40">

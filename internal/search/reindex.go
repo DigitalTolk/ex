@@ -185,13 +185,16 @@ func (r *Reindexer) bulkChannels(ctx context.Context, channels []*model.Channel)
 
 // fileBucket aggregates per-attachment state across all messages we
 // re-walk during a reindex so each file is written once with the
-// merged parent/message sets.
+// merged parent/message sets. messageIds and parentMessageIds are
+// kept index-aligned (parentMessageIds[i] is the thread root of
+// messageIds[i], or "" for top-level).
 type fileBucket struct {
-	a          *model.Attachment
-	parentIds  []string
-	messageIds []string
-	parentSeen map[string]bool
-	msgSeen    map[string]bool
+	a                *model.Attachment
+	parentIds        []string
+	messageIds       []string
+	parentMessageIds []string
+	parentSeen       map[string]bool
+	msgSeen          map[string]bool
 }
 
 func (r *Reindexer) bulkMessages(ctx context.Context, msgs []*model.Message, parentType string, files map[string]*fileBucket) error {
@@ -221,6 +224,7 @@ func (r *Reindexer) bulkMessages(ctx context.Context, msgs []*model.Message, par
 			if !b.msgSeen[m.ID] {
 				b.msgSeen[m.ID] = true
 				b.messageIds = append(b.messageIds, m.ID)
+				b.parentMessageIds = append(b.parentMessageIds, m.ParentMessageID)
 			}
 		}
 	}
@@ -245,14 +249,15 @@ func (r *Reindexer) bulkFiles(ctx context.Context, files map[string]*fileBucket)
 		entries = append(entries, BulkEntry{
 			ID: id,
 			Doc: map[string]any{
-				"id":          b.a.ID,
-				"filename":    b.a.Filename,
-				"contentType": b.a.ContentType,
-				"size":        b.a.Size,
-				"sharedBy":    b.a.CreatedBy,
-				"parentIds":   b.parentIds,
-				"messageIds":  b.messageIds,
-				"createdAt":   b.a.CreatedAt,
+				"id":               b.a.ID,
+				"filename":         b.a.Filename,
+				"contentType":      b.a.ContentType,
+				"size":             b.a.Size,
+				"sharedBy":         b.a.CreatedBy,
+				"parentIds":        b.parentIds,
+				"messageIds":       b.messageIds,
+				"parentMessageIds": b.parentMessageIds,
+				"createdAt":        b.a.CreatedAt,
 			},
 		})
 	}

@@ -127,6 +127,99 @@ func TestLiveIndexer_IndexMessage_FileDocMergesExistingParents(t *testing.T) {
 	}
 }
 
+func TestLiveIndexer_IndexMessage_FileDocCarriesParentMessageID_TopLevel(t *testing.T) {
+	// First index of an attachment on a top-level message: messageIds
+	// gets the message ID, parentMessageIds gets "" at the same index
+	// so a frontend deep-link knows it's not in a thread.
+	w := &recordingWriter{}
+	idx := &LiveIndexer{w: w}
+	idx.SetAttachmentResolver(&stubAttachmentResolver{byID: map[string]*model.Attachment{
+		"a-1": {ID: "a-1", Filename: "doc.pdf"},
+	}})
+	m := &model.Message{ID: "m-1", ParentID: "ch-1", AuthorID: "u-1", AttachmentIDs: []string{"a-1"}}
+	if err := idx.IndexMessage(context.Background(), m, "channel"); err != nil {
+		t.Fatalf("IndexMessage: %v", err)
+	}
+	fileDoc := w.indexed[1].doc.(map[string]any)
+	msgIDs, _ := fileDoc["messageIds"].([]string)
+	parentMsgIDs, _ := fileDoc["parentMessageIds"].([]string)
+	if len(msgIDs) != 1 || msgIDs[0] != "m-1" {
+		t.Fatalf("messageIds = %v, want [m-1]", msgIDs)
+	}
+	if len(parentMsgIDs) != 1 || parentMsgIDs[0] != "" {
+		t.Fatalf("parentMessageIds = %v, want [\"\"]", parentMsgIDs)
+	}
+}
+
+func TestLiveIndexer_IndexMessage_FileDocCarriesParentMessageID_ThreadReply(t *testing.T) {
+	// Attachment on a thread reply: parentMessageIds carries the
+	// thread root so a click on the file hit lands in the thread
+	// panel with the reply highlighted.
+	w := &recordingWriter{}
+	idx := &LiveIndexer{w: w}
+	idx.SetAttachmentResolver(&stubAttachmentResolver{byID: map[string]*model.Attachment{
+		"a-1": {ID: "a-1", Filename: "doc.pdf"},
+	}})
+	m := &model.Message{
+		ID:              "reply-1",
+		ParentID:        "ch-1",
+		ParentMessageID: "root-1",
+		AuthorID:        "u-1",
+		AttachmentIDs:   []string{"a-1"},
+	}
+	if err := idx.IndexMessage(context.Background(), m, "channel"); err != nil {
+		t.Fatalf("IndexMessage: %v", err)
+	}
+	fileDoc := w.indexed[1].doc.(map[string]any)
+	parentMsgIDs, _ := fileDoc["parentMessageIds"].([]string)
+	if len(parentMsgIDs) != 1 || parentMsgIDs[0] != "root-1" {
+		t.Fatalf("parentMessageIds = %v, want [root-1]", parentMsgIDs)
+	}
+}
+
+func TestLiveIndexer_IndexMessage_FileDocKeepsParentMessageIdsAlignedAcrossReshares(t *testing.T) {
+	// File previously shared in a top-level message; now re-shared in
+	// a thread reply. Both messages must show up — messageIds and
+	// parentMessageIds index-aligned. Legacy docs without
+	// parentMessageIds get padded with "" before the new entry.
+	w := &recordingWriter{
+		getDocs: map[string]map[string]any{
+			IndexFiles + "/a-1": {
+				"id":         "a-1",
+				"filename":   "doc.pdf",
+				"parentIds":  []any{"ch-1"},
+				"messageIds": []any{"m-old"},
+				// parentMessageIds intentionally absent — legacy v1 doc.
+			},
+		},
+	}
+	idx := &LiveIndexer{w: w}
+	idx.SetAttachmentResolver(&stubAttachmentResolver{byID: map[string]*model.Attachment{
+		"a-1": {ID: "a-1", Filename: "doc.pdf"},
+	}})
+	m := &model.Message{
+		ID:              "m-new",
+		ParentID:        "ch-1",
+		ParentMessageID: "root-7",
+		AuthorID:        "u-1",
+		AttachmentIDs:   []string{"a-1"},
+	}
+	if err := idx.IndexMessage(context.Background(), m, "channel"); err != nil {
+		t.Fatalf("IndexMessage: %v", err)
+	}
+	fileDoc := w.indexed[1].doc.(map[string]any)
+	msgIDs, _ := fileDoc["messageIds"].([]string)
+	parentMsgIDs, _ := fileDoc["parentMessageIds"].([]string)
+	// Two entries, index-aligned: m-old (legacy, padded "") and m-new
+	// (its own thread root).
+	if len(msgIDs) != 2 || msgIDs[0] != "m-old" || msgIDs[1] != "m-new" {
+		t.Fatalf("messageIds = %v, want [m-old m-new]", msgIDs)
+	}
+	if len(parentMsgIDs) != 2 || parentMsgIDs[0] != "" || parentMsgIDs[1] != "root-7" {
+		t.Fatalf("parentMessageIds = %v, want [\"\" root-7]", parentMsgIDs)
+	}
+}
+
 func TestLiveIndexer_IndexMessage_PropagatesGetDocError(t *testing.T) {
 	w := &recordingWriter{}
 	w.indexErr = errors.New("indexdoc fell over")

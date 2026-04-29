@@ -2,12 +2,18 @@ package search
 
 // Index name constants. Kept simple (no aliases / per-deploy suffixes)
 // because the workspace's data volume is small enough that an in-place
-// reindex is acceptable.
+// reindex is acceptable. When the analyzer or shape of an index
+// changes, bump the suffix here — EnsureIndices will create the new
+// one fresh with the new mapping; the admin reindex then repopulates.
+// (Old indexes become orphaned and can be dropped manually.)
 const (
 	IndexUsers    = "ex_users"
 	IndexChannels = "ex_channels"
 	IndexMessages = "ex_messages"
-	IndexFiles    = "ex_files"
+	// v2: filename uses the `simple` analyzer (so "chat-icon" matches
+	// "chat-icon.png"); files docs include parentMessageIds parallel
+	// to messageIds so file hits in thread replies link correctly.
+	IndexFiles = "ex_files_v2"
 )
 
 // indexMappings is the mapping JSON used at index-creation time. The
@@ -59,14 +65,15 @@ var indexMappings = map[string]string{
 	IndexFiles: `{
 		"mappings": {
 			"properties": {
-				"id":          {"type": "keyword"},
-				"filename":    {"type": "text"},
-				"contentType": {"type": "keyword"},
-				"size":        {"type": "long"},
-				"sharedBy":    {"type": "keyword"},
-				"parentIds":   {"type": "keyword"},
-				"messageIds":  {"type": "keyword"},
-				"createdAt":   {"type": "date"}
+				"id":               {"type": "keyword"},
+				"filename":         {"type": "text", "analyzer": "simple"},
+				"contentType":      {"type": "keyword"},
+				"size":             {"type": "long"},
+				"sharedBy":         {"type": "keyword"},
+				"parentIds":        {"type": "keyword"},
+				"messageIds":       {"type": "keyword"},
+				"parentMessageIds": {"type": "keyword"},
+				"createdAt":        {"type": "date"}
 			}
 		}
 	}`,

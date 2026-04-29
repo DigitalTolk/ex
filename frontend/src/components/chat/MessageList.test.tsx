@@ -1096,6 +1096,51 @@ describe('MessageList', () => {
       });
     });
 
+    it('re-clicking the same search hit (anchor unchanged, navigation token changes) re-fires the scroll', () => {
+      // anchorRevision threads useLocation().key through. A re-click
+      // pushes a new history entry → fresh key → re-trigger, even
+      // though anchorMsgId is identical.
+      withScrollIntoViewSpy((spy) => {
+        const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+        const wrap = (props: Partial<React.ComponentProps<typeof MessageList>>) => (
+          <QueryClientProvider client={qc}>
+            <BrowserRouter>
+              <MessageList {...defaultProps} {...props} />
+            </BrowserRouter>
+          </QueryClientProvider>
+        );
+        const { rerender } = render(
+          wrap({
+            pages: [{ items: [makeMessage({ id: 'm-1', body: 'target' })] }],
+            anchorMsgId: 'm-1',
+            anchorRevision: 'nav-1',
+          }),
+        );
+        expect(spy).toHaveBeenCalledTimes(1);
+
+        // Same anchor, same navigation key — must NOT re-fire (page
+        // fetches re-render with identical props).
+        rerender(
+          wrap({
+            pages: [{ items: [makeMessage({ id: 'm-1', body: 'target' }), makeMessage({ id: 'm-2' })] }],
+            anchorMsgId: 'm-1',
+            anchorRevision: 'nav-1',
+          }),
+        );
+        expect(spy).toHaveBeenCalledTimes(1);
+
+        // Re-click the same hit → new navigation key → re-fire.
+        rerender(
+          wrap({
+            pages: [{ items: [makeMessage({ id: 'm-1', body: 'target' }), makeMessage({ id: 'm-2' })] }],
+            anchorMsgId: 'm-1',
+            anchorRevision: 'nav-2',
+          }),
+        );
+        expect(spy).toHaveBeenCalledTimes(2);
+      });
+    });
+
     it('the follow-anchor RO observes the inner messages container, not a load-newer sentinel (regression: cross-parent search-result scroll drifted)', () => {
       // Both load-more (top) and load-newer (bottom) sentinels render
       // when the around-window has older AND newer pages remaining —
@@ -1300,6 +1345,70 @@ describe('MessageList', () => {
       } finally {
         vi.useRealTimers();
       }
+    });
+
+    it('does NOT auto-scroll to bottom when load-newer fetches a page whose bottom is the user\'s own (regression: jumps to latest while paging through newer messages)', () => {
+      // In deep-link mode, scrolling down triggers fetchPreviousPage
+      // which APPENDS a newer page. The previous bottom message
+      // ends up several positions up — distinguishing this from a
+      // single-message append (a fresh send). Without that check,
+      // the lastBottom effect treats the new page's last own
+      // message as a fresh send and yanks to the bottom.
+      withScrollIntoViewSpy(() => {
+        const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+        const wrap = (props: Partial<React.ComponentProps<typeof MessageList>>) => (
+          <QueryClientProvider client={qc}>
+            <BrowserRouter>
+              <MessageList {...defaultProps} {...props} />
+            </BrowserRouter>
+          </QueryClientProvider>
+        );
+
+        // Initial: deep-link landing on msg-target. Around-window
+        // has older messages below the target, none yet from a
+        // newer page.
+        const aroundPage = {
+          items: [
+            makeMessage({ id: 'around-bottom', authorID: 'user-2', body: 'around bottom' }),
+            makeMessage({ id: 'msg-target', authorID: 'user-2', body: 'target' }),
+            makeMessage({ id: 'around-old', authorID: 'user-2', body: 'older' }),
+          ],
+        };
+        const { rerender, container } = render(
+          wrap({ pages: [aroundPage], anchorMsgId: 'msg-target', hasPreviousPage: true, fetchPreviousPage: vi.fn() }),
+        );
+        const scroller = container.querySelector('div.overflow-y-auto') as HTMLDivElement;
+        Object.defineProperty(scroller, 'scrollHeight', { value: 1500, configurable: true });
+        // After deep-link, simulate the user scrolling down — they're
+        // mid-list now, definitely not at scrollHeight.
+        scroller.scrollTop = 600;
+
+        // Newer page arrives via fetchPreviousPage. Its last message
+        // is the user's own. Under the old code this looked like a
+        // fresh send and scrollTop got set to scrollHeight.
+        rerender(
+          wrap({
+            pages: [
+              aroundPage,
+              {
+                items: [
+                  makeMessage({ id: 'newer-bottom-own', authorID: 'user-1', body: 'mine, latest' }),
+                  makeMessage({ id: 'newer-mid', authorID: 'user-2', body: 'mid' }),
+                  makeMessage({ id: 'newer-top', authorID: 'user-2', body: 'top' }),
+                ],
+              },
+            ],
+            anchorMsgId: 'msg-target',
+            hasPreviousPage: false,
+            fetchPreviousPage: vi.fn(),
+          }),
+        );
+        Object.defineProperty(scroller, 'scrollHeight', { value: 2400, configurable: true });
+        // Bottom shifted from around-bottom to newer-bottom-own —
+        // multiple positions, not a single append. lastBottom must
+        // not fire.
+        expect(scroller.scrollTop).toBe(600);
+      });
     });
 
     it('does NOT auto-scroll to bottom on cross-parent navigation when the around-window\'s bottom message is the user\'s own (regression: "scrolls and scrolls back to the latest message")', () => {

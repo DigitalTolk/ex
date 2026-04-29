@@ -122,22 +122,34 @@ func (l *LiveIndexer) IndexMessage(ctx context.Context, m *model.Message, parent
 // upsertFile read-modifies-writes the file doc so the parent/message
 // reference sets stay deduped. Concurrent writes can race; the admin
 // reindex is the recovery path for any divergence.
+//
+// messageIds and parentMessageIds are kept INDEX-ALIGNED — each
+// messageId in messageIds[i] has its thread-root (or "" for top-
+// level) at parentMessageIds[i]. The frontend uses this alignment
+// to deep-link a file hit in a thread reply directly into the right
+// thread panel.
 func (l *LiveIndexer) upsertFile(ctx context.Context, a *model.Attachment, m *model.Message) error {
 	existing, err := l.w.GetDoc(ctx, IndexFiles, a.ID)
 	if err != nil {
 		return err
 	}
 	parentIds := mergeStringSet(existing["parentIds"], m.ParentID)
-	messageIds := mergeStringSet(existing["messageIds"], m.ID)
+	messageIds, parentMessageIds := mergeMessageRefs(
+		existing["messageIds"],
+		existing["parentMessageIds"],
+		m.ID,
+		m.ParentMessageID,
+	)
 	doc := map[string]any{
-		"id":          a.ID,
-		"filename":    a.Filename,
-		"contentType": a.ContentType,
-		"size":        a.Size,
-		"sharedBy":    a.CreatedBy,
-		"parentIds":   parentIds,
-		"messageIds":  messageIds,
-		"createdAt":   a.CreatedAt,
+		"id":               a.ID,
+		"filename":         a.Filename,
+		"contentType":      a.ContentType,
+		"size":             a.Size,
+		"sharedBy":         a.CreatedBy,
+		"parentIds":        parentIds,
+		"messageIds":       messageIds,
+		"parentMessageIds": parentMessageIds,
+		"createdAt":        a.CreatedAt,
 	}
 	return l.w.IndexDoc(ctx, IndexFiles, a.ID, doc)
 }
@@ -153,6 +165,42 @@ func mergeStringSet(prev any, add string) []string {
 			}
 			seen[s] = true
 			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// mergeMessageRefs maintains a pair of parallel slices keyed by the
+// messageId. If addMsgID is already present, the existing entry's
+// parentMessageID is preserved (we don't ratchet over a corrected
+// value with a stale one). Otherwise the new (msgID, parentMsgID)
+// pair is appended at the same index. Legacy docs with only
+// messageIds (no parentMessageIds) are tolerated by padding with
+// empty strings.
+func mergeMessageRefs(prevMsgIDs, prevParentMsgIDs any, addMsgID, addParentMsgID string) ([]string, []string) {
+	msgIDs := stringsFromAny(prevMsgIDs)
+	parentMsgIDs := stringsFromAny(prevParentMsgIDs)
+	for len(parentMsgIDs) < len(msgIDs) {
+		parentMsgIDs = append(parentMsgIDs, "")
+	}
+	for i, id := range msgIDs {
+		if id == addMsgID {
+			// Already there. Keep arrays as-is (with padding applied
+			// above so callers always see aligned slices).
+			_ = i
+			return msgIDs, parentMsgIDs
+		}
+	}
+	return append(msgIDs, addMsgID), append(parentMsgIDs, addParentMsgID)
+}
+
+func stringsFromAny(v any) []string {
+	out := []string{}
+	if list, ok := v.([]any); ok {
+		for _, x := range list {
+			if s, ok := x.(string); ok {
+				out = append(out, s)
+			}
 		}
 	}
 	return out

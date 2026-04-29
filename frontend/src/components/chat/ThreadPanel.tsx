@@ -26,6 +26,8 @@ interface ThreadPanelProps {
   // Used for search/threads-page links of the form
   // /channel/x?thread=root#msg-replyId.
   anchorMsgId?: string;
+  // Per-navigation revision token; same role as in MessageList.
+  anchorRevision?: string;
 }
 
 export function ThreadPanel({
@@ -36,6 +38,7 @@ export function ThreadPanel({
   userMap,
   currentUserId,
   anchorMsgId,
+  anchorRevision,
 }: ThreadPanelProps) {
   const { data, isLoading } = useThreadMessages({ channelId, conversationId, threadRootID });
 
@@ -155,9 +158,10 @@ export function ThreadPanel({
     const el = document.getElementById(`msg-${anchorMsgId}`);
     if (!el) return;
 
-    if (anchorAppliedRef.current !== anchorMsgId) {
+    const dedupKey = anchorRevision ? `${anchorMsgId}@${anchorRevision}` : anchorMsgId;
+    if (anchorAppliedRef.current !== dedupKey) {
       el.scrollIntoView({ block: 'center' });
-      anchorAppliedRef.current = anchorMsgId;
+      anchorAppliedRef.current = dedupKey;
       wasAtBottomRef.current = false;
       userHasScrolledRef.current = false;
       followDeadlineRef.current = Date.now() + 1500;
@@ -189,7 +193,7 @@ export function ThreadPanel({
     const remaining = Math.max(0, followDeadlineRef.current - Date.now());
     const timeoutId = window.setTimeout(stopFollowing, remaining);
     return stopFollowing;
-  }, [anchorMsgId, data?.length, wasAtBottomRef]);
+  }, [anchorMsgId, anchorRevision, data?.length, wasAtBottomRef]);
 
   // Cosmetic highlight ring on the in-thread anchor.
   const repliesHaveLoaded = (data?.length ?? 0) > 0;
@@ -205,7 +209,7 @@ export function ThreadPanel({
       window.clearTimeout(t);
       el.classList.remove(...ANCHOR_HIGHLIGHT_CLASSES);
     };
-  }, [anchorMsgId, repliesHaveLoaded]);
+  }, [anchorMsgId, anchorRevision, repliesHaveLoaded]);
   useEffect(
     () => () => {
       if (stickyROrRef.current) {

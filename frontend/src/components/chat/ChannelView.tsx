@@ -79,7 +79,7 @@ export function ChannelView() {
   const { data: channel } = useChannelBySlug(slug);
   const { data: members } = useChannelMembers(channel?.id);
   useDocumentTitle(channel ? `~${channel.name}` : null);
-  const { mainAnchor, threadAnchor, threadParam } = useDeepLinkAnchor(channel?.id);
+  const { mainAnchor, threadAnchor, threadParam, navKey } = useDeepLinkAnchor(channel?.id);
   const {
     data,
     hasNextPage,
@@ -241,6 +241,7 @@ export function ChannelView() {
             userMap={userMap}
             onReplyInThread={openThread}
             anchorMsgId={mainAnchor}
+            anchorRevision={navKey}
             intro={
               channel ? (
                 <ChannelIntro
@@ -274,6 +275,7 @@ export function ChannelView() {
           anchorMsgId={
             effectiveThreadRootID === threadParam ? threadAnchor : undefined
           }
+          anchorRevision={navKey}
         />
       ) : showPinned ? (
         <PinnedPanel
