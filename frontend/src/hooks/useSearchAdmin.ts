@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiFetch } from '@/lib/api';
+import { queryKeys } from '@/lib/query-keys';
 
 // SearchIndexStat mirrors search.IndexStat in the backend; kept thin so
 // the admin panel can render rows without coupling to internal types.
@@ -36,7 +37,7 @@ export interface SearchAdminStatus {
 // visibly; otherwise a 30s heartbeat is plenty.
 export function useSearchAdminStatus() {
   return useQuery({
-    queryKey: ['admin-search-status'],
+    queryKey: queryKeys.adminSearchStatus(),
     queryFn: () => apiFetch<SearchAdminStatus>('/api/v1/admin/search/status'),
     refetchInterval: (query) => {
       const data = query.state.data;
@@ -56,7 +57,7 @@ export function useStartSearchReindex() {
     mutationFn: () =>
       apiFetch<SearchReindexProgress>('/api/v1/admin/search/reindex', { method: 'POST' }),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['admin-search-status'] });
+      qc.invalidateQueries({ queryKey: queryKeys.adminSearchStatus() });
     },
   });
 }

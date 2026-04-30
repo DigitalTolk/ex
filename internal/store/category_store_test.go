@@ -221,3 +221,34 @@ func TestCategoryStore_Delete_Idempotent(t *testing.T) {
 		t.Errorf("Delete of missing should be a no-op, got %v", err)
 	}
 }
+
+// TestCategoryStore_Get_NonexistentTable covers the wrap-and-return
+// branch in Get when the underlying GetItem call errors.
+func TestCategoryStore_Get_NonexistentTable(t *testing.T) {
+	db := brokenDB(t)
+	s := NewCategoryStore(db)
+	if _, err := s.Get(context.Background(), "u", "c"); err == nil {
+		t.Error("expected error on missing table")
+	}
+}
+
+// TestCategoryStore_List_NonexistentTable covers the Query error path.
+func TestCategoryStore_List_NonexistentTable(t *testing.T) {
+	db := brokenDB(t)
+	s := NewCategoryStore(db)
+	if _, err := s.List(context.Background(), "u"); err == nil {
+		t.Error("expected error on missing table")
+	}
+}
+
+// TestCategoryStore_Delete_NonexistentTable covers the DeleteItem error
+// path. DynamoDB DeleteItem ordinarily succeeds on a missing key, but a
+// missing table returns ResourceNotFoundException which the store
+// wraps and surfaces.
+func TestCategoryStore_Delete_NonexistentTable(t *testing.T) {
+	db := brokenDB(t)
+	s := NewCategoryStore(db)
+	if err := s.Delete(context.Background(), "u", "c"); err == nil {
+		t.Error("expected error on missing table")
+	}
+}

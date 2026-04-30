@@ -2,6 +2,7 @@ import { createElement, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Download } from 'lucide-react';
 import { apiFetch } from '@/lib/api';
+import { queryKeys, parentPath } from '@/lib/query-keys';
 import { useAttachmentsBatch } from '@/hooks/useAttachments';
 import { useAttachmentLightbox } from '@/hooks/useAttachmentLightbox';
 import { iconForAttachment, isImageContentType } from '@/lib/file-helpers';
@@ -38,13 +39,11 @@ export function FilesPanel({
   userMap,
   postedIn,
 }: FilesPanelProps) {
-  const parentPath = channelId
-    ? `channels/${channelId}`
-    : `conversations/${conversationId}`;
+  const path = parentPath({ channelId, conversationId });
 
   const { data: entries, isLoading } = useQuery({
-    queryKey: ['files', parentPath],
-    queryFn: () => apiFetch<FileEntry[]>(`/api/v1/${parentPath}/files`),
+    queryKey: queryKeys.files(path),
+    queryFn: () => apiFetch<FileEntry[]>(`/api/v1/${path}/files`),
     enabled: !!(channelId || conversationId),
     // Files change when someone uploads — those propagate via the
     // message.new event. A 5-minute cache avoids re-fetching on every

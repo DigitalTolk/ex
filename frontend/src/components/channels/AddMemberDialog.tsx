@@ -3,6 +3,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { apiFetch } from '@/lib/api';
+import { queryKeys } from '@/lib/query-keys';
 import { useQueryClient } from '@tanstack/react-query';
 
 interface AddMemberDialogProps {
@@ -51,7 +52,7 @@ export function AddMemberDialog({ open, onOpenChange, channelId }: AddMemberDial
         method: 'POST',
         body: JSON.stringify({ userID: selectedUser.id, role: 'member' }),
       });
-      queryClient.invalidateQueries({ queryKey: ['channelMembers', channelId] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.channelMembers(channelId) });
       setQuery('');
       setSelectedUser(null);
       setResults([]);

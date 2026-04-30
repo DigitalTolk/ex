@@ -2,7 +2,23 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createElement, type ReactNode } from 'react';
-import { useChannelMessages } from './useMessages';
+import {
+  useChannelMessages,
+  appendMessageToCache,
+  updateMessageInCache,
+  removeMessageFromCache,
+  bumpThreadReplyMetadata,
+  resyncMessageCache,
+  useEditMessage,
+  useDeleteMessage,
+  useToggleReaction,
+  useSetPinned,
+  useSetNoUnfurl,
+  type MessageWindow,
+  type MessagePageParam,
+} from './useMessages';
+import type { Message } from '@/types';
+import type { InfiniteData } from '@tanstack/react-query';
 
 vi.mock('@/lib/api', () => ({
   apiFetch: vi.fn(),
@@ -238,5 +254,377 @@ describe('useChannelMessages', () => {
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(result.current.hasPreviousPage).toBe(true);
     expect(result.current.hasNextPage).toBe(false);
+  });
+});
+
+function makeMsg(overrides: Partial<Message> = {}): Message {
+  return {
+    id: 'm',
+    parentID: 'ch-1',
+    authorID: 'u',
+    body: 'hi',
+    createdAt: '2026-04-30T00:00:00Z',
+    ...overrides,
+  };
+}
+
+function seedCache(qc: QueryClient, key: unknown[], data: InfiniteData<MessageWindow, MessagePageParam>) {
+  qc.setQueryData(key, data);
+}
+
+describe('cache patching helpers (avoiding v5 walk-forward refetch)', () => {
+  it('appendMessageToCache prepends to pages[0] when it is the live tail', () => {
+    // Regression: invalidateQueries on a deep-link infinite query
+    // truncates the page chain (see appendMessageToCache jsdoc).
+    // Patching directly preserves the chain.
+    const qc = new QueryClient();
+    const aroundPage: MessageWindow = {
+      items: [makeMsg({ id: 'm-2' }), makeMsg({ id: 'm-1' })],
+      hasMoreOlder: true,
+      hasMoreNewer: true,
+      newestID: 'm-2',
+      oldestID: 'm-1',
+    };
+    const newerPage: MessageWindow = {
+      items: [makeMsg({ id: 'm-4' }), makeMsg({ id: 'm-3' })],
+      hasMoreOlder: false,
+      hasMoreNewer: false,
+      newestID: 'm-4',
+      oldestID: 'm-3',
+    };
+    seedCache(qc, ['channelMessages', 'ch-1', 'm-1'], {
+      pages: [newerPage, aroundPage],
+      pageParams: [
+        { kind: 'newer', after: 'm-2' },
+        { kind: 'around', msgId: 'm-1', before: 25, after: 25 },
+      ],
+    });
+    appendMessageToCache(qc, 'ch-1', makeMsg({ id: 'm-5' }));
+    const result = qc.getQueryData<InfiniteData<MessageWindow, MessagePageParam>>([
+      'channelMessages', 'ch-1', 'm-1',
+    ]);
+    expect(result?.pages.length).toBe(2);
+    expect(result?.pages[0].items.map((m) => m.id)).toEqual(['m-5', 'm-4', 'm-3']);
+    expect(result?.pages[0].newestID).toBe('m-5');
+    expect(result?.pages[1]).toBe(aroundPage);
+  });
+
+  it('appendMessageToCache is a no-op when pages[0] still has more newer pages to fetch', () => {
+    // The new message belongs to a future page that doesn't exist in
+    // cache yet; load-newer pagination will pick it up. Don't risk
+    // inserting it into the wrong page.
+    const qc = new QueryClient();
+    const aroundPage: MessageWindow = {
+      items: [makeMsg({ id: 'm-1' })],
+      hasMoreOlder: false,
+      hasMoreNewer: true, // <-- not at live tail
+      newestID: 'm-1',
+      oldestID: 'm-1',
+    };
+    seedCache(qc, ['channelMessages', 'ch-1', 'm-1'], {
+      pages: [aroundPage],
+      pageParams: [{ kind: 'around', msgId: 'm-1', before: 25, after: 25 }],
+    });
+    appendMessageToCache(qc, 'ch-1', makeMsg({ id: 'm-2' }));
+    const result = qc.getQueryData<InfiniteData<MessageWindow, MessagePageParam>>([
+      'channelMessages', 'ch-1', 'm-1',
+    ]);
+    expect(result?.pages[0].items.map((m) => m.id)).toEqual(['m-1']);
+  });
+
+  it('appendMessageToCache dedupes WS echoes of an already-cached message', () => {
+    const qc = new QueryClient();
+    seedCache(qc, ['channelMessages', 'ch-1', null], {
+      pages: [{
+        items: [makeMsg({ id: 'm-1' })],
+        hasMoreOlder: false,
+        hasMoreNewer: false,
+        newestID: 'm-1',
+      }],
+      pageParams: [{ kind: 'tail' }],
+    });
+    appendMessageToCache(qc, 'ch-1', makeMsg({ id: 'm-1' }));
+    const result = qc.getQueryData<InfiniteData<MessageWindow, MessagePageParam>>([
+      'channelMessages', 'ch-1', null,
+    ]);
+    expect(result?.pages[0].items.length).toBe(1);
+  });
+
+  it('updateMessageInCache replaces the message in whichever page holds it', () => {
+    const qc = new QueryClient();
+    seedCache(qc, ['conversationMessages', 'dm-1', null], {
+      pages: [
+        { items: [makeMsg({ id: 'm-2', body: 'old' })], hasMoreOlder: true, hasMoreNewer: false, newestID: 'm-2' },
+        { items: [makeMsg({ id: 'm-1' })], hasMoreOlder: false, hasMoreNewer: false, oldestID: 'm-1' },
+      ],
+      pageParams: [{ kind: 'tail' }, { kind: 'older', cursor: 'm-2' }],
+    });
+    updateMessageInCache(qc, 'dm-1', makeMsg({ id: 'm-2', body: 'edited' }));
+    const result = qc.getQueryData<InfiniteData<MessageWindow, MessagePageParam>>([
+      'conversationMessages', 'dm-1', null,
+    ]);
+    expect(result?.pages[0].items[0].body).toBe('edited');
+    expect(result?.pages.length).toBe(2);
+  });
+
+  it('removeMessageFromCache filters the message out without touching other pages', () => {
+    const qc = new QueryClient();
+    seedCache(qc, ['channelMessages', 'ch-1', null], {
+      pages: [{
+        items: [makeMsg({ id: 'm-2' }), makeMsg({ id: 'm-1' })],
+        hasMoreOlder: false,
+        hasMoreNewer: false,
+      }],
+      pageParams: [{ kind: 'tail' }],
+    });
+    removeMessageFromCache(qc, 'ch-1', 'm-1');
+    const result = qc.getQueryData<InfiniteData<MessageWindow, MessagePageParam>>([
+      'channelMessages', 'ch-1', null,
+    ]);
+    expect(result?.pages[0].items.map((m) => m.id)).toEqual(['m-2']);
+  });
+
+  it('bumpThreadReplyMetadata increments replyCount and sets recent authors on the parent', () => {
+    const qc = new QueryClient();
+    seedCache(qc, ['channelMessages', 'ch-1', null], {
+      pages: [{
+        items: [makeMsg({ id: 'root', replyCount: 1, recentReplyAuthorIDs: ['u-a'] })],
+        hasMoreOlder: false,
+        hasMoreNewer: false,
+      }],
+      pageParams: [{ kind: 'tail' }],
+    });
+    bumpThreadReplyMetadata(qc, 'ch-1', makeMsg({
+      id: 'reply-1',
+      authorID: 'u-b',
+      parentMessageID: 'root',
+      createdAt: '2026-04-30T01:00:00Z',
+    }));
+    const result = qc.getQueryData<InfiniteData<MessageWindow, MessagePageParam>>([
+      'channelMessages', 'ch-1', null,
+    ]);
+    const root = result?.pages[0].items[0];
+    expect(root?.replyCount).toBe(2);
+    expect(root?.lastReplyAt).toBe('2026-04-30T01:00:00Z');
+    expect(root?.recentReplyAuthorIDs).toEqual(['u-b', 'u-a']);
+  });
+
+  it('bumpThreadReplyMetadata is a no-op when the parent is not in cache (older page not loaded)', () => {
+    const qc = new QueryClient();
+    seedCache(qc, ['channelMessages', 'ch-1', null], {
+      pages: [{
+        items: [makeMsg({ id: 'unrelated' })],
+        hasMoreOlder: true,
+        hasMoreNewer: false,
+      }],
+      pageParams: [{ kind: 'tail' }],
+    });
+    expect(() =>
+      bumpThreadReplyMetadata(qc, 'ch-1', makeMsg({ id: 'r', parentMessageID: 'missing-root' })),
+    ).not.toThrow();
+  });
+
+});
+
+describe('resyncMessageCache (WS reconnect catch-up)', () => {
+  beforeEach(() => {
+    vi.mocked(apiFetch).mockReset();
+  });
+
+  it('fetches newer messages and prepends them to tail-mode pages[0]', async () => {
+    const qc = new QueryClient();
+    const head: MessageWindow = {
+      items: [makeMsg({ id: 'm-2' }), makeMsg({ id: 'm-1' })],
+      hasMoreOlder: false,
+      hasMoreNewer: false, // <-- live tail
+      newestID: 'm-2',
+      oldestID: 'm-1',
+    };
+    qc.setQueryData(['channelMessages', 'ch-1', null], {
+      pages: [head],
+      pageParams: [{ kind: 'tail' }],
+    });
+    vi.mocked(apiFetch).mockResolvedValueOnce({
+      items: [makeMsg({ id: 'm-3' })],
+      hasMoreOlder: false,
+      hasMoreNewer: false,
+      newestID: 'm-3',
+      oldestID: 'm-3',
+    });
+
+    await resyncMessageCache(qc);
+
+    const result = qc.getQueryData<InfiniteData<MessageWindow, MessagePageParam>>([
+      'channelMessages', 'ch-1', null,
+    ]);
+    expect(result?.pages[0].items.map((m) => m.id)).toEqual(['m-3', 'm-2', 'm-1']);
+    expect(result?.pages[0].newestID).toBe('m-3');
+    expect(vi.mocked(apiFetch).mock.calls[0][0]).toMatch(/\/messages\?after=m-2&limit=50/);
+  });
+
+  it('skips deep-link queries (head.hasMoreNewer === true)', async () => {
+    const qc = new QueryClient();
+    qc.setQueryData(['channelMessages', 'ch-1', 'msg-anchor'], {
+      pages: [{
+        items: [makeMsg({ id: 'm-1' })],
+        hasMoreOlder: true,
+        hasMoreNewer: true, // <-- not at live tail
+        newestID: 'm-1',
+      }],
+      pageParams: [{ kind: 'around', msgId: 'msg-anchor', before: 25, after: 25 }],
+    });
+
+    await resyncMessageCache(qc);
+
+    expect(apiFetch).not.toHaveBeenCalled();
+  });
+
+  it('dedupes a returned message that is already in pages[0] (WS event won the race)', async () => {
+    const qc = new QueryClient();
+    qc.setQueryData(['channelMessages', 'ch-1', null], {
+      pages: [{
+        items: [makeMsg({ id: 'm-2' }), makeMsg({ id: 'm-1' })],
+        hasMoreOlder: false,
+        hasMoreNewer: false,
+        newestID: 'm-2',
+      }],
+      pageParams: [{ kind: 'tail' }],
+    });
+    vi.mocked(apiFetch).mockResolvedValueOnce({
+      items: [makeMsg({ id: 'm-2' })], // already cached
+      hasMoreOlder: false,
+      hasMoreNewer: false,
+      newestID: 'm-2',
+    });
+
+    await resyncMessageCache(qc);
+
+    const result = qc.getQueryData<InfiniteData<MessageWindow, MessagePageParam>>([
+      'channelMessages', 'ch-1', null,
+    ]);
+    expect(result?.pages[0].items.map((m) => m.id)).toEqual(['m-2', 'm-1']);
+  });
+
+  it('swallows fetch errors so a transient failure does not crash on reconnect', async () => {
+    const qc = new QueryClient();
+    qc.setQueryData(['channelMessages', 'ch-1', null], {
+      pages: [{
+        items: [makeMsg({ id: 'm-1' })],
+        hasMoreOlder: false,
+        hasMoreNewer: false,
+        newestID: 'm-1',
+      }],
+      pageParams: [{ kind: 'tail' }],
+    });
+    vi.mocked(apiFetch).mockRejectedValueOnce(new Error('network'));
+
+    await expect(resyncMessageCache(qc)).resolves.toBeUndefined();
+  });
+
+  it('useSetPinned patches the cached message with the server response', async () => {
+    const qc = new QueryClient();
+    const wrap = ({ children }: { children: ReactNode }) =>
+      createElement(QueryClientProvider, { client: qc }, children);
+    qc.setQueryData(['channelMessages', 'ch-1', null], {
+      pages: [{
+        items: [makeMsg({ id: 'm-1', body: 'x' })],
+        hasMoreOlder: false,
+        hasMoreNewer: false,
+      }],
+      pageParams: [{ kind: 'tail' }],
+    });
+    vi.mocked(apiFetch).mockResolvedValueOnce(makeMsg({ id: 'm-1', body: 'x', pinned: true } as Partial<Message>));
+
+    const { result } = renderHook(() => useSetPinned(), { wrapper: wrap });
+    result.current.mutate({ channelId: 'ch-1', messageId: 'm-1', pinned: true });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    const out = qc.getQueryData<InfiniteData<MessageWindow, MessagePageParam>>([
+      'channelMessages', 'ch-1', null,
+    ]);
+    expect(out?.pages[0].items[0].pinned).toBe(true);
+  });
+
+  it('useEditMessage / useDeleteMessage / useToggleReaction / useSetNoUnfurl all patch the message-list cache', async () => {
+    const qc = new QueryClient();
+    const wrap = ({ children }: { children: ReactNode }) =>
+      createElement(QueryClientProvider, { client: qc }, children);
+    qc.setQueryData(['channelMessages', 'ch-1', null], {
+      pages: [{
+        items: [makeMsg({ id: 'm-1', body: 'old' })],
+        hasMoreOlder: false,
+        hasMoreNewer: false,
+      }],
+      pageParams: [{ kind: 'tail' }],
+    });
+
+    // Edit
+    vi.mocked(apiFetch).mockResolvedValueOnce(makeMsg({ id: 'm-1', body: 'edited' }));
+    const edit = renderHook(() => useEditMessage(), { wrapper: wrap });
+    edit.result.current.mutate({ channelId: 'ch-1', messageId: 'm-1', body: 'edited' });
+    await waitFor(() => expect(edit.result.current.isSuccess).toBe(true));
+    let out = qc.getQueryData<InfiniteData<MessageWindow, MessagePageParam>>([
+      'channelMessages', 'ch-1', null,
+    ]);
+    expect(out?.pages[0].items[0].body).toBe('edited');
+
+    // ToggleReaction (returns updated message)
+    vi.mocked(apiFetch).mockResolvedValueOnce(
+      makeMsg({ id: 'm-1', body: 'edited', reactions: { '👍': ['u-1'] } } as Partial<Message>),
+    );
+    const react = renderHook(() => useToggleReaction(), { wrapper: wrap });
+    react.result.current.mutate({ channelId: 'ch-1', messageId: 'm-1', emoji: '👍' });
+    await waitFor(() => expect(react.result.current.isSuccess).toBe(true));
+    out = qc.getQueryData<InfiniteData<MessageWindow, MessagePageParam>>([
+      'channelMessages', 'ch-1', null,
+    ]);
+    expect(out?.pages[0].items[0].reactions).toEqual({ '👍': ['u-1'] });
+
+    // SetNoUnfurl
+    vi.mocked(apiFetch).mockResolvedValueOnce(makeMsg({ id: 'm-1', noUnfurl: true } as Partial<Message>));
+    const noUnfurl = renderHook(() => useSetNoUnfurl(), { wrapper: wrap });
+    noUnfurl.result.current.mutate({ channelId: 'ch-1', messageId: 'm-1', noUnfurl: true });
+    await waitFor(() => expect(noUnfurl.result.current.isSuccess).toBe(true));
+    out = qc.getQueryData<InfiniteData<MessageWindow, MessagePageParam>>([
+      'channelMessages', 'ch-1', null,
+    ]);
+    expect(out?.pages[0].items[0].noUnfurl).toBe(true);
+
+    // Delete
+    vi.mocked(apiFetch).mockResolvedValueOnce(undefined);
+    const del = renderHook(() => useDeleteMessage(), { wrapper: wrap });
+    del.result.current.mutate({ channelId: 'ch-1', messageId: 'm-1' });
+    await waitFor(() => expect(del.result.current.isSuccess).toBe(true));
+    out = qc.getQueryData<InfiniteData<MessageWindow, MessagePageParam>>([
+      'channelMessages', 'ch-1', null,
+    ]);
+    expect(out?.pages[0].items).toEqual([]);
+  });
+
+  it('catches up conversations the same way as channels', async () => {
+    const qc = new QueryClient();
+    qc.setQueryData(['conversationMessages', 'dm-1', null], {
+      pages: [{
+        items: [makeMsg({ id: 'd-1', parentID: 'dm-1' })],
+        hasMoreOlder: false,
+        hasMoreNewer: false,
+        newestID: 'd-1',
+      }],
+      pageParams: [{ kind: 'tail' }],
+    });
+    vi.mocked(apiFetch).mockResolvedValueOnce({
+      items: [makeMsg({ id: 'd-2', parentID: 'dm-1' })],
+      hasMoreOlder: false,
+      hasMoreNewer: false,
+      newestID: 'd-2',
+    });
+
+    await resyncMessageCache(qc);
+
+    expect(vi.mocked(apiFetch).mock.calls[0][0]).toMatch(/\/conversations\/dm-1\/messages/);
+    const result = qc.getQueryData<InfiniteData<MessageWindow, MessagePageParam>>([
+      'conversationMessages', 'dm-1', null,
+    ]);
+    expect(result?.pages[0].items.map((m) => m.id)).toEqual(['d-2', 'd-1']);
   });
 });

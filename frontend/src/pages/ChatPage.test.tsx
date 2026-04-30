@@ -93,10 +93,21 @@ describe('ChatPage', () => {
     expect(typeof opts.onMessageNew).toBe('function');
   });
 
+  function msg(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      id: 'msg-1',
+      parentID: 'ch-99',
+      authorID: 'other-user',
+      body: 'hi',
+      createdAt: '2026-04-30T10:00:00Z',
+      ...overrides,
+    };
+  }
+
   it('onMessageNew marks unread for messages from other users', () => {
     renderChatPage();
     const opts = mockUseWebSocket.mock.calls[0][0];
-    opts.onMessageNew({ parentID: 'ch-99', authorID: 'other-user' });
+    opts.onMessageNew(msg());
     expect(mockMarkChannelUnread).toHaveBeenCalledWith('ch-99');
     expect(mockMarkConversationUnread).toHaveBeenCalledWith('ch-99');
   });
@@ -107,7 +118,7 @@ describe('ChatPage', () => {
     renderChatPage();
     const opts = mockUseWebSocket.mock.calls[0][0];
     // user.id is 'u-1' from the mock
-    opts.onMessageNew({ parentID: 'ch-99', authorID: 'u-1' });
+    opts.onMessageNew(msg({ authorID: 'u-1' }));
     expect(mockMarkChannelUnread).not.toHaveBeenCalled();
     expect(mockMarkConversationUnread).not.toHaveBeenCalled();
   });
@@ -115,12 +126,10 @@ describe('ChatPage', () => {
   it('onMessageNew still invalidates queries for own messages', () => {
     renderChatPage();
     const opts = mockUseWebSocket.mock.calls[0][0];
-    // Own message should still refresh the message list, just not mark unread
-    opts.onMessageNew({ parentID: 'ch-99', authorID: 'u-1' });
-    // No assertion on queryClient since it's not mocked, but it should not throw
+    opts.onMessageNew(msg({ authorID: 'u-1' }));
   });
 
-  it('onMessageNew does nothing without parentID', () => {
+  it('onMessageNew does nothing without a valid Message payload', () => {
     mockMarkChannelUnread.mockClear();
     mockMarkConversationUnread.mockClear();
     renderChatPage();
@@ -238,7 +247,7 @@ describe('ChatPage', () => {
   it('onMessageNew calls unhideConversation', () => {
     renderChatPage();
     const opts = mockUseWebSocket.mock.calls[0][0];
-    opts.onMessageNew({ parentID: 'conv-1', authorID: 'other-user' });
+    opts.onMessageNew(msg({ parentID: 'conv-1' }));
     expect(mockUnhideConversation).toHaveBeenCalledWith('conv-1');
   });
 });

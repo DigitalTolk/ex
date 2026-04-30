@@ -299,3 +299,24 @@ func TestGenerateRefreshToken_HashDeterminism(t *testing.T) {
 		t.Errorf("hash mismatch: got %q, recomputed %q", hash, recomputed)
 	}
 }
+
+// TestValidateToken_WrongSigningMethod covers the alg-mismatch defence
+// inside ValidateToken's keyfunc. A token with a "none" or RS256
+// header alg must be rejected even if its signature would otherwise
+// verify, since accepting it would let an attacker forge tokens by
+// supplying an asymmetric public key as the secret.
+func TestValidateToken_WrongSigningMethod(t *testing.T) {
+	mgr := NewJWTManager("test-secret", 15*time.Minute, 720*time.Hour)
+
+	// A pre-fabricated JWT whose header reads {"alg":"none","typ":"JWT"}
+	// and whose payload is a minimal claims set with no signature. We
+	// hand-craft it to exercise the keyfunc rejection without relying on
+	// the jwt library's own deprecated none signer.
+	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"none","typ":"JWT"}`))
+	payload := base64.RawURLEncoding.EncodeToString([]byte(`{"sub":"x"}`))
+	noneToken := strings.Join([]string{header, payload, ""}, ".")
+
+	if _, err := mgr.ValidateToken(noneToken); err == nil {
+		t.Fatal("expected error for alg=none token, got nil")
+	}
+}

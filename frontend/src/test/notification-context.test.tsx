@@ -12,12 +12,21 @@ vi.mock('@/lib/notification-sound', () => ({
   playNotificationPing: () => playMock(),
 }));
 
-const toastMock = vi.fn();
-vi.mock('sonner', () => ({
-  toast: (...args: unknown[]) => toastMock(...args),
-}));
-
+// Default payload is a DM message — DMs always notify, so this represents
+// a "should fire" baseline. Channel-specific behavior is covered explicitly
+// in dedicated tests below.
 const samplePayload: NotificationPayload = {
+  kind: 'message',
+  title: 'Alice',
+  body: 'hello there',
+  deepLink: '/conversation/dm-1',
+  parentID: 'dm-1',
+  parentType: 'conversation',
+  messageID: 'm-1',
+  createdAt: new Date().toISOString(),
+};
+
+const channelMessagePayload: NotificationPayload = {
   kind: 'message',
   title: 'Alice in ~general',
   body: 'hello there',
@@ -52,13 +61,25 @@ function renderProbe() {
   );
 }
 
+function installNotification(permission: NotificationPermission) {
+  const ctor = vi.fn().mockImplementation(() => ({ onclick: null, close: () => {} }));
+  Object.defineProperty(window, 'Notification', {
+    value: Object.assign(ctor, {
+      permission,
+      requestPermission: vi.fn().mockResolvedValue(permission),
+    }),
+    configurable: true,
+    writable: true,
+  });
+  return ctor;
+}
+
 describe('NotificationProvider', () => {
   let origNotification: typeof Notification | undefined;
   let notificationCtor: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
     playMock.mockReset();
-    toastMock.mockReset();
     dispatchSpy = null;
     setActiveSpy = null;
     setUserSpy = null;
@@ -66,15 +87,7 @@ describe('NotificationProvider', () => {
     localStorage.clear();
     sessionStorage.clear();
     origNotification = (window as unknown as { Notification?: typeof Notification }).Notification;
-    notificationCtor = vi.fn().mockImplementation(() => ({ onclick: null, close: () => {} }));
-    Object.defineProperty(window, 'Notification', {
-      value: Object.assign(notificationCtor, {
-        permission: 'granted',
-        requestPermission: vi.fn().mockResolvedValue('granted'),
-      }),
-      configurable: true,
-      writable: true,
-    });
+    notificationCtor = installNotification('granted');
     Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true });
   });
 
@@ -84,20 +97,28 @@ describe('NotificationProvider', () => {
     }
   });
 
-  it('plays sound and creates browser notification on dispatch', () => {
+  it('plays sound and creates a native browser notification on dispatch', () => {
     renderProbe();
     act(() => {
       dispatchSpy!(samplePayload);
     });
     expect(playMock).toHaveBeenCalledTimes(1);
     expect(notificationCtor).toHaveBeenCalledTimes(1);
-    expect(notificationCtor.mock.calls[0][0]).toBe('Alice in ~general');
+    expect(notificationCtor.mock.calls[0][0]).toBe('Alice');
+    const opts = notificationCtor.mock.calls[0][1] as NotificationOptions;
+    expect(opts.body).toBe('hello there');
+    // No tag: Chrome silently swallows tag-replacements regardless of
+    // renotify, which made a second message in the same channel never
+    // banner. Each notification is now its own entry.
+    expect(opts.tag).toBeUndefined();
+    // App logo, not Chrome's default.
+    expect(opts.icon).toBe('/logo.svg');
   });
 
-  it('suppresses notifications for the active parent (already on screen)', () => {
+  it('suppresses conversation-message notifications when that DM is already on screen', () => {
     renderProbe();
     act(() => {
-      setActiveSpy!('ch-1');
+      setActiveSpy!('dm-1');
       dispatchSpy!(samplePayload);
     });
     expect(playMock).not.toHaveBeenCalled();
@@ -151,7 +172,7 @@ describe('NotificationProvider', () => {
     renderProbe();
     act(() => {
       setActiveSpy!('ch-1');
-      dispatchSpy!({ ...samplePayload, kind: 'mention' });
+      dispatchSpy!({ ...channelMessagePayload, kind: 'mention' });
     });
     expect(playMock).toHaveBeenCalledTimes(1);
     expect(notificationCtor).toHaveBeenCalledTimes(1);
@@ -164,56 +185,145 @@ describe('NotificationProvider', () => {
     renderProbe();
     act(() => {
       setActiveSpy!('ch-1');
-      dispatchSpy!({ ...samplePayload, kind: 'thread_reply' });
+      dispatchSpy!({ ...channelMessagePayload, kind: 'thread_reply' });
     });
     expect(playMock).toHaveBeenCalledTimes(1);
     expect(notificationCtor).toHaveBeenCalledTimes(1);
   });
 
-  it('always fires an in-app toast on dispatch (popup that works without OS permission)', () => {
-    // The OS Notification API has many barriers (default-permission,
-    // focus rules on Safari, OS DnD). The in-app toast is the primary
-    // popup so the user always sees something — the OS popup is a bonus.
+  it('suppresses regular channel messages even when not on the active parent', () => {
+    // Channels are noisy — joining one shouldn't mean every message
+    // pings you. Only @mentions / @all / @here / thread replies
+    // (kinds 'mention' and 'thread_reply') escalate from a channel.
     renderProbe();
     act(() => {
-      dispatchSpy!(samplePayload);
+      dispatchSpy!(channelMessagePayload);
     });
-    expect(toastMock).toHaveBeenCalledTimes(1);
-    expect(toastMock.mock.calls[0][0]).toBe('Alice in ~general');
-    const opts = toastMock.mock.calls[0][1] as { description: string; action?: { label: string } };
-    expect(opts.description).toBe('hello there');
-    expect(opts.action?.label).toBe('Open');
+    expect(playMock).not.toHaveBeenCalled();
+    expect(notificationCtor).not.toHaveBeenCalled();
   });
 
-  it('still fires the in-app toast when OS permission is "default" (never granted)', () => {
-    // If the user never clicked "Enable" on the prompt, Notification
-    // permission stays "default" and the OS popup is silent. The toast
-    // must still appear so the user gets feedback.
-    Object.defineProperty(window, 'Notification', {
-      value: Object.assign(vi.fn(), {
-        permission: 'default',
-        requestPermission: vi.fn().mockResolvedValue('default'),
-      }),
-      configurable: true,
-      writable: true,
-    });
+  it('still fires for channel mentions when no other suppression applies', () => {
     renderProbe();
     act(() => {
-      dispatchSpy!(samplePayload);
+      dispatchSpy!({ ...channelMessagePayload, kind: 'mention' });
     });
-    expect(toastMock).toHaveBeenCalledTimes(1);
+    expect(playMock).toHaveBeenCalledTimes(1);
+    expect(notificationCtor).toHaveBeenCalledTimes(1);
   });
 
-  it('does not fire a toast when the active parent suppresses the notification', () => {
-    // Active-parent suppression for a regular message also drops the
-    // toast — the user is already looking at the message; doubling up
-    // with a popup is noise.
+  it('still fires for channel thread replies (you are already a participant)', () => {
+    // Backend filters thread_reply notifications to thread participants,
+    // so receiving one means you've replied in the thread already.
     renderProbe();
     act(() => {
-      setActiveSpy!('ch-1');
+      dispatchSpy!({ ...channelMessagePayload, kind: 'thread_reply' });
+    });
+    expect(playMock).toHaveBeenCalledTimes(1);
+    expect(notificationCtor).toHaveBeenCalledTimes(1);
+  });
+
+  it('navigates to the deep link via SPA history (no full page reload) when clicked', () => {
+    // The click handler must focus the tab and route to the message via
+    // history.pushState + popstate so React Router takes over without
+    // reloading the page. Setting window.location.href would discard
+    // the user's loaded message history and leave a deep-link landing
+    // showing only the around-window plus one page on each side.
+    let clickHandler: (() => void) | null = null;
+    const closeMock = vi.fn();
+    notificationCtor.mockImplementation(function NotificationCtor() {
+      return {
+        close: closeMock,
+        set onclick(h: () => void) {
+          clickHandler = h;
+        },
+        get onclick() {
+          return clickHandler!;
+        },
+      };
+    });
+    const focusSpy = vi.spyOn(window, 'focus').mockImplementation(() => undefined);
+    const pushStateSpy = vi.spyOn(window.history, 'pushState');
+    const popStateSpy = vi.fn();
+    window.addEventListener('popstate', popStateSpy);
+
+    renderProbe();
+    act(() => {
       dispatchSpy!(samplePayload);
     });
-    expect(toastMock).not.toHaveBeenCalled();
+    act(() => {
+      clickHandler!();
+    });
+    expect(focusSpy).toHaveBeenCalledTimes(1);
+    expect(pushStateSpy).toHaveBeenCalledTimes(1);
+    expect(pushStateSpy.mock.calls[0][2]).toBe('/conversation/dm-1');
+    expect(popStateSpy).toHaveBeenCalledTimes(1);
+    expect(closeMock).toHaveBeenCalledTimes(1);
+
+    focusSpy.mockRestore();
+    pushStateSpy.mockRestore();
+    window.removeEventListener('popstate', popStateSpy);
+  });
+
+  it('does not fire an OS notification when permission is "default" (never granted)', () => {
+    // Sound still plays; the OS popup is gated behind explicit permission.
+    installNotification('default');
+    renderProbe();
+    act(() => {
+      dispatchSpy!(samplePayload);
+    });
+    expect(playMock).toHaveBeenCalledTimes(1);
+    // The freshly installed ctor for this test isn't the same reference,
+    // so re-read it from window to assert.
+    const ctor = (window as unknown as { Notification: ReturnType<typeof vi.fn> }).Notification;
+    expect(ctor).not.toHaveBeenCalled();
+  });
+
+  it('does not fire an OS notification when permission is "denied"', () => {
+    installNotification('denied');
+    renderProbe();
+    act(() => {
+      dispatchSpy!(samplePayload);
+    });
+    const ctor = (window as unknown as { Notification: ReturnType<typeof vi.fn> }).Notification;
+    expect(ctor).not.toHaveBeenCalled();
+  });
+
+  it('does not fire an OS notification when browserEnabled is false', () => {
+    // User can mute popups in-app even with OS permission granted.
+    localStorage.setItem(
+      'ex.notifications.prefs.v1',
+      JSON.stringify({ soundEnabled: true, browserEnabled: false }),
+    );
+    renderProbe();
+    act(() => {
+      dispatchSpy!(samplePayload);
+    });
+    expect(playMock).toHaveBeenCalledTimes(1);
+    expect(notificationCtor).not.toHaveBeenCalled();
+  });
+
+  it('reports permission=unsupported when window.Notification is missing', () => {
+    delete (window as unknown as { Notification?: unknown }).Notification;
+    renderProbe();
+    expect(screen.getByTestId('probe').textContent).toBe('unsupported');
+  });
+
+  it('does not throw when dispatch fires on a browser without Notification API', () => {
+    delete (window as unknown as { Notification?: unknown }).Notification;
+    renderProbe();
+    expect(() => act(() => dispatchSpy!(samplePayload))).not.toThrow();
+    // Sound still played even without a Notification API.
+    expect(playMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not throw when the Notification constructor itself throws (embedded webview)', () => {
+    notificationCtor.mockImplementation(() => {
+      throw new Error('Notification not allowed in this context');
+    });
+    renderProbe();
+    expect(() => act(() => dispatchSpy!(samplePayload))).not.toThrow();
+    expect(playMock).toHaveBeenCalledTimes(1);
   });
 
   it('falls back to no-op when used outside the provider', () => {

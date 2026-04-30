@@ -1,4 +1,5 @@
 import { createContext, useContext, useState, useCallback, useRef, type ReactNode } from 'react';
+import { readJSON, writeJSON } from '@/lib/storage';
 
 interface UnreadState {
   unreadChannels: Set<string>;
@@ -20,17 +21,14 @@ interface UnreadState {
 
 const UnreadContext = createContext<UnreadState | undefined>(undefined);
 
+const HIDDEN_KEY = 'hidden_conversations';
+
 function loadHiddenConversations(): Set<string> {
-  try {
-    const stored = localStorage.getItem('hidden_conversations');
-    return stored ? new Set(JSON.parse(stored)) : new Set();
-  } catch {
-    return new Set();
-  }
+  return new Set(readJSON<string[]>(HIDDEN_KEY, []));
 }
 
 function persistHiddenConversations(set: Set<string>) {
-  localStorage.setItem('hidden_conversations', JSON.stringify([...set]));
+  writeJSON(HIDDEN_KEY, [...set]);
 }
 
 export function UnreadProvider({ children }: { children: ReactNode }) {

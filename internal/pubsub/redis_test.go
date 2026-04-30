@@ -75,6 +75,22 @@ func TestPublish(t *testing.T) {
 	}
 }
 
+// TestPublishClientError covers the wrap-and-return path inside Publish
+// when the underlying Redis client returns an error (e.g. the server is
+// gone). The marshal step happens before the publish so we test it via
+// a closed miniredis.
+func TestPublishClientError(t *testing.T) {
+	ps, mr := setupTestPubSub(t)
+	mr.Close()
+	event, err := events.NewEvent(events.EventMessageNew, map[string]string{"text": "hi"})
+	if err != nil {
+		t.Fatalf("NewEvent: %v", err)
+	}
+	if err := ps.Publish(context.Background(), "ch", event); err == nil {
+		t.Fatal("expected error after redis closed")
+	}
+}
+
 func TestChannelName(t *testing.T) {
 	got := ChannelName("abc123")
 	want := "chan:abc123"

@@ -1,6 +1,8 @@
 import { useQuery } from '@tanstack/react-query';
 import { apiFetch } from '@/lib/api';
 import { slugify } from '@/lib/format';
+import { readJSON, writeJSON } from '@/lib/storage';
+import { queryKeys, parentPath } from '@/lib/query-keys';
 import type { Message } from '@/types';
 
 export interface ThreadSummary {
@@ -16,7 +18,7 @@ export interface ThreadSummary {
 
 export function useUserThreads() {
   return useQuery<ThreadSummary[]>({
-    queryKey: ['userThreads'],
+    queryKey: queryKeys.userThreads(),
     queryFn: () => apiFetch<ThreadSummary[]>('/api/v1/threads'),
     staleTime: 15_000,
   });
@@ -32,27 +34,13 @@ let seenCache: Record<string, string> | null = null;
 
 function loadSeen(): Record<string, string> {
   if (seenCache) return seenCache;
-  if (typeof localStorage === 'undefined') {
-    seenCache = {};
-    return seenCache;
-  }
-  try {
-    const raw = localStorage.getItem(SEEN_KEY);
-    seenCache = raw ? (JSON.parse(raw) as Record<string, string>) : {};
-  } catch {
-    seenCache = {};
-  }
+  seenCache = readJSON<Record<string, string>>(SEEN_KEY, {});
   return seenCache;
 }
 
 function saveSeen(map: Record<string, string>) {
   seenCache = map;
-  if (typeof localStorage === 'undefined') return;
-  try {
-    localStorage.setItem(SEEN_KEY, JSON.stringify(map));
-  } catch {
-    // ignore quota errors
-  }
+  writeJSON(SEEN_KEY, map);
 }
 
 // markThreadSeen records the timestamp at which the user last viewed a thread.
@@ -76,37 +64,28 @@ export function getSeenMap(): Record<string, string> {
   return loadSeen();
 }
 
-// threadParentPath returns the URL prefix for messages in a thread's
-// parent — `channels/<id>` or `conversations/<id>`. Used by every site
-// that fetches or invalidates thread messages, so the cache key shape
-// stays in lockstep across hooks and components.
-export function threadParentPath(opts: { channelId?: string; conversationId?: string }): string {
-  return opts.channelId ? `channels/${opts.channelId}` : `conversations/${opts.conversationId}`;
-}
-
 // useThreadMessages fetches all messages in a thread (root + replies).
 // Shared by ThreadPanel (the side drawer in a chat view) and ThreadCard
 // (the standalone snippet on the /threads page). Both subscribe to the
-// same `['thread', parentPath, rootID]` key so a reply posted from
-// either place invalidates both views without an extra refetch.
+// same thread query key so a reply posted from either place invalidates
+// both views without an extra refetch.
 //
 // The optional `enabled` flag lets callers gate fetching on something
 // other than the parent IDs — e.g. ThreadCard waits for the card to
 // enter the viewport to avoid fanning out N parallel requests on
-// /threads load. When omitted, the query runs as soon as the parent
-// IDs are present.
+// /threads load.
 export function useThreadMessages(opts: {
   channelId?: string;
   conversationId?: string;
   threadRootID: string;
   enabled?: boolean;
 }) {
-  const parentPath = threadParentPath(opts);
+  const path = parentPath(opts);
   const ready = !!(opts.channelId || opts.conversationId) && !!opts.threadRootID;
   return useQuery({
-    queryKey: ['thread', parentPath, opts.threadRootID],
+    queryKey: queryKeys.thread(path, opts.threadRootID),
     queryFn: () =>
-      apiFetch<Message[]>(`/api/v1/${parentPath}/messages/${opts.threadRootID}/thread`),
+      apiFetch<Message[]>(`/api/v1/${path}/messages/${opts.threadRootID}/thread`),
     enabled: ready && (opts.enabled ?? true),
     staleTime: 15_000,
   });

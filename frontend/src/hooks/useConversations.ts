@@ -1,10 +1,11 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiFetch } from '@/lib/api';
+import { queryKeys } from '@/lib/query-keys';
 import type { UserConversation, Conversation } from '@/types';
 
 export function useUserConversations() {
   return useQuery({
-    queryKey: ['userConversations'],
+    queryKey: queryKeys.userConversations(),
     queryFn: () =>
       apiFetch<UserConversation[]>('/api/v1/conversations'),
   });
@@ -12,7 +13,7 @@ export function useUserConversations() {
 
 export function useConversation(conversationId: string | undefined) {
   return useQuery({
-    queryKey: ['conversation', conversationId],
+    queryKey: queryKeys.conversation(conversationId ?? ''),
     queryFn: () =>
       apiFetch<Conversation>(`/api/v1/conversations/${conversationId}`),
     enabled: !!conversationId,
@@ -32,14 +33,14 @@ export function useCreateConversation() {
         body: JSON.stringify(data),
       }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['userConversations'] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.userConversations() });
     },
   });
 }
 
 export function useSearchUsers(query: string) {
   return useQuery({
-    queryKey: ['searchUsers', query],
+    queryKey: queryKeys.searchUsers(query),
     queryFn: () =>
       apiFetch<{ id: string; email: string; displayName: string }[]>(
         `/api/v1/users?q=${encodeURIComponent(query)}`,

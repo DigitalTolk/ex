@@ -242,6 +242,86 @@ func TestMessageService_ListAfter_RejectsNonMember(t *testing.T) {
 	}
 }
 
+func TestMessageService_List_ExcludesThreadReplies(t *testing.T) {
+	// Regression: deep-linking into a channel with bursts of threaded
+	// conversations used to render only ~2 messages around the
+	// highlight because the around-window's 50 raw items were
+	// dominated by replies that the frontend filtered out. The API
+	// list endpoints must filter top-level on the server so each
+	// page returns ~limit RENDERABLE messages.
+	svc, messages, memberships, _, _ := setupMessageService()
+	memberships.memberships["ch1#user-1"] = &model.ChannelMembership{
+		ChannelID: "ch1", UserID: "user-1", Role: model.ChannelRoleMember,
+	}
+	messages.messages["ch1#root"] = &model.Message{ID: "root", ParentID: "ch1", AuthorID: "user-1", Body: "root"}
+	messages.messages["ch1#reply-1"] = &model.Message{
+		ID: "reply-1", ParentID: "ch1", AuthorID: "user-1", Body: "r1", ParentMessageID: "root",
+	}
+	messages.messages["ch1#reply-2"] = &model.Message{
+		ID: "reply-2", ParentID: "ch1", AuthorID: "user-1", Body: "r2", ParentMessageID: "root",
+	}
+	messages.messages["ch1#top-2"] = &model.Message{ID: "top-2", ParentID: "ch1", AuthorID: "user-1", Body: "top-2"}
+
+	msgs, _, err := svc.List(context.Background(), "user-1", "ch1", ParentChannel, "", 50)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	for _, m := range msgs {
+		if m.ParentMessageID != "" {
+			t.Errorf("top-level list returned reply %q with parentMessageID=%q", m.ID, m.ParentMessageID)
+		}
+	}
+	if len(msgs) != 2 {
+		t.Errorf("got %d top-level messages, want 2", len(msgs))
+	}
+}
+
+func TestMessageService_ListAfter_ExcludesThreadReplies(t *testing.T) {
+	svc, messages, memberships, _, _ := setupMessageService()
+	memberships.memberships["ch1#user-1"] = &model.ChannelMembership{
+		ChannelID: "ch1", UserID: "user-1", Role: model.ChannelRoleMember,
+	}
+	messages.messages["ch1#m1"] = &model.Message{ID: "m1", ParentID: "ch1", AuthorID: "user-1", Body: "x"}
+	messages.messages["ch1#r1"] = &model.Message{
+		ID: "r1", ParentID: "ch1", AuthorID: "user-1", Body: "x", ParentMessageID: "m1",
+	}
+
+	msgs, _, err := svc.ListAfter(context.Background(), "user-1", "ch1", ParentChannel, "cursor", 50)
+	if err != nil {
+		t.Fatalf("ListAfter: %v", err)
+	}
+	for _, m := range msgs {
+		if m.ParentMessageID != "" {
+			t.Errorf("ListAfter returned reply %q", m.ID)
+		}
+	}
+}
+
+func TestMessageService_ListAround_ExcludesThreadReplies(t *testing.T) {
+	svc, messages, memberships, _, _ := setupMessageService()
+	memberships.memberships["ch1#user-1"] = &model.ChannelMembership{
+		ChannelID: "ch1", UserID: "user-1", Role: model.ChannelRoleMember,
+	}
+	messages.messages["ch1#anchor"] = &model.Message{ID: "anchor", ParentID: "ch1", AuthorID: "user-1", Body: "a"}
+	messages.messages["ch1#top"] = &model.Message{ID: "top", ParentID: "ch1", AuthorID: "user-1", Body: "t"}
+	messages.messages["ch1#reply"] = &model.Message{
+		ID: "reply", ParentID: "ch1", AuthorID: "user-1", Body: "r", ParentMessageID: "anchor",
+	}
+
+	msgs, _, _, err := svc.ListAround(context.Background(), "user-1", "ch1", ParentChannel, "anchor", 25, 25)
+	if err != nil {
+		t.Fatalf("ListAround: %v", err)
+	}
+	for _, m := range msgs {
+		if m.ID == "anchor" {
+			continue // the target itself is allowed regardless
+		}
+		if m.ParentMessageID != "" {
+			t.Errorf("ListAround returned reply %q in the surrounding window", m.ID)
+		}
+	}
+}
+
 func TestMessageService_ListAfter_DelegatesToStore(t *testing.T) {
 	svc, messages, memberships, _, _ := setupMessageService()
 	memberships.memberships["ch1#u"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u", Role: model.ChannelRoleMember}

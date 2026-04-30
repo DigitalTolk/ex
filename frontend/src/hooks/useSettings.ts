@@ -1,10 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiFetch } from '@/lib/api';
+import { queryKeys } from '@/lib/query-keys';
 import type { WorkspaceSettings } from '@/types';
 
 export function useWorkspaceSettings() {
   return useQuery({
-    queryKey: ['workspace-settings'],
+    queryKey: queryKeys.workspaceSettings(),
     queryFn: () => apiFetch<WorkspaceSettings>('/api/v1/admin/settings'),
     staleTime: 5 * 60 * 1000,
   });
@@ -19,7 +20,7 @@ export function useUpdateWorkspaceSettings() {
         body: JSON.stringify(input),
       }),
     onSuccess: (data) => {
-      qc.setQueryData(['workspace-settings'], data);
+      qc.setQueryData(queryKeys.workspaceSettings(), data);
     },
   });
 }

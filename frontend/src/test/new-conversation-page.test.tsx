@@ -252,4 +252,64 @@ describe('NewConversationPage', () => {
     await Promise.resolve();
     expect(mockCreate).not.toHaveBeenCalled();
   });
+
+  it('shows an error when the API rejects on send', async () => {
+    apiFetchMock.mockRejectedValueOnce(new Error('Network down'));
+    renderPage();
+    fireEvent.change(screen.getByTestId('recipients-input'), { target: { value: 'al' } });
+    fireEvent.mouseDown(screen.getByTestId('recipient-option-u-1').querySelector('button')!);
+    const editor = screen.getByLabelText('Message input');
+    fireEvent.change(editor, { target: { value: 'hi' } });
+    fireEvent.click(screen.getByLabelText('Send'));
+    await waitFor(() => {
+      expect(screen.getByTestId('new-conversation-error')).toHaveTextContent('Network down');
+    });
+  });
+
+  it('shows the generic "Failed to send" when the rejection is not an Error', async () => {
+    apiFetchMock.mockImplementationOnce(() => Promise.reject('boom'));
+    renderPage();
+    fireEvent.change(screen.getByTestId('recipients-input'), { target: { value: 'al' } });
+    fireEvent.mouseDown(screen.getByTestId('recipient-option-u-1').querySelector('button')!);
+    fireEvent.change(screen.getByLabelText('Message input'), { target: { value: 'hi' } });
+    fireEvent.click(screen.getByLabelText('Send'));
+    await waitFor(() => {
+      expect(screen.getByTestId('new-conversation-error')).toHaveTextContent('Failed to send');
+    });
+  });
+
+  it('arrow keys cycle the highlighted suggestion; mouseEnter updates it too', () => {
+    renderPage();
+    const input = screen.getByTestId('recipients-input');
+    fireEvent.change(input, { target: { value: 'al' } });
+    const opt1 = screen.getByTestId('recipient-option-u-1');
+    const opt2 = screen.getByTestId('recipient-option-u-2');
+    expect(opt1.getAttribute('aria-selected')).toBe('true');
+
+    fireEvent.keyDown(input, { key: 'ArrowDown' });
+    expect(opt2.getAttribute('aria-selected')).toBe('true');
+
+    fireEvent.keyDown(input, { key: 'ArrowUp' });
+    expect(opt1.getAttribute('aria-selected')).toBe('true');
+
+    // ArrowUp wraps to the last option.
+    fireEvent.keyDown(input, { key: 'ArrowUp' });
+    expect(opt2.getAttribute('aria-selected')).toBe('true');
+
+    // mouseEnter on opt1 brings the highlight back.
+    fireEvent.mouseEnter(opt1.querySelector('button')!);
+    expect(opt1.getAttribute('aria-selected')).toBe('true');
+  });
+
+  it('clicking the To: row focuses the input', () => {
+    renderPage();
+    const input = screen.getByTestId('recipients-input') as HTMLInputElement;
+    // Defocus so we can verify focus is restored.
+    input.blur();
+    expect(document.activeElement).not.toBe(input);
+    // The wrapper is the parent of the input that has the click handler.
+    const wrapper = input.parentElement!;
+    fireEvent.click(wrapper);
+    expect(document.activeElement).toBe(input);
+  });
 });

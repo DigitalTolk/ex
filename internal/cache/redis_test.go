@@ -184,6 +184,47 @@ func TestGetUnmarshalError(t *testing.T) {
 	}
 }
 
+// TestSetMarshalError covers the "cache marshal" failure path: a value
+// that the JSON encoder cannot serialize must surface a wrapped error
+// rather than write garbage to Redis.
+func TestSetMarshalError(t *testing.T) {
+	c, _ := setupTestCache(t)
+	ctx := context.Background()
+	// Channels can't be marshaled by encoding/json.
+	if err := c.Set(ctx, "k", make(chan int), time.Minute); err == nil {
+		t.Fatal("expected marshal error")
+	}
+}
+
+// TestSetClientError covers the "cache set" failure path. Closing the
+// miniredis instance forces the underlying client to error.
+func TestSetClientError(t *testing.T) {
+	c, mr := setupTestCache(t)
+	mr.Close()
+	if err := c.Set(context.Background(), "k", "v", time.Minute); err == nil {
+		t.Fatal("expected error from closed redis")
+	}
+}
+
+// TestDeleteClientError exercises the wrap-and-return path on Delete.
+func TestDeleteClientError(t *testing.T) {
+	c, mr := setupTestCache(t)
+	mr.Close()
+	if err := c.Delete(context.Background(), "k"); err == nil {
+		t.Fatal("expected error from closed redis")
+	}
+}
+
+// TestGetClientError exercises the non-cache-miss error branch on Get.
+func TestGetClientError(t *testing.T) {
+	c, mr := setupTestCache(t)
+	mr.Close()
+	var dest string
+	if err := c.Get(context.Background(), "k", &dest); err == nil {
+		t.Fatal("expected error from closed redis")
+	}
+}
+
 func TestSetUser(t *testing.T) {
 	c, mr := setupTestCache(t)
 	ctx := context.Background()

@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { apiFetch, ApiError } from '@/lib/api';
+import { queryKeys } from '@/lib/query-keys';
 
 export interface UnfurlPreview {
   url: string;
@@ -15,7 +16,7 @@ export interface UnfurlPreview {
 // those.
 export function useUnfurl(url: string | null) {
   return useQuery<UnfurlPreview | null>({
-    queryKey: ['unfurl', url],
+    queryKey: queryKeys.unfurl(url ?? ''),
     queryFn: async () => {
       if (!url) return null;
       try {

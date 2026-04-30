@@ -1,4 +1,5 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
+import { readString, writeString } from '@/lib/storage';
 
 export type Theme = 'light' | 'dark' | 'system';
 
@@ -23,10 +24,7 @@ function applyTheme(theme: Theme) {
 }
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
-  const [theme, setThemeState] = useState<Theme>(() => {
-    if (typeof localStorage === 'undefined') return 'system';
-    return (localStorage.getItem('theme') as Theme) || 'system';
-  });
+  const [theme, setThemeState] = useState<Theme>(() => (readString('theme') as Theme) || 'system');
 
   useEffect(() => {
     applyTheme(theme);
@@ -40,11 +38,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   }, [theme]);
 
   const setTheme = (t: Theme) => {
-    try {
-      localStorage.setItem('theme', t);
-    } catch {
-      // ignore
-    }
+    writeString('theme', t);
     setThemeState(t);
   };
 

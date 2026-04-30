@@ -23,6 +23,7 @@ import { useNotifications } from '@/context/NotificationContext';
 import { canEditChannel, canArchiveChannel, canLeaveChannel, roleNumber } from '@/lib/roles';
 import { markThreadSeen } from '@/hooks/useThreads';
 import { apiFetch } from '@/lib/api';
+import { queryKeys } from '@/lib/query-keys';
 import { useUsersBatch } from '@/hooks/useUsersBatch';
 import { collectMessageUserIDs } from '@/lib/message-users';
 import { useSidePanels } from '@/hooks/useSidePanels';
@@ -178,14 +179,14 @@ export function ChannelView() {
   async function handleArchive() {
     if (!channel?.id) return;
     await apiFetch(`/api/v1/channels/${channel.id}`, { method: 'DELETE' });
-    queryClient.invalidateQueries({ queryKey: ['userChannels'] });
+    queryClient.invalidateQueries({ queryKey: queryKeys.userChannels() });
     navigate('/');
   }
 
   async function handleLeave() {
     if (!channel?.id) return;
     await apiFetch(`/api/v1/channels/${channel.id}/leave`, { method: 'POST' });
-    queryClient.invalidateQueries({ queryKey: ['userChannels'] });
+    queryClient.invalidateQueries({ queryKey: queryKeys.userChannels() });
     navigate('/');
   }
 
@@ -195,7 +196,7 @@ export function ChannelView() {
       method: 'PATCH',
       body: JSON.stringify({ description: desc }),
     });
-    queryClient.invalidateQueries({ queryKey: ['channelBySlug', slug] });
+    queryClient.invalidateQueries({ queryKey: queryKeys.channelBySlug(slug) });
   }
 
   if (!slug) {

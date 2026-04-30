@@ -8,7 +8,7 @@ import { NotificationProvider } from '@/context/NotificationContext';
 import { TypingProvider } from '@/context/TypingContext';
 import { ThemeProvider } from '@/context/ThemeContext';
 import { UpdateBanner } from '@/components/UpdateBanner';
-import { Toaster } from '@/components/ui/sonner';
+import { NotificationPermissionBanner } from '@/components/NotificationPermissionBanner';
 import LoginPage from '@/pages/LoginPage';
 import OIDCCallbackPage from '@/pages/OIDCCallbackPage';
 import ChatPage from '@/pages/ChatPage';
@@ -98,11 +98,11 @@ export default function App() {
                           app and never has to overlay scrolling content. */}
                       <div className="flex h-dvh flex-col">
                         <UpdateBanner />
+                        <NotificationPermissionBanner />
                         <div className="min-h-0 flex-1">
                           <AppRoutes />
                         </div>
                       </div>
-                      <Toaster position="top-right" richColors />
                     </TooltipProvider>
                   </TypingProvider>
                 </NotificationProvider>

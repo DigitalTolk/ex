@@ -187,3 +187,50 @@ func TestUnfurlService_RejectsNonHTMLContentType(t *testing.T) {
 		t.Error("expected error for non-HTML content-type")
 	}
 }
+
+// TestSafeDialContext_BlocksPrivateAndLoopback covers the dial-layer
+// SSRF guard. Production callers wire safeDialContext into the unfurl
+// http.Transport so a hostname that only resolves to private IPs (post-
+// validateURL bypass) still cannot connect.
+func TestSafeDialContext_BlocksPrivateAndLoopback(t *testing.T) {
+	cases := []struct {
+		name string
+		addr string
+	}{
+		{"loopback v4 host", "127.0.0.1:80"},
+		{"loopback v6 host", "[::1]:80"},
+		{"private 10/8", "10.0.0.1:80"},
+		{"private 192.168/16", "192.168.0.1:80"},
+		{"private 172.16/12", "172.16.0.1:80"},
+		{"link-local", "169.254.169.254:80"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			conn, err := safeDialContext(context.Background(), "tcp", tc.addr)
+			if err == nil {
+				_ = conn.Close()
+				t.Fatalf("expected dial to be blocked for %q", tc.addr)
+			}
+			if !strings.Contains(err.Error(), "blocked private IP") {
+				t.Errorf("unexpected error for %q: %v", tc.addr, err)
+			}
+		})
+	}
+}
+
+// TestSafeDialContext_RejectsMissingPort covers the SplitHostPort
+// guard.
+func TestSafeDialContext_RejectsMissingPort(t *testing.T) {
+	if _, err := safeDialContext(context.Background(), "tcp", "127.0.0.1"); err == nil {
+		t.Error("expected SplitHostPort error for malformed addr")
+	}
+}
+
+// TestSafeDialContext_LookupFailure covers the resolver-error path: an
+// obviously-invalid host should fail before any dialing happens.
+func TestSafeDialContext_LookupFailure(t *testing.T) {
+	// .invalid is reserved by RFC 2606 and guaranteed never to resolve.
+	if _, err := safeDialContext(context.Background(), "tcp", "definitely-not-a-real-host.invalid:80"); err == nil {
+		t.Error("expected lookup error for .invalid host")
+	}
+}

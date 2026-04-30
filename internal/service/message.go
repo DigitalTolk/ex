@@ -408,48 +408,146 @@ func (s *MessageService) ListFiles(ctx context.Context, userID, parentID, parent
 	return files, nil
 }
 
-// List returns messages for a parent with cursor-based pagination.
-// It returns the messages, a boolean indicating whether there are more
-// results, and any error.
+// maxListRounds caps the inner store-fetch loop so a channel that is
+// 99% thread replies can't loop forever; 6 rounds ≈ 300 raw messages,
+// after which the frontend's sentinel takes over from the cursor we
+// returned.
+const maxListRounds = 6
+
+// List returns top-level messages for a parent with cursor-based
+// pagination. Thread replies live in the thread panel and are filtered
+// out by listTopLevel.
 func (s *MessageService) List(ctx context.Context, userID, parentID, parentType, before string, limit int) ([]*model.Message, bool, error) {
 	if err := s.checkAccess(ctx, userID, parentID, parentType); err != nil {
 		return nil, false, err
 	}
-
-	msgs, hasMore, err := s.messages.ListMessages(ctx, parentID, before, limit)
-	if err != nil {
-		return nil, false, fmt.Errorf("message: list: %w", err)
-	}
-	return msgs, hasMore, nil
+	return s.listTopLevel(ctx, parentID, before, limit)
 }
 
-// ListAfter returns messages strictly newer than `after`. Used by the
-// frontend's bidirectional paginator when a deep-link anchored the
-// message list mid-history and the user scrolls down toward the live
-// tail.
+// ListAfter returns top-level messages strictly newer than `after`.
 func (s *MessageService) ListAfter(ctx context.Context, userID, parentID, parentType, after string, limit int) ([]*model.Message, bool, error) {
 	if err := s.checkAccess(ctx, userID, parentID, parentType); err != nil {
 		return nil, false, err
 	}
-	msgs, hasMore, err := s.messages.ListMessagesAfter(ctx, parentID, after, limit)
-	if err != nil {
-		return nil, false, fmt.Errorf("message: list after: %w", err)
-	}
-	return msgs, hasMore, nil
+	return s.listTopLevelAfter(ctx, parentID, after, limit)
 }
 
-// ListAround returns a window centered on msgID so a deep-link can
-// load only the messages near the target instead of paging back from
-// the live tail.
+// ListAround returns a top-level window centered on msgID so a deep-
+// link can load only the messages near the target instead of paging
+// back from the live tail. The three sub-fetches run concurrently —
+// this is on the user-perceived "Jump to message" path so latency
+// multiplies if they serialize.
 func (s *MessageService) ListAround(ctx context.Context, userID, parentID, parentType, msgID string, before, after int) ([]*model.Message, bool, bool, error) {
 	if err := s.checkAccess(ctx, userID, parentID, parentType); err != nil {
 		return nil, false, false, err
 	}
-	msgs, hasMoreOlder, hasMoreNewer, err := s.messages.ListMessagesAround(ctx, parentID, msgID, before, after)
-	if err != nil {
-		return nil, false, false, fmt.Errorf("message: list around: %w", err)
+	var (
+		wg                                       sync.WaitGroup
+		target                                   *model.Message
+		older, newer                             []*model.Message
+		hasMoreOlder, hasMoreNewer               bool
+		errTarget, errOlder, errNewer            error
+	)
+	wg.Add(3)
+	go func() {
+		defer wg.Done()
+		target, errTarget = s.messages.GetMessage(ctx, parentID, msgID)
+	}()
+	go func() {
+		defer wg.Done()
+		older, hasMoreOlder, errOlder = s.listTopLevel(ctx, parentID, msgID, before)
+	}()
+	go func() {
+		defer wg.Done()
+		newer, hasMoreNewer, errNewer = s.listTopLevelAfter(ctx, parentID, msgID, after)
+	}()
+	wg.Wait()
+	if errTarget != nil && !errors.Is(errTarget, store.ErrNotFound) {
+		return nil, false, false, fmt.Errorf("message: list around: %w", errTarget)
 	}
-	return msgs, hasMoreOlder, hasMoreNewer, nil
+	if errOlder != nil {
+		return nil, false, false, errOlder
+	}
+	if errNewer != nil {
+		return nil, false, false, errNewer
+	}
+	out := make([]*model.Message, 0, len(older)+len(newer)+1)
+	out = append(out, newer...)
+	if target != nil {
+		out = append(out, target)
+	}
+	out = append(out, older...)
+	return out, hasMoreOlder, hasMoreNewer, nil
+}
+
+// listTopLevel pages OLDER from `before` (or the live tail if empty),
+// accumulating top-level messages until we have `limit` of them.
+func (s *MessageService) listTopLevel(ctx context.Context, parentID, before string, limit int) ([]*model.Message, bool, error) {
+	collected := make([]*model.Message, 0, limit)
+	cursor := before
+	storeHasMore := true
+	for round := 0; round < maxListRounds && storeHasMore && len(collected) <= limit; round++ {
+		raw, hasMore, err := s.messages.ListMessages(ctx, parentID, cursor, limit)
+		if err != nil {
+			return nil, false, fmt.Errorf("message: list: %w", err)
+		}
+		storeHasMore = hasMore
+		if len(raw) == 0 {
+			break
+		}
+		for _, m := range raw {
+			if m.ParentMessageID == "" {
+				collected = append(collected, m)
+			}
+		}
+		cursor = raw[len(raw)-1].ID
+	}
+	hasMore := false
+	if len(collected) > limit {
+		collected = collected[:limit]
+		hasMore = true
+	} else if storeHasMore {
+		hasMore = true
+	}
+	return collected, hasMore, nil
+}
+
+// listTopLevelAfter pages NEWER from `after`. Cursor advances via the
+// newest raw ID seen so pure-reply stretches don't loop forever.
+// Accumulates oldest-first (closer-to-cursor wins on trim), then
+// reverses at the end to match List's newest-first contract.
+func (s *MessageService) listTopLevelAfter(ctx context.Context, parentID, after string, limit int) ([]*model.Message, bool, error) {
+	collected := make([]*model.Message, 0, limit)
+	cursor := after
+	storeHasMore := true
+	for round := 0; round < maxListRounds && storeHasMore && len(collected) <= limit; round++ {
+		raw, hasMore, err := s.messages.ListMessagesAfter(ctx, parentID, cursor, limit)
+		if err != nil {
+			return nil, false, fmt.Errorf("message: list after: %w", err)
+		}
+		storeHasMore = hasMore
+		if len(raw) == 0 {
+			break
+		}
+		for i := len(raw) - 1; i >= 0; i-- {
+			m := raw[i]
+			if m.ParentMessageID == "" {
+				collected = append(collected, m)
+			}
+		}
+		cursor = raw[0].ID
+	}
+	hasMore := false
+	if len(collected) > limit {
+		collected = collected[:limit]
+		hasMore = true
+	} else if storeHasMore {
+		hasMore = true
+	}
+	for i, j := 0, len(collected)-1; i < j; i, j = i+1, j-1 {
+		collected[i], collected[j] = collected[j], collected[i]
+	}
+	return collected, hasMore, nil
 }
 
 // Edit updates the body and (optionally) the attachment list of an existing

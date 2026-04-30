@@ -143,4 +143,67 @@ describe('useWebSocket - extra coverage', () => {
 
     expect(MockWebSocket.instances).toHaveLength(0);
   });
+
+  it.each([
+    ['presence.changed', 'onPresenceChanged', { userId: 'u-1', online: true }],
+    ['emoji.added', 'onEmojiAdded', { name: ':party:' }],
+    ['emoji.removed', 'onEmojiRemoved', { name: ':party:' }],
+    ['user.updated', 'onUserUpdated', { id: 'u-1', displayName: 'New' }],
+    ['attachment.deleted', 'onAttachmentDeleted', { attachmentID: 'a-1' }],
+    ['channel.muted', 'onChannelMuted', { channelID: 'ch-1', muted: true }],
+    ['notification.new', 'onNotification', { id: 'n-1' }],
+    ['auth.force_logout', 'onForceLogout', { reason: 'admin-revoked' }],
+    ['server.version', 'onServerVersion', { version: '1.2.3' }],
+    ['typing', 'onTyping', { userId: 'u-1' }],
+  ] as const)('routes %s events to %s', (type, cbName, payload) => {
+    const cb = vi.fn();
+    renderHook(() => useWebSocket({ [cbName]: cb, enabled: true }));
+    const ws = MockWebSocket.instances[0];
+    ws.simulateOpen();
+    ws.simulateMessage(JSON.stringify({ type, data: JSON.stringify(payload) }));
+    expect(cb).toHaveBeenCalledWith(payload);
+  });
+
+  it('updates the latest callbacks via ref so handlers see fresh closures', () => {
+    const first = vi.fn();
+    const second = vi.fn();
+    const { rerender } = renderHook(
+      ({ cb }: { cb: typeof first }) => useWebSocket({ onMessageNew: cb, enabled: true }),
+      { initialProps: { cb: first } },
+    );
+    rerender({ cb: second });
+    const ws = MockWebSocket.instances[0];
+    ws.simulateMessage(JSON.stringify({ type: 'message.new', data: JSON.stringify({ id: '1' }) }));
+    expect(first).not.toHaveBeenCalled();
+    expect(second).toHaveBeenCalledWith({ id: '1' });
+  });
+
+  it('ignores unknown event types', () => {
+    const cb = vi.fn();
+    renderHook(() => useWebSocket({ onMessageNew: cb, enabled: true }));
+    const ws = MockWebSocket.instances[0];
+    ws.simulateMessage(JSON.stringify({ type: 'pong', data: '{}' }));
+    expect(cb).not.toHaveBeenCalled();
+  });
+
+  it('does NOT call onReconnect on the first successful open', () => {
+    const onReconnect = vi.fn();
+    renderHook(() => useWebSocket({ onReconnect, enabled: true }));
+    MockWebSocket.instances[0].simulateOpen();
+    expect(onReconnect).not.toHaveBeenCalled();
+  });
+
+  it('calls onReconnect when the socket re-opens after a close', () => {
+    const onReconnect = vi.fn();
+    renderHook(() => useWebSocket({ onReconnect, enabled: true }));
+    const first = MockWebSocket.instances[0];
+    first.simulateOpen();
+    first.simulateClose();
+    // Backoff timer fires → new WebSocket constructed
+    vi.advanceTimersByTime(2000);
+    const second = MockWebSocket.instances[1];
+    expect(second).toBeDefined();
+    second.simulateOpen();
+    expect(onReconnect).toHaveBeenCalledTimes(1);
+  });
 });

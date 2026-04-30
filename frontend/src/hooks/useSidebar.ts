@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiFetch } from '@/lib/api';
+import { queryKeys } from '@/lib/query-keys';
 import type { SidebarCategory } from '@/types';
 
 // SidebarItemKind selects whether a sidebar attribute mutation targets a
@@ -13,14 +14,14 @@ const URL_PREFIX: Record<SidebarItemKind, string> = {
 };
 
 const INVALIDATE_KEY: Record<SidebarItemKind, readonly string[]> = {
-  channel: ['userChannels'],
-  conversation: ['userConversations'],
+  channel: queryKeys.userChannels(),
+  conversation: queryKeys.userConversations(),
 };
 
 // useCategories returns the user's sidebar categories.
 export function useCategories() {
   return useQuery<SidebarCategory[]>({
-    queryKey: ['sidebarCategories'],
+    queryKey: queryKeys.sidebarCategories(),
     queryFn: () => apiFetch<SidebarCategory[]>('/api/v1/sidebar/categories'),
     staleTime: 30_000,
   });
@@ -34,7 +35,7 @@ export function useCreateCategory() {
         method: 'POST',
         body: JSON.stringify({ name }),
       }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['sidebarCategories'] }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.sidebarCategories() }),
   });
 }
 
@@ -46,7 +47,7 @@ export function useUpdateCategory() {
         method: 'PATCH',
         body: JSON.stringify({ name: vars.name, position: vars.position }),
       }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['sidebarCategories'] }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.sidebarCategories() }),
   });
 }
 
@@ -56,12 +57,12 @@ export function useDeleteCategory() {
     mutationFn: (id: string) =>
       apiFetch(`/api/v1/sidebar/categories/${id}`, { method: 'DELETE' }),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['sidebarCategories'] });
+      qc.invalidateQueries({ queryKey: queryKeys.sidebarCategories() });
       // Channels and DMs assigned to a deleted category fall back to
       // their default sections; the user-side rows still carry the
       // (now-stale) categoryID, so refetch both lists.
-      qc.invalidateQueries({ queryKey: ['userChannels'] });
-      qc.invalidateQueries({ queryKey: ['userConversations'] });
+      qc.invalidateQueries({ queryKey: queryKeys.userChannels() });
+      qc.invalidateQueries({ queryKey: queryKeys.userConversations() });
     },
   });
 }

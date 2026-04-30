@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { toast } from 'sonner';
 import { playNotificationPing } from '@/lib/notification-sound';
+import { readJSON, writeJSON } from '@/lib/storage';
+import { useLatestRef } from '@/hooks/useLatestRef';
 
 // NotificationKind mirrors backend service.NotificationKind. Adding a new
 // kind here is the single client-side place where a new alert flavor is
@@ -22,8 +23,8 @@ export interface NotificationPayload {
 type Permission = NotificationPermission | 'unsupported';
 
 interface NotificationPrefs {
-  // User-facing toggles persisted to localStorage. Independent of OS
-  // permission so a user can keep notifications enabled but silenced.
+  // Independent of OS permission so a user can keep notifications
+  // enabled at the OS level but silenced in-app.
   soundEnabled: boolean;
   browserEnabled: boolean;
 }
@@ -34,49 +35,51 @@ interface NotificationContextValue {
   setBrowserEnabled: (v: boolean) => void;
   permission: Permission;
   requestPermission: () => Promise<Permission>;
-  // Called by the WebSocket handler when a notification.new event arrives.
-  // The context decides whether to play sound / show OS popup based on the
-  // current view (suppress alerts for the channel/conversation already on
-  // screen) and the user prefs.
   dispatch: (n: NotificationPayload) => void;
-  // Routes used by the page-on-screen suppression. ChatPage calls these.
   setActiveParent: (parentID: string | null) => void;
-  // Current viewer's user id, used for own-author suppression so a user
-  // doesn't get pinged by their own messages echoed back over the socket.
   setCurrentUserID: (id: string | null) => void;
 }
 
 const STORAGE_KEY = 'ex.notifications.prefs.v1';
+const DEFAULT_PREFS: NotificationPrefs = { soundEnabled: true, browserEnabled: true };
 
-function loadPrefs(): NotificationPrefs {
-  if (typeof localStorage === 'undefined') {
-    return { soundEnabled: true, browserEnabled: true };
-  }
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return { soundEnabled: true, browserEnabled: true };
-    const parsed = JSON.parse(raw) as Partial<NotificationPrefs>;
-    return {
-      soundEnabled: parsed.soundEnabled ?? true,
-      browserEnabled: parsed.browserEnabled ?? true,
-    };
-  } catch {
-    return { soundEnabled: true, browserEnabled: true };
-  }
+function notificationsSupported(): boolean {
+  return typeof window !== 'undefined' && 'Notification' in window;
 }
 
-function savePrefs(p: NotificationPrefs) {
-  if (typeof localStorage === 'undefined') return;
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(p));
-  } catch {
-    // ignore
-  }
+function loadPrefs(): NotificationPrefs {
+  const parsed = readJSON<Partial<NotificationPrefs>>(STORAGE_KEY, {});
+  return {
+    soundEnabled: parsed.soundEnabled ?? DEFAULT_PREFS.soundEnabled,
+    browserEnabled: parsed.browserEnabled ?? DEFAULT_PREFS.browserEnabled,
+  };
 }
 
 function readPermission(): Permission {
-  if (typeof window === 'undefined' || !('Notification' in window)) return 'unsupported';
+  if (!notificationsSupported()) return 'unsupported';
   return Notification.permission;
+}
+
+// SPA navigation so a notification click doesn't trigger a full page
+// reload. Setting window.location.href reloads the document and wipes
+// the user's loaded message history, which on a deep-link landing
+// leaves them with only the around-window plus one page on each side.
+// pushState + popstate hands control to React Router without reload;
+// fallback to href for cross-origin links (which the backend never
+// produces today, but keeps the boundary safe).
+function navigateInApp(href: string) {
+  if (typeof window === 'undefined') return;
+  try {
+    const url = new URL(href, window.location.origin);
+    if (url.origin !== window.location.origin) {
+      window.location.href = href;
+      return;
+    }
+    window.history.pushState(null, '', url.pathname + url.search + url.hash);
+    window.dispatchEvent(new PopStateEvent('popstate'));
+  } catch {
+    window.location.href = href;
+  }
 }
 
 const NotificationContext = createContext<NotificationContextValue | undefined>(undefined);
@@ -86,9 +89,24 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   const [permission, setPermission] = useState<Permission>(readPermission);
   const activeParentRef = useRef<string | null>(null);
   const currentUserIDRef = useRef<string | null>(null);
+  // Mirror reactive state into refs so `dispatch` can be a stable callback
+  // — recreating it on every prefs/permission change would invalidate the
+  // memoized context value and re-render every consumer of useNotifications.
+  // Mirror reactive state into refs so `dispatch` can be a stable
+  // callback — recreating it on every prefs/permission change would
+  // invalidate the memoized context value and re-render every consumer.
+  const prefsRef = useLatestRef(prefs);
+  const permissionRef = useLatestRef(permission);
+  const initialMountRef = useRef(true);
 
   useEffect(() => {
-    savePrefs(prefs);
+    if (initialMountRef.current) {
+      // Skip the first run — loadPrefs() already returned what's in
+      // localStorage; rewriting it on mount is pointless I/O.
+      initialMountRef.current = false;
+      return;
+    }
+    writeJSON(STORAGE_KEY, prefs);
   }, [prefs]);
 
   const setSoundEnabled = useCallback((v: boolean) => {
@@ -100,9 +118,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const requestPermission = useCallback(async (): Promise<Permission> => {
-    if (typeof window === 'undefined' || !('Notification' in window)) {
-      return 'unsupported';
-    }
+    if (!notificationsSupported()) return 'unsupported';
     const result = await Notification.requestPermission();
     setPermission(result);
     return result;
@@ -116,77 +132,63 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     currentUserIDRef.current = id;
   }, []);
 
-  const dispatch = useCallback(
-    (n: NotificationPayload) => {
-      // Never alert for messages the viewer authored — their own send shouldn't
-      // ping them. Server-side recipient filtering already excludes the author,
-      // but echoes via shared subscriptions can slip through.
-      if (n.authorID && currentUserIDRef.current && n.authorID === currentUserIDRef.current) {
-        return;
-      }
-      // Suppress only regular-message popups for the parent the user is
-      // currently viewing — those land in the visible message list, no
-      // popup adds value. Mentions and thread replies escalate and should
-      // alert even when the parent is on screen: a mention in a long
-      // channel might scroll out of view, and a thread reply lives in a
-      // panel the user hasn't opened.
-      if (
-        n.kind === 'message' &&
-        activeParentRef.current &&
-        activeParentRef.current === n.parentID
-      ) {
-        return;
-      }
-      if (prefs.soundEnabled) {
-        playNotificationPing();
-      }
-      // In-app toast — the primary popup. Always fires regardless of OS
-      // permission so the user sees alerts even if they never granted
-      // browser notifications, dismissed the prompt, or are on a browser
-      // that suppresses Notification API while the tab is focused
-      // (e.g. Safari ≥16). Click to deep-link to the message.
-      toast(n.title, {
-        description: n.body,
-        duration: 6000,
-        onAutoClose: () => undefined,
-        action: n.deepLink
-          ? {
-              label: 'Open',
-              onClick: () => {
-                window.location.href = n.deepLink;
-              },
-            }
-          : undefined,
+  const dispatch = useCallback((n: NotificationPayload) => {
+    // Server-side recipient filtering already excludes the author, but
+    // echoes via shared subscriptions can slip through.
+    if (n.authorID && currentUserIDRef.current && n.authorID === currentUserIDRef.current) {
+      return;
+    }
+    // Channels are noisy by default — only escalate when the message is
+    // *for you*. Backend filters thread_reply notifications to actual
+    // thread participants, so receiving one implies you replied in it.
+    if (n.parentType === 'channel' && n.kind === 'message') {
+      return;
+    }
+    // Mentions and thread replies still escalate when the parent is on
+    // screen — a mention can scroll out of view, a thread reply lives in
+    // a side panel that may not be open.
+    if (
+      n.kind === 'message' &&
+      activeParentRef.current &&
+      activeParentRef.current === n.parentID
+    ) {
+      return;
+    }
+    const { soundEnabled, browserEnabled } = prefsRef.current;
+    if (soundEnabled) {
+      playNotificationPing();
+    }
+    if (!browserEnabled || permissionRef.current !== 'granted' || !notificationsSupported()) {
+      return;
+    }
+    try {
+      // No `tag`: Chrome treats tag-collisions as silent thread updates
+      // (no banner) regardless of `renotify`, so a second message in the
+      // same channel would never alert. macOS/Windows already group by
+      // origin at the OS level so per-message banners don't spam.
+      const note = new Notification(n.title, {
+        body: n.body,
+        icon: '/logo.svg',
+        silent: soundEnabled,
       });
-      // OS-level popup is the bonus path — only fires when the user has
-      // explicitly granted permission AND the browser is willing to show
-      // it. Failures here are silent because the toast already covered
-      // the user-visible alert.
-      if (
-        prefs.browserEnabled &&
-        typeof window !== 'undefined' &&
-        'Notification' in window &&
-        Notification.permission === 'granted'
-      ) {
-        try {
-          const note = new Notification(n.title, {
-            body: n.body,
-            tag: `${n.parentType}:${n.parentID}`,
-            silent: prefs.soundEnabled, // OS sound off when we already played our own
-          });
-          note.onclick = () => {
-            window.focus();
-            if (n.deepLink) window.location.href = n.deepLink;
-            note.close();
-          };
-        } catch {
-          // Notification constructor can throw on some embedded browsers;
-          // the toast above is still showing.
-        }
-      }
-    },
-    [prefs.soundEnabled, prefs.browserEnabled],
-  );
+      note.onclick = () => {
+        window.focus();
+        if (n.deepLink) navigateInApp(n.deepLink);
+        note.close();
+      };
+      // Drop handler refs once the OS dismisses the notification so the
+      // click closure (which retains `n` and `note`) becomes eligible
+      // for GC immediately, instead of lingering as long as the entry
+      // sits in the macOS Notification Center / Windows Action Center.
+      note.onclose = () => {
+        note.onclick = null;
+        note.onclose = null;
+      };
+    } catch {
+      // Some embedded webviews throw on the Notification constructor
+      // even after the permission check passes.
+    }
+  }, []);
 
   const value = useMemo(
     () => ({
@@ -205,11 +207,8 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   return <NotificationContext.Provider value={value}>{children}</NotificationContext.Provider>;
 }
 
-// noopValue is returned when useNotifications is called outside a provider.
-// This keeps test setups simple — a component that only *consumes* the
-// dispatch (e.g. for active-parent tracking) shouldn't force every test
-// to wrap in NotificationProvider just to render. Throwing here was the
-// original posture but made unrelated layout tests fail noisily.
+// Returned when useNotifications is called outside a provider so unrelated
+// tests don't have to wrap in NotificationProvider just to render.
 const noopValue: NotificationContextValue = {
   prefs: { soundEnabled: false, browserEnabled: false },
   setSoundEnabled: () => {},
