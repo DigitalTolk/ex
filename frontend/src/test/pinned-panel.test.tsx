@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, act } from '@testing-library/react';
 import { BrowserRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { PinnedPanel } from '@/components/chat/PinnedPanel';
@@ -113,7 +113,7 @@ describe('PinnedPanel', () => {
     apiFetchMock.mockResolvedValueOnce(messages);
     renderPanel();
     const row = await screen.findByTestId('pinned-message-row');
-    row.click();
+    await act(async () => { row.click(); });
     // Hash anchor drives useDeepLinkAnchor to scroll the main list to
     // the pinned message.
     expect(window.location.pathname).toBe('/channel/general');
@@ -136,7 +136,7 @@ describe('PinnedPanel', () => {
     window.history.replaceState(null, '', '/');
     renderPanel();
     const row = await screen.findByTestId('pinned-message-row');
-    row.click();
+    await act(async () => { row.click(); });
     expect(window.location.pathname).toBe('/channel/general');
     expect(window.location.search).toBe('?thread=m-root');
     expect(window.location.hash).toBe('#msg-m-reply');

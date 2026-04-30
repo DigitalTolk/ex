@@ -127,6 +127,13 @@ export function ChannelView() {
     if (threadParam) markThreadSeen(threadParam);
   }, [threadParam]);
 
+  // Opening a thread (via URL navigation, e.g. clicking a pinned
+  // thread reply) must dismiss any other side panel — the local
+  // openThread() helper does this, but URL-driven threads bypass it.
+  useEffect(() => {
+    if (effectiveThreadRootID) panels.close();
+  }, [effectiveThreadRootID, panels]);
+
   // If the current user is no longer a member of the open channel (e.g.
   // they were just removed by an admin), boot them back to the placeholder
   // home view. We only react once members has loaded to avoid a spurious

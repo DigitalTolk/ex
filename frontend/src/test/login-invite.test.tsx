@@ -33,6 +33,10 @@ function renderInvitePage(token = 'invite-abc') {
       <MemoryRouter initialEntries={[`/invite/${token}`]}>
         <Routes>
           <Route path="/invite/:token" element={<LoginPage />} />
+          {/* LoginPage redirects to /channel/general after a successful
+              invite accept; declare a stub so React Router doesn't warn
+              about an unmatched location during the post-submit flow. */}
+          <Route path="/channel/:slug" element={<div />} />
         </Routes>
       </MemoryRouter>
     </QueryClientProvider>,

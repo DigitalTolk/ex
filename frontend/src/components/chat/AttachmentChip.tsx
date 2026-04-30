@@ -51,7 +51,7 @@ export function AttachmentChip({ att, onRemove }: AttachmentChipProps) {
       </div>
       <div className="min-w-0 flex-1">
         <p className="text-xs font-medium truncate">{att.filename}</p>
-        <p className="text-[10px] text-muted-foreground">
+        <p className="text-xs text-muted-foreground">
           {formatBytes(att.size)}
         </p>
         {uploading && (

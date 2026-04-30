@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render as rtlRender, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render as rtlRender, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 const mockUploadAttachment = vi.fn();
@@ -139,7 +139,7 @@ describe('MessageInput - file upload', () => {
         ],
       },
     });
-    editor.dispatchEvent(event);
+    await act(async () => { editor.dispatchEvent(event); });
 
     await waitFor(() => {
       expect(mockUploadAttachment).toHaveBeenCalled();

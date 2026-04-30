@@ -139,6 +139,13 @@ export function ConversationView() {
     if (threadParam) markThreadSeen(threadParam);
   }, [threadParam]);
 
+  // Opening a thread (via URL navigation, e.g. clicking a pinned
+  // thread reply) must dismiss any other side panel — the local
+  // openThread() helper does this, but URL-driven threads bypass it.
+  useEffect(() => {
+    if (effectiveThreadRootID) panels.close();
+  }, [effectiveThreadRootID, panels]);
+
   const userIDs = useMemo(() => {
     const ids = new Set<string>();
     conversation?.participantIDs?.forEach((pid) => ids.add(pid));

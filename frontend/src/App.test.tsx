@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import App from './App';
 
 const originalFetch = globalThis.fetch;
@@ -25,7 +25,7 @@ describe('App', () => {
   it('renders without crashing', async () => {
     render(<App />);
     // Initially shows Loading... from ProtectedRoute, then redirects to login
-    await vi.waitFor(() => {
+    await waitFor(() => {
       // After auth finishes loading, unauthenticated user sees login page
       expect(
         screen.getByText('Welcome back') || screen.getByText('Loading...'),
@@ -35,14 +35,14 @@ describe('App', () => {
 
   it('redirects unauthenticated user to login page', async () => {
     render(<App />);
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(screen.getByText('Welcome back')).toBeInTheDocument();
     });
   });
 
   it('shows sign in with SSO button on login page', async () => {
     render(<App />);
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(screen.getByLabelText('Sign in with Single Sign-On')).toBeInTheDocument();
     });
   });

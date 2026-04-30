@@ -385,31 +385,47 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, Props>(function Wys
     if (!range.collapsed) return 'pass';
     if (!elRef.current.contains(range.startContainer)) return 'pass';
 
-    // Real <li> path: walk up looking for an <li>. If the <li> is
-    // empty we explicitly exit the list — older browsers / Safari
-    // don't always do this on Enter, leaving the user stuck.
+    // Walk up to find the nearest <li> or <blockquote>. Either is a
+    // recognised "block" the user can be inside; we treat them
+    // symmetrically: empty → exit, with-content → 'native' so the
+    // browser handles continuation (new <li> or in-block <br>).
+    let blockEl: HTMLElement | null = null;
     let n: Node | null = range.startContainer;
     while (n && n !== elRef.current) {
-      if (n.nodeType === Node.ELEMENT_NODE && (n as HTMLElement).tagName.toLowerCase() === 'li') {
-        const li = n as HTMLElement;
-        if ((li.textContent ?? '').trim() === '') {
-          const list = li.parentElement;
-          if (list && (list.tagName === 'UL' || list.tagName === 'OL')) {
-            const after = document.createElement('div');
-            after.appendChild(document.createElement('br'));
-            list.insertAdjacentElement('afterend', after);
-            li.remove();
-            const r = document.createRange();
-            r.setStart(after, 0);
-            r.collapse(true);
-            sel.removeAllRanges();
-            sel.addRange(r);
-            return 'handled';
-          }
+      if (n.nodeType === Node.ELEMENT_NODE) {
+        const tag = (n as HTMLElement).tagName.toLowerCase();
+        if (tag === 'li' || tag === 'blockquote') {
+          blockEl = n as HTMLElement;
+          break;
         }
-        return 'native';
       }
       n = n.parentNode;
+    }
+    if (blockEl) {
+      const isEmpty = (blockEl.textContent ?? '').trim() === '';
+      if (isEmpty) {
+        const after = document.createElement('div');
+        after.appendChild(document.createElement('br'));
+        // For an empty <li> we exit the parent list (ul/ol). For an
+        // empty <blockquote> we exit the blockquote itself.
+        const exitFrom =
+          blockEl.tagName.toLowerCase() === 'li'
+            ? blockEl.parentElement && (blockEl.parentElement.tagName === 'UL' || blockEl.parentElement.tagName === 'OL')
+              ? blockEl.parentElement
+              : null
+            : blockEl;
+        if (exitFrom) {
+          exitFrom.insertAdjacentElement('afterend', after);
+          (blockEl.tagName.toLowerCase() === 'li' ? blockEl : exitFrom).remove();
+          const r = document.createRange();
+          r.setStart(after, 0);
+          r.collapse(true);
+          sel.removeAllRanges();
+          sel.addRange(r);
+          return 'handled';
+        }
+      }
+      return 'native';
     }
 
     // Typed-marker path: only fires when the caret sits in a TEXT_NODE

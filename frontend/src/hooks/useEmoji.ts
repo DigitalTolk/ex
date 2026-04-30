@@ -3,18 +3,24 @@ import { apiFetch } from '@/lib/api';
 import { queryKeys } from '@/lib/query-keys';
 import type { CustomEmoji } from '@/types';
 
-export function useEmojis() {
+async function fetchEmojis(): Promise<CustomEmoji[]> {
+  const res = await apiFetch<CustomEmoji[]>('/api/v1/emojis');
+  return Array.isArray(res) ? res : [];
+}
+
+export function useEmojis(enabled = true) {
   return useQuery({
     queryKey: queryKeys.emojis(),
-    queryFn: () => apiFetch<CustomEmoji[]>('/api/v1/emojis'),
+    queryFn: fetchEmojis,
     staleTime: 5 * 60 * 1000,
+    enabled,
   });
 }
 
 export function useEmojiMap() {
   return useQuery({
     queryKey: queryKeys.emojis(),
-    queryFn: () => apiFetch<CustomEmoji[]>('/api/v1/emojis'),
+    queryFn: fetchEmojis,
     staleTime: 5 * 60 * 1000,
     select: (list) => {
       const map: Record<string, string> = {};

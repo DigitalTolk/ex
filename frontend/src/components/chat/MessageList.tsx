@@ -528,7 +528,7 @@ export function MessageList({
     );
     observer.observe(node);
     return () => observer.disconnect();
-  }, [hasNextPage, fetchNextPage]);
+  }, [hasNextPage, fetchNextPage, isFetchingNextRef]);
 
   // Newer-direction sentinel; only mounted while a deep-link window
   // is open. Pulls successive newer pages until the live tail is in
@@ -551,7 +551,7 @@ export function MessageList({
     );
     observer.observe(node);
     return () => observer.disconnect();
-  }, [hasPreviousPage, fetchPreviousPage]);
+  }, [hasPreviousPage, fetchPreviousPage, isFetchingPrevRef]);
 
   if (isLoading) {
     return (

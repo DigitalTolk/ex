@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { BrowserRouter } from 'react-router-dom';
@@ -77,7 +77,7 @@ afterEach(() => {
 
 async function gotoMembersTab(user: ReturnType<typeof userEvent.setup>) {
   await user.click(screen.getByRole('tab', { name: 'Members' }));
-  vi.advanceTimersByTime(300);
+  await act(async () => { await vi.advanceTimersByTimeAsync(300); });
 }
 
 describe('DirectoriesPage - Members tab', () => {
@@ -108,7 +108,7 @@ describe('DirectoriesPage - Members tab', () => {
 
     const search = screen.getByLabelText('Search members');
     await user.type(search, 'al');
-    vi.advanceTimersByTime(300);
+    await act(async () => { await vi.advanceTimersByTimeAsync(300); });
 
     await waitFor(() => {
       expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/users?q=al');

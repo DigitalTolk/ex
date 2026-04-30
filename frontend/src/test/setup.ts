@@ -1,5 +1,26 @@
 import '@testing-library/jest-dom/vitest';
+import { vi } from 'vitest';
+import { createElement, type ReactNode } from 'react';
 import { APP_VERSION_META } from '@/lib/version-meta';
+
+// @base-ui/react/scroll-area uses ResizeObserver inside Root and emits
+// async state updates that show up in tests as "An update to
+// ScrollAreaRoot inside a test was not wrapped in act(...)". The
+// scrollbar logic is non-functional in jsdom (no layout), so the
+// pragmatic fix is to swap each subcomponent for a passthrough <div>.
+vi.mock('@base-ui/react/scroll-area', () => {
+  const passthrough = (props: { children?: ReactNode } & Record<string, unknown>) =>
+    createElement('div', props, props.children);
+  return {
+    ScrollArea: {
+      Root: passthrough,
+      Viewport: passthrough,
+      Scrollbar: passthrough,
+      Thumb: passthrough,
+      Corner: passthrough,
+    },
+  };
+});
 
 // Seed the version meta tag so useServerVersion's BUILD_VERSION resolves
 // to a stable, non-dev value across the suite. The hook reads this once

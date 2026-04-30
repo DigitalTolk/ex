@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, act } from '@testing-library/react';
+import { render, screen, act, waitFor } from '@testing-library/react';
 import { BrowserRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AuthProvider, useAuth } from './AuthContext';
@@ -48,14 +48,14 @@ describe('AuthContext', () => {
 
   it('renders children', async () => {
     renderWithProviders(<div data-testid="child">hello</div>);
-    expect(screen.getByTestId('child')).toHaveTextContent('hello');
+    expect(await screen.findByTestId('child')).toHaveTextContent('hello');
   });
 
   it('provides isAuthenticated: false initially (after loading)', async () => {
     renderWithProviders(<AuthTestConsumer />);
 
     // Wait for the tryRestore effect to complete
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(screen.getByTestId('loading')).toHaveTextContent('false');
     });
 
@@ -81,7 +81,7 @@ describe('AuthContext', () => {
     renderWithProviders(<AuthTestConsumer />);
 
     // Wait for loading to finish
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(screen.getByTestId('loading')).toHaveTextContent('false');
     });
 

@@ -75,13 +75,13 @@ export function MessageAttachments({
 function AttachmentSkeleton({ loading }: { loading: boolean }) {
   if (loading) {
     return (
-      <div className="flex h-12 w-64 items-center justify-center rounded-md border bg-muted/40 text-[10px] text-muted-foreground">
+      <div className="flex h-12 w-64 items-center justify-center rounded-md border bg-muted/40 text-xs text-muted-foreground">
         Loading…
       </div>
     );
   }
   return (
-    <div className="flex h-12 w-64 items-center justify-center rounded-md border border-destructive/30 bg-destructive/5 text-[10px] text-destructive">
+    <div className="flex h-12 w-64 items-center justify-center rounded-md border border-destructive/30 bg-destructive/5 text-xs text-destructive">
       Attachment unavailable
     </div>
   );
@@ -139,7 +139,7 @@ function AttachmentRow({ att, onOpen }: { att: Attachment; onOpen: () => void })
         )}
         <div className="min-w-0 flex-1">
           <p className="truncate text-xs font-medium">{att.filename}</p>
-          <p className="text-[10px] text-muted-foreground">{formatBytes(att.size)}</p>
+          <p className="text-xs text-muted-foreground">{formatBytes(att.size)}</p>
         </div>
       </button>
       {att.url && (

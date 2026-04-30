@@ -24,7 +24,7 @@ const NAME_RE = /^[a-z0-9_+-]{1,32}$/;
 
 export function EmojiManagerDialog({ open, onOpenChange }: Props) {
   const { user } = useAuth();
-  const { data: emojis } = useEmojis();
+  const { data: emojis } = useEmojis(open);
   const upload = useUploadEmoji();
   const remove = useDeleteEmoji();
   const [name, setName] = useState('');

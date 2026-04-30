@@ -3,10 +3,13 @@ import { apiFetch } from '@/lib/api';
 import { queryKeys } from '@/lib/query-keys';
 import type { WorkspaceSettings } from '@/types';
 
+const DEFAULT_WORKSPACE_SETTINGS: WorkspaceSettings = { maxUploadBytes: 0, allowedExtensions: [] };
+
 export function useWorkspaceSettings() {
   return useQuery({
     queryKey: queryKeys.workspaceSettings(),
-    queryFn: () => apiFetch<WorkspaceSettings>('/api/v1/admin/settings'),
+    queryFn: async () =>
+      (await apiFetch<WorkspaceSettings>('/api/v1/admin/settings')) ?? DEFAULT_WORKSPACE_SETTINGS,
     staleTime: 5 * 60 * 1000,
   });
 }

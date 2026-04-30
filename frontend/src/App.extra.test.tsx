@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render } from '@testing-library/react';
+import { render, waitFor } from '@testing-library/react';
 import App from './App';
 
 const originalFetch = globalThis.fetch;
@@ -62,7 +62,7 @@ describe('App - authenticated route', () => {
     // Root visit lands on the index route which navigates to
     // /channel/general — confirms the post-login redirect.
     render(<App />);
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(window.location.pathname).toBe('/channel/general');
     });
   });

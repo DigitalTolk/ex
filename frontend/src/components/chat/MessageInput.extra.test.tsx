@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render as rtlRender, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render as rtlRender, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
@@ -161,23 +161,25 @@ describe('MessageInput - file upload', () => {
     // Both uploads still pending — no completion has happened yet.
     // Drive progress on file B while file A is still at 0% to prove the
     // second chip's progress updates without waiting on the first.
-    inFlight[0].onInit({
-      id: 'att-a.png',
-      uploadURL: 'http://s3/u',
-      alreadyExists: false,
-      filename: 'a.png',
-      contentType: 'image/png',
-      size: 1,
+    await act(async () => {
+      inFlight[0].onInit({
+        id: 'att-a.png',
+        uploadURL: 'http://s3/u',
+        alreadyExists: false,
+        filename: 'a.png',
+        contentType: 'image/png',
+        size: 1,
+      });
+      inFlight[1].onInit({
+        id: 'att-b.png',
+        uploadURL: 'http://s3/u',
+        alreadyExists: false,
+        filename: 'b.png',
+        contentType: 'image/png',
+        size: 1,
+      });
+      inFlight[1].onProgress(0.5);
     });
-    inFlight[1].onInit({
-      id: 'att-b.png',
-      uploadURL: 'http://s3/u',
-      alreadyExists: false,
-      filename: 'b.png',
-      contentType: 'image/png',
-      size: 1,
-    });
-    inFlight[1].onProgress(0.5);
 
     await waitFor(() => {
       const chips = screen.getAllByTestId('attachment-chip');
@@ -189,8 +191,10 @@ describe('MessageInput - file upload', () => {
     });
 
     // Release both to let cleanup proceed.
-    inFlight[0].release();
-    inFlight[1].release();
+    await act(async () => {
+      inFlight[0].release();
+      inFlight[1].release();
+    });
   });
 
   it('caps concurrency at 4 so a 5-file drop kicks off only 4 uploads simultaneously', async () => {
@@ -224,8 +228,8 @@ describe('MessageInput - file upload', () => {
     expect(inFlight.length).toBe(4);
 
     // Release one — the 5th upload should now start.
-    inFlight[0]();
+    await act(async () => { inFlight[0](); });
     await waitFor(() => expect(inFlight.length).toBe(5));
-    inFlight.slice(1).forEach((r) => r());
+    await act(async () => { inFlight.slice(1).forEach((r) => r()); });
   });
 });

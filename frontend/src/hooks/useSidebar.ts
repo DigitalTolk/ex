@@ -22,7 +22,10 @@ const INVALIDATE_KEY: Record<SidebarItemKind, readonly string[]> = {
 export function useCategories() {
   return useQuery<SidebarCategory[]>({
     queryKey: queryKeys.sidebarCategories(),
-    queryFn: () => apiFetch<SidebarCategory[]>('/api/v1/sidebar/categories'),
+    queryFn: async () => {
+      const res = await apiFetch<SidebarCategory[]>('/api/v1/sidebar/categories');
+      return Array.isArray(res) ? res : [];
+    },
     staleTime: 30_000,
   });
 }

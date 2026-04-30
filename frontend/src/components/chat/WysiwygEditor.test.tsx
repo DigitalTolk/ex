@@ -212,4 +212,46 @@ describe('WysiwygEditor', () => {
     // Marker removed, line is now empty.
     expect(el.textContent).toBe('');
   });
+
+  it('Enter inside an empty <li> exits the list and does not submit', () => {
+    const onSubmit = vi.fn();
+    const { getByLabelText } = render(
+      <WysiwygEditor onSubmit={onSubmit} initialBody="" />,
+    );
+    const el = getByLabelText('Message input');
+    el.innerHTML = '<ul><li>foo</li><li><br></li></ul>';
+    const emptyLi = el.querySelectorAll('li')[1];
+    const range = document.createRange();
+    range.setStart(emptyLi, 0);
+    range.collapse(true);
+    const sel = window.getSelection();
+    sel?.removeAllRanges();
+    sel?.addRange(range);
+
+    fireEvent.keyDown(el, { key: 'Enter' });
+    expect(onSubmit).not.toHaveBeenCalled();
+    // The empty li was removed; a div sits after the surviving list.
+    expect(el.querySelectorAll('li').length).toBe(1);
+    expect(el.querySelector('ul + div')).not.toBeNull();
+  });
+
+  it('Enter inside an empty <blockquote> exits the blockquote and does not submit', () => {
+    const onSubmit = vi.fn();
+    const { getByLabelText } = render(
+      <WysiwygEditor onSubmit={onSubmit} initialBody="" />,
+    );
+    const el = getByLabelText('Message input');
+    el.innerHTML = '<blockquote><br></blockquote>';
+    const bq = el.querySelector('blockquote')!;
+    const range = document.createRange();
+    range.setStart(bq, 0);
+    range.collapse(true);
+    const sel = window.getSelection();
+    sel?.removeAllRanges();
+    sel?.addRange(range);
+
+    fireEvent.keyDown(el, { key: 'Enter' });
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(el.querySelector('blockquote')).toBeNull();
+  });
 });

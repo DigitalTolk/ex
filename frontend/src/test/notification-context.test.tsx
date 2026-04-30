@@ -62,7 +62,12 @@ function renderProbe() {
 }
 
 function installNotification(permission: NotificationPermission) {
-  const ctor = vi.fn().mockImplementation(() => ({ onclick: null, close: () => {} }));
+  // Use a `function` (not arrow) so vi.fn().mockImplementation can act
+  // as a constructor — `new Notification(...)` requires a [[Construct]]
+  // slot, which arrow functions don't have.
+  const ctor = vi.fn().mockImplementation(function NotificationStub() {
+    return { onclick: null, close: () => {} };
+  });
   Object.defineProperty(window, 'Notification', {
     value: Object.assign(ctor, {
       permission,
@@ -318,7 +323,7 @@ describe('NotificationProvider', () => {
   });
 
   it('does not throw when the Notification constructor itself throws (embedded webview)', () => {
-    notificationCtor.mockImplementation(() => {
+    notificationCtor.mockImplementation(function ThrowingNotification() {
       throw new Error('Notification not allowed in this context');
     });
     renderProbe();

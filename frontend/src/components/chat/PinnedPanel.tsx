@@ -37,7 +37,10 @@ export function PinnedPanel({
 
   const { data, isLoading } = useQuery({
     queryKey: queryKeys.pinned(path),
-    queryFn: () => apiFetch<Message[]>(`/api/v1/${path}/pinned`),
+    queryFn: async () => {
+      const res = await apiFetch<Message[]>(`/api/v1/${path}/pinned`);
+      return Array.isArray(res) ? res : [];
+    },
     enabled: !!(channelId || conversationId),
   });
 

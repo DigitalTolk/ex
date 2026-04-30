@@ -6,8 +6,10 @@ import type { UserConversation, Conversation, User } from '@/types';
 export function useUserConversations() {
   return useQuery({
     queryKey: queryKeys.userConversations(),
-    queryFn: () =>
-      apiFetch<UserConversation[]>('/api/v1/conversations'),
+    queryFn: async () => {
+      const res = await apiFetch<UserConversation[]>('/api/v1/conversations');
+      return Array.isArray(res) ? res : [];
+    },
   });
 }
 
