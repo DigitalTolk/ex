@@ -114,10 +114,10 @@ func (h *AuthHandler) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, finalRedirect, http.StatusFound)
 }
 
-// isAllowedOIDCRedirect permits localhost (dev) and tauri:// (desktop) redirect
-// targets; all other URLs are rejected to prevent open redirect attacks. The
-// match is performed on the parsed URL's host (not via string prefix) so an
-// attacker controlling e.g. localhost.evil.com cannot satisfy the allowlist.
+// isAllowedOIDCRedirect permits localhost (dev), tauri:// (desktop WebView),
+// and ex:// (desktop deep-link) redirect targets; all other URLs are rejected
+// to prevent open redirect attacks. The match uses url.Parse so an attacker
+// controlling e.g. localhost.evil.com cannot satisfy the allowlist.
 func isAllowedOIDCRedirect(u string) bool {
 	if u == "" {
 		return false
@@ -128,10 +128,12 @@ func isAllowedOIDCRedirect(u string) bool {
 	}
 	switch parsed.Scheme {
 	case "http", "https", "tauri":
+		return parsed.Hostname() == "localhost"
+	case "ex":
+		return parsed.Host == "app"
 	default:
 		return false
 	}
-	return parsed.Hostname() == "localhost"
 }
 
 // RefreshToken exchanges a refresh token cookie for a new access token.
