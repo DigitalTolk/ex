@@ -5,6 +5,7 @@ import { useEmojis } from '@/hooks/useEmoji';
 import { COMMON_EMOJI_SHORTCODES } from '@/lib/emoji-shortcodes';
 import { PopoverPortal } from '@/components/PopoverPortal';
 import { EmojiGlyph } from '@/components/EmojiGlyph';
+import { fuzzyMatch } from '@/lib/fuzzy';
 
 type SelectMode = 'shortcode' | 'reaction';
 
@@ -29,18 +30,14 @@ export function EmojiPicker({ onSelect, onClose, trigger, ariaLabel = 'Emoji pic
   const { data: customEmojis } = useEmojis();
 
   const filteredStandard = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return COMMON_EMOJI_SHORTCODES;
-    return COMMON_EMOJI_SHORTCODES.filter((e) =>
-      e.name.toLowerCase().includes(q) || e.unicode.includes(q),
-    );
+    if (!query.trim()) return COMMON_EMOJI_SHORTCODES;
+    return COMMON_EMOJI_SHORTCODES.filter((e) => fuzzyMatch(query, e.name, e.unicode));
   }, [query]);
 
   const filteredCustom = useMemo(() => {
     if (!customEmojis) return [];
-    const q = query.trim().toLowerCase();
-    if (!q) return customEmojis;
-    return customEmojis.filter((e) => e.name.toLowerCase().includes(q));
+    if (!query.trim()) return customEmojis;
+    return customEmojis.filter((e) => fuzzyMatch(query, e.name));
   }, [customEmojis, query]);
 
   useEffect(() => {

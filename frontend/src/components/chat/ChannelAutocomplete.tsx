@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useBrowseChannels } from '@/hooks/useChannels';
+import { fuzzyMatch } from '@/lib/fuzzy';
 
 // Channel autocomplete pick payload — id is what gets stamped into the
 // markdown so the link survives renames; slug is what the user reads.
@@ -26,13 +27,9 @@ export function ChannelAutocomplete({ query, anchorRect, onPick, onDismiss }: Pr
   const [active, setActive] = useState(0);
 
   const items: ChannelSuggestion[] = useMemo(() => {
-    const q = query.trim().toLowerCase();
     const list = (all ?? [])
       .filter((c) => c.type === 'public' && !c.archived)
-      .filter((c) => {
-        if (!q) return true;
-        return c.slug.toLowerCase().includes(q) || c.name.toLowerCase().includes(q);
-      })
+      .filter((c) => fuzzyMatch(query, c.slug, c.name))
       .slice(0, MAX_ROWS)
       .map((c) => ({ id: c.id, slug: c.slug, name: c.name }));
     return list;

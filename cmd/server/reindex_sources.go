@@ -5,6 +5,7 @@ import (
 
 	"github.com/DigitalTolk/ex/internal/handler"
 	"github.com/DigitalTolk/ex/internal/model"
+	"github.com/DigitalTolk/ex/internal/paginate"
 )
 
 // reindexSources adapts the handler-level store adapters to the slim
@@ -29,20 +30,9 @@ func newReindexSources(
 }
 
 func (a *reindexSources) ListUsers(ctx context.Context) ([]*model.User, error) {
-	out := make([]*model.User, 0)
-	cursor := ""
-	for {
-		page, next, err := a.users.ListUsers(ctx, 200, cursor)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, page...)
-		if next == "" {
-			break
-		}
-		cursor = next
-	}
-	return out, nil
+	return paginate.All(ctx, func(ctx context.Context, cursor string) ([]*model.User, string, error) {
+		return a.users.ListUsers(ctx, 200, cursor)
+	}, 0)
 }
 
 func (a *reindexSources) ListChannels(ctx context.Context) ([]*model.Channel, error) {
@@ -54,18 +44,17 @@ func (a *reindexSources) ListConversations(ctx context.Context) ([]*model.Conver
 }
 
 func (a *reindexSources) ListMessages(ctx context.Context, parentID string) ([]*model.Message, error) {
-	out := make([]*model.Message, 0)
-	before := ""
-	for {
-		page, hasMore, err := a.messages.ListMessages(ctx, parentID, before, 200)
+	// ListMessages uses (page, hasMore, err) instead of (page, next,
+	// err) and the cursor is the last item's ID. Translate to the
+	// shape paginate.All expects.
+	return paginate.All(ctx, func(ctx context.Context, cursor string) ([]*model.Message, string, error) {
+		page, hasMore, err := a.messages.ListMessages(ctx, parentID, cursor, 200)
 		if err != nil {
-			return nil, err
+			return nil, "", err
 		}
-		out = append(out, page...)
 		if !hasMore || len(page) == 0 {
-			break
+			return page, "", nil
 		}
-		before = page[len(page)-1].ID
-	}
-	return out, nil
+		return page, page[len(page)-1].ID, nil
+	}, 0)
 }

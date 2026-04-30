@@ -1,10 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useSearchUsers } from '@/hooks/useConversations';
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import { useAllUsers } from '@/hooks/useConversations';
+import { usePresence } from '@/context/PresenceContext';
+import { fuzzyMatch } from '@/lib/fuzzy';
+import { topK } from '@/lib/topk';
+import { getInitials } from '@/lib/format';
 
 // MentionSuggestion is the shape the editor inserts. user => @[id|name]
-// pill; group => literal "@all"/"@here" text.
+// pill; group => literal "@all"/"@here" text. `online` is a UI flag —
+// resolved at memo time from the live presence state.
 export type MentionSuggestion =
-  | { kind: 'user'; id: string; displayName: string; email?: string }
+  | { kind: 'user'; id: string; displayName: string; email?: string; avatarURL?: string; online?: boolean }
   | { kind: 'group'; group: 'all' | 'here' };
 
 interface Props {
@@ -20,31 +26,59 @@ interface Props {
   onDismiss: () => void;
 }
 
-const GROUPS: { kind: 'group'; group: 'all' | 'here'; description: string }[] = [
-  { kind: 'group', group: 'all', description: 'Notify everyone in this channel' },
-  { kind: 'group', group: 'here', description: 'Notify everyone currently online' },
-];
+type GroupName = 'all' | 'here';
+
+const GROUP_DESCRIPTIONS: Record<GroupName, string> = {
+  all: 'Notify everyone in this channel',
+  here: 'Notify everyone currently online',
+};
+const GROUP_NAMES: GroupName[] = ['all', 'here'];
+
+// Cap the rendered list so a large workspace doesn't render a giant
+// popup on an empty query. Filtering is cheap; rendering isn't.
+const MAX_RESULTS = 12;
 
 export function MentionAutocomplete({ query, anchorRect, onPick, onDismiss }: Props) {
-  const { data: users } = useSearchUsers(query);
+  const { data: users } = useAllUsers();
+  const { isOnline } = usePresence();
   const [active, setActive] = useState(0);
 
-  // Group entries first (Slack-style); then user matches. When the query
-  // is non-empty, group entries also need to be filtered so typing
-  // "alice" doesn't keep "@all" at the top of the list.
+  const q = useMemo(() => query.trim().toLowerCase(), [query]);
+
+  // Roster filter is stable across presence changes — we only re-run
+  // the fuzzy match when the roster or query actually changes. A
+  // teammate going online doesn't re-walk hundreds of users.
+  const filteredUsers = useMemo(
+    () => (users ?? []).filter((u) => fuzzyMatch(q, u.displayName, u.email)),
+    [users, q],
+  );
+
+  // @here / @all are noisy — surface them only when the user has
+  // typed the group name out in full. Plain `@` and partial typing
+  // skip past them straight to the user roster (online first).
   const items: MentionSuggestion[] = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    const groupItems: MentionSuggestion[] = GROUPS
-      .filter((g) => g.group.startsWith(q) || q.length === 0)
-      .map((g) => ({ kind: 'group', group: g.group }));
-    const userItems: MentionSuggestion[] = (users ?? []).map((u) => ({
+    const groupItems: MentionSuggestion[] = GROUP_NAMES
+      .filter((name) => name === q)
+      .map((name) => ({ kind: 'group', group: name }));
+    // Online first, then alphabetical. topK is a single-pass selection
+    // so we never sort the trailing N-K users; the popup caps at
+    // MAX_RESULTS rendered rows anyway.
+    const top = topK(filteredUsers, MAX_RESULTS, (a, b) => {
+      const ao = isOnline(a.id);
+      const bo = isOnline(b.id);
+      if (ao !== bo) return ao ? -1 : 1;
+      return a.displayName.localeCompare(b.displayName);
+    });
+    const userItems: MentionSuggestion[] = top.map((u) => ({
       kind: 'user',
       id: u.id,
       displayName: u.displayName,
       email: u.email,
+      avatarURL: u.avatarURL,
+      online: isOnline(u.id),
     }));
     return [...groupItems, ...userItems];
-  }, [query, users]);
+  }, [filteredUsers, q, isOnline]);
 
   // Reset the highlighted index when the suggestion list changes — the
   // previous highlighted row may no longer exist after a query refines.
@@ -110,44 +144,69 @@ export function MentionAutocomplete({ query, anchorRect, onPick, onDismiss }: Pr
       style={style}
       className="w-[28rem] max-w-[90vw] rounded-md border bg-popover p-1 shadow-lg"
     >
-      {items.map((it, i) => {
-        const isActive = i === active;
-        const key = it.kind === 'user' ? `u-${it.id}` : `g-${it.group}`;
-        const label = it.kind === 'user' ? `@${it.displayName}` : `@${it.group}`;
-        const sub =
-          it.kind === 'user'
-            ? it.email
-            : it.group === 'all'
-              ? 'Notify everyone in this channel'
-              : 'Notify everyone currently online';
-        return (
-          <button
-            key={key}
-            type="button"
-            role="option"
-            aria-selected={isActive}
-            data-testid="mention-option"
-            data-mention-active={isActive ? 'true' : 'false'}
-            onMouseDown={(e) => {
-              // Prevent the contentEditable from losing focus on click.
-              e.preventDefault();
-              onPick(it);
-            }}
-            onMouseEnter={() => setActive(i)}
-            className={
-              'flex w-full items-center gap-2 whitespace-nowrap rounded px-2 py-1.5 text-left text-sm ' +
-              (isActive ? 'bg-muted' : 'hover:bg-muted/50')
-            }
-          >
-            <span className="truncate font-medium">{label}</span>
-            {sub && (
-              <span className="ml-auto shrink-0 truncate text-xs text-muted-foreground">
-                {sub}
-              </span>
-            )}
-          </button>
-        );
-      })}
+      {items.map((it, i) => (
+        <button
+          key={it.kind === 'user' ? `u-${it.id}` : `g-${it.group}`}
+          type="button"
+          role="option"
+          aria-selected={i === active}
+          data-testid="mention-option"
+          data-mention-active={i === active ? 'true' : 'false'}
+          onMouseDown={(e) => {
+            e.preventDefault();
+            onPick(it);
+          }}
+          onMouseEnter={() => setActive(i)}
+          className={
+            'flex w-full items-center gap-2 whitespace-nowrap rounded px-2 py-1.5 text-left text-sm ' +
+            (i === active ? 'bg-muted' : 'hover:bg-muted/50')
+          }
+        >
+          {it.kind === 'user' ? <UserRow it={it} /> : <GroupRow it={it} />}
+        </button>
+      ))}
     </div>
+  );
+}
+
+function UserRow({ it }: { it: Extract<MentionSuggestion, { kind: 'user' }> }) {
+  return (
+    <>
+      <span className="relative shrink-0">
+        <Avatar className="h-7 w-7">
+          {it.avatarURL && <AvatarImage src={it.avatarURL} alt="" />}
+          <AvatarFallback className="bg-primary/10 text-xs">
+            {getInitials(it.displayName)}
+          </AvatarFallback>
+        </Avatar>
+        {it.online && (
+          <span
+            data-testid="mention-online-indicator"
+            aria-label="Online"
+            className="absolute right-0 bottom-0 h-2 w-2 rounded-full bg-emerald-500 ring-2 ring-popover"
+          />
+        )}
+      </span>
+      <span className="truncate font-medium">{it.displayName}</span>
+      {it.email && (
+        <span className="ml-auto shrink-0 truncate text-xs text-muted-foreground">
+          {it.email}
+        </span>
+      )}
+    </>
+  );
+}
+
+function GroupRow({ it }: { it: Extract<MentionSuggestion, { kind: 'group' }> }) {
+  return (
+    <>
+      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold">
+        @
+      </span>
+      <span className="font-medium">@{it.group}</span>
+      <span className="ml-auto shrink-0 truncate text-xs text-muted-foreground">
+        {GROUP_DESCRIPTIONS[it.group]}
+      </span>
+    </>
   );
 }

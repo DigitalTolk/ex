@@ -8,6 +8,7 @@ import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
+import { fuzzyMatch } from '@/lib/fuzzy';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -78,16 +79,9 @@ function ChannelsTab() {
 
   const joinedIds = new Set(userChannels?.map((c) => c.channelID) ?? []);
 
-  const q = query.trim().toLowerCase();
   const visible = (allChannels ?? [])
     .filter((ch) => ch.type === 'public')
-    .filter((ch) => {
-      if (!q) return true;
-      return (
-        ch.name.toLowerCase().includes(q) ||
-        (ch.description ?? '').toLowerCase().includes(q)
-      );
-    });
+    .filter((ch) => fuzzyMatch(query, ch.name, ch.description ?? ''));
 
   function handleJoin(channelId: string, channelSlug: string) {
     // Routes are keyed by slug (ChannelView resolves the slug back to a
@@ -123,7 +117,7 @@ function ChannelsTab() {
 
       {!isLoading && visible.length === 0 && (
         <p className="py-12 text-center text-muted-foreground">
-          {q ? 'No matching channels' : 'No channels available'}
+          {query.trim() ? 'No matching channels' : 'No channels available'}
         </p>
       )}
 

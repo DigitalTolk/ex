@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -392,6 +393,41 @@ func TestListUsers(t *testing.T) {
 
 	if rec.Code != http.StatusOK {
 		t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+}
+
+func TestListUsers_AllReturnsEntireRoster(t *testing.T) {
+	// `?all=true` flips the handler into the paginate-internally mode
+	// used by the mention popup. Every user in the store must come back
+	// in a single response.
+	h, userStore, jwtMgr := setupUserHandler(t)
+	for i := 0; i < 7; i++ {
+		id := fmt.Sprintf("u-%d", i)
+		userStore.users[id] = &model.User{
+			ID:          id,
+			Email:       fmt.Sprintf("u%d@example.com", i),
+			DisplayName: fmt.Sprintf("User %d", i),
+			SystemRole:  model.SystemRoleMember,
+		}
+	}
+	caller := &model.User{ID: "all-caller", Email: "all@test.com", SystemRole: model.SystemRoleMember}
+	token := makeTokenForUser(jwtMgr, caller)
+	handler := middleware.Auth(jwtMgr)(http.HandlerFunc(h.ListUsers))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/users?all=true", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body: %s", rec.Code, rec.Body.String())
+	}
+	var got []map[string]interface{}
+	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(got) != 7 {
+		t.Errorf("len(users) = %d, want 7", len(got))
 	}
 }
 
