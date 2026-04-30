@@ -163,13 +163,9 @@ describe('NotificationContext.dispatch — sound regression', () => {
   // future refactor drops the audio cue.
   it('plays the sound on dispatch when soundEnabled is true', async () => {
     const playMock = vi.fn();
-    const toastMock = vi.fn();
     vi.resetModules();
     vi.doMock('@/lib/notification-sound', () => ({
       playNotificationPing: () => playMock(),
-    }));
-    vi.doMock('sonner', () => ({
-      toast: (...args: unknown[]) => toastMock(...args),
     }));
 
     const { NotificationProvider, useNotifications } = await import(
@@ -197,12 +193,14 @@ describe('NotificationContext.dispatch — sound regression', () => {
 
     act(() => {
       dispatchRef!({
+        // DM message — channel messages are suppressed entirely now,
+        // so use a fire-able payload to assert the sound path.
         kind: 'message',
-        title: 'Alice in ~general',
+        title: 'Alice',
         body: 'hello',
-        deepLink: '/channel/general',
-        parentID: 'ch-1',
-        parentType: 'channel',
+        deepLink: '/conversation/dm-1',
+        parentID: 'dm-1',
+        parentType: 'conversation',
         createdAt: new Date().toISOString(),
       });
     });

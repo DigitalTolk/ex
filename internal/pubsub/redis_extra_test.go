@@ -27,3 +27,25 @@ func TestGlobalChannelEvents(t *testing.T) {
 		t.Errorf("GlobalChannelEvents() = %q, want %q", got, "global:channels")
 	}
 }
+
+// TestGlobalEventChannels covers the workspace-scoped channel-name builders.
+// These map to fan-out topics every connected user subscribes to (or every
+// instance, in the global emoji-catalog case).
+func TestGlobalEventChannels(t *testing.T) {
+	cases := []struct {
+		name string
+		got  string
+		want string
+	}{
+		{"GlobalEmojiEvents", GlobalEmojiEvents(), "global:emojis"},
+		{"PresenceEvents", PresenceEvents(), "global:presence"},
+		{"UserEvents", UserEvents(), "global:users"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if c.got != c.want {
+				t.Errorf("%s = %q, want %q", c.name, c.got, c.want)
+			}
+		})
+	}
+}

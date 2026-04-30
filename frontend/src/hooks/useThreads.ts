@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { apiFetch } from '@/lib/api';
 import { slugify } from '@/lib/format';
+import { readJSON, writeJSON } from '@/lib/storage';
 import type { Message } from '@/types';
 
 export interface ThreadSummary {
@@ -32,27 +33,13 @@ let seenCache: Record<string, string> | null = null;
 
 function loadSeen(): Record<string, string> {
   if (seenCache) return seenCache;
-  if (typeof localStorage === 'undefined') {
-    seenCache = {};
-    return seenCache;
-  }
-  try {
-    const raw = localStorage.getItem(SEEN_KEY);
-    seenCache = raw ? (JSON.parse(raw) as Record<string, string>) : {};
-  } catch {
-    seenCache = {};
-  }
+  seenCache = readJSON<Record<string, string>>(SEEN_KEY, {});
   return seenCache;
 }
 
 function saveSeen(map: Record<string, string>) {
   seenCache = map;
-  if (typeof localStorage === 'undefined') return;
-  try {
-    localStorage.setItem(SEEN_KEY, JSON.stringify(map));
-  } catch {
-    // ignore quota errors
-  }
+  writeJSON(SEEN_KEY, map);
 }
 
 // markThreadSeen records the timestamp at which the user last viewed a thread.

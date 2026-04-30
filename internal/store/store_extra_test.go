@@ -769,3 +769,228 @@ func TestMembershipStore_SetUserChannelMute_NonexistentTable(t *testing.T) {
 		t.Error("expected error on missing table")
 	}
 }
+
+// ============================================================================
+// Membership Store: SetUserChannelFavorite + SetUserChannelCategory
+// ============================================================================
+
+// TestMembershipStore_SetUserChannelFavorite covers the favorite-pin
+// toggle for the sidebar "Favorites" section. Per-user — favoriting a
+// channel does not change the channel-side membership row.
+func TestMembershipStore_SetUserChannelFavorite(t *testing.T) {
+	db := setupDynamoDB(t)
+	ms := NewMembershipStore(db)
+	cs := NewChannelStore(db)
+	ctx := context.Background()
+
+	ch := makeChannel("ch-fav", "fav", "fav-slug", model.ChannelTypePublic)
+	if err := cs.Create(ctx, ch); err != nil {
+		t.Fatalf("Create channel: %v", err)
+	}
+	now := time.Now().Truncate(time.Millisecond)
+	member := &model.ChannelMembership{ChannelID: "ch-fav", UserID: "u-fav", Role: model.ChannelRoleMember, JoinedAt: now}
+	userChan := &model.UserChannel{UserID: "u-fav", ChannelID: "ch-fav", Role: model.ChannelRoleMember, JoinedAt: now}
+	if err := ms.AddChannelMember(ctx, ch, member, userChan); err != nil {
+		t.Fatalf("AddChannelMember: %v", err)
+	}
+
+	if err := ms.SetUserChannelFavorite(ctx, "ch-fav", "u-fav", true); err != nil {
+		t.Fatalf("SetUserChannelFavorite true: %v", err)
+	}
+	chans, err := ms.ListUserChannels(ctx, "u-fav")
+	if err != nil {
+		t.Fatalf("ListUserChannels: %v", err)
+	}
+	if len(chans) != 1 || !chans[0].Favorite {
+		t.Errorf("expected Favorite=true after pin, got %+v", chans)
+	}
+
+	if err := ms.SetUserChannelFavorite(ctx, "ch-fav", "u-fav", false); err != nil {
+		t.Fatalf("SetUserChannelFavorite false: %v", err)
+	}
+	chans, _ = ms.ListUserChannels(ctx, "u-fav")
+	if chans[0].Favorite {
+		t.Error("expected Favorite=false after unpin")
+	}
+}
+
+// TestMembershipStore_SetUserChannelCategory covers assigning the channel
+// to a sidebar category and clearing it back to the default group.
+func TestMembershipStore_SetUserChannelCategory(t *testing.T) {
+	db := setupDynamoDB(t)
+	ms := NewMembershipStore(db)
+	cs := NewChannelStore(db)
+	ctx := context.Background()
+
+	ch := makeChannel("ch-cat", "cat", "cat-slug", model.ChannelTypePublic)
+	if err := cs.Create(ctx, ch); err != nil {
+		t.Fatalf("Create channel: %v", err)
+	}
+	now := time.Now().Truncate(time.Millisecond)
+	member := &model.ChannelMembership{ChannelID: "ch-cat", UserID: "u-cat", Role: model.ChannelRoleMember, JoinedAt: now}
+	userChan := &model.UserChannel{UserID: "u-cat", ChannelID: "ch-cat", Role: model.ChannelRoleMember, JoinedAt: now}
+	if err := ms.AddChannelMember(ctx, ch, member, userChan); err != nil {
+		t.Fatalf("AddChannelMember: %v", err)
+	}
+
+	if err := ms.SetUserChannelCategory(ctx, "ch-cat", "u-cat", "cat-id-1"); err != nil {
+		t.Fatalf("SetUserChannelCategory: %v", err)
+	}
+	chans, _ := ms.ListUserChannels(ctx, "u-cat")
+	if len(chans) != 1 || chans[0].CategoryID != "cat-id-1" {
+		t.Errorf("expected CategoryID=cat-id-1, got %+v", chans)
+	}
+
+	// Clearing back to the empty string is the "remove from category" path.
+	if err := ms.SetUserChannelCategory(ctx, "ch-cat", "u-cat", ""); err != nil {
+		t.Fatalf("SetUserChannelCategory clear: %v", err)
+	}
+	chans, _ = ms.ListUserChannels(ctx, "u-cat")
+	if chans[0].CategoryID != "" {
+		t.Errorf("expected empty CategoryID after clear, got %q", chans[0].CategoryID)
+	}
+}
+
+// TestMembershipStore_SetUserChannelFavorite_NotFound exercises the
+// attribute_exists guard that turns missing rows into ErrNotFound.
+func TestMembershipStore_SetUserChannelFavorite_NotFound(t *testing.T) {
+	db := setupDynamoDB(t)
+	ms := NewMembershipStore(db)
+	ctx := context.Background()
+
+	if err := ms.SetUserChannelFavorite(ctx, "ch-ghost", "u-ghost", true); !errors.Is(err, ErrNotFound) {
+		t.Errorf("expected ErrNotFound, got %v", err)
+	}
+	if err := ms.SetUserChannelCategory(ctx, "ch-ghost", "u-ghost", "cat"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("expected ErrNotFound, got %v", err)
+	}
+}
+
+// TestMembershipStore_SetUserChannelFavorite_NonexistentTable covers the
+// non-condition error path so the wrap-and-return branch is hit.
+func TestMembershipStore_SetUserChannelFavorite_NonexistentTable(t *testing.T) {
+	db := brokenDB(t)
+	ms := NewMembershipStore(db)
+	ctx := context.Background()
+
+	if err := ms.SetUserChannelFavorite(ctx, "ch-x", "u-x", true); err == nil {
+		t.Error("expected error on missing table")
+	}
+	if err := ms.SetUserChannelCategory(ctx, "ch-x", "u-x", "c"); err == nil {
+		t.Error("expected error on missing table")
+	}
+}
+
+// ============================================================================
+// Conversation Store: SetUserConversationFavorite + SetUserConversationCategory
+// ============================================================================
+
+// makeConv constructs a DM conversation with two participants for the
+// favorite/category tests below.
+func makeConv(id, a, b string) (*model.Conversation, []*model.UserConversation) {
+	now := time.Now().Truncate(time.Millisecond)
+	conv := &model.Conversation{
+		ID:             id,
+		Type:           model.ConversationTypeDM,
+		ParticipantIDs: []string{a, b},
+		CreatedBy:      a,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+	members := []*model.UserConversation{
+		{UserID: a, ConversationID: id, Type: model.ConversationTypeDM, JoinedAt: now},
+		{UserID: b, ConversationID: id, Type: model.ConversationTypeDM, JoinedAt: now},
+	}
+	return conv, members
+}
+
+func TestConversationStore_SetUserConversationFavorite(t *testing.T) {
+	db := setupDynamoDB(t)
+	cs := NewConversationStore(db)
+	ctx := context.Background()
+
+	conv, members := makeConv("conv-fav", "u-cf-a", "u-cf-b")
+	if err := cs.Create(ctx, conv, members); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	if err := cs.SetUserConversationFavorite(ctx, "conv-fav", "u-cf-a", true); err != nil {
+		t.Fatalf("SetUserConversationFavorite true: %v", err)
+	}
+	got, err := cs.ListUserConversations(ctx, "u-cf-a")
+	if err != nil {
+		t.Fatalf("ListUserConversations: %v", err)
+	}
+	if len(got) != 1 || !got[0].Favorite {
+		t.Errorf("expected Favorite=true, got %+v", got)
+	}
+	// The other participant should be unaffected.
+	gotB, _ := cs.ListUserConversations(ctx, "u-cf-b")
+	if len(gotB) != 1 || gotB[0].Favorite {
+		t.Errorf("other participant's Favorite must remain false: %+v", gotB)
+	}
+
+	if err := cs.SetUserConversationFavorite(ctx, "conv-fav", "u-cf-a", false); err != nil {
+		t.Fatalf("SetUserConversationFavorite false: %v", err)
+	}
+	got, _ = cs.ListUserConversations(ctx, "u-cf-a")
+	if got[0].Favorite {
+		t.Error("expected Favorite=false after unpin")
+	}
+}
+
+func TestConversationStore_SetUserConversationCategory(t *testing.T) {
+	db := setupDynamoDB(t)
+	cs := NewConversationStore(db)
+	ctx := context.Background()
+
+	conv, members := makeConv("conv-cat", "u-cc-a", "u-cc-b")
+	if err := cs.Create(ctx, conv, members); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	if err := cs.SetUserConversationCategory(ctx, "conv-cat", "u-cc-a", "cat-conv-1"); err != nil {
+		t.Fatalf("SetUserConversationCategory: %v", err)
+	}
+	got, err := cs.ListUserConversations(ctx, "u-cc-a")
+	if err != nil {
+		t.Fatalf("ListUserConversations: %v", err)
+	}
+	if len(got) != 1 || got[0].CategoryID != "cat-conv-1" {
+		t.Errorf("expected CategoryID=cat-conv-1, got %+v", got)
+	}
+
+	if err := cs.SetUserConversationCategory(ctx, "conv-cat", "u-cc-a", ""); err != nil {
+		t.Fatalf("SetUserConversationCategory clear: %v", err)
+	}
+	got, _ = cs.ListUserConversations(ctx, "u-cc-a")
+	if got[0].CategoryID != "" {
+		t.Errorf("expected empty CategoryID after clear, got %q", got[0].CategoryID)
+	}
+}
+
+func TestConversationStore_SetUserConversationFavorite_NotFound(t *testing.T) {
+	db := setupDynamoDB(t)
+	cs := NewConversationStore(db)
+	ctx := context.Background()
+
+	if err := cs.SetUserConversationFavorite(ctx, "conv-ghost", "u-ghost", true); !errors.Is(err, ErrNotFound) {
+		t.Errorf("expected ErrNotFound, got %v", err)
+	}
+	if err := cs.SetUserConversationCategory(ctx, "conv-ghost", "u-ghost", "x"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("expected ErrNotFound, got %v", err)
+	}
+}
+
+func TestConversationStore_SetUserConversationFavorite_NonexistentTable(t *testing.T) {
+	db := brokenDB(t)
+	cs := NewConversationStore(db)
+	ctx := context.Background()
+
+	if err := cs.SetUserConversationFavorite(ctx, "conv-x", "u-x", true); err == nil {
+		t.Error("expected error on missing table")
+	}
+	if err := cs.SetUserConversationCategory(ctx, "conv-x", "u-x", "c"); err == nil {
+		t.Error("expected error on missing table")
+	}
+}

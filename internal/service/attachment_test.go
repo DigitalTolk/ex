@@ -347,3 +347,70 @@ func TestMessageService_Delete_DerefsAttachments(t *testing.T) {
 		t.Errorf("S3 object not deleted, got %v", signer.deleted)
 	}
 }
+
+// TestAttachmentService_GetMany covers the parallel batched fetch the
+// message renderer uses to resolve the per-message attachment chip
+// list. Empty / unknown / mixed inputs must all produce a stable,
+// in-order result with missing IDs silently skipped.
+func TestAttachmentService_GetMany(t *testing.T) {
+	atts := newMockAttachmentStore()
+	signer := &fakeAttachmentSigner{}
+	svc := NewAttachmentService(atts, signer, newMockPublisher())
+	ctx := context.Background()
+
+	// Seed three real attachments — GetMany resolves each via Get(),
+	// which is what stamps the URL/DownloadURL fields.
+	for _, id := range []string{"a1", "a2", "a3"} {
+		atts.byID[id] = &model.Attachment{
+			ID:          id,
+			SHA256:      "h-" + id,
+			Filename:    id + ".png",
+			ContentType: "image/png",
+			S3Key:       "k/" + id,
+			CreatedAt:   time.Now(),
+		}
+	}
+
+	t.Run("empty input returns nil", func(t *testing.T) {
+		got, err := svc.GetMany(ctx, nil)
+		if err != nil {
+			t.Fatalf("GetMany: %v", err)
+		}
+		if got != nil {
+			t.Errorf("expected nil for empty input, got %v", got)
+		}
+	})
+
+	t.Run("missing IDs are skipped silently", func(t *testing.T) {
+		got, err := svc.GetMany(ctx, []string{"a1", "missing", "a2", ""})
+		if err != nil {
+			t.Fatalf("GetMany: %v", err)
+		}
+		if len(got) != 2 {
+			t.Fatalf("expected 2 hits (missing + empty skipped), got %d", len(got))
+		}
+		seen := map[string]bool{}
+		for _, a := range got {
+			seen[a.ID] = true
+			if a.URL == "" {
+				t.Errorf("attachment %s missing presigned URL", a.ID)
+			}
+			if a.DownloadURL == "" {
+				t.Errorf("attachment %s missing download URL", a.ID)
+			}
+		}
+		if !seen["a1"] || !seen["a2"] {
+			t.Errorf("expected a1+a2, got %v", seen)
+		}
+	})
+
+	t.Run("all hits returns full set", func(t *testing.T) {
+		got, err := svc.GetMany(ctx, []string{"a1", "a2", "a3"})
+		if err != nil {
+			t.Fatalf("GetMany: %v", err)
+		}
+		if len(got) != 3 {
+			t.Fatalf("expected 3, got %d", len(got))
+		}
+	})
+}

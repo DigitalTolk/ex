@@ -319,3 +319,93 @@ func TestChannelService_SearchPublic_FiltersArchivedAndPrivate(t *testing.T) {
 		t.Fatalf("expected [c3] only, got %+v", got)
 	}
 }
+
+// TestAuthService_SetIndexer_PropagatesOnSignup verifies the wired-after-
+// construction indexer fires when OIDC creates a new user (the typical
+// "first SSO login" path) and again on the subsequent profile-refresh
+// branch. The setter is the only reachable wiring point — no constructor
+// argument exists for it.
+func TestAuthService_SetIndexer_PropagatesOnSignup(t *testing.T) {
+	env := setupAuthService()
+	env.users.hasUsersVal = false
+	idx := &stubUserIndexer{}
+	env.svc.SetIndexer(idx)
+
+	ctx := context.Background()
+	if _, _, _, err := env.svc.HandleOIDCCallback(ctx, "code", "state"); err != nil {
+		t.Fatalf("HandleOIDCCallback (create): %v", err)
+	}
+
+	idx.mu.Lock()
+	indexedAfterCreate := append([]string(nil), idx.indexed...)
+	idx.mu.Unlock()
+	if len(indexedAfterCreate) != 1 {
+		t.Fatalf("expected one IndexUser call after signup, got %v", indexedAfterCreate)
+	}
+
+	// Second callback for the same email should hit the "existing user"
+	// branch and re-index the refreshed profile.
+	if _, _, _, err := env.svc.HandleOIDCCallback(ctx, "code", "state"); err != nil {
+		t.Fatalf("HandleOIDCCallback (refresh): %v", err)
+	}
+	idx.mu.Lock()
+	defer idx.mu.Unlock()
+	if len(idx.indexed) != 2 {
+		t.Fatalf("expected IndexUser to fire on profile refresh too, got %v", idx.indexed)
+	}
+}
+
+// stubMessageNotifier records NotifyForMessage calls so SetNotifier
+// wiring can be verified by observing the notifier from a real Send.
+type stubMessageNotifier struct {
+	mu      sync.Mutex
+	calls   []string
+	parents []string
+}
+
+func (s *stubMessageNotifier) NotifyForMessage(_ context.Context, m *model.Message, parentType string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calls = append(s.calls, m.ID)
+	s.parents = append(s.parents, parentType)
+}
+
+// TestMessageService_SetNotifier_FiresOnSend asserts that wiring a
+// notifier via the cycle-breaking setter routes Send-time messages
+// through it. NotifyForMessage runs synchronously inside Send (notifier
+// returns nothing), so no signal channel is needed.
+func TestMessageService_SetNotifier_FiresOnSend(t *testing.T) {
+	svc, _, memberships, _, _ := setupMessageService()
+	notifier := &stubMessageNotifier{}
+	svc.SetNotifier(notifier)
+	memberships.memberships["ch1#u1"] = &model.ChannelMembership{
+		ChannelID: "ch1", UserID: "u1", Role: model.ChannelRoleMember,
+	}
+
+	msg, err := svc.Send(context.Background(), "u1", "ch1", ParentChannel, "ping", "")
+	if err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+
+	notifier.mu.Lock()
+	defer notifier.mu.Unlock()
+	if len(notifier.calls) != 1 || notifier.calls[0] != msg.ID {
+		t.Fatalf("expected one NotifyForMessage(%s), got %v", msg.ID, notifier.calls)
+	}
+	if notifier.parents[0] != ParentChannel {
+		t.Errorf("parentType = %q, want %q", notifier.parents[0], ParentChannel)
+	}
+}
+
+// TestMessageService_NoNotifier_StillSends covers the documented
+// optional-notifier contract: when SetNotifier was never called, Send
+// completes normally and no panic occurs from the nil dispatch guard.
+func TestMessageService_NoNotifier_StillSends(t *testing.T) {
+	svc, _, memberships, _, _ := setupMessageService()
+	memberships.memberships["ch1#u1"] = &model.ChannelMembership{
+		ChannelID: "ch1", UserID: "u1", Role: model.ChannelRoleMember,
+	}
+	if _, err := svc.Send(context.Background(), "u1", "ch1", ParentChannel, "ping", ""); err != nil {
+		t.Fatalf("Send must work without a notifier: %v", err)
+	}
+}

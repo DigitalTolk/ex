@@ -193,6 +193,79 @@ func setupAuthHandler(t *testing.T) (*AuthHandler, *mockUserStore, *mockTokenSto
 	return h, userStore, tokenStore
 }
 
+// stubOIDCProvider is a minimal OIDCProvider used by the handler-level
+// OIDC tests so the login flow can run without real network I/O.
+type stubOIDCProvider struct {
+	url      string
+	userInfo *service.OIDCUserInfo
+}
+
+func (s *stubOIDCProvider) AuthURL(state string) string {
+	return s.url + "?state=" + state
+}
+func (s *stubOIDCProvider) Exchange(_ context.Context, _ string) (*service.OIDCUserInfo, error) {
+	if s.userInfo == nil {
+		return nil, nil
+	}
+	return s.userInfo, nil
+}
+
+// setupAuthHandlerWithOIDC builds an AuthHandler whose AuthService has a
+// non-nil OIDC provider so OIDCLogin runs to the redirect step.
+func setupAuthHandlerWithOIDC(t *testing.T) (*AuthHandler, *mockUserStore, *mockTokenStore) {
+	t.Helper()
+
+	jwtMgr := auth.NewJWTManager("test-handler-secret", 15*time.Minute, 720*time.Hour)
+	userStore := newMockUserStore()
+	tokenStore := newMockTokenStore()
+
+	authSvc := service.NewAuthService(
+		userStore,
+		tokenStore,
+		&mockInviteStore{},
+		&mockMembershipStore{},
+		&mockChannelStore{},
+		jwtMgr,
+		&stubOIDCProvider{url: "https://provider.example.com/authorize"},
+		&mockCache{},
+	)
+
+	h := NewAuthHandler(authSvc, jwtMgr)
+	return h, userStore, tokenStore
+}
+
+// setupAuthHandlerWithOIDCSuccess wires the provider so a code-exchange
+// returns a valid OIDCUserInfo, letting OIDCCallback drive the
+// signup-and-redirect happy path.
+func setupAuthHandlerWithOIDCSuccess(t *testing.T) (*AuthHandler, *mockUserStore, *mockTokenStore) {
+	t.Helper()
+
+	jwtMgr := auth.NewJWTManager("test-handler-secret", 15*time.Minute, 720*time.Hour)
+	userStore := newMockUserStore()
+	tokenStore := newMockTokenStore()
+
+	authSvc := service.NewAuthService(
+		userStore,
+		tokenStore,
+		&mockInviteStore{},
+		&mockMembershipStore{},
+		&mockChannelStore{},
+		jwtMgr,
+		&stubOIDCProvider{
+			url: "https://provider.example.com/authorize",
+			userInfo: &service.OIDCUserInfo{
+				Email:   "callback@example.com",
+				Name:    "Callback User",
+				Picture: "https://example.com/avatar.png",
+			},
+		},
+		&mockCache{},
+	)
+
+	h := NewAuthHandler(authSvc, jwtMgr)
+	return h, userStore, tokenStore
+}
+
 // --- Tests ---
 
 func TestRefreshTokenHandler_MissingCookie(t *testing.T) {
@@ -622,4 +695,128 @@ func TestLogoutHandler_NoCookie(t *testing.T) {
 	if rec.Code != http.StatusNoContent {
 		t.Errorf("status = %d, want %d", rec.Code, http.StatusNoContent)
 	}
+}
+
+// TestIsAllowedOIDCRedirect covers the open-redirect allowlist that gates
+// the optional ?redirect_to=… on /auth/oidc/login. Anything not on the
+// localhost / tauri:// list must be rejected so an attacker can't bounce
+// freshly-issued tokens to a third-party origin.
+func TestIsAllowedOIDCRedirect(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want bool
+	}{
+		{"empty rejected", "", false},
+		{"plain localhost http allowed", "http://localhost:5173/cb", true},
+		{"plain localhost https allowed", "https://localhost:5173/cb", true},
+		{"tauri scheme allowed", "tauri://localhost/oidc/callback", true},
+		{"https external rejected", "https://evil.example.com/cb", false},
+		{"http external rejected", "http://evil.example.com/cb", false},
+		{"javascript scheme rejected", "javascript:alert(1)", false},
+		{"data URL rejected", "data:text/html,<script></script>", false},
+		{"prefix-match attack rejected", "https://localhost.evil.com/cb", false},
+		{"protocol-relative rejected", "//localhost/cb", false},
+		{"missing scheme rejected", "localhost/cb", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isAllowedOIDCRedirect(tc.in); got != tc.want {
+				t.Errorf("isAllowedOIDCRedirect(%q) = %v, want %v", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestOIDCCallback_HonorsRedirectCookie covers the success-path branch
+// that consumes an oauth_redirect cookie and redirects to the
+// allowlisted target with the freshly-issued access token. Together
+// with the existing failure-mode tests, this exercises the full
+// OIDCCallback handler.
+func TestOIDCCallback_HonorsRedirectCookie(t *testing.T) {
+	h, _, _ := setupAuthHandlerWithOIDCSuccess(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/auth/oidc/callback?state=ok&code=c", nil)
+	req.AddCookie(&http.Cookie{Name: "oauth_state", Value: "ok"})
+	req.AddCookie(&http.Cookie{Name: "oauth_redirect", Value: "tauri://localhost/cb"})
+	rec := httptest.NewRecorder()
+
+	h.OIDCCallback(rec, req)
+
+	if rec.Code != http.StatusFound {
+		t.Fatalf("status = %d, want %d (body: %s)", rec.Code, http.StatusFound, rec.Body.String())
+	}
+	loc := rec.Header().Get("Location")
+	if !strings.HasPrefix(loc, "tauri://localhost/cb?token=") {
+		t.Errorf("Location = %q, expected tauri://localhost/cb?token=...", loc)
+	}
+
+	// The redirect cookie should be cleared (MaxAge<0).
+	var cleared bool
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == "oauth_redirect" && c.MaxAge < 0 {
+			cleared = true
+		}
+	}
+	if !cleared {
+		t.Error("expected oauth_redirect cookie to be cleared after consume")
+	}
+}
+
+// TestOIDCCallback_DefaultRedirect covers the no-cookie fallback branch
+// where the SPA's /oidc/callback route is the redirect target.
+func TestOIDCCallback_DefaultRedirect(t *testing.T) {
+	h, _, _ := setupAuthHandlerWithOIDCSuccess(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/auth/oidc/callback?state=ok&code=c", nil)
+	req.AddCookie(&http.Cookie{Name: "oauth_state", Value: "ok"})
+	rec := httptest.NewRecorder()
+
+	h.OIDCCallback(rec, req)
+
+	if rec.Code != http.StatusFound {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusFound)
+	}
+	loc := rec.Header().Get("Location")
+	if !strings.HasPrefix(loc, "/oidc/callback?token=") {
+		t.Errorf("Location = %q, expected /oidc/callback?token=...", loc)
+	}
+}
+
+// TestOIDCLogin_HonorsAllowedRedirect verifies the login handler stores
+// an oauth_redirect cookie when redirect_to is on the allowlist, and skips
+// it otherwise.
+func TestOIDCLogin_HonorsAllowedRedirect(t *testing.T) {
+	h, _, _ := setupAuthHandlerWithOIDC(t)
+
+	t.Run("allowed redirect sets cookie", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/auth/oidc/login?redirect_to=tauri://localhost/cb", nil)
+		rec := httptest.NewRecorder()
+		h.OIDCLogin(rec, req)
+
+		if rec.Code != http.StatusFound {
+			t.Fatalf("status = %d, want %d", rec.Code, http.StatusFound)
+		}
+		var found bool
+		for _, c := range rec.Result().Cookies() {
+			if c.Name == "oauth_redirect" && c.Value == "tauri://localhost/cb" {
+				found = true
+			}
+		}
+		if !found {
+			t.Error("expected oauth_redirect cookie to be set with allowed value")
+		}
+	})
+
+	t.Run("rejected redirect does not set cookie", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/auth/oidc/login?redirect_to=https://evil.example.com/cb", nil)
+		rec := httptest.NewRecorder()
+		h.OIDCLogin(rec, req)
+
+		for _, c := range rec.Result().Cookies() {
+			if c.Name == "oauth_redirect" {
+				t.Errorf("oauth_redirect cookie set for disallowed redirect: %q", c.Value)
+			}
+		}
+	})
 }

@@ -2,6 +2,8 @@ package storage
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -187,5 +189,81 @@ func TestS3Client_PresignedPutURL(t *testing.T) {
 	}
 	if !strings.Contains(url, "upload-key") {
 		t.Errorf("URL should contain key: %s", url)
+	}
+}
+
+// TestS3Client_DeleteObject_Success covers the happy-path GC call used
+// when the last attachment reference is dropped. We point the client at
+// an httptest server that records the inbound request and responds with
+// the empty 204 the AWS SDK accepts as success.
+func TestS3Client_DeleteObject_Success(t *testing.T) {
+	type req struct {
+		method string
+		path   string
+	}
+	got := make(chan req, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got <- req{method: r.Method, path: r.URL.Path}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	ctx := context.Background()
+	client, err := NewS3Client(ctx, S3Config{
+		Endpoint:  srv.URL,
+		Bucket:    "bucket",
+		AccessKey: "test",
+		SecretKey: "test",
+		Region:    "us-east-1",
+	})
+	if err != nil {
+		t.Fatalf("NewS3Client: %v", err)
+	}
+
+	// Drain the CreateBucket call the constructor fires.
+	<-got
+
+	if err := client.DeleteObject(ctx, "uploads/abc"); err != nil {
+		t.Fatalf("DeleteObject: %v", err)
+	}
+	r := <-got
+	if r.method != http.MethodDelete {
+		t.Errorf("method = %s, want DELETE", r.method)
+	}
+	if !strings.Contains(r.path, "uploads/abc") {
+		t.Errorf("path = %q, want it to include uploads/abc", r.path)
+	}
+}
+
+// TestS3Client_DeleteObject_ServerError covers the wrap-and-return
+// branch: a 500 from S3 must surface as a "s3: delete object" error.
+func TestS3Client_DeleteObject_ServerError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Let the bootstrap CreateBucket succeed (PUT) but fail any DELETE.
+		if r.Method == http.MethodDelete {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	ctx := context.Background()
+	client, err := NewS3Client(ctx, S3Config{
+		Endpoint:  srv.URL,
+		Bucket:    "bucket",
+		AccessKey: "test",
+		SecretKey: "test",
+		Region:    "us-east-1",
+	})
+	if err != nil {
+		t.Fatalf("NewS3Client: %v", err)
+	}
+	err = client.DeleteObject(ctx, "uploads/explode")
+	if err == nil {
+		t.Fatal("expected error from 500 response")
+	}
+	if !strings.Contains(err.Error(), "s3: delete object") {
+		t.Errorf("error should be wrapped: %v", err)
 	}
 }

@@ -402,6 +402,68 @@ func TestMessageStoreAdapter(t *testing.T) {
 	}
 }
 
+// TestMessageStoreAdapter_ListAfter_ListAround exercises the two
+// directional list adapters used by the "jump to message" UX. Both are
+// thin pass-throughs but they are wired into the production handler so
+// a regression-proof test belongs at the adapter layer, not just inside
+// the store package.
+func TestMessageStoreAdapter_ListAfter_ListAround(t *testing.T) {
+	db := setupDynamoForAdapters(t)
+	ctx := context.Background()
+	storeImpl := store.NewMessageStore(db)
+	adapter := NewMessageStoreAdapter(storeImpl)
+
+	// Seed a small ordered set of messages so before/after windows have
+	// something predictable to bracket.
+	parent := "ch-msgadapt-window"
+	base := time.Now().Truncate(time.Millisecond)
+	ids := []string{"m01", "m02", "m03", "m04", "m05"}
+	for i, id := range ids {
+		msg := &model.Message{
+			ID:        id,
+			ParentID:  parent,
+			AuthorID:  "u-window",
+			Body:      fmt.Sprintf("body-%d", i),
+			CreatedAt: base.Add(time.Duration(i) * time.Second),
+		}
+		if err := adapter.CreateMessage(ctx, msg); err != nil {
+			t.Fatalf("CreateMessage %s: %v", id, err)
+		}
+	}
+
+	// ListMessagesAfter: ask for everything strictly newer than m02.
+	after, _, err := adapter.ListMessagesAfter(ctx, parent, "m02", 10)
+	if err != nil {
+		t.Fatalf("ListMessagesAfter: %v", err)
+	}
+	if len(after) == 0 {
+		t.Fatal("expected at least one message after m02")
+	}
+	for _, m := range after {
+		if m.ID <= "m02" {
+			t.Errorf("ListMessagesAfter returned %q which is not strictly after m02", m.ID)
+		}
+	}
+
+	// ListMessagesAround: 1 before + 1 after centred on m03 → [m02, m03, m04].
+	around, _, _, err := adapter.ListMessagesAround(ctx, parent, "m03", 1, 1)
+	if err != nil {
+		t.Fatalf("ListMessagesAround: %v", err)
+	}
+	if len(around) < 2 {
+		t.Fatalf("ListMessagesAround: expected at least 2 surrounding messages, got %d", len(around))
+	}
+	var sawCenter bool
+	for _, m := range around {
+		if m.ID == "m03" {
+			sawCenter = true
+		}
+	}
+	if !sawCenter {
+		t.Error("ListMessagesAround result must include the center message m03")
+	}
+}
+
 func TestInviteStoreAdapter(t *testing.T) {
 	db := setupDynamoForAdapters(t)
 	ctx := context.Background()
