@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { apiFetch } from '@/lib/api';
+import { queryKeys, parentPath } from '@/lib/query-keys';
 import { MessageItem } from './MessageItem';
 import { SidePanel } from './SidePanel';
 import type { Message } from '@/types';
@@ -22,13 +23,11 @@ export function PinnedPanel({
   userMap,
   currentUserId,
 }: PinnedPanelProps) {
-  const parentPath = channelId
-    ? `channels/${channelId}`
-    : `conversations/${conversationId}`;
+  const path = parentPath({ channelId, conversationId });
 
   const { data, isLoading } = useQuery({
-    queryKey: ['pinned', parentPath],
-    queryFn: () => apiFetch<Message[]>(`/api/v1/${parentPath}/pinned`),
+    queryKey: queryKeys.pinned(path),
+    queryFn: () => apiFetch<Message[]>(`/api/v1/${path}/pinned`),
     enabled: !!(channelId || conversationId),
   });
 

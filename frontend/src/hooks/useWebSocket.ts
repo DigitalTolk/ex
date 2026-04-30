@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import { getAccessToken } from '@/lib/api';
 import { EventType } from '@/lib/event-types';
 import { setWSSender } from '@/lib/ws-sender';
+import { useLatestRef } from '@/hooks/useLatestRef';
 
 type WSCallback = (data: unknown) => void;
 
@@ -25,20 +26,20 @@ interface UseWebSocketOptions {
   onForceLogout?: WSCallback;
   onServerVersion?: WSCallback;
   onTyping?: WSCallback;
+  // Fires when the socket re-opens after a previous failure. The
+  // initial connection does NOT trigger this — only true reconnects.
+  // With auto-refetch disabled on infinite message queries, this is
+  // the hook for catching up on events missed during the disconnect.
+  onReconnect?: () => void;
   enabled?: boolean;
 }
 
 export function useWebSocket(options: UseWebSocketOptions) {
-  const callbacksRef = useRef(options);
+  const callbacksRef = useLatestRef(options);
+  const enabledRef = useLatestRef(options.enabled);
   const wsRef = useRef<WebSocket | null>(null);
   const retryCountRef = useRef(0);
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const enabledRef = useRef(options.enabled);
-
-  useEffect(() => {
-    callbacksRef.current = options;
-    enabledRef.current = options.enabled;
-  });
 
   useEffect(() => {
     if (!options.enabled) return;
@@ -53,10 +54,12 @@ export function useWebSocket(options: UseWebSocketOptions) {
       wsRef.current = ws;
 
       ws.onopen = () => {
+        const reconnected = retryCountRef.current > 0;
         retryCountRef.current = 0;
         // Expose the live socket's send to other components (typing
         // indicator and similar ephemera) without prop-drilling.
         setWSSender((frame) => ws.send(frame));
+        if (reconnected) callbacksRef.current.onReconnect?.();
       };
 
       ws.onmessage = (event) => {

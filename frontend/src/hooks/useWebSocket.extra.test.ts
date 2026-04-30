@@ -185,4 +185,25 @@ describe('useWebSocket - extra coverage', () => {
     ws.simulateMessage(JSON.stringify({ type: 'pong', data: '{}' }));
     expect(cb).not.toHaveBeenCalled();
   });
+
+  it('does NOT call onReconnect on the first successful open', () => {
+    const onReconnect = vi.fn();
+    renderHook(() => useWebSocket({ onReconnect, enabled: true }));
+    MockWebSocket.instances[0].simulateOpen();
+    expect(onReconnect).not.toHaveBeenCalled();
+  });
+
+  it('calls onReconnect when the socket re-opens after a close', () => {
+    const onReconnect = vi.fn();
+    renderHook(() => useWebSocket({ onReconnect, enabled: true }));
+    const first = MockWebSocket.instances[0];
+    first.simulateOpen();
+    first.simulateClose();
+    // Backoff timer fires → new WebSocket constructed
+    vi.advanceTimersByTime(2000);
+    const second = MockWebSocket.instances[1];
+    expect(second).toBeDefined();
+    second.simulateOpen();
+    expect(onReconnect).toHaveBeenCalledTimes(1);
+  });
 });

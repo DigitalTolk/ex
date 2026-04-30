@@ -6,6 +6,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { MessageSquare } from 'lucide-react';
 import { apiFetch } from '@/lib/api';
+import { queryKeys } from '@/lib/query-keys';
 import { getInitials } from '@/lib/format';
 import { PopoverPortal } from '@/components/PopoverPortal';
 import { usePresence } from '@/context/PresenceContext';
@@ -54,7 +55,7 @@ export function UserHoverCard({
   // record including authProvider — both paths are sufficient to render
   // the inactive badge correctly.
   const { data: userDetails } = useQuery<Partial<User>>({
-    queryKey: ['user', userId],
+    queryKey: queryKeys.user(userId),
     queryFn: () => apiFetch<Partial<User>>(`/api/v1/users/${userId}`),
     enabled: open,
     staleTime: 30_000,

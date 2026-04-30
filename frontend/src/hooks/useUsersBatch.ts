@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { apiFetch } from '@/lib/api';
+import { queryKeys } from '@/lib/query-keys';
 import type { User } from '@/types';
 
 // Resolves a set of user IDs to user records via /users/batch in a single
@@ -10,7 +11,7 @@ import type { User } from '@/types';
 export function useUsersBatch(ids: string[]) {
   const sortedIDs = useMemo(() => [...new Set(ids)].sort(), [ids]);
   const query = useQuery({
-    queryKey: ['users-batch', sortedIDs],
+    queryKey: queryKeys.usersBatch(sortedIDs),
     queryFn: () =>
       apiFetch<User[]>('/api/v1/users/batch', {
         method: 'POST',

@@ -877,6 +877,63 @@ describe('MessageList', () => {
     }
   });
 
+  it('does not re-fire fetchPreviousPage when the isFetching flag flips during a load-newer cycle', () => {
+    // Regression for the deep-link-disappearing-messages bug: the
+    // load-newer IntersectionObserver effect used to depend on
+    // `isFetchingPreviousPage`, so it was torn down + recreated each
+    // time the flag flipped. observe() re-fires the initial-intersection
+    // callback on every new observer; with the sentinel sitting inside
+    // the 800px rootMargin, that meant fetchPreviousPage fired twice in
+    // a row before the pages array updated, sending the same `after=`
+    // cursor to the server twice. Now the observer is created once per
+    // hasPreviousPage change and reads the fetching flag via a ref.
+    let observeCount = 0;
+    const original = globalThis.IntersectionObserver;
+    class CountingObserver {
+      callback: IntersectionObserverCallback;
+      root: Element | Document | null = null;
+      rootMargin = '';
+      thresholds: number[] = [];
+      constructor(cb: IntersectionObserverCallback) {
+        this.callback = cb;
+      }
+      observe() { observeCount += 1; }
+      disconnect() {}
+      unobserve() {}
+      takeRecords() { return []; }
+    }
+    globalThis.IntersectionObserver = CountingObserver as unknown as typeof IntersectionObserver;
+    try {
+      const fetchPreviousPage = vi.fn();
+      const aroundPage = { items: [makeMessage()] };
+      const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      const wrap = (isFetching: boolean) => (
+        <QueryClientProvider client={qc}>
+          <BrowserRouter>
+            <MessageList
+              {...defaultProps}
+              pages={[aroundPage]}
+              anchorMsgId="msg-target"
+              hasPreviousPage
+              isFetchingPreviousPage={isFetching}
+              fetchPreviousPage={fetchPreviousPage}
+            />
+          </BrowserRouter>
+        </QueryClientProvider>
+      );
+      const { rerender } = render(wrap(false));
+      const initialObserves = observeCount;
+      // Simulate the fetch cycle: flag flips true (in flight) then back
+      // to false (response arrived). Before the fix, each flip recreated
+      // the observer.
+      rerender(wrap(true));
+      rerender(wrap(false));
+      expect(observeCount).toBe(initialObserves);
+    } finally {
+      globalThis.IntersectionObserver = original;
+    }
+  });
+
   it('uses userMap to display author names', () => {
     const pages = [
       {

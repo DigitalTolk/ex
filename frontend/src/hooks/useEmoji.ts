@@ -1,10 +1,11 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiFetch } from '@/lib/api';
+import { queryKeys } from '@/lib/query-keys';
 import type { CustomEmoji } from '@/types';
 
 export function useEmojis() {
   return useQuery({
-    queryKey: ['emojis'],
+    queryKey: queryKeys.emojis(),
     queryFn: () => apiFetch<CustomEmoji[]>('/api/v1/emojis'),
     staleTime: 5 * 60 * 1000,
   });
@@ -12,7 +13,7 @@ export function useEmojis() {
 
 export function useEmojiMap() {
   return useQuery({
-    queryKey: ['emojis'],
+    queryKey: queryKeys.emojis(),
     queryFn: () => apiFetch<CustomEmoji[]>('/api/v1/emojis'),
     staleTime: 5 * 60 * 1000,
     select: (list) => {
@@ -48,7 +49,7 @@ export function useUploadEmoji() {
         body: JSON.stringify({ name, imageURL: fileURL, imageKey: key }),
       });
     },
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['emojis'] }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.emojis() }),
   });
 }
 
@@ -57,6 +58,6 @@ export function useDeleteEmoji() {
   return useMutation({
     mutationFn: (name: string) =>
       apiFetch(`/api/v1/emojis/${encodeURIComponent(name)}`, { method: 'DELETE' }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['emojis'] }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.emojis() }),
   });
 }

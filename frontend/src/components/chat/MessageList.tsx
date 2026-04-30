@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, type ReactNode } from 'rea
 import { Skeleton } from '@/components/ui/skeleton';
 import { MessageItem } from './MessageItem';
 import { useAtBottomRef } from '@/hooks/useAtBottomRef';
+import { useLatestRef } from '@/hooks/useLatestRef';
 import { dayKey, formatDayHeading } from '@/lib/format';
 import { deriveThreadMeta } from '@/lib/message-users';
 import type { Message } from '@/types';
@@ -473,6 +474,15 @@ export function MessageList({
     return () => el.removeEventListener('wheel', onWheel);
   }, [refetch]);
 
+  // Read isFetching flags via refs inside the observer callbacks so the
+  // observers don't get torn down and recreated on every fetch cycle.
+  // observe() re-fires the initial intersection callback on each new
+  // observer; with the sentinel sitting inside the 800px rootMargin,
+  // that retrigger fires fetchPreviousPage twice in a row before pages
+  // is updated, sending the same cursor to the server.
+  const isFetchingNextRef = useLatestRef(isFetchingNextPage);
+  const isFetchingPrevRef = useLatestRef(isFetchingPreviousPage);
+
   useEffect(() => {
     const node = loadMoreRef.current;
     const root = scrollRef.current;
@@ -481,7 +491,7 @@ export function MessageList({
     const observer = new IntersectionObserver(
       (entries) => {
         for (const entry of entries) {
-          if (entry.isIntersecting && !isFetchingNextPage) {
+          if (entry.isIntersecting && !isFetchingNextRef.current) {
             fetchNextPage();
             return;
           }
@@ -493,7 +503,7 @@ export function MessageList({
     );
     observer.observe(node);
     return () => observer.disconnect();
-  }, [hasNextPage, isFetchingNextPage, fetchNextPage]);
+  }, [hasNextPage, fetchNextPage]);
 
   // Newer-direction sentinel; only mounted while a deep-link window
   // is open. Pulls successive newer pages until the live tail is in
@@ -506,7 +516,7 @@ export function MessageList({
     const observer = new IntersectionObserver(
       (entries) => {
         for (const entry of entries) {
-          if (entry.isIntersecting && !isFetchingPreviousPage) {
+          if (entry.isIntersecting && !isFetchingPrevRef.current) {
             fetchPreviousPage();
             return;
           }
@@ -516,7 +526,7 @@ export function MessageList({
     );
     observer.observe(node);
     return () => observer.disconnect();
-  }, [hasPreviousPage, isFetchingPreviousPage, fetchPreviousPage]);
+  }, [hasPreviousPage, fetchPreviousPage]);
 
   if (isLoading) {
     return (

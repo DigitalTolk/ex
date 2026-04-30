@@ -10,6 +10,23 @@ import { useTyping } from '@/context/TypingContext';
 import { useWebSocket } from '@/hooks/useWebSocket';
 import { setServerVersion } from '@/hooks/useServerVersion';
 import { slugify } from '@/lib/format';
+import {
+  appendMessageToCache,
+  bumpThreadReplyMetadata,
+  removeMessageFromCache,
+  resyncMessageCache,
+  updateMessageInCache,
+} from '@/hooks/useMessages';
+import { queryKeys } from '@/lib/query-keys';
+import {
+  parseAttachmentDeleted,
+  parseChannelID,
+  parseMembersChanged,
+  parseMessage,
+  parsePresence,
+  parseServerVersion,
+  parseTyping,
+} from '@/lib/ws-schemas';
 
 export default function ChatPage() {
   const { markChannelUnread, markConversationUnread, unhideConversation } = useUnread();
@@ -31,158 +48,140 @@ export default function ChatPage() {
 
   useWebSocket({
     onMessageNew: (data: unknown) => {
-      const msg = data as Record<string, unknown> | undefined;
-      const parentID = msg?.parentID as string | undefined;
-      const parentMessageID = msg?.parentMessageID as string | undefined;
-      const authorID = msg?.authorID as string | undefined;
-      if (!parentID) return;
+      const msg = parseMessage(data);
+      if (!msg) return;
+      const { parentID, parentMessageID, authorID } = msg;
       // The author has finished typing the moment their message lands;
       // drop them from the indicator immediately rather than waiting
       // up to 6s for the expiry to tick.
-      if (authorID) clearTyping(parentID, authorID);
-      // Only mark as unread if the message is from someone else
+      clearTyping(parentID, authorID);
       if (authorID !== user?.id) {
         markChannelUnread(parentID);
         markConversationUnread(parentID);
       }
-      // Un-hide conversation if it was hidden (new message should resurface it)
       unhideConversation(parentID);
-      // Invalidate message queries so open views refresh
-      queryClient.invalidateQueries({ queryKey: ['channelMessages', parentID] });
-      queryClient.invalidateQueries({ queryKey: ['conversationMessages', parentID] });
-      // If this is a thread reply, refresh the open ThreadPanel for everyone
-      // and bump the cross-parent threads list so the sidebar's unread dot
-      // reflects the new activity.
+      // Patch the message-list cache directly. invalidateQueries here
+      // would walk forward from pages[0] and truncate deep-link page
+      // chains (see appendMessageToCache).
       if (parentMessageID) {
-        const path = `channels/${parentID}`;
-        const altPath = `conversations/${parentID}`;
-        queryClient.invalidateQueries({ queryKey: ['thread', path, parentMessageID] });
-        queryClient.invalidateQueries({ queryKey: ['thread', altPath, parentMessageID] });
-        queryClient.invalidateQueries({ queryKey: ['userThreads'] });
+        // Reply belongs in the thread query, not the main list. Bump
+        // the parent's reply metadata so the count + recent-author
+        // avatars stay live in the main list.
+        bumpThreadReplyMetadata(queryClient, parentID, msg);
+      } else {
+        appendMessageToCache(queryClient, parentID, msg);
+      }
+      // Thread queries are non-infinite — invalidation is safe.
+      if (parentMessageID) {
+        queryClient.invalidateQueries({ queryKey: queryKeys.thread(`channels/${parentID}`, parentMessageID) });
+        queryClient.invalidateQueries({ queryKey: queryKeys.thread(`conversations/${parentID}`, parentMessageID) });
+        queryClient.invalidateQueries({ queryKey: queryKeys.userThreads() });
       }
     },
     onMessageEdited: (data: unknown) => {
-      const msg = data as Record<string, unknown> | undefined;
-      const parentID = msg?.parentID as string | undefined;
-      const parentMessageID = msg?.parentMessageID as string | undefined;
-      const id = msg?.id as string | undefined;
-      if (!parentID) return;
-      queryClient.invalidateQueries({ queryKey: ['channelMessages', parentID] });
-      queryClient.invalidateQueries({ queryKey: ['conversationMessages', parentID] });
-      // Edits inside a thread (or to a thread root) must refresh open thread panels too.
+      const msg = parseMessage(data);
+      if (!msg) return;
+      const { parentID, parentMessageID, id } = msg;
+      updateMessageInCache(queryClient, parentID, msg);
       const threadRoot = parentMessageID || id;
-      if (threadRoot) {
-        queryClient.invalidateQueries({ queryKey: ['thread', `channels/${parentID}`, threadRoot] });
-        queryClient.invalidateQueries({ queryKey: ['thread', `conversations/${parentID}`, threadRoot] });
-      }
+      queryClient.invalidateQueries({ queryKey: queryKeys.thread(`channels/${parentID}`, threadRoot) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.thread(`conversations/${parentID}`, threadRoot) });
     },
     onMessageDeleted: (data: unknown) => {
-      const msg = data as Record<string, unknown> | undefined;
-      const parentID = msg?.parentID as string | undefined;
-      const parentMessageID = msg?.parentMessageID as string | undefined;
-      const id = msg?.id as string | undefined;
-      if (!parentID) return;
-      queryClient.invalidateQueries({ queryKey: ['channelMessages', parentID] });
-      queryClient.invalidateQueries({ queryKey: ['conversationMessages', parentID] });
+      const msg = parseMessage(data);
+      if (!msg) return;
+      const { parentID, parentMessageID, id } = msg;
+      removeMessageFromCache(queryClient, parentID, id);
       const threadRoot = parentMessageID || id;
-      if (threadRoot) {
-        queryClient.invalidateQueries({ queryKey: ['thread', `channels/${parentID}`, threadRoot] });
-        queryClient.invalidateQueries({ queryKey: ['thread', `conversations/${parentID}`, threadRoot] });
-      }
+      queryClient.invalidateQueries({ queryKey: queryKeys.thread(`channels/${parentID}`, threadRoot) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.thread(`conversations/${parentID}`, threadRoot) });
       // /threads page reads body + replyCount via the userThreads list;
       // a deletion can change either, so refresh the list too.
-      queryClient.invalidateQueries({ queryKey: ['userThreads'] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.userThreads() });
     },
     onMembersChanged: (data: unknown) => {
-      const evt = data as Record<string, unknown> | undefined;
-      const channelID = evt?.channelID as string | undefined;
-      if (!channelID) return;
-      queryClient.invalidateQueries({ queryKey: ['channelMembers', channelID] });
-      queryClient.invalidateQueries({ queryKey: ['userChannels'] });
-      // Membership changes always post a "X was added/removed" system
-      // message. Invalidate the message list here too so the system
-      // line shows up even if the separate message.new event is dropped
-      // (WS reconnect race, transient disconnect, etc.).
-      queryClient.invalidateQueries({ queryKey: ['channelMessages', channelID] });
-      queryClient.invalidateQueries({ queryKey: ['conversationMessages', channelID] });
+      const evt = parseMembersChanged(data);
+      if (!evt) return;
+      queryClient.invalidateQueries({ queryKey: queryKeys.channelMembers(evt.channelID) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.userChannels() });
+      // The "X was added/removed" system message arrives via message.new
+      // and is appended via appendMessageToCache. Invalidating the
+      // message list here would walk forward from pages[0] and truncate
+      // a deep-linked page chain.
     },
     onConversationNew: () => {
       // Refresh conversation list in sidebar
-      queryClient.invalidateQueries({ queryKey: ['userConversations'] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.userConversations() });
     },
     onChannelArchived: (data: unknown) => {
-      const evt = data as Record<string, unknown> | undefined;
-      const channelID = evt?.channelID as string | undefined;
-      if (!channelID) return;
+      const evt = parseChannelID(data);
+      if (!evt) return;
       // Look up the slug from the cached userChannels list before
       // invalidating so we can match the URL (which uses slug, not ID).
-      const userChannels = queryClient.getQueryData<{ channelID: string; channelName: string }[]>(['userChannels']);
-      const open = userChannels?.find((c) => c.channelID === channelID);
-      queryClient.invalidateQueries({ queryKey: ['userChannels'] });
-      queryClient.invalidateQueries({ queryKey: ['browseChannels'] });
+      const userChannels = queryClient.getQueryData<{ channelID: string; channelName: string }[]>(queryKeys.userChannels());
+      const open = userChannels?.find((c) => c.channelID === evt.channelID);
+      queryClient.invalidateQueries({ queryKey: queryKeys.userChannels() });
+      queryClient.invalidateQueries({ queryKey: queryKeys.browseChannels() });
       if (open && window.location.pathname.endsWith(`/channel/${slugify(open.channelName)}`)) {
         navigate('/', { replace: true });
       }
     },
     onChannelRemoved: (data: unknown) => {
-      const evt = data as Record<string, unknown> | undefined;
-      const channelID = evt?.channelID as string | undefined;
-      if (!channelID) return;
-      const userChannels = queryClient.getQueryData<{ channelID: string; channelName: string }[]>(['userChannels']);
-      const open = userChannels?.find((c) => c.channelID === channelID);
-      queryClient.invalidateQueries({ queryKey: ['userChannels'] });
-      queryClient.invalidateQueries({ queryKey: ['channelMembers', channelID] });
+      const evt = parseChannelID(data);
+      if (!evt) return;
+      const userChannels = queryClient.getQueryData<{ channelID: string; channelName: string }[]>(queryKeys.userChannels());
+      const open = userChannels?.find((c) => c.channelID === evt.channelID);
+      queryClient.invalidateQueries({ queryKey: queryKeys.userChannels() });
+      queryClient.invalidateQueries({ queryKey: queryKeys.channelMembers(evt.channelID) });
       // The directory's BrowsePublic results are guest-scoped (only joined
       // channels), so a kicked-out guest must refetch to drop the channel
       // they no longer belong to from the listing.
-      queryClient.invalidateQueries({ queryKey: ['browseChannels'] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.browseChannels() });
       if (open && window.location.pathname.endsWith(`/channel/${slugify(open.channelName)}`)) {
         navigate('/', { replace: true });
       }
     },
     onChannelUpdated: (data: unknown) => {
-      const evt = data as Record<string, unknown> | undefined;
-      const channelID = evt?.channelID as string | undefined;
-      if (!channelID) return;
-      queryClient.invalidateQueries({ queryKey: ['channelBySlug'] });
-      queryClient.invalidateQueries({ queryKey: ['userChannels'] });
+      if (!parseChannelID(data)) return;
+      queryClient.invalidateQueries({ queryKey: queryKeys.channelBySlug() });
+      queryClient.invalidateQueries({ queryKey: queryKeys.userChannels() });
     },
     onChannelNew: () => {
-      queryClient.invalidateQueries({ queryKey: ['browseChannels'] });
-      queryClient.invalidateQueries({ queryKey: ['userChannels'] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.browseChannels() });
+      queryClient.invalidateQueries({ queryKey: queryKeys.userChannels() });
     },
     onPresenceChanged: (data: unknown) => {
-      const evt = data as { userID?: string; online?: boolean } | undefined;
-      if (!evt?.userID) return;
-      setUserOnline(evt.userID, !!evt.online);
+      const evt = parsePresence(data);
+      if (!evt) return;
+      setUserOnline(evt.userID, evt.online);
     },
     onEmojiAdded: () => {
-      queryClient.invalidateQueries({ queryKey: ['emojis'] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.emojis() });
     },
     onEmojiRemoved: () => {
-      queryClient.invalidateQueries({ queryKey: ['emojis'] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.emojis() });
     },
     onUserUpdated: () => {
       // Avatar/displayName changed for some user — invalidate user batches and
       // member lists so all open views refresh stale presigned avatar URLs.
-      queryClient.invalidateQueries({ queryKey: ['users-batch'] });
-      queryClient.invalidateQueries({ queryKey: ['channelMembers'] });
-      queryClient.invalidateQueries({ queryKey: ['userChannels'] });
-      queryClient.invalidateQueries({ queryKey: ['userConversations'] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.usersBatch() });
+      queryClient.invalidateQueries({ queryKey: queryKeys.channelMembers() });
+      queryClient.invalidateQueries({ queryKey: queryKeys.userChannels() });
+      queryClient.invalidateQueries({ queryKey: queryKeys.userConversations() });
       // The Directory page's Members tab fetches users into local
       // useState (not React Query), so cache invalidation isn't enough
       // — broadcast a DOM event the page listens to and refetches on.
       window.dispatchEvent(new CustomEvent('ex:user-updated'));
     },
     onAttachmentDeleted: (data: unknown) => {
-      const evt = data as { id?: string } | undefined;
-      if (!evt?.id) return;
-      queryClient.invalidateQueries({ queryKey: ['attachment', evt.id] });
+      const evt = parseAttachmentDeleted(data);
+      if (!evt) return;
+      queryClient.invalidateQueries({ queryKey: queryKeys.attachment(evt.id) });
     },
     onChannelMuted: () => {
       // Either tab toggled mute — refetch the user's channel list so the
       // sidebar bell-slash indicator stays in sync across browser tabs.
-      queryClient.invalidateQueries({ queryKey: ['userChannels'] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.userChannels() });
     },
     onNotification: (data: unknown) => {
       const n = data as NotificationPayload | undefined;
@@ -190,8 +189,9 @@ export default function ChatPage() {
       dispatchNotification(n);
     },
     onServerVersion: (data: unknown) => {
-      const v = (data as { version?: string } | undefined)?.version;
-      if (v) setServerVersion(v);
+      const evt = parseServerVersion(data);
+      if (!evt) return;
+      setServerVersion(evt.version);
     },
     onForceLogout: () => {
       // Server tells us this session must end (admin disabled the account
@@ -201,9 +201,20 @@ export default function ChatPage() {
       void logout().finally(() => navigate('/login', { replace: true }));
     },
     onTyping: (data: unknown) => {
-      const evt = data as { userID?: string; parentID?: string } | undefined;
-      if (!evt?.parentID || !evt.userID) return;
+      const evt = parseTyping(data);
+      if (!evt) return;
       recordTyping(evt.parentID, evt.userID);
+    },
+    onReconnect: () => {
+      // Refresh non-infinite peripheral lists outright.
+      queryClient.invalidateQueries({ queryKey: queryKeys.userChannels() });
+      queryClient.invalidateQueries({ queryKey: queryKeys.userConversations() });
+      queryClient.invalidateQueries({ queryKey: queryKeys.userThreads() });
+      queryClient.invalidateQueries({ queryKey: queryKeys.channelMembers() });
+      // Top up tail-mode message caches via a forward fetch so events
+      // missed during the disconnect appear without re-triggering v5's
+      // walk-forward refetch on the infinite query.
+      void resyncMessageCache(queryClient);
     },
     enabled: !!user,
   });

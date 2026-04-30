@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { apiFetch } from '@/lib/api';
 import { slugify } from '@/lib/format';
 import { readJSON, writeJSON } from '@/lib/storage';
+import { queryKeys } from '@/lib/query-keys';
 import type { Message } from '@/types';
 
 export interface ThreadSummary {
@@ -17,7 +18,7 @@ export interface ThreadSummary {
 
 export function useUserThreads() {
   return useQuery<ThreadSummary[]>({
-    queryKey: ['userThreads'],
+    queryKey: queryKeys.userThreads(),
     queryFn: () => apiFetch<ThreadSummary[]>('/api/v1/threads'),
     staleTime: 15_000,
   });
@@ -91,7 +92,7 @@ export function useThreadMessages(opts: {
   const parentPath = threadParentPath(opts);
   const ready = !!(opts.channelId || opts.conversationId) && !!opts.threadRootID;
   return useQuery({
-    queryKey: ['thread', parentPath, opts.threadRootID],
+    queryKey: queryKeys.thread(parentPath, opts.threadRootID),
     queryFn: () =>
       apiFetch<Message[]>(`/api/v1/${parentPath}/messages/${opts.threadRootID}/thread`),
     enabled: ready && (opts.enabled ?? true),

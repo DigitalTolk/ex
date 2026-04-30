@@ -123,20 +123,33 @@ describe('ChatPage WebSocket handlers', () => {
     setCurrentUserID.mockReset();
   });
 
+  // Helper for building a payload that satisfies the runtime
+  // isMessage validator (id, parentID, authorID, body, createdAt).
+  function msg(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      id: 'msg-1',
+      parentID: 'ch-1',
+      authorID: 'u-other',
+      body: 'hi',
+      createdAt: '2026-04-30T10:00:00Z',
+      ...overrides,
+    };
+  }
+
   it('onMessageNew marks unread + un-hides + invalidates queries (skipping self)', () => {
     renderAt('/');
     const handler = capturedOptions.onMessageNew as (d: unknown) => void;
     // From self — should skip the unread marking
-    handler({ parentID: 'ch-1', authorID: 'u-me' });
+    handler(msg({ authorID: 'u-me' }));
     expect(markChannelUnread).not.toHaveBeenCalled();
     // From someone else
-    handler({ parentID: 'ch-1', authorID: 'u-other' });
+    handler(msg({ authorID: 'u-other' }));
     expect(markChannelUnread).toHaveBeenCalledWith('ch-1');
     expect(markConversationUnread).toHaveBeenCalledWith('ch-1');
     expect(unhideConversation).toHaveBeenCalledWith('ch-1');
   });
 
-  it('onMessageNew without parentID is a no-op', () => {
+  it('onMessageNew without a valid Message payload is a no-op', () => {
     renderAt('/');
     (capturedOptions.onMessageNew as (d: unknown) => void)({});
     expect(markChannelUnread).not.toHaveBeenCalled();
@@ -145,11 +158,10 @@ describe('ChatPage WebSocket handlers', () => {
   it('onMessageNew with parentMessageID invalidates thread + userThreads (so the /threads count updates live)', () => {
     const { qc } = renderAt('/');
     const spy = vi.spyOn(qc, 'invalidateQueries');
-    (capturedOptions.onMessageNew as (d: unknown) => void)({
-      parentID: 'ch-1',
+    (capturedOptions.onMessageNew as (d: unknown) => void)(msg({
       parentMessageID: 'msg-root',
-      authorID: 'u-other',
-    });
+      id: 'msg-reply-1',
+    }));
     const calls = spy.mock.calls.map((c) => (c[0] as { queryKey?: unknown[] }).queryKey);
     expect(calls).toContainEqual(['thread', 'channels/ch-1', 'msg-root']);
     expect(calls).toContainEqual(['userThreads']);
@@ -159,15 +171,17 @@ describe('ChatPage WebSocket handlers', () => {
     // Regression: the backend now ships parentMessageID in the deleted
     // payload, and the client routes it to the thread query. Without
     // this, deleting a reply leaves the sidebar / /threads page stale.
+    // The main message list isn't invalidated — that would trigger v5's
+    // walk-forward refetch which truncates a deep-linked page chain
+    // (see appendMessageToCache); we patch the cache directly instead.
     const { qc } = renderAt('/');
     const spy = vi.spyOn(qc, 'invalidateQueries');
-    (capturedOptions.onMessageDeleted as (d: unknown) => void)({
-      parentID: 'ch-1',
+    (capturedOptions.onMessageDeleted as (d: unknown) => void)(msg({
       parentMessageID: 'msg-root',
       id: 'msg-reply',
-    });
+    }));
     const calls = spy.mock.calls.map((c) => (c[0] as { queryKey?: unknown[] }).queryKey);
-    expect(calls).toContainEqual(['channelMessages', 'ch-1']);
+    expect(calls).not.toContainEqual(['channelMessages', 'ch-1']);
     expect(calls).toContainEqual(['thread', 'channels/ch-1', 'msg-root']);
     expect(calls).toContainEqual(['thread', 'conversations/ch-1', 'msg-root']);
     expect(calls).toContainEqual(['userThreads']);
@@ -176,13 +190,38 @@ describe('ChatPage WebSocket handlers', () => {
   it('onMessageDeleted on a thread root falls back to id when parentMessageID is absent', () => {
     const { qc } = renderAt('/');
     const spy = vi.spyOn(qc, 'invalidateQueries');
-    (capturedOptions.onMessageDeleted as (d: unknown) => void)({
-      parentID: 'ch-1',
-      id: 'msg-root',
-    });
+    (capturedOptions.onMessageDeleted as (d: unknown) => void)(msg({ id: 'msg-root' }));
     const calls = spy.mock.calls.map((c) => (c[0] as { queryKey?: unknown[] }).queryKey);
     expect(calls).toContainEqual(['thread', 'channels/ch-1', 'msg-root']);
     expect(calls).toContainEqual(['userThreads']);
+  });
+
+  it('onMessageEdited patches the cached message in the open channel', () => {
+    const { qc } = renderAt('/');
+    qc.setQueryData(['channelMessages', 'ch-1', null], {
+      pages: [{
+        items: [{ id: 'm-1', parentID: 'ch-1', authorID: 'u-1', body: 'old', createdAt: '2026-04-30T10:00:00Z' }],
+        hasMoreOlder: false,
+        hasMoreNewer: false,
+      }],
+      pageParams: [{ kind: 'tail' }],
+    });
+    (capturedOptions.onMessageEdited as (d: unknown) => void)(msg({ id: 'm-1', body: 'edited' }));
+    const out = qc.getQueryData<{ pages: { items: { id: string; body: string }[] }[] }>([
+      'channelMessages', 'ch-1', null,
+    ]);
+    expect(out?.pages[0].items[0].body).toBe('edited');
+  });
+
+  it('onReconnect refreshes peripheral lists', () => {
+    const { qc } = renderAt('/');
+    const spy = vi.spyOn(qc, 'invalidateQueries');
+    (capturedOptions.onReconnect as () => void)();
+    const calls = spy.mock.calls.map((c) => (c[0] as { queryKey?: unknown[] }).queryKey);
+    expect(calls).toContainEqual(['userChannels']);
+    expect(calls).toContainEqual(['userConversations']);
+    expect(calls).toContainEqual(['userThreads']);
+    expect(calls).toContainEqual(['channelMembers']);
   });
 
   it('onMessageEdited / onMessageDeleted gracefully ignore missing parentID and invalidate when present', () => {
@@ -213,19 +252,21 @@ describe('ChatPage WebSocket handlers', () => {
     }).not.toThrow();
   });
 
-  it('onMembersChanged also invalidates messages so the "X was added" line shows even if message.new is missed', () => {
-    // Regression: AddMember posts a system message via a separate
-    // message.new event. If that event is dropped (WS reconnect race,
-    // transient disconnect), the membership-changed signal must still
-    // refresh the open message view so the system line appears.
+  it('onMembersChanged refreshes membership but does NOT invalidate the message list', () => {
+    // The "X was added" system message arrives via a separate
+    // message.new event and is appended via appendMessageToCache.
+    // Invalidating the message list here would trigger v5's walk-
+    // forward refetch, truncating a deep-linked page chain to a
+    // single 2-message slice. Members and the channel-list cache are
+    // safe — neither is an infinite query.
     const { qc } = renderAt('/');
     const spy = vi.spyOn(qc, 'invalidateQueries');
     (capturedOptions.onMembersChanged as (d: unknown) => void)({ channelID: 'ch-1' });
     const calls = spy.mock.calls.map((c) => (c[0] as { queryKey?: unknown[] }).queryKey);
     expect(calls).toContainEqual(['channelMembers', 'ch-1']);
     expect(calls).toContainEqual(['userChannels']);
-    expect(calls).toContainEqual(['channelMessages', 'ch-1']);
-    expect(calls).toContainEqual(['conversationMessages', 'ch-1']);
+    expect(calls).not.toContainEqual(['channelMessages', 'ch-1']);
+    expect(calls).not.toContainEqual(['conversationMessages', 'ch-1']);
   });
 
   it('onConversationNew refreshes the userConversations list', () => {

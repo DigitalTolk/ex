@@ -1,5 +1,6 @@
 import { useQuery, keepPreviousData, type UseQueryResult } from '@tanstack/react-query';
 import { apiFetch } from '@/lib/api';
+import { queryKeys } from '@/lib/query-keys';
 
 export interface SearchHit {
   id: string;
@@ -53,7 +54,7 @@ function useSearchQuery(
   // enforces RBAC and short-circuits if both are missing.
   const filterOnly = !!(opts?.from || opts?.in);
   return useQuery({
-    queryKey: ['search', index, trimmed, limit, opts ?? {}, nonce ?? 0],
+    queryKey: queryKeys.search(index, trimmed, limit, opts ?? {}, nonce ?? 0),
     queryFn: () => apiFetch<SearchResult>(buildURL(index, trimmed, limit, opts)),
     enabled: enabled && (trimmed.length >= MIN_QUERY_CHARS || filterOnly),
     placeholderData: keepPreviousData,

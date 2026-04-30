@@ -6,6 +6,7 @@ import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { X, Check, UserPlus } from 'lucide-react';
 import { apiFetch } from '@/lib/api';
+import { queryKeys } from '@/lib/query-keys';
 import { getInitials } from '@/lib/format';
 import { useQueryClient } from '@tanstack/react-query';
 import { UserHoverCard } from '@/components/UserHoverCard';
@@ -69,7 +70,7 @@ export function MemberList({ members, channelId, currentUserId, currentUserRole,
   async function handleRemove(userId: string) {
     if (!channelId) return;
     await apiFetch(`/api/v1/channels/${channelId}/members/${userId}`, { method: 'DELETE' });
-    queryClient.invalidateQueries({ queryKey: ['channelMembers', channelId] });
+    queryClient.invalidateQueries({ queryKey: queryKeys.channelMembers(channelId) });
   }
 
   async function handleAdd(user: SearchUser) {
@@ -81,7 +82,7 @@ export function MemberList({ members, channelId, currentUserId, currentUserRole,
         method: 'POST',
         body: JSON.stringify({ userID: user.id, role: 'member' }),
       });
-      queryClient.invalidateQueries({ queryKey: ['channelMembers', channelId] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.channelMembers(channelId) });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to add member');
     } finally {

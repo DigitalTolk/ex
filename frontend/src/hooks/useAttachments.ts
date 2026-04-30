@@ -1,6 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useMemo } from 'react';
 import { apiFetch } from '@/lib/api';
+import { queryKeys } from '@/lib/query-keys';
 import type { Attachment } from '@/types';
 
 interface UploadInitResponse {
@@ -87,7 +88,7 @@ function uploadWithProgress(
 
 export function useAttachment(id: string | undefined) {
   return useQuery({
-    queryKey: ['attachment', id],
+    queryKey: queryKeys.attachment(id ?? ''),
     queryFn: () => apiFetch<Attachment>(`/api/v1/attachments/${id}`),
     enabled: !!id,
     // Signed URLs last 6h; refetch occasionally so we don't render stale URLs
@@ -106,11 +107,11 @@ export function useAttachmentsBatch(ids: string[]) {
   const key = sorted.join(',');
 
   const query = useQuery({
-    queryKey: ['attachments-batch', key],
+    queryKey: queryKeys.attachmentsBatch(key),
     queryFn: async () => {
       const list = await apiFetch<Attachment[]>(`/api/v1/attachments?ids=${encodeURIComponent(key)}`);
       for (const a of list) {
-        qc.setQueryData(['attachment', a.id], a);
+        qc.setQueryData(queryKeys.attachment(a.id), a);
       }
       return list;
     },

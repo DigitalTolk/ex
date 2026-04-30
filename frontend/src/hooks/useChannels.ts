@@ -1,17 +1,18 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiFetch } from '@/lib/api';
+import { queryKeys } from '@/lib/query-keys';
 import type { UserChannel, Channel, ChannelMembership } from '@/types';
 
 export function useUserChannels() {
   return useQuery({
-    queryKey: ['userChannels'],
+    queryKey: queryKeys.userChannels(),
     queryFn: () => apiFetch<UserChannel[]>('/api/v1/channels'),
   });
 }
 
 export function useChannel(channelId: string | undefined) {
   return useQuery({
-    queryKey: ['channel', channelId],
+    queryKey: queryKeys.channel(channelId ?? ''),
     queryFn: () => apiFetch<Channel>(`/api/v1/channels/${channelId}`),
     enabled: !!channelId,
   });
@@ -19,7 +20,7 @@ export function useChannel(channelId: string | undefined) {
 
 export function useChannelBySlug(slug: string | undefined) {
   return useQuery({
-    queryKey: ['channelBySlug', slug],
+    queryKey: queryKeys.channelBySlug(slug),
     queryFn: () => apiFetch<Channel>(`/api/v1/channels/${slug}`),
     enabled: !!slug,
   });
@@ -27,7 +28,7 @@ export function useChannelBySlug(slug: string | undefined) {
 
 export function useChannelMembers(channelId: string | undefined) {
   return useQuery({
-    queryKey: ['channelMembers', channelId],
+    queryKey: queryKeys.channelMembers(channelId),
     queryFn: () =>
       apiFetch<ChannelMembership[]>(
         `/api/v1/channels/${channelId}/members`,
@@ -43,7 +44,7 @@ export function useChannelMembers(channelId: string | undefined) {
 export function useBrowseChannels(q?: string) {
   const trimmed = (q ?? '').trim();
   return useQuery({
-    queryKey: ['browseChannels', trimmed],
+    queryKey: queryKeys.browseChannels(trimmed),
     queryFn: () => {
       const url = trimmed
         ? `/api/v1/channels/browse?q=${encodeURIComponent(trimmed)}`
@@ -62,8 +63,8 @@ export function useCreateChannel() {
         body: JSON.stringify(data),
       }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['userChannels'] });
-      queryClient.invalidateQueries({ queryKey: ['browseChannels'] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.userChannels() });
+      queryClient.invalidateQueries({ queryKey: queryKeys.browseChannels() });
     },
   });
 }
@@ -76,8 +77,8 @@ export function useJoinChannel() {
         method: 'POST',
       }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['userChannels'] });
-      queryClient.invalidateQueries({ queryKey: ['browseChannels'] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.userChannels() });
+      queryClient.invalidateQueries({ queryKey: queryKeys.browseChannels() });
     },
   });
 }
@@ -94,7 +95,7 @@ export function useMuteChannel() {
     // updates. The server also broadcasts channel.muted via WebSocket so
     // other tabs/devices stay in sync.
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['userChannels'] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.userChannels() });
     },
   });
 }

@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { playNotificationPing } from '@/lib/notification-sound';
 import { readJSON, writeJSON } from '@/lib/storage';
+import { useLatestRef } from '@/hooks/useLatestRef';
 
 // NotificationKind mirrors backend service.NotificationKind. Adding a new
 // kind here is the single client-side place where a new alert flavor is
@@ -59,6 +60,28 @@ function readPermission(): Permission {
   return Notification.permission;
 }
 
+// SPA navigation so a notification click doesn't trigger a full page
+// reload. Setting window.location.href reloads the document and wipes
+// the user's loaded message history, which on a deep-link landing
+// leaves them with only the around-window plus one page on each side.
+// pushState + popstate hands control to React Router without reload;
+// fallback to href for cross-origin links (which the backend never
+// produces today, but keeps the boundary safe).
+function navigateInApp(href: string) {
+  if (typeof window === 'undefined') return;
+  try {
+    const url = new URL(href, window.location.origin);
+    if (url.origin !== window.location.origin) {
+      window.location.href = href;
+      return;
+    }
+    window.history.pushState(null, '', url.pathname + url.search + url.hash);
+    window.dispatchEvent(new PopStateEvent('popstate'));
+  } catch {
+    window.location.href = href;
+  }
+}
+
 const NotificationContext = createContext<NotificationContextValue | undefined>(undefined);
 
 export function NotificationProvider({ children }: { children: ReactNode }) {
@@ -69,12 +92,14 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   // Mirror reactive state into refs so `dispatch` can be a stable callback
   // — recreating it on every prefs/permission change would invalidate the
   // memoized context value and re-render every consumer of useNotifications.
-  const prefsRef = useRef(prefs);
-  const permissionRef = useRef(permission);
+  // Mirror reactive state into refs so `dispatch` can be a stable
+  // callback — recreating it on every prefs/permission change would
+  // invalidate the memoized context value and re-render every consumer.
+  const prefsRef = useLatestRef(prefs);
+  const permissionRef = useLatestRef(permission);
   const initialMountRef = useRef(true);
 
   useEffect(() => {
-    prefsRef.current = prefs;
     if (initialMountRef.current) {
       // Skip the first run — loadPrefs() already returned what's in
       // localStorage; rewriting it on mount is pointless I/O.
@@ -83,10 +108,6 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     }
     writeJSON(STORAGE_KEY, prefs);
   }, [prefs]);
-
-  useEffect(() => {
-    permissionRef.current = permission;
-  }, [permission]);
 
   const setSoundEnabled = useCallback((v: boolean) => {
     setPrefs((p) => ({ ...p, soundEnabled: v }));
@@ -152,7 +173,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       });
       note.onclick = () => {
         window.focus();
-        if (n.deepLink) window.location.href = n.deepLink;
+        if (n.deepLink) navigateInApp(n.deepLink);
         note.close();
       };
       // Drop handler refs once the OS dismisses the notification so the

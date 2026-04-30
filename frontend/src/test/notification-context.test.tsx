@@ -223,8 +223,12 @@ describe('NotificationProvider', () => {
     expect(notificationCtor).toHaveBeenCalledTimes(1);
   });
 
-  it('navigates to the deep link when the OS notification is clicked', () => {
-    // Click handler must focus the tab and route to the message anchor.
+  it('navigates to the deep link via SPA history (no full page reload) when clicked', () => {
+    // The click handler must focus the tab and route to the message via
+    // history.pushState + popstate so React Router takes over without
+    // reloading the page. Setting window.location.href would discard
+    // the user's loaded message history and leave a deep-link landing
+    // showing only the around-window plus one page on each side.
     let clickHandler: (() => void) | null = null;
     const closeMock = vi.fn();
     notificationCtor.mockImplementation(function NotificationCtor() {
@@ -239,22 +243,9 @@ describe('NotificationProvider', () => {
       };
     });
     const focusSpy = vi.spyOn(window, 'focus').mockImplementation(() => undefined);
-    // jsdom forbids reassigning window.location.href directly. Stub the
-    // whole location object with a setter we can observe.
-    let assignedHref: string | null = null;
-    const origLocation = window.location;
-    Object.defineProperty(window, 'location', {
-      configurable: true,
-      value: {
-        ...origLocation,
-        get href() {
-          return assignedHref ?? origLocation.href;
-        },
-        set href(v: string) {
-          assignedHref = v;
-        },
-      },
-    });
+    const pushStateSpy = vi.spyOn(window.history, 'pushState');
+    const popStateSpy = vi.fn();
+    window.addEventListener('popstate', popStateSpy);
 
     renderProbe();
     act(() => {
@@ -264,11 +255,14 @@ describe('NotificationProvider', () => {
       clickHandler!();
     });
     expect(focusSpy).toHaveBeenCalledTimes(1);
-    expect(assignedHref).toBe('/conversation/dm-1');
+    expect(pushStateSpy).toHaveBeenCalledTimes(1);
+    expect(pushStateSpy.mock.calls[0][2]).toBe('/conversation/dm-1');
+    expect(popStateSpy).toHaveBeenCalledTimes(1);
     expect(closeMock).toHaveBeenCalledTimes(1);
 
     focusSpy.mockRestore();
-    Object.defineProperty(window, 'location', { configurable: true, value: origLocation });
+    pushStateSpy.mockRestore();
+    window.removeEventListener('popstate', popStateSpy);
   });
 
   it('does not fire an OS notification when permission is "default" (never granted)', () => {
