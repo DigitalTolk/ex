@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import { MessageItem } from './MessageItem';
 import { MessageInput, type MessageInputHandle } from './MessageInput';
 import { MessageDropZone } from './MessageDropZone';
+import { ThreadTypingIndicator } from './TypingIndicator';
 import { Button } from '@/components/ui/button';
 import { X } from 'lucide-react';
 import { useAtBottomRef } from '@/hooks/useAtBottomRef';
@@ -235,6 +236,27 @@ export function ThreadPanel({
     [],
   );
 
+  // Backup for the bottom-stick RO: late-loading <img> elements
+  // (avatars, attachments, unfurl thumbs) finish at unpredictable
+  // moments. Listening for delegated load events on the inner
+  // container is the most reliable signal that "this image just
+  // grew its box" — gated by wasAtBottomRef and skipped in deep-link
+  // mode. Mirrors MessageList; see that file for the full rationale.
+  useEffect(() => {
+    const el = scrollRef.current;
+    const inner = innerRef.current;
+    if (!el || !inner) return;
+    if (anchorMsgId) return;
+    const onLoad = (e: Event) => {
+      const target = e.target as HTMLElement | null;
+      if (!target || target.tagName !== 'IMG') return;
+      if (!wasAtBottomRef.current) return;
+      el.scrollTop = el.scrollHeight;
+    };
+    inner.addEventListener('load', onLoad, true);
+    return () => inner.removeEventListener('load', onLoad, true);
+  }, [anchorMsgId, wasAtBottomRef]);
+
   function handleReply(input: SendMessageInput) {
     send.mutate({ ...input, parentMessageID: threadRootID });
   }
@@ -282,12 +304,20 @@ export function ThreadPanel({
             })}
           </div>
         </div>
+        <ThreadTypingIndicator
+          parentID={channelId ?? conversationId}
+          threadRootID={threadRootID}
+          userMap={mergedUserMap}
+        />
         <MessageInput
           ref={inputRef}
           onSend={handleReply}
           disabled={send.isPending}
           placeholder="Reply..."
           focusKey={threadRootID}
+          typingParentID={channelId ?? conversationId}
+          typingParentType={channelId ? 'channel' : 'conversation'}
+          typingThreadRootID={threadRootID}
         />
       </MessageDropZone>
     </aside>

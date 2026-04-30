@@ -31,7 +31,7 @@ type EmojiURLSigner interface {
 // EmojiURLTTL is how long re-signed emoji GET URLs remain valid. Short
 // enough that a stale URL never lingers in caches forever, long enough
 // to amortize the presign cost across a typical user session.
-const EmojiURLTTL = 6 * time.Hour
+const EmojiURLTTL = 24 * time.Hour
 
 // EmojiService manages workspace custom emojis.
 type EmojiService struct {
@@ -39,11 +39,24 @@ type EmojiService struct {
 	users     UserStore
 	publisher Publisher
 	signer    EmojiURLSigner
+	// urlCache memoises presigned emoji image URLs so repeated List
+	// calls return identical URLs — without it every reload would
+	// hand out fresh signatures and the browser would re-download
+	// every emoji on every page view.
+	urlCache *presignedURLCache
 }
 
 // NewEmojiService constructs an EmojiService.
 func NewEmojiService(emojis EmojiStore, users UserStore, publisher Publisher) *EmojiService {
-	return &EmojiService{emojis: emojis, users: users, publisher: publisher}
+	return &EmojiService{
+		emojis:    emojis,
+		users:     users,
+		publisher: publisher,
+		// 20h cache TTL — emojis are heavily reused; cache window is
+		// well inside the 24h URL validity so a cached URL is always
+		// still valid when reused.
+		urlCache: newPresignedURLCache(20 * time.Hour),
+	}
 }
 
 // SetSigner wires the URL re-signer. Optional — when unset, List returns
@@ -113,7 +126,10 @@ func (s *EmojiService) List(ctx context.Context) ([]*model.CustomEmoji, error) {
 			if e.ImageKey == "" {
 				continue
 			}
-			url, err := s.signer.PresignedGetURL(ctx, e.ImageKey, EmojiURLTTL)
+			url, err := s.urlCache.getOrSign(ctx, presignedKey{op: "get", key: e.ImageKey},
+				func(ctx context.Context) (string, error) {
+					return s.signer.PresignedGetURL(ctx, e.ImageKey, EmojiURLTTL)
+				})
 			if err != nil {
 				continue
 			}
@@ -141,6 +157,9 @@ func (s *EmojiService) Delete(ctx context.Context, userID, name string) error {
 	}
 	if err := s.emojis.Delete(ctx, name); err != nil {
 		return fmt.Errorf("emoji: delete: %w", err)
+	}
+	if existing.ImageKey != "" {
+		s.urlCache.invalidate(existing.ImageKey)
 	}
 	events.Publish(ctx, s.publisher, pubsub.GlobalEmojiEvents(), events.EventEmojiRemoved, map[string]string{"name": name})
 	return nil

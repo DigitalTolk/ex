@@ -21,6 +21,7 @@ import { UserHoverCard } from '@/components/UserHoverCard';
 import { useEditMessage, useDeleteMessage, useToggleReaction, useSetPinned } from '@/hooks/useMessages';
 import { useEmojiMap } from '@/hooks/useEmoji';
 import { renderMarkdown } from '@/lib/markdown';
+import { buildChannelHref, buildConversationHref } from '@/lib/message-deeplink';
 import { useTagOpen } from '@/context/TagSearchContext';
 import { EmojiGlyph } from '@/components/EmojiGlyph';
 import { MessageAttachments } from '@/components/chat/MessageAttachments';
@@ -112,17 +113,11 @@ export function MessageItem({
   const { openTag } = useTagOpen();
 
   function buildMessageLink(): string {
-    // Channels resolve URLs by slug; conversations have no slug so the ID
-    // is used. The fragment is the deep-link target read by MessageList.
     const origin = typeof window !== 'undefined' ? window.location.origin : '';
-    const path = channelSlug
-      ? `/channel/${channelSlug}`
-      : channelId
-        ? `/channel/${channelId}`
-        : conversationId
-          ? `/conversation/${conversationId}`
-          : '/';
-    return `${origin}${path}#msg-${message.id}`;
+    const slug = channelSlug ?? channelId;
+    if (slug) return `${origin}${buildChannelHref(slug, message.id, message.parentMessageID)}`;
+    if (conversationId) return `${origin}${buildConversationHref(conversationId, message.id, message.parentMessageID)}`;
+    return `${origin}/#msg-${message.id}`;
   }
 
   async function handleCopyLink() {

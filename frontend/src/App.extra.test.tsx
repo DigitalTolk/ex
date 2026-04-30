@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render } from '@testing-library/react';
 import App from './App';
 
 const originalFetch = globalThis.fetch;
@@ -58,14 +58,12 @@ describe('App - authenticated route', () => {
     vi.clearAllMocks();
   });
 
-  it('renders ChatPage shell when user is authenticated', async () => {
-    // Default route is "/" which renders the protected ChatPage shell
+  it('redirects "/" to the general channel when user is authenticated', async () => {
+    // Root visit lands on the index route which navigates to
+    // /channel/general — confirms the post-login redirect.
     render(<App />);
-    // After auth resolves, the empty <Route index> should show its message
     await vi.waitFor(() => {
-      expect(
-        screen.getByText(/select a channel or conversation to start chatting/i),
-      ).toBeInTheDocument();
+      expect(window.location.pathname).toBe('/channel/general');
     });
   });
 });

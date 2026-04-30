@@ -8,6 +8,7 @@ import { MessageDropZone } from './MessageDropZone';
 import { MemberList } from './MemberList';
 import { ThreadPanel } from './ThreadPanel';
 import { PinnedPanel } from './PinnedPanel';
+import { NotFoundPage } from '@/pages/NotFoundPage';
 import { FilesPanel } from './FilesPanel';
 import { ChannelIntro } from './ConversationIntro';
 import { TypingIndicator } from './TypingIndicator';
@@ -58,7 +59,7 @@ export function ChannelView() {
   // Tag panel takes the same right-rail slot as thread/pinned/files.
   // Opening any of those closes a tag, and opening a tag closes them.
   const { activeTag, closeTag } = useTagState();
-  const { data: channel } = useChannelBySlug(slug);
+  const { data: channel, isError: channelNotFound, isLoading: channelLoading } = useChannelBySlug(slug);
   const { data: members } = useChannelMembers(channel?.id);
   useDocumentTitle(channel ? `~${channel.name}` : null);
   const { mainAnchor, threadAnchor, threadParam, navKey } = useDeepLinkAnchor(channel?.id);
@@ -207,6 +208,10 @@ export function ChannelView() {
     );
   }
 
+  if (channelNotFound || (!channelLoading && !channel)) {
+    return <NotFoundPage resource="channel" />;
+  }
+
   return (
     <div className="flex flex-1 overflow-hidden">
       <div className="flex flex-1 flex-col overflow-hidden">
@@ -288,6 +293,7 @@ export function ChannelView() {
           onClose={panels.close}
           userMap={userMap}
           currentUserId={user?.id}
+          onReplyInThread={openThread}
         />
       ) : showFiles ? (
         <FilesPanel

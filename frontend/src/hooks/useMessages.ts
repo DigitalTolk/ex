@@ -160,38 +160,6 @@ export function updateMessageInCache(qc: QueryClient, parentID: string, msg: Mes
   });
 }
 
-// Backend re-writes the parent's replyCount / lastReplyAt /
-// recentReplyAuthorIDs on every Send, so without refetches we have to
-// keep them in sync ourselves when a thread reply arrives.
-export function bumpThreadReplyMetadata(qc: QueryClient, parentID: string, reply: Message) {
-  if (!reply.parentMessageID) return;
-  patchBothScopes(qc, parentID, (old) => {
-    if (!old) return old;
-    let changed = false;
-    const pages = old.pages.map((p) => {
-      if (!p.items.some((m) => m.id === reply.parentMessageID)) return p;
-      changed = true;
-      return {
-        ...p,
-        items: p.items.map((m) => {
-          if (m.id !== reply.parentMessageID) return m;
-          const recentReplyAuthorIDs = [
-            reply.authorID,
-            ...(m.recentReplyAuthorIDs ?? []).filter((id) => id !== reply.authorID),
-          ].slice(0, 3);
-          return {
-            ...m,
-            replyCount: (m.replyCount ?? 0) + 1,
-            lastReplyAt: reply.createdAt,
-            recentReplyAuthorIDs,
-          };
-        }),
-      };
-    });
-    return changed ? { ...old, pages } : old;
-  });
-}
-
 export function removeMessageFromCache(qc: QueryClient, parentID: string, msgId: string) {
   patchBothScopes(qc, parentID, (old) => {
     if (!old) return old;
@@ -296,9 +264,10 @@ export function useSendMessage(scope: SendMessageScope) {
       }),
     onSuccess: (data, input) => {
       const parentID = channelId ?? conversationId;
-      if (parentID && input.parentMessageID) {
-        bumpThreadReplyMetadata(queryClient, parentID, data);
-      } else if (parentID) {
+      // Top-level only — sender sees their post immediately. Thread
+      // replies are reconciled via the message.edited event the
+      // backend publishes alongside message.new.
+      if (parentID && !input.parentMessageID) {
         appendMessageToCache(queryClient, parentID, data);
       }
       if (input.parentMessageID) {

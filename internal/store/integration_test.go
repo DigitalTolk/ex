@@ -905,6 +905,105 @@ func TestMessageStore_Update(t *testing.T) {
 	}
 }
 
+func TestMessageStore_IncrementReplyMetadata(t *testing.T) {
+	db := setupDynamoDB(t)
+	ms := NewMessageStore(db)
+	ctx := context.Background()
+
+	root := &model.Message{
+		ID:        "msg-root",
+		ParentID:  "ch-thread",
+		AuthorID:  "u-1",
+		Body:      "thread root",
+		CreatedAt: time.Now().Truncate(time.Millisecond),
+	}
+	if err := ms.Create(ctx, root); err != nil {
+		t.Fatalf("Create root: %v", err)
+	}
+
+	// Three sequential bumps simulate three replies arriving in order.
+	for i, author := range []string{"u-2", "u-3", "u-2"} {
+		ts := time.Now().Truncate(time.Millisecond).Add(time.Duration(i) * time.Second)
+		updated, err := ms.IncrementReplyMetadata(ctx, root.ParentID, root.ID, ts, author)
+		if err != nil {
+			t.Fatalf("Increment %d: %v", i, err)
+		}
+		if updated.ReplyCount != i+1 {
+			t.Errorf("after bump %d: ReplyCount=%d, want %d", i, updated.ReplyCount, i+1)
+		}
+		if updated.LastReplyAt == nil || !updated.LastReplyAt.Equal(ts) {
+			t.Errorf("after bump %d: LastReplyAt=%v, want %v", i, updated.LastReplyAt, ts)
+		}
+	}
+
+	got, err := ms.GetByID(ctx, root.ParentID, root.ID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if got.ReplyCount != 3 {
+		t.Errorf("final ReplyCount=%d, want 3", got.ReplyCount)
+	}
+	// Final author after the third bump (author u-2 again, prepended,
+	// dedup'd) should be u-2 first, then u-3, then the original u-2's
+	// position now empty since dedup pulled it forward.
+	if len(got.RecentReplyAuthorIDs) == 0 || got.RecentReplyAuthorIDs[0] != "u-2" {
+		t.Errorf("RecentReplyAuthorIDs[0]=%v, want u-2", got.RecentReplyAuthorIDs)
+	}
+}
+
+func TestMessageStore_IncrementReplyMetadata_ConcurrentAdd(t *testing.T) {
+	// N concurrent bumps must land as exactly N increments — the
+	// atomic ADD is the load-bearing piece.
+	db := setupDynamoDB(t)
+	ms := NewMessageStore(db)
+	ctx := context.Background()
+
+	root := &model.Message{
+		ID:        "msg-conc",
+		ParentID:  "ch-conc",
+		AuthorID:  "u-1",
+		Body:      "concurrent",
+		CreatedAt: time.Now().Truncate(time.Millisecond),
+	}
+	if err := ms.Create(ctx, root); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	const N = 20
+	errs := make(chan error, N)
+	for i := 0; i < N; i++ {
+		go func(i int) {
+			ts := time.Now().Truncate(time.Millisecond)
+			_, err := ms.IncrementReplyMetadata(ctx, root.ParentID, root.ID, ts, fmt.Sprintf("u-%d", i))
+			errs <- err
+		}(i)
+	}
+	for i := 0; i < N; i++ {
+		if err := <-errs; err != nil {
+			t.Fatalf("Increment: %v", err)
+		}
+	}
+
+	got, err := ms.GetByID(ctx, root.ParentID, root.ID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if got.ReplyCount != N {
+		t.Errorf("ReplyCount=%d, want %d (atomic ADD lost increments)", got.ReplyCount, N)
+	}
+}
+
+func TestMessageStore_IncrementReplyMetadata_NotFound(t *testing.T) {
+	db := setupDynamoDB(t)
+	ms := NewMessageStore(db)
+	ctx := context.Background()
+
+	_, err := ms.IncrementReplyMetadata(ctx, "ch-missing", "msg-missing", time.Now(), "u-1")
+	if !errors.Is(err, ErrNotFound) {
+		t.Errorf("expected ErrNotFound, got %v", err)
+	}
+}
+
 func TestMessageStore_Update_NotFound(t *testing.T) {
 	db := setupDynamoDB(t)
 	ms := NewMessageStore(db)

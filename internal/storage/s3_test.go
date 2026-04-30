@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -232,6 +233,186 @@ func TestS3Client_DeleteObject_Success(t *testing.T) {
 	}
 	if !strings.Contains(r.path, "uploads/abc") {
 		t.Errorf("path = %q, want it to include uploads/abc", r.path)
+	}
+}
+
+// TestS3Client_HeadObject_Found covers the happy path: HEAD returning
+// 200 means the object exists.
+func TestS3Client_HeadObject_Found(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Bootstrap CreateBucket is a PUT on the bucket root; HEAD on
+		// the object key returns 200 to mean "exists".
+		if r.Method == http.MethodHead {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	ctx := context.Background()
+	client, err := NewS3Client(ctx, S3Config{
+		Endpoint:  srv.URL,
+		Bucket:    "bucket",
+		AccessKey: "test",
+		SecretKey: "test",
+		Region:    "us-east-1",
+	})
+	if err != nil {
+		t.Fatalf("NewS3Client: %v", err)
+	}
+	exists, err := client.HeadObject(ctx, "unfurl/abc.png")
+	if err != nil {
+		t.Fatalf("HeadObject: %v", err)
+	}
+	if !exists {
+		t.Error("expected exists=true for 200 response")
+	}
+}
+
+// TestS3Client_HeadObject_NotFound covers the 404 path: a missing object
+// must surface as (false, nil), not an error.
+func TestS3Client_HeadObject_NotFound(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodHead {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	ctx := context.Background()
+	client, err := NewS3Client(ctx, S3Config{
+		Endpoint:  srv.URL,
+		Bucket:    "bucket",
+		AccessKey: "test",
+		SecretKey: "test",
+		Region:    "us-east-1",
+	})
+	if err != nil {
+		t.Fatalf("NewS3Client: %v", err)
+	}
+	exists, err := client.HeadObject(ctx, "unfurl/missing.png")
+	if err != nil {
+		t.Fatalf("HeadObject 404 should not error: %v", err)
+	}
+	if exists {
+		t.Error("expected exists=false for 404 response")
+	}
+}
+
+// TestS3Client_HeadObject_ServerError covers the error-wrap branch: a
+// 500 must surface as an error (not silently treated as a miss).
+func TestS3Client_HeadObject_ServerError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodHead {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	ctx := context.Background()
+	client, err := NewS3Client(ctx, S3Config{
+		Endpoint:  srv.URL,
+		Bucket:    "bucket",
+		AccessKey: "test",
+		SecretKey: "test",
+		Region:    "us-east-1",
+	})
+	if err != nil {
+		t.Fatalf("NewS3Client: %v", err)
+	}
+	if _, err := client.HeadObject(ctx, "unfurl/explode.png"); err == nil {
+		t.Error("expected error for 500 response")
+	}
+}
+
+// TestS3Client_PutObject_Success covers the upload path used by the
+// unfurl image proxy.
+func TestS3Client_PutObject_Success(t *testing.T) {
+	type seen struct {
+		method string
+		path   string
+		ct     string
+		body   []byte
+	}
+	got := make(chan seen, 4)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		got <- seen{
+			method: r.Method,
+			path:   r.URL.Path,
+			ct:     r.Header.Get("Content-Type"),
+			body:   body,
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	ctx := context.Background()
+	client, err := NewS3Client(ctx, S3Config{
+		Endpoint:  srv.URL,
+		Bucket:    "bucket",
+		AccessKey: "test",
+		SecretKey: "test",
+		Region:    "us-east-1",
+	})
+	if err != nil {
+		t.Fatalf("NewS3Client: %v", err)
+	}
+	// Drain the bootstrap CreateBucket call.
+	<-got
+
+	if err := client.PutObject(ctx, "unfurl/abc.png", "image/png", []byte("PNGBYTES")); err != nil {
+		t.Fatalf("PutObject: %v", err)
+	}
+	r := <-got
+	if r.method != http.MethodPut {
+		t.Errorf("method = %s, want PUT", r.method)
+	}
+	if !strings.Contains(r.path, "unfurl/abc.png") {
+		t.Errorf("path = %q, want unfurl/abc.png", r.path)
+	}
+	if r.ct != "image/png" {
+		t.Errorf("Content-Type = %q, want image/png", r.ct)
+	}
+	if string(r.body) != "PNGBYTES" {
+		t.Errorf("body = %q, want PNGBYTES", string(r.body))
+	}
+}
+
+// TestS3Client_PutObject_ServerError covers the error-wrap branch.
+func TestS3Client_PutObject_ServerError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Let CreateBucket succeed, fail any subsequent PUT to an object key.
+		if r.Method == http.MethodPut && strings.Count(r.URL.Path, "/") > 1 {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	ctx := context.Background()
+	client, err := NewS3Client(ctx, S3Config{
+		Endpoint:  srv.URL,
+		Bucket:    "bucket",
+		AccessKey: "test",
+		SecretKey: "test",
+		Region:    "us-east-1",
+	})
+	if err != nil {
+		t.Fatalf("NewS3Client: %v", err)
+	}
+	err = client.PutObject(ctx, "unfurl/explode.png", "image/png", []byte("x"))
+	if err == nil {
+		t.Fatal("expected error from 500 response")
+	}
+	if !strings.Contains(err.Error(), "s3: put object") {
+		t.Errorf("error should be wrapped: %v", err)
 	}
 }
 

@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -16,6 +17,18 @@ type fakeAvatarSigner struct{}
 
 func (fakeAvatarSigner) PresignedGetURL(_ context.Context, key string, _ time.Duration) (string, error) {
 	return "https://signed.example/" + key, nil
+}
+
+// countingAvatarSigner is a fakeAvatarSigner variant whose returned URL
+// embeds a per-call counter, so two URLs for the same key are
+// *different strings* — exactly how production presigned URLs behave
+// (each carries a fresh signing timestamp). Tests use it to assert that
+// the URL cache is what stabilises the final AvatarURL across calls.
+type countingAvatarSigner struct{ calls int }
+
+func (s *countingAvatarSigner) PresignedGetURL(_ context.Context, key string, _ time.Duration) (string, error) {
+	s.calls++
+	return fmt.Sprintf("https://signed.example/%s?sig=%d", key, s.calls), nil
 }
 
 func TestNewUserService(t *testing.T) {
@@ -728,5 +741,46 @@ func TestUserService_UpdateAvatarKey_RegeneratesURLAfterRefresh(t *testing.T) {
 		if got.AvatarURL != "https://signed.example/"+newKey {
 			t.Errorf("call %d: AvatarURL = %q, want signed URL with new key", i, got.AvatarURL)
 		}
+	}
+}
+
+// TestUserService_AvatarURL_StableAcrossLookups is the regression test
+// for the "avatars reload too often" bug. Production presigned URLs
+// embed a fresh signing timestamp on every sign — so without per-key
+// URL caching the same avatar would render with a different URL on
+// each request, blowing the browser cache. Using countingAvatarSigner
+// (which embeds a call counter in the URL) we verify the resolved
+// AvatarURL is byte-identical across two consecutive lookups within
+// the cache window, and that the underlying signer was called only
+// once.
+func TestUserService_AvatarURL_StableAcrossLookups(t *testing.T) {
+	users := newMockUserStore()
+	users.users["u1"] = &model.User{
+		ID: "u1", Email: "u1@x.com", DisplayName: "U1",
+		AvatarKey: "avatars/u1/abc", SystemRole: model.SystemRoleMember,
+	}
+	signer := &countingAvatarSigner{}
+	// nil cache: take the no-cache path so resolveAvatar is hit on
+	// every call. This isolates the URL cache as the only thing that
+	// could be holding the URL stable.
+	svc := NewUserService(users, nil, signer, nil)
+
+	first, err := svc.GetByID(context.Background(), "u1")
+	if err != nil {
+		t.Fatalf("first GetByID: %v", err)
+	}
+	second, err := svc.GetByID(context.Background(), "u1")
+	if err != nil {
+		t.Fatalf("second GetByID: %v", err)
+	}
+
+	if first.AvatarURL == "" {
+		t.Fatal("expected an AvatarURL on the first lookup")
+	}
+	if first.AvatarURL != second.AvatarURL {
+		t.Errorf("AvatarURL changed across consecutive lookups (browser would re-download):\n  first:  %q\n  second: %q", first.AvatarURL, second.AvatarURL)
+	}
+	if signer.calls != 1 {
+		t.Errorf("PresignedGetURL called %d times across two lookups; expected 1 (cached)", signer.calls)
 	}
 }

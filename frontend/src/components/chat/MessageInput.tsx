@@ -62,6 +62,11 @@ interface MessageInputProps {
   // editing an existing message is private.
   typingParentID?: string;
   typingParentType?: 'channel' | 'conversation';
+  // When the composer is the thread reply box, this is the root message
+  // ID. Including it in the typing frame lets receivers route the
+  // indicator into ThreadPanel rather than the main MessageList. Absent
+  // for the main composer.
+  typingThreadRootID?: string;
 }
 
 export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(function MessageInput({
@@ -76,6 +81,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
   focusKey,
   typingParentID,
   typingParentType,
+  typingThreadRootID,
 }, ref) {
   const [body, setBody] = useState(initialBody);
   const [drafts, setDrafts] = useState<DraftAttachment[]>(initialDrafts);
@@ -95,8 +101,14 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
     const now = Date.now();
     if (now - lastTypingPingRef.current < TYPING_PING_INTERVAL_MS) return;
     lastTypingPingRef.current = now;
-    sendWS({ type: 'typing', parentID: typingParentID, parentType: typingParentType });
-  }, [typingParentID, typingParentType]);
+    const frame: Record<string, string> = {
+      type: 'typing',
+      parentID: typingParentID,
+      parentType: typingParentType,
+    };
+    if (typingThreadRootID) frame.parentMessageID = typingThreadRootID;
+    sendWS(frame);
+  }, [typingParentID, typingParentType, typingThreadRootID]);
 
   // Codepoint cap mirrors the backend rule: the user pastes "🚀🚀🚀…",
   // each emoji is one user-visible char, and we count it as one — not
@@ -158,40 +170,90 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
     }
     if (files.length === 0) return;
     setIsUploading(true);
+
+    // Render a chip for every selected file *before* any network I/O so
+    // the user sees N progress bars immediately instead of one-at-a-time
+    // as each file's SHA / presign call resolves. We track the chip by a
+    // local placeholder id, then swap to the server id when init returns.
+    const tempIDs = files.map((_, i) => `pending-${Date.now()}-${i}-${Math.random().toString(36).slice(2)}`);
+    setDrafts((prev) => [
+      ...prev,
+      ...files.map((file, i) => ({
+        id: tempIDs[i],
+        filename: file.name,
+        contentType: file.type || 'application/octet-stream',
+        size: file.size,
+        localURL: isImageContentType(file.type) ? URL.createObjectURL(file) : undefined,
+        progress: 0,
+      })),
+    ]);
+
+    // Concurrency-capped pool. Promise.all would dispatch all uploads at
+    // once; cap at 4 so we stay polite to the upload endpoint and don't
+    // saturate upstream bandwidth on bulk drops. Per-file failures are
+    // captured (allSettled-style) so one bad file doesn't abort siblings.
+    const POOL = 4;
+    const errors: string[] = [];
+    let cursor = 0;
+    const runOne = async (idx: number) => {
+      const file = files[idx];
+      const tempID = tempIDs[idx];
+      // currentID flips from the temp id to the server-issued id once
+      // init resolves. Progress callbacks use this so they can find the
+      // chip whether or not the swap has happened yet.
+      let currentID = tempID;
+      try {
+        await uploadAttachment(file, {
+          onInit: (init) => {
+            // Swap the temp id for the real one. If the server already
+            // had the bytes (alreadyExists), progress jumps to 1.
+            currentID = init.id;
+            setDrafts((prev) =>
+              prev.map((d) =>
+                d.id === tempID
+                  ? {
+                      ...d,
+                      id: init.id,
+                      filename: init.filename,
+                      contentType: init.contentType,
+                      size: init.size,
+                      progress: init.alreadyExists ? 1 : d.progress ?? 0,
+                    }
+                  : d,
+              ),
+            );
+          },
+          onProgress: (fraction) => {
+            // Match by the live id — temp before init, server-issued after.
+            setDrafts((prev) =>
+              prev.map((d) => (d.id === currentID ? { ...d, progress: fraction } : d)),
+            );
+          },
+        });
+      } catch (err) {
+        errors.push(err instanceof Error ? err.message : 'Upload failed');
+        // Drop the failed chip — keep siblings intact. Match by the
+        // current id, which may be the temp id (init never resolved)
+        // or the server id (init succeeded but the PUT failed).
+        setDrafts((prev) => {
+          const target = prev.find((d) => d.id === currentID);
+          if (target?.localURL) URL.revokeObjectURL(target.localURL);
+          return prev.filter((d) => d.id !== currentID);
+        });
+      }
+    };
+    const worker = async () => {
+      while (true) {
+        const i = cursor++;
+        if (i >= files.length) return;
+        await runOne(i);
+      }
+    };
     try {
-      await Promise.all(
-        files.map(async (file) => {
-          let attachmentID: string | null = null;
-          await uploadAttachment(file, {
-            onInit: (init) => {
-              attachmentID = init.id;
-              setDrafts((prev) => {
-                if (prev.some((d) => d.id === init.id)) return prev;
-                return [
-                  ...prev,
-                  {
-                    id: init.id,
-                    filename: init.filename,
-                    contentType: init.contentType,
-                    size: init.size,
-                    localURL: isImageContentType(file.type) ? URL.createObjectURL(file) : undefined,
-                    progress: init.alreadyExists ? 1 : 0,
-                  },
-                ];
-              });
-            },
-            onProgress: (fraction) => {
-              if (!attachmentID) return;
-              const id = attachmentID;
-              setDrafts((prev) =>
-                prev.map((d) => (d.id === id ? { ...d, progress: fraction } : d)),
-              );
-            },
-          });
-        }),
-      );
-    } catch (err) {
-      setUploadError(err instanceof Error ? err.message : 'Upload failed');
+      await Promise.all(Array.from({ length: Math.min(POOL, files.length) }, worker));
+      if (errors.length > 0) {
+        setUploadError(errors.length === 1 ? errors[0] : `${errors.length} uploads failed: ${errors[0]}`);
+      }
     } finally {
       setIsUploading(false);
     }

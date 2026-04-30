@@ -1,7 +1,9 @@
 package storage
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -11,6 +13,8 @@ import (
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	smithy "github.com/aws/smithy-go"
 )
 
 // S3Config holds configuration for connecting to an S3-compatible service.
@@ -171,6 +175,54 @@ func (c *S3Client) DeleteObject(ctx context.Context, key string) error {
 	})
 	if err != nil {
 		return fmt.Errorf("s3: delete object: %w", err)
+	}
+	return nil
+}
+
+// HeadObject returns true if the given key exists in the bucket. A 404
+// (NotFound / NoSuchKey) is reported as (false, nil); any other error is
+// returned to the caller.
+func (c *S3Client) HeadObject(ctx context.Context, key string) (bool, error) {
+	_, err := c.client.HeadObject(ctx, &s3.HeadObjectInput{
+		Bucket: aws.String(c.bucket),
+		Key:    aws.String(key),
+	})
+	if err == nil {
+		return true, nil
+	}
+	var notFound *types.NotFound
+	if errors.As(err, &notFound) {
+		return false, nil
+	}
+	var noSuchKey *types.NoSuchKey
+	if errors.As(err, &noSuchKey) {
+		return false, nil
+	}
+	// MinIO and some S3-compatible backends surface 404s as a generic
+	// smithy.APIError with code "NotFound" instead of the typed
+	// NotFound shape. Treat that as a miss too.
+	var apiErr smithy.APIError
+	if errors.As(err, &apiErr) {
+		if apiErr.ErrorCode() == "NotFound" || apiErr.ErrorCode() == "NoSuchKey" {
+			return false, nil
+		}
+	}
+	return false, fmt.Errorf("s3: head object: %w", err)
+}
+
+// PutObject uploads body bytes under key with the supplied contentType.
+// Used by the unfurl image proxy (folder `unfurl/`) and any other server-
+// side uploads. S3 lifecycle rules to expire `unfurl/` keys after N days
+// should be configured externally (Terraform / IaC).
+func (c *S3Client) PutObject(ctx context.Context, key, contentType string, body []byte) error {
+	_, err := c.client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket:      aws.String(c.bucket),
+		Key:         aws.String(key),
+		ContentType: aws.String(contentType),
+		Body:        bytes.NewReader(body),
+	})
+	if err != nil {
+		return fmt.Errorf("s3: put object: %w", err)
 	}
 	return nil
 }

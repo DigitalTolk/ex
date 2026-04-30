@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -89,13 +90,23 @@ func keys(m map[string]bool) []string {
 type fakeAttachmentSigner struct {
 	deleted []string
 	delErr  error
+	// presignCalls counts every PresignedGetURL call. The URL it
+	// returns embeds the call number so two URLs for the same key
+	// are *different strings* — exactly the production behaviour
+	// (presigned URLs include a signing timestamp). Tests that want
+	// to verify URL caching assert that the cached URL equals the
+	// FIRST signature, not a freshly-minted one.
+	presignCalls         int
+	presignDownloadCalls int
 }
 
 func (s *fakeAttachmentSigner) PresignedGetURL(_ context.Context, key string, _ time.Duration) (string, error) {
-	return "https://signed.test/" + key, nil
+	s.presignCalls++
+	return fmt.Sprintf("https://signed.test/%s?sig=%d", key, s.presignCalls), nil
 }
 func (s *fakeAttachmentSigner) PresignedDownloadURL(_ context.Context, key, filename string, _ time.Duration) (string, error) {
-	return "https://signed.test/" + key + "?download=" + filename, nil
+	s.presignDownloadCalls++
+	return fmt.Sprintf("https://signed.test/%s?download=%s&sig=%d", key, filename, s.presignDownloadCalls), nil
 }
 func (s *fakeAttachmentSigner) PresignedPutURL(_ context.Context, key string, _ string, _ time.Duration) (string, error) {
 	return "https://upload.test/" + key, nil
@@ -284,6 +295,84 @@ func TestAttachmentService_Get_ResolvesSignedURL(t *testing.T) {
 	}
 	if got.URL == got.DownloadURL {
 		t.Error("download URL should differ from inline URL (different Content-Disposition)")
+	}
+}
+
+// TestAttachmentService_Get_CachesPresignedURL is the regression test for
+// the "images reload too often" bug. Without per-S3-key URL caching,
+// two consecutive Get() calls returned different signed URLs (each
+// embedded a fresh signing timestamp), so the browser image cache
+// missed on every render and re-downloaded the bytes. Assert that two
+// Get() calls within the cache window yield the SAME URL — and that
+// the underlying signer was only called once.
+func TestAttachmentService_Get_CachesPresignedURL(t *testing.T) {
+	storeM := newMockAttachmentStore()
+	signer := &fakeAttachmentSigner{}
+	svc := NewAttachmentService(storeM, signer, newMockPublisher())
+
+	res, _ := svc.CreateUploadURL(context.Background(), "u1", "f.png", "image/png", "h-stable", 1)
+	id := res.Attachment.ID
+
+	first, err := svc.Get(context.Background(), id)
+	if err != nil {
+		t.Fatalf("first get: %v", err)
+	}
+	second, err := svc.Get(context.Background(), id)
+	if err != nil {
+		t.Fatalf("second get: %v", err)
+	}
+
+	if first.URL != second.URL {
+		t.Errorf("URL not cached across consecutive Get() calls:\n  first:  %q\n  second: %q", first.URL, second.URL)
+	}
+	if first.DownloadURL != second.DownloadURL {
+		t.Errorf("DownloadURL not cached across consecutive Get() calls:\n  first:  %q\n  second: %q", first.DownloadURL, second.DownloadURL)
+	}
+	if signer.presignCalls != 1 {
+		t.Errorf("PresignedGetURL called %d times across two Get()s; expected 1 (cached)", signer.presignCalls)
+	}
+	if signer.presignDownloadCalls != 1 {
+		t.Errorf("PresignedDownloadURL called %d times; expected 1 (cached)", signer.presignDownloadCalls)
+	}
+}
+
+// TestAttachmentService_GC_InvalidatesURLCache covers the corner case
+// where an attachment is deleted (last ref dropped or draft removed)
+// and its S3 key would otherwise stay cached. After GC, the cache
+// must drop the entry so a subsequent re-upload of the same key (or
+// a new attachment that recycles it) doesn't render with a stale URL.
+func TestAttachmentService_GC_InvalidatesURLCache(t *testing.T) {
+	storeM := newMockAttachmentStore()
+	signer := &fakeAttachmentSigner{}
+	svc := NewAttachmentService(storeM, signer, newMockPublisher())
+
+	res, _ := svc.CreateUploadURL(context.Background(), "u1", "f.png", "image/png", "h-gc", 1)
+	id := res.Attachment.ID
+	key := res.Attachment.S3Key
+
+	// Prime the cache.
+	if _, err := svc.Get(context.Background(), id); err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if signer.presignCalls != 1 {
+		t.Fatalf("expected 1 sign call after first get, got %d", signer.presignCalls)
+	}
+
+	// Delete the draft — must invalidate the cached URL for that key.
+	if err := svc.DeleteDraft(context.Background(), "u1", id); err != nil {
+		t.Fatalf("delete draft: %v", err)
+	}
+
+	// Forge a fresh sign for the same key. If the cache was correctly
+	// invalidated, the underlying signer is consulted again.
+	if _, err := svc.urlCache.getOrSign(context.Background(), presignedKey{op: "get", key: key},
+		func(ctx context.Context) (string, error) {
+			return signer.PresignedGetURL(ctx, key, AttachmentURLTTL)
+		}); err != nil {
+		t.Fatalf("re-sign: %v", err)
+	}
+	if signer.presignCalls != 2 {
+		t.Errorf("cache invalidation failed: signer called %d times after GC, expected 2", signer.presignCalls)
 	}
 }
 

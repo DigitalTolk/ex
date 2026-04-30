@@ -20,9 +20,10 @@ import (
 // the shape small and JSON-tolerant — unknown fields are ignored so the
 // protocol can grow without breaking older clients.
 type inboundMessage struct {
-	Type           string `json:"type"`
-	ParentID       string `json:"parentID"`
-	ParentType     string `json:"parentType"` // "channel" | "conversation"
+	Type            string `json:"type"`
+	ParentID        string `json:"parentID"`
+	ParentType      string `json:"parentType"`      // "channel" | "conversation"
+	ParentMessageID string `json:"parentMessageID"` // optional — set when typing inside a thread reply
 }
 
 const wsKeepAliveInterval = 30 * time.Second
@@ -255,11 +256,17 @@ func (h *WSHandler) publishTyping(ctx context.Context, userID string, msg inboun
 	default:
 		return
 	}
-	evt, err := events.NewEvent(events.EventTyping, map[string]any{
+	payload := map[string]any{
 		"userID":     userID,
 		"parentID":   msg.ParentID,
 		"parentType": msg.ParentType,
-	})
+	}
+	// Only include parentMessageID when it's set so a non-thread typing
+	// frame stays exactly the same on the wire as before.
+	if msg.ParentMessageID != "" {
+		payload["parentMessageID"] = msg.ParentMessageID
+	}
+	evt, err := events.NewEvent(events.EventTyping, payload)
 	if err != nil {
 		return
 	}

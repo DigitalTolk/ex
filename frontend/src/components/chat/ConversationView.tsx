@@ -8,6 +8,7 @@ import { MessageDropZone } from './MessageDropZone';
 import { MemberList } from './MemberList';
 import { ThreadPanel } from './ThreadPanel';
 import { PinnedPanel } from './PinnedPanel';
+import { NotFoundPage } from '@/pages/NotFoundPage';
 import { FilesPanel } from './FilesPanel';
 import { DMIntro, SelfDMIntro, GroupIntro } from './ConversationIntro';
 import { TypingIndicator } from './TypingIndicator';
@@ -66,7 +67,7 @@ export function ConversationView() {
   const { clearConversationUnread, setActiveConversation } = useUnread();
   const { online } = usePresence();
   const { setActiveParent } = useNotifications();
-  const { data: conversation } = useConversation(id);
+  const { data: conversation, isError: conversationNotFound, isLoading: conversationLoading } = useConversation(id);
   const { mainAnchor, threadAnchor, threadParam, navKey } = useDeepLinkAnchor(id);
   const {
     data,
@@ -172,6 +173,10 @@ export function ConversationView() {
         Select a conversation
       </div>
     );
+  }
+
+  if (conversationNotFound || (!conversationLoading && !conversation)) {
+    return <NotFoundPage resource="conversation" />;
   }
 
   const title = derivedTitle ?? 'Direct Message';
@@ -295,6 +300,7 @@ export function ConversationView() {
           onClose={panels.close}
           userMap={userMap}
           currentUserId={user?.id}
+          onReplyInThread={openThread}
         />
       ) : showFiles ? (
         <FilesPanel

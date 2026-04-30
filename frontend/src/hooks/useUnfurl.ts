@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { apiFetch, ApiError } from '@/lib/api';
+import { apiFetch } from '@/lib/api';
 import { queryKeys } from '@/lib/query-keys';
 
 export interface UnfurlPreview {
@@ -25,9 +25,11 @@ export function useUnfurl(url: string | null) {
           `/api/v1/unfurl?url=${encodeURIComponent(url)}`,
         );
         return preview ?? null;
-      } catch (err) {
-        if (err instanceof ApiError) return null;
-        throw err;
+      } catch {
+        // Any failure — non-2xx, network drop, malformed JSON — is
+        // treated as "no preview". Caller renders nothing rather than
+        // an error state.
+        return null;
       }
     },
     enabled: !!url,

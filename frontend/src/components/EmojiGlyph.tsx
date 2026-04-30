@@ -26,7 +26,7 @@ export function EmojiGlyph({ emoji, customMap, size = 'sm', className = '' }: Em
           src={url}
           alt={emoji}
           title={emoji}
-          className={`inline-block align-text-bottom ${imgCls} ${className}`}
+          className={`inline-block align-middle ${imgCls} ${className}`}
         />
       );
     }

@@ -319,6 +319,21 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, Props>(function Wys
       }
     }
     if (e.key === 'Enter' && !e.shiftKey) {
+      // List- / quote-continuation / exit: if the caret sits in a list
+      // or blockquote context we override the default "Enter submits"
+      // behaviour so users can build a multi-line block inline. Empty
+      // marker line strips the marker and stays in the editor.
+      const blockAction = handleBlockEnter();
+      if (blockAction === 'handled') {
+        e.preventDefault();
+        emitChange();
+        return;
+      }
+      if (blockAction === 'native') {
+        // Inside a real <li> — let the browser create / exit the <li>
+        // for us; do not submit.
+        return;
+      }
       e.preventDefault();
       const md = elRef.current ? htmlToMarkdown(elRef.current) : '';
       onSubmit?.(md);
@@ -340,6 +355,111 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, Props>(function Wys
         return;
       }
     }
+  }
+
+  // Block-prefix patterns we recognise on a typed line. Captures the
+  // marker so we can compute the next prefix ("1. " → "2. "). Quotes
+  // share the same continuation/close behaviour: empty `> ` line on
+  // Enter strips the marker; a non-empty `> hi` line gets `> ` on the
+  // next line.
+  const UL_LINE_RE = /^([-*])\s$/;
+  const OL_LINE_RE = /^(\d+)([.)])\s$/;
+  const QUOTE_LINE_RE = /^>\s$/;
+  const UL_PREFIX_RE = /^([-*])\s/;
+  const OL_PREFIX_RE = /^(\d+)([.)])\s/;
+  const QUOTE_PREFIX_RE = /^>\s/;
+
+  // Inspect the caret's line context and, when the caret is inside a
+  // markdown-style list or blockquote line, either continue the block
+  // or close it. Returns:
+  //   'handled' — we mutated the DOM ourselves, caller must
+  //               preventDefault and emit a change.
+  //   'native'  — caret is inside a real <li>; let the browser handle
+  //               Enter and do NOT submit. Empty trailing <li> we
+  //               manually exit since some browsers don't.
+  //   'pass'    — not in any block, fall through to normal submit.
+  function handleBlockEnter(): 'handled' | 'native' | 'pass' {
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0 || !elRef.current) return 'pass';
+    const range = sel.getRangeAt(0);
+    if (!range.collapsed) return 'pass';
+    if (!elRef.current.contains(range.startContainer)) return 'pass';
+
+    // Real <li> path: walk up looking for an <li>. If the <li> is
+    // empty we explicitly exit the list — older browsers / Safari
+    // don't always do this on Enter, leaving the user stuck.
+    let n: Node | null = range.startContainer;
+    while (n && n !== elRef.current) {
+      if (n.nodeType === Node.ELEMENT_NODE && (n as HTMLElement).tagName.toLowerCase() === 'li') {
+        const li = n as HTMLElement;
+        if ((li.textContent ?? '').trim() === '') {
+          const list = li.parentElement;
+          if (list && (list.tagName === 'UL' || list.tagName === 'OL')) {
+            const after = document.createElement('div');
+            after.appendChild(document.createElement('br'));
+            list.insertAdjacentElement('afterend', after);
+            li.remove();
+            const r = document.createRange();
+            r.setStart(after, 0);
+            r.collapse(true);
+            sel.removeAllRanges();
+            sel.addRange(r);
+            return 'handled';
+          }
+        }
+        return 'native';
+      }
+      n = n.parentNode;
+    }
+
+    // Typed-marker path: only fires when the caret sits in a TEXT_NODE
+    // whose line (back to the previous newline / element start) matches
+    // a known block prefix.
+    if (range.startContainer.nodeType !== Node.TEXT_NODE) return 'pass';
+    const textNode = range.startContainer as Text;
+    const before = (textNode.textContent ?? '').slice(0, range.startOffset);
+    const after = (textNode.textContent ?? '').slice(range.startOffset);
+    const lineStart = before.lastIndexOf('\n') + 1; // 0 when no newline
+    const line = before.slice(lineStart);
+
+    // Empty-marker on this line → strip marker, stay in editor (caller
+    // preventDefaults, suppressing submit).
+    if (UL_LINE_RE.test(line) || OL_LINE_RE.test(line) || QUOTE_LINE_RE.test(line)) {
+      textNode.textContent = before.slice(0, lineStart) + after;
+      const r = document.createRange();
+      r.setStart(textNode, lineStart);
+      r.collapse(true);
+      sel.removeAllRanges();
+      sel.addRange(r);
+      return 'handled';
+    }
+
+    // Continue block: line has content beyond the marker → insert a
+    // newline + next marker at the caret.
+    const ul = line.match(UL_PREFIX_RE);
+    const ol = line.match(OL_PREFIX_RE);
+    const quote = line.match(QUOTE_PREFIX_RE);
+    let prefix: string;
+    if (ul) {
+      prefix = `${ul[1]} `;
+    } else if (ol) {
+      const next = parseInt(ol[1], 10) + 1;
+      prefix = `${next}${ol[2]} `;
+    } else if (quote) {
+      prefix = '> ';
+    } else {
+      return 'pass';
+    }
+    const br = document.createElement('br');
+    const tail = document.createTextNode(prefix);
+    range.insertNode(tail);
+    range.insertNode(br);
+    const r = document.createRange();
+    r.setStartAfter(tail);
+    r.collapse(true);
+    sel.removeAllRanges();
+    sel.addRange(r);
+    return 'handled';
   }
 
   // Wrap the current selection (or insert an empty placeholder) in the

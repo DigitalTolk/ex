@@ -156,4 +156,60 @@ describe('WysiwygEditor', () => {
     ref.current!.applyMark('code');
     expect(el.innerHTML).toContain('<code>');
   });
+
+  it('renders a <blockquote> element in the editor when initial markdown is "> hi"', () => {
+    const { getByLabelText } = render(<WysiwygEditor initialBody="> hi" />);
+    const el = getByLabelText('Message input');
+    // The visible quote bar comes from CSS scoped to .wysiwyg-editor —
+    // here we pin the DOM contract so the styling has something to bind to.
+    expect(el.querySelector('blockquote')).not.toBeNull();
+    expect(el.classList.contains('wysiwyg-editor')).toBe(true);
+  });
+
+  it('Enter on a typed "1. foo" line auto-inserts the next "2. " marker', () => {
+    const onSubmit = vi.fn();
+    const { getByLabelText } = render(
+      <WysiwygEditor onSubmit={onSubmit} initialBody="" />,
+    );
+    const el = getByLabelText('Message input');
+    // Plant a text node with a typed list line and put the caret at the end.
+    const text = document.createTextNode('1. foo');
+    el.innerHTML = '';
+    el.appendChild(text);
+    const range = document.createRange();
+    range.setStart(text, text.length);
+    range.collapse(true);
+    const sel = window.getSelection();
+    sel?.removeAllRanges();
+    sel?.addRange(range);
+
+    fireEvent.keyDown(el, { key: 'Enter' });
+    // No submit — list-continuation handled it.
+    expect(onSubmit).not.toHaveBeenCalled();
+    // A <br> + "2. " was inserted at the caret.
+    expect(el.innerHTML).toContain('<br>');
+    expect(el.textContent).toBe('1. foo2. ');
+  });
+
+  it('Enter on an empty "- " marker line closes the list (strips marker, no submit)', () => {
+    const onSubmit = vi.fn();
+    const { getByLabelText } = render(
+      <WysiwygEditor onSubmit={onSubmit} initialBody="" />,
+    );
+    const el = getByLabelText('Message input');
+    const text = document.createTextNode('- ');
+    el.innerHTML = '';
+    el.appendChild(text);
+    const range = document.createRange();
+    range.setStart(text, text.length);
+    range.collapse(true);
+    const sel = window.getSelection();
+    sel?.removeAllRanges();
+    sel?.addRange(range);
+
+    fireEvent.keyDown(el, { key: 'Enter' });
+    expect(onSubmit).not.toHaveBeenCalled();
+    // Marker removed, line is now empty.
+    expect(el.textContent).toBe('');
+  });
 });

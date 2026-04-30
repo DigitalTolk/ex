@@ -7,7 +7,6 @@ import {
   appendMessageToCache,
   updateMessageInCache,
   removeMessageFromCache,
-  bumpThreadReplyMetadata,
   resyncMessageCache,
   useEditMessage,
   useDeleteMessage,
@@ -384,7 +383,10 @@ describe('cache patching helpers (avoiding v5 walk-forward refetch)', () => {
     expect(result?.pages[0].items.map((m) => m.id)).toEqual(['m-2']);
   });
 
-  it('bumpThreadReplyMetadata increments replyCount and sets recent authors on the parent', () => {
+  it('updateMessageInCache replaces a parent thread root with the server-issued copy', () => {
+    // The backend's IncrementReplyMetadata publishes message.edited
+    // with the authoritative replyCount/lastReplyAt/recentReplyAuthorIDs;
+    // the frontend just substitutes the cached parent.
     const qc = new QueryClient();
     seedCache(qc, ['channelMessages', 'ch-1', null], {
       pages: [{
@@ -394,11 +396,11 @@ describe('cache patching helpers (avoiding v5 walk-forward refetch)', () => {
       }],
       pageParams: [{ kind: 'tail' }],
     });
-    bumpThreadReplyMetadata(qc, 'ch-1', makeMsg({
-      id: 'reply-1',
-      authorID: 'u-b',
-      parentMessageID: 'root',
-      createdAt: '2026-04-30T01:00:00Z',
+    updateMessageInCache(qc, 'ch-1', makeMsg({
+      id: 'root',
+      replyCount: 2,
+      lastReplyAt: '2026-04-30T01:00:00Z',
+      recentReplyAuthorIDs: ['u-b', 'u-a'],
     }));
     const result = qc.getQueryData<InfiniteData<MessageWindow, MessagePageParam>>([
       'channelMessages', 'ch-1', null,
@@ -407,21 +409,6 @@ describe('cache patching helpers (avoiding v5 walk-forward refetch)', () => {
     expect(root?.replyCount).toBe(2);
     expect(root?.lastReplyAt).toBe('2026-04-30T01:00:00Z');
     expect(root?.recentReplyAuthorIDs).toEqual(['u-b', 'u-a']);
-  });
-
-  it('bumpThreadReplyMetadata is a no-op when the parent is not in cache (older page not loaded)', () => {
-    const qc = new QueryClient();
-    seedCache(qc, ['channelMessages', 'ch-1', null], {
-      pages: [{
-        items: [makeMsg({ id: 'unrelated' })],
-        hasMoreOlder: true,
-        hasMoreNewer: false,
-      }],
-      pageParams: [{ kind: 'tail' }],
-    });
-    expect(() =>
-      bumpThreadReplyMetadata(qc, 'ch-1', makeMsg({ id: 'r', parentMessageID: 'missing-root' })),
-    ).not.toThrow();
   });
 
 });

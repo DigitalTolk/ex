@@ -1851,4 +1851,94 @@ describe('MessageList', () => {
       });
     });
   });
+
+  it('stays pinned to the bottom when avatar/inline images finish loading after the initial render', () => {
+    // Regression: opening a fresh channel rendered "scrolled to bottom"
+    // synchronously, but avatars / inline images / unfurl thumbs load
+    // asynchronously and grow the inner container after our first
+    // scrollTop write. A delegated load-event listener on the inner
+    // container catches every img inside the message list — fire load
+    // events on injected <img>s and assert we re-pin.
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrap = (props: Partial<React.ComponentProps<typeof MessageList>>) => (
+      <QueryClientProvider client={qc}>
+        <BrowserRouter>
+          <MessageList {...defaultProps} {...props} />
+        </BrowserRouter>
+      </QueryClientProvider>
+    );
+
+    const pages = [
+      {
+        items: [
+          makeMessage({
+            id: 'm-1',
+            authorID: 'user-1',
+            body: 'hello',
+            createdAt: '2026-04-24T10:30:00Z',
+          }),
+        ],
+      },
+    ];
+
+    const { container } = render(wrap({ pages }));
+    const scroller = container.querySelector('div.overflow-y-auto') as HTMLDivElement;
+    Object.defineProperty(scroller, 'clientHeight', { value: 600, configurable: true });
+    // Initial scroll height — synchronous pin already ran via the
+    // useLayoutEffect on render; emulate the result here so the rest
+    // of the assertions are about post-image-load behavior.
+    Object.defineProperty(scroller, 'scrollHeight', { value: 800, configurable: true });
+    scroller.scrollTop = 800;
+    expect(scroller.scrollTop).toBe(800);
+
+    // Inject an <img> (e.g. an avatar or inline attachment) inside the
+    // inner messages container, simulate its async load, and assert
+    // the scroller re-pins to the grown scrollHeight.
+    const inner = scroller.querySelector('.p-4.space-y-1') as HTMLElement;
+    expect(inner).toBeTruthy();
+    const img = document.createElement('img');
+    inner.appendChild(img);
+
+    Object.defineProperty(scroller, 'scrollHeight', { value: 920, configurable: true });
+    img.dispatchEvent(new Event('load'));
+    expect(scroller.scrollTop).toBe(920);
+
+    // Another image (e.g. an unfurl thumb) loads later — keeps
+    // re-pinning while the user remains at the bottom.
+    Object.defineProperty(scroller, 'scrollHeight', { value: 1200, configurable: true });
+    img.dispatchEvent(new Event('load'));
+    expect(scroller.scrollTop).toBe(1200);
+  });
+
+  it('does NOT re-pin on image load when the user has scrolled up to read older content', () => {
+    // Belt-and-braces: the load-event handler must respect
+    // wasAtBottomRef so a reader scrolled up doesn't get yanked when
+    // an image far above their viewport finishes loading.
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrap = (props: Partial<React.ComponentProps<typeof MessageList>>) => (
+      <QueryClientProvider client={qc}>
+        <BrowserRouter>
+          <MessageList {...defaultProps} {...props} />
+        </BrowserRouter>
+      </QueryClientProvider>
+    );
+    const pages = [{ items: [makeMessage({ id: 'm-1' })] }];
+
+    const { container } = render(wrap({ pages }));
+    const scroller = container.querySelector('div.overflow-y-auto') as HTMLDivElement;
+    Object.defineProperty(scroller, 'clientHeight', { value: 600, configurable: true });
+    Object.defineProperty(scroller, 'scrollHeight', { value: 1500, configurable: true });
+
+    // Reader scrolls up past the 120px "at bottom" window.
+    scroller.scrollTop = 200;
+    scroller.dispatchEvent(new Event('scroll'));
+
+    // An image deep above their viewport finishes loading.
+    const inner = scroller.querySelector('.p-4.space-y-1') as HTMLElement;
+    const img = document.createElement('img');
+    inner.appendChild(img);
+    Object.defineProperty(scroller, 'scrollHeight', { value: 2400, configurable: true });
+    img.dispatchEvent(new Event('load'));
+    expect(scroller.scrollTop).toBe(200);
+  });
 });

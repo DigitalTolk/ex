@@ -193,6 +193,29 @@ func (s *dataMessageStore) ListMessagesAround(ctx context.Context, parentID, _ s
 	return msgs, false, false, err
 }
 
+func (s *dataMessageStore) IncrementReplyMetadata(_ context.Context, parentID, msgID string, replyTime time.Time, replyAuthorID string) (*model.Message, error) {
+	key := parentID + "#" + msgID
+	msg, ok := s.messages[key]
+	if !ok {
+		return nil, store.ErrNotFound
+	}
+	msg.ReplyCount++
+	t := replyTime
+	msg.LastReplyAt = &t
+	authors := []string{replyAuthorID}
+	for _, id := range msg.RecentReplyAuthorIDs {
+		if id == replyAuthorID {
+			continue
+		}
+		authors = append(authors, id)
+		if len(authors) >= 3 {
+			break
+		}
+	}
+	msg.RecentReplyAuthorIDs = authors
+	return msg, nil
+}
+
 type channelHandlerEnv struct {
 	handler     *ChannelHandler
 	channels    *dataChannelStore

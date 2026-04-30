@@ -45,11 +45,23 @@ type AttachmentService struct {
 	signer      AttachmentSigner
 	publisher   Publisher
 	limits      uploadLimits
+	// urlCache memoises presigned GET / download URLs by S3 key for
+	// the cache window so the browser sees the same URL across
+	// renders — without it every signed URL is fresh and the image
+	// cache misses on every fetch.
+	urlCache *presignedURLCache
 }
 
 // NewAttachmentService constructs an AttachmentService.
 func NewAttachmentService(attachments AttachmentStore, signer AttachmentSigner, publisher Publisher) *AttachmentService {
-	return &AttachmentService{attachments: attachments, signer: signer, publisher: publisher}
+	return &AttachmentService{
+		attachments: attachments,
+		signer:      signer,
+		publisher:   publisher,
+		// 20h cache TTL, comfortably shorter than the 24h presigned-URL
+		// validity so a cached URL is always still valid when reused.
+		urlCache: newPresignedURLCache(20 * time.Hour),
+	}
 }
 
 // SetUploadLimits wires the settings-based limit checker. Optional —
@@ -59,7 +71,7 @@ func (s *AttachmentService) SetUploadLimits(l uploadLimits) { s.limits = l }
 
 // AttachmentURLTTL is how long signed GET URLs remain valid. Frontend resolves
 // URLs on demand via the API so this can be relatively short.
-const AttachmentURLTTL = 6 * time.Hour
+const AttachmentURLTTL = 24 * time.Hour
 
 // CreateUploadResult carries the result of a request for an upload URL. When
 // AlreadyExists is true the caller should NOT upload — the attachment was
@@ -122,18 +134,27 @@ func (s *AttachmentService) CreateUploadURL(ctx context.Context, userID, filenam
 	return &CreateUploadResult{Attachment: a, UploadURL: uploadURL}, nil
 }
 
-// Get returns an attachment with a freshly signed GET URL. Used by clients to
-// render an attachment whose previously-signed URL has expired.
+// Get returns an attachment with a signed GET URL. Used by clients to
+// render an attachment. URLs are served from a per-S3-key cache so
+// repeated lookups within the cache window hand out the SAME URL —
+// the browser image cache hits on every subsequent render instead of
+// re-downloading because the signature query string changed.
 func (s *AttachmentService) Get(ctx context.Context, id string) (*model.Attachment, error) {
 	a, err := s.attachments.GetByID(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("attachment: get: %w", err)
 	}
 	if s.signer != nil && a.S3Key != "" {
-		if url, err := s.signer.PresignedGetURL(ctx, a.S3Key, AttachmentURLTTL); err == nil {
+		if url, err := s.urlCache.getOrSign(ctx, presignedKey{op: "get", key: a.S3Key},
+			func(ctx context.Context) (string, error) {
+				return s.signer.PresignedGetURL(ctx, a.S3Key, AttachmentURLTTL)
+			}); err == nil {
 			a.URL = url
 		}
-		if dl, err := s.signer.PresignedDownloadURL(ctx, a.S3Key, a.Filename, AttachmentURLTTL); err == nil {
+		if dl, err := s.urlCache.getOrSign(ctx, presignedKey{op: "download", key: a.S3Key, extra: a.Filename},
+			func(ctx context.Context) (string, error) {
+				return s.signer.PresignedDownloadURL(ctx, a.S3Key, a.Filename, AttachmentURLTTL)
+			}); err == nil {
 			a.DownloadURL = dl
 		}
 	}
@@ -188,6 +209,7 @@ func (s *AttachmentService) RemoveRef(ctx context.Context, attachmentID, message
 		if s.signer != nil && updated.S3Key != "" {
 			_ = s.signer.DeleteObject(ctx, updated.S3Key)
 		}
+		s.urlCache.invalidate(updated.S3Key)
 		_ = s.attachments.Delete(ctx, attachmentID)
 		events.Publish(ctx, s.publisher, pubsub.GlobalChannelEvents(), events.EventAttachmentDeleted, map[string]any{
 			"id": attachmentID,
@@ -213,6 +235,7 @@ func (s *AttachmentService) DeleteDraft(ctx context.Context, userID, attachmentI
 	if s.signer != nil && a.S3Key != "" {
 		_ = s.signer.DeleteObject(ctx, a.S3Key)
 	}
+	s.urlCache.invalidate(a.S3Key)
 	if err := s.attachments.Delete(ctx, attachmentID); err != nil {
 		return fmt.Errorf("attachment: delete: %w", err)
 	}

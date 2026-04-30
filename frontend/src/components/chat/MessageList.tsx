@@ -245,6 +245,31 @@ export function MessageList({
     [],
   );
 
+  // Backup for the bottom-stick RO: late-loading <img> elements
+  // (avatars, inline attachments, unfurl thumbs) finish at unpredictable
+  // moments. The ResizeObserver above handles most of these, but image
+  // load events are themselves the most reliable signal that "this
+  // image's box just grew" — capture them at the inner container so a
+  // single delegated listener covers every img inside the message list.
+  // Gated by wasAtBottomRef so a reader scrolled up doesn't get yanked
+  // when an image far above their viewport finishes loading. Skipped
+  // in deep-link mode for the same reason as the RO.
+  useEffect(() => {
+    const el = scrollRef.current;
+    const inner = innerRef.current;
+    if (!el || !inner) return;
+    if (anchorMsgId) return;
+    const onLoad = (e: Event) => {
+      const target = e.target as HTMLElement | null;
+      if (!target || target.tagName !== 'IMG') return;
+      if (!wasAtBottomRef.current) return;
+      el.scrollTop = el.scrollHeight;
+    };
+    // useCapture=true so img load events (which don't bubble) reach us.
+    inner.addEventListener('load', onLoad, true);
+    return () => inner.removeEventListener('load', onLoad, true);
+  }, [anchorMsgId, wasAtBottomRef]);
+
   // Scroll anchoring: track the top-most visible message on every
   // scroll. The bottom-stick RO above will use this to preserve
   // reading position when the scroller's WIDTH changes (panel toggle,

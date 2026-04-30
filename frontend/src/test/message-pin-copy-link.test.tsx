@@ -95,6 +95,22 @@ describe('MessageItem — pin and copy-link actions', () => {
     expect(link).toMatch(/\/channel\/general#msg-msg-1$/);
   });
 
+  it('Copy link of a thread reply includes ?thread=ROOT so it opens the thread on load', async () => {
+    // The host view only auto-opens the thread panel when ?thread=ROOT
+    // is present, so a bare hash URL would scroll to the reply but
+    // leave the thread closed.
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.assign(navigator, {
+      clipboard: { writeText },
+    });
+
+    renderItem({ id: 'reply-1', parentMessageID: 'root-1' });
+    fireEvent.click(screen.getByLabelText('Copy link to message'));
+    await waitFor(() => expect(writeText).toHaveBeenCalled());
+    const link = writeText.mock.calls[0][0] as string;
+    expect(link).toMatch(/\/channel\/general\?thread=root-1#msg-reply-1$/);
+  });
+
   it('renders a stable id="msg-{id}" anchor for the deep link target', () => {
     renderItem();
     expect(document.getElementById('msg-msg-1')).not.toBeNull();
