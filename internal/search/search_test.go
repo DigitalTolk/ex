@@ -344,3 +344,270 @@ func TestExtractTagToken(t *testing.T) {
 		t.Error("standalone # should not be treated as a tag")
 	}
 }
+
+func TestNormalizeFuzzy(t *testing.T) {
+	cases := []struct {
+		in, want string
+	}{
+		// User-reported case: emphasis-elongation collapsed so the
+		// query lines up with the indexed term.
+		{"Noiceeee", "Noice"},
+		// Single trailing emphasis run.
+		{"soooo", "so"},
+		// Multiple runs in one word.
+		{"yessssnoooo", "yesno"},
+		// Legitimate doubles preserved.
+		{"letter", "letter"},
+		{"happy", "happy"},
+		{"book", "book"},
+		// Empty / short inputs.
+		{"", ""},
+		{"a", "a"},
+		{"aa", "aa"},
+		// Exactly 3 collapses to 1.
+		{"aaa", "a"},
+		// Mixed case is preserved.
+		{"NOoooo", "NOo"},
+		// Whitespace untouched.
+		{"hi    there", "hi there"},
+	}
+	for _, c := range cases {
+		if got := normalizeFuzzy(c.in); got != c.want {
+			t.Errorf("normalizeFuzzy(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+func TestService_Messages_NoiceeeeMatchesNoice(t *testing.T) {
+	// The user-facing fuzzy contract: searching "Noiceeee" must reach
+	// OpenSearch with a query body that allows the index entry "Noice"
+	// to match. We verify two things:
+	//   1. The query string sent has been normalized to "Noice" so a
+	//      doc storing "Noice" is reachable via standard analysis.
+	//   2. fuzziness=AUTO is set so 1–2 edit typos also match.
+	r := &stubRunner{}
+	svc := &Service{r: r}
+	if _, err := svc.Messages(context.Background(), MessageQuery{
+		Q: "Noiceeee", AllowedParentIDs: []string{"ch-1"}, Limit: 10,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	body := r.called.body.(map[string]any)
+	must := body["query"].(map[string]any)["bool"].(map[string]any)["must"].([]any)
+	match := must[0].(map[string]any)["match"].(map[string]any)["body"].(map[string]any)
+	if match["query"] != "Noice" {
+		t.Errorf("normalized query = %v, want %q", match["query"], "Noice")
+	}
+	if match["fuzziness"] != "AUTO" {
+		t.Errorf("fuzziness = %v, want AUTO", match["fuzziness"])
+	}
+}
+
+func TestService_Users_FuzzyMatchEmitsAutoFuzziness(t *testing.T) {
+	r := &stubRunner{}
+	svc := &Service{r: r}
+	if _, err := svc.Users(context.Background(), "aliceeeee", 5); err != nil {
+		t.Fatal(err)
+	}
+	mm := r.called.body.(map[string]any)["query"].(map[string]any)["multi_match"].(map[string]any)
+	if mm["query"] != "alice" {
+		t.Errorf("normalized query = %v, want %q", mm["query"], "alice")
+	}
+	if mm["fuzziness"] != "AUTO" {
+		t.Errorf("fuzziness = %v, want AUTO", mm["fuzziness"])
+	}
+}
+
+func TestService_Channels_FuzzyMatchEmitsAutoFuzziness(t *testing.T) {
+	r := &stubRunner{}
+	svc := &Service{r: r}
+	if _, err := svc.Channels(context.Background(), "generaaaal", 10); err != nil {
+		t.Fatal(err)
+	}
+	must := r.called.body.(map[string]any)["query"].(map[string]any)["bool"].(map[string]any)["must"].([]any)
+	mm := must[0].(map[string]any)["multi_match"].(map[string]any)
+	if mm["query"] != "general" {
+		t.Errorf("normalized query = %v, want %q", mm["query"], "general")
+	}
+	if mm["fuzziness"] != "AUTO" {
+		t.Errorf("fuzziness = %v, want AUTO", mm["fuzziness"])
+	}
+}
+
+func TestService_Files_FuzzyFilenameMatch(t *testing.T) {
+	r := &stubRunner{}
+	svc := &Service{r: r}
+	if _, err := svc.Files(context.Background(), MessageQuery{
+		Q: "reportttt", AllowedParentIDs: []string{"ch-1"}, Limit: 5,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	body := r.called.body.(map[string]any)
+	must := body["query"].(map[string]any)["bool"].(map[string]any)["must"].([]any)
+	match := must[0].(map[string]any)["match"].(map[string]any)["filename"].(map[string]any)
+	if match["query"] != "report" {
+		t.Errorf("normalized filename query = %v, want %q", match["query"], "report")
+	}
+	if match["fuzziness"] != "AUTO" {
+		t.Errorf("fuzziness = %v, want AUTO", match["fuzziness"])
+	}
+}
+
+func TestHasWildcard(t *testing.T) {
+	cases := []struct {
+		in   string
+		want bool
+	}{
+		{"plain", false},
+		{"Noice*", true},
+		{"a?b", true},
+		{"", false},
+		{"*", true},
+	}
+	for _, c := range cases {
+		if got := hasWildcard(c.in); got != c.want {
+			t.Errorf("hasWildcard(%q) = %v, want %v", c.in, got, c.want)
+		}
+	}
+}
+
+func TestService_Messages_WildcardRoutesToSimpleQueryString(t *testing.T) {
+	// User-facing wildcard contract: "Noice*" must reach OpenSearch
+	// as a prefix-search shape so docs like "Noice", "Noiceparty",
+	// "Noice meeting" all match. We use simple_query_string because
+	// it's permissive (no syntax errors on user input) and supports
+	// `*`/`?` natively without dropping field weights.
+	r := &stubRunner{}
+	svc := &Service{r: r}
+	if _, err := svc.Messages(context.Background(), MessageQuery{
+		Q: "Noice*", AllowedParentIDs: []string{"ch-1"}, Limit: 10,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	body := r.called.body.(map[string]any)
+	must := body["query"].(map[string]any)["bool"].(map[string]any)["must"].([]any)
+	sqs, ok := must[0].(map[string]any)["simple_query_string"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected simple_query_string for wildcard query, got %v", must[0])
+	}
+	if sqs["query"] != "Noice*" {
+		t.Errorf("query = %v, want %q", sqs["query"], "Noice*")
+	}
+	fields := sqs["fields"].([]string)
+	if len(fields) != 1 || fields[0] != "body" {
+		t.Errorf("fields = %v, want [body]", fields)
+	}
+	if sqs["default_operator"] != "AND" {
+		t.Errorf("default_operator = %v, want AND", sqs["default_operator"])
+	}
+}
+
+func TestService_Users_WildcardRoutesToSimpleQueryString(t *testing.T) {
+	r := &stubRunner{}
+	svc := &Service{r: r}
+	if _, err := svc.Users(context.Background(), "ali*", 10); err != nil {
+		t.Fatal(err)
+	}
+	sqs, ok := r.called.body.(map[string]any)["query"].(map[string]any)["simple_query_string"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected simple_query_string at top level for wildcard user search")
+	}
+	if sqs["query"] != "ali*" {
+		t.Errorf("query = %v, want %q", sqs["query"], "ali*")
+	}
+	fields := sqs["fields"].([]string)
+	if len(fields) != 2 || fields[0] != "displayName^3" || fields[1] != "email" {
+		t.Errorf("fields = %v, want [displayName^3 email]", fields)
+	}
+}
+
+func TestService_Channels_WildcardRoutesToSimpleQueryString(t *testing.T) {
+	r := &stubRunner{}
+	svc := &Service{r: r}
+	if _, err := svc.Channels(context.Background(), "gen*", 10); err != nil {
+		t.Fatal(err)
+	}
+	body := r.called.body.(map[string]any)
+	bool_ := body["query"].(map[string]any)["bool"].(map[string]any)
+	must := bool_["must"].([]any)
+	sqs, ok := must[0].(map[string]any)["simple_query_string"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected simple_query_string in must clause for wildcard channel search")
+	}
+	if sqs["query"] != "gen*" {
+		t.Errorf("query = %v", sqs["query"])
+	}
+	// archived=true exclusion still applies.
+	mustNot := bool_["must_not"].([]any)
+	if len(mustNot) != 1 {
+		t.Errorf("must_not = %v, want archived filter", mustNot)
+	}
+}
+
+func TestService_Files_WildcardRoutesToSimpleQueryString(t *testing.T) {
+	r := &stubRunner{}
+	svc := &Service{r: r}
+	if _, err := svc.Files(context.Background(), MessageQuery{
+		Q: "rep*", AllowedParentIDs: []string{"ch-1"}, Limit: 5,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	body := r.called.body.(map[string]any)
+	must := body["query"].(map[string]any)["bool"].(map[string]any)["must"].([]any)
+	sqs, ok := must[0].(map[string]any)["simple_query_string"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected simple_query_string for wildcard file search")
+	}
+	if sqs["query"] != "rep*" {
+		t.Errorf("query = %v", sqs["query"])
+	}
+	if sqs["fields"].([]string)[0] != "filename" {
+		t.Errorf("fields = %v", sqs["fields"])
+	}
+}
+
+func TestService_Messages_WildcardCombinedWithElongation(t *testing.T) {
+	// "Noiceeee*" → normalized "Noice*" before reaching OpenSearch,
+	// so the prefix is the cleaned-up form, not the elongated typo.
+	r := &stubRunner{}
+	svc := &Service{r: r}
+	if _, err := svc.Messages(context.Background(), MessageQuery{
+		Q: "Noiceeee*", AllowedParentIDs: []string{"ch-1"}, Limit: 10,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	must := r.called.body.(map[string]any)["query"].(map[string]any)["bool"].(map[string]any)["must"].([]any)
+	sqs := must[0].(map[string]any)["simple_query_string"].(map[string]any)
+	if sqs["query"] != "Noice*" {
+		t.Errorf("normalized wildcard query = %v, want %q", sqs["query"], "Noice*")
+	}
+}
+
+func TestService_Messages_HashtagBranchKeepsExactTagButFuzzyBody(t *testing.T) {
+	// Tag tokens are exact-match (`tags` is a `keyword` field). The
+	// fallback body match alongside the term must still benefit from
+	// fuzzy matching though, so a typed "#bug fixxxx" still finds
+	// "fix" hits next to the exact #bug tag hits.
+	r := &stubRunner{}
+	svc := &Service{r: r}
+	if _, err := svc.Messages(context.Background(), MessageQuery{
+		Q: "#bug fixxxx", AllowedParentIDs: []string{"ch-1"}, Limit: 10,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	body := r.called.body.(map[string]any)
+	must := body["query"].(map[string]any)["bool"].(map[string]any)["must"].([]any)
+	bool_ := must[0].(map[string]any)["bool"].(map[string]any)
+	should := bool_["should"].([]any)
+	tagTerm := should[0].(map[string]any)["term"].(map[string]any)["tags"]
+	if tagTerm != "bug" {
+		t.Errorf("tag term = %v, want %q", tagTerm, "bug")
+	}
+	bodyMatch := should[1].(map[string]any)["match"].(map[string]any)["body"].(map[string]any)
+	if bodyMatch["query"] != "#bug fix" {
+		t.Errorf("normalized body query = %v, want %q", bodyMatch["query"], "#bug fix")
+	}
+	if bodyMatch["fuzziness"] != "AUTO" {
+		t.Errorf("fuzziness = %v, want AUTO", bodyMatch["fuzziness"])
+	}
+}

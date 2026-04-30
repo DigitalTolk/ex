@@ -67,19 +67,13 @@ func NewService(c *Client) Searcher {
 
 // Users runs a multi-field match against displayName + email.
 func (s *Service) Users(ctx context.Context, q string, limit int) (*SearchResult, error) {
-	q = strings.TrimSpace(q)
+	q = normalizeFuzzy(strings.TrimSpace(q))
 	if q == "" {
 		return &SearchResult{Hits: []SearchHit{}}, nil
 	}
 	body := map[string]any{
-		"size": clampLimit(limit),
-		"query": map[string]any{
-			"multi_match": map[string]any{
-				"query":  q,
-				"fields": []string{"displayName^3", "email"},
-				"type":   "best_fields",
-			},
-		},
+		"size":  clampLimit(limit),
+		"query": fieldMust(q, "displayName^3", "email"),
 	}
 	return s.r.Search(ctx, IndexUsers, body)
 }
@@ -87,7 +81,7 @@ func (s *Service) Users(ctx context.Context, q string, limit int) (*SearchResult
 // Channels matches name (boosted) + description, with a filter that
 // excludes archived channels.
 func (s *Service) Channels(ctx context.Context, q string, limit int) (*SearchResult, error) {
-	q = strings.TrimSpace(q)
+	q = normalizeFuzzy(strings.TrimSpace(q))
 	if q == "" {
 		return &SearchResult{Hits: []SearchHit{}}, nil
 	}
@@ -95,15 +89,7 @@ func (s *Service) Channels(ctx context.Context, q string, limit int) (*SearchRes
 		"size": clampLimit(limit),
 		"query": map[string]any{
 			"bool": map[string]any{
-				"must": []any{
-					map[string]any{
-						"multi_match": map[string]any{
-							"query":  q,
-							"fields": []string{"name^3", "description"},
-							"type":   "best_fields",
-						},
-					},
-				},
+				"must": []any{fieldMust(q, "name^3", "description")},
 				"must_not": []any{
 					map[string]any{"term": map[string]any{"archived": true}},
 				},
@@ -120,44 +106,40 @@ func (s *Service) Channels(ctx context.Context, q string, limit int) (*SearchRes
 // field for exact-match boost. Empty `q` is allowed when `from` or
 // `in` is set — "all messages by user X" is a useful query.
 func (s *Service) Messages(ctx context.Context, opts MessageQuery) (*SearchResult, error) {
-	q := strings.TrimSpace(opts.Q)
+	rawQ := strings.TrimSpace(opts.Q)
 	if len(opts.AllowedParentIDs) == 0 {
 		return &SearchResult{Hits: []SearchHit{}}, nil
 	}
-	if q == "" && opts.FromUserID == "" && opts.InParentID == "" {
+	if rawQ == "" && opts.FromUserID == "" && opts.InParentID == "" {
 		return &SearchResult{Hits: []SearchHit{}}, nil
 	}
-	must := messageMust(q)
+	must := messageMust(rawQ)
 	return s.r.Search(ctx, IndexMessages, buildMessageBody(must, opts))
 }
 
 // messageMust builds the OpenSearch `must` clause for a body search.
-// Hashtag queries route to the keyword `tags` field (exact match);
-// otherwise we run an AND match against the body. An empty query
-// becomes match_all so filter-only searches ("all from user X") work.
+// Hashtag queries route to the keyword `tags` field (exact match — no
+// fuzziness, no normalization). Wildcards in the query (`*` / `?`)
+// route to a simple_query_string so users can prefix-search ("Noice*").
+// Otherwise a fuzzy AND match against the body, with runs of 3+
+// identical characters collapsed so "Noiceeee" matches "Noice".
 func messageMust(q string) any {
 	if q == "" {
 		return map[string]any{"match_all": map[string]any{}}
 	}
+	norm := normalizeFuzzy(q)
 	if tag := extractTagToken(q); tag != "" {
 		return map[string]any{
 			"bool": map[string]any{
 				"should": []any{
 					map[string]any{"term": map[string]any{"tags": tag}},
-					map[string]any{"match": map[string]any{"body": q}},
+					fieldMust(norm, "body"),
 				},
 				"minimum_should_match": 1,
 			},
 		}
 	}
-	return map[string]any{
-		"match": map[string]any{
-			"body": map[string]any{
-				"query":    q,
-				"operator": "and",
-			},
-		},
-	}
+	return fieldMust(norm, "body")
 }
 
 // Files queries the dedicated ex_files index. RBAC re-uses the same
@@ -183,14 +165,7 @@ func (s *Service) Files(ctx context.Context, opts MessageQuery) (*SearchResult, 
 	}
 	var fileMust any = map[string]any{"match_all": map[string]any{}}
 	if q != "" {
-		fileMust = map[string]any{
-			"match": map[string]any{
-				"filename": map[string]any{
-					"query":    q,
-					"operator": "and",
-				},
-			},
-		}
+		fileMust = fieldMust(normalizeFuzzy(q), "filename")
 	}
 	body := map[string]any{
 		"size": clampLimit(opts.Limit),
@@ -310,4 +285,79 @@ func stringSliceToAny(in []string) []any {
 		out[i] = s
 	}
 	return out
+}
+
+// hasWildcard returns true if the query contains a wildcard character
+// understood by simple_query_string (`*` for any sequence, `?` for one
+// character). Used to route wildcard queries through a different
+// OpenSearch query shape than the standard fuzzy match.
+func hasWildcard(q string) bool {
+	return strings.ContainsAny(q, "*?")
+}
+
+// fieldMust builds the OpenSearch `must` clause for one or more text
+// fields. Plain queries use `match` (one field) or `multi_match` (many)
+// with fuzziness=AUTO; queries containing `*`/`?` route to
+// `simple_query_string` so users can prefix-search ("Noice*"). All
+// paths assume `q` has already been normalized for elongation.
+func fieldMust(q string, fields ...string) any {
+	if hasWildcard(q) {
+		return map[string]any{
+			"simple_query_string": map[string]any{
+				"query":            q,
+				"fields":           fields,
+				"default_operator": "AND",
+			},
+		}
+	}
+	if len(fields) == 1 {
+		return map[string]any{
+			"match": map[string]any{
+				fields[0]: map[string]any{
+					"query":     q,
+					"operator":  "and",
+					"fuzziness": "AUTO",
+				},
+			},
+		}
+	}
+	return map[string]any{
+		"multi_match": map[string]any{
+			"query":     q,
+			"fields":    fields,
+			"type":      "best_fields",
+			"fuzziness": "AUTO",
+		},
+	}
+}
+
+// normalizeFuzzy collapses runs of 3+ identical characters in the
+// query to a single character, so emphasis-spelling like "Noiceeee"
+// matches "Noice". Legitimate doubles ("letter", "happy") stay
+// unchanged. Combined with `fuzziness: "AUTO"` on the match query,
+// this gives the searcher both elongation tolerance and 1–2 edit
+// typo tolerance.
+//
+// Mirror in frontend/src/lib/fuzzy.ts — keep both implementations
+// behaviourally identical so client- and server-side filters agree.
+func normalizeFuzzy(s string) string {
+	if s == "" {
+		return ""
+	}
+	runes := []rune(s)
+	out := make([]rune, 0, len(runes))
+	for i := 0; i < len(runes); {
+		c := runes[i]
+		j := i + 1
+		for j < len(runes) && runes[j] == c {
+			j++
+		}
+		if j-i >= 3 {
+			out = append(out, c)
+		} else {
+			out = append(out, runes[i:j]...)
+		}
+		i = j
+	}
+	return string(out)
 }

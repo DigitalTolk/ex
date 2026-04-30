@@ -1,7 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiFetch } from '@/lib/api';
 import { queryKeys } from '@/lib/query-keys';
-import type { UserConversation, Conversation } from '@/types';
+import type { UserConversation, Conversation, User } from '@/types';
 
 export function useUserConversations() {
   return useQuery({
@@ -46,5 +46,19 @@ export function useSearchUsers(query: string) {
         `/api/v1/users?q=${encodeURIComponent(query)}`,
       ),
     enabled: query.length >= 2,
+  });
+}
+
+// useAllUsers loads the entire roster into the React Query cache so
+// the mention popup can filter client-side without a per-keystroke
+// round-trip. `?all=true` flips the handler into the
+// paginate-internally-and-return-everything path. The list mutates
+// rarely (joins/leaves, profile edits); a 5-minute stale time keeps
+// it fresh enough for the UX without thrashing the network.
+export function useAllUsers() {
+  return useQuery({
+    queryKey: queryKeys.allUsers(),
+    queryFn: () => apiFetch<User[]>('/api/v1/users?all=true'),
+    staleTime: 5 * 60 * 1000,
   });
 }

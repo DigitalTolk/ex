@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { COMMON_EMOJI_SHORTCODES } from '@/lib/emoji-shortcodes';
 import { useEmojis } from '@/hooks/useEmoji';
 import { EmojiGlyph } from '@/components/EmojiGlyph';
+import { fuzzyMatch } from '@/lib/fuzzy';
 
 // EmojiSuggestion is what the editor inserts. Custom emojis carry an
 // imageURL so the popup row can preview them; standard ones use the
@@ -26,18 +27,14 @@ export function EmojiAutocomplete({ query, anchorRect, onPick, onDismiss }: Prop
   const [active, setActive] = useState(0);
 
   const items: EmojiSuggestion[] = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return [];
+    if (!query.trim()) return [];
     const customMatches = (customEmojis ?? [])
-      .filter((e) => e.name.toLowerCase().includes(q))
+      .filter((e) => fuzzyMatch(query, e.name))
       .slice(0, MAX_SUGGESTIONS)
       .map((e): EmojiSuggestion => ({ kind: 'custom', name: e.name, imageURL: e.imageURL }));
     const remaining = MAX_SUGGESTIONS - customMatches.length;
     const standardMatches = COMMON_EMOJI_SHORTCODES
-      .filter((e) =>
-        e.name.toLowerCase().includes(q) ||
-        (e.keywords ?? []).some((k) => k.toLowerCase().includes(q)),
-      )
+      .filter((e) => fuzzyMatch(query, e.name, ...(e.keywords ?? [])))
       .slice(0, Math.max(0, remaining))
       .map((e): EmojiSuggestion => ({ kind: 'standard', name: e.name, unicode: e.unicode }));
     return [...customMatches, ...standardMatches];

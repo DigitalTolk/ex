@@ -59,6 +59,18 @@ function typeInto(editor: HTMLElement, text: string) {
 describe('WysiwygEditor — mention integration', () => {
   beforeEach(() => {
     apiFetchMock.mockReset();
+    // Default: any /api/v1/users fetch (mention popup roster, search,
+    // etc.) returns a small roster. Per-test calls to mockResolvedValue*
+    // override this for specific assertions.
+    apiFetchMock.mockImplementation((url: unknown) => {
+      if (typeof url === 'string' && url.startsWith('/api/v1/users')) {
+        return Promise.resolve([
+          { id: 'u-1', email: 'alice@example.com', displayName: 'Alice' },
+          { id: 'u-2', email: 'bob@example.com', displayName: 'Bob' },
+        ]);
+      }
+      return Promise.resolve([]);
+    });
   });
 
   it('opens the mention popover when the user types @', async () => {
@@ -127,11 +139,14 @@ describe('WysiwygEditor — mention integration', () => {
       typeInto(editor, '@al');
     });
 
-    // Wait for Alice's row to appear in the suggestion list.
+    // Wait for Alice's row to appear in the suggestion list. User
+    // rows in the new mention popup show the bare display name (the
+    // avatar identifies them as a user); only @all/@here have a
+    // leading @ in the row label.
     let aliceOpt: HTMLElement | undefined;
     await waitFor(() => {
       const opts = screen.getAllByTestId('mention-option');
-      aliceOpt = opts.find((o) => o.textContent?.startsWith('@Alice'));
+      aliceOpt = opts.find((o) => o.textContent?.includes('Alice'));
       expect(aliceOpt).toBeDefined();
     });
 

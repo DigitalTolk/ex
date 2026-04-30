@@ -8,6 +8,7 @@ export const queryKeys = {
   usersBatch: (sortedIDs?: readonly string[]) =>
     sortedIDs === undefined ? (['users-batch'] as const) : (['users-batch', sortedIDs] as const),
   searchUsers: (query: string) => ['searchUsers', query] as const,
+  allUsers: () => ['allUsers'] as const,
 
   // Workspace
   workspaceSettings: () => ['workspace-settings'] as const,

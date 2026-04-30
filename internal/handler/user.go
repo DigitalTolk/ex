@@ -1,12 +1,14 @@
 package handler
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"time"
 
 	"github.com/DigitalTolk/ex/internal/middleware"
 	"github.com/DigitalTolk/ex/internal/model"
+	"github.com/DigitalTolk/ex/internal/paginate"
 	"github.com/DigitalTolk/ex/internal/service"
 	"github.com/DigitalTolk/ex/internal/storage"
 	"github.com/DigitalTolk/ex/internal/store"
@@ -148,8 +150,18 @@ func (h *UserHandler) BatchGetUsers(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, result)
 }
 
+// listAllMaxRounds caps the inner pagination loop served by
+// ListUsers's `?all=true` mode so a misbehaving backend (or a wildly
+// large workspace) can't pin the request indefinitely. 200 rounds *
+// 500 users = up to 100k users — well above any realistic team size,
+// short enough to fail fast if something is wrong.
+const listAllMaxRounds = 200
+const listAllPageSize = 500
+
 // ListUsers returns a paginated list of users. If the "q" query parameter is
 // provided, it searches users by display name or email prefix instead.
+// `?all=true` returns the whole roster by paginating internally — used
+// by the mention popup which caches the list client-side.
 func (h *UserHandler) ListUsers(w http.ResponseWriter, r *http.Request) {
 	q := queryParam(r, "q", "")
 	if q != "" {
@@ -162,6 +174,32 @@ func (h *UserHandler) ListUsers(w http.ResponseWriter, r *http.Request) {
 			users = []*model.User{}
 		}
 		writeJSON(w, http.StatusOK, users)
+		return
+	}
+
+	if queryParam(r, "all", "") == "true" {
+		users, err := paginate.All(r.Context(), func(ctx context.Context, cursor string) ([]*model.User, string, error) {
+			return h.userSvc.List(ctx, listAllPageSize, cursor)
+		}, listAllMaxRounds)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "list_error", err.Error())
+			return
+		}
+		// Project to the same limited shape BatchGetUsers returns to
+		// non-admins, plus email (mention popup matches against it).
+		// systemRole / lastSeenAt / authProvider are admin-only fields
+		// and have no business in a roster fetched by every member.
+		out := make([]JSON, 0, len(users))
+		for _, u := range users {
+			out = append(out, JSON{
+				"id":          u.ID,
+				"displayName": u.DisplayName,
+				"email":       u.Email,
+				"avatarURL":   u.AvatarURL,
+				"status":      u.Status,
+			})
+		}
+		writeJSON(w, http.StatusOK, out)
 		return
 	}
 
