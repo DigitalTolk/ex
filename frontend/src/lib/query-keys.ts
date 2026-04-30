@@ -1,11 +1,6 @@
-// Centralized React Query key factory. Every cache key in the app
-// originates here so we have one place to update shapes, audit
-// invalidations, and enforce typed parameters.
-//
-// All keys are returned `as const` so partial-match calls
-// (`invalidateQueries({ queryKey: queryKeys.channelMessages(id) })`)
-// keep working even when the underlying query was created with the
-// fuller key (e.g. with a deep-link anchor segment).
+// Centralized React Query key factory. Keys are returned `as const`
+// so partial-match invalidations work even when the underlying query
+// was created with a fuller key (e.g. a deep-link anchor segment).
 
 export const queryKeys = {
   // Auth / users
@@ -33,8 +28,9 @@ export const queryKeys = {
   userConversations: () => ['userConversations'] as const,
   conversation: (conversationId: string) => ['conversation', conversationId] as const,
 
-  // Messages — the third segment is the deep-link anchor (null in
-  // tail mode). Callers omit it for partial-match invalidations.
+  // Messages — anchor=null means tail mode. The *All variants drop
+  // the anchor segment for partial-match invalidations across all
+  // anchor variants.
   channelMessages: (channelId: string, anchor: string | null = null) =>
     ['channelMessages', channelId, anchor] as const,
   channelMessagesAll: (channelId: string) => ['channelMessages', channelId] as const,

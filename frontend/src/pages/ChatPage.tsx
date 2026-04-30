@@ -13,6 +13,7 @@ import { slugify } from '@/lib/format';
 import {
   appendMessageToCache,
   bumpThreadReplyMetadata,
+  invalidateThreadBothScopes,
   removeMessageFromCache,
   resyncMessageCache,
   updateMessageInCache,
@@ -73,8 +74,7 @@ export default function ChatPage() {
       }
       // Thread queries are non-infinite — invalidation is safe.
       if (parentMessageID) {
-        queryClient.invalidateQueries({ queryKey: queryKeys.thread(`channels/${parentID}`, parentMessageID) });
-        queryClient.invalidateQueries({ queryKey: queryKeys.thread(`conversations/${parentID}`, parentMessageID) });
+        invalidateThreadBothScopes(queryClient, parentID, parentMessageID);
         queryClient.invalidateQueries({ queryKey: queryKeys.userThreads() });
       }
     },
@@ -83,18 +83,14 @@ export default function ChatPage() {
       if (!msg) return;
       const { parentID, parentMessageID, id } = msg;
       updateMessageInCache(queryClient, parentID, msg);
-      const threadRoot = parentMessageID || id;
-      queryClient.invalidateQueries({ queryKey: queryKeys.thread(`channels/${parentID}`, threadRoot) });
-      queryClient.invalidateQueries({ queryKey: queryKeys.thread(`conversations/${parentID}`, threadRoot) });
+      invalidateThreadBothScopes(queryClient, parentID, parentMessageID || id);
     },
     onMessageDeleted: (data: unknown) => {
       const msg = parseMessage(data);
       if (!msg) return;
       const { parentID, parentMessageID, id } = msg;
       removeMessageFromCache(queryClient, parentID, id);
-      const threadRoot = parentMessageID || id;
-      queryClient.invalidateQueries({ queryKey: queryKeys.thread(`channels/${parentID}`, threadRoot) });
-      queryClient.invalidateQueries({ queryKey: queryKeys.thread(`conversations/${parentID}`, threadRoot) });
+      invalidateThreadBothScopes(queryClient, parentID, parentMessageID || id);
       // /threads page reads body + replyCount via the userThreads list;
       // a deletion can change either, so refresh the list too.
       queryClient.invalidateQueries({ queryKey: queryKeys.userThreads() });

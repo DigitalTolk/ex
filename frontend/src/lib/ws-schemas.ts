@@ -1,18 +1,16 @@
 import { z } from 'zod';
 import type { Message } from '@/types';
 
-// Zod schemas for WebSocket payloads. Server is trusted, but a missing
-// or typo'd field — or a payload of a different event type misrouted
-// to the wrong handler — must not silently feed garbage into the cache
-// (e.g. an "appendMessageToCache" call with no id would corrupt every
-// page's items).
-//
-// Each schema validates only the fields the handler actually reads;
-// extras pass through untouched (default zod object behavior). Use the
-// matching `parse*` helper from a handler — it returns the typed value
-// or null so the call-site stays a single `if (!parsed) return`.
+// Zod schemas for WebSocket payloads. A misrouted event or missing
+// field must not silently feed garbage into the cache (e.g. an
+// appendMessageToCache call with no id would corrupt every page's
+// items). Each schema validates the fields the handler reads; extras
+// (avatars, attachments, reactions) pass through untouched via zod's
+// default `passthrough` behavior so cache-stored messages keep them.
 
-const messageSchema = z.object({
+// `reactions` and similar map/array fields aren't validated in detail —
+// they pass through, and downstream consumers handle their own shape.
+const messageSchema: z.ZodType<Message> = z.object({
   id: z.string().min(1),
   parentID: z.string().min(1),
   authorID: z.string().min(1),
@@ -24,8 +22,7 @@ const messageSchema = z.object({
   lastReplyAt: z.string().optional(),
   pinned: z.boolean().optional(),
   noUnfurl: z.boolean().optional(),
-  reactions: z.record(z.string(), z.array(z.string())).optional(),
-});
+}).passthrough() as z.ZodType<Message>;
 
 const channelIDSchema = z.object({ channelID: z.string().min(1) });
 const presenceSchema = z.object({ userID: z.string().min(1), online: z.boolean() });
@@ -40,11 +37,7 @@ function parser<T>(schema: z.ZodType<T>): (v: unknown) => T | null {
   };
 }
 
-// Returns Message-shaped data on success. The result type is the app's
-// existing Message interface (not zod's inferred type) so call-sites
-// don't have to convert; the schema validates the subset of fields the
-// runtime reads.
-export const parseMessage = parser(messageSchema) as (v: unknown) => Message | null;
+export const parseMessage = parser(messageSchema);
 
 export interface ChannelIDPayload {
   channelID: string;

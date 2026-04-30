@@ -4,9 +4,10 @@ import {
   useQueryClient,
   type InfiniteData,
   type QueryClient,
+  type QueryKey,
 } from '@tanstack/react-query';
 import { apiFetch } from '@/lib/api';
-import { queryKeys } from '@/lib/query-keys';
+import { queryKeys, parentPath } from '@/lib/query-keys';
 import type { Message } from '@/types';
 
 export interface MessageWindow {
@@ -112,16 +113,19 @@ type MessageInfiniteUpdater = (old: MessageInfiniteData | undefined) => MessageI
 // these infinite queries triggers v5's walk-forward refetch (see
 // infiniteQueryBehavior.js:65) which truncates the page chain after a
 // fetchPreviousPage — leaving deep-linked viewers stuck on a 2-message
-// slice with no working sentinels. Patching the cache directly keeps
-// the chain intact.
-//
-// Each updater returns the same `old` reference when nothing changed
-// so React Query skips notifying observers (no spurious re-renders).
+// slice with no working sentinels.
 function patchBothScopes(qc: QueryClient, parentID: string, updater: MessageInfiniteUpdater) {
   // We don't know whether parentID names a channel or a conversation.
   // setQueriesData is a no-op for non-matching keys, so patch both.
   qc.setQueriesData<MessageInfiniteData>({ queryKey: queryKeys.channelMessagesAll(parentID) }, updater);
   qc.setQueriesData<MessageInfiniteData>({ queryKey: queryKeys.conversationMessagesAll(parentID) }, updater);
+}
+
+// Same channel-or-conversation ambiguity as patchBothScopes — invalidate
+// the thread query under both possible parent paths.
+export function invalidateThreadBothScopes(qc: QueryClient, parentID: string, threadRootID: string) {
+  qc.invalidateQueries({ queryKey: queryKeys.thread(`channels/${parentID}`, threadRootID) });
+  qc.invalidateQueries({ queryKey: queryKeys.thread(`conversations/${parentID}`, threadRootID) });
 }
 
 export function appendMessageToCache(qc: QueryClient, parentID: string, msg: Message) {
@@ -210,16 +214,10 @@ export function removeMessageFromCache(qc: QueryClient, parentID: string, msgId:
 // reading the live tail there, and the load-newer sentinel will fetch
 // what's missing the next time it's in viewport.
 export async function resyncMessageCache(qc: QueryClient): Promise<void> {
-  const channelEntries = qc.getQueriesData<MessageInfiniteData>({ queryKey: ['channelMessages'] });
-  const conversationEntries = qc.getQueriesData<MessageInfiniteData>({ queryKey: ['conversationMessages'] });
-  type Entry = readonly [readonly unknown[], MessageInfiniteData | undefined];
   const fetches: Promise<void>[] = [];
-  const all: { entries: Entry[]; basePathOf: (id: string) => string }[] = [
-    { entries: channelEntries, basePathOf: (id) => `/api/v1/channels/${id}/messages` },
-    { entries: conversationEntries, basePathOf: (id) => `/api/v1/conversations/${id}/messages` },
-  ];
-  for (const { entries, basePathOf } of all) {
-    for (const [key, data] of entries) {
+  for (const scope of ['channelMessages', 'conversationMessages'] as const) {
+    const apiScope = scope === 'channelMessages' ? 'channels' : 'conversations';
+    for (const [key, data] of qc.getQueriesData<MessageInfiniteData>({ queryKey: [scope] })) {
       if (!data || data.pages.length === 0) continue;
       const head = data.pages[0];
       // Only top up tail-mode chains. Deep-link viewers that haven't
@@ -228,7 +226,7 @@ export async function resyncMessageCache(qc: QueryClient): Promise<void> {
       if (head.hasMoreNewer || !head.newestID) continue;
       const parentID = key[1] as string;
       if (!parentID) continue;
-      fetches.push(catchUpTail(qc, key, basePathOf(parentID), head.newestID));
+      fetches.push(catchUpTail(qc, key, `/api/v1/${apiScope}/${parentID}/messages`, head.newestID));
     }
   }
   await Promise.allSettled(fetches);
@@ -236,14 +234,14 @@ export async function resyncMessageCache(qc: QueryClient): Promise<void> {
 
 async function catchUpTail(
   qc: QueryClient,
-  key: readonly unknown[],
+  key: QueryKey,
   basePath: string,
   newestID: string,
 ): Promise<void> {
   try {
     const window = await apiFetch<MessageWindow>(`${basePath}?after=${newestID}&limit=50`);
     if (window.items.length === 0) return;
-    qc.setQueryData<MessageInfiniteData>(key as readonly unknown[] as Parameters<typeof qc.setQueryData>[0], (old) => {
+    qc.setQueryData<MessageInfiniteData>(key, (old) => {
       if (!old || old.pages.length === 0) return old;
       const head = old.pages[0];
       const seen = new Set(head.items.map((m) => m.id));
@@ -304,7 +302,7 @@ export function useSendMessage(scope: SendMessageScope) {
         appendMessageToCache(queryClient, parentID, data);
       }
       if (input.parentMessageID) {
-        const path = channelId ? `channels/${channelId}` : `conversations/${conversationId}`;
+        const path = parentPath({ channelId, conversationId });
         queryClient.invalidateQueries({ queryKey: queryKeys.thread(path, input.parentMessageID) });
         queryClient.invalidateQueries({ queryKey: queryKeys.userThreads() });
       }

@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { apiFetch } from '@/lib/api';
 import { slugify } from '@/lib/format';
 import { readJSON, writeJSON } from '@/lib/storage';
-import { queryKeys } from '@/lib/query-keys';
+import { queryKeys, parentPath } from '@/lib/query-keys';
 import type { Message } from '@/types';
 
 export interface ThreadSummary {
@@ -64,37 +64,28 @@ export function getSeenMap(): Record<string, string> {
   return loadSeen();
 }
 
-// threadParentPath returns the URL prefix for messages in a thread's
-// parent — `channels/<id>` or `conversations/<id>`. Used by every site
-// that fetches or invalidates thread messages, so the cache key shape
-// stays in lockstep across hooks and components.
-export function threadParentPath(opts: { channelId?: string; conversationId?: string }): string {
-  return opts.channelId ? `channels/${opts.channelId}` : `conversations/${opts.conversationId}`;
-}
-
 // useThreadMessages fetches all messages in a thread (root + replies).
 // Shared by ThreadPanel (the side drawer in a chat view) and ThreadCard
 // (the standalone snippet on the /threads page). Both subscribe to the
-// same `['thread', parentPath, rootID]` key so a reply posted from
-// either place invalidates both views without an extra refetch.
+// same thread query key so a reply posted from either place invalidates
+// both views without an extra refetch.
 //
 // The optional `enabled` flag lets callers gate fetching on something
 // other than the parent IDs — e.g. ThreadCard waits for the card to
 // enter the viewport to avoid fanning out N parallel requests on
-// /threads load. When omitted, the query runs as soon as the parent
-// IDs are present.
+// /threads load.
 export function useThreadMessages(opts: {
   channelId?: string;
   conversationId?: string;
   threadRootID: string;
   enabled?: boolean;
 }) {
-  const parentPath = threadParentPath(opts);
+  const path = parentPath(opts);
   const ready = !!(opts.channelId || opts.conversationId) && !!opts.threadRootID;
   return useQuery({
-    queryKey: queryKeys.thread(parentPath, opts.threadRootID),
+    queryKey: queryKeys.thread(path, opts.threadRootID),
     queryFn: () =>
-      apiFetch<Message[]>(`/api/v1/${parentPath}/messages/${opts.threadRootID}/thread`),
+      apiFetch<Message[]>(`/api/v1/${path}/messages/${opts.threadRootID}/thread`),
     enabled: ready && (opts.enabled ?? true),
     staleTime: 15_000,
   });
