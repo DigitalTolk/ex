@@ -159,10 +159,15 @@ describe('MessageInput toolbar buttons', () => {
         initialBody="hello world"
       />,
     );
+    // Wait for Lexical's post-mount placeholder effect to settle
+    // before firing the send click — otherwise the placeholder's
+    // delayed state update lands after the click and surfaces an
+    // act() warning.
+    const editor = await screen.findByLabelText('Message input');
     fireEvent.click(screen.getByLabelText('Send message'));
     expect(onSend).toHaveBeenCalled();
     // Editor still shows the body — parent owns unmount lifecycle.
-    expect(screen.getByLabelText('Message input').textContent).toContain('hello');
+    expect(editor.textContent).toContain('hello');
   });
 
   it('does not call delete mutation when cancelling failed remove (silent failure)', async () => {

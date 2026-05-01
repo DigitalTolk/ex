@@ -27,13 +27,16 @@ function Providers({ children }: { children: ReactNode }) {
 }
 
 function makeClipboard(text: string): DataTransfer {
-  // jsdom DataTransfer is a thin shell — the bits this plugin reads
-  // are getData/types, so a hand-rolled object matches the shape we
-  // need without pulling in a real DataTransfer.
+  // jsdom DataTransfer is a thin shell. We hand-roll one that matches
+  // the surface our plugin reads (getData/types), plus the surface
+  // Lexical's stock fallback inspects (`files`, also iterates `types`)
+  // so the default-paste path doesn't blow up after our plugin
+  // declines to claim the event.
   return {
     getData: (type: string) => (type === 'text/plain' ? text : ''),
     types: ['text/plain'],
     items: { length: 0 } as unknown as DataTransferItemList,
+    files: [] as unknown as FileList,
   } as unknown as DataTransfer;
 }
 

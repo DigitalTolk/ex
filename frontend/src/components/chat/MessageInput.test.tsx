@@ -25,12 +25,15 @@ describe('MessageInput', () => {
     expect(screen.getByLabelText('Send message')).toBeDisabled();
   });
 
-  it('send button is enabled when input has text', () => {
+  it('send button is enabled when input has text', async () => {
     // jsdom doesn't accept synthetic typing into Lexical's
     // contenteditable; seed the body via initialBody to verify the
-    // disabled-state wiring.
+    // disabled-state wiring. `findByLabelText` flushes Lexical's
+    // post-mount Placeholder state update inside act() — without it
+    // we'd race against Placeholder's effect and surface an act()
+    // warning.
     render(<MessageInput onSend={vi.fn()} initialBody="Hello" />);
-    expect(screen.getByLabelText('Send message')).not.toBeDisabled();
+    expect(await screen.findByLabelText('Send message')).not.toBeDisabled();
   });
 
   it('calls onSend when pressing Enter', async () => {

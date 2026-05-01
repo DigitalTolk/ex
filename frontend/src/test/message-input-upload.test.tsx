@@ -79,9 +79,13 @@ describe('MessageInput - file upload', () => {
       expect(screen.getByText('myfile.txt')).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByLabelText('Send message'));
-
-    expect(onSend).toHaveBeenCalledWith({ body: 'see file', attachmentIDs: ['att-1'] });
+    // Click + immediate assert can fire before Lexical's post-mount
+    // Placeholder updates land. await findBy* flushes them inside
+    // act() so the click's downstream state changes don't leak.
+    fireEvent.click(await screen.findByLabelText('Send message'));
+    await waitFor(() => {
+      expect(onSend).toHaveBeenCalledWith({ body: 'see file', attachmentIDs: ['att-1'] });
+    });
   });
 
   it('shows error when upload fails', async () => {
@@ -151,9 +155,9 @@ describe('MessageInput - file upload', () => {
     });
   });
 
-  it('ignores text-only paste events (does not call uploadAttachment)', () => {
+  it('ignores text-only paste events (does not call uploadAttachment)', async () => {
     render(<MessageInput onSend={vi.fn()} />);
-    const editor = screen.getByLabelText('Message input');
+    const editor = await screen.findByLabelText('Message input');
 
     const event = new Event('paste', { bubbles: true, cancelable: true });
     Object.defineProperty(event, 'clipboardData', {
@@ -163,7 +167,9 @@ describe('MessageInput - file upload', () => {
         types: ['text/plain'],
       },
     });
-    editor.dispatchEvent(event);
+    await act(async () => {
+      editor.dispatchEvent(event);
+    });
 
     expect(mockUploadAttachment).not.toHaveBeenCalled();
   });

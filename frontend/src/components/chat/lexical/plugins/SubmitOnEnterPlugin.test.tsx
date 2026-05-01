@@ -57,7 +57,9 @@ describe('SubmitOnEnterPlugin', () => {
       // First option auto-highlighted (preselectFirstItem default).
       expect(screen.getByRole('option', { selected: true })).toBeInTheDocument();
     });
-    fireEvent.keyDown(screen.getByLabelText('Message input'), { key: 'Enter' });
+    await act(async () => {
+      fireEvent.keyDown(screen.getByLabelText('Message input'), { key: 'Enter' });
+    });
     expect(onSubmit).not.toHaveBeenCalled();
   });
 

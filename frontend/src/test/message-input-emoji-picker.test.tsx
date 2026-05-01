@@ -59,11 +59,15 @@ describe('MessageInput — emoji picker integration', () => {
 
   it('picking an emoji closes the picker', async () => {
     renderInput();
+    // findBy* awaits Lexical's post-mount effects so the click below
+    // doesn't race against Placeholder's delayed setState.
+    await screen.findByLabelText('Message input');
     fireEvent.click(screen.getByLabelText('Emoji'));
     expect(screen.getByLabelText('Search emojis')).toBeInTheDocument();
     fireEvent.click(screen.getAllByTestId('emoji-picker-tile')[0]);
-    // Picker dismissed: the search input is gone.
-    expect(screen.queryByLabelText('Search emojis')).toBeNull();
+    await waitFor(() => {
+      expect(screen.queryByLabelText('Search emojis')).toBeNull();
+    });
   });
 
   it('inserts a shortcode even when the editor was never focused first', async () => {
