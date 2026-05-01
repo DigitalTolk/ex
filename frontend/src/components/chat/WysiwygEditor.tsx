@@ -17,6 +17,7 @@ import type { InitialConfigType } from '@lexical/react/LexicalComposer';
 
 import { MentionNode } from './lexical/nodes/MentionNode';
 import { ChannelMentionNode } from './lexical/nodes/ChannelMentionNode';
+import { ExListNode } from './lexical/nodes/ExListNode';
 import { EX_TRANSFORMERS } from './lexical/transformers';
 import { UserMentionsPlugin } from './lexical/plugins/UserMentionsPlugin';
 import { ChannelMentionsPlugin } from './lexical/plugins/ChannelMentionsPlugin';
@@ -24,6 +25,7 @@ import { EmojiShortcutsPlugin } from './lexical/plugins/EmojiShortcutsPlugin';
 import { SubmitOnEnterPlugin } from './lexical/plugins/SubmitOnEnterPlugin';
 import { QuoteContinuationPlugin } from './lexical/plugins/QuoteContinuationPlugin';
 import { CodeBlockExitPlugin } from './lexical/plugins/CodeBlockExitPlugin';
+import { MarkdownShortcutFallbackPlugin } from './lexical/plugins/MarkdownShortcutFallbackPlugin';
 import { PasteFilesPlugin } from './lexical/plugins/PasteFilesPlugin';
 import { PasteLinkPlugin } from './lexical/plugins/PasteLinkPlugin';
 import { MarkdownChangePlugin } from './lexical/plugins/MarkdownChangePlugin';
@@ -92,7 +94,14 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, Props>(function Wys
       QuoteNode,
       CodeNode,
       CodeHighlightNode,
-      ListNode,
+      // ExListNode replaces stock ListNode to drop the upstream
+      // auto-merge $transform — see the node file for rationale.
+      // Lexical's class-replacement registry requires the subclass to
+      // declare its own type and be registered as a plain entry too,
+      // so its static getType() / clone() are filled in. The entry
+      // below maps every $createListNode call to ExListNode.
+      ExListNode,
+      { replace: ListNode, with: (n: ListNode) => new ExListNode(n.getListType(), n.getStart()), withKlass: ExListNode },
       ListItemNode,
       LinkNode,
       AutoLinkNode,
@@ -131,6 +140,7 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, Props>(function Wys
         <LinkPlugin />
         <TabIndentationPlugin />
         <MarkdownShortcutPlugin transformers={EX_TRANSFORMERS} />
+        <MarkdownShortcutFallbackPlugin />
         <UserMentionsPlugin />
         <ChannelMentionsPlugin />
         <EmojiShortcutsPlugin />

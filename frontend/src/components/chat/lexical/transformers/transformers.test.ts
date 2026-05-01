@@ -13,6 +13,7 @@ import {
 import { QuoteNode } from '@lexical/rich-text';
 import type { ElementTransformer } from '@lexical/markdown';
 import { EX_TRANSFORMERS } from './index';
+import { ExListNode } from '../nodes/ExListNode';
 
 function findListTransformer(predicate: (t: ElementTransformer) => boolean): ElementTransformer {
   const t = EX_TRANSFORMERS.find(
@@ -29,7 +30,12 @@ describe('EX_TRANSFORMERS list-restart override', () => {
     // ListNode for live typing while still merging on import.
     const editor = createHeadlessEditor({
       namespace: 'test',
-      nodes: [ListNode, ListItemNode, QuoteNode],
+      nodes: [
+        ExListNode,
+        { replace: ListNode, with: (n: ListNode) => new ExListNode(n.getListType(), n.getStart()), withKlass: ExListNode },
+        ListItemNode,
+        QuoteNode,
+      ],
       onError: (e) => { throw e; },
     });
     const ulTransformer = findListTransformer((t) =>
@@ -77,7 +83,12 @@ describe('EX_TRANSFORMERS list-restart override', () => {
     // to render as a single list per markdown spec when imported.
     const editor = createHeadlessEditor({
       namespace: 'test',
-      nodes: [ListNode, ListItemNode, QuoteNode],
+      nodes: [
+        ExListNode,
+        { replace: ListNode, with: (n: ListNode) => new ExListNode(n.getListType(), n.getStart()), withKlass: ExListNode },
+        ListItemNode,
+        QuoteNode,
+      ],
       onError: (e) => { throw e; },
     });
     const ulTransformer = findListTransformer((t) =>

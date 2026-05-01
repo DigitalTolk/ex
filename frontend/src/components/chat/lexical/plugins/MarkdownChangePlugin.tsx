@@ -1,7 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext';
-import { $convertToMarkdownString } from '@lexical/markdown';
-import { EX_TRANSFORMERS } from '../transformers';
+import { $exportMarkdown } from '../markdown-export';
 
 interface Props {
   onChange?: (markdown: string) => void;
@@ -19,7 +18,7 @@ export function MarkdownChangePlugin({ onChange }: Props) {
     if (!onChange) return;
     return editor.registerUpdateListener(({ editorState }) => {
       editorState.read(() => {
-        const md = $convertToMarkdownString(EX_TRANSFORMERS).trim();
+        const md = $exportMarkdown();
         if (md === lastEmittedRef.current) return;
         lastEmittedRef.current = md;
         onChange(md);

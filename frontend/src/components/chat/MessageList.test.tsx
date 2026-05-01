@@ -1920,6 +1920,61 @@ describe('MessageList', () => {
     rafSpy.mockRestore();
   });
 
+  it('initial scroll: re-sticks to the bottom on mount for images that finished loading before the listener attached', () => {
+    // Cached avatars / inline thumbnails fire their `load` event as a
+    // microtask before our useEffect runs and attaches the delegated
+    // listener — so the event is lost. The mount-time sweep checks
+    // every <img> already in the DOM for `complete && naturalHeight`
+    // and triggers one re-stick if any are present, otherwise the
+    // page comes up partially scrolled (the "50% of refreshes" bug
+    // when images were warm in the HTTP cache).
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrap = (props: Partial<React.ComponentProps<typeof MessageList>>) => (
+      <QueryClientProvider client={qc}>
+        <BrowserRouter>
+          <MessageList {...defaultProps} {...props} />
+        </BrowserRouter>
+      </QueryClientProvider>
+    );
+
+    // Defer rAF callbacks so we can inject a "post-image-load"
+    // scrollHeight before the cached-image stickToBottom runs —
+    // mirrors the real flow: image was already loaded into layout
+    // before our useEffect, but our scrollTop write reads the
+    // post-image scrollHeight.
+    const rafCallbacks: FrameRequestCallback[] = [];
+    const rafSpy = vi.spyOn(window, 'requestAnimationFrame').mockImplementation((cb) => {
+      rafCallbacks.push(cb);
+      return 0 as unknown as number;
+    });
+
+    const fakeImg = Object.assign(document.createElement('img'), { src: '/cached.png' });
+    Object.defineProperty(fakeImg, 'complete', { value: true });
+    Object.defineProperty(fakeImg, 'naturalHeight', { value: 120 });
+    const originalQSA = HTMLElement.prototype.querySelectorAll;
+    const qsaSpy = vi
+      .spyOn(HTMLElement.prototype, 'querySelectorAll')
+      .mockImplementation(function (this: HTMLElement, selectors: string) {
+        if (selectors === 'img') {
+          return [fakeImg] as unknown as NodeListOf<Element>;
+        }
+        return originalQSA.call(this, selectors);
+      });
+
+    const pages = [{ items: [makeMessage({ id: 'm-1' })] }];
+    const { container } = render(wrap({ pages }));
+    const scroller = container.querySelector('div.overflow-y-auto') as HTMLDivElement;
+    Object.defineProperty(scroller, 'clientHeight', { value: 600, configurable: true });
+    Object.defineProperty(scroller, 'scrollHeight', { value: 950, configurable: true });
+    // Now flush deferred rAF — they were queued by both the mount
+    // layout-effect stick and the cached-image sweep.
+    rafCallbacks.splice(0).forEach((cb) => cb(0));
+    expect(scroller.scrollTop).toBe(950);
+
+    qsaSpy.mockRestore();
+    rafSpy.mockRestore();
+  });
+
   it('post-message scroll: a freshly sent image catches up to the bottom once it loads', () => {
     // Regression: when the user posts a message containing an image,
     // the layout effect that snap-scrolls to the new bottom runs *before*

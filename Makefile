@@ -50,6 +50,12 @@ check:
 	@echo "=== Go test (with integration) ==="
 	go test -tags=integration -coverprofile=coverage.out -covermode=atomic ./internal/...
 	@go tool cover -func=coverage.out | tail -1
+	@echo "=== Frontend type-check ==="
+	# `tsc --noEmit` on a project-references root tsconfig is a no-op
+	# — it ignores `references` unless --build is set. The production
+	# build (`npm run build`) uses `tsc -b`, so use the same here so
+	# `make check` actually catches the same errors prod does.
+	cd frontend && npx tsc -b --noEmit
 	@echo "=== Frontend lint ==="
 	cd frontend && npx eslint src/
 	@echo "=== Frontend test ==="

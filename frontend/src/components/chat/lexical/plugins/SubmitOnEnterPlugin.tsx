@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext';
-import { $convertToMarkdownString } from '@lexical/markdown';
+import { $exportMarkdown } from '../markdown-export';
 import { $isListItemNode } from '@lexical/list';
 import { $isQuoteNode } from '@lexical/rich-text';
 import { $isCodeNode } from '@lexical/code';
@@ -12,7 +12,6 @@ import {
   KEY_ENTER_COMMAND,
   KEY_ESCAPE_COMMAND,
 } from 'lexical';
-import { EX_TRANSFORMERS } from '../transformers';
 
 interface Props {
   onSubmit?: (markdown: string) => void;
@@ -51,7 +50,7 @@ export function SubmitOnEnterPlugin({ onSubmit, onCancel }: Props) {
         event.preventDefault();
         if (onSubmit) {
           editor.getEditorState().read(() => {
-            onSubmit($convertToMarkdownString(EX_TRANSFORMERS).trim());
+            onSubmit($exportMarkdown());
           });
         }
         return true;

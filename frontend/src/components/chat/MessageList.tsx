@@ -259,21 +259,38 @@ export function MessageList({
     const inner = innerRef.current;
     if (!el || !inner) return;
     if (anchorMsgId) return;
-    const onLoad = (e: Event) => {
-      const target = e.target as HTMLElement | null;
-      if (!target || target.tagName !== 'IMG') return;
+    const stickToBottom = () => {
       if (!wasAtBottomRef.current) return;
       // Defer to the next frame so the browser has a chance to apply
       // the just-loaded image's intrinsic dimensions to layout. Reading
-      // scrollHeight synchronously inside the load handler can return
-      // the pre-resize value in some browsers, leaving the scroll
-      // position one image-height short of the actual bottom.
+      // scrollHeight synchronously can return the pre-resize value in
+      // some browsers, leaving the scroll position one image-height
+      // short of the actual bottom.
       requestAnimationFrame(() => {
         el.scrollTop = el.scrollHeight;
       });
     };
+    const onLoad = (e: Event) => {
+      const target = e.target as HTMLElement | null;
+      if (!target || target.tagName !== 'IMG') return;
+      stickToBottom();
+    };
     // useCapture=true so img load events (which don't bubble) reach us.
     inner.addEventListener('load', onLoad, true);
+    // Cached images load synchronously — by the time this useEffect
+    // runs (post-paint), their `load` event already fired and our
+    // listener missed it. Walk every <img> already in the DOM and
+    // re-stick once for any that finished loading early. Without this,
+    // the initial scroll lands at the pre-image scrollHeight and the
+    // page comes up partially scrolled (the "50% of refreshes" bug
+    // when avatars / inline thumbnails were warm in the HTTP cache).
+    const imgs = inner.querySelectorAll('img');
+    for (const img of imgs) {
+      if (img.complete && img.naturalHeight > 0) {
+        stickToBottom();
+        break;
+      }
+    }
     return () => inner.removeEventListener('load', onLoad, true);
   }, [anchorMsgId, wasAtBottomRef]);
 

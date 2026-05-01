@@ -5,7 +5,7 @@ import {
   type ElementTransformer,
   type TextMatchTransformer,
 } from '@lexical/markdown';
-import { $createListItemNode, $createListNode, $isListNode, ListItemNode, ListNode } from '@lexical/list';
+import { $createListItemNode, $createListNode, ListItemNode, ListNode } from '@lexical/list';
 import { HeadingNode } from '@lexical/rich-text';
 import type { LexicalNode, TextNode } from 'lexical';
 import { $createMentionNode, $isMentionNode, MentionNode } from '../nodes/MentionNode';
@@ -50,12 +50,9 @@ export const CHANNEL_MENTION_TRANSFORMER: TextMatchTransformer = {
 // didn't fire". Stock import behaviour (single list across blank
 // lines) is preserved so stored markdown messages still round-trip.
 //
-// Lexical's ListNode has a built-in $transform that calls
-// `mergeNextSiblingListIfSameType` on every editor update — even if
-// we create a fresh ListNode here, that transform will silently merge
-// it into the previous adjacent list. Keep `parentNode` (the paragraph
-// the user typed `- ` into) as an empty separator between the two
-// lists so the auto-merge transform doesn't trigger.
+// (Auto-merge by Lexical's ListNode.$transform is separately disabled
+// via ExListNode — without that, `parentNode.replace(list)` here is
+// silently undone by the merge transform on the next reconciliation.)
 function makeListTransformer(
   stock: ElementTransformer,
   listType: 'bullet' | 'number',
@@ -68,12 +65,7 @@ function makeListTransformer(
       const list = $createListNode(listType, listType === 'number' ? Number(match[2]) : undefined);
       const item = $createListItemNode();
       list.append(item);
-      const prev = parentNode.getPreviousSibling();
-      if ($isListNode(prev) && prev.getListType() === listType) {
-        parentNode.insertAfter(list);
-      } else {
-        parentNode.replace(list);
-      }
+      parentNode.replace(list);
       item.append(...(children as LexicalNode[]));
       item.select(0, 0);
     },

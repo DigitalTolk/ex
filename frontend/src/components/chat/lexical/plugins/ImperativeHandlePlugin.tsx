@@ -1,6 +1,7 @@
 import { useImperativeHandle, useRef, type Ref } from 'react';
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext';
-import { $convertFromMarkdownString, $convertToMarkdownString } from '@lexical/markdown';
+import { $convertFromMarkdownString } from '@lexical/markdown';
+import { $exportMarkdown } from '../markdown-export';
 import {
   $createParagraphNode,
   $createRangeSelection,
@@ -185,7 +186,7 @@ export function ImperativeHandlePlugin({ imperativeRef }: Props) {
       getMarkdown() {
         let md = '';
         editor.getEditorState().read(() => {
-          md = $convertToMarkdownString(EX_TRANSFORMERS).trim();
+          md = $exportMarkdown();
         });
         return md;
       },

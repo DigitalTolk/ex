@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import type { MenuOption } from '@lexical/react/LexicalTypeaheadMenuPlugin';
+import { pickPlacement, type Placement } from './typeaheadPlacement';
 
 // Shared popup chrome for the @ / ~ / : typeaheads. Lexical drives
 // keyboard navigation (arrow keys, Enter, Tab, Esc) — this component
@@ -24,13 +25,6 @@ interface TypeaheadMenuProps<T extends MenuOption> {
   renderRow: (option: T, isActive: boolean) => ReactNode;
 }
 
-// Vertical placement relative to Lexical's anchor div. The anchor div
-// is positioned at the trigger character's bottom; "below" stacks the
-// menu downward from there, "above" lifts it up to clear the viewport
-// bottom when the trigger is close to the screen edge (typical for
-// chat composers, which sit at the bottom of the page).
-type Placement = 'below' | 'above';
-
 export function TypeaheadMenu<T extends MenuOption>({
   testId,
   emptyLabel,
@@ -51,22 +45,23 @@ export function TypeaheadMenu<T extends MenuOption>({
     row?.scrollIntoView({ block: 'nearest' });
   }, [selectedIndex]);
 
-  // Flip the menu above the anchor when its bottom edge would clip the
-  // viewport. Lexical's own positioner only flips when there's room
-  // above the EDITOR root — useless for a chat input pinned to the
-  // bottom of the screen. Re-runs whenever option count changes (menu
-  // height varies with content).
+  // Flip the menu above the anchor when its bottom edge would clip
+  // the viewport. Lexical's own positioner only flips when there's
+  // room above the EDITOR root — useless for a chat input pinned to
+  // the bottom of the screen. Re-runs whenever the option count or
+  // selected row changes (both can shift the menu's measured height).
   useLayoutEffect(() => {
     const menu = containerRef.current;
     if (!menu) return;
-    const anchorRect = menu.parentElement?.getBoundingClientRect();
-    if (!anchorRect) return;
-    const menuRect = menu.getBoundingClientRect();
-    const SAFE_MARGIN = 8;
-    const overflowsBottom = anchorRect.bottom + menuRect.height + SAFE_MARGIN > window.innerHeight;
-    const fitsAbove = anchorRect.top - menuRect.height - SAFE_MARGIN > 0;
-    setPlacement(overflowsBottom && fitsAbove ? 'above' : 'below');
-  }, [options.length]);
+    const anchor = menu.parentElement;
+    if (!anchor) return;
+    const next = pickPlacement(
+      anchor.getBoundingClientRect(),
+      menu.getBoundingClientRect(),
+      window.innerHeight,
+    );
+    setPlacement((prev) => (prev === next ? prev : next));
+  }, [options.length, selectedIndex]);
 
   // Lexical owns the anchor element's lifecycle. `menuRenderFn` is
   // only called after Lexical has populated `anchorElementRef.current`
