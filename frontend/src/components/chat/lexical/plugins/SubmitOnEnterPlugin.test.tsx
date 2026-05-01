@@ -57,6 +57,9 @@ describe('SubmitOnEnterPlugin', () => {
       // First option auto-highlighted (preselectFirstItem default).
       expect(screen.getByRole('option', { selected: true })).toBeInTheDocument();
     });
+    // Wrap the keyDown so Lexical's command-dispatch state changes
+    // settle inside act() — without it the typeahead's downstream
+    // updates land after the assertion and trip an act() warning.
     await act(async () => {
       fireEvent.keyDown(screen.getByLabelText('Message input'), { key: 'Enter' });
     });

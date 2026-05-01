@@ -3,6 +3,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createRef, type ReactNode } from 'react';
 import { WysiwygEditor, type WysiwygEditorHandle } from '@/components/chat/WysiwygEditor';
+import { makeDataTransfer } from '@/test/dataTransfer';
 
 vi.mock('@/lib/api', () => ({ apiFetch: vi.fn().mockResolvedValue([]) }));
 vi.mock('@/hooks/useConversations', async () => {
@@ -26,19 +27,7 @@ function Providers({ children }: { children: ReactNode }) {
   return <QueryClientProvider client={qc}>{children}</QueryClientProvider>;
 }
 
-function makeClipboard(text: string): DataTransfer {
-  // jsdom DataTransfer is a thin shell. We hand-roll one that matches
-  // the surface our plugin reads (getData/types), plus the surface
-  // Lexical's stock fallback inspects (`files`, also iterates `types`)
-  // so the default-paste path doesn't blow up after our plugin
-  // declines to claim the event.
-  return {
-    getData: (type: string) => (type === 'text/plain' ? text : ''),
-    types: ['text/plain'],
-    items: { length: 0 } as unknown as DataTransferItemList,
-    files: [] as unknown as FileList,
-  } as unknown as DataTransfer;
-}
+const makeClipboard = (text: string) => makeDataTransfer({ text, types: ['text/plain'] });
 
 describe('PasteLinkPlugin', () => {
   beforeEach(() => vi.restoreAllMocks());

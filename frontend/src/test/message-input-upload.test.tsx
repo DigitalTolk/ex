@@ -21,6 +21,7 @@ vi.mock('@/hooks/useEmoji', () => ({
 }));
 
 import { MessageInput } from '@/components/chat/MessageInput';
+import { makeDataTransfer } from './dataTransfer';
 
 function render(ui: React.ReactElement) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -130,19 +131,9 @@ describe('MessageInput - file upload', () => {
     // that's the path browsers use for clipboard images and copied files.
     const event = new Event('paste', { bubbles: true, cancelable: true });
     Object.defineProperty(event, 'clipboardData', {
-      value: {
-        items: [
-          {
-            kind: 'file',
-            type: 'image/png',
-            getAsFile: () => pasted,
-          },
-        ],
-        // Tiptap's paste plugin reads getData('text/html')/('text/plain')
-        // before checking files; provide stubs so it doesn't throw.
-        getData: () => '',
-        types: [],
-      },
+      value: makeDataTransfer({
+        items: [{ kind: 'file', type: 'image/png', getAsFile: () => pasted }],
+      }),
     });
     await act(async () => { editor.dispatchEvent(event); });
 
@@ -161,11 +152,10 @@ describe('MessageInput - file upload', () => {
 
     const event = new Event('paste', { bubbles: true, cancelable: true });
     Object.defineProperty(event, 'clipboardData', {
-      value: {
+      value: makeDataTransfer({
         items: [{ kind: 'string', type: 'text/plain', getAsFile: () => null }],
-        getData: () => '',
         types: ['text/plain'],
-      },
+      }),
     });
     await act(async () => {
       editor.dispatchEvent(event);

@@ -1,12 +1,10 @@
 import { describe, it, expect, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { MessageDropZone } from '@/components/chat/MessageDropZone';
+import { makeDataTransfer } from './dataTransfer';
 
-// Build a DataTransfer-shaped object the way the browser exposes it on
-// drag/drop events. jsdom doesn't synthesize one for us.
-function dataTransferWith(files: File[], types: string[] = ['Files']) {
-  return { files, types } as unknown as DataTransfer;
-}
+const dataTransferWith = (files: File[], types: string[] = ['Files']) =>
+  makeDataTransfer({ files, types });
 
 describe('MessageDropZone', () => {
   it('shows the overlay while a file drag is in progress', () => {

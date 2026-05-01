@@ -102,8 +102,11 @@ if (typeof globalThis.ClipboardEvent === 'undefined') {
 // every other deprecation / warning untouched.
 const originalConsoleWarn = console.warn;
 console.warn = (...args: Parameters<Console['warn']>) => {
+  // startsWith — not strict equality — so a future Lexical patch
+  // version that appends to the message (e.g. "...; use CodeExtension
+  // instead") still gets suppressed without re-breaking the gate.
   const first = args[0];
-  if (typeof first === 'string' && first === 'Using CodeNode without CodeExtension is deprecated') return;
+  if (typeof first === 'string' && first.startsWith('Using CodeNode without CodeExtension')) return;
   originalConsoleWarn(...args);
 };
 
