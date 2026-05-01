@@ -23,6 +23,7 @@ import { UserMentionsPlugin } from './lexical/plugins/UserMentionsPlugin';
 import { ChannelMentionsPlugin } from './lexical/plugins/ChannelMentionsPlugin';
 import { EmojiShortcutsPlugin } from './lexical/plugins/EmojiShortcutsPlugin';
 import { SubmitOnEnterPlugin } from './lexical/plugins/SubmitOnEnterPlugin';
+import { EditLastOnArrowUpPlugin } from './lexical/plugins/EditLastOnArrowUpPlugin';
 import { QuoteContinuationPlugin } from './lexical/plugins/QuoteContinuationPlugin';
 import { CodeBlockExitPlugin } from './lexical/plugins/CodeBlockExitPlugin';
 import { MarkdownShortcutFallbackPlugin } from './lexical/plugins/MarkdownShortcutFallbackPlugin';
@@ -46,6 +47,8 @@ interface Props {
   ariaLabel?: string;
   className?: string;
   onPasteFiles?: (files: File[]) => void;
+  // ArrowUp on an empty editor — return true to claim the event.
+  onArrowUpEmpty?: () => boolean;
 }
 
 // Lexical theme — pure class hooks the editor adds to its rendered
@@ -80,6 +83,7 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, Props>(function Wys
     ariaLabel = 'Message input',
     className = '',
     onPasteFiles,
+    onArrowUpEmpty,
   },
   ref,
 ) {
@@ -147,6 +151,7 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, Props>(function Wys
         <QuoteContinuationPlugin />
         <CodeBlockExitPlugin />
         <SubmitOnEnterPlugin onSubmit={onSubmit} onCancel={onCancel} />
+        <EditLastOnArrowUpPlugin onArrowUpEmpty={onArrowUpEmpty} />
         <PasteFilesPlugin onPasteFiles={onPasteFiles} />
         <PasteLinkPlugin />
         <MarkdownChangePlugin onChange={onChange} />

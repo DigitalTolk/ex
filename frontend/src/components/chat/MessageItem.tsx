@@ -29,6 +29,7 @@ import { ThreadActionBar } from '@/components/chat/ThreadActionBar';
 import { UnfurlCard } from '@/components/chat/UnfurlCard';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { extractURLs, getInitials, formatLongDateTime } from '@/lib/format';
+import { dispatchFocusComposer, registerEditMessageHandler } from '@/lib/window-events';
 import type { Message } from '@/types';
 
 // Module-level Set so MessageList/ThreadPanel don't need to thread a
@@ -105,6 +106,16 @@ export function MessageItem({
       messageHoverListeners.delete(onHover);
     };
   }, [actionsMenuOpen, message.id]);
+
+  // ArrowUp on an empty composer asks the surrounding list's most
+  // recent own message to enter edit mode. Registry-based dispatch
+  // (one window listener + a Map keyed by id) keeps this O(1) per
+  // event regardless of how many MessageItems are on screen, while
+  // preserving the cross-scope decoupling of a window event.
+  useEffect(() => {
+    if (!isOwn || message.deleted || message.system) return;
+    return registerEditMessageHandler(message.id, () => setIsEditing(true));
+  }, [isOwn, message.id, message.deleted, message.system]);
   const editMessage = useEditMessage();
   const deleteMessage = useDeleteMessage();
   const toggleReaction = useToggleReaction();
@@ -171,17 +182,26 @@ export function MessageItem({
   const editorReady =
     !isEditing || editAttachmentIDs.length === 0 || initialEditDrafts.length === editAttachmentIDs.length;
 
+  // Hand focus back to the main composer when an inline edit ends —
+  // Escape, no-op submit, or successful save. Scoped by parentID +
+  // inThread so a thread-reply edit doesn't yank the channel
+  // composer's focus when both views are open simultaneously.
+  function endEdit() {
+    setIsEditing(false);
+    dispatchFocusComposer({ parentID: message.parentID, inThread: !!inThread });
+  }
+
   function handleEditSubmit(value: MessageInputValue) {
     const same =
       value.body === message.body &&
       value.attachmentIDs.length === (message.attachmentIDs ?? []).length &&
       value.attachmentIDs.every((id, idx) => id === (message.attachmentIDs ?? [])[idx]);
     if (same) {
-      setIsEditing(false);
+      endEdit();
       return;
     }
     if (!value.body.trim() && value.attachmentIDs.length === 0) {
-      setIsEditing(false);
+      endEdit();
       return;
     }
     editMessage.mutate(
@@ -192,7 +212,7 @@ export function MessageItem({
         channelId,
         conversationId,
       },
-      { onSuccess: () => setIsEditing(false) },
+      { onSuccess: endEdit },
     );
   }
 
@@ -300,10 +320,15 @@ export function MessageItem({
                 initialBody={message.body}
                 initialDrafts={initialEditDrafts}
                 onSend={handleEditSubmit}
-                onCancel={() => setIsEditing(false)}
+                onCancel={endEdit}
                 disabled={editMessage.isPending}
                 placeholder="Edit message..."
                 submitLabel="Save"
+                // Pull focus into the inline editor on mount —
+                // entering edit mode via ArrowUp from the channel
+                // composer should land the caret in the edit field
+                // directly so the user can keep typing.
+                focusKey={message.id}
               />
             </div>
           ) : (

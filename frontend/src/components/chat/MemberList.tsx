@@ -10,6 +10,7 @@ import { queryKeys } from '@/lib/query-keys';
 import { getInitials } from '@/lib/format';
 import { useQueryClient } from '@tanstack/react-query';
 import { UserHoverCard } from '@/components/UserHoverCard';
+import { UserAvatar } from '@/components/UserAvatar';
 import { canManageMembers, canRemoveMember, roleNumber, ChannelRole } from '@/lib/roles';
 import type { ChannelMembership } from '@/types';
 import type { UserMapEntry } from './MessageList';
@@ -195,21 +196,12 @@ export function MemberList({ members, channelId, currentUserId, currentUserRole,
                   online={online}
                   currentUserId={currentUserId}
                 >
-                  <span className="relative inline-block">
-                    <Avatar className="h-7 w-7 shrink-0 cursor-pointer">
-                      {avatarURL && <AvatarImage src={avatarURL} alt="" />}
-                      <AvatarFallback className="bg-primary/10 text-[10px]">
-                        {getInitials(m.displayName || '??')}
-                      </AvatarFallback>
-                    </Avatar>
-                    {online !== undefined && (
-                      <span
-                        className={`absolute bottom-0 right-0 h-2 w-2 rounded-full ring-2 ring-background ${
-                          online ? 'bg-emerald-500' : 'bg-muted-foreground/40'
-                        }`}
-                        aria-label={online ? 'Online' : 'Offline'}
-                      />
-                    )}
+                  <span className="cursor-pointer">
+                    <UserAvatar
+                      displayName={m.displayName || ''}
+                      avatarURL={avatarURL}
+                      online={online}
+                    />
                   </span>
                 </UserHoverCard>
                 <span className="text-sm truncate flex-1">{m.displayName || 'Unknown'}</span>

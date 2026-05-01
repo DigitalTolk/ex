@@ -22,7 +22,7 @@ import { useUnread } from '@/context/UnreadContext';
 import { usePresence } from '@/context/PresenceContext';
 import { useNotifications } from '@/context/NotificationContext';
 import { markThreadSeen } from '@/hooks/useThreads';
-import { collectMessageUserIDs } from '@/lib/message-users';
+import { collectMessageUserIDs, findLastOwnMessageId } from '@/lib/message-users';
 import { useSidePanels } from '@/hooks/useSidePanels';
 import { useTagState } from '@/context/TagSearchContext';
 import { TagSearchPanel } from '@/components/TagSearchPanel';
@@ -157,6 +157,11 @@ export function ConversationView() {
 
   const { data: usersData } = useUsersBatch(userIDs);
 
+  const lastOwnMessageId = useMemo(
+    () => findLastOwnMessageId(data?.pages, user?.id, 'main'),
+    [data, user?.id],
+  );
+
   const userMap = useMemo(() => {
     const m: Record<string, UserMapEntry> = {};
     if (user) m[user.id] = { displayName: user.displayName, avatarURL: user.avatarURL, online: true };
@@ -284,6 +289,7 @@ export function ConversationView() {
             focusKey={id}
             typingParentID={id}
             typingParentType="conversation"
+            lastOwnMessageId={lastOwnMessageId}
           />
         </MessageDropZone>
       </div>

@@ -306,6 +306,29 @@ describe('MessageList', () => {
     expect(refetch).not.toHaveBeenCalled();
   });
 
+  // Regression: refetch() in deep-link mode triggers v5's walk-forward
+  // refetch from the `around` initialPageParam, wiping every newer page
+  // the user fetched via fetchPreviousPage and stranding the load-newer
+  // sentinel re-requesting the around page's stale newestID. The wheel-
+  // up overscroll handler must stay silent when an anchor is in play —
+  // the load-more sentinel already covers any "more older" case.
+  it('does NOT force-check via refetch when the list is in deep-link mode', () => {
+    const refetch = vi.fn();
+    const { container } = renderWithProviders(
+      <MessageList
+        {...defaultProps}
+        pages={[{ items: [makeMessage()] }]}
+        refetch={refetch}
+        anchorMsgId="msg-1"
+      />,
+    );
+    const scroller = container.querySelector('div.overflow-y-auto') as HTMLDivElement;
+    scroller.scrollTop = 0;
+    scroller.dispatchEvent(new WheelEvent('wheel', { deltaY: -200 }));
+    scroller.dispatchEvent(new WheelEvent('wheel', { deltaY: -200 }));
+    expect(refetch).not.toHaveBeenCalled();
+  });
+
   it('snaps to the bottom on initial messages render so the user starts on the newest', () => {
     // Regression: visiting a channel was landing the user at the
     // OLDEST message (top of the list) because there was no test
@@ -527,6 +550,121 @@ describe('MessageList', () => {
       expect(scroller.scrollTop).toBe(1200);
     } finally {
       if (desc) Object.defineProperty(HTMLElement.prototype, 'scrollHeight', desc);
+    }
+  });
+
+  it('re-sticks when the scroller\'s clientHeight shrinks (Header reflow / MessageInput growth)', () => {
+    // Regression for the long-tail "1/N refresh isn't fully at the
+    // bottom" flake. The Header / MessageInput / TypingIndicator can
+    // reflow AFTER the initial stick (channel data hydrates, the
+    // Header gets a subtitle, the input grows). The scroller's
+    // clientHeight shrinks but inner's size doesn't change, so the
+    // inner-only RO had no signal — the browser silently clamped
+    // scrollTop down by the height delta. Now the persistent RO
+    // observes the scroller too and re-sticks on container resize.
+    let resizeCallback: (() => void) | null = null;
+    const origRO = globalThis.ResizeObserver;
+    globalThis.ResizeObserver = class {
+      cb: () => void;
+      constructor(cb: () => void) { this.cb = cb; resizeCallback = cb; }
+      observe() {}
+      disconnect() { resizeCallback = null; }
+      unobserve() {}
+    } as unknown as typeof ResizeObserver;
+    try {
+      const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      const Tree = (
+        <QueryClientProvider client={qc}>
+          <BrowserRouter>
+            <MessageList
+              {...defaultProps}
+              pages={[{ items: [makeMessage({ id: 'm-1' })] }]}
+            />
+          </BrowserRouter>
+        </QueryClientProvider>
+      );
+      const { container } = render(Tree);
+      const scroller = container.querySelector('div.overflow-y-auto') as HTMLDivElement;
+      // Initial layout: scroller is 600 tall, content is 1500 tall.
+      Object.defineProperty(scroller, 'clientWidth', { value: 800, configurable: true });
+      Object.defineProperty(scroller, 'clientHeight', { value: 600, configurable: true });
+      Object.defineProperty(scroller, 'scrollHeight', { value: 1500, configurable: true });
+      // Reader is at the live tail.
+      scroller.scrollTop = 900;
+      scroller.dispatchEvent(new Event('scroll'));
+      // Channel data hydrates → Header grows (e.g. adds a subtitle
+      // row) → scroller's clientHeight shrinks by 30px to 570. Inner
+      // content height (scrollHeight) is unchanged. Without the
+      // container-resize signal, scrollTop=900 would no longer be
+      // the bottom (new max = 1500 - 570 = 930) and the reader sits
+      // 30px above the live tail.
+      Object.defineProperty(scroller, 'clientHeight', { value: 570, configurable: true });
+      resizeCallback?.();
+      expect(scroller.scrollTop).toBe(1500);
+    } finally {
+      globalThis.ResizeObserver = origRO;
+    }
+  });
+
+  it('keeps the bottom-stick ResizeObserver alive across a StrictMode setup-cleanup-setup cycle', () => {
+    // Regression for "1/N times the channel doesn't fully scroll to
+    // the bottom on refresh". React StrictMode in dev runs effects
+    // twice on mount: setup → cleanup → setup. The previous design
+    // had a separate empty-deps useEffect whose cleanup disconnected
+    // the RO between the two layoutEffect setups, while the
+    // dedup ref short-circuited the second setup so the RO was
+    // never reinstalled — leaving late content growth (cached
+    // images, async markdown, attachments) without a stick. The fix
+    // moves cleanup onto the layoutEffect itself so each StrictMode
+    // setup gets a paired cleanup and the second setup re-observes.
+    let resizeCallback: (() => void) | null = null;
+    let observeCount = 0;
+    let disconnectCount = 0;
+    const origRO = globalThis.ResizeObserver;
+    globalThis.ResizeObserver = class {
+      cb: () => void;
+      constructor(cb: () => void) { this.cb = cb; resizeCallback = cb; }
+      observe() { observeCount++; }
+      disconnect() { disconnectCount++; resizeCallback = null; }
+      unobserve() {}
+    } as unknown as typeof ResizeObserver;
+    try {
+      const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      const Tree = (
+        <QueryClientProvider client={qc}>
+          <BrowserRouter>
+            <MessageList
+              {...defaultProps}
+              pages={[{ items: [makeMessage({ id: 'm-1' })] }]}
+            />
+          </BrowserRouter>
+        </QueryClientProvider>
+      );
+      // Simulate StrictMode: render → unmount → render. After the
+      // second mount the RO must be live (resizeCallback non-null)
+      // so settling content can re-stick.
+      const { unmount } = render(Tree);
+      unmount();
+      const { container } = render(Tree);
+      expect(resizeCallback).not.toBeNull();
+      expect(observeCount).toBeGreaterThanOrEqual(2);
+      expect(disconnectCount).toBeGreaterThanOrEqual(1);
+
+      // Late content settles after the second mount — RO must fire
+      // and stick to the new bottom.
+      const scroller = container.querySelector('div.overflow-y-auto') as HTMLDivElement;
+      Object.defineProperty(scroller, 'clientHeight', { value: 600, configurable: true });
+      Object.defineProperty(scroller, 'scrollHeight', { value: 1500, configurable: true });
+      Object.defineProperty(scroller, 'clientWidth', { value: 800, configurable: true });
+      // Reader is at the live tail (initial stick happened).
+      scroller.scrollTop = 900;
+      scroller.dispatchEvent(new Event('scroll'));
+      // Late image loads → height grows.
+      Object.defineProperty(scroller, 'scrollHeight', { value: 1700, configurable: true });
+      resizeCallback?.();
+      expect(scroller.scrollTop).toBe(1700);
+    } finally {
+      globalThis.ResizeObserver = origRO;
     }
   });
 
@@ -1466,6 +1604,67 @@ describe('MessageList', () => {
           // scrollTop unchanged — the reader stays where they were.
           expect(scroller.scrollTop).toBe(700);
         });
+      } finally {
+        globalThis.ResizeObserver = origRO;
+      }
+    });
+
+    it('re-sticks to the live tail when a reflow shrinks the scroller while the reader is at the bottom', () => {
+      // Regression for the "1/10 channel refresh isn't fully scrolled
+      // to the bottom" bug. A reflow (panel toggle, viewport resize,
+      // sidebar collapse) at first paint drops the scroller's height
+      // below scrollTop's previous max. The reflow branch used to
+      // skip every adjustment when wasAtBottomRef was true on the
+      // assumption that the persistent stick observer would handle
+      // it — but the persistent observer's grew check misses height
+      // *decreases*, so the reader was left parked above the new
+      // bottom. Now the reflow branch sticks for the at-bottom case.
+      let resizeCallback: (() => void) | null = null;
+      const origRO = globalThis.ResizeObserver;
+      globalThis.ResizeObserver = class {
+        cb: () => void;
+        constructor(cb: () => void) { this.cb = cb; resizeCallback = cb; }
+        observe() {}
+        disconnect() { resizeCallback = null; }
+        unobserve() {}
+      } as unknown as typeof ResizeObserver;
+      try {
+        const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+        const Tree = (
+          <QueryClientProvider client={qc}>
+            <BrowserRouter>
+              <MessageList
+                {...defaultProps}
+                pages={[{ items: [
+                  makeMessage({ id: 'm-3', body: 'three' }),
+                  makeMessage({ id: 'm-2', body: 'two' }),
+                  makeMessage({ id: 'm-1', body: 'one' }),
+                ] }]}
+              />
+            </BrowserRouter>
+          </QueryClientProvider>
+        );
+        const { container } = render(Tree);
+        const scroller = container.querySelector('div.overflow-y-auto') as HTMLDivElement;
+        Object.defineProperty(scroller, 'clientHeight', { value: 800, configurable: true });
+        Object.defineProperty(scroller, 'scrollHeight', { value: 2400, configurable: true });
+        Object.defineProperty(scroller, 'clientWidth', { value: 600, configurable: true });
+
+        // Reader is at the live tail — initial stick lands them at
+        // the bottom and useAtBottomRef reports < 120px from bottom.
+        scroller.scrollTop = 1600;
+        scroller.dispatchEvent(new Event('scroll'));
+
+        // Reflow: clientWidth jumps by > 24px (panel reflow), and
+        // scrollHeight changes too. The persistent observer's reflow
+        // branch must re-stick instead of bailing.
+        Object.defineProperty(scroller, 'clientWidth', { value: 1000, configurable: true });
+        Object.defineProperty(scroller, 'scrollHeight', { value: 1800, configurable: true });
+        resizeCallback?.();
+        // After re-stick, scrollTop matches the new scrollHeight (the
+        // browser would clamp to maxScrollTop = scrollHeight - clientHeight,
+        // but the assignment is the unclamped value that we wrote).
+        expect(scroller.scrollTop).toBe(1800);
       } finally {
         globalThis.ResizeObserver = origRO;
       }

@@ -3,6 +3,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { MessageItem } from './MessageItem';
 import { useAtBottomRef } from '@/hooks/useAtBottomRef';
 import { useLatestRef } from '@/hooks/useLatestRef';
+import { useStickToBottomOnSettle } from '@/hooks/useStickToBottomOnSettle';
 import { dayKey, formatDayHeading } from '@/lib/format';
 import { deriveThreadMeta } from '@/lib/message-users';
 import type { Message } from '@/types';
@@ -125,7 +126,6 @@ export function MessageList({
   // needs to reference it from its RO callback.
   const userHasScrolledRef = useRef(false);
   const stickyBottomDoneRef = useRef(false);
-  const stickyROrRef = useRef<ResizeObserver | null>(null);
   // Tracks the ID of the bottom message in allMessages. Updated by
   // the lastBottom layout effect below, but DECLARED here so the
   // bottom-stick RO can read it from its closure: the RO uses a
@@ -134,83 +134,75 @@ export function MessageList({
   useLayoutEffect(() => {
     // Channel/DM switch — or transitioning into/out of deep-link
     // mode within the same parent — re-arms initial scroll-to-bottom
-    // and tears down the previous observer so the next mode sets up
-    // its own. Without anchorMsgId in the deps, leaving deep-link
-    // mode in the same channel would never re-pin to the bottom.
+    // so the next mode lands at the right initial position. The
+    // ResizeObserver itself is owned by the layout effect below and
+    // tears down via its own cleanup when channel/anchor change
+    // bubbles into a different `allMessages.length` value.
     stickyBottomDoneRef.current = false;
-    if (stickyROrRef.current) {
-      stickyROrRef.current.disconnect();
-      stickyROrRef.current = null;
-    }
   }, [channelId, conversationId, anchorMsgId]);
+  // Initial stick + multi-stage settle chase for content that
+  // settles after first paint. See the hook for the strategy.
+  useStickToBottomOnSettle({
+    scrollRef,
+    innerRef,
+    pulse: allMessages.length,
+    doneRef: stickyBottomDoneRef,
+    atBottomRef: wasAtBottomRef,
+    disabled: !!anchorMsgId,
+  });
+
+  // Persistent bottom-stick ResizeObserver. Long-lived per
+  // channel/anchor session so its size baselines track growth
+  // across rerenders. Cleanup disconnects on teardown — without
+  // that, StrictMode's setup-cleanup-setup cycle leaves the
+  // observer permanently disconnected.
   useLayoutEffect(() => {
-    if (stickyBottomDoneRef.current) return;
-    if (allMessages.length === 0) return;
+    if (typeof ResizeObserver === 'undefined') return;
     const el = scrollRef.current;
-    if (!el) return;
+    const inner = innerRef.current;
+    if (!el || !inner) return;
     const stick = () => {
       el.scrollTop = el.scrollHeight;
       wasAtBottomRef.current = true;
     };
-    // Deep-link mode: the anchor effect below controls the initial
-    // scroll position. We still install the ResizeObserver so that
-    // once the user reaches the live tail (atBottomRef flips true),
-    // settling content keeps following along — the gating below
-    // ensures the observer is a no-op until then.
-    if (!anchorMsgId) {
-      stick();
-    }
-    stickyBottomDoneRef.current = true;
-    if (typeof ResizeObserver === 'undefined') return;
-    const inner = innerRef.current;
-    if (!inner) return;
-    // The bottom-stick RO follows live conversation: when a NEW
-    // MESSAGE lands at the bottom and the reader is already at the
-    // bottom, stick to the new bottom so the new message comes into
-    // view. It does NOT fire on:
-    //   1. Same-bottom resizes (avatar/attachment loading, reaction
-    //      added) — these change scrollHeight but the bottom message
-    //      ID stays the same. Following them would yank readers who
-    //      happen to be near the bottom (e.g., a deep-link landing
-    //      that the browser clamped to within 120px) on every settling
-    //      image, making the list feel "locked at the bottom".
-    //   2. Scroller width changes (panel toggle, window resize).
-    //      Visible-anchor preservation kicks in for that case so the
-    //      reader's current message stays visually pinned.
-    //
-    // The "new message added at the bottom" signal comes from the
-    // lastBottomIdRef that the lastBottom layout effect maintains —
-    // it's updated synchronously when allMessages's last item changes,
-    // before this RO callback fires. We compare against the bottom ID
-    // we last SAW here (in this RO's closure), so any RO fire where
-    // the bottom didn't change is treated as a no-op resize.
-    // The lastBottom layout effect (which populates lastBottomIdRef)
-    // runs AFTER this effect, so on first fire the ref may still be
-    // undefined. Detect that and treat it as the initial snapshot —
-    // not a "new message arrived".
     let lastScrollHeight = el.scrollHeight;
     let lastClientWidth = el.clientWidth;
+    let lastClientHeight = el.clientHeight;
     const ro = new ResizeObserver(() => {
       const width = el.clientWidth;
       const height = el.scrollHeight;
+      const containerHeight = el.clientHeight;
       const widthDelta = Math.abs(width - lastClientWidth);
       const heightDelta = Math.abs(height - lastScrollHeight);
-      // True layout reflow = both width AND height change (panel
-      // toggle, window resize). Width-only changes come from overlay-
-      // scrollbar appearance during scroll on some platforms.
+      const containerHeightDelta = Math.abs(containerHeight - lastClientHeight);
+      // Width AND height both changing = a real reflow (panel toggle,
+      // viewport resize). Width-only deltas come from overlay
+      // scrollbars and don't count.
       const reflow = widthDelta > 24 && heightDelta > 0.5;
       const grew = height > lastScrollHeight + 0.5;
+      // Scroller's clientHeight changed without inner growing — Header
+      // reflow, MessageInput growth, TypingIndicator appearing. Without
+      // this signal a reader at the bottom gets silently clamped above
+      // it (the long-tail "1/N refresh isn't fully scrolled" flake).
+      const containerResized = containerHeightDelta > 0.5;
       lastClientWidth = width;
       lastScrollHeight = height;
+      lastClientHeight = containerHeight;
       if (reflow) {
-        // Layout reflow → preserve the reader's visible-anchor
-        // position so the browser's clamp-on-shrink doesn't drag
-        // them and reflow doesn't shift their reading position.
-        // Skipped when the reader is at the live tail (sticking
-        // handles them) and in deep-link mode (the anchor effect
-        // controls position).
+        // Reader at the live tail → stick to the new bottom. Without
+        // this branch, a reflow that shrinks the scroller (sidebar
+        // toggle, viewport resize) clamps scrollTop down by the height
+        // delta and the user ends up parked above the live tail.
+        // Skipped in deep-link mode (the anchor effect owns position).
+        if (wasAtBottomRef.current && !anchorMsgId) {
+          stick();
+          return;
+        }
+        // Otherwise preserve the reader's visible-anchor position so
+        // the browser's clamp-on-shrink doesn't drag them and reflow
+        // doesn't shift their reading position.
         const anchor = visibleAnchorRef.current;
-        if (anchor && !wasAtBottomRef.current) {
+        if (anchor) {
           const msg = document.getElementById(`msg-${anchor.id}`);
           if (msg) {
             const scrollerTop = el.getBoundingClientRect().top;
@@ -229,21 +221,20 @@ export function MessageList({
       // opted into live-tail follow, so we never auto-yank them
       // (even when a new message arrives in the loaded set).
       if (anchorMsgId) return;
-      if (!grew) return;
-      if (wasAtBottomRef.current) stick();
+      if (wasAtBottomRef.current && (grew || containerResized)) stick();
     });
+    // Observe BOTH the inner content AND the scroller itself. Inner
+    // catches content-height changes (new messages, image decode,
+    // markdown / attachment / unfurl hydration). Scroller catches
+    // container-height changes (Header reflow, MessageInput growth,
+    // TypingIndicator appearance, viewport resize) — those don't
+    // change inner's size but do change the bottom anchor.
     ro.observe(inner);
-    stickyROrRef.current = ro;
-  }, [allMessages.length, anchorMsgId, wasAtBottomRef]);
-  useEffect(
-    () => () => {
-      if (stickyROrRef.current) {
-        stickyROrRef.current.disconnect();
-        stickyROrRef.current = null;
-      }
-    },
-    [],
-  );
+    ro.observe(el);
+    return () => {
+      ro.disconnect();
+    };
+  }, [channelId, conversationId, anchorMsgId, wasAtBottomRef]);
 
   // Backup for the bottom-stick RO: late-loading <img> elements
   // (avatars, inline attachments, unfurl thumbs) finish at unpredictable
@@ -497,9 +488,16 @@ export function MessageList({
   // actually has more — calling refetch() re-evaluates `hasMore` so
   // the load-more sentinel can come back. Rate-limited so a flicked
   // mousewheel doesn't fire a thundering herd of requests.
+  //
+  // Skipped in deep-link mode: refetch() triggers v5's walk-forward
+  // refetch from initialPageParam (the `around` window), which wipes
+  // every newer page the user fetched via fetchPreviousPage and leaves
+  // the load-newer sentinel stuck re-requesting the around's newestID.
+  // The load-more sentinel already covers the legitimate "more older"
+  // case in deep-link mode without destroying the chain.
   useEffect(() => {
     const el = scrollRef.current;
-    if (!el || !refetch) return;
+    if (!el || !refetch || anchorMsgId) return;
     let upDelta = 0;
     let lastTrigger = 0;
     const onWheel = (e: WheelEvent) => {
@@ -521,7 +519,7 @@ export function MessageList({
     };
     el.addEventListener('wheel', onWheel, { passive: true });
     return () => el.removeEventListener('wheel', onWheel);
-  }, [refetch]);
+  }, [refetch, anchorMsgId]);
 
   // Read isFetching flags via refs inside the observer callbacks so the
   // observers don't get torn down and recreated on every fetch cycle.

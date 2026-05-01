@@ -6,12 +6,11 @@ import {
   useBasicTypeaheadTriggerMatch,
 } from '@lexical/react/LexicalTypeaheadMenuPlugin';
 import { $createTextNode, COMMAND_PRIORITY_NORMAL, type TextNode } from 'lexical';
-import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { useAllUsers } from '@/hooks/useConversations';
 import { usePresence } from '@/context/PresenceContext';
 import { fuzzyMatch } from '@/lib/fuzzy';
 import { topK } from '@/lib/topk';
-import { getInitials } from '@/lib/format';
+import { UserAvatar } from '@/components/UserAvatar';
 import { $createMentionNode } from '../nodes/MentionNode';
 import { TypeaheadMenu } from './TypeaheadMenu';
 import { $replaceWithDecoratorAndTrailingSpace } from './typeaheadHelpers';
@@ -146,21 +145,22 @@ function MentionRow({ suggestion }: { suggestion: Suggestion }) {
       </div>
     );
   }
+  // Presence dot lives on the avatar (matching MemberList) instead of
+  // hanging off the row's right edge, so the @-mention popup and the
+  // member sidebar use the same visual treatment.
   return (
     <div className="flex items-center gap-2" data-testid="mention-option">
-      <Avatar className="h-7 w-7">
-        <AvatarImage src={suggestion.avatarURL} alt="" />
-        <AvatarFallback>{getInitials(suggestion.displayName)}</AvatarFallback>
-      </Avatar>
+      <UserAvatar
+        displayName={suggestion.displayName}
+        avatarURL={suggestion.avatarURL}
+        online={suggestion.online}
+      />
       <div className="min-w-0 flex-1">
         <div className="truncate font-medium">{suggestion.displayName}</div>
         {suggestion.email && (
           <div className="truncate text-xs text-muted-foreground">{suggestion.email}</div>
         )}
       </div>
-      {suggestion.online && (
-        <span aria-label="Online" className="h-2 w-2 shrink-0 rounded-full bg-emerald-500" />
-      )}
     </div>
   );
 }
