@@ -60,7 +60,10 @@ describe('MessageInput - file upload', () => {
     );
 
     const onSend = vi.fn();
-    render(<MessageInput onSend={onSend} />);
+    // Tiptap doesn't accept synthetic typing in jsdom, so seed the body
+    // through initialBody. The point of the test is the attachmentIDs
+    // wiring, not the editor's text input.
+    render(<MessageInput onSend={onSend} initialBody="see file" />);
 
     const fileInput = screen.getByLabelText('File input') as HTMLInputElement;
     const file = new File(['content'], 'myfile.txt', { type: 'text/plain' });
@@ -76,12 +79,6 @@ describe('MessageInput - file upload', () => {
       expect(screen.getByText('myfile.txt')).toBeInTheDocument();
     });
 
-    // Sending now includes the attachment ID. The composer is a
-    // contentEditable WYSIWYG, so we set textContent + fire the input
-    // event the editor listens to.
-    const editor = screen.getByLabelText('Message input');
-    editor.textContent = 'see file';
-    fireEvent.input(editor);
     fireEvent.click(screen.getByLabelText('Send message'));
 
     expect(onSend).toHaveBeenCalledWith({ body: 'see file', attachmentIDs: ['att-1'] });
@@ -137,6 +134,10 @@ describe('MessageInput - file upload', () => {
             getAsFile: () => pasted,
           },
         ],
+        // Tiptap's paste plugin reads getData('text/html')/('text/plain')
+        // before checking files; provide stubs so it doesn't throw.
+        getData: () => '',
+        types: [],
       },
     });
     await act(async () => { editor.dispatchEvent(event); });
@@ -156,7 +157,11 @@ describe('MessageInput - file upload', () => {
 
     const event = new Event('paste', { bubbles: true, cancelable: true });
     Object.defineProperty(event, 'clipboardData', {
-      value: { items: [{ kind: 'string', type: 'text/plain', getAsFile: () => null }] },
+      value: {
+        items: [{ kind: 'string', type: 'text/plain', getAsFile: () => null }],
+        getData: () => '',
+        types: ['text/plain'],
+      },
     });
     editor.dispatchEvent(event);
 

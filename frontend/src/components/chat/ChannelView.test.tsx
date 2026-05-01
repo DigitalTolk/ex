@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ChannelView } from './ChannelView';
@@ -116,13 +116,13 @@ describe('ChannelView', () => {
     expect(screen.getByRole('heading', { name: 'general' })).toBeInTheDocument();
   });
 
-  it('renders message input with channel placeholder', () => {
+  it('renders message input with channel placeholder', async () => {
     renderChannelView();
-    // The WysiwygEditor exposes its placeholder as `data-placeholder` on
-    // the contentEditable surface (no native placeholder attribute).
-    expect(
-      screen.getByLabelText('Message input').getAttribute('data-placeholder'),
-    ).toBe('Write to ~general');
+    // Lexical renders the placeholder as a sibling element of the
+    // contenteditable when the doc is empty.
+    await waitFor(() => {
+      expect(screen.getByText('Write to ~general')).toBeInTheDocument();
+    });
   });
 
   it('shows "No messages yet" when there are no messages', () => {

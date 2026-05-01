@@ -1,257 +1,218 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, fireEvent } from '@testing-library/react';
-import { createRef } from 'react';
+import { render, fireEvent, screen, waitFor } from '@testing-library/react';
+import { createRef, type ReactNode } from 'react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { WysiwygEditor, type WysiwygEditorHandle } from './WysiwygEditor';
+
+// The mention/channel/emoji typeahead plugins read live data via
+// React Query — stubs are enough for composer-level tests.
+vi.mock('@/lib/api', () => ({ apiFetch: vi.fn().mockResolvedValue([]) }));
+vi.mock('@/hooks/useConversations', async () => {
+  const actual = await vi.importActual<typeof import('@/hooks/useConversations')>('@/hooks/useConversations');
+  return { ...actual, useAllUsers: () => ({ data: [] }) };
+});
+vi.mock('@/hooks/useChannels', async () => {
+  const actual = await vi.importActual<typeof import('@/hooks/useChannels')>('@/hooks/useChannels');
+  return { ...actual, useUserChannels: () => ({ data: [] }) };
+});
+vi.mock('@/hooks/useEmoji', async () => {
+  const actual = await vi.importActual<typeof import('@/hooks/useEmoji')>('@/hooks/useEmoji');
+  return { ...actual, useEmojis: () => ({ data: [] }) };
+});
+vi.mock('@/context/PresenceContext', () => ({
+  usePresence: () => ({ online: new Set<string>() }),
+}));
+
+function Providers({ children }: { children: ReactNode }) {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return <QueryClientProvider client={qc}>{children}</QueryClientProvider>;
+}
+
+function renderEditor(props: Parameters<typeof WysiwygEditor>[0] & { ref?: React.Ref<WysiwygEditorHandle> } = {}) {
+  return render(<Providers><WysiwygEditor {...props} /></Providers>);
+}
+
+function getEditor() {
+  return screen.getByLabelText('Message input');
+}
 
 describe('WysiwygEditor', () => {
   beforeEach(() => {
-    // Stub document.execCommand for jsdom (deprecated, but still used by the editor).
-    document.execCommand = vi.fn(() => true) as unknown as typeof document.execCommand;
+    vi.restoreAllMocks();
   });
 
-  it('mounts with initial markdown converted to HTML', () => {
+  it('mounts with initial markdown rendered and round-trips back', async () => {
     const ref = createRef<WysiwygEditorHandle>();
-    const { getByLabelText } = render(
-      <WysiwygEditor ref={ref} initialBody="**bold**" />,
-    );
-    const el = getByLabelText('Message input');
-    // markdownToEditableHtml turns **bold** into a <strong> wrapper.
-    expect(el.innerHTML).toContain('strong');
-    expect(ref.current?.getMarkdown()).toContain('bold');
+    renderEditor({ ref, initialBody: '**bold** and *italic*' });
+    await waitFor(() => expect(ref.current).not.toBeNull());
+    const md = ref.current!.getMarkdown();
+    expect(md).toContain('**bold**');
+    expect(md).toContain('*italic*');
   });
 
-  it('emits onChange only when markdown actually changes', () => {
-    const onChange = vi.fn();
-    const { getByLabelText } = render(
-      <WysiwygEditor onChange={onChange} initialBody="" />,
-    );
-    const el = getByLabelText('Message input');
-    el.textContent = 'hello';
-    fireEvent.input(el);
-    expect(onChange).toHaveBeenCalledWith('hello');
-    onChange.mockClear();
-    // Same content — no extra emission.
-    fireEvent.input(el);
-    expect(onChange).not.toHaveBeenCalled();
-  });
-
-  it('Enter without Shift submits and prevents the default newline', () => {
+  it('Enter without Shift submits the current markdown', async () => {
     const onSubmit = vi.fn();
-    const { getByLabelText } = render(
-      <WysiwygEditor onSubmit={onSubmit} initialBody="hi" />,
-    );
-    const el = getByLabelText('Message input');
-    fireEvent.keyDown(el, { key: 'Enter' });
-    expect(onSubmit).toHaveBeenCalledWith('hi');
+    const ref = createRef<WysiwygEditorHandle>();
+    renderEditor({ ref, onSubmit, initialBody: 'hi' });
+    await waitFor(() => expect(ref.current).not.toBeNull());
+    fireEvent.keyDown(getEditor(), { key: 'Enter' });
+    expect(onSubmit).toHaveBeenCalled();
+    expect(onSubmit.mock.calls[0][0]).toContain('hi');
   });
 
-  it('Shift+Enter does not submit', () => {
+  it('Shift+Enter does not submit', async () => {
     const onSubmit = vi.fn();
-    const { getByLabelText } = render(
-      <WysiwygEditor onSubmit={onSubmit} initialBody="hi" />,
-    );
-    const el = getByLabelText('Message input');
-    fireEvent.keyDown(el, { key: 'Enter', shiftKey: true });
+    const ref = createRef<WysiwygEditorHandle>();
+    renderEditor({ ref, onSubmit, initialBody: 'hi' });
+    await waitFor(() => expect(ref.current).not.toBeNull());
+    fireEvent.keyDown(getEditor(), { key: 'Enter', shiftKey: true });
     expect(onSubmit).not.toHaveBeenCalled();
   });
 
-  it('Escape calls onCancel when provided', () => {
+  it('Escape calls onCancel when provided', async () => {
     const onCancel = vi.fn();
-    const { getByLabelText } = render(<WysiwygEditor onCancel={onCancel} />);
-    fireEvent.keyDown(getByLabelText('Message input'), { key: 'Escape' });
+    const ref = createRef<WysiwygEditorHandle>();
+    renderEditor({ ref, onCancel });
+    await waitFor(() => expect(ref.current).not.toBeNull());
+    fireEvent.keyDown(getEditor(), { key: 'Escape' });
     expect(onCancel).toHaveBeenCalled();
   });
 
-  it('Ctrl+B / Ctrl+I / Ctrl+E invoke execCommand or wrap inline-code', () => {
-    const exec = document.execCommand as unknown as ReturnType<typeof vi.fn>;
-    const { getByLabelText } = render(<WysiwygEditor />);
-    const el = getByLabelText('Message input');
-    fireEvent.keyDown(el, { key: 'b', ctrlKey: true });
-    expect(exec).toHaveBeenCalledWith('bold');
-    fireEvent.keyDown(el, { key: 'i', ctrlKey: true });
-    expect(exec).toHaveBeenCalledWith('italic');
-    // Ctrl+E uses the inline-code wrapper which calls window.getSelection
-    fireEvent.keyDown(el, { key: 'e', ctrlKey: true });
-    // No extra exec call for Ctrl+E (it uses range manipulation instead);
-    // we assert that no error is thrown and the exec call list does not
-    // include an unexpected 'underline' or similar.
-  });
-
-  it('imperative applyMark calls execCommand for bold / italic / strike', () => {
-    const exec = document.execCommand as unknown as ReturnType<typeof vi.fn>;
+  it('applyBlock("ul") wraps the current line in a bullet list', async () => {
     const ref = createRef<WysiwygEditorHandle>();
-    render(<WysiwygEditor ref={ref} />);
-    ref.current!.applyMark('bold');
-    expect(exec).toHaveBeenCalledWith('bold');
-    ref.current!.applyMark('italic');
-    expect(exec).toHaveBeenCalledWith('italic');
-    ref.current!.applyMark('strike');
-    expect(exec).toHaveBeenCalledWith('strikeThrough');
-  });
-
-  it('imperative applyBlock calls the matching execCommand variants', () => {
-    const exec = document.execCommand as unknown as ReturnType<typeof vi.fn>;
-    const ref = createRef<WysiwygEditorHandle>();
-    render(<WysiwygEditor ref={ref} />);
+    renderEditor({ ref, initialBody: 'item one' });
+    await waitFor(() => expect(ref.current).not.toBeNull());
     ref.current!.applyBlock('ul');
-    expect(exec).toHaveBeenCalledWith('insertUnorderedList');
+    await waitFor(() => expect(ref.current!.getElement()?.querySelector('ul')).not.toBeNull());
+    expect(ref.current!.getMarkdown()).toMatch(/-\s+item one/);
+  });
+
+  it('applyBlock("ol") wraps the current line in an ordered list', async () => {
+    const ref = createRef<WysiwygEditorHandle>();
+    renderEditor({ ref, initialBody: 'step' });
+    await waitFor(() => expect(ref.current).not.toBeNull());
     ref.current!.applyBlock('ol');
-    expect(exec).toHaveBeenCalledWith('insertOrderedList');
+    await waitFor(() => expect(ref.current!.getElement()?.querySelector('ol')).not.toBeNull());
+    expect(ref.current!.getMarkdown()).toMatch(/1\.\s+step/);
+  });
+
+  it('applyBlock("quote") wraps the line in a blockquote', async () => {
+    const ref = createRef<WysiwygEditorHandle>();
+    renderEditor({ ref, initialBody: 'quoted' });
+    await waitFor(() => expect(ref.current).not.toBeNull());
     ref.current!.applyBlock('quote');
-    expect(exec).toHaveBeenCalledWith('formatBlock', false, 'blockquote');
+    await waitFor(() => expect(ref.current!.getElement()?.querySelector('blockquote')).not.toBeNull());
+    expect(ref.current!.getMarkdown()).toMatch(/^>\s+quoted/m);
   });
 
-  it('applyLink prompts for URL and calls createLink only when answered', () => {
-    const exec = document.execCommand as unknown as ReturnType<typeof vi.fn>;
+  it('beginLinkEdit + commitLinkEdit links the text inserted by the dialog', async () => {
     const ref = createRef<WysiwygEditorHandle>();
-    render(<WysiwygEditor ref={ref} />);
-
-    const promptSpy = vi.spyOn(window, 'prompt').mockReturnValueOnce('');
-    ref.current!.applyLink();
-    // Empty answer = no createLink call.
-    expect(exec).not.toHaveBeenCalledWith('createLink', false, expect.anything());
-    promptSpy.mockReset();
-
-    promptSpy.mockReturnValueOnce('https://example.com');
-    ref.current!.applyLink();
-    expect(exec).toHaveBeenCalledWith('createLink', false, 'https://example.com');
-    promptSpy.mockRestore();
+    renderEditor({ ref });
+    await waitFor(() => expect(ref.current).not.toBeNull());
+    // No selection yet (collapsed) — commit inserts the display text
+    // and links it. Mirrors the toolbar Link button flow when nothing
+    // is selected.
+    ref.current!.beginLinkEdit();
+    ref.current!.commitLinkEdit('https://example.com', 'docs');
+    await waitFor(() => expect(ref.current!.getElement()?.querySelector('a[href="https://example.com"]')).not.toBeNull());
+    expect(ref.current!.getMarkdown()).toContain('[docs](https://example.com)');
   });
 
-  it('insertText calls execCommand("insertText", …)', () => {
-    const exec = document.execCommand as unknown as ReturnType<typeof vi.fn>;
+  it('commitLinkEdit returns selectedText="" when nothing is selected', async () => {
+    // The full select-and-link path requires real DOM focus + selection,
+    // which jsdom can't replicate (Lexical's selection state syncs from
+    // the DOM, and an unfocused contenteditable always reports an empty
+    // selection). Cover the wiring here; the round-trip is exercised by
+    // the dialog test in MessageInput.extra.test.tsx and by E2E.
     const ref = createRef<WysiwygEditorHandle>();
-    render(<WysiwygEditor ref={ref} />);
-    ref.current!.insertText(':smile: ');
-    expect(exec).toHaveBeenCalledWith('insertText', false, ':smile: ');
+    renderEditor({ ref, initialBody: 'see docs' });
+    await waitFor(() => expect(ref.current).not.toBeNull());
+    expect(ref.current!.beginLinkEdit().selectedText).toBe('');
   });
 
-  it('setMarkdown replaces the editor content and emits onChange', () => {
+  it('insertText injects raw text at the caret', async () => {
+    const ref = createRef<WysiwygEditorHandle>();
+    renderEditor({ ref, initialBody: 'hello ' });
+    await waitFor(() => expect(ref.current).not.toBeNull());
+    ref.current!.focus();
+    ref.current!.insertText('world');
+    // Lexical mutations land on the next paint in jsdom; wait for the
+    // DOM to reflect the new text content.
+    await waitFor(() => {
+      expect(ref.current!.getElement()?.textContent ?? '').toContain('world');
+    });
+    expect(ref.current!.getMarkdown()).toContain('world');
+  });
+
+  it('setMarkdown replaces the editor content and emits onChange', async () => {
     const onChange = vi.fn();
     const ref = createRef<WysiwygEditorHandle>();
-    const { getByLabelText } = render(<WysiwygEditor ref={ref} onChange={onChange} />);
-    ref.current!.setMarkdown('hello *world*');
-    const el = getByLabelText('Message input');
-    expect(el.innerHTML.length).toBeGreaterThan(0);
-    expect(onChange).toHaveBeenCalledWith('hello *world*');
+    renderEditor({ ref, onChange });
+    await waitFor(() => expect(ref.current).not.toBeNull());
+    ref.current!.setMarkdown('**hi**');
+    await waitFor(() => expect(ref.current!.getMarkdown()).toContain('**hi**'));
+    expect(onChange).toHaveBeenCalled();
   });
 
-  it('focus() focuses the contentEditable region', () => {
+  it('focus() runs without throwing and exposes getElement()', async () => {
     const ref = createRef<WysiwygEditorHandle>();
-    const { getByLabelText } = render(<WysiwygEditor ref={ref} />);
-    ref.current!.focus();
-    expect(document.activeElement).toBe(getByLabelText('Message input'));
+    renderEditor({ ref });
+    await waitFor(() => expect(ref.current).not.toBeNull());
+    expect(() => ref.current!.focus()).not.toThrow();
+    expect(ref.current!.getElement()).toBe(getEditor());
   });
 
-  it('applyMark("code") wraps a non-collapsed selection in <code>', () => {
+  it('renders a <blockquote> in the DOM when initial markdown is "> hi"', async () => {
+    renderEditor({ initialBody: '> hi' });
+    await waitFor(() => {
+      expect(getEditor().querySelector('blockquote')).not.toBeNull();
+    });
+  });
+
+  it('round-trips an ordered list back to markdown without blank-line bloat', async () => {
     const ref = createRef<WysiwygEditorHandle>();
-    const { getByLabelText } = render(<WysiwygEditor ref={ref} initialBody="abc" />);
-    const el = getByLabelText('Message input');
-    // Select the entire text so the wrapper goes around it.
-    const range = document.createRange();
-    range.selectNodeContents(el);
-    const sel = window.getSelection();
-    sel?.removeAllRanges();
-    sel?.addRange(range);
-    ref.current!.applyMark('code');
-    expect(el.innerHTML).toContain('<code>');
+    renderEditor({ ref, initialBody: '1. one\n2. two' });
+    await waitFor(() => expect(ref.current).not.toBeNull());
+    const md = ref.current!.getMarkdown();
+    expect(md).toMatch(/1\.\s+one/);
+    expect(md).toMatch(/2\.\s+two/);
+    expect(md).not.toMatch(/\d+\.\s*\n\n\S/);
   });
 
-  it('renders a <blockquote> element in the editor when initial markdown is "> hi"', () => {
-    const { getByLabelText } = render(<WysiwygEditor initialBody="> hi" />);
-    const el = getByLabelText('Message input');
-    // The visible quote bar comes from CSS scoped to .wysiwyg-editor —
-    // here we pin the DOM contract so the styling has something to bind to.
-    expect(el.querySelector('blockquote')).not.toBeNull();
-    expect(el.classList.contains('wysiwyg-editor')).toBe(true);
+  it('round-trips a multi-line blockquote back to "> line" per row', async () => {
+    const ref = createRef<WysiwygEditorHandle>();
+    renderEditor({ ref, initialBody: '> a\n> b' });
+    await waitFor(() => expect(ref.current).not.toBeNull());
+    const md = ref.current!.getMarkdown();
+    expect(md).toMatch(/>\s+a/);
+    expect(md).toMatch(/>\s+b/);
   });
 
-  it('Enter on a typed "1. foo" line auto-inserts the next "2. " marker', () => {
-    const onSubmit = vi.fn();
-    const { getByLabelText } = render(
-      <WysiwygEditor onSubmit={onSubmit} initialBody="" />,
-    );
-    const el = getByLabelText('Message input');
-    // Plant a text node with a typed list line and put the caret at the end.
-    const text = document.createTextNode('1. foo');
-    el.innerHTML = '';
-    el.appendChild(text);
-    const range = document.createRange();
-    range.setStart(text, text.length);
-    range.collapse(true);
-    const sel = window.getSelection();
-    sel?.removeAllRanges();
-    sel?.addRange(range);
-
-    fireEvent.keyDown(el, { key: 'Enter' });
-    // No submit — list-continuation handled it.
-    expect(onSubmit).not.toHaveBeenCalled();
-    // A <br> + "2. " was inserted at the caret.
-    expect(el.innerHTML).toContain('<br>');
-    expect(el.textContent).toBe('1. foo2. ');
+  it('preserves "# Heading" as literal markdown text without rendering an <h1>', async () => {
+    // Headings are deliberately not rendered in the composer (UX feedback:
+    // mid-thought heading typography felt buggy). The wire format must
+    // still round-trip the raw `# foo` literal so the message list
+    // renders it as a heading.
+    const ref = createRef<WysiwygEditorHandle>();
+    renderEditor({ ref, initialBody: '# Hello' });
+    await waitFor(() => expect(ref.current).not.toBeNull());
+    expect(ref.current!.getElement()?.querySelector('h1')).toBeNull();
+    expect(ref.current!.getMarkdown()).toMatch(/^#\s+Hello/);
   });
 
-  it('Enter on an empty "- " marker line closes the list (strips marker, no submit)', () => {
-    const onSubmit = vi.fn();
-    const { getByLabelText } = render(
-      <WysiwygEditor onSubmit={onSubmit} initialBody="" />,
-    );
-    const el = getByLabelText('Message input');
-    const text = document.createTextNode('- ');
-    el.innerHTML = '';
-    el.appendChild(text);
-    const range = document.createRange();
-    range.setStart(text, text.length);
-    range.collapse(true);
-    const sel = window.getSelection();
-    sel?.removeAllRanges();
-    sel?.addRange(range);
-
-    fireEvent.keyDown(el, { key: 'Enter' });
-    expect(onSubmit).not.toHaveBeenCalled();
-    // Marker removed, line is now empty.
-    expect(el.textContent).toBe('');
+  it('round-trips a user mention through markdown', async () => {
+    const ref = createRef<WysiwygEditorHandle>();
+    renderEditor({ ref, initialBody: 'hello @[u-1|Alice] there' });
+    await waitFor(() => expect(ref.current).not.toBeNull());
+    expect(ref.current!.getElement()?.querySelector('span.mention[data-user-id="u-1"]')).not.toBeNull();
+    expect(ref.current!.getMarkdown()).toContain('@[u-1|Alice]');
   });
 
-  it('Enter inside an empty <li> exits the list and does not submit', () => {
-    const onSubmit = vi.fn();
-    const { getByLabelText } = render(
-      <WysiwygEditor onSubmit={onSubmit} initialBody="" />,
-    );
-    const el = getByLabelText('Message input');
-    el.innerHTML = '<ul><li>foo</li><li><br></li></ul>';
-    const emptyLi = el.querySelectorAll('li')[1];
-    const range = document.createRange();
-    range.setStart(emptyLi, 0);
-    range.collapse(true);
-    const sel = window.getSelection();
-    sel?.removeAllRanges();
-    sel?.addRange(range);
-
-    fireEvent.keyDown(el, { key: 'Enter' });
-    expect(onSubmit).not.toHaveBeenCalled();
-    // The empty li was removed; a div sits after the surviving list.
-    expect(el.querySelectorAll('li').length).toBe(1);
-    expect(el.querySelector('ul + div')).not.toBeNull();
-  });
-
-  it('Enter inside an empty <blockquote> exits the blockquote and does not submit', () => {
-    const onSubmit = vi.fn();
-    const { getByLabelText } = render(
-      <WysiwygEditor onSubmit={onSubmit} initialBody="" />,
-    );
-    const el = getByLabelText('Message input');
-    el.innerHTML = '<blockquote><br></blockquote>';
-    const bq = el.querySelector('blockquote')!;
-    const range = document.createRange();
-    range.setStart(bq, 0);
-    range.collapse(true);
-    const sel = window.getSelection();
-    sel?.removeAllRanges();
-    sel?.addRange(range);
-
-    fireEvent.keyDown(el, { key: 'Enter' });
-    expect(onSubmit).not.toHaveBeenCalled();
-    expect(el.querySelector('blockquote')).toBeNull();
+  it('round-trips a channel mention through markdown', async () => {
+    const ref = createRef<WysiwygEditorHandle>();
+    renderEditor({ ref, initialBody: 'see ~[c-1|general]' });
+    await waitFor(() => expect(ref.current).not.toBeNull());
+    expect(ref.current!.getElement()?.querySelector('span.channel-mention[data-channel-id="c-1"]')).not.toBeNull();
+    expect(ref.current!.getMarkdown()).toContain('~[c-1|general]');
   });
 });

@@ -82,7 +82,8 @@ vi.mock('@/components/chat/WysiwygEditor', async () => {
       React.useImperativeHandle(ref, () => ({
         applyMark: () => {},
         applyBlock: () => {},
-        applyLink: () => {},
+        beginLinkEdit: () => ({ selectedText: '' }),
+        commitLinkEdit: () => {},
         insertText: (t: string) => { if (taRef.current) taRef.current.value += t; },
         getMarkdown: () => taRef.current?.value ?? '',
         setMarkdown: (md: string) => { if (taRef.current) taRef.current.value = md; },

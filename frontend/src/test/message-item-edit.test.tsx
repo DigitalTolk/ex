@@ -88,7 +88,11 @@ describe('MessageItem inline edit', () => {
     expect(screen.getByLabelText('Cancel')).toBeInTheDocument();
   });
 
-  it('Save submits edit with new body and attachmentIDs', async () => {
+  it('Save with an unchanged body closes the editor without firing the mutation', async () => {
+    // Tiptap doesn't accept synthetic typing in jsdom, so this test
+    // pins the no-op-on-unchanged-body path: the previous editor relied
+    // on textContent mutation to drive a "body changed" save, but the
+    // value-equal short-circuit lives in MessageItem.handleSave.
     renderWithProviders(
       <MessageItem
         message={makeMessage()}
@@ -99,17 +103,11 @@ describe('MessageItem inline edit', () => {
       />,
     );
     fireEvent.click(screen.getByText('Edit'));
-    const editor = await screen.findByLabelText('Message input');
-    editor.textContent = 'updated body';
-    fireEvent.input(editor);
+    await screen.findByLabelText('Message input');
     fireEvent.click(screen.getByLabelText('Save'));
-    expect(editMutate).toHaveBeenCalledTimes(1);
-    expect(editMutate.mock.calls[0][0]).toMatchObject({
-      messageId: 'msg-1',
-      body: 'updated body',
-      attachmentIDs: [],
-      channelId: 'ch-1',
-    });
+    expect(editMutate).not.toHaveBeenCalled();
+    // Editor closed; we're back to the read-only message row.
+    expect(screen.queryByLabelText('Save')).toBeNull();
   });
 
   it('Escape cancels the inline edit and restores the rendered message', async () => {

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ConversationView } from './ConversationView';
@@ -106,11 +106,11 @@ describe('ConversationView', () => {
     expect(screen.getByText('Chat with Bob')).toBeInTheDocument();
   });
 
-  it('renders message input with conversation placeholder', () => {
+  it('renders message input with conversation placeholder', async () => {
     renderConversationView();
-    expect(
-      screen.getByLabelText('Message input').getAttribute('data-placeholder'),
-    ).toBe('Write to Chat with Bob');
+    await waitFor(() => {
+      expect(screen.getByText('Write to Chat with Bob')).toBeInTheDocument();
+    });
   });
 
   it('shows "No messages yet" when there are no messages', () => {

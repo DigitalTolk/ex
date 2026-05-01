@@ -1,28 +1,41 @@
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import type { ReactNode } from 'react';
 import { WysiwygEditor } from '@/components/chat/WysiwygEditor';
 
+function Providers({ children }: { children: ReactNode }) {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return <QueryClientProvider client={qc}>{children}</QueryClientProvider>;
+}
+
 describe('WysiwygEditor placeholder', () => {
-  it('exposes the provided placeholder text on data-placeholder when empty', () => {
-    render(<WysiwygEditor value="" onChange={() => {}} placeholder="Write to ~general" />);
-    const el = screen.getByRole('textbox');
-    expect(el.getAttribute('data-placeholder')).toBe('Write to ~general');
+  it('renders the placeholder text via the Lexical RichTextPlugin slot', async () => {
+    // Lexical renders the placeholder in its own absolutely-positioned
+    // div as a sibling of the contenteditable surface (not as an
+    // attribute on a child paragraph the way Tiptap did).
+    render(
+      <Providers>
+        <WysiwygEditor initialBody="" placeholder="Write to ~general" />
+      </Providers>,
+    );
+    await waitFor(() => {
+      expect(screen.getByText('Write to ~general')).toBeInTheDocument();
+    });
   });
 
-  it('still keeps the data-placeholder attribute populated even with content (CSS hides it via :empty)', () => {
-    render(<WysiwygEditor value="<p>hi</p>" onChange={() => {}} placeholder="Write to ~general" />);
-    const el = screen.getByRole('textbox');
-    expect(el.getAttribute('data-placeholder')).toBe('Write to ~general');
-  });
-
-  it('global stylesheet renders the placeholder via .wysiwyg-editor:empty::before', () => {
-    // Pin the CSS contract: the only way the placeholder is visible inside a
-    // contentEditable is via this rule, and we don't want a future cleanup to
-    // delete it without noticing.
-    const css = readFileSync(resolve(__dirname, '../index.css'), 'utf8');
-    expect(css).toMatch(/\.wysiwyg-editor:empty::before/);
-    expect(css).toMatch(/content:\s*attr\(data-placeholder\)/);
+  it('does not render the placeholder when the editor has content', async () => {
+    render(
+      <Providers>
+        <WysiwygEditor initialBody="hi" placeholder="Write to ~general" />
+      </Providers>,
+    );
+    await waitFor(() => {
+      expect(screen.getByLabelText('Message input').textContent).toContain('hi');
+    });
+    // Lexical's placeholder element exists in the DOM but is hidden via
+    // CSS when the doc isn't empty. Either it's gone or it's hidden —
+    // we only need to verify it isn't visibly the only thing showing.
+    expect(screen.queryByText('Write to ~general')).toBeNull();
   });
 });

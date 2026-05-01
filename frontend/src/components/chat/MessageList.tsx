@@ -263,7 +263,14 @@ export function MessageList({
       const target = e.target as HTMLElement | null;
       if (!target || target.tagName !== 'IMG') return;
       if (!wasAtBottomRef.current) return;
-      el.scrollTop = el.scrollHeight;
+      // Defer to the next frame so the browser has a chance to apply
+      // the just-loaded image's intrinsic dimensions to layout. Reading
+      // scrollHeight synchronously inside the load handler can return
+      // the pre-resize value in some browsers, leaving the scroll
+      // position one image-height short of the actual bottom.
+      requestAnimationFrame(() => {
+        el.scrollTop = el.scrollHeight;
+      });
     };
     // useCapture=true so img load events (which don't bubble) reach us.
     inner.addEventListener('load', onLoad, true);

@@ -27,6 +27,34 @@ vi.mock('@/hooks/useEmoji', () => ({
   useEmojiMap: () => ({ data: {} }),
 }));
 
+// MessageInput is exhaustively unit-tested in isolation; here we just
+// need a test stub that exposes onSend + records the typing-related
+// props so ThreadPanel's prop wiring can be verified without going
+// through the full Lexical composer (synthetic typing into Lexical's
+// contenteditable isn't wired in jsdom).
+const lastMessageInputProps: { current: Record<string, unknown> | null } = { current: null };
+vi.mock('./MessageInput', () => ({
+  MessageInput: (props: {
+    onSend?: (v: { body: string; attachmentIDs: string[] }) => void;
+    typingParentID?: string;
+    typingParentType?: string;
+    typingThreadRootID?: string;
+  }) => {
+    lastMessageInputProps.current = props as Record<string, unknown>;
+    return (
+      <div>
+        <textarea aria-label="Message input" data-testid="message-input-stub" />
+        <button
+          aria-label="Send message"
+          onClick={() => props.onSend?.({ body: 'hello in thread', attachmentIDs: [] })}
+        >
+          Send
+        </button>
+      </div>
+    );
+  },
+}));
+
 function renderWithProviders(ui: React.ReactElement) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
@@ -108,9 +136,8 @@ describe('ThreadPanel', () => {
     expect(onClose).toHaveBeenCalled();
   });
 
-  it('sends a reply via parentMessageID', async () => {
-    mockApiFetch.mockResolvedValueOnce([]); // initial GET
-    mockApiFetch.mockResolvedValueOnce({ id: 'new', body: 'hi', authorID: 'u-1', createdAt: '', parentID: 'ch-1' }); // POST
+  it('forwards parentMessageID to useSendMessage when the user sends a reply', async () => {
+    mockApiFetch.mockResolvedValueOnce([]);
     const user = userEvent.setup();
     renderWithProviders(
       <ThreadPanel
@@ -122,8 +149,6 @@ describe('ThreadPanel', () => {
       />,
     );
 
-    const textarea = await screen.findByLabelText('Message input');
-    await user.type(textarea, 'hello in thread');
     await user.click(screen.getByLabelText('Send message'));
 
     await waitFor(() => {
@@ -245,36 +270,25 @@ describe('ThreadPanel', () => {
     });
 
     it('passes typingThreadRootID down so the composer broadcasts thread-scoped typing', async () => {
-      // Spy on the WS sender used by MessageInput.emitTyping.
-      const wsSender = await import('@/lib/ws-sender');
-      const sentFrames: Record<string, unknown>[] = [];
-      wsSender.setWSSender((frame) => {
-        sentFrames.push(JSON.parse(frame));
+      mockApiFetch.mockResolvedValueOnce([]);
+      renderWithProviders(
+        <ThreadPanel
+          channelId="ch-1"
+          threadRootID="m-1"
+          onClose={vi.fn()}
+          userMap={userMap}
+          currentUserId="u-1"
+        />,
+      );
+      await screen.findByLabelText('Message input');
+      // ThreadPanel hands the right typing-channel triplet to
+      // MessageInput; the actual frame emit lives in MessageInput's
+      // own unit tests (TypingContext + MessageInput.emitTyping).
+      expect(lastMessageInputProps.current).toMatchObject({
+        typingParentID: 'ch-1',
+        typingParentType: 'channel',
+        typingThreadRootID: 'm-1',
       });
-      try {
-        mockApiFetch.mockResolvedValueOnce([]);
-        const user = userEvent.setup();
-        renderWithProviders(
-          <ThreadPanel
-            channelId="ch-1"
-            threadRootID="m-1"
-            onClose={vi.fn()}
-            userMap={userMap}
-            currentUserId="u-1"
-          />,
-        );
-        const textarea = await screen.findByLabelText('Message input');
-        await user.type(textarea, 'h');
-        const typingFrame = sentFrames.find((f) => f.type === 'typing');
-        expect(typingFrame).toMatchObject({
-          type: 'typing',
-          parentID: 'ch-1',
-          parentType: 'channel',
-          parentMessageID: 'm-1',
-        });
-      } finally {
-        wsSender.setWSSender(null);
-      }
     });
   });
 

@@ -110,15 +110,16 @@
 }
 
 @layer components {
-  /* WysiwygEditor uses a contentEditable div, so the native :placeholder
-     pseudo doesn't apply. Show the data-placeholder attribute as muted text
-     when the editor is empty (no children) — and keep showing it while the
-     element is focused so the user always sees what they're writing into. */
-  .wysiwyg-editor:empty::before {
+  /* Placeholder rendering. Tiptap's @tiptap/extension-placeholder marks
+     the first empty paragraph with `is-editor-empty` and writes the
+     supplied text to `data-placeholder`. We surface it via a ::before
+     pseudo so the contenteditable's native cursor still draws on top. */
+  .wysiwyg-editor p.is-editor-empty:first-child::before {
     content: attr(data-placeholder);
     color: var(--color-muted-foreground);
     pointer-events: none;
-    display: block;
+    float: left;
+    height: 0;
   }
 
   /* Tailwind's preflight zeroes list-style and padding on ul/ol globally.
@@ -141,5 +142,14 @@
     padding-left: 0.75rem;
     margin: 0.25rem 0;
     color: var(--color-muted-foreground);
+  }
+  /* Inline code styling that matches the rendered-message look so what
+     the user types in the composer is what they see in the feed. */
+  .wysiwyg-editor code {
+    background: var(--color-muted);
+    padding: 0.125rem 0.375rem;
+    border-radius: 0.25rem;
+    font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+    font-size: 0.875rem;
   }
 }

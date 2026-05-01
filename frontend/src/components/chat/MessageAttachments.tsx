@@ -97,7 +97,14 @@ function ThumbnailButton({ att, onOpen }: { att: Attachment; onOpen: () => void 
       data-testid="message-image-thumb"
     >
       {att.url && (
-        <img src={att.url} alt={att.filename} className="max-h-72 max-w-full" loading="lazy" />
+        // Eager load: the live-tail bottom-stick logic in MessageList
+        // re-pins on each img's load event. With loading="lazy" a freshly
+        // posted image at the bottom of the viewport sometimes never
+        // triggers the load event (browser decides it's outside the
+        // near-viewport heuristic when its 0×0 placeholder is exactly at
+        // the visible bottom), so the scroll never catches up to its
+        // grown box.
+        <img src={att.url} alt={att.filename} className="max-h-72 max-w-full" />
       )}
     </button>
   );

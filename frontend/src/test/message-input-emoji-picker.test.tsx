@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 vi.mock('@/lib/api', () => ({ apiFetch: vi.fn() }));
@@ -42,26 +42,19 @@ describe('MessageInput — emoji picker integration', () => {
     expect(screen.getByLabelText('Search emojis')).toBeInTheDocument();
   });
 
-  it('picking an emoji inserts the shortcode into the editor (focus is restored first)', () => {
-    // Regression: the emoji button stole focus from the contentEditable
-    // editor, so document.execCommand("insertText") silently no-op'd.
-    // The fix lives in WysiwygEditor: restoreEditorSelection() before
-    // insertText. This test asserts the full pipe — picker → MessageInput
-    // → WysiwygEditor.insertText → execCommand("insertText", :name: ).
+  it('picking an emoji inserts the shortcode into the editor', async () => {
+    // Regression: the emoji button stole focus from the editor and the
+    // shortcode never landed. Tiptap drives inserts through editor
+    // commands rather than execCommand, so we assert the visible
+    // outcome: the editor's text content gains a `:name:` token.
     renderInput();
     fireEvent.click(screen.getByLabelText('Emoji'));
+    fireEvent.click(screen.getAllByTestId('emoji-picker-tile')[0]);
 
-    // Pick the first standard tile. The picker tags every grid cell
-    // with data-testid="emoji-picker-tile" so we don't depend on a
-    // specific emoji name.
-    const tiles = screen.getAllByTestId('emoji-picker-tile');
-    fireEvent.click(tiles[0]);
-
-    const exec = document.execCommand as unknown as ReturnType<typeof vi.fn>;
-    const insertCalls = exec.mock.calls.filter((c) => c[0] === 'insertText');
-    expect(insertCalls.length).toBe(1);
-    const inserted = insertCalls[0][2] as string;
-    expect(inserted).toMatch(/^:[a-z0-9_+-]+: $/i);
+    await waitFor(() => {
+      const editor = screen.getByLabelText('Message input');
+      expect(editor.textContent ?? '').toMatch(/:[a-z0-9_+-]+:/i);
+    });
   });
 
   it('picking an emoji closes the picker', async () => {
@@ -73,19 +66,16 @@ describe('MessageInput — emoji picker integration', () => {
     expect(screen.queryByLabelText('Search emojis')).toBeNull();
   });
 
-  it('focuses the editor before invoking execCommand even when no caret was set', () => {
+  it('inserts a shortcode even when the editor was never focused first', async () => {
     // Reproduces the user-reported case: composer just mounted, user
-    // hasn't typed anything. selectionchange never fired with a range
-    // inside the editor, so lastRangeRef is null. The fallback in
-    // restoreEditorSelection drops the caret at the end of the editor
-    // — and crucially focuses it — so the subsequent execCommand
-    // actually writes characters.
+    // hasn't typed anything. The picker's onSelect path must focus the
+    // editor before inserting so the shortcode actually lands.
     renderInput();
     fireEvent.click(screen.getByLabelText('Emoji'));
     fireEvent.click(screen.getAllByTestId('emoji-picker-tile')[0]);
-
-    const editor = screen.getByLabelText('Message input');
-    expect(document.activeElement).toBe(editor);
+    await waitFor(() => {
+      expect(screen.getByLabelText('Message input').textContent ?? '').toMatch(/:[a-z0-9_+-]+:/i);
+    });
   });
 
   it('the emoji search input filters the visible tiles', async () => {

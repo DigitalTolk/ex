@@ -1899,6 +1899,15 @@ describe('MessageList', () => {
     const img = document.createElement('img');
     inner.appendChild(img);
 
+    // The image-load handler defers its scroll to the next animation
+    // frame so the browser has time to apply the just-loaded image's
+    // dimensions before scrollHeight is read. Stub rAF to run
+    // synchronously so the assertion can verify the post-frame state.
+    const rafSpy = vi.spyOn(window, 'requestAnimationFrame').mockImplementation((cb) => {
+      cb(0);
+      return 0 as unknown as number;
+    });
+
     Object.defineProperty(scroller, 'scrollHeight', { value: 920, configurable: true });
     img.dispatchEvent(new Event('load'));
     expect(scroller.scrollTop).toBe(920);
@@ -1908,6 +1917,62 @@ describe('MessageList', () => {
     Object.defineProperty(scroller, 'scrollHeight', { value: 1200, configurable: true });
     img.dispatchEvent(new Event('load'));
     expect(scroller.scrollTop).toBe(1200);
+    rafSpy.mockRestore();
+  });
+
+  it('post-message scroll: a freshly sent image catches up to the bottom once it loads', () => {
+    // Regression: when the user posts a message containing an image,
+    // the layout effect that snap-scrolls to the new bottom runs *before*
+    // the image has dimensions, so scrollHeight is short. As soon as the
+    // browser layouts the loaded image, the load-event handler must
+    // re-pin so the message — and the image inside it — is fully visible.
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrap = (props: Partial<React.ComponentProps<typeof MessageList>>) => (
+      <QueryClientProvider client={qc}>
+        <BrowserRouter>
+          <MessageList {...defaultProps} {...props} />
+        </BrowserRouter>
+      </QueryClientProvider>
+    );
+    // Pages are newest-first; allMessages reverses so [len-1] is the
+    // newest. Initial state: a single older message from the user.
+    const pages = [{ items: [makeMessage({ id: 'm-1', authorID: 'user-1' })] }];
+
+    const { container, rerender } = render(wrap({ pages, currentUserId: 'user-1' }));
+    const scroller = container.querySelector('div.overflow-y-auto') as HTMLDivElement;
+    Object.defineProperty(scroller, 'clientHeight', { value: 600, configurable: true });
+    Object.defineProperty(scroller, 'scrollHeight', { value: 700, configurable: true });
+    scroller.scrollTop = 700;
+
+    // User posts a new message with an image. New bottom message ID
+    // changes; the lastBottom layout effect snaps scrollTop to the
+    // (still-short) scrollHeight because the image has 0×0 dimensions.
+    const newPages = [
+      {
+        items: [
+          makeMessage({ id: 'm-2', authorID: 'user-1', body: 'with image' }),
+          makeMessage({ id: 'm-1', authorID: 'user-1' }),
+        ],
+      },
+    ];
+    Object.defineProperty(scroller, 'scrollHeight', { value: 740, configurable: true });
+    rerender(wrap({ pages: newPages, currentUserId: 'user-1' }));
+    expect(scroller.scrollTop).toBe(740);
+
+    // Image inside the new message finishes loading. Box grows from 0×0
+    // to its intrinsic size; scrollHeight grows accordingly. The
+    // load-event handler must re-pin to the new scrollHeight.
+    const rafSpy = vi.spyOn(window, 'requestAnimationFrame').mockImplementation((cb) => {
+      cb(0);
+      return 0 as unknown as number;
+    });
+    const inner = scroller.querySelector('.p-4.space-y-1') as HTMLElement;
+    const img = document.createElement('img');
+    inner.appendChild(img);
+    Object.defineProperty(scroller, 'scrollHeight', { value: 1040, configurable: true });
+    img.dispatchEvent(new Event('load'));
+    expect(scroller.scrollTop).toBe(1040);
+    rafSpy.mockRestore();
   });
 
   it('does NOT re-pin on image load when the user has scrolled up to read older content', () => {

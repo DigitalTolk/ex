@@ -29,9 +29,9 @@ function flushMicrotasks() {
 }
 
 describe('MessageInput focusKey', () => {
-  it('refocuses the textarea when focusKey changes', async () => {
+  it('refocuses the editor when focusKey changes', async () => {
     const { rerender } = render(<MessageInput onSend={vi.fn()} focusKey="ch-1" />);
-    const ta = screen.getByLabelText('Message input') as HTMLTextAreaElement;
+    const editor = screen.getByLabelText('Message input');
     // Move focus elsewhere
     const other = document.createElement('input');
     document.body.appendChild(other);
@@ -46,6 +46,6 @@ describe('MessageInput focusKey', () => {
     await act(async () => {
       await flushMicrotasks();
     });
-    expect(document.activeElement).toBe(ta);
+    expect(document.activeElement).toBe(editor);
   });
 });

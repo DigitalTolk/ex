@@ -30,33 +30,67 @@ function renderWithClient(ui: React.ReactElement) {
 describe('MessageInput toolbar buttons', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    document.execCommand = vi.fn(() => true) as unknown as typeof document.execCommand;
   });
 
-  it('Bold/Italic/Strikethrough/Code/Quote/List buttons trigger execCommand on the editor', () => {
-    const exec = document.execCommand as unknown as ReturnType<typeof vi.fn>;
-    renderWithClient(<MessageInput onSend={vi.fn()} />);
-    fireEvent.click(screen.getByLabelText('Bold (Ctrl+B)'));
-    expect(exec).toHaveBeenCalledWith('bold');
-    fireEvent.click(screen.getByLabelText('Italic (Ctrl+I)'));
-    expect(exec).toHaveBeenCalledWith('italic');
-    fireEvent.click(screen.getByLabelText('Strikethrough'));
-    expect(exec).toHaveBeenCalledWith('strikeThrough');
-    fireEvent.click(screen.getByLabelText('Quote'));
-    expect(exec).toHaveBeenCalledWith('formatBlock', false, 'blockquote');
-    fireEvent.click(screen.getByLabelText('List'));
-    expect(exec).toHaveBeenCalledWith('insertUnorderedList');
-    // Code is the inline-wrapper code path — must not throw.
-    expect(() => fireEvent.click(screen.getByLabelText('Code (Ctrl+E)'))).not.toThrow();
+  it('block toolbar buttons each apply their formatting to the seeded body', async () => {
+    // Block-level toolbar buttons render distinct DOM elements that we
+    // can latch onto. Inline-mark buttons render via theme classes on
+    // <span data-lexical-text> elements — those are covered by the
+    // dedicated mark test below.
+    const cases: Array<{ label: string; selector: string }> = [
+      { label: 'Quote', selector: 'blockquote' },
+      { label: 'List', selector: 'ul' },
+    ];
+    for (const c of cases) {
+      const { unmount } = renderWithClient(<MessageInput onSend={vi.fn()} initialBody="hello" />);
+      const editor = await screen.findByLabelText('Message input');
+      fireEvent.click(screen.getByLabelText(c.label));
+      await waitFor(() => {
+        expect(editor.querySelector(c.selector)).not.toBeNull();
+      });
+      unmount();
+    }
   });
 
-  it('Link button prompts and calls createLink with the answered URL', () => {
-    const exec = document.execCommand as unknown as ReturnType<typeof vi.fn>;
-    renderWithClient(<MessageInput onSend={vi.fn()} />);
-    const promptSpy = vi.spyOn(window, 'prompt').mockReturnValue('https://example.com');
+  it('inline mark buttons (Bold/Italic/Strikethrough/Code) toggle the corresponding text format on the seeded body', async () => {
+    // Lexical renders text-format spans (Bold/Italic/Strike) as
+    // <span data-lexical-text> with theme classes; the inline-code
+    // format renders as a real <code> element. Both are observable via
+    // a specific theme-class marker.
+    const cases: Array<{ label: string; marker: string }> = [
+      { label: 'Bold (Ctrl+B)', marker: 'font-semibold' },
+      { label: 'Italic (Ctrl+I)', marker: 'italic' },
+      { label: 'Strikethrough', marker: 'line-through' },
+      { label: 'Code (Ctrl+E)', marker: 'font-mono' },
+    ];
+    for (const c of cases) {
+      const { unmount } = renderWithClient(<MessageInput onSend={vi.fn()} initialBody="hello" />);
+      const editor = await screen.findByLabelText('Message input');
+      fireEvent.click(screen.getByLabelText(c.label));
+      await waitFor(() => {
+        // Any element inside the editor carrying the theme class is
+        // proof the format took effect.
+        const candidate = editor.querySelector(`.${c.marker.replace(/\s+/g, '.')}`);
+        expect(candidate).not.toBeNull();
+      });
+      unmount();
+    }
+  });
+
+  it('Link button opens the modal and wraps the inserted text in an <a href>', async () => {
+    // Replaces the previous window.prompt() flow — the user requested
+    // no JS popups; the toolbar Link button now opens a shadcn dialog.
+    renderWithClient(<MessageInput onSend={vi.fn()} initialBody="docs" />);
+    const editor = await screen.findByLabelText('Message input');
     fireEvent.click(screen.getByLabelText('Link'));
-    expect(exec).toHaveBeenCalledWith('createLink', false, 'https://example.com');
-    promptSpy.mockRestore();
+    const urlField = await screen.findByLabelText('URL');
+    const textField = screen.getByLabelText('Text');
+    fireEvent.change(textField, { target: { value: 'docs' } });
+    fireEvent.change(urlField, { target: { value: 'https://example.com' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Insert' }));
+    await waitFor(() => {
+      expect(editor.querySelector('a[href="https://example.com"]')).not.toBeNull();
+    });
   });
 
   it('clicking the chip remove button removes the draft and calls the delete mutation', async () => {

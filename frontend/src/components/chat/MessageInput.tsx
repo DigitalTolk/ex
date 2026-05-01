@@ -14,11 +14,20 @@ import {
 } from 'lucide-react';
 import { useEffect } from 'react';
 import { Button } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { EmojiPicker } from '@/components/EmojiPicker';
 import { AttachmentChip, type DraftAttachment } from '@/components/chat/AttachmentChip';
 import { uploadAttachment, useDeleteDraftAttachment } from '@/hooks/useAttachments';
 import { isImageContentType } from '@/lib/file-helpers';
-import { WysiwygEditor, type WysiwygEditorHandle } from '@/components/chat/WysiwygEditor';
+import { WysiwygEditor, type WysiwygEditorHandle, type ActiveFormat } from '@/components/chat/WysiwygEditor';
 import { sendWS } from '@/lib/ws-sender';
 import {
   MAX_ATTACHMENTS_PER_MESSAGE,
@@ -26,6 +35,7 @@ import {
   countCodepoints,
 } from '@/lib/limits';
 import { normalizeEmojiInBody } from '@/lib/emoji-shortcodes';
+import { isHttpUrl } from '@/lib/utils';
 
 const TYPING_PING_INTERVAL_MS = 3000;
 
@@ -91,6 +101,39 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
   const fileInputRef = useRef<HTMLInputElement>(null);
   const lastTypingPingRef = useRef(0);
   const deleteDraft = useDeleteDraftAttachment();
+  // Toolbar pressed-state tracking. Driven by Lexical's
+  // registerUpdateListener so a toolbar click flips the pressed state
+  // immediately — selectionchange only fires when the caret moves and
+  // would lag behind format toggles by one keystroke.
+  const [active, setActive] = useState<Set<ActiveFormat>>(new Set());
+  useEffect(() => {
+    return editorRef.current?.subscribeActiveFormats?.(setActive);
+  }, []);
+
+  // Link dialog state. Opening the dialog calls editor.beginLinkEdit
+  // which captures the current selection (Lexical loses selection when
+  // focus moves to the modal), so the eventual commit can apply the
+  // link to the right text.
+  const [linkDialogOpen, setLinkDialogOpen] = useState(false);
+  const [linkUrl, setLinkUrl] = useState('');
+  const [linkText, setLinkText] = useState('');
+  const openLinkDialog = useCallback(() => {
+    const { selectedText } = editorRef.current?.beginLinkEdit?.() ?? { selectedText: '' };
+    setLinkText(selectedText);
+    setLinkUrl('');
+    setLinkDialogOpen(true);
+  }, []);
+  const submitLinkDialog = useCallback(() => {
+    const url = linkUrl.trim();
+    // isHttpUrl is the same gate PasteLinkPlugin uses — blocks
+    // javascript:/data:/vbscript: schemes regardless of what the
+    // browser's <input type="url"> accepts.
+    if (!isHttpUrl(url)) return;
+    const text = linkText.trim() || url;
+    editorRef.current?.commitLinkEdit?.(url, text);
+    setLinkDialogOpen(false);
+    queueMicrotask(() => editorRef.current?.focus());
+  }, [linkUrl, linkText]);
 
   // Throttled typing emit. Other clients show "<user> is typing" for 5s
   // after the most recent ping; we re-ping every 3s while the user is
@@ -306,13 +349,13 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
       )}
       <div className="rounded-lg border bg-muted/40 dark:bg-input/30 focus-within:ring-1 focus-within:ring-ring">
         <div className="flex items-center gap-0.5 border-b px-2 py-1" role="toolbar" aria-label="Formatting">
-          <ToolbarBtn label="Bold (Ctrl+B)" onClick={() => editorRef.current?.applyMark('bold')}><Bold className="h-3.5 w-3.5" /></ToolbarBtn>
-          <ToolbarBtn label="Italic (Ctrl+I)" onClick={() => editorRef.current?.applyMark('italic')}><Italic className="h-3.5 w-3.5" /></ToolbarBtn>
-          <ToolbarBtn label="Strikethrough" onClick={() => editorRef.current?.applyMark('strike')}><Strikethrough className="h-3.5 w-3.5" /></ToolbarBtn>
-          <ToolbarBtn label="Code (Ctrl+E)" onClick={() => editorRef.current?.applyMark('code')}><Code className="h-3.5 w-3.5" /></ToolbarBtn>
-          <ToolbarBtn label="Link" onClick={() => editorRef.current?.applyLink()}><LinkIcon className="h-3.5 w-3.5" /></ToolbarBtn>
-          <ToolbarBtn label="Quote" onClick={() => editorRef.current?.applyBlock('quote')}><Quote className="h-3.5 w-3.5" /></ToolbarBtn>
-          <ToolbarBtn label="List" onClick={() => editorRef.current?.applyBlock('ul')}><List className="h-3.5 w-3.5" /></ToolbarBtn>
+          <ToolbarBtn label="Bold (Ctrl+B)" active={active.has('bold')} onClick={() => editorRef.current?.applyMark('bold')}><Bold className="h-3.5 w-3.5" /></ToolbarBtn>
+          <ToolbarBtn label="Italic (Ctrl+I)" active={active.has('italic')} onClick={() => editorRef.current?.applyMark('italic')}><Italic className="h-3.5 w-3.5" /></ToolbarBtn>
+          <ToolbarBtn label="Strikethrough" active={active.has('strike')} onClick={() => editorRef.current?.applyMark('strike')}><Strikethrough className="h-3.5 w-3.5" /></ToolbarBtn>
+          <ToolbarBtn label="Code (Ctrl+E)" active={active.has('code')} onClick={() => editorRef.current?.applyMark('code')}><Code className="h-3.5 w-3.5" /></ToolbarBtn>
+          <ToolbarBtn label="Link" onClick={openLinkDialog}><LinkIcon className="h-3.5 w-3.5" /></ToolbarBtn>
+          <ToolbarBtn label="Quote" active={active.has('quote')} onClick={() => editorRef.current?.applyBlock('quote')}><Quote className="h-3.5 w-3.5" /></ToolbarBtn>
+          <ToolbarBtn label="List" active={active.has('ul')} onClick={() => editorRef.current?.applyBlock('ul')}><List className="h-3.5 w-3.5" /></ToolbarBtn>
           <span className="mx-1 h-4 w-px bg-border" aria-hidden />
           <EmojiPicker
             onSelect={insertEmojiShortcode}
@@ -360,7 +403,6 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
             onCancel={onCancel}
             onPasteFiles={uploadFiles}
             placeholder={isUploading ? 'Uploading…' : placeholder}
-            disabled={disabled || isUploading}
             ariaLabel="Message input"
             className="flex-1"
           />
@@ -388,6 +430,50 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
           </div>
         </div>
       </div>
+      <Dialog open={linkDialogOpen} onOpenChange={setLinkDialogOpen}>
+        <DialogContent aria-label="Insert link">
+          <DialogHeader>
+            <DialogTitle>Insert link</DialogTitle>
+          </DialogHeader>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              submitLinkDialog();
+            }}
+            className="flex flex-col gap-3"
+          >
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="link-text">Text</Label>
+              <Input
+                id="link-text"
+                value={linkText}
+                onChange={(e) => setLinkText(e.target.value)}
+                placeholder="Link text"
+              />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="link-url">URL</Label>
+              <Input
+                id="link-url"
+                value={linkUrl}
+                onChange={(e) => setLinkUrl(e.target.value)}
+                placeholder="https://example.com"
+                autoFocus
+                required
+                type="url"
+              />
+            </div>
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setLinkDialogOpen(false)}>
+                Cancel
+              </Button>
+              <Button type="submit" disabled={!isHttpUrl(linkUrl.trim())}>
+                Insert
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 });
@@ -396,10 +482,12 @@ function ToolbarBtn({
   label,
   onClick,
   children,
+  active,
 }: {
   label: string;
   onClick?: () => void;
   children: React.ReactNode;
+  active?: boolean;
 }) {
   return (
     <button
@@ -407,7 +495,10 @@ function ToolbarBtn({
       onClick={onClick}
       title={label}
       aria-label={label}
-      className="h-7 w-7 flex items-center justify-center rounded-md hover:bg-muted"
+      aria-pressed={active ? 'true' : undefined}
+      className={`h-7 w-7 flex items-center justify-center rounded-md hover:bg-muted ${
+        active ? 'bg-muted text-foreground' : 'text-muted-foreground'
+      }`}
     >
       {children}
     </button>

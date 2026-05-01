@@ -188,7 +188,7 @@ function findInline(src: string, opts: RenderOpts | undefined, keyPrefix: string
 
   // inline code: `code`
   tryMatch(/`([^`\n]+)`/, (m) => (
-    <code key={`${keyPrefix}-c-${m.index}`} className="rounded bg-muted px-1 py-0.5 text-[0.85em] font-mono">
+    <code key={`${keyPrefix}-c-${m.index}`} className="rounded bg-muted px-1.5 py-0.5 text-sm font-mono">
       {m[1]}
     </code>
   ));
