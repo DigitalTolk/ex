@@ -8,6 +8,7 @@ import { MessageDropZone } from './MessageDropZone';
 import { MemberList } from './MemberList';
 import { ThreadPanel } from './ThreadPanel';
 import { PinnedPanel } from './PinnedPanel';
+import { NotFoundPage } from '@/pages/NotFoundPage';
 import { FilesPanel } from './FilesPanel';
 import { ChannelIntro } from './ConversationIntro';
 import { TypingIndicator } from './TypingIndicator';
@@ -58,7 +59,7 @@ export function ChannelView() {
   // Tag panel takes the same right-rail slot as thread/pinned/files.
   // Opening any of those closes a tag, and opening a tag closes them.
   const { activeTag, closeTag } = useTagState();
-  const { data: channel } = useChannelBySlug(slug);
+  const { data: channel, isError: channelNotFound, isLoading: channelLoading } = useChannelBySlug(slug);
   const { data: members } = useChannelMembers(channel?.id);
   useDocumentTitle(channel ? `~${channel.name}` : null);
   const { mainAnchor, threadAnchor, threadParam, navKey } = useDeepLinkAnchor(channel?.id);
@@ -125,6 +126,13 @@ export function ChannelView() {
   useEffect(() => {
     if (threadParam) markThreadSeen(threadParam);
   }, [threadParam]);
+
+  // Opening a thread (via URL navigation, e.g. clicking a pinned
+  // thread reply) must dismiss any other side panel — the local
+  // openThread() helper does this, but URL-driven threads bypass it.
+  useEffect(() => {
+    if (effectiveThreadRootID) panels.close();
+  }, [effectiveThreadRootID, panels]);
 
   // If the current user is no longer a member of the open channel (e.g.
   // they were just removed by an admin), boot them back to the placeholder
@@ -205,6 +213,10 @@ export function ChannelView() {
         Select a channel to start chatting
       </div>
     );
+  }
+
+  if (channelNotFound || (!channelLoading && !channel)) {
+    return <NotFoundPage resource="channel" />;
   }
 
   return (
@@ -288,6 +300,7 @@ export function ChannelView() {
           onClose={panels.close}
           userMap={userMap}
           currentUserId={user?.id}
+          onReplyInThread={openThread}
         />
       ) : showFiles ? (
         <FilesPanel

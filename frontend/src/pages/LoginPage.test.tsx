@@ -40,26 +40,26 @@ describe('LoginPage', () => {
     globalThis.fetch = originalFetch;
   });
 
-  it('renders SSO button', () => {
+  it('renders SSO button', async () => {
     renderLoginPage();
     expect(
-      screen.getByRole('button', { name: /sign in with single sign-on/i }),
+      await screen.findByRole('button', { name: /sign in with single sign-on/i }),
     ).toBeInTheDocument();
   });
 
-  it('renders guest login form with email and password fields', () => {
+  it('renders guest login form with email and password fields', async () => {
     renderLoginPage();
-    expect(screen.getByLabelText(/email/i)).toBeInTheDocument();
+    expect(await screen.findByLabelText(/email/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/password/i)).toBeInTheDocument();
     expect(
       screen.getByRole('button', { name: /sign in$/i }),
     ).toBeInTheDocument();
   });
 
-  it('shows invite form when token param is present', () => {
+  it('shows invite form when token param is present', async () => {
     renderLoginPage('/invite/abc123');
     expect(
-      screen.getByText(/accept invitation/i),
+      await screen.findByText(/accept invitation/i),
     ).toBeInTheDocument();
     expect(screen.getByLabelText(/display name/i)).toBeInTheDocument();
     expect(

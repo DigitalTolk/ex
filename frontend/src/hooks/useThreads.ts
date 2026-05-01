@@ -19,7 +19,10 @@ export interface ThreadSummary {
 export function useUserThreads() {
   return useQuery<ThreadSummary[]>({
     queryKey: queryKeys.userThreads(),
-    queryFn: () => apiFetch<ThreadSummary[]>('/api/v1/threads'),
+    queryFn: async () => {
+      const res = await apiFetch<ThreadSummary[]>('/api/v1/threads');
+      return Array.isArray(res) ? res : [];
+    },
     staleTime: 15_000,
   });
 }
@@ -84,8 +87,10 @@ export function useThreadMessages(opts: {
   const ready = !!(opts.channelId || opts.conversationId) && !!opts.threadRootID;
   return useQuery({
     queryKey: queryKeys.thread(path, opts.threadRootID),
-    queryFn: () =>
-      apiFetch<Message[]>(`/api/v1/${path}/messages/${opts.threadRootID}/thread`),
+    queryFn: async () => {
+      const res = await apiFetch<Message[]>(`/api/v1/${path}/messages/${opts.threadRootID}/thread`);
+      return Array.isArray(res) ? res : [];
+    },
     enabled: ready && (opts.enabled ?? true),
     staleTime: 15_000,
   });

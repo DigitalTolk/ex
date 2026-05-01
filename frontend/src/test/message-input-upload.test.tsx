@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render as rtlRender, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render as rtlRender, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 const mockUploadAttachment = vi.fn();
@@ -21,6 +21,7 @@ vi.mock('@/hooks/useEmoji', () => ({
 }));
 
 import { MessageInput } from '@/components/chat/MessageInput';
+import { makeDataTransfer } from './dataTransfer';
 
 function render(ui: React.ReactElement) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -60,7 +61,10 @@ describe('MessageInput - file upload', () => {
     );
 
     const onSend = vi.fn();
-    render(<MessageInput onSend={onSend} />);
+    // Tiptap doesn't accept synthetic typing in jsdom, so seed the body
+    // through initialBody. The point of the test is the attachmentIDs
+    // wiring, not the editor's text input.
+    render(<MessageInput onSend={onSend} initialBody="see file" />);
 
     const fileInput = screen.getByLabelText('File input') as HTMLInputElement;
     const file = new File(['content'], 'myfile.txt', { type: 'text/plain' });
@@ -76,15 +80,13 @@ describe('MessageInput - file upload', () => {
       expect(screen.getByText('myfile.txt')).toBeInTheDocument();
     });
 
-    // Sending now includes the attachment ID. The composer is a
-    // contentEditable WYSIWYG, so we set textContent + fire the input
-    // event the editor listens to.
-    const editor = screen.getByLabelText('Message input');
-    editor.textContent = 'see file';
-    fireEvent.input(editor);
-    fireEvent.click(screen.getByLabelText('Send message'));
-
-    expect(onSend).toHaveBeenCalledWith({ body: 'see file', attachmentIDs: ['att-1'] });
+    // Click + immediate assert can fire before Lexical's post-mount
+    // Placeholder updates land. await findBy* flushes them inside
+    // act() so the click's downstream state changes don't leak.
+    fireEvent.click(await screen.findByLabelText('Send message'));
+    await waitFor(() => {
+      expect(onSend).toHaveBeenCalledWith({ body: 'see file', attachmentIDs: ['att-1'] });
+    });
   });
 
   it('shows error when upload fails', async () => {
@@ -129,17 +131,11 @@ describe('MessageInput - file upload', () => {
     // that's the path browsers use for clipboard images and copied files.
     const event = new Event('paste', { bubbles: true, cancelable: true });
     Object.defineProperty(event, 'clipboardData', {
-      value: {
-        items: [
-          {
-            kind: 'file',
-            type: 'image/png',
-            getAsFile: () => pasted,
-          },
-        ],
-      },
+      value: makeDataTransfer({
+        items: [{ kind: 'file', type: 'image/png', getAsFile: () => pasted }],
+      }),
     });
-    editor.dispatchEvent(event);
+    await act(async () => { editor.dispatchEvent(event); });
 
     await waitFor(() => {
       expect(mockUploadAttachment).toHaveBeenCalled();
@@ -150,15 +146,20 @@ describe('MessageInput - file upload', () => {
     });
   });
 
-  it('ignores text-only paste events (does not call uploadAttachment)', () => {
+  it('ignores text-only paste events (does not call uploadAttachment)', async () => {
     render(<MessageInput onSend={vi.fn()} />);
-    const editor = screen.getByLabelText('Message input');
+    const editor = await screen.findByLabelText('Message input');
 
     const event = new Event('paste', { bubbles: true, cancelable: true });
     Object.defineProperty(event, 'clipboardData', {
-      value: { items: [{ kind: 'string', type: 'text/plain', getAsFile: () => null }] },
+      value: makeDataTransfer({
+        items: [{ kind: 'string', type: 'text/plain', getAsFile: () => null }],
+        types: ['text/plain'],
+      }),
     });
-    editor.dispatchEvent(event);
+    await act(async () => {
+      editor.dispatchEvent(event);
+    });
 
     expect(mockUploadAttachment).not.toHaveBeenCalled();
   });

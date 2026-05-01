@@ -1,4 +1,5 @@
-import { X } from 'lucide-react';
+import { useState } from 'react';
+import { ImageOff, X } from 'lucide-react';
 import { useUnfurl } from '@/hooks/useUnfurl';
 import { useSetNoUnfurl } from '@/hooks/useMessages';
 
@@ -24,6 +25,10 @@ export function UnfurlCard({
 }: UnfurlCardProps) {
   const { data: preview, isLoading } = useUnfurl(url);
   const dismiss = useSetNoUnfurl();
+  // imageBroken flips when the <img> element fails to load (404, network,
+  // CORS). The card stays — we just swap the image slot for an inert
+  // placeholder so the user doesn't see the browser's broken-image icon.
+  const [imageBroken, setImageBroken] = useState(false);
   if (isLoading || !preview) return null;
   if (!preview.title && !preview.description && !preview.image) return null;
   return (
@@ -34,13 +39,24 @@ export function UnfurlCard({
         rel="noopener noreferrer"
         className="flex gap-3 overflow-hidden rounded-md border border-l-4 border-l-primary bg-muted/20 p-2 hover:bg-muted/40"
       >
-        {preview.image && (
+        {preview.image && !imageBroken && (
           <img
             src={preview.image}
             alt=""
             loading="lazy"
+            onError={() => setImageBroken(true)}
+            data-testid="unfurl-card-image"
             className="h-16 w-16 shrink-0 rounded object-cover"
           />
+        )}
+        {preview.image && imageBroken && (
+          <div
+            data-testid="unfurl-card-image-placeholder"
+            aria-hidden="true"
+            className="flex h-16 w-16 shrink-0 items-center justify-center rounded bg-muted text-muted-foreground"
+          >
+            <ImageOff className="h-6 w-6" />
+          </div>
         )}
         <div className="min-w-0 flex-1 pr-6">
           {preview.siteName && (

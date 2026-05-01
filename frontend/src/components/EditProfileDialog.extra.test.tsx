@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { EditProfileDialog } from './EditProfileDialog';
 import { ThemeProvider } from '@/context/ThemeContext';
@@ -96,8 +96,7 @@ describe('EditProfileDialog - theme buttons + save errors', () => {
     const file = new File(['fake'], 'a.png', { type: 'image/png' });
 
     // Use fireEvent-like approach: set files and dispatch change
-    Object.defineProperty(fileInput, 'files', { value: [file], configurable: true });
-    fileInput.dispatchEvent(new Event('change', { bubbles: true }));
+    fireEvent.change(fileInput, { target: { files: [file] } });
 
     expect(await screen.findByRole('alert')).toHaveTextContent('presign denied');
   });
@@ -116,8 +115,7 @@ describe('EditProfileDialog - theme buttons + save errors', () => {
     const fileInputs = document.querySelectorAll('input[type="file"]');
     const fileInput = fileInputs[0] as HTMLInputElement;
     const file = new File(['fake'], 'a.png', { type: 'image/png' });
-    Object.defineProperty(fileInput, 'files', { value: [file], configurable: true });
-    fileInput.dispatchEvent(new Event('change', { bubbles: true }));
+    fireEvent.change(fileInput, { target: { files: [file] } });
 
     expect(await screen.findByRole('alert')).toHaveTextContent(/upload failed: 500/i);
 
@@ -143,8 +141,7 @@ describe('EditProfileDialog - theme buttons + save errors', () => {
     const fileInputs = document.querySelectorAll('input[type="file"]');
     const fileInput = fileInputs[0] as HTMLInputElement;
     const file = new File(['fake'], 'a.png', { type: 'image/png' });
-    Object.defineProperty(fileInput, 'files', { value: [file], configurable: true });
-    fileInput.dispatchEvent(new Event('change', { bubbles: true }));
+    fireEvent.change(fileInput, { target: { files: [file] } });
 
     // Wait for upload completed
     await waitFor(() => {

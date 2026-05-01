@@ -21,6 +21,7 @@ vi.mock('@/components/ui/dialog', () => ({
   DialogContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
   DialogHeader: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
   DialogTitle: ({ children }: { children: React.ReactNode }) => <h2>{children}</h2>,
+  DialogFooter: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
 }));
 
 const mockNavigate = vi.fn();
@@ -122,7 +123,8 @@ vi.mock('@/components/chat/WysiwygEditor', async () => {
       React.useImperativeHandle(ref, () => ({
         applyMark: () => {},
         applyBlock: () => {},
-        applyLink: () => {},
+        beginLinkEdit: () => ({ selectedText: '' }),
+        commitLinkEdit: () => {},
         insertText: (t: string) => { if (taRef.current) taRef.current.value += t; },
         getMarkdown: () => taRef.current?.value ?? '',
         setMarkdown: (md: string) => { if (taRef.current) taRef.current.value = md; },

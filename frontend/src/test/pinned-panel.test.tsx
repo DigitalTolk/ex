@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, act } from '@testing-library/react';
 import { BrowserRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { PinnedPanel } from '@/components/chat/PinnedPanel';
@@ -101,6 +101,88 @@ describe('PinnedPanel', () => {
     await waitFor(() => {
       expect(apiFetchMock).toHaveBeenCalledWith('/api/v1/conversations/conv-9/pinned');
     });
+  });
+
+  it('navigates to the message when a pinned row is clicked', async () => {
+    const messages: Message[] = [
+      {
+        id: 'm-pin-1', parentID: 'ch-1', authorID: 'u-1', body: 'pinned',
+        createdAt: '2026-04-26T10:00:00Z', pinned: true,
+      },
+    ];
+    apiFetchMock.mockResolvedValueOnce(messages);
+    renderPanel();
+    const row = await screen.findByTestId('pinned-message-row');
+    await act(async () => { row.click(); });
+    // Hash anchor drives useDeepLinkAnchor to scroll the main list to
+    // the pinned message.
+    expect(window.location.pathname).toBe('/channel/general');
+    expect(window.location.hash).toBe('#msg-m-pin-1');
+  });
+
+  it('navigates to a pinned thread reply with ?thread=ROOT so the thread panel opens', async () => {
+    // useDeepLinkAnchor only surfaces a threadAnchor (and the host
+    // view only swaps Pinned→Thread) when the URL has ?thread=ROOT,
+    // so pinned thread replies must encode that — a bare #msg-X
+    // would scroll to the reply but never open the thread panel.
+    const messages: Message[] = [
+      {
+        id: 'm-reply', parentID: 'ch-1', parentMessageID: 'm-root',
+        authorID: 'u-1', body: 'pinned reply',
+        createdAt: '2026-04-26T10:00:00Z', pinned: true,
+      },
+    ];
+    apiFetchMock.mockResolvedValueOnce(messages);
+    window.history.replaceState(null, '', '/');
+    renderPanel();
+    const row = await screen.findByTestId('pinned-message-row');
+    await act(async () => { row.click(); });
+    expect(window.location.pathname).toBe('/channel/general');
+    expect(window.location.search).toBe('?thread=m-root');
+    expect(window.location.hash).toBe('#msg-m-reply');
+  });
+
+  it('opens a thread when "Reply in thread" is clicked on a pinned row', async () => {
+    // Bug: clicking the thread action bar from inside the PinnedPanel
+    // did nothing because MessageItem's onReplyInThread callback was
+    // never wired through. The fix wires it to the host view's
+    // openThread() helper, which closes the pinned panel and opens the
+    // thread side panel for that root message.
+    const messages: Message[] = [
+      {
+        id: 'm-pin-1', parentID: 'ch-1', authorID: 'u-1', body: 'pinned',
+        createdAt: '2026-04-26T10:00:00Z', pinned: true,
+      },
+    ];
+    apiFetchMock.mockResolvedValueOnce(messages);
+    const onReplyInThread = vi.fn();
+    // Reset URL state from any earlier test in the file that navigated.
+    window.history.replaceState(null, '', '/');
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={qc}>
+        <BrowserRouter>
+          <PinnedPanel
+            channelId="ch-1"
+            channelSlug="general"
+            onClose={vi.fn()}
+            userMap={{ 'u-1': { displayName: 'Alice' } }}
+            currentUserId="u-me"
+            onReplyInThread={onReplyInThread}
+          />
+        </BrowserRouter>
+      </QueryClientProvider>,
+    );
+    // Hover the pinned row so the toolbar button reveals.
+    const row = await screen.findByTestId('pinned-message-row');
+    row.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+    const replyBtn = await screen.findByLabelText('Reply in thread');
+    replyBtn.click();
+    expect(onReplyInThread).toHaveBeenCalledWith('m-pin-1');
+    // The row's own jump-to-message handler should NOT have fired —
+    // clicks on nested interactive elements stay there. (Hash stays
+    // empty from this test's POV.)
+    expect(window.location.hash).toBe('');
   });
 
   it('invokes onClose when the close button is clicked', async () => {

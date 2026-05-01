@@ -27,7 +27,14 @@ const messageSchema: z.ZodType<Message> = z.object({
 const channelIDSchema = z.object({ channelID: z.string().min(1) });
 const presenceSchema = z.object({ userID: z.string().min(1), online: z.boolean() });
 const attachmentDeletedSchema = z.object({ id: z.string().min(1) });
-const typingSchema = z.object({ userID: z.string().min(1), parentID: z.string().min(1) });
+// `parentMessageID` is set only when the typing happened inside a thread
+// reply composer; absent for ordinary channel/DM typing. Both shapes
+// share a topic on the wire — the receiver routes by presence/absence.
+const typingSchema = z.object({
+  userID: z.string().min(1),
+  parentID: z.string().min(1),
+  parentMessageID: z.string().min(1).optional(),
+});
 const serverVersionSchema = z.object({ version: z.string().min(1) });
 
 function parser<T>(schema: z.ZodType<T>): (v: unknown) => T | null {
@@ -59,6 +66,7 @@ export const parseAttachmentDeleted = parser(attachmentDeletedSchema);
 export interface TypingPayload {
   userID: string;
   parentID: string;
+  parentMessageID?: string;
 }
 export const parseTyping = parser(typingSchema);
 

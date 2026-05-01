@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"time"
 
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/DigitalTolk/ex/internal/store"
@@ -173,6 +174,9 @@ func (a *MessageStoreAdapter) ListMessagesAround(ctx context.Context, parentID, 
 }
 func (a *MessageStoreAdapter) ListMessages(ctx context.Context, parentID string, before string, limit int) ([]*model.Message, bool, error) {
 	return a.s.List(ctx, parentID, before, limit)
+}
+func (a *MessageStoreAdapter) IncrementReplyMetadata(ctx context.Context, parentID, msgID string, replyTime time.Time, replyAuthorID string) (*model.Message, error) {
+	return a.s.IncrementReplyMetadata(ctx, parentID, msgID, replyTime, replyAuthorID)
 }
 
 // InviteStoreAdapter wraps store.InviteStoreImpl to satisfy service.InviteStore.

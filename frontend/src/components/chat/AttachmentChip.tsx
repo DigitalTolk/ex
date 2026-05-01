@@ -26,7 +26,7 @@ export function AttachmentChip({ att, onRemove }: AttachmentChipProps) {
     <div
       data-testid="attachment-chip"
       data-uploading={uploading ? 'true' : undefined}
-      className="group relative flex items-center gap-2 rounded-md border bg-background p-1.5 pr-2 shadow-sm"
+      className="group relative flex w-64 items-center gap-2 rounded-md border bg-background p-1.5 pr-2 shadow-sm"
     >
       <div className="relative h-10 w-10 shrink-0 overflow-hidden rounded bg-muted flex items-center justify-center">
         {isImage && att.localURL ? (
@@ -49,9 +49,9 @@ export function AttachmentChip({ att, onRemove }: AttachmentChipProps) {
           </div>
         )}
       </div>
-      <div className="min-w-0">
-        <p className="text-xs font-medium truncate max-w-[180px]">{att.filename}</p>
-        <p className="text-[10px] text-muted-foreground">
+      <div className="min-w-0 flex-1">
+        <p className="text-xs font-medium truncate">{att.filename}</p>
+        <p className="text-xs text-muted-foreground">
           {formatBytes(att.size)}
         </p>
         {uploading && (

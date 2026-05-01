@@ -12,7 +12,6 @@ import { setServerVersion } from '@/hooks/useServerVersion';
 import { slugify } from '@/lib/format';
 import {
   appendMessageToCache,
-  bumpThreadReplyMetadata,
   invalidateThreadBothScopes,
   removeMessageFromCache,
   resyncMessageCache,
@@ -54,8 +53,9 @@ export default function ChatPage() {
       const { parentID, parentMessageID, authorID } = msg;
       // The author has finished typing the moment their message lands;
       // drop them from the indicator immediately rather than waiting
-      // up to 6s for the expiry to tick.
-      clearTyping(parentID, authorID);
+      // up to 6s for the expiry to tick. Pass parentMessageID so a
+      // thread reply clears the thread bucket (not the main one).
+      clearTyping(parentID, authorID, parentMessageID ?? '');
       if (authorID !== user?.id) {
         markChannelUnread(parentID);
         markConversationUnread(parentID);
@@ -63,19 +63,15 @@ export default function ChatPage() {
       unhideConversation(parentID);
       // Patch the message-list cache directly. invalidateQueries here
       // would walk forward from pages[0] and truncate deep-link page
-      // chains (see appendMessageToCache).
-      if (parentMessageID) {
-        // Reply belongs in the thread query, not the main list. Bump
-        // the parent's reply metadata so the count + recent-author
-        // avatars stay live in the main list.
-        bumpThreadReplyMetadata(queryClient, parentID, msg);
-      } else {
-        appendMessageToCache(queryClient, parentID, msg);
-      }
-      // Thread queries are non-infinite — invalidation is safe.
+      // chains (see appendMessageToCache). Thread replies don't touch
+      // the main list — the parent's replyCount/lastReplyAt/authors
+      // arrive via the message.edited event the backend publishes
+      // alongside message.new (driven by IncrementReplyMetadata).
       if (parentMessageID) {
         invalidateThreadBothScopes(queryClient, parentID, parentMessageID);
         queryClient.invalidateQueries({ queryKey: queryKeys.userThreads() });
+      } else {
+        appendMessageToCache(queryClient, parentID, msg);
       }
     },
     onMessageEdited: (data: unknown) => {
@@ -199,7 +195,10 @@ export default function ChatPage() {
     onTyping: (data: unknown) => {
       const evt = parseTyping(data);
       if (!evt) return;
-      recordTyping(evt.parentID, evt.userID);
+      // parentMessageID present → typing inside a thread reply composer.
+      // Routed into typingByThread; ThreadPanel reads that bucket so the
+      // indicator surfaces in the side panel rather than the main list.
+      recordTyping(evt.parentID, evt.userID, evt.parentMessageID ?? '');
     },
     onReconnect: () => {
       // Refresh non-infinite peripheral lists outright.

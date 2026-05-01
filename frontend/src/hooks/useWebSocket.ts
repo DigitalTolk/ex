@@ -154,5 +154,5 @@ export function useWebSocket(options: UseWebSocketOptions) {
       }
       setWSSender(null);
     };
-  }, [options.enabled]);
+  }, [options.enabled, callbacksRef, enabledRef]);
 }

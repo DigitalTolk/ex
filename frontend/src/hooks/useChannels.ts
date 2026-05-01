@@ -6,7 +6,10 @@ import type { UserChannel, Channel, ChannelMembership } from '@/types';
 export function useUserChannels() {
   return useQuery({
     queryKey: queryKeys.userChannels(),
-    queryFn: () => apiFetch<UserChannel[]>('/api/v1/channels'),
+    queryFn: async () => {
+      const res = await apiFetch<UserChannel[]>('/api/v1/channels');
+      return Array.isArray(res) ? res : [];
+    },
   });
 }
 

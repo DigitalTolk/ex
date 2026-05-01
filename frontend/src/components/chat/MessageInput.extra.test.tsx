@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render as rtlRender, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render as rtlRender, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
@@ -112,5 +112,124 @@ describe('MessageInput - file upload', () => {
     Object.defineProperty(fileInput, 'files', { value: [], configurable: true });
     fireEvent.change(fileInput);
     expect(mockUploadAttachment).not.toHaveBeenCalled();
+  });
+
+  it('uploads multiple files concurrently and shows a chip for each before any completes', async () => {
+    // Hold every upload open until the test releases it. This proves that
+    // the orchestration starts uploads in parallel — the second chip
+    // must appear (and its progress must update) while the first upload
+    // is still pending.
+    type Resolvers = {
+      release: () => void;
+      onInit: (init: { id: string; uploadURL: string; alreadyExists: boolean; filename: string; contentType: string; size: number }) => void;
+      onProgress: (n: number) => void;
+    };
+    const inFlight: Resolvers[] = [];
+    mockUploadAttachment.mockImplementation((file: File, cb: { onInit: Resolvers['onInit']; onProgress: Resolvers['onProgress'] }) => {
+      return new Promise<void>((resolve) => {
+        inFlight.push({
+          release: resolve,
+          onInit: cb.onInit,
+          onProgress: cb.onProgress,
+        });
+      }).then(() => ({
+        id: `att-${file.name}`,
+        uploadURL: 'http://s3/u',
+        alreadyExists: false,
+        filename: file.name,
+        contentType: file.type,
+        size: file.size,
+      }));
+    });
+
+    render(<MessageInput onSend={vi.fn()} />);
+    const fileInput = screen.getByLabelText('File input') as HTMLInputElement;
+    const fileA = new File(['a'], 'a.png', { type: 'image/png' });
+    const fileB = new File(['b'], 'b.png', { type: 'image/png' });
+    Object.defineProperty(fileInput, 'files', { value: [fileA, fileB], configurable: true });
+    fireEvent.change(fileInput);
+
+    // Both chips must render immediately (before any upload completes),
+    // and uploadAttachment must have been called twice in parallel —
+    // proving uploads are not serialized.
+    await waitFor(() => {
+      expect(screen.getByText('a.png')).toBeInTheDocument();
+      expect(screen.getByText('b.png')).toBeInTheDocument();
+    });
+    await waitFor(() => expect(inFlight.length).toBe(2));
+
+    // Both uploads still pending — no completion has happened yet.
+    // Drive progress on file B while file A is still at 0% to prove the
+    // second chip's progress updates without waiting on the first.
+    await act(async () => {
+      inFlight[0].onInit({
+        id: 'att-a.png',
+        uploadURL: 'http://s3/u',
+        alreadyExists: false,
+        filename: 'a.png',
+        contentType: 'image/png',
+        size: 1,
+      });
+      inFlight[1].onInit({
+        id: 'att-b.png',
+        uploadURL: 'http://s3/u',
+        alreadyExists: false,
+        filename: 'b.png',
+        contentType: 'image/png',
+        size: 1,
+      });
+      inFlight[1].onProgress(0.5);
+    });
+
+    await waitFor(() => {
+      const chips = screen.getAllByTestId('attachment-chip');
+      expect(chips).toHaveLength(2);
+      const bChip = chips.find((c) => c.textContent?.includes('b.png'));
+      expect(bChip).toBeDefined();
+      // 50% progress shows on the second chip while the first is still 0%.
+      expect(bChip!.textContent).toContain('50%');
+    });
+
+    // Release both to let cleanup proceed.
+    await act(async () => {
+      inFlight[0].release();
+      inFlight[1].release();
+    });
+  });
+
+  it('caps concurrency at 4 so a 5-file drop kicks off only 4 uploads simultaneously', async () => {
+    const inFlight: Array<() => void> = [];
+    mockUploadAttachment.mockImplementation((file: File) => {
+      return new Promise<void>((resolve) => {
+        inFlight.push(resolve);
+      }).then(() => ({
+        id: `att-${file.name}`,
+        uploadURL: 'http://s3/u',
+        alreadyExists: false,
+        filename: file.name,
+        contentType: file.type,
+        size: file.size,
+      }));
+    });
+
+    render(<MessageInput onSend={vi.fn()} />);
+    const fileInput = screen.getByLabelText('File input') as HTMLInputElement;
+    const files = [1, 2, 3, 4, 5].map((i) => new File([String(i)], `f${i}.png`, { type: 'image/png' }));
+    Object.defineProperty(fileInput, 'files', { value: files, configurable: true });
+    fireEvent.change(fileInput);
+
+    // All 5 chips render up front; only 4 uploads kick off until one finishes.
+    await waitFor(() => {
+      expect(screen.getAllByTestId('attachment-chip')).toHaveLength(5);
+    });
+    await waitFor(() => expect(inFlight.length).toBe(4));
+    // Give the event loop a tick to potentially fire a 5th — it must not.
+    await new Promise((r) => setTimeout(r, 20));
+    expect(inFlight.length).toBe(4);
+
+    // Release one — the 5th upload should now start.
+    await act(async () => { inFlight[0](); });
+    await waitFor(() => expect(inFlight.length).toBe(5));
+    await act(async () => { inFlight.slice(1).forEach((r) => r()); });
   });
 });

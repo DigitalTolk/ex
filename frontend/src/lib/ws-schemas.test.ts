@@ -90,6 +90,18 @@ describe('event payload parsers', () => {
     expect(parseTyping({ userID: 'u' })).toBeNull();
   });
 
+  it('parseTyping accepts an optional parentMessageID for thread typing', () => {
+    expect(parseTyping({ userID: 'u', parentID: 'p', parentMessageID: 'm-1' })).toEqual({
+      userID: 'u',
+      parentID: 'p',
+      parentMessageID: 'm-1',
+    });
+  });
+
+  it('parseTyping rejects a non-string parentMessageID', () => {
+    expect(parseTyping({ userID: 'u', parentID: 'p', parentMessageID: 0 })).toBeNull();
+  });
+
   it('parseServerVersion requires a non-empty version', () => {
     expect(parseServerVersion({ version: 'abc' })?.version).toBe('abc');
     expect(parseServerVersion({ version: '' })).toBeNull();

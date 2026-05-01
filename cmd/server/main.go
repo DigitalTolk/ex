@@ -231,6 +231,12 @@ func main() {
 		allowOrigin = cfg.BaseURL
 	}
 	unfurlSvc := service.NewUnfurlService(redisCache)
+	if s3Client != nil {
+		// Proxy preview images through S3 (folder `unfurl/`) so viewers
+		// don't hit upstream origins directly. S3 lifecycle rule should
+		// expire `unfurl/` keys after ~30 days (configured in IaC).
+		unfurlSvc.SetImageStore(s3Client)
+	}
 	unfurlH := handler.NewUnfurlHandler(unfurlSvc)
 	router := handler.NewRouter(authH, userH, channelH, convH, wsH, uploadH, emojiH, presenceH, attachmentH, adminH, threadH, versionH, unfurlH, sidebarH, searchH, jwtMgr, frontendDist, appVersion, allowOrigin)
 

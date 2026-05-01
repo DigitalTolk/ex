@@ -51,7 +51,9 @@ func TestScrapePreview_FallsBackToTitleAndMetaDescription(t *testing.T) {
 func TestScrapePreview_TwitterCardFallback(t *testing.T) {
 	html := `<meta name="twitter:title" content="Tweet"><meta name="twitter:image" content="i.jpg">`
 	p := scrapePreview(html, "https://example.com")
-	if p.Title != "Tweet" || p.Image != "i.jpg" {
+	// Relative image URLs are resolved against the page URL so the
+	// browser doesn't try to load them from our origin.
+	if p.Title != "Tweet" || p.Image != "https://example.com/i.jpg" {
 		t.Errorf("twitter fallback: %+v", p)
 	}
 }
@@ -132,10 +134,13 @@ func newLoopbackUnfurlService(cache UnfurlCache) *UnfurlService {
 	// Plain http.Client without the safeDialContext guard so the test
 	// can hit httptest's 127.0.0.1 server. fetchAndScrape skips
 	// validateURL too — both layers of the SSRF guard are still
-	// covered by the dedicated tests above.
+	// covered by the dedicated tests above. skipURLValidation lets
+	// the image proxy path point at httptest's 127.0.0.1 image
+	// servers in unit tests.
 	return &UnfurlService{
-		cache:  cache,
-		client: &http.Client{Timeout: unfurlTimeout},
+		cache:             cache,
+		client:            &http.Client{Timeout: unfurlTimeout},
+		skipURLValidation: true,
 	}
 }
 
@@ -232,5 +237,252 @@ func TestSafeDialContext_LookupFailure(t *testing.T) {
 	// .invalid is reserved by RFC 2606 and guaranteed never to resolve.
 	if _, err := safeDialContext(context.Background(), "tcp", "definitely-not-a-real-host.invalid:80"); err == nil {
 		t.Error("expected lookup error for .invalid host")
+	}
+}
+
+// fakeImageStore is the test stand-in for storage.S3Client. Records every
+// call so tests can assert HEAD/PUT/Presign hits and seed `existing` keys
+// to simulate the cache-hit path.
+type fakeImageStore struct {
+	existing  map[string]bool
+	puts      map[string][]byte
+	puttypes  map[string]string
+	headCalls int
+	putCalls  int
+	signCalls int
+	failPut   bool
+}
+
+func newFakeImageStore() *fakeImageStore {
+	return &fakeImageStore{
+		existing: map[string]bool{},
+		puts:     map[string][]byte{},
+		puttypes: map[string]string{},
+	}
+}
+
+func (f *fakeImageStore) HeadObject(_ context.Context, key string) (bool, error) {
+	f.headCalls++
+	return f.existing[key], nil
+}
+
+func (f *fakeImageStore) PutObject(_ context.Context, key, contentType string, body []byte) error {
+	f.putCalls++
+	if f.failPut {
+		return errors.New("put failed")
+	}
+	f.puts[key] = body
+	f.puttypes[key] = contentType
+	f.existing[key] = true
+	return nil
+}
+
+func (f *fakeImageStore) PresignedGetURL(_ context.Context, key string, _ time.Duration) (string, error) {
+	f.signCalls++
+	return "https://s3.example/" + key + "?sig=abc", nil
+}
+
+// TestUnfurlService_ImageProxiedToS3_HitsCache verifies the dedupe path:
+// the second unfurl for the same upstream image must HEAD-hit and skip
+// the upload, while still re-presigning the URL each time.
+func TestUnfurlService_ImageProxiedToS3_HitsCache(t *testing.T) {
+	imgSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		_, _ = w.Write([]byte("\x89PNG\r\n\x1a\nfake-png-bytes"))
+	}))
+	defer imgSrv.Close()
+
+	pageSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte(`<meta property="og:title" content="t"><meta property="og:image" content="` + imgSrv.URL + `/social.png">`))
+	}))
+	defer pageSrv.Close()
+
+	store := newFakeImageStore()
+	svc := newLoopbackUnfurlService(nil) // bypass cache so both calls hit fetchAndScrape
+	svc.SetImageStore(store)
+
+	first, err := svc.fetchAndScrape(context.Background(), pageSrv.URL)
+	if err != nil {
+		t.Fatalf("first fetch: %v", err)
+	}
+	if !strings.HasPrefix(first.Image, "https://s3.example/unfurl/") {
+		t.Errorf("first.Image not rewritten to S3 presigned URL: %q", first.Image)
+	}
+	if store.putCalls != 1 {
+		t.Errorf("first call: putCalls = %d, want 1", store.putCalls)
+	}
+
+	second, err := svc.fetchAndScrape(context.Background(), pageSrv.URL)
+	if err != nil {
+		t.Fatalf("second fetch: %v", err)
+	}
+	if !strings.HasPrefix(second.Image, "https://s3.example/unfurl/") {
+		t.Errorf("second.Image not rewritten to S3 presigned URL: %q", second.Image)
+	}
+	if store.putCalls != 1 {
+		t.Errorf("second call: putCalls = %d, want 1 (cache hit, no re-upload)", store.putCalls)
+	}
+	if store.headCalls < 2 {
+		t.Errorf("headCalls = %d, want >= 2", store.headCalls)
+	}
+}
+
+// TestUnfurlService_ImageProxyFailureClearsImageField verifies that when
+// the upstream image fetch fails, preview.Image is cleared but the rest
+// of the preview is still returned (so the frontend can render a card
+// with title/description and a placeholder).
+func TestUnfurlService_ImageProxyFailureClearsImageField(t *testing.T) {
+	pageSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		// Image points at a definitely-dead host (.invalid is reserved
+		// by RFC 2606 and never resolves).
+		_, _ = w.Write([]byte(`<meta property="og:title" content="Still Has Title">
+			<meta property="og:description" content="And description">
+			<meta property="og:image" content="https://definitely-dead.invalid/x.png">`))
+	}))
+	defer pageSrv.Close()
+
+	store := newFakeImageStore()
+	svc := newLoopbackUnfurlService(nil)
+	svc.SetImageStore(store)
+
+	got, err := svc.fetchAndScrape(context.Background(), pageSrv.URL)
+	if err != nil {
+		t.Fatalf("fetchAndScrape: %v", err)
+	}
+	if got.Image != "" {
+		t.Errorf("Image = %q, want \"\" on fetch failure", got.Image)
+	}
+	if got.Title != "Still Has Title" {
+		t.Errorf("Title cleared along with Image — got %q", got.Title)
+	}
+	if got.Description != "And description" {
+		t.Errorf("Description cleared along with Image — got %q", got.Description)
+	}
+	if store.putCalls != 0 {
+		t.Errorf("putCalls = %d, want 0 (upstream fetch failed)", store.putCalls)
+	}
+}
+
+// TestUnfurlService_ImageProxyRespectsContentType verifies the
+// `image/*`-only guard: an upstream that returns text/html or
+// application/octet-stream for the image URL must be rejected and
+// preview.Image cleared.
+func TestUnfurlService_ImageProxyRespectsContentType(t *testing.T) {
+	imgSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write([]byte("<html>not an image</html>"))
+	}))
+	defer imgSrv.Close()
+
+	pageSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte(`<meta property="og:image" content="` + imgSrv.URL + `/sneaky">`))
+	}))
+	defer pageSrv.Close()
+
+	store := newFakeImageStore()
+	svc := newLoopbackUnfurlService(nil)
+	svc.SetImageStore(store)
+
+	got, err := svc.fetchAndScrape(context.Background(), pageSrv.URL)
+	if err != nil {
+		t.Fatalf("fetchAndScrape: %v", err)
+	}
+	if got.Image != "" {
+		t.Errorf("Image = %q, want \"\" for non-image content-type", got.Image)
+	}
+	if store.putCalls != 0 {
+		t.Errorf("putCalls = %d, want 0 (content-type rejected)", store.putCalls)
+	}
+}
+
+// TestUnfurlService_ImageProxyRejectsOversize covers the size cap: an
+// upstream image larger than unfurlImageMax must be rejected (no
+// truncate-and-store).
+func TestUnfurlService_ImageProxyRejectsOversize(t *testing.T) {
+	imgSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		// Write 1 byte over the cap.
+		_, _ = w.Write(make([]byte, unfurlImageMax+1))
+	}))
+	defer imgSrv.Close()
+
+	pageSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte(`<meta property="og:image" content="` + imgSrv.URL + `/huge.png">`))
+	}))
+	defer pageSrv.Close()
+
+	store := newFakeImageStore()
+	svc := newLoopbackUnfurlService(nil)
+	svc.SetImageStore(store)
+
+	got, err := svc.fetchAndScrape(context.Background(), pageSrv.URL)
+	if err != nil {
+		t.Fatalf("fetchAndScrape: %v", err)
+	}
+	if got.Image != "" {
+		t.Errorf("Image = %q, want \"\" for oversize body", got.Image)
+	}
+	if store.putCalls != 0 {
+		t.Errorf("putCalls = %d, want 0 (oversize)", store.putCalls)
+	}
+}
+
+// TestUnfurlService_ImageProxyKeyExt covers the extension-preservation
+// branch of unfurlImageKey: a recognised extension is appended to the
+// hash; an unknown one is dropped.
+func TestUnfurlService_ImageProxyKeyExt(t *testing.T) {
+	cases := []struct {
+		url     string
+		wantExt string
+	}{
+		{"https://example.com/img.png", ".png"},
+		{"https://example.com/img.JPG", ".jpg"},
+		{"https://example.com/path/social", ""},
+		{"https://example.com/img.weird", ""},
+	}
+	for _, tc := range cases {
+		got := unfurlImageKey(tc.url)
+		if !strings.HasPrefix(got, unfurlImagePrefix) {
+			t.Errorf("%q: missing prefix in %q", tc.url, got)
+		}
+		if tc.wantExt != "" && !strings.HasSuffix(got, tc.wantExt) {
+			t.Errorf("%q: want suffix %q in %q", tc.url, tc.wantExt, got)
+		}
+		if tc.wantExt == "" && (strings.Contains(got[len(unfurlImagePrefix):], ".")) {
+			t.Errorf("%q: expected no extension, got %q", tc.url, got)
+		}
+	}
+}
+
+// TestUnfurlService_ImageProxyPutFailureClearsImage verifies that an S3
+// upload failure (separate from upstream fetch failure) also clears the
+// image rather than leaking the upstream URL.
+func TestUnfurlService_ImageProxyPutFailureClearsImage(t *testing.T) {
+	imgSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		_, _ = w.Write([]byte("\x89PNGfake"))
+	}))
+	defer imgSrv.Close()
+	pageSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte(`<meta property="og:image" content="` + imgSrv.URL + `/x.png">`))
+	}))
+	defer pageSrv.Close()
+
+	store := newFakeImageStore()
+	store.failPut = true
+	svc := newLoopbackUnfurlService(nil)
+	svc.SetImageStore(store)
+
+	got, err := svc.fetchAndScrape(context.Background(), pageSrv.URL)
+	if err != nil {
+		t.Fatalf("fetchAndScrape: %v", err)
+	}
+	if got.Image != "" {
+		t.Errorf("Image = %q, want \"\" when S3 PUT fails", got.Image)
 	}
 }

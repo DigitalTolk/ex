@@ -245,6 +245,55 @@ export function MessageList({
     [],
   );
 
+  // Backup for the bottom-stick RO: late-loading <img> elements
+  // (avatars, inline attachments, unfurl thumbs) finish at unpredictable
+  // moments. The ResizeObserver above handles most of these, but image
+  // load events are themselves the most reliable signal that "this
+  // image's box just grew" — capture them at the inner container so a
+  // single delegated listener covers every img inside the message list.
+  // Gated by wasAtBottomRef so a reader scrolled up doesn't get yanked
+  // when an image far above their viewport finishes loading. Skipped
+  // in deep-link mode for the same reason as the RO.
+  useEffect(() => {
+    const el = scrollRef.current;
+    const inner = innerRef.current;
+    if (!el || !inner) return;
+    if (anchorMsgId) return;
+    const stickToBottom = () => {
+      if (!wasAtBottomRef.current) return;
+      // Defer to the next frame so the browser has a chance to apply
+      // the just-loaded image's intrinsic dimensions to layout. Reading
+      // scrollHeight synchronously can return the pre-resize value in
+      // some browsers, leaving the scroll position one image-height
+      // short of the actual bottom.
+      requestAnimationFrame(() => {
+        el.scrollTop = el.scrollHeight;
+      });
+    };
+    const onLoad = (e: Event) => {
+      const target = e.target as HTMLElement | null;
+      if (!target || target.tagName !== 'IMG') return;
+      stickToBottom();
+    };
+    // useCapture=true so img load events (which don't bubble) reach us.
+    inner.addEventListener('load', onLoad, true);
+    // Cached images load synchronously — by the time this useEffect
+    // runs (post-paint), their `load` event already fired and our
+    // listener missed it. Walk every <img> already in the DOM and
+    // re-stick once for any that finished loading early. Without this,
+    // the initial scroll lands at the pre-image scrollHeight and the
+    // page comes up partially scrolled (the "50% of refreshes" bug
+    // when avatars / inline thumbnails were warm in the HTTP cache).
+    const imgs = inner.querySelectorAll('img');
+    for (const img of imgs) {
+      if (img.complete && img.naturalHeight > 0) {
+        stickToBottom();
+        break;
+      }
+    }
+    return () => inner.removeEventListener('load', onLoad, true);
+  }, [anchorMsgId, wasAtBottomRef]);
+
   // Scroll anchoring: track the top-most visible message on every
   // scroll. The bottom-stick RO above will use this to preserve
   // reading position when the scroller's WIDTH changes (panel toggle,
@@ -503,7 +552,7 @@ export function MessageList({
     );
     observer.observe(node);
     return () => observer.disconnect();
-  }, [hasNextPage, fetchNextPage]);
+  }, [hasNextPage, fetchNextPage, isFetchingNextRef]);
 
   // Newer-direction sentinel; only mounted while a deep-link window
   // is open. Pulls successive newer pages until the live tail is in
@@ -526,7 +575,7 @@ export function MessageList({
     );
     observer.observe(node);
     return () => observer.disconnect();
-  }, [hasPreviousPage, fetchPreviousPage]);
+  }, [hasPreviousPage, fetchPreviousPage, isFetchingPrevRef]);
 
   if (isLoading) {
     return (

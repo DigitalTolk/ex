@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render as rtlRender, screen } from '@testing-library/react';
+import { render as rtlRender, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MessageInput } from './MessageInput';
@@ -26,23 +26,30 @@ describe('MessageInput', () => {
   });
 
   it('send button is enabled when input has text', async () => {
-    const user = userEvent.setup();
-    render(<MessageInput onSend={vi.fn()} />);
-
-    await user.type(screen.getByLabelText('Message input'), 'Hello');
-
-    expect(screen.getByLabelText('Send message')).not.toBeDisabled();
+    // jsdom doesn't accept synthetic typing into Lexical's
+    // contenteditable; seed the body via initialBody to verify the
+    // disabled-state wiring. `findByLabelText` flushes Lexical's
+    // post-mount Placeholder state update inside act() — without it
+    // we'd race against Placeholder's effect and surface an act()
+    // warning.
+    render(<MessageInput onSend={vi.fn()} initialBody="Hello" />);
+    expect(await screen.findByLabelText('Send message')).not.toBeDisabled();
   });
 
   it('calls onSend when pressing Enter', async () => {
+    // jsdom + contenteditable doesn't accept synthetic typing into
+    // Tiptap, so seed via initialBody and just verify that Enter
+    // routes through to onSend with the body.
     const user = userEvent.setup();
     const onSend = vi.fn();
-    render(<MessageInput onSend={onSend} />);
+    render(<MessageInput onSend={onSend} initialBody="Hello" />);
 
-    const textarea = screen.getByLabelText('Message input');
-    await user.type(textarea, 'Hello{Enter}');
+    const editor = await screen.findByLabelText('Message input');
+    editor.focus();
+    await user.keyboard('{Enter}');
 
-    expect(onSend).toHaveBeenCalledWith({ body: 'Hello', attachmentIDs: [] });
+    expect(onSend).toHaveBeenCalled();
+    expect(onSend.mock.calls[0][0]).toEqual({ body: 'Hello', attachmentIDs: [] });
   });
 
   it('does not call onSend on Shift+Enter', async () => {
@@ -59,23 +66,25 @@ describe('MessageInput', () => {
   it('clears input after sending', async () => {
     const user = userEvent.setup();
     const onSend = vi.fn();
-    render(<MessageInput onSend={onSend} />);
+    render(<MessageInput onSend={onSend} initialBody="Hello" />);
 
-    const editor = screen.getByLabelText('Message input');
-    await user.type(editor, 'Hello{Enter}');
+    const editor = await screen.findByLabelText('Message input');
+    editor.focus();
+    await user.keyboard('{Enter}');
 
-    // contentEditable carries text in textContent, not value.
-    expect(editor.textContent ?? '').toBe('');
+    expect(onSend).toHaveBeenCalled();
+    await waitFor(() => {
+      expect((editor.textContent ?? '').trim()).toBe('');
+    });
   });
 
-  it('uses custom placeholder', () => {
+  it('uses custom placeholder', async () => {
     render(<MessageInput onSend={vi.fn()} placeholder="Write here..." />);
-
-    // The editor is contentEditable — placeholder is exposed as
-    // data-placeholder, not the native HTML placeholder attribute.
-    expect(
-      screen.getByLabelText('Message input').getAttribute('data-placeholder'),
-    ).toBe('Write here...');
+    // Lexical renders the placeholder as a sibling element of the
+    // contenteditable when the doc is empty.
+    await waitFor(() => {
+      expect(screen.getByText('Write here...')).toBeInTheDocument();
+    });
   });
 
   it('only disables send button (not textarea) when disabled prop is true', () => {
@@ -89,10 +98,10 @@ describe('MessageInput', () => {
   it('refocuses textarea after sending via Enter', async () => {
     const user = userEvent.setup();
     const onSend = vi.fn();
-    render(<MessageInput onSend={onSend} />);
+    render(<MessageInput onSend={onSend} initialBody="hello" />);
 
-    const textarea = screen.getByLabelText('Message input');
-    await user.type(textarea, 'hello');
+    const textarea = await screen.findByLabelText('Message input');
+    textarea.focus();
     await user.keyboard('{Enter}');
 
     await vi.waitFor(() => {
@@ -103,10 +112,9 @@ describe('MessageInput', () => {
   it('refocuses textarea after sending via button click', async () => {
     const user = userEvent.setup();
     const onSend = vi.fn();
-    render(<MessageInput onSend={onSend} />);
+    render(<MessageInput onSend={onSend} initialBody="hello" />);
 
-    const textarea = screen.getByLabelText('Message input');
-    await user.type(textarea, 'hello');
+    const textarea = await screen.findByLabelText('Message input');
     await user.click(screen.getByLabelText('Send message'));
 
     expect(onSend).toHaveBeenCalledWith({ body: 'hello', attachmentIDs: [] });

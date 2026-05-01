@@ -64,6 +64,11 @@ type MessageStore interface {
 	// ListMessagesAround returns a window centered on msgID: up to
 	// `before` older + the target + up to `after` newer, newest-first.
 	ListMessagesAround(ctx context.Context, parentID, msgID string, before, after int) ([]*model.Message, bool, bool, error)
+	// IncrementReplyMetadata atomically bumps replyCount, sets
+	// lastReplyAt, and merges replyAuthorID into recentReplyAuthorIDs.
+	// Returns the updated message so callers can republish authoritative
+	// state. ErrNotFound if the parent doesn't exist.
+	IncrementReplyMetadata(ctx context.Context, parentID, msgID string, replyTime time.Time, replyAuthorID string) (*model.Message, error)
 }
 
 // InviteStore defines persistence operations for invitations.

@@ -12,11 +12,13 @@ export function useUsersBatch(ids: string[]) {
   const sortedIDs = useMemo(() => [...new Set(ids)].sort(), [ids]);
   const query = useQuery({
     queryKey: queryKeys.usersBatch(sortedIDs),
-    queryFn: () =>
-      apiFetch<User[]>('/api/v1/users/batch', {
+    queryFn: async () => {
+      const res = await apiFetch<User[]>('/api/v1/users/batch', {
         method: 'POST',
         body: JSON.stringify({ ids: sortedIDs }),
-      }),
+      });
+      return Array.isArray(res) ? res : [];
+    },
     enabled: sortedIDs.length > 0,
     // User records (display name, avatar URL) change rarely. Cache for
     // 5 minutes and skip the window-focus refetch — every alt-tab back

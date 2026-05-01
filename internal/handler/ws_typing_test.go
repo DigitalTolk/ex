@@ -103,6 +103,56 @@ func TestWSHandler_HandleInbound_TypingChannel(t *testing.T) {
 	}
 }
 
+func TestWSHandler_HandleInbound_TypingChannelInThread(t *testing.T) {
+	// Typing inside a thread reply must publish to the same parent topic
+	// as ordinary channel typing but carry parentMessageID so listening
+	// clients can route the indicator into ThreadPanel rather than the
+	// main MessageList.
+	h, pub := buildHandlerWithChannel(t)
+	raw, _ := json.Marshal(map[string]string{
+		"type":            "typing",
+		"parentID":        "ch-1",
+		"parentType":      "channel",
+		"parentMessageID": "m-thread-root",
+	})
+	h.handleInbound(context.Background(), "u-1", raw)
+
+	if len(pub.hits) != 1 {
+		t.Fatalf("expected 1 publish; got %d", len(pub.hits))
+	}
+	hit := pub.hits[0]
+	if hit.topic != pubsub.ChannelName("ch-1") {
+		t.Errorf("topic = %q, want %q", hit.topic, pubsub.ChannelName("ch-1"))
+	}
+	body := decodeTyping(t, hit.evt)
+	if body["parentMessageID"] != "m-thread-root" {
+		t.Errorf("parentMessageID not forwarded; got %+v", body)
+	}
+	if body["userID"] != "u-1" || body["parentID"] != "ch-1" || body["parentType"] != "channel" {
+		t.Errorf("typing payload mismatch: %+v", body)
+	}
+}
+
+func TestWSHandler_HandleInbound_TypingChannelOmitsParentMessageIDWhenAbsent(t *testing.T) {
+	// Backwards compatibility: when no parentMessageID is supplied, the
+	// emitted payload must not include the key at all (older clients use
+	// strict shape parsers that may reject unknown blank fields).
+	h, pub := buildHandlerWithChannel(t)
+	raw, _ := json.Marshal(map[string]string{
+		"type":       "typing",
+		"parentID":   "ch-1",
+		"parentType": "channel",
+	})
+	h.handleInbound(context.Background(), "u-1", raw)
+	if len(pub.hits) != 1 {
+		t.Fatalf("expected 1 publish; got %d", len(pub.hits))
+	}
+	body := decodeTyping(t, pub.hits[0].evt)
+	if _, ok := body["parentMessageID"]; ok {
+		t.Errorf("parentMessageID should be absent when caller did not set it; got %+v", body)
+	}
+}
+
 func TestWSHandler_HandleInbound_TypingConversation(t *testing.T) {
 	h, pub := buildHandlerWithChannel(t)
 	raw, _ := json.Marshal(map[string]string{

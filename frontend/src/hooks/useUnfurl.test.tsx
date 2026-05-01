@@ -57,11 +57,14 @@ describe('useUnfurl', () => {
     expect(result.current.data).toBeNull();
   });
 
-  it('rethrows non-ApiError network failures', async () => {
+  it('returns null on non-ApiError network failures (no error UI shown)', async () => {
+    // Any failure — non-2xx, network drop, malformed JSON — is
+    // treated as "no preview". Caller renders nothing rather than
+    // an error state.
     apiFetchMock.mockRejectedValueOnce(new Error('network down'));
     const { result } = renderHook(() => useUnfurl('https://broken.example'), { wrapper: wrap() });
-    await waitFor(() => expect(result.current.isError).toBe(true));
-    expect(result.current.error).toBeInstanceOf(Error);
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data).toBeNull();
   });
 
   it('is disabled and returns no data when the URL is null', async () => {

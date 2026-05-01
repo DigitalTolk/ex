@@ -4,11 +4,13 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/expression"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/DigitalTolk/ex/internal/model"
 )
 
@@ -305,6 +307,75 @@ func (s *MessageStoreImpl) Update(ctx context.Context, parentID string, msg *mod
 		return fmt.Errorf("store: update message: %w", err)
 	}
 	return nil
+}
+
+// recentReplyAuthorsCap caps the recent-authors list at 3 — drives
+// the thread-action-bar avatar stack without unbounded growth.
+const recentReplyAuthorsCap = 3
+
+// mergeRecentAuthors prepends authorID to prev, dedupes, and trims to
+// recentReplyAuthorsCap entries newest-first.
+func mergeRecentAuthors(prev []string, authorID string) []string {
+	out := make([]string, 0, recentReplyAuthorsCap)
+	out = append(out, authorID)
+	for _, id := range prev {
+		if id == authorID {
+			continue
+		}
+		out = append(out, id)
+		if len(out) >= recentReplyAuthorsCap {
+			break
+		}
+	}
+	return out
+}
+
+// IncrementReplyMetadata atomically bumps a thread root's ReplyCount
+// by one, sets LastReplyAt to replyTime, and updates RecentReplyAuthorIDs
+// with replyAuthorID prepended (deduped, capped). Returns the updated
+// message; ErrNotFound if the parent is missing.
+//
+// ReplyCount uses DynamoDB's ADD action so concurrent thread replies
+// can't lose-update each other. LastReplyAt and RecentReplyAuthorIDs
+// are last-writer-wins; the authors list is computed from a fresh GET
+// inside this method, so the race is small but real — at worst one of
+// two simultaneous authors is dropped from the avatar stack. Count
+// integrity is unaffected.
+func (s *MessageStoreImpl) IncrementReplyMetadata(ctx context.Context, parentID, msgID string, replyTime time.Time, replyAuthorID string) (*model.Message, error) {
+	parent, err := s.GetByID(ctx, parentID, msgID)
+	if err != nil {
+		return nil, err
+	}
+	authors := mergeRecentAuthors(parent.RecentReplyAuthorIDs, replyAuthorID)
+	upd := expression.
+		Add(expression.Name("replyCount"), expression.Value(1)).
+		Set(expression.Name("lastReplyAt"), expression.Value(replyTime)).
+		Set(expression.Name("recentReplyAuthorIDs"), expression.Value(authors))
+	cond := expression.Name("PK").AttributeExists()
+	expr, err := expression.NewBuilder().WithUpdate(upd).WithCondition(cond).Build()
+	if err != nil {
+		return nil, fmt.Errorf("store: build reply-metadata expression: %w", err)
+	}
+	out, err := s.Client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName:                 aws.String(s.Table),
+		Key:                       compositeKey(parentPK(parentID), msgSK(msgID)),
+		UpdateExpression:          expr.Update(),
+		ConditionExpression:       expr.Condition(),
+		ExpressionAttributeNames:  expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
+		ReturnValues:              types.ReturnValueAllNew,
+	})
+	if err != nil {
+		if isConditionCheckFailed(err) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("store: increment reply metadata: %w", err)
+	}
+	var item messageItem
+	if err := attributevalue.UnmarshalMap(out.Attributes, &item); err != nil {
+		return nil, fmt.Errorf("store: unmarshal updated message: %w", err)
+	}
+	return &item.Message, nil
 }
 
 func (s *MessageStoreImpl) Delete(ctx context.Context, parentID, msgID string) error {

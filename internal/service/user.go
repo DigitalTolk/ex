@@ -40,13 +40,25 @@ type UserService struct {
 	tokens    TokenStore // optional: when set, deactivation invalidates refresh tokens
 	indexer   UserIndexer
 	searcher  UserSearcher
+	// urlCache memoises presigned avatar URLs so repeat fetches return
+	// the same URL — the browser then reuses its cached image instead
+	// of re-downloading on every render that hits a fresh signature.
+	urlCache *presignedURLCache
 }
 
 // NewUserService creates a UserService with the given dependencies.
 // avatars may be nil; when set, AvatarKey is resolved into a presigned AvatarURL
 // on each fetch. publisher may be nil to disable user.updated broadcasts.
 func NewUserService(users UserStore, cache Cache, avatars AvatarSigner, publisher Publisher) *UserService {
-	return &UserService{users: users, cache: cache, avatars: avatars, publisher: publisher}
+	return &UserService{
+		users:     users,
+		cache:     cache,
+		avatars:   avatars,
+		publisher: publisher,
+		// 20h cache TTL — well inside the 24h presigned-URL validity so
+		// a cached URL is always still valid when reused.
+		urlCache: newPresignedURLCache(20 * time.Hour),
+	}
 }
 
 // SetTokenStore wires a TokenStore so deactivating a user invalidates every
@@ -74,15 +86,21 @@ func indexUser(ctx context.Context, idx UserIndexer, u *model.User) {
 
 // avatarURLTTL is how long avatar presigned URLs remain valid. Frontend
 // caches user data via React Query, so this can be short.
-const avatarURLTTL = 6 * time.Hour
+const avatarURLTTL = 24 * time.Hour
 
 // resolveAvatar populates user.AvatarURL from user.AvatarKey using the signer.
-// Mutates the user in place. No-op if no signer or no key.
+// Mutates the user in place. No-op if no signer or no key. The URL is
+// cached by S3 key so repeat resolutions hand out the SAME URL —
+// otherwise every fresh signature would defeat the browser image cache
+// and the same avatar would be re-downloaded on every render.
 func (s *UserService) resolveAvatar(ctx context.Context, user *model.User) {
 	if s.avatars == nil || user == nil || user.AvatarKey == "" {
 		return
 	}
-	url, err := s.avatars.PresignedGetURL(ctx, user.AvatarKey, avatarURLTTL)
+	url, err := s.urlCache.getOrSign(ctx, presignedKey{op: "get", key: user.AvatarKey},
+		func(ctx context.Context) (string, error) {
+			return s.avatars.PresignedGetURL(ctx, user.AvatarKey, avatarURLTTL)
+		})
 	if err == nil {
 		user.AvatarURL = url
 	}
@@ -159,6 +177,10 @@ func (s *UserService) Update(ctx context.Context, userID string, displayName, av
 		user.DisplayName = *displayName
 	}
 	if avatarKey != nil {
+		// New key → drop any cached presigned URL for the previous key
+		// so an avatar swap shows up immediately rather than after the
+		// cache window elapses.
+		s.urlCache.invalidate(user.AvatarKey)
 		user.AvatarKey = *avatarKey
 	}
 	user.UpdatedAt = time.Now()

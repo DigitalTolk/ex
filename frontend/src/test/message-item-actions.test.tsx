@@ -53,10 +53,12 @@ vi.mock('@/components/ui/dropdown-menu', () => ({
   }: { children: React.ReactNode; [k: string]: unknown } & {
     'data-on-open-change'?: (v: boolean) => void;
   }) => {
-    const onOpenChange = props['data-on-open-change'] as ((v: boolean) => void) | undefined;
+    const { 'data-on-open-change': onOpenChange, ...rest } = props as Record<string, unknown> & {
+      'data-on-open-change'?: (v: boolean) => void;
+    };
     return (
       <button
-        {...props}
+        {...rest}
         onClick={() => onOpenChange?.(true)}
       >
         {children}

@@ -75,13 +75,13 @@ export function MessageAttachments({
 function AttachmentSkeleton({ loading }: { loading: boolean }) {
   if (loading) {
     return (
-      <div className="flex h-12 w-56 items-center justify-center rounded-md border bg-muted/40 text-[10px] text-muted-foreground">
+      <div className="flex h-12 w-64 items-center justify-center rounded-md border bg-muted/40 text-xs text-muted-foreground">
         Loading…
       </div>
     );
   }
   return (
-    <div className="flex h-12 w-56 items-center justify-center rounded-md border border-destructive/30 bg-destructive/5 text-[10px] text-destructive">
+    <div className="flex h-12 w-64 items-center justify-center rounded-md border border-destructive/30 bg-destructive/5 text-xs text-destructive">
       Attachment unavailable
     </div>
   );
@@ -97,7 +97,14 @@ function ThumbnailButton({ att, onOpen }: { att: Attachment; onOpen: () => void 
       data-testid="message-image-thumb"
     >
       {att.url && (
-        <img src={att.url} alt={att.filename} className="max-h-72 max-w-full" loading="lazy" />
+        // Eager load: the live-tail bottom-stick logic in MessageList
+        // re-pins on each img's load event. With loading="lazy" a freshly
+        // posted image at the bottom of the viewport sometimes never
+        // triggers the load event (browser decides it's outside the
+        // near-viewport heuristic when its 0×0 placeholder is exactly at
+        // the visible bottom), so the scroll never catches up to its
+        // grown box.
+        <img src={att.url} alt={att.filename} className="max-h-72 max-w-full" />
       )}
     </button>
   );
@@ -111,7 +118,7 @@ function AttachmentRow({ att, onOpen }: { att: Attachment; onOpen: () => void })
   const isImage = att.url && isImageContentType(att.contentType);
   const iconType = iconForAttachment(att.contentType, att.filename);
   return (
-    <div className="flex items-center gap-1 rounded-md border bg-background pr-1 hover:bg-muted/50">
+    <div className="flex h-12 w-64 items-center gap-1 rounded-md border bg-background pr-1 hover:bg-muted/50">
       <button
         type="button"
         onClick={onOpen}
@@ -119,7 +126,7 @@ function AttachmentRow({ att, onOpen }: { att: Attachment; onOpen: () => void })
         // outline-none + focus-visible:ring suppresses the click-focus
         // outline some browsers leave behind without taking away the
         // keyboard focus indicator.
-        className="flex flex-1 items-center gap-2 px-2 py-1.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50"
+        className="flex h-full min-w-0 flex-1 items-center gap-2 px-2 py-1.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50"
         aria-label={`Open ${att.filename}`}
         data-testid="message-attachment-box"
       >
@@ -137,9 +144,9 @@ function AttachmentRow({ att, onOpen }: { att: Attachment; onOpen: () => void })
             'aria-hidden': true,
           })
         )}
-        <div className="min-w-0">
-          <p className="truncate text-xs font-medium max-w-[200px]">{att.filename}</p>
-          <p className="text-[10px] text-muted-foreground">{formatBytes(att.size)}</p>
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-xs font-medium">{att.filename}</p>
+          <p className="text-xs text-muted-foreground">{formatBytes(att.size)}</p>
         </div>
       </button>
       {att.url && (

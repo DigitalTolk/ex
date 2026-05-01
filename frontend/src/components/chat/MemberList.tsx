@@ -93,7 +93,7 @@ export function MemberList({ members, channelId, currentUserId, currentUserRole,
   const canManage = canManageMembers(currentUserRole) && !!channelId;
 
   return (
-    <div className="w-80 border-l flex flex-col">
+    <div className="w-80 border-l flex h-full min-h-0 flex-col">
       <div className="px-4 py-3 border-b flex items-center justify-between gap-2">
         <div className="min-w-0">
           <h2 className="text-sm font-semibold">Members</h2>

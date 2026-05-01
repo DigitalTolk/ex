@@ -681,3 +681,29 @@ func (m *mockMessageStore) ListMessagesAround(ctx context.Context, parentID, _ s
 	msgs, _, err := m.ListMessages(ctx, parentID, "", 0)
 	return msgs, false, false, err
 }
+
+func (m *mockMessageStore) IncrementReplyMetadata(_ context.Context, parentID, msgID string, replyTime time.Time, replyAuthorID string) (*model.Message, error) {
+	if m.updateErr != nil {
+		return nil, m.updateErr
+	}
+	key := parentID + "#" + msgID
+	msg, ok := m.messages[key]
+	if !ok {
+		return nil, store.ErrNotFound
+	}
+	msg.ReplyCount++
+	t := replyTime
+	msg.LastReplyAt = &t
+	authors := []string{replyAuthorID}
+	for _, id := range msg.RecentReplyAuthorIDs {
+		if id == replyAuthorID {
+			continue
+		}
+		authors = append(authors, id)
+		if len(authors) >= 3 {
+			break
+		}
+	}
+	msg.RecentReplyAuthorIDs = authors
+	return msg, nil
+}

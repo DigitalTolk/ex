@@ -188,7 +188,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       // Some embedded webviews throw on the Notification constructor
       // even after the permission check passes.
     }
-  }, []);
+  }, [permissionRef, prefsRef]);
 
   const value = useMemo(
     () => ({

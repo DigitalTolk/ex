@@ -19,6 +19,8 @@ import AdminPage from '@/pages/AdminPage';
 import NewConversationPage from '@/pages/NewConversationPage';
 import ThreadsPage from '@/pages/ThreadsPage';
 import SearchResultsPage from '@/pages/SearchResultsPage';
+import { NotFoundPage } from '@/pages/NotFoundPage';
+import { GENERAL_CHANNEL_SLUG } from '@/lib/roles';
 import type { ReactNode } from 'react';
 
 const queryClient = new QueryClient({
@@ -64,11 +66,7 @@ function AppRoutes() {
       >
         <Route
           index
-          element={
-            <div className="flex flex-1 items-center justify-center text-muted-foreground">
-              Select a channel or conversation to start chatting
-            </div>
-          }
+          element={<Navigate to={`/channel/${GENERAL_CHANNEL_SLUG}`} replace />}
         />
         <Route path="directory" element={<DirectoriesPage />} />
         <Route path="search" element={<SearchResultsPage />} />
@@ -77,7 +75,9 @@ function AppRoutes() {
         <Route path="channel/:id" element={<ChannelView />} />
         <Route path="conversations/new" element={<NewConversationPage />} />
         <Route path="conversation/:id" element={<ConversationView />} />
+        <Route path="*" element={<NotFoundPage />} />
       </Route>
+      <Route path="*" element={<NotFoundPage />} />
     </Routes>
   );
 }

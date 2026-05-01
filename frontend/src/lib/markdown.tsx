@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { Fragment, type ReactNode } from 'react';
 import { shortcodeToUnicode } from './emoji-shortcodes';
 import { USER_MENTION_RE, GROUP_MENTION_RE, CHANNEL_MENTION_RE } from './mention-syntax';
 
@@ -73,7 +73,14 @@ function findInline(src: string, opts: RenderOpts | undefined, keyPrefix: string
       </span>
     );
     if (opts?.renderUserMention) {
-      return opts.renderUserMention(userId, name, isSelf, pill);
+      // Wrap in a keyed Fragment — the caller's wrapper element may
+      // not carry a key, and the rendered node lands in an array
+      // (renderInlineString.out) where React expects per-child keys.
+      return (
+        <Fragment key={`${keyPrefix}-mu-${m.index}`}>
+          {opts.renderUserMention(userId, name, isSelf, pill)}
+        </Fragment>
+      );
     }
     return pill;
   });
@@ -181,15 +188,18 @@ function findInline(src: string, opts: RenderOpts | undefined, keyPrefix: string
 
   // inline code: `code`
   tryMatch(/`([^`\n]+)`/, (m) => (
-    <code key={`${keyPrefix}-c-${m.index}`} className="rounded bg-muted px-1 py-0.5 text-[0.85em] font-mono">
+    <code key={`${keyPrefix}-c-${m.index}`} className="rounded bg-muted px-1.5 py-0.5 text-sm font-mono">
       {m[1]}
     </code>
   ));
 
   // emoji :name: — try custom map first, then standard shortcode unicode,
-  // otherwise render the literal :name:. Body emojis render at ~1.5x the
-  // surrounding text (Slack-style) so they're legible without dwarfing
-  // the line.
+  // otherwise render the literal :name:. Body emojis render at ~1.4em
+  // (Slack-style) so they're legible without dwarfing the line and so
+  // they scale with the surrounding font-size when used inside headings
+  // (`# title :tada:` keeps the emoji proportional to the H1 text).
+  // align-middle (not align-text-bottom) centers the glyph on the text's
+  // x-height so it sits visually balanced inside paragraphs and lists.
   tryMatch(/:([a-z0-9_+-]+):/i, (m) => {
     const name = m[1];
     const url = opts?.emojiMap?.[name];
@@ -200,7 +210,7 @@ function findInline(src: string, opts: RenderOpts | undefined, keyPrefix: string
           src={url}
           alt={`:${name}:`}
           title={`:${name}:`}
-          className="inline-block h-[20px] w-[20px] align-text-bottom"
+          className="inline-block h-[1.4em] w-[1.4em] align-middle"
         />
       );
     }
@@ -210,7 +220,7 @@ function findInline(src: string, opts: RenderOpts | undefined, keyPrefix: string
         <span
           key={`${keyPrefix}-eu-${m.index}`}
           title={`:${name}:`}
-          className="text-[20px] leading-none align-text-bottom"
+          className="text-[1.4em] leading-none align-middle"
         >
           {unicode}
         </span>
@@ -321,9 +331,12 @@ export function renderMarkdown(body: string, opts?: RenderOpts): ReactNode {
         buf.push(lines[i].slice(2));
         i++;
       }
+      const bqKey = blockKey++;
       blocks.push(
-        <blockquote key={`bk-${blockKey++}`} className="my-1 border-l-2 border-muted-foreground/30 pl-3 text-muted-foreground">
-          {renderInlineString(buf.join('\n'), opts, `bq-${blockKey}`)}
+        <blockquote key={`bk-${bqKey}`} className="my-1 border-l-2 border-muted-foreground/30 pl-3 text-muted-foreground">
+          {buf.map((bqLine, idx) => (
+            <div key={idx}>{renderInlineString(bqLine, opts, `bq-${bqKey}-${idx}`)}</div>
+          ))}
         </blockquote>,
       );
       continue;
