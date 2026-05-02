@@ -62,6 +62,22 @@ func TestCategoryStore_Create_DuplicateRejected(t *testing.T) {
 	}
 }
 
+func TestCategoryStore_Create_DuplicateNameRejectedPerUser(t *testing.T) {
+	db := setupDynamoDB(t)
+	s := NewCategoryStore(db)
+	ctx := context.Background()
+
+	if err := s.Create(ctx, makeCategory("u-cat-dup-name", "cat-a", "Engineering", 1)); err != nil {
+		t.Fatalf("first Create: %v", err)
+	}
+	if err := s.Create(ctx, makeCategory("u-cat-dup-name", "cat-b", " engineering ", 2)); !errors.Is(err, ErrAlreadyExists) {
+		t.Fatalf("second Create: err = %v, want ErrAlreadyExists", err)
+	}
+	if err := s.Create(ctx, makeCategory("u-cat-other-name", "cat-c", "Engineering", 1)); err != nil {
+		t.Fatalf("same name for different user should be allowed: %v", err)
+	}
+}
+
 func TestCategoryStore_Create_RequiresIdentity(t *testing.T) {
 	db := setupDynamoDB(t)
 	s := NewCategoryStore(db)
@@ -165,6 +181,26 @@ func TestCategoryStore_Update_NameAndPosition(t *testing.T) {
 	}
 }
 
+func TestCategoryStore_Update_DuplicateNameRejected(t *testing.T) {
+	db := setupDynamoDB(t)
+	s := NewCategoryStore(db)
+	ctx := context.Background()
+
+	uid := "u-cat-upd-dup"
+	if err := s.Create(ctx, makeCategory(uid, "c-a", "Engineering", 1)); err != nil {
+		t.Fatalf("Create A: %v", err)
+	}
+	c := makeCategory(uid, "c-b", "Support", 2)
+	if err := s.Create(ctx, c); err != nil {
+		t.Fatalf("Create B: %v", err)
+	}
+
+	c.Name = " engineering "
+	if err := s.Update(ctx, c); !errors.Is(err, ErrAlreadyExists) {
+		t.Fatalf("Update: err = %v, want ErrAlreadyExists", err)
+	}
+}
+
 func TestCategoryStore_Update_NotFound(t *testing.T) {
 	db := setupDynamoDB(t)
 	s := NewCategoryStore(db)
@@ -207,6 +243,9 @@ func TestCategoryStore_Delete(t *testing.T) {
 	}
 	if _, err := s.Get(ctx, uid, "c-del"); !errors.Is(err, ErrNotFound) {
 		t.Errorf("expected ErrNotFound after delete, got %v", err)
+	}
+	if err := s.Create(ctx, makeCategory(uid, "c-del-2", "Del", 2)); err != nil {
+		t.Fatalf("recreate same name after Delete: %v", err)
 	}
 }
 

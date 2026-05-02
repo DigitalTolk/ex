@@ -29,6 +29,20 @@ func TestPresignedCache_HitWithinTTL(t *testing.T) {
 	}
 }
 
+func TestPresignedCache_CapsRequestedHourScaleTTL(t *testing.T) {
+	c := newPresignedURLCache(20 * time.Hour)
+	if c.ttl != presignedURLCacheTTL {
+		t.Fatalf("ttl = %s, want capped %s", c.ttl, presignedURLCacheTTL)
+	}
+}
+
+func TestPresignedCache_UsesDefaultSafetyTTLForInvalidTTL(t *testing.T) {
+	c := newPresignedURLCache(0)
+	if c.ttl != presignedURLCacheTTL {
+		t.Fatalf("ttl = %s, want safety default %s", c.ttl, presignedURLCacheTTL)
+	}
+}
+
 func TestPresignedCache_ExpiredEntryEvictedOnRead(t *testing.T) {
 	c := newPresignedURLCache(time.Nanosecond)
 	calls := 0

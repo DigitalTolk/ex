@@ -44,6 +44,7 @@ type UnfurlImageStore interface {
 	HeadObject(ctx context.Context, key string) (bool, error)
 	PutObject(ctx context.Context, key, contentType string, body []byte) error
 	PresignedGetURL(ctx context.Context, key string, expires time.Duration) (string, error)
+	GetObject(ctx context.Context, key string) (io.ReadCloser, string, int64, time.Time, error)
 }
 
 // UnfurlService fetches HTML for a URL, scrapes OpenGraph / Twitter Card
@@ -60,9 +61,10 @@ type UnfurlImageStore interface {
 // cleared so the frontend can render a placeholder rather than a broken
 // image icon.
 type UnfurlService struct {
-	cache    UnfurlCache
-	client   *http.Client
-	imgStore UnfurlImageStore
+	cache      UnfurlCache
+	client     *http.Client
+	imgStore   UnfurlImageStore
+	mediaCache MediaURLCache
 	// skipURLValidation, when true, bypasses validateURL for the image
 	// proxy path. Production wiring (NewUnfurlService) leaves this false
 	// so the SSRF guard runs on every upstream image URL; tests that
@@ -114,6 +116,8 @@ func NewUnfurlService(cache UnfurlCache) *UnfurlService {
 func (s *UnfurlService) SetImageStore(store UnfurlImageStore) {
 	s.imgStore = store
 }
+
+func (s *UnfurlService) SetMediaURLCache(c MediaURLCache) { s.mediaCache = c }
 
 // Unfurl returns a preview for rawURL. Cache is hit first; on a miss the
 // service fetches, scrapes, and caches the result. Errors are returned
@@ -227,6 +231,12 @@ func (s *UnfurlService) proxyImage(ctx context.Context, preview *UnfurlPreview) 
 		}
 	}
 
+	if s.mediaCache != nil {
+		if mediaURL, err := StableMediaURL(ctx, s.mediaCache, "unfurl", key, key, path.Base(key), "", 0); err == nil {
+			preview.Image = mediaURL
+			return
+		}
+	}
 	signed, err := s.imgStore.PresignedGetURL(ctx, key, unfurlImageExpires)
 	if err != nil {
 		preview.Image = ""

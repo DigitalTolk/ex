@@ -146,6 +146,7 @@ func NewRouter(
 
 	// ------------------------------------------------------------------ Attachments
 	if attachmentH != nil {
+		mux.HandleFunc("GET /api/v1/media/{token}/{filename...}", attachmentH.Media)
 		mux.Handle("POST /api/v1/attachments/url", middleware.WrapFunc(attachmentH.CreateUploadURL, authMW))
 		mux.Handle("GET /api/v1/attachments", middleware.WrapFunc(attachmentH.List, authMW))
 		mux.Handle("GET /api/v1/attachments/{id}", middleware.WrapFunc(attachmentH.Get, authMW))
@@ -203,9 +204,9 @@ func NewRouter(
 }
 
 // spaHandler serves the embedded SPA. Static asset requests pass through
-// to http.FileServer; navigations land on a pre-built index.html that has
-// been augmented with `<meta name="app-version">` so the loaded SPA can
-// recognise its own deploy and detect a newer one via /api/v1/version.
+// to http.FileServer; navigations land on a pre-built index.html augmented
+// with an app-version meta tag for reload detection and a build-version meta
+// tag for display-only release metadata.
 type spaHandler struct {
 	fs         http.FileSystem
 	fileServer http.Handler
@@ -219,7 +220,8 @@ func newSPAHandler(frontendFS fs.FS, version string) *spaHandler {
 	if f, err := frontendFS.Open("index.html"); err == nil {
 		defer func() { _ = f.Close() }()
 		if raw, err := io.ReadAll(f); err == nil {
-			meta := []byte(`<meta name="` + AppVersionMetaName + `" content="` + version + `">`)
+			meta := []byte(`<meta name="` + AppVersionMetaName + `" content="` + version + `">` +
+				`<meta name="` + BuildVersionMetaName + `" content="` + DisplayVersion(version) + `">`)
 			// Insert just before </head>; if the marker isn't present
 			// (extremely unlikely with Vite output) fall back to the
 			// untouched bytes — the API endpoint still reports the

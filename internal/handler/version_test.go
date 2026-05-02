@@ -51,6 +51,8 @@ func TestVersionHandler_DefaultsToDevWhenEmpty(t *testing.T) {
 }
 
 func TestAppVersion_HashesIndexHTML(t *testing.T) {
+	BuildVersion = ""
+	t.Cleanup(func() { BuildVersion = "" })
 	a := AppVersion(fstest.MapFS{
 		"index.html": &fstest.MapFile{Data: []byte("<html>v1</html>")},
 	})
@@ -72,11 +74,46 @@ func TestAppVersion_HashesIndexHTML(t *testing.T) {
 }
 
 func TestAppVersion_FallsBackToDevWithoutFS(t *testing.T) {
+	BuildVersion = ""
+	t.Cleanup(func() { BuildVersion = "" })
 	if got := AppVersion(nil); got != "dev" {
 		t.Errorf("AppVersion(nil) = %q, want dev", got)
 	}
 	if got := AppVersion(fstest.MapFS{}); got != "dev" {
 		t.Errorf("AppVersion(empty) = %q, want dev", got)
+	}
+}
+
+func TestAppVersion_IgnoresBakedDisplayVersionForReloadDetection(t *testing.T) {
+	BuildVersion = "v1.2.3"
+	t.Cleanup(func() { BuildVersion = "" })
+	a := AppVersion(fstest.MapFS{
+		"index.html": &fstest.MapFile{Data: []byte("<html>v1</html>")},
+	})
+	b := AppVersion(fstest.MapFS{
+		"index.html": &fstest.MapFile{Data: []byte("<html>v2</html>")},
+	})
+	if a == "v1.2.3" || b == "v1.2.3" {
+		t.Fatalf("AppVersion used display BuildVersion: %q / %q", a, b)
+	}
+	if a == b {
+		t.Fatalf("different frontend artifacts produced same app version %q", a)
+	}
+}
+
+func TestDisplayVersion_PrefersBakedBuildVersion(t *testing.T) {
+	BuildVersion = "v1.2.3"
+	t.Cleanup(func() { BuildVersion = "" })
+	if got := DisplayVersion("asset-hash"); got != "v1.2.3" {
+		t.Errorf("DisplayVersion = %q, want baked build version", got)
+	}
+}
+
+func TestDisplayVersion_FallsBackToAppVersion(t *testing.T) {
+	BuildVersion = ""
+	t.Cleanup(func() { BuildVersion = "" })
+	if got := DisplayVersion("asset-hash"); got != "asset-hash" {
+		t.Errorf("DisplayVersion = %q, want app version fallback", got)
 	}
 }
 

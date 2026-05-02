@@ -1,7 +1,7 @@
 import '@testing-library/jest-dom/vitest';
 import { vi } from 'vitest';
 import { createElement, type ReactNode } from 'react';
-import { APP_VERSION_META } from '@/lib/version-meta';
+import { APP_VERSION_META, BUILD_VERSION_META } from '@/lib/version-meta';
 
 // @base-ui/react/scroll-area uses ResizeObserver inside Root and emits
 // async state updates that show up in tests as "An update to
@@ -30,6 +30,12 @@ if (typeof document !== 'undefined') {
     const meta = document.createElement('meta');
     meta.setAttribute('name', APP_VERSION_META);
     meta.setAttribute('content', 'test');
+    document.head.appendChild(meta);
+  }
+  if (!document.querySelector(`meta[name="${BUILD_VERSION_META}"]`)) {
+    const meta = document.createElement('meta');
+    meta.setAttribute('name', BUILD_VERSION_META);
+    meta.setAttribute('content', 'release-test');
     document.head.appendChild(meta);
   }
 }

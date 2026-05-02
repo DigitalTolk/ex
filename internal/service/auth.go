@@ -29,16 +29,16 @@ type ChannelJoiner interface {
 
 // AuthService handles authentication, token management, and invitations.
 type AuthService struct {
-	users       UserStore
-	tokens      TokenStore
-	invites     InviteStore
-	memberships MembershipStore
+	users        UserStore
+	tokens       TokenStore
+	invites      InviteStore
+	memberships  MembershipStore
 	channelStore ChannelStore
-	joiner      ChannelJoiner // optional: when set, channel joins post system messages
-	jwt         JWTProvider
-	oidc        OIDCProvider // may be nil when OIDC is not configured
-	cache       Cache
-	indexer     UserIndexer
+	joiner       ChannelJoiner // optional: when set, channel joins post system messages
+	jwt          JWTProvider
+	oidc         OIDCProvider // may be nil when OIDC is not configured
+	cache        Cache
+	indexer      UserIndexer
 }
 
 // NewAuthService creates an AuthService with the given dependencies.
@@ -137,6 +137,9 @@ func (s *AuthService) HandleOIDCCallback(ctx context.Context, code, state string
 			UpdatedAt:    now,
 		}
 		if err := s.users.CreateUser(ctx, user); err != nil {
+			if errors.Is(err, store.ErrAlreadyExists) {
+				return "", "", nil, errors.New("auth: a user with this email already exists")
+			}
 			return "", "", nil, fmt.Errorf("auth: create user: %w", err)
 		}
 		s.indexUser(ctx, user)
@@ -266,6 +269,9 @@ func (s *AuthService) AcceptInvite(ctx context.Context, token, displayName, pass
 		UpdatedAt:    now,
 	}
 	if err := s.users.CreateUser(ctx, user); err != nil {
+		if errors.Is(err, store.ErrAlreadyExists) {
+			return "", "", nil, errors.New("auth: a user with this email already exists")
+		}
 		return "", "", nil, fmt.Errorf("auth: create guest user: %w", err)
 	}
 	s.indexUser(ctx, user)

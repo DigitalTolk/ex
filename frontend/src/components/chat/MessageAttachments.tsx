@@ -16,6 +16,9 @@ interface MessageAttachmentsProps {
   postedAt: string;
 }
 
+const THUMBNAIL_MAX_WIDTH = 320;
+const THUMBNAIL_MAX_HEIGHT = 288;
+
 export function MessageAttachments({
   ids,
   authorName,
@@ -89,9 +92,9 @@ function AttachmentSkeleton({ loading }: { loading: boolean }) {
 
 function ThumbnailButton({ att, onOpen }: { att: Attachment; onOpen: () => void }) {
   // width/height attrs reserve the layout box pre-decode; CSS caps
-  // visible size. Without these the row resizes after image decode
-  // and breaks scroll-to-bottom on first paint.
-  const hasDims = att.width && att.height;
+  // visible size. Use the rendered thumbnail box, not the full
+  // intrinsic image, so the reserved layout matches the chat message.
+  const thumbnailDims = getThumbnailDimensions(att);
   return (
     <button
       type="button"
@@ -105,12 +108,21 @@ function ThumbnailButton({ att, onOpen }: { att: Attachment; onOpen: () => void 
           src={att.url}
           alt={att.filename}
           className="h-auto max-h-72 max-w-full"
-          width={hasDims ? att.width : undefined}
-          height={hasDims ? att.height : undefined}
+          width={thumbnailDims.width}
+          height={thumbnailDims.height}
         />
       )}
     </button>
   );
+}
+
+function getThumbnailDimensions(att: Attachment): { width?: number; height?: number } {
+  if (!att.width || !att.height) return {};
+  const scale = Math.min(1, THUMBNAIL_MAX_WIDTH / att.width, THUMBNAIL_MAX_HEIGHT / att.height);
+  return {
+    width: Math.round(att.width * scale),
+    height: Math.round(att.height * scale),
+  };
 }
 
 // AttachmentRow is the compact box used whenever a message has multiple

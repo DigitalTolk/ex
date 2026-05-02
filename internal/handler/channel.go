@@ -3,10 +3,12 @@ package handler
 import (
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/DigitalTolk/ex/internal/middleware"
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/DigitalTolk/ex/internal/service"
+	"github.com/DigitalTolk/ex/internal/store"
 )
 
 // ChannelHandler exposes HTTP endpoints for channel operations.
@@ -29,9 +31,9 @@ func (h *ChannelHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var body struct {
-		Name        string           `json:"name"`
+		Name        string            `json:"name"`
 		Type        model.ChannelType `json:"type"`
-		Description string           `json:"description"`
+		Description string            `json:"description"`
 	}
 	if err := readJSON(r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_body", err.Error())
@@ -71,11 +73,23 @@ func isValidationError(err error) bool {
 	return false
 }
 
+func isDuplicateError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "already exists") || strings.Contains(msg, "already taken")
+}
+
 // writeServiceError maps a service-layer error to an HTTP response: a
 // validation error becomes 400, anything else uses the supplied
 // fallback. Centralized so a typo in user input doesn't surface as a
 // scary 500.
 func writeServiceError(w http.ResponseWriter, err error, fallbackStatus int, fallbackCode string) {
+	if isDuplicateError(err) {
+		writeError(w, http.StatusConflict, "conflict", err.Error())
+		return
+	}
 	if isValidationError(err) {
 		writeError(w, http.StatusBadRequest, "invalid_body", err.Error())
 		return
@@ -159,20 +173,36 @@ func (h *ChannelHandler) Get(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "missing_id", "channel ID or slug is required")
 		return
 	}
+	userID := middleware.UserIDFromContext(r.Context())
+	if userID == "" {
+		writeError(w, http.StatusUnauthorized, "unauthorized", "authentication required")
+		return
+	}
 
 	var ch *model.Channel
 	var err error
 	if isULID(val) {
-		ch, err = h.channelSvc.GetByID(r.Context(), val)
+		ch, err = h.channelSvc.GetVisibleByID(r.Context(), userID, val)
 	} else {
-		ch, err = h.channelSvc.GetBySlug(r.Context(), val)
+		ch, err = h.channelSvc.GetVisibleBySlug(r.Context(), userID, val)
 	}
 	if err != nil {
-		writeError(w, http.StatusNotFound, "not_found", err.Error())
+		writeReadResourceError(w, err, "channel")
 		return
 	}
 
 	writeJSON(w, http.StatusOK, ch)
+}
+
+func writeReadResourceError(w http.ResponseWriter, err error, resource string) {
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		writeError(w, http.StatusNotFound, "not_found", resource+" not found")
+	case errors.Is(err, service.ErrForbidden):
+		writeError(w, http.StatusForbidden, "forbidden", "you do not have access to this "+resource)
+	default:
+		writeError(w, http.StatusInternalServerError, "server_error", err.Error())
+	}
 }
 
 // Update modifies a channel's name or description.

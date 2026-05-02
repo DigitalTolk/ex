@@ -123,6 +123,7 @@ func main() {
 		avatarSigner = s3Client
 	}
 	userSvc := service.NewUserService(userStore, redisCache, avatarSigner, redisPubSub)
+	userSvc.SetMediaURLCache(redisCache)
 	userSvc.SetTokenStore(tokenStore)
 	channelSvc := service.NewChannelService(channelStore, membershipStore, userStore, messageStore, redisCache, brokerAdapter, redisPubSub)
 	authSvc.SetChannelJoiner(channelSvc)
@@ -133,12 +134,14 @@ func main() {
 	if s3Client != nil {
 		emojiSvc.SetSigner(s3Client)
 	}
+	emojiSvc.SetMediaURLCache(redisCache)
 	presenceSvc := service.NewPresenceService(broker, redisPubSub)
 	var attachmentSigner service.AttachmentSigner
 	if s3Client != nil {
 		attachmentSigner = s3Client
 	}
 	attachmentSvc := service.NewAttachmentService(attachmentStore, attachmentSigner, redisPubSub)
+	attachmentSvc.SetMediaURLCache(redisCache)
 	messageSvc.SetAttachmentManager(attachmentSvc)
 	notificationSvc := service.NewNotificationService(redisPubSub, membershipStore, conversationStore, channelStore, userStore, messageStore)
 	notificationSvc.SetPresence(presenceSvc)
@@ -237,6 +240,7 @@ func main() {
 		// expire `unfurl/` keys after ~30 days (configured in IaC).
 		unfurlSvc.SetImageStore(s3Client)
 	}
+	unfurlSvc.SetMediaURLCache(redisCache)
 	unfurlH := handler.NewUnfurlHandler(unfurlSvc)
 	router := handler.NewRouter(authH, userH, channelH, convH, wsH, uploadH, emojiH, presenceH, attachmentH, adminH, threadH, versionH, unfurlH, sidebarH, searchH, jwtMgr, frontendDist, appVersion, allowOrigin)
 

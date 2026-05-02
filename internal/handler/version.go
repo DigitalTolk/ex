@@ -13,6 +13,20 @@ import (
 // frontend (lib/version-meta.ts) — keep them in sync.
 const AppVersionMetaName = "app-version"
 
+// BuildVersionMetaName is the HTML meta-tag name the SPA reads for display-only
+// release metadata. It must not be used for reload detection: a Git tag/SHA can
+// stay the same across frontend artifact rebuilds in local and CI workflows.
+const BuildVersionMetaName = "build-version"
+
+// BuildVersion can be set by release builds via:
+//
+//	-ldflags "-X github.com/DigitalTolk/ex/internal/handler.BuildVersion=<tag-or-sha>"
+//
+// This is display-only release metadata for the About dialog. AppVersion must
+// remain derived from the shipped frontend artifact so the reload banner still
+// detects a new index.html even when the Git metadata is unchanged.
+var BuildVersion string
+
 // VersionHandler exposes the build version of the running binary so the
 // browser can detect when a deploy has rolled out and trigger a reload.
 //
@@ -60,6 +74,19 @@ func AppVersion(frontendFS fs.FS) string {
 	// the rebuild cadence of a single workspace and keeps logs/network
 	// frames compact.
 	return hex.EncodeToString(h.Sum(nil))[:12]
+}
+
+// DisplayVersion returns the human-facing version shown in About. Release
+// builds prefer Git metadata; local/dev builds fall back to the app artifact
+// version so the dialog still shows something useful.
+func DisplayVersion(appVersion string) string {
+	if BuildVersion != "" {
+		return BuildVersion
+	}
+	if appVersion != "" {
+		return appVersion
+	}
+	return "dev"
 }
 
 // Get returns {"version": "<build version>"}. No auth — the version is

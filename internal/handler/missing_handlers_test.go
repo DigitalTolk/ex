@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -11,9 +12,11 @@ import (
 	"time"
 
 	"github.com/DigitalTolk/ex/internal/auth"
+	"github.com/DigitalTolk/ex/internal/cache"
 	"github.com/DigitalTolk/ex/internal/middleware"
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/DigitalTolk/ex/internal/service"
+	"github.com/DigitalTolk/ex/internal/storage"
 	"github.com/DigitalTolk/ex/internal/store"
 )
 
@@ -340,6 +343,31 @@ func (f *fakeSigner) DeleteObject(_ context.Context, _ string) error { return ni
 func (f *fakeSigner) GetObjectRange(_ context.Context, _ string, _ int64) ([]byte, error) {
 	return nil, nil
 }
+func (f *fakeSigner) GetObject(_ context.Context, _ string) (io.ReadCloser, string, int64, time.Time, error) {
+	return io.NopCloser(strings.NewReader("body")), "text/plain", 4, time.Date(2026, 5, 2, 12, 0, 0, 0, time.UTC), nil
+}
+
+type fakeMediaCacheH struct {
+	items map[string]any
+}
+
+func newFakeMediaCacheH() *fakeMediaCacheH {
+	return &fakeMediaCacheH{items: map[string]any{}}
+}
+
+func (c *fakeMediaCacheH) Get(_ context.Context, key string, dest interface{}) error {
+	v, ok := c.items[key]
+	if !ok {
+		return cache.ErrCacheMiss
+	}
+	data, _ := json.Marshal(v)
+	return json.Unmarshal(data, dest)
+}
+
+func (c *fakeMediaCacheH) Set(_ context.Context, key string, val interface{}, _ time.Duration) error {
+	c.items[key] = val
+	return nil
+}
 
 func setupAttachmentHandler(t *testing.T) (*AttachmentHandler, *fakeAttachmentStore, *auth.JWTManager) {
 	t.Helper()
@@ -501,6 +529,75 @@ func TestAttachmentHandler_Get_OK(t *testing.T) {
 	}
 	if got.URL == "" {
 		t.Error("expected freshly-signed URL")
+	}
+}
+
+func TestAttachmentHandler_Media_OK(t *testing.T) {
+	st := newFakeAttachmentStore()
+	svc := service.NewAttachmentService(st, &fakeSigner{}, nil)
+	svc.SetMediaURLCache(newFakeMediaCacheH())
+	h := NewAttachmentHandler(svc)
+	att := &model.Attachment{
+		ID:          "a-media",
+		SHA256:      "sha-media",
+		S3Key:       "attachments/a-media",
+		Filename:    "pic.png",
+		ContentType: "image/png",
+		Size:        4,
+		CreatedBy:   "u1",
+	}
+	if err := st.Create(context.Background(), att); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	resolved, err := svc.Get(context.Background(), att.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	parts := strings.Split(resolved.URL, "/")
+	token := parts[len(parts)-2]
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/media/"+token+"/pic.png", nil)
+	req.SetPathValue("token", token)
+	rec := httptest.NewRecorder()
+	h.Media(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if rec.Body.String() != "body" {
+		t.Fatalf("body = %q, want body", rec.Body.String())
+	}
+	if got := rec.Header().Get("Cache-Control"); got != storage.BrowserObjectCacheControl {
+		t.Fatalf("Cache-Control = %q, want %q", got, storage.BrowserObjectCacheControl)
+	}
+	if got := rec.Header().Get("Content-Type"); got != "text/plain" {
+		t.Fatalf("Content-Type = %q, want text/plain", got)
+	}
+	lastModified := rec.Header().Get("Last-Modified")
+	if lastModified != "Sat, 02 May 2026 12:00:00 GMT" {
+		t.Fatalf("Last-Modified = %q, want object timestamp", lastModified)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/media/"+token+"/pic.png", nil)
+	req.SetPathValue("token", token)
+	req.Header.Set("If-Modified-Since", lastModified)
+	rec = httptest.NewRecorder()
+	h.Media(rec, req)
+	if rec.Code != http.StatusNotModified {
+		t.Fatalf("conditional status = %d, want %d; body: %s", rec.Code, http.StatusNotModified, rec.Body.String())
+	}
+	if rec.Body.Len() != 0 {
+		t.Fatalf("conditional body length = %d, want 0", rec.Body.Len())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/media/"+token+"/pic.png?download=1", nil)
+	req.SetPathValue("token", token)
+	rec = httptest.NewRecorder()
+	h.Media(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("download status = %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if got := rec.Header().Get("Content-Disposition"); got != `attachment; filename="pic.png"` {
+		t.Fatalf("Content-Disposition = %q, want attachment filename", got)
 	}
 }
 

@@ -9,6 +9,7 @@ import { MemberList } from './MemberList';
 import { ThreadPanel } from './ThreadPanel';
 import { PinnedPanel } from './PinnedPanel';
 import { NotFoundPage } from '@/pages/NotFoundPage';
+import { ResourceErrorPage } from '@/pages/ResourceErrorPage';
 import { FilesPanel } from './FilesPanel';
 import { DMIntro, SelfDMIntro, GroupIntro } from './ConversationIntro';
 import { TypingIndicator } from './TypingIndicator';
@@ -31,6 +32,12 @@ import { useDeepLinkAnchor } from '@/hooks/useDeepLinkAnchor';
 import { firstName } from '@/lib/format';
 import type { Conversation } from '@/types';
 import type { UserMapEntry } from './MessageList';
+
+function errorStatus(err: unknown): number | null {
+  return typeof err === 'object' && err !== null && 'status' in err
+    ? Number((err as { status?: unknown }).status)
+    : null;
+}
 
 // Resolves a human-readable label for the conversation header, document
 // title, and intro card. Returns null when the conversation isn't
@@ -67,7 +74,7 @@ export function ConversationView() {
   const { clearConversationUnread, setActiveConversation } = useUnread();
   const { online } = usePresence();
   const { setActiveParent } = useNotifications();
-  const { data: conversation, isError: conversationNotFound, isLoading: conversationLoading } = useConversation(id);
+  const { data: conversation, error: conversationError, isLoading: conversationLoading } = useConversation(id);
   const { mainAnchor, threadAnchor, threadParam, navKey } = useDeepLinkAnchor(id);
   const {
     data,
@@ -186,8 +193,15 @@ export function ConversationView() {
     );
   }
 
-  if (conversationNotFound || (!conversationLoading && !conversation)) {
+  const conversationErrorStatus = errorStatus(conversationError);
+  if (conversationErrorStatus === 404) {
     return <NotFoundPage resource="conversation" />;
+  }
+  if (conversationErrorStatus === 403) {
+    return <ResourceErrorPage resource="conversation" status={403} />;
+  }
+  if (conversationError || (!conversationLoading && !conversation)) {
+    return <ResourceErrorPage resource="conversation" status={500} />;
   }
 
   const title = derivedTitle ?? 'Direct Message';

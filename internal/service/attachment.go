@@ -13,6 +13,7 @@ import (
 	_ "image/gif"
 	_ "image/jpeg"
 	_ "image/png"
+	"io"
 	"sync"
 	"time"
 
@@ -47,6 +48,7 @@ type AttachmentSigner interface {
 	PresignedPutURL(ctx context.Context, key, contentType string, expires time.Duration) (string, error)
 	DeleteObject(ctx context.Context, key string) error
 	GetObjectRange(ctx context.Context, key string, maxBytes int64) ([]byte, error)
+	GetObject(ctx context.Context, key string) (io.ReadCloser, string, int64, time.Time, error)
 }
 
 // AttachmentService manages message attachments: dedup-by-hash uploads, signed
@@ -72,6 +74,7 @@ type AttachmentService struct {
 	// duplicate S3 reads.
 	backfillMu        sync.Mutex
 	inFlightBackfills map[string]struct{}
+	mediaCache        MediaURLCache
 }
 
 // NewAttachmentService constructs an AttachmentService.
@@ -80,8 +83,9 @@ func NewAttachmentService(attachments AttachmentStore, signer AttachmentSigner, 
 		attachments: attachments,
 		signer:      signer,
 		publisher:   publisher,
-		// 20h cache TTL, comfortably shorter than the 24h presigned-URL
-		// validity so a cached URL is always still valid when reused.
+		// The cache constructor caps this to a short safety window so
+		// temporary AWS security tokens embedded in presigned URLs never
+		// linger for hours after expiry.
 		urlCache: newPresignedURLCache(20 * time.Hour),
 	}
 }
@@ -90,6 +94,10 @@ func NewAttachmentService(attachments AttachmentStore, signer AttachmentSigner, 
 // when unset, no extra validation runs (useful for unit tests of the
 // other paths). Production wiring always passes the SettingsService.
 func (s *AttachmentService) SetUploadLimits(l uploadLimits) { s.limits = l }
+
+// SetMediaURLCache enables stable app-hosted media URLs for attachment
+// rendering. Without it, Get falls back to direct presigned S3 URLs.
+func (s *AttachmentService) SetMediaURLCache(c MediaURLCache) { s.mediaCache = c }
 
 // AttachmentURLTTL is how long signed GET URLs remain valid. Frontend resolves
 // URLs on demand via the API so this can be relatively short.
@@ -192,23 +200,42 @@ func (s *AttachmentService) Get(ctx context.Context, id string) (*model.Attachme
 		return nil, fmt.Errorf("attachment: get: %w", err)
 	}
 	if s.signer != nil && a.S3Key != "" {
+		s.resolveAttachmentURLs(ctx, a)
+	}
+	if a.IsImage() && a.Width == 0 && a.Height == 0 && a.S3Key != "" && s.signer != nil {
+		s.scheduleDimensionsBackfill(a.ID, a.S3Key)
+	}
+	return a, nil
+}
+
+func (s *AttachmentService) resolveAttachmentURLs(ctx context.Context, a *model.Attachment) {
+	if s.mediaCache != nil {
+		if mediaURL, err := s.mediaURL(ctx, a); err == nil {
+			a.URL = mediaURL
+		}
+	}
+	if a.URL == "" {
 		if url, err := s.urlCache.getOrSign(ctx, presignedKey{op: "get", key: a.S3Key},
 			func(ctx context.Context) (string, error) {
 				return s.signer.PresignedGetURL(ctx, a.S3Key, AttachmentURLTTL)
 			}); err == nil {
 			a.URL = url
 		}
-		if dl, err := s.urlCache.getOrSign(ctx, presignedKey{op: "download", key: a.S3Key, extra: a.Filename},
-			func(ctx context.Context) (string, error) {
-				return s.signer.PresignedDownloadURL(ctx, a.S3Key, a.Filename, AttachmentURLTTL)
-			}); err == nil {
-			a.DownloadURL = dl
-		}
 	}
-	if a.IsImage() && a.Width == 0 && a.Height == 0 && a.S3Key != "" && s.signer != nil {
-		s.scheduleDimensionsBackfill(a.ID, a.S3Key)
+	if dl, err := s.urlCache.getOrSign(ctx, presignedKey{op: "download", key: a.S3Key, extra: a.Filename},
+		func(ctx context.Context) (string, error) {
+			return s.signer.PresignedDownloadURL(ctx, a.S3Key, a.Filename, AttachmentURLTTL)
+		}); err == nil {
+		a.DownloadURL = dl
 	}
-	return a, nil
+}
+
+func (s *AttachmentService) mediaURL(ctx context.Context, a *model.Attachment) (string, error) {
+	return StableMediaURL(ctx, s.mediaCache, "attachment", a.ID, a.S3Key, a.Filename, a.ContentType, a.Size)
+}
+
+func (s *AttachmentService) OpenMedia(ctx context.Context, token string) (*MediaObject, error) {
+	return OpenStableMedia(ctx, s.mediaCache, s.signer, token)
 }
 
 // scheduleDimensionsBackfill kicks off a one-shot goroutine that

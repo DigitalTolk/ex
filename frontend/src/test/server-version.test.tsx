@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { useEffect } from 'react';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import {
+  BUILD_DISPLAY_VERSION,
   BUILD_VERSION,
   setServerVersion,
   useServerVersion,
@@ -50,6 +51,16 @@ describe('useServerVersion', () => {
     expect(captured?.serverVersion).toBe('v2.0.0');
     expect(captured?.outdated).toBe(true);
     expect(BUILD_VERSION).toBe('test');
+    expect(BUILD_DISPLAY_VERSION).toBe('release-test');
+  });
+
+  it('compares server version against app-version, not display build-version', () => {
+    render(<Probe />);
+    act(() => setServerVersion(BUILD_DISPLAY_VERSION));
+    expect(BUILD_VERSION).toBe('test');
+    expect(BUILD_DISPLAY_VERSION).toBe('release-test');
+    expect(captured?.serverVersion).toBe('release-test');
+    expect(captured?.outdated).toBe(true);
   });
 
   it('keeps outdated=false when server reports the same version as the build', () => {

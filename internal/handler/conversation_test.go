@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -20,6 +21,7 @@ import (
 type dataConversationStore struct {
 	conversations map[string]*model.Conversation
 	userConvs     map[string][]*model.UserConversation
+	getErr        error
 }
 
 func newDataConversationStore() *dataConversationStore {
@@ -41,6 +43,9 @@ func (s *dataConversationStore) CreateConversation(_ context.Context, conv *mode
 }
 
 func (s *dataConversationStore) GetConversation(_ context.Context, id string) (*model.Conversation, error) {
+	if s.getErr != nil {
+		return nil, s.getErr
+	}
 	conv, ok := s.conversations[id]
 	if !ok {
 		return nil, store.ErrNotFound
@@ -778,8 +783,24 @@ func TestConversationHandler_Get_Forbidden(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer "+token)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusNotFound {
-		t.Errorf("status = %d, want %d", rec.Code, http.StatusNotFound)
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusForbidden)
+	}
+}
+
+func TestConversationHandler_Get_ServerError(t *testing.T) {
+	env := setupConversationHandlerFull(t)
+	env.convs.getErr = errors.New("dynamodb unavailable")
+	user := &model.User{ID: "u-x", Email: "x@x.com", SystemRole: model.SystemRoleMember}
+	token := makeTokenForUser(env.jwtMgr, user)
+	handler := middleware.Auth(env.jwtMgr)(http.HandlerFunc(env.handler.Get))
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/conversations/c-err", nil)
+	req.SetPathValue("id", "c-err")
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want %d; body: %s", rec.Code, http.StatusInternalServerError, rec.Body.String())
 	}
 }
 

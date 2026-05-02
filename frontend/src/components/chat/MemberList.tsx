@@ -181,7 +181,11 @@ export function MemberList({ members, channelId, currentUserId, currentUserRole,
         </div>
       )}
 
-      <ScrollArea className="flex-1">
+      <ScrollArea
+        className="min-h-0 flex-1"
+        scrollbarClassName="opacity-0 transition-opacity data-[scrolling]:opacity-100"
+        data-testid="member-list-scroll-area"
+      >
         <div className="p-2 space-y-0.5">
           {members.map((m) => {
             const entry = userMap?.[m.userID];

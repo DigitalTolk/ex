@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"sort"
@@ -32,6 +33,7 @@ func (m *mockBrokerForHandler) Unsubscribe(_, _ string) {}
 // dataChannelStore stores channels and returns them. Used for handler integration tests.
 type dataChannelStore struct {
 	channels map[string]*model.Channel
+	getErr   error
 }
 
 func newDataChannelStore() *dataChannelStore {
@@ -43,6 +45,9 @@ func (s *dataChannelStore) CreateChannel(_ context.Context, ch *model.Channel) e
 	return nil
 }
 func (s *dataChannelStore) GetChannel(_ context.Context, id string) (*model.Channel, error) {
+	if s.getErr != nil {
+		return nil, s.getErr
+	}
 	ch, ok := s.channels[id]
 	if !ok {
 		return nil, store.ErrNotFound
@@ -50,6 +55,9 @@ func (s *dataChannelStore) GetChannel(_ context.Context, id string) (*model.Chan
 	return ch, nil
 }
 func (s *dataChannelStore) GetChannelBySlug(_ context.Context, slug string) (*model.Channel, error) {
+	if s.getErr != nil {
+		return nil, s.getErr
+	}
 	for _, ch := range s.channels {
 		if ch.Slug == slug {
 			return ch, nil
@@ -285,6 +293,32 @@ func TestChannelHandler_Create(t *testing.T) {
 
 	if rec.Code != http.StatusCreated {
 		t.Errorf("status = %d, want %d; body: %s", rec.Code, http.StatusCreated, rec.Body.String())
+	}
+}
+
+func TestChannelHandler_Create_DuplicateNameReturnsConflict(t *testing.T) {
+	env := setupChannelHandlerFull(t)
+	user := &model.User{ID: "creator-dup", Email: "dup@example.com", SystemRole: model.SystemRoleMember}
+	token := makeTokenForUser(env.jwtMgr, user)
+
+	handler := middleware.Auth(env.jwtMgr)(http.HandlerFunc(env.handler.Create))
+	for i := 0; i < 2; i++ {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/channels", strings.NewReader(`{"name":"team-room","type":"public"}`))
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if i == 0 && rec.Code != http.StatusCreated {
+			t.Fatalf("first status=%d body=%s", rec.Code, rec.Body.String())
+		}
+		if i == 1 {
+			if rec.Code != http.StatusConflict {
+				t.Fatalf("second status=%d, want 409; body=%s", rec.Code, rec.Body.String())
+			}
+			if !strings.Contains(rec.Body.String(), "already exists") {
+				t.Fatalf("expected friendly duplicate message, got %s", rec.Body.String())
+			}
+		}
 	}
 }
 
@@ -740,6 +774,11 @@ func TestChannelHandlerFull_Get(t *testing.T) {
 		Slug: "ch-get",
 		Type: model.ChannelTypePublic,
 	}
+	env.memberships.memberships["ch-get#u-get"] = &model.ChannelMembership{
+		ChannelID: "ch-get",
+		UserID:    "u-get",
+		Role:      model.ChannelRoleMember,
+	}
 
 	user := &model.User{ID: "u-get", Email: "get@test.com", SystemRole: model.SystemRoleMember}
 	token := makeTokenForUser(env.jwtMgr, user)
@@ -775,6 +814,47 @@ func TestChannelHandlerFull_Get_NotFound(t *testing.T) {
 
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+}
+
+func TestChannelHandlerFull_Get_ForbiddenWhenNotMember(t *testing.T) {
+	env := setupChannelHandlerFull(t)
+	env.channels.channels["ch-private"] = &model.Channel{
+		ID:   "ch-private",
+		Name: "private",
+		Slug: "private",
+		Type: model.ChannelTypePrivate,
+	}
+	user := &model.User{ID: "u-outsider", Email: "outsider@test.com", SystemRole: model.SystemRoleMember}
+	token := makeTokenForUser(env.jwtMgr, user)
+	handler := middleware.Auth(env.jwtMgr)(http.HandlerFunc(env.handler.Get))
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/channels/private", nil)
+	req.SetPathValue("id", "private")
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want %d; body: %s", rec.Code, http.StatusForbidden, rec.Body.String())
+	}
+}
+
+func TestChannelHandlerFull_Get_ServerError(t *testing.T) {
+	env := setupChannelHandlerFull(t)
+	env.channels.getErr = errors.New("dynamodb unavailable")
+	user := &model.User{ID: "u-geterr", Email: "geterr@test.com", SystemRole: model.SystemRoleMember}
+	token := makeTokenForUser(env.jwtMgr, user)
+	handler := middleware.Auth(env.jwtMgr)(http.HandlerFunc(env.handler.Get))
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/channels/general", nil)
+	req.SetPathValue("id", "general")
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want %d; body: %s", rec.Code, http.StatusInternalServerError, rec.Body.String())
 	}
 }
 
@@ -1402,6 +1482,11 @@ func TestChannelHandlerFull_Get_BySlug(t *testing.T) {
 		Name: "slug-test",
 		Slug: "slug-test",
 		Type: model.ChannelTypePublic,
+	}
+	env.memberships.memberships["ch-slugtest#u-slug"] = &model.ChannelMembership{
+		ChannelID: "ch-slugtest",
+		UserID:    "u-slug",
+		Role:      model.ChannelRoleMember,
 	}
 
 	user := &model.User{ID: "u-slug", Email: "slug@test.com", SystemRole: model.SystemRoleMember}

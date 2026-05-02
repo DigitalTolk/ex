@@ -1,9 +1,11 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -280,6 +282,10 @@ func (f *fakeImageStore) PutObject(_ context.Context, key, contentType string, b
 func (f *fakeImageStore) PresignedGetURL(_ context.Context, key string, _ time.Duration) (string, error) {
 	f.signCalls++
 	return "https://s3.example/" + key + "?sig=abc", nil
+}
+func (f *fakeImageStore) GetObject(_ context.Context, key string) (io.ReadCloser, string, int64, time.Time, error) {
+	body := f.puts[key]
+	return io.NopCloser(bytes.NewReader(body)), f.puttypes[key], int64(len(body)), time.Time{}, nil
 }
 
 // TestUnfurlService_ImageProxiedToS3_HitsCache verifies the dedupe path:

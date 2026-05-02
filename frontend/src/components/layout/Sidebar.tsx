@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useRef } from 'react';
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { useUsersBatch } from '@/hooks/useUsersBatch';
 import { slugify } from '@/lib/format';
@@ -58,6 +58,7 @@ export function Sidebar({ onClose }: SidebarProps) {
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
   const [creatingCategory, setCreatingCategory] = useState(false);
   const [newCategoryName, setNewCategoryName] = useState('');
+  const [categoryCreateError, setCategoryCreateError] = useState('');
   const navigate = useNavigate();
   const location = useLocation();
   const [createChannelOpen, setCreateChannelOpen] = useState(false);
@@ -65,6 +66,7 @@ export function Sidebar({ onClose }: SidebarProps) {
   const [editProfileOpen, setEditProfileOpen] = useState(false);
   const [emojiManagerOpen, setEmojiManagerOpen] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
+  const userMenuTriggerRef = useRef<HTMLButtonElement>(null);
   // null = closed; otherwise the section being deleted. Modal confirm
   // replaces window.confirm so the prompt fits the rest of the app's
   // visual language (and is mockable in tests).
@@ -111,12 +113,35 @@ export function Sidebar({ onClose }: SidebarProps) {
     navigate('/login');
   }
 
+  function clearUserMenuFocus() {
+    userMenuTriggerRef.current?.blur();
+    if (document.activeElement instanceof HTMLElement) {
+      document.activeElement.blur();
+    }
+  }
+
+  function scheduleClearUserMenuFocus() {
+    clearUserMenuFocus();
+    queueMicrotask(clearUserMenuFocus);
+    requestAnimationFrame(() => {
+      clearUserMenuFocus();
+      requestAnimationFrame(clearUserMenuFocus);
+    });
+    window.setTimeout(clearUserMenuFocus, 50);
+  }
+
+  function setAboutOpenAndClearUserFocus(open: boolean) {
+    setAboutOpen(open);
+    scheduleClearUserMenuFocus();
+  }
+
   return (
     <div className="flex h-full flex-col text-gray-300">
       {/* User section */}
       <div className="flex items-center gap-2 border-b border-white/10 p-3">
         <DropdownMenu>
           <DropdownMenuTrigger
+              ref={userMenuTriggerRef}
               className="flex flex-1 items-center gap-2 rounded-md p-1 text-left hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40"
               aria-label="User menu"
             >
@@ -165,7 +190,11 @@ export function Sidebar({ onClose }: SidebarProps) {
                 Admin
               </DropdownMenuItem>
             )}
-            <DropdownMenuItem onClick={() => setAboutOpen(true)}>
+            <DropdownMenuItem
+              onClick={() => {
+                setAboutOpenAndClearUserFocus(true);
+              }}
+            >
               <Info className="mr-2 h-4 w-4" />
               About
             </DropdownMenuItem>
@@ -177,7 +206,11 @@ export function Sidebar({ onClose }: SidebarProps) {
         </DropdownMenu>
       </div>
 
-      <ScrollArea className="flex-1">
+      <ScrollArea
+        className="min-h-0 flex-1"
+        scrollbarClassName="opacity-0 transition-opacity data-[scrolling]:opacity-100"
+        data-testid="sidebar-scroll-area"
+      >
         <div className="space-y-px p-2">
           {/* Directories link — same row geometry (px-2 py-1) as channel
               rows below so the eye doesn't catch on a height bump. */}
@@ -232,7 +265,10 @@ export function Sidebar({ onClose }: SidebarProps) {
               <input
                 autoFocus
                 value={newCategoryName}
-                onChange={(e) => setNewCategoryName(e.target.value)}
+                onChange={(e) => {
+                  setNewCategoryName(e.target.value);
+                  setCategoryCreateError('');
+                }}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') {
                     const name = newCategoryName.trim();
@@ -241,19 +277,34 @@ export function Sidebar({ onClose }: SidebarProps) {
                       onSuccess: () => {
                         setNewCategoryName('');
                         setCreatingCategory(false);
+                        setCategoryCreateError('');
+                      },
+                      onError: (err) => {
+                        setCategoryCreateError(err instanceof Error ? err.message : 'Could not create category');
                       },
                     });
                   }
-                  if (e.key === 'Escape') setCreatingCategory(false);
+                  if (e.key === 'Escape') {
+                    setCreatingCategory(false);
+                    setCategoryCreateError('');
+                  }
                 }}
                 placeholder="Category name…"
                 data-testid="sidebar-new-category-input"
                 className="w-full rounded-md bg-white/10 px-2 py-1 text-sm text-white placeholder:text-gray-400 focus:outline-none focus:ring-1 focus:ring-white/40"
               />
+              {categoryCreateError && (
+                <p className="mt-1 text-xs text-red-300" role="alert">
+                  {categoryCreateError}
+                </p>
+              )}
             </div>
           ) : (
             <button
-              onClick={() => setCreatingCategory(true)}
+              onClick={() => {
+                setCategoryCreateError('');
+                setCreatingCategory(true);
+              }}
               data-testid="sidebar-add-category"
               className="mb-1 w-full rounded-md px-2 py-1 text-left text-sm text-gray-500 hover:bg-white/5 hover:text-gray-300"
             >
@@ -408,7 +459,11 @@ export function Sidebar({ onClose }: SidebarProps) {
       <InviteDialog open={inviteOpen} onOpenChange={setInviteOpen} />
       <EditProfileDialog open={editProfileOpen} onOpenChange={setEditProfileOpen} />
       <EmojiManagerDialog open={emojiManagerOpen} onOpenChange={setEmojiManagerOpen} />
-      <AboutDialog open={aboutOpen} onOpenChange={setAboutOpen} />
+      <AboutDialog
+        open={aboutOpen}
+        onOpenChange={setAboutOpenAndClearUserFocus}
+        onClosed={scheduleClearUserMenuFocus}
+      />
 
       <ConfirmDialog
         open={categoryToDelete !== null}

@@ -50,6 +50,10 @@ func (h *EmojiHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 	emoji, err := h.emojiSvc.Create(r.Context(), userID, body.Name, body.ImageURL, body.ImageKey)
 	if err != nil {
+		if isDuplicateError(err) {
+			writeError(w, http.StatusConflict, "conflict", err.Error())
+			return
+		}
 		writeError(w, http.StatusBadRequest, "create_error", err.Error())
 		return
 	}

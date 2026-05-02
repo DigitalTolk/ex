@@ -306,6 +306,26 @@ func TestUserStore_DuplicateEmail(t *testing.T) {
 	}
 }
 
+func TestUserStore_DuplicateEmailCaseInsensitive(t *testing.T) {
+	db := setupDynamoDB(t)
+	s := NewUserStore(db)
+	ctx := context.Background()
+
+	if err := s.Create(ctx, makeUser("u-dup-case1", "Dup@Test.com", "First")); err != nil {
+		t.Fatalf("Create first: %v", err)
+	}
+	if err := s.Create(ctx, makeUser("u-dup-case2", "dup@test.com", "Second")); !errors.Is(err, ErrAlreadyExists) {
+		t.Fatalf("expected ErrAlreadyExists, got %v", err)
+	}
+	got, err := s.GetByEmail(ctx, "DUP@test.com")
+	if err != nil {
+		t.Fatalf("GetByEmail: %v", err)
+	}
+	if got.ID != "u-dup-case1" {
+		t.Fatalf("GetByEmail returned %q, want first user", got.ID)
+	}
+}
+
 // ============================================================================
 // Channel Store Tests
 // ============================================================================

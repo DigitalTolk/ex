@@ -22,6 +22,23 @@ export class ApiError extends Error {
   }
 }
 
+async function errorMessageFromResponse(res: Response): Promise<string> {
+  const text = await res.text();
+  if (!text) return res.statusText || `Request failed (${res.status})`;
+  try {
+    const data = JSON.parse(text) as {
+      error?: string | { message?: string; code?: string };
+      message?: string;
+    };
+    if (typeof data.error === 'string') return data.error;
+    if (data.error?.message) return data.error.message;
+    if (data.message) return data.message;
+  } catch {
+    // Plain-text error response.
+  }
+  return text;
+}
+
 async function tryRefreshToken(): Promise<boolean> {
   try {
     const res = await fetch('/auth/token/refresh', {
@@ -74,7 +91,7 @@ export async function apiFetch<T>(
         credentials: 'include',
       });
       if (!retry.ok) {
-        throw new ApiError(retry.status, await retry.text());
+        throw new ApiError(retry.status, await errorMessageFromResponse(retry));
       }
       return retry.json();
     }
@@ -83,7 +100,7 @@ export async function apiFetch<T>(
   }
 
   if (!res.ok) {
-    throw new ApiError(res.status, await res.text());
+    throw new ApiError(res.status, await errorMessageFromResponse(res));
   }
 
   if (res.status === 204) {

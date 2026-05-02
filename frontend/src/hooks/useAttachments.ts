@@ -125,9 +125,9 @@ export function useAttachment(id: string | undefined) {
     queryKey: queryKeys.attachment(id ?? ''),
     queryFn: () => apiFetch<Attachment>(`/api/v1/attachments/${id}`),
     enabled: !!id,
-    // Signed URLs last 6h; refetch occasionally so we don't render stale URLs
-    // after long-lived sessions.
-    staleTime: 60 * 60 * 1000,
+    // Signed URLs can carry temporary AWS session tokens. Refetch on a short
+    // cadence so long-lived tabs do not keep rendering expired-token URLs.
+    staleTime: 5 * 60 * 1000,
   });
 }
 
@@ -150,7 +150,7 @@ export function useAttachmentsBatch(ids: string[]) {
       return list;
     },
     enabled: sorted.length > 0,
-    staleTime: 60 * 60 * 1000,
+    staleTime: 5 * 60 * 1000,
   });
 
   const map = useMemo(() => {

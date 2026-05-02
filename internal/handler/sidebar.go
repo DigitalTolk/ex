@@ -115,6 +115,10 @@ func (h *SidebarHandler) CreateCategory(w http.ResponseWriter, r *http.Request) 
 	}
 	cat, err := h.categorySvc.Create(r.Context(), userID, body.Name)
 	if err != nil {
+		if errors.Is(err, service.ErrCategoryNameTaken) {
+			writeError(w, http.StatusConflict, "duplicate_category", err.Error())
+			return
+		}
 		writeError(w, http.StatusBadRequest, "create_error", err.Error())
 		return
 	}
@@ -142,6 +146,10 @@ func (h *SidebarHandler) UpdateCategory(w http.ResponseWriter, r *http.Request) 
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			writeError(w, http.StatusNotFound, "not_found", "category not found")
+			return
+		}
+		if errors.Is(err, service.ErrCategoryNameTaken) {
+			writeError(w, http.StatusConflict, "duplicate_category", err.Error())
 			return
 		}
 		writeError(w, http.StatusBadRequest, "update_error", err.Error())
