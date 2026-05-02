@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -105,6 +106,7 @@ func TestS3Client_PresignedGetURL(t *testing.T) {
 	if !strings.Contains(url, "some-key") {
 		t.Errorf("URL should contain key: %s", url)
 	}
+	assertPresignedCacheControl(t, url)
 }
 
 func TestS3Client_PresignedDownloadURL(t *testing.T) {
@@ -134,6 +136,7 @@ func TestS3Client_PresignedDownloadURL(t *testing.T) {
 	if !strings.Contains(strings.ToLower(url), "attachment") {
 		t.Errorf("URL should mark response as attachment: %s", url)
 	}
+	assertPresignedCacheControl(t, url)
 }
 
 func TestContentDispositionAttachment(t *testing.T) {
@@ -166,6 +169,17 @@ func TestContentDispositionAttachment(t *testing.T) {
 				t.Errorf("contentDispositionAttachment(%q)\n got: %q\nwant: %q", tc.in, got, tc.want)
 			}
 		})
+	}
+}
+
+func assertPresignedCacheControl(t *testing.T, rawURL string) {
+	t.Helper()
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		t.Fatalf("parse presigned URL: %v", err)
+	}
+	if got := u.Query().Get("response-cache-control"); got != BrowserObjectCacheControl {
+		t.Fatalf("response-cache-control = %q, want %q in %s", got, BrowserObjectCacheControl, rawURL)
 	}
 }
 
@@ -336,6 +350,7 @@ func TestS3Client_PutObject_Success(t *testing.T) {
 	type seen struct {
 		method string
 		path   string
+		cache  string
 		ct     string
 		body   []byte
 	}
@@ -345,6 +360,7 @@ func TestS3Client_PutObject_Success(t *testing.T) {
 		got <- seen{
 			method: r.Method,
 			path:   r.URL.Path,
+			cache:  r.Header.Get("Cache-Control"),
 			ct:     r.Header.Get("Content-Type"),
 			body:   body,
 		}
@@ -378,6 +394,9 @@ func TestS3Client_PutObject_Success(t *testing.T) {
 	}
 	if r.ct != "image/png" {
 		t.Errorf("Content-Type = %q, want image/png", r.ct)
+	}
+	if r.cache != BrowserObjectCacheControl {
+		t.Errorf("Cache-Control = %q, want %q", r.cache, BrowserObjectCacheControl)
 	}
 	if string(r.body) != "PNGBYTES" {
 		t.Errorf("body = %q, want PNGBYTES", string(r.body))
@@ -435,6 +454,64 @@ func TestS3Client_GetObjectRange_Success(t *testing.T) {
 	}
 	if !strings.HasPrefix(r.rangeHdr, "bytes=0-") {
 		t.Errorf("Range = %q, want bytes=0-...", r.rangeHdr)
+	}
+}
+
+func TestS3Client_GetObject_Success(t *testing.T) {
+	type seen struct {
+		method string
+		path   string
+	}
+	got := make(chan seen, 4)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			got <- seen{method: r.Method, path: r.URL.Path}
+			w.Header().Set("Content-Type", "image/png")
+			w.Header().Set("Content-Length", "7")
+			w.Header().Set("Last-Modified", time.Date(2026, 5, 2, 12, 0, 0, 0, time.UTC).Format(http.TimeFormat))
+			_, _ = w.Write([]byte("PNGDATA"))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	ctx := context.Background()
+	client, err := NewS3Client(ctx, S3Config{
+		Endpoint:  srv.URL,
+		Bucket:    "bucket",
+		AccessKey: "test",
+		SecretKey: "test",
+		Region:    "us-east-1",
+	})
+	if err != nil {
+		t.Fatalf("NewS3Client: %v", err)
+	}
+
+	body, contentType, size, lastModified, err := client.GetObject(ctx, "uploads/full.png")
+	if err != nil {
+		t.Fatalf("GetObject: %v", err)
+	}
+	defer func() { _ = body.Close() }()
+	data, _ := io.ReadAll(body)
+	if string(data) != "PNGDATA" {
+		t.Fatalf("body = %q, want PNGDATA", string(data))
+	}
+	if contentType != "image/png" {
+		t.Fatalf("contentType = %q, want image/png", contentType)
+	}
+	if size != 7 {
+		t.Fatalf("size = %d, want 7", size)
+	}
+	if lastModified.IsZero() {
+		t.Fatalf("lastModified is zero")
+	}
+	r := <-got
+	if r.method != http.MethodGet {
+		t.Errorf("method = %s, want GET", r.method)
+	}
+	if !strings.Contains(r.path, "uploads/full.png") {
+		t.Errorf("path = %q, want uploads/full.png", r.path)
 	}
 }
 

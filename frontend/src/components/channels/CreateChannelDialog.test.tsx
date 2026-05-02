@@ -92,4 +92,18 @@ describe('CreateChannelDialog', () => {
     await user.click(screen.getByText('Create Channel'));
     expect(mockMutate).not.toHaveBeenCalled();
   });
+
+  it('shows the backend duplicate-name message without raw JSON', async () => {
+    const user = userEvent.setup();
+    mockMutate.mockImplementation((_vars, opts) => {
+      opts.onError(new Error('channel: a channel with this name already exists'));
+    });
+    renderDialog(true);
+
+    await user.type(screen.getByLabelText('Name'), 'marketing');
+    await user.click(screen.getByText('Create Channel'));
+
+    expect(screen.getByRole('alert')).toHaveTextContent('channel: a channel with this name already exists');
+    expect(screen.getByRole('alert')).not.toHaveTextContent('{"error"');
+  });
 });

@@ -15,6 +15,8 @@ import (
 // TestSpaHandler_ServesIndexHTML verifies that the SPA handler serves index.html
 // for unknown paths (client-side routing fallback) and injects the version meta.
 func TestSpaHandler_ServesIndexHTML(t *testing.T) {
+	BuildVersion = "release-1"
+	t.Cleanup(func() { BuildVersion = "" })
 	memFS := fstest.MapFS{
 		"index.html":     &fstest.MapFile{Data: []byte("<html><head><title>app</title></head></html>")},
 		"assets/main.js": &fstest.MapFile{Data: []byte("console.log('ok')")},
@@ -28,7 +30,8 @@ func TestSpaHandler_ServesIndexHTML(t *testing.T) {
 		wantStatus int
 		wantBody   string
 	}{
-		{"root serves index with injected meta", "/", http.StatusOK, `<meta name="app-version" content="abc123">`},
+		{"root serves index with injected app meta", "/", http.StatusOK, `<meta name="app-version" content="abc123">`},
+		{"root serves index with injected build meta", "/", http.StatusOK, `<meta name="build-version" content="release-1">`},
 		{"static file served directly", "/assets/main.js", http.StatusOK, "console.log('ok')"},
 		{"unknown path falls back to index", "/some/route", http.StatusOK, `<meta name="app-version" content="abc123">`},
 	}

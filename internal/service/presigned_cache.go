@@ -6,6 +6,13 @@ import (
 	"time"
 )
 
+// presignedURLCacheTTL is intentionally short. Presigned URLs can include
+// temporary AWS session tokens whose lifetime may be shorter than the requested
+// X-Amz-Expires value; caching signed URLs for hours can keep serving an
+// already-expired security token. A few minutes still dedupes hot render loops
+// without outliving normal credential refresh windows.
+const presignedURLCacheTTL = 5 * time.Minute
+
 // presignedURLCache memoises presigned GET URLs by their underlying S3 key
 // for a TTL window. Without it every avatar / attachment / emoji fetch
 // generated a fresh URL on each request — the URL changes (signing date
@@ -48,6 +55,9 @@ type presignedEntry struct {
 }
 
 func newPresignedURLCache(ttl time.Duration) *presignedURLCache {
+	if ttl <= 0 || ttl > presignedURLCacheTTL {
+		ttl = presignedURLCacheTTL
+	}
 	return &presignedURLCache{ttl: ttl, maxSize: presignedCacheMaxSize, items: map[presignedKey]presignedEntry{}}
 }
 

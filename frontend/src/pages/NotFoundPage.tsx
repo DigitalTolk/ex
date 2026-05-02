@@ -23,7 +23,7 @@ export function NotFoundPage({ resource = 'page', homeHref = '/' }: NotFoundPage
           {resource === 'page' ? 'Page not found' : `${resource[0].toUpperCase()}${resource.slice(1)} not found`}
         </h1>
         <p className="text-sm">
-          The {resource} you're looking for doesn't exist or you don't have access to it.
+          The {resource} you're looking for doesn't exist.
         </p>
       </div>
       <Link to={homeHref} className={buttonVariants({ variant: 'outline', size: 'sm' })}>

@@ -249,6 +249,29 @@ func (s *ChannelService) GetByID(ctx context.Context, id string) (*model.Channel
 	return ch, nil
 }
 
+// GetVisibleByID returns a channel only if the actor has access to its chat
+// surface. Public discovery uses BrowsePublic; direct /channel/:id rendering is
+// scoped to joined channels, with system admins allowed through.
+func (s *ChannelService) GetVisibleByID(ctx context.Context, actorID, id string) (*model.Channel, error) {
+	ch, err := s.GetByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if ch.Archived {
+		return nil, ErrForbidden
+	}
+	if isSystemAdmin(ctx) {
+		return ch, nil
+	}
+	if _, err := s.memberships.GetMembership(ctx, ch.ID, actorID); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, ErrForbidden
+		}
+		return nil, fmt.Errorf("channel: check access: %w", err)
+	}
+	return ch, nil
+}
+
 // Update modifies optional channel fields. The actor must be an owner, admin,
 // or system admin.
 func (s *ChannelService) Update(ctx context.Context, actorID, channelID string, name, description *string) (*model.Channel, error) {
@@ -768,6 +791,27 @@ func (s *ChannelService) GetBySlug(ctx context.Context, slug string) (*model.Cha
 	ch, err := s.channels.GetChannelBySlug(ctx, slug)
 	if err != nil {
 		return nil, fmt.Errorf("channel: get by slug: %w", err)
+	}
+	return ch, nil
+}
+
+// GetVisibleBySlug is the slug variant of GetVisibleByID.
+func (s *ChannelService) GetVisibleBySlug(ctx context.Context, actorID, slug string) (*model.Channel, error) {
+	ch, err := s.GetBySlug(ctx, slug)
+	if err != nil {
+		return nil, err
+	}
+	if ch.Archived {
+		return nil, ErrForbidden
+	}
+	if isSystemAdmin(ctx) {
+		return ch, nil
+	}
+	if _, err := s.memberships.GetMembership(ctx, ch.ID, actorID); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, ErrForbidden
+		}
+		return nil, fmt.Errorf("channel: check access: %w", err)
 	}
 	return ch, nil
 }

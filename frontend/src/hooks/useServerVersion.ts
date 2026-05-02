@@ -1,5 +1,5 @@
 import { useEffect, useSyncExternalStore } from 'react';
-import { APP_VERSION_META } from '@/lib/version-meta';
+import { APP_VERSION_META, BUILD_VERSION_META } from '@/lib/version-meta';
 
 // BUILD_VERSION reads `<meta name="app-version">` once on module load —
 // it's whatever the server stamped into the same HTML that delivered
@@ -12,6 +12,11 @@ function readBootVersion(): string {
 }
 
 export const BUILD_VERSION: string = readBootVersion();
+export const BUILD_DISPLAY_VERSION: string = (() => {
+  if (typeof document === 'undefined') return BUILD_VERSION;
+  const tag = document.querySelector(`meta[name="${BUILD_VERSION_META}"]`);
+  return tag?.getAttribute('content') || BUILD_VERSION;
+})();
 
 let serverVersion: string | null = null;
 const subscribers = new Set<() => void>();

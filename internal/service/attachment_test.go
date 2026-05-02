@@ -3,13 +3,17 @@ package service
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"image"
 	"image/png"
+	"io"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/DigitalTolk/ex/internal/cache"
 	"github.com/DigitalTolk/ex/internal/events"
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/DigitalTolk/ex/internal/store"
@@ -117,6 +121,28 @@ type fakeAttachmentSigner struct {
 	objects map[string][]byte
 }
 
+type fakeMediaCache struct {
+	items map[string]any
+}
+
+func newFakeMediaCache() *fakeMediaCache {
+	return &fakeMediaCache{items: map[string]any{}}
+}
+
+func (c *fakeMediaCache) Get(_ context.Context, key string, dest interface{}) error {
+	v, ok := c.items[key]
+	if !ok {
+		return cache.ErrCacheMiss
+	}
+	data, _ := json.Marshal(v)
+	return json.Unmarshal(data, dest)
+}
+
+func (c *fakeMediaCache) Set(_ context.Context, key string, val interface{}, _ time.Duration) error {
+	c.items[key] = val
+	return nil
+}
+
 func (s *fakeAttachmentSigner) PresignedGetURL(_ context.Context, key string, _ time.Duration) (string, error) {
 	s.presignCalls++
 	return fmt.Sprintf("https://signed.test/%s?sig=%d", key, s.presignCalls), nil
@@ -141,6 +167,16 @@ func (s *fakeAttachmentSigner) GetObjectRange(_ context.Context, key string, _ i
 		return nil, fmt.Errorf("no object %s", key)
 	}
 	return body, nil
+}
+func (s *fakeAttachmentSigner) GetObject(_ context.Context, key string) (io.ReadCloser, string, int64, time.Time, error) {
+	if s.objects == nil {
+		return nil, "", 0, time.Time{}, fmt.Errorf("no object %s", key)
+	}
+	body, ok := s.objects[key]
+	if !ok {
+		return nil, "", 0, time.Time{}, fmt.Errorf("no object %s", key)
+	}
+	return io.NopCloser(bytes.NewReader(body)), "image/png", int64(len(body)), time.Date(2026, 5, 2, 10, 0, 0, 0, time.UTC), nil
 }
 
 func TestAttachmentService_CreateUploadURL_PersistsClientReportedDimensions(t *testing.T) {
@@ -397,6 +433,90 @@ func TestAttachmentService_Get_ResolvesSignedURL(t *testing.T) {
 	}
 	if got.URL == got.DownloadURL {
 		t.Error("download URL should differ from inline URL (different Content-Disposition)")
+	}
+}
+
+func TestAttachmentService_Get_UsesStableMediaURLWhenCacheConfigured(t *testing.T) {
+	storeM := newMockAttachmentStore()
+	signer := &fakeAttachmentSigner{}
+	svc := NewAttachmentService(storeM, signer, newMockPublisher())
+	svc.SetMediaURLCache(newFakeMediaCache())
+	a := &model.Attachment{
+		ID:          "a-media",
+		SHA256:      "sha-media",
+		S3Key:       "attachments/a-media",
+		Filename:    "cat pic.png",
+		ContentType: "image/png",
+		Size:        42,
+		CreatedBy:   "u1",
+	}
+	if err := storeM.Create(context.Background(), a); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	got1, err := svc.Get(context.Background(), a.ID)
+	if err != nil {
+		t.Fatalf("Get first: %v", err)
+	}
+	got2, err := svc.Get(context.Background(), a.ID)
+	if err != nil {
+		t.Fatalf("Get second: %v", err)
+	}
+	if got1.URL == "" || got1.URL != got2.URL {
+		t.Fatalf("stable media URL mismatch: first=%q second=%q", got1.URL, got2.URL)
+	}
+	if !strings.HasPrefix(got1.URL, "/api/v1/media/") {
+		t.Fatalf("URL = %q, want app media URL", got1.URL)
+	}
+	if got1.DownloadURL == "" || !strings.HasPrefix(got1.DownloadURL, "https://signed.test/") {
+		t.Fatalf("DownloadURL = %q, want direct signed S3 URL", got1.DownloadURL)
+	}
+	if signer.presignCalls != 0 || signer.presignDownloadCalls != 1 {
+		t.Fatalf("unexpected presign calls: get=%d download=%d", signer.presignCalls, signer.presignDownloadCalls)
+	}
+}
+
+func TestAttachmentService_OpenMedia_StreamsCachedToken(t *testing.T) {
+	storeM := newMockAttachmentStore()
+	signer := &fakeAttachmentSigner{objects: map[string][]byte{
+		"attachments/a-media-open": []byte("PNG"),
+	}}
+	mediaCache := newFakeMediaCache()
+	svc := NewAttachmentService(storeM, signer, newMockPublisher())
+	svc.SetMediaURLCache(mediaCache)
+	a := &model.Attachment{
+		ID:          "a-media-open",
+		SHA256:      "sha-media-open",
+		S3Key:       "attachments/a-media-open",
+		Filename:    "cat.png",
+		ContentType: "image/png",
+		Size:        3,
+		CreatedBy:   "u1",
+	}
+	if err := storeM.Create(context.Background(), a); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	got, err := svc.Get(context.Background(), a.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	parts := strings.Split(got.URL, "/")
+	token := parts[len(parts)-2]
+
+	media, err := svc.OpenMedia(context.Background(), token)
+	if err != nil {
+		t.Fatalf("OpenMedia: %v", err)
+	}
+	defer func() { _ = media.Body.Close() }()
+	body, _ := io.ReadAll(media.Body)
+	if string(body) != "PNG" {
+		t.Fatalf("body = %q, want PNG", string(body))
+	}
+	if media.ContentType != "image/png" || media.Filename != "cat.png" || media.Size != 3 {
+		t.Fatalf("media metadata mismatch: %+v", media)
+	}
+	if _, err := svc.OpenMedia(context.Background(), "missing"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("missing token err = %v, want ErrNotFound", err)
 	}
 }
 

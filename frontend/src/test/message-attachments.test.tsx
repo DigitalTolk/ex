@@ -43,6 +43,46 @@ describe('MessageAttachments', () => {
     expect(screen.getByAltText('cat.png')).toBeInTheDocument();
   });
 
+  it('uses rendered thumbnail dimensions in image width and height attributes', () => {
+    const att: Attachment = {
+      id: 'wide-1',
+      filename: 'wide.png',
+      contentType: 'image/png',
+      size: 12345,
+      url: 'https://cdn/wide.png',
+      width: 4000,
+      height: 3000,
+    };
+    useAttachmentsBatchMock.mockReturnValue({
+      map: new Map([['wide-1', att]]),
+      isLoading: false,
+    });
+    render(<MessageAttachments {...baseProps} ids={['wide-1']} />);
+    const img = screen.getByAltText('wide.png');
+    expect(img).toHaveAttribute('width', '320');
+    expect(img).toHaveAttribute('height', '240');
+  });
+
+  it('caps tall image thumbnails by rendered height', () => {
+    const att: Attachment = {
+      id: 'tall-1',
+      filename: 'tall.png',
+      contentType: 'image/png',
+      size: 12345,
+      url: 'https://cdn/tall.png',
+      width: 1000,
+      height: 4000,
+    };
+    useAttachmentsBatchMock.mockReturnValue({
+      map: new Map([['tall-1', att]]),
+      isLoading: false,
+    });
+    render(<MessageAttachments {...baseProps} ids={['tall-1']} />);
+    const img = screen.getByAltText('tall.png');
+    expect(img).toHaveAttribute('width', '72');
+    expect(img).toHaveAttribute('height', '288');
+  });
+
   it('attachment-box shows a small <img> thumbnail when the attachment is an image with a URL', () => {
     // Multi-attachment messages render the compact box for each row.
     // For image rows the box should show a small thumbnail in place of

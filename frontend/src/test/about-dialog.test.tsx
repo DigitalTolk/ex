@@ -6,6 +6,7 @@ describe('AboutDialog', () => {
   it('renders the project name and a link to the repository', () => {
     render(<AboutDialog open onOpenChange={vi.fn()} />);
     expect(screen.getByText('ex')).toBeInTheDocument();
+    expect(screen.getByText('Version release-test')).toBeInTheDocument();
     const link = screen.getByRole('link', { name: /github.com\/DigitalTolk\/ex/ });
     expect(link.getAttribute('href')).toBe('https://github.com/DigitalTolk/ex');
     expect(link.getAttribute('target')).toBe('_blank');

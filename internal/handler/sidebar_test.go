@@ -360,6 +360,21 @@ func TestSidebarHandler_CreateCategory_BlankName(t *testing.T) {
 	}
 }
 
+func TestSidebarHandler_CreateCategory_DuplicateName(t *testing.T) {
+	env := setupSidebarHandler(t)
+	user := &model.User{ID: "u-cdup", Email: "cdup@x.com", SystemRole: model.SystemRoleMember}
+	env.categories.rows[env.categories.key(user.ID, "c1")] = &model.UserChannelCategory{UserID: user.ID, ID: "c1", Name: "Engineering", Position: 1}
+
+	rec, req, mw := authedRequest(t, env, user, http.MethodPost, "/api/v1/sidebar/categories", `{"name":" engineering "}`, "", "")
+	mw(http.HandlerFunc(env.handler.CreateCategory)).ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusConflict, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "category name already exists") {
+		t.Errorf("body = %s, want friendly duplicate message", rec.Body.String())
+	}
+}
+
 func TestSidebarHandler_CreateCategory_InvalidJSON(t *testing.T) {
 	env := setupSidebarHandler(t)
 	user := &model.User{ID: "u-cij2", Email: "cij2@x.com", SystemRole: model.SystemRoleMember}
@@ -432,6 +447,23 @@ func TestSidebarHandler_UpdateCategory_BlankNameRejected(t *testing.T) {
 	mw(http.HandlerFunc(env.handler.UpdateCategory)).ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+}
+
+func TestSidebarHandler_UpdateCategory_DuplicateName(t *testing.T) {
+	env := setupSidebarHandler(t)
+	user := &model.User{ID: "u-udup", Email: "udup@x.com", SystemRole: model.SystemRoleMember}
+	env.categories.rows[env.categories.key(user.ID, "c1")] = &model.UserChannelCategory{UserID: user.ID, ID: "c1", Name: "Engineering", Position: 1}
+	env.categories.rows[env.categories.key(user.ID, "c2")] = &model.UserChannelCategory{UserID: user.ID, ID: "c2", Name: "Support", Position: 2}
+
+	body := `{"name":" engineering "}`
+	rec, req, mw := authedRequest(t, env, user, http.MethodPatch, "/api/v1/sidebar/categories/c2", body, "id", "c2")
+	mw(http.HandlerFunc(env.handler.UpdateCategory)).ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusConflict, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "category name already exists") {
+		t.Errorf("body = %s, want friendly duplicate message", rec.Body.String())
 	}
 }
 

@@ -43,7 +43,8 @@ type UserService struct {
 	// urlCache memoises presigned avatar URLs so repeat fetches return
 	// the same URL — the browser then reuses its cached image instead
 	// of re-downloading on every render that hits a fresh signature.
-	urlCache *presignedURLCache
+	urlCache   *presignedURLCache
+	mediaCache MediaURLCache
 }
 
 // NewUserService creates a UserService with the given dependencies.
@@ -55,8 +56,9 @@ func NewUserService(users UserStore, cache Cache, avatars AvatarSigner, publishe
 		cache:     cache,
 		avatars:   avatars,
 		publisher: publisher,
-		// 20h cache TTL — well inside the 24h presigned-URL validity so
-		// a cached URL is always still valid when reused.
+		// The cache constructor caps this to a short safety window so
+		// temporary AWS security tokens embedded in presigned URLs never
+		// linger for hours after expiry.
 		urlCache: newPresignedURLCache(20 * time.Hour),
 	}
 }
@@ -68,6 +70,8 @@ func (s *UserService) SetTokenStore(t TokenStore) { s.tokens = t }
 func (s *UserService) SetIndexer(i UserIndexer) { s.indexer = i }
 
 func (s *UserService) SetSearcher(sr UserSearcher) { s.searcher = sr }
+
+func (s *UserService) SetMediaURLCache(c MediaURLCache) { s.mediaCache = c }
 
 func (s *UserService) indexUser(ctx context.Context, u *model.User) {
 	indexUser(ctx, s.indexer, u)
@@ -96,6 +100,12 @@ const avatarURLTTL = 24 * time.Hour
 func (s *UserService) resolveAvatar(ctx context.Context, user *model.User) {
 	if s.avatars == nil || user == nil || user.AvatarKey == "" {
 		return
+	}
+	if s.mediaCache != nil {
+		if mediaURL, err := StableMediaURL(ctx, s.mediaCache, "avatar", user.ID+":"+user.AvatarKey, user.AvatarKey, "avatar", "", 0); err == nil {
+			user.AvatarURL = mediaURL
+			return
+		}
 	}
 	url, err := s.urlCache.getOrSign(ctx, presignedKey{op: "get", key: user.AvatarKey},
 		func(ctx context.Context) (string, error) {

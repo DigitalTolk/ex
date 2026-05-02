@@ -152,6 +152,12 @@ describe('Sidebar grouped rendering', () => {
 
   it('renders Favorites group with the favorited channel', () => {
     renderSidebar();
+    const scrollArea = screen.getByTestId('sidebar-scroll-area');
+    expect(scrollArea).toHaveClass('min-h-0', 'flex-1');
+    expect(scrollArea.querySelector('[data-slot="scroll-area-scrollbar"]')).toHaveClass(
+      'opacity-0',
+      'data-[scrolling]:opacity-100',
+    );
     const favGroup = screen.getByTestId('sidebar-group-__favorites__');
     expect(within(favGroup).getByText('Favorites')).toBeInTheDocument();
     expect(within(favGroup).getByText('fav-channel')).toBeInTheDocument();
@@ -253,6 +259,23 @@ describe('Sidebar grouped rendering', () => {
       opts.onSuccess({ id: 'cat-new', name: 'Side projects', position: 99 });
     });
     expect(screen.queryByTestId('sidebar-new-category-input')).not.toBeInTheDocument();
+  });
+
+  it('shows the category create error without closing the inline input', () => {
+    renderSidebar();
+    fireEvent.click(screen.getByTestId('sidebar-add-category'));
+    const input = screen.getByTestId('sidebar-new-category-input') as HTMLInputElement;
+    fireEvent.change(input, { target: { value: 'Work' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+
+    const opts = createCategoryMutate.mock.calls[0][1] as {
+      onError: (err: Error) => void;
+    };
+    act(() => {
+      opts.onError(new Error('category name already exists'));
+    });
+    expect(screen.getByRole('alert')).toHaveTextContent('category name already exists');
+    expect(screen.getByTestId('sidebar-new-category-input')).toBeInTheDocument();
   });
 
   it('does not render an item-count next to section titles', () => {

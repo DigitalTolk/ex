@@ -1,6 +1,5 @@
-# The build version is derived at runtime from a SHA-256 of the embedded
-# index.html, so no VERSION arg or ldflag plumbing is needed: any change
-# to the bundle changes the hash and the running clients see the banner.
+# Docker builds bake release metadata into the binary. Pass GIT_TAG for
+# releases; otherwise pass GIT_SHA and the build falls back to its short SHA.
 
 # Stage 1: Build frontend
 FROM node:24-alpine AS frontend
@@ -12,12 +11,19 @@ RUN npm run build
 
 # Stage 2: Build Go binary
 FROM golang:1.26-alpine AS backend
+ARG GIT_TAG=""
+ARG GIT_SHA=""
 WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 COPY --from=frontend /app/frontend/dist ./frontend/dist
-RUN CGO_ENABLED=0 GOOS=linux go build -o /ex ./cmd/server
+RUN VERSION="${GIT_TAG:-${GIT_SHA}}" && \
+    VERSION="${VERSION:-dev}" && \
+    VERSION="$(printf '%s' "$VERSION" | cut -c1-12)" && \
+    CGO_ENABLED=0 GOOS=linux go build \
+      -ldflags="-X github.com/DigitalTolk/ex/internal/handler.BuildVersion=${VERSION}" \
+      -o /ex ./cmd/server
 
 # Stage 3: Runtime
 FROM alpine:3.23

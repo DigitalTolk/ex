@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -177,19 +178,21 @@ func DeriveID(seed string) string {
 
 // Key builder helpers.
 
-func userPK(id string) string     { return "USER#" + id }
-func userEmailPK(email string) string { return "USEREMAIL#" + email }
+func userPK(id string) string { return "USER#" + id }
+func userEmailPK(email string) string {
+	return "USEREMAIL#" + strings.ToLower(strings.TrimSpace(email))
+}
 func channelPK(id string) string   { return "CHAN#" + id }
 func convPK(id string) string      { return "CONV#" + id }
 func invitePK(token string) string { return "INVITE#" + token }
 func rtokenPK(hash string) string  { return "RTOKEN#" + hash }
 
-func profileSK() string            { return "PROFILE" }
-func metaSK() string               { return "META" }
-func memberSK(userID string) string { return "MEMBER#" + userID }
-func msgSK(msgID string) string     { return "MSG#" + msgID }
+func profileSK() string              { return "PROFILE" }
+func metaSK() string                 { return "META" }
+func memberSK(userID string) string  { return "MEMBER#" + userID }
+func msgSK(msgID string) string      { return "MSG#" + msgID }
 func chanSK(channelID string) string { return "CHAN#" + channelID }
-func convSK(convID string) string   { return "CONV#" + convID }
+func convSK(convID string) string    { return "CONV#" + convID }
 
 func chanNameGSI1PK(name string) string { return "CHANNAME#" + name }
 func chanSlugGSI1PK(slug string) string { return "CHANSLUG#" + slug }
@@ -207,3 +210,7 @@ func settingsSK() string { return "WORKSPACE" }
 // User-defined sidebar categories: rows live under the user's PK so a
 // single Query returns every category the user owns.
 func categorySK(id string) string { return "CATEGORY#" + id }
+
+func categoryNameSK(name string) string {
+	return "CATEGORYNAME#" + strings.ToLower(strings.TrimSpace(name))
+}

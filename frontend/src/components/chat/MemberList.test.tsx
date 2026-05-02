@@ -37,6 +37,12 @@ describe('MemberList', () => {
 
     renderWithProviders(<MemberList members={members} />);
 
+    const scrollArea = screen.getByTestId('member-list-scroll-area');
+    expect(scrollArea).toHaveClass('min-h-0', 'flex-1');
+    expect(scrollArea.querySelector('[data-slot="scroll-area-scrollbar"]')).toHaveClass(
+      'opacity-0',
+      'data-[scrolling]:opacity-100',
+    );
     expect(screen.getByText('Alice')).toBeInTheDocument();
     expect(screen.getByText('Bob')).toBeInTheDocument();
     expect(screen.getByText('Charlie')).toBeInTheDocument();

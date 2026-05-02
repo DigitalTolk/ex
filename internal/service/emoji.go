@@ -43,7 +43,8 @@ type EmojiService struct {
 	// calls return identical URLs — without it every reload would
 	// hand out fresh signatures and the browser would re-download
 	// every emoji on every page view.
-	urlCache *presignedURLCache
+	urlCache   *presignedURLCache
+	mediaCache MediaURLCache
 }
 
 // NewEmojiService constructs an EmojiService.
@@ -52,9 +53,9 @@ func NewEmojiService(emojis EmojiStore, users UserStore, publisher Publisher) *E
 		emojis:    emojis,
 		users:     users,
 		publisher: publisher,
-		// 20h cache TTL — emojis are heavily reused; cache window is
-		// well inside the 24h URL validity so a cached URL is always
-		// still valid when reused.
+		// The cache constructor caps this to a short safety window so
+		// temporary AWS security tokens embedded in presigned URLs never
+		// linger for hours after expiry.
 		urlCache: newPresignedURLCache(20 * time.Hour),
 	}
 }
@@ -62,6 +63,8 @@ func NewEmojiService(emojis EmojiStore, users UserStore, publisher Publisher) *E
 // SetSigner wires the URL re-signer. Optional — when unset, List returns
 // stored URLs as-is. Production wiring always passes the S3 client.
 func (s *EmojiService) SetSigner(signer EmojiURLSigner) { s.signer = signer }
+
+func (s *EmojiService) SetMediaURLCache(c MediaURLCache) { s.mediaCache = c }
 
 var emojiNameRE = regexp.MustCompile(`^[a-z0-9_+-]{1,32}$`)
 
@@ -125,6 +128,12 @@ func (s *EmojiService) List(ctx context.Context) ([]*model.CustomEmoji, error) {
 		for _, e := range list {
 			if e.ImageKey == "" {
 				continue
+			}
+			if s.mediaCache != nil {
+				if mediaURL, err := StableMediaURL(ctx, s.mediaCache, "emoji", e.Name+":"+e.ImageKey, e.ImageKey, e.Name, "", 0); err == nil {
+					e.ImageURL = mediaURL
+					continue
+				}
 			}
 			url, err := s.urlCache.getOrSign(ctx, presignedKey{op: "get", key: e.ImageKey},
 				func(ctx context.Context) (string, error) {

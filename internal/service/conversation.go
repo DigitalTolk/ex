@@ -374,7 +374,7 @@ func (s *ConversationService) GetByID(ctx context.Context, userID, convID string
 			return conv, nil
 		}
 	}
-	return nil, errors.New("conversation: not a participant")
+	return nil, fmt.Errorf("conversation: not a participant: %w", ErrForbidden)
 }
 
 // dmConversationID deterministically derives a ULID-formatted conversation ID

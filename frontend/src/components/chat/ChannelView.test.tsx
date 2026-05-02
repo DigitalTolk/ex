@@ -4,6 +4,7 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ChannelView } from './ChannelView';
 import type { Channel, ChannelMembership } from '@/types';
+import { ApiError } from '@/lib/api';
 
 // --- mocks ---------------------------------------------------------------
 
@@ -21,6 +22,8 @@ const mockMembers: ChannelMembership[] = [
   { channelID: 'ch-1', userID: 'u-1', role: 'owner', displayName: 'Alice', joinedAt: '2026-01-01T00:00:00Z' },
   { channelID: 'ch-1', userID: 'u-2', role: 'member', displayName: 'Bob', joinedAt: '2026-01-01T00:00:00Z' },
 ];
+
+let channelQuery: { data?: Channel; error?: Error; isLoading?: boolean };
 
 vi.mock('@/context/AuthContext', () => ({
   useAuth: () => ({
@@ -58,7 +61,7 @@ vi.mock('@/context/PresenceContext', () => ({
 }));
 
 vi.mock('@/hooks/useChannels', () => ({
-  useChannelBySlug: () => ({ data: mockChannel }),
+  useChannelBySlug: () => channelQuery,
   useChannelMembers: () => ({ data: mockMembers }),
   useUserChannels: () => ({ data: [] }),
   useBrowseChannels: () => ({ data: [] }),
@@ -85,9 +88,13 @@ vi.mock('@/hooks/useWebSocket', () => ({
   useWebSocket: vi.fn(),
 }));
 
-vi.mock('@/lib/api', () => ({
-  apiFetch: vi.fn(),
-}));
+vi.mock('@/lib/api', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/api')>('@/lib/api');
+  return {
+    ...actual,
+    apiFetch: vi.fn(),
+  };
+});
 
 // --- helpers -------------------------------------------------------------
 
@@ -109,6 +116,7 @@ function renderChannelView(slug = 'general') {
 describe('ChannelView', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    channelQuery = { data: mockChannel, isLoading: false };
   });
 
   it('renders channel name in header', () => {
@@ -178,5 +186,24 @@ describe('ChannelView', () => {
     expect(screen.getByLabelText('Pinned messages')).toBeInTheDocument();
     await u.click(screen.getByTestId('pinned-toggle'));
     expect(screen.queryByLabelText('Pinned messages')).toBeNull();
+  });
+
+  it('shows not found only for real 404 channel responses', () => {
+    channelQuery = { error: new ApiError(404, 'not found'), isLoading: false };
+    renderChannelView();
+    expect(screen.getByTestId('not-found-page')).toHaveTextContent('Channel not found');
+  });
+
+  it('shows access denied for forbidden channels', () => {
+    channelQuery = { error: new ApiError(403, 'forbidden'), isLoading: false };
+    renderChannelView();
+    expect(screen.getByTestId('resource-error-403')).toHaveTextContent('Channel access denied');
+  });
+
+  it('does not show the not-found page for server errors', () => {
+    channelQuery = { error: new ApiError(500, 'server exploded'), isLoading: false };
+    renderChannelView();
+    expect(screen.queryByTestId('not-found-page')).toBeNull();
+    expect(screen.getByTestId('resource-error-500')).toHaveTextContent('Channel unavailable');
   });
 });

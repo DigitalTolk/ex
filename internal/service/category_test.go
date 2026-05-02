@@ -108,6 +108,20 @@ func TestCategoryService_Create_RejectsBlankName(t *testing.T) {
 	}
 }
 
+func TestCategoryService_Create_RejectsDuplicateName(t *testing.T) {
+	svc := NewCategoryService(newStubCategoryStore(), newMockPublisher())
+	ctx := context.Background()
+	if _, err := svc.Create(ctx, "u-1", "Engineering"); err != nil {
+		t.Fatalf("first Create: %v", err)
+	}
+	if _, err := svc.Create(ctx, "u-1", " engineering "); !errors.Is(err, ErrCategoryNameTaken) {
+		t.Fatalf("second Create: err = %v, want ErrCategoryNameTaken", err)
+	}
+	if _, err := svc.Create(ctx, "u-2", "Engineering"); err != nil {
+		t.Fatalf("same name for different user should be allowed: %v", err)
+	}
+}
+
 func TestCategoryService_List_ReturnsEmptySliceNotNil(t *testing.T) {
 	svc := NewCategoryService(newStubCategoryStore(), newMockPublisher())
 	got, err := svc.List(context.Background(), "u-empty")
@@ -147,6 +161,23 @@ func TestCategoryService_Update_BlankNameRejected(t *testing.T) {
 	blank := "   "
 	if _, err := svc.Update(ctx, "u-1", c.ID, &blank, nil); err == nil {
 		t.Fatal("blank rename must be rejected")
+	}
+}
+
+func TestCategoryService_Update_RejectsDuplicateName(t *testing.T) {
+	cs := newStubCategoryStore()
+	svc := NewCategoryService(cs, newMockPublisher())
+	ctx := context.Background()
+	if _, err := svc.Create(ctx, "u-1", "Engineering"); err != nil {
+		t.Fatalf("Create A: %v", err)
+	}
+	b, err := svc.Create(ctx, "u-1", "Support")
+	if err != nil {
+		t.Fatalf("Create B: %v", err)
+	}
+	name := " engineering "
+	if _, err := svc.Update(ctx, "u-1", b.ID, &name, nil); !errors.Is(err, ErrCategoryNameTaken) {
+		t.Fatalf("Update: err = %v, want ErrCategoryNameTaken", err)
 	}
 }
 

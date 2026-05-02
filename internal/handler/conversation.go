@@ -148,7 +148,7 @@ func (h *ConversationHandler) Get(w http.ResponseWriter, r *http.Request) {
 
 	conv, err := h.convSvc.GetByID(r.Context(), userID, id)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "not_found", err.Error())
+		writeReadResourceError(w, err, "conversation")
 		return
 	}
 

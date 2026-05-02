@@ -40,6 +40,12 @@ type S3Client struct {
 	bucket    string
 }
 
+// BrowserObjectCacheControl is attached to browser-bound object responses.
+// Attachment/avatar/emoji object keys are immutable: replacements get new
+// keys, so a one-year browser cache is safe for the exact presigned URL.
+// `private` keeps shared caches out.
+const BrowserObjectCacheControl = "private, max-age=31536000, immutable"
+
 // NewS3Client creates an S3Client configured for the given S3Config.
 //
 // Two underlying S3 clients are created: one with the internal Endpoint for
@@ -98,8 +104,9 @@ func NewS3Client(ctx context.Context, cfg S3Config) (*S3Client, error) {
 // PresignedGetURL generates a pre-signed GET URL for the given key.
 func (c *S3Client) PresignedGetURL(ctx context.Context, key string, expires time.Duration) (string, error) {
 	req, err := c.presigner.PresignGetObject(ctx, &s3.GetObjectInput{
-		Bucket: aws.String(c.bucket),
-		Key:    aws.String(key),
+		Bucket:               aws.String(c.bucket),
+		Key:                  aws.String(key),
+		ResponseCacheControl: aws.String(BrowserObjectCacheControl),
 	}, s3.WithPresignExpires(expires))
 	if err != nil {
 		return "", fmt.Errorf("s3: presign get: %w", err)
@@ -115,6 +122,7 @@ func (c *S3Client) PresignedDownloadURL(ctx context.Context, key, filename strin
 	req, err := c.presigner.PresignGetObject(ctx, &s3.GetObjectInput{
 		Bucket:                     aws.String(c.bucket),
 		Key:                        aws.String(key),
+		ResponseCacheControl:       aws.String(BrowserObjectCacheControl),
 		ResponseContentDisposition: aws.String(contentDispositionAttachment(filename)),
 	}, s3.WithPresignExpires(expires))
 	if err != nil {
@@ -125,7 +133,7 @@ func (c *S3Client) PresignedDownloadURL(ctx context.Context, key, filename strin
 
 // contentDispositionAttachment builds an RFC 6266 / RFC 5987 compliant
 // Content-Disposition header value. The plain `filename=` parameter handles
-// ASCII clients; `filename*=UTF-8''…` carries the original UTF-8 name for
+// ASCII clients; `filename*=UTF-8”...` carries the original UTF-8 name for
 // modern browsers without breaking older parsers on quoted-string limits.
 func contentDispositionAttachment(filename string) string {
 	if filename == "" {
@@ -232,16 +240,38 @@ func (c *S3Client) GetObjectRange(ctx context.Context, key string, maxBytes int6
 	return buf, nil
 }
 
+// GetObject opens the full object body for streaming through the app. The
+// caller owns closing the returned body.
+func (c *S3Client) GetObject(ctx context.Context, key string) (io.ReadCloser, string, int64, time.Time, error) {
+	out, err := c.client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(c.bucket),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		return nil, "", 0, time.Time{}, fmt.Errorf("s3: get object: %w", err)
+	}
+	contentType := ""
+	if out.ContentType != nil {
+		contentType = *out.ContentType
+	}
+	lastModified := time.Time{}
+	if out.LastModified != nil {
+		lastModified = *out.LastModified
+	}
+	return out.Body, contentType, aws.ToInt64(out.ContentLength), lastModified, nil
+}
+
 // PutObject uploads body bytes under key with the supplied contentType.
 // Used by the unfurl image proxy (folder `unfurl/`) and any other server-
 // side uploads. S3 lifecycle rules to expire `unfurl/` keys after N days
 // should be configured externally (Terraform / IaC).
 func (c *S3Client) PutObject(ctx context.Context, key, contentType string, body []byte) error {
 	_, err := c.client.PutObject(ctx, &s3.PutObjectInput{
-		Bucket:      aws.String(c.bucket),
-		Key:         aws.String(key),
-		ContentType: aws.String(contentType),
-		Body:        bytes.NewReader(body),
+		Bucket:       aws.String(c.bucket),
+		Key:          aws.String(key),
+		CacheControl: aws.String(BrowserObjectCacheControl),
+		ContentType:  aws.String(contentType),
+		Body:         bytes.NewReader(body),
 	})
 	if err != nil {
 		return fmt.Errorf("s3: put object: %w", err)

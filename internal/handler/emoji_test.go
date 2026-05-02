@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -87,6 +88,29 @@ func TestEmojiHandler_Create_Success(t *testing.T) {
 	}
 	if _, exists := store.items["fire"]; !exists {
 		t.Error("emoji not stored")
+	}
+}
+
+func TestEmojiHandler_Create_DuplicateNameReturnsConflict(t *testing.T) {
+	h, emojis, users, jwtMgr := setupEmojiHandler(t)
+	u := &model.User{ID: "u1", Email: "u@x", SystemRole: model.SystemRoleMember}
+	users.users[u.ID] = u
+	users.emailIndex[u.Email] = u
+	emojis.items["fire"] = &model.CustomEmoji{Name: "fire", ImageURL: "https://x.test/fire.png"}
+
+	handler := middleware.Auth(jwtMgr)(http.HandlerFunc(h.Create))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/emojis",
+		strings.NewReader(`{"name":"fire","imageURL":"https://x.test/fire2.png"}`))
+	req.Header.Set("Authorization", "Bearer "+tokenFor(t, jwtMgr, u))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status=%d, want 409; body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "name already taken") {
+		t.Fatalf("expected friendly duplicate message, got %s", rec.Body.String())
 	}
 }
 
@@ -314,6 +338,9 @@ func (fakeAttachmentSignerH) PresignedPutURL(_ context.Context, key, _ string, _
 func (fakeAttachmentSignerH) DeleteObject(_ context.Context, _ string) error { return nil }
 func (fakeAttachmentSignerH) GetObjectRange(_ context.Context, _ string, _ int64) ([]byte, error) {
 	return nil, nil
+}
+func (fakeAttachmentSignerH) GetObject(_ context.Context, _ string) (io.ReadCloser, string, int64, time.Time, error) {
+	return io.NopCloser(strings.NewReader("body")), "text/plain", 4, time.Time{}, nil
 }
 
 // TestPresenceHandler_List verifies the presence handler returns the

@@ -4,6 +4,7 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ConversationView } from './ConversationView';
 import type { Conversation } from '@/types';
+import { ApiError } from '@/lib/api';
 
 // --- mocks ---------------------------------------------------------------
 
@@ -14,6 +15,8 @@ const mockConversation: Conversation = {
   participantIDs: ['u-1', 'u-2'],
   createdAt: '2026-01-01T00:00:00Z',
 };
+
+let conversationQuery: { data?: Conversation; error?: Error; isLoading?: boolean };
 
 vi.mock('@/context/AuthContext', () => ({
   useAuth: () => ({
@@ -51,7 +54,7 @@ vi.mock('@/context/PresenceContext', () => ({
 }));
 
 vi.mock('@/hooks/useConversations', () => ({
-  useConversation: () => ({ data: mockConversation }),
+  useConversation: () => conversationQuery,
   useUserConversations: () => ({ data: [] }),
   useSearchUsers: () => ({ data: [] }),
   useCreateConversation: () => ({ mutate: vi.fn(), isPending: false }),
@@ -75,9 +78,13 @@ vi.mock('@/hooks/useWebSocket', () => ({
   useWebSocket: vi.fn(),
 }));
 
-vi.mock('@/lib/api', () => ({
-  apiFetch: vi.fn().mockResolvedValue({ id: 'u-2', displayName: 'Bob' }),
-}));
+vi.mock('@/lib/api', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/api')>('@/lib/api');
+  return {
+    ...actual,
+    apiFetch: vi.fn().mockResolvedValue({ id: 'u-2', displayName: 'Bob' }),
+  };
+});
 
 // --- helpers -------------------------------------------------------------
 
@@ -99,6 +106,7 @@ function renderConversationView(id = 'conv-1') {
 describe('ConversationView', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    conversationQuery = { data: mockConversation, isLoading: false };
   });
 
   it('renders conversation title from name', () => {
@@ -145,5 +153,24 @@ describe('ConversationView', () => {
     const messagesIdx = children.indexOf(messages);
     expect(messagesIdx).toBeGreaterThanOrEqual(0);
     expect(inputIdx).toBeGreaterThan(messagesIdx);
+  });
+
+  it('shows not found only for real 404 conversation responses', () => {
+    conversationQuery = { error: new ApiError(404, 'not found'), isLoading: false };
+    renderConversationView();
+    expect(screen.getByTestId('not-found-page')).toHaveTextContent('Conversation not found');
+  });
+
+  it('shows access denied for forbidden conversations', () => {
+    conversationQuery = { error: new ApiError(403, 'forbidden'), isLoading: false };
+    renderConversationView();
+    expect(screen.getByTestId('resource-error-403')).toHaveTextContent('Conversation access denied');
+  });
+
+  it('does not show the not-found page for server errors', () => {
+    conversationQuery = { error: new ApiError(500, 'server exploded'), isLoading: false };
+    renderConversationView();
+    expect(screen.queryByTestId('not-found-page')).toBeNull();
+    expect(screen.getByTestId('resource-error-500')).toHaveTextContent('Conversation unavailable');
   });
 });

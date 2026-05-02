@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
@@ -43,6 +44,12 @@ type categoryItem struct {
 	model.UserChannelCategory
 }
 
+type categoryNameItem struct {
+	PK         string
+	SK         string
+	CategoryID string `dynamodbav:"categoryID"`
+}
+
 func (s *CategoryStoreImpl) Create(ctx context.Context, c *model.UserChannelCategory) error {
 	if c == nil || c.UserID == "" || c.ID == "" {
 		return errors.New("store: category requires UserID and ID")
@@ -56,13 +63,34 @@ func (s *CategoryStoreImpl) Create(ctx context.Context, c *model.UserChannelCate
 	if err != nil {
 		return fmt.Errorf("store: marshal category: %w", err)
 	}
-	_, err = s.Client.PutItem(ctx, &dynamodb.PutItemInput{
-		TableName:           aws.String(s.Table),
-		Item:                av,
-		ConditionExpression: aws.String("attribute_not_exists(PK)"),
+	nameAV, err := attributevalue.MarshalMap(categoryNameItem{
+		PK:         userPK(c.UserID),
+		SK:         categoryNameSK(c.Name),
+		CategoryID: c.ID,
 	})
 	if err != nil {
-		if isConditionCheckFailed(err) {
+		return fmt.Errorf("store: marshal category name: %w", err)
+	}
+	_, err = s.Client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
+		TransactItems: []types.TransactWriteItem{
+			{
+				Put: &types.Put{
+					TableName:           aws.String(s.Table),
+					Item:                av,
+					ConditionExpression: aws.String("attribute_not_exists(PK)"),
+				},
+			},
+			{
+				Put: &types.Put{
+					TableName:           aws.String(s.Table),
+					Item:                nameAV,
+					ConditionExpression: aws.String("attribute_not_exists(PK)"),
+				},
+			},
+		},
+	})
+	if err != nil {
+		if isConditionCheckFailed(err) || isTransactionCancelledWithCondition(err) {
 			return ErrAlreadyExists
 		}
 		return fmt.Errorf("store: create category: %w", err)
@@ -130,6 +158,10 @@ func (s *CategoryStoreImpl) Update(ctx context.Context, c *model.UserChannelCate
 	if c == nil || c.UserID == "" || c.ID == "" {
 		return errors.New("store: category requires UserID and ID")
 	}
+	existing, err := s.Get(ctx, c.UserID, c.ID)
+	if err != nil {
+		return err
+	}
 	upd := expression.
 		Set(expression.Name("name"), expression.Value(c.Name)).
 		Set(expression.Name("position"), expression.Value(c.Position))
@@ -137,17 +169,62 @@ func (s *CategoryStoreImpl) Update(ctx context.Context, c *model.UserChannelCate
 	if err != nil {
 		return fmt.Errorf("store: build category update: %w", err)
 	}
-	_, err = s.Client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
-		TableName:                 aws.String(s.Table),
-		Key:                       compositeKey(userPK(c.UserID), categorySK(c.ID)),
-		UpdateExpression:          expr.Update(),
-		ExpressionAttributeNames:  expr.Names(),
-		ExpressionAttributeValues: expr.Values(),
-		ConditionExpression:       aws.String("attribute_exists(PK)"),
+	if normalizeCategoryName(existing.Name) == normalizeCategoryName(c.Name) {
+		_, err = s.Client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+			TableName:                 aws.String(s.Table),
+			Key:                       compositeKey(userPK(c.UserID), categorySK(c.ID)),
+			UpdateExpression:          expr.Update(),
+			ExpressionAttributeNames:  expr.Names(),
+			ExpressionAttributeValues: expr.Values(),
+			ConditionExpression:       aws.String("attribute_exists(PK)"),
+		})
+		if err != nil {
+			if isConditionCheckFailed(err) {
+				return ErrNotFound
+			}
+			return fmt.Errorf("store: update category: %w", err)
+		}
+		return nil
+	}
+
+	nameAV, err := attributevalue.MarshalMap(categoryNameItem{
+		PK:         userPK(c.UserID),
+		SK:         categoryNameSK(c.Name),
+		CategoryID: c.ID,
 	})
 	if err != nil {
-		if isConditionCheckFailed(err) {
-			return ErrNotFound
+		return fmt.Errorf("store: marshal category name: %w", err)
+	}
+	_, err = s.Client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
+		TransactItems: []types.TransactWriteItem{
+			{
+				Put: &types.Put{
+					TableName:           aws.String(s.Table),
+					Item:                nameAV,
+					ConditionExpression: aws.String("attribute_not_exists(PK)"),
+				},
+			},
+			{
+				Update: &types.Update{
+					TableName:                 aws.String(s.Table),
+					Key:                       compositeKey(userPK(c.UserID), categorySK(c.ID)),
+					UpdateExpression:          expr.Update(),
+					ExpressionAttributeNames:  expr.Names(),
+					ExpressionAttributeValues: expr.Values(),
+					ConditionExpression:       aws.String("attribute_exists(PK)"),
+				},
+			},
+			{
+				Delete: &types.Delete{
+					TableName: aws.String(s.Table),
+					Key:       compositeKey(userPK(c.UserID), categoryNameSK(existing.Name)),
+				},
+			},
+		},
+	})
+	if err != nil {
+		if isTransactionCancelledWithCondition(err) {
+			return ErrAlreadyExists
 		}
 		return fmt.Errorf("store: update category: %w", err)
 	}
@@ -155,9 +232,28 @@ func (s *CategoryStoreImpl) Update(ctx context.Context, c *model.UserChannelCate
 }
 
 func (s *CategoryStoreImpl) Delete(ctx context.Context, userID, categoryID string) error {
-	_, err := s.Client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
-		TableName: aws.String(s.Table),
-		Key:       compositeKey(userPK(userID), categorySK(categoryID)),
+	existing, err := s.Get(ctx, userID, categoryID)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return nil
+		}
+		return err
+	}
+	_, err = s.Client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
+		TransactItems: []types.TransactWriteItem{
+			{
+				Delete: &types.Delete{
+					TableName: aws.String(s.Table),
+					Key:       compositeKey(userPK(userID), categorySK(categoryID)),
+				},
+			},
+			{
+				Delete: &types.Delete{
+					TableName: aws.String(s.Table),
+					Key:       compositeKey(userPK(userID), categoryNameSK(existing.Name)),
+				},
+			},
+		},
 	})
 	if err != nil {
 		return fmt.Errorf("store: delete category: %w", err)
@@ -165,5 +261,6 @@ func (s *CategoryStoreImpl) Delete(ctx context.Context, userID, categoryID strin
 	return nil
 }
 
-// silence unused-import lint when types is referenced indirectly only.
-var _ types.AttributeValue = (types.AttributeValue)(nil)
+func normalizeCategoryName(name string) string {
+	return strings.ToLower(strings.TrimSpace(name))
+}

@@ -2,3 +2,4 @@
 // (handler.AppVersionMetaName on the Go side). Imported by both the
 // runtime hook and the test setup so a future rename only happens once.
 export const APP_VERSION_META = 'app-version';
+export const BUILD_VERSION_META = 'build-version';

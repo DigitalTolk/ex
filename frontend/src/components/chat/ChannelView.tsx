@@ -9,6 +9,7 @@ import { MemberList } from './MemberList';
 import { ThreadPanel } from './ThreadPanel';
 import { PinnedPanel } from './PinnedPanel';
 import { NotFoundPage } from '@/pages/NotFoundPage';
+import { ResourceErrorPage } from '@/pages/ResourceErrorPage';
 import { FilesPanel } from './FilesPanel';
 import { ChannelIntro } from './ConversationIntro';
 import { TypingIndicator } from './TypingIndicator';
@@ -33,6 +34,12 @@ import { useDeepLinkAnchor } from '@/hooks/useDeepLinkAnchor';
 import { useTagState } from '@/context/TagSearchContext';
 import { TagSearchPanel } from '@/components/TagSearchPanel';
 import type { UserMapEntry } from './MessageList';
+
+function errorStatus(err: unknown): number | null {
+  return typeof err === 'object' && err !== null && 'status' in err
+    ? Number((err as { status?: unknown }).status)
+    : null;
+}
 
 export function ChannelView() {
   const { id: slug } = useParams<{ id: string }>();
@@ -59,7 +66,7 @@ export function ChannelView() {
   // Tag panel takes the same right-rail slot as thread/pinned/files.
   // Opening any of those closes a tag, and opening a tag closes them.
   const { activeTag, closeTag } = useTagState();
-  const { data: channel, isError: channelNotFound, isLoading: channelLoading } = useChannelBySlug(slug);
+  const { data: channel, error: channelError, isLoading: channelLoading } = useChannelBySlug(slug);
   const { data: members } = useChannelMembers(channel?.id);
   useDocumentTitle(channel ? `~${channel.name}` : null);
   const { mainAnchor, threadAnchor, threadParam, navKey } = useDeepLinkAnchor(channel?.id);
@@ -219,8 +226,15 @@ export function ChannelView() {
     );
   }
 
-  if (channelNotFound || (!channelLoading && !channel)) {
+  const channelErrorStatus = errorStatus(channelError);
+  if (channelErrorStatus === 404) {
     return <NotFoundPage resource="channel" />;
+  }
+  if (channelErrorStatus === 403) {
+    return <ResourceErrorPage resource="channel" status={403} />;
+  }
+  if (channelError || (!channelLoading && !channel)) {
+    return <ResourceErrorPage resource="channel" status={500} />;
   }
 
   return (

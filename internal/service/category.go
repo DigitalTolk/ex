@@ -30,6 +30,10 @@ type CategoryService struct {
 	publisher Publisher
 }
 
+// ErrCategoryNameTaken is returned when a user tries to create or rename
+// a sidebar category to a name they already use.
+var ErrCategoryNameTaken = errors.New("category name already exists")
+
 // NewCategoryService creates a CategoryService.
 func NewCategoryService(s CategoryStore, p Publisher) *CategoryService {
 	return &CategoryService{store: s, publisher: p}
@@ -48,6 +52,9 @@ func (s *CategoryService) Create(ctx context.Context, userID, name string) (*mod
 	}
 	maxPos := 0
 	for _, c := range existing {
+		if sameCategoryName(c.Name, name) {
+			return nil, ErrCategoryNameTaken
+		}
 		if c.Position > maxPos {
 			maxPos = c.Position
 		}
@@ -60,6 +67,9 @@ func (s *CategoryService) Create(ctx context.Context, userID, name string) (*mod
 		CreatedAt: time.Now(),
 	}
 	if err := s.store.Create(ctx, c); err != nil {
+		if errors.Is(err, store.ErrAlreadyExists) {
+			return nil, ErrCategoryNameTaken
+		}
 		return nil, fmt.Errorf("category: create: %w", err)
 	}
 	s.publishUpdated(ctx, userID)
@@ -93,16 +103,32 @@ func (s *CategoryService) Update(ctx context.Context, userID, categoryID string,
 		if trimmed == "" {
 			return nil, errors.New("category: name is required")
 		}
+		existing, err := s.store.List(ctx, userID)
+		if err != nil {
+			return nil, fmt.Errorf("category: list: %w", err)
+		}
+		for _, other := range existing {
+			if other.ID != categoryID && sameCategoryName(other.Name, trimmed) {
+				return nil, ErrCategoryNameTaken
+			}
+		}
 		cat.Name = trimmed
 	}
 	if position != nil {
 		cat.Position = *position
 	}
 	if err := s.store.Update(ctx, cat); err != nil {
+		if errors.Is(err, store.ErrAlreadyExists) {
+			return nil, ErrCategoryNameTaken
+		}
 		return nil, fmt.Errorf("category: update: %w", err)
 	}
 	s.publishUpdated(ctx, userID)
 	return cat, nil
+}
+
+func sameCategoryName(a, b string) bool {
+	return strings.EqualFold(strings.TrimSpace(a), strings.TrimSpace(b))
 }
 
 // Delete removes a category. Channels assigned to it become uncategorised

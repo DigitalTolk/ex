@@ -93,6 +93,26 @@ describe('apiFetch', () => {
     });
   });
 
+  it('uses structured backend error messages instead of raw JSON', async () => {
+    const mockResponse = {
+      ok: false,
+      status: 409,
+      text: () => Promise.resolve(JSON.stringify({
+        error: {
+          code: 'conflict',
+          message: 'channel: a channel with this name already exists',
+        },
+      })),
+    } as Response;
+
+    vi.mocked(globalThis.fetch).mockResolvedValue(mockResponse);
+
+    await expect(apiFetch('/api/v1/channels')).rejects.toMatchObject({
+      status: 409,
+      message: 'channel: a channel with this name already exists',
+    });
+  });
+
   it('returns undefined for 204 No Content', async () => {
     const mockResponse = {
       ok: true,

@@ -127,6 +127,8 @@ describe('normalizeEmojiInBody', () => {
     expect(normalizeEmojiInBody('sad :-(')).toBe('sad :slightly_frown_face:');
     expect(normalizeEmojiInBody('wink ;)')).toBe('wink :winking_face:');
     expect(normalizeEmojiInBody('big grin :D')).toBe('big grin :smile:');
+    expect(normalizeEmojiInBody('silly :P')).toBe('silly :face_tongue:');
+    expect(normalizeEmojiInBody('silly :p')).toBe('silly :face_tongue:');
     expect(normalizeEmojiInBody('that was funny xD')).toBe('that was funny :laughing:');
     expect(normalizeEmojiInBody('we love this <3 keep going')).toBe('we love this :heart: keep going');
   });
