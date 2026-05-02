@@ -125,26 +125,25 @@ type CreateUploadParams struct {
 // hash (with no upload URL) or creates a new attachment record + presigned PUT
 // URL the client uploads to.
 func (s *AttachmentService) CreateUploadURL(ctx context.Context, p CreateUploadParams) (*CreateUploadResult, error) {
-	userID, filename, contentType, sha256, size := p.UserID, p.Filename, p.ContentType, p.SHA256, p.Size
-	if userID == "" {
+	if p.UserID == "" {
 		return nil, errors.New("attachment: userID required")
 	}
-	if filename == "" || contentType == "" || sha256 == "" {
+	if p.Filename == "" || p.ContentType == "" || p.SHA256 == "" {
 		return nil, errors.New("attachment: filename, contentType, sha256 required")
 	}
 	if s.signer == nil {
 		return nil, errors.New("attachment: storage not configured")
 	}
 	if s.limits != nil {
-		if !s.limits.AllowsExtension(ctx, filename) {
+		if !s.limits.AllowsExtension(ctx, p.Filename) {
 			return nil, errors.New("attachment: file extension not allowed by workspace settings")
 		}
-		if !s.limits.AllowsSize(ctx, size) {
+		if !s.limits.AllowsSize(ctx, p.Size) {
 			return nil, errors.New("attachment: file exceeds the workspace upload size limit")
 		}
 	}
 
-	if existing, err := s.attachments.GetByHash(ctx, sha256); err == nil && existing != nil {
+	if existing, err := s.attachments.GetByHash(ctx, p.SHA256); err == nil && existing != nil {
 		return &CreateUploadResult{Attachment: existing, AlreadyExists: true}, nil
 	} else if err != nil && !errors.Is(err, store.ErrNotFound) {
 		return nil, fmt.Errorf("attachment: lookup hash: %w", err)
@@ -154,21 +153,21 @@ func (s *AttachmentService) CreateUploadURL(ctx context.Context, p CreateUploadP
 	key := "attachments/" + id
 	a := &model.Attachment{
 		ID:          id,
-		SHA256:      sha256,
-		Size:        size,
-		ContentType: contentType,
-		Filename:    filename,
+		SHA256:      p.SHA256,
+		Size:        p.Size,
+		ContentType: p.ContentType,
+		Filename:    p.Filename,
 		S3Key:       key,
 		Width:       p.Width,
 		Height:      p.Height,
-		CreatedBy:   userID,
+		CreatedBy:   p.UserID,
 		CreatedAt:   time.Now(),
 	}
 	if err := s.attachments.Create(ctx, a); err != nil {
 		return nil, fmt.Errorf("attachment: create: %w", err)
 	}
 
-	uploadURL, err := s.signer.PresignedPutURL(ctx, key, contentType, 1*time.Hour)
+	uploadURL, err := s.signer.PresignedPutURL(ctx, key, p.ContentType, 1*time.Hour)
 	if err != nil {
 		return nil, fmt.Errorf("attachment: presign put: %w", err)
 	}

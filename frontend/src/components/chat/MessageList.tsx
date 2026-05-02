@@ -15,6 +15,19 @@ const ANCHOR_HIGHLIGHT_MS = 2200;
 // reach 0 in any reasonable session.
 const VIRTUOSO_START_INDEX = 1_000_000;
 
+// Schedule fn at rAF + each ms delay. Used for scroll chases where
+// Virtuoso's first scroll uses estimated row heights and later passes
+// need to correct once real measurements have settled. Returns a
+// cleanup that cancels every pending pass.
+function multiPassScroll(fn: () => void, delaysMs: number[]): () => void {
+  const raf = requestAnimationFrame(fn);
+  const timers = delaysMs.map((d) => window.setTimeout(fn, d));
+  return () => {
+    cancelAnimationFrame(raf);
+    timers.forEach((t) => window.clearTimeout(t));
+  };
+}
+
 export interface UserMapEntry {
   displayName: string;
   avatarURL?: string;
@@ -93,8 +106,7 @@ function VirtuosoMessageList({
     [userMap],
   );
 
-  // Pages are newest-first within and across pages; reverse for
-  // chronological order (oldest at top, newest at bottom).
+  // Pages are newest-first; reverse to chronological for rendering.
   const allMessages = useMemo(
     () => pages.flatMap((p) => p.items).reverse(),
     [pages],
@@ -102,14 +114,10 @@ function VirtuosoMessageList({
   const threadMeta = useMemo(() => deriveThreadMeta(allMessages), [allMessages]);
   const rows = useMemo(() => buildMessageListRows(allMessages), [allMessages]);
 
-  // `data` and `firstItemIndex` must update atomically — Virtuoso's
-  // own prepend example pairs `setState` calls in one callback so
-  // React batches them into a single render. We can't do that
-  // because React Query owns the data, but we CAN mirror the same
-  // shape by keeping both inside one `useState` and syncing from the
-  // `rows` prop in a layout effect. Each transition is one
-  // setState → one render → Virtuoso sees both values change in a
-  // single diff, exactly matching the documented pattern.
+  // `data` and `firstItemIndex` must reach Virtuoso in the SAME render
+  // (its prepend contract). One useState with both fields + a sync
+  // layout effect gives us that atomicity even though React Query owns
+  // the data.
   const [virtuosoData, setVirtuosoData] = useState<{ rows: typeof rows; firstItemIndex: number }>(() => ({
     rows,
     firstItemIndex: VIRTUOSO_START_INDEX,
@@ -119,23 +127,14 @@ function VirtuosoMessageList({
     setVirtuosoData((prev) => nextVirtuosoState(prev, rows));
   }, [rows]);
 
-  // Deep-link landing: scroll to the anchor message and flash a
-  // highlight ring. We always scroll (rather than relying on
-  // `initialTopMostItemIndex` for the first application) because
-  // data may arrive after the Virtuoso mount, in which case the
-  // mount-time index would have been -1 and the prop wouldn't
-  // re-trigger when the index later becomes valid.
+  // Belt-and-braces vs initialTopMostItemIndex: data may arrive after
+  // mount, so we re-scroll inside an effect once anchorIndex resolves.
   const anchorIndex = anchorMsgId
     ? virtuosoData.rows.findIndex((r) => r.kind === 'message' && r.message.id === anchorMsgId)
     : -1;
-  // Highlight is React-driven: the anchor effect sets a state value
-  // that flows into MessageItem via props, MessageItem renders the
-  // ring class when its id matches. Doing it via classList.add on
-  // document.getElementById raced with Virtuoso's render — the
-  // element didn't exist yet when the timeout fired, especially for
-  // thread-root deep-links where the anchor was off-viewport at
-  // mount, causing the regression where the parent message in the
-  // channel never lit up.
+  // React-driven (not classList.add on getElementById) because the
+  // DOM element doesn't exist yet on first paint for off-viewport
+  // anchors — the timeout would race virtuoso's render.
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
   const anchorAppliedRef = useRef<string | null>(null);
   useEffect(() => {
@@ -147,31 +146,20 @@ function VirtuosoMessageList({
     const dedupKey = anchorRevision ? `${anchorMsgId}@${anchorRevision}` : anchorMsgId;
     if (anchorAppliedRef.current === dedupKey) return;
     anchorAppliedRef.current = dedupKey;
-    // Multi-pass scroll: virtuoso's initial scroll uses estimated
-    // row heights for unmeasured rows. Thread deep-links are the
-    // worst case — ThreadPanel mounts alongside MessageList,
-    // narrowing the main scroller's width, so messages wrap to
-    // more lines than virtuoso's defaultItemHeight estimate. A
-    // single scroll lands wildly off-target; later passes re-
-    // assert position once real heights have been measured. The
-    // old DOM-based version used scrollIntoView + a 1.5s
-    // ResizeObserver to re-center on content settle; this is the
-    // virtuoso equivalent. Each pass is a no-op if already on
-    // target, so the cost is just three rAF/timer fires.
-    const scroll = () =>
-      virtuosoRef.current?.scrollToIndex({ index: anchorIndex, align: 'center' });
-    requestAnimationFrame(scroll);
-    const t1 = window.setTimeout(scroll, 100);
-    const t2 = window.setTimeout(scroll, 350);
-    const t3 = window.setTimeout(scroll, 800);
+    // Thread deep-links are the worst case for single-pass scroll:
+    // ThreadPanel mounts alongside MessageList, narrowing the main
+    // scroller, so virtuoso's row-height estimates wrap differently
+    // than reality. Later passes correct once real heights settle.
+    const cancelScroll = multiPassScroll(
+      () => virtuosoRef.current?.scrollToIndex({ index: anchorIndex, align: 'center' }),
+      [100, 350, 800],
+    );
     setHighlightedMessageId(anchorMsgId);
     const flashId = window.setTimeout(() => {
       setHighlightedMessageId((curr) => (curr === anchorMsgId ? null : curr));
     }, ANCHOR_HIGHLIGHT_MS);
     return () => {
-      window.clearTimeout(t1);
-      window.clearTimeout(t2);
-      window.clearTimeout(t3);
+      cancelScroll();
       window.clearTimeout(flashId);
     };
   }, [anchorMsgId, anchorRevision, anchorIndex]);
@@ -240,29 +228,21 @@ function VirtuosoMessageList({
     if (inner) ro.observe(inner);
 
     if (renderRows.length === 0) return () => ro.disconnect();
-    // Multi-pass post-mount snap (live-tail mounts only): any
-    // measurement that resizes the scroller BETWEEN initial paint
-    // and the RO attaching is missed. For channels with many items
-    // Virtuoso's initial estimate-based scroll can land 4-5px short
-    // of the actual bottom; the chase below explicitly scrolls to
-    // the last item at three increasing delays. Each call is a
-    // no-op if we're already there.
+    // Live-tail post-mount snap: catches measurements that resize
+    // the scroller between initial paint and the RO attaching,
+    // which the RO would otherwise miss.
     const lastIdx = renderRows.length - 1;
-    const snap = () => virtuosoRef.current?.scrollToIndex({ index: lastIdx, align: 'end' });
-    const timers = [
-      window.setTimeout(snap, 0),
-      window.setTimeout(snap, 100),
-      window.setTimeout(snap, 350),
-    ];
+    const cancelSnap = multiPassScroll(
+      () => virtuosoRef.current?.scrollToIndex({ index: lastIdx, align: 'end' }),
+      [100, 350],
+    );
     return () => {
       ro.disconnect();
-      timers.forEach((t) => window.clearTimeout(t));
+      cancelSnap();
     };
     // Mount-only: anchorMsgId and renderRows.length are captured
-    // for the initial-snap chase. The wrapper component keys this
-    // mount on channel/anchor changes, so a fresh mount runs the
-    // chase with the new values; we don't want it re-firing as
-    // rows grow during the session.
+    // for the initial-snap chase; the wrapper keys this mount on
+    // channel/anchor changes so a fresh mount runs with new values.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

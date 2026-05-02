@@ -225,22 +225,9 @@ func (c *S3Client) GetObjectRange(ctx context.Context, key string, maxBytes int6
 		return nil, fmt.Errorf("s3: get object range: %w", err)
 	}
 	defer func() { _ = out.Body.Close() }()
-	buf := make([]byte, 0, maxBytes)
-	tmp := make([]byte, 32*1024)
-	for {
-		n, rerr := out.Body.Read(tmp)
-		if n > 0 {
-			buf = append(buf, tmp[:n]...)
-		}
-		if rerr == io.EOF {
-			break
-		}
-		if rerr != nil {
-			return nil, fmt.Errorf("s3: read object body: %w", rerr)
-		}
-		if int64(len(buf)) >= maxBytes {
-			break
-		}
+	buf, err := io.ReadAll(io.LimitReader(out.Body, maxBytes))
+	if err != nil {
+		return nil, fmt.Errorf("s3: read object body: %w", err)
 	}
 	return buf, nil
 }

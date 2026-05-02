@@ -1,27 +1,61 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { BrowserRouter } from 'react-router-dom';
+import { createElement, forwardRef, useImperativeHandle, type ComponentType, type Ref } from 'react';
 import { MessageList } from './MessageList';
 import type { Message } from '@/types';
+// ResizeObserver + offsetHeight/offsetWidth/clientHeight/clientWidth
+// stubs are installed globally by frontend/src/test/setup.ts.
 
-// Virtuoso depends on ResizeObserver + element layout dimensions to
-// decide which rows to render. jsdom reports zero for layout and
-// doesn't ship a ResizeObserver, so without these stubs Virtuoso
-// renders nothing visible. The component's wrappers (Header, Footer,
-// empty placeholder) are rendered outside virtualization and stay
-// testable here; assertions on the virtualized message rows live in
-// the parent-component integration tests.
-class ResizeObserverStub {
-  observe() {}
-  unobserve() {}
-  disconnect() {}
-}
-(globalThis as unknown as { ResizeObserver: typeof ResizeObserverStub }).ResizeObserver = ResizeObserverStub;
-Object.defineProperty(HTMLElement.prototype, 'offsetHeight', { configurable: true, get() { return 50; } });
-Object.defineProperty(HTMLElement.prototype, 'offsetWidth', { configurable: true, get() { return 1024; } });
-Object.defineProperty(HTMLElement.prototype, 'clientHeight', { configurable: true, get() { return 768; } });
-Object.defineProperty(HTMLElement.prototype, 'clientWidth', { configurable: true, get() { return 1024; } });
+// Virtuoso mock: capture props + scrollToIndex calls for the regression
+// contract tests, while still rendering Header/Footer and the
+// [data-virtuoso-scroller] / [data-viewport-type] markers the resize-
+// snap effect queries for. The captured object is module-scoped and
+// reset per test in beforeEach.
+type Captured = {
+  initialTopMostItemIndex?: unknown;
+  followOutput?: unknown;
+  data?: unknown[];
+  scrollToIndexCalls: Array<{ index: number | string; align?: string }>;
+};
+const captured: Captured = { scrollToIndexCalls: [] };
+
+vi.mock('react-virtuoso', () => {
+  type VirtuosoMockProps = {
+    initialTopMostItemIndex?: unknown;
+    followOutput?: unknown;
+    data?: unknown[];
+    components?: { Header?: ComponentType; Footer?: ComponentType };
+  };
+  const Virtuoso = forwardRef((props: VirtuosoMockProps, ref: Ref<unknown>) => {
+    captured.initialTopMostItemIndex = props.initialTopMostItemIndex;
+    captured.followOutput = props.followOutput;
+    captured.data = props.data;
+    useImperativeHandle(ref, () => ({
+      scrollToIndex: (arg: { index: number | string; align?: string }) => {
+        captured.scrollToIndexCalls.push(arg);
+      },
+    }));
+    const Header = props.components?.Header;
+    const Footer = props.components?.Footer;
+    return createElement(
+      'div',
+      { 'data-virtuoso-scroller': true },
+      Header ? createElement(Header) : null,
+      createElement('div', { 'data-viewport-type': 'window' }),
+      Footer ? createElement(Footer) : null,
+    );
+  });
+  return { Virtuoso };
+});
+
+beforeEach(() => {
+  captured.initialTopMostItemIndex = undefined;
+  captured.followOutput = undefined;
+  captured.data = undefined;
+  captured.scrollToIndexCalls.length = 0;
+});
 
 function renderWithProviders(ui: React.ReactElement) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -172,84 +206,16 @@ describe('MessageList', () => {
 
 });
 
-// MessageList Virtuoso wiring contract
-//
-// These tests are the strict regression contract for how MessageList
-// drives Virtuoso. Every behavior the user has reported as broken in
-// past iterations is locked here so subsequent edits can't oscillate.
-// If any of these fail, the implementation is wrong — do NOT loosen
-// the assertions.
-//
-// Behaviors locked:
-//
-// 1. Deep-link mount → Virtuoso receives initialTopMostItemIndex
-//    pointing at the anchor message's row index, with center align.
-//    Without this the user lands at the wrong spot on first paint.
-// 2. Deep-link mount → after a frame, scrollToIndex is called with
-//    the anchor index and align:'center'. Belt-and-braces because
-//    initialTopMostItemIndex is captured at mount time and may be
-//    -1 if data hadn't arrived yet.
-// 3. Deep-link forward pagination → followOutput is false while
-//    hasPreviousPage=true. Otherwise each fetched newer page snaps
-//    the user to the new bottom and re-arms endReached → spam.
-// 4. Live-tail mount (no anchor) → initialTopMostItemIndex points at
-//    the last row, align:'end'. Without this the user lands mid-list
-//    on a fresh channel open.
-// 5. Live-tail mount → followOutput='auto' so live WS messages stick
-//    when the user is at the bottom.
-//
-// Each test imports MessageList behind a Virtuoso mock that captures
-// the exact props the component passes.
-type Captured = {
-  initialTopMostItemIndex?: unknown;
-  followOutput?: unknown;
-  data?: unknown[];
-  scrollToIndexCalls: Array<{ index: number | string; align?: string }>;
-};
-
-async function renderWithVirtuosoMock(
-  ui: (Component: typeof MessageList) => React.ReactElement,
+// MessageList Virtuoso wiring contract: locks the props + scroll calls
+// the implementation must drive Virtuoso with on every code path the
+// user has reported broken in past iterations. If these fail, the
+// implementation is wrong — do not loosen the assertions.
+async function renderAndCaptureVirtuoso(
+  ui: React.ReactElement,
 ): Promise<Captured> {
-  const captured: Captured = { scrollToIndexCalls: [] };
-  vi.resetModules();
-  vi.doMock('react-virtuoso', async () => {
-    const React = await import('react');
-    const Virtuoso = React.forwardRef(
-      (
-        props: {
-          initialTopMostItemIndex?: unknown;
-          followOutput?: unknown;
-          data?: unknown[];
-        },
-        ref: React.Ref<unknown>,
-      ) => {
-        captured.initialTopMostItemIndex = props.initialTopMostItemIndex;
-        captured.followOutput = props.followOutput;
-        captured.data = props.data;
-        React.useImperativeHandle(ref, () => ({
-          scrollToIndex: (arg: { index: number | string; align?: string }) => {
-            captured.scrollToIndexCalls.push(arg);
-          },
-        }));
-        // Render the scroller + viewport markers the resize-snap
-        // effect queries for. Without these, querySelector returns
-        // null and the effect early-returns harmlessly — masking
-        // any regression where the anchor-bail is removed.
-        return React.createElement(
-          'div',
-          { 'data-virtuoso-scroller': true },
-          React.createElement('div', { 'data-viewport-type': 'window' }),
-        );
-      },
-    );
-    return { Virtuoso };
-  });
-  const { MessageList: MessageListMocked } = await import('./MessageList');
-  renderWithProviders(ui(MessageListMocked));
-  // The deeplink scrollToIndex is queued in a RAF; flush it.
+  renderWithProviders(ui);
+  // The deep-link scrollToIndex fires inside requestAnimationFrame.
   await new Promise((r) => requestAnimationFrame(() => r(undefined)));
-  vi.doUnmock('react-virtuoso');
-  vi.resetModules();
   return captured;
 }
 
@@ -261,15 +227,15 @@ describe('MessageList Virtuoso wiring (regression contract)', () => {
     // Pages are newest-first per the API contract; MessageList
     // reverses to chronological. Day divider lands first; anchor
     // is the second message → row index 2.
-    const captured = await renderWithVirtuosoMock((ML) => (
-      <ML
+    const captured = await renderAndCaptureVirtuoso(
+      <MessageList
         {...defaultProps}
         pages={[{ items: [m3, m2, m1] }]}
         hasPreviousPage={true}
         fetchPreviousPage={vi.fn()}
         anchorMsgId="msg-anchor"
       />
-    ));
+    );
     expect(captured.initialTopMostItemIndex).toEqual({ index: 2, align: 'center' });
   });
 
@@ -277,15 +243,15 @@ describe('MessageList Virtuoso wiring (regression contract)', () => {
     const m1 = makeMessage({ id: 'msg-a', createdAt: '2026-04-24T10:00:00Z' });
     const m2 = makeMessage({ id: 'msg-anchor', createdAt: '2026-04-24T10:30:00Z' });
     const m3 = makeMessage({ id: 'msg-c', createdAt: '2026-04-24T11:00:00Z' });
-    const captured = await renderWithVirtuosoMock((ML) => (
-      <ML
+    const captured = await renderAndCaptureVirtuoso(
+      <MessageList
         {...defaultProps}
         pages={[{ items: [m3, m2, m1] }]}
         hasPreviousPage={true}
         fetchPreviousPage={vi.fn()}
         anchorMsgId="msg-anchor"
       />
-    ));
+    );
     expect(captured.scrollToIndexCalls).toContainEqual({ index: 2, align: 'center' });
   });
 
@@ -301,15 +267,15 @@ describe('MessageList Virtuoso wiring (regression contract)', () => {
     const m1 = makeMessage({ id: 'msg-a', createdAt: '2026-04-24T10:00:00Z' });
     const m2 = makeMessage({ id: 'msg-anchor', createdAt: '2026-04-24T10:30:00Z' });
     const m3 = makeMessage({ id: 'msg-c', createdAt: '2026-04-24T11:00:00Z' });
-    const captured = await renderWithVirtuosoMock((ML) => (
-      <ML
+    const captured = await renderAndCaptureVirtuoso(
+      <MessageList
         {...defaultProps}
         pages={[{ items: [m3, m2, m1] }]}
         hasPreviousPage={true}
         fetchPreviousPage={vi.fn()}
         anchorMsgId="msg-anchor"
       />
-    ));
+    );
     // Wait for the last pass at 800ms to fire.
     await new Promise((r) => setTimeout(r, 850));
     const anchorCalls = captured.scrollToIndexCalls.filter(
@@ -319,33 +285,33 @@ describe('MessageList Virtuoso wiring (regression contract)', () => {
   });
 
   it('deep-link forward pagination: followOutput=false while hasPreviousPage=true (prevents spam-scroll on append)', async () => {
-    const captured = await renderWithVirtuosoMock((ML) => (
-      <ML
+    const captured = await renderAndCaptureVirtuoso(
+      <MessageList
         {...defaultProps}
         pages={[{ items: [makeMessage()] }]}
         hasPreviousPage={true}
         fetchPreviousPage={vi.fn()}
         anchorMsgId="msg-1"
       />
-    ));
+    );
     expect(captured.followOutput).toBe(false);
   });
 
   it('live-tail mount (no anchor): initialTopMostItemIndex is the last row index with end alignment', async () => {
     const m1 = makeMessage({ id: 'msg-a', createdAt: '2026-04-24T10:00:00Z' });
     const m2 = makeMessage({ id: 'msg-b', createdAt: '2026-04-24T11:00:00Z' });
-    const captured = await renderWithVirtuosoMock((ML) => (
-      <ML {...defaultProps} pages={[{ items: [m2, m1] }]} hasPreviousPage={false} />
-    ));
+    const captured = await renderAndCaptureVirtuoso(
+      <MessageList {...defaultProps} pages={[{ items: [m2, m1] }]} hasPreviousPage={false} />
+    );
     // Two messages on the same day → 1 day divider + 2 messages
     // = 3 rows; last row index is 2.
     expect(captured.initialTopMostItemIndex).toEqual({ index: 2, align: 'end' });
   });
 
   it('live-tail mount: followOutput="auto" so live WS messages stick when at bottom', async () => {
-    const captured = await renderWithVirtuosoMock((ML) => (
-      <ML {...defaultProps} pages={[{ items: [makeMessage()] }]} hasPreviousPage={false} />
-    ));
+    const captured = await renderAndCaptureVirtuoso(
+      <MessageList {...defaultProps} pages={[{ items: [makeMessage()] }]} hasPreviousPage={false} />
+    );
     expect(captured.followOutput).toBe('auto');
   });
 
@@ -360,15 +326,15 @@ describe('MessageList Virtuoso wiring (regression contract)', () => {
     const m1 = makeMessage({ id: 'msg-a', createdAt: '2026-04-24T10:00:00Z' });
     const m2 = makeMessage({ id: 'msg-anchor', createdAt: '2026-04-24T10:30:00Z' });
     const m3 = makeMessage({ id: 'msg-c', createdAt: '2026-04-24T11:00:00Z' });
-    const captured = await renderWithVirtuosoMock((ML) => (
-      <ML
+    const captured = await renderAndCaptureVirtuoso(
+      <MessageList
         {...defaultProps}
         pages={[{ items: [m3, m2, m1] }]}
         hasPreviousPage={true}
         fetchPreviousPage={vi.fn()}
         anchorMsgId="msg-anchor"
       />
-    ));
+    );
     // Wait long enough for the multi-pass timer chase to fire if
     // it were enabled (the chase has timers at 0/100/350 ms).
     await new Promise((r) => setTimeout(r, 400));
@@ -399,15 +365,15 @@ describe('MessageList Virtuoso wiring (regression contract)', () => {
     const original = (globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver;
     (globalThis as unknown as { ResizeObserver: typeof TrackingRO }).ResizeObserver = TrackingRO;
     try {
-      await renderWithVirtuosoMock((ML) => (
-        <ML
+      await renderAndCaptureVirtuoso(
+        <MessageList
           {...defaultProps}
           pages={[{ items: [makeMessage()] }]}
           hasPreviousPage={true}
           fetchPreviousPage={vi.fn()}
           anchorMsgId="msg-1"
         />
-      ));
+      );
       expect(observeCalls).toEqual([]);
     } finally {
       (globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver = original;
@@ -425,15 +391,15 @@ describe('MessageList Virtuoso wiring (regression contract)', () => {
     // m3 is the bottom of the around-window AND is the current
     // user's own message. defaultProps.currentUserId === 'user-1'.
     const m3 = makeMessage({ id: 'msg-own', authorID: 'user-1', createdAt: '2026-04-24T11:00:00Z' });
-    const captured = await renderWithVirtuosoMock((ML) => (
-      <ML
+    const captured = await renderAndCaptureVirtuoso(
+      <MessageList
         {...defaultProps}
         pages={[{ items: [m3, m2, m1] }]}
         hasPreviousPage={true}
         fetchPreviousPage={vi.fn()}
         anchorMsgId="msg-anchor"
       />
-    ));
+    );
     await new Promise((r) => setTimeout(r, 50));
     // No scroll-to-end (last row index is 3 with 3 messages + 1 day divider).
     const endCalls = captured.scrollToIndexCalls.filter((c) => c.align === 'end');
@@ -447,9 +413,9 @@ describe('MessageList Virtuoso wiring (regression contract)', () => {
     // (the canonical "I sent a message, scroll to it" behavior).
     const m1 = makeMessage({ id: 'msg-a', authorID: 'user-2', createdAt: '2026-04-24T10:00:00Z' });
     const m2 = makeMessage({ id: 'msg-own', authorID: 'user-1', createdAt: '2026-04-24T11:00:00Z' });
-    const captured = await renderWithVirtuosoMock((ML) => (
-      <ML {...defaultProps} pages={[{ items: [m2, m1] }]} hasPreviousPage={false} />
-    ));
+    const captured = await renderAndCaptureVirtuoso(
+      <MessageList {...defaultProps} pages={[{ items: [m2, m1] }]} hasPreviousPage={false} />
+    );
     await new Promise((r) => setTimeout(r, 50));
     const endCalls = captured.scrollToIndexCalls.filter((c) => c.align === 'end');
     expect(endCalls.length).toBeGreaterThan(0);
@@ -470,9 +436,9 @@ describe('MessageList Virtuoso wiring (regression contract)', () => {
     const original = (globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver;
     (globalThis as unknown as { ResizeObserver: typeof TrackingRO }).ResizeObserver = TrackingRO;
     try {
-      await renderWithVirtuosoMock((ML) => (
-        <ML {...defaultProps} pages={[{ items: [makeMessage()] }]} hasPreviousPage={false} />
-      ));
+      await renderAndCaptureVirtuoso(
+        <MessageList {...defaultProps} pages={[{ items: [makeMessage()] }]} hasPreviousPage={false} />
+      );
       // The mocked Virtuoso renders [data-virtuoso-scroller] +
       // [data-viewport-type], so the live-tail RO setup observes
       // both. observeCallCount > 0 proves the anchorMsgId
