@@ -16,9 +16,6 @@ import groups from 'unicode-emoji-json/data-by-group.json' with { type: 'json' }
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const outPath = resolve(__dirname, '..', 'src', 'lib', 'emoji-data.generated.ts');
 const MAX_EMOJI_NAME_LENGTH = 32;
-const EMOJI_MODIFIER_BASE_RE = /^\p{Emoji_Modifier_Base}/u;
-const EMOJI_MODIFIER_RE = /[\u{1F3FB}-\u{1F3FF}]/gu;
-const ZERO_WIDTH_JOINER = '\u200D';
 
 const STOP_WORDS = new Set(['a', 'an', 'and', 'for', 'in', 'of', 'the', 'with']);
 const WORD_REPLACEMENTS = new Map([

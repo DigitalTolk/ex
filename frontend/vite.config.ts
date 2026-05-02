@@ -1,4 +1,5 @@
 import path from "path"
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
@@ -9,9 +10,21 @@ import tailwindcss from '@tailwindcss/vite'
 // `<meta name="app-version">` into the served HTML and exposes the same
 // hash via /api/v1/version — no Vite-side env var to keep in sync.
 
+const distGitignorePath = path.resolve(__dirname, 'dist', '.gitignore')
+
+function preserveDistGitignore() {
+  return {
+    name: 'preserve-dist-gitignore',
+    closeBundle() {
+      mkdirSync(path.dirname(distGitignorePath), { recursive: true })
+      writeFileSync(distGitignorePath, '*\n!.gitignore\n')
+    },
+  }
+}
+
 // https://vite.dev/config/
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  plugins: [react(), tailwindcss(), preserveDistGitignore()],
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),

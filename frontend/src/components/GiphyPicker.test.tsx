@@ -195,6 +195,6 @@ describe('GiphyPicker', () => {
 
     expect(await screen.findByRole('dialog')).toHaveClass('h-[460px]');
     expect(screen.getByTestId('giphy-grid')).toHaveClass('flex-1');
-    expect(screen.queryByText(/powered by giphy/i)).toBeNull();
+    expect(screen.getByRole('link', { name: /powered by giphy/i })).toHaveAttribute('href', 'https://giphy.com/');
   });
 });
