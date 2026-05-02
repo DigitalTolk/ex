@@ -490,6 +490,32 @@ func TestChannelStore_DuplicateID(t *testing.T) {
 	}
 }
 
+func TestChannelStore_DuplicateSlugDifferentID(t *testing.T) {
+	// Race-safety check: two channels with DIFFERENT IDs but the
+	// same slug must not both succeed. The slug is the URL key,
+	// so two channels at /channel/<slug> would render the wrong
+	// content. Conditional puts on PK alone don't catch this
+	// (each channel has a unique PK derived from its ID); the
+	// store relies on a transactional slug-lock item to enforce
+	// uniqueness atomically. Without that lock this test would
+	// pass through both creates and surface the bug as silent
+	// data corruption.
+	db := setupDynamoDB(t)
+	s := NewChannelStore(db)
+	ctx := context.Background()
+
+	chA := makeChannel("ch-a-id", "engineering", "engineering", model.ChannelTypePublic)
+	if err := s.Create(ctx, chA); err != nil {
+		t.Fatalf("Create A: %v", err)
+	}
+
+	chB := makeChannel("ch-b-id", "engineering", "engineering", model.ChannelTypePublic)
+	err := s.Create(ctx, chB)
+	if !errors.Is(err, ErrAlreadyExists) {
+		t.Errorf("expected ErrAlreadyExists for second create on the same slug, got %v", err)
+	}
+}
+
 // ============================================================================
 // Membership Store Tests
 // ============================================================================

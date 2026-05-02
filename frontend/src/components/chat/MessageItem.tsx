@@ -60,6 +60,10 @@ interface MessageItemProps {
   // reads display names + avatars from here instead of issuing its own
   // /users/batch fetch — avoids N+1 batches across many thread bars.
   userMap?: { get(id: string): { displayName: string; avatarURL?: string } | undefined };
+  // When true, renders the deep-link highlight ring. Driven by the
+  // surrounding list's anchor effect; the surrounding list also
+  // clears the flag after the flash window so the ring auto-removes.
+  highlighted?: boolean;
 }
 
 function formatTime(dateStr: string): string {
@@ -82,6 +86,7 @@ export function MessageItem({
   inThread,
   onReplyInThread,
   userMap,
+  highlighted,
 }: MessageItemProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [linkCopied, setLinkCopied] = useState(false);
@@ -116,6 +121,36 @@ export function MessageItem({
     if (!isOwn || message.deleted || message.system) return;
     return registerEditMessageHandler(message.id, () => setIsEditing(true));
   }, [isOwn, message.id, message.deleted, message.system]);
+
+  // Keep the inline edit visible — both on entry AND as the editor
+  // grows while the user types more lines. The composer lives just
+  // below the scroller, so without active tracking the bottom of the
+  // edit area slides behind it as height grows.
+  // - On entry: scrollIntoView after two frames so editor mount +
+  //   attachment chip layout settle before measuring.
+  // - During edit: a ResizeObserver re-scrolls on every height
+  //   increase. Disconnects on cancel/save.
+  useEffect(() => {
+    if (!isEditing) return;
+    const id = `msg-${message.id}`;
+    const el = document.getElementById(id);
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        document.getElementById(id)?.scrollIntoView({ block: 'nearest' });
+      });
+    });
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    let lastHeight = el.getBoundingClientRect().height;
+    const ro = new ResizeObserver(() => {
+      const h = el.getBoundingClientRect().height;
+      if (h > lastHeight + 0.5) {
+        el.scrollIntoView({ block: 'nearest' });
+      }
+      lastHeight = h;
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [isEditing, message.id]);
   const editMessage = useEditMessage();
   const deleteMessage = useDeleteMessage();
   const toggleReaction = useToggleReaction();
@@ -258,7 +293,7 @@ export function MessageItem({
       onMouseLeave={() => setHovered(false)}
       className={`relative flex items-start gap-3 rounded-md px-2 py-1.5 hover:bg-muted/50 ${
         message.pinned ? 'border-l-2 border-amber-500 pl-2' : ''
-      }`}
+      } ${highlighted ? 'ring-1 ring-amber-400/50 rounded-md' : ''}`}
     >
       <UserHoverCard
         userId={message.authorID}

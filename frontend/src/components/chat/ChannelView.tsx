@@ -93,7 +93,6 @@ export function ChannelView() {
     fetchPreviousPage,
     hasPreviousPage,
     isFetchingPreviousPage,
-    refetch,
   } = useChannelMessages(channel?.id, mainAnchor);
   const sendMessage = useSendChannelMessage(channel?.id);
   useEffect(() => {
@@ -255,7 +254,6 @@ export function ChannelView() {
             hasPreviousPage={hasPreviousPage}
             isFetchingPreviousPage={isFetchingPreviousPage}
             fetchPreviousPage={fetchPreviousPage}
-            refetch={refetch}
             currentUserId={user?.id}
             channelId={channel?.id}
             channelSlug={channel?.slug}

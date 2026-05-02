@@ -223,6 +223,13 @@ func (s *fakeAttachmentStore) Delete(_ context.Context, id string) error {
 	delete(s.byID, id)
 	return nil
 }
+func (s *fakeAttachmentStore) SetDimensions(_ context.Context, id string, width, height int) error {
+	if a, ok := s.byID[id]; ok {
+		a.Width = width
+		a.Height = height
+	}
+	return nil
+}
 
 type fakeSigner struct{}
 
@@ -236,6 +243,9 @@ func (f *fakeSigner) PresignedPutURL(_ context.Context, key, _ string, _ time.Du
 	return "https://signed.test/put/" + key, nil
 }
 func (f *fakeSigner) DeleteObject(_ context.Context, _ string) error { return nil }
+func (f *fakeSigner) GetObjectRange(_ context.Context, _ string, _ int64) ([]byte, error) {
+	return nil, nil
+}
 
 func setupAttachmentHandler(t *testing.T) (*AttachmentHandler, *fakeAttachmentStore, *auth.JWTManager) {
 	t.Helper()

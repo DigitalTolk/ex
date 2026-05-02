@@ -78,7 +78,6 @@ export function ConversationView() {
     hasPreviousPage,
     isFetchingPreviousPage,
     fetchPreviousPage,
-    refetch,
   } = useConversationMessages(id, mainAnchor);
   const sendMessage = useSendConversationMessage(id);
 
@@ -202,12 +201,16 @@ export function ConversationView() {
     }
   }
 
-  // Build the appropriate intro variant for the conversation kind. We render
-  // *something* once the conversation record loads — the empty-list state
-  // alone isn't enough to signal "this is the start" for chats with the
-  // user's first message already drafted in.
+  // Build the appropriate intro variant for the conversation kind.
+  // Gate it behind "the conversation has at least one message" so a
+  // brand-new DM/group doesn't render the intro until the first
+  // message is sent — the participants haven't been notified yet
+  // and an intro card would imply the conversation already exists.
+  // Public/private channels handle this differently: they render
+  // the intro immediately on empty list (see ChannelView).
+  const hasMessages = (data?.pages ?? []).some((p) => p.items.length > 0);
   let intro = null;
-  if (conversation && user) {
+  if (conversation && user && hasMessages) {
     if (conversation.type === 'group') {
       const participants = (conversation.participantIDs ?? [])
         .filter((pid) => pid !== user.id)
@@ -271,7 +274,6 @@ export function ConversationView() {
             hasPreviousPage={hasPreviousPage}
             isFetchingPreviousPage={isFetchingPreviousPage}
             fetchPreviousPage={fetchPreviousPage}
-            refetch={refetch}
             currentUserId={user?.id}
             conversationId={id}
             userMap={userMap}

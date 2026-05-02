@@ -20,6 +20,11 @@ type AttachmentStore interface {
 	AddRef(ctx context.Context, attachmentID, messageID string) error
 	RemoveRef(ctx context.Context, attachmentID, messageID string) (*model.Attachment, error)
 	Delete(ctx context.Context, id string) error
+	// SetDimensions persists detected pixel dimensions on an
+	// existing image attachment. Used by the lazy backfill path
+	// for attachments uploaded before the upload pipeline started
+	// recording dimensions.
+	SetDimensions(ctx context.Context, id string, width, height int) error
 }
 
 // AttachmentStoreImpl is the DynamoDB implementation of AttachmentStore.
@@ -172,6 +177,33 @@ func (s *AttachmentStoreImpl) Delete(ctx context.Context, id string) error {
 	})
 	if err != nil {
 		return fmt.Errorf("store: delete attachment: %w", err)
+	}
+	return nil
+}
+
+// SetDimensions backfills width/height on an existing attachment item.
+// Conditional on attribute_exists(PK) so a deletion racing with the
+// backfill doesn't recreate the row.
+func (s *AttachmentStoreImpl) SetDimensions(ctx context.Context, id string, width, height int) error {
+	_, err := s.Client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName:           aws.String(s.Table),
+		Key:                 compositeKey(attachmentPK(id), metaSK()),
+		UpdateExpression:    aws.String("SET #w = :w, #h = :h"),
+		ConditionExpression: aws.String("attribute_exists(PK)"),
+		ExpressionAttributeNames: map[string]string{
+			"#w": "width",
+			"#h": "height",
+		},
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":w": &types.AttributeValueMemberN{Value: fmt.Sprintf("%d", width)},
+			":h": &types.AttributeValueMemberN{Value: fmt.Sprintf("%d", height)},
+		},
+	})
+	if err != nil {
+		if isConditionCheckFailed(err) {
+			return ErrNotFound
+		}
+		return fmt.Errorf("store: set attachment dimensions: %w", err)
 	}
 	return nil
 }

@@ -376,8 +376,16 @@ export function renderMarkdown(body: string, opts?: RenderOpts): ReactNode {
       continue;
     }
 
-    // blank line
+    // blank line — preserve as a literal empty line in the rendered
+    // output. Slack/iMessage parity: pressing Enter twice in the
+    // composer leaves a visible gap, not a paragraph collapse.
+    // Each consecutive blank line stacks an additional gap.
     if (line.trim() === '') {
+      blocks.push(
+        <p key={`bk-${blockKey++}`} className="leading-snug">
+          {' '}
+        </p>,
+      );
       i++;
       continue;
     }

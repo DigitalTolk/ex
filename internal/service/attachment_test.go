@@ -1,9 +1,12 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"image"
+	"image/png"
 	"testing"
 	"time"
 
@@ -78,6 +81,15 @@ func (m *mockAttachmentStore) Delete(_ context.Context, id string) error {
 	delete(m.refs, id)
 	return nil
 }
+func (m *mockAttachmentStore) SetDimensions(_ context.Context, id string, width, height int) error {
+	a, ok := m.byID[id]
+	if !ok {
+		return store.ErrNotFound
+	}
+	a.Width = width
+	a.Height = height
+	return nil
+}
 
 func keys(m map[string]bool) []string {
 	out := make([]string, 0, len(m))
@@ -98,6 +110,11 @@ type fakeAttachmentSigner struct {
 	// FIRST signature, not a freshly-minted one.
 	presignCalls         int
 	presignDownloadCalls int
+	// objects is the in-memory bucket used by the dimensions-backfill
+	// path: GetObjectRange returns whatever bytes are stored here for
+	// the requested key. Tests that don't exercise backfill leave
+	// this nil and GetObjectRange errors out.
+	objects map[string][]byte
 }
 
 func (s *fakeAttachmentSigner) PresignedGetURL(_ context.Context, key string, _ time.Duration) (string, error) {
@@ -115,13 +132,98 @@ func (s *fakeAttachmentSigner) DeleteObject(_ context.Context, key string) error
 	s.deleted = append(s.deleted, key)
 	return s.delErr
 }
+func (s *fakeAttachmentSigner) GetObjectRange(_ context.Context, key string, _ int64) ([]byte, error) {
+	if s.objects == nil {
+		return nil, fmt.Errorf("no object %s", key)
+	}
+	body, ok := s.objects[key]
+	if !ok {
+		return nil, fmt.Errorf("no object %s", key)
+	}
+	return body, nil
+}
+
+func TestAttachmentService_CreateUploadURL_PersistsClientReportedDimensions(t *testing.T) {
+	storeM := newMockAttachmentStore()
+	signer := &fakeAttachmentSigner{}
+	svc := NewAttachmentService(storeM, signer, newMockPublisher())
+
+	res, err := svc.CreateUploadURL(context.Background(), CreateUploadParams{
+		UserID: "u1", Filename: "pic.png", ContentType: "image/png", SHA256: "h", Size: 100,
+		Width: 1280, Height: 720,
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if res.Attachment.Width != 1280 || res.Attachment.Height != 720 {
+		t.Errorf("dimensions = %dx%d, want 1280x720", res.Attachment.Width, res.Attachment.Height)
+	}
+	stored := storeM.byID[res.Attachment.ID]
+	if stored.Width != 1280 || stored.Height != 720 {
+		t.Errorf("stored dimensions = %dx%d, want 1280x720", stored.Width, stored.Height)
+	}
+}
+
+func TestAttachmentService_Get_BackfillsDimensionsForLegacyImage(t *testing.T) {
+	// Pre-feature attachments have Width/Height = 0; on the next
+	// Get we should fetch enough of the S3 object to decode the
+	// dimensions and persist them. Subsequent Gets see the stored
+	// values without re-reading S3.
+	storeM := newMockAttachmentStore()
+	signer := &fakeAttachmentSigner{objects: map[string][]byte{}}
+	signer.objects["attachments/legacy"] = makePNG(640, 480)
+
+	att := &model.Attachment{
+		ID:          "legacy",
+		SHA256:      "h",
+		Size:        int64(len(signer.objects["attachments/legacy"])),
+		ContentType: "image/png",
+		Filename:    "old.png",
+		S3Key:       "attachments/legacy",
+		CreatedBy:   "u1",
+		CreatedAt:   time.Now(),
+		// no Width/Height — this is the legacy case.
+	}
+	if err := storeM.Create(context.Background(), att); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	svc := NewAttachmentService(storeM, signer, newMockPublisher())
+	if _, err := svc.Get(context.Background(), "legacy"); err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	// Backfill is async — bounded wait. The test signer answers
+	// synchronously and the goroutine does at most one S3 read +
+	// one store write, so this resolves in a few ms.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		stored := storeM.byID["legacy"]
+		if stored.Width != 0 && stored.Height != 0 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	stored := storeM.byID["legacy"]
+	if stored.Width != 640 || stored.Height != 480 {
+		t.Errorf("backfilled dimensions = %dx%d, want 640x480", stored.Width, stored.Height)
+	}
+}
+
+// makePNG produces a valid in-memory PNG of the given dimensions.
+// Used by the backfill test to seed a legacy attachment's S3 body.
+func makePNG(w, h int) []byte {
+	img := image.NewRGBA(image.Rect(0, 0, w, h))
+	var buf bytes.Buffer
+	_ = png.Encode(&buf, img)
+	return buf.Bytes()
+}
 
 func TestAttachmentService_CreateUploadURL_NewUpload(t *testing.T) {
 	storeM := newMockAttachmentStore()
 	signer := &fakeAttachmentSigner{}
 	svc := NewAttachmentService(storeM, signer, newMockPublisher())
 
-	res, err := svc.CreateUploadURL(context.Background(), "u1", "pic.png", "image/png", "abc123", 100)
+	res, err := svc.CreateUploadURL(context.Background(), CreateUploadParams{UserID: "u1", Filename: "pic.png", ContentType: "image/png", SHA256: "abc123", Size: 100})
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -150,7 +252,7 @@ func TestAttachmentService_CreateUploadURL_RejectsDisallowedExtension(t *testing
 	svc := NewAttachmentService(storeM, signer, newMockPublisher())
 	svc.SetUploadLimits(&fakeUploadLimits{allowExt: false, allowSize: true})
 
-	if _, err := svc.CreateUploadURL(context.Background(), "u1", "exec.exe", "application/octet-stream", "abc", 100); err == nil {
+	if _, err := svc.CreateUploadURL(context.Background(), CreateUploadParams{UserID: "u1", Filename: "exec.exe", ContentType: "application/octet-stream", SHA256: "abc", Size: 100}); err == nil {
 		t.Fatal("expected disallowed extension to be rejected")
 	}
 }
@@ -161,7 +263,7 @@ func TestAttachmentService_CreateUploadURL_RejectsOversize(t *testing.T) {
 	svc := NewAttachmentService(storeM, signer, newMockPublisher())
 	svc.SetUploadLimits(&fakeUploadLimits{allowExt: true, allowSize: false})
 
-	if _, err := svc.CreateUploadURL(context.Background(), "u1", "big.png", "image/png", "abc", 999_999_999); err == nil {
+	if _, err := svc.CreateUploadURL(context.Background(), CreateUploadParams{UserID: "u1", Filename: "big.png", ContentType: "image/png", SHA256: "abc", Size: 999_999_999}); err == nil {
 		t.Fatal("expected oversize upload to be rejected")
 	}
 }
@@ -172,13 +274,13 @@ func TestAttachmentService_CreateUploadURL_DedupeByHash(t *testing.T) {
 	svc := NewAttachmentService(storeM, signer, newMockPublisher())
 
 	// First upload
-	first, err := svc.CreateUploadURL(context.Background(), "u1", "pic.png", "image/png", "abc", 10)
+	first, err := svc.CreateUploadURL(context.Background(), CreateUploadParams{UserID: "u1", Filename: "pic.png", ContentType: "image/png", SHA256: "abc", Size: 10})
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
 
 	// Same hash from another user — should dedupe
-	second, err := svc.CreateUploadURL(context.Background(), "u2", "other.png", "image/png", "abc", 10)
+	second, err := svc.CreateUploadURL(context.Background(), CreateUploadParams{UserID: "u2", Filename: "other.png", ContentType: "image/png", SHA256: "abc", Size: 10})
 	if err != nil {
 		t.Fatalf("dedupe: %v", err)
 	}
@@ -199,7 +301,7 @@ func TestAttachmentService_AddRemoveRef_GCsOnLastDeref(t *testing.T) {
 	pub := newMockPublisher()
 	svc := NewAttachmentService(storeM, signer, pub)
 
-	res, _ := svc.CreateUploadURL(context.Background(), "u1", "f.bin", "application/octet-stream", "h", 1)
+	res, _ := svc.CreateUploadURL(context.Background(), CreateUploadParams{UserID: "u1", Filename: "f.bin", ContentType: "application/octet-stream", SHA256: "h", Size: 1})
 	id := res.Attachment.ID
 
 	if err := svc.AddRef(context.Background(), id, "m1"); err != nil {
@@ -246,7 +348,7 @@ func TestAttachmentService_DeleteDraft_OnlyOwner(t *testing.T) {
 	signer := &fakeAttachmentSigner{}
 	svc := NewAttachmentService(storeM, signer, newMockPublisher())
 
-	res, _ := svc.CreateUploadURL(context.Background(), "owner", "f.bin", "image/png", "h1", 1)
+	res, _ := svc.CreateUploadURL(context.Background(), CreateUploadParams{UserID: "owner", Filename: "f.bin", ContentType: "image/png", SHA256: "h1", Size: 1})
 	id := res.Attachment.ID
 
 	if err := svc.DeleteDraft(context.Background(), "intruder", id); err == nil {
@@ -265,7 +367,7 @@ func TestAttachmentService_DeleteDraft_RefusesIfReferenced(t *testing.T) {
 	signer := &fakeAttachmentSigner{}
 	svc := NewAttachmentService(storeM, signer, newMockPublisher())
 
-	res, _ := svc.CreateUploadURL(context.Background(), "owner", "f.bin", "image/png", "h2", 1)
+	res, _ := svc.CreateUploadURL(context.Background(), CreateUploadParams{UserID: "owner", Filename: "f.bin", ContentType: "image/png", SHA256: "h2", Size: 1})
 	id := res.Attachment.ID
 	_ = svc.AddRef(context.Background(), id, "m1")
 
@@ -282,7 +384,7 @@ func TestAttachmentService_Get_ResolvesSignedURL(t *testing.T) {
 	signer := &fakeAttachmentSigner{}
 	svc := NewAttachmentService(storeM, signer, newMockPublisher())
 
-	res, _ := svc.CreateUploadURL(context.Background(), "u1", "f.bin", "image/png", "h3", 1)
+	res, _ := svc.CreateUploadURL(context.Background(), CreateUploadParams{UserID: "u1", Filename: "f.bin", ContentType: "image/png", SHA256: "h3", Size: 1})
 	got, err := svc.Get(context.Background(), res.Attachment.ID)
 	if err != nil {
 		t.Fatalf("get: %v", err)
@@ -310,7 +412,7 @@ func TestAttachmentService_Get_CachesPresignedURL(t *testing.T) {
 	signer := &fakeAttachmentSigner{}
 	svc := NewAttachmentService(storeM, signer, newMockPublisher())
 
-	res, _ := svc.CreateUploadURL(context.Background(), "u1", "f.png", "image/png", "h-stable", 1)
+	res, _ := svc.CreateUploadURL(context.Background(), CreateUploadParams{UserID: "u1", Filename: "f.png", ContentType: "image/png", SHA256: "h-stable", Size: 1})
 	id := res.Attachment.ID
 
 	first, err := svc.Get(context.Background(), id)
@@ -346,7 +448,7 @@ func TestAttachmentService_GC_InvalidatesURLCache(t *testing.T) {
 	signer := &fakeAttachmentSigner{}
 	svc := NewAttachmentService(storeM, signer, newMockPublisher())
 
-	res, _ := svc.CreateUploadURL(context.Background(), "u1", "f.png", "image/png", "h-gc", 1)
+	res, _ := svc.CreateUploadURL(context.Background(), CreateUploadParams{UserID: "u1", Filename: "f.png", ContentType: "image/png", SHA256: "h-gc", Size: 1})
 	id := res.Attachment.ID
 	key := res.Attachment.S3Key
 
@@ -390,7 +492,7 @@ func TestMessageService_Send_RegistersAttachmentRefs(t *testing.T) {
 	attSvc := NewAttachmentService(atts, signer, pub)
 	svc.SetAttachmentManager(attSvc)
 
-	res, _ := attSvc.CreateUploadURL(context.Background(), "u1", "p.png", "image/png", "h", 1)
+	res, _ := attSvc.CreateUploadURL(context.Background(), CreateUploadParams{UserID: "u1", Filename: "p.png", ContentType: "image/png", SHA256: "h", Size: 1})
 	att := res.Attachment
 
 	msg, err := svc.Send(context.Background(), "u1", "c1", ParentChannel, "hi", "", att.ID)
@@ -419,7 +521,7 @@ func TestMessageService_Delete_DerefsAttachments(t *testing.T) {
 	attSvc := NewAttachmentService(atts, signer, pub)
 	svc.SetAttachmentManager(attSvc)
 
-	res, _ := attSvc.CreateUploadURL(context.Background(), "u1", "p.png", "image/png", "h", 1)
+	res, _ := attSvc.CreateUploadURL(context.Background(), CreateUploadParams{UserID: "u1", Filename: "p.png", ContentType: "image/png", SHA256: "h", Size: 1})
 	att := res.Attachment
 	msg, err := svc.Send(context.Background(), "u1", "c1", ParentChannel, "hi", "", att.ID)
 	if err != nil {

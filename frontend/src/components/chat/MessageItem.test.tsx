@@ -142,6 +142,39 @@ describe('MessageItem', () => {
     expect(await screen.findByTestId('inline-edit')).toBeInTheDocument();
   });
 
+  it('scrolls the message into view when entering edit mode (so the inline edit isn\'t hidden behind the composer when editing the last message)', async () => {
+    // Regression: the composer sits below the scroll container. When
+    // the user edits the bottom-most message, the inline edit grows
+    // past the previous max-scroll and ends up clipped behind the
+    // composer. Mounting an editor must call scrollIntoView so the
+    // browser brings it back into view.
+    const original = Element.prototype.scrollIntoView;
+    const spy = vi.fn();
+    Element.prototype.scrollIntoView = spy as unknown as typeof Element.prototype.scrollIntoView;
+    try {
+      renderWithProviders(
+        <MessageItem
+          message={makeMessage({ id: 'msg-9' })}
+          authorName="Alice"
+          isOwn={true}
+          currentUserId="user-1"
+        />,
+      );
+      act(() => {
+        window.dispatchEvent(
+          new CustomEvent('ex:edit-message', { detail: { messageId: 'msg-9' } }),
+        );
+      });
+      await screen.findByTestId('inline-edit');
+      // Two rAF frames are queued by the effect — flush them.
+      await new Promise((r) => requestAnimationFrame(() => r(undefined)));
+      await new Promise((r) => requestAnimationFrame(() => r(undefined)));
+      expect(spy).toHaveBeenCalled();
+    } finally {
+      Element.prototype.scrollIntoView = original;
+    }
+  });
+
   it('focuses the inline editor after entering edit mode via ex:edit-message', async () => {
     renderWithProviders(
       <MessageItem

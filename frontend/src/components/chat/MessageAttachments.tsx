@@ -88,6 +88,17 @@ function AttachmentSkeleton({ loading }: { loading: boolean }) {
 }
 
 function ThumbnailButton({ att, onOpen }: { att: Attachment; onOpen: () => void }) {
+  // Pass intrinsic width/height through to the <img> so the browser
+  // reserves the laid-out box on first paint instead of starting at
+  // 0×0 and resizing after decode. The CSS caps the visual size at
+  // max-h-72 / max-w-xs, but the aspect ratio + reserved box come
+  // from the attributes — that's what stops the message list from
+  // shifting underneath an image-bearing message and lets the
+  // MessageList scroll-to-bottom land at the actual bottom on first
+  // try. Legacy attachments without dimensions render unchanged
+  // (no attributes → previous behaviour) and pick up a server-side
+  // backfill on the next read.
+  const hasDims = att.width && att.height && att.width > 0 && att.height > 0;
   return (
     <button
       type="button"
@@ -97,14 +108,16 @@ function ThumbnailButton({ att, onOpen }: { att: Attachment; onOpen: () => void 
       data-testid="message-image-thumb"
     >
       {att.url && (
-        // Eager load: the live-tail bottom-stick logic in MessageList
-        // re-pins on each img's load event. With loading="lazy" a freshly
-        // posted image at the bottom of the viewport sometimes never
-        // triggers the load event (browser decides it's outside the
-        // near-viewport heuristic when its 0×0 placeholder is exactly at
-        // the visible bottom), so the scroll never catches up to its
-        // grown box.
-        <img src={att.url} alt={att.filename} className="max-h-72 max-w-full" />
+        <img
+          src={att.url}
+          alt={att.filename}
+          // h-auto + max-w-full + max-h-72 keeps the image within
+          // the bubble while the width/height attributes preserve
+          // the aspect ratio for layout reservation.
+          className="h-auto max-h-72 max-w-full"
+          width={hasDims ? att.width : undefined}
+          height={hasDims ? att.height : undefined}
+        />
       )}
     </button>
   );

@@ -11,6 +11,8 @@ interface UploadInitResponse {
   filename: string;
   contentType: string;
   size: number;
+  width?: number;
+  height?: number;
 }
 
 async function sha256Hex(buf: ArrayBuffer): Promise<string> {
@@ -19,6 +21,33 @@ async function sha256Hex(buf: ArrayBuffer): Promise<string> {
   let out = '';
   for (let i = 0; i < bytes.length; i++) out += bytes[i].toString(16).padStart(2, '0');
   return out;
+}
+
+// readImageDimensions returns the intrinsic pixel size of an image
+// File. Sends them along to the upload-init endpoint so the
+// MessageList renderer can reserve the layout box on first paint
+// — the same width/height the browser would have measured after
+// decode, except known before the image bytes leave the client.
+// Returns undefined dimensions for non-images, or if the browser
+// can't decode (e.g. corrupt file). The upload still proceeds; the
+// server-side backfill will pick up the dimensions later.
+async function readImageDimensions(file: File): Promise<{ width?: number; height?: number }> {
+  if (!file.type.startsWith('image/')) return {};
+  return new Promise((resolve) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      const w = img.naturalWidth;
+      const h = img.naturalHeight;
+      URL.revokeObjectURL(url);
+      resolve(w > 0 && h > 0 ? { width: w, height: h } : {});
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      resolve({});
+    };
+    img.src = url;
+  });
 }
 
 interface UploadCallbacks {
@@ -31,7 +60,10 @@ export async function uploadAttachment(
   callbacks: UploadCallbacks = {},
 ): Promise<UploadInitResponse> {
   const buf = await file.arrayBuffer();
-  const sha = await sha256Hex(buf);
+  const [sha, dims] = await Promise.all([
+    sha256Hex(buf),
+    readImageDimensions(file),
+  ]);
   const init = await apiFetch<UploadInitResponse>('/api/v1/attachments/url', {
     method: 'POST',
     body: JSON.stringify({
@@ -39,6 +71,8 @@ export async function uploadAttachment(
       contentType: file.type || 'application/octet-stream',
       size: file.size,
       sha256: sha,
+      width: dims.width,
+      height: dims.height,
     }),
   });
   callbacks.onInit?.(init);
