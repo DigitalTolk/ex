@@ -8,7 +8,10 @@ describe('unicodeToShortcode', () => {
   });
 
   it('passes unknown sequences through unchanged', () => {
-    expect(unicodeToShortcode('🦄')).toBe('🦄');
+    // Private-use codepoint — never going to land in the Unicode emoji
+    // table, so this is the safe "definitely unknown" sentinel now
+    // that the picker covers the full CLDR set.
+    expect(unicodeToShortcode('')).toBe('');
   });
 });
 
@@ -18,8 +21,10 @@ describe('normalizeEmojiInBody', () => {
     expect(normalizeEmojiInBody('🎉 launch! 🎉')).toMatch(/:[a-z]+: launch! :[a-z]+:/);
   });
 
-  it('leaves unknown emoji alone', () => {
-    expect(normalizeEmojiInBody('mythical 🦄 friend')).toBe('mythical 🦄 friend');
+  it('leaves unknown emoji-shaped codepoints alone', () => {
+    // Private-use codepoint — won't ever be in the Unicode emoji
+    // table, so the normalizer leaves it verbatim.
+    expect(normalizeEmojiInBody('mythical  friend')).toBe('mythical  friend');
   });
 
   it('preserves text inside fenced code blocks', () => {

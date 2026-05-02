@@ -81,6 +81,11 @@ export interface ChannelMembership {
 export interface WorkspaceSettings {
   maxUploadBytes: number;
   allowedExtensions: string[];
+  // Only present in admin-issued responses; non-admins receive
+  // `giphyEnabled` instead so the UI knows whether to surface the
+  // Giphy picker without ever seeing the key.
+  giphyAPIKey?: string;
+  giphyEnabled?: boolean;
 }
 
 export interface UserChannel {

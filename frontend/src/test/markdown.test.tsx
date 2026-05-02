@@ -109,4 +109,30 @@ describe('renderMarkdown', () => {
     expect(ps[0].textContent).toBe('a');
     expect(ps[4].textContent).toBe('b');
   });
+
+  it('renders inline images with optional `=WxH` size suffix as width/height attrs', () => {
+    // The Giphy composer hook injects `![title](url =WxH)` so the
+    // chat list reserves the layout box at first paint — without
+    // this, the row would resize on decode and break scroll
+    // anchoring.
+    const { container } = render(
+      <>{renderMarkdown('![cat](https://media.giphy.com/cat.gif =300x200)')}</>,
+    );
+    const img = container.querySelector('img');
+    expect(img).not.toBeNull();
+    expect(img!.getAttribute('src')).toBe('https://media.giphy.com/cat.gif');
+    expect(img!.getAttribute('width')).toBe('300');
+    expect(img!.getAttribute('height')).toBe('200');
+    expect(img!.getAttribute('alt')).toBe('cat');
+  });
+
+  it('renders inline images without a size suffix as plain `<img>`', () => {
+    const { container } = render(
+      <>{renderMarkdown('![logo](https://example.com/logo.png)')}</>,
+    );
+    const img = container.querySelector('img');
+    expect(img).not.toBeNull();
+    expect(img!.hasAttribute('width')).toBe(false);
+    expect(img!.hasAttribute('height')).toBe(false);
+  });
 });

@@ -34,6 +34,9 @@ describe('EmojiPicker', () => {
     render(<EmojiPicker onSelect={onSelect} />);
 
     await user.click(screen.getByRole('button', { name: /open emoji picker/i }));
+    // Picker now opens on the first category — search for the legacy
+    // `:thumbsup:` alias to surface its tile.
+    await user.type(screen.getByLabelText('Search emojis'), 'thumbsup');
     await user.click(screen.getByLabelText('React with :thumbsup:'));
 
     expect(onSelect).toHaveBeenCalledWith(':thumbsup:');
@@ -45,6 +48,7 @@ describe('EmojiPicker', () => {
 
     await user.click(screen.getByRole('button', { name: /open emoji picker/i }));
     expect(screen.getByRole('dialog')).toBeInTheDocument();
+    await user.type(screen.getByLabelText('Search emojis'), 'tada');
     await user.click(screen.getByLabelText('React with :tada:'));
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });

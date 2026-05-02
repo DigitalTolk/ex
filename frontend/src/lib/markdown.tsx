@@ -141,16 +141,25 @@ function findInline(src: string, opts: RenderOpts | undefined, keyPrefix: string
     });
   }
 
-  // image: ![alt](url)
-  tryMatch(/!\[([^\]]*)\]\(([^)\s]+)\)/, (m) => (
-    <img
-      key={`${keyPrefix}-img-${m.index}`}
-      src={m[2]}
-      alt={m[1] || ''}
-      className="my-1 max-h-80 max-w-full rounded-md border"
-      loading="lazy"
-    />
-  ));
+  // image: ![alt](url) with optional `=WxH` size suffix used by the
+  // Giphy composer hook so picked GIFs render with reserved layout
+  // boxes (no shift on decode). Width/height attrs let the browser
+  // size the box from the markup; CSS still constrains max-width.
+  tryMatch(/!\[([^\]]*)\]\(([^)\s]+?)(?:\s+=(\d+)x(\d+))?\)/, (m) => {
+    const w = m[3] ? Number(m[3]) : undefined;
+    const h = m[4] ? Number(m[4]) : undefined;
+    return (
+      <img
+        key={`${keyPrefix}-img-${m.index}`}
+        src={m[2]}
+        alt={m[1] || ''}
+        width={w}
+        height={h}
+        className="my-1 max-h-80 max-w-full rounded-md border"
+        loading="lazy"
+      />
+    );
+  });
 
   // link: [text](url)
   tryMatch(/\[([^\]]+)\]\(([^)\s]+)\)/, (m) => (

@@ -75,6 +75,7 @@ func (s *SettingsService) Update(ctx context.Context, ws *model.WorkspaceSetting
 	if ws.MaxUploadBytes < 0 {
 		ws.MaxUploadBytes = 0
 	}
+	ws.GiphyAPIKey = strings.TrimSpace(ws.GiphyAPIKey)
 
 	if err := s.store.PutSettings(ctx, ws); err != nil {
 		return nil, err

@@ -3,7 +3,11 @@ import { apiFetch } from '@/lib/api';
 import { queryKeys } from '@/lib/query-keys';
 import type { WorkspaceSettings } from '@/types';
 
-const DEFAULT_WORKSPACE_SETTINGS: WorkspaceSettings = { maxUploadBytes: 0, allowedExtensions: [] };
+const DEFAULT_WORKSPACE_SETTINGS: WorkspaceSettings = {
+  maxUploadBytes: 0,
+  allowedExtensions: [],
+  giphyEnabled: false,
+};
 
 export function useWorkspaceSettings() {
   return useQuery({

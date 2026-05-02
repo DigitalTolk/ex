@@ -158,6 +158,8 @@ func main() {
 	presenceH := handler.NewPresenceHandler(presenceSvc)
 	attachmentH := handler.NewAttachmentHandler(attachmentSvc)
 	adminH := handler.NewAdminHandler(settingsSvc)
+	giphySvc := service.NewGiphyService(settingsSvc)
+	giphyH := handler.NewGiphyHandler(giphySvc)
 	threadH := handler.NewThreadHandler(messageSvc)
 	categorySvc := service.NewCategoryService(store.NewCategoryStore(db), redisPubSub)
 	sidebarH := handler.NewSidebarHandler(channelSvc, convSvc, categorySvc)
@@ -238,7 +240,7 @@ func main() {
 		unfurlSvc.SetImageStore(s3Client)
 	}
 	unfurlH := handler.NewUnfurlHandler(unfurlSvc)
-	router := handler.NewRouter(authH, userH, channelH, convH, wsH, uploadH, emojiH, presenceH, attachmentH, adminH, threadH, versionH, unfurlH, sidebarH, searchH, jwtMgr, frontendDist, appVersion, allowOrigin)
+	router := handler.NewRouter(authH, userH, channelH, convH, wsH, uploadH, emojiH, presenceH, attachmentH, adminH, threadH, versionH, unfurlH, sidebarH, searchH, giphyH, jwtMgr, frontendDist, appVersion, allowOrigin)
 
 	// ------------------------------------------------------------------ Server
 	srv := &http.Server{

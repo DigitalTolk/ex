@@ -97,7 +97,8 @@ describe('MessageInput — emoji picker integration', () => {
     const filtered = screen.getAllByTestId('emoji-picker-tile');
     expect(filtered.length).toBeGreaterThan(0);
     expect(filtered.length).toBeLessThan(20);
+    // When search is active the section label flips to "Results".
     const popover = search.closest('[role="dialog"]') ?? search.parentElement!;
-    expect(within(popover).getByText('Standard')).toBeInTheDocument();
+    expect(within(popover).getByText('Results')).toBeInTheDocument();
   });
 });

@@ -21,7 +21,8 @@ describe('EmojiPicker — readable sizes', () => {
     renderPicker();
     fireEvent.click(screen.getByLabelText('Open emoji picker'));
 
-    const standardLabel = await screen.findByText('Standard');
+    // Default category label — picker opens on the first CLDR group.
+    const standardLabel = await screen.findByText('Smileys & Emotion');
     expect(standardLabel.className).toContain('text-sm');
     expect(standardLabel.className).not.toContain('text-[10px]');
 
