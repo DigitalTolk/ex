@@ -69,8 +69,8 @@ describe('EmojiPicker', () => {
 
     await user.click(screen.getByRole('button', { name: /open emoji picker/i }));
     expect(screen.getByRole('dialog')).toBeInTheDocument();
-    await user.type(screen.getByLabelText('Search emojis'), 'party_popper');
-    await user.click(screen.getByLabelText('React with :party_popper:'));
+    await user.type(screen.getByLabelText('Search emojis'), 'tada');
+    await user.click(screen.getByLabelText('React with :tada:'));
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 

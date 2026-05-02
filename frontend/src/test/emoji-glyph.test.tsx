@@ -22,7 +22,7 @@ describe('EmojiGlyph (shared 14px renderer)', () => {
   });
 
   it('renders full picker-catalog shortcodes that are not in common typeahead aliases', () => {
-    const { container } = render(<EmojiGlyph emoji=":grin_squint_face:" />);
+    const { container } = render(<EmojiGlyph emoji=":laughing:" />);
     const span = container.querySelector('span');
     expect(span?.textContent).toBe('😆');
   });

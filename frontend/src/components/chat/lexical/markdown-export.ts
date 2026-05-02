@@ -4,7 +4,7 @@ import { EX_TRANSFORMERS } from './transformers';
 // Lexical's text-export pass blindly escapes every `_`, `*`, `` ` ``,
 // `~`, and `\` in TextNode content (see exportTextFormat in
 // @lexical/markdown). The underscore escape mangles emoji shortcodes
-// — `:smile_face_heart_eyes:` becomes `:smile_face\_heart\_eyes:` and our renderer's
+// — `:heart_eyes:` becomes `:heart\_eyes:` and our renderer's
 // `/:[a-z0-9_+-]+:/` regex no longer matches, so the shortcode shows
 // as literal text instead of the emoji glyph.
 //

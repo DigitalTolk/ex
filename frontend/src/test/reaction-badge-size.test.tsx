@@ -111,7 +111,7 @@ describe('Reaction badge — 14px font size pin', () => {
       authorID: 'u-other',
       body: 'hi',
       createdAt: '2026-04-26T10:00:00Z',
-      reactions: { ':grin_squint_face:': ['u-1'] },
+      reactions: { ':laughing:': ['u-1'] },
     };
     renderItem(msg);
     const badge = screen.getByTestId('reaction-badge');

@@ -124,13 +124,13 @@ describe('EmojiShortcutsPlugin', () => {
     render(<Providers><WysiwygEditor ref={ref} /></Providers>);
     await waitFor(() => expect(ref.current).not.toBeNull());
     act(() => {
-      ref.current!.insertText(':grin_squint');
+      ref.current!.insertText(':laugh');
     });
 
     await waitFor(() => {
       const rows = screen.getAllByTestId('emoji-option').map((row) => row.textContent ?? '');
-      expect(rows).toContain('😆:grin_squint_face:');
-      expect(rows.some((row) => row.includes(':laughing:'))).toBe(false);
+      expect(rows).toContain('😆:laughing:');
+      expect(rows.some((row) => row.includes(':grin_squint_face:'))).toBe(false);
     });
   });
 });

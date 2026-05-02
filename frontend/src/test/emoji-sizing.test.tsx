@@ -5,7 +5,7 @@ import { renderMarkdown } from '@/lib/markdown';
 // Body emojis render at 1.4em (relative to surrounding font-size) so
 // they stay legible alongside the 14px message text without dwarfing
 // the line and — crucially — scale up automatically when wrapped in a
-// heading (`# Title :party_popper:` keeps the emoji proportional to H1).
+// heading (`# Title :tada:` keeps the emoji proportional to H1).
 describe('Emoji sizing — 1.4em in message body', () => {
   it('inline custom emoji image uses h-[1.4em] w-[1.4em]', () => {
     const { container } = render(
@@ -18,8 +18,8 @@ describe('Emoji sizing — 1.4em in message body', () => {
   });
 
   it('shortcode-resolved unicode emoji uses text-[1.4em] hero size', () => {
-    const { container } = render(<>{renderMarkdown(':grin_face_smile_eyes:')}</>);
-    const span = container.querySelector('span[title=":grin_face_smile_eyes:"]');
+    const { container } = render(<>{renderMarkdown(':smile:')}</>);
+    const span = container.querySelector('span[title=":smile:"]');
     expect(span).not.toBeNull();
     expect(span?.className).toContain('text-[1.4em]');
   });
@@ -52,10 +52,10 @@ describe('Emoji sizing — 1.4em in message body', () => {
   });
 
   it('unicode emoji inside a heading also scales via em-based sizing', () => {
-    const { container } = render(<>{renderMarkdown('## Hi :grin_face_smile_eyes:')}</>);
+    const { container } = render(<>{renderMarkdown('## Hi :smile:')}</>);
     const h2 = container.querySelector('h2');
     expect(h2).not.toBeNull();
-    const span = h2?.querySelector('span[title=":grin_face_smile_eyes:"]');
+    const span = h2?.querySelector('span[title=":smile:"]');
     expect(span).not.toBeNull();
     expect(span?.className).toContain('text-[1.4em]');
   });

@@ -96,6 +96,20 @@ const UNICODE_TO_NAME: Record<string, string> = (() => {
   return map;
 })();
 
+const ASCII_EMOJI_TO_SHORTCODE = new Map<string, string>([
+  [':)', ':slightly_smile_face:'],
+  [':-)', ':slightly_smile_face:'],
+  [':(', ':slightly_frown_face:'],
+  [':-(', ':slightly_frown_face:'],
+  [';)', ':winking_face:'],
+  [';-)', ':winking_face:'],
+  [':D', ':smile:'],
+  [':-D', ':smile:'],
+  ['xD', ':laughing:'],
+  ['XD', ':laughing:'],
+  ['<3', ':heart:'],
+]);
+
 export function shortcodeWithSkinTone(name: string, unicode: string, tone: EmojiSkinTone | undefined): string {
   if (!tone || !supportsEmojiSkinTone(unicode)) return `:${name}:`;
   const suffix = SKIN_TONE_BY_VALUE.get(tone)?.suffix;
@@ -128,7 +142,11 @@ const NORMALIZE_EMOJI_RE = (() => {
     .sort((a, b) => b.length - a.length)
     .map(escapeRegex)
     .join('|');
-  return new RegExp(`(${unicodeAlternation})`, 'g');
+  const asciiAlternation = [...ASCII_EMOJI_TO_SHORTCODE.keys()]
+    .sort((a, b) => b.length - a.length)
+    .map(escapeRegex)
+    .join('|');
+  return new RegExp(`(${unicodeAlternation})|(?<!\\S)(${asciiAlternation})(?!\\S)`, 'g');
 })();
 
 // normalizeEmojiInBody replaces every known unicode emoji in the body
@@ -166,7 +184,7 @@ export function normalizeEmojiInBody(body: string): string {
     if (tick !== -1 && tick < next) next = tick;
     out += body.slice(i, next).replace(
       NORMALIZE_EMOJI_RE,
-      (unicodeToken: string) => unicodeToShortcode(unicodeToken),
+      (token: string) => ASCII_EMOJI_TO_SHORTCODE.get(token) ?? unicodeToShortcode(token),
     );
     i = next;
   }

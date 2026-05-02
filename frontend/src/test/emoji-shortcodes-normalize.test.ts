@@ -13,8 +13,9 @@ import {
 describe('unicodeToShortcode', () => {
   it('returns the matching :name: for known emojis', () => {
     expect(unicodeToShortcode('👍')).toBe(':thumbsup:');
-    expect(unicodeToShortcode('❤️')).toBe(':red_heart:');
-    expect(unicodeToShortcode('😆')).toBe(':grin_squint_face:');
+    expect(unicodeToShortcode('❤️')).toBe(':heart:');
+    expect(unicodeToShortcode('😆')).toBe(':laughing:');
+    expect(unicodeToShortcode('🎉')).toBe(':tada:');
   });
 
   it('passes unknown sequences through unchanged', () => {
@@ -61,12 +62,25 @@ describe('unicodeToShortcode', () => {
     expect(COMMON_EMOJI_SHORTCODES.some((emoji) => emoji.name === 'raising_hands')).toBe(false);
     expect(unicodeToShortcode('🙌')).toBe(':raised_hands:');
   });
+
+  it('uses common canonical names for high-frequency chat emojis', () => {
+    expect(unicodeToShortcode('😄')).toBe(':smile:');
+    expect(unicodeToShortcode('😆')).toBe(':laughing:');
+    expect(unicodeToShortcode('😂')).toBe(':joy:');
+    expect(unicodeToShortcode('😍')).toBe(':heart_eyes:');
+    expect(unicodeToShortcode('❤️')).toBe(':heart:');
+    expect(unicodeToShortcode('💯')).toBe(':100:');
+    expect(unicodeToShortcode('👋')).toBe(':wave:');
+    expect(unicodeToShortcode('👏')).toBe(':clap:');
+    expect(unicodeToShortcode('🙏')).toBe(':pray:');
+    expect(unicodeToShortcode('🎉')).toBe(':tada:');
+  });
 });
 
 describe('normalizeEmojiInBody', () => {
   it('rewrites known unicode emoji to :shortcode:', () => {
     expect(normalizeEmojiInBody('hello 👍 world')).toBe('hello :thumbsup: world');
-    expect(normalizeEmojiInBody('🎉 launch! 🎉')).toBe(':party_popper: launch! :party_popper:');
+    expect(normalizeEmojiInBody('🎉 launch! 🎉')).toBe(':tada: launch! :tada:');
   });
 
   it('leaves unknown emoji-shaped codepoints alone', () => {
@@ -81,14 +95,14 @@ describe('normalizeEmojiInBody', () => {
     const input = 'see this:\n```\nconsole.log("🎉")\n```\nyay 🎉';
     const out = normalizeEmojiInBody(input);
     expect(out).toContain('console.log("🎉")');
-    expect(out).toMatch(/yay :party_popper:$/);
+    expect(out).toMatch(/yay :tada:$/);
   });
 
   it('preserves text inside inline code spans', () => {
     const input = 'use `console.log("🎉")` to celebrate 🎉';
     const out = normalizeEmojiInBody(input);
     expect(out).toContain('`console.log("🎉")`');
-    expect(out).toMatch(/celebrate :party_popper:$/);
+    expect(out).toMatch(/celebrate :tada:$/);
   });
 
   it('handles multi-codepoint sequences (skin-tone variants) correctly', () => {
@@ -108,9 +122,18 @@ describe('normalizeEmojiInBody', () => {
     );
   });
 
-  it('does not convert ASCII emoticons', () => {
-    expect(normalizeEmojiInBody('hi :)')).toBe('hi :)');
-    expect(normalizeEmojiInBody('that was funny xD')).toBe('that was funny xD');
-    expect(normalizeEmojiInBody('we love this <3 keep going')).toBe('we love this <3 keep going');
+  it('converts the supported common ASCII emoticons', () => {
+    expect(normalizeEmojiInBody('hi :)')).toBe('hi :slightly_smile_face:');
+    expect(normalizeEmojiInBody('sad :-(')).toBe('sad :slightly_frown_face:');
+    expect(normalizeEmojiInBody('wink ;)')).toBe('wink :winking_face:');
+    expect(normalizeEmojiInBody('big grin :D')).toBe('big grin :smile:');
+    expect(normalizeEmojiInBody('that was funny xD')).toBe('that was funny :laughing:');
+    expect(normalizeEmojiInBody('we love this <3 keep going')).toBe('we love this :heart: keep going');
+  });
+
+  it('does not convert unsupported or embedded ASCII emoticons', () => {
+    expect(normalizeEmojiInBody('path/to/file')).toBe('path/to/file');
+    expect(normalizeEmojiInBody('abc:)')).toBe('abc:)');
+    expect(normalizeEmojiInBody('indexD')).toBe('indexD');
   });
 });

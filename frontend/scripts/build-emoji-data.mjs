@@ -75,6 +75,16 @@ const WORD_REPLACEMENTS = new Map([
 ]);
 
 const NAME_OVERRIDES = new Map([
+  ['grinning_face_with_smiling_eyes', 'smile'],
+  ['grinning_squinting_face', 'laughing'],
+  ['face_with_tears_of_joy', 'joy'],
+  ['smiling_face_with_heart_eyes', 'heart_eyes'],
+  ['red_heart', 'heart'],
+  ['hundred_points', '100'],
+  ['waving_hand', 'wave'],
+  ['clapping_hands', 'clap'],
+  ['folded_hands', 'pray'],
+  ['party_popper', 'tada'],
   ['hand_with_fingers_splayed', 'hand'],
   ['raising_hands', 'raised_hands'],
   ['thumbs_up', 'thumbsup'],
