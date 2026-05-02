@@ -91,12 +91,6 @@ const NAME_OVERRIDES = new Map([
   ['thumbs_down', 'thumbsdown'],
 ]);
 
-function supportsEmojiSkinTone(emoji) {
-  if (emoji.includes(ZERO_WIDTH_JOINER)) return false;
-  const first = Array.from(emoji.replace(EMOJI_MODIFIER_RE, ''))[0] ?? '';
-  return !!first && EMOJI_MODIFIER_BASE_RE.test(first);
-}
-
 function hashSlug(slug) {
   let hash = 5381;
   for (const ch of slug) hash = ((hash << 5) + hash) ^ ch.codePointAt(0);
