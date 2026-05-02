@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type RefObject } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react';
 
 export interface PopoverPosition {
   // Vertical placement: 'bottom' renders below the trigger; 'top' renders above
@@ -32,6 +32,8 @@ interface Options {
   contentRef?: RefObject<HTMLElement | null>;
 }
 
+const useIsomorphicLayoutEffect = typeof window === 'undefined' ? useEffect : useLayoutEffect;
+
 /**
  * Returns viewport-fixed coordinates and a side/align placement that keeps a
  * popover anchored to triggerRef inside the viewport. Recomputes on `open`
@@ -62,10 +64,9 @@ export function usePopoverPosition(
   });
   const rafRef = useRef(0);
 
-  useEffect(() => {
+  useIsomorphicLayoutEffect(() => {
     if (!open) {
       // Reset measured on close so the next open starts hidden again.
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setPos((prev) => (prev.measured ? { ...prev, measured: false } : prev));
       return;
     }
@@ -77,8 +78,12 @@ export function usePopoverPosition(
       const vw = window.innerWidth;
 
       const measured = contentRef?.current?.getBoundingClientRect();
-      const height = measured && measured.height > 0 ? measured.height : estimatedHeight;
-      const width = measured && measured.width > 0 ? measured.width : estimatedWidth;
+      const maxHeight = Math.max(0, vh - margin * 2);
+      const maxWidth = Math.max(0, vw - margin * 2);
+      const measuredHeight = measured && measured.height > 0 ? measured.height : estimatedHeight;
+      const measuredWidth = measured && measured.width > 0 ? measured.width : estimatedWidth;
+      const height = Math.min(measuredHeight, maxHeight);
+      const width = Math.min(measuredWidth, maxWidth);
 
       const spaceBelow = vh - rect.bottom;
       const spaceAbove = rect.top;
@@ -122,14 +127,25 @@ export function usePopoverPosition(
       rafRef.current = requestAnimationFrame(compute);
     }
     compute();
-    // Re-measure on next frame too: once the popover paints, contentRef has
-    // real dimensions, so the second pass swaps the estimate for the truth.
+    // Re-measure on the next frame too: once fonts/images/SDK content paint,
+    // contentRef has final dimensions, so the second pass swaps the estimate
+    // for the truth before the user can interact.
     rafRef.current = requestAnimationFrame(compute);
+    const resizeObserver =
+      typeof ResizeObserver !== 'undefined' && contentRef?.current
+        ? new ResizeObserver(schedule)
+        : null;
+    if (resizeObserver && contentRef?.current) {
+      resizeObserver.observe(contentRef.current);
+    }
     window.addEventListener('resize', schedule);
+    window.visualViewport?.addEventListener('resize', schedule);
     window.addEventListener('scroll', schedule, true);
     return () => {
       cancelAnimationFrame(rafRef.current);
+      resizeObserver?.disconnect();
       window.removeEventListener('resize', schedule);
+      window.visualViewport?.removeEventListener('resize', schedule);
       window.removeEventListener('scroll', schedule, true);
     };
   }, [open, triggerRef, estimatedHeight, estimatedWidth, preferredSide, preferredAlign, margin, contentRef]);

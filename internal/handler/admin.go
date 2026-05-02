@@ -41,17 +41,36 @@ func (h *AdminHandler) SetSearch(reporter SearchStatusReporter, reindexer *searc
 	h.reindexer = reindexer
 }
 
+// settingsResponse is the wire shape returned from GetSettings. It
+// extends model.WorkspaceSettings with a derived `giphyEnabled` flag.
+// GIPHY requires API and media requests to be made directly by the
+// client, so authenticated members receive the configured browser key
+// when the picker is enabled.
+type settingsResponse struct {
+	MaxUploadBytes    int64    `json:"maxUploadBytes"`
+	AllowedExtensions []string `json:"allowedExtensions"`
+	GiphyAPIKey       string   `json:"giphyAPIKey,omitempty"`
+	GiphyEnabled      bool     `json:"giphyEnabled"`
+}
+
 // GetSettings returns the effective workspace settings (with defaults
 // applied for any field the admin hasn't overridden). Available to all
 // authenticated users so the upload UI can show the limits before
 // attempting a request — the write side is admin-only.
 func (h *AdminHandler) GetSettings(w http.ResponseWriter, r *http.Request) {
-	if middleware.UserIDFromContext(r.Context()) == "" {
+	claims := middleware.ClaimsFromContext(r.Context())
+	if claims == nil {
 		writeError(w, http.StatusUnauthorized, "unauthorized", "authentication required")
 		return
 	}
 	ws := h.settings.Effective(r.Context())
-	writeJSON(w, http.StatusOK, ws)
+	resp := settingsResponse{
+		MaxUploadBytes:    ws.MaxUploadBytes,
+		AllowedExtensions: ws.AllowedExtensions,
+		GiphyEnabled:      ws.GiphyAPIKey != "",
+	}
+	resp.GiphyAPIKey = ws.GiphyAPIKey
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // SearchStatus returns the search cluster's health, per-index doc
@@ -120,5 +139,10 @@ func (h *AdminHandler) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "update_error", err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, out)
+	writeJSON(w, http.StatusOK, settingsResponse{
+		MaxUploadBytes:    out.MaxUploadBytes,
+		AllowedExtensions: out.AllowedExtensions,
+		GiphyAPIKey:       out.GiphyAPIKey,
+		GiphyEnabled:      out.GiphyAPIKey != "",
+	})
 }

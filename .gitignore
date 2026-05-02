@@ -13,6 +13,7 @@ Thumbs.db
 /.env
 /.env.local
 /.env.*.local
+/AGENTS.md
 /CLAUDE.md
 /.claude/scheduled_tasks.lock
 

@@ -1,4 +1,4 @@
-.PHONY: dev dev-up dev-down dev-logs build frontend run docker clean deps check
+.PHONY: dev dev-up dev-down dev-logs build frontend run docker clean deps check check-dist-placeholder
 
 # The app version is derived from a SHA-256 of the embedded index.html at
 # server startup — no VERSION env-var to keep in sync between Go and Vite.
@@ -37,14 +37,20 @@ docker:
 
 # Clean build artifacts
 clean:
-	rm -rf bin/ frontend/dist/ coverage.out
+	rm -rf bin/ coverage.out
+	find frontend/dist -mindepth 1 ! -name .gitignore -exec rm -rf {} +
 
 # Install Go dependencies
 deps:
 	go mod tidy
 
 # Lint + test everything (backend and frontend)
+check-dist-placeholder:
+	@test -f frontend/dist/.gitignore || (echo "frontend/dist/.gitignore is required so frontend.go's //go:embed matches on fresh checkouts" >&2; exit 1)
+
 check:
+	@echo "=== Dist placeholder ==="
+	$(MAKE) check-dist-placeholder
 	@echo "=== Go lint ==="
 	golangci-lint run ./...
 	@echo "=== Go test (with integration) ==="

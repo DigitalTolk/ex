@@ -65,6 +65,61 @@ describe('AdminPage', () => {
     });
   });
 
+  it('places the single save settings action in the page header', async () => {
+    mockApiFetch.mockImplementation((path: string) => {
+      if (path === '/api/v1/admin/settings') {
+        return Promise.resolve({ maxUploadBytes: 50 * 1024 * 1024, allowedExtensions: ['png'] });
+      }
+      if (path === '/api/v1/admin/search/status') {
+        return Promise.resolve({ configured: false });
+      }
+      return Promise.resolve({});
+    });
+    renderPage();
+
+    await screen.findByLabelText(/Max file size/i);
+    const saveButtons = screen.getAllByRole('button', { name: /Save settings/i });
+    expect(saveButtons).toHaveLength(1);
+    const header = screen.getByRole('heading', { name: /Workspace settings/i }).closest('header');
+    expect(header).not.toBeNull();
+    expect(header).toContainElement(saveButtons[0]);
+  });
+
+  it('seeds and PUTs the Giphy API key, surfacing the enabled-state copy', async () => {
+    mockApiFetch.mockImplementation((path: string, init?: { method?: string; body?: string }) => {
+      if (path === '/api/v1/admin/search/status') {
+        return Promise.resolve({ configured: false });
+      }
+      if (path === '/api/v1/admin/settings' && (!init || init.method !== 'PUT')) {
+        return Promise.resolve({
+          maxUploadBytes: 50 * 1024 * 1024,
+          allowedExtensions: ['png'],
+          giphyAPIKey: 'existing-key',
+          giphyEnabled: true,
+        });
+      }
+      return Promise.resolve(JSON.parse(init?.body ?? '{}'));
+    });
+    renderPage();
+
+    const giphyInput = (await screen.findByLabelText(/Giphy API key/i)) as HTMLInputElement;
+    await waitFor(() => expect(giphyInput.value).toBe('existing-key'));
+    expect(screen.getByText(/Giphy is enabled/i)).toBeInTheDocument();
+
+    fireEvent.change(giphyInput, { target: { value: '  rotated-key  ' } });
+    fireEvent.click(screen.getByRole('button', { name: /Save settings/i }));
+
+    await waitFor(() => {
+      const putCall = mockApiFetch.mock.calls.find(
+        (c) => c[0] === '/api/v1/admin/settings' && c[1]?.method === 'PUT',
+      );
+      expect(putCall).toBeDefined();
+      const body = JSON.parse(putCall![1].body) as Record<string, unknown>;
+      // Composer trims whitespace before sending.
+      expect(body.giphyAPIKey).toBe('rotated-key');
+    });
+  });
+
   it('PUTs converted bytes + cleaned extension list on save', async () => {
     mockApiFetch.mockImplementation((path: string, init?: { method?: string; body?: string }) => {
       if (path === '/api/v1/admin/search/status') {

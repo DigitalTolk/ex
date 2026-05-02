@@ -149,6 +149,70 @@ func TestUpdateMe(t *testing.T) {
 	}
 }
 
+func TestUpdateMe_EmojiSkinTone(t *testing.T) {
+	h, userStore, jwtMgr := setupUserHandler(t)
+
+	user := &model.User{
+		ID:          "tone-1",
+		Email:       "tone@example.com",
+		DisplayName: "Tone User",
+		SystemRole:  model.SystemRoleMember,
+		Status:      "active",
+	}
+	userStore.users[user.ID] = user
+	userStore.emailIndex[user.Email] = user
+
+	token := makeTokenForUser(jwtMgr, user)
+	handler := middleware.Auth(jwtMgr)(http.HandlerFunc(h.UpdateMe))
+
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/users/me", strings.NewReader(`{"emojiSkinTone":"medium"}`))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	var got model.User
+	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.EmojiSkinTone != "medium" {
+		t.Errorf("EmojiSkinTone = %q, want medium", got.EmojiSkinTone)
+	}
+}
+
+func TestUpdateMe_InvalidEmojiSkinTone(t *testing.T) {
+	h, userStore, jwtMgr := setupUserHandler(t)
+
+	user := &model.User{
+		ID:          "tone-bad",
+		Email:       "tonebad@example.com",
+		DisplayName: "Tone User",
+		SystemRole:  model.SystemRoleMember,
+		Status:      "active",
+	}
+	userStore.users[user.ID] = user
+	userStore.emailIndex[user.Email] = user
+
+	token := makeTokenForUser(jwtMgr, user)
+	handler := middleware.Auth(jwtMgr)(http.HandlerFunc(h.UpdateMe))
+
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/users/me", strings.NewReader(`{"emojiSkinTone":"blue"}`))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want %d; body: %s", rec.Code, http.StatusInternalServerError, rec.Body.String())
+	}
+}
+
 func TestUpdateMe_Unauthenticated(t *testing.T) {
 	h, _, _ := setupUserHandler(t)
 

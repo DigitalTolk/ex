@@ -25,6 +25,7 @@ export default function AdminPage() {
   const [extensions, setExtensions] = useState(() =>
     data ? data.allowedExtensions.join(', ') : '',
   );
+  const [giphyKey, setGiphyKey] = useState(() => data?.giphyAPIKey ?? '');
   const [savedAt, setSavedAt] = useState<number | null>(null);
   const lastDataRef = useRef<typeof data>(undefined);
 
@@ -33,6 +34,7 @@ export default function AdminPage() {
     lastDataRef.current = data;
     setMaxMB(String(bytesToMib(data.maxUploadBytes)));
     setExtensions(data.allowedExtensions.join(', '));
+    setGiphyKey(data.giphyAPIKey ?? '');
   }, [data]);
 
   if (!isAdmin(user?.systemRole)) {
@@ -53,7 +55,11 @@ export default function AdminPage() {
       .map((e) => e.trim().replace(/^\./, '').toLowerCase())
       .filter(Boolean);
     update.mutate(
-      { maxUploadBytes: bytes, allowedExtensions: exts },
+      {
+        maxUploadBytes: bytes,
+        allowedExtensions: exts,
+        giphyAPIKey: giphyKey.trim(),
+      },
       {
         onSuccess: () => setSavedAt(Date.now()),
       },
@@ -64,6 +70,27 @@ export default function AdminPage() {
     <PageContainer
       title="Workspace settings"
       description="Limits and policies that apply to every member."
+      actions={
+        <>
+          {savedAt && !update.isPending && (
+            <span className="text-sm text-muted-foreground" aria-live="polite">
+              Saved.
+            </span>
+          )}
+          {update.isError && (
+            <span className="text-sm text-destructive" role="alert">
+              {update.error instanceof Error ? update.error.message : 'Save failed'}
+            </span>
+          )}
+          <Button
+            onClick={handleSave}
+            disabled={update.isPending}
+            aria-label="Save settings for all workspace sections"
+          >
+            {update.isPending ? 'Saving...' : 'Save settings'}
+          </Button>
+        </>
+      }
     >
         <section className="space-y-4 rounded-lg border bg-card p-5">
           <div>
@@ -102,20 +129,43 @@ export default function AdminPage() {
             </p>
           </div>
 
-          <div className="flex items-center gap-3">
-            <Button onClick={handleSave} disabled={update.isPending}>
-              {update.isPending ? 'Saving…' : 'Save settings'}
-            </Button>
-            {savedAt && !update.isPending && (
-              <span className="text-sm text-muted-foreground" aria-live="polite">
-                Saved.
-              </span>
-            )}
-            {update.isError && (
-              <span className="text-sm text-destructive" role="alert">
-                {update.error instanceof Error ? update.error.message : 'Save failed'}
-              </span>
-            )}
+        </section>
+
+        <section className="space-y-4 rounded-lg border bg-card p-5">
+          <div>
+            <h2 className="text-base font-semibold">Giphy</h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Paste your Giphy API key to enable the GIF picker in the
+              message composer. Get a key at{' '}
+              <a
+                href="https://developers.giphy.com/dashboard"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-primary underline"
+              >
+                developers.giphy.com
+              </a>
+              . Leave blank to disable.
+            </p>
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="giphy-key">Giphy API key</Label>
+            <Input
+              id="giphy-key"
+              type="text"
+              value={giphyKey}
+              onChange={(e) => setGiphyKey(e.target.value)}
+              placeholder="dc6zaTOxFJmzC"
+              disabled={isLoading}
+              autoComplete="off"
+              spellCheck={false}
+            />
+            <p className="text-xs text-muted-foreground">
+              {data?.giphyEnabled
+                ? 'Giphy is enabled — members will see a GIF button next to the emoji picker.'
+                : 'Giphy is disabled. The GIF button is hidden from the composer.'}
+            </p>
           </div>
         </section>
 

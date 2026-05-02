@@ -99,13 +99,13 @@ func TestIsULID(t *testing.T) {
 		input string
 		want  bool
 	}{
-		{valid26, true},                          // standard ULID
-		{valid26[:25], false},                     // 25 chars — too short
-		{valid26 + "X", false},                    // 27 chars — too long
-		{"01arz3ndektsv4rrffq69g5fav", true},      // lowercase OK
+		{valid26, true},                      // standard ULID
+		{valid26[:25], false},                // 25 chars — too short
+		{valid26 + "X", false},               // 27 chars — too long
+		{"01arz3ndektsv4rrffq69g5fav", true}, // lowercase OK
 		{"general", false},
 		{"my-cool-channel", false},
-		{"01ARZ3NDEKTSV4RRFFQ69G5FA!", false},     // 26 chars but has special char
+		{"01ARZ3NDEKTSV4RRFFQ69G5FA!", false}, // 26 chars but has special char
 		{"", false},
 	}
 	for _, tt := range tests {

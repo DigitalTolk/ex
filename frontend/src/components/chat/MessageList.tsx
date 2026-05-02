@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso';
 import { Skeleton } from '@/components/ui/skeleton';
 import { MessageItem } from './MessageItem';
@@ -8,6 +8,7 @@ import type { Message } from '@/types';
 import { buildMessageListRows, nextVirtuosoState } from './MessageListRows';
 
 const ANCHOR_HIGHLIGHT_MS = 2200;
+const LIVE_TAIL_BOTTOM_INTENT_MS = 2400;
 
 // firstItemIndex is shifted down on every prepend (older-page fetch)
 // so Virtuoso identifies prepended rows as preceding existing ones
@@ -173,6 +174,22 @@ function VirtuosoMessageList({
   // computation; we just mirror the value into a ref so a non-React
   // ResizeObserver callback can read it without re-subscribing.
   const atBottomRef = useRef(true);
+  const bottomIntentUntilRef = useRef(0);
+  const bottomIntentCanceledRef = useRef(false);
+
+  const startBottomIntent = useCallback(() => {
+    bottomIntentUntilRef.current = Date.now() + LIVE_TAIL_BOTTOM_INTENT_MS;
+    bottomIntentCanceledRef.current = false;
+  }, []);
+
+  const cancelBottomIntent = useCallback(() => {
+    bottomIntentUntilRef.current = 0;
+    bottomIntentCanceledRef.current = true;
+  }, []);
+
+  const hasBottomIntent = useCallback(() => {
+    return !bottomIntentCanceledRef.current && Date.now() < bottomIntentUntilRef.current;
+  }, []);
 
   // When the scroll container shrinks (e.g., the "refresh for new
   // version" banner appears at the top of the page after mount),
@@ -197,9 +214,12 @@ function VirtuosoMessageList({
     if (typeof ResizeObserver === 'undefined') return;
     const scroller = document.querySelector<HTMLElement>('[data-virtuoso-scroller]');
     if (!scroller) return;
+    startBottomIntent();
     let lastClientHeight = scroller.clientHeight;
     let lastScrollHeight = scroller.scrollHeight;
+    const shouldStickToBottom = () => atBottomRef.current || hasBottomIntent();
     const reSnap = () => {
+      if (!shouldStickToBottom()) return;
       virtuosoRef.current?.scrollToIndex({ index: 'LAST', align: 'end' });
     };
     const ro = new ResizeObserver(() => {
@@ -215,7 +235,6 @@ function VirtuosoMessageList({
       const contentGrew = sh > lastScrollHeight + 0.5;
       lastClientHeight = ch;
       lastScrollHeight = sh;
-      if (!atBottomRef.current) return;
       if (containerShrank || contentGrew) reSnap();
     });
     ro.observe(scroller);
@@ -233,12 +252,24 @@ function VirtuosoMessageList({
     // which the RO would otherwise miss.
     const lastIdx = renderRows.length - 1;
     const cancelSnap = multiPassScroll(
-      () => virtuosoRef.current?.scrollToIndex({ index: lastIdx, align: 'end' }),
-      [100, 350],
+      () => {
+        if (shouldStickToBottom()) {
+          virtuosoRef.current?.scrollToIndex({ index: lastIdx, align: 'end' });
+        }
+      },
+      [100, 350, 800, 1400],
     );
+    scroller.addEventListener('wheel', cancelBottomIntent, { passive: true });
+    scroller.addEventListener('touchstart', cancelBottomIntent, { passive: true });
+    scroller.addEventListener('pointerdown', cancelBottomIntent, { passive: true });
+    scroller.addEventListener('keydown', cancelBottomIntent);
     return () => {
       ro.disconnect();
       cancelSnap();
+      scroller.removeEventListener('wheel', cancelBottomIntent);
+      scroller.removeEventListener('touchstart', cancelBottomIntent);
+      scroller.removeEventListener('pointerdown', cancelBottomIntent);
+      scroller.removeEventListener('keydown', cancelBottomIntent);
     };
     // Mount-only: anchorMsgId and renderRows.length are captured
     // for the initial-snap chase; the wrapper keys this mount on
@@ -274,11 +305,16 @@ function VirtuosoMessageList({
     lastOwnBottomRef.current = bottomId;
     if (last.message.authorID !== currentUserId) return;
     if (last.message.parentMessageID) return;
-    virtuosoRef.current?.scrollToIndex({
-      index: renderRows.length - 1,
-      align: 'end',
-    });
-  }, [anchorMsgId, renderRows, currentUserId]);
+    startBottomIntent();
+    return multiPassScroll(
+      () => {
+        if (hasBottomIntent()) {
+          virtuosoRef.current?.scrollToIndex({ index: 'LAST', align: 'end' });
+        }
+      },
+      [100, 350, 800, 1400],
+    );
+  }, [anchorMsgId, renderRows, currentUserId, startBottomIntent, hasBottomIntent]);
 
   if (renderRows.length === 0) {
     // Empty state: render the intro (channels show "This is the

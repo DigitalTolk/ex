@@ -10,6 +10,7 @@ import {
   List,
   Quote,
   Smile,
+  ImagePlay,
   X,
 } from 'lucide-react';
 import { useEffect } from 'react';
@@ -24,6 +25,8 @@ import {
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { EmojiPicker } from '@/components/EmojiPicker';
+import { GiphyPicker, type PickedGIF } from '@/components/GiphyPicker';
+import { useWorkspaceSettings } from '@/hooks/useSettings';
 import { AttachmentChip, type DraftAttachment } from '@/components/chat/AttachmentChip';
 import { uploadAttachment, useDeleteDraftAttachment } from '@/hooks/useAttachments';
 import { isImageContentType } from '@/lib/file-helpers';
@@ -116,6 +119,9 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
   useEffect(() => {
     return editorRef.current?.subscribeActiveFormats?.(setActive);
   }, []);
+  const { data: settings } = useWorkspaceSettings();
+  const giphyAPIKey = settings?.giphyAPIKey?.trim() ?? '';
+  const giphyEnabled = (settings?.giphyEnabled ?? false) && giphyAPIKey !== '';
 
   // Link dialog state. Opening the dialog calls editor.beginLinkEdit
   // which captures the current selection (Lexical loses selection when
@@ -226,6 +232,14 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
 
   function insertEmojiShortcode(emoji: string) {
     editorRef.current?.insertText(emoji + ' ');
+  }
+
+  function insertGiphyGIF(gif: PickedGIF) {
+    // Store only GIPHY's stable content ID plus dimensions for layout.
+    // Media URLs are resolved directly from GIPHY at render time so
+    // saved messages don't cache returned media URLs.
+    const dims = gif.width && gif.height ? ` =${gif.width}x${gif.height}` : '';
+    editorRef.current?.insertText(`![GIPHY](giphy:${gif.id}${dims}) `);
   }
 
   async function uploadFiles(allFiles: File[]) {
@@ -397,6 +411,15 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
               <ToolbarBtn label="Emoji"><Smile className="h-3.5 w-3.5" /></ToolbarBtn>
             }
           />
+          {giphyEnabled && (
+            <GiphyPicker
+              apiKey={giphyAPIKey}
+              onSelect={insertGiphyGIF}
+              trigger={
+                <ToolbarBtn label="GIF"><ImagePlay className="h-3.5 w-3.5" /></ToolbarBtn>
+              }
+            />
+          )}
           <button
             type="button"
             onClick={() => fileInputRef.current?.click()}

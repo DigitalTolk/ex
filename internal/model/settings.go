@@ -12,6 +12,10 @@ type WorkspaceSettings struct {
 	// of file extensions that may be uploaded. Empty list means "use
 	// the built-in default".
 	AllowedExtensions []string `json:"allowedExtensions" dynamodbav:"allowedExtensions"`
+	// GiphyAPIKey, when non-empty, enables the Giphy picker in the
+	// composer. GIPHY requires client-side API/media requests, so this
+	// browser key is sent to authenticated clients that can use the picker.
+	GiphyAPIKey string `json:"giphyAPIKey,omitempty" dynamodbav:"giphyAPIKey,omitempty"`
 }
 
 // DefaultMaxUploadBytes is the fallback ceiling when the workspace hasn't

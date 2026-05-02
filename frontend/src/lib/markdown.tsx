@@ -1,5 +1,6 @@
 import { Fragment, type ReactNode } from 'react';
-import { shortcodeToUnicode } from './emoji-shortcodes';
+import { GiphyEmbed } from '@/components/GiphyEmbed';
+import { applySkinToneSuffix, shortcodeToUnicode } from './emoji-shortcodes';
 import { USER_MENTION_RE, GROUP_MENTION_RE, CHANNEL_MENTION_RE } from './mention-syntax';
 
 export interface RenderOpts {
@@ -20,6 +21,10 @@ export interface RenderOpts {
   // onTagClick turns `#tag` tokens into clickable buttons that surface
   // the tag-search side panel. Without it, hashtags render as plain text.
   onTagClick?: (tag: string) => void;
+  // Browser key for resolving persisted `giphy:<id>` references. The
+  // saved message stores only the GIPHY ID; media URLs are fetched
+  // directly from GIPHY on render.
+  giphyAPIKey?: string;
 }
 
 // The leading-char class excludes `/` so URL fragments like
@@ -36,6 +41,11 @@ const MENTION_PILL_OTHER =
 // muted color used for ordinary user mentions.
 const MENTION_PILL_HIGHLIGHT =
   ' bg-amber-200 text-amber-900 dark:bg-amber-500/30 dark:text-amber-100';
+
+function isVideoAssetURL(url: string) {
+  const path = url.split(/[?#]/, 1)[0]?.toLowerCase() ?? '';
+  return path.endsWith('.mp4') || path.endsWith('.webm');
+}
 
 interface Match {
   index: number;
@@ -141,16 +151,53 @@ function findInline(src: string, opts: RenderOpts | undefined, keyPrefix: string
     });
   }
 
-  // image: ![alt](url)
-  tryMatch(/!\[([^\]]*)\]\(([^)\s]+)\)/, (m) => (
-    <img
-      key={`${keyPrefix}-img-${m.index}`}
-      src={m[2]}
-      alt={m[1] || ''}
-      className="my-1 max-h-80 max-w-full rounded-md border"
-      loading="lazy"
-    />
-  ));
+  // image: ![alt](url) with optional `=WxH` size suffix. Width/height
+  // attrs let the browser size the box from the markup; CSS still
+  // constrains max-width. `giphy:<id>` is resolved by GiphyEmbed.
+  tryMatch(/!\[([^\]]*)\]\(([^)\s]+?)(?:\s+=(\d+)x(\d+))?\)/, (m) => {
+    if (m[2].startsWith('giphy:')) {
+      return (
+        <GiphyEmbed
+          key={`${keyPrefix}-giphy-${m.index}`}
+          id={m[2].slice('giphy:'.length)}
+          width={m[3] ? Number(m[3]) : undefined}
+          height={m[4] ? Number(m[4]) : undefined}
+          apiKey={opts?.giphyAPIKey}
+        />
+      );
+    }
+    const w = m[3] ? Number(m[3]) : undefined;
+    const h = m[4] ? Number(m[4]) : undefined;
+    if (isVideoAssetURL(m[2])) {
+      return (
+        <video
+          key={`${keyPrefix}-video-${m.index}`}
+          src={m[2]}
+          aria-label={m[1] || 'Video'}
+          title={m[1] || undefined}
+          width={w}
+          height={h}
+          className="my-1 max-h-80 max-w-full rounded-md border"
+          autoPlay
+          loop
+          muted
+          playsInline
+          preload="metadata"
+        />
+      );
+    }
+    return (
+      <img
+        key={`${keyPrefix}-img-${m.index}`}
+        src={m[2]}
+        alt={m[1] || ''}
+        width={w}
+        height={h}
+        className="my-1 max-h-80 max-w-full rounded-md border"
+        loading="lazy"
+      />
+    );
+  });
 
   // link: [text](url)
   tryMatch(/\[([^\]]+)\]\(([^)\s]+)\)/, (m) => (
@@ -200,6 +247,23 @@ function findInline(src: string, opts: RenderOpts | undefined, keyPrefix: string
   // (`# title :tada:` keeps the emoji proportional to the H1 text).
   // align-middle (not align-text-bottom) centers the glyph on the text's
   // x-height so it sits visually balanced inside paragraphs and lists.
+  tryMatch(/:([a-z0-9_+-]+)::(skin-tone-[1-5]):/i, (m) => {
+    const name = m[1];
+    const unicode = shortcodeToUnicode(`:${name}:`);
+    if (unicode !== `:${name}:`) {
+      return (
+        <span
+          key={`${keyPrefix}-eu-${m.index}`}
+          title={`:${name}::${m[2]}:`}
+          className="text-[1.4em] leading-none align-middle"
+        >
+          {applySkinToneSuffix(unicode, m[2])}
+        </span>
+      );
+    }
+    return <span key={`${keyPrefix}-eu-${m.index}`}>{m[0]}</span>;
+  });
+
   tryMatch(/:([a-z0-9_+-]+):/i, (m) => {
     const name = m[1];
     const url = opts?.emojiMap?.[name];
@@ -415,4 +479,3 @@ export function renderMarkdown(body: string, opts?: RenderOpts): ReactNode {
 
   return <>{blocks}</>;
 }
-

@@ -4,9 +4,30 @@ import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { EmojiPicker } from './EmojiPicker';
 
+const authMock = vi.hoisted(() => ({
+  user: {
+    id: 'u-1',
+    email: 'u@example.com',
+    displayName: 'User',
+    systemRole: 'member' as const,
+    status: 'active',
+    emojiSkinTone: '' as const,
+  },
+  setAuth: vi.fn(),
+}));
+
 vi.mock('@/hooks/useEmoji', () => ({
   useEmojis: () => ({ data: [] }),
   useEmojiMap: () => ({ data: {} }),
+}));
+
+vi.mock('@/context/AuthContext', () => ({
+  useOptionalAuth: () => authMock,
+}));
+
+vi.mock('@/lib/api', () => ({
+  apiFetch: vi.fn(),
+  getAccessToken: () => 'tok',
 }));
 
 function render(ui: React.ReactElement) {
@@ -34,6 +55,9 @@ describe('EmojiPicker', () => {
     render(<EmojiPicker onSelect={onSelect} />);
 
     await user.click(screen.getByRole('button', { name: /open emoji picker/i }));
+    // Picker opens on the first category; search for a generated
+    // shortcode to surface its tile.
+    await user.type(screen.getByLabelText('Search emojis'), 'thumbsup');
     await user.click(screen.getByLabelText('React with :thumbsup:'));
 
     expect(onSelect).toHaveBeenCalledWith(':thumbsup:');
@@ -45,6 +69,7 @@ describe('EmojiPicker', () => {
 
     await user.click(screen.getByRole('button', { name: /open emoji picker/i }));
     expect(screen.getByRole('dialog')).toBeInTheDocument();
+    await user.type(screen.getByLabelText('Search emojis'), 'tada');
     await user.click(screen.getByLabelText('React with :tada:'));
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
@@ -94,5 +119,38 @@ describe('EmojiPicker', () => {
     expect(screen.getByRole('dialog')).toBeInTheDocument();
     await user.click(trigger);
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('uses larger monochrome SVG category tabs, nine emoji columns, and a custom tab at the right', async () => {
+    const user = userEvent.setup();
+    render(<EmojiPicker onSelect={vi.fn()} />);
+    await user.click(screen.getByRole('button', { name: /open emoji picker/i }));
+
+    const dialog = screen.getByRole('dialog');
+    expect(dialog.className).toContain('w-[336px]');
+    expect(dialog.className).toContain('h-[460px]');
+
+    const tabs = screen.getAllByTestId('emoji-category-tab');
+    expect(tabs).toHaveLength(10);
+    expect(tabs[0].className).toContain('h-7');
+    expect(tabs[0].className).toContain('w-7');
+    expect(tabs[0].querySelector('svg')).not.toBeNull();
+    expect(tabs[0].textContent).toBe('');
+    expect(tabs[tabs.length - 1]).toHaveAttribute('data-category', 'custom');
+    expect(screen.getByRole('tablist', { name: /emoji categories/i }).className).toContain('justify-center');
+    expect(screen.getByRole('list', { name: /standard emojis/i }).className).toContain('grid-cols-[repeat(9,2rem)]');
+  });
+
+  it('applies selected skin tone to supported standard emoji picks', async () => {
+    const onSelect = vi.fn();
+    const user = userEvent.setup();
+    render(<EmojiPicker onSelect={onSelect} />);
+
+    await user.click(screen.getByRole('button', { name: /open emoji picker/i }));
+    await user.click(screen.getByRole('radio', { name: /medium skin tone/i }));
+    await user.type(screen.getByLabelText('Search emojis'), 'thumbsup');
+    await user.click(screen.getByLabelText('React with :thumbsup::skin-tone-3:'));
+
+    expect(onSelect).toHaveBeenCalledWith(':thumbsup::skin-tone-3:');
   });
 });

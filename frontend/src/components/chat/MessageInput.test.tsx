@@ -6,6 +6,14 @@ import { MessageInput } from './MessageInput';
 
 vi.mock('@/lib/api', () => ({ apiFetch: vi.fn().mockResolvedValue([]) }));
 
+// Stub the workspace-settings hook so MessageInput doesn't fire a
+// real React Query against the mocked apiFetch — the late resolve
+// would land outside act() and warn during focus-event tests.
+vi.mock('@/hooks/useSettings', () => ({
+  useWorkspaceSettings: () => ({ data: { maxUploadBytes: 0, allowedExtensions: [], giphyEnabled: false } }),
+  useUpdateWorkspaceSettings: () => ({ mutate: vi.fn(), isPending: false }),
+}));
+
 function render(ui: React.ReactElement) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return rtlRender(<QueryClientProvider client={qc}>{ui}</QueryClientProvider>);

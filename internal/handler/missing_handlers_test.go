@@ -124,6 +124,100 @@ func TestAdminHandler_UpdateSettings_OK(t *testing.T) {
 	}
 }
 
+func TestAdminHandler_GetSettings_GiphyKeyVisibleForMember(t *testing.T) {
+	settingsSvc := service.NewSettingsService(&fakeSettingsStore{
+		current: &model.WorkspaceSettings{GiphyAPIKey: "secret-giphy-key"},
+	})
+	h := NewAdminHandler(settingsSvc)
+	jwtMgr := auth.NewJWTManager("redact-secret", 15*time.Minute, 720*time.Hour)
+	user := &model.User{ID: "u-mem-redact", Email: "m@x.com", SystemRole: model.SystemRoleMember}
+	token := makeTokenForUser(jwtMgr, user)
+
+	handler := middleware.Auth(jwtMgr)(http.HandlerFunc(h.GetSettings))
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/settings", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	var got map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got["giphyAPIKey"] != "secret-giphy-key" {
+		t.Errorf("member should receive browser Giphy key, got %v", got["giphyAPIKey"])
+	}
+	if got["giphyEnabled"] != true {
+		t.Errorf("giphyEnabled = %v, want true", got["giphyEnabled"])
+	}
+}
+
+func TestAdminHandler_GetSettings_GiphyKeyVisibleForAdmin(t *testing.T) {
+	settingsSvc := service.NewSettingsService(&fakeSettingsStore{
+		current: &model.WorkspaceSettings{GiphyAPIKey: "secret-giphy-key"},
+	})
+	h := NewAdminHandler(settingsSvc)
+	jwtMgr := auth.NewJWTManager("admin-vis-secret", 15*time.Minute, 720*time.Hour)
+	admin := &model.User{ID: "u-adm-vis", Email: "a@x.com", SystemRole: model.SystemRoleAdmin}
+	token := makeTokenForUser(jwtMgr, admin)
+
+	handler := middleware.Auth(jwtMgr)(http.HandlerFunc(h.GetSettings))
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/settings", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	var got map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got["giphyAPIKey"] != "secret-giphy-key" {
+		t.Errorf("admin should see giphyAPIKey, got %v", got["giphyAPIKey"])
+	}
+	if got["giphyEnabled"] != true {
+		t.Errorf("giphyEnabled = %v, want true", got["giphyEnabled"])
+	}
+}
+
+func TestAdminHandler_UpdateSettings_GiphyRoundtrip(t *testing.T) {
+	store := &fakeSettingsStore{}
+	settingsSvc := service.NewSettingsService(store)
+	h := NewAdminHandler(settingsSvc)
+	jwtMgr := auth.NewJWTManager("giphy-round-secret", 15*time.Minute, 720*time.Hour)
+	admin := &model.User{ID: "u-adm-rt", Email: "a@x.com", SystemRole: model.SystemRoleAdmin}
+	token := makeTokenForUser(jwtMgr, admin)
+
+	handler := middleware.Auth(jwtMgr)(http.HandlerFunc(h.UpdateSettings))
+	body := `{"maxUploadBytes":2048,"allowedExtensions":["png"],"giphyAPIKey":"  brand-new-key  "}`
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/admin/settings", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	if store.current == nil || store.current.GiphyAPIKey != "brand-new-key" {
+		t.Errorf("stored key = %q, want trimmed 'brand-new-key'", store.current.GiphyAPIKey)
+	}
+
+	var got map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got["giphyAPIKey"] != "brand-new-key" {
+		t.Errorf("response key = %v, want 'brand-new-key'", got["giphyAPIKey"])
+	}
+	if got["giphyEnabled"] != true {
+		t.Errorf("giphyEnabled = %v, want true", got["giphyEnabled"])
+	}
+}
+
 func TestAdminHandler_UpdateSettings_InvalidJSON(t *testing.T) {
 	h, jwtMgr := setupAdminHandler(t)
 	admin := &model.User{ID: "u-adm2", Email: "adm2@x.com", SystemRole: model.SystemRoleAdmin}

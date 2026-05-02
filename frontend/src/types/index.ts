@@ -5,6 +5,7 @@ export interface User {
   avatarURL?: string;
   systemRole: 'admin' | 'member' | 'guest';
   authProvider?: 'oidc' | 'guest';
+  emojiSkinTone?: '' | 'light' | 'medium_light' | 'medium' | 'medium_dark' | 'dark';
   status: string;
   online?: boolean;
   lastSeenAt?: string;
@@ -81,6 +82,11 @@ export interface ChannelMembership {
 export interface WorkspaceSettings {
   maxUploadBytes: number;
   allowedExtensions: string[];
+  // Browser key used by the Giphy SDK. Present for authenticated users
+  // when the picker is enabled because GIPHY API calls must be made
+  // directly from the client, not proxied through this app.
+  giphyAPIKey?: string;
+  giphyEnabled?: boolean;
 }
 
 export interface UserChannel {

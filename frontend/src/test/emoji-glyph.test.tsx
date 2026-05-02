@@ -21,10 +21,23 @@ describe('EmojiGlyph (shared 14px renderer)', () => {
     expect(span?.className).toContain('text-sm');
   });
 
+  it('renders full picker-catalog shortcodes that are not in common typeahead aliases', () => {
+    const { container } = render(<EmojiGlyph emoji=":laughing:" />);
+    const span = container.querySelector('span');
+    expect(span?.textContent).toBe('😆');
+  });
+
   it('renders raw unicode as text-sm span', () => {
     const { container } = render(<EmojiGlyph emoji="🎉" />);
     const span = container.querySelector('span');
     expect(span?.textContent).toBe('🎉');
+    expect(span?.className).toContain('text-sm');
+  });
+
+  it('renders split skin-tone shortcodes as one toned glyph', () => {
+    const { container } = render(<EmojiGlyph emoji=":hand::skin-tone-3:" />);
+    const span = container.querySelector('span');
+    expect(span?.textContent).toBe('🖐🏽');
     expect(span?.className).toContain('text-sm');
   });
 

@@ -109,4 +109,53 @@ describe('renderMarkdown', () => {
     expect(ps[0].textContent).toBe('a');
     expect(ps[4].textContent).toBe('b');
   });
+
+  it('renders inline images with optional `=WxH` size suffix as width/height attrs', () => {
+    // Inline images can carry explicit dimensions so the chat list
+    // reserves the layout box at first paint.
+    const { container } = render(
+      <>{renderMarkdown('![cat](https://media.giphy.com/cat.gif =300x200)')}</>,
+    );
+    const img = container.querySelector('img');
+    expect(img).not.toBeNull();
+    expect(img!.getAttribute('src')).toBe('https://media.giphy.com/cat.gif');
+    expect(img!.getAttribute('width')).toBe('300');
+    expect(img!.getAttribute('height')).toBe('200');
+    expect(img!.getAttribute('alt')).toBe('cat');
+  });
+
+  it('renders inline images without a size suffix as plain `<img>`', () => {
+    const { container } = render(
+      <>{renderMarkdown('![logo](https://example.com/logo.png)')}</>,
+    );
+    const img = container.querySelector('img');
+    expect(img).not.toBeNull();
+    expect(img!.hasAttribute('width')).toBe(false);
+    expect(img!.hasAttribute('height')).toBe(false);
+  });
+
+  it('renders Giphy MP4 picks inline as looping muted video without changing the URL', () => {
+    const url = 'https://media.giphy.com/cat.mp4?cid=keep';
+    const { container } = render(<>{renderMarkdown(`![cat](${url} =300x200)`)}</>);
+    const video = container.querySelector('video');
+    expect(video).not.toBeNull();
+    expect(video!.getAttribute('src')).toBe(url);
+    expect(video!.getAttribute('width')).toBe('300');
+    expect(video!.getAttribute('height')).toBe('200');
+    expect(video!.hasAttribute('loop')).toBe(true);
+    expect((video as HTMLVideoElement).muted).toBe(true);
+    expect(video!.hasAttribute('playsinline')).toBe(true);
+  });
+
+  it('renders persisted Giphy references without storing a media URL in the message body', () => {
+    const { container } = render(<>{renderMarkdown('![GIPHY](giphy:g-1)', { giphyAPIKey: '' })}</>);
+    expect(container.textContent).toContain('GIPHY unavailable');
+    expect(container.textContent).not.toContain('media.giphy.com');
+  });
+
+  it('renders split skin-tone emoji shortcodes as one toned emoji', () => {
+    const { container } = render(<>{renderMarkdown('hi :hand::skin-tone-3:')}</>);
+    const emoji = container.querySelector('span[title=":hand::skin-tone-3:"]');
+    expect(emoji?.textContent).toBe('🖐🏽');
+  });
 });

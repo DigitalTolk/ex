@@ -219,7 +219,7 @@ func TestUserService_Update_FiresIndexer(t *testing.T) {
 	svc.SetIndexer(idx)
 
 	newName := "New"
-	if _, err := svc.Update(context.Background(), "u1", &newName, nil); err != nil {
+	if _, err := svc.Update(context.Background(), "u1", &newName, nil, nil); err != nil {
 		t.Fatalf("Update: %v", err)
 	}
 	if len(idx.indexed) != 1 || idx.indexed[0] != "u1" {

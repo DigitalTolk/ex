@@ -355,6 +355,9 @@ describe('MessageItem', () => {
     );
     await user.click(screen.getByLabelText('Add reaction'));
     expect(screen.getByRole('dialog')).toBeInTheDocument();
+    // Picker opens on the first category; search to surface the generated
+    // activity shortcode.
+    await user.type(screen.getByLabelText('Search emojis'), 'tada');
     await user.click(screen.getByLabelText('React with :tada:'));
     expect(mockReactMutate).toHaveBeenCalledWith({
       messageId: 'msg-1',

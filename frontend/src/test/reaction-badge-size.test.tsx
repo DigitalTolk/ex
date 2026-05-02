@@ -88,4 +88,34 @@ describe('Reaction badge — 14px font size pin', () => {
     expect(glyph).not.toBeNull();
     expect(glyph?.className).toContain('text-sm');
   });
+
+  it('renders split skin-tone reaction shortcodes as one emoji glyph', () => {
+    const msg: Message = {
+      id: 'm-1',
+      parentID: 'ch-1',
+      authorID: 'u-other',
+      body: 'hi',
+      createdAt: '2026-04-26T10:00:00Z',
+      reactions: { ':hand::skin-tone-3:': ['u-1'] },
+    };
+    renderItem(msg);
+    const badge = screen.getByTestId('reaction-badge');
+    const glyph = badge.querySelector('span.leading-none');
+    expect(glyph?.textContent).toBe('🖐🏽');
+  });
+
+  it('renders picker-only standard shortcode reactions', () => {
+    const msg: Message = {
+      id: 'm-1',
+      parentID: 'ch-1',
+      authorID: 'u-other',
+      body: 'hi',
+      createdAt: '2026-04-26T10:00:00Z',
+      reactions: { ':laughing:': ['u-1'] },
+    };
+    renderItem(msg);
+    const badge = screen.getByTestId('reaction-badge');
+    const glyph = badge.querySelector('span.leading-none');
+    expect(glyph?.textContent).toBe('😆');
+  });
 });

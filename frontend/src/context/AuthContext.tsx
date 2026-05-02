@@ -94,3 +94,7 @@ export function useAuth(): AuthState {
   }
   return ctx;
 }
+
+export function useOptionalAuth(): AuthState | null {
+  return useContext(AuthContext) ?? null;
+}
