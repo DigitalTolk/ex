@@ -1,4 +1,16 @@
 import { useEffect, useRef, useState, useMemo } from 'react';
+import {
+  Flag,
+  Hash,
+  Leaf,
+  Package,
+  Plane,
+  Smile,
+  Trophy,
+  UserRound,
+  Utensils,
+  type LucideIcon,
+} from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useEmojis } from '@/hooks/useEmoji';
@@ -36,6 +48,18 @@ const EMOJIS_BY_CATEGORY: Record<string, EmojiEntry[]> = (() => {
   }
   return map;
 })();
+
+const CATEGORY_ICONS: Record<string, LucideIcon> = {
+  smileys_emotion: Smile,
+  people_body: UserRound,
+  animals_nature: Leaf,
+  food_drink: Utensils,
+  travel_places: Plane,
+  activities: Trophy,
+  objects: Package,
+  symbols: Hash,
+  flags: Flag,
+};
 
 export function EmojiPicker({ onSelect, onClose, trigger, ariaLabel = 'Emoji picker' }: EmojiPickerProps) {
   const [open, setOpen] = useState(false);
@@ -100,11 +124,11 @@ export function EmojiPicker({ onSelect, onClose, trigger, ariaLabel = 'Emoji pic
         triggerRef={triggerRef}
         onDismiss={close}
         estimatedHeight={420}
-        estimatedWidth={336}
+        estimatedWidth={304}
         preferredSide="bottom"
         preferredAlign="end"
         ariaLabel={ariaLabel}
-        className="w-[336px] rounded-md border bg-popover p-3 shadow-md"
+        className="w-[304px] max-w-[calc(100vw-16px)] rounded-md border bg-popover p-3 shadow-md"
       >
         <Input
           ref={inputRef}
@@ -116,13 +140,13 @@ export function EmojiPicker({ onSelect, onClose, trigger, ariaLabel = 'Emoji pic
         />
         {!query.trim() && (
           <div
-            className="mb-2 flex gap-0.5 overflow-x-auto border-b pb-1"
+            className="mb-2 flex gap-1 overflow-x-auto border-b pb-1"
             role="tablist"
             aria-label="Emoji categories"
           >
             {EMOJI_CATEGORIES.map((c) => {
-              const sample = EMOJIS_BY_CATEGORY[c.slug]?.[0]?.unicode ?? '•';
               const selected = c.slug === activeCategory;
+              const Icon = CATEGORY_ICONS[c.slug] ?? Hash;
               return (
                 <button
                   key={c.slug}
@@ -134,11 +158,11 @@ export function EmojiPicker({ onSelect, onClose, trigger, ariaLabel = 'Emoji pic
                   onClick={() => setActiveCategory(c.slug)}
                   title={c.label}
                   className={
-                    'h-7 w-7 shrink-0 rounded-md flex items-center justify-center text-base ' +
-                    (selected ? 'bg-muted' : 'hover:bg-muted/60')
+                    'flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-muted-foreground ' +
+                    (selected ? 'bg-muted text-foreground' : 'hover:bg-muted/60 hover:text-foreground')
                   }
                 >
-                  <EmojiGlyph emoji={sample} />
+                  <Icon className="size-4" aria-hidden="true" />
                 </button>
               );
             })}

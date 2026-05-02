@@ -120,7 +120,8 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
     return editorRef.current?.subscribeActiveFormats?.(setActive);
   }, []);
   const { data: settings } = useWorkspaceSettings();
-  const giphyEnabled = settings?.giphyEnabled ?? false;
+  const giphyAPIKey = settings?.giphyAPIKey?.trim() ?? '';
+  const giphyEnabled = (settings?.giphyEnabled ?? false) && giphyAPIKey !== '';
 
   // Link dialog state. Opening the dialog calls editor.beginLinkEdit
   // which captures the current selection (Lexical loses selection when
@@ -234,12 +235,11 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
   }
 
   function insertGiphyGIF(gif: PickedGIF) {
-    // ![title](url =WxH) reserves the layout box at first paint so
-    // the chat list doesn't shift when the GIF decodes — the same
-    // explicit-dimensions rule attachments already follow.
-    const safeTitle = (gif.title || 'GIF').replace(/[[\]]/g, '');
-    const sizeSuffix = gif.width > 0 && gif.height > 0 ? ` =${gif.width}x${gif.height}` : '';
-    editorRef.current?.insertText(`![${safeTitle}](${gif.url}${sizeSuffix}) `);
+    // Store only GIPHY's stable content ID plus dimensions for layout.
+    // Media URLs are resolved directly from GIPHY at render time so
+    // saved messages don't cache returned media URLs.
+    const dims = gif.width && gif.height ? ` =${gif.width}x${gif.height}` : '';
+    editorRef.current?.insertText(`![GIPHY](giphy:${gif.id}${dims}) `);
   }
 
   async function uploadFiles(allFiles: File[]) {
@@ -413,6 +413,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
           />
           {giphyEnabled && (
             <GiphyPicker
+              apiKey={giphyAPIKey}
               onSelect={insertGiphyGIF}
               trigger={
                 <ToolbarBtn label="GIF"><ImagePlay className="h-3.5 w-3.5" /></ToolbarBtn>

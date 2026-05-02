@@ -3,13 +3,21 @@ import { render as rtlRender, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
-import { apiFetch } from '@/lib/api';
 import { GiphyPicker } from './GiphyPicker';
 
-vi.mock('@/lib/api', () => ({ apiFetch: vi.fn() }));
+const giphyFetchMocks = vi.hoisted(() => ({
+  search: vi.fn(),
+  trending: vi.fn(),
+}));
+
+vi.mock('@giphy/js-fetch-api', () => ({
+  GiphyFetch: vi.fn(function GiphyFetch() {
+    return giphyFetchMocks;
+  }),
+}));
 
 // Stub the Giphy SDK's <Grid> so the test exercises *our* wiring (the
-// proxy call, the search debounce, the gif-click handler) without
+// SDK fetch call, the search debounce, the gif-click handler) without
 // pulling in the SDK's image-loading + IntersectionObserver code that
 // jsdom doesn't model. The stub eagerly invokes fetchGifs on mount and
 // renders one tile per returned item.
@@ -65,12 +73,27 @@ const sampleResponse = {
     {
       id: 'g-1',
       title: 'cat dance',
-      images: { original: { url: 'https://media.giphy.com/g-1.gif', width: 300, height: 200 } },
+      images: {
+        original: {
+          url: 'https://media.giphy.com/g-1.gif',
+          mp4: 'https://media.giphy.com/g-1-fallback.mp4?cid=keep',
+          width: 300,
+          height: 200,
+        },
+        original_mp4: {
+          mp4: 'https://media.giphy.com/g-1.mp4?cid=keep',
+          width: 300,
+          height: 200,
+        },
+      },
     },
     {
       id: 'g-2',
       title: 'dog dance',
-      images: { original: { url: 'https://media.giphy.com/g-2.gif', width: 250, height: 250 } },
+      images: {
+        original: { url: 'https://media.giphy.com/g-2.gif', width: 250, height: 250 },
+        original_mp4: { mp4: 'https://media.giphy.com/g-2.mp4', width: 250, height: 250 },
+      },
     },
   ],
   pagination: { total_count: 2, count: 2, offset: 0 },
@@ -81,18 +104,19 @@ function renderPicker(onSelect: (gif: unknown) => void) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return rtlRender(
     <QueryClientProvider client={qc}>
-      <GiphyPicker onSelect={onSelect} trigger={<button>open gif</button>} />
+      <GiphyPicker apiKey="browser-key" onSelect={onSelect} trigger={<button>open gif</button>} />
     </QueryClientProvider>,
   );
 }
 
 describe('GiphyPicker', () => {
   beforeEach(() => {
-    vi.mocked(apiFetch).mockReset();
+    giphyFetchMocks.search.mockReset();
+    giphyFetchMocks.trending.mockReset();
   });
 
-  it('opens the picker and hits the trending endpoint via the proxy', async () => {
-    vi.mocked(apiFetch).mockResolvedValue(sampleResponse);
+  it('opens the picker and fetches trending GIFs directly through the Giphy SDK', async () => {
+    giphyFetchMocks.trending.mockResolvedValue(sampleResponse);
     const user = userEvent.setup();
     renderPicker(vi.fn());
 
@@ -101,17 +125,17 @@ describe('GiphyPicker', () => {
     await waitFor(() => {
       expect(screen.getAllByTestId('giphy-tile')).toHaveLength(2);
     });
-    // Empty query → /api/v1/giphy/trending. The picker must NEVER
-    // hit Giphy's API directly — that would leak the workspace key.
-    expect(apiFetch).toHaveBeenCalledWith(expect.stringContaining('/api/v1/giphy/trending'));
-    const calls = vi.mocked(apiFetch).mock.calls.map((c) => String(c[0]));
-    for (const path of calls) {
-      expect(path.startsWith('/api/v1/giphy/')).toBe(true);
-    }
+    expect(giphyFetchMocks.trending).toHaveBeenCalledWith({
+      offset: 0,
+      limit: 12,
+      rating: 'pg',
+    });
+    expect(giphyFetchMocks.search).not.toHaveBeenCalled();
   });
 
-  it('switches to /search when the user types and debounces the request', async () => {
-    vi.mocked(apiFetch).mockResolvedValue(sampleResponse);
+  it('switches to SDK search when the user types and debounces the request', async () => {
+    giphyFetchMocks.trending.mockResolvedValue(sampleResponse);
+    giphyFetchMocks.search.mockResolvedValue(sampleResponse);
     const user = userEvent.setup();
     renderPicker(vi.fn());
 
@@ -121,13 +145,16 @@ describe('GiphyPicker', () => {
     await user.type(screen.getByLabelText('Search GIFs'), 'cats');
 
     await waitFor(() => {
-      const calls = vi.mocked(apiFetch).mock.calls.map((c) => String(c[0]));
-      expect(calls.some((p) => p.includes('/api/v1/giphy/search') && p.includes('q=cats'))).toBe(true);
+      expect(giphyFetchMocks.search).toHaveBeenCalledWith('cats', {
+        offset: 0,
+        limit: 12,
+        rating: 'pg',
+      });
     });
   });
 
-  it('calls onSelect with the picked gif and closes the picker', async () => {
-    vi.mocked(apiFetch).mockResolvedValue(sampleResponse);
+  it('calls onSelect with the picked Giphy ID and dimensions, then closes the picker', async () => {
+    giphyFetchMocks.trending.mockResolvedValue(sampleResponse);
     const onSelect = vi.fn();
     const user = userEvent.setup();
     renderPicker(onSelect);
@@ -139,18 +166,19 @@ describe('GiphyPicker', () => {
     expect(onSelect).toHaveBeenCalledWith(
       expect.objectContaining({
         id: 'g-1',
-        url: 'https://media.giphy.com/g-1.gif',
+        title: 'cat dance',
         width: 300,
         height: 200,
       }),
     );
+    expect(onSelect.mock.calls[0][0]).not.toHaveProperty('url');
     // The popover unmounts on dismissal — its search input is the
     // cleanest "still open?" probe.
     expect(screen.queryByLabelText('Search GIFs')).toBeNull();
   });
 
-  it('surfaces an error state when the proxy call fails', async () => {
-    vi.mocked(apiFetch).mockRejectedValueOnce(new Error('boom'));
+  it('surfaces an error state when the Giphy SDK call fails', async () => {
+    giphyFetchMocks.trending.mockRejectedValueOnce(new Error('boom'));
     const user = userEvent.setup();
     renderPicker(vi.fn());
 

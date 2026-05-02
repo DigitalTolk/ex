@@ -99,4 +99,20 @@ describe('EmojiPicker', () => {
     await user.click(trigger);
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
+
+  it('uses larger monochrome SVG category tabs in a narrower picker', async () => {
+    const user = userEvent.setup();
+    render(<EmojiPicker onSelect={vi.fn()} />);
+    await user.click(screen.getByRole('button', { name: /open emoji picker/i }));
+
+    const dialog = screen.getByRole('dialog');
+    expect(dialog.className).toContain('w-[304px]');
+
+    const tabs = screen.getAllByTestId('emoji-category-tab');
+    expect(tabs.length).toBeGreaterThan(0);
+    expect(tabs[0].className).toContain('h-9');
+    expect(tabs[0].className).toContain('w-9');
+    expect(tabs[0].querySelector('svg')).not.toBeNull();
+    expect(tabs[0].textContent).toBe('');
+  });
 });

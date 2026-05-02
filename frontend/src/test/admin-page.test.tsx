@@ -65,6 +65,26 @@ describe('AdminPage', () => {
     });
   });
 
+  it('places the single save settings action in the page header', async () => {
+    mockApiFetch.mockImplementation((path: string) => {
+      if (path === '/api/v1/admin/settings') {
+        return Promise.resolve({ maxUploadBytes: 50 * 1024 * 1024, allowedExtensions: ['png'] });
+      }
+      if (path === '/api/v1/admin/search/status') {
+        return Promise.resolve({ configured: false });
+      }
+      return Promise.resolve({});
+    });
+    renderPage();
+
+    await screen.findByLabelText(/Max file size/i);
+    const saveButtons = screen.getAllByRole('button', { name: /Save settings/i });
+    expect(saveButtons).toHaveLength(1);
+    const header = screen.getByRole('heading', { name: /Workspace settings/i }).closest('header');
+    expect(header).not.toBeNull();
+    expect(header).toContainElement(saveButtons[0]);
+  });
+
   it('seeds and PUTs the Giphy API key, surfacing the enabled-state copy', async () => {
     mockApiFetch.mockImplementation((path: string, init?: { method?: string; body?: string }) => {
       if (path === '/api/v1/admin/search/status') {

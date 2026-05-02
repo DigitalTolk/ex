@@ -70,6 +70,27 @@ export default function AdminPage() {
     <PageContainer
       title="Workspace settings"
       description="Limits and policies that apply to every member."
+      actions={
+        <>
+          {savedAt && !update.isPending && (
+            <span className="text-sm text-muted-foreground" aria-live="polite">
+              Saved.
+            </span>
+          )}
+          {update.isError && (
+            <span className="text-sm text-destructive" role="alert">
+              {update.error instanceof Error ? update.error.message : 'Save failed'}
+            </span>
+          )}
+          <Button
+            onClick={handleSave}
+            disabled={update.isPending}
+            aria-label="Save settings for all workspace sections"
+          >
+            {update.isPending ? 'Saving...' : 'Save settings'}
+          </Button>
+        </>
+      }
     >
         <section className="space-y-4 rounded-lg border bg-card p-5">
           <div>
@@ -108,21 +129,6 @@ export default function AdminPage() {
             </p>
           </div>
 
-          <div className="flex items-center gap-3">
-            <Button onClick={handleSave} disabled={update.isPending}>
-              {update.isPending ? 'Saving…' : 'Save settings'}
-            </Button>
-            {savedAt && !update.isPending && (
-              <span className="text-sm text-muted-foreground" aria-live="polite">
-                Saved.
-              </span>
-            )}
-            {update.isError && (
-              <span className="text-sm text-destructive" role="alert">
-                {update.error instanceof Error ? update.error.message : 'Save failed'}
-              </span>
-            )}
-          </div>
         </section>
 
         <section className="space-y-4 rounded-lg border bg-card p-5">

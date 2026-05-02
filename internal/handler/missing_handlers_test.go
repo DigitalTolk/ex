@@ -124,7 +124,7 @@ func TestAdminHandler_UpdateSettings_OK(t *testing.T) {
 	}
 }
 
-func TestAdminHandler_GetSettings_GiphyKeyRedactedForMember(t *testing.T) {
+func TestAdminHandler_GetSettings_GiphyKeyVisibleForMember(t *testing.T) {
 	settingsSvc := service.NewSettingsService(&fakeSettingsStore{
 		current: &model.WorkspaceSettings{GiphyAPIKey: "secret-giphy-key"},
 	})
@@ -146,8 +146,8 @@ func TestAdminHandler_GetSettings_GiphyKeyRedactedForMember(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
 		t.Fatal(err)
 	}
-	if _, exists := got["giphyAPIKey"]; exists {
-		t.Errorf("member response leaked giphyAPIKey: %v", got["giphyAPIKey"])
+	if got["giphyAPIKey"] != "secret-giphy-key" {
+		t.Errorf("member should receive browser Giphy key, got %v", got["giphyAPIKey"])
 	}
 	if got["giphyEnabled"] != true {
 		t.Errorf("giphyEnabled = %v, want true", got["giphyEnabled"])

@@ -13,8 +13,8 @@ type WorkspaceSettings struct {
 	// the built-in default".
 	AllowedExtensions []string `json:"allowedExtensions" dynamodbav:"allowedExtensions"`
 	// GiphyAPIKey, when non-empty, enables the Giphy picker in the
-	// composer. Stored verbatim and proxied server-side — never sent
-	// to non-admin clients.
+	// composer. GIPHY requires client-side API/media requests, so this
+	// browser key is sent to authenticated clients that can use the picker.
 	GiphyAPIKey string `json:"giphyAPIKey,omitempty" dynamodbav:"giphyAPIKey,omitempty"`
 }
 

@@ -42,10 +42,10 @@ func (h *AdminHandler) SetSearch(reporter SearchStatusReporter, reindexer *searc
 }
 
 // settingsResponse is the wire shape returned from GetSettings. It
-// extends model.WorkspaceSettings with a derived `giphyEnabled` flag so
-// non-admins can detect whether the Giphy picker should render without
-// ever seeing the API key. Admins receive the literal key in the same
-// payload so the admin form can prefill itself without a second call.
+// extends model.WorkspaceSettings with a derived `giphyEnabled` flag.
+// GIPHY requires API and media requests to be made directly by the
+// client, so authenticated members receive the configured browser key
+// when the picker is enabled.
 type settingsResponse struct {
 	MaxUploadBytes    int64    `json:"maxUploadBytes"`
 	AllowedExtensions []string `json:"allowedExtensions"`
@@ -56,8 +56,7 @@ type settingsResponse struct {
 // GetSettings returns the effective workspace settings (with defaults
 // applied for any field the admin hasn't overridden). Available to all
 // authenticated users so the upload UI can show the limits before
-// attempting a request — the write side is admin-only. The Giphy API
-// key is only included for admin callers.
+// attempting a request — the write side is admin-only.
 func (h *AdminHandler) GetSettings(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.ClaimsFromContext(r.Context())
 	if claims == nil {
@@ -70,9 +69,7 @@ func (h *AdminHandler) GetSettings(w http.ResponseWriter, r *http.Request) {
 		AllowedExtensions: ws.AllowedExtensions,
 		GiphyEnabled:      ws.GiphyAPIKey != "",
 	}
-	if claims.SystemRole == model.SystemRoleAdmin {
-		resp.GiphyAPIKey = ws.GiphyAPIKey
-	}
+	resp.GiphyAPIKey = ws.GiphyAPIKey
 	writeJSON(w, http.StatusOK, resp)
 }
 

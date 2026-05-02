@@ -33,7 +33,6 @@ func NewRouter(
 	unfurlH *UnfurlHandler,
 	sidebarH *SidebarHandler,
 	searchH *SearchHandler,
-	giphyH *GiphyHandler,
 	jwtMgr *auth.JWTManager,
 	frontendFS fs.FS,
 	appVersion string,
@@ -171,12 +170,6 @@ func NewRouter(
 		mux.Handle("GET /api/v1/search/channels", middleware.WrapFunc(searchH.SearchChannels, authMW))
 		mux.Handle("GET /api/v1/search/messages", middleware.WrapFunc(searchH.SearchMessages, authMW))
 		mux.Handle("GET /api/v1/search/files", middleware.WrapFunc(searchH.SearchFiles, authMW))
-	}
-
-	// ------------------------------------------------------------------ Giphy proxy
-	if giphyH != nil {
-		mux.Handle("GET /api/v1/giphy/search", middleware.WrapFunc(giphyH.Search, authMW))
-		mux.Handle("GET /api/v1/giphy/trending", middleware.WrapFunc(giphyH.Trending, authMW))
 	}
 
 	// ------------------------------------------------------------------ Admin / settings

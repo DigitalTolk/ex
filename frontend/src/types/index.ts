@@ -81,9 +81,9 @@ export interface ChannelMembership {
 export interface WorkspaceSettings {
   maxUploadBytes: number;
   allowedExtensions: string[];
-  // Only present in admin-issued responses; non-admins receive
-  // `giphyEnabled` instead so the UI knows whether to surface the
-  // Giphy picker without ever seeing the key.
+  // Browser key used by the Giphy SDK. Present for authenticated users
+  // when the picker is enabled because GIPHY API calls must be made
+  // directly from the client, not proxied through this app.
   giphyAPIKey?: string;
   giphyEnabled?: boolean;
 }

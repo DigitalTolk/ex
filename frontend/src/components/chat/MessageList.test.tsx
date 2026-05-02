@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { BrowserRouter } from 'react-router-dom';
 import { createElement, forwardRef, useImperativeHandle, type ComponentType, type Ref } from 'react';
@@ -17,6 +17,7 @@ type Captured = {
   initialTopMostItemIndex?: unknown;
   followOutput?: unknown;
   data?: unknown[];
+  atBottomStateChange?: (atBottom: boolean) => void;
   scrollToIndexCalls: Array<{ index: number | string; align?: string }>;
 };
 const captured: Captured = { scrollToIndexCalls: [] };
@@ -26,12 +27,14 @@ vi.mock('react-virtuoso', () => {
     initialTopMostItemIndex?: unknown;
     followOutput?: unknown;
     data?: unknown[];
+    atBottomStateChange?: (atBottom: boolean) => void;
     components?: { Header?: ComponentType; Footer?: ComponentType };
   };
   const Virtuoso = forwardRef((props: VirtuosoMockProps, ref: Ref<unknown>) => {
     captured.initialTopMostItemIndex = props.initialTopMostItemIndex;
     captured.followOutput = props.followOutput;
     captured.data = props.data;
+    captured.atBottomStateChange = props.atBottomStateChange;
     useImperativeHandle(ref, () => ({
       scrollToIndex: (arg: { index: number | string; align?: string }) => {
         captured.scrollToIndexCalls.push(arg);
@@ -54,6 +57,7 @@ beforeEach(() => {
   captured.initialTopMostItemIndex = undefined;
   captured.followOutput = undefined;
   captured.data = undefined;
+  captured.atBottomStateChange = undefined;
   captured.scrollToIndexCalls.length = 0;
 });
 
@@ -419,6 +423,52 @@ describe('MessageList Virtuoso wiring (regression contract)', () => {
     await new Promise((r) => setTimeout(r, 50));
     const endCalls = captured.scrollToIndexCalls.filter((c) => c.align === 'end');
     expect(endCalls.length).toBeGreaterThan(0);
+  });
+
+  it('live-tail mount: content growth re-snaps during bottom intent, then user interaction cancels it', async () => {
+    let resizeCallback: ResizeObserverCallback | undefined;
+    class TrackingRO {
+      constructor(cb: ResizeObserverCallback) {
+        resizeCallback = cb;
+      }
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    }
+    const original = (globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver;
+    (globalThis as unknown as { ResizeObserver: typeof TrackingRO }).ResizeObserver = TrackingRO;
+    try {
+      const captured = await renderAndCaptureVirtuoso(
+        <MessageList {...defaultProps} pages={[{ items: [makeMessage()] }]} hasPreviousPage={false} />
+      );
+      const scroller = document.querySelector<HTMLElement>('[data-virtuoso-scroller]');
+      if (!scroller) throw new Error('missing mocked Virtuoso scroller');
+      let scrollHeight = 100;
+      Object.defineProperty(scroller, 'scrollHeight', {
+        configurable: true,
+        get: () => scrollHeight,
+      });
+      captured.atBottomStateChange?.(false);
+      captured.scrollToIndexCalls.length = 0;
+
+      scrollHeight = 200;
+      resizeCallback?.(
+        [{ target: scroller, contentRect: { width: 1024, height: 768 } } as ResizeObserverEntry],
+        {} as ResizeObserver,
+      );
+      expect(captured.scrollToIndexCalls).toContainEqual({ index: 'LAST', align: 'end' });
+
+      fireEvent.wheel(scroller);
+      captured.scrollToIndexCalls.length = 0;
+      scrollHeight = 300;
+      resizeCallback?.(
+        [{ target: scroller, contentRect: { width: 1024, height: 768 } } as ResizeObserverEntry],
+        {} as ResizeObserver,
+      );
+      expect(captured.scrollToIndexCalls).toEqual([]);
+    } finally {
+      (globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver = original;
+    }
   });
 
   it('live-tail mount: DOES attach a ResizeObserver — needed to re-snap when the banner appears or content grows', async () => {

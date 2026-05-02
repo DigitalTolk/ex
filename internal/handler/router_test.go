@@ -26,7 +26,7 @@ func TestNewRouterDoesNotPanic(t *testing.T) {
 	wsH := &WSHandler{}
 
 	// This is the call that panics if routes conflict.
-	router := NewRouter(authH, userH, channelH, convH, wsH, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, jwtMgr, nil, "test", "*")
+	router := NewRouter(authH, userH, channelH, convH, wsH, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, jwtMgr, nil, "test", "*")
 
 	if router == nil {
 		t.Fatal("expected non-nil router")
@@ -36,7 +36,7 @@ func TestNewRouterDoesNotPanic(t *testing.T) {
 // TestRouterHealthEndpoint verifies the health check endpoint works.
 func TestRouterHealthEndpoint(t *testing.T) {
 	jwtMgr := auth.NewJWTManager("test-secret", 15*time.Minute, 24*time.Hour)
-	router := NewRouter(&AuthHandler{}, &UserHandler{}, &ChannelHandler{}, &ConversationHandler{}, &WSHandler{}, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, jwtMgr, nil, "test", "*")
+	router := NewRouter(&AuthHandler{}, &UserHandler{}, &ChannelHandler{}, &ConversationHandler{}, &WSHandler{}, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, jwtMgr, nil, "test", "*")
 
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	rec := httptest.NewRecorder()
@@ -52,7 +52,7 @@ func TestRouterHealthEndpoint(t *testing.T) {
 // it means the route matched but auth middleware rejected the request).
 func TestRouterRegisteredRoutes(t *testing.T) {
 	jwtMgr := auth.NewJWTManager("test-secret", 15*time.Minute, 24*time.Hour)
-	router := NewRouter(&AuthHandler{}, &UserHandler{}, &ChannelHandler{}, &ConversationHandler{}, &WSHandler{}, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, jwtMgr, nil, "test", "*")
+	router := NewRouter(&AuthHandler{}, &UserHandler{}, &ChannelHandler{}, &ConversationHandler{}, &WSHandler{}, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, jwtMgr, nil, "test", "*")
 
 	routes := []struct {
 		method string
@@ -99,13 +99,13 @@ func TestIsULID(t *testing.T) {
 		input string
 		want  bool
 	}{
-		{valid26, true},                          // standard ULID
-		{valid26[:25], false},                     // 25 chars — too short
-		{valid26 + "X", false},                    // 27 chars — too long
-		{"01arz3ndektsv4rrffq69g5fav", true},      // lowercase OK
+		{valid26, true},                      // standard ULID
+		{valid26[:25], false},                // 25 chars — too short
+		{valid26 + "X", false},               // 27 chars — too long
+		{"01arz3ndektsv4rrffq69g5fav", true}, // lowercase OK
 		{"general", false},
 		{"my-cool-channel", false},
-		{"01ARZ3NDEKTSV4RRFFQ69G5FA!", false},     // 26 chars but has special char
+		{"01ARZ3NDEKTSV4RRFFQ69G5FA!", false}, // 26 chars but has special char
 		{"", false},
 	}
 	for _, tt := range tests {
@@ -166,7 +166,6 @@ func TestNewRouter_AllOptionalHandlersWired(t *testing.T) {
 		&UnfurlHandler{},
 		&SidebarHandler{},
 		&SearchHandler{},
-		&GiphyHandler{},
 		jwtMgr, nil, "test", "*",
 	)
 	if router == nil {

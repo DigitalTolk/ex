@@ -6,6 +6,17 @@ import { apiFetch } from '@/lib/api';
 
 vi.mock('@/lib/api', () => ({ apiFetch: vi.fn() }));
 
+const giphyFetchMocks = vi.hoisted(() => ({
+  search: vi.fn(),
+  trending: vi.fn(),
+}));
+
+vi.mock('@giphy/js-fetch-api', () => ({
+  GiphyFetch: vi.fn(function GiphyFetch() {
+    return giphyFetchMocks;
+  }),
+}));
+
 vi.mock('@/hooks/useAttachments', () => ({
   uploadAttachment: vi.fn(),
   useDeleteDraftAttachment: () => ({ mutateAsync: vi.fn(), mutate: vi.fn(), isPending: false }),
@@ -58,7 +69,7 @@ vi.mock('@giphy/react-components', async () => {
   return { Grid };
 });
 
-const giphyEnabled = { maxUploadBytes: 0, allowedExtensions: [], giphyEnabled: true };
+const giphyEnabled = { maxUploadBytes: 0, allowedExtensions: [], giphyEnabled: true, giphyAPIKey: 'browser-key' };
 const giphyDisabled = { maxUploadBytes: 0, allowedExtensions: [], giphyEnabled: false };
 
 let mockSettings: typeof giphyEnabled = giphyDisabled;
@@ -82,6 +93,8 @@ function renderInput(onSend = vi.fn()) {
 describe('MessageInput — Giphy integration', () => {
   beforeEach(() => {
     vi.mocked(apiFetch).mockReset();
+    giphyFetchMocks.search.mockReset();
+    giphyFetchMocks.trending.mockReset();
   });
 
   it('hides the GIF toolbar button when Giphy is disabled', () => {
@@ -90,14 +103,17 @@ describe('MessageInput — Giphy integration', () => {
     expect(screen.queryByLabelText('GIF')).toBeNull();
   });
 
-  it('shows the GIF toolbar button when Giphy is enabled and inserts a markdown image with explicit dimensions on pick', async () => {
+  it('shows the GIF toolbar button when Giphy is enabled and inserts a Giphy ID reference on pick', async () => {
     mockSettings = giphyEnabled;
-    vi.mocked(apiFetch).mockResolvedValue({
+    giphyFetchMocks.trending.mockResolvedValue({
       data: [
         {
           id: 'g-1',
           title: 'cat',
-          images: { original: { url: 'https://media.giphy.com/g-1.gif', width: 300, height: 200 } },
+          images: {
+            original: { url: 'https://media.giphy.com/g-1.gif', width: 300, height: 200 },
+            original_mp4: { mp4: 'https://media.giphy.com/g-1.mp4?cid=keep', width: 300, height: 200 },
+          },
         },
       ],
       pagination: { total_count: 1, count: 1, offset: 0 },
@@ -111,10 +127,11 @@ describe('MessageInput — Giphy integration', () => {
 
     await waitFor(() => {
       const editor = screen.getByLabelText('Message input');
-      // The composer wraps the picked URL in `![title](url =WxH)`
-      // so the renderer can reserve the layout box.
-      expect(editor.textContent ?? '').toContain('https://media.giphy.com/g-1.gif');
-      expect(editor.textContent ?? '').toContain('=300x200');
+      // Store only the selected content ID; returned media URLs are
+      // resolved directly from GIPHY when the message renders. Dimensions
+      // are stored so the eventual message can reserve stable layout.
+      expect(editor.textContent ?? '').toContain('![GIPHY](giphy:g-1 =300x200)');
+      expect(editor.textContent ?? '').not.toContain('media.giphy.com');
     });
   });
 });

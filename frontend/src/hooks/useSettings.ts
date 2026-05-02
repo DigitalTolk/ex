@@ -9,11 +9,12 @@ const DEFAULT_WORKSPACE_SETTINGS: WorkspaceSettings = {
   giphyEnabled: false,
 };
 
-export function useWorkspaceSettings() {
+export function useWorkspaceSettings(enabled = true) {
   return useQuery({
     queryKey: queryKeys.workspaceSettings(),
     queryFn: async () =>
       (await apiFetch<WorkspaceSettings>('/api/v1/admin/settings')) ?? DEFAULT_WORKSPACE_SETTINGS,
+    enabled,
     staleTime: 5 * 60 * 1000,
   });
 }
