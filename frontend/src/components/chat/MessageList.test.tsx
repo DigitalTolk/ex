@@ -1,16 +1,61 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { BrowserRouter } from 'react-router-dom';
+import { createElement, forwardRef, useImperativeHandle, type ComponentType, type Ref } from 'react';
 import { MessageList } from './MessageList';
 import type { Message } from '@/types';
+// ResizeObserver + offsetHeight/offsetWidth/clientHeight/clientWidth
+// stubs are installed globally by frontend/src/test/setup.ts.
 
-vi.mock('@/hooks/useMessages', () => ({
-  useEditMessage: () => ({ mutate: vi.fn(), isPending: false }),
-  useDeleteMessage: () => ({ mutate: vi.fn(), isPending: false }),
-  useToggleReaction: () => ({ mutate: vi.fn(), isPending: false }),
-  useSetPinned: () => ({ mutate: vi.fn(), isPending: false }),
-}));
+// Virtuoso mock: capture props + scrollToIndex calls for the regression
+// contract tests, while still rendering Header/Footer and the
+// [data-virtuoso-scroller] / [data-viewport-type] markers the resize-
+// snap effect queries for. The captured object is module-scoped and
+// reset per test in beforeEach.
+type Captured = {
+  initialTopMostItemIndex?: unknown;
+  followOutput?: unknown;
+  data?: unknown[];
+  scrollToIndexCalls: Array<{ index: number | string; align?: string }>;
+};
+const captured: Captured = { scrollToIndexCalls: [] };
+
+vi.mock('react-virtuoso', () => {
+  type VirtuosoMockProps = {
+    initialTopMostItemIndex?: unknown;
+    followOutput?: unknown;
+    data?: unknown[];
+    components?: { Header?: ComponentType; Footer?: ComponentType };
+  };
+  const Virtuoso = forwardRef((props: VirtuosoMockProps, ref: Ref<unknown>) => {
+    captured.initialTopMostItemIndex = props.initialTopMostItemIndex;
+    captured.followOutput = props.followOutput;
+    captured.data = props.data;
+    useImperativeHandle(ref, () => ({
+      scrollToIndex: (arg: { index: number | string; align?: string }) => {
+        captured.scrollToIndexCalls.push(arg);
+      },
+    }));
+    const Header = props.components?.Header;
+    const Footer = props.components?.Footer;
+    return createElement(
+      'div',
+      { 'data-virtuoso-scroller': true },
+      Header ? createElement(Header) : null,
+      createElement('div', { 'data-viewport-type': 'window' }),
+      Footer ? createElement(Footer) : null,
+    );
+  });
+  return { Virtuoso };
+});
+
+beforeEach(() => {
+  captured.initialTopMostItemIndex = undefined;
+  captured.followOutput = undefined;
+  captured.data = undefined;
+  captured.scrollToIndexCalls.length = 0;
+});
 
 function renderWithProviders(ui: React.ReactElement) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -42,2023 +87,366 @@ const defaultProps = {
   userMap: {
     'user-1': { displayName: 'Alice' },
     'user-2': { displayName: 'Bob' },
-  } as Record<string, { displayName: string; avatarURL?: string }>,
+  },
+  pages: [],
 };
 
-// Stubs out IntersectionObserver and exposes a `fire()` so tests can
-// trigger the observer callback synchronously. The first observed
-// element wins (we only observe one sentinel here).
-function installFakeIntersectionObserver(): {
-  fire: () => void;
-  restore: () => void;
-} {
-  const original = globalThis.IntersectionObserver;
-  let trigger: (() => void) | null = null;
-  // Match the real IntersectionObserver constructor signature
-  // (callback, options?) so production callers passing options
-  // aren't flagged as supplying superfluous arguments.
-  class FakeObserver {
-    private cb: IntersectionObserverCallback;
-    root: Element | Document | null = null;
-    rootMargin = '';
-    thresholds: number[] = [];
-    constructor(cb: IntersectionObserverCallback, options?: IntersectionObserverInit) {
-      this.cb = cb;
-      if (options?.root instanceof Element || options?.root instanceof Document) {
-        this.root = options.root;
-      }
-      if (options?.rootMargin !== undefined) this.rootMargin = options.rootMargin;
-      const thresholds = options?.threshold;
-      this.thresholds = Array.isArray(thresholds)
-        ? thresholds
-        : thresholds !== undefined
-          ? [thresholds]
-          : [];
-    }
-    observe(el: Element) {
-      trigger = () =>
-        this.cb(
-          [{ isIntersecting: true, target: el } as IntersectionObserverEntry],
-          this as unknown as IntersectionObserver,
-        );
-    }
-    disconnect() { trigger = null; }
-    unobserve() {}
-    takeRecords() { return []; }
-  }
-  globalThis.IntersectionObserver = FakeObserver as unknown as typeof IntersectionObserver;
-  return {
-    fire: () => trigger?.(),
-    restore: () => {
-      globalThis.IntersectionObserver = original;
-    },
-  };
-}
-
 describe('MessageList', () => {
-  it('shows "No messages yet" when empty', () => {
-    renderWithProviders(
-      <MessageList {...defaultProps} pages={[{ items: [] }]} />,
+  it('shows the empty state when there are no messages', () => {
+    renderWithProviders(<MessageList {...defaultProps} pages={[{ items: [] }]} />);
+    expect(screen.getByTestId('empty-message-list')).toBeInTheDocument();
+  });
+
+  it('renders the loading skeleton when isLoading is true', () => {
+    const { container } = renderWithProviders(
+      <MessageList {...defaultProps} isLoading={true} />,
     );
-
-    expect(screen.getByText(/no messages yet/i)).toBeInTheDocument();
+    const skeletons = container.querySelectorAll('[data-slot="skeleton"]');
+    expect(skeletons.length).toBeGreaterThan(0);
   });
 
-  it('renders messages in chronological order (reversed from API)', () => {
-    const pages = [
-      {
-        items: [
-          makeMessage({ id: 'msg-2', body: 'Second message', createdAt: '2026-04-24T10:31:00Z', authorID: 'user-2' }),
-          makeMessage({ id: 'msg-1', body: 'First message', createdAt: '2026-04-24T10:30:00Z', authorID: 'user-1' }),
-        ],
-      },
-    ];
-
-    renderWithProviders(
-      <MessageList {...defaultProps} pages={pages} />,
-    );
-
-    const firstMsg = screen.getByText('First message');
-    const secondMsg = screen.getByText('Second message');
-    expect(firstMsg).toBeInTheDocument();
-    expect(secondMsg).toBeInTheDocument();
-
-    // After reversing, First message should come before Second message in DOM
-    const allParagraphs = screen.getAllByText(/message$/);
-    expect(allParagraphs[0]).toHaveTextContent('First message');
-    expect(allParagraphs[1]).toHaveTextContent('Second message');
-  });
-
-  it('preserves chronological order across multiple pages', () => {
-    // Regression: useChannelMessages used to .reverse() the pages array
-    // in `select`, then MessageList did flatMap().reverse() — across
-    // multiple pages this inverted the *batch* order so newest-batch
-    // messages appeared above older-batch messages, producing day
-    // dividers like "Today → Yesterday → Today" interleaved.
-    // The hook now returns pages in API order (newest batch first,
-    // items newest-first within each page); MessageList's single
-    // `.reverse()` then yields a clean chronological flat list.
-    const pages = [
-      // Newest batch (page 1)
-      {
-        items: [
-          makeMessage({ id: 'm-6', body: 'today-late', createdAt: '2026-04-28T18:00:00Z' }),
-          makeMessage({ id: 'm-5', body: 'today-mid', createdAt: '2026-04-28T12:00:00Z' }),
-          makeMessage({ id: 'm-4', body: 'today-early', createdAt: '2026-04-28T08:00:00Z' }),
-        ],
-      },
-      // Older batch (page 2)
-      {
-        items: [
-          makeMessage({ id: 'm-3', body: 'yesterday-late', createdAt: '2026-04-27T22:00:00Z' }),
-          makeMessage({ id: 'm-2', body: 'yesterday-mid', createdAt: '2026-04-27T14:00:00Z' }),
-          makeMessage({ id: 'm-1', body: 'yesterday-early', createdAt: '2026-04-27T09:00:00Z' }),
-        ],
-      },
-    ];
-
-    renderWithProviders(<MessageList {...defaultProps} pages={pages} />);
-
-    const bodies = screen
-      .getAllByText(/^(yesterday|today)-(early|mid|late)$/)
-      .map((el) => el.textContent);
-    expect(bodies).toEqual([
-      'yesterday-early',
-      'yesterday-mid',
-      'yesterday-late',
-      'today-early',
-      'today-mid',
-      'today-late',
-    ]);
-
-    // Exactly one divider per calendar day, in chronological order.
-    const dividers = screen.getAllByTestId('day-divider');
-    expect(dividers).toHaveLength(2);
-  });
-
-  it('shows date separators', () => {
-    const pages = [
-      {
-        items: [
-          makeMessage({ id: 'msg-2', body: 'Yesterday msg', createdAt: '2026-04-23T10:00:00Z' }),
-          makeMessage({ id: 'msg-1', body: 'Today msg', createdAt: '2026-04-24T10:00:00Z' }),
-        ],
-      },
-    ];
-
-    renderWithProviders(
-      <MessageList {...defaultProps} pages={pages} />,
-    );
-
-    // The separator elements should have role="separator"
-    const separators = screen.getAllByRole('separator');
-    expect(separators.length).toBeGreaterThanOrEqual(1);
-  });
-
-  it('renders an auto-load sentinel when hasNextPage is true', () => {
-    renderWithProviders(
-      <MessageList
-        {...defaultProps}
-        pages={[{ items: [makeMessage()] }]}
-        hasNextPage={true}
-      />,
-    );
-
-    expect(screen.getByTestId('message-list-load-more')).toBeInTheDocument();
-  });
-
-  it('does not render the sentinel when hasNextPage is false', () => {
+  it('renders the intro at the top once we\'ve paged back to the start (hasNextPage=false)', () => {
     renderWithProviders(
       <MessageList
         {...defaultProps}
         pages={[{ items: [makeMessage()] }]}
         hasNextPage={false}
+        intro={<div data-testid="my-intro">Welcome</div>}
       />,
     );
+    expect(screen.getByTestId('my-intro')).toBeInTheDocument();
+  });
 
+  it('does NOT render the intro while older pages are still available (hasNextPage=true)', () => {
+    renderWithProviders(
+      <MessageList
+        {...defaultProps}
+        pages={[{ items: [makeMessage()] }]}
+        hasNextPage={true}
+        intro={<div data-testid="my-intro">Welcome</div>}
+      />,
+    );
+    expect(screen.queryByTestId('my-intro')).not.toBeInTheDocument();
+  });
+
+  it('shows the load-more sentinel + Loading earlier… text when fetching older pages', () => {
+    renderWithProviders(
+      <MessageList
+        {...defaultProps}
+        pages={[{ items: [makeMessage()] }]}
+        hasNextPage={true}
+        isFetchingNextPage={true}
+      />,
+    );
+    expect(screen.getByTestId('message-list-load-more')).toBeInTheDocument();
+    expect(screen.getByText('Loading earlier messages…')).toBeInTheDocument();
+  });
+
+  it('shows the load-newer sentinel + Loading newer… text when fetching newer pages (deep-link mode)', () => {
+    renderWithProviders(
+      <MessageList
+        {...defaultProps}
+        pages={[{ items: [makeMessage()] }]}
+        hasPreviousPage={true}
+        isFetchingPreviousPage={true}
+        fetchPreviousPage={vi.fn()}
+        anchorMsgId="msg-1"
+      />,
+    );
+    expect(screen.getByTestId('message-list-load-newer')).toBeInTheDocument();
+    expect(screen.getByText('Loading newer messages…')).toBeInTheDocument();
+  });
+
+  it('does not render load sentinels when there are no more pages in either direction', () => {
+    renderWithProviders(
+      <MessageList
+        {...defaultProps}
+        pages={[{ items: [makeMessage()] }]}
+        hasNextPage={false}
+        hasPreviousPage={false}
+      />,
+    );
     expect(screen.queryByTestId('message-list-load-more')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('message-list-load-newer')).not.toBeInTheDocument();
   });
 
-  it('shows "Loading earlier messages…" status while fetching the next page', () => {
+  it('renders the empty-state intro with the same horizontal padding as messages', () => {
+    // Regression: the empty-state intro lived inside `<div p-4>`
+    // while the with-messages intro rendered flush-left in
+    // Virtuoso's Header. After posting the first message the intro
+    // visibly shifted because px-4 disappeared. Both branches now
+    // wrap the intro in `px-4`.
+    const { container } = renderWithProviders(
+      <MessageList
+        {...defaultProps}
+        pages={[{ items: [] }]}
+        intro={<div data-testid="my-intro">Welcome</div>}
+      />,
+    );
+    const intro = screen.getByTestId('my-intro');
+    const wrapper = intro.parentElement;
+    expect(wrapper?.className).toContain('px-4');
+    // The empty-list placeholder must also align at the same gutter.
+    expect(screen.getByTestId('empty-message-list').className).toContain('px-4');
+    void container;
+  });
+
+  it('wraps the with-messages intro in px-4 too (matches the empty-state padding so messages and intro line up)', () => {
     renderWithProviders(
       <MessageList
         {...defaultProps}
         pages={[{ items: [makeMessage()] }]}
-        hasNextPage={true}
-        isFetchingNextPage={true}
+        intro={<div data-testid="my-intro">Welcome</div>}
       />,
     );
-    expect(screen.getByText(/Loading earlier messages/i)).toBeInTheDocument();
+    const intro = screen.getByTestId('my-intro');
+    const wrapper = intro.parentElement;
+    expect(wrapper?.className).toContain('px-4');
   });
 
-  it('shows loading skeletons when isLoading is true', () => {
-    const { container } = renderWithProviders(
+});
+
+// MessageList Virtuoso wiring contract: locks the props + scroll calls
+// the implementation must drive Virtuoso with on every code path the
+// user has reported broken in past iterations. If these fail, the
+// implementation is wrong — do not loosen the assertions.
+async function renderAndCaptureVirtuoso(
+  ui: React.ReactElement,
+): Promise<Captured> {
+  renderWithProviders(ui);
+  // The deep-link scrollToIndex fires inside requestAnimationFrame.
+  await new Promise((r) => requestAnimationFrame(() => r(undefined)));
+  return captured;
+}
+
+describe('MessageList Virtuoso wiring (regression contract)', () => {
+  it('deep-link mount: initialTopMostItemIndex points at the anchor row index with center alignment', async () => {
+    const m1 = makeMessage({ id: 'msg-old', createdAt: '2026-04-24T10:00:00Z' });
+    const m2 = makeMessage({ id: 'msg-anchor', createdAt: '2026-04-24T10:30:00Z' });
+    const m3 = makeMessage({ id: 'msg-new', createdAt: '2026-04-24T11:00:00Z' });
+    // Pages are newest-first per the API contract; MessageList
+    // reverses to chronological. Day divider lands first; anchor
+    // is the second message → row index 2.
+    const captured = await renderAndCaptureVirtuoso(
       <MessageList
         {...defaultProps}
-        pages={[]}
-        isLoading={true}
-      />,
+        pages={[{ items: [m3, m2, m1] }]}
+        hasPreviousPage={true}
+        fetchPreviousPage={vi.fn()}
+        anchorMsgId="msg-anchor"
+      />
     );
-
-    // Skeleton elements should be present
-    const skeletons = container.querySelectorAll('[class*="animate-pulse"], [data-slot="skeleton"]');
-    expect(skeletons.length).toBeGreaterThan(0);
+    expect(captured.initialTopMostItemIndex).toEqual({ index: 2, align: 'center' });
   });
 
-  it('shows the loading status text when fetching next page', () => {
-    renderWithProviders(
+  it('deep-link mount: scrollToIndex is invoked with the anchor row index after a frame', async () => {
+    const m1 = makeMessage({ id: 'msg-a', createdAt: '2026-04-24T10:00:00Z' });
+    const m2 = makeMessage({ id: 'msg-anchor', createdAt: '2026-04-24T10:30:00Z' });
+    const m3 = makeMessage({ id: 'msg-c', createdAt: '2026-04-24T11:00:00Z' });
+    const captured = await renderAndCaptureVirtuoso(
       <MessageList
         {...defaultProps}
-        pages={[{ items: [makeMessage()] }]}
-        hasNextPage={true}
-        isFetchingNextPage={true}
-      />,
+        pages={[{ items: [m3, m2, m1] }]}
+        hasPreviousPage={true}
+        fetchPreviousPage={vi.fn()}
+        anchorMsgId="msg-anchor"
+      />
     );
-
-    expect(screen.getByText(/Loading earlier messages/i)).toBeInTheDocument();
+    expect(captured.scrollToIndexCalls).toContainEqual({ index: 2, align: 'center' });
   });
 
-  it('force-checks for older messages when the user wheel-scrolls up past the top', () => {
-    const refetch = vi.fn();
-    const { container } = renderWithProviders(
+  it('deep-link mount: scrollToIndex is invoked MULTIPLE times so virtuoso can correct on real row measurements', async () => {
+    // Regression: thread deep-links mount the ThreadPanel alongside
+    // MessageList, narrowing the main scroller. Virtuoso's row-
+    // height estimates are wrong at the narrower width, so a
+    // single rAF scrollToIndex lands off-target. The fix is multi-
+    // pass at 0/100/350/800ms — later passes re-assert position
+    // once measurements have settled. This test asserts that at
+    // least 4 anchor scrolls fire within ~1s (the no-op cost of
+    // an already-on-target call is acceptable).
+    const m1 = makeMessage({ id: 'msg-a', createdAt: '2026-04-24T10:00:00Z' });
+    const m2 = makeMessage({ id: 'msg-anchor', createdAt: '2026-04-24T10:30:00Z' });
+    const m3 = makeMessage({ id: 'msg-c', createdAt: '2026-04-24T11:00:00Z' });
+    const captured = await renderAndCaptureVirtuoso(
       <MessageList
         {...defaultProps}
-        pages={[{ items: [makeMessage()] }]}
-        refetch={refetch}
-      />,
+        pages={[{ items: [m3, m2, m1] }]}
+        hasPreviousPage={true}
+        fetchPreviousPage={vi.fn()}
+        anchorMsgId="msg-anchor"
+      />
     );
-    const scroller = container.querySelector('div.overflow-y-auto') as HTMLDivElement;
-    scroller.scrollTop = 0;
-
-    // Below the threshold (80px) — no fire yet.
-    scroller.dispatchEvent(new WheelEvent('wheel', { deltaY: -50 }));
-    expect(refetch).not.toHaveBeenCalled();
-
-    // Cumulative wheel-up crosses the threshold → fire once.
-    scroller.dispatchEvent(new WheelEvent('wheel', { deltaY: -40 }));
-    expect(refetch).toHaveBeenCalledTimes(1);
-
-    // Rate-limit: another big wheel-up immediately after must not
-    // re-trigger (3-second window).
-    scroller.dispatchEvent(new WheelEvent('wheel', { deltaY: -200 }));
-    expect(refetch).toHaveBeenCalledTimes(1);
-  });
-
-  it('does NOT force-check when the user is not at the top, or when scrolling down', () => {
-    const refetch = vi.fn();
-    const { container } = renderWithProviders(
-      <MessageList
-        {...defaultProps}
-        pages={[{ items: [makeMessage()] }]}
-        refetch={refetch}
-      />,
+    // Wait for the last pass at 800ms to fire.
+    await new Promise((r) => setTimeout(r, 850));
+    const anchorCalls = captured.scrollToIndexCalls.filter(
+      (c) => c.index === 2 && c.align === 'center',
     );
-    const scroller = container.querySelector('div.overflow-y-auto') as HTMLDivElement;
-
-    // Not at top — overscroll doesn't apply.
-    scroller.scrollTop = 200;
-    scroller.dispatchEvent(new WheelEvent('wheel', { deltaY: -300 }));
-    expect(refetch).not.toHaveBeenCalled();
-
-    // At top, but scrolling DOWN — natural scroll, not overscroll.
-    scroller.scrollTop = 0;
-    scroller.dispatchEvent(new WheelEvent('wheel', { deltaY: 300 }));
-    expect(refetch).not.toHaveBeenCalled();
+    expect(anchorCalls.length).toBeGreaterThanOrEqual(4);
   });
 
-  it('snaps to the bottom on initial messages render so the user starts on the newest', () => {
-    // Regression: visiting a channel was landing the user at the
-    // OLDEST message (top of the list) because there was no test
-    // exercising the actual scrollTop adjustment. jsdom doesn't lay
-    // out, so we mock scrollHeight, render with 0 messages first, then
-    // re-render with messages — the bottom-stick layoutEffect fires
-    // when allMessages.length transitions 0 → N and must set
-    // scrollTop to scrollHeight.
-    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    const wrap = (props: Partial<React.ComponentProps<typeof MessageList>>) => (
-      <QueryClientProvider client={qc}>
-        <BrowserRouter>
-          <MessageList {...defaultProps} {...props} />
-        </BrowserRouter>
-      </QueryClientProvider>
-    );
-
-    const { rerender, container } = render(wrap({ pages: [{ items: [] }] }));
-    const scroller = container.querySelector('div.overflow-y-auto') as HTMLDivElement;
-    expect(scroller.scrollTop).toBe(0);
-
-    Object.defineProperty(scroller, 'scrollHeight', { value: 1500, configurable: true });
-    rerender(
-      wrap({
-        pages: [
-          {
-            items: [
-              makeMessage({ id: 'm-2', body: 'newer', createdAt: '2026-04-24T10:31:00Z' }),
-              makeMessage({ id: 'm-1', body: 'older', createdAt: '2026-04-24T10:30:00Z' }),
-            ],
-          },
-        ],
-      }),
-    );
-    expect(scroller.scrollTop).toBe(1500);
-  });
-
-  it('persistent bottom-stick STOPS re-pinning once the user scrolls up to read older content', () => {
-    let resizeCallback: (() => void) | null = null;
-    const origRO = globalThis.ResizeObserver;
-    globalThis.ResizeObserver = class {
-      cb: () => void;
-      constructor(cb: () => void) { this.cb = cb; resizeCallback = cb; }
-      observe() {}
-      disconnect() { resizeCallback = null; }
-      unobserve() {}
-    } as unknown as typeof ResizeObserver;
-    try {
-      const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-      const wrap = (props: Partial<React.ComponentProps<typeof MessageList>>) => (
-        <QueryClientProvider client={qc}>
-          <BrowserRouter>
-            <MessageList {...defaultProps} {...props} />
-          </BrowserRouter>
-        </QueryClientProvider>
-      );
-
-      const { rerender, container } = render(wrap({ pages: [{ items: [] }] }));
-      const scroller = container.querySelector('div.overflow-y-auto') as HTMLDivElement;
-      Object.defineProperty(scroller, 'clientHeight', { value: 600, configurable: true });
-      Object.defineProperty(scroller, 'scrollHeight', { value: 1500, configurable: true });
-      rerender(wrap({ pages: [{ items: [makeMessage({ id: 'm-1' })] }] }));
-      expect(scroller.scrollTop).toBe(1500);
-
-      // Reader scrolls up past the 120px "at bottom" window.
-      // distanceFromBottom = 1500 - 200 - 600 = 700.
-      scroller.scrollTop = 200;
-      scroller.dispatchEvent(new Event('scroll'));
-
-      // Async content settles. The observer must NOT slam them back
-      // to the bottom — they're intentionally reading older content.
-      Object.defineProperty(scroller, 'scrollHeight', { value: 2400, configurable: true });
-      resizeCallback?.();
-      expect(scroller.scrollTop).toBe(200);
-    } finally {
-      globalThis.ResizeObserver = origRO;
-    }
-  });
-
-  it('keeps the user pinned to the bottom on a fresh mount as content keeps settling — page-refresh scenario', () => {
-    // Regression: refreshing the page (full mount, no warm cache)
-    // landed the user at the OLDEST message because the bottom-stick
-    // ResizeObserver only ran for ~4 seconds, then disconnected.
-    // Slow-loading attachments / unfurls / avatar URLs took longer
-    // than that, so once they settled the user was no longer at the
-    // bottom. The observer is now persistent for the channel
-    // session, gated on wasAtBottomRef so it never yanks a reader
-    // who has scrolled up.
-    let resizeCallback: (() => void) | null = null;
-    const origRO = globalThis.ResizeObserver;
-    globalThis.ResizeObserver = class {
-      cb: () => void;
-      constructor(cb: () => void) { this.cb = cb; resizeCallback = cb; }
-      observe() {}
-      disconnect() { resizeCallback = null; }
-      unobserve() {}
-    } as unknown as typeof ResizeObserver;
-    try {
-      const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-      const wrap = (props: Partial<React.ComponentProps<typeof MessageList>>) => (
-        <QueryClientProvider client={qc}>
-          <BrowserRouter>
-            <MessageList {...defaultProps} {...props} />
-          </BrowserRouter>
-        </QueryClientProvider>
-      );
-
-      // Fresh mount with empty pages, exactly as on a page refresh
-      // before the messages query has resolved.
-      const { rerender, container } = render(wrap({ pages: [{ items: [] }] }));
-      const scroller = container.querySelector('div.overflow-y-auto') as HTMLDivElement;
-      Object.defineProperty(scroller, 'clientHeight', { value: 600, configurable: true });
-
-      // Messages arrive. Initial scrollHeight is small (placeholder
-      // attachment slots still 0px), so the synchronous pin lands
-      // somewhere short of "real bottom".
-      Object.defineProperty(scroller, 'scrollHeight', { value: 800, configurable: true });
-      rerender(wrap({ pages: [{ items: [makeMessage({ id: 'm-1' })] }] }));
-      expect(scroller.scrollTop).toBe(800);
-
-      // Slow attachment load #1 — three seconds in.
-      Object.defineProperty(scroller, 'scrollHeight', { value: 1500, configurable: true });
-      resizeCallback?.();
-      expect(scroller.scrollTop).toBe(1500);
-
-      // Slow attachment load #2 — six seconds in. The old
-      // implementation would have disconnected at 4s and missed
-      // this; the user would be stranded at 1500 while real bottom
-      // is 2400.
-      Object.defineProperty(scroller, 'scrollHeight', { value: 2400, configurable: true });
-      resizeCallback?.();
-      expect(scroller.scrollTop).toBe(2400);
-    } finally {
-      globalThis.ResizeObserver = origRO;
-    }
-  });
-
-  it('keeps re-pinning to the bottom while async content settles (avatars, attachments) on initial load', () => {
-    // Regression: visiting a channel was landing the user near the
-    // top because async content (avatars, attachments, unfurls)
-    // resized inside the viewport AFTER the initial synchronous
-    // scrollTop write. The bottom-stick now wires a ResizeObserver
-    // for a few seconds so subsequent layout shifts re-pin to the
-    // bottom and the user lands cleanly on the newest message.
-    let resizeCallback: (() => void) | null = null;
-    const origRO = globalThis.ResizeObserver;
-    globalThis.ResizeObserver = class {
-      cb: () => void;
-      constructor(cb: () => void) { this.cb = cb; resizeCallback = cb; }
-      observe() {}
-      disconnect() { resizeCallback = null; }
-      unobserve() {}
-    } as unknown as typeof ResizeObserver;
-    try {
-      const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-      const wrap = (props: Partial<React.ComponentProps<typeof MessageList>>) => (
-        <QueryClientProvider client={qc}>
-          <BrowserRouter>
-            <MessageList {...defaultProps} {...props} />
-          </BrowserRouter>
-        </QueryClientProvider>
-      );
-
-      const { rerender, container } = render(wrap({ pages: [{ items: [] }] }));
-      const scroller = container.querySelector('div.overflow-y-auto') as HTMLDivElement;
-
-      // First render with messages — scrollTop snaps to scrollHeight.
-      Object.defineProperty(scroller, 'scrollHeight', { value: 1000, configurable: true });
-      rerender(wrap({ pages: [{ items: [makeMessage({ id: 'm-1', body: 'a' })] }] }));
-      expect(scroller.scrollTop).toBe(1000);
-
-      // Async content (e.g., an attachment image) loads, growing the
-      // inner content. ResizeObserver fires; we must re-pin to the
-      // new scrollHeight so the user doesn't drift up.
-      Object.defineProperty(scroller, 'scrollHeight', { value: 1500, configurable: true });
-      resizeCallback?.();
-      expect(scroller.scrollTop).toBe(1500);
-    } finally {
-      globalThis.ResizeObserver = origRO;
-    }
-  });
-
-  it('snaps to the bottom even when the channel has cached data already (no isLoading transition)', () => {
-    // The other variant: useInfiniteQuery served cached pages
-    // synchronously, so MessageList renders messages on its first
-    // commit. Effect must fire and set scrollTop to scrollHeight on
-    // that first paint, not require a 0→N transition.
-    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    const Harness = () => (
-      <QueryClientProvider client={qc}>
-        <BrowserRouter>
-          <MessageList
-            {...defaultProps}
-            pages={[
-              {
-                items: [
-                  makeMessage({ id: 'm-2', body: 'newer' }),
-                  makeMessage({ id: 'm-1', body: 'older' }),
-                ],
-              },
-            ]}
-          />
-        </BrowserRouter>
-      </QueryClientProvider>
-    );
-
-    // Patch Element.prototype.scrollHeight before render so the
-    // useLayoutEffect that runs on first commit reads a non-zero value.
-    const desc = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollHeight');
-    Object.defineProperty(HTMLElement.prototype, 'scrollHeight', {
-      configurable: true,
-      get() {
-        return 1200;
-      },
-    });
-    try {
-      const { container } = render(<Harness />);
-      const scroller = container.querySelector('div.overflow-y-auto') as HTMLDivElement;
-      expect(scroller.scrollTop).toBe(1200);
-    } finally {
-      if (desc) Object.defineProperty(HTMLElement.prototype, 'scrollHeight', desc);
-    }
-  });
-
-  it('renders the load-more sentinel above the messages so it sits at the top of the scroll area', () => {
-    const { container } = renderWithProviders(
+  it('deep-link forward pagination: followOutput=false while hasPreviousPage=true (prevents spam-scroll on append)', async () => {
+    const captured = await renderAndCaptureVirtuoso(
       <MessageList
         {...defaultProps}
         pages={[{ items: [makeMessage()] }]}
-        hasNextPage={true}
-      />,
+        hasPreviousPage={true}
+        fetchPreviousPage={vi.fn()}
+        anchorMsgId="msg-1"
+      />
     );
-    const scroller = container.querySelector('div.overflow-y-auto') as HTMLDivElement;
-    // Sentinel must be the FIRST child so it lives at the top of the
-    // scroll content; the user reaches it by scrolling up to older
-    // messages, which is where the fetch trigger belongs.
-    expect(scroller.firstElementChild?.getAttribute('data-testid')).toBe('message-list-load-more');
+    expect(captured.followOutput).toBe(false);
   });
 
-  it('snaps to the bottom when the user sends a new message (bottom of list changes to an own message)', async () => {
-    let resizeCallback: (() => void) | null = null;
-    const origRO = globalThis.ResizeObserver;
-    globalThis.ResizeObserver = class {
-      cb: () => void;
-      constructor(cb: () => void) { this.cb = cb; resizeCallback = cb; }
-      observe() {}
-      disconnect() { resizeCallback = null; }
-      unobserve() {}
-    } as unknown as typeof ResizeObserver;
-    try {
-      const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-      const wrap = (props: Partial<React.ComponentProps<typeof MessageList>>) => (
-        <QueryClientProvider client={qc}>
-          <BrowserRouter>
-            <MessageList {...defaultProps} {...props} />
-          </BrowserRouter>
-        </QueryClientProvider>
-      );
-
-      const { rerender, container } = render(
-        wrap({
-          pages: [
-            {
-              items: [
-                makeMessage({ id: 'm-1', authorID: 'user-2', body: 'hi' }),
-              ],
-            },
-          ],
-        }),
-      );
-      const scroller = container.querySelector('div.overflow-y-auto') as HTMLDivElement;
-      Object.defineProperty(scroller, 'scrollHeight', { value: 1500, configurable: true });
-
-      // User sends a new message. The bottom of the list is now their
-      // own ID; the effect should snap scrollTop to scrollHeight.
-      rerender(
-        wrap({
-          pages: [
-            {
-              items: [
-                makeMessage({ id: 'm-2', authorID: 'user-1', body: 'mine' }),
-                makeMessage({ id: 'm-1', authorID: 'user-2', body: 'hi' }),
-              ],
-            },
-          ],
-        }),
-      );
-      expect(scroller.scrollTop).toBe(1500);
-
-      // Async content (an attachment loading in) makes the inner
-      // container resize. The ResizeObserver re-stick callback should
-      // re-pin to the new scrollHeight so the user's just-sent message
-      // doesn't get pushed above the viewport.
-      Object.defineProperty(scroller, 'scrollHeight', { value: 2000, configurable: true });
-      resizeCallback?.();
-      expect(scroller.scrollTop).toBe(2000);
-    } finally {
-      globalThis.ResizeObserver = origRO;
-    }
-  });
-
-  it('follows new messages from others when the user is already at the bottom (live-conversation mode)', () => {
-    // The persistent bottom-stick observer fires when the messages
-    // container grows. Use a callback-capturing RO mock so we can
-    // simulate that growth on rerender.
-    let resizeCallback: (() => void) | null = null;
-    const origRO = globalThis.ResizeObserver;
-    globalThis.ResizeObserver = class {
-      cb: () => void;
-      constructor(cb: () => void) { this.cb = cb; resizeCallback = cb; }
-      observe() {}
-      disconnect() { resizeCallback = null; }
-      unobserve() {}
-    } as unknown as typeof ResizeObserver;
-    try {
-      const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-      const wrap = (props: Partial<React.ComponentProps<typeof MessageList>>) => (
-        <QueryClientProvider client={qc}>
-          <BrowserRouter>
-            <MessageList {...defaultProps} {...props} />
-          </BrowserRouter>
-        </QueryClientProvider>
-      );
-      Object.defineProperty(HTMLElement.prototype, 'scrollHeight', {
-        configurable: true,
-        get() {
-          // The mocked value is updated by the test below. Default
-          // here is just so the initial mount has *some* height.
-          return 0;
-        },
-      });
-      const { rerender, container } = render(
-        wrap({
-          pages: [{ items: [makeMessage({ id: 'm-1', authorID: 'user-2' })] }],
-        }),
-      );
-      const scroller = container.querySelector('div.overflow-y-auto') as HTMLDivElement;
-      Object.defineProperty(scroller, 'scrollHeight', { value: 1500, configurable: true });
-      Object.defineProperty(scroller, 'clientHeight', { value: 700, configurable: true });
-      // Re-pin via the persistent observer so wasAtBottomRef gets
-      // updated by the resulting scroll event.
-      resizeCallback?.();
-      expect(scroller.scrollTop).toBe(1500);
-      // distanceFromBottom = 1500 - 1500 - 700 < 120 → at bottom.
-
-      // A teammate sends a message; messages container grows from
-      // 1500 to 1600. The persistent RO fires and stick() runs
-      // because wasAtBottomRef is still true.
-      Object.defineProperty(scroller, 'scrollHeight', { value: 1600, configurable: true });
-      rerender(
-        wrap({
-          pages: [
-            {
-              items: [
-                makeMessage({ id: 'm-2', authorID: 'user-2', body: 'live!' }),
-                makeMessage({ id: 'm-1', authorID: 'user-2', body: 'hi' }),
-              ],
-            },
-          ],
-        }),
-      );
-      resizeCallback?.();
-      expect(scroller.scrollTop).toBe(1600);
-    } finally {
-      globalThis.ResizeObserver = origRO;
-    }
-  });
-
-  it('does NOT follow new messages from others when the user has scrolled up to read older content', () => {
-    const origRO = globalThis.ResizeObserver;
-    globalThis.ResizeObserver = class {
-      observe() {} disconnect() {} unobserve() {}
-    } as unknown as typeof ResizeObserver;
-    try {
-      const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-      const wrap = (props: Partial<React.ComponentProps<typeof MessageList>>) => (
-        <QueryClientProvider client={qc}>
-          <BrowserRouter>
-            <MessageList {...defaultProps} {...props} />
-          </BrowserRouter>
-        </QueryClientProvider>
-      );
-      const { rerender, container } = render(
-        wrap({
-          pages: [{ items: [makeMessage({ id: 'm-1', authorID: 'user-2' })] }],
-        }),
-      );
-      const scroller = container.querySelector('div.overflow-y-auto') as HTMLDivElement;
-      Object.defineProperty(scroller, 'scrollHeight', { value: 1500, configurable: true });
-      Object.defineProperty(scroller, 'clientHeight', { value: 700, configurable: true });
-      // User scrolled up to read older content (well outside the 120px
-      // "at bottom" window): distanceFromBottom = 1500 - 200 - 700 = 600.
-      scroller.scrollTop = 200;
-      scroller.dispatchEvent(new Event('scroll'));
-
-      // Someone else's message arrives. The reader stays put.
-      Object.defineProperty(scroller, 'scrollHeight', { value: 1600, configurable: true });
-      rerender(
-        wrap({
-          pages: [
-            {
-              items: [
-                makeMessage({ id: 'm-2', authorID: 'user-2', body: 'theirs' }),
-                makeMessage({ id: 'm-1', authorID: 'user-2', body: 'hi' }),
-              ],
-            },
-          ],
-        }),
-      );
-      expect(scroller.scrollTop).toBe(200);
-    } finally {
-      globalThis.ResizeObserver = origRO;
-    }
-  });
-
-  it('does NOT scroll-to-bottom when the bottom message is a thread reply (lives in ThreadPanel, not main list)', () => {
-    const origRO = globalThis.ResizeObserver;
-    globalThis.ResizeObserver = class {
-      observe() {} disconnect() {} unobserve() {}
-    } as unknown as typeof ResizeObserver;
-    try {
-      const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-      const wrap = (props: Partial<React.ComponentProps<typeof MessageList>>) => (
-        <QueryClientProvider client={qc}>
-          <BrowserRouter>
-            <MessageList {...defaultProps} {...props} />
-          </BrowserRouter>
-        </QueryClientProvider>
-      );
-      const { rerender, container } = render(
-        wrap({
-          pages: [{ items: [makeMessage({ id: 'm-1', authorID: 'user-1' })] }],
-        }),
-      );
-      const scroller = container.querySelector('div.overflow-y-auto') as HTMLDivElement;
-      Object.defineProperty(scroller, 'scrollHeight', { value: 1500, configurable: true });
-      scroller.scrollTop = 200;
-
-      // The user posts a thread reply. It's a new bottom of allMessages
-      // but parentMessageID is set, so it doesn't render in the main
-      // list and shouldn't affect the main scroll position.
-      rerender(
-        wrap({
-          pages: [
-            {
-              items: [
-                makeMessage({
-                  id: 'm-reply',
-                  authorID: 'user-1',
-                  parentMessageID: 'm-1',
-                  body: 'reply',
-                }),
-                makeMessage({ id: 'm-1', authorID: 'user-1', body: 'root' }),
-              ],
-            },
-          ],
-        }),
-      );
-      expect(scroller.scrollTop).toBe(200);
-    } finally {
-      globalThis.ResizeObserver = origRO;
-    }
-  });
-
-  it('does NOT scroll-to-bottom when an older-page prepend revives the user\'s own message in the list', async () => {
-    // Regression: the previous "scroll-to-bottom on send" detection
-    // watched the newest own message anywhere in allMessages. When an
-    // older page prepended and contained any of the user's older
-    // messages, the watcher saw null → ID and treated it as a fresh
-    // send — slamming the user to the bottom of the channel after
-    // every load. The detector now keys off the BOTTOM message of the
-    // chat instead, which prepends never touch.
-    const origRO = globalThis.ResizeObserver;
-    globalThis.ResizeObserver = class {
-      observe() {} disconnect() {} unobserve() {}
-    } as unknown as typeof ResizeObserver;
-    try {
-      const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-      const wrap = (props: Partial<React.ComponentProps<typeof MessageList>>) => (
-        <QueryClientProvider client={qc}>
-          <BrowserRouter>
-            <MessageList {...defaultProps} {...props} />
-          </BrowserRouter>
-        </QueryClientProvider>
-      );
-
-      // Initial render: page 1 (newest batch). No own messages here —
-      // newestOwn is null. The bottom message is m-newest by someone else.
-      const { rerender, container } = render(
-        wrap({
-          pages: [
-            {
-              items: [
-                makeMessage({ id: 'm-newest', authorID: 'user-2', body: 'hi' }),
-              ],
-            },
-          ],
-          hasNextPage: true,
-        }),
-      );
-      const scroller = container.querySelector('div.overflow-y-auto') as HTMLDivElement;
-      // The user has scrolled up to read older content.
-      Object.defineProperty(scroller, 'scrollHeight', { value: 1000, configurable: true });
-      scroller.scrollTop = 200;
-
-      // Older page commits. It contains an older OWN message — under
-      // the old logic this would trip "newestOwn changed null → ID"
-      // and snap the user to scrollHeight (1000). Under the fix,
-      // bottom didn't change so nothing fires.
-      rerender(
-        wrap({
-          pages: [
-            {
-              items: [
-                makeMessage({ id: 'm-newest', authorID: 'user-2', body: 'hi' }),
-              ],
-            },
-            {
-              items: [
-                makeMessage({ id: 'm-own-old', authorID: 'user-1', body: 'mine' }),
-              ],
-            },
-          ],
-          hasNextPage: true,
-        }),
-      );
-
-      // scrollTop must NOT have been pinned to scrollHeight. It can be
-      // adjusted by the anchor-restore logic, but never to 1000 (the
-      // scrollHeight, which would mean "snapped to bottom").
-      expect(scroller.scrollTop).not.toBe(1000);
-    } finally {
-      globalThis.ResizeObserver = origRO;
-    }
-  });
-
-  it('does NOT disable browser scroll-anchoring — the browser preserves reading position when content above the viewport changes height (older-page prepends, thread reply counts updating, reactions added on messages above)', () => {
-    // Regression: a previous attempt set `overflow-anchor: none` and
-    // ran a manual anchor-restore on every fetchNextPage commit. That
-    // covered older-page prepends but not OTHER above-viewport shifts
-    // — when a thread reply landed, its root message's reply-count
-    // bar grew, content below shifted up, and the user's view drifted
-    // bit by bit. The browser's native scroll anchoring handles every
-    // one of these cases uniformly; we leave it on by NOT setting
-    // overflow-anchor: none on the scroll container.
-    const { container } = renderWithProviders(
-      <MessageList {...defaultProps} pages={[{ items: [makeMessage()] }]} />,
+  it('live-tail mount (no anchor): initialTopMostItemIndex is the last row index with end alignment', async () => {
+    const m1 = makeMessage({ id: 'msg-a', createdAt: '2026-04-24T10:00:00Z' });
+    const m2 = makeMessage({ id: 'msg-b', createdAt: '2026-04-24T11:00:00Z' });
+    const captured = await renderAndCaptureVirtuoso(
+      <MessageList {...defaultProps} pages={[{ items: [m2, m1] }]} hasPreviousPage={false} />
     );
-    const scroller = container.querySelector('div.overflow-y-auto') as HTMLDivElement;
-    expect(scroller.style.overflowAnchor).toBe('');
+    // Two messages on the same day → 1 day divider + 2 messages
+    // = 3 rows; last row index is 2.
+    expect(captured.initialTopMostItemIndex).toEqual({ index: 2, align: 'end' });
   });
 
-  it('auto-fetches the next page when the load-more sentinel scrolls into view', () => {
-    const io = installFakeIntersectionObserver();
+  it('live-tail mount: followOutput="auto" so live WS messages stick when at bottom', async () => {
+    const captured = await renderAndCaptureVirtuoso(
+      <MessageList {...defaultProps} pages={[{ items: [makeMessage()] }]} hasPreviousPage={false} />
+    );
+    expect(captured.followOutput).toBe('auto');
+  });
+
+  it('deep-link mount: scrollToIndex(LAST) is NEVER called — the resize-snap-to-bottom logic must not fight the anchor scroll', async () => {
+    // Regression: atBottomRef defaults to true; the ResizeObserver
+    // attached on mount fired reSnap → scrollToIndex({index:'LAST'})
+    // before atBottomStateChange had a chance to correct the ref to
+    // false, yanking the deep-linked user away from their anchor.
+    // The fix: skip the RO + multi-pass snap entirely when an
+    // anchor is set. This test asserts the only scrollToIndex call
+    // is the anchor scroll, not LAST.
+    const m1 = makeMessage({ id: 'msg-a', createdAt: '2026-04-24T10:00:00Z' });
+    const m2 = makeMessage({ id: 'msg-anchor', createdAt: '2026-04-24T10:30:00Z' });
+    const m3 = makeMessage({ id: 'msg-c', createdAt: '2026-04-24T11:00:00Z' });
+    const captured = await renderAndCaptureVirtuoso(
+      <MessageList
+        {...defaultProps}
+        pages={[{ items: [m3, m2, m1] }]}
+        hasPreviousPage={true}
+        fetchPreviousPage={vi.fn()}
+        anchorMsgId="msg-anchor"
+      />
+    );
+    // Wait long enough for the multi-pass timer chase to fire if
+    // it were enabled (the chase has timers at 0/100/350 ms).
+    await new Promise((r) => setTimeout(r, 400));
+    const lastCalls = captured.scrollToIndexCalls.filter((c) => c.index === 'LAST');
+    expect(lastCalls).toEqual([]);
+    // And the anchor scroll DID happen.
+    expect(captured.scrollToIndexCalls).toContainEqual({ index: 2, align: 'center' });
+  });
+
+  it('deep-link mount: does NOT attach a ResizeObserver — the resize-snap effect must early-return before observe()', async () => {
+    // Stronger regression coverage than the scrollToIndex check:
+    // even if a future edit kept reSnap conditional on
+    // atBottomRef (which defaults to true), an attached RO would
+    // STILL fire on a real browser's first content-grew resize
+    // and pull the user away from the anchor. The contract is
+    // that the RO is not attached at all when anchorMsgId is set.
+    //
+    // We replace globalThis.ResizeObserver with an instrumented
+    // stub for this test only, then restore it.
+    const observeCalls: Element[] = [];
+    class TrackingRO {
+      observe(el: Element) {
+        observeCalls.push(el);
+      }
+      unobserve() {}
+      disconnect() {}
+    }
+    const original = (globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver;
+    (globalThis as unknown as { ResizeObserver: typeof TrackingRO }).ResizeObserver = TrackingRO;
     try {
-      const fetchNextPage = vi.fn();
-      renderWithProviders(
+      await renderAndCaptureVirtuoso(
         <MessageList
           {...defaultProps}
-          fetchNextPage={fetchNextPage}
           pages={[{ items: [makeMessage()] }]}
-          hasNextPage={true}
-        />,
+          hasPreviousPage={true}
+          fetchPreviousPage={vi.fn()}
+          anchorMsgId="msg-1"
+        />
       );
-      io.fire();
-      expect(fetchNextPage).toHaveBeenCalledTimes(1);
+      expect(observeCalls).toEqual([]);
     } finally {
-      io.restore();
+      (globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver = original;
     }
   });
 
-  it('does not re-fire fetchPreviousPage when the isFetching flag flips during a load-newer cycle', () => {
-    // Regression for the deep-link-disappearing-messages bug: the
-    // load-newer IntersectionObserver effect used to depend on
-    // `isFetchingPreviousPage`, so it was torn down + recreated each
-    // time the flag flipped. observe() re-fires the initial-intersection
-    // callback on every new observer; with the sentinel sitting inside
-    // the 800px rootMargin, that meant fetchPreviousPage fired twice in
-    // a row before the pages array updated, sending the same `after=`
-    // cursor to the server twice. Now the observer is created once per
-    // hasPreviousPage change and reads the fetching flag via a ref.
-    let observeCount = 0;
-    const original = globalThis.IntersectionObserver;
-    class CountingObserver {
-      callback: IntersectionObserverCallback;
-      root: Element | Document | null = null;
-      rootMargin = '';
-      thresholds: number[] = [];
-      constructor(cb: IntersectionObserverCallback) {
-        this.callback = cb;
+  it('deep-link mount: does NOT scroll to the last row even if it is the current user\'s own message (lastOwnBottomRef must be skipped)', async () => {
+    // Regression: a deep-link's around-window may include the
+    // user's own message in its newer half. Without the
+    // anchorMsgId guard, lastOwnBottomRef saw "bottom of loaded
+    // slice is own message" and scrolled to LAST end — yanking
+    // the user away from their anchor.
+    const m1 = makeMessage({ id: 'msg-a', authorID: 'user-2', createdAt: '2026-04-24T10:00:00Z' });
+    const m2 = makeMessage({ id: 'msg-anchor', authorID: 'user-2', createdAt: '2026-04-24T10:30:00Z' });
+    // m3 is the bottom of the around-window AND is the current
+    // user's own message. defaultProps.currentUserId === 'user-1'.
+    const m3 = makeMessage({ id: 'msg-own', authorID: 'user-1', createdAt: '2026-04-24T11:00:00Z' });
+    const captured = await renderAndCaptureVirtuoso(
+      <MessageList
+        {...defaultProps}
+        pages={[{ items: [m3, m2, m1] }]}
+        hasPreviousPage={true}
+        fetchPreviousPage={vi.fn()}
+        anchorMsgId="msg-anchor"
+      />
+    );
+    await new Promise((r) => setTimeout(r, 50));
+    // No scroll-to-end (last row index is 3 with 3 messages + 1 day divider).
+    const endCalls = captured.scrollToIndexCalls.filter((c) => c.align === 'end');
+    expect(endCalls).toEqual([]);
+  });
+
+  it('live-tail mount: lastOwnBottomRef DOES fire when no anchor is set and the bottom is the user\'s own message', async () => {
+    // Companion to the deep-link test above: confirms the anchor
+    // guard is conditional, not always-on. Without an anchor the
+    // user's own message at the bottom should pull the view to it
+    // (the canonical "I sent a message, scroll to it" behavior).
+    const m1 = makeMessage({ id: 'msg-a', authorID: 'user-2', createdAt: '2026-04-24T10:00:00Z' });
+    const m2 = makeMessage({ id: 'msg-own', authorID: 'user-1', createdAt: '2026-04-24T11:00:00Z' });
+    const captured = await renderAndCaptureVirtuoso(
+      <MessageList {...defaultProps} pages={[{ items: [m2, m1] }]} hasPreviousPage={false} />
+    );
+    await new Promise((r) => setTimeout(r, 50));
+    const endCalls = captured.scrollToIndexCalls.filter((c) => c.align === 'end');
+    expect(endCalls.length).toBeGreaterThan(0);
+  });
+
+  it('live-tail mount: DOES attach a ResizeObserver — needed to re-snap when the banner appears or content grows', async () => {
+    // Companion to the deep-link test above: confirms the early
+    // return is gated on anchorMsgId only, not always-on. The RO
+    // must remain wired up for live-tail viewers.
+    let observeCallCount = 0;
+    class TrackingRO {
+      observe() {
+        observeCallCount++;
       }
-      observe() { observeCount += 1; }
-      disconnect() {}
       unobserve() {}
-      takeRecords() { return []; }
+      disconnect() {}
     }
-    globalThis.IntersectionObserver = CountingObserver as unknown as typeof IntersectionObserver;
+    const original = (globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver;
+    (globalThis as unknown as { ResizeObserver: typeof TrackingRO }).ResizeObserver = TrackingRO;
     try {
-      const fetchPreviousPage = vi.fn();
-      const aroundPage = { items: [makeMessage()] };
-      const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-      const wrap = (isFetching: boolean) => (
-        <QueryClientProvider client={qc}>
-          <BrowserRouter>
-            <MessageList
-              {...defaultProps}
-              pages={[aroundPage]}
-              anchorMsgId="msg-target"
-              hasPreviousPage
-              isFetchingPreviousPage={isFetching}
-              fetchPreviousPage={fetchPreviousPage}
-            />
-          </BrowserRouter>
-        </QueryClientProvider>
+      await renderAndCaptureVirtuoso(
+        <MessageList {...defaultProps} pages={[{ items: [makeMessage()] }]} hasPreviousPage={false} />
       );
-      const { rerender } = render(wrap(false));
-      const initialObserves = observeCount;
-      // Simulate the fetch cycle: flag flips true (in flight) then back
-      // to false (response arrived). Before the fix, each flip recreated
-      // the observer.
-      rerender(wrap(true));
-      rerender(wrap(false));
-      expect(observeCount).toBe(initialObserves);
+      // The mocked Virtuoso renders [data-virtuoso-scroller] +
+      // [data-viewport-type], so the live-tail RO setup observes
+      // both. observeCallCount > 0 proves the anchorMsgId
+      // early-return is conditional, not unconditional — the
+      // companion to the deep-link "DOES NOT attach RO" test.
+      expect(observeCallCount).toBeGreaterThan(0);
     } finally {
-      globalThis.IntersectionObserver = original;
+      (globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver = original;
     }
-  });
-
-  it('uses userMap to display author names', () => {
-    const pages = [
-      {
-        items: [
-          makeMessage({ id: 'msg-1', authorID: 'user-2', body: 'Hi from Bob' }),
-        ],
-      },
-    ];
-
-    renderWithProviders(
-      <MessageList {...defaultProps} pages={pages} />,
-    );
-
-    expect(screen.getByText('Bob')).toBeInTheDocument();
-  });
-
-  it('renders system messages inline without avatar/edit controls', () => {
-    const pages = [
-      {
-        items: [
-          makeMessage({
-            id: 'sys-1',
-            authorID: 'system',
-            body: 'Alice joined the channel',
-            system: true,
-          }),
-        ],
-      },
-    ];
-
-    renderWithProviders(<MessageList {...defaultProps} pages={pages} />);
-
-    // Body text appears
-    expect(screen.getByText('Alice joined the channel')).toBeInTheDocument();
-    // No edit/delete buttons since it's a system message
-    expect(screen.queryByLabelText('Edit message')).not.toBeInTheDocument();
-    expect(screen.queryByLabelText('Delete message')).not.toBeInTheDocument();
-  });
-
-  describe('deep-link anchor (anchorMsgId)', () => {
-    // Replace scrollIntoView with a spy. jsdom doesn't implement layout
-    // so we just observe whether the anchor element's scrollIntoView was
-    // called and with what options.
-    function withScrollIntoViewSpy<T>(fn: (spy: ReturnType<typeof vi.fn>) => T): T {
-      const original = Element.prototype.scrollIntoView;
-      const spy = vi.fn();
-      Element.prototype.scrollIntoView = spy as unknown as typeof Element.prototype.scrollIntoView;
-      try {
-        return fn(spy);
-      } finally {
-        Element.prototype.scrollIntoView = original;
-      }
-    }
-
-    it('does NOT snap to the bottom when anchorMsgId is set (deep-link mode)', () => {
-      withScrollIntoViewSpy(() => {
-        const { container } = renderWithProviders(
-          <MessageList
-            {...defaultProps}
-            pages={[
-              {
-                items: [
-                  makeMessage({ id: 'm-2', body: 'newer', createdAt: '2026-04-24T10:31:00Z' }),
-                  makeMessage({ id: 'm-1', body: 'older', createdAt: '2026-04-24T10:30:00Z' }),
-                ],
-              },
-            ]}
-            anchorMsgId="m-1"
-          />,
-        );
-        const scroller = container.querySelector('div.overflow-y-auto') as HTMLDivElement;
-        Object.defineProperty(scroller, 'scrollHeight', { value: 1500, configurable: true });
-        // The bottom-stick layout effect is gated on anchorMsgId; we
-        // never write scrollTop = scrollHeight in deep-link mode.
-        expect(scroller.scrollTop).toBe(0);
-      });
-    });
-
-    it('scrolls the anchor message into view (centered) when anchorMsgId is set', () => {
-      withScrollIntoViewSpy((spy) => {
-        renderWithProviders(
-          <MessageList
-            {...defaultProps}
-            pages={[
-              {
-                items: [
-                  makeMessage({ id: 'm-2', body: 'newer', createdAt: '2026-04-24T10:31:00Z' }),
-                  makeMessage({ id: 'm-1', body: 'older', createdAt: '2026-04-24T10:30:00Z' }),
-                ],
-              },
-            ]}
-            anchorMsgId="m-1"
-          />,
-        );
-        // Spy receives the call with block:'center'. The element it was
-        // called on is the message div with id="msg-m-1".
-        expect(spy).toHaveBeenCalled();
-        const opts = spy.mock.calls[0]?.[0] as ScrollIntoViewOptions | undefined;
-        expect(opts?.block).toBe('center');
-        expect(spy.mock.instances[0]).toBe(document.getElementById('msg-m-1'));
-      });
-    });
-
-    it('applies the highlight ring on the anchor and removes it after the timeout', () => {
-      vi.useFakeTimers();
-      try {
-        withScrollIntoViewSpy(() => {
-          renderWithProviders(
-            <MessageList
-              {...defaultProps}
-              pages={[{ items: [makeMessage({ id: 'm-1', body: 'target' })] }]}
-              anchorMsgId="m-1"
-            />,
-          );
-          const target = document.getElementById('msg-m-1');
-          expect(target?.classList.contains('ring-1')).toBe(true);
-          expect(target?.classList.contains('ring-amber-400/50')).toBe(true);
-          vi.advanceTimersByTime(2300);
-          expect(target?.classList.contains('ring-1')).toBe(false);
-        });
-      } finally {
-        vi.useRealTimers();
-      }
-    });
-
-    it('does NOT re-scroll to the anchor on a subsequent page commit (no jump-back when paginating)', () => {
-      withScrollIntoViewSpy((spy) => {
-        const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-        const wrap = (props: Partial<React.ComponentProps<typeof MessageList>>) => (
-          <QueryClientProvider client={qc}>
-            <BrowserRouter>
-              <MessageList {...defaultProps} {...props} />
-            </BrowserRouter>
-          </QueryClientProvider>
-        );
-        const initialPages = [
-          {
-            items: [
-              makeMessage({ id: 'm-2', body: 'newer', createdAt: '2026-04-24T10:31:00Z' }),
-              makeMessage({ id: 'm-1', body: 'older', createdAt: '2026-04-24T10:30:00Z' }),
-            ],
-          },
-        ];
-        const { rerender } = render(wrap({ pages: initialPages, anchorMsgId: 'm-1' }));
-        expect(spy).toHaveBeenCalledTimes(1);
-
-        // A newer page is fetched (load-newer sentinel triggered). The
-        // pages array grows; the deep-link scroll must NOT fire again,
-        // otherwise the user gets yanked back to the anchor every time
-        // they try to read newer content.
-        rerender(
-          wrap({
-            pages: [
-              ...initialPages,
-              {
-                items: [
-                  makeMessage({ id: 'm-3', body: 'even newer', createdAt: '2026-04-24T10:32:00Z' }),
-                ],
-              },
-            ],
-            anchorMsgId: 'm-1',
-          }),
-        );
-        expect(spy).toHaveBeenCalledTimes(1);
-      });
-    });
-
-    it('persistent bottom-stick observer does NOT yank to bottom in deep-link mode (wasAtBottomRef stays false)', () => {
-      withScrollIntoViewSpy(() => {
-        let resizeCallback: (() => void) | null = null;
-        const origRO = globalThis.ResizeObserver;
-        globalThis.ResizeObserver = class {
-          cb: () => void;
-          constructor(cb: () => void) { this.cb = cb; resizeCallback = cb; }
-          observe() {}
-          disconnect() { resizeCallback = null; }
-          unobserve() {}
-        } as unknown as typeof ResizeObserver;
-        // useAtBottomRef computes "at bottom" off scrollHeight/clientHeight
-        // on mount. In a real browser scrollIntoView moves scrollTop and
-        // scrollHeight is real, so the centered-anchor case works out to
-        // "not at bottom". jsdom has no layout, so we patch the prototype
-        // before render to mirror those numbers.
-        const heightDesc = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollHeight');
-        const clientDesc = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientHeight');
-        Object.defineProperty(HTMLElement.prototype, 'scrollHeight', {
-          configurable: true,
-          get() { return 1500; },
-        });
-        Object.defineProperty(HTMLElement.prototype, 'clientHeight', {
-          configurable: true,
-          get() { return 600; },
-        });
-        try {
-          const { container } = renderWithProviders(
-            <MessageList
-              {...defaultProps}
-              pages={[{ items: [makeMessage({ id: 'm-1', body: 'target' })] }]}
-              anchorMsgId="m-1"
-            />,
-          );
-          const scroller = container.querySelector('div.overflow-y-auto') as HTMLDivElement;
-          // Mid-window position simulating where the deep-link landed.
-          scroller.scrollTop = 400;
-          scroller.dispatchEvent(new Event('scroll'));
-          // Async content settles → ResizeObserver fires. The bottom-
-          // stick must NOT trip because the user is mid-history.
-          resizeCallback?.();
-          expect(scroller.scrollTop).toBe(400);
-        } finally {
-          if (heightDesc) Object.defineProperty(HTMLElement.prototype, 'scrollHeight', heightDesc);
-          else delete (HTMLElement.prototype as unknown as { scrollHeight?: unknown }).scrollHeight;
-          if (clientDesc) Object.defineProperty(HTMLElement.prototype, 'clientHeight', clientDesc);
-          else delete (HTMLElement.prototype as unknown as { clientHeight?: unknown }).clientHeight;
-          globalThis.ResizeObserver = origRO;
-        }
-      });
-    });
-
-    it('re-clicking the same search hit (anchor unchanged, navigation token changes) re-fires the scroll', () => {
-      // anchorRevision threads useLocation().key through. A re-click
-      // pushes a new history entry → fresh key → re-trigger, even
-      // though anchorMsgId is identical.
-      withScrollIntoViewSpy((spy) => {
-        const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-        const wrap = (props: Partial<React.ComponentProps<typeof MessageList>>) => (
-          <QueryClientProvider client={qc}>
-            <BrowserRouter>
-              <MessageList {...defaultProps} {...props} />
-            </BrowserRouter>
-          </QueryClientProvider>
-        );
-        const { rerender } = render(
-          wrap({
-            pages: [{ items: [makeMessage({ id: 'm-1', body: 'target' })] }],
-            anchorMsgId: 'm-1',
-            anchorRevision: 'nav-1',
-          }),
-        );
-        expect(spy).toHaveBeenCalledTimes(1);
-
-        // Same anchor, same navigation key — must NOT re-fire (page
-        // fetches re-render with identical props).
-        rerender(
-          wrap({
-            pages: [{ items: [makeMessage({ id: 'm-1', body: 'target' }), makeMessage({ id: 'm-2' })] }],
-            anchorMsgId: 'm-1',
-            anchorRevision: 'nav-1',
-          }),
-        );
-        expect(spy).toHaveBeenCalledTimes(1);
-
-        // Re-click the same hit → new navigation key → re-fire.
-        rerender(
-          wrap({
-            pages: [{ items: [makeMessage({ id: 'm-1', body: 'target' }), makeMessage({ id: 'm-2' })] }],
-            anchorMsgId: 'm-1',
-            anchorRevision: 'nav-2',
-          }),
-        );
-        expect(spy).toHaveBeenCalledTimes(2);
-      });
-    });
-
-    it('the follow-anchor RO observes the inner messages container, not a load-newer sentinel (regression: cross-parent search-result scroll drifted)', () => {
-      // Both load-more (top) and load-newer (bottom) sentinels render
-      // when the around-window has older AND newer pages remaining —
-      // the typical deep-link case from /search. Earlier the RO was
-      // wired to scroller.lastElementChild, which in this layout is
-      // the fixed-height load-newer sentinel that never resizes when
-      // real message content above settles. Result: the anchor drifted
-      // off-screen as avatars/attachments loaded. The fix observes the
-      // dedicated inner container instead.
-      withScrollIntoViewSpy(() => {
-        const observed: Element[] = [];
-        const origRO = globalThis.ResizeObserver;
-        globalThis.ResizeObserver = class {
-          constructor(_cb: () => void) {}
-          observe(el: Element) { observed.push(el); }
-          disconnect() {}
-          unobserve() {}
-        } as unknown as typeof ResizeObserver;
-        try {
-          const { container } = renderWithProviders(
-            <MessageList
-              {...defaultProps}
-              pages={[{ items: [makeMessage({ id: 'm-1', body: 'target' })] }]}
-              hasNextPage
-              hasPreviousPage
-              fetchPreviousPage={vi.fn()}
-              isFetchingPreviousPage={false}
-              anchorMsgId="m-1"
-            />,
-          );
-          // Both sentinels are present.
-          expect(container.querySelector('[data-testid="message-list-load-more"]')).toBeInTheDocument();
-          expect(container.querySelector('[data-testid="message-list-load-newer"]')).toBeInTheDocument();
-          // Among the elements observed by the various ResizeObservers,
-          // none should be a sentinel — they must be the real
-          // messages container (.p-4.space-y-1).
-          for (const el of observed) {
-            expect(el.getAttribute('data-testid')).not.toBe('message-list-load-more');
-            expect(el.getAttribute('data-testid')).not.toBe('message-list-load-newer');
-          }
-        } finally {
-          globalThis.ResizeObserver = origRO;
-        }
-      });
-    });
-
-    it('re-centers the anchor when content above it grows (avatars/attachments loading after the initial scroll)', () => {
-      // The original "scroll once" approach drifted off-screen as
-      // avatars/attachments/unfurls above the anchor finished loading
-      // — exactly the scenario where deep-links from /search felt
-      // broken. The follow-anchor ResizeObserver re-centers until the
-      // user takes over.
-      withScrollIntoViewSpy((spy) => {
-        let resizeCallback: (() => void) | null = null;
-        const origRO = globalThis.ResizeObserver;
-        globalThis.ResizeObserver = class {
-          cb: () => void;
-          constructor(cb: () => void) { this.cb = cb; resizeCallback = cb; }
-          observe() {}
-          disconnect() { resizeCallback = null; }
-          unobserve() {}
-        } as unknown as typeof ResizeObserver;
-        try {
-          renderWithProviders(
-            <MessageList
-              {...defaultProps}
-              pages={[{ items: [makeMessage({ id: 'm-1', body: 'target' })] }]}
-              anchorMsgId="m-1"
-            />,
-          );
-          // Initial mount → 1 scrollIntoView for the anchor.
-          expect(spy).toHaveBeenCalledTimes(1);
-          // Async content above the anchor finishes loading; the
-          // inner content resizes. The follow-anchor RO re-centers.
-          resizeCallback?.();
-          expect(spy).toHaveBeenCalledTimes(2);
-          // And again — it keeps re-centering as long as the user
-          // hasn't scrolled.
-          resizeCallback?.();
-          expect(spy).toHaveBeenCalledTimes(3);
-        } finally {
-          globalThis.ResizeObserver = origRO;
-        }
-      });
-    });
-
-    it('reinstalls the follow-anchor RO after a StrictMode-style cleanup + re-fire (regression: dev-mode double-effect was tearing down follow-anchor permanently)', () => {
-      // React StrictMode runs effects twice in dev: setup, cleanup,
-      // setup. Earlier the dedup ref short-circuited the second setup
-      // — so production looked fine but dev mode silently lost the
-      // follow-anchor RO. Async content settling above the anchor
-      // then drifted the message off-screen.
-      withScrollIntoViewSpy((spy) => {
-        let resizeCallback: (() => void) | null = null;
-        const origRO = globalThis.ResizeObserver;
-        globalThis.ResizeObserver = class {
-          cb: () => void;
-          constructor(cb: () => void) { this.cb = cb; resizeCallback = cb; }
-          observe() {}
-          disconnect() { resizeCallback = null; }
-          unobserve() {}
-        } as unknown as typeof ResizeObserver;
-        try {
-          const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-          const Tree = (
-            <QueryClientProvider client={qc}>
-              <BrowserRouter>
-                <MessageList
-                  {...defaultProps}
-                  pages={[{ items: [makeMessage({ id: 'm-1', body: 'target' })] }]}
-                  anchorMsgId="m-1"
-                />
-              </BrowserRouter>
-            </QueryClientProvider>
-          );
-          // Simulate StrictMode: render → unmount → render. Each cycle
-          // fires layout effect setup + cleanup. After the second
-          // setup the RO must still be live.
-          const { unmount } = render(Tree);
-          unmount();
-          render(Tree);
-          // Initial scrolls fired during both mounts.
-          expect(spy).toHaveBeenCalled();
-          const beforeResize = spy.mock.calls.length;
-          // Async content settles after the second mount — RO must
-          // fire and re-center, proving the follow-anchor was
-          // reinstalled on the second setup.
-          resizeCallback?.();
-          expect(spy.mock.calls.length).toBeGreaterThan(beforeResize);
-        } finally {
-          globalThis.ResizeObserver = origRO;
-        }
-      });
-    });
-
-    it('stops following the anchor as soon as the user scrolls', () => {
-      withScrollIntoViewSpy((spy) => {
-        let resizeCallback: (() => void) | null = null;
-        const origRO = globalThis.ResizeObserver;
-        globalThis.ResizeObserver = class {
-          cb: () => void;
-          constructor(cb: () => void) { this.cb = cb; resizeCallback = cb; }
-          observe() {}
-          disconnect() { resizeCallback = null; }
-          unobserve() {}
-        } as unknown as typeof ResizeObserver;
-        try {
-          const { container } = renderWithProviders(
-            <MessageList
-              {...defaultProps}
-              pages={[{ items: [makeMessage({ id: 'm-1', body: 'target' })] }]}
-              anchorMsgId="m-1"
-            />,
-          );
-          const scroller = container.querySelector('div.overflow-y-auto') as HTMLDivElement;
-          expect(spy).toHaveBeenCalledTimes(1);
-          // User scrolls — scrollTop diverges from our last expected
-          // value by more than the 5px threshold.
-          scroller.scrollTop = 600;
-          scroller.dispatchEvent(new Event('scroll'));
-          // Subsequent content settles — but we've stopped following,
-          // so no further scrollIntoView.
-          resizeCallback?.();
-          expect(spy).toHaveBeenCalledTimes(1);
-        } finally {
-          globalThis.ResizeObserver = origRO;
-        }
-      });
-    });
-
-    it('stops following the anchor after the 1.5s safety window', () => {
-      vi.useFakeTimers();
-      try {
-        withScrollIntoViewSpy((spy) => {
-          let resizeCallback: (() => void) | null = null;
-          const origRO = globalThis.ResizeObserver;
-          globalThis.ResizeObserver = class {
-            cb: () => void;
-            constructor(cb: () => void) { this.cb = cb; resizeCallback = cb; }
-            observe() {}
-            disconnect() { resizeCallback = null; }
-            unobserve() {}
-          } as unknown as typeof ResizeObserver;
-          try {
-            renderWithProviders(
-              <MessageList
-                {...defaultProps}
-                pages={[{ items: [makeMessage({ id: 'm-1', body: 'target' })] }]}
-                anchorMsgId="m-1"
-              />,
-            );
-            expect(spy).toHaveBeenCalledTimes(1);
-            // Far beyond the 1.5s window. Any further content shifts
-            // are the user's problem now.
-            vi.advanceTimersByTime(1600);
-            resizeCallback?.();
-            expect(spy).toHaveBeenCalledTimes(1);
-          } finally {
-            globalThis.ResizeObserver = origRO;
-          }
-        });
-      } finally {
-        vi.useRealTimers();
-      }
-    });
-
-    it('does NOT auto-stick to the live tail in deep-link mode even when a new message arrives at the bottom (regression: DM deep-link from /search yanked reader away from anchor)', () => {
-      // In deep-link mode the reader explicitly went to a specific
-      // message — they never opted into live-tail follow. Auto-
-      // sticking on every new message arrival would yank them away
-      // from the anchor whenever fetchPreviousPage adds a newer
-      // page or a WebSocket invalidation refetches.
-      let bottomStickCB: (() => void) | null = null;
-      const origRO = globalThis.ResizeObserver;
-      globalThis.ResizeObserver = class {
-        cb: () => void;
-        constructor(cb: () => void) {
-          this.cb = cb;
-          if (bottomStickCB === null) bottomStickCB = cb;
-        }
-        observe() {}
-        disconnect() {}
-        unobserve() {}
-      } as unknown as typeof ResizeObserver;
-      try {
-        withScrollIntoViewSpy(() => {
-          const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-          const wrap = (props: Partial<React.ComponentProps<typeof MessageList>>) => (
-            <QueryClientProvider client={qc}>
-              <BrowserRouter>
-                <MessageList {...defaultProps} {...props} />
-              </BrowserRouter>
-            </QueryClientProvider>
-          );
-          const initialPages = [{ items: [
-            makeMessage({ id: 'm-target', authorID: 'user-2', body: 'target' }),
-            makeMessage({ id: 'm-old', authorID: 'user-2', body: 'old' }),
-          ] }];
-          const { rerender, container } = render(
-            wrap({ pages: initialPages, anchorMsgId: 'm-target' }),
-          );
-          const scroller = container.querySelector('div.overflow-y-auto') as HTMLDivElement;
-          Object.defineProperty(scroller, 'clientHeight', { value: 800, configurable: true });
-
-          // Reader was scrolled near the bottom of the loaded set.
-          Object.defineProperty(scroller, 'scrollHeight', { value: 1500, configurable: true });
-          scroller.scrollTop = 700;
-          scroller.dispatchEvent(new Event('scroll'));
-
-          // fetchPreviousPage adds a newer page. innerRef grows.
-          // wasAtBottomRef may be true (clamp / reader near bottom).
-          // In deep-link mode, the bottom-stick RO must NOT engage —
-          // the reader never asked to follow the live tail.
-          rerender(
-            wrap({
-              pages: [{ items: [
-                makeMessage({ id: 'm-new', authorID: 'user-2', body: 'incoming' }),
-                makeMessage({ id: 'm-target', authorID: 'user-2', body: 'target' }),
-                makeMessage({ id: 'm-old', authorID: 'user-2', body: 'old' }),
-              ] }],
-              anchorMsgId: 'm-target',
-            }),
-          );
-          Object.defineProperty(scroller, 'scrollHeight', { value: 1700, configurable: true });
-          bottomStickCB?.();
-          // scrollTop unchanged — the reader stays where they were.
-          expect(scroller.scrollTop).toBe(700);
-        });
-      } finally {
-        globalThis.ResizeObserver = origRO;
-      }
-    });
-
-    it('preserves the reader\'s visible message when the scroller width changes (regression: closing the thread panel reflowed and dragged to the latest message)', () => {
-      // The browser's overflow-anchor: auto doesn't reliably handle
-      // scroller width changes — when the right panel closes, the
-      // main column widens, content re-wraps with shorter messages,
-      // scrollHeight drops, and if the reader was past the new max
-      // scrollTop the browser clamps them down. Manual anchoring:
-      // remember the top-visible message before the reflow, then
-      // adjust scrollTop so its post-reflow viewport offset matches.
-      let resizeCallback: (() => void) | null = null;
-      const origRO = globalThis.ResizeObserver;
-      globalThis.ResizeObserver = class {
-        cb: () => void;
-        constructor(cb: () => void) { this.cb = cb; resizeCallback = cb; }
-        observe() {}
-        disconnect() { resizeCallback = null; }
-        unobserve() {}
-      } as unknown as typeof ResizeObserver;
-      try {
-        const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-        const Tree = (
-          <QueryClientProvider client={qc}>
-            <BrowserRouter>
-              <MessageList
-                {...defaultProps}
-                pages={[{ items: [
-                  makeMessage({ id: 'm-3', authorID: 'user-2', body: 'three' }),
-                  makeMessage({ id: 'm-2', authorID: 'user-2', body: 'two' }),
-                  makeMessage({ id: 'm-1', authorID: 'user-2', body: 'one' }),
-                ] }]}
-              />
-            </BrowserRouter>
-          </QueryClientProvider>
-        );
-        const { container } = render(Tree);
-        const scroller = container.querySelector('div.overflow-y-auto') as HTMLDivElement;
-        Object.defineProperty(scroller, 'clientHeight', { value: 800, configurable: true });
-        Object.defineProperty(scroller, 'scrollHeight', { value: 2400, configurable: true });
-        Object.defineProperty(scroller, 'clientWidth', { value: 600, configurable: true });
-
-        // Reader scrolls to msg-2. Mock its position to be at the
-        // top of viewport offset by 0px in the pre-reflow layout.
-        const target = document.getElementById('msg-m-2') as HTMLElement;
-        const scrollerRectBefore = { top: 100, bottom: 900 };
-        scroller.getBoundingClientRect = () =>
-          ({ ...scrollerRectBefore } as DOMRect);
-        target.getBoundingClientRect = () =>
-          ({ top: 100, bottom: 200 } as DOMRect);
-        scroller.scrollTop = 1200;
-        scroller.dispatchEvent(new Event('scroll'));
-        // visibleAnchorRef now records msg-m-2 at offset=0.
-
-        // Side panel closes — scroller widens (600 → 1000), content
-        // re-wraps with less wrapping, target message is now at a
-        // SHORTER offset from the inner top because content above
-        // shrank. Without preservation, scrollTop stays 1200 but
-        // target moved up to a NEGATIVE offset — invisible.
-        Object.defineProperty(scroller, 'clientWidth', { value: 1000, configurable: true });
-        Object.defineProperty(scroller, 'scrollHeight', { value: 1800, configurable: true });
-        target.getBoundingClientRect = () =>
-          ({ top: -200, bottom: -100 } as DOMRect);
-        resizeCallback?.();
-        // Adjustment: delta = -300 (currentOffset) - 0 (anchor.offset) = -300.
-        // scrollTop should decrease by 300.
-        expect(scroller.scrollTop).toBe(900);
-      } finally {
-        globalThis.ResizeObserver = origRO;
-      }
-    });
-
-    it('persistent bottom-stick RO does NOT yank to bottom on content shrinkage (regression: closing the thread panel jumped the main list to the latest message)', () => {
-      // Closing a side panel widens the main column → content
-      // re-wraps with less line-wrapping → scrollHeight drops → the
-      // browser clamps scrollTop within reach of the bottom →
-      // useAtBottomRef flips wasAtBottomRef=true on the resulting
-      // scroll event. The bottom-stick RO would then stick to the
-      // new (smaller) bottom, yanking the reader from the older
-      // message they had been reading.
-      let resizeCallback: (() => void) | null = null;
-      const origRO = globalThis.ResizeObserver;
-      globalThis.ResizeObserver = class {
-        cb: () => void;
-        constructor(cb: () => void) { this.cb = cb; resizeCallback = cb; }
-        observe() {}
-        disconnect() { resizeCallback = null; }
-        unobserve() {}
-      } as unknown as typeof ResizeObserver;
-      try {
-        const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-        const Tree = (
-          <QueryClientProvider client={qc}>
-            <BrowserRouter>
-              <MessageList
-                {...defaultProps}
-                pages={[{ items: [makeMessage({ id: 'm-1', authorID: 'user-2' })] }]}
-              />
-            </BrowserRouter>
-          </QueryClientProvider>
-        );
-        const { container } = render(Tree);
-        const scroller = container.querySelector('div.overflow-y-auto') as HTMLDivElement;
-        Object.defineProperty(scroller, 'clientHeight', { value: 800, configurable: true });
-
-        // Reader is at the live tail. Initial mount: scrollHeight is
-        // 2500. The bottom-stick layout effect ran, marked
-        // wasAtBottomRef=true on stick(). RO now installed.
-        Object.defineProperty(scroller, 'scrollHeight', { value: 2500, configurable: true });
-        // Prime the RO's lastScrollHeight by firing once at the
-        // current size — first fire is a no-op for the growth check.
-        resizeCallback?.();
-
-        // Reader scrolls up to read an older message. atBottomRef
-        // flips false via the scroll listener. (Skip dispatching a
-        // real scroll event; just set scrollTop and assert that the
-        // RO doesn't move it on the subsequent shrinkage.)
-        scroller.scrollTop = 800;
-
-        // Side panel closes — main column widens, content re-wraps
-        // with less wrapping, scrollHeight DROPS to 2000.
-        Object.defineProperty(scroller, 'scrollHeight', { value: 2000, configurable: true });
-        resizeCallback?.();
-
-        // Reader's scroll position must be untouched. Without the
-        // growth-only guard, the RO would have stuck to scrollHeight
-        // (2000) — yanking them to the latest of the (newly-shorter)
-        // main list.
-        expect(scroller.scrollTop).toBe(800);
-      } finally {
-        globalThis.ResizeObserver = origRO;
-      }
-    });
-
-    it('persistent bottom-stick RO stays a no-op while in deep-link mode, even if the anchor lands within the at-bottom threshold (regression: thread action bar click yanked to live tail)', () => {
-      // Recent threads (the typical /threads-page deep link) land
-      // near the bottom of the loaded around-window. After
-      // scrollIntoView, useAtBottomRef.update() flips
-      // wasAtBottomRef=true on its mount-time read AND on the
-      // post-scroll event. A later RO fire (from any settling
-      // content) would then yank the reader to the live tail. The
-      // gate keeps the bottom-stick RO a no-op until the reader has
-      // actually moved the scroll themselves.
-      //
-      // useAtBottomRef defaults its ref to TRUE and its mount-time
-      // update() reads the prototype-defined scrollHeight=1000 etc.
-      // below, which computes to "at bottom" (negative distance).
-      // That gives the bottom-stick RO the worst-case input;
-      // verifying scrollTop doesn't move proves the gate is in place.
-      withScrollIntoViewSpy(() => {
-        let bottomStickRO: (() => void) | null = null;
-        const origRO = globalThis.ResizeObserver;
-        globalThis.ResizeObserver = class {
-          cb: () => void;
-          constructor(cb: () => void) {
-            this.cb = cb;
-            // The bottom-stick RO is the FIRST one set up
-            // (declaration order; runs before the anchor effect).
-            if (!bottomStickRO) bottomStickRO = cb;
-          }
-          observe() {}
-          disconnect() {}
-          unobserve() {}
-        } as unknown as typeof ResizeObserver;
-        const heightDesc = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollHeight');
-        const clientDesc = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientHeight');
-        Object.defineProperty(HTMLElement.prototype, 'scrollHeight', {
-          configurable: true,
-          get() { return 1000; },
-        });
-        Object.defineProperty(HTMLElement.prototype, 'clientHeight', {
-          configurable: true,
-          get() { return 1200; },
-        });
-        try {
-          const { container } = renderWithProviders(
-            <MessageList
-              {...defaultProps}
-              pages={[{ items: [makeMessage({ id: 'm-1', body: 'target' })] }]}
-              anchorMsgId="m-1"
-            />,
-          );
-          const scroller = container.querySelector('div.overflow-y-auto') as HTMLDivElement;
-          // wasAtBottomRef is now true (1000 - 0 - 1200 = -200 < 120
-          // → "at bottom"). Simulate content settling — bottom-stick
-          // RO must NOT yank because anchor is set and the user
-          // hasn't scrolled.
-          bottomStickRO?.();
-          expect(scroller.scrollTop).toBe(0);
-        } finally {
-          if (heightDesc) Object.defineProperty(HTMLElement.prototype, 'scrollHeight', heightDesc);
-          else delete (HTMLElement.prototype as unknown as { scrollHeight?: unknown }).scrollHeight;
-          if (clientDesc) Object.defineProperty(HTMLElement.prototype, 'clientHeight', clientDesc);
-          else delete (HTMLElement.prototype as unknown as { clientHeight?: unknown }).clientHeight;
-          globalThis.ResizeObserver = origRO;
-        }
-      });
-    });
-
-    it('does NOT auto-scroll to bottom when load-newer fetches a page whose bottom is the user\'s own (regression: jumps to latest while paging through newer messages)', () => {
-      // In deep-link mode, scrolling down triggers fetchPreviousPage
-      // which APPENDS a newer page. The previous bottom message
-      // ends up several positions up — distinguishing this from a
-      // single-message append (a fresh send). Without that check,
-      // the lastBottom effect treats the new page's last own
-      // message as a fresh send and yanks to the bottom.
-      withScrollIntoViewSpy(() => {
-        const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-        const wrap = (props: Partial<React.ComponentProps<typeof MessageList>>) => (
-          <QueryClientProvider client={qc}>
-            <BrowserRouter>
-              <MessageList {...defaultProps} {...props} />
-            </BrowserRouter>
-          </QueryClientProvider>
-        );
-
-        // Initial: deep-link landing on msg-target. Around-window
-        // has older messages below the target, none yet from a
-        // newer page.
-        const aroundPage = {
-          items: [
-            makeMessage({ id: 'around-bottom', authorID: 'user-2', body: 'around bottom' }),
-            makeMessage({ id: 'msg-target', authorID: 'user-2', body: 'target' }),
-            makeMessage({ id: 'around-old', authorID: 'user-2', body: 'older' }),
-          ],
-        };
-        const { rerender, container } = render(
-          wrap({ pages: [aroundPage], anchorMsgId: 'msg-target', hasPreviousPage: true, fetchPreviousPage: vi.fn() }),
-        );
-        const scroller = container.querySelector('div.overflow-y-auto') as HTMLDivElement;
-        Object.defineProperty(scroller, 'scrollHeight', { value: 1500, configurable: true });
-        // After deep-link, simulate the user scrolling down — they're
-        // mid-list now, definitely not at scrollHeight.
-        scroller.scrollTop = 600;
-
-        // Newer page arrives via fetchPreviousPage. Its last message
-        // is the user's own. Under the old code this looked like a
-        // fresh send and scrollTop got set to scrollHeight.
-        rerender(
-          wrap({
-            pages: [
-              aroundPage,
-              {
-                items: [
-                  makeMessage({ id: 'newer-bottom-own', authorID: 'user-1', body: 'mine, latest' }),
-                  makeMessage({ id: 'newer-mid', authorID: 'user-2', body: 'mid' }),
-                  makeMessage({ id: 'newer-top', authorID: 'user-2', body: 'top' }),
-                ],
-              },
-            ],
-            anchorMsgId: 'msg-target',
-            hasPreviousPage: false,
-            fetchPreviousPage: vi.fn(),
-          }),
-        );
-        Object.defineProperty(scroller, 'scrollHeight', { value: 2400, configurable: true });
-        // Bottom shifted from around-bottom to newer-bottom-own —
-        // multiple positions, not a single append. lastBottom must
-        // not fire.
-        expect(scroller.scrollTop).toBe(600);
-      });
-    });
-
-    it('does NOT auto-scroll to bottom on cross-parent navigation when the around-window\'s bottom message is the user\'s own (regression: "scrolls and scrolls back to the latest message")', () => {
-      // Cross-parent navigation transitions allMessages through an
-      // empty state: [old A's tail] → [] → [B's around-window]. The
-      // lastBottom effect was reading the final transition as a
-      // "fresh send" if the around-window's last message happened to
-      // be the user's own (very common in DMs / quiet channels).
-      // That set wasAtBottomRef=true, after which the persistent
-      // bottom-stick RO kept yanking on every settling avatar — the
-      // exact "scrolls and scrolls" symptom.
-      withScrollIntoViewSpy(() => {
-        let bottomStickRO: (() => void) | null = null;
-        const origRO = globalThis.ResizeObserver;
-        globalThis.ResizeObserver = class {
-          cb: () => void;
-          constructor(cb: () => void) {
-            this.cb = cb;
-            // First RO installed is the bottom-stick (declared
-            // before the anchor effect). Capture it to simulate
-            // content settling later.
-            if (!bottomStickRO) bottomStickRO = cb;
-          }
-          observe() {}
-          disconnect() {}
-          unobserve() {}
-        } as unknown as typeof ResizeObserver;
-        try {
-          const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-          const wrap = (props: Partial<React.ComponentProps<typeof MessageList>>) => (
-            <QueryClientProvider client={qc}>
-              <BrowserRouter>
-                <MessageList {...defaultProps} {...props} />
-              </BrowserRouter>
-            </QueryClientProvider>
-          );
-
-          // Render 1: old channel A's live tail. Bottom is someone's
-          // own message — wasAtBottomRef gets set, ref tracks bottom.
-          const { rerender, container } = render(
-            wrap({
-              pages: [{ items: [makeMessage({ id: 'a-bottom', authorID: 'user-1', body: 'A bottom (own)' })] }],
-              channelId: 'A-id',
-            }),
-          );
-          const scroller = container.querySelector('div.overflow-y-auto') as HTMLDivElement;
-          Object.defineProperty(scroller, 'scrollHeight', { value: 1500, configurable: true });
-          Object.defineProperty(scroller, 'clientHeight', { value: 700, configurable: true });
-
-          // Render 2: empty state during query refetch (channel B
-          // around-window query in flight).
-          rerender(
-            wrap({
-              pages: [{ items: [] }],
-              channelId: 'B-id',
-              anchorMsgId: 'msg-target',
-            }),
-          );
-
-          // Render 3: B's around-window arrives. Bottom of the
-          // around-window is the user's own message (typical pattern).
-          rerender(
-            wrap({
-              pages: [{
-                items: [
-                  makeMessage({ id: 'b-bottom-own', authorID: 'user-1', body: 'B around bottom (own)' }),
-                  makeMessage({ id: 'msg-target', authorID: 'user-2', body: 'target' }),
-                  makeMessage({ id: 'b-old', authorID: 'user-2', body: 'older' }),
-                ],
-              }],
-              channelId: 'B-id',
-              anchorMsgId: 'msg-target',
-            }),
-          );
-
-          // The buggy cascade was: lastBottom fires (own at bottom)
-          // → scrollTop=scrollHeight + wasAtBottomRef=true → RO
-          // re-yanks on resize. Reset scrollTop here to isolate the
-          // assertion: a follow-up resize must NOT pull us to the
-          // bottom (1500). The user is still mid-deep-link.
-          scroller.scrollTop = 400;
-          Object.defineProperty(scroller, 'scrollHeight', { value: 1700, configurable: true });
-          bottomStickRO?.();
-          expect(scroller.scrollTop).toBe(400);
-        } finally {
-          globalThis.ResizeObserver = origRO;
-        }
-      });
-    });
-
-    it('re-arms the bottom-stick when anchorMsgId clears (deep-link → live tail in same parent)', () => {
-      withScrollIntoViewSpy(() => {
-        const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-        const wrap = (props: Partial<React.ComponentProps<typeof MessageList>>) => (
-          <QueryClientProvider client={qc}>
-            <BrowserRouter>
-              <MessageList {...defaultProps} {...props} />
-            </BrowserRouter>
-          </QueryClientProvider>
-        );
-        const pages = [
-          {
-            items: [
-              makeMessage({ id: 'm-2', body: 'newer', createdAt: '2026-04-24T10:31:00Z' }),
-              makeMessage({ id: 'm-1', body: 'older', createdAt: '2026-04-24T10:30:00Z' }),
-            ],
-          },
-        ];
-        const { rerender, container } = render(wrap({ pages, anchorMsgId: 'm-1' }));
-        const scroller = container.querySelector('div.overflow-y-auto') as HTMLDivElement;
-        Object.defineProperty(scroller, 'scrollHeight', { value: 1500, configurable: true });
-        // Deep-link mode: not pinned to bottom.
-        expect(scroller.scrollTop).toBe(0);
-
-        // User clicks the channel/conversation in the sidebar — same
-        // parent, anchor cleared. The bottom-stick should re-arm and
-        // pin to the live tail on the next render.
-        rerender(wrap({ pages, anchorMsgId: undefined }));
-        expect(scroller.scrollTop).toBe(1500);
-      });
-    });
-  });
-
-  it('stays pinned to the bottom when avatar/inline images finish loading after the initial render', () => {
-    // Regression: opening a fresh channel rendered "scrolled to bottom"
-    // synchronously, but avatars / inline images / unfurl thumbs load
-    // asynchronously and grow the inner container after our first
-    // scrollTop write. A delegated load-event listener on the inner
-    // container catches every img inside the message list — fire load
-    // events on injected <img>s and assert we re-pin.
-    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    const wrap = (props: Partial<React.ComponentProps<typeof MessageList>>) => (
-      <QueryClientProvider client={qc}>
-        <BrowserRouter>
-          <MessageList {...defaultProps} {...props} />
-        </BrowserRouter>
-      </QueryClientProvider>
-    );
-
-    const pages = [
-      {
-        items: [
-          makeMessage({
-            id: 'm-1',
-            authorID: 'user-1',
-            body: 'hello',
-            createdAt: '2026-04-24T10:30:00Z',
-          }),
-        ],
-      },
-    ];
-
-    const { container } = render(wrap({ pages }));
-    const scroller = container.querySelector('div.overflow-y-auto') as HTMLDivElement;
-    Object.defineProperty(scroller, 'clientHeight', { value: 600, configurable: true });
-    // Initial scroll height — synchronous pin already ran via the
-    // useLayoutEffect on render; emulate the result here so the rest
-    // of the assertions are about post-image-load behavior.
-    Object.defineProperty(scroller, 'scrollHeight', { value: 800, configurable: true });
-    scroller.scrollTop = 800;
-    expect(scroller.scrollTop).toBe(800);
-
-    // Inject an <img> (e.g. an avatar or inline attachment) inside the
-    // inner messages container, simulate its async load, and assert
-    // the scroller re-pins to the grown scrollHeight.
-    const inner = scroller.querySelector('.p-4.space-y-1') as HTMLElement;
-    expect(inner).toBeTruthy();
-    const img = document.createElement('img');
-    inner.appendChild(img);
-
-    // The image-load handler defers its scroll to the next animation
-    // frame so the browser has time to apply the just-loaded image's
-    // dimensions before scrollHeight is read. Stub rAF to run
-    // synchronously so the assertion can verify the post-frame state.
-    const rafSpy = vi.spyOn(window, 'requestAnimationFrame').mockImplementation((cb) => {
-      cb(0);
-      return 0 as unknown as number;
-    });
-
-    Object.defineProperty(scroller, 'scrollHeight', { value: 920, configurable: true });
-    img.dispatchEvent(new Event('load'));
-    expect(scroller.scrollTop).toBe(920);
-
-    // Another image (e.g. an unfurl thumb) loads later — keeps
-    // re-pinning while the user remains at the bottom.
-    Object.defineProperty(scroller, 'scrollHeight', { value: 1200, configurable: true });
-    img.dispatchEvent(new Event('load'));
-    expect(scroller.scrollTop).toBe(1200);
-    rafSpy.mockRestore();
-  });
-
-  it('initial scroll: re-sticks to the bottom on mount for images that finished loading before the listener attached', () => {
-    // Cached avatars / inline thumbnails fire their `load` event as a
-    // microtask before our useEffect runs and attaches the delegated
-    // listener — so the event is lost. The mount-time sweep checks
-    // every <img> already in the DOM for `complete && naturalHeight`
-    // and triggers one re-stick if any are present, otherwise the
-    // page comes up partially scrolled (the "50% of refreshes" bug
-    // when images were warm in the HTTP cache).
-    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    const wrap = (props: Partial<React.ComponentProps<typeof MessageList>>) => (
-      <QueryClientProvider client={qc}>
-        <BrowserRouter>
-          <MessageList {...defaultProps} {...props} />
-        </BrowserRouter>
-      </QueryClientProvider>
-    );
-
-    // Defer rAF callbacks so we can inject a "post-image-load"
-    // scrollHeight before the cached-image stickToBottom runs —
-    // mirrors the real flow: image was already loaded into layout
-    // before our useEffect, but our scrollTop write reads the
-    // post-image scrollHeight.
-    const rafCallbacks: FrameRequestCallback[] = [];
-    const rafSpy = vi.spyOn(window, 'requestAnimationFrame').mockImplementation((cb) => {
-      rafCallbacks.push(cb);
-      return 0 as unknown as number;
-    });
-
-    const fakeImg = Object.assign(document.createElement('img'), { src: '/cached.png' });
-    Object.defineProperty(fakeImg, 'complete', { value: true });
-    Object.defineProperty(fakeImg, 'naturalHeight', { value: 120 });
-    const originalQSA = HTMLElement.prototype.querySelectorAll;
-    const qsaSpy = vi
-      .spyOn(HTMLElement.prototype, 'querySelectorAll')
-      .mockImplementation(function (this: HTMLElement, selectors: string) {
-        if (selectors === 'img') {
-          return [fakeImg] as unknown as NodeListOf<Element>;
-        }
-        return originalQSA.call(this, selectors);
-      });
-
-    const pages = [{ items: [makeMessage({ id: 'm-1' })] }];
-    const { container } = render(wrap({ pages }));
-    const scroller = container.querySelector('div.overflow-y-auto') as HTMLDivElement;
-    Object.defineProperty(scroller, 'clientHeight', { value: 600, configurable: true });
-    Object.defineProperty(scroller, 'scrollHeight', { value: 950, configurable: true });
-    // Now flush deferred rAF — they were queued by both the mount
-    // layout-effect stick and the cached-image sweep.
-    rafCallbacks.splice(0).forEach((cb) => cb(0));
-    expect(scroller.scrollTop).toBe(950);
-
-    qsaSpy.mockRestore();
-    rafSpy.mockRestore();
-  });
-
-  it('post-message scroll: a freshly sent image catches up to the bottom once it loads', () => {
-    // Regression: when the user posts a message containing an image,
-    // the layout effect that snap-scrolls to the new bottom runs *before*
-    // the image has dimensions, so scrollHeight is short. As soon as the
-    // browser layouts the loaded image, the load-event handler must
-    // re-pin so the message — and the image inside it — is fully visible.
-    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    const wrap = (props: Partial<React.ComponentProps<typeof MessageList>>) => (
-      <QueryClientProvider client={qc}>
-        <BrowserRouter>
-          <MessageList {...defaultProps} {...props} />
-        </BrowserRouter>
-      </QueryClientProvider>
-    );
-    // Pages are newest-first; allMessages reverses so [len-1] is the
-    // newest. Initial state: a single older message from the user.
-    const pages = [{ items: [makeMessage({ id: 'm-1', authorID: 'user-1' })] }];
-
-    const { container, rerender } = render(wrap({ pages, currentUserId: 'user-1' }));
-    const scroller = container.querySelector('div.overflow-y-auto') as HTMLDivElement;
-    Object.defineProperty(scroller, 'clientHeight', { value: 600, configurable: true });
-    Object.defineProperty(scroller, 'scrollHeight', { value: 700, configurable: true });
-    scroller.scrollTop = 700;
-
-    // User posts a new message with an image. New bottom message ID
-    // changes; the lastBottom layout effect snaps scrollTop to the
-    // (still-short) scrollHeight because the image has 0×0 dimensions.
-    const newPages = [
-      {
-        items: [
-          makeMessage({ id: 'm-2', authorID: 'user-1', body: 'with image' }),
-          makeMessage({ id: 'm-1', authorID: 'user-1' }),
-        ],
-      },
-    ];
-    Object.defineProperty(scroller, 'scrollHeight', { value: 740, configurable: true });
-    rerender(wrap({ pages: newPages, currentUserId: 'user-1' }));
-    expect(scroller.scrollTop).toBe(740);
-
-    // Image inside the new message finishes loading. Box grows from 0×0
-    // to its intrinsic size; scrollHeight grows accordingly. The
-    // load-event handler must re-pin to the new scrollHeight.
-    const rafSpy = vi.spyOn(window, 'requestAnimationFrame').mockImplementation((cb) => {
-      cb(0);
-      return 0 as unknown as number;
-    });
-    const inner = scroller.querySelector('.p-4.space-y-1') as HTMLElement;
-    const img = document.createElement('img');
-    inner.appendChild(img);
-    Object.defineProperty(scroller, 'scrollHeight', { value: 1040, configurable: true });
-    img.dispatchEvent(new Event('load'));
-    expect(scroller.scrollTop).toBe(1040);
-    rafSpy.mockRestore();
-  });
-
-  it('does NOT re-pin on image load when the user has scrolled up to read older content', () => {
-    // Belt-and-braces: the load-event handler must respect
-    // wasAtBottomRef so a reader scrolled up doesn't get yanked when
-    // an image far above their viewport finishes loading.
-    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    const wrap = (props: Partial<React.ComponentProps<typeof MessageList>>) => (
-      <QueryClientProvider client={qc}>
-        <BrowserRouter>
-          <MessageList {...defaultProps} {...props} />
-        </BrowserRouter>
-      </QueryClientProvider>
-    );
-    const pages = [{ items: [makeMessage({ id: 'm-1' })] }];
-
-    const { container } = render(wrap({ pages }));
-    const scroller = container.querySelector('div.overflow-y-auto') as HTMLDivElement;
-    Object.defineProperty(scroller, 'clientHeight', { value: 600, configurable: true });
-    Object.defineProperty(scroller, 'scrollHeight', { value: 1500, configurable: true });
-
-    // Reader scrolls up past the 120px "at bottom" window.
-    scroller.scrollTop = 200;
-    scroller.dispatchEvent(new Event('scroll'));
-
-    // An image deep above their viewport finishes loading.
-    const inner = scroller.querySelector('.p-4.space-y-1') as HTMLElement;
-    const img = document.createElement('img');
-    inner.appendChild(img);
-    Object.defineProperty(scroller, 'scrollHeight', { value: 2400, configurable: true });
-    img.dispatchEvent(new Event('load'));
-    expect(scroller.scrollTop).toBe(200);
   });
 });

@@ -29,6 +29,7 @@ import { ThreadActionBar } from '@/components/chat/ThreadActionBar';
 import { UnfurlCard } from '@/components/chat/UnfurlCard';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { extractURLs, getInitials, formatLongDateTime } from '@/lib/format';
+import { dispatchFocusComposer, registerEditMessageHandler } from '@/lib/window-events';
 import type { Message } from '@/types';
 
 // Module-level Set so MessageList/ThreadPanel don't need to thread a
@@ -59,6 +60,10 @@ interface MessageItemProps {
   // reads display names + avatars from here instead of issuing its own
   // /users/batch fetch — avoids N+1 batches across many thread bars.
   userMap?: { get(id: string): { displayName: string; avatarURL?: string } | undefined };
+  // When true, renders the deep-link highlight ring. Driven by the
+  // surrounding list's anchor effect; the surrounding list also
+  // clears the flag after the flash window so the ring auto-removes.
+  highlighted?: boolean;
 }
 
 function formatTime(dateStr: string): string {
@@ -81,6 +86,7 @@ export function MessageItem({
   inThread,
   onReplyInThread,
   userMap,
+  highlighted,
 }: MessageItemProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [linkCopied, setLinkCopied] = useState(false);
@@ -105,6 +111,46 @@ export function MessageItem({
       messageHoverListeners.delete(onHover);
     };
   }, [actionsMenuOpen, message.id]);
+
+  // ArrowUp on an empty composer asks the surrounding list's most
+  // recent own message to enter edit mode. Registry-based dispatch
+  // (one window listener + a Map keyed by id) keeps this O(1) per
+  // event regardless of how many MessageItems are on screen, while
+  // preserving the cross-scope decoupling of a window event.
+  useEffect(() => {
+    if (!isOwn || message.deleted || message.system) return;
+    return registerEditMessageHandler(message.id, () => setIsEditing(true));
+  }, [isOwn, message.id, message.deleted, message.system]);
+
+  // Keep the inline edit visible — both on entry AND as the editor
+  // grows while the user types more lines. The composer lives just
+  // below the scroller, so without active tracking the bottom of the
+  // edit area slides behind it as height grows.
+  // - On entry: scrollIntoView after two frames so editor mount +
+  //   attachment chip layout settle before measuring.
+  // - During edit: a ResizeObserver re-scrolls on every height
+  //   increase. Disconnects on cancel/save.
+  useEffect(() => {
+    if (!isEditing) return;
+    const id = `msg-${message.id}`;
+    const el = document.getElementById(id);
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        document.getElementById(id)?.scrollIntoView({ block: 'nearest' });
+      });
+    });
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    let lastHeight = el.getBoundingClientRect().height;
+    const ro = new ResizeObserver(() => {
+      const h = el.getBoundingClientRect().height;
+      if (h > lastHeight + 0.5) {
+        el.scrollIntoView({ block: 'nearest' });
+      }
+      lastHeight = h;
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [isEditing, message.id]);
   const editMessage = useEditMessage();
   const deleteMessage = useDeleteMessage();
   const toggleReaction = useToggleReaction();
@@ -171,17 +217,26 @@ export function MessageItem({
   const editorReady =
     !isEditing || editAttachmentIDs.length === 0 || initialEditDrafts.length === editAttachmentIDs.length;
 
+  // Hand focus back to the main composer when an inline edit ends —
+  // Escape, no-op submit, or successful save. Scoped by parentID +
+  // inThread so a thread-reply edit doesn't yank the channel
+  // composer's focus when both views are open simultaneously.
+  function endEdit() {
+    setIsEditing(false);
+    dispatchFocusComposer({ parentID: message.parentID, inThread: !!inThread });
+  }
+
   function handleEditSubmit(value: MessageInputValue) {
     const same =
       value.body === message.body &&
       value.attachmentIDs.length === (message.attachmentIDs ?? []).length &&
       value.attachmentIDs.every((id, idx) => id === (message.attachmentIDs ?? [])[idx]);
     if (same) {
-      setIsEditing(false);
+      endEdit();
       return;
     }
     if (!value.body.trim() && value.attachmentIDs.length === 0) {
-      setIsEditing(false);
+      endEdit();
       return;
     }
     editMessage.mutate(
@@ -192,7 +247,7 @@ export function MessageItem({
         channelId,
         conversationId,
       },
-      { onSuccess: () => setIsEditing(false) },
+      { onSuccess: endEdit },
     );
   }
 
@@ -238,7 +293,7 @@ export function MessageItem({
       onMouseLeave={() => setHovered(false)}
       className={`relative flex items-start gap-3 rounded-md px-2 py-1.5 hover:bg-muted/50 ${
         message.pinned ? 'border-l-2 border-amber-500 pl-2' : ''
-      }`}
+      } ${highlighted ? 'ring-1 ring-amber-400/50 rounded-md' : ''}`}
     >
       <UserHoverCard
         userId={message.authorID}
@@ -300,10 +355,15 @@ export function MessageItem({
                 initialBody={message.body}
                 initialDrafts={initialEditDrafts}
                 onSend={handleEditSubmit}
-                onCancel={() => setIsEditing(false)}
+                onCancel={endEdit}
                 disabled={editMessage.isPending}
                 placeholder="Edit message..."
                 submitLabel="Save"
+                // Pull focus into the inline editor on mount —
+                // entering edit mode via ArrowUp from the channel
+                // composer should land the caret in the edit field
+                // directly so the user can keep typing.
+                focusKey={message.id}
               />
             </div>
           ) : (

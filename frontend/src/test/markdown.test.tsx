@@ -88,4 +88,25 @@ describe('renderMarkdown', () => {
     expect(container.querySelector('[data-testid="hashtag-pill"]')).toBeNull();
     expect(container.querySelector('p')?.textContent).toContain('#plain');
   });
+
+  it('preserves blank lines as literal empty lines in the rendered output', () => {
+    // Slack/iMessage parity: pressing Enter twice in the composer
+    // leaves a visible gap. Previous behaviour collapsed double
+    // newlines into a paragraph break with no visible spacing.
+    const { container } = render(<>{renderMarkdown('first\n\nsecond')}</>);
+    const ps = container.querySelectorAll('p');
+    expect(ps.length).toBe(3);
+    expect(ps[0].textContent).toBe('first');
+    expect(ps[1].textContent?.trim()).toBe('');
+    expect(ps[2].textContent).toBe('second');
+  });
+
+  it('stacks one blank paragraph per consecutive blank line', () => {
+    const { container } = render(<>{renderMarkdown('a\n\n\n\nb')}</>);
+    const ps = container.querySelectorAll('p');
+    // a, blank, blank, blank, b
+    expect(ps.length).toBe(5);
+    expect(ps[0].textContent).toBe('a');
+    expect(ps[4].textContent).toBe('b');
+  });
 });

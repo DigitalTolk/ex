@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/DigitalTolk/ex/internal/model"
+	"github.com/DigitalTolk/ex/internal/store"
 )
 
 func setupChannelService() (*ChannelService, *mockChannelStore, *mockMembershipStore, *mockBroker, *mockPublisher) {
@@ -77,6 +78,64 @@ func TestChannelService_Create_MemberAllowed(t *testing.T) {
 	users.users["m-1"] = &model.User{ID: "m-1", SystemRole: model.SystemRoleMember}
 	if _, err := svc.Create(context.Background(), "m-1", "team-room", model.ChannelTypePublic, ""); err != nil {
 		t.Fatalf("member should be allowed to create a channel: %v", err)
+	}
+}
+
+func TestChannelService_Create_RejectsDuplicateName(t *testing.T) {
+	svc, channels, _, _, _ := setupChannelService()
+	ctx := context.Background()
+
+	// Seed an existing channel so the slug-collision check has
+	// something to find.
+	channels.channels["existing-id"] = &model.Channel{
+		ID:   "existing-id",
+		Name: "engineering",
+		Slug: "engineering",
+		Type: model.ChannelTypePublic,
+	}
+
+	if _, err := svc.Create(ctx, "user-1", "engineering", model.ChannelTypePublic, ""); err == nil {
+		t.Fatal("expected duplicate name to be rejected")
+	}
+}
+
+func TestChannelService_Create_RejectsDuplicateNameOnRace(t *testing.T) {
+	// The service-layer GetChannelBySlug pre-check catches the
+	// common case but is NOT race-safe — two concurrent Creates
+	// can both pass it. The store layer's TransactWriteItems with
+	// a slug-lock item is the actual guard, and surfaces
+	// store.ErrAlreadyExists when the slug-lock conditional check
+	// fails. Simulate that race here: pre-check returns "not
+	// found" (no existing channel), but the store says
+	// ErrAlreadyExists. The service must map it to the friendly
+	// duplicate-name error rather than a generic 500.
+	svc, channels, _, _, _ := setupChannelService()
+	ctx := context.Background()
+	channels.createErr = store.ErrAlreadyExists
+
+	_, err := svc.Create(ctx, "user-1", "engineering", model.ChannelTypePublic, "")
+	if err == nil {
+		t.Fatal("expected race-loser to receive an error")
+	}
+	if !strings.Contains(err.Error(), "already exists") {
+		t.Errorf("expected friendly duplicate-name error, got: %v", err)
+	}
+}
+
+func TestChannelService_Create_RejectsDuplicateNameCaseInsensitive(t *testing.T) {
+	// Slugs lowercase the input, so "Engineering" and "engineering"
+	// hit the same /channel/<slug> URL — must be treated as the
+	// same name for uniqueness purposes.
+	svc, channels, _, _, _ := setupChannelService()
+	ctx := context.Background()
+	channels.channels["existing-id"] = &model.Channel{
+		ID:   "existing-id",
+		Name: "engineering",
+		Slug: "engineering",
+		Type: model.ChannelTypePublic,
+	}
+	if _, err := svc.Create(ctx, "user-1", "Engineering", model.ChannelTypePublic, ""); err == nil {
+		t.Fatal("expected case-only-different name to be rejected")
 	}
 }
 

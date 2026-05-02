@@ -36,6 +36,7 @@ import {
 } from '@/lib/limits';
 import { normalizeEmojiInBody } from '@/lib/emoji-shortcodes';
 import { isHttpUrl } from '@/lib/utils';
+import { dispatchEditMessage, onFocusComposer } from '@/lib/window-events';
 
 const TYPING_PING_INTERVAL_MS = 3000;
 
@@ -77,6 +78,11 @@ interface MessageInputProps {
   // indicator into ThreadPanel rather than the main MessageList. Absent
   // for the main composer.
   typingThreadRootID?: string;
+  // ID of the user's most recent message currently loaded in the
+  // surrounding list. ArrowUp on an empty composer triggers an inline
+  // edit on this message via the `ex:edit-message` window event;
+  // omitted (or undefined) disables the shortcut.
+  lastOwnMessageId?: string;
 }
 
 export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(function MessageInput({
@@ -92,6 +98,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
   typingParentID,
   typingParentType,
   typingThreadRootID,
+  lastOwnMessageId,
 }, ref) {
   const [body, setBody] = useState(initialBody);
   const [drafts, setDrafts] = useState<DraftAttachment[]>(initialDrafts);
@@ -153,6 +160,16 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
     sendWS(frame);
   }, [typingParentID, typingParentType, typingThreadRootID]);
 
+  // ArrowUp in an empty composer asks the surrounding list to put the
+  // user's most recent loaded message into edit mode (Slack/iMessage
+  // parity). Disabled when there's no candidate or when the composer
+  // is itself an inline edit (initialBody non-empty).
+  const requestEditLast = useCallback((): boolean => {
+    if (!lastOwnMessageId || initialBody) return false;
+    dispatchEditMessage({ messageId: lastOwnMessageId });
+    return true;
+  }, [lastOwnMessageId, initialBody]);
+
   // Codepoint cap mirrors the backend rule: the user pastes "🚀🚀🚀…",
   // each emoji is one user-visible char, and we count it as one — not
   // as four bytes or two UTF-16 units.
@@ -190,6 +207,22 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
     if (focusKey === undefined) return;
     queueMicrotask(() => editorRef.current?.focus());
   }, [focusKey]);
+
+  // Refocus when an inline edit elsewhere finishes (cancel or submit).
+  // Only composers that emit typing (i.e., the main / thread composer,
+  // not the inline-edit MessageInput inside MessageItem) participate.
+  // The thread-vs-main scope is disambiguated by typingThreadRootID:
+  // a non-thread edit's event matches composers without a thread root,
+  // and vice versa.
+  useEffect(() => {
+    if (!typingParentID) return;
+    const inThreadComposer = !!typingThreadRootID;
+    return onFocusComposer((detail) => {
+      if (detail.parentID !== typingParentID) return;
+      if (detail.inThread !== inThreadComposer) return;
+      queueMicrotask(() => editorRef.current?.focus());
+    });
+  }, [typingParentID, typingThreadRootID]);
 
   function insertEmojiShortcode(emoji: string) {
     editorRef.current?.insertText(emoji + ' ');
@@ -402,6 +435,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
             onSubmit={handleSend}
             onCancel={onCancel}
             onPasteFiles={uploadFiles}
+            onArrowUpEmpty={requestEditLast}
             placeholder={isUploading ? 'Uploading…' : placeholder}
             ariaLabel="Message input"
             className="flex-1"

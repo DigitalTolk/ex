@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"strings"
 	"time"
@@ -208,6 +209,27 @@ func (c *S3Client) HeadObject(ctx context.Context, key string) (bool, error) {
 		}
 	}
 	return false, fmt.Errorf("s3: head object: %w", err)
+}
+
+// GetObjectRange reads up to maxBytes from the start of the object at key.
+// Used for cheap header peek operations (e.g. decoding image dimensions
+// without downloading the full payload) — we send a Range header so even
+// 10 MB images cost a few KB of bandwidth.
+func (c *S3Client) GetObjectRange(ctx context.Context, key string, maxBytes int64) ([]byte, error) {
+	out, err := c.client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(c.bucket),
+		Key:    aws.String(key),
+		Range:  aws.String(fmt.Sprintf("bytes=0-%d", maxBytes-1)),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("s3: get object range: %w", err)
+	}
+	defer func() { _ = out.Body.Close() }()
+	buf, err := io.ReadAll(io.LimitReader(out.Body, maxBytes))
+	if err != nil {
+		return nil, fmt.Errorf("s3: read object body: %w", err)
+	}
+	return buf, nil
 }
 
 // PutObject uploads body bytes under key with the supplied contentType.

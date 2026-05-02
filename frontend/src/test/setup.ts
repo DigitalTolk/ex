@@ -51,16 +51,59 @@ vi.mock('@/components/chat/lexical/plugins/EmojiShortcutsPlugin', () => ({
   EmojiShortcutsPlugin: () => null,
 }));
 
-// Lexical's TypeaheadMenuPlugin uses ResizeObserver to track the
-// trigger anchor's size — jsdom doesn't ship it, so install a no-op
-// implementation. The mocked-out plugins in the global setup above
-// don't trigger this path; the dedicated typeahead test suites do.
+// Lexical's TypeaheadMenuPlugin and react-virtuoso both depend on
+// ResizeObserver. jsdom doesn't ship it; install a polyfill that
+// fires its callback once on observe() with a non-zero rect so
+// Virtuoso sees a viewport and proceeds to render rows. Lexical
+// only uses the observer for size tracking, so an extra synchronous
+// fire is harmless there.
 if (typeof globalThis.ResizeObserver === 'undefined') {
   globalThis.ResizeObserver = class {
-    observe() {}
+    callback: ResizeObserverCallback;
+    constructor(cb: ResizeObserverCallback) {
+      this.callback = cb;
+    }
+    observe(target: Element) {
+      this.callback(
+        [{ target, contentRect: { width: 1024, height: 768 } } as ResizeObserverEntry],
+        this as unknown as ResizeObserver,
+      );
+    }
     unobserve() {}
     disconnect() {}
   } as unknown as typeof ResizeObserver;
+}
+
+// Virtuoso reads offsetHeight/offsetWidth on items + scroller to
+// decide which rows to render. jsdom returns 0 for both, which makes
+// Virtuoso bail out and render nothing. Stub fixed non-zero sizes
+// so the viewport (clientHeight) is comfortably larger than each
+// item (offsetHeight) and Virtuoso renders enough rows to test.
+if (typeof HTMLElement !== 'undefined') {
+  if (!Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetHeight')?.get) {
+    Object.defineProperty(HTMLElement.prototype, 'offsetHeight', {
+      configurable: true,
+      get() { return 50; },
+    });
+  }
+  if (!Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetWidth')?.get) {
+    Object.defineProperty(HTMLElement.prototype, 'offsetWidth', {
+      configurable: true,
+      get() { return 1024; },
+    });
+  }
+  if (!Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientHeight')?.get) {
+    Object.defineProperty(HTMLElement.prototype, 'clientHeight', {
+      configurable: true,
+      get() { return 768; },
+    });
+  }
+  if (!Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientWidth')?.get) {
+    Object.defineProperty(HTMLElement.prototype, 'clientWidth', {
+      configurable: true,
+      get() { return 1024; },
+    });
+  }
 }
 
 // jsdom doesn't ship DragEvent / ClipboardEvent. @lexical/rich-text's

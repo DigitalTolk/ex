@@ -113,6 +113,54 @@ describe('UserMentionsPlugin', () => {
     });
   });
 
+  it('renders the online presence dot anchored to the avatar, matching the member-list style', async () => {
+    // Regression: the online indicator used to be a trailing right-
+    // edge dot with no offline state and no ring, while the member
+    // list anchored it to the avatar with `ring-2 ring-background`.
+    // Both surfaces should now share the UserAvatar component, so the
+    // dot lives inside the row's avatar wrapper and uses the same
+    // ring class. We assert structural equivalence (a dot under the
+    // avatar with the shared classes) rather than pixel-identical
+    // styling so future restyling of the shared component cascades
+    // without breaking this test.
+    const ref = createRef<WysiwygEditorHandle>();
+    render(<Providers><WysiwygEditor ref={ref} /></Providers>);
+    await waitFor(() => expect(ref.current).not.toBeNull());
+    act(() => {
+      ref.current!.insertText('@al');
+    });
+    let aliceRow: HTMLElement | undefined;
+    await waitFor(() => {
+      aliceRow = screen.getAllByTestId('mention-option').find((r) =>
+        r.textContent?.includes('Alice'),
+      );
+      expect(aliceRow).toBeDefined();
+    });
+    // Alice is online (mocked in usePresence). The dot should be a
+    // descendant of the row marked Online with the shared ring class.
+    const dot = aliceRow!.querySelector('span[aria-label="Online"]');
+    expect(dot).not.toBeNull();
+    expect(dot!.className).toContain('ring-background');
+    expect(dot!.className).toContain('bg-emerald-500');
+  });
+
+  it('renders the typeahead popup above the trigger, not below', async () => {
+    // The chat composer sits at the viewport bottom, so opening the
+    // popup downward would clip it under the page chrome. The class
+    // on the popup encodes the "above" placement: `bottom-full mb-2`
+    // anchors the menu's bottom edge to the trigger's top edge.
+    // Regression test for the case where this was inverted.
+    const ref = createRef<WysiwygEditorHandle>();
+    render(<Providers><WysiwygEditor ref={ref} /></Providers>);
+    await waitFor(() => expect(ref.current).not.toBeNull());
+    act(() => {
+      ref.current!.insertText('@');
+    });
+    const popup = await screen.findByTestId('mention-popup');
+    expect(popup.className).toContain('bottom-full');
+    expect(popup.className).not.toContain('top-full');
+  });
+
   it('inserts a mention pill on click', async () => {
     const onChange = vi.fn();
     const ref = createRef<WysiwygEditorHandle>();

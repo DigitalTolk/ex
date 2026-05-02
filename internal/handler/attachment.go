@@ -35,12 +35,22 @@ func (h *AttachmentHandler) CreateUploadURL(w http.ResponseWriter, r *http.Reque
 		ContentType string `json:"contentType"`
 		Size        int64  `json:"size"`
 		SHA256      string `json:"sha256"`
+		Width       int    `json:"width"`
+		Height      int    `json:"height"`
 	}
 	if err := readJSON(r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_body", err.Error())
 		return
 	}
-	res, err := h.svc.CreateUploadURL(r.Context(), userID, body.Filename, body.ContentType, body.SHA256, body.Size)
+	res, err := h.svc.CreateUploadURL(r.Context(), service.CreateUploadParams{
+		UserID:      userID,
+		Filename:    body.Filename,
+		ContentType: body.ContentType,
+		SHA256:      body.SHA256,
+		Size:        body.Size,
+		Width:       body.Width,
+		Height:      body.Height,
+	})
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "create_error", err.Error())
 		return
@@ -52,6 +62,8 @@ func (h *AttachmentHandler) CreateUploadURL(w http.ResponseWriter, r *http.Reque
 		"filename":      res.Attachment.Filename,
 		"contentType":   res.Attachment.ContentType,
 		"size":          res.Attachment.Size,
+		"width":         res.Attachment.Width,
+		"height":        res.Attachment.Height,
 	})
 }
 

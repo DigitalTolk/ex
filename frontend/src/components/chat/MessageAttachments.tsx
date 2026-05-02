@@ -88,6 +88,10 @@ function AttachmentSkeleton({ loading }: { loading: boolean }) {
 }
 
 function ThumbnailButton({ att, onOpen }: { att: Attachment; onOpen: () => void }) {
+  // width/height attrs reserve the layout box pre-decode; CSS caps
+  // visible size. Without these the row resizes after image decode
+  // and breaks scroll-to-bottom on first paint.
+  const hasDims = att.width && att.height;
   return (
     <button
       type="button"
@@ -97,14 +101,13 @@ function ThumbnailButton({ att, onOpen }: { att: Attachment; onOpen: () => void 
       data-testid="message-image-thumb"
     >
       {att.url && (
-        // Eager load: the live-tail bottom-stick logic in MessageList
-        // re-pins on each img's load event. With loading="lazy" a freshly
-        // posted image at the bottom of the viewport sometimes never
-        // triggers the load event (browser decides it's outside the
-        // near-viewport heuristic when its 0×0 placeholder is exactly at
-        // the visible bottom), so the scroll never catches up to its
-        // grown box.
-        <img src={att.url} alt={att.filename} className="max-h-72 max-w-full" />
+        <img
+          src={att.url}
+          alt={att.filename}
+          className="h-auto max-h-72 max-w-full"
+          width={hasDims ? att.width : undefined}
+          height={hasDims ? att.height : undefined}
+        />
       )}
     </button>
   );

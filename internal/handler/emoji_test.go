@@ -292,6 +292,13 @@ func (s *dataAttachmentStore) Delete(_ context.Context, id string) error {
 	delete(s.refs, id)
 	return nil
 }
+func (s *dataAttachmentStore) SetDimensions(_ context.Context, id string, width, height int) error {
+	if a, ok := s.byID[id]; ok {
+		a.Width = width
+		a.Height = height
+	}
+	return nil
+}
 
 type fakeAttachmentSignerH struct{}
 
@@ -305,6 +312,9 @@ func (fakeAttachmentSignerH) PresignedPutURL(_ context.Context, key, _ string, _
 	return "https://upload/" + key, nil
 }
 func (fakeAttachmentSignerH) DeleteObject(_ context.Context, _ string) error { return nil }
+func (fakeAttachmentSignerH) GetObjectRange(_ context.Context, _ string, _ int64) ([]byte, error) {
+	return nil, nil
+}
 
 // TestPresenceHandler_List verifies the presence handler returns the
 // service's online userIDs.

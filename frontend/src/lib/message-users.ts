@@ -19,6 +19,40 @@ export function collectMessageUserIDs(messages: Iterable<Message>): string[] {
   return Array.from(ids);
 }
 
+// findLastOwnMessageId walks message pages newest-first to find the
+// caller's most recent top-level message currently in cache. Used by
+// the composer to drive the ArrowUp-edit-last-message shortcut: only
+// candidates already loaded in the DOM should be editable that way,
+// so we read directly from the loaded pages instead of asking the
+// server. Pages are ordered newest-first; items within a page are
+// also newest-first (the API contract). Skips thread replies (they
+// belong to the thread composer's scope, not the main one), system
+// messages, deleted tombstones, and anyone else's posts.
+//
+// `scope` selects which subset of messages to consider:
+//   - 'main'   → top-level only (parentMessageID empty)
+//   - threadID → replies whose parentMessageID matches the thread root
+export function findLastOwnMessageId(
+  pages: { items: Message[] }[] | undefined,
+  currentUserId: string | undefined,
+  scope: 'main' | string,
+): string | undefined {
+  if (!currentUserId || !pages) return undefined;
+  for (const page of pages) {
+    for (const m of page.items) {
+      if (m.authorID !== currentUserId) continue;
+      if (m.deleted || m.system) continue;
+      if (scope === 'main') {
+        if (m.parentMessageID) continue;
+      } else {
+        if (m.parentMessageID !== scope) continue;
+      }
+      return m.id;
+    }
+  }
+  return undefined;
+}
+
 export interface ThreadMeta {
   lastReplyAt: string;
   authors: string[]; // distinct, most-recent first, capped at 3

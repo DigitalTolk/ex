@@ -53,6 +53,7 @@ services:
       # bundle and switch the URL scheme to https.
       DISABLE_SECURITY_PLUGIN: "true"
       DISABLE_INSTALL_DEMO_CONFIG: "true"
+      DISABLE_PERFORMANCE_ANALYZER_AGENT_CLI: "true"
       # Quiet down the default INFO-level chatter — the dev console
       # was getting buried under cluster-state, GC, and shard
       # bookkeeping logs from a single-node setup that nobody is

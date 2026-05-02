@@ -26,7 +26,7 @@ import { markThreadSeen } from '@/hooks/useThreads';
 import { apiFetch } from '@/lib/api';
 import { queryKeys } from '@/lib/query-keys';
 import { useUsersBatch } from '@/hooks/useUsersBatch';
-import { collectMessageUserIDs } from '@/lib/message-users';
+import { collectMessageUserIDs, findLastOwnMessageId } from '@/lib/message-users';
 import { useSidePanels } from '@/hooks/useSidePanels';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { useDeepLinkAnchor } from '@/hooks/useDeepLinkAnchor';
@@ -93,7 +93,6 @@ export function ChannelView() {
     fetchPreviousPage,
     hasPreviousPage,
     isFetchingPreviousPage,
-    refetch,
   } = useChannelMessages(channel?.id, mainAnchor);
   const sendMessage = useSendChannelMessage(channel?.id);
   useEffect(() => {
@@ -155,6 +154,11 @@ export function ChannelView() {
   }, [members, data]);
 
   const { data: usersData } = useUsersBatch(userIDs);
+
+  const lastOwnMessageId = useMemo(
+    () => findLastOwnMessageId(data?.pages, user?.id, 'main'),
+    [data, user?.id],
+  );
 
   const userMap = useMemo(() => {
     const m: Record<string, UserMapEntry> = {};
@@ -250,7 +254,6 @@ export function ChannelView() {
             hasPreviousPage={hasPreviousPage}
             isFetchingPreviousPage={isFetchingPreviousPage}
             fetchPreviousPage={fetchPreviousPage}
-            refetch={refetch}
             currentUserId={user?.id}
             channelId={channel?.id}
             channelSlug={channel?.slug}
@@ -276,6 +279,7 @@ export function ChannelView() {
             focusKey={channel?.id}
             typingParentID={channel?.id}
             typingParentType="channel"
+            lastOwnMessageId={lastOwnMessageId}
           />
         </MessageDropZone>
       </div>

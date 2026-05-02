@@ -68,6 +68,22 @@ export function ThreadPanel({
 
   const send = useSendMessage({ channelId, conversationId });
   const inputRef = useRef<MessageInputHandle>(null);
+
+  // Most recent own reply for the ArrowUp-edit-last shortcut. Thread
+  // data is oldest-first; walk from the end to find the newest reply
+  // matching the current user. Skip the root — that's editable from
+  // the main composer, not the thread panel.
+  const lastOwnMessageId = useMemo(() => {
+    if (!currentUserId || !data) return undefined;
+    for (let i = data.length - 1; i >= 0; i--) {
+      const m = data[i];
+      if (m.parentMessageID !== threadRootID) continue;
+      if (m.authorID !== currentUserId) continue;
+      if (m.deleted || m.system) continue;
+      return m.id;
+    }
+    return undefined;
+  }, [data, currentUserId, threadRootID]);
   const scrollRef = useRef<HTMLDivElement>(null);
   // Inner messages container — observed by the ResizeObservers below
   // (NOT scroller.lastElementChild, which can be a fixed-height
@@ -318,6 +334,7 @@ export function ThreadPanel({
           typingParentID={channelId ?? conversationId}
           typingParentType={channelId ? 'channel' : 'conversation'}
           typingThreadRootID={threadRootID}
+          lastOwnMessageId={lastOwnMessageId}
         />
       </MessageDropZone>
     </aside>

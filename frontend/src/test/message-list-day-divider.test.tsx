@@ -1,63 +1,13 @@
-import { describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
-import { BrowserRouter } from 'react-router-dom';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { MessageList } from '@/components/chat/MessageList';
+import { describe, it, expect } from 'vitest';
+import { buildMessageListRows } from '@/components/chat/MessageListRows';
+import { formatDayHeading } from '@/lib/format';
 import type { Message } from '@/types';
 
-vi.mock('@/hooks/useMessages', () => ({
-  useEditMessage: () => ({ mutate: vi.fn(), isPending: false }),
-  useDeleteMessage: () => ({ mutate: vi.fn(), isPending: false }),
-  useToggleReaction: () => ({ mutate: vi.fn(), isPending: false }),
-  useSetPinned: () => ({ mutate: vi.fn(), isPending: false }),
-}));
-
-vi.mock('@/hooks/useEmoji', () => ({
-  useEmojis: () => ({ data: [] }),
-  useEmojiMap: () => ({ data: {} }),
-}));
-
-vi.mock('@/hooks/useAttachments', () => ({
-  uploadAttachment: vi.fn(),
-  useDeleteDraftAttachment: () => ({ mutateAsync: vi.fn(), mutate: vi.fn(), isPending: false }),
-  useAttachment: () => ({ data: undefined, isLoading: false }),
-  useAttachmentsBatch: () => ({ map: new Map(), data: [] }),
-}));
-
-vi.mock('@/components/ui/dropdown-menu', () => ({
-  DropdownMenu: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-  DropdownMenuTrigger: ({ children }: { children: React.ReactNode }) => <button>{children}</button>,
-  DropdownMenuContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-  DropdownMenuItem: ({ children, onClick }: { children: React.ReactNode; onClick?: () => void }) => (
-    <button onClick={onClick}>{children}</button>
-  ),
-}));
-
-function renderList(messages: Message[]) {
-  // pages are stored newest-first (the list reverses them); pass them
-  // newest-first to mirror the real query shape.
-  const newestFirst = [...messages].reverse();
-  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(
-    <QueryClientProvider client={qc}>
-      <BrowserRouter>
-        <MessageList
-          pages={[{ items: newestFirst }]}
-          hasNextPage={false}
-          isFetchingNextPage={false}
-          isLoading={false}
-          fetchNextPage={vi.fn()}
-          currentUserId="u-me"
-          channelId="ch-1"
-          userMap={{
-            'u-1': { displayName: 'Alice' },
-            'u-2': { displayName: 'Bob' },
-          }}
-        />
-      </BrowserRouter>
-    </QueryClientProvider>,
-  );
-}
+// Day-divider semantics live in the pure `buildMessageListRows`
+// helper so they're covered without spinning up Virtuoso (which
+// doesn't render items under jsdom). Heading rendering is verified
+// by piping the divider's `date` field through `formatDayHeading`,
+// the same call the component itself makes.
 
 describe('MessageList day-grouping divider', () => {
   it('inserts one divider per calendar day spanned', () => {
@@ -75,9 +25,8 @@ describe('MessageList day-grouping divider', () => {
         createdAt: new Date(2026, 3, 25, 14, 0, 0).toISOString(),
       },
     ];
-    renderList(messages);
-    const dividers = screen.getAllByTestId('day-divider');
-    // Two unique days (Apr 24, Apr 25) → two dividers.
+    const rows = buildMessageListRows(messages);
+    const dividers = rows.filter((r) => r.kind === 'day');
     expect(dividers).toHaveLength(2);
   });
 
@@ -94,8 +43,8 @@ describe('MessageList day-grouping divider', () => {
         createdAt: same2.toISOString(),
       },
     ];
-    renderList(messages);
-    expect(screen.getAllByTestId('day-divider')).toHaveLength(1);
+    const rows = buildMessageListRows(messages);
+    expect(rows.filter((r) => r.kind === 'day')).toHaveLength(1);
   });
 
   it('renders the heading using the shared Mar 26th-style format', () => {
@@ -105,8 +54,30 @@ describe('MessageList day-grouping divider', () => {
         createdAt: new Date(2025, 11, 31, 12, 0, 0).toISOString(),
       },
     ];
-    renderList(messages);
-    // Older year → includes the year per formatDayHeading.
-    expect(screen.getByText('Dec 31st, 2025')).toBeInTheDocument();
+    const rows = buildMessageListRows(messages);
+    const day = rows.find((r) => r.kind === 'day');
+    expect(day).toBeDefined();
+    if (day && day.kind === 'day') {
+      // Older year → includes the year per formatDayHeading.
+      expect(formatDayHeading(day.date)).toBe('Dec 31st, 2025');
+    }
+  });
+
+  it('skips thread replies (they belong to the thread panel)', () => {
+    const messages: Message[] = [
+      {
+        id: 'root', parentID: 'ch-1', authorID: 'u-1', body: 'root',
+        createdAt: new Date(2026, 3, 26, 10, 0, 0).toISOString(),
+      },
+      {
+        id: 'reply', parentID: 'ch-1', authorID: 'u-2', body: 'reply',
+        parentMessageID: 'root',
+        createdAt: new Date(2026, 3, 26, 11, 0, 0).toISOString(),
+      },
+    ];
+    const rows = buildMessageListRows(messages);
+    const messageRows = rows.filter((r) => r.kind === 'message');
+    expect(messageRows).toHaveLength(1);
+    expect(messageRows[0].kind === 'message' && messageRows[0].message.id).toBe('root');
   });
 });

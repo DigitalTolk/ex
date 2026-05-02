@@ -15,8 +15,18 @@ type Attachment struct {
 	S3Key       string    `json:"-" dynamodbav:"s3Key"`
 	URL         string    `json:"url,omitempty" dynamodbav:"-"`         // resolved at fetch time, inline (used by <img>/preview)
 	DownloadURL string    `json:"downloadURL,omitempty" dynamodbav:"-"` // resolved at fetch time, forces Content-Disposition: attachment
-	CreatedBy   string    `json:"createdBy" dynamodbav:"createdBy"`
-	CreatedAt   time.Time `json:"createdAt" dynamodbav:"createdAt"`
+	// Width and Height are the intrinsic pixel dimensions of an
+	// image attachment. Detected at upload time from the image's
+	// own headers and persisted so the frontend can render the
+	// <img> with explicit width/height attributes — that reserves
+	// the layout box on first paint and stops the message list
+	// from shifting as the image decodes. Zero for non-image
+	// attachments and for image attachments uploaded before this
+	// field existed (lazy-backfilled on next read).
+	Width     int       `json:"width,omitempty" dynamodbav:"width,omitempty"`
+	Height    int       `json:"height,omitempty" dynamodbav:"height,omitempty"`
+	CreatedBy string    `json:"createdBy" dynamodbav:"createdBy"`
+	CreatedAt time.Time `json:"createdAt" dynamodbav:"createdAt"`
 	// MessageIDs is the set of message IDs currently referencing this
 	// attachment. Maintained as a Dynamo string set; never serialized to JSON.
 	MessageIDs []string `json:"-" dynamodbav:"messageIDs,omitempty,stringset"`

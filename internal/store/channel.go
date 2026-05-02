@@ -66,13 +66,44 @@ func (s *ChannelStoreImpl) Create(ctx context.Context, ch *model.Channel) error 
 		return fmt.Errorf("store: marshal channel: %w", err)
 	}
 
-	_, err = s.Client.PutItem(ctx, &dynamodb.PutItemInput{
-		TableName:           aws.String(s.Table),
-		Item:                av,
-		ConditionExpression: aws.String("attribute_not_exists(PK)"),
+	// Slug-lock item: a separate key derived from the slug. Both
+	// the channel item and the slug-lock are written in one
+	// TransactWriteItems with conditional puts; if a concurrent
+	// Create races on the same slug, exactly one transaction
+	// succeeds and the other gets ConditionalCheckFailed. A
+	// service-layer GetBySlug pre-check is the fast path for the
+	// common case but isn't load-bearing for correctness — this
+	// transaction is.
+	lockAV, err := attributevalue.MarshalMap(map[string]any{
+		"PK":        chanSlugGSI1PK(ch.Slug),
+		"SK":        metaSK(),
+		"ChannelID": ch.ID,
+		"CreatedAt": ch.CreatedAt.Format(time.RFC3339Nano),
 	})
 	if err != nil {
-		if isConditionCheckFailed(err) {
+		return fmt.Errorf("store: marshal channel slug lock: %w", err)
+	}
+
+	_, err = s.Client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
+		TransactItems: []types.TransactWriteItem{
+			{
+				Put: &types.Put{
+					TableName:           aws.String(s.Table),
+					Item:                av,
+					ConditionExpression: aws.String("attribute_not_exists(PK)"),
+				},
+			},
+			{
+				Put: &types.Put{
+					TableName:           aws.String(s.Table),
+					Item:                lockAV,
+					ConditionExpression: aws.String("attribute_not_exists(PK)"),
+				},
+			},
+		},
+	})
+	if err != nil {
+		if isConditionCheckFailed(err) || isTransactionCancelledWithCondition(err) {
 			return ErrAlreadyExists
 		}
 		return fmt.Errorf("store: create channel: %w", err)

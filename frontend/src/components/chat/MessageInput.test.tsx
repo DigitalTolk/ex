@@ -122,4 +122,107 @@ describe('MessageInput', () => {
       expect(document.activeElement).toBe(textarea);
     });
   });
+
+  it('dispatches ex:edit-message when ArrowUp is pressed in an empty composer', async () => {
+    const user = userEvent.setup();
+    const events: string[] = [];
+    const listener = (e: Event) => {
+      const ce = e as CustomEvent<{ messageId?: string }>;
+      if (ce.detail?.messageId) events.push(ce.detail.messageId);
+    };
+    window.addEventListener('ex:edit-message', listener);
+    render(<MessageInput onSend={vi.fn()} lastOwnMessageId="msg-7" />);
+    const editor = await screen.findByLabelText('Message input');
+    editor.focus();
+    await user.keyboard('{ArrowUp}');
+    window.removeEventListener('ex:edit-message', listener);
+    expect(events).toEqual(['msg-7']);
+  });
+
+  it('does NOT dispatch ex:edit-message when the composer has content', async () => {
+    const user = userEvent.setup();
+    const listener = vi.fn();
+    window.addEventListener('ex:edit-message', listener);
+    render(
+      <MessageInput onSend={vi.fn()} lastOwnMessageId="msg-7" initialBody="draft" />,
+    );
+    const editor = await screen.findByLabelText('Message input');
+    editor.focus();
+    await user.keyboard('{ArrowUp}');
+    window.removeEventListener('ex:edit-message', listener);
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  it('does NOT dispatch ex:edit-message when there is no candidate own message', async () => {
+    const user = userEvent.setup();
+    const listener = vi.fn();
+    window.addEventListener('ex:edit-message', listener);
+    render(<MessageInput onSend={vi.fn()} />);
+    const editor = await screen.findByLabelText('Message input');
+    editor.focus();
+    await user.keyboard('{ArrowUp}');
+    window.removeEventListener('ex:edit-message', listener);
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  it('refocuses on ex:focus-composer when parent + scope match (main composer)', async () => {
+    render(
+      <MessageInput
+        onSend={vi.fn()}
+        typingParentID="ch-1"
+        typingParentType="channel"
+      />,
+    );
+    const editor = await screen.findByLabelText('Message input');
+    editor.blur();
+    expect(document.activeElement).not.toBe(editor);
+    window.dispatchEvent(
+      new CustomEvent('ex:focus-composer', {
+        detail: { parentID: 'ch-1', inThread: false },
+      }),
+    );
+    await waitFor(() => {
+      expect(document.activeElement).toBe(editor);
+    });
+  });
+
+  it('does NOT refocus when ex:focus-composer comes from a different parent', async () => {
+    render(
+      <MessageInput
+        onSend={vi.fn()}
+        typingParentID="ch-1"
+        typingParentType="channel"
+      />,
+    );
+    const editor = await screen.findByLabelText('Message input');
+    editor.blur();
+    window.dispatchEvent(
+      new CustomEvent('ex:focus-composer', {
+        detail: { parentID: 'ch-2', inThread: false },
+      }),
+    );
+    // Give the queueMicrotask a tick to reveal a buggy fire.
+    await new Promise((r) => setTimeout(r, 10));
+    expect(document.activeElement).not.toBe(editor);
+  });
+
+  it('thread composer ignores main-scope ex:focus-composer events', async () => {
+    render(
+      <MessageInput
+        onSend={vi.fn()}
+        typingParentID="ch-1"
+        typingParentType="channel"
+        typingThreadRootID="root-1"
+      />,
+    );
+    const editor = await screen.findByLabelText('Message input');
+    editor.blur();
+    window.dispatchEvent(
+      new CustomEvent('ex:focus-composer', {
+        detail: { parentID: 'ch-1', inThread: false },
+      }),
+    );
+    await new Promise((r) => setTimeout(r, 10));
+    expect(document.activeElement).not.toBe(editor);
+  });
 });

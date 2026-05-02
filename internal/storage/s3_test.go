@@ -384,6 +384,88 @@ func TestS3Client_PutObject_Success(t *testing.T) {
 	}
 }
 
+// TestS3Client_GetObjectRange_Success covers the cheap header-peek
+// path used by the dimension backfill: a Range request returning a
+// partial body must be read and returned as bytes.
+func TestS3Client_GetObjectRange_Success(t *testing.T) {
+	type seen struct {
+		method   string
+		path     string
+		rangeHdr string
+	}
+	got := make(chan seen, 4)
+	payload := []byte("HEADERBYTES")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			got <- seen{method: r.Method, path: r.URL.Path, rangeHdr: r.Header.Get("Range")}
+			w.Header().Set("Content-Range", "bytes 0-10/100")
+			w.WriteHeader(http.StatusPartialContent)
+			_, _ = w.Write(payload)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	ctx := context.Background()
+	client, err := NewS3Client(ctx, S3Config{
+		Endpoint:  srv.URL,
+		Bucket:    "bucket",
+		AccessKey: "test",
+		SecretKey: "test",
+		Region:    "us-east-1",
+	})
+	if err != nil {
+		t.Fatalf("NewS3Client: %v", err)
+	}
+
+	buf, err := client.GetObjectRange(ctx, "uploads/abc.png", int64(len(payload)))
+	if err != nil {
+		t.Fatalf("GetObjectRange: %v", err)
+	}
+	if string(buf) != string(payload) {
+		t.Errorf("body = %q, want %q", string(buf), string(payload))
+	}
+	r := <-got
+	if r.method != http.MethodGet {
+		t.Errorf("method = %s, want GET", r.method)
+	}
+	if !strings.Contains(r.path, "uploads/abc.png") {
+		t.Errorf("path = %q, want uploads/abc.png", r.path)
+	}
+	if !strings.HasPrefix(r.rangeHdr, "bytes=0-") {
+		t.Errorf("Range = %q, want bytes=0-...", r.rangeHdr)
+	}
+}
+
+// TestS3Client_GetObjectRange_ServerError covers the wrap-and-return
+// branch: a non-2xx GetObject must surface as a wrapped error.
+func TestS3Client_GetObjectRange_ServerError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	ctx := context.Background()
+	client, err := NewS3Client(ctx, S3Config{
+		Endpoint:  srv.URL,
+		Bucket:    "bucket",
+		AccessKey: "test",
+		SecretKey: "test",
+		Region:    "us-east-1",
+	})
+	if err != nil {
+		t.Fatalf("NewS3Client: %v", err)
+	}
+	if _, err := client.GetObjectRange(ctx, "uploads/explode", 64); err == nil {
+		t.Fatal("expected error from 500 response")
+	}
+}
+
 // TestS3Client_PutObject_ServerError covers the error-wrap branch.
 func TestS3Client_PutObject_ServerError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

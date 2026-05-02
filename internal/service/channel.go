@@ -173,11 +173,23 @@ func (s *ChannelService) Create(ctx context.Context, userID, name string, chanTy
 	if err := ValidateChannelDescription(description); err != nil {
 		return nil, err
 	}
+	// Slugs are derived from names and used as URL keys; two
+	// channels with the same name (case-insensitive collisions
+	// included via slugify's lowercasing) would collide on
+	// /channel/<slug>. The pre-check is the fast path for friendlier
+	// errors; the actual race-safety lives in the store layer's
+	// TransactWriteItems with a slug-lock item, which surfaces
+	// ErrAlreadyExists if a concurrent create wins. We map both to
+	// the same user-facing message.
+	slug := slugify(name)
+	if existing, err := s.channels.GetChannelBySlug(ctx, slug); err == nil && existing != nil {
+		return nil, errors.New("channel: a channel with this name already exists")
+	}
 	now := time.Now()
 	ch := &model.Channel{
 		ID:          store.NewID(),
 		Name:        name,
-		Slug:        slugify(name),
+		Slug:        slug,
 		Description: description,
 		Type:        chanType,
 		CreatedBy:   userID,
@@ -186,6 +198,9 @@ func (s *ChannelService) Create(ctx context.Context, userID, name string, chanTy
 	}
 
 	if err := s.channels.CreateChannel(ctx, ch); err != nil {
+		if errors.Is(err, store.ErrAlreadyExists) {
+			return nil, errors.New("channel: a channel with this name already exists")
+		}
 		return nil, fmt.Errorf("channel: create: %w", err)
 	}
 

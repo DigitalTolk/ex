@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { collectMessageUserIDs, deriveThreadMeta } from '@/lib/message-users';
+import { collectMessageUserIDs, deriveThreadMeta, findLastOwnMessageId } from '@/lib/message-users';
 import type { Message } from '@/types';
 
 function msg(overrides: Partial<Message>): Message {
@@ -100,5 +100,66 @@ describe('deriveThreadMeta', () => {
   it('skips messages that are not replies', () => {
     const meta = deriveThreadMeta([msg({ id: 'r1', authorID: 'u-a' })]);
     expect(meta.size).toBe(0);
+  });
+});
+
+describe('findLastOwnMessageId', () => {
+  // Pages are newest-first; items within each page are also newest-first
+  // (matches the API contract). Across-page case: the user's most recent
+  // own message lives in pages[1] because pages[0] only has other people.
+  it('returns the newest own top-level message in scope=main', () => {
+    const pages = [
+      { items: [
+        msg({ id: 'm-9', authorID: 'u-other' }),
+        msg({ id: 'm-8', authorID: 'u-other' }),
+      ] },
+      { items: [
+        msg({ id: 'm-7', authorID: 'u-me' }),
+        msg({ id: 'm-6', authorID: 'u-me' }),
+      ] },
+    ];
+    expect(findLastOwnMessageId(pages, 'u-me', 'main')).toBe('m-7');
+  });
+
+  it('skips thread replies in scope=main', () => {
+    const pages = [
+      { items: [
+        msg({ id: 'r-1', authorID: 'u-me', parentMessageID: 'root-1' }),
+        msg({ id: 'm-5', authorID: 'u-me' }),
+      ] },
+    ];
+    expect(findLastOwnMessageId(pages, 'u-me', 'main')).toBe('m-5');
+  });
+
+  it('skips system and deleted messages', () => {
+    const pages = [
+      { items: [
+        msg({ id: 'sys', authorID: 'u-me', system: true }),
+        msg({ id: 'tomb', authorID: 'u-me', deleted: true }),
+        msg({ id: 'm-3', authorID: 'u-me' }),
+      ] },
+    ];
+    expect(findLastOwnMessageId(pages, 'u-me', 'main')).toBe('m-3');
+  });
+
+  it('returns undefined when no own message is loaded', () => {
+    const pages = [{ items: [msg({ id: 'm-1', authorID: 'u-other' })] }];
+    expect(findLastOwnMessageId(pages, 'u-me', 'main')).toBeUndefined();
+  });
+
+  it('returns undefined when pages or currentUserId is missing', () => {
+    expect(findLastOwnMessageId(undefined, 'u-me', 'main')).toBeUndefined();
+    expect(findLastOwnMessageId([], undefined, 'main')).toBeUndefined();
+  });
+
+  it('with a thread scope, only returns replies under that root', () => {
+    const pages = [
+      { items: [
+        msg({ id: 'm-top', authorID: 'u-me' }),
+        msg({ id: 'r-other-thread', authorID: 'u-me', parentMessageID: 'root-2' }),
+        msg({ id: 'r-mine', authorID: 'u-me', parentMessageID: 'root-1' }),
+      ] },
+    ];
+    expect(findLastOwnMessageId(pages, 'u-me', 'root-1')).toBe('r-mine');
   });
 });

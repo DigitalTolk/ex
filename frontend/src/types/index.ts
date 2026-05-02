@@ -50,6 +50,14 @@ export interface Attachment {
   filename: string;
   url?: string; // resolved presigned GET URL — inline (used by <img>/preview)
   downloadURL?: string; // presigned GET URL with forced Content-Disposition: attachment
+  // Intrinsic pixel dimensions for image attachments. Reported by
+  // the browser at upload time and persisted server-side; may be
+  // absent on legacy attachments uploaded before this field
+  // existed (those backfill on next read). Renderers pass them as
+  // width/height attributes on <img> so the layout box is reserved
+  // before image decode.
+  width?: number;
+  height?: number;
   createdBy: string;
   createdAt: string;
 }
