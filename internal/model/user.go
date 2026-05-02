@@ -21,16 +21,17 @@ const (
 )
 
 type User struct {
-	ID           string       `json:"id" dynamodbav:"id"`
-	Email        string       `json:"email" dynamodbav:"email"`
-	DisplayName  string       `json:"displayName" dynamodbav:"displayName"`
-	AvatarKey    string       `json:"-" dynamodbav:"avatarKey,omitempty"`               // S3 object key (persistent)
-	AvatarURL    string       `json:"avatarURL,omitempty" dynamodbav:"-"`               // presigned URL, regenerated on each fetch
-	SystemRole   SystemRole   `json:"systemRole" dynamodbav:"systemRole"`
-	AuthProvider AuthProvider `json:"authProvider,omitempty" dynamodbav:"authProvider,omitempty"`
-	PasswordHash string       `json:"-" dynamodbav:"passwordHash,omitempty"`
-	Status       string       `json:"status" dynamodbav:"status"` // "active", "deactivated"
-	LastSeenAt   *time.Time   `json:"lastSeenAt,omitempty" dynamodbav:"lastSeenAt,omitempty"`
-	CreatedAt    time.Time    `json:"createdAt" dynamodbav:"createdAt"`
-	UpdatedAt    time.Time    `json:"updatedAt" dynamodbav:"updatedAt"`
+	ID            string       `json:"id" dynamodbav:"id"`
+	Email         string       `json:"email" dynamodbav:"email"`
+	DisplayName   string       `json:"displayName" dynamodbav:"displayName"`
+	AvatarKey     string       `json:"-" dynamodbav:"avatarKey,omitempty"` // S3 object key (persistent)
+	AvatarURL     string       `json:"avatarURL,omitempty" dynamodbav:"-"` // presigned URL, regenerated on each fetch
+	SystemRole    SystemRole   `json:"systemRole" dynamodbav:"systemRole"`
+	AuthProvider  AuthProvider `json:"authProvider,omitempty" dynamodbav:"authProvider,omitempty"`
+	PasswordHash  string       `json:"-" dynamodbav:"passwordHash,omitempty"`
+	EmojiSkinTone string       `json:"emojiSkinTone,omitempty" dynamodbav:"emojiSkinTone,omitempty"`
+	Status        string       `json:"status" dynamodbav:"status"` // "active", "deactivated"
+	LastSeenAt    *time.Time   `json:"lastSeenAt,omitempty" dynamodbav:"lastSeenAt,omitempty"`
+	CreatedAt     time.Time    `json:"createdAt" dynamodbav:"createdAt"`
+	UpdatedAt     time.Time    `json:"updatedAt" dynamodbav:"updatedAt"`
 }

@@ -21,7 +21,6 @@ func adminCtx(userID string) context.Context {
 	})
 }
 
-
 // ============================================================================
 // channel.go: postSystemMessage
 // ============================================================================
@@ -1365,7 +1364,7 @@ func TestUserService_Update_CacheDeleteSwallowed(t *testing.T) {
 	users.users["uu"] = &model.User{ID: "uu", Email: "uu@x", DisplayName: "U"}
 	users.emailIndex["uu@x"] = users.users["uu"]
 	name := "New"
-	if _, err := svc.Update(context.Background(), "uu", &name, nil); err != nil {
+	if _, err := svc.Update(context.Background(), "uu", &name, nil, nil); err != nil {
 		t.Fatalf("Update: %v", err)
 	}
 }
@@ -1378,7 +1377,7 @@ func TestUserService_Update_StoreError(t *testing.T) {
 	users.updateErr = errors.New("update boom")
 	svc := NewUserService(users, nil, nil, nil)
 	name := "X"
-	if _, err := svc.Update(context.Background(), "uu2", &name, nil); err == nil {
+	if _, err := svc.Update(context.Background(), "uu2", &name, nil, nil); err == nil {
 		t.Fatal("expected error")
 	}
 }
@@ -1389,7 +1388,7 @@ func TestUserService_Update_GetUserGenericError(t *testing.T) {
 	users.getUserErr = errors.New("db boom")
 	svc := NewUserService(users, nil, nil, nil)
 	name := "x"
-	if _, err := svc.Update(context.Background(), "anything", &name, nil); err == nil {
+	if _, err := svc.Update(context.Background(), "anything", &name, nil, nil); err == nil {
 		t.Fatal("expected wrapped error")
 	}
 }

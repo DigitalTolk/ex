@@ -216,17 +216,17 @@ describe('WysiwygEditor', () => {
     expect(ref.current!.getMarkdown()).toContain('~[c-1|general]');
   });
 
-  it('preserves underscores in emoji shortcodes — `:heart_eyes:` does NOT export as `:heart\\_eyes:`', async () => {
+  it('preserves underscores in emoji shortcodes — `:smile_face_heart_eyes:` does NOT export as `:smile_face\\_heart\\_eyes:`', async () => {
     // Regression: Lexical's exportTextFormat blindly escapes every `_`
     // in TextNode content, breaking emoji shortcodes whose names
     // contain underscores. Our $exportMarkdown helper strips the
     // escape on the way out so the renderer's `/:[a-z0-9_+-]+:/` regex
     // still matches.
     const ref = createRef<WysiwygEditorHandle>();
-    renderEditor({ ref, initialBody: ':heart_eyes:' });
+    renderEditor({ ref, initialBody: ':smile_face_heart_eyes:' });
     await waitFor(() => expect(ref.current).not.toBeNull());
     const md = ref.current!.getMarkdown();
-    expect(md).toContain(':heart_eyes:');
-    expect(md).not.toContain(':heart\\_eyes:');
+    expect(md).toContain(':smile_face_heart_eyes:');
+    expect(md).not.toContain(':smile_face\\_heart\\_eyes:');
   });
 });

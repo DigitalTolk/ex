@@ -5,6 +5,7 @@ export interface User {
   avatarURL?: string;
   systemRole: 'admin' | 'member' | 'guest';
   authProvider?: 'oidc' | 'guest';
+  emojiSkinTone?: '' | 'light' | 'medium_light' | 'medium' | 'medium_dark' | 'dark';
   status: string;
   online?: boolean;
   lastSeenAt?: string;

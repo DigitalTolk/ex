@@ -152,4 +152,10 @@ describe('renderMarkdown', () => {
     expect(container.textContent).toContain('GIPHY unavailable');
     expect(container.textContent).not.toContain('media.giphy.com');
   });
+
+  it('renders split skin-tone emoji shortcodes as one toned emoji', () => {
+    const { container } = render(<>{renderMarkdown('hi :hand::skin-tone-3:')}</>);
+    const emoji = container.querySelector('span[title=":hand::skin-tone-3:"]');
+    expect(emoji?.textContent).toBe('🖐🏽');
+  });
 });

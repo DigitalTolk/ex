@@ -1,6 +1,6 @@
 import { Fragment, type ReactNode } from 'react';
 import { GiphyEmbed } from '@/components/GiphyEmbed';
-import { shortcodeToUnicode } from './emoji-shortcodes';
+import { applySkinToneSuffix, shortcodeToUnicode } from './emoji-shortcodes';
 import { USER_MENTION_RE, GROUP_MENTION_RE, CHANNEL_MENTION_RE } from './mention-syntax';
 
 export interface RenderOpts {
@@ -247,6 +247,23 @@ function findInline(src: string, opts: RenderOpts | undefined, keyPrefix: string
   // (`# title :tada:` keeps the emoji proportional to the H1 text).
   // align-middle (not align-text-bottom) centers the glyph on the text's
   // x-height so it sits visually balanced inside paragraphs and lists.
+  tryMatch(/:([a-z0-9_+-]+)::(skin-tone-[1-5]):/i, (m) => {
+    const name = m[1];
+    const unicode = shortcodeToUnicode(`:${name}:`);
+    if (unicode !== `:${name}:`) {
+      return (
+        <span
+          key={`${keyPrefix}-eu-${m.index}`}
+          title={`:${name}::${m[2]}:`}
+          className="text-[1.4em] leading-none align-middle"
+        >
+          {applySkinToneSuffix(unicode, m[2])}
+        </span>
+      );
+    }
+    return <span key={`${keyPrefix}-eu-${m.index}`}>{m[0]}</span>;
+  });
+
   tryMatch(/:([a-z0-9_+-]+):/i, (m) => {
     const name = m[1];
     const url = opts?.emojiMap?.[name];

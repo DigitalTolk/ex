@@ -20,7 +20,7 @@ func TestUpdate_PublishesUserUpdatedEvent(t *testing.T) {
 	svc := NewUserService(users, cache, fakeAvatarSigner{}, pub)
 
 	newName := "New"
-	if _, err := svc.Update(context.Background(), "u1", &newName, nil); err != nil {
+	if _, err := svc.Update(context.Background(), "u1", &newName, nil, nil); err != nil {
 		t.Fatalf("update: %v", err)
 	}
 
@@ -43,7 +43,7 @@ func TestUpdate_NoPublisherDoesNotPanic(t *testing.T) {
 
 	svc := NewUserService(users, nil, nil, nil)
 	newName := "New"
-	if _, err := svc.Update(context.Background(), "u1", &newName, nil); err != nil {
+	if _, err := svc.Update(context.Background(), "u1", &newName, nil, nil); err != nil {
 		t.Fatalf("update: %v", err)
 	}
 }

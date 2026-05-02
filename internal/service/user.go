@@ -157,7 +157,7 @@ func (s *UserService) GetByEmail(ctx context.Context, email string) (*model.User
 
 // Update modifies optional user profile fields and invalidates the cache.
 // avatarKey is the new S3 object key; pass nil to leave it unchanged.
-func (s *UserService) Update(ctx context.Context, userID string, displayName, avatarKey *string) (*model.User, error) {
+func (s *UserService) Update(ctx context.Context, userID string, displayName, avatarKey, emojiSkinTone *string) (*model.User, error) {
 	user, err := s.users.GetUser(ctx, userID)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
@@ -182,6 +182,14 @@ func (s *UserService) Update(ctx context.Context, userID string, displayName, av
 		// cache window elapses.
 		s.urlCache.invalidate(user.AvatarKey)
 		user.AvatarKey = *avatarKey
+	}
+	if emojiSkinTone != nil {
+		switch *emojiSkinTone {
+		case "", "light", "medium_light", "medium", "medium_dark", "dark":
+			user.EmojiSkinTone = *emojiSkinTone
+		default:
+			return nil, errors.New("user: emoji skin tone must be empty, light, medium_light, medium, medium_dark, or dark")
+		}
 	}
 	user.UpdatedAt = time.Now()
 

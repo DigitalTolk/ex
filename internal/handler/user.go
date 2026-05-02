@@ -60,15 +60,16 @@ func (h *UserHandler) UpdateMe(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var body struct {
-		DisplayName *string `json:"displayName"`
-		AvatarKey   *string `json:"avatarKey"`
+		DisplayName   *string `json:"displayName"`
+		AvatarKey     *string `json:"avatarKey"`
+		EmojiSkinTone *string `json:"emojiSkinTone"`
 	}
 	if err := readJSON(r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_body", err.Error())
 		return
 	}
 
-	user, err := h.userSvc.Update(r.Context(), userID, body.DisplayName, body.AvatarKey)
+	user, err := h.userSvc.Update(r.Context(), userID, body.DisplayName, body.AvatarKey, body.EmojiSkinTone)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "update_error", err.Error())
 		return

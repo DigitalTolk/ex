@@ -25,10 +25,11 @@ interface GiphyPickerProps {
 
 const MAX_GRID_WIDTH = 336;
 const MIN_GRID_WIDTH = 180;
+const POPOVER_HEIGHT = 460;
 const GRID_GUTTER = 6;
 const PAGE_SIZE = 12;
 const POPOVER_MARGIN = 8;
-const POPOVER_PADDING_X = 24;
+const POPOVER_PADDING_X = 16;
 
 // SEARCH_DEBOUNCE_MS keeps us under the per-key Giphy rate limits and
 // avoids the Grid restarting from scratch on every keystroke.
@@ -142,12 +143,12 @@ export function GiphyPicker({ apiKey, onSelect, trigger, ariaLabel = 'Giphy pick
         open={open}
         triggerRef={triggerRef}
         onDismiss={close}
-        estimatedHeight={460}
+        estimatedHeight={POPOVER_HEIGHT}
         estimatedWidth={gridWidth + POPOVER_PADDING_X}
         preferredSide="bottom"
         preferredAlign="end"
         ariaLabel={ariaLabel}
-        className="max-w-[calc(100vw-16px)] rounded-md border bg-popover p-3 shadow-md"
+        className="flex h-[460px] max-w-[calc(100vw-16px)] flex-col rounded-md border bg-popover p-2 shadow-md"
       >
         <Input
           ref={inputRef}
@@ -155,11 +156,11 @@ export function GiphyPicker({ apiKey, onSelect, trigger, ariaLabel = 'Giphy pick
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Search GIFs..."
           aria-label="Search GIFs"
-          className="mb-2 h-9 text-sm"
+          className="mb-2 h-9 shrink-0 text-sm"
           data-testid="giphy-search"
         />
         <div
-          className="max-h-80 overflow-y-auto"
+          className="min-h-0 flex-1 overflow-y-auto"
           style={{ width: gridWidth }}
           data-testid="giphy-grid"
         >
@@ -182,10 +183,6 @@ export function GiphyPicker({ apiKey, onSelect, trigger, ariaLabel = 'Giphy pick
             />
           )}
         </div>
-        {/* Giphy's terms require attribution — we hide the SDK's own
-            badge so we can render it consistently with our other
-            popovers. */}
-        <p className="mt-2 text-center text-[10px] text-muted-foreground">Powered by GIPHY</p>
       </PopoverPortal>
     </>
   );

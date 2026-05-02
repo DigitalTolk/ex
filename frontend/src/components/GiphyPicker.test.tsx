@@ -185,4 +185,16 @@ describe('GiphyPicker', () => {
     await user.click(screen.getByText('open gif'));
     expect(await screen.findByTestId('grid-error')).toHaveTextContent('boom');
   });
+
+  it('keeps a static popup and grid height across content states', async () => {
+    giphyFetchMocks.trending.mockResolvedValue(sampleResponse);
+    const user = userEvent.setup();
+    renderPicker(vi.fn());
+
+    await user.click(screen.getByText('open gif'));
+
+    expect(await screen.findByRole('dialog')).toHaveClass('h-[460px]');
+    expect(screen.getByTestId('giphy-grid')).toHaveClass('flex-1');
+    expect(screen.queryByText(/powered by giphy/i)).toBeNull();
+  });
 });

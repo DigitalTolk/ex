@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alicebob/miniredis/v2"
 	"github.com/DigitalTolk/ex/internal/cache"
 	"github.com/DigitalTolk/ex/internal/model"
+	"github.com/alicebob/miniredis/v2"
 )
 
 // fakeAvatarSigner returns a deterministic URL so we can verify it ends up on
@@ -237,7 +237,7 @@ func TestUserService_Update(t *testing.T) {
 
 	newName := "New Name"
 	newKey := "avatars/u5/some-id"
-	updated, err := svc.Update(context.Background(), "u5", &newName, &newKey)
+	updated, err := svc.Update(context.Background(), "u5", &newName, &newKey, nil)
 	if err != nil {
 		t.Fatalf("Update: %v", err)
 	}
@@ -264,7 +264,7 @@ func TestUserService_Update_OIDCUserCannotChangeDisplayName(t *testing.T) {
 	users.emailIndex[user.Email] = user
 
 	newName := "Local Override"
-	if _, err := svc.Update(context.Background(), "u-sso", &newName, nil); err == nil {
+	if _, err := svc.Update(context.Background(), "u-sso", &newName, nil, nil); err == nil {
 		t.Fatal("expected error when OIDC user tries to rename themselves")
 	}
 	if user.DisplayName != "Upstream Name" {
@@ -292,7 +292,7 @@ func TestUserService_Update_OIDCUserSameDisplayNameAllowed(t *testing.T) {
 
 	same := "Upstream Name"
 	newKey := "avatars/u-sso2/new"
-	if _, err := svc.Update(context.Background(), "u-sso2", &same, &newKey); err != nil {
+	if _, err := svc.Update(context.Background(), "u-sso2", &same, &newKey, nil); err != nil {
 		t.Fatalf("Update with unchanged name should succeed: %v", err)
 	}
 	if user.AvatarKey != newKey {
@@ -305,7 +305,7 @@ func TestUserService_Update_NotFound(t *testing.T) {
 	svc := NewUserService(users, nil, nil, nil)
 
 	name := "X"
-	_, err := svc.Update(context.Background(), "nonexistent", &name, nil)
+	_, err := svc.Update(context.Background(), "nonexistent", &name, nil, nil)
 	if err == nil {
 		t.Fatal("expected error for non-existent user")
 	}
@@ -327,7 +327,7 @@ func TestUserService_Update_PartialFields(t *testing.T) {
 
 	// Only update display name.
 	newName := "Updated"
-	updated, err := svc.Update(context.Background(), "u6", &newName, nil)
+	updated, err := svc.Update(context.Background(), "u6", &newName, nil, nil)
 	if err != nil {
 		t.Fatalf("Update: %v", err)
 	}
@@ -724,7 +724,7 @@ func TestUserService_UpdateAvatarKey_RegeneratesURLAfterRefresh(t *testing.T) {
 
 	// Upload sets the new key.
 	newKey := "avatars/u1/new-upload"
-	if _, err := svc.Update(context.Background(), "u1", nil, &newKey); err != nil {
+	if _, err := svc.Update(context.Background(), "u1", nil, &newKey, nil); err != nil {
 		t.Fatalf("Update: %v", err)
 	}
 

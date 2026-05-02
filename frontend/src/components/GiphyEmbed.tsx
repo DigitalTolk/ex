@@ -18,7 +18,7 @@ const FALLBACK_MEDIA_WIDTH = 320;
 const FALLBACK_MEDIA_HEIGHT = 240;
 const MAX_MEDIA_WIDTH = 420;
 const MAX_MEDIA_HEIGHT = 320;
-const GIPHY_MEMORY_CACHE_TTL_MS = 30 * 60 * 1000;
+const GIPHY_MEMORY_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 
 type GiphyCacheEntry = {
   expiresAt: number;

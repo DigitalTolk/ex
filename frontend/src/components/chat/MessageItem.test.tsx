@@ -355,13 +355,13 @@ describe('MessageItem', () => {
     );
     await user.click(screen.getByLabelText('Add reaction'));
     expect(screen.getByRole('dialog')).toBeInTheDocument();
-    // Picker now opens on the first CLDR category (Smileys & Emotion)
-    // and `:tada:` lives in Activities — search to surface its tile.
-    await user.type(screen.getByLabelText('Search emojis'), 'tada');
-    await user.click(screen.getByLabelText('React with :tada:'));
+    // Picker opens on the first category; search to surface the generated
+    // activity shortcode.
+    await user.type(screen.getByLabelText('Search emojis'), 'party_popper');
+    await user.click(screen.getByLabelText('React with :party_popper:'));
     expect(mockReactMutate).toHaveBeenCalledWith({
       messageId: 'msg-1',
-      emoji: ':tada:',
+      emoji: ':party_popper:',
       channelId: 'channel-1',
       conversationId: undefined,
     });

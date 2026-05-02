@@ -3,8 +3,29 @@ import { render, screen, fireEvent } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { EmojiPicker } from '@/components/EmojiPicker';
 
+const authMock = vi.hoisted(() => ({
+  user: {
+    id: 'u-1',
+    email: 'u@example.com',
+    displayName: 'User',
+    systemRole: 'member' as const,
+    status: 'active',
+    emojiSkinTone: '' as const,
+  },
+  setAuth: vi.fn(),
+}));
+
 vi.mock('@/hooks/useEmoji', () => ({
   useEmojis: () => ({ data: [] }),
+}));
+
+vi.mock('@/context/AuthContext', () => ({
+  useOptionalAuth: () => authMock,
+}));
+
+vi.mock('@/lib/api', () => ({
+  apiFetch: vi.fn(),
+  getAccessToken: () => 'tok',
 }));
 
 function renderPicker() {
@@ -27,9 +48,9 @@ describe('EmojiPicker — readable sizes', () => {
     expect(standardLabel.className).not.toContain('text-[10px]');
 
     const tile = (await screen.findAllByTestId('emoji-picker-tile'))[0];
-    // Tile is 36px (h-9 w-9), fitting a large glyph.
-    expect(tile.className).toContain('h-9');
-    expect(tile.className).toContain('w-9');
+    // Tile is 32px (h-8 w-8), keeping the grid dense while fitting a large glyph.
+    expect(tile.className).toContain('h-8');
+    expect(tile.className).toContain('w-8');
 
     // Glyph inside should use text-[22px] (lg size — 2px less than text-2xl
     // so the picker doesn't feel cluttered).

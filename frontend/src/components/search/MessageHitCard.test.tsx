@@ -99,7 +99,7 @@ describe('MessageHitCard', () => {
   it('renders reactions when present', async () => {
     wrap(
       <MessageHitCard
-        hit={buildHit({ reactions: { ':smile:': ['u-1', 'u-2'], ':thumbsup:': [] } })}
+        hit={buildHit({ reactions: { ':grin_face_smile_eyes:': ['u-1', 'u-2'], ':thumbsup:': [] } })}
       />,
     );
     expect(await screen.findByText('Hello world')).toBeInTheDocument();
