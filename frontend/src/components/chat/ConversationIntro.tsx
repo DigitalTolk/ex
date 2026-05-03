@@ -66,7 +66,7 @@ export function DMIntro({ otherDisplayName, otherAvatarURL, online, className }:
         {online !== undefined && (
           <span
             className={`absolute bottom-0 right-0 h-3 w-3 rounded-full ring-2 ring-background ${
-              online ? 'bg-emerald-500' : 'bg-muted-foreground/40'
+              online ? 'bg-emerald-500' : 'bg-muted-foreground'
             }`}
             aria-label={online ? 'Online' : 'Offline'}
           />

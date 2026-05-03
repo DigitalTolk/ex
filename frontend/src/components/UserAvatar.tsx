@@ -50,7 +50,7 @@ export function UserAvatar({
             'absolute bottom-0 right-0 rounded-full ring-2',
             dotClassName,
             dotRingClassName,
-            online ? 'bg-emerald-500' : 'bg-muted-foreground/40',
+            online ? 'bg-emerald-500' : 'bg-muted-foreground',
           )}
           aria-label={online ? 'Online' : 'Offline'}
         />

@@ -236,7 +236,6 @@ export function ThreadCard({ summary, title, deepLink, currentUserId }: ThreadCa
             onSend={handleReply}
             disabled={send.isPending}
             placeholder="Reply…"
-            focusKey={summary.threadRootID}
             initialBody={draft?.body ?? ''}
             initialDrafts={draftAttachments}
             onDraftChange={handleDraftChange}

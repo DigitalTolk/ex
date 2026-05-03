@@ -93,11 +93,19 @@ describe('ChannelRow', () => {
     expect(favoriteMutate).toHaveBeenCalledWith({ channelID: 'ch-1', favorite: true });
   });
 
-  it('toggles favorite off when channel is already favorited', () => {
-    renderRow(makeChannel({ channelID: 'ch-1', favorite: true, categoryID: 'cat-A' }));
+  it('clears the previous category as soon as a channel is favorited', () => {
+    renderRow(makeChannel({ channelID: 'ch-1', favorite: false, categoryID: 'cat-A' }));
     const star = screen.getByTestId('fav-toggle-ch-1');
     fireEvent.click(star);
     expect(setCategoryMutate).toHaveBeenCalledWith({ channelID: 'ch-1', categoryID: '' });
+    expect(favoriteMutate).toHaveBeenCalledWith({ channelID: 'ch-1', favorite: true });
+  });
+
+  it('toggles favorite off without rewriting the old category', () => {
+    renderRow(makeChannel({ channelID: 'ch-1', favorite: true, categoryID: '' }));
+    const star = screen.getByTestId('fav-toggle-ch-1');
+    fireEvent.click(star);
+    expect(setCategoryMutate).not.toHaveBeenCalled();
     expect(favoriteMutate).toHaveBeenCalledWith({ channelID: 'ch-1', favorite: false });
   });
 
@@ -129,6 +137,15 @@ describe('ChannelRow', () => {
     expect(setCategoryMutate).toHaveBeenCalledWith({ channelID: 'ch-1', categoryID: '' });
   });
 
+  it('"Move to Channels" from Favorites clears favorite and moves to the default channel section', () => {
+    renderRow(makeChannel({ channelID: 'ch-1', favorite: true, categoryID: '' }));
+    const items = screen.getAllByTestId('dropdown-item');
+    const moveBack = items.find((b) => b.textContent === 'Move to Channels');
+    fireEvent.click(moveBack!);
+    expect(favoriteMutate).toHaveBeenCalledWith({ channelID: 'ch-1', favorite: false });
+    expect(setCategoryMutate).toHaveBeenCalledWith({ channelID: 'ch-1', categoryID: '' });
+  });
+
   it('disables "Move to Channels" when channel is already in the default section', () => {
     // No-op moves are pointless — disable the entry so the user knows
     // they're already there, rather than firing a redundant API call.
@@ -136,6 +153,13 @@ describe('ChannelRow', () => {
     const items = screen.getAllByTestId('dropdown-item');
     const moveBack = items.find((b) => b.textContent === 'Move to Channels') as HTMLButtonElement;
     expect(moveBack.disabled).toBe(true);
+  });
+
+  it('keeps "Move to Channels" enabled for a favorited channel already carrying the default category', () => {
+    renderRow(makeChannel({ channelID: 'ch-1', favorite: true, categoryID: '' }));
+    const items = screen.getAllByTestId('dropdown-item');
+    const moveBack = items.find((b) => b.textContent === 'Move to Channels') as HTMLButtonElement;
+    expect(moveBack.disabled).toBe(false);
   });
 
   it('does not offer a "New category" option in the row menu', () => {
@@ -155,6 +179,16 @@ describe('ChannelRow', () => {
     const items = screen.getAllByTestId('dropdown-item');
     const moveToBeta = items.find((b) => b.textContent === 'Move to Beta');
     fireEvent.click(moveToBeta!);
+    expect(setCategoryMutate).toHaveBeenCalledWith({ channelID: 'ch-1', categoryID: 'cat-B' });
+  });
+
+  it('"Move to <category>" from Favorites clears favorite so the channel leaves Favorites', () => {
+    categoriesData = [{ id: 'cat-B', name: 'Beta', position: 1 }];
+    renderRow(makeChannel({ channelID: 'ch-1', favorite: true }));
+    const items = screen.getAllByTestId('dropdown-item');
+    const moveToBeta = items.find((b) => b.textContent === 'Move to Beta');
+    fireEvent.click(moveToBeta!);
+    expect(favoriteMutate).toHaveBeenCalledWith({ channelID: 'ch-1', favorite: false });
     expect(setCategoryMutate).toHaveBeenCalledWith({ channelID: 'ch-1', categoryID: 'cat-B' });
   });
 

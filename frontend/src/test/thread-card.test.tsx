@@ -39,11 +39,13 @@ vi.mock('@/components/chat/MessageInput', () => ({
   MessageInput: ({
     onSend,
     disabled,
+    focusKey,
   }: {
     onSend: (v: { body: string; attachmentIDs: string[] }) => void;
     disabled?: boolean;
+    focusKey?: string;
   }) => (
-    <div>
+    <div data-focus-key={focusKey ?? ''}>
       <textarea aria-label="Reply body" data-testid="reply-body" disabled={disabled} />
       <button
         type="button"
@@ -221,6 +223,18 @@ describe('ThreadCard', () => {
 
     const seen = JSON.parse(localStorage.getItem('ex.threads.seen.v1') ?? '{}');
     expect(seen['msg-root']).toBeDefined();
+  });
+
+  it('does not pass focusKey to the inline /threads composer', async () => {
+    apiFetchMock.mockImplementation((url: string) => {
+      if (url.includes('/messages/msg-root/thread')) {
+        return Promise.resolve([makeMessage('msg-root')]);
+      }
+      return Promise.resolve([]);
+    });
+    renderCard(makeSummary());
+    const replyBody = await screen.findByTestId('reply-body');
+    expect(replyBody.closest('[data-focus-key]')?.getAttribute('data-focus-key')).toBe('');
   });
 });
 
