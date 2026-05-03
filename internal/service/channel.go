@@ -489,18 +489,22 @@ func (s *ChannelService) SetFavorite(ctx context.Context, userID, channelID stri
 // semantics as SetFavorite. Validation that the categoryID actually
 // belongs to this user is the caller's responsibility — handlers do
 // that check before invoking.
-func (s *ChannelService) SetCategory(ctx context.Context, userID, channelID, categoryID string) error {
+func (s *ChannelService) SetCategory(ctx context.Context, userID, channelID, categoryID string, sidebarPosition *int) error {
 	if _, err := s.memberships.GetMembership(ctx, channelID, userID); err != nil {
 		return fmt.Errorf("channel: get membership: %w", err)
 	}
-	if err := s.memberships.SetCategory(ctx, channelID, userID, categoryID); err != nil {
+	if err := s.memberships.SetCategory(ctx, channelID, userID, categoryID, sidebarPosition); err != nil {
 		return fmt.Errorf("channel: set category: %w", err)
 	}
-	events.Publish(ctx, s.publisher, pubsub.UserChannel(userID), events.EventUserChannelUpdated, map[string]any{
+	payload := map[string]any{
 		"channelID":  channelID,
 		"userID":     userID,
 		"categoryID": categoryID,
-	})
+	}
+	if sidebarPosition != nil {
+		payload["sidebarPosition"] = *sidebarPosition
+	}
+	events.Publish(ctx, s.publisher, pubsub.UserChannel(userID), events.EventUserChannelUpdated, payload)
 	return nil
 }
 

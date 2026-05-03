@@ -97,6 +97,53 @@ describe('groupSidebarItems', () => {
     ]);
   });
 
+  it('orders channels by saved sidebar position', () => {
+    const sections = groupSidebarItems(
+      [
+        ch({ channelID: 'late', channelName: 'late', sidebarPosition: 2000 }),
+        ch({ channelID: 'early', channelName: 'early', sidebarPosition: 1000 }),
+      ],
+      [],
+      [],
+    );
+    const channels = sections.find((s) => s.key === SidebarSectionKeys.Channels);
+    expect(channels?.items.map((i) => (i.kind === 'channel' ? i.channel.channelID : ''))).toEqual([
+      'early',
+      'late',
+    ]);
+  });
+
+  it('sorts direct messages by recent activity by default and A-Z on request', () => {
+    const recent = groupSidebarItems(
+      [],
+      [
+        conv({ conversationID: 'old', displayName: 'Zoe', updatedAt: '2026-05-01T10:00:00Z' }),
+        conv({ conversationID: 'new', displayName: 'Amy', updatedAt: '2026-05-02T10:00:00Z' }),
+      ],
+      [],
+    );
+    expect(
+      recent
+        .find((s) => s.key === SidebarSectionKeys.DirectMessages)
+        ?.items.map((i) => (i.kind === 'conversation' ? i.conversation.conversationID : '')),
+    ).toEqual(['new', 'old']);
+
+    const az = groupSidebarItems(
+      [],
+      [
+        conv({ conversationID: 'zoe', displayName: 'Zoe', updatedAt: '2026-05-02T10:00:00Z' }),
+        conv({ conversationID: 'amy', displayName: 'Amy', updatedAt: '2026-05-01T10:00:00Z' }),
+      ],
+      [],
+      { conversationSort: 'az' },
+    );
+    expect(
+      az
+        .find((s) => s.key === SidebarSectionKeys.DirectMessages)
+        ?.items.map((i) => (i.kind === 'conversation' ? i.conversation.conversationID : '')),
+    ).toEqual(['amy', 'zoe']);
+  });
+
   it('exposes stable section keys via SidebarSectionKeys', () => {
     const sections = groupSidebarItems([], [], []);
     const keys = sections.map((s) => s.key);

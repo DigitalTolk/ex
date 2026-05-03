@@ -292,7 +292,7 @@ func TestMembershipStoreAdapter(t *testing.T) {
 	if err := adapter.SetFavorite(ctx, "ch-ma-1", "u-ma-1", true); err != nil {
 		t.Fatalf("SetFavorite: %v", err)
 	}
-	if err := adapter.SetCategory(ctx, "ch-ma-1", "u-ma-1", "cat-1"); err != nil {
+	if err := adapter.SetCategory(ctx, "ch-ma-1", "u-ma-1", "cat-1", nil); err != nil {
 		t.Fatalf("SetCategory: %v", err)
 	}
 
@@ -345,7 +345,7 @@ func TestConversationStoreAdapter(t *testing.T) {
 	if err := adapter.SetFavorite(ctx, "conv-adapt", "u-ca1", true); err != nil {
 		t.Fatalf("SetFavorite: %v", err)
 	}
-	if err := adapter.SetCategory(ctx, "conv-adapt", "u-ca1", "cat-conv"); err != nil {
+	if err := adapter.SetCategory(ctx, "conv-adapt", "u-ca1", "cat-conv", nil); err != nil {
 		t.Fatalf("SetCategory: %v", err)
 	}
 

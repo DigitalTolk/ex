@@ -20,6 +20,7 @@ interface UseWebSocketOptions {
   onEmojiAdded?: WSCallback;
   onEmojiRemoved?: WSCallback;
   onUserUpdated?: WSCallback;
+  onUserChannelUpdated?: WSCallback;
   onAttachmentDeleted?: WSCallback;
   onChannelMuted?: WSCallback;
   onNotification?: WSCallback;
@@ -105,6 +106,9 @@ export function useWebSocket(options: UseWebSocketOptions) {
               break;
             case EventType.UserUpdated:
               callbacksRef.current.onUserUpdated?.(payload);
+              break;
+            case EventType.UserChannelUpdated:
+              callbacksRef.current.onUserChannelUpdated?.(payload);
               break;
             case EventType.AttachmentDeleted:
               callbacksRef.current.onAttachmentDeleted?.(payload);

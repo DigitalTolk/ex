@@ -159,4 +159,47 @@ describe('SearchBar', () => {
     fireEvent.click(inScope);
     expect(navigateMock).toHaveBeenCalledWith('/search?q=plan&in=conv-grp&type=dms');
   });
+
+  it('clears the current query and focuses the input', () => {
+    wrap();
+    const input = screen.getByTestId('searchbar-input');
+    fireEvent.change(input, { target: { value: 'incident' } });
+    fireEvent.click(screen.getByLabelText('Clear search'));
+    expect(input).toHaveValue('');
+    expect(input).toHaveFocus();
+  });
+
+  it('closes the dropdown when clicking outside', () => {
+    wrap();
+    fireEvent.change(screen.getByTestId('searchbar-input'), { target: { value: 'outside' } });
+    expect(screen.getByTestId('searchbar-dropdown')).toBeInTheDocument();
+    fireEvent.mouseDown(document.body);
+    expect(screen.queryByTestId('searchbar-dropdown')).toBeNull();
+  });
+
+  it('ignores Enter and arrow keys when there is no trimmed query', () => {
+    wrap();
+    const input = screen.getByTestId('searchbar-input');
+    fireEvent.change(input, { target: { value: '   ' } });
+    fireEvent.keyDown(input, { key: 'ArrowDown' });
+    fireEvent.keyDown(input, { key: 'ArrowUp' });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(navigateMock).not.toHaveBeenCalled();
+  });
+
+  it('wraps ArrowUp from the first suggestion to the scoped suggestion', async () => {
+    apiFetchMock.mockImplementation((url: string) => {
+      if (url === '/api/v1/channels/design') {
+        return Promise.resolve({ id: 'c-d', slug: 'design', name: 'design', type: 'public' });
+      }
+      return Promise.resolve(null);
+    });
+    wrap('/channel/design');
+    const input = screen.getByTestId('searchbar-input');
+    fireEvent.change(input, { target: { value: 'retro' } });
+    await screen.findByTestId('searchbar-show-in-scope');
+    fireEvent.keyDown(input, { key: 'ArrowUp' });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(navigateMock).toHaveBeenCalledWith('/search?q=retro&in=c-d&type=messages');
+  });
 });

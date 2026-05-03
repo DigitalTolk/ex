@@ -4,12 +4,12 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/expression"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
-	"github.com/DigitalTolk/ex/internal/model"
 )
 
 // MembershipStore defines operations on channel memberships.
@@ -266,8 +266,12 @@ func (s *MembershipStoreImpl) SetUserChannelFavorite(ctx context.Context, channe
 
 // SetUserChannelCategory assigns the channel to a user-defined sidebar
 // category. Empty string clears the assignment.
-func (s *MembershipStoreImpl) SetUserChannelCategory(ctx context.Context, channelID, userID, categoryID string) error {
-	return s.setUserChannelAttribute(ctx, channelID, userID, "categoryID", categoryID)
+func (s *MembershipStoreImpl) SetUserChannelCategory(ctx context.Context, channelID, userID, categoryID string, sidebarPosition *int) error {
+	upd := expression.Set(expression.Name("categoryID"), expression.Value(categoryID))
+	if sidebarPosition != nil {
+		upd = upd.Set(expression.Name("sidebarPosition"), expression.Value(*sidebarPosition))
+	}
+	return s.updateUserChannel(ctx, channelID, userID, upd, "category")
 }
 
 // setUserChannelAttribute is a small helper for the family of single-
@@ -276,9 +280,13 @@ func (s *MembershipStoreImpl) SetUserChannelCategory(ctx context.Context, channe
 // ErrNotFound instead of silently creating an orphan row.
 func (s *MembershipStoreImpl) setUserChannelAttribute(ctx context.Context, channelID, userID, attr string, value any) error {
 	upd := expression.Set(expression.Name(attr), expression.Value(value))
+	return s.updateUserChannel(ctx, channelID, userID, upd, attr)
+}
+
+func (s *MembershipStoreImpl) updateUserChannel(ctx context.Context, channelID, userID string, upd expression.UpdateBuilder, label string) error {
 	expr, err := expression.NewBuilder().WithUpdate(upd).Build()
 	if err != nil {
-		return fmt.Errorf("store: build user channel %s expression: %w", attr, err)
+		return fmt.Errorf("store: build user channel %s expression: %w", label, err)
 	}
 
 	_, err = s.Client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
@@ -293,7 +301,7 @@ func (s *MembershipStoreImpl) setUserChannelAttribute(ctx context.Context, chann
 		if isConditionCheckFailed(err) {
 			return ErrNotFound
 		}
-		return fmt.Errorf("store: set user channel %s: %w", attr, err)
+		return fmt.Errorf("store: set user channel %s: %w", label, err)
 	}
 	return nil
 }

@@ -18,6 +18,9 @@ type Captured = {
   followOutput?: unknown;
   data?: unknown[];
   atBottomStateChange?: (atBottom: boolean) => void;
+  startReached?: () => void;
+  endReached?: () => void;
+  itemContent?: (index: number, row?: unknown) => React.ReactNode;
   scrollToIndexCalls: Array<{ index: number | string; align?: string }>;
 };
 const captured: Captured = { scrollToIndexCalls: [] };
@@ -28,6 +31,9 @@ vi.mock('react-virtuoso', () => {
     followOutput?: unknown;
     data?: unknown[];
     atBottomStateChange?: (atBottom: boolean) => void;
+    startReached?: () => void;
+    endReached?: () => void;
+    itemContent?: (index: number, row?: unknown) => React.ReactNode;
     components?: { Header?: ComponentType; Footer?: ComponentType };
   };
   const Virtuoso = forwardRef((props: VirtuosoMockProps, ref: Ref<unknown>) => {
@@ -35,6 +41,9 @@ vi.mock('react-virtuoso', () => {
     captured.followOutput = props.followOutput;
     captured.data = props.data;
     captured.atBottomStateChange = props.atBottomStateChange;
+    captured.startReached = props.startReached;
+    captured.endReached = props.endReached;
+    captured.itemContent = props.itemContent;
     useImperativeHandle(ref, () => ({
       scrollToIndex: (arg: { index: number | string; align?: string }) => {
         captured.scrollToIndexCalls.push(arg);
@@ -47,6 +56,9 @@ vi.mock('react-virtuoso', () => {
       { 'data-virtuoso-scroller': true },
       Header ? createElement(Header) : null,
       createElement('div', { 'data-viewport-type': 'window' }),
+      ...(props.data ?? []).map((row, index) =>
+        createElement('div', { key: index, 'data-testid': 'virtuoso-row' }, props.itemContent?.(index, row)),
+      ),
       Footer ? createElement(Footer) : null,
     );
   });
@@ -58,6 +70,9 @@ beforeEach(() => {
   captured.followOutput = undefined;
   captured.data = undefined;
   captured.atBottomStateChange = undefined;
+  captured.startReached = undefined;
+  captured.endReached = undefined;
+  captured.itemContent = undefined;
   captured.scrollToIndexCalls.length = 0;
 });
 
@@ -498,5 +513,92 @@ describe('MessageList Virtuoso wiring (regression contract)', () => {
     } finally {
       (globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver = original;
     }
+  });
+
+  it('startReached fetches older pages only when ready and not already fetching', async () => {
+    const fetchNextPage = vi.fn();
+    const captured = await renderAndCaptureVirtuoso(
+      <MessageList
+        {...defaultProps}
+        pages={[{ items: [makeMessage()] }]}
+        hasNextPage={true}
+        isFetchingNextPage={false}
+        fetchNextPage={fetchNextPage}
+      />,
+    );
+    await new Promise((r) => setTimeout(r, 300));
+    captured.startReached?.();
+    expect(fetchNextPage).toHaveBeenCalledTimes(1);
+
+    fetchNextPage.mockClear();
+    renderWithProviders(
+      <MessageList
+        {...defaultProps}
+        pages={[{ items: [makeMessage({ id: 'busy' })] }]}
+        hasNextPage={true}
+        isFetchingNextPage={true}
+        fetchNextPage={fetchNextPage}
+      />,
+    );
+    captured.startReached?.();
+    expect(fetchNextPage).not.toHaveBeenCalled();
+  });
+
+  it('endReached fetches newer pages only when configured and idle', async () => {
+    const fetchPreviousPage = vi.fn();
+    const captured = await renderAndCaptureVirtuoso(
+      <MessageList
+        {...defaultProps}
+        pages={[{ items: [makeMessage()] }]}
+        hasPreviousPage={true}
+        isFetchingPreviousPage={false}
+        fetchPreviousPage={fetchPreviousPage}
+        anchorMsgId="msg-1"
+      />,
+    );
+    await new Promise((r) => setTimeout(r, 300));
+    captured.endReached?.();
+    expect(fetchPreviousPage).toHaveBeenCalledTimes(1);
+
+    fetchPreviousPage.mockClear();
+    renderWithProviders(
+      <MessageList
+        {...defaultProps}
+        pages={[{ items: [makeMessage({ id: 'busy-newer' })] }]}
+        hasPreviousPage={true}
+        isFetchingPreviousPage={true}
+        fetchPreviousPage={fetchPreviousPage}
+        anchorMsgId="busy-newer"
+      />,
+    );
+    captured.endReached?.();
+    expect(fetchPreviousPage).not.toHaveBeenCalled();
+  });
+
+  it('itemContent handles missing rows, day dividers, system messages, and unknown authors', async () => {
+    const root = makeMessage({ id: 'root', authorID: 'missing-user', replyCount: 1 });
+    const reply = makeMessage({
+      id: 'reply',
+      authorID: 'user-2',
+      parentMessageID: 'root',
+      createdAt: '2026-04-24T10:35:00Z',
+    });
+    const captured = await renderAndCaptureVirtuoso(
+      <MessageList
+        {...defaultProps}
+        pages={[{ items: [reply, root, makeMessage({ id: 'sys', system: true, body: 'joined' })] }]}
+        hasPreviousPage={false}
+      />,
+    );
+
+    expect(captured.itemContent?.(0, undefined)).toBeNull();
+    renderWithProviders(<>{captured.itemContent?.(0, { kind: 'day', key: 'd', date: '2026-04-24' })}</>);
+    expect(screen.getAllByTestId('day-divider').at(-1)).toHaveTextContent('Apr 24th');
+    renderWithProviders(
+      <>{captured.itemContent?.(1, { kind: 'message', key: 'sys', message: makeMessage({ id: 'sys-2', system: true, body: 'joined again' }) })}</>,
+    );
+    expect(screen.getAllByRole('status').at(-1)).toHaveTextContent('joined again');
+    renderWithProviders(<>{captured.itemContent?.(2, { kind: 'message', key: 'root', message: root })}</>);
+    expect(screen.getAllByText('Unknown').length).toBeGreaterThan(0);
   });
 });

@@ -143,7 +143,7 @@ func (m *mockMembershipStore) SetMute(_ context.Context, _, _ string, _ bool) er
 func (m *mockMembershipStore) SetFavorite(_ context.Context, _, _ string, _ bool) error {
 	return nil
 }
-func (m *mockMembershipStore) SetCategory(_ context.Context, _, _, _ string) error {
+func (m *mockMembershipStore) SetCategory(_ context.Context, _, _, _ string, _ *int) error {
 	return nil
 }
 

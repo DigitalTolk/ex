@@ -16,6 +16,8 @@
     "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
+    "@atlaskit/pragmatic-drag-and-drop": "^1.8.1",
+    "@atlaskit/pragmatic-drag-and-drop-hitbox": "^1.1.0",
     "@base-ui/react": "^1.4.1",
     "@giphy/js-fetch-api": "^5.8.0",
     "@giphy/react-components": "^10.1.2",

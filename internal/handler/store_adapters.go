@@ -106,8 +106,8 @@ func (a *MembershipStoreAdapter) SetMute(ctx context.Context, channelID, userID 
 func (a *MembershipStoreAdapter) SetFavorite(ctx context.Context, channelID, userID string, favorite bool) error {
 	return a.s.SetUserChannelFavorite(ctx, channelID, userID, favorite)
 }
-func (a *MembershipStoreAdapter) SetCategory(ctx context.Context, channelID, userID, categoryID string) error {
-	return a.s.SetUserChannelCategory(ctx, channelID, userID, categoryID)
+func (a *MembershipStoreAdapter) SetCategory(ctx context.Context, channelID, userID, categoryID string, sidebarPosition *int) error {
+	return a.s.SetUserChannelCategory(ctx, channelID, userID, categoryID, sidebarPosition)
 }
 
 // ConversationStoreAdapter wraps store.ConversationStoreImpl to satisfy service.ConversationStore.
@@ -131,11 +131,14 @@ func (a *ConversationStoreAdapter) ListUserConversations(ctx context.Context, us
 func (a *ConversationStoreAdapter) ActivateConversation(ctx context.Context, convID string, participantIDs []string) error {
 	return a.s.Activate(ctx, convID, participantIDs)
 }
+func (a *ConversationStoreAdapter) TouchConversation(ctx context.Context, convID string, participantIDs []string, at time.Time) error {
+	return a.s.Touch(ctx, convID, participantIDs, at)
+}
 func (a *ConversationStoreAdapter) SetFavorite(ctx context.Context, convID, userID string, favorite bool) error {
 	return a.s.SetUserConversationFavorite(ctx, convID, userID, favorite)
 }
-func (a *ConversationStoreAdapter) SetCategory(ctx context.Context, convID, userID, categoryID string) error {
-	return a.s.SetUserConversationCategory(ctx, convID, userID, categoryID)
+func (a *ConversationStoreAdapter) SetCategory(ctx context.Context, convID, userID, categoryID string, sidebarPosition *int) error {
+	return a.s.SetUserConversationCategory(ctx, convID, userID, categoryID, sidebarPosition)
 }
 
 // ListAllConversations exposes the full conversation Scan to admin

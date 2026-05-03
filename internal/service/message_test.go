@@ -100,7 +100,7 @@ func TestMessageService_Send_RejectsTooManyAttachments(t *testing.T) {
 }
 
 func TestMessageService_Send_Conversation(t *testing.T) {
-	svc, _, _, conversations, _ := setupMessageService()
+	svc, _, _, conversations, publisher := setupMessageService()
 	ctx := context.Background()
 
 	conversations.conversations["conv-1"] = &model.Conversation{
@@ -115,6 +115,69 @@ func TestMessageService_Send_Conversation(t *testing.T) {
 	}
 	if msg.Body != "hi from DM" {
 		t.Errorf("Body = %q, want %q", msg.Body, "hi from DM")
+	}
+	var sidebarEvents int
+	for _, published := range publisher.published {
+		if published.event.Type == "userchannel.updated" {
+			sidebarEvents++
+		}
+	}
+	if sidebarEvents != 2 {
+		t.Fatalf("userchannel.updated events = %d, want 2 participant sidebar refreshes", sidebarEvents)
+	}
+}
+
+func TestMessageService_Send_ConversationThreadReplyTouchesActivity(t *testing.T) {
+	svc, messages, _, conversations, publisher := setupMessageService()
+	ctx := context.Background()
+	old := time.Date(2026, 5, 1, 10, 0, 0, 0, time.UTC)
+
+	conversations.conversations["conv-thread"] = &model.Conversation{
+		ID:             "conv-thread",
+		Type:           model.ConversationTypeGroup,
+		ParticipantIDs: []string{"user-1", "user-2"},
+		UpdatedAt:      old,
+	}
+	conversations.userConvs["user-1"] = []*model.UserConversation{{
+		UserID:         "user-1",
+		ConversationID: "conv-thread",
+		UpdatedAt:      old,
+	}}
+	conversations.userConvs["user-2"] = []*model.UserConversation{{
+		UserID:         "user-2",
+		ConversationID: "conv-thread",
+		UpdatedAt:      old,
+	}}
+	messages.messages["conv-thread#root-msg"] = &model.Message{
+		ID:       "root-msg",
+		ParentID: "conv-thread",
+		AuthorID: "user-1",
+		Body:     "root",
+	}
+
+	reply, err := svc.Send(ctx, "user-1", "conv-thread", ParentConversation, "reply", "root-msg")
+	if err != nil {
+		t.Fatalf("Send reply: %v", err)
+	}
+	if reply.ParentMessageID != "root-msg" {
+		t.Errorf("ParentMessageID = %q, want root-msg", reply.ParentMessageID)
+	}
+	if !conversations.conversations["conv-thread"].UpdatedAt.After(old) {
+		t.Errorf("conversation UpdatedAt = %v, want after %v", conversations.conversations["conv-thread"].UpdatedAt, old)
+	}
+	for userID, userConvs := range conversations.userConvs {
+		if len(userConvs) != 1 || !userConvs[0].UpdatedAt.After(old) {
+			t.Errorf("%s user conversation UpdatedAt = %+v, want after %v", userID, userConvs, old)
+		}
+	}
+	var sidebarEvents int
+	for _, published := range publisher.published {
+		if published.event.Type == "userchannel.updated" {
+			sidebarEvents++
+		}
+	}
+	if sidebarEvents != 2 {
+		t.Fatalf("userchannel.updated events = %d, want 2 participant sidebar refreshes", sidebarEvents)
 	}
 }
 

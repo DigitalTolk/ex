@@ -13,15 +13,15 @@ import (
 // --- Mock UserStore ---
 
 type mockUserStore struct {
-	users        map[string]*model.User
-	emailIndex   map[string]*model.User
-	createErr    error
-	hasUsersVal  bool
-	hasUsersErr  error
-	getUserErr   error
-	getEmailErr  error
-	updateErr    error
-	listErr      error
+	users       map[string]*model.User
+	emailIndex  map[string]*model.User
+	createErr   error
+	hasUsersVal bool
+	hasUsersErr error
+	getUserErr  error
+	getEmailErr error
+	updateErr   error
+	listErr     error
 }
 
 func newMockUserStore() *mockUserStore {
@@ -301,10 +301,13 @@ func (m *mockMembershipStore) SetFavorite(_ context.Context, channelID, userID s
 	return store.ErrNotFound
 }
 
-func (m *mockMembershipStore) SetCategory(_ context.Context, channelID, userID, categoryID string) error {
+func (m *mockMembershipStore) SetCategory(_ context.Context, channelID, userID, categoryID string, sidebarPosition *int) error {
 	for _, uc := range m.userChannels {
 		if uc.UserID == userID && uc.ChannelID == channelID {
 			uc.CategoryID = categoryID
+			if sidebarPosition != nil {
+				uc.SidebarPosition = *sidebarPosition
+			}
 			return nil
 		}
 	}
@@ -586,6 +589,20 @@ func (m *mockConversationStore) ActivateConversation(_ context.Context, convID s
 	return nil
 }
 
+func (m *mockConversationStore) TouchConversation(_ context.Context, convID string, participantIDs []string, at time.Time) error {
+	if conv, ok := m.conversations[convID]; ok {
+		conv.UpdatedAt = at
+	}
+	for _, uid := range participantIDs {
+		for _, uc := range m.userConvs[uid] {
+			if uc.ConversationID == convID {
+				uc.UpdatedAt = at
+			}
+		}
+	}
+	return nil
+}
+
 func (m *mockConversationStore) SetFavorite(_ context.Context, convID, userID string, favorite bool) error {
 	for _, uc := range m.userConvs[userID] {
 		if uc.ConversationID == convID {
@@ -596,10 +613,13 @@ func (m *mockConversationStore) SetFavorite(_ context.Context, convID, userID st
 	return store.ErrNotFound
 }
 
-func (m *mockConversationStore) SetCategory(_ context.Context, convID, userID, categoryID string) error {
+func (m *mockConversationStore) SetCategory(_ context.Context, convID, userID, categoryID string, sidebarPosition *int) error {
 	for _, uc := range m.userConvs[userID] {
 		if uc.ConversationID == convID {
 			uc.CategoryID = categoryID
+			if sidebarPosition != nil {
+				uc.SidebarPosition = *sidebarPosition
+			}
 			return nil
 		}
 	}

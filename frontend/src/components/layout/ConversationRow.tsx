@@ -15,6 +15,7 @@ import {
   useCategories,
 } from '@/hooks/useSidebar';
 import type { UserConversation, SidebarCategory } from '@/types';
+import type { CSSProperties } from 'react';
 
 interface Props {
   conversation: UserConversation;
@@ -22,6 +23,11 @@ interface Props {
   dmAvatarURL?: string;
   onClose: () => void;
   onHide: (convID: string) => void;
+  draggable?: boolean;
+  dragRef?: (node: HTMLElement | null) => void;
+  dragStyle?: CSSProperties;
+  suppressNavigation?: boolean;
+  onSuppressNavigationConsumed?: () => void;
 }
 
 // ConversationRow is one row in the sidebar's DM/group list. It owns the
@@ -29,7 +35,18 @@ interface Props {
 // menu for moving between categories. Closing the conversation lives in
 // the same kebab so a DM row keeps the exact button layout (star + …)
 // every other sidebar row uses.
-export function ConversationRow({ conversation, hasUnread, dmAvatarURL, onClose, onHide }: Props) {
+export function ConversationRow({
+  conversation,
+  hasUnread,
+  dmAvatarURL,
+  onClose,
+  onHide,
+  draggable,
+  dragRef,
+  dragStyle,
+  suppressNavigation,
+  onSuppressNavigationConsumed,
+}: Props) {
   const favorite = useFavoriteConversation();
   const setCategory = useSetConversationCategory();
   const { data: categories } = useCategories();
@@ -41,6 +58,13 @@ export function ConversationRow({ conversation, hasUnread, dmAvatarURL, onClose,
   function toggleFavorite(e: React.MouseEvent) {
     e.preventDefault();
     e.stopPropagation();
+    if (isFav) {
+      setCategory.mutate({
+        conversationID: conversation.conversationID,
+        categoryID: conversation.categoryID ?? '',
+        sidebarPosition: 0,
+      });
+    }
     favorite.mutate({ conversationID: conversation.conversationID, favorite: !isFav });
   }
 
@@ -49,10 +73,24 @@ export function ConversationRow({ conversation, hasUnread, dmAvatarURL, onClose,
   }
 
   return (
-    <div className="group/row relative flex items-center">
+    <div
+      ref={dragRef}
+      className={`group/row relative flex items-center ${draggable ? 'cursor-grab active:cursor-grabbing' : ''}`}
+      data-testid={`conversation-row-${conversation.conversationID}`}
+      style={dragStyle}
+    >
       <NavLink
         to={`/conversation/${conversation.conversationID}`}
-        onClick={onClose}
+        onClick={(event) => {
+          if (suppressNavigation) {
+            event.preventDefault();
+            event.stopPropagation();
+            onSuppressNavigationConsumed?.();
+            return;
+          }
+          onClose();
+        }}
+        draggable={false}
         className={({ isActive }) =>
           `flex flex-1 min-w-0 items-center gap-2 rounded-md py-1 pl-2 pr-12 text-sm transition-colors ${
             isActive
@@ -87,12 +125,6 @@ export function ConversationRow({ conversation, hasUnread, dmAvatarURL, onClose,
             ? firstNamesOnly(conversation.displayName)
             : conversation.displayName}
         </span>
-        {hasUnread && (
-          <span
-            data-testid="unread-dot"
-            className="ml-auto h-2 w-2 rounded-full bg-white group-hover/row:hidden"
-          />
-        )}
       </NavLink>
       {/* Star — visible on hover; persistent yellow when favorited.
           Positioned to match ChannelRow's right-7 / right-1 layout. */}

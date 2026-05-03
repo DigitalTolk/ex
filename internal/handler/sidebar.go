@@ -76,7 +76,8 @@ func (h *SidebarHandler) SetCategory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		CategoryID string `json:"categoryID"`
+		CategoryID      string `json:"categoryID"`
+		SidebarPosition *int   `json:"sidebarPosition"`
 	}
 	if err := readJSON(r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_body", err.Error())
@@ -85,7 +86,7 @@ func (h *SidebarHandler) SetCategory(w http.ResponseWriter, r *http.Request) {
 	if !h.validateUserCategory(w, r, userID, body.CategoryID) {
 		return
 	}
-	if err := h.channelSvc.SetCategory(r.Context(), userID, channelID, body.CategoryID); err != nil {
+	if err := h.channelSvc.SetCategory(r.Context(), userID, channelID, body.CategoryID, body.SidebarPosition); err != nil {
 		writeError(w, http.StatusForbidden, "category_error", err.Error())
 		return
 	}
@@ -215,7 +216,8 @@ func (h *SidebarHandler) SetConversationCategory(w http.ResponseWriter, r *http.
 		return
 	}
 	var body struct {
-		CategoryID string `json:"categoryID"`
+		CategoryID      string `json:"categoryID"`
+		SidebarPosition *int   `json:"sidebarPosition"`
 	}
 	if err := readJSON(r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_body", err.Error())
@@ -224,7 +226,7 @@ func (h *SidebarHandler) SetConversationCategory(w http.ResponseWriter, r *http.
 	if !h.validateUserCategory(w, r, userID, body.CategoryID) {
 		return
 	}
-	if err := h.convSvc.SetCategory(r.Context(), userID, convID, body.CategoryID); err != nil {
+	if err := h.convSvc.SetCategory(r.Context(), userID, convID, body.CategoryID, body.SidebarPosition); err != nil {
 		writeError(w, http.StatusForbidden, "category_error", err.Error())
 		return
 	}

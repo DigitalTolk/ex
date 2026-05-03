@@ -4,13 +4,14 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"time"
 
+	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/expression"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
-	"github.com/DigitalTolk/ex/internal/model"
 )
 
 // ConversationStore defines operations on Conversation entities.
@@ -20,6 +21,7 @@ type ConversationStore interface {
 	ListUserConversations(ctx context.Context, userID string) ([]*model.UserConversation, error)
 	IsMember(ctx context.Context, convID, userID string) (bool, error)
 	Activate(ctx context.Context, convID string, participantIDs []string) error
+	Touch(ctx context.Context, convID string, participantIDs []string, at time.Time) error
 	ListAll(ctx context.Context) ([]*model.Conversation, error)
 }
 
@@ -233,6 +235,39 @@ func (s *ConversationStoreImpl) Activate(ctx context.Context, convID string, par
 	return nil
 }
 
+// Touch updates the conversation activity timestamp on both the canonical
+// conversation row and each participant's user-side sidebar row.
+func (s *ConversationStoreImpl) Touch(ctx context.Context, convID string, participantIDs []string, at time.Time) error {
+	expr, err := expression.NewBuilder().
+		WithUpdate(expression.Set(expression.Name("updatedAt"), expression.Value(at))).
+		Build()
+	if err != nil {
+		return fmt.Errorf("store: build touch conversation expression: %w", err)
+	}
+
+	keys := make([]map[string]types.AttributeValue, 0, 1+len(participantIDs))
+	keys = append(keys, compositeKey(convPK(convID), metaSK()))
+	for _, uid := range participantIDs {
+		keys = append(keys, compositeKey(userPK(uid), convSK(convID)))
+	}
+	for _, key := range keys {
+		if _, err := s.Client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+			TableName:                 aws.String(s.Table),
+			Key:                       key,
+			UpdateExpression:          expr.Update(),
+			ExpressionAttributeNames:  expr.Names(),
+			ExpressionAttributeValues: expr.Values(),
+			ConditionExpression:       aws.String("attribute_exists(PK)"),
+		}); err != nil {
+			if isConditionCheckFailed(err) {
+				return ErrNotFound
+			}
+			return fmt.Errorf("store: touch conversation: %w", err)
+		}
+	}
+	return nil
+}
+
 // SetUserConversationFavorite flips the favorite flag on the user-side
 // UserConversation row. Per-user — pinning the DM doesn't affect the
 // other participants' views.
@@ -242,8 +277,12 @@ func (s *ConversationStoreImpl) SetUserConversationFavorite(ctx context.Context,
 
 // SetUserConversationCategory assigns the DM/group to a sidebar category
 // (or clears it when categoryID is empty).
-func (s *ConversationStoreImpl) SetUserConversationCategory(ctx context.Context, convID, userID, categoryID string) error {
-	return s.setUserConversationAttribute(ctx, convID, userID, "categoryID", categoryID)
+func (s *ConversationStoreImpl) SetUserConversationCategory(ctx context.Context, convID, userID, categoryID string, sidebarPosition *int) error {
+	upd := expression.Set(expression.Name("categoryID"), expression.Value(categoryID))
+	if sidebarPosition != nil {
+		upd = upd.Set(expression.Name("sidebarPosition"), expression.Value(*sidebarPosition))
+	}
+	return s.updateUserConversation(ctx, convID, userID, upd, "category")
 }
 
 // setUserConversationAttribute is the shared helper for one-attribute
@@ -252,9 +291,13 @@ func (s *ConversationStoreImpl) SetUserConversationCategory(ctx context.Context,
 // orphan.
 func (s *ConversationStoreImpl) setUserConversationAttribute(ctx context.Context, convID, userID, attr string, value any) error {
 	upd := expression.Set(expression.Name(attr), expression.Value(value))
+	return s.updateUserConversation(ctx, convID, userID, upd, attr)
+}
+
+func (s *ConversationStoreImpl) updateUserConversation(ctx context.Context, convID, userID string, upd expression.UpdateBuilder, label string) error {
 	expr, err := expression.NewBuilder().WithUpdate(upd).Build()
 	if err != nil {
-		return fmt.Errorf("store: build user conv %s expression: %w", attr, err)
+		return fmt.Errorf("store: build user conv %s expression: %w", label, err)
 	}
 	_, err = s.Client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
 		TableName:                 aws.String(s.Table),
@@ -268,7 +311,7 @@ func (s *ConversationStoreImpl) setUserConversationAttribute(ctx context.Context
 		if isConditionCheckFailed(err) {
 			return ErrNotFound
 		}
-		return fmt.Errorf("store: set user conv %s: %w", attr, err)
+		return fmt.Errorf("store: set user conv %s: %w", label, err)
 	}
 	return nil
 }

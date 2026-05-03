@@ -31,6 +31,9 @@ type UserChannel struct {
 	// empty string means "no category" (lands under the default "Other"
 	// section). The category record itself lives in UserChannelCategory.
 	CategoryID string `json:"categoryID,omitempty" dynamodbav:"categoryID,omitempty"`
+	// SidebarPosition is a sparse per-user ordering key inside the
+	// channel's current sidebar bucket.
+	SidebarPosition int `json:"sidebarPosition,omitempty" dynamodbav:"sidebarPosition,omitempty"`
 }
 
 // UserChannelCategory is a user-defined grouping for the sidebar. Users
@@ -55,6 +58,7 @@ type UserConversation struct {
 	CreatedBy      string           `json:"createdBy,omitempty" dynamodbav:"createdBy,omitempty"`
 	Activated      bool             `json:"activated" dynamodbav:"activated"`
 	JoinedAt       time.Time        `json:"joinedAt" dynamodbav:"joinedAt"`
+	UpdatedAt      time.Time        `json:"updatedAt,omitempty" dynamodbav:"updatedAt,omitempty"`
 	LastReadMsgID  string           `json:"lastReadMsgID,omitempty" dynamodbav:"lastReadMsgID,omitempty"`
 	// Favorite pins this DM/group to the user's "Favorites" sidebar
 	// section. Same per-user semantics as on UserChannel.
@@ -64,4 +68,7 @@ type UserConversation struct {
 	// and conversations so a category like "Engineering" can hold both
 	// #eng-channel and a DM with the team lead.
 	CategoryID string `json:"categoryID,omitempty" dynamodbav:"categoryID,omitempty"`
+	// SidebarPosition is a sparse per-user ordering key inside the
+	// conversation's current sidebar bucket.
+	SidebarPosition int `json:"sidebarPosition,omitempty" dynamodbav:"sidebarPosition,omitempty"`
 }

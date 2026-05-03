@@ -129,7 +129,7 @@ func (s *dataMembershipStore) SetMute(_ context.Context, _, _ string, _ bool) er
 func (s *dataMembershipStore) SetFavorite(_ context.Context, _, _ string, _ bool) error {
 	return nil
 }
-func (s *dataMembershipStore) SetCategory(_ context.Context, _, _, _ string) error {
+func (s *dataMembershipStore) SetCategory(_ context.Context, _, _, _ string, _ *int) error {
 	return nil
 }
 

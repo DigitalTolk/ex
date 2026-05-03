@@ -65,7 +65,7 @@ func TestConversationService_SetCategory(t *testing.T) {
 	conversations.userConvs["u-1"] = []*model.UserConversation{
 		{UserID: "u-1", ConversationID: "c-cat"},
 	}
-	if err := svc.SetCategory(ctx, "u-1", "c-cat", "cat-eng"); err != nil {
+	if err := svc.SetCategory(ctx, "u-1", "c-cat", "cat-eng", nil); err != nil {
 		t.Fatalf("SetCategory: %v", err)
 	}
 	if conversations.userConvs["u-1"][0].CategoryID != "cat-eng" {
@@ -81,7 +81,7 @@ func TestConversationService_SetCategory_RejectsNonParticipant(t *testing.T) {
 		Type:           model.ConversationTypeGroup,
 		ParticipantIDs: []string{"u-1"},
 	}
-	if err := svc.SetCategory(ctx, "u-stranger", "c-cat", "cat"); err == nil {
+	if err := svc.SetCategory(ctx, "u-stranger", "c-cat", "cat", nil); err == nil {
 		t.Fatal("expected non-participant rejection")
 	}
 }

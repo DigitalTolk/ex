@@ -98,6 +98,7 @@ export interface UserChannel {
   muted?: boolean;
   favorite?: boolean;
   categoryID?: string;
+  sidebarPosition?: number;
 }
 
 export interface SidebarCategory {
@@ -115,6 +116,8 @@ export interface UserConversation {
   lastReadMsgID?: string;
   favorite?: boolean;
   categoryID?: string;
+  sidebarPosition?: number;
+  updatedAt?: string;
 }
 
 export interface PaginatedResponse<T> {

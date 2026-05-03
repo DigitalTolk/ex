@@ -93,6 +93,7 @@ func (s *ConversationService) GetOrCreateDM(ctx context.Context, userA, userB st
 			CreatedBy:      userA,
 			Activated:      false,
 			JoinedAt:       now,
+			UpdatedAt:      now,
 		},
 	}
 	if userA != userB {
@@ -105,6 +106,7 @@ func (s *ConversationService) GetOrCreateDM(ctx context.Context, userA, userB st
 			CreatedBy:      userA,
 			Activated:      false,
 			JoinedAt:       now,
+			UpdatedAt:      now,
 		})
 	}
 
@@ -237,6 +239,7 @@ func (s *ConversationService) CreateGroup(ctx context.Context, creatorID string,
 			CreatedBy:      creatorID,
 			Activated:      false,
 			JoinedAt:       now,
+			UpdatedAt:      now,
 		})
 	}
 
@@ -347,18 +350,22 @@ func (s *ConversationService) SetFavorite(ctx context.Context, userID, convID st
 // SetCategory assigns the DM/group to one of the user's sidebar
 // categories (or clears it when categoryID is empty). Validation that
 // the categoryID belongs to the user is the handler's responsibility.
-func (s *ConversationService) SetCategory(ctx context.Context, userID, convID, categoryID string) error {
+func (s *ConversationService) SetCategory(ctx context.Context, userID, convID, categoryID string, sidebarPosition *int) error {
 	if !s.IsParticipant(ctx, userID, convID) {
 		return errors.New("conversation: not a participant")
 	}
-	if err := s.conversations.SetCategory(ctx, convID, userID, categoryID); err != nil {
+	if err := s.conversations.SetCategory(ctx, convID, userID, categoryID, sidebarPosition); err != nil {
 		return fmt.Errorf("conversation: set category: %w", err)
 	}
-	events.Publish(ctx, s.publisher, pubsub.UserChannel(userID), events.EventUserChannelUpdated, map[string]any{
+	payload := map[string]any{
 		"conversationID": convID,
 		"userID":         userID,
 		"categoryID":     categoryID,
-	})
+	}
+	if sidebarPosition != nil {
+		payload["sidebarPosition"] = *sidebarPosition
+	}
+	events.Publish(ctx, s.publisher, pubsub.UserChannel(userID), events.EventUserChannelUpdated, payload)
 	return nil
 }
 

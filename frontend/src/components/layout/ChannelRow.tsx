@@ -10,18 +10,33 @@ import {
 import { slugify } from '@/lib/format';
 import { useFavoriteChannel, useSetCategory, useCategories } from '@/hooks/useSidebar';
 import type { UserChannel, SidebarCategory } from '@/types';
+import type { CSSProperties } from 'react';
 
 interface Props {
   channel: UserChannel;
   hasUnread: boolean;
   onClose: () => void;
+  draggable?: boolean;
+  dragRef?: (node: HTMLElement | null) => void;
+  dragStyle?: CSSProperties;
+  suppressNavigation?: boolean;
+  onSuppressNavigationConsumed?: () => void;
 }
 
 // ChannelRow is one row in the sidebar's channels list. It owns the
 // per-row interactions: the star (favorite toggle) and the kebab menu
 // for moving the channel between existing categories. Creating a new
 // category lives in the sidebar header so the row menu stays terse.
-export function ChannelRow({ channel, hasUnread, onClose }: Props) {
+export function ChannelRow({
+  channel,
+  hasUnread,
+  onClose,
+  draggable,
+  dragRef,
+  dragStyle,
+  suppressNavigation,
+  onSuppressNavigationConsumed,
+}: Props) {
   const favorite = useFavoriteChannel();
   const setCategory = useSetCategory();
   const { data: categories } = useCategories();
@@ -31,6 +46,9 @@ export function ChannelRow({ channel, hasUnread, onClose }: Props) {
   function toggleFavorite(e: React.MouseEvent) {
     e.preventDefault();
     e.stopPropagation();
+    if (isFav) {
+      setCategory.mutate({ channelID: channel.channelID, categoryID: '' });
+    }
     favorite.mutate({ channelID: channel.channelID, favorite: !isFav });
   }
 
@@ -39,10 +57,24 @@ export function ChannelRow({ channel, hasUnread, onClose }: Props) {
   }
 
   return (
-    <div className="group/row relative flex items-center">
+    <div
+      ref={dragRef}
+      className={`group/row relative flex items-center ${draggable ? 'cursor-grab active:cursor-grabbing' : ''}`}
+      data-testid={`channel-row-${channel.channelID}`}
+      style={dragStyle}
+    >
       <NavLink
         to={`/channel/${slugify(channel.channelName)}`}
-        onClick={onClose}
+        onClick={(event) => {
+          if (suppressNavigation) {
+            event.preventDefault();
+            event.stopPropagation();
+            onSuppressNavigationConsumed?.();
+            return;
+          }
+          onClose();
+        }}
+        draggable={false}
         className={({ isActive }) =>
           `flex flex-1 min-w-0 items-center gap-2 rounded-md py-1 pl-2 pr-12 text-sm transition-colors ${
             isActive
@@ -59,12 +91,6 @@ export function ChannelRow({ channel, hasUnread, onClose }: Props) {
         </span>
         {channel.muted && (
           <BellOff className="ml-auto h-3 w-3 shrink-0 text-gray-500 group-hover/row:hidden" aria-label="Muted" />
-        )}
-        {hasUnread && !channel.muted && (
-          <span
-            data-testid="unread-dot"
-            className="ml-auto h-2 w-2 rounded-full bg-white group-hover/row:hidden"
-          />
         )}
       </NavLink>
       {/* Star — visible on hover; persistent yellow when favorited. */}

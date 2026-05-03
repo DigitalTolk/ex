@@ -372,7 +372,7 @@ func TestChannelService_SetCategory(t *testing.T) {
 		{UserID: "u-1", ChannelID: "ch-cat"},
 	}
 
-	if err := svc.SetCategory(ctx, "u-1", "ch-cat", "cat-eng"); err != nil {
+	if err := svc.SetCategory(ctx, "u-1", "ch-cat", "cat-eng", nil); err != nil {
 		t.Fatalf("SetCategory: %v", err)
 	}
 	if memberships.userChannels[0].CategoryID != "cat-eng" {
@@ -386,7 +386,7 @@ func TestChannelService_SetCategory(t *testing.T) {
 func TestChannelService_SetCategory_RejectsNonMember(t *testing.T) {
 	svc, _, _, _, _ := setupChannelService()
 	ctx := context.Background()
-	if err := svc.SetCategory(ctx, "u-stranger", "ch-cat", "cat-x"); err == nil {
+	if err := svc.SetCategory(ctx, "u-stranger", "ch-cat", "cat-x", nil); err == nil {
 		t.Fatal("expected error for non-member")
 	}
 }

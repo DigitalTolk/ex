@@ -165,6 +165,11 @@ export default function ChatPage() {
       // — broadcast a DOM event the page listens to and refetches on.
       window.dispatchEvent(new CustomEvent('ex:user-updated'));
     },
+    onUserChannelUpdated: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.userChannels() });
+      queryClient.invalidateQueries({ queryKey: queryKeys.userConversations() });
+      queryClient.invalidateQueries({ queryKey: queryKeys.sidebarCategories() });
+    },
     onAttachmentDeleted: (data: unknown) => {
       const evt = parseAttachmentDeleted(data);
       if (!evt) return;
