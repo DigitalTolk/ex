@@ -53,9 +53,29 @@ func (h *SearchHandler) SearchChannels(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, emptyResults())
 		return
 	}
+	userID := middleware.UserIDFromContext(r.Context())
+	if userID == "" {
+		writeError(w, http.StatusUnauthorized, "unauthorized", "authentication required")
+		return
+	}
+	var allowed []string
+	if h.access == nil {
+		writeJSON(w, http.StatusOK, emptyResults())
+		return
+	}
+	ids, err := h.access.AllowedParentIDs(r.Context(), userID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "access_failed", err.Error())
+		return
+	}
+	allowed = ids
 	q := queryParam(r, "q", "")
 	limit := queryInt(r, "limit", 10)
-	res, err := h.searcher.Channels(r.Context(), q, limit)
+	res, err := h.searcher.Channels(r.Context(), search.ChannelQuery{
+		Q:                 q,
+		AllowedChannelIDs: allowed,
+		Limit:             limit,
+	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "search_failed", err.Error())
 		return

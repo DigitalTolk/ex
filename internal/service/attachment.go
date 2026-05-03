@@ -3,6 +3,8 @@ package service
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"image"
@@ -14,6 +16,8 @@ import (
 	_ "image/jpeg"
 	_ "image/png"
 	"io"
+	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -138,6 +142,12 @@ func (s *AttachmentService) CreateUploadURL(ctx context.Context, p CreateUploadP
 	}
 	if p.Filename == "" || p.ContentType == "" || p.SHA256 == "" {
 		return nil, errors.New("attachment: filename, contentType, sha256 required")
+	}
+	if !validSHA256Hex(p.SHA256) {
+		return nil, errors.New("attachment: invalid sha256")
+	}
+	if p.Width < 0 || p.Height < 0 {
+		return nil, errors.New("attachment: invalid dimensions")
 	}
 	if s.signer == nil {
 		return nil, errors.New("attachment: storage not configured")
@@ -316,6 +326,97 @@ func (s *AttachmentService) GetMany(ctx context.Context, ids []string) ([]*model
 // AddRef binds an attachment to a message. Called by MessageService.Send.
 func (s *AttachmentService) AddRef(ctx context.Context, attachmentID, messageID string) error {
 	return s.attachments.AddRef(ctx, attachmentID, messageID)
+}
+
+// ValidateForUse proves that an attachment row points at an uploaded object
+// whose immutable properties still match the metadata the row advertises.
+// Message sends/edits call this before persisting attachment IDs supplied by
+// the client, so a failed or tampered direct-to-S3 upload cannot become a
+// message attachment.
+func (s *AttachmentService) ValidateForUse(ctx context.Context, attachmentID string) error {
+	if attachmentID == "" {
+		return errors.New("attachment: id required")
+	}
+	a, err := s.attachments.GetByID(ctx, attachmentID)
+	if err != nil {
+		return fmt.Errorf("attachment: get for validation: %w", err)
+	}
+	if a.S3Key == "" {
+		return errors.New("attachment: missing storage key")
+	}
+	if a.Size <= 0 {
+		return errors.New("attachment: invalid size")
+	}
+	if s.signer == nil {
+		return errors.New("attachment: storage not configured")
+	}
+	body, objectContentType, objectSize, _, err := s.signer.GetObject(ctx, a.S3Key)
+	if err != nil {
+		return fmt.Errorf("attachment: object missing: %w", err)
+	}
+	defer func() { _ = body.Close() }()
+	if objectSize > 0 && objectSize != a.Size {
+		return fmt.Errorf("attachment: object size mismatch: got %d want %d", objectSize, a.Size)
+	}
+
+	limited := io.LimitReader(body, a.Size+1)
+	data, err := io.ReadAll(limited)
+	if err != nil {
+		return fmt.Errorf("attachment: read object: %w", err)
+	}
+	if int64(len(data)) != a.Size {
+		return fmt.Errorf("attachment: object size mismatch: got %d want %d", len(data), a.Size)
+	}
+	sum := sha256.Sum256(data)
+	if !strings.EqualFold(hex.EncodeToString(sum[:]), a.SHA256) {
+		return errors.New("attachment: sha256 mismatch")
+	}
+	if err := validateAttachmentContentType(a, objectContentType, data); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateAttachmentContentType(a *model.Attachment, objectContentType string, data []byte) error {
+	declared := a.ContentType
+	declared = strings.ToLower(strings.TrimSpace(strings.Split(declared, ";")[0]))
+	objectContentType = strings.ToLower(strings.TrimSpace(strings.Split(objectContentType, ";")[0]))
+	if objectContentType != "" && declared != "" && objectContentType != declared && declared != "application/octet-stream" {
+		return fmt.Errorf("attachment: object content type %q does not match declared %q", objectContentType, declared)
+	}
+	if !strings.HasPrefix(declared, "image/") {
+		return nil
+	}
+	detected := http.DetectContentType(data)
+	if detected == "application/octet-stream" {
+		return errors.New("attachment: could not detect image content type")
+	}
+	cfg, format, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil || cfg.Width <= 0 || cfg.Height <= 0 {
+		return errors.New("attachment: invalid image")
+	}
+	if a.Width > 0 && a.Width != cfg.Width {
+		return fmt.Errorf("attachment: image width mismatch: got %d want %d", cfg.Width, a.Width)
+	}
+	if a.Height > 0 && a.Height != cfg.Height {
+		return fmt.Errorf("attachment: image height mismatch: got %d want %d", cfg.Height, a.Height)
+	}
+	expectedFormat := strings.TrimPrefix(declared, "image/")
+	if expectedFormat == "jpg" {
+		expectedFormat = "jpeg"
+	}
+	if format != expectedFormat {
+		return fmt.Errorf("attachment: image format %q does not match declared %q", format, declared)
+	}
+	return nil
+}
+
+func validSHA256Hex(v string) bool {
+	if len(v) != sha256.Size*2 {
+		return false
+	}
+	decoded, err := hex.DecodeString(v)
+	return err == nil && len(decoded) == sha256.Size
 }
 
 // RemoveRef releases a message's claim on an attachment. When the last

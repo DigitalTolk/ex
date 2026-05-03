@@ -399,8 +399,13 @@ func TestMessageService_Edit(t *testing.T) {
 }
 
 type fakeAttachmentRefMgr struct {
-	added   []string
-	removed []string
+	added       []string
+	removed     []string
+	validateErr error
+}
+
+func (f *fakeAttachmentRefMgr) ValidateForUse(_ context.Context, _ string) error {
+	return f.validateErr
 }
 
 func (f *fakeAttachmentRefMgr) AddRef(_ context.Context, attachmentID, _ string) error {
@@ -448,6 +453,24 @@ func TestMessageService_Edit_AttachmentDiff(t *testing.T) {
 	}
 	if len(refs.removed) != 1 || refs.removed[0] != "a" {
 		t.Errorf("removed=%v want [a]", refs.removed)
+	}
+}
+
+func TestMessageService_Send_RejectsInvalidAttachmentBeforeCreate(t *testing.T) {
+	svc, messages, memberships, _, _ := setupMessageService()
+	ctx := context.Background()
+	memberships.memberships["ch1#u1"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u1", Role: model.ChannelRoleMember}
+	refs := &fakeAttachmentRefMgr{validateErr: errors.New("object missing")}
+	svc.SetAttachmentManager(refs)
+
+	if _, err := svc.Send(ctx, "u1", "ch1", ParentChannel, "body", "", "att-missing"); err == nil {
+		t.Fatal("expected invalid attachment to reject send")
+	}
+	if len(messages.messages) != 0 {
+		t.Fatalf("message was created despite invalid attachment: %+v", messages.messages)
+	}
+	if len(refs.added) != 0 {
+		t.Fatalf("attachment refs were added despite invalid attachment: %+v", refs.added)
 	}
 }
 

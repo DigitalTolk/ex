@@ -33,6 +33,7 @@ type ConversationActivator interface {
 // to bind/unbind attachments to messages. Defined as an interface so tests can
 // stub it without dragging in storage.
 type AttachmentRefManager interface {
+	ValidateForUse(ctx context.Context, attachmentID string) error
 	AddRef(ctx context.Context, attachmentID, messageID string) error
 	RemoveRef(ctx context.Context, attachmentID, messageID string) error
 }
@@ -140,6 +141,9 @@ func (s *MessageService) Send(ctx context.Context, userID, parentID, parentType,
 		return nil, err
 	}
 	if err := ValidateAttachmentCount(len(attachmentIDs)); err != nil {
+		return nil, err
+	}
+	if err := s.validateAttachmentsForUse(ctx, attachmentIDs); err != nil {
 		return nil, err
 	}
 
@@ -651,6 +655,11 @@ func (s *MessageService) Edit(ctx context.Context, userID, parentID, parentType,
 	if err := ValidateAttachmentCount(len(finalAttachments)); err != nil {
 		return nil, err
 	}
+	if attachmentIDs != nil {
+		if err := s.validateAttachmentsForUse(ctx, attachmentIDs); err != nil {
+			return nil, err
+		}
+	}
 
 	msg.Body = newBody
 	now := time.Now()
@@ -901,6 +910,23 @@ func (s *MessageService) checkAccess(ctx context.Context, userID, parentID, pare
 		}
 	default:
 		return fmt.Errorf("message: unknown parent type %q", parentType)
+	}
+	return nil
+}
+
+func (s *MessageService) validateAttachmentsForUse(ctx context.Context, ids []string) error {
+	if len(ids) == 0 || s.attachments == nil {
+		return nil
+	}
+	seen := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		if err := s.attachments.ValidateForUse(ctx, id); err != nil {
+			return fmt.Errorf("message: invalid attachment %q: %w", id, err)
+		}
 	}
 	return nil
 }

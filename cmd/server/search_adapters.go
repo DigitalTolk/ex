@@ -25,7 +25,7 @@ func (a *idSearcher) Users(ctx context.Context, q string, limit int) ([]string, 
 }
 
 func (a *idSearcher) Channels(ctx context.Context, q string, limit int) ([]string, error) {
-	res, err := a.s.Channels(ctx, q, limit)
+	res, err := a.s.Channels(ctx, search.ChannelQuery{Q: q, Limit: limit})
 	if err != nil || res == nil {
 		return nil, err
 	}

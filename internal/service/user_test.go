@@ -254,6 +254,21 @@ func TestUserService_Update(t *testing.T) {
 	}
 }
 
+func TestUserService_Update_RejectsAvatarKeyForAnotherUser(t *testing.T) {
+	users := newMockUserStore()
+	svc := NewUserService(users, nil, nil, nil)
+	user := &model.User{
+		ID: "u5", Email: "u5@example.com", DisplayName: "Name", SystemRole: model.SystemRoleMember,
+	}
+	users.users[user.ID] = user
+	users.emailIndex[user.Email] = user
+
+	foreignKey := "avatars/u-other/upload"
+	if _, err := svc.Update(context.Background(), "u5", nil, &foreignKey, nil); err == nil {
+		t.Fatal("expected avatar key outside the user's prefix to be rejected")
+	}
+}
+
 func TestUserService_Update_OIDCUserCannotChangeDisplayName(t *testing.T) {
 	users := newMockUserStore()
 	svc := NewUserService(users, nil, nil, nil)

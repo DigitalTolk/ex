@@ -891,8 +891,9 @@ func TestLogout_DeleteNotFoundIsOK(t *testing.T) {
 func TestCreateInvite_StoreError(t *testing.T) {
 	env := setupAuthService()
 	env.invites.createErr = errors.New("store boom")
+	env.memberships.memberships["a#inviter"] = &model.ChannelMembership{ChannelID: "a", UserID: "inviter"}
 
-	if _, err := env.svc.CreateInvite(context.Background(), "inviter", "x@y", []string{"a"}); err == nil {
+	if _, err := env.svc.CreateInvite(context.Background(), "inviter", "x@example.com", []string{"a"}); err == nil {
 		t.Fatal("expected error")
 	}
 }
@@ -904,7 +905,7 @@ func TestCreateInvite_StoreError(t *testing.T) {
 func TestAcceptInvite_GetInviteGenericError(t *testing.T) {
 	env := setupAuthService()
 	env.invites.getErr = errors.New("get invite boom")
-	if _, _, _, err := env.svc.AcceptInvite(context.Background(), "tok", "n", "p"); err == nil {
+	if _, _, _, err := env.svc.AcceptInvite(context.Background(), "tok", "Name", "password123"); err == nil {
 		t.Fatal("expected error")
 	}
 }
@@ -918,7 +919,7 @@ func TestAcceptInvite_CreateUserError(t *testing.T) {
 	}
 	env.users.createErr = errors.New("create boom")
 
-	if _, _, _, err := env.svc.AcceptInvite(context.Background(), "t1", "Name", "pw"); err == nil {
+	if _, _, _, err := env.svc.AcceptInvite(context.Background(), "t1", "Name", "password123"); err == nil {
 		t.Fatal("expected error")
 	}
 }
@@ -933,7 +934,7 @@ func TestAcceptInvite_AddMemberError(t *testing.T) {
 	}
 	env.memberships.addErr = errors.New("add member boom")
 
-	if _, _, _, err := env.svc.AcceptInvite(context.Background(), "t2", "G", "pw"); err == nil {
+	if _, _, _, err := env.svc.AcceptInvite(context.Background(), "t2", "Guest", "password123"); err == nil {
 		t.Fatal("expected error from AddMember")
 	}
 }
@@ -948,7 +949,7 @@ func TestAcceptInvite_IssueTokensError(t *testing.T) {
 	}
 	env.jwt.accessTokenErr = errors.New("jwt boom")
 
-	if _, _, _, err := env.svc.AcceptInvite(context.Background(), "t3", "G", "pw"); err == nil {
+	if _, _, _, err := env.svc.AcceptInvite(context.Background(), "t3", "Guest", "password123"); err == nil {
 		t.Fatal("expected error from issueTokens")
 	}
 }
@@ -960,7 +961,7 @@ func TestAcceptInvite_IssueTokensError(t *testing.T) {
 func TestGuestLogin_GetUserGenericError(t *testing.T) {
 	env := setupAuthService()
 	env.users.getEmailErr = errors.New("get email boom")
-	if _, _, _, err := env.svc.GuestLogin(context.Background(), "x@y", "pw"); err == nil {
+	if _, _, _, err := env.svc.GuestLogin(context.Background(), "x@example.com", "pw"); err == nil {
 		t.Fatal("expected error")
 	}
 }

@@ -8,7 +8,10 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net/mail"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/DigitalTolk/ex/internal/store"
@@ -40,6 +43,12 @@ type AuthService struct {
 	cache        Cache
 	indexer      UserIndexer
 }
+
+const (
+	minGuestPasswordLen = 8
+	maxGuestPasswordLen = 1024
+	maxDisplayNameLen   = 80
+)
 
 // NewAuthService creates an AuthService with the given dependencies.
 func NewAuthService(
@@ -214,6 +223,14 @@ func (s *AuthService) Logout(ctx context.Context, refreshTokenRaw string) error 
 // CreateInvite generates an invitation token, stores the invite with a 72-hour
 // expiry, and returns the invite model.
 func (s *AuthService) CreateInvite(ctx context.Context, inviterID, email string, channelIDs []string) (*model.Invite, error) {
+	email, err := normalizeEmailAddress(email)
+	if err != nil {
+		return nil, err
+	}
+	channelIDs, err = s.authorizedInviteChannelIDs(ctx, inviterID, channelIDs)
+	if err != nil {
+		return nil, err
+	}
 	b := make([]byte, 24)
 	if _, err := rand.Read(b); err != nil {
 		return nil, fmt.Errorf("auth: generate invite token: %w", err)
@@ -238,6 +255,13 @@ func (s *AuthService) CreateInvite(ctx context.Context, inviterID, email string,
 // AcceptInvite validates the invite token, creates a guest user, adds the user
 // to the specified channels, generates tokens, and deletes the invite.
 func (s *AuthService) AcceptInvite(ctx context.Context, token, displayName, password string) (accessToken, refreshTokenRaw string, user *model.User, err error) {
+	displayName = strings.TrimSpace(displayName)
+	if displayName == "" || utf8.RuneCountInString(displayName) > maxDisplayNameLen {
+		return "", "", nil, fmt.Errorf("auth: display name must be 1-%d characters", maxDisplayNameLen)
+	}
+	if utf8.RuneCountInString(password) < minGuestPasswordLen || len(password) > maxGuestPasswordLen {
+		return "", "", nil, fmt.Errorf("auth: password must be at least %d characters", minGuestPasswordLen)
+	}
 	inv, err := s.invites.GetInvite(ctx, token)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
@@ -302,6 +326,10 @@ func (s *AuthService) AcceptInvite(ctx context.Context, token, displayName, pass
 
 // GuestLogin authenticates a guest user via email and password (bcrypt).
 func (s *AuthService) GuestLogin(ctx context.Context, email, password string) (accessToken, refreshTokenRaw string, user *model.User, err error) {
+	email, err = normalizeEmailAddress(email)
+	if err != nil {
+		return "", "", nil, errors.New("auth: invalid credentials")
+	}
 	user, err = s.users.GetUserByEmail(ctx, email)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
@@ -323,6 +351,38 @@ func (s *AuthService) GuestLogin(ctx context.Context, email, password string) (a
 		return "", "", nil, err
 	}
 	return accessToken, refreshTokenRaw, user, nil
+}
+
+func normalizeEmailAddress(email string) (string, error) {
+	email = strings.ToLower(strings.TrimSpace(email))
+	if email == "" || len(email) > 254 {
+		return "", errors.New("auth: invalid email address")
+	}
+	addr, err := mail.ParseAddress(email)
+	if err != nil || addr.Address != email {
+		return "", errors.New("auth: invalid email address")
+	}
+	return email, nil
+}
+
+func (s *AuthService) authorizedInviteChannelIDs(ctx context.Context, inviterID string, channelIDs []string) ([]string, error) {
+	cleaned := make([]string, 0, len(channelIDs))
+	seen := make(map[string]bool, len(channelIDs))
+	for _, raw := range channelIDs {
+		chID := strings.TrimSpace(raw)
+		if chID == "" || seen[chID] {
+			continue
+		}
+		seen[chID] = true
+		if _, err := s.memberships.GetMembership(ctx, chID, inviterID); err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				return nil, errors.New("auth: inviter cannot invite to a channel they are not a member of")
+			}
+			return nil, fmt.Errorf("auth: check invite channel membership: %w", err)
+		}
+		cleaned = append(cleaned, chID)
+	}
+	return cleaned, nil
 }
 
 // ensureGeneralChannel creates the #general channel if it doesn't exist and adds

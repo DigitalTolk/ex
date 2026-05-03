@@ -81,7 +81,7 @@ func TestAcceptInvite_NotFound(t *testing.T) {
 	env := setupAuthService()
 	ctx := context.Background()
 
-	_, _, _, err := env.svc.AcceptInvite(ctx, "nonexistent", "Name", "pw")
+	_, _, _, err := env.svc.AcceptInvite(ctx, "nonexistent", "Name", "password123")
 	if err == nil {
 		t.Fatal("expected error for non-existent invite")
 	}
@@ -99,7 +99,7 @@ func TestAcceptInvite_Expired(t *testing.T) {
 		CreatedAt: time.Now().Add(-73 * time.Hour),
 	}
 
-	_, _, _, err := env.svc.AcceptInvite(ctx, "expired-token", "Name", "pw")
+	_, _, _, err := env.svc.AcceptInvite(ctx, "expired-token", "Name", "password123")
 	if err == nil {
 		t.Fatal("expected error for expired invite")
 	}

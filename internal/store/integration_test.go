@@ -1282,6 +1282,16 @@ func TestInviteStore_CreateGetDelete(t *testing.T) {
 	if err := is.Create(ctx, invite); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
+	rawKey, err := db.Client.GetItem(ctx, &dynamodb.GetItemInput{
+		TableName: aws.String(db.Table),
+		Key:       compositeKey(invitePK("invite-token-1"), metaSK()),
+	})
+	if err != nil {
+		t.Fatalf("GetItem raw invite key: %v", err)
+	}
+	if rawKey.Item != nil {
+		t.Fatal("raw invite token was used as the database key")
+	}
 
 	// Get.
 	got, err := is.GetByToken(ctx, "invite-token-1")

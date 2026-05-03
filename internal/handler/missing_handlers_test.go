@@ -394,7 +394,7 @@ func TestAttachmentHandler_CreateUploadURL_OK(t *testing.T) {
 	token := makeTokenForUser(jwtMgr, user)
 	handler := middleware.Auth(jwtMgr)(http.HandlerFunc(h.CreateUploadURL))
 
-	body := `{"filename":"foo.png","contentType":"image/png","size":1024,"sha256":"hash-1"}`
+	body := `{"filename":"foo.png","contentType":"image/png","size":1024,"sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/attachments/url", strings.NewReader(body))
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
@@ -417,17 +417,18 @@ func TestAttachmentHandler_CreateUploadURL_OK(t *testing.T) {
 
 func TestAttachmentHandler_CreateUploadURL_DedupExisting(t *testing.T) {
 	h, st, jwtMgr := setupAttachmentHandler(t)
+	hash := strings.Repeat("d", 64)
 	st.byID["a-existing"] = &model.Attachment{
-		ID: "a-existing", SHA256: "dup-hash", Filename: "old.png",
+		ID: "a-existing", SHA256: hash, Filename: "old.png",
 		ContentType: "image/png", Size: 200,
 	}
-	st.byHash["dup-hash"] = st.byID["a-existing"]
+	st.byHash[hash] = st.byID["a-existing"]
 
 	user := &model.User{ID: "u-att-dup", Email: "dup@x.com", SystemRole: model.SystemRoleMember}
 	token := makeTokenForUser(jwtMgr, user)
 	handler := middleware.Auth(jwtMgr)(http.HandlerFunc(h.CreateUploadURL))
 
-	body := `{"filename":"new.png","contentType":"image/png","size":200,"sha256":"dup-hash"}`
+	body := `{"filename":"new.png","contentType":"image/png","size":200,"sha256":"` + hash + `"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/attachments/url", strings.NewReader(body))
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")

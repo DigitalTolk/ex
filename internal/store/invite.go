@@ -2,12 +2,14 @@ package store
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"fmt"
 
+	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
-	"github.com/DigitalTolk/ex/internal/model"
 )
 
 // InviteStore defines operations on Invite entities.
@@ -37,12 +39,19 @@ type inviteItem struct {
 	model.Invite
 }
 
+func inviteTokenHash(token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return base64.RawURLEncoding.EncodeToString(sum[:])
+}
+
 func (s *InviteStoreImpl) Create(ctx context.Context, invite *model.Invite) error {
+	stored := *invite
+	stored.Token = ""
 	item := inviteItem{
-		PK:     invitePK(invite.Token),
+		PK:     invitePK(inviteTokenHash(invite.Token)),
 		SK:     metaSK(),
 		TTL:    invite.ExpiresAt.Unix(),
-		Invite: *invite,
+		Invite: stored,
 	}
 
 	av, err := attributevalue.MarshalMap(item)
@@ -67,7 +76,7 @@ func (s *InviteStoreImpl) Create(ctx context.Context, invite *model.Invite) erro
 func (s *InviteStoreImpl) GetByToken(ctx context.Context, token string) (*model.Invite, error) {
 	out, err := s.Client.GetItem(ctx, &dynamodb.GetItemInput{
 		TableName: aws.String(s.Table),
-		Key:       compositeKey(invitePK(token), metaSK()),
+		Key:       compositeKey(invitePK(inviteTokenHash(token)), metaSK()),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("store: get invite: %w", err)
@@ -86,7 +95,7 @@ func (s *InviteStoreImpl) GetByToken(ctx context.Context, token string) (*model.
 func (s *InviteStoreImpl) Delete(ctx context.Context, token string) error {
 	_, err := s.Client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
 		TableName: aws.String(s.Table),
-		Key:       compositeKey(invitePK(token), metaSK()),
+		Key:       compositeKey(invitePK(inviteTokenHash(token)), metaSK()),
 	})
 	if err != nil {
 		return fmt.Errorf("store: delete invite: %w", err)

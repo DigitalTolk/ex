@@ -446,6 +446,8 @@ func TestHashToken(t *testing.T) {
 func TestCreateInvite(t *testing.T) {
 	env := setupAuthService()
 	ctx := context.Background()
+	env.memberships.memberships["ch1#inviter-1"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "inviter-1"}
+	env.memberships.memberships["ch2#inviter-1"] = &model.ChannelMembership{ChannelID: "ch2", UserID: "inviter-1"}
 
 	inv, err := env.svc.CreateInvite(ctx, "inviter-1", "invitee@example.com", []string{"ch1", "ch2"})
 	if err != nil {
@@ -462,6 +464,17 @@ func TestCreateInvite(t *testing.T) {
 	}
 	if len(inv.ChannelIDs) != 2 {
 		t.Errorf("ChannelIDs len = %d, want 2", len(inv.ChannelIDs))
+	}
+}
+
+func TestCreateInvite_RejectsInvalidEmailAndUnauthorizedChannel(t *testing.T) {
+	env := setupAuthService()
+	ctx := context.Background()
+	if _, err := env.svc.CreateInvite(ctx, "inviter-1", "not an email", nil); err == nil {
+		t.Fatal("expected invalid email to be rejected")
+	}
+	if _, err := env.svc.CreateInvite(ctx, "inviter-1", "invitee@example.com", []string{"private"}); err == nil {
+		t.Fatal("expected unauthorized invite channel to be rejected")
 	}
 }
 

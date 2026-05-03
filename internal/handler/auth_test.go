@@ -573,7 +573,7 @@ func TestCreateInviteHandler_Authenticated(t *testing.T) {
 
 	handler := middleware.Auth(jwtMgr)(http.HandlerFunc(h.CreateInvite))
 
-	body := `{"email":"newinvitee@example.com","channelIDs":["ch1"]}`
+	body := `{"email":"newinvitee@example.com"}`
 	req := httptest.NewRequest(http.MethodPost, "/auth/invite", strings.NewReader(body))
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
@@ -644,7 +644,7 @@ func TestAcceptInviteHandler_MissingFields(t *testing.T) {
 func TestAcceptInviteHandler_InvalidToken(t *testing.T) {
 	h, _, _ := setupAuthHandler(t)
 
-	body := `{"token":"nonexistent","displayName":"Name","password":"pw"}`
+	body := `{"token":"nonexistent","displayName":"Name","password":"password123"}`
 	req := httptest.NewRequest(http.MethodPost, "/auth/invite/accept", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()

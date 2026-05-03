@@ -3,6 +3,8 @@ package service
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -23,7 +25,9 @@ type mockAttachmentStore struct {
 	byID   map[string]*model.Attachment
 	byHash map[string]*model.Attachment
 	// refs[attID] is the set of message IDs referencing the attachment.
-	refs map[string]map[string]bool
+	refs       map[string]map[string]bool
+	createErr  error
+	getHashErr error
 }
 
 func newMockAttachmentStore() *mockAttachmentStore {
@@ -35,6 +39,9 @@ func newMockAttachmentStore() *mockAttachmentStore {
 }
 
 func (m *mockAttachmentStore) Create(_ context.Context, a *model.Attachment) error {
+	if m.createErr != nil {
+		return m.createErr
+	}
 	if _, ok := m.byID[a.ID]; ok {
 		return store.ErrAlreadyExists
 	}
@@ -49,6 +56,9 @@ func (m *mockAttachmentStore) GetByID(_ context.Context, id string) (*model.Atta
 	return nil, store.ErrNotFound
 }
 func (m *mockAttachmentStore) GetByHash(_ context.Context, sha256 string) (*model.Attachment, error) {
+	if m.getHashErr != nil {
+		return nil, m.getHashErr
+	}
 	if a, ok := m.byHash[sha256]; ok {
 		return a, nil
 	}
@@ -103,9 +113,21 @@ func keys(m map[string]bool) []string {
 	return out
 }
 
+func sha256Hex(data []byte) string {
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
+}
+
+var (
+	testSHA256A = strings.Repeat("a", sha256.Size*2)
+	testSHA256B = strings.Repeat("b", sha256.Size*2)
+	testSHA256C = strings.Repeat("c", sha256.Size*2)
+)
+
 type fakeAttachmentSigner struct {
 	deleted []string
 	delErr  error
+	putErr  error
 	// presignCalls counts every PresignedGetURL call. The URL it
 	// returns embeds the call number so two URLs for the same key
 	// are *different strings* — exactly the production behaviour
@@ -118,7 +140,8 @@ type fakeAttachmentSigner struct {
 	// path: GetObjectRange returns whatever bytes are stored here for
 	// the requested key. Tests that don't exercise backfill leave
 	// this nil and GetObjectRange errors out.
-	objects map[string][]byte
+	objects           map[string][]byte
+	objectContentType string
 }
 
 type fakeMediaCache struct {
@@ -152,6 +175,9 @@ func (s *fakeAttachmentSigner) PresignedDownloadURL(_ context.Context, key, file
 	return fmt.Sprintf("https://signed.test/%s?download=%s&sig=%d", key, filename, s.presignDownloadCalls), nil
 }
 func (s *fakeAttachmentSigner) PresignedPutURL(_ context.Context, key string, _ string, _ time.Duration) (string, error) {
+	if s.putErr != nil {
+		return "", s.putErr
+	}
 	return "https://upload.test/" + key, nil
 }
 func (s *fakeAttachmentSigner) DeleteObject(_ context.Context, key string) error {
@@ -176,7 +202,11 @@ func (s *fakeAttachmentSigner) GetObject(_ context.Context, key string) (io.Read
 	if !ok {
 		return nil, "", 0, time.Time{}, fmt.Errorf("no object %s", key)
 	}
-	return io.NopCloser(bytes.NewReader(body)), "image/png", int64(len(body)), time.Date(2026, 5, 2, 10, 0, 0, 0, time.UTC), nil
+	contentType := s.objectContentType
+	if contentType == "" {
+		contentType = "image/png"
+	}
+	return io.NopCloser(bytes.NewReader(body)), contentType, int64(len(body)), time.Date(2026, 5, 2, 10, 0, 0, 0, time.UTC), nil
 }
 
 func TestAttachmentService_CreateUploadURL_PersistsClientReportedDimensions(t *testing.T) {
@@ -185,7 +215,7 @@ func TestAttachmentService_CreateUploadURL_PersistsClientReportedDimensions(t *t
 	svc := NewAttachmentService(storeM, signer, newMockPublisher())
 
 	res, err := svc.CreateUploadURL(context.Background(), CreateUploadParams{
-		UserID: "u1", Filename: "pic.png", ContentType: "image/png", SHA256: "h", Size: 100,
+		UserID: "u1", Filename: "pic.png", ContentType: "image/png", SHA256: testSHA256A, Size: 100,
 		Width: 1280, Height: 720,
 	})
 	if err != nil {
@@ -259,7 +289,7 @@ func TestAttachmentService_CreateUploadURL_NewUpload(t *testing.T) {
 	signer := &fakeAttachmentSigner{}
 	svc := NewAttachmentService(storeM, signer, newMockPublisher())
 
-	res, err := svc.CreateUploadURL(context.Background(), CreateUploadParams{UserID: "u1", Filename: "pic.png", ContentType: "image/png", SHA256: "abc123", Size: 100})
+	res, err := svc.CreateUploadURL(context.Background(), CreateUploadParams{UserID: "u1", Filename: "pic.png", ContentType: "image/png", SHA256: testSHA256A, Size: 100})
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -288,7 +318,7 @@ func TestAttachmentService_CreateUploadURL_RejectsDisallowedExtension(t *testing
 	svc := NewAttachmentService(storeM, signer, newMockPublisher())
 	svc.SetUploadLimits(&fakeUploadLimits{allowExt: false, allowSize: true})
 
-	if _, err := svc.CreateUploadURL(context.Background(), CreateUploadParams{UserID: "u1", Filename: "exec.exe", ContentType: "application/octet-stream", SHA256: "abc", Size: 100}); err == nil {
+	if _, err := svc.CreateUploadURL(context.Background(), CreateUploadParams{UserID: "u1", Filename: "exec.exe", ContentType: "application/octet-stream", SHA256: testSHA256A, Size: 100}); err == nil {
 		t.Fatal("expected disallowed extension to be rejected")
 	}
 }
@@ -299,8 +329,63 @@ func TestAttachmentService_CreateUploadURL_RejectsOversize(t *testing.T) {
 	svc := NewAttachmentService(storeM, signer, newMockPublisher())
 	svc.SetUploadLimits(&fakeUploadLimits{allowExt: true, allowSize: false})
 
-	if _, err := svc.CreateUploadURL(context.Background(), CreateUploadParams{UserID: "u1", Filename: "big.png", ContentType: "image/png", SHA256: "abc", Size: 999_999_999}); err == nil {
+	if _, err := svc.CreateUploadURL(context.Background(), CreateUploadParams{UserID: "u1", Filename: "big.png", ContentType: "image/png", SHA256: testSHA256A, Size: 999_999_999}); err == nil {
 		t.Fatal("expected oversize upload to be rejected")
+	}
+}
+
+func TestAttachmentService_CreateUploadURL_RejectsInvalidMetadata(t *testing.T) {
+	storeM := newMockAttachmentStore()
+	svc := NewAttachmentService(storeM, &fakeAttachmentSigner{}, nil)
+
+	if _, err := svc.CreateUploadURL(context.Background(), CreateUploadParams{UserID: "u1", Filename: "pic.png", ContentType: "image/png", SHA256: "not-a-sha", Size: 100}); err == nil {
+		t.Fatal("expected invalid sha256 to be rejected")
+	}
+	if _, err := svc.CreateUploadURL(context.Background(), CreateUploadParams{UserID: "u1", Filename: "pic.png", ContentType: "image/png", SHA256: testSHA256A, Size: 100, Width: -1}); err == nil {
+		t.Fatal("expected invalid dimensions to be rejected")
+	}
+}
+
+func TestAttachmentService_CreateUploadURL_PropagatesStorageErrors(t *testing.T) {
+	ctx := context.Background()
+	params := CreateUploadParams{UserID: "u1", Filename: "pic.png", ContentType: "image/png", SHA256: testSHA256A, Size: 100}
+
+	tests := []struct {
+		name   string
+		store  *mockAttachmentStore
+		signer *fakeAttachmentSigner
+	}{
+		{
+			name: "hash lookup",
+			store: func() *mockAttachmentStore {
+				s := newMockAttachmentStore()
+				s.getHashErr = errors.New("lookup failed")
+				return s
+			}(),
+			signer: &fakeAttachmentSigner{},
+		},
+		{
+			name: "create",
+			store: func() *mockAttachmentStore {
+				s := newMockAttachmentStore()
+				s.createErr = errors.New("create failed")
+				return s
+			}(),
+			signer: &fakeAttachmentSigner{},
+		},
+		{
+			name:   "presign",
+			store:  newMockAttachmentStore(),
+			signer: &fakeAttachmentSigner{putErr: errors.New("presign failed")},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc := NewAttachmentService(tt.store, tt.signer, nil)
+			if _, err := svc.CreateUploadURL(ctx, params); err == nil {
+				t.Fatal("expected error")
+			}
+		})
 	}
 }
 
@@ -310,13 +395,13 @@ func TestAttachmentService_CreateUploadURL_DedupeByHash(t *testing.T) {
 	svc := NewAttachmentService(storeM, signer, newMockPublisher())
 
 	// First upload
-	first, err := svc.CreateUploadURL(context.Background(), CreateUploadParams{UserID: "u1", Filename: "pic.png", ContentType: "image/png", SHA256: "abc", Size: 10})
+	first, err := svc.CreateUploadURL(context.Background(), CreateUploadParams{UserID: "u1", Filename: "pic.png", ContentType: "image/png", SHA256: testSHA256A, Size: 10})
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
 
 	// Same hash from another user — should dedupe
-	second, err := svc.CreateUploadURL(context.Background(), CreateUploadParams{UserID: "u2", Filename: "other.png", ContentType: "image/png", SHA256: "abc", Size: 10})
+	second, err := svc.CreateUploadURL(context.Background(), CreateUploadParams{UserID: "u2", Filename: "other.png", ContentType: "image/png", SHA256: testSHA256A, Size: 10})
 	if err != nil {
 		t.Fatalf("dedupe: %v", err)
 	}
@@ -331,13 +416,125 @@ func TestAttachmentService_CreateUploadURL_DedupeByHash(t *testing.T) {
 	}
 }
 
+func TestAttachmentService_ValidateForUse_VerifiesUploadedObject(t *testing.T) {
+	storeM := newMockAttachmentStore()
+	object := makePNG(2, 2)
+	signer := &fakeAttachmentSigner{objects: map[string][]byte{}}
+	svc := NewAttachmentService(storeM, signer, nil)
+
+	res, err := svc.CreateUploadURL(context.Background(), CreateUploadParams{
+		UserID: "u1", Filename: "p.png", ContentType: "image/png", SHA256: sha256Hex(object), Size: int64(len(object)),
+	})
+	if err != nil {
+		t.Fatalf("CreateUploadURL: %v", err)
+	}
+	signer.objects[res.Attachment.S3Key] = object
+
+	if err := svc.ValidateForUse(context.Background(), res.Attachment.ID); err != nil {
+		t.Fatalf("ValidateForUse: %v", err)
+	}
+}
+
+func TestAttachmentService_ValidateForUse_RejectsMissingOrTamperedObject(t *testing.T) {
+	storeM := newMockAttachmentStore()
+	object := makePNG(2, 2)
+	signer := &fakeAttachmentSigner{objects: map[string][]byte{}}
+	svc := NewAttachmentService(storeM, signer, nil)
+
+	res, err := svc.CreateUploadURL(context.Background(), CreateUploadParams{
+		UserID: "u1", Filename: "p.png", ContentType: "image/png", SHA256: sha256Hex(object), Size: int64(len(object)),
+	})
+	if err != nil {
+		t.Fatalf("CreateUploadURL: %v", err)
+	}
+	if err := svc.ValidateForUse(context.Background(), res.Attachment.ID); err == nil {
+		t.Fatal("expected missing upload object to be rejected")
+	}
+	signer.objects[res.Attachment.S3Key] = []byte("not a png")
+	if err := svc.ValidateForUse(context.Background(), res.Attachment.ID); err == nil {
+		t.Fatal("expected tampered upload object to be rejected")
+	}
+}
+
+func TestAttachmentService_ValidateForUse_RejectsClientDimensionMismatch(t *testing.T) {
+	storeM := newMockAttachmentStore()
+	object := makePNG(2, 2)
+	signer := &fakeAttachmentSigner{objects: map[string][]byte{}}
+	svc := NewAttachmentService(storeM, signer, nil)
+
+	res, err := svc.CreateUploadURL(context.Background(), CreateUploadParams{
+		UserID: "u1", Filename: "p.png", ContentType: "image/png", SHA256: sha256Hex(object), Size: int64(len(object)), Width: 999, Height: 2,
+	})
+	if err != nil {
+		t.Fatalf("CreateUploadURL: %v", err)
+	}
+	signer.objects[res.Attachment.S3Key] = object
+
+	if err := svc.ValidateForUse(context.Background(), res.Attachment.ID); err == nil {
+		t.Fatal("expected mismatched client dimensions to be rejected")
+	}
+}
+
+func TestAttachmentService_ValidateForUse_RejectsInvalidRowsAndObjects(t *testing.T) {
+	ctx := context.Background()
+	object := makePNG(1, 1)
+
+	tests := []struct {
+		name   string
+		row    *model.Attachment
+		signer *fakeAttachmentSigner
+	}{
+		{
+			name:   "missing storage key",
+			row:    &model.Attachment{ID: "a1", SHA256: sha256Hex(object), Size: int64(len(object)), ContentType: "image/png"},
+			signer: &fakeAttachmentSigner{objects: map[string][]byte{}},
+		},
+		{
+			name:   "invalid size",
+			row:    &model.Attachment{ID: "a2", S3Key: "attachments/a2", SHA256: sha256Hex(object), ContentType: "image/png"},
+			signer: &fakeAttachmentSigner{objects: map[string][]byte{"attachments/a2": object}},
+		},
+		{
+			name:   "object size mismatch",
+			row:    &model.Attachment{ID: "a3", S3Key: "attachments/a3", SHA256: sha256Hex(object), Size: int64(len(object) + 1), ContentType: "image/png"},
+			signer: &fakeAttachmentSigner{objects: map[string][]byte{"attachments/a3": object}},
+		},
+		{
+			name:   "sha mismatch",
+			row:    &model.Attachment{ID: "a4", S3Key: "attachments/a4", SHA256: testSHA256A, Size: int64(len(object)), ContentType: "image/png"},
+			signer: &fakeAttachmentSigner{objects: map[string][]byte{"attachments/a4": object}},
+		},
+		{
+			name:   "content type mismatch",
+			row:    &model.Attachment{ID: "a5", S3Key: "attachments/a5", SHA256: sha256Hex(object), Size: int64(len(object)), ContentType: "image/jpeg"},
+			signer: &fakeAttachmentSigner{objects: map[string][]byte{"attachments/a5": object}},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			storeM := newMockAttachmentStore()
+			storeM.byID[tt.row.ID] = tt.row
+			svc := NewAttachmentService(storeM, tt.signer, nil)
+			if err := svc.ValidateForUse(ctx, tt.row.ID); err == nil {
+				t.Fatal("expected validation error")
+			}
+		})
+	}
+
+	storeM := newMockAttachmentStore()
+	storeM.byID["a6"] = &model.Attachment{ID: "a6", S3Key: "attachments/a6", SHA256: sha256Hex(object), Size: int64(len(object)), ContentType: "image/png"}
+	if err := NewAttachmentService(storeM, nil, nil).ValidateForUse(ctx, "a6"); err == nil {
+		t.Fatal("expected missing signer to be rejected")
+	}
+}
+
 func TestAttachmentService_AddRemoveRef_GCsOnLastDeref(t *testing.T) {
 	storeM := newMockAttachmentStore()
 	signer := &fakeAttachmentSigner{}
 	pub := newMockPublisher()
 	svc := NewAttachmentService(storeM, signer, pub)
 
-	res, _ := svc.CreateUploadURL(context.Background(), CreateUploadParams{UserID: "u1", Filename: "f.bin", ContentType: "application/octet-stream", SHA256: "h", Size: 1})
+	res, _ := svc.CreateUploadURL(context.Background(), CreateUploadParams{UserID: "u1", Filename: "f.bin", ContentType: "application/octet-stream", SHA256: testSHA256A, Size: 1})
 	id := res.Attachment.ID
 
 	if err := svc.AddRef(context.Background(), id, "m1"); err != nil {
@@ -384,7 +581,7 @@ func TestAttachmentService_DeleteDraft_OnlyOwner(t *testing.T) {
 	signer := &fakeAttachmentSigner{}
 	svc := NewAttachmentService(storeM, signer, newMockPublisher())
 
-	res, _ := svc.CreateUploadURL(context.Background(), CreateUploadParams{UserID: "owner", Filename: "f.bin", ContentType: "image/png", SHA256: "h1", Size: 1})
+	res, _ := svc.CreateUploadURL(context.Background(), CreateUploadParams{UserID: "owner", Filename: "f.bin", ContentType: "image/png", SHA256: testSHA256A, Size: 1})
 	id := res.Attachment.ID
 
 	if err := svc.DeleteDraft(context.Background(), "intruder", id); err == nil {
@@ -403,7 +600,7 @@ func TestAttachmentService_DeleteDraft_RefusesIfReferenced(t *testing.T) {
 	signer := &fakeAttachmentSigner{}
 	svc := NewAttachmentService(storeM, signer, newMockPublisher())
 
-	res, _ := svc.CreateUploadURL(context.Background(), CreateUploadParams{UserID: "owner", Filename: "f.bin", ContentType: "image/png", SHA256: "h2", Size: 1})
+	res, _ := svc.CreateUploadURL(context.Background(), CreateUploadParams{UserID: "owner", Filename: "f.bin", ContentType: "image/png", SHA256: testSHA256B, Size: 1})
 	id := res.Attachment.ID
 	_ = svc.AddRef(context.Background(), id, "m1")
 
@@ -420,7 +617,7 @@ func TestAttachmentService_Get_ResolvesSignedURL(t *testing.T) {
 	signer := &fakeAttachmentSigner{}
 	svc := NewAttachmentService(storeM, signer, newMockPublisher())
 
-	res, _ := svc.CreateUploadURL(context.Background(), CreateUploadParams{UserID: "u1", Filename: "f.bin", ContentType: "image/png", SHA256: "h3", Size: 1})
+	res, _ := svc.CreateUploadURL(context.Background(), CreateUploadParams{UserID: "u1", Filename: "f.bin", ContentType: "image/png", SHA256: testSHA256C, Size: 1})
 	got, err := svc.Get(context.Background(), res.Attachment.ID)
 	if err != nil {
 		t.Fatalf("get: %v", err)
@@ -532,7 +729,7 @@ func TestAttachmentService_Get_CachesPresignedURL(t *testing.T) {
 	signer := &fakeAttachmentSigner{}
 	svc := NewAttachmentService(storeM, signer, newMockPublisher())
 
-	res, _ := svc.CreateUploadURL(context.Background(), CreateUploadParams{UserID: "u1", Filename: "f.png", ContentType: "image/png", SHA256: "h-stable", Size: 1})
+	res, _ := svc.CreateUploadURL(context.Background(), CreateUploadParams{UserID: "u1", Filename: "f.png", ContentType: "image/png", SHA256: testSHA256A, Size: 1})
 	id := res.Attachment.ID
 
 	first, err := svc.Get(context.Background(), id)
@@ -568,7 +765,7 @@ func TestAttachmentService_GC_InvalidatesURLCache(t *testing.T) {
 	signer := &fakeAttachmentSigner{}
 	svc := NewAttachmentService(storeM, signer, newMockPublisher())
 
-	res, _ := svc.CreateUploadURL(context.Background(), CreateUploadParams{UserID: "u1", Filename: "f.png", ContentType: "image/png", SHA256: "h-gc", Size: 1})
+	res, _ := svc.CreateUploadURL(context.Background(), CreateUploadParams{UserID: "u1", Filename: "f.png", ContentType: "image/png", SHA256: testSHA256B, Size: 1})
 	id := res.Attachment.ID
 	key := res.Attachment.S3Key
 
@@ -605,15 +802,17 @@ func TestMessageService_Send_RegistersAttachmentRefs(t *testing.T) {
 	channelMembers.memberships["c1#u1"] = &model.ChannelMembership{ChannelID: "c1", UserID: "u1", Role: model.ChannelRoleMember}
 	messages := newMockMessageStore()
 	atts := newMockAttachmentStore()
-	signer := &fakeAttachmentSigner{}
+	object := makePNG(1, 1)
+	signer := &fakeAttachmentSigner{objects: map[string][]byte{}}
 	pub := newMockPublisher()
 
 	svc := NewMessageService(messages, channelMembers, newMockConversationStore(), pub, newMockBroker())
 	attSvc := NewAttachmentService(atts, signer, pub)
 	svc.SetAttachmentManager(attSvc)
 
-	res, _ := attSvc.CreateUploadURL(context.Background(), CreateUploadParams{UserID: "u1", Filename: "p.png", ContentType: "image/png", SHA256: "h", Size: 1})
+	res, _ := attSvc.CreateUploadURL(context.Background(), CreateUploadParams{UserID: "u1", Filename: "p.png", ContentType: "image/png", SHA256: sha256Hex(object), Size: int64(len(object))})
 	att := res.Attachment
+	signer.objects[att.S3Key] = object
 
 	msg, err := svc.Send(context.Background(), "u1", "c1", ParentChannel, "hi", "", att.ID)
 	if err != nil {
@@ -634,15 +833,17 @@ func TestMessageService_Delete_DerefsAttachments(t *testing.T) {
 	channelMembers.memberships["c1#u1"] = &model.ChannelMembership{ChannelID: "c1", UserID: "u1", Role: model.ChannelRoleMember}
 	messages := newMockMessageStore()
 	atts := newMockAttachmentStore()
-	signer := &fakeAttachmentSigner{}
+	object := makePNG(1, 1)
+	signer := &fakeAttachmentSigner{objects: map[string][]byte{}}
 	pub := newMockPublisher()
 
 	svc := NewMessageService(messages, channelMembers, newMockConversationStore(), pub, newMockBroker())
 	attSvc := NewAttachmentService(atts, signer, pub)
 	svc.SetAttachmentManager(attSvc)
 
-	res, _ := attSvc.CreateUploadURL(context.Background(), CreateUploadParams{UserID: "u1", Filename: "p.png", ContentType: "image/png", SHA256: "h", Size: 1})
+	res, _ := attSvc.CreateUploadURL(context.Background(), CreateUploadParams{UserID: "u1", Filename: "p.png", ContentType: "image/png", SHA256: sha256Hex(object), Size: int64(len(object))})
 	att := res.Attachment
+	signer.objects[att.S3Key] = object
 	msg, err := svc.Send(context.Background(), "u1", "c1", ParentChannel, "hi", "", att.ID)
 	if err != nil {
 		t.Fatalf("send: %v", err)

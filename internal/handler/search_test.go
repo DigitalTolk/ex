@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 	"time"
 
@@ -24,6 +25,7 @@ type stubSearcher struct {
 	messagesHits []search.SearchHit
 	filesHits    []search.SearchHit
 	allowedSeen  []string
+	channelOpts  search.ChannelQuery
 	lastOpts     search.MessageQuery
 }
 
@@ -32,8 +34,9 @@ func (s *stubSearcher) Users(_ context.Context, q string, _ int) (*search.Search
 	return &search.SearchResult{Total: len(s.usersHits), Hits: s.usersHits}, nil
 }
 
-func (s *stubSearcher) Channels(_ context.Context, q string, _ int) (*search.SearchResult, error) {
-	s.calls = append(s.calls, "channels:"+q)
+func (s *stubSearcher) Channels(_ context.Context, opts search.ChannelQuery) (*search.SearchResult, error) {
+	s.calls = append(s.calls, "channels:"+opts.Q)
+	s.channelOpts = opts
 	return &search.SearchResult{Total: len(s.channelsHits), Hits: s.channelsHits}, nil
 }
 
@@ -96,7 +99,8 @@ func TestSearchHandler_Users_OK(t *testing.T) {
 }
 
 func TestSearchHandler_Channels_OK(t *testing.T) {
-	h, sr, _, jwtMgr := setupSearchTest(t)
+	h, sr, ac, jwtMgr := setupSearchTest(t)
+	ac.parents = []string{"ch-public", "ch-private", "conv-ignored"}
 	sr.channelsHits = []search.SearchHit{{ID: "c-1"}}
 	user := &model.User{ID: "u-2", SystemRole: model.SystemRoleMember}
 	token := makeTokenForUser(jwtMgr, user)
@@ -111,6 +115,96 @@ func TestSearchHandler_Channels_OK(t *testing.T) {
 	}
 	if len(sr.calls) != 1 || sr.calls[0] != "channels:eng" {
 		t.Fatalf("expected Channels(eng), got %v", sr.calls)
+	}
+	if !reflect.DeepEqual(sr.channelOpts.AllowedChannelIDs, ac.parents) {
+		t.Fatalf("AllowedChannelIDs = %v, want %v", sr.channelOpts.AllowedChannelIDs, ac.parents)
+	}
+}
+
+func TestSearchHandler_Channels_AccessError(t *testing.T) {
+	h, _, ac, jwtMgr := setupSearchTest(t)
+	ac.err = errors.New("membership down")
+	user := &model.User{ID: "u-2", SystemRole: model.SystemRoleMember}
+	token := makeTokenForUser(jwtMgr, user)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/search/channels?q=eng", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	middleware.Auth(jwtMgr)(http.HandlerFunc(h.SearchChannels)).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", rec.Code)
+	}
+}
+
+func TestSearchHandler_Channels_NoAccessReturnsEmpty(t *testing.T) {
+	h, sr, ac, jwtMgr := setupSearchTest(t)
+	ac.parents = []string{}
+	user := &model.User{ID: "u-2", SystemRole: model.SystemRoleMember}
+	token := makeTokenForUser(jwtMgr, user)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/search/channels?q=eng", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	middleware.Auth(jwtMgr)(http.HandlerFunc(h.SearchChannels)).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var got search.SearchResult
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(got.Hits) != 0 {
+		t.Fatalf("hits = %v, want empty", got.Hits)
+	}
+	if len(sr.calls) != 1 || len(sr.channelOpts.AllowedChannelIDs) != 0 {
+		t.Fatalf("search call not scoped to empty access: calls=%v opts=%+v", sr.calls, sr.channelOpts)
+	}
+}
+
+func TestSearchHandler_Channels_NilAccessReturnsEmpty(t *testing.T) {
+	sr := &stubSearcher{}
+	h := NewSearchHandler(sr, nil)
+	jwtMgr := auth.NewJWTManager("search-nil-access", 15*time.Minute, 24*time.Hour)
+	user := &model.User{ID: "u-2", SystemRole: model.SystemRoleMember}
+	token := makeTokenForUser(jwtMgr, user)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/search/channels?q=eng", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	middleware.Auth(jwtMgr)(http.HandlerFunc(h.SearchChannels)).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var got search.SearchResult
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(got.Hits) != 0 {
+		t.Fatalf("hits = %v, want empty", got.Hits)
+	}
+	if len(sr.calls) != 0 {
+		t.Fatalf("searcher should not be called without access resolver: %v", sr.calls)
+	}
+}
+
+func TestSearchHandler_Channels_NilHandlerAndUnauthenticated(t *testing.T) {
+	var nilHandler *SearchHandler
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/search/channels?q=eng", nil)
+	nilHandler.SearchChannels(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("nil handler status = %d, want 200", rec.Code)
+	}
+
+	h := NewSearchHandler(&stubSearcher{}, &stubAccess{parents: []string{"ch-1"}})
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/search/channels?q=eng", nil)
+	h.SearchChannels(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated status = %d, want 401", rec.Code)
 	}
 }
 
@@ -181,7 +275,7 @@ type erroringSearcher struct{}
 func (erroringSearcher) Users(context.Context, string, int) (*search.SearchResult, error) {
 	return nil, errSearch
 }
-func (erroringSearcher) Channels(context.Context, string, int) (*search.SearchResult, error) {
+func (erroringSearcher) Channels(context.Context, search.ChannelQuery) (*search.SearchResult, error) {
 	return nil, errSearch
 }
 func (erroringSearcher) Messages(context.Context, search.MessageQuery) (*search.SearchResult, error) {

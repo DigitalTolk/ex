@@ -59,23 +59,45 @@ func TestService_Users_BuildsMultiMatch(t *testing.T) {
 	}
 }
 
-func TestService_Channels_ExcludesArchived(t *testing.T) {
+func TestService_Channels_ScopesToAllowedNonArchivedChannels(t *testing.T) {
 	r := &stubRunner{}
 	svc := &Service{r: r}
-	if _, err := svc.Channels(context.Background(), "general", 10); err != nil {
+	if _, err := svc.Channels(context.Background(), ChannelQuery{
+		Q:                 "general",
+		AllowedChannelIDs: []string{"ch-public", "ch-private"},
+		Limit:             10,
+	}); err != nil {
 		t.Fatal(err)
 	}
 	body := r.called.body.(map[string]any)
-	must := body["query"].(map[string]any)["bool"].(map[string]any)["must_not"].([]any)
-	if len(must) != 1 {
-		t.Errorf("expected one must_not (archived=true), got %v", must)
+	bool_ := body["query"].(map[string]any)["bool"].(map[string]any)
+	filter := bool_["filter"].([]any)
+	wantFilter := []any{map[string]any{"terms": map[string]any{"id": []any{"ch-public", "ch-private"}}}}
+	if !reflect.DeepEqual(filter, wantFilter) {
+		t.Errorf("filter = %v, want allowed channel ID filter", filter)
+	}
+	mustNot := bool_["must_not"].([]any)
+	if len(mustNot) != 1 {
+		t.Errorf("expected one must_not (archived=true), got %v", mustNot)
+	}
+}
+
+func TestService_Channels_EmptyAllowedScopeShortCircuits(t *testing.T) {
+	r := &stubRunner{}
+	svc := &Service{r: r}
+	res, _ := svc.Channels(context.Background(), ChannelQuery{Q: "general", AllowedChannelIDs: []string{}, Limit: 10})
+	if r.called.index != "" {
+		t.Error("ES should not be queried for empty allowed channel scope")
+	}
+	if len(res.Hits) != 0 {
+		t.Error("expected empty hits")
 	}
 }
 
 func TestService_Channels_EmptyQueryShortCircuits(t *testing.T) {
 	r := &stubRunner{}
 	svc := &Service{r: r}
-	res, _ := svc.Channels(context.Background(), "", 0)
+	res, _ := svc.Channels(context.Background(), ChannelQuery{})
 	if r.called.index != "" {
 		t.Error("ES should not be queried for empty input")
 	}
@@ -96,6 +118,27 @@ func TestService_Messages_NoAllowedParentsShortCircuits(t *testing.T) {
 	}
 	if len(res.Hits) != 0 {
 		t.Errorf("hits = %d, want 0", len(res.Hits))
+	}
+}
+
+func TestService_Files_ShortCircuitsWithoutScopeOrQuery(t *testing.T) {
+	r := &stubRunner{}
+	svc := &Service{r: r}
+
+	res, err := svc.Files(context.Background(), MessageQuery{Q: "report", Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.called.index != "" || len(res.Hits) != 0 {
+		t.Fatalf("no-scope search should not query index, index=%q hits=%d", r.called.index, len(res.Hits))
+	}
+
+	res, err = svc.Files(context.Background(), MessageQuery{AllowedParentIDs: []string{"ch-1"}, Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.called.index != "" || len(res.Hits) != 0 {
+		t.Fatalf("empty unfiltered search should not query index, index=%q hits=%d", r.called.index, len(res.Hits))
 	}
 }
 
@@ -213,7 +256,7 @@ func TestNoopSearcher_AllOpsReturnEmpty(t *testing.T) {
 	if r, _ := n.Users(context.Background(), "x", 0); len(r.Hits) != 0 {
 		t.Error("Users not empty")
 	}
-	if r, _ := n.Channels(context.Background(), "x", 0); len(r.Hits) != 0 {
+	if r, _ := n.Channels(context.Background(), ChannelQuery{Q: "x"}); len(r.Hits) != 0 {
 		t.Error("Channels not empty")
 	}
 	if r, _ := n.Messages(context.Background(), MessageQuery{Q: "x", AllowedParentIDs: []string{"a"}}); len(r.Hits) != 0 {
@@ -421,7 +464,7 @@ func TestService_Users_FuzzyMatchEmitsAutoFuzziness(t *testing.T) {
 func TestService_Channels_FuzzyMatchEmitsAutoFuzziness(t *testing.T) {
 	r := &stubRunner{}
 	svc := &Service{r: r}
-	if _, err := svc.Channels(context.Background(), "generaaaal", 10); err != nil {
+	if _, err := svc.Channels(context.Background(), ChannelQuery{Q: "generaaaal", Limit: 10}); err != nil {
 		t.Fatal(err)
 	}
 	must := r.called.body.(map[string]any)["query"].(map[string]any)["bool"].(map[string]any)["must"].([]any)
@@ -524,7 +567,7 @@ func TestService_Users_WildcardRoutesToSimpleQueryString(t *testing.T) {
 func TestService_Channels_WildcardRoutesToSimpleQueryString(t *testing.T) {
 	r := &stubRunner{}
 	svc := &Service{r: r}
-	if _, err := svc.Channels(context.Background(), "gen*", 10); err != nil {
+	if _, err := svc.Channels(context.Background(), ChannelQuery{Q: "gen*", Limit: 10}); err != nil {
 		t.Fatal(err)
 	}
 	body := r.called.body.(map[string]any)
@@ -536,6 +579,10 @@ func TestService_Channels_WildcardRoutesToSimpleQueryString(t *testing.T) {
 	}
 	if sqs["query"] != "gen*" {
 		t.Errorf("query = %v", sqs["query"])
+	}
+	filter := bool_["filter"].([]any)
+	if len(filter) != 0 {
+		t.Errorf("filter = %v, want no channel scope for unscoped search", filter)
 	}
 	// archived=true exclusion still applies.
 	mustNot := bool_["must_not"].([]any)
