@@ -56,7 +56,7 @@ export function groupSidebarItems(
   const favItems: SidebarItem[] = [
     ...sortedChannels.filter((c) => c.favorite).map((c): SidebarItem => ({ kind: 'channel', channel: c })),
     ...sortedConversations.filter((c) => c.favorite).map((c): SidebarItem => ({ kind: 'conversation', conversation: c })),
-  ];
+  ].sort(compareSidebarItems);
   sections.push({ key: FAVORITES_KEY, title: 'Favorites', items: favItems });
 
   const sortedCats = [...categories].sort((a, b) => {
@@ -89,6 +89,24 @@ export function groupSidebarItems(
   sections.push({ key: DMS_DEFAULT_KEY, title: 'Direct Messages', items: dmsDefault });
 
   return sections;
+}
+
+function compareSidebarItems(a: SidebarItem, b: SidebarItem): number {
+  const pos = compareSparsePosition(itemPosition(a), itemPosition(b));
+  if (pos !== 0) return pos;
+  return itemLabel(a).localeCompare(itemLabel(b), undefined, { sensitivity: 'base' });
+}
+
+function itemPosition(item: SidebarItem): number | undefined {
+  return item.kind === 'channel'
+    ? item.channel.sidebarPosition
+    : item.conversation.sidebarPosition;
+}
+
+function itemLabel(item: SidebarItem): string {
+  return item.kind === 'channel'
+    ? item.channel.channelName
+    : item.conversation.displayName;
 }
 
 function compareChannels(a: UserChannel, b: UserChannel): number {

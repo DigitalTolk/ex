@@ -98,9 +98,19 @@ vi.mock('@atlaskit/pragmatic-drag-and-drop/element/adapter', () => {
         activeSource = null;
         activeDropTargets = [];
       };
+      target.ondragleave = (event) => {
+        event.preventDefault();
+        activeInput = { clientX: event.clientX, clientY: event.clientY };
+        activeDropTargets = [];
+        for (const monitor of monitors) {
+          monitor.onDropTargetChange?.({ location: location() });
+          monitor.onDrag?.({ location: location() });
+        }
+      };
       return () => {
         target.ondragover = null;
         target.ondrop = null;
+        target.ondragleave = null;
       };
     },
     monitorForElements: (monitor: Monitor) => {
@@ -627,6 +637,180 @@ describe('Sidebar', () => {
 
     const group = screen.getByTestId('sidebar-group-cat-eng');
     expect(within(group).getByTestId('sidebar-drop-indicator')).toBeInTheDocument();
+  });
+
+  it('shows a placement line below a channel without jumping to the category end', async () => {
+    mockApiFetch.mockImplementation(async (url: string) => {
+      if (url === '/api/v1/sidebar/categories') return [{ id: 'cat-eng', name: 'Engineering', position: 1000 }];
+      return undefined;
+    });
+    mockChannels = [
+      { ...baseMockChannels[0], categoryID: 'cat-eng', sidebarPosition: 1000 },
+      { ...baseMockChannels[1], categoryID: 'cat-eng', sidebarPosition: 2000 },
+      { ...baseMockChannels[2], categoryID: 'cat-eng', sidebarPosition: 3000 },
+    ];
+    const dataTransfer = { effectAllowed: '', dropEffect: '', setData: vi.fn(), getData: vi.fn() };
+    renderSidebar();
+
+    await screen.findByText('Engineering');
+    const firstRow = screen.getByTestId('channel-row-ch-1');
+    mockRect(firstRow, { top: 0, bottom: 20, height: 20 });
+    fireEvent.pointerDown(screen.getByTestId('channel-row-ch-3'));
+    fireEvent.dragStart(screen.getByTestId('channel-row-ch-3'), { dataTransfer });
+    fireDragOver(firstRow, dataTransfer, 19);
+
+    const secondRowWrapper = screen.getByTestId('channel-row-ch-2').parentElement!;
+    expect(within(secondRowWrapper).getByTestId('sidebar-drop-indicator')).toBeInTheDocument();
+    expect(within(screen.getByTestId('sidebar-section-tail-drop-cat-eng')).queryByTestId('sidebar-drop-indicator')).toBeNull();
+  });
+
+  it('commits the line above the last channel instead of dropping below it', async () => {
+    mockApiFetch.mockImplementation(async (url: string) => {
+      if (url === '/api/v1/sidebar/categories') return [{ id: 'cat-eng', name: 'Engineering', position: 1000 }];
+      return undefined;
+    });
+    mockChannels = [
+      { ...baseMockChannels[0], categoryID: 'cat-eng', sidebarPosition: 1000 },
+      { ...baseMockChannels[1], categoryID: 'cat-eng', sidebarPosition: 2000 },
+      { ...baseMockChannels[2], categoryID: 'cat-eng', sidebarPosition: 3000 },
+    ];
+    const dataTransfer = { effectAllowed: '', dropEffect: '', setData: vi.fn(), getData: vi.fn() };
+    renderSidebar();
+
+    await screen.findByText('Engineering');
+    const secondRow = screen.getByTestId('channel-row-ch-2');
+    mockRect(secondRow, { top: 0, bottom: 20, height: 20 });
+    fireEvent.pointerDown(secondRow);
+    fireEvent.dragStart(secondRow, { dataTransfer });
+    fireDragOver(secondRow, dataTransfer, 19);
+
+    const lastRowWrapper = screen.getByTestId('channel-row-ch-3').parentElement!;
+    expect(within(lastRowWrapper).getByTestId('sidebar-drop-indicator')).toBeInTheDocument();
+    fireDrop(secondRow, dataTransfer, 19);
+
+    await waitFor(() => {
+      expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/channels/ch-2/category', {
+        method: 'PUT',
+        body: JSON.stringify({ categoryID: 'cat-eng', sidebarPosition: 2000 }),
+      });
+    });
+  });
+
+  it('commits the painted channel placement line when a later raw target arrives before paint', async () => {
+    mockApiFetch.mockImplementation(async (url: string) => {
+      if (url === '/api/v1/sidebar/categories') return [{ id: 'cat-eng', name: 'Engineering', position: 1000 }];
+      return undefined;
+    });
+    mockChannels = [
+      { ...baseMockChannels[0], categoryID: 'cat-eng', sidebarPosition: 1000 },
+      { ...baseMockChannels[1], categoryID: 'cat-eng', sidebarPosition: 2000 },
+      { ...baseMockChannels[2], categoryID: 'cat-eng', sidebarPosition: 3000 },
+    ];
+    const dataTransfer = { effectAllowed: '', dropEffect: '', setData: vi.fn(), getData: vi.fn() };
+    renderSidebar();
+
+    await screen.findByText('Engineering');
+    const firstRow = screen.getByTestId('channel-row-ch-1');
+    const secondRow = screen.getByTestId('channel-row-ch-2');
+    mockRect(secondRow, { top: 0, bottom: 20, height: 20 });
+    fireEvent.pointerDown(screen.getByTestId('channel-row-ch-3'));
+    fireEvent.dragStart(screen.getByTestId('channel-row-ch-3'), { dataTransfer });
+    fireEvent.dragOver(firstRow, { dataTransfer });
+    expect(within(firstRow.parentElement!).getByTestId('sidebar-drop-indicator')).toBeInTheDocument();
+    fireDrop(secondRow, dataTransfer, 19);
+
+    await waitFor(() => {
+      expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/channels/ch-3/category', {
+        method: 'PUT',
+        body: JSON.stringify({ categoryID: 'cat-eng', sidebarPosition: 500 }),
+      });
+    });
+  });
+
+  it('keeps the channel placement line visible when the browser reports a gap', async () => {
+    mockApiFetch.mockImplementation(async (url: string) => {
+      if (url === '/api/v1/sidebar/categories') return [{ id: 'cat-eng', name: 'Engineering', position: 1000 }];
+      return undefined;
+    });
+    mockChannels = [
+      { ...baseMockChannels[0], categoryID: 'cat-eng', sidebarPosition: 1000 },
+      { ...baseMockChannels[1], categoryID: 'cat-eng', sidebarPosition: 2000 },
+    ];
+    const dataTransfer = { effectAllowed: '', dropEffect: '', setData: vi.fn(), getData: vi.fn() };
+    renderSidebar();
+
+    await screen.findByText('Engineering');
+    const targetRow = screen.getByTestId('channel-row-ch-1');
+    fireEvent.pointerDown(screen.getByTestId('channel-row-ch-2'));
+    fireEvent.dragStart(screen.getByTestId('channel-row-ch-2'), { dataTransfer });
+    fireEvent.dragOver(targetRow, { dataTransfer });
+    const group = screen.getByTestId('sidebar-group-cat-eng');
+    expect(within(group).getByTestId('sidebar-drop-indicator')).toBeInTheDocument();
+
+    fireEvent.dragLeave(targetRow, { dataTransfer });
+
+    expect(within(group).getByTestId('sidebar-drop-indicator')).toBeInTheDocument();
+  });
+
+  it('reorders favorited conversations together with channels inside Favorites', async () => {
+    mockChannels = [
+      { ...baseMockChannels[0], favorite: true, sidebarPosition: 1000 },
+      { ...baseMockChannels[1], favorite: true, sidebarPosition: 3000 },
+    ];
+    mockConversations = [
+      { ...baseMockConversations[0], favorite: true, sidebarPosition: 2000 },
+    ];
+    const dataTransfer = { effectAllowed: '', dropEffect: '', setData: vi.fn(), getData: vi.fn() };
+    renderSidebar();
+
+    const favorites = screen.getByTestId('sidebar-group-__favorites__');
+    const labels = within(favorites).getAllByRole('link').map((link) => link.textContent ?? '');
+    expect(labels.findIndex((text) => text.includes('general'))).toBeLessThan(
+      labels.findIndex((text) => text.includes('Bob Jones')),
+    );
+    expect(labels.findIndex((text) => text.includes('Bob Jones'))).toBeLessThan(
+      labels.findIndex((text) => text.includes('secret')),
+    );
+
+    fireEvent.pointerDown(screen.getByTestId('conversation-row-conv-1'));
+    fireEvent.dragStart(screen.getByTestId('conversation-row-conv-1'), { dataTransfer });
+    fireEvent.drop(screen.getByTestId('channel-row-ch-1'), { dataTransfer });
+
+    await waitFor(() => {
+      expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/conversations/conv-1/category', {
+        method: 'PUT',
+        body: JSON.stringify({ categoryID: '', sidebarPosition: 500 }),
+      });
+    });
+  });
+
+  it('commits the last visible channel placement when dropping from a gap', async () => {
+    mockApiFetch.mockImplementation(async (url: string) => {
+      if (url === '/api/v1/sidebar/categories') return [{ id: 'cat-eng', name: 'Engineering', position: 1000 }];
+      return undefined;
+    });
+    mockChannels = [
+      { ...baseMockChannels[0], categoryID: 'cat-eng', sidebarPosition: 1000 },
+      { ...baseMockChannels[1], categoryID: 'cat-eng', sidebarPosition: 2000 },
+    ];
+    const dataTransfer = { effectAllowed: '', dropEffect: '', setData: vi.fn(), getData: vi.fn() };
+    renderSidebar();
+
+    await screen.findByText('Engineering');
+    const draggedRow = screen.getByTestId('channel-row-ch-2');
+    const targetRow = screen.getByTestId('channel-row-ch-1');
+    fireEvent.pointerDown(draggedRow);
+    fireEvent.dragStart(draggedRow, { dataTransfer });
+    fireEvent.dragOver(targetRow, { dataTransfer });
+    fireEvent.dragLeave(targetRow, { dataTransfer });
+    fireEvent.dragEnd(draggedRow, { dataTransfer });
+
+    await waitFor(() => {
+      expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/channels/ch-2/category', {
+        method: 'PUT',
+        body: JSON.stringify({ categoryID: 'cat-eng', sidebarPosition: 500 }),
+      });
+    });
   });
 
   it('drags categories before each other and renumbers their positions', async () => {

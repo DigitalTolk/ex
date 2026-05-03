@@ -79,10 +79,17 @@ describe('ConversationRow', () => {
     });
   });
 
-  it('clicking unfavorite on a favorited row sends favorite=false', async () => {
-    renderRow({ ...sampleConv, favorite: true });
+  it('clicking unfavorite on a favorited row clears the old favorite position', async () => {
+    renderRow({ ...sampleConv, favorite: true, sidebarPosition: 2000 });
     fireEvent.click(screen.getByTestId(`conv-fav-toggle-${sampleConv.conversationID}`));
     await waitFor(() => {
+      expect(apiFetchMock).toHaveBeenCalledWith(
+        `/api/v1/conversations/${sampleConv.conversationID}/category`,
+        expect.objectContaining({
+          method: 'PUT',
+          body: JSON.stringify({ categoryID: '', sidebarPosition: 0 }),
+        }),
+      );
       expect(apiFetchMock).toHaveBeenCalledWith(
         `/api/v1/conversations/${sampleConv.conversationID}/favorite`,
         expect.objectContaining({ method: 'PUT', body: JSON.stringify({ favorite: false }) }),
