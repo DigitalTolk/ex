@@ -198,7 +198,7 @@ func TestCORSPreflight(t *testing.T) {
 	checks := map[string]string{
 		"Access-Control-Allow-Origin":      "https://example.com",
 		"Access-Control-Allow-Methods":     "GET, POST, PUT, PATCH, DELETE, OPTIONS",
-		"Access-Control-Allow-Headers":     "Authorization, Content-Type",
+		"Access-Control-Allow-Headers":     "Authorization, Content-Type, X-Refresh-Token",
 		"Access-Control-Allow-Credentials": "true",
 		"Access-Control-Max-Age":           "86400",
 	}
