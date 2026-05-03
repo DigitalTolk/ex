@@ -26,7 +26,7 @@ func TestNewRouterDoesNotPanic(t *testing.T) {
 	wsH := &WSHandler{}
 
 	// This is the call that panics if routes conflict.
-	router := NewRouter(authH, userH, channelH, convH, wsH, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, jwtMgr, nil, "test", "*")
+	router := NewRouter(authH, userH, channelH, convH, wsH, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, jwtMgr, nil, "test", []string{"*"})
 
 	if router == nil {
 		t.Fatal("expected non-nil router")
@@ -36,7 +36,7 @@ func TestNewRouterDoesNotPanic(t *testing.T) {
 // TestRouterHealthEndpoint verifies the health check endpoint works.
 func TestRouterHealthEndpoint(t *testing.T) {
 	jwtMgr := auth.NewJWTManager("test-secret", 15*time.Minute, 24*time.Hour)
-	router := NewRouter(&AuthHandler{}, &UserHandler{}, &ChannelHandler{}, &ConversationHandler{}, &WSHandler{}, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, jwtMgr, nil, "test", "*")
+	router := NewRouter(&AuthHandler{}, &UserHandler{}, &ChannelHandler{}, &ConversationHandler{}, &WSHandler{}, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, jwtMgr, nil, "test", []string{"*"})
 
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	rec := httptest.NewRecorder()
@@ -52,7 +52,7 @@ func TestRouterHealthEndpoint(t *testing.T) {
 // it means the route matched but auth middleware rejected the request).
 func TestRouterRegisteredRoutes(t *testing.T) {
 	jwtMgr := auth.NewJWTManager("test-secret", 15*time.Minute, 24*time.Hour)
-	router := NewRouter(&AuthHandler{}, &UserHandler{}, &ChannelHandler{}, &ConversationHandler{}, &WSHandler{}, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, jwtMgr, nil, "test", "*")
+	router := NewRouter(&AuthHandler{}, &UserHandler{}, &ChannelHandler{}, &ConversationHandler{}, &WSHandler{}, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, jwtMgr, nil, "test", []string{"*"})
 
 	routes := []struct {
 		method string
@@ -166,7 +166,7 @@ func TestNewRouter_AllOptionalHandlersWired(t *testing.T) {
 		&UnfurlHandler{},
 		&SidebarHandler{},
 		&SearchHandler{},
-		jwtMgr, nil, "test", "*",
+		jwtMgr, nil, "test", []string{"*"},
 	)
 	if router == nil {
 		t.Fatal("expected non-nil router with all handlers wired")

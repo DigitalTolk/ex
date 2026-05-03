@@ -229,9 +229,9 @@ func main() {
 	wsH.SetVersion(appVersion)
 
 	// ------------------------------------------------------------------ Router
-	allowOrigin := "*"
+	allowOrigins := []string{"*"}
 	if !cfg.IsDev() {
-		allowOrigin = cfg.BaseURL
+		allowOrigins = []string{cfg.BaseURL, "tauri://localhost"}
 	}
 	unfurlSvc := service.NewUnfurlService(redisCache)
 	if s3Client != nil {
@@ -242,7 +242,7 @@ func main() {
 	}
 	unfurlSvc.SetMediaURLCache(redisCache)
 	unfurlH := handler.NewUnfurlHandler(unfurlSvc)
-	router := handler.NewRouter(authH, userH, channelH, convH, wsH, uploadH, emojiH, presenceH, attachmentH, adminH, threadH, versionH, unfurlH, sidebarH, searchH, jwtMgr, frontendDist, appVersion, allowOrigin)
+	router := handler.NewRouter(authH, userH, channelH, convH, wsH, uploadH, emojiH, presenceH, attachmentH, adminH, threadH, versionH, unfurlH, sidebarH, searchH, jwtMgr, frontendDist, appVersion, allowOrigins)
 
 	// ------------------------------------------------------------------ Server
 	srv := &http.Server{
