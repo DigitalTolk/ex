@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import { render, screen, fireEvent, createEvent, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { BrowserRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -192,6 +192,36 @@ function renderSidebar(onClose = vi.fn()) {
   );
 }
 
+function mockRect(element: Element, rect: Partial<DOMRect>) {
+  Object.defineProperty(element, 'getBoundingClientRect', {
+    configurable: true,
+    value: () => ({
+      x: 0,
+      y: 0,
+      top: 0,
+      bottom: 20,
+      left: 0,
+      right: 120,
+      width: 120,
+      height: 20,
+      toJSON: () => ({}),
+      ...rect,
+    }),
+  });
+}
+
+function fireDragOver(element: Element, dataTransfer: object, clientY: number) {
+  const event = createEvent.dragOver(element, { dataTransfer });
+  Object.defineProperty(event, 'clientY', { value: clientY });
+  fireEvent(element, event);
+}
+
+function fireDrop(element: Element, dataTransfer: object, clientY: number) {
+  const event = createEvent.drop(element, { dataTransfer });
+  Object.defineProperty(event, 'clientY', { value: clientY });
+  fireEvent(element, event);
+}
+
 // --- tests ---------------------------------------------------------------
 
 describe('Sidebar', () => {
@@ -366,10 +396,12 @@ describe('Sidebar', () => {
     renderSidebar();
 
     await screen.findByText('Engineering');
+    const header = screen.getByTestId('sidebar-group-header-cat-eng');
+    mockRect(header, { top: -20, bottom: 0 });
     fireEvent.pointerDown(screen.getByTestId('channel-row-ch-1'));
     fireEvent.dragStart(screen.getByTestId('channel-row-ch-1'), { dataTransfer });
-    fireEvent.dragOver(screen.getByTestId('sidebar-group-cat-eng'), { dataTransfer });
-    fireEvent.drop(screen.getByTestId('sidebar-group-cat-eng').firstElementChild!, { dataTransfer });
+    fireDragOver(header, dataTransfer, 19);
+    fireDrop(header, dataTransfer, 19);
 
     await waitFor(() => {
       expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/channels/ch-1/category', {
@@ -393,15 +425,51 @@ describe('Sidebar', () => {
     renderSidebar();
 
     await screen.findByText('Engineering');
+    const header = screen.getByTestId('sidebar-group-header-cat-eng');
+    mockRect(header, { top: -20, bottom: 0 });
     fireEvent.pointerDown(screen.getByTestId('channel-row-ch-3'));
     fireEvent.dragStart(screen.getByTestId('channel-row-ch-3'), { dataTransfer });
-    fireEvent.dragOver(screen.getByTestId('sidebar-group-header-cat-eng'), { dataTransfer });
-    fireEvent.drop(screen.getByTestId('sidebar-group-header-cat-eng'), { dataTransfer });
+    fireDragOver(header, dataTransfer, 19);
+    fireDrop(header, dataTransfer, 19);
 
     await waitFor(() => {
       expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/channels/ch-3/category', {
         method: 'PUT',
         body: JSON.stringify({ categoryID: 'cat-eng', sidebarPosition: 500 }),
+      });
+    });
+  });
+
+  it('treats a channel dropped above a category header as the end of the previous category', async () => {
+    mockApiFetch.mockImplementation(async (url: string) => {
+      if (url === '/api/v1/sidebar/categories') {
+        return [
+          { id: 'cat-eng', name: 'Engineering', position: 1000 },
+          { id: 'cat-ops', name: 'Operations', position: 2000 },
+        ];
+      }
+      return undefined;
+    });
+    mockChannels = [
+      { ...baseMockChannels[0], categoryID: 'cat-eng', sidebarPosition: 1000 },
+      { ...baseMockChannels[1], categoryID: 'cat-ops', sidebarPosition: 1000 },
+      { ...baseMockChannels[2] },
+    ];
+    const dataTransfer = { effectAllowed: '', dropEffect: '', setData: vi.fn(), getData: vi.fn() };
+    renderSidebar();
+
+    await screen.findByText('Operations');
+    const header = screen.getByTestId('sidebar-group-header-cat-ops');
+    mockRect(header, {});
+    fireEvent.pointerDown(screen.getByTestId('channel-row-ch-3'));
+    fireEvent.dragStart(screen.getByTestId('channel-row-ch-3'), { dataTransfer });
+    fireDragOver(header, dataTransfer, 1);
+    fireDrop(header, dataTransfer, 1);
+
+    await waitFor(() => {
+      expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/channels/ch-3/category', {
+        method: 'PUT',
+        body: JSON.stringify({ categoryID: 'cat-eng', sidebarPosition: 2000 }),
       });
     });
   });

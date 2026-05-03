@@ -274,7 +274,7 @@ describe('GiphyEmbed', () => {
   });
 
   it('does not fetch when the persisted Giphy ID is empty', () => {
-    render(<GiphyEmbed id="" apiKey="browser-key" />);
+    render(<GiphyEmbed id={undefined} apiKey="browser-key" />);
 
     expect(screen.getByText('Loading GIPHY...')).toBeInTheDocument();
     expect(giphyFetchMocks.gif).not.toHaveBeenCalled();

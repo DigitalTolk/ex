@@ -132,7 +132,7 @@ function PragmaticCategoryHeader({
       ref={elementRef}
       data-testid={testID}
       className={className}
-      style={{ opacity: dragging ? 0.55 : undefined }}
+      style={{ opacity: dragging ? 0.25 : undefined }}
     >
       {children}
     </div>
@@ -222,7 +222,7 @@ function PragmaticChannelRow({
       {/* eslint-disable-next-line react-hooks/refs -- passing ref callbacks to a child render prop; refs are only assigned by React later. */}
       {children({
         dragRef: setElementRef,
-        dragStyle: { opacity: dragging ? 0.55 : undefined },
+        dragStyle: { opacity: dragging ? 0.25 : undefined },
       })}
     </>
   );
@@ -448,6 +448,30 @@ export function Sidebar({ onClose }: SidebarProps) {
     moveCategoryBefore(drop.categoryID);
   }
 
+  function canAcceptChannelDrop(sectionKey: string): boolean {
+    return sectionKey !== SidebarSectionKeys.DirectMessages;
+  }
+
+  function previousChannelDrop(sectionKey: string): ResolvedDrop | null {
+    const sectionIndex = sidebarSections.findIndex((section) => section.key === sectionKey);
+    if (sectionIndex < 1) return null;
+    for (let index = sectionIndex - 1; index >= 0; index -= 1) {
+      const section = sidebarSections[index];
+      if (canAcceptChannelDrop(section.key)) {
+        return { kind: 'channel', sectionKey: section.key, index: channelCount(section.items), area: 'end' };
+      }
+    }
+    return null;
+  }
+
+  function channelDropFromSectionHeader(sectionKey: string, edge: Edge | null): ResolvedDrop {
+    if (edge === 'top') {
+      const previousDrop = previousChannelDrop(sectionKey);
+      if (previousDrop) return previousDrop;
+    }
+    return { kind: 'channel', sectionKey, index: 0, area: 'lead' };
+  }
+
   function resolveDropPayload(payload: DropPayload | undefined): ResolvedDrop | null {
     if (!payload) return null;
     const currentDrag = activeDragRef.current;
@@ -464,7 +488,7 @@ export function Sidebar({ onClose }: SidebarProps) {
     }
     if (payload.type === 'section-header-target') {
       if (currentDrag?.type === 'channel') {
-        return { kind: 'channel', sectionKey: payload.sectionKey, index: 0, area: 'lead' };
+        return channelDropFromSectionHeader(payload.sectionKey, extractClosestEdge(payload));
       }
       if (
         currentDrag?.type === 'category' &&
@@ -507,6 +531,12 @@ export function Sidebar({ onClose }: SidebarProps) {
   function updateResolvedDrop(payload: DropPayload | undefined) {
     const resolvedDrop = resolveDropPayload(payload);
     if (!resolvedDrop) {
+      if (
+        (activeDragRef.current?.type === 'channel' && resolvedDropRef.current?.kind === 'channel') ||
+        (activeDragRef.current?.type === 'category' && resolvedDropRef.current?.kind === 'category')
+      ) {
+        return;
+      }
       clearDropTarget();
       return;
     }
@@ -542,8 +572,8 @@ export function Sidebar({ onClose }: SidebarProps) {
         data-testid="sidebar-drop-indicator"
         className={
           overlay
-            ? 'pointer-events-none absolute left-2 right-2 top-0 z-10 h-px bg-white/60'
-            : 'pointer-events-none mx-2 my-0.5 h-px bg-white/60'
+            ? 'pointer-events-none absolute left-2 right-2 top-0 z-10 h-px bg-white/85'
+            : 'pointer-events-none mx-2 my-0.5 h-px bg-white/85'
         }
       />
     );

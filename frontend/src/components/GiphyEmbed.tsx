@@ -4,7 +4,7 @@ import type IGif from '@giphy/js-types/dist/gif';
 import { useWorkspaceSettings } from '@/hooks/useSettings';
 
 interface GiphyEmbedProps {
-  id: string;
+  id?: string;
   apiKey?: string;
   width?: number;
   height?: number;
@@ -182,7 +182,7 @@ function GiphyEmbedFromSettings({
   width,
   height,
 }: {
-  id: string;
+  id?: string;
   width?: number;
   height?: number;
 }) {
@@ -203,7 +203,7 @@ function GiphyEmbedMedia({ id, apiKey, width, height }: GiphyEmbedProps & { apiK
     failed: boolean;
   }>(() => ({
     requestKey,
-    media: readCachedGiphyMedia(id),
+    media: id ? readCachedGiphyMedia(id) : null,
     failed: false,
   }));
 
