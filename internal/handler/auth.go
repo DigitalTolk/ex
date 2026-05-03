@@ -97,15 +97,17 @@ func (h *AuthHandler) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 
 	// Default redirect: the SPA lives outside /auth/ to avoid the namespace
 	// the router 404s for unknown /auth/** paths.
-	finalRedirect := "/oidc/callback?token=" + accessToken
+	finalRedirect := oidcCallbackRedirect(accessToken)
 	if redirectCookie, err := r.Cookie("oauth_redirect"); err == nil && isAllowedOIDCRedirect(redirectCookie.Value) {
-		target := redirectCookie.Value + "?token=" + accessToken
-		// For localhost callbacks (Tauri desktop one-shot TCP server), also
-		// include the refresh token so the app can store it in the OS keychain.
-		// The token is only exposed to the local process — not a browser URL bar.
+		target := redirectWithQuery(redirectCookie.Value, url.Values{"token": []string{accessToken}})
 		parsed, _ := url.Parse(redirectCookie.Value)
 		if parsed != nil && parsed.Hostname() == "localhost" && parsed.Scheme == "http" {
-			target += "&refresh=" + refreshToken
+			code, err := h.authSvc.CreateDesktopAuthSession(r.Context(), accessToken, refreshToken)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "desktop_auth_error", err.Error())
+				return
+			}
+			target = redirectWithQuery(redirectCookie.Value, url.Values{"desktop_code": []string{code}})
 		}
 		finalRedirect = target
 		http.SetCookie(w, &http.Cookie{
@@ -120,6 +122,17 @@ func (h *AuthHandler) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	http.Redirect(w, r, finalRedirect, http.StatusFound)
+}
+
+func (h *AuthHandler) DesktopComplete(w http.ResponseWriter, r *http.Request) {
+	session, err := h.authSvc.ConsumeDesktopAuthSession(r.Context(), r.URL.Query().Get("code"))
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "desktop_auth_error", err.Error())
+		return
+	}
+
+	h.setRefreshCookie(w, session.RefreshToken, h.jwt.RefreshTTL())
+	http.Redirect(w, r, oidcCallbackRedirect(session.AccessToken), http.StatusFound)
 }
 
 // isAllowedOIDCRedirect permits localhost (dev), tauri:// (desktop WebView),
@@ -144,16 +157,32 @@ func isAllowedOIDCRedirect(u string) bool {
 	}
 }
 
-// RefreshToken exchanges a refresh token for a new access token.
-// Accepts the token either as an httpOnly cookie (web) or via the
-// X-Refresh-Token request header (Tauri desktop, where the token is
-// stored in the OS keychain rather than a browser cookie).
-func (h *AuthHandler) RefreshToken(w http.ResponseWriter, r *http.Request) {
-	rawToken := r.Header.Get("X-Refresh-Token")
-	if rawToken == "" {
-		if cookie, err := r.Cookie("refresh_token"); err == nil {
-			rawToken = cookie.Value
+func oidcCallbackRedirect(accessToken string) string {
+	return redirectWithQuery("/oidc/callback", url.Values{"token": []string{accessToken}})
+}
+
+func redirectWithQuery(raw string, query url.Values) string {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return raw
+	}
+	existing := parsed.Query()
+	for key, values := range query {
+		existing.Del(key)
+		for _, value := range values {
+			existing.Add(key, value)
 		}
+	}
+	parsed.RawQuery = existing.Encode()
+	return parsed.String()
+}
+
+// RefreshToken exchanges a refresh token for a new access token.
+// Accepts the token from an httpOnly cookie.
+func (h *AuthHandler) RefreshToken(w http.ResponseWriter, r *http.Request) {
+	var rawToken string
+	if cookie, err := r.Cookie("refresh_token"); err == nil {
+		rawToken = cookie.Value
 	}
 	if rawToken == "" {
 		writeError(w, http.StatusUnauthorized, "missing_token", "missing refresh token")

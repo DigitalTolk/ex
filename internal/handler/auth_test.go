@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -161,13 +162,39 @@ func (m *mockChannelStore) ListPublicChannels(_ context.Context, _ int, _ string
 	return nil, "", nil
 }
 
-type mockCache struct{}
+type mockCache struct {
+	values map[string]interface{}
+}
+
+func newMockCache() *mockCache {
+	return &mockCache{values: make(map[string]interface{})}
+}
+
+func (m *mockCache) Get(_ context.Context, key string, dest interface{}) error {
+	value, ok := m.values[key]
+	if !ok {
+		return errors.New("cache miss")
+	}
+	data, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(data, dest)
+}
+
+func (m *mockCache) Set(_ context.Context, key string, val interface{}, _ time.Duration) error {
+	m.values[key] = val
+	return nil
+}
 
 func (m *mockCache) GetUser(_ context.Context, _ string) (*model.User, error) {
 	return nil, store.ErrNotFound // cache miss
 }
 func (m *mockCache) SetUser(_ context.Context, _ *model.User) error { return nil }
-func (m *mockCache) Delete(_ context.Context, _ string) error       { return nil }
+func (m *mockCache) Delete(_ context.Context, key string) error {
+	delete(m.values, key)
+	return nil
+}
 
 // --- Helper to create an AuthHandler for tests ---
 
@@ -186,7 +213,7 @@ func setupAuthHandler(t *testing.T) (*AuthHandler, *mockUserStore, *mockTokenSto
 		&mockChannelStore{},
 		jwtMgr,
 		nil, // no OIDC
-		&mockCache{},
+		newMockCache(),
 	)
 
 	h := NewAuthHandler(authSvc, jwtMgr)
@@ -227,7 +254,7 @@ func setupAuthHandlerWithOIDC(t *testing.T) (*AuthHandler, *mockUserStore, *mock
 		&mockChannelStore{},
 		jwtMgr,
 		&stubOIDCProvider{url: "https://provider.example.com/authorize"},
-		&mockCache{},
+		newMockCache(),
 	)
 
 	h := NewAuthHandler(authSvc, jwtMgr)
@@ -259,7 +286,7 @@ func setupAuthHandlerWithOIDCSuccess(t *testing.T) (*AuthHandler, *mockUserStore
 				Picture: "https://example.com/avatar.png",
 			},
 		},
-		&mockCache{},
+		newMockCache(),
 	)
 
 	h := NewAuthHandler(authSvc, jwtMgr)
@@ -324,7 +351,7 @@ func TestRefreshTokenHandler_ValidCookie(t *testing.T) {
 	}
 }
 
-func TestRefreshTokenHandler_ValidHeader(t *testing.T) {
+func TestRefreshTokenHandler_IgnoresRefreshHeader(t *testing.T) {
 	h, userStore, tokenStore := setupAuthHandler(t)
 
 	user := &model.User{
@@ -352,15 +379,8 @@ func TestRefreshTokenHandler_ValidHeader(t *testing.T) {
 
 	h.RefreshToken(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)
-	}
-	var body map[string]string
-	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
-		t.Fatalf("decode body: %v", err)
-	}
-	if body["accessToken"] == "" {
-		t.Error("expected non-empty accessToken in response")
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
 	}
 }
 
@@ -800,6 +820,71 @@ func TestOIDCCallback_HonorsRedirectCookie(t *testing.T) {
 	}
 	if !cleared {
 		t.Error("expected oauth_redirect cookie to be cleared after consume")
+	}
+}
+
+func TestOIDCCallback_LocalhostRedirectUsesDesktopCode(t *testing.T) {
+	h, _, _ := setupAuthHandlerWithOIDCSuccess(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/auth/oidc/callback?state=ok&code=c", nil)
+	req.AddCookie(&http.Cookie{Name: "oauth_state", Value: "ok"})
+	req.AddCookie(&http.Cookie{Name: "oauth_redirect", Value: "http://localhost:1234/callback"})
+	rec := httptest.NewRecorder()
+
+	h.OIDCCallback(rec, req)
+
+	if rec.Code != http.StatusFound {
+		t.Fatalf("status = %d, want %d (body: %s)", rec.Code, http.StatusFound, rec.Body.String())
+	}
+	loc := rec.Header().Get("Location")
+	if !strings.HasPrefix(loc, "http://localhost:1234/callback?desktop_code=") {
+		t.Fatalf("Location = %q, expected desktop_code redirect", loc)
+	}
+	if strings.Contains(loc, "refresh=") || strings.Contains(loc, "token=") {
+		t.Errorf("Location = %q, must not expose refresh or access token to desktop local callback", loc)
+	}
+}
+
+func TestDesktopCompleteSetsRefreshCookieAndRedirects(t *testing.T) {
+	h, _, _ := setupAuthHandlerWithOIDCSuccess(t)
+	code, err := h.authSvc.CreateDesktopAuthSession(context.Background(), "access-1", "refresh-1")
+	if err != nil {
+		t.Fatalf("CreateDesktopAuthSession: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/auth/desktop/complete?code="+code, nil)
+	rec := httptest.NewRecorder()
+
+	h.DesktopComplete(rec, req)
+
+	if rec.Code != http.StatusFound {
+		t.Fatalf("status = %d, want %d (body: %s)", rec.Code, http.StatusFound, rec.Body.String())
+	}
+	if loc := rec.Header().Get("Location"); loc != "/oidc/callback?token=access-1" {
+		t.Errorf("Location = %q, want /oidc/callback?token=access-1", loc)
+	}
+
+	var found bool
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == "refresh_token" && c.Value == "refresh-1" && c.HttpOnly {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected httpOnly refresh_token cookie")
+	}
+}
+
+func TestDesktopCompleteRejectsInvalidCode(t *testing.T) {
+	h, _, _ := setupAuthHandlerWithOIDCSuccess(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/auth/desktop/complete?code=missing", nil)
+	rec := httptest.NewRecorder()
+
+	h.DesktopComplete(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
 	}
 }
 

@@ -48,7 +48,13 @@ const (
 	minGuestPasswordLen = 8
 	maxGuestPasswordLen = 1024
 	maxDisplayNameLen   = 80
+	desktopAuthCodeTTL  = 2 * time.Minute
 )
+
+type DesktopAuthSession struct {
+	AccessToken  string `json:"accessToken"`
+	RefreshToken string `json:"refreshToken"`
+}
 
 // NewAuthService creates an AuthService with the given dependencies.
 func NewAuthService(
@@ -209,6 +215,47 @@ func (s *AuthService) RefreshAccessToken(ctx context.Context, refreshTokenRaw st
 		return "", fmt.Errorf("auth: generate access token: %w", err)
 	}
 	return accessToken, nil
+}
+
+func (s *AuthService) CreateDesktopAuthSession(ctx context.Context, accessToken, refreshToken string) (string, error) {
+	if s.cache == nil {
+		return "", errors.New("auth: desktop auth cache is not configured")
+	}
+
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("auth: generate desktop auth code: %w", err)
+	}
+	code := base64.RawURLEncoding.EncodeToString(b)
+	session := DesktopAuthSession{
+		AccessToken:  accessToken,
+		RefreshToken: refreshToken,
+	}
+	if err := s.cache.Set(ctx, desktopAuthCodeKey(code), session, desktopAuthCodeTTL); err != nil {
+		return "", fmt.Errorf("auth: store desktop auth session: %w", err)
+	}
+	return code, nil
+}
+
+func (s *AuthService) ConsumeDesktopAuthSession(ctx context.Context, code string) (*DesktopAuthSession, error) {
+	code = strings.TrimSpace(code)
+	if code == "" {
+		return nil, errors.New("auth: missing desktop auth code")
+	}
+	if s.cache == nil {
+		return nil, errors.New("auth: desktop auth cache is not configured")
+	}
+
+	var session DesktopAuthSession
+	key := desktopAuthCodeKey(code)
+	if err := s.cache.Get(ctx, key, &session); err != nil {
+		return nil, errors.New("auth: desktop auth code expired or invalid")
+	}
+	_ = s.cache.Delete(ctx, key)
+	if session.AccessToken == "" || session.RefreshToken == "" {
+		return nil, errors.New("auth: desktop auth session is invalid")
+	}
+	return &session, nil
 }
 
 // Logout deletes the refresh token identified by the raw value.
@@ -443,4 +490,8 @@ func (s *AuthService) issueTokens(ctx context.Context, user *model.User) (access
 func hashToken(raw string) string {
 	h := sha256.Sum256([]byte(raw))
 	return base64.RawURLEncoding.EncodeToString(h[:])
+}
+
+func desktopAuthCodeKey(code string) string {
+	return "desktop_auth:" + code
 }

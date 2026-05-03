@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -223,6 +224,80 @@ func TestRefreshAccessToken_NotFound(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for missing token")
 	}
+}
+
+func TestDesktopAuthSession_RoundTrip(t *testing.T) {
+	env := setupAuthService()
+	ctx := context.Background()
+
+	code, err := env.svc.CreateDesktopAuthSession(ctx, "access-token", "refresh-token")
+	if err != nil {
+		t.Fatalf("CreateDesktopAuthSession: %v", err)
+	}
+	if code == "" {
+		t.Fatal("expected desktop auth code")
+	}
+
+	session, err := env.svc.ConsumeDesktopAuthSession(ctx, " "+code+" ")
+	if err != nil {
+		t.Fatalf("ConsumeDesktopAuthSession: %v", err)
+	}
+	if session.AccessToken != "access-token" || session.RefreshToken != "refresh-token" {
+		t.Fatalf("session = %+v, want stored tokens", session)
+	}
+	if _, ok := env.cache.values[desktopAuthCodeKey(code)]; ok {
+		t.Fatal("expected desktop auth code to be single-use")
+	}
+}
+
+func TestDesktopAuthSession_Errors(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("missing cache on create", func(t *testing.T) {
+		env := setupAuthService()
+		env.svc.cache = nil
+		if _, err := env.svc.CreateDesktopAuthSession(ctx, "access", "refresh"); err == nil {
+			t.Fatal("expected missing cache error")
+		}
+	})
+
+	t.Run("missing cache on consume", func(t *testing.T) {
+		env := setupAuthService()
+		env.svc.cache = nil
+		if _, err := env.svc.ConsumeDesktopAuthSession(ctx, "code"); err == nil {
+			t.Fatal("expected missing cache error")
+		}
+	})
+
+	t.Run("cache set error", func(t *testing.T) {
+		env := setupAuthService()
+		env.cache.setErr = errors.New("cache unavailable")
+		if _, err := env.svc.CreateDesktopAuthSession(ctx, "access", "refresh"); err == nil {
+			t.Fatal("expected cache set error")
+		}
+	})
+
+	t.Run("missing code", func(t *testing.T) {
+		env := setupAuthService()
+		if _, err := env.svc.ConsumeDesktopAuthSession(ctx, " "); err == nil {
+			t.Fatal("expected missing code error")
+		}
+	})
+
+	t.Run("invalid code", func(t *testing.T) {
+		env := setupAuthService()
+		if _, err := env.svc.ConsumeDesktopAuthSession(ctx, "missing-code"); err == nil {
+			t.Fatal("expected invalid code error")
+		}
+	})
+
+	t.Run("invalid stored session", func(t *testing.T) {
+		env := setupAuthService()
+		env.cache.values[desktopAuthCodeKey("bad-session")] = DesktopAuthSession{AccessToken: "access"}
+		if _, err := env.svc.ConsumeDesktopAuthSession(ctx, "bad-session"); err == nil {
+			t.Fatal("expected invalid session error")
+		}
+	})
 }
 
 func TestLogout(t *testing.T) {

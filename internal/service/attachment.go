@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/xml"
 	"errors"
 	"fmt"
 	"image"
@@ -387,6 +388,9 @@ func validateAttachmentContentType(a *model.Attachment, objectContentType string
 	if !strings.HasPrefix(declared, "image/") {
 		return nil
 	}
+	if declared == "image/svg+xml" {
+		return validateSVG(data)
+	}
 	detected := http.DetectContentType(data)
 	if detected == "application/octet-stream" {
 		return errors.New("attachment: could not detect image content type")
@@ -407,6 +411,45 @@ func validateAttachmentContentType(a *model.Attachment, objectContentType string
 	}
 	if format != expectedFormat {
 		return fmt.Errorf("attachment: image format %q does not match declared %q", format, declared)
+	}
+	return nil
+}
+
+func validateSVG(data []byte) error {
+	decoder := xml.NewDecoder(bytes.NewReader(data))
+	sawRoot := false
+	for {
+		tok, err := decoder.Token()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return errors.New("attachment: invalid svg")
+		}
+		start, ok := tok.(xml.StartElement)
+		if !ok {
+			continue
+		}
+		name := strings.ToLower(start.Name.Local)
+		if !sawRoot {
+			if name != "svg" {
+				return errors.New("attachment: invalid svg root")
+			}
+			sawRoot = true
+		}
+		if name == "script" || name == "foreignobject" {
+			return errors.New("attachment: unsafe svg")
+		}
+		for _, attr := range start.Attr {
+			attrName := strings.ToLower(attr.Name.Local)
+			attrValue := strings.ToLower(strings.TrimSpace(attr.Value))
+			if strings.HasPrefix(attrName, "on") || ((attrName == "href" || attrName == "src") && strings.HasPrefix(attrValue, "javascript:")) {
+				return errors.New("attachment: unsafe svg")
+			}
+		}
+	}
+	if !sawRoot {
+		return errors.New("attachment: invalid svg")
 	}
 	return nil
 }

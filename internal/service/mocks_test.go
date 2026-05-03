@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"sync"
 	"time"
 
@@ -388,13 +389,37 @@ func (m *mockChannelStore) ListPublicChannels(_ context.Context, _ int, _ string
 
 type mockCache struct {
 	users     map[string]*model.User
+	values    map[string]interface{}
 	getErr    error
 	setErr    error
 	deleteErr error
 }
 
 func newMockCache() *mockCache {
-	return &mockCache{users: make(map[string]*model.User)}
+	return &mockCache{users: make(map[string]*model.User), values: make(map[string]interface{})}
+}
+
+func (m *mockCache) Get(_ context.Context, key string, dest interface{}) error {
+	if m.getErr != nil {
+		return m.getErr
+	}
+	value, ok := m.values[key]
+	if !ok {
+		return store.ErrNotFound
+	}
+	data, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(data, dest)
+}
+
+func (m *mockCache) Set(_ context.Context, key string, val interface{}, _ time.Duration) error {
+	if m.setErr != nil {
+		return m.setErr
+	}
+	m.values[key] = val
+	return nil
 }
 
 func (m *mockCache) GetUser(_ context.Context, id string) (*model.User, error) {
@@ -421,6 +446,7 @@ func (m *mockCache) Delete(_ context.Context, key string) error {
 		return m.deleteErr
 	}
 	delete(m.users, key)
+	delete(m.values, key)
 	return nil
 }
 

@@ -61,6 +61,7 @@ func NewRouter(
 	// ------------------------------------------------------------------ Auth (public)
 	mux.HandleFunc("GET /auth/oidc/login", authH.OIDCLogin)
 	mux.HandleFunc("GET /auth/oidc/callback", authH.OIDCCallback)
+	mux.HandleFunc("GET /auth/desktop/complete", authH.DesktopComplete)
 	mux.HandleFunc("POST /auth/token/refresh", authH.RefreshToken)
 	mux.HandleFunc("POST /auth/logout", authH.Logout)
 	mux.HandleFunc("POST /auth/invite/accept", authH.AcceptInvite)

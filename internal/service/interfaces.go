@@ -105,6 +105,8 @@ type TokenStore interface {
 
 // Cache defines cache operations used by the service layer.
 type Cache interface {
+	Get(ctx context.Context, key string, dest interface{}) error
+	Set(ctx context.Context, key string, val interface{}, ttl time.Duration) error
 	GetUser(ctx context.Context, id string) (*model.User, error)
 	SetUser(ctx context.Context, user *model.User) error
 	Delete(ctx context.Context, key string) error

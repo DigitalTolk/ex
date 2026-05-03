@@ -475,6 +475,44 @@ func TestAttachmentService_ValidateForUse_RejectsClientDimensionMismatch(t *test
 	}
 }
 
+func TestAttachmentService_ValidateForUse_AllowsSafeSVG(t *testing.T) {
+	storeM := newMockAttachmentStore()
+	object := []byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><path d="M0 0h10v10z"/></svg>`)
+	signer := &fakeAttachmentSigner{objects: map[string][]byte{}, objectContentType: "image/svg+xml"}
+	svc := NewAttachmentService(storeM, signer, nil)
+
+	res, err := svc.CreateUploadURL(context.Background(), CreateUploadParams{
+		UserID: "u1", Filename: "safe.svg", ContentType: "image/svg+xml", SHA256: sha256Hex(object), Size: int64(len(object)),
+	})
+	if err != nil {
+		t.Fatalf("CreateUploadURL: %v", err)
+	}
+	signer.objects[res.Attachment.S3Key] = object
+
+	if err := svc.ValidateForUse(context.Background(), res.Attachment.ID); err != nil {
+		t.Fatalf("ValidateForUse: %v", err)
+	}
+}
+
+func TestAttachmentService_ValidateForUse_RejectsUnsafeSVG(t *testing.T) {
+	storeM := newMockAttachmentStore()
+	object := []byte(`<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>`)
+	signer := &fakeAttachmentSigner{objects: map[string][]byte{}, objectContentType: "image/svg+xml"}
+	svc := NewAttachmentService(storeM, signer, nil)
+
+	res, err := svc.CreateUploadURL(context.Background(), CreateUploadParams{
+		UserID: "u1", Filename: "unsafe.svg", ContentType: "image/svg+xml", SHA256: sha256Hex(object), Size: int64(len(object)),
+	})
+	if err != nil {
+		t.Fatalf("CreateUploadURL: %v", err)
+	}
+	signer.objects[res.Attachment.S3Key] = object
+
+	if err := svc.ValidateForUse(context.Background(), res.Attachment.ID); err == nil {
+		t.Fatal("expected unsafe svg to be rejected")
+	}
+}
+
 func TestAttachmentService_ValidateForUse_RejectsInvalidRowsAndObjects(t *testing.T) {
 	ctx := context.Background()
 	object := makePNG(1, 1)
@@ -925,4 +963,44 @@ func TestAttachmentService_GetMany(t *testing.T) {
 			t.Fatalf("expected 3, got %d", len(got))
 		}
 	})
+}
+
+func TestValidateSVG_EdgeCases(t *testing.T) {
+	tests := []struct {
+		name string
+		data []byte
+	}{
+		{
+			name: "malformed XML",
+			data: []byte(`<svg><path></svg`),
+		},
+		{
+			name: "wrong root",
+			data: []byte(`<html><svg /></html>`),
+		},
+		{
+			name: "event attribute",
+			data: []byte(`<svg xmlns="http://www.w3.org/2000/svg"><path onclick="alert(1)" /></svg>`),
+		},
+		{
+			name: "javascript href",
+			data: []byte(`<svg xmlns="http://www.w3.org/2000/svg"><a href="javascript:alert(1)" /></svg>`),
+		},
+		{
+			name: "foreign object",
+			data: []byte(`<svg xmlns="http://www.w3.org/2000/svg"><foreignObject /></svg>`),
+		},
+		{
+			name: "empty document",
+			data: []byte(`   `),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := validateSVG(tt.data); err == nil {
+				t.Fatal("expected SVG validation error")
+			}
+		})
+	}
 }
