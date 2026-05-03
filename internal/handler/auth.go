@@ -99,7 +99,15 @@ func (h *AuthHandler) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 	// the router 404s for unknown /auth/** paths.
 	finalRedirect := "/oidc/callback?token=" + accessToken
 	if redirectCookie, err := r.Cookie("oauth_redirect"); err == nil && isAllowedOIDCRedirect(redirectCookie.Value) {
-		finalRedirect = redirectCookie.Value + "?token=" + accessToken
+		target := redirectCookie.Value + "?token=" + accessToken
+		// For localhost callbacks (Tauri desktop one-shot TCP server), also
+		// include the refresh token so the app can store it in the OS keychain.
+		// The token is only exposed to the local process — not a browser URL bar.
+		parsed, _ := url.Parse(redirectCookie.Value)
+		if parsed != nil && parsed.Hostname() == "localhost" && parsed.Scheme == "http" {
+			target += "&refresh=" + refreshToken
+		}
+		finalRedirect = target
 		http.SetCookie(w, &http.Cookie{
 			Name:     "oauth_redirect",
 			Value:    "",
@@ -136,15 +144,23 @@ func isAllowedOIDCRedirect(u string) bool {
 	}
 }
 
-// RefreshToken exchanges a refresh token cookie for a new access token.
+// RefreshToken exchanges a refresh token for a new access token.
+// Accepts the token either as an httpOnly cookie (web) or via the
+// X-Refresh-Token request header (Tauri desktop, where the token is
+// stored in the OS keychain rather than a browser cookie).
 func (h *AuthHandler) RefreshToken(w http.ResponseWriter, r *http.Request) {
-	cookie, err := r.Cookie("refresh_token")
-	if err != nil {
+	rawToken := r.Header.Get("X-Refresh-Token")
+	if rawToken == "" {
+		if cookie, err := r.Cookie("refresh_token"); err == nil {
+			rawToken = cookie.Value
+		}
+	}
+	if rawToken == "" {
 		writeError(w, http.StatusUnauthorized, "missing_token", "missing refresh token")
 		return
 	}
 
-	accessToken, err := h.authSvc.RefreshAccessToken(r.Context(), cookie.Value)
+	accessToken, err := h.authSvc.RefreshAccessToken(r.Context(), rawToken)
 	if err != nil {
 		writeError(w, http.StatusUnauthorized, "refresh_error", err.Error())
 		return
