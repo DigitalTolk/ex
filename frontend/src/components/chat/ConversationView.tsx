@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef } from 'react';
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
 import { useUsersBatch } from '@/hooks/useUsersBatch';
 import { Header } from '@/components/layout/Header';
@@ -29,6 +29,7 @@ import { useTagState } from '@/context/TagSearchContext';
 import { TagSearchPanel } from '@/components/TagSearchPanel';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { useDeepLinkAnchor } from '@/hooks/useDeepLinkAnchor';
+import { useDeleteDraft, useDraftAttachmentChips, useDraftForScope, useSaveDraft } from '@/hooks/useDrafts';
 import { firstName } from '@/lib/format';
 import type { Conversation } from '@/types';
 import type { UserMapEntry } from './MessageList';
@@ -87,6 +88,39 @@ export function ConversationView() {
     fetchPreviousPage,
   } = useConversationMessages(id, mainAnchor);
   const sendMessage = useSendConversationMessage(id);
+  const draftScope = useMemo(
+    () => ({ parentID: id, parentType: 'conversation' as const }),
+    [id],
+  );
+  const { data: draft } = useDraftForScope(draftScope);
+  const draftAttachments = useDraftAttachmentChips(draft?.attachmentIDs);
+  const draftID = draft?.id;
+  const saveDraft = useSaveDraft();
+  const deleteDraft = useDeleteDraft();
+  const saveDraftMutate = saveDraft.mutate;
+  const deleteDraftMutate = deleteDraft.mutate;
+  const handleDraftChange = useCallback(
+    (value: { body: string; attachmentIDs: string[] }) => {
+      if (!id) return;
+      saveDraftMutate({
+        parentID: id,
+        parentType: 'conversation',
+        body: value.body,
+        attachmentIDs: value.attachmentIDs,
+      });
+    },
+    [id, saveDraftMutate],
+  );
+  const handleSendMessage = useCallback(
+    (value: { body: string; attachmentIDs: string[] }) => {
+      if (!draftID) {
+        sendMessage.mutate(value);
+        return;
+      }
+      sendMessage.mutate(value, { onSuccess: () => deleteDraftMutate(draftID) });
+    },
+    [sendMessage, draftID, deleteDraftMutate],
+  );
 
   useEffect(() => {
     if (!id) return;
@@ -312,10 +346,13 @@ export function ConversationView() {
           <TypingIndicator parentID={id} userMap={userMap} />
           <MessageInput
             ref={inputRef}
-            onSend={sendMessage.mutate}
+            onSend={handleSendMessage}
             disabled={sendMessage.isPending}
             placeholder={`Write to ${title}`}
             focusKey={id}
+            initialBody={draft?.body ?? ''}
+            initialDrafts={draftAttachments}
+            onDraftChange={handleDraftChange}
             typingParentID={id}
             typingParentType="conversation"
             lastOwnMessageId={lastOwnMessageId}

@@ -72,6 +72,14 @@ type MessageStore interface {
 	IncrementReplyMetadata(ctx context.Context, parentID, msgID string, replyTime time.Time, replyAuthorID string) (*model.Message, error)
 }
 
+// DraftStore defines persistence operations for server-side message drafts.
+type DraftStore interface {
+	Upsert(ctx context.Context, draft *model.MessageDraft) error
+	Get(ctx context.Context, userID, id string) (*model.MessageDraft, error)
+	List(ctx context.Context, userID string) ([]*model.MessageDraft, error)
+	Delete(ctx context.Context, userID, id string) error
+}
+
 // InviteStore defines persistence operations for invitations.
 type InviteStore interface {
 	CreateInvite(ctx context.Context, inv *model.Invite) error

@@ -29,6 +29,7 @@ func NewRouter(
 	attachmentH *AttachmentHandler,
 	adminH *AdminHandler,
 	threadH *ThreadHandler,
+	draftH *DraftHandler,
 	versionH *VersionHandler,
 	unfurlH *UnfurlHandler,
 	sidebarH *SidebarHandler,
@@ -127,6 +128,13 @@ func NewRouter(
 	// ------------------------------------------------------------------ Threads (cross-parent)
 	if threadH != nil {
 		mux.Handle("GET /api/v1/threads", middleware.WrapFunc(threadH.List, authMW))
+	}
+
+	// ------------------------------------------------------------------ Drafts
+	if draftH != nil {
+		mux.Handle("GET /api/v1/drafts", middleware.WrapFunc(draftH.List, authMW))
+		mux.Handle("PUT /api/v1/drafts", middleware.WrapFunc(draftH.Upsert, authMW))
+		mux.Handle("DELETE /api/v1/drafts/{id}", middleware.WrapFunc(draftH.Delete, authMW))
 	}
 
 	// ------------------------------------------------------------------ Sidebar (per-user)

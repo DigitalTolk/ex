@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import { MessageItem } from './MessageItem';
 import { MessageInput, type MessageInputHandle } from './MessageInput';
 import { MessageDropZone } from './MessageDropZone';
@@ -10,6 +10,7 @@ import { useSendMessage, type SendMessageInput } from '@/hooks/useMessages';
 import { useThreadMessages } from '@/hooks/useThreads';
 import { useUsersBatch } from '@/hooks/useUsersBatch';
 import { collectMessageUserIDs } from '@/lib/message-users';
+import { useDeleteDraft, useDraftAttachmentChips, useDraftForScope, useSaveDraft } from '@/hooks/useDrafts';
 import type { UserMapEntry } from './MessageList';
 
 const ANCHOR_HIGHLIGHT_CLASSES = ['ring-1', 'ring-amber-400/50', 'rounded-md'];
@@ -68,6 +69,19 @@ export function ThreadPanel({
 
   const send = useSendMessage({ channelId, conversationId });
   const inputRef = useRef<MessageInputHandle>(null);
+  const parentID = channelId ?? conversationId;
+  const parentType = channelId ? 'channel' : 'conversation';
+  const { data: draft } = useDraftForScope({
+    parentID,
+    parentType,
+    parentMessageID: threadRootID,
+  });
+  const draftAttachments = useDraftAttachmentChips(draft?.attachmentIDs);
+  const draftID = draft?.id;
+  const saveDraft = useSaveDraft();
+  const deleteDraft = useDeleteDraft();
+  const saveDraftMutate = saveDraft.mutate;
+  const deleteDraftMutate = deleteDraft.mutate;
 
   // Most recent own reply for the ArrowUp-edit-last shortcut. Thread
   // data is oldest-first; walk from the end to find the newest reply
@@ -273,9 +287,31 @@ export function ThreadPanel({
     return () => inner.removeEventListener('load', onLoad, true);
   }, [anchorMsgId, wasAtBottomRef]);
 
-  function handleReply(input: SendMessageInput) {
-    send.mutate({ ...input, parentMessageID: threadRootID });
-  }
+  const handleDraftChange = useCallback(
+    (value: SendMessageInput) => {
+      if (!parentID) return;
+      saveDraftMutate({
+        parentID,
+        parentType,
+        parentMessageID: threadRootID,
+        body: value.body,
+        attachmentIDs: value.attachmentIDs ?? [],
+      });
+    },
+    [parentID, parentType, threadRootID, saveDraftMutate],
+  );
+
+  const handleReply = useCallback(
+    (input: SendMessageInput) => {
+      const payload = { ...input, parentMessageID: threadRootID };
+      if (!draftID) {
+        send.mutate(payload);
+        return;
+      }
+      send.mutate(payload, { onSuccess: () => deleteDraftMutate(draftID) });
+    },
+    [send, threadRootID, draftID, deleteDraftMutate],
+  );
 
   return (
     <aside className="w-[28rem] border-l flex flex-col" aria-label="Thread">
@@ -331,6 +367,9 @@ export function ThreadPanel({
           disabled={send.isPending}
           placeholder="Reply..."
           focusKey={threadRootID}
+          initialBody={draft?.body ?? ''}
+          initialDrafts={draftAttachments}
+          onDraftChange={handleDraftChange}
           typingParentID={channelId ?? conversationId}
           typingParentType={channelId ? 'channel' : 'conversation'}
           typingThreadRootID={threadRootID}

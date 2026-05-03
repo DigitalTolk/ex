@@ -62,6 +62,7 @@ interface MessageInputProps {
   placeholder?: string;
   initialBody?: string;
   initialDrafts?: DraftAttachment[];
+  onDraftChange?: (value: MessageInputValue) => void;
   submitLabel?: string;
   // When true, the input renders compactly without a top border (used by
   // inline edit mode inside MessageItem).
@@ -102,6 +103,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
   typingParentType,
   typingThreadRootID,
   lastOwnMessageId,
+  onDraftChange,
 }, ref) {
   const [body, setBody] = useState(initialBody);
   const [drafts, setDrafts] = useState<DraftAttachment[]>(initialDrafts);
@@ -111,6 +113,9 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
   const fileInputRef = useRef<HTMLInputElement>(null);
   const lastTypingPingRef = useRef(0);
   const deleteDraft = useDeleteDraftAttachment();
+  const mountedDraftChangeRef = useRef(false);
+  const initialDraftKey = `${initialBody}\u0000${initialDrafts.map((d) => d.id).join('\u0000')}`;
+  const appliedInitialDraftRef = useRef(initialDraftKey);
   // Toolbar pressed-state tracking. Driven by Lexical's
   // registerUpdateListener so a toolbar click flips the pressed state
   // immediately — selectionchange only fires when the caret moves and
@@ -201,6 +206,44 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
     editorRef.current?.setMarkdown('');
     queueMicrotask(() => editorRef.current?.focus());
   }, [canSend, body, drafts, onSend, variant]);
+
+  useEffect(() => {
+    if (variant !== 'composer') return;
+    if (focusKey === undefined) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setBody(initialBody);
+    editorRef.current?.setMarkdown(initialBody);
+    setDrafts(initialDrafts);
+    appliedInitialDraftRef.current = initialDraftKey;
+    mountedDraftChangeRef.current = false;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusKey]);
+
+  useEffect(() => {
+    if (variant !== 'composer') return;
+    if (!initialBody && initialDrafts.length === 0) return;
+    if (initialDraftKey === appliedInitialDraftRef.current) return;
+    if (body !== '') return;
+    if (drafts.length > 0) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setBody(initialBody);
+    editorRef.current?.setMarkdown(initialBody);
+    setDrafts(initialDrafts);
+    appliedInitialDraftRef.current = initialDraftKey;
+    mountedDraftChangeRef.current = false;
+  }, [initialBody, initialDraftKey, initialDrafts, body, drafts.length, variant]);
+
+  useEffect(() => {
+    if (!onDraftChange || variant !== 'composer') return;
+    if (!mountedDraftChangeRef.current) {
+      mountedDraftChangeRef.current = true;
+      return;
+    }
+    const timeout = window.setTimeout(() => {
+      onDraftChange({ body, attachmentIDs: drafts.map((d) => d.id) });
+    }, 600);
+    return () => window.clearTimeout(timeout);
+  }, [body, drafts, onDraftChange, variant]);
 
   useEffect(() => {
     return () => {

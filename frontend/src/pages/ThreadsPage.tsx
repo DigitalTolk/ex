@@ -1,3 +1,4 @@
+import { useLayoutEffect } from 'react';
 import { PageContainer } from '@/components/layout/PageContainer';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useUserThreads, threadDeepLink } from '@/hooks/useThreads';
@@ -18,6 +19,11 @@ export default function ThreadsPage() {
     userChannels?.find((c) => c.channelID === id)?.channelName ?? '';
   const conversationName = (id: string) =>
     userConvs?.find((c) => c.conversationID === id)?.displayName ?? 'Conversation';
+
+  useLayoutEffect(() => {
+    const container = document.querySelector<HTMLElement>('[data-testid="page-container"]');
+    if (container) container.scrollTop = 0;
+  }, []);
 
   return (
     <PageContainer

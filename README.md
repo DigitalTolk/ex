@@ -1,6 +1,7 @@
 # ex
 
-[![Coverage Status](https://coveralls.io/repos/github/DigitalTolk/ex/badge.svg)](https://coveralls.io/github/DigitalTolk/ex)
+[![CI](https://github.com/DigitalTolk/ex/actions/workflows/ci.yml/badge.svg)](https://github.com/DigitalTolk/ex/actions/workflows/ci.yml)
+[![Coverage Status](https://coveralls.io/repos/github/DigitalTolk/ex/badge.svg?branch=main)](https://coveralls.io/github/DigitalTolk/ex?branch=main)
 
 A team messaging application built with Go and React.
 

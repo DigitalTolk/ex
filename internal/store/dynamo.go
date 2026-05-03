@@ -210,6 +210,7 @@ func settingsSK() string { return "WORKSPACE" }
 // User-defined sidebar categories: rows live under the user's PK so a
 // single Query returns every category the user owns.
 func categorySK(id string) string { return "CATEGORY#" + id }
+func draftSK(id string) string    { return "DRAFT#" + id }
 
 func categoryNameSK(name string) string {
 	return "CATEGORYNAME#" + strings.ToLower(strings.TrimSpace(name))

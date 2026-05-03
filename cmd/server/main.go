@@ -163,6 +163,8 @@ func main() {
 	attachmentH := handler.NewAttachmentHandler(attachmentSvc)
 	adminH := handler.NewAdminHandler(settingsSvc)
 	threadH := handler.NewThreadHandler(messageSvc)
+	draftSvc := service.NewDraftService(store.NewDraftStore(db), messageStore, membershipStore, conversationStore, redisPubSub)
+	draftH := handler.NewDraftHandler(draftSvc)
 	categorySvc := service.NewCategoryService(store.NewCategoryStore(db), redisPubSub)
 	sidebarH := handler.NewSidebarHandler(channelSvc, convSvc, categorySvc)
 
@@ -243,7 +245,7 @@ func main() {
 	}
 	unfurlSvc.SetMediaURLCache(redisCache)
 	unfurlH := handler.NewUnfurlHandler(unfurlSvc)
-	router := handler.NewRouter(authH, userH, channelH, convH, wsH, uploadH, emojiH, presenceH, attachmentH, adminH, threadH, versionH, unfurlH, sidebarH, searchH, jwtMgr, frontendDist, appVersion, allowOrigins)
+	router := handler.NewRouter(authH, userH, channelH, convH, wsH, uploadH, emojiH, presenceH, attachmentH, adminH, threadH, draftH, versionH, unfurlH, sidebarH, searchH, jwtMgr, frontendDist, appVersion, allowOrigins)
 
 	// ------------------------------------------------------------------ Server
 	srv := &http.Server{

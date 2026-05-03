@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef } from 'react';
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { Header } from '@/components/layout/Header';
@@ -31,6 +31,7 @@ import { collectMessageUserIDs, findLastOwnMessageId } from '@/lib/message-users
 import { useSidePanels } from '@/hooks/useSidePanels';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { useDeepLinkAnchor } from '@/hooks/useDeepLinkAnchor';
+import { useDeleteDraft, useDraftAttachmentChips, useDraftForScope, useSaveDraft } from '@/hooks/useDrafts';
 import { useTagState } from '@/context/TagSearchContext';
 import { TagSearchPanel } from '@/components/TagSearchPanel';
 import type { UserMapEntry } from './MessageList';
@@ -102,6 +103,40 @@ export function ChannelView() {
     isFetchingPreviousPage,
   } = useChannelMessages(channel?.id, mainAnchor);
   const sendMessage = useSendChannelMessage(channel?.id);
+  const channelID = channel?.id;
+  const draftScope = useMemo(
+    () => ({ parentID: channelID, parentType: 'channel' as const }),
+    [channelID],
+  );
+  const { data: draft } = useDraftForScope(draftScope);
+  const draftAttachments = useDraftAttachmentChips(draft?.attachmentIDs);
+  const draftID = draft?.id;
+  const saveDraft = useSaveDraft();
+  const deleteDraft = useDeleteDraft();
+  const saveDraftMutate = saveDraft.mutate;
+  const deleteDraftMutate = deleteDraft.mutate;
+  const handleDraftChange = useCallback(
+    (value: { body: string; attachmentIDs: string[] }) => {
+      if (!channelID) return;
+      saveDraftMutate({
+        parentID: channelID,
+        parentType: 'channel',
+        body: value.body,
+        attachmentIDs: value.attachmentIDs,
+      });
+    },
+    [channelID, saveDraftMutate],
+  );
+  const handleSendMessage = useCallback(
+    (value: { body: string; attachmentIDs: string[] }) => {
+      if (!draftID) {
+        sendMessage.mutate(value);
+        return;
+      }
+      sendMessage.mutate(value, { onSuccess: () => deleteDraftMutate(draftID) });
+    },
+    [sendMessage, draftID, deleteDraftMutate],
+  );
   useEffect(() => {
     if (!channel?.id) return;
     clearChannelUnread(channel.id);
@@ -287,10 +322,13 @@ export function ChannelView() {
           <TypingIndicator parentID={channel?.id} userMap={userMap} />
           <MessageInput
             ref={inputRef}
-            onSend={sendMessage.mutate}
+            onSend={handleSendMessage}
             disabled={sendMessage.isPending}
             placeholder={`Write to ~${channel?.name ?? '...'}`}
             focusKey={channel?.id}
+            initialBody={draft?.body ?? ''}
+            initialDrafts={draftAttachments}
+            onDraftChange={handleDraftChange}
             typingParentID={channel?.id}
             typingParentType="channel"
             lastOwnMessageId={lastOwnMessageId}

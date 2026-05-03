@@ -25,6 +25,7 @@ import {
   Settings,
   Info,
   MessagesSquare,
+  FilePenLine,
   MoreVertical,
   Trash2,
   ArrowDownAZ,
@@ -47,6 +48,7 @@ import { useUnread } from '@/context/UnreadContext';
 import { useUserChannels } from '@/hooks/useChannels';
 import { useUserConversations } from '@/hooks/useConversations';
 import { useUserThreads, hasUnreadActivity } from '@/hooks/useThreads';
+import { useDrafts } from '@/hooks/useDrafts';
 import { useCategories, useCreateCategory, useDeleteCategory, useFavoriteChannel, useSetCategory, useSetConversationCategory, useReorderCategories } from '@/hooks/useSidebar';
 import { groupSidebarItems, SidebarSectionKeys, type SidebarItem, type ConversationSidebarSort } from '@/lib/sidebar-groups';
 import type { SidebarCategory, UserChannel, UserConversation } from '@/types';
@@ -402,6 +404,7 @@ export function Sidebar({ onClose }: SidebarProps) {
   const { data: channels } = useUserChannels();
   const { data: conversations } = useUserConversations();
   const { data: threads } = useUserThreads();
+  const { data: drafts } = useDrafts();
   const { data: categories } = useCategories();
   const createCategory = useCreateCategory();
   const deleteCategory = useDeleteCategory();
@@ -452,6 +455,7 @@ export function Sidebar({ onClose }: SidebarProps) {
     [conversations, hiddenConversations],
   );
   const hasThreadUpdates = (threads ?? []).some((t) => hasUnreadActivity(t));
+  const draftCount = drafts?.length ?? 0;
 
   const sidebarSections = useMemo(
     () => groupSidebarItems(channels ?? [], visibleConversations, categories ?? [], { conversationSort }),
@@ -1312,6 +1316,26 @@ export function Sidebar({ onClose }: SidebarProps) {
           >
             <MessagesSquare className="h-4 w-4 shrink-0" aria-hidden="true" />
             <span className={hasThreadUpdates ? 'font-bold text-white' : ''}>Threads</span>
+          </NavLink>
+
+          <NavLink
+            to="/drafts"
+            onClick={onClose}
+            className={({ isActive }) =>
+              `flex items-center gap-2 rounded-md px-2 py-1 text-sm transition-colors ${
+                isActive
+                  ? 'bg-white/15 text-white font-semibold'
+                  : 'text-gray-300 hover:bg-white/10 hover:text-white'
+              }`
+            }
+          >
+            <FilePenLine className="h-4 w-4 shrink-0" aria-hidden="true" />
+            <span>Drafts</span>
+            {draftCount > 0 && (
+              <Badge variant="secondary" className="ml-auto h-5 min-w-5 px-1.5 text-[10px]">
+                {draftCount}
+              </Badge>
+            )}
           </NavLink>
 
           {/* Visual break between top-level pages and the channel/DM list. */}

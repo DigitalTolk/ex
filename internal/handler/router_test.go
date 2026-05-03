@@ -26,7 +26,7 @@ func TestNewRouterDoesNotPanic(t *testing.T) {
 	wsH := &WSHandler{}
 
 	// This is the call that panics if routes conflict.
-	router := NewRouter(authH, userH, channelH, convH, wsH, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, jwtMgr, nil, "test", []string{"*"})
+	router := NewRouter(authH, userH, channelH, convH, wsH, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, jwtMgr, nil, "test", []string{"*"})
 
 	if router == nil {
 		t.Fatal("expected non-nil router")
@@ -36,7 +36,7 @@ func TestNewRouterDoesNotPanic(t *testing.T) {
 // TestRouterHealthEndpoint verifies the health check endpoint works.
 func TestRouterHealthEndpoint(t *testing.T) {
 	jwtMgr := auth.NewJWTManager("test-secret", 15*time.Minute, 24*time.Hour)
-	router := NewRouter(&AuthHandler{}, &UserHandler{}, &ChannelHandler{}, &ConversationHandler{}, &WSHandler{}, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, jwtMgr, nil, "test", []string{"*"})
+	router := NewRouter(&AuthHandler{}, &UserHandler{}, &ChannelHandler{}, &ConversationHandler{}, &WSHandler{}, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, jwtMgr, nil, "test", []string{"*"})
 
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	rec := httptest.NewRecorder()
@@ -52,7 +52,7 @@ func TestRouterHealthEndpoint(t *testing.T) {
 // it means the route matched but auth middleware rejected the request).
 func TestRouterRegisteredRoutes(t *testing.T) {
 	jwtMgr := auth.NewJWTManager("test-secret", 15*time.Minute, 24*time.Hour)
-	router := NewRouter(&AuthHandler{}, &UserHandler{}, &ChannelHandler{}, &ConversationHandler{}, &WSHandler{}, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, jwtMgr, nil, "test", []string{"*"})
+	router := NewRouter(&AuthHandler{}, &UserHandler{}, &ChannelHandler{}, &ConversationHandler{}, &WSHandler{}, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, jwtMgr, nil, "test", []string{"*"})
 
 	routes := []struct {
 		method string
@@ -146,7 +146,7 @@ func TestIsValidationError(t *testing.T) {
 // TestNewRouter_AllOptionalHandlersWired exercises the conditional
 // branches in NewRouter that mount the optional sub-routers (sidebar,
 // uploads, attachments, emojis, presence, search, admin, threads,
-// version, unfurl). Without this, those branches stay at 0% coverage
+// drafts, version, unfurl). Without this, those branches stay at 0% coverage
 // even though they are the production wiring path.
 func TestNewRouter_AllOptionalHandlersWired(t *testing.T) {
 	jwtMgr := auth.NewJWTManager("test-secret", 15*time.Minute, 24*time.Hour)
@@ -162,6 +162,7 @@ func TestNewRouter_AllOptionalHandlersWired(t *testing.T) {
 		&AttachmentHandler{},
 		&AdminHandler{},
 		&ThreadHandler{},
+		&DraftHandler{},
 		&VersionHandler{},
 		&UnfurlHandler{},
 		&SidebarHandler{},
@@ -180,6 +181,7 @@ func TestNewRouter_AllOptionalHandlersWired(t *testing.T) {
 		"/api/v1/emojis",
 		"/api/v1/presence",
 		"/api/v1/threads",
+		"/api/v1/drafts",
 		"/api/v1/search/users",
 		"/api/v1/admin/settings",
 		"/api/v1/sidebar/categories",
