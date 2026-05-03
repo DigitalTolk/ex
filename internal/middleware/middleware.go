@@ -97,27 +97,12 @@ func UserIDFromContext(ctx context.Context) string {
 }
 
 // CORS returns middleware that sets Cross-Origin Resource Sharing headers.
-// Multiple origins may be passed; the request Origin is echoed back when it
-// matches one of them (required when Allow-Credentials is true).
-func CORS(allowOrigins ...string) func(http.Handler) http.Handler {
-	allowed := make(map[string]bool, len(allowOrigins))
-	for _, o := range allowOrigins {
-		allowed[o] = true
-	}
-	primary := ""
-	if len(allowOrigins) > 0 {
-		primary = allowOrigins[0]
-	}
+func CORS(allowOrigin string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			origin := r.Header.Get("Origin")
-			if allowed[origin] {
-				w.Header().Set("Access-Control-Allow-Origin", origin)
-			} else {
-				w.Header().Set("Access-Control-Allow-Origin", primary)
-			}
+			w.Header().Set("Access-Control-Allow-Origin", allowOrigin)
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
-			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Refresh-Token")
+			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
 			w.Header().Set("Access-Control-Allow-Credentials", "true")
 			w.Header().Set("Access-Control-Max-Age", "86400")
 

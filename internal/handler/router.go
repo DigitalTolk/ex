@@ -36,7 +36,7 @@ func NewRouter(
 	jwtMgr *auth.JWTManager,
 	frontendFS fs.FS,
 	appVersion string,
-	allowOrigins []string,
+	allowOrigin string,
 ) http.Handler {
 	mux := http.NewServeMux()
 
@@ -195,7 +195,7 @@ func NewRouter(
 
 	// Apply global middleware: CORS, RequestID, Logging.
 	handler := middleware.Wrap(mux,
-		middleware.CORS(allowOrigins...),
+		middleware.CORS(allowOrigin),
 		middleware.RequestID,
 		middleware.Logging,
 	)
