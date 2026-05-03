@@ -205,16 +205,19 @@ export function ConversationView() {
   }
 
   const title = derivedTitle ?? 'Direct Message';
+  let dmOtherUserID: string | undefined;
   let dmOtherUserAvatar: string | undefined;
   let dmOtherUserStatus = user?.userStatus;
   let dmOtherUserOnline: boolean | undefined;
   if (conversation?.type === 'dm') {
     const otherID = conversation.participantIDs?.find((pid) => pid !== user?.id);
     if (otherID) {
+      dmOtherUserID = otherID;
       dmOtherUserAvatar = userMap[otherID]?.avatarURL;
       dmOtherUserStatus = userMap[otherID]?.userStatus;
       dmOtherUserOnline = userMap[otherID]?.online;
     } else if (user) {
+      dmOtherUserID = user.id;
       dmOtherUserAvatar = user.avatarURL;
       dmOtherUserStatus = user.userStatus;
       dmOtherUserOnline = true;
@@ -279,6 +282,8 @@ export function ConversationView() {
           avatarURL={conversation?.type === 'dm' ? dmOtherUserAvatar : undefined}
           avatarOnline={conversation?.type === 'dm' ? dmOtherUserOnline : undefined}
           userStatus={conversation?.type === 'dm' ? dmOtherUserStatus : undefined}
+          userId={conversation?.type === 'dm' ? dmOtherUserID : undefined}
+          currentUserId={user?.id}
           memberCount={conversation?.type === 'group' ? conversation?.participantIDs?.length : undefined}
           onMembersClick={conversation?.type === 'group' ? () => (showMembers ? closeMembers() : openMembers()) : undefined}
           onPinnedClick={togglePinned}

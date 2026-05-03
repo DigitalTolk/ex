@@ -13,9 +13,8 @@ import { firstNamesOnly } from '@/lib/format';
 import {
   useFavoriteConversation,
   useSetConversationCategory,
-  useCategories,
 } from '@/hooks/useSidebar';
-import type { UserConversation, SidebarCategory, UserStatus } from '@/types';
+import type { UserConversation, UserStatus } from '@/types';
 import type { CSSProperties } from 'react';
 
 interface Props {
@@ -54,7 +53,6 @@ export function ConversationRow({
 }: Props) {
   const favorite = useFavoriteConversation();
   const setCategory = useSetConversationCategory();
-  const { data: categories } = useCategories();
 
   const isFav = !!conversation.favorite;
   const isGroup = conversation.type === 'group';
@@ -71,10 +69,6 @@ export function ConversationRow({
       });
     }
     favorite.mutate({ conversationID: conversation.conversationID, favorite: !isFav });
-  }
-
-  function moveToCategory(categoryID: string) {
-    setCategory.mutate({ conversationID: conversation.conversationID, categoryID });
   }
 
   return (
@@ -107,32 +101,30 @@ export function ConversationRow({
         }
       >
         {isGroup ? (
-          <Badge
-            variant="secondary"
-            className="shrink-0 h-5 min-w-5 px-1.5 bg-white/20 text-white border-0 text-[10px]"
-            aria-label={`${participantCount} participants`}
-          >
-            {participantCount}
-          </Badge>
+          <>
+            <Badge
+              variant="secondary"
+              className="shrink-0 h-5 min-w-5 px-1.5 bg-white/20 text-white border-0 text-[10px]"
+              aria-label={`${participantCount} participants`}
+            >
+              {participantCount}
+            </Badge>
+            <span className="truncate">{firstNamesOnly(conversation.displayName)}</span>
+          </>
         ) : (
-          <UserAvatar
-            displayName={conversation.displayName || '??'}
-            avatarURL={dmAvatarURL}
-            online={dmOnline}
-            userStatus={dmUserStatus}
-            className="h-5 w-5"
-            dotClassName="h-1.5 w-1.5"
-          />
+          <>
+            <UserAvatar
+              displayName={conversation.displayName || '??'}
+              avatarURL={dmAvatarURL}
+              online={dmOnline}
+              userStatus={dmUserStatus}
+              className="h-5 w-5"
+              dotClassName="h-1.5 w-1.5"
+            />
+            <span className="truncate">{conversation.displayName}</span>
+            <UserStatusIndicator status={dmUserStatus} className="h-4 w-4" />
+          </>
         )}
-        {/* DMs keep the full name; group rows show first-names only
-            because the comma-joined list of full names ("Alice Smith,
-            Bob Jones, Charlie Brown") immediately overflows. */}
-        <span className="truncate">
-          {isGroup
-            ? firstNamesOnly(conversation.displayName)
-            : conversation.displayName}
-        </span>
-        <UserStatusIndicator status={dmUserStatus} className="h-4 w-4" />
       </NavLink>
       {/* Star — visible on hover; persistent yellow when favorited.
           Positioned to match ChannelRow's right-7 / right-1 layout. */}
@@ -146,7 +138,8 @@ export function ConversationRow({
       >
         <Star className="h-3.5 w-3.5" fill={isFav ? 'currentColor' : 'none'} />
       </button>
-      {/* Kebab — move-to-category and close. Same right-1 slot as ChannelRow. */}
+      {/* Kebab — close only. Category placement is intentionally channel-only;
+          DMs/groups move to Favorites through the star. */}
       <DropdownMenu>
         <DropdownMenuTrigger
           aria-label={`Manage ${conversation.displayName} sidebar placement`}
@@ -156,22 +149,6 @@ export function ConversationRow({
           <MoreVertical className="h-3.5 w-3.5" />
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-56">
-          <DropdownMenuItem
-            onClick={() => moveToCategory('')}
-            disabled={!conversation.categoryID}
-          >
-            Move to Direct Messages
-          </DropdownMenuItem>
-          {(categories ?? []).map((c: SidebarCategory) => (
-            <DropdownMenuItem
-              key={c.id}
-              onClick={() => moveToCategory(c.id)}
-              disabled={conversation.categoryID === c.id}
-            >
-              Move to {c.name}
-            </DropdownMenuItem>
-          ))}
-          <div className="my-1 h-px bg-border" />
           <DropdownMenuItem
             onClick={() => onHide(conversation.conversationID)}
             data-testid={`conv-close-${conversation.conversationID}`}

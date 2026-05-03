@@ -314,6 +314,13 @@ describe('Sidebar grouped rendering', () => {
     expect(threads?.className).not.toMatch(/\bmb-2\b/);
   });
 
+  it('keeps Directory highlighted on nested directory routes', () => {
+    renderSidebarAt('/directory/users');
+
+    expect(screen.getByText('Directory').closest('a')).toHaveClass('bg-white/15');
+    expect(screen.getByText('Directory').closest('a')).toHaveClass('font-semibold');
+  });
+
   it('keeps the currently-viewed channel visible even when its category is collapsed', () => {
     // Bug: collapsing a category hid the channel the user was actively
     // looking at, so a click on the chevron made the row vanish out from

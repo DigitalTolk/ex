@@ -3,6 +3,7 @@ import { Users, ChevronDown, LogOut, Archive, Pencil, Bell, BellOff, Pin, Paperc
 import { ChannelIcon } from '@/components/ChannelIcon';
 import { UserAvatar } from '@/components/UserAvatar';
 import { UserStatusIndicator } from '@/components/UserStatusIndicator';
+import { UserHoverCard } from '@/components/UserHoverCard';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -33,6 +34,8 @@ interface HeaderProps {
   // group conversations where no single avatar represents the room.
   showAvatar?: boolean;
   userStatus?: UserStatus;
+  userId?: string;
+  currentUserId?: string;
   onMembersClick?: () => void;
   channelId?: string;
   canEdit?: boolean;
@@ -58,6 +61,8 @@ export function Header({
   avatarOnline,
   showAvatar,
   userStatus,
+  userId,
+  currentUserId,
   onMembersClick,
   canEdit,
   onDescriptionSave,
@@ -129,28 +134,59 @@ export function Header({
           </DropdownMenu>
         ) : (
           <div className="flex items-center gap-2">
-            {showAvatar && (
-              // Keyed on avatarURL so AvatarImage's internal load state
-              // resets when switching between DMs — otherwise a previous
-              // load can keep the fallback hidden when the new partner
-              // has no image.
-              <UserAvatar
-                key={avatarURL ?? '__none__'}
-                displayName={displayTitle || '??'}
-                avatarURL={avatarURL}
-                online={avatarOnline}
-                className="h-7 w-7"
-              />
-            )}
-            <div>
-              <div className="flex items-center gap-1.5">
-                <h1 className="text-lg font-semibold">{displayTitle}</h1>
-                {userStatus && <UserStatusIndicator status={userStatus} />}
+            {userId ? (
+              <div>
+                <UserHoverCard
+                  userId={userId}
+                  displayName={displayTitle}
+                  avatarURL={avatarURL}
+                  userStatus={userStatus}
+                  online={avatarOnline}
+                  currentUserId={currentUserId}
+                >
+                  <span className="inline-flex items-center gap-2">
+                    {showAvatar && (
+                      <UserAvatar
+                        key={avatarURL ?? '__none__'}
+                        displayName={displayTitle || '??'}
+                        avatarURL={avatarURL}
+                        online={avatarOnline}
+                        className="h-7 w-7"
+                      />
+                    )}
+                    <h1 className="text-lg font-semibold">{displayTitle}</h1>
+                  </span>
+                </UserHoverCard>
+                {subtitle && (
+                  <p className="text-xs text-muted-foreground">{subtitle}</p>
+                )}
               </div>
-              {subtitle && (
-                <p className="text-xs text-muted-foreground">{subtitle}</p>
-              )}
-            </div>
+            ) : (
+              <>
+                {showAvatar && (
+                  // Keyed on avatarURL so AvatarImage's internal load state
+                  // resets when switching between DMs — otherwise a previous
+                  // load can keep the fallback hidden when the new partner
+                  // has no image.
+                  <UserAvatar
+                    key={avatarURL ?? '__none__'}
+                    displayName={displayTitle || '??'}
+                    avatarURL={avatarURL}
+                    online={avatarOnline}
+                    className="h-7 w-7"
+                  />
+                )}
+                <div>
+                  <div className="flex items-center gap-1.5">
+                    <h1 className="text-lg font-semibold">{displayTitle}</h1>
+                    {userStatus && <UserStatusIndicator status={userStatus} />}
+                  </div>
+                  {subtitle && (
+                    <p className="text-xs text-muted-foreground">{subtitle}</p>
+                  )}
+                </div>
+              </>
+            )}
           </div>
         )}
       </div>

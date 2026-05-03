@@ -13,8 +13,18 @@ export function localTimeZone(): string {
   return Intl.DateTimeFormat().resolvedOptions().timeZone || '';
 }
 
+export function isValidTimeZone(timeZone?: string | null): timeZone is string {
+  if (!timeZone) return false;
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone }).format(new Date(0));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function formatTimeZoneName(timeZone?: string): string | null {
-  if (!timeZone) return null;
+  if (!isValidTimeZone(timeZone)) return null;
   const parts = timeZone.split('/');
   if (parts.length === 1) return parts[0].replaceAll('_', ' ');
   const city = parts.at(-1)?.replaceAll('_', ' ') ?? timeZone;
@@ -62,7 +72,7 @@ export function formatTimeZoneDelta(
   const deltaMinutes = userOffset - localOffset;
   if (deltaMinutes === 0) return null;
   const abs = Math.abs(deltaMinutes);
-  const hours = Math.round(abs / 60);
-  const amount = `${hours} hr${hours === 1 ? '' : 's'}`;
+  const hours = abs / 60;
+  const amount = `${Number.isInteger(hours) ? hours : hours.toFixed(1)} hr${hours === 1 ? '' : 's'}`;
   return `${amount} ${deltaMinutes > 0 ? 'ahead' : 'behind'}`;
 }

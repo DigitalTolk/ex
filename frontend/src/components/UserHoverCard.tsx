@@ -12,7 +12,7 @@ import { PopoverPortal } from '@/components/PopoverPortal';
 import { UserStatusIndicator } from '@/components/UserStatusIndicator';
 import { usePresence } from '@/context/PresenceContext';
 import { formatStatusUntil } from '@/lib/user-status';
-import { formatLastSeen, formatTimeZoneDelta, formatTimeZoneName } from '@/lib/user-time';
+import { formatLastSeen, formatTimeZoneDelta, formatTimeZoneName, isValidTimeZone } from '@/lib/user-time';
 import type { Conversation, User, UserStatus } from '@/types';
 
 interface UserHoverCardProps {
@@ -71,8 +71,9 @@ export function UserHoverCard({
   const effectiveAvatar = avatarURL ?? userDetails?.avatarURL;
   const effectiveStatus = userStatus ?? userDetails?.userStatus;
   const lastSeen = formatLastSeen(userDetails?.lastSeenAt, effectiveOnline);
-  const timeZoneDelta = formatTimeZoneDelta(userDetails?.timeZone);
-  const timeZoneName = formatTimeZoneName(userDetails?.timeZone);
+  const effectiveTimeZone = isValidTimeZone(userDetails?.timeZone) ? userDetails.timeZone : undefined;
+  const timeZoneDelta = formatTimeZoneDelta(effectiveTimeZone);
+  const timeZoneName = formatTimeZoneName(effectiveTimeZone);
 
   const isSelf = currentUserId === userId;
 
@@ -102,7 +103,7 @@ export function UserHoverCard({
         className="w-72 rounded-md border bg-popover p-3 shadow-lg"
       >
         <div>
-          <div className="flex items-center gap-3">
+          <div data-testid="hover-card-header" className="flex items-start gap-3">
             <div className="relative">
               <Avatar className="h-12 w-12">
                 {effectiveAvatar && <AvatarImage src={effectiveAvatar} alt="" />}
@@ -151,11 +152,11 @@ export function UserHoverCard({
                 </dd>
               </div>
             )}
-            {userDetails?.timeZone && (
+            {effectiveTimeZone && (
               <div className="flex justify-between gap-3">
                 <dt className="text-muted-foreground">Local time</dt>
                 <dd className="text-right">
-                  {new Date().toLocaleTimeString(undefined, { timeZone: userDetails.timeZone, hour: 'numeric', minute: '2-digit' })}
+                  {new Date().toLocaleTimeString(undefined, { timeZone: effectiveTimeZone, hour: 'numeric', minute: '2-digit' })}
                   {timeZoneDelta && <span className="ml-1 text-muted-foreground">({timeZoneDelta})</span>}
                 </dd>
               </div>

@@ -138,10 +138,35 @@ describe('UserHoverCard — presence fallback for mentions', () => {
     expect(await screen.findByRole('link', { name: 'bob@example.com' })).toHaveAttribute('href', 'mailto:bob@example.com');
     expect(screen.getByText('now')).toBeInTheDocument();
     expect(screen.getByText('Working from home')).toBeInTheDocument();
+    expect(screen.getByTestId('hover-card-header')).toHaveClass('items-start');
     expect(screen.getByTestId('hover-status-line')).toHaveClass('whitespace-normal');
     expect(screen.getByTestId('hover-status-line')).toHaveClass('break-words');
     expect(screen.getByTestId('hover-status-line')).toHaveAttribute('title', expect.stringMatching(/^until /));
     expect(screen.getByText('Timezone')).toBeInTheDocument();
     expect(screen.getByText('New York, America')).toBeInTheDocument();
+  });
+
+  it('does not crash or render local time when persisted timezone is invalid', async () => {
+    apiFetchMock.mockImplementation((url: string) => {
+      if (url === '/api/v1/presence') return Promise.resolve({ online: [] });
+      if (url === '/api/v1/users/u-bob')
+        return Promise.resolve({
+          id: 'u-bob',
+          displayName: 'Bob',
+          email: 'bob@example.com',
+          status: 'active',
+          timeZone: 'Not/AZone',
+        });
+      return Promise.resolve({});
+    });
+    renderCard({ userId: 'u-bob' });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    fireEvent.click(screen.getByText('trigger'));
+
+    expect(await screen.findByText('bob@example.com')).toBeInTheDocument();
+    expect(screen.queryByText('Local time')).not.toBeInTheDocument();
+    expect(screen.queryByText('Timezone')).not.toBeInTheDocument();
   });
 });

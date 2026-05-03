@@ -3,6 +3,7 @@ import {
   formatLastSeen,
   formatTimeZoneName,
   formatTimeZoneDelta,
+  isValidTimeZone,
   localTimeZone,
   timeZoneOffsetMinutes,
 } from './user-time';
@@ -22,11 +23,18 @@ describe('user-time helpers', () => {
     expect(timeZoneOffsetMinutes('not-a-zone')).toBeNull();
   });
 
+  it('validates IANA timezone names', () => {
+    expect(isValidTimeZone('Europe/Stockholm')).toBe(true);
+    expect(isValidTimeZone('Not/AZone')).toBe(false);
+    expect(isValidTimeZone('')).toBe(false);
+  });
+
   it('formats ahead and behind timezone deltas', () => {
     expect(formatTimeZoneDelta('Europe/Stockholm', 'UTC')).toMatch(/ahead/);
     expect(formatTimeZoneDelta('Europe/Stockholm', 'Europe/London')).toBe('1 hr ahead');
     expect(formatTimeZoneDelta('America/New_York', 'UTC')).toMatch(/behind/);
-    expect(formatTimeZoneDelta('Australia/Adelaide', 'UTC')).toMatch(/hrs ahead/);
+    expect(formatTimeZoneDelta('Australia/Adelaide', 'UTC')).toBe('9.5 hrs ahead');
+    expect(formatTimeZoneDelta('Asia/Kolkata', 'UTC')).toBe('5.5 hrs ahead');
     expect(formatTimeZoneDelta('UTC', 'UTC')).toBeNull();
   });
 
@@ -44,6 +52,7 @@ describe('user-time helpers', () => {
   it('formats IANA timezone names for display', () => {
     expect(formatTimeZoneName('America/New_York')).toBe('New York, America');
     expect(formatTimeZoneName('UTC')).toBe('UTC');
+    expect(formatTimeZoneName('Not/AZone')).toBeNull();
     expect(formatTimeZoneName()).toBeNull();
   });
 });

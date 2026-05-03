@@ -68,7 +68,8 @@ function AppRoutes() {
           index
           element={<Navigate to={`/channel/${GENERAL_CHANNEL_SLUG}`} replace />}
         />
-        <Route path="directory" element={<DirectoriesPage />} />
+        <Route path="directory" element={<Navigate to="/directory/channels" replace />} />
+        <Route path="directory/:section" element={<DirectoriesPage />} />
         <Route path="search" element={<SearchResultsPage />} />
         <Route path="threads" element={<ThreadsPage />} />
         <Route path="admin" element={<AdminPage />} />

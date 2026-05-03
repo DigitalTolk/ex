@@ -256,7 +256,9 @@ func (s *UserService) SetUserStatusMessage(ctx context.Context, userID string, s
 		}
 	}
 	user.UserStatus = status
-	user.TimeZone = strings.TrimSpace(timeZone)
+	if normalizedTimeZone, ok := normalizeWritableTimeZone(timeZone); ok {
+		user.TimeZone = normalizedTimeZone
+	}
 	user.UpdatedAt = time.Now()
 	if err := s.users.UpdateUser(ctx, user); err != nil {
 		return nil, fmt.Errorf("user: update status message: %w", err)
@@ -361,8 +363,8 @@ func (s *UserService) RunExpiredStatusSweeper(ctx context.Context, interval time
 // differs from the stored profile value. It is intentionally quiet on no-op
 // calls because /users/me is fetched often.
 func (s *UserService) PatchTimeZoneIfChanged(ctx context.Context, userID, timeZone string) (*model.User, error) {
-	timeZone = strings.TrimSpace(timeZone)
-	if timeZone == "" {
+	timeZone, ok := normalizeWritableTimeZone(timeZone)
+	if !ok || timeZone == "" {
 		return nil, nil
 	}
 	user, err := s.users.GetUser(ctx, userID)
@@ -386,6 +388,17 @@ func (s *UserService) PatchTimeZoneIfChanged(ctx context.Context, userID, timeZo
 	})
 	s.indexUser(ctx, user)
 	return user, nil
+}
+
+func normalizeWritableTimeZone(timeZone string) (string, bool) {
+	timeZone = strings.TrimSpace(timeZone)
+	if timeZone == "" {
+		return "", true
+	}
+	if _, err := time.LoadLocation(timeZone); err != nil {
+		return "", false
+	}
+	return timeZone, true
 }
 
 // GetBatch returns users by a list of IDs. Missing users are silently skipped.

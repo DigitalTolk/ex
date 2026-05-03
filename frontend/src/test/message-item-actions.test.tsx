@@ -186,6 +186,17 @@ describe('MessageItem - hover bar and avatar', () => {
     expect(screen.getByText('1 reply')).toBeInTheDocument();
   });
 
+  it('shows an add-reaction button beside existing reactions', () => {
+    renderWithProviders(
+      <MessageItem
+        message={makeMessage({ reactions: { ':thumbsup:': ['u-1'] } })}
+        authorName="Alice"
+        isOwn={false}
+      />,
+    );
+    expect(screen.getByLabelText('Add another reaction')).toBeInTheDocument();
+  });
+
   it('closes an open kebab menu when another message row gets hovered', () => {
     // Bug: clicking "..." opened the menu and pinned the toolbar, but
     // moving the mouse to a different message left the toolbar stuck on

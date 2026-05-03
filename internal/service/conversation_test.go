@@ -54,7 +54,7 @@ func TestConversationService_SetFavorite_RejectsNonParticipant(t *testing.T) {
 	}
 }
 
-func TestConversationService_SetCategory(t *testing.T) {
+func TestConversationService_SetCategory_ClearsFavoritePosition(t *testing.T) {
 	svc, conversations, _, _, _ := setupConversationService()
 	ctx := context.Background()
 	conversations.conversations["c-cat"] = &model.Conversation{
@@ -65,11 +65,31 @@ func TestConversationService_SetCategory(t *testing.T) {
 	conversations.userConvs["u-1"] = []*model.UserConversation{
 		{UserID: "u-1", ConversationID: "c-cat"},
 	}
-	if err := svc.SetCategory(ctx, "u-1", "c-cat", "cat-eng", nil); err != nil {
+	pos := 0
+	if err := svc.SetCategory(ctx, "u-1", "c-cat", "", &pos); err != nil {
 		t.Fatalf("SetCategory: %v", err)
 	}
-	if conversations.userConvs["u-1"][0].CategoryID != "cat-eng" {
-		t.Errorf("CategoryID = %q, want cat-eng", conversations.userConvs["u-1"][0].CategoryID)
+	if conversations.userConvs["u-1"][0].CategoryID != "" {
+		t.Errorf("CategoryID = %q, want empty", conversations.userConvs["u-1"][0].CategoryID)
+	}
+	if conversations.userConvs["u-1"][0].SidebarPosition != 0 {
+		t.Errorf("SidebarPosition = %d, want 0", conversations.userConvs["u-1"][0].SidebarPosition)
+	}
+}
+
+func TestConversationService_SetCategory_RejectsUserCategory(t *testing.T) {
+	svc, conversations, _, _, _ := setupConversationService()
+	ctx := context.Background()
+	conversations.conversations["c-cat"] = &model.Conversation{
+		ID:             "c-cat",
+		Type:           model.ConversationTypeGroup,
+		ParticipantIDs: []string{"u-1", "u-2"},
+	}
+	conversations.userConvs["u-1"] = []*model.UserConversation{
+		{UserID: "u-1", ConversationID: "c-cat"},
+	}
+	if err := svc.SetCategory(ctx, "u-1", "c-cat", "cat-eng", nil); err == nil {
+		t.Fatal("expected user category rejection")
 	}
 }
 

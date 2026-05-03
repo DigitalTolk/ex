@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Pencil, Trash2, Smile, MessageSquareReply, MoreHorizontal, Pin, PinOff, Link as LinkIcon } from 'lucide-react';
+import { Pencil, Trash2, SmilePlus, MessageSquareReply, MoreHorizontal, Pin, PinOff, Link as LinkIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { MessageInput, type MessageInputValue } from '@/components/chat/MessageInput';
 import type { DraftAttachment } from '@/components/chat/AttachmentChip';
@@ -325,7 +325,7 @@ export function MessageItem({
             online={authorOnline}
             currentUserId={currentUserId}
           >
-            <span className="text-sm font-semibold cursor-pointer hover:underline">{authorName}</span>
+            <span className="cursor-pointer text-sm font-semibold">{authorName}</span>
           </UserHoverCard>
           <Tooltip>
             <TooltipTrigger
@@ -432,7 +432,7 @@ export function MessageItem({
               />
             )}
             {reactionEntries.length > 0 && (
-              <div className="mt-1 flex flex-wrap gap-1" role="list" aria-label="Reactions">
+              <div className="mt-1 flex flex-wrap items-center gap-1" role="list" aria-label="Reactions">
                 {reactionEntries.map(([emoji, users]) => {
                   const reactedByMe = currentUserId ? users.includes(currentUserId) : false;
                   return (
@@ -469,6 +469,19 @@ export function MessageItem({
                     </Tooltip>
                   );
                 })}
+                <EmojiPicker
+                  onSelect={handleReact}
+                  trigger={
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      className="h-6 w-6 rounded-full text-muted-foreground hover:text-foreground"
+                      aria-label="Add another reaction"
+                    >
+                      <SmilePlus className="h-3.5 w-3.5" />
+                    </Button>
+                  }
+                />
               </div>
             )}
             {!inThread && message.replyCount !== undefined && message.replyCount > 0 && (
@@ -498,7 +511,7 @@ export function MessageItem({
             onSelect={handleReact}
             trigger={
               <Button size="icon" variant="ghost" className="h-7 w-7" aria-label="Add reaction">
-                <Smile className="h-3.5 w-3.5" />
+                <SmilePlus className="h-3.5 w-3.5" />
               </Button>
             }
           />

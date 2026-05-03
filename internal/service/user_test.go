@@ -867,6 +867,29 @@ func TestUserService_SetUserStatusMessage_SetClearAndBroadcast(t *testing.T) {
 	}
 }
 
+func TestUserService_SetUserStatusMessage_IgnoresInvalidTimeZone(t *testing.T) {
+	users := newMockUserStore()
+	users.users["u-status-tz"] = &model.User{
+		ID:          "u-status-tz",
+		Email:       "status-tz@example.com",
+		DisplayName: "Status TZ User",
+		SystemRole:  model.SystemRoleMember,
+		TimeZone:    "Europe/Stockholm",
+	}
+	svc := NewUserService(users, nil, nil, nil)
+
+	got, err := svc.SetUserStatusMessage(context.Background(), "u-status-tz", &model.UserStatus{
+		Emoji: ":house:",
+		Text:  "Working from home",
+	}, "Not/AZone")
+	if err != nil {
+		t.Fatalf("SetUserStatusMessage: %v", err)
+	}
+	if got.TimeZone != "Europe/Stockholm" {
+		t.Fatalf("TimeZone = %q, want existing valid timezone preserved", got.TimeZone)
+	}
+}
+
 func TestUserService_PatchTimeZoneIfChanged(t *testing.T) {
 	users := newMockUserStore()
 	cache := newMockCache()
@@ -1082,7 +1105,8 @@ func TestUserService_RunExpiredStatusSweeper_RunsOnceOnStartupAndStops(t *testin
 
 func TestUserService_PatchTimeZoneIfChanged_ErrorsAndEmptyInput(t *testing.T) {
 	users := newMockUserStore()
-	svc := NewUserService(users, nil, nil, nil)
+	pub := newMockPublisher()
+	svc := NewUserService(users, nil, nil, pub)
 
 	got, err := svc.PatchTimeZoneIfChanged(context.Background(), "u-empty", "  ")
 	if err != nil {
@@ -1090,6 +1114,21 @@ func TestUserService_PatchTimeZoneIfChanged_ErrorsAndEmptyInput(t *testing.T) {
 	}
 	if got != nil {
 		t.Fatalf("empty timezone returned %+v, want nil", got)
+	}
+
+	users.users["u-invalid"] = &model.User{ID: "u-invalid", Email: "invalid@example.com", TimeZone: "UTC"}
+	got, err = svc.PatchTimeZoneIfChanged(context.Background(), "u-invalid", "Not/AZone")
+	if err != nil {
+		t.Fatalf("invalid timezone: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("invalid timezone returned %+v, want nil", got)
+	}
+	if users.users["u-invalid"].TimeZone != "UTC" {
+		t.Fatalf("invalid timezone persisted %q, want UTC", users.users["u-invalid"].TimeZone)
+	}
+	if len(pub.published) != 0 {
+		t.Fatalf("invalid timezone published %+v, want no event", pub.published)
 	}
 
 	if _, err := svc.PatchTimeZoneIfChanged(context.Background(), "missing", "Europe/Stockholm"); err == nil {

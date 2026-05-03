@@ -433,6 +433,7 @@ export function Sidebar({ onClose }: SidebarProps) {
   const [categoryCreateError, setCategoryCreateError] = useState('');
   const navigate = useNavigate();
   const location = useLocation();
+  const directoryActive = location.pathname === '/directory' || location.pathname.startsWith('/directory/');
   const [createChannelOpen, setCreateChannelOpen] = useState(false);
   const [inviteOpen, setInviteOpen] = useState(false);
   const [editProfileOpen, setEditProfileOpen] = useState(false);
@@ -1284,11 +1285,11 @@ export function Sidebar({ onClose }: SidebarProps) {
           {/* Directories link — same row geometry (px-2 py-1) as channel
               rows below so the eye doesn't catch on a height bump. */}
           <NavLink
-            to="/directory"
+            to="/directory/channels"
             onClick={onClose}
-            className={({ isActive }) =>
+            className={() =>
               `flex items-center gap-2 rounded-md px-2 py-1 text-sm transition-colors ${
-                isActive
+                directoryActive
                   ? 'bg-white/15 text-white font-semibold'
                   : 'text-gray-300 hover:bg-white/10 hover:text-white'
               }`
@@ -1377,8 +1378,8 @@ export function Sidebar({ onClose }: SidebarProps) {
           {/* Unified sidebar list: Favorites (mixed) → user categories
               (mixed) → Channels (uncategorised) → Direct Messages
               (always rendered as the bottom section; its "+" routes to
-              /conversations/new). Both channels and DMs/groups can live
-              in any user-defined category. */}
+              /conversations/new). User-defined categories contain channels;
+              DMs/groups can only appear here when favorited. */}
           <nav aria-label="Channels and direct messages">
             {sidebarSections.map((section) => {
               const isFavorites = section.key === SidebarSectionKeys.Favorites;

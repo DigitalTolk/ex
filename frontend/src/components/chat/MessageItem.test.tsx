@@ -67,6 +67,18 @@ describe('MessageItem', () => {
     expect(screen.getByText('Hello world')).toBeInTheDocument();
   });
 
+  it('does not underline the author name on hover', () => {
+    renderWithProviders(
+      <MessageItem
+        message={makeMessage()}
+        authorName="Alice Johnson"
+        isOwn={false}
+      />,
+    );
+
+    expect(screen.getByText('Alice Johnson')).not.toHaveClass('hover:underline');
+  });
+
   it('renders the online indicator on the author avatar', () => {
     renderWithProviders(
       <MessageItem
