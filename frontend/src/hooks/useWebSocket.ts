@@ -26,6 +26,7 @@ interface UseWebSocketOptions {
   onNotification?: WSCallback;
   onForceLogout?: WSCallback;
   onServerVersion?: WSCallback;
+  onPing?: WSCallback;
   onTyping?: WSCallback;
   // Fires when the socket re-opens after a previous failure. The
   // initial connection does NOT trigger this — only true reconnects.
@@ -124,6 +125,9 @@ export function useWebSocket(options: UseWebSocketOptions) {
               break;
             case EventType.ServerVersion:
               callbacksRef.current.onServerVersion?.(payload);
+              break;
+            case EventType.Ping:
+              callbacksRef.current.onPing?.(payload);
               break;
             case 'typing':
               callbacksRef.current.onTyping?.(payload);

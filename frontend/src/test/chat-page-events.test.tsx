@@ -5,6 +5,18 @@ import { MemoryRouter, Routes, Route, useLocation } from 'react-router-dom';
 import ChatPage from '@/pages/ChatPage';
 
 let capturedOptions: Record<string, ((data: unknown) => void) | boolean | undefined> = {};
+const authUserMock = vi.hoisted(() => ({
+  current: { id: 'u-me', email: 'a@b.c', displayName: 'Me', systemRole: 'member', status: 'active' } as {
+    id: string;
+    email: string;
+    displayName: string;
+    systemRole: string;
+    status: string;
+    timeZone?: string;
+  },
+}));
+const sendWSMock = vi.hoisted(() => vi.fn());
+const localTimeZoneMock = vi.hoisted(() => vi.fn(() => 'Europe/Stockholm'));
 
 vi.mock('@/hooks/useWebSocket', () => ({
   useWebSocket: (opts: Record<string, ((data: unknown) => void) | boolean | undefined>) => {
@@ -13,12 +25,14 @@ vi.mock('@/hooks/useWebSocket', () => ({
 }));
 
 const logoutMock = vi.fn().mockResolvedValue(undefined);
+const patchUserMock = vi.fn();
 vi.mock('@/context/AuthContext', () => ({
   useAuth: () => ({
-    user: { id: 'u-me', email: 'a@b.c', displayName: 'Me', systemRole: 'member', status: 'active' },
+    user: authUserMock.current,
     isAuthenticated: true,
     isLoading: false,
     logout: logoutMock,
+    patchUser: patchUserMock,
   }),
 }));
 
@@ -84,6 +98,18 @@ vi.mock('@/lib/api', () => ({
   ApiError: class extends Error { status = 0; },
 }));
 
+vi.mock('@/lib/ws-sender', () => ({
+  sendWS: (...args: unknown[]) => sendWSMock(...args),
+}));
+
+vi.mock('@/lib/user-time', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/user-time')>('@/lib/user-time');
+  return {
+    ...actual,
+    localTimeZone: () => localTimeZoneMock(),
+  };
+});
+
 vi.mock('@/context/ThemeContext', () => ({
   useTheme: () => ({ theme: 'system', setTheme: vi.fn() }),
   ThemeProvider: ({ children }: { children: React.ReactNode }) => children,
@@ -115,12 +141,23 @@ function renderAt(path: string, qcSeed?: (qc: QueryClient) => void) {
 describe('ChatPage WebSocket handlers', () => {
   beforeEach(() => {
     capturedOptions = {};
+    authUserMock.current = {
+      id: 'u-me',
+      email: 'a@b.c',
+      displayName: 'Me',
+      systemRole: 'member',
+      status: 'active',
+    };
     markChannelUnread.mockReset();
     markConversationUnread.mockReset();
     unhideConversation.mockReset();
     setUserOnline.mockReset();
     dispatchNotification.mockReset();
     setCurrentUserID.mockReset();
+    patchUserMock.mockReset();
+    sendWSMock.mockReset();
+    localTimeZoneMock.mockReset();
+    localTimeZoneMock.mockReturnValue('Europe/Stockholm');
   });
 
   // Helper for building a payload that satisfies the runtime
@@ -369,6 +406,52 @@ describe('ChatPage WebSocket handlers', () => {
     expect(() => {
       (capturedOptions.onUserUpdated as (d: unknown) => void)({});
     }).not.toThrow();
+  });
+
+  it('onUserUpdated patches the authenticated user so status clears across tabs', () => {
+    renderAt('/');
+    (capturedOptions.onUserUpdated as (d: unknown) => void)({
+      id: 'u-me',
+      userStatus: null,
+      timeZone: 'Europe/Stockholm',
+      lastSeenAt: '2026-05-03T10:00:00.000Z',
+    });
+    expect(patchUserMock).toHaveBeenCalledWith({
+      userStatus: undefined,
+      timeZone: 'Europe/Stockholm',
+      lastSeenAt: '2026-05-03T10:00:00.000Z',
+    });
+  });
+
+  it('onPing sends timezone.update on the first ping, then only after browser timezone changes', () => {
+    renderAt('/');
+
+    (capturedOptions.onPing as (d: unknown) => void)({});
+    expect(sendWSMock).toHaveBeenCalledWith({ type: 'timezone.update', timeZone: 'Europe/Stockholm' });
+
+    sendWSMock.mockClear();
+    (capturedOptions.onPing as (d: unknown) => void)({});
+    expect(sendWSMock).not.toHaveBeenCalled();
+
+    localTimeZoneMock.mockReturnValue('America/New_York');
+    (capturedOptions.onPing as (d: unknown) => void)({});
+    expect(sendWSMock).toHaveBeenCalledWith({ type: 'timezone.update', timeZone: 'America/New_York' });
+  });
+
+  it('onPing still sends on first ping even if the restored user already has a stored timezone', () => {
+    authUserMock.current = { ...authUserMock.current, timeZone: 'Europe/Stockholm' };
+    renderAt('/');
+
+    (capturedOptions.onPing as (d: unknown) => void)({});
+    expect(sendWSMock).toHaveBeenCalledWith({ type: 'timezone.update', timeZone: 'Europe/Stockholm' });
+  });
+
+  it('onPing skips timezone.update when the browser has no timezone', () => {
+    localTimeZoneMock.mockReturnValue('');
+    renderAt('/');
+
+    (capturedOptions.onPing as (d: unknown) => void)({});
+    expect(sendWSMock).not.toHaveBeenCalled();
   });
 
   it('onAttachmentDeleted invalidates the per-attachment cache; ignores missing id', () => {

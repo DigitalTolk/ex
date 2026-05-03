@@ -29,6 +29,7 @@ import {
   Trash2,
   ArrowDownAZ,
   Clock3,
+  CalendarClock,
 } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
@@ -41,6 +42,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { useAuth } from '@/context/AuthContext';
+import { usePresence } from '@/context/PresenceContext';
 import { useUnread } from '@/context/UnreadContext';
 import { useUserChannels } from '@/hooks/useChannels';
 import { useUserConversations } from '@/hooks/useConversations';
@@ -53,6 +55,8 @@ import { ConversationRow } from './ConversationRow';
 import { CreateChannelDialog } from '@/components/channels/CreateChannelDialog';
 import { InviteDialog } from '@/components/InviteDialog';
 import { EditProfileDialog } from '@/components/EditProfileDialog';
+import { UserStatusDialog } from '@/components/UserStatusDialog';
+import { UserStatusIndicator } from '@/components/UserStatusIndicator';
 import { AboutDialog } from '@/components/AboutDialog';
 import { EmojiManagerDialog } from '@/components/EmojiManagerDialog';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
@@ -432,8 +436,10 @@ export function Sidebar({ onClose }: SidebarProps) {
   const [createChannelOpen, setCreateChannelOpen] = useState(false);
   const [inviteOpen, setInviteOpen] = useState(false);
   const [editProfileOpen, setEditProfileOpen] = useState(false);
+  const [statusOpen, setStatusOpen] = useState(false);
   const [emojiManagerOpen, setEmojiManagerOpen] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
+  const { online } = usePresence();
   const userMenuTriggerRef = useRef<HTMLButtonElement>(null);
   // null = closed; otherwise the section being deleted. Modal confirm
   // replaces window.confirm so the prompt fits the rest of the app's
@@ -1212,6 +1218,7 @@ export function Sidebar({ onClose }: SidebarProps) {
               <span className="flex-1 truncate text-sm font-semibold text-white">
                 {user?.displayName}
               </span>
+              <UserStatusIndicator status={user?.userStatus} />
               {isAdmin(user?.systemRole) && (
                 <Badge variant="secondary" className="ml-1 text-[10px] px-1 py-0 bg-white/20 text-white border-0">
                   Admin
@@ -1223,6 +1230,10 @@ export function Sidebar({ onClose }: SidebarProps) {
             <DropdownMenuItem onClick={() => setEditProfileOpen(true)}>
               <UserIcon className="mr-2 h-4 w-4" />
               Edit profile
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => setStatusOpen(true)}>
+              <CalendarClock className="mr-2 h-4 w-4" />
+              Set status
             </DropdownMenuItem>
             {isAdmin(user?.systemRole) && (
               <DropdownMenuItem onClick={() => setInviteOpen(true)}>
@@ -1563,6 +1574,8 @@ export function Sidebar({ onClose }: SidebarProps) {
                         ? ((conv.participantIDs ?? []).find((p) => p !== user?.id) ?? conv.participantIDs?.[0])
                         : undefined;
                       const dmAvatarURL = otherID ? dmUserMap.get(otherID)?.avatarURL : undefined;
+                      const dmUserStatus = otherID ? dmUserMap.get(otherID)?.userStatus : undefined;
+                      const dmOnline = otherID ? online.has(otherID) : undefined;
                       return (
                         <div key={`conv-${conv.conversationID}`} className="relative">
                           {section.key === SidebarSectionKeys.Favorites &&
@@ -1578,6 +1591,8 @@ export function Sidebar({ onClose }: SidebarProps) {
                                   conversation={conv}
                                   hasUnread={unreadConversations.has(conv.conversationID)}
                                   dmAvatarURL={dmAvatarURL}
+                                  dmUserStatus={dmUserStatus}
+                                  dmOnline={dmOnline}
                                   onClose={onClose}
                                   onHide={hideConversation}
                                   draggable
@@ -1592,6 +1607,8 @@ export function Sidebar({ onClose }: SidebarProps) {
                               conversation={conv}
                               hasUnread={unreadConversations.has(conv.conversationID)}
                               dmAvatarURL={dmAvatarURL}
+                              dmUserStatus={dmUserStatus}
+                              dmOnline={dmOnline}
                               onClose={onClose}
                               onHide={hideConversation}
                             />
@@ -1626,6 +1643,11 @@ export function Sidebar({ onClose }: SidebarProps) {
       />
       <InviteDialog open={inviteOpen} onOpenChange={setInviteOpen} />
       <EditProfileDialog open={editProfileOpen} onOpenChange={setEditProfileOpen} />
+      <UserStatusDialog
+        key={`${user?.id ?? ''}:${user?.userStatus?.emoji ?? ''}:${user?.userStatus?.text ?? ''}:${user?.userStatus?.clearAt ?? ''}`}
+        open={statusOpen}
+        onOpenChange={setStatusOpen}
+      />
       <EmojiManagerDialog open={emojiManagerOpen} onOpenChange={setEmojiManagerOpen} />
       <AboutDialog
         open={aboutOpen}

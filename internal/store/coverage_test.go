@@ -666,6 +666,15 @@ func TestStores_NonexistentTable_ReturnsWrappedError(t *testing.T) {
 	if err := mss.Update(ctx, "ch-x", msg); err == nil {
 		t.Error("MessageStore.Update: expected error")
 	}
+	if _, _, err := mss.ListAfter(ctx, "ch-x", "m-x", 10); err == nil {
+		t.Error("MessageStore.ListAfter: expected error")
+	}
+	if _, _, _, err := mss.ListAround(ctx, "ch-x", "m-x", 10, 10); err == nil {
+		t.Error("MessageStore.ListAround: expected error")
+	}
+	if _, err := mss.IncrementReplyMetadata(ctx, "ch-x", "m-x", time.Now(), "u-x"); err == nil {
+		t.Error("MessageStore.IncrementReplyMetadata: expected error")
+	}
 	if err := mss.Delete(ctx, "ch-x", "m-x"); err == nil {
 		t.Error("MessageStore.Delete: expected error")
 	}
@@ -693,8 +702,24 @@ func TestStores_NonexistentTable_ReturnsWrappedError(t *testing.T) {
 	if _, err := convs.ListUserConversations(ctx, "u-a"); err == nil {
 		t.Error("ConversationStore.ListUserConversations: expected error")
 	}
+	if err := convs.Activate(ctx, "v-x", []string{"u-a", "u-b"}); err == nil {
+		t.Error("ConversationStore.Activate: expected error")
+	}
+	if err := convs.Touch(ctx, "v-x", []string{"u-a", "u-b"}, time.Now()); err == nil {
+		t.Error("ConversationStore.Touch: expected error")
+	}
+	if err := convs.SetUserConversationFavorite(ctx, "v-x", "u-a", true); err == nil {
+		t.Error("ConversationStore.SetUserConversationFavorite: expected error")
+	}
+	pos := 1
+	if err := convs.SetUserConversationCategory(ctx, "v-x", "u-a", "cat-x", &pos); err == nil {
+		t.Error("ConversationStore.SetUserConversationCategory: expected error")
+	}
 	if _, err := convs.IsMember(ctx, "v-x", "u-a"); err == nil {
 		t.Error("ConversationStore.IsMember: expected error")
+	}
+	if _, err := convs.ListAll(ctx); err == nil {
+		t.Error("ConversationStore.ListAll: expected error")
 	}
 
 	// Invite store

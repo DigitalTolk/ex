@@ -47,7 +47,6 @@ func (h *UserHandler) GetMe(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "deactivated", "account has been deactivated")
 		return
 	}
-
 	writeJSON(w, http.StatusOK, user)
 }
 
@@ -78,6 +77,57 @@ func (h *UserHandler) UpdateMe(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, user)
 }
 
+// SetMyUserStatus sets the authenticated user's visible status message.
+func (h *UserHandler) SetMyUserStatus(w http.ResponseWriter, r *http.Request) {
+	userID := middleware.UserIDFromContext(r.Context())
+	if userID == "" {
+		writeError(w, http.StatusUnauthorized, "unauthorized", "authentication required")
+		return
+	}
+
+	var body struct {
+		Emoji    string     `json:"emoji"`
+		Text     string     `json:"text"`
+		ClearAt  *time.Time `json:"clearAt"`
+		TimeZone string     `json:"timeZone"`
+	}
+	if err := readJSON(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", err.Error())
+		return
+	}
+	user, err := h.userSvc.SetUserStatusMessage(r.Context(), userID, &model.UserStatus{
+		Emoji:   body.Emoji,
+		Text:    body.Text,
+		ClearAt: body.ClearAt,
+	}, body.TimeZone)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "status_error", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, user)
+}
+
+// ClearMyUserStatus clears the authenticated user's visible status message.
+func (h *UserHandler) ClearMyUserStatus(w http.ResponseWriter, r *http.Request) {
+	userID := middleware.UserIDFromContext(r.Context())
+	if userID == "" {
+		writeError(w, http.StatusUnauthorized, "unauthorized", "authentication required")
+		return
+	}
+	var body struct {
+		TimeZone string `json:"timeZone"`
+	}
+	if r.Body != nil {
+		_ = readJSON(r, &body)
+	}
+	user, err := h.userSvc.SetUserStatusMessage(r.Context(), userID, nil, body.TimeZone)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "status_error", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, user)
+}
+
 // GetUser returns a user by ID. Non-admin callers receive limited fields.
 func (h *UserHandler) GetUser(w http.ResponseWriter, r *http.Request) {
 	id := pathParam(r, "id")
@@ -102,8 +152,12 @@ func (h *UserHandler) GetUser(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, JSON{
 			"id":          user.ID,
 			"displayName": user.DisplayName,
+			"email":       user.Email,
 			"avatarURL":   user.AvatarURL,
 			"status":      user.Status,
+			"userStatus":  user.UserStatus,
+			"timeZone":    user.TimeZone,
+			"lastSeenAt":  user.LastSeenAt,
 		})
 		return
 	}
@@ -144,8 +198,12 @@ func (h *UserHandler) BatchGetUsers(w http.ResponseWriter, r *http.Request) {
 		result = append(result, JSON{
 			"id":          u.ID,
 			"displayName": u.DisplayName,
+			"email":       u.Email,
 			"avatarURL":   u.AvatarURL,
 			"status":      u.Status,
+			"userStatus":  u.UserStatus,
+			"timeZone":    u.TimeZone,
+			"lastSeenAt":  u.LastSeenAt,
 		})
 	}
 	writeJSON(w, http.StatusOK, result)
@@ -198,6 +256,9 @@ func (h *UserHandler) ListUsers(w http.ResponseWriter, r *http.Request) {
 				"email":       u.Email,
 				"avatarURL":   u.AvatarURL,
 				"status":      u.Status,
+				"userStatus":  u.UserStatus,
+				"timeZone":    u.TimeZone,
+				"lastSeenAt":  u.LastSeenAt,
 			})
 		}
 		writeJSON(w, http.StatusOK, out)

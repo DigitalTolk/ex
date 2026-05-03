@@ -1,26 +1,29 @@
 import { NavLink } from 'react-router-dom';
 import { Star, MoreVertical } from 'lucide-react';
-import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
+import { UserAvatar } from '@/components/UserAvatar';
+import { UserStatusIndicator } from '@/components/UserStatusIndicator';
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { getInitials, firstNamesOnly } from '@/lib/format';
+import { firstNamesOnly } from '@/lib/format';
 import {
   useFavoriteConversation,
   useSetConversationCategory,
   useCategories,
 } from '@/hooks/useSidebar';
-import type { UserConversation, SidebarCategory } from '@/types';
+import type { UserConversation, SidebarCategory, UserStatus } from '@/types';
 import type { CSSProperties } from 'react';
 
 interface Props {
   conversation: UserConversation;
   hasUnread: boolean;
   dmAvatarURL?: string;
+  dmUserStatus?: UserStatus;
+  dmOnline?: boolean;
   onClose: () => void;
   onHide: (convID: string) => void;
   draggable?: boolean;
@@ -39,6 +42,8 @@ export function ConversationRow({
   conversation,
   hasUnread,
   dmAvatarURL,
+  dmUserStatus,
+  dmOnline,
   onClose,
   onHide,
   draggable,
@@ -110,12 +115,14 @@ export function ConversationRow({
             {participantCount}
           </Badge>
         ) : (
-          <Avatar className="h-5 w-5 shrink-0">
-            {dmAvatarURL && <AvatarImage src={dmAvatarURL} alt="" />}
-            <AvatarFallback className="text-[10px] bg-emerald-700 text-white">
-              {getInitials(conversation.displayName || '??')}
-            </AvatarFallback>
-          </Avatar>
+          <UserAvatar
+            displayName={conversation.displayName || '??'}
+            avatarURL={dmAvatarURL}
+            online={dmOnline}
+            userStatus={dmUserStatus}
+            className="h-5 w-5"
+            dotClassName="h-1.5 w-1.5"
+          />
         )}
         {/* DMs keep the full name; group rows show first-names only
             because the comma-joined list of full names ("Alice Smith,
@@ -125,6 +132,7 @@ export function ConversationRow({
             ? firstNamesOnly(conversation.displayName)
             : conversation.displayName}
         </span>
+        <UserStatusIndicator status={dmUserStatus} className="h-4 w-4" />
       </NavLink>
       {/* Star — visible on hover; persistent yellow when favorited.
           Positioned to match ChannelRow's right-7 / right-1 layout. */}

@@ -10,6 +10,10 @@ vi.mock('@/lib/api', () => ({
   apiFetch: (...args: unknown[]) => apiFetchMock(...args),
 }));
 
+vi.mock('@/hooks/useEmoji', () => ({
+  useEmojiMap: () => ({ data: {} }),
+}));
+
 vi.mock('@/components/ui/dropdown-menu', () => ({
   DropdownMenu: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
   DropdownMenuTrigger: (props: { children: React.ReactNode; 'data-testid'?: string; 'aria-label'?: string }) => (
@@ -66,6 +70,41 @@ describe('ConversationRow', () => {
   it('renders the conversation displayName', () => {
     renderRow(sampleConv);
     expect(screen.getByText('Bob')).toBeInTheDocument();
+  });
+
+  it('renders DM status on the row', () => {
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <BrowserRouter>
+          <ConversationRow
+            conversation={sampleConv}
+            hasUnread={false}
+            dmUserStatus={{ emoji: ':house:', text: 'Working from home' }}
+            onClose={vi.fn()}
+            onHide={vi.fn()}
+          />
+        </BrowserRouter>
+      </QueryClientProvider>,
+    );
+    expect(screen.getAllByLabelText(/Working from home/).length).toBeGreaterThan(0);
+  });
+
+  it('renders the online indicator on the DM avatar', () => {
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <BrowserRouter>
+          <ConversationRow
+            conversation={sampleConv}
+            hasUnread={false}
+            dmOnline
+            onClose={vi.fn()}
+            onHide={vi.fn()}
+          />
+        </BrowserRouter>
+      </QueryClientProvider>,
+    );
+
+    expect(screen.getByLabelText('Online')).toBeInTheDocument();
   });
 
   it('clicking the star toggles favorite via the conversation favorite endpoint', async () => {

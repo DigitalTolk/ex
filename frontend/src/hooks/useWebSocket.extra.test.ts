@@ -155,6 +155,7 @@ describe('useWebSocket - extra coverage', () => {
     ['notification.new', 'onNotification', { id: 'n-1' }],
     ['auth.force_logout', 'onForceLogout', { reason: 'admin-revoked' }],
     ['server.version', 'onServerVersion', { version: '1.2.3' }],
+    ['ping', 'onPing', { ts: 123 }],
     ['typing', 'onTyping', { userId: 'u-1' }],
   ] as const)('routes %s events to %s', (type, cbName, payload) => {
     const cb = vi.fn();

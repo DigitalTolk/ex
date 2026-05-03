@@ -71,6 +71,8 @@ func NewRouter(
 	// ------------------------------------------------------------------ Users
 	mux.Handle("GET /api/v1/users/me", middleware.WrapFunc(userH.GetMe, authMW))
 	mux.Handle("PATCH /api/v1/users/me", middleware.WrapFunc(userH.UpdateMe, authMW))
+	mux.Handle("PATCH /api/v1/users/me/status", middleware.WrapFunc(userH.SetMyUserStatus, authMW))
+	mux.Handle("DELETE /api/v1/users/me/status", middleware.WrapFunc(userH.ClearMyUserStatus, authMW))
 	mux.Handle("POST /api/v1/users/me/avatar/upload-url", middleware.WrapFunc(userH.CreateAvatarUploadURL, authMW))
 	mux.Handle("POST /api/v1/users/batch", middleware.WrapFunc(userH.BatchGetUsers, authMW))
 	mux.Handle("GET /api/v1/users/{id}", middleware.WrapFunc(userH.GetUser, authMW))

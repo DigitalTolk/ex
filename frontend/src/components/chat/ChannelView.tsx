@@ -176,7 +176,7 @@ export function ChannelView() {
     }
     if (usersData) {
       for (const u of usersData) {
-        m[u.id] = { displayName: u.displayName || 'Unknown', avatarURL: u.avatarURL, online: online.has(u.id) };
+        m[u.id] = { displayName: u.displayName || 'Unknown', avatarURL: u.avatarURL, userStatus: u.userStatus, online: online.has(u.id) };
       }
     }
     return m;

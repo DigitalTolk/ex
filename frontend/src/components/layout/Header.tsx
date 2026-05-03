@@ -1,10 +1,10 @@
 import { useState } from 'react';
 import { Users, ChevronDown, LogOut, Archive, Pencil, Bell, BellOff, Pin, Paperclip } from 'lucide-react';
-import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { ChannelIcon } from '@/components/ChannelIcon';
+import { UserAvatar } from '@/components/UserAvatar';
+import { UserStatusIndicator } from '@/components/UserStatusIndicator';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { getInitials } from '@/lib/format';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -17,7 +17,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import type { Channel } from '@/types';
+import type { Channel, UserStatus } from '@/types';
 
 interface HeaderProps {
   channel?: Channel;
@@ -25,12 +25,14 @@ interface HeaderProps {
   title?: string;
   subtitle?: string;
   avatarURL?: string;
+  avatarOnline?: boolean;
   // When true, always render an Avatar in non-channel mode — falling
   // back to initials when avatarURL is missing. Without this, switching
   // from a DM whose partner has an avatar to a DM whose partner has
   // none leaves the avatar slot blank. Pass false (the default) for
   // group conversations where no single avatar represents the room.
   showAvatar?: boolean;
+  userStatus?: UserStatus;
   onMembersClick?: () => void;
   channelId?: string;
   canEdit?: boolean;
@@ -53,7 +55,9 @@ export function Header({
   title,
   subtitle,
   avatarURL,
+  avatarOnline,
   showAvatar,
+  userStatus,
   onMembersClick,
   canEdit,
   onDescriptionSave,
@@ -130,15 +134,19 @@ export function Header({
               // resets when switching between DMs — otherwise a previous
               // load can keep the fallback hidden when the new partner
               // has no image.
-              <Avatar key={avatarURL ?? '__none__'} className="h-7 w-7">
-                {avatarURL && <AvatarImage src={avatarURL} alt="" />}
-                <AvatarFallback className="text-[10px]">
-                  {getInitials(displayTitle || '??')}
-                </AvatarFallback>
-              </Avatar>
+              <UserAvatar
+                key={avatarURL ?? '__none__'}
+                displayName={displayTitle || '??'}
+                avatarURL={avatarURL}
+                online={avatarOnline}
+                className="h-7 w-7"
+              />
             )}
             <div>
-              <h1 className="text-lg font-semibold">{displayTitle}</h1>
+              <div className="flex items-center gap-1.5">
+                <h1 className="text-lg font-semibold">{displayTitle}</h1>
+                {userStatus && <UserStatusIndicator status={userStatus} />}
+              </div>
               {subtitle && (
                 <p className="text-xs text-muted-foreground">{subtitle}</p>
               )}

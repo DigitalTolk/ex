@@ -67,6 +67,20 @@ describe('MessageItem', () => {
     expect(screen.getByText('Hello world')).toBeInTheDocument();
   });
 
+  it('renders the online indicator on the author avatar', () => {
+    renderWithProviders(
+      <MessageItem
+        message={makeMessage()}
+        authorName="Alice Johnson"
+        authorOnline
+        authorUserStatus={{ emoji: ':house:', text: 'Working from home' }}
+        isOwn={false}
+      />,
+    );
+
+    expect(screen.getByLabelText('Online')).toBeInTheDocument();
+  });
+
   it('shows formatted time', () => {
     renderWithProviders(
       <MessageItem

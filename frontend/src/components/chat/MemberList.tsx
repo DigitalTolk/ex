@@ -11,6 +11,7 @@ import { getInitials } from '@/lib/format';
 import { useQueryClient } from '@tanstack/react-query';
 import { UserHoverCard } from '@/components/UserHoverCard';
 import { UserAvatar } from '@/components/UserAvatar';
+import { UserStatusIndicator } from '@/components/UserStatusIndicator';
 import { canManageMembers, canRemoveMember, roleNumber, ChannelRole } from '@/lib/roles';
 import type { ChannelMembership } from '@/types';
 import type { UserMapEntry } from './MessageList';
@@ -197,6 +198,7 @@ export function MemberList({ members, channelId, currentUserId, currentUserRole,
                   userId={m.userID}
                   displayName={m.displayName || 'Unknown'}
                   avatarURL={avatarURL}
+                  userStatus={entry?.userStatus}
                   online={online}
                   currentUserId={currentUserId}
                 >
@@ -205,10 +207,14 @@ export function MemberList({ members, channelId, currentUserId, currentUserRole,
                       displayName={m.displayName || ''}
                       avatarURL={avatarURL}
                       online={online}
+                      userStatus={entry?.userStatus}
                     />
                   </span>
                 </UserHoverCard>
-                <span className="text-sm truncate flex-1">{m.displayName || 'Unknown'}</span>
+                <span className="flex min-w-0 flex-1 items-center gap-1">
+                  <span className="truncate text-sm">{m.displayName || 'Unknown'}</span>
+                  <UserStatusIndicator status={entry?.userStatus} />
+                </span>
                 {roleBadge(m.role)}
                 {m.userID !== currentUserId && canRemoveMember(currentUserRole, m.role) && (
                   <Button variant="ghost" size="icon" className="h-6 w-6 shrink-0 opacity-0 group-hover:opacity-100" onClick={() => handleRemove(m.userID)} aria-label={`Remove ${m.displayName}`}>

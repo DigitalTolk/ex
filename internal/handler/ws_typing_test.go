@@ -205,6 +205,30 @@ func TestWSHandler_HandleInbound_UnknownTypeIgnored(t *testing.T) {
 	}
 }
 
+func TestWSHandler_HandleInbound_TimeZoneUpdatePatchesUser(t *testing.T) {
+	users := newDataUserStoreForConv()
+	users.users["u-1"] = &model.User{
+		ID:          "u-1",
+		Email:       "u1@example.com",
+		DisplayName: "User 1",
+		SystemRole:  model.SystemRoleMember,
+		Status:      "active",
+		TimeZone:    "UTC",
+	}
+	h := &WSHandler{}
+	h.SetUserService(service.NewUserService(users, nil, nil, nil))
+
+	raw, _ := json.Marshal(map[string]string{
+		"type":     "timezone.update",
+		"timeZone": "Europe/Stockholm",
+	})
+	h.handleInbound(context.Background(), "u-1", raw)
+
+	if users.users["u-1"].TimeZone != "Europe/Stockholm" {
+		t.Fatalf("timezone = %q, want Europe/Stockholm", users.users["u-1"].TimeZone)
+	}
+}
+
 func TestWSHandler_HandleInbound_MalformedJSONIgnored(t *testing.T) {
 	h, pub := buildHandlerWithChannel(t)
 	h.handleInbound(context.Background(), "u-1", []byte("{not json"))

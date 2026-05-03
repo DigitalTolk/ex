@@ -108,4 +108,10 @@ describe('Header', () => {
     );
     expect(container.querySelector('[data-slot="avatar"]')).not.toBeNull();
   });
+
+  it('renders the online indicator on a DM header avatar', () => {
+    render(<Header title="Alice" showAvatar avatarOnline />);
+
+    expect(screen.getByLabelText('Online')).toBeInTheDocument();
+  });
 });

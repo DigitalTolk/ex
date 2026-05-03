@@ -213,6 +213,30 @@ func TestAttachmentStore_Delete_Idempotent(t *testing.T) {
 	}
 }
 
+func TestAttachmentStore_SetDimensions(t *testing.T) {
+	db := setupDynamoDB(t)
+	s := NewAttachmentStore(db)
+	ctx := context.Background()
+
+	a := makeAttachment("att-dims", "hash-dims", "dims.png")
+	if err := s.Create(ctx, a); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := s.SetDimensions(ctx, a.ID, 640, 480); err != nil {
+		t.Fatalf("SetDimensions: %v", err)
+	}
+	got, err := s.GetByID(ctx, a.ID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if got.Width != 640 || got.Height != 480 {
+		t.Fatalf("dimensions = %dx%d, want 640x480", got.Width, got.Height)
+	}
+	if err := s.SetDimensions(ctx, "att-missing", 1, 1); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing SetDimensions err = %v, want ErrNotFound", err)
+	}
+}
+
 func TestAttachmentStore_KeyHelpers(t *testing.T) {
 	if got := attachmentPK("a1"); got != "ATT#a1" {
 		t.Errorf("attachmentPK = %q, want %q", got, "ATT#a1")
@@ -246,6 +270,9 @@ func TestAttachmentStore_NonexistentTable(t *testing.T) {
 	}
 	if _, err := s.RemoveRef(ctx, "att-bk", "msg-x"); err == nil {
 		t.Error("RemoveRef: expected error")
+	}
+	if err := s.SetDimensions(ctx, "att-bk", 1, 1); err == nil {
+		t.Error("SetDimensions: expected error")
 	}
 	if err := s.Delete(ctx, "att-bk"); err == nil {
 		t.Error("Delete: expected error")
@@ -675,6 +702,50 @@ func TestConversationStore_Activate(t *testing.T) {
 	}
 	if !userConvs[0].Activated {
 		t.Error("expected UserConversation.Activated=true after Activate")
+	}
+}
+
+func TestConversationStore_Touch(t *testing.T) {
+	db := setupDynamoDB(t)
+	cs := NewConversationStore(db)
+	ctx := context.Background()
+
+	initial := time.Now().Add(-time.Hour).Truncate(time.Millisecond)
+	touchedAt := time.Now().Truncate(time.Millisecond)
+	conv := &model.Conversation{
+		ID:             "conv-touch",
+		Type:           model.ConversationTypeDM,
+		ParticipantIDs: []string{"u-touch-a", "u-touch-b"},
+		CreatedBy:      "u-touch-a",
+		CreatedAt:      initial,
+		UpdatedAt:      initial,
+	}
+	members := []*model.UserConversation{
+		{UserID: "u-touch-a", ConversationID: "conv-touch", Type: model.ConversationTypeDM, DisplayName: "User B", JoinedAt: initial, UpdatedAt: initial},
+		{UserID: "u-touch-b", ConversationID: "conv-touch", Type: model.ConversationTypeDM, DisplayName: "User A", JoinedAt: initial, UpdatedAt: initial},
+	}
+	if err := cs.Create(ctx, conv, members); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := cs.Touch(ctx, conv.ID, conv.ParticipantIDs, touchedAt); err != nil {
+		t.Fatalf("Touch: %v", err)
+	}
+	got, err := cs.GetByID(ctx, conv.ID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if !got.UpdatedAt.Equal(touchedAt) {
+		t.Fatalf("conversation UpdatedAt = %s, want %s", got.UpdatedAt, touchedAt)
+	}
+	userConvs, err := cs.ListUserConversations(ctx, "u-touch-a")
+	if err != nil {
+		t.Fatalf("ListUserConversations: %v", err)
+	}
+	if len(userConvs) != 1 || !userConvs[0].UpdatedAt.Equal(touchedAt) {
+		t.Fatalf("user conversation UpdatedAt = %+v, want %s", userConvs, touchedAt)
+	}
+	if err := cs.Touch(ctx, "conv-missing", []string{"u-touch-a"}, touchedAt); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing Touch err = %v, want ErrNotFound", err)
 	}
 }
 

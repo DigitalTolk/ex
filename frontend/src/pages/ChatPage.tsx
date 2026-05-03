@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { Outlet, useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { AppLayout } from '@/components/layout/AppLayout';
@@ -9,6 +9,8 @@ import { useNotifications, type NotificationPayload } from '@/context/Notificati
 import { useTyping } from '@/context/TypingContext';
 import { useWebSocket } from '@/hooks/useWebSocket';
 import { setServerVersion } from '@/hooks/useServerVersion';
+import { sendWS } from '@/lib/ws-sender';
+import { localTimeZone } from '@/lib/user-time';
 import { slugify } from '@/lib/format';
 import {
   appendMessageToCache,
@@ -30,12 +32,13 @@ import {
 
 export default function ChatPage() {
   const { markChannelUnread, markConversationUnread, unhideConversation } = useUnread();
-  const { user, logout } = useAuth();
+  const { user, logout, patchUser } = useAuth();
   const { setUserOnline } = usePresence();
   const { dispatch: dispatchNotification, setCurrentUserID } = useNotifications();
   const { recordTyping, clearTyping, setSelfUserID } = useTyping();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
+  const reportedTimeZoneRef = useRef('');
 
   useEffect(() => {
     setCurrentUserID(user?.id ?? null);
@@ -153,10 +156,26 @@ export default function ChatPage() {
     onEmojiRemoved: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.emojis() });
     },
-    onUserUpdated: () => {
+    onUserUpdated: (data: unknown) => {
+      const updated = data as { id?: string; userStatus?: unknown; timeZone?: string; lastSeenAt?: string } | undefined;
+      if (updated?.id) {
+        queryClient.invalidateQueries({ queryKey: queryKeys.user(updated.id) });
+      }
+      const currentUser = user;
+      if (updated?.id && currentUser && updated.id === currentUser.id) {
+        patchUser({
+          ...(Object.prototype.hasOwnProperty.call(updated, 'userStatus')
+            ? { userStatus: updated.userStatus === null ? undefined : updated.userStatus as typeof currentUser.userStatus }
+            : {}),
+          ...(updated.timeZone !== undefined ? { timeZone: updated.timeZone } : {}),
+          ...(updated.lastSeenAt !== undefined ? { lastSeenAt: updated.lastSeenAt } : {}),
+        });
+      }
       // Avatar/displayName changed for some user — invalidate user batches and
       // member lists so all open views refresh stale presigned avatar URLs.
       queryClient.invalidateQueries({ queryKey: queryKeys.usersBatch() });
+      queryClient.invalidateQueries({ queryKey: queryKeys.allUsers() });
+      queryClient.invalidateQueries({ queryKey: ['searchUsers'] });
       queryClient.invalidateQueries({ queryKey: queryKeys.channelMembers() });
       queryClient.invalidateQueries({ queryKey: queryKeys.userChannels() });
       queryClient.invalidateQueries({ queryKey: queryKeys.userConversations() });
@@ -189,6 +208,12 @@ export default function ChatPage() {
       const evt = parseServerVersion(data);
       if (!evt) return;
       setServerVersion(evt.version);
+    },
+    onPing: () => {
+      const detected = localTimeZone();
+      if (!detected || detected === reportedTimeZoneRef.current) return;
+      reportedTimeZoneRef.current = detected;
+      sendWS({ type: 'timezone.update', timeZone: detected });
     },
     onForceLogout: () => {
       // Server tells us this session must end (admin disabled the account

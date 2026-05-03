@@ -6,9 +6,17 @@ export interface User {
   systemRole: 'admin' | 'member' | 'guest';
   authProvider?: 'oidc' | 'guest';
   emojiSkinTone?: '' | 'light' | 'medium_light' | 'medium' | 'medium_dark' | 'dark';
+  userStatus?: UserStatus;
+  timeZone?: string;
   status: string;
   online?: boolean;
   lastSeenAt?: string;
+}
+
+export interface UserStatus {
+  emoji: string;
+  text: string;
+  clearAt?: string;
 }
 
 export interface Channel {

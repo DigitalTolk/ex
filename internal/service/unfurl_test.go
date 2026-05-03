@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -252,7 +254,9 @@ type fakeImageStore struct {
 	headCalls int
 	putCalls  int
 	signCalls int
+	failHead  bool
 	failPut   bool
+	failSign  bool
 }
 
 func newFakeImageStore() *fakeImageStore {
@@ -265,6 +269,9 @@ func newFakeImageStore() *fakeImageStore {
 
 func (f *fakeImageStore) HeadObject(_ context.Context, key string) (bool, error) {
 	f.headCalls++
+	if f.failHead {
+		return false, errors.New("head failed")
+	}
 	return f.existing[key], nil
 }
 
@@ -281,6 +288,9 @@ func (f *fakeImageStore) PutObject(_ context.Context, key, contentType string, b
 
 func (f *fakeImageStore) PresignedGetURL(_ context.Context, key string, _ time.Duration) (string, error) {
 	f.signCalls++
+	if f.failSign {
+		return "", errors.New("sign failed")
+	}
 	return "https://s3.example/" + key + "?sig=abc", nil
 }
 func (f *fakeImageStore) GetObject(_ context.Context, key string) (io.ReadCloser, string, int64, time.Time, error) {
@@ -491,4 +501,114 @@ func TestUnfurlService_ImageProxyPutFailureClearsImage(t *testing.T) {
 	if got.Image != "" {
 		t.Errorf("Image = %q, want \"\" when S3 PUT fails", got.Image)
 	}
+}
+
+func TestUnfurlService_ProxyImage_DirectErrorBranches(t *testing.T) {
+	svc := newLoopbackUnfurlService(nil)
+	store := newFakeImageStore()
+	svc.SetImageStore(store)
+
+	for _, imageURL := range []string{"://bad-url", "/relative.png"} {
+		preview := &UnfurlPreview{Image: imageURL}
+		svc.proxyImage(context.Background(), preview)
+		if preview.Image != "" {
+			t.Fatalf("invalid image %q left Image=%q, want empty", imageURL, preview.Image)
+		}
+	}
+
+	svc.skipURLValidation = false
+	preview := &UnfurlPreview{Image: "http://127.0.0.1/social.png"}
+	svc.proxyImage(context.Background(), preview)
+	if preview.Image != "" {
+		t.Fatalf("private image URL left Image=%q, want empty", preview.Image)
+	}
+	svc.skipURLValidation = true
+
+	store.failHead = true
+	preview = &UnfurlPreview{Image: "https://example.com/social.png"}
+	svc.proxyImage(context.Background(), preview)
+	if preview.Image != "" {
+		t.Fatalf("head failure left Image=%q, want empty", preview.Image)
+	}
+
+	store.failHead = false
+	store.existing[unfurlImageKey("https://example.com/social.png")] = true
+	store.failSign = true
+	preview = &UnfurlPreview{Image: "https://example.com/social.png"}
+	svc.proxyImage(context.Background(), preview)
+	if preview.Image != "" {
+		t.Fatalf("sign failure left Image=%q, want empty", preview.Image)
+	}
+}
+
+func TestUnfurlService_ProxyImage_UsesStableMediaURLWhenConfigured(t *testing.T) {
+	svc := newLoopbackUnfurlService(nil)
+	store := newFakeImageStore()
+	imageURL := "https://example.com/social.png"
+	store.existing[unfurlImageKey(imageURL)] = true
+	svc.SetImageStore(store)
+	svc.SetMediaURLCache(newFakeMediaCache())
+
+	preview := &UnfurlPreview{Image: imageURL}
+	svc.proxyImage(context.Background(), preview)
+	if !strings.HasPrefix(preview.Image, "/api/v1/media/") {
+		t.Fatalf("Image = %q, want stable media URL", preview.Image)
+	}
+	if store.signCalls != 0 {
+		t.Fatalf("signCalls = %d, want 0 when stable media URL succeeds", store.signCalls)
+	}
+}
+
+func TestUnfurlService_FetchUpstreamImage_ErrorBranches(t *testing.T) {
+	svc := newLoopbackUnfurlService(nil)
+
+	statusSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "nope", http.StatusBadGateway)
+	}))
+	defer statusSrv.Close()
+	if _, _, err := svc.fetchUpstreamImage(context.Background(), statusSrv.URL); err == nil {
+		t.Fatal("expected status error")
+	}
+
+	emptySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+	}))
+	defer emptySrv.Close()
+	if _, _, err := svc.fetchUpstreamImage(context.Background(), emptySrv.URL); err == nil {
+		t.Fatal("expected empty image error")
+	}
+}
+
+func TestUnfurlService_ValidationAndScrapeFallbacks(t *testing.T) {
+	if err := validateURL(nil); err == nil {
+		t.Fatal("expected nil URL validation error")
+	}
+	if err := validateURL(mustParseURL(t, "https:///missing-host")); err == nil {
+		t.Fatal("expected empty host validation error")
+	}
+	if isPublicIP(net.ParseIP("224.0.0.1")) {
+		t.Fatal("multicast IP must not be public")
+	}
+
+	linkPreview := scrapePreview(`<link rel="image_src" href="/cover.png">`, "https://example.com/post")
+	if linkPreview.Image != "https://example.com/cover.png" {
+		t.Fatalf("link image = %q", linkPreview.Image)
+	}
+	imgPreview := scrapePreview(`<img src="/photo.png">`, "https://example.com/post")
+	if imgPreview.Image != "https://example.com/photo.png" {
+		t.Fatalf("img image = %q", imgPreview.Image)
+	}
+	pixelPreview := scrapePreview(`<img src="/1x1.gif">`, "https://example.com/post")
+	if pixelPreview.Image != "" {
+		t.Fatalf("tracking pixel image = %q, want empty", pixelPreview.Image)
+	}
+}
+
+func mustParseURL(t *testing.T, raw string) *url.URL {
+	t.Helper()
+	u, err := url.Parse(raw)
+	if err != nil {
+		t.Fatalf("parse url: %v", err)
+	}
+	return u
 }
