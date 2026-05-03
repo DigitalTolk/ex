@@ -89,6 +89,37 @@ func TestUnfurlService_RejectsEmptyURL(t *testing.T) {
 	}
 }
 
+func TestNewUnfurlService_ConfiguresClientAndSetters(t *testing.T) {
+	cache := newFakeUnfurlCache()
+	svc := NewUnfurlService(cache)
+	if svc.cache != cache {
+		t.Fatal("NewUnfurlService did not retain cache")
+	}
+	if svc.client == nil || svc.client.Timeout != unfurlTimeout {
+		t.Fatalf("client = %+v, want configured HTTP client", svc.client)
+	}
+
+	imageStore := newFakeImageStore()
+	svc.SetImageStore(imageStore)
+	if svc.imgStore != imageStore {
+		t.Fatal("SetImageStore did not retain store")
+	}
+	mediaCache := newFakeMediaCache()
+	svc.SetMediaURLCache(mediaCache)
+	if svc.mediaCache != mediaCache {
+		t.Fatal("SetMediaURLCache did not retain cache")
+	}
+
+	redirectReq := &http.Request{URL: mustParseURL(t, "https://example.com/next")}
+	if err := svc.client.CheckRedirect(redirectReq, make([]*http.Request, unfurlMaxRedirect)); err == nil {
+		t.Fatal("expected redirect limit error")
+	}
+	privateReq := &http.Request{URL: mustParseURL(t, "http://127.0.0.1/private")}
+	if err := svc.client.CheckRedirect(privateReq, nil); err == nil {
+		t.Fatal("expected redirect URL validation error")
+	}
+}
+
 // fakeUnfurlCache mirrors the slim UnfurlCache interface used by
 // UnfurlService — JSON-serialises the value the way RedisCache does.
 type fakeUnfurlCache struct {

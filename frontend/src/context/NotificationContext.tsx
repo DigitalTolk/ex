@@ -144,13 +144,13 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     if (n.parentType === 'channel' && n.kind === 'message') {
       return;
     }
-    // Mentions and thread replies still escalate when the parent is on
-    // screen — a mention can scroll out of view, a thread reply lives in
-    // a side panel that may not be open.
+    // Regular DM notifications are suppressed only for this visible tab's
+    // active conversation. Background tabs/windows still need the alert.
     if (
       n.kind === 'message' &&
       activeParentRef.current &&
-      activeParentRef.current === n.parentID
+      activeParentRef.current === n.parentID &&
+      document.visibilityState === 'visible'
     ) {
       return;
     }

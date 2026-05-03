@@ -72,6 +72,14 @@ type MessageStore interface {
 	IncrementReplyMetadata(ctx context.Context, parentID, msgID string, replyTime time.Time, replyAuthorID string) (*model.Message, error)
 }
 
+// ThreadFollowStore defines per-user follow/unfollow overrides for threads.
+type ThreadFollowStore interface {
+	SetThreadFollow(ctx context.Context, follow *model.ThreadFollow) error
+	GetThreadFollow(ctx context.Context, userID, parentID, threadRootID string) (*model.ThreadFollow, error)
+	ListUserThreadFollows(ctx context.Context, userID string) ([]*model.ThreadFollow, error)
+	ListThreadFollows(ctx context.Context, parentID, threadRootID string) ([]*model.ThreadFollow, error)
+}
+
 // DraftStore defines persistence operations for server-side message drafts.
 type DraftStore interface {
 	Upsert(ctx context.Context, draft *model.MessageDraft) error

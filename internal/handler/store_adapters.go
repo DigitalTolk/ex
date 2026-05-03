@@ -182,6 +182,35 @@ func (a *MessageStoreAdapter) IncrementReplyMetadata(ctx context.Context, parent
 	return a.s.IncrementReplyMetadata(ctx, parentID, msgID, replyTime, replyAuthorID)
 }
 
+type threadFollowBacking interface {
+	Set(ctx context.Context, follow *model.ThreadFollow) error
+	Get(ctx context.Context, userID, parentID, threadRootID string) (*model.ThreadFollow, error)
+	ListUser(ctx context.Context, userID string) ([]*model.ThreadFollow, error)
+	ListThread(ctx context.Context, parentID, threadRootID string) ([]*model.ThreadFollow, error)
+}
+
+// ThreadFollowStoreAdapter wraps store.ThreadFollowStoreImpl to satisfy service.ThreadFollowStore.
+type ThreadFollowStoreAdapter struct {
+	s threadFollowBacking
+}
+
+func NewThreadFollowStoreAdapter(s *store.ThreadFollowStoreImpl) *ThreadFollowStoreAdapter {
+	return &ThreadFollowStoreAdapter{s: s}
+}
+
+func (a *ThreadFollowStoreAdapter) SetThreadFollow(ctx context.Context, follow *model.ThreadFollow) error {
+	return a.s.Set(ctx, follow)
+}
+func (a *ThreadFollowStoreAdapter) GetThreadFollow(ctx context.Context, userID, parentID, threadRootID string) (*model.ThreadFollow, error) {
+	return a.s.Get(ctx, userID, parentID, threadRootID)
+}
+func (a *ThreadFollowStoreAdapter) ListUserThreadFollows(ctx context.Context, userID string) ([]*model.ThreadFollow, error) {
+	return a.s.ListUser(ctx, userID)
+}
+func (a *ThreadFollowStoreAdapter) ListThreadFollows(ctx context.Context, parentID, threadRootID string) ([]*model.ThreadFollow, error) {
+	return a.s.ListThread(ctx, parentID, threadRootID)
+}
+
 // InviteStoreAdapter wraps store.InviteStoreImpl to satisfy service.InviteStore.
 type InviteStoreAdapter struct {
 	s *store.InviteStoreImpl

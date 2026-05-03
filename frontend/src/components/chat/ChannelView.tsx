@@ -335,9 +335,7 @@ export function ChannelView() {
           />
         </MessageDropZone>
       </div>
-      {activeTag ? (
-        <TagSearchPanel />
-      ) : effectiveThreadRootID ? (
+      {effectiveThreadRootID ? (
         <ThreadPanel
           channelId={channel?.id}
           threadRootID={effectiveThreadRootID}
@@ -349,6 +347,8 @@ export function ChannelView() {
           }
           anchorRevision={navKey}
         />
+      ) : activeTag ? (
+        <TagSearchPanel />
       ) : showPinned ? (
         <PinnedPanel
           channelId={channel?.id}

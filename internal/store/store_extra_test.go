@@ -1073,3 +1073,100 @@ func TestConversationStore_SetUserConversationFavorite_NonexistentTable(t *testi
 		t.Error("expected error on missing table")
 	}
 }
+
+func TestThreadFollowStore_SetGetAndList(t *testing.T) {
+	db := setupDynamoDB(t)
+	s := NewThreadFollowStore(db)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Millisecond)
+
+	follow := &model.ThreadFollow{
+		UserID: "u-1", ParentID: "ch-1", ParentType: "channel", ThreadRootID: "root-1", Following: true, UpdatedAt: now,
+	}
+	if err := s.Set(ctx, follow); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	unfollow := &model.ThreadFollow{
+		UserID: "u-2", ParentID: "ch-1", ParentType: "channel", ThreadRootID: "root-1", Following: false, UpdatedAt: now.Add(time.Second),
+	}
+	if err := s.Set(ctx, unfollow); err != nil {
+		t.Fatalf("Set unfollow: %v", err)
+	}
+
+	got, err := s.Get(ctx, "u-1", "ch-1", "root-1")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if !got.Following || got.ParentType != "channel" {
+		t.Fatalf("unexpected follow: %+v", got)
+	}
+
+	userRows, err := s.ListUser(ctx, "u-1")
+	if err != nil {
+		t.Fatalf("ListUser: %v", err)
+	}
+	if len(userRows) != 1 || userRows[0].ThreadRootID != "root-1" {
+		t.Fatalf("ListUser = %+v, want one root-1 row", userRows)
+	}
+
+	threadRows, err := s.ListThread(ctx, "ch-1", "root-1")
+	if err != nil {
+		t.Fatalf("ListThread: %v", err)
+	}
+	if len(threadRows) != 2 {
+		t.Fatalf("ListThread count = %d, want 2", len(threadRows))
+	}
+	byUser := map[string]bool{}
+	for _, row := range threadRows {
+		byUser[row.UserID] = row.Following
+	}
+	if byUser["u-1"] != true || byUser["u-2"] != false {
+		t.Fatalf("ListThread rows = %+v", threadRows)
+	}
+}
+
+func TestThreadFollowStore_GetNotFound(t *testing.T) {
+	db := setupDynamoDB(t)
+	s := NewThreadFollowStore(db)
+	_, err := s.Get(context.Background(), "u-missing", "ch-1", "root-1")
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Get missing error = %v, want ErrNotFound", err)
+	}
+}
+
+func TestThreadFollowStore_EmptyListsAndNonexistentTable(t *testing.T) {
+	db := setupDynamoDB(t)
+	s := NewThreadFollowStore(db)
+	ctx := context.Background()
+
+	userRows, err := s.ListUser(ctx, "u-empty")
+	if err != nil {
+		t.Fatalf("ListUser empty: %v", err)
+	}
+	if len(userRows) != 0 {
+		t.Fatalf("ListUser empty len = %d, want 0", len(userRows))
+	}
+	threadRows, err := s.ListThread(ctx, "ch-empty", "root-empty")
+	if err != nil {
+		t.Fatalf("ListThread empty: %v", err)
+	}
+	if len(threadRows) != 0 {
+		t.Fatalf("ListThread empty len = %d, want 0", len(threadRows))
+	}
+
+	broken := NewThreadFollowStore(&DB{Client: db.Client, Table: "missing-thread-follow-table"})
+	if err := broken.Set(ctx, &model.ThreadFollow{
+		UserID: "u-1", ParentID: "ch-1", ParentType: "channel", ThreadRootID: "root-1", Following: true, UpdatedAt: time.Now(),
+	}); err == nil {
+		t.Fatal("Set on nonexistent table: expected error")
+	}
+	if _, err := broken.Get(ctx, "u-1", "ch-1", "root-1"); err == nil {
+		t.Fatal("Get on nonexistent table: expected error")
+	}
+	if _, err := broken.ListUser(ctx, "u-1"); err == nil {
+		t.Fatal("ListUser on nonexistent table: expected error")
+	}
+	if _, err := broken.ListThread(ctx, "ch-1", "root-1"); err == nil {
+		t.Fatal("ListThread on nonexistent table: expected error")
+	}
+}

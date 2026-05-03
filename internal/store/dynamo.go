@@ -211,6 +211,12 @@ func settingsSK() string { return "WORKSPACE" }
 // single Query returns every category the user owns.
 func categorySK(id string) string { return "CATEGORY#" + id }
 func draftSK(id string) string    { return "DRAFT#" + id }
+func threadFollowSK(parentID, threadRootID string) string {
+	return "THREAD#" + parentID + "#" + threadRootID
+}
+func threadFollowGSI1PK(parentID, threadRootID string) string {
+	return "THREADFOLLOW#" + parentID + "#" + threadRootID
+}
 
 func categoryNameSK(name string) string {
 	return "CATEGORYNAME#" + strings.ToLower(strings.TrimSpace(name))

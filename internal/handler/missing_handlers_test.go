@@ -1071,6 +1071,218 @@ func TestThreadHandler_List_OK(t *testing.T) {
 	}
 }
 
+type dataThreadFollowStore struct {
+	rows map[string]*model.ThreadFollow
+}
+
+func newDataThreadFollowStore() *dataThreadFollowStore {
+	return &dataThreadFollowStore{rows: make(map[string]*model.ThreadFollow)}
+}
+
+func dataThreadFollowKey(userID, parentID, threadRootID string) string {
+	return userID + "#" + parentID + "#" + threadRootID
+}
+
+func (s *dataThreadFollowStore) SetThreadFollow(_ context.Context, follow *model.ThreadFollow) error {
+	cp := *follow
+	s.rows[dataThreadFollowKey(follow.UserID, follow.ParentID, follow.ThreadRootID)] = &cp
+	return nil
+}
+
+func (s *dataThreadFollowStore) GetThreadFollow(_ context.Context, userID, parentID, threadRootID string) (*model.ThreadFollow, error) {
+	f, ok := s.rows[dataThreadFollowKey(userID, parentID, threadRootID)]
+	if !ok {
+		return nil, errors.New("not found")
+	}
+	cp := *f
+	return &cp, nil
+}
+
+func (s *dataThreadFollowStore) ListUserThreadFollows(_ context.Context, userID string) ([]*model.ThreadFollow, error) {
+	out := make([]*model.ThreadFollow, 0)
+	for _, f := range s.rows {
+		if f.UserID == userID {
+			cp := *f
+			out = append(out, &cp)
+		}
+	}
+	return out, nil
+}
+
+func (s *dataThreadFollowStore) ListThreadFollows(_ context.Context, parentID, threadRootID string) ([]*model.ThreadFollow, error) {
+	out := make([]*model.ThreadFollow, 0)
+	for _, f := range s.rows {
+		if f.ParentID == parentID && f.ThreadRootID == threadRootID {
+			cp := *f
+			out = append(out, &cp)
+		}
+	}
+	return out, nil
+}
+
+func (s *dataThreadFollowStore) Set(ctx context.Context, follow *model.ThreadFollow) error {
+	return s.SetThreadFollow(ctx, follow)
+}
+
+func (s *dataThreadFollowStore) Get(ctx context.Context, userID, parentID, threadRootID string) (*model.ThreadFollow, error) {
+	return s.GetThreadFollow(ctx, userID, parentID, threadRootID)
+}
+
+func (s *dataThreadFollowStore) ListUser(ctx context.Context, userID string) ([]*model.ThreadFollow, error) {
+	return s.ListUserThreadFollows(ctx, userID)
+}
+
+func (s *dataThreadFollowStore) ListThread(ctx context.Context, parentID, threadRootID string) ([]*model.ThreadFollow, error) {
+	return s.ListThreadFollows(ctx, parentID, threadRootID)
+}
+
+func TestThreadHandler_FollowAndUnfollow(t *testing.T) {
+	memberships := newDataMembershipStore()
+	memberships.memberships["ch-thread#u-thread"] = &model.ChannelMembership{ChannelID: "ch-thread", UserID: "u-thread"}
+	wrapper := &dataMembershipStoreWithUserChans{
+		dataMembershipStore: memberships,
+		userChans: map[string][]*model.UserChannel{
+			"u-thread": {{UserID: "u-thread", ChannelID: "ch-thread", ChannelName: "thread-chan"}},
+		},
+	}
+	messages := newDataMessageStore()
+	messages.messages["ch-thread#root"] = &model.Message{
+		ID: "root", ParentID: "ch-thread", AuthorID: "u-other", Body: "root msg", CreatedAt: time.Now(),
+	}
+	follows := newDataThreadFollowStore()
+	messageSvc := service.NewMessageService(messages, wrapper, newDataConversationStore(), nil, &mockBrokerForHandler{})
+	messageSvc.SetThreadFollowStore(follows)
+	jwtMgr := auth.NewJWTManager("thread-follow-secret", 15*time.Minute, 720*time.Hour)
+	h := NewThreadHandler(messageSvc)
+	user := &model.User{ID: "u-thread", Email: "th@x.com", SystemRole: model.SystemRoleMember}
+	token := makeTokenForUser(jwtMgr, user)
+
+	handler := middleware.Auth(jwtMgr)(http.HandlerFunc(h.Follow))
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/threads/channels/ch-thread/root/follow", nil)
+	req.SetPathValue("parentType", "channels")
+	req.SetPathValue("parentID", "ch-thread")
+	req.SetPathValue("threadRootID", "root")
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("follow status = %d, want %d (body: %s)", rec.Code, http.StatusNoContent, rec.Body.String())
+	}
+	if got := follows.rows[dataThreadFollowKey("u-thread", "ch-thread", "root")]; got == nil || !got.Following {
+		t.Fatalf("follow row = %+v, want Following=true", got)
+	}
+
+	handler = middleware.Auth(jwtMgr)(http.HandlerFunc(h.Unfollow))
+	req = httptest.NewRequest(http.MethodDelete, "/api/v1/threads/channels/ch-thread/root/follow", nil)
+	req.SetPathValue("parentType", "channels")
+	req.SetPathValue("parentID", "ch-thread")
+	req.SetPathValue("threadRootID", "root")
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("unfollow status = %d, want %d (body: %s)", rec.Code, http.StatusNoContent, rec.Body.String())
+	}
+	if got := follows.rows[dataThreadFollowKey("u-thread", "ch-thread", "root")]; got == nil || got.Following {
+		t.Fatalf("follow row = %+v, want Following=false", got)
+	}
+}
+
+func TestThreadHandler_Follow_UnauthenticatedAndBadTarget(t *testing.T) {
+	messageSvc := service.NewMessageService(newDataMessageStore(), newDataMembershipStore(), newDataConversationStore(), nil, &mockBrokerForHandler{})
+	messageSvc.SetThreadFollowStore(newDataThreadFollowStore())
+	h := NewThreadHandler(messageSvc)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/threads/channels/ch/root/follow", nil)
+	h.Follow(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("unauth status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	}
+
+	jwtMgr := auth.NewJWTManager("thread-follow-bad-secret", 15*time.Minute, 720*time.Hour)
+	user := &model.User{ID: "u-thread", Email: "th@x.com", SystemRole: model.SystemRoleMember}
+	token := makeTokenForUser(jwtMgr, user)
+	handler := middleware.Auth(jwtMgr)(http.HandlerFunc(h.Follow))
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPut, "/api/v1/threads/bogus/ch/root/follow", nil)
+	req.SetPathValue("parentType", "bogus")
+	req.SetPathValue("parentID", "ch")
+	req.SetPathValue("threadRootID", "root")
+	req.Header.Set("Authorization", "Bearer "+token)
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("bad target status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPut, "/api/v1/threads/channels//root/follow", nil)
+	req.SetPathValue("parentType", "channels")
+	req.SetPathValue("parentID", "")
+	req.SetPathValue("threadRootID", "root")
+	req.Header.Set("Authorization", "Bearer "+token)
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("empty parent status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+}
+
+func TestNormalizeThreadParentType(t *testing.T) {
+	tests := []struct {
+		raw  string
+		want string
+		ok   bool
+	}{
+		{raw: "channel", want: service.ParentChannel, ok: true},
+		{raw: "channels", want: service.ParentChannel, ok: true},
+		{raw: "conversation", want: service.ParentConversation, ok: true},
+		{raw: "conversations", want: service.ParentConversation, ok: true},
+		{raw: "bogus", ok: false},
+	}
+	for _, tt := range tests {
+		got, ok := normalizeThreadParentType(tt.raw)
+		if ok != tt.ok || got != tt.want {
+			t.Fatalf("normalizeThreadParentType(%q) = %q, %v; want %q, %v", tt.raw, got, ok, tt.want, tt.ok)
+		}
+	}
+}
+
+func TestThreadFollowStoreAdapter_Delegates(t *testing.T) {
+	backing := newDataThreadFollowStore()
+	if NewThreadFollowStoreAdapter(nil) == nil {
+		t.Fatal("NewThreadFollowStoreAdapter returned nil")
+	}
+	adapter := &ThreadFollowStoreAdapter{s: backing}
+	ctx := context.Background()
+	follow := &model.ThreadFollow{
+		UserID: "u-1", ParentID: "ch-1", ParentType: service.ParentChannel, ThreadRootID: "root-1", Following: true, UpdatedAt: time.Now(),
+	}
+	if err := adapter.SetThreadFollow(ctx, follow); err != nil {
+		t.Fatalf("SetThreadFollow: %v", err)
+	}
+	got, err := adapter.GetThreadFollow(ctx, "u-1", "ch-1", "root-1")
+	if err != nil {
+		t.Fatalf("GetThreadFollow: %v", err)
+	}
+	if !got.Following {
+		t.Fatalf("Following = false, want true")
+	}
+	userRows, err := adapter.ListUserThreadFollows(ctx, "u-1")
+	if err != nil {
+		t.Fatalf("ListUserThreadFollows: %v", err)
+	}
+	if len(userRows) != 1 {
+		t.Fatalf("ListUserThreadFollows len = %d, want 1", len(userRows))
+	}
+	threadRows, err := adapter.ListThreadFollows(ctx, "ch-1", "root-1")
+	if err != nil {
+		t.Fatalf("ListThreadFollows: %v", err)
+	}
+	if len(threadRows) != 1 {
+		t.Fatalf("ListThreadFollows len = %d, want 1", len(threadRows))
+	}
+}
+
 // erroringMembershipStore returns an error from ListUserChannels.
 type erroringMembershipStore struct {
 	*dataMembershipStore

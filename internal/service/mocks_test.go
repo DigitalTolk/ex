@@ -727,3 +727,56 @@ func (m *mockMessageStore) IncrementReplyMetadata(_ context.Context, parentID, m
 	msg.RecentReplyAuthorIDs = authors
 	return msg, nil
 }
+
+// --- Mock ThreadFollowStore ---
+
+type mockThreadFollowStore struct {
+	follows map[string]*model.ThreadFollow
+}
+
+func newMockThreadFollowStore() *mockThreadFollowStore {
+	return &mockThreadFollowStore{follows: make(map[string]*model.ThreadFollow)}
+}
+
+func threadFollowMockKey(userID, parentID, threadRootID string) string {
+	return userID + "#" + parentID + "#" + threadRootID
+}
+
+func (m *mockThreadFollowStore) SetThreadFollow(_ context.Context, follow *model.ThreadFollow) error {
+	cp := *follow
+	m.follows[threadFollowMockKey(follow.UserID, follow.ParentID, follow.ThreadRootID)] = &cp
+	return nil
+}
+
+func (m *mockThreadFollowStore) GetThreadFollow(_ context.Context, userID, parentID, threadRootID string) (*model.ThreadFollow, error) {
+	f, ok := m.follows[threadFollowMockKey(userID, parentID, threadRootID)]
+	if !ok {
+		return nil, store.ErrNotFound
+	}
+	cp := *f
+	return &cp, nil
+}
+
+func (m *mockThreadFollowStore) ListUserThreadFollows(_ context.Context, userID string) ([]*model.ThreadFollow, error) {
+	out := make([]*model.ThreadFollow, 0)
+	for _, f := range m.follows {
+		if f.UserID != userID {
+			continue
+		}
+		cp := *f
+		out = append(out, &cp)
+	}
+	return out, nil
+}
+
+func (m *mockThreadFollowStore) ListThreadFollows(_ context.Context, parentID, threadRootID string) ([]*model.ThreadFollow, error) {
+	out := make([]*model.ThreadFollow, 0)
+	for _, f := range m.follows {
+		if f.ParentID != parentID || f.ThreadRootID != threadRootID {
+			continue
+		}
+		cp := *f
+		out = append(out, &cp)
+	}
+	return out, nil
+}

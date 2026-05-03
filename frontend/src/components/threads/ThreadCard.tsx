@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Globe, MessageSquare } from 'lucide-react';
+import { BellOff, Globe, MessageSquare } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 import { MessageItem } from '@/components/chat/MessageItem';
 import { MessageInput, type MessageInputHandle } from '@/components/chat/MessageInput';
 import { MessageDropZone } from '@/components/chat/MessageDropZone';
@@ -15,6 +16,7 @@ import {
   hasUnreadActivity,
   markThreadSeen,
   useThreadMessages,
+  useUnfollowThread,
   type ThreadSummary,
 } from '@/hooks/useThreads';
 
@@ -90,6 +92,7 @@ export function ThreadCard({ summary, title, deepLink, currentUserId }: ThreadCa
   );
   const { map: userMap } = useUsersBatch(userIDs);
   const presence = usePresence();
+  const unfollowThread = useUnfollowThread();
 
   // useSendMessage invalidates the same ['thread', parentPath, rootID]
   // key the hook above subscribes to, so a reply lands without an
@@ -166,7 +169,23 @@ export function ThreadCard({ summary, title, deepLink, currentUserId }: ThreadCa
         >
           {title}
         </Link>
-        <span className="ml-auto text-xs text-muted-foreground">
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="ml-auto h-7 gap-1 px-2 text-xs"
+          disabled={unfollowThread.isPending}
+          onClick={() => unfollowThread.mutate({
+            parentID: summary.parentID,
+            parentType: summary.parentType,
+            threadRootID: summary.threadRootID,
+          })}
+          aria-label="Unfollow thread"
+        >
+          <BellOff className="h-3.5 w-3.5" />
+          Unfollow
+        </Button>
+        <span className="text-xs text-muted-foreground">
           {summary.replyCount} {summary.replyCount === 1 ? 'reply' : 'replies'}
         </span>
       </header>
