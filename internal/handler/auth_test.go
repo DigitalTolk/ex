@@ -324,6 +324,46 @@ func TestRefreshTokenHandler_ValidCookie(t *testing.T) {
 	}
 }
 
+func TestRefreshTokenHandler_ValidHeader(t *testing.T) {
+	h, userStore, tokenStore := setupAuthHandler(t)
+
+	user := &model.User{
+		ID:          "user-header",
+		Email:       "header@example.com",
+		DisplayName: "Header User",
+		SystemRole:  model.SystemRoleMember,
+		Status:      "active",
+	}
+	userStore.users[user.ID] = user
+	userStore.emailIndex[user.Email] = user
+
+	jwtMgr := auth.NewJWTManager("test-handler-secret", 15*time.Minute, 720*time.Hour)
+	raw, hash, _ := jwtMgr.GenerateRefreshToken()
+	tokenStore.tokens[hash] = &model.RefreshToken{
+		TokenHash: hash,
+		UserID:    user.ID,
+		ExpiresAt: time.Now().Add(720 * time.Hour),
+		CreatedAt: time.Now(),
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/auth/refresh", nil)
+	req.Header.Set("X-Refresh-Token", raw)
+	rec := httptest.NewRecorder()
+
+	h.RefreshToken(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	var body map[string]string
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if body["accessToken"] == "" {
+		t.Error("expected non-empty accessToken in response")
+	}
+}
+
 func TestRefreshTokenHandler_InvalidToken(t *testing.T) {
 	h, _, _ := setupAuthHandler(t)
 
