@@ -1,8 +1,16 @@
-import { describe, it, expect, vi } from 'vitest';
+import { beforeEach, describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { BrowserRouter } from 'react-router-dom';
+import type { ReactElement } from 'react';
 import { Header } from './Header';
 import type { Channel } from '@/types';
+
+const apiFetchMock = vi.fn();
+vi.mock('@/lib/api', () => ({
+  apiFetch: (...args: unknown[]) => apiFetchMock(...args),
+}));
 
 function makeChannel(overrides: Partial<Channel> = {}): Channel {
   return {
@@ -17,7 +25,21 @@ function makeChannel(overrides: Partial<Channel> = {}): Channel {
   };
 }
 
+function renderHeaderWithProviders(ui: ReactElement) {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(
+    <QueryClientProvider client={qc}>
+      <BrowserRouter>{ui}</BrowserRouter>
+    </QueryClientProvider>,
+  );
+}
+
 describe('Header', () => {
+  beforeEach(() => {
+    apiFetchMock.mockReset();
+    apiFetchMock.mockResolvedValue({});
+  });
+
   it('renders channel name', () => {
     render(<Header channel={makeChannel({ name: 'general' })} />);
 
@@ -107,5 +129,68 @@ describe('Header', () => {
       <Header title="Alice" showAvatar avatarURL="https://example.com/a.png" />,
     );
     expect(container.querySelector('[data-slot="avatar"]')).not.toBeNull();
+  });
+
+  it('renders the online indicator on a DM header avatar', () => {
+    render(<Header title="Alice" showAvatar avatarOnline />);
+
+    expect(screen.getByLabelText('Online')).toBeInTheDocument();
+  });
+
+  it('opens the user hover card from a DM header title', async () => {
+    apiFetchMock.mockImplementation((url: string) => {
+      if (url === '/api/v1/users/u-alice') {
+        return Promise.resolve({
+          id: 'u-alice',
+          displayName: 'Alice',
+          email: 'alice@example.com',
+          status: 'active',
+          systemRole: 'member',
+        });
+      }
+      return Promise.resolve({});
+    });
+    const user = userEvent.setup();
+    renderHeaderWithProviders(<Header title="Alice" showAvatar userId="u-alice" currentUserId="u-me" />);
+
+    await user.click(screen.getByText('Alice'));
+    expect(await screen.findByRole('link', { name: 'alice@example.com' })).toHaveAttribute('href', 'mailto:alice@example.com');
+  });
+
+  it('opens the user hover card from a DM header avatar', async () => {
+    apiFetchMock.mockImplementation((url: string) => {
+      if (url === '/api/v1/users/u-alice') {
+        return Promise.resolve({
+          id: 'u-alice',
+          displayName: 'Alice',
+          email: 'alice@example.com',
+          status: 'active',
+          systemRole: 'member',
+        });
+      }
+      return Promise.resolve({});
+    });
+    const user = userEvent.setup();
+    const { container } = renderHeaderWithProviders(
+      <Header title="Alice" showAvatar userId="u-alice" currentUserId="u-me" />,
+    );
+
+    await user.click(container.querySelector('[data-slot="avatar"]') as HTMLElement);
+
+    expect(await screen.findByRole('link', { name: 'alice@example.com' })).toHaveAttribute('href', 'mailto:alice@example.com');
+  });
+
+  it('renders one status indicator in a DM header', () => {
+    renderHeaderWithProviders(
+      <Header
+        title="Alice"
+        showAvatar
+        userId="u-alice"
+        currentUserId="u-me"
+        userStatus={{ emoji: ':house:', text: 'Working from home' }}
+      />,
+    );
+
+    expect(screen.getAllByLabelText(/Working from home/)).toHaveLength(1);
   });
 });

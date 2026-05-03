@@ -66,6 +66,105 @@ func TestGetMe(t *testing.T) {
 	}
 }
 
+func TestSetMyUserStatus_OKAndClear(t *testing.T) {
+	h, userStore, jwtMgr := setupUserHandler(t)
+	user := &model.User{
+		ID:          "status-me",
+		Email:       "status@example.com",
+		DisplayName: "Status User",
+		SystemRole:  model.SystemRoleMember,
+		Status:      "active",
+	}
+	userStore.users[user.ID] = user
+	userStore.emailIndex[user.Email] = user
+	token := makeTokenForUser(jwtMgr, user)
+
+	setHandler := middleware.Auth(jwtMgr)(http.HandlerFunc(h.SetMyUserStatus))
+	clearAt := time.Now().Add(time.Hour).UTC().Format(time.RFC3339)
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/users/me/status", strings.NewReader(
+		fmt.Sprintf(`{"emoji":":house:","text":"Working from home","clearAt":%q,"timeZone":"Europe/Stockholm"}`, clearAt),
+	))
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	setHandler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("set status = %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if userStore.users[user.ID].UserStatus == nil || userStore.users[user.ID].UserStatus.Text != "Working from home" {
+		t.Fatalf("UserStatus = %+v, want Working from home", userStore.users[user.ID].UserStatus)
+	}
+	if userStore.users[user.ID].TimeZone != "Europe/Stockholm" {
+		t.Errorf("TimeZone = %q, want Europe/Stockholm", userStore.users[user.ID].TimeZone)
+	}
+
+	clearHandler := middleware.Auth(jwtMgr)(http.HandlerFunc(h.ClearMyUserStatus))
+	req = httptest.NewRequest(http.MethodDelete, "/api/v1/users/me/status", strings.NewReader(`{"timeZone":"Europe/Stockholm"}`))
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec = httptest.NewRecorder()
+	clearHandler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("clear status = %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if userStore.users[user.ID].UserStatus != nil {
+		t.Fatalf("UserStatus = %+v, want nil", userStore.users[user.ID].UserStatus)
+	}
+}
+
+func TestSetMyUserStatus_Errors(t *testing.T) {
+	h, userStore, jwtMgr := setupUserHandler(t)
+	user := &model.User{ID: "status-errors", Email: "status-errors@example.com", DisplayName: "Status Errors", SystemRole: model.SystemRoleMember, Status: "active"}
+	userStore.users[user.ID] = user
+	userStore.emailIndex[user.Email] = user
+	token := makeTokenForUser(jwtMgr, user)
+	handler := middleware.Auth(jwtMgr)(http.HandlerFunc(h.SetMyUserStatus))
+
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/users/me/status", strings.NewReader(`{`))
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("invalid body status = %d, want 400; body: %s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodPatch, "/api/v1/users/me/status", strings.NewReader(`{"emoji":"","text":"Busy"}`))
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("validation status = %d, want 400; body: %s", rec.Code, rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	h.SetMyUserStatus(rec, httptest.NewRequest(http.MethodPatch, "/api/v1/users/me/status", strings.NewReader(`{}`)))
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated status = %d, want 401", rec.Code)
+	}
+}
+
+func TestClearMyUserStatus_Errors(t *testing.T) {
+	h, userStore, jwtMgr := setupUserHandler(t)
+	user := &model.User{ID: "clear-errors", Email: "clear-errors@example.com", DisplayName: "Clear Errors", SystemRole: model.SystemRoleMember, Status: "active"}
+	userStore.users[user.ID] = user
+	userStore.emailIndex[user.Email] = user
+	token := makeTokenForUser(jwtMgr, user)
+	handler := middleware.Auth(jwtMgr)(http.HandlerFunc(h.ClearMyUserStatus))
+
+	delete(userStore.users, user.ID)
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/users/me/status", strings.NewReader(`{"timeZone":"Europe/Stockholm"}`))
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("missing user status = %d, want 400; body: %s", rec.Code, rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	h.ClearMyUserStatus(rec, httptest.NewRequest(http.MethodDelete, "/api/v1/users/me/status", nil))
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated status = %d, want 401", rec.Code)
+	}
+}
+
 // A deactivated user must be locked out at /users/me so AuthContext on the
 // frontend gets a 401 → falls back to /login. The JWT itself is still
 // cryptographically valid (we don't have a JWT denylist), so the handler
@@ -284,9 +383,8 @@ func TestGetUser_Found_NonAdmin(t *testing.T) {
 	if got["id"] != "target-1" {
 		t.Errorf("id = %v, want target-1", got["id"])
 	}
-	// Should not have email field (limited view).
-	if _, hasEmail := got["email"]; hasEmail {
-		t.Error("non-admin should not see email field")
+	if got["email"] != "target@example.com" {
+		t.Errorf("email = %v, want target@example.com", got["email"])
 	}
 }
 
@@ -387,11 +485,12 @@ func TestBatchGetUsers(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("expected 2 users, got %d", len(got))
 	}
-	// Should return limited fields (no email).
+	// Should return the shared user card fields.
 	for _, u := range got {
 		if _, hasEmail := u["email"]; hasEmail {
-			t.Error("batch should return limited fields, got email")
+			continue
 		}
+		t.Error("batch should include email for user cards")
 	}
 }
 

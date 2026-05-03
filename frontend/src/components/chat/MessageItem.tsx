@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Pencil, Trash2, Smile, MessageSquareReply, MoreHorizontal, Pin, PinOff, Link as LinkIcon } from 'lucide-react';
-import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import { Pencil, Trash2, SmilePlus, MessageSquareReply, MoreHorizontal, Pin, PinOff, Link as LinkIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { MessageInput, type MessageInputValue } from '@/components/chat/MessageInput';
 import type { DraftAttachment } from '@/components/chat/AttachmentChip';
@@ -18,6 +17,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { EmojiPicker } from '@/components/EmojiPicker';
 import { UserHoverCard } from '@/components/UserHoverCard';
+import { UserAvatar } from '@/components/UserAvatar';
 import { useEditMessage, useDeleteMessage, useToggleReaction, useSetPinned } from '@/hooks/useMessages';
 import { useEmojiMap } from '@/hooks/useEmoji';
 import { renderMarkdown } from '@/lib/markdown';
@@ -28,9 +28,9 @@ import { MessageAttachments } from '@/components/chat/MessageAttachments';
 import { ThreadActionBar } from '@/components/chat/ThreadActionBar';
 import { UnfurlCard } from '@/components/chat/UnfurlCard';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
-import { extractURLs, getInitials, formatLongDateTime } from '@/lib/format';
+import { extractURLs, formatLongDateTime } from '@/lib/format';
 import { dispatchFocusComposer, registerEditMessageHandler } from '@/lib/window-events';
-import type { Message } from '@/types';
+import type { Message, UserStatus } from '@/types';
 
 // Module-level Set so MessageList/ThreadPanel don't need to thread a
 // context through every callsite. Listeners are MessageItems with an
@@ -48,6 +48,7 @@ interface MessageItemProps {
   message: Message;
   authorName: string;
   authorAvatarURL?: string;
+  authorUserStatus?: UserStatus;
   authorOnline?: boolean;
   isOwn: boolean;
   channelId?: string;
@@ -59,7 +60,7 @@ interface MessageItemProps {
   // Optional pre-resolved user lookup. When supplied, ThreadActionBar
   // reads display names + avatars from here instead of issuing its own
   // /users/batch fetch — avoids N+1 batches across many thread bars.
-  userMap?: { get(id: string): { displayName: string; avatarURL?: string } | undefined };
+  userMap?: { get(id: string): { displayName: string; avatarURL?: string; userStatus?: UserStatus } | undefined };
   // When true, renders the deep-link highlight ring. Driven by the
   // surrounding list's anchor effect; the surrounding list also
   // clears the flag after the flash window so the ring auto-removes.
@@ -77,6 +78,7 @@ export function MessageItem({
   message,
   authorName,
   authorAvatarURL,
+  authorUserStatus,
   authorOnline,
   isOwn,
   channelId,
@@ -299,15 +301,18 @@ export function MessageItem({
         userId={message.authorID}
         displayName={authorName}
         avatarURL={authorAvatarURL}
+        userStatus={authorUserStatus}
         online={authorOnline}
         currentUserId={currentUserId}
+        showInlineStatus={false}
       >
-        <Avatar className="mt-0.5 h-9 w-9 shrink-0 cursor-pointer">
-          {authorAvatarURL && <AvatarImage src={authorAvatarURL} alt="" />}
-          <AvatarFallback className="bg-primary/10 text-xs">
-            {getInitials(authorName)}
-          </AvatarFallback>
-        </Avatar>
+        <UserAvatar
+          displayName={authorName}
+          avatarURL={authorAvatarURL}
+          online={authorOnline}
+          className="mt-0.5 h-9 w-9 cursor-pointer"
+          dotClassName="h-2.5 w-2.5"
+        />
       </UserHoverCard>
 
       <div className="flex-1 min-w-0">
@@ -316,10 +321,11 @@ export function MessageItem({
             userId={message.authorID}
             displayName={authorName}
             avatarURL={authorAvatarURL}
+            userStatus={authorUserStatus}
             online={authorOnline}
             currentUserId={currentUserId}
           >
-            <span className="text-sm font-semibold cursor-pointer hover:underline">{authorName}</span>
+            <span className="cursor-pointer text-sm font-semibold">{authorName}</span>
           </UserHoverCard>
           <Tooltip>
             <TooltipTrigger
@@ -426,7 +432,7 @@ export function MessageItem({
               />
             )}
             {reactionEntries.length > 0 && (
-              <div className="mt-1 flex flex-wrap gap-1" role="list" aria-label="Reactions">
+              <div className="mt-1 flex flex-wrap items-center gap-1" role="list" aria-label="Reactions">
                 {reactionEntries.map(([emoji, users]) => {
                   const reactedByMe = currentUserId ? users.includes(currentUserId) : false;
                   return (
@@ -463,6 +469,19 @@ export function MessageItem({
                     </Tooltip>
                   );
                 })}
+                <EmojiPicker
+                  onSelect={handleReact}
+                  trigger={
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      className="h-6 w-6 rounded-full text-muted-foreground hover:text-foreground"
+                      aria-label="Add another reaction"
+                    >
+                      <SmilePlus className="h-3.5 w-3.5" />
+                    </Button>
+                  }
+                />
               </div>
             )}
             {!inThread && message.replyCount !== undefined && message.replyCount > 0 && (
@@ -492,7 +511,7 @@ export function MessageItem({
             onSelect={handleReact}
             trigger={
               <Button size="icon" variant="ghost" className="h-7 w-7" aria-label="Add reaction">
-                <Smile className="h-3.5 w-3.5" />
+                <SmilePlus className="h-3.5 w-3.5" />
               </Button>
             }
           />

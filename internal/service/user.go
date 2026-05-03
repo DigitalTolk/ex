@@ -92,6 +92,8 @@ func indexUser(ctx context.Context, idx UserIndexer, u *model.User) {
 // caches user data via React Query, so this can be short.
 const avatarURLTTL = 24 * time.Hour
 
+const expiredStatusSweepBatchSize = 200
+
 // resolveAvatar populates user.AvatarURL from user.AvatarKey using the signer.
 // Mutates the user in place. No-op if no signer or no key. The URL is
 // cached by S3 key so repeat resolutions hand out the SAME URL —
@@ -132,11 +134,15 @@ func backfillAuthProvider(user *model.User) {
 	}
 }
 
+func normalizeUserProfile(user *model.User) {
+	backfillAuthProvider(user)
+}
+
 // GetByID returns a user by ID, checking the cache first.
 func (s *UserService) GetByID(ctx context.Context, id string) (*model.User, error) {
 	if s.cache != nil {
 		if user, err := s.cache.GetUser(ctx, id); err == nil {
-			backfillAuthProvider(user)
+			normalizeUserProfile(user)
 			s.resolveAvatar(ctx, user)
 			return user, nil
 		}
@@ -146,7 +152,7 @@ func (s *UserService) GetByID(ctx context.Context, id string) (*model.User, erro
 	if err != nil {
 		return nil, fmt.Errorf("user: get by id: %w", err)
 	}
-	backfillAuthProvider(user)
+	normalizeUserProfile(user)
 
 	if s.cache != nil {
 		_ = s.cache.SetUser(ctx, user)
@@ -161,6 +167,7 @@ func (s *UserService) GetByEmail(ctx context.Context, email string) (*model.User
 	if err != nil {
 		return nil, fmt.Errorf("user: get by email: %w", err)
 	}
+	normalizeUserProfile(user)
 	s.resolveAvatar(ctx, user)
 	return user, nil
 }
@@ -225,6 +232,175 @@ func (s *UserService) Update(ctx context.Context, userID string, displayName, av
 	return user, nil
 }
 
+// SetUserStatusMessage sets or clears the caller-visible status message.
+func (s *UserService) SetUserStatusMessage(ctx context.Context, userID string, status *model.UserStatus, timeZone string) (*model.User, error) {
+	user, err := s.users.GetUser(ctx, userID)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, fmt.Errorf("user: not found: %w", err)
+		}
+		return nil, fmt.Errorf("user: get: %w", err)
+	}
+	normalizeUserProfile(user)
+	if status != nil {
+		status.Emoji = strings.TrimSpace(status.Emoji)
+		status.Text = strings.TrimSpace(status.Text)
+		if status.Emoji == "" {
+			return nil, errors.New("user: status emoji is required")
+		}
+		if status.Text == "" {
+			return nil, errors.New("user: status text is required")
+		}
+		if len([]rune(status.Text)) > 32 {
+			return nil, errors.New("user: status text must be 32 characters or fewer")
+		}
+	}
+	user.UserStatus = status
+	if normalizedTimeZone, ok := normalizeWritableTimeZone(timeZone); ok {
+		user.TimeZone = normalizedTimeZone
+	}
+	user.UpdatedAt = time.Now()
+	if err := s.users.UpdateUser(ctx, user); err != nil {
+		return nil, fmt.Errorf("user: update status message: %w", err)
+	}
+	if s.cache != nil {
+		_ = s.cache.Delete(ctx, "user:"+userID)
+	}
+	s.resolveAvatar(ctx, user)
+	events.Publish(ctx, s.publisher, pubsub.UserEvents(), events.EventUserUpdated, map[string]any{
+		"id":         user.ID,
+		"userStatus": user.UserStatus,
+		"timeZone":   user.TimeZone,
+	})
+	s.indexUser(ctx, user)
+	return user, nil
+}
+
+// ClearExpiredStatuses clears persisted statuses whose ClearAt has passed and
+// publishes user.updated so every connected client removes the status without
+// waiting for that user profile to be read again.
+func (s *UserService) ClearExpiredStatuses(ctx context.Context, now time.Time, limit int) (int, error) {
+	if limit <= 0 {
+		limit = expiredStatusSweepBatchSize
+	}
+
+	cleared := 0
+	cursor := ""
+	for {
+		users, nextCursor, err := s.users.ListUsers(ctx, limit, cursor)
+		if err != nil {
+			return cleared, fmt.Errorf("user: list users for expired statuses: %w", err)
+		}
+		for _, listedUser := range users {
+			if listedUser == nil || listedUser.UserStatus == nil || listedUser.UserStatus.ClearAt == nil || listedUser.UserStatus.ClearAt.After(now) {
+				continue
+			}
+
+			user, err := s.users.GetUser(ctx, listedUser.ID)
+			if err != nil {
+				return cleared, fmt.Errorf("user: get expired status user: %w", err)
+			}
+			if user == nil || user.UserStatus == nil || user.UserStatus.ClearAt == nil || user.UserStatus.ClearAt.After(now) {
+				continue
+			}
+
+			user.UserStatus = nil
+			user.UpdatedAt = now
+			if err := s.users.UpdateUser(ctx, user); err != nil {
+				return cleared, fmt.Errorf("user: clear expired status: %w", err)
+			}
+			if s.cache != nil {
+				_ = s.cache.Delete(ctx, "user:"+user.ID)
+			}
+			events.Publish(ctx, s.publisher, pubsub.UserEvents(), events.EventUserUpdated, map[string]any{
+				"id":         user.ID,
+				"userStatus": nil,
+				"timeZone":   user.TimeZone,
+			})
+			s.indexUser(ctx, user)
+			cleared++
+		}
+		if nextCursor == "" {
+			return cleared, nil
+		}
+		cursor = nextCursor
+	}
+}
+
+// RunExpiredStatusSweeper periodically clears expired statuses from the
+// persisted user profiles. Because the expiration timestamp lives in the user
+// record, restarting the server only delays the next sweep; it does not lose
+// scheduled clears.
+func (s *UserService) RunExpiredStatusSweeper(ctx context.Context, interval time.Duration, limit int) {
+	if interval <= 0 {
+		interval = time.Minute
+	}
+	run := func() {
+		cleared, err := s.ClearExpiredStatuses(ctx, time.Now(), limit)
+		if err != nil {
+			slog.Warn("user status sweeper failed", "error", err)
+			return
+		}
+		if cleared > 0 {
+			slog.Info("user status sweeper cleared expired statuses", "count", cleared)
+		}
+	}
+
+	run()
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			run()
+		}
+	}
+}
+
+// PatchTimeZoneIfChanged records the browser's current local time zone when it
+// differs from the stored profile value. It is intentionally quiet on no-op
+// calls because /users/me is fetched often.
+func (s *UserService) PatchTimeZoneIfChanged(ctx context.Context, userID, timeZone string) (*model.User, error) {
+	timeZone, ok := normalizeWritableTimeZone(timeZone)
+	if !ok || timeZone == "" {
+		return nil, nil
+	}
+	user, err := s.users.GetUser(ctx, userID)
+	if err != nil {
+		return nil, fmt.Errorf("user: get: %w", err)
+	}
+	if user.TimeZone == timeZone {
+		return user, nil
+	}
+	user.TimeZone = timeZone
+	user.UpdatedAt = time.Now()
+	if err := s.users.UpdateUser(ctx, user); err != nil {
+		return nil, fmt.Errorf("user: update time zone: %w", err)
+	}
+	if s.cache != nil {
+		_ = s.cache.Delete(ctx, "user:"+userID)
+	}
+	events.Publish(ctx, s.publisher, pubsub.UserEvents(), events.EventUserUpdated, map[string]any{
+		"id":       user.ID,
+		"timeZone": user.TimeZone,
+	})
+	s.indexUser(ctx, user)
+	return user, nil
+}
+
+func normalizeWritableTimeZone(timeZone string) (string, bool) {
+	timeZone = strings.TrimSpace(timeZone)
+	if timeZone == "" {
+		return "", true
+	}
+	if _, err := time.LoadLocation(timeZone); err != nil {
+		return "", false
+	}
+	return timeZone, true
+}
+
 // GetBatch returns users by a list of IDs. Missing users are silently skipped.
 // AvatarURLs are resolved on each user via GetByID.
 func (s *UserService) GetBatch(ctx context.Context, ids []string) ([]*model.User, error) {
@@ -255,6 +431,7 @@ func (s *UserService) Search(ctx context.Context, query string, limit int) ([]*m
 				if err != nil || u == nil {
 					continue
 				}
+				normalizeUserProfile(u)
 				s.resolveAvatar(ctx, u)
 				out = append(out, u)
 			}
@@ -272,6 +449,7 @@ func (s *UserService) Search(ctx context.Context, query string, limit int) ([]*m
 	for _, u := range all {
 		if strings.Contains(strings.ToLower(u.DisplayName), query) ||
 			strings.Contains(strings.ToLower(u.Email), query) {
+			normalizeUserProfile(u)
 			s.resolveAvatar(ctx, u)
 			results = append(results, u)
 			if len(results) >= limit {
@@ -377,6 +555,7 @@ func (s *UserService) List(ctx context.Context, limit int, cursor string) ([]*mo
 		return nil, "", fmt.Errorf("user: list: %w", err)
 	}
 	for _, u := range users {
+		normalizeUserProfile(u)
 		s.resolveAvatar(ctx, u)
 	}
 	return users, nextCursor, nil

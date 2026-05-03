@@ -30,8 +30,16 @@ type User struct {
 	AuthProvider  AuthProvider `json:"authProvider,omitempty" dynamodbav:"authProvider,omitempty"`
 	PasswordHash  string       `json:"-" dynamodbav:"passwordHash,omitempty"`
 	EmojiSkinTone string       `json:"emojiSkinTone,omitempty" dynamodbav:"emojiSkinTone,omitempty"`
+	UserStatus    *UserStatus  `json:"userStatus,omitempty" dynamodbav:"userStatus,omitempty"`
+	TimeZone      string       `json:"timeZone,omitempty" dynamodbav:"timeZone,omitempty"`
 	Status        string       `json:"status" dynamodbav:"status"` // "active", "deactivated"
 	LastSeenAt    *time.Time   `json:"lastSeenAt,omitempty" dynamodbav:"lastSeenAt,omitempty"`
 	CreatedAt     time.Time    `json:"createdAt" dynamodbav:"createdAt"`
 	UpdatedAt     time.Time    `json:"updatedAt" dynamodbav:"updatedAt"`
+}
+
+type UserStatus struct {
+	Emoji   string     `json:"emoji" dynamodbav:"emoji"`
+	Text    string     `json:"text" dynamodbav:"text"`
+	ClearAt *time.Time `json:"clearAt,omitempty" dynamodbav:"clearAt,omitempty"`
 }

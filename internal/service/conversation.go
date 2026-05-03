@@ -347,10 +347,12 @@ func (s *ConversationService) SetFavorite(ctx context.Context, userID, convID st
 	return nil
 }
 
-// SetCategory assigns the DM/group to one of the user's sidebar
-// categories (or clears it when categoryID is empty). Validation that
-// the categoryID belongs to the user is the handler's responsibility.
+// SetCategory only stores the user-side sidebar position for a favorite
+// DM/group. Conversations cannot be assigned to user-defined categories.
 func (s *ConversationService) SetCategory(ctx context.Context, userID, convID, categoryID string, sidebarPosition *int) error {
+	if categoryID != "" {
+		return errors.New("conversation: categories are not supported")
+	}
 	if !s.IsParticipant(ctx, userID, convID) {
 		return errors.New("conversation: not a participant")
 	}

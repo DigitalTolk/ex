@@ -201,9 +201,9 @@ func (h *SidebarHandler) SetConversationFavorite(w http.ResponseWriter, r *http.
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// SetConversationCategory assigns the DM/group to a sidebar category
-// (or clears it when categoryID is empty). The same SidebarCategory
-// namespace is shared with channels.
+// SetConversationCategory stores the user-side favorite sidebar position.
+// DMs/groups cannot be assigned to arbitrary categories; they only appear in
+// Favorites when the favorite flag is set.
 func (h *SidebarHandler) SetConversationCategory(w http.ResponseWriter, r *http.Request) {
 	if h.convSvc == nil {
 		writeError(w, http.StatusServiceUnavailable, "no_service", "conversation service unavailable")
@@ -221,6 +221,10 @@ func (h *SidebarHandler) SetConversationCategory(w http.ResponseWriter, r *http.
 	}
 	if err := readJSON(r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_body", err.Error())
+		return
+	}
+	if body.CategoryID != "" {
+		writeError(w, http.StatusBadRequest, "invalid_category", "conversations can only be favorited, not moved into categories")
 		return
 	}
 	if !h.validateUserCategory(w, r, userID, body.CategoryID) {

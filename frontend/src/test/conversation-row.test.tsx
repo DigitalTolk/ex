@@ -3,11 +3,16 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { BrowserRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ConversationRow } from '@/components/layout/ConversationRow';
+import type { ComponentProps } from 'react';
 import type { UserConversation } from '@/types';
 
 const apiFetchMock = vi.fn();
 vi.mock('@/lib/api', () => ({
   apiFetch: (...args: unknown[]) => apiFetchMock(...args),
+}));
+
+vi.mock('@/hooks/useEmoji', () => ({
+  useEmojiMap: () => ({ data: {} }),
 }));
 
 vi.mock('@/components/ui/dropdown-menu', () => ({
@@ -28,7 +33,7 @@ vi.mock('@/components/ui/dropdown-menu', () => ({
   ),
 }));
 
-function renderRow(conv: UserConversation) {
+function renderRow(conv: UserConversation, props: Partial<ComponentProps<typeof ConversationRow>> = {}) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={qc}>
@@ -38,6 +43,7 @@ function renderRow(conv: UserConversation) {
           hasUnread={false}
           onClose={vi.fn()}
           onHide={vi.fn()}
+          {...props}
         />
       </BrowserRouter>
     </QueryClientProvider>,
@@ -66,6 +72,41 @@ describe('ConversationRow', () => {
   it('renders the conversation displayName', () => {
     renderRow(sampleConv);
     expect(screen.getByText('Bob')).toBeInTheDocument();
+  });
+
+  it('renders DM status on the row', () => {
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <BrowserRouter>
+          <ConversationRow
+            conversation={sampleConv}
+            hasUnread={false}
+            dmUserStatus={{ emoji: ':house:', text: 'Working from home' }}
+            onClose={vi.fn()}
+            onHide={vi.fn()}
+          />
+        </BrowserRouter>
+      </QueryClientProvider>,
+    );
+    expect(screen.getAllByLabelText(/Working from home/).length).toBeGreaterThan(0);
+  });
+
+  it('renders the online indicator on the DM avatar', () => {
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <BrowserRouter>
+          <ConversationRow
+            conversation={sampleConv}
+            hasUnread={false}
+            dmOnline
+            onClose={vi.fn()}
+            onHide={vi.fn()}
+          />
+        </BrowserRouter>
+      </QueryClientProvider>,
+    );
+
+    expect(screen.getByLabelText('Online')).toBeInTheDocument();
   });
 
   it('clicking the star toggles favorite via the conversation favorite endpoint', async () => {
@@ -97,15 +138,10 @@ describe('ConversationRow', () => {
     });
   });
 
-  it('"Move to Direct Messages" sends an empty categoryID', async () => {
-    renderRow({ ...sampleConv, categoryID: 'cat-x' });
-    fireEvent.click(screen.getByText('Move to Direct Messages'));
-    await waitFor(() => {
-      expect(apiFetchMock).toHaveBeenCalledWith(
-        `/api/v1/conversations/${sampleConv.conversationID}/category`,
-        expect.objectContaining({ method: 'PUT', body: JSON.stringify({ categoryID: '' }) }),
-      );
-    });
+  it('does not attach the user hover card in the sidebar row', () => {
+    renderRow(sampleConv);
+    fireEvent.click(screen.getByText('Bob'));
+    expect(screen.queryByRole('link', { name: /@/ })).not.toBeInTheDocument();
   });
 
   it('renders the participant-count badge for groups', () => {
@@ -145,10 +181,10 @@ describe('ConversationRow', () => {
     expect(onHide).toHaveBeenCalledWith(sampleConv.conversationID);
   });
 
-  it('disables "Move to Direct Messages" when the row is already in the default section', () => {
+  it('does not offer category movement in the conversation row menu', () => {
     renderRow(sampleConv);
-    const item = screen.getByText('Move to Direct Messages') as HTMLButtonElement;
-    expect(item.disabled).toBe(true);
+    expect(screen.queryByText('Move to Direct Messages')).not.toBeInTheDocument();
+    expect(screen.queryByText(/^Move to /)).not.toBeInTheDocument();
   });
 
   it('does not offer a "New category" option in the row menu', () => {

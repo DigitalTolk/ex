@@ -1,6 +1,7 @@
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { getInitials } from '@/lib/format';
 import { cn } from '@/lib/utils';
+import type { UserStatus } from '@/types';
 
 interface UserAvatarProps {
   displayName: string;
@@ -18,6 +19,7 @@ interface UserAvatarProps {
   // sidebar/list backdrop; switch to `ring-popover` inside hover cards
   // and similar floating surfaces.
   dotRingClassName?: string;
+  userStatus?: UserStatus | null;
 }
 
 // Avatar with an inline presence dot, sharing one set of styles
@@ -32,6 +34,7 @@ export function UserAvatar({
   className = 'h-7 w-7',
   dotClassName = 'h-2 w-2',
   dotRingClassName = 'ring-background',
+  userStatus: _userStatus,
 }: UserAvatarProps) {
   return (
     <span className="relative inline-block">

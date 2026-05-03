@@ -11,6 +11,8 @@ import { usePresence } from '@/context/PresenceContext';
 import { fuzzyMatch } from '@/lib/fuzzy';
 import { topK } from '@/lib/topk';
 import { UserAvatar } from '@/components/UserAvatar';
+import { UserStatusIndicator } from '@/components/UserStatusIndicator';
+import type { UserStatus } from '@/types';
 import { $createMentionNode } from '../nodes/MentionNode';
 import { TypeaheadMenu } from './TypeaheadMenu';
 import { $replaceWithDecoratorAndTrailingSpace } from './typeaheadHelpers';
@@ -28,7 +30,7 @@ class UserMentionOption extends MenuOption {
 type GroupName = 'all' | 'here';
 
 type Suggestion =
-  | { kind: 'user'; id: string; displayName: string; email?: string; avatarURL?: string; online: boolean }
+  | { kind: 'user'; id: string; displayName: string; email?: string; avatarURL?: string; userStatus?: UserStatus; online: boolean }
   | { kind: 'group'; group: GroupName };
 
 const GROUP_NAMES: GroupName[] = ['all', 'here'];
@@ -58,6 +60,7 @@ export function UserMentionsPlugin() {
         displayName: u.displayName,
         email: u.email,
         avatarURL: u.avatarURL,
+        userStatus: u.userStatus,
         online: online.has(u.id),
       }));
     const ranked = topK(userMatches, MAX_RESULTS, (a, b) => {
@@ -154,9 +157,13 @@ function MentionRow({ suggestion }: { suggestion: Suggestion }) {
         displayName={suggestion.displayName}
         avatarURL={suggestion.avatarURL}
         online={suggestion.online}
+        userStatus={suggestion.userStatus}
       />
       <div className="min-w-0 flex-1">
-        <div className="truncate font-medium">{suggestion.displayName}</div>
+        <div className="flex items-center gap-1">
+          <div className="truncate font-medium">{suggestion.displayName}</div>
+          <UserStatusIndicator status={suggestion.userStatus} />
+        </div>
         {suggestion.email && (
           <div className="truncate text-xs text-muted-foreground">{suggestion.email}</div>
         )}

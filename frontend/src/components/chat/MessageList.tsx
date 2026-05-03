@@ -4,7 +4,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { MessageItem } from './MessageItem';
 import { formatDayHeading } from '@/lib/format';
 import { deriveThreadMeta } from '@/lib/message-users';
-import type { Message } from '@/types';
+import type { Message, UserStatus } from '@/types';
 import { buildMessageListRows, nextVirtuosoState } from './MessageListRows';
 
 const ANCHOR_HIGHLIGHT_MS = 2200;
@@ -32,6 +32,7 @@ function multiPassScroll(fn: () => void, delaysMs: number[]): () => void {
 export interface UserMapEntry {
   displayName: string;
   avatarURL?: string;
+  userStatus?: UserStatus;
   online?: boolean;
 }
 
@@ -507,6 +508,7 @@ function MessageRow({
         message={augmented}
         authorName={u?.displayName ?? 'Unknown'}
         authorAvatarURL={u?.avatarURL}
+        authorUserStatus={u?.userStatus}
         authorOnline={u?.online}
         isOwn={msg.authorID === currentUserId}
         channelId={channelId}

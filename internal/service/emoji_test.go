@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -240,6 +241,31 @@ func TestEmojiService_List_FallsBackOnSignerError(t *testing.T) {
 	}
 	if out[0].ImageURL != "https://stored.example/fire.png?sig=stale" {
 		t.Errorf("ImageURL=%q, expected stored fallback when signer errored", out[0].ImageURL)
+	}
+}
+
+func TestEmojiService_List_UsesStableMediaURLWhenConfigured(t *testing.T) {
+	svc, store, _, _ := setupEmojiSvc()
+	store.items["fire"] = &model.CustomEmoji{
+		Name:     "fire",
+		ImageURL: "https://expired.example/fire.png?expired=true",
+		ImageKey: "uploads/u1/fire.png",
+	}
+	signer := &fakeEmojiSigner{urls: map[string]string{
+		"uploads/u1/fire.png": "https://fresh.example/fire.png?sig=new",
+	}}
+	svc.SetSigner(signer)
+	svc.SetMediaURLCache(newFakeMediaCache())
+
+	out, err := svc.List(context.Background())
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(out) != 1 {
+		t.Fatalf("got %d emojis, want 1", len(out))
+	}
+	if !strings.HasPrefix(out[0].ImageURL, "/api/v1/media/") {
+		t.Fatalf("ImageURL = %q, want stable media URL", out[0].ImageURL)
 	}
 }
 

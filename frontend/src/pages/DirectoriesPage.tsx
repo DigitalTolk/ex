@@ -1,14 +1,15 @@
 import { useState, useEffect } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
-import { Globe, Search, MessageSquare } from 'lucide-react';
+import { Globe, Search, MessageSquare, MoreVertical } from 'lucide-react';
 import { PageContainer } from '@/components/layout/PageContainer';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
+import { UserStatusIndicator } from '@/components/UserStatusIndicator';
 import { fuzzyMatch } from '@/lib/fuzzy';
 import {
   DropdownMenu,
@@ -22,6 +23,7 @@ import { useAuth } from '@/context/AuthContext';
 import { usePresence } from '@/context/PresenceContext';
 import { apiFetch } from '@/lib/api';
 import { getInitials } from '@/lib/format';
+import { formatLastSeen, formatTimeZoneDelta, formatTimeZoneName, isValidTimeZone } from '@/lib/user-time';
 import type { User } from '@/types';
 
 type Tab = 'channels' | 'members';
@@ -33,7 +35,11 @@ function capitalize(s: string): string {
 
 export default function DirectoriesPage() {
   useDocumentTitle('Directory');
-  const [tab, setTab] = useState<Tab>('channels');
+  const { section } = useParams<{ section?: string }>();
+  const location = useLocation();
+  const navigate = useNavigate();
+  const activeSection = section ?? location.pathname.split('/').filter(Boolean).at(-1);
+  const tab: Tab = activeSection === 'users' ? 'members' : 'channels';
   const { user } = useAuth();
   const isAdmin = user?.systemRole === 'admin';
 
@@ -43,7 +49,7 @@ export default function DirectoriesPage() {
         <button
           role="tab"
           aria-selected={tab === 'channels'}
-          onClick={() => setTab('channels')}
+          onClick={() => navigate('/directory/channels')}
           className={`px-3 py-2 text-sm font-medium border-b-2 -mb-px ${
             tab === 'channels'
               ? 'border-primary text-foreground'
@@ -55,7 +61,7 @@ export default function DirectoriesPage() {
         <button
           role="tab"
           aria-selected={tab === 'members'}
-          onClick={() => setTab('members')}
+          onClick={() => navigate('/directory/users')}
           className={`px-3 py-2 text-sm font-medium border-b-2 -mb-px ${
             tab === 'members'
               ? 'border-primary text-foreground'
@@ -267,9 +273,9 @@ function MembersTab({ isAdmin, currentUserId }: MembersTabProps) {
       )}
 
       {isLoading && (
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {Array.from({ length: 6 }).map((_, i) => (
-            <Skeleton key={i} className="h-24 w-full" />
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5" data-testid="members-grid-loading">
+          {Array.from({ length: 10 }).map((_, i) => (
+            <Skeleton key={i} className="aspect-[4/5] w-full" />
           ))}
         </div>
       )}
@@ -284,47 +290,54 @@ function MembersTab({ isAdmin, currentUserId }: MembersTabProps) {
         </p>
       )}
 
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5" data-testid="members-grid">
         {!isLoading && users.map((u) => {
           const online = isOnline(u.id);
           const isSelf = u.id === currentUserId;
+          const effectiveTimeZone = isValidTimeZone(u.timeZone) ? u.timeZone : undefined;
+          const timeZoneDelta = formatTimeZoneDelta(effectiveTimeZone);
+          const timeZoneName = formatTimeZoneName(effectiveTimeZone);
+          const lastSeen = formatLastSeen(u.lastSeenAt, online);
           return (
             <div
               key={u.id}
               data-testid="directory-user-card"
-              className="group flex items-start gap-3 rounded-lg border bg-card p-3 transition-colors hover:bg-muted/40"
+              className="group items-start overflow-hidden rounded-lg border bg-card transition-colors hover:bg-muted/40"
             >
-              <span className="relative inline-block shrink-0">
-                <Avatar className="h-11 w-11">
-                  {u.avatarURL && <AvatarImage src={u.avatarURL} alt="" />}
-                  <AvatarFallback className="bg-primary/10 text-sm">
+              <div className="relative aspect-square w-full bg-muted" data-testid="directory-user-avatar">
+                <Avatar className="h-full w-full rounded-none after:rounded-none">
+                  {u.avatarURL && <AvatarImage src={u.avatarURL} alt="" className="rounded-none" />}
+                  <AvatarFallback className="rounded-none bg-primary/10 text-3xl">
                     {getInitials(u.displayName || '??')}
                   </AvatarFallback>
                 </Avatar>
                 <span
                   data-testid={`presence-${u.id}`}
-                  className={`absolute bottom-0 right-0 h-2.5 w-2.5 rounded-full ring-2 ring-background ${
+                  className={`absolute bottom-2 right-2 h-3 w-3 rounded-full ring-2 ring-background ${
                     online ? 'bg-emerald-500' : 'bg-muted-foreground/40'
                   }`}
                   aria-label={online ? 'Online' : 'Offline'}
                 />
-              </span>
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-1.5">
+                <Badge
+                  variant={u.systemRole === 'admin' ? 'default' : 'secondary'}
+                  data-testid={`role-pill-${u.id}`}
+                  className="absolute bottom-2 left-2 bg-background/85 text-[11px] text-foreground shadow-sm backdrop-blur"
+                >
+                  {capitalize(u.systemRole)}
+                </Badge>
+              </div>
+              <div className="space-y-2 p-3">
+                <div className="flex min-w-0 items-center gap-1.5">
                   <p className="font-medium truncate">{u.displayName}</p>
+                  <UserStatusIndicator status={u.userStatus} />
                   {isSelf && (
                     <span className="text-[10px] text-muted-foreground">(you)</span>
                   )}
                 </div>
-                <p className="text-sm text-muted-foreground truncate">{u.email}</p>
-                <div className="mt-1 flex flex-wrap items-center gap-1">
-                  <Badge
-                    variant={u.systemRole === 'admin' ? 'default' : 'secondary'}
-                    data-testid={`role-pill-${u.id}`}
-                    className="text-sm h-auto py-0.5"
-                  >
-                    {capitalize(u.systemRole)}
-                  </Badge>
+                <p className="truncate text-sm text-muted-foreground">
+                  <a className="text-sm hover:underline" href={`mailto:${u.email}`}>{u.email}</a>
+                </p>
+                <div className="flex flex-wrap items-center gap-1">
                   {u.status === 'deactivated' && (
                     <Badge
                       variant="destructive"
@@ -335,66 +348,89 @@ function MembersTab({ isAdmin, currentUserId }: MembersTabProps) {
                     </Badge>
                   )}
                 </div>
-              </div>
-              <div className="flex flex-col items-end gap-1.5 shrink-0" data-testid="directory-card-actions">
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => handleMessage(u.id)}
-                  disabled={createConversation.isPending}
-                  aria-label={isSelf ? 'Open notes-to-self' : `Message ${u.displayName}`}
-                  className="h-8"
-                >
-                  <MessageSquare className="mr-1.5 h-3.5 w-3.5" />
-                  Message
-                </Button>
-                {isAdmin && !isSelf && (
-                  <DropdownMenu>
-                    <DropdownMenuTrigger
-                      className="inline-flex items-center justify-center rounded-md border border-input bg-background px-2 h-7 text-xs font-medium hover:bg-accent hover:text-accent-foreground"
-                      aria-label={`Manage ${u.displayName}`}
-                    >
-                      Manage
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end" className="w-52">
-                      <DropdownMenuItem
-                        onClick={() => changeRole(u.id, 'admin')}
-                        disabled={u.systemRole === 'admin' || u.systemRole === 'guest' || u.authProvider === 'guest'}
+                <dl className="space-y-1 text-xs text-muted-foreground">
+                  {effectiveTimeZone && (
+                    <div className="flex justify-between gap-2">
+                      <dt>Local time</dt>
+                      <dd className="text-right">
+                        {new Date().toLocaleTimeString(undefined, { timeZone: effectiveTimeZone, hour: 'numeric', minute: '2-digit' })}
+                        {timeZoneDelta && <span className="ml-1">({timeZoneDelta})</span>}
+                      </dd>
+                    </div>
+                  )}
+                  {timeZoneName && (
+                    <div className="flex justify-between gap-2">
+                      <dt>Timezone</dt>
+                      <dd className="min-w-0 truncate text-right">{timeZoneName}</dd>
+                    </div>
+                  )}
+                  {lastSeen && (
+                    <div className="flex justify-between gap-2">
+                      <dt>Last seen</dt>
+                      <dd className="text-right">{lastSeen}</dd>
+                    </div>
+                  )}
+                </dl>
+                <div className="flex items-center justify-between gap-2" data-testid="directory-card-actions">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => handleMessage(u.id)}
+                    disabled={createConversation.isPending}
+                    aria-label={isSelf ? 'Open notes-to-self' : `Message ${u.displayName}`}
+                    className="h-8 min-w-0 flex-1"
+                  >
+                    <MessageSquare className="mr-1.5 h-3.5 w-3.5" />
+                    Message
+                  </Button>
+                  {isAdmin && !isSelf && (
+                    <DropdownMenu>
+                      <DropdownMenuTrigger
+                        className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-input bg-background hover:bg-accent hover:text-accent-foreground"
+                        aria-label={`Manage ${u.displayName}`}
                       >
-                        Promote to Admin
-                      </DropdownMenuItem>
-                      <DropdownMenuItem
-                        onClick={() => changeRole(u.id, 'member')}
-                        disabled={u.systemRole === 'member' || u.systemRole === 'guest' || u.authProvider === 'guest'}
-                      >
-                        Set as Member
-                      </DropdownMenuItem>
-                      <DropdownMenuItem
-                        onClick={() => changeRole(u.id, 'guest')}
-                        disabled={u.systemRole === 'guest'}
-                      >
-                        Set as Guest
-                      </DropdownMenuItem>
-                      {u.authProvider === 'guest' && (
-                        u.status === 'deactivated' ? (
-                          <DropdownMenuItem
-                            onClick={() => setStatus(u.id, false)}
-                            data-testid={`reactivate-${u.id}`}
-                          >
-                            Reactivate guest
-                          </DropdownMenuItem>
-                        ) : (
-                          <DropdownMenuItem
-                            onClick={() => setStatus(u.id, true)}
-                            data-testid={`deactivate-${u.id}`}
-                          >
-                            Disable guest
-                          </DropdownMenuItem>
-                        )
-                      )}
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                )}
+                        <MoreVertical className="h-4 w-4" />
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end" className="w-52">
+                        <DropdownMenuItem
+                          onClick={() => changeRole(u.id, 'admin')}
+                          disabled={u.systemRole === 'admin' || u.systemRole === 'guest' || u.authProvider === 'guest'}
+                        >
+                          Promote to Admin
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          onClick={() => changeRole(u.id, 'member')}
+                          disabled={u.systemRole === 'member' || u.systemRole === 'guest' || u.authProvider === 'guest'}
+                        >
+                          Set as Member
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          onClick={() => changeRole(u.id, 'guest')}
+                          disabled={u.systemRole === 'guest'}
+                        >
+                          Set as Guest
+                        </DropdownMenuItem>
+                        {u.authProvider === 'guest' && (
+                          u.status === 'deactivated' ? (
+                            <DropdownMenuItem
+                              onClick={() => setStatus(u.id, false)}
+                              data-testid={`reactivate-${u.id}`}
+                            >
+                              Reactivate guest
+                            </DropdownMenuItem>
+                          ) : (
+                            <DropdownMenuItem
+                              onClick={() => setStatus(u.id, true)}
+                              data-testid={`deactivate-${u.id}`}
+                            >
+                              Disable guest
+                            </DropdownMenuItem>
+                          )
+                        )}
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  )}
+                </div>
               </div>
             </div>
           );

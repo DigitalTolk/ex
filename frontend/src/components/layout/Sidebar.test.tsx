@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, createEvent, waitFor, within } from '@testing-library/react';
+import { act, render, screen, fireEvent, createEvent, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { BrowserRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -600,7 +600,9 @@ describe('Sidebar', () => {
     fireEvent.dragStart(screen.getByTestId('channel-row-ch-2'), { dataTransfer });
     fireEvent.dragOver(screen.getByTestId('channel-row-ch-1'), { dataTransfer });
     fireEvent.dragEnd(screen.getByTestId('channel-row-ch-2'), { dataTransfer });
-    await new Promise((resolve) => window.setTimeout(resolve, 50));
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 50));
+    });
     fireEvent.click(screen.getByText('secret').closest('a')!);
 
     expect(onClose).not.toHaveBeenCalled();

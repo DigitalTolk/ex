@@ -20,6 +20,7 @@ interface AuthState {
   login: () => void;
   logout: () => Promise<void>;
   setAuth: (token: string, user: User) => void;
+  patchUser: (patch: Partial<User>) => void;
 }
 
 const AuthContext = createContext<AuthState | undefined>(undefined);
@@ -78,9 +79,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(userData);
   }, []);
 
+  const patchUser = useCallback((patch: Partial<User>) => {
+    setUser((current) => (current ? { ...current, ...patch } : current));
+  }, []);
+
   return (
     <AuthContext.Provider
-      value={{ user, isAuthenticated, isLoading, login, logout, setAuth }}
+      value={{ user, isAuthenticated, isLoading, login, logout, setAuth, patchUser }}
     >
       {children}
     </AuthContext.Provider>

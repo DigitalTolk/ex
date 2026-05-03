@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { BrowserRouter } from 'react-router-dom';
 import DirectoriesPage from './DirectoriesPage';
@@ -71,6 +71,19 @@ describe('DirectoriesPage', () => {
 
     expect(screen.getByRole('tab', { name: 'Channels' })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Members' })).toBeInTheDocument();
+  });
+
+  it('uses bookmarkable URLs for directory tabs', () => {
+    mockBrowseChannels.mockReturnValue({ data: [], isLoading: false });
+    mockUserChannels.mockReturnValue({ data: [] });
+    window.history.pushState({}, '', '/directory/channels');
+
+    renderWithProviders(<DirectoriesPage />);
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Members' }));
+    expect(window.location.pathname).toBe('/directory/users');
+    fireEvent.click(screen.getByRole('tab', { name: 'Channels' }));
+    expect(window.location.pathname).toBe('/directory/channels');
   });
 
   it('renders channels when data is loaded', () => {

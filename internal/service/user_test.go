@@ -2,12 +2,17 @@ package service
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/DigitalTolk/ex/internal/cache"
+	"github.com/DigitalTolk/ex/internal/events"
 	"github.com/DigitalTolk/ex/internal/model"
+	"github.com/DigitalTolk/ex/internal/pubsub"
 	"github.com/alicebob/miniredis/v2"
 )
 
@@ -783,4 +788,412 @@ func TestUserService_AvatarURL_StableAcrossLookups(t *testing.T) {
 	if signer.calls != 1 {
 		t.Errorf("PresignedGetURL called %d times across two lookups; expected 1 (cached)", signer.calls)
 	}
+}
+
+func TestUserService_AvatarURL_UsesStableMediaURLWhenConfigured(t *testing.T) {
+	users := newMockUserStore()
+	users.users["u1"] = &model.User{
+		ID: "u1", Email: "u1@x.com", DisplayName: "U1",
+		AvatarKey: "avatars/u1/abc", SystemRole: model.SystemRoleMember,
+	}
+	signer := &countingAvatarSigner{}
+	svc := NewUserService(users, nil, signer, nil)
+	svc.SetMediaURLCache(newFakeMediaCache())
+
+	got, err := svc.GetByID(context.Background(), "u1")
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if !strings.HasPrefix(got.AvatarURL, "/api/v1/media/") {
+		t.Fatalf("AvatarURL = %q, want stable media URL", got.AvatarURL)
+	}
+	if signer.calls != 0 {
+		t.Fatalf("PresignedGetURL called %d times, want stable media path to avoid signing", signer.calls)
+	}
+}
+
+func TestUserService_SetUserStatusMessage_SetClearAndBroadcast(t *testing.T) {
+	users := newMockUserStore()
+	cache := newMockCache()
+	pub := newMockPublisher()
+	users.users["u-status"] = &model.User{
+		ID:          "u-status",
+		Email:       "status@example.com",
+		DisplayName: "Status User",
+		SystemRole:  model.SystemRoleMember,
+	}
+	cache.users["u-status"] = users.users["u-status"]
+	svc := NewUserService(users, cache, nil, pub)
+	idx := &stubUserIndexer{}
+	svc.SetIndexer(idx)
+
+	clearAt := time.Now().Add(time.Hour)
+	got, err := svc.SetUserStatusMessage(context.Background(), "u-status", &model.UserStatus{
+		Emoji:   "  :house:  ",
+		Text:    "  Working from home  ",
+		ClearAt: &clearAt,
+	}, "  Europe/Stockholm  ")
+	if err != nil {
+		t.Fatalf("SetUserStatusMessage: %v", err)
+	}
+	if got.UserStatus == nil {
+		t.Fatal("UserStatus = nil, want value")
+	}
+	if got.UserStatus.Emoji != ":house:" || got.UserStatus.Text != "Working from home" {
+		t.Fatalf("UserStatus = %+v, want trimmed house/WFH", got.UserStatus)
+	}
+	if got.TimeZone != "Europe/Stockholm" {
+		t.Fatalf("TimeZone = %q, want Europe/Stockholm", got.TimeZone)
+	}
+	if _, ok := cache.users["user:u-status"]; ok {
+		t.Fatal("expected user cache key to be deleted")
+	}
+	if len(pub.published) != 1 || pub.published[0].event.Type != events.EventUserUpdated {
+		t.Fatalf("published = %+v, want one user.updated", pub.published)
+	}
+	if len(idx.indexed) != 1 || idx.indexed[0] != "u-status" {
+		t.Fatalf("indexed = %+v, want u-status", idx.indexed)
+	}
+
+	got, err = svc.SetUserStatusMessage(context.Background(), "u-status", nil, "")
+	if err != nil {
+		t.Fatalf("clear SetUserStatusMessage: %v", err)
+	}
+	if got.UserStatus != nil {
+		t.Fatalf("UserStatus = %+v, want nil after clear", got.UserStatus)
+	}
+	if got.TimeZone != "" {
+		t.Fatalf("TimeZone = %q, want empty after clear", got.TimeZone)
+	}
+}
+
+func TestUserService_SetUserStatusMessage_IgnoresInvalidTimeZone(t *testing.T) {
+	users := newMockUserStore()
+	users.users["u-status-tz"] = &model.User{
+		ID:          "u-status-tz",
+		Email:       "status-tz@example.com",
+		DisplayName: "Status TZ User",
+		SystemRole:  model.SystemRoleMember,
+		TimeZone:    "Europe/Stockholm",
+	}
+	svc := NewUserService(users, nil, nil, nil)
+
+	got, err := svc.SetUserStatusMessage(context.Background(), "u-status-tz", &model.UserStatus{
+		Emoji: ":house:",
+		Text:  "Working from home",
+	}, "Not/AZone")
+	if err != nil {
+		t.Fatalf("SetUserStatusMessage: %v", err)
+	}
+	if got.TimeZone != "Europe/Stockholm" {
+		t.Fatalf("TimeZone = %q, want existing valid timezone preserved", got.TimeZone)
+	}
+}
+
+func TestUserService_PatchTimeZoneIfChanged(t *testing.T) {
+	users := newMockUserStore()
+	cache := newMockCache()
+	pub := newMockPublisher()
+	users.users["u-tz"] = &model.User{
+		ID:          "u-tz",
+		Email:       "tz@example.com",
+		DisplayName: "TZ User",
+		SystemRole:  model.SystemRoleMember,
+		TimeZone:    "UTC",
+	}
+	cache.users["user:u-tz"] = users.users["u-tz"]
+	svc := NewUserService(users, cache, nil, pub)
+
+	got, err := svc.PatchTimeZoneIfChanged(context.Background(), "u-tz", "Europe/Stockholm")
+	if err != nil {
+		t.Fatalf("PatchTimeZoneIfChanged: %v", err)
+	}
+	if got.TimeZone != "Europe/Stockholm" {
+		t.Fatalf("TimeZone = %q, want Europe/Stockholm", got.TimeZone)
+	}
+	if _, ok := cache.users["u-tz"]; ok {
+		t.Fatal("expected cache entry to be invalidated")
+	}
+	if len(pub.published) != 1 || pub.published[0].event.Type != events.EventUserUpdated {
+		t.Fatalf("published = %+v, want user.updated", pub.published)
+	}
+
+	pub.published = nil
+	if _, err := svc.PatchTimeZoneIfChanged(context.Background(), "u-tz", "Europe/Stockholm"); err != nil {
+		t.Fatalf("same timezone: %v", err)
+	}
+	if len(pub.published) != 0 {
+		t.Fatalf("same timezone published %+v, want no event", pub.published)
+	}
+}
+
+func TestUserService_SetUserStatusMessage_PersistsExpiredStatusForSweeper(t *testing.T) {
+	users := newMockUserStore()
+	users.users["u-status-expired"] = &model.User{
+		ID:          "u-status-expired",
+		Email:       "expired@example.com",
+		DisplayName: "Expired User",
+		SystemRole:  model.SystemRoleMember,
+	}
+	svc := NewUserService(users, nil, nil, nil)
+
+	clearAt := time.Now().Add(-time.Minute)
+	got, err := svc.SetUserStatusMessage(context.Background(), "u-status-expired", &model.UserStatus{
+		Emoji:   ":sandwich:",
+		Text:    "Out for Lunch",
+		ClearAt: &clearAt,
+	}, "Europe/Stockholm")
+	if err != nil {
+		t.Fatalf("SetUserStatusMessage expired: %v", err)
+	}
+	if got.UserStatus == nil {
+		t.Fatal("UserStatus = nil, want persisted status for sweeper")
+	}
+	if got.UserStatus.Text != "Out for Lunch" {
+		t.Fatalf("UserStatus = %+v, want Out for Lunch", got.UserStatus)
+	}
+}
+
+func TestUserService_GetByID_DoesNotClearExpiredStatus(t *testing.T) {
+	users := newMockUserStore()
+	clearAt := time.Now().Add(-time.Minute)
+	users.users["u-status-expired-read"] = &model.User{
+		ID:          "u-status-expired-read",
+		Email:       "expired-read@example.com",
+		DisplayName: "Expired Read User",
+		SystemRole:  model.SystemRoleMember,
+		UserStatus:  &model.UserStatus{Emoji: ":sandwich:", Text: "Out for Lunch", ClearAt: &clearAt},
+	}
+	svc := NewUserService(users, nil, nil, nil)
+
+	got, err := svc.GetByID(context.Background(), "u-status-expired-read")
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if got.UserStatus == nil {
+		t.Fatal("GetByID cleared expired status; sweeper should be the only clearing path")
+	}
+}
+
+func TestUserService_ClearExpiredStatuses_ClearsAndBroadcasts(t *testing.T) {
+	users := newMockUserStore()
+	cache := newMockCache()
+	pub := newMockPublisher()
+	idx := &stubUserIndexer{}
+	svc := NewUserService(users, cache, nil, pub)
+	svc.SetIndexer(idx)
+	now := time.Date(2026, 5, 3, 10, 0, 0, 0, time.UTC)
+	expiredAt := now.Add(-time.Minute)
+	futureAt := now.Add(time.Hour)
+
+	users.users["u-expired"] = &model.User{
+		ID:          "u-expired",
+		Email:       "expired@example.com",
+		DisplayName: "Expired",
+		SystemRole:  model.SystemRoleMember,
+		TimeZone:    "Europe/Stockholm",
+		UserStatus:  &model.UserStatus{Emoji: ":calendar:", Text: "On Vacation", ClearAt: &expiredAt},
+	}
+	users.users["u-future"] = &model.User{
+		ID:          "u-future",
+		Email:       "future@example.com",
+		DisplayName: "Future",
+		SystemRole:  model.SystemRoleMember,
+		UserStatus:  &model.UserStatus{Emoji: ":house:", Text: "Working from home", ClearAt: &futureAt},
+	}
+	users.users["u-manual"] = &model.User{
+		ID:          "u-manual",
+		Email:       "manual@example.com",
+		DisplayName: "Manual",
+		SystemRole:  model.SystemRoleMember,
+		UserStatus:  &model.UserStatus{Emoji: ":palm_tree:", Text: "On Vacation"},
+	}
+	cache.users["user:u-expired"] = users.users["u-expired"]
+
+	cleared, err := svc.ClearExpiredStatuses(context.Background(), now, 0)
+	if err != nil {
+		t.Fatalf("ClearExpiredStatuses: %v", err)
+	}
+	if cleared != 1 {
+		t.Fatalf("cleared = %d, want 1", cleared)
+	}
+	if users.users["u-expired"].UserStatus != nil {
+		t.Fatalf("expired UserStatus = %+v, want nil", users.users["u-expired"].UserStatus)
+	}
+	if users.users["u-expired"].UpdatedAt != now {
+		t.Fatalf("UpdatedAt = %v, want %v", users.users["u-expired"].UpdatedAt, now)
+	}
+	if users.users["u-future"].UserStatus == nil || users.users["u-manual"].UserStatus == nil {
+		t.Fatal("future/manual statuses should not be cleared")
+	}
+	if _, ok := cache.users["user:u-expired"]; ok {
+		t.Fatal("expected expired user cache key to be deleted")
+	}
+	if len(pub.published) != 1 {
+		t.Fatalf("published = %+v, want one event", pub.published)
+	}
+	if pub.published[0].channel != pubsub.UserEvents() || pub.published[0].event.Type != events.EventUserUpdated {
+		t.Fatalf("published = %+v, want user.updated on user events", pub.published[0])
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(pub.published[0].event.Data, &payload); err != nil {
+		t.Fatalf("unmarshal event payload: %v", err)
+	}
+	if payload["id"] != "u-expired" {
+		t.Fatalf("event id = %v, want u-expired", payload["id"])
+	}
+	if payload["userStatus"] != nil {
+		t.Fatalf("event userStatus = %v, want null", payload["userStatus"])
+	}
+	if len(idx.indexed) != 1 || idx.indexed[0] != "u-expired" {
+		t.Fatalf("indexed = %+v, want u-expired", idx.indexed)
+	}
+}
+
+func TestUserService_ClearExpiredStatuses_Errors(t *testing.T) {
+	now := time.Date(2026, 5, 3, 10, 0, 0, 0, time.UTC)
+	expiredAt := now.Add(-time.Minute)
+
+	t.Run("list error", func(t *testing.T) {
+		users := newMockUserStore()
+		users.listErr = errors.New("list failed")
+		svc := NewUserService(users, nil, nil, nil)
+		if _, err := svc.ClearExpiredStatuses(context.Background(), now, 100); err == nil {
+			t.Fatal("expected list error")
+		}
+	})
+
+	t.Run("get error", func(t *testing.T) {
+		users := newMockUserStore()
+		users.users["u-expired"] = &model.User{ID: "u-expired", Email: "expired@example.com", UserStatus: &model.UserStatus{Emoji: ":calendar:", Text: "On Vacation", ClearAt: &expiredAt}}
+		users.getUserErr = errors.New("get failed")
+		svc := NewUserService(users, nil, nil, nil)
+		if _, err := svc.ClearExpiredStatuses(context.Background(), now, 100); err == nil {
+			t.Fatal("expected get error")
+		}
+	})
+
+	t.Run("update error", func(t *testing.T) {
+		users := newMockUserStore()
+		users.users["u-expired"] = &model.User{ID: "u-expired", Email: "expired@example.com", UserStatus: &model.UserStatus{Emoji: ":calendar:", Text: "On Vacation", ClearAt: &expiredAt}}
+		users.updateErr = errors.New("update failed")
+		svc := NewUserService(users, nil, nil, nil)
+		if _, err := svc.ClearExpiredStatuses(context.Background(), now, 100); err == nil {
+			t.Fatal("expected update error")
+		}
+	})
+}
+
+func TestUserService_RunExpiredStatusSweeper_RunsOnceOnStartupAndStops(t *testing.T) {
+	users := newMockUserStore()
+	now := time.Now().Add(-time.Minute)
+	users.users["u-expired"] = &model.User{
+		ID:         "u-expired",
+		Email:      "expired@example.com",
+		UserStatus: &model.UserStatus{Emoji: ":calendar:", Text: "On Vacation", ClearAt: &now},
+	}
+	svc := NewUserService(users, nil, nil, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	svc.RunExpiredStatusSweeper(ctx, 0, 0)
+
+	if users.users["u-expired"].UserStatus != nil {
+		t.Fatalf("UserStatus = %+v, want nil after startup sweep", users.users["u-expired"].UserStatus)
+	}
+}
+
+func TestUserService_PatchTimeZoneIfChanged_ErrorsAndEmptyInput(t *testing.T) {
+	users := newMockUserStore()
+	pub := newMockPublisher()
+	svc := NewUserService(users, nil, nil, pub)
+
+	got, err := svc.PatchTimeZoneIfChanged(context.Background(), "u-empty", "  ")
+	if err != nil {
+		t.Fatalf("empty timezone: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("empty timezone returned %+v, want nil", got)
+	}
+
+	users.users["u-invalid"] = &model.User{ID: "u-invalid", Email: "invalid@example.com", TimeZone: "UTC"}
+	got, err = svc.PatchTimeZoneIfChanged(context.Background(), "u-invalid", "Not/AZone")
+	if err != nil {
+		t.Fatalf("invalid timezone: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("invalid timezone returned %+v, want nil", got)
+	}
+	if users.users["u-invalid"].TimeZone != "UTC" {
+		t.Fatalf("invalid timezone persisted %q, want UTC", users.users["u-invalid"].TimeZone)
+	}
+	if len(pub.published) != 0 {
+		t.Fatalf("invalid timezone published %+v, want no event", pub.published)
+	}
+
+	if _, err := svc.PatchTimeZoneIfChanged(context.Background(), "missing", "Europe/Stockholm"); err == nil {
+		t.Fatal("expected missing user error")
+	}
+
+	users.users["u-update"] = &model.User{ID: "u-update", Email: "update@example.com", TimeZone: "UTC"}
+	users.updateErr = errors.New("update failed")
+	if _, err := svc.PatchTimeZoneIfChanged(context.Background(), "u-update", "Europe/Stockholm"); err == nil {
+		t.Fatal("expected update error")
+	}
+}
+
+func TestUserService_SetUserStatusMessage_ValidationErrors(t *testing.T) {
+	users := newMockUserStore()
+	users.users["u-status-invalid"] = &model.User{
+		ID:          "u-status-invalid",
+		Email:       "invalid@example.com",
+		DisplayName: "Invalid User",
+		SystemRole:  model.SystemRoleMember,
+	}
+	svc := NewUserService(users, nil, nil, nil)
+	ctx := context.Background()
+
+	cases := []struct {
+		name   string
+		status *model.UserStatus
+	}{
+		{name: "missing emoji", status: &model.UserStatus{Text: "Busy"}},
+		{name: "missing text", status: &model.UserStatus{Emoji: ":house:"}},
+		{name: "text too long", status: &model.UserStatus{Emoji: ":house:", Text: strings.Repeat("x", 33)}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := svc.SetUserStatusMessage(ctx, "u-status-invalid", tc.status, ""); err == nil {
+				t.Fatal("expected validation error")
+			}
+		})
+	}
+}
+
+func TestUserService_SetUserStatusMessage_StoreErrors(t *testing.T) {
+	t.Run("not found", func(t *testing.T) {
+		svc := NewUserService(newMockUserStore(), nil, nil, nil)
+		if _, err := svc.SetUserStatusMessage(context.Background(), "missing", nil, ""); err == nil {
+			t.Fatal("expected not found error")
+		}
+	})
+
+	t.Run("get error", func(t *testing.T) {
+		users := newMockUserStore()
+		users.getUserErr = errors.New("get failed")
+		svc := NewUserService(users, nil, nil, nil)
+		if _, err := svc.SetUserStatusMessage(context.Background(), "u", nil, ""); err == nil {
+			t.Fatal("expected get error")
+		}
+	})
+
+	t.Run("update error", func(t *testing.T) {
+		users := newMockUserStore()
+		users.users["u-status-update"] = &model.User{ID: "u-status-update", Email: "update@example.com"}
+		users.updateErr = errors.New("update failed")
+		svc := NewUserService(users, nil, nil, nil)
+		if _, err := svc.SetUserStatusMessage(context.Background(), "u-status-update", nil, ""); err == nil {
+			t.Fatal("expected update error")
+		}
+	})
 }

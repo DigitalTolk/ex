@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -221,6 +222,26 @@ func TestNotificationService_NotifyForMessage_SkipsSystemMessages(t *testing.T) 
 	}
 }
 
+func TestNotificationService_NotifyForMessage_SkipsNilAndBrokenAudience(t *testing.T) {
+	svc, pub, members, conv, _, _ := setupNotifier(t)
+	svc.NotifyForMessage(context.Background(), nil, ParentChannel)
+	if len(pub.published) != 0 {
+		t.Fatalf("nil message published %d notifications", len(pub.published))
+	}
+
+	members.listMembersErr = errors.New("members down")
+	svc.NotifyForMessage(context.Background(), &model.Message{ID: "m1", ParentID: "ch1", AuthorID: "u-author", Body: "hello"}, ParentChannel)
+	if len(pub.published) != 0 {
+		t.Fatalf("member load error published %d notifications", len(pub.published))
+	}
+
+	conv.getErr = errors.New("conversation down")
+	svc.NotifyForMessage(context.Background(), &model.Message{ID: "m2", ParentID: "c1", AuthorID: "u-author", Body: "hello"}, ParentConversation)
+	if len(pub.published) != 0 {
+		t.Fatalf("conversation load error published %d notifications", len(pub.published))
+	}
+}
+
 func TestNotificationService_NotifyForMessage_Conversation(t *testing.T) {
 	svc, pub, _, conv, _, users := setupNotifier(t)
 	ctx := context.Background()
@@ -366,6 +387,40 @@ func TestNotificationService_PreviewBody_LeavesGroupMentionsAlone(t *testing.T) 
 	}
 	if got := previewBody("@here check this"); got != "@here check this" {
 		t.Errorf("@here changed: %q", got)
+	}
+}
+
+func TestNotificationService_DisplayNameFallbacksAndTitles(t *testing.T) {
+	svc, _, _, _, chans, users := setupNotifier(t)
+	ctx := context.Background()
+
+	if got := svc.parentDisplayName(ctx, "ch-missing", ParentChannel); got != "ch-missing" {
+		t.Fatalf("missing channel parentDisplayName = %q, want ID", got)
+	}
+	chans.channels["ch-name"] = &model.Channel{ID: "ch-name", Name: "General"}
+	if got := svc.parentDisplayName(ctx, "ch-name", ParentChannel); got != "General" {
+		t.Fatalf("channel name fallback = %q, want General", got)
+	}
+	if got := svc.parentDisplayName(ctx, "c1", ParentConversation); got != "" {
+		t.Fatalf("conversation parentDisplayName = %q, want empty", got)
+	}
+
+	if got := svc.userDisplayName(ctx, "u-missing"); got != "u-missing" {
+		t.Fatalf("missing userDisplayName = %q, want ID", got)
+	}
+	users.users["u-email"] = &model.User{ID: "u-email", Email: "email@example.com"}
+	if got := svc.userDisplayName(ctx, "u-email"); got != "email@example.com" {
+		t.Fatalf("email fallback userDisplayName = %q", got)
+	}
+
+	if got := titleFor(NotificationKindThreadReply, ParentConversation, "", "Alice"); got != "Alice replied" {
+		t.Fatalf("thread conversation title = %q", got)
+	}
+	if got := titleFor(NotificationKindMention, ParentConversation, "", "Alice"); got != "Alice mentioned you" {
+		t.Fatalf("mention conversation title = %q", got)
+	}
+	if got := titleFor("unknown", ParentChannel, "general", "Alice"); got != "Alice" {
+		t.Fatalf("unknown title = %q", got)
 	}
 }
 

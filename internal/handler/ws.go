@@ -24,6 +24,7 @@ type inboundMessage struct {
 	ParentID        string `json:"parentID"`
 	ParentType      string `json:"parentType"`      // "channel" | "conversation"
 	ParentMessageID string `json:"parentMessageID"` // optional — set when typing inside a thread reply
+	TimeZone        string `json:"timeZone"`        // optional — "timezone.update" heartbeat frame
 }
 
 const wsKeepAliveInterval = 30 * time.Second
@@ -33,6 +34,7 @@ type WSHandler struct {
 	broker      *pubsub.Broker
 	chanSvc     *service.ChannelService
 	convSvc     *service.ConversationService
+	userSvc     *service.UserService
 	presenceSvc *service.PresenceService
 	publisher   service.Publisher
 	version     string
@@ -46,6 +48,10 @@ func NewWSHandler(broker *pubsub.Broker, chanSvc *service.ChannelService, convSv
 // SetPublisher wires a publisher for inbound ephemeral events (typing
 // indicator). Optional — when nil, inbound typing is dropped.
 func (h *WSHandler) SetPublisher(p service.Publisher) { h.publisher = p }
+
+// SetUserService wires the profile service for lightweight client heartbeat
+// metadata, currently timezone drift while a user remains logged in.
+func (h *WSHandler) SetUserService(s *service.UserService) { h.userSvc = s }
 
 // SetVersion records the running build version so each newly-connected
 // client receives a "server.version" frame as part of the handshake. The
@@ -223,6 +229,10 @@ func (h *WSHandler) handleInbound(ctx context.Context, userID string, raw []byte
 	switch msg.Type {
 	case "typing":
 		h.publishTyping(ctx, userID, msg)
+	case "timezone.update":
+		if h.userSvc != nil {
+			_, _ = h.userSvc.PatchTimeZoneIfChanged(ctx, userID, msg.TimeZone)
+		}
 	}
 }
 

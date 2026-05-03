@@ -170,10 +170,10 @@ export function ConversationView() {
 
   const userMap = useMemo(() => {
     const m: Record<string, UserMapEntry> = {};
-    if (user) m[user.id] = { displayName: user.displayName, avatarURL: user.avatarURL, online: true };
+    if (user) m[user.id] = { displayName: user.displayName, avatarURL: user.avatarURL, userStatus: user.userStatus, online: true };
     if (usersData) {
       for (const u of usersData) {
-        m[u.id] = { displayName: u.displayName || 'Unknown', avatarURL: u.avatarURL, online: online.has(u.id) };
+        m[u.id] = { displayName: u.displayName || 'Unknown', avatarURL: u.avatarURL, userStatus: u.userStatus, online: online.has(u.id) };
       }
     }
     return m;
@@ -205,13 +205,22 @@ export function ConversationView() {
   }
 
   const title = derivedTitle ?? 'Direct Message';
+  let dmOtherUserID: string | undefined;
   let dmOtherUserAvatar: string | undefined;
+  let dmOtherUserStatus = user?.userStatus;
+  let dmOtherUserOnline: boolean | undefined;
   if (conversation?.type === 'dm') {
     const otherID = conversation.participantIDs?.find((pid) => pid !== user?.id);
     if (otherID) {
+      dmOtherUserID = otherID;
       dmOtherUserAvatar = userMap[otherID]?.avatarURL;
+      dmOtherUserStatus = userMap[otherID]?.userStatus;
+      dmOtherUserOnline = userMap[otherID]?.online;
     } else if (user) {
+      dmOtherUserID = user.id;
       dmOtherUserAvatar = user.avatarURL;
+      dmOtherUserStatus = user.userStatus;
+      dmOtherUserOnline = true;
     }
   }
 
@@ -271,6 +280,10 @@ export function ConversationView() {
           title={title}
           showAvatar={conversation?.type === 'dm'}
           avatarURL={conversation?.type === 'dm' ? dmOtherUserAvatar : undefined}
+          avatarOnline={conversation?.type === 'dm' ? dmOtherUserOnline : undefined}
+          userStatus={conversation?.type === 'dm' ? dmOtherUserStatus : undefined}
+          userId={conversation?.type === 'dm' ? dmOtherUserID : undefined}
+          currentUserId={user?.id}
           memberCount={conversation?.type === 'group' ? conversation?.participantIDs?.length : undefined}
           onMembersClick={conversation?.type === 'group' ? () => (showMembers ? closeMembers() : openMembers()) : undefined}
           onPinnedClick={togglePinned}

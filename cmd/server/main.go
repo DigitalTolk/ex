@@ -156,6 +156,7 @@ func main() {
 	convH := handler.NewConversationHandler(convSvc, messageSvc)
 	wsH := handler.NewWSHandler(broker, channelSvc, convSvc, presenceSvc)
 	wsH.SetPublisher(redisPubSub)
+	wsH.SetUserService(userSvc)
 	uploadH := handler.NewUploadHandler(s3Client)
 	emojiH := handler.NewEmojiHandler(emojiSvc)
 	presenceH := handler.NewPresenceHandler(presenceSvc)
@@ -253,6 +254,10 @@ func main() {
 		IdleTimeout:  120 * time.Second,
 	}
 
+	backgroundCtx, stopBackground := context.WithCancel(context.Background())
+	defer stopBackground()
+	go userSvc.RunExpiredStatusSweeper(backgroundCtx, time.Minute, 0)
+
 	// Start in a goroutine so we can listen for shutdown signals.
 	go func() {
 		slog.Info("server starting",
@@ -271,6 +276,7 @@ func main() {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	sig := <-quit
 	slog.Info("shutting down", "signal", sig.String())
+	stopBackground()
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

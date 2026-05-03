@@ -210,6 +210,59 @@ func TestCategoryService_Create_StoreErrorPropagates(t *testing.T) {
 	}
 }
 
+func TestCategoryService_Create_ListErrorPropagates(t *testing.T) {
+	cs := newStubCategoryStore()
+	cs.listErr = errors.New("list boom")
+	svc := NewCategoryService(cs, newMockPublisher())
+	if _, err := svc.Create(context.Background(), "u-1", "Eng"); err == nil {
+		t.Fatal("expected wrapped list error")
+	}
+}
+
+func TestCategoryService_Create_AlreadyExistsMapsToNameTaken(t *testing.T) {
+	cs := newStubCategoryStore()
+	cs.createErr = store.ErrAlreadyExists
+	svc := NewCategoryService(cs, newMockPublisher())
+	if _, err := svc.Create(context.Background(), "u-1", "Eng"); !errors.Is(err, ErrCategoryNameTaken) {
+		t.Fatalf("err = %v, want ErrCategoryNameTaken", err)
+	}
+}
+
+func TestCategoryService_Update_StoreErrors(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("list error", func(t *testing.T) {
+		cs := newStubCategoryStore()
+		svc := NewCategoryService(cs, newMockPublisher())
+		c, _ := svc.Create(ctx, "u-1", "Eng")
+		cs.listErr = errors.New("list boom")
+		name := "Engineering"
+		if _, err := svc.Update(ctx, "u-1", c.ID, &name, nil); err == nil {
+			t.Fatal("expected list error")
+		}
+	})
+
+	t.Run("already exists maps to name taken", func(t *testing.T) {
+		cs := newStubCategoryStore()
+		svc := NewCategoryService(cs, newMockPublisher())
+		c, _ := svc.Create(ctx, "u-1", "Eng")
+		cs.updateErr = store.ErrAlreadyExists
+		if _, err := svc.Update(ctx, "u-1", c.ID, nil, nil); !errors.Is(err, ErrCategoryNameTaken) {
+			t.Fatalf("err = %v, want ErrCategoryNameTaken", err)
+		}
+	})
+
+	t.Run("generic update error", func(t *testing.T) {
+		cs := newStubCategoryStore()
+		svc := NewCategoryService(cs, newMockPublisher())
+		c, _ := svc.Create(ctx, "u-1", "Eng")
+		cs.updateErr = errors.New("update boom")
+		if _, err := svc.Update(ctx, "u-1", c.ID, nil, nil); err == nil {
+			t.Fatal("expected update error")
+		}
+	})
+}
+
 func TestCategoryService_Delete_StoreErrorPropagates(t *testing.T) {
 	cs := newStubCategoryStore()
 	cs.deleteErr = errors.New("boom")

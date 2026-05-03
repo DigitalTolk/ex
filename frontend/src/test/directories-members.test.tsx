@@ -136,6 +136,35 @@ describe('DirectoriesPage - members tab', () => {
     });
   });
 
+  it('uses five-column member cards with a full-width avatar area and kebab management menu', async () => {
+    mockApiFetch.mockResolvedValue([
+      {
+        id: 'u-1',
+        email: 'alice@x.com',
+        displayName: 'Alice',
+        systemRole: 'member',
+        status: 'active',
+        userStatus: { emoji: ':house:', text: 'Working from home' },
+        timeZone: 'America/New_York',
+        lastSeenAt: '2026-05-03T10:00:00.000Z',
+      },
+    ]);
+
+    renderWithProviders();
+    fireEvent.click(screen.getByRole('tab', { name: 'Members' }));
+
+    expect(await screen.findByText('Alice')).toBeInTheDocument();
+    expect(screen.getByTestId('members-grid')).toHaveClass('xl:grid-cols-5');
+    expect(screen.getByTestId('directory-user-avatar')).toHaveClass('w-full');
+    expect(screen.queryByText('Working from home')).not.toBeInTheDocument();
+    expect(screen.getByText('Local time')).toBeInTheDocument();
+    expect(screen.getByText('Timezone')).toBeInTheDocument();
+    expect(screen.getByText('Last seen')).toBeInTheDocument();
+    const manage = screen.getByLabelText('Manage Alice');
+    expect(manage.querySelector('svg')).not.toBeNull();
+    expect(manage).not.toHaveTextContent('Manage');
+  });
+
   it('does not show Manage button for non-admin viewer', async () => {
     mockSystemRole = 'member';
     mockApiFetch.mockResolvedValue([

@@ -589,7 +589,7 @@ func TestSidebarHandler_SetConversationFavorite_NoServiceWired(t *testing.T) {
 	}
 }
 
-func TestSidebarHandler_SetConversationCategory_OK(t *testing.T) {
+func TestSidebarHandler_SetConversationCategory_UserCategoryRejected(t *testing.T) {
 	env := setupSidebarHandler(t)
 	user := &model.User{ID: "u-cv", Email: "cv@x.com", SystemRole: model.SystemRoleMember}
 	env.addParticipant("c-1", user.ID)
@@ -597,8 +597,8 @@ func TestSidebarHandler_SetConversationCategory_OK(t *testing.T) {
 
 	rec, req, mw := authedRequest(t, env, user, http.MethodPut, "/api/v1/conversations/c-1/category", `{"categoryID":"cat-1"}`, "id", "c-1")
 	mw(http.HandlerFunc(env.handler.SetConversationCategory)).ServeHTTP(rec, req)
-	if rec.Code != http.StatusNoContent {
-		t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusNoContent, rec.Body.String())
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusBadRequest, rec.Body.String())
 	}
 }
 
@@ -627,15 +627,27 @@ func TestSidebarHandler_SetConversationCategory_StrangerCategoryRejected(t *test
 	}
 }
 
-func TestSidebarHandler_SetConversationCategory_StoreErrorOnCategoryList(t *testing.T) {
+func TestSidebarHandler_SetChannelCategory_StoreErrorOnCategoryList(t *testing.T) {
+	env := setupSidebarHandler(t)
+	env.categories.listErr = errors.New("boom")
+	user := &model.User{ID: "u-cv", SystemRole: model.SystemRoleMember}
+	rec, req, mw := authedRequest(t, env, user, http.MethodPut, "/api/v1/channels/ch-1/category", `{"categoryID":"cat-1"}`, "id", "ch-1")
+	_ = env.memberships.AddMember(context.Background(), &model.ChannelMembership{ChannelID: "ch-1", UserID: user.ID, Role: model.ChannelRoleMember}, nil)
+	mw(http.HandlerFunc(env.handler.SetCategory)).ServeHTTP(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
+	}
+}
+
+func TestSidebarHandler_SetConversationCategory_DoesNotConsultCategoryStoreWhenClearing(t *testing.T) {
 	env := setupSidebarHandler(t)
 	env.categories.listErr = errors.New("boom")
 	user := &model.User{ID: "u-cv", SystemRole: model.SystemRoleMember}
 	env.addParticipant("c-1", user.ID)
-	rec, req, mw := authedRequest(t, env, user, http.MethodPut, "/api/v1/conversations/c-1/category", `{"categoryID":"cat-1"}`, "id", "c-1")
+	rec, req, mw := authedRequest(t, env, user, http.MethodPut, "/api/v1/conversations/c-1/category", `{"categoryID":""}`, "id", "c-1")
 	mw(http.HandlerFunc(env.handler.SetConversationCategory)).ServeHTTP(rec, req)
-	if rec.Code != http.StatusInternalServerError {
-		t.Errorf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
+	if rec.Code != http.StatusNoContent {
+		t.Errorf("status = %d, want %d; body: %s", rec.Code, http.StatusNoContent, rec.Body.String())
 	}
 }
 

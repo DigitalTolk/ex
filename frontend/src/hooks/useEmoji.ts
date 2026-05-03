@@ -17,11 +17,12 @@ export function useEmojis(enabled = true) {
   });
 }
 
-export function useEmojiMap() {
+export function useEmojiMap(enabled = true) {
   return useQuery({
     queryKey: queryKeys.emojis(),
     queryFn: fetchEmojis,
     staleTime: 5 * 60 * 1000,
+    enabled,
     select: (list) => {
       const map: Record<string, string> = {};
       for (const e of list) map[e.name] = e.imageURL;

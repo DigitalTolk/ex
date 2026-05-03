@@ -65,7 +65,8 @@ describe('DirectoriesPage — readable text sizes', () => {
 
     const role = screen.getByTestId('role-pill-u-1');
     expect(role.textContent).toBe('Member');
-    expect(role.className).toContain('text-sm');
+    expect(role.className).toContain('absolute');
+    expect(role.className).toContain('bg-background/85');
     expect(role.className).not.toContain('text-[10px]');
   });
 });

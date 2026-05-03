@@ -144,4 +144,36 @@ describe('apiFetch', () => {
     const headers = call[1]?.headers as Headers;
     expect(headers.get('Content-Type')).toBe('application/json');
   });
+
+  it('does not send timezone by default', async () => {
+    const mockResponse = {
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({}),
+    } as Response;
+
+    vi.mocked(globalThis.fetch).mockResolvedValue(mockResponse);
+
+    await apiFetch('/api/v1/test');
+
+    const call = vi.mocked(globalThis.fetch).mock.calls[0];
+    const headers = call[1]?.headers as Headers;
+    expect(headers.get('X-Time-Zone')).toBeNull();
+  });
+
+  it('preserves an explicitly provided timezone header', async () => {
+    const mockResponse = {
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({}),
+    } as Response;
+
+    vi.mocked(globalThis.fetch).mockResolvedValue(mockResponse);
+
+    await apiFetch('/api/v1/test', { headers: { 'X-Time-Zone': 'Europe/Stockholm' } });
+
+    const call = vi.mocked(globalThis.fetch).mock.calls[0];
+    const headers = call[1]?.headers as Headers;
+    expect(headers.get('X-Time-Zone')).toBe('Europe/Stockholm');
+  });
 });
