@@ -399,8 +399,13 @@ func TestMessageService_Edit(t *testing.T) {
 }
 
 type fakeAttachmentRefMgr struct {
-	added   []string
-	removed []string
+	added       []string
+	removed     []string
+	validateErr error
+}
+
+func (f *fakeAttachmentRefMgr) ValidateForUse(_ context.Context, _ string) error {
+	return f.validateErr
 }
 
 func (f *fakeAttachmentRefMgr) AddRef(_ context.Context, attachmentID, _ string) error {
@@ -448,6 +453,24 @@ func TestMessageService_Edit_AttachmentDiff(t *testing.T) {
 	}
 	if len(refs.removed) != 1 || refs.removed[0] != "a" {
 		t.Errorf("removed=%v want [a]", refs.removed)
+	}
+}
+
+func TestMessageService_Send_RejectsInvalidAttachmentBeforeCreate(t *testing.T) {
+	svc, messages, memberships, _, _ := setupMessageService()
+	ctx := context.Background()
+	memberships.memberships["ch1#u1"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u1", Role: model.ChannelRoleMember}
+	refs := &fakeAttachmentRefMgr{validateErr: errors.New("object missing")}
+	svc.SetAttachmentManager(refs)
+
+	if _, err := svc.Send(ctx, "u1", "ch1", ParentChannel, "body", "", "att-missing"); err == nil {
+		t.Fatal("expected invalid attachment to reject send")
+	}
+	if len(messages.messages) != 0 {
+		t.Fatalf("message was created despite invalid attachment: %+v", messages.messages)
+	}
+	if len(refs.added) != 0 {
+		t.Fatalf("attachment refs were added despite invalid attachment: %+v", refs.added)
 	}
 }
 
@@ -686,6 +709,143 @@ func TestMessageService_ListUserThreads(t *testing.T) {
 	// m-root has reply1 at -30min — so m-other-root should be first.
 	if got[0].ThreadRootID != "m-other-root" {
 		t.Errorf("expected m-other-root first by latest activity; got %q", got[0].ThreadRootID)
+	}
+}
+
+func TestMessageService_ListUserThreads_UsesFollowOverrides(t *testing.T) {
+	svc, messages, memberships, _, _ := setupMessageService()
+	follows := newMockThreadFollowStore()
+	svc.SetThreadFollowStore(follows)
+	ctx := context.Background()
+
+	memberships.userChannels = []*model.UserChannel{{UserID: "u-me", ChannelID: "ch-1"}}
+	now := time.Now()
+	messages.messages["ch-1#m-participated"] = &model.Message{
+		ID: "m-participated", ParentID: "ch-1", AuthorID: "u-me", Body: "mine", CreatedAt: now.Add(-time.Hour), ReplyCount: 1,
+	}
+	messages.messages["ch-1#m-participated-r"] = &model.Message{
+		ID: "m-participated-r", ParentID: "ch-1", AuthorID: "u-other", Body: "reply", CreatedAt: now.Add(-50 * time.Minute), ParentMessageID: "m-participated",
+	}
+	messages.messages["ch-1#m-followed"] = &model.Message{
+		ID: "m-followed", ParentID: "ch-1", AuthorID: "u-other", Body: "follow me", CreatedAt: now.Add(-40 * time.Minute), ReplyCount: 1,
+	}
+	messages.messages["ch-1#m-followed-r"] = &model.Message{
+		ID: "m-followed-r", ParentID: "ch-1", AuthorID: "u-someone", Body: "reply", CreatedAt: now.Add(-30 * time.Minute), ParentMessageID: "m-followed",
+	}
+	if err := follows.SetThreadFollow(ctx, &model.ThreadFollow{
+		UserID: "u-me", ParentID: "ch-1", ParentType: ParentChannel, ThreadRootID: "m-followed", Following: true,
+	}); err != nil {
+		t.Fatalf("follow m-followed: %v", err)
+	}
+	if err := follows.SetThreadFollow(ctx, &model.ThreadFollow{
+		UserID: "u-me", ParentID: "ch-1", ParentType: ParentChannel, ThreadRootID: "m-participated", Following: false,
+	}); err != nil {
+		t.Fatalf("unfollow m-participated: %v", err)
+	}
+
+	got, err := svc.ListUserThreads(ctx, "u-me")
+	if err != nil {
+		t.Fatalf("ListUserThreads: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected only explicit follow after unfollow override, got %d: %+v", len(got), got)
+	}
+	if got[0].ThreadRootID != "m-followed" {
+		t.Fatalf("ThreadRootID = %q, want m-followed", got[0].ThreadRootID)
+	}
+}
+
+func TestMessageService_SetThreadFollow_RejectsReplyAsRoot(t *testing.T) {
+	svc, messages, memberships, _, _ := setupMessageService()
+	svc.SetThreadFollowStore(newMockThreadFollowStore())
+	ctx := context.Background()
+	memberships.memberships["ch-1#u-me"] = &model.ChannelMembership{ChannelID: "ch-1", UserID: "u-me"}
+	messages.messages["ch-1#m-reply"] = &model.Message{
+		ID: "m-reply", ParentID: "ch-1", AuthorID: "u-other", ParentMessageID: "m-root", Body: "reply",
+	}
+
+	if err := svc.SetThreadFollow(ctx, "u-me", "ch-1", ParentChannel, "m-reply", true); err == nil {
+		t.Fatal("expected reply roots to be rejected")
+	}
+}
+
+func TestMessageService_SetThreadFollow_Success(t *testing.T) {
+	svc, messages, memberships, _, _ := setupMessageService()
+	follows := newMockThreadFollowStore()
+	svc.SetThreadFollowStore(follows)
+	ctx := context.Background()
+	memberships.memberships["ch-1#u-me"] = &model.ChannelMembership{ChannelID: "ch-1", UserID: "u-me"}
+	messages.messages["ch-1#m-root"] = &model.Message{
+		ID: "m-root", ParentID: "ch-1", AuthorID: "u-other", Body: "root",
+	}
+
+	if err := svc.SetThreadFollow(ctx, "u-me", "ch-1", ParentChannel, "m-root", true); err != nil {
+		t.Fatalf("SetThreadFollow: %v", err)
+	}
+	got, err := follows.GetThreadFollow(ctx, "u-me", "ch-1", "m-root")
+	if err != nil {
+		t.Fatalf("GetThreadFollow: %v", err)
+	}
+	if !got.Following || got.ParentType != ParentChannel {
+		t.Fatalf("follow = %+v, want following channel row", got)
+	}
+}
+
+func TestMessageService_SetThreadFollow_ConversationAndListUserThreads(t *testing.T) {
+	svc, messages, _, conversations, _ := setupMessageService()
+	follows := newMockThreadFollowStore()
+	svc.SetThreadFollowStore(follows)
+	ctx := context.Background()
+	conversations.conversations["conv-1"] = &model.Conversation{
+		ID: "conv-1", Type: model.ConversationTypeDM, ParticipantIDs: []string{"u-me", "u-other"},
+	}
+	conversations.userConvs["u-me"] = []*model.UserConversation{{UserID: "u-me", ConversationID: "conv-1"}}
+	now := time.Now()
+	messages.messages["conv-1#m-root"] = &model.Message{
+		ID: "m-root", ParentID: "conv-1", AuthorID: "u-other", Body: "root", CreatedAt: now.Add(-time.Hour), ReplyCount: 1,
+	}
+	messages.messages["conv-1#m-r1"] = &model.Message{
+		ID: "m-r1", ParentID: "conv-1", AuthorID: "u-someone", Body: "reply", CreatedAt: now.Add(-30 * time.Minute), ParentMessageID: "m-root",
+	}
+
+	if err := svc.SetThreadFollow(ctx, "u-me", "conv-1", ParentConversation, "m-root", true); err != nil {
+		t.Fatalf("SetThreadFollow conversation: %v", err)
+	}
+	got, err := svc.ListUserThreads(ctx, "u-me")
+	if err != nil {
+		t.Fatalf("ListUserThreads: %v", err)
+	}
+	if len(got) != 1 || got[0].ParentType != ParentConversation || got[0].ThreadRootID != "m-root" {
+		t.Fatalf("ListUserThreads = %+v, want followed conversation thread", got)
+	}
+}
+
+func TestMessageService_SetThreadFollow_InvalidConfigurationAndParentType(t *testing.T) {
+	svc, _, _, _, _ := setupMessageService()
+	ctx := context.Background()
+	if err := svc.SetThreadFollow(ctx, "u-me", "ch-1", "bogus", "root", true); err == nil {
+		t.Fatal("expected invalid parent type error")
+	}
+	if err := svc.SetThreadFollow(ctx, "u-me", "ch-1", ParentChannel, "root", true); err == nil {
+		t.Fatal("expected missing follow store error")
+	}
+}
+
+func TestMessageService_SetThreadFollow_AccessAndMissingRootErrors(t *testing.T) {
+	svc, messages, memberships, _, _ := setupMessageService()
+	svc.SetThreadFollowStore(newMockThreadFollowStore())
+	ctx := context.Background()
+
+	if err := svc.SetThreadFollow(ctx, "u-me", "ch-1", ParentChannel, "root", true); err == nil {
+		t.Fatal("expected access error")
+	}
+	memberships.memberships["ch-1#u-me"] = &model.ChannelMembership{ChannelID: "ch-1", UserID: "u-me"}
+	if err := svc.SetThreadFollow(ctx, "u-me", "ch-1", ParentChannel, "missing", true); err == nil {
+		t.Fatal("expected missing root error")
+	}
+	messages.messages["ch-1#root"] = &model.Message{ID: "root", ParentID: "ch-other", AuthorID: "u-other"}
+	if err := svc.SetThreadFollow(ctx, "u-me", "ch-1", ParentChannel, "root", false); err != nil {
+		t.Fatalf("SetThreadFollow accepts existing top-level root regardless of stored parent mismatch: %v", err)
 	}
 }
 

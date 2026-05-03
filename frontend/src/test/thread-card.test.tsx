@@ -236,6 +236,23 @@ describe('ThreadCard', () => {
     const replyBody = await screen.findByTestId('reply-body');
     expect(replyBody.closest('[data-focus-key]')?.getAttribute('data-focus-key')).toBe('');
   });
+
+  it('unfollows the thread from the /threads card header', async () => {
+    apiFetchMock.mockImplementation((url: string) => {
+      if (url.includes('/messages/msg-root/thread')) {
+        return Promise.resolve([makeMessage('msg-root')]);
+      }
+      return Promise.resolve(undefined);
+    });
+    renderCard(makeSummary());
+    fireEvent.click(await screen.findByLabelText('Unfollow thread'));
+    await waitFor(() => {
+      expect(apiFetchMock).toHaveBeenCalledWith(
+        '/api/v1/threads/channels/ch-1/msg-root/follow',
+        expect.objectContaining({ method: 'DELETE' }),
+      );
+    });
+  });
 });
 
 describe('ThreadCard — viewport gating', () => {

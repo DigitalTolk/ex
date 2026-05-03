@@ -5,36 +5,39 @@ import (
 	"sync"
 	"time"
 
-	"github.com/DigitalTolk/ex/internal/handler"
+	"github.com/DigitalTolk/ex/internal/model"
 )
 
-// allowedParentIDsTTL caches a single user's allowed-parent set
-// in-process. Membership lives in DynamoDB (not in OpenSearch — we
-// don't denormalize membership into every message doc), so the
-// /search/messages RBAC filter has to fetch the user's channels and
-// conversations. Search-as-you-type fires one such request per
-// debounced keystroke; a 30s TTL turns a 20-keystroke burst into a
-// single pair of point queries. Membership churn is rare on this
-// scale, and a hit a user just lost access to gets re-validated when
-// they click through to the parent.
+// allowedParentIDsTTL caches a single user's allowed-parent set in-process.
+// Membership lives in DynamoDB, not in OpenSearch, so search has to fetch the
+// user's channels and conversations before applying the RBAC filter. The short
+// TTL intentionally smooths search-as-you-type bursts.
 const allowedParentIDsTTL = 30 * time.Second
 
-type allowedEntry struct {
-	ids       []string
-	expiresAt time.Time
+type userChannelLister interface {
+	ListUserChannels(ctx context.Context, userID string) ([]*model.UserChannel, error)
+}
+
+type userConversationLister interface {
+	ListUserConversations(ctx context.Context, userID string) ([]*model.UserConversation, error)
 }
 
 // searchAccess implements handler.SearchAccess.
 type searchAccess struct {
-	memberships   *handler.MembershipStoreAdapter
-	conversations *handler.ConversationStoreAdapter
+	memberships   userChannelLister
+	conversations userConversationLister
 	now           func() time.Time
 
 	mu    sync.Mutex
 	cache map[string]allowedEntry
 }
 
-func newSearchAccess(memberships *handler.MembershipStoreAdapter, conversations *handler.ConversationStoreAdapter) *searchAccess {
+type allowedEntry struct {
+	ids       []string
+	expiresAt time.Time
+}
+
+func newSearchAccess(memberships userChannelLister, conversations userConversationLister) *searchAccess {
 	return &searchAccess{
 		memberships:   memberships,
 		conversations: conversations,
@@ -44,9 +47,9 @@ func newSearchAccess(memberships *handler.MembershipStoreAdapter, conversations 
 }
 
 // AllowedParentIDs returns the user's channel + conversation IDs from
-// DynamoDB. Two point queries run concurrently; results are cached
-// per-user (see allowedParentIDsTTL) so a burst of search-as-you-type
-// queries doesn't fan out into one DDB round-trip pair per keystroke.
+// DynamoDB. Two point queries run concurrently; results are cached per-user
+// for allowedParentIDsTTL so debounced search bursts do not fan out into one
+// DynamoDB round-trip pair per keystroke.
 func (a *searchAccess) AllowedParentIDs(ctx context.Context, userID string) ([]string, error) {
 	if userID == "" {
 		return nil, nil
@@ -96,11 +99,14 @@ func (a *searchAccess) cachedFor(userID string) ([]string, bool) {
 	if !ok || a.now().After(entry.expiresAt) {
 		return nil, false
 	}
-	return entry.ids, true
+	return append([]string(nil), entry.ids...), true
 }
 
 func (a *searchAccess) put(userID string, ids []string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.cache[userID] = allowedEntry{ids: ids, expiresAt: a.now().Add(allowedParentIDsTTL)}
+	a.cache[userID] = allowedEntry{
+		ids:       append([]string(nil), ids...),
+		expiresAt: a.now().Add(allowedParentIDsTTL),
+	}
 }

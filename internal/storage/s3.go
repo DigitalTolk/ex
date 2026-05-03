@@ -76,6 +76,7 @@ func NewS3Client(ctx context.Context, cfg S3Config) (*S3Client, error) {
 			o.BaseEndpoint = aws.String(cfg.Endpoint)
 			o.UsePathStyle = true
 		}
+		o.DisableLogOutputChecksumValidationSkipped = true
 	})
 
 	publicEndpoint := cfg.PublicEndpoint
@@ -87,6 +88,7 @@ func NewS3Client(ctx context.Context, cfg S3Config) (*S3Client, error) {
 			o.BaseEndpoint = aws.String(publicEndpoint)
 			o.UsePathStyle = true
 		}
+		o.DisableLogOutputChecksumValidationSkipped = true
 	})
 
 	// Ensure bucket exists (ignore "already exists" errors).

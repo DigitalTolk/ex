@@ -121,6 +121,7 @@ describe('NotificationProvider', () => {
   });
 
   it('suppresses conversation-message notifications when that DM is already on screen', () => {
+    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
     renderProbe();
     act(() => {
       setActiveSpy!('dm-1');
@@ -128,6 +129,17 @@ describe('NotificationProvider', () => {
     });
     expect(playMock).not.toHaveBeenCalled();
     expect(notificationCtor).not.toHaveBeenCalled();
+  });
+
+  it('still fires conversation-message notifications for the active parent in a background tab', () => {
+    Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true });
+    renderProbe();
+    act(() => {
+      setActiveSpy!('dm-1');
+      dispatchSpy!(samplePayload);
+    });
+    expect(playMock).toHaveBeenCalledTimes(1);
+    expect(notificationCtor).toHaveBeenCalledTimes(1);
   });
 
   it('still fires browser notification when document is visible (regression: previously gated)', () => {

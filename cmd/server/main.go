@@ -71,6 +71,7 @@ func main() {
 	membershipStore := handler.NewMembershipStoreAdapter(store.NewMembershipStore(db))
 	conversationStore := handler.NewConversationStoreAdapter(store.NewConversationStore(db))
 	messageStore := handler.NewMessageStoreAdapter(store.NewMessageStore(db))
+	threadFollowStore := handler.NewThreadFollowStoreAdapter(store.NewThreadFollowStore(db))
 	inviteStore := handler.NewInviteStoreAdapter(store.NewInviteStore(db))
 	tokenStore := handler.NewTokenStoreAdapter(store.NewTokenStore(db))
 	emojiStore := store.NewEmojiStore(db)
@@ -129,6 +130,7 @@ func main() {
 	authSvc.SetChannelJoiner(channelSvc)
 	convSvc := service.NewConversationService(conversationStore, userStore, redisCache, brokerAdapter, redisPubSub)
 	messageSvc := service.NewMessageService(messageStore, membershipStore, conversationStore, redisPubSub, brokerAdapter)
+	messageSvc.SetThreadFollowStore(threadFollowStore)
 	messageSvc.SetActivator(convSvc)
 	emojiSvc := service.NewEmojiService(emojiStore, userStore, redisPubSub)
 	if s3Client != nil {
@@ -145,6 +147,7 @@ func main() {
 	messageSvc.SetAttachmentManager(attachmentSvc)
 	notificationSvc := service.NewNotificationService(redisPubSub, membershipStore, conversationStore, channelStore, userStore, messageStore)
 	notificationSvc.SetPresence(presenceSvc)
+	notificationSvc.SetThreadFollowStore(threadFollowStore)
 	messageSvc.SetNotifier(notificationSvc)
 	settingsSvc := service.NewSettingsService(store.NewSettingsStore(db))
 	attachmentSvc.SetUploadLimits(settingsSvc)

@@ -4,10 +4,10 @@ import { MessageInput, type MessageInputHandle } from './MessageInput';
 import { MessageDropZone } from './MessageDropZone';
 import { ThreadTypingIndicator } from './TypingIndicator';
 import { Button } from '@/components/ui/button';
-import { X } from 'lucide-react';
+import { Bell, BellOff, X } from 'lucide-react';
 import { useAtBottomRef } from '@/hooks/useAtBottomRef';
 import { useSendMessage, type SendMessageInput } from '@/hooks/useMessages';
-import { useThreadMessages } from '@/hooks/useThreads';
+import { useFollowThread, useThreadMessages, useUnfollowThread, useUserThreads } from '@/hooks/useThreads';
 import { useUsersBatch } from '@/hooks/useUsersBatch';
 import { collectMessageUserIDs } from '@/lib/message-users';
 import { useDeleteDraft, useDraftAttachmentChips, useDraftForScope, useSaveDraft } from '@/hooks/useDrafts';
@@ -70,7 +70,13 @@ export function ThreadPanel({
   const send = useSendMessage({ channelId, conversationId });
   const inputRef = useRef<MessageInputHandle>(null);
   const parentID = channelId ?? conversationId;
-  const parentType = channelId ? 'channel' : 'conversation';
+  const parentType: 'channel' | 'conversation' = channelId ? 'channel' : 'conversation';
+  const { data: userThreads } = useUserThreads();
+  const isFollowing = !!userThreads?.some(
+    (t) => t.parentID === parentID && t.parentType === parentType && t.threadRootID === threadRootID,
+  );
+  const followThread = useFollowThread();
+  const unfollowThread = useUnfollowThread();
   const { data: draft } = useDraftForScope({
     parentID,
     parentType,
@@ -317,15 +323,37 @@ export function ThreadPanel({
     <aside className="w-[28rem] border-l flex flex-col" aria-label="Thread">
       <div className="flex items-center justify-between border-b px-4 py-3">
         <h2 className="text-sm font-semibold">Thread</h2>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-7 w-7"
-          onClick={onClose}
-          aria-label="Close thread"
-        >
-          <X className="h-4 w-4" />
-        </Button>
+        <div className="flex items-center gap-1">
+          {parentID && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 gap-1 px-2 text-xs"
+              disabled={followThread.isPending || unfollowThread.isPending}
+              onClick={() => {
+                const target = { parentID, parentType, threadRootID };
+                if (isFollowing) {
+                  unfollowThread.mutate(target);
+                } else {
+                  followThread.mutate(target);
+                }
+              }}
+              aria-label={isFollowing ? 'Unfollow thread' : 'Follow thread'}
+            >
+              {isFollowing ? <BellOff className="h-3.5 w-3.5" /> : <Bell className="h-3.5 w-3.5" />}
+              {isFollowing ? 'Unfollow' : 'Follow'}
+            </Button>
+          )}
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7"
+            onClick={onClose}
+            aria-label="Close thread"
+          >
+            <X className="h-4 w-4" />
+          </Button>
+        </div>
       </div>
       <MessageDropZone onFiles={(files) => void inputRef.current?.uploadFiles(files)}>
         <div ref={scrollRef} className="flex-1 overflow-y-auto">

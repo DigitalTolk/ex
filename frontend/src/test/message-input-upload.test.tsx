@@ -89,6 +89,51 @@ describe('MessageInput - file upload', () => {
     });
   });
 
+  it('keeps an attachment-only send cleared while stale draft props are still present', async () => {
+    const onSend = vi.fn();
+    const onDraftChange = vi.fn();
+    const staleDraft = {
+      id: 'att-only',
+      filename: 'diagram.svg',
+      contentType: 'image/svg+xml',
+      size: 128,
+      progress: 1,
+    };
+    const { rerender } = render(
+      <MessageInput
+        onSend={onSend}
+        onDraftChange={onDraftChange}
+        initialDrafts={[staleDraft]}
+      />,
+    );
+
+    expect(screen.getByText('diagram.svg')).toBeInTheDocument();
+    fireEvent.click(await screen.findByLabelText('Send message'));
+
+    await waitFor(() => {
+      expect(onSend).toHaveBeenCalledWith({ body: '', attachmentIDs: ['att-only'] });
+    });
+    expect(screen.queryByText('diagram.svg')).not.toBeInTheDocument();
+
+    rerender(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <MessageInput
+          onSend={onSend}
+          onDraftChange={onDraftChange}
+          initialDrafts={[staleDraft]}
+        />
+      </QueryClientProvider>,
+    );
+    expect(screen.queryByText('diagram.svg')).not.toBeInTheDocument();
+
+    await waitFor(
+      () => {
+        expect(onDraftChange).toHaveBeenCalledWith({ body: '', attachmentIDs: [] });
+      },
+      { timeout: 1500 },
+    );
+  });
+
   it('shows error when upload fails', async () => {
     mockUploadAttachment.mockRejectedValueOnce(new Error('Network error'));
 

@@ -75,6 +75,7 @@ type NotificationService struct {
 	users     UserStore
 	messages  MessageStore
 	presence  PresenceLookup
+	follows   ThreadFollowStore
 }
 
 // NewNotificationService builds a NotificationService. messages is used
@@ -89,6 +90,8 @@ func NewNotificationService(p Publisher, m MembershipStore, c ConversationStore,
 // currently-online members. Optional — when nil, @here falls through to
 // "no recipients" (better than spamming the whole channel).
 func (s *NotificationService) SetPresence(p PresenceLookup) { s.presence = p }
+
+func (s *NotificationService) SetThreadFollowStore(f ThreadFollowStore) { s.follows = f }
 
 // memberSnapshot is everything NotifyForMessage and its helpers need to
 // reason about a parent's audience: the IDs of every recipient (author
@@ -201,7 +204,7 @@ func (s *NotificationService) NotifyForMessage(ctx context.Context, msg *model.M
 	//     members were being woken up for conversations they're not in.
 	var audience []string
 	if kind == NotificationKindThreadReply {
-		audience = s.resolveThreadRecipients(ctx, msg)
+		audience = s.resolveThreadRecipients(ctx, msg, parentType, snap)
 	} else {
 		audience = snap.memberIDs
 	}
@@ -269,9 +272,23 @@ func (s *NotificationService) resolveMentionRecipients(msg *model.Message, paren
 // thread-reply notification: the thread root's author plus everyone
 // who has already replied in this thread. The current message's author
 // is excluded; duplicates are removed.
-func (s *NotificationService) resolveThreadRecipients(ctx context.Context, msg *model.Message) []string {
+func (s *NotificationService) resolveThreadRecipients(ctx context.Context, msg *model.Message, parentType string, snap memberSnapshot) []string {
 	if s.messages == nil || msg.ParentMessageID == "" {
 		return nil
+	}
+	unfollowed := make(map[string]bool)
+	explicitFollowers := make([]string, 0)
+	if s.follows != nil {
+		follows, err := s.follows.ListThreadFollows(ctx, msg.ParentID, msg.ParentMessageID)
+		if err == nil {
+			for _, f := range follows {
+				if f.Following {
+					explicitFollowers = append(explicitFollowers, f.UserID)
+				} else {
+					unfollowed[f.UserID] = true
+				}
+			}
+		}
 	}
 	// Pull every message under the parent and filter for the thread.
 	// 1000 matches the cap ListThreadMessages uses; threads larger
@@ -285,23 +302,40 @@ func (s *NotificationService) resolveThreadRecipients(ctx context.Context, msg *
 	var rootAuthor string
 	repliers := make([]string, 0)
 	seen := make(map[string]bool)
+	currentMembers := make(map[string]bool, len(snap.memberIDs))
+	for _, uid := range snap.memberIDs {
+		currentMembers[uid] = true
+	}
 	add := func(dst *[]string, uid string) {
-		if uid == "" || uid == msg.AuthorID || seen[uid] {
+		if uid == "" || uid == msg.AuthorID || seen[uid] || unfollowed[uid] {
+			return
+		}
+		if parentType == ParentChannel && !currentMembers[uid] {
 			return
 		}
 		seen[uid] = true
 		*dst = append(*dst, uid)
 	}
+	if parentType == ParentConversation {
+		out := make([]string, 0, len(snap.memberIDs))
+		for _, uid := range snap.memberIDs {
+			add(&out, uid)
+		}
+		return out
+	}
 	for _, m := range all {
 		switch {
 		case m.ID == msg.ParentMessageID:
-			if rootAuthor == "" && m.AuthorID != "" && m.AuthorID != msg.AuthorID {
+			if rootAuthor == "" && m.AuthorID != "" && m.AuthorID != msg.AuthorID && !unfollowed[m.AuthorID] && currentMembers[m.AuthorID] {
 				rootAuthor = m.AuthorID
 				seen[m.AuthorID] = true
 			}
 		case m.ParentMessageID == msg.ParentMessageID && m.ID != msg.ID:
 			add(&repliers, m.AuthorID)
 		}
+	}
+	for _, uid := range explicitFollowers {
+		add(&repliers, uid)
 	}
 	if rootAuthor == "" {
 		return repliers

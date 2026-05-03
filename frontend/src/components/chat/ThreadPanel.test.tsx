@@ -136,6 +136,71 @@ describe('ThreadPanel', () => {
     expect(onClose).toHaveBeenCalled();
   });
 
+  it('shows Follow when the thread is not in /threads and calls the follow endpoint', async () => {
+    mockApiFetch.mockImplementation((url: string) => {
+      if (url === '/api/v1/threads') return Promise.resolve([]);
+      if (url.includes('/messages/m-1/thread')) return Promise.resolve([]);
+      return Promise.resolve(undefined);
+    });
+    renderWithProviders(
+      <ThreadPanel
+        channelId="ch-1"
+        threadRootID="m-1"
+        onClose={vi.fn()}
+        userMap={userMap}
+        currentUserId="u-1"
+      />,
+    );
+
+    fireEvent.click(await screen.findByLabelText('Follow thread'));
+
+    await waitFor(() => {
+      expect(mockApiFetch).toHaveBeenCalledWith(
+        '/api/v1/threads/channels/ch-1/m-1/follow',
+        expect.objectContaining({ method: 'PUT' }),
+      );
+    });
+  });
+
+  it('shows Unfollow when the thread is already in /threads and calls the unfollow endpoint', async () => {
+    mockApiFetch.mockImplementation((url: string) => {
+      if (url === '/api/v1/threads') {
+        return Promise.resolve([
+          {
+            parentID: 'ch-1',
+            parentType: 'channel',
+            threadRootID: 'm-1',
+            rootAuthorID: 'u-2',
+            rootBody: 'root',
+            rootCreatedAt: '2026-04-24T10:00:00Z',
+            replyCount: 1,
+            latestActivityAt: '2026-04-24T10:30:00Z',
+          },
+        ]);
+      }
+      if (url.includes('/messages/m-1/thread')) return Promise.resolve([]);
+      return Promise.resolve(undefined);
+    });
+    renderWithProviders(
+      <ThreadPanel
+        channelId="ch-1"
+        threadRootID="m-1"
+        onClose={vi.fn()}
+        userMap={userMap}
+        currentUserId="u-1"
+      />,
+    );
+
+    fireEvent.click(await screen.findByLabelText('Unfollow thread'));
+
+    await waitFor(() => {
+      expect(mockApiFetch).toHaveBeenCalledWith(
+        '/api/v1/threads/channels/ch-1/m-1/follow',
+        expect.objectContaining({ method: 'DELETE' }),
+      );
+    });
+  });
+
   it('forwards parentMessageID to useSendMessage when the user sends a reply', async () => {
     mockApiFetch.mockResolvedValueOnce([]);
     const user = userEvent.setup();

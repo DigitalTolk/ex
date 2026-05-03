@@ -359,9 +359,7 @@ export function ConversationView() {
           />
         </MessageDropZone>
       </div>
-      {activeTag ? (
-        <TagSearchPanel />
-      ) : effectiveThreadRootID ? (
+      {effectiveThreadRootID ? (
         <ThreadPanel
           conversationId={id}
           threadRootID={effectiveThreadRootID}
@@ -373,6 +371,8 @@ export function ConversationView() {
           }
           anchorRevision={navKey}
         />
+      ) : activeTag ? (
+        <TagSearchPanel />
       ) : showPinned ? (
         <PinnedPanel
           conversationId={id}

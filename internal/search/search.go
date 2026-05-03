@@ -29,11 +29,19 @@ type MessageQuery struct {
 	Limit      int
 }
 
+// ChannelQuery bundles optional filters for channel search. AllowedChannelIDs
+// scopes results to channels the caller belongs to; nil means unscoped.
+type ChannelQuery struct {
+	Q                 string
+	AllowedChannelIDs []string
+	Limit             int
+}
+
 // Searcher is the read side. Tests stub this directly so they don't
 // need a live cluster.
 type Searcher interface {
 	Users(ctx context.Context, q string, limit int) (*SearchResult, error)
-	Channels(ctx context.Context, q string, limit int) (*SearchResult, error)
+	Channels(ctx context.Context, opts ChannelQuery) (*SearchResult, error)
 	// Messages searches message bodies, restricted to the parent IDs
 	// the caller is allowed to read. Hashtag queries (`#foo`) are
 	// detected in the input string and routed to the `tags` keyword
@@ -78,18 +86,28 @@ func (s *Service) Users(ctx context.Context, q string, limit int) (*SearchResult
 	return s.r.Search(ctx, IndexUsers, body)
 }
 
-// Channels matches name (boosted) + description, with a filter that
-// excludes archived channels.
-func (s *Service) Channels(ctx context.Context, q string, limit int) (*SearchResult, error) {
-	q = normalizeFuzzy(strings.TrimSpace(q))
+// Channels matches name (boosted) + description, excluding archived channels.
+// When AllowedChannelIDs is non-nil, results are scoped to those channel IDs so
+// callers can include private channels without leaking channels they do not
+// belong to.
+func (s *Service) Channels(ctx context.Context, opts ChannelQuery) (*SearchResult, error) {
+	q := normalizeFuzzy(strings.TrimSpace(opts.Q))
 	if q == "" {
 		return &SearchResult{Hits: []SearchHit{}}, nil
 	}
+	filters := []any{}
+	if opts.AllowedChannelIDs != nil {
+		if len(opts.AllowedChannelIDs) == 0 {
+			return &SearchResult{Hits: []SearchHit{}}, nil
+		}
+		filters = append(filters, map[string]any{"terms": map[string]any{"id": stringSliceToAny(opts.AllowedChannelIDs)}})
+	}
 	body := map[string]any{
-		"size": clampLimit(limit),
+		"size": clampLimit(opts.Limit),
 		"query": map[string]any{
 			"bool": map[string]any{
-				"must": []any{fieldMust(q, "name^3", "description")},
+				"must":   []any{fieldMust(q, "name^3", "description")},
+				"filter": filters,
 				"must_not": []any{
 					map[string]any{"term": map[string]any{"archived": true}},
 				},
@@ -247,7 +265,7 @@ type noopSearcher struct{}
 func (noopSearcher) Users(context.Context, string, int) (*SearchResult, error) {
 	return &SearchResult{Hits: []SearchHit{}}, nil
 }
-func (noopSearcher) Channels(context.Context, string, int) (*SearchResult, error) {
+func (noopSearcher) Channels(context.Context, ChannelQuery) (*SearchResult, error) {
 	return &SearchResult{Hits: []SearchHit{}}, nil
 }
 func (noopSearcher) Messages(context.Context, MessageQuery) (*SearchResult, error) {

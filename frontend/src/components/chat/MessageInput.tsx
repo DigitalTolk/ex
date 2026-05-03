@@ -201,11 +201,14 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
     onSend({ body: normalized, attachmentIDs: drafts.map((d) => d.id) });
     if (variant === 'inline') return; // parent unmounts the inline edit
     drafts.forEach((d) => d.localURL && URL.revokeObjectURL(d.localURL));
+    // Prevent the just-sent server draft props from rehydrating while the
+    // debounced empty-draft save/delete catches up.
+    appliedInitialDraftRef.current = initialDraftKey;
     setBody('');
     setDrafts([]);
     editorRef.current?.setMarkdown('');
     queueMicrotask(() => editorRef.current?.focus());
-  }, [canSend, body, drafts, onSend, variant]);
+  }, [canSend, body, drafts, onSend, variant, initialDraftKey]);
 
   useEffect(() => {
     if (variant !== 'composer') return;

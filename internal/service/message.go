@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -32,6 +33,7 @@ type ConversationActivator interface {
 // to bind/unbind attachments to messages. Defined as an interface so tests can
 // stub it without dragging in storage.
 type AttachmentRefManager interface {
+	ValidateForUse(ctx context.Context, attachmentID string) error
 	AddRef(ctx context.Context, attachmentID, messageID string) error
 	RemoveRef(ctx context.Context, attachmentID, messageID string) error
 }
@@ -59,6 +61,7 @@ type MessageService struct {
 	attachments   AttachmentRefManager
 	notifier      MessageNotifier
 	indexer       MessageIndexer
+	threadFollows ThreadFollowStore
 }
 
 // NewMessageService creates a MessageService with the given dependencies.
@@ -91,6 +94,8 @@ func (s *MessageService) SetAttachmentManager(a AttachmentRefManager) { s.attach
 func (s *MessageService) SetNotifier(n MessageNotifier) { s.notifier = n }
 
 func (s *MessageService) SetIndexer(i MessageIndexer) { s.indexer = i }
+
+func (s *MessageService) SetThreadFollowStore(f ThreadFollowStore) { s.threadFollows = f }
 
 // indexMessage / deleteFromIndex dispatch on a detached goroutine so a
 // slow OpenSearch never adds to user-perceived send latency. Failures
@@ -136,6 +141,9 @@ func (s *MessageService) Send(ctx context.Context, userID, parentID, parentType,
 		return nil, err
 	}
 	if err := ValidateAttachmentCount(len(attachmentIDs)); err != nil {
+		return nil, err
+	}
+	if err := s.validateAttachmentsForUse(ctx, attachmentIDs); err != nil {
 		return nil, err
 	}
 
@@ -247,6 +255,40 @@ type ThreadSummary struct {
 	LatestActivityAt time.Time `json:"latestActivityAt"`
 }
 
+func threadFollowKey(parentID, threadRootID string) string {
+	return parentID + "#" + threadRootID
+}
+
+// SetThreadFollow records whether userID follows threadRootID. Following=true
+// adds a thread to /threads without requiring the user to reply. Following=false
+// suppresses implicit participation from authored roots/replies.
+func (s *MessageService) SetThreadFollow(ctx context.Context, userID, parentID, parentType, threadRootID string, following bool) error {
+	if parentType != ParentChannel && parentType != ParentConversation {
+		return errors.New("thread: invalid parent type")
+	}
+	if s.threadFollows == nil {
+		return errors.New("thread: follow store unavailable")
+	}
+	if err := s.checkAccess(ctx, userID, parentID, parentType); err != nil {
+		return err
+	}
+	root, err := s.messages.GetMessage(ctx, parentID, threadRootID)
+	if err != nil {
+		return fmt.Errorf("thread: get root: %w", err)
+	}
+	if root.ParentMessageID != "" {
+		return errors.New("thread: root must be a top-level message")
+	}
+	return s.threadFollows.SetThreadFollow(ctx, &model.ThreadFollow{
+		UserID:       userID,
+		ParentID:     parentID,
+		ParentType:   parentType,
+		ThreadRootID: threadRootID,
+		Following:    following,
+		UpdatedAt:    time.Now(),
+	})
+}
+
 // ListUserThreads returns thread summaries for every thread the given user has
 // participated in (authored the root or any reply). Sorted by latest activity,
 // newest first.
@@ -283,6 +325,16 @@ func (s *MessageService) ListUserThreads(ctx context.Context, userID string) ([]
 
 	out := make([]*ThreadSummary, 0)
 	seen := make(map[string]bool)
+	followOverrides := make(map[string]bool)
+	if s.threadFollows != nil {
+		follows, err := s.threadFollows.ListUserThreadFollows(ctx, userID)
+		if err != nil {
+			return nil, fmt.Errorf("threads: list follows: %w", err)
+		}
+		for _, f := range follows {
+			followOverrides[threadFollowKey(f.ParentID, f.ThreadRootID)] = f.Following
+		}
+	}
 
 	for _, p := range parents {
 		msgs, _, err := s.messages.ListMessages(ctx, p.id, "", 1000)
@@ -304,6 +356,17 @@ func (s *MessageService) ListUserThreads(ctx context.Context, userID string) ([]
 				participated[m.ParentMessageID] = true
 			} else if m.ReplyCount > 0 {
 				participated[m.ID] = true
+			}
+		}
+		for key, following := range followOverrides {
+			if !strings.HasPrefix(key, p.id+"#") {
+				continue
+			}
+			rootID := strings.TrimPrefix(key, p.id+"#")
+			if following {
+				participated[rootID] = true
+			} else {
+				delete(participated, rootID)
 			}
 		}
 		// Build summaries.
@@ -592,6 +655,11 @@ func (s *MessageService) Edit(ctx context.Context, userID, parentID, parentType,
 	if err := ValidateAttachmentCount(len(finalAttachments)); err != nil {
 		return nil, err
 	}
+	if attachmentIDs != nil {
+		if err := s.validateAttachmentsForUse(ctx, attachmentIDs); err != nil {
+			return nil, err
+		}
+	}
 
 	msg.Body = newBody
 	now := time.Now()
@@ -842,6 +910,23 @@ func (s *MessageService) checkAccess(ctx context.Context, userID, parentID, pare
 		}
 	default:
 		return fmt.Errorf("message: unknown parent type %q", parentType)
+	}
+	return nil
+}
+
+func (s *MessageService) validateAttachmentsForUse(ctx context.Context, ids []string) error {
+	if len(ids) == 0 || s.attachments == nil {
+		return nil
+	}
+	seen := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		if err := s.attachments.ValidateForUse(ctx, id); err != nil {
+			return fmt.Errorf("message: invalid attachment %q: %w", id, err)
+		}
 	}
 	return nil
 }

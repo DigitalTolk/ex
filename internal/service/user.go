@@ -194,6 +194,9 @@ func (s *UserService) Update(ctx context.Context, userID string, displayName, av
 		user.DisplayName = *displayName
 	}
 	if avatarKey != nil {
+		if *avatarKey != "" && !strings.HasPrefix(*avatarKey, "avatars/"+userID+"/") {
+			return nil, errors.New("user: avatar key is not owned by this user")
+		}
 		// New key → drop any cached presigned URL for the previous key
 		// so an avatar swap shows up immediately rather than after the
 		// cache window elapses.

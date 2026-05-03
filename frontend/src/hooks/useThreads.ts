@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiFetch } from '@/lib/api';
 import { slugify } from '@/lib/format';
 import { readJSON, writeJSON } from '@/lib/storage';
@@ -16,6 +16,12 @@ export interface ThreadSummary {
   latestActivityAt: string;
 }
 
+interface ThreadFollowTarget {
+  parentID: string;
+  parentType: 'channel' | 'conversation';
+  threadRootID: string;
+}
+
 export function useUserThreads() {
   return useQuery<ThreadSummary[]>({
     queryKey: queryKeys.userThreads(),
@@ -24,6 +30,29 @@ export function useUserThreads() {
       return Array.isArray(res) ? res : [];
     },
     staleTime: 15_000,
+  });
+}
+
+function threadFollowPath(target: ThreadFollowTarget): string {
+  const parentType = target.parentType === 'channel' ? 'channels' : 'conversations';
+  return `/api/v1/threads/${parentType}/${encodeURIComponent(target.parentID)}/${encodeURIComponent(target.threadRootID)}/follow`;
+}
+
+export function useFollowThread() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (target: ThreadFollowTarget) =>
+      apiFetch<void>(threadFollowPath(target), { method: 'PUT' }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.userThreads() }),
+  });
+}
+
+export function useUnfollowThread() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (target: ThreadFollowTarget) =>
+      apiFetch<void>(threadFollowPath(target), { method: 'DELETE' }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.userThreads() }),
   });
 }
 

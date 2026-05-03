@@ -72,6 +72,14 @@ type MessageStore interface {
 	IncrementReplyMetadata(ctx context.Context, parentID, msgID string, replyTime time.Time, replyAuthorID string) (*model.Message, error)
 }
 
+// ThreadFollowStore defines per-user follow/unfollow overrides for threads.
+type ThreadFollowStore interface {
+	SetThreadFollow(ctx context.Context, follow *model.ThreadFollow) error
+	GetThreadFollow(ctx context.Context, userID, parentID, threadRootID string) (*model.ThreadFollow, error)
+	ListUserThreadFollows(ctx context.Context, userID string) ([]*model.ThreadFollow, error)
+	ListThreadFollows(ctx context.Context, parentID, threadRootID string) ([]*model.ThreadFollow, error)
+}
+
 // DraftStore defines persistence operations for server-side message drafts.
 type DraftStore interface {
 	Upsert(ctx context.Context, draft *model.MessageDraft) error
@@ -97,6 +105,8 @@ type TokenStore interface {
 
 // Cache defines cache operations used by the service layer.
 type Cache interface {
+	Get(ctx context.Context, key string, dest interface{}) error
+	Set(ctx context.Context, key string, val interface{}, ttl time.Duration) error
 	GetUser(ctx context.Context, id string) (*model.User, error)
 	SetUser(ctx context.Context, user *model.User) error
 	Delete(ctx context.Context, key string) error

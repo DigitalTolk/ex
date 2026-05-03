@@ -37,6 +37,9 @@ const threadDataState: { current: { id: string; authorID: string; body: string }
 };
 vi.mock('@/hooks/useThreads', () => ({
   useThreadMessages: () => ({ data: threadDataState.current, isLoading: false }),
+  useUserThreads: () => ({ data: [] }),
+  useFollowThread: () => ({ mutate: vi.fn(), isPending: false }),
+  useUnfollowThread: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 
 import { ThreadPanel } from '@/components/chat/ThreadPanel';

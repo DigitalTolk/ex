@@ -39,6 +39,20 @@ func setupNotifierWithMessages(t *testing.T) (*NotificationService, *mockPublish
 	return svc, pub, members, chans, users, msgs
 }
 
+func setupNotifierWithMessagesAndFollows(t *testing.T) (*NotificationService, *mockPublisher, *mockMembershipStore, *mockConversationStore, *mockChannelStore, *mockUserStore, *mockMessageStore, *mockThreadFollowStore) {
+	t.Helper()
+	pub := newMockPublisher()
+	members := newMockMembershipStore()
+	conv := newMockConversationStore()
+	chans := newMockChannelStore()
+	users := newMockUserStore()
+	msgs := newMockMessageStore()
+	follows := newMockThreadFollowStore()
+	svc := NewNotificationService(pub, members, conv, chans, users, msgs)
+	svc.SetThreadFollowStore(follows)
+	return svc, pub, members, conv, chans, users, msgs, follows
+}
+
 // stubPresence is a tiny PresenceLookup implementation: any userID listed
 // in the set is reported online; everyone else is offline.
 type stubPresence struct {
@@ -151,6 +165,121 @@ func TestNotificationService_NotifyForMessage_ThreadReply_OnlyParticipantsAndRoo
 		if n.Kind != NotificationKindThreadReply {
 			t.Errorf("kind = %q, want thread_reply", n.Kind)
 		}
+	}
+}
+
+func TestNotificationService_NotifyForMessage_ThreadReply_IncludesExplicitFollowers(t *testing.T) {
+	svc, pub, members, _, chans, users, msgs, follows := setupNotifierWithMessagesAndFollows(t)
+	ctx := context.Background()
+
+	chans.channels["ch1"] = &model.Channel{ID: "ch1", Name: "general", Slug: "general"}
+	for _, uid := range []string{"u-root", "u-replier", "u-follower"} {
+		users.users[uid] = &model.User{ID: uid, DisplayName: uid}
+		members.memberships["ch1#"+uid] = &model.ChannelMembership{ChannelID: "ch1", UserID: uid}
+	}
+	msgs.messages["ch1#m-root"] = &model.Message{ID: "m-root", ParentID: "ch1", AuthorID: "u-root", Body: "ask"}
+	if err := follows.SetThreadFollow(ctx, &model.ThreadFollow{
+		UserID: "u-follower", ParentID: "ch1", ParentType: ParentChannel, ThreadRootID: "m-root", Following: true,
+	}); err != nil {
+		t.Fatalf("SetThreadFollow: %v", err)
+	}
+
+	svc.NotifyForMessage(ctx, &model.Message{
+		ID: "m-r1", ParentID: "ch1", AuthorID: "u-replier", ParentMessageID: "m-root", Body: "reply",
+	}, ParentChannel)
+
+	kinds := publishedKinds(pub)
+	if got := kinds[pubsub.UserChannel("u-follower")]; got != NotificationKindThreadReply {
+		t.Errorf("explicit follower should get thread_reply, got %q", got)
+	}
+}
+
+func TestNotificationService_NotifyForMessage_ThreadReply_SkipsStaleExplicitFollowers(t *testing.T) {
+	svc, pub, members, _, chans, users, msgs, follows := setupNotifierWithMessagesAndFollows(t)
+	ctx := context.Background()
+
+	chans.channels["ch1"] = &model.Channel{ID: "ch1", Name: "general", Slug: "general"}
+	for _, uid := range []string{"u-root", "u-replier", "u-stale"} {
+		users.users[uid] = &model.User{ID: uid, DisplayName: uid}
+	}
+	for _, uid := range []string{"u-root", "u-replier"} {
+		members.memberships["ch1#"+uid] = &model.ChannelMembership{ChannelID: "ch1", UserID: uid}
+	}
+	msgs.messages["ch1#m-root"] = &model.Message{ID: "m-root", ParentID: "ch1", AuthorID: "u-root", Body: "ask"}
+	if err := follows.SetThreadFollow(ctx, &model.ThreadFollow{
+		UserID: "u-stale", ParentID: "ch1", ParentType: ParentChannel, ThreadRootID: "m-root", Following: true,
+	}); err != nil {
+		t.Fatalf("SetThreadFollow: %v", err)
+	}
+
+	svc.NotifyForMessage(ctx, &model.Message{
+		ID: "m-r1", ParentID: "ch1", AuthorID: "u-replier", ParentMessageID: "m-root", Body: "reply",
+	}, ParentChannel)
+
+	kinds := publishedKinds(pub)
+	if _, ok := kinds[pubsub.UserChannel("u-stale")]; ok {
+		t.Error("stale explicit follower without channel membership must not get thread_reply")
+	}
+	if got := kinds[pubsub.UserChannel("u-root")]; got != NotificationKindThreadReply {
+		t.Errorf("current root author should still get thread_reply, got %q", got)
+	}
+}
+
+func TestNotificationService_NotifyForMessage_ThreadReply_ExcludesUnfollowedParticipants(t *testing.T) {
+	svc, pub, members, _, chans, users, msgs, follows := setupNotifierWithMessagesAndFollows(t)
+	ctx := context.Background()
+
+	chans.channels["ch1"] = &model.Channel{ID: "ch1", Name: "general", Slug: "general"}
+	for _, uid := range []string{"u-root", "u-replier", "u-author"} {
+		users.users[uid] = &model.User{ID: uid, DisplayName: uid}
+		members.memberships["ch1#"+uid] = &model.ChannelMembership{ChannelID: "ch1", UserID: uid}
+	}
+	msgs.messages["ch1#m-root"] = &model.Message{ID: "m-root", ParentID: "ch1", AuthorID: "u-root", Body: "ask"}
+	msgs.messages["ch1#m-r1"] = &model.Message{ID: "m-r1", ParentID: "ch1", AuthorID: "u-replier", ParentMessageID: "m-root", Body: "prior"}
+	if err := follows.SetThreadFollow(ctx, &model.ThreadFollow{
+		UserID: "u-replier", ParentID: "ch1", ParentType: ParentChannel, ThreadRootID: "m-root", Following: false,
+	}); err != nil {
+		t.Fatalf("SetThreadFollow: %v", err)
+	}
+
+	svc.NotifyForMessage(ctx, &model.Message{
+		ID: "m-r2", ParentID: "ch1", AuthorID: "u-author", ParentMessageID: "m-root", Body: "reply",
+	}, ParentChannel)
+
+	kinds := publishedKinds(pub)
+	if _, ok := kinds[pubsub.UserChannel("u-replier")]; ok {
+		t.Error("unfollowed prior participant should not get thread_reply")
+	}
+	if got := kinds[pubsub.UserChannel("u-root")]; got != NotificationKindThreadReply {
+		t.Errorf("root author should still get thread_reply, got %q", got)
+	}
+}
+
+func TestNotificationService_NotifyForMessage_DMThreadReply_NotifiesConversationParticipants(t *testing.T) {
+	svc, pub, _, conv, _, users, msgs, _ := setupNotifierWithMessagesAndFollows(t)
+	ctx := context.Background()
+
+	users.users["u-author"] = &model.User{ID: "u-author", DisplayName: "Alice"}
+	users.users["u-bob"] = &model.User{ID: "u-bob", DisplayName: "Bob"}
+	users.users["u-carol"] = &model.User{ID: "u-carol", DisplayName: "Carol"}
+	conv.conversations["conv1"] = &model.Conversation{
+		ID: "conv1", Type: model.ConversationTypeGroup, ParticipantIDs: []string{"u-author", "u-bob", "u-carol"},
+	}
+	msgs.messages["conv1#m-root"] = &model.Message{ID: "m-root", ParentID: "conv1", AuthorID: "u-bob", Body: "ask"}
+
+	svc.NotifyForMessage(ctx, &model.Message{
+		ID: "m-r1", ParentID: "conv1", AuthorID: "u-author", ParentMessageID: "m-root", Body: "reply",
+	}, ParentConversation)
+
+	kinds := publishedKinds(pub)
+	if got := kinds[pubsub.UserChannel("u-bob")]; got != NotificationKindThreadReply {
+		t.Errorf("DM root author should get thread_reply, got %q", got)
+	}
+	if got := kinds[pubsub.UserChannel("u-carol")]; got != NotificationKindThreadReply {
+		t.Errorf("other DM participant should get thread_reply even without activity, got %q", got)
+	}
+	if _, ok := kinds[pubsub.UserChannel("u-author")]; ok {
+		t.Error("author must not receive their own DM thread notification")
 	}
 }
 
