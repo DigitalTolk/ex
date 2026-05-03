@@ -194,6 +194,37 @@ func TestNotificationService_NotifyForMessage_ThreadReply_IncludesExplicitFollow
 	}
 }
 
+func TestNotificationService_NotifyForMessage_ThreadReply_SkipsStaleExplicitFollowers(t *testing.T) {
+	svc, pub, members, _, chans, users, msgs, follows := setupNotifierWithMessagesAndFollows(t)
+	ctx := context.Background()
+
+	chans.channels["ch1"] = &model.Channel{ID: "ch1", Name: "general", Slug: "general"}
+	for _, uid := range []string{"u-root", "u-replier", "u-stale"} {
+		users.users[uid] = &model.User{ID: uid, DisplayName: uid}
+	}
+	for _, uid := range []string{"u-root", "u-replier"} {
+		members.memberships["ch1#"+uid] = &model.ChannelMembership{ChannelID: "ch1", UserID: uid}
+	}
+	msgs.messages["ch1#m-root"] = &model.Message{ID: "m-root", ParentID: "ch1", AuthorID: "u-root", Body: "ask"}
+	if err := follows.SetThreadFollow(ctx, &model.ThreadFollow{
+		UserID: "u-stale", ParentID: "ch1", ParentType: ParentChannel, ThreadRootID: "m-root", Following: true,
+	}); err != nil {
+		t.Fatalf("SetThreadFollow: %v", err)
+	}
+
+	svc.NotifyForMessage(ctx, &model.Message{
+		ID: "m-r1", ParentID: "ch1", AuthorID: "u-replier", ParentMessageID: "m-root", Body: "reply",
+	}, ParentChannel)
+
+	kinds := publishedKinds(pub)
+	if _, ok := kinds[pubsub.UserChannel("u-stale")]; ok {
+		t.Error("stale explicit follower without channel membership must not get thread_reply")
+	}
+	if got := kinds[pubsub.UserChannel("u-root")]; got != NotificationKindThreadReply {
+		t.Errorf("current root author should still get thread_reply, got %q", got)
+	}
+}
+
 func TestNotificationService_NotifyForMessage_ThreadReply_ExcludesUnfollowedParticipants(t *testing.T) {
 	svc, pub, members, _, chans, users, msgs, follows := setupNotifierWithMessagesAndFollows(t)
 	ctx := context.Background()

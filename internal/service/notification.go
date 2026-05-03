@@ -302,8 +302,15 @@ func (s *NotificationService) resolveThreadRecipients(ctx context.Context, msg *
 	var rootAuthor string
 	repliers := make([]string, 0)
 	seen := make(map[string]bool)
+	currentMembers := make(map[string]bool, len(snap.memberIDs))
+	for _, uid := range snap.memberIDs {
+		currentMembers[uid] = true
+	}
 	add := func(dst *[]string, uid string) {
 		if uid == "" || uid == msg.AuthorID || seen[uid] || unfollowed[uid] {
+			return
+		}
+		if parentType == ParentChannel && !currentMembers[uid] {
 			return
 		}
 		seen[uid] = true
@@ -319,7 +326,7 @@ func (s *NotificationService) resolveThreadRecipients(ctx context.Context, msg *
 	for _, m := range all {
 		switch {
 		case m.ID == msg.ParentMessageID:
-			if rootAuthor == "" && m.AuthorID != "" && m.AuthorID != msg.AuthorID && !unfollowed[m.AuthorID] {
+			if rootAuthor == "" && m.AuthorID != "" && m.AuthorID != msg.AuthorID && !unfollowed[m.AuthorID] && currentMembers[m.AuthorID] {
 				rootAuthor = m.AuthorID
 				seen[m.AuthorID] = true
 			}
