@@ -158,9 +158,7 @@ func (s *MessageService) Send(ctx context.Context, userID, parentID, parentType,
 	// message is already persisted so we don't roll it back.
 	s.bindAttachments(ctx, msg.ID, attachmentIDs)
 
-	// Activate the conversation on first message so non-creator participants
-	// see it appear in their sidebars only after activity exists.
-	if parentType == ParentConversation && parentMessageID == "" {
+	if parentType == ParentConversation {
 		if conv, err := s.conversations.GetConversation(ctx, parentID); err == nil && conv != nil {
 			if err := s.conversations.TouchConversation(ctx, parentID, conv.ParticipantIDs, now); err != nil {
 				slog.Warn("conversation activity touch failed", "convID", parentID, "error", err)
@@ -174,10 +172,12 @@ func (s *MessageService) Send(ctx context.Context, userID, parentID, parentType,
 					"updatedAt":      now,
 				})
 			}
-		}
-		if s.activator != nil {
-			if err := s.activator.Activate(ctx, parentID); err != nil {
-				slog.Warn("conversation activate failed", "convID", parentID, "error", err)
+			// Activate the conversation on first top-level message so non-creator
+			// participants see it appear in their sidebars only after activity exists.
+			if parentMessageID == "" && s.activator != nil {
+				if err := s.activator.Activate(ctx, parentID); err != nil {
+					slog.Warn("conversation activate failed", "convID", parentID, "error", err)
+				}
 			}
 		}
 	}
