@@ -30,7 +30,7 @@ export const ALL_EMOJI: EmojiEntry[] = [
   { name: "smile", unicode: "😄", category: "smileys_emotion" },
   { name: "beam_face_smile_eyes", unicode: "😁", category: "smileys_emotion" },
   { name: "laughing", unicode: "😆", category: "smileys_emotion" },
-  { name: "grin_face_sweat", unicode: "😅", category: "smileys_emotion" },
+  { name: "sweat_smile", unicode: "😅", category: "smileys_emotion" },
   { name: "rolling_on_floor_laugh", unicode: "🤣", category: "smileys_emotion" },
   { name: "joy", unicode: "😂", category: "smileys_emotion" },
   { name: "slightly_smile_face", unicode: "🙂", category: "smileys_emotion" },

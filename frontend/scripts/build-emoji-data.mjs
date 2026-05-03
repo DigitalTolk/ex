@@ -73,6 +73,7 @@ const WORD_REPLACEMENTS = new Map([
 
 const NAME_OVERRIDES = new Map([
   ['grinning_face_with_smiling_eyes', 'smile'],
+  ['grinning_face_with_sweat', 'sweat_smile'],
   ['grinning_squinting_face', 'laughing'],
   ['face_with_tears_of_joy', 'joy'],
   ['smiling_face_with_heart_eyes', 'heart_eyes'],

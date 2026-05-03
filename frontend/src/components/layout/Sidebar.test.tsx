@@ -15,18 +15,20 @@ vi.mock('@/lib/api', () => ({
 }));
 
 vi.mock('@atlaskit/pragmatic-drag-and-drop/element/adapter', () => {
+  type DragLocation = { current: { input: { clientX: number; clientY: number }; dropTargets: Array<{ data: Record<string | symbol, unknown> }> } };
   type Monitor = {
-    onDragStart?: (args: { source: { data: Record<string, unknown> } }) => void;
-    onDropTargetChange?: (args: { location: { current: { dropTargets: Array<{ data: Record<string | symbol, unknown> }> } } }) => void;
-    onDrag?: (args: { location: { current: { dropTargets: Array<{ data: Record<string | symbol, unknown> }> } } }) => void;
-    onDrop?: (args: { location: { current: { dropTargets: Array<{ data: Record<string | symbol, unknown> }> } } }) => void;
+    onDragStart?: (args: { source: { data: Record<string, unknown> }; location: DragLocation }) => void;
+    onDropTargetChange?: (args: { location: DragLocation }) => void;
+    onDrag?: (args: { location: DragLocation }) => void;
+    onDrop?: (args: { location: DragLocation }) => void;
   };
   const monitors = new Set<Monitor>();
   let activeSource: { data: Record<string, unknown> } | null = null;
   let activeDropTargets: Array<{ data: Record<string | symbol, unknown> }> = [];
+  let activeInput = { clientX: 0, clientY: 0 };
 
   function location() {
-    return { current: { dropTargets: activeDropTargets } };
+    return { current: { input: activeInput, dropTargets: activeDropTargets } };
   }
 
   return {
@@ -44,10 +46,11 @@ vi.mock('@atlaskit/pragmatic-drag-and-drop/element/adapter', () => {
       onDrop?: () => void;
     }) => {
       const handle = (dragHandle ?? element) as HTMLElement;
-      handle.ondragstart = () => {
+      handle.ondragstart = (event) => {
+        activeInput = { clientX: event.clientX, clientY: event.clientY };
         activeSource = { data: getInitialData?.() ?? {} };
         onDragStart?.();
-        for (const monitor of monitors) monitor.onDragStart?.({ source: activeSource });
+        for (const monitor of monitors) monitor.onDragStart?.({ source: activeSource, location: location() });
       };
       handle.ondragend = () => {
         onDrop?.();
@@ -79,6 +82,7 @@ vi.mock('@atlaskit/pragmatic-drag-and-drop/element/adapter', () => {
       target.ondragover = (event) => {
         event.preventDefault();
         event.stopPropagation();
+        activeInput = { clientX: event.clientX, clientY: event.clientY };
         activeDropTargets = [{ data: readData(event) }];
         for (const monitor of monitors) {
           monitor.onDropTargetChange?.({ location: location() });
@@ -88,6 +92,7 @@ vi.mock('@atlaskit/pragmatic-drag-and-drop/element/adapter', () => {
       target.ondrop = (event) => {
         event.preventDefault();
         event.stopPropagation();
+        activeInput = { clientX: event.clientX, clientY: event.clientY };
         activeDropTargets = [{ data: readData(event) }];
         for (const monitor of monitors) monitor.onDrop?.({ location: location() });
         activeSource = null;
@@ -597,7 +602,7 @@ describe('Sidebar', () => {
     renderSidebar();
 
     fireEvent.pointerDown(screen.getByTestId('channel-row-ch-2'));
-    fireEvent.dragStart(screen.getByTestId('channel-row-ch-2'), { dataTransfer });
+    fireEvent.dragStart(screen.getByTestId('channel-row-ch-2'), { dataTransfer, clientX: 24, clientY: 32 });
     fireEvent.dragOver(screen.getByTestId('channel-row-ch-1'), { dataTransfer });
 
     expect(screen.getByTestId('sidebar-drop-indicator')).toBeInTheDocument();
@@ -647,7 +652,11 @@ describe('Sidebar', () => {
     await waitFor(() => {
       expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/sidebar/categories/cat-ops', {
         method: 'PATCH',
-        body: JSON.stringify({ name: undefined, position: 500 }),
+        body: JSON.stringify({ name: undefined, position: 1000 }),
+      });
+      expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/sidebar/categories/cat-eng', {
+        method: 'PATCH',
+        body: JSON.stringify({ name: undefined, position: 2000 }),
       });
     });
   });
@@ -675,12 +684,55 @@ describe('Sidebar', () => {
     await waitFor(() => {
       expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/sidebar/categories/cat-ops', {
         method: 'PATCH',
-        body: JSON.stringify({ name: undefined, position: 500 }),
+        body: JSON.stringify({ name: undefined, position: 1000 }),
+      });
+      expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/sidebar/categories/cat-eng', {
+        method: 'PATCH',
+        body: JSON.stringify({ name: undefined, position: 2000 }),
       });
     });
   });
 
-  it('treats a category dropped over another category body as a category reorder', async () => {
+  it('uses the visible category placement line as the drop source of truth', async () => {
+    mockApiFetch.mockImplementation(async (url: string) => {
+      if (url === '/api/v1/sidebar/categories') {
+        return [
+          { id: 'cat-eng', name: 'Engineering', position: 1000 },
+          { id: 'cat-ops', name: 'Operations', position: 2000 },
+          { id: 'cat-design', name: 'Design', position: 3000 },
+        ];
+      }
+      return undefined;
+    });
+    const dataTransfer = { effectAllowed: '', dropEffect: '', setData: vi.fn(), getData: vi.fn() };
+    renderSidebar();
+
+    await screen.findByText('Operations');
+    const targetHeader = screen.getByTestId('sidebar-group-header-cat-ops');
+    mockRect(targetHeader, { top: 0, bottom: 20, height: 20 });
+    fireEvent.pointerDown(screen.getByTestId('sidebar-group-header-cat-design'));
+    fireEvent.dragStart(screen.getByTestId('sidebar-group-header-cat-design'), { dataTransfer });
+    fireDragOver(targetHeader, dataTransfer, 1);
+    expect(within(targetHeader).getByTestId('sidebar-drop-indicator')).toBeInTheDocument();
+    fireDrop(targetHeader, dataTransfer, 19);
+
+    await waitFor(() => {
+      expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/sidebar/categories/cat-eng', {
+        method: 'PATCH',
+        body: JSON.stringify({ name: undefined, position: 1000 }),
+      });
+      expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/sidebar/categories/cat-design', {
+        method: 'PATCH',
+        body: JSON.stringify({ name: undefined, position: 2000 }),
+      });
+      expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/sidebar/categories/cat-ops', {
+        method: 'PATCH',
+        body: JSON.stringify({ name: undefined, position: 3000 }),
+      });
+    });
+  });
+
+  it('ignores category drops over category bodies', async () => {
     mockApiFetch.mockImplementation(async (url: string) => {
       if (url === '/api/v1/sidebar/categories') {
         return [
@@ -703,12 +755,153 @@ describe('Sidebar', () => {
     fireEvent.dragOver(screen.getByTestId('sidebar-section-tail-drop-cat-ops'), { dataTransfer });
     fireEvent.drop(screen.getByTestId('sidebar-section-tail-drop-cat-ops'), { dataTransfer });
 
+    await new Promise((resolve) => window.setTimeout(resolve, 50));
+    expect(mockApiFetch).not.toHaveBeenCalledWith(
+      '/api/v1/sidebar/categories/cat-eng',
+      expect.objectContaining({ method: 'PATCH' }),
+    );
+  });
+
+  it('keeps the category placement line visible after crossing a category body', async () => {
+    mockApiFetch.mockImplementation(async (url: string) => {
+      if (url === '/api/v1/sidebar/categories') {
+        return [
+          { id: 'cat-eng', name: 'Engineering', position: 1000 },
+          { id: 'cat-ops', name: 'Operations', position: 2000 },
+        ];
+      }
+      return undefined;
+    });
+    mockChannels = [
+      { ...baseMockChannels[0], categoryID: 'cat-eng', sidebarPosition: 1000 },
+      { ...baseMockChannels[1], categoryID: 'cat-ops', sidebarPosition: 1000 },
+    ];
+    const dataTransfer = { effectAllowed: '', dropEffect: '', setData: vi.fn(), getData: vi.fn() };
+    renderSidebar();
+
+    await screen.findByText('Operations');
+    const targetHeader = screen.getByTestId('sidebar-group-header-cat-eng');
+    fireEvent.pointerDown(screen.getByTestId('sidebar-group-header-cat-ops'));
+    fireEvent.dragStart(screen.getByTestId('sidebar-group-header-cat-ops'), { dataTransfer });
+    fireEvent.dragOver(targetHeader, { dataTransfer });
+    expect(within(targetHeader).getByTestId('sidebar-drop-indicator')).toBeInTheDocument();
+
+    fireEvent.dragOver(screen.getByTestId('sidebar-section-tail-drop-cat-eng'), { dataTransfer });
+
+    expect(within(targetHeader).getByTestId('sidebar-drop-indicator')).toBeInTheDocument();
+  });
+
+  it('accepts a category drop directly on the visible boundary line hitbox', async () => {
+    mockApiFetch.mockImplementation(async (url: string) => {
+      if (url === '/api/v1/sidebar/categories') {
+        return [
+          { id: 'cat-eng', name: 'Engineering', position: 1000 },
+          { id: 'cat-ops', name: 'Operations', position: 2000 },
+        ];
+      }
+      return undefined;
+    });
+    const dataTransfer = { effectAllowed: '', dropEffect: '', setData: vi.fn(), getData: vi.fn() };
+    renderSidebar();
+
+    await screen.findByText('Operations');
+    fireEvent.pointerDown(screen.getByTestId('sidebar-group-header-cat-ops'));
+    fireEvent.dragStart(screen.getByTestId('sidebar-group-header-cat-ops'), { dataTransfer });
+    fireEvent.dragOver(screen.getByTestId('sidebar-category-boundary-drop-cat-eng'), { dataTransfer });
+    expect(
+      within(screen.getByTestId('sidebar-group-header-cat-eng')).getByTestId('sidebar-drop-indicator'),
+    ).toBeInTheDocument();
+    fireEvent.drop(screen.getByTestId('sidebar-category-boundary-drop-cat-eng'), { dataTransfer });
+
+    await waitFor(() => {
+      expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/sidebar/categories/cat-ops', {
+        method: 'PATCH',
+        body: JSON.stringify({ name: undefined, position: 1000 }),
+      });
+      expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/sidebar/categories/cat-eng', {
+        method: 'PATCH',
+        body: JSON.stringify({ name: undefined, position: 2000 }),
+      });
+    });
+  });
+
+  it('commits the last visible category placement after crossing a category body', async () => {
+    mockApiFetch.mockImplementation(async (url: string) => {
+      if (url === '/api/v1/sidebar/categories') {
+        return [
+          { id: 'cat-eng', name: 'Engineering', position: 1000 },
+          { id: 'cat-ops', name: 'Operations', position: 2000 },
+        ];
+      }
+      return undefined;
+    });
+    mockChannels = [
+      { ...baseMockChannels[0], categoryID: 'cat-eng', sidebarPosition: 1000 },
+      { ...baseMockChannels[1], categoryID: 'cat-ops', sidebarPosition: 1000 },
+    ];
+    const dataTransfer = { effectAllowed: '', dropEffect: '', setData: vi.fn(), getData: vi.fn() };
+    renderSidebar();
+
+    await screen.findByText('Operations');
+    fireEvent.pointerDown(screen.getByTestId('sidebar-group-header-cat-ops'));
+    fireEvent.dragStart(screen.getByTestId('sidebar-group-header-cat-ops'), { dataTransfer });
+    fireEvent.dragOver(screen.getByTestId('sidebar-group-header-cat-eng'), { dataTransfer });
+    fireEvent.drop(screen.getByTestId('sidebar-section-tail-drop-cat-eng'), { dataTransfer });
+
+    await waitFor(() => {
+      expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/sidebar/categories/cat-ops', {
+        method: 'PATCH',
+        body: JSON.stringify({ name: undefined, position: 1000 }),
+      });
+      expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/sidebar/categories/cat-eng', {
+        method: 'PATCH',
+        body: JSON.stringify({ name: undefined, position: 2000 }),
+      });
+    });
+  });
+
+  it('normalizes category drops that resolve before the dragged category to the next slot', async () => {
+    mockApiFetch.mockImplementation(async (url: string) => {
+      if (url === '/api/v1/sidebar/categories') {
+        return [
+          { id: 'cat-eng', name: 'Engineering', position: 1000 },
+          { id: 'cat-ops', name: 'Operations', position: 2000 },
+          { id: 'cat-design', name: 'Design', position: 3000 },
+        ];
+      }
+      return undefined;
+    });
+    const dataTransfer = { effectAllowed: '', dropEffect: '', setData: vi.fn(), getData: vi.fn() };
+    renderSidebar();
+
+    await screen.findByText('Engineering');
+    const previousHeader = screen.getByTestId('sidebar-group-header-cat-eng');
+    mockRect(previousHeader, { top: 0, bottom: 20, height: 20 });
+    fireEvent.pointerDown(screen.getByTestId('sidebar-group-header-cat-ops'));
+    fireEvent.dragStart(screen.getByTestId('sidebar-group-header-cat-ops'), { dataTransfer });
+    fireDragOver(previousHeader, dataTransfer, 19);
+    fireDrop(previousHeader, dataTransfer, 19);
+
     await waitFor(() => {
       expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/sidebar/categories/cat-eng', {
+        method: 'PATCH',
+        body: JSON.stringify({ name: undefined, position: 1000 }),
+      });
+      expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/sidebar/categories/cat-ops', {
+        method: 'PATCH',
+        body: JSON.stringify({ name: undefined, position: 2000 }),
+      });
+      expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/sidebar/categories/cat-design', {
         method: 'PATCH',
         body: JSON.stringify({ name: undefined, position: 3000 }),
       });
     });
+    expect(mockApiFetch).not.toHaveBeenCalledWith(
+      '/api/v1/sidebar/categories/cat-ops',
+      expect.objectContaining({
+        body: JSON.stringify({ name: undefined, position: 1000 }),
+      }),
+    );
   });
 
   it('commits the visible category placement on drag end when the browser misses drop', async () => {
@@ -733,7 +926,11 @@ describe('Sidebar', () => {
     await waitFor(() => {
       expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/sidebar/categories/cat-ops', {
         method: 'PATCH',
-        body: JSON.stringify({ name: undefined, position: 500 }),
+        body: JSON.stringify({ name: undefined, position: 1000 }),
+      });
+      expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/sidebar/categories/cat-eng', {
+        method: 'PATCH',
+        body: JSON.stringify({ name: undefined, position: 2000 }),
       });
     });
   });

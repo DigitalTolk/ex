@@ -31,6 +31,7 @@ const mockConversations: UserConversation[] = [];
 const createCategoryMutate = vi.fn();
 const deleteCategoryMutate = vi.fn();
 const updateCategoryMutate = vi.fn();
+const reorderCategoriesMutate = vi.fn();
 
 vi.mock('@/context/AuthContext', () => ({
   useAuth: () => ({
@@ -82,6 +83,7 @@ vi.mock('@/hooks/useSidebar', () => ({
   useCreateCategory: () => ({ mutate: createCategoryMutate }),
   useDeleteCategory: () => ({ mutate: deleteCategoryMutate }),
   useUpdateCategory: () => ({ mutate: updateCategoryMutate }),
+  useReorderCategories: () => ({ mutate: reorderCategoriesMutate }),
   useFavoriteChannel: () => ({ mutate: vi.fn() }),
   useSetCategory: () => ({ mutate: vi.fn() }),
   useFavoriteConversation: () => ({ mutate: vi.fn() }),

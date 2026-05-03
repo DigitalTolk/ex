@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, useMemo, useRef, type CSSProperties, type ReactNode } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useState, useMemo, useRef, type CSSProperties, type ReactNode } from 'react';
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import {
   draggable as makeDraggable,
@@ -44,7 +44,7 @@ import { useUnread } from '@/context/UnreadContext';
 import { useUserChannels } from '@/hooks/useChannels';
 import { useUserConversations } from '@/hooks/useConversations';
 import { useUserThreads, hasUnreadActivity } from '@/hooks/useThreads';
-import { useCategories, useCreateCategory, useDeleteCategory, useFavoriteChannel, useSetCategory, useUpdateCategory } from '@/hooks/useSidebar';
+import { useCategories, useCreateCategory, useDeleteCategory, useFavoriteChannel, useSetCategory, useReorderCategories } from '@/hooks/useSidebar';
 import { groupSidebarItems, SidebarSectionKeys, type SidebarItem, type ConversationSidebarSort } from '@/lib/sidebar-groups';
 import type { SidebarCategory, UserChannel } from '@/types';
 import { ChannelRow } from './ChannelRow';
@@ -63,11 +63,13 @@ interface SidebarProps {
 const SIDEBAR_POSITION_STEP = 1000;
 const CONVERSATION_SORT_STORAGE_KEY = 'sidebar.conversationSort';
 const CATEGORY_DROP_END = '__category-end__';
+const SIDEBAR_DND_DEBUG_STORAGE_KEY = 'ex.sidebarDndDebug';
+const DROP_TARGET_LOST_GRACE_MS = 300;
 
 type ChannelDropArea = 'lead' | 'row' | 'end';
 type ResolvedDrop =
   | { kind: 'channel'; sectionKey: string; index: number; area: ChannelDropArea }
-  | { kind: 'category'; categoryID: string };
+  | { kind: 'category'; beforeCategoryID: string; position: number };
 type DropIndicator = ResolvedDrop;
 
 type DragPayload =
@@ -77,6 +79,34 @@ type DragPayload =
 type DropPayload =
   | { type: 'channel-target'; sectionKey: string; index: number; area: ChannelDropArea }
   | { type: 'section-header-target'; sectionKey: string; categoryID: string };
+
+function sidebarDndDebugEnabled(): boolean {
+  try {
+    return (
+      localStorage.getItem(SIDEBAR_DND_DEBUG_STORAGE_KEY) === '1' ||
+      window.location.search.includes('sidebarDndDebug=1')
+    );
+  } catch {
+    return false;
+  }
+}
+
+function sidebarDndDebug(event: string, details?: Record<string, unknown>) {
+  if (!sidebarDndDebugEnabled()) return;
+  console.debug(`[sidebar-dnd] ${event}`, details ?? {});
+}
+
+function elementDebugRect(element: Element) {
+  const rect = element.getBoundingClientRect();
+  return {
+    top: Math.round(rect.top),
+    bottom: Math.round(rect.bottom),
+    left: Math.round(rect.left),
+    right: Math.round(rect.right),
+    width: Math.round(rect.width),
+    height: Math.round(rect.height),
+  };
+}
 
 function PragmaticCategoryHeader({
   id,
@@ -94,11 +124,23 @@ function PragmaticCategoryHeader({
   children: ReactNode;
 }) {
   const elementRef = useRef<HTMLDivElement | null>(null);
+  const dropDataRef = useRef(dropData);
   const [dragging, setDragging] = useState(false);
+  const hasDropData = dropData !== undefined;
+
+  useLayoutEffect(() => {
+    dropDataRef.current = dropData;
+  }, [dropData]);
 
   useEffect(() => {
     const element = elementRef.current;
     if (!element) return undefined;
+    sidebarDndDebug('category-header register', {
+      id,
+      draggable,
+      dropData: dropDataRef.current,
+      rect: elementDebugRect(element),
+    });
     const registrations = [];
     if (draggable) {
       registrations.push(
@@ -106,26 +148,46 @@ function PragmaticCategoryHeader({
           element,
           canDrag: ({ input }) => input.button === 0,
           getInitialData: () => ({ type: 'category', categoryID: id } satisfies DragPayload),
-          onDragStart: () => setDragging(true),
-          onDrop: () => setDragging(false),
+          onDragStart: () => {
+            sidebarDndDebug('category-native dragStart', {
+              id,
+              rect: elementDebugRect(element),
+            });
+            setDragging(true);
+          },
+          onDrop: () => {
+            sidebarDndDebug('category-native drop/end', {
+              id,
+              rect: elementDebugRect(element),
+            });
+            setDragging(false);
+          },
         }),
       );
     }
-    if (dropData) {
+    if (hasDropData) {
       registrations.push(
         dropTargetForElements({
           element,
-          getData: ({ input, element }) =>
-            attachClosestEdge(dropData, {
+          getData: ({ input, element }) => {
+            const currentDropData = dropDataRef.current;
+            if (!currentDropData) return {};
+            const data = attachClosestEdge(currentDropData, {
               input,
               element,
               allowedEdges: ['top', 'bottom'],
-            }),
+            });
+            return data;
+          },
         }),
       );
     }
-    return combine(...registrations);
-  }, [draggable, dropData, id]);
+    const cleanup = combine(...registrations);
+    return () => {
+      sidebarDndDebug('category-header unregister', { id });
+      cleanup();
+    };
+  }, [draggable, hasDropData, id]);
 
   return (
     <div
@@ -153,20 +215,69 @@ function PragmaticSection({
   children?: ReactNode;
 }) {
   const elementRef = useRef<HTMLDivElement | null>(null);
+  const dataRef = useRef(data);
+
+  useLayoutEffect(() => {
+    dataRef.current = data;
+  }, [data]);
 
   useEffect(() => {
     const element = elementRef.current;
     if (!element || disabled) return undefined;
     return dropTargetForElements({
       element,
-      getData: () => data,
+      getData: ({ input, element }) => {
+        const currentData = dataRef.current;
+        sidebarDndDebug('section-target getData', {
+          input,
+          data: currentData,
+          rect: elementDebugRect(element),
+        });
+        return currentData;
+      },
     });
-  }, [data, disabled]);
+  }, [disabled]);
 
   return (
     <div ref={elementRef} data-testid={testID} className={className}>
       {children}
     </div>
+  );
+}
+
+function PragmaticCategoryDropHitbox({
+  active,
+  data,
+  testID,
+}: {
+  active: boolean;
+  data: DropPayload;
+  testID: string;
+}) {
+  const elementRef = useRef<HTMLDivElement | null>(null);
+  const dataRef = useRef(data);
+
+  useLayoutEffect(() => {
+    dataRef.current = data;
+  }, [data]);
+
+  useEffect(() => {
+    const element = elementRef.current;
+    if (!element) return undefined;
+    return dropTargetForElements({
+      element,
+      getData: () => dataRef.current,
+    });
+  }, []);
+
+  return (
+    <div
+      ref={elementRef}
+      data-testid={testID}
+      className={`absolute -top-2 left-0 right-0 z-20 h-4 ${
+        active ? 'pointer-events-auto' : 'pointer-events-none'
+      }`}
+    />
   );
 }
 
@@ -239,14 +350,20 @@ export function Sidebar({ onClose }: SidebarProps) {
   const deleteCategory = useDeleteCategory();
   const favoriteChannel = useFavoriteChannel();
   const setCategory = useSetCategory();
-  const updateCategory = useUpdateCategory();
+  const reorderCategories = useReorderCategories();
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
   const [conversationSort, setConversationSort] = useState<ConversationSidebarSort>(() =>
     localStorage.getItem(CONVERSATION_SORT_STORAGE_KEY) === 'az' ? 'az' : 'recent',
   );
   const activeDragRef = useRef<DragPayload | null>(null);
+  const [isDraggingCategory, setIsDraggingCategory] = useState(false);
   const [dropIndicator, setDropIndicator] = useState<DropIndicator | null>(null);
   const resolvedDropRef = useRef<ResolvedDrop | null>(null);
+  const categoryDragStartedAtRef = useRef<number | null>(null);
+  const categoryDropSequenceRef = useRef(0);
+  const lastCategoryDebugKeyRef = useRef<string | null>(null);
+  const lastCategoryMonitorDragLogAtRef = useRef(0);
+  const lastResolvedDropAtRef = useRef<number | null>(null);
   const [suppressChannelNavigationID, setSuppressChannelNavigationID] = useState<string | null>(null);
   const suppressNavigationResetRef = useRef<number | null>(null);
   const [creatingCategory, setCreatingCategory] = useState(false);
@@ -380,6 +497,7 @@ export function Sidebar({ onClose }: SidebarProps) {
   }
 
   function showChannelDropIndicator(sectionKey: string, index: number, area: ChannelDropArea) {
+    lastResolvedDropAtRef.current = performance.now();
     resolvedDropRef.current = { kind: 'channel', sectionKey, index, area };
     setDropIndicator((prev) => {
       if (
@@ -394,7 +512,23 @@ export function Sidebar({ onClose }: SidebarProps) {
     });
   }
 
+  function showCategoryDropIndicator(beforeCategoryID: string, position: number) {
+    lastResolvedDropAtRef.current = performance.now();
+    resolvedDropRef.current = { kind: 'category', beforeCategoryID, position };
+    setDropIndicator((prev) => {
+      if (
+        prev?.kind === 'category' &&
+        prev.beforeCategoryID === beforeCategoryID &&
+        prev.position === position
+      ) {
+        return prev;
+      }
+      return { kind: 'category', beforeCategoryID, position };
+    });
+  }
+
   function clearDropTarget() {
+    lastResolvedDropAtRef.current = null;
     resolvedDropRef.current = null;
     setDropIndicator(null);
   }
@@ -405,30 +539,74 @@ export function Sidebar({ onClose }: SidebarProps) {
       .sort((a, b) => a.position - b.position || a.name.localeCompare(b.name));
   }
 
-  function positionForCategoryDrop(targetCategoryID: string): number {
-    const ordered = sortedCategoriesWithoutDragged();
-    const foundIndex = ordered.findIndex((category) => category.id === targetCategoryID);
-    const targetIndex = targetCategoryID === CATEGORY_DROP_END
-      ? ordered.length
-      : Math.max(0, foundIndex);
-    const before = ordered[targetIndex - 1]?.position;
-    const after = ordered[targetIndex]?.position;
-
-    if (before && after && after - before > 1) return Math.floor((before + after) / 2);
-    if (before) return before + SIDEBAR_POSITION_STEP;
-    if (after && after > 1) return Math.floor(after / 2);
-    if (after !== undefined) return after - SIDEBAR_POSITION_STEP;
-    return SIDEBAR_POSITION_STEP;
+  function categoryOrderDebugSnapshot(): Array<{ id: string; name: string; position: number }> {
+    return [...(categories ?? [])]
+      .sort((a, b) => a.position - b.position || a.name.localeCompare(b.name))
+      .map((category) => ({ id: category.id, name: category.name, position: category.position }));
   }
 
-  function moveCategoryBefore(targetCategoryID: string) {
-    const draggedCategoryID = activeDragRef.current?.type === 'category' ? activeDragRef.current.categoryID : null;
-    if (!draggedCategoryID || draggedCategoryID === targetCategoryID) return;
+  function orderedCategoriesAfterDrop(draggedCategoryID: string, beforeCategoryID: string): SidebarCategory[] {
+    const withoutDragged = sortedCategoriesWithoutDragged();
     const draggedCategory = categories?.find((category) => category.id === draggedCategoryID);
-    if (!draggedCategory) return;
+    if (!draggedCategory) return withoutDragged;
+    const beforeIndex = beforeCategoryID === CATEGORY_DROP_END
+      ? withoutDragged.length
+      : withoutDragged.findIndex((category) => category.id === beforeCategoryID);
+    const insertIndex = beforeIndex < 0 ? withoutDragged.length : beforeIndex;
+    return [
+      ...withoutDragged.slice(0, insertIndex),
+      draggedCategory,
+      ...withoutDragged.slice(insertIndex),
+    ];
+  }
 
-    updateCategory.mutate({ id: draggedCategoryID, position: positionForCategoryDrop(targetCategoryID) });
+  function normalizeCategoryDropSlot(beforeCategoryID: string, draggedCategoryID: string): string {
+    return beforeCategoryID === draggedCategoryID ? nextCategoryTarget(draggedCategoryID) : beforeCategoryID;
+  }
+
+  function moveCategoryBefore(beforeCategoryID: string) {
+    const draggedCategoryID = activeDragRef.current?.type === 'category' ? activeDragRef.current.categoryID : null;
+    const sequence = categoryDropSequenceRef.current;
+    if (!draggedCategoryID) {
+      sidebarDndDebug('category-drop ignored: no active category', {
+        sequence,
+        beforeCategoryID,
+        activeDrag: activeDragRef.current,
+      });
+      return;
+    }
+    const normalizedBeforeCategoryID = normalizeCategoryDropSlot(beforeCategoryID, draggedCategoryID);
+    const draggedCategory = categories?.find((category) => category.id === draggedCategoryID);
+    if (!draggedCategory) {
+      sidebarDndDebug('category-drop ignored: dragged category missing from cache', {
+        sequence,
+        draggedCategoryID,
+        beforeCategoryID: normalizedBeforeCategoryID,
+        order: categoryOrderDebugSnapshot(),
+      });
+      return;
+    }
+
+    const nextOrder = orderedCategoriesAfterDrop(draggedCategoryID, normalizedBeforeCategoryID);
+    sidebarDndDebug('category-reorder scheduled', {
+      sequence,
+      draggedCategoryID,
+      beforeCategoryID: normalizedBeforeCategoryID,
+      order: nextOrder.map((category, index) => ({ id: category.id, position: (index + 1) * 1000 })),
+      previousOrder: categoryOrderDebugSnapshot(),
+    });
+    sidebarDndDebug('category-reorder firing', {
+      sequence,
+      draggedCategoryID,
+      beforeCategoryID: normalizedBeforeCategoryID,
+      order: categoryOrderDebugSnapshot(),
+    });
+    reorderCategories.mutate({ categories: nextOrder });
     setDropIndicator(null);
+  }
+
+  function toggleGroupCollapsed(sectionKey: string) {
+    setCollapsedGroups((prev) => ({ ...prev, [sectionKey]: !prev[sectionKey] }));
   }
 
   function isChannelDropIndicator(sectionKey: string, index: number, area: ChannelDropArea): boolean {
@@ -445,7 +623,7 @@ export function Sidebar({ onClose }: SidebarProps) {
       return;
     }
     if (activeDragRef.current?.type !== 'category') return;
-    moveCategoryBefore(drop.categoryID);
+    moveCategoryBefore(drop.beforeCategoryID);
   }
 
   function canAcceptChannelDrop(sectionKey: string): boolean {
@@ -478,8 +656,7 @@ export function Sidebar({ onClose }: SidebarProps) {
     if (payload.type === 'channel-target') {
       const edge = extractClosestEdge(payload);
       if (currentDrag?.type === 'category') {
-        const categoryID = categoryTargetFromSection(payload.sectionKey, edge, payload.area);
-        return categoryID ? { kind: 'category', categoryID } : null;
+        return null;
       }
       if (currentDrag?.type !== 'channel') return null;
       const index = edge === 'bottom' ? payload.index + 1 : payload.index;
@@ -492,11 +669,16 @@ export function Sidebar({ onClose }: SidebarProps) {
       }
       if (
         currentDrag?.type === 'category' &&
-        payload.categoryID !== currentDrag.categoryID &&
         payload.sectionKey !== SidebarSectionKeys.Favorites
       ) {
         const edge = extractClosestEdge(payload);
-        return { kind: 'category', categoryID: edge === 'bottom' ? nextCategoryTarget(payload.categoryID) : payload.categoryID };
+        const rawBeforeCategoryID = edge === 'bottom' ? nextCategoryTarget(payload.categoryID) : payload.categoryID;
+        const beforeCategoryID = normalizeCategoryDropSlot(rawBeforeCategoryID, currentDrag.categoryID);
+        return {
+          kind: 'category',
+          beforeCategoryID,
+          position: (orderedCategoriesAfterDrop(currentDrag.categoryID, beforeCategoryID).findIndex((category) => category.id === currentDrag.categoryID) + 1) * 1000,
+        };
       }
     }
     return null;
@@ -508,14 +690,83 @@ export function Sidebar({ onClose }: SidebarProps) {
     return ordered[index + 1]?.id ?? CATEGORY_DROP_END;
   }
 
-  function categoryTargetFromSection(sectionKey: string, edge: Edge | null, area: ChannelDropArea): string | null {
-    if (sectionKey === SidebarSectionKeys.Favorites || sectionKey === SidebarSectionKeys.DirectMessages) return null;
-    if (sectionKey === SidebarSectionKeys.Channels) return CATEGORY_DROP_END;
-    return edge === 'bottom' || area === 'end' ? nextCategoryTarget(sectionKey) : sectionKey;
-  }
-
   function currentDropPayload(location: { dropTargets: Array<{ data: Record<string | symbol, unknown> }> }): DropPayload | undefined {
     return location.dropTargets[0]?.data as DropPayload | undefined;
+  }
+
+  function describeDropPayload(payload: DropPayload | undefined) {
+    if (!payload) return null;
+    const edge = extractClosestEdge(payload);
+    if (payload.type === 'channel-target') {
+      return {
+        type: payload.type,
+        sectionKey: payload.sectionKey,
+        index: payload.index,
+        area: payload.area,
+        edge,
+      };
+    }
+    return {
+      type: payload.type,
+      sectionKey: payload.sectionKey,
+      categoryID: payload.categoryID,
+      edge,
+    };
+  }
+
+  function describeResolvedDrop(drop: ResolvedDrop | null) {
+    if (!drop) return null;
+    if (drop.kind === 'channel') {
+      return {
+        kind: drop.kind,
+        sectionKey: drop.sectionKey,
+        index: drop.index,
+        area: drop.area,
+      };
+    }
+    return {
+      kind: drop.kind,
+      beforeCategoryID: drop.beforeCategoryID,
+      position: drop.position,
+    };
+  }
+
+  function logCategoryResolution(payload: DropPayload | undefined, resolvedDrop: ResolvedDrop | null) {
+    if (activeDragRef.current?.type !== 'category') return;
+    const key = JSON.stringify({
+      payload: describeDropPayload(payload),
+      resolved: describeResolvedDrop(resolvedDrop),
+    });
+    if (lastCategoryDebugKeyRef.current === key) return;
+    lastCategoryDebugKeyRef.current = key;
+    sidebarDndDebug('category-target resolved', {
+      sequence: categoryDropSequenceRef.current,
+      draggedCategoryID: activeDragRef.current.categoryID,
+      payload: describeDropPayload(payload),
+      resolved: describeResolvedDrop(resolvedDrop),
+      previousResolved: describeResolvedDrop(resolvedDropRef.current),
+      order: categoryOrderDebugSnapshot(),
+      elapsedMs: categoryDragStartedAtRef.current === null
+        ? null
+        : Math.round(performance.now() - categoryDragStartedAtRef.current),
+    });
+  }
+
+  function logCategoryMonitorEvent(event: string, payload: DropPayload | undefined, force = false) {
+    if (activeDragRef.current?.type !== 'category') return;
+    if (event === 'drag') return;
+    const now = performance.now();
+    if (!force && now - lastCategoryMonitorDragLogAtRef.current < 250) return;
+    lastCategoryMonitorDragLogAtRef.current = now;
+    sidebarDndDebug(`category-monitor ${event}`, {
+      sequence: categoryDropSequenceRef.current,
+      draggedCategoryID: activeDragRef.current.categoryID,
+      payload: describeDropPayload(payload),
+      resolved: describeResolvedDrop(resolvedDropRef.current),
+      elapsedMs: categoryDragStartedAtRef.current === null
+        ? null
+        : Math.round(now - categoryDragStartedAtRef.current),
+    });
   }
 
   function handleDragStart(payload: DragPayload | null) {
@@ -524,16 +775,35 @@ export function Sidebar({ onClose }: SidebarProps) {
       suppressNavigationResetRef.current = null;
     }
     activeDragRef.current = payload;
+    setIsDraggingCategory(payload?.type === 'category');
+    if (payload?.type === 'category') {
+      categoryDropSequenceRef.current += 1;
+      categoryDragStartedAtRef.current = performance.now();
+      lastResolvedDropAtRef.current = null;
+      lastCategoryMonitorDragLogAtRef.current = 0;
+      lastCategoryDebugKeyRef.current = null;
+      sidebarDndDebug('category-drag start', {
+        sequence: categoryDropSequenceRef.current,
+        categoryID: payload.categoryID,
+        order: categoryOrderDebugSnapshot(),
+      });
+    }
     setSuppressChannelNavigationID(payload?.type === 'channel' ? payload.channel.channelID : null);
     clearDropTarget();
   }
 
   function updateResolvedDrop(payload: DropPayload | undefined) {
     const resolvedDrop = resolveDropPayload(payload);
+    logCategoryResolution(payload, resolvedDrop);
     if (!resolvedDrop) {
+      if (activeDragRef.current?.type === 'category') {
+        return;
+      }
       if (
-        (activeDragRef.current?.type === 'channel' && resolvedDropRef.current?.kind === 'channel') ||
-        (activeDragRef.current?.type === 'category' && resolvedDropRef.current?.kind === 'category')
+        activeDragRef.current?.type === 'channel' &&
+        resolvedDropRef.current?.kind === 'channel' &&
+        lastResolvedDropAtRef.current !== null &&
+        performance.now() - lastResolvedDropAtRef.current <= DROP_TARGET_LOST_GRACE_MS
       ) {
         return;
       }
@@ -545,12 +815,30 @@ export function Sidebar({ onClose }: SidebarProps) {
       showChannelDropIndicator(resolvedDrop.sectionKey, resolvedDrop.index, resolvedDrop.area);
       return;
     }
-    setDropIndicator(resolvedDrop);
+    showCategoryDropIndicator(resolvedDrop.beforeCategoryID, resolvedDrop.position);
   }
 
   function handleDrop(payload: DropPayload | undefined) {
-    applyResolvedDrop(resolvedDropRef.current ?? resolveDropPayload(payload));
+    const resolvedDrop = activeDragRef.current?.type === 'category'
+      ? resolvedDropRef.current
+      : resolveDropPayload(payload);
+    if (activeDragRef.current?.type === 'category') {
+      sidebarDndDebug('category-drop received', {
+        sequence: categoryDropSequenceRef.current,
+        draggedCategoryID: activeDragRef.current.categoryID,
+        payload: describeDropPayload(payload),
+        resolved: describeResolvedDrop(resolvedDrop),
+        order: categoryOrderDebugSnapshot(),
+        elapsedMs: categoryDragStartedAtRef.current === null
+          ? null
+          : Math.round(performance.now() - categoryDragStartedAtRef.current),
+      });
+    }
+    applyResolvedDrop(resolvedDrop);
     activeDragRef.current = null;
+    setIsDraggingCategory(false);
+    categoryDragStartedAtRef.current = null;
+    lastCategoryDebugKeyRef.current = null;
     clearDropTarget();
     suppressNavigationResetRef.current = window.setTimeout(() => {
       setSuppressChannelNavigationID(null);
@@ -579,22 +867,40 @@ export function Sidebar({ onClose }: SidebarProps) {
     );
   }
 
+  const handleDragStartRef = useRef(handleDragStart);
+  const updateResolvedDropRef = useRef(updateResolvedDrop);
+  const handleDropRef = useRef(handleDrop);
+  const logCategoryMonitorEventRef = useRef(logCategoryMonitorEvent);
+
+  useLayoutEffect(() => {
+    handleDragStartRef.current = handleDragStart;
+    updateResolvedDropRef.current = updateResolvedDrop;
+    handleDropRef.current = handleDrop;
+    logCategoryMonitorEventRef.current = logCategoryMonitorEvent;
+  });
+
   useEffect(() => {
     return monitorForElements({
       onDragStart: ({ source }) => {
-        handleDragStart(source.data as DragPayload);
+        handleDragStartRef.current(source.data as DragPayload);
       },
       onDropTargetChange: ({ location }) => {
-        updateResolvedDrop(currentDropPayload(location.current));
+        const payload = currentDropPayload(location.current);
+        logCategoryMonitorEventRef.current('dropTargetChange', payload, true);
+        updateResolvedDropRef.current(payload);
       },
       onDrag: ({ location }) => {
-        updateResolvedDrop(currentDropPayload(location.current));
+        const payload = currentDropPayload(location.current);
+        logCategoryMonitorEventRef.current('drag', payload);
+        updateResolvedDropRef.current(payload);
       },
       onDrop: ({ location }) => {
-        handleDrop(currentDropPayload(location.current));
+        const payload = currentDropPayload(location.current);
+        logCategoryMonitorEventRef.current('drop', payload, true);
+        handleDropRef.current(payload);
       },
     });
-  });
+  }, []);
 
   return (
     <div className="flex h-full flex-col text-gray-300">
@@ -804,7 +1110,18 @@ export function Sidebar({ onClose }: SidebarProps) {
                 : section.items;
 
               return (
-                <div key={section.key} className="mt-2" data-testid={`sidebar-group-${section.key}`}>
+                <div key={section.key} className="relative mt-2" data-testid={`sidebar-group-${section.key}`}>
+                  {(isFavorites || isUserCategory || isChannelsDefault) && (
+                    <PragmaticCategoryDropHitbox
+                      active={isDraggingCategory}
+                      data={{
+                        type: 'section-header-target',
+                        sectionKey: section.key,
+                        categoryID: isChannelsDefault ? CATEGORY_DROP_END : section.key,
+                      }}
+                      testID={`sidebar-category-boundary-drop-${section.key}`}
+                    />
+                  )}
                   <PragmaticCategoryHeader
                     id={section.key}
                     draggable={isUserCategory}
@@ -821,13 +1138,19 @@ export function Sidebar({ onClose }: SidebarProps) {
                     testID={`sidebar-group-header-${section.key}`}
                   >
                     {dropIndicator?.kind === 'category' &&
-                      dropIndicator.categoryID === (isChannelsDefault ? CATEGORY_DROP_END : section.key) && (
+                      dropIndicator.beforeCategoryID === (isChannelsDefault ? CATEGORY_DROP_END : section.key) && (
                         <DropLine overlay />
                       )}
-                    <button
-                      onClick={() =>
-                        setCollapsedGroups((prev) => ({ ...prev, [section.key]: !collapsed }))
-                      }
+                    <div
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => toggleGroupCollapsed(section.key)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter' || event.key === ' ') {
+                          event.preventDefault();
+                          toggleGroupCollapsed(section.key);
+                        }
+                      }}
                       aria-expanded={!collapsed}
                       data-testid={`sidebar-group-toggle-${section.key}`}
                       className="flex flex-1 items-center gap-1 rounded-md px-2 py-1 text-sm font-semibold text-gray-400 hover:bg-white/5"
@@ -836,7 +1159,7 @@ export function Sidebar({ onClose }: SidebarProps) {
                         className={`h-3 w-3 transition-transform ${collapsed ? '-rotate-90' : ''}`}
                       />
                       <span className="truncate">{section.title}</span>
-                    </button>
+                    </div>
                     {/* Hover-revealed actions per section type. */}
                     {isChannelsDefault && !isGuest(user?.systemRole) && (
                       <button
