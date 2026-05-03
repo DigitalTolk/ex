@@ -43,6 +43,9 @@ export const queryKeys = {
   userThreads: () => ['userThreads'] as const,
   thread: (parentPath: string, threadRootID: string) => ['thread', parentPath, threadRootID] as const,
 
+  // Drafts
+  drafts: () => ['drafts'] as const,
+
   // Pinned / files (parentPath is "channels/<id>" or "conversations/<id>")
   pinned: (parentPath: string) => ['pinned', parentPath] as const,
   files: (parentPath: string) => ['files', parentPath] as const,

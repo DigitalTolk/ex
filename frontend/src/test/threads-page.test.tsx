@@ -120,4 +120,29 @@ describe('ThreadsPage', () => {
     renderPage();
     expect(screen.getByTestId('threads-loading')).toBeInTheDocument();
   });
+
+  it('resets the threads page scroll position to the top on mount', async () => {
+    const descriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollTop');
+    const scrollAssignments: number[] = [];
+    Object.defineProperty(HTMLElement.prototype, 'scrollTop', {
+      configurable: true,
+      get() {
+        return 240;
+      },
+      set(value) {
+        scrollAssignments.push(value);
+      },
+    });
+    try {
+      apiFetchMock.mockResolvedValueOnce(sample);
+      renderPage();
+      expect(scrollAssignments).toContain(0);
+    } finally {
+      if (descriptor) {
+        Object.defineProperty(HTMLElement.prototype, 'scrollTop', descriptor);
+      } else {
+        delete (HTMLElement.prototype as { scrollTop?: number }).scrollTop;
+      }
+    }
+  });
 });

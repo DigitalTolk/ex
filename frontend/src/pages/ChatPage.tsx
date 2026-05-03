@@ -204,6 +204,9 @@ export default function ChatPage() {
       if (!n || !n.kind) return;
       dispatchNotification(n);
     },
+    onDraftUpdated: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.drafts() });
+    },
     onServerVersion: (data: unknown) => {
       const evt = parseServerVersion(data);
       if (!evt) return;
@@ -235,6 +238,7 @@ export default function ChatPage() {
       queryClient.invalidateQueries({ queryKey: queryKeys.userChannels() });
       queryClient.invalidateQueries({ queryKey: queryKeys.userConversations() });
       queryClient.invalidateQueries({ queryKey: queryKeys.userThreads() });
+      queryClient.invalidateQueries({ queryKey: queryKeys.drafts() });
       queryClient.invalidateQueries({ queryKey: queryKeys.channelMembers() });
       // Top up tail-mode message caches via a forward fetch so events
       // missed during the disconnect appear without re-triggering v5's

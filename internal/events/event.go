@@ -7,29 +7,30 @@ import (
 
 // Event type constants used across the application.
 const (
-	EventMessageNew      = "message.new"
-	EventMessageEdited   = "message.edited"
-	EventMessageDeleted  = "message.deleted"
-	EventMemberJoined    = "member.joined"
-	EventMemberLeft      = "member.left"
-	EventChannelUpdated  = "channel.updated"
-	EventConversationNew = "conversation.new"
-	EventChannelNew      = "channel.new"
-	EventChannelArchived = "channel.archived"
-	EventChannelRemoved  = "channel.removed" // user was removed from a channel — sent to that user's personal channel
-	EventMembersChanged  = "members.changed"
-	EventEmojiAdded      = "emoji.added"
-	EventEmojiRemoved    = "emoji.removed"
-	EventPresenceChanged = "presence.changed"
-	EventUserUpdated     = "user.updated"
-	EventAttachmentDeleted = "attachment.deleted"
-	EventChannelMuted      = "channel.muted"
+	EventMessageNew         = "message.new"
+	EventMessageEdited      = "message.edited"
+	EventMessageDeleted     = "message.deleted"
+	EventMemberJoined       = "member.joined"
+	EventMemberLeft         = "member.left"
+	EventChannelUpdated     = "channel.updated"
+	EventConversationNew    = "conversation.new"
+	EventChannelNew         = "channel.new"
+	EventChannelArchived    = "channel.archived"
+	EventChannelRemoved     = "channel.removed" // user was removed from a channel — sent to that user's personal channel
+	EventMembersChanged     = "members.changed"
+	EventEmojiAdded         = "emoji.added"
+	EventEmojiRemoved       = "emoji.removed"
+	EventPresenceChanged    = "presence.changed"
+	EventUserUpdated        = "user.updated"
+	EventAttachmentDeleted  = "attachment.deleted"
+	EventChannelMuted       = "channel.muted"
 	EventUserChannelUpdated = "userchannel.updated" // per-user user-side state changed (favorite/category)
-	EventNotificationNew   = "notification.new"
-	EventForceLogout       = "auth.force_logout" // sent to a user's personal channel when their session must end (e.g. deactivation)
-	EventServerVersion     = "server.version"    // sent once on connect so clients can detect deploys without polling
-	EventTyping          = "typing" // ephemeral typing indicator — published when a user starts typing in a parent
-	EventPing            = "ping"
+	EventNotificationNew    = "notification.new"
+	EventDraftUpdated       = "draft.updated"
+	EventForceLogout        = "auth.force_logout" // sent to a user's personal channel when their session must end (e.g. deactivation)
+	EventServerVersion      = "server.version"    // sent once on connect so clients can detect deploys without polling
+	EventTyping             = "typing"            // ephemeral typing indicator — published when a user starts typing in a parent
+	EventPing               = "ping"
 )
 
 // Event represents a real-time event with a type and JSON payload, delivered

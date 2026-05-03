@@ -24,6 +24,7 @@ interface UseWebSocketOptions {
   onAttachmentDeleted?: WSCallback;
   onChannelMuted?: WSCallback;
   onNotification?: WSCallback;
+  onDraftUpdated?: WSCallback;
   onForceLogout?: WSCallback;
   onServerVersion?: WSCallback;
   onPing?: WSCallback;
@@ -119,6 +120,9 @@ export function useWebSocket(options: UseWebSocketOptions) {
               break;
             case EventType.NotificationNew:
               callbacksRef.current.onNotification?.(payload);
+              break;
+            case EventType.DraftUpdated:
+              callbacksRef.current.onDraftUpdated?.(payload);
               break;
             case EventType.ForceLogout:
               callbacksRef.current.onForceLogout?.(payload);

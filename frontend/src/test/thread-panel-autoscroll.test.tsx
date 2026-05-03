@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { act, render, screen } from '@testing-library/react';
 import { BrowserRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { TooltipProvider } from '@/components/ui/tooltip';
@@ -119,7 +119,7 @@ describe('ThreadPanel autoscroll', () => {
     }
   });
 
-  it('re-arms initial scroll-to-bottom when the user opens a different thread', () => {
+  it('re-arms initial scroll-to-bottom when the user opens a different thread', async () => {
     const desc = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollHeight');
     let mockHeight = 0;
     Object.defineProperty(HTMLElement.prototype, 'scrollHeight', {
@@ -132,6 +132,7 @@ describe('ThreadPanel autoscroll', () => {
       threadDataState.current = [{ id: 'r-1', authorID: 'u-1', body: 'first' }];
       mockHeight = 600;
       const { rerender } = renderPanel();
+      await act(async () => {});
       let list = screen.getByLabelText('Thread').querySelector('.overflow-y-auto') as HTMLElement;
       expect(list.scrollTop).toBe(600);
 
@@ -144,21 +145,23 @@ describe('ThreadPanel autoscroll', () => {
       ];
       mockHeight = 1200;
       const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-      rerender(
-        <QueryClientProvider client={qc}>
-          <BrowserRouter>
-            <TooltipProvider>
-              <ThreadPanel
-                channelId="ch-1"
-                threadRootID="root-2"
-                onClose={vi.fn()}
-                userMap={{}}
-                currentUserId="me"
-              />
-            </TooltipProvider>
-          </BrowserRouter>
-        </QueryClientProvider>,
-      );
+      await act(async () => {
+        rerender(
+          <QueryClientProvider client={qc}>
+            <BrowserRouter>
+              <TooltipProvider>
+                <ThreadPanel
+                  channelId="ch-1"
+                  threadRootID="root-2"
+                  onClose={vi.fn()}
+                  userMap={{}}
+                  currentUserId="me"
+                />
+              </TooltipProvider>
+            </BrowserRouter>
+          </QueryClientProvider>,
+        );
+      });
       list = screen.getByLabelText('Thread').querySelector('.overflow-y-auto') as HTMLElement;
       expect(list.scrollTop).toBe(1200);
     } finally {

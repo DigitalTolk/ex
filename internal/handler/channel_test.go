@@ -30,6 +30,18 @@ type mockBrokerForHandler struct{}
 func (m *mockBrokerForHandler) Subscribe(_, _ string)   {}
 func (m *mockBrokerForHandler) Unsubscribe(_, _ string) {}
 
+type mockChannelSearcher struct {
+	ids []string
+	err error
+}
+
+func (m mockChannelSearcher) Channels(_ context.Context, _ string, _ int) ([]string, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	return m.ids, nil
+}
+
 // dataChannelStore stores channels and returns them. Used for handler integration tests.
 type dataChannelStore struct {
 	channels map[string]*model.Channel
@@ -1650,6 +1662,51 @@ func TestChannelHandlerFull_BrowsePublic_WithChannels(t *testing.T) {
 	// Should only include public channels.
 	if len(channels) < 1 {
 		t.Error("expected at least 1 public channel")
+	}
+}
+
+func TestChannelHandlerFull_BrowsePublic_SearchHits(t *testing.T) {
+	env := setupChannelHandlerFull(t)
+	env.channels.channels["ch-search1"] = &model.Channel{ID: "ch-search1", Name: "Searchable", Type: model.ChannelTypePublic}
+	env.channels.channels["ch-search-private"] = &model.Channel{ID: "ch-search-private", Name: "Private", Type: model.ChannelTypePrivate}
+	env.handler.channelSvc.SetSearcher(mockChannelSearcher{ids: []string{"ch-search1", "ch-search-private", "missing"}})
+
+	user := &model.User{ID: "u-search", Email: "search@test.com", SystemRole: model.SystemRoleMember}
+	token := makeTokenForUser(env.jwtMgr, user)
+	handler := middleware.Auth(env.jwtMgr)(http.HandlerFunc(env.handler.BrowsePublic))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/channels/browse?q=search&limit=5", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	var channels []model.Channel
+	if err := json.NewDecoder(rec.Body).Decode(&channels); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(channels) != 1 || channels[0].ID != "ch-search1" {
+		t.Fatalf("channels = %+v", channels)
+	}
+}
+
+func TestChannelHandlerFull_BrowsePublic_SearchError(t *testing.T) {
+	env := setupChannelHandlerFull(t)
+	env.handler.channelSvc.SetSearcher(mockChannelSearcher{err: errors.New("search down")})
+
+	user := &model.User{ID: "u-search-err", Email: "searcherr@test.com", SystemRole: model.SystemRoleMember}
+	token := makeTokenForUser(env.jwtMgr, user)
+	handler := middleware.Auth(env.jwtMgr)(http.HandlerFunc(env.handler.BrowsePublic))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/channels/browse?q=search", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500; body=%s", rec.Code, rec.Body.String())
 	}
 }
 

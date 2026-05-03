@@ -18,6 +18,7 @@ import DirectoriesPage from '@/pages/DirectoriesPage';
 import AdminPage from '@/pages/AdminPage';
 import NewConversationPage from '@/pages/NewConversationPage';
 import ThreadsPage from '@/pages/ThreadsPage';
+import DraftsPage from '@/pages/DraftsPage';
 import SearchResultsPage from '@/pages/SearchResultsPage';
 import { NotFoundPage } from '@/pages/NotFoundPage';
 import { GENERAL_CHANNEL_SLUG } from '@/lib/roles';
@@ -72,6 +73,7 @@ function AppRoutes() {
         <Route path="directory/:section" element={<DirectoriesPage />} />
         <Route path="search" element={<SearchResultsPage />} />
         <Route path="threads" element={<ThreadsPage />} />
+        <Route path="drafts" element={<DraftsPage />} />
         <Route path="admin" element={<AdminPage />} />
         <Route path="channel/:id" element={<ChannelView />} />
         <Route path="conversations/new" element={<NewConversationPage />} />

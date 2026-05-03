@@ -51,6 +51,18 @@ export interface Message {
   noUnfurl?: boolean;
 }
 
+export interface MessageDraft {
+  id: string;
+  userID: string;
+  parentID: string;
+  parentType: 'channel' | 'conversation';
+  parentMessageID?: string;
+  body: string;
+  attachmentIDs?: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface Attachment {
   id: string;
   sha256: string;

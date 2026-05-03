@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Globe, MessageSquare } from 'lucide-react';
 import { MessageItem } from '@/components/chat/MessageItem';
@@ -8,6 +8,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { useUsersBatch } from '@/hooks/useUsersBatch';
 import { useSendMessage, type SendMessageInput } from '@/hooks/useMessages';
 import { useInView } from '@/hooks/useInView';
+import { useDeleteDraft, useDraftAttachmentChips, useDraftForScope, useSaveDraft } from '@/hooks/useDrafts';
 import { usePresence } from '@/context/PresenceContext';
 import { collectMessageUserIDs } from '@/lib/message-users';
 import {
@@ -94,13 +95,48 @@ export function ThreadCard({ summary, title, deepLink, currentUserId }: ThreadCa
   // key the hook above subscribes to, so a reply lands without an
   // extra fetch from us.
   const send = useSendMessage({ channelId, conversationId });
+  const parentID = channelId ?? conversationId;
+  const parentType = channelId ? 'channel' : 'conversation';
+  const { data: draft } = useDraftForScope({
+    parentID,
+    parentType,
+    parentMessageID: summary.threadRootID,
+  });
+  const draftAttachments = useDraftAttachmentChips(draft?.attachmentIDs);
+  const draftID = draft?.id;
+  const saveDraft = useSaveDraft();
+  const deleteDraft = useDeleteDraft();
+  const saveDraftMutate = saveDraft.mutate;
+  const deleteDraftMutate = deleteDraft.mutate;
 
-  function handleReply(input: SendMessageInput) {
-    send.mutate({ ...input, parentMessageID: summary.threadRootID });
-    // Treat sending as "seeing" — drops the unread dot in the sidebar
-    // since the user is clearly engaged with this thread.
-    markThreadSeen(summary.threadRootID);
-  }
+  const handleDraftChange = useCallback(
+    (input: SendMessageInput) => {
+      if (!parentID) return;
+      saveDraftMutate({
+        parentID,
+        parentType,
+        parentMessageID: summary.threadRootID,
+        body: input.body,
+        attachmentIDs: input.attachmentIDs ?? [],
+      });
+    },
+    [parentID, parentType, summary.threadRootID, saveDraftMutate],
+  );
+
+  const handleReply = useCallback(
+    (input: SendMessageInput) => {
+      const payload = { ...input, parentMessageID: summary.threadRootID };
+      if (draftID) {
+        send.mutate(payload, { onSuccess: () => deleteDraftMutate(draftID) });
+      } else {
+        send.mutate(payload);
+      }
+      // Treat sending as "seeing" — drops the unread dot in the sidebar
+      // since the user is clearly engaged with this thread.
+      markThreadSeen(summary.threadRootID);
+    },
+    [send, summary.threadRootID, draftID, deleteDraftMutate],
+  );
 
   return (
     <article
@@ -200,10 +236,13 @@ export function ThreadCard({ summary, title, deepLink, currentUserId }: ThreadCa
             onSend={handleReply}
             disabled={send.isPending}
             placeholder="Reply…"
+            focusKey={summary.threadRootID}
+            initialBody={draft?.body ?? ''}
+            initialDrafts={draftAttachments}
+            onDraftChange={handleDraftChange}
           />
         </div>
       </MessageDropZone>
     </article>
   );
 }
-
