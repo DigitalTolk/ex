@@ -314,7 +314,7 @@ function MembersTab({ isAdmin, currentUserId }: MembersTabProps) {
                 <span
                   data-testid={`presence-${u.id}`}
                   className={`absolute bottom-2 right-2 h-3 w-3 rounded-full ring-2 ring-background ${
-                    online ? 'bg-emerald-500' : 'bg-muted-foreground/40'
+                    online ? 'bg-emerald-500' : 'bg-muted-foreground'
                   }`}
                   aria-label={online ? 'Online' : 'Offline'}
                 />

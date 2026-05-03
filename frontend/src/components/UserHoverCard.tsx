@@ -114,7 +114,7 @@ export function UserHoverCard({
               <span
                 data-testid="hover-online-dot"
                 className={`absolute bottom-0 right-0 h-3 w-3 rounded-full ring-2 ring-popover ${
-                  effectiveOnline ? 'bg-emerald-500' : 'bg-muted-foreground/40'
+                  effectiveOnline ? 'bg-emerald-500' : 'bg-muted-foreground'
                 }`}
                 aria-label={effectiveOnline ? 'Online' : 'Offline'}
               />

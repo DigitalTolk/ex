@@ -46,13 +46,16 @@ export function ChannelRow({
   function toggleFavorite(e: React.MouseEvent) {
     e.preventDefault();
     e.stopPropagation();
-    if (isFav) {
+    if (!isFav) {
       setCategory.mutate({ channelID: channel.channelID, categoryID: '' });
     }
     favorite.mutate({ channelID: channel.channelID, favorite: !isFav });
   }
 
   function moveToCategory(categoryID: string) {
+    if (isFav) {
+      favorite.mutate({ channelID: channel.channelID, favorite: false });
+    }
     setCategory.mutate({ channelID: channel.channelID, categoryID });
   }
 
@@ -85,7 +88,9 @@ export function ChannelRow({
           }`
         }
       >
-        <ChannelIcon type={channel.channelType} className="h-4 w-4 shrink-0" ariaLabel="" />
+        <span className="flex h-5 w-5 shrink-0 items-center justify-center">
+          <ChannelIcon type={channel.channelType} className="h-4 w-4" ariaLabel="" />
+        </span>
         <span className={`truncate ${channel.muted ? 'text-gray-500' : ''}`}>
           {channel.channelName}
         </span>
@@ -116,7 +121,7 @@ export function ChannelRow({
         <DropdownMenuContent align="end" className="w-56">
           <DropdownMenuItem
             onClick={() => moveToCategory('')}
-            disabled={!channel.categoryID}
+            disabled={!channel.categoryID && !isFav}
           >
             Move to Channels
           </DropdownMenuItem>

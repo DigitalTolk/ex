@@ -121,7 +121,7 @@ describe('ThreadsPage', () => {
     expect(screen.getByTestId('threads-loading')).toBeInTheDocument();
   });
 
-  it('resets the threads page scroll position to the top on mount', async () => {
+  it('does not force the threads page scroll position on mount', async () => {
     const descriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollTop');
     const scrollAssignments: number[] = [];
     Object.defineProperty(HTMLElement.prototype, 'scrollTop', {
@@ -136,7 +136,7 @@ describe('ThreadsPage', () => {
     try {
       apiFetchMock.mockResolvedValueOnce(sample);
       renderPage();
-      expect(scrollAssignments).toContain(0);
+      expect(scrollAssignments).toEqual([]);
     } finally {
       if (descriptor) {
         Object.defineProperty(HTMLElement.prototype, 'scrollTop', descriptor);
