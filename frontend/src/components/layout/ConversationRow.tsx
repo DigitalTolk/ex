@@ -87,12 +87,6 @@ export function ConversationRow({ conversation, hasUnread, dmAvatarURL, onClose,
             ? firstNamesOnly(conversation.displayName)
             : conversation.displayName}
         </span>
-        {hasUnread && (
-          <span
-            data-testid="unread-dot"
-            className="ml-auto h-2 w-2 rounded-full bg-white group-hover/row:hidden"
-          />
-        )}
       </NavLink>
       {/* Star — visible on hover; persistent yellow when favorited.
           Positioned to match ChannelRow's right-7 / right-1 layout. */}

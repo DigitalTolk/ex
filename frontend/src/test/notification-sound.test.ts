@@ -154,6 +154,21 @@ describe('playNotificationPing', () => {
     const play = await loadModule();
     expect(() => play()).not.toThrow();
   });
+
+  it('primes the AudioContext from a user gesture without playing a stale tone', async () => {
+    let pointerHandler: EventListener | null = null;
+    const addSpy = vi.spyOn(window, 'addEventListener').mockImplementation((type, listener) => {
+      if (type === 'pointerdown') pointerHandler = listener as EventListener;
+    });
+    initialState = 'running';
+    installFakeAudioContext();
+
+    await loadModule();
+    pointerHandler?.(new Event('pointerdown'));
+
+    expect(createOsc).not.toHaveBeenCalled();
+    addSpy.mockRestore();
+  });
 });
 
 describe('NotificationContext.dispatch — sound regression', () => {

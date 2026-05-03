@@ -1,5 +1,16 @@
-import { useState, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useState, useMemo, useRef, type CSSProperties, type ReactNode } from 'react';
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
+import {
+  draggable as makeDraggable,
+  dropTargetForElements,
+  monitorForElements,
+} from '@atlaskit/pragmatic-drag-and-drop/element/adapter';
+import { combine } from '@atlaskit/pragmatic-drag-and-drop/combine';
+import {
+  attachClosestEdge,
+  extractClosestEdge,
+  type Edge,
+} from '@atlaskit/pragmatic-drag-and-drop-hitbox/closest-edge';
 import { useUsersBatch } from '@/hooks/useUsersBatch';
 import { slugify } from '@/lib/format';
 import {
@@ -15,6 +26,8 @@ import {
   MessagesSquare,
   MoreVertical,
   Trash2,
+  ArrowDownAZ,
+  Clock3,
 } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
@@ -31,8 +44,9 @@ import { useUnread } from '@/context/UnreadContext';
 import { useUserChannels } from '@/hooks/useChannels';
 import { useUserConversations } from '@/hooks/useConversations';
 import { useUserThreads, hasUnreadActivity } from '@/hooks/useThreads';
-import { useCategories, useCreateCategory, useDeleteCategory } from '@/hooks/useSidebar';
-import { groupSidebarItems, SidebarSectionKeys } from '@/lib/sidebar-groups';
+import { useCategories, useCreateCategory, useDeleteCategory, useFavoriteChannel, useSetCategory, useUpdateCategory } from '@/hooks/useSidebar';
+import { groupSidebarItems, SidebarSectionKeys, type SidebarItem, type ConversationSidebarSort } from '@/lib/sidebar-groups';
+import type { SidebarCategory, UserChannel } from '@/types';
 import { ChannelRow } from './ChannelRow';
 import { ConversationRow } from './ConversationRow';
 import { CreateChannelDialog } from '@/components/channels/CreateChannelDialog';
@@ -46,6 +60,174 @@ interface SidebarProps {
   onClose: () => void;
 }
 
+const SIDEBAR_POSITION_STEP = 1000;
+const CONVERSATION_SORT_STORAGE_KEY = 'sidebar.conversationSort';
+const CATEGORY_DROP_END = '__category-end__';
+
+type ChannelDropArea = 'lead' | 'row' | 'end';
+type ResolvedDrop =
+  | { kind: 'channel'; sectionKey: string; index: number; area: ChannelDropArea }
+  | { kind: 'category'; categoryID: string };
+type DropIndicator = ResolvedDrop;
+
+type DragPayload =
+  | { type: 'channel'; channel: UserChannel }
+  | { type: 'category'; categoryID: string };
+
+type DropPayload =
+  | { type: 'channel-target'; sectionKey: string; index: number; area: ChannelDropArea }
+  | { type: 'section-header-target'; sectionKey: string; categoryID: string };
+
+function PragmaticCategoryHeader({
+  id,
+  draggable,
+  dropData,
+  className,
+  testID,
+  children,
+}: {
+  id: string;
+  draggable: boolean;
+  dropData?: DropPayload;
+  className: string;
+  testID: string;
+  children: ReactNode;
+}) {
+  const elementRef = useRef<HTMLDivElement | null>(null);
+  const [dragging, setDragging] = useState(false);
+
+  useEffect(() => {
+    const element = elementRef.current;
+    if (!element) return undefined;
+    const registrations = [];
+    if (draggable) {
+      registrations.push(
+        makeDraggable({
+          element,
+          canDrag: ({ input }) => input.button === 0,
+          getInitialData: () => ({ type: 'category', categoryID: id } satisfies DragPayload),
+          onDragStart: () => setDragging(true),
+          onDrop: () => setDragging(false),
+        }),
+      );
+    }
+    if (dropData) {
+      registrations.push(
+        dropTargetForElements({
+          element,
+          getData: ({ input, element }) =>
+            attachClosestEdge(dropData, {
+              input,
+              element,
+              allowedEdges: ['top', 'bottom'],
+            }),
+        }),
+      );
+    }
+    return combine(...registrations);
+  }, [draggable, dropData, id]);
+
+  return (
+    <div
+      ref={elementRef}
+      data-testid={testID}
+      className={className}
+      style={{ opacity: dragging ? 0.55 : undefined }}
+    >
+      {children}
+    </div>
+  );
+}
+
+function PragmaticSection({
+  data,
+  disabled,
+  className,
+  testID,
+  children,
+}: {
+  data: DropPayload;
+  disabled?: boolean;
+  className?: string;
+  testID?: string;
+  children?: ReactNode;
+}) {
+  const elementRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const element = elementRef.current;
+    if (!element || disabled) return undefined;
+    return dropTargetForElements({
+      element,
+      getData: () => data,
+    });
+  }, [data, disabled]);
+
+  return (
+    <div ref={elementRef} data-testid={testID} className={className}>
+      {children}
+    </div>
+  );
+}
+
+function PragmaticChannelRow({
+  sectionKey,
+  index,
+  channel,
+  children,
+}: {
+  sectionKey: string;
+  index: number;
+  channel: UserChannel;
+  children: (args: {
+    dragRef?: (node: HTMLElement | null) => void;
+    dragStyle?: CSSProperties;
+  }) => ReactNode;
+}) {
+  const elementRef = useRef<HTMLElement | null>(null);
+  const [dragging, setDragging] = useState(false);
+
+  useEffect(() => {
+    const element = elementRef.current;
+    if (!element) return undefined;
+    return combine(
+      makeDraggable({
+        element,
+        canDrag: ({ input }) => input.button === 0,
+        getInitialData: () => ({ type: 'channel', channel } satisfies DragPayload),
+        onDragStart: () => setDragging(true),
+        onDrop: () => setDragging(false),
+      }),
+      dropTargetForElements({
+        element,
+        getData: ({ input, element }) =>
+          attachClosestEdge(
+            { type: 'channel-target', sectionKey, index, area: 'row' } satisfies DropPayload,
+            {
+              input,
+              element,
+              allowedEdges: ['top', 'bottom'],
+            },
+          ),
+      }),
+    );
+  }, [channel, index, sectionKey]);
+
+  const setElementRef = useCallback((node: HTMLElement | null) => {
+    elementRef.current = node;
+  }, []);
+
+  return (
+    <>
+      {/* eslint-disable-next-line react-hooks/refs -- passing ref callbacks to a child render prop; refs are only assigned by React later. */}
+      {children({
+        dragRef: setElementRef,
+        dragStyle: { opacity: dragging ? 0.55 : undefined },
+      })}
+    </>
+  );
+}
+
 export function Sidebar({ onClose }: SidebarProps) {
   const { user, logout } = useAuth();
   const { unreadChannels, unreadConversations, hiddenConversations, hideConversation } = useUnread();
@@ -55,7 +237,18 @@ export function Sidebar({ onClose }: SidebarProps) {
   const { data: categories } = useCategories();
   const createCategory = useCreateCategory();
   const deleteCategory = useDeleteCategory();
+  const favoriteChannel = useFavoriteChannel();
+  const setCategory = useSetCategory();
+  const updateCategory = useUpdateCategory();
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
+  const [conversationSort, setConversationSort] = useState<ConversationSidebarSort>(() =>
+    localStorage.getItem(CONVERSATION_SORT_STORAGE_KEY) === 'az' ? 'az' : 'recent',
+  );
+  const activeDragRef = useRef<DragPayload | null>(null);
+  const [dropIndicator, setDropIndicator] = useState<DropIndicator | null>(null);
+  const resolvedDropRef = useRef<ResolvedDrop | null>(null);
+  const [suppressChannelNavigationID, setSuppressChannelNavigationID] = useState<string | null>(null);
+  const suppressNavigationResetRef = useRef<number | null>(null);
   const [creatingCategory, setCreatingCategory] = useState(false);
   const [newCategoryName, setNewCategoryName] = useState('');
   const [categoryCreateError, setCategoryCreateError] = useState('');
@@ -79,8 +272,8 @@ export function Sidebar({ onClose }: SidebarProps) {
   const hasThreadUpdates = (threads ?? []).some((t) => hasUnreadActivity(t));
 
   const sidebarSections = useMemo(
-    () => groupSidebarItems(channels ?? [], visibleConversations, categories ?? []),
-    [channels, visibleConversations, categories],
+    () => groupSidebarItems(channels ?? [], visibleConversations, categories ?? [], { conversationSort }),
+    [channels, visibleConversations, categories, conversationSort],
   );
 
   // Fetch the other participant for every DM in one batch so the sidebar
@@ -134,6 +327,244 @@ export function Sidebar({ onClose }: SidebarProps) {
     setAboutOpen(open);
     scheduleClearUserMenuFocus();
   }
+
+  function setConversationSortPreference(sort: ConversationSidebarSort) {
+    setConversationSort(sort);
+    localStorage.setItem(CONVERSATION_SORT_STORAGE_KEY, sort);
+  }
+
+  function sectionCategoryID(sectionKey: string): string {
+    return sectionKey === SidebarSectionKeys.Channels ? '' : sectionKey;
+  }
+
+  function positionForDrop(items: SidebarItem[], targetIndex: number): number {
+    const currentDraggedChannel = activeDragRef.current?.type === 'channel' ? activeDragRef.current.channel : null;
+    const channelsOnly = items
+      .filter((item): item is Extract<SidebarItem, { kind: 'channel' }> => item.kind === 'channel')
+      .map((item) => item.channel)
+      .filter((channel) => channel.channelID !== currentDraggedChannel?.channelID);
+    const before = channelsOnly[targetIndex - 1]?.sidebarPosition;
+    const after = channelsOnly[targetIndex]?.sidebarPosition;
+
+    if (before && after && after - before > 1) return Math.floor((before + after) / 2);
+    if (before) return before + SIDEBAR_POSITION_STEP;
+    if (after && after > 1) return Math.floor(after / 2);
+    if (after !== undefined) return after - SIDEBAR_POSITION_STEP;
+    return SIDEBAR_POSITION_STEP;
+  }
+
+  function dropChannelInto(sectionKey: string, items: SidebarItem[], targetIndex: number) {
+    const currentDraggedChannel = activeDragRef.current?.type === 'channel' ? activeDragRef.current.channel : null;
+    if (!currentDraggedChannel) return;
+    if (sectionKey === SidebarSectionKeys.DirectMessages) return;
+    if (sectionKey === SidebarSectionKeys.Favorites) {
+      if (!currentDraggedChannel.favorite) {
+        favoriteChannel.mutate({ channelID: currentDraggedChannel.channelID, favorite: true });
+      }
+      setDropIndicator(null);
+      return;
+    }
+    if (currentDraggedChannel.favorite) {
+      favoriteChannel.mutate({ channelID: currentDraggedChannel.channelID, favorite: false });
+    }
+    setCategory.mutate({
+      channelID: currentDraggedChannel.channelID,
+      categoryID: sectionCategoryID(sectionKey),
+      sidebarPosition: positionForDrop(items, targetIndex),
+    });
+    setDropIndicator(null);
+  }
+
+  function channelCount(items: SidebarItem[]): number {
+    return items.filter((item) => item.kind === 'channel').length;
+  }
+
+  function showChannelDropIndicator(sectionKey: string, index: number, area: ChannelDropArea) {
+    resolvedDropRef.current = { kind: 'channel', sectionKey, index, area };
+    setDropIndicator((prev) => {
+      if (
+        prev?.kind === 'channel' &&
+        prev.sectionKey === sectionKey &&
+        prev.index === index &&
+        prev.area === area
+      ) {
+        return prev;
+      }
+      return { kind: 'channel', sectionKey, index, area };
+    });
+  }
+
+  function clearDropTarget() {
+    resolvedDropRef.current = null;
+    setDropIndicator(null);
+  }
+
+  function sortedCategoriesWithoutDragged(): SidebarCategory[] {
+    return [...(categories ?? [])]
+      .filter((category) => category.id !== (activeDragRef.current?.type === 'category' ? activeDragRef.current.categoryID : null))
+      .sort((a, b) => a.position - b.position || a.name.localeCompare(b.name));
+  }
+
+  function positionForCategoryDrop(targetCategoryID: string): number {
+    const ordered = sortedCategoriesWithoutDragged();
+    const foundIndex = ordered.findIndex((category) => category.id === targetCategoryID);
+    const targetIndex = targetCategoryID === CATEGORY_DROP_END
+      ? ordered.length
+      : Math.max(0, foundIndex);
+    const before = ordered[targetIndex - 1]?.position;
+    const after = ordered[targetIndex]?.position;
+
+    if (before && after && after - before > 1) return Math.floor((before + after) / 2);
+    if (before) return before + SIDEBAR_POSITION_STEP;
+    if (after && after > 1) return Math.floor(after / 2);
+    if (after !== undefined) return after - SIDEBAR_POSITION_STEP;
+    return SIDEBAR_POSITION_STEP;
+  }
+
+  function moveCategoryBefore(targetCategoryID: string) {
+    const draggedCategoryID = activeDragRef.current?.type === 'category' ? activeDragRef.current.categoryID : null;
+    if (!draggedCategoryID || draggedCategoryID === targetCategoryID) return;
+    const draggedCategory = categories?.find((category) => category.id === draggedCategoryID);
+    if (!draggedCategory) return;
+
+    updateCategory.mutate({ id: draggedCategoryID, position: positionForCategoryDrop(targetCategoryID) });
+    setDropIndicator(null);
+  }
+
+  function isChannelDropIndicator(sectionKey: string, index: number, area: ChannelDropArea): boolean {
+    return dropIndicator?.kind === 'channel' && dropIndicator.sectionKey === sectionKey && dropIndicator.index === index && dropIndicator.area === area;
+  }
+
+  function applyResolvedDrop(drop: ResolvedDrop | null) {
+    if (!drop) return;
+    if (drop.kind === 'channel') {
+      if (activeDragRef.current?.type !== 'channel') return;
+      const section = sidebarSections.find((candidate) => candidate.key === drop.sectionKey);
+      if (!section) return;
+      dropChannelInto(drop.sectionKey, section.items, drop.index);
+      return;
+    }
+    if (activeDragRef.current?.type !== 'category') return;
+    moveCategoryBefore(drop.categoryID);
+  }
+
+  function resolveDropPayload(payload: DropPayload | undefined): ResolvedDrop | null {
+    if (!payload) return null;
+    const currentDrag = activeDragRef.current;
+    if (payload.type === 'channel-target') {
+      const edge = extractClosestEdge(payload);
+      if (currentDrag?.type === 'category') {
+        const categoryID = categoryTargetFromSection(payload.sectionKey, edge, payload.area);
+        return categoryID ? { kind: 'category', categoryID } : null;
+      }
+      if (currentDrag?.type !== 'channel') return null;
+      const index = edge === 'bottom' ? payload.index + 1 : payload.index;
+      const area = edge === 'bottom' ? 'end' : payload.area;
+      return { kind: 'channel', sectionKey: payload.sectionKey, index, area };
+    }
+    if (payload.type === 'section-header-target') {
+      if (currentDrag?.type === 'channel') {
+        return { kind: 'channel', sectionKey: payload.sectionKey, index: 0, area: 'lead' };
+      }
+      if (
+        currentDrag?.type === 'category' &&
+        payload.categoryID !== currentDrag.categoryID &&
+        payload.sectionKey !== SidebarSectionKeys.Favorites
+      ) {
+        const edge = extractClosestEdge(payload);
+        return { kind: 'category', categoryID: edge === 'bottom' ? nextCategoryTarget(payload.categoryID) : payload.categoryID };
+      }
+    }
+    return null;
+  }
+
+  function nextCategoryTarget(categoryID: string): string {
+    const ordered = [...(categories ?? [])].sort((a, b) => a.position - b.position || a.name.localeCompare(b.name));
+    const index = ordered.findIndex((category) => category.id === categoryID);
+    return ordered[index + 1]?.id ?? CATEGORY_DROP_END;
+  }
+
+  function categoryTargetFromSection(sectionKey: string, edge: Edge | null, area: ChannelDropArea): string | null {
+    if (sectionKey === SidebarSectionKeys.Favorites || sectionKey === SidebarSectionKeys.DirectMessages) return null;
+    if (sectionKey === SidebarSectionKeys.Channels) return CATEGORY_DROP_END;
+    return edge === 'bottom' || area === 'end' ? nextCategoryTarget(sectionKey) : sectionKey;
+  }
+
+  function currentDropPayload(location: { dropTargets: Array<{ data: Record<string | symbol, unknown> }> }): DropPayload | undefined {
+    return location.dropTargets[0]?.data as DropPayload | undefined;
+  }
+
+  function handleDragStart(payload: DragPayload | null) {
+    if (suppressNavigationResetRef.current !== null) {
+      window.clearTimeout(suppressNavigationResetRef.current);
+      suppressNavigationResetRef.current = null;
+    }
+    activeDragRef.current = payload;
+    setSuppressChannelNavigationID(payload?.type === 'channel' ? payload.channel.channelID : null);
+    clearDropTarget();
+  }
+
+  function updateResolvedDrop(payload: DropPayload | undefined) {
+    const resolvedDrop = resolveDropPayload(payload);
+    if (!resolvedDrop) {
+      clearDropTarget();
+      return;
+    }
+    resolvedDropRef.current = resolvedDrop;
+    if (resolvedDrop.kind === 'channel') {
+      showChannelDropIndicator(resolvedDrop.sectionKey, resolvedDrop.index, resolvedDrop.area);
+      return;
+    }
+    setDropIndicator(resolvedDrop);
+  }
+
+  function handleDrop(payload: DropPayload | undefined) {
+    applyResolvedDrop(resolvedDropRef.current ?? resolveDropPayload(payload));
+    activeDragRef.current = null;
+    clearDropTarget();
+    suppressNavigationResetRef.current = window.setTimeout(() => {
+      setSuppressChannelNavigationID(null);
+      suppressNavigationResetRef.current = null;
+    }, 750);
+  }
+
+  function clearSuppressedChannelNavigation() {
+    if (suppressNavigationResetRef.current !== null) {
+      window.clearTimeout(suppressNavigationResetRef.current);
+      suppressNavigationResetRef.current = null;
+    }
+    setSuppressChannelNavigationID(null);
+  }
+
+  function DropLine({ overlay = false }: { overlay?: boolean }) {
+    return (
+      <div
+        data-testid="sidebar-drop-indicator"
+        className={
+          overlay
+            ? 'pointer-events-none absolute left-2 right-2 top-0 z-10 h-px bg-white/60'
+            : 'pointer-events-none mx-2 my-0.5 h-px bg-white/60'
+        }
+      />
+    );
+  }
+
+  useEffect(() => {
+    return monitorForElements({
+      onDragStart: ({ source }) => {
+        handleDragStart(source.data as DragPayload);
+      },
+      onDropTargetChange: ({ location }) => {
+        updateResolvedDrop(currentDropPayload(location.current));
+      },
+      onDrag: ({ location }) => {
+        updateResolvedDrop(currentDropPayload(location.current));
+      },
+      onDrop: ({ location }) => {
+        handleDrop(currentDropPayload(location.current));
+      },
+    });
+  });
 
   return (
     <div className="flex h-full flex-col text-gray-300">
@@ -241,14 +672,7 @@ export function Sidebar({ onClose }: SidebarProps) {
             }
           >
             <MessagesSquare className="h-4 w-4 shrink-0" aria-hidden="true" />
-            <span>Threads</span>
-            {hasThreadUpdates && (
-              <span
-                data-testid="threads-unread-dot"
-                className="ml-auto h-2 w-2 rounded-full bg-white"
-                aria-label="Unread thread activity"
-              />
-            )}
+            <span className={hasThreadUpdates ? 'font-bold text-white' : ''}>Threads</span>
           </NavLink>
 
           {/* Visual break between top-level pages and the channel/DM list. */}
@@ -323,11 +747,7 @@ export function Sidebar({ onClose }: SidebarProps) {
               const isChannelsDefault = section.key === SidebarSectionKeys.Channels;
               const isDMsDefault = section.key === SidebarSectionKeys.DirectMessages;
               const isUserCategory = !isFavorites && !isChannelsDefault && !isDMsDefault;
-              // Favorites is hidden when empty — empty defaults still
-              // render so the user always has a "+" target for new
-              // channels and DMs, and user categories always render so
-              // the user can drop items into them.
-              if (isFavorites && section.items.length === 0) return null;
+              const canDropChannel = isFavorites || isUserCategory || isChannelsDefault;
               const collapsed = !!collapsedGroups[section.key];
 
               // When collapsed, still surface:
@@ -355,7 +775,25 @@ export function Sidebar({ onClose }: SidebarProps) {
 
               return (
                 <div key={section.key} className="mt-2" data-testid={`sidebar-group-${section.key}`}>
-                  <div className="group/sec relative flex items-center">
+                  <PragmaticCategoryHeader
+                    id={section.key}
+                    draggable={isUserCategory}
+                    dropData={
+                      isFavorites || isUserCategory || isChannelsDefault
+                        ? {
+                            type: 'section-header-target',
+                            sectionKey: section.key,
+                            categoryID: isChannelsDefault ? CATEGORY_DROP_END : section.key,
+                          }
+                        : undefined
+                    }
+                    className="group/sec relative flex items-center"
+                    testID={`sidebar-group-header-${section.key}`}
+                  >
+                    {dropIndicator?.kind === 'category' &&
+                      dropIndicator.categoryID === (isChannelsDefault ? CATEGORY_DROP_END : section.key) && (
+                        <DropLine overlay />
+                      )}
                     <button
                       onClick={() =>
                         setCollapsedGroups((prev) => ({ ...prev, [section.key]: !collapsed }))
@@ -382,15 +820,36 @@ export function Sidebar({ onClose }: SidebarProps) {
                       </button>
                     )}
                     {isDMsDefault && (
-                      <button
-                        onClick={() => navigate('/conversations/new')}
-                        aria-label="New direct message"
-                        title="New direct message"
-                        data-testid="sidebar-new-dm"
-                        className="absolute right-1 top-1/2 -translate-y-1/2 h-5 w-5 flex items-center justify-center rounded text-gray-400 opacity-0 group-hover/sec:opacity-100 hover:bg-white/20 hover:text-white"
-                      >
-                        <Plus className="h-3.5 w-3.5" />
-                      </button>
+                      <div className="absolute right-1 top-1/2 flex -translate-y-1/2 items-center gap-0.5 opacity-0 group-hover/sec:opacity-100">
+                        <button
+                          onClick={() => navigate('/conversations/new')}
+                          aria-label="New direct message"
+                          title="New direct message"
+                          data-testid="sidebar-new-dm"
+                          className="h-5 w-5 flex items-center justify-center rounded text-gray-400 hover:bg-white/20 hover:text-white"
+                        >
+                          <Plus className="h-3.5 w-3.5" />
+                        </button>
+                        <DropdownMenu>
+                          <DropdownMenuTrigger
+                            aria-label="Sort direct messages"
+                            data-testid="sidebar-dm-sort-menu"
+                            className="h-5 w-5 flex items-center justify-center rounded text-gray-400 hover:bg-white/20 hover:text-white"
+                          >
+                            <MoreVertical className="h-3.5 w-3.5" />
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end" className="w-52">
+                            <DropdownMenuItem onClick={() => setConversationSortPreference('recent')}>
+                              <Clock3 className="mr-2 h-4 w-4" />
+                              Recent activity
+                            </DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => setConversationSortPreference('az')}>
+                              <ArrowDownAZ className="mr-2 h-4 w-4" />
+                              A-Z
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      </div>
                     )}
                     {isUserCategory && (
                       <DropdownMenu>
@@ -413,17 +872,47 @@ export function Sidebar({ onClose }: SidebarProps) {
                         </DropdownMenuContent>
                       </DropdownMenu>
                     )}
-                  </div>
-                  <div className="space-y-px">
-                    {visibleItems.map((item) => {
+                  </PragmaticCategoryHeader>
+                  {isChannelDropIndicator(section.key, 0, 'lead') && (
+                    <div className="relative h-0">
+                      <DropLine overlay />
+                    </div>
+                  )}
+                  <PragmaticSection
+                    data={{ type: 'channel-target', sectionKey: section.key, index: channelCount(visibleItems), area: 'end' }}
+                    disabled={!canDropChannel}
+                    className="min-h-2 space-y-px pb-2"
+                    testID={canDropChannel ? `sidebar-section-tail-drop-${section.key}` : undefined}
+                  >
+                    {visibleItems.map((item, index) => {
                       if (item.kind === 'channel') {
+                        const channelDropIndex = visibleItems
+                          .slice(0, index)
+                          .filter((candidate) => candidate.kind === 'channel').length;
                         return (
-                          <ChannelRow
+                          <div
                             key={`ch-${item.channel.channelID}`}
-                            channel={item.channel}
-                            hasUnread={unreadChannels.has(item.channel.channelID)}
-                            onClose={onClose}
-                          />
+                            className="relative"
+                          >
+                            {isChannelDropIndicator(section.key, channelDropIndex, 'row') && <DropLine overlay />}
+                            <PragmaticChannelRow
+                              sectionKey={section.key}
+                              index={channelDropIndex}
+                              channel={item.channel}
+                            >
+                              {(dragProps) => (
+                                <ChannelRow
+                                  channel={item.channel}
+                                  hasUnread={unreadChannels.has(item.channel.channelID)}
+                                  onClose={onClose}
+                                  draggable
+                                  suppressNavigation={suppressChannelNavigationID === item.channel.channelID}
+                                  onSuppressNavigationConsumed={clearSuppressedChannelNavigation}
+                                  {...dragProps}
+                                />
+                              )}
+                            </PragmaticChannelRow>
+                          </div>
                         );
                       }
                       const conv = item.conversation;
@@ -443,7 +932,8 @@ export function Sidebar({ onClose }: SidebarProps) {
                         />
                       );
                     })}
-                  </div>
+                    {isChannelDropIndicator(section.key, channelCount(visibleItems), 'end') && <DropLine />}
+                  </PragmaticSection>
                 </div>
               );
             })}

@@ -833,16 +833,20 @@ func TestMembershipStore_SetUserChannelCategory(t *testing.T) {
 		t.Fatalf("AddChannelMember: %v", err)
 	}
 
-	if err := ms.SetUserChannelCategory(ctx, "ch-cat", "u-cat", "cat-id-1"); err != nil {
+	pos := 1200
+	if err := ms.SetUserChannelCategory(ctx, "ch-cat", "u-cat", "cat-id-1", &pos); err != nil {
 		t.Fatalf("SetUserChannelCategory: %v", err)
 	}
 	chans, _ := ms.ListUserChannels(ctx, "u-cat")
 	if len(chans) != 1 || chans[0].CategoryID != "cat-id-1" {
 		t.Errorf("expected CategoryID=cat-id-1, got %+v", chans)
 	}
+	if chans[0].SidebarPosition != pos {
+		t.Errorf("expected SidebarPosition=%d, got %+v", pos, chans)
+	}
 
 	// Clearing back to the empty string is the "remove from category" path.
-	if err := ms.SetUserChannelCategory(ctx, "ch-cat", "u-cat", ""); err != nil {
+	if err := ms.SetUserChannelCategory(ctx, "ch-cat", "u-cat", "", nil); err != nil {
 		t.Fatalf("SetUserChannelCategory clear: %v", err)
 	}
 	chans, _ = ms.ListUserChannels(ctx, "u-cat")
@@ -861,7 +865,7 @@ func TestMembershipStore_SetUserChannelFavorite_NotFound(t *testing.T) {
 	if err := ms.SetUserChannelFavorite(ctx, "ch-ghost", "u-ghost", true); !errors.Is(err, ErrNotFound) {
 		t.Errorf("expected ErrNotFound, got %v", err)
 	}
-	if err := ms.SetUserChannelCategory(ctx, "ch-ghost", "u-ghost", "cat"); !errors.Is(err, ErrNotFound) {
+	if err := ms.SetUserChannelCategory(ctx, "ch-ghost", "u-ghost", "cat", nil); !errors.Is(err, ErrNotFound) {
 		t.Errorf("expected ErrNotFound, got %v", err)
 	}
 }
@@ -876,7 +880,7 @@ func TestMembershipStore_SetUserChannelFavorite_NonexistentTable(t *testing.T) {
 	if err := ms.SetUserChannelFavorite(ctx, "ch-x", "u-x", true); err == nil {
 		t.Error("expected error on missing table")
 	}
-	if err := ms.SetUserChannelCategory(ctx, "ch-x", "u-x", "c"); err == nil {
+	if err := ms.SetUserChannelCategory(ctx, "ch-x", "u-x", "c", nil); err == nil {
 		t.Error("expected error on missing table")
 	}
 }
@@ -949,7 +953,8 @@ func TestConversationStore_SetUserConversationCategory(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	if err := cs.SetUserConversationCategory(ctx, "conv-cat", "u-cc-a", "cat-conv-1"); err != nil {
+	pos := 2400
+	if err := cs.SetUserConversationCategory(ctx, "conv-cat", "u-cc-a", "cat-conv-1", &pos); err != nil {
 		t.Fatalf("SetUserConversationCategory: %v", err)
 	}
 	got, err := cs.ListUserConversations(ctx, "u-cc-a")
@@ -959,8 +964,11 @@ func TestConversationStore_SetUserConversationCategory(t *testing.T) {
 	if len(got) != 1 || got[0].CategoryID != "cat-conv-1" {
 		t.Errorf("expected CategoryID=cat-conv-1, got %+v", got)
 	}
+	if got[0].SidebarPosition != pos {
+		t.Errorf("expected SidebarPosition=%d, got %+v", pos, got)
+	}
 
-	if err := cs.SetUserConversationCategory(ctx, "conv-cat", "u-cc-a", ""); err != nil {
+	if err := cs.SetUserConversationCategory(ctx, "conv-cat", "u-cc-a", "", nil); err != nil {
 		t.Fatalf("SetUserConversationCategory clear: %v", err)
 	}
 	got, _ = cs.ListUserConversations(ctx, "u-cc-a")
@@ -977,7 +985,7 @@ func TestConversationStore_SetUserConversationFavorite_NotFound(t *testing.T) {
 	if err := cs.SetUserConversationFavorite(ctx, "conv-ghost", "u-ghost", true); !errors.Is(err, ErrNotFound) {
 		t.Errorf("expected ErrNotFound, got %v", err)
 	}
-	if err := cs.SetUserConversationCategory(ctx, "conv-ghost", "u-ghost", "x"); !errors.Is(err, ErrNotFound) {
+	if err := cs.SetUserConversationCategory(ctx, "conv-ghost", "u-ghost", "x", nil); !errors.Is(err, ErrNotFound) {
 		t.Errorf("expected ErrNotFound, got %v", err)
 	}
 }
@@ -990,7 +998,7 @@ func TestConversationStore_SetUserConversationFavorite_NonexistentTable(t *testi
 	if err := cs.SetUserConversationFavorite(ctx, "conv-x", "u-x", true); err == nil {
 		t.Error("expected error on missing table")
 	}
-	if err := cs.SetUserConversationCategory(ctx, "conv-x", "u-x", "c"); err == nil {
+	if err := cs.SetUserConversationCategory(ctx, "conv-x", "u-x", "c", nil); err == nil {
 		t.Error("expected error on missing table")
 	}
 }

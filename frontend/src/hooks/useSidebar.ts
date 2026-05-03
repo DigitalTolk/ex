@@ -100,8 +100,11 @@ export function useSetCategory() {
   const m = usePutSidebarAttr('channel', 'category');
   return {
     ...m,
-    mutate: (vars: { channelID: string; categoryID: string }) =>
-      m.mutate({ id: vars.channelID, body: { categoryID: vars.categoryID } }),
+    mutate: (vars: { channelID: string; categoryID: string; sidebarPosition?: number }) => {
+      const body: { categoryID: string; sidebarPosition?: number } = { categoryID: vars.categoryID };
+      if (vars.sidebarPosition !== undefined) body.sidebarPosition = vars.sidebarPosition;
+      return m.mutate({ id: vars.channelID, body });
+    },
   };
 }
 
@@ -118,7 +121,10 @@ export function useSetConversationCategory() {
   const m = usePutSidebarAttr('conversation', 'category');
   return {
     ...m,
-    mutate: (vars: { conversationID: string; categoryID: string }) =>
-      m.mutate({ id: vars.conversationID, body: { categoryID: vars.categoryID } }),
+    mutate: (vars: { conversationID: string; categoryID: string; sidebarPosition?: number }) => {
+      const body: { categoryID: string; sidebarPosition?: number } = { categoryID: vars.categoryID };
+      if (vars.sidebarPosition !== undefined) body.sidebarPosition = vars.sidebarPosition;
+      return m.mutate({ id: vars.conversationID, body });
+    },
   };
 }

@@ -6,6 +6,9 @@
 // browsers reject AudioContext.resume() unless triggered by user input).
 
 let ctx: AudioContext | null = null;
+let unlockListenersInstalled = false;
+let resumeInFlight: Promise<void> | null = null;
+let pendingPing = false;
 
 function ensureContext(): AudioContext | null {
   if (typeof window === 'undefined') return null;
@@ -42,16 +45,53 @@ function scheduleTone(c: AudioContext): void {
   osc.stop(now + 0.4);
 }
 
+function schedulePendingTone(c: AudioContext): void {
+  if (!pendingPing) return;
+  pendingPing = false;
+  scheduleTone(c);
+}
+
+function resumeThenMaybePlay(c: AudioContext): void {
+  if (c.state !== 'suspended') {
+    schedulePendingTone(c);
+    return;
+  }
+  if (!resumeInFlight) {
+    resumeInFlight = c.resume().then(
+      () => schedulePendingTone(c),
+      () => undefined,
+    ).finally(() => {
+      resumeInFlight = null;
+    });
+  }
+}
+
+function unlockAudioContext(): void {
+  const c = ensureContext();
+  if (!c) return;
+  resumeThenMaybePlay(c);
+}
+
+function installUnlockListeners(): void {
+  if (unlockListenersInstalled || typeof window === 'undefined') return;
+  unlockListenersInstalled = true;
+  const opts: AddEventListenerOptions = { capture: true, passive: true };
+  window.addEventListener('pointerdown', unlockAudioContext, opts);
+  window.addEventListener('keydown', unlockAudioContext, opts);
+  window.addEventListener('touchstart', unlockAudioContext, opts);
+}
+
+installUnlockListeners();
+
 export function playNotificationPing(): void {
+  installUnlockListeners();
   const c = ensureContext();
   if (!c) return;
   // Suspended context (browser autoplay policy / fresh ctx pre-gesture)
   // must finish resume() before we can schedule — see scheduleTone.
   if (c.state === 'suspended') {
-    c.resume().then(
-      () => scheduleTone(c),
-      () => undefined,
-    );
+    pendingPing = true;
+    resumeThenMaybePlay(c);
     return;
   }
   scheduleTone(c);

@@ -71,6 +71,20 @@ func (s *dataConversationStore) ActivateConversation(_ context.Context, convID s
 	return nil
 }
 
+func (s *dataConversationStore) TouchConversation(_ context.Context, convID string, participantIDs []string, at time.Time) error {
+	if conv, ok := s.conversations[convID]; ok {
+		conv.UpdatedAt = at
+	}
+	for _, uid := range participantIDs {
+		for _, uc := range s.userConvs[uid] {
+			if uc.ConversationID == convID {
+				uc.UpdatedAt = at
+			}
+		}
+	}
+	return nil
+}
+
 func (s *dataConversationStore) SetFavorite(_ context.Context, convID, userID string, favorite bool) error {
 	for _, uc := range s.userConvs[userID] {
 		if uc.ConversationID == convID {
@@ -81,10 +95,13 @@ func (s *dataConversationStore) SetFavorite(_ context.Context, convID, userID st
 	return store.ErrNotFound
 }
 
-func (s *dataConversationStore) SetCategory(_ context.Context, convID, userID, categoryID string) error {
+func (s *dataConversationStore) SetCategory(_ context.Context, convID, userID, categoryID string, sidebarPosition *int) error {
 	for _, uc := range s.userConvs[userID] {
 		if uc.ConversationID == convID {
 			uc.CategoryID = categoryID
+			if sidebarPosition != nil {
+				uc.SidebarPosition = *sidebarPosition
+			}
 			return nil
 		}
 	}

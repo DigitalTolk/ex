@@ -100,7 +100,7 @@ func TestMessageService_Send_RejectsTooManyAttachments(t *testing.T) {
 }
 
 func TestMessageService_Send_Conversation(t *testing.T) {
-	svc, _, _, conversations, _ := setupMessageService()
+	svc, _, _, conversations, publisher := setupMessageService()
 	ctx := context.Background()
 
 	conversations.conversations["conv-1"] = &model.Conversation{
@@ -115,6 +115,15 @@ func TestMessageService_Send_Conversation(t *testing.T) {
 	}
 	if msg.Body != "hi from DM" {
 		t.Errorf("Body = %q, want %q", msg.Body, "hi from DM")
+	}
+	var sidebarEvents int
+	for _, published := range publisher.published {
+		if published.event.Type == "userchannel.updated" {
+			sidebarEvents++
+		}
+	}
+	if sidebarEvents != 2 {
+		t.Fatalf("userchannel.updated events = %d, want 2 participant sidebar refreshes", sidebarEvents)
 	}
 }
 

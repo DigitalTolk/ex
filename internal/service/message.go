@@ -160,9 +160,25 @@ func (s *MessageService) Send(ctx context.Context, userID, parentID, parentType,
 
 	// Activate the conversation on first message so non-creator participants
 	// see it appear in their sidebars only after activity exists.
-	if parentType == ParentConversation && s.activator != nil && parentMessageID == "" {
-		if err := s.activator.Activate(ctx, parentID); err != nil {
-			slog.Warn("conversation activate failed", "convID", parentID, "error", err)
+	if parentType == ParentConversation && parentMessageID == "" {
+		if conv, err := s.conversations.GetConversation(ctx, parentID); err == nil && conv != nil {
+			if err := s.conversations.TouchConversation(ctx, parentID, conv.ParticipantIDs, now); err != nil {
+				slog.Warn("conversation activity touch failed", "convID", parentID, "error", err)
+			} else {
+				userChannels := make([]string, 0, len(conv.ParticipantIDs))
+				for _, participantID := range conv.ParticipantIDs {
+					userChannels = append(userChannels, pubsub.UserChannel(participantID))
+				}
+				events.PublishMany(ctx, s.publisher, userChannels, events.EventUserChannelUpdated, map[string]any{
+					"conversationID": parentID,
+					"updatedAt":      now,
+				})
+			}
+		}
+		if s.activator != nil {
+			if err := s.activator.Activate(ctx, parentID); err != nil {
+				slog.Warn("conversation activate failed", "convID", parentID, "error", err)
+			}
 		}
 	}
 
@@ -437,11 +453,11 @@ func (s *MessageService) ListAround(ctx context.Context, userID, parentID, paren
 		return nil, false, false, err
 	}
 	var (
-		wg                                       sync.WaitGroup
-		target                                   *model.Message
-		older, newer                             []*model.Message
-		hasMoreOlder, hasMoreNewer               bool
-		errTarget, errOlder, errNewer            error
+		wg                            sync.WaitGroup
+		target                        *model.Message
+		older, newer                  []*model.Message
+		hasMoreOlder, hasMoreNewer    bool
+		errTarget, errOlder, errNewer error
 	)
 	wg.Add(3)
 	go func() {
@@ -934,4 +950,3 @@ func (s *MessageService) publishEvent(ctx context.Context, parentID, parentType,
 	}
 	events.Publish(ctx, s.publisher, channel, eventType, data)
 }
-

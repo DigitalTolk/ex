@@ -160,6 +160,42 @@ describe('ThreadPanel', () => {
     });
   });
 
+  it('passes the newest non-deleted own reply to the composer edit shortcut', async () => {
+    mockApiFetch.mockResolvedValueOnce([
+      { id: 'own-old', parentID: 'ch-1', parentMessageID: 'm-1', authorID: 'u-1', body: 'old', createdAt: '2026-04-24T10:30:00Z' },
+      { id: 'own-deleted', parentID: 'ch-1', parentMessageID: 'm-1', authorID: 'u-1', body: 'deleted', createdAt: '2026-04-24T10:31:00Z', deleted: true },
+      { id: 'own-system', parentID: 'ch-1', parentMessageID: 'm-1', authorID: 'u-1', body: 'system', createdAt: '2026-04-24T10:32:00Z', system: true },
+      { id: 'own-new', parentID: 'ch-1', parentMessageID: 'm-1', authorID: 'u-1', body: 'new', createdAt: '2026-04-24T10:33:00Z' },
+    ]);
+    renderWithProviders(
+      <ThreadPanel
+        channelId="ch-1"
+        threadRootID="m-1"
+        onClose={vi.fn()}
+        userMap={userMap}
+        currentUserId="u-1"
+      />,
+    );
+    await screen.findByText('new');
+    expect(lastMessageInputProps.current).toMatchObject({ lastOwnMessageId: 'own-new' });
+  });
+
+  it('does not pass an edit shortcut when current user is unknown', async () => {
+    mockApiFetch.mockResolvedValueOnce([
+      { id: 'own-new', parentID: 'ch-1', parentMessageID: 'm-1', authorID: 'u-1', body: 'new', createdAt: '2026-04-24T10:33:00Z' },
+    ]);
+    renderWithProviders(
+      <ThreadPanel
+        channelId="ch-1"
+        threadRootID="m-1"
+        onClose={vi.fn()}
+        userMap={userMap}
+      />,
+    );
+    await screen.findByText('new');
+    expect(lastMessageInputProps.current).toMatchObject({ lastOwnMessageId: undefined });
+  });
+
   it('shows empty state when there are no replies', async () => {
     mockApiFetch.mockResolvedValueOnce([]);
     renderWithProviders(

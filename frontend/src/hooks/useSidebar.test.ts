@@ -151,6 +151,20 @@ describe('useSetCategory', () => {
       body: JSON.stringify({ categoryID: '' }),
     });
   });
+
+  it('PUTs an optional channel sidebar position with the category', async () => {
+    vi.mocked(apiFetch).mockResolvedValue(undefined);
+
+    const { wrapper } = createWrapperWithClient();
+    const { result } = renderHook(() => useSetCategory(), { wrapper });
+    result.current.mutate({ channelID: 'ch-9', categoryID: 'c-3', sidebarPosition: 1500 });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(apiFetch).toHaveBeenCalledWith('/api/v1/channels/ch-9/category', {
+      method: 'PUT',
+      body: JSON.stringify({ categoryID: 'c-3', sidebarPosition: 1500 }),
+    });
+  });
 });
 
 describe('useFavoriteConversation', () => {
@@ -201,6 +215,20 @@ describe('useSetConversationCategory', () => {
     expect(apiFetch).toHaveBeenCalledWith('/api/v1/conversations/c-9/category', {
       method: 'PUT',
       body: JSON.stringify({ categoryID: '' }),
+    });
+  });
+
+  it('PUTs an optional conversation sidebar position with the category', async () => {
+    vi.mocked(apiFetch).mockResolvedValue(undefined);
+
+    const { wrapper } = createWrapperWithClient();
+    const { result } = renderHook(() => useSetConversationCategory(), { wrapper });
+    result.current.mutate({ conversationID: 'c-9', categoryID: 'cat-eng', sidebarPosition: 2500 });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(apiFetch).toHaveBeenCalledWith('/api/v1/conversations/c-9/category', {
+      method: 'PUT',
+      body: JSON.stringify({ categoryID: 'cat-eng', sidebarPosition: 2500 }),
     });
   });
 });

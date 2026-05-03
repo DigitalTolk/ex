@@ -3,6 +3,7 @@ import { render, screen, fireEvent } from '@testing-library/react';
 import { BrowserRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { UserChannel, SidebarCategory } from '@/types';
+import type { ComponentProps } from 'react';
 
 // --- mocks ---------------------------------------------------------------
 
@@ -55,14 +56,14 @@ function makeChannel(overrides: Partial<UserChannel> = {}): UserChannel {
   };
 }
 
-function renderRow(channel: UserChannel, hasUnread = false) {
+function renderRow(channel: UserChannel, hasUnread = false, props: Partial<ComponentProps<typeof ChannelRow>> = {}) {
   const onClose = vi.fn();
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return {
     ...render(
       <QueryClientProvider client={qc}>
         <BrowserRouter>
-          <ChannelRow channel={channel} hasUnread={hasUnread} onClose={onClose} />
+          <ChannelRow channel={channel} hasUnread={hasUnread} onClose={onClose} {...props} />
         </BrowserRouter>
       </QueryClientProvider>,
     ),
@@ -77,6 +78,7 @@ describe('ChannelRow', () => {
     favoriteMutate.mockReset();
     setCategoryMutate.mockReset();
     categoriesData = [];
+    window.history.pushState({}, '', '/');
   });
 
   it('renders the channel name', () => {
@@ -92,10 +94,23 @@ describe('ChannelRow', () => {
   });
 
   it('toggles favorite off when channel is already favorited', () => {
-    renderRow(makeChannel({ channelID: 'ch-1', favorite: true }));
+    renderRow(makeChannel({ channelID: 'ch-1', favorite: true, categoryID: 'cat-A' }));
     const star = screen.getByTestId('fav-toggle-ch-1');
     fireEvent.click(star);
+    expect(setCategoryMutate).toHaveBeenCalledWith({ channelID: 'ch-1', categoryID: '' });
     expect(favoriteMutate).toHaveBeenCalledWith({ channelID: 'ch-1', favorite: false });
+  });
+
+  it('does not navigate when the parent suppresses the dragged channel click', () => {
+    const { onClose } = renderRow(makeChannel({ channelID: 'ch-1', channelName: 'general' }), false, {
+      suppressNavigation: true,
+    });
+    const link = screen.getByText('general').closest('a')!;
+
+    fireEvent.click(link);
+
+    expect(onClose).not.toHaveBeenCalled();
+    expect(window.location.pathname).not.toBe('/channel/general');
   });
 
   it('uses Lock icon and shows mute indicator for muted private channels', () => {

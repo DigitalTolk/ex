@@ -185,4 +185,98 @@ describe('GiphyEmbed', () => {
     expect(screen.queryByText('GIPHY unavailable')).not.toBeInTheDocument();
     expect(giphyFetchMocks.gif).not.toHaveBeenCalled();
   });
+
+  it('uses the workspace settings API key when no explicit key is passed', async () => {
+    settingsMock.value = { data: { giphyAPIKey: 'settings-key' }, isLoading: false };
+    giphyFetchMocks.gif.mockResolvedValue({
+      data: {
+        id: 'settings-1',
+        title: '',
+        url: '',
+        is_sticker: false,
+        images: {
+          original: {
+            url: 'https://media.giphy.com/settings-1.gif',
+            width: 120,
+            height: 80,
+          },
+        },
+      },
+    });
+
+    render(<GiphyEmbed id="settings-1" />);
+
+    const img = await screen.findByAltText('GIPHY GIF');
+    expect(img.getAttribute('src')).toBe('https://media.giphy.com/settings-1.gif');
+    expect(screen.getByRole('link', { name: /powered by giphy/i })).toHaveAttribute(
+      'href',
+      'https://giphy.com',
+    );
+  });
+
+  it('falls back to looping MP4 when original MP4 renditions are absent', async () => {
+    giphyFetchMocks.gif.mockResolvedValue({
+      data: {
+        id: 'loop-1',
+        title: '',
+        url: 'https://giphy.com/gifs/loop-1',
+        is_sticker: false,
+        images: {
+          original: {
+            url: 'https://media.giphy.com/loop-1.gif',
+            width: 900,
+            height: 600,
+          },
+          looping: {
+            mp4: 'https://media.giphy.com/loop-1-loop.mp4?cid=keep',
+          },
+        },
+      },
+    });
+
+    render(<GiphyEmbed id="loop-1" apiKey="browser-key" />);
+
+    const video = await screen.findByLabelText('GIPHY GIF');
+    expect(video.tagName.toLowerCase()).toBe('video');
+    expect(video.getAttribute('src')).toBe('https://media.giphy.com/loop-1-loop.mp4?cid=keep');
+    expect(video).toHaveStyle({ width: '420px', height: '280px' });
+  });
+
+  it('shows unavailable when a Giphy lookup fails and clears the failed promise from cache', async () => {
+    giphyFetchMocks.gif.mockRejectedValueOnce(new Error('network'));
+
+    render(<GiphyEmbed id="fail-1" apiKey="browser-key" width={640} height={480} />);
+
+    expect(await screen.findByText('GIPHY unavailable')).toHaveStyle({
+      width: '420px',
+      height: '315px',
+    });
+    expect(giphyFetchMocks.gif).toHaveBeenCalledTimes(1);
+
+    giphyFetchMocks.gif.mockResolvedValueOnce({
+      data: {
+        id: 'fail-1',
+        title: 'retry ok',
+        url: 'https://giphy.com/gifs/retry-ok',
+        is_sticker: false,
+        images: {
+          original: {
+            url: 'https://media.giphy.com/retry-ok.gif',
+            width: 200,
+            height: 120,
+          },
+        },
+      },
+    });
+    render(<GiphyEmbed id="fail-1" apiKey="browser-key" />);
+    expect(await screen.findByAltText('retry ok')).toBeInTheDocument();
+    expect(giphyFetchMocks.gif).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not fetch when the persisted Giphy ID is empty', () => {
+    render(<GiphyEmbed id="" apiKey="browser-key" />);
+
+    expect(screen.getByText('Loading GIPHY...')).toBeInTheDocument();
+    expect(giphyFetchMocks.gif).not.toHaveBeenCalled();
+  });
 });
