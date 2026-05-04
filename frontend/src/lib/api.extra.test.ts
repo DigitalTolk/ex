@@ -2,6 +2,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   setAccessToken,
   clearAccessToken,
+  getAccessToken,
+  refreshAccessToken,
   apiFetch,
   ApiError,
 } from './api';
@@ -142,5 +144,27 @@ describe('apiFetch - tryRefreshToken edge cases', () => {
       } as Response);
 
     await expect(apiFetch('/api/v1/test')).rejects.toThrow(ApiError);
+  });
+
+  it('deduplicates concurrent refresh attempts', async () => {
+    const refreshResponse = Promise.resolve({
+      ok: true,
+      json: () => Promise.resolve({ accessToken: 'shared-token' }),
+    } as Response);
+    vi.mocked(globalThis.fetch).mockReturnValue(refreshResponse);
+
+    const [first, second] = await Promise.all([
+      refreshAccessToken(),
+      refreshAccessToken(),
+    ]);
+
+    expect(first).toBe('shared-token');
+    expect(second).toBe('shared-token');
+    expect(getAccessToken()).toBe('shared-token');
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+    expect(globalThis.fetch).toHaveBeenCalledWith('/auth/token/refresh', {
+      method: 'POST',
+      credentials: 'include',
+    });
   });
 });

@@ -1,4 +1,5 @@
 let accessToken: string | null = null;
+let refreshPromise: Promise<string | null> | null = null;
 
 export function setAccessToken(token: string) {
   accessToken = token;
@@ -39,22 +40,34 @@ async function errorMessageFromResponse(res: Response): Promise<string> {
   return text;
 }
 
-async function tryRefreshToken(): Promise<boolean> {
-  try {
-    const res = await fetch('/auth/token/refresh', {
-      method: 'POST',
-      credentials: 'include',
+export async function refreshAccessToken(): Promise<string | null> {
+  if (!refreshPromise) {
+    refreshPromise = (async () => {
+      try {
+        const res = await fetch('/auth/token/refresh', {
+          method: 'POST',
+          credentials: 'include',
+        });
+        if (!res.ok) {
+          clearAccessToken();
+          return null;
+        }
+        const data = await res.json();
+        if (data.accessToken) {
+          setAccessToken(data.accessToken);
+          return data.accessToken;
+        }
+        clearAccessToken();
+        return null;
+      } catch {
+        clearAccessToken();
+        return null;
+      }
+    })().finally(() => {
+      refreshPromise = null;
     });
-    if (!res.ok) return false;
-    const data = await res.json();
-    if (data.accessToken) {
-      setAccessToken(data.accessToken);
-      return true;
-    }
-    return false;
-  } catch {
-    return false;
   }
+  return refreshPromise;
 }
 
 export async function apiFetch<T>(
@@ -82,8 +95,8 @@ export async function apiFetch<T>(
   });
 
   if (res.status === 401 && accessToken) {
-    const refreshed = await tryRefreshToken();
-    if (refreshed) {
+    const refreshedToken = await refreshAccessToken();
+    if (refreshedToken) {
       headers.set('Authorization', `Bearer ${accessToken}`);
       const retry = await fetch(path, {
         ...options,
