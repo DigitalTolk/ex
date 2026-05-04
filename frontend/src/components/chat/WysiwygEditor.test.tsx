@@ -362,6 +362,19 @@ describe('WysiwygEditor', () => {
     expect(ref.current!.getElement()).toBe(getEditor());
   });
 
+  it('focusEnd() parks inserted text at the end of existing content', async () => {
+    const ref = createRef<WysiwygEditorHandle>();
+    renderEditor({ ref, initialBody: 'draft body' });
+    await waitFor(() => expect(ref.current).not.toBeNull());
+
+    ref.current!.focusEnd();
+    ref.current!.insertText(' plus');
+
+    await waitFor(() => {
+      expect(ref.current!.getMarkdown()).toBe('draft body plus');
+    });
+  });
+
   it('renders a <blockquote> in the DOM when initial markdown is "> hi"', async () => {
     renderEditor({ initialBody: '> hi' });
     await waitFor(() => {
