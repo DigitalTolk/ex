@@ -1032,12 +1032,13 @@ func (s *MessageService) flagNonMemberMentions(ctx context.Context, msg *model.M
 // Used for join/leave/audit-style notices and the non-member-mention flag.
 func (s *MessageService) postSystemMessage(ctx context.Context, channelID, body string) {
 	sysMsg := &model.Message{
-		ID:        store.NewID(),
-		ParentID:  channelID,
-		AuthorID:  "system",
-		Body:      body,
-		System:    true,
-		CreatedAt: time.Now(),
+		ID:         store.NewID(),
+		ParentID:   channelID,
+		ParentType: ParentChannel,
+		AuthorID:   "system",
+		Body:       body,
+		System:     true,
+		CreatedAt:  time.Now(),
 	}
 	if err := s.messages.CreateMessage(ctx, sysMsg); err != nil {
 		return
@@ -1055,6 +1056,11 @@ func (s *MessageService) publishEvent(ctx context.Context, parentID, parentType,
 		channel = pubsub.ConversationName(parentID)
 	default:
 		return
+	}
+	if msg, ok := data.(*model.Message); ok && msg != nil {
+		cp := *msg
+		cp.ParentType = parentType
+		data = &cp
 	}
 	events.Publish(ctx, s.publisher, channel, eventType, data)
 }

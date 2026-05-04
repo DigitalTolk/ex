@@ -254,7 +254,7 @@ describe('ChatPage', () => {
   it('onMessageNew calls unhideConversation', () => {
     renderChatPage();
     const opts = mockUseWebSocket.mock.calls[0][0];
-    opts.onMessageNew(msg({ parentID: 'conv-1' }));
+    opts.onMessageNew(msg({ parentID: 'conv-1', parentType: 'conversation' }));
     expect(mockUnhideConversation).toHaveBeenCalledWith('conv-1');
   });
 });

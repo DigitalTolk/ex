@@ -33,6 +33,7 @@ export interface Channel {
 export interface Message {
   id: string;
   parentID: string;
+  parentType?: 'channel' | 'conversation';
   authorID: string;
   body: string;
   system?: boolean;

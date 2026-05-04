@@ -3,6 +3,7 @@ import { render, act } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Routes, Route, useLocation } from 'react-router-dom';
 import ChatPage from '@/pages/ChatPage';
+import { apiFetch } from '@/lib/api';
 
 let capturedOptions: Record<string, ((data: unknown) => void) | boolean | undefined> = {};
 const authUserMock = vi.hoisted(() => ({
@@ -40,6 +41,8 @@ const markChannelUnread = vi.fn();
 const markChannelNotificationUnread = vi.fn();
 const markConversationUnread = vi.fn();
 const markThreadNotificationUnread = vi.fn();
+const clearConversationUnread = vi.fn();
+const isActiveConversation = vi.fn(() => false);
 const unhideConversation = vi.fn();
 
 vi.mock('@/context/UnreadContext', () => ({
@@ -56,11 +59,11 @@ vi.mock('@/context/UnreadContext', () => ({
     hiddenConversations: new Set(),
     hideConversation: vi.fn(),
     clearChannelUnread: vi.fn(),
-    clearConversationUnread: vi.fn(),
+    clearConversationUnread,
     setActiveChannel: vi.fn(),
     setActiveConversation: vi.fn(),
     isActiveChannel: vi.fn(() => false),
-    isActiveConversation: vi.fn(() => false),
+    isActiveConversation,
   }),
 }));
 
@@ -158,7 +161,12 @@ describe('ChatPage WebSocket handlers', () => {
     markChannelNotificationUnread.mockReset();
     markConversationUnread.mockReset();
     markThreadNotificationUnread.mockReset();
+    clearConversationUnread.mockReset();
+    isActiveConversation.mockReset();
+    isActiveConversation.mockReturnValue(false);
     unhideConversation.mockReset();
+    vi.mocked(apiFetch).mockReset();
+    vi.mocked(apiFetch).mockResolvedValue(undefined);
     setUserOnline.mockReset();
     dispatchNotification.mockReset();
     setCurrentUserID.mockReset();
@@ -196,6 +204,28 @@ describe('ChatPage WebSocket handlers', () => {
     expect(unhideConversation).not.toHaveBeenCalled();
   });
 
+  it('onMessageNew uses payload parentType when channel cache is empty', () => {
+    renderAt('/');
+    const handler = capturedOptions.onMessageNew as (d: unknown) => void;
+
+    handler(msg({ parentID: 'ch-not-loaded', parentType: 'channel', authorID: 'u-other' }));
+
+    expect(markChannelUnread).toHaveBeenCalledWith('ch-not-loaded');
+    expect(markConversationUnread).not.toHaveBeenCalled();
+    expect(unhideConversation).not.toHaveBeenCalled();
+  });
+
+  it('onMessageNew does not guess conversation when parent type and caches are missing', () => {
+    renderAt('/');
+    const handler = capturedOptions.onMessageNew as (d: unknown) => void;
+
+    handler(msg({ parentID: 'ch-not-loaded', authorID: 'u-other' }));
+
+    expect(markChannelUnread).not.toHaveBeenCalled();
+    expect(markConversationUnread).not.toHaveBeenCalled();
+    expect(unhideConversation).not.toHaveBeenCalled();
+  });
+
   it('onMessageNew marks a DM unread only once', () => {
     renderAt('/', (qc) => {
       qc.setQueryData(['userChannels'], [{ channelID: 'ch-1', channelName: 'general' }]);
@@ -209,6 +239,20 @@ describe('ChatPage WebSocket handlers', () => {
     expect(markConversationUnread).toHaveBeenCalledTimes(1);
     expect(markConversationUnread).toHaveBeenCalledWith('conv-1');
     expect(unhideConversation).toHaveBeenCalledWith('conv-1');
+  });
+
+  it('onMessageNew clears shared unread for an active conversation', () => {
+    isActiveConversation.mockReturnValue(true);
+    renderAt('/', (qc) => {
+      qc.setQueryData(['userConversations'], [{ conversationID: 'conv-1' }]);
+    });
+    const handler = capturedOptions.onMessageNew as (d: unknown) => void;
+
+    handler(msg({ parentID: 'conv-1', parentType: 'conversation', authorID: 'u-other' }));
+
+    expect(markConversationUnread).not.toHaveBeenCalled();
+    expect(clearConversationUnread).toHaveBeenCalledWith('conv-1');
+    expect(apiFetch).toHaveBeenCalledWith('/api/v1/conversations/conv-1/read', { method: 'PUT' });
   });
 
   it('onMessageNew without a valid Message payload is a no-op', () => {

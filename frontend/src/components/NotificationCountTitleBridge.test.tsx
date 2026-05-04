@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, render, waitFor } from '@testing-library/react';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { setDocumentNotificationCount } from '@/lib/document-title';
-import type { ThreadSummary } from '@/hooks/useThreads';
+import { resetSeenCache, type ThreadSummary } from '@/hooks/useThreads';
 import { NotificationCountTitleBridge } from './NotificationCountTitleBridge';
 
 const mockState = vi.hoisted(() => ({
@@ -12,6 +12,9 @@ const mockState = vi.hoisted(() => ({
   unreadConversations: new Set<string>(),
   unreadThreadNotifications: new Set<string>(),
   threads: [] as ThreadSummary[],
+  channelNotifications: [] as string[],
+  threadNotifications: [] as string[],
+  threadSeen: {} as Record<string, string>,
 }));
 
 vi.mock('@/context/AuthContext', () => ({
@@ -38,9 +41,9 @@ vi.mock('@/hooks/useThreads', async () => {
 vi.mock('@/hooks/useUserState', () => ({
   useUserState: () => ({
     data: {
-      channelNotifications: [],
-      threadNotifications: [],
-      threadSeen: JSON.parse(localStorage.getItem('ex.threads.seen.v1') ?? '{}'),
+      channelNotifications: mockState.channelNotifications,
+      threadNotifications: mockState.threadNotifications,
+      threadSeen: { ...mockState.threadSeen, ...JSON.parse(localStorage.getItem('ex.threads.seen.v1') ?? '{}') },
       hiddenConversations: [],
     },
   }),
@@ -54,6 +57,7 @@ function TitleConsumer() {
 describe('NotificationCountTitleBridge', () => {
   beforeEach(() => {
     localStorage.clear();
+    resetSeenCache();
     act(() => {
       setDocumentNotificationCount(0);
     });
@@ -64,6 +68,9 @@ describe('NotificationCountTitleBridge', () => {
     mockState.unreadConversations = new Set();
     mockState.unreadThreadNotifications = new Set();
     mockState.threads = [];
+    mockState.channelNotifications = [];
+    mockState.threadNotifications = [];
+    mockState.threadSeen = {};
   });
 
   afterEach(() => {
@@ -201,6 +208,26 @@ describe('NotificationCountTitleBridge', () => {
     );
 
     await waitFor(() => expect(document.title).toBe('(1) Threads · ex'));
+  });
+
+  it('local thread seen state overrides a stale persisted thread notification', async () => {
+    mockState.threadNotifications = ['root-unread'];
+    mockState.threads = [
+      makeThread({ threadRootID: 'root-unread', latestActivityAt: '2026-05-04T08:00:00.000Z' }),
+    ];
+    localStorage.setItem(
+      'ex.threads.seen.v1',
+      JSON.stringify({ 'root-unread': '2026-05-04T08:01:00.000Z' }),
+    );
+
+    render(
+      <>
+        <NotificationCountTitleBridge />
+        <TitleConsumer />
+      </>,
+    );
+
+    await waitFor(() => expect(document.title).toBe('Threads · ex'));
   });
 
   it('does not count unread notifications while signed out', async () => {

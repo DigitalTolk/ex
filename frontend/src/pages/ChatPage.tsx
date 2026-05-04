@@ -29,11 +29,14 @@ import {
   parseServerVersion,
   parseTyping,
 } from '@/lib/ws-schemas';
+import { apiFetch } from '@/lib/api';
 
 export default function ChatPage() {
   const {
     markChannelUnread,
     markChannelNotificationUnread,
+    clearConversationUnread,
+    isActiveConversation,
     markConversationUnread,
     markThreadNotificationUnread,
     unhideConversation,
@@ -66,17 +69,33 @@ export default function ChatPage() {
       // thread reply clears the thread bucket (not the main one).
       clearTyping(parentID, authorID, parentMessageID ?? '');
       const userChannels = queryClient.getQueryData<{ channelID: string }[]>(queryKeys.userChannels()) ?? [];
-      const isChannelParent = userChannels.some((channel) => channel.channelID === parentID);
+      const userConversations = queryClient.getQueryData<{ conversationID: string }[]>(queryKeys.userConversations()) ?? [];
+      const isCachedChannel = userChannels.some((channel) => channel.channelID === parentID);
+      const isCachedConversation = userConversations.some((conv) => conv.conversationID === parentID);
+      const isChannelParent = msg.parentType === 'channel' || (!msg.parentType && isCachedChannel);
+      const isConversationParent =
+        msg.parentType === 'conversation' || (!msg.parentType && !isCachedChannel && isCachedConversation);
       if (authorID !== user?.id) {
         if (isChannelParent) {
           markChannelUnread(parentID);
-        } else {
-          markConversationUnread(parentID);
-          queryClient.invalidateQueries({ queryKey: queryKeys.userConversations() });
+        } else if (isConversationParent) {
+          if (isActiveConversation(parentID)) {
+            clearConversationUnread(parentID);
+            void apiFetch<void>(`/api/v1/conversations/${encodeURIComponent(parentID)}/read`, { method: 'PUT' })
+              .catch(() => undefined)
+              .finally(() => {
+                queryClient.invalidateQueries({ queryKey: queryKeys.userConversations() });
+              });
+          } else {
+            markConversationUnread(parentID);
+            queryClient.invalidateQueries({ queryKey: queryKeys.userConversations() });
+          }
         }
       }
-      if (!isChannelParent) {
-        unhideConversation(parentID);
+      if (isConversationParent) {
+        if (authorID === user?.id || !isActiveConversation(parentID)) {
+          unhideConversation(parentID);
+        }
       }
       // Patch the message-list cache directly. invalidateQueries here
       // would walk forward from pages[0] and truncate deep-link page

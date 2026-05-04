@@ -1244,6 +1244,13 @@ func TestSendMessage_WithThread(t *testing.T) {
 	for _, e := range publisher.published {
 		if e.event.Type == "message.new" {
 			sawNew = true
+			var payload model.Message
+			if err := json.Unmarshal(e.event.Data, &payload); err != nil {
+				t.Fatalf("unmarshal message.new: %v", err)
+			}
+			if payload.ParentType != ParentChannel {
+				t.Fatalf("message.new parentType = %q, want %q", payload.ParentType, ParentChannel)
+			}
 		}
 		if e.event.Type == "message.edited" {
 			sawEdited = true
