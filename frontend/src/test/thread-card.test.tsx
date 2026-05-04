@@ -129,6 +129,10 @@ describe('ThreadCard', () => {
     expect(link.tagName).toBe('A');
     expect(link.getAttribute('href')).toBe('/channel/general?thread=msg-root#msg-msg-root');
     expect(link.textContent).toBe('~general');
+    expect(link).toHaveClass('text-sm');
+    expect(link).toHaveClass('font-semibold');
+    expect(link).not.toHaveClass('hover:underline');
+    expect(link).not.toHaveClass('text-link');
   });
 
   it('renders root + all replies when the thread is below the collapse threshold', async () => {

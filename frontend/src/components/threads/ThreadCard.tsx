@@ -180,7 +180,7 @@ export function ThreadCard({ summary, title, deepLink, currentUserId, unread = f
         <Link
           to={deepLink}
           data-testid="thread-card-title"
-          className="truncate text-sm font-semibold text-link transition-colors hover:text-link/80"
+          className="truncate text-sm font-semibold"
           onClick={() => markSummaryThreadSeen(summary)}
         >
           {title}

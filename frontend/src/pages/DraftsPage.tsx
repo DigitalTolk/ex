@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Trash2 } from 'lucide-react';
+import { Globe, Lock, MessageSquare, Trash2, Users } from 'lucide-react';
 import { PageContainer } from '@/components/layout/PageContainer';
 import { Button } from '@/components/ui/button';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
@@ -22,8 +22,12 @@ export default function DraftsPage() {
 
   const channelName = (id: string) =>
     channels?.find((c) => c.channelID === id)?.channelName ?? '';
+  const channelType = (id: string) =>
+    channels?.find((c) => c.channelID === id)?.channelType;
   const conversationName = (id: string) =>
     conversations?.find((c) => c.conversationID === id)?.displayName ?? 'Conversation';
+  const conversationType = (id: string) =>
+    conversations?.find((c) => c.conversationID === id)?.type;
 
   const deletePreview = draftToDelete ? draftPreview(draftToDelete) : '';
 
@@ -50,6 +54,11 @@ export default function DraftsPage() {
               draft.parentType === 'channel'
                 ? `~${channelName(draft.parentID) || 'channel'}`
                 : conversationName(draft.parentID);
+            const parentIcon = draftParentIcon({
+              parentType: draft.parentType,
+              channelType: channelType(draft.parentID),
+              conversationType: conversationType(draft.parentID),
+            });
             return (
               <article
                 key={draft.id}
@@ -58,6 +67,7 @@ export default function DraftsPage() {
               >
                 <Link to={draftHref(draft, channelName(draft.parentID))} className="min-w-0 flex-1">
                   <div className="flex items-center gap-2 text-sm font-semibold">
+                    {parentIcon}
                     <span className="truncate">{title}</span>
                     {draft.parentMessageID && (
                       <span className="rounded bg-muted px-1.5 py-0.5 text-xs font-medium text-muted-foreground">
@@ -104,6 +114,26 @@ export default function DraftsPage() {
       />
     </PageContainer>
   );
+}
+
+function draftParentIcon({
+  parentType,
+  channelType,
+  conversationType,
+}: {
+  parentType: MessageDraft['parentType'];
+  channelType?: 'public' | 'private';
+  conversationType?: 'dm' | 'group';
+}) {
+  const className = 'h-4 w-4 shrink-0 text-muted-foreground';
+  if (parentType === 'channel') {
+    return channelType === 'private'
+      ? <Lock className={className} aria-hidden data-testid="draft-parent-private-channel-icon" />
+      : <Globe className={className} aria-hidden data-testid="draft-parent-public-channel-icon" />;
+  }
+  return conversationType === 'group'
+    ? <Users className={className} aria-hidden data-testid="draft-parent-group-icon" />
+    : <MessageSquare className={className} aria-hidden data-testid="draft-parent-dm-icon" />;
 }
 
 function draftHref(draft: MessageDraft, channelName: string): string {
