@@ -2,6 +2,8 @@ import { useEffect } from 'react';
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext';
 import {
   $createParagraphNode,
+  $createLineBreakNode,
+  $createTextNode,
   $getSelection,
   $isLineBreakNode,
   $isParagraphNode,
@@ -66,6 +68,7 @@ const ELEMENT_TRANSFORMERS: ElementTransformer[] = EX_TRANSFORMERS.filter(
 // /@lexical/markdown/LexicalMarkdown.dev.js around line 939. Captures
 // the fence in [1] and an optional language tag in [2].
 const CODE_START_REGEX = /^([ \t]*`{3,})([\w-]+)?[ \t]?$/;
+const CODE_END_REGEX = /^[ \t]*`{3,}[ \t]*$/;
 
 export function MarkdownShortcutFallbackPlugin() {
   const [editor] = useLexicalComposerContext();
@@ -77,6 +80,8 @@ export function MarkdownShortcutFallbackPlugin() {
         if (!$isParagraphNode(paragraph)) return;
         const grandparent = paragraph.getParent();
         if (!grandparent || !$isRootOrShadowRoot(grandparent)) return;
+
+        if (convertSoftLineFencedCodeBlock(paragraph, textNode)) return;
 
         const previousSibling = textNode.getPreviousSibling();
         const isFirstChild = paragraph.getFirstChild() === textNode;
@@ -135,6 +140,38 @@ export function MarkdownShortcutFallbackPlugin() {
   }, [editor]);
 
   return null;
+}
+
+function convertSoftLineFencedCodeBlock(
+  paragraph: ReturnType<typeof $createParagraphNode>,
+  closingText: TextNode,
+): boolean {
+  if (closingText.getNextSibling()) return false;
+  if (!CODE_END_REGEX.test(closingText.getTextContent())) return false;
+
+  const openingText = paragraph.getFirstChild();
+  if (!$isTextNode(openingText)) return false;
+  const openingMatch = openingText.getTextContent().match(CODE_START_REGEX);
+  if (!openingMatch || openingMatch[0].length !== openingText.getTextContent().length) return false;
+
+  const openingBreak = openingText.getNextSibling();
+  if (!$isLineBreakNode(openingBreak)) return false;
+
+  const codeNode = $createCodeNode(openingMatch[2]);
+  let cursor = openingBreak.getNextSibling();
+  while (cursor && cursor !== closingText) {
+    const next: LexicalNode | null = cursor.getNextSibling();
+    if ($isLineBreakNode(cursor)) {
+      codeNode.append($createLineBreakNode());
+    } else {
+      const text = cursor.getTextContent();
+      if (text) codeNode.append($createTextNode(text));
+    }
+    cursor = next;
+  }
+  paragraph.replace(codeNode);
+  codeNode.selectEnd();
+  return true;
 }
 
 function splitAtLineBreak(

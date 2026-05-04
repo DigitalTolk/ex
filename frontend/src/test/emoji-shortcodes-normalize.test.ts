@@ -79,7 +79,16 @@ describe('unicodeToShortcode', () => {
     expect(unicodeToShortcode('💪')).toBe(':muscle:');
   });
 
+  it('keeps grin as the canonical shortcode for 😁', () => {
+    expect(COMMON_EMOJI_SHORTCODES.some((emoji) => emoji.name === 'grin')).toBe(true);
+    expect(COMMON_EMOJI_SHORTCODES.some((emoji) => emoji.name === 'beam_face_smile_eyes')).toBe(false);
+    expect(shortcodeToUnicode(':grin:')).toBe('😁');
+    expect(shortcodeToUnicode(':beam_face_smile_eyes:')).toBe(':beam_face_smile_eyes:');
+    expect(unicodeToShortcode('😁')).toBe(':grin:');
+  });
+
   it('uses common canonical names for high-frequency chat emojis', () => {
+    expect(unicodeToShortcode('😁')).toBe(':grin:');
     expect(unicodeToShortcode('😄')).toBe(':smile:');
     expect(unicodeToShortcode('😆')).toBe(':laughing:');
     expect(unicodeToShortcode('😂')).toBe(':joy:');

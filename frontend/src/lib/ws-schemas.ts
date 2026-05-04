@@ -25,6 +25,12 @@ const messageSchema: z.ZodType<Message> = z.object({
   noUnfurl: z.boolean().optional(),
 }).passthrough() as z.ZodType<Message>;
 
+const messageDeletedSchema = z.object({
+  id: z.string().min(1),
+  parentID: z.string().min(1),
+  parentMessageID: z.string().min(1).optional(),
+}).passthrough();
+
 const channelIDSchema = z.object({ channelID: z.string().min(1) });
 const presenceSchema = z.object({ userID: z.string().min(1), online: z.boolean() });
 const attachmentDeletedSchema = z.object({ id: z.string().min(1) });
@@ -46,6 +52,9 @@ function parser<T>(schema: z.ZodType<T>): (v: unknown) => T | null {
 }
 
 export const parseMessage = parser(messageSchema);
+
+export type MessageDeletedPayload = z.infer<typeof messageDeletedSchema>;
+export const parseMessageDeleted = parser(messageDeletedSchema);
 
 export interface ChannelIDPayload {
   channelID: string;

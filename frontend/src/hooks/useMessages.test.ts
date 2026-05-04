@@ -5,6 +5,7 @@ import { createElement, type ReactNode } from 'react';
 import {
   useChannelMessages,
   appendMessageToCache,
+  markMessageDeletedInCache,
   updateMessageInCache,
   removeMessageFromCache,
   resyncMessageCache,
@@ -383,6 +384,42 @@ describe('cache patching helpers (avoiding v5 walk-forward refetch)', () => {
     expect(result?.pages[0].items.map((m) => m.id)).toEqual(['m-2']);
   });
 
+  it('markMessageDeletedInCache tombstones cached lists and thread replies', () => {
+    const qc = new QueryClient();
+    seedCache(qc, ['channelMessages', 'ch-1', null], {
+      pages: [{
+        items: [
+          makeMsg({ id: 'm-2' }),
+          makeMsg({ id: 'm-1', body: 'delete me', attachmentIDs: ['att-1'], reactions: { '👍': ['u-1'] } }),
+        ],
+        hasMoreOlder: false,
+        hasMoreNewer: false,
+      }],
+      pageParams: [{ kind: 'tail' }],
+    });
+    qc.setQueryData(['thread', 'channels/ch-1', 'root-1'], [
+      makeMsg({ id: 'root-1' }),
+      makeMsg({ id: 'm-1', parentMessageID: 'root-1', body: 'delete me' }),
+    ]);
+
+    markMessageDeletedInCache(qc, 'ch-1', 'm-1', 'root-1');
+
+    const list = qc.getQueryData<InfiniteData<MessageWindow, MessagePageParam>>([
+      'channelMessages', 'ch-1', null,
+    ]);
+    expect(list?.pages[0].items.map((m) => m.id)).toEqual(['m-2', 'm-1']);
+    expect(list?.pages[0].items[1]).toMatchObject({
+      id: 'm-1',
+      body: '',
+      attachmentIDs: [],
+      deleted: true,
+    });
+    expect(list?.pages[0].items[1].reactions).toBeUndefined();
+
+    const thread = qc.getQueryData<Message[]>(['thread', 'channels/ch-1', 'root-1']);
+    expect(thread?.[1]).toMatchObject({ id: 'm-1', body: '', deleted: true });
+  });
+
   it('updateMessageInCache replaces a parent thread root with the server-issued copy', () => {
     // The backend's IncrementReplyMetadata publishes message.edited
     // with the authoritative replyCount/lastReplyAt/recentReplyAuthorIDs;
@@ -585,7 +622,7 @@ describe('resyncMessageCache (WS reconnect catch-up)', () => {
     out = qc.getQueryData<InfiniteData<MessageWindow, MessagePageParam>>([
       'channelMessages', 'ch-1', null,
     ]);
-    expect(out?.pages[0].items).toEqual([]);
+    expect(out?.pages[0].items[0]).toMatchObject({ id: 'm-1', body: '', deleted: true });
   });
 
   it('catches up conversations the same way as channels', async () => {

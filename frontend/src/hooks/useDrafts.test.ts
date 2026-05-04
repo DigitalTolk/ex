@@ -145,7 +145,7 @@ describe('useDrafts', () => {
     expect(restored.result.current.data).toEqual([stale]);
   });
 
-  it('saves and deletes drafts with normalized request bodies', async () => {
+  it('saves and deletes drafts without trimming request bodies', async () => {
     vi.mocked(apiFetch).mockResolvedValue(undefined);
     const wrapper = createWrapper();
     const save = renderHook(() => useSaveDraft(), { wrapper });
@@ -154,7 +154,7 @@ describe('useDrafts', () => {
     save.result.current.mutate({
       parentID: 'dm-1',
       parentType: 'conversation',
-      body: 'hello',
+      body: '  hello\n\n',
     });
     await waitFor(() => expect(save.result.current.isSuccess).toBe(true));
     expect(apiFetch).toHaveBeenCalledWith('/api/v1/drafts', {
@@ -163,7 +163,7 @@ describe('useDrafts', () => {
         parentID: 'dm-1',
         parentType: 'conversation',
         parentMessageID: '',
-        body: 'hello',
+        body: '  hello\n\n',
         attachmentIDs: [],
       }),
     });

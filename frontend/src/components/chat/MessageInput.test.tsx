@@ -136,6 +136,25 @@ describe('MessageInput', () => {
     });
   });
 
+  it('flushes whitespace-only drafts without treating them as empty', async () => {
+    const onDraftChange = vi.fn();
+    const { unmount } = render(
+      <MessageInput
+        onSend={vi.fn()}
+        initialBody={'  \n\n'}
+        onDraftChange={onDraftChange}
+      />,
+    );
+    await screen.findByLabelText('Message input');
+
+    unmount();
+
+    expect(onDraftChange).toHaveBeenCalledWith({
+      body: '  \n\n',
+      attachmentIDs: [],
+    });
+  });
+
   it('flushes the previous draft before a focusKey view switch resets the composer', async () => {
     const onDraftChange = vi.fn();
     const { rerender } = render(

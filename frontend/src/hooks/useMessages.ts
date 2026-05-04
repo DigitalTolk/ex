@@ -160,6 +160,51 @@ export function updateMessageInCache(qc: QueryClient, parentID: string, msg: Mes
   });
 }
 
+function deletedMessagePatch(existing: Message, patch?: Partial<Message>): Message {
+  return {
+    ...existing,
+    ...patch,
+    id: existing.id,
+    parentID: existing.parentID,
+    authorID: patch?.authorID ?? existing.authorID,
+    createdAt: patch?.createdAt ?? existing.createdAt,
+    body: '',
+    attachmentIDs: [],
+    reactions: undefined,
+    deleted: true,
+  };
+}
+
+export function markMessageDeletedInCache(
+  qc: QueryClient,
+  parentID: string,
+  msgId: string,
+  parentMessageID?: string,
+  patch?: Partial<Message>,
+) {
+  patchBothScopes(qc, parentID, (old) => {
+    if (!old) return old;
+    let changed = false;
+    const pages = old.pages.map((p) => {
+      if (!p.items.some((m) => m.id === msgId)) return p;
+      changed = true;
+      return {
+        ...p,
+        items: p.items.map((m) => (m.id === msgId ? deletedMessagePatch(m, patch) : m)),
+      };
+    });
+    return changed ? { ...old, pages } : old;
+  });
+
+  const threadRootID = parentMessageID || msgId;
+  for (const path of [`channels/${parentID}`, `conversations/${parentID}`]) {
+    qc.setQueryData<Message[]>(queryKeys.thread(path, threadRootID), (old) => {
+      if (!old || !old.some((m) => m.id === msgId)) return old;
+      return old.map((m) => (m.id === msgId ? deletedMessagePatch(m, patch) : m));
+    });
+  }
+}
+
 export function removeMessageFromCache(qc: QueryClient, parentID: string, msgId: string) {
   patchBothScopes(qc, parentID, (old) => {
     if (!old) return old;
@@ -293,6 +338,7 @@ interface MessageMutationVars {
   messageId: string;
   channelId?: string;
   conversationId?: string;
+  parentMessageID?: string;
 }
 
 // Pinned list is non-infinite; invalidation is safe here.
@@ -331,7 +377,11 @@ export function useDeleteMessage() {
       apiFetch<void>(messagePath(vars), { method: 'DELETE' }),
     onSuccess: (_data, vars) => {
       const parentID = vars.channelId ?? vars.conversationId;
-      if (parentID) removeMessageFromCache(queryClient, parentID, vars.messageId);
+      if (parentID) {
+        markMessageDeletedInCache(queryClient, parentID, vars.messageId, vars.parentMessageID);
+        const path = parentPath(vars);
+        queryClient.invalidateQueries({ queryKey: queryKeys.thread(path, vars.parentMessageID || vars.messageId) });
+      }
       invalidatePinnedList(queryClient, vars);
     },
   });

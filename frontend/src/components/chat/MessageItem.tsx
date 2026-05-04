@@ -255,7 +255,12 @@ export function MessageItem({
 
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   function confirmDelete() {
-    deleteMessage.mutate({ messageId: message.id, channelId, conversationId });
+    deleteMessage.mutate({
+      messageId: message.id,
+      parentMessageID: message.parentMessageID,
+      channelId,
+      conversationId,
+    });
   }
 
   function handleReact(emoji: string) {

@@ -90,6 +90,29 @@ describe('CodeBlockExitPlugin', () => {
     });
   });
 
+  it('turns soft-line fenced markdown into a code block after Shift+Enter', async () => {
+    const ref = createRef<WysiwygEditorHandle>();
+    render(
+      <Providers>
+        <WysiwygEditor ref={ref} />
+      </Providers>,
+    );
+    await waitFor(() => expect(ref.current).not.toBeNull());
+    const editor = screen.getByLabelText('Message input');
+
+    act(() => ref.current!.insertText('```'));
+    fireEvent.keyDown(editor, { key: 'Enter', shiftKey: true });
+    act(() => ref.current!.insertText('foo'));
+    fireEvent.keyDown(editor, { key: 'Enter', shiftKey: true });
+    act(() => ref.current!.insertText('```'));
+
+    await waitFor(() => {
+      const code = ref.current!.getElement()?.querySelector('code');
+      expect(code?.textContent).toContain('foo');
+    });
+    expect(ref.current!.getMarkdown()).toContain('foo');
+  });
+
   it('ArrowDown at the last line of a code block exits to a paragraph', async () => {
     // Slack/GitHub UX: ↓ at the bottom of a fenced block escapes to a
     // fresh paragraph below so users don't have to type the closing

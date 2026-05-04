@@ -136,7 +136,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
   const giphyAPIKey = settings?.giphyAPIKey?.trim() ?? '';
   const giphyEnabled = (settings?.giphyEnabled ?? false) && giphyAPIKey !== '';
 
-  const hasInitialDraftValue = initialBody.trim() !== '' || initialDrafts.length > 0;
+  const hasInitialDraftValue = initialBody !== '' || initialDrafts.length > 0;
 
   useEffect(() => {
     latestDraftValueRef.current = { body, attachmentIDs: drafts.map((d) => d.id) };
@@ -150,7 +150,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
     if (variant !== 'composer') return;
     const value = latestDraftValueRef.current;
     const shouldFlush =
-      value.body.trim() !== '' ||
+      value.body !== '' ||
       value.attachmentIDs.length > 0 ||
       hasInitialDraftValue ||
       mountedDraftChangeRef.current;

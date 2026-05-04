@@ -4,6 +4,7 @@ import {
   parseChannelID,
   parseMembersChanged,
   parseMessage,
+  parseMessageDeleted,
   parsePresence,
   parseServerVersion,
   parseTyping,
@@ -83,6 +84,20 @@ describe('event payload parsers', () => {
   it('parseAttachmentDeleted requires id', () => {
     expect(parseAttachmentDeleted({ id: 'a-1' })?.id).toBe('a-1');
     expect(parseAttachmentDeleted({})).toBeNull();
+  });
+
+  it('parseMessageDeleted accepts the compact delete event payload', () => {
+    expect(parseMessageDeleted({
+      id: 'm-1',
+      parentID: 'ch-1',
+      parentMessageID: 'root-1',
+    })).toMatchObject({
+      id: 'm-1',
+      parentID: 'ch-1',
+      parentMessageID: 'root-1',
+    });
+    expect(parseMessageDeleted({ id: 'm-1', parentID: 'ch-1' })?.id).toBe('m-1');
+    expect(parseMessageDeleted({ id: 'm-1' })).toBeNull();
   });
 
   it('parseTyping requires userID and parentID', () => {

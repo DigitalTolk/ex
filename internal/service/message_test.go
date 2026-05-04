@@ -1261,9 +1261,12 @@ func TestMessageService_Delete_ThreadReplyEventCarriesParentMessageID(t *testing
 		t.Fatalf("marshal payload: %v", err)
 	}
 	var payload struct {
-		ID              string `json:"id"`
-		ParentID        string `json:"parentID"`
-		ParentMessageID string `json:"parentMessageID"`
+		ID              string   `json:"id"`
+		ParentID        string   `json:"parentID"`
+		ParentMessageID string   `json:"parentMessageID"`
+		Body            string   `json:"body"`
+		Deleted         bool     `json:"deleted"`
+		AttachmentIDs   []string `json:"attachmentIDs"`
 	}
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		t.Fatalf("decode payload: %v", err)
@@ -1273,6 +1276,15 @@ func TestMessageService_Delete_ThreadReplyEventCarriesParentMessageID(t *testing
 	}
 	if payload.ID != "m-reply" || payload.ParentID != "ch1" {
 		t.Errorf("payload = %+v, expected id=m-reply parentID=ch1", payload)
+	}
+	if !payload.Deleted {
+		t.Error("expected deleted tombstone payload")
+	}
+	if payload.Body != "" {
+		t.Errorf("payload body = %q, want empty", payload.Body)
+	}
+	if len(payload.AttachmentIDs) != 0 {
+		t.Errorf("payload attachments = %v, want empty", payload.AttachmentIDs)
 	}
 }
 

@@ -15,7 +15,7 @@ import { slugify } from '@/lib/format';
 import {
   appendMessageToCache,
   invalidateThreadBothScopes,
-  removeMessageFromCache,
+  markMessageDeletedInCache,
   resyncMessageCache,
   updateMessageInCache,
 } from '@/hooks/useMessages';
@@ -25,6 +25,7 @@ import {
   parseChannelID,
   parseMembersChanged,
   parseMessage,
+  parseMessageDeleted,
   parsePresence,
   parseServerVersion,
   parseTyping,
@@ -118,10 +119,10 @@ export default function ChatPage() {
       invalidateThreadBothScopes(queryClient, parentID, parentMessageID || id);
     },
     onMessageDeleted: (data: unknown) => {
-      const msg = parseMessage(data);
+      const msg = parseMessageDeleted(data);
       if (!msg) return;
       const { parentID, parentMessageID, id } = msg;
-      removeMessageFromCache(queryClient, parentID, id);
+      markMessageDeletedInCache(queryClient, parentID, id, parentMessageID, msg);
       invalidateThreadBothScopes(queryClient, parentID, parentMessageID || id);
       // /threads page reads body + replyCount via the userThreads list;
       // a deletion can change either, so refresh the list too.
