@@ -3,7 +3,12 @@
 // emoji-data.generated.ts — re-run scripts/build-emoji-data.mjs to
 // refresh it.
 
-import { ALL_EMOJI, EMOJI_CATEGORIES, type EmojiEntry, type EmojiCategory } from './emoji-data.generated';
+import {
+  ALL_EMOJI as GENERATED_ALL_EMOJI,
+  EMOJI_CATEGORIES,
+  type EmojiEntry,
+  type EmojiCategory,
+} from './emoji-data.generated';
 
 export interface EmojiShortcode {
   name: string;
@@ -35,6 +40,15 @@ const EMOJI_MODIFIER_BASE_RE = /^\p{Emoji_Modifier_Base}/u;
 const EMOJI_MODIFIER_RE = /[\u{1F3FB}-\u{1F3FF}]/gu;
 const VARIATION_SELECTOR_16 = '\uFE0F';
 const ZERO_WIDTH_JOINER = '\u200D';
+const CANONICAL_EMOJI_NAMES: Record<string, string> = {
+  flexed_biceps: 'muscle',
+  person_bowing: 'bow',
+};
+
+export const ALL_EMOJI: EmojiEntry[] = GENERATED_ALL_EMOJI.map((emoji) => ({
+  ...emoji,
+  name: CANONICAL_EMOJI_NAMES[emoji.name] ?? emoji.name,
+}));
 
 export function applyEmojiSkinTone(unicode: string, tone: EmojiSkinTone | undefined): string {
   const skinTone = SKIN_TONE_BY_VALUE.get(tone ?? '') ?? SKIN_TONE_BY_VALUE.get('');
@@ -59,7 +73,7 @@ export function supportsEmojiSkinTone(unicode: string): boolean {
 
 export const COMMON_EMOJI_SHORTCODES: EmojiShortcode[] = ALL_EMOJI;
 
-export { EMOJI_CATEGORIES, ALL_EMOJI };
+export { EMOJI_CATEGORIES };
 export type { EmojiEntry, EmojiCategory };
 
 const NAME_TO_UNICODE: Record<string, string> = (() => {

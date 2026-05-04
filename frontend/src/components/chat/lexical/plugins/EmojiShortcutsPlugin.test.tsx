@@ -119,6 +119,21 @@ describe('EmojiShortcutsPlugin', () => {
     });
   });
 
+  it('puts the shortest shortcode match first', async () => {
+    const ref = createRef<WysiwygEditorHandle>();
+    render(<Providers><WysiwygEditor ref={ref} /></Providers>);
+    await waitFor(() => expect(ref.current).not.toBeNull());
+    act(() => {
+      ref.current!.insertText(':bow');
+    });
+
+    await waitFor(() => {
+      const rows = screen.getAllByTestId('emoji-option').map((row) => row.textContent ?? '');
+      expect(rows[0]).toBe('🙇:bow:');
+      expect(rows.findIndex((row) => row.includes(':rainbow:'))).toBeGreaterThan(0);
+    });
+  });
+
   it('uses the same generated shortcode names as picker and native normalization', async () => {
     const ref = createRef<WysiwygEditorHandle>();
     render(<Providers><WysiwygEditor ref={ref} /></Providers>);

@@ -90,6 +90,13 @@ function emojiSearchRank(query: string, emoji: { name: string; keywords?: string
   return Number.POSITIVE_INFINITY;
 }
 
+function compareEmojiSearchHits(
+  a: { emoji: { name: string }; rank: number; index: number },
+  b: { emoji: { name: string }; rank: number; index: number },
+) {
+  return a.rank - b.rank || a.emoji.name.length - b.emoji.name.length || a.index - b.index;
+}
+
 function useEmojiPickerAuth() {
   try {
     // Test suites often mock AuthContext before mounting isolated message
@@ -132,7 +139,7 @@ export function EmojiPicker({ onSelect, onClose, trigger, ariaLabel = 'Emoji pic
     return COMMON_EMOJI_SHORTCODES
       .map((emoji, index) => ({ emoji, rank: emojiSearchRank(query, emoji), index }))
       .filter((hit) => Number.isFinite(hit.rank))
-      .sort((a, b) => a.rank - b.rank || a.index - b.index)
+      .sort(compareEmojiSearchHits)
       .map((hit) => hit.emoji);
   }, [query, activeCategory]);
 
@@ -245,26 +252,6 @@ export function EmojiPicker({ onSelect, onClose, trigger, ariaLabel = 'Emoji pic
             })}
           </div>
         )}
-        <div className="mb-1.5 flex shrink-0 items-center gap-0.5" role="radiogroup" aria-label="Emoji skin tone">
-          <span className="mr-1 text-xs font-medium text-muted-foreground">Skin tone</span>
-          {EMOJI_SKIN_TONES.map((tone) => (
-            <button
-              key={tone.value || 'default'}
-              type="button"
-              role="radio"
-              aria-checked={skinTone === tone.value}
-              aria-label={tone.label}
-              title={tone.label}
-              onClick={() => void handleSkinToneChange(tone.value)}
-              className={
-                'flex h-7 w-7 items-center justify-center rounded-md text-base hover:bg-muted ' +
-                (skinTone === tone.value ? 'bg-muted ring-1 ring-ring' : '')
-              }
-            >
-              {tone.swatch}
-            </button>
-          ))}
-        </div>
         <div className="flex min-h-0 flex-1 flex-col">
           <div className="mb-1 text-sm font-semibold uppercase tracking-wider text-muted-foreground">
             {query.trim()
@@ -321,6 +308,26 @@ export function EmojiPicker({ onSelect, onClose, trigger, ariaLabel = 'Emoji pic
               <p className="col-span-9 py-3 text-center text-xs text-muted-foreground">No emojis found</p>
             )}
           </div>
+        </div>
+        <div className="mt-1.5 flex shrink-0 items-center gap-0.5 border-t pt-1.5" role="radiogroup" aria-label="Emoji skin tone">
+          <span className="mr-1 text-xs font-medium text-muted-foreground">Skin tone</span>
+          {EMOJI_SKIN_TONES.map((tone) => (
+            <button
+              key={tone.value || 'default'}
+              type="button"
+              role="radio"
+              aria-checked={skinTone === tone.value}
+              aria-label={tone.label}
+              title={tone.label}
+              onClick={() => void handleSkinToneChange(tone.value)}
+              className={
+                'flex h-7 w-7 items-center justify-center rounded-md text-base hover:bg-muted ' +
+                (skinTone === tone.value ? 'bg-muted ring-1 ring-ring' : '')
+              }
+            >
+              {tone.swatch}
+            </button>
+          ))}
         </div>
       </PopoverPortal>
     </>

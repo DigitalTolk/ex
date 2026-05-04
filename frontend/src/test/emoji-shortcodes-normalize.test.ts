@@ -63,6 +63,22 @@ describe('unicodeToShortcode', () => {
     expect(unicodeToShortcode('🙌')).toBe(':raised_hands:');
   });
 
+  it('keeps bow as the canonical shortcode for 🙇', () => {
+    expect(COMMON_EMOJI_SHORTCODES.some((emoji) => emoji.name === 'bow')).toBe(true);
+    expect(COMMON_EMOJI_SHORTCODES.some((emoji) => emoji.name === 'person_bowing')).toBe(false);
+    expect(shortcodeToUnicode(':bow:')).toBe('🙇');
+    expect(shortcodeToUnicode(':person_bowing:')).toBe(':person_bowing:');
+    expect(unicodeToShortcode('🙇')).toBe(':bow:');
+  });
+
+  it('keeps muscle as the canonical shortcode for 💪', () => {
+    expect(COMMON_EMOJI_SHORTCODES.some((emoji) => emoji.name === 'muscle')).toBe(true);
+    expect(COMMON_EMOJI_SHORTCODES.some((emoji) => emoji.name === 'flexed_biceps')).toBe(false);
+    expect(shortcodeToUnicode(':muscle:')).toBe('💪');
+    expect(shortcodeToUnicode(':flexed_biceps:')).toBe(':flexed_biceps:');
+    expect(unicodeToShortcode('💪')).toBe(':muscle:');
+  });
+
   it('uses common canonical names for high-frequency chat emojis', () => {
     expect(unicodeToShortcode('😄')).toBe(':smile:');
     expect(unicodeToShortcode('😆')).toBe(':laughing:');

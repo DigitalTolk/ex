@@ -206,6 +206,9 @@ func (h *WSHandler) Connect(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		case <-ticker.C:
+			if h.presenceSvc != nil {
+				h.presenceSvc.Refresh(ctx, userID)
+			}
 			if err := writePing(ctx, conn); err != nil {
 				return
 			}

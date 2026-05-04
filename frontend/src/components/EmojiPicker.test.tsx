@@ -74,6 +74,18 @@ describe('EmojiPicker', () => {
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 
+  it('shows the shortest shortcode match first when searching', async () => {
+    const user = userEvent.setup();
+    render(<EmojiPicker onSelect={vi.fn()} />);
+
+    await user.click(screen.getByRole('button', { name: /open emoji picker/i }));
+    await user.type(screen.getByLabelText('Search emojis'), 'bow');
+
+    const rows = screen.getAllByTestId('emoji-picker-tile');
+    expect(rows[0]).toHaveAccessibleName('React with :bow:');
+    expect(rows.findIndex((row) => row.getAttribute('aria-label') === 'React with :rainbow:')).toBeGreaterThan(0);
+  });
+
   it('closes on Escape', async () => {
     const user = userEvent.setup();
     render(<EmojiPicker onSelect={vi.fn()} />);
@@ -139,6 +151,19 @@ describe('EmojiPicker', () => {
     expect(tabs[tabs.length - 1]).toHaveAttribute('data-category', 'custom');
     expect(screen.getByRole('tablist', { name: /emoji categories/i }).className).toContain('justify-center');
     expect(screen.getByRole('list', { name: /standard emojis/i }).className).toContain('grid-cols-[repeat(9,2rem)]');
+  });
+
+  it('places the skin tone selector below the emoji grid', async () => {
+    const user = userEvent.setup();
+    render(<EmojiPicker onSelect={vi.fn()} />);
+    await user.click(screen.getByRole('button', { name: /open emoji picker/i }));
+
+    const list = screen.getByRole('list', { name: /standard emojis/i });
+    const skinToneSelector = screen.getByRole('radiogroup', { name: /emoji skin tone/i });
+
+    expect(list.compareDocumentPosition(skinToneSelector) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(skinToneSelector.className).toContain('mt-1.5');
+    expect(skinToneSelector.className).toContain('border-t');
   });
 
   it('applies selected skin tone to supported standard emoji picks', async () => {

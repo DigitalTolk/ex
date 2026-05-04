@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alicebob/miniredis/v2"
 	"github.com/DigitalTolk/ex/internal/model"
+	"github.com/alicebob/miniredis/v2"
 )
 
 func setupTestCache(t *testing.T) (*RedisCache, *miniredis.Miniredis) {
@@ -87,6 +87,108 @@ func TestDelete(t *testing.T) {
 	err := c.Get(ctx, "delme", &dest)
 	if err != ErrCacheMiss {
 		t.Fatalf("expected ErrCacheMiss after delete, got %v", err)
+	}
+}
+
+func TestPresenceCounts(t *testing.T) {
+	c, _ := setupTestCache(t)
+	ctx := context.Background()
+
+	first, err := c.IncrementPresence(ctx, "u1")
+	if err != nil {
+		t.Fatalf("IncrementPresence first: %v", err)
+	}
+	if !first {
+		t.Fatal("first presence increment should report online transition")
+	}
+	first, err = c.IncrementPresence(ctx, "u1")
+	if err != nil {
+		t.Fatalf("IncrementPresence second: %v", err)
+	}
+	if first {
+		t.Fatal("second presence increment should not report online transition")
+	}
+	online, err := c.IsPresenceOnline(ctx, "u1")
+	if err != nil {
+		t.Fatalf("IsPresenceOnline: %v", err)
+	}
+	if !online {
+		t.Fatal("u1 should be online")
+	}
+	ids, err := c.OnlinePresenceUserIDs(ctx)
+	if err != nil {
+		t.Fatalf("OnlinePresenceUserIDs: %v", err)
+	}
+	if len(ids) != 1 || ids[0] != "u1" {
+		t.Fatalf("online IDs = %v, want [u1]", ids)
+	}
+	if err := c.RefreshPresence(ctx, "u1"); err != nil {
+		t.Fatalf("RefreshPresence: %v", err)
+	}
+
+	last, err := c.DecrementPresence(ctx, "u1")
+	if err != nil {
+		t.Fatalf("DecrementPresence first: %v", err)
+	}
+	if last {
+		t.Fatal("first decrement should not report offline transition while one connection remains")
+	}
+	last, err = c.DecrementPresence(ctx, "u1")
+	if err != nil {
+		t.Fatalf("DecrementPresence second: %v", err)
+	}
+	if !last {
+		t.Fatal("last decrement should report offline transition")
+	}
+	online, err = c.IsPresenceOnline(ctx, "u1")
+	if err != nil {
+		t.Fatalf("IsPresenceOnline after disconnect: %v", err)
+	}
+	if online {
+		t.Fatal("u1 should be offline after last decrement")
+	}
+	if err := c.RefreshPresence(ctx, "u1"); err != ErrCacheMiss {
+		t.Fatalf("missing RefreshPresence error = %v, want ErrCacheMiss", err)
+	}
+}
+
+func TestPresenceKeysExpire(t *testing.T) {
+	c, mr := setupTestCache(t)
+	ctx := context.Background()
+
+	if _, err := c.IncrementPresence(ctx, "u1"); err != nil {
+		t.Fatalf("IncrementPresence: %v", err)
+	}
+	mr.FastForward(presenceTTL + time.Second)
+
+	online, err := c.IsPresenceOnline(ctx, "u1")
+	if err != nil {
+		t.Fatalf("IsPresenceOnline: %v", err)
+	}
+	if online {
+		t.Fatal("presence key should expire when websocket keepalive stops refreshing it")
+	}
+}
+
+func TestPresenceClientErrors(t *testing.T) {
+	c, mr := setupTestCache(t)
+	mr.Close()
+	ctx := context.Background()
+
+	if _, err := c.IncrementPresence(ctx, "u1"); err == nil {
+		t.Fatal("expected IncrementPresence error from closed redis")
+	}
+	if _, err := c.DecrementPresence(ctx, "u1"); err == nil {
+		t.Fatal("expected DecrementPresence error from closed redis")
+	}
+	if err := c.RefreshPresence(ctx, "u1"); err == nil {
+		t.Fatal("expected RefreshPresence error from closed redis")
+	}
+	if _, err := c.IsPresenceOnline(ctx, "u1"); err == nil {
+		t.Fatal("expected IsPresenceOnline error from closed redis")
+	}
+	if _, err := c.OnlinePresenceUserIDs(ctx); err == nil {
+		t.Fatal("expected OnlinePresenceUserIDs error from closed redis")
 	}
 }
 
