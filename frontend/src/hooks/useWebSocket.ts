@@ -6,6 +6,9 @@ import { useLatestRef } from '@/hooks/useLatestRef';
 
 type WSCallback = (data: unknown) => void;
 
+const reconnectDelayStepsMs = [1000, 2000, 4000, 8000, 16000, 30000];
+const reconnectAttemptsPerStep = 3;
+
 interface UseWebSocketOptions {
   onMessageNew?: WSCallback;
   onMessageEdited?: WSCallback;
@@ -151,7 +154,8 @@ export function useWebSocket(options: UseWebSocketOptions) {
         wsRef.current = null;
         setWSSender(null);
         if (disposed || !enabledRef.current) return;
-        const backoff = Math.min(1000 * Math.pow(2, retryCountRef.current), 30000);
+        const delayStep = Math.floor(retryCountRef.current / reconnectAttemptsPerStep);
+        const backoff = reconnectDelayStepsMs[Math.min(delayStep, reconnectDelayStepsMs.length - 1)];
         retryCountRef.current++;
         retryTimerRef.current = setTimeout(() => {
           void connect(true);
