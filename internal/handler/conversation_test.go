@@ -156,6 +156,7 @@ type convHandlerEnv struct {
 	users    *dataUserStoreForConv
 	members  *dataMembershipStore
 	messages *dataMessageStore
+	cache    *mockCache
 	jwtMgr   *auth.JWTManager
 }
 
@@ -166,7 +167,7 @@ func setupConversationHandlerFull(t *testing.T) *convHandlerEnv {
 	users := newDataUserStoreForConv()
 	members := newDataMembershipStore()
 	messages := newDataMessageStore()
-	cache := &mockCache{}
+	cache := newMockCache()
 	broker := &mockBrokerForHandler{}
 
 	convSvc := service.NewConversationService(convs, users, cache, broker, nil)
@@ -180,6 +181,7 @@ func setupConversationHandlerFull(t *testing.T) *convHandlerEnv {
 		users:    users,
 		members:  members,
 		messages: messages,
+		cache:    cache,
 		jwtMgr:   jwtMgr,
 	}
 }
@@ -253,6 +255,130 @@ func TestConversationHandler_List_Authenticated(t *testing.T) {
 
 	if rec.Code != http.StatusOK {
 		t.Errorf("status = %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+}
+
+func TestConversationHandler_MarkRead_ClearsSharedUnread(t *testing.T) {
+	env := setupConversationHandlerFull(t)
+	user := &model.User{
+		ID:         "u-read",
+		Email:      "read@example.com",
+		SystemRole: model.SystemRoleMember,
+	}
+	token, _ := env.jwtMgr.GenerateAccessToken(user)
+	env.convs.conversations["conv-read"] = &model.Conversation{
+		ID:             "conv-read",
+		Type:           model.ConversationTypeDM,
+		ParticipantIDs: []string{"u-read", "u-other"},
+		Activated:      true,
+	}
+	env.convs.userConvs["u-read"] = []*model.UserConversation{{
+		UserID:         "u-read",
+		ConversationID: "conv-read",
+		Type:           model.ConversationTypeDM,
+		DisplayName:    "Other",
+		Activated:      true,
+	}}
+	env.cache.values["unread:conversation:u-read:conv-read"] = true
+
+	handler := middleware.Auth(env.jwtMgr)(http.HandlerFunc(env.handler.MarkRead))
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/conversations/conv-read/read", nil)
+	req.SetPathValue("id", "conv-read")
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusNoContent, rec.Body.String())
+	}
+	if _, ok := env.cache.values["unread:conversation:u-read:conv-read"]; ok {
+		t.Fatal("unread marker was not cleared")
+	}
+}
+
+func TestConversationHandler_MarkRead_Errors(t *testing.T) {
+	env := setupConversationHandlerFull(t)
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/conversations/conv/read", nil)
+	req.SetPathValue("id", "conv")
+	rec := httptest.NewRecorder()
+	env.handler.MarkRead(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	}
+
+	user := &model.User{ID: "u-read", Email: "read@example.com", SystemRole: model.SystemRoleMember}
+	token, _ := env.jwtMgr.GenerateAccessToken(user)
+	handler := middleware.Auth(env.jwtMgr)(http.HandlerFunc(env.handler.MarkRead))
+
+	req = httptest.NewRequest(http.MethodPut, "/api/v1/conversations//read", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("missing id status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+
+	req = httptest.NewRequest(http.MethodPut, "/api/v1/conversations/missing/read", nil)
+	req.SetPathValue("id", "missing")
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("missing conversation status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+
+	env.convs.conversations["conv-read"] = &model.Conversation{
+		ID:             "conv-read",
+		Type:           model.ConversationTypeDM,
+		ParticipantIDs: []string{"u-read"},
+		Activated:      true,
+	}
+	env.convs.userConvs["u-read"] = []*model.UserConversation{{
+		UserID:         "u-read",
+		ConversationID: "conv-read",
+		Type:           model.ConversationTypeDM,
+		DisplayName:    "Self",
+		Activated:      true,
+	}}
+	env.cache.deleteErr = errors.New("redis down")
+	req = httptest.NewRequest(http.MethodPut, "/api/v1/conversations/conv-read/read", nil)
+	req.SetPathValue("id", "conv-read")
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("cache error status = %d, want %d", rec.Code, http.StatusInternalServerError)
+	}
+}
+
+func TestConversationHandler_List_IncludesSharedUnread(t *testing.T) {
+	env := setupConversationHandlerFull(t)
+	user := &model.User{ID: "u-list", Email: "list@example.com", SystemRole: model.SystemRoleMember}
+	token, _ := env.jwtMgr.GenerateAccessToken(user)
+	env.convs.userConvs["u-list"] = []*model.UserConversation{{
+		UserID:         "u-list",
+		ConversationID: "conv-unread",
+		Type:           model.ConversationTypeDM,
+		DisplayName:    "Unread",
+		Activated:      true,
+	}}
+	env.cache.values["unread:conversation:u-list:conv-unread"] = true
+
+	handler := middleware.Auth(env.jwtMgr)(http.HandlerFunc(env.handler.List))
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/conversations", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	var got []model.UserConversation
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(got) != 1 || !got[0].Unread {
+		t.Fatalf("unread conversation missing from response: %+v", got)
 	}
 }
 

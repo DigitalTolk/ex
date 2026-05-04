@@ -148,7 +148,12 @@ export function UserHoverCard({
               <div className="flex justify-between gap-3">
                 <dt className="text-muted-foreground">Email</dt>
                 <dd className="truncate">
-                  <a className="hover:underline" href={`mailto:${userDetails.email}`}>{userDetails.email}</a>
+                  <a
+                    className="text-link transition-colors hover:text-link/80"
+                    href={`mailto:${userDetails.email}`}
+                  >
+                    {userDetails.email}
+                  </a>
                 </dd>
               </div>
             )}

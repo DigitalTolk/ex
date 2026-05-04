@@ -201,17 +201,17 @@ export function MemberList({ members, channelId, currentUserId, currentUserRole,
                   userStatus={entry?.userStatus}
                   online={online}
                   currentUserId={currentUserId}
+                  showInlineStatus={false}
                 >
                   <span className="cursor-pointer">
                     <UserAvatar
                       displayName={m.displayName || ''}
                       avatarURL={avatarURL}
                       online={online}
-                      userStatus={entry?.userStatus}
                     />
                   </span>
                 </UserHoverCard>
-                <span className="flex min-w-0 flex-1 items-center gap-1">
+                <span className="flex min-w-0 flex-1 items-center gap-1" data-testid={`member-name-status-${m.userID}`}>
                   <span className="truncate text-sm">{m.displayName || 'Unknown'}</span>
                   <UserStatusIndicator status={entry?.userStatus} />
                 </span>

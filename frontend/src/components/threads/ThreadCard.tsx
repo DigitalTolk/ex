@@ -9,11 +9,18 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { useUsersBatch } from '@/hooks/useUsersBatch';
 import { useSendMessage, type SendMessageInput } from '@/hooks/useMessages';
 import { useInView } from '@/hooks/useInView';
-import { useDeleteDraft, useDraftAttachmentChips, useDraftForScope, useSaveDraft } from '@/hooks/useDrafts';
+import {
+  restoreDraftScope,
+  restoreDraftScopeForContent,
+  suppressSentDraft,
+  useDeleteDraft,
+  useDraftAttachmentChips,
+  useDraftForScope,
+  useSaveDraft,
+} from '@/hooks/useDrafts';
 import { usePresence } from '@/context/PresenceContext';
 import { collectMessageUserIDs } from '@/lib/message-users';
 import {
-  hasUnreadActivity,
   markThreadSeen,
   useThreadMessages,
   useUnfollowThread,
@@ -30,6 +37,14 @@ interface ThreadCardProps {
   // existing `?thread=…` deep-link the channel/conversation pages handle.
   deepLink: string;
   currentUserId?: string;
+  unread?: boolean;
+}
+
+function markSummaryThreadSeen(summary: ThreadSummary) {
+  markThreadSeen(summary.threadRootID, summary.latestActivityAt, {
+    parentID: summary.parentID,
+    parentType: summary.parentType,
+  });
 }
 
 // Cap the number of fully-rendered messages per thread before we collapse
@@ -43,7 +58,7 @@ const TAIL_LENGTH = 2;
 // reply composer. Each card fetches its own thread messages; React
 // Query's keyed cache means clicking into the channel/conversation view
 // doesn't re-fetch.
-export function ThreadCard({ summary, title, deepLink, currentUserId }: ThreadCardProps) {
+export function ThreadCard({ summary, title, deepLink, currentUserId, unread = false }: ThreadCardProps) {
   const channelId = summary.parentType === 'channel' ? summary.parentID : undefined;
   const conversationId = summary.parentType === 'conversation' ? summary.parentID : undefined;
 
@@ -53,15 +68,11 @@ export function ThreadCard({ summary, title, deepLink, currentUserId }: ThreadCa
   const { ref, inView } = useInView<HTMLElement>();
   const inputRef = useRef<MessageInputHandle>(null);
 
-  // Capture the unread state on first render — once we mark this thread
-  // seen below the card would otherwise lose its highlight mid-frame.
-  const [wasUnread] = useState(() => hasUnreadActivity(summary));
-
-  // Mark seen the first time the card actually scrolls into view.
   useEffect(() => {
-    if (!inView) return;
-    markThreadSeen(summary.threadRootID);
-  }, [inView, summary.threadRootID]);
+    if (!inView || !unread) return;
+    markSummaryThreadSeen(summary);
+  }, [inView, summary, unread]);
+
   const { data: messages, isLoading } = useThreadMessages({
     channelId,
     conversationId,
@@ -99,12 +110,12 @@ export function ThreadCard({ summary, title, deepLink, currentUserId }: ThreadCa
   // extra fetch from us.
   const send = useSendMessage({ channelId, conversationId });
   const parentID = channelId ?? conversationId;
-  const parentType = channelId ? 'channel' : 'conversation';
-  const { data: draft } = useDraftForScope({
-    parentID,
-    parentType,
-    parentMessageID: summary.threadRootID,
-  });
+  const parentType: 'channel' | 'conversation' = channelId ? 'channel' : 'conversation';
+  const draftScope = useMemo(
+    () => ({ parentID, parentType, parentMessageID: summary.threadRootID }),
+    [parentID, parentType, summary.threadRootID],
+  );
+  const { data: draft } = useDraftForScope(draftScope);
   const draftAttachments = useDraftAttachmentChips(draft?.attachmentIDs);
   const draftID = draft?.id;
   const saveDraft = useSaveDraft();
@@ -115,6 +126,7 @@ export function ThreadCard({ summary, title, deepLink, currentUserId }: ThreadCa
   const handleDraftChange = useCallback(
     (input: SendMessageInput) => {
       if (!parentID) return;
+      restoreDraftScopeForContent(draftScope, input);
       saveDraftMutate({
         parentID,
         parentType,
@@ -123,22 +135,26 @@ export function ThreadCard({ summary, title, deepLink, currentUserId }: ThreadCa
         attachmentIDs: input.attachmentIDs ?? [],
       });
     },
-    [parentID, parentType, summary.threadRootID, saveDraftMutate],
+    [parentID, parentType, summary.threadRootID, draftScope, saveDraftMutate],
   );
 
   const handleReply = useCallback(
     (input: SendMessageInput) => {
       const payload = { ...input, parentMessageID: summary.threadRootID };
+      suppressSentDraft(draftScope);
       if (draftID) {
-        send.mutate(payload, { onSuccess: () => deleteDraftMutate(draftID) });
+        send.mutate(payload, {
+          onSuccess: () => deleteDraftMutate(draftID),
+          onError: () => restoreDraftScope(draftScope),
+        });
       } else {
-        send.mutate(payload);
+        send.mutate(payload, { onError: () => restoreDraftScope(draftScope) });
       }
       // Treat sending as "seeing" — drops the unread dot in the sidebar
       // since the user is clearly engaged with this thread.
-      markThreadSeen(summary.threadRootID);
+      markSummaryThreadSeen(summary);
     },
-    [send, summary.threadRootID, draftID, deleteDraftMutate],
+    [send, summary, draftScope, draftID, deleteDraftMutate],
   );
 
   return (
@@ -147,15 +163,15 @@ export function ThreadCard({ summary, title, deepLink, currentUserId }: ThreadCa
       data-testid="thread-card"
       data-thread-root-id={summary.threadRootID}
       data-in-view={inView ? 'true' : 'false'}
-      data-unread={wasUnread ? 'true' : 'false'}
+      data-unread={unread ? 'true' : 'false'}
       className={
         'rounded-lg border bg-card overflow-hidden ' +
-        (wasUnread ? 'border-primary/40 bg-primary/5' : '')
+        (unread ? 'border-primary bg-primary/10 shadow-sm ring-1 ring-primary/30' : '')
       }
     >
       {/* Title — same shape as a channel/conversation header. Clicking
           opens the thread in its parent view. */}
-      <header className="flex items-center gap-2 border-b px-4 py-2.5">
+      <header className={'flex items-center gap-2 border-b px-4 py-2.5 ' + (unread ? 'bg-primary/10' : '')}>
         {summary.parentType === 'channel' ? (
           <Globe className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
         ) : (
@@ -164,11 +180,19 @@ export function ThreadCard({ summary, title, deepLink, currentUserId }: ThreadCa
         <Link
           to={deepLink}
           data-testid="thread-card-title"
-          className="truncate text-sm font-semibold hover:underline"
-          onClick={() => markThreadSeen(summary.threadRootID)}
+          className="truncate text-sm font-semibold"
+          onClick={() => markSummaryThreadSeen(summary)}
         >
           {title}
         </Link>
+        {unread && (
+          <span
+            data-testid="thread-card-unread"
+            className="rounded-full bg-primary px-2 py-0.5 text-[11px] font-semibold text-primary-foreground"
+          >
+            Unread
+          </span>
+        )}
         <Button
           type="button"
           variant="ghost"
@@ -222,7 +246,7 @@ export function ThreadCard({ summary, title, deepLink, currentUserId }: ThreadCa
               type="button"
               onClick={() => setExpanded(true)}
               data-testid="thread-card-expand"
-              className="my-1 ml-12 block text-xs font-medium text-primary hover:underline"
+              className="my-1 ml-12 block text-xs font-medium text-link transition-colors hover:text-link/80"
             >
               Show {hiddenCount} more {hiddenCount === 1 ? 'reply' : 'replies'}
             </button>

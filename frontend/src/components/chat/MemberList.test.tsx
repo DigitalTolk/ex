@@ -1,9 +1,13 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { BrowserRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemberList } from './MemberList';
 import type { ChannelMembership } from '@/types';
+
+vi.mock('@/hooks/useEmoji', () => ({
+  useEmojiMap: () => ({ data: {} }),
+}));
 
 function makeMember(overrides: Partial<ChannelMembership> = {}): ChannelMembership {
   return {
@@ -124,6 +128,27 @@ describe('MemberList', () => {
     );
 
     expect(screen.getByText('AJ')).toBeInTheDocument();
+  });
+
+  it('renders user status after the username instead of with the avatar', () => {
+    renderWithProviders(
+      <MemberList
+        members={[makeMember({ userID: 'u1', displayName: 'Alice Johnson' })]}
+        userMap={{
+          u1: {
+            displayName: 'Alice Johnson',
+            userStatus: { emoji: '☕', text: 'Coffee break' },
+          },
+        }}
+      />,
+    );
+
+    const status = screen.getByLabelText(/Coffee break/);
+    const nameStatus = screen.getByTestId('member-name-status-u1');
+    const initials = screen.getByText('AJ');
+
+    expect(nameStatus).toContainElement(status);
+    expect(initials.closest('.relative')).not.toContainElement(status);
   });
 
   it('shows "Members" heading', () => {

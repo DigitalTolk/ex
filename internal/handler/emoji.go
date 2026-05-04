@@ -41,14 +41,13 @@ func (h *EmojiHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 	var body struct {
 		Name     string `json:"name"`
-		ImageURL string `json:"imageURL"`
 		ImageKey string `json:"imageKey"`
 	}
 	if err := readJSON(r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_body", err.Error())
 		return
 	}
-	emoji, err := h.emojiSvc.Create(r.Context(), userID, body.Name, body.ImageURL, body.ImageKey)
+	emoji, err := h.emojiSvc.Create(r.Context(), userID, body.Name, body.ImageKey)
 	if err != nil {
 		if isDuplicateError(err) {
 			writeError(w, http.StatusConflict, "conflict", err.Error())

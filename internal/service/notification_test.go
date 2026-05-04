@@ -76,6 +76,18 @@ func publishedKinds(pub *mockPublisher) map[string]NotificationKind {
 	return out
 }
 
+func publishedNotifications(pub *mockPublisher) map[string]Notification {
+	out := make(map[string]Notification, len(pub.published))
+	for _, p := range pub.published {
+		var n Notification
+		if err := json.Unmarshal(p.event.Data, &n); err != nil {
+			continue
+		}
+		out[p.channel] = n
+	}
+	return out
+}
+
 func TestNotificationService_NotifyForMessage_ChannelFanout(t *testing.T) {
 	svc, pub, members, _, chans, users := setupNotifier(t)
 	ctx := context.Background()
@@ -106,6 +118,49 @@ func TestNotificationService_NotifyForMessage_ChannelFanout(t *testing.T) {
 	if gotChannels[pubsub.UserChannel("u-author")] {
 		t.Error("author should be excluded from notification fanout")
 	}
+}
+
+func TestNotificationService_PersistsNotificationState(t *testing.T) {
+	svc, _, members, _, chans, users, msgs, follows := setupNotifierWithMessagesAndFollows(t)
+	ctx := context.Background()
+	stateStore := newMockUserStateStore()
+	stateSvc := NewUserStateService(stateStore, nil)
+	svc.SetUserStateService(stateSvc)
+
+	chans.channels["ch1"] = &model.Channel{ID: "ch1", Name: "general", Slug: "general", Type: model.ChannelTypePublic}
+	for _, uid := range []string{"u-author", "u-bob"} {
+		users.users[uid] = &model.User{ID: uid, DisplayName: uid}
+		members.memberships["ch1#"+uid] = &model.ChannelMembership{ChannelID: "ch1", UserID: uid}
+	}
+	svc.NotifyForMessage(ctx, &model.Message{ID: "m1", ParentID: "ch1", AuthorID: "u-author", Body: "hi @[u-bob|Bob]"}, ParentChannel)
+	if _, ok := stateStore.rows[stateStore.key("u-bob", model.UserStateChannelNotification, "ch1")]; !ok {
+		t.Fatal("expected channel notification state for mentioned user")
+	}
+	if err := stateStore.DeleteUserState(ctx, "u-bob", model.UserStateChannelNotification, "ch1"); err != nil {
+		t.Fatalf("DeleteUserState: %v", err)
+	}
+
+	msgs.messages["ch1#root1"] = &model.Message{ID: "root1", ParentID: "ch1", AuthorID: "u-author", Body: "root", CreatedAt: time.Now()}
+	if err := follows.SetThreadFollow(ctx, &model.ThreadFollow{
+		UserID: "u-bob", ParentID: "ch1", ParentType: ParentChannel, ThreadRootID: "root1", Following: true, UpdatedAt: time.Now(),
+	}); err != nil {
+		t.Fatalf("SetThreadFollow: %v", err)
+	}
+	svc.NotifyForMessage(ctx, &model.Message{ID: "reply1", ParentID: "ch1", ParentMessageID: "root1", AuthorID: "u-author", Body: "reply @[u-bob|Bob]"}, ParentChannel)
+	if _, ok := stateStore.rows[stateStore.key("u-bob", model.UserStateThreadNotification, "root1")]; !ok {
+		t.Fatal("expected thread notification state for follower")
+	}
+	if _, ok := stateStore.rows[stateStore.key("u-bob", model.UserStateChannelNotification, "ch1")]; ok {
+		t.Fatal("did not expect channel notification state for thread mention")
+	}
+}
+
+func TestNotificationService_NotificationStateNoops(t *testing.T) {
+	svc, _, _, _, _, _ := setupNotifier(t)
+	svc.markChannelNotification(context.Background(), "u-1", "ch-1")
+	svc.markThreadNotification(context.Background(), "u-1", nil, ParentChannel)
+	svc.SetUserStateService(NewUserStateService(newMockUserStateStore(), nil))
+	svc.markThreadNotification(context.Background(), "u-1", &model.Message{ID: "m1"}, ParentChannel)
 }
 
 func TestNotificationService_NotifyForMessage_ThreadReply_OnlyParticipantsAndRootAuthor(t *testing.T) {
@@ -470,23 +525,25 @@ func TestNotifyForMessage_ThreadReply_DeepLinkOpensThread(t *testing.T) {
 	}
 	svc.NotifyForMessage(context.Background(), msg, ParentChannel)
 
-	var deepLink string
+	var notif Notification
 	for _, p := range pub.published {
 		if p.event.Type != events.EventNotificationNew {
 			continue
 		}
-		var n Notification
-		if err := json.Unmarshal(p.event.Data, &n); err != nil {
+		if err := json.Unmarshal(p.event.Data, &notif); err != nil {
 			continue
 		}
-		deepLink = n.DeepLink
 		break
 	}
+	deepLink := notif.DeepLink
 	if !strings.Contains(deepLink, "?thread=root-XYZ") {
 		t.Errorf("deepLink missing ?thread=root-XYZ: %q", deepLink)
 	}
 	if !strings.Contains(deepLink, "#msg-root-XYZ") {
 		t.Errorf("deepLink missing #msg-root-XYZ: %q", deepLink)
+	}
+	if notif.ParentMessageID != "root-XYZ" {
+		t.Errorf("ParentMessageID = %q, want root-XYZ", notif.ParentMessageID)
 	}
 }
 
@@ -680,6 +737,34 @@ func TestNotifyForMessage_AtAll_NotifiesAllMembersAsMention(t *testing.T) {
 	}
 }
 
+func TestNotifyForMessage_AtAll_NotificationKeepsGroupMentionCopy(t *testing.T) {
+	svc, pub, members, _, chans, users := setupNotifier(t)
+	ctx := context.Background()
+
+	chans.channels["ch1"] = &model.Channel{ID: "ch1", Name: "general", Slug: "general"}
+	users.users["u-author"] = &model.User{ID: "u-author", DisplayName: "Alice"}
+	members.memberships["ch1#u-author"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u-author"}
+	members.memberships["ch1#u-bob"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u-bob"}
+
+	msg := &model.Message{
+		ID: "m1", ParentID: "ch1", AuthorID: "u-author",
+		Body: "@all please review",
+	}
+	svc.NotifyForMessage(ctx, msg, ParentChannel)
+
+	notifs := publishedNotifications(pub)
+	got := notifs[pubsub.UserChannel("u-bob")]
+	if got.Kind != NotificationKindMention {
+		t.Fatalf("kind = %q, want %q", got.Kind, NotificationKindMention)
+	}
+	if !strings.Contains(got.Title, "@all") {
+		t.Errorf("@all title lost group mention: %q", got.Title)
+	}
+	if !strings.Contains(got.Body, "@all") {
+		t.Errorf("@all body lost group mention: %q", got.Body)
+	}
+}
+
 func TestNotifyForMessage_AtAll_RespectsMute(t *testing.T) {
 	// @all is a group mention — it follows the polite "respect mute" rule
 	// rather than the bypass behaviour of a direct mention.
@@ -738,6 +823,35 @@ func TestNotifyForMessage_AtHere_OnlyOnlineMembers(t *testing.T) {
 	// in the channel does) — but must NOT receive a @here mention.
 	if got := kinds[pubsub.UserChannel("u-carol")]; got == NotificationKindMention {
 		t.Error("offline u-carol must not receive a mention from @here")
+	}
+}
+
+func TestNotifyForMessage_AtHere_NotificationKeepsGroupMentionCopy(t *testing.T) {
+	svc, pub, members, _, chans, users := setupNotifier(t)
+	ctx := context.Background()
+	svc.SetPresence(&stubPresence{online: map[string]bool{"u-bob": true}})
+
+	chans.channels["ch1"] = &model.Channel{ID: "ch1", Name: "general", Slug: "general"}
+	users.users["u-author"] = &model.User{ID: "u-author", DisplayName: "Alice"}
+	members.memberships["ch1#u-author"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u-author"}
+	members.memberships["ch1#u-bob"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u-bob"}
+
+	msg := &model.Message{
+		ID: "m1", ParentID: "ch1", AuthorID: "u-author",
+		Body: "@here anyone?",
+	}
+	svc.NotifyForMessage(ctx, msg, ParentChannel)
+
+	notifs := publishedNotifications(pub)
+	got := notifs[pubsub.UserChannel("u-bob")]
+	if got.Kind != NotificationKindMention {
+		t.Fatalf("kind = %q, want %q", got.Kind, NotificationKindMention)
+	}
+	if !strings.Contains(got.Title, "@here") {
+		t.Errorf("@here title lost group mention: %q", got.Title)
+	}
+	if !strings.Contains(got.Body, "@here") {
+		t.Errorf("@here body lost group mention: %q", got.Body)
 	}
 }
 

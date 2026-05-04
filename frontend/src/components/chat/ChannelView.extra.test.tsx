@@ -216,7 +216,10 @@ describe('ChannelView - actions', () => {
     const input = screen.getByLabelText('Message input');
     await user.type(input, 'hello world{enter}');
 
-    expect(mockSendMutate).toHaveBeenCalledWith({ body: 'hello world', attachmentIDs: [] });
+    expect(mockSendMutate).toHaveBeenCalledWith(
+      { body: 'hello world', attachmentIDs: [] },
+      expect.objectContaining({ onError: expect.any(Function) }),
+    );
   });
 
   it('owner can archive channel — archives via apiFetch DELETE and navigates', async () => {

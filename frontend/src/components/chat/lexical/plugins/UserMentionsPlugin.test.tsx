@@ -99,6 +99,38 @@ describe('UserMentionsPlugin', () => {
     });
   });
 
+  it('inserts @all as a group mention, not a user mention pill', async () => {
+    const ref = createRef<WysiwygEditorHandle>();
+    render(<Providers><WysiwygEditor ref={ref} /></Providers>);
+    await waitFor(() => expect(ref.current).not.toBeNull());
+    act(() => {
+      ref.current!.insertText('@all');
+    });
+    const allRow = await screen.findByText('@all');
+
+    fireEvent.mouseDown(allRow);
+
+    await waitFor(() => expect(ref.current?.getMarkdown()).toContain('@all'));
+    expect(ref.current?.getMarkdown()).not.toContain('@[');
+    expect(ref.current?.getElement()?.querySelector('span.mention[data-user-id]')).toBeNull();
+  });
+
+  it('inserts @here as a group mention, not a user mention pill', async () => {
+    const ref = createRef<WysiwygEditorHandle>();
+    render(<Providers><WysiwygEditor ref={ref} /></Providers>);
+    await waitFor(() => expect(ref.current).not.toBeNull());
+    act(() => {
+      ref.current!.insertText('@here');
+    });
+    const hereRow = await screen.findByText('@here');
+
+    fireEvent.mouseDown(hereRow);
+
+    await waitFor(() => expect(ref.current?.getMarkdown()).toContain('@here'));
+    expect(ref.current?.getMarkdown()).not.toContain('@[');
+    expect(ref.current?.getElement()?.querySelector('span.mention[data-user-id]')).toBeNull();
+  });
+
   it('surfaces @here only when the user has typed the full keyword', async () => {
     const ref = createRef<WysiwygEditorHandle>();
     render(<Providers><WysiwygEditor ref={ref} /></Providers>);

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/DigitalTolk/ex/internal/events"
@@ -77,15 +78,18 @@ func ValidateEmojiName(name string) error {
 }
 
 // Create stores a new custom emoji and publishes a global event so connected
-// clients can refresh their emoji catalog. The imageKey is the persistent
-// S3 key used for re-signing on List; imageURL is the initial presigned
-// URL the client already has on hand.
-func (s *EmojiService) Create(ctx context.Context, userID, name, imageURL, imageKey string) (*model.CustomEmoji, error) {
+// clients can refresh their emoji catalog. The client supplies only the
+// server-issued upload key; the URL is derived server-side so arbitrary or
+// expired client URLs are never persisted.
+func (s *EmojiService) Create(ctx context.Context, userID, name, imageKey string) (*model.CustomEmoji, error) {
 	if err := ValidateEmojiName(name); err != nil {
 		return nil, err
 	}
-	if imageURL == "" {
-		return nil, errors.New("emoji: imageURL is required")
+	if imageKey == "" {
+		return nil, errors.New("emoji: imageKey is required")
+	}
+	if !strings.HasPrefix(imageKey, "uploads/"+userID+"/") {
+		return nil, errors.New("emoji: image key is not owned by this user")
 	}
 
 	u, err := s.users.GetUser(ctx, userID)
@@ -94,6 +98,10 @@ func (s *EmojiService) Create(ctx context.Context, userID, name, imageURL, image
 	}
 	if u.SystemRole == model.SystemRoleGuest {
 		return nil, errors.New("emoji: guests cannot upload emojis")
+	}
+	imageURL, err := s.resolveCreateImageURL(ctx, name, imageKey)
+	if err != nil {
+		return nil, err
 	}
 
 	e := &model.CustomEmoji{
@@ -112,6 +120,22 @@ func (s *EmojiService) Create(ctx context.Context, userID, name, imageURL, image
 
 	events.Publish(ctx, s.publisher, pubsub.GlobalEmojiEvents(), events.EventEmojiAdded, e)
 	return e, nil
+}
+
+func (s *EmojiService) resolveCreateImageURL(ctx context.Context, name, imageKey string) (string, error) {
+	if s.mediaCache != nil {
+		if mediaURL, err := StableMediaURL(ctx, s.mediaCache, "emoji", name+":"+imageKey, imageKey, name, "", 0); err == nil && mediaURL != "" {
+			return mediaURL, nil
+		}
+	}
+	if s.signer == nil {
+		return "", errors.New("emoji: storage signer not configured")
+	}
+	url, err := s.signer.PresignedGetURL(ctx, imageKey, EmojiURLTTL)
+	if err != nil {
+		return "", fmt.Errorf("emoji: sign image url: %w", err)
+	}
+	return url, nil
 }
 
 // List returns all custom emojis with freshly signed image URLs. Without

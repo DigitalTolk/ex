@@ -3,6 +3,7 @@ import { render, act } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Routes, Route, useLocation } from 'react-router-dom';
 import ChatPage from '@/pages/ChatPage';
+import { apiFetch } from '@/lib/api';
 
 let capturedOptions: Record<string, ((data: unknown) => void) | boolean | undefined> = {};
 const authUserMock = vi.hoisted(() => ({
@@ -37,24 +38,32 @@ vi.mock('@/context/AuthContext', () => ({
 }));
 
 const markChannelUnread = vi.fn();
+const markChannelNotificationUnread = vi.fn();
 const markConversationUnread = vi.fn();
+const markThreadNotificationUnread = vi.fn();
+const clearConversationUnread = vi.fn();
+const isActiveConversation = vi.fn(() => false);
 const unhideConversation = vi.fn();
 
 vi.mock('@/context/UnreadContext', () => ({
   useUnread: () => ({
     markChannelUnread,
+    markChannelNotificationUnread,
     markConversationUnread,
+    markThreadNotificationUnread,
     unhideConversation,
     unreadChannels: new Set(),
+    unreadChannelNotifications: new Set(),
     unreadConversations: new Set(),
+    unreadThreadNotifications: new Set(),
     hiddenConversations: new Set(),
     hideConversation: vi.fn(),
     clearChannelUnread: vi.fn(),
-    clearConversationUnread: vi.fn(),
+    clearConversationUnread,
     setActiveChannel: vi.fn(),
     setActiveConversation: vi.fn(),
     isActiveChannel: vi.fn(() => false),
-    isActiveConversation: vi.fn(() => false),
+    isActiveConversation,
   }),
 }));
 
@@ -149,8 +158,15 @@ describe('ChatPage WebSocket handlers', () => {
       status: 'active',
     };
     markChannelUnread.mockReset();
+    markChannelNotificationUnread.mockReset();
     markConversationUnread.mockReset();
+    markThreadNotificationUnread.mockReset();
+    clearConversationUnread.mockReset();
+    isActiveConversation.mockReset();
+    isActiveConversation.mockReturnValue(false);
     unhideConversation.mockReset();
+    vi.mocked(apiFetch).mockReset();
+    vi.mocked(apiFetch).mockResolvedValue(undefined);
     setUserOnline.mockReset();
     dispatchNotification.mockReset();
     setCurrentUserID.mockReset();
@@ -174,7 +190,9 @@ describe('ChatPage WebSocket handlers', () => {
   }
 
   it('onMessageNew marks unread + un-hides + invalidates queries (skipping self)', () => {
-    renderAt('/');
+    renderAt('/', (qc) => {
+      qc.setQueryData(['userChannels'], [{ channelID: 'ch-1', channelName: 'general' }]);
+    });
     const handler = capturedOptions.onMessageNew as (d: unknown) => void;
     // From self — should skip the unread marking
     handler(msg({ authorID: 'u-me' }));
@@ -182,8 +200,59 @@ describe('ChatPage WebSocket handlers', () => {
     // From someone else
     handler(msg({ authorID: 'u-other' }));
     expect(markChannelUnread).toHaveBeenCalledWith('ch-1');
-    expect(markConversationUnread).toHaveBeenCalledWith('ch-1');
-    expect(unhideConversation).toHaveBeenCalledWith('ch-1');
+    expect(markConversationUnread).not.toHaveBeenCalled();
+    expect(unhideConversation).not.toHaveBeenCalled();
+  });
+
+  it('onMessageNew uses payload parentType when channel cache is empty', () => {
+    renderAt('/');
+    const handler = capturedOptions.onMessageNew as (d: unknown) => void;
+
+    handler(msg({ parentID: 'ch-not-loaded', parentType: 'channel', authorID: 'u-other' }));
+
+    expect(markChannelUnread).toHaveBeenCalledWith('ch-not-loaded');
+    expect(markConversationUnread).not.toHaveBeenCalled();
+    expect(unhideConversation).not.toHaveBeenCalled();
+  });
+
+  it('onMessageNew does not guess conversation when parent type and caches are missing', () => {
+    renderAt('/');
+    const handler = capturedOptions.onMessageNew as (d: unknown) => void;
+
+    handler(msg({ parentID: 'ch-not-loaded', authorID: 'u-other' }));
+
+    expect(markChannelUnread).not.toHaveBeenCalled();
+    expect(markConversationUnread).not.toHaveBeenCalled();
+    expect(unhideConversation).not.toHaveBeenCalled();
+  });
+
+  it('onMessageNew marks a DM unread only once', () => {
+    renderAt('/', (qc) => {
+      qc.setQueryData(['userChannels'], [{ channelID: 'ch-1', channelName: 'general' }]);
+      qc.setQueryData(['userConversations'], [{ conversationID: 'conv-1' }]);
+    });
+    const handler = capturedOptions.onMessageNew as (d: unknown) => void;
+
+    handler(msg({ parentID: 'conv-1', authorID: 'u-other' }));
+
+    expect(markChannelUnread).not.toHaveBeenCalled();
+    expect(markConversationUnread).toHaveBeenCalledTimes(1);
+    expect(markConversationUnread).toHaveBeenCalledWith('conv-1');
+    expect(unhideConversation).toHaveBeenCalledWith('conv-1');
+  });
+
+  it('onMessageNew clears shared unread for an active conversation', () => {
+    isActiveConversation.mockReturnValue(true);
+    renderAt('/', (qc) => {
+      qc.setQueryData(['userConversations'], [{ conversationID: 'conv-1' }]);
+    });
+    const handler = capturedOptions.onMessageNew as (d: unknown) => void;
+
+    handler(msg({ parentID: 'conv-1', parentType: 'conversation', authorID: 'u-other' }));
+
+    expect(markConversationUnread).not.toHaveBeenCalled();
+    expect(clearConversationUnread).toHaveBeenCalledWith('conv-1');
+    expect(apiFetch).toHaveBeenCalledWith('/api/v1/conversations/conv-1/read', { method: 'PUT' });
   });
 
   it('onMessageNew without a valid Message payload is a no-op', () => {
@@ -202,6 +271,26 @@ describe('ChatPage WebSocket handlers', () => {
     const calls = spy.mock.calls.map((c) => (c[0] as { queryKey?: unknown[] }).queryKey);
     expect(calls).toContainEqual(['thread', 'channels/ch-1', 'msg-root']);
     expect(calls).toContainEqual(['userThreads']);
+  });
+
+  it('onNotification for a thread reply refreshes /threads immediately', () => {
+    const { qc } = renderAt('/');
+    const spy = vi.spyOn(qc, 'invalidateQueries');
+
+    (capturedOptions.onNotification as (d: unknown) => void)({
+      kind: 'thread_reply',
+      parentID: 'ch-1',
+      parentType: 'channel',
+      parentMessageID: 'msg-root',
+      title: 'Alice replied',
+      body: 'hello',
+    });
+
+    const calls = spy.mock.calls.map((c) => (c[0] as { queryKey?: unknown[] }).queryKey);
+    expect(markThreadNotificationUnread).toHaveBeenCalledWith('msg-root');
+    expect(calls).toContainEqual(['userThreads']);
+    expect(calls).toContainEqual(['userState']);
+    expect(dispatchNotification).toHaveBeenCalled();
   });
 
   it('onMessageDeleted on a thread reply invalidates that thread + userThreads', () => {
@@ -474,6 +563,60 @@ describe('ChatPage WebSocket handlers', () => {
       createdAt: new Date().toISOString(),
     });
     expect(dispatchNotification).toHaveBeenCalledTimes(1);
+  });
+
+  it('onNotification counts channel mentions but not ordinary channel messages', () => {
+    renderAt('/');
+    const payload = {
+      title: 't',
+      body: 'b',
+      deepLink: '/x',
+      parentID: 'ch-1',
+      parentType: 'channel',
+      createdAt: new Date().toISOString(),
+    };
+
+    (capturedOptions.onNotification as (d: unknown) => void)({ ...payload, kind: 'message' });
+    expect(markChannelNotificationUnread).not.toHaveBeenCalled();
+
+    (capturedOptions.onNotification as (d: unknown) => void)({ ...payload, kind: 'mention' });
+    expect(markChannelNotificationUnread).toHaveBeenCalledWith('ch-1');
+  });
+
+  it('onNotification counts thread replies separately from their DM parent', () => {
+    renderAt('/');
+
+    (capturedOptions.onNotification as (d: unknown) => void)({
+      kind: 'thread_reply',
+      title: 't',
+      body: 'b',
+      deepLink: '/conversation/conv-1?thread=root-1#msg-reply-1',
+      parentID: 'conv-1',
+      parentType: 'conversation',
+      parentMessageID: 'root-1',
+      createdAt: new Date().toISOString(),
+    });
+
+    expect(markThreadNotificationUnread).toHaveBeenCalledWith('root-1');
+    expect(dispatchNotification).toHaveBeenCalledTimes(1);
+  });
+
+  it('onNotification counts channel thread mentions as thread unread only', () => {
+    renderAt('/');
+
+    (capturedOptions.onNotification as (d: unknown) => void)({
+      kind: 'mention',
+      title: 't',
+      body: 'b',
+      deepLink: '/channel/general?thread=root-1#msg-reply-1',
+      parentID: 'ch-1',
+      parentType: 'channel',
+      parentMessageID: 'root-1',
+      createdAt: new Date().toISOString(),
+    });
+
+    expect(markThreadNotificationUnread).toHaveBeenCalledWith('root-1');
+    expect(markChannelNotificationUnread).not.toHaveBeenCalled();
   });
 
   it('updates current user id on mount and resets to null on unmount', () => {

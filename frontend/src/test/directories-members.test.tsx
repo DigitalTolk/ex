@@ -73,6 +73,9 @@ describe('DirectoriesPage - members tab', () => {
     });
     expect(screen.getByLabelText('Message Alice')).toBeInTheDocument();
     expect(screen.getByLabelText('Message Bob')).toBeInTheDocument();
+    const aliceEmail = screen.getByRole('link', { name: 'alice@x.com' });
+    expect(aliceEmail).toHaveClass('text-link');
+    expect(aliceEmail).not.toHaveClass('hover:underline');
     const aliceDot = screen.getByTestId('presence-u-1');
     const bobDot = screen.getByTestId('presence-u-2');
     expect(aliceDot.getAttribute('aria-label')).toBe('Online');
@@ -136,7 +139,7 @@ describe('DirectoriesPage - members tab', () => {
     });
   });
 
-  it('uses five-column member cards with a full-width avatar area and kebab management menu', async () => {
+  it('uses wrapping member cards with a full-width avatar area and kebab management menu', async () => {
     mockApiFetch.mockResolvedValue([
       {
         id: 'u-1',
@@ -154,7 +157,8 @@ describe('DirectoriesPage - members tab', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'Members' }));
 
     expect(await screen.findByText('Alice')).toBeInTheDocument();
-    expect(screen.getByTestId('members-grid')).toHaveClass('xl:grid-cols-5');
+    expect(screen.getByTestId('members-grid')).toHaveClass('grid-cols-[repeat(auto-fill,minmax(16rem,calc((100%_-_3rem)/5)))]');
+    expect(screen.getByTestId('members-grid')).toHaveClass('justify-start');
     expect(screen.getByTestId('directory-user-avatar')).toHaveClass('w-full');
     expect(screen.queryByText('Working from home')).not.toBeInTheDocument();
     expect(screen.getByText('Local time')).toBeInTheDocument();

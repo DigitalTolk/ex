@@ -13,6 +13,7 @@ import type { Message } from '@/types';
 const messageSchema: z.ZodType<Message> = z.object({
   id: z.string().min(1),
   parentID: z.string().min(1),
+  parentType: z.enum(['channel', 'conversation']).optional(),
   authorID: z.string().min(1),
   body: z.string(),
   createdAt: z.string().min(1),

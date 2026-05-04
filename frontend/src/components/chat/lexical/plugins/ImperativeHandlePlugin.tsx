@@ -49,6 +49,7 @@ export interface WysiwygEditorHandle {
   getMarkdown: () => string;
   setMarkdown: (md: string) => void;
   focus: () => void;
+  focusEnd: () => void;
   getElement: () => HTMLDivElement | null;
   getActiveFormats: () => Set<ActiveFormat>;
   /**
@@ -203,6 +204,14 @@ export function ImperativeHandlePlugin({ imperativeRef }: Props) {
         // matches the editor surface in both runtimes.
         const dom = editor.getRootElement();
         dom?.focus();
+        editor.focus();
+      },
+      focusEnd() {
+        const dom = editor.getRootElement();
+        dom?.focus();
+        editor.update(() => {
+          $getRoot().selectEnd();
+        });
         editor.focus();
       },
       getElement() {

@@ -29,6 +29,10 @@ type ConversationActivator interface {
 	Activate(ctx context.Context, convID string) error
 }
 
+type ConversationUnreadTracker interface {
+	MarkUnread(ctx context.Context, userID, convID string) error
+}
+
 // AttachmentRefManager is the AttachmentService capability MessageService uses
 // to bind/unbind attachments to messages. Defined as an interface so tests can
 // stub it without dragging in storage.
@@ -58,10 +62,12 @@ type MessageService struct {
 	publisher     Publisher
 	broker        Broker
 	activator     ConversationActivator
+	unreadTracker ConversationUnreadTracker
 	attachments   AttachmentRefManager
 	notifier      MessageNotifier
 	indexer       MessageIndexer
 	threadFollows ThreadFollowStore
+	userState     UserStateStore
 }
 
 // NewMessageService creates a MessageService with the given dependencies.
@@ -85,6 +91,10 @@ func NewMessageService(
 // both services are constructed to avoid a constructor cycle.
 func (s *MessageService) SetActivator(a ConversationActivator) { s.activator = a }
 
+func (s *MessageService) SetConversationUnreadTracker(t ConversationUnreadTracker) {
+	s.unreadTracker = t
+}
+
 // SetAttachmentManager wires the attachment ref manager. Called from main
 // wiring after both services are constructed to avoid a constructor cycle.
 func (s *MessageService) SetAttachmentManager(a AttachmentRefManager) { s.attachments = a }
@@ -96,6 +106,12 @@ func (s *MessageService) SetNotifier(n MessageNotifier) { s.notifier = n }
 func (s *MessageService) SetIndexer(i MessageIndexer) { s.indexer = i }
 
 func (s *MessageService) SetThreadFollowStore(f ThreadFollowStore) { s.threadFollows = f }
+
+func (s *MessageService) SetUserStateStore(userState UserStateStore) { s.userState = userState }
+
+func (s *MessageService) CheckAccess(ctx context.Context, userID, parentID, parentType string) error {
+	return s.checkAccess(ctx, userID, parentID, parentType)
+}
 
 // indexMessage / deleteFromIndex dispatch on a detached goroutine so a
 // slow OpenSearch never adds to user-perceived send latency. Failures
@@ -168,6 +184,16 @@ func (s *MessageService) Send(ctx context.Context, userID, parentID, parentType,
 
 	if parentType == ParentConversation {
 		if conv, err := s.conversations.GetConversation(ctx, parentID); err == nil && conv != nil {
+			if s.unreadTracker != nil {
+				for _, participantID := range conv.ParticipantIDs {
+					if participantID == userID {
+						continue
+					}
+					if err := s.unreadTracker.MarkUnread(ctx, participantID, parentID); err != nil {
+						slog.Warn("conversation unread mark failed", "convID", parentID, "userID", participantID, "error", err)
+					}
+				}
+			}
 			if err := s.conversations.TouchConversation(ctx, parentID, conv.ParticipantIDs, now); err != nil {
 				slog.Warn("conversation activity touch failed", "convID", parentID, "error", err)
 			} else {
@@ -190,6 +216,18 @@ func (s *MessageService) Send(ctx context.Context, userID, parentID, parentType,
 		}
 	}
 
+	var updatedThreadRoot *model.Message
+	if parentMessageID != "" {
+		// Update thread-derived state before publishing message.new. Clients
+		// refetch /threads as soon as that event arrives; if the follow row or
+		// root reply metadata is still missing, the list can stay stale until
+		// the next cache invalidation.
+		s.followMentionedThreadUsers(ctx, msg, parentType)
+		if updated, err := s.messages.IncrementReplyMetadata(ctx, parentID, parentMessageID, msg.CreatedAt, userID); err == nil {
+			updatedThreadRoot = updated
+		}
+	}
+
 	s.publishEvent(ctx, parentID, parentType, events.EventMessageNew, msg)
 
 	// Fire user-facing notifications (sound + popup) to recipients who
@@ -208,16 +246,43 @@ func (s *MessageService) Send(ctx context.Context, userID, parentID, parentType,
 		s.flagNonMemberMentions(ctx, msg)
 	}
 
-	// Thread reply: bump root metadata atomically and republish the
-	// authoritative parent so subscribers see the new replyCount /
-	// avatar stack without a re-fetch.
-	if parentMessageID != "" {
-		if updated, err := s.messages.IncrementReplyMetadata(ctx, parentID, parentMessageID, msg.CreatedAt, userID); err == nil {
-			s.publishEvent(ctx, parentID, parentType, events.EventMessageEdited, updated)
-		}
+	// Thread reply: republish the authoritative parent so subscribers see
+	// the new replyCount / avatar stack without a re-fetch. The metadata
+	// itself was already persisted before message.new to keep /threads
+	// refetches from racing old state.
+	if updatedThreadRoot != nil {
+		s.publishEvent(ctx, parentID, parentType, events.EventMessageEdited, updatedThreadRoot)
 	}
 
 	return msg, nil
+}
+
+func (s *MessageService) followMentionedThreadUsers(ctx context.Context, msg *model.Message, parentType string) {
+	if s.threadFollows == nil || msg == nil || msg.ParentMessageID == "" {
+		return
+	}
+	mentions := ParseMentions(msg.Body)
+	if len(mentions.Users) == 0 {
+		return
+	}
+	for _, mention := range mentions.Users {
+		if mention.UserID == "" || mention.UserID == msg.AuthorID {
+			continue
+		}
+		if err := s.checkAccess(ctx, mention.UserID, msg.ParentID, parentType); err != nil {
+			continue
+		}
+		if err := s.threadFollows.SetThreadFollow(ctx, &model.ThreadFollow{
+			UserID:       mention.UserID,
+			ParentID:     msg.ParentID,
+			ParentType:   parentType,
+			ThreadRootID: msg.ParentMessageID,
+			Following:    true,
+			UpdatedAt:    time.Now(),
+		}); err != nil {
+			slog.Warn("thread mention follow failed", "userID", mention.UserID, "threadRootID", msg.ParentMessageID, "error", err)
+		}
+	}
 }
 
 // ListThreadMessages returns the root message followed by all reply messages
@@ -326,6 +391,7 @@ func (s *MessageService) ListUserThreads(ctx context.Context, userID string) ([]
 	out := make([]*ThreadSummary, 0)
 	seen := make(map[string]bool)
 	followOverrides := make(map[string]bool)
+	notificationThreads := make(map[string]bool)
 	if s.threadFollows != nil {
 		follows, err := s.threadFollows.ListUserThreadFollows(ctx, userID)
 		if err != nil {
@@ -333,6 +399,18 @@ func (s *MessageService) ListUserThreads(ctx context.Context, userID string) ([]
 		}
 		for _, f := range follows {
 			followOverrides[threadFollowKey(f.ParentID, f.ThreadRootID)] = f.Following
+		}
+	}
+	if s.userState != nil {
+		items, err := s.userState.ListUserState(ctx, userID)
+		if err != nil {
+			return nil, fmt.Errorf("threads: list user state: %w", err)
+		}
+		for _, item := range items {
+			if item.Kind != model.UserStateThreadNotification || item.ParentID == "" || item.ThreadRootID == "" {
+				continue
+			}
+			notificationThreads[threadFollowKey(item.ParentID, item.ThreadRootID)] = true
 		}
 	}
 
@@ -365,9 +443,15 @@ func (s *MessageService) ListUserThreads(ctx context.Context, userID string) ([]
 			rootID := strings.TrimPrefix(key, p.id+"#")
 			if following {
 				participated[rootID] = true
-			} else {
+			} else if !notificationThreads[key] {
 				delete(participated, rootID)
 			}
+		}
+		for key := range notificationThreads {
+			if !strings.HasPrefix(key, p.id+"#") {
+				continue
+			}
+			participated[strings.TrimPrefix(key, p.id+"#")] = true
 		}
 		// Build summaries.
 		for rootID := range participated {
@@ -1009,12 +1093,13 @@ func (s *MessageService) flagNonMemberMentions(ctx context.Context, msg *model.M
 // Used for join/leave/audit-style notices and the non-member-mention flag.
 func (s *MessageService) postSystemMessage(ctx context.Context, channelID, body string) {
 	sysMsg := &model.Message{
-		ID:        store.NewID(),
-		ParentID:  channelID,
-		AuthorID:  "system",
-		Body:      body,
-		System:    true,
-		CreatedAt: time.Now(),
+		ID:         store.NewID(),
+		ParentID:   channelID,
+		ParentType: ParentChannel,
+		AuthorID:   "system",
+		Body:       body,
+		System:     true,
+		CreatedAt:  time.Now(),
 	}
 	if err := s.messages.CreateMessage(ctx, sysMsg); err != nil {
 		return
@@ -1032,6 +1117,11 @@ func (s *MessageService) publishEvent(ctx context.Context, parentID, parentType,
 		channel = pubsub.ConversationName(parentID)
 	default:
 		return
+	}
+	if msg, ok := data.(*model.Message); ok && msg != nil {
+		cp := *msg
+		cp.ParentType = parentType
+		data = &cp
 	}
 	events.Publish(ctx, s.publisher, channel, eventType, data)
 }

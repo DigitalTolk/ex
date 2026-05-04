@@ -47,7 +47,8 @@ import { usePresence } from '@/context/PresenceContext';
 import { useUnread } from '@/context/UnreadContext';
 import { useUserChannels } from '@/hooks/useChannels';
 import { useUserConversations } from '@/hooks/useConversations';
-import { useUserThreads, hasUnreadActivity } from '@/hooks/useThreads';
+import { getSeenMap, THREAD_SEEN_CHANGED_EVENT, unreadThreadIDs, useUserThreads } from '@/hooks/useThreads';
+import { useUserState } from '@/hooks/useUserState';
 import { useDrafts } from '@/hooks/useDrafts';
 import { useCategories, useCreateCategory, useDeleteCategory, useFavoriteChannel, useSetCategory, useSetConversationCategory, useReorderCategories } from '@/hooks/useSidebar';
 import { groupSidebarItems, SidebarSectionKeys, type SidebarItem, type ConversationSidebarSort } from '@/lib/sidebar-groups';
@@ -400,10 +401,11 @@ function PragmaticConversationRow({
 
 export function Sidebar({ onClose }: SidebarProps) {
   const { user, logout } = useAuth();
-  const { unreadChannels, unreadConversations, hiddenConversations, hideConversation } = useUnread();
+  const { unreadChannels, unreadConversations, unreadThreadNotifications, hiddenConversations, hideConversation } = useUnread();
   const { data: channels } = useUserChannels();
   const { data: conversations } = useUserConversations();
   const { data: threads } = useUserThreads();
+  const { data: userState } = useUserState();
   const { data: drafts } = useDrafts();
   const { data: categories } = useCategories();
   const createCategory = useCreateCategory();
@@ -449,12 +451,31 @@ export function Sidebar({ onClose }: SidebarProps) {
   // replaces window.confirm so the prompt fits the rest of the app's
   // visual language (and is mockable in tests).
   const [categoryToDelete, setCategoryToDelete] = useState<{ id: string; title: string } | null>(null);
+  const [localSeenMap, setLocalSeenMap] = useState(() => getSeenMap());
+
+  useEffect(() => {
+    const handleSeenChange = () => setLocalSeenMap(getSeenMap());
+    window.addEventListener(THREAD_SEEN_CHANGED_EVENT, handleSeenChange);
+    return () => window.removeEventListener(THREAD_SEEN_CHANGED_EVENT, handleSeenChange);
+  }, []);
 
   const visibleConversations = useMemo(
-    () => conversations?.filter((c) => !hiddenConversations.has(c.conversationID)) ?? [],
-    [conversations, hiddenConversations],
+    () => {
+      const hidden = new Set([...(userState?.hiddenConversations ?? []), ...hiddenConversations]);
+      return conversations?.filter((c) => !hidden.has(c.conversationID)) ?? [];
+    },
+    [conversations, hiddenConversations, userState?.hiddenConversations],
   );
-  const hasThreadUpdates = (threads ?? []).some((t) => hasUnreadActivity(t));
+  const hasThreadUpdates = useMemo(
+    () =>
+      unreadThreadIDs(
+        threads ?? [],
+        userState?.threadNotifications ?? [],
+        unreadThreadNotifications ?? new Set(),
+        { ...(userState?.threadSeen ?? {}), ...localSeenMap },
+      ).size > 0,
+    [localSeenMap, threads, unreadThreadNotifications, userState?.threadNotifications, userState?.threadSeen],
+  );
   const draftCount = drafts?.length ?? 0;
 
   const sidebarSections = useMemo(
@@ -511,6 +532,11 @@ export function Sidebar({ onClose }: SidebarProps) {
 
   function setAboutOpenAndClearUserFocus(open: boolean) {
     setAboutOpen(open);
+    scheduleClearUserMenuFocus();
+  }
+
+  function setUserMenuModalOpen(setOpen: (open: boolean) => void, open: boolean) {
+    setOpen(open);
     scheduleClearUserMenuFocus();
   }
 
@@ -1232,22 +1258,22 @@ export function Sidebar({ onClose }: SidebarProps) {
               <ChevronDown className="h-4 w-4 text-gray-400" />
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start" className="w-48">
-            <DropdownMenuItem onClick={() => setEditProfileOpen(true)}>
+            <DropdownMenuItem onClick={() => setUserMenuModalOpen(setEditProfileOpen, true)}>
               <UserIcon className="mr-2 h-4 w-4" />
               Edit profile
             </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => setStatusOpen(true)}>
+            <DropdownMenuItem onClick={() => setUserMenuModalOpen(setStatusOpen, true)}>
               <CalendarClock className="mr-2 h-4 w-4" />
               Set status
             </DropdownMenuItem>
             {isAdmin(user?.systemRole) && (
-              <DropdownMenuItem onClick={() => setInviteOpen(true)}>
+              <DropdownMenuItem onClick={() => setUserMenuModalOpen(setInviteOpen, true)}>
                 <UserPlus className="mr-2 h-4 w-4" />
                 Invite people
               </DropdownMenuItem>
             )}
             {!isGuest(user?.systemRole) && (
-              <DropdownMenuItem onClick={() => setEmojiManagerOpen(true)}>
+              <DropdownMenuItem onClick={() => setUserMenuModalOpen(setEmojiManagerOpen, true)}>
                 <Smile className="mr-2 h-4 w-4" />
                 Custom emojis
               </DropdownMenuItem>
@@ -1427,12 +1453,13 @@ export function Sidebar({ onClose }: SidebarProps) {
                       const ch = item.channel;
                       const isActive =
                         location.pathname === `/channel/${slugify(ch.channelName)}`;
-                      return isActive || (!ch.muted && unreadChannels.has(ch.channelID));
+                      const hasNotification = (userState?.channelNotifications ?? []).includes(ch.channelID);
+                      return isActive || (!ch.muted && (unreadChannels.has(ch.channelID) || hasNotification));
                     }
                     const conv = item.conversation;
                     const isActive =
                       location.pathname === `/conversation/${conv.conversationID}`;
-                    return isActive || unreadConversations.has(conv.conversationID);
+                    return isActive || conv.unread || unreadConversations.has(conv.conversationID);
                   })
                 : section.items;
 
@@ -1580,7 +1607,10 @@ export function Sidebar({ onClose }: SidebarProps) {
                               {(dragProps) => (
                                 <ChannelRow
                                   channel={item.channel}
-                                  hasUnread={unreadChannels.has(item.channel.channelID)}
+                                  hasUnread={
+                                    unreadChannels.has(item.channel.channelID) ||
+                                    (userState?.channelNotifications ?? []).includes(item.channel.channelID)
+                                  }
                                   onClose={onClose}
                                   draggable
                                   suppressNavigation={suppressChannelNavigationID === item.channel.channelID}
@@ -1614,7 +1644,7 @@ export function Sidebar({ onClose }: SidebarProps) {
                               {(dragProps) => (
                                 <ConversationRow
                                   conversation={conv}
-                                  hasUnread={unreadConversations.has(conv.conversationID)}
+                                  hasUnread={!!conv.unread || unreadConversations.has(conv.conversationID)}
                                   dmAvatarURL={dmAvatarURL}
                                   dmUserStatus={dmUserStatus}
                                   dmOnline={dmOnline}
@@ -1630,7 +1660,7 @@ export function Sidebar({ onClose }: SidebarProps) {
                           ) : (
                             <ConversationRow
                               conversation={conv}
-                              hasUnread={unreadConversations.has(conv.conversationID)}
+                              hasUnread={!!conv.unread || unreadConversations.has(conv.conversationID)}
                               dmAvatarURL={dmAvatarURL}
                               dmUserStatus={dmUserStatus}
                               dmOnline={dmOnline}
@@ -1666,14 +1696,14 @@ export function Sidebar({ onClose }: SidebarProps) {
         open={createChannelOpen}
         onOpenChange={setCreateChannelOpen}
       />
-      <InviteDialog open={inviteOpen} onOpenChange={setInviteOpen} />
-      <EditProfileDialog open={editProfileOpen} onOpenChange={setEditProfileOpen} />
+      <InviteDialog open={inviteOpen} onOpenChange={(open) => setUserMenuModalOpen(setInviteOpen, open)} />
+      <EditProfileDialog open={editProfileOpen} onOpenChange={(open) => setUserMenuModalOpen(setEditProfileOpen, open)} />
       <UserStatusDialog
         key={`${user?.id ?? ''}:${user?.userStatus?.emoji ?? ''}:${user?.userStatus?.text ?? ''}:${user?.userStatus?.clearAt ?? ''}`}
         open={statusOpen}
-        onOpenChange={setStatusOpen}
+        onOpenChange={(open) => setUserMenuModalOpen(setStatusOpen, open)}
       />
-      <EmojiManagerDialog open={emojiManagerOpen} onOpenChange={setEmojiManagerOpen} />
+      <EmojiManagerDialog open={emojiManagerOpen} onOpenChange={(open) => setUserMenuModalOpen(setEmojiManagerOpen, open)} />
       <AboutDialog
         open={aboutOpen}
         onOpenChange={setAboutOpenAndClearUserFocus}

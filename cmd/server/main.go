@@ -72,6 +72,7 @@ func main() {
 	conversationStore := handler.NewConversationStoreAdapter(store.NewConversationStore(db))
 	messageStore := handler.NewMessageStoreAdapter(store.NewMessageStore(db))
 	threadFollowStore := handler.NewThreadFollowStoreAdapter(store.NewThreadFollowStore(db))
+	userStateStore := handler.NewUserStateStoreAdapter(store.NewUserStateStore(db))
 	inviteStore := handler.NewInviteStoreAdapter(store.NewInviteStore(db))
 	tokenStore := handler.NewTokenStoreAdapter(store.NewTokenStore(db))
 	emojiStore := store.NewEmojiStore(db)
@@ -131,7 +132,10 @@ func main() {
 	convSvc := service.NewConversationService(conversationStore, userStore, redisCache, brokerAdapter, redisPubSub)
 	messageSvc := service.NewMessageService(messageStore, membershipStore, conversationStore, redisPubSub, brokerAdapter)
 	messageSvc.SetThreadFollowStore(threadFollowStore)
+	messageSvc.SetUserStateStore(userStateStore)
 	messageSvc.SetActivator(convSvc)
+	messageSvc.SetConversationUnreadTracker(convSvc)
+	userStateSvc := service.NewUserStateService(userStateStore, redisPubSub)
 	emojiSvc := service.NewEmojiService(emojiStore, userStore, redisPubSub)
 	if s3Client != nil {
 		emojiSvc.SetSigner(s3Client)
@@ -148,6 +152,7 @@ func main() {
 	notificationSvc := service.NewNotificationService(redisPubSub, membershipStore, conversationStore, channelStore, userStore, messageStore)
 	notificationSvc.SetPresence(presenceSvc)
 	notificationSvc.SetThreadFollowStore(threadFollowStore)
+	notificationSvc.SetUserStateService(userStateSvc)
 	messageSvc.SetNotifier(notificationSvc)
 	settingsSvc := service.NewSettingsService(store.NewSettingsStore(db))
 	attachmentSvc.SetUploadLimits(settingsSvc)
@@ -155,6 +160,7 @@ func main() {
 	// ------------------------------------------------------------------ Handlers
 	authH := handler.NewAuthHandler(authSvc, jwtMgr)
 	userH := handler.NewUserHandler(userSvc, s3Client)
+	userStateH := handler.NewUserStateHandler(userStateSvc, messageSvc, convSvc)
 	channelH := handler.NewChannelHandler(channelSvc, messageSvc)
 	convH := handler.NewConversationHandler(convSvc, messageSvc)
 	wsH := handler.NewWSHandler(broker, channelSvc, convSvc, presenceSvc)
@@ -248,7 +254,7 @@ func main() {
 	}
 	unfurlSvc.SetMediaURLCache(redisCache)
 	unfurlH := handler.NewUnfurlHandler(unfurlSvc)
-	router := handler.NewRouter(authH, userH, channelH, convH, wsH, uploadH, emojiH, presenceH, attachmentH, adminH, threadH, draftH, versionH, unfurlH, sidebarH, searchH, jwtMgr, frontendDist, appVersion, allowOrigins)
+	router := handler.NewRouter(authH, userH, userStateH, channelH, convH, wsH, uploadH, emojiH, presenceH, attachmentH, adminH, threadH, draftH, versionH, unfurlH, sidebarH, searchH, jwtMgr, frontendDist, appVersion, allowOrigins)
 
 	// ------------------------------------------------------------------ Server
 	srv := &http.Server{

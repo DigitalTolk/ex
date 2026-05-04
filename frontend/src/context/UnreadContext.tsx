@@ -1,12 +1,18 @@
-import { createContext, useContext, useState, useCallback, useRef, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useState, useCallback, useRef, type ReactNode } from 'react';
 import { readJSON, writeJSON } from '@/lib/storage';
+import { apiFetch } from '@/lib/api';
+import { THREAD_SEEN_CHANGED_EVENT } from '@/hooks/useThreads';
 
 interface UnreadState {
   unreadChannels: Set<string>;
+  unreadChannelNotifications: Set<string>;
   unreadConversations: Set<string>;
+  unreadThreadNotifications: Set<string>;
   hiddenConversations: Set<string>;
   markChannelUnread: (channelId: string) => void;
+  markChannelNotificationUnread: (channelId: string) => void;
   markConversationUnread: (conversationId: string) => void;
+  markThreadNotificationUnread: (threadRootId: string) => void;
   clearChannelUnread: (channelId: string) => void;
   clearConversationUnread: (conversationId: string) => void;
   hideConversation: (id: string) => void;
@@ -22,6 +28,13 @@ interface UnreadState {
 const UnreadContext = createContext<UnreadState | undefined>(undefined);
 
 const HIDDEN_KEY = 'hidden_conversations';
+export const USER_STATE_CHANGED_EVENT = 'ex:user-state-changed';
+
+function notifyUserStateChanged() {
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new Event(USER_STATE_CHANGED_EVENT));
+  }
+}
 
 function loadHiddenConversations(): Set<string> {
   return new Set(readJSON<string[]>(HIDDEN_KEY, []));
@@ -33,7 +46,9 @@ function persistHiddenConversations(set: Set<string>) {
 
 export function UnreadProvider({ children }: { children: ReactNode }) {
   const [unreadChannels, setUnreadChannels] = useState<Set<string>>(new Set());
+  const [unreadChannelNotifications, setUnreadChannelNotifications] = useState<Set<string>>(new Set());
   const [unreadConversations, setUnreadConversations] = useState<Set<string>>(new Set());
+  const [unreadThreadNotifications, setUnreadThreadNotifications] = useState<Set<string>>(new Set());
   const [hiddenConversations, setHiddenConversations] = useState<Set<string>>(loadHiddenConversations);
   // Refs (not state) so updates from onMessageNew callbacks see the latest
   // active scope without re-creating the WS handlers on every navigation.
@@ -44,12 +59,25 @@ export function UnreadProvider({ children }: { children: ReactNode }) {
     if (activeChannelRef.current === id) return;
     setUnreadChannels(prev => new Set(prev).add(id));
   }, []);
+  const markChannelNotificationUnread = useCallback((id: string) => {
+    if (activeChannelRef.current === id) return;
+    setUnreadChannelNotifications(prev => new Set(prev).add(id));
+    notifyUserStateChanged();
+  }, []);
   const markConversationUnread = useCallback((id: string) => {
     if (activeConvRef.current === id) return;
     setUnreadConversations(prev => new Set(prev).add(id));
   }, []);
+  const markThreadNotificationUnread = useCallback((id: string) => {
+    setUnreadThreadNotifications(prev => new Set(prev).add(id));
+    notifyUserStateChanged();
+  }, []);
   const clearChannelUnread = useCallback((id: string) => {
     setUnreadChannels(prev => { const next = new Set(prev); next.delete(id); return next; });
+    setUnreadChannelNotifications(prev => { const next = new Set(prev); next.delete(id); return next; });
+    void apiFetch<void>(`/api/v1/user-state/channels/${encodeURIComponent(id)}/notification`, { method: 'DELETE' })
+      .catch(() => undefined)
+      .finally(notifyUserStateChanged);
   }, []);
   const clearConversationUnread = useCallback((id: string) => {
     setUnreadConversations(prev => { const next = new Set(prev); next.delete(id); return next; });
@@ -59,6 +87,9 @@ export function UnreadProvider({ children }: { children: ReactNode }) {
     setHiddenConversations(prev => {
       const next = new Set(prev).add(id);
       persistHiddenConversations(next);
+      void apiFetch<void>(`/api/v1/user-state/conversations/${encodeURIComponent(id)}/hidden`, { method: 'PUT' })
+        .catch(() => undefined)
+        .finally(notifyUserStateChanged);
       return next;
     });
   }, []);
@@ -69,6 +100,9 @@ export function UnreadProvider({ children }: { children: ReactNode }) {
       const next = new Set(prev);
       next.delete(id);
       persistHiddenConversations(next);
+      void apiFetch<void>(`/api/v1/user-state/conversations/${encodeURIComponent(id)}/hidden`, { method: 'DELETE' })
+        .catch(() => undefined)
+        .finally(notifyUserStateChanged);
       return next;
     });
   }, []);
@@ -77,6 +111,10 @@ export function UnreadProvider({ children }: { children: ReactNode }) {
     activeChannelRef.current = id;
     if (id) {
       setUnreadChannels(prev => { const next = new Set(prev); next.delete(id); return next; });
+      setUnreadChannelNotifications(prev => { const next = new Set(prev); next.delete(id); return next; });
+      void apiFetch<void>(`/api/v1/user-state/channels/${encodeURIComponent(id)}/notification`, { method: 'DELETE' })
+        .catch(() => undefined)
+        .finally(notifyUserStateChanged);
     }
   }, []);
   const setActiveConversation = useCallback((id: string | null) => {
@@ -88,13 +126,32 @@ export function UnreadProvider({ children }: { children: ReactNode }) {
   const isActiveChannel = useCallback((id: string) => activeChannelRef.current === id, []);
   const isActiveConversation = useCallback((id: string) => activeConvRef.current === id, []);
 
+  useEffect(() => {
+    const handleThreadSeen = (event: Event) => {
+      const threadRootID = (event as CustomEvent<{ threadRootID?: string }>).detail?.threadRootID;
+      if (!threadRootID) return;
+      setUnreadThreadNotifications(prev => {
+        if (!prev.has(threadRootID)) return prev;
+        const next = new Set(prev);
+        next.delete(threadRootID);
+        return next;
+      });
+    };
+    window.addEventListener(THREAD_SEEN_CHANGED_EVENT, handleThreadSeen);
+    return () => window.removeEventListener(THREAD_SEEN_CHANGED_EVENT, handleThreadSeen);
+  }, []);
+
   return (
     <UnreadContext.Provider value={{
       unreadChannels,
+      unreadChannelNotifications,
       unreadConversations,
+      unreadThreadNotifications,
       hiddenConversations,
       markChannelUnread,
+      markChannelNotificationUnread,
       markConversationUnread,
+      markThreadNotificationUnread,
       clearChannelUnread,
       clearConversationUnread,
       hideConversation,

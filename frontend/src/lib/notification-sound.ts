@@ -12,7 +12,7 @@ let pendingPing = false;
 
 function ensureContext(): AudioContext | null {
   if (typeof window === 'undefined') return null;
-  if (ctx) return ctx;
+  if (ctx && ctx.state !== 'closed') return ctx;
   const Ctor =
     window.AudioContext ||
     (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
@@ -52,8 +52,14 @@ function schedulePendingTone(c: AudioContext): void {
 }
 
 function resumeThenMaybePlay(c: AudioContext): void {
-  if (c.state !== 'suspended') {
+  if (c.state === 'running') {
     schedulePendingTone(c);
+    return;
+  }
+  if (c.state === 'closed') {
+    ctx = null;
+    const next = ensureContext();
+    if (next) resumeThenMaybePlay(next);
     return;
   }
   if (!resumeInFlight) {
@@ -87,9 +93,10 @@ export function playNotificationPing(): void {
   installUnlockListeners();
   const c = ensureContext();
   if (!c) return;
-  // Suspended context (browser autoplay policy / fresh ctx pre-gesture)
-  // must finish resume() before we can schedule — see scheduleTone.
-  if (c.state === 'suspended') {
+  // Suspended/interrupted contexts (browser autoplay policy, fresh ctx
+  // pre-gesture, or Safari temporarily interrupting audio) must finish
+  // resume() before we can schedule — see scheduleTone.
+  if (c.state !== 'running') {
     pendingPing = true;
     resumeThenMaybePlay(c);
     return;

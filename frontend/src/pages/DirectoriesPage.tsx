@@ -252,6 +252,8 @@ function MembersTab({ isAdmin, currentUserId }: MembersTabProps) {
   }
 
   const onlineCount = users.reduce((n, u) => (isOnline(u.id) ? n + 1 : n), 0);
+  const memberGridClassName =
+    'grid grid-cols-[repeat(auto-fill,minmax(16rem,calc((100%_-_3rem)/5)))] justify-start gap-3';
 
   return (
     <>
@@ -273,7 +275,7 @@ function MembersTab({ isAdmin, currentUserId }: MembersTabProps) {
       )}
 
       {isLoading && (
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5" data-testid="members-grid-loading">
+        <div className={memberGridClassName} data-testid="members-grid-loading">
           {Array.from({ length: 10 }).map((_, i) => (
             <Skeleton key={i} className="aspect-[4/5] w-full" />
           ))}
@@ -290,7 +292,7 @@ function MembersTab({ isAdmin, currentUserId }: MembersTabProps) {
         </p>
       )}
 
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5" data-testid="members-grid">
+      <div className={memberGridClassName} data-testid="members-grid">
         {!isLoading && users.map((u) => {
           const online = isOnline(u.id);
           const isSelf = u.id === currentUserId;
@@ -335,7 +337,12 @@ function MembersTab({ isAdmin, currentUserId }: MembersTabProps) {
                   )}
                 </div>
                 <p className="truncate text-sm text-muted-foreground">
-                  <a className="text-sm hover:underline" href={`mailto:${u.email}`}>{u.email}</a>
+                  <a
+                    className="text-sm text-link transition-colors hover:text-link/80"
+                    href={`mailto:${u.email}`}
+                  >
+                    {u.email}
+                  </a>
                 </p>
                 <div className="flex flex-wrap items-center gap-1">
                   {u.status === 'deactivated' && (

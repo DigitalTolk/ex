@@ -97,6 +97,7 @@ describe('NotificationProvider', () => {
   });
 
   afterEach(() => {
+    delete (window as Window & { __EX_DESKTOP__?: boolean }).__EX_DESKTOP__;
     if (origNotification) {
       Object.defineProperty(window, 'Notification', { value: origNotification, configurable: true });
     }
@@ -118,6 +119,21 @@ describe('NotificationProvider', () => {
     expect(opts.tag).toBeUndefined();
     // App logo, not Chrome's default.
     expect(opts.icon).toBe('/logo.svg');
+    expect(opts.silent).toBe(false);
+  });
+
+  it('omits the web notification icon inside the desktop shell', () => {
+    Object.defineProperty(window, '__EX_DESKTOP__', {
+      value: true,
+      configurable: true,
+    });
+    renderProbe();
+    act(() => {
+      dispatchSpy!(samplePayload);
+    });
+    expect(notificationCtor).toHaveBeenCalledTimes(1);
+    const opts = notificationCtor.mock.calls[0][1] as NotificationOptions;
+    expect(opts.icon).toBeUndefined();
   });
 
   it('suppresses conversation-message notifications when that DM is already on screen', () => {
@@ -318,6 +334,21 @@ describe('NotificationProvider', () => {
     });
     expect(playMock).toHaveBeenCalledTimes(1);
     expect(notificationCtor).not.toHaveBeenCalled();
+  });
+
+  it('keeps browser notifications silent when only in-app sound is disabled', () => {
+    localStorage.setItem(
+      'ex.notifications.prefs.v1',
+      JSON.stringify({ soundEnabled: false, browserEnabled: true }),
+    );
+    renderProbe();
+    act(() => {
+      dispatchSpy!(samplePayload);
+    });
+    expect(playMock).not.toHaveBeenCalled();
+    expect(notificationCtor).toHaveBeenCalledTimes(1);
+    const opts = notificationCtor.mock.calls[0][1] as NotificationOptions;
+    expect(opts.silent).toBe(true);
   });
 
   it('reports permission=unsupported when window.Notification is missing', () => {

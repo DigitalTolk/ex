@@ -114,6 +114,14 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
   const lastTypingPingRef = useRef(0);
   const deleteDraft = useDeleteDraftAttachment();
   const mountedDraftChangeRef = useRef(false);
+  const locallyEditedDraftRef = useRef(false);
+  const applyingServerDraftRef = useRef(false);
+  const focusKeyMountedRef = useRef(false);
+  const latestDraftValueRef = useRef<MessageInputValue>({
+    body: initialBody,
+    attachmentIDs: initialDrafts.map((d) => d.id),
+  });
+  const onDraftChangeRef = useRef(onDraftChange);
   const initialDraftKey = `${initialBody}\u0000${initialDrafts.map((d) => d.id).join('\u0000')}`;
   const appliedInitialDraftRef = useRef(initialDraftKey);
   // Toolbar pressed-state tracking. Driven by Lexical's
@@ -127,6 +135,28 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
   const { data: settings } = useWorkspaceSettings();
   const giphyAPIKey = settings?.giphyAPIKey?.trim() ?? '';
   const giphyEnabled = (settings?.giphyEnabled ?? false) && giphyAPIKey !== '';
+
+  const hasInitialDraftValue = initialBody.trim() !== '' || initialDrafts.length > 0;
+
+  useEffect(() => {
+    latestDraftValueRef.current = { body, attachmentIDs: drafts.map((d) => d.id) };
+  }, [body, drafts]);
+
+  useEffect(() => {
+    onDraftChangeRef.current = onDraftChange;
+  }, [onDraftChange]);
+
+  const flushDraft = useCallback(() => {
+    if (variant !== 'composer') return;
+    const value = latestDraftValueRef.current;
+    const shouldFlush =
+      value.body.trim() !== '' ||
+      value.attachmentIDs.length > 0 ||
+      hasInitialDraftValue ||
+      mountedDraftChangeRef.current;
+    if (!shouldFlush) return;
+    onDraftChangeRef.current?.(value);
+  }, [hasInitialDraftValue, variant]);
 
   // Link dialog state. Opening the dialog calls editor.beginLinkEdit
   // which captures the current selection (Lexical loses selection when
@@ -204,6 +234,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
     // Prevent the just-sent server draft props from rehydrating while the
     // debounced empty-draft save/delete catches up.
     appliedInitialDraftRef.current = initialDraftKey;
+    locallyEditedDraftRef.current = true;
     setBody('');
     setDrafts([]);
     editorRef.current?.setMarkdown('');
@@ -213,26 +244,46 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
   useEffect(() => {
     if (variant !== 'composer') return;
     if (focusKey === undefined) return;
+    if (focusKeyMountedRef.current) {
+      flushDraft();
+    } else {
+      focusKeyMountedRef.current = true;
+    }
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setBody(initialBody);
+    applyingServerDraftRef.current = true;
     editorRef.current?.setMarkdown(initialBody);
+    queueMicrotask(() => {
+      applyingServerDraftRef.current = false;
+      if (initialBody || initialDrafts.length > 0) {
+        editorRef.current?.focusEnd?.();
+      }
+    });
     setDrafts(initialDrafts);
     appliedInitialDraftRef.current = initialDraftKey;
+    locallyEditedDraftRef.current = false;
     mountedDraftChangeRef.current = false;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [focusKey]);
+  }, [focusKey, flushDraft]);
 
   useEffect(() => {
     if (variant !== 'composer') return;
     if (!initialBody && initialDrafts.length === 0) return;
     if (initialDraftKey === appliedInitialDraftRef.current) return;
+    if (locallyEditedDraftRef.current) return;
     if (body !== '') return;
     if (drafts.length > 0) return;
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setBody(initialBody);
+    applyingServerDraftRef.current = true;
     editorRef.current?.setMarkdown(initialBody);
+    queueMicrotask(() => {
+      applyingServerDraftRef.current = false;
+      editorRef.current?.focusEnd?.();
+    });
     setDrafts(initialDrafts);
     appliedInitialDraftRef.current = initialDraftKey;
+    locallyEditedDraftRef.current = false;
     mountedDraftChangeRef.current = false;
   }, [initialBody, initialDraftKey, initialDrafts, body, drafts.length, variant]);
 
@@ -243,22 +294,29 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
       return;
     }
     const timeout = window.setTimeout(() => {
-      onDraftChange({ body, attachmentIDs: drafts.map((d) => d.id) });
+      onDraftChange(latestDraftValueRef.current);
     }, 600);
     return () => window.clearTimeout(timeout);
   }, [body, drafts, onDraftChange, variant]);
 
   useEffect(() => {
     return () => {
+      flushDraft();
       drafts.forEach((d) => d.localURL && URL.revokeObjectURL(d.localURL));
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [flushDraft]);
 
   useEffect(() => {
     if (focusKey === undefined) return;
-    queueMicrotask(() => editorRef.current?.focus());
-  }, [focusKey]);
+    queueMicrotask(() => {
+      if (initialBody || initialDrafts.length > 0) {
+        editorRef.current?.focusEnd?.();
+        return;
+      }
+      editorRef.current?.focus();
+    });
+  }, [focusKey, initialBody, initialDrafts.length]);
 
   // Refocus when an inline edit elsewhere finishes (cancel or submit).
   // Only composers that emit typing (i.e., the main / thread composer,
@@ -306,6 +364,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
     }
     if (files.length === 0) return;
     setIsUploading(true);
+    locallyEditedDraftRef.current = true;
 
     // Render a chip for every selected file *before* any network I/O so
     // the user sees N progress bars immediately instead of one-at-a-time
@@ -406,6 +465,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
   async function removeDraft(id: string) {
     const target = drafts.find((d) => d.id === id);
     if (target?.localURL) URL.revokeObjectURL(target.localURL);
+    locallyEditedDraftRef.current = true;
     setDrafts((d) => d.filter((x) => x.id !== id));
     try {
       await deleteDraft.mutateAsync(id);
@@ -498,6 +558,13 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
             ref={editorRef}
             initialBody={initialBody}
             onChange={(md) => {
+              if (!applyingServerDraftRef.current && md !== body) {
+                locallyEditedDraftRef.current = true;
+              }
+              latestDraftValueRef.current = {
+                body: md,
+                attachmentIDs: drafts.map((d) => d.id),
+              };
               setBody(md);
               emitTyping();
             }}

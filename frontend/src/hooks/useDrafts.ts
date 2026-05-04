@@ -20,12 +20,36 @@ export interface SaveDraftInput {
   attachmentIDs?: string[];
 }
 
+const suppressedSentDraftScopes = new Set<string>();
+
+function draftScopeKey(scope: DraftScope): string {
+  return `${scope.parentType}:${scope.parentID ?? ''}:${scope.parentMessageID ?? ''}`;
+}
+
+function isSuppressedSentDraft(draft: MessageDraft): boolean {
+  return suppressedSentDraftScopes.has(draftScopeKey(draft));
+}
+
+export function suppressSentDraft(scope: DraftScope) {
+  suppressedSentDraftScopes.add(draftScopeKey(scope));
+}
+
+export function restoreDraftScope(scope: DraftScope) {
+  suppressedSentDraftScopes.delete(draftScopeKey(scope));
+}
+
+export function restoreDraftScopeForContent(scope: DraftScope, value: { body: string; attachmentIDs?: string[] }) {
+  if (value.body !== '' || (value.attachmentIDs?.length ?? 0) > 0) {
+    restoreDraftScope(scope);
+  }
+}
+
 export function useDrafts() {
   return useQuery({
     queryKey: queryKeys.drafts(),
     queryFn: async () => {
       const res = await apiFetch<MessageDraft[]>('/api/v1/drafts');
-      return Array.isArray(res) ? res : [];
+      return Array.isArray(res) ? res.filter((draft) => !isSuppressedSentDraft(draft)) : [];
     },
     staleTime: 15_000,
   });

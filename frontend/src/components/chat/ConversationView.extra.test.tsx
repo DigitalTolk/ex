@@ -159,7 +159,10 @@ describe('ConversationView - extra coverage', () => {
     // Group title with no name → use participants — wait for it
     const inputs = await screen.findAllByPlaceholderText(/Message/);
     await user.type(inputs[0], 'hi all{enter}');
-    expect(mockSendMutate).toHaveBeenCalledWith({ body: 'hi all', attachmentIDs: [] });
+    expect(mockSendMutate).toHaveBeenCalledWith(
+      { body: 'hi all', attachmentIDs: [] },
+      expect.objectContaining({ onError: expect.any(Function) }),
+    );
   });
 
   it('renders group conversation with member toggle', async () => {

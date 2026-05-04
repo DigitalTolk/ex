@@ -29,9 +29,18 @@ import {
   parseServerVersion,
   parseTyping,
 } from '@/lib/ws-schemas';
+import { apiFetch } from '@/lib/api';
 
 export default function ChatPage() {
-  const { markChannelUnread, markConversationUnread, unhideConversation } = useUnread();
+  const {
+    markChannelUnread,
+    markChannelNotificationUnread,
+    clearConversationUnread,
+    isActiveConversation,
+    markConversationUnread,
+    markThreadNotificationUnread,
+    unhideConversation,
+  } = useUnread();
   const { user, logout, patchUser } = useAuth();
   const { setUserOnline } = usePresence();
   const { dispatch: dispatchNotification, setCurrentUserID } = useNotifications();
@@ -59,11 +68,35 @@ export default function ChatPage() {
       // up to 6s for the expiry to tick. Pass parentMessageID so a
       // thread reply clears the thread bucket (not the main one).
       clearTyping(parentID, authorID, parentMessageID ?? '');
+      const userChannels = queryClient.getQueryData<{ channelID: string }[]>(queryKeys.userChannels()) ?? [];
+      const userConversations = queryClient.getQueryData<{ conversationID: string }[]>(queryKeys.userConversations()) ?? [];
+      const isCachedChannel = userChannels.some((channel) => channel.channelID === parentID);
+      const isCachedConversation = userConversations.some((conv) => conv.conversationID === parentID);
+      const isChannelParent = msg.parentType === 'channel' || (!msg.parentType && isCachedChannel);
+      const isConversationParent =
+        msg.parentType === 'conversation' || (!msg.parentType && !isCachedChannel && isCachedConversation);
       if (authorID !== user?.id) {
-        markChannelUnread(parentID);
-        markConversationUnread(parentID);
+        if (isChannelParent) {
+          markChannelUnread(parentID);
+        } else if (isConversationParent) {
+          if (isActiveConversation(parentID)) {
+            clearConversationUnread(parentID);
+            void apiFetch<void>(`/api/v1/conversations/${encodeURIComponent(parentID)}/read`, { method: 'PUT' })
+              .catch(() => undefined)
+              .finally(() => {
+                queryClient.invalidateQueries({ queryKey: queryKeys.userConversations() });
+              });
+          } else {
+            markConversationUnread(parentID);
+            queryClient.invalidateQueries({ queryKey: queryKeys.userConversations() });
+          }
+        }
       }
-      unhideConversation(parentID);
+      if (isConversationParent) {
+        if (authorID === user?.id || !isActiveConversation(parentID)) {
+          unhideConversation(parentID);
+        }
+      }
       // Patch the message-list cache directly. invalidateQueries here
       // would walk forward from pages[0] and truncate deep-link page
       // chains (see appendMessageToCache). Thread replies don't touch
@@ -188,6 +221,7 @@ export default function ChatPage() {
       queryClient.invalidateQueries({ queryKey: queryKeys.userChannels() });
       queryClient.invalidateQueries({ queryKey: queryKeys.userConversations() });
       queryClient.invalidateQueries({ queryKey: queryKeys.sidebarCategories() });
+      queryClient.invalidateQueries({ queryKey: queryKeys.userState() });
     },
     onAttachmentDeleted: (data: unknown) => {
       const evt = parseAttachmentDeleted(data);
@@ -202,6 +236,13 @@ export default function ChatPage() {
     onNotification: (data: unknown) => {
       const n = data as NotificationPayload | undefined;
       if (!n || !n.kind) return;
+      if (n.parentMessageID) {
+        markThreadNotificationUnread(n.parentMessageID);
+        queryClient.invalidateQueries({ queryKey: queryKeys.userThreads() });
+        queryClient.invalidateQueries({ queryKey: queryKeys.userState() });
+      } else if (n.parentType === 'channel' && n.kind === 'mention') {
+        markChannelNotificationUnread(n.parentID);
+      }
       dispatchNotification(n);
     },
     onDraftUpdated: () => {

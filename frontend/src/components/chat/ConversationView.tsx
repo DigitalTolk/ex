@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
+import { useQueryClient } from '@tanstack/react-query';
 import { useUsersBatch } from '@/hooks/useUsersBatch';
 import { Header } from '@/components/layout/Header';
 import { MessageList } from './MessageList';
@@ -29,8 +30,18 @@ import { useTagState } from '@/context/TagSearchContext';
 import { TagSearchPanel } from '@/components/TagSearchPanel';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { useDeepLinkAnchor } from '@/hooks/useDeepLinkAnchor';
-import { useDeleteDraft, useDraftAttachmentChips, useDraftForScope, useSaveDraft } from '@/hooks/useDrafts';
+import {
+  restoreDraftScope,
+  restoreDraftScopeForContent,
+  suppressSentDraft,
+  useDeleteDraft,
+  useDraftAttachmentChips,
+  useDraftForScope,
+  useSaveDraft,
+} from '@/hooks/useDrafts';
 import { firstName } from '@/lib/format';
+import { apiFetch } from '@/lib/api';
+import { queryKeys } from '@/lib/query-keys';
 import type { Conversation } from '@/types';
 import type { UserMapEntry } from './MessageList';
 
@@ -70,6 +81,7 @@ function deriveConversationTitle(
 
 export function ConversationView() {
   const { id } = useParams<{ id: string }>();
+  const queryClient = useQueryClient();
   const [searchParams] = useSearchParams();
   const { user } = useAuth();
   const { clearConversationUnread, setActiveConversation } = useUnread();
@@ -102,6 +114,7 @@ export function ConversationView() {
   const handleDraftChange = useCallback(
     (value: { body: string; attachmentIDs: string[] }) => {
       if (!id) return;
+      restoreDraftScopeForContent(draftScope, value);
       saveDraftMutate({
         parentID: id,
         parentType: 'conversation',
@@ -109,17 +122,21 @@ export function ConversationView() {
         attachmentIDs: value.attachmentIDs,
       });
     },
-    [id, saveDraftMutate],
+    [id, draftScope, saveDraftMutate],
   );
   const handleSendMessage = useCallback(
     (value: { body: string; attachmentIDs: string[] }) => {
+      suppressSentDraft(draftScope);
       if (!draftID) {
-        sendMessage.mutate(value);
+        sendMessage.mutate(value, { onError: () => restoreDraftScope(draftScope) });
         return;
       }
-      sendMessage.mutate(value, { onSuccess: () => deleteDraftMutate(draftID) });
+      sendMessage.mutate(value, {
+        onSuccess: () => deleteDraftMutate(draftID),
+        onError: () => restoreDraftScope(draftScope),
+      });
     },
-    [sendMessage, draftID, deleteDraftMutate],
+    [sendMessage, draftScope, draftID, deleteDraftMutate],
   );
 
   useEffect(() => {
@@ -127,11 +144,14 @@ export function ConversationView() {
     clearConversationUnread(id);
     setActiveConversation(id);
     setActiveParent(id);
+    void apiFetch<void>(`/api/v1/conversations/${id}/read`, { method: 'PUT' }).finally(() => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.userConversations() });
+    });
     return () => {
       setActiveConversation(null);
       setActiveParent(null);
     };
-  }, [id, clearConversationUnread, setActiveConversation, setActiveParent]);
+  }, [id, clearConversationUnread, setActiveConversation, setActiveParent, queryClient]);
 
   const [threadRootID, setThreadRootID] = useState<string | null>(null);
   const inputRef = useRef<MessageInputHandle>(null);
@@ -176,8 +196,8 @@ export function ConversationView() {
 
   // Mark URL-driven threads as seen exactly once per change.
   useEffect(() => {
-    if (threadParam) markThreadSeen(threadParam);
-  }, [threadParam]);
+    if (threadParam && id) markThreadSeen(threadParam, new Date().toISOString(), { parentID: id, parentType: 'conversation' });
+  }, [threadParam, id]);
 
   // Opening a thread (via URL navigation, e.g. clicking a pinned
   // thread reply) must dismiss any other side panel — the local

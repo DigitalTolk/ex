@@ -57,6 +57,7 @@ describe('DraftsPage', () => {
     renderPage();
 
     const row = await screen.findByTestId('draft-row');
+    expect(screen.getByTestId('draft-parent-public-channel-icon')).toBeInTheDocument();
     expect(row).toHaveTextContent('~Team Room');
     expect(row).toHaveTextContent('thread');
     expect(row).toHaveTextContent('finish this thought');
@@ -97,7 +98,7 @@ describe('DraftsPage', () => {
       if (path === '/api/v1/drafts') return draftsPromise;
       if (path === '/api/v1/channels') return [];
       if (path === '/api/v1/conversations') {
-        return [{ conversationID: 'dm-1', displayName: 'Ada Lovelace' }];
+        return [{ conversationID: 'dm-1', type: 'dm', displayName: 'Ada Lovelace' }];
       }
       return undefined;
     });
@@ -127,6 +128,8 @@ describe('DraftsPage', () => {
     ]);
 
     expect(await screen.findByText('Ada Lovelace')).toBeInTheDocument();
+    expect(screen.getByTestId('draft-parent-dm-icon')).toBeInTheDocument();
+    expect(screen.getByTestId('draft-parent-public-channel-icon')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /ada lovelace/i })).toHaveAttribute(
       'href',
       '/conversation/dm-1',
@@ -137,6 +140,60 @@ describe('DraftsPage', () => {
       'href',
       '/channel/ch-missing',
     );
+  });
+
+  it('shows private channel and group conversation icons', async () => {
+    vi.mocked(apiFetch).mockImplementation(async (path) => {
+      if (path === '/api/v1/drafts') {
+        return [
+          {
+            id: 'draft-private',
+            userID: 'u-1',
+            parentID: 'ch-private',
+            parentType: 'channel',
+            body: 'private note',
+            updatedAt: '2026-05-03T12:00:00Z',
+            createdAt: '2026-05-03T11:00:00Z',
+          },
+          {
+            id: 'draft-group',
+            userID: 'u-1',
+            parentID: 'group-1',
+            parentType: 'conversation',
+            body: 'group note',
+            updatedAt: '2026-05-03T12:05:00Z',
+            createdAt: '2026-05-03T11:05:00Z',
+          },
+        ];
+      }
+      if (path === '/api/v1/channels') {
+        return [
+          {
+            channelID: 'ch-private',
+            channelName: 'secret',
+            channelType: 'private',
+            role: 1,
+          },
+        ];
+      }
+      if (path === '/api/v1/conversations') {
+        return [
+          {
+            conversationID: 'group-1',
+            type: 'group',
+            displayName: 'Project Group',
+          },
+        ];
+      }
+      return undefined;
+    });
+
+    renderPage();
+
+    expect(await screen.findByText('~secret')).toBeInTheDocument();
+    expect(screen.getByText('Project Group')).toBeInTheDocument();
+    expect(screen.getByTestId('draft-parent-private-channel-icon')).toBeInTheDocument();
+    expect(screen.getByTestId('draft-parent-group-icon')).toBeInTheDocument();
   });
 
   it('uses the conversation fallback label and cancels draft deletion without mutating', async () => {

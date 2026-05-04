@@ -184,6 +184,143 @@ describe('WysiwygEditor', () => {
     });
   });
 
+  it('Backspace clears selected content that contains a user mention', async () => {
+    const ref = createRef<WysiwygEditorHandle>();
+    renderEditor({ ref, initialBody: 'remove @[u-bob|Bob]' });
+    await waitFor(() => expect(ref.current?.getElement()?.textContent).toContain('@Bob'));
+
+    const editor = getEditor();
+    const range = document.createRange();
+    range.selectNodeContents(editor);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+
+    fireEvent.keyDown(editor, { key: 'Backspace' });
+
+    await waitFor(() => {
+      expect(ref.current!.getMarkdown().trim()).toBe('');
+      expect(ref.current!.getElement()?.textContent ?? '').not.toContain('@Bob');
+    });
+  });
+
+  it('Backspace removes a user mention when the caret is directly after it', async () => {
+    const ref = createRef<WysiwygEditorHandle>();
+    renderEditor({ ref, initialBody: '@[u-bob|Bob] ' });
+    await waitFor(() => expect(ref.current?.getElement()?.textContent).toContain('@Bob'));
+
+    const editor = getEditor();
+    const mention = editor.querySelector('[data-user-id="u-bob"]');
+    expect(mention).not.toBeNull();
+    const range = document.createRange();
+    range.setStartAfter(mention!);
+    range.collapse(true);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+
+    fireEvent.keyDown(editor, { key: 'Backspace' });
+
+    await waitFor(() => {
+      expect(ref.current!.getMarkdown()).not.toContain('@[u-bob|Bob]');
+      expect(ref.current!.getElement()?.textContent ?? '').not.toContain('@Bob');
+    });
+  });
+
+  it('Backspace removes a user mention from the start of the following text node', async () => {
+    const ref = createRef<WysiwygEditorHandle>();
+    renderEditor({ ref, initialBody: '@[u-bob|Bob] ' });
+    await waitFor(() => expect(ref.current?.getElement()?.textContent).toContain('@Bob'));
+
+    const editor = getEditor();
+    const mention = editor.querySelector('[data-user-id="u-bob"]');
+    expect(mention).not.toBeNull();
+    const trailingText = mention!.nextSibling?.firstChild;
+    expect(trailingText?.nodeType).toBe(Node.TEXT_NODE);
+    const range = document.createRange();
+    range.setStart(trailingText!, 0);
+    range.collapse(true);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+
+    fireEvent.keyDown(editor, { key: 'Backspace' });
+
+    await waitFor(() => {
+      expect(ref.current!.getMarkdown()).not.toContain('@[u-bob|Bob]');
+      expect(ref.current!.getElement()?.textContent ?? '').not.toContain('@Bob');
+    });
+  });
+
+  it('Delete removes a user mention when the caret is directly before it', async () => {
+    const ref = createRef<WysiwygEditorHandle>();
+    renderEditor({ ref, initialBody: '@[u-bob|Bob]' });
+    await waitFor(() => expect(ref.current?.getElement()?.textContent).toContain('@Bob'));
+
+    const editor = getEditor();
+    const paragraph = editor.querySelector('p');
+    expect(paragraph).not.toBeNull();
+    const range = document.createRange();
+    range.setStart(paragraph!, 0);
+    range.collapse(true);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+
+    fireEvent.keyDown(editor, { key: 'Delete' });
+
+    await waitFor(() => {
+      expect(ref.current!.getMarkdown()).not.toContain('@[u-bob|Bob]');
+      expect(ref.current!.getElement()?.textContent ?? '').not.toContain('@Bob');
+    });
+  });
+
+  it('Delete removes a user mention from the end of the preceding text node', async () => {
+    const ref = createRef<WysiwygEditorHandle>();
+    renderEditor({ ref, initialBody: 'hi @[u-bob|Bob]' });
+    await waitFor(() => expect(ref.current?.getElement()?.textContent).toContain('@Bob'));
+
+    const editor = getEditor();
+    const firstText = editor.querySelector('[data-lexical-text="true"]')?.firstChild;
+    expect(firstText?.nodeType).toBe(Node.TEXT_NODE);
+    const range = document.createRange();
+    range.setStart(firstText!, firstText!.textContent?.length ?? 0);
+    range.collapse(true);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+
+    fireEvent.keyDown(editor, { key: 'Delete' });
+
+    await waitFor(() => {
+      expect(ref.current!.getMarkdown()).not.toContain('@[u-bob|Bob]');
+      expect(ref.current!.getElement()?.textContent ?? '').not.toContain('@Bob');
+    });
+  });
+
+  it('Backspace removes a channel mention when the caret is directly after it', async () => {
+    const ref = createRef<WysiwygEditorHandle>();
+    renderEditor({ ref, initialBody: '~[ch-general|general] ' });
+    await waitFor(() => expect(ref.current?.getElement()?.textContent).toContain('~general'));
+
+    const editor = getEditor();
+    const mention = editor.querySelector('[data-channel-id="ch-general"]');
+    expect(mention).not.toBeNull();
+    const range = document.createRange();
+    range.setStartAfter(mention!);
+    range.collapse(true);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+
+    fireEvent.keyDown(editor, { key: 'Backspace' });
+
+    await waitFor(() => {
+      expect(ref.current!.getMarkdown()).not.toContain('~[ch-general|general]');
+      expect(ref.current!.getElement()?.textContent ?? '').not.toContain('~general');
+    });
+  });
+
   it('Backspace does not run the full-clear path for a partial selection', async () => {
     const ref = createRef<WysiwygEditorHandle>();
     renderEditor({ ref, initialBody: 'keep most text' });
@@ -223,6 +360,19 @@ describe('WysiwygEditor', () => {
     await waitFor(() => expect(ref.current).not.toBeNull());
     expect(() => ref.current!.focus()).not.toThrow();
     expect(ref.current!.getElement()).toBe(getEditor());
+  });
+
+  it('focusEnd() parks inserted text at the end of existing content', async () => {
+    const ref = createRef<WysiwygEditorHandle>();
+    renderEditor({ ref, initialBody: 'draft body' });
+    await waitFor(() => expect(ref.current).not.toBeNull());
+
+    ref.current!.focusEnd();
+    ref.current!.insertText(' plus');
+
+    await waitFor(() => {
+      expect(ref.current!.getMarkdown()).toBe('draft body plus');
+    });
   });
 
   it('renders a <blockquote> in the DOM when initial markdown is "> hi"', async () => {

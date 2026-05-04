@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render as rtlRender, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render as rtlRender, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MessageInput } from './MessageInput';
@@ -17,6 +17,10 @@ vi.mock('@/hooks/useSettings', () => ({
 function render(ui: React.ReactElement) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return rtlRender(<QueryClientProvider client={qc}>{ui}</QueryClientProvider>);
+}
+
+function flushMicrotasks() {
+  return new Promise<void>((resolve) => queueMicrotask(resolve));
 }
 
 describe('MessageInput', () => {
@@ -83,6 +87,85 @@ describe('MessageInput', () => {
     expect(onSend).toHaveBeenCalled();
     await waitFor(() => {
       expect((editor.textContent ?? '').trim()).toBe('');
+    });
+  });
+
+  it('does not rehydrate stale server draft text after the user clears the composer', async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const renderTree = (initialBody: string) => (
+      <QueryClientProvider client={qc}>
+        <MessageInput onSend={vi.fn()} initialBody={initialBody} />
+      </QueryClientProvider>
+    );
+    const { rerender } = rtlRender(renderTree('delete me'));
+    const editor = await screen.findByLabelText('Message input');
+
+    const range = document.createRange();
+    range.selectNodeContents(editor);
+    const sel = window.getSelection();
+    sel?.removeAllRanges();
+    sel?.addRange(range);
+    fireEvent.keyDown(editor, { key: 'Backspace' });
+
+    await waitFor(() => {
+      expect((editor.textContent ?? '').trim()).toBe('');
+    });
+
+    rerender(renderTree('delete me'));
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect((editor.textContent ?? '').trim()).toBe('');
+  });
+
+  it('flushes a pending draft when the composer unmounts', async () => {
+    const onDraftChange = vi.fn();
+    const { unmount } = render(
+      <MessageInput
+        onSend={vi.fn()}
+        initialBody="fast navigation draft"
+        onDraftChange={onDraftChange}
+      />,
+    );
+    await screen.findByLabelText('Message input');
+
+    unmount();
+
+    expect(onDraftChange).toHaveBeenCalledWith({
+      body: 'fast navigation draft',
+      attachmentIDs: [],
+    });
+  });
+
+  it('flushes the previous draft before a focusKey view switch resets the composer', async () => {
+    const onDraftChange = vi.fn();
+    const { rerender } = render(
+      <MessageInput
+        onSend={vi.fn()}
+        focusKey="ch-1"
+        initialBody="channel one draft"
+        onDraftChange={onDraftChange}
+      />,
+    );
+    await screen.findByLabelText('Message input');
+    expect(onDraftChange).not.toHaveBeenCalled();
+
+    await act(async () => {
+      rerender(
+        <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+          <MessageInput
+            onSend={vi.fn()}
+            focusKey="ch-2"
+            initialBody=""
+            onDraftChange={onDraftChange}
+          />
+        </QueryClientProvider>,
+      );
+      await flushMicrotasks();
+    });
+
+    expect(onDraftChange).toHaveBeenCalledWith({
+      body: 'channel one draft',
+      attachmentIDs: [],
     });
   });
 

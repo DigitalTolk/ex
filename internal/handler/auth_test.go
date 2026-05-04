@@ -3,7 +3,6 @@ package handler
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -163,7 +162,8 @@ func (m *mockChannelStore) ListPublicChannels(_ context.Context, _ int, _ string
 }
 
 type mockCache struct {
-	values map[string]interface{}
+	values    map[string]interface{}
+	deleteErr error
 }
 
 func newMockCache() *mockCache {
@@ -173,7 +173,7 @@ func newMockCache() *mockCache {
 func (m *mockCache) Get(_ context.Context, key string, dest interface{}) error {
 	value, ok := m.values[key]
 	if !ok {
-		return errors.New("cache miss")
+		return store.ErrNotFound
 	}
 	data, err := json.Marshal(value)
 	if err != nil {
@@ -192,6 +192,9 @@ func (m *mockCache) GetUser(_ context.Context, _ string) (*model.User, error) {
 }
 func (m *mockCache) SetUser(_ context.Context, _ *model.User) error { return nil }
 func (m *mockCache) Delete(_ context.Context, key string) error {
+	if m.deleteErr != nil {
+		return m.deleteErr
+	}
 	delete(m.values, key)
 	return nil
 }

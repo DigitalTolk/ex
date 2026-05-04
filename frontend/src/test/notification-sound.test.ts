@@ -133,6 +133,50 @@ describe('playNotificationPing', () => {
     expect(createOsc).not.toHaveBeenCalled();
   });
 
+  it('waits for resume before playing an interrupted context', async () => {
+    let resolveResume: () => void = () => undefined;
+    resumeMock = vi.fn(
+      () =>
+        new Promise<void>((res) => {
+          resolveResume = res;
+        }),
+    );
+    initialState = 'interrupted' as AudioContextState;
+    installFakeAudioContext();
+
+    const play = await loadModule();
+    play();
+
+    expect(resumeMock).toHaveBeenCalledTimes(1);
+    expect(createOsc).not.toHaveBeenCalled();
+
+    resolveResume();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(createOsc).toHaveBeenCalledTimes(1);
+  });
+
+  it('recreates the AudioContext when the cached one is closed', async () => {
+    let constructCount = 0;
+    const Ctor = vi.fn(function FakeAudioContext(this: Record<string, unknown>) {
+      constructCount += 1;
+      this.currentTime = 0;
+      this.state = constructCount === 1 ? 'closed' : 'running';
+      this.destination = {};
+      this.resume = resumeMock;
+      this.createOscillator = createOsc;
+      this.createGain = createGain;
+    });
+    originalAudioContext = (window as unknown as { AudioContext?: typeof AudioContext }).AudioContext;
+    Object.defineProperty(window, 'AudioContext', { value: Ctor, configurable: true, writable: true });
+
+    const play = await loadModule();
+    play();
+
+    expect(Ctor).toHaveBeenCalledTimes(2);
+    expect(createOsc).toHaveBeenCalledTimes(1);
+  });
+
   it('reuses the cached AudioContext on subsequent calls', async () => {
     initialState = 'running';
     installFakeAudioContext();

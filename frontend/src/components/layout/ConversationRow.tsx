@@ -117,7 +117,6 @@ export function ConversationRow({
               displayName={conversation.displayName || '??'}
               avatarURL={dmAvatarURL}
               online={dmOnline}
-              userStatus={dmUserStatus}
               className="h-5 w-5"
               dotClassName="h-1.5 w-1.5"
             />

@@ -61,7 +61,7 @@ describe('useUploadEmoji', () => {
 
   it('uploads file via signed URL and posts the new emoji record', async () => {
     vi.mocked(apiFetch)
-      .mockResolvedValueOnce({ uploadURL: 'https://upload.test/u', fileURL: 'https://cdn/x.png' })
+      .mockResolvedValueOnce({ uploadURL: 'https://upload.test/u', key: 'uploads/u-1/x.png' })
       .mockResolvedValueOnce({ name: 'new', imageURL: 'https://cdn/x.png', createdBy: 'u-1' });
     (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ ok: true } as Response);
 
@@ -81,6 +81,8 @@ describe('useUploadEmoji', () => {
       '/api/v1/emojis',
       expect.objectContaining({ method: 'POST' }),
     );
+    const body = JSON.parse(vi.mocked(apiFetch).mock.calls[1][1]?.body as string);
+    expect(body).toEqual({ name: 'new', imageKey: 'uploads/u-1/x.png' });
     // PUT to the signed URL with the file
     expect(globalThis.fetch).toHaveBeenCalledWith(
       'https://upload.test/u',
@@ -91,7 +93,7 @@ describe('useUploadEmoji', () => {
   it('throws when the PUT upload fails', async () => {
     vi.mocked(apiFetch).mockResolvedValueOnce({
       uploadURL: 'https://upload.test/u',
-      fileURL: 'https://cdn/x.png',
+      key: 'uploads/u-1/x.png',
     });
     (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ ok: false, status: 500 } as Response);
 

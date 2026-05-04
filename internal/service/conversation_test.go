@@ -463,6 +463,40 @@ func TestConversationService_ListUserConversations(t *testing.T) {
 	}
 }
 
+func TestConversationService_ListUserConversations_OverlaysRedisUnread(t *testing.T) {
+	svc, convStore, _, _, _ := setupConversationService()
+	ctx := context.Background()
+	convStore.userConvs["u-1"] = []*model.UserConversation{{
+		UserID:         "u-1",
+		ConversationID: "conv-unread",
+		Type:           model.ConversationTypeDM,
+		DisplayName:    "Ada",
+		Activated:      true,
+	}}
+
+	if err := svc.MarkUnread(ctx, "u-1", "conv-unread"); err != nil {
+		t.Fatalf("MarkUnread: %v", err)
+	}
+	convs, err := svc.ListUserConversations(ctx, "u-1")
+	if err != nil {
+		t.Fatalf("ListUserConversations: %v", err)
+	}
+	if len(convs) != 1 || !convs[0].Unread {
+		t.Fatalf("unread overlay missing: %+v", convs)
+	}
+
+	if err := svc.ClearUnread(ctx, "u-1", "conv-unread"); err != nil {
+		t.Fatalf("ClearUnread: %v", err)
+	}
+	convs, err = svc.ListUserConversations(ctx, "u-1")
+	if err != nil {
+		t.Fatalf("ListUserConversations after clear: %v", err)
+	}
+	if len(convs) != 1 || convs[0].Unread {
+		t.Fatalf("unread overlay should be cleared: %+v", convs)
+	}
+}
+
 func TestConversationService_GetByID(t *testing.T) {
 	svc, convStore, _, _, _ := setupConversationService()
 	ctx := context.Background()

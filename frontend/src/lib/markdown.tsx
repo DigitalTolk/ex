@@ -42,6 +42,10 @@ const MENTION_PILL_OTHER =
 const MENTION_PILL_HIGHLIGHT =
   ' bg-amber-200 text-amber-900 dark:bg-amber-500/30 dark:text-amber-100';
 
+function displayBareURL(url: string) {
+  return url.startsWith('https://') ? url.slice('https://'.length) : url;
+}
+
 function isVideoAssetURL(url: string) {
   const path = url.split(/[?#]/, 1)[0]?.toLowerCase() ?? '';
   return path.endsWith('.mp4') || path.endsWith('.webm');
@@ -206,7 +210,7 @@ function findInline(src: string, opts: RenderOpts | undefined, keyPrefix: string
       href={m[2]}
       target="_blank"
       rel="noopener noreferrer"
-      className="text-primary underline"
+      className="text-link transition-colors hover:text-link/80"
     >
       {m[1]}
     </a>
@@ -300,9 +304,9 @@ function findInline(src: string, opts: RenderOpts | undefined, keyPrefix: string
       href={m[0]}
       target="_blank"
       rel="noopener noreferrer"
-      className="text-primary underline"
+      className="text-link transition-colors hover:text-link/80"
     >
-      {m[0]}
+      {displayBareURL(m[0])}
     </a>
   ));
 

@@ -22,13 +22,14 @@ interface ThreadFollowTarget {
   threadRootID: string;
 }
 
-export function useUserThreads() {
+export function useUserThreads(options?: { enabled?: boolean }) {
   return useQuery<ThreadSummary[]>({
     queryKey: queryKeys.userThreads(),
     queryFn: async () => {
       const res = await apiFetch<ThreadSummary[]>('/api/v1/threads');
       return Array.isArray(res) ? res : [];
     },
+    enabled: options?.enabled ?? true,
     staleTime: 15_000,
   });
 }
@@ -57,6 +58,7 @@ export function useUnfollowThread() {
 }
 
 const SEEN_KEY = 'ex.threads.seen.v1';
+export const THREAD_SEEN_CHANGED_EVENT = 'ex:threads-seen-changed';
 
 // Cached parse of the seen-map. /threads can mount 50+ ThreadCards in
 // one render, each calling hasUnreadActivity → loadSeen — without the
@@ -75,13 +77,31 @@ function saveSeen(map: Record<string, string>) {
   writeJSON(SEEN_KEY, map);
 }
 
-// markThreadSeen records the timestamp at which the user last viewed a thread.
-// Subsequent threads-list fetches compare against this to decide which threads
-// have new activity since the last visit.
-export function markThreadSeen(threadRootID: string, at: string = new Date().toISOString()) {
-  const map = loadSeen();
+export function resetSeenCache() {
+  seenCache = null;
+}
+
+// markThreadSeen records an optimistic local timestamp for immediate UI updates.
+// The persisted server state deliberately uses server time; the client never
+// sends its local clock as authoritative read state.
+export function markThreadSeen(
+  threadRootID: string,
+  at: string = new Date().toISOString(),
+  target?: { parentID: string; parentType: 'channel' | 'conversation' },
+) {
+  const map = { ...loadSeen() };
   map[threadRootID] = at;
   saveSeen(map);
+  if (target) {
+    const parentType = target.parentType === 'channel' ? 'channels' : 'conversations';
+    void apiFetch<void>(
+      `/api/v1/user-state/threads/${parentType}/${encodeURIComponent(target.parentID)}/${encodeURIComponent(threadRootID)}/seen`,
+      { method: 'PUT' },
+    ).catch(() => undefined);
+  }
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent(THREAD_SEEN_CHANGED_EVENT, { detail: { threadRootID } }));
+  }
 }
 
 // hasUnreadActivity returns true when latestActivityAt is newer than the
@@ -90,6 +110,31 @@ export function hasUnreadActivity(t: ThreadSummary, seen: Record<string, string>
   const seenAt = seen[t.threadRootID];
   if (!seenAt) return true;
   return new Date(t.latestActivityAt).getTime() > new Date(seenAt).getTime();
+}
+
+export function unreadThreadIDs(
+  threads: ThreadSummary[] = [],
+  threadNotifications: string[] = [],
+  liveThreadNotifications: Set<string> = new Set(),
+  seenMap: Record<string, string> = {},
+): Set<string> {
+  const listedThreadIDs = new Set(threads.map((thread) => thread.threadRootID));
+  const ids = new Set(
+    [...threadNotifications, ...liveThreadNotifications].filter((threadRootID) =>
+      listedThreadIDs.has(threadRootID),
+    ),
+  );
+  for (const thread of threads) {
+    if (!seenMap[thread.threadRootID]) {
+      continue;
+    }
+    if (hasUnreadActivity(thread, seenMap)) {
+      ids.add(thread.threadRootID);
+    } else {
+      ids.delete(thread.threadRootID);
+    }
+  }
+  return ids;
 }
 
 export function getSeenMap(): Record<string, string> {

@@ -16,6 +16,7 @@ export interface NotificationPayload {
   parentID: string;
   parentType: 'channel' | 'conversation';
   messageID?: string;
+  parentMessageID?: string;
   authorID?: string;
   createdAt: string;
 }
@@ -166,11 +167,14 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       // (no banner) regardless of `renotify`, so a second message in the
       // same channel would never alert. macOS/Windows already group by
       // origin at the OS level so per-message banners don't spam.
-      const note = new Notification(n.title, {
+      const notificationOptions: NotificationOptions = {
         body: n.body,
-        icon: '/logo.svg',
-        silent: soundEnabled,
-      });
+        silent: !soundEnabled,
+      };
+      if (!window.__EX_DESKTOP__) {
+        notificationOptions.icon = '/logo.svg';
+      }
+      const note = new Notification(n.title, notificationOptions);
       note.onclick = () => {
         window.focus();
         if (n.deepLink) navigateInApp(n.deepLink);

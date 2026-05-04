@@ -136,6 +136,15 @@ func TestCategoryService_List_ReturnsEmptySliceNotNil(t *testing.T) {
 	}
 }
 
+func TestCategoryService_List_Error(t *testing.T) {
+	cs := newStubCategoryStore()
+	cs.listErr = errors.New("list failed")
+	svc := NewCategoryService(cs, newMockPublisher())
+	if _, err := svc.List(context.Background(), "u-1"); err == nil {
+		t.Fatal("expected list error")
+	}
+}
+
 func TestCategoryService_Update_RenameAndReorder(t *testing.T) {
 	cs := newStubCategoryStore()
 	svc := NewCategoryService(cs, newMockPublisher())

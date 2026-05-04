@@ -842,20 +842,27 @@ func TestUserService_SetUserStatusMessage_SetClearAndBroadcast(t *testing.T) {
 	idx := &stubUserIndexer{}
 	svc.SetIndexer(idx)
 
-	clearAt := time.Now().Add(time.Hour)
+	clearAfter := time.Hour
+	beforeClear := time.Now()
 	got, err := svc.SetUserStatusMessage(context.Background(), "u-status", &model.UserStatus{
-		Emoji:   "  :house:  ",
-		Text:    "  Working from home  ",
-		ClearAt: &clearAt,
-	}, "  Europe/Stockholm  ")
+		Emoji: "  :house:  ",
+		Text:  "  Working from home  ",
+	}, &clearAfter, "  Europe/Stockholm  ")
 	if err != nil {
 		t.Fatalf("SetUserStatusMessage: %v", err)
 	}
+	afterClear := time.Now()
 	if got.UserStatus == nil {
 		t.Fatal("UserStatus = nil, want value")
 	}
 	if got.UserStatus.Emoji != ":house:" || got.UserStatus.Text != "Working from home" {
 		t.Fatalf("UserStatus = %+v, want trimmed house/WFH", got.UserStatus)
+	}
+	if got.UserStatus.ClearAt == nil {
+		t.Fatal("ClearAt = nil, want server-computed clear time")
+	}
+	if got.UserStatus.ClearAt.Before(beforeClear.Add(clearAfter)) || got.UserStatus.ClearAt.After(afterClear.Add(clearAfter)) {
+		t.Fatalf("ClearAt = %s, want server now + %s", got.UserStatus.ClearAt, clearAfter)
 	}
 	if got.TimeZone != "Europe/Stockholm" {
 		t.Fatalf("TimeZone = %q, want Europe/Stockholm", got.TimeZone)
@@ -870,7 +877,7 @@ func TestUserService_SetUserStatusMessage_SetClearAndBroadcast(t *testing.T) {
 		t.Fatalf("indexed = %+v, want u-status", idx.indexed)
 	}
 
-	got, err = svc.SetUserStatusMessage(context.Background(), "u-status", nil, "")
+	got, err = svc.SetUserStatusMessage(context.Background(), "u-status", nil, nil, "")
 	if err != nil {
 		t.Fatalf("clear SetUserStatusMessage: %v", err)
 	}
@@ -896,7 +903,7 @@ func TestUserService_SetUserStatusMessage_IgnoresInvalidTimeZone(t *testing.T) {
 	got, err := svc.SetUserStatusMessage(context.Background(), "u-status-tz", &model.UserStatus{
 		Emoji: ":house:",
 		Text:  "Working from home",
-	}, "Not/AZone")
+	}, nil, "Not/AZone")
 	if err != nil {
 		t.Fatalf("SetUserStatusMessage: %v", err)
 	}
@@ -952,12 +959,10 @@ func TestUserService_SetUserStatusMessage_PersistsExpiredStatusForSweeper(t *tes
 	}
 	svc := NewUserService(users, nil, nil, nil)
 
-	clearAt := time.Now().Add(-time.Minute)
 	got, err := svc.SetUserStatusMessage(context.Background(), "u-status-expired", &model.UserStatus{
-		Emoji:   ":sandwich:",
-		Text:    "Out for Lunch",
-		ClearAt: &clearAt,
-	}, "Europe/Stockholm")
+		Emoji: ":sandwich:",
+		Text:  "Out for Lunch",
+	}, nil, "Europe/Stockholm")
 	if err != nil {
 		t.Fatalf("SetUserStatusMessage expired: %v", err)
 	}
@@ -1178,17 +1183,34 @@ func TestUserService_SetUserStatusMessage_ValidationErrors(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if _, err := svc.SetUserStatusMessage(ctx, "u-status-invalid", tc.status, ""); err == nil {
+			if _, err := svc.SetUserStatusMessage(ctx, "u-status-invalid", tc.status, nil, ""); err == nil {
 				t.Fatal("expected validation error")
 			}
 		})
 	}
 }
 
+func TestUserService_SetUserStatusMessage_RejectsInvalidClearDuration(t *testing.T) {
+	users := newMockUserStore()
+	users.users["u-status-duration"] = &model.User{
+		ID:          "u-status-duration",
+		Email:       "duration@example.com",
+		DisplayName: "Duration User",
+		SystemRole:  model.SystemRoleMember,
+	}
+	svc := NewUserService(users, nil, nil, nil)
+	ctx := context.Background()
+	for _, d := range []time.Duration{0, -time.Second, maxUserStatusClearAfter + time.Second} {
+		if _, err := svc.SetUserStatusMessage(ctx, "u-status-duration", &model.UserStatus{Emoji: ":house:", Text: "Home"}, &d, ""); err == nil {
+			t.Fatalf("duration %s accepted, want validation error", d)
+		}
+	}
+}
+
 func TestUserService_SetUserStatusMessage_StoreErrors(t *testing.T) {
 	t.Run("not found", func(t *testing.T) {
 		svc := NewUserService(newMockUserStore(), nil, nil, nil)
-		if _, err := svc.SetUserStatusMessage(context.Background(), "missing", nil, ""); err == nil {
+		if _, err := svc.SetUserStatusMessage(context.Background(), "missing", nil, nil, ""); err == nil {
 			t.Fatal("expected not found error")
 		}
 	})
@@ -1197,7 +1219,7 @@ func TestUserService_SetUserStatusMessage_StoreErrors(t *testing.T) {
 		users := newMockUserStore()
 		users.getUserErr = errors.New("get failed")
 		svc := NewUserService(users, nil, nil, nil)
-		if _, err := svc.SetUserStatusMessage(context.Background(), "u", nil, ""); err == nil {
+		if _, err := svc.SetUserStatusMessage(context.Background(), "u", nil, nil, ""); err == nil {
 			t.Fatal("expected get error")
 		}
 	})
@@ -1207,7 +1229,7 @@ func TestUserService_SetUserStatusMessage_StoreErrors(t *testing.T) {
 		users.users["u-status-update"] = &model.User{ID: "u-status-update", Email: "update@example.com"}
 		users.updateErr = errors.New("update failed")
 		svc := NewUserService(users, nil, nil, nil)
-		if _, err := svc.SetUserStatusMessage(context.Background(), "u-status-update", nil, ""); err == nil {
+		if _, err := svc.SetUserStatusMessage(context.Background(), "u-status-update", nil, nil, ""); err == nil {
 			t.Fatal("expected update error")
 		}
 	})

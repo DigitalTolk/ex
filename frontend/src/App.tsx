@@ -9,6 +9,7 @@ import { TypingProvider } from '@/context/TypingContext';
 import { ThemeProvider } from '@/context/ThemeContext';
 import { UpdateBanner } from '@/components/UpdateBanner';
 import { NotificationPermissionBanner } from '@/components/NotificationPermissionBanner';
+import { NotificationCountTitleBridge } from '@/components/NotificationCountTitleBridge';
 import LoginPage from '@/pages/LoginPage';
 import OIDCCallbackPage from '@/pages/OIDCCallbackPage';
 import ChatPage from '@/pages/ChatPage';
@@ -96,6 +97,7 @@ export default function App() {
                 <NotificationProvider>
                   <TypingProvider>
                     <TooltipProvider>
+                      <NotificationCountTitleBridge />
                       {/* h-dvh + flex-col viewport constraint so the
                           UpdateBanner sits as a normal block above the
                           app and never has to overlay scrolling content. */}

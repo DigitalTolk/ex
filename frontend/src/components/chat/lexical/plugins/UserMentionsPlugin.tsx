@@ -157,7 +157,6 @@ function MentionRow({ suggestion }: { suggestion: Suggestion }) {
         displayName={suggestion.displayName}
         avatarURL={suggestion.avatarURL}
         online={suggestion.online}
-        userStatus={suggestion.userStatus}
       />
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-1">
