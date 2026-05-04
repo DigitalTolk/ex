@@ -1,10 +1,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { renderHook } from '@testing-library/react';
+import { act, renderHook } from '@testing-library/react';
 import { useWebSocket } from './useWebSocket';
+
+const refreshAccessTokenMock = vi.hoisted(() => vi.fn());
 
 // Mock getAccessToken
 vi.mock('@/lib/api', () => ({
   getAccessToken: vi.fn(() => 'test-token'),
+  refreshAccessToken: refreshAccessTokenMock,
 }));
 
 // --- WebSocket mock ---
@@ -49,6 +52,7 @@ class MockWebSocket {
 
 beforeEach(() => {
   MockWebSocket.instances = [];
+  refreshAccessTokenMock.mockResolvedValue('test-token');
   vi.stubGlobal('WebSocket', MockWebSocket);
   vi.useFakeTimers();
 });
@@ -140,46 +144,72 @@ describe('useWebSocket', () => {
     expect(onMessageNew).toHaveBeenCalledWith({ type: 'message.new' });
   });
 
-  it('reconnects with exponential backoff on close', () => {
+  it('tries each reconnect delay three times before advancing', async () => {
     renderHook(() =>
       useWebSocket({ enabled: true }),
     );
 
     expect(MockWebSocket.instances).toHaveLength(1);
 
-    // Simulate close
-    MockWebSocket.instances[0].simulateClose();
+    const attempts = [
+      { wait: 1000, early: 999 },
+      { wait: 1000, early: 999 },
+      { wait: 1000, early: 999 },
+      { wait: 2000, early: 1999 },
+      { wait: 2000, early: 1999 },
+      { wait: 2000, early: 1999 },
+      { wait: 4000, early: 3999 },
+      { wait: 4000, early: 3999 },
+      { wait: 4000, early: 3999 },
+      { wait: 8000, early: 7999 },
+      { wait: 8000, early: 7999 },
+      { wait: 8000, early: 7999 },
+      { wait: 16000, early: 15999 },
+      { wait: 16000, early: 15999 },
+      { wait: 16000, early: 15999 },
+      { wait: 30000, early: 29999 },
+    ];
 
-    // Should not reconnect immediately
-    expect(MockWebSocket.instances).toHaveLength(1);
+    for (const [index, { wait, early }] of attempts.entries()) {
+      MockWebSocket.instances[index].simulateClose();
+      expect(MockWebSocket.instances).toHaveLength(index + 1);
 
-    // Advance timer by 1000ms (first backoff)
-    vi.advanceTimersByTime(1000);
-    expect(MockWebSocket.instances).toHaveLength(2);
+      await act(async () => {
+        vi.advanceTimersByTime(early);
+        await Promise.resolve();
+      });
+      expect(MockWebSocket.instances).toHaveLength(index + 1);
 
-    // Close again
-    MockWebSocket.instances[1].simulateClose();
-
-    // Advance timer by 2000ms (second backoff)
-    vi.advanceTimersByTime(2000);
-    expect(MockWebSocket.instances).toHaveLength(3);
+      await act(async () => {
+        vi.advanceTimersByTime(wait - early);
+        await Promise.resolve();
+      });
+      expect(MockWebSocket.instances).toHaveLength(index + 2);
+      expect(refreshAccessTokenMock).toHaveBeenCalledTimes(index + 1);
+    }
   });
 
-  it('resets retry count after successful open', () => {
+  it('resets retry count after successful open', async () => {
     renderHook(() =>
       useWebSocket({ enabled: true }),
     );
 
     const ws = MockWebSocket.instances[0];
     ws.simulateClose();
-    vi.advanceTimersByTime(1000); // reconnect
+    await act(async () => {
+      vi.advanceTimersByTime(1000); // reconnect
+      await Promise.resolve();
+    });
 
     const ws2 = MockWebSocket.instances[1];
     ws2.simulateOpen(); // resets retry count
     ws2.simulateClose();
 
     // Should use 1000ms backoff again (retry count was reset)
-    vi.advanceTimersByTime(1000);
+    await act(async () => {
+      vi.advanceTimersByTime(1000);
+      await Promise.resolve();
+    });
     expect(MockWebSocket.instances).toHaveLength(3);
   });
 

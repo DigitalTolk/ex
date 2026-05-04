@@ -1,10 +1,13 @@
 import { useEffect, useRef } from 'react';
-import { getAccessToken } from '@/lib/api';
+import { getAccessToken, refreshAccessToken } from '@/lib/api';
 import { EventType } from '@/lib/event-types';
 import { setWSSender } from '@/lib/ws-sender';
 import { useLatestRef } from '@/hooks/useLatestRef';
 
 type WSCallback = (data: unknown) => void;
+
+const reconnectDelayStepsMs = [1000, 2000, 4000, 8000, 16000, 30000];
+const reconnectAttemptsPerStep = 3;
 
 interface UseWebSocketOptions {
   onMessageNew?: WSCallback;
@@ -46,10 +49,15 @@ export function useWebSocket(options: UseWebSocketOptions) {
 
   useEffect(() => {
     if (!options.enabled) return;
+    let disposed = false;
 
-    function connect() {
-      const token = getAccessToken();
+    async function connect(refreshBeforeConnect = false) {
+      let token = getAccessToken();
       if (!token) return;
+      if (refreshBeforeConnect) {
+        token = await refreshAccessToken();
+        if (!token || disposed || !enabledRef.current) return;
+      }
 
       const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
       const url = `${proto}//${window.location.host}/api/v1/ws?token=${encodeURIComponent(token)}`;
@@ -145,10 +153,13 @@ export function useWebSocket(options: UseWebSocketOptions) {
       ws.onclose = () => {
         wsRef.current = null;
         setWSSender(null);
-        if (!enabledRef.current) return;
-        const backoff = Math.min(1000 * Math.pow(2, retryCountRef.current), 30000);
+        if (disposed || !enabledRef.current) return;
+        const delayStep = Math.floor(retryCountRef.current / reconnectAttemptsPerStep);
+        const backoff = reconnectDelayStepsMs[Math.min(delayStep, reconnectDelayStepsMs.length - 1)];
         retryCountRef.current++;
-        retryTimerRef.current = setTimeout(connect, backoff);
+        retryTimerRef.current = setTimeout(() => {
+          void connect(true);
+        }, backoff);
       };
 
       ws.onerror = () => {
@@ -156,9 +167,10 @@ export function useWebSocket(options: UseWebSocketOptions) {
       };
     }
 
-    connect();
+    void connect();
 
     return () => {
+      disposed = true;
       if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
       if (wsRef.current) {
         wsRef.current.close();

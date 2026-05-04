@@ -1,9 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { renderHook } from '@testing-library/react';
+import { act, renderHook } from '@testing-library/react';
 import { useWebSocket } from './useWebSocket';
+
+const refreshAccessTokenMock = vi.hoisted(() => vi.fn());
 
 vi.mock('@/lib/api', () => ({
   getAccessToken: vi.fn(() => 'test-token'),
+  refreshAccessToken: refreshAccessTokenMock,
 }));
 
 type WSHandler = ((ev: unknown) => void) | null;
@@ -46,6 +49,7 @@ class MockWebSocket {
 
 beforeEach(() => {
   MockWebSocket.instances = [];
+  refreshAccessTokenMock.mockResolvedValue('test-token');
   vi.stubGlobal('WebSocket', MockWebSocket);
   vi.useFakeTimers();
 });
@@ -195,17 +199,21 @@ describe('useWebSocket - extra coverage', () => {
     expect(onReconnect).not.toHaveBeenCalled();
   });
 
-  it('calls onReconnect when the socket re-opens after a close', () => {
+  it('calls onReconnect when the socket re-opens after a close', async () => {
     const onReconnect = vi.fn();
     renderHook(() => useWebSocket({ onReconnect, enabled: true }));
     const first = MockWebSocket.instances[0];
     first.simulateOpen();
     first.simulateClose();
     // Backoff timer fires → new WebSocket constructed
-    vi.advanceTimersByTime(2000);
+    await act(async () => {
+      vi.advanceTimersByTime(2000);
+      await Promise.resolve();
+    });
     const second = MockWebSocket.instances[1];
     expect(second).toBeDefined();
     second.simulateOpen();
     expect(onReconnect).toHaveBeenCalledTimes(1);
+    expect(refreshAccessTokenMock).toHaveBeenCalledTimes(1);
   });
 });

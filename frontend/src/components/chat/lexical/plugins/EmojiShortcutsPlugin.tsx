@@ -38,6 +38,13 @@ function emojiSearchRank(query: string, emoji: { name: string; keywords?: string
   return Number.POSITIVE_INFINITY;
 }
 
+function compareEmojiSearchHits(
+  a: { emoji: { name: string }; rank: number; index: number },
+  b: { emoji: { name: string }; rank: number; index: number },
+) {
+  return a.rank - b.rank || a.emoji.name.length - b.emoji.name.length || a.index - b.index;
+}
+
 type EmojiHit =
   | { kind: 'standard'; name: string; unicode: string }
   | { kind: 'custom'; name: string; imageURL: string };
@@ -68,7 +75,7 @@ export function EmojiShortcutsPlugin() {
     const standard: EmojiHit[] = COMMON_EMOJI_SHORTCODES
       .map((emoji, index) => ({ emoji, rank: emojiSearchRank(q, emoji), index }))
       .filter((hit) => Number.isFinite(hit.rank))
-      .sort((a, b) => a.rank - b.rank || a.index - b.index)
+      .sort(compareEmojiSearchHits)
       .slice(0, Math.max(0, remaining))
       .map(({ emoji }) => ({ kind: 'standard' as const, name: emoji.name, unicode: emoji.unicode }));
     return [...custom, ...standard].map((h) => new EmojiOption(h));

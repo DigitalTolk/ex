@@ -26,6 +26,7 @@ import { SubmitOnEnterPlugin } from './lexical/plugins/SubmitOnEnterPlugin';
 import { EditLastOnArrowUpPlugin } from './lexical/plugins/EditLastOnArrowUpPlugin';
 import { QuoteContinuationPlugin } from './lexical/plugins/QuoteContinuationPlugin';
 import { CodeBlockExitPlugin } from './lexical/plugins/CodeBlockExitPlugin';
+import { ClearSelectedContentPlugin } from './lexical/plugins/ClearSelectedContentPlugin';
 import { MarkdownShortcutFallbackPlugin } from './lexical/plugins/MarkdownShortcutFallbackPlugin';
 import { PasteFilesPlugin } from './lexical/plugins/PasteFilesPlugin';
 import { PasteLinkPlugin } from './lexical/plugins/PasteLinkPlugin';
@@ -150,6 +151,7 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, Props>(function Wys
         <EmojiShortcutsPlugin />
         <QuoteContinuationPlugin />
         <CodeBlockExitPlugin />
+        <ClearSelectedContentPlugin />
         <SubmitOnEnterPlugin onSubmit={onSubmit} onCancel={onCancel} />
         <EditLastOnArrowUpPlugin onArrowUpEmpty={onArrowUpEmpty} />
         <PasteFilesPlugin onPasteFiles={onPasteFiles} />

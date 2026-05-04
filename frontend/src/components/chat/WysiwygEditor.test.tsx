@@ -144,6 +144,69 @@ describe('WysiwygEditor', () => {
     expect(ref.current!.getMarkdown()).toContain('world');
   });
 
+  it('Backspace clears the editor when all content is selected', async () => {
+    const ref = createRef<WysiwygEditorHandle>();
+    renderEditor({ ref, initialBody: 'delete me' });
+    await waitFor(() => expect(ref.current?.getElement()?.textContent).toContain('delete me'));
+
+    const editor = getEditor();
+    const range = document.createRange();
+    range.selectNodeContents(editor);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+
+    fireEvent.keyDown(editor, { key: 'Backspace' });
+
+    await waitFor(() => {
+      expect(ref.current!.getMarkdown().trim()).toBe('');
+      expect(ref.current!.getElement()?.textContent ?? '').not.toContain('delete me');
+    });
+  });
+
+  it('Delete clears the editor when all content is selected', async () => {
+    const ref = createRef<WysiwygEditorHandle>();
+    renderEditor({ ref, initialBody: 'remove all' });
+    await waitFor(() => expect(ref.current?.getElement()?.textContent).toContain('remove all'));
+
+    const editor = getEditor();
+    const range = document.createRange();
+    range.selectNodeContents(editor);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+
+    fireEvent.keyDown(editor, { key: 'Delete' });
+
+    await waitFor(() => {
+      expect(ref.current!.getMarkdown().trim()).toBe('');
+      expect(ref.current!.getElement()?.textContent ?? '').not.toContain('remove all');
+    });
+  });
+
+  it('Backspace does not run the full-clear path for a partial selection', async () => {
+    const ref = createRef<WysiwygEditorHandle>();
+    renderEditor({ ref, initialBody: 'keep most text' });
+    await waitFor(() => expect(ref.current?.getElement()?.textContent).toContain('keep most text'));
+
+    const editor = getEditor();
+    const walker = document.createTreeWalker(editor, NodeFilter.SHOW_TEXT);
+    const textNode = walker.nextNode();
+    expect(textNode).not.toBeNull();
+    const range = document.createRange();
+    range.setStart(textNode!, 0);
+    range.setEnd(textNode!, 4);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+
+    fireEvent.keyDown(editor, { key: 'Backspace' });
+
+    await waitFor(() => {
+      expect(ref.current!.getMarkdown()).toContain('keep most text');
+    });
+  });
+
   it('setMarkdown replaces the editor content and emits onChange', async () => {
     const onChange = vi.fn();
     const ref = createRef<WysiwygEditorHandle>();
