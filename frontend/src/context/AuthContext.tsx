@@ -11,6 +11,7 @@ import {
   setAccessToken,
   clearAccessToken,
   apiFetch,
+  refreshAccessToken,
 } from '@/lib/api';
 
 interface AuthState {
@@ -36,17 +37,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // (the refresh token is in an httpOnly cookie)
     async function tryRestore() {
       try {
-        const res = await fetch('/auth/token/refresh', {
-          method: 'POST',
-          credentials: 'include',
-        });
-        if (res.ok) {
-          const data = await res.json();
-          if (data.accessToken) {
-            setAccessToken(data.accessToken);
-            const me = await apiFetch<User>('/api/v1/users/me');
-            setUser(me);
-          }
+        const token = await refreshAccessToken();
+        if (token) {
+          setAccessToken(token);
+          const me = await apiFetch<User>('/api/v1/users/me');
+          setUser(me);
         }
       } catch {
         // not authenticated
