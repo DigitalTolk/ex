@@ -9,7 +9,15 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { useUsersBatch } from '@/hooks/useUsersBatch';
 import { useSendMessage, type SendMessageInput } from '@/hooks/useMessages';
 import { useInView } from '@/hooks/useInView';
-import { useDeleteDraft, useDraftAttachmentChips, useDraftForScope, useSaveDraft } from '@/hooks/useDrafts';
+import {
+  restoreDraftScope,
+  restoreDraftScopeForContent,
+  suppressSentDraft,
+  useDeleteDraft,
+  useDraftAttachmentChips,
+  useDraftForScope,
+  useSaveDraft,
+} from '@/hooks/useDrafts';
 import { usePresence } from '@/context/PresenceContext';
 import { collectMessageUserIDs } from '@/lib/message-users';
 import {
@@ -30,6 +38,13 @@ interface ThreadCardProps {
   // existing `?thread=…` deep-link the channel/conversation pages handle.
   deepLink: string;
   currentUserId?: string;
+}
+
+function markSummaryThreadSeen(summary: ThreadSummary) {
+  markThreadSeen(summary.threadRootID, new Date().toISOString(), {
+    parentID: summary.parentID,
+    parentType: summary.parentType,
+  });
 }
 
 // Cap the number of fully-rendered messages per thread before we collapse
@@ -60,8 +75,8 @@ export function ThreadCard({ summary, title, deepLink, currentUserId }: ThreadCa
   // Mark seen the first time the card actually scrolls into view.
   useEffect(() => {
     if (!inView) return;
-    markThreadSeen(summary.threadRootID);
-  }, [inView, summary.threadRootID]);
+    markSummaryThreadSeen(summary);
+  }, [inView, summary]);
   const { data: messages, isLoading } = useThreadMessages({
     channelId,
     conversationId,
@@ -99,12 +114,12 @@ export function ThreadCard({ summary, title, deepLink, currentUserId }: ThreadCa
   // extra fetch from us.
   const send = useSendMessage({ channelId, conversationId });
   const parentID = channelId ?? conversationId;
-  const parentType = channelId ? 'channel' : 'conversation';
-  const { data: draft } = useDraftForScope({
-    parentID,
-    parentType,
-    parentMessageID: summary.threadRootID,
-  });
+  const parentType: 'channel' | 'conversation' = channelId ? 'channel' : 'conversation';
+  const draftScope = useMemo(
+    () => ({ parentID, parentType, parentMessageID: summary.threadRootID }),
+    [parentID, parentType, summary.threadRootID],
+  );
+  const { data: draft } = useDraftForScope(draftScope);
   const draftAttachments = useDraftAttachmentChips(draft?.attachmentIDs);
   const draftID = draft?.id;
   const saveDraft = useSaveDraft();
@@ -115,6 +130,7 @@ export function ThreadCard({ summary, title, deepLink, currentUserId }: ThreadCa
   const handleDraftChange = useCallback(
     (input: SendMessageInput) => {
       if (!parentID) return;
+      restoreDraftScopeForContent(draftScope, input);
       saveDraftMutate({
         parentID,
         parentType,
@@ -123,22 +139,26 @@ export function ThreadCard({ summary, title, deepLink, currentUserId }: ThreadCa
         attachmentIDs: input.attachmentIDs ?? [],
       });
     },
-    [parentID, parentType, summary.threadRootID, saveDraftMutate],
+    [parentID, parentType, summary.threadRootID, draftScope, saveDraftMutate],
   );
 
   const handleReply = useCallback(
     (input: SendMessageInput) => {
       const payload = { ...input, parentMessageID: summary.threadRootID };
+      suppressSentDraft(draftScope);
       if (draftID) {
-        send.mutate(payload, { onSuccess: () => deleteDraftMutate(draftID) });
+        send.mutate(payload, {
+          onSuccess: () => deleteDraftMutate(draftID),
+          onError: () => restoreDraftScope(draftScope),
+        });
       } else {
-        send.mutate(payload);
+        send.mutate(payload, { onError: () => restoreDraftScope(draftScope) });
       }
       // Treat sending as "seeing" — drops the unread dot in the sidebar
       // since the user is clearly engaged with this thread.
-      markThreadSeen(summary.threadRootID);
+      markSummaryThreadSeen(summary);
     },
-    [send, summary.threadRootID, draftID, deleteDraftMutate],
+    [send, summary, draftScope, draftID, deleteDraftMutate],
   );
 
   return (
@@ -165,7 +185,7 @@ export function ThreadCard({ summary, title, deepLink, currentUserId }: ThreadCa
           to={deepLink}
           data-testid="thread-card-title"
           className="truncate text-sm font-semibold hover:underline"
-          onClick={() => markThreadSeen(summary.threadRootID)}
+          onClick={() => markSummaryThreadSeen(summary)}
         >
           {title}
         </Link>

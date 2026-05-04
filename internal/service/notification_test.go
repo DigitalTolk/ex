@@ -108,6 +108,43 @@ func TestNotificationService_NotifyForMessage_ChannelFanout(t *testing.T) {
 	}
 }
 
+func TestNotificationService_PersistsNotificationState(t *testing.T) {
+	svc, _, members, _, chans, users, msgs, follows := setupNotifierWithMessagesAndFollows(t)
+	ctx := context.Background()
+	stateStore := newMockUserStateStore()
+	stateSvc := NewUserStateService(stateStore, nil)
+	svc.SetUserStateService(stateSvc)
+
+	chans.channels["ch1"] = &model.Channel{ID: "ch1", Name: "general", Slug: "general", Type: model.ChannelTypePublic}
+	for _, uid := range []string{"u-author", "u-bob"} {
+		users.users[uid] = &model.User{ID: uid, DisplayName: uid}
+		members.memberships["ch1#"+uid] = &model.ChannelMembership{ChannelID: "ch1", UserID: uid}
+	}
+	svc.NotifyForMessage(ctx, &model.Message{ID: "m1", ParentID: "ch1", AuthorID: "u-author", Body: "hi @[u-bob|Bob]"}, ParentChannel)
+	if _, ok := stateStore.rows[stateStore.key("u-bob", model.UserStateChannelNotification, "ch1")]; !ok {
+		t.Fatal("expected channel notification state for mentioned user")
+	}
+
+	msgs.messages["ch1#root1"] = &model.Message{ID: "root1", ParentID: "ch1", AuthorID: "u-author", Body: "root", CreatedAt: time.Now()}
+	if err := follows.SetThreadFollow(ctx, &model.ThreadFollow{
+		UserID: "u-bob", ParentID: "ch1", ParentType: ParentChannel, ThreadRootID: "root1", Following: true, UpdatedAt: time.Now(),
+	}); err != nil {
+		t.Fatalf("SetThreadFollow: %v", err)
+	}
+	svc.NotifyForMessage(ctx, &model.Message{ID: "reply1", ParentID: "ch1", ParentMessageID: "root1", AuthorID: "u-author", Body: "reply"}, ParentChannel)
+	if _, ok := stateStore.rows[stateStore.key("u-bob", model.UserStateThreadNotification, "root1")]; !ok {
+		t.Fatal("expected thread notification state for follower")
+	}
+}
+
+func TestNotificationService_NotificationStateNoops(t *testing.T) {
+	svc, _, _, _, _, _ := setupNotifier(t)
+	svc.markChannelNotification(context.Background(), "u-1", "ch-1")
+	svc.markThreadNotification(context.Background(), "u-1", nil, ParentChannel)
+	svc.SetUserStateService(NewUserStateService(newMockUserStateStore(), nil))
+	svc.markThreadNotification(context.Background(), "u-1", &model.Message{ID: "m1"}, ParentChannel)
+}
+
 func TestNotificationService_NotifyForMessage_ThreadReply_OnlyParticipantsAndRootAuthor(t *testing.T) {
 	// Regression: thread replies used to fan out to every channel
 	// member. They should be scoped to the thread root author + the
@@ -470,23 +507,25 @@ func TestNotifyForMessage_ThreadReply_DeepLinkOpensThread(t *testing.T) {
 	}
 	svc.NotifyForMessage(context.Background(), msg, ParentChannel)
 
-	var deepLink string
+	var notif Notification
 	for _, p := range pub.published {
 		if p.event.Type != events.EventNotificationNew {
 			continue
 		}
-		var n Notification
-		if err := json.Unmarshal(p.event.Data, &n); err != nil {
+		if err := json.Unmarshal(p.event.Data, &notif); err != nil {
 			continue
 		}
-		deepLink = n.DeepLink
 		break
 	}
+	deepLink := notif.DeepLink
 	if !strings.Contains(deepLink, "?thread=root-XYZ") {
 		t.Errorf("deepLink missing ?thread=root-XYZ: %q", deepLink)
 	}
 	if !strings.Contains(deepLink, "#msg-root-XYZ") {
 		t.Errorf("deepLink missing #msg-root-XYZ: %q", deepLink)
+	}
+	if notif.ParentMessageID != "root-XYZ" {
+		t.Errorf("ParentMessageID = %q, want root-XYZ", notif.ParentMessageID)
 	}
 }
 

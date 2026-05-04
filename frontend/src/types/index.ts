@@ -134,6 +134,7 @@ export interface UserConversation {
   displayName: string;
   participantIDs?: string[];
   lastReadMsgID?: string;
+  unread?: boolean;
   favorite?: boolean;
   categoryID?: string;
   sidebarPosition?: number;
@@ -156,4 +157,11 @@ export interface CustomEmoji {
 export interface PresenceEvent {
   userID: string;
   online: boolean;
+}
+
+export interface UserState {
+  channelNotifications: string[];
+  threadNotifications: string[];
+  threadSeen: Record<string, string>;
+  hiddenConversations: string[];
 }

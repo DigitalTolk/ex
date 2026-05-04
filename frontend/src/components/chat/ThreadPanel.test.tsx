@@ -217,11 +217,14 @@ describe('ThreadPanel', () => {
     await user.click(screen.getByLabelText('Send message'));
 
     await waitFor(() => {
-      expect(mockReplyMutate).toHaveBeenCalledWith({
-        body: 'hello in thread',
-        attachmentIDs: [],
-        parentMessageID: 'm-1',
-      });
+      expect(mockReplyMutate).toHaveBeenCalledWith(
+        {
+          body: 'hello in thread',
+          attachmentIDs: [],
+          parentMessageID: 'm-1',
+        },
+        expect.objectContaining({ onError: expect.any(Function) }),
+      );
     });
   });
 

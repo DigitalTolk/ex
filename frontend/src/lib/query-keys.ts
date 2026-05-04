@@ -28,6 +28,7 @@ export const queryKeys = {
   // Conversations
   userConversations: () => ['userConversations'] as const,
   conversation: (conversationId: string) => ['conversation', conversationId] as const,
+  userState: () => ['userState'] as const,
 
   // Messages — anchor=null means tail mode. The *All variants drop
   // the anchor segment for partial-match invalidations across all

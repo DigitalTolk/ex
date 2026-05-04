@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/DigitalTolk/ex/internal/auth"
+	"github.com/DigitalTolk/ex/internal/model"
 )
 
 // TestSpaHandler_ServesIndexHTML verifies that the SPA handler serves index.html
@@ -84,7 +86,7 @@ func TestNewRouterWithFrontendFS(t *testing.T) {
 	var frontendFS fs.FS = memFS
 
 	jwtMgr := setupJWTManager()
-	router := NewRouter(&AuthHandler{}, &UserHandler{}, &ChannelHandler{}, &ConversationHandler{}, &WSHandler{}, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, jwtMgr, frontendFS, "test", []string{"*"})
+	router := NewRouter(&AuthHandler{}, &UserHandler{}, nil, &ChannelHandler{}, &ConversationHandler{}, &WSHandler{}, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, jwtMgr, frontendFS, "test", []string{"*"})
 
 	// SPA route should return index.html.
 	req := httptest.NewRequest(http.MethodGet, "/some-spa-route", nil)
@@ -150,6 +152,141 @@ func TestQueryInt_NonNumeric(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestUserStateStoreAdapter(t *testing.T) {
+	backing := newUserStateAdapterBacking()
+	adapter := NewUserStateStoreAdapter(backing)
+	ctx := context.Background()
+	item := &model.UserStateItem{UserID: "u-1", Kind: model.UserStateHiddenConversation, TargetID: "conv-1", UpdatedAt: time.Now()}
+
+	if err := adapter.SetUserState(ctx, item); err != nil {
+		t.Fatalf("SetUserState: %v", err)
+	}
+	rows, err := adapter.ListUserState(ctx, "u-1")
+	if err != nil {
+		t.Fatalf("ListUserState: %v", err)
+	}
+	if len(rows) != 1 || rows[0].TargetID != "conv-1" {
+		t.Fatalf("rows = %+v", rows)
+	}
+	if err := adapter.DeleteUserState(ctx, "u-1", model.UserStateHiddenConversation, "conv-1"); err != nil {
+		t.Fatalf("DeleteUserState: %v", err)
+	}
+	rows, err = adapter.ListUserState(ctx, "u-1")
+	if err != nil {
+		t.Fatalf("ListUserState after delete: %v", err)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("rows after delete = %+v", rows)
+	}
+}
+
+func TestConversationAndMessageStoreAdapterDelegates(t *testing.T) {
+	ctx := context.Background()
+	convBacking := &adapterConversationBacking{}
+	convAdapter := NewConversationStoreAdapter(convBacking)
+	when := time.Now()
+	if err := convAdapter.TouchConversation(ctx, "conv-1", []string{"u-1"}, when); err != nil {
+		t.Fatalf("TouchConversation: %v", err)
+	}
+	if !convBacking.touched.Equal(when) {
+		t.Fatalf("touch time = %s, want %s", convBacking.touched, when)
+	}
+
+	msgBacking := &adapterMessageBacking{}
+	msgAdapter := NewMessageStoreAdapter(msgBacking)
+	msg, err := msgAdapter.IncrementReplyMetadata(ctx, "ch-1", "root-1", when, "u-1")
+	if err != nil {
+		t.Fatalf("IncrementReplyMetadata: %v", err)
+	}
+	if msg.ID != "root-1" || msg.ReplyCount != 1 {
+		t.Fatalf("message = %+v", msg)
+	}
+}
+
+type adapterConversationBacking struct {
+	touched time.Time
+}
+
+func (b *adapterConversationBacking) Create(context.Context, *model.Conversation, []*model.UserConversation) error {
+	return nil
+}
+func (b *adapterConversationBacking) GetByID(context.Context, string) (*model.Conversation, error) {
+	return nil, nil
+}
+func (b *adapterConversationBacking) ListUserConversations(context.Context, string) ([]*model.UserConversation, error) {
+	return nil, nil
+}
+func (b *adapterConversationBacking) Activate(context.Context, string, []string) error { return nil }
+func (b *adapterConversationBacking) Touch(_ context.Context, _ string, _ []string, at time.Time) error {
+	b.touched = at
+	return nil
+}
+func (b *adapterConversationBacking) SetUserConversationFavorite(context.Context, string, string, bool) error {
+	return nil
+}
+func (b *adapterConversationBacking) SetUserConversationCategory(context.Context, string, string, string, *int) error {
+	return nil
+}
+func (b *adapterConversationBacking) ListAll(context.Context) ([]*model.Conversation, error) {
+	return nil, nil
+}
+
+type adapterMessageBacking struct{}
+
+func (b *adapterMessageBacking) Create(context.Context, *model.Message) error { return nil }
+func (b *adapterMessageBacking) GetByID(context.Context, string, string) (*model.Message, error) {
+	return nil, nil
+}
+func (b *adapterMessageBacking) Update(context.Context, string, *model.Message) error { return nil }
+func (b *adapterMessageBacking) Delete(context.Context, string, string) error         { return nil }
+func (b *adapterMessageBacking) ListAfter(context.Context, string, string, int) ([]*model.Message, bool, error) {
+	return nil, false, nil
+}
+func (b *adapterMessageBacking) ListAround(context.Context, string, string, int, int) ([]*model.Message, bool, bool, error) {
+	return nil, false, false, nil
+}
+func (b *adapterMessageBacking) List(context.Context, string, string, int) ([]*model.Message, bool, error) {
+	return nil, false, nil
+}
+func (b *adapterMessageBacking) IncrementReplyMetadata(_ context.Context, parentID, msgID string, _ time.Time, _ string) (*model.Message, error) {
+	return &model.Message{ID: msgID, ParentID: parentID, ReplyCount: 1}, nil
+}
+
+type userStateAdapterBacking struct {
+	rows map[string]*model.UserStateItem
+}
+
+func newUserStateAdapterBacking() *userStateAdapterBacking {
+	return &userStateAdapterBacking{rows: map[string]*model.UserStateItem{}}
+}
+
+func (b *userStateAdapterBacking) key(userID string, kind model.UserStateKind, targetID string) string {
+	return userID + "#" + string(kind) + "#" + targetID
+}
+
+func (b *userStateAdapterBacking) Set(_ context.Context, item *model.UserStateItem) error {
+	cp := *item
+	b.rows[b.key(item.UserID, item.Kind, item.TargetID)] = &cp
+	return nil
+}
+
+func (b *userStateAdapterBacking) Delete(_ context.Context, userID string, kind model.UserStateKind, targetID string) error {
+	delete(b.rows, b.key(userID, kind, targetID))
+	return nil
+}
+
+func (b *userStateAdapterBacking) List(_ context.Context, userID string) ([]*model.UserStateItem, error) {
+	out := make([]*model.UserStateItem, 0)
+	for _, row := range b.rows {
+		if row.UserID != userID {
+			continue
+		}
+		cp := *row
+		out = append(out, &cp)
+	}
+	return out, nil
 }
 
 // setupJWTManager creates a JWT manager for test helpers.

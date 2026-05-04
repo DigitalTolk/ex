@@ -9,16 +9,23 @@ import (
 	"sync"
 	"time"
 
+	"github.com/DigitalTolk/ex/internal/cache"
 	"github.com/DigitalTolk/ex/internal/events"
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/DigitalTolk/ex/internal/pubsub"
 	"github.com/DigitalTolk/ex/internal/store"
 )
 
+const conversationUnreadKeyPrefix = "unread:conversation:"
+
 // publishConversationNew is a small wrapper so the activation pathway is the
 // single place that broadcasts conversation.new events.
 func publishConversationNew(ctx context.Context, p Publisher, channels []string, payload map[string]any) {
 	events.PublishMany(ctx, p, channels, events.EventConversationNew, payload)
+}
+
+func conversationUnreadKey(userID, convID string) string {
+	return conversationUnreadKeyPrefix + userID + ":" + convID
 }
 
 // ConversationService manages direct messages and group conversations.
@@ -277,9 +284,33 @@ func (s *ConversationService) ListUserConversations(ctx context.Context, userID 
 		if !c.Activated && c.CreatedBy != "" && c.CreatedBy != userID {
 			continue
 		}
+		if s.cache != nil {
+			var unread bool
+			if err := s.cache.Get(ctx, conversationUnreadKey(userID, c.ConversationID), &unread); err == nil && unread {
+				c.Unread = true
+			} else if err == nil || errors.Is(err, cache.ErrCacheMiss) || errors.Is(err, store.ErrNotFound) {
+				c.Unread = false
+			} else if err != nil && !errors.Is(err, cache.ErrCacheMiss) && !errors.Is(err, store.ErrNotFound) {
+				return nil, fmt.Errorf("conversation: unread cache: %w", err)
+			}
+		}
 		out = append(out, c)
 	}
 	return out, nil
+}
+
+func (s *ConversationService) MarkUnread(ctx context.Context, userID, convID string) error {
+	if s.cache == nil || userID == "" || convID == "" {
+		return nil
+	}
+	return s.cache.Set(ctx, conversationUnreadKey(userID, convID), true, 0)
+}
+
+func (s *ConversationService) ClearUnread(ctx context.Context, userID, convID string) error {
+	if s.cache == nil || userID == "" || convID == "" {
+		return nil
+	}
+	return s.cache.Delete(ctx, conversationUnreadKey(userID, convID))
 }
 
 // Activate marks the conversation as activated and broadcasts EventConversationNew

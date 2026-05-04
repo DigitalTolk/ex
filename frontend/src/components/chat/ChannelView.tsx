@@ -31,7 +31,15 @@ import { collectMessageUserIDs, findLastOwnMessageId } from '@/lib/message-users
 import { useSidePanels } from '@/hooks/useSidePanels';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { useDeepLinkAnchor } from '@/hooks/useDeepLinkAnchor';
-import { useDeleteDraft, useDraftAttachmentChips, useDraftForScope, useSaveDraft } from '@/hooks/useDrafts';
+import {
+  restoreDraftScope,
+  restoreDraftScopeForContent,
+  suppressSentDraft,
+  useDeleteDraft,
+  useDraftAttachmentChips,
+  useDraftForScope,
+  useSaveDraft,
+} from '@/hooks/useDrafts';
 import { useTagState } from '@/context/TagSearchContext';
 import { TagSearchPanel } from '@/components/TagSearchPanel';
 import type { UserMapEntry } from './MessageList';
@@ -118,6 +126,7 @@ export function ChannelView() {
   const handleDraftChange = useCallback(
     (value: { body: string; attachmentIDs: string[] }) => {
       if (!channelID) return;
+      restoreDraftScopeForContent(draftScope, value);
       saveDraftMutate({
         parentID: channelID,
         parentType: 'channel',
@@ -125,17 +134,21 @@ export function ChannelView() {
         attachmentIDs: value.attachmentIDs,
       });
     },
-    [channelID, saveDraftMutate],
+    [channelID, draftScope, saveDraftMutate],
   );
   const handleSendMessage = useCallback(
     (value: { body: string; attachmentIDs: string[] }) => {
+      suppressSentDraft(draftScope);
       if (!draftID) {
-        sendMessage.mutate(value);
+        sendMessage.mutate(value, { onError: () => restoreDraftScope(draftScope) });
         return;
       }
-      sendMessage.mutate(value, { onSuccess: () => deleteDraftMutate(draftID) });
+      sendMessage.mutate(value, {
+        onSuccess: () => deleteDraftMutate(draftID),
+        onError: () => restoreDraftScope(draftScope),
+      });
     },
-    [sendMessage, draftID, deleteDraftMutate],
+    [sendMessage, draftScope, draftID, deleteDraftMutate],
   );
   useEffect(() => {
     if (!channel?.id) return;
@@ -165,8 +178,8 @@ export function ChannelView() {
 
   // Mark URL-driven threads as seen exactly once per change.
   useEffect(() => {
-    if (threadParam) markThreadSeen(threadParam);
-  }, [threadParam]);
+    if (threadParam && channel?.id) markThreadSeen(threadParam, new Date().toISOString(), { parentID: channel.id, parentType: 'channel' });
+  }, [threadParam, channel?.id]);
 
   // Opening a thread (via URL navigation, e.g. clicking a pinned
   // thread reply) must dismiss any other side panel — the local

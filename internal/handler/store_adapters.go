@@ -112,10 +112,21 @@ func (a *MembershipStoreAdapter) SetCategory(ctx context.Context, channelID, use
 
 // ConversationStoreAdapter wraps store.ConversationStoreImpl to satisfy service.ConversationStore.
 type ConversationStoreAdapter struct {
-	s *store.ConversationStoreImpl
+	s conversationBacking
 }
 
-func NewConversationStoreAdapter(s *store.ConversationStoreImpl) *ConversationStoreAdapter {
+type conversationBacking interface {
+	Create(ctx context.Context, conv *model.Conversation, userConvs []*model.UserConversation) error
+	GetByID(ctx context.Context, id string) (*model.Conversation, error)
+	ListUserConversations(ctx context.Context, userID string) ([]*model.UserConversation, error)
+	Activate(ctx context.Context, convID string, participantIDs []string) error
+	Touch(ctx context.Context, convID string, participantIDs []string, at time.Time) error
+	SetUserConversationFavorite(ctx context.Context, convID, userID string, favorite bool) error
+	SetUserConversationCategory(ctx context.Context, convID, userID, categoryID string, sidebarPosition *int) error
+	ListAll(ctx context.Context) ([]*model.Conversation, error)
+}
+
+func NewConversationStoreAdapter(s conversationBacking) *ConversationStoreAdapter {
 	return &ConversationStoreAdapter{s: s}
 }
 
@@ -150,10 +161,21 @@ func (a *ConversationStoreAdapter) ListAllConversations(ctx context.Context) ([]
 
 // MessageStoreAdapter wraps store.MessageStoreImpl to satisfy service.MessageStore.
 type MessageStoreAdapter struct {
-	s *store.MessageStoreImpl
+	s messageBacking
 }
 
-func NewMessageStoreAdapter(s *store.MessageStoreImpl) *MessageStoreAdapter {
+type messageBacking interface {
+	Create(ctx context.Context, msg *model.Message) error
+	GetByID(ctx context.Context, parentID, msgID string) (*model.Message, error)
+	Update(ctx context.Context, parentID string, msg *model.Message) error
+	Delete(ctx context.Context, parentID, msgID string) error
+	ListAfter(ctx context.Context, parentID, after string, limit int) ([]*model.Message, bool, error)
+	ListAround(ctx context.Context, parentID, msgID string, before, after int) ([]*model.Message, bool, bool, error)
+	List(ctx context.Context, parentID string, before string, limit int) ([]*model.Message, bool, error)
+	IncrementReplyMetadata(ctx context.Context, parentID, msgID string, replyTime time.Time, replyAuthorID string) (*model.Message, error)
+}
+
+func NewMessageStoreAdapter(s messageBacking) *MessageStoreAdapter {
 	return &MessageStoreAdapter{s: s}
 }
 
@@ -209,6 +231,32 @@ func (a *ThreadFollowStoreAdapter) ListUserThreadFollows(ctx context.Context, us
 }
 func (a *ThreadFollowStoreAdapter) ListThreadFollows(ctx context.Context, parentID, threadRootID string) ([]*model.ThreadFollow, error) {
 	return a.s.ListThread(ctx, parentID, threadRootID)
+}
+
+type userStateBacking interface {
+	Set(ctx context.Context, item *model.UserStateItem) error
+	Delete(ctx context.Context, userID string, kind model.UserStateKind, targetID string) error
+	List(ctx context.Context, userID string) ([]*model.UserStateItem, error)
+}
+
+type UserStateStoreAdapter struct {
+	s userStateBacking
+}
+
+func NewUserStateStoreAdapter(s userStateBacking) *UserStateStoreAdapter {
+	return &UserStateStoreAdapter{s: s}
+}
+
+func (a *UserStateStoreAdapter) SetUserState(ctx context.Context, item *model.UserStateItem) error {
+	return a.s.Set(ctx, item)
+}
+
+func (a *UserStateStoreAdapter) DeleteUserState(ctx context.Context, userID string, kind model.UserStateKind, targetID string) error {
+	return a.s.Delete(ctx, userID, kind, targetID)
+}
+
+func (a *UserStateStoreAdapter) ListUserState(ctx context.Context, userID string) ([]*model.UserStateItem, error) {
+	return a.s.List(ctx, userID)
 }
 
 // InviteStoreAdapter wraps store.InviteStoreImpl to satisfy service.InviteStore.

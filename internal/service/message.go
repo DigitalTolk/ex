@@ -29,6 +29,10 @@ type ConversationActivator interface {
 	Activate(ctx context.Context, convID string) error
 }
 
+type ConversationUnreadTracker interface {
+	MarkUnread(ctx context.Context, userID, convID string) error
+}
+
 // AttachmentRefManager is the AttachmentService capability MessageService uses
 // to bind/unbind attachments to messages. Defined as an interface so tests can
 // stub it without dragging in storage.
@@ -58,6 +62,7 @@ type MessageService struct {
 	publisher     Publisher
 	broker        Broker
 	activator     ConversationActivator
+	unreadTracker ConversationUnreadTracker
 	attachments   AttachmentRefManager
 	notifier      MessageNotifier
 	indexer       MessageIndexer
@@ -85,6 +90,10 @@ func NewMessageService(
 // both services are constructed to avoid a constructor cycle.
 func (s *MessageService) SetActivator(a ConversationActivator) { s.activator = a }
 
+func (s *MessageService) SetConversationUnreadTracker(t ConversationUnreadTracker) {
+	s.unreadTracker = t
+}
+
 // SetAttachmentManager wires the attachment ref manager. Called from main
 // wiring after both services are constructed to avoid a constructor cycle.
 func (s *MessageService) SetAttachmentManager(a AttachmentRefManager) { s.attachments = a }
@@ -96,6 +105,10 @@ func (s *MessageService) SetNotifier(n MessageNotifier) { s.notifier = n }
 func (s *MessageService) SetIndexer(i MessageIndexer) { s.indexer = i }
 
 func (s *MessageService) SetThreadFollowStore(f ThreadFollowStore) { s.threadFollows = f }
+
+func (s *MessageService) CheckAccess(ctx context.Context, userID, parentID, parentType string) error {
+	return s.checkAccess(ctx, userID, parentID, parentType)
+}
 
 // indexMessage / deleteFromIndex dispatch on a detached goroutine so a
 // slow OpenSearch never adds to user-perceived send latency. Failures
@@ -168,6 +181,16 @@ func (s *MessageService) Send(ctx context.Context, userID, parentID, parentType,
 
 	if parentType == ParentConversation {
 		if conv, err := s.conversations.GetConversation(ctx, parentID); err == nil && conv != nil {
+			if s.unreadTracker != nil {
+				for _, participantID := range conv.ParticipantIDs {
+					if participantID == userID {
+						continue
+					}
+					if err := s.unreadTracker.MarkUnread(ctx, participantID, parentID); err != nil {
+						slog.Warn("conversation unread mark failed", "convID", parentID, "userID", participantID, "error", err)
+					}
+				}
+			}
 			if err := s.conversations.TouchConversation(ctx, parentID, conv.ParticipantIDs, now); err != nil {
 				slog.Warn("conversation activity touch failed", "convID", parentID, "error", err)
 			} else {

@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -44,15 +45,16 @@ func IsNotifiable(k NotificationKind) bool {
 // WebSocket pipe as state events. It is intentionally minimal — title, body,
 // where to go on click, and a stable client-side de-dup key.
 type Notification struct {
-	Kind       NotificationKind `json:"kind"`
-	Title      string           `json:"title"`
-	Body       string           `json:"body"`
-	DeepLink   string           `json:"deepLink"`
-	ParentID   string           `json:"parentID"`   // channel/conversation ID
-	ParentType string           `json:"parentType"` // "channel" | "conversation"
-	MessageID  string           `json:"messageID,omitempty"`
-	AuthorID   string           `json:"authorID,omitempty"` // for client-side own-author suppression
-	CreatedAt  time.Time        `json:"createdAt"`
+	Kind            NotificationKind `json:"kind"`
+	Title           string           `json:"title"`
+	Body            string           `json:"body"`
+	DeepLink        string           `json:"deepLink"`
+	ParentID        string           `json:"parentID"`   // channel/conversation ID
+	ParentType      string           `json:"parentType"` // "channel" | "conversation"
+	MessageID       string           `json:"messageID,omitempty"`
+	ParentMessageID string           `json:"parentMessageID,omitempty"`
+	AuthorID        string           `json:"authorID,omitempty"` // for client-side own-author suppression
+	CreatedAt       time.Time        `json:"createdAt"`
 }
 
 // PresenceLookup is the slice of PresenceService NotificationService cares
@@ -76,6 +78,7 @@ type NotificationService struct {
 	messages  MessageStore
 	presence  PresenceLookup
 	follows   ThreadFollowStore
+	userState *UserStateService
 }
 
 // NewNotificationService builds a NotificationService. messages is used
@@ -92,6 +95,10 @@ func NewNotificationService(p Publisher, m MembershipStore, c ConversationStore,
 func (s *NotificationService) SetPresence(p PresenceLookup) { s.presence = p }
 
 func (s *NotificationService) SetThreadFollowStore(f ThreadFollowStore) { s.follows = f }
+
+func (s *NotificationService) SetUserStateService(userState *UserStateService) {
+	s.userState = userState
+}
 
 // memberSnapshot is everything NotifyForMessage and its helpers need to
 // reason about a parent's audience: the IDs of every recipient (author
@@ -172,15 +179,16 @@ func (s *NotificationService) NotifyForMessage(ctx context.Context, msg *model.M
 	}
 
 	notif := Notification{
-		Kind:       kind,
-		Title:      titleFor(kind, parentType, parentName, authorName),
-		Body:       previewBody(msg.Body),
-		DeepLink:   deepLink,
-		ParentID:   msg.ParentID,
-		ParentType: parentType,
-		MessageID:  msg.ID,
-		AuthorID:   msg.AuthorID,
-		CreatedAt:  time.Now(),
+		Kind:            kind,
+		Title:           titleFor(kind, parentType, parentName, authorName),
+		Body:            previewBody(msg.Body),
+		DeepLink:        deepLink,
+		ParentID:        msg.ParentID,
+		ParentType:      parentType,
+		MessageID:       msg.ID,
+		ParentMessageID: msg.ParentMessageID,
+		AuthorID:        msg.AuthorID,
+		CreatedAt:       time.Now(),
 	}
 
 	// A direct @-mention bypasses mute; @all/@here respect it. The
@@ -212,6 +220,9 @@ func (s *NotificationService) NotifyForMessage(ctx context.Context, msg *model.M
 		if mentionedSet[uid] || snap.muted[uid] {
 			continue
 		}
+		if kind == NotificationKindThreadReply {
+			s.markThreadNotification(ctx, uid, msg, parentType)
+		}
 		events.Publish(ctx, s.publisher, pubsub.UserChannel(uid), events.EventNotificationNew, notif)
 	}
 
@@ -220,8 +231,32 @@ func (s *NotificationService) NotifyForMessage(ctx context.Context, msg *model.M
 		mentionNotif.Kind = NotificationKindMention
 		mentionNotif.Title = titleFor(NotificationKindMention, parentType, parentName, authorName)
 		for _, uid := range mentionRecipients {
+			if parentType == ParentChannel {
+				s.markChannelNotification(ctx, uid, msg.ParentID)
+			}
+			if kind == NotificationKindThreadReply {
+				s.markThreadNotification(ctx, uid, msg, parentType)
+			}
 			events.Publish(ctx, s.publisher, pubsub.UserChannel(uid), events.EventNotificationNew, mentionNotif)
 		}
+	}
+}
+
+func (s *NotificationService) markChannelNotification(ctx context.Context, userID, channelID string) {
+	if s.userState == nil {
+		return
+	}
+	if err := s.userState.MarkChannelNotificationUnread(ctx, userID, channelID); err != nil {
+		slog.Warn("channel notification state failed", "channelID", channelID, "userID", userID, "error", err)
+	}
+}
+
+func (s *NotificationService) markThreadNotification(ctx context.Context, userID string, msg *model.Message, parentType string) {
+	if s.userState == nil || msg == nil || msg.ParentMessageID == "" {
+		return
+	}
+	if err := s.userState.MarkThreadNotificationUnread(ctx, userID, msg.ParentID, parentType, msg.ParentMessageID); err != nil {
+		slog.Warn("thread notification state failed", "threadRootID", msg.ParentMessageID, "userID", userID, "error", err)
 	}
 }
 

@@ -12,17 +12,23 @@ vi.mock('@/components/layout/AppLayout', () => ({
 }));
 
 const mockMarkChannelUnread = vi.fn();
+const mockMarkChannelNotificationUnread = vi.fn();
 const mockMarkConversationUnread = vi.fn();
+const mockMarkThreadNotificationUnread = vi.fn();
 
 const mockUnhideConversation = vi.fn();
 
 vi.mock('@/context/UnreadContext', () => ({
   useUnread: () => ({
     unreadChannels: new Set(),
+    unreadChannelNotifications: new Set(),
     unreadConversations: new Set(),
+    unreadThreadNotifications: new Set(),
     hiddenConversations: new Set(),
     markChannelUnread: mockMarkChannelUnread,
+    markChannelNotificationUnread: mockMarkChannelNotificationUnread,
     markConversationUnread: mockMarkConversationUnread,
+    markThreadNotificationUnread: mockMarkThreadNotificationUnread,
     clearChannelUnread: vi.fn(),
     clearConversationUnread: vi.fn(),
     hideConversation: vi.fn(),
@@ -65,6 +71,7 @@ vi.mock('@/hooks/useWebSocket', () => ({
 
 function renderChatPage() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  qc.setQueryData(['userChannels'], [{ channelID: 'ch-99', channelName: 'general' }]);
   return render(
     <QueryClientProvider client={qc}>
       <MemoryRouter>
@@ -109,7 +116,7 @@ describe('ChatPage', () => {
     const opts = mockUseWebSocket.mock.calls[0][0];
     opts.onMessageNew(msg());
     expect(mockMarkChannelUnread).toHaveBeenCalledWith('ch-99');
-    expect(mockMarkConversationUnread).toHaveBeenCalledWith('ch-99');
+    expect(mockMarkConversationUnread).not.toHaveBeenCalledWith('ch-99');
   });
 
   it('onMessageNew does NOT mark unread for own messages', () => {

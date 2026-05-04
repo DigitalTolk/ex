@@ -5,10 +5,14 @@ import { UnreadProvider, useUnread } from './UnreadContext';
 function TestConsumer() {
   const {
     unreadChannels,
+    unreadChannelNotifications,
     unreadConversations,
+    unreadThreadNotifications,
     hiddenConversations,
     markChannelUnread,
+    markChannelNotificationUnread,
     markConversationUnread,
+    markThreadNotificationUnread,
     clearChannelUnread,
     clearConversationUnread,
     hideConversation,
@@ -22,13 +26,17 @@ function TestConsumer() {
   return (
     <div>
       <span data-testid="channels">{JSON.stringify([...unreadChannels])}</span>
+      <span data-testid="channel-notifications">{JSON.stringify([...unreadChannelNotifications])}</span>
       <span data-testid="conversations">{JSON.stringify([...unreadConversations])}</span>
+      <span data-testid="thread-notifications">{JSON.stringify([...unreadThreadNotifications])}</span>
       <span data-testid="hidden">{JSON.stringify([...hiddenConversations])}</span>
       <span data-testid="is-active-ch">{String(isActiveChannel('ch-1'))}</span>
       <span data-testid="is-active-conv">{String(isActiveConversation('conv-1'))}</span>
       <button onClick={() => markChannelUnread('ch-1')}>markChannel</button>
+      <button onClick={() => markChannelNotificationUnread('ch-1')}>markChannelNotification</button>
       <button onClick={() => clearChannelUnread('ch-1')}>clearChannel</button>
       <button onClick={() => markConversationUnread('conv-1')}>markConvo</button>
+      <button onClick={() => markThreadNotificationUnread('root-1')}>markThreadNotification</button>
       <button onClick={() => clearConversationUnread('conv-1')}>clearConvo</button>
       <button onClick={() => hideConversation('conv-1')}>hideConvo</button>
       <button onClick={() => unhideConversation('conv-1')}>unhideConvo</button>
@@ -75,6 +83,26 @@ describe('UnreadContext', () => {
     expect(screen.getByTestId('channels')).toHaveTextContent('[]');
   });
 
+  it('markChannelNotificationUnread and clearChannelUnread work', () => {
+    render(
+      <UnreadProvider>
+        <TestConsumer />
+      </UnreadProvider>,
+    );
+
+    expect(screen.getByTestId('channel-notifications')).toHaveTextContent('[]');
+
+    act(() => {
+      screen.getByText('markChannelNotification').click();
+    });
+    expect(screen.getByTestId('channel-notifications')).toHaveTextContent('["ch-1"]');
+
+    act(() => {
+      screen.getByText('clearChannel').click();
+    });
+    expect(screen.getByTestId('channel-notifications')).toHaveTextContent('[]');
+  });
+
   it('markConversationUnread and clearConversationUnread work', () => {
     render(
       <UnreadProvider>
@@ -93,6 +121,24 @@ describe('UnreadContext', () => {
       screen.getByText('clearConvo').click();
     });
     expect(screen.getByTestId('conversations')).toHaveTextContent('[]');
+  });
+
+  it('markThreadNotificationUnread is cleared when that thread is marked seen', () => {
+    render(
+      <UnreadProvider>
+        <TestConsumer />
+      </UnreadProvider>,
+    );
+
+    act(() => {
+      screen.getByText('markThreadNotification').click();
+    });
+    expect(screen.getByTestId('thread-notifications')).toHaveTextContent('["root-1"]');
+
+    act(() => {
+      window.dispatchEvent(new CustomEvent('ex:threads-seen-changed', { detail: { threadRootID: 'root-1' } }));
+    });
+    expect(screen.getByTestId('thread-notifications')).toHaveTextContent('[]');
   });
 
   it('hide/unhide conversation persists to localStorage', () => {
@@ -147,16 +193,21 @@ describe('UnreadContext', () => {
     expect(screen.getByTestId('is-active-ch')).toHaveTextContent('true');
     // Try to mark unread — should be suppressed.
     act(() => screen.getByText('markChannel').click());
+    act(() => screen.getByText('markChannelNotification').click());
     expect(screen.getByTestId('channels')).toHaveTextContent('[]');
+    expect(screen.getByTestId('channel-notifications')).toHaveTextContent('[]');
 
     // Deactivating allows mark to land again.
     act(() => screen.getByText('deactivateCh').click());
     act(() => screen.getByText('markChannel').click());
+    act(() => screen.getByText('markChannelNotification').click());
     expect(screen.getByTestId('channels')).toHaveTextContent('["ch-1"]');
+    expect(screen.getByTestId('channel-notifications')).toHaveTextContent('["ch-1"]');
 
     // Activating clears any existing unread for that id.
     act(() => screen.getByText('activateCh').click());
     expect(screen.getByTestId('channels')).toHaveTextContent('[]');
+    expect(screen.getByTestId('channel-notifications')).toHaveTextContent('[]');
   });
 
   it('setActiveConversation suppresses markConversationUnread for that id', () => {

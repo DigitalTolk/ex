@@ -137,6 +137,28 @@ func (h *ConversationHandler) List(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, convs)
 }
 
+func (h *ConversationHandler) MarkRead(w http.ResponseWriter, r *http.Request) {
+	userID := middleware.UserIDFromContext(r.Context())
+	id := pathParam(r, "id")
+	if userID == "" {
+		writeError(w, http.StatusUnauthorized, "unauthorized", "authentication required")
+		return
+	}
+	if id == "" {
+		writeError(w, http.StatusBadRequest, "missing_id", "conversation ID is required")
+		return
+	}
+	if _, err := h.convSvc.GetByID(r.Context(), userID, id); err != nil {
+		writeReadResourceError(w, err, "conversation")
+		return
+	}
+	if err := h.convSvc.ClearUnread(r.Context(), userID, id); err != nil {
+		writeError(w, http.StatusInternalServerError, "read_error", err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // Get returns a single conversation by ID.
 func (h *ConversationHandler) Get(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserIDFromContext(r.Context())

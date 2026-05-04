@@ -37,16 +37,22 @@ vi.mock('@/context/AuthContext', () => ({
 }));
 
 const markChannelUnread = vi.fn();
+const markChannelNotificationUnread = vi.fn();
 const markConversationUnread = vi.fn();
+const markThreadNotificationUnread = vi.fn();
 const unhideConversation = vi.fn();
 
 vi.mock('@/context/UnreadContext', () => ({
   useUnread: () => ({
     markChannelUnread,
+    markChannelNotificationUnread,
     markConversationUnread,
+    markThreadNotificationUnread,
     unhideConversation,
     unreadChannels: new Set(),
+    unreadChannelNotifications: new Set(),
     unreadConversations: new Set(),
+    unreadThreadNotifications: new Set(),
     hiddenConversations: new Set(),
     hideConversation: vi.fn(),
     clearChannelUnread: vi.fn(),
@@ -149,7 +155,9 @@ describe('ChatPage WebSocket handlers', () => {
       status: 'active',
     };
     markChannelUnread.mockReset();
+    markChannelNotificationUnread.mockReset();
     markConversationUnread.mockReset();
+    markThreadNotificationUnread.mockReset();
     unhideConversation.mockReset();
     setUserOnline.mockReset();
     dispatchNotification.mockReset();
@@ -174,7 +182,9 @@ describe('ChatPage WebSocket handlers', () => {
   }
 
   it('onMessageNew marks unread + un-hides + invalidates queries (skipping self)', () => {
-    renderAt('/');
+    renderAt('/', (qc) => {
+      qc.setQueryData(['userChannels'], [{ channelID: 'ch-1', channelName: 'general' }]);
+    });
     const handler = capturedOptions.onMessageNew as (d: unknown) => void;
     // From self — should skip the unread marking
     handler(msg({ authorID: 'u-me' }));
@@ -182,8 +192,23 @@ describe('ChatPage WebSocket handlers', () => {
     // From someone else
     handler(msg({ authorID: 'u-other' }));
     expect(markChannelUnread).toHaveBeenCalledWith('ch-1');
-    expect(markConversationUnread).toHaveBeenCalledWith('ch-1');
-    expect(unhideConversation).toHaveBeenCalledWith('ch-1');
+    expect(markConversationUnread).not.toHaveBeenCalled();
+    expect(unhideConversation).not.toHaveBeenCalled();
+  });
+
+  it('onMessageNew marks a DM unread only once', () => {
+    renderAt('/', (qc) => {
+      qc.setQueryData(['userChannels'], [{ channelID: 'ch-1', channelName: 'general' }]);
+      qc.setQueryData(['userConversations'], [{ conversationID: 'conv-1' }]);
+    });
+    const handler = capturedOptions.onMessageNew as (d: unknown) => void;
+
+    handler(msg({ parentID: 'conv-1', authorID: 'u-other' }));
+
+    expect(markChannelUnread).not.toHaveBeenCalled();
+    expect(markConversationUnread).toHaveBeenCalledTimes(1);
+    expect(markConversationUnread).toHaveBeenCalledWith('conv-1');
+    expect(unhideConversation).toHaveBeenCalledWith('conv-1');
   });
 
   it('onMessageNew without a valid Message payload is a no-op', () => {
@@ -473,6 +498,42 @@ describe('ChatPage WebSocket handlers', () => {
       parentType: 'channel',
       createdAt: new Date().toISOString(),
     });
+    expect(dispatchNotification).toHaveBeenCalledTimes(1);
+  });
+
+  it('onNotification counts channel mentions but not ordinary channel messages', () => {
+    renderAt('/');
+    const payload = {
+      title: 't',
+      body: 'b',
+      deepLink: '/x',
+      parentID: 'ch-1',
+      parentType: 'channel',
+      createdAt: new Date().toISOString(),
+    };
+
+    (capturedOptions.onNotification as (d: unknown) => void)({ ...payload, kind: 'message' });
+    expect(markChannelNotificationUnread).not.toHaveBeenCalled();
+
+    (capturedOptions.onNotification as (d: unknown) => void)({ ...payload, kind: 'mention' });
+    expect(markChannelNotificationUnread).toHaveBeenCalledWith('ch-1');
+  });
+
+  it('onNotification counts thread replies separately from their DM parent', () => {
+    renderAt('/');
+
+    (capturedOptions.onNotification as (d: unknown) => void)({
+      kind: 'thread_reply',
+      title: 't',
+      body: 'b',
+      deepLink: '/conversation/conv-1?thread=root-1#msg-reply-1',
+      parentID: 'conv-1',
+      parentType: 'conversation',
+      parentMessageID: 'root-1',
+      createdAt: new Date().toISOString(),
+    });
+
+    expect(markThreadNotificationUnread).toHaveBeenCalledWith('root-1');
     expect(dispatchNotification).toHaveBeenCalledTimes(1);
   });
 

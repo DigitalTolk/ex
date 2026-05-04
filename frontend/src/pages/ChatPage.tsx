@@ -31,7 +31,13 @@ import {
 } from '@/lib/ws-schemas';
 
 export default function ChatPage() {
-  const { markChannelUnread, markConversationUnread, unhideConversation } = useUnread();
+  const {
+    markChannelUnread,
+    markChannelNotificationUnread,
+    markConversationUnread,
+    markThreadNotificationUnread,
+    unhideConversation,
+  } = useUnread();
   const { user, logout, patchUser } = useAuth();
   const { setUserOnline } = usePresence();
   const { dispatch: dispatchNotification, setCurrentUserID } = useNotifications();
@@ -59,11 +65,19 @@ export default function ChatPage() {
       // up to 6s for the expiry to tick. Pass parentMessageID so a
       // thread reply clears the thread bucket (not the main one).
       clearTyping(parentID, authorID, parentMessageID ?? '');
+      const userChannels = queryClient.getQueryData<{ channelID: string }[]>(queryKeys.userChannels()) ?? [];
+      const isChannelParent = userChannels.some((channel) => channel.channelID === parentID);
       if (authorID !== user?.id) {
-        markChannelUnread(parentID);
-        markConversationUnread(parentID);
+        if (isChannelParent) {
+          markChannelUnread(parentID);
+        } else {
+          markConversationUnread(parentID);
+          queryClient.invalidateQueries({ queryKey: queryKeys.userConversations() });
+        }
       }
-      unhideConversation(parentID);
+      if (!isChannelParent) {
+        unhideConversation(parentID);
+      }
       // Patch the message-list cache directly. invalidateQueries here
       // would walk forward from pages[0] and truncate deep-link page
       // chains (see appendMessageToCache). Thread replies don't touch
@@ -188,6 +202,7 @@ export default function ChatPage() {
       queryClient.invalidateQueries({ queryKey: queryKeys.userChannels() });
       queryClient.invalidateQueries({ queryKey: queryKeys.userConversations() });
       queryClient.invalidateQueries({ queryKey: queryKeys.sidebarCategories() });
+      queryClient.invalidateQueries({ queryKey: queryKeys.userState() });
     },
     onAttachmentDeleted: (data: unknown) => {
       const evt = parseAttachmentDeleted(data);
@@ -202,6 +217,12 @@ export default function ChatPage() {
     onNotification: (data: unknown) => {
       const n = data as NotificationPayload | undefined;
       if (!n || !n.kind) return;
+      if (n.parentType === 'channel' && n.kind === 'mention') {
+        markChannelNotificationUnread(n.parentID);
+      }
+      if (n.kind === 'thread_reply' && n.parentMessageID) {
+        markThreadNotificationUnread(n.parentMessageID);
+      }
       dispatchNotification(n);
     },
     onDraftUpdated: () => {

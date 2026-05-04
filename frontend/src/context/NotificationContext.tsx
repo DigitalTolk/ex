@@ -16,6 +16,7 @@ export interface NotificationPayload {
   parentID: string;
   parentType: 'channel' | 'conversation';
   messageID?: string;
+  parentMessageID?: string;
   authorID?: string;
   createdAt: string;
 }

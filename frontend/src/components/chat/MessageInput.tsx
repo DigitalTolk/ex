@@ -114,6 +114,8 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
   const lastTypingPingRef = useRef(0);
   const deleteDraft = useDeleteDraftAttachment();
   const mountedDraftChangeRef = useRef(false);
+  const locallyEditedDraftRef = useRef(false);
+  const applyingServerDraftRef = useRef(false);
   const initialDraftKey = `${initialBody}\u0000${initialDrafts.map((d) => d.id).join('\u0000')}`;
   const appliedInitialDraftRef = useRef(initialDraftKey);
   // Toolbar pressed-state tracking. Driven by Lexical's
@@ -204,6 +206,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
     // Prevent the just-sent server draft props from rehydrating while the
     // debounced empty-draft save/delete catches up.
     appliedInitialDraftRef.current = initialDraftKey;
+    locallyEditedDraftRef.current = true;
     setBody('');
     setDrafts([]);
     editorRef.current?.setMarkdown('');
@@ -215,9 +218,14 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
     if (focusKey === undefined) return;
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setBody(initialBody);
+    applyingServerDraftRef.current = true;
     editorRef.current?.setMarkdown(initialBody);
+    queueMicrotask(() => {
+      applyingServerDraftRef.current = false;
+    });
     setDrafts(initialDrafts);
     appliedInitialDraftRef.current = initialDraftKey;
+    locallyEditedDraftRef.current = false;
     mountedDraftChangeRef.current = false;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusKey]);
@@ -226,13 +234,19 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
     if (variant !== 'composer') return;
     if (!initialBody && initialDrafts.length === 0) return;
     if (initialDraftKey === appliedInitialDraftRef.current) return;
+    if (locallyEditedDraftRef.current) return;
     if (body !== '') return;
     if (drafts.length > 0) return;
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setBody(initialBody);
+    applyingServerDraftRef.current = true;
     editorRef.current?.setMarkdown(initialBody);
+    queueMicrotask(() => {
+      applyingServerDraftRef.current = false;
+    });
     setDrafts(initialDrafts);
     appliedInitialDraftRef.current = initialDraftKey;
+    locallyEditedDraftRef.current = false;
     mountedDraftChangeRef.current = false;
   }, [initialBody, initialDraftKey, initialDrafts, body, drafts.length, variant]);
 
@@ -306,6 +320,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
     }
     if (files.length === 0) return;
     setIsUploading(true);
+    locallyEditedDraftRef.current = true;
 
     // Render a chip for every selected file *before* any network I/O so
     // the user sees N progress bars immediately instead of one-at-a-time
@@ -406,6 +421,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
   async function removeDraft(id: string) {
     const target = drafts.find((d) => d.id === id);
     if (target?.localURL) URL.revokeObjectURL(target.localURL);
+    locallyEditedDraftRef.current = true;
     setDrafts((d) => d.filter((x) => x.id !== id));
     try {
       await deleteDraft.mutateAsync(id);
@@ -498,6 +514,9 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
             ref={editorRef}
             initialBody={initialBody}
             onChange={(md) => {
+              if (!applyingServerDraftRef.current && md !== body) {
+                locallyEditedDraftRef.current = true;
+              }
               setBody(md);
               emitTyping();
             }}

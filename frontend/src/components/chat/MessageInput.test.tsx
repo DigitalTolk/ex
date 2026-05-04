@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render as rtlRender, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render as rtlRender, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MessageInput } from './MessageInput';
@@ -84,6 +84,33 @@ describe('MessageInput', () => {
     await waitFor(() => {
       expect((editor.textContent ?? '').trim()).toBe('');
     });
+  });
+
+  it('does not rehydrate stale server draft text after the user clears the composer', async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const renderTree = (initialBody: string) => (
+      <QueryClientProvider client={qc}>
+        <MessageInput onSend={vi.fn()} initialBody={initialBody} />
+      </QueryClientProvider>
+    );
+    const { rerender } = rtlRender(renderTree('delete me'));
+    const editor = await screen.findByLabelText('Message input');
+
+    const range = document.createRange();
+    range.selectNodeContents(editor);
+    const sel = window.getSelection();
+    sel?.removeAllRanges();
+    sel?.addRange(range);
+    fireEvent.keyDown(editor, { key: 'Backspace' });
+
+    await waitFor(() => {
+      expect((editor.textContent ?? '').trim()).toBe('');
+    });
+
+    rerender(renderTree('delete me'));
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect((editor.textContent ?? '').trim()).toBe('');
   });
 
   it('uses custom placeholder', async () => {

@@ -145,7 +145,7 @@ func TestMessageService_SendActivatesConversation(t *testing.T) {
 	users.users["a"] = &model.User{ID: "a", DisplayName: "A"}
 	users.users["b"] = &model.User{ID: "b", DisplayName: "B"}
 	pub := newMockPublisher()
-	convSvc := NewConversationService(convs, users, &mockCache{}, newMockBroker(), pub)
+	convSvc := NewConversationService(convs, users, newMockCache(), newMockBroker(), pub)
 	conv, err := convSvc.CreateGroup(context.Background(), "a", []string{"b"}, "")
 	if err != nil {
 		t.Fatalf("create: %v", err)
@@ -155,6 +155,7 @@ func TestMessageService_SendActivatesConversation(t *testing.T) {
 	memberStore := newMockMembershipStore()
 	msgSvc := NewMessageService(messageStore, memberStore, convs, pub, newMockBroker())
 	msgSvc.SetActivator(convSvc)
+	msgSvc.SetConversationUnreadTracker(convSvc)
 
 	pub.published = nil
 	if _, err := msgSvc.Send(context.Background(), "a", conv.ID, ParentConversation, "hello", ""); err != nil {
@@ -170,5 +171,13 @@ func TestMessageService_SendActivatesConversation(t *testing.T) {
 	}
 	if convNewCount == 0 {
 		t.Error("first message did not trigger conversation activation event")
+	}
+
+	listB, err := convSvc.ListUserConversations(context.Background(), "b")
+	if err != nil {
+		t.Fatalf("ListUserConversations(b): %v", err)
+	}
+	if len(listB) != 1 || !listB[0].Unread {
+		t.Fatalf("recipient conversation should be unread from shared cache: %+v", listB)
 	}
 }

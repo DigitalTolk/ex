@@ -48,6 +48,7 @@ import { useUnread } from '@/context/UnreadContext';
 import { useUserChannels } from '@/hooks/useChannels';
 import { useUserConversations } from '@/hooks/useConversations';
 import { useUserThreads, hasUnreadActivity } from '@/hooks/useThreads';
+import { useUserState } from '@/hooks/useUserState';
 import { useDrafts } from '@/hooks/useDrafts';
 import { useCategories, useCreateCategory, useDeleteCategory, useFavoriteChannel, useSetCategory, useSetConversationCategory, useReorderCategories } from '@/hooks/useSidebar';
 import { groupSidebarItems, SidebarSectionKeys, type SidebarItem, type ConversationSidebarSort } from '@/lib/sidebar-groups';
@@ -404,6 +405,7 @@ export function Sidebar({ onClose }: SidebarProps) {
   const { data: channels } = useUserChannels();
   const { data: conversations } = useUserConversations();
   const { data: threads } = useUserThreads();
+  const { data: userState } = useUserState();
   const { data: drafts } = useDrafts();
   const { data: categories } = useCategories();
   const createCategory = useCreateCategory();
@@ -451,10 +453,13 @@ export function Sidebar({ onClose }: SidebarProps) {
   const [categoryToDelete, setCategoryToDelete] = useState<{ id: string; title: string } | null>(null);
 
   const visibleConversations = useMemo(
-    () => conversations?.filter((c) => !hiddenConversations.has(c.conversationID)) ?? [],
-    [conversations, hiddenConversations],
+    () => {
+      const hidden = new Set([...(userState?.hiddenConversations ?? []), ...hiddenConversations]);
+      return conversations?.filter((c) => !hidden.has(c.conversationID)) ?? [];
+    },
+    [conversations, hiddenConversations, userState?.hiddenConversations],
   );
-  const hasThreadUpdates = (threads ?? []).some((t) => hasUnreadActivity(t));
+  const hasThreadUpdates = (threads ?? []).some((t) => hasUnreadActivity(t, userState?.threadSeen ?? {}));
   const draftCount = drafts?.length ?? 0;
 
   const sidebarSections = useMemo(
@@ -1427,12 +1432,13 @@ export function Sidebar({ onClose }: SidebarProps) {
                       const ch = item.channel;
                       const isActive =
                         location.pathname === `/channel/${slugify(ch.channelName)}`;
-                      return isActive || (!ch.muted && unreadChannels.has(ch.channelID));
+                      const hasNotification = (userState?.channelNotifications ?? []).includes(ch.channelID);
+                      return isActive || (!ch.muted && (unreadChannels.has(ch.channelID) || hasNotification));
                     }
                     const conv = item.conversation;
                     const isActive =
                       location.pathname === `/conversation/${conv.conversationID}`;
-                    return isActive || unreadConversations.has(conv.conversationID);
+                    return isActive || conv.unread || unreadConversations.has(conv.conversationID);
                   })
                 : section.items;
 
@@ -1580,7 +1586,10 @@ export function Sidebar({ onClose }: SidebarProps) {
                               {(dragProps) => (
                                 <ChannelRow
                                   channel={item.channel}
-                                  hasUnread={unreadChannels.has(item.channel.channelID)}
+                                  hasUnread={
+                                    unreadChannels.has(item.channel.channelID) ||
+                                    (userState?.channelNotifications ?? []).includes(item.channel.channelID)
+                                  }
                                   onClose={onClose}
                                   draggable
                                   suppressNavigation={suppressChannelNavigationID === item.channel.channelID}
@@ -1614,7 +1623,7 @@ export function Sidebar({ onClose }: SidebarProps) {
                               {(dragProps) => (
                                 <ConversationRow
                                   conversation={conv}
-                                  hasUnread={unreadConversations.has(conv.conversationID)}
+                                  hasUnread={!!conv.unread || unreadConversations.has(conv.conversationID)}
                                   dmAvatarURL={dmAvatarURL}
                                   dmUserStatus={dmUserStatus}
                                   dmOnline={dmOnline}
@@ -1630,7 +1639,7 @@ export function Sidebar({ onClose }: SidebarProps) {
                           ) : (
                             <ConversationRow
                               conversation={conv}
-                              hasUnread={unreadConversations.has(conv.conversationID)}
+                              hasUnread={!!conv.unread || unreadConversations.has(conv.conversationID)}
                               dmAvatarURL={dmAvatarURL}
                               dmUserStatus={dmUserStatus}
                               dmOnline={dmOnline}

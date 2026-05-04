@@ -60,6 +60,7 @@ type UserConversation struct {
 	JoinedAt       time.Time        `json:"joinedAt" dynamodbav:"joinedAt"`
 	UpdatedAt      time.Time        `json:"updatedAt,omitempty" dynamodbav:"updatedAt,omitempty"`
 	LastReadMsgID  string           `json:"lastReadMsgID,omitempty" dynamodbav:"lastReadMsgID,omitempty"`
+	Unread         bool             `json:"unread,omitempty" dynamodbav:"-"`
 	// Favorite pins this DM/group to the user's "Favorites" sidebar
 	// section. Same per-user semantics as on UserChannel.
 	Favorite bool `json:"favorite,omitempty" dynamodbav:"favorite,omitempty"`

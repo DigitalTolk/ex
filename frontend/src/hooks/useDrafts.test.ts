@@ -3,6 +3,9 @@ import { renderHook, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createElement, type ReactNode } from 'react';
 import {
+  restoreDraftScope,
+  restoreDraftScopeForContent,
+  suppressSentDraft,
   useDeleteDraft,
   useDraftAttachmentChips,
   useDraftForScope,
@@ -32,6 +35,7 @@ function createWrapper() {
 describe('useDrafts', () => {
   beforeEach(() => {
     vi.mocked(apiFetch).mockReset();
+    restoreDraftScope({ parentID: 'dm-1', parentType: 'conversation' });
   });
 
   it('loads drafts and normalizes invalid responses to an empty list', async () => {
@@ -78,6 +82,67 @@ describe('useDrafts', () => {
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(result.current.data?.id).toBe('draft-1');
+  });
+
+  it('hides sent draft scopes so a late save cannot rehydrate the composer', async () => {
+    const suppressed: MessageDraft = {
+      id: 'draft-stale',
+      userID: 'u-1',
+      parentID: 'dm-1',
+      parentType: 'conversation',
+      parentMessageID: '',
+      body: 'already sent',
+      attachmentIDs: [],
+      updatedAt: '2026-05-03T10:00:00Z',
+      createdAt: '2026-05-03T10:00:00Z',
+    };
+    const visible: MessageDraft = {
+      id: 'draft-visible',
+      userID: 'u-1',
+      parentID: 'dm-2',
+      parentType: 'conversation',
+      parentMessageID: '',
+      body: 'keep me',
+      attachmentIDs: [],
+      updatedAt: '2026-05-03T10:01:00Z',
+      createdAt: '2026-05-03T10:01:00Z',
+    };
+    vi.mocked(apiFetch).mockResolvedValue([suppressed, visible]);
+
+    suppressSentDraft({ parentID: 'dm-1', parentType: 'conversation' });
+    const { result } = renderHook(() => useDrafts(), { wrapper: createWrapper() });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data).toEqual([visible]);
+  });
+
+  it('keeps sent draft scopes suppressed for empty clears and restores them when the user edits again', async () => {
+    const stale: MessageDraft = {
+      id: 'draft-stale',
+      userID: 'u-1',
+      parentID: 'dm-1',
+      parentType: 'conversation',
+      parentMessageID: '',
+      body: 'already sent',
+      attachmentIDs: [],
+      updatedAt: '2026-05-03T10:00:00Z',
+      createdAt: '2026-05-03T10:00:00Z',
+    };
+    const scope = { parentID: 'dm-1', parentType: 'conversation' as const };
+    vi.mocked(apiFetch).mockResolvedValue([stale]);
+
+    suppressSentDraft(scope);
+    restoreDraftScopeForContent(scope, { body: '', attachmentIDs: [] });
+    const hidden = renderHook(() => useDrafts(), { wrapper: createWrapper() });
+
+    await waitFor(() => expect(hidden.result.current.isSuccess).toBe(true));
+    expect(hidden.result.current.data).toEqual([]);
+
+    restoreDraftScopeForContent(scope, { body: 'new edit', attachmentIDs: [] });
+    const restored = renderHook(() => useDrafts(), { wrapper: createWrapper() });
+
+    await waitFor(() => expect(restored.result.current.isSuccess).toBe(true));
+    expect(restored.result.current.data).toEqual([stale]);
   });
 
   it('saves and deletes drafts with normalized request bodies', async () => {

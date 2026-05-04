@@ -831,6 +831,18 @@ func TestMessageService_SetThreadFollow_InvalidConfigurationAndParentType(t *tes
 	}
 }
 
+func TestMessageService_CheckAccess(t *testing.T) {
+	svc, _, memberships, _, _ := setupMessageService()
+	ctx := context.Background()
+	memberships.memberships["ch-1#u-me"] = &model.ChannelMembership{ChannelID: "ch-1", UserID: "u-me"}
+	if err := svc.CheckAccess(ctx, "u-me", "ch-1", ParentChannel); err != nil {
+		t.Fatalf("CheckAccess channel: %v", err)
+	}
+	if err := svc.CheckAccess(ctx, "u-me", "ch-1", "bogus"); err == nil {
+		t.Fatal("expected invalid parent type error")
+	}
+}
+
 func TestMessageService_SetThreadFollow_AccessAndMissingRootErrors(t *testing.T) {
 	svc, messages, memberships, _, _ := setupMessageService()
 	svc.SetThreadFollowStore(newMockThreadFollowStore())

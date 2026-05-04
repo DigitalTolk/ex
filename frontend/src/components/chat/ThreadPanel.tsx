@@ -10,7 +10,15 @@ import { useSendMessage, type SendMessageInput } from '@/hooks/useMessages';
 import { useFollowThread, useThreadMessages, useUnfollowThread, useUserThreads } from '@/hooks/useThreads';
 import { useUsersBatch } from '@/hooks/useUsersBatch';
 import { collectMessageUserIDs } from '@/lib/message-users';
-import { useDeleteDraft, useDraftAttachmentChips, useDraftForScope, useSaveDraft } from '@/hooks/useDrafts';
+import {
+  restoreDraftScope,
+  restoreDraftScopeForContent,
+  suppressSentDraft,
+  useDeleteDraft,
+  useDraftAttachmentChips,
+  useDraftForScope,
+  useSaveDraft,
+} from '@/hooks/useDrafts';
 import type { UserMapEntry } from './MessageList';
 
 const ANCHOR_HIGHLIGHT_CLASSES = ['ring-1', 'ring-amber-400/50', 'rounded-md'];
@@ -71,17 +79,17 @@ export function ThreadPanel({
   const inputRef = useRef<MessageInputHandle>(null);
   const parentID = channelId ?? conversationId;
   const parentType: 'channel' | 'conversation' = channelId ? 'channel' : 'conversation';
+  const draftScope = useMemo(
+    () => ({ parentID, parentType, parentMessageID: threadRootID }),
+    [parentID, parentType, threadRootID],
+  );
   const { data: userThreads } = useUserThreads();
   const isFollowing = !!userThreads?.some(
     (t) => t.parentID === parentID && t.parentType === parentType && t.threadRootID === threadRootID,
   );
   const followThread = useFollowThread();
   const unfollowThread = useUnfollowThread();
-  const { data: draft } = useDraftForScope({
-    parentID,
-    parentType,
-    parentMessageID: threadRootID,
-  });
+  const { data: draft } = useDraftForScope(draftScope);
   const draftAttachments = useDraftAttachmentChips(draft?.attachmentIDs);
   const draftID = draft?.id;
   const saveDraft = useSaveDraft();
@@ -296,6 +304,7 @@ export function ThreadPanel({
   const handleDraftChange = useCallback(
     (value: SendMessageInput) => {
       if (!parentID) return;
+      restoreDraftScopeForContent(draftScope, value);
       saveDraftMutate({
         parentID,
         parentType,
@@ -304,19 +313,23 @@ export function ThreadPanel({
         attachmentIDs: value.attachmentIDs ?? [],
       });
     },
-    [parentID, parentType, threadRootID, saveDraftMutate],
+    [parentID, parentType, threadRootID, draftScope, saveDraftMutate],
   );
 
   const handleReply = useCallback(
     (input: SendMessageInput) => {
       const payload = { ...input, parentMessageID: threadRootID };
+      suppressSentDraft(draftScope);
       if (!draftID) {
-        send.mutate(payload);
+        send.mutate(payload, { onError: () => restoreDraftScope(draftScope) });
         return;
       }
-      send.mutate(payload, { onSuccess: () => deleteDraftMutate(draftID) });
+      send.mutate(payload, {
+        onSuccess: () => deleteDraftMutate(draftID),
+        onError: () => restoreDraftScope(draftScope),
+      });
     },
-    [send, threadRootID, draftID, deleteDraftMutate],
+    [send, threadRootID, draftScope, draftID, deleteDraftMutate],
   );
 
   return (

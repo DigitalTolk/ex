@@ -205,6 +205,7 @@ describe('ThreadCard', () => {
         body: 'a quick reply',
         parentMessageID: 'msg-root',
       }),
+      expect.objectContaining({ onError: expect.any(Function) }),
     );
   });
 

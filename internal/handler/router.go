@@ -20,6 +20,7 @@ import (
 func NewRouter(
 	authH *AuthHandler,
 	userH *UserHandler,
+	userStateH *UserStateHandler,
 	channelH *ChannelHandler,
 	convH *ConversationHandler,
 	wsH *WSHandler,
@@ -82,6 +83,14 @@ func NewRouter(
 	mux.Handle("PATCH /api/v1/users/{id}/status", middleware.WrapFunc(userH.SetUserStatus, authMW))
 	mux.Handle("GET /api/v1/users", middleware.WrapFunc(userH.ListUsers, authMW))
 
+	if userStateH != nil {
+		mux.Handle("GET /api/v1/user-state", middleware.WrapFunc(userStateH.Get, authMW))
+		mux.Handle("DELETE /api/v1/user-state/channels/{id}/notification", middleware.WrapFunc(userStateH.ClearChannelNotification, authMW))
+		mux.Handle("PUT /api/v1/user-state/threads/{parentType}/{parentID}/{threadRootID}/seen", middleware.WrapFunc(userStateH.MarkThreadSeen, authMW))
+		mux.Handle("PUT /api/v1/user-state/conversations/{id}/hidden", middleware.WrapFunc(userStateH.HideConversation, authMW))
+		mux.Handle("DELETE /api/v1/user-state/conversations/{id}/hidden", middleware.WrapFunc(userStateH.UnhideConversation, authMW))
+	}
+
 	// ------------------------------------------------------------------ Channels
 	mux.Handle("POST /api/v1/channels", middleware.WrapFunc(channelH.Create, authMW))
 	mux.Handle("GET /api/v1/channels", middleware.WrapFunc(channelH.List, authMW))
@@ -114,6 +123,7 @@ func NewRouter(
 	mux.Handle("POST /api/v1/conversations", middleware.WrapFunc(convH.Create, authMW))
 	mux.Handle("GET /api/v1/conversations", middleware.WrapFunc(convH.List, authMW))
 	mux.Handle("GET /api/v1/conversations/{id}", middleware.WrapFunc(convH.Get, authMW))
+	mux.Handle("PUT /api/v1/conversations/{id}/read", middleware.WrapFunc(convH.MarkRead, authMW))
 
 	mux.Handle("GET /api/v1/conversations/{id}/messages", middleware.WrapFunc(convH.ListMessages, authMW))
 	mux.Handle("POST /api/v1/conversations/{id}/messages", middleware.WrapFunc(convH.SendMessage, authMW))

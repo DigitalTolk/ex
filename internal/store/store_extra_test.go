@@ -1134,6 +1134,62 @@ func TestThreadFollowStore_GetNotFound(t *testing.T) {
 	}
 }
 
+func TestUserStateStore_SetListDelete(t *testing.T) {
+	db := setupDynamoDB(t)
+	s := NewUserStateStore(db)
+	ctx := context.Background()
+	seenAt := time.Now().UTC().Truncate(time.Millisecond)
+
+	if err := s.Set(ctx, &model.UserStateItem{
+		UserID: "u-1", Kind: model.UserStateChannelNotification, TargetID: "ch-1", UpdatedAt: seenAt,
+	}); err != nil {
+		t.Fatalf("Set channel notification: %v", err)
+	}
+	if err := s.Set(ctx, &model.UserStateItem{
+		UserID: "u-1", Kind: model.UserStateThreadSeen, TargetID: "root-1", ParentID: "ch-1", ParentType: "channel", ThreadRootID: "root-1", SeenAt: &seenAt, UpdatedAt: seenAt,
+	}); err != nil {
+		t.Fatalf("Set thread seen: %v", err)
+	}
+
+	rows, err := s.List(ctx, "u-1")
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("List count = %d, want 2", len(rows))
+	}
+	if err := s.Delete(ctx, "u-1", model.UserStateChannelNotification, "ch-1"); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	rows, err = s.List(ctx, "u-1")
+	if err != nil {
+		t.Fatalf("List after delete: %v", err)
+	}
+	if len(rows) != 1 || rows[0].Kind != model.UserStateThreadSeen {
+		t.Fatalf("rows after delete = %+v", rows)
+	}
+	if got := userStateKindFromSK("STATE#thread_seen#root-1"); got != model.UserStateThreadSeen {
+		t.Fatalf("userStateKindFromSK = %q", got)
+	}
+	if got := userStateKindFromSK("bad"); got != "" {
+		t.Fatalf("userStateKindFromSK bad = %q", got)
+	}
+}
+
+func TestUserStateStore_NonexistentTableErrors(t *testing.T) {
+	s := NewUserStateStore(brokenDB(t))
+	ctx := context.Background()
+	if err := s.Set(ctx, &model.UserStateItem{UserID: "u", Kind: model.UserStateHiddenConversation, TargetID: "conv"}); err == nil {
+		t.Fatal("expected Set error")
+	}
+	if err := s.Delete(ctx, "u", model.UserStateHiddenConversation, "conv"); err == nil {
+		t.Fatal("expected Delete error")
+	}
+	if _, err := s.List(ctx, "u"); err == nil {
+		t.Fatal("expected List error")
+	}
+}
+
 func TestThreadFollowStore_EmptyListsAndNonexistentTable(t *testing.T) {
 	db := setupDynamoDB(t)
 	s := NewThreadFollowStore(db)
