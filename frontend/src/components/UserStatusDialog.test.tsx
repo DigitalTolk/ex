@@ -72,7 +72,8 @@ describe('UserStatusDialog', () => {
     });
     const body = JSON.parse(apiFetchMock.mock.calls[0][1].body);
     expect(body).toMatchObject({ emoji: ':sandwich:', text: 'Out for Lunch' });
-    expect(body.clearAt).toEqual(expect.any(String));
+    expect(body.clearAt).toBeUndefined();
+    expect(body.clearAfterSeconds).toBeGreaterThan(0);
     expect(setAuthMock).toHaveBeenCalled();
   });
 
@@ -93,7 +94,8 @@ describe('UserStatusDialog', () => {
     await waitFor(() => expect(apiFetchMock).toHaveBeenCalled());
     const sickBody = JSON.parse(apiFetchMock.mock.calls[0][1].body);
     expect(sickBody).toMatchObject({ emoji: ':face_thermo:', text: 'Out Sick' });
-    expect(sickBody.clearAt).toEqual(expect.any(String));
+    expect(sickBody.clearAt).toBeUndefined();
+    expect(sickBody.clearAfterSeconds).toBeGreaterThan(0);
 
     apiFetchMock.mockClear();
     await userEvent.selectOptions(screen.getByLabelText(/Predefined status/i), 'Working from home');
@@ -102,7 +104,8 @@ describe('UserStatusDialog', () => {
     await waitFor(() => expect(apiFetchMock).toHaveBeenCalled());
     const wfhBody = JSON.parse(apiFetchMock.mock.calls[0][1].body);
     expect(wfhBody).toMatchObject({ emoji: ':house:', text: 'Working from home' });
-    expect(wfhBody.clearAt).toEqual(expect.any(String));
+    expect(wfhBody.clearAt).toBeUndefined();
+    expect(wfhBody.clearAfterSeconds).toBeGreaterThan(0);
   });
 
   it('uses the one-hour default for meetings', async () => {
@@ -118,7 +121,8 @@ describe('UserStatusDialog', () => {
     await waitFor(() => expect(apiFetchMock).toHaveBeenCalled());
     const body = JSON.parse(apiFetchMock.mock.calls[0][1].body);
     expect(body).toMatchObject({ emoji: ':spiral_calendar:', text: 'In a meeting' });
-    expect(body.clearAt).toEqual(expect.any(String));
+    expect(body.clearAt).toBeUndefined();
+    expect(body.clearAfterSeconds).toBeGreaterThan(0);
   });
 
   it('supports custom emoji, custom text, and no automatic clear', async () => {
@@ -143,6 +147,7 @@ describe('UserStatusDialog', () => {
     expect(body.emoji).toBe(':tada:');
     expect(body.text).toBe('Shipping');
     expect(body.clearAt).toBeUndefined();
+    expect(body.clearAfterSeconds).toBeUndefined();
   });
 
   it('saves a custom clear time', async () => {
@@ -158,7 +163,8 @@ describe('UserStatusDialog', () => {
 
     await waitFor(() => expect(apiFetchMock).toHaveBeenCalled());
     const body = JSON.parse(apiFetchMock.mock.calls[0][1].body);
-    expect(body.clearAt).toBe('2030-05-03T12:30:00.000Z');
+    expect(body.clearAt).toBeUndefined();
+    expect(body.clearAfterSeconds).toBeGreaterThan(0);
   });
 
   it('omits an invalid custom clear time', async () => {
@@ -173,6 +179,7 @@ describe('UserStatusDialog', () => {
     await waitFor(() => expect(apiFetchMock).toHaveBeenCalled());
     const body = JSON.parse(apiFetchMock.mock.calls[0][1].body);
     expect(body.clearAt).toBeUndefined();
+    expect(body.clearAfterSeconds).toBeUndefined();
   });
 
   it('initializes from an existing status with a clear time', () => {

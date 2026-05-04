@@ -76,6 +76,18 @@ func publishedKinds(pub *mockPublisher) map[string]NotificationKind {
 	return out
 }
 
+func publishedNotifications(pub *mockPublisher) map[string]Notification {
+	out := make(map[string]Notification, len(pub.published))
+	for _, p := range pub.published {
+		var n Notification
+		if err := json.Unmarshal(p.event.Data, &n); err != nil {
+			continue
+		}
+		out[p.channel] = n
+	}
+	return out
+}
+
 func TestNotificationService_NotifyForMessage_ChannelFanout(t *testing.T) {
 	svc, pub, members, _, chans, users := setupNotifier(t)
 	ctx := context.Background()
@@ -725,6 +737,34 @@ func TestNotifyForMessage_AtAll_NotifiesAllMembersAsMention(t *testing.T) {
 	}
 }
 
+func TestNotifyForMessage_AtAll_NotificationKeepsGroupMentionCopy(t *testing.T) {
+	svc, pub, members, _, chans, users := setupNotifier(t)
+	ctx := context.Background()
+
+	chans.channels["ch1"] = &model.Channel{ID: "ch1", Name: "general", Slug: "general"}
+	users.users["u-author"] = &model.User{ID: "u-author", DisplayName: "Alice"}
+	members.memberships["ch1#u-author"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u-author"}
+	members.memberships["ch1#u-bob"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u-bob"}
+
+	msg := &model.Message{
+		ID: "m1", ParentID: "ch1", AuthorID: "u-author",
+		Body: "@all please review",
+	}
+	svc.NotifyForMessage(ctx, msg, ParentChannel)
+
+	notifs := publishedNotifications(pub)
+	got := notifs[pubsub.UserChannel("u-bob")]
+	if got.Kind != NotificationKindMention {
+		t.Fatalf("kind = %q, want %q", got.Kind, NotificationKindMention)
+	}
+	if !strings.Contains(got.Title, "@all") {
+		t.Errorf("@all title lost group mention: %q", got.Title)
+	}
+	if !strings.Contains(got.Body, "@all") {
+		t.Errorf("@all body lost group mention: %q", got.Body)
+	}
+}
+
 func TestNotifyForMessage_AtAll_RespectsMute(t *testing.T) {
 	// @all is a group mention — it follows the polite "respect mute" rule
 	// rather than the bypass behaviour of a direct mention.
@@ -783,6 +823,35 @@ func TestNotifyForMessage_AtHere_OnlyOnlineMembers(t *testing.T) {
 	// in the channel does) — but must NOT receive a @here mention.
 	if got := kinds[pubsub.UserChannel("u-carol")]; got == NotificationKindMention {
 		t.Error("offline u-carol must not receive a mention from @here")
+	}
+}
+
+func TestNotifyForMessage_AtHere_NotificationKeepsGroupMentionCopy(t *testing.T) {
+	svc, pub, members, _, chans, users := setupNotifier(t)
+	ctx := context.Background()
+	svc.SetPresence(&stubPresence{online: map[string]bool{"u-bob": true}})
+
+	chans.channels["ch1"] = &model.Channel{ID: "ch1", Name: "general", Slug: "general"}
+	users.users["u-author"] = &model.User{ID: "u-author", DisplayName: "Alice"}
+	members.memberships["ch1#u-author"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u-author"}
+	members.memberships["ch1#u-bob"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u-bob"}
+
+	msg := &model.Message{
+		ID: "m1", ParentID: "ch1", AuthorID: "u-author",
+		Body: "@here anyone?",
+	}
+	svc.NotifyForMessage(ctx, msg, ParentChannel)
+
+	notifs := publishedNotifications(pub)
+	got := notifs[pubsub.UserChannel("u-bob")]
+	if got.Kind != NotificationKindMention {
+		t.Fatalf("kind = %q, want %q", got.Kind, NotificationKindMention)
+	}
+	if !strings.Contains(got.Title, "@here") {
+		t.Errorf("@here title lost group mention: %q", got.Title)
+	}
+	if !strings.Contains(got.Body, "@here") {
+		t.Errorf("@here body lost group mention: %q", got.Body)
 	}
 }
 

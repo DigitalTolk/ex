@@ -93,6 +93,7 @@ func indexUser(ctx context.Context, idx UserIndexer, u *model.User) {
 const avatarURLTTL = 24 * time.Hour
 
 const expiredStatusSweepBatchSize = 200
+const maxUserStatusClearAfter = 366 * 24 * time.Hour
 
 // resolveAvatar populates user.AvatarURL from user.AvatarKey using the signer.
 // Mutates the user in place. No-op if no signer or no key. The URL is
@@ -236,7 +237,9 @@ func (s *UserService) Update(ctx context.Context, userID string, displayName, av
 }
 
 // SetUserStatusMessage sets or clears the caller-visible status message.
-func (s *UserService) SetUserStatusMessage(ctx context.Context, userID string, status *model.UserStatus, timeZone string) (*model.User, error) {
+// clearAfter is a duration from server time; clients must not supply an
+// absolute persisted timestamp because their clock can be wrong.
+func (s *UserService) SetUserStatusMessage(ctx context.Context, userID string, status *model.UserStatus, clearAfter *time.Duration, timeZone string) (*model.User, error) {
 	user, err := s.users.GetUser(ctx, userID)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
@@ -256,6 +259,17 @@ func (s *UserService) SetUserStatusMessage(ctx context.Context, userID string, s
 		}
 		if len([]rune(status.Text)) > 32 {
 			return nil, errors.New("user: status text must be 32 characters or fewer")
+		}
+		status.ClearAt = nil
+		if clearAfter != nil {
+			if *clearAfter <= 0 {
+				return nil, errors.New("user: status clear duration must be positive")
+			}
+			if *clearAfter > maxUserStatusClearAfter {
+				return nil, errors.New("user: status clear duration is too far in the future")
+			}
+			clearAt := time.Now().Add(*clearAfter)
+			status.ClearAt = &clearAt
 		}
 	}
 	user.UserStatus = status

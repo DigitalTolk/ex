@@ -179,6 +179,14 @@ describe('NotificationCountTitleBridge', () => {
   it('counts thread notifications in addition to the unread DM parent', async () => {
     mockState.unreadConversations = new Set(['conv-1']);
     mockState.unreadThreadNotifications = new Set(['root-in-dm']);
+    mockState.threads = [
+      makeThread({
+        parentID: 'conv-1',
+        parentType: 'conversation',
+        threadRootID: 'root-in-dm',
+        latestActivityAt: '2026-05-04T08:00:00.000Z',
+      }),
+    ];
 
     render(
       <>
@@ -188,6 +196,20 @@ describe('NotificationCountTitleBridge', () => {
     );
 
     await waitFor(() => expect(document.title).toBe('(2) Threads · ex'));
+  });
+
+  it('does not count stale thread notifications when the thread is not listed', async () => {
+    mockState.unreadThreadNotifications = new Set(['root-orphan']);
+    mockState.threads = [];
+
+    render(
+      <>
+        <NotificationCountTitleBridge />
+        <TitleConsumer />
+      </>,
+    );
+
+    await waitFor(() => expect(document.title).toBe('Threads · ex'));
   });
 
   it('does not double-count the same unread thread from notification and thread activity', async () => {

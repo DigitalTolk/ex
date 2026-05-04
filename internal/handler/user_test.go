@@ -80,9 +80,9 @@ func TestSetMyUserStatus_OKAndClear(t *testing.T) {
 	token := makeTokenForUser(jwtMgr, user)
 
 	setHandler := middleware.Auth(jwtMgr)(http.HandlerFunc(h.SetMyUserStatus))
-	clearAt := time.Now().Add(time.Hour).UTC().Format(time.RFC3339)
+	beforeClear := time.Now()
 	req := httptest.NewRequest(http.MethodPatch, "/api/v1/users/me/status", strings.NewReader(
-		fmt.Sprintf(`{"emoji":":house:","text":"Working from home","clearAt":%q,"timeZone":"Europe/Stockholm"}`, clearAt),
+		`{"emoji":":house:","text":"Working from home","clearAfterSeconds":3600,"timeZone":"Europe/Stockholm"}`,
 	))
 	req.Header.Set("Authorization", "Bearer "+token)
 	rec := httptest.NewRecorder()
@@ -90,8 +90,16 @@ func TestSetMyUserStatus_OKAndClear(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("set status = %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
 	}
+	afterClear := time.Now()
 	if userStore.users[user.ID].UserStatus == nil || userStore.users[user.ID].UserStatus.Text != "Working from home" {
 		t.Fatalf("UserStatus = %+v, want Working from home", userStore.users[user.ID].UserStatus)
+	}
+	gotClearAt := userStore.users[user.ID].UserStatus.ClearAt
+	if gotClearAt == nil {
+		t.Fatal("ClearAt = nil, want server-computed clear time")
+	}
+	if gotClearAt.Before(beforeClear.Add(time.Hour)) || gotClearAt.After(afterClear.Add(time.Hour)) {
+		t.Fatalf("ClearAt = %s, want server now + 1h", gotClearAt)
 	}
 	if userStore.users[user.ID].TimeZone != "Europe/Stockholm" {
 		t.Errorf("TimeZone = %q, want Europe/Stockholm", userStore.users[user.ID].TimeZone)
@@ -107,6 +115,34 @@ func TestSetMyUserStatus_OKAndClear(t *testing.T) {
 	}
 	if userStore.users[user.ID].UserStatus != nil {
 		t.Fatalf("UserStatus = %+v, want nil", userStore.users[user.ID].UserStatus)
+	}
+}
+
+func TestSetMyUserStatus_RejectsClientClearAt(t *testing.T) {
+	h, userStore, jwtMgr := setupUserHandler(t)
+	user := &model.User{
+		ID:          "status-clear-at",
+		Email:       "clearat@example.com",
+		DisplayName: "Status User",
+		SystemRole:  model.SystemRoleMember,
+		Status:      "active",
+	}
+	userStore.users[user.ID] = user
+	userStore.emailIndex[user.Email] = user
+
+	handler := middleware.Auth(jwtMgr)(http.HandlerFunc(h.SetMyUserStatus))
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/users/me/status", strings.NewReader(
+		`{"emoji":":house:","text":"Working from home","clearAt":"2001-02-03T04:05:06Z","clearAfterSeconds":3600}`,
+	))
+	req.Header.Set("Authorization", "Bearer "+makeTokenForUser(jwtMgr, user))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "unknown field") {
+		t.Fatalf("expected unknown field rejection, got %s", rec.Body.String())
 	}
 }
 

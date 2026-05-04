@@ -79,7 +79,8 @@ func (s *UserStateService) MarkThreadNotificationUnread(ctx context.Context, use
 	})
 }
 
-func (s *UserStateService) MarkThreadSeen(ctx context.Context, userID, parentID, parentType, threadRootID string, seenAt time.Time) error {
+func (s *UserStateService) MarkThreadSeen(ctx context.Context, userID, parentID, parentType, threadRootID string) error {
+	now := time.Now()
 	if err := s.set(ctx, &model.UserStateItem{
 		UserID:       userID,
 		Kind:         model.UserStateThreadSeen,
@@ -87,8 +88,8 @@ func (s *UserStateService) MarkThreadSeen(ctx context.Context, userID, parentID,
 		ParentID:     parentID,
 		ParentType:   parentType,
 		ThreadRootID: threadRootID,
-		SeenAt:       &seenAt,
-		UpdatedAt:    time.Now(),
+		SeenAt:       &now,
+		UpdatedAt:    now,
 	}); err != nil {
 		return err
 	}

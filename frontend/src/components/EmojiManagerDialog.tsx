@@ -88,7 +88,7 @@ export function EmojiManagerDialog({ open, onOpenChange }: Props) {
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-xl">
+      <DialogContent className="max-w-xl" finalFocus={false}>
         <DialogHeader>
           <DialogTitle>Custom emojis</DialogTitle>
           <p className="text-xs text-muted-foreground">
@@ -239,6 +239,7 @@ export function EmojiManagerDialog({ open, onOpenChange }: Props) {
         onConfirm={() => {
           if (emojiToDelete) void performDelete(emojiToDelete);
         }}
+        finalFocus={false}
         testIDPrefix="delete-emoji"
       />
     </Dialog>

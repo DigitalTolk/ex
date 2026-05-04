@@ -51,11 +51,18 @@ func (s *dataEmojiStore) Delete(_ context.Context, name string) error {
 	return nil
 }
 
+type handlerEmojiSigner struct{}
+
+func (handlerEmojiSigner) PresignedGetURL(_ context.Context, key string, _ time.Duration) (string, error) {
+	return "https://fresh.test/" + key, nil
+}
+
 func setupEmojiHandler(t *testing.T) (*EmojiHandler, *dataEmojiStore, *dataUserStoreForConv, *auth.JWTManager) {
 	t.Helper()
 	emojis := newDataEmojiStore()
 	users := newDataUserStoreForConv()
 	svc := service.NewEmojiService(emojis, users, nil)
+	svc.SetSigner(handlerEmojiSigner{})
 	jwtMgr := auth.NewJWTManager("emoji-test-secret", 15*time.Minute, 720*time.Hour)
 	return NewEmojiHandler(svc), emojis, users, jwtMgr
 }
@@ -77,7 +84,7 @@ func TestEmojiHandler_Create_Success(t *testing.T) {
 
 	handler := middleware.Auth(jwtMgr)(http.HandlerFunc(h.Create))
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/emojis",
-		strings.NewReader(`{"name":"fire","imageURL":"https://x.test/fire.png"}`))
+		strings.NewReader(`{"name":"fire","imageKey":"uploads/u1/fire.png"}`))
 	req.Header.Set("Authorization", "Bearer "+tokenFor(t, jwtMgr, u))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
@@ -88,6 +95,31 @@ func TestEmojiHandler_Create_Success(t *testing.T) {
 	}
 	if _, exists := store.items["fire"]; !exists {
 		t.Error("emoji not stored")
+	}
+	if got := store.items["fire"].ImageURL; !strings.Contains(got, "uploads/u1/fire.png") {
+		t.Fatalf("ImageURL = %q, want server-derived URL from imageKey", got)
+	}
+}
+
+func TestEmojiHandler_Create_RejectsClientImageURL(t *testing.T) {
+	h, _, users, jwtMgr := setupEmojiHandler(t)
+	u := &model.User{ID: "u1", Email: "u@x", SystemRole: model.SystemRoleMember}
+	users.users[u.ID] = u
+	users.emailIndex[u.Email] = u
+
+	handler := middleware.Auth(jwtMgr)(http.HandlerFunc(h.Create))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/emojis",
+		strings.NewReader(`{"name":"fire","imageURL":"https://attacker.test/fire.png","imageKey":"uploads/u1/fire.png"}`))
+	req.Header.Set("Authorization", "Bearer "+tokenFor(t, jwtMgr, u))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d, want 400; body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "unknown field") {
+		t.Fatalf("expected unknown field rejection, got %s", rec.Body.String())
 	}
 }
 
@@ -100,7 +132,7 @@ func TestEmojiHandler_Create_DuplicateNameReturnsConflict(t *testing.T) {
 
 	handler := middleware.Auth(jwtMgr)(http.HandlerFunc(h.Create))
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/emojis",
-		strings.NewReader(`{"name":"fire","imageURL":"https://x.test/fire2.png"}`))
+		strings.NewReader(`{"name":"fire","imageKey":"uploads/u1/fire.png"}`))
 	req.Header.Set("Authorization", "Bearer "+tokenFor(t, jwtMgr, u))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
@@ -121,7 +153,7 @@ func TestEmojiHandler_Create_GuestForbidden(t *testing.T) {
 
 	handler := middleware.Auth(jwtMgr)(http.HandlerFunc(h.Create))
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/emojis",
-		strings.NewReader(`{"name":"fire","imageURL":"https://x.test/fire.png"}`))
+		strings.NewReader(`{"name":"fire","imageKey":"uploads/g1/fire.png"}`))
 	req.Header.Set("Authorization", "Bearer "+tokenFor(t, jwtMgr, u))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()

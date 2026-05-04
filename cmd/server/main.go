@@ -132,6 +132,7 @@ func main() {
 	convSvc := service.NewConversationService(conversationStore, userStore, redisCache, brokerAdapter, redisPubSub)
 	messageSvc := service.NewMessageService(messageStore, membershipStore, conversationStore, redisPubSub, brokerAdapter)
 	messageSvc.SetThreadFollowStore(threadFollowStore)
+	messageSvc.SetUserStateStore(userStateStore)
 	messageSvc.SetActivator(convSvc)
 	messageSvc.SetConversationUnreadTracker(convSvc)
 	userStateSvc := service.NewUserStateService(userStateStore, redisPubSub)

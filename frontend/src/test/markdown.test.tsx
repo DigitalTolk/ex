@@ -56,6 +56,8 @@ describe('renderMarkdown', () => {
     expect(links.length).toBe(2);
     expect(links[0].getAttribute('href')).toBe('https://example.com');
     expect(links[1].getAttribute('href')).toBe('https://example.org');
+    expect(links[0]).toHaveClass('text-link');
+    expect(links[0]).not.toHaveClass('underline');
   });
 
   it('does not treat # without space as a heading', () => {

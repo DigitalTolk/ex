@@ -141,7 +141,7 @@ export default function AdminPage() {
                 href="https://developers.giphy.com/dashboard"
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-primary underline"
+                className="text-link transition-colors hover:text-link/80"
               >
                 developers.giphy.com
               </a>

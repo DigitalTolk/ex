@@ -3,9 +3,10 @@ import { render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import ThreadsPage from '@/pages/ThreadsPage';
-import type { ThreadSummary } from '@/hooks/useThreads';
+import { unreadThreadIDs, type ThreadSummary } from '@/hooks/useThreads';
 
 const apiFetchMock = vi.fn();
+const unreadThreadNotifications = new Set<string>();
 vi.mock('@/lib/api', () => ({
   apiFetch: (...args: unknown[]) => apiFetchMock(...args),
 }));
@@ -26,16 +27,42 @@ vi.mock('@/context/AuthContext', () => ({
   useAuth: () => ({ user: { id: 'u-me', displayName: 'Me' } }),
 }));
 
+vi.mock('@/context/UnreadContext', () => ({
+  useUnread: () => ({ unreadThreadNotifications }),
+}));
+
+vi.mock('@/hooks/useUserState', () => ({
+  useUserState: () => ({
+    data: {
+      channelNotifications: [],
+      threadNotifications: ['msg-root-1'],
+      threadSeen: {},
+      hiddenConversations: [],
+    },
+  }),
+}));
+
 // Stub ThreadCard so this test focuses on the page-level orchestration:
 // one card per summary, correct title and deep-link, empty state, loading.
 // ThreadCard's own behavior (snippet rendering, collapse, reply composer)
 // is covered in thread-card.test.tsx.
 vi.mock('@/components/threads/ThreadCard', () => ({
-  ThreadCard: ({ summary, title, deepLink }: { summary: ThreadSummary; title: string; deepLink: string }) => (
+  ThreadCard: ({
+    summary,
+    title,
+    deepLink,
+    unread,
+  }: {
+    summary: ThreadSummary;
+    title: string;
+    deepLink: string;
+    unread?: boolean;
+  }) => (
     <article
       data-testid="thread-card"
       data-thread-root-id={summary.threadRootID}
       data-deep-link={deepLink}
+      data-unread={unread ? 'true' : 'false'}
     >
       <span data-testid="thread-card-title">{title}</span>
     </article>
@@ -83,6 +110,8 @@ function renderPage() {
 describe('ThreadsPage', () => {
   beforeEach(() => {
     apiFetchMock.mockReset();
+    unreadThreadNotifications.clear();
+    localStorage.clear();
   });
 
   it('renders one ThreadCard per summary with the channel/conversation label as title', async () => {
@@ -103,6 +132,16 @@ describe('ThreadsPage', () => {
     const links = cards.map((c) => c.getAttribute('data-deep-link'));
     expect(links).toContain('/channel/general?thread=msg-root-1#msg-msg-root-1');
     expect(links).toContain('/conversation/conv-1?thread=msg-root-2#msg-msg-root-2');
+  });
+
+  it('passes unread state to ThreadCard from persisted thread notifications', async () => {
+    apiFetchMock.mockResolvedValueOnce(sample);
+    renderPage();
+    const cards = await screen.findAllByTestId('thread-card');
+    expect(cards[0]).toHaveAttribute('data-thread-root-id', 'msg-root-1');
+    expect(cards[0]).toHaveAttribute('data-unread', 'true');
+    expect(cards[1]).toHaveAttribute('data-thread-root-id', 'msg-root-2');
+    expect(cards[1]).toHaveAttribute('data-unread', 'false');
   });
 
   it('shows an empty state when no threads exist', async () => {
@@ -144,5 +183,28 @@ describe('ThreadsPage', () => {
         delete (HTMLElement.prototype as { scrollTop?: number }).scrollTop;
       }
     }
+  });
+
+  it('derives unread thread IDs from notifications and seen activity', () => {
+    const ids = unreadThreadIDs(
+      [
+        { ...sample[0], threadRootID: 'newer-than-seen', latestActivityAt: '2026-04-26T11:00:00Z' },
+        { ...sample[0], threadRootID: 'already-seen', latestActivityAt: '2026-04-26T11:00:00Z' },
+        { ...sample[0], threadRootID: 'never-seen', latestActivityAt: '2026-04-26T11:00:00Z' },
+        { ...sample[0], threadRootID: 'live-unread', latestActivityAt: '2026-04-26T11:00:00Z' },
+      ],
+      ['already-seen'],
+      new Set(['live-unread', 'orphan-live']),
+      {
+        'newer-than-seen': '2026-04-26T10:59:00Z',
+        'already-seen': '2026-04-26T11:01:00Z',
+      },
+    );
+
+    expect(ids.has('newer-than-seen')).toBe(true);
+    expect(ids.has('already-seen')).toBe(false);
+    expect(ids.has('never-seen')).toBe(false);
+    expect(ids.has('live-unread')).toBe(true);
+    expect(ids.has('orphan-live')).toBe(false);
   });
 });

@@ -75,7 +75,7 @@ func TestUserStateService_ErrorsAndNilInputs(t *testing.T) {
 	if err := NewUserStateService(store, nil).HideConversation(ctx, "u-1", "conv-1"); err == nil {
 		t.Fatal("expected set error")
 	}
-	if err := NewUserStateService(store, nil).MarkThreadSeen(ctx, "u-1", "ch-1", ParentChannel, "root-1", time.Now()); err == nil {
+	if err := NewUserStateService(store, nil).MarkThreadSeen(ctx, "u-1", "ch-1", ParentChannel, "root-1"); err == nil {
 		t.Fatal("expected mark thread seen set error")
 	}
 	store = newMockUserStateStore()
@@ -94,7 +94,6 @@ func TestUserStateService_ListAndMutations(t *testing.T) {
 	store := newMockUserStateStore()
 	publisher := newMockPublisher()
 	svc := NewUserStateService(store, publisher)
-	seenAt := time.Date(2026, 5, 4, 10, 0, 0, 0, time.UTC)
 
 	if err := svc.MarkChannelNotificationUnread(ctx, "u-1", "ch-1"); err != nil {
 		t.Fatalf("MarkChannelNotificationUnread: %v", err)
@@ -108,9 +107,11 @@ func TestUserStateService_ListAndMutations(t *testing.T) {
 	if err := svc.HideConversation(ctx, "u-1", "conv-1"); err != nil {
 		t.Fatalf("HideConversation: %v", err)
 	}
-	if err := svc.MarkThreadSeen(ctx, "u-1", "conv-1", ParentConversation, "root-1", seenAt); err != nil {
+	beforeSeen := time.Now()
+	if err := svc.MarkThreadSeen(ctx, "u-1", "conv-1", ParentConversation, "root-1"); err != nil {
 		t.Fatalf("MarkThreadSeen: %v", err)
 	}
+	afterSeen := time.Now()
 
 	state, err := svc.List(ctx, "u-1")
 	if err != nil {
@@ -119,8 +120,12 @@ func TestUserStateService_ListAndMutations(t *testing.T) {
 	if got := len(state.ThreadNotifications); got != 0 {
 		t.Fatalf("thread notifications = %d, want 0 after seen", got)
 	}
-	if got := state.ThreadSeen["root-1"]; got != seenAt.Format(time.RFC3339Nano) {
-		t.Fatalf("thread seen = %q", got)
+	gotSeen, err := time.Parse(time.RFC3339Nano, state.ThreadSeen["root-1"])
+	if err != nil {
+		t.Fatalf("thread seen parse: %v", err)
+	}
+	if gotSeen.Before(beforeSeen) || gotSeen.After(afterSeen) {
+		t.Fatalf("thread seen = %s, want server time between %s and %s", gotSeen, beforeSeen, afterSeen)
 	}
 	if got := state.ChannelNotifications; len(got) != 1 || got[0] != "ch-1" {
 		t.Fatalf("channel notifications = %#v", got)

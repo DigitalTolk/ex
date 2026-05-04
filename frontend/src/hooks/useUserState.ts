@@ -31,14 +31,11 @@ export function useUserState(options?: { enabled?: boolean }) {
 export function useMarkThreadSeen() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (target: { parentID: string; parentType: string; threadRootID: string; seenAt?: string }) => {
+    mutationFn: (target: { parentID: string; parentType: string; threadRootID: string }) => {
       const parentType = target.parentType === 'channel' ? 'channels' : 'conversations';
       return apiFetch<void>(
         `/api/v1/user-state/threads/${parentType}/${encodeURIComponent(target.parentID)}/${encodeURIComponent(target.threadRootID)}/seen`,
-        {
-          method: 'PUT',
-          body: JSON.stringify({ seenAt: target.seenAt ?? new Date().toISOString() }),
-        },
+        { method: 'PUT' },
       );
     },
     onSuccess: () => {

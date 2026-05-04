@@ -86,20 +86,24 @@ func (h *UserHandler) SetMyUserStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var body struct {
-		Emoji    string     `json:"emoji"`
-		Text     string     `json:"text"`
-		ClearAt  *time.Time `json:"clearAt"`
-		TimeZone string     `json:"timeZone"`
+		Emoji             string `json:"emoji"`
+		Text              string `json:"text"`
+		ClearAfterSeconds *int64 `json:"clearAfterSeconds"`
+		TimeZone          string `json:"timeZone"`
 	}
 	if err := readJSON(r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_body", err.Error())
 		return
 	}
+	var clearAfter *time.Duration
+	if body.ClearAfterSeconds != nil {
+		d := time.Duration(*body.ClearAfterSeconds) * time.Second
+		clearAfter = &d
+	}
 	user, err := h.userSvc.SetUserStatusMessage(r.Context(), userID, &model.UserStatus{
-		Emoji:   body.Emoji,
-		Text:    body.Text,
-		ClearAt: body.ClearAt,
-	}, body.TimeZone)
+		Emoji: body.Emoji,
+		Text:  body.Text,
+	}, clearAfter, body.TimeZone)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "status_error", err.Error())
 		return
@@ -120,7 +124,7 @@ func (h *UserHandler) ClearMyUserStatus(w http.ResponseWriter, r *http.Request) 
 	if r.Body != nil {
 		_ = readJSON(r, &body)
 	}
-	user, err := h.userSvc.SetUserStatusMessage(r.Context(), userID, nil, body.TimeZone)
+	user, err := h.userSvc.SetUserStatusMessage(r.Context(), userID, nil, nil, body.TimeZone)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "status_error", err.Error())
 		return

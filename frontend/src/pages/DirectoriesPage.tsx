@@ -335,7 +335,12 @@ function MembersTab({ isAdmin, currentUserId }: MembersTabProps) {
                   )}
                 </div>
                 <p className="truncate text-sm text-muted-foreground">
-                  <a className="text-sm hover:underline" href={`mailto:${u.email}`}>{u.email}</a>
+                  <a
+                    className="text-sm text-link transition-colors hover:text-link/80"
+                    href={`mailto:${u.email}`}
+                  >
+                    {u.email}
+                  </a>
                 </p>
                 <div className="flex flex-wrap items-center gap-1">
                   {u.status === 'deactivated' && (

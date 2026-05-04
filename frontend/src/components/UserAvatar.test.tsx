@@ -8,13 +8,7 @@ vi.mock('@/hooks/useEmoji', () => ({
 
 describe('UserAvatar', () => {
   it('renders presence without overlaying status on top of the avatar', () => {
-    render(
-      <UserAvatar
-        displayName="Ada Lovelace"
-        online
-        userStatus={{ emoji: ':house:', text: 'Working from home' }}
-      />,
-    );
+    render(<UserAvatar displayName="Ada Lovelace" online />);
 
     expect(screen.getByLabelText('Online')).toBeInTheDocument();
     expect(screen.queryByLabelText(/Working from home/)).toBeNull();

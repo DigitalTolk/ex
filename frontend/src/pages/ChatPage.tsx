@@ -238,6 +238,8 @@ export default function ChatPage() {
       if (!n || !n.kind) return;
       if (n.parentMessageID) {
         markThreadNotificationUnread(n.parentMessageID);
+        queryClient.invalidateQueries({ queryKey: queryKeys.userThreads() });
+        queryClient.invalidateQueries({ queryKey: queryKeys.userState() });
       } else if (n.parentType === 'channel' && n.kind === 'mention') {
         markChannelNotificationUnread(n.parentID);
       }

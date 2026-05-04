@@ -3,7 +3,7 @@ import { act, render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ThreadCard } from '@/components/threads/ThreadCard';
-import { threadDeepLink, type ThreadSummary } from '@/hooks/useThreads';
+import { resetSeenCache, threadDeepLink, type ThreadSummary } from '@/hooks/useThreads';
 import type { Message } from '@/types';
 
 const apiFetchMock = vi.fn();
@@ -107,6 +107,7 @@ describe('ThreadCard', () => {
     apiFetchMock.mockReset();
     sendMutate.mockReset();
     localStorage.clear();
+    resetSeenCache();
     // Default: useUsersBatch sees /api/v1/users/batch — return [].
     apiFetchMock.mockImplementation((url: string) => {
       if (typeof url === 'string' && url.includes('/users/batch')) {
@@ -210,20 +211,21 @@ describe('ThreadCard', () => {
   });
 
   it('posting a reply marks the thread seen so the sidebar dot drops', async () => {
+    const summary = makeSummary({ latestActivityAt: '2099-01-01T00:00:00.000Z' });
     apiFetchMock.mockImplementation((url: string) => {
       if (url.includes('/messages/msg-root/thread')) {
         return Promise.resolve([makeMessage('msg-root')]);
       }
       return Promise.resolve([]);
     });
-    renderCard(makeSummary());
+    renderCard(summary);
     fireEvent.change(await screen.findByTestId('reply-body'), {
       target: { value: 'reply' },
     });
     fireEvent.click(screen.getByLabelText('Send reply'));
 
     const seen = JSON.parse(localStorage.getItem('ex.threads.seen.v1') ?? '{}');
-    expect(seen['msg-root']).toBeDefined();
+    expect(seen['msg-root']).toBe(summary.latestActivityAt);
   });
 
   it('does not pass focusKey to the inline /threads composer', async () => {
@@ -253,6 +255,31 @@ describe('ThreadCard', () => {
         expect.objectContaining({ method: 'DELETE' }),
       );
     });
+  });
+
+  it('shows unread state in the header', async () => {
+    apiFetchMock.mockImplementation((url: string) => {
+      if (url.includes('/messages/msg-root/thread')) {
+        return Promise.resolve([makeMessage('msg-root')]);
+      }
+      return Promise.resolve([]);
+    });
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <MemoryRouter>
+          <ThreadCard
+            summary={makeSummary()}
+            title="~general"
+            deepLink="/channel/general?thread=msg-root#msg-msg-root"
+            currentUserId="u-me"
+            unread
+          />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByTestId('thread-card-unread')).toHaveTextContent('Unread');
+    expect(screen.getByTestId('thread-card')).toHaveAttribute('data-unread', 'true');
   });
 });
 
@@ -293,6 +320,8 @@ describe('ThreadCard — viewport gating', () => {
   let originalIO: typeof IntersectionObserver | undefined;
 
   beforeEach(() => {
+    localStorage.clear();
+    resetSeenCache();
     originalIO = (globalThis as { IntersectionObserver?: typeof IntersectionObserver }).IntersectionObserver;
     FakeObserver.instances = [];
     Object.defineProperty(globalThis, 'IntersectionObserver', {
@@ -339,6 +368,57 @@ describe('ThreadCard — viewport gating', () => {
       );
       expect(threadCalls.length).toBe(1);
     });
+  });
+
+  it('marks an unread thread read when the card enters the viewport', async () => {
+    const summary = makeSummary({ latestActivityAt: '2099-01-01T00:00:00.000Z' });
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <MemoryRouter>
+          <ThreadCard
+            summary={summary}
+            title="~general"
+            deepLink="/channel/general?thread=msg-root#msg-msg-root"
+            currentUserId="u-me"
+            unread
+          />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    await Promise.resolve();
+    act(() => {
+      FakeObserver.instances[0].fire(true);
+    });
+    await waitFor(() => {
+      const threadCalls = apiFetchMock.mock.calls.filter(
+        (c) => typeof c[0] === 'string' && c[0].includes('/messages/msg-root/thread'),
+      );
+      expect(threadCalls.length).toBe(1);
+    });
+    const seen = JSON.parse(localStorage.getItem('ex.threads.seen.v1') ?? '{}');
+    expect(seen['msg-root']).toBe(summary.latestActivityAt);
+    expect(apiFetchMock).toHaveBeenCalledWith(
+      '/api/v1/user-state/threads/channels/ch-1/msg-root/seen',
+      expect.objectContaining({ method: 'PUT' }),
+    );
+  });
+
+  it('does not mark a read thread again when the card enters the viewport', async () => {
+    renderCard(makeSummary());
+    await Promise.resolve();
+    act(() => {
+      FakeObserver.instances[0].fire(true);
+    });
+    await waitFor(() => {
+      const threadCalls = apiFetchMock.mock.calls.filter(
+        (c) => typeof c[0] === 'string' && c[0].includes('/messages/msg-root/thread'),
+      );
+      expect(threadCalls.length).toBe(1);
+    });
+    const seenCalls = apiFetchMock.mock.calls.filter(
+      (c) => typeof c[0] === 'string' && c[0].includes('/user-state/threads/'),
+    );
+    expect(seenCalls).toHaveLength(0);
   });
 });
 

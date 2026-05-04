@@ -59,7 +59,9 @@ func TestUserStateHandler_GetAndMutations(t *testing.T) {
 		t.Fatalf("ClearChannelNotification status = %d body=%s", rec.Code, rec.Body.String())
 	}
 
-	req = userStateAuthedRequest(http.MethodPut, "/api/v1/user-state/threads/channels/ch-1/root-1/seen", bytes.NewBufferString(`{"seenAt":"2026-05-04T10:00:00Z"}`), userID)
+	clientSeenAt := time.Date(2001, 2, 3, 4, 5, 6, 0, time.UTC)
+	beforeSeen := time.Now()
+	req = userStateAuthedRequest(http.MethodPut, "/api/v1/user-state/threads/channels/ch-1/root-1/seen", bytes.NewBufferString(`{"seenAt":"`+clientSeenAt.Format(time.RFC3339Nano)+`"}`), userID)
 	req.SetPathValue("parentType", "channels")
 	req.SetPathValue("parentID", "ch-1")
 	req.SetPathValue("threadRootID", "root-1")
@@ -67,6 +69,17 @@ func TestUserStateHandler_GetAndMutations(t *testing.T) {
 	handler.MarkThreadSeen(rec, req)
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("MarkThreadSeen status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	afterSeen := time.Now()
+	seenRow := stateStore.rows[stateStore.key(userID, model.UserStateThreadSeen, "root-1")]
+	if seenRow == nil || seenRow.SeenAt == nil {
+		t.Fatal("expected thread seen row")
+	}
+	if seenRow.SeenAt.Equal(clientSeenAt) {
+		t.Fatal("server must not persist client-supplied seenAt")
+	}
+	if seenRow.SeenAt.Before(beforeSeen) || seenRow.SeenAt.After(afterSeen) {
+		t.Fatalf("seenAt = %s, want server time between %s and %s", seenRow.SeenAt, beforeSeen, afterSeen)
 	}
 
 	req = userStateAuthedRequest(http.MethodPut, "/api/v1/user-state/threads/conversations/conv-1/root-2/seen", nil, userID)
@@ -96,7 +109,8 @@ func TestUserStateHandler_GetAndMutations(t *testing.T) {
 }
 
 func TestUserStateHandler_Errors(t *testing.T) {
-	stateSvc := service.NewUserStateService(newMockUserStateStoreForHandler(), nil)
+	stateStore := newMockUserStateStoreForHandler()
+	stateSvc := service.NewUserStateService(stateStore, nil)
 	convs := newDataConversationStore()
 	users := newDataUserStoreForConv()
 	members := newDataMembershipStore()
@@ -128,15 +142,46 @@ func TestUserStateHandler_Errors(t *testing.T) {
 		t.Fatalf("MarkThreadSeen bad parent type status = %d", rec.Code)
 	}
 
-	req = userStateAuthedRequest(http.MethodPut, "/api/v1/user-state/threads/channels/ch/root/seen", bytes.NewBufferString(`{"seenAt":"bad"}`), "u-1")
+	req = httptest.NewRequest(http.MethodPut, "/api/v1/user-state/threads/channels/ch/root/seen", nil)
 	req.SetPathValue("parentType", "channels")
 	req.SetPathValue("parentID", "ch")
 	req.SetPathValue("threadRootID", "root")
-	members.memberships["ch#u-1"] = &model.ChannelMembership{ChannelID: "ch", UserID: "u-1"}
+	rec = httptest.NewRecorder()
+	handler.MarkThreadSeen(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("MarkThreadSeen unauth status = %d", rec.Code)
+	}
+
+	req = userStateAuthedRequest(http.MethodPut, "/api/v1/user-state/threads/channels//root/seen", nil, "u-1")
+	req.SetPathValue("parentType", "channels")
+	req.SetPathValue("threadRootID", "root")
 	rec = httptest.NewRecorder()
 	handler.MarkThreadSeen(rec, req)
 	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("MarkThreadSeen bad date status = %d", rec.Code)
+		t.Fatalf("MarkThreadSeen missing parent status = %d", rec.Code)
+	}
+
+	req = userStateAuthedRequest(http.MethodPut, "/api/v1/user-state/threads/channels/ch-denied/root/seen", nil, "u-1")
+	req.SetPathValue("parentType", "channels")
+	req.SetPathValue("parentID", "ch-denied")
+	req.SetPathValue("threadRootID", "root")
+	rec = httptest.NewRecorder()
+	handler.MarkThreadSeen(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("MarkThreadSeen denied status = %d", rec.Code)
+	}
+
+	stateStore = newMockUserStateStoreForHandler()
+	stateStore.setErr = errors.New("seen boom")
+	handler = NewUserStateHandler(service.NewUserStateService(stateStore, nil), msgSvc, convSvc)
+	req = userStateAuthedRequest(http.MethodPut, "/api/v1/user-state/threads/channels/ch/root/seen", nil, "u-1")
+	req.SetPathValue("parentType", "channels")
+	req.SetPathValue("parentID", "ch")
+	req.SetPathValue("threadRootID", "root")
+	rec = httptest.NewRecorder()
+	handler.MarkThreadSeen(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("MarkThreadSeen set error status = %d", rec.Code)
 	}
 
 	req = userStateAuthedRequest(http.MethodPut, "/api/v1/user-state/conversations/conv-missing/hidden", nil, "u-1")
@@ -147,7 +192,7 @@ func TestUserStateHandler_Errors(t *testing.T) {
 		t.Fatalf("HideConversation missing status = %d", rec.Code)
 	}
 
-	stateStore := newMockUserStateStoreForHandler()
+	stateStore = newMockUserStateStoreForHandler()
 	stateStore.listErr = errors.New("list boom")
 	handler = NewUserStateHandler(service.NewUserStateService(stateStore, nil), msgSvc, convSvc)
 	rec = httptest.NewRecorder()

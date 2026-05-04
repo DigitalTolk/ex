@@ -97,6 +97,13 @@ function clearAtFor(mode: ClearAfter, customUntil: string, timeZone: string): st
   return zonedInputToISO(customUntil, timeZone);
 }
 
+function clearAfterSecondsFor(mode: ClearAfter, customUntil: string, timeZone: string): number | undefined {
+  const clearAt = clearAtFor(mode, customUntil, timeZone);
+  if (!clearAt) return undefined;
+  const seconds = Math.ceil((new Date(clearAt).getTime() - Date.now()) / 1000);
+  return seconds > 0 ? seconds : undefined;
+}
+
 function localTimeZone(): string {
   return Intl.DateTimeFormat().resolvedOptions().timeZone || '';
 }
@@ -179,7 +186,7 @@ function UserStatusDialogContent({
         body: JSON.stringify({
           emoji,
           text: text.trim(),
-          clearAt: clearAtFor(clearAfter, customUntil, userTimeZone),
+          clearAfterSeconds: clearAfterSecondsFor(clearAfter, customUntil, userTimeZone),
           timeZone: localTimeZone(),
         }),
       });
@@ -208,7 +215,7 @@ function UserStatusDialogContent({
   }
 
   return (
-    <DialogContent className="max-w-lg">
+    <DialogContent className="max-w-lg" finalFocus={false}>
       <DialogHeader>
         <DialogTitle>Set status</DialogTitle>
       </DialogHeader>

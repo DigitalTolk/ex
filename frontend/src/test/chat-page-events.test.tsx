@@ -273,6 +273,26 @@ describe('ChatPage WebSocket handlers', () => {
     expect(calls).toContainEqual(['userThreads']);
   });
 
+  it('onNotification for a thread reply refreshes /threads immediately', () => {
+    const { qc } = renderAt('/');
+    const spy = vi.spyOn(qc, 'invalidateQueries');
+
+    (capturedOptions.onNotification as (d: unknown) => void)({
+      kind: 'thread_reply',
+      parentID: 'ch-1',
+      parentType: 'channel',
+      parentMessageID: 'msg-root',
+      title: 'Alice replied',
+      body: 'hello',
+    });
+
+    const calls = spy.mock.calls.map((c) => (c[0] as { queryKey?: unknown[] }).queryKey);
+    expect(markThreadNotificationUnread).toHaveBeenCalledWith('msg-root');
+    expect(calls).toContainEqual(['userThreads']);
+    expect(calls).toContainEqual(['userState']);
+    expect(dispatchNotification).toHaveBeenCalled();
+  });
+
   it('onMessageDeleted on a thread reply invalidates that thread + userThreads', () => {
     // Regression: the backend now ships parentMessageID in the deleted
     // payload, and the client routes it to the thread query. Without

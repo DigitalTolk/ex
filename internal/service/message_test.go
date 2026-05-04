@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/DigitalTolk/ex/internal/events"
 	"github.com/DigitalTolk/ex/internal/model"
 )
 
@@ -628,6 +629,78 @@ func TestMessageService_Send_MentionedMemberDoesNotProduceSystemMessage(t *testi
 	}
 }
 
+func TestMessageService_Send_ThreadReplyFollowsMentionedMember(t *testing.T) {
+	svc, messages, memberships, _, _ := setupMessageService()
+	follows := newMockThreadFollowStore()
+	svc.SetThreadFollowStore(follows)
+	ctx := context.Background()
+
+	memberships.memberships["ch1#u-author"] = &model.ChannelMembership{
+		ChannelID: "ch1", UserID: "u-author", Role: model.ChannelRoleMember,
+	}
+	memberships.memberships["ch1#u-bob"] = &model.ChannelMembership{
+		ChannelID: "ch1", UserID: "u-bob", Role: model.ChannelRoleMember,
+	}
+	messages.messages["ch1#m-root"] = &model.Message{ID: "m-root", ParentID: "ch1", AuthorID: "u-other", Body: "root"}
+
+	if _, err := svc.Send(ctx, "u-author", "ch1", ParentChannel, "please check @[u-bob|Bob]", "m-root"); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+
+	got, err := follows.GetThreadFollow(ctx, "u-bob", "ch1", "m-root")
+	if err != nil {
+		t.Fatalf("GetThreadFollow: %v", err)
+	}
+	if !got.Following || got.ParentType != ParentChannel {
+		t.Fatalf("follow = %+v, want mentioned member following channel thread", got)
+	}
+}
+
+func TestMessageService_Send_ThreadReplyDoesNotFollowMentionedNonMember(t *testing.T) {
+	svc, messages, memberships, _, _ := setupMessageService()
+	follows := newMockThreadFollowStore()
+	svc.SetThreadFollowStore(follows)
+	ctx := context.Background()
+
+	memberships.memberships["ch1#u-author"] = &model.ChannelMembership{
+		ChannelID: "ch1", UserID: "u-author", Role: model.ChannelRoleMember,
+	}
+	messages.messages["ch1#m-root"] = &model.Message{ID: "m-root", ParentID: "ch1", AuthorID: "u-other", Body: "root"}
+
+	if _, err := svc.Send(ctx, "u-author", "ch1", ParentChannel, "please check @[u-outsider|Outsider]", "m-root"); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+
+	if _, err := follows.GetThreadFollow(ctx, "u-outsider", "ch1", "m-root"); err == nil {
+		t.Fatal("expected non-member mention not to create a thread follow")
+	}
+}
+
+func TestMessageService_Send_ConversationThreadReplyFollowsMentionedParticipant(t *testing.T) {
+	svc, messages, _, conversations, _ := setupMessageService()
+	follows := newMockThreadFollowStore()
+	svc.SetThreadFollowStore(follows)
+	ctx := context.Background()
+	conversations.conversations["c1"] = &model.Conversation{
+		ID:             "c1",
+		Type:           model.ConversationTypeGroup,
+		ParticipantIDs: []string{"u-author", "u-bob"},
+	}
+	messages.messages["c1#m-root"] = &model.Message{ID: "m-root", ParentID: "c1", AuthorID: "u-author", Body: "root"}
+
+	if _, err := svc.Send(ctx, "u-author", "c1", ParentConversation, "please check @[u-bob|Bob]", "m-root"); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+
+	got, err := follows.GetThreadFollow(ctx, "u-bob", "c1", "m-root")
+	if err != nil {
+		t.Fatalf("GetThreadFollow: %v", err)
+	}
+	if !got.Following || got.ParentType != ParentConversation {
+		t.Fatalf("follow = %+v, want mentioned participant following conversation thread", got)
+	}
+}
+
 func TestMessageService_Send_ConversationMention_NoSystemMessage(t *testing.T) {
 	// Non-member-mention checks are channel-only; mentioning an outsider
 	// in a DM/group should not surface anything (no concept of outsider).
@@ -752,6 +825,94 @@ func TestMessageService_ListUserThreads_UsesFollowOverrides(t *testing.T) {
 	}
 	if got[0].ThreadRootID != "m-followed" {
 		t.Fatalf("ThreadRootID = %q, want m-followed", got[0].ThreadRootID)
+	}
+}
+
+func TestMessageService_ListUserThreads_IncludesUnreadThreadNotification(t *testing.T) {
+	svc, messages, memberships, _, _ := setupMessageService()
+	stateStore := newMockUserStateStore()
+	svc.SetUserStateStore(stateStore)
+	ctx := context.Background()
+
+	memberships.userChannels = []*model.UserChannel{{UserID: "u-me", ChannelID: "ch-1"}}
+	now := time.Now()
+	messages.messages["ch-1#m-notified"] = &model.Message{
+		ID: "m-notified", ParentID: "ch-1", AuthorID: "u-other", Body: "root", CreatedAt: now.Add(-time.Hour), ReplyCount: 1,
+	}
+	messages.messages["ch-1#m-notified-r"] = &model.Message{
+		ID: "m-notified-r", ParentID: "ch-1", AuthorID: "u-author", Body: "@all", CreatedAt: now.Add(-30 * time.Minute), ParentMessageID: "m-notified",
+	}
+	if err := stateStore.SetUserState(ctx, &model.UserStateItem{
+		UserID:       "u-me",
+		Kind:         model.UserStateThreadNotification,
+		TargetID:     "m-notified",
+		ParentID:     "ch-1",
+		ParentType:   ParentChannel,
+		ThreadRootID: "m-notified",
+		UpdatedAt:    now,
+	}); err != nil {
+		t.Fatalf("SetUserState: %v", err)
+	}
+
+	got, err := svc.ListUserThreads(ctx, "u-me")
+	if err != nil {
+		t.Fatalf("ListUserThreads: %v", err)
+	}
+	if len(got) != 1 || got[0].ThreadRootID != "m-notified" {
+		t.Fatalf("ListUserThreads = %+v, want unread notified thread", got)
+	}
+}
+
+func TestMessageService_ListUserThreads_NotificationTemporarilyOverridesUnfollow(t *testing.T) {
+	svc, messages, memberships, _, _ := setupMessageService()
+	follows := newMockThreadFollowStore()
+	stateStore := newMockUserStateStore()
+	svc.SetThreadFollowStore(follows)
+	svc.SetUserStateStore(stateStore)
+	ctx := context.Background()
+
+	memberships.userChannels = []*model.UserChannel{{UserID: "u-me", ChannelID: "ch-1"}}
+	now := time.Now()
+	messages.messages["ch-1#m-unfollowed"] = &model.Message{
+		ID: "m-unfollowed", ParentID: "ch-1", AuthorID: "u-me", Body: "root", CreatedAt: now.Add(-time.Hour), ReplyCount: 1,
+	}
+	messages.messages["ch-1#m-unfollowed-r"] = &model.Message{
+		ID: "m-unfollowed-r", ParentID: "ch-1", AuthorID: "u-other", Body: "@here", CreatedAt: now.Add(-30 * time.Minute), ParentMessageID: "m-unfollowed",
+	}
+	if err := follows.SetThreadFollow(ctx, &model.ThreadFollow{
+		UserID: "u-me", ParentID: "ch-1", ParentType: ParentChannel, ThreadRootID: "m-unfollowed", Following: false,
+	}); err != nil {
+		t.Fatalf("SetThreadFollow: %v", err)
+	}
+	if err := stateStore.SetUserState(ctx, &model.UserStateItem{
+		UserID:       "u-me",
+		Kind:         model.UserStateThreadNotification,
+		TargetID:     "m-unfollowed",
+		ParentID:     "ch-1",
+		ParentType:   ParentChannel,
+		ThreadRootID: "m-unfollowed",
+		UpdatedAt:    now,
+	}); err != nil {
+		t.Fatalf("SetUserState: %v", err)
+	}
+
+	got, err := svc.ListUserThreads(ctx, "u-me")
+	if err != nil {
+		t.Fatalf("ListUserThreads with notification: %v", err)
+	}
+	if len(got) != 1 || got[0].ThreadRootID != "m-unfollowed" {
+		t.Fatalf("ListUserThreads with notification = %+v, want temporarily visible unread thread", got)
+	}
+
+	if err := stateStore.DeleteUserState(ctx, "u-me", model.UserStateThreadNotification, "m-unfollowed"); err != nil {
+		t.Fatalf("DeleteUserState: %v", err)
+	}
+	got, err = svc.ListUserThreads(ctx, "u-me")
+	if err != nil {
+		t.Fatalf("ListUserThreads after read: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("ListUserThreads after read = %+v, want unfollowed thread hidden again", got)
 	}
 }
 
@@ -1261,6 +1422,64 @@ func TestSendMessage_WithThread(t *testing.T) {
 	}
 	if !sawEdited {
 		t.Error("expected message.edited event for the parent (reply count bump)")
+	}
+}
+
+type inspectingPublisher struct {
+	onPublish func(eventType string)
+}
+
+func (p *inspectingPublisher) Publish(_ context.Context, _ string, event *events.Event) error {
+	if p.onPublish != nil {
+		p.onPublish(event.Type)
+	}
+	return nil
+}
+
+func TestSendMessage_ThreadStateReadyBeforeMessageNew(t *testing.T) {
+	messages := newMockMessageStore()
+	memberships := newMockMembershipStore()
+	conversations := newMockConversationStore()
+	follows := newMockThreadFollowStore()
+	ctx := context.Background()
+
+	for _, userID := range []string{"u-root", "u-replier", "u-mentioned"} {
+		memberships.memberships["ch-race#"+userID] = &model.ChannelMembership{
+			ChannelID: "ch-race",
+			UserID:    userID,
+			Role:      model.ChannelRoleMember,
+		}
+	}
+	messages.messages["ch-race#root-msg"] = &model.Message{
+		ID:       "root-msg",
+		ParentID: "ch-race",
+		AuthorID: "u-root",
+		Body:     "root",
+	}
+
+	var sawMessageNew bool
+	publisher := &inspectingPublisher{
+		onPublish: func(eventType string) {
+			if eventType != events.EventMessageNew {
+				return
+			}
+			sawMessageNew = true
+			if got := messages.messages["ch-race#root-msg"].ReplyCount; got != 1 {
+				t.Errorf("root ReplyCount at message.new = %d, want 1", got)
+			}
+			if _, ok := follows.follows[threadFollowMockKey("u-mentioned", "ch-race", "root-msg")]; !ok {
+				t.Errorf("mentioned user follow missing before message.new")
+			}
+		},
+	}
+	svc := NewMessageService(messages, memberships, conversations, publisher, newMockBroker())
+	svc.SetThreadFollowStore(follows)
+
+	if _, err := svc.Send(ctx, "u-replier", "ch-race", ParentChannel, "reply @[u-mentioned|Mentioned]", "root-msg"); err != nil {
+		t.Fatalf("Send reply: %v", err)
+	}
+	if !sawMessageNew {
+		t.Fatal("expected message.new event")
 	}
 }
 

@@ -1,9 +1,7 @@
 package handler
 
 import (
-	"encoding/json"
 	"net/http"
-	"time"
 
 	"github.com/DigitalTolk/ex/internal/middleware"
 	"github.com/DigitalTolk/ex/internal/service"
@@ -68,20 +66,7 @@ func (h *UserStateHandler) MarkThreadSeen(w http.ResponseWriter, r *http.Request
 		writeReadResourceError(w, err, "thread")
 		return
 	}
-	var req struct {
-		SeenAt string `json:"seenAt"`
-	}
-	_ = json.NewDecoder(r.Body).Decode(&req)
-	seenAt := time.Now()
-	if req.SeenAt != "" {
-		parsed, err := time.Parse(time.RFC3339Nano, req.SeenAt)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, "bad_seen_at", "seenAt must be a valid RFC3339 timestamp")
-			return
-		}
-		seenAt = parsed
-	}
-	if err := h.stateSvc.MarkThreadSeen(r.Context(), userID, parentID, parentType, threadRootID, seenAt); err != nil {
+	if err := h.stateSvc.MarkThreadSeen(r.Context(), userID, parentID, parentType, threadRootID); err != nil {
 		writeError(w, http.StatusInternalServerError, "state_error", err.Error())
 		return
 	}

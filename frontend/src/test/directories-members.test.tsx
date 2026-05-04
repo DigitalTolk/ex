@@ -73,6 +73,9 @@ describe('DirectoriesPage - members tab', () => {
     });
     expect(screen.getByLabelText('Message Alice')).toBeInTheDocument();
     expect(screen.getByLabelText('Message Bob')).toBeInTheDocument();
+    const aliceEmail = screen.getByRole('link', { name: 'alice@x.com' });
+    expect(aliceEmail).toHaveClass('text-link');
+    expect(aliceEmail).not.toHaveClass('hover:underline');
     const aliceDot = screen.getByTestId('presence-u-1');
     const bobDot = screen.getByTestId('presence-u-2');
     expect(aliceDot.getAttribute('aria-label')).toBe('Online');

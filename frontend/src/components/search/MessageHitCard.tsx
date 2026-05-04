@@ -53,7 +53,7 @@ export function MessageHitCard({ hit, onAuthorClick }: MessageHitCardProps) {
                 e.stopPropagation();
                 if (authorId) onAuthorClick(authorId);
               }}
-              className="font-semibold hover:underline"
+              className="font-semibold transition-colors hover:text-link"
               title="Filter results from this person"
             >
               {name}

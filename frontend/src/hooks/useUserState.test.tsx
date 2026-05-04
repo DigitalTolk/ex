@@ -40,12 +40,11 @@ describe('useUserState', () => {
         parentID: 'ch 1',
         parentType: 'channel',
         threadRootID: 'root/1',
-        seenAt: '2026-05-04T10:00:00.000Z',
       });
     });
     expect(apiFetch).toHaveBeenCalledWith(
       '/api/v1/user-state/threads/channels/ch%201/root%2F1/seen',
-      { method: 'PUT', body: JSON.stringify({ seenAt: '2026-05-04T10:00:00.000Z' }) },
+      { method: 'PUT' },
     );
 
     await act(async () => {

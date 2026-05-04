@@ -206,7 +206,7 @@ function findInline(src: string, opts: RenderOpts | undefined, keyPrefix: string
       href={m[2]}
       target="_blank"
       rel="noopener noreferrer"
-      className="text-primary underline"
+      className="text-link transition-colors hover:text-link/80"
     >
       {m[1]}
     </a>
@@ -300,7 +300,7 @@ function findInline(src: string, opts: RenderOpts | undefined, keyPrefix: string
       href={m[0]}
       target="_blank"
       rel="noopener noreferrer"
-      className="text-primary underline"
+      className="text-link transition-colors hover:text-link/80"
     >
       {m[0]}
     </a>

@@ -70,7 +70,7 @@ const THEME = {
     listitem: 'my-0.5',
   },
   quote: 'border-l-2 border-muted-foreground/30 pl-3 my-1 text-muted-foreground',
-  link: 'text-primary underline',
+  link: 'text-link',
   code: 'block bg-muted rounded px-2 py-1 my-1 text-sm font-mono whitespace-pre-wrap',
 };
 

@@ -67,6 +67,7 @@ type MessageService struct {
 	notifier      MessageNotifier
 	indexer       MessageIndexer
 	threadFollows ThreadFollowStore
+	userState     UserStateStore
 }
 
 // NewMessageService creates a MessageService with the given dependencies.
@@ -105,6 +106,8 @@ func (s *MessageService) SetNotifier(n MessageNotifier) { s.notifier = n }
 func (s *MessageService) SetIndexer(i MessageIndexer) { s.indexer = i }
 
 func (s *MessageService) SetThreadFollowStore(f ThreadFollowStore) { s.threadFollows = f }
+
+func (s *MessageService) SetUserStateStore(userState UserStateStore) { s.userState = userState }
 
 func (s *MessageService) CheckAccess(ctx context.Context, userID, parentID, parentType string) error {
 	return s.checkAccess(ctx, userID, parentID, parentType)
@@ -213,6 +216,18 @@ func (s *MessageService) Send(ctx context.Context, userID, parentID, parentType,
 		}
 	}
 
+	var updatedThreadRoot *model.Message
+	if parentMessageID != "" {
+		// Update thread-derived state before publishing message.new. Clients
+		// refetch /threads as soon as that event arrives; if the follow row or
+		// root reply metadata is still missing, the list can stay stale until
+		// the next cache invalidation.
+		s.followMentionedThreadUsers(ctx, msg, parentType)
+		if updated, err := s.messages.IncrementReplyMetadata(ctx, parentID, parentMessageID, msg.CreatedAt, userID); err == nil {
+			updatedThreadRoot = updated
+		}
+	}
+
 	s.publishEvent(ctx, parentID, parentType, events.EventMessageNew, msg)
 
 	// Fire user-facing notifications (sound + popup) to recipients who
@@ -231,16 +246,43 @@ func (s *MessageService) Send(ctx context.Context, userID, parentID, parentType,
 		s.flagNonMemberMentions(ctx, msg)
 	}
 
-	// Thread reply: bump root metadata atomically and republish the
-	// authoritative parent so subscribers see the new replyCount /
-	// avatar stack without a re-fetch.
-	if parentMessageID != "" {
-		if updated, err := s.messages.IncrementReplyMetadata(ctx, parentID, parentMessageID, msg.CreatedAt, userID); err == nil {
-			s.publishEvent(ctx, parentID, parentType, events.EventMessageEdited, updated)
-		}
+	// Thread reply: republish the authoritative parent so subscribers see
+	// the new replyCount / avatar stack without a re-fetch. The metadata
+	// itself was already persisted before message.new to keep /threads
+	// refetches from racing old state.
+	if updatedThreadRoot != nil {
+		s.publishEvent(ctx, parentID, parentType, events.EventMessageEdited, updatedThreadRoot)
 	}
 
 	return msg, nil
+}
+
+func (s *MessageService) followMentionedThreadUsers(ctx context.Context, msg *model.Message, parentType string) {
+	if s.threadFollows == nil || msg == nil || msg.ParentMessageID == "" {
+		return
+	}
+	mentions := ParseMentions(msg.Body)
+	if len(mentions.Users) == 0 {
+		return
+	}
+	for _, mention := range mentions.Users {
+		if mention.UserID == "" || mention.UserID == msg.AuthorID {
+			continue
+		}
+		if err := s.checkAccess(ctx, mention.UserID, msg.ParentID, parentType); err != nil {
+			continue
+		}
+		if err := s.threadFollows.SetThreadFollow(ctx, &model.ThreadFollow{
+			UserID:       mention.UserID,
+			ParentID:     msg.ParentID,
+			ParentType:   parentType,
+			ThreadRootID: msg.ParentMessageID,
+			Following:    true,
+			UpdatedAt:    time.Now(),
+		}); err != nil {
+			slog.Warn("thread mention follow failed", "userID", mention.UserID, "threadRootID", msg.ParentMessageID, "error", err)
+		}
+	}
 }
 
 // ListThreadMessages returns the root message followed by all reply messages
@@ -349,6 +391,7 @@ func (s *MessageService) ListUserThreads(ctx context.Context, userID string) ([]
 	out := make([]*ThreadSummary, 0)
 	seen := make(map[string]bool)
 	followOverrides := make(map[string]bool)
+	notificationThreads := make(map[string]bool)
 	if s.threadFollows != nil {
 		follows, err := s.threadFollows.ListUserThreadFollows(ctx, userID)
 		if err != nil {
@@ -356,6 +399,18 @@ func (s *MessageService) ListUserThreads(ctx context.Context, userID string) ([]
 		}
 		for _, f := range follows {
 			followOverrides[threadFollowKey(f.ParentID, f.ThreadRootID)] = f.Following
+		}
+	}
+	if s.userState != nil {
+		items, err := s.userState.ListUserState(ctx, userID)
+		if err != nil {
+			return nil, fmt.Errorf("threads: list user state: %w", err)
+		}
+		for _, item := range items {
+			if item.Kind != model.UserStateThreadNotification || item.ParentID == "" || item.ThreadRootID == "" {
+				continue
+			}
+			notificationThreads[threadFollowKey(item.ParentID, item.ThreadRootID)] = true
 		}
 	}
 
@@ -388,9 +443,15 @@ func (s *MessageService) ListUserThreads(ctx context.Context, userID string) ([]
 			rootID := strings.TrimPrefix(key, p.id+"#")
 			if following {
 				participated[rootID] = true
-			} else {
+			} else if !notificationThreads[key] {
 				delete(participated, rootID)
 			}
+		}
+		for key := range notificationThreads {
+			if !strings.HasPrefix(key, p.id+"#") {
+				continue
+			}
+			participated[strings.TrimPrefix(key, p.id+"#")] = true
 		}
 		// Build summaries.
 		for rootID := range participated {

@@ -35,7 +35,7 @@ export function AboutDialog({ open, onOpenChange, onClosed }: AboutDialogProps) 
             href={REPO_URL}
             target="_blank"
             rel="noopener noreferrer"
-            className="text-sm text-primary underline-offset-2 hover:underline"
+            className="text-sm text-link transition-colors hover:text-link/80"
           >
             {REPO_URL.replace(/^https?:\/\//, '')}
           </a>

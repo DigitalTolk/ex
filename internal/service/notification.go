@@ -229,7 +229,7 @@ func (s *NotificationService) NotifyForMessage(ctx context.Context, msg *model.M
 	if len(mentionRecipients) > 0 {
 		mentionNotif := notif
 		mentionNotif.Kind = NotificationKindMention
-		mentionNotif.Title = titleFor(NotificationKindMention, parentType, parentName, authorName)
+		mentionNotif.Title = mentionTitleFor(mentions, parentType, parentName, authorName)
 		for _, uid := range mentionRecipients {
 			if kind == NotificationKindThreadReply {
 				s.markThreadNotification(ctx, uid, msg, parentType)
@@ -238,6 +238,29 @@ func (s *NotificationService) NotifyForMessage(ctx context.Context, msg *model.M
 			}
 			events.Publish(ctx, s.publisher, pubsub.UserChannel(uid), events.EventNotificationNew, mentionNotif)
 		}
+	}
+}
+
+func mentionTitleFor(mentions ParsedMentions, parentType, parentName, authorName string) string {
+	if label := groupMentionLabel(mentions); label != "" {
+		if parentType == ParentChannel {
+			return authorName + " used " + label + " in ~" + parentName
+		}
+		return authorName + " used " + label
+	}
+	return titleFor(NotificationKindMention, parentType, parentName, authorName)
+}
+
+func groupMentionLabel(mentions ParsedMentions) string {
+	switch {
+	case mentions.All && mentions.Here:
+		return "@all/@here"
+	case mentions.All:
+		return "@all"
+	case mentions.Here:
+		return "@here"
+	default:
+		return ""
 	}
 }
 

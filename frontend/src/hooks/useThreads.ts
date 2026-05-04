@@ -81,9 +81,9 @@ export function resetSeenCache() {
   seenCache = null;
 }
 
-// markThreadSeen records the timestamp at which the user last viewed a thread.
-// Subsequent threads-list fetches compare against this to decide which threads
-// have new activity since the last visit.
+// markThreadSeen records an optimistic local timestamp for immediate UI updates.
+// The persisted server state deliberately uses server time; the client never
+// sends its local clock as authoritative read state.
 export function markThreadSeen(
   threadRootID: string,
   at: string = new Date().toISOString(),
@@ -96,7 +96,7 @@ export function markThreadSeen(
     const parentType = target.parentType === 'channel' ? 'channels' : 'conversations';
     void apiFetch<void>(
       `/api/v1/user-state/threads/${parentType}/${encodeURIComponent(target.parentID)}/${encodeURIComponent(threadRootID)}/seen`,
-      { method: 'PUT', body: JSON.stringify({ seenAt: at }) },
+      { method: 'PUT' },
     ).catch(() => undefined);
   }
   if (typeof window !== 'undefined') {
@@ -110,6 +110,31 @@ export function hasUnreadActivity(t: ThreadSummary, seen: Record<string, string>
   const seenAt = seen[t.threadRootID];
   if (!seenAt) return true;
   return new Date(t.latestActivityAt).getTime() > new Date(seenAt).getTime();
+}
+
+export function unreadThreadIDs(
+  threads: ThreadSummary[] = [],
+  threadNotifications: string[] = [],
+  liveThreadNotifications: Set<string> = new Set(),
+  seenMap: Record<string, string> = {},
+): Set<string> {
+  const listedThreadIDs = new Set(threads.map((thread) => thread.threadRootID));
+  const ids = new Set(
+    [...threadNotifications, ...liveThreadNotifications].filter((threadRootID) =>
+      listedThreadIDs.has(threadRootID),
+    ),
+  );
+  for (const thread of threads) {
+    if (!seenMap[thread.threadRootID]) {
+      continue;
+    }
+    if (hasUnreadActivity(thread, seenMap)) {
+      ids.add(thread.threadRootID);
+    } else {
+      ids.delete(thread.threadRootID);
+    }
+  }
+  return ids;
 }
 
 export function getSeenMap(): Record<string, string> {

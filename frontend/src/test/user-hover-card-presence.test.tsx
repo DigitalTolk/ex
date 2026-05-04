@@ -135,7 +135,10 @@ describe('UserHoverCard — presence fallback for mentions', () => {
     });
     fireEvent.click(screen.getByText('trigger'));
 
-    expect(await screen.findByRole('link', { name: 'bob@example.com' })).toHaveAttribute('href', 'mailto:bob@example.com');
+    const email = await screen.findByRole('link', { name: 'bob@example.com' });
+    expect(email).toHaveAttribute('href', 'mailto:bob@example.com');
+    expect(email).toHaveClass('text-link');
+    expect(email).not.toHaveClass('hover:underline');
     expect(screen.getByText('now')).toBeInTheDocument();
     expect(screen.getByText('Working from home')).toBeInTheDocument();
     expect(screen.getByTestId('hover-card-header')).toHaveClass('items-start');

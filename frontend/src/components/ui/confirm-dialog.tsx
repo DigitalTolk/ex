@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import type { ComponentProps, ReactNode } from 'react';
 import {
   Dialog,
   DialogContent,
@@ -22,6 +22,7 @@ interface ConfirmDialogProps {
   // confirms on the same page (rare, but possible) can be targeted
   // independently from tests. Defaults to "confirm-dialog".
   testIDPrefix?: string;
+  finalFocus?: ComponentProps<typeof DialogContent>['finalFocus'];
 }
 
 // ConfirmDialog is the standard "are you sure?" modal — replaces
@@ -38,10 +39,11 @@ export function ConfirmDialog({
   destructive = false,
   onConfirm,
   testIDPrefix = 'confirm-dialog',
+  finalFocus,
 }: ConfirmDialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md" data-testid={testIDPrefix}>
+      <DialogContent className="sm:max-w-md" data-testid={testIDPrefix} finalFocus={finalFocus}>
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
           {description && <DialogDescription>{description}</DialogDescription>}
