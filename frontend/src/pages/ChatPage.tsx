@@ -279,6 +279,7 @@ export default function ChatPage() {
       queryClient.invalidateQueries({ queryKey: queryKeys.userChannels() });
       queryClient.invalidateQueries({ queryKey: queryKeys.userConversations() });
       queryClient.invalidateQueries({ queryKey: queryKeys.userThreads() });
+      queryClient.invalidateQueries({ queryKey: queryKeys.userState() });
       queryClient.invalidateQueries({ queryKey: queryKeys.drafts() });
       queryClient.invalidateQueries({ queryKey: queryKeys.channelMembers() });
       // Top up tail-mode message caches via a forward fetch so events

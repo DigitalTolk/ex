@@ -347,6 +347,7 @@ describe('ChatPage WebSocket handlers', () => {
     expect(calls).toContainEqual(['userChannels']);
     expect(calls).toContainEqual(['userConversations']);
     expect(calls).toContainEqual(['userThreads']);
+    expect(calls).toContainEqual(['userState']);
     expect(calls).toContainEqual(['channelMembers']);
   });
 
