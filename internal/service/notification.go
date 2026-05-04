@@ -231,11 +231,10 @@ func (s *NotificationService) NotifyForMessage(ctx context.Context, msg *model.M
 		mentionNotif.Kind = NotificationKindMention
 		mentionNotif.Title = titleFor(NotificationKindMention, parentType, parentName, authorName)
 		for _, uid := range mentionRecipients {
-			if parentType == ParentChannel {
-				s.markChannelNotification(ctx, uid, msg.ParentID)
-			}
 			if kind == NotificationKindThreadReply {
 				s.markThreadNotification(ctx, uid, msg, parentType)
+			} else if parentType == ParentChannel {
+				s.markChannelNotification(ctx, uid, msg.ParentID)
 			}
 			events.Publish(ctx, s.publisher, pubsub.UserChannel(uid), events.EventNotificationNew, mentionNotif)
 		}

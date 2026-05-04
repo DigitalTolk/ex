@@ -124,6 +124,9 @@ func TestNotificationService_PersistsNotificationState(t *testing.T) {
 	if _, ok := stateStore.rows[stateStore.key("u-bob", model.UserStateChannelNotification, "ch1")]; !ok {
 		t.Fatal("expected channel notification state for mentioned user")
 	}
+	if err := stateStore.DeleteUserState(ctx, "u-bob", model.UserStateChannelNotification, "ch1"); err != nil {
+		t.Fatalf("DeleteUserState: %v", err)
+	}
 
 	msgs.messages["ch1#root1"] = &model.Message{ID: "root1", ParentID: "ch1", AuthorID: "u-author", Body: "root", CreatedAt: time.Now()}
 	if err := follows.SetThreadFollow(ctx, &model.ThreadFollow{
@@ -131,9 +134,12 @@ func TestNotificationService_PersistsNotificationState(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("SetThreadFollow: %v", err)
 	}
-	svc.NotifyForMessage(ctx, &model.Message{ID: "reply1", ParentID: "ch1", ParentMessageID: "root1", AuthorID: "u-author", Body: "reply"}, ParentChannel)
+	svc.NotifyForMessage(ctx, &model.Message{ID: "reply1", ParentID: "ch1", ParentMessageID: "root1", AuthorID: "u-author", Body: "reply @[u-bob|Bob]"}, ParentChannel)
 	if _, ok := stateStore.rows[stateStore.key("u-bob", model.UserStateThreadNotification, "root1")]; !ok {
 		t.Fatal("expected thread notification state for follower")
+	}
+	if _, ok := stateStore.rows[stateStore.key("u-bob", model.UserStateChannelNotification, "ch1")]; ok {
+		t.Fatal("did not expect channel notification state for thread mention")
 	}
 }
 

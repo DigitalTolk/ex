@@ -217,11 +217,10 @@ export default function ChatPage() {
     onNotification: (data: unknown) => {
       const n = data as NotificationPayload | undefined;
       if (!n || !n.kind) return;
-      if (n.parentType === 'channel' && n.kind === 'mention') {
-        markChannelNotificationUnread(n.parentID);
-      }
-      if (n.kind === 'thread_reply' && n.parentMessageID) {
+      if (n.parentMessageID) {
         markThreadNotificationUnread(n.parentMessageID);
+      } else if (n.parentType === 'channel' && n.kind === 'mention') {
+        markChannelNotificationUnread(n.parentID);
       }
       dispatchNotification(n);
     },

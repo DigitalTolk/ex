@@ -537,6 +537,24 @@ describe('ChatPage WebSocket handlers', () => {
     expect(dispatchNotification).toHaveBeenCalledTimes(1);
   });
 
+  it('onNotification counts channel thread mentions as thread unread only', () => {
+    renderAt('/');
+
+    (capturedOptions.onNotification as (d: unknown) => void)({
+      kind: 'mention',
+      title: 't',
+      body: 'b',
+      deepLink: '/channel/general?thread=root-1#msg-reply-1',
+      parentID: 'ch-1',
+      parentType: 'channel',
+      parentMessageID: 'root-1',
+      createdAt: new Date().toISOString(),
+    });
+
+    expect(markThreadNotificationUnread).toHaveBeenCalledWith('root-1');
+    expect(markChannelNotificationUnread).not.toHaveBeenCalled();
+  });
+
   it('updates current user id on mount and resets to null on unmount', () => {
     const { unmount } = renderAt('/');
     expect(setCurrentUserID).toHaveBeenCalledWith('u-me');
