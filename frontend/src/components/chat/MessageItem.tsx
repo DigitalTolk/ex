@@ -422,9 +422,12 @@ export function MessageItem({
               ) : null;
             })()}
             {message.attachmentIDs && message.attachmentIDs.length > 0 && (
-              <MessageAttachments
-                ids={message.attachmentIDs}
-                authorName={authorName}
+	              <MessageAttachments
+	                ids={message.attachmentIDs}
+	                parentID={channelId ?? conversationId}
+	                parentType={channelId ? 'channel' : conversationId ? 'conversation' : undefined}
+	                messageID={message.id}
+	                authorName={authorName}
                 authorAvatarURL={authorAvatarURL}
                 postedIn={
                   channelSlug

@@ -105,6 +105,14 @@ func (m *mockAttachmentStore) SetDimensions(_ context.Context, id string, width,
 	return nil
 }
 
+type fakeAttachmentAccessChecker struct {
+	err error
+}
+
+func (f fakeAttachmentAccessChecker) CanAccessMessageAttachment(context.Context, string, string, string, string, string) error {
+	return f.err
+}
+
 func keys(m map[string]bool) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {
@@ -400,8 +408,8 @@ func TestAttachmentService_CreateUploadURL_DedupeByHash(t *testing.T) {
 		t.Fatalf("create: %v", err)
 	}
 
-	// Same hash from another user — should dedupe
-	second, err := svc.CreateUploadURL(context.Background(), CreateUploadParams{UserID: "u2", Filename: "other.png", ContentType: "image/png", SHA256: testSHA256A, Size: 10})
+	// Same hash from the same user dedupes without revealing another user's file.
+	second, err := svc.CreateUploadURL(context.Background(), CreateUploadParams{UserID: "u1", Filename: "other.png", ContentType: "image/png", SHA256: testSHA256A, Size: 10})
 	if err != nil {
 		t.Fatalf("dedupe: %v", err)
 	}
@@ -413,6 +421,77 @@ func TestAttachmentService_CreateUploadURL_DedupeByHash(t *testing.T) {
 	}
 	if second.UploadURL != "" {
 		t.Error("dedup hit should not return upload URL")
+	}
+
+	third, err := svc.CreateUploadURL(context.Background(), CreateUploadParams{UserID: "u2", Filename: "other.png", ContentType: "image/png", SHA256: testSHA256A, Size: 10})
+	if err != nil {
+		t.Fatalf("cross-user upload: %v", err)
+	}
+	if third.AlreadyExists {
+		t.Error("cross-user same hash must not dedupe to another user's attachment")
+	}
+	if third.Attachment.ID == first.Attachment.ID {
+		t.Error("cross-user same hash leaked existing attachment ID")
+	}
+}
+
+func TestAttachmentService_GetForUserRequiresOwnerOrMessageAccess(t *testing.T) {
+	storeM := newMockAttachmentStore()
+	svc := NewAttachmentService(storeM, &fakeAttachmentSigner{}, newMockPublisher())
+	storeM.byID["att-private"] = &model.Attachment{
+		ID: "att-private", SHA256: testSHA256A, S3Key: "attachments/att-private",
+		Filename: "private.png", ContentType: "image/png", Size: 10,
+		CreatedBy: "u-owner", MessageIDs: []string{"msg-1"},
+	}
+
+	if _, err := svc.GetForUser(context.Background(), "u-other", "att-private", "", "", ""); err == nil {
+		t.Fatal("expected non-owner lookup without message context to fail")
+	}
+
+	svc.SetAccessChecker(fakeAttachmentAccessChecker{})
+	if _, err := svc.GetForUser(context.Background(), "u-other", "att-private", "ch-1", ParentChannel, "msg-1"); err != nil {
+		t.Fatalf("expected message-scoped access to succeed: %v", err)
+	}
+
+	storeM.byID["att-draft"] = &model.Attachment{
+		ID: "att-draft", SHA256: testSHA256B, S3Key: "attachments/att-draft",
+		Filename: "draft.png", ContentType: "image/png", Size: 10, CreatedBy: "u-owner",
+	}
+	if _, err := svc.GetForUser(context.Background(), "u-owner", "att-draft", "", "", ""); err != nil {
+		t.Fatalf("owner should be able to resolve an unbound draft attachment: %v", err)
+	}
+
+	svc.SetAccessChecker(fakeAttachmentAccessChecker{err: errors.New("denied")})
+	if _, err := svc.GetForUser(context.Background(), "u-other", "att-private", "ch-1", ParentChannel, "msg-1"); err == nil {
+		t.Fatal("expected access-checker denial")
+	}
+}
+
+func TestAttachmentService_GetManyForUserFiltersUnauthorizedAndCapsBatch(t *testing.T) {
+	storeM := newMockAttachmentStore()
+	svc := NewAttachmentService(storeM, &fakeAttachmentSigner{}, newMockPublisher())
+	svc.SetAccessChecker(fakeAttachmentAccessChecker{})
+	storeM.byID["att-1"] = &model.Attachment{
+		ID: "att-1", SHA256: testSHA256A, S3Key: "attachments/att-1",
+		Filename: "one.png", ContentType: "image/png", Size: 10,
+		CreatedBy: "u-owner", MessageIDs: []string{"msg-1"},
+	}
+	storeM.byID["att-draft"] = &model.Attachment{
+		ID: "att-draft", SHA256: testSHA256B, S3Key: "attachments/att-draft",
+		Filename: "draft.png", ContentType: "image/png", Size: 10,
+		CreatedBy: "u-other",
+	}
+
+	got, err := svc.GetManyForUser(context.Background(), "u-other", []string{"att-1", "att-draft", "missing"}, "ch-1", ParentChannel, "msg-1")
+	if err != nil {
+		t.Fatalf("GetManyForUser: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("len = %d, want 2", len(got))
+	}
+	ids := make([]string, MaxAttachmentBatchIDs+1)
+	if _, err := svc.GetManyForUser(context.Background(), "u-other", ids, "ch-1", ParentChannel, "msg-1"); err == nil {
+		t.Fatal("expected too many IDs error")
 	}
 }
 

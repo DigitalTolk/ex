@@ -181,6 +181,62 @@ func TestCategoryStore_Update_NameAndPosition(t *testing.T) {
 	}
 }
 
+func TestCategoryStore_Update_SameNameOnlyPosition(t *testing.T) {
+	db := setupDynamoDB(t)
+	s := NewCategoryStore(db)
+	ctx := context.Background()
+
+	uid := "u-cat-upd-same"
+	c := makeCategory(uid, "c-same", "Same", 1)
+	if err := s.Create(ctx, c); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	c.Name = " same "
+	c.Position = 7
+	if err := s.Update(ctx, c); err != nil {
+		t.Fatalf("Update same name: %v", err)
+	}
+	got, err := s.Get(ctx, uid, "c-same")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Position != 7 {
+		t.Fatalf("Position = %d, want 7", got.Position)
+	}
+}
+
+func TestCategoryStore_Update_NameChangeReplacesNameIndex(t *testing.T) {
+	db := setupDynamoDB(t)
+	s := NewCategoryStore(db)
+	ctx := context.Background()
+
+	uid := "u-cat-upd-name"
+	c := makeCategory(uid, "c-name", "Old", 1)
+	if err := s.Create(ctx, c); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	c.Name = "New"
+	c.Position = 5
+	if err := s.Update(ctx, c); err != nil {
+		t.Fatalf("Update name: %v", err)
+	}
+	got, err := s.Get(ctx, uid, "c-name")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Name != "New" || got.Position != 5 {
+		t.Fatalf("updated category = %+v, want name New position 5", got)
+	}
+	if err := s.Create(ctx, makeCategory(uid, "c-old", "Old", 2)); err != nil {
+		t.Fatalf("old name index was not released: %v", err)
+	}
+	if err := s.Create(ctx, makeCategory(uid, "c-new", " new ", 3)); !errors.Is(err, ErrAlreadyExists) {
+		t.Fatalf("new name index not enforced: %v", err)
+	}
+}
+
 func TestCategoryStore_Update_DuplicateNameRejected(t *testing.T) {
 	db := setupDynamoDB(t)
 	s := NewCategoryStore(db)

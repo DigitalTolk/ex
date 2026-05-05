@@ -80,6 +80,7 @@ type AttachmentService struct {
 	backfillMu        sync.Mutex
 	inFlightBackfills map[string]struct{}
 	mediaCache        MediaURLCache
+	accessChecker     AttachmentAccessChecker
 }
 
 // NewAttachmentService constructs an AttachmentService.
@@ -104,9 +105,17 @@ func (s *AttachmentService) SetUploadLimits(l uploadLimits) { s.limits = l }
 // rendering. Without it, Get falls back to direct presigned S3 URLs.
 func (s *AttachmentService) SetMediaURLCache(c MediaURLCache) { s.mediaCache = c }
 
+func (s *AttachmentService) SetAccessChecker(c AttachmentAccessChecker) { s.accessChecker = c }
+
 // AttachmentURLTTL is how long signed GET URLs remain valid. Frontend resolves
 // URLs on demand via the API so this can be relatively short.
 const AttachmentURLTTL = 24 * time.Hour
+
+const MaxAttachmentBatchIDs = 50
+
+type AttachmentAccessChecker interface {
+	CanAccessMessageAttachment(ctx context.Context, userID, parentID, parentType, messageID, attachmentID string) error
+}
 
 // CreateUploadResult carries the result of a request for an upload URL. When
 // AlreadyExists is true the caller should NOT upload — the attachment was
@@ -162,7 +171,7 @@ func (s *AttachmentService) CreateUploadURL(ctx context.Context, p CreateUploadP
 		}
 	}
 
-	if existing, err := s.attachments.GetByHash(ctx, p.SHA256); err == nil && existing != nil {
+	if existing, err := s.attachments.GetByHash(ctx, p.SHA256); err == nil && existing != nil && existing.CreatedBy == p.UserID {
 		return &CreateUploadResult{Attachment: existing, AlreadyExists: true}, nil
 	} else if err != nil && !errors.Is(err, store.ErrNotFound) {
 		return nil, fmt.Errorf("attachment: lookup hash: %w", err)
@@ -217,6 +226,36 @@ func (s *AttachmentService) Get(ctx context.Context, id string) (*model.Attachme
 		s.scheduleDimensionsBackfill(a.ID, a.S3Key)
 	}
 	return a, nil
+}
+
+func (s *AttachmentService) GetForUser(ctx context.Context, userID, id, parentID, parentType, messageID string) (*model.Attachment, error) {
+	a, err := s.attachments.GetByID(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("attachment: get: %w", err)
+	}
+	if !s.canAccessAttachment(ctx, userID, a, parentID, parentType, messageID) {
+		return nil, store.ErrNotFound
+	}
+	if s.signer != nil && a.S3Key != "" {
+		s.resolveAttachmentURLs(ctx, a)
+	}
+	if a.IsImage() && a.Width == 0 && a.Height == 0 && a.S3Key != "" && s.signer != nil {
+		s.scheduleDimensionsBackfill(a.ID, a.S3Key)
+	}
+	return a, nil
+}
+
+func (s *AttachmentService) canAccessAttachment(ctx context.Context, userID string, a *model.Attachment, parentID, parentType, messageID string) bool {
+	if userID == "" || a == nil {
+		return false
+	}
+	if a.CreatedBy == userID && len(a.MessageIDs) == 0 {
+		return true
+	}
+	if parentID == "" || parentType == "" || messageID == "" || s.accessChecker == nil {
+		return false
+	}
+	return s.accessChecker.CanAccessMessageAttachment(ctx, userID, parentID, parentType, messageID, a.ID) == nil
 }
 
 func (s *AttachmentService) resolveAttachmentURLs(ctx context.Context, a *model.Attachment) {
@@ -310,6 +349,37 @@ func (s *AttachmentService) GetMany(ctx context.Context, ids []string) ([]*model
 		go func(i int, id string) {
 			defer wg.Done()
 			if a, err := s.Get(ctx, id); err == nil {
+				results[i] = a
+			}
+		}(i, id)
+	}
+	wg.Wait()
+	out := make([]*model.Attachment, 0, len(ids))
+	for _, a := range results {
+		if a != nil {
+			out = append(out, a)
+		}
+	}
+	return out, nil
+}
+
+func (s *AttachmentService) GetManyForUser(ctx context.Context, userID string, ids []string, parentID, parentType, messageID string) ([]*model.Attachment, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	if len(ids) > MaxAttachmentBatchIDs {
+		return nil, fmt.Errorf("attachment: too many IDs")
+	}
+	results := make([]*model.Attachment, len(ids))
+	var wg sync.WaitGroup
+	for i, id := range ids {
+		if id == "" {
+			continue
+		}
+		wg.Add(1)
+		go func(i int, id string) {
+			defer wg.Done()
+			if a, err := s.GetForUser(ctx, userID, id, parentID, parentType, messageID); err == nil {
 				results[i] = a
 			}
 		}(i, id)

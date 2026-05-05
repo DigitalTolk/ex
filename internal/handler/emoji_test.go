@@ -57,6 +57,11 @@ func (handlerEmojiSigner) PresignedGetURL(_ context.Context, key string, _ time.
 	return "https://fresh.test/" + key, nil
 }
 
+func (handlerEmojiSigner) GetObject(_ context.Context, _ string) (io.ReadCloser, string, int64, time.Time, error) {
+	data := "GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff!\xf9\x04\x00\x00\x00\x00\x00,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02D\x01\x00;"
+	return io.NopCloser(strings.NewReader(data)), "image/gif", int64(len(data)), time.Now(), nil
+}
+
 func setupEmojiHandler(t *testing.T) (*EmojiHandler, *dataEmojiStore, *dataUserStoreForConv, *auth.JWTManager) {
 	t.Helper()
 	emojis := newDataEmojiStore()
@@ -253,8 +258,8 @@ func TestAttachmentHandler_List(t *testing.T) {
 	u := &model.User{ID: "u1", SystemRole: model.SystemRoleMember}
 	tok := tokenFor(t, jwtMgr, u)
 
-	a1 := &model.Attachment{ID: "a1", S3Key: "attachments/a1", SHA256: "h1", ContentType: "image/png", Filename: "1.png", Size: 10}
-	a2 := &model.Attachment{ID: "a2", S3Key: "attachments/a2", SHA256: "h2", ContentType: "image/png", Filename: "2.png", Size: 20}
+	a1 := &model.Attachment{ID: "a1", S3Key: "attachments/a1", SHA256: "h1", ContentType: "image/png", Filename: "1.png", Size: 10, CreatedBy: "u1"}
+	a2 := &model.Attachment{ID: "a2", S3Key: "attachments/a2", SHA256: "h2", ContentType: "image/png", Filename: "2.png", Size: 20, CreatedBy: "u1"}
 	_ = atts.Create(context.Background(), a1)
 	_ = atts.Create(context.Background(), a2)
 
@@ -295,6 +300,26 @@ func TestAttachmentHandler_List_Empty(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status=%d", rec.Code)
+	}
+}
+
+func TestAttachmentHandler_List_RejectsTooManyIDs(t *testing.T) {
+	svc := service.NewAttachmentService(newDataAttachmentStore(), nil, nil)
+	jwtMgr := auth.NewJWTManager("att-test-3", 15*time.Minute, 720*time.Hour)
+	u := &model.User{ID: "u1", SystemRole: model.SystemRoleMember}
+	tok := tokenFor(t, jwtMgr, u)
+	h := NewAttachmentHandler(svc)
+	handler := middleware.Auth(jwtMgr)(http.HandlerFunc(h.List))
+	ids := make([]string, service.MaxAttachmentBatchIDs+1)
+	for i := range ids {
+		ids[i] = "a"
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/attachments?ids="+strings.Join(ids, ","), nil)
+	req.Header.Set("Authorization", "Bearer "+tok)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d, want %d", rec.Code, http.StatusBadRequest)
 	}
 }
 

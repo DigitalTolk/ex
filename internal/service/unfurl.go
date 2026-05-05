@@ -266,7 +266,11 @@ func (s *UnfurlService) fetchUpstreamImage(ctx context.Context, imgURL string) (
 		return nil, "", fmt.Errorf("unfurl: image upstream %d", resp.StatusCode)
 	}
 	contentType := resp.Header.Get("Content-Type")
-	if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(strings.Split(contentType, ";")[0])), "image/") {
+	declared := strings.ToLower(strings.TrimSpace(strings.Split(contentType, ";")[0]))
+	if declared == "image/svg+xml" {
+		return nil, "", errors.New("unfurl: SVG preview images are not allowed")
+	}
+	if !strings.HasPrefix(declared, "image/") {
 		return nil, "", fmt.Errorf("unfurl: non-image content-type %q", contentType)
 	}
 
@@ -281,6 +285,10 @@ func (s *UnfurlService) fetchUpstreamImage(ctx context.Context, imgURL string) (
 	}
 	if len(body) == 0 {
 		return nil, "", errors.New("unfurl: empty image body")
+	}
+	detected := strings.ToLower(strings.TrimSpace(strings.Split(http.DetectContentType(body), ";")[0]))
+	if !strings.HasPrefix(detected, "image/") {
+		return nil, "", fmt.Errorf("unfurl: image magic mismatch %q", detected)
 	}
 	return body, contentType, nil
 }
@@ -310,7 +318,7 @@ func imageExtFromURL(imgURL string) string {
 	}
 	ext := strings.ToLower(path.Ext(u.Path))
 	switch ext {
-	case ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".avif", ".bmp", ".ico":
+	case ".png", ".jpg", ".jpeg", ".gif", ".webp", ".avif", ".bmp", ".ico":
 		return ext
 	}
 	return ""

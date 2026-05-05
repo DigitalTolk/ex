@@ -420,7 +420,7 @@ func TestAttachmentHandler_CreateUploadURL_DedupExisting(t *testing.T) {
 	hash := strings.Repeat("d", 64)
 	st.byID["a-existing"] = &model.Attachment{
 		ID: "a-existing", SHA256: hash, Filename: "old.png",
-		ContentType: "image/png", Size: 200,
+		ContentType: "image/png", Size: 200, CreatedBy: "u-att-dup",
 	}
 	st.byHash[hash] = st.byID["a-existing"]
 
@@ -507,7 +507,7 @@ func TestAttachmentHandler_Get_MissingID(t *testing.T) {
 func TestAttachmentHandler_Get_OK(t *testing.T) {
 	h, st, jwtMgr := setupAttachmentHandler(t)
 	st.byID["a-get"] = &model.Attachment{
-		ID: "a-get", Filename: "g.png", ContentType: "image/png", S3Key: "attachments/a-get",
+		ID: "a-get", Filename: "g.png", ContentType: "image/png", S3Key: "attachments/a-get", CreatedBy: "u-att-g",
 	}
 	user := &model.User{ID: "u-att-g", Email: "g@x.com", SystemRole: model.SystemRoleMember}
 	token := makeTokenForUser(jwtMgr, user)

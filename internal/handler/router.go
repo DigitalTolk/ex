@@ -43,6 +43,9 @@ func NewRouter(
 	mux := http.NewServeMux()
 
 	authMW := middleware.Auth(jwtMgr)
+	if userH != nil && userH.userSvc != nil {
+		authMW = middleware.AuthWithUserStatus(jwtMgr, userH.userSvc)
+	}
 
 	// ------------------------------------------------------------------ Health
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {

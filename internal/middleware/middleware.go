@@ -22,6 +22,16 @@ const (
 // Auth returns middleware that validates a JWT from the Authorization header
 // (Bearer scheme) or the "token" query parameter, and stores the claims in context.
 func Auth(jwtMgr *auth.JWTManager) func(http.Handler) http.Handler {
+	return AuthWithUserStatus(jwtMgr, nil)
+}
+
+type authUserStore interface {
+	GetByID(ctx context.Context, id string) (*model.User, error)
+}
+
+// AuthWithUserStatus validates a JWT and, when a user store is supplied,
+// rejects tokens for accounts that have since been deactivated.
+func AuthWithUserStatus(jwtMgr *auth.JWTManager, users authUserStore) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			tokenStr := extractToken(r)
@@ -34,6 +44,13 @@ func Auth(jwtMgr *auth.JWTManager) func(http.Handler) http.Handler {
 			if err != nil {
 				http.Error(w, "invalid token", http.StatusUnauthorized)
 				return
+			}
+			if users != nil {
+				user, err := users.GetByID(r.Context(), claims.UserID)
+				if err != nil || user == nil || user.Status == "deactivated" {
+					http.Error(w, "account deactivated", http.StatusUnauthorized)
+					return
+				}
 			}
 
 			ctx := context.WithValue(r.Context(), claimsKey, claims)

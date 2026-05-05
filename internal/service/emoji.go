@@ -1,12 +1,21 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"image"
+	_ "image/gif"
+	_ "image/jpeg"
+	_ "image/png"
+	"io"
+	"net/http"
 	"regexp"
 	"strings"
 	"time"
+
+	_ "golang.org/x/image/webp"
 
 	"github.com/DigitalTolk/ex/internal/events"
 	"github.com/DigitalTolk/ex/internal/model"
@@ -27,12 +36,14 @@ type EmojiStore interface {
 // here just documents what EmojiService actually uses.
 type EmojiURLSigner interface {
 	PresignedGetURL(ctx context.Context, key string, expires time.Duration) (string, error)
+	GetObject(ctx context.Context, key string) (io.ReadCloser, string, int64, time.Time, error)
 }
 
 // EmojiURLTTL is how long re-signed emoji GET URLs remain valid. Short
 // enough that a stale URL never lingers in caches forever, long enough
 // to amortize the presign cost across a typical user session.
 const EmojiURLTTL = 24 * time.Hour
+const MaxEmojiImageBytes = 512 * 1024
 
 // EmojiService manages workspace custom emojis.
 type EmojiService struct {
@@ -91,6 +102,9 @@ func (s *EmojiService) Create(ctx context.Context, userID, name, imageKey string
 	if !strings.HasPrefix(imageKey, "uploads/"+userID+"/") {
 		return nil, errors.New("emoji: image key is not owned by this user")
 	}
+	if err := s.validateImageObject(ctx, imageKey); err != nil {
+		return nil, err
+	}
 
 	u, err := s.users.GetUser(ctx, userID)
 	if err != nil {
@@ -120,6 +134,39 @@ func (s *EmojiService) Create(ctx context.Context, userID, name, imageKey string
 
 	events.Publish(ctx, s.publisher, pubsub.GlobalEmojiEvents(), events.EventEmojiAdded, e)
 	return e, nil
+}
+
+func (s *EmojiService) validateImageObject(ctx context.Context, imageKey string) error {
+	if s.signer == nil {
+		return errors.New("emoji: storage signer not configured")
+	}
+	body, contentType, size, _, err := s.signer.GetObject(ctx, imageKey)
+	if err != nil {
+		return fmt.Errorf("emoji: image object missing: %w", err)
+	}
+	defer func() { _ = body.Close() }()
+	if size <= 0 || size > MaxEmojiImageBytes {
+		return fmt.Errorf("emoji: image must be 1-%d bytes", MaxEmojiImageBytes)
+	}
+	data, err := io.ReadAll(io.LimitReader(body, MaxEmojiImageBytes+1))
+	if err != nil {
+		return fmt.Errorf("emoji: read image: %w", err)
+	}
+	if len(data) == 0 || len(data) > MaxEmojiImageBytes {
+		return fmt.Errorf("emoji: image must be 1-%d bytes", MaxEmojiImageBytes)
+	}
+	declared := strings.ToLower(strings.TrimSpace(strings.Split(contentType, ";")[0]))
+	if declared == "image/svg+xml" {
+		return errors.New("emoji: SVG images are not allowed")
+	}
+	detected := strings.ToLower(strings.TrimSpace(strings.Split(http.DetectContentType(data), ";")[0]))
+	if !strings.HasPrefix(declared, "image/") || !strings.HasPrefix(detected, "image/") {
+		return errors.New("emoji: object is not an image")
+	}
+	if _, _, err := image.DecodeConfig(bytes.NewReader(data)); err != nil {
+		return errors.New("emoji: invalid image")
+	}
+	return nil
 }
 
 func (s *EmojiService) resolveCreateImageURL(ctx context.Context, name, imageKey string) (string, error) {

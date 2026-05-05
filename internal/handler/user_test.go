@@ -699,7 +699,7 @@ func TestListUsers_Search_NoResults(t *testing.T) {
 func TestCreateAvatarUploadURL_Unauthenticated(t *testing.T) {
 	h, _, _ := setupUserHandler(t)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/users/me/avatar/upload-url", strings.NewReader(`{"contentType":"image/png"}`))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/users/me/avatar/upload-url", strings.NewReader(`{"contentType":"image/png","size":128}`))
 	rec := httptest.NewRecorder()
 
 	h.CreateAvatarUploadURL(rec, req)
@@ -725,7 +725,7 @@ func TestCreateAvatarUploadURL_NoStorage(t *testing.T) {
 	token := makeTokenForUser(jwtMgr, user)
 	handler := middleware.Auth(jwtMgr)(http.HandlerFunc(h.CreateAvatarUploadURL))
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/users/me/avatar/upload-url", strings.NewReader(`{"contentType":"image/png"}`))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/users/me/avatar/upload-url", strings.NewReader(`{"contentType":"image/png","size":128}`))
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
@@ -773,6 +773,34 @@ func TestCreateAvatarUploadURL_InvalidContentType(t *testing.T) {
 	}
 }
 
+func TestCreateAvatarUploadURL_InvalidSize(t *testing.T) {
+	h, userStore, jwtMgr := setupUserHandler(t)
+	s3Client, err := storage.NewS3Client(context.Background(), storage.S3Config{
+		Endpoint:  "http://127.0.0.1:1",
+		Bucket:    "test",
+		AccessKey: "test",
+		SecretKey: "test",
+		Region:    "us-east-1",
+	})
+	if err != nil {
+		t.Fatalf("S3 client: %v", err)
+	}
+	h.s3 = s3Client
+	user := &model.User{ID: "avatar-size", Email: "size@test.com", DisplayName: "Size", SystemRole: model.SystemRoleMember, Status: "active"}
+	userStore.users[user.ID] = user
+	userStore.emailIndex[user.Email] = user
+	token := makeTokenForUser(jwtMgr, user)
+	handler := middleware.Auth(jwtMgr)(http.HandlerFunc(h.CreateAvatarUploadURL))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/users/me/avatar/upload-url", strings.NewReader(`{"contentType":"image/png","size":0}`))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+}
+
 func TestCreateAvatarUploadURL_Success(t *testing.T) {
 	h, userStore, jwtMgr := setupUserHandler(t)
 	s3Client, err := storage.NewS3Client(context.Background(), storage.S3Config{
@@ -796,7 +824,7 @@ func TestCreateAvatarUploadURL_Success(t *testing.T) {
 	token := makeTokenForUser(jwtMgr, user)
 	handler := middleware.Auth(jwtMgr)(http.HandlerFunc(h.CreateAvatarUploadURL))
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/users/me/avatar/upload-url", strings.NewReader(`{"contentType":"image/png"}`))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/users/me/avatar/upload-url", strings.NewReader(`{"contentType":"image/png","size":128}`))
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()

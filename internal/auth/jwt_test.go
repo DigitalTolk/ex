@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/DigitalTolk/ex/internal/model"
+	"github.com/golang-jwt/jwt/v5"
 )
 
 func testUser() *model.User {
@@ -109,6 +110,29 @@ func TestValidateTokenInvalid(t *testing.T) {
 				t.Errorf("ValidateToken(%q): expected error, got nil", tt.token)
 			}
 		})
+	}
+}
+
+func TestValidateTokenRejectsUnexpectedSigningMethod(t *testing.T) {
+	mgr := NewJWTManager("test-secret", 15*time.Minute, 720*time.Hour)
+	token := jwt.NewWithClaims(jwt.SigningMethodNone, model.TokenClaims{
+		RegisteredClaims: jwt.RegisteredClaims{
+			Subject:   "user-123",
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour)),
+		},
+		UserID: "user-123",
+	})
+	tokenString, err := token.SignedString(jwt.UnsafeAllowNoneSignatureType)
+	if err != nil {
+		t.Fatalf("sign none token: %v", err)
+	}
+
+	_, err = mgr.ValidateToken(tokenString)
+	if err == nil {
+		t.Fatal("expected unexpected signing method to be rejected")
+	}
+	if !strings.Contains(err.Error(), "unexpected signing method") {
+		t.Fatalf("error = %v, want unexpected signing method", err)
 	}
 }
 

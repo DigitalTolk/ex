@@ -72,7 +72,7 @@ function EditProfileBody({ onOpenChange }: { onOpenChange: (open: boolean) => vo
         '/api/v1/users/me/avatar/upload-url',
         {
           method: 'POST',
-          body: JSON.stringify({ contentType: file.type }),
+          body: JSON.stringify({ contentType: file.type, size: file.size }),
         },
       );
 

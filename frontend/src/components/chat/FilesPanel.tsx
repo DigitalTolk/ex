@@ -52,7 +52,18 @@ export function FilesPanel({
   });
 
   const ids = useMemo(() => (entries ?? []).map((e) => e.attachmentID), [entries]);
-  const { map: attMap } = useAttachmentsBatch(ids);
+  const firstMessageIDByAttachment = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const e of entries ?? []) {
+      if (!map.has(e.attachmentID)) map.set(e.attachmentID, e.messageID);
+    }
+    return map;
+  }, [entries]);
+  const { map: attMap } = useAttachmentsBatch(ids, {
+    parentID: channelId ?? conversationId,
+    parentType: channelId ? 'channel' : conversationId ? 'conversation' : undefined,
+    messageID: ids.length === 1 ? firstMessageIDByAttachment.get(ids[0]) : undefined,
+  });
 
   // Author + timestamp differ per row (same channel, many uploaders),
   // so each slide carries its own header metadata.

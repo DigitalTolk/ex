@@ -40,7 +40,7 @@ export function useUploadEmoji() {
         key: string;
       }>('/api/v1/uploads/url', {
         method: 'POST',
-        body: JSON.stringify({ filename: file.name, contentType: file.type }),
+        body: JSON.stringify({ filename: file.name, contentType: file.type, size: file.size }),
       });
       const put = await fetch(uploadURL, {
         method: 'PUT',
