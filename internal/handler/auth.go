@@ -151,7 +151,7 @@ func isAllowedOIDCRedirect(u string) bool {
 	case "http", "https", "tauri":
 		return parsed.Hostname() == "localhost"
 	case "ex":
-		return parsed.Host == "app"
+		return parsed.Host == "app" || parsed.Host == "mobile"
 	default:
 		return false
 	}
