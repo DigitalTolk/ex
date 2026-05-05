@@ -86,6 +86,7 @@ func TestHandleOIDCLoginNoOIDC(t *testing.T) {
 func TestHandleOIDCCallback_FirstUserGetsAdmin(t *testing.T) {
 	env := setupAuthService()
 	env.users.hasUsersVal = false // no existing users
+	env.oidc.userInfo.Email = " OIDC@Example.COM "
 
 	ctx := context.Background()
 	accessToken, refreshToken, user, err := env.svc.HandleOIDCCallback(ctx, "auth-code", "state")
@@ -130,17 +131,18 @@ func TestHandleOIDCCallback_SecondUserGetsMember(t *testing.T) {
 
 func TestHandleOIDCCallback_ExistingUser(t *testing.T) {
 	env := setupAuthService()
+	env.oidc.userInfo.Email = "OIDC@EXAMPLE.COM"
 
 	// Pre-create the user in the store.
 	existing := &model.User{
 		ID:          "existing-user",
-		Email:       "oidc@example.com",
+		Email:       "OIDC@Example.COM",
 		DisplayName: "Old Name",
 		SystemRole:  model.SystemRoleMember,
 		Status:      "active",
 	}
 	env.users.users[existing.ID] = existing
-	env.users.emailIndex[existing.Email] = existing
+	env.users.emailIndex["oidc@example.com"] = existing
 
 	ctx := context.Background()
 	_, _, user, err := env.svc.HandleOIDCCallback(ctx, "auth-code", "state")
@@ -151,6 +153,9 @@ func TestHandleOIDCCallback_ExistingUser(t *testing.T) {
 	// Profile should be updated from OIDC.
 	if user.DisplayName != "OIDC User" {
 		t.Errorf("DisplayName = %q, want %q", user.DisplayName, "OIDC User")
+	}
+	if user.Email != "OIDC@Example.COM" {
+		t.Errorf("Email = %q, want existing profile email to be preserved", user.Email)
 	}
 }
 

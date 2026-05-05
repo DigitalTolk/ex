@@ -113,6 +113,28 @@ func TestReadJSONRejectsTrailingData(t *testing.T) {
 	}
 }
 
+func TestReadJSONRejectsTrailingEmptyObject(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"name":"test"}{}`))
+	var dest struct {
+		Name string `json:"name"`
+	}
+	if err := readJSON(req, &dest); err == nil {
+		t.Fatal("expected error for trailing JSON object")
+	}
+}
+
+func TestClampInt(t *testing.T) {
+	if got := clampInt(-10, 1, 100); got != 1 {
+		t.Fatalf("clampInt below min = %d, want 1", got)
+	}
+	if got := clampInt(200, 1, 100); got != 100 {
+		t.Fatalf("clampInt above max = %d, want 100", got)
+	}
+	if got := clampInt(50, 1, 100); got != 50 {
+		t.Fatalf("clampInt within range = %d, want 50", got)
+	}
+}
+
 func TestReadJSONOversizedBody(t *testing.T) {
 	// Create a body larger than 1 MB.
 	big := strings.Repeat("a", 1<<20+1)

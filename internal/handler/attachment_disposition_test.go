@@ -1,6 +1,11 @@
 package handler
 
-import "testing"
+import (
+	"net/http"
+	"net/http/httptest"
+	"testing"
+	"time"
+)
 
 func TestAttachmentDisposition(t *testing.T) {
 	tests := map[string]string{
@@ -13,5 +18,13 @@ func TestAttachmentDisposition(t *testing.T) {
 		if got := attachmentDisposition(in); got != want {
 			t.Fatalf("attachmentDisposition(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+func TestNotModifiedSinceInvalidHeader(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/media", nil)
+	req.Header.Set("If-Modified-Since", "not a time")
+	if notModifiedSince(req, time.Now()) {
+		t.Fatal("invalid If-Modified-Since header should not match")
 	}
 }

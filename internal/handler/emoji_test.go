@@ -303,6 +303,17 @@ func TestAttachmentHandler_List_Empty(t *testing.T) {
 	}
 }
 
+func TestAttachmentHandler_List_Unauthenticated(t *testing.T) {
+	svc := service.NewAttachmentService(newDataAttachmentStore(), nil, nil)
+	h := NewAttachmentHandler(svc)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/attachments?ids=a1", nil)
+	rec := httptest.NewRecorder()
+	h.List(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status=%d, want %d", rec.Code, http.StatusUnauthorized)
+	}
+}
+
 func TestAttachmentHandler_List_RejectsTooManyIDs(t *testing.T) {
 	svc := service.NewAttachmentService(newDataAttachmentStore(), nil, nil)
 	jwtMgr := auth.NewJWTManager("att-test-3", 15*time.Minute, 720*time.Hour)
@@ -328,6 +339,7 @@ type dataAttachmentStore struct {
 	byID   map[string]*model.Attachment
 	byHash map[string]*model.Attachment
 	refs   map[string]map[string]bool
+	getErr error
 }
 
 func newDataAttachmentStore() *dataAttachmentStore {
@@ -343,6 +355,9 @@ func (s *dataAttachmentStore) Create(_ context.Context, a *model.Attachment) err
 	return nil
 }
 func (s *dataAttachmentStore) GetByID(_ context.Context, id string) (*model.Attachment, error) {
+	if s.getErr != nil {
+		return nil, s.getErr
+	}
 	if a, ok := s.byID[id]; ok {
 		return a, nil
 	}

@@ -16,7 +16,7 @@ func TestAcceptInvite_Valid(t *testing.T) {
 	env.channels.channels["ch1"] = &model.Channel{ID: "ch1", Name: "ch1", Type: model.ChannelTypePublic}
 	env.invites.invites["valid-token"] = &model.Invite{
 		Token:      "valid-token",
-		Email:      "invitee@example.com",
+		Email:      " Invitee@Example.COM ",
 		InviterID:  "inviter-1",
 		ChannelIDs: []string{"ch1"},
 		ExpiresAt:  time.Now().Add(72 * time.Hour),

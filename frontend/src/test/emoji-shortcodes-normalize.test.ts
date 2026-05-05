@@ -87,6 +87,14 @@ describe('unicodeToShortcode', () => {
     expect(unicodeToShortcode('😁')).toBe(':grin:');
   });
 
+  it('keeps thinking as the canonical shortcode for 🤔', () => {
+    expect(COMMON_EMOJI_SHORTCODES.some((emoji) => emoji.name === 'thinking')).toBe(true);
+    expect(COMMON_EMOJI_SHORTCODES.some((emoji) => emoji.name === 'thinking_face')).toBe(false);
+    expect(shortcodeToUnicode(':thinking:')).toBe('🤔');
+    expect(shortcodeToUnicode(':thinking_face:')).toBe(':thinking_face:');
+    expect(unicodeToShortcode('🤔')).toBe(':thinking:');
+  });
+
   it('uses common canonical names for high-frequency chat emojis', () => {
     expect(unicodeToShortcode('😁')).toBe(':grin:');
     expect(unicodeToShortcode('😄')).toBe(':smile:');
