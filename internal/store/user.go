@@ -4,14 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
+	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/expression"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
-	"github.com/DigitalTolk/ex/internal/model"
 )
 
 // UserStore defines operations on User entities.
@@ -51,7 +52,19 @@ type userEmailItem struct {
 	UserID string `dynamodbav:"userID"`
 }
 
+func normalizeStoredEmail(email string) string {
+	return strings.ToLower(strings.TrimSpace(email))
+}
+
 func (s *UserStoreImpl) Create(ctx context.Context, user *model.User) error {
+	user.Email = normalizeStoredEmail(user.Email)
+	if existing, err := s.findByEmailScan(ctx, user.Email); err == nil {
+		_ = s.ensureEmailIndex(ctx, existing.Email, existing.ID)
+		return ErrAlreadyExists
+	} else if !errors.Is(err, ErrNotFound) {
+		return err
+	}
+
 	item := userItem{
 		PK:     userPK(user.ID),
 		SK:     profileSK(),
@@ -132,7 +145,12 @@ func (s *UserStoreImpl) GetByEmail(ctx context.Context, email string) (*model.Us
 		return nil, fmt.Errorf("store: get user email: %w", err)
 	}
 	if out.Item == nil {
-		return nil, ErrNotFound
+		user, err := s.findByEmailScan(ctx, email)
+		if err != nil {
+			return nil, err
+		}
+		_ = s.ensureEmailIndex(ctx, user.Email, user.ID)
+		return user, nil
 	}
 
 	var emailEntry userEmailItem
@@ -143,7 +161,71 @@ func (s *UserStoreImpl) GetByEmail(ctx context.Context, email string) (*model.Us
 	return s.GetByID(ctx, emailEntry.UserID)
 }
 
+func (s *UserStoreImpl) findByEmailScan(ctx context.Context, email string) (*model.User, error) {
+	normalized := strings.ToLower(strings.TrimSpace(email))
+	if normalized == "" {
+		return nil, ErrNotFound
+	}
+	keyCond := expression.Key("GSI2PK").Equal(expression.Value(allUsersGSI2PK()))
+	expr, err := expression.NewBuilder().WithKeyCondition(keyCond).Build()
+	if err != nil {
+		return nil, fmt.Errorf("store: build users by email fallback expression: %w", err)
+	}
+	input := &dynamodb.QueryInput{
+		TableName:                 aws.String(s.Table),
+		IndexName:                 aws.String("GSI2"),
+		KeyConditionExpression:    expr.KeyCondition(),
+		ExpressionAttributeNames:  expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
+	}
+	for {
+		out, err := s.Client.Query(ctx, input)
+		if err != nil {
+			return nil, fmt.Errorf("store: scan users by email fallback: %w", err)
+		}
+		for _, raw := range out.Items {
+			var item userItem
+			if err := attributevalue.UnmarshalMap(raw, &item); err != nil {
+				return nil, fmt.Errorf("store: unmarshal user by email fallback: %w", err)
+			}
+			if strings.ToLower(strings.TrimSpace(item.Email)) == normalized {
+				u := item.User
+				return &u, nil
+			}
+		}
+		if len(out.LastEvaluatedKey) == 0 {
+			break
+		}
+		input.ExclusiveStartKey = out.LastEvaluatedKey
+	}
+	return nil, ErrNotFound
+}
+
+func (s *UserStoreImpl) ensureEmailIndex(ctx context.Context, email, userID string) error {
+	emailAV, err := attributevalue.MarshalMap(userEmailItem{
+		PK:     userEmailPK(email),
+		SK:     profileSK(),
+		UserID: userID,
+	})
+	if err != nil {
+		return fmt.Errorf("store: marshal user email: %w", err)
+	}
+	_, err = s.Client.PutItem(ctx, &dynamodb.PutItemInput{
+		TableName:           aws.String(s.Table),
+		Item:                emailAV,
+		ConditionExpression: aws.String("attribute_not_exists(PK)"),
+	})
+	if err != nil {
+		if isConditionCheckFailed(err) {
+			return ErrAlreadyExists
+		}
+		return fmt.Errorf("store: repair user email index: %w", err)
+	}
+	return nil
+}
+
 func (s *UserStoreImpl) Update(ctx context.Context, user *model.User) error {
+	user.Email = normalizeStoredEmail(user.Email)
 	item := userItem{
 		PK:     userPK(user.ID),
 		SK:     profileSK(),

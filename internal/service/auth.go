@@ -120,9 +120,13 @@ func (s *AuthService) HandleOIDCCallback(ctx context.Context, code, state string
 	if err != nil {
 		return "", "", nil, fmt.Errorf("auth: oidc exchange: %w", err)
 	}
+	email, err := normalizeEmailAddress(info.Email)
+	if err != nil {
+		return "", "", nil, err
+	}
 
 	// Look up the user by email; create if not found.
-	user, err = s.users.GetUserByEmail(ctx, info.Email)
+	user, err = s.users.GetUserByEmail(ctx, email)
 	if err != nil {
 		if !errors.Is(err, store.ErrNotFound) {
 			return "", "", nil, fmt.Errorf("auth: get user by email: %w", err)
@@ -141,7 +145,7 @@ func (s *AuthService) HandleOIDCCallback(ctx context.Context, code, state string
 		now := time.Now()
 		user = &model.User{
 			ID:           store.NewID(),
-			Email:        info.Email,
+			Email:        email,
 			DisplayName:  info.Name,
 			AvatarURL:    info.Picture,
 			SystemRole:   role,
@@ -321,6 +325,10 @@ func (s *AuthService) AcceptInvite(ctx context.Context, token, displayName, pass
 		_ = s.invites.DeleteInvite(ctx, token)
 		return "", "", nil, errors.New("auth: invite expired")
 	}
+	email, err := normalizeEmailAddress(inv.Email)
+	if err != nil {
+		return "", "", nil, err
+	}
 
 	hashed, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
@@ -330,7 +338,7 @@ func (s *AuthService) AcceptInvite(ctx context.Context, token, displayName, pass
 	now := time.Now()
 	user = &model.User{
 		ID:           store.NewID(),
-		Email:        inv.Email,
+		Email:        email,
 		DisplayName:  displayName,
 		SystemRole:   model.SystemRoleGuest,
 		AuthProvider: model.AuthProviderGuest,

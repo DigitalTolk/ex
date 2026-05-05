@@ -44,6 +44,7 @@ const CANONICAL_EMOJI_NAMES: Record<string, string> = {
   beam_face_smile_eyes: 'grin',
   flexed_biceps: 'muscle',
   person_bowing: 'bow',
+  thinking_face: 'thinking',
 };
 
 export const ALL_EMOJI: EmojiEntry[] = GENERATED_ALL_EMOJI.map((emoji) => ({

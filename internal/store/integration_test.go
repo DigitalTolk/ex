@@ -15,6 +15,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
@@ -149,7 +150,7 @@ func TestUserStore_CreateAndGet(t *testing.T) {
 	s := NewUserStore(db)
 	ctx := context.Background()
 
-	user := makeUser("u-1", "alice@test.com", "Alice")
+	user := makeUser("u-1", "Alice@Test.COM", "Alice")
 
 	if err := s.Create(ctx, user); err != nil {
 		t.Fatalf("Create: %v", err)
@@ -168,7 +169,7 @@ func TestUserStore_CreateAndGet(t *testing.T) {
 	}
 
 	// Get by Email.
-	got2, err := s.GetByEmail(ctx, "alice@test.com")
+	got2, err := s.GetByEmail(ctx, "ALICE@test.com")
 	if err != nil {
 		t.Fatalf("GetByEmail: %v", err)
 	}
@@ -210,6 +211,7 @@ func TestUserStore_Update(t *testing.T) {
 	}
 
 	user.DisplayName = "After"
+	user.Email = "Update@Test.COM"
 	user.UpdatedAt = time.Now().Truncate(time.Millisecond)
 	if err := s.Update(ctx, user); err != nil {
 		t.Fatalf("Update: %v", err)
@@ -221,6 +223,9 @@ func TestUserStore_Update(t *testing.T) {
 	}
 	if got.DisplayName != "After" {
 		t.Errorf("DisplayName = %q, want %q", got.DisplayName, "After")
+	}
+	if got.Email != "update@test.com" {
+		t.Errorf("Email = %q, want %q", got.Email, "update@test.com")
 	}
 }
 
@@ -323,6 +328,93 @@ func TestUserStore_DuplicateEmailCaseInsensitive(t *testing.T) {
 	}
 	if got.ID != "u-dup-case1" {
 		t.Fatalf("GetByEmail returned %q, want first user", got.ID)
+	}
+	if got.Email != "dup@test.com" {
+		t.Fatalf("GetByEmail returned Email %q, want normalized email", got.Email)
+	}
+}
+
+func TestUserStore_GetByEmail_RepairsMissingEmailIndex(t *testing.T) {
+	db := setupDynamoDB(t)
+	s := NewUserStore(db)
+	ctx := context.Background()
+
+	legacy := makeUser("u-legacy-email", "legacy@test.com", "Legacy")
+	item := userItem{
+		PK:     userPK(legacy.ID),
+		SK:     profileSK(),
+		GSI2PK: allUsersGSI2PK(),
+		GSI2SK: legacy.CreatedAt.Format(time.RFC3339Nano) + "#" + legacy.ID,
+		User:   *legacy,
+	}
+	av, err := attributevalue.MarshalMap(item)
+	if err != nil {
+		t.Fatalf("marshal legacy user: %v", err)
+	}
+	if _, err := db.Client.PutItem(ctx, &dynamodb.PutItemInput{
+		TableName: aws.String(db.Table),
+		Item:      av,
+	}); err != nil {
+		t.Fatalf("put legacy user without email index: %v", err)
+	}
+
+	got, err := s.GetByEmail(ctx, "LEGACY@test.com")
+	if err != nil {
+		t.Fatalf("GetByEmail fallback: %v", err)
+	}
+	if got.ID != legacy.ID {
+		t.Fatalf("GetByEmail returned %q, want %q", got.ID, legacy.ID)
+	}
+	if _, err := s.GetByEmail(ctx, "legacy@test.com"); err != nil {
+		t.Fatalf("GetByEmail after repair: %v", err)
+	}
+}
+
+func TestUserStore_CreateRejectsLegacyDuplicateWithoutEmailIndex(t *testing.T) {
+	db := setupDynamoDB(t)
+	s := NewUserStore(db)
+	ctx := context.Background()
+
+	legacy := makeUser("u-legacy-dup", "legacy-dup@test.com", "Legacy")
+	item := userItem{
+		PK:     userPK(legacy.ID),
+		SK:     profileSK(),
+		GSI2PK: allUsersGSI2PK(),
+		GSI2SK: legacy.CreatedAt.Format(time.RFC3339Nano) + "#" + legacy.ID,
+		User:   *legacy,
+	}
+	av, err := attributevalue.MarshalMap(item)
+	if err != nil {
+		t.Fatalf("marshal legacy user: %v", err)
+	}
+	if _, err := db.Client.PutItem(ctx, &dynamodb.PutItemInput{
+		TableName: aws.String(db.Table),
+		Item:      av,
+	}); err != nil {
+		t.Fatalf("put legacy user without email index: %v", err)
+	}
+
+	dupe := makeUser("u-new-dup", "LEGACY-DUP@test.com", "Legacy")
+	if err := s.Create(ctx, dupe); !errors.Is(err, ErrAlreadyExists) {
+		t.Fatalf("Create duplicate = %v, want ErrAlreadyExists", err)
+	}
+}
+
+func TestUserStore_EmailFallbackHelpers(t *testing.T) {
+	db := setupDynamoDB(t)
+	s := NewUserStore(db)
+	ctx := context.Background()
+
+	if _, err := s.findByEmailScan(ctx, "   "); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("empty fallback scan = %v, want ErrNotFound", err)
+	}
+
+	user := makeUser("u-email-helper", "helper@test.com", "Helper")
+	if err := s.Create(ctx, user); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := s.ensureEmailIndex(ctx, user.Email, user.ID); !errors.Is(err, ErrAlreadyExists) {
+		t.Fatalf("ensureEmailIndex duplicate = %v, want ErrAlreadyExists", err)
 	}
 }
 
