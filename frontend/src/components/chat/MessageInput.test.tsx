@@ -155,18 +155,38 @@ describe('MessageInput', () => {
     });
   });
 
-  it('flushes the previous draft before a focusKey view switch resets the composer', async () => {
+  it('flushes the current draft immediately when the window loses focus', async () => {
     const onDraftChange = vi.fn();
+    render(
+      <MessageInput
+        onSend={vi.fn()}
+        initialBody="switching windows"
+        onDraftChange={onDraftChange}
+      />,
+    );
+    await screen.findByLabelText('Message input');
+
+    window.dispatchEvent(new Event('blur'));
+
+    expect(onDraftChange).toHaveBeenCalledWith({
+      body: 'switching windows',
+      attachmentIDs: [],
+    });
+  });
+
+  it('flushes the previous draft to the previous focusKey scope before resetting the composer', async () => {
+    const ch1DraftChange = vi.fn();
+    const ch2DraftChange = vi.fn();
     const { rerender } = render(
       <MessageInput
         onSend={vi.fn()}
         focusKey="ch-1"
         initialBody="channel one draft"
-        onDraftChange={onDraftChange}
+        onDraftChange={ch1DraftChange}
       />,
     );
     await screen.findByLabelText('Message input');
-    expect(onDraftChange).not.toHaveBeenCalled();
+    expect(ch1DraftChange).not.toHaveBeenCalled();
 
     await act(async () => {
       rerender(
@@ -175,17 +195,18 @@ describe('MessageInput', () => {
             onSend={vi.fn()}
             focusKey="ch-2"
             initialBody=""
-            onDraftChange={onDraftChange}
+            onDraftChange={ch2DraftChange}
           />
         </QueryClientProvider>,
       );
       await flushMicrotasks();
     });
 
-    expect(onDraftChange).toHaveBeenCalledWith({
+    expect(ch1DraftChange).toHaveBeenCalledWith({
       body: 'channel one draft',
       attachmentIDs: [],
     });
+    expect(ch2DraftChange).not.toHaveBeenCalled();
   });
 
   it('does not run the view-switch draft flush when server draft props change under the same focusKey', async () => {
@@ -215,6 +236,54 @@ describe('MessageInput', () => {
     });
 
     expect(onDraftChange).not.toHaveBeenCalled();
+  });
+
+  it('does not move focus to the end when server draft props refresh under the same focusKey', async () => {
+    const { rerender } = render(
+      <MessageInput
+        onSend={vi.fn()}
+        focusKey="ch-1"
+        initialBody="draft body"
+      />,
+    );
+    const editor = await screen.findByLabelText('Message input');
+    editor.blur();
+
+    await act(async () => {
+      rerender(
+        <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+          <MessageInput
+            onSend={vi.fn()}
+            focusKey="ch-1"
+            initialBody="draft body refreshed"
+          />
+        </QueryClientProvider>,
+      );
+      await flushMicrotasks();
+    });
+
+    expect(document.activeElement).not.toBe(editor);
+  });
+
+  it('hydrates an asynchronously loaded draft when no focusKey is provided', async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const renderTree = (initialBody: string) => (
+      <QueryClientProvider client={qc}>
+        <MessageInput onSend={vi.fn()} initialBody={initialBody} />
+      </QueryClientProvider>
+    );
+    const { rerender } = rtlRender(renderTree(''));
+    const editor = await screen.findByLabelText('Message input');
+    expect((editor.textContent ?? '').trim()).toBe('');
+
+    await act(async () => {
+      rerender(renderTree('draft loaded later'));
+      await flushMicrotasks();
+    });
+
+    await waitFor(() => {
+      expect((editor.textContent ?? '').trim()).toBe('draft loaded later');
+    });
   });
 
   it('uses custom placeholder', async () => {
