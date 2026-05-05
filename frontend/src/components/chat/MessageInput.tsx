@@ -117,12 +117,14 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
   const locallyEditedDraftRef = useRef(false);
   const applyingServerDraftRef = useRef(false);
   const focusKeyMountedRef = useRef(false);
+  const allowServerDraftHydrationRef = useRef(true);
   const latestDraftValueRef = useRef<MessageInputValue>({
     body: initialBody,
     attachmentIDs: initialDrafts.map((d) => d.id),
   });
   const hasInitialDraftValueRef = useRef(false);
-  const onDraftChangeRef = useRef(onDraftChange);
+  const scopedDraftChangeRef = useRef(onDraftChange);
+  const activeDraftFocusKeyRef = useRef(focusKey);
   const initialDraftKey = `${initialBody}\u0000${initialDrafts.map((d) => d.id).join('\u0000')}`;
   const appliedInitialDraftRef = useRef(initialDraftKey);
   // Toolbar pressed-state tracking. Driven by Lexical's
@@ -148,8 +150,9 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
   }, [hasInitialDraftValue]);
 
   useEffect(() => {
-    onDraftChangeRef.current = onDraftChange;
-  }, [onDraftChange]);
+    if (focusKey !== undefined && activeDraftFocusKeyRef.current !== focusKey) return;
+    scopedDraftChangeRef.current = onDraftChange;
+  }, [focusKey, onDraftChange]);
 
   const flushDraft = useCallback(() => {
     if (variant !== 'composer') return;
@@ -160,7 +163,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
       hasInitialDraftValueRef.current ||
       mountedDraftChangeRef.current;
     if (!shouldFlush) return;
-    onDraftChangeRef.current?.(value);
+    scopedDraftChangeRef.current?.(value);
   }, [variant]);
 
   // Link dialog state. Opening the dialog calls editor.beginLinkEdit
@@ -251,9 +254,12 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
     if (focusKey === undefined) return;
     if (focusKeyMountedRef.current) {
       flushDraft();
+      allowServerDraftHydrationRef.current = true;
     } else {
       focusKeyMountedRef.current = true;
     }
+    scopedDraftChangeRef.current = onDraftChange;
+    activeDraftFocusKeyRef.current = focusKey;
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setBody(initialBody);
     applyingServerDraftRef.current = true;
@@ -273,6 +279,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
 
   useEffect(() => {
     if (variant !== 'composer') return;
+    if (!allowServerDraftHydrationRef.current) return;
     if (!initialBody && initialDrafts.length === 0) return;
     if (initialDraftKey === appliedInitialDraftRef.current) return;
     if (locallyEditedDraftRef.current) return;
@@ -284,25 +291,28 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
     editorRef.current?.setMarkdown(initialBody);
     queueMicrotask(() => {
       applyingServerDraftRef.current = false;
-      editorRef.current?.focusEnd?.();
+      if (focusKey !== undefined) {
+        editorRef.current?.focusEnd?.();
+      }
     });
     setDrafts(initialDrafts);
     appliedInitialDraftRef.current = initialDraftKey;
+    allowServerDraftHydrationRef.current = false;
     locallyEditedDraftRef.current = false;
     mountedDraftChangeRef.current = false;
-  }, [initialBody, initialDraftKey, initialDrafts, body, drafts.length, variant]);
+  }, [initialBody, initialDraftKey, initialDrafts, body, drafts.length, focusKey, variant]);
 
   useEffect(() => {
-    if (!onDraftChange || variant !== 'composer') return;
+    if (!scopedDraftChangeRef.current || variant !== 'composer') return;
     if (!mountedDraftChangeRef.current) {
       mountedDraftChangeRef.current = true;
       return;
     }
     const timeout = window.setTimeout(() => {
-      onDraftChange(latestDraftValueRef.current);
+      scopedDraftChangeRef.current?.(latestDraftValueRef.current);
     }, 600);
     return () => window.clearTimeout(timeout);
-  }, [body, drafts, onDraftChange, variant]);
+  }, [body, drafts, focusKey, variant]);
 
   useEffect(() => {
     return () => {
@@ -313,15 +323,26 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
   }, [flushDraft]);
 
   useEffect(() => {
+    if (variant !== 'composer') return;
+    const flushWhenHidden = () => {
+      if (document.visibilityState === 'hidden') flushDraft();
+    };
+    window.addEventListener('blur', flushDraft);
+    window.addEventListener('pagehide', flushDraft);
+    document.addEventListener('visibilitychange', flushWhenHidden);
+    return () => {
+      window.removeEventListener('blur', flushDraft);
+      window.removeEventListener('pagehide', flushDraft);
+      document.removeEventListener('visibilitychange', flushWhenHidden);
+    };
+  }, [flushDraft, variant]);
+
+  useEffect(() => {
     if (focusKey === undefined) return;
     queueMicrotask(() => {
-      if (initialBody || initialDrafts.length > 0) {
-        editorRef.current?.focusEnd?.();
-        return;
-      }
       editorRef.current?.focus();
     });
-  }, [focusKey, initialBody, initialDrafts.length]);
+  }, [focusKey]);
 
   // Refocus when an inline edit elsewhere finishes (cancel or submit).
   // Only composers that emit typing (i.e., the main / thread composer,
