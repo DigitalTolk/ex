@@ -18,6 +18,10 @@ updates:
     directory: "/"
     schedule:
       interval: "daily"
+    ignore:
+      - dependency-name: "node"
+        versions:
+          - "25.x"
     groups:
       docker:
         patterns:
@@ -36,6 +40,10 @@ updates:
     directory: "/frontend"
     schedule:
       interval: "daily"
+    ignore:
+      - dependency-name: "@types/node"
+        versions:
+          - ">=25.0.0"
     groups:
       npm:
         patterns:
