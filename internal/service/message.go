@@ -21,6 +21,8 @@ import (
 const (
 	ParentChannel      = "channel"
 	ParentConversation = "conversation"
+	threadScanPageSize = 200
+	maxThreadScanPages = 25
 )
 
 // ConversationActivator is implemented by ConversationService and lets
@@ -113,6 +115,36 @@ func (s *MessageService) CheckAccess(ctx context.Context, userID, parentID, pare
 	return s.checkAccess(ctx, userID, parentID, parentType)
 }
 
+func (s *MessageService) CanAccessMessageAttachment(ctx context.Context, userID, parentID, parentType, messageID, attachmentID string) error {
+	if err := s.checkAccess(ctx, userID, parentID, parentType); err != nil {
+		return err
+	}
+	if messageID == "" {
+		msgs, _, err := s.messages.ListMessages(ctx, parentID, "", 1000)
+		if err != nil {
+			return fmt.Errorf("message: list attachment parent messages: %w", err)
+		}
+		for _, msg := range msgs {
+			for _, id := range msg.AttachmentIDs {
+				if id == attachmentID {
+					return nil
+				}
+			}
+		}
+		return errors.New("message: attachment is not referenced by parent")
+	}
+	msg, err := s.messages.GetMessage(ctx, parentID, messageID)
+	if err != nil {
+		return fmt.Errorf("message: get attachment owner message: %w", err)
+	}
+	for _, id := range msg.AttachmentIDs {
+		if id == attachmentID {
+			return nil
+		}
+	}
+	return errors.New("message: attachment is not referenced by message")
+}
+
 // indexMessage / deleteFromIndex dispatch on a detached goroutine so a
 // slow OpenSearch never adds to user-perceived send latency. Failures
 // are logged; the admin reindex is the recovery path.
@@ -178,9 +210,12 @@ func (s *MessageService) Send(ctx context.Context, userID, parentID, parentType,
 		return nil, fmt.Errorf("message: create: %w", err)
 	}
 
-	// Bind each attachment to this message. Failures are logged but the
-	// message is already persisted so we don't roll it back.
-	s.bindAttachments(ctx, msg.ID, attachmentIDs)
+	if err := s.bindAttachments(ctx, msg.ID, attachmentIDs); err != nil {
+		if delErr := s.messages.DeleteMessage(ctx, parentID, msg.ID); delErr != nil {
+			slog.Warn("message rollback after attachment bind failed", "msgID", msg.ID, "error", delErr)
+		}
+		return nil, err
+	}
 
 	if parentType == ParentConversation {
 		if conv, err := s.conversations.GetConversation(ctx, parentID); err == nil && conv != nil {
@@ -292,7 +327,7 @@ func (s *MessageService) ListThreadMessages(ctx context.Context, userID, parentI
 	if err := s.checkAccess(ctx, userID, parentID, parentType); err != nil {
 		return nil, err
 	}
-	msgs, _, err := s.messages.ListMessages(ctx, parentID, "", 1000)
+	msgs, err := s.scanParentMessages(ctx, parentID)
 	if err != nil {
 		return nil, fmt.Errorf("message: list thread: %w", err)
 	}
@@ -415,7 +450,7 @@ func (s *MessageService) ListUserThreads(ctx context.Context, userID string) ([]
 	}
 
 	for _, p := range parents {
-		msgs, _, err := s.messages.ListMessages(ctx, p.id, "", 1000)
+		msgs, err := s.scanParentMessages(ctx, p.id)
 		if err != nil {
 			continue
 		}
@@ -486,6 +521,26 @@ func (s *MessageService) ListUserThreads(ctx context.Context, userID string) ([]
 	sort.Slice(out, func(i, j int) bool {
 		return out[i].LatestActivityAt.After(out[j].LatestActivityAt)
 	})
+	return out, nil
+}
+
+func (s *MessageService) scanParentMessages(ctx context.Context, parentID string) ([]*model.Message, error) {
+	out := make([]*model.Message, 0, threadScanPageSize)
+	cursor := ""
+	for page := 0; page < maxThreadScanPages; page++ {
+		msgs, hasMore, err := s.messages.ListMessages(ctx, parentID, cursor, threadScanPageSize)
+		if err != nil {
+			return nil, err
+		}
+		if len(msgs) == 0 {
+			return out, nil
+		}
+		out = append(out, msgs...)
+		if !hasMore {
+			return out, nil
+		}
+		cursor = msgs[len(msgs)-1].ID
+	}
 	return out, nil
 }
 
@@ -745,9 +800,11 @@ func (s *MessageService) Edit(ctx context.Context, userID, parentID, parentType,
 		}
 	}
 
-	msg.Body = newBody
+	edited := *msg
+	edited.AttachmentIDs = append([]string(nil), msg.AttachmentIDs...)
+	edited.Body = newBody
 	now := time.Now()
-	msg.EditedAt = &now
+	edited.EditedAt = &now
 
 	var added, removed []string
 	if attachmentIDs != nil {
@@ -780,23 +837,23 @@ func (s *MessageService) Edit(ctx context.Context, userID, parentID, parentType,
 			seen[id] = true
 			clean = append(clean, id)
 		}
-		msg.AttachmentIDs = clean
+		edited.AttachmentIDs = clean
 	}
 
-	if err := s.messages.UpdateMessage(ctx, msg); err != nil {
+	if err := s.bindAttachments(ctx, msgID, added); err != nil {
+		return nil, err
+	}
+	if err := s.messages.UpdateMessage(ctx, &edited); err != nil {
+		s.releaseAttachments(ctx, msgID, added)
 		return nil, fmt.Errorf("message: update: %w", err)
 	}
-
-	// Reconcile attachment refcounts in parallel; failures are logged inside
-	// bindAttachments / releaseAttachments and do not roll back the edit.
-	s.bindAttachments(ctx, msgID, added)
 	s.releaseAttachments(ctx, msgID, removed)
 
-	s.publishEvent(ctx, parentID, parentType, events.EventMessageEdited, msg)
+	s.publishEvent(ctx, parentID, parentType, events.EventMessageEdited, &edited)
 
-	s.indexMessage(ctx, msg, parentType)
+	s.indexMessage(ctx, &edited, parentType)
 
-	return msg, nil
+	return &edited, nil
 }
 
 // Delete soft-deletes a message: the row stays in the list (so replies
@@ -1010,13 +1067,12 @@ func (s *MessageService) validateAttachmentsForUse(ctx context.Context, ids []st
 	return nil
 }
 
-// bindAttachments fans out AddRef calls in parallel and logs (but does not
-// surface) any per-attachment failure — the message is already persisted.
-func (s *MessageService) bindAttachments(ctx context.Context, msgID string, ids []string) {
+func (s *MessageService) bindAttachments(ctx context.Context, msgID string, ids []string) error {
 	if s.attachments == nil || len(ids) == 0 {
-		return
+		return nil
 	}
 	var wg sync.WaitGroup
+	errCh := make(chan error, len(ids))
 	for _, aid := range ids {
 		if aid == "" {
 			continue
@@ -1025,11 +1081,16 @@ func (s *MessageService) bindAttachments(ctx context.Context, msgID string, ids 
 		go func(aid string) {
 			defer wg.Done()
 			if err := s.attachments.AddRef(ctx, aid, msgID); err != nil {
-				slog.Warn("attachment add ref failed", "attID", aid, "msgID", msgID, "error", err)
+				errCh <- fmt.Errorf("message: bind attachment %q: %w", aid, err)
 			}
 		}(aid)
 	}
 	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		return err
+	}
+	return nil
 }
 
 // releaseAttachments mirrors bindAttachments but for RemoveRef. Run on message

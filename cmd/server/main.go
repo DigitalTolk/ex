@@ -148,6 +148,7 @@ func main() {
 	}
 	attachmentSvc := service.NewAttachmentService(attachmentStore, attachmentSigner, redisPubSub)
 	attachmentSvc.SetMediaURLCache(redisCache)
+	attachmentSvc.SetAccessChecker(messageSvc)
 	messageSvc.SetAttachmentManager(attachmentSvc)
 	notificationSvc := service.NewNotificationService(redisPubSub, membershipStore, conversationStore, channelStore, userStore, messageStore)
 	notificationSvc.SetPresence(presenceSvc)

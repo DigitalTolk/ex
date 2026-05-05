@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"time"
+	"unicode/utf8"
 )
 
 type Config struct {
@@ -61,27 +62,27 @@ type Config struct {
 
 func Load() (*Config, error) {
 	c := &Config{
-		Port:             envOr("PORT", "8080"),
-		Env:              envOr("ENV", "development"),
-		AWSRegion:        envOr("AWS_REGION", "us-east-1"),
-		DynamoDBTable:    envOr("DYNAMODB_TABLE", "ex"),
-		DynamoDBEndpoint: os.Getenv("DYNAMODB_ENDPOINT"),
-		RedisURL:         envOr("REDIS_URL", "redis://localhost:6379"),
-		OIDCIssuer:       os.Getenv("OIDC_ISSUER"),
-		OIDCClientID:     os.Getenv("OIDC_CLIENT_ID"),
-		OIDCClientSecret: os.Getenv("OIDC_CLIENT_SECRET"),
-		JWTSecret:        os.Getenv("JWT_SECRET"),
-		SMTPHost:         os.Getenv("SMTP_HOST"),
-		SMTPPort:         envOr("SMTP_PORT", "587"),
-		SMTPUser:         os.Getenv("SMTP_USER"),
-		SMTPPass:         os.Getenv("SMTP_PASS"),
-		SMTPFrom:         envOr("SMTP_FROM", "noreply@example.com"),
-		S3Endpoint:       os.Getenv("S3_ENDPOINT"),
-		S3PublicEndpoint: os.Getenv("S3_PUBLIC_ENDPOINT"),
-		S3Bucket:         envOr("S3_BUCKET", "ex-avatars"),
-		S3AccessKey:      os.Getenv("S3_ACCESS_KEY"),
-		S3SecretKey:      os.Getenv("S3_SECRET_KEY"),
-		S3Region:         envOr("S3_REGION", "us-east-1"),
+		Port:                 envOr("PORT", "8080"),
+		Env:                  envOr("ENV", "development"),
+		AWSRegion:            envOr("AWS_REGION", "us-east-1"),
+		DynamoDBTable:        envOr("DYNAMODB_TABLE", "ex"),
+		DynamoDBEndpoint:     os.Getenv("DYNAMODB_ENDPOINT"),
+		RedisURL:             envOr("REDIS_URL", "redis://localhost:6379"),
+		OIDCIssuer:           os.Getenv("OIDC_ISSUER"),
+		OIDCClientID:         os.Getenv("OIDC_CLIENT_ID"),
+		OIDCClientSecret:     os.Getenv("OIDC_CLIENT_SECRET"),
+		JWTSecret:            os.Getenv("JWT_SECRET"),
+		SMTPHost:             os.Getenv("SMTP_HOST"),
+		SMTPPort:             envOr("SMTP_PORT", "587"),
+		SMTPUser:             os.Getenv("SMTP_USER"),
+		SMTPPass:             os.Getenv("SMTP_PASS"),
+		SMTPFrom:             envOr("SMTP_FROM", "noreply@example.com"),
+		S3Endpoint:           os.Getenv("S3_ENDPOINT"),
+		S3PublicEndpoint:     os.Getenv("S3_PUBLIC_ENDPOINT"),
+		S3Bucket:             envOr("S3_BUCKET", "ex-avatars"),
+		S3AccessKey:          os.Getenv("S3_ACCESS_KEY"),
+		S3SecretKey:          os.Getenv("S3_SECRET_KEY"),
+		S3Region:             envOr("S3_REGION", "us-east-1"),
 		BaseURL:              envOr("BASE_URL", "http://localhost:8080"),
 		OpenSearchURL:        os.Getenv("OPENSEARCH_URL"),
 		OpenSearchAWSRegion:  os.Getenv("OPENSEARCH_AWS_REGION"),
@@ -107,6 +108,9 @@ func Load() (*Config, error) {
 	}
 	if c.JWTSecret == "" {
 		return nil, fmt.Errorf("JWT_SECRET is required")
+	}
+	if c.Env != "development" && utf8.RuneCountInString(c.JWTSecret) < 32 {
+		return nil, fmt.Errorf("JWT_SECRET must be at least 32 characters outside development")
 	}
 
 	return c, nil

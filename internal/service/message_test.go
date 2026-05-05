@@ -128,6 +128,28 @@ func TestMessageService_Send_Conversation(t *testing.T) {
 	}
 }
 
+func TestMessageService_CanAccessMessageAttachment(t *testing.T) {
+	svc, messages, memberships, _, _ := setupMessageService()
+	ctx := context.Background()
+	memberships.memberships["ch-access#u1"] = &model.ChannelMembership{ChannelID: "ch-access", UserID: "u1", Role: model.ChannelRoleMember}
+	messages.messages["ch-access#m1"] = &model.Message{
+		ID: "m1", ParentID: "ch-access", AuthorID: "u2", AttachmentIDs: []string{"att-1"},
+	}
+
+	if err := svc.CanAccessMessageAttachment(ctx, "u1", "ch-access", ParentChannel, "m1", "att-1"); err != nil {
+		t.Fatalf("CanAccessMessageAttachment: %v", err)
+	}
+	if err := svc.CanAccessMessageAttachment(ctx, "u1", "ch-access", ParentChannel, "m1", "att-other"); err == nil {
+		t.Fatal("expected missing attachment reference to fail")
+	}
+	if err := svc.CanAccessMessageAttachment(ctx, "u-outsider", "ch-access", ParentChannel, "m1", "att-1"); err == nil {
+		t.Fatal("expected non-member to fail")
+	}
+	if err := svc.CanAccessMessageAttachment(ctx, "u1", "ch-access", ParentChannel, "", "att-1"); err != nil {
+		t.Fatalf("parent-scoped CanAccessMessageAttachment: %v", err)
+	}
+}
+
 func TestMessageService_Send_ConversationThreadReplyTouchesActivity(t *testing.T) {
 	svc, messages, _, conversations, publisher := setupMessageService()
 	ctx := context.Background()
@@ -403,6 +425,7 @@ type fakeAttachmentRefMgr struct {
 	added       []string
 	removed     []string
 	validateErr error
+	addErr      error
 }
 
 func (f *fakeAttachmentRefMgr) ValidateForUse(_ context.Context, _ string) error {
@@ -411,7 +434,7 @@ func (f *fakeAttachmentRefMgr) ValidateForUse(_ context.Context, _ string) error
 
 func (f *fakeAttachmentRefMgr) AddRef(_ context.Context, attachmentID, _ string) error {
 	f.added = append(f.added, attachmentID)
-	return nil
+	return f.addErr
 }
 
 func (f *fakeAttachmentRefMgr) RemoveRef(_ context.Context, attachmentID, _ string) error {
@@ -457,6 +480,38 @@ func TestMessageService_Edit_AttachmentDiff(t *testing.T) {
 	}
 }
 
+func TestMessageService_Edit_ReturnsWhenAttachmentBindFails(t *testing.T) {
+	svc, messages, memberships, _, _ := setupMessageService()
+	ctx := context.Background()
+	refs := &fakeAttachmentRefMgr{addErr: errors.New("bind failed")}
+	svc.SetAttachmentManager(refs)
+
+	memberships.memberships["ch1#user-1"] = &model.ChannelMembership{
+		ChannelID: "ch1",
+		UserID:    "user-1",
+		Role:      model.ChannelRoleMember,
+	}
+	messages.messages["ch1#msg-1"] = &model.Message{
+		ID:       "msg-1",
+		ParentID: "ch1",
+		AuthorID: "user-1",
+		Body:     "hello",
+	}
+
+	if _, err := svc.Edit(ctx, "user-1", "ch1", ParentChannel, "msg-1", "hello edited", []string{"att-1"}); err == nil {
+		t.Fatal("expected edit to fail when new attachment bind fails")
+	}
+	if len(refs.added) != 1 || refs.added[0] != "att-1" {
+		t.Fatalf("AddRef calls = %+v, want [att-1]", refs.added)
+	}
+	if len(refs.removed) != 0 {
+		t.Fatalf("RemoveRef calls = %+v, want none", refs.removed)
+	}
+	if messages.messages["ch1#msg-1"].Body != "hello" {
+		t.Fatalf("message body changed after failed bind: %q", messages.messages["ch1#msg-1"].Body)
+	}
+}
+
 func TestMessageService_Send_RejectsInvalidAttachmentBeforeCreate(t *testing.T) {
 	svc, messages, memberships, _, _ := setupMessageService()
 	ctx := context.Background()
@@ -472,6 +527,24 @@ func TestMessageService_Send_RejectsInvalidAttachmentBeforeCreate(t *testing.T) 
 	}
 	if len(refs.added) != 0 {
 		t.Fatalf("attachment refs were added despite invalid attachment: %+v", refs.added)
+	}
+}
+
+func TestMessageService_Send_RollsBackWhenAttachmentBindFails(t *testing.T) {
+	svc, messages, memberships, _, _ := setupMessageService()
+	ctx := context.Background()
+	memberships.memberships["ch1#u1"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u1", Role: model.ChannelRoleMember}
+	refs := &fakeAttachmentRefMgr{addErr: errors.New("bind failed")}
+	svc.SetAttachmentManager(refs)
+
+	if _, err := svc.Send(ctx, "u1", "ch1", ParentChannel, "body", "", "att-1"); err == nil {
+		t.Fatal("expected send to fail when attachment bind fails")
+	}
+	if len(messages.messages) != 0 {
+		t.Fatalf("message was not rolled back after bind failure: %+v", messages.messages)
+	}
+	if len(refs.added) != 1 || refs.added[0] != "att-1" {
+		t.Fatalf("AddRef calls = %+v, want [att-1]", refs.added)
 	}
 }
 

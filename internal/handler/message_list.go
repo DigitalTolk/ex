@@ -13,6 +13,7 @@ import (
 //   - ?around=<msgId>  – window centered on a message (deep link)
 //   - ?after=<msgId>   – messages strictly newer than cursor
 //   - ?cursor=<msgId>  – messages strictly older than cursor (default)
+//
 // Responses always carry hasMoreOlder + hasMoreNewer so the client can
 // drive bidirectional infinite scroll without a second probe call.
 func listMessages(
@@ -22,11 +23,11 @@ func listMessages(
 	svc *service.MessageService,
 ) {
 	userID := middleware.UserIDFromContext(r.Context())
-	limit := queryInt(r, "limit", 50)
+	limit := clampInt(queryInt(r, "limit", 50), 1, service.MaxMessageListLimit)
 
 	if around := queryParam(r, "around", ""); around != "" {
-		before := queryInt(r, "before", limit/2)
-		after := queryInt(r, "after_count", limit/2)
+		before := clampInt(queryInt(r, "before", limit/2), 0, service.MaxMessageListLimit)
+		after := clampInt(queryInt(r, "after_count", limit/2), 0, service.MaxMessageListLimit)
 		msgs, hasMoreOlder, hasMoreNewer, err := svc.ListAround(r.Context(), userID, parentID, parentType, around, before, after)
 		if err != nil {
 			writeError(w, http.StatusForbidden, "list_error", err.Error())

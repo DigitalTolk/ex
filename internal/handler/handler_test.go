@@ -103,6 +103,16 @@ func TestReadJSONUnknownFields(t *testing.T) {
 	}
 }
 
+func TestReadJSONRejectsTrailingData(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"name":"test"}{"name":"second"}`))
+	var dest struct {
+		Name string `json:"name"`
+	}
+	if err := readJSON(req, &dest); err == nil {
+		t.Fatal("expected error for trailing JSON data")
+	}
+}
+
 func TestReadJSONOversizedBody(t *testing.T) {
 	// Create a body larger than 1 MB.
 	big := strings.Repeat("a", 1<<20+1)

@@ -83,7 +83,7 @@ func TestLoadCustomEnv(t *testing.T) {
 
 	t.Setenv("PORT", "3000")
 	t.Setenv("ENV", "production")
-	t.Setenv("JWT_SECRET", "my-prod-secret")
+	t.Setenv("JWT_SECRET", "my-prod-secret-with-at-least-32-chars")
 	t.Setenv("JWT_ACCESS_TTL", "30m")
 	t.Setenv("JWT_REFRESH_TTL", "168h")
 	t.Setenv("BASE_URL", "https://example.com")
@@ -100,8 +100,8 @@ func TestLoadCustomEnv(t *testing.T) {
 	if cfg.Env != "production" {
 		t.Errorf("Env = %q, want %q", cfg.Env, "production")
 	}
-	if cfg.JWTSecret != "my-prod-secret" {
-		t.Errorf("JWTSecret = %q, want %q", cfg.JWTSecret, "my-prod-secret")
+	if cfg.JWTSecret != "my-prod-secret-with-at-least-32-chars" {
+		t.Errorf("JWTSecret = %q, want %q", cfg.JWTSecret, "my-prod-secret-with-at-least-32-chars")
 	}
 	if cfg.JWTAccessTTL != 30*time.Minute {
 		t.Errorf("JWTAccessTTL = %v, want %v", cfg.JWTAccessTTL, 30*time.Minute)
@@ -144,6 +144,16 @@ func TestLoadMissingJWTSecretProduction(t *testing.T) {
 	_, err := Load()
 	if err == nil {
 		t.Fatal("expected error for missing JWT_SECRET in production")
+	}
+}
+
+func TestLoadWeakJWTSecretProduction(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("ENV", "production")
+	t.Setenv("JWT_SECRET", "short-secret")
+
+	if _, err := Load(); err == nil {
+		t.Fatal("expected error for weak JWT_SECRET in production")
 	}
 }
 

@@ -19,6 +19,10 @@ const (
 	// to a single message at send time. Editing follows the same cap.
 	MaxAttachmentsPerMessage = 10
 
+	// MaxMessageListLimit is the largest page/window size accepted by
+	// message-list handlers before any store query or slice allocation.
+	MaxMessageListLimit = 100
+
 	// MaxChannelNameLen / MaxChannelDescriptionLen / MaxDistinctReactions
 	// guard the rest of the message-adjacent surface against abuse.
 	MaxChannelNameLen        = 32

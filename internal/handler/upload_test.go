@@ -67,6 +67,35 @@ func TestCreateUploadURL_InvalidBody(t *testing.T) {
 	}
 }
 
+func TestCreateUploadURL_RejectsUnsafeTypeAndSize(t *testing.T) {
+	s3Client, err := storage.NewS3Client(context.Background(), storage.S3Config{
+		Endpoint: "http://127.0.0.1:1", Bucket: "test", AccessKey: "test", SecretKey: "test", Region: "us-east-1",
+	})
+	if err != nil {
+		t.Fatalf("S3: %v", err)
+	}
+	h := NewUploadHandler(s3Client)
+	jwtMgr := auth.NewJWTManager("upload-secret-4", 15*time.Minute, 720*time.Hour)
+	user := &model.User{ID: "up-u4", Email: "u4@example.com", SystemRole: model.SystemRoleMember}
+	token, _ := jwtMgr.GenerateAccessToken(user)
+	handler := middleware.Auth(jwtMgr)(http.HandlerFunc(h.CreateUploadURL))
+
+	for _, body := range []string{
+		`{"filename":"x.svg","contentType":"image/svg+xml","size":10}`,
+		`{"filename":"x.png","contentType":"image/png","size":0}`,
+		`{"filename":"x.png","contentType":"image/png","size":999999999}`,
+	} {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/uploads/url", strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("body %s status = %d, want %d", body, rec.Code, http.StatusBadRequest)
+		}
+	}
+}
+
 func TestCreateUploadURL_Success(t *testing.T) {
 	s3Client, err := storage.NewS3Client(context.Background(), storage.S3Config{
 		Endpoint: "http://127.0.0.1:1", Bucket: "test", AccessKey: "test", SecretKey: "test", Region: "us-east-1",
@@ -80,7 +109,7 @@ func TestCreateUploadURL_Success(t *testing.T) {
 	token, _ := jwtMgr.GenerateAccessToken(user)
 
 	handler := middleware.Auth(jwtMgr)(http.HandlerFunc(h.CreateUploadURL))
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/uploads/url", strings.NewReader(`{"filename":"hello.txt","contentType":"text/plain"}`))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/uploads/url", strings.NewReader(`{"filename":"emoji.png","contentType":"image/png","size":128}`))
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
@@ -103,8 +132,8 @@ func TestCreateUploadURL_Success(t *testing.T) {
 	if !strings.HasPrefix(got.Key, "uploads/up-u3/") {
 		t.Errorf("key = %q, want uploads/up-u3/...", got.Key)
 	}
-	if !strings.HasSuffix(got.Key, "/hello.txt") {
-		t.Errorf("key %q should end with /hello.txt", got.Key)
+	if !strings.HasSuffix(got.Key, "/emoji.png") {
+		t.Errorf("key %q should end with /emoji.png", got.Key)
 	}
 }
 

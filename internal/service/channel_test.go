@@ -740,7 +740,7 @@ func TestChannelService_ListMembers(t *testing.T) {
 		Role:      model.ChannelRoleAdmin,
 	}
 
-	members, err := svc.ListMembers(ctx, "ch16")
+	members, err := svc.ListMembers(ctx, "u1", "ch16")
 	if err != nil {
 		t.Fatalf("ListMembers: %v", err)
 	}

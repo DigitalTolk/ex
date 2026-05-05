@@ -120,10 +120,25 @@ function uploadWithProgress(
   });
 }
 
-export function useAttachment(id: string | undefined) {
+export interface AttachmentAccessContext {
+  parentID?: string;
+  parentType?: 'channel' | 'conversation';
+  messageID?: string;
+}
+
+function attachmentContextQuery(ctx?: AttachmentAccessContext): string {
+  const params = new URLSearchParams();
+  if (ctx?.parentID) params.set('parentID', ctx.parentID);
+  if (ctx?.parentType) params.set('parentType', ctx.parentType);
+  if (ctx?.messageID) params.set('messageID', ctx.messageID);
+  const qs = params.toString();
+  return qs ? `?${qs}` : '';
+}
+
+export function useAttachment(id: string | undefined, ctx?: AttachmentAccessContext) {
   return useQuery({
-    queryKey: queryKeys.attachment(id ?? ''),
-    queryFn: () => apiFetch<Attachment>(`/api/v1/attachments/${id}`),
+    queryKey: queryKeys.attachment(`${id ?? ''}:${ctx?.parentType ?? ''}:${ctx?.parentID ?? ''}:${ctx?.messageID ?? ''}`),
+    queryFn: () => apiFetch<Attachment>(`/api/v1/attachments/${id}${attachmentContextQuery(ctx)}`),
     enabled: !!id,
     // Signed URLs can carry temporary AWS session tokens. Refetch on a short
     // cadence so long-lived tabs do not keep rendering expired-token URLs.
@@ -134,16 +149,21 @@ export function useAttachment(id: string | undefined) {
 // useAttachmentsBatch resolves a list of attachment IDs in a single request
 // and hydrates the per-id query cache so any nested useAttachment(id) reuses
 // the result without an extra round-trip. Returns a stable id→attachment map.
-export function useAttachmentsBatch(ids: string[]) {
+export function useAttachmentsBatch(ids: string[], ctx?: AttachmentAccessContext) {
   const qc = useQueryClient();
   // Sort for a stable cache key — same set of IDs in any order shares a query.
   const sorted = useMemo(() => [...ids].sort(), [ids]);
   const key = sorted.join(',');
+  const ctxKey = `${ctx?.parentType ?? ''}:${ctx?.parentID ?? ''}:${ctx?.messageID ?? ''}`;
 
   const query = useQuery({
-    queryKey: queryKeys.attachmentsBatch(key),
+    queryKey: queryKeys.attachmentsBatch(`${key}:${ctxKey}`),
     queryFn: async () => {
-      const list = await apiFetch<Attachment[]>(`/api/v1/attachments?ids=${encodeURIComponent(key)}`);
+      const params = new URLSearchParams({ ids: key });
+      if (ctx?.parentID) params.set('parentID', ctx.parentID);
+      if (ctx?.parentType) params.set('parentType', ctx.parentType);
+      if (ctx?.messageID) params.set('messageID', ctx.messageID);
+      const list = await apiFetch<Attachment[]>(`/api/v1/attachments?${params.toString()}`);
       for (const a of list) {
         qc.setQueryData(queryKeys.attachment(a.id), a);
       }

@@ -317,10 +317,15 @@ func (h *ChannelHandler) ListMembers(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "missing_id", "channel ID is required")
 		return
 	}
+	userID := middleware.UserIDFromContext(r.Context())
+	if userID == "" {
+		writeError(w, http.StatusUnauthorized, "unauthorized", "authentication required")
+		return
+	}
 
-	members, err := h.channelSvc.ListMembers(r.Context(), id)
+	members, err := h.channelSvc.ListMembers(r.Context(), userID, id)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "list_error", err.Error())
+		writeError(w, http.StatusForbidden, "list_error", err.Error())
 		return
 	}
 	if members == nil {

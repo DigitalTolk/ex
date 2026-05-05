@@ -2,7 +2,9 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 
@@ -37,6 +39,12 @@ func readJSON(r *http.Request, dest interface{}) error {
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(dest); err != nil {
+		return fmt.Errorf("invalid JSON: %w", err)
+	}
+	var extra struct{}
+	if err := dec.Decode(&extra); err == nil {
+		return errors.New("invalid JSON: trailing data")
+	} else if !errors.Is(err, io.EOF) {
 		return fmt.Errorf("invalid JSON: %w", err)
 	}
 	return nil
@@ -77,6 +85,16 @@ func queryInt(r *http.Request, name string, fallback int) int {
 	n, err := strconv.Atoi(v)
 	if err != nil {
 		return fallback
+	}
+	return n
+}
+
+func clampInt(n, min, max int) int {
+	if n < min {
+		return min
+	}
+	if n > max {
+		return max
 	}
 	return n
 }

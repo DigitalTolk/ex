@@ -629,8 +629,11 @@ func (s *ChannelService) UpdateMemberRole(ctx context.Context, actorID, channelI
 	return nil
 }
 
-// ListMembers returns all memberships for a channel.
-func (s *ChannelService) ListMembers(ctx context.Context, channelID string) ([]*model.ChannelMembership, error) {
+// ListMembers returns all memberships for a channel the actor can access.
+func (s *ChannelService) ListMembers(ctx context.Context, actorID, channelID string) ([]*model.ChannelMembership, error) {
+	if err := s.checkPermission(ctx, actorID, channelID, model.ChannelRoleMember); err != nil {
+		return nil, err
+	}
 	members, err := s.memberships.ListMembers(ctx, channelID)
 	if err != nil {
 		return nil, fmt.Errorf("channel: list members: %w", err)

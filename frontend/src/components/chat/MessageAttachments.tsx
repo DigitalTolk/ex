@@ -8,6 +8,9 @@ import type { Attachment } from '@/types';
 
 interface MessageAttachmentsProps {
   ids: string[];
+  parentID?: string;
+  parentType?: 'channel' | 'conversation';
+  messageID: string;
   authorName: string;
   authorAvatarURL?: string;
   // Human-readable parent label for the lightbox subtitle, e.g.
@@ -21,12 +24,15 @@ const THUMBNAIL_MAX_HEIGHT = 288;
 
 export function MessageAttachments({
   ids,
+  parentID,
+  parentType,
+  messageID,
   authorName,
   authorAvatarURL,
   postedIn,
   postedAt,
 }: MessageAttachmentsProps) {
-  const { map, isLoading } = useAttachmentsBatch(ids);
+  const { map, isLoading } = useAttachmentsBatch(ids, { parentID, parentType, messageID });
 
   // Every message attachment shares the same author + timestamp, so the
   // per-slide header info is identical for every slide.

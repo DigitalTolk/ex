@@ -271,9 +271,10 @@ func TestUpdateMemberRole_StoreError(t *testing.T) {
 
 func TestListMembers_Error(t *testing.T) {
 	svc, _, memberships, _, _ := setupChannelService()
+	memberships.memberships["ch#u1"] = &model.ChannelMembership{ChannelID: "ch", UserID: "u1", Role: model.ChannelRoleMember}
 	memberships.listMembersErr = errors.New("list members boom")
 
-	if _, err := svc.ListMembers(context.Background(), "ch"); err == nil {
+	if _, err := svc.ListMembers(context.Background(), "u1", "ch"); err == nil {
 		t.Fatal("expected error")
 	}
 }

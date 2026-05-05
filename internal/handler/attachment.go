@@ -89,7 +89,14 @@ func (h *AttachmentHandler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ids := strings.Split(raw, ",")
-	atts, err := h.svc.GetMany(r.Context(), ids)
+	if len(ids) > service.MaxAttachmentBatchIDs {
+		writeError(w, http.StatusBadRequest, "too_many_ids", "too many attachment IDs")
+		return
+	}
+	parentID := queryParam(r, "parentID", "")
+	parentType := queryParam(r, "parentType", "")
+	messageID := queryParam(r, "messageID", "")
+	atts, err := h.svc.GetManyForUser(r.Context(), userID, ids, parentID, parentType, messageID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "list_error", err.Error())
 		return
@@ -113,7 +120,14 @@ func (h *AttachmentHandler) Get(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "missing_id", "attachment ID required")
 		return
 	}
-	a, err := h.svc.Get(r.Context(), id)
+	a, err := h.svc.GetForUser(
+		r.Context(),
+		userID,
+		id,
+		queryParam(r, "parentID", ""),
+		queryParam(r, "parentType", ""),
+		queryParam(r, "messageID", ""),
+	)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "not_found", err.Error())
 		return

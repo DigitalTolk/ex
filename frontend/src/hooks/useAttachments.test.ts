@@ -221,6 +221,18 @@ describe('useAttachmentsBatch', () => {
     expect(qc.getQueryData(['attachment', 'a'])).toEqual(list[1]);
     expect(qc.getQueryData(['attachment', 'b'])).toEqual(list[0]);
   });
+
+  it('sends message context when resolving protected message attachments', async () => {
+    vi.mocked(apiFetch).mockResolvedValueOnce([]);
+    const { Wrapper } = createWrapper();
+    const { result } = renderHook(
+      () => useAttachmentsBatch(['att-1'], { parentID: 'ch-1', parentType: 'channel', messageID: 'msg-1' }),
+      { wrapper: Wrapper },
+    );
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(apiFetch).toHaveBeenCalledWith('/api/v1/attachments?ids=att-1&parentID=ch-1&parentType=channel&messageID=msg-1');
+  });
 });
 
 describe('useDeleteDraftAttachment', () => {

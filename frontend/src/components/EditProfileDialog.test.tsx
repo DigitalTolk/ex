@@ -167,7 +167,7 @@ describe('EditProfileDialog', () => {
         '/api/v1/users/me/avatar/upload-url',
         expect.objectContaining({
           method: 'POST',
-          body: JSON.stringify({ contentType: 'image/png' }),
+          body: JSON.stringify({ contentType: 'image/png', size: file.size }),
         }),
       );
     });

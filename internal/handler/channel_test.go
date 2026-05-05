@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -147,7 +148,10 @@ func (s *dataMembershipStore) SetCategory(_ context.Context, _, _, _ string, _ *
 
 // dataMessageStore stores messages. Used for handler integration tests.
 type dataMessageStore struct {
-	messages map[string]*model.Message
+	messages  map[string]*model.Message
+	mu        sync.Mutex
+	lastLimit int
+	limits    []int
 }
 
 func newDataMessageStore() *dataMessageStore {
@@ -174,6 +178,10 @@ func (s *dataMessageStore) DeleteMessage(_ context.Context, parentID, msgID stri
 	return nil
 }
 func (s *dataMessageStore) ListMessages(_ context.Context, parentID string, before string, limit int) ([]*model.Message, bool, error) {
+	s.mu.Lock()
+	s.lastLimit = limit
+	s.limits = append(s.limits, limit)
+	s.mu.Unlock()
 	var result []*model.Message
 	for _, msg := range s.messages {
 		if msg.ParentID == parentID {
@@ -208,9 +216,20 @@ func (s *dataMessageStore) ListMessagesAfter(ctx context.Context, parentID, _ st
 	return s.ListMessages(ctx, parentID, "", limit)
 }
 
-func (s *dataMessageStore) ListMessagesAround(ctx context.Context, parentID, _ string, _ int, _ int) ([]*model.Message, bool, bool, error) {
+func (s *dataMessageStore) ListMessagesAround(ctx context.Context, parentID, _ string, before int, after int) ([]*model.Message, bool, bool, error) {
 	msgs, _, err := s.ListMessages(ctx, parentID, "", 0)
 	return msgs, false, false, err
+}
+
+func (s *dataMessageStore) sawLimit(limit int) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, got := range s.limits {
+		if got == limit {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *dataMessageStore) IncrementReplyMetadata(_ context.Context, parentID, msgID string, replyTime time.Time, replyAuthorID string) (*model.Message, error) {
@@ -989,9 +1008,9 @@ func TestChannelHandlerFull_Leave(t *testing.T) {
 func TestChannelHandlerFull_ListMembers(t *testing.T) {
 	env := setupChannelHandlerFull(t)
 
-	env.memberships.memberships["ch-lm#u1"] = &model.ChannelMembership{
+	env.memberships.memberships["ch-lm#u-lm"] = &model.ChannelMembership{
 		ChannelID: "ch-lm",
-		UserID:    "u1",
+		UserID:    "u-lm",
 		Role:      model.ChannelRoleMember,
 	}
 
@@ -1009,6 +1028,31 @@ func TestChannelHandlerFull_ListMembers(t *testing.T) {
 
 	if rec.Code != http.StatusOK {
 		t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+}
+
+func TestChannelHandlerFull_ListMembers_RequiresAuthAndMembership(t *testing.T) {
+	env := setupChannelHandlerFull(t)
+	handler := http.HandlerFunc(env.handler.ListMembers)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/channels/ch-lm/members", nil)
+	req.SetPathValue("id", "ch-lm")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated status = %d, want %d; body=%s", rec.Code, http.StatusUnauthorized, rec.Body.String())
+	}
+
+	user := &model.User{ID: "u-outsider", Email: "outside@test.com", SystemRole: model.SystemRoleMember}
+	token := makeTokenForUser(env.jwtMgr, user)
+	authenticated := middleware.Auth(env.jwtMgr)(handler)
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/channels/ch-lm/members", nil)
+	req.SetPathValue("id", "ch-lm")
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec = httptest.NewRecorder()
+	authenticated.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("non-member status = %d, want %d; body=%s", rec.Code, http.StatusForbidden, rec.Body.String())
 	}
 }
 
@@ -1217,6 +1261,76 @@ func TestChannelHandlerFull_ListMessages(t *testing.T) {
 	}
 }
 
+func TestChannelHandlerFull_ListMessages_ClampsLimit(t *testing.T) {
+	env := setupChannelHandlerFull(t)
+	env.channels.channels["ch-limit"] = &model.Channel{ID: "ch-limit", Name: "limit", Type: model.ChannelTypePublic}
+	env.memberships.memberships["ch-limit#u-limit"] = &model.ChannelMembership{ChannelID: "ch-limit", UserID: "u-limit", Role: model.ChannelRoleMember}
+	user := &model.User{ID: "u-limit", Email: "limit@test.com", SystemRole: model.SystemRoleMember}
+	token := makeTokenForUser(env.jwtMgr, user)
+	handler := middleware.Auth(env.jwtMgr)(http.HandlerFunc(env.handler.ListMessages))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/channels/ch-limit/messages?limit=100000", nil)
+	req.SetPathValue("id", "ch-limit")
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if env.messages.lastLimit != service.MaxMessageListLimit {
+		t.Fatalf("ListMessages limit = %d, want %d", env.messages.lastLimit, service.MaxMessageListLimit)
+	}
+}
+
+func TestChannelHandlerFull_ListMessages_ClampsAfterLimit(t *testing.T) {
+	env := setupChannelHandlerFull(t)
+	env.memberships.memberships["ch-after-limit#u-limit"] = &model.ChannelMembership{ChannelID: "ch-after-limit", UserID: "u-limit", Role: model.ChannelRoleMember}
+	user := &model.User{ID: "u-limit", Email: "limit@test.com", SystemRole: model.SystemRoleMember}
+	token := makeTokenForUser(env.jwtMgr, user)
+	handler := middleware.Auth(env.jwtMgr)(http.HandlerFunc(env.handler.ListMessages))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/channels/ch-after-limit/messages?after=m1&limit=100000", nil)
+	req.SetPathValue("id", "ch-after-limit")
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if env.messages.lastLimit != service.MaxMessageListLimit {
+		t.Fatalf("ListMessagesAfter limit = %d, want %d", env.messages.lastLimit, service.MaxMessageListLimit)
+	}
+}
+
+func TestChannelHandlerFull_ListMessages_ClampsAroundWindow(t *testing.T) {
+	env := setupChannelHandlerFull(t)
+	env.memberships.memberships["ch-around-limit#u-limit"] = &model.ChannelMembership{ChannelID: "ch-around-limit", UserID: "u-limit", Role: model.ChannelRoleMember}
+	env.messages.messages["ch-around-limit#m1"] = &model.Message{
+		ID:       "m1",
+		ParentID: "ch-around-limit",
+		AuthorID: "u-limit",
+		Body:     "target",
+	}
+	user := &model.User{ID: "u-limit", Email: "limit@test.com", SystemRole: model.SystemRoleMember}
+	token := makeTokenForUser(env.jwtMgr, user)
+	handler := middleware.Auth(env.jwtMgr)(http.HandlerFunc(env.handler.ListMessages))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/channels/ch-around-limit/messages?around=m1&before=100000&after_count=100000", nil)
+	req.SetPathValue("id", "ch-around-limit")
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if !env.messages.sawLimit(service.MaxMessageListLimit) {
+		t.Fatalf("ListAround did not pass clamped limit %d; saw %v", service.MaxMessageListLimit, env.messages.limits)
+	}
+}
+
 func TestChannelHandlerFull_ListMessages_Pagination(t *testing.T) {
 	env := setupChannelHandlerFull(t)
 	env.memberships.memberships["ch-pg#u"] = &model.ChannelMembership{
@@ -1315,6 +1429,24 @@ func TestChannelHandlerFull_ListMessages_AcceptsAroundAndAfterParams(t *testing.
 		}
 		if _, ok := resp["hasMoreNewer"]; !ok {
 			t.Errorf("response missing hasMoreNewer key: %v", resp)
+		}
+	}
+}
+
+func TestChannelHandlerFull_ListMessages_RejectsWindowForNonMember(t *testing.T) {
+	env := setupChannelHandlerFull(t)
+	user := &model.User{ID: "u-window-outsider", Email: "window@test.com", SystemRole: model.SystemRoleMember}
+	token := makeTokenForUser(env.jwtMgr, user)
+	handler := middleware.Auth(env.jwtMgr)(http.HandlerFunc(env.handler.ListMessages))
+
+	for _, qs := range []string{"around=01-b&before=1&after_count=1", "after=01-a"} {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/channels/ch-window/messages?"+qs, nil)
+		req.SetPathValue("id", "ch-window")
+		req.Header.Set("Authorization", "Bearer "+token)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("%s status=%d, want %d; body=%s", qs, rec.Code, http.StatusForbidden, rec.Body.String())
 		}
 	}
 }

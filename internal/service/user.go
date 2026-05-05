@@ -7,12 +7,15 @@ import (
 	"log/slog"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/DigitalTolk/ex/internal/events"
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/DigitalTolk/ex/internal/pubsub"
 	"github.com/DigitalTolk/ex/internal/store"
 )
+
+const MaxUserDisplayNameLen = 80
 
 type UserIndexer interface {
 	IndexUser(ctx context.Context, u *model.User) error
@@ -192,7 +195,11 @@ func (s *UserService) Update(ctx context.Context, userID string, displayName, av
 		if user.AuthProvider == model.AuthProviderOIDC {
 			return nil, errors.New("user: display name is managed by SSO provider and cannot be edited here")
 		}
-		user.DisplayName = *displayName
+		name := strings.TrimSpace(*displayName)
+		if name == "" || utf8.RuneCountInString(name) > MaxUserDisplayNameLen {
+			return nil, fmt.Errorf("user: display name must be 1-%d characters", MaxUserDisplayNameLen)
+		}
+		user.DisplayName = name
 	}
 	if avatarKey != nil {
 		if *avatarKey != "" && !strings.HasPrefix(*avatarKey, "avatars/"+userID+"/") {

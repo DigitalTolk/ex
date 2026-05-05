@@ -269,6 +269,37 @@ func TestUserService_Update_RejectsAvatarKeyForAnotherUser(t *testing.T) {
 	}
 }
 
+func TestUserService_Update_RejectsInvalidDisplayNames(t *testing.T) {
+	users := newMockUserStore()
+	svc := NewUserService(users, nil, nil, nil)
+	user := &model.User{
+		ID:           "u-local",
+		Email:        "local@example.com",
+		DisplayName:  "Local User",
+		SystemRole:   model.SystemRoleMember,
+		AuthProvider: model.AuthProviderGuest,
+	}
+	users.users[user.ID] = user
+	users.emailIndex[user.Email] = user
+
+	blank := "   "
+	if _, err := svc.Update(context.Background(), user.ID, &blank, nil, nil); err == nil {
+		t.Fatal("expected blank display name to be rejected")
+	}
+	tooLong := strings.Repeat("a", MaxUserDisplayNameLen+1)
+	if _, err := svc.Update(context.Background(), user.ID, &tooLong, nil, nil); err == nil {
+		t.Fatal("expected oversized display name to be rejected")
+	}
+	valid := "  Trimmed User  "
+	updated, err := svc.Update(context.Background(), user.ID, &valid, nil, nil)
+	if err != nil {
+		t.Fatalf("expected trimmed display name to be accepted: %v", err)
+	}
+	if updated.DisplayName != "Trimmed User" {
+		t.Fatalf("DisplayName = %q, want Trimmed User", updated.DisplayName)
+	}
+}
+
 func TestUserService_Update_OIDCUserCannotChangeDisplayName(t *testing.T) {
 	users := newMockUserStore()
 	svc := NewUserService(users, nil, nil, nil)

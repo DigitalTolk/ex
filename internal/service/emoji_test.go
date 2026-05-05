@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -170,6 +171,28 @@ func TestEmojiService_Create_RequiresServerSigner(t *testing.T) {
 	}
 }
 
+func TestEmojiService_Create_RejectsInvalidImageObjects(t *testing.T) {
+	tests := []struct {
+		name   string
+		signer *fakeEmojiSigner
+	}{
+		{name: "missing object", signer: &fakeEmojiSigner{objectErr: errors.New("missing")}},
+		{name: "oversize", signer: &fakeEmojiSigner{objectSize: MaxEmojiImageBytes + 1}},
+		{name: "svg", signer: &fakeEmojiSigner{contentType: "image/svg+xml", objectData: `<svg xmlns="http://www.w3.org/2000/svg"/>`}},
+		{name: "not image", signer: &fakeEmojiSigner{contentType: "image/png", objectData: "not an image"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc, _, users, _ := setupEmojiSvc()
+			users.users["u1"] = &model.User{ID: "u1", SystemRole: model.SystemRoleMember}
+			svc.SetSigner(tt.signer)
+			if _, err := svc.Create(context.Background(), "u1", "fire", "uploads/u1/fire.png"); err == nil {
+				t.Fatal("expected invalid image object to be rejected")
+			}
+		})
+	}
+}
+
 func TestEmojiService_List(t *testing.T) {
 	svc, store, _, _ := setupEmojiSvc()
 	store.items["a"] = &model.CustomEmoji{Name: "a"}
@@ -194,8 +217,12 @@ func TestEmojiService_List_StoreError(t *testing.T) {
 }
 
 type fakeEmojiSigner struct {
-	urls map[string]string
-	err  error
+	urls        map[string]string
+	err         error
+	objectData  string
+	contentType string
+	objectSize  int64
+	objectErr   error
 }
 
 func (f *fakeEmojiSigner) PresignedGetURL(_ context.Context, key string, _ time.Duration) (string, error) {
@@ -203,6 +230,25 @@ func (f *fakeEmojiSigner) PresignedGetURL(_ context.Context, key string, _ time.
 		return "", f.err
 	}
 	return f.urls[key], nil
+}
+
+func (f *fakeEmojiSigner) GetObject(_ context.Context, _ string) (io.ReadCloser, string, int64, time.Time, error) {
+	if f.objectErr != nil {
+		return nil, "", 0, time.Time{}, f.objectErr
+	}
+	data := f.objectData
+	if data == "" {
+		data = "GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff!\xf9\x04\x00\x00\x00\x00\x00,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02D\x01\x00;"
+	}
+	contentType := f.contentType
+	if contentType == "" {
+		contentType = "image/gif"
+	}
+	size := f.objectSize
+	if size == 0 {
+		size = int64(len(data))
+	}
+	return io.NopCloser(strings.NewReader(data)), contentType, size, time.Now(), nil
 }
 
 func TestEmojiService_List_RefreshesPresignedURLs(t *testing.T) {

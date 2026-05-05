@@ -2,12 +2,15 @@ package handler
 
 import (
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/DigitalTolk/ex/internal/middleware"
 	"github.com/DigitalTolk/ex/internal/storage"
 	"github.com/DigitalTolk/ex/internal/store"
 )
+
+const MaxGenericUploadBytes int64 = 512 * 1024
 
 // UploadHandler exposes generic file-upload endpoints backed by S3 presigned URLs.
 type UploadHandler struct {
@@ -36,6 +39,7 @@ func (h *UploadHandler) CreateUploadURL(w http.ResponseWriter, r *http.Request) 
 	var body struct {
 		Filename    string `json:"filename"`
 		ContentType string `json:"contentType"`
+		Size        int64  `json:"size"`
 	}
 	if err := readJSON(r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_body", err.Error())
@@ -43,6 +47,15 @@ func (h *UploadHandler) CreateUploadURL(w http.ResponseWriter, r *http.Request) 
 	}
 	if body.Filename == "" || body.ContentType == "" {
 		writeError(w, http.StatusBadRequest, "invalid_body", "filename and contentType required")
+		return
+	}
+	contentType := strings.ToLower(strings.TrimSpace(strings.Split(body.ContentType, ";")[0]))
+	if !strings.HasPrefix(contentType, "image/") || contentType == "image/svg+xml" {
+		writeError(w, http.StatusBadRequest, "invalid_type", "only raster image uploads are allowed")
+		return
+	}
+	if body.Size <= 0 || body.Size > MaxGenericUploadBytes {
+		writeError(w, http.StatusBadRequest, "invalid_size", "upload size is required and too large")
 		return
 	}
 

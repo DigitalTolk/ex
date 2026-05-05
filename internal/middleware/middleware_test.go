@@ -65,6 +65,31 @@ func TestAuthMiddlewareQueryParam(t *testing.T) {
 	}
 }
 
+type statusUserStore struct {
+	user *model.User
+	err  error
+}
+
+func (s statusUserStore) GetByID(context.Context, string) (*model.User, error) {
+	return s.user, s.err
+}
+
+func TestAuthWithUserStatusRejectsDeactivatedUser(t *testing.T) {
+	mgr := newTestJWTManager()
+	token := generateTestToken(mgr)
+	handler := AuthWithUserStatus(mgr, statusUserStore{user: &model.User{ID: "user-42", Status: "deactivated"}})(okHandler())
+
+	req := httptest.NewRequest(http.MethodGet, "/test", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	}
+}
+
 func TestAuthMiddlewareMissingToken(t *testing.T) {
 	mgr := newTestJWTManager()
 	handler := Auth(mgr)(okHandler())

@@ -372,6 +372,7 @@ func (h *UserHandler) CreateAvatarUploadURL(w http.ResponseWriter, r *http.Reque
 
 	var body struct {
 		ContentType string `json:"contentType"`
+		Size        int64  `json:"size"`
 	}
 	if err := readJSON(r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_body", err.Error())
@@ -379,6 +380,10 @@ func (h *UserHandler) CreateAvatarUploadURL(w http.ResponseWriter, r *http.Reque
 	}
 	if body.ContentType != "image/jpeg" && body.ContentType != "image/png" && body.ContentType != "image/webp" {
 		writeError(w, http.StatusBadRequest, "invalid_type", "only JPEG, PNG, or WebP images allowed")
+		return
+	}
+	if body.Size <= 0 || body.Size > 2*1024*1024 {
+		writeError(w, http.StatusBadRequest, "invalid_size", "avatar size is required and too large")
 		return
 	}
 
