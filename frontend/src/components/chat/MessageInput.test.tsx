@@ -188,6 +188,35 @@ describe('MessageInput', () => {
     });
   });
 
+  it('does not run the view-switch draft flush when server draft props change under the same focusKey', async () => {
+    const onDraftChange = vi.fn();
+    const { rerender } = render(
+      <MessageInput
+        onSend={vi.fn()}
+        focusKey="ch-1"
+        initialBody=""
+        onDraftChange={onDraftChange}
+      />,
+    );
+    await screen.findByLabelText('Message input');
+
+    await act(async () => {
+      rerender(
+        <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+          <MessageInput
+            onSend={vi.fn()}
+            focusKey="ch-1"
+            initialBody="stale server draft"
+            onDraftChange={onDraftChange}
+          />
+        </QueryClientProvider>,
+      );
+      await flushMicrotasks();
+    });
+
+    expect(onDraftChange).not.toHaveBeenCalled();
+  });
+
   it('uses custom placeholder', async () => {
     render(<MessageInput onSend={vi.fn()} placeholder="Write here..." />);
     // Lexical renders the placeholder as a sibling element of the
