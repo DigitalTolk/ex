@@ -107,7 +107,7 @@ export class MentionNode extends DecoratorNode<JSX.Element> {
 
   createDOM(_config: EditorConfig): HTMLElement {
     const span = document.createElement('span');
-    span.className = 'mention inline-block rounded px-1 text-sm font-medium leading-tight bg-primary/10 text-primary';
+    span.className = 'mention inline align-baseline rounded px-1 font-medium leading-[inherit] bg-primary/10 text-primary';
     span.setAttribute('data-user-id', this.__userId);
     span.setAttribute('data-mention-name', this.__displayName);
     return span;

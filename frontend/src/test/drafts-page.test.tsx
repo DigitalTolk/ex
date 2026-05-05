@@ -76,6 +76,36 @@ describe('DraftsPage', () => {
     });
   });
 
+  it('renders mention markdown in draft previews as readable labels', async () => {
+    vi.mocked(apiFetch).mockImplementation(async (path) => {
+      if (path === '/api/v1/drafts') {
+        return [
+          {
+            id: 'draft-mentions',
+            userID: 'u-1',
+            parentID: 'ch-1',
+            parentType: 'channel',
+            body: 'ping @[u-2|Ada Lovelace] in ~[ch-2|engineering]',
+            updatedAt: '2026-05-03T12:00:00Z',
+            createdAt: '2026-05-03T11:00:00Z',
+          },
+        ];
+      }
+      if (path === '/api/v1/channels') {
+        return [{ channelID: 'ch-1', channelName: 'Team Room', channelType: 'public', role: 1 }];
+      }
+      if (path === '/api/v1/conversations') return [];
+      return undefined;
+    });
+
+    renderPage();
+
+    const row = await screen.findByTestId('draft-row');
+    expect(row).toHaveTextContent('ping @Ada Lovelace in ~engineering');
+    expect(row).not.toHaveTextContent('@[u-2|Ada Lovelace]');
+    expect(row).not.toHaveTextContent('~[ch-2|engineering]');
+  });
+
   it('shows the empty state', async () => {
     vi.mocked(apiFetch).mockImplementation(async (path) => {
       if (path === '/api/v1/drafts') return [];

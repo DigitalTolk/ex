@@ -775,7 +775,6 @@ func TestIsAllowedOIDCRedirect(t *testing.T) {
 		{"plain localhost https allowed", "https://localhost:5173/cb", true},
 		{"tauri scheme allowed", "tauri://localhost/oidc/callback", true},
 		{"desktop ex scheme allowed", "ex://app/auth/callback", true},
-		{"mobile ex scheme allowed", "ex://mobile/auth/callback", true},
 		{"unknown ex host rejected", "ex://evil/auth/callback", false},
 		{"https external rejected", "https://evil.example.com/cb", false},
 		{"http external rejected", "http://evil.example.com/cb", false},

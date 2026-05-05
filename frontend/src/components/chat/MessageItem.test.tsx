@@ -67,6 +67,27 @@ describe('MessageItem', () => {
     expect(screen.getByText('Hello world')).toBeInTheDocument();
   });
 
+  it('keeps rendered user and channel mention pills on the text baseline', () => {
+    renderWithProviders(
+      <MessageItem
+        message={makeMessage({ body: '~[channel-1|general] hello @[user-2|Bob]' })}
+        authorName="Alice Johnson"
+        currentUserId="user-1"
+        isOwn={false}
+      />,
+    );
+
+    const channelPill = screen.getByTestId('channel-mention-pill');
+    const userPill = screen.getByTestId('mention-pill');
+    const userHoverTrigger = userPill.parentElement;
+
+    expect(channelPill).toHaveClass('inline', 'align-baseline', 'leading-[inherit]');
+    expect(userPill).toHaveClass('inline', 'align-baseline', 'leading-[inherit]');
+    expect(userHoverTrigger).toHaveClass('inline', 'align-baseline');
+    expect(userHoverTrigger).not.toHaveClass('inline-flex');
+    expect(userHoverTrigger).not.toHaveClass('align-middle');
+  });
+
   it('does not underline the author name on hover', () => {
     renderWithProviders(
       <MessageItem

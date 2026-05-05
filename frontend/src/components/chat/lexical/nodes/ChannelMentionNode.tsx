@@ -105,7 +105,7 @@ export class ChannelMentionNode extends DecoratorNode<JSX.Element> {
 
   createDOM(_config: EditorConfig): HTMLElement {
     const span = document.createElement('span');
-    span.className = 'mention channel-mention inline-block rounded px-1 text-sm font-medium leading-tight bg-primary/10 text-primary';
+    span.className = 'mention channel-mention inline align-baseline rounded px-1 font-medium leading-[inherit] bg-primary/10 text-primary';
     span.setAttribute('data-channel-id', this.__channelId);
     span.setAttribute('data-channel-slug', this.__slug);
     return span;

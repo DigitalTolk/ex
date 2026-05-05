@@ -34,9 +34,9 @@ const HASHTAG_RE = /(^|[^\w/])#([\p{L}\p{N}_-]{2,64})/u;
 const FENCE_RE = /^```(\S+)?\s*$/;
 
 const MENTION_PILL_BASE =
-  'inline-block rounded px-1 text-sm font-medium leading-tight';
+  'inline align-baseline rounded px-1 font-medium leading-[inherit] no-underline';
 const MENTION_PILL_OTHER =
-  ' bg-primary/10 text-primary hover:bg-primary/20';
+  ' bg-primary/10 text-primary hover:bg-primary/20 hover:text-primary hover:no-underline';
 // "You" mentions and group mentions (@all/@here) share the same amber
 // highlight — both are calls to action that should stand out from the
 // muted color used for ordinary user mentions.
