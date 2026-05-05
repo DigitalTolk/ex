@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Pencil, Trash2, SmilePlus, MessageSquareReply, MoreHorizontal, Pin, PinOff, Link as LinkIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { MessageInput, type MessageInputValue } from '@/components/chat/MessageInput';
@@ -97,6 +97,8 @@ export function MessageItem({
   // propagation on the row.
   const [hovered, setHovered] = useState(false);
   const [actionsMenuOpen, setActionsMenuOpen] = useState(false);
+  const [mobileActionsOpen, setMobileActionsOpen] = useState(false);
+  const longPressTimerRef = useRef<number | null>(null);
   const toolbarVisible = hovered || actionsMenuOpen;
 
   useEffect(() => {
@@ -194,6 +196,35 @@ export function MessageItem({
     });
   }
 
+  function closeMobileActions() {
+    setMobileActionsOpen(false);
+  }
+
+  function handleMobileReply() {
+    closeMobileActions();
+    onReplyInThread?.(message.id);
+  }
+
+  function handleMobileTogglePin() {
+    closeMobileActions();
+    handleTogglePin();
+  }
+
+  function handleMobileEdit() {
+    closeMobileActions();
+    setIsEditing(true);
+  }
+
+  function handleMobileDelete() {
+    closeMobileActions();
+    setDeleteConfirmOpen(true);
+  }
+
+  function handleMobileCopyLink() {
+    closeMobileActions();
+    void handleCopyLink();
+  }
+
   // When entering edit mode, hydrate the existing attachments so the
   // MessageInput can render them as draft chips (and let the user remove
   // any of them). We only fetch when the user actually starts editing.
@@ -267,6 +298,24 @@ export function MessageItem({
     toggleReaction.mutate({ messageId: message.id, emoji, channelId, conversationId });
   }
 
+  function cancelLongPress() {
+    if (longPressTimerRef.current === null) return;
+    window.clearTimeout(longPressTimerRef.current);
+    longPressTimerRef.current = null;
+  }
+
+  function startLongPress(e: React.PointerEvent<HTMLDivElement>) {
+    if (e.pointerType === 'mouse' || isEditing || message.deleted || message.system) return;
+    cancelLongPress();
+    longPressTimerRef.current = window.setTimeout(() => {
+      setMobileActionsOpen(true);
+      notifyMessageHovered(message.id);
+      longPressTimerRef.current = null;
+    }, 420);
+  }
+
+  useEffect(() => cancelLongPress, []);
+
   const reactions = message.reactions ?? {};
   const reactionEntries = Object.entries(reactions).filter(([, users]) => users && users.length > 0);
 
@@ -298,6 +347,10 @@ export function MessageItem({
         notifyMessageHovered(message.id);
       }}
       onMouseLeave={() => setHovered(false)}
+      onPointerDown={startLongPress}
+      onPointerUp={cancelLongPress}
+      onPointerCancel={cancelLongPress}
+      onPointerMove={cancelLongPress}
       className={`relative flex items-start gap-3 rounded-md px-2 py-1.5 hover:bg-muted/50 ${
         message.pinned ? 'border-l-2 border-amber-500 pl-2' : ''
       } ${highlighted ? 'ring-1 ring-amber-400/50 rounded-md' : ''}`}
@@ -510,7 +563,7 @@ export function MessageItem({
 
       {!isEditing && !message.deleted && (
         <div
-          className="absolute right-2 -top-3 flex items-center gap-0.5 bg-background border rounded-md shadow-sm transition-opacity"
+          className="absolute right-2 -top-3 flex items-center gap-0.5 rounded-md border bg-background shadow-sm transition-opacity max-md:hidden"
           style={{ opacity: toolbarVisible ? 1 : 0 }}
           data-actions-pinned={actionsMenuOpen ? 'true' : 'false'}
           data-actions-visible={toolbarVisible ? 'true' : 'false'}
@@ -584,6 +637,89 @@ export function MessageItem({
               )}
             </DropdownMenuContent>
           </DropdownMenu>
+        </div>
+      )}
+      {!isEditing && !message.deleted && mobileActionsOpen && (
+        <div className="fixed inset-0 z-50 md:hidden" role="presentation">
+          <button
+            type="button"
+            className="absolute inset-0 bg-black/35"
+            aria-label="Close message actions"
+            onClick={closeMobileActions}
+          />
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="Message actions"
+            className="absolute inset-x-0 bottom-0 rounded-t-xl border bg-popover p-3 pb-[calc(env(safe-area-inset-bottom)+0.75rem)] text-popover-foreground shadow-lg animate-in slide-in-from-bottom-4"
+            data-testid="mobile-message-actions"
+          >
+            {!inThread && (
+              <Button
+                type="button"
+                className="mb-2 h-12 w-full justify-start gap-3 text-base"
+                onClick={handleMobileReply}
+                aria-label="Reply in thread"
+              >
+                <MessageSquareReply className="h-5 w-5" />
+                Reply in thread
+              </Button>
+            )}
+            <div className="mb-2 flex items-center justify-between rounded-lg border px-3 py-2">
+              <span className="text-sm font-medium">Reaction</span>
+              <EmojiPicker
+                onSelect={(emoji) => {
+                  handleReact(emoji);
+                  closeMobileActions();
+                }}
+                trigger={
+                  <Button type="button" size="icon" variant="secondary" aria-label="Add reaction">
+                    <SmilePlus className="h-5 w-5" />
+                  </Button>
+                }
+              />
+            </div>
+            <div className="flex flex-col rounded-lg border">
+              <button
+                type="button"
+                className="flex items-center gap-3 border-b px-3 py-3 text-left text-sm"
+                onClick={handleMobileCopyLink}
+                aria-label="Copy link to message"
+              >
+                <LinkIcon className="h-4 w-4" />
+                {linkCopied ? 'Link copied' : 'Copy link'}
+              </button>
+              <button
+                type="button"
+                className="flex items-center gap-3 border-b px-3 py-3 text-left text-sm"
+                onClick={handleMobileTogglePin}
+                aria-label={message.pinned ? 'Unpin message' : 'Pin message'}
+              >
+                {message.pinned ? <PinOff className="h-4 w-4" /> : <Pin className="h-4 w-4" />}
+                {message.pinned ? 'Unpin' : 'Pin'}
+              </button>
+              {isOwn && (
+                <>
+                  <button
+                    type="button"
+                    className="flex items-center gap-3 border-b px-3 py-3 text-left text-sm"
+                    onClick={handleMobileEdit}
+                  >
+                    <Pencil className="h-4 w-4" />
+                    Edit
+                  </button>
+                  <button
+                    type="button"
+                    className="flex items-center gap-3 px-3 py-3 text-left text-sm text-destructive"
+                    onClick={handleMobileDelete}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                    Delete
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
         </div>
       )}
       <ConfirmDialog

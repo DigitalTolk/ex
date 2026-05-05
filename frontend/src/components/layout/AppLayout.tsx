@@ -1,53 +1,46 @@
-import { useState, type ReactNode } from 'react';
+import { type ReactNode } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { Sidebar } from './Sidebar';
 import { SearchBar } from '@/components/SearchBar';
 import { TagSearchProvider } from '@/context/TagSearchContext';
 import { Button } from '@/components/ui/button';
-import { Menu, X } from 'lucide-react';
+import { Menu } from 'lucide-react';
 
 interface AppLayoutProps {
   children: ReactNode;
 }
 
 export function AppLayout({ children }: AppLayoutProps) {
-  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const navigate = useNavigate();
+  const location = useLocation();
+  const isHome = location.pathname === '/';
 
   return (
     <TagSearchProvider>
       <div className="flex h-full flex-col overflow-hidden">
-        {/* Slack/Mattermost-style thin top bar: full width, search
-            centered, mobile-menu button on the left at small screens. */}
-        <header className="flex h-11 shrink-0 items-center gap-2 border-b bg-[#1a1d21] px-3 text-foreground">
+        {/* Slack/Mattermost-style thin top bar. On mobile, channels/DMs are
+            the primary home view, so the left control navigates there
+            instead of opening a temporary side-over. */}
+        <header className="flex h-11 w-full shrink-0 items-center gap-2 border-b bg-[#1a1d21] px-3 text-foreground">
           <Button
             variant="ghost"
             size="icon"
-            onClick={() => setSidebarOpen(!sidebarOpen)}
-            aria-label="Open sidebar"
-            className="text-zinc-200 hover:bg-white/10 lg:hidden"
+            onClick={() => navigate('/')}
+            aria-label="Open channels"
+            aria-hidden={isHome}
+            tabIndex={isHome ? -1 : 0}
+            className={`text-zinc-200 hover:bg-white/10 lg:hidden ${isHome ? 'invisible' : ''}`}
           >
-            {sidebarOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
+            <Menu className="h-5 w-5" />
           </Button>
-          <div className="mx-auto w-full max-w-2xl">
+          <div className="min-w-0 flex-1 lg:mx-auto lg:max-w-2xl">
             <SearchBar />
           </div>
         </header>
 
         <div className="flex flex-1 overflow-hidden">
-          {sidebarOpen && (
-            <div
-              className="fixed inset-0 z-20 bg-black/50 lg:hidden"
-              onClick={() => setSidebarOpen(false)}
-              aria-hidden="true"
-            />
-          )}
-          <aside
-            className={`
-              fixed inset-y-0 left-0 top-11 z-30 w-72 transform bg-[#1a1d21] transition-transform duration-200 ease-in-out
-              lg:static lg:top-0 lg:translate-x-0
-              ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}
-            `}
-          >
-            <Sidebar onClose={() => setSidebarOpen(false)} />
+          <aside className="hidden w-72 shrink-0 bg-[#1a1d21] lg:block">
+            <Sidebar onClose={() => undefined} />
           </aside>
           <main className="flex flex-1 flex-col overflow-hidden">{children}</main>
         </div>

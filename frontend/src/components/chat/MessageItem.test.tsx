@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { BrowserRouter } from 'react-router-dom';
 import { MessageItem } from './MessageItem';
@@ -8,12 +8,13 @@ import type { Message } from '@/types';
 const mockEditMutate = vi.fn();
 const mockDeleteMutate = vi.fn();
 const mockReactMutate = vi.fn();
+const mockPinMutate = vi.fn();
 
 vi.mock('@/hooks/useMessages', () => ({
   useEditMessage: () => ({ mutate: mockEditMutate, isPending: false }),
   useDeleteMessage: () => ({ mutate: mockDeleteMutate, isPending: false }),
   useToggleReaction: () => ({ mutate: mockReactMutate, isPending: false }),
-  useSetPinned: () => ({ mutate: vi.fn(), isPending: false }),
+  useSetPinned: () => ({ mutate: mockPinMutate, isPending: false }),
 }));
 
 vi.mock('@/hooks/useEmoji', () => ({
@@ -412,6 +413,34 @@ describe('MessageItem', () => {
       channelId: 'channel-1',
       conversationId: undefined,
     });
+  });
+
+  it('opens message actions from long press on touch pointers', async () => {
+    const reply = vi.fn();
+    renderWithProviders(
+      <MessageItem
+        message={makeMessage()}
+        authorName="Alice"
+        isOwn={true}
+        channelId="channel-1"
+        currentUserId="user-1"
+        onReplyInThread={reply}
+      />,
+    );
+    const row = screen.getByTestId('message-actions-trigger').closest('[data-message-id]')!;
+    act(() => {
+      fireEvent.pointerDown(row, { pointerType: 'touch' });
+    });
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 430));
+    });
+    const sheet = screen.getByTestId('mobile-message-actions');
+    expect(sheet).toBeInTheDocument();
+    expect(within(sheet).getByRole('button', { name: 'Reply in thread' })).toHaveClass('h-12', 'w-full');
+    expect(within(sheet).getByLabelText('Add reaction')).toBeInTheDocument();
+    expect(within(sheet).getByLabelText('Pin message')).toBeInTheDocument();
+    expect(within(sheet).getByText('Edit')).toBeInTheDocument();
+    expect(within(sheet).getByText('Delete')).toBeInTheDocument();
   });
 
   it('does not render reactions row when no reactions', () => {

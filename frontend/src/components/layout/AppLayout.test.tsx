@@ -36,35 +36,43 @@ describe('AppLayout', () => {
     expect(screen.getByText('Test child content')).toBeInTheDocument();
   });
 
-  it('renders mobile menu button', () => {
+  it('renders mobile channels button', () => {
     renderLayout();
-    expect(screen.getByLabelText('Open sidebar')).toBeInTheDocument();
+    expect(screen.getByLabelText('Open channels')).toBeInTheDocument();
   });
 
-  it('opens sidebar on mobile menu click', async () => {
-    const user = userEvent.setup();
+  it('lets the mobile top bar and search fill the full viewport width', () => {
+    const { container } = renderLayout();
+
+    const header = container.querySelector('header')!;
+    const searchShell = screen.getByLabelText('Search').closest('header')!.querySelector('div')!;
+    expect(header.className).toContain('w-full');
+    expect(searchShell).toHaveClass('flex-1', 'lg:max-w-2xl');
+    expect(searchShell.classList.contains('max-w-2xl')).toBe(false);
+  });
+
+  it('keeps the desktop sidebar as a persistent rail', () => {
     renderLayout();
 
-    const menuBtn = screen.getByLabelText('Open sidebar');
+    const aside = screen.getByTestId('sidebar').closest('aside')!;
+    expect(aside.className).toContain('lg:block');
+    expect(aside.className).not.toContain('fixed');
+  });
+
+  it('mobile channels button navigates to channel home', async () => {
+    const user = userEvent.setup();
+    window.history.pushState({}, '', '/channel/general');
+    renderLayout();
+
+    const menuBtn = screen.getByLabelText('Open channels');
     await user.click(menuBtn);
 
-    // After clicking, the overlay should appear (a div with aria-hidden)
-    // and sidebar should have translate-x-0 class
-    const aside = screen.getByTestId('sidebar').closest('aside')!;
-    expect(aside.className).toContain('translate-x-0');
+    expect(window.location.pathname).toBe('/');
   });
 
-  it('closes sidebar when close callback fires', async () => {
-    const user = userEvent.setup();
-    renderLayout();
+  it('does not render a mobile side-over overlay', () => {
+    const { container } = renderLayout();
 
-    // Open the sidebar first
-    await user.click(screen.getByLabelText('Open sidebar'));
-
-    // Click the close button inside our mocked sidebar
-    await user.click(screen.getByText('Close sidebar'));
-
-    const aside = screen.getByTestId('sidebar').closest('aside')!;
-    expect(aside.className).toContain('-translate-x-full');
+    expect(container.querySelector('.bg-black\\/50')).toBeNull();
   });
 });

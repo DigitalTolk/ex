@@ -54,6 +54,7 @@ function emptyGiphyResult(offset: number): GifsResult {
 function computeGridWidth() {
   if (typeof window === 'undefined') return MAX_GRID_WIDTH;
   const available = window.innerWidth - POPOVER_MARGIN * 2 - POPOVER_PADDING_X;
+  if (window.innerWidth <= 767) return Math.max(MIN_GRID_WIDTH, available);
   return Math.max(MIN_GRID_WIDTH, Math.min(MAX_GRID_WIDTH, available));
 }
 
@@ -148,7 +149,8 @@ export function GiphyPicker({ apiKey, onSelect, trigger, ariaLabel = 'Giphy pick
         preferredSide="bottom"
         preferredAlign="end"
         ariaLabel={ariaLabel}
-        className="flex h-[460px] max-w-[calc(100vw-16px)] flex-col rounded-md border bg-popover p-2 shadow-md"
+        mobileSheet
+        className="flex h-[460px] max-w-[calc(100vw-16px)] flex-col rounded-md border bg-popover p-2 shadow-md max-md:h-[min(78vh,calc(100dvh-72px))] max-md:w-screen max-md:max-w-none max-md:rounded-b-none max-md:rounded-t-xl"
       >
         <Input
           ref={inputRef}
@@ -161,7 +163,7 @@ export function GiphyPicker({ apiKey, onSelect, trigger, ariaLabel = 'Giphy pick
         />
         <div
           className="min-h-0 flex-1 overflow-y-auto"
-          style={{ width: gridWidth }}
+          style={{ width: gridWidth, maxWidth: '100%' }}
           data-testid="giphy-grid"
         >
           {open && (

@@ -102,7 +102,8 @@ export function UserHoverCard({
         preferredSide="bottom"
         preferredAlign="start"
         role="tooltip"
-        className="w-72 rounded-md border bg-popover p-3 shadow-lg"
+        mobileSheet
+        className="w-72 rounded-md border bg-popover p-3 shadow-lg max-md:w-screen max-md:max-w-none max-md:rounded-b-none max-md:rounded-t-xl"
       >
         <div>
           <div data-testid="hover-card-header" className="flex items-start gap-3">

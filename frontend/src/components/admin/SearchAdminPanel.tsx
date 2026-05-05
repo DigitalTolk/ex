@@ -100,31 +100,33 @@ export function SearchAdminPanel() {
           <p className="text-xs uppercase tracking-wide text-muted-foreground">
             Indices
           </p>
-          <table className="mt-2 w-full text-sm" data-testid="indices-table">
-            <thead className="text-xs uppercase tracking-wide text-muted-foreground">
-              <tr>
-                <th className="pb-1 text-left font-normal">Index</th>
-                <th className="pb-1 text-right font-normal">Docs</th>
-                <th className="pb-1 text-right font-normal">Size</th>
-              </tr>
-            </thead>
-            <tbody>
-              {(data.indices ?? []).map((idx) => (
-                <tr key={idx.name}>
-                  <td className="py-1">
-                    <span className="font-medium">{idx.name}</span>
-                    <span className="ml-2 text-xs text-muted-foreground">
-                      {idx.health}
-                    </span>
-                  </td>
-                  <td className="py-1 text-right tabular-nums">{idx.docs}</td>
-                  <td className="py-1 text-right tabular-nums">
-                    {idx.storeSize || '—'}
-                  </td>
+          <div className="overflow-x-auto">
+            <table className="mt-2 w-full min-w-[18rem] text-sm" data-testid="indices-table">
+              <thead className="text-xs uppercase tracking-wide text-muted-foreground">
+                <tr>
+                  <th className="pb-1 text-left font-normal">Index</th>
+                  <th className="pb-1 text-right font-normal">Docs</th>
+                  <th className="pb-1 text-right font-normal">Size</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {(data.indices ?? []).map((idx) => (
+                  <tr key={idx.name}>
+                    <td className="py-1">
+                      <span className="font-medium">{idx.name}</span>
+                      <span className="ml-2 text-xs text-muted-foreground">
+                        {idx.health}
+                      </span>
+                    </td>
+                    <td className="py-1 text-right tabular-nums">{idx.docs}</td>
+                    <td className="py-1 text-right tabular-nums">
+                      {idx.storeSize || '—'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
           {data.indicesError && (
             <p className="mt-2 text-xs text-destructive" role="alert">
               {data.indicesError}
@@ -137,7 +139,7 @@ export function SearchAdminPanel() {
         <p className="text-xs uppercase tracking-wide text-muted-foreground">
           Reindex
         </p>
-        <div className="mt-2 flex items-start gap-3">
+        <div className="mt-2 flex flex-col gap-3 sm:flex-row sm:items-start">
           <Button
             onClick={() => start.mutate()}
             disabled={running || start.isPending}

@@ -23,6 +23,8 @@ import DraftsPage from '@/pages/DraftsPage';
 import SearchResultsPage from '@/pages/SearchResultsPage';
 import { NotFoundPage } from '@/pages/NotFoundPage';
 import { GENERAL_CHANNEL_SLUG } from '@/lib/roles';
+import { Sidebar } from '@/components/layout/Sidebar';
+import { useIsMobile } from '@/hooks/useIsMobile';
 import type { ReactNode } from 'react';
 
 const queryClient = new QueryClient({
@@ -52,6 +54,16 @@ function ProtectedRoute({ children }: { children: ReactNode }) {
   return <>{children}</>;
 }
 
+function ChatHomeRoute() {
+  const isMobile = useIsMobile();
+  if (!isMobile) return <Navigate to={`/channel/${GENERAL_CHANNEL_SLUG}`} replace />;
+  return (
+    <div className="flex min-h-0 w-full flex-1 bg-[#1a1d21] text-zinc-100" data-testid="mobile-channel-home">
+      <Sidebar onClose={() => undefined} />
+    </div>
+  );
+}
+
 function AppRoutes() {
   return (
     <Routes>
@@ -68,7 +80,7 @@ function AppRoutes() {
       >
         <Route
           index
-          element={<Navigate to={`/channel/${GENERAL_CHANNEL_SLUG}`} replace />}
+          element={<ChatHomeRoute />}
         />
         <Route path="directory" element={<Navigate to="/directory/channels" replace />} />
         <Route path="directory/:section" element={<DirectoriesPage />} />

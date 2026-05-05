@@ -15,15 +15,15 @@ interface PageContainerProps {
 export function PageContainer({ title, description, actions, children }: PageContainerProps) {
   return (
     <div className="flex-1 overflow-y-auto" data-testid="page-container">
-      <div className="p-6 space-y-6">
-        <header className="flex items-start justify-between gap-3">
+      <div className="space-y-6 p-4 sm:p-6">
+        <header className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div className="min-w-0">
             <h1 className="text-xl font-bold">{title}</h1>
             {description && (
               <p className="mt-1 text-sm text-muted-foreground">{description}</p>
             )}
           </div>
-          {actions && <div className="flex items-center gap-2 shrink-0">{actions}</div>}
+          {actions && <div className="flex shrink-0 flex-wrap items-center gap-2">{actions}</div>}
         </header>
         {children}
       </div>

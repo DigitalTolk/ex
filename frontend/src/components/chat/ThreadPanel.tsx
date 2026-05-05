@@ -333,7 +333,7 @@ export function ThreadPanel({
   );
 
   return (
-    <aside className="w-[28rem] border-l flex flex-col" aria-label="Thread">
+    <aside className="flex w-[28rem] flex-col border-l bg-background max-md:fixed max-md:inset-x-0 max-md:bottom-0 max-md:top-11 max-md:z-40 max-md:w-auto max-md:animate-in max-md:slide-in-from-right-4" aria-label="Thread">
       <div className="flex items-center justify-between border-b px-4 py-3">
         <h2 className="text-sm font-semibold">Thread</h2>
         <div className="flex items-center gap-1">
