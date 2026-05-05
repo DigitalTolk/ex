@@ -121,6 +121,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
     body: initialBody,
     attachmentIDs: initialDrafts.map((d) => d.id),
   });
+  const hasInitialDraftValueRef = useRef(false);
   const onDraftChangeRef = useRef(onDraftChange);
   const initialDraftKey = `${initialBody}\u0000${initialDrafts.map((d) => d.id).join('\u0000')}`;
   const appliedInitialDraftRef = useRef(initialDraftKey);
@@ -136,11 +137,15 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
   const giphyAPIKey = settings?.giphyAPIKey?.trim() ?? '';
   const giphyEnabled = (settings?.giphyEnabled ?? false) && giphyAPIKey !== '';
 
-  const hasInitialDraftValue = initialBody.trim() !== '' || initialDrafts.length > 0;
+  const hasInitialDraftValue = initialBody !== '' || initialDrafts.length > 0;
 
   useEffect(() => {
     latestDraftValueRef.current = { body, attachmentIDs: drafts.map((d) => d.id) };
   }, [body, drafts]);
+
+  useEffect(() => {
+    hasInitialDraftValueRef.current = hasInitialDraftValue;
+  }, [hasInitialDraftValue]);
 
   useEffect(() => {
     onDraftChangeRef.current = onDraftChange;
@@ -150,13 +155,13 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
     if (variant !== 'composer') return;
     const value = latestDraftValueRef.current;
     const shouldFlush =
-      value.body.trim() !== '' ||
+      value.body !== '' ||
       value.attachmentIDs.length > 0 ||
-      hasInitialDraftValue ||
+      hasInitialDraftValueRef.current ||
       mountedDraftChangeRef.current;
     if (!shouldFlush) return;
     onDraftChangeRef.current?.(value);
-  }, [hasInitialDraftValue, variant]);
+  }, [variant]);
 
   // Link dialog state. Opening the dialog calls editor.beginLinkEdit
   // which captures the current selection (Lexical loses selection when

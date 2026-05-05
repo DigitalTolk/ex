@@ -301,16 +301,37 @@ describe('ChatPage WebSocket handlers', () => {
     // walk-forward refetch which truncates a deep-linked page chain
     // (see appendMessageToCache); we patch the cache directly instead.
     const { qc } = renderAt('/');
+    qc.setQueryData(['channelMessages', 'ch-1', null], {
+      pages: [{
+        items: [msg({ id: 'msg-reply', parentMessageID: 'msg-root', body: 'stale body' })],
+        hasMoreOlder: false,
+        hasMoreNewer: false,
+      }],
+      pageParams: [{ kind: 'tail' }],
+    });
+    qc.setQueryData(['thread', 'channels/ch-1', 'msg-root'], [
+      msg({ id: 'msg-root' }),
+      msg({ id: 'msg-reply', parentMessageID: 'msg-root', body: 'stale body' }),
+    ]);
     const spy = vi.spyOn(qc, 'invalidateQueries');
-    (capturedOptions.onMessageDeleted as (d: unknown) => void)(msg({
+    (capturedOptions.onMessageDeleted as (d: unknown) => void)({
+      parentID: 'ch-1',
       parentMessageID: 'msg-root',
       id: 'msg-reply',
-    }));
+    });
     const calls = spy.mock.calls.map((c) => (c[0] as { queryKey?: unknown[] }).queryKey);
     expect(calls).not.toContainEqual(['channelMessages', 'ch-1']);
     expect(calls).toContainEqual(['thread', 'channels/ch-1', 'msg-root']);
     expect(calls).toContainEqual(['thread', 'conversations/ch-1', 'msg-root']);
     expect(calls).toContainEqual(['userThreads']);
+    const list = qc.getQueryData<{ pages: { items: { id: string; body: string; deleted?: boolean }[] }[] }>([
+      'channelMessages', 'ch-1', null,
+    ]);
+    expect(list?.pages[0].items[0]).toMatchObject({ id: 'msg-reply', body: '', deleted: true });
+    const thread = qc.getQueryData<{ id: string; body: string; deleted?: boolean }[]>([
+      'thread', 'channels/ch-1', 'msg-root',
+    ]);
+    expect(thread?.[1]).toMatchObject({ id: 'msg-reply', body: '', deleted: true });
   });
 
   it('onMessageDeleted on a thread root falls back to id when parentMessageID is absent', () => {
@@ -347,6 +368,7 @@ describe('ChatPage WebSocket handlers', () => {
     expect(calls).toContainEqual(['userChannels']);
     expect(calls).toContainEqual(['userConversations']);
     expect(calls).toContainEqual(['userThreads']);
+    expect(calls).toContainEqual(['userState']);
     expect(calls).toContainEqual(['channelMembers']);
   });
 

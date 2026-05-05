@@ -41,6 +41,7 @@ const EMOJI_MODIFIER_RE = /[\u{1F3FB}-\u{1F3FF}]/gu;
 const VARIATION_SELECTOR_16 = '\uFE0F';
 const ZERO_WIDTH_JOINER = '\u200D';
 const CANONICAL_EMOJI_NAMES: Record<string, string> = {
+  beam_face_smile_eyes: 'grin',
   flexed_biceps: 'muscle',
   person_bowing: 'bow',
 };

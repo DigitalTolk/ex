@@ -2,14 +2,19 @@ import { useEffect } from 'react';
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext';
 import {
   $createParagraphNode,
+  $createLineBreakNode,
+  $createTextNode,
   $getSelection,
+  $getRoot,
   $isLineBreakNode,
   $isParagraphNode,
   $isRangeSelection,
   $isRootOrShadowRoot,
   $isTextNode,
+  COMMAND_PRIORITY_HIGH,
   COMMAND_PRIORITY_NORMAL,
   KEY_ENTER_COMMAND,
+  PASTE_COMMAND,
   TextNode,
   type LexicalNode,
 } from 'lexical';
@@ -62,10 +67,11 @@ const ELEMENT_TRANSFORMERS: ElementTransformer[] = EX_TRANSFORMERS.filter(
   (t): t is ElementTransformer => t.type === 'element',
 );
 
-// Stock @lexical/markdown's CODE_START_REGEX — see node_modules
-// /@lexical/markdown/LexicalMarkdown.dev.js around line 939. Captures
-// the fence in [1] and an optional language tag in [2].
-const CODE_START_REGEX = /^([ \t]*`{3,})([\w-]+)?[ \t]?$/;
+// Captures the fence in [1] and the optional first non-space token as
+// language hint in [2]. The hint deliberately accepts common symbolic
+// names such as c++, c#, f#, and objective-c.
+const CODE_START_REGEX = /^([ \t]*`{3,})(\S+)?[ \t]?$/;
+const PASTED_FENCED_CODE_REGEX = /^[ \t]*`{3,}(\S+)?[ \t]*\r?\n([\s\S]*?)\r?\n?[ \t]*`{3,}[ \t]*$/;
 
 export function MarkdownShortcutFallbackPlugin() {
   const [editor] = useLexicalComposerContext();
@@ -96,14 +102,11 @@ export function MarkdownShortcutFallbackPlugin() {
         }
       }),
       // Multiline code-block trigger fires on Enter. We claim it at
-      // NORMAL priority (above SubmitOnEnter at LOW) only when the
-      // trigger text sits AFTER a soft line break; the first-child
-      // case is handled fine by Lexical's stock multiline path on
-      // KEY_ENTER, so we let that run normally.
+      // NORMAL priority (above SubmitOnEnter at LOW) so an opening
+      // fence converts immediately for both Enter and Shift+Enter.
       editor.registerCommand(
         KEY_ENTER_COMMAND,
         (event) => {
-          if (event && event.shiftKey) return false;
           const selection = $getSelection();
           if (!$isRangeSelection(selection) || !selection.isCollapsed()) return false;
           const anchorNode = selection.anchor.getNode();
@@ -114,27 +117,80 @@ export function MarkdownShortcutFallbackPlugin() {
           const grandparent = paragraph.getParent();
           if (!grandparent || !$isRootOrShadowRoot(grandparent)) return false;
           const previousSibling = anchorNode.getPreviousSibling();
-          if (!$isLineBreakNode(previousSibling)) return false;
+          const isFirstChild = paragraph.getFirstChild() === anchorNode;
+          const afterLineBreak = $isLineBreakNode(previousSibling);
+          if (!isFirstChild && !afterLineBreak) return false;
 
-          const textContent = anchorNode.getTextContent();
-          const match = textContent.match(CODE_START_REGEX);
-          if (!match || match[0].length !== textContent.length) return false;
-
-          editor.update(() => {
-            const newPara = splitAtLineBreak(paragraph, anchorNode, previousSibling);
-            const codeNode = $createCodeNode(match[2]);
-            newPara.replace(codeNode);
-            codeNode.select(0, 0);
-          });
+          const converted = convertOpeningFenceToCodeBlock(
+            paragraph,
+            anchorNode,
+            afterLineBreak ? previousSibling : null,
+          );
+          if (!converted) return false;
           event?.preventDefault();
           return true;
         },
         COMMAND_PRIORITY_NORMAL,
       ),
+      editor.registerCommand(
+        PASTE_COMMAND,
+        (event) => {
+          const clipboardData = (event as ClipboardEvent).clipboardData;
+          if (!clipboardData) return false;
+          const text = clipboardData.getData('text/plain');
+          const match = text.match(PASTED_FENCED_CODE_REGEX);
+          if (!match) return false;
+
+          const currentSelection = $getSelection();
+          const selection = $isRangeSelection(currentSelection) ? currentSelection : $getRoot().selectEnd();
+          if (!$isRangeSelection(selection)) return false;
+          const codeNode = createCodeNodeFromText(match[2], match[1]);
+          const anchor = selection.anchor.getNode();
+          const paragraph = $isParagraphNode(anchor) ? anchor : anchor.getParent();
+          if (!$isParagraphNode(paragraph)) return false;
+          event.preventDefault();
+          if (paragraph.getTextContent() === '') {
+            paragraph.replace(codeNode);
+          } else {
+            paragraph.insertAfter(codeNode);
+          }
+          const nextParagraph = $createParagraphNode();
+          codeNode.insertAfter(nextParagraph);
+          nextParagraph.select(0, 0);
+          return true;
+        },
+        COMMAND_PRIORITY_HIGH,
+      ),
     );
   }, [editor]);
 
   return null;
+}
+
+function convertOpeningFenceToCodeBlock(
+  paragraph: ReturnType<typeof $createParagraphNode>,
+  openingText: TextNode,
+  previousLineBreak: LexicalNode | null,
+): boolean {
+  const textContent = openingText.getTextContent();
+  const match = textContent.match(CODE_START_REGEX);
+  if (!match || match[0].length !== textContent.length) return false;
+
+  const target = previousLineBreak ? splitAtLineBreak(paragraph, openingText, previousLineBreak) : paragraph;
+  const codeNode = $createCodeNode(match[2]);
+  target.replace(codeNode);
+  codeNode.selectEnd();
+  return true;
+}
+
+function createCodeNodeFromText(text: string, language?: string): ReturnType<typeof $createCodeNode> {
+  const codeNode = $createCodeNode(language);
+  const lines = text.split(/\r?\n/);
+  lines.forEach((line, index) => {
+    if (line) codeNode.append($createTextNode(line));
+    if (index < lines.length - 1) codeNode.append($createLineBreakNode());
+  });
+  return codeNode;
 }
 
 function splitAtLineBreak(

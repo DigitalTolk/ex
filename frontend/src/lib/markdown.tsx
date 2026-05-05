@@ -31,6 +31,7 @@ export interface RenderOpts {
 // `/path#anchor` don't render as a hashtag pill. The body regex
 // mirrors `internal/search/indexer.go` hashtagPattern.
 const HASHTAG_RE = /(^|[^\w/])#([\p{L}\p{N}_-]{2,64})/u;
+const FENCE_RE = /^```(\S+)?\s*$/;
 
 const MENTION_PILL_BASE =
   'inline-block rounded px-1 text-sm font-medium leading-tight';
@@ -49,6 +50,93 @@ function displayBareURL(url: string) {
 function isVideoAssetURL(url: string) {
   const path = url.split(/[?#]/, 1)[0]?.toLowerCase() ?? '';
   return path.endsWith('.mp4') || path.endsWith('.webm');
+}
+
+function codeLanguageClass(language: string | undefined) {
+  if (!language) return '';
+  return ` language-${normalizeCodeLanguage(language)}`;
+}
+
+function normalizeCodeLanguage(language: string) {
+  const lowered = language.toLowerCase();
+  const aliases: Record<string, string> = {
+    'c++': 'cpp',
+    'c#': 'csharp',
+    'f#': 'fsharp',
+    js: 'javascript',
+    py: 'python',
+    rb: 'ruby',
+    sh: 'bash',
+    ts: 'typescript',
+  };
+  return aliases[lowered] ?? lowered.replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '');
+}
+
+const COMMON_CODE_KEYWORDS = new Set([
+  'and', 'as', 'async', 'await', 'break', 'case', 'catch', 'class', 'const', 'continue', 'def', 'default',
+  'defer', 'do', 'echo', 'else', 'elseif', 'enum', 'export', 'extends', 'false', 'finally', 'fn', 'for',
+  'foreach', 'from', 'func', 'function', 'global', 'go', 'if', 'import', 'in', 'interface', 'let', 'match',
+  'module', 'namespace', 'new', 'nil', 'none', 'not', 'null', 'or', 'package', 'private', 'protected',
+  'public', 'return', 'select', 'self', 'static', 'struct', 'switch', 'then', 'this', 'throw', 'trait',
+  'true', 'try', 'type', 'use', 'var', 'while', 'with', 'yield',
+]);
+
+const LANGUAGE_KEYWORDS: Record<string, Set<string>> = {
+  bash: new Set(['case', 'do', 'done', 'elif', 'else', 'esac', 'export', 'fi', 'for', 'function', 'if', 'in', 'local', 'then', 'while']),
+  c: new Set(['auto', 'break', 'case', 'char', 'const', 'continue', 'default', 'do', 'double', 'else', 'enum', 'extern', 'float', 'for', 'goto', 'if', 'int', 'long', 'return', 'short', 'signed', 'sizeof', 'static', 'struct', 'switch', 'typedef', 'union', 'unsigned', 'void', 'volatile', 'while']),
+  cpp: new Set(['auto', 'bool', 'break', 'case', 'catch', 'class', 'const', 'constexpr', 'continue', 'default', 'delete', 'do', 'double', 'else', 'enum', 'false', 'float', 'for', 'if', 'include', 'int', 'namespace', 'new', 'nullptr', 'private', 'protected', 'public', 'return', 'static', 'struct', 'switch', 'template', 'this', 'throw', 'true', 'try', 'typename', 'using', 'virtual', 'void', 'while']),
+  csharp: new Set(['abstract', 'as', 'async', 'await', 'base', 'bool', 'break', 'case', 'catch', 'class', 'const', 'continue', 'default', 'delegate', 'do', 'else', 'enum', 'event', 'false', 'finally', 'for', 'foreach', 'if', 'interface', 'internal', 'is', 'namespace', 'new', 'null', 'override', 'private', 'protected', 'public', 'readonly', 'return', 'static', 'string', 'struct', 'switch', 'this', 'throw', 'true', 'try', 'using', 'var', 'virtual', 'void', 'while']),
+  css: new Set(['important', 'media', 'supports']),
+  go: new Set(['break', 'case', 'chan', 'const', 'continue', 'default', 'defer', 'else', 'fallthrough', 'for', 'func', 'go', 'goto', 'if', 'import', 'interface', 'map', 'nil', 'package', 'range', 'return', 'select', 'struct', 'switch', 'type', 'var']),
+  hcl: new Set(['data', 'dynamic', 'for_each', 'locals', 'module', 'output', 'provider', 'resource', 'terraform', 'variable']),
+  ini: new Set(['false', 'no', 'off', 'on', 'true', 'yes']),
+  java: new Set(['abstract', 'boolean', 'break', 'case', 'catch', 'class', 'const', 'continue', 'default', 'do', 'else', 'enum', 'extends', 'false', 'final', 'finally', 'for', 'if', 'implements', 'import', 'instanceof', 'interface', 'new', 'null', 'package', 'private', 'protected', 'public', 'return', 'static', 'super', 'switch', 'this', 'throw', 'throws', 'true', 'try', 'void', 'while']),
+  javascript: new Set(['async', 'await', 'break', 'case', 'catch', 'class', 'const', 'continue', 'debugger', 'default', 'delete', 'do', 'else', 'export', 'extends', 'false', 'finally', 'for', 'from', 'function', 'if', 'import', 'in', 'instanceof', 'let', 'new', 'null', 'return', 'static', 'super', 'switch', 'this', 'throw', 'true', 'try', 'typeof', 'undefined', 'var', 'void', 'while', 'yield']),
+  json: new Set(['false', 'null', 'true']),
+  kotlin: new Set(['as', 'break', 'by', 'catch', 'class', 'companion', 'continue', 'data', 'do', 'else', 'false', 'for', 'fun', 'if', 'import', 'in', 'interface', 'is', 'null', 'object', 'package', 'private', 'protected', 'public', 'return', 'sealed', 'super', 'this', 'throw', 'true', 'try', 'typealias', 'val', 'var', 'when', 'while']),
+  php: new Set(['abstract', 'array', 'as', 'catch', 'class', 'echo', 'else', 'elseif', 'extends', 'final', 'finally', 'foreach', 'function', 'implements', 'interface', 'namespace', 'new', 'private', 'protected', 'public', 'return', 'static', 'throw', 'trait', 'try', 'use']),
+  python: new Set(['and', 'as', 'assert', 'async', 'await', 'break', 'class', 'continue', 'def', 'del', 'elif', 'else', 'except', 'false', 'finally', 'for', 'from', 'global', 'if', 'import', 'in', 'is', 'lambda', 'none', 'nonlocal', 'not', 'or', 'pass', 'raise', 'return', 'true', 'try', 'while', 'with', 'yield']),
+  ruby: new Set(['alias', 'and', 'begin', 'break', 'case', 'class', 'def', 'defined', 'do', 'else', 'elsif', 'end', 'ensure', 'false', 'for', 'if', 'in', 'module', 'next', 'nil', 'not', 'or', 'redo', 'rescue', 'retry', 'return', 'self', 'super', 'then', 'true', 'undef', 'unless', 'until', 'when', 'while', 'yield']),
+  rust: new Set(['as', 'async', 'await', 'break', 'const', 'continue', 'crate', 'dyn', 'else', 'enum', 'extern', 'false', 'fn', 'for', 'if', 'impl', 'in', 'let', 'loop', 'match', 'mod', 'move', 'mut', 'pub', 'ref', 'return', 'self', 'static', 'struct', 'super', 'trait', 'true', 'type', 'unsafe', 'use', 'where', 'while']),
+  sql: new Set(['alter', 'and', 'as', 'by', 'case', 'create', 'delete', 'desc', 'distinct', 'drop', 'else', 'end', 'from', 'group', 'having', 'in', 'insert', 'into', 'is', 'join', 'left', 'limit', 'not', 'null', 'on', 'or', 'order', 'right', 'select', 'set', 'table', 'then', 'update', 'values', 'when', 'where']),
+  swift: new Set(['as', 'associatedtype', 'break', 'case', 'catch', 'class', 'continue', 'defer', 'do', 'else', 'enum', 'extension', 'false', 'for', 'func', 'guard', 'if', 'import', 'in', 'init', 'let', 'nil', 'private', 'protocol', 'public', 'return', 'self', 'static', 'struct', 'switch', 'throw', 'true', 'try', 'typealias', 'var', 'where', 'while']),
+  typescript: new Set(['abstract', 'any', 'as', 'async', 'await', 'boolean', 'break', 'case', 'catch', 'class', 'const', 'continue', 'debugger', 'default', 'delete', 'do', 'else', 'enum', 'export', 'extends', 'false', 'finally', 'for', 'from', 'function', 'if', 'implements', 'import', 'in', 'instanceof', 'interface', 'let', 'new', 'null', 'number', 'private', 'protected', 'public', 'readonly', 'return', 'static', 'string', 'super', 'switch', 'this', 'throw', 'true', 'try', 'type', 'typeof', 'undefined', 'var', 'void', 'while', 'yield']),
+  yaml: new Set(['false', 'no', 'null', 'off', 'on', 'true', 'yes']),
+};
+
+const CODE_TOKEN_RE = /\/\*[\s\S]*?\*\/|\/\/[^\n]*|#[^\n]*|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`|\$[A-Za-z_][\w-]*|\b\d+(?:\.\d+)?\b|\b[A-Za-z_][\w-]*\b/g;
+
+function codeTokenClass(token: string, language: string) {
+  if (token.startsWith('//') || token.startsWith('#') || token.startsWith('/*')) {
+    return 'text-muted-foreground italic';
+  }
+  if (/^["'`]/.test(token)) return 'text-emerald-700 dark:text-emerald-300';
+  if (token.startsWith('$')) return 'text-sky-700 dark:text-sky-300';
+  if (/^\d/.test(token)) return 'text-amber-700 dark:text-amber-300';
+  const lowered = token.toLowerCase();
+  if ((LANGUAGE_KEYWORDS[language] ?? COMMON_CODE_KEYWORDS).has(lowered) || COMMON_CODE_KEYWORDS.has(lowered)) {
+    return 'text-purple-700 dark:text-purple-300';
+  }
+  return null;
+}
+
+function renderCodeString(src: string, language: string | undefined, keyPrefix: string): ReactNode {
+  if (!language) return src;
+  const normalizedLanguage = normalizeCodeLanguage(language);
+  const out: ReactNode[] = [];
+  let cursor = 0;
+  for (const match of src.matchAll(CODE_TOKEN_RE)) {
+    const token = match[0];
+    const index = match.index ?? 0;
+    if (index > cursor) out.push(src.slice(cursor, index));
+    const className = codeTokenClass(token, normalizedLanguage);
+    out.push(className
+      ? <span key={`${keyPrefix}-${index}`} className={className}>{token}</span>
+      : token);
+    cursor = index + token.length;
+  }
+  if (cursor < src.length) out.push(src.slice(cursor));
+  return out.length ? out : src;
 }
 
 interface Match {
@@ -376,16 +464,24 @@ export function renderMarkdown(body: string, opts?: RenderOpts): ReactNode {
     }
 
     // fenced code block
-    if (line.startsWith('```')) {
+    const fenceMatch = FENCE_RE.exec(line);
+    if (fenceMatch) {
       const buf: string[] = [];
       let j = i + 1;
-      while (j < lines.length && !lines[j].startsWith('```')) {
+      while (j < lines.length && !FENCE_RE.test(lines[j])) {
         buf.push(lines[j]);
         j++;
       }
+      const language = fenceMatch[1]?.toLowerCase();
       blocks.push(
-        <pre key={`bk-${blockKey++}`} className="my-2 overflow-x-auto rounded-md bg-muted p-2 text-xs font-mono">
-          <code>{buf.join('\n')}</code>
+        <pre
+          key={`bk-${blockKey++}`}
+          className="my-0 overflow-x-auto rounded-md bg-muted p-2 text-xs font-mono"
+          data-language={language}
+        >
+          <code className={codeLanguageClass(language)}>
+            {renderCodeString(buf.join('\n'), language, `code-${blockKey}`)}
+          </code>
         </pre>,
       );
       i = j + 1;

@@ -21,6 +21,9 @@ export interface SaveDraftInput {
 }
 
 const suppressedSentDraftScopes = new Set<string>();
+const draftMutationVersions = new Map<string, number>();
+const LOCAL_DRAFT_EVENT_IGNORE_MS = 1500;
+let ignoreDraftEventsUntil = 0;
 
 function draftScopeKey(scope: DraftScope): string {
   return `${scope.parentType}:${scope.parentID ?? ''}:${scope.parentMessageID ?? ''}`;
@@ -28,6 +31,59 @@ function draftScopeKey(scope: DraftScope): string {
 
 function isSuppressedSentDraft(draft: MessageDraft): boolean {
   return suppressedSentDraftScopes.has(draftScopeKey(draft));
+}
+
+function nextDraftMutationVersion(scope: DraftScope): { key: string; version: number } {
+  ignoreDraftEventsUntil = Date.now() + LOCAL_DRAFT_EVENT_IGNORE_MS;
+  const key = draftScopeKey(scope);
+  const version = (draftMutationVersions.get(key) ?? 0) + 1;
+  draftMutationVersions.set(key, version);
+  return { key, version };
+}
+
+function markLocalDraftDelete() {
+  ignoreDraftEventsUntil = Date.now() + LOCAL_DRAFT_EVENT_IGNORE_MS;
+}
+
+export function shouldRefetchDraftsForRemoteUpdate(): boolean {
+  return Date.now() >= ignoreDraftEventsUntil;
+}
+
+function isLatestDraftMutation(key: string, version: number): boolean {
+  return draftMutationVersions.get(key) === version;
+}
+
+function sameDraftScope(draft: MessageDraft, scope: DraftScope): boolean {
+  return (
+    draft.parentID === scope.parentID &&
+    draft.parentType === scope.parentType &&
+    (draft.parentMessageID ?? '') === (scope.parentMessageID ?? '')
+  );
+}
+
+function patchDraftListByScope(
+  drafts: MessageDraft[] | undefined,
+  scope: DraftScope,
+  draft: MessageDraft | null,
+): MessageDraft[] | undefined {
+  if (!drafts) return drafts;
+  const withoutScope = drafts.filter((item) => !sameDraftScope(item, scope));
+  if (!draft || isSuppressedSentDraft(draft)) return withoutScope;
+  return [draft, ...withoutScope];
+}
+
+function sortedAttachmentIDs(ids: string[] | undefined): string[] {
+  return [...(ids ?? [])].sort();
+}
+
+function sameAttachmentIDs(a: string[] | undefined, b: string[] | undefined): boolean {
+  const left = sortedAttachmentIDs(a);
+  const right = sortedAttachmentIDs(b);
+  return left.length === right.length && left.every((id, index) => id === right[index]);
+}
+
+function findDraftByScope(drafts: MessageDraft[] | undefined, scope: DraftScope): MessageDraft | undefined {
+  return drafts?.find((draft) => sameDraftScope(draft, scope));
 }
 
 export function suppressSentDraft(scope: DraftScope) {
@@ -71,19 +127,37 @@ export function useDraftForScope(scope: DraftScope) {
 export function useSaveDraft() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (input: SaveDraftInput) =>
-      apiFetch<MessageDraft | void>('/api/v1/drafts', {
+    mutationFn: (input: SaveDraftInput) => {
+      const existing = findDraftByScope(qc.getQueryData<MessageDraft[]>(queryKeys.drafts()), input);
+      const attachmentIDs = input.attachmentIDs ?? [];
+      if (input.body === '' && attachmentIDs.length === 0 && !existing) {
+        return Promise.resolve(undefined);
+      }
+      if (
+        existing &&
+        existing.body === input.body &&
+        sameAttachmentIDs(existing.attachmentIDs, attachmentIDs)
+      ) {
+        return Promise.resolve(existing);
+      }
+      return apiFetch<MessageDraft | void>('/api/v1/drafts', {
         method: 'PUT',
         body: JSON.stringify({
           parentID: input.parentID,
           parentType: input.parentType,
           parentMessageID: input.parentMessageID ?? '',
           body: input.body,
-          attachmentIDs: input.attachmentIDs ?? [],
+          attachmentIDs,
         }),
-      }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: queryKeys.drafts() });
+      });
+    },
+    onMutate: (input) => nextDraftMutationVersion(input),
+    onSuccess: (draft, input, ctx) => {
+      if (!ctx || !isLatestDraftMutation(ctx.key, ctx.version)) return;
+      qc.setQueryData<MessageDraft[]>(
+        queryKeys.drafts(),
+        (old) => patchDraftListByScope(old, input, draft ?? null),
+      );
     },
   });
 }
@@ -91,12 +165,16 @@ export function useSaveDraft() {
 export function useDeleteDraft() {
   const qc = useQueryClient();
   return useMutation({
+    onMutate: markLocalDraftDelete,
     mutationFn: (id: string) =>
       apiFetch<void>(`/api/v1/drafts/${id}`, {
         method: 'DELETE',
       }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: queryKeys.drafts() });
+    onSuccess: (_data, id) => {
+      qc.setQueryData<MessageDraft[]>(
+        queryKeys.drafts(),
+        (old) => old?.filter((draft) => draft.id !== id),
+      );
     },
   });
 }

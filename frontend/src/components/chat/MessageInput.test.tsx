@@ -136,6 +136,25 @@ describe('MessageInput', () => {
     });
   });
 
+  it('flushes whitespace-only drafts without treating them as empty', async () => {
+    const onDraftChange = vi.fn();
+    const { unmount } = render(
+      <MessageInput
+        onSend={vi.fn()}
+        initialBody={'  \n\n'}
+        onDraftChange={onDraftChange}
+      />,
+    );
+    await screen.findByLabelText('Message input');
+
+    unmount();
+
+    expect(onDraftChange).toHaveBeenCalledWith({
+      body: '  \n\n',
+      attachmentIDs: [],
+    });
+  });
+
   it('flushes the previous draft before a focusKey view switch resets the composer', async () => {
     const onDraftChange = vi.fn();
     const { rerender } = render(
@@ -167,6 +186,35 @@ describe('MessageInput', () => {
       body: 'channel one draft',
       attachmentIDs: [],
     });
+  });
+
+  it('does not run the view-switch draft flush when server draft props change under the same focusKey', async () => {
+    const onDraftChange = vi.fn();
+    const { rerender } = render(
+      <MessageInput
+        onSend={vi.fn()}
+        focusKey="ch-1"
+        initialBody=""
+        onDraftChange={onDraftChange}
+      />,
+    );
+    await screen.findByLabelText('Message input');
+
+    await act(async () => {
+      rerender(
+        <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+          <MessageInput
+            onSend={vi.fn()}
+            focusKey="ch-1"
+            initialBody="stale server draft"
+            onDraftChange={onDraftChange}
+          />
+        </QueryClientProvider>,
+      );
+      await flushMicrotasks();
+    });
+
+    expect(onDraftChange).not.toHaveBeenCalled();
   });
 
   it('uses custom placeholder', async () => {

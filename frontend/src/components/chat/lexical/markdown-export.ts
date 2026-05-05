@@ -19,5 +19,5 @@ const ESCAPED_UNDERSCORE = /\\_/g;
 // post-process. Must be called inside an editor.read / editorState.read
 // scope (same constraint as $convertToMarkdownString).
 export function $exportMarkdown(): string {
-  return $convertToMarkdownString(EX_TRANSFORMERS).trim().replace(ESCAPED_UNDERSCORE, '_');
+  return $convertToMarkdownString(EX_TRANSFORMERS).replace(ESCAPED_UNDERSCORE, '_');
 }

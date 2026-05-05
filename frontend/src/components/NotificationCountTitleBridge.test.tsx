@@ -11,6 +11,7 @@ const mockState = vi.hoisted(() => ({
   unreadChannelNotifications: new Set<string>(),
   unreadConversations: new Set<string>(),
   unreadThreadNotifications: new Set<string>(),
+  conversations: [] as { conversationID: string; displayName: string; type: 'dm' | 'group'; unread?: boolean }[],
   threads: [] as ThreadSummary[],
   channelNotifications: [] as string[],
   threadNotifications: [] as string[],
@@ -49,6 +50,10 @@ vi.mock('@/hooks/useUserState', () => ({
   }),
 }));
 
+vi.mock('@/hooks/useConversations', () => ({
+  useUserConversations: () => ({ data: mockState.conversations }),
+}));
+
 function TitleConsumer() {
   useDocumentTitle('Threads');
   return null;
@@ -67,6 +72,7 @@ describe('NotificationCountTitleBridge', () => {
     mockState.unreadChannelNotifications = new Set();
     mockState.unreadConversations = new Set();
     mockState.unreadThreadNotifications = new Set();
+    mockState.conversations = [];
     mockState.threads = [];
     mockState.channelNotifications = [];
     mockState.threadNotifications = [];
@@ -174,6 +180,38 @@ describe('NotificationCountTitleBridge', () => {
       </>,
     );
     await waitFor(() => expect(document.title).toBe('Threads · ex'));
+  });
+
+  it('counts unread conversations refetched from the server after reconnect', async () => {
+    mockState.conversations = [
+      { conversationID: 'conv-1', type: 'dm', displayName: 'Ada Lovelace', unread: true },
+      { conversationID: 'conv-2', type: 'group', displayName: 'Project Group', unread: false },
+    ];
+
+    render(
+      <>
+        <NotificationCountTitleBridge />
+        <TitleConsumer />
+      </>,
+    );
+
+    await waitFor(() => expect(document.title).toBe('(1) Threads · ex'));
+  });
+
+  it('does not double-count the same conversation from live and refetched unread state', async () => {
+    mockState.unreadConversations = new Set(['conv-1']);
+    mockState.conversations = [
+      { conversationID: 'conv-1', type: 'dm', displayName: 'Ada Lovelace', unread: true },
+    ];
+
+    render(
+      <>
+        <NotificationCountTitleBridge />
+        <TitleConsumer />
+      </>,
+    );
+
+    await waitFor(() => expect(document.title).toBe('(1) Threads · ex'));
   });
 
   it('counts thread notifications in addition to the unread DM parent', async () => {

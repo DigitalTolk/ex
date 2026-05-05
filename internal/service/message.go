@@ -836,15 +836,10 @@ func (s *MessageService) Delete(ctx context.Context, userID, parentID, parentTyp
 
 	s.releaseAttachments(ctx, msgID, originalAttachments)
 
-	// parentMessageID is the field clients use to invalidate the right
-	// thread query. Without it, deleting a reply leaves the thread
-	// sidebar and /threads page showing the message as if still present.
-	payload := struct {
-		ID              string `json:"id"`
-		ParentID        string `json:"parentID"`
-		ParentMessageID string `json:"parentMessageID,omitempty"`
-	}{ID: msgID, ParentID: parentID, ParentMessageID: msg.ParentMessageID}
-	s.publishEvent(ctx, parentID, parentType, events.EventMessageDeleted, payload)
+	// Publish the deleted tombstone so other clients can patch their
+	// visible cache without waiting for a refetch. parentMessageID is
+	// included by the model and lets clients refresh the right thread.
+	s.publishEvent(ctx, parentID, parentType, events.EventMessageDeleted, msg)
 
 	s.deleteFromIndex(ctx, msgID)
 
