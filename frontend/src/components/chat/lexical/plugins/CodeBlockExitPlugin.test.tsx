@@ -3,6 +3,7 @@ import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createRef, type ReactNode } from 'react';
 import { WysiwygEditor, type WysiwygEditorHandle } from '@/components/chat/WysiwygEditor';
+import { makeDataTransfer } from '@/test/dataTransfer';
 
 vi.mock('@/lib/api', () => ({ apiFetch: vi.fn().mockResolvedValue([]) }));
 vi.mock('@/hooks/useConversations', async () => {
@@ -90,7 +91,7 @@ describe('CodeBlockExitPlugin', () => {
     });
   });
 
-  it('turns soft-line fenced markdown into a code block after Shift+Enter', async () => {
+  it('turns an opening fence into a code block on Shift+Enter', async () => {
     const ref = createRef<WysiwygEditorHandle>();
     render(
       <Providers>
@@ -102,18 +103,15 @@ describe('CodeBlockExitPlugin', () => {
 
     act(() => ref.current!.insertText('```'));
     fireEvent.keyDown(editor, { key: 'Enter', shiftKey: true });
-    act(() => ref.current!.insertText('foo'));
-    fireEvent.keyDown(editor, { key: 'Enter', shiftKey: true });
-    act(() => ref.current!.insertText('```'));
-
     await waitFor(() => {
       const code = ref.current!.getElement()?.querySelector('code');
-      expect(code?.textContent).toBe('foo');
+      expect(code).not.toBeNull();
     });
-    expect(ref.current!.getMarkdown()).toContain('foo');
   });
 
-  it('turns repeated soft-line fenced markdown blocks into separate code blocks', async () => {
+  it.each(['ts', 'python', 'go', 'rust', 'bash', 'ini', 'hcl', 'c++', 'c#'])(
+    'keeps the %s language when an opening fence converts on Shift+Enter',
+    async (language) => {
     const ref = createRef<WysiwygEditorHandle>();
     render(
       <Providers>
@@ -123,29 +121,17 @@ describe('CodeBlockExitPlugin', () => {
     await waitFor(() => expect(ref.current).not.toBeNull());
     const editor = screen.getByLabelText('Message input');
 
-    act(() => ref.current!.insertText('```'));
+    act(() => ref.current!.insertText(`\`\`\`${language}`));
     fireEvent.keyDown(editor, { key: 'Enter', shiftKey: true });
-    act(() => ref.current!.insertText('foo'));
-    fireEvent.keyDown(editor, { key: 'Enter', shiftKey: true });
-    act(() => ref.current!.insertText('```'));
 
     await waitFor(() => {
-      expect(ref.current!.getElement()?.querySelectorAll('code')).toHaveLength(1);
+      expect(ref.current!.getElement()?.querySelector('code')).not.toBeNull();
     });
+    expect(ref.current!.getMarkdown()).toContain(`\`\`\`${language}`);
+    },
+  );
 
-    act(() => ref.current!.insertText('```'));
-    fireEvent.keyDown(editor, { key: 'Enter', shiftKey: true });
-    act(() => ref.current!.insertText('bar'));
-    fireEvent.keyDown(editor, { key: 'Enter', shiftKey: true });
-    act(() => ref.current!.insertText('```'));
-
-    await waitFor(() => {
-      const codes = Array.from(ref.current!.getElement()?.querySelectorAll('code') ?? []);
-      expect(codes.map((code) => code.textContent)).toEqual(['foo', 'bar']);
-    });
-  });
-
-  it('preserves internal soft lines but drops the separator before the closing fence', async () => {
+  it('turns a soft-line opening fence into a code block on Shift+Enter', async () => {
     const ref = createRef<WysiwygEditorHandle>();
     render(
       <Providers>
@@ -155,13 +141,52 @@ describe('CodeBlockExitPlugin', () => {
     await waitFor(() => expect(ref.current).not.toBeNull());
     const editor = screen.getByLabelText('Message input');
 
-    act(() => ref.current!.insertText('```'));
-    fireEvent.keyDown(editor, { key: 'Enter', shiftKey: true });
-    act(() => ref.current!.insertText('foo'));
-    fireEvent.keyDown(editor, { key: 'Enter', shiftKey: true });
-    act(() => ref.current!.insertText('bar'));
+    act(() => ref.current!.insertText('before'));
     fireEvent.keyDown(editor, { key: 'Enter', shiftKey: true });
     act(() => ref.current!.insertText('```'));
+    fireEvent.keyDown(editor, { key: 'Enter', shiftKey: true });
+
+    await waitFor(() => {
+      const root = ref.current!.getElement();
+      expect(root?.textContent).toContain('before');
+      expect(root?.querySelector('code')).not.toBeNull();
+    });
+  });
+
+  it('leaves non-fence Shift+Enter text alone', async () => {
+    const ref = createRef<WysiwygEditorHandle>();
+    render(
+      <Providers>
+        <WysiwygEditor ref={ref} />
+      </Providers>,
+    );
+    await waitFor(() => expect(ref.current).not.toBeNull());
+    const editor = screen.getByLabelText('Message input');
+
+    act(() => ref.current!.insertText('not a fence'));
+    fireEvent.keyDown(editor, { key: 'Enter', shiftKey: true });
+
+    await waitFor(() => {
+      const root = ref.current!.getElement();
+      expect(root?.querySelector('code')).toBeNull();
+      expect(root?.textContent).toContain('not a fence');
+    });
+  });
+
+  it('pastes fenced markdown with internal lines as a code block', async () => {
+    const ref = createRef<WysiwygEditorHandle>();
+    render(
+      <Providers>
+        <WysiwygEditor ref={ref} />
+      </Providers>,
+    );
+    await waitFor(() => expect(ref.current).not.toBeNull());
+    fireEvent.paste(screen.getByLabelText('Message input'), {
+      clipboardData: makeDataTransfer({
+        text: '```\nfoo\nbar\n```',
+        types: ['text/plain'],
+      }),
+    });
 
     await waitFor(() => {
       const code = ref.current!.getElement()?.querySelector('code');
@@ -170,6 +195,123 @@ describe('CodeBlockExitPlugin', () => {
     });
     expect(ref.current!.getMarkdown()).toContain('foo\nbar');
   });
+
+  it('pastes fenced markdown as a code block', async () => {
+    const ref = createRef<WysiwygEditorHandle>();
+    render(
+      <Providers>
+        <WysiwygEditor ref={ref} />
+      </Providers>,
+    );
+    await waitFor(() => expect(ref.current).not.toBeNull());
+
+    fireEvent.paste(screen.getByLabelText('Message input'), {
+      clipboardData: makeDataTransfer({
+        text: '```\nAdaasdas\n```',
+        types: ['text/plain'],
+      }),
+    });
+
+    await waitFor(() => {
+      const code = ref.current!.getElement()?.querySelector('code');
+      expect(code?.textContent).toBe('Adaasdas');
+    });
+    expect(ref.current!.getMarkdown()).toContain('Adaasdas');
+  });
+
+  it('pastes an empty fenced block as an empty code block', async () => {
+    const ref = createRef<WysiwygEditorHandle>();
+    render(
+      <Providers>
+        <WysiwygEditor ref={ref} />
+      </Providers>,
+    );
+    await waitFor(() => expect(ref.current).not.toBeNull());
+
+    fireEvent.paste(screen.getByLabelText('Message input'), {
+      clipboardData: makeDataTransfer({
+        text: '```\n```',
+        types: ['text/plain'],
+      }),
+    });
+
+    await waitFor(() => {
+      const code = ref.current!.getElement()?.querySelector('code');
+      expect(code).not.toBeNull();
+      expect(code?.textContent).toBe('');
+    });
+  });
+
+  it('does not treat plain pasted text as a fenced code block', async () => {
+    const ref = createRef<WysiwygEditorHandle>();
+    render(
+      <Providers>
+        <WysiwygEditor ref={ref} />
+      </Providers>,
+    );
+    await waitFor(() => expect(ref.current).not.toBeNull());
+
+    fireEvent.paste(screen.getByLabelText('Message input'), {
+      clipboardData: makeDataTransfer({
+        text: 'Adaasdas',
+        types: ['text/plain'],
+      }),
+    });
+
+    await waitFor(() => {
+      expect(ref.current!.getElement()?.querySelector('code')).toBeNull();
+    });
+  });
+
+  it('pastes a fenced code block into existing text without dropping the text', async () => {
+    const ref = createRef<WysiwygEditorHandle>();
+    render(
+      <Providers>
+        <WysiwygEditor ref={ref} />
+      </Providers>,
+    );
+    await waitFor(() => expect(ref.current).not.toBeNull());
+
+    act(() => ref.current!.insertText('before'));
+    fireEvent.paste(screen.getByLabelText('Message input'), {
+      clipboardData: makeDataTransfer({
+        text: '```js\nconst x = 1\n```',
+        types: ['text/plain'],
+      }),
+    });
+
+    await waitFor(() => {
+      const root = ref.current!.getElement();
+      expect(root?.textContent).toContain('before');
+      expect(root?.querySelector('code')?.textContent).toBe('const x = 1');
+    });
+    expect(ref.current!.getMarkdown()).toContain('```js');
+  });
+
+  it.each(['php', 'javascript', 'bash', 'ini', 'hcl', 'c++', 'c#'])(
+    'keeps %s language hints when pasting fenced markdown',
+    async (language) => {
+    const ref = createRef<WysiwygEditorHandle>();
+    render(
+      <Providers>
+        <WysiwygEditor ref={ref} />
+      </Providers>,
+    );
+    await waitFor(() => expect(ref.current).not.toBeNull());
+
+    fireEvent.paste(screen.getByLabelText('Message input'), {
+      clipboardData: makeDataTransfer({
+        text: `\`\`\`${language}\nvalue = 1;\n\`\`\``,
+        types: ['text/plain'],
+      }),
+    });
+
+    await waitFor(() => {
+      expect(ref.current!.getElement()?.querySelector('code')?.textContent).toBe('value = 1;');
+    });
+    expect(ref.current!.getMarkdown()).toContain(`\`\`\`${language}`);
+    },
+  );
 
   it('ArrowDown at the last line of a code block exits to a paragraph', async () => {
     // Slack/GitHub UX: ↓ at the bottom of a fenced block escapes to a

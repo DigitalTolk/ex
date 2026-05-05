@@ -48,6 +48,106 @@ describe('renderMarkdown', () => {
     expect(pre?.textContent).toContain('let x = 1;');
   });
 
+  it('preserves fenced code block language hints', () => {
+    const examples = [
+      ['php', 'php'],
+      ['javascript', 'javascript'],
+      ['js', 'javascript'],
+      ['typescript', 'typescript'],
+      ['ts', 'typescript'],
+      ['python', 'python'],
+      ['py', 'python'],
+      ['go', 'go'],
+      ['rust', 'rust'],
+      ['ruby', 'ruby'],
+      ['rb', 'ruby'],
+      ['bash', 'bash'],
+      ['sh', 'bash'],
+      ['ini', 'ini'],
+      ['hcl', 'hcl'],
+      ['java', 'java'],
+      ['c', 'c'],
+      ['c++', 'cpp'],
+      ['c#', 'csharp'],
+      ['f#', 'fsharp'],
+      ['objective-c', 'objective-c'],
+      ['swift', 'swift'],
+      ['kotlin', 'kotlin'],
+      ['sql', 'sql'],
+      ['html', 'html'],
+      ['css', 'css'],
+      ['json', 'json'],
+      ['yaml', 'yaml'],
+    ] as const;
+
+    for (const [hint, className] of examples) {
+      const { container, unmount } = render(<>{renderMarkdown(`\`\`\`${hint}\ncode\n\`\`\``)}</>);
+      const pre = container.querySelector('pre');
+      const code = container.querySelector('code');
+      expect(pre?.getAttribute('data-language')).toBe(hint);
+      expect(code).toHaveClass(`language-${className}`);
+      expect(code?.textContent).toBe('code');
+      unmount();
+    }
+  });
+
+  it('renders visible syntax tokens for language-hinted code blocks', () => {
+    const { container } = render(<>{renderMarkdown("```php\n// comment\nfunction demo() {\n  $value = 'ok';\n  return 123;\n}\n```")}</>);
+    const spans = Array.from(container.querySelectorAll('code span'));
+    expect(spans.some((span) => span.textContent === '// comment' && span.className.includes('muted-foreground'))).toBe(true);
+    expect(spans.some((span) => span.textContent === 'function' && span.className.includes('purple'))).toBe(true);
+    expect(spans.some((span) => span.textContent === '$value' && span.className.includes('sky'))).toBe(true);
+    expect(spans.some((span) => span.textContent === "'ok'" && span.className.includes('emerald'))).toBe(true);
+    expect(spans.some((span) => span.textContent === '123' && span.className.includes('amber'))).toBe(true);
+  });
+
+  it.each([
+    ['python', 'def'],
+    ['javascript', 'const'],
+    ['typescript', 'interface'],
+    ['go', 'func'],
+    ['rust', 'fn'],
+    ['ruby', 'end'],
+    ['bash', 'then'],
+    ['hcl', 'resource'],
+    ['sql', 'select'],
+    ['swift', 'let'],
+    ['kotlin', 'fun'],
+    ['java', 'public'],
+    ['c', 'int'],
+    ['c++', 'namespace'],
+    ['c#', 'using'],
+    ['ini', 'true'],
+    ['yaml', 'false'],
+    ['json', 'null'],
+  ])('highlights %s language keywords', (language, keyword) => {
+    const { container } = render(<>{renderMarkdown(`\`\`\`${language}\n${keyword}\n\`\`\``)}</>);
+    const span = container.querySelector('code span');
+    expect(span?.textContent).toBe(keyword);
+    expect(span?.className).toContain('purple');
+  });
+
+  it('leaves unrecognized code tokens unwrapped', () => {
+    const { container } = render(<>{renderMarkdown('```php\nplainIdentifier\n```')}</>);
+    expect(container.querySelectorAll('code span')).toHaveLength(0);
+    expect(container.querySelector('code')?.textContent).toBe('plainIdentifier');
+  });
+
+  it('does not add synthetic vertical margin to fenced code blocks', () => {
+    const { container } = render(<>{renderMarkdown('```\none\n```')}</>);
+    expect(container.querySelector('pre')).toHaveClass('my-0');
+  });
+
+  it.each([
+    ['zero', '```\none\n```\n```php\ntwo\n```', 0],
+    ['one', '```\none\n```\n\n```php\ntwo\n```', 1],
+    ['two', '```\none\n```\n\n\n```php\ntwo\n```', 2],
+  ])('renders exactly %s blank line(s) between adjacent fenced code blocks', (_label, markdown, blanks) => {
+    const { container } = render(<>{renderMarkdown(markdown)}</>);
+    expect(container.querySelectorAll('pre')).toHaveLength(2);
+    expect(container.querySelectorAll('p')).toHaveLength(blanks);
+  });
+
   it('renders links and bare URLs', () => {
     const { container } = render(
       <>{renderMarkdown('see [docs](https://example.com) and https://example.org')}</>,
@@ -167,5 +267,11 @@ describe('renderMarkdown', () => {
     const { container } = render(<>{renderMarkdown('hi :hand::skin-tone-3:')}</>);
     const emoji = container.querySelector('span[title=":hand::skin-tone-3:"]');
     expect(emoji?.textContent).toBe('🖐🏽');
+  });
+
+  it('leaves unknown emoji and skin-tone shortcodes literal', () => {
+    const { container } = render(<>{renderMarkdown(':not_real: :not_real::skin-tone-3:')}</>);
+    expect(container.textContent).toContain(':not_real:');
+    expect(container.textContent).toContain(':not_real::skin-tone-3:');
   });
 });
