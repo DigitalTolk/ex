@@ -31,6 +31,7 @@ import {
   parseTyping,
 } from '@/lib/ws-schemas';
 import { apiFetch } from '@/lib/api';
+import { shouldRefetchDraftsForRemoteUpdate } from '@/hooks/useDrafts';
 
 export default function ChatPage() {
   const {
@@ -247,6 +248,7 @@ export default function ChatPage() {
       dispatchNotification(n);
     },
     onDraftUpdated: () => {
+      if (!shouldRefetchDraftsForRemoteUpdate()) return;
       queryClient.invalidateQueries({ queryKey: queryKeys.drafts() });
     },
     onServerVersion: (data: unknown) => {

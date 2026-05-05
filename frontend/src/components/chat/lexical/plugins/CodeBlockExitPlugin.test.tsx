@@ -108,9 +108,67 @@ describe('CodeBlockExitPlugin', () => {
 
     await waitFor(() => {
       const code = ref.current!.getElement()?.querySelector('code');
-      expect(code?.textContent).toContain('foo');
+      expect(code?.textContent).toBe('foo');
     });
     expect(ref.current!.getMarkdown()).toContain('foo');
+  });
+
+  it('turns repeated soft-line fenced markdown blocks into separate code blocks', async () => {
+    const ref = createRef<WysiwygEditorHandle>();
+    render(
+      <Providers>
+        <WysiwygEditor ref={ref} />
+      </Providers>,
+    );
+    await waitFor(() => expect(ref.current).not.toBeNull());
+    const editor = screen.getByLabelText('Message input');
+
+    act(() => ref.current!.insertText('```'));
+    fireEvent.keyDown(editor, { key: 'Enter', shiftKey: true });
+    act(() => ref.current!.insertText('foo'));
+    fireEvent.keyDown(editor, { key: 'Enter', shiftKey: true });
+    act(() => ref.current!.insertText('```'));
+
+    await waitFor(() => {
+      expect(ref.current!.getElement()?.querySelectorAll('code')).toHaveLength(1);
+    });
+
+    act(() => ref.current!.insertText('```'));
+    fireEvent.keyDown(editor, { key: 'Enter', shiftKey: true });
+    act(() => ref.current!.insertText('bar'));
+    fireEvent.keyDown(editor, { key: 'Enter', shiftKey: true });
+    act(() => ref.current!.insertText('```'));
+
+    await waitFor(() => {
+      const codes = Array.from(ref.current!.getElement()?.querySelectorAll('code') ?? []);
+      expect(codes.map((code) => code.textContent)).toEqual(['foo', 'bar']);
+    });
+  });
+
+  it('preserves internal soft lines but drops the separator before the closing fence', async () => {
+    const ref = createRef<WysiwygEditorHandle>();
+    render(
+      <Providers>
+        <WysiwygEditor ref={ref} />
+      </Providers>,
+    );
+    await waitFor(() => expect(ref.current).not.toBeNull());
+    const editor = screen.getByLabelText('Message input');
+
+    act(() => ref.current!.insertText('```'));
+    fireEvent.keyDown(editor, { key: 'Enter', shiftKey: true });
+    act(() => ref.current!.insertText('foo'));
+    fireEvent.keyDown(editor, { key: 'Enter', shiftKey: true });
+    act(() => ref.current!.insertText('bar'));
+    fireEvent.keyDown(editor, { key: 'Enter', shiftKey: true });
+    act(() => ref.current!.insertText('```'));
+
+    await waitFor(() => {
+      const code = ref.current!.getElement()?.querySelector('code');
+      expect(code?.querySelectorAll('br')).toHaveLength(1);
+      expect(code?.textContent).toBe('foobar');
+    });
+    expect(ref.current!.getMarkdown()).toContain('foo\nbar');
   });
 
   it('ArrowDown at the last line of a code block exits to a paragraph', async () => {

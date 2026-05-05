@@ -162,7 +162,7 @@ function convertSoftLineFencedCodeBlock(
   while (cursor && cursor !== closingText) {
     const next: LexicalNode | null = cursor.getNextSibling();
     if ($isLineBreakNode(cursor)) {
-      codeNode.append($createLineBreakNode());
+      if (next !== closingText) codeNode.append($createLineBreakNode());
     } else {
       const text = cursor.getTextContent();
       if (text) codeNode.append($createTextNode(text));
@@ -170,7 +170,9 @@ function convertSoftLineFencedCodeBlock(
     cursor = next;
   }
   paragraph.replace(codeNode);
-  codeNode.selectEnd();
+  const nextParagraph = $createParagraphNode();
+  codeNode.insertAfter(nextParagraph);
+  nextParagraph.select(0, 0);
   return true;
 }
 
