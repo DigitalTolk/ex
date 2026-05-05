@@ -9,6 +9,11 @@ describe('renderMarkdown — mentions', () => {
     expect(pill).toHaveTextContent('@Alice');
     expect(pill.getAttribute('data-mention-user-id')).toBe('u-1');
     expect(pill.getAttribute('data-mention-self')).toBe('false');
+    expect(pill.className).toContain('inline');
+    expect(pill.className).toContain('align-baseline');
+    expect(pill.className).toContain('leading-[inherit]');
+    expect(pill.className).not.toContain('inline-block');
+    expect(pill.className).not.toContain('inline-flex');
   });
 
   it('marks the pill as self when currentUserId matches', () => {
@@ -73,5 +78,33 @@ describe('renderMarkdown — mentions', () => {
     expect(pill).toHaveTextContent('~general');
     expect(pill.getAttribute('href')).toBe('/channel/general');
     expect(pill.getAttribute('data-channel-id')).toBe('c-1');
+    expect(pill.className).toContain('inline');
+    expect(pill.className).toContain('align-baseline');
+    expect(pill.className).toContain('leading-[inherit]');
+    expect(pill.className).toContain('no-underline');
+    expect(pill.className).toContain('hover:no-underline');
+    expect(pill.className).not.toContain('inline-block');
+    expect(pill.className).not.toContain('inline-flex');
+  });
+
+  it('renders user and channel pills with the same visual treatment', () => {
+    render(<>{renderMarkdown('@[u-1|Alice] ~[c-1|general]')}</>);
+    const user = screen.getByTestId('mention-pill');
+    const channel = screen.getByTestId('channel-mention-pill');
+    for (const token of [
+      'inline',
+      'align-baseline',
+      'rounded',
+      'px-1',
+      'font-medium',
+      'leading-[inherit]',
+      'bg-primary/10',
+      'text-primary',
+      'hover:bg-primary/20',
+      'hover:text-primary',
+    ]) {
+      expect(user.className).toContain(token);
+      expect(channel.className).toContain(token);
+    }
   });
 });

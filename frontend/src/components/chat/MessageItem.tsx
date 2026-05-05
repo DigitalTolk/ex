@@ -400,6 +400,8 @@ export function MessageItem({
                     userId={userId}
                     displayName={displayName}
                     currentUserId={currentUserId}
+                    showInlineStatus={false}
+                    triggerClassName="inline cursor-pointer align-baseline"
                   >
                     {pill}
                   </UserHoverCard>

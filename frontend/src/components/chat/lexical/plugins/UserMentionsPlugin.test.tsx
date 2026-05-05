@@ -212,6 +212,55 @@ describe('UserMentionsPlugin', () => {
     await waitFor(() => {
       expect(ref.current?.getElement()?.querySelector('span.mention[data-user-id="u-1"]')).not.toBeNull();
     });
-    expect(ref.current?.getMarkdown()).toContain('@[u-1|Alice]');
+    expect(ref.current?.getMarkdown()).toBe('@[u-1|Alice] ');
+  });
+
+  it('inserts the highlighted mention pill on Enter', async () => {
+    const ref = createRef<WysiwygEditorHandle>();
+    render(<Providers><WysiwygEditor ref={ref} /></Providers>);
+    await waitFor(() => expect(ref.current).not.toBeNull());
+    act(() => {
+      ref.current!.insertText('@al');
+    });
+    await waitFor(() => {
+      expect(screen.getByRole('option', { selected: true })).toHaveTextContent('Alice');
+    });
+
+    await act(async () => {
+      fireEvent.keyDown(screen.getByLabelText('Message input'), { key: 'Enter' });
+    });
+
+    await waitFor(() => {
+      expect(ref.current?.getElement()?.querySelector('span.mention[data-user-id="u-1"]')).not.toBeNull();
+    });
+    expect(ref.current?.getMarkdown()).toBe('@[u-1|Alice] ');
+  });
+
+  it('moves to the start with Cmd+ArrowLeft when a mention is the first node', async () => {
+    const ref = createRef<WysiwygEditorHandle>();
+    render(<Providers><WysiwygEditor ref={ref} /></Providers>);
+    await waitFor(() => expect(ref.current).not.toBeNull());
+    act(() => {
+      ref.current!.insertText('@al');
+    });
+    await waitFor(() => {
+      expect(screen.getByRole('option', { selected: true })).toHaveTextContent('Alice');
+    });
+    await act(async () => {
+      fireEvent.keyDown(screen.getByLabelText('Message input'), { key: 'Enter' });
+    });
+    act(() => {
+      ref.current!.insertText(' hello');
+      ref.current!.focus();
+    });
+
+    await act(async () => {
+      fireEvent.keyDown(screen.getByLabelText('Message input'), { key: 'ArrowLeft', code: 'ArrowLeft', keyCode: 37, metaKey: true });
+    });
+    await act(async () => {
+      fireEvent.keyDown(screen.getByLabelText('Message input'), { key: 'S', code: 'KeyS', keyCode: 83 });
+    });
+
+    expect(ref.current?.getMarkdown()).toBe('S@[u-1|Alice]  hello');
   });
 });

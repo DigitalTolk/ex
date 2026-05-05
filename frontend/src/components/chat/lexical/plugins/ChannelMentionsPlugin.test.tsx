@@ -62,6 +62,55 @@ describe('ChannelMentionsPlugin', () => {
     await waitFor(() => {
       expect(ref.current?.getElement()?.querySelector('span.channel-mention[data-channel-id="c-1"]')).not.toBeNull();
     });
-    expect(ref.current?.getMarkdown()).toContain('~[c-1|general]');
+    expect(ref.current?.getMarkdown()).toBe('~[c-1|general] ');
+  });
+
+  it('inserts the highlighted channel pill on Enter', async () => {
+    const ref = createRef<WysiwygEditorHandle>();
+    render(<Providers><WysiwygEditor ref={ref} /></Providers>);
+    await waitFor(() => expect(ref.current).not.toBeNull());
+    act(() => {
+      ref.current!.insertText('~gen');
+    });
+    await waitFor(() => {
+      expect(screen.getByRole('option', { selected: true })).toHaveTextContent('general');
+    });
+
+    await act(async () => {
+      fireEvent.keyDown(screen.getByLabelText('Message input'), { key: 'Enter' });
+    });
+
+    await waitFor(() => {
+      expect(ref.current?.getElement()?.querySelector('span.channel-mention[data-channel-id="c-1"]')).not.toBeNull();
+    });
+    expect(ref.current?.getMarkdown()).toBe('~[c-1|general] ');
+  });
+
+  it('moves to the start with Cmd+ArrowLeft when a channel mention is the first node', async () => {
+    const ref = createRef<WysiwygEditorHandle>();
+    render(<Providers><WysiwygEditor ref={ref} /></Providers>);
+    await waitFor(() => expect(ref.current).not.toBeNull());
+    act(() => {
+      ref.current!.insertText('~gen');
+    });
+    await waitFor(() => {
+      expect(screen.getByRole('option', { selected: true })).toHaveTextContent('general');
+    });
+    await act(async () => {
+      fireEvent.keyDown(screen.getByLabelText('Message input'), { key: 'Enter' });
+    });
+    act(() => {
+      ref.current!.insertText(' hello');
+      ref.current!.focus();
+    });
+
+    await act(async () => {
+      fireEvent.keyDown(screen.getByLabelText('Message input'), { key: 'ArrowLeft', code: 'ArrowLeft', keyCode: 37, metaKey: true });
+    });
+    await act(async () => {
+      fireEvent.keyDown(screen.getByLabelText('Message input'), { key: 'S', code: 'KeyS', keyCode: 83 });
+    });
+
+    expect(ref.current?.getMarkdown()).toBe('S~[c-1|general]  hello');
   });
 });

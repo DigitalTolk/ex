@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, fireEvent, screen, waitFor } from '@testing-library/react';
+import { act, render, fireEvent, screen, waitFor } from '@testing-library/react';
 import { createRef, type ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { WysiwygEditor, type WysiwygEditorHandle } from './WysiwygEditor';
@@ -67,6 +67,80 @@ describe('WysiwygEditor', () => {
     await waitFor(() => expect(ref.current).not.toBeNull());
     fireEvent.keyDown(getEditor(), { key: 'Enter', shiftKey: true });
     expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it('Cmd+ArrowLeft moves before regular text so the next typed key inserts at the start', async () => {
+    const ref = createRef<WysiwygEditorHandle>();
+    renderEditor({ ref, initialBody: 'hello' });
+    await waitFor(() => expect(ref.current).not.toBeNull());
+    act(() => {
+      ref.current!.focusEnd();
+    });
+
+    await act(async () => {
+      fireEvent.keyDown(getEditor(), { key: 'ArrowLeft', code: 'ArrowLeft', keyCode: 37, metaKey: true });
+    });
+    await act(async () => {
+      fireEvent.keyDown(getEditor(), { key: 'S', code: 'KeyS', keyCode: 83 });
+    });
+
+    expect(ref.current!.getMarkdown()).toBe('Shello');
+  });
+
+  it('Cmd+ArrowLeft handles an empty editor before the next typed key', async () => {
+    const ref = createRef<WysiwygEditorHandle>();
+    renderEditor({ ref });
+    await waitFor(() => expect(ref.current).not.toBeNull());
+
+    await act(async () => {
+      fireEvent.keyDown(getEditor(), { key: 'ArrowLeft', code: 'ArrowLeft', keyCode: 37, metaKey: true });
+    });
+    await act(async () => {
+      fireEvent.keyDown(getEditor(), { key: 'S', code: 'KeyS', keyCode: 83 });
+    });
+
+    expect(ref.current!.getMarkdown()).toBe('S');
+  });
+
+  it('Cmd+ArrowLeft start insertion is cancelled by mouse interaction', async () => {
+    const ref = createRef<WysiwygEditorHandle>();
+    renderEditor({ ref, initialBody: 'hello' });
+    await waitFor(() => expect(ref.current).not.toBeNull());
+
+    await act(async () => {
+      fireEvent.keyDown(getEditor(), { key: 'ArrowLeft', code: 'ArrowLeft', keyCode: 37, metaKey: true });
+      fireEvent.mouseDown(getEditor());
+      fireEvent.keyDown(getEditor(), { key: 'S', code: 'KeyS', keyCode: 83 });
+    });
+
+    expect(ref.current!.getMarkdown()).toBe('hello');
+  });
+
+  it('Cmd+ArrowLeft start insertion is cancelled by non-text navigation', async () => {
+    const ref = createRef<WysiwygEditorHandle>();
+    renderEditor({ ref, initialBody: 'hello' });
+    await waitFor(() => expect(ref.current).not.toBeNull());
+
+    await act(async () => {
+      fireEvent.keyDown(getEditor(), { key: 'ArrowLeft', code: 'ArrowLeft', keyCode: 37, metaKey: true });
+      fireEvent.keyDown(getEditor(), { key: 'ArrowRight', code: 'ArrowRight', keyCode: 39 });
+      fireEvent.keyDown(getEditor(), { key: 'S', code: 'KeyS', keyCode: 83 });
+    });
+
+    expect(ref.current!.getMarkdown()).toBe('hello');
+  });
+
+  it('ignores modified Cmd+ArrowLeft shortcuts owned by the browser', async () => {
+    const ref = createRef<WysiwygEditorHandle>();
+    renderEditor({ ref, initialBody: 'hello' });
+    await waitFor(() => expect(ref.current).not.toBeNull());
+
+    await act(async () => {
+      fireEvent.keyDown(getEditor(), { key: 'ArrowLeft', code: 'ArrowLeft', keyCode: 37, metaKey: true, altKey: true });
+      fireEvent.keyDown(getEditor(), { key: 'S', code: 'KeyS', keyCode: 83 });
+    });
+
+    expect(ref.current!.getMarkdown()).toBe('hello');
   });
 
   it('Escape calls onCancel when provided', async () => {
@@ -421,12 +495,36 @@ describe('WysiwygEditor', () => {
     expect(ref.current!.getMarkdown()).toContain('@[u-1|Alice]');
   });
 
+  it('round-trips a user mention at the start of markdown', async () => {
+    const ref = createRef<WysiwygEditorHandle>();
+    renderEditor({ ref, initialBody: '@[u-1|Alice] please check' });
+    await waitFor(() => expect(ref.current).not.toBeNull());
+    const mention = ref.current!.getElement()?.querySelector('span.mention[data-user-id="u-1"]');
+    expect(mention).not.toBeNull();
+    expect(mention?.className).toContain('inline');
+    expect(mention?.className).toContain('align-baseline');
+    expect(mention?.className).toContain('leading-[inherit]');
+    expect(ref.current!.getMarkdown()).toBe('@[u-1|Alice] please check');
+  });
+
   it('round-trips a channel mention through markdown', async () => {
     const ref = createRef<WysiwygEditorHandle>();
     renderEditor({ ref, initialBody: 'see ~[c-1|general]' });
     await waitFor(() => expect(ref.current).not.toBeNull());
     expect(ref.current!.getElement()?.querySelector('span.channel-mention[data-channel-id="c-1"]')).not.toBeNull();
     expect(ref.current!.getMarkdown()).toContain('~[c-1|general]');
+  });
+
+  it('round-trips a channel mention at the start of markdown', async () => {
+    const ref = createRef<WysiwygEditorHandle>();
+    renderEditor({ ref, initialBody: '~[c-1|general] has context' });
+    await waitFor(() => expect(ref.current).not.toBeNull());
+    const mention = ref.current!.getElement()?.querySelector('span.channel-mention[data-channel-id="c-1"]');
+    expect(mention).not.toBeNull();
+    expect(mention?.className).toContain('inline');
+    expect(mention?.className).toContain('align-baseline');
+    expect(mention?.className).toContain('leading-[inherit]');
+    expect(ref.current!.getMarkdown()).toBe('~[c-1|general] has context');
   });
 
   it('preserves underscores in emoji shortcodes — `:heart_eyes:` does NOT export as `:heart\\_eyes:`', async () => {

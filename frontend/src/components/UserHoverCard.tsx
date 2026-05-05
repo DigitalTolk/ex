@@ -23,6 +23,7 @@ interface UserHoverCardProps {
   online?: boolean;
   currentUserId?: string;
   showInlineStatus?: boolean;
+  triggerClassName?: string;
   children: ReactNode;
 }
 
@@ -34,6 +35,7 @@ export function UserHoverCard({
   online,
   currentUserId,
   showInlineStatus = true,
+  triggerClassName = 'inline-flex cursor-pointer items-center gap-1 align-middle',
   children,
 }: UserHoverCardProps) {
   const [open, setOpen] = useState(false);
@@ -81,7 +83,7 @@ export function UserHoverCard({
     <>
       <span
         ref={triggerRef}
-        className="inline-flex cursor-pointer items-center gap-1 align-middle"
+        className={triggerClassName}
         onClick={(e) => {
           e.preventDefault();
           e.stopPropagation();
