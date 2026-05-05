@@ -212,7 +212,8 @@ export function EmojiPicker({ onSelect, onClose, trigger, ariaLabel = 'Emoji pic
         preferredSide="bottom"
         preferredAlign="end"
         ariaLabel={ariaLabel}
-        className="flex h-[460px] w-[336px] max-w-[calc(100vw-16px)] flex-col rounded-md border bg-popover p-2 shadow-md"
+        mobileSheet
+        className="flex h-[460px] w-[336px] max-w-[calc(100vw-16px)] flex-col rounded-md border bg-popover p-2 shadow-md max-md:h-[min(78vh,calc(100dvh-72px))] max-md:w-screen max-md:max-w-none max-md:rounded-b-none max-md:rounded-t-xl"
       >
         <Input
           ref={inputRef}

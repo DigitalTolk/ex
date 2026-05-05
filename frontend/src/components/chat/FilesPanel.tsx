@@ -1,13 +1,13 @@
 import { createElement, useMemo } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQueries, useQuery } from '@tanstack/react-query';
 import { Download } from 'lucide-react';
 import { apiFetch } from '@/lib/api';
 import { queryKeys, parentPath } from '@/lib/query-keys';
-import { useAttachmentsBatch } from '@/hooks/useAttachments';
 import { useAttachmentLightbox } from '@/hooks/useAttachmentLightbox';
 import { iconForAttachment, isImageContentType } from '@/lib/file-helpers';
 import { formatBytes, formatRelative } from '@/lib/format';
 import { SidePanel } from './SidePanel';
+import type { Attachment } from '@/types';
 import type { UserMapEntry } from './MessageList';
 
 interface FileEntry {
@@ -20,7 +20,20 @@ interface FileEntry {
 // The same attachment can appear in multiple messages, so the React key
 // and the index map must be keyed on (attachmentID, messageID), not the
 // attachment alone.
-const rowKey = (e: FileEntry) => e.attachmentID + ':' + e.messageID;
+const rowKey = (e: FileEntry) => `${e.attachmentID}:${e.messageID}`;
+
+function attachmentURLForFile(
+  entry: FileEntry,
+  parentID: string | undefined,
+  parentType: 'channel' | 'conversation' | undefined,
+) {
+  const params = new URLSearchParams();
+  if (parentID) params.set('parentID', parentID);
+  if (parentType) params.set('parentType', parentType);
+  if (entry.messageID) params.set('messageID', entry.messageID);
+  const qs = params.toString();
+  return `/api/v1/attachments/${entry.attachmentID}${qs ? `?${qs}` : ''}`;
+}
 
 interface FilesPanelProps {
   channelId?: string;
@@ -51,19 +64,25 @@ export function FilesPanel({
     staleTime: 5 * 60_000,
   });
 
-  const ids = useMemo(() => (entries ?? []).map((e) => e.attachmentID), [entries]);
-  const firstMessageIDByAttachment = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const e of entries ?? []) {
-      if (!map.has(e.attachmentID)) map.set(e.attachmentID, e.messageID);
+  const parentID = channelId ?? conversationId;
+  const parentType = channelId ? 'channel' : conversationId ? 'conversation' : undefined;
+  const attachmentQueries = useQueries({
+    queries: (entries ?? []).map((entry) => ({
+      queryKey: queryKeys.attachment(
+        `${entry.attachmentID}:${parentType ?? ''}:${parentID ?? ''}:${entry.messageID}`,
+      ),
+      queryFn: () => apiFetch<Attachment>(attachmentURLForFile(entry, parentID, parentType)),
+      enabled: !!parentID && !!parentType && !!entry.attachmentID && !!entry.messageID,
+      staleTime: 5 * 60 * 1000,
+    })),
+  });
+  const attMap = useMemo(() => {
+    const map = new Map<string, Attachment>();
+    for (const query of attachmentQueries) {
+      if (query.data) map.set(query.data.id, query.data);
     }
     return map;
-  }, [entries]);
-  const { map: attMap } = useAttachmentsBatch(ids, {
-    parentID: channelId ?? conversationId,
-    parentType: channelId ? 'channel' : conversationId ? 'conversation' : undefined,
-    messageID: ids.length === 1 ? firstMessageIDByAttachment.get(ids[0]) : undefined,
-  });
+  }, [attachmentQueries]);
 
   // Author + timestamp differ per row (same channel, many uploaders),
   // so each slide carries its own header metadata.

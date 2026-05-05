@@ -239,7 +239,7 @@ describe('Sidebar - user menu actions', () => {
     ['Set status', 'mock-user-status-close'],
     ['Invite people', 'mock-invite-close'],
     ['Custom emojis', 'mock-emoji-manager-close'],
-    ['About', 'mock-about-close'],
+    ['About Server', 'mock-about-close'],
   ])('clears user-menu focus when %s closes', async (label, closeTestId) => {
     const user = userEvent.setup();
     renderSidebar();

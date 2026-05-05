@@ -15,7 +15,10 @@ interface SidePanelProps {
 // stays focused on its own content.
 export function SidePanel({ title, ariaLabel, closeLabel, onClose, children }: SidePanelProps) {
   return (
-    <aside className="flex w-[28rem] flex-col border-l" aria-label={ariaLabel}>
+    <aside
+      className="flex w-[28rem] flex-col border-l bg-background max-md:fixed max-md:inset-x-0 max-md:bottom-0 max-md:top-11 max-md:z-40 max-md:w-auto max-md:animate-in max-md:slide-in-from-right-4"
+      aria-label={ariaLabel}
+    >
       <div className="flex items-center justify-between border-b px-4 py-3">
         <h2 className="text-sm font-semibold">{title}</h2>
         <Button

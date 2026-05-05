@@ -1,6 +1,7 @@
 import { useEffect, useRef, type ReactNode, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import { usePopoverPosition } from '@/hooks/usePopoverPosition';
+import { useIsMobile } from '@/hooks/useIsMobile';
 
 interface PopoverPortalProps {
   open: boolean;
@@ -16,6 +17,7 @@ interface PopoverPortalProps {
   className?: string;
   role?: string;
   ariaLabel?: string;
+  mobileSheet?: boolean;
   children: ReactNode;
 }
 
@@ -37,9 +39,12 @@ export function PopoverPortal({
   className = '',
   role = 'dialog',
   ariaLabel,
+  mobileSheet = false,
   children,
 }: PopoverPortalProps) {
   const contentRef = useRef<HTMLDivElement>(null);
+  const isMobile = useIsMobile();
+  const renderSheet = mobileSheet && isMobile;
   const pos = usePopoverPosition(open, triggerRef, {
     estimatedHeight,
     estimatedWidth,
@@ -70,32 +75,57 @@ export function PopoverPortal({
 
   if (!open || typeof document === 'undefined') return null;
 
+  const measured = renderSheet ? true : pos.measured;
   return createPortal(
-    <div
-      ref={contentRef}
-      role={role}
-      aria-label={ariaLabel}
-      data-testid="popover-portal"
-      data-popover-side={pos.side}
-      data-popover-align={pos.align}
-      data-popover-measured={pos.measured ? 'true' : 'false'}
-      // Hide until measured — seeded (0,0) would otherwise flash in the
-      // top-left corner before the position effect commits.
-      style={{
-        position: 'fixed',
-        top: pos.top,
-        left: pos.left,
-        zIndex: 1000,
-        maxWidth: 'calc(100vw - 16px)',
-        maxHeight: 'calc(100vh - 16px)',
-        overflowY: 'auto',
-        opacity: pos.measured ? 1 : 0,
-        pointerEvents: pos.measured ? 'auto' : 'none',
-      }}
-      className={className}
-    >
-      {children}
-    </div>,
+    <>
+      {renderSheet && (
+        <div
+          className="fixed inset-0 z-[999] bg-black/35"
+          aria-hidden="true"
+          onMouseDown={onDismiss}
+        />
+      )}
+      <div
+        ref={contentRef}
+        role={role}
+        aria-label={ariaLabel}
+        data-testid="popover-portal"
+        data-popover-side={renderSheet ? 'bottom' : pos.side}
+        data-popover-align={renderSheet ? 'start' : pos.align}
+        data-popover-measured={measured ? 'true' : 'false'}
+        data-mobile-sheet={renderSheet ? 'true' : 'false'}
+        // Hide until measured — seeded (0,0) would otherwise flash in the
+        // top-left corner before the position effect commits.
+        style={renderSheet
+          ? {
+              position: 'fixed',
+              left: 0,
+              right: 0,
+              bottom: 0,
+              zIndex: 1000,
+              width: '100vw',
+              maxWidth: '100vw',
+              maxHeight: 'min(78vh, calc(100dvh - 72px))',
+              overflowY: 'auto',
+              opacity: measured ? 1 : 0,
+              pointerEvents: measured ? 'auto' : 'none',
+            }
+          : {
+              position: 'fixed',
+              top: pos.top,
+              left: pos.left,
+              zIndex: 1000,
+              maxWidth: 'calc(100vw - 16px)',
+              maxHeight: 'calc(100vh - 16px)',
+              overflowY: 'auto',
+              opacity: measured ? 1 : 0,
+              pointerEvents: measured ? 'auto' : 'none',
+            }}
+        className={className}
+      >
+        {children}
+      </div>
+    </>,
     document.body,
   );
 }

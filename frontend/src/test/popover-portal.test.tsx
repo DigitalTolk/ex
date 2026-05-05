@@ -9,6 +9,7 @@ function Harness({
   triggerRect,
   preferredAlign,
   preferredSide,
+  mobileSheet,
   estimatedHeight = 100,
   estimatedWidth = 100,
 }: {
@@ -17,6 +18,7 @@ function Harness({
   triggerRect: { top: number; bottom: number; left: number; right: number };
   preferredAlign?: 'start' | 'end';
   preferredSide?: 'top' | 'bottom';
+  mobileSheet?: boolean;
   estimatedHeight?: number;
   estimatedWidth?: number;
 }) {
@@ -51,6 +53,7 @@ function Harness({
         estimatedWidth={estimatedWidth}
         preferredAlign={preferredAlign}
         preferredSide={preferredSide}
+        mobileSheet={mobileSheet}
       >
         <div>popover content</div>
       </PopoverPortal>
@@ -213,5 +216,60 @@ describe('PopoverPortal', () => {
       fireEvent.mouseDown(portal);
     });
     expect(onDismiss).not.toHaveBeenCalled();
+  });
+
+  it('renders mobile sheet presentation when requested on a phone viewport', async () => {
+    const originalMatchMedia = window.matchMedia;
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      value: vi.fn().mockImplementation((query: string) => ({
+        matches: query.includes('767px'),
+        media: query,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      })),
+    });
+    render(
+      <Harness
+        open
+        mobileSheet
+        triggerRect={{ top: 500, bottom: 540, left: 100, right: 200 }}
+      />,
+    );
+    const portal = screen.getByTestId('popover-portal');
+    await act(async () => {
+      await new Promise((resolve) => requestAnimationFrame(() => resolve(undefined)));
+    });
+    expect(portal).toHaveAttribute('data-mobile-sheet', 'true');
+    expect(portal.style.bottom).toBe('0px');
+    expect(portal.style.width).toBe('100vw');
+    Object.defineProperty(window, 'matchMedia', { configurable: true, value: originalMatchMedia });
+  });
+
+  it('dismisses a mobile sheet from its scrim', () => {
+    const onDismiss = vi.fn();
+    const originalMatchMedia = window.matchMedia;
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      value: vi.fn().mockImplementation((query: string) => ({
+        matches: query.includes('767px'),
+        media: query,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      })),
+    });
+    render(
+      <Harness
+        open
+        mobileSheet
+        onDismiss={onDismiss}
+        triggerRect={{ top: 500, bottom: 540, left: 100, right: 200 }}
+      />,
+    );
+    const scrim = document.querySelector('.bg-black\\/35') as HTMLElement;
+    expect(scrim).toBeTruthy();
+    fireEvent.mouseDown(scrim);
+    expect(onDismiss).toHaveBeenCalled();
+    Object.defineProperty(window, 'matchMedia', { configurable: true, value: originalMatchMedia });
   });
 });

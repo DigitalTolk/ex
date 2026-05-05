@@ -1231,7 +1231,7 @@ export function Sidebar({ onClose }: SidebarProps) {
   }, []);
 
   return (
-    <div className="flex h-full flex-col text-gray-300">
+    <div className="flex h-full w-full min-w-0 flex-col text-gray-300">
       {/* User section */}
       <div className="flex items-center gap-2 border-b border-white/10 p-3">
         <DropdownMenu>
@@ -1296,7 +1296,7 @@ export function Sidebar({ onClose }: SidebarProps) {
               }}
             >
               <Info className="mr-2 h-4 w-4" />
-              About
+              About Server
             </DropdownMenuItem>
             <DropdownMenuItem onClick={handleLogout}>
               <LogOut className="mr-2 h-4 w-4" />
@@ -1307,11 +1307,11 @@ export function Sidebar({ onClose }: SidebarProps) {
       </div>
 
       <ScrollArea
-        className="min-h-0 flex-1"
+        className="min-h-0 w-full flex-1"
         scrollbarClassName="opacity-0 transition-opacity data-[scrolling]:opacity-100"
         data-testid="sidebar-scroll-area"
       >
-        <div className="space-y-px p-2">
+        <div className="w-full min-w-0 space-y-px p-2">
           {/* Directories link — same row geometry (px-2 py-1) as channel
               rows below so the eye doesn't catch on a height bump. */}
           <NavLink

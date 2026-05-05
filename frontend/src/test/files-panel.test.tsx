@@ -9,6 +9,10 @@ vi.mock('@/lib/api', () => ({
 
 import { FilesPanel } from '@/components/chat/FilesPanel';
 
+function attachmentPath(id: string, messageID = 'm-1') {
+  return `/api/v1/attachments/${id}?parentID=ch-1&parentType=channel&messageID=${messageID}`;
+}
+
 function renderPanel(
   props: { channelId?: string; conversationId?: string; postedIn?: string } = {
     channelId: 'ch-1',
@@ -51,20 +55,16 @@ describe('FilesPanel', () => {
           { attachmentID: 'a-1', messageID: 'm-1', authorID: 'u-1', createdAt: '2026-04-26T10:00:00Z' },
         ]);
       }
-      if (path.includes('/attachments?ids=')) {
-        return Promise.resolve([
-          {
-            id: 'a-1',
-            sha256: 'h',
-            size: 1024,
-            contentType: 'image/png',
-            filename: 'shot.png',
-            url: 'https://x/shot.png',
-            createdBy: 'u-1',
-            createdAt: '2026-04-26T10:00:00Z',
-          },
-        ]);
-      }
+      if (path === attachmentPath('a-1')) return Promise.resolve({
+        id: 'a-1',
+        sha256: 'h',
+        size: 1024,
+        contentType: 'image/png',
+        filename: 'shot.png',
+        url: 'https://x/shot.png',
+        createdBy: 'u-1',
+        createdAt: '2026-04-26T10:00:00Z',
+      });
       return Promise.resolve([]);
     });
     renderPanel();
@@ -90,20 +90,16 @@ describe('FilesPanel', () => {
           { attachmentID: 'a-pdf', messageID: 'm-1', authorID: 'u-1', createdAt: '2026-04-26T10:00:00Z' },
         ]);
       }
-      if (path.includes('/attachments?ids=')) {
-        return Promise.resolve([
-          {
-            id: 'a-pdf',
-            sha256: 'h',
-            size: 1024,
-            contentType: 'application/pdf',
-            filename: 'report.pdf',
-            url: 'https://x/report.pdf',
-            createdBy: 'u-1',
-            createdAt: '2026-04-26T10:00:00Z',
-          },
-        ]);
-      }
+      if (path === attachmentPath('a-pdf')) return Promise.resolve({
+        id: 'a-pdf',
+        sha256: 'h',
+        size: 1024,
+        contentType: 'application/pdf',
+        filename: 'report.pdf',
+        url: 'https://x/report.pdf',
+        createdBy: 'u-1',
+        createdAt: '2026-04-26T10:00:00Z',
+      });
       return Promise.resolve([]);
     });
     renderPanel({ channelId: 'ch-1' });
@@ -126,20 +122,16 @@ describe('FilesPanel', () => {
           { attachmentID: 'a-img', messageID: 'm-1', authorID: 'u-1', createdAt: '2026-04-26T10:00:00Z' },
         ]);
       }
-      if (path.includes('/attachments?ids=')) {
-        return Promise.resolve([
-          {
-            id: 'a-img',
-            sha256: 'h',
-            size: 1024,
-            contentType: 'image/png',
-            filename: 'pic.png',
-            url: 'https://x/pic.png',
-            createdBy: 'u-1',
-            createdAt: '2026-04-26T10:00:00Z',
-          },
-        ]);
-      }
+      if (path === attachmentPath('a-img')) return Promise.resolve({
+        id: 'a-img',
+        sha256: 'h',
+        size: 1024,
+        contentType: 'image/png',
+        filename: 'pic.png',
+        url: 'https://x/pic.png',
+        createdBy: 'u-1',
+        createdAt: '2026-04-26T10:00:00Z',
+      });
       return Promise.resolve([]);
     });
     renderPanel({ channelId: 'ch-1' });
@@ -155,20 +147,16 @@ describe('FilesPanel', () => {
           { attachmentID: 'a-c', messageID: 'm-1', authorID: 'u-1', createdAt: '2026-04-26T10:00:00Z' },
         ]);
       }
-      if (path.includes('/attachments?ids=')) {
-        return Promise.resolve([
-          {
-            id: 'a-c',
-            sha256: 'h',
-            size: 1024,
-            contentType: 'application/pdf',
-            filename: 'doc.pdf',
-            url: 'https://x/doc.pdf',
-            createdBy: 'u-1',
-            createdAt: '2026-04-26T10:00:00Z',
-          },
-        ]);
-      }
+      if (path === attachmentPath('a-c')) return Promise.resolve({
+        id: 'a-c',
+        sha256: 'h',
+        size: 1024,
+        contentType: 'application/pdf',
+        filename: 'doc.pdf',
+        url: 'https://x/doc.pdf',
+        createdBy: 'u-1',
+        createdAt: '2026-04-26T10:00:00Z',
+      });
       return Promise.resolve([]);
     });
     renderPanel({ channelId: 'ch-1' });
@@ -183,20 +171,16 @@ describe('FilesPanel', () => {
           { attachmentID: 'a-f', messageID: 'm-1', authorID: 'u-1', createdAt: '2026-04-26T10:00:00Z' },
         ]);
       }
-      if (path.includes('/attachments?ids=')) {
-        return Promise.resolve([
-          {
-            id: 'a-f',
-            sha256: 'h',
-            size: 1024,
-            contentType: 'application/pdf',
-            filename: 'doc.pdf',
-            url: 'https://x/doc.pdf',
-            createdBy: 'u-1',
-            createdAt: '2026-04-26T10:00:00Z',
-          },
-        ]);
-      }
+      if (path === attachmentPath('a-f')) return Promise.resolve({
+        id: 'a-f',
+        sha256: 'h',
+        size: 1024,
+        contentType: 'application/pdf',
+        filename: 'doc.pdf',
+        url: 'https://x/doc.pdf',
+        createdBy: 'u-1',
+        createdAt: '2026-04-26T10:00:00Z',
+      });
       return Promise.resolve([]);
     });
     renderPanel({ channelId: 'ch-1' });
@@ -222,21 +206,17 @@ describe('FilesPanel', () => {
           { attachmentID: 'a-long', messageID: 'm-1', authorID: 'u-1', createdAt: '2026-04-26T10:00:00Z' },
         ]);
       }
-      if (path.includes('/attachments?ids=')) {
-        return Promise.resolve([
-          {
-            id: 'a-long',
-            sha256: 'h',
-            size: 1024,
-            contentType: 'application/pdf',
-            filename: longName,
-            url: 'https://x/long.pdf',
-            downloadURL: 'https://x/long.pdf?response-content-disposition=attachment',
-            createdBy: 'u-1',
-            createdAt: '2026-04-26T10:00:00Z',
-          },
-        ]);
-      }
+      if (path === attachmentPath('a-long')) return Promise.resolve({
+        id: 'a-long',
+        sha256: 'h',
+        size: 1024,
+        contentType: 'application/pdf',
+        filename: longName,
+        url: 'https://x/long.pdf',
+        downloadURL: 'https://x/long.pdf?response-content-disposition=attachment',
+        createdBy: 'u-1',
+        createdAt: '2026-04-26T10:00:00Z',
+      });
       return Promise.resolve([]);
     });
     renderPanel({ channelId: 'ch-1' });
@@ -264,36 +244,35 @@ describe('FilesPanel', () => {
           { attachmentID: 'a-2', messageID: 'm-2', authorID: 'u-1', createdAt: '2026-04-26T11:00:00Z' },
         ]);
       }
-      if (path.includes('/attachments?ids=')) {
-        return Promise.resolve([
-          {
-            id: 'a-1',
-            sha256: 'h1',
-            size: 1024,
-            contentType: 'image/png',
-            filename: 'one.png',
-            url: 'https://x/one.png',
-            downloadURL: 'https://x/one.png?response-content-disposition=attachment',
-            createdBy: 'u-1',
-            createdAt: '2026-04-26T10:00:00Z',
-          },
-          {
-            id: 'a-2',
-            sha256: 'h2',
-            size: 2048,
-            contentType: 'image/png',
-            filename: 'two.png',
-            url: 'https://x/two.png',
-            downloadURL: 'https://x/two.png?response-content-disposition=attachment',
-            createdBy: 'u-1',
-            createdAt: '2026-04-26T11:00:00Z',
-          },
-        ]);
-      }
+      if (path === attachmentPath('a-1')) return Promise.resolve({
+        id: 'a-1',
+        sha256: 'h1',
+        size: 1024,
+        contentType: 'image/png',
+        filename: 'one.png',
+        url: 'https://x/one.png',
+        downloadURL: 'https://x/one.png?response-content-disposition=attachment',
+        createdBy: 'u-1',
+        createdAt: '2026-04-26T10:00:00Z',
+      });
+      if (path === attachmentPath('a-2', 'm-2')) return Promise.resolve({
+        id: 'a-2',
+        sha256: 'h2',
+        size: 2048,
+        contentType: 'image/png',
+        filename: 'two.png',
+        url: 'https://x/two.png',
+        downloadURL: 'https://x/two.png?response-content-disposition=attachment',
+        createdBy: 'u-1',
+        createdAt: '2026-04-26T11:00:00Z',
+      });
       return Promise.resolve([]);
     });
     renderPanel({ channelId: 'ch-1', postedIn: '~general' });
     await waitFor(() => expect(screen.getByText('one.png')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('two.png')).toBeInTheDocument());
+    expect(apiFetchMock).toHaveBeenCalledWith(attachmentPath('a-1'));
+    expect(apiFetchMock).toHaveBeenCalledWith(attachmentPath('a-2', 'm-2'));
 
     // Each row's download icon must point at the forced-download URL,
     // not the inline preview URL — otherwise <a download> is ignored
