@@ -32,24 +32,12 @@ describe('MessageInput toolbar buttons', () => {
     vi.clearAllMocks();
   });
 
-  it('block toolbar buttons each apply their formatting to the seeded body', async () => {
-    // Block-level toolbar buttons render distinct DOM elements that we
-    // can latch onto. Inline-mark buttons render via theme classes on
-    // <span data-lexical-text> elements — those are covered by the
-    // dedicated mark test below.
-    const cases: Array<{ label: string; selector: string }> = [
-      { label: 'Quote', selector: 'blockquote' },
-      { label: 'List', selector: 'ul' },
-    ];
-    for (const c of cases) {
-      const { unmount } = renderWithClient(<MessageInput onSend={vi.fn()} initialBody="hello" />);
-      const editor = await screen.findByLabelText('Message input');
-      fireEvent.click(screen.getByLabelText(c.label));
-      await waitFor(() => {
-        expect(editor.querySelector(c.selector)).not.toBeNull();
-      });
-      unmount();
-    }
+  it('does not render quote/list toolbar buttons in the composer toolbar', async () => {
+    renderWithClient(<MessageInput onSend={vi.fn()} initialBody="hello" />);
+    await screen.findByLabelText('Message input');
+
+    expect(screen.queryByLabelText('Quote')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('List')).not.toBeInTheDocument();
   });
 
   it('inline mark buttons (Bold/Italic/Strikethrough/Code) toggle the corresponding text format on the seeded body', async () => {

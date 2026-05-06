@@ -41,9 +41,11 @@ function DialogContent({
   className,
   children,
   showCloseButton = true,
+  mobileCloseLabel,
   ...props
 }: DialogPrimitive.Popup.Props & {
   showCloseButton?: boolean
+  mobileCloseLabel?: string
 }) {
   return (
     <DialogPortal>
@@ -58,20 +60,37 @@ function DialogContent({
       >
         {children}
         {showCloseButton && (
-          <DialogPrimitive.Close
-            data-slot="dialog-close"
-            render={
-              <Button
-                variant="ghost"
-                className="absolute top-2 right-2"
-                size="icon-sm"
+          <>
+            {mobileCloseLabel && (
+              <DialogPrimitive.Close
+                data-slot="dialog-mobile-close"
+                render={
+                  <Button
+                    aria-label="Dismiss dialog"
+                    variant="ghost"
+                    className="absolute right-3 top-[calc(env(safe-area-inset-top)+0.5rem)] hidden h-9 px-3 text-base after:content-[var(--mobile-close-label)] max-md:inline-flex"
+                    style={{
+                      '--mobile-close-label': `"${mobileCloseLabel}"`,
+                    } as React.CSSProperties}
+                  />
+                }
               />
-            }
-          >
-            <XIcon
-            />
-            <span className="sr-only">Close</span>
-          </DialogPrimitive.Close>
+            )}
+            <DialogPrimitive.Close
+              data-slot="dialog-close"
+              render={
+                <Button
+                  variant="ghost"
+                  className={cn("absolute top-2 right-2", mobileCloseLabel && "max-md:hidden")}
+                  size="icon-sm"
+                />
+              }
+            >
+              <XIcon
+              />
+              <span className="sr-only">Close</span>
+            </DialogPrimitive.Close>
+          </>
         )}
       </DialogPrimitive.Popup>
     </DialogPortal>

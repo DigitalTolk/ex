@@ -253,7 +253,7 @@ function MembersTab({ isAdmin, currentUserId }: MembersTabProps) {
 
   const onlineCount = users.reduce((n, u) => (isOnline(u.id) ? n + 1 : n), 0);
   const memberGridClassName =
-    'grid grid-cols-[repeat(auto-fill,minmax(16rem,calc((100%_-_3rem)/5)))] justify-start gap-3';
+    'grid grid-cols-2 gap-3 md:grid-cols-[repeat(auto-fill,minmax(16rem,calc((100%_-_3rem)/5)))] md:justify-start';
 
   return (
     <>

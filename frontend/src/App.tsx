@@ -114,7 +114,7 @@ export default function App() {
                           UpdateBanner sits as a normal block above the
                           app and never has to overlay scrolling content. */}
                       <div className="flex h-dvh flex-col bg-[#1a1d21]">
-                        <div className="shrink-0 bg-[#1a1d21] pt-[env(safe-area-inset-top)]">
+                        <div className="shrink-0 bg-[#1a1d21]">
                           <UpdateBanner />
                           <NotificationPermissionBanner />
                         </div>

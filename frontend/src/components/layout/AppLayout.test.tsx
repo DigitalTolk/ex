@@ -50,9 +50,8 @@ describe('AppLayout', () => {
 
     const header = container.querySelector('header')!;
     const searchShell = screen.getByLabelText('Search').closest('header')!.querySelector('div')!;
-    expect(header.className).toContain('w-full');
-    expect(searchShell).toHaveClass('flex-1', 'lg:max-w-2xl');
-    expect(searchShell.classList.contains('max-w-2xl')).toBe(false);
+    expect(header).toHaveClass('grid', 'w-full', 'grid-cols-[2.75rem_minmax(0,1fr)_2.75rem]');
+    expect(searchShell).toHaveClass('w-full', 'max-w-2xl', 'justify-self-center', 'lg:flex-1');
   });
 
   it('keeps the desktop sidebar as a persistent rail', () => {
@@ -71,8 +70,7 @@ describe('AppLayout', () => {
     expect(shell.className).toContain('bg-[#1a1d21]');
   });
 
-  it('shows a native server change button when running inside the mobile shell', async () => {
-    const user = userEvent.setup();
+  it('keeps native server switching out of the top bar', () => {
     const resetServer = vi.fn().mockResolvedValue(undefined);
     window.Capacitor = {
       isNativePlatform: () => true,
@@ -81,8 +79,8 @@ describe('AppLayout', () => {
 
     renderLayout();
 
-    await user.click(await screen.findByLabelText('Change server'));
-    expect(resetServer).toHaveBeenCalledTimes(1);
+    expect(screen.queryByLabelText('Change server')).not.toBeInTheDocument();
+    expect(resetServer).not.toHaveBeenCalled();
   });
 
   it('mobile channels button navigates to channel home', async () => {

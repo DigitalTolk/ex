@@ -91,7 +91,7 @@ export function ConversationRow({
         }}
         draggable={false}
         className={({ isActive }) =>
-          `flex flex-1 min-w-0 items-center gap-2 rounded-md py-1 pl-2 pr-12 text-sm transition-colors ${
+          `flex flex-1 min-w-0 items-center gap-2 rounded-md py-1 pl-2 pr-12 text-sm transition-colors max-md:h-12 max-md:py-0 max-md:pl-3 max-md:text-base ${
             isActive
               ? 'bg-white/15 text-white font-semibold'
               : hasUnread

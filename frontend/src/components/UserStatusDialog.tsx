@@ -215,7 +215,7 @@ function UserStatusDialogContent({
   }
 
   return (
-    <DialogContent className="max-w-lg" finalFocus={false}>
+    <DialogContent className="max-w-lg" finalFocus={false} mobileCloseLabel="Cancel">
       <DialogHeader>
         <DialogTitle>Set status</DialogTitle>
       </DialogHeader>

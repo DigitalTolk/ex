@@ -157,8 +157,9 @@ describe('DirectoriesPage - members tab', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'Members' }));
 
     expect(await screen.findByText('Alice')).toBeInTheDocument();
-    expect(screen.getByTestId('members-grid')).toHaveClass('grid-cols-[repeat(auto-fill,minmax(16rem,calc((100%_-_3rem)/5)))]');
-    expect(screen.getByTestId('members-grid')).toHaveClass('justify-start');
+    expect(screen.getByTestId('members-grid')).toHaveClass('grid-cols-2');
+    expect(screen.getByTestId('members-grid').className).toContain('md:grid-cols-[repeat(auto-fill,minmax(16rem,calc((100%_-_3rem)/5)))]');
+    expect(screen.getByTestId('members-grid')).toHaveClass('md:justify-start');
     expect(screen.getByTestId('directory-user-avatar')).toHaveClass('w-full');
     expect(screen.queryByText('Working from home')).not.toBeInTheDocument();
     expect(screen.getByText('Local time')).toBeInTheDocument();

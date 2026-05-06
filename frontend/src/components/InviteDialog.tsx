@@ -55,7 +55,7 @@ export function InviteDialog({ open, onOpenChange }: InviteDialogProps) {
 
   return (
     <Dialog open={open} onOpenChange={handleClose}>
-      <DialogContent className="max-w-lg min-h-[300px]" finalFocus={false}>
+      <DialogContent className="max-w-lg min-h-[300px]" finalFocus={false} mobileCloseLabel="Cancel">
         <DialogHeader>
           <DialogTitle>Invite someone</DialogTitle>
         </DialogHeader>

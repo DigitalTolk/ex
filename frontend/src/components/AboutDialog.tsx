@@ -23,7 +23,7 @@ export function AboutDialog({ open, onOpenChange, onClosed }: AboutDialogProps) 
         if (!nextOpen) onClosed?.();
       }}
     >
-      <DialogContent className="max-w-sm" finalFocus={false}>
+      <DialogContent className="max-w-sm" finalFocus={false} mobileCloseLabel="Cancel">
         <DialogHeader>
           <DialogTitle className="sr-only">About ex</DialogTitle>
         </DialogHeader>

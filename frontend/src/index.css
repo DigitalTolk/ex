@@ -101,6 +101,16 @@
     margin: 0;
   }
 
+  @media (max-width: 767px) {
+    input,
+    textarea,
+    select,
+    [contenteditable="true"],
+    [role="textbox"] {
+      font-size: 16px;
+    }
+  }
+
   * {
     @apply border-border outline-ring/50;
     box-sizing: border-box;

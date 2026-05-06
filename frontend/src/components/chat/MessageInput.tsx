@@ -7,8 +7,6 @@ import {
   Strikethrough,
   Code,
   Link as LinkIcon,
-  List,
-  Quote,
   Smile,
   ImagePlay,
   X,
@@ -146,7 +144,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
   const suppressAutoFocus = isMobile && variant === 'composer';
   const compactMobileComposer =
     variant === 'composer' && !editorFocused && body.trim() === '' && drafts.length === 0;
-  const showToolbar = variant !== 'composer' || !isMobile || !compactMobileComposer;
+  const showToolbar = variant !== 'composer' || !isMobile || editorFocused;
 
   useEffect(() => {
     latestDraftValueRef.current = { body, attachmentIDs: drafts.map((d) => d.id) };
@@ -510,7 +508,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
   }
 
   return (
-    <div className={variant === 'inline' ? 'p-0' : 'border-t p-3'}>
+    <div className={variant === 'inline' ? 'p-0' : 'border-t p-3 max-md:pb-[calc(0.75rem+env(safe-area-inset-bottom))]'}>
       {uploadError && (
         <div className="mb-2 rounded-md bg-destructive/10 p-2 text-xs text-destructive" role="alert">
           {uploadError}
@@ -542,8 +540,6 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
             <ToolbarBtn label="Strikethrough" active={active.has('strike')} onClick={() => editorRef.current?.applyMark('strike')}><Strikethrough className="h-3.5 w-3.5" /></ToolbarBtn>
             <ToolbarBtn label="Code (Ctrl+E)" active={active.has('code')} onClick={() => editorRef.current?.applyMark('code')}><Code className="h-3.5 w-3.5" /></ToolbarBtn>
             <ToolbarBtn label="Link" onClick={openLinkDialog}><LinkIcon className="h-3.5 w-3.5" /></ToolbarBtn>
-            <ToolbarBtn label="Quote" active={active.has('quote')} onClick={() => editorRef.current?.applyBlock('quote')}><Quote className="h-3.5 w-3.5" /></ToolbarBtn>
-            <ToolbarBtn label="List" active={active.has('ul')} onClick={() => editorRef.current?.applyBlock('ul')}><List className="h-3.5 w-3.5" /></ToolbarBtn>
             <span className="mx-1 h-4 w-px bg-border" aria-hidden />
             <EmojiPicker
               onSelect={insertEmojiShortcode}
@@ -565,7 +561,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
               type="button"
               onClick={() => fileInputRef.current?.click()}
               disabled={isUploading}
-              className="ml-auto h-7 w-7 flex items-center justify-center rounded-md hover:bg-muted disabled:opacity-50"
+              className="ml-auto flex h-7 w-7 items-center justify-center rounded-md hover:bg-muted disabled:opacity-50 max-md:ml-0 max-md:h-9 max-md:w-9 max-md:shrink-0"
               aria-label="Attach file"
             >
               <Paperclip className="h-3.5 w-3.5" />
@@ -708,7 +704,7 @@ function ToolbarBtn({
       title={label}
       aria-label={label}
       aria-pressed={active ? 'true' : undefined}
-      className={`h-7 w-7 flex items-center justify-center rounded-md hover:bg-muted ${
+      className={`flex h-7 w-7 items-center justify-center rounded-md hover:bg-muted max-md:h-9 max-md:w-9 max-md:shrink-0 ${
         active ? 'bg-muted text-foreground' : 'text-muted-foreground'
       }`}
     >
