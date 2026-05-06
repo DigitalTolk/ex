@@ -320,6 +320,26 @@ describe('MessageAttachments', () => {
     expect(screen.queryByTestId('image-lightbox')).toBeNull();
   });
 
+  it('tapping the lightbox image closes the lightbox', () => {
+    const att: Attachment = {
+      id: 'a-tap-close',
+      filename: 'tap.png',
+      contentType: 'image/png',
+      size: 100,
+      url: 'https://cdn/tap.png',
+    };
+    useAttachmentsBatchMock.mockReturnValue({
+      map: new Map([['a-tap-close', att]]),
+      isLoading: false,
+    });
+    render(<MessageAttachments {...baseProps} ids={['a-tap-close']} />);
+
+    fireEvent.click(screen.getByLabelText('Open image tap.png'));
+    fireEvent.click(screen.getByTestId('image-lightbox-image'));
+
+    expect(screen.queryByTestId('image-lightbox')).toBeNull();
+  });
+
   it('Escape blurs the active element so the attachment trigger does not pick up a focus-visible ring after closing', () => {
     // Regression: pressing Esc to close the lightbox is a keyboard
     // interaction, which flips the browser's :focus-visible heuristic

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { beforeEach, describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { BrowserRouter } from 'react-router-dom';
@@ -26,6 +26,10 @@ function renderLayout(children: React.ReactNode = <div>Main content</div>) {
 }
 
 describe('AppLayout', () => {
+  beforeEach(() => {
+    delete window.Capacitor;
+  });
+
   it('renders sidebar', () => {
     renderLayout();
     expect(screen.getByTestId('sidebar')).toBeInTheDocument();
@@ -64,6 +68,21 @@ describe('AppLayout', () => {
 
     const shell = container.querySelector('.pt-\\[env\\(safe-area-inset-top\\)\\]')!;
     expect(shell).toBeInTheDocument();
+    expect(shell.className).toContain('bg-[#1a1d21]');
+  });
+
+  it('shows a native server change button when running inside the mobile shell', async () => {
+    const user = userEvent.setup();
+    const resetServer = vi.fn().mockResolvedValue(undefined);
+    window.Capacitor = {
+      isNativePlatform: () => true,
+      Plugins: { ServerNavigation: { resetServer } },
+    };
+
+    renderLayout();
+
+    await user.click(await screen.findByLabelText('Change server'));
+    expect(resetServer).toHaveBeenCalledTimes(1);
   });
 
   it('mobile channels button navigates to channel home', async () => {

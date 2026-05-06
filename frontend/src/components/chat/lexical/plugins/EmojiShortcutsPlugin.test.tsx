@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { createRef, type ReactNode } from 'react';
+import { createRef, type ReactNode, type RefObject } from 'react';
 
 vi.unmock('@/components/chat/lexical/plugins/EmojiShortcutsPlugin');
 
@@ -34,6 +34,13 @@ function Providers({ children }: { children: ReactNode }) {
   return <QueryClientProvider client={qc}>{children}</QueryClientProvider>;
 }
 
+function insertIntoFocusedEditor(ref: RefObject<WysiwygEditorHandle>, text: string) {
+  act(() => {
+    ref.current!.focusEnd();
+    ref.current!.insertText(text);
+  });
+}
+
 describe('EmojiShortcutsPlugin', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -44,9 +51,7 @@ describe('EmojiShortcutsPlugin', () => {
     const ref = createRef<WysiwygEditorHandle>();
     render(<Providers><WysiwygEditor ref={ref} /></Providers>);
     await waitFor(() => expect(ref.current).not.toBeNull());
-    act(() => {
-      ref.current!.insertText(':smi');
-    });
+    insertIntoFocusedEditor(ref, ':smi');
     await waitFor(() => {
       expect(screen.getByTestId('emoji-popup')).toBeInTheDocument();
     });
@@ -57,9 +62,7 @@ describe('EmojiShortcutsPlugin', () => {
     const ref = createRef<WysiwygEditorHandle>();
     render(<Providers><WysiwygEditor ref={ref} /></Providers>);
     await waitFor(() => expect(ref.current).not.toBeNull());
-    act(() => {
-      ref.current!.insertText(':smile');
-    });
+    insertIntoFocusedEditor(ref, ':smile');
     let row: HTMLElement | undefined;
     await waitFor(() => {
       row = screen.getAllByTestId('emoji-option')[0];
@@ -76,9 +79,7 @@ describe('EmojiShortcutsPlugin', () => {
     const ref = createRef<WysiwygEditorHandle>();
     render(<Providers><WysiwygEditor ref={ref} /></Providers>);
     await waitFor(() => expect(ref.current).not.toBeNull());
-    act(() => {
-      ref.current!.insertText(':hand');
-    });
+    insertIntoFocusedEditor(ref, ':hand');
     let row: HTMLElement | undefined;
     await waitFor(() => {
       row = screen.getAllByTestId('emoji-option')[0];
@@ -95,9 +96,7 @@ describe('EmojiShortcutsPlugin', () => {
     const ref = createRef<WysiwygEditorHandle>();
     render(<Providers><WysiwygEditor ref={ref} /></Providers>);
     await waitFor(() => expect(ref.current).not.toBeNull());
-    act(() => {
-      ref.current!.insertText(':thumbsup');
-    });
+    insertIntoFocusedEditor(ref, ':thumbsup');
 
     await waitFor(() => {
       expect(screen.getAllByTestId('emoji-option')[0].textContent).toContain('👍🏽');
@@ -108,9 +107,7 @@ describe('EmojiShortcutsPlugin', () => {
     const ref = createRef<WysiwygEditorHandle>();
     render(<Providers><WysiwygEditor ref={ref} /></Providers>);
     await waitFor(() => expect(ref.current).not.toBeNull());
-    act(() => {
-      ref.current!.insertText(':raised_');
-    });
+    insertIntoFocusedEditor(ref, ':raised_');
 
     await waitFor(() => {
       const rows = screen.getAllByTestId('emoji-option').map((row) => row.textContent ?? '');
@@ -123,9 +120,7 @@ describe('EmojiShortcutsPlugin', () => {
     const ref = createRef<WysiwygEditorHandle>();
     render(<Providers><WysiwygEditor ref={ref} /></Providers>);
     await waitFor(() => expect(ref.current).not.toBeNull());
-    act(() => {
-      ref.current!.insertText(':bow');
-    });
+    insertIntoFocusedEditor(ref, ':bow');
 
     await waitFor(() => {
       const rows = screen.getAllByTestId('emoji-option').map((row) => row.textContent ?? '');
@@ -138,9 +133,7 @@ describe('EmojiShortcutsPlugin', () => {
     const ref = createRef<WysiwygEditorHandle>();
     render(<Providers><WysiwygEditor ref={ref} /></Providers>);
     await waitFor(() => expect(ref.current).not.toBeNull());
-    act(() => {
-      ref.current!.insertText(':laugh');
-    });
+    insertIntoFocusedEditor(ref, ':laugh');
 
     await waitFor(() => {
       const rows = screen.getAllByTestId('emoji-option').map((row) => row.textContent ?? '');

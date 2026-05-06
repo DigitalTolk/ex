@@ -285,6 +285,16 @@ describe('Sidebar', () => {
     expect(await screen.findByTestId('user-menu-admin')).toBeInTheDocument();
   });
 
+  it('renders the user menu as full-width mobile rows', async () => {
+    renderSidebar();
+    fireEvent.click(screen.getByLabelText('User menu'));
+    const admin = await screen.findByTestId('user-menu-admin');
+    const menu = admin.closest('[data-slot="dropdown-menu-content"]');
+
+    expect(menu).toHaveClass('max-md:fixed', 'max-md:left-0', 'max-md:right-0', 'max-md:w-screen');
+    expect(admin).toHaveClass('max-md:h-12', 'max-md:px-3', 'max-md:text-base');
+  });
+
   it('renders channel list', () => {
     renderSidebar();
     expect(screen.getByText('general')).toBeInTheDocument();
