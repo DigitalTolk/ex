@@ -165,8 +165,7 @@ export function ImageLightbox({
         <img
           src={current.url}
           alt={current.filename}
-          className="max-h-[88vh] max-w-[92vw] rounded-md object-contain shadow-2xl"
-          onClick={(e) => e.stopPropagation()}
+          className="max-h-[88vh] max-w-[92vw] cursor-zoom-out rounded-md object-contain shadow-2xl"
           data-testid="image-lightbox-image"
         />
       ) : (

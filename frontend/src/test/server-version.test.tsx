@@ -125,6 +125,7 @@ describe('UpdateBanner', () => {
     expect(screen.getByText('New version available.')).toBeInTheDocument();
     expect(screen.getByTestId('update-banner-reload')).toHaveTextContent('Reload');
     expect(screen.getByText('New version available.').parentElement).toHaveClass('text-center');
+    expect(screen.getByTestId('update-banner').querySelector('svg')).toBeNull();
   });
 
   it('the reload button cache-busts the location', () => {

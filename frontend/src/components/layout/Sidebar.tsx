@@ -74,6 +74,7 @@ const CATEGORY_DROP_END = '__category-end__';
 const SIDEBAR_DND_DEBUG_STORAGE_KEY = 'ex.sidebarDndDebug';
 const SIDEBAR_DRAGGING_OPACITY = 0.25;
 const SIDEBAR_DROP_LINE_CLASS = 'pointer-events-none absolute left-2 right-2 top-0 z-10 h-px bg-white/85';
+const USER_MENU_ITEM_CLASS = 'max-md:h-12 max-md:px-3 max-md:text-base';
 
 type ChannelDropArea = 'lead' | 'row' | 'end';
 type ResolvedDrop =
@@ -1257,29 +1258,33 @@ export function Sidebar({ onClose }: SidebarProps) {
               )}
               <ChevronDown className="h-4 w-4 text-gray-400" />
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" className="w-48">
-            <DropdownMenuItem onClick={() => setUserMenuModalOpen(setEditProfileOpen, true)}>
+          <DropdownMenuContent
+            align="start"
+            className="w-48 max-md:fixed max-md:left-0 max-md:right-0 max-md:top-[calc(env(safe-area-inset-top)+2.75rem)] max-md:w-screen max-md:min-w-0 max-md:rounded-none max-md:border-b max-md:p-2 max-md:ring-0"
+          >
+            <DropdownMenuItem className={USER_MENU_ITEM_CLASS} onClick={() => setUserMenuModalOpen(setEditProfileOpen, true)}>
               <UserIcon className="mr-2 h-4 w-4" />
               Edit profile
             </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => setUserMenuModalOpen(setStatusOpen, true)}>
+            <DropdownMenuItem className={USER_MENU_ITEM_CLASS} onClick={() => setUserMenuModalOpen(setStatusOpen, true)}>
               <CalendarClock className="mr-2 h-4 w-4" />
               Set status
             </DropdownMenuItem>
             {isAdmin(user?.systemRole) && (
-              <DropdownMenuItem onClick={() => setUserMenuModalOpen(setInviteOpen, true)}>
+              <DropdownMenuItem className={USER_MENU_ITEM_CLASS} onClick={() => setUserMenuModalOpen(setInviteOpen, true)}>
                 <UserPlus className="mr-2 h-4 w-4" />
                 Invite people
               </DropdownMenuItem>
             )}
             {!isGuest(user?.systemRole) && (
-              <DropdownMenuItem onClick={() => setUserMenuModalOpen(setEmojiManagerOpen, true)}>
+              <DropdownMenuItem className={USER_MENU_ITEM_CLASS} onClick={() => setUserMenuModalOpen(setEmojiManagerOpen, true)}>
                 <Smile className="mr-2 h-4 w-4" />
                 Custom emojis
               </DropdownMenuItem>
             )}
             {isAdmin(user?.systemRole) && (
               <DropdownMenuItem
+                className={USER_MENU_ITEM_CLASS}
                 onClick={() => {
                   onClose();
                   navigate('/admin');
@@ -1291,6 +1296,7 @@ export function Sidebar({ onClose }: SidebarProps) {
               </DropdownMenuItem>
             )}
             <DropdownMenuItem
+              className={USER_MENU_ITEM_CLASS}
               onClick={() => {
                 setAboutOpenAndClearUserFocus(true);
               }}
@@ -1298,7 +1304,7 @@ export function Sidebar({ onClose }: SidebarProps) {
               <Info className="mr-2 h-4 w-4" />
               About Server
             </DropdownMenuItem>
-            <DropdownMenuItem onClick={handleLogout}>
+            <DropdownMenuItem className={USER_MENU_ITEM_CLASS} onClick={handleLogout}>
               <LogOut className="mr-2 h-4 w-4" />
               Sign out
             </DropdownMenuItem>

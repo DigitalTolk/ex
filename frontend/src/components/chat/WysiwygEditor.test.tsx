@@ -436,6 +436,14 @@ describe('WysiwygEditor', () => {
     expect(ref.current!.getElement()).toBe(getEditor());
   });
 
+  it('uses 16px mobile text to avoid iOS focus zoom and allows 25 desktop rows', async () => {
+    const ref = createRef<WysiwygEditorHandle>();
+    renderEditor({ ref });
+    await waitFor(() => expect(ref.current).not.toBeNull());
+
+    expect(getEditor()).toHaveClass('text-base', 'md:text-sm', 'md:max-h-[37.5rem]');
+  });
+
   it('focusEnd() parks inserted text at the end of existing content', async () => {
     const ref = createRef<WysiwygEditorHandle>();
     renderEditor({ ref, initialBody: 'draft body' });
@@ -473,6 +481,27 @@ describe('WysiwygEditor', () => {
     const md = ref.current!.getMarkdown();
     expect(md).toMatch(/>\s+a/);
     expect(md).toMatch(/>\s+b/);
+  });
+
+  it('round-trips a blockquote followed by a paragraph without inserting a blank line', async () => {
+    const ref = createRef<WysiwygEditorHandle>();
+    renderEditor({ ref, initialBody: '> foobar\nfoobar' });
+    await waitFor(() => expect(ref.current).not.toBeNull());
+    expect(ref.current!.getMarkdown()).toBe('> foobar\nfoobar');
+  });
+
+  it('round-trips a paragraph followed by a blockquote without inserting a blank line', async () => {
+    const ref = createRef<WysiwygEditorHandle>();
+    renderEditor({ ref, initialBody: 'foobar\n> quoted' });
+    await waitFor(() => expect(ref.current).not.toBeNull());
+    expect(ref.current!.getMarkdown()).toBe('foobar\n> quoted');
+  });
+
+  it('round-trips a list followed by text without inserting a blank line', async () => {
+    const ref = createRef<WysiwygEditorHandle>();
+    renderEditor({ ref, initialBody: '1. one\n2. two\nthree' });
+    await waitFor(() => expect(ref.current).not.toBeNull());
+    expect(ref.current!.getMarkdown()).toBe('1. one\n2. two\nthree');
   });
 
   it('preserves "# Heading" as literal markdown text without rendering an <h1>', async () => {

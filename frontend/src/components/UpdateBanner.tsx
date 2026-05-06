@@ -1,7 +1,6 @@
 import { useServerVersion } from '@/hooks/useServerVersion';
 import { Button } from '@/components/ui/button';
 import { Banner } from '@/components/Banner';
-import { RefreshCw } from 'lucide-react';
 
 // Watches the server's deployed version and prompts the user to reload
 // when a new build has rolled out. We deliberately don't auto-reload —
@@ -17,7 +16,6 @@ export function UpdateBanner() {
       tone="warn"
       testId="update-banner"
       centered
-      icon={<RefreshCw className="h-4 w-4" aria-hidden="true" />}
       actions={
         <Button
           variant="outline"

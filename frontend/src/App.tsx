@@ -113,10 +113,12 @@ export default function App() {
                       {/* h-dvh + flex-col viewport constraint so the
                           UpdateBanner sits as a normal block above the
                           app and never has to overlay scrolling content. */}
-                      <div className="flex h-dvh flex-col">
-                        <UpdateBanner />
-                        <NotificationPermissionBanner />
-                        <div className="min-h-0 flex-1">
+                      <div className="flex h-dvh flex-col bg-[#1a1d21]">
+                        <div className="shrink-0 bg-[#1a1d21] pt-[env(safe-area-inset-top)]">
+                          <UpdateBanner />
+                          <NotificationPermissionBanner />
+                        </div>
+                        <div className="min-h-0 flex-1 bg-background">
                           <AppRoutes />
                         </div>
                       </div>
