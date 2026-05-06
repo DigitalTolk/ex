@@ -65,11 +65,17 @@ export function QuoteContinuationPlugin() {
 }
 
 function exitQuote(quote: QuoteNode): void {
+  const quoteIsEmpty = quote.getTextContent().trim() === '';
   // Drop the trailing LineBreak that introduced the now-blank line so
   // the markdown round-trip doesn't keep an empty `> ` row.
   const tail = quote.getLastChild();
   if (tail && $isLineBreakNode(tail)) tail.remove();
   const para = $createParagraphNode();
+  if (quoteIsEmpty) {
+    quote.replace(para);
+    para.select(0, 0);
+    return;
+  }
   quote.insertAfter(para);
   para.select(0, 0);
 }

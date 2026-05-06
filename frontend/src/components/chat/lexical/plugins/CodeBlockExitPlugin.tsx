@@ -44,6 +44,10 @@ export function CodeBlockExitPlugin() {
             // Extend back over the closing-fence line and drop it in
             // one shot, then strip any leftover trailing LineBreak so
             // the code node doesn't keep a blank tail line.
+            if (target.codeNode.getTextContent().trim() === '```') {
+              removeCodeNodeForParagraph(target.codeNode);
+              return;
+            }
             for (let i = 0; i < target.lineLength; i++) selection.deleteCharacter(true);
             const tail = target.codeNode.getLastChild();
             if (tail && $isLineBreakNode(tail)) tail.remove();
@@ -94,8 +98,19 @@ function readArrowDownExitTarget(): CodeNode | null {
 
 function appendParagraphAfter(codeNode: CodeNode): void {
   const para = $createParagraphNode();
+  if (codeNode.getTextContent().trim() === '') {
+    removeCodeNodeForParagraph(codeNode);
+    return;
+  }
   codeNode.insertAfter(para);
   para.select(0, 0);
+}
+
+function removeCodeNodeForParagraph(codeNode: CodeNode): void {
+  const para = $createParagraphNode();
+  codeNode.insertAfter(para);
+  para.select(0, 0);
+  codeNode.remove();
 }
 
 function hasFollowingLineBreak(anchor: LexicalNode): boolean {

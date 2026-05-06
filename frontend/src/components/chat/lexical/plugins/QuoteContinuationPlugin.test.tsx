@@ -85,4 +85,20 @@ describe('QuoteContinuationPlugin', () => {
       expect(root?.querySelector('blockquote + p, p:not(blockquote p)')).not.toBeNull();
     });
   });
+
+  it('Backspace on a lone empty blockquote removes the quote shell', async () => {
+    const ref = createRef<WysiwygEditorHandle>();
+    render(<Providers><WysiwygEditor ref={ref} initialBody="> " /></Providers>);
+    await waitFor(() => expect(ref.current).not.toBeNull());
+    act(() => {
+      ref.current!.insertText('');
+    });
+
+    fireEvent.keyDown(screen.getByLabelText('Message input'), { key: 'Backspace' });
+
+    await waitFor(() => {
+      expect(ref.current!.getElement()?.querySelector('blockquote')).toBeNull();
+    });
+    expect(ref.current!.getMarkdown()).toBe('');
+  });
 });
