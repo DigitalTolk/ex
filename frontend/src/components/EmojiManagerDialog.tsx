@@ -88,7 +88,7 @@ export function EmojiManagerDialog({ open, onOpenChange }: Props) {
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-xl" finalFocus={false}>
+      <DialogContent className="max-w-xl" finalFocus={false} mobileCloseLabel="Cancel">
         <DialogHeader>
           <DialogTitle>Custom emojis</DialogTitle>
           <p className="text-xs text-muted-foreground">

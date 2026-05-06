@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
@@ -27,29 +27,67 @@ function renderWithClient(ui: React.ReactElement) {
   return render(<QueryClientProvider client={qc}>{ui}</QueryClientProvider>);
 }
 
+function setMobileMatch(matches: boolean) {
+  Object.defineProperty(window, 'matchMedia', {
+    configurable: true,
+    value: vi.fn(() => ({
+      matches,
+      media: '(max-width: 767px)',
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+    })),
+  });
+}
+
 describe('MessageInput toolbar buttons', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    setMobileMatch(false);
   });
 
-  it('block toolbar buttons each apply their formatting to the seeded body', async () => {
-    // Block-level toolbar buttons render distinct DOM elements that we
-    // can latch onto. Inline-mark buttons render via theme classes on
-    // <span data-lexical-text> elements — those are covered by the
-    // dedicated mark test below.
-    const cases: Array<{ label: string; selector: string }> = [
-      { label: 'Quote', selector: 'blockquote' },
-      { label: 'List', selector: 'ul' },
-    ];
-    for (const c of cases) {
-      const { unmount } = renderWithClient(<MessageInput onSend={vi.fn()} initialBody="hello" />);
-      const editor = await screen.findByLabelText('Message input');
-      fireEvent.click(screen.getByLabelText(c.label));
-      await waitFor(() => {
-        expect(editor.querySelector(c.selector)).not.toBeNull();
-      });
-      unmount();
-    }
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('keeps quote and list toolbar buttons on desktop', async () => {
+    setMobileMatch(false);
+    renderWithClient(<MessageInput onSend={vi.fn()} initialBody="hello" />);
+    await screen.findByLabelText('Message input');
+
+    expect(screen.getByLabelText('Quote')).toBeInTheDocument();
+    expect(screen.getByLabelText('List')).toBeInTheDocument();
+    expect(screen.getByLabelText('Numbered list')).toBeInTheDocument();
+  });
+
+  it('removes quote and list toolbar buttons only from the focused mobile composer', async () => {
+    setMobileMatch(true);
+    renderWithClient(<MessageInput onSend={vi.fn()} initialBody="hello" />);
+    fireEvent.focus(await screen.findByLabelText('Message input'));
+
+    expect(screen.queryByLabelText('Quote')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('List')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Numbered list')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Bold (Ctrl+B)')).toBeInTheDocument();
+  });
+
+  it('keeps the focused mobile toolbar alive while tapping formatting buttons', async () => {
+    setMobileMatch(true);
+    renderWithClient(<MessageInput onSend={vi.fn()} initialBody="hello" />);
+    const editor = await screen.findByLabelText('Message input');
+    fireEvent.focus(editor);
+
+    const bold = screen.getByLabelText('Bold (Ctrl+B)');
+    const mouseDown = new MouseEvent('mousedown', { bubbles: true, cancelable: true });
+    bold.dispatchEvent(mouseDown);
+
+    expect(mouseDown.defaultPrevented).toBe(true);
+    expect(screen.getByRole('toolbar', { name: 'Formatting' })).toBeInTheDocument();
+    fireEvent.click(bold);
+    await waitFor(() => {
+      expect(editor.querySelector('.font-semibold')).not.toBeNull();
+    });
   });
 
   it('inline mark buttons (Bold/Italic/Strikethrough/Code) toggle the corresponding text format on the seeded body', async () => {

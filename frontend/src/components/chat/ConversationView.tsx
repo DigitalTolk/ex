@@ -17,6 +17,7 @@ import { TypingIndicator } from './TypingIndicator';
 import { useConversation } from '@/hooks/useConversations';
 import {
   useConversationMessages,
+  useEditMessage,
   useSendConversationMessage,
 } from '@/hooks/useMessages';
 import { useAuth } from '@/context/AuthContext';
@@ -30,6 +31,7 @@ import { useTagState } from '@/context/TagSearchContext';
 import { TagSearchPanel } from '@/components/TagSearchPanel';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { useDeepLinkAnchor } from '@/hooks/useDeepLinkAnchor';
+import { useIsMobile } from '@/hooks/useIsMobile';
 import {
   restoreDraftScope,
   restoreDraftScopeForContent,
@@ -42,7 +44,7 @@ import {
 import { firstName } from '@/lib/format';
 import { apiFetch } from '@/lib/api';
 import { queryKeys } from '@/lib/query-keys';
-import type { Conversation } from '@/types';
+import type { Conversation, Message } from '@/types';
 import type { UserMapEntry } from './MessageList';
 
 function errorStatus(err: unknown): number | null {
@@ -106,6 +108,14 @@ export function ConversationView() {
   );
   const { data: draft } = useDraftForScope(draftScope);
   const draftAttachments = useDraftAttachmentChips(draft?.attachmentIDs);
+  const [editingMessage, setEditingMessage] = useState<Message | null>(null);
+  const isMobile = useIsMobile();
+  const activeEditingMessage = isMobile ? editingMessage : null;
+  const editAttachmentIDs = editingMessage?.attachmentIDs ?? [];
+  const editDraftAttachments = useDraftAttachmentChips(editAttachmentIDs);
+  const editReady =
+    !editingMessage || editAttachmentIDs.length === 0 || editDraftAttachments.length === editAttachmentIDs.length;
+  const editMessage = useEditMessage();
   const draftID = draft?.id;
   const saveDraft = useSaveDraft();
   const deleteDraft = useDeleteDraft();
@@ -137,6 +147,30 @@ export function ConversationView() {
       });
     },
     [sendMessage, draftScope, draftID, deleteDraftMutate],
+  );
+  const handleEditMessage = useCallback(
+    (value: { body: string; attachmentIDs: string[] }) => {
+      if (!editingMessage) return;
+      const currentAttachmentIDs = editingMessage.attachmentIDs ?? [];
+      const same =
+        value.body === editingMessage.body &&
+        value.attachmentIDs.length === currentAttachmentIDs.length &&
+        value.attachmentIDs.every((attID, idx) => attID === currentAttachmentIDs[idx]);
+      if (same || (!value.body.trim() && value.attachmentIDs.length === 0)) {
+        setEditingMessage(null);
+        return;
+      }
+      editMessage.mutate(
+        {
+          messageId: editingMessage.id,
+          body: value.body,
+          attachmentIDs: value.attachmentIDs,
+          conversationId: id,
+        },
+        { onSuccess: () => setEditingMessage(null) },
+      );
+    },
+    [editMessage, editingMessage, id],
   );
 
   useEffect(() => {
@@ -188,6 +222,8 @@ export function ConversationView() {
   // Reset locally-opened thread when the conversation changes.
   // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => setThreadRootID(null), [id]);
+  // eslint-disable-next-line react-hooks/set-state-in-effect
+  useEffect(() => setEditingMessage(null), [id]);
 
   // The displayed thread is the local one if set, otherwise the URL-
   // driven one — unless the user has dismissed it.
@@ -359,24 +395,31 @@ export function ConversationView() {
             conversationId={id}
             userMap={userMap}
             onReplyInThread={openThread}
+            onEditMessage={isMobile ? setEditingMessage : undefined}
             anchorMsgId={mainAnchor}
             anchorRevision={navKey}
             intro={intro ?? undefined}
           />
           <TypingIndicator parentID={id} userMap={userMap} />
-          <MessageInput
-            ref={inputRef}
-            onSend={handleSendMessage}
-            disabled={sendMessage.isPending}
-            placeholder={`Write to ${title}`}
-            focusKey={id}
-            initialBody={draft?.body ?? ''}
-            initialDrafts={draftAttachments}
-            onDraftChange={handleDraftChange}
-            typingParentID={id}
-            typingParentType="conversation"
-            lastOwnMessageId={lastOwnMessageId}
-          />
+          {activeEditingMessage && !editReady ? (
+            <div className="border-t p-3 text-sm text-muted-foreground">Loading message editor…</div>
+          ) : (
+            <MessageInput
+              ref={inputRef}
+              onSend={activeEditingMessage ? handleEditMessage : handleSendMessage}
+              onCancel={activeEditingMessage ? () => setEditingMessage(null) : undefined}
+              disabled={activeEditingMessage ? editMessage.isPending : sendMessage.isPending}
+              placeholder={activeEditingMessage ? 'Edit message...' : `Write to ${title}`}
+              focusKey={activeEditingMessage ? `edit-${activeEditingMessage.id}` : id}
+              initialBody={activeEditingMessage?.body ?? draft?.body ?? ''}
+              initialDrafts={activeEditingMessage ? editDraftAttachments : draftAttachments}
+              onDraftChange={activeEditingMessage ? undefined : handleDraftChange}
+              submitLabel={activeEditingMessage ? 'Save' : undefined}
+              typingParentID={activeEditingMessage ? undefined : id}
+              typingParentType={activeEditingMessage ? undefined : 'conversation'}
+              lastOwnMessageId={activeEditingMessage ? undefined : lastOwnMessageId}
+            />
+          )}
         </MessageDropZone>
       </div>
       {effectiveThreadRootID ? (

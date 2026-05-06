@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import { BrowserRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MessageItem } from '@/components/chat/MessageItem';
@@ -61,7 +61,7 @@ describe('MessageItem inline edit', () => {
     editMutate.mockReset();
   });
 
-  it('clicking Edit shows the full MessageInput composer prefilled', async () => {
+  it('clicking Edit shows the full MessageInput composer prefilled on desktop', async () => {
     renderWithProviders(
       <MessageItem
         message={makeMessage()}
@@ -72,27 +72,16 @@ describe('MessageItem inline edit', () => {
       />,
     );
     fireEvent.click(screen.getByText('Edit'));
-    await waitFor(() => {
-      expect(screen.getByTestId('inline-edit')).toBeInTheDocument();
-    });
+    expect(await screen.findByTestId('inline-edit')).toBeInTheDocument();
     const editor = screen.getByLabelText('Message input');
-    // The WYSIWYG editor is contentEditable — initialBody is converted to
-    // HTML on mount; verify the visible text matches the source markdown
-    // content (italic markers turn into an <em>, but textContent is flat).
     expect(editor.textContent ?? '').toContain('hello');
     expect(editor.textContent ?? '').toContain('world');
-    // Formatting toolbar from MessageInput must be present
     expect(screen.getByLabelText('Bold (Ctrl+B)')).toBeInTheDocument();
-    // Save and Cancel actions
     expect(screen.getByLabelText('Save')).toBeInTheDocument();
     expect(screen.getByLabelText('Cancel')).toBeInTheDocument();
   });
 
   it('Save with an unchanged body closes the editor without firing the mutation', async () => {
-    // Tiptap doesn't accept synthetic typing in jsdom, so this test
-    // pins the no-op-on-unchanged-body path: the previous editor relied
-    // on textContent mutation to drive a "body changed" save, but the
-    // value-equal short-circuit lives in MessageItem.handleSave.
     renderWithProviders(
       <MessageItem
         message={makeMessage()}
@@ -106,7 +95,6 @@ describe('MessageItem inline edit', () => {
     await screen.findByLabelText('Message input');
     fireEvent.click(screen.getByLabelText('Save'));
     expect(editMutate).not.toHaveBeenCalled();
-    // Editor closed; we're back to the read-only message row.
     expect(screen.queryByLabelText('Save')).toBeNull();
   });
 
@@ -123,8 +111,6 @@ describe('MessageItem inline edit', () => {
     fireEvent.click(screen.getByText('Edit'));
     const editor = await screen.findByLabelText('Message input');
     fireEvent.keyDown(editor, { key: 'Escape' });
-    await waitFor(() => {
-      expect(screen.queryByTestId('inline-edit')).toBeNull();
-    });
+    expect(screen.queryByTestId('inline-edit')).toBeNull();
   });
 });

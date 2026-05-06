@@ -338,6 +338,52 @@ describe('CodeBlockExitPlugin', () => {
     });
   });
 
+  it('ArrowDown in an empty code block removes the code shell', async () => {
+    const ref = createRef<WysiwygEditorHandle>();
+    render(
+      <Providers>
+        <WysiwygEditor ref={ref} initialBody={'```\n```'} />
+      </Providers>,
+    );
+    await waitFor(() => expect(ref.current).not.toBeNull());
+    await waitFor(() => {
+      expect(ref.current!.getElement()?.querySelector('code')).not.toBeNull();
+    });
+    act(() => {
+      ref.current!.insertText('');
+    });
+
+    fireEvent.keyDown(screen.getByLabelText('Message input'), { key: 'ArrowDown' });
+
+    await waitFor(() => {
+      expect(ref.current!.getElement()?.querySelector('code')).toBeNull();
+    });
+    expect(ref.current!.getMarkdown()).toBe('');
+  });
+
+  it('closing fence in an empty code block removes the code shell', async () => {
+    const ref = createRef<WysiwygEditorHandle>();
+    render(
+      <Providers>
+        <WysiwygEditor ref={ref} initialBody={'```\n```'} />
+      </Providers>,
+    );
+    await waitFor(() => expect(ref.current).not.toBeNull());
+    await waitFor(() => {
+      expect(ref.current!.getElement()?.querySelector('code')).not.toBeNull();
+    });
+    act(() => {
+      ref.current!.insertText('```');
+    });
+
+    fireEvent.keyDown(screen.getByLabelText('Message input'), { key: 'Enter' });
+
+    await waitFor(() => {
+      expect(ref.current!.getElement()?.querySelector('code')).toBeNull();
+    });
+    expect(ref.current!.getMarkdown()).toBe('');
+  });
+
   it('round-trips a fenced code block back to ``` markdown', async () => {
     const ref = createRef<WysiwygEditorHandle>();
     render(

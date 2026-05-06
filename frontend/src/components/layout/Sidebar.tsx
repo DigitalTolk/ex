@@ -31,6 +31,7 @@ import {
   ArrowDownAZ,
   Clock3,
   CalendarClock,
+  ServerCog,
 } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
@@ -66,6 +67,21 @@ import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 
 interface SidebarProps {
   onClose: () => void;
+}
+
+interface NativeServerNavigation {
+  resetServer?: () => Promise<void>;
+}
+
+declare global {
+  interface Window {
+    Capacitor?: {
+      isNativePlatform?: () => boolean;
+      Plugins?: {
+        ServerNavigation?: NativeServerNavigation;
+      };
+    };
+  }
 }
 
 const SIDEBAR_POSITION_STEP = 1000;
@@ -446,8 +462,15 @@ export function Sidebar({ onClose }: SidebarProps) {
   const [statusOpen, setStatusOpen] = useState(false);
   const [emojiManagerOpen, setEmojiManagerOpen] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
+  const [userMenuOpen, setUserMenuOpen] = useState(false);
+  const [mobileUserMenuOpen, setMobileUserMenuOpen] = useState(false);
+  const [changeServerConfirmOpen, setChangeServerConfirmOpen] = useState(false);
   const { online } = usePresence();
   const userMenuTriggerRef = useRef<HTMLButtonElement>(null);
+  const nativePlugin = window.Capacitor?.Plugins?.ServerNavigation;
+  const serverNavigation = window.Capacitor?.isNativePlatform?.() && nativePlugin?.resetServer
+    ? nativePlugin
+    : null;
   // null = closed; otherwise the section being deleted. Modal confirm
   // replaces window.confirm so the prompt fits the rest of the app's
   // visual language (and is mockable in tests).
@@ -514,6 +537,11 @@ export function Sidebar({ onClose }: SidebarProps) {
     navigate('/login');
   }
 
+  function closeUserMenu() {
+    setUserMenuOpen(false);
+    setMobileUserMenuOpen(false);
+  }
+
   function clearUserMenuFocus() {
     userMenuTriggerRef.current?.blur();
     if (document.activeElement instanceof HTMLElement) {
@@ -538,7 +566,13 @@ export function Sidebar({ onClose }: SidebarProps) {
 
   function setUserMenuModalOpen(setOpen: (open: boolean) => void, open: boolean) {
     setOpen(open);
+    if (open) closeUserMenu();
     scheduleClearUserMenuFocus();
+  }
+
+  function openChangeServerConfirm() {
+    closeUserMenu();
+    setChangeServerConfirmOpen(true);
   }
 
   function setConversationSortPreference(sort: ConversationSidebarSort) {
@@ -1235,32 +1269,33 @@ export function Sidebar({ onClose }: SidebarProps) {
     <div className="flex h-full w-full min-w-0 flex-col text-gray-300">
       {/* User section */}
       <div className="flex items-center gap-2 border-b border-white/10 p-3">
-        <DropdownMenu>
+        <DropdownMenu open={userMenuOpen} onOpenChange={setUserMenuOpen} modal={false}>
           <DropdownMenuTrigger
-              ref={userMenuTriggerRef}
-              className="flex flex-1 items-center gap-2 rounded-md p-1 text-left hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40"
-              aria-label="User menu"
-            >
-              <Avatar className="h-8 w-8">
-                <AvatarImage src={user?.avatarURL} alt="" />
-                <AvatarFallback className="bg-emerald-700 text-white text-xs">
-                  {initials}
-                </AvatarFallback>
-              </Avatar>
-              <span className="flex-1 truncate text-sm font-semibold text-white">
-                {user?.displayName}
-              </span>
-              <UserStatusIndicator status={user?.userStatus} />
-              {isAdmin(user?.systemRole) && (
-                <Badge variant="secondary" className="ml-1 text-[10px] px-1 py-0 bg-white/20 text-white border-0">
-                  Admin
-                </Badge>
-              )}
-              <ChevronDown className="h-4 w-4 text-gray-400" />
+            ref={userMenuTriggerRef}
+            className="flex flex-1 items-center gap-2 rounded-md p-1 text-left hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40"
+            aria-label="User menu"
+            onClick={() => setMobileUserMenuOpen((open) => !open)}
+          >
+            <Avatar className="h-8 w-8">
+              <AvatarImage src={user?.avatarURL} alt="" />
+              <AvatarFallback className="bg-emerald-700 text-white text-xs">
+                {initials}
+              </AvatarFallback>
+            </Avatar>
+            <span className="flex-1 truncate text-sm font-semibold text-white">
+              {user?.displayName}
+            </span>
+            <UserStatusIndicator status={user?.userStatus} />
+            {isAdmin(user?.systemRole) && (
+              <Badge variant="secondary" className="ml-1 text-[10px] px-1 py-0 bg-white/20 text-white border-0">
+                Admin
+              </Badge>
+            )}
+            <ChevronDown className="h-4 w-4 text-gray-400" />
           </DropdownMenuTrigger>
           <DropdownMenuContent
             align="start"
-            className="w-48 max-md:fixed max-md:left-0 max-md:right-0 max-md:top-[calc(env(safe-area-inset-top)+2.75rem)] max-md:w-screen max-md:min-w-0 max-md:rounded-none max-md:border-b max-md:p-2 max-md:ring-0"
+            className="w-48 max-md:hidden"
           >
             <DropdownMenuItem className={USER_MENU_ITEM_CLASS} onClick={() => setUserMenuModalOpen(setEditProfileOpen, true)}>
               <UserIcon className="mr-2 h-4 w-4" />
@@ -1295,6 +1330,16 @@ export function Sidebar({ onClose }: SidebarProps) {
                 Admin
               </DropdownMenuItem>
             )}
+            {serverNavigation && (
+              <DropdownMenuItem
+                className={USER_MENU_ITEM_CLASS}
+                onClick={openChangeServerConfirm}
+                data-testid="user-menu-change-server"
+              >
+                <ServerCog className="mr-2 h-4 w-4" />
+                Change server
+              </DropdownMenuItem>
+            )}
             <DropdownMenuItem
               className={USER_MENU_ITEM_CLASS}
               onClick={() => {
@@ -1312,6 +1357,99 @@ export function Sidebar({ onClose }: SidebarProps) {
         </DropdownMenu>
       </div>
 
+      {mobileUserMenuOpen && (
+        <div
+          className="border-b border-white/10 p-2 text-base text-gray-200 md:hidden"
+          data-testid="mobile-user-menu"
+          onPointerDown={(event) => event.stopPropagation()}
+        >
+          <button
+            type="button"
+            className="flex h-12 w-full items-center rounded-md px-3 text-left hover:bg-white/10"
+            onClick={() => setUserMenuModalOpen(setEditProfileOpen, true)}
+          >
+            <UserIcon className="mr-2 h-4 w-4" />
+            Edit profile
+          </button>
+          <button
+            type="button"
+            className="flex h-12 w-full items-center rounded-md px-3 text-left hover:bg-white/10"
+            onClick={() => setUserMenuModalOpen(setStatusOpen, true)}
+          >
+            <CalendarClock className="mr-2 h-4 w-4" />
+            Set status
+          </button>
+          {isAdmin(user?.systemRole) && (
+            <button
+              type="button"
+              className="flex h-12 w-full items-center rounded-md px-3 text-left hover:bg-white/10"
+              onClick={() => setUserMenuModalOpen(setInviteOpen, true)}
+            >
+              <UserPlus className="mr-2 h-4 w-4" />
+              Invite people
+            </button>
+          )}
+          {!isGuest(user?.systemRole) && (
+            <button
+              type="button"
+              className="flex h-12 w-full items-center rounded-md px-3 text-left hover:bg-white/10"
+              onClick={() => setUserMenuModalOpen(setEmojiManagerOpen, true)}
+            >
+              <Smile className="mr-2 h-4 w-4" />
+              Custom emojis
+            </button>
+          )}
+          {isAdmin(user?.systemRole) && (
+            <button
+              type="button"
+              className="flex h-12 w-full items-center rounded-md px-3 text-left hover:bg-white/10"
+              onClick={() => {
+                closeUserMenu();
+                onClose();
+                navigate('/admin');
+              }}
+              data-testid="mobile-user-menu-admin"
+            >
+              <Settings className="mr-2 h-4 w-4" />
+              Admin
+            </button>
+          )}
+          {serverNavigation && (
+            <button
+              type="button"
+              className="flex h-12 w-full items-center rounded-md px-3 text-left hover:bg-white/10"
+              onClick={openChangeServerConfirm}
+              data-testid="mobile-change-server"
+            >
+              <ServerCog className="mr-2 h-4 w-4" />
+              Change server
+            </button>
+          )}
+          <button
+            type="button"
+            className="flex h-12 w-full items-center rounded-md px-3 text-left hover:bg-white/10"
+            onClick={() => {
+              setAboutOpenAndClearUserFocus(true);
+              closeUserMenu();
+            }}
+          >
+            <Info className="mr-2 h-4 w-4" />
+            About Server
+          </button>
+          <button
+            type="button"
+            className="flex h-12 w-full items-center rounded-md px-3 text-left hover:bg-white/10"
+            onClick={() => {
+              closeUserMenu();
+              void handleLogout();
+            }}
+          >
+            <LogOut className="mr-2 h-4 w-4" />
+            Sign out
+          </button>
+        </div>
+      )}
+
       <ScrollArea
         className="min-h-0 w-full flex-1"
         scrollbarClassName="opacity-0 transition-opacity data-[scrolling]:opacity-100"
@@ -1324,7 +1462,7 @@ export function Sidebar({ onClose }: SidebarProps) {
             to="/directory/channels"
             onClick={onClose}
             className={() =>
-              `flex items-center gap-2 rounded-md px-2 py-1 text-sm transition-colors ${
+              `flex items-center gap-2 rounded-md px-2 py-1 text-sm transition-colors max-md:h-12 max-md:px-3 max-md:py-0 max-md:text-base ${
                 directoryActive
                   ? 'bg-white/15 text-white font-semibold'
                   : 'text-gray-300 hover:bg-white/10 hover:text-white'
@@ -1339,7 +1477,7 @@ export function Sidebar({ onClose }: SidebarProps) {
             to="/threads"
             onClick={onClose}
             className={({ isActive }) =>
-              `flex items-center gap-2 rounded-md px-2 py-1 text-sm transition-colors ${
+              `flex items-center gap-2 rounded-md px-2 py-1 text-sm transition-colors max-md:h-12 max-md:px-3 max-md:py-0 max-md:text-base ${
                 isActive
                   ? 'bg-white/15 text-white font-semibold'
                   : 'text-gray-300 hover:bg-white/10 hover:text-white'
@@ -1354,7 +1492,7 @@ export function Sidebar({ onClose }: SidebarProps) {
             to="/drafts"
             onClick={onClose}
             className={({ isActive }) =>
-              `flex items-center gap-2 rounded-md px-2 py-1 text-sm transition-colors ${
+              `flex items-center gap-2 rounded-md px-2 py-1 text-sm transition-colors max-md:h-12 max-md:px-3 max-md:py-0 max-md:text-base ${
                 isActive
                   ? 'bg-white/15 text-white font-semibold'
                   : 'text-gray-300 hover:bg-white/10 hover:text-white'
@@ -1410,7 +1548,7 @@ export function Sidebar({ onClose }: SidebarProps) {
                 }}
                 placeholder="Category name…"
                 data-testid="sidebar-new-category-input"
-                className="w-full rounded-md bg-white/10 px-2 py-1 text-sm text-white placeholder:text-gray-400 focus:outline-none focus:ring-1 focus:ring-white/40"
+                className="w-full rounded-md bg-white/10 px-2 py-1 text-sm text-white placeholder:text-gray-400 focus:outline-none focus:ring-1 focus:ring-white/40 max-md:h-12 max-md:px-3 max-md:py-0 max-md:text-base"
               />
               {categoryCreateError && (
                 <p className="mt-1 text-xs text-red-300" role="alert">
@@ -1425,7 +1563,7 @@ export function Sidebar({ onClose }: SidebarProps) {
                 setCreatingCategory(true);
               }}
               data-testid="sidebar-add-category"
-              className="mb-1 w-full rounded-md px-2 py-1 text-left text-sm text-gray-500 hover:bg-white/5 hover:text-gray-300"
+              className="mb-1 w-full rounded-md px-2 py-1 text-left text-sm text-gray-500 hover:bg-white/5 hover:text-gray-300 max-md:h-12 max-md:px-3 max-md:py-0 max-md:text-base"
             >
               + Add category
             </button>
@@ -1513,7 +1651,7 @@ export function Sidebar({ onClose }: SidebarProps) {
                       }}
                       aria-expanded={!collapsed}
                       data-testid={`sidebar-group-toggle-${section.key}`}
-                      className="flex flex-1 items-center gap-1 rounded-md px-2 py-1 text-sm font-semibold text-gray-400 hover:bg-white/5"
+                      className="flex flex-1 items-center gap-1 rounded-md px-2 py-1 text-sm font-semibold text-gray-400 hover:bg-white/5 max-md:h-12 max-md:px-3 max-md:py-0 max-md:text-base"
                     >
                       <ChevronDown
                         className={`h-3 w-3 transition-transform ${collapsed ? '-rotate-90' : ''}`}
@@ -1714,6 +1852,18 @@ export function Sidebar({ onClose }: SidebarProps) {
         open={aboutOpen}
         onOpenChange={setAboutOpenAndClearUserFocus}
         onClosed={scheduleClearUserMenuFocus}
+      />
+      <ConfirmDialog
+        open={changeServerConfirmOpen}
+        onOpenChange={setChangeServerConfirmOpen}
+        title="Change chat server?"
+        description="This returns you to the server setup screen. You may need to sign in again for the selected server."
+        confirmLabel="Change server"
+        onConfirm={() => {
+          void serverNavigation?.resetServer?.();
+        }}
+        testIDPrefix="change-server"
+        finalFocus={userMenuTriggerRef}
       />
 
       <ConfirmDialog

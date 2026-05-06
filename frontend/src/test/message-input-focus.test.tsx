@@ -98,7 +98,7 @@ describe('MessageInput focusKey', () => {
     expect(editor).not.toHaveClass('max-md:max-h-[1.5rem]');
   });
 
-  it('hides mobile formatting controls until the user focuses the input line', () => {
+  it('keeps the mobile composer as a single input until focus reveals a non-scrolling toolbar', () => {
     setMobileMatch(true);
     render(<MessageInput onSend={vi.fn()} focusKey="ch-1" />);
     const editor = screen.getByLabelText('Message input');
@@ -106,7 +106,13 @@ describe('MessageInput focusKey', () => {
     expect(screen.queryByRole('toolbar', { name: 'Formatting' })).not.toBeInTheDocument();
     expect(screen.queryByLabelText('Attach file')).not.toBeInTheDocument();
     fireEvent.focus(editor);
-    expect(screen.getByRole('toolbar', { name: 'Formatting' })).toBeInTheDocument();
-    expect(screen.getByLabelText('Attach file')).toBeInTheDocument();
+    const toolbar = screen.getByRole('toolbar', { name: 'Formatting' });
+    const attach = screen.getByLabelText('Attach file');
+
+    expect(toolbar).not.toHaveClass('overflow-x-auto', 'max-md:touch-pan-x');
+    expect(screen.getByLabelText('Bold (Ctrl+B)')).toHaveClass('max-md:h-9', 'max-md:w-9');
+    expect(attach).toHaveClass('max-md:h-9', 'max-md:w-9', 'max-md:ml-0');
+    expect(screen.queryByLabelText('Quote')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('List')).not.toBeInTheDocument();
   });
 });

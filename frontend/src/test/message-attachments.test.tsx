@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import type { Attachment } from '@/types';
 
@@ -16,6 +16,10 @@ const baseProps = {
 
 beforeEach(() => {
   useAttachmentsBatchMock.mockReset();
+});
+
+afterEach(() => {
+  document.body.removeAttribute('style');
 });
 
 describe('MessageAttachments', () => {
@@ -384,6 +388,33 @@ describe('MessageAttachments', () => {
     fireEvent.click(screen.getByLabelText('Open image p.png'));
     fireEvent.click(screen.getByTestId('image-lightbox-close'));
     expect(screen.queryByTestId('image-lightbox')).toBeNull();
+  });
+
+  it('restores document scroll state after the lightbox closes', () => {
+    const att: Attachment = {
+      id: 'a-scroll-lock',
+      filename: 'scroll.png',
+      contentType: 'image/png',
+      size: 100,
+      url: 'https://cdn/scroll.png',
+    };
+    document.body.style.overflow = 'auto';
+    useAttachmentsBatchMock.mockReturnValue({
+      map: new Map([['a-scroll-lock', att]]),
+      isLoading: false,
+    });
+    render(<MessageAttachments {...baseProps} ids={['a-scroll-lock']} />);
+
+    fireEvent.click(screen.getByLabelText('Open image scroll.png'));
+    expect(document.body.style.overflow).toBe('hidden');
+    expect(document.body.style.touchAction).toBe('');
+    expect(document.body.style.overscrollBehavior).toBe('');
+
+    fireEvent.click(screen.getByTestId('image-lightbox-close'));
+
+    expect(document.body.style.overflow).toBe('auto');
+    expect(document.body.style.touchAction).toBe('');
+    expect(document.body.style.overscrollBehavior).toBe('');
   });
 
   function multiImageMap(): Map<string, Attachment> {

@@ -25,6 +25,7 @@ describe('BucketPicker', () => {
     wrap(
       <BucketPicker kind="users" buttonLabel="From ▾" buckets={[]} onPick={onPick} />,
     );
+    expect(screen.getByTestId('bucket-picker-users')).toHaveClass('text-xs', 'max-md:text-sm', 'max-md:min-h-9');
     fireEvent.click(screen.getByTestId('bucket-picker-users'));
     expect(screen.getByText(/no options/i)).toBeInTheDocument();
   });
@@ -53,6 +54,7 @@ describe('BucketPicker', () => {
     );
     fireEvent.click(screen.getByTestId('bucket-picker-users'));
     await waitFor(() => screen.getByText('Alice'));
+    expect(screen.getByText('Alice').closest('button')).toHaveClass('py-2', 'text-sm', 'max-md:py-3', 'max-md:text-base');
     expect(screen.getByText('12')).toBeInTheDocument();
     fireEvent.click(screen.getByText('Alice'));
     expect(onPick).toHaveBeenCalledWith('u-1');

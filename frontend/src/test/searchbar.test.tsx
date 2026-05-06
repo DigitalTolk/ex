@@ -39,12 +39,22 @@ describe('SearchBar', () => {
     expect(screen.getByTestId('searchbar-input')).toBeInTheDocument();
   });
 
+  it('keeps desktop search compact while adding mobile-only touch sizing', () => {
+    wrap();
+
+    const input = screen.getByTestId('searchbar-input');
+    const shell = input.parentElement!;
+    expect(shell).toHaveClass('h-7', 'max-md:h-9');
+    expect(input).toHaveClass('text-sm', 'max-md:text-base');
+  });
+
   it('opens a "Show results for" dropdown once the user types', () => {
     wrap();
     fireEvent.change(screen.getByTestId('searchbar-input'), { target: { value: 'claude' } });
     expect(screen.getByTestId('searchbar-dropdown')).toBeInTheDocument();
     expect(screen.getByTestId('searchbar-show-results')).toHaveTextContent(/Show results for/i);
     expect(screen.getByTestId('searchbar-show-results')).toHaveTextContent('claude');
+    expect(screen.getByTestId('searchbar-show-results')).toHaveClass('py-2', 'text-sm', 'max-md:py-3', 'max-md:text-base');
   });
 
   it('navigates to /search?q=... when the suggestion is clicked', () => {

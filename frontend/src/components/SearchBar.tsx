@@ -111,7 +111,7 @@ export function SearchBar() {
 
   return (
     <div ref={containerRef} className="relative w-full" data-testid="searchbar">
-      <div className="flex h-7 items-center gap-2 rounded-md bg-white/10 px-2 text-zinc-100 transition-colors focus-within:bg-white/20 hover:bg-white/15">
+      <div className="flex h-7 items-center gap-2 rounded-md bg-white/10 px-2 text-zinc-100 transition-colors focus-within:bg-white/20 hover:bg-white/15 max-md:h-9">
         <Search className="h-3.5 w-3.5 text-zinc-300" aria-hidden="true" />
         <input
           ref={inputRef}
@@ -140,7 +140,7 @@ export function SearchBar() {
           }}
           placeholder="Search"
           aria-label="Search"
-          className="flex-1 bg-transparent text-sm text-zinc-100 placeholder:text-zinc-400 focus:outline-none"
+          className="flex-1 bg-transparent text-sm text-zinc-100 placeholder:text-zinc-400 focus:outline-none max-md:text-base"
           data-testid="searchbar-input"
         />
         {q && (
@@ -148,7 +148,7 @@ export function SearchBar() {
             type="button"
             onClick={clear}
             aria-label="Clear search"
-            className="rounded text-zinc-300 hover:text-zinc-100"
+            className="inline-flex h-7 w-7 items-center justify-center rounded text-zinc-300 hover:text-zinc-100"
           >
             <X className="h-3.5 w-3.5" />
           </button>
@@ -188,7 +188,7 @@ export function SearchBar() {
                 }
                 data-scope-kind={s.kind === 'in-scope' ? s.scopeKind : undefined}
                 aria-selected={isHighlighted}
-                className={`flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-sm ${
+                className={`flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-sm max-md:py-3 max-md:text-base ${
                   isHighlighted ? 'bg-muted' : ''
                 }`}
               >

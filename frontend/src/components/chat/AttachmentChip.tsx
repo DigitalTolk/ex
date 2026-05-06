@@ -75,7 +75,7 @@ export function AttachmentChip({ att, onRemove }: AttachmentChipProps) {
           type="button"
           onClick={onRemove}
           aria-label={`Remove ${att.filename}`}
-          className="absolute -right-1.5 -top-1.5 inline-flex h-5 w-5 items-center justify-center rounded-full border bg-background text-muted-foreground shadow-sm opacity-0 transition-opacity hover:text-foreground hover:bg-muted group-hover:opacity-100 focus:opacity-100"
+          className="absolute -right-2 -top-2 inline-flex h-7 w-7 items-center justify-center rounded-full border bg-background text-muted-foreground shadow-sm opacity-100 transition-opacity hover:bg-muted hover:text-foreground md:-right-1.5 md:-top-1.5 md:h-5 md:w-5 md:opacity-0 md:group-hover:opacity-100 md:focus:opacity-100"
         >
           <X className="h-3 w-3" />
         </button>

@@ -41,9 +41,11 @@ function DialogContent({
   className,
   children,
   showCloseButton = true,
+  mobileCloseLabel,
   ...props
 }: DialogPrimitive.Popup.Props & {
   showCloseButton?: boolean
+  mobileCloseLabel?: string
 }) {
   return (
     <DialogPortal>
@@ -52,26 +54,44 @@ function DialogContent({
         data-slot="dialog-content"
         className={cn(
           "fixed top-1/2 left-1/2 z-50 grid w-full max-w-[calc(100%-2rem)] -translate-x-1/2 -translate-y-1/2 gap-4 rounded-xl bg-popover p-4 text-sm text-popover-foreground ring-1 ring-foreground/10 duration-100 outline-none max-md:inset-0 max-md:max-h-none max-md:max-w-none max-md:translate-x-0 max-md:translate-y-0 max-md:overflow-y-auto max-md:rounded-none max-md:p-[calc(env(safe-area-inset-top)+1rem)_1rem_calc(env(safe-area-inset-bottom)+1rem)] sm:max-w-sm data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+          mobileCloseLabel && "max-md:[&_[data-slot=dialog-header]]:pr-20",
           className
         )}
         {...props}
       >
         {children}
         {showCloseButton && (
-          <DialogPrimitive.Close
-            data-slot="dialog-close"
-            render={
-              <Button
-                variant="ghost"
-                className="absolute top-2 right-2"
-                size="icon-sm"
+          <>
+            {mobileCloseLabel && (
+              <DialogPrimitive.Close
+                data-slot="dialog-mobile-close"
+                render={
+                  <Button
+                    aria-label="Dismiss dialog"
+                    variant="ghost"
+                    className="absolute right-3 top-[calc(env(safe-area-inset-top)+0.5rem)] hidden h-9 px-3 text-base after:content-[var(--mobile-close-label)] max-md:inline-flex"
+                    style={{
+                      '--mobile-close-label': `"${mobileCloseLabel}"`,
+                    } as React.CSSProperties}
+                  />
+                }
               />
-            }
-          >
-            <XIcon
-            />
-            <span className="sr-only">Close</span>
-          </DialogPrimitive.Close>
+            )}
+            <DialogPrimitive.Close
+              data-slot="dialog-close"
+              render={
+                <Button
+                  variant="ghost"
+                  className={cn("absolute top-2 right-2", mobileCloseLabel && "max-md:hidden")}
+                  size="icon-sm"
+                />
+              }
+            >
+              <XIcon
+              />
+              <span className="sr-only">Close</span>
+            </DialogPrimitive.Close>
+          </>
         )}
       </DialogPrimitive.Popup>
     </DialogPortal>

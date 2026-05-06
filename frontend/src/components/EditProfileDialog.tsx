@@ -29,7 +29,7 @@ export function EditProfileDialog({ open, onOpenChange }: EditProfileDialogProps
   if (!user) return null;
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-lg" finalFocus={false}>
+      <DialogContent className="max-w-lg" finalFocus={false} mobileCloseLabel="Cancel">
         <DialogHeader>
           <DialogTitle>Edit profile</DialogTitle>
         </DialogHeader>

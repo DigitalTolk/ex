@@ -90,11 +90,26 @@ function renderInput(onSend = vi.fn()) {
   );
 }
 
+function setMobileMatch(matches: boolean) {
+  Object.defineProperty(window, 'matchMedia', {
+    configurable: true,
+    value: vi.fn(() => ({
+      matches,
+      media: '(max-width: 767px)',
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+    })),
+  });
+}
+
 describe('MessageInput — Giphy integration', () => {
   beforeEach(() => {
     vi.mocked(apiFetch).mockReset();
     giphyFetchMocks.search.mockReset();
     giphyFetchMocks.trending.mockReset();
+    setMobileMatch(false);
   });
 
   it('hides the GIF toolbar button when Giphy is disabled', () => {
@@ -133,5 +148,48 @@ describe('MessageInput — Giphy integration', () => {
       expect(editor.textContent ?? '').toContain('![GIPHY](giphy:g-1 =300x200)');
       expect(editor.textContent ?? '').not.toContain('media.giphy.com');
     });
+  });
+
+  it('lets the portal search input receive pointer focus from the toolbar picker', async () => {
+    mockSettings = giphyEnabled;
+    giphyFetchMocks.trending.mockResolvedValue({
+      data: [],
+      pagination: { total_count: 0, count: 0, offset: 0 },
+      meta: { status: 200, msg: 'OK', response_id: 'r' },
+    });
+    renderInput();
+
+    fireEvent.click(screen.getByLabelText('GIF'));
+    const search = await screen.findByLabelText('Search GIFs');
+    const pointerDown = new PointerEvent('pointerdown', { bubbles: true, cancelable: true });
+    const mouseDown = new MouseEvent('mousedown', { bubbles: true, cancelable: true });
+
+    search.dispatchEvent(pointerDown);
+    search.dispatchEvent(mouseDown);
+
+    expect(pointerDown.defaultPrevented).toBe(false);
+    expect(mouseDown.defaultPrevented).toBe(false);
+  });
+
+  it('keeps the mobile GIF picker open when tapping its search field', async () => {
+    setMobileMatch(true);
+    mockSettings = giphyEnabled;
+    giphyFetchMocks.trending.mockResolvedValue({
+      data: [],
+      pagination: { total_count: 0, count: 0, offset: 0 },
+      meta: { status: 200, msg: 'OK', response_id: 'r' },
+    });
+    renderInput();
+    const editor = screen.getByLabelText('Message input');
+    fireEvent.focus(editor);
+    fireEvent.click(screen.getByLabelText('GIF'));
+    const search = await screen.findByLabelText('Search GIFs');
+
+    fireEvent.blur(editor);
+    fireEvent.pointerDown(search, { pointerType: 'touch' });
+    fireEvent.focus(search);
+
+    expect(screen.getByLabelText('Search GIFs')).toBeInTheDocument();
+    expect(screen.getByRole('toolbar', { name: 'Formatting' })).toBeInTheDocument();
   });
 });

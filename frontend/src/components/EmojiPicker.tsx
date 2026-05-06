@@ -31,6 +31,7 @@ import { EmojiGlyph } from '@/components/EmojiGlyph';
 import { fuzzyMatch } from '@/lib/fuzzy';
 import { apiFetch, getAccessToken } from '@/lib/api';
 import * as AuthContext from '@/context/AuthContext';
+import { useIsMobile } from '@/hooks/useIsMobile';
 import type { User } from '@/types';
 
 type SelectMode = 'shortcode' | 'reaction';
@@ -40,6 +41,7 @@ interface EmojiPickerProps {
   // (so messages and reactions are stored uniformly per the API contract).
   onSelect: (shortcode: string) => void;
   onClose?: () => void;
+  onOpenChange?: (open: boolean) => void;
   trigger?: React.ReactNode;
   ariaLabel?: string;
   // shortcode: insert :name: into a textarea (for the message composer)
@@ -109,11 +111,12 @@ function useEmojiPickerAuth() {
   }
 }
 
-export function EmojiPicker({ onSelect, onClose, trigger, ariaLabel = 'Emoji picker' }: EmojiPickerProps) {
+export function EmojiPicker({ onSelect, onClose, onOpenChange, trigger, ariaLabel = 'Emoji picker' }: EmojiPickerProps) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [activeCategory, setActiveCategory] = useState<string>(EMOJI_CATEGORIES[0]?.slug ?? '');
   const auth = useEmojiPickerAuth();
+  const isMobile = useIsMobile();
   const user = auth?.user;
   const [skinTone, setSkinTone] = useState<EmojiSkinTone>(user?.emojiSkinTone ?? '');
   const profileSkinToneRef = useRef<EmojiSkinTone>(user?.emojiSkinTone ?? '');
@@ -151,8 +154,8 @@ export function EmojiPicker({ onSelect, onClose, trigger, ariaLabel = 'Emoji pic
   }, [activeCategory, customEmojis, query]);
 
   useEffect(() => {
-    if (open) inputRef.current?.focus();
-  }, [open]);
+    if (open && !isMobile) inputRef.current?.focus();
+  }, [isMobile, open]);
 
   useEffect(() => {
     if (!open) return;
@@ -164,7 +167,9 @@ export function EmojiPicker({ onSelect, onClose, trigger, ariaLabel = 'Emoji pic
   }, [open, user]);
 
   function close() {
+    inputRef.current?.blur();
     setOpen(false);
+    onOpenChange?.(false);
     setQuery('');
     onClose?.();
   }
@@ -195,7 +200,13 @@ export function EmojiPicker({ onSelect, onClose, trigger, ariaLabel = 'Emoji pic
       <span
         ref={triggerRef}
         className="inline-block"
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => {
+          setOpen((v) => {
+            const next = !v;
+            onOpenChange?.(next);
+            return next;
+          });
+        }}
       >
         {trigger ?? (
           <Button size="sm" variant="ghost" aria-label="Open emoji picker">

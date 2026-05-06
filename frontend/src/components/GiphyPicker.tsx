@@ -4,6 +4,7 @@ import { Grid } from '@giphy/react-components';
 import type IGif from '@giphy/js-types/dist/gif';
 import { Input } from '@/components/ui/input';
 import { PopoverPortal } from '@/components/PopoverPortal';
+import { useIsMobile } from '@/hooks/useIsMobile';
 
 // PickedGIF is the shape we hand back to the composer: just the fields
 // the message body needs. The Grid's onGifClick gives us a full IGif;
@@ -21,6 +22,7 @@ interface GiphyPickerProps {
   onSelect: (gif: PickedGIF) => void;
   trigger: React.ReactNode;
   ariaLabel?: string;
+  onOpenChange?: (open: boolean) => void;
 }
 
 const MAX_GRID_WIDTH = 336;
@@ -62,18 +64,19 @@ function computeGridWidth() {
 // `<Grid>` component. The Grid handles infinite scroll, masonry layout,
 // image rendering, and direct client-side requests to GIPHY via the
 // SDK fetch client; this app does not proxy GIPHY API or media traffic.
-export function GiphyPicker({ apiKey, onSelect, trigger, ariaLabel = 'Giphy picker' }: GiphyPickerProps) {
+export function GiphyPicker({ apiKey, onSelect, trigger, ariaLabel = 'Giphy picker', onOpenChange }: GiphyPickerProps) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [debouncedQuery, setDebouncedQuery] = useState('');
   const [gridWidth, setGridWidth] = useState(computeGridWidth);
   const triggerRef = useRef<HTMLSpanElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const isMobile = useIsMobile();
   const gf = useMemo(() => new GiphyFetch(apiKey.trim()), [apiKey]);
 
   useEffect(() => {
-    if (open) inputRef.current?.focus();
-  }, [open]);
+    if (open && !isMobile) inputRef.current?.focus();
+  }, [isMobile, open]);
 
   useEffect(() => {
     if (!open) return;
@@ -109,10 +112,12 @@ export function GiphyPicker({ apiKey, onSelect, trigger, ariaLabel = 'Giphy pick
   );
 
   const close = useCallback(() => {
+    inputRef.current?.blur();
     setOpen(false);
+    onOpenChange?.(false);
     setQuery('');
     setDebouncedQuery('');
-  }, []);
+  }, [onOpenChange]);
 
   const handleGifClick = useCallback(
     (gif: IGif, e: React.SyntheticEvent) => {
@@ -136,7 +141,13 @@ export function GiphyPicker({ apiKey, onSelect, trigger, ariaLabel = 'Giphy pick
       <span
         ref={triggerRef}
         className="inline-block"
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => {
+          setOpen((v) => {
+            const next = !v;
+            onOpenChange?.(next);
+            return next;
+          });
+        }}
       >
         {trigger}
       </span>

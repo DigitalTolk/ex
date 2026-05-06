@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { beforeEach, describe, it, expect, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { BrowserRouter } from 'react-router-dom';
@@ -8,11 +8,24 @@ import type { Channel, UserChannel } from '@/types';
 const mockBrowseChannels = vi.fn();
 const mockUserChannels = vi.fn();
 const mockJoinChannel = vi.fn();
+const mockApiFetch = vi.fn();
 
 vi.mock('@/hooks/useChannels', () => ({
   useBrowseChannels: () => mockBrowseChannels(),
   useUserChannels: () => mockUserChannels(),
   useJoinChannel: () => ({ mutate: mockJoinChannel, isPending: false }),
+}));
+
+vi.mock('@/hooks/useConversations', () => ({
+  useCreateConversation: () => ({ mutate: vi.fn(), isPending: false }),
+}));
+
+vi.mock('@/context/PresenceContext', () => ({
+  usePresence: () => ({ isOnline: () => false }),
+}));
+
+vi.mock('@/lib/api', () => ({
+  apiFetch: (...args: unknown[]) => mockApiFetch(...args),
 }));
 
 vi.mock('@/context/AuthContext', () => ({
@@ -33,6 +46,12 @@ function renderWithProviders(ui: React.ReactElement) {
 }
 
 describe('DirectoriesPage', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockApiFetch.mockResolvedValue([]);
+    window.history.pushState({}, '', '/directory/channels');
+  });
+
   it('shows loading skeleton', () => {
     mockBrowseChannels.mockReturnValue({ data: undefined, isLoading: true });
     mockUserChannels.mockReturnValue({ data: undefined });
@@ -84,6 +103,22 @@ describe('DirectoriesPage', () => {
     expect(window.location.pathname).toBe('/directory/users');
     fireEvent.click(screen.getByRole('tab', { name: 'Channels' }));
     expect(window.location.pathname).toBe('/directory/channels');
+  });
+
+  it('uses a two-column member grid on mobile and the dense desktop grid at larger sizes', async () => {
+    mockBrowseChannels.mockReturnValue({ data: [], isLoading: false });
+    mockUserChannels.mockReturnValue({ data: [] });
+    mockApiFetch.mockResolvedValue([
+      { id: 'u-1', email: 'a@b.c', displayName: 'Alice', systemRole: 'member', status: 'active' },
+      { id: 'u-2', email: 'b@b.c', displayName: 'Bob', systemRole: 'member', status: 'active' },
+    ]);
+    window.history.pushState({}, '', '/directory/users');
+
+    renderWithProviders(<DirectoriesPage />);
+
+    const grid = await screen.findByTestId('members-grid');
+    expect(grid).toHaveClass('grid-cols-2', 'gap-3');
+    expect(grid.className).toContain('md:grid-cols-[repeat(auto-fill,minmax(16rem,calc((100%_-_3rem)/5)))]');
   });
 
   it('renders channels when data is loaded', () => {

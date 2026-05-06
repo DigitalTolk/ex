@@ -1,9 +1,10 @@
-import { createElement, useEffect } from 'react';
+import { createElement, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { ChevronLeft, ChevronRight, Download, X } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { getInitials, formatLongDateTime, formatBytes } from '@/lib/format';
 import { iconForAttachment, isImageContentType } from '@/lib/file-helpers';
+import { useTransientOverlayCleanup } from '@/hooks/useTransientOverlayCleanup';
 
 export interface LightboxImage {
   url: string;
@@ -42,6 +43,8 @@ export function ImageLightbox({
   const total = images.length;
   const safeIndex = total === 0 ? 0 : ((index % total) + total) % total;
   const current = images[safeIndex];
+  const lightboxRef = useRef<HTMLDivElement>(null);
+  useTransientOverlayCleanup(open, { rootRef: lightboxRef, lockScroll: true });
 
   useEffect(() => {
     if (!open) return;
@@ -71,11 +74,8 @@ export function ImageLightbox({
       }
     }
     document.addEventListener('keydown', onKey);
-    const prevOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
     return () => {
       document.removeEventListener('keydown', onKey);
-      document.body.style.overflow = prevOverflow;
     };
   }, [open, onClose, onIndexChange, safeIndex, total]);
 
@@ -86,6 +86,7 @@ export function ImageLightbox({
 
   return createPortal(
     <div
+      ref={lightboxRef}
       role="dialog"
       aria-modal="true"
       aria-label={`Attachment preview: ${current.filename}`}

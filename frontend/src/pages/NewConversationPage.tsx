@@ -119,7 +119,7 @@ export default function NewConversationPage() {
     // at the top; the composer pins to the bottom; the middle is empty
     // until the user sends the first message.
     <div
-      className="flex flex-1 flex-col overflow-hidden"
+      className="flex min-h-0 flex-1 flex-col overflow-hidden"
       data-testid="new-conversation-form"
     >
       {/* Header / "To:" row */}
@@ -170,7 +170,7 @@ export default function NewConversationPage() {
               onKeyDown={handleKeyDown}
               placeholder={picked.length === 0 ? 'Type a name…' : ''}
               autoFocus
-              className="flex-1 min-w-[8rem] bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+              className="min-w-[8rem] flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground max-md:text-base"
             />
           </div>
         </div>
@@ -203,7 +203,7 @@ export default function NewConversationPage() {
                       pick({ id: u.id, displayName: u.displayName });
                     }}
                     onMouseEnter={() => setActiveIndex(i)}
-                    className={`flex w-full items-center gap-2 px-3 py-2 text-left text-sm ${
+                    className={`flex w-full items-center gap-2 px-3 py-2 text-left text-sm max-md:py-3 max-md:text-base ${
                       isActive ? 'bg-muted' : 'hover:bg-muted/50'
                     }`}
                   >
@@ -223,7 +223,7 @@ export default function NewConversationPage() {
       {/* Empty message area — fills the gap between the To: row and the
           composer the same way an empty chat would. We don't render
           fake messages; just a neutral hint. */}
-      <div className="flex-1 overflow-y-auto">
+      <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="flex h-full items-center justify-center px-6 text-center text-sm text-muted-foreground">
           {picked.length === 0
             ? 'Type a name above to find someone, then send a message to start the chat.'
@@ -258,4 +258,3 @@ export default function NewConversationPage() {
     </div>
   );
 }
-

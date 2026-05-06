@@ -86,6 +86,17 @@ describe('ChannelRow', () => {
     expect(screen.getByText('general')).toBeInTheDocument();
   });
 
+  it('keeps row actions visible and tappable on mobile', () => {
+    renderRow(makeChannel({ channelID: 'ch-1', channelName: 'general' }));
+
+    const link = screen.getByText('general').closest('a')!;
+    const star = screen.getByTestId('fav-toggle-ch-1');
+    const menu = screen.getByTestId('row-menu-ch-1');
+    expect(link).toHaveClass('max-md:pr-20');
+    expect(star).toHaveClass('max-md:h-9', 'max-md:w-9', 'max-md:opacity-100');
+    expect(menu).toHaveClass('max-md:h-9', 'max-md:w-9', 'max-md:opacity-100');
+  });
+
   it('toggles favorite via the star button', () => {
     renderRow(makeChannel({ channelID: 'ch-1', favorite: false }));
     const star = screen.getByTestId('fav-toggle-ch-1');

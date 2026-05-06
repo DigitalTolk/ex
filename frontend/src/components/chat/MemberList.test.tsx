@@ -159,6 +159,24 @@ describe('MemberList', () => {
     expect(initials.closest('.relative')).not.toContainElement(status);
   });
 
+  it('keeps member remove controls available on touch devices', () => {
+    renderWithProviders(
+      <MemberList
+        channelId="ch-1"
+        currentUserId="owner"
+        currentUserRole={3}
+        members={[makeMember({ userID: 'u1', role: 'member', displayName: 'Alice Johnson' })]}
+      />,
+    );
+
+    expect(screen.getByLabelText('Remove Alice Johnson')).toHaveClass(
+      'h-9',
+      'w-9',
+      'opacity-100',
+      'md:opacity-0',
+    );
+  });
+
   it('shows "Members" heading', () => {
     renderWithProviders(<MemberList members={[makeMember()]} />);
 

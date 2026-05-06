@@ -6,9 +6,10 @@ import {
   Italic,
   Strikethrough,
   Code,
-  Link as LinkIcon,
-  List,
   Quote,
+  List,
+  ListOrdered,
+  Link as LinkIcon,
   Smile,
   ImagePlay,
   X,
@@ -110,6 +111,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
   const [drafts, setDrafts] = useState<DraftAttachment[]>(initialDrafts);
   const [isUploading, setIsUploading] = useState(false);
   const [editorFocused, setEditorFocused] = useState(false);
+  const [toolbarPickerOpen, setToolbarPickerOpen] = useState(false);
   const [uploadError, setUploadError] = useState('');
   const editorRef = useRef<WysiwygEditorHandle>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -146,7 +148,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
   const suppressAutoFocus = isMobile && variant === 'composer';
   const compactMobileComposer =
     variant === 'composer' && !editorFocused && body.trim() === '' && drafts.length === 0;
-  const showToolbar = variant !== 'composer' || !isMobile || !compactMobileComposer;
+  const showToolbar = variant !== 'composer' || !isMobile || editorFocused || toolbarPickerOpen;
 
   useEffect(() => {
     latestDraftValueRef.current = { body, attachmentIDs: drafts.map((d) => d.id) };
@@ -510,7 +512,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
   }
 
   return (
-    <div className={variant === 'inline' ? 'p-0' : 'border-t p-3'}>
+    <div className={variant === 'inline' ? 'p-0' : 'border-t p-3 max-md:pb-[calc(0.75rem+env(safe-area-inset-bottom))]'}>
       {uploadError && (
         <div className="mb-2 rounded-md bg-destructive/10 p-2 text-xs text-destructive" role="alert">
           {uploadError}
@@ -536,18 +538,34 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
       )}
       <div className="rounded-lg border bg-muted/40 dark:bg-input/30 focus-within:ring-1 focus-within:ring-ring">
         {showToolbar && (
-          <div className="flex items-center gap-0.5 border-b px-2 py-1" role="toolbar" aria-label="Formatting">
+          <div
+            className="flex items-center gap-0.5 border-b px-2 py-1"
+            role="toolbar"
+            aria-label="Formatting"
+            onMouseDown={(event) => {
+              if (event.currentTarget.contains(event.target as Node)) event.preventDefault();
+            }}
+            onPointerDown={(event) => {
+              if (event.currentTarget.contains(event.target as Node)) event.preventDefault();
+            }}
+          >
             <ToolbarBtn label="Bold (Ctrl+B)" active={active.has('bold')} onClick={() => editorRef.current?.applyMark('bold')}><Bold className="h-3.5 w-3.5" /></ToolbarBtn>
             <ToolbarBtn label="Italic (Ctrl+I)" active={active.has('italic')} onClick={() => editorRef.current?.applyMark('italic')}><Italic className="h-3.5 w-3.5" /></ToolbarBtn>
             <ToolbarBtn label="Strikethrough" active={active.has('strike')} onClick={() => editorRef.current?.applyMark('strike')}><Strikethrough className="h-3.5 w-3.5" /></ToolbarBtn>
             <ToolbarBtn label="Code (Ctrl+E)" active={active.has('code')} onClick={() => editorRef.current?.applyMark('code')}><Code className="h-3.5 w-3.5" /></ToolbarBtn>
+            {!isMobile && (
+              <>
+                <ToolbarBtn label="Quote" active={active.has('quote')} onClick={() => editorRef.current?.applyBlock('quote')}><Quote className="h-3.5 w-3.5" /></ToolbarBtn>
+                <ToolbarBtn label="List" active={active.has('ul')} onClick={() => editorRef.current?.applyBlock('ul')}><List className="h-3.5 w-3.5" /></ToolbarBtn>
+                <ToolbarBtn label="Numbered list" active={active.has('ol')} onClick={() => editorRef.current?.applyBlock('ol')}><ListOrdered className="h-3.5 w-3.5" /></ToolbarBtn>
+              </>
+            )}
             <ToolbarBtn label="Link" onClick={openLinkDialog}><LinkIcon className="h-3.5 w-3.5" /></ToolbarBtn>
-            <ToolbarBtn label="Quote" active={active.has('quote')} onClick={() => editorRef.current?.applyBlock('quote')}><Quote className="h-3.5 w-3.5" /></ToolbarBtn>
-            <ToolbarBtn label="List" active={active.has('ul')} onClick={() => editorRef.current?.applyBlock('ul')}><List className="h-3.5 w-3.5" /></ToolbarBtn>
             <span className="mx-1 h-4 w-px bg-border" aria-hidden />
             <EmojiPicker
               onSelect={insertEmojiShortcode}
               mode="shortcode"
+              onOpenChange={setToolbarPickerOpen}
               trigger={
                 <ToolbarBtn label="Emoji"><Smile className="h-3.5 w-3.5" /></ToolbarBtn>
               }
@@ -556,6 +574,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
               <GiphyPicker
                 apiKey={giphyAPIKey}
                 onSelect={insertGiphyGIF}
+                onOpenChange={setToolbarPickerOpen}
                 trigger={
                   <ToolbarBtn label="GIF"><ImagePlay className="h-3.5 w-3.5" /></ToolbarBtn>
                 }
@@ -565,7 +584,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
               type="button"
               onClick={() => fileInputRef.current?.click()}
               disabled={isUploading}
-              className="ml-auto h-7 w-7 flex items-center justify-center rounded-md hover:bg-muted disabled:opacity-50"
+              className="ml-auto flex h-7 w-7 items-center justify-center rounded-md hover:bg-muted disabled:opacity-50 max-md:ml-0 max-md:h-9 max-md:w-9 max-md:shrink-0"
               aria-label="Attach file"
             >
               <Paperclip className="h-3.5 w-3.5" />
@@ -589,7 +608,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
           </div>
         )}
 
-        <div className="flex items-end gap-2 px-3 py-2">
+        <div className={`flex gap-2 px-3 py-2 ${compactMobileComposer ? 'items-center' : 'items-end'}`}>
           <WysiwygEditor
             ref={editorRef}
             initialBody={initialBody}
@@ -624,7 +643,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
                 onClick={onCancel}
                 variant="ghost"
                 size="icon"
-                className="h-8 w-8 rounded-md"
+                className="h-9 w-9 rounded-md"
                 aria-label="Cancel"
               >
                 <X className="h-4 w-4" />
@@ -634,7 +653,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
               onClick={handleSend}
               disabled={!canSend}
               size={submitLabel ? 'sm' : 'icon'}
-              className={submitLabel ? 'h-8 rounded-md' : 'h-8 w-8 rounded-md'}
+              className={submitLabel ? 'h-9 rounded-md px-3' : 'h-8 w-8 rounded-md'}
               aria-label={submitLabel ?? 'Send message'}
             >
               {submitLabel ? submitLabel : <Send className="h-4 w-4" />}
@@ -708,7 +727,7 @@ function ToolbarBtn({
       title={label}
       aria-label={label}
       aria-pressed={active ? 'true' : undefined}
-      className={`h-7 w-7 flex items-center justify-center rounded-md hover:bg-muted ${
+      className={`flex h-7 w-7 items-center justify-center rounded-md hover:bg-muted max-md:h-9 max-md:w-9 max-md:shrink-0 ${
         active ? 'bg-muted text-foreground' : 'text-muted-foreground'
       }`}
     >

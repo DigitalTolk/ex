@@ -2,6 +2,7 @@ import { useEffect, useRef, type ReactNode, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import { usePopoverPosition } from '@/hooks/usePopoverPosition';
 import { useIsMobile } from '@/hooks/useIsMobile';
+import { useTransientOverlayCleanup } from '@/hooks/useTransientOverlayCleanup';
 
 interface PopoverPortalProps {
   open: boolean;
@@ -55,7 +56,7 @@ export function PopoverPortal({
 
   useEffect(() => {
     if (!open) return;
-    function onDown(e: MouseEvent) {
+    function onDown(e: PointerEvent) {
       const target = e.target as Node | null;
       if (!target) return;
       if (contentRef.current?.contains(target)) return;
@@ -65,13 +66,15 @@ export function PopoverPortal({
     function onKey(e: KeyboardEvent) {
       if (e.key === 'Escape') onDismiss?.();
     }
-    document.addEventListener('mousedown', onDown);
+    document.addEventListener('pointerdown', onDown);
     document.addEventListener('keydown', onKey);
     return () => {
-      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('pointerdown', onDown);
       document.removeEventListener('keydown', onKey);
     };
   }, [open, onDismiss, triggerRef]);
+
+  useTransientOverlayCleanup(open, { rootRef: contentRef });
 
   if (!open || typeof document === 'undefined') return null;
 
@@ -82,7 +85,7 @@ export function PopoverPortal({
         <div
           className="fixed inset-0 z-[999] bg-black/35"
           aria-hidden="true"
-          onMouseDown={onDismiss}
+          onPointerDown={onDismiss}
         />
       )}
       <div

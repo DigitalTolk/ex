@@ -87,7 +87,7 @@ export default function DraftsPage() {
                   type="button"
                   variant="ghost"
                   size="icon"
-                  className="h-8 w-8 shrink-0 rounded-md"
+                  className="h-8 w-8 shrink-0 rounded-md max-md:h-9 max-md:w-9"
                   aria-label="Delete draft"
                   onClick={() => setDraftToDelete(draft)}
                 >

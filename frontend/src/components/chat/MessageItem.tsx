@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Pencil, Trash2, SmilePlus, MessageSquareReply, MoreHorizontal, Pin, PinOff, Link as LinkIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { MessageInput, type MessageInputValue } from '@/components/chat/MessageInput';
@@ -30,6 +30,8 @@ import { UnfurlCard } from '@/components/chat/UnfurlCard';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { extractURLs, formatLongDateTime } from '@/lib/format';
 import { dispatchFocusComposer, registerEditMessageHandler } from '@/lib/window-events';
+import { useIsMobile } from '@/hooks/useIsMobile';
+import { useTransientOverlayCleanup } from '@/hooks/useTransientOverlayCleanup';
 import type { Message, UserStatus } from '@/types';
 
 // Module-level Set so MessageList/ThreadPanel don't need to thread a
@@ -57,6 +59,7 @@ interface MessageItemProps {
   currentUserId?: string;
   inThread?: boolean;
   onReplyInThread?: (messageID: string) => void;
+  onEditMessage?: (message: Message) => void;
   // Optional pre-resolved user lookup. When supplied, ThreadActionBar
   // reads display names + avatars from here instead of issuing its own
   // /users/batch fetch — avoids N+1 batches across many thread bars.
@@ -87,9 +90,11 @@ export function MessageItem({
   currentUserId,
   inThread,
   onReplyInThread,
+  onEditMessage,
   userMap,
   highlighted,
 }: MessageItemProps) {
+  const isMobile = useIsMobile();
   const [isEditing, setIsEditing] = useState(false);
   const [linkCopied, setLinkCopied] = useState(false);
   // Visibility tracked in JS (not Tailwind group-hover) because Radix's
@@ -99,7 +104,15 @@ export function MessageItem({
   const [actionsMenuOpen, setActionsMenuOpen] = useState(false);
   const [mobileActionsOpen, setMobileActionsOpen] = useState(false);
   const longPressTimerRef = useRef<number | null>(null);
+  const mobileActionsRef = useRef<HTMLDivElement>(null);
   const toolbarVisible = hovered || actionsMenuOpen;
+  const startEdit = useCallback(() => {
+    if (isMobile) {
+      onEditMessage?.(message);
+    } else {
+      setIsEditing(true);
+    }
+  }, [isMobile, message, onEditMessage]);
 
   useEffect(() => {
     if (!actionsMenuOpen) return;
@@ -123,17 +136,11 @@ export function MessageItem({
   // preserving the cross-scope decoupling of a window event.
   useEffect(() => {
     if (!isOwn || message.deleted || message.system) return;
-    return registerEditMessageHandler(message.id, () => setIsEditing(true));
-  }, [isOwn, message.id, message.deleted, message.system]);
+    return registerEditMessageHandler(message.id, startEdit);
+  }, [isOwn, message.id, message.deleted, message.system, startEdit]);
 
-  // Keep the inline edit visible — both on entry AND as the editor
-  // grows while the user types more lines. The composer lives just
-  // below the scroller, so without active tracking the bottom of the
-  // edit area slides behind it as height grows.
-  // - On entry: scrollIntoView after two frames so editor mount +
-  //   attachment chip layout settle before measuring.
-  // - During edit: a ResizeObserver re-scrolls on every height
-  //   increase. Disconnects on cancel/save.
+  // Desktop keeps the classic inline edit. Mobile routes editing to the
+  // bottom composer, because inline editors get cramped behind the keyboard.
   useEffect(() => {
     if (!isEditing) return;
     const id = `msg-${message.id}`;
@@ -155,6 +162,7 @@ export function MessageItem({
     ro.observe(el);
     return () => ro.disconnect();
   }, [isEditing, message.id]);
+
   const editMessage = useEditMessage();
   const deleteMessage = useDeleteMessage();
   const toggleReaction = useToggleReaction();
@@ -197,6 +205,7 @@ export function MessageItem({
   }
 
   function closeMobileActions() {
+    cancelLongPress();
     setMobileActionsOpen(false);
   }
 
@@ -212,63 +221,40 @@ export function MessageItem({
 
   function handleMobileEdit() {
     closeMobileActions();
-    setIsEditing(true);
+    onEditMessage?.(message);
   }
 
-  function handleMobileDelete() {
-    closeMobileActions();
-    setDeleteConfirmOpen(true);
-  }
-
-  function handleMobileCopyLink() {
-    closeMobileActions();
-    void handleCopyLink();
-  }
-
-  // When entering edit mode, hydrate the existing attachments so the
-  // MessageInput can render them as draft chips (and let the user remove
-  // any of them). We only fetch when the user actually starts editing.
   const editAttachmentIDs = isEditing ? (message.attachmentIDs ?? []) : [];
   const { map: editAttachmentMap } = useAttachmentsBatch(editAttachmentIDs);
   const initialEditDrafts: DraftAttachment[] = isEditing
     ? editAttachmentIDs
         .map((id): DraftAttachment | null => {
-          const a = editAttachmentMap.get(id);
-          if (!a) return null;
+          const attachment = editAttachmentMap.get(id);
+          if (!attachment) return null;
           return {
-            id: a.id,
-            filename: a.filename,
-            contentType: a.contentType,
-            size: a.size,
+            id: attachment.id,
+            filename: attachment.filename,
+            contentType: attachment.contentType,
+            size: attachment.size,
           };
         })
-        .filter((d): d is DraftAttachment => d !== null)
+        .filter((draft): draft is DraftAttachment => draft !== null)
     : [];
-  // Wait until existing attachments are hydrated before mounting the editor;
-  // otherwise the editor mounts with an empty draft list and the user's first
-  // save would silently strip every attachment off the message.
   const editorReady =
     !isEditing || editAttachmentIDs.length === 0 || initialEditDrafts.length === editAttachmentIDs.length;
 
-  // Hand focus back to the main composer when an inline edit ends —
-  // Escape, no-op submit, or successful save. Scoped by parentID +
-  // inThread so a thread-reply edit doesn't yank the channel
-  // composer's focus when both views are open simultaneously.
   function endEdit() {
     setIsEditing(false);
     dispatchFocusComposer({ parentID: message.parentID, inThread: !!inThread });
   }
 
   function handleEditSubmit(value: MessageInputValue) {
+    const currentAttachmentIDs = message.attachmentIDs ?? [];
     const same =
       value.body === message.body &&
-      value.attachmentIDs.length === (message.attachmentIDs ?? []).length &&
-      value.attachmentIDs.every((id, idx) => id === (message.attachmentIDs ?? [])[idx]);
-    if (same) {
-      endEdit();
-      return;
-    }
-    if (!value.body.trim() && value.attachmentIDs.length === 0) {
+      value.attachmentIDs.length === currentAttachmentIDs.length &&
+      value.attachmentIDs.every((id, idx) => id === currentAttachmentIDs[idx]);
+    if (same || (!value.body.trim() && value.attachmentIDs.length === 0)) {
       endEdit();
       return;
     }
@@ -282,6 +268,16 @@ export function MessageItem({
       },
       { onSuccess: endEdit },
     );
+  }
+
+  function handleMobileDelete() {
+    closeMobileActions();
+    setDeleteConfirmOpen(true);
+  }
+
+  function handleMobileCopyLink() {
+    closeMobileActions();
+    void handleCopyLink();
   }
 
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
@@ -315,6 +311,7 @@ export function MessageItem({
   }
 
   useEffect(() => cancelLongPress, []);
+  useTransientOverlayCleanup(mobileActionsOpen, { rootRef: mobileActionsRef });
 
   const reactions = message.reactions ?? {};
   const reactionEntries = Object.entries(reactions).filter(([, users]) => users && users.length > 0);
@@ -351,9 +348,13 @@ export function MessageItem({
       onPointerUp={cancelLongPress}
       onPointerCancel={cancelLongPress}
       onPointerMove={cancelLongPress}
+      onContextMenu={(event) => {
+        if (!isMobile) return;
+        event.preventDefault();
+      }}
       className={`relative flex items-start gap-3 rounded-md px-2 py-1.5 hover:bg-muted/50 ${
         message.pinned ? 'border-l-2 border-amber-500 pl-2' : ''
-      } ${highlighted ? 'ring-1 ring-amber-400/50 rounded-md' : ''}`}
+      } ${highlighted ? 'ring-1 ring-amber-400/50 rounded-md' : ''} max-md:touch-pan-y max-md:[-webkit-touch-callout:none]`}
     >
       <UserHoverCard
         userId={message.authorID}
@@ -423,10 +424,6 @@ export function MessageItem({
                 disabled={editMessage.isPending}
                 placeholder="Edit message..."
                 submitLabel="Save"
-                // Pull focus into the inline editor on mount —
-                // entering edit mode via ArrowUp from the channel
-                // composer should land the caret in the edit field
-                // directly so the user can keep typing.
                 focusKey={message.id}
               />
             </div>
@@ -624,7 +621,7 @@ export function MessageItem({
               </DropdownMenuItem>
               {isOwn && (
                 <>
-                  <DropdownMenuItem onClick={() => setIsEditing(true)}>
+                  <DropdownMenuItem onClick={startEdit}>
                     <Pencil className="mr-2 h-4 w-4" /> Edit
                   </DropdownMenuItem>
                   <DropdownMenuItem
@@ -640,7 +637,12 @@ export function MessageItem({
         </div>
       )}
       {!isEditing && !message.deleted && mobileActionsOpen && (
-        <div className="fixed inset-0 z-50 md:hidden" role="presentation">
+        <div
+          ref={mobileActionsRef}
+          className="fixed inset-0 z-50 select-none [-webkit-touch-callout:none] [-webkit-user-select:none] md:hidden"
+          role="presentation"
+          onContextMenu={(event) => event.preventDefault()}
+        >
           <button
             type="button"
             className="absolute inset-0 bg-black/35"

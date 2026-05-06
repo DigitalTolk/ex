@@ -79,7 +79,7 @@ export function ChannelRow({
         }}
         draggable={false}
         className={({ isActive }) =>
-          `flex flex-1 min-w-0 items-center gap-2 rounded-md py-1 pl-2 pr-12 text-sm transition-colors ${
+          `flex flex-1 min-w-0 items-center gap-2 rounded-md py-1 pl-2 pr-12 text-sm transition-colors max-md:h-12 max-md:py-0 max-md:pl-3 max-md:pr-20 max-md:text-base ${
             isActive
               ? 'bg-white/15 text-white font-semibold'
               : hasUnread
@@ -98,13 +98,13 @@ export function ChannelRow({
           <BellOff className="ml-auto h-3 w-3 shrink-0 text-gray-500 group-hover/row:hidden" aria-label="Muted" />
         )}
       </NavLink>
-      {/* Star — visible on hover; persistent yellow when favorited. */}
+      {/* Star — visible on hover; persistent yellow when favorited. Always visible on touch screens. */}
       <button
         onClick={toggleFavorite}
         aria-label={isFav ? `Unfavorite ${channel.channelName}` : `Favorite ${channel.channelName}`}
         data-testid={`fav-toggle-${channel.channelID}`}
-        className={`absolute right-7 top-1/2 -translate-y-1/2 flex h-5 w-5 items-center justify-center rounded transition-opacity ${
-          isFav ? 'opacity-100 text-amber-300' : 'opacity-0 group-hover/row:opacity-100 text-gray-400 hover:text-white'
+        className={`absolute right-7 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded transition-opacity max-md:right-10 max-md:h-9 max-md:w-9 ${
+          isFav ? 'opacity-100 text-amber-300' : 'opacity-0 text-gray-400 hover:text-white group-hover/row:opacity-100 max-md:opacity-100'
         }`}
       >
         <Star className="h-3.5 w-3.5" fill={isFav ? 'currentColor' : 'none'} />
@@ -114,7 +114,7 @@ export function ChannelRow({
         <DropdownMenuTrigger
           aria-label={`Manage ${channel.channelName} sidebar placement`}
           data-testid={`row-menu-${channel.channelID}`}
-          className="absolute right-1 top-1/2 -translate-y-1/2 h-5 w-5 flex items-center justify-center rounded text-gray-400 opacity-0 group-hover/row:opacity-100 hover:bg-white/20 hover:text-white"
+          className="absolute right-1 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded text-gray-400 opacity-0 hover:bg-white/20 hover:text-white group-hover/row:opacity-100 max-md:h-9 max-md:w-9 max-md:opacity-100"
         >
           <MoreVertical className="h-3.5 w-3.5" />
         </DropdownMenuTrigger>

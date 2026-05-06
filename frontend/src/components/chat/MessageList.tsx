@@ -51,6 +51,7 @@ interface MessageListProps {
   conversationId?: string;
   userMap: Record<string, UserMapEntry>;
   onReplyInThread?: (messageID: string) => void;
+  onEditMessage?: (message: Message) => void;
   intro?: ReactNode;
   anchorMsgId?: string;
   anchorRevision?: string;
@@ -80,6 +81,7 @@ function VirtuosoMessageList({
   conversationId,
   userMap,
   onReplyInThread,
+  onEditMessage,
   intro,
   anchorMsgId,
   anchorRevision,
@@ -432,6 +434,7 @@ function VirtuosoMessageList({
             channelSlug={channelSlug}
             conversationId={conversationId}
             onReplyInThread={onReplyInThread}
+            onEditMessage={onEditMessage}
             highlighted={row.message.id === highlightedMessageId}
           />
         );
@@ -467,6 +470,7 @@ function MessageRow({
   channelSlug,
   conversationId,
   onReplyInThread,
+  onEditMessage,
   highlighted,
 }: {
   row: { kind: 'message'; key: string; message: Message };
@@ -478,6 +482,7 @@ function MessageRow({
   channelSlug?: string;
   conversationId?: string;
   onReplyInThread?: (id: string) => void;
+  onEditMessage?: (message: Message) => void;
   highlighted?: boolean;
 }) {
   const msg = row.message;
@@ -516,6 +521,7 @@ function MessageRow({
         conversationId={conversationId}
         currentUserId={currentUserId}
         onReplyInThread={onReplyInThread}
+        onEditMessage={onEditMessage}
         userMap={userLookup}
         highlighted={highlighted}
       />

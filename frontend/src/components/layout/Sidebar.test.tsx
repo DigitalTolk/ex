@@ -255,6 +255,7 @@ describe('Sidebar', () => {
     mockHiddenConversations.clear();
     localStorage.clear();
     window.history.pushState({}, '', '/');
+    delete window.Capacitor;
   });
 
   it('renders user display name', () => {
@@ -285,20 +286,66 @@ describe('Sidebar', () => {
     expect(await screen.findByTestId('user-menu-admin')).toBeInTheDocument();
   });
 
-  it('renders the user menu as full-width mobile rows', async () => {
+  it('renders the mobile user menu inline above the scrollable channel list', async () => {
+    renderSidebar();
+    fireEvent.click(screen.getByLabelText('User menu'));
+    const menu = await screen.findByTestId('mobile-user-menu');
+    const scrollArea = screen.getByTestId('sidebar-scroll-area');
+
+    expect(menu).toHaveClass('md:hidden', 'border-b');
+    expect(menu.compareDocumentPosition(scrollArea) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByTestId('mobile-user-menu-admin')).toHaveClass('h-12', 'px-3');
+  });
+
+  it('hides the desktop dropdown content on mobile so it does not cover channels', async () => {
     renderSidebar();
     fireEvent.click(screen.getByLabelText('User menu'));
     const admin = await screen.findByTestId('user-menu-admin');
     const menu = admin.closest('[data-slot="dropdown-menu-content"]');
 
-    expect(menu).toHaveClass('max-md:fixed', 'max-md:left-0', 'max-md:right-0', 'max-md:w-screen');
-    expect(admin).toHaveClass('max-md:h-12', 'max-md:px-3', 'max-md:text-base');
+    expect(menu).toHaveClass('max-md:hidden');
+  });
+
+  it('confirms native server changes from the mobile user menu before resetting', async () => {
+    const user = userEvent.setup();
+    const resetServer = vi.fn().mockResolvedValue(undefined);
+    window.Capacitor = {
+      isNativePlatform: () => true,
+      Plugins: { ServerNavigation: { resetServer } },
+    };
+
+    renderSidebar();
+    await user.click(screen.getByLabelText('User menu'));
+    await user.click(await screen.findByTestId('mobile-change-server'));
+
+    expect(await screen.findByTestId('change-server')).toHaveTextContent('Change chat server?');
+    expect(resetServer).not.toHaveBeenCalled();
+
+    await user.click(screen.getByTestId('change-server-confirm'));
+    expect(resetServer).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps native server switching out of the desktop menu when not running natively', async () => {
+    renderSidebar();
+    fireEvent.click(screen.getByLabelText('User menu'));
+
+    expect(screen.queryByTestId('user-menu-change-server')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('mobile-change-server')).not.toBeInTheDocument();
   });
 
   it('renders channel list', () => {
     renderSidebar();
     expect(screen.getByText('general')).toBeInTheDocument();
     expect(screen.getByText('secret')).toBeInTheDocument();
+  });
+
+  it('uses the same mobile row sizing across top links, section headers, channels, and DMs', () => {
+    renderSidebar();
+
+    expect(screen.getByText('Directory').closest('a')).toHaveClass('max-md:h-12', 'max-md:px-3', 'max-md:text-base');
+    expect(screen.getByText('Channels').closest('[role="button"]')).toHaveClass('max-md:h-12', 'max-md:px-3', 'max-md:text-base');
+    expect(screen.getByText('general').closest('a')).toHaveClass('max-md:h-12', 'max-md:pl-3', 'max-md:text-base');
+    expect(screen.getByText('Bob Jones').closest('a')).toHaveClass('max-md:h-12', 'max-md:pl-3', 'max-md:text-base');
   });
 
   it('does not render a "Browse" header above the channel groups', () => {

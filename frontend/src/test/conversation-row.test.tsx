@@ -17,8 +17,13 @@ vi.mock('@/hooks/useEmoji', () => ({
 
 vi.mock('@/components/ui/dropdown-menu', () => ({
   DropdownMenu: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-  DropdownMenuTrigger: (props: { children: React.ReactNode; 'data-testid'?: string; 'aria-label'?: string }) => (
-    <button data-testid={props['data-testid']} aria-label={props['aria-label']}>{props.children}</button>
+  DropdownMenuTrigger: (props: {
+    children: React.ReactNode;
+    'data-testid'?: string;
+    'aria-label'?: string;
+    className?: string;
+  }) => (
+    <button data-testid={props['data-testid']} aria-label={props['aria-label']} className={props.className}>{props.children}</button>
   ),
   DropdownMenuContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
   DropdownMenuItem: (props: {
@@ -72,6 +77,17 @@ describe('ConversationRow', () => {
   it('renders the conversation displayName', () => {
     renderRow(sampleConv);
     expect(screen.getByText('Bob')).toBeInTheDocument();
+  });
+
+  it('keeps row actions visible and tappable on mobile', () => {
+    renderRow(sampleConv);
+
+    const link = screen.getByText('Bob').closest('a')!;
+    const star = screen.getByTestId(`conv-fav-toggle-${sampleConv.conversationID}`);
+    const menu = screen.getByTestId(`conv-row-menu-${sampleConv.conversationID}`);
+    expect(link).toHaveClass('max-md:pr-20');
+    expect(star).toHaveClass('max-md:h-9', 'max-md:w-9', 'max-md:opacity-100');
+    expect(menu).toHaveClass('max-md:h-9', 'max-md:w-9', 'max-md:opacity-100');
   });
 
   it('renders DM status on the row', () => {

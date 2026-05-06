@@ -167,7 +167,7 @@ describe('PopoverPortal', () => {
     expect(onDismiss).toHaveBeenCalled();
   });
 
-  it('calls onDismiss when clicking outside both trigger and content', () => {
+  it('calls onDismiss when pressing outside both trigger and content', () => {
     const onDismiss = vi.fn();
     render(
       <div>
@@ -180,7 +180,7 @@ describe('PopoverPortal', () => {
       </div>,
     );
     act(() => {
-      fireEvent.mouseDown(screen.getByTestId('outside'));
+      fireEvent.pointerDown(screen.getByTestId('outside'));
     });
     expect(onDismiss).toHaveBeenCalled();
   });
@@ -202,7 +202,7 @@ describe('PopoverPortal', () => {
     expect(portal.style.opacity).toBe('1');
   });
 
-  it('does not call onDismiss when clicking inside the popover', () => {
+  it('does not call onDismiss when pressing inside the popover', () => {
     const onDismiss = vi.fn();
     render(
       <Harness
@@ -213,7 +213,7 @@ describe('PopoverPortal', () => {
     );
     const portal = screen.getByTestId('popover-portal');
     act(() => {
-      fireEvent.mouseDown(portal);
+      fireEvent.pointerDown(portal);
     });
     expect(onDismiss).not.toHaveBeenCalled();
   });
@@ -268,8 +268,85 @@ describe('PopoverPortal', () => {
     );
     const scrim = document.querySelector('.bg-black\\/35') as HTMLElement;
     expect(scrim).toBeTruthy();
-    fireEvent.mouseDown(scrim);
+    fireEvent.pointerDown(scrim);
     expect(onDismiss).toHaveBeenCalled();
     Object.defineProperty(window, 'matchMedia', { configurable: true, value: originalMatchMedia });
+  });
+
+  it('dismisses a mobile sheet from a touch-style outside pointer press', () => {
+    const onDismiss = vi.fn();
+    const originalMatchMedia = window.matchMedia;
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      value: vi.fn().mockImplementation((query: string) => ({
+        matches: query.includes('767px'),
+        media: query,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      })),
+    });
+    render(
+      <div>
+        <Harness
+          open
+          mobileSheet
+          onDismiss={onDismiss}
+          triggerRect={{ top: 500, bottom: 540, left: 100, right: 200 }}
+        />
+        <button data-testid="outside">outside</button>
+      </div>,
+    );
+    fireEvent.pointerDown(screen.getByTestId('outside'), { pointerType: 'touch' });
+    expect(onDismiss).toHaveBeenCalled();
+    Object.defineProperty(window, 'matchMedia', { configurable: true, value: originalMatchMedia });
+  });
+
+  it('does not lock document scroll for mobile sheets', () => {
+    const originalMatchMedia = window.matchMedia;
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      value: vi.fn().mockImplementation((query: string) => ({
+        matches: query.includes('767px'),
+        media: query,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      })),
+    });
+    const { rerender } = render(
+      <Harness
+        open
+        mobileSheet
+        triggerRect={{ top: 500, bottom: 540, left: 100, right: 200 }}
+      />,
+    );
+    expect(document.body.style.overflow).toBe('');
+    expect(document.body.style.touchAction).toBe('');
+    expect(document.body.style.overscrollBehavior).toBe('');
+    rerender(
+      <Harness
+        open={false}
+        mobileSheet
+        triggerRect={{ top: 500, bottom: 540, left: 100, right: 200 }}
+      />,
+    );
+    expect(document.body.style.overflow).toBe('');
+    Object.defineProperty(window, 'matchMedia', { configurable: true, value: originalMatchMedia });
+  });
+
+  it('blurs focused content when the portal unmounts', () => {
+    const { unmount } = render(
+      <Harness
+        open
+        triggerRect={{ top: 100, bottom: 120, left: 100, right: 200 }}
+      />,
+    );
+    const button = document.createElement('button');
+    screen.getByTestId('popover-portal').appendChild(button);
+    button.focus();
+    expect(document.activeElement).toBe(button);
+
+    unmount();
+
+    expect(document.activeElement).not.toBe(button);
   });
 });
