@@ -120,8 +120,9 @@ describe('ChannelView', () => {
   });
 
   it('renders channel name in header', () => {
-    renderChannelView();
+    const { container } = renderChannelView();
     expect(screen.getByRole('heading', { name: 'general' })).toBeInTheDocument();
+    expect(container.querySelector('header')?.className).toContain('shrink-0');
   });
 
   it('renders message input with channel placeholder', async () => {
@@ -162,7 +163,7 @@ describe('ChannelView', () => {
     // (DMs stopped scrolling, channels drifted on send), so we keep
     // the surrounding DOM flat and just rely on DOM order.
     const { container } = renderChannelView();
-    const dropzone = container.querySelector('div.flex.flex-1.flex-col.min-h-0');
+    const dropzone = container.querySelector('div.relative.flex.flex-1.flex-col.min-h-0');
     expect(dropzone).not.toBeNull();
     const children = Array.from(dropzone!.children);
     const inputIdx = children.findIndex((c) =>

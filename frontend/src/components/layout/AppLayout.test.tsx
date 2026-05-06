@@ -59,6 +59,13 @@ describe('AppLayout', () => {
     expect(aside.className).not.toContain('fixed');
   });
 
+  it('reserves iOS safe-area space above the mobile top bar', () => {
+    const { container } = renderLayout();
+
+    const shell = container.querySelector('.pt-\\[env\\(safe-area-inset-top\\)\\]')!;
+    expect(shell).toBeInTheDocument();
+  });
+
   it('mobile channels button navigates to channel home', async () => {
     const user = userEvent.setup();
     window.history.pushState({}, '', '/channel/general');

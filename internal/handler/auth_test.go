@@ -775,6 +775,7 @@ func TestIsAllowedOIDCRedirect(t *testing.T) {
 		{"plain localhost https allowed", "https://localhost:5173/cb", true},
 		{"tauri scheme allowed", "tauri://localhost/oidc/callback", true},
 		{"desktop ex scheme allowed", "ex://app/auth/callback", true},
+		{"mobile ex scheme allowed", "ex://mobile/auth/callback", true},
 		{"unknown ex host rejected", "ex://evil/auth/callback", false},
 		{"https external rejected", "https://evil.example.com/cb", false},
 		{"http external rejected", "http://evil.example.com/cb", false},
@@ -847,6 +848,39 @@ func TestOIDCCallback_LocalhostRedirectUsesDesktopCode(t *testing.T) {
 	}
 	if strings.Contains(loc, "refresh=") || strings.Contains(loc, "token=") {
 		t.Errorf("Location = %q, must not expose refresh or access token to desktop local callback", loc)
+	}
+	assertNoRefreshCookie(t, rec)
+}
+
+func TestOIDCCallback_MobileRedirectUsesDesktopCode(t *testing.T) {
+	h, _, _ := setupAuthHandlerWithOIDCSuccess(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/auth/oidc/callback?state=ok&code=c", nil)
+	req.AddCookie(&http.Cookie{Name: "oauth_state", Value: "ok"})
+	req.AddCookie(&http.Cookie{Name: "oauth_redirect", Value: "ex://mobile/auth/callback"})
+	rec := httptest.NewRecorder()
+
+	h.OIDCCallback(rec, req)
+
+	if rec.Code != http.StatusFound {
+		t.Fatalf("status = %d, want %d (body: %s)", rec.Code, http.StatusFound, rec.Body.String())
+	}
+	loc := rec.Header().Get("Location")
+	if !strings.HasPrefix(loc, "ex://mobile/auth/callback?desktop_code=") {
+		t.Fatalf("Location = %q, expected desktop_code redirect", loc)
+	}
+	if strings.Contains(loc, "refresh=") || strings.Contains(loc, "token=") {
+		t.Errorf("Location = %q, must not expose refresh or access token to mobile callback", loc)
+	}
+	assertNoRefreshCookie(t, rec)
+}
+
+func assertNoRefreshCookie(t *testing.T, rec *httptest.ResponseRecorder) {
+	t.Helper()
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == "refresh_token" && c.Value != "" {
+			t.Fatalf("refresh_token cookie was set during code handoff")
+		}
 	}
 }
 

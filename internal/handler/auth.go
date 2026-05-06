@@ -23,7 +23,7 @@ func NewAuthHandler(authSvc *service.AuthService, jwt *auth.JWTManager) *AuthHan
 
 // OIDCLogin initiates the OIDC login flow by redirecting to the identity provider.
 // An optional ?redirect_to=<url> query parameter overrides where the browser is
-// sent after a successful callback (must be a localhost or tauri:// URL).
+// sent after a successful callback (must be a localhost, tauri://, or ex:// URL).
 func (h *AuthHandler) OIDCLogin(w http.ResponseWriter, r *http.Request) {
 	authURL, state, err := h.authSvc.HandleOIDCLogin()
 	if err != nil {
@@ -93,21 +93,21 @@ func (h *AuthHandler) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.setRefreshCookie(w, refreshToken, h.jwt.RefreshTTL())
-
 	// Default redirect: the SPA lives outside /auth/ to avoid the namespace
 	// the router 404s for unknown /auth/** paths.
 	finalRedirect := oidcCallbackRedirect(accessToken)
+	setCallbackRefreshCookie := true
 	if redirectCookie, err := r.Cookie("oauth_redirect"); err == nil && isAllowedOIDCRedirect(redirectCookie.Value) {
 		target := redirectWithQuery(redirectCookie.Value, url.Values{"token": []string{accessToken}})
 		parsed, _ := url.Parse(redirectCookie.Value)
-		if parsed != nil && parsed.Hostname() == "localhost" && parsed.Scheme == "http" {
+		if shouldUseDesktopAuthCode(parsed) {
 			code, err := h.authSvc.CreateDesktopAuthSession(r.Context(), accessToken, refreshToken)
 			if err != nil {
 				writeError(w, http.StatusInternalServerError, "desktop_auth_error", err.Error())
 				return
 			}
 			target = redirectWithQuery(redirectCookie.Value, url.Values{"desktop_code": []string{code}})
+			setCallbackRefreshCookie = false
 		}
 		finalRedirect = target
 		http.SetCookie(w, &http.Cookie{
@@ -119,6 +119,10 @@ func (h *AuthHandler) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 			Secure:   true,
 			SameSite: http.SameSiteLaxMode,
 		})
+	}
+
+	if setCallbackRefreshCookie {
+		h.setRefreshCookie(w, refreshToken, h.jwt.RefreshTTL())
 	}
 
 	http.Redirect(w, r, finalRedirect, http.StatusFound)
@@ -136,7 +140,7 @@ func (h *AuthHandler) DesktopComplete(w http.ResponseWriter, r *http.Request) {
 }
 
 // isAllowedOIDCRedirect permits localhost (dev), tauri:// (desktop WebView),
-// and ex:// (desktop deep-link) redirect targets; all other URLs are rejected
+// and ex:// (desktop/mobile deep-link) redirect targets; all other URLs are rejected
 // to prevent open redirect attacks. The match uses url.Parse so an attacker
 // controlling e.g. localhost.evil.com cannot satisfy the allowlist.
 func isAllowedOIDCRedirect(u string) bool {
@@ -151,10 +155,18 @@ func isAllowedOIDCRedirect(u string) bool {
 	case "http", "https", "tauri":
 		return parsed.Hostname() == "localhost"
 	case "ex":
-		return parsed.Host == "app"
+		return parsed.Host == "app" || parsed.Host == "mobile"
 	default:
 		return false
 	}
+}
+
+func shouldUseDesktopAuthCode(parsed *url.URL) bool {
+	if parsed == nil {
+		return false
+	}
+	return (parsed.Hostname() == "localhost" && parsed.Scheme == "http") ||
+		(parsed.Scheme == "ex" && parsed.Host == "mobile")
 }
 
 func oidcCallbackRedirect(accessToken string) string {

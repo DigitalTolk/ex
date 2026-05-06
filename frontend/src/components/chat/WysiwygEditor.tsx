@@ -1,4 +1,4 @@
-import { forwardRef, useMemo } from 'react';
+import { forwardRef, useMemo, useState } from 'react';
 import { LexicalComposer } from '@lexical/react/LexicalComposer';
 import { RichTextPlugin } from '@lexical/react/LexicalRichTextPlugin';
 import { ContentEditable } from '@lexical/react/LexicalContentEditable';
@@ -48,6 +48,8 @@ interface Props {
   placeholder?: string;
   ariaLabel?: string;
   className?: string;
+  editorClassName?: string;
+  onFocusChange?: (focused: boolean) => void;
   onPasteFiles?: (files: File[]) => void;
   // ArrowUp on an empty editor — return true to claim the event.
   onArrowUpEmpty?: () => boolean;
@@ -84,11 +86,14 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, Props>(function Wys
     placeholder,
     ariaLabel = 'Message input',
     className = '',
+    editorClassName = '',
+    onFocusChange,
     onPasteFiles,
     onArrowUpEmpty,
   },
   ref,
 ) {
+  const [isEmpty, setIsEmpty] = useState(initialBody.trim() === '');
   // Initial config is read once on mount. We seed the markdown via the
   // editorState callback below — Lexical re-renders deterministically
   // from there.
@@ -130,17 +135,20 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, Props>(function Wys
           contentEditable={
             <ContentEditable
               aria-label={ariaLabel}
-              className="wysiwyg-editor min-h-[60px] max-h-[200px] overflow-y-auto whitespace-pre-wrap break-words text-sm focus:outline-none"
+              className={`wysiwyg-editor min-h-[60px] max-h-[200px] overflow-y-auto whitespace-pre-wrap break-words text-sm focus:outline-none ${editorClassName}`}
+              onFocus={() => onFocusChange?.(true)}
+              onBlur={() => onFocusChange?.(false)}
               role="textbox"
             />
           }
-          placeholder={
-            <div className="pointer-events-none absolute left-0 top-0 select-none text-sm text-muted-foreground">
-              {placeholder}
-            </div>
-          }
+          placeholder={null}
           ErrorBoundary={LexicalErrorBoundary}
         />
+        {placeholder && isEmpty && (
+          <div className="pointer-events-none absolute left-0 top-0 select-none text-sm text-muted-foreground">
+            {placeholder}
+          </div>
+        )}
         <HistoryPlugin />
         <ListPlugin />
         <LinkPlugin />
@@ -158,7 +166,12 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, Props>(function Wys
         <EditLastOnArrowUpPlugin onArrowUpEmpty={onArrowUpEmpty} />
         <PasteFilesPlugin onPasteFiles={onPasteFiles} />
         <PasteLinkPlugin />
-        <MarkdownChangePlugin onChange={onChange} />
+        <MarkdownChangePlugin
+          onChange={(markdown) => {
+            setIsEmpty(markdown.trim() === '');
+            onChange?.(markdown);
+          }}
+        />
         <ImperativeHandlePlugin imperativeRef={ref} />
       </div>
     </LexicalComposer>

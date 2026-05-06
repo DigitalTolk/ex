@@ -40,6 +40,7 @@ import {
 import { normalizeEmojiInBody } from '@/lib/emoji-shortcodes';
 import { isHttpUrl } from '@/lib/utils';
 import { dispatchEditMessage, onFocusComposer } from '@/lib/window-events';
+import { useIsMobile } from '@/hooks/useIsMobile';
 
 const TYPING_PING_INTERVAL_MS = 3000;
 
@@ -108,6 +109,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
   const [body, setBody] = useState(initialBody);
   const [drafts, setDrafts] = useState<DraftAttachment[]>(initialDrafts);
   const [isUploading, setIsUploading] = useState(false);
+  const [editorFocused, setEditorFocused] = useState(false);
   const [uploadError, setUploadError] = useState('');
   const editorRef = useRef<WysiwygEditorHandle>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -136,10 +138,14 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
     return editorRef.current?.subscribeActiveFormats?.(setActive);
   }, []);
   const { data: settings } = useWorkspaceSettings();
+  const isMobile = useIsMobile();
   const giphyAPIKey = settings?.giphyAPIKey?.trim() ?? '';
   const giphyEnabled = (settings?.giphyEnabled ?? false) && giphyAPIKey !== '';
 
   const hasInitialDraftValue = initialBody !== '' || initialDrafts.length > 0;
+  const suppressAutoFocus = isMobile && variant === 'composer';
+  const compactMobileComposer =
+    variant === 'composer' && !editorFocused && body.trim() === '' && drafts.length === 0;
 
   useEffect(() => {
     latestDraftValueRef.current = { body, attachmentIDs: drafts.map((d) => d.id) };
@@ -266,7 +272,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
     editorRef.current?.setMarkdown(initialBody);
     queueMicrotask(() => {
       applyingServerDraftRef.current = false;
-      if (initialBody || initialDrafts.length > 0) {
+      if (!suppressAutoFocus && (initialBody || initialDrafts.length > 0)) {
         editorRef.current?.focusEnd?.();
       }
     });
@@ -291,7 +297,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
     editorRef.current?.setMarkdown(initialBody);
     queueMicrotask(() => {
       applyingServerDraftRef.current = false;
-      if (focusKey !== undefined) {
+      if (!suppressAutoFocus && focusKey !== undefined) {
         editorRef.current?.focusEnd?.();
       }
     });
@@ -300,7 +306,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
     allowServerDraftHydrationRef.current = false;
     locallyEditedDraftRef.current = false;
     mountedDraftChangeRef.current = false;
-  }, [initialBody, initialDraftKey, initialDrafts, body, drafts.length, focusKey, variant]);
+  }, [initialBody, initialDraftKey, initialDrafts, body, drafts.length, focusKey, variant, suppressAutoFocus]);
 
   useEffect(() => {
     if (!scopedDraftChangeRef.current || variant !== 'composer') return;
@@ -339,10 +345,11 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
 
   useEffect(() => {
     if (focusKey === undefined) return;
+    if (suppressAutoFocus) return;
     queueMicrotask(() => {
       editorRef.current?.focus();
     });
-  }, [focusKey]);
+  }, [focusKey, suppressAutoFocus]);
 
   // Refocus when an inline edit elsewhere finishes (cancel or submit).
   // Only composers that emit typing (i.e., the main / thread composer,
@@ -601,6 +608,12 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
             placeholder={isUploading ? 'Uploading…' : placeholder}
             ariaLabel="Message input"
             className="flex-1"
+            editorClassName={
+              compactMobileComposer
+                ? 'max-md:min-h-[1.5rem] max-md:max-h-[1.5rem] max-md:overflow-hidden'
+                : ''
+            }
+            onFocusChange={isMobile && variant === 'composer' ? setEditorFocused : undefined}
           />
           <div className="flex shrink-0 items-center gap-1">
             {onCancel && (

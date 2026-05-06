@@ -1,5 +1,5 @@
-import { describe, it, expect, vi } from 'vitest';
-import { render as rtlRender, screen, act } from '@testing-library/react';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import { render as rtlRender, screen, act, fireEvent } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 vi.mock('@/hooks/useAttachments', () => ({
@@ -28,7 +28,25 @@ function flushMicrotasks() {
   return new Promise<void>((resolve) => queueMicrotask(resolve));
 }
 
+function setMobileMatch(matches: boolean) {
+  Object.defineProperty(window, 'matchMedia', {
+    configurable: true,
+    value: vi.fn(() => ({
+      matches,
+      media: '(max-width: 767px)',
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+    })),
+  });
+}
+
 describe('MessageInput focusKey', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it('refocuses the editor when focusKey changes', async () => {
     const { rerender } = render(<MessageInput onSend={vi.fn()} focusKey="ch-1" />);
     const editor = screen.getByLabelText('Message input');
@@ -47,5 +65,36 @@ describe('MessageInput focusKey', () => {
       await flushMicrotasks();
     });
     expect(document.activeElement).toBe(editor);
+  });
+
+  it('does not autofocus the editor on mobile when focusKey changes', async () => {
+    setMobileMatch(true);
+    const { rerender } = render(<MessageInput onSend={vi.fn()} focusKey="ch-1" />);
+    const editor = screen.getByLabelText('Message input');
+    const other = document.createElement('input');
+    document.body.appendChild(other);
+    other.focus();
+
+    rerender(
+      <QueryClientProvider client={new QueryClient()}>
+        <MessageInput onSend={vi.fn()} focusKey="ch-2" />
+      </QueryClientProvider>,
+    );
+    await act(async () => {
+      await flushMicrotasks();
+    });
+    expect(document.activeElement).toBe(other);
+    expect(document.activeElement).not.toBe(editor);
+  });
+
+  it('keeps the mobile composer one line until the user focuses it', () => {
+    setMobileMatch(true);
+    render(<MessageInput onSend={vi.fn()} focusKey="ch-1" />);
+    const editor = screen.getByLabelText('Message input');
+
+    expect(editor).toHaveClass('max-md:min-h-[1.5rem]', 'max-md:max-h-[1.5rem]');
+    fireEvent.focus(editor);
+    expect(editor).not.toHaveClass('max-md:min-h-[1.5rem]');
+    expect(editor).not.toHaveClass('max-md:max-h-[1.5rem]');
   });
 });
