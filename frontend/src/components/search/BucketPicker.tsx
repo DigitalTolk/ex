@@ -50,7 +50,7 @@ export function BucketPicker({ kind, buttonLabel, buckets, onPick }: BucketPicke
         type="button"
         data-testid={`bucket-picker-${kind}`}
         onClick={() => setOpen((p) => !p)}
-        className="inline-flex items-center gap-1 rounded-md border bg-background px-2 py-1 text-xs hover:bg-muted max-md:min-h-9 max-md:px-3 max-md:text-sm"
+        className="inline-flex h-auto items-center gap-1 rounded-md border bg-background px-2 py-1 text-xs hover:bg-muted max-md:h-9 max-md:px-3 max-md:text-sm"
       >
         {buttonLabel}
       </button>

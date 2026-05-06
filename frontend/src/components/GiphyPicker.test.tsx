@@ -204,6 +204,19 @@ describe('GiphyPicker', () => {
     expect(document.activeElement).not.toBe(screen.getByLabelText('Search GIFs'));
   });
 
+  it('uses a shorter mobile sheet height so it fits mobile browsers', async () => {
+    setMobileMatch(true);
+    giphyFetchMocks.trending.mockResolvedValue(sampleResponse);
+    const user = userEvent.setup();
+    renderPicker(vi.fn());
+
+    await user.click(screen.getByText('open gif'));
+
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog).toHaveAttribute('data-mobile-sheet', 'true');
+    expect(dialog.className).toContain('max-md:h-[min(58vh,calc(100dvh-9rem))]');
+  });
+
   it('blurs the search field before closing after GIF selection', async () => {
     giphyFetchMocks.trending.mockResolvedValue(sampleResponse);
     const user = userEvent.setup();

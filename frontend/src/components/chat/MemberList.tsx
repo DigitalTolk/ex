@@ -13,6 +13,7 @@ import { UserHoverCard } from '@/components/UserHoverCard';
 import { UserAvatar } from '@/components/UserAvatar';
 import { UserStatusIndicator } from '@/components/UserStatusIndicator';
 import { canManageMembers, canRemoveMember, roleNumber, ChannelRole } from '@/lib/roles';
+import { useMobileSwipe } from '@/hooks/useMobileSwipe';
 import type { ChannelMembership } from '@/types';
 import type { UserMapEntry } from './MessageList';
 
@@ -93,9 +94,13 @@ export function MemberList({ members, channelId, currentUserId, currentUserRole,
   }
 
   const canManage = canManageMembers(currentUserRole) && !!channelId;
+  const closeSwipe = useMobileSwipe('left', () => onClose?.());
 
   return (
-    <div className="flex h-full min-h-0 w-80 flex-col border-l bg-background max-md:fixed max-md:inset-x-0 max-md:bottom-0 max-md:top-[calc(2.75rem+env(safe-area-inset-top))] max-md:z-40 max-md:w-auto max-md:border-l-0 max-md:animate-in max-md:slide-in-from-right-4">
+    <div
+      className="flex h-full min-h-0 w-80 flex-col border-l bg-background max-md:fixed max-md:inset-x-0 max-md:bottom-0 max-md:top-[calc(2.75rem+env(safe-area-inset-top))] max-md:z-40 max-md:w-auto max-md:touch-pan-y max-md:border-l-0 max-md:animate-in max-md:slide-in-from-right-4"
+      {...closeSwipe}
+    >
       <div className="px-4 py-3 border-b flex items-center justify-between gap-2">
         <div className="min-w-0">
           <h2 className="text-sm font-semibold">Members</h2>

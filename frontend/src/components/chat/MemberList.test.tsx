@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { BrowserRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemberList } from './MemberList';
@@ -69,6 +69,17 @@ describe('MemberList', () => {
     renderWithProviders(<MemberList members={members} />);
 
     expect(screen.getByText('2 members')).toBeInTheDocument();
+  });
+
+  it('closes on a mobile right-to-left swipe', () => {
+    const onClose = vi.fn();
+    renderWithProviders(<MemberList members={[makeMember()]} onClose={onClose} />);
+
+    const panel = screen.getByTestId('member-list-scroll-area').parentElement!;
+    fireEvent.pointerDown(panel, { pointerType: 'touch', clientX: 240, clientY: 160 });
+    fireEvent.pointerUp(panel, { pointerType: 'touch', clientX: 120, clientY: 168 });
+
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 
   it('shows singular "member" for count of 1', () => {

@@ -300,9 +300,13 @@ describe('MessageAttachments', () => {
     fireEvent.click(screen.getByLabelText('Open image pic.png'));
     const lightbox = screen.getByTestId('image-lightbox');
     expect(lightbox).toBeInTheDocument();
+    expect(lightbox).toHaveClass('max-md:pt-[calc(env(safe-area-inset-top)+4.5rem)]');
     expect(lightbox.textContent).toContain('Alice');
     expect(lightbox.textContent).toContain('~general');
-    expect(screen.getByTestId('image-lightbox-image')).toHaveAttribute('src', 'https://cdn/pic.png');
+    const image = screen.getByTestId('image-lightbox-image');
+    expect(image).toHaveAttribute('src', 'https://cdn/pic.png');
+    expect(image).toHaveClass('max-md:max-h-[calc(100dvh-env(safe-area-inset-top)-env(safe-area-inset-bottom)-6rem)]');
+    expect(screen.getByTestId('image-lightbox-zoom-stage')).toHaveClass('touch-none', 'overscroll-contain');
   });
 
   it('Escape closes the lightbox', () => {
@@ -324,7 +328,7 @@ describe('MessageAttachments', () => {
     expect(screen.queryByTestId('image-lightbox')).toBeNull();
   });
 
-  it('tapping the lightbox image closes the lightbox', () => {
+  it('tapping the lightbox image does not close the lightbox so it can be zoomed', () => {
     const att: Attachment = {
       id: 'a-tap-close',
       filename: 'tap.png',
@@ -341,7 +345,32 @@ describe('MessageAttachments', () => {
     fireEvent.click(screen.getByLabelText('Open image tap.png'));
     fireEvent.click(screen.getByTestId('image-lightbox-image'));
 
-    expect(screen.queryByTestId('image-lightbox')).toBeNull();
+    expect(screen.getByTestId('image-lightbox')).toBeInTheDocument();
+  });
+
+  it('zooms the lightbox image without relying on page zoom', () => {
+    const att: Attachment = {
+      id: 'a-zoom',
+      filename: 'zoom.png',
+      contentType: 'image/png',
+      size: 100,
+      url: 'https://cdn/zoom.png',
+    };
+    useAttachmentsBatchMock.mockReturnValue({
+      map: new Map([['a-zoom', att]]),
+      isLoading: false,
+    });
+    render(<MessageAttachments {...baseProps} ids={['a-zoom']} />);
+
+    fireEvent.click(screen.getByLabelText('Open image zoom.png'));
+    const image = screen.getByTestId('image-lightbox-image');
+    expect(image).toHaveStyle({ transform: 'scale(1)' });
+
+    fireEvent.click(screen.getByTestId('image-lightbox-zoom-in'));
+    expect(image).toHaveStyle({ transform: 'scale(1.5)' });
+
+    fireEvent.doubleClick(image);
+    expect(image).toHaveStyle({ transform: 'scale(1)' });
   });
 
   it('Escape blurs the active element so the attachment trigger does not pick up a focus-visible ring after closing', () => {

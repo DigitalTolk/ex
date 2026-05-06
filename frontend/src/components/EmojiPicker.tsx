@@ -75,7 +75,7 @@ const CATEGORY_ICONS: Record<string, LucideIcon> = {
 
 const CUSTOM_CATEGORY_SLUG = 'custom';
 const PICKER_WIDTH = 336;
-const PICKER_HEIGHT = 460;
+const PICKER_HEIGHT = 380;
 
 function normalizeEmojiQuery(query: string) {
   return query.trim().toLowerCase().replace(/^:+|:+$/g, '');
@@ -224,7 +224,7 @@ export function EmojiPicker({ onSelect, onClose, onOpenChange, trigger, ariaLabe
         preferredAlign="end"
         ariaLabel={ariaLabel}
         mobileSheet
-        className="flex h-[460px] w-[336px] max-w-[calc(100vw-16px)] flex-col rounded-md border bg-popover p-2 shadow-md max-md:h-[min(78vh,calc(100dvh-72px))] max-md:w-screen max-md:max-w-none max-md:rounded-b-none max-md:rounded-t-xl"
+        className="flex h-[460px] w-[336px] max-w-[calc(100vw-16px)] flex-col rounded-md border bg-popover p-2 shadow-md max-md:h-[min(58vh,calc(100dvh-9rem))] max-md:w-screen max-md:max-w-none max-md:rounded-b-none max-md:rounded-t-xl"
       >
         <Input
           ref={inputRef}

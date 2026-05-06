@@ -242,6 +242,18 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
     !bodyOverLimit &&
     !attachmentsOverLimit;
 
+  const collapseMobileComposer = useCallback(() => {
+    setToolbarPickerOpen(false);
+    setEditorFocused(false);
+    const blurComposer = () => {
+      editorRef.current?.blur();
+      const active = document.activeElement;
+      if (active instanceof HTMLElement) active.blur();
+    };
+    blurComposer();
+    requestAnimationFrame(blurComposer);
+  }, []);
+
   const handleSend = useCallback(() => {
     if (!canSend) return;
     const normalized = normalizeEmojiInBody(body.trim());
@@ -255,8 +267,12 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
     setBody('');
     setDrafts([]);
     editorRef.current?.setMarkdown('');
+    if (isMobile) {
+      collapseMobileComposer();
+      return;
+    }
     queueMicrotask(() => editorRef.current?.focus());
-  }, [canSend, body, drafts, onSend, variant, initialDraftKey]);
+  }, [canSend, body, drafts, onSend, variant, initialDraftKey, isMobile, collapseMobileComposer]);
 
   useEffect(() => {
     if (variant !== 'composer') return;
@@ -536,7 +552,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
           Up to {MAX_ATTACHMENTS_PER_MESSAGE} attachments per message — remove a few to send.
         </div>
       )}
-      <div className="rounded-lg border bg-muted/40 dark:bg-input/30 focus-within:ring-1 focus-within:ring-ring">
+      <div className="rounded-lg border bg-muted/40 dark:bg-input/30 focus-within:ring-1 focus-within:ring-ring" data-message-composer>
         {showToolbar && (
           <div
             className="flex items-center gap-0.5 border-b px-2 py-1"

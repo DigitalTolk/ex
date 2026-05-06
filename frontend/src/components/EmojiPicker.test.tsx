@@ -183,6 +183,7 @@ describe('EmojiPicker', () => {
     const dialog = screen.getByRole('dialog');
     expect(dialog.className).toContain('w-[336px]');
     expect(dialog.className).toContain('h-[460px]');
+    expect(dialog.className).toContain('max-md:h-[min(58vh,calc(100dvh-9rem))]');
 
     const tabs = screen.getAllByTestId('emoji-category-tab');
     expect(tabs).toHaveLength(10);

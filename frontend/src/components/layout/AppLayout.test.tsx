@@ -1,5 +1,5 @@
 import { beforeEach, describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { BrowserRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -101,6 +101,28 @@ describe('AppLayout', () => {
     await user.click(menuBtn);
 
     expect(window.location.pathname).toBe('/');
+  });
+
+  it('opens the mobile channel home on a left-to-right touch swipe', () => {
+    window.history.pushState({}, '', '/channel/general');
+    const { container } = renderLayout();
+    const main = container.querySelector('main')!;
+
+    fireEvent.pointerDown(main, { pointerType: 'touch', clientX: 12, clientY: 200 });
+    fireEvent.pointerUp(main, { pointerType: 'touch', clientX: 120, clientY: 210 });
+
+    expect(window.location.pathname).toBe('/');
+  });
+
+  it('ignores desktop mouse drags for mobile channel swipe navigation', () => {
+    window.history.pushState({}, '', '/channel/general');
+    const { container } = renderLayout();
+    const main = container.querySelector('main')!;
+
+    fireEvent.pointerDown(main, { pointerType: 'mouse', clientX: 12, clientY: 200 });
+    fireEvent.pointerUp(main, { pointerType: 'mouse', clientX: 120, clientY: 210 });
+
+    expect(window.location.pathname).toBe('/channel/general');
   });
 
   it('does not render a mobile side-over overlay', () => {

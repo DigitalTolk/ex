@@ -27,7 +27,7 @@ interface GiphyPickerProps {
 
 const MAX_GRID_WIDTH = 336;
 const MIN_GRID_WIDTH = 180;
-const POPOVER_HEIGHT = 460;
+const POPOVER_HEIGHT = 380;
 const GRID_GUTTER = 6;
 const PAGE_SIZE = 12;
 const POPOVER_MARGIN = 8;
@@ -161,7 +161,7 @@ export function GiphyPicker({ apiKey, onSelect, trigger, ariaLabel = 'Giphy pick
         preferredAlign="end"
         ariaLabel={ariaLabel}
         mobileSheet
-        className="flex h-[460px] max-w-[calc(100vw-16px)] flex-col rounded-md border bg-popover p-2 shadow-md max-md:h-[min(78vh,calc(100dvh-72px))] max-md:w-screen max-md:max-w-none max-md:rounded-b-none max-md:rounded-t-xl"
+        className="flex h-[460px] max-w-[calc(100vw-16px)] flex-col rounded-md border bg-popover p-2 shadow-md max-md:h-[min(58vh,calc(100dvh-9rem))] max-md:w-screen max-md:max-w-none max-md:rounded-b-none max-md:rounded-t-xl"
       >
         <Input
           ref={inputRef}

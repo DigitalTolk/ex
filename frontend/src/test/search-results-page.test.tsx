@@ -133,6 +133,19 @@ describe('SearchResultsPage', () => {
     expect(screen.queryByText('~design')).toBeNull();
   });
 
+  it('uses a mobile-friendly horizontal tab strip', async () => {
+    apiFetchMock.mockImplementation((url: string) => {
+      if (url.startsWith('/api/v1/search')) return Promise.resolve({ total: 0, hits: [] });
+      return Promise.resolve([]);
+    });
+
+    wrap(['/search?q=design']);
+
+    const tablist = screen.getByRole('tablist');
+    expect(tablist).toHaveClass('overflow-x-auto', 'max-md:border-b-0');
+    expect(screen.getByRole('tab', { name: /all/i })).toHaveClass('shrink-0', 'rounded-full', 'md:rounded-none');
+  });
+
   it('renders file hits with their filename', async () => {
     apiFetchMock.mockImplementation((url: string) => {
       if (url.startsWith('/api/v1/search/files')) {
@@ -307,6 +320,8 @@ describe('SearchResultsPage', () => {
     });
     wrap(['/search?q=hello&type=messages']);
     await waitFor(() => screen.getByTestId('bucket-picker-users'));
+    expect(screen.getByTestId('results-sort')).toHaveClass('max-md:h-9', 'max-md:px-3', 'max-md:text-sm');
+    expect(screen.getByTestId('bucket-picker-users')).toHaveClass('max-md:h-9', 'max-md:px-3', 'max-md:text-sm');
     fireEvent.click(screen.getByTestId('bucket-picker-users'));
     await waitFor(() => screen.getByText('Alice'));
     expect(screen.getByText('7')).toBeInTheDocument();

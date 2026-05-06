@@ -136,6 +136,41 @@ describe('ThreadPanel', () => {
     expect(onClose).toHaveBeenCalled();
   });
 
+  it('keeps more mobile spacing between follow and close controls', () => {
+    mockApiFetch.mockResolvedValueOnce([]);
+    renderWithProviders(
+      <ThreadPanel
+        channelId="ch-1"
+        threadRootID="m-1"
+        onClose={vi.fn()}
+        userMap={userMap}
+        currentUserId="u-1"
+      />,
+    );
+
+    expect(screen.getByLabelText('Close thread').parentElement).toHaveClass('gap-1', 'max-md:gap-3');
+  });
+
+  it('closes on a mobile right-to-left swipe', () => {
+    mockApiFetch.mockResolvedValueOnce([]);
+    const onClose = vi.fn();
+    renderWithProviders(
+      <ThreadPanel
+        channelId="ch-1"
+        threadRootID="m-1"
+        onClose={onClose}
+        userMap={userMap}
+        currentUserId="u-1"
+      />,
+    );
+
+    const panel = screen.getByLabelText('Thread');
+    fireEvent.pointerDown(panel, { pointerType: 'touch', clientX: 240, clientY: 160 });
+    fireEvent.pointerUp(panel, { pointerType: 'touch', clientX: 120, clientY: 168 });
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
   it('shows Follow when the thread is not in /threads and calls the follow endpoint', async () => {
     mockApiFetch.mockImplementation((url: string) => {
       if (url === '/api/v1/threads') return Promise.resolve([]);

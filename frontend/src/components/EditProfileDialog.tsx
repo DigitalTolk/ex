@@ -231,10 +231,7 @@ function EditProfileBody({ onOpenChange }: { onOpenChange: (open: boolean) => vo
         </div>
       </div>
 
-      <div className="flex justify-end gap-2 pt-2">
-        <Button variant="outline" onClick={() => onOpenChange(false)} disabled={isSaving}>
-          Cancel
-        </Button>
+      <div className="flex justify-end pt-2">
         <Button onClick={handleSave} disabled={isSaving || isUploading}>
           {isSaving ? 'Saving...' : 'Save'}
         </Button>

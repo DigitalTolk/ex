@@ -25,7 +25,7 @@ describe('BucketPicker', () => {
     wrap(
       <BucketPicker kind="users" buttonLabel="From ▾" buckets={[]} onPick={onPick} />,
     );
-    expect(screen.getByTestId('bucket-picker-users')).toHaveClass('text-xs', 'max-md:text-sm', 'max-md:min-h-9');
+    expect(screen.getByTestId('bucket-picker-users')).toHaveClass('text-xs', 'max-md:text-sm', 'max-md:h-9');
     fireEvent.click(screen.getByTestId('bucket-picker-users'));
     expect(screen.getByText(/no options/i)).toBeInTheDocument();
   });

@@ -462,12 +462,12 @@ describe('MessageItem', () => {
     await act(async () => {
       await new Promise((resolve) => window.setTimeout(resolve, 430));
     });
-    expect(document.body.style.overflow).toBe('');
+    expect(document.body.style.overflow).toBe('hidden');
     expect(document.body.style.touchAction).toBe('');
     expect(document.body.style.overscrollBehavior).toBe('');
 
     await user.click(within(screen.getByTestId('mobile-message-actions')).getByLabelText('Add reaction'));
-    expect(document.body.style.overflow).toBe('');
+    expect(document.body.style.overflow).toBe('hidden');
     expect(document.body.style.touchAction).toBe('');
     expect(document.body.style.overscrollBehavior).toBe('');
     await user.type(screen.getByLabelText('Search emojis'), 'tada');

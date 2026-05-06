@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Pencil, Trash2, SmilePlus, MessageSquareReply, MoreHorizontal, Pin, PinOff, Link as LinkIcon } from 'lucide-react';
+import { Copy, Pencil, Trash2, SmilePlus, MessageSquareReply, MoreHorizontal, Pin, PinOff, Link as LinkIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { MessageInput, type MessageInputValue } from '@/components/chat/MessageInput';
 import type { DraftAttachment } from '@/components/chat/AttachmentChip';
@@ -178,21 +178,28 @@ export function MessageItem({
     return `${origin}/#msg-${message.id}`;
   }
 
-  async function handleCopyLink() {
-    const link = buildMessageLink();
+  async function copyToClipboard(value: string) {
     try {
-      await navigator.clipboard.writeText(link);
+      await navigator.clipboard.writeText(value);
     } catch {
       // Fallback for environments without async clipboard (jsdom, older browsers).
       const ta = document.createElement('textarea');
-      ta.value = link;
+      ta.value = value;
       document.body.appendChild(ta);
       ta.select();
       try { document.execCommand('copy'); } catch { /* swallow */ }
       ta.remove();
     }
+  }
+
+  async function handleCopyLink() {
+    await copyToClipboard(buildMessageLink());
     setLinkCopied(true);
     setTimeout(() => setLinkCopied(false), 1500);
+  }
+
+  async function handleCopyText() {
+    await copyToClipboard(message.body);
   }
 
   function handleTogglePin() {
@@ -280,6 +287,11 @@ export function MessageItem({
     void handleCopyLink();
   }
 
+  function handleMobileCopyText() {
+    closeMobileActions();
+    void handleCopyText();
+  }
+
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   function confirmDelete() {
     deleteMessage.mutate({
@@ -311,7 +323,7 @@ export function MessageItem({
   }
 
   useEffect(() => cancelLongPress, []);
-  useTransientOverlayCleanup(mobileActionsOpen, { rootRef: mobileActionsRef });
+  useTransientOverlayCleanup(mobileActionsOpen, { rootRef: mobileActionsRef, lockScroll: true });
 
   const reactions = message.reactions ?? {};
   const reactionEntries = Object.entries(reactions).filter(([, users]) => users && users.length > 0);
@@ -354,7 +366,7 @@ export function MessageItem({
       }}
       className={`relative flex items-start gap-3 rounded-md px-2 py-1.5 hover:bg-muted/50 ${
         message.pinned ? 'border-l-2 border-amber-500 pl-2' : ''
-      } ${highlighted ? 'ring-1 ring-amber-400/50 rounded-md' : ''} max-md:touch-pan-y max-md:[-webkit-touch-callout:none]`}
+      } ${highlighted ? 'ring-1 ring-amber-400/50 rounded-md' : ''} max-md:select-none max-md:touch-pan-y max-md:[-webkit-touch-callout:none] max-md:[-webkit-user-select:none]`}
     >
       <UserHoverCard
         userId={message.authorID}
@@ -639,7 +651,7 @@ export function MessageItem({
       {!isEditing && !message.deleted && mobileActionsOpen && (
         <div
           ref={mobileActionsRef}
-          className="fixed inset-0 z-50 select-none [-webkit-touch-callout:none] [-webkit-user-select:none] md:hidden"
+          className="fixed inset-0 z-[70] select-none [-webkit-touch-callout:none] [-webkit-user-select:none] md:hidden"
           role="presentation"
           onContextMenu={(event) => event.preventDefault()}
         >
@@ -653,7 +665,7 @@ export function MessageItem({
             role="dialog"
             aria-modal="true"
             aria-label="Message actions"
-            className="absolute inset-x-0 bottom-0 rounded-t-xl border bg-popover p-3 pb-[calc(env(safe-area-inset-bottom)+0.75rem)] text-popover-foreground shadow-lg animate-in slide-in-from-bottom-4"
+            className="absolute inset-x-0 bottom-0 max-h-[calc(100dvh-env(safe-area-inset-top)-0.75rem)] overflow-y-auto rounded-t-xl border-x-0 border-b-0 border-t bg-popover p-3 pb-[calc(env(safe-area-inset-bottom)+0.75rem)] text-popover-foreground shadow-lg animate-in slide-in-from-bottom-4"
             data-testid="mobile-message-actions"
           >
             {!inThread && (
@@ -667,21 +679,34 @@ export function MessageItem({
                 Reply in thread
               </Button>
             )}
-            <div className="mb-2 flex items-center justify-between rounded-lg border px-3 py-2">
-              <span className="text-sm font-medium">Reaction</span>
-              <EmojiPicker
-                onSelect={(emoji) => {
-                  handleReact(emoji);
-                  closeMobileActions();
-                }}
-                trigger={
-                  <Button type="button" size="icon" variant="secondary" aria-label="Add reaction">
+            <EmojiPicker
+              onSelect={(emoji) => {
+                handleReact(emoji);
+                closeMobileActions();
+              }}
+              trigger={
+                <button
+                  type="button"
+                  className="mb-2 flex h-12 w-full items-center justify-between rounded-lg border px-3 text-left"
+                  aria-label="Add reaction"
+                >
+                  <span className="text-sm font-medium">Reaction</span>
+                  <span className="inline-flex h-9 w-9 items-center justify-center rounded-md bg-secondary text-secondary-foreground">
                     <SmilePlus className="h-5 w-5" />
-                  </Button>
-                }
-              />
-            </div>
+                  </span>
+                </button>
+              }
+            />
             <div className="flex flex-col rounded-lg border">
+              <button
+                type="button"
+                className="flex items-center gap-3 border-b px-3 py-3 text-left text-sm"
+                onClick={handleMobileCopyText}
+                aria-label="Copy message text"
+              >
+                <Copy className="h-4 w-4" />
+                Copy text
+              </button>
               <button
                 type="button"
                 className="flex items-center gap-3 border-b px-3 py-3 text-left text-sm"

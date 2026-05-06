@@ -1,5 +1,5 @@
-import { describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { BrowserRouter } from 'react-router-dom';
@@ -8,11 +8,12 @@ import type { Message } from '@/types';
 
 const mockEditMutate = vi.fn();
 const mockDeleteMutate = vi.fn();
+const mockToggleReactionMutate = vi.fn();
 
 vi.mock('@/hooks/useMessages', () => ({
   useEditMessage: () => ({ mutate: mockEditMutate, isPending: false }),
   useDeleteMessage: () => ({ mutate: mockDeleteMutate, isPending: false }),
-  useToggleReaction: () => ({ mutate: vi.fn(), isPending: false }),
+  useToggleReaction: () => ({ mutate: mockToggleReactionMutate, isPending: false }),
   useSetPinned: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 
@@ -60,6 +61,53 @@ function makeMessage(overrides: Partial<Message> = {}): Message {
   };
 }
 
+function setMobileMatch(matches: boolean) {
+  Object.defineProperty(window, 'matchMedia', {
+    configurable: true,
+    value: vi.fn(() => ({
+      matches,
+      media: '(max-width: 767px)',
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+    })),
+  });
+}
+
+async function openMobileActions(message: Message = makeMessage()) {
+  vi.useFakeTimers();
+  setMobileMatch(true);
+  renderWithProviders(
+    <MessageItem
+      message={message}
+      authorName="Alice"
+      isOwn={true}
+      channelId="ch-1"
+    />,
+  );
+  const row = screen.getByText(message.body).closest('[data-message-id]')!;
+  fireEvent.pointerDown(row, { pointerType: 'touch', clientX: 20, clientY: 20 });
+  act(() => {
+    vi.advanceTimersByTime(430);
+  });
+  expect(screen.getByTestId('mobile-message-actions')).toBeInTheDocument();
+  vi.useRealTimers();
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  setMobileMatch(false);
+  Object.defineProperty(navigator, 'clipboard', {
+    configurable: true,
+    value: { writeText: vi.fn().mockResolvedValue(undefined) },
+  });
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 describe('MessageItem - editing', () => {
   it('enters inline edit mode on desktop when Edit is clicked', async () => {
     const user = userEvent.setup();
@@ -92,6 +140,39 @@ describe('MessageItem - editing', () => {
     await user.click(screen.getByLabelText('Save'));
     expect(mockEditMutate).not.toHaveBeenCalled();
     expect(screen.queryByLabelText('Save')).toBeNull();
+  });
+});
+
+describe('MessageItem - mobile actions', () => {
+  it('opens a viewport-bounded bottom sheet for long-press actions', async () => {
+    await openMobileActions();
+
+    const sheet = screen.getByTestId('mobile-message-actions');
+    expect(sheet).toHaveClass('bottom-0', 'max-h-[calc(100dvh-env(safe-area-inset-top)-0.75rem)]', 'overflow-y-auto');
+    expect(sheet).toHaveClass('border-x-0', 'border-b-0');
+  });
+
+  it('offers copy text and suppresses native text selection affordances on mobile', async () => {
+    await openMobileActions(makeMessage({ body: 'Copy this text' }));
+
+    const row = screen.getByText('Copy this text').closest('[data-message-id]')!;
+    expect(row).toHaveClass('max-md:select-none', 'max-md:[-webkit-user-select:none]', 'max-md:[-webkit-touch-callout:none]');
+    await userEvent.click(screen.getByRole('button', { name: /Copy message text/i }));
+
+    await waitFor(() => {
+      expect(navigator.clipboard.writeText).toHaveBeenCalledWith('Copy this text');
+    });
+  });
+
+  it('makes the full reaction row clickable in the mobile action sheet', async () => {
+    await openMobileActions();
+
+    const sheet = screen.getByTestId('mobile-message-actions');
+    const reaction = within(sheet).getByRole('button', { name: /Add reaction/i });
+    expect(reaction).toHaveClass('w-full', 'justify-between');
+    await userEvent.click(reaction);
+
+    expect(await screen.findByRole('dialog', { name: /Emoji picker/i })).toBeInTheDocument();
   });
 });
 

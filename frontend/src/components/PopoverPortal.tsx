@@ -108,7 +108,7 @@ export function PopoverPortal({
               zIndex: 1000,
               width: '100vw',
               maxWidth: '100vw',
-              maxHeight: 'min(78vh, calc(100dvh - 72px))',
+              maxHeight: 'min(58vh, calc(100dvh - 9rem))',
               overflowY: 'auto',
               opacity: measured ? 1 : 0,
               pointerEvents: measured ? 'auto' : 'none',
