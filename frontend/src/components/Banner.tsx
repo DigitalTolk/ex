@@ -13,9 +13,26 @@ interface BannerProps {
   children: ReactNode;
   actions?: ReactNode;
   testId?: string;
+  centered?: boolean;
 }
 
-export function Banner({ tone, icon, children, actions, testId }: BannerProps) {
+export function Banner({ tone, icon, children, actions, testId, centered = false }: BannerProps) {
+  if (centered) {
+    return (
+      <div
+        role="alert"
+        data-testid={testId}
+        className={`grid shrink-0 grid-cols-[2rem_minmax(0,1fr)_auto] items-center gap-2 border-b px-3 py-2 text-sm ${TONE_CLASSES[tone]}`}
+      >
+        <div className="flex justify-start">{icon}</div>
+        <div className="min-w-0 text-center">
+          <span className="truncate">{children}</span>
+        </div>
+        {actions ? <div className="flex items-center justify-end gap-2">{actions}</div> : <div />}
+      </div>
+    );
+  }
+
   return (
     <div
       role="alert"

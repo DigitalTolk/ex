@@ -16,6 +16,7 @@ export function UpdateBanner() {
     <Banner
       tone="warn"
       testId="update-banner"
+      centered
       icon={<RefreshCw className="h-4 w-4" aria-hidden="true" />}
       actions={
         <Button
@@ -31,11 +32,11 @@ export function UpdateBanner() {
           }}
           data-testid="update-banner-reload"
         >
-          Reload now
+          Reload
         </Button>
       }
     >
-      A new version of <strong>ex</strong> has been deployed. Reload to pick up the latest changes.
+      New version available.
     </Banner>
   );
 }

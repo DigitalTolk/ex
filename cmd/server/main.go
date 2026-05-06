@@ -244,7 +244,12 @@ func main() {
 	// ------------------------------------------------------------------ Router
 	allowOrigins := []string{"*"}
 	if !cfg.IsDev() {
-		allowOrigins = []string{cfg.BaseURL, "tauri://localhost"}
+		allowOrigins = []string{
+			cfg.BaseURL,
+			"tauri://localhost",
+			"capacitor://localhost",
+			"http://localhost",
+		}
 	}
 	unfurlSvc := service.NewUnfurlService(redisCache)
 	if s3Client != nil {
