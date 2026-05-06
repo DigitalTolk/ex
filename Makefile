@@ -67,4 +67,18 @@ check:
 	@echo "=== Frontend lint ==="
 	cd frontend && npx eslint src/
 	@echo "=== Frontend test ==="
-	cd frontend && npx vitest run --coverage
+	@tmp=$$(mktemp); \
+		cd frontend && npx vitest run --coverage > "$$tmp" 2>&1; \
+		status=$$?; \
+		cat "$$tmp"; \
+		if [ $$status -ne 0 ]; then \
+			rm -f "$$tmp"; \
+			exit $$status; \
+		fi; \
+		if grep -E '^(stderr|stdout) \|' "$$tmp" >/dev/null; then \
+			echo "vitest emitted console output; keep tests quiet before passing make check" >&2; \
+			grep -n -E '^(stderr|stdout) \|' "$$tmp" >&2; \
+			rm -f "$$tmp"; \
+			exit 1; \
+		fi; \
+		rm -f "$$tmp"

@@ -86,6 +86,24 @@ vi.mock('@/lib/api', async () => {
   };
 });
 
+vi.mock('./MessageInput', async () => {
+  const React = await import('react');
+  type Handle = { uploadFiles: (files: File[]) => Promise<void> };
+  const MessageInput = React.forwardRef<Handle, { placeholder?: string }>(({ placeholder }, ref) => {
+    React.useImperativeHandle(ref, () => ({
+      uploadFiles: () => Promise.resolve(),
+    }));
+    return (
+      <div>
+        <textarea aria-label="Message input" placeholder={placeholder} />
+        {placeholder ? <span>{placeholder}</span> : null}
+      </div>
+    );
+  });
+  MessageInput.displayName = 'MessageInputStub';
+  return { MessageInput };
+});
+
 // --- helpers -------------------------------------------------------------
 
 function renderConversationView(id = 'conv-1') {
@@ -139,7 +157,7 @@ describe('ConversationView', () => {
     // scrolling in DMs and drifted on send in channels. The typing
     // indicator now uses normal-flow positioning instead.
     const { container } = renderConversationView();
-    const dropzone = container.querySelector('div.flex.flex-1.flex-col.min-h-0');
+    const dropzone = container.querySelector('div.relative.flex.flex-1.flex-col.min-h-0');
     expect(dropzone).not.toBeNull();
     const messages = container.querySelector('div.overflow-y-auto') as HTMLElement;
     expect(messages.parentElement).toBe(dropzone);

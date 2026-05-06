@@ -43,7 +43,13 @@ describe('MemberList', () => {
 
     const scrollArea = screen.getByTestId('member-list-scroll-area');
     const panel = scrollArea.parentElement!;
-    expect(panel).toHaveClass('w-80', 'max-md:fixed', 'max-md:inset-x-0', 'max-md:top-11', 'max-md:w-auto');
+    expect(panel).toHaveClass(
+      'w-80',
+      'max-md:fixed',
+      'max-md:inset-x-0',
+      'max-md:top-[calc(2.75rem+env(safe-area-inset-top))]',
+      'max-md:w-auto',
+    );
     expect(scrollArea).toHaveClass('min-h-0', 'flex-1');
     expect(scrollArea.querySelector('[data-slot="scroll-area-scrollbar"]')).toHaveClass(
       'opacity-0',

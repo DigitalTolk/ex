@@ -17,7 +17,7 @@ export function AppLayout({ children }: AppLayoutProps) {
 
   return (
     <TagSearchProvider>
-      <div className="flex h-full flex-col overflow-hidden">
+      <div className="flex h-full flex-col overflow-hidden bg-background pt-[env(safe-area-inset-top)]">
         {/* Slack/Mattermost-style thin top bar. On mobile, channels/DMs are
             the primary home view, so the left control navigates there
             instead of opening a temporary side-over. */}
