@@ -97,4 +97,16 @@ describe('MessageInput focusKey', () => {
     expect(editor).not.toHaveClass('max-md:min-h-[1.5rem]');
     expect(editor).not.toHaveClass('max-md:max-h-[1.5rem]');
   });
+
+  it('hides mobile formatting controls until the user focuses the input line', () => {
+    setMobileMatch(true);
+    render(<MessageInput onSend={vi.fn()} focusKey="ch-1" />);
+    const editor = screen.getByLabelText('Message input');
+
+    expect(screen.queryByRole('toolbar', { name: 'Formatting' })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Attach file')).not.toBeInTheDocument();
+    fireEvent.focus(editor);
+    expect(screen.getByRole('toolbar', { name: 'Formatting' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Attach file')).toBeInTheDocument();
+  });
 });
