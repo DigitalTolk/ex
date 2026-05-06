@@ -41,6 +41,7 @@ interface EmojiPickerProps {
   // (so messages and reactions are stored uniformly per the API contract).
   onSelect: (shortcode: string) => void;
   onClose?: () => void;
+  onOpenChange?: (open: boolean) => void;
   trigger?: React.ReactNode;
   ariaLabel?: string;
   // shortcode: insert :name: into a textarea (for the message composer)
@@ -110,7 +111,7 @@ function useEmojiPickerAuth() {
   }
 }
 
-export function EmojiPicker({ onSelect, onClose, trigger, ariaLabel = 'Emoji picker' }: EmojiPickerProps) {
+export function EmojiPicker({ onSelect, onClose, onOpenChange, trigger, ariaLabel = 'Emoji picker' }: EmojiPickerProps) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [activeCategory, setActiveCategory] = useState<string>(EMOJI_CATEGORIES[0]?.slug ?? '');
@@ -168,6 +169,7 @@ export function EmojiPicker({ onSelect, onClose, trigger, ariaLabel = 'Emoji pic
   function close() {
     inputRef.current?.blur();
     setOpen(false);
+    onOpenChange?.(false);
     setQuery('');
     onClose?.();
   }
@@ -198,7 +200,13 @@ export function EmojiPicker({ onSelect, onClose, trigger, ariaLabel = 'Emoji pic
       <span
         ref={triggerRef}
         className="inline-block"
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => {
+          setOpen((v) => {
+            const next = !v;
+            onOpenChange?.(next);
+            return next;
+          });
+        }}
       >
         {trigger ?? (
           <Button size="sm" variant="ghost" aria-label="Open emoji picker">

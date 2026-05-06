@@ -29,9 +29,24 @@ function renderInput() {
   );
 }
 
+function setMobileMatch(matches: boolean) {
+  Object.defineProperty(window, 'matchMedia', {
+    configurable: true,
+    value: vi.fn(() => ({
+      matches,
+      media: '(max-width: 767px)',
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+    })),
+  });
+}
+
 describe('MessageInput — emoji picker integration', () => {
   beforeEach(() => {
     document.execCommand = vi.fn(() => true) as unknown as typeof document.execCommand;
+    setMobileMatch(false);
   });
 
   it('clicking the toolbar Emoji button opens the picker', () => {
@@ -100,5 +115,35 @@ describe('MessageInput — emoji picker integration', () => {
     // When search is active the section label flips to "Results".
     const popover = search.closest('[role="dialog"]') ?? search.parentElement!;
     expect(within(popover).getByText('Results')).toBeInTheDocument();
+  });
+
+  it('lets the portal search input receive pointer focus from the toolbar picker', () => {
+    renderInput();
+    fireEvent.click(screen.getByLabelText('Emoji'));
+    const search = screen.getByLabelText('Search emojis');
+    const pointerDown = new PointerEvent('pointerdown', { bubbles: true, cancelable: true });
+    const mouseDown = new MouseEvent('mousedown', { bubbles: true, cancelable: true });
+
+    search.dispatchEvent(pointerDown);
+    search.dispatchEvent(mouseDown);
+
+    expect(pointerDown.defaultPrevented).toBe(false);
+    expect(mouseDown.defaultPrevented).toBe(false);
+  });
+
+  it('keeps the mobile emoji picker open when tapping its search field', () => {
+    setMobileMatch(true);
+    renderInput();
+    const editor = screen.getByLabelText('Message input');
+    fireEvent.focus(editor);
+    fireEvent.click(screen.getByLabelText('Emoji'));
+    const search = screen.getByLabelText('Search emojis');
+
+    fireEvent.blur(editor);
+    fireEvent.pointerDown(search, { pointerType: 'touch' });
+    fireEvent.focus(search);
+
+    expect(screen.getByLabelText('Search emojis')).toBeInTheDocument();
+    expect(screen.getByRole('toolbar', { name: 'Formatting' })).toBeInTheDocument();
   });
 });

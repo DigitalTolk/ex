@@ -111,6 +111,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
   const [drafts, setDrafts] = useState<DraftAttachment[]>(initialDrafts);
   const [isUploading, setIsUploading] = useState(false);
   const [editorFocused, setEditorFocused] = useState(false);
+  const [toolbarPickerOpen, setToolbarPickerOpen] = useState(false);
   const [uploadError, setUploadError] = useState('');
   const editorRef = useRef<WysiwygEditorHandle>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -147,7 +148,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
   const suppressAutoFocus = isMobile && variant === 'composer';
   const compactMobileComposer =
     variant === 'composer' && !editorFocused && body.trim() === '' && drafts.length === 0;
-  const showToolbar = variant !== 'composer' || !isMobile || editorFocused;
+  const showToolbar = variant !== 'composer' || !isMobile || editorFocused || toolbarPickerOpen;
 
   useEffect(() => {
     latestDraftValueRef.current = { body, attachmentIDs: drafts.map((d) => d.id) };
@@ -537,7 +538,17 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
       )}
       <div className="rounded-lg border bg-muted/40 dark:bg-input/30 focus-within:ring-1 focus-within:ring-ring">
         {showToolbar && (
-          <div className="flex items-center gap-0.5 border-b px-2 py-1" role="toolbar" aria-label="Formatting">
+          <div
+            className="flex items-center gap-0.5 border-b px-2 py-1"
+            role="toolbar"
+            aria-label="Formatting"
+            onMouseDown={(event) => {
+              if (event.currentTarget.contains(event.target as Node)) event.preventDefault();
+            }}
+            onPointerDown={(event) => {
+              if (event.currentTarget.contains(event.target as Node)) event.preventDefault();
+            }}
+          >
             <ToolbarBtn label="Bold (Ctrl+B)" active={active.has('bold')} onClick={() => editorRef.current?.applyMark('bold')}><Bold className="h-3.5 w-3.5" /></ToolbarBtn>
             <ToolbarBtn label="Italic (Ctrl+I)" active={active.has('italic')} onClick={() => editorRef.current?.applyMark('italic')}><Italic className="h-3.5 w-3.5" /></ToolbarBtn>
             <ToolbarBtn label="Strikethrough" active={active.has('strike')} onClick={() => editorRef.current?.applyMark('strike')}><Strikethrough className="h-3.5 w-3.5" /></ToolbarBtn>
@@ -554,6 +565,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
             <EmojiPicker
               onSelect={insertEmojiShortcode}
               mode="shortcode"
+              onOpenChange={setToolbarPickerOpen}
               trigger={
                 <ToolbarBtn label="Emoji"><Smile className="h-3.5 w-3.5" /></ToolbarBtn>
               }
@@ -562,6 +574,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
               <GiphyPicker
                 apiKey={giphyAPIKey}
                 onSelect={insertGiphyGIF}
+                onOpenChange={setToolbarPickerOpen}
                 trigger={
                   <ToolbarBtn label="GIF"><ImagePlay className="h-3.5 w-3.5" /></ToolbarBtn>
                 }

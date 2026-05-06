@@ -22,6 +22,7 @@ interface GiphyPickerProps {
   onSelect: (gif: PickedGIF) => void;
   trigger: React.ReactNode;
   ariaLabel?: string;
+  onOpenChange?: (open: boolean) => void;
 }
 
 const MAX_GRID_WIDTH = 336;
@@ -63,7 +64,7 @@ function computeGridWidth() {
 // `<Grid>` component. The Grid handles infinite scroll, masonry layout,
 // image rendering, and direct client-side requests to GIPHY via the
 // SDK fetch client; this app does not proxy GIPHY API or media traffic.
-export function GiphyPicker({ apiKey, onSelect, trigger, ariaLabel = 'Giphy picker' }: GiphyPickerProps) {
+export function GiphyPicker({ apiKey, onSelect, trigger, ariaLabel = 'Giphy picker', onOpenChange }: GiphyPickerProps) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [debouncedQuery, setDebouncedQuery] = useState('');
@@ -113,9 +114,10 @@ export function GiphyPicker({ apiKey, onSelect, trigger, ariaLabel = 'Giphy pick
   const close = useCallback(() => {
     inputRef.current?.blur();
     setOpen(false);
+    onOpenChange?.(false);
     setQuery('');
     setDebouncedQuery('');
-  }, []);
+  }, [onOpenChange]);
 
   const handleGifClick = useCallback(
     (gif: IGif, e: React.SyntheticEvent) => {
@@ -139,7 +141,13 @@ export function GiphyPicker({ apiKey, onSelect, trigger, ariaLabel = 'Giphy pick
       <span
         ref={triggerRef}
         className="inline-block"
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => {
+          setOpen((v) => {
+            const next = !v;
+            onOpenChange?.(next);
+            return next;
+          });
+        }}
       >
         {trigger}
       </span>

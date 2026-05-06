@@ -72,6 +72,24 @@ describe('MessageInput toolbar buttons', () => {
     expect(screen.getByLabelText('Bold (Ctrl+B)')).toBeInTheDocument();
   });
 
+  it('keeps the focused mobile toolbar alive while tapping formatting buttons', async () => {
+    setMobileMatch(true);
+    renderWithClient(<MessageInput onSend={vi.fn()} initialBody="hello" />);
+    const editor = await screen.findByLabelText('Message input');
+    fireEvent.focus(editor);
+
+    const bold = screen.getByLabelText('Bold (Ctrl+B)');
+    const mouseDown = new MouseEvent('mousedown', { bubbles: true, cancelable: true });
+    bold.dispatchEvent(mouseDown);
+
+    expect(mouseDown.defaultPrevented).toBe(true);
+    expect(screen.getByRole('toolbar', { name: 'Formatting' })).toBeInTheDocument();
+    fireEvent.click(bold);
+    await waitFor(() => {
+      expect(editor.querySelector('.font-semibold')).not.toBeNull();
+    });
+  });
+
   it('inline mark buttons (Bold/Italic/Strikethrough/Code) toggle the corresponding text format on the seeded body', async () => {
     // Lexical renders text-format spans (Bold/Italic/Strike) as
     // <span data-lexical-text> with theme classes; the inline-code
