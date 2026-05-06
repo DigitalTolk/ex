@@ -122,7 +122,9 @@ describe('UpdateBanner', () => {
     act(() => setServerVersion('v9.9.9'));
     render(<UpdateBanner />);
     expect(screen.getByTestId('update-banner')).toBeInTheDocument();
-    expect(screen.getByTestId('update-banner-reload')).toBeInTheDocument();
+    expect(screen.getByText('New version available.')).toBeInTheDocument();
+    expect(screen.getByTestId('update-banner-reload')).toHaveTextContent('Reload');
+    expect(screen.getByText('New version available.').parentElement).toHaveClass('text-center');
   });
 
   it('the reload button cache-busts the location', () => {
