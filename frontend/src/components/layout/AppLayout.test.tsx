@@ -54,6 +54,15 @@ describe('AppLayout', () => {
     expect(searchShell).toHaveClass('w-full', 'max-w-2xl', 'justify-self-center', 'lg:flex-1');
   });
 
+  it('keeps flex scroll containers shrinkable on mobile Safari', () => {
+    const { container } = renderLayout();
+
+    const bodyShell = container.querySelector('header')!.nextElementSibling as HTMLElement;
+    const main = bodyShell.querySelector('main')!;
+    expect(bodyShell).toHaveClass('min-h-0', 'overflow-hidden');
+    expect(main).toHaveClass('min-h-0', 'overflow-hidden');
+  });
+
   it('keeps the desktop sidebar as a persistent rail', () => {
     renderLayout();
 

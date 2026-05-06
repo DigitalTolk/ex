@@ -117,7 +117,10 @@ describe('NewConversationPage', () => {
     // fills the content area without scrolling at the page level.
     expect(root.className).toMatch(/flex-1/);
     expect(root.className).toMatch(/flex-col/);
+    expect(root.className).toMatch(/min-h-0/);
     expect(root.className).toMatch(/overflow-hidden/);
+
+    expect(screen.getByTestId('recipients-input')).toHaveClass('text-sm', 'max-md:text-base');
 
     const recipients = screen.getByTestId('recipients-input');
     const send = screen.getByLabelText('Send');

@@ -51,6 +51,7 @@ export function ConfirmDialog({
         <DialogFooter>
           <Button
             variant="ghost"
+            className="max-md:h-9 max-md:px-2.5"
             onClick={() => onOpenChange(false)}
             data-testid={`${testIDPrefix}-cancel`}
           >
@@ -58,6 +59,7 @@ export function ConfirmDialog({
           </Button>
           <Button
             variant={destructive ? 'destructive' : 'default'}
+            className="max-md:h-9 max-md:px-2.5"
             onClick={() => {
               onConfirm();
               onOpenChange(false);

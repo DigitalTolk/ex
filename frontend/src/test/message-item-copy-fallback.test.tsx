@@ -153,15 +153,14 @@ describe('MessageItem — edit no-op branches', () => {
     useAttachmentsBatchMock.mockReturnValue({ map: new Map(), data: [] });
   });
 
-  it('renders Loading… while attachments are being hydrated for an edit', () => {
-    // Simulate "in flight" — map is empty but ids exist on the message.
+  it('renders Loading… while attachments are being hydrated for a desktop inline edit', () => {
     useAttachmentsBatchMock.mockReturnValue({ map: new Map(), data: undefined });
     renderItem({ body: 'with files', attachmentIDs: ['a-1', 'a-2'] });
     fireEvent.click(screen.getByText('Edit'));
     expect(screen.getByText('Loading…')).toBeInTheDocument();
   });
 
-  it('mounts the editor once attachments hydrate (drafts populated)', async () => {
+  it('mounts the desktop inline editor once attachments hydrate', async () => {
     useAttachmentsBatchMock.mockReturnValue({
       map: new Map([
         ['a-1', { id: 'a-1', filename: 'one.txt', contentType: 'text/plain', size: 1 }],
@@ -171,7 +170,6 @@ describe('MessageItem — edit no-op branches', () => {
     renderItem({ body: 'with files', attachmentIDs: ['a-1'] });
     fireEvent.click(screen.getByText('Edit'));
     expect(await screen.findByTestId('inline-edit')).toBeInTheDocument();
-    // The chip from initialEditDrafts should be visible.
     expect(screen.getByText('one.txt')).toBeInTheDocument();
   });
 });

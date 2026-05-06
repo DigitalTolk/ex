@@ -39,7 +39,7 @@ export default function AdminPage() {
 
   if (!isAdmin(user?.systemRole)) {
     return (
-      <div className="flex-1 overflow-y-auto p-6">
+      <div className="min-h-0 flex-1 overflow-y-auto p-6">
         <p className="text-sm text-muted-foreground">
           Admin access required.
         </p>

@@ -1,4 +1,4 @@
-import { beforeEach, describe, it, expect, vi } from 'vitest';
+import { beforeEach, afterEach, describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -34,10 +34,29 @@ function renderHeaderWithProviders(ui: ReactElement) {
   );
 }
 
+function setMobileMatch(matches: boolean) {
+  Object.defineProperty(window, 'matchMedia', {
+    configurable: true,
+    value: vi.fn(() => ({
+      matches,
+      media: '(max-width: 767px)',
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+    })),
+  });
+}
+
 describe('Header', () => {
   beforeEach(() => {
     apiFetchMock.mockReset();
     apiFetchMock.mockResolvedValue({});
+    setMobileMatch(false);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   it('renders channel name', () => {
@@ -110,6 +129,27 @@ describe('Header', () => {
     );
 
     expect(screen.getByText('General discussion')).toBeInTheDocument();
+  });
+
+  it('keeps the channel dropdown trigger as a desktop dropdown without mobile menu state', () => {
+    setMobileMatch(false);
+    render(<Header channel={makeChannel()} canEdit />);
+
+    const trigger = screen.getByText('general').closest('button');
+    expect(trigger).not.toHaveAttribute('aria-controls', 'mobile-channel-menu');
+    expect(trigger).not.toHaveAttribute('aria-expanded');
+    expect(screen.queryByTestId('mobile-channel-menu')).not.toBeInTheDocument();
+  });
+
+  it('uses the inline channel menu only on mobile', async () => {
+    setMobileMatch(true);
+    const user = userEvent.setup();
+    render(<Header channel={makeChannel()} canEdit />);
+
+    await user.click(screen.getByText('general').closest('button')!);
+
+    expect(screen.getByTestId('mobile-channel-menu')).toHaveClass('md:hidden');
+    expect(screen.getByText('general').closest('button')).toHaveAttribute('aria-controls', 'mobile-channel-menu');
   });
 
   it('renders the fallback avatar with initials when showAvatar is true and avatarURL is missing', () => {

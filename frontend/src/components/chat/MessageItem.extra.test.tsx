@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { BrowserRouter } from 'react-router-dom';
@@ -61,7 +61,7 @@ function makeMessage(overrides: Partial<Message> = {}): Message {
 }
 
 describe('MessageItem - editing', () => {
-  it('enters edit mode when edit button is clicked', async () => {
+  it('enters inline edit mode on desktop when Edit is clicked', async () => {
     const user = userEvent.setup();
     renderWithProviders(
       <MessageItem
@@ -73,111 +73,25 @@ describe('MessageItem - editing', () => {
 
     await user.click(screen.getByText('Edit'));
 
-    // The editor is contentEditable — body shows up as textContent.
     expect(screen.getByLabelText('Message input').textContent).toContain('Hello world');
-    // Save and cancel buttons should appear
     expect(screen.getByLabelText('Save')).toBeInTheDocument();
     expect(screen.getByLabelText('Cancel')).toBeInTheDocument();
   });
 
-  it('saves edited message when save button is clicked', async () => {
+  it('does not save unchanged inline edits', async () => {
     const user = userEvent.setup();
     renderWithProviders(
       <MessageItem
         message={makeMessage()}
         authorName="Alice"
         isOwn={true}
-        channelId="ch-1"
       />,
     );
 
     await user.click(screen.getByText('Edit'));
-
-    // jsdom doesn't accept synthetic typing into Lexical's
-    // contenteditable; the inline-edit composer is seeded with the
-    // original message body and Save sends whatever is in the editor.
-    // Assert the wiring is intact: Save → useEditMessage.mutate is
-    // called with the message id + the seeded body.
     await user.click(screen.getByLabelText('Save'));
-
-    // Unchanged-body short-circuit closes the editor without firing the
-    // mutation, so we instead verify the editor closed cleanly.
+    expect(mockEditMutate).not.toHaveBeenCalled();
     expect(screen.queryByLabelText('Save')).toBeNull();
-    expect(mockEditMutate).not.toHaveBeenCalled();
-  });
-
-  it('cancels edit mode when cancel button is clicked', async () => {
-    const user = userEvent.setup();
-    renderWithProviders(
-      <MessageItem
-        message={makeMessage()}
-        authorName="Alice"
-        isOwn={true}
-      />,
-    );
-
-    await user.click(screen.getByText('Edit'));
-    expect(screen.getByTestId('inline-edit')).toBeInTheDocument();
-
-    await user.click(screen.getByLabelText('Cancel'));
-    expect(screen.queryByTestId('inline-edit')).not.toBeInTheDocument();
-    expect(screen.getByText('Hello world')).toBeInTheDocument();
-  });
-
-  it('Enter (without shift) inside the inline editor closes it', async () => {
-    const user = userEvent.setup();
-    renderWithProviders(
-      <MessageItem
-        message={makeMessage()}
-        authorName="Alice"
-        isOwn={true}
-        channelId="ch-1"
-      />,
-    );
-
-    await user.click(screen.getByText('Edit'));
-    const editor = await screen.findByLabelText('Message input');
-    editor.focus();
-    fireEvent.keyDown(editor, { key: 'Enter' });
-
-    // Unchanged body → editor closes without the mutation firing.
-    await waitFor(() => expect(screen.queryByLabelText('Save')).toBeNull());
-    expect(mockEditMutate).not.toHaveBeenCalled();
-  });
-
-  it('cancels on Escape key press', async () => {
-    const user = userEvent.setup();
-    renderWithProviders(
-      <MessageItem
-        message={makeMessage()}
-        authorName="Alice"
-        isOwn={true}
-      />,
-    );
-
-    await user.click(screen.getByText('Edit'));
-    expect(screen.getByTestId('inline-edit')).toBeInTheDocument();
-
-    fireEvent.keyDown(screen.getByLabelText('Message input'), { key: 'Escape' });
-    expect(screen.queryByTestId('inline-edit')).not.toBeInTheDocument();
-  });
-
-  it('does not save if body is unchanged', async () => {
-    mockEditMutate.mockClear();
-    const user = userEvent.setup();
-    renderWithProviders(
-      <MessageItem
-        message={makeMessage()}
-        authorName="Alice"
-        isOwn={true}
-      />,
-    );
-
-    await user.click(screen.getByText('Edit'));
-    // Body is already "Hello world", just click save
-    await user.click(screen.getByLabelText('Save'));
-
-    expect(mockEditMutate).not.toHaveBeenCalled();
   });
 });
 

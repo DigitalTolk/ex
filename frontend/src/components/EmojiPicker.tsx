@@ -31,6 +31,7 @@ import { EmojiGlyph } from '@/components/EmojiGlyph';
 import { fuzzyMatch } from '@/lib/fuzzy';
 import { apiFetch, getAccessToken } from '@/lib/api';
 import * as AuthContext from '@/context/AuthContext';
+import { useIsMobile } from '@/hooks/useIsMobile';
 import type { User } from '@/types';
 
 type SelectMode = 'shortcode' | 'reaction';
@@ -114,6 +115,7 @@ export function EmojiPicker({ onSelect, onClose, trigger, ariaLabel = 'Emoji pic
   const [query, setQuery] = useState('');
   const [activeCategory, setActiveCategory] = useState<string>(EMOJI_CATEGORIES[0]?.slug ?? '');
   const auth = useEmojiPickerAuth();
+  const isMobile = useIsMobile();
   const user = auth?.user;
   const [skinTone, setSkinTone] = useState<EmojiSkinTone>(user?.emojiSkinTone ?? '');
   const profileSkinToneRef = useRef<EmojiSkinTone>(user?.emojiSkinTone ?? '');
@@ -151,8 +153,8 @@ export function EmojiPicker({ onSelect, onClose, trigger, ariaLabel = 'Emoji pic
   }, [activeCategory, customEmojis, query]);
 
   useEffect(() => {
-    if (open) inputRef.current?.focus();
-  }, [open]);
+    if (open && !isMobile) inputRef.current?.focus();
+  }, [isMobile, open]);
 
   useEffect(() => {
     if (!open) return;
@@ -164,6 +166,7 @@ export function EmojiPicker({ onSelect, onClose, trigger, ariaLabel = 'Emoji pic
   }, [open, user]);
 
   function close() {
+    inputRef.current?.blur();
     setOpen(false);
     setQuery('');
     onClose?.();

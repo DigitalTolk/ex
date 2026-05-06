@@ -6,6 +6,9 @@ import {
   Italic,
   Strikethrough,
   Code,
+  Quote,
+  List,
+  ListOrdered,
   Link as LinkIcon,
   Smile,
   ImagePlay,
@@ -539,6 +542,13 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
             <ToolbarBtn label="Italic (Ctrl+I)" active={active.has('italic')} onClick={() => editorRef.current?.applyMark('italic')}><Italic className="h-3.5 w-3.5" /></ToolbarBtn>
             <ToolbarBtn label="Strikethrough" active={active.has('strike')} onClick={() => editorRef.current?.applyMark('strike')}><Strikethrough className="h-3.5 w-3.5" /></ToolbarBtn>
             <ToolbarBtn label="Code (Ctrl+E)" active={active.has('code')} onClick={() => editorRef.current?.applyMark('code')}><Code className="h-3.5 w-3.5" /></ToolbarBtn>
+            {!isMobile && (
+              <>
+                <ToolbarBtn label="Quote" active={active.has('quote')} onClick={() => editorRef.current?.applyBlock('quote')}><Quote className="h-3.5 w-3.5" /></ToolbarBtn>
+                <ToolbarBtn label="List" active={active.has('ul')} onClick={() => editorRef.current?.applyBlock('ul')}><List className="h-3.5 w-3.5" /></ToolbarBtn>
+                <ToolbarBtn label="Numbered list" active={active.has('ol')} onClick={() => editorRef.current?.applyBlock('ol')}><ListOrdered className="h-3.5 w-3.5" /></ToolbarBtn>
+              </>
+            )}
             <ToolbarBtn label="Link" onClick={openLinkDialog}><LinkIcon className="h-3.5 w-3.5" /></ToolbarBtn>
             <span className="mx-1 h-4 w-px bg-border" aria-hidden />
             <EmojiPicker
@@ -585,7 +595,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
           </div>
         )}
 
-        <div className="flex items-end gap-2 px-3 py-2">
+        <div className={`flex gap-2 px-3 py-2 ${compactMobileComposer ? 'items-center' : 'items-end'}`}>
           <WysiwygEditor
             ref={editorRef}
             initialBody={initialBody}
@@ -620,7 +630,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
                 onClick={onCancel}
                 variant="ghost"
                 size="icon"
-                className="h-8 w-8 rounded-md"
+                className="h-9 w-9 rounded-md"
                 aria-label="Cancel"
               >
                 <X className="h-4 w-4" />
@@ -630,7 +640,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
               onClick={handleSend}
               disabled={!canSend}
               size={submitLabel ? 'sm' : 'icon'}
-              className={submitLabel ? 'h-8 rounded-md' : 'h-8 w-8 rounded-md'}
+              className={submitLabel ? 'h-9 rounded-md px-3' : 'h-8 w-8 rounded-md'}
               aria-label={submitLabel ?? 'Send message'}
             >
               {submitLabel ? submitLabel : <Send className="h-4 w-4" />}

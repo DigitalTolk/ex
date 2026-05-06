@@ -39,11 +39,11 @@ export function AppLayout({ children }: AppLayoutProps) {
           <div className="h-11 w-11 lg:hidden" aria-hidden />
         </header>
 
-        <div className="flex flex-1 overflow-hidden bg-background">
+        <div className="flex min-h-0 flex-1 overflow-hidden bg-background">
           <aside className="hidden w-72 shrink-0 bg-[#1a1d21] lg:block">
             <Sidebar onClose={() => undefined} />
           </aside>
-          <main className="flex flex-1 flex-col overflow-hidden bg-background">{children}</main>
+          <main className="flex min-h-0 flex-1 flex-col overflow-hidden bg-background">{children}</main>
         </div>
       </div>
     </TagSearchProvider>

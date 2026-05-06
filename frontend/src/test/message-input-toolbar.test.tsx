@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
@@ -27,17 +27,49 @@ function renderWithClient(ui: React.ReactElement) {
   return render(<QueryClientProvider client={qc}>{ui}</QueryClientProvider>);
 }
 
+function setMobileMatch(matches: boolean) {
+  Object.defineProperty(window, 'matchMedia', {
+    configurable: true,
+    value: vi.fn(() => ({
+      matches,
+      media: '(max-width: 767px)',
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+    })),
+  });
+}
+
 describe('MessageInput toolbar buttons', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    setMobileMatch(false);
   });
 
-  it('does not render quote/list toolbar buttons in the composer toolbar', async () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('keeps quote and list toolbar buttons on desktop', async () => {
+    setMobileMatch(false);
     renderWithClient(<MessageInput onSend={vi.fn()} initialBody="hello" />);
     await screen.findByLabelText('Message input');
 
+    expect(screen.getByLabelText('Quote')).toBeInTheDocument();
+    expect(screen.getByLabelText('List')).toBeInTheDocument();
+    expect(screen.getByLabelText('Numbered list')).toBeInTheDocument();
+  });
+
+  it('removes quote and list toolbar buttons only from the focused mobile composer', async () => {
+    setMobileMatch(true);
+    renderWithClient(<MessageInput onSend={vi.fn()} initialBody="hello" />);
+    fireEvent.focus(await screen.findByLabelText('Message input'));
+
     expect(screen.queryByLabelText('Quote')).not.toBeInTheDocument();
     expect(screen.queryByLabelText('List')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Numbered list')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Bold (Ctrl+B)')).toBeInTheDocument();
   });
 
   it('inline mark buttons (Bold/Italic/Strikethrough/Code) toggle the corresponding text format on the seeded body', async () => {

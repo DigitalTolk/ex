@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { BrowserRouter } from 'react-router-dom';
 import { MessageItem } from './MessageItem';
@@ -52,6 +52,20 @@ function makeMessage(overrides: Partial<Message> = {}): Message {
     createdAt: '2026-04-24T10:30:00Z',
     ...overrides,
   };
+}
+
+function setMobileMatch(matches: boolean) {
+  Object.defineProperty(window, 'matchMedia', {
+    configurable: true,
+    value: vi.fn(() => ({
+      matches,
+      media: '(max-width: 767px)',
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+    })),
+  });
 }
 
 describe('MessageItem', () => {
@@ -169,7 +183,7 @@ describe('MessageItem', () => {
     expect(screen.getByText('Delete')).toBeInTheDocument();
   });
 
-  it('enters edit mode when an ex:edit-message event names this message and it is own', async () => {
+  it('enters inline edit mode on desktop when an ex:edit-message event names this message and it is own', async () => {
     renderWithProviders(
       <MessageItem
         message={makeMessage({ id: 'msg-7' })}
@@ -179,9 +193,6 @@ describe('MessageItem', () => {
       />,
     );
     expect(screen.queryByTestId('inline-edit')).not.toBeInTheDocument();
-    // Wrap the synchronous state update from the listener so vitest
-    // doesn't surface an act() warning — dispatchEvent on window fires
-    // listeners synchronously and one of them calls setIsEditing.
     act(() => {
       window.dispatchEvent(
         new CustomEvent('ex:edit-message', { detail: { messageId: 'msg-7' } }),
@@ -190,46 +201,42 @@ describe('MessageItem', () => {
     expect(await screen.findByTestId('inline-edit')).toBeInTheDocument();
   });
 
-  it('scrolls the message into view when entering edit mode (so the inline edit isn\'t hidden behind the composer when editing the last message)', async () => {
-    // Regression: the composer sits below the scroll container. When
-    // the user edits the bottom-most message, the inline edit grows
-    // past the previous max-scroll and ends up clipped behind the
-    // composer. Mounting an editor must call scrollIntoView so the
-    // browser brings it back into view.
-    const original = Element.prototype.scrollIntoView;
-    const spy = vi.fn();
-    Element.prototype.scrollIntoView = spy as unknown as typeof Element.prototype.scrollIntoView;
+  it('asks the parent composer to edit on mobile instead of rendering inline', () => {
+    const originalMatchMedia = window.matchMedia;
+    setMobileMatch(true);
     try {
+      const onEditMessage = vi.fn();
+      const message = makeMessage({ id: 'msg-7' });
       renderWithProviders(
         <MessageItem
-          message={makeMessage({ id: 'msg-9' })}
+          message={message}
           authorName="Alice"
           isOwn={true}
           currentUserId="user-1"
+          onEditMessage={onEditMessage}
         />,
       );
       act(() => {
         window.dispatchEvent(
-          new CustomEvent('ex:edit-message', { detail: { messageId: 'msg-9' } }),
+          new CustomEvent('ex:edit-message', { detail: { messageId: 'msg-7' } }),
         );
       });
-      await screen.findByTestId('inline-edit');
-      // Two rAF frames are queued by the effect — flush them.
-      await new Promise((r) => requestAnimationFrame(() => r(undefined)));
-      await new Promise((r) => requestAnimationFrame(() => r(undefined)));
-      expect(spy).toHaveBeenCalled();
+      expect(onEditMessage).toHaveBeenCalledWith(message);
+      expect(screen.queryByTestId('inline-edit')).not.toBeInTheDocument();
     } finally {
-      Element.prototype.scrollIntoView = original;
+      Object.defineProperty(window, 'matchMedia', { configurable: true, value: originalMatchMedia });
     }
   });
 
-  it('focuses the inline editor after entering edit mode via ex:edit-message', async () => {
+  it('does not handle edit events for other peoples messages', () => {
+    const onEditMessage = vi.fn();
     renderWithProviders(
       <MessageItem
         message={makeMessage({ id: 'msg-7' })}
         authorName="Alice"
-        isOwn={true}
+        isOwn={false}
         currentUserId="user-1"
+        onEditMessage={onEditMessage}
       />,
     );
     act(() => {
@@ -237,44 +244,7 @@ describe('MessageItem', () => {
         new CustomEvent('ex:edit-message', { detail: { messageId: 'msg-7' } }),
       );
     });
-    await screen.findByTestId('inline-edit');
-    // MessageInput's focusKey effect runs on mount and queues a
-    // editor.focus() in a microtask — wait for it to land. In jsdom
-    // Lexical's contenteditable becomes the active element.
-    const editor = await screen.findByLabelText('Message input');
-    await waitFor(() => {
-      expect(document.activeElement).toBe(editor);
-    });
-  });
-
-  it('dispatches ex:focus-composer when an inline edit is cancelled', async () => {
-    const user = (await import('@testing-library/user-event')).default.setup();
-    const events: Array<{ parentID?: string; inThread?: boolean }> = [];
-    const listener = (e: Event) => {
-      const ce = e as CustomEvent<{ parentID?: string; inThread?: boolean }>;
-      if (ce.detail) events.push(ce.detail);
-    };
-    window.addEventListener('ex:focus-composer', listener);
-    renderWithProviders(
-      <MessageItem
-        message={makeMessage({ id: 'msg-7', parentID: 'ch-1' })}
-        authorName="Alice"
-        isOwn={true}
-        currentUserId="user-1"
-      />,
-    );
-    act(() => {
-      window.dispatchEvent(
-        new CustomEvent('ex:edit-message', { detail: { messageId: 'msg-7' } }),
-      );
-    });
-    await screen.findByTestId('inline-edit');
-    // Cancel the edit via the X button — onCancel routes through
-    // endEdit() which dispatches the focus-return event. The X
-    // button is the cancel control rendered by inline MessageInput.
-    await user.click(screen.getByLabelText('Cancel'));
-    window.removeEventListener('ex:focus-composer', listener);
-    expect(events).toEqual([{ parentID: 'ch-1', inThread: false }]);
+    expect(onEditMessage).not.toHaveBeenCalled();
   });
 
   it('ignores ex:edit-message events for other messages', () => {
@@ -441,6 +411,46 @@ describe('MessageItem', () => {
     expect(within(sheet).getByLabelText('Pin message')).toBeInTheDocument();
     expect(within(sheet).getByText('Edit')).toBeInTheDocument();
     expect(within(sheet).getByText('Delete')).toBeInTheDocument();
+  });
+
+  it('closes mobile reaction overlays after picking an emoji', async () => {
+    const user = (await import('@testing-library/user-event')).default.setup();
+    setMobileMatch(true);
+    mockReactMutate.mockClear();
+    renderWithProviders(
+      <MessageItem
+        message={makeMessage()}
+        authorName="Alice"
+        isOwn={false}
+        channelId="channel-1"
+        currentUserId="user-1"
+      />,
+    );
+    const row = screen.getByTestId('message-actions-trigger').closest('[data-message-id]')!;
+    act(() => {
+      fireEvent.pointerDown(row, { pointerType: 'touch' });
+    });
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 430));
+    });
+    expect(document.body.style.overflow).toBe('hidden');
+
+    await user.click(within(screen.getByTestId('mobile-message-actions')).getByLabelText('Add reaction'));
+    expect(document.body.style.overflow).toBe('hidden');
+    await user.type(screen.getByLabelText('Search emojis'), 'tada');
+    await user.click(screen.getByLabelText('React with :tada:'));
+
+    expect(mockReactMutate).toHaveBeenCalledWith({
+      messageId: 'msg-1',
+      emoji: ':tada:',
+      channelId: 'channel-1',
+      conversationId: undefined,
+    });
+    expect(screen.queryByTestId('mobile-message-actions')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('popover-portal')).not.toBeInTheDocument();
+    expect(document.body.style.overflow).toBe('');
+    expect(document.body.style.touchAction).toBe('');
+    expect(document.body.style.overscrollBehavior).toBe('');
   });
 
   it('does not render reactions row when no reactions', () => {

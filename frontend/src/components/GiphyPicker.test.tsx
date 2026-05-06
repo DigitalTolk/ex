@@ -109,10 +109,25 @@ function renderPicker(onSelect: (gif: unknown) => void) {
   );
 }
 
+function setMobileMatch(matches: boolean) {
+  Object.defineProperty(window, 'matchMedia', {
+    configurable: true,
+    value: vi.fn(() => ({
+      matches,
+      media: '(max-width: 767px)',
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+    })),
+  });
+}
+
 describe('GiphyPicker', () => {
   beforeEach(() => {
     giphyFetchMocks.search.mockReset();
     giphyFetchMocks.trending.mockReset();
+    setMobileMatch(false);
   });
 
   it('opens the picker and fetches trending GIFs directly through the Giphy SDK', async () => {
@@ -174,6 +189,33 @@ describe('GiphyPicker', () => {
     expect(onSelect.mock.calls[0][0]).not.toHaveProperty('url');
     // The popover unmounts on dismissal — its search input is the
     // cleanest "still open?" probe.
+    expect(screen.queryByLabelText('Search GIFs')).toBeNull();
+  });
+
+  it('does not autofocus the search field on mobile', async () => {
+    setMobileMatch(true);
+    giphyFetchMocks.trending.mockResolvedValue(sampleResponse);
+    const user = userEvent.setup();
+    renderPicker(vi.fn());
+
+    await user.click(screen.getByText('open gif'));
+
+    expect(await screen.findByRole('dialog')).toHaveAttribute('data-mobile-sheet', 'true');
+    expect(document.activeElement).not.toBe(screen.getByLabelText('Search GIFs'));
+  });
+
+  it('blurs the search field before closing after GIF selection', async () => {
+    giphyFetchMocks.trending.mockResolvedValue(sampleResponse);
+    const user = userEvent.setup();
+    renderPicker(vi.fn());
+
+    await user.click(screen.getByText('open gif'));
+    const search = screen.getByLabelText('Search GIFs');
+    expect(document.activeElement).toBe(search);
+    const tiles = await screen.findAllByTestId('giphy-tile');
+    await user.click(tiles[0]);
+
+    expect(document.activeElement).not.toBe(search);
     expect(screen.queryByLabelText('Search GIFs')).toBeNull();
   });
 

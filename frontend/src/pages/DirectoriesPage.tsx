@@ -355,26 +355,26 @@ function MembersTab({ isAdmin, currentUserId }: MembersTabProps) {
                     </Badge>
                   )}
                 </div>
-                <dl className="space-y-1 text-xs text-muted-foreground">
+                <dl className="space-y-2 text-xs text-muted-foreground md:space-y-1">
                   {effectiveTimeZone && (
-                    <div className="flex justify-between gap-2">
-                      <dt>Local time</dt>
-                      <dd className="text-right">
+                    <div className="md:flex md:justify-between md:gap-2" data-testid="directory-meta-local-time">
+                      <dt className="font-medium text-muted-foreground md:font-normal">Local time</dt>
+                      <dd className="mt-0.5 text-foreground md:mt-0 md:text-right md:text-muted-foreground">
                         {new Date().toLocaleTimeString(undefined, { timeZone: effectiveTimeZone, hour: 'numeric', minute: '2-digit' })}
                         {timeZoneDelta && <span className="ml-1">({timeZoneDelta})</span>}
                       </dd>
                     </div>
                   )}
                   {timeZoneName && (
-                    <div className="flex justify-between gap-2">
-                      <dt>Timezone</dt>
-                      <dd className="min-w-0 truncate text-right">{timeZoneName}</dd>
+                    <div className="md:flex md:justify-between md:gap-2" data-testid="directory-meta-timezone">
+                      <dt className="font-medium text-muted-foreground md:font-normal">Timezone</dt>
+                      <dd className="mt-0.5 min-w-0 truncate text-foreground md:mt-0 md:text-right md:text-muted-foreground">{timeZoneName}</dd>
                     </div>
                   )}
                   {lastSeen && (
-                    <div className="flex justify-between gap-2">
-                      <dt>Last seen</dt>
-                      <dd className="text-right">{lastSeen}</dd>
+                    <div className="md:flex md:justify-between md:gap-2" data-testid="directory-meta-last-seen">
+                      <dt className="font-medium text-muted-foreground md:font-normal">Last seen</dt>
+                      <dd className="mt-0.5 text-foreground md:mt-0 md:text-right md:text-muted-foreground">{lastSeen}</dd>
                     </div>
                   )}
                 </dl>

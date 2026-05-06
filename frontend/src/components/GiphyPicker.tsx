@@ -4,6 +4,7 @@ import { Grid } from '@giphy/react-components';
 import type IGif from '@giphy/js-types/dist/gif';
 import { Input } from '@/components/ui/input';
 import { PopoverPortal } from '@/components/PopoverPortal';
+import { useIsMobile } from '@/hooks/useIsMobile';
 
 // PickedGIF is the shape we hand back to the composer: just the fields
 // the message body needs. The Grid's onGifClick gives us a full IGif;
@@ -69,11 +70,12 @@ export function GiphyPicker({ apiKey, onSelect, trigger, ariaLabel = 'Giphy pick
   const [gridWidth, setGridWidth] = useState(computeGridWidth);
   const triggerRef = useRef<HTMLSpanElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const isMobile = useIsMobile();
   const gf = useMemo(() => new GiphyFetch(apiKey.trim()), [apiKey]);
 
   useEffect(() => {
-    if (open) inputRef.current?.focus();
-  }, [open]);
+    if (open && !isMobile) inputRef.current?.focus();
+  }, [isMobile, open]);
 
   useEffect(() => {
     if (!open) return;
@@ -109,6 +111,7 @@ export function GiphyPicker({ apiKey, onSelect, trigger, ariaLabel = 'Giphy pick
   );
 
   const close = useCallback(() => {
+    inputRef.current?.blur();
     setOpen(false);
     setQuery('');
     setDebouncedQuery('');

@@ -50,7 +50,7 @@ export function BucketPicker({ kind, buttonLabel, buckets, onPick }: BucketPicke
         type="button"
         data-testid={`bucket-picker-${kind}`}
         onClick={() => setOpen((p) => !p)}
-        className="inline-flex items-center gap-1 rounded-md border bg-background px-2 py-1 text-xs hover:bg-muted"
+        className="inline-flex items-center gap-1 rounded-md border bg-background px-2 py-1 text-xs hover:bg-muted max-md:min-h-9 max-md:px-3 max-md:text-sm"
       >
         {buttonLabel}
       </button>
@@ -73,7 +73,7 @@ export function BucketPicker({ kind, buttonLabel, buckets, onPick }: BucketPicke
                       onPick(b.key);
                       setOpen(false);
                     }}
-                    className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-sm hover:bg-muted"
+                    className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-sm hover:bg-muted max-md:py-3 max-md:text-base"
                   >
                     <span className="truncate">{labelFor(b.key)}</span>
                     <span className="shrink-0 tabular-nums text-xs text-muted-foreground">

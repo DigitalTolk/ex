@@ -165,6 +165,9 @@ describe('DirectoriesPage - members tab', () => {
     expect(screen.getByText('Local time')).toBeInTheDocument();
     expect(screen.getByText('Timezone')).toBeInTheDocument();
     expect(screen.getByText('Last seen')).toBeInTheDocument();
+    expect(screen.getByTestId('directory-meta-local-time')).toHaveClass('md:flex', 'md:justify-between');
+    expect(screen.getByText('Local time')).toHaveClass('md:font-normal');
+    expect(screen.getByText('Timezone').nextElementSibling).toHaveClass('md:text-right', 'md:text-muted-foreground');
     const manage = screen.getByLabelText('Manage Alice');
     expect(manage.querySelector('svg')).not.toBeNull();
     expect(manage).not.toHaveTextContent('Manage');

@@ -18,6 +18,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import { useIsMobile } from '@/hooks/useIsMobile';
 import type { Channel, UserStatus } from '@/types';
 
 interface HeaderProps {
@@ -82,30 +83,58 @@ export function Header({
   const [isEditingDesc, setIsEditingDesc] = useState(false);
   const [descDraft, setDescDraft] = useState('');
   const [archiveConfirmOpen, setArchiveConfirmOpen] = useState(false);
+  const [mobileChannelMenuOpen, setMobileChannelMenuOpen] = useState(false);
+  const isMobile = useIsMobile();
+
+  function editDescription() {
+    setDescDraft(channel?.description || '');
+    setIsEditingDesc(true);
+    setMobileChannelMenuOpen(false);
+  }
+
+  function toggleMute() {
+    onToggleMute?.();
+    setMobileChannelMenuOpen(false);
+  }
+
+  function leaveChannel() {
+    onLeave?.();
+    setMobileChannelMenuOpen(false);
+  }
+
+  function confirmArchive() {
+    setArchiveConfirmOpen(true);
+    setMobileChannelMenuOpen(false);
+  }
 
   return (
-    <header className="flex shrink-0 items-center gap-3 border-b px-4 py-3">
+    <div className="shrink-0 border-b bg-background">
+    <header className="flex shrink-0 items-center gap-3 px-4 py-3">
       <div className="flex items-center gap-2">
         {channel ? (
-          <DropdownMenu>
-            <DropdownMenuTrigger className="flex items-center gap-1 hover:bg-muted/50 rounded-md px-1 -ml-1">
+          <DropdownMenu modal={false}>
+            <DropdownMenuTrigger
+              className="flex items-center gap-1 rounded-md px-1 -ml-1 hover:bg-muted/50"
+              onClick={() => {
+                if (isMobile) setMobileChannelMenuOpen((open) => !open);
+              }}
+              aria-expanded={isMobile ? mobileChannelMenuOpen : undefined}
+              aria-controls={isMobile ? 'mobile-channel-menu' : undefined}
+            >
               <ChannelIcon type={channel.type} className="h-5 w-5 text-muted-foreground" />
               <h1 className="text-lg font-semibold">{displayTitle}</h1>
               <ChevronDown className="h-4 w-4 text-muted-foreground" />
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" className="w-56">
+            <DropdownMenuContent align="start" className="w-56 max-md:hidden">
               {canEdit && (
                 <DropdownMenuItem
-                  onClick={() => {
-                    setDescDraft(channel?.description || '');
-                    setIsEditingDesc(true);
-                  }}
+                  onClick={editDescription}
                 >
                   <Pencil className="mr-2 h-4 w-4" /> Edit description
                 </DropdownMenuItem>
               )}
               {onToggleMute && (
-                <DropdownMenuItem onClick={onToggleMute} aria-label={muted ? 'Unmute channel' : 'Mute channel'}>
+                <DropdownMenuItem onClick={toggleMute} aria-label={muted ? 'Unmute channel' : 'Mute channel'}>
                   {muted ? (
                     <>
                       <Bell className="mr-2 h-4 w-4" /> Unmute channel
@@ -118,13 +147,13 @@ export function Header({
                 </DropdownMenuItem>
               )}
               {canLeave && (
-                <DropdownMenuItem onClick={onLeave}>
+                <DropdownMenuItem onClick={leaveChannel}>
                   <LogOut className="mr-2 h-4 w-4" /> Leave channel
                 </DropdownMenuItem>
               )}
               {canArchive && (
                 <DropdownMenuItem
-                  onClick={() => setArchiveConfirmOpen(true)}
+                  onClick={confirmArchive}
                   className="text-destructive"
                 >
                   <Archive className="mr-2 h-4 w-4" /> Archive channel
@@ -260,6 +289,50 @@ export function Header({
           </button>
         )}
       </div>
+    </header>
+
+      {channel && mobileChannelMenuOpen && (
+        <div id="mobile-channel-menu" className="border-t px-2 py-2 text-base md:hidden" data-testid="mobile-channel-menu">
+          {canEdit && (
+            <button
+              type="button"
+              className="flex h-12 w-full items-center rounded-md px-3 text-left hover:bg-muted"
+              onClick={editDescription}
+            >
+              <Pencil className="mr-2 h-4 w-4" /> Edit description
+            </button>
+          )}
+          {onToggleMute && (
+            <button
+              type="button"
+              className="flex h-12 w-full items-center rounded-md px-3 text-left hover:bg-muted"
+              onClick={toggleMute}
+              aria-label={muted ? 'Unmute channel' : 'Mute channel'}
+            >
+              {muted ? <Bell className="mr-2 h-4 w-4" /> : <BellOff className="mr-2 h-4 w-4" />}
+              {muted ? 'Unmute channel' : 'Mute channel'}
+            </button>
+          )}
+          {canLeave && (
+            <button
+              type="button"
+              className="flex h-12 w-full items-center rounded-md px-3 text-left hover:bg-muted"
+              onClick={leaveChannel}
+            >
+              <LogOut className="mr-2 h-4 w-4" /> Leave channel
+            </button>
+          )}
+          {canArchive && (
+            <button
+              type="button"
+              className="flex h-12 w-full items-center rounded-md px-3 text-left text-destructive hover:bg-muted"
+              onClick={confirmArchive}
+            >
+              <Archive className="mr-2 h-4 w-4" /> Archive channel
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Archive confirmation dialog */}
       <Dialog open={archiveConfirmOpen} onOpenChange={setArchiveConfirmOpen}>
@@ -286,6 +359,6 @@ export function Header({
           </div>
         </DialogContent>
       </Dialog>
-    </header>
+    </div>
   );
 }

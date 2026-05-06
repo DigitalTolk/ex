@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render as rtlRender, screen, fireEvent } from '@testing-library/react';
+import { render as rtlRender, screen, fireEvent, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { EmojiPicker } from './EmojiPicker';
@@ -33,6 +33,20 @@ vi.mock('@/lib/api', () => ({
 function render(ui: React.ReactElement) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return rtlRender(<QueryClientProvider client={qc}>{ui}</QueryClientProvider>);
+}
+
+function setMobileMatch(matches: boolean) {
+  Object.defineProperty(window, 'matchMedia', {
+    configurable: true,
+    value: vi.fn(() => ({
+      matches,
+      media: '(max-width: 767px)',
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+    })),
+  });
 }
 
 describe('EmojiPicker', () => {
@@ -74,6 +88,33 @@ describe('EmojiPicker', () => {
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 
+  it('does not autofocus the search field on mobile', async () => {
+    const originalMatchMedia = window.matchMedia;
+    setMobileMatch(true);
+    const user = userEvent.setup();
+    render(<EmojiPicker onSelect={vi.fn()} />);
+
+    await user.click(screen.getByRole('button', { name: /open emoji picker/i }));
+
+    expect(screen.getByRole('dialog')).toHaveAttribute('data-mobile-sheet', 'true');
+    expect(document.activeElement).not.toBe(screen.getByLabelText('Search emojis'));
+    Object.defineProperty(window, 'matchMedia', { configurable: true, value: originalMatchMedia });
+  });
+
+  it('blurs the search field before closing after selection', async () => {
+    const user = userEvent.setup();
+    render(<EmojiPicker onSelect={vi.fn()} />);
+
+    await user.click(screen.getByRole('button', { name: /open emoji picker/i }));
+    const search = screen.getByLabelText('Search emojis');
+    expect(document.activeElement).toBe(search);
+    await user.type(search, 'tada');
+    await user.click(screen.getByLabelText('React with :tada:'));
+
+    expect(document.activeElement).not.toBe(search);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
   it('shows the shortest shortcode match first when searching', async () => {
     const user = userEvent.setup();
     render(<EmojiPicker onSelect={vi.fn()} />);
@@ -81,9 +122,10 @@ describe('EmojiPicker', () => {
     await user.click(screen.getByRole('button', { name: /open emoji picker/i }));
     await user.type(screen.getByLabelText('Search emojis'), 'bow');
 
-    const rows = screen.getAllByTestId('emoji-picker-tile');
-    expect(rows[0]).toHaveAccessibleName('React with :bow:');
-    expect(rows.findIndex((row) => row.getAttribute('aria-label') === 'React with :rainbow:')).toBeGreaterThan(0);
+    await waitFor(() => {
+      expect(screen.getAllByTestId('emoji-picker-tile')[0]).toHaveAccessibleName('React with :bow:');
+    });
+    expect(screen.getAllByTestId('emoji-picker-tile').findIndex((row) => row.getAttribute('aria-label') === 'React with :rainbow:')).toBeGreaterThan(0);
   });
 
   it('closes on Escape', async () => {
@@ -94,7 +136,7 @@ describe('EmojiPicker', () => {
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 
-  it('closes on outside click', async () => {
+  it('closes on outside pointer press', async () => {
     const user = userEvent.setup();
     render(
       <div>
@@ -104,7 +146,7 @@ describe('EmojiPicker', () => {
     );
     await user.click(screen.getByRole('button', { name: /open emoji picker/i }));
     expect(screen.getByRole('dialog')).toBeInTheDocument();
-    fireEvent.mouseDown(screen.getByText('outside'));
+    fireEvent.pointerDown(screen.getByText('outside'));
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 
