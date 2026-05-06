@@ -2,18 +2,12 @@ import { useEffect, type RefObject } from 'react';
 
 let lockDepth = 0;
 let previousOverflow = '';
-let previousTouchAction = '';
-let previousOverscrollBehavior = '';
 
 function lockDocumentScroll() {
   if (typeof document === 'undefined') return;
   if (lockDepth === 0) {
     previousOverflow = document.body.style.overflow;
-    previousTouchAction = document.body.style.touchAction;
-    previousOverscrollBehavior = document.body.style.overscrollBehavior;
     document.body.style.overflow = 'hidden';
-    document.body.style.touchAction = 'none';
-    document.body.style.overscrollBehavior = 'none';
   }
   lockDepth += 1;
 }
@@ -23,8 +17,6 @@ function unlockDocumentScroll() {
   lockDepth = Math.max(0, lockDepth - 1);
   if (lockDepth > 0) return;
   document.body.style.overflow = previousOverflow;
-  document.body.style.touchAction = previousTouchAction;
-  document.body.style.overscrollBehavior = previousOverscrollBehavior;
 }
 
 function cleanupFocus(root: HTMLElement | null | undefined) {

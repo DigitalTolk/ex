@@ -301,7 +301,7 @@ describe('PopoverPortal', () => {
     Object.defineProperty(window, 'matchMedia', { configurable: true, value: originalMatchMedia });
   });
 
-  it('locks document scroll while a mobile sheet is open and restores it on close', () => {
+  it('does not lock document scroll for mobile sheets', () => {
     const originalMatchMedia = window.matchMedia;
     Object.defineProperty(window, 'matchMedia', {
       configurable: true,
@@ -319,7 +319,9 @@ describe('PopoverPortal', () => {
         triggerRect={{ top: 500, bottom: 540, left: 100, right: 200 }}
       />,
     );
-    expect(document.body.style.overflow).toBe('hidden');
+    expect(document.body.style.overflow).toBe('');
+    expect(document.body.style.touchAction).toBe('');
+    expect(document.body.style.overscrollBehavior).toBe('');
     rerender(
       <Harness
         open={false}

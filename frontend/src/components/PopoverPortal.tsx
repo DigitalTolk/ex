@@ -74,7 +74,7 @@ export function PopoverPortal({
     };
   }, [open, onDismiss, triggerRef]);
 
-  useTransientOverlayCleanup(open, { rootRef: contentRef, lockScroll: renderSheet });
+  useTransientOverlayCleanup(open, { rootRef: contentRef });
 
   if (!open || typeof document === 'undefined') return null;
 

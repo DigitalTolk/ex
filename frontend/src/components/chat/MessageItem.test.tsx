@@ -405,12 +405,41 @@ describe('MessageItem', () => {
       await new Promise((resolve) => window.setTimeout(resolve, 430));
     });
     const sheet = screen.getByTestId('mobile-message-actions');
+    const overlay = sheet.parentElement!;
     expect(sheet).toBeInTheDocument();
+    expect(overlay).toHaveClass('select-none', '[-webkit-touch-callout:none]', '[-webkit-user-select:none]');
+    const contextMenu = new MouseEvent('contextmenu', { bubbles: true, cancelable: true });
+    overlay.dispatchEvent(contextMenu);
+    expect(contextMenu.defaultPrevented).toBe(true);
     expect(within(sheet).getByRole('button', { name: 'Reply in thread' })).toHaveClass('h-12', 'w-full');
     expect(within(sheet).getByLabelText('Add reaction')).toBeInTheDocument();
     expect(within(sheet).getByLabelText('Pin message')).toBeInTheDocument();
     expect(within(sheet).getByText('Edit')).toBeInTheDocument();
     expect(within(sheet).getByText('Delete')).toBeInTheDocument();
+  });
+
+  it('keeps mobile long-press rows vertically pannable and suppresses native callout', () => {
+    const originalMatchMedia = window.matchMedia;
+    setMobileMatch(true);
+    try {
+      renderWithProviders(
+        <MessageItem
+          message={makeMessage()}
+          authorName="Alice"
+          isOwn={false}
+          channelId="channel-1"
+          currentUserId="user-1"
+        />,
+      );
+      const row = screen.getByTestId('message-actions-trigger').closest('[data-message-id]')!;
+
+      expect(row).toHaveClass('max-md:touch-pan-y', 'max-md:[-webkit-touch-callout:none]');
+      const contextMenu = new MouseEvent('contextmenu', { bubbles: true, cancelable: true });
+      row.dispatchEvent(contextMenu);
+      expect(contextMenu.defaultPrevented).toBe(true);
+    } finally {
+      Object.defineProperty(window, 'matchMedia', { configurable: true, value: originalMatchMedia });
+    }
   });
 
   it('closes mobile reaction overlays after picking an emoji', async () => {
@@ -433,10 +462,14 @@ describe('MessageItem', () => {
     await act(async () => {
       await new Promise((resolve) => window.setTimeout(resolve, 430));
     });
-    expect(document.body.style.overflow).toBe('hidden');
+    expect(document.body.style.overflow).toBe('');
+    expect(document.body.style.touchAction).toBe('');
+    expect(document.body.style.overscrollBehavior).toBe('');
 
     await user.click(within(screen.getByTestId('mobile-message-actions')).getByLabelText('Add reaction'));
-    expect(document.body.style.overflow).toBe('hidden');
+    expect(document.body.style.overflow).toBe('');
+    expect(document.body.style.touchAction).toBe('');
+    expect(document.body.style.overscrollBehavior).toBe('');
     await user.type(screen.getByLabelText('Search emojis'), 'tada');
     await user.click(screen.getByLabelText('React with :tada:'));
 
@@ -448,9 +481,17 @@ describe('MessageItem', () => {
     });
     expect(screen.queryByTestId('mobile-message-actions')).not.toBeInTheDocument();
     expect(screen.queryByTestId('popover-portal')).not.toBeInTheDocument();
+    expect(document.querySelector('.fixed.inset-0')).toBeNull();
     expect(document.body.style.overflow).toBe('');
     expect(document.body.style.touchAction).toBe('');
     expect(document.body.style.overscrollBehavior).toBe('');
+
+    const wheel = new WheelEvent('wheel', { bubbles: true, cancelable: true });
+    row.dispatchEvent(wheel);
+    expect(wheel.defaultPrevented).toBe(false);
+    const touchMove = new TouchEvent('touchmove', { bubbles: true, cancelable: true });
+    row.dispatchEvent(touchMove);
+    expect(touchMove.defaultPrevented).toBe(false);
   });
 
   it('does not render reactions row when no reactions', () => {

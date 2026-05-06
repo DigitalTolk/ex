@@ -407,8 +407,8 @@ describe('MessageAttachments', () => {
 
     fireEvent.click(screen.getByLabelText('Open image scroll.png'));
     expect(document.body.style.overflow).toBe('hidden');
-    expect(document.body.style.touchAction).toBe('none');
-    expect(document.body.style.overscrollBehavior).toBe('none');
+    expect(document.body.style.touchAction).toBe('');
+    expect(document.body.style.overscrollBehavior).toBe('');
 
     fireEvent.click(screen.getByTestId('image-lightbox-close'));
 

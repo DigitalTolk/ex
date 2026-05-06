@@ -24,8 +24,8 @@ describe('useTransientOverlayCleanup', () => {
     const { rerender } = render(<Harness open />);
 
     expect(document.body.style.overflow).toBe('hidden');
-    expect(document.body.style.touchAction).toBe('none');
-    expect(document.body.style.overscrollBehavior).toBe('none');
+    expect(document.body.style.touchAction).toBe('');
+    expect(document.body.style.overscrollBehavior).toBe('');
 
     rerender(<Harness open={false} />);
 

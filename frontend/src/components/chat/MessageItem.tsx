@@ -311,7 +311,7 @@ export function MessageItem({
   }
 
   useEffect(() => cancelLongPress, []);
-  useTransientOverlayCleanup(mobileActionsOpen, { rootRef: mobileActionsRef, lockScroll: true });
+  useTransientOverlayCleanup(mobileActionsOpen, { rootRef: mobileActionsRef });
 
   const reactions = message.reactions ?? {};
   const reactionEntries = Object.entries(reactions).filter(([, users]) => users && users.length > 0);
@@ -348,9 +348,13 @@ export function MessageItem({
       onPointerUp={cancelLongPress}
       onPointerCancel={cancelLongPress}
       onPointerMove={cancelLongPress}
+      onContextMenu={(event) => {
+        if (!isMobile) return;
+        event.preventDefault();
+      }}
       className={`relative flex items-start gap-3 rounded-md px-2 py-1.5 hover:bg-muted/50 ${
         message.pinned ? 'border-l-2 border-amber-500 pl-2' : ''
-      } ${highlighted ? 'ring-1 ring-amber-400/50 rounded-md' : ''}`}
+      } ${highlighted ? 'ring-1 ring-amber-400/50 rounded-md' : ''} max-md:touch-pan-y max-md:[-webkit-touch-callout:none]`}
     >
       <UserHoverCard
         userId={message.authorID}
@@ -633,7 +637,12 @@ export function MessageItem({
         </div>
       )}
       {!isEditing && !message.deleted && mobileActionsOpen && (
-        <div ref={mobileActionsRef} className="fixed inset-0 z-50 md:hidden" role="presentation">
+        <div
+          ref={mobileActionsRef}
+          className="fixed inset-0 z-50 select-none [-webkit-touch-callout:none] [-webkit-user-select:none] md:hidden"
+          role="presentation"
+          onContextMenu={(event) => event.preventDefault()}
+        >
           <button
             type="button"
             className="absolute inset-0 bg-black/35"
