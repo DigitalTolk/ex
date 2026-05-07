@@ -412,10 +412,45 @@ describe('MessageItem', () => {
     overlay.dispatchEvent(contextMenu);
     expect(contextMenu.defaultPrevented).toBe(true);
     expect(within(sheet).getByRole('button', { name: 'Reply in thread' })).toHaveClass('h-12', 'w-full');
-    expect(within(sheet).getByLabelText('Add reaction')).toBeInTheDocument();
+    const reaction = within(sheet).getByLabelText('Add reaction');
+    expect(reaction).toBeInTheDocument();
+    expect(reaction.parentElement).toHaveClass('block', 'w-full');
     expect(within(sheet).getByLabelText('Pin message')).toBeInTheDocument();
     expect(within(sheet).getByText('Edit')).toBeInTheDocument();
     expect(within(sheet).getByText('Delete')).toBeInTheDocument();
+  });
+
+  it('does not offer message editing when editing is disabled', async () => {
+    const originalMatchMedia = window.matchMedia;
+    setMobileMatch(true);
+    try {
+      renderWithProviders(
+        <MessageItem
+          message={makeMessage()}
+          authorName="Alice"
+          isOwn={true}
+          channelId="channel-1"
+          currentUserId="user-1"
+          inThread
+          disableEditing
+        />,
+      );
+
+      expect(screen.queryByText('Edit')).not.toBeInTheDocument();
+      const row = screen.getByTestId('message-actions-trigger').closest('[data-message-id]')!;
+      act(() => {
+        fireEvent.pointerDown(row, { pointerType: 'touch' });
+      });
+      await act(async () => {
+        await new Promise((resolve) => window.setTimeout(resolve, 430));
+      });
+
+      const sheet = screen.getByTestId('mobile-message-actions');
+      expect(within(sheet).queryByText('Edit')).not.toBeInTheDocument();
+      expect(within(sheet).getByText('Delete')).toBeInTheDocument();
+    } finally {
+      Object.defineProperty(window, 'matchMedia', { configurable: true, value: originalMatchMedia });
+    }
   });
 
   it('keeps mobile long-press rows vertically pannable and suppresses native callout', () => {

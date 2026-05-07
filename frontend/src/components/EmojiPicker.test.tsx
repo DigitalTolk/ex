@@ -49,6 +49,12 @@ function setMobileMatch(matches: boolean) {
   });
 }
 
+function swipeDown(element: Element) {
+  fireEvent.touchStart(element, { touches: [{ clientX: 160, clientY: 120 }] });
+  fireEvent.touchMove(element, { touches: [{ clientX: 168, clientY: 230 }] });
+  fireEvent.touchEnd(element, { changedTouches: [{ clientX: 168, clientY: 230 }] });
+}
+
 describe('EmojiPicker', () => {
   it('renders trigger and is closed by default', () => {
     render(<EmojiPicker onSelect={vi.fn()} />);
@@ -194,6 +200,52 @@ describe('EmojiPicker', () => {
     expect(tabs[tabs.length - 1]).toHaveAttribute('data-category', 'custom');
     expect(screen.getByRole('tablist', { name: /emoji categories/i }).className).toContain('justify-center');
     expect(screen.getByRole('list', { name: /standard emojis/i }).className).toContain('grid-cols-[repeat(9,2rem)]');
+  });
+
+  it('uses larger emoji tap targets on mobile', async () => {
+    const originalMatchMedia = window.matchMedia;
+    setMobileMatch(true);
+    const user = userEvent.setup();
+    render(<EmojiPicker onSelect={vi.fn()} />);
+    await user.click(screen.getByRole('button', { name: /open emoji picker/i }));
+
+    const list = screen.getByRole('list', { name: /standard emojis/i });
+    const tile = screen.getAllByTestId('emoji-picker-tile')[0];
+
+    expect(list.className).toContain('max-md:grid-cols-[repeat(7,2.75rem)]');
+    expect(tile.className).toContain('max-md:h-11');
+    expect(tile.className).toContain('max-md:w-11');
+    Object.defineProperty(window, 'matchMedia', { configurable: true, value: originalMatchMedia });
+  });
+
+  it('closes the mobile sheet on swipe down', async () => {
+    const originalMatchMedia = window.matchMedia;
+    setMobileMatch(true);
+    const user = userEvent.setup();
+    render(<EmojiPicker onSelect={vi.fn()} />);
+    await user.click(screen.getByRole('button', { name: /open emoji picker/i }));
+
+    const dialog = screen.getByRole('dialog');
+    swipeDown(dialog);
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    Object.defineProperty(window, 'matchMedia', { configurable: true, value: originalMatchMedia });
+  });
+
+  it('keeps the mobile sheet open on a diagonal downward swipe', async () => {
+    const originalMatchMedia = window.matchMedia;
+    setMobileMatch(true);
+    const user = userEvent.setup();
+    render(<EmojiPicker onSelect={vi.fn()} />);
+    await user.click(screen.getByRole('button', { name: /open emoji picker/i }));
+
+    const dialog = screen.getByRole('dialog');
+    fireEvent.touchStart(dialog, { touches: [{ clientX: 80, clientY: 120 }] });
+    fireEvent.touchMove(dialog, { touches: [{ clientX: 180, clientY: 230 }] });
+    fireEvent.touchEnd(dialog, { changedTouches: [{ clientX: 180, clientY: 230 }] });
+
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    Object.defineProperty(window, 'matchMedia', { configurable: true, value: originalMatchMedia });
   });
 
   it('places the skin tone selector below the emoji grid', async () => {

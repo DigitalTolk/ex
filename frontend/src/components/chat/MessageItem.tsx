@@ -29,8 +29,10 @@ import { ThreadActionBar } from '@/components/chat/ThreadActionBar';
 import { UnfurlCard } from '@/components/chat/UnfurlCard';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { extractURLs, formatLongDateTime } from '@/lib/format';
-import { dispatchFocusComposer, registerEditMessageHandler } from '@/lib/window-events';
+import { CHANNEL_MENTION_RE_GLOBAL, USER_MENTION_RE_GLOBAL } from '@/lib/mention-syntax';
+import { registerEditMessageHandler } from '@/lib/window-events';
 import { useIsMobile } from '@/hooks/useIsMobile';
+import { useMobileSwipe } from '@/hooks/useMobileSwipe';
 import { useTransientOverlayCleanup } from '@/hooks/useTransientOverlayCleanup';
 import type { Message, UserStatus } from '@/types';
 
@@ -58,6 +60,7 @@ interface MessageItemProps {
   conversationId?: string;
   currentUserId?: string;
   inThread?: boolean;
+  disableEditing?: boolean;
   onReplyInThread?: (messageID: string) => void;
   onEditMessage?: (message: Message) => void;
   // Optional pre-resolved user lookup. When supplied, ThreadActionBar
@@ -77,6 +80,12 @@ function formatTime(dateStr: string): string {
   });
 }
 
+function formatMessageTextForCopy(body: string): string {
+  return body
+    .replace(USER_MENTION_RE_GLOBAL, (_match, _userId: string, displayName: string) => `@${displayName}`)
+    .replace(CHANNEL_MENTION_RE_GLOBAL, (_match, _channelId: string, slug: string) => `~${slug}`);
+}
+
 export function MessageItem({
   message,
   authorName,
@@ -89,6 +98,7 @@ export function MessageItem({
   conversationId,
   currentUserId,
   inThread,
+  disableEditing,
   onReplyInThread,
   onEditMessage,
   userMap,
@@ -105,14 +115,17 @@ export function MessageItem({
   const [mobileActionsOpen, setMobileActionsOpen] = useState(false);
   const longPressTimerRef = useRef<number | null>(null);
   const mobileActionsRef = useRef<HTMLDivElement>(null);
+  const mobileActionsSheetRef = useRef<HTMLDivElement>(null);
   const toolbarVisible = hovered || actionsMenuOpen;
+  const canEdit = isOwn && !disableEditing;
   const startEdit = useCallback(() => {
+    if (!canEdit) return;
     if (isMobile) {
       onEditMessage?.(message);
     } else {
       setIsEditing(true);
     }
-  }, [isMobile, message, onEditMessage]);
+  }, [canEdit, isMobile, message, onEditMessage]);
 
   useEffect(() => {
     if (!actionsMenuOpen) return;
@@ -135,9 +148,9 @@ export function MessageItem({
   // event regardless of how many MessageItems are on screen, while
   // preserving the cross-scope decoupling of a window event.
   useEffect(() => {
-    if (!isOwn || message.deleted || message.system) return;
+    if (!canEdit || message.deleted || message.system) return;
     return registerEditMessageHandler(message.id, startEdit);
-  }, [isOwn, message.id, message.deleted, message.system, startEdit]);
+  }, [canEdit, message.id, message.deleted, message.system, startEdit]);
 
   // Desktop keeps the classic inline edit. Mobile routes editing to the
   // bottom composer, because inline editors get cramped behind the keyboard.
@@ -199,7 +212,7 @@ export function MessageItem({
   }
 
   async function handleCopyText() {
-    await copyToClipboard(message.body);
+    await copyToClipboard(formatMessageTextForCopy(message.body));
   }
 
   function handleTogglePin() {
@@ -215,6 +228,14 @@ export function MessageItem({
     cancelLongPress();
     setMobileActionsOpen(false);
   }
+  const { ref: mobileActionsSwipeRef, ...mobileActionsSwipe } = useMobileSwipe('down', closeMobileActions);
+  const setMobileActionsNode = useCallback(
+    (node: HTMLDivElement | null) => {
+      mobileActionsSheetRef.current = node;
+      mobileActionsSwipeRef(node);
+    },
+    [mobileActionsSwipeRef],
+  );
 
   function handleMobileReply() {
     closeMobileActions();
@@ -252,7 +273,6 @@ export function MessageItem({
 
   function endEdit() {
     setIsEditing(false);
-    dispatchFocusComposer({ parentID: message.parentID, inThread: !!inThread });
   }
 
   function handleEditSubmit(value: MessageInputValue) {
@@ -633,9 +653,11 @@ export function MessageItem({
               </DropdownMenuItem>
               {isOwn && (
                 <>
-                  <DropdownMenuItem onClick={startEdit}>
-                    <Pencil className="mr-2 h-4 w-4" /> Edit
-                  </DropdownMenuItem>
+                  {canEdit && (
+                    <DropdownMenuItem onClick={startEdit}>
+                      <Pencil className="mr-2 h-4 w-4" /> Edit
+                    </DropdownMenuItem>
+                  )}
                   <DropdownMenuItem
                     variant="destructive"
                     onClick={() => setDeleteConfirmOpen(true)}
@@ -667,11 +689,13 @@ export function MessageItem({
             aria-label="Message actions"
             className="absolute inset-x-0 bottom-0 max-h-[calc(100dvh-env(safe-area-inset-top)-0.75rem)] overflow-y-auto rounded-t-xl border-x-0 border-b-0 border-t bg-popover p-3 pb-[calc(env(safe-area-inset-bottom)+0.75rem)] text-popover-foreground shadow-lg animate-in slide-in-from-bottom-4"
             data-testid="mobile-message-actions"
+            ref={setMobileActionsNode}
+            {...mobileActionsSwipe}
           >
             {!inThread && (
               <Button
                 type="button"
-                className="mb-2 h-12 w-full justify-start gap-3 text-base"
+                className="mb-2 h-12 w-full justify-start gap-3 text-base max-md:h-14"
                 onClick={handleMobileReply}
                 aria-label="Reply in thread"
               >
@@ -684,23 +708,22 @@ export function MessageItem({
                 handleReact(emoji);
                 closeMobileActions();
               }}
+              triggerClassName="block w-full"
               trigger={
                 <button
                   type="button"
-                  className="mb-2 flex h-12 w-full items-center justify-between rounded-lg border px-3 text-left"
+                  className="mb-2 flex h-12 w-full items-center gap-3 rounded-lg border px-3 text-left max-md:h-14"
                   aria-label="Add reaction"
                 >
+                  <SmilePlus className="h-4 w-4" />
                   <span className="text-sm font-medium">Reaction</span>
-                  <span className="inline-flex h-9 w-9 items-center justify-center rounded-md bg-secondary text-secondary-foreground">
-                    <SmilePlus className="h-5 w-5" />
-                  </span>
                 </button>
               }
             />
             <div className="flex flex-col rounded-lg border">
               <button
                 type="button"
-                className="flex items-center gap-3 border-b px-3 py-3 text-left text-sm"
+                className="flex items-center gap-3 border-b px-3 py-4 text-left text-base"
                 onClick={handleMobileCopyText}
                 aria-label="Copy message text"
               >
@@ -709,7 +732,7 @@ export function MessageItem({
               </button>
               <button
                 type="button"
-                className="flex items-center gap-3 border-b px-3 py-3 text-left text-sm"
+                className="flex items-center gap-3 border-b px-3 py-4 text-left text-base"
                 onClick={handleMobileCopyLink}
                 aria-label="Copy link to message"
               >
@@ -718,7 +741,7 @@ export function MessageItem({
               </button>
               <button
                 type="button"
-                className="flex items-center gap-3 border-b px-3 py-3 text-left text-sm"
+                className="flex items-center gap-3 border-b px-3 py-4 text-left text-base"
                 onClick={handleMobileTogglePin}
                 aria-label={message.pinned ? 'Unpin message' : 'Pin message'}
               >
@@ -727,17 +750,19 @@ export function MessageItem({
               </button>
               {isOwn && (
                 <>
+                  {canEdit && (
+                    <button
+                      type="button"
+                      className="flex items-center gap-3 border-b px-3 py-4 text-left text-base"
+                      onClick={handleMobileEdit}
+                    >
+                      <Pencil className="h-4 w-4" />
+                      Edit
+                    </button>
+                  )}
                   <button
                     type="button"
-                    className="flex items-center gap-3 border-b px-3 py-3 text-left text-sm"
-                    onClick={handleMobileEdit}
-                  >
-                    <Pencil className="h-4 w-4" />
-                    Edit
-                  </button>
-                  <button
-                    type="button"
-                    className="flex items-center gap-3 px-3 py-3 text-left text-sm text-destructive"
+                    className="flex items-center gap-3 px-3 py-4 text-left text-base text-destructive"
                     onClick={handleMobileDelete}
                   >
                     <Trash2 className="h-4 w-4" />

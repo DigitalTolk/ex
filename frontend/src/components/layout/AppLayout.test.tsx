@@ -25,6 +25,12 @@ function renderLayout(children: React.ReactNode = <div>Main content</div>) {
   );
 }
 
+function touchSwipe(element: Element, fromX: number, toX: number, y = 200) {
+  fireEvent.touchStart(element, { touches: [{ clientX: fromX, clientY: y }] });
+  fireEvent.touchMove(element, { touches: [{ clientX: toX, clientY: y + 10 }] });
+  fireEvent.touchEnd(element, { changedTouches: [{ clientX: toX, clientY: y + 10 }] });
+}
+
 describe('AppLayout', () => {
   beforeEach(() => {
     delete window.Capacitor;
@@ -108,10 +114,30 @@ describe('AppLayout', () => {
     const { container } = renderLayout();
     const main = container.querySelector('main')!;
 
-    fireEvent.pointerDown(main, { pointerType: 'touch', clientX: 12, clientY: 200 });
-    fireEvent.pointerUp(main, { pointerType: 'touch', clientX: 120, clientY: 210 });
+    touchSwipe(main, 12, 120);
 
     expect(window.location.pathname).toBe('/');
+  });
+
+  it('does not open channel home on swipe while a right sidebar is open', () => {
+    window.history.pushState({}, '', '/channel/general');
+    const { container } = renderLayout(<div data-mobile-right-sidebar="true">Thread</div>);
+    const main = container.querySelector('main')!;
+
+    touchSwipe(main, 12, 120);
+
+    expect(window.location.pathname).toBe('/channel/general');
+  });
+
+  it('does not open channel home when the swipe starts inside a right sidebar', () => {
+    window.history.pushState({}, '', '/channel/general');
+    const { container } = renderLayout(<div data-mobile-right-sidebar="true">Thread</div>);
+    const sidebar = screen.getByText('Thread');
+
+    touchSwipe(sidebar, 12, 120);
+
+    expect(window.location.pathname).toBe('/channel/general');
+    expect(container.querySelector('[data-mobile-right-sidebar="true"]')).toBeInTheDocument();
   });
 
   it('ignores desktop mouse drags for mobile channel swipe navigation', () => {
@@ -119,8 +145,8 @@ describe('AppLayout', () => {
     const { container } = renderLayout();
     const main = container.querySelector('main')!;
 
-    fireEvent.pointerDown(main, { pointerType: 'mouse', clientX: 12, clientY: 200 });
-    fireEvent.pointerUp(main, { pointerType: 'mouse', clientX: 120, clientY: 210 });
+    fireEvent.mouseDown(main, { clientX: 12, clientY: 200 });
+    fireEvent.mouseUp(main, { clientX: 120, clientY: 210 });
 
     expect(window.location.pathname).toBe('/channel/general');
   });

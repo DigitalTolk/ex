@@ -31,6 +31,12 @@ function renderWithProviders(ui: React.ReactElement) {
   );
 }
 
+function touchSwipe(element: Element, fromX: number, toX: number, y = 160) {
+  fireEvent.touchStart(element, { touches: [{ clientX: fromX, clientY: y }] });
+  fireEvent.touchMove(element, { touches: [{ clientX: toX, clientY: y + 8 }] });
+  fireEvent.touchEnd(element, { changedTouches: [{ clientX: toX, clientY: y + 8 }] });
+}
+
 describe('MemberList', () => {
   it('renders all members', () => {
     const members = [
@@ -71,13 +77,22 @@ describe('MemberList', () => {
     expect(screen.getByText('2 members')).toBeInTheDocument();
   });
 
-  it('closes on a mobile right-to-left swipe', () => {
+  it('does not close on a mobile right-to-left swipe', () => {
     const onClose = vi.fn();
     renderWithProviders(<MemberList members={[makeMember()]} onClose={onClose} />);
 
     const panel = screen.getByTestId('member-list-scroll-area').parentElement!;
-    fireEvent.pointerDown(panel, { pointerType: 'touch', clientX: 240, clientY: 160 });
-    fireEvent.pointerUp(panel, { pointerType: 'touch', clientX: 120, clientY: 168 });
+    touchSwipe(panel, 240, 120);
+
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('closes on a mobile left-to-right swipe', () => {
+    const onClose = vi.fn();
+    renderWithProviders(<MemberList members={[makeMember()]} onClose={onClose} />);
+
+    const panel = screen.getByTestId('member-list-scroll-area').parentElement!;
+    touchSwipe(panel, 120, 240);
 
     expect(onClose).toHaveBeenCalledTimes(1);
   });

@@ -40,9 +40,30 @@ function renderCard(opts: {
   );
 }
 
+function setMobileMatch(matches: boolean) {
+  Object.defineProperty(window, 'matchMedia', {
+    configurable: true,
+    value: vi.fn(() => ({
+      matches,
+      media: '(max-width: 767px)',
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+    })),
+  });
+}
+
+function swipeDown(element: Element) {
+  fireEvent.touchStart(element, { touches: [{ clientX: 160, clientY: 120 }] });
+  fireEvent.touchMove(element, { touches: [{ clientX: 168, clientY: 230 }] });
+  fireEvent.touchEnd(element, { changedTouches: [{ clientX: 168, clientY: 230 }] });
+}
+
 describe('UserHoverCard — click-to-open + DM action', () => {
   beforeEach(() => {
     apiFetchMock.mockReset();
+    setMobileMatch(false);
   });
 
   it('opens on click and queries the user record', async () => {
@@ -76,6 +97,20 @@ describe('UserHoverCard — click-to-open + DM action', () => {
     fireEvent.click(screen.getByText('trigger'));
     await screen.findByRole('button', { name: /Direct message/i });
     fireEvent.click(screen.getByText('trigger'));
+    await waitFor(() => {
+      expect(screen.queryByRole('button', { name: /Direct message/i })).toBeNull();
+    });
+  });
+
+  it('closes the mobile hover card on swipe down', async () => {
+    setMobileMatch(true);
+    apiFetchMock.mockResolvedValue({ id: 'u-other', displayName: 'Bob', status: 'active' });
+    renderCard();
+    fireEvent.click(screen.getByText('trigger'));
+    const dialog = await screen.findByRole('tooltip');
+
+    swipeDown(dialog);
+
     await waitFor(() => {
       expect(screen.queryByRole('button', { name: /Direct message/i })).toBeNull();
     });

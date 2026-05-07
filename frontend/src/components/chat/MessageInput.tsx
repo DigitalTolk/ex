@@ -267,12 +267,12 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
     setBody('');
     setDrafts([]);
     editorRef.current?.setMarkdown('');
-    if (isMobile) {
+    if (isMobile || submitLabel) {
       collapseMobileComposer();
       return;
     }
     queueMicrotask(() => editorRef.current?.focus());
-  }, [canSend, body, drafts, onSend, variant, initialDraftKey, isMobile, collapseMobileComposer]);
+  }, [canSend, body, drafts, onSend, variant, initialDraftKey, isMobile, submitLabel, collapseMobileComposer]);
 
   useEffect(() => {
     if (variant !== 'composer') return;
@@ -659,7 +659,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
                 onClick={onCancel}
                 variant="ghost"
                 size="icon"
-                className="h-9 w-9 rounded-md"
+                className="h-9 w-9 rounded-md max-md:h-11 max-md:w-11"
                 aria-label="Cancel"
               >
                 <X className="h-4 w-4" />
@@ -669,7 +669,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
               onClick={handleSend}
               disabled={!canSend}
               size={submitLabel ? 'sm' : 'icon'}
-              className={submitLabel ? 'h-9 rounded-md px-3' : 'h-8 w-8 rounded-md'}
+              className={submitLabel ? 'h-9 rounded-md px-3 max-md:h-11 max-md:px-4' : 'h-8 w-8 rounded-md max-md:h-11 max-md:w-11'}
               aria-label={submitLabel ?? 'Send message'}
             >
               {submitLabel ? submitLabel : <Send className="h-4 w-4" />}

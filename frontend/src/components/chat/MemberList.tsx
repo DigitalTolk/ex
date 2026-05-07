@@ -94,11 +94,12 @@ export function MemberList({ members, channelId, currentUserId, currentUserRole,
   }
 
   const canManage = canManageMembers(currentUserRole) && !!channelId;
-  const closeSwipe = useMobileSwipe('left', () => onClose?.());
+  const closeSwipe = useMobileSwipe('right', () => onClose?.());
 
   return (
     <div
       className="flex h-full min-h-0 w-80 flex-col border-l bg-background max-md:fixed max-md:inset-x-0 max-md:bottom-0 max-md:top-[calc(2.75rem+env(safe-area-inset-top))] max-md:z-40 max-md:w-auto max-md:touch-pan-y max-md:border-l-0 max-md:animate-in max-md:slide-in-from-right-4"
+      data-mobile-right-sidebar="true"
       {...closeSwipe}
     >
       <div className="px-4 py-3 border-b flex items-center justify-between gap-2">

@@ -121,6 +121,37 @@ describe('MessageInput', () => {
     setMobileMatch(false);
   });
 
+  it('blurs and returns to single-line mobile composer after saving an edit', async () => {
+    const user = userEvent.setup();
+    const onSend = vi.fn();
+    setMobileMatch(true);
+    render(<MessageInput onSend={onSend} initialBody="Edited text" submitLabel="Save" />);
+
+    const editor = await screen.findByLabelText('Message input');
+    editor.focus();
+    await user.click(screen.getByLabelText('Save'));
+    await flushMicrotasks();
+
+    expect(onSend).toHaveBeenCalledWith({ body: 'Edited text', attachmentIDs: [] });
+    expect(document.activeElement).not.toBe(editor);
+    expect(editor).toHaveClass('max-md:min-h-[1.5rem]', 'max-md:max-h-[1.5rem]');
+    setMobileMatch(false);
+  });
+
+  it('does not refocus the composer after saving an edit', async () => {
+    const user = userEvent.setup();
+    const onSend = vi.fn();
+    render(<MessageInput onSend={onSend} initialBody="Edited text" submitLabel="Save" />);
+
+    const editor = await screen.findByLabelText('Message input');
+    editor.focus();
+    await user.click(screen.getByLabelText('Save'));
+    await flushMicrotasks();
+
+    expect(onSend).toHaveBeenCalledWith({ body: 'Edited text', attachmentIDs: [] });
+    expect(document.activeElement).not.toBe(editor);
+  });
+
   it('does not rehydrate stale server draft text after the user clears the composer', async () => {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const renderTree = (initialBody: string) => (

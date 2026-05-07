@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { BrowserRouter } from 'react-router-dom';
 import { MessageItem } from './MessageItem';
+import { WINDOW_EVENTS } from '@/lib/window-events';
 import type { Message } from '@/types';
 
 const mockEditMutate = vi.fn();
@@ -75,6 +76,12 @@ function setMobileMatch(matches: boolean) {
   });
 }
 
+function swipeDown(element: Element) {
+  fireEvent.touchStart(element, { touches: [{ clientX: 160, clientY: 120 }] });
+  fireEvent.touchMove(element, { touches: [{ clientX: 168, clientY: 230 }] });
+  fireEvent.touchEnd(element, { changedTouches: [{ clientX: 168, clientY: 230 }] });
+}
+
 async function openMobileActions(message: Message = makeMessage()) {
   vi.useFakeTimers();
   setMobileMatch(true);
@@ -86,7 +93,7 @@ async function openMobileActions(message: Message = makeMessage()) {
       channelId="ch-1"
     />,
   );
-  const row = screen.getByText(message.body).closest('[data-message-id]')!;
+  const row = screen.getByTestId('message-actions-trigger').closest('[data-message-id]')!;
   fireEvent.pointerDown(row, { pointerType: 'touch', clientX: 20, clientY: 20 });
   act(() => {
     vi.advanceTimersByTime(430);
@@ -128,6 +135,8 @@ describe('MessageItem - editing', () => {
 
   it('does not save unchanged inline edits', async () => {
     const user = userEvent.setup();
+    const onFocusComposer = vi.fn();
+    window.addEventListener(WINDOW_EVENTS.FocusComposer, onFocusComposer);
     renderWithProviders(
       <MessageItem
         message={makeMessage()}
@@ -140,6 +149,8 @@ describe('MessageItem - editing', () => {
     await user.click(screen.getByLabelText('Save'));
     expect(mockEditMutate).not.toHaveBeenCalled();
     expect(screen.queryByLabelText('Save')).toBeNull();
+    expect(onFocusComposer).not.toHaveBeenCalled();
+    window.removeEventListener(WINDOW_EVENTS.FocusComposer, onFocusComposer);
   });
 });
 
@@ -164,15 +175,34 @@ describe('MessageItem - mobile actions', () => {
     });
   });
 
+  it('copies readable mention text from the mobile copy action', async () => {
+    await openMobileActions(makeMessage({ body: 'Hi @[u-2|Bob Jones] in ~[ch-1|general]' }));
+
+    await userEvent.click(screen.getByRole('button', { name: /Copy message text/i }));
+
+    await waitFor(() => {
+      expect(navigator.clipboard.writeText).toHaveBeenCalledWith('Hi @Bob Jones in ~general');
+    });
+  });
+
   it('makes the full reaction row clickable in the mobile action sheet', async () => {
     await openMobileActions();
 
     const sheet = screen.getByTestId('mobile-message-actions');
     const reaction = within(sheet).getByRole('button', { name: /Add reaction/i });
-    expect(reaction).toHaveClass('w-full', 'justify-between');
+    expect(reaction).toHaveClass('w-full', 'gap-3');
+    expect(reaction.querySelector('svg')).toBe(reaction.firstElementChild);
     await userEvent.click(reaction);
 
     expect(await screen.findByRole('dialog', { name: /Emoji picker/i })).toBeInTheDocument();
+  });
+
+  it('closes the mobile action sheet on swipe down', async () => {
+    await openMobileActions();
+
+    swipeDown(screen.getByTestId('mobile-message-actions'));
+
+    expect(screen.queryByTestId('mobile-message-actions')).not.toBeInTheDocument();
   });
 });
 

@@ -1,39 +1,28 @@
-import { useRef, type PointerEvent } from 'react';
+import { useSwipeable, type SwipeEventData } from 'react-swipeable';
 
 const MIN_SWIPE_X = 72;
 const MAX_SWIPE_Y = 48;
+const MIN_SWIPE_Y = 72;
+const MAX_SWIPE_X = 48;
 
-type SwipeDirection = 'right' | 'left';
+type SwipeDirection = 'right' | 'left' | 'down';
 
 export function useMobileSwipe(
   direction: SwipeDirection,
-  onSwipe: () => void,
+  onSwipe: (eventData: SwipeEventData) => void,
 ) {
-  const startRef = useRef<{ x: number; y: number } | null>(null);
-
-  function onPointerDown(event: PointerEvent<HTMLElement>) {
-    if (event.pointerType === 'mouse') return;
-    startRef.current = { x: event.clientX, y: event.clientY };
-  }
-
-  function onPointerUp(event: PointerEvent<HTMLElement>) {
-    const start = startRef.current;
-    startRef.current = null;
-    if (!start || event.pointerType === 'mouse') return;
-    const dx = event.clientX - start.x;
-    const dy = Math.abs(event.clientY - start.y);
-    if (dy > MAX_SWIPE_Y) return;
-    if (direction === 'right' && dx >= MIN_SWIPE_X) onSwipe();
-    if (direction === 'left' && dx <= -MIN_SWIPE_X) onSwipe();
-  }
-
-  function onPointerCancel() {
-    startRef.current = null;
-  }
-
-  return {
-    onPointerDown,
-    onPointerUp,
-    onPointerCancel,
-  };
+  return useSwipeable({
+    delta: MIN_SWIPE_X,
+    trackMouse: false,
+    preventScrollOnSwipe: false,
+    onSwipedLeft: (eventData) => {
+      if (direction === 'left' && eventData.absY <= MAX_SWIPE_Y) onSwipe(eventData);
+    },
+    onSwipedRight: (eventData) => {
+      if (direction === 'right' && eventData.absY <= MAX_SWIPE_Y) onSwipe(eventData);
+    },
+    onSwipedDown: (eventData) => {
+      if (direction === 'down' && eventData.absY >= MIN_SWIPE_Y && eventData.absX <= MAX_SWIPE_X) onSwipe(eventData);
+    },
+  });
 }

@@ -92,7 +92,8 @@ function clearAtFor(mode: ClearAfter, customUntil: string, timeZone: string): st
   if (mode === '1h') return new Date(now.getTime() + 60 * 60_000).toISOString();
   if (mode === 'today') {
     const today = partsInTimeZone(now, timeZone);
-    return zonedInputToISO(`${today.year}-${pad(today.month)}-${pad(today.day)}T23:59`, timeZone);
+    const finalMinute = zonedInputToISO(`${today.year}-${pad(today.month)}-${pad(today.day)}T23:59`, timeZone);
+    return finalMinute ? new Date(new Date(finalMinute).getTime() + 59_999).toISOString() : undefined;
   }
   return zonedInputToISO(customUntil, timeZone);
 }

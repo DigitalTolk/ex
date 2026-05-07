@@ -15,7 +15,10 @@ export function AppLayout({ children }: AppLayoutProps) {
   const navigate = useNavigate();
   const location = useLocation();
   const isHome = location.pathname === '/';
-  const openChannelsSwipe = useMobileSwipe('right', () => {
+  const openChannelsSwipe = useMobileSwipe('right', ({ event }) => {
+    const target = event.target;
+    if (target instanceof Element && target.closest('[data-mobile-right-sidebar="true"]')) return;
+    if (document.querySelector('[data-mobile-right-sidebar="true"]')) return;
     if (!isHome) navigate('/');
   });
 

@@ -15,11 +15,12 @@ interface SidePanelProps {
 // Centralises the title bar + close button + scroll body so each panel
 // stays focused on its own content.
 export function SidePanel({ title, ariaLabel, closeLabel, onClose, children }: SidePanelProps) {
-  const closeSwipe = useMobileSwipe('left', onClose);
+  const closeSwipe = useMobileSwipe('right', onClose);
   return (
     <aside
       className="flex w-[28rem] flex-col border-l bg-background max-md:fixed max-md:inset-x-0 max-md:bottom-0 max-md:top-[calc(2.75rem+env(safe-area-inset-top))] max-md:z-40 max-md:w-auto max-md:touch-pan-y max-md:animate-in max-md:slide-in-from-right-4"
       aria-label={ariaLabel}
+      data-mobile-right-sidebar="true"
       {...closeSwipe}
     >
       <div className="flex items-center justify-between border-b px-4 py-3">
