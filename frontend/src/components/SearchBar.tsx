@@ -100,6 +100,8 @@ export function SearchBar() {
       params.set('type', sel.scopeKind === 'channel' ? 'messages' : 'dms');
     }
     navigate(`/search?${params.toString()}`);
+    setQ('');
+    setHighlight(0);
   }
 
   function clear() {

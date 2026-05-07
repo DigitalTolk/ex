@@ -59,9 +59,11 @@ describe('SearchBar', () => {
 
   it('navigates to /search?q=... when the suggestion is clicked', () => {
     wrap();
-    fireEvent.change(screen.getByTestId('searchbar-input'), { target: { value: 'engineering' } });
+    const input = screen.getByTestId('searchbar-input');
+    fireEvent.change(input, { target: { value: 'engineering' } });
     fireEvent.click(screen.getByTestId('searchbar-show-results'));
     expect(navigateMock).toHaveBeenCalledWith('/search?q=engineering');
+    expect(input).toHaveValue('');
   });
 
   it('navigates on Enter', () => {
@@ -70,6 +72,7 @@ describe('SearchBar', () => {
     fireEvent.change(input, { target: { value: 'design' } });
     fireEvent.keyDown(input, { key: 'Enter' });
     expect(navigateMock).toHaveBeenCalledWith('/search?q=design');
+    expect(input).toHaveValue('');
   });
 
   it('does not show the dropdown when the field is empty', () => {

@@ -70,8 +70,9 @@ describe('EditProfileDialog', () => {
     const user = userEvent.setup();
     renderWithTheme(<EditProfileDialog open={true} onOpenChange={onOpenChange} />);
 
-    await user.click(screen.getByText('Cancel'));
-    expect(onOpenChange).toHaveBeenCalledWith(false);
+    expect(screen.getAllByRole('button', { name: /Cancel/i })).toHaveLength(1);
+    await user.click(screen.getByRole('button', { name: /Cancel/i }));
+    expect(onOpenChange).toHaveBeenCalledWith(false, expect.anything());
   });
 
   it('saves display name when changed', async () => {

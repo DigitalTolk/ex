@@ -5,6 +5,7 @@ import { SearchBar } from '@/components/SearchBar';
 import { TagSearchProvider } from '@/context/TagSearchContext';
 import { Button } from '@/components/ui/button';
 import { Menu } from 'lucide-react';
+import { useMobileSwipe } from '@/hooks/useMobileSwipe';
 
 interface AppLayoutProps {
   children: ReactNode;
@@ -14,6 +15,12 @@ export function AppLayout({ children }: AppLayoutProps) {
   const navigate = useNavigate();
   const location = useLocation();
   const isHome = location.pathname === '/';
+  const openChannelsSwipe = useMobileSwipe('right', ({ event }) => {
+    const target = event.target;
+    if (target instanceof Element && target.closest('[data-mobile-right-sidebar="true"]')) return;
+    if (document.querySelector('[data-mobile-right-sidebar="true"]')) return;
+    if (!isHome) navigate('/');
+  });
 
   return (
     <TagSearchProvider>
@@ -43,7 +50,12 @@ export function AppLayout({ children }: AppLayoutProps) {
           <aside className="hidden w-72 shrink-0 bg-[#1a1d21] lg:block">
             <Sidebar onClose={() => undefined} />
           </aside>
-          <main className="flex min-h-0 flex-1 flex-col overflow-hidden bg-background">{children}</main>
+          <main
+            className="flex min-h-0 flex-1 flex-col overflow-hidden bg-background max-md:touch-pan-y"
+            {...openChannelsSwipe}
+          >
+            {children}
+          </main>
         </div>
       </div>
     </TagSearchProvider>

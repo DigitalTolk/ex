@@ -92,7 +92,8 @@ function clearAtFor(mode: ClearAfter, customUntil: string, timeZone: string): st
   if (mode === '1h') return new Date(now.getTime() + 60 * 60_000).toISOString();
   if (mode === 'today') {
     const today = partsInTimeZone(now, timeZone);
-    return zonedInputToISO(`${today.year}-${pad(today.month)}-${pad(today.day)}T23:59`, timeZone);
+    const finalMinute = zonedInputToISO(`${today.year}-${pad(today.month)}-${pad(today.day)}T23:59`, timeZone);
+    return finalMinute ? new Date(new Date(finalMinute).getTime() + 59_999).toISOString() : undefined;
   }
   return zonedInputToISO(customUntil, timeZone);
 }
@@ -311,28 +312,25 @@ function UserStatusDialogContent({
           />
         )}
 
-        {text.trim() && (
-          <div className="flex items-center gap-2 rounded-md border bg-muted/30 p-2 text-sm">
-            <span className="text-muted-foreground">Preview</span>
-            <UserStatusIndicator status={previewStatus} />
-            <span className="truncate">{text}</span>
-          </div>
-        )}
+        <div className="min-h-10" data-testid="status-preview-slot">
+          {text.trim() && (
+            <div className="flex items-center gap-2 rounded-md border bg-muted/30 p-2 text-sm">
+              <span className="text-muted-foreground">Preview</span>
+              <UserStatusIndicator status={previewStatus} />
+              <span className="truncate">{text}</span>
+            </div>
+          )}
+        </div>
 
         <div className="flex justify-between gap-2 pt-2">
           <Button type="button" variant="ghost" onClick={clearStatus} disabled={saving || !user.userStatus}>
             <X className="mr-2 h-4 w-4" />
             Clear status
           </Button>
-          <div className="flex gap-2">
-            <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>
-              Cancel
-            </Button>
-            <Button type="button" onClick={saveStatus} disabled={saving}>
-              {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              Save status
-            </Button>
-          </div>
+          <Button type="button" onClick={saveStatus} disabled={saving}>
+            {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+            Save status
+          </Button>
         </div>
       </div>
     </DialogContent>

@@ -375,6 +375,7 @@ export function ChannelView() {
             <div className="border-t p-3 text-sm text-muted-foreground">Loading message editor…</div>
           ) : (
             <MessageInput
+              key={activeEditingMessage ? `edit-${activeEditingMessage.id}` : `channel-${channel?.id ?? 'loading'}`}
               ref={inputRef}
               onSend={activeEditingMessage ? handleEditMessage : handleSendMessage}
               onCancel={activeEditingMessage ? () => setEditingMessage(null) : undefined}

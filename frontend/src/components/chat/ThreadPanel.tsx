@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { MessageItem } from './MessageItem';
 import { MessageInput, type MessageInputHandle } from './MessageInput';
 import { MessageDropZone } from './MessageDropZone';
@@ -6,7 +6,10 @@ import { ThreadTypingIndicator } from './TypingIndicator';
 import { Button } from '@/components/ui/button';
 import { Bell, BellOff, X } from 'lucide-react';
 import { useAtBottomRef } from '@/hooks/useAtBottomRef';
-import { useSendMessage, type SendMessageInput } from '@/hooks/useMessages';
+import { useAttachmentsBatch } from '@/hooks/useAttachments';
+import { useIsMobile } from '@/hooks/useIsMobile';
+import { useMobileSwipe } from '@/hooks/useMobileSwipe';
+import { useEditMessage, useSendMessage, type SendMessageInput } from '@/hooks/useMessages';
 import { useFollowThread, useThreadMessages, useUnfollowThread, useUserThreads } from '@/hooks/useThreads';
 import { useUsersBatch } from '@/hooks/useUsersBatch';
 import { collectMessageUserIDs } from '@/lib/message-users';
@@ -19,7 +22,9 @@ import {
   useDraftForScope,
   useSaveDraft,
 } from '@/hooks/useDrafts';
+import type { DraftAttachment } from '@/components/chat/AttachmentChip';
 import type { UserMapEntry } from './MessageList';
+import type { Message } from '@/types';
 
 const ANCHOR_HIGHLIGHT_CLASSES = ['ring-1', 'ring-amber-400/50', 'rounded-md'];
 const ANCHOR_HIGHLIGHT_MS = 2200;
@@ -51,6 +56,10 @@ export function ThreadPanel({
   anchorRevision,
 }: ThreadPanelProps) {
   const { data, isLoading } = useThreadMessages({ channelId, conversationId, threadRootID });
+  const closeSwipe = useMobileSwipe('right', onClose);
+  const isMobile = useIsMobile();
+  const [editingMessage, setEditingMessage] = useState<Message | null>(null);
+  const activeEditingMessage = isMobile ? editingMessage : null;
 
   // Authors + reactors of thread messages may not be in the parent
   // userMap (which was built from the channel page, not the thread).
@@ -96,6 +105,27 @@ export function ThreadPanel({
   const deleteDraft = useDeleteDraft();
   const saveDraftMutate = saveDraft.mutate;
   const deleteDraftMutate = deleteDraft.mutate;
+  const editMessage = useEditMessage();
+  const editAttachmentIDs = activeEditingMessage?.attachmentIDs ?? [];
+  const { map: editAttachmentMap } = useAttachmentsBatch(editAttachmentIDs);
+  const editDraftAttachments: DraftAttachment[] = activeEditingMessage
+    ? editAttachmentIDs
+        .map((id): DraftAttachment | null => {
+          const attachment = editAttachmentMap.get(id);
+          if (!attachment) return null;
+          return {
+            id: attachment.id,
+            filename: attachment.filename,
+            contentType: attachment.contentType,
+            size: attachment.size,
+          };
+        })
+        .filter((draft): draft is DraftAttachment => draft !== null)
+    : [];
+  const editReady =
+    !activeEditingMessage ||
+    editAttachmentIDs.length === 0 ||
+    editDraftAttachments.length === editAttachmentIDs.length;
 
   // Most recent own reply for the ArrowUp-edit-last shortcut. Thread
   // data is oldest-first; walk from the end to find the newest reply
@@ -332,11 +362,43 @@ export function ThreadPanel({
     [send, threadRootID, draftScope, draftID, deleteDraftMutate],
   );
 
+  const handleEditMessage = useCallback(
+    (value: SendMessageInput) => {
+      if (!editingMessage) return;
+      const currentAttachmentIDs = editingMessage.attachmentIDs ?? [];
+      const nextAttachmentIDs = value.attachmentIDs ?? [];
+      const same =
+        value.body === editingMessage.body &&
+        nextAttachmentIDs.length === currentAttachmentIDs.length &&
+        nextAttachmentIDs.every((id, idx) => id === currentAttachmentIDs[idx]);
+      if (same || (!value.body.trim() && nextAttachmentIDs.length === 0)) {
+        setEditingMessage(null);
+        return;
+      }
+      editMessage.mutate(
+        {
+          messageId: editingMessage.id,
+          body: value.body,
+          attachmentIDs: nextAttachmentIDs,
+          channelId,
+          conversationId,
+        },
+        { onSuccess: () => setEditingMessage(null) },
+      );
+    },
+    [channelId, conversationId, editMessage, editingMessage],
+  );
+
   return (
-    <aside className="flex w-[28rem] flex-col border-l bg-background max-md:fixed max-md:inset-x-0 max-md:bottom-0 max-md:top-[calc(2.75rem+env(safe-area-inset-top))] max-md:z-40 max-md:w-auto max-md:animate-in max-md:slide-in-from-right-4" aria-label="Thread">
+    <aside
+      className="flex w-[28rem] flex-col border-l bg-background max-md:fixed max-md:inset-x-0 max-md:bottom-0 max-md:top-[calc(2.75rem+env(safe-area-inset-top))] max-md:z-40 max-md:w-auto max-md:touch-pan-y max-md:animate-in max-md:slide-in-from-right-4"
+      aria-label="Thread"
+      data-mobile-right-sidebar="true"
+      {...closeSwipe}
+    >
       <div className="flex items-center justify-between border-b px-4 py-3">
         <h2 className="text-sm font-semibold">Thread</h2>
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-1 max-md:gap-3">
           {parentID && (
             <Button
               variant="ghost"
@@ -392,6 +454,7 @@ export function ThreadPanel({
                   currentUserId={currentUserId}
                   userMap={userLookup}
                   inThread
+                  onEditMessage={isMobile ? setEditingMessage : undefined}
                 />
               );
             })}
@@ -402,20 +465,27 @@ export function ThreadPanel({
           threadRootID={threadRootID}
           userMap={mergedUserMap}
         />
-        <MessageInput
-          ref={inputRef}
-          onSend={handleReply}
-          disabled={send.isPending}
-          placeholder="Reply..."
-          focusKey={threadRootID}
-          initialBody={draft?.body ?? ''}
-          initialDrafts={draftAttachments}
-          onDraftChange={handleDraftChange}
-          typingParentID={channelId ?? conversationId}
-          typingParentType={channelId ? 'channel' : 'conversation'}
-          typingThreadRootID={threadRootID}
-          lastOwnMessageId={lastOwnMessageId}
-        />
+        {activeEditingMessage && !editReady ? (
+          <div className="border-t p-3 text-sm text-muted-foreground">Loading message editor...</div>
+        ) : (
+          <MessageInput
+            key={activeEditingMessage ? `edit-${activeEditingMessage.id}` : `thread-${threadRootID}`}
+            ref={inputRef}
+            onSend={activeEditingMessage ? handleEditMessage : handleReply}
+            onCancel={activeEditingMessage ? () => setEditingMessage(null) : undefined}
+            disabled={activeEditingMessage ? editMessage.isPending : send.isPending}
+            placeholder={activeEditingMessage ? 'Edit message...' : 'Reply...'}
+            focusKey={activeEditingMessage ? `edit-${activeEditingMessage.id}` : threadRootID}
+            initialBody={activeEditingMessage?.body ?? draft?.body ?? ''}
+            initialDrafts={activeEditingMessage ? editDraftAttachments : draftAttachments}
+            onDraftChange={activeEditingMessage ? undefined : handleDraftChange}
+            submitLabel={activeEditingMessage ? 'Save' : undefined}
+            typingParentID={activeEditingMessage ? undefined : channelId ?? conversationId}
+            typingParentType={activeEditingMessage ? undefined : channelId ? 'channel' : 'conversation'}
+            typingThreadRootID={activeEditingMessage ? undefined : threadRootID}
+            lastOwnMessageId={activeEditingMessage ? undefined : lastOwnMessageId}
+          />
+        )}
       </MessageDropZone>
     </aside>
   );

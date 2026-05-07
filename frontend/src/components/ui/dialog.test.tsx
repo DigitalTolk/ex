@@ -30,7 +30,7 @@ describe('DialogContent', () => {
       </Dialog>,
     );
 
-    const mobileClose = await screen.findByRole('button', { name: 'Dismiss dialog' });
+    const mobileClose = await screen.findByRole('button', { name: 'Cancel' });
     expect(mobileClose).toHaveAttribute('data-slot', 'dialog-mobile-close');
     expect(mobileClose).toHaveClass('after:content-[var(--mobile-close-label)]');
     expect(screen.getByRole('dialog')).toHaveClass('max-md:[&_[data-slot=dialog-header]]:pr-20');

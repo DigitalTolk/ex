@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render as rtlRender, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render as rtlRender, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
@@ -123,6 +123,12 @@ function setMobileMatch(matches: boolean) {
   });
 }
 
+function swipeDown(element: Element) {
+  fireEvent.touchStart(element, { touches: [{ clientX: 160, clientY: 120 }] });
+  fireEvent.touchMove(element, { touches: [{ clientX: 168, clientY: 230 }] });
+  fireEvent.touchEnd(element, { changedTouches: [{ clientX: 168, clientY: 230 }] });
+}
+
 describe('GiphyPicker', () => {
   beforeEach(() => {
     giphyFetchMocks.search.mockReset();
@@ -202,6 +208,32 @@ describe('GiphyPicker', () => {
 
     expect(await screen.findByRole('dialog')).toHaveAttribute('data-mobile-sheet', 'true');
     expect(document.activeElement).not.toBe(screen.getByLabelText('Search GIFs'));
+  });
+
+  it('uses a shorter mobile sheet height so it fits mobile browsers', async () => {
+    setMobileMatch(true);
+    giphyFetchMocks.trending.mockResolvedValue(sampleResponse);
+    const user = userEvent.setup();
+    renderPicker(vi.fn());
+
+    await user.click(screen.getByText('open gif'));
+
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog).toHaveAttribute('data-mobile-sheet', 'true');
+    expect(dialog.className).toContain('max-md:h-[min(58vh,calc(100dvh-9rem))]');
+  });
+
+  it('closes the mobile sheet on swipe down', async () => {
+    setMobileMatch(true);
+    giphyFetchMocks.trending.mockResolvedValue(sampleResponse);
+    const user = userEvent.setup();
+    renderPicker(vi.fn());
+
+    await user.click(screen.getByText('open gif'));
+    const dialog = await screen.findByRole('dialog');
+    swipeDown(dialog);
+
+    expect(screen.queryByLabelText('Search GIFs')).toBeNull();
   });
 
   it('blurs the search field before closing after GIF selection', async () => {

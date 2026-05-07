@@ -35,6 +35,7 @@ const SORT_LABELS: Record<Sort, string> = {
   newest: 'Newest first',
   oldest: 'Oldest first',
 };
+const MOBILE_FILTER_CONTROL_CLASS = 'max-md:h-9 max-md:px-3 max-md:text-sm';
 
 // SearchResultsPage drives every filter from the URL so back/forward
 // and external deep-links are first-class.
@@ -118,7 +119,10 @@ export default function SearchResultsPage() {
 
   return (
     <PageContainer title={`Search: ${q}`}>
-      <div role="tablist" className="flex flex-wrap gap-1 border-b">
+      <div
+        role="tablist"
+        className="-mx-2 flex gap-1 overflow-x-auto border-b px-2 pb-2 max-md:border-b-0 max-md:[scrollbar-width:none] max-md:[&::-webkit-scrollbar]:hidden md:flex-wrap md:pb-0"
+      >
         {(
           [
             { id: 'all', label: 'All', count: totalHits },
@@ -134,10 +138,10 @@ export default function SearchResultsPage() {
             role="tab"
             aria-selected={tab === t.id}
             onClick={() => updateParams({ type: t.id === 'all' ? null : t.id })}
-            className={`px-3 py-2 text-sm font-medium border-b-2 -mb-px ${
+            className={`shrink-0 rounded-full border px-3 py-2 text-sm font-medium transition-colors md:-mb-px md:rounded-none md:border-0 md:border-b-2 ${
               tab === t.id
-                ? 'border-primary text-foreground'
-                : 'border-transparent text-muted-foreground hover:text-foreground'
+                ? 'border-primary bg-primary/10 text-foreground md:bg-transparent'
+                : 'border-border bg-background text-muted-foreground hover:text-foreground md:border-transparent md:bg-transparent'
             }`}
           >
             {t.label} <span className="text-xs text-muted-foreground">{t.count}</span>
@@ -149,7 +153,7 @@ export default function SearchResultsPage() {
         <DropdownMenu>
           <DropdownMenuTrigger
             data-testid="results-sort"
-            className="inline-flex items-center gap-1 rounded-md border bg-background px-2 py-1 text-xs hover:bg-muted"
+            className={`inline-flex items-center gap-1 rounded-md border bg-background px-2 py-1 text-xs hover:bg-muted ${MOBILE_FILTER_CONTROL_CLASS}`}
           >
             Sort: {SORT_LABELS[sort]}
           </DropdownMenuTrigger>
@@ -274,7 +278,7 @@ function Section({
 
 function FilterChip({ label, onClear }: { label: string; onClear: () => void }) {
   return (
-    <span className="inline-flex items-center gap-1 rounded-md bg-muted px-2 py-0.5 text-xs">
+    <span className={`inline-flex items-center gap-1 rounded-md bg-muted px-2 py-0.5 text-xs ${MOBILE_FILTER_CONTROL_CLASS}`}>
       {label}
       <button
         type="button"

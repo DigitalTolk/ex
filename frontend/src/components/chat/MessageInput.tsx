@@ -242,6 +242,18 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
     !bodyOverLimit &&
     !attachmentsOverLimit;
 
+  const collapseMobileComposer = useCallback(() => {
+    setToolbarPickerOpen(false);
+    setEditorFocused(false);
+    const blurComposer = () => {
+      editorRef.current?.blur();
+      const active = document.activeElement;
+      if (active instanceof HTMLElement) active.blur();
+    };
+    blurComposer();
+    requestAnimationFrame(blurComposer);
+  }, []);
+
   const handleSend = useCallback(() => {
     if (!canSend) return;
     const normalized = normalizeEmojiInBody(body.trim());
@@ -255,8 +267,12 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
     setBody('');
     setDrafts([]);
     editorRef.current?.setMarkdown('');
+    if (isMobile || submitLabel) {
+      collapseMobileComposer();
+      return;
+    }
     queueMicrotask(() => editorRef.current?.focus());
-  }, [canSend, body, drafts, onSend, variant, initialDraftKey]);
+  }, [canSend, body, drafts, onSend, variant, initialDraftKey, isMobile, submitLabel, collapseMobileComposer]);
 
   useEffect(() => {
     if (variant !== 'composer') return;
@@ -536,7 +552,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
           Up to {MAX_ATTACHMENTS_PER_MESSAGE} attachments per message — remove a few to send.
         </div>
       )}
-      <div className="rounded-lg border bg-muted/40 dark:bg-input/30 focus-within:ring-1 focus-within:ring-ring">
+      <div className="rounded-lg border bg-muted/40 dark:bg-input/30 focus-within:ring-1 focus-within:ring-ring" data-message-composer>
         {showToolbar && (
           <div
             className="flex items-center gap-0.5 border-b px-2 py-1"
@@ -643,7 +659,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
                 onClick={onCancel}
                 variant="ghost"
                 size="icon"
-                className="h-9 w-9 rounded-md"
+                className="h-9 w-9 rounded-md max-md:h-11 max-md:w-11"
                 aria-label="Cancel"
               >
                 <X className="h-4 w-4" />
@@ -653,7 +669,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
               onClick={handleSend}
               disabled={!canSend}
               size={submitLabel ? 'sm' : 'icon'}
-              className={submitLabel ? 'h-9 rounded-md px-3' : 'h-8 w-8 rounded-md'}
+              className={submitLabel ? 'h-9 rounded-md px-3 max-md:h-11 max-md:px-4' : 'h-8 w-8 rounded-md max-md:h-11 max-md:w-11'}
               aria-label={submitLabel ?? 'Send message'}
             >
               {submitLabel ? submitLabel : <Send className="h-4 w-4" />}

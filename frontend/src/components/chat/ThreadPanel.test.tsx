@@ -14,13 +14,28 @@ vi.mock('@/lib/api', () => ({
 }));
 
 const mockReplyMutate = vi.fn();
+const mockEditMutate = vi.fn();
 vi.mock('@/hooks/useMessages', () => ({
-  useEditMessage: () => ({ mutate: vi.fn(), isPending: false }),
+  useEditMessage: () => ({ mutate: mockEditMutate, isPending: false }),
   useDeleteMessage: () => ({ mutate: vi.fn(), isPending: false }),
   useToggleReaction: () => ({ mutate: vi.fn(), isPending: false }),
   useSetPinned: () => ({ mutate: vi.fn(), isPending: false }),
   useSendMessage: () => ({ mutate: mockReplyMutate, isPending: false }),
 }));
+
+function setMobileMatch(matches: boolean) {
+  Object.defineProperty(window, 'matchMedia', {
+    configurable: true,
+    value: vi.fn(() => ({
+      matches,
+      media: '(max-width: 767px)',
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+    })),
+  });
+}
 
 vi.mock('@/hooks/useEmoji', () => ({
   useEmojis: () => ({ data: [] }),
@@ -66,6 +81,12 @@ function renderWithProviders(ui: React.ReactElement) {
   );
 }
 
+function touchSwipe(element: Element, fromX: number, toX: number, y = 160) {
+  fireEvent.touchStart(element, { touches: [{ clientX: fromX, clientY: y }] });
+  fireEvent.touchMove(element, { touches: [{ clientX: toX, clientY: y + 8 }] });
+  fireEvent.touchEnd(element, { changedTouches: [{ clientX: toX, clientY: y + 8 }] });
+}
+
 // Bridge a TypingContext recorder out of the React tree so a test can
 // fire a `typing` WebSocket event from the outside.
 const typingRecorderRef: { current: ReturnType<typeof useTyping>['recordTyping'] | null } = {
@@ -100,6 +121,10 @@ describe('ThreadPanel', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockApiFetch.mockReset();
+    mockReplyMutate.mockReset();
+    mockEditMutate.mockReset();
+    lastMessageInputProps.current = null;
+    setMobileMatch(false);
   });
 
   it('renders thread header and replies', async () => {
@@ -134,6 +159,59 @@ describe('ThreadPanel', () => {
     );
     fireEvent.click(screen.getByLabelText('Close thread'));
     expect(onClose).toHaveBeenCalled();
+  });
+
+  it('keeps more mobile spacing between follow and close controls', () => {
+    mockApiFetch.mockResolvedValueOnce([]);
+    renderWithProviders(
+      <ThreadPanel
+        channelId="ch-1"
+        threadRootID="m-1"
+        onClose={vi.fn()}
+        userMap={userMap}
+        currentUserId="u-1"
+      />,
+    );
+
+    expect(screen.getByLabelText('Close thread').parentElement).toHaveClass('gap-1', 'max-md:gap-3');
+  });
+
+  it('does not close on a mobile right-to-left swipe', () => {
+    mockApiFetch.mockResolvedValueOnce([]);
+    const onClose = vi.fn();
+    renderWithProviders(
+      <ThreadPanel
+        channelId="ch-1"
+        threadRootID="m-1"
+        onClose={onClose}
+        userMap={userMap}
+        currentUserId="u-1"
+      />,
+    );
+
+    const panel = screen.getByLabelText('Thread');
+    touchSwipe(panel, 240, 120);
+
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('closes on a mobile left-to-right swipe', () => {
+    mockApiFetch.mockResolvedValueOnce([]);
+    const onClose = vi.fn();
+    renderWithProviders(
+      <ThreadPanel
+        channelId="ch-1"
+        threadRootID="m-1"
+        onClose={onClose}
+        userMap={userMap}
+        currentUserId="u-1"
+      />,
+    );
+
+    const panel = screen.getByLabelText('Thread');
+    touchSwipe(panel, 120, 240);
+
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 
   it('shows Follow when the thread is not in /threads and calls the follow endpoint', async () => {
@@ -316,6 +394,57 @@ describe('ThreadPanel', () => {
     expect(screen.queryByLabelText('Reply in thread')).toBeNull();
     // No nested ThreadActionBar (which would show reply count + jump).
     expect(screen.queryByTestId('thread-action-bar')).toBeNull();
+  });
+
+  it('routes mobile thread message editing through the thread composer', async () => {
+    setMobileMatch(true);
+    mockApiFetch.mockResolvedValueOnce([
+      {
+        id: 'r-1',
+        parentID: 'ch-1',
+        parentMessageID: 'm-1',
+        authorID: 'u-1',
+        body: 'editable reply',
+        createdAt: '2026-04-24T10:30:00Z',
+      },
+    ]);
+    renderWithProviders(
+      <ThreadPanel
+        channelId="ch-1"
+        threadRootID="m-1"
+        onClose={vi.fn()}
+        userMap={userMap}
+        currentUserId="u-1"
+      />,
+    );
+    await screen.findByText('editable reply');
+
+    const row = screen.getByTestId('message-actions-trigger').closest('[data-message-id]')!;
+    act(() => {
+      fireEvent.pointerDown(row, { pointerType: 'touch' });
+    });
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 430));
+    });
+    await userEvent.click(screen.getByText('Edit'));
+
+    expect(lastMessageInputProps.current).toMatchObject({
+      submitLabel: 'Save',
+      initialBody: 'editable reply',
+      typingParentID: undefined,
+      lastOwnMessageId: undefined,
+    });
+
+    fireEvent.click(screen.getByLabelText('Send message'));
+
+    expect(mockEditMutate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId: 'r-1',
+        body: 'hello in thread',
+        channelId: 'ch-1',
+      }),
+      expect.objectContaining({ onSuccess: expect.any(Function) }),
+    );
   });
 
   describe('thread typing indicator', () => {

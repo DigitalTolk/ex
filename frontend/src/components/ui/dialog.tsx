@@ -67,7 +67,7 @@ function DialogContent({
                 data-slot="dialog-mobile-close"
                 render={
                   <Button
-                    aria-label="Dismiss dialog"
+                    aria-label={mobileCloseLabel}
                     variant="ghost"
                     className="absolute right-3 top-[calc(env(safe-area-inset-top)+0.5rem)] hidden h-9 px-3 text-base after:content-[var(--mobile-close-label)] max-md:inline-flex"
                     style={{

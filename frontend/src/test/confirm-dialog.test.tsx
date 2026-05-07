@@ -19,8 +19,8 @@ describe('ConfirmDialog', () => {
     );
     expect(screen.getByText('Delete X?')).toBeInTheDocument();
     expect(screen.getByText('X will be removed.')).toBeInTheDocument();
-    expect(screen.getByTestId('confirm-dialog-cancel')).toHaveClass('h-8', 'max-md:h-9');
-    expect(screen.getByTestId('confirm-dialog-confirm')).toHaveClass('h-8', 'max-md:h-9');
+    expect(screen.getByTestId('confirm-dialog-cancel')).toHaveClass('h-8', 'max-md:h-11');
+    expect(screen.getByTestId('confirm-dialog-confirm')).toHaveClass('h-8', 'max-md:h-11');
 
     fireEvent.click(screen.getByTestId('confirm-dialog-confirm'));
     expect(onConfirm).toHaveBeenCalledTimes(1);

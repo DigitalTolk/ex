@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { BrowserRouter } from 'react-router-dom';
 import { createElement, forwardRef, useImperativeHandle, type ComponentType, type Ref } from 'react';
@@ -9,15 +9,16 @@ import type { Message } from '@/types';
 // stubs are installed globally by frontend/src/test/setup.ts.
 
 // Virtuoso mock: capture props + scrollToIndex calls for the regression
-// contract tests, while still rendering Header/Footer and the
-// [data-virtuoso-scroller] / [data-viewport-type] markers the resize-
-// snap effect queries for. The captured object is module-scoped and
-// reset per test in beforeEach.
+// contract tests, while still rendering Header/Footer and rows. The
+// captured object is module-scoped and reset per test in beforeEach.
 type Captured = {
   initialTopMostItemIndex?: unknown;
   followOutput?: unknown;
+  alignToBottom?: boolean;
+  computeItemKey?: (index: number, row: { key: string }) => string;
+  defaultItemHeight?: number;
+  increaseViewportBy?: unknown;
   data?: unknown[];
-  atBottomStateChange?: (atBottom: boolean) => void;
   startReached?: () => void;
   endReached?: () => void;
   itemContent?: (index: number, row?: unknown) => React.ReactNode;
@@ -29,8 +30,11 @@ vi.mock('react-virtuoso', () => {
   type VirtuosoMockProps = {
     initialTopMostItemIndex?: unknown;
     followOutput?: unknown;
+    alignToBottom?: boolean;
+    computeItemKey?: (index: number, row: { key: string }) => string;
+    defaultItemHeight?: number;
+    increaseViewportBy?: unknown;
     data?: unknown[];
-    atBottomStateChange?: (atBottom: boolean) => void;
     startReached?: () => void;
     endReached?: () => void;
     itemContent?: (index: number, row?: unknown) => React.ReactNode;
@@ -39,8 +43,11 @@ vi.mock('react-virtuoso', () => {
   const Virtuoso = forwardRef((props: VirtuosoMockProps, ref: Ref<unknown>) => {
     captured.initialTopMostItemIndex = props.initialTopMostItemIndex;
     captured.followOutput = props.followOutput;
+    captured.alignToBottom = props.alignToBottom;
+    captured.computeItemKey = props.computeItemKey;
+    captured.defaultItemHeight = props.defaultItemHeight;
+    captured.increaseViewportBy = props.increaseViewportBy;
     captured.data = props.data;
-    captured.atBottomStateChange = props.atBottomStateChange;
     captured.startReached = props.startReached;
     captured.endReached = props.endReached;
     captured.itemContent = props.itemContent;
@@ -68,8 +75,11 @@ vi.mock('react-virtuoso', () => {
 beforeEach(() => {
   captured.initialTopMostItemIndex = undefined;
   captured.followOutput = undefined;
+  captured.alignToBottom = undefined;
+  captured.computeItemKey = undefined;
+  captured.defaultItemHeight = undefined;
+  captured.increaseViewportBy = undefined;
   captured.data = undefined;
-  captured.atBottomStateChange = undefined;
   captured.startReached = undefined;
   captured.endReached = undefined;
   captured.itemContent = undefined;
@@ -274,15 +284,7 @@ describe('MessageList Virtuoso wiring (regression contract)', () => {
     expect(captured.scrollToIndexCalls).toContainEqual({ index: 2, align: 'center' });
   });
 
-  it('deep-link mount: scrollToIndex is invoked MULTIPLE times so virtuoso can correct on real row measurements', async () => {
-    // Regression: thread deep-links mount the ThreadPanel alongside
-    // MessageList, narrowing the main scroller. Virtuoso's row-
-    // height estimates are wrong at the narrower width, so a
-    // single rAF scrollToIndex lands off-target. The fix is multi-
-    // pass at 0/100/350/800ms — later passes re-assert position
-    // once measurements have settled. This test asserts that at
-    // least 4 anchor scrolls fire within ~1s (the no-op cost of
-    // an already-on-target call is acceptable).
+  it('deep-link mount: scrollToIndex is a single correction, not a timer chase', async () => {
     const m1 = makeMessage({ id: 'msg-a', createdAt: '2026-04-24T10:00:00Z' });
     const m2 = makeMessage({ id: 'msg-anchor', createdAt: '2026-04-24T10:30:00Z' });
     const m3 = makeMessage({ id: 'msg-c', createdAt: '2026-04-24T11:00:00Z' });
@@ -295,12 +297,13 @@ describe('MessageList Virtuoso wiring (regression contract)', () => {
         anchorMsgId="msg-anchor"
       />
     );
-    // Wait for the last pass at 800ms to fire.
+    // Wait past the old 100/350/800ms chase. Smooth chat scrolling
+    // relies on Virtuoso measurement, not repeated imperative scrolls.
     await new Promise((r) => setTimeout(r, 850));
     const anchorCalls = captured.scrollToIndexCalls.filter(
       (c) => c.index === 2 && c.align === 'center',
     );
-    expect(anchorCalls.length).toBeGreaterThanOrEqual(4);
+    expect(anchorCalls).toHaveLength(1);
   });
 
   it('deep-link forward pagination: followOutput=false while hasPreviousPage=true (prevents spam-scroll on append)', async () => {
@@ -335,13 +338,9 @@ describe('MessageList Virtuoso wiring (regression contract)', () => {
   });
 
   it('deep-link mount: scrollToIndex(LAST) is NEVER called — the resize-snap-to-bottom logic must not fight the anchor scroll', async () => {
-    // Regression: atBottomRef defaults to true; the ResizeObserver
-    // attached on mount fired reSnap → scrollToIndex({index:'LAST'})
-    // before atBottomStateChange had a chance to correct the ref to
-    // false, yanking the deep-linked user away from their anchor.
-    // The fix: skip the RO + multi-pass snap entirely when an
-    // anchor is set. This test asserts the only scrollToIndex call
-    // is the anchor scroll, not LAST.
+    // Regression: manual bottom snapping yanked deep-linked users
+    // away from their anchor. The component may perform the single
+    // anchor correction, but it must not scroll to the live tail.
     const m1 = makeMessage({ id: 'msg-a', createdAt: '2026-04-24T10:00:00Z' });
     const m2 = makeMessage({ id: 'msg-anchor', createdAt: '2026-04-24T10:30:00Z' });
     const m3 = makeMessage({ id: 'msg-c', createdAt: '2026-04-24T11:00:00Z' });
@@ -354,8 +353,8 @@ describe('MessageList Virtuoso wiring (regression contract)', () => {
         anchorMsgId="msg-anchor"
       />
     );
-    // Wait long enough for the multi-pass timer chase to fire if
-    // it were enabled (the chase has timers at 0/100/350 ms).
+    // Wait long enough for the old multi-pass timer chase to fire if
+    // it were reintroduced.
     await new Promise((r) => setTimeout(r, 400));
     const lastCalls = captured.scrollToIndexCalls.filter((c) => c.index === 'LAST');
     expect(lastCalls).toEqual([]);
@@ -363,16 +362,7 @@ describe('MessageList Virtuoso wiring (regression contract)', () => {
     expect(captured.scrollToIndexCalls).toContainEqual({ index: 2, align: 'center' });
   });
 
-  it('deep-link mount: does NOT attach a ResizeObserver — the resize-snap effect must early-return before observe()', async () => {
-    // Stronger regression coverage than the scrollToIndex check:
-    // even if a future edit kept reSnap conditional on
-    // atBottomRef (which defaults to true), an attached RO would
-    // STILL fire on a real browser's first content-grew resize
-    // and pull the user away from the anchor. The contract is
-    // that the RO is not attached at all when anchorMsgId is set.
-    //
-    // We replace globalThis.ResizeObserver with an instrumented
-    // stub for this test only, then restore it.
+  it('does not attach a manual ResizeObserver for scroll correction', async () => {
     const observeCalls: Element[] = [];
     class TrackingRO {
       observe(el: Element) {
@@ -388,9 +378,7 @@ describe('MessageList Virtuoso wiring (regression contract)', () => {
         <MessageList
           {...defaultProps}
           pages={[{ items: [makeMessage()] }]}
-          hasPreviousPage={true}
-          fetchPreviousPage={vi.fn()}
-          anchorMsgId="msg-1"
+          hasPreviousPage={false}
         />
       );
       expect(observeCalls).toEqual([]);
@@ -399,12 +387,10 @@ describe('MessageList Virtuoso wiring (regression contract)', () => {
     }
   });
 
-  it('deep-link mount: does NOT scroll to the last row even if it is the current user\'s own message (lastOwnBottomRef must be skipped)', async () => {
+  it('deep-link mount: does NOT scroll to the last row even if it is the current user\'s own message', async () => {
     // Regression: a deep-link's around-window may include the
-    // user's own message in its newer half. Without the
-    // anchorMsgId guard, lastOwnBottomRef saw "bottom of loaded
-    // slice is own message" and scrolled to LAST end — yanking
-    // the user away from their anchor.
+    // user's own message in its newer half. That bottom is the end
+    // of the loaded slice, not necessarily the live channel tail.
     const m1 = makeMessage({ id: 'msg-a', authorID: 'user-2', createdAt: '2026-04-24T10:00:00Z' });
     const m2 = makeMessage({ id: 'msg-anchor', authorID: 'user-2', createdAt: '2026-04-24T10:30:00Z' });
     // m3 is the bottom of the around-window AND is the current
@@ -425,11 +411,7 @@ describe('MessageList Virtuoso wiring (regression contract)', () => {
     expect(endCalls).toEqual([]);
   });
 
-  it('live-tail mount: lastOwnBottomRef DOES fire when no anchor is set and the bottom is the user\'s own message', async () => {
-    // Companion to the deep-link test above: confirms the anchor
-    // guard is conditional, not always-on. Without an anchor the
-    // user's own message at the bottom should pull the view to it
-    // (the canonical "I sent a message, scroll to it" behavior).
+  it('live-tail mount: does not imperatively scroll just because the initial bottom message is own-authored', async () => {
     const m1 = makeMessage({ id: 'msg-a', authorID: 'user-2', createdAt: '2026-04-24T10:00:00Z' });
     const m2 = makeMessage({ id: 'msg-own', authorID: 'user-1', createdAt: '2026-04-24T11:00:00Z' });
     const captured = await renderAndCaptureVirtuoso(
@@ -437,82 +419,38 @@ describe('MessageList Virtuoso wiring (regression contract)', () => {
     );
     await new Promise((r) => setTimeout(r, 50));
     const endCalls = captured.scrollToIndexCalls.filter((c) => c.align === 'end');
-    expect(endCalls.length).toBeGreaterThan(0);
+    expect(endCalls).toEqual([]);
   });
 
-  it('live-tail mount: content growth re-snaps during bottom intent, then user interaction cancels it', async () => {
-    let resizeCallback: ResizeObserverCallback | undefined;
-    class TrackingRO {
-      constructor(cb: ResizeObserverCallback) {
-        resizeCallback = cb;
-      }
-      observe() {}
-      unobserve() {}
-      disconnect() {}
-    }
-    const original = (globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver;
-    (globalThis as unknown as { ResizeObserver: typeof TrackingRO }).ResizeObserver = TrackingRO;
-    try {
-      const captured = await renderAndCaptureVirtuoso(
-        <MessageList {...defaultProps} pages={[{ items: [makeMessage()] }]} hasPreviousPage={false} />
-      );
-      const scroller = document.querySelector<HTMLElement>('[data-virtuoso-scroller]');
-      if (!scroller) throw new Error('missing mocked Virtuoso scroller');
-      let scrollHeight = 100;
-      Object.defineProperty(scroller, 'scrollHeight', {
-        configurable: true,
-        get: () => scrollHeight,
-      });
-      captured.atBottomStateChange?.(false);
-      captured.scrollToIndexCalls.length = 0;
+  it('appending the current user\'s own message performs one explicit scroll to bottom', async () => {
+    const m1 = makeMessage({ id: 'msg-a', authorID: 'user-2', createdAt: '2026-04-24T10:00:00Z' });
+    const { rerender } = renderWithProviders(
+      <MessageList {...defaultProps} pages={[{ items: [m1] }]} hasPreviousPage={false} />,
+    );
+    await new Promise((r) => requestAnimationFrame(() => r(undefined)));
+    captured.scrollToIndexCalls.length = 0;
 
-      scrollHeight = 200;
-      resizeCallback?.(
-        [{ target: scroller, contentRect: { width: 1024, height: 768 } } as ResizeObserverEntry],
-        {} as ResizeObserver,
-      );
-      expect(captured.scrollToIndexCalls).toContainEqual({ index: 'LAST', align: 'end' });
+    const m2 = makeMessage({ id: 'msg-own', authorID: 'user-1', createdAt: '2026-04-24T11:00:00Z' });
+    rerender(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <BrowserRouter>
+          <MessageList {...defaultProps} pages={[{ items: [m2, m1] }]} hasPreviousPage={false} />
+        </BrowserRouter>
+      </QueryClientProvider>,
+    );
+    await new Promise((r) => requestAnimationFrame(() => r(undefined)));
 
-      fireEvent.wheel(scroller);
-      captured.scrollToIndexCalls.length = 0;
-      scrollHeight = 300;
-      resizeCallback?.(
-        [{ target: scroller, contentRect: { width: 1024, height: 768 } } as ResizeObserverEntry],
-        {} as ResizeObserver,
-      );
-      expect(captured.scrollToIndexCalls).toEqual([]);
-    } finally {
-      (globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver = original;
-    }
+    expect(captured.scrollToIndexCalls).toEqual([{ index: 'LAST', align: 'end' }]);
   });
 
-  it('live-tail mount: DOES attach a ResizeObserver — needed to re-snap when the banner appears or content grows', async () => {
-    // Companion to the deep-link test above: confirms the early
-    // return is gated on anchorMsgId only, not always-on. The RO
-    // must remain wired up for live-tail viewers.
-    let observeCallCount = 0;
-    class TrackingRO {
-      observe() {
-        observeCallCount++;
-      }
-      unobserve() {}
-      disconnect() {}
-    }
-    const original = (globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver;
-    (globalThis as unknown as { ResizeObserver: typeof TrackingRO }).ResizeObserver = TrackingRO;
-    try {
-      await renderAndCaptureVirtuoso(
-        <MessageList {...defaultProps} pages={[{ items: [makeMessage()] }]} hasPreviousPage={false} />
-      );
-      // The mocked Virtuoso renders [data-virtuoso-scroller] +
-      // [data-viewport-type], so the live-tail RO setup observes
-      // both. observeCallCount > 0 proves the anchorMsgId
-      // early-return is conditional, not unconditional — the
-      // companion to the deep-link "DOES NOT attach RO" test.
-      expect(observeCallCount).toBeGreaterThan(0);
-    } finally {
-      (globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver = original;
-    }
+  it('uses Virtuoso-native stability props instead of manual scroll correction', async () => {
+    const captured = await renderAndCaptureVirtuoso(
+      <MessageList {...defaultProps} pages={[{ items: [makeMessage()] }]} hasPreviousPage={false} />
+    );
+    expect(captured.alignToBottom).toBe(true);
+    expect(captured.defaultItemHeight).toBe(88);
+    expect(captured.increaseViewportBy).toEqual({ top: 600, bottom: 600 });
+    expect(captured.computeItemKey?.(0, { key: 'stable-key' })).toBe('stable-key');
   });
 
   it('startReached fetches older pages only when ready and not already fetching', async () => {

@@ -43,6 +43,7 @@ interface EmojiPickerProps {
   onClose?: () => void;
   onOpenChange?: (open: boolean) => void;
   trigger?: React.ReactNode;
+  triggerClassName?: string;
   ariaLabel?: string;
   // shortcode: insert :name: into a textarea (for the message composer)
   // reaction: emit :name: too — handled identically here
@@ -75,7 +76,7 @@ const CATEGORY_ICONS: Record<string, LucideIcon> = {
 
 const CUSTOM_CATEGORY_SLUG = 'custom';
 const PICKER_WIDTH = 336;
-const PICKER_HEIGHT = 460;
+const PICKER_HEIGHT = 380;
 
 function normalizeEmojiQuery(query: string) {
   return query.trim().toLowerCase().replace(/^:+|:+$/g, '');
@@ -111,7 +112,7 @@ function useEmojiPickerAuth() {
   }
 }
 
-export function EmojiPicker({ onSelect, onClose, onOpenChange, trigger, ariaLabel = 'Emoji picker' }: EmojiPickerProps) {
+export function EmojiPicker({ onSelect, onClose, onOpenChange, trigger, triggerClassName = 'inline-block', ariaLabel = 'Emoji picker' }: EmojiPickerProps) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [activeCategory, setActiveCategory] = useState<string>(EMOJI_CATEGORIES[0]?.slug ?? '');
@@ -199,7 +200,7 @@ export function EmojiPicker({ onSelect, onClose, onOpenChange, trigger, ariaLabe
     <>
       <span
         ref={triggerRef}
-        className="inline-block"
+        className={triggerClassName}
         onClick={() => {
           setOpen((v) => {
             const next = !v;
@@ -224,7 +225,7 @@ export function EmojiPicker({ onSelect, onClose, onOpenChange, trigger, ariaLabe
         preferredAlign="end"
         ariaLabel={ariaLabel}
         mobileSheet
-        className="flex h-[460px] w-[336px] max-w-[calc(100vw-16px)] flex-col rounded-md border bg-popover p-2 shadow-md max-md:h-[min(78vh,calc(100dvh-72px))] max-md:w-screen max-md:max-w-none max-md:rounded-b-none max-md:rounded-t-xl"
+        className="flex h-[460px] w-[336px] max-w-[calc(100vw-16px)] flex-col rounded-md border bg-popover p-2 shadow-md max-md:h-[min(58vh,calc(100dvh-9rem))] max-md:w-screen max-md:max-w-none max-md:rounded-b-none max-md:rounded-t-xl"
       >
         <Input
           ref={inputRef}
@@ -273,7 +274,7 @@ export function EmojiPicker({ onSelect, onClose, onOpenChange, trigger, ariaLabe
                 : EMOJI_CATEGORIES.find((c) => c.slug === activeCategory)?.label ?? 'Standard'}
           </div>
           <div
-            className="grid min-h-0 flex-1 grid-cols-[repeat(9,2rem)] content-start justify-center gap-0.5 overflow-y-auto"
+            className="grid min-h-0 flex-1 grid-cols-[repeat(9,2rem)] content-start justify-center gap-0.5 overflow-y-auto max-md:grid-cols-[repeat(7,2.75rem)]"
             role="list"
             aria-label={activeCategory === CUSTOM_CATEGORY_SLUG && !query.trim() ? 'Custom emojis' : 'Standard emojis'}
           >
@@ -284,7 +285,7 @@ export function EmojiPicker({ onSelect, onClose, onOpenChange, trigger, ariaLabe
                 role="listitem"
                 data-testid="emoji-picker-tile"
                 onClick={() => handlePick(`:${e.name}:`)}
-                className="flex h-8 w-8 items-center justify-center rounded hover:bg-muted"
+                className="flex h-8 w-8 items-center justify-center rounded hover:bg-muted max-md:h-11 max-md:w-11"
                 aria-label={`React with :${e.name}:`}
                 title={`:${e.name}:`}
               >
@@ -292,6 +293,7 @@ export function EmojiPicker({ onSelect, onClose, onOpenChange, trigger, ariaLabe
                   emoji={`:${e.name}:`}
                   customMap={{ [e.name]: e.imageURL }}
                   size="lg"
+                  className="max-md:h-[30px] max-md:w-[30px] max-md:text-[30px]"
                 />
               </button>
             ))}
@@ -305,13 +307,14 @@ export function EmojiPicker({ onSelect, onClose, onOpenChange, trigger, ariaLabe
                   role="listitem"
                   data-testid="emoji-picker-tile"
                   onClick={() => handlePick(shortcode)}
-                  className="flex h-8 w-8 items-center justify-center rounded hover:bg-muted"
+                  className="flex h-8 w-8 items-center justify-center rounded hover:bg-muted max-md:h-11 max-md:w-11"
                   aria-label={`React with ${shortcode}`}
                   title={shortcode}
                 >
                   <EmojiGlyph
                     emoji={supportsEmojiSkinTone(e.unicode) ? tonedEmoji : e.unicode}
                     size="lg"
+                    className="max-md:text-[30px]"
                   />
                 </button>
               );

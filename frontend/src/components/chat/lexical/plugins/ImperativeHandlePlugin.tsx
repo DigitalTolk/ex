@@ -50,6 +50,7 @@ export interface WysiwygEditorHandle {
   setMarkdown: (md: string) => void;
   focus: () => void;
   focusEnd: () => void;
+  blur: () => void;
   getElement: () => HTMLDivElement | null;
   getActiveFormats: () => Set<ActiveFormat>;
   /**
@@ -213,6 +214,10 @@ export function ImperativeHandlePlugin({ imperativeRef }: Props) {
           $getRoot().selectEnd();
         });
         editor.focus();
+      },
+      blur() {
+        editor.blur();
+        editor.getRootElement()?.blur();
       },
       getElement() {
         return editor.getRootElement() as HTMLDivElement | null;

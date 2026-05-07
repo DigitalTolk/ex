@@ -542,6 +542,11 @@ export function Sidebar({ onClose }: SidebarProps) {
     setMobileUserMenuOpen(false);
   }
 
+  function openChangeServerConfirm() {
+    closeUserMenu();
+    setChangeServerConfirmOpen(true);
+  }
+
   function clearUserMenuFocus() {
     userMenuTriggerRef.current?.blur();
     if (document.activeElement instanceof HTMLElement) {
@@ -568,11 +573,6 @@ export function Sidebar({ onClose }: SidebarProps) {
     setOpen(open);
     if (open) closeUserMenu();
     scheduleClearUserMenuFocus();
-  }
-
-  function openChangeServerConfirm() {
-    closeUserMenu();
-    setChangeServerConfirmOpen(true);
   }
 
   function setConversationSortPreference(sort: ConversationSidebarSort) {
@@ -1865,7 +1865,6 @@ export function Sidebar({ onClose }: SidebarProps) {
         testIDPrefix="change-server"
         finalFocus={userMenuTriggerRef}
       />
-
       <ConfirmDialog
         open={categoryToDelete !== null}
         onOpenChange={(o) => {

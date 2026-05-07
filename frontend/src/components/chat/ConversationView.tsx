@@ -405,6 +405,7 @@ export function ConversationView() {
             <div className="border-t p-3 text-sm text-muted-foreground">Loading message editor…</div>
           ) : (
             <MessageInput
+              key={activeEditingMessage ? `edit-${activeEditingMessage.id}` : `conversation-${id}`}
               ref={inputRef}
               onSend={activeEditingMessage ? handleEditMessage : handleSendMessage}
               onCancel={activeEditingMessage ? () => setEditingMessage(null) : undefined}

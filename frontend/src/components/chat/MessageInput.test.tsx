@@ -23,6 +23,20 @@ function flushMicrotasks() {
   return new Promise<void>((resolve) => queueMicrotask(resolve));
 }
 
+function setMobileMatch(matches: boolean) {
+  Object.defineProperty(window, 'matchMedia', {
+    configurable: true,
+    value: vi.fn(() => ({
+      matches,
+      media: '(max-width: 767px)',
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+    })),
+  });
+}
+
 describe('MessageInput', () => {
   it('renders textarea and send button', () => {
     render(<MessageInput onSend={vi.fn()} />);
@@ -88,6 +102,54 @@ describe('MessageInput', () => {
     await waitFor(() => {
       expect((editor.textContent ?? '').trim()).toBe('');
     });
+  });
+
+  it('blurs and returns to the single-line mobile composer after sending', async () => {
+    const user = userEvent.setup();
+    const onSend = vi.fn();
+    setMobileMatch(true);
+    render(<MessageInput onSend={onSend} initialBody="Hello" />);
+
+    const editor = await screen.findByLabelText('Message input');
+    editor.focus();
+    await user.keyboard('{Enter}');
+    await flushMicrotasks();
+
+    expect(onSend).toHaveBeenCalled();
+    expect(document.activeElement).not.toBe(editor);
+    expect(editor).toHaveClass('max-md:min-h-[1.5rem]', 'max-md:max-h-[1.5rem]');
+    setMobileMatch(false);
+  });
+
+  it('blurs and returns to single-line mobile composer after saving an edit', async () => {
+    const user = userEvent.setup();
+    const onSend = vi.fn();
+    setMobileMatch(true);
+    render(<MessageInput onSend={onSend} initialBody="Edited text" submitLabel="Save" />);
+
+    const editor = await screen.findByLabelText('Message input');
+    editor.focus();
+    await user.click(screen.getByLabelText('Save'));
+    await flushMicrotasks();
+
+    expect(onSend).toHaveBeenCalledWith({ body: 'Edited text', attachmentIDs: [] });
+    expect(document.activeElement).not.toBe(editor);
+    expect(editor).toHaveClass('max-md:min-h-[1.5rem]', 'max-md:max-h-[1.5rem]');
+    setMobileMatch(false);
+  });
+
+  it('does not refocus the composer after saving an edit', async () => {
+    const user = userEvent.setup();
+    const onSend = vi.fn();
+    render(<MessageInput onSend={onSend} initialBody="Edited text" submitLabel="Save" />);
+
+    const editor = await screen.findByLabelText('Message input');
+    editor.focus();
+    await user.click(screen.getByLabelText('Save'));
+    await flushMicrotasks();
+
+    expect(onSend).toHaveBeenCalledWith({ body: 'Edited text', attachmentIDs: [] });
+    expect(document.activeElement).not.toBe(editor);
   });
 
   it('does not rehydrate stale server draft text after the user clears the composer', async () => {

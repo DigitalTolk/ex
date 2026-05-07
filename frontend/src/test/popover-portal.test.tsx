@@ -243,6 +243,7 @@ describe('PopoverPortal', () => {
     expect(portal).toHaveAttribute('data-mobile-sheet', 'true');
     expect(portal.style.bottom).toBe('0px');
     expect(portal.style.width).toBe('100vw');
+    expect(portal.style.maxHeight).toBe('min(58vh, calc(100dvh - 9rem))');
     Object.defineProperty(window, 'matchMedia', { configurable: true, value: originalMatchMedia });
   });
 

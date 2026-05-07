@@ -238,6 +238,7 @@ export function ThreadCard({ summary, title, deepLink, currentUserId, unread = f
               currentUserId={currentUserId}
               userMap={userMap}
               inThread
+              disableEditing
             />
           )}
 
@@ -266,6 +267,7 @@ export function ThreadCard({ summary, title, deepLink, currentUserId, unread = f
                 currentUserId={currentUserId}
                 userMap={userMap}
                 inThread
+                disableEditing
               />
             ))}
         </div>

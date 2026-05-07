@@ -1,6 +1,6 @@
-import { createElement, useEffect, useRef } from 'react';
+import { createElement, useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { ChevronLeft, ChevronRight, Download, X } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Download, X, ZoomIn, ZoomOut } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { getInitials, formatLongDateTime, formatBytes } from '@/lib/format';
 import { iconForAttachment, isImageContentType } from '@/lib/file-helpers';
@@ -44,13 +44,28 @@ export function ImageLightbox({
   const safeIndex = total === 0 ? 0 : ((index % total) + total) % total;
   const current = images[safeIndex];
   const lightboxRef = useRef<HTMLDivElement>(null);
+  const imageKey = current ? `${current.url}\u0000${safeIndex}` : '';
+  const [zoomState, setZoomState] = useState({ key: '', value: 1 });
+  const zoom = zoomState.key === imageKey ? zoomState.value : 1;
   useTransientOverlayCleanup(open, { rootRef: lightboxRef, lockScroll: true });
+
+  function setCurrentZoom(update: (value: number) => number) {
+    setZoomState((state) => ({
+      key: imageKey,
+      value: update(state.key === imageKey ? state.value : 1),
+    }));
+  }
+
+  const handleClose = useCallback(() => {
+    setZoomState({ key: '', value: 1 });
+    onClose();
+  }, [onClose]);
 
   useEffect(() => {
     if (!open) return;
     function onKey(e: KeyboardEvent) {
       if (e.key === 'Escape') {
-        onClose();
+        handleClose();
         // Esc is a keyboard interaction, which flips :focus-visible on
         // for whatever element holds focus next — usually the
         // attachment-trigger button that opened the lightbox. Blur it
@@ -77,7 +92,7 @@ export function ImageLightbox({
     return () => {
       document.removeEventListener('keydown', onKey);
     };
-  }, [open, onClose, onIndexChange, safeIndex, total]);
+  }, [open, handleClose, onIndexChange, safeIndex, total]);
 
   if (!open || typeof document === 'undefined' || !current) return null;
 
@@ -91,11 +106,11 @@ export function ImageLightbox({
       aria-modal="true"
       aria-label={`Attachment preview: ${current.filename}`}
       data-testid="image-lightbox"
-      className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 p-6"
-      onClick={onClose}
+      className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 p-6 max-md:px-3 max-md:pb-[calc(env(safe-area-inset-bottom)+0.75rem)] max-md:pt-[calc(env(safe-area-inset-top)+4.5rem)]"
+      onClick={handleClose}
     >
       <div
-        className="absolute inset-x-0 top-0 flex items-center gap-3 bg-gradient-to-b from-black/70 to-transparent px-4 py-3 text-white"
+        className="absolute inset-x-0 top-0 flex items-center gap-3 bg-gradient-to-b from-black/70 to-transparent px-4 pb-3 pt-[calc(env(safe-area-inset-top)+0.75rem)] text-white"
         onClick={(e) => e.stopPropagation()}
       >
         <Avatar className="h-8 w-8 ring-2 ring-white/30">
@@ -112,6 +127,35 @@ export function ImageLightbox({
             {total > 1 ? ` · ${safeIndex + 1} / ${total}` : ''}
           </p>
         </div>
+        {isImage && (
+          <div className="flex items-center gap-1" role="group" aria-label="Image zoom controls">
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setCurrentZoom((value) => Math.max(1, Math.round((value - 0.5) * 10) / 10));
+              }}
+              aria-label="Zoom out"
+              data-testid="image-lightbox-zoom-out"
+              className="flex h-9 w-9 items-center justify-center rounded-md text-white/80 hover:bg-white/15 hover:text-white disabled:opacity-40"
+              disabled={zoom <= 1}
+            >
+              <ZoomOut className="h-4 w-4" />
+            </button>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setCurrentZoom((value) => Math.min(4, Math.round((value + 0.5) * 10) / 10));
+              }}
+              aria-label="Zoom in"
+              data-testid="image-lightbox-zoom-in"
+              className="flex h-9 w-9 items-center justify-center rounded-md text-white/80 hover:bg-white/15 hover:text-white"
+            >
+              <ZoomIn className="h-4 w-4" />
+            </button>
+          </div>
+        )}
         <a
           href={current.downloadURL ?? current.url}
           download={current.filename}
@@ -124,7 +168,7 @@ export function ImageLightbox({
         </a>
         <button
           type="button"
-          onClick={onClose}
+          onClick={handleClose}
           aria-label="Close attachment preview"
           data-testid="image-lightbox-close"
           className="flex h-9 w-9 items-center justify-center rounded-md text-white/80 hover:bg-white/15 hover:text-white"
@@ -163,12 +207,29 @@ export function ImageLightbox({
       )}
 
       {isImage ? (
-        <img
-          src={current.url}
-          alt={current.filename}
-          className="max-h-[88vh] max-w-[92vw] cursor-zoom-out rounded-md object-contain shadow-2xl"
-          data-testid="image-lightbox-image"
-        />
+        <div
+          className="flex max-h-full max-w-full items-center justify-center overflow-auto touch-none overscroll-contain"
+          data-testid="image-lightbox-zoom-stage"
+          onClick={(e) => e.stopPropagation()}
+          onWheel={(e) => {
+            if (!e.ctrlKey && !e.metaKey) return;
+            e.preventDefault();
+            setCurrentZoom((value) => {
+              const next = e.deltaY < 0 ? value + 0.25 : value - 0.25;
+              return Math.min(4, Math.max(1, Math.round(next * 100) / 100));
+            });
+          }}
+        >
+          <img
+            src={current.url}
+            alt={current.filename}
+            className="max-h-[88vh] max-w-[92vw] rounded-md object-contain shadow-2xl transition-transform max-md:max-h-[calc(100dvh-env(safe-area-inset-top)-env(safe-area-inset-bottom)-6rem)]"
+            style={{ transform: `scale(${zoom})` }}
+            onDoubleClick={() => setCurrentZoom((value) => (value > 1 ? 1 : 2))}
+            data-testid="image-lightbox-image"
+            data-zoom={zoom}
+          />
+        </div>
       ) : (
         <div
           onClick={(e) => e.stopPropagation()}

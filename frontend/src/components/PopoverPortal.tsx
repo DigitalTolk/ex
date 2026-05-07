@@ -1,8 +1,9 @@
-import { useEffect, useRef, type ReactNode, type RefObject } from 'react';
+import { useCallback, useEffect, useRef, type ReactNode, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import { usePopoverPosition } from '@/hooks/usePopoverPosition';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { useTransientOverlayCleanup } from '@/hooks/useTransientOverlayCleanup';
+import { useMobileSwipe } from '@/hooks/useMobileSwipe';
 
 interface PopoverPortalProps {
   open: boolean;
@@ -46,6 +47,16 @@ export function PopoverPortal({
   const contentRef = useRef<HTMLDivElement>(null);
   const isMobile = useIsMobile();
   const renderSheet = mobileSheet && isMobile;
+  const { ref: swipeRef, ...swipeDown } = useMobileSwipe('down', () => {
+    if (renderSheet) onDismiss?.();
+  });
+  const setContentRef = useCallback(
+    (node: HTMLDivElement | null) => {
+      contentRef.current = node;
+      swipeRef(node);
+    },
+    [swipeRef],
+  );
   const pos = usePopoverPosition(open, triggerRef, {
     estimatedHeight,
     estimatedWidth,
@@ -89,7 +100,7 @@ export function PopoverPortal({
         />
       )}
       <div
-        ref={contentRef}
+        ref={setContentRef}
         role={role}
         aria-label={ariaLabel}
         data-testid="popover-portal"
@@ -108,7 +119,7 @@ export function PopoverPortal({
               zIndex: 1000,
               width: '100vw',
               maxWidth: '100vw',
-              maxHeight: 'min(78vh, calc(100dvh - 72px))',
+              maxHeight: 'min(58vh, calc(100dvh - 9rem))',
               overflowY: 'auto',
               opacity: measured ? 1 : 0,
               pointerEvents: measured ? 'auto' : 'none',
@@ -125,6 +136,7 @@ export function PopoverPortal({
               pointerEvents: measured ? 'auto' : 'none',
             }}
         className={className}
+        {...(renderSheet ? swipeDown : {})}
       >
         {children}
       </div>

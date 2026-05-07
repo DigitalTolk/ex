@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso';
 import { Skeleton } from '@/components/ui/skeleton';
 import { MessageItem } from './MessageItem';
@@ -8,26 +8,14 @@ import type { Message, UserStatus } from '@/types';
 import { buildMessageListRows, nextVirtuosoState } from './MessageListRows';
 
 const ANCHOR_HIGHLIGHT_MS = 2200;
-const LIVE_TAIL_BOTTOM_INTENT_MS = 2400;
+const DEFAULT_MESSAGE_ROW_HEIGHT = 88;
+const MESSAGE_LIST_OVERSCAN_PX = 600;
 
 // firstItemIndex is shifted down on every prepend (older-page fetch)
 // so Virtuoso identifies prepended rows as preceding existing ones
 // rather than displacing them. Starting high enough that we won't
 // reach 0 in any reasonable session.
 const VIRTUOSO_START_INDEX = 1_000_000;
-
-// Schedule fn at rAF + each ms delay. Used for scroll chases where
-// Virtuoso's first scroll uses estimated row heights and later passes
-// need to correct once real measurements have settled. Returns a
-// cleanup that cancels every pending pass.
-function multiPassScroll(fn: () => void, delaysMs: number[]): () => void {
-  const raf = requestAnimationFrame(fn);
-  const timers = delaysMs.map((d) => window.setTimeout(fn, d));
-  return () => {
-    cancelAnimationFrame(raf);
-    timers.forEach((t) => window.clearTimeout(t));
-  };
-}
 
 export interface UserMapEntry {
   displayName: string;
@@ -150,20 +138,15 @@ function VirtuosoMessageList({
     const dedupKey = anchorRevision ? `${anchorMsgId}@${anchorRevision}` : anchorMsgId;
     if (anchorAppliedRef.current === dedupKey) return;
     anchorAppliedRef.current = dedupKey;
-    // Thread deep-links are the worst case for single-pass scroll:
-    // ThreadPanel mounts alongside MessageList, narrowing the main
-    // scroller, so virtuoso's row-height estimates wrap differently
-    // than reality. Later passes correct once real heights settle.
-    const cancelScroll = multiPassScroll(
-      () => virtuosoRef.current?.scrollToIndex({ index: anchorIndex, align: 'center' }),
-      [100, 350, 800],
-    );
+    const scrollFrame = requestAnimationFrame(() => {
+      virtuosoRef.current?.scrollToIndex({ index: anchorIndex, align: 'center' });
+    });
     setHighlightedMessageId(anchorMsgId);
     const flashId = window.setTimeout(() => {
       setHighlightedMessageId((curr) => (curr === anchorMsgId ? null : curr));
     }, ANCHOR_HIGHLIGHT_MS);
     return () => {
-      cancelScroll();
+      cancelAnimationFrame(scrollFrame);
       window.clearTimeout(flashId);
     };
   }, [anchorMsgId, anchorRevision, anchorIndex]);
@@ -172,113 +155,6 @@ function VirtuosoMessageList({
   // `rows` prop — this is what guarantees `data` and `firstItemIndex`
   // hit Virtuoso atomically.
   const renderRows = virtuosoData.rows;
-
-  // Track at-bottom for the resize handler below. Virtuoso owns the
-  // computation; we just mirror the value into a ref so a non-React
-  // ResizeObserver callback can read it without re-subscribing.
-  const atBottomRef = useRef(true);
-  const bottomIntentUntilRef = useRef(0);
-  const bottomIntentCanceledRef = useRef(false);
-
-  const startBottomIntent = useCallback(() => {
-    bottomIntentUntilRef.current = Date.now() + LIVE_TAIL_BOTTOM_INTENT_MS;
-    bottomIntentCanceledRef.current = false;
-  }, []);
-
-  const cancelBottomIntent = useCallback(() => {
-    bottomIntentUntilRef.current = 0;
-    bottomIntentCanceledRef.current = true;
-  }, []);
-
-  const hasBottomIntent = useCallback(() => {
-    return !bottomIntentCanceledRef.current && Date.now() < bottomIntentUntilRef.current;
-  }, []);
-
-  // When the scroll container shrinks (e.g., the "refresh for new
-  // version" banner appears at the top of the page after mount),
-  // Virtuoso doesn't auto-snap to the new bottom on its own —
-  // the user ends up parked above the live tail by the banner's
-  // height. ResizeObserver on the Virtuoso scroller fires on every
-  // container resize; if we were at the bottom before the resize,
-  // we re-scroll to the last item.
-  useEffect(() => {
-    const handle = virtuosoRef.current;
-    if (!handle) return;
-    // Deep-link mounts land the user mid-list at an explicit anchor.
-    // Skip the RO + multi-pass snap entirely: those exist to keep a
-    // live-tail viewer pinned to the bottom when content/container
-    // resizes, and on a deep-link mount they actively fight the
-    // anchor scroll. (atBottomRef defaults to true; on mount the RO
-    // sees content grow from row measurements, atBottomRef hasn't
-    // been corrected yet by atBottomStateChange, so reSnap fires and
-    // yanks the user to LAST — exactly the regression where "the
-    // page doesn't scroll to the message".)
-    if (anchorMsgId) return;
-    if (typeof ResizeObserver === 'undefined') return;
-    const scroller = document.querySelector<HTMLElement>('[data-virtuoso-scroller]');
-    if (!scroller) return;
-    startBottomIntent();
-    let lastClientHeight = scroller.clientHeight;
-    let lastScrollHeight = scroller.scrollHeight;
-    const shouldStickToBottom = () => atBottomRef.current || hasBottomIntent();
-    const reSnap = () => {
-      if (!shouldStickToBottom()) return;
-      virtuosoRef.current?.scrollToIndex({ index: 'LAST', align: 'end' });
-    };
-    const ro = new ResizeObserver(() => {
-      const ch = scroller.clientHeight;
-      const sh = scroller.scrollHeight;
-      const containerShrank = ch < lastClientHeight;
-      // Content grew AFTER Virtuoso's initial scroll-to-end means
-      // an existing item resized post-mount — usually a late-
-      // loading avatar / image / unfurl card adding a few pixels.
-      // Cached-content channels don't see this because everything's
-      // measured by first paint; fresh-fetched channels do, and
-      // were ending up 4-5px short of the actual bottom.
-      const contentGrew = sh > lastScrollHeight + 0.5;
-      lastClientHeight = ch;
-      lastScrollHeight = sh;
-      if (containerShrank || contentGrew) reSnap();
-    });
-    ro.observe(scroller);
-    // Inner content size changes (item resize from late image
-    // decode, attachment hydration, etc.) don't bubble through the
-    // scroller's own ResizeObserver entry, so observe the inner
-    // measurement node too. Virtuoso renders it as a direct child
-    // of the scroller with `[data-viewport-type]`.
-    const inner = scroller.querySelector<HTMLElement>('[data-viewport-type]');
-    if (inner) ro.observe(inner);
-
-    if (renderRows.length === 0) return () => ro.disconnect();
-    // Live-tail post-mount snap: catches measurements that resize
-    // the scroller between initial paint and the RO attaching,
-    // which the RO would otherwise miss.
-    const lastIdx = renderRows.length - 1;
-    const cancelSnap = multiPassScroll(
-      () => {
-        if (shouldStickToBottom()) {
-          virtuosoRef.current?.scrollToIndex({ index: lastIdx, align: 'end' });
-        }
-      },
-      [100, 350, 800, 1400],
-    );
-    scroller.addEventListener('wheel', cancelBottomIntent, { passive: true });
-    scroller.addEventListener('touchstart', cancelBottomIntent, { passive: true });
-    scroller.addEventListener('pointerdown', cancelBottomIntent, { passive: true });
-    scroller.addEventListener('keydown', cancelBottomIntent);
-    return () => {
-      ro.disconnect();
-      cancelSnap();
-      scroller.removeEventListener('wheel', cancelBottomIntent);
-      scroller.removeEventListener('touchstart', cancelBottomIntent);
-      scroller.removeEventListener('pointerdown', cancelBottomIntent);
-      scroller.removeEventListener('keydown', cancelBottomIntent);
-    };
-    // Mount-only: anchorMsgId and renderRows.length are captured
-    // for the initial-snap chase; the wrapper keys this mount on
-    // channel/anchor changes so a fresh mount runs with new values.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   // Force-scroll-to-bottom when the bottom message becomes the
   // current user's own send. `followOutput="auto"` only sticks when
@@ -294,30 +170,26 @@ function VirtuosoMessageList({
   // of the loaded slice is NOT the live tail — we'd be yanking the
   // user away from their anchored position to a half-loaded "fake"
   // bottom.
-  const lastOwnBottomRef = useRef<string | undefined>(undefined);
+  const lastBottomMessageIdRef = useRef<string | undefined>(undefined);
   useEffect(() => {
     if (anchorMsgId) return;
     if (renderRows.length === 0) {
-      lastOwnBottomRef.current = undefined;
+      lastBottomMessageIdRef.current = undefined;
       return;
     }
     const last = renderRows[renderRows.length - 1];
     if (last.kind !== 'message') return;
     const bottomId = last.message.id;
-    if (lastOwnBottomRef.current === bottomId) return;
-    lastOwnBottomRef.current = bottomId;
+    const previousBottomId = lastBottomMessageIdRef.current;
+    lastBottomMessageIdRef.current = bottomId;
+    if (!previousBottomId || previousBottomId === bottomId) return;
     if (last.message.authorID !== currentUserId) return;
     if (last.message.parentMessageID) return;
-    startBottomIntent();
-    return multiPassScroll(
-      () => {
-        if (hasBottomIntent()) {
-          virtuosoRef.current?.scrollToIndex({ index: 'LAST', align: 'end' });
-        }
-      },
-      [100, 350, 800, 1400],
-    );
-  }, [anchorMsgId, renderRows, currentUserId, startBottomIntent, hasBottomIntent]);
+    const scrollFrame = requestAnimationFrame(() => {
+      virtuosoRef.current?.scrollToIndex({ index: 'LAST', align: 'end' });
+    });
+    return () => cancelAnimationFrame(scrollFrame);
+  }, [anchorMsgId, renderRows, currentUserId]);
 
   if (renderRows.length === 0) {
     // Empty state: render the intro (channels show "This is the
@@ -384,6 +256,9 @@ function VirtuosoMessageList({
       // of the chat area with a tall empty gap below it — exactly
       // what the user reported.
       alignToBottom={true}
+      computeItemKey={(_index, row) => row.key}
+      defaultItemHeight={DEFAULT_MESSAGE_ROW_HEIGHT}
+      increaseViewportBy={{ top: MESSAGE_LIST_OVERSCAN_PX, bottom: MESSAGE_LIST_OVERSCAN_PX }}
       // Auto-follow only when the loaded slice IS the live tail. When
       // hasPreviousPage is true (deep-link mid-history with newer
       // pages still unfetched), disable follow: each forward-pagination
@@ -395,9 +270,6 @@ function VirtuosoMessageList({
       // 'auto' still snaps for incoming WS messages when the user is
       // at the bottom — the canonical chat behaviour.
       followOutput={hasPreviousPage ? false : 'auto'}
-      atBottomStateChange={(atBottom) => {
-        atBottomRef.current = atBottom;
-      }}
       startReached={() => {
         if (!readyForFetchRef.current) return;
         if (hasNextPage && !isFetchingNextPage) fetchNextPage();

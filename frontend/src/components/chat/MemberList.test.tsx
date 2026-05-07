@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { BrowserRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemberList } from './MemberList';
@@ -29,6 +29,12 @@ function renderWithProviders(ui: React.ReactElement) {
       <BrowserRouter>{ui}</BrowserRouter>
     </QueryClientProvider>,
   );
+}
+
+function touchSwipe(element: Element, fromX: number, toX: number, y = 160) {
+  fireEvent.touchStart(element, { touches: [{ clientX: fromX, clientY: y }] });
+  fireEvent.touchMove(element, { touches: [{ clientX: toX, clientY: y + 8 }] });
+  fireEvent.touchEnd(element, { changedTouches: [{ clientX: toX, clientY: y + 8 }] });
 }
 
 describe('MemberList', () => {
@@ -69,6 +75,26 @@ describe('MemberList', () => {
     renderWithProviders(<MemberList members={members} />);
 
     expect(screen.getByText('2 members')).toBeInTheDocument();
+  });
+
+  it('does not close on a mobile right-to-left swipe', () => {
+    const onClose = vi.fn();
+    renderWithProviders(<MemberList members={[makeMember()]} onClose={onClose} />);
+
+    const panel = screen.getByTestId('member-list-scroll-area').parentElement!;
+    touchSwipe(panel, 240, 120);
+
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('closes on a mobile left-to-right swipe', () => {
+    const onClose = vi.fn();
+    renderWithProviders(<MemberList members={[makeMember()]} onClose={onClose} />);
+
+    const panel = screen.getByTestId('member-list-scroll-area').parentElement!;
+    touchSwipe(panel, 120, 240);
+
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 
   it('shows singular "member" for count of 1', () => {

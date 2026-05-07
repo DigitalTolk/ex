@@ -319,10 +319,22 @@ describe('UserStatusDialog', () => {
     const onOpenChange = vi.fn();
 
     render(<UserStatusDialog open onOpenChange={onOpenChange} />);
+    expect(screen.getAllByRole('button', { name: /Cancel/i })).toHaveLength(1);
     await userEvent.click(screen.getByRole('button', { name: /Cancel/i }));
 
-    expect(onOpenChange).toHaveBeenCalledWith(false);
+    expect(onOpenChange).toHaveBeenCalledWith(false, expect.anything());
     expect(apiFetchMock).not.toHaveBeenCalled();
+  });
+
+  it('keeps the preview slot reserved when selecting predefined status', async () => {
+    render(<UserStatusDialog open onOpenChange={vi.fn()} />);
+
+    const slot = screen.getByTestId('status-preview-slot');
+    expect(slot).toHaveClass('min-h-10');
+
+    await userEvent.selectOptions(screen.getByLabelText(/Predefined status/i), 'Out for Lunch');
+    expect(screen.getByText('Preview')).toBeInTheDocument();
+    expect(slot).toHaveClass('min-h-10');
   });
 
   it('does not update auth when no token is available', async () => {
