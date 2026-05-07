@@ -84,6 +84,23 @@ describe('WysiwygEditor', () => {
     await waitFor(() => expect(ref.current!.getMarkdown()).toContain('\n'));
   });
 
+  it('Enter keeps Lexical list behavior when submit-on-enter is disabled', async () => {
+    const onSubmit = vi.fn();
+    const ref = createRef<WysiwygEditorHandle>();
+    renderEditor({ ref, onSubmit, initialBody: '- item', submitOnEnter: false });
+    await waitFor(() => expect(ref.current).not.toBeNull());
+    act(() => {
+      ref.current!.focusEnd();
+    });
+
+    fireEvent.keyDown(getEditor(), { key: 'Enter' });
+
+    expect(onSubmit).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(ref.current!.getMarkdown()).toMatch(/^- item\n- ?$/);
+    });
+  });
+
   it('Cmd+ArrowLeft moves before regular text so the next typed key inserts at the start', async () => {
     const ref = createRef<WysiwygEditorHandle>();
     renderEditor({ ref, initialBody: 'hello' });

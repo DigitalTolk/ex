@@ -18,6 +18,22 @@ interface Props {
   onCancel?: () => void;
 }
 
+function selectionIsInsideStructuredBlock() {
+  const selection = $getSelection();
+  if (!$isRangeSelection(selection)) return false;
+  const anchorNode = selection.anchor.getNode();
+  for (
+    let node: ReturnType<typeof anchorNode.getParent> | typeof anchorNode | null = anchorNode;
+    node;
+    node = node?.getParent() ?? null
+  ) {
+    if ($isListItemNode(node) || $isQuoteNode(node) || $isCodeNode(node)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 // Bare Enter at top-level (paragraph) submits the message; inside a
 // list item / blockquote / code block we let Lexical's defaults run so
 // the user gets a new list item / quote line / code line. Escape is
@@ -33,6 +49,7 @@ export function SubmitOnEnterPlugin({ onSubmit, onCancel }: Props) {
         const selection = $getSelection();
         if (!onSubmit) {
           if (!$isRangeSelection(selection)) return false;
+          if (selectionIsInsideStructuredBlock()) return false;
           event.preventDefault();
           selection.insertLineBreak();
           return true;
@@ -41,18 +58,7 @@ export function SubmitOnEnterPlugin({ onSubmit, onCancel }: Props) {
         // and submit. Only suppress when the caret is demonstrably
         // inside a list item / blockquote / code block, where Lexical's
         // default new-line behaviour is what the user wants.
-        if ($isRangeSelection(selection)) {
-          const anchorNode = selection.anchor.getNode();
-          for (
-            let node: ReturnType<typeof anchorNode.getParent> | typeof anchorNode | null = anchorNode;
-            node;
-            node = node?.getParent() ?? null
-          ) {
-            if ($isListItemNode(node) || $isQuoteNode(node) || $isCodeNode(node)) {
-              return false;
-            }
-          }
-        }
+        if (selectionIsInsideStructuredBlock()) return false;
         event.preventDefault();
         editor.getEditorState().read(() => {
           onSubmit($exportMarkdown());

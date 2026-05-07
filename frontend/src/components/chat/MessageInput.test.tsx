@@ -162,6 +162,31 @@ describe('MessageInput', () => {
     setMobileMatch(false);
   });
 
+  it('shows edit formatting controls immediately on mobile before focus', async () => {
+    setMobileMatch(true);
+    render(
+      <MessageInput
+        onSend={vi.fn()}
+        onCancel={vi.fn()}
+        initialBody="Edited text"
+        submitLabel="Save"
+      />,
+    );
+
+    const editor = await screen.findByLabelText('Message input');
+    expect(document.activeElement).not.toBe(editor);
+    const toolbar = screen.getByRole('toolbar', { name: 'Formatting' });
+    expect(toolbar).toBeInTheDocument();
+    expect(screen.getByLabelText('Bold (Ctrl+B)')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Code (Ctrl+E)')).not.toBeInTheDocument();
+    expect(toolbar).toContainElement(screen.getByLabelText('Cancel'));
+    const save = screen.getByLabelText('Save');
+    expect(toolbar).toContainElement(save);
+    expect(save).toHaveClass('h-7', 'w-7', 'max-md:h-9', 'max-md:w-9');
+    expect(save).toHaveTextContent('');
+    setMobileMatch(false);
+  });
+
   it('does not refocus the composer after saving an edit', async () => {
     const user = userEvent.setup();
     const onSend = vi.fn();

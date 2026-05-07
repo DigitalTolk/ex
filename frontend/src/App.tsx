@@ -23,7 +23,6 @@ import DraftsPage from '@/pages/DraftsPage';
 import SearchResultsPage from '@/pages/SearchResultsPage';
 import { NotFoundPage } from '@/pages/NotFoundPage';
 import { GENERAL_CHANNEL_SLUG } from '@/lib/roles';
-import { Sidebar } from '@/components/layout/Sidebar';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import type { ReactNode } from 'react';
 
@@ -57,11 +56,7 @@ function ProtectedRoute({ children }: { children: ReactNode }) {
 function ChatHomeRoute() {
   const isMobile = useIsMobile();
   if (!isMobile) return <Navigate to={`/channel/${GENERAL_CHANNEL_SLUG}`} replace />;
-  return (
-    <div className="flex min-h-0 w-full flex-1 bg-[#1a1d21] text-zinc-100" data-testid="mobile-channel-home">
-      <Sidebar onClose={() => undefined} />
-    </div>
-  );
+  return <div className="hidden" data-testid="mobile-channel-home" aria-hidden="true" />;
 }
 
 function AppRoutes() {
@@ -113,7 +108,7 @@ export default function App() {
                       {/* h-dvh + flex-col viewport constraint so the
                           UpdateBanner sits as a normal block above the
                           app and never has to overlay scrolling content. */}
-                      <div className="flex h-dvh flex-col bg-[#1a1d21]">
+                      <div className="flex h-dvh flex-col bg-[#1a1d21] pt-[env(safe-area-inset-top)]">
                         <div className="shrink-0 bg-[#1a1d21]">
                           <UpdateBanner />
                           <NotificationPermissionBanner />
