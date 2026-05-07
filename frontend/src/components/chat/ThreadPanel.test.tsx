@@ -87,6 +87,11 @@ function touchSwipe(element: Element, fromX: number, toX: number, y = 160) {
   fireEvent.touchEnd(element, { changedTouches: [{ clientX: toX, clientY: y + 8 }] });
 }
 
+function touchDrag(element: Element, fromX: number, toX: number, y = 160) {
+  fireEvent.touchStart(element, { touches: [{ clientX: fromX, clientY: y }] });
+  fireEvent.touchMove(element, { touches: [{ clientX: toX, clientY: y + 8 }] });
+}
+
 // Bridge a TypingContext recorder out of the React tree so a test can
 // fire a `typing` WebSocket event from the outside.
 const typingRecorderRef: { current: ReturnType<typeof useTyping>['recordTyping'] | null } = {
@@ -190,6 +195,7 @@ describe('ThreadPanel', () => {
     );
 
     const panel = screen.getByLabelText('Thread');
+    expect(panel).toHaveClass('mobile-right-sidebar-enter');
     touchSwipe(panel, 240, 120);
 
     expect(onClose).not.toHaveBeenCalled();
@@ -209,9 +215,36 @@ describe('ThreadPanel', () => {
     );
 
     const panel = screen.getByLabelText('Thread');
+    vi.useFakeTimers();
     touchSwipe(panel, 120, 240);
 
+    expect(panel).toHaveAttribute('data-swipe-dismissing', 'true');
+    expect(panel).toHaveClass('max-md:translate-x-full');
+    expect(onClose).not.toHaveBeenCalled();
+    act(() => vi.advanceTimersByTime(180));
     expect(onClose).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
+  });
+
+  it('tracks the finger while the mobile thread panel is being pulled closed', () => {
+    mockApiFetch.mockResolvedValueOnce([]);
+    const onClose = vi.fn();
+    renderWithProviders(
+      <ThreadPanel
+        channelId="ch-1"
+        threadRootID="m-1"
+        onClose={onClose}
+        userMap={userMap}
+        currentUserId="u-1"
+      />,
+    );
+
+    const panel = screen.getByLabelText('Thread');
+    touchDrag(panel, 120, 190);
+
+    expect(panel).toHaveStyle({ transform: 'translateX(70px)', transition: 'none' });
+    expect(panel).toHaveAttribute('data-swipe-dismissing', 'false');
+    expect(onClose).not.toHaveBeenCalled();
   });
 
   it('shows Follow when the thread is not in /threads and calls the follow endpoint', async () => {

@@ -35,4 +35,43 @@ describe('useMobileSwipe', () => {
 
     expect(onSwipe).not.toHaveBeenCalled();
   });
+
+  it('ignores vertical drift for left swipes', () => {
+    const onSwipe = vi.fn();
+    renderHook(() => useMobileSwipe('left', onSwipe));
+
+    swipeConfig().onSwipedLeft({ absY: 80 });
+
+    expect(onSwipe).not.toHaveBeenCalled();
+  });
+
+  it('fires for a valid right swipe only when configured for right', () => {
+    const onSwipe = vi.fn();
+    renderHook(() => useMobileSwipe('right', onSwipe));
+
+    swipeConfig().onSwipedLeft({ absY: 4 });
+    expect(onSwipe).not.toHaveBeenCalled();
+
+    swipeConfig().onSwipedRight({ absY: 4 });
+    expect(onSwipe).toHaveBeenCalledTimes(1);
+  });
+
+  it('fires for a vertical down swipe', () => {
+    const onSwipe = vi.fn();
+    renderHook(() => useMobileSwipe('down', onSwipe));
+
+    swipeConfig().onSwipedDown({ absX: 8, absY: 90 });
+
+    expect(onSwipe).toHaveBeenCalledTimes(1);
+  });
+
+  it('ignores short or horizontal-heavy down swipes', () => {
+    const onSwipe = vi.fn();
+    renderHook(() => useMobileSwipe('down', onSwipe));
+
+    swipeConfig().onSwipedDown({ absX: 8, absY: 40 });
+    swipeConfig().onSwipedDown({ absX: 80, absY: 90 });
+
+    expect(onSwipe).not.toHaveBeenCalled();
+  });
 });

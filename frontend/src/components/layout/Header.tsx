@@ -92,6 +92,15 @@ export function Header({
     setMobileChannelMenuOpen(false);
   }
 
+  function saveDescription() {
+    onDescriptionSave?.(descDraft);
+    setIsEditingDesc(false);
+  }
+
+  function cancelDescriptionEdit() {
+    setIsEditingDesc(false);
+  }
+
   function toggleMute() {
     onToggleMute?.();
     setMobileChannelMenuOpen(false);
@@ -220,14 +229,14 @@ export function Header({
         )}
       </div>
 
-      {channel && (
+      {channel && !isMobile && (
         isEditingDesc ? (
           <input
             className="hidden text-sm border-b border-input bg-transparent outline-none sm:inline"
             value={descDraft}
             onChange={e => setDescDraft(e.target.value)}
-            onBlur={() => { onDescriptionSave?.(descDraft); setIsEditingDesc(false); }}
-            onKeyDown={e => { if (e.key === 'Enter') { onDescriptionSave?.(descDraft); setIsEditingDesc(false); } if (e.key === 'Escape') setIsEditingDesc(false); }}
+            onBlur={saveDescription}
+            onKeyDown={e => { if (e.key === 'Enter') saveDescription(); if (e.key === 'Escape') cancelDescriptionEdit(); }}
             placeholder="Add a description..."
             autoFocus
           />
@@ -246,6 +255,37 @@ export function Header({
             </span>
           )
         ) : null
+      )}
+
+      {channel && isMobile && (
+        <Dialog open={isEditingDesc} onOpenChange={(open) => { if (!open) cancelDescriptionEdit(); }}>
+          <DialogContent className="max-w-none" data-testid="mobile-description-editor">
+            <DialogHeader>
+              <DialogTitle>Edit channel description</DialogTitle>
+            </DialogHeader>
+            <div className="flex min-h-0 flex-1 flex-col gap-3">
+              <label className="text-sm font-medium" htmlFor="mobile-channel-description">
+                Description
+              </label>
+              <textarea
+                id="mobile-channel-description"
+                className="min-h-40 w-full resize-none rounded-md border border-input bg-background px-3 py-3 text-base outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+                value={descDraft}
+                onChange={(e) => setDescDraft(e.target.value)}
+                placeholder="Add a description..."
+                autoFocus
+              />
+            </div>
+            <div className="mt-auto flex gap-2">
+              <Button type="button" variant="ghost" className="flex-1" onClick={cancelDescriptionEdit}>
+                Cancel
+              </Button>
+              <Button type="button" className="flex-1" onClick={saveDescription}>
+                Save
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
       )}
 
       <div className="ml-auto flex items-center gap-2">

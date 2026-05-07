@@ -58,13 +58,14 @@ function optimisticSidebarAttr(body: Record<string, unknown>): Partial<SidebarAt
 }
 
 // useCategories returns the user's sidebar categories.
-export function useCategories() {
+export function useCategories(options?: { enabled?: boolean }) {
   return useQuery<SidebarCategory[]>({
     queryKey: queryKeys.sidebarCategories(),
     queryFn: async () => {
       const res = await apiFetch<SidebarCategory[]>('/api/v1/sidebar/categories');
       return Array.isArray(res) ? res : [];
     },
+    enabled: options?.enabled ?? true,
     staleTime: 30_000,
   });
 }

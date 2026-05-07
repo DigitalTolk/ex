@@ -1,5 +1,5 @@
-import { describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
+import { render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import ChatPage from './ChatPage';
@@ -62,12 +62,39 @@ vi.mock('@/context/AuthContext', () => ({
 }));
 
 const mockUseWebSocket = vi.fn();
+const originalFetch = globalThis.fetch;
+const originalMatchMedia = window.matchMedia;
 
 vi.mock('@/hooks/useWebSocket', () => ({
   useWebSocket: (opts: unknown) => {
     mockUseWebSocket(opts);
   },
 }));
+
+function setMobileViewport(matches: boolean) {
+  Object.defineProperty(window, 'matchMedia', {
+    configurable: true,
+    writable: true,
+    value: vi.fn().mockImplementation((query: string) => ({
+      matches,
+      media: query,
+      onchange: null,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    })),
+  });
+}
+
+function responseJSON(data: unknown): Response {
+  return {
+    ok: true,
+    status: 200,
+    json: () => Promise.resolve(data),
+  } as Response;
+}
 
 function renderChatPage() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -82,9 +109,96 @@ function renderChatPage() {
 }
 
 describe('ChatPage', () => {
+  beforeEach(() => {
+    mockUseWebSocket.mockClear();
+    mockMarkChannelUnread.mockClear();
+    mockMarkConversationUnread.mockClear();
+    mockUnhideConversation.mockClear();
+    setMobileViewport(false);
+    globalThis.fetch = vi.fn().mockResolvedValue(responseJSON([]));
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      writable: true,
+      value: originalMatchMedia,
+    });
+  });
+
   it('renders AppLayout', () => {
     renderChatPage();
     expect(screen.getByTestId('app-layout')).toBeInTheDocument();
+  });
+
+  it('does not gate desktop rendering on sidebar query data', () => {
+    setMobileViewport(false);
+
+    renderChatPage();
+
+    expect(screen.getByTestId('app-layout')).toBeInTheDocument();
+    expect(screen.queryByTestId('mobile-chat-loading')).not.toBeInTheDocument();
+  });
+
+  it('keeps the mobile loading page while initial chat shell data is still pending', () => {
+    setMobileViewport(true);
+    globalThis.fetch = vi.fn(() => new Promise<Response>(() => undefined));
+
+    renderChatPage();
+
+    expect(screen.getByTestId('mobile-chat-loading')).toBeInTheDocument();
+    expect(screen.queryByTestId('app-layout')).not.toBeInTheDocument();
+  });
+
+  it('renders the mobile chat shell after initial sidebar data has loaded', async () => {
+    setMobileViewport(true);
+    globalThis.fetch = vi.fn((input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path === '/api/v1/user-state') {
+        return Promise.resolve(responseJSON({
+          channelNotifications: [],
+          threadNotifications: [],
+          threadSeen: {},
+          hiddenConversations: [],
+        }));
+      }
+      return Promise.resolve(responseJSON([]));
+    });
+
+    renderChatPage();
+
+    expect(screen.getByTestId('mobile-chat-loading')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId('app-layout')).toBeInTheDocument());
+    expect(screen.queryByTestId('mobile-chat-loading')).not.toBeInTheDocument();
+  });
+
+  it('does not keep mobile users stuck on the loading page when a startup query fails', async () => {
+    setMobileViewport(true);
+    globalThis.fetch = vi.fn((input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path === '/api/v1/conversations') {
+        return Promise.resolve({
+          ok: false,
+          status: 500,
+          statusText: 'Server error',
+          text: () => Promise.resolve('Server error'),
+        } as Response);
+      }
+      if (path === '/api/v1/user-state') {
+        return Promise.resolve(responseJSON({
+          channelNotifications: [],
+          threadNotifications: [],
+          threadSeen: {},
+          hiddenConversations: [],
+        }));
+      }
+      return Promise.resolve(responseJSON([]));
+    });
+
+    renderChatPage();
+
+    await waitFor(() => expect(screen.getByTestId('app-layout')).toBeInTheDocument());
   });
 
   it('sets up WebSocket with enabled flag when user exists', () => {

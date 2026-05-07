@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { BrowserRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemberList } from './MemberList';
@@ -35,6 +35,11 @@ function touchSwipe(element: Element, fromX: number, toX: number, y = 160) {
   fireEvent.touchStart(element, { touches: [{ clientX: fromX, clientY: y }] });
   fireEvent.touchMove(element, { touches: [{ clientX: toX, clientY: y + 8 }] });
   fireEvent.touchEnd(element, { changedTouches: [{ clientX: toX, clientY: y + 8 }] });
+}
+
+function touchDrag(element: Element, fromX: number, toX: number, y = 160) {
+  fireEvent.touchStart(element, { touches: [{ clientX: fromX, clientY: y }] });
+  fireEvent.touchMove(element, { touches: [{ clientX: toX, clientY: y + 8 }] });
 }
 
 describe('MemberList', () => {
@@ -82,19 +87,38 @@ describe('MemberList', () => {
     renderWithProviders(<MemberList members={[makeMember()]} onClose={onClose} />);
 
     const panel = screen.getByTestId('member-list-scroll-area').parentElement!;
+    expect(panel).toHaveClass('mobile-right-sidebar-enter');
     touchSwipe(panel, 240, 120);
 
     expect(onClose).not.toHaveBeenCalled();
   });
 
   it('closes on a mobile left-to-right swipe', () => {
+    vi.useFakeTimers();
     const onClose = vi.fn();
     renderWithProviders(<MemberList members={[makeMember()]} onClose={onClose} />);
 
     const panel = screen.getByTestId('member-list-scroll-area').parentElement!;
     touchSwipe(panel, 120, 240);
 
+    expect(panel).toHaveAttribute('data-swipe-dismissing', 'true');
+    expect(panel).toHaveClass('max-md:translate-x-full');
+    expect(onClose).not.toHaveBeenCalled();
+    act(() => vi.advanceTimersByTime(180));
     expect(onClose).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
+  });
+
+  it('tracks the finger while the mobile member list is being pulled closed', () => {
+    const onClose = vi.fn();
+    renderWithProviders(<MemberList members={[makeMember()]} onClose={onClose} />);
+
+    const panel = screen.getByTestId('member-list-scroll-area').parentElement!;
+    touchDrag(panel, 120, 190);
+
+    expect(panel).toHaveStyle({ transform: 'translateX(70px)', transition: 'none' });
+    expect(panel).toHaveAttribute('data-swipe-dismissing', 'false');
+    expect(onClose).not.toHaveBeenCalled();
   });
 
   it('shows singular "member" for count of 1', () => {

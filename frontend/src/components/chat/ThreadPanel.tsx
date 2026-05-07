@@ -6,9 +6,9 @@ import { ThreadTypingIndicator } from './TypingIndicator';
 import { Button } from '@/components/ui/button';
 import { Bell, BellOff, X } from 'lucide-react';
 import { useAtBottomRef } from '@/hooks/useAtBottomRef';
+import { useAnimatedSwipeDismiss } from '@/hooks/useAnimatedSwipeDismiss';
 import { useAttachmentsBatch } from '@/hooks/useAttachments';
 import { useIsMobile } from '@/hooks/useIsMobile';
-import { useMobileSwipe } from '@/hooks/useMobileSwipe';
 import { useEditMessage, useSendMessage, type SendMessageInput } from '@/hooks/useMessages';
 import { useFollowThread, useThreadMessages, useUnfollowThread, useUserThreads } from '@/hooks/useThreads';
 import { useUsersBatch } from '@/hooks/useUsersBatch';
@@ -56,7 +56,7 @@ export function ThreadPanel({
   anchorRevision,
 }: ThreadPanelProps) {
   const { data, isLoading } = useThreadMessages({ channelId, conversationId, threadRootID });
-  const closeSwipe = useMobileSwipe('right', onClose);
+  const { dismissing, dragStyle, swipeHandlers } = useAnimatedSwipeDismiss('right', onClose);
   const isMobile = useIsMobile();
   const [editingMessage, setEditingMessage] = useState<Message | null>(null);
   const activeEditingMessage = isMobile ? editingMessage : null;
@@ -391,10 +391,12 @@ export function ThreadPanel({
 
   return (
     <aside
-      className="flex w-[28rem] flex-col border-l bg-background max-md:fixed max-md:inset-x-0 max-md:bottom-0 max-md:top-[calc(2.75rem+env(safe-area-inset-top))] max-md:z-40 max-md:w-auto max-md:touch-pan-y max-md:animate-in max-md:slide-in-from-right-4"
+      className={`mobile-right-sidebar-enter flex w-[28rem] flex-col border-l bg-background max-md:fixed max-md:inset-x-0 max-md:bottom-0 max-md:top-[calc(2.75rem+env(safe-area-inset-top))] max-md:z-40 max-md:w-auto max-md:touch-pan-y max-md:transform-gpu max-md:transition-transform max-md:duration-200 max-md:ease-out ${dismissing ? 'max-md:translate-x-full' : ''}`}
       aria-label="Thread"
       data-mobile-right-sidebar="true"
-      {...closeSwipe}
+      data-swipe-dismissing={dismissing ? 'true' : 'false'}
+      style={dragStyle}
+      {...swipeHandlers}
     >
       <div className="flex items-center justify-between border-b px-4 py-3">
         <h2 className="text-sm font-semibold">Thread</h2>

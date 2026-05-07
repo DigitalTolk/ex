@@ -51,6 +51,7 @@ interface Props {
   editorClassName?: string;
   onFocusChange?: (focused: boolean) => void;
   onPasteFiles?: (files: File[]) => void;
+  submitOnEnter?: boolean;
   // ArrowUp on an empty editor — return true to claim the event.
   onArrowUpEmpty?: () => boolean;
 }
@@ -89,6 +90,7 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, Props>(function Wys
     editorClassName = '',
     onFocusChange,
     onPasteFiles,
+    submitOnEnter = true,
     onArrowUpEmpty,
   },
   ref,
@@ -162,7 +164,7 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, Props>(function Wys
         <CodeBlockExitPlugin />
         <LineBoundaryNavigationPlugin />
         <ClearSelectedContentPlugin />
-        <SubmitOnEnterPlugin onSubmit={onSubmit} onCancel={onCancel} />
+        <SubmitOnEnterPlugin onSubmit={submitOnEnter ? onSubmit : undefined} onCancel={onCancel} />
         <EditLastOnArrowUpPlugin onArrowUpEmpty={onArrowUpEmpty} />
         <PasteFilesPlugin onPasteFiles={onPasteFiles} />
         <PasteLinkPlugin />

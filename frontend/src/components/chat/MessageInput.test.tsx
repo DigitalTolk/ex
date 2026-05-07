@@ -96,7 +96,7 @@ describe('MessageInput', () => {
 
     const editor = await screen.findByLabelText('Message input');
     editor.focus();
-    await user.keyboard('{Enter}');
+    await user.click(screen.getByLabelText('Send message'));
 
     expect(onSend).toHaveBeenCalled();
     await waitFor(() => {
@@ -111,13 +111,33 @@ describe('MessageInput', () => {
     render(<MessageInput onSend={onSend} initialBody="Hello" />);
 
     const editor = await screen.findByLabelText('Message input');
-    editor.focus();
-    await user.keyboard('{Enter}');
-    await flushMicrotasks();
+    act(() => {
+      editor.focus();
+    });
+    await user.click(screen.getByLabelText('Send message'));
+    await act(async () => {
+      await flushMicrotasks();
+    });
 
     expect(onSend).toHaveBeenCalled();
     expect(document.activeElement).not.toBe(editor);
     expect(editor).toHaveClass('max-md:min-h-[1.5rem]', 'max-md:max-h-[1.5rem]');
+    setMobileMatch(false);
+  });
+
+  it('does not send on bare Enter on mobile', async () => {
+    const user = userEvent.setup();
+    const onSend = vi.fn();
+    setMobileMatch(true);
+    render(<MessageInput onSend={onSend} initialBody="Hello" />);
+
+    const editor = await screen.findByLabelText('Message input');
+    act(() => {
+      editor.focus();
+    });
+    await user.keyboard('{Enter}');
+
+    expect(onSend).not.toHaveBeenCalled();
     setMobileMatch(false);
   });
 
@@ -128,13 +148,42 @@ describe('MessageInput', () => {
     render(<MessageInput onSend={onSend} initialBody="Edited text" submitLabel="Save" />);
 
     const editor = await screen.findByLabelText('Message input');
-    editor.focus();
+    act(() => {
+      editor.focus();
+    });
     await user.click(screen.getByLabelText('Save'));
-    await flushMicrotasks();
+    await act(async () => {
+      await flushMicrotasks();
+    });
 
     expect(onSend).toHaveBeenCalledWith({ body: 'Edited text', attachmentIDs: [] });
     expect(document.activeElement).not.toBe(editor);
     expect(editor).toHaveClass('max-md:min-h-[1.5rem]', 'max-md:max-h-[1.5rem]');
+    setMobileMatch(false);
+  });
+
+  it('shows edit formatting controls immediately on mobile before focus', async () => {
+    setMobileMatch(true);
+    render(
+      <MessageInput
+        onSend={vi.fn()}
+        onCancel={vi.fn()}
+        initialBody="Edited text"
+        submitLabel="Save"
+      />,
+    );
+
+    const editor = await screen.findByLabelText('Message input');
+    expect(document.activeElement).not.toBe(editor);
+    const toolbar = screen.getByRole('toolbar', { name: 'Formatting' });
+    expect(toolbar).toBeInTheDocument();
+    expect(screen.getByLabelText('Bold (Ctrl+B)')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Code (Ctrl+E)')).not.toBeInTheDocument();
+    expect(toolbar).toContainElement(screen.getByLabelText('Cancel'));
+    const save = screen.getByLabelText('Save');
+    expect(toolbar).toContainElement(save);
+    expect(save).toHaveClass('h-7', 'w-7', 'max-md:h-9', 'max-md:w-9');
+    expect(save).toHaveTextContent('');
     setMobileMatch(false);
   });
 

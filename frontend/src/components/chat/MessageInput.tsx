@@ -13,6 +13,7 @@ import {
   Smile,
   ImagePlay,
   X,
+  Save,
 } from 'lucide-react';
 import { useEffect } from 'react';
 import { Button } from '@/components/ui/button';
@@ -143,12 +144,13 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
   const isMobile = useIsMobile();
   const giphyAPIKey = settings?.giphyAPIKey?.trim() ?? '';
   const giphyEnabled = (settings?.giphyEnabled ?? false) && giphyAPIKey !== '';
+  const isEditingMode = submitLabel !== undefined || onCancel !== undefined;
 
   const hasInitialDraftValue = initialBody !== '' || initialDrafts.length > 0;
   const suppressAutoFocus = isMobile && variant === 'composer';
   const compactMobileComposer =
     variant === 'composer' && !editorFocused && body.trim() === '' && drafts.length === 0;
-  const showToolbar = variant !== 'composer' || !isMobile || editorFocused || toolbarPickerOpen;
+  const showToolbar = variant !== 'composer' || !isMobile || editorFocused || toolbarPickerOpen || isEditingMode;
 
   useEffect(() => {
     latestDraftValueRef.current = { body, attachmentIDs: drafts.map((d) => d.id) };
@@ -568,7 +570,9 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
             <ToolbarBtn label="Bold (Ctrl+B)" active={active.has('bold')} onClick={() => editorRef.current?.applyMark('bold')}><Bold className="h-3.5 w-3.5" /></ToolbarBtn>
             <ToolbarBtn label="Italic (Ctrl+I)" active={active.has('italic')} onClick={() => editorRef.current?.applyMark('italic')}><Italic className="h-3.5 w-3.5" /></ToolbarBtn>
             <ToolbarBtn label="Strikethrough" active={active.has('strike')} onClick={() => editorRef.current?.applyMark('strike')}><Strikethrough className="h-3.5 w-3.5" /></ToolbarBtn>
-            <ToolbarBtn label="Code (Ctrl+E)" active={active.has('code')} onClick={() => editorRef.current?.applyMark('code')}><Code className="h-3.5 w-3.5" /></ToolbarBtn>
+            {!isEditingMode && (
+              <ToolbarBtn label="Code (Ctrl+E)" active={active.has('code')} onClick={() => editorRef.current?.applyMark('code')}><Code className="h-3.5 w-3.5" /></ToolbarBtn>
+            )}
             {!isMobile && (
               <>
                 <ToolbarBtn label="Quote" active={active.has('quote')} onClick={() => editorRef.current?.applyBlock('quote')}><Quote className="h-3.5 w-3.5" /></ToolbarBtn>
@@ -613,6 +617,31 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
               onChange={handleFileUpload}
               aria-label="File input"
             />
+            {isEditingMode && (
+              <>
+                <span className="mx-1 h-4 w-px bg-border" aria-hidden />
+                {onCancel && (
+                  <Button
+                    onClick={onCancel}
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7 rounded-md max-md:h-9 max-md:w-9"
+                    aria-label="Cancel"
+                  >
+                    <X className="h-4 w-4" />
+                  </Button>
+                )}
+                <Button
+                  onClick={handleSend}
+                  disabled={!canSend}
+                  size="icon"
+                  className="h-7 w-7 rounded-md max-md:h-9 max-md:w-9"
+                  aria-label={submitLabel ?? 'Send message'}
+                >
+                  <Save className="h-4 w-4" />
+                </Button>
+              </>
+            )}
           </div>
         )}
 
@@ -641,6 +670,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
             }}
             onSubmit={handleSend}
             onCancel={onCancel}
+            submitOnEnter={!isMobile}
             onPasteFiles={uploadFiles}
             onArrowUpEmpty={requestEditLast}
             placeholder={isUploading ? 'Uploading…' : placeholder}
@@ -653,28 +683,19 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
             }
             onFocusChange={isMobile && variant === 'composer' ? setEditorFocused : undefined}
           />
-          <div className="flex shrink-0 items-center gap-1">
-            {onCancel && (
+          {!isEditingMode && (
+            <div className="flex shrink-0 self-end items-center gap-1">
               <Button
-                onClick={onCancel}
-                variant="ghost"
+                onClick={handleSend}
+                disabled={!canSend}
                 size="icon"
-                className="h-9 w-9 rounded-md max-md:h-11 max-md:w-11"
-                aria-label="Cancel"
+                className="h-8 w-8 rounded-md max-md:h-11 max-md:w-11"
+                aria-label="Send message"
               >
-                <X className="h-4 w-4" />
+                <Send className="h-4 w-4" />
               </Button>
-            )}
-            <Button
-              onClick={handleSend}
-              disabled={!canSend}
-              size={submitLabel ? 'sm' : 'icon'}
-              className={submitLabel ? 'h-9 rounded-md px-3 max-md:h-11 max-md:px-4' : 'h-8 w-8 rounded-md max-md:h-11 max-md:w-11'}
-              aria-label={submitLabel ?? 'Send message'}
-            >
-              {submitLabel ? submitLabel : <Send className="h-4 w-4" />}
-            </Button>
-          </div>
+            </div>
+          )}
         </div>
       </div>
       <Dialog open={linkDialogOpen} onOpenChange={setLinkDialogOpen}>

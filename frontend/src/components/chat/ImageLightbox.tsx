@@ -46,18 +46,30 @@ export function ImageLightbox({
   const lightboxRef = useRef<HTMLDivElement>(null);
   const imageKey = current ? `${current.url}\u0000${safeIndex}` : '';
   const [zoomState, setZoomState] = useState({ key: '', value: 1 });
+  const [panState, setPanState] = useState({ key: '', x: 0, y: 0 });
+  const panGestureRef = useRef<{
+    pointerId: number;
+    startX: number;
+    startY: number;
+    originX: number;
+    originY: number;
+  } | null>(null);
   const zoom = zoomState.key === imageKey ? zoomState.value : 1;
+  const pan = panState.key === imageKey && zoom > 1 ? panState : { key: imageKey, x: 0, y: 0 };
   useTransientOverlayCleanup(open, { rootRef: lightboxRef, lockScroll: true });
 
   function setCurrentZoom(update: (value: number) => number) {
-    setZoomState((state) => ({
-      key: imageKey,
-      value: update(state.key === imageKey ? state.value : 1),
-    }));
+    const next = update(zoom);
+    setZoomState({ key: imageKey, value: next });
+    if (next <= 1) {
+      setPanState({ key: imageKey, x: 0, y: 0 });
+      panGestureRef.current = null;
+    }
   }
 
   const handleClose = useCallback(() => {
     setZoomState({ key: '', value: 1 });
+    setPanState({ key: '', x: 0, y: 0 });
     onClose();
   }, [onClose]);
 
@@ -106,11 +118,12 @@ export function ImageLightbox({
       aria-modal="true"
       aria-label={`Attachment preview: ${current.filename}`}
       data-testid="image-lightbox"
-      className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 p-6 max-md:px-3 max-md:pb-[calc(env(safe-area-inset-bottom)+0.75rem)] max-md:pt-[calc(env(safe-area-inset-top)+4.5rem)]"
+      className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 p-6 pt-[calc(2.75rem+1.5rem)] max-md:px-3 max-md:pb-[calc(env(safe-area-inset-bottom)+0.75rem)] max-md:pt-[calc(env(safe-area-inset-top)+4.5rem)]"
       onClick={handleClose}
     >
       <div
-        className="absolute inset-x-0 top-0 flex items-center gap-3 bg-gradient-to-b from-black/70 to-transparent px-4 pb-3 pt-[calc(env(safe-area-inset-top)+0.75rem)] text-white"
+        className="absolute inset-x-0 top-11 flex items-center gap-3 bg-gradient-to-b from-black/70 to-transparent px-4 pb-3 pt-3 text-white max-md:top-0 max-md:pt-[calc(env(safe-area-inset-top)+0.75rem)]"
+        data-testid="image-lightbox-toolbar"
         onClick={(e) => e.stopPropagation()}
       >
         <Avatar className="h-8 w-8 ring-2 ring-white/30">
@@ -219,15 +232,53 @@ export function ImageLightbox({
               return Math.min(4, Math.max(1, Math.round(next * 100) / 100));
             });
           }}
+          onPointerDown={(e) => {
+            if (zoom <= 1) return;
+            e.stopPropagation();
+            e.currentTarget.setPointerCapture?.(e.pointerId);
+            panGestureRef.current = {
+              pointerId: e.pointerId,
+              startX: e.clientX,
+              startY: e.clientY,
+              originX: pan.x,
+              originY: pan.y,
+            };
+          }}
+          onPointerMove={(e) => {
+            const gesture = panGestureRef.current;
+            if (!gesture || gesture.pointerId !== e.pointerId) return;
+            e.preventDefault();
+            e.stopPropagation();
+            setPanState({
+              key: imageKey,
+              x: gesture.originX + e.clientX - gesture.startX,
+              y: gesture.originY + e.clientY - gesture.startY,
+            });
+          }}
+          onPointerUp={(e) => {
+            if (panGestureRef.current?.pointerId === e.pointerId) {
+              e.stopPropagation();
+              panGestureRef.current = null;
+              e.currentTarget.releasePointerCapture?.(e.pointerId);
+            }
+          }}
+          onPointerCancel={(e) => {
+            if (panGestureRef.current?.pointerId === e.pointerId) {
+              panGestureRef.current = null;
+              e.currentTarget.releasePointerCapture?.(e.pointerId);
+            }
+          }}
         >
           <img
             src={current.url}
             alt={current.filename}
-            className="max-h-[88vh] max-w-[92vw] rounded-md object-contain shadow-2xl transition-transform max-md:max-h-[calc(100dvh-env(safe-area-inset-top)-env(safe-area-inset-bottom)-6rem)]"
-            style={{ transform: `scale(${zoom})` }}
+            className={`max-h-[88vh] max-w-[92vw] rounded-md object-contain shadow-2xl transition-transform max-md:max-h-[calc(100dvh-env(safe-area-inset-top)-env(safe-area-inset-bottom)-6rem)] ${zoom > 1 ? 'cursor-grab active:cursor-grabbing' : ''}`}
+            style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})` }}
             onDoubleClick={() => setCurrentZoom((value) => (value > 1 ? 1 : 2))}
             data-testid="image-lightbox-image"
             data-zoom={zoom}
+            data-pan-x={pan.x}
+            data-pan-y={pan.y}
           />
         </div>
       ) : (

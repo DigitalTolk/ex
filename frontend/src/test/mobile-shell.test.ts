@@ -10,11 +10,13 @@ function readProjectFile(path: string) {
 }
 
 describe('mobile shell invariants', () => {
-  it('does not add a second safe-area top inset above the authenticated shell', () => {
+  it('reserves top safe-area once at the viewport shell so banners are not clipped', () => {
     const app = readProjectFile('src/App.tsx');
+    const layout = readProjectFile('src/components/layout/AppLayout.tsx');
 
+    expect(app).toContain('className="flex h-dvh flex-col bg-[#1a1d21] pt-[env(safe-area-inset-top)]"');
     expect(app).toContain('className="shrink-0 bg-[#1a1d21]"');
-    expect(app).not.toContain('className="shrink-0 bg-[#1a1d21] pt-[env(safe-area-inset-top)]"');
+    expect(layout).not.toContain('pt-[env(safe-area-inset-top)]');
   });
 
   it('keeps mobile text inputs at 16px to avoid iOS focus zoom', () => {
