@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fireEvent, render as rtlRender, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render as rtlRender, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
@@ -231,9 +231,34 @@ describe('GiphyPicker', () => {
 
     await user.click(screen.getByText('open gif'));
     const dialog = await screen.findByRole('dialog');
+    vi.useFakeTimers();
     swipeDown(dialog);
 
+    expect(dialog).toHaveAttribute('data-swipe-dismissing', 'true');
+    expect(dialog).toHaveClass('translate-y-full');
+    act(() => vi.advanceTimersByTime(180));
     expect(screen.queryByLabelText('Search GIFs')).toBeNull();
+    vi.useRealTimers();
+  });
+
+  it('reopens the mobile sheet after it was dismissed by swiping down', async () => {
+    giphyFetchMocks.trending.mockResolvedValue(sampleResponse);
+    setMobileMatch(true);
+    const user = userEvent.setup();
+    renderPicker(vi.fn());
+    await user.click(screen.getByText('open gif'));
+
+    const dialog = await screen.findByRole('dialog');
+    vi.useFakeTimers();
+    swipeDown(dialog);
+    act(() => vi.advanceTimersByTime(180));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    vi.useRealTimers();
+
+    await user.click(screen.getByText('open gif'));
+    const reopened = await screen.findByRole('dialog');
+    expect(reopened).toHaveAttribute('data-swipe-dismissing', 'false');
+    expect(reopened).not.toHaveClass('translate-y-full');
   });
 
   it('blurs the search field before closing after GIF selection', async () => {

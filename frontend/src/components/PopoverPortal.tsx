@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { usePopoverPosition } from '@/hooks/usePopoverPosition';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { useTransientOverlayCleanup } from '@/hooks/useTransientOverlayCleanup';
-import { useMobileSwipe } from '@/hooks/useMobileSwipe';
+import { useAnimatedSwipeDismiss } from '@/hooks/useAnimatedSwipeDismiss';
 
 interface PopoverPortalProps {
   open: boolean;
@@ -47,7 +47,7 @@ export function PopoverPortal({
   const contentRef = useRef<HTMLDivElement>(null);
   const isMobile = useIsMobile();
   const renderSheet = mobileSheet && isMobile;
-  const { ref: swipeRef, ...swipeDown } = useMobileSwipe('down', () => {
+  const { dismissing, dragStyle, swipeHandlers: { ref: swipeRef, ...swipeDown } } = useAnimatedSwipeDismiss('down', () => {
     if (renderSheet) onDismiss?.();
   });
   const setContentRef = useCallback(
@@ -123,6 +123,7 @@ export function PopoverPortal({
               overflowY: 'auto',
               opacity: measured ? 1 : 0,
               pointerEvents: measured ? 'auto' : 'none',
+              ...dragStyle,
             }
           : {
               position: 'fixed',
@@ -135,7 +136,8 @@ export function PopoverPortal({
               opacity: measured ? 1 : 0,
               pointerEvents: measured ? 'auto' : 'none',
             }}
-        className={className}
+        className={`${className} ${renderSheet ? 'mobile-bottom-sheet-enter transform-gpu transition-transform duration-200 ease-out' : ''} ${renderSheet && dismissing ? 'translate-y-full' : ''}`}
+        data-swipe-dismissing={dismissing ? 'true' : 'false'}
         {...(renderSheet ? swipeDown : {})}
       >
         {children}

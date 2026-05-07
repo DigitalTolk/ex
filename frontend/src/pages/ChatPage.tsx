@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
 import { Outlet, useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { AppLayout } from '@/components/layout/AppLayout';
@@ -31,7 +31,48 @@ import {
   parseTyping,
 } from '@/lib/ws-schemas';
 import { apiFetch } from '@/lib/api';
-import { shouldRefetchDraftsForRemoteUpdate } from '@/hooks/useDrafts';
+import { shouldRefetchDraftsForRemoteUpdate, useDrafts } from '@/hooks/useDrafts';
+import { useUserChannels } from '@/hooks/useChannels';
+import { useUserConversations } from '@/hooks/useConversations';
+import { useCategories } from '@/hooks/useSidebar';
+import { useUserState } from '@/hooks/useUserState';
+import { useUserThreads } from '@/hooks/useThreads';
+import { useIsMobile } from '@/hooks/useIsMobile';
+
+function MobileChatLoadingPage() {
+  return (
+    <div
+      className="flex h-full min-h-0 flex-1 items-center justify-center bg-[#1a1d21]"
+      aria-label="Loading chat"
+      data-testid="mobile-chat-loading"
+    >
+      <img className="h-14 w-14" src="/logo.svg" alt="ex" />
+    </div>
+  );
+}
+
+function queryReady(query: { isSuccess: boolean; isError: boolean; isPlaceholderData?: boolean }): boolean {
+  return query.isError || (query.isSuccess && !query.isPlaceholderData);
+}
+
+function MobileChatReadyGate({ children }: { children: ReactNode }) {
+  const isMobile = useIsMobile();
+  const channels = useUserChannels({ enabled: isMobile });
+  const conversations = useUserConversations({ enabled: isMobile });
+  const categories = useCategories({ enabled: isMobile });
+  const drafts = useDrafts({ enabled: isMobile });
+  const userState = useUserState({ enabled: isMobile });
+  const threads = useUserThreads({ enabled: isMobile });
+
+  if (
+    isMobile &&
+    ![channels, conversations, categories, drafts, userState, threads].every(queryReady)
+  ) {
+    return <MobileChatLoadingPage />;
+  }
+
+  return <>{children}</>;
+}
 
 export default function ChatPage() {
   const {
@@ -294,8 +335,10 @@ export default function ChatPage() {
   });
 
   return (
-    <AppLayout>
-      <Outlet />
-    </AppLayout>
+    <MobileChatReadyGate>
+      <AppLayout>
+        <Outlet />
+      </AppLayout>
+    </MobileChatReadyGate>
   );
 }

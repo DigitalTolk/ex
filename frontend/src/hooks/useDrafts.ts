@@ -100,13 +100,14 @@ export function restoreDraftScopeForContent(scope: DraftScope, value: { body: st
   }
 }
 
-export function useDrafts() {
+export function useDrafts(options?: { enabled?: boolean }) {
   return useQuery({
     queryKey: queryKeys.drafts(),
     queryFn: async () => {
       const res = await apiFetch<MessageDraft[]>('/api/v1/drafts');
       return Array.isArray(res) ? res.filter((draft) => !isSuppressedSentDraft(draft)) : [];
     },
+    enabled: options?.enabled ?? true,
     staleTime: 15_000,
   });
 }

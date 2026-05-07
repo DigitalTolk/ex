@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { act, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { UserHoverCard } from '@/components/UserHoverCard';
@@ -65,6 +65,9 @@ describe('UserHoverCard — click-to-open + DM action', () => {
     apiFetchMock.mockReset();
     setMobileMatch(false);
   });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
 
   it('opens on click and queries the user record', async () => {
     apiFetchMock.mockResolvedValue({
@@ -109,11 +112,13 @@ describe('UserHoverCard — click-to-open + DM action', () => {
     fireEvent.click(screen.getByText('trigger'));
     const dialog = await screen.findByRole('tooltip');
 
+    vi.useFakeTimers();
     swipeDown(dialog);
 
-    await waitFor(() => {
-      expect(screen.queryByRole('button', { name: /Direct message/i })).toBeNull();
-    });
+    expect(dialog).toHaveAttribute('data-swipe-dismissing', 'true');
+    expect(dialog).toHaveClass('translate-y-full');
+    act(() => vi.advanceTimersByTime(180));
+    expect(screen.queryByRole('button', { name: /Direct message/i })).toBeNull();
   });
 
   it('hides the Direct message button when viewing your own card', async () => {

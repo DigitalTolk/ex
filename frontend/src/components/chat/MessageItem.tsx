@@ -32,7 +32,7 @@ import { extractURLs, formatLongDateTime } from '@/lib/format';
 import { CHANNEL_MENTION_RE_GLOBAL, USER_MENTION_RE_GLOBAL } from '@/lib/mention-syntax';
 import { registerEditMessageHandler } from '@/lib/window-events';
 import { useIsMobile } from '@/hooks/useIsMobile';
-import { useMobileSwipe } from '@/hooks/useMobileSwipe';
+import { useAnimatedSwipeDismiss } from '@/hooks/useAnimatedSwipeDismiss';
 import { useTransientOverlayCleanup } from '@/hooks/useTransientOverlayCleanup';
 import type { Message, UserStatus } from '@/types';
 
@@ -228,7 +228,11 @@ export function MessageItem({
     cancelLongPress();
     setMobileActionsOpen(false);
   }
-  const { ref: mobileActionsSwipeRef, ...mobileActionsSwipe } = useMobileSwipe('down', closeMobileActions);
+  const {
+    dismissing: swipeDismissing,
+    dragStyle: mobileActionsDragStyle,
+    swipeHandlers: { ref: mobileActionsSwipeRef, ...mobileActionsSwipe },
+  } = useAnimatedSwipeDismiss('down', closeMobileActions);
   const setMobileActionsNode = useCallback(
     (node: HTMLDivElement | null) => {
       mobileActionsSheetRef.current = node;
@@ -335,6 +339,9 @@ export function MessageItem({
   function startLongPress(e: React.PointerEvent<HTMLDivElement>) {
     if (e.pointerType === 'mouse' || isEditing || message.deleted || message.system) return;
     cancelLongPress();
+    const cancelPendingLongPress = () => cancelLongPress();
+    window.addEventListener('pointerup', cancelPendingLongPress, { once: true });
+    window.addEventListener('pointercancel', cancelPendingLongPress, { once: true });
     longPressTimerRef.current = window.setTimeout(() => {
       setMobileActionsOpen(true);
       notifyMessageHovered(message.id);
@@ -673,7 +680,7 @@ export function MessageItem({
       {!isEditing && !message.deleted && mobileActionsOpen && (
         <div
           ref={mobileActionsRef}
-          className="fixed inset-0 z-[70] select-none [-webkit-touch-callout:none] [-webkit-user-select:none] md:hidden"
+          className="fixed inset-0 z-[120] select-none [-webkit-touch-callout:none] [-webkit-user-select:none] md:hidden"
           role="presentation"
           onContextMenu={(event) => event.preventDefault()}
         >
@@ -687,8 +694,10 @@ export function MessageItem({
             role="dialog"
             aria-modal="true"
             aria-label="Message actions"
-            className="absolute inset-x-0 bottom-0 max-h-[calc(100dvh-env(safe-area-inset-top)-0.75rem)] overflow-y-auto rounded-t-xl border-x-0 border-b-0 border-t bg-popover p-3 pb-[calc(env(safe-area-inset-bottom)+0.75rem)] text-popover-foreground shadow-lg animate-in slide-in-from-bottom-4"
+            className={`mobile-bottom-sheet-enter absolute inset-x-0 bottom-0 max-h-[calc(100dvh-env(safe-area-inset-top)-0.75rem)] overflow-y-auto rounded-t-xl border-x-0 border-b-0 border-t bg-popover p-3 pb-[calc(env(safe-area-inset-bottom)+0.75rem)] text-popover-foreground shadow-lg transform-gpu transition-transform duration-200 ease-out ${swipeDismissing ? 'translate-y-full' : ''}`}
             data-testid="mobile-message-actions"
+            data-swipe-dismissing={swipeDismissing ? 'true' : 'false'}
+            style={mobileActionsDragStyle}
             ref={setMobileActionsNode}
             {...mobileActionsSwipe}
           >

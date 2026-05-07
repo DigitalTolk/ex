@@ -159,6 +159,7 @@ describe('MessageItem - mobile actions', () => {
     await openMobileActions();
 
     const sheet = screen.getByTestId('mobile-message-actions');
+    expect(sheet.parentElement).toHaveClass('z-[120]');
     expect(sheet).toHaveClass('bottom-0', 'max-h-[calc(100dvh-env(safe-area-inset-top)-0.75rem)]', 'overflow-y-auto');
     expect(sheet).toHaveClass('border-x-0', 'border-b-0');
   });
@@ -199,10 +200,37 @@ describe('MessageItem - mobile actions', () => {
 
   it('closes the mobile action sheet on swipe down', async () => {
     await openMobileActions();
+    vi.useFakeTimers();
+    const sheet = screen.getByTestId('mobile-message-actions');
 
-    swipeDown(screen.getByTestId('mobile-message-actions'));
+    swipeDown(sheet);
+
+    expect(sheet).toHaveAttribute('data-swipe-dismissing', 'true');
+    expect(sheet).toHaveClass('translate-y-full');
+    act(() => vi.advanceTimersByTime(180));
+    expect(screen.queryByTestId('mobile-message-actions')).not.toBeInTheDocument();
+    vi.useRealTimers();
+  });
+
+  it('does not open the mobile action sheet from a short tap', () => {
+    vi.useFakeTimers();
+    setMobileMatch(true);
+    renderWithProviders(
+      <MessageItem
+        message={makeMessage()}
+        authorName="Alice"
+        isOwn={true}
+        channelId="ch-1"
+      />,
+    );
+    const row = screen.getByTestId('message-actions-trigger').closest('[data-message-id]')!;
+
+    fireEvent.pointerDown(row, { pointerType: 'touch', clientX: 20, clientY: 20 });
+    fireEvent.pointerUp(window);
+    vi.advanceTimersByTime(430);
 
     expect(screen.queryByTestId('mobile-message-actions')).not.toBeInTheDocument();
+    vi.useRealTimers();
   });
 });
 

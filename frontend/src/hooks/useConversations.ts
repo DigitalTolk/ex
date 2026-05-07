@@ -3,13 +3,14 @@ import { apiFetch } from '@/lib/api';
 import { queryKeys } from '@/lib/query-keys';
 import type { UserConversation, Conversation, User } from '@/types';
 
-export function useUserConversations() {
+export function useUserConversations(options?: { enabled?: boolean }) {
   return useQuery({
     queryKey: queryKeys.userConversations(),
     queryFn: async () => {
       const res = await apiFetch<UserConversation[]>('/api/v1/conversations');
       return Array.isArray(res) ? res : [];
     },
+    enabled: options?.enabled ?? true,
   });
 }
 

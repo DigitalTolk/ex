@@ -17,7 +17,7 @@ vi.mock('@/components/ui/dropdown-menu', () => ({
 
 vi.mock('@/components/ui/dialog', () => ({
   Dialog: ({ children, open }: { children: React.ReactNode; open: boolean }) => open ? <div data-testid="dialog">{children}</div> : null,
-  DialogContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  DialogContent: ({ children, className, ...props }: { children: React.ReactNode; className?: string; [key: string]: unknown }) => <div className={className} {...props}>{children}</div>,
   DialogHeader: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
   DialogTitle: ({ children }: { children: React.ReactNode }) => <h2>{children}</h2>,
 }));
@@ -27,8 +27,8 @@ vi.mock('@/components/ui/badge', () => ({
 }));
 
 vi.mock('@/components/ui/button', () => ({
-  Button: ({ children, onClick, variant }: { children: React.ReactNode; onClick?: () => void; variant?: string }) => (
-    <button onClick={onClick} data-variant={variant}>{children}</button>
+  Button: ({ children, onClick, variant, className, type }: { children: React.ReactNode; onClick?: () => void; variant?: string; className?: string; type?: 'button' | 'submit' | 'reset' }) => (
+    <button type={type} onClick={onClick} data-variant={variant} className={className}>{children}</button>
   ),
 }));
 
@@ -46,6 +46,34 @@ const baseChannel: Channel = {
 describe('Header - description editing', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it('opens channel description editing as a full-page mobile dialog', () => {
+    const originalMatchMedia = window.matchMedia;
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      value: vi.fn(() => ({
+        matches: true,
+        media: '(max-width: 767px)',
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      })),
+    });
+    const onDescriptionSave = vi.fn();
+    render(<Header channel={baseChannel} canEdit onDescriptionSave={onDescriptionSave} />);
+
+    const items = screen.getAllByTestId('dropdown-item');
+    const editItem = items.find(item => item.textContent?.includes('Edit description'));
+    fireEvent.click(editItem!);
+
+    const editor = screen.getByTestId('mobile-description-editor');
+    expect(editor).toHaveClass('max-w-none');
+    const textarea = screen.getByLabelText('Description');
+    fireEvent.change(textarea, { target: { value: 'Mobile desc' } });
+    fireEvent.click(screen.getByText('Save'));
+
+    expect(onDescriptionSave).toHaveBeenCalledWith('Mobile desc');
+    Object.defineProperty(window, 'matchMedia', { configurable: true, value: originalMatchMedia });
   });
 
   it('clicking edit description opens inline input', () => {

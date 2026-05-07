@@ -246,6 +246,8 @@ describe('MessageAttachments', () => {
       'href',
       att.downloadURL,
     );
+    expect(screen.getByTestId('image-lightbox-toolbar')).toHaveClass('top-11', 'max-md:top-0');
+    expect(screen.getByTestId('image-lightbox')).toHaveClass('pt-[calc(2.75rem+1.5rem)]');
   });
 
   it('shows a "Loading…" skeleton while the batch is in flight', () => {
@@ -364,13 +366,41 @@ describe('MessageAttachments', () => {
 
     fireEvent.click(screen.getByLabelText('Open image zoom.png'));
     const image = screen.getByTestId('image-lightbox-image');
-    expect(image).toHaveStyle({ transform: 'scale(1)' });
+    expect(image).toHaveStyle({ transform: 'translate(0px, 0px) scale(1)' });
 
     fireEvent.click(screen.getByTestId('image-lightbox-zoom-in'));
-    expect(image).toHaveStyle({ transform: 'scale(1.5)' });
+    expect(image).toHaveStyle({ transform: 'translate(0px, 0px) scale(1.5)' });
 
     fireEvent.doubleClick(image);
-    expect(image).toHaveStyle({ transform: 'scale(1)' });
+    expect(image).toHaveStyle({ transform: 'translate(0px, 0px) scale(1)' });
+  });
+
+  it('pans a zoomed lightbox image on touch-style pointer drag', () => {
+    const att: Attachment = {
+      id: 'a-pan',
+      filename: 'pan.png',
+      contentType: 'image/png',
+      size: 100,
+      url: 'https://cdn/pan.png',
+    };
+    useAttachmentsBatchMock.mockReturnValue({
+      map: new Map([['a-pan', att]]),
+      isLoading: false,
+    });
+    render(<MessageAttachments {...baseProps} ids={['a-pan']} />);
+
+    fireEvent.click(screen.getByLabelText('Open image pan.png'));
+    const image = screen.getByTestId('image-lightbox-image');
+    const stage = screen.getByTestId('image-lightbox-zoom-stage');
+    fireEvent.click(screen.getByTestId('image-lightbox-zoom-in'));
+
+    fireEvent.pointerDown(stage, { pointerId: 1, clientX: 120, clientY: 140, pointerType: 'touch' });
+    fireEvent.pointerMove(stage, { pointerId: 1, clientX: 152, clientY: 118, pointerType: 'touch' });
+    fireEvent.pointerUp(stage, { pointerId: 1, clientX: 152, clientY: 118, pointerType: 'touch' });
+
+    expect(image).toHaveStyle({ transform: 'translate(32px, -22px) scale(1.5)' });
+    expect(image).toHaveAttribute('data-pan-x', '32');
+    expect(image).toHaveAttribute('data-pan-y', '-22');
   });
 
   it('Escape blurs the active element so the attachment trigger does not pick up a focus-visible ring after closing', () => {

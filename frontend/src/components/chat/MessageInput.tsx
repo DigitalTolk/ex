@@ -641,6 +641,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
             }}
             onSubmit={handleSend}
             onCancel={onCancel}
+            submitOnEnter={!isMobile}
             onPasteFiles={uploadFiles}
             onArrowUpEmpty={requestEditLast}
             placeholder={isUploading ? 'Uploading…' : placeholder}

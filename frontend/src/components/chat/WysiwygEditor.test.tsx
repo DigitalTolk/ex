@@ -69,6 +69,21 @@ describe('WysiwygEditor', () => {
     expect(onSubmit).not.toHaveBeenCalled();
   });
 
+  it('Enter inserts a new line when submit-on-enter is disabled', async () => {
+    const onSubmit = vi.fn();
+    const ref = createRef<WysiwygEditorHandle>();
+    renderEditor({ ref, onSubmit, initialBody: 'hi', submitOnEnter: false });
+    await waitFor(() => expect(ref.current).not.toBeNull());
+    act(() => {
+      ref.current!.focusEnd();
+    });
+
+    fireEvent.keyDown(getEditor(), { key: 'Enter' });
+
+    expect(onSubmit).not.toHaveBeenCalled();
+    await waitFor(() => expect(ref.current!.getMarkdown()).toContain('\n'));
+  });
+
   it('Cmd+ArrowLeft moves before regular text so the next typed key inserts at the start', async () => {
     const ref = createRef<WysiwygEditorHandle>();
     renderEditor({ ref, initialBody: 'hello' });

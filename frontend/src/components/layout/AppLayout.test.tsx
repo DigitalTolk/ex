@@ -1,6 +1,5 @@
 import { beforeEach, describe, it, expect, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { BrowserRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AppLayout } from './AppLayout';
@@ -31,9 +30,29 @@ function touchSwipe(element: Element, fromX: number, toX: number, y = 200) {
   fireEvent.touchEnd(element, { changedTouches: [{ clientX: toX, clientY: y + 10 }] });
 }
 
+function touchDrag(element: Element, fromX: number, toX: number, y = 200) {
+  fireEvent.touchStart(element, { touches: [{ clientX: fromX, clientY: y }] });
+  fireEvent.touchMove(element, { touches: [{ clientX: toX, clientY: y + 10 }] });
+}
+
+function setMobileMatch(matches: boolean) {
+  Object.defineProperty(window, 'matchMedia', {
+    configurable: true,
+    value: vi.fn(() => ({
+      matches,
+      media: '(max-width: 767px)',
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+    })),
+  });
+}
+
 describe('AppLayout', () => {
   beforeEach(() => {
     delete window.Capacitor;
+    setMobileMatch(false);
   });
 
   it('renders sidebar', () => {
@@ -98,25 +117,45 @@ describe('AppLayout', () => {
     expect(resetServer).not.toHaveBeenCalled();
   });
 
-  it('mobile channels button navigates to channel home', async () => {
-    const user = userEvent.setup();
+  it('mobile channels button navigates to channel home after the open animation', () => {
+    vi.useFakeTimers();
     window.history.pushState({}, '', '/channel/general');
     renderLayout();
 
     const menuBtn = screen.getByLabelText('Open channels');
-    await user.click(menuBtn);
+    fireEvent.click(menuBtn);
 
+    expect(window.location.pathname).toBe('/channel/general');
+    act(() => vi.advanceTimersByTime(180));
     expect(window.location.pathname).toBe('/');
+    vi.useRealTimers();
   });
 
   it('opens the mobile channel home on a left-to-right touch swipe', () => {
+    vi.useFakeTimers();
     window.history.pushState({}, '', '/channel/general');
     const { container } = renderLayout();
     const main = container.querySelector('main')!;
 
     touchSwipe(main, 12, 120);
 
+    expect(main).toHaveAttribute('data-channel-dragging', 'true');
+    act(() => vi.advanceTimersByTime(180));
     expect(window.location.pathname).toBe('/');
+    vi.useRealTimers();
+  });
+
+  it('pulls the current mobile view aside while opening channel home', () => {
+    setMobileMatch(true);
+    window.history.pushState({}, '', '/channel/general');
+    const { container } = renderLayout();
+    const main = container.querySelector('main')!;
+
+    touchDrag(main, 12, 92);
+
+    expect(screen.getByTestId('mobile-channel-sidebar-preview')).toHaveClass('opacity-100');
+    expect(main).toHaveStyle({ transform: 'translateX(80px)', transition: 'none' });
+    expect(main).toHaveAttribute('data-channel-dragging', 'true');
   });
 
   it('does not open channel home on swipe while a right sidebar is open', () => {

@@ -164,4 +164,33 @@
     font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
     font-size: 0.875rem;
   }
+
+  @media (max-width: 767px) {
+    .mobile-right-sidebar-enter {
+      animation: mobile-right-sidebar-enter 180ms ease-out;
+    }
+
+    .mobile-bottom-sheet-enter {
+      animation: mobile-bottom-sheet-enter 180ms ease-out;
+    }
+
+  }
+}
+
+@keyframes mobile-right-sidebar-enter {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+@keyframes mobile-bottom-sheet-enter {
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: translateY(0);
+  }
 }

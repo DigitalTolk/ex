@@ -3,13 +3,14 @@ import { apiFetch } from '@/lib/api';
 import { queryKeys } from '@/lib/query-keys';
 import type { UserChannel, Channel, ChannelMembership } from '@/types';
 
-export function useUserChannels() {
+export function useUserChannels(options?: { enabled?: boolean }) {
   return useQuery({
     queryKey: queryKeys.userChannels(),
     queryFn: async () => {
       const res = await apiFetch<UserChannel[]>('/api/v1/channels');
       return Array.isArray(res) ? res : [];
     },
+    enabled: options?.enabled ?? true,
   });
 }
 

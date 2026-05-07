@@ -31,6 +31,12 @@ export function SubmitOnEnterPlugin({ onSubmit, onCancel }: Props) {
       (event) => {
         if (!event || event.shiftKey) return false;
         const selection = $getSelection();
+        if (!onSubmit) {
+          if (!$isRangeSelection(selection)) return false;
+          event.preventDefault();
+          selection.insertLineBreak();
+          return true;
+        }
         // No selection (mounted-but-not-focused) → treat as top-level
         // and submit. Only suppress when the caret is demonstrably
         // inside a list item / blockquote / code block, where Lexical's
@@ -48,11 +54,9 @@ export function SubmitOnEnterPlugin({ onSubmit, onCancel }: Props) {
           }
         }
         event.preventDefault();
-        if (onSubmit) {
-          editor.getEditorState().read(() => {
-            onSubmit($exportMarkdown());
-          });
-        }
+        editor.getEditorState().read(() => {
+          onSubmit($exportMarkdown());
+        });
         return true;
       },
       // Stay at LOW so the typeahead plugins (registered at NORMAL

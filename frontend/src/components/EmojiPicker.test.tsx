@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render as rtlRender, screen, fireEvent, waitFor } from '@testing-library/react';
+import { act, render as rtlRender, screen, fireEvent, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { EmojiPicker } from './EmojiPicker';
@@ -226,9 +226,36 @@ describe('EmojiPicker', () => {
     await user.click(screen.getByRole('button', { name: /open emoji picker/i }));
 
     const dialog = screen.getByRole('dialog');
+    vi.useFakeTimers();
     swipeDown(dialog);
 
+    expect(dialog).toHaveAttribute('data-swipe-dismissing', 'true');
+    expect(dialog).toHaveClass('translate-y-full');
+    act(() => vi.advanceTimersByTime(180));
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    vi.useRealTimers();
+    Object.defineProperty(window, 'matchMedia', { configurable: true, value: originalMatchMedia });
+  });
+
+  it('reopens the mobile sheet after it was dismissed by swiping down', async () => {
+    const originalMatchMedia = window.matchMedia;
+    setMobileMatch(true);
+    const user = userEvent.setup();
+    render(<EmojiPicker onSelect={vi.fn()} />);
+    await user.click(screen.getByRole('button', { name: /open emoji picker/i }));
+
+    const dialog = screen.getByRole('dialog');
+    vi.useFakeTimers();
+    swipeDown(dialog);
+    act(() => vi.advanceTimersByTime(180));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    vi.useRealTimers();
+
+    await user.click(screen.getByRole('button', { name: /open emoji picker/i }));
+    const reopened = screen.getByRole('dialog');
+    expect(reopened).toBeInTheDocument();
+    expect(reopened).toHaveAttribute('data-swipe-dismissing', 'false');
+    expect(reopened).not.toHaveClass('translate-y-full');
     Object.defineProperty(window, 'matchMedia', { configurable: true, value: originalMatchMedia });
   });
 
