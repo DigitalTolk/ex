@@ -21,7 +21,7 @@ updates:
     ignore:
       - dependency-name: "node"
         versions:
-          - "25.x"
+          - ">=25.0.0"
     groups:
       docker:
         patterns:
