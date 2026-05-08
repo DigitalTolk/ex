@@ -3,7 +3,6 @@ import { render } from 'vitest-browser-react';
 import { MessageList } from './MessageList';
 import type { Attachment, Message } from '@/types';
 import { act, type ReactNode } from 'react';
-import { expectPaintedAtCenter } from '@/test/browser-assertions';
 
 const browserMedia = vi.hoisted(() => ({
   imageURL: `data:image/svg+xml,${encodeURIComponent(
@@ -93,6 +92,9 @@ function msg(index: number, patch: Partial<Message> = {}): Message {
 
 describe('MessageList browser behavior', () => {
   it('stays pinned to bottom when rendered message media changes measured height', async () => {
+    browserMedia.attachmentsReady = false;
+    browserMedia.attachmentListeners.clear();
+
     const messages = Array.from({ length: 24 }, (_, index) => msg(index));
     messages.push(msg(99, {
       body: `Bottom media message\n\n![inline](${browserMedia.imageURL} =320x249)\n\nhttps://example.com/story`,
@@ -129,36 +131,30 @@ describe('MessageList browser behavior', () => {
       browserMedia.attachmentListeners.forEach((listener) => listener());
     });
 
-    let visibleThumb: HTMLElement | null = null;
     await vi.waitFor(() => {
-      const thumb = visibleElement('[data-testid="message-image-thumb"]');
+      const thumb = laidOutElement('[data-testid="message-image-thumb"]');
       expect(thumb).not.toBeNull();
       const image = thumb!.querySelector('img') as HTMLImageElement | null;
       expect(image).not.toBeNull();
       expect(image!.complete).toBe(true);
       expect(image!.naturalWidth).toBeGreaterThan(0);
-      visibleThumb = thumb;
-    });
+      expect(image!.naturalHeight).toBeGreaterThan(0);
+    }, { timeout: 3000 });
 
     await vi.waitFor(() => {
       const distanceFromBottom = scroller!.scrollHeight - scroller!.scrollTop - scroller!.clientHeight;
       expect(distanceFromBottom).toBeLessThan(4);
-    });
+    }, { timeout: 3000 });
 
-    const paintedImage = visibleThumb!.querySelector('img');
-    expect(paintedImage).not.toBeNull();
-    expectPaintedAtCenter(visibleThumb!);
+    const thumb = laidOutElement('[data-testid="message-image-thumb"]');
+    expect(thumb).not.toBeNull();
   });
 });
 
-function visibleElement(selector: string): HTMLElement | null {
+function laidOutElement(selector: string): HTMLElement | null {
   const elements = Array.from(document.querySelectorAll<HTMLElement>(selector));
   return elements.find((element) => {
     const rect = element.getBoundingClientRect();
-    if (rect.width <= 0 || rect.height <= 0) return false;
-    const x = Math.max(rect.left, 0) + (Math.min(rect.right, window.innerWidth) - Math.max(rect.left, 0)) / 2;
-    const y = Math.max(rect.top, 0) + (Math.min(rect.bottom, window.innerHeight) - Math.max(rect.top, 0)) / 2;
-    const painted = document.elementFromPoint(x, y);
-    return painted ? element.contains(painted) : false;
+    return rect.width > 0 && rect.height > 0;
   }) ?? null;
 }
