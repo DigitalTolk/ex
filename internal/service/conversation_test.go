@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/DigitalTolk/ex/internal/model"
 )
@@ -39,6 +40,93 @@ func TestConversationService_SetFavorite(t *testing.T) {
 	if len(publisher.published) != 1 || publisher.published[0].event.Type != "userchannel.updated" {
 		t.Errorf("expected userchannel.updated; got %+v", publisher.published)
 	}
+}
+
+func TestConversationService_ListUserConversations_EnrichesDMProfileFromUserStore(t *testing.T) {
+	svc, conversations, users, _, _ := setupConversationService()
+	ctx := context.Background()
+	svc.SetMediaURLCache(newFakeMediaCache())
+
+	clearAt := time.Date(2026, 5, 8, 12, 0, 0, 0, time.UTC)
+	users.users["u-me"] = &model.User{ID: "u-me", DisplayName: "Me"}
+	users.users["u-other"] = &model.User{
+		ID:          "u-other",
+		DisplayName: "Other",
+		AvatarKey:   "avatars/u-other.png",
+		UserStatus:  &model.UserStatus{Emoji: "☕", Text: "In focus", ClearAt: &clearAt},
+	}
+	conversations.userConvs["u-me"] = []*model.UserConversation{
+		{
+			UserID:         "u-me",
+			ConversationID: "c-dm",
+			Type:           model.ConversationTypeDM,
+			DisplayName:    "Other",
+			ParticipantIDs: []string{"u-me", "u-other"},
+			Activated:      true,
+		},
+	}
+
+	got, err := svc.ListUserConversations(ctx, "u-me")
+	if err != nil {
+		t.Fatalf("ListUserConversations: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("len = %d, want 1", len(got))
+	}
+	if !got[0].ProfileResolved {
+		t.Fatal("ProfileResolved = false, want true")
+	}
+	if got[0].AvatarURL == "" {
+		t.Fatal("AvatarURL is empty")
+	}
+	if got[0].UserStatus == nil || got[0].UserStatus.Text != "In focus" {
+		t.Fatalf("UserStatus = %#v, want In focus", got[0].UserStatus)
+	}
+	if conversations.userConvs["u-me"][0].AvatarURL != "" {
+		t.Fatal("stored UserConversation was mutated with transient AvatarURL")
+	}
+}
+
+func TestConversationService_ListUserConversations_UsesProfileResolver(t *testing.T) {
+	svc, conversations, _, _, _ := setupConversationService()
+	ctx := context.Background()
+	resolver := &conversationProfileResolver{
+		users: map[string]*model.User{
+			"u-other": {ID: "u-other", DisplayName: "Other", AvatarURL: "/api/v1/media/avatar"},
+		},
+	}
+	svc.SetUserProfileResolver(resolver)
+	conversations.userConvs["u-me"] = []*model.UserConversation{
+		{
+			UserID:         "u-me",
+			ConversationID: "c-dm",
+			Type:           model.ConversationTypeDM,
+			DisplayName:    "Other",
+			ParticipantIDs: []string{"u-me", "u-other"},
+			Activated:      true,
+		},
+	}
+
+	got, err := svc.ListUserConversations(ctx, "u-me")
+	if err != nil {
+		t.Fatalf("ListUserConversations: %v", err)
+	}
+	if resolver.calls != 1 {
+		t.Fatalf("resolver calls = %d, want 1", resolver.calls)
+	}
+	if got[0].AvatarURL != "/api/v1/media/avatar" {
+		t.Fatalf("AvatarURL = %q, want resolver URL", got[0].AvatarURL)
+	}
+}
+
+type conversationProfileResolver struct {
+	users map[string]*model.User
+	calls int
+}
+
+func (r *conversationProfileResolver) GetByID(_ context.Context, id string) (*model.User, error) {
+	r.calls++
+	return r.users[id], nil
 }
 
 func TestConversationService_SetFavorite_RejectsNonParticipant(t *testing.T) {

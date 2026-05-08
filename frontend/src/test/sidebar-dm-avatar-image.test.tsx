@@ -1,10 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, waitFor } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import { BrowserRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Sidebar } from '@/components/layout/Sidebar';
+import type { UserConversation } from '@/types';
 
 const mockApiFetch = vi.fn();
+let mockConversations: UserConversation[] | undefined;
 vi.mock('@/lib/api', () => ({
   apiFetch: (...args: unknown[]) => mockApiFetch(...args),
 }));
@@ -52,20 +54,7 @@ vi.mock('@/hooks/useConversations', () => ({
   useCreateConversation: () => ({ mutate: vi.fn(), isPending: false }),
   useSearchUsers: () => ({ data: [] }),
   useUserConversations: () => ({
-    data: [
-      {
-        conversationID: 'c-dm-1',
-        type: 'dm',
-        displayName: 'Alice',
-        participantIDs: ['u-me', 'u-alice'],
-      },
-      {
-        conversationID: 'c-group-1',
-        type: 'group',
-        displayName: 'group',
-        participantIDs: ['u-me', 'u-alice', 'u-bob'],
-      },
-    ],
+    data: mockConversations,
   }),
 }));
 
@@ -83,6 +72,20 @@ function renderSidebar() {
 describe('Sidebar — DM avatars', () => {
   beforeEach(() => {
     mockApiFetch.mockReset();
+    mockConversations = [
+      {
+        conversationID: 'c-dm-1',
+        type: 'dm',
+        displayName: 'Alice',
+        participantIDs: ['u-me', 'u-alice'],
+      },
+      {
+        conversationID: 'c-group-1',
+        type: 'group',
+        displayName: 'group',
+        participantIDs: ['u-me', 'u-alice', 'u-bob'],
+      },
+    ];
   });
 
   it('fetches the other DM participant via /users/batch and passes avatarURL to the Avatar', async () => {
@@ -115,15 +118,43 @@ describe('Sidebar — DM avatars', () => {
     });
   });
 
+  it('keeps grouped sidebar sections in a stable loading state until conversations are ready', () => {
+    mockConversations = undefined;
+
+    renderSidebar();
+
+    expect(screen.getByTestId('sidebar-primary-loading')).toBeInTheDocument();
+    expect(screen.queryByTestId('sidebar-primary-sections')).not.toBeInTheDocument();
+  });
+
   it('does not call /users/batch when conversations list is empty', () => {
     // Suppress all fetches; with no DMs the batch query stays disabled.
+    mockConversations = [];
     mockApiFetch.mockResolvedValue([]);
     renderSidebar();
-    // The query is enabled only when dmOtherUserIDs.length > 0; here it is.
-    // Recheck: the test is mainly about not crashing.
-    // (We can't assert "never called" easily because the test setup mock
-    // returns conversations regardless.)
-    // The previous test covers the positive case — this is a smoke test.
-    expect(true).toBe(true);
+    expect(mockApiFetch).not.toHaveBeenCalledWith('/api/v1/users/batch', expect.anything());
+  });
+
+  it('uses profile fields from /conversations without fetching /users/batch', async () => {
+    mockConversations = [
+      {
+        conversationID: 'c-dm-1',
+        type: 'dm',
+        displayName: 'Alice',
+        participantIDs: ['u-me', 'u-alice'],
+        avatarURL: 'https://x/inline-alice.png',
+        userStatus: { emoji: '☕', text: 'In focus' },
+        profileResolved: true,
+      },
+    ];
+    mockApiFetch.mockResolvedValue([]);
+
+    renderSidebar();
+
+    await waitFor(() => {
+      expect(document.body.innerHTML).toContain('https://x/inline-alice.png');
+      expect(document.body.textContent).toContain('☕');
+    });
+    expect(mockApiFetch).not.toHaveBeenCalledWith('/api/v1/users/batch', expect.anything());
   });
 });

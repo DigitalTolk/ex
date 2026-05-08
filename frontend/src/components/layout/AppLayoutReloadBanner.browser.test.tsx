@@ -216,6 +216,13 @@ describe('AppLayout reload banner browser behavior', () => {
       expect(error).not.toBeNull();
       expect(banner!.getBoundingClientRect().bottom).toBeLessThanOrEqual(error!.getBoundingClientRect().top + 1);
       expectPaintedAtCenter(banner!, '[data-testid="update-banner"]');
+      if (window.innerWidth <= 767) {
+        const mobileSidebar = document.querySelector('[data-testid="mobile-channel-sidebar"]') as HTMLElement | null;
+        expect(mobileSidebar).not.toBeNull();
+        expect(mobileSidebar!.getBoundingClientRect().top).toBeGreaterThanOrEqual(
+          banner!.getBoundingClientRect().bottom - 1,
+        );
+      }
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -259,7 +266,11 @@ describe('AppLayout reload banner browser behavior', () => {
       expect(banner).not.toBeNull();
       expectPaintedAtCenter(banner!, '[data-testid="update-banner"]');
       if (window.innerWidth <= 767) {
-        await expect.element(screen.getByTestId('mobile-chat-loading')).toBeVisible();
+        const loading = screen.getByTestId('mobile-chat-loading');
+        await expect.element(loading).toBeVisible();
+        expect(loading.element().getBoundingClientRect().top).toBeGreaterThanOrEqual(
+          banner!.getBoundingClientRect().bottom - 1,
+        );
       } else {
         await expect.element(screen.getByText('Channel ready')).toBeVisible();
       }

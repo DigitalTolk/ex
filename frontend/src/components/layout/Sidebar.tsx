@@ -421,15 +421,32 @@ function PragmaticConversationRow({
   );
 }
 
+function SidebarSectionsSkeleton() {
+  return (
+    <div className="mt-2 space-y-4 px-2" data-testid="sidebar-primary-loading" aria-hidden="true">
+      {['w-20', 'w-24', 'w-32'].map((widthClass) => (
+        <div key={widthClass} className="space-y-2">
+          <div className={`h-4 rounded bg-white/10 ${widthClass}`} />
+          <div className="h-8 rounded-md bg-white/5 max-md:h-12" />
+          <div className="h-8 rounded-md bg-white/5 max-md:h-12" />
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export function Sidebar({ onClose }: SidebarProps) {
   const { user, logout } = useAuth();
   const { unreadChannels, unreadConversations, unreadThreadNotifications, hiddenConversations, hideConversation } = useUnread();
   const { data: channels } = useUserChannels();
-  const { data: conversations } = useUserConversations();
+  const conversationsQuery = useUserConversations();
+  const { data: conversations } = conversationsQuery;
   const { data: threads } = useUserThreads();
   const { data: userState } = useUserState();
   const { data: drafts } = useDrafts();
   const { data: categories } = useCategories();
+  const sidebarPrimaryDataReady =
+    conversations !== undefined || conversationsQuery.isError;
   const createCategory = useCreateCategory();
   const deleteCategory = useDeleteCategory();
   const favoriteChannel = useFavoriteChannel();
@@ -521,6 +538,7 @@ export function Sidebar({ onClose }: SidebarProps) {
     const seen = new Set<string>();
     for (const c of visibleConversations ?? []) {
       if (c.type !== 'dm') continue;
+      if (c.profileResolved) continue;
       const other = (c.participantIDs ?? []).find((p) => p !== user?.id) ?? c.participantIDs?.[0];
       if (other && !seen.has(other)) {
         seen.add(other);
@@ -1580,7 +1598,8 @@ export function Sidebar({ onClose }: SidebarProps) {
               (always rendered as the bottom section; its "+" routes to
               /conversations/new). User-defined categories contain channels;
               DMs/groups can only appear here when favorited. */}
-          <nav aria-label="Channels and direct messages">
+          {sidebarPrimaryDataReady ? (
+          <nav aria-label="Channels and direct messages" data-testid="sidebar-primary-sections">
             {sidebarSections.map((section) => {
               const isFavorites = section.key === SidebarSectionKeys.Favorites;
               const isChannelsDefault = section.key === SidebarSectionKeys.Channels;
@@ -1781,6 +1800,8 @@ export function Sidebar({ onClose }: SidebarProps) {
                         : undefined;
                       const dmAvatarURL = otherID ? dmUserMap.get(otherID)?.avatarURL : undefined;
                       const dmUserStatus = otherID ? dmUserMap.get(otherID)?.userStatus : undefined;
+                      const resolvedDMAvatarURL = conv.avatarURL ?? dmAvatarURL;
+                      const resolvedDMUserStatus = conv.userStatus ?? dmUserStatus;
                       const dmOnline = otherID ? online.has(otherID) : undefined;
                       return (
                         <div key={`conv-${conv.conversationID}`} className="relative">
@@ -1797,8 +1818,8 @@ export function Sidebar({ onClose }: SidebarProps) {
                                 <ConversationRow
                                   conversation={conv}
                                   hasUnread={!!conv.unread || unreadConversations.has(conv.conversationID)}
-                                  dmAvatarURL={dmAvatarURL}
-                                  dmUserStatus={dmUserStatus}
+                                  dmAvatarURL={resolvedDMAvatarURL}
+                                  dmUserStatus={resolvedDMUserStatus}
                                   dmOnline={dmOnline}
                                   onClose={onClose}
                                   onHide={hideConversation}
@@ -1813,8 +1834,8 @@ export function Sidebar({ onClose }: SidebarProps) {
                             <ConversationRow
                               conversation={conv}
                               hasUnread={!!conv.unread || unreadConversations.has(conv.conversationID)}
-                              dmAvatarURL={dmAvatarURL}
-                              dmUserStatus={dmUserStatus}
+                              dmAvatarURL={resolvedDMAvatarURL}
+                              dmUserStatus={resolvedDMUserStatus}
                               dmOnline={dmOnline}
                               onClose={onClose}
                               onHide={hideConversation}
@@ -1840,6 +1861,9 @@ export function Sidebar({ onClose }: SidebarProps) {
               );
             })}
           </nav>
+          ) : (
+            <SidebarSectionsSkeleton />
+          )}
         </div>
       </ScrollArea>
 

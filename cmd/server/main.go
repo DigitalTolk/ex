@@ -130,6 +130,8 @@ func main() {
 	channelSvc := service.NewChannelService(channelStore, membershipStore, userStore, messageStore, redisCache, brokerAdapter, redisPubSub)
 	authSvc.SetChannelJoiner(channelSvc)
 	convSvc := service.NewConversationService(conversationStore, userStore, redisCache, brokerAdapter, redisPubSub)
+	convSvc.SetMediaURLCache(redisCache)
+	convSvc.SetUserProfileResolver(userSvc)
 	messageSvc := service.NewMessageService(messageStore, membershipStore, conversationStore, redisPubSub, brokerAdapter)
 	messageSvc.SetThreadFollowStore(threadFollowStore)
 	messageSvc.SetUserStateStore(userStateStore)

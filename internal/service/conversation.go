@@ -32,9 +32,13 @@ func conversationUnreadKey(userID, convID string) string {
 type ConversationService struct {
 	conversations ConversationStore
 	users         UserStore
-	cache         Cache
-	broker        Broker
-	publisher     Publisher
+	userProfiles  interface {
+		GetByID(context.Context, string) (*model.User, error)
+	}
+	cache      Cache
+	mediaCache MediaURLCache
+	broker     Broker
+	publisher  Publisher
 }
 
 // NewConversationService creates a ConversationService with the given dependencies.
@@ -46,6 +50,18 @@ func NewConversationService(conversations ConversationStore, users UserStore, ca
 		broker:        broker,
 		publisher:     publisher,
 	}
+}
+
+// SetMediaURLCache enables stable /api/v1/media URLs for transient DM avatar
+// enrichments. The URL is still derived from the authoritative user AvatarKey.
+func (s *ConversationService) SetMediaURLCache(c MediaURLCache) { s.mediaCache = c }
+
+// SetUserProfileResolver lets list responses use the same cached/profile-
+// normalized user reads as the user API without changing conversation storage.
+func (s *ConversationService) SetUserProfileResolver(r interface {
+	GetByID(context.Context, string) (*model.User, error)
+}) {
+	s.userProfiles = r
 }
 
 // GetOrCreateDM returns the existing DM conversation between two users, or
@@ -284,19 +300,81 @@ func (s *ConversationService) ListUserConversations(ctx context.Context, userID 
 		if !c.Activated && c.CreatedBy != "" && c.CreatedBy != userID {
 			continue
 		}
+		row := *c
 		if s.cache != nil {
 			var unread bool
-			if err := s.cache.Get(ctx, conversationUnreadKey(userID, c.ConversationID), &unread); err == nil && unread {
-				c.Unread = true
+			if err := s.cache.Get(ctx, conversationUnreadKey(userID, row.ConversationID), &unread); err == nil && unread {
+				row.Unread = true
 			} else if err == nil || errors.Is(err, cache.ErrCacheMiss) || errors.Is(err, store.ErrNotFound) {
-				c.Unread = false
+				row.Unread = false
 			} else if err != nil && !errors.Is(err, cache.ErrCacheMiss) && !errors.Is(err, store.ErrNotFound) {
 				return nil, fmt.Errorf("conversation: unread cache: %w", err)
 			}
 		}
-		out = append(out, c)
+		out = append(out, &row)
 	}
+	s.enrichDMProfiles(ctx, userID, out)
 	return out, nil
+}
+
+func (s *ConversationService) enrichDMProfiles(ctx context.Context, userID string, rows []*model.UserConversation) {
+	var wg sync.WaitGroup
+	for _, row := range rows {
+		if row == nil || row.Type != model.ConversationTypeDM {
+			continue
+		}
+		wg.Add(1)
+		go func(row *model.UserConversation) {
+			defer wg.Done()
+			s.enrichDMProfile(ctx, userID, row)
+		}(row)
+	}
+	wg.Wait()
+}
+
+func (s *ConversationService) enrichDMProfile(ctx context.Context, userID string, c *model.UserConversation) {
+	if (s.users == nil && s.userProfiles == nil) || c == nil || c.Type != model.ConversationTypeDM {
+		return
+	}
+	otherID := ""
+	for _, id := range c.ParticipantIDs {
+		if id != userID {
+			otherID = id
+			break
+		}
+	}
+	if otherID == "" && len(c.ParticipantIDs) > 0 {
+		otherID = c.ParticipantIDs[0]
+	}
+	if otherID == "" {
+		return
+	}
+	u, err := s.getUserProfile(ctx, otherID)
+	if err != nil || u == nil {
+		return
+	}
+	c.ProfileResolved = true
+	c.UserStatus = u.UserStatus
+	if u.AvatarURL != "" {
+		c.AvatarURL = u.AvatarURL
+		return
+	}
+	if u.AvatarKey == "" || s.mediaCache == nil {
+		return
+	}
+	if mediaURL, err := StableMediaURL(ctx, s.mediaCache, "avatar", u.ID+":"+u.AvatarKey, u.AvatarKey, "avatar", "", 0); err == nil {
+		c.AvatarURL = mediaURL
+	}
+}
+
+func (s *ConversationService) getUserProfile(ctx context.Context, id string) (*model.User, error) {
+	if s.userProfiles != nil {
+		return s.userProfiles.GetByID(ctx, id)
+	}
+	if s.users == nil {
+		return nil, store.ErrNotFound
+	}
+	return s.users.GetUser(ctx, id)
 }
 
 func (s *ConversationService) MarkUnread(ctx context.Context, userID, convID string) error {
