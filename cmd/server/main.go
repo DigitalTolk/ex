@@ -164,7 +164,9 @@ func main() {
 	if err != nil {
 		slog.Warn("OneSignal mobile push disabled", "error", err)
 	} else if oneSignalPush != nil {
-		notificationSvc.SetMobilePushSender(oneSignalPush)
+		asyncOneSignalPush := service.NewAsyncMobilePushSender(oneSignalPush, 0, 0)
+		defer asyncOneSignalPush.Close()
+		notificationSvc.SetMobilePushSender(asyncOneSignalPush)
 	}
 	messageSvc.SetNotifier(notificationSvc)
 	settingsSvc := service.NewSettingsService(store.NewSettingsStore(db))

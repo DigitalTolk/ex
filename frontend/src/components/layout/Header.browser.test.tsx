@@ -36,7 +36,7 @@ describe('Header browser behavior', () => {
     expectPaintedAtCenter(screen.getByLabelText('View shared files').element());
   });
 
-  it('keeps the desktop channel description aligned with the title area, not the right actions', async () => {
+  it('keeps the desktop channel description on the same row as the channel name', async () => {
     if (window.innerWidth <= 767) return;
 
     const screen = await render(
@@ -59,9 +59,12 @@ describe('Header browser behavior', () => {
     const titleRect = title.element().getBoundingClientRect();
     const descriptionRect = description.element().getBoundingClientRect();
     const filesRect = files.element().getBoundingClientRect();
+    const titleMidY = titleRect.top + titleRect.height / 2;
+    const descriptionMidY = descriptionRect.top + descriptionRect.height / 2;
 
-    expect(descriptionRect.left).toBeLessThan(titleRect.left + 4);
+    expect(descriptionRect.left).toBeGreaterThan(titleRect.right - 1);
     expect(descriptionRect.right).toBeLessThan(filesRect.left - 8);
+    expect(Math.abs(descriptionMidY - titleMidY)).toBeLessThanOrEqual(4);
     expectPaintedAtCenter(description.element());
     expectPaintedAtCenter(files.element());
   });

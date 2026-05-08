@@ -155,7 +155,7 @@ export function Header({
     <header className="flex shrink-0 items-center gap-3 px-4 py-3">
       <div className="flex min-w-0 flex-1 items-center gap-2">
         {channel ? (
-          <div className="flex min-w-0 flex-1 flex-col items-start" data-testid="channel-title-stack">
+          <div className="flex min-w-0 flex-1 items-center gap-2" data-testid="channel-title-stack">
             <DropdownMenu modal={false}>
               <DropdownMenuTrigger
                 className="-ml-1 flex min-w-0 max-w-full items-center gap-1 rounded-md px-1 hover:bg-muted/50"
@@ -208,7 +208,7 @@ export function Header({
             {!isMobile && (
               isEditingDesc ? (
                 <input
-                  className="mt-0.5 hidden w-full max-w-xl border-b border-input bg-transparent text-left text-sm outline-none md:block"
+                  className="hidden min-w-0 max-w-xl flex-1 border-b border-input bg-transparent text-left text-sm outline-none md:block"
                   value={descDraft}
                   onChange={e => setDescDraft(e.target.value)}
                   onBlur={saveDescription}
@@ -220,13 +220,13 @@ export function Header({
                 canEdit ? (
                   <button
                     onClick={() => { setDescDraft(channel.description || ''); setIsEditingDesc(true); }}
-                    className="mt-0.5 hidden max-w-full truncate text-left text-sm text-muted-foreground hover:text-foreground md:block"
+                    className="hidden min-w-0 max-w-full truncate text-left text-sm text-muted-foreground hover:text-foreground md:block"
                     title="Click to edit description"
                   >
                     {channel.description}
                   </button>
                 ) : (
-                  <span className="mt-0.5 hidden max-w-full truncate text-left text-sm text-muted-foreground md:block">
+                  <span className="hidden min-w-0 max-w-full truncate text-left text-sm text-muted-foreground md:block">
                     {channel.description}
                   </span>
                 )

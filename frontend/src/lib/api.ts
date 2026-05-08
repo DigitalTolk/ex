@@ -69,7 +69,6 @@ export async function refreshAccessToken(): Promise<string | null> {
         clearAccessToken();
         return null;
       } catch {
-        clearAccessToken();
         return null;
       }
     })().finally(() => {
@@ -104,7 +103,7 @@ export async function apiFetch<T>(
   });
   captureServerVersion(res);
 
-  if (res.status === 401 && accessToken) {
+  if (res.status === 401) {
     const refreshedToken = await refreshAccessToken();
     if (refreshedToken) {
       headers.set('Authorization', `Bearer ${accessToken}`);

@@ -67,17 +67,25 @@ describe('apiFetch - 401 refresh flow', () => {
     await expect(apiFetch('/api/v1/test2')).rejects.toThrow(); // token was cleared
   });
 
-  it('does not retry refresh when there is no token', async () => {
-    // No token set
-    vi.mocked(globalThis.fetch).mockResolvedValueOnce({
-      ok: false,
-      status: 401,
-      text: () => Promise.resolve('Unauthorized'),
-    } as Response);
+  it('tries cookie refresh on 401 even when the in-memory token was already cleared', async () => {
+    vi.mocked(globalThis.fetch)
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 401,
+        text: () => Promise.resolve('Unauthorized'),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ accessToken: 'cookie-restored-token' }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({ data: 'success' }),
+      } as Response);
 
-    await expect(apiFetch('/api/v1/test')).rejects.toThrow(ApiError);
-    // Only 1 call: no refresh attempt
-    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+    await expect(apiFetch('/api/v1/test')).resolves.toEqual({ data: 'success' });
+    expect(globalThis.fetch).toHaveBeenCalledTimes(3);
   });
 
   it('throws ApiError when retry after refresh returns non-ok', async () => {
@@ -127,6 +135,15 @@ describe('apiFetch - tryRefreshToken edge cases', () => {
       .mockRejectedValueOnce(new Error('Network error'));
 
     await expect(apiFetch('/api/v1/test')).rejects.toThrow(ApiError);
+    expect(getAccessToken()).toBeNull();
+  });
+
+  it('keeps the in-memory token when refresh hits a transient network error', async () => {
+    setAccessToken('still-possibly-valid-token');
+    vi.mocked(globalThis.fetch).mockRejectedValueOnce(new Error('server restarting'));
+
+    await expect(refreshAccessToken()).resolves.toBeNull();
+    expect(getAccessToken()).toBe('still-possibly-valid-token');
   });
 
   it('handles refresh returning ok but no accessToken', async () => {

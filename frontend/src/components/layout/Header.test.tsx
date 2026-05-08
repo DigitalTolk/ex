@@ -206,7 +206,7 @@ describe('Header', () => {
     expect(screen.getByText('General discussion')).toBeInTheDocument();
   });
 
-  it('keeps the desktop channel description left-aligned under the channel title', () => {
+  it('keeps the desktop channel description in the title row', () => {
     render(
       <Header
         channel={makeChannel({ description: 'General discussion' })}
@@ -217,8 +217,9 @@ describe('Header', () => {
 
     const description = screen.getByText('General discussion');
     expect(screen.getByTestId('channel-title-stack')).toContainElement(description);
+    expect(screen.getByTestId('channel-title-stack')).toHaveClass('items-center', 'gap-2');
     expect(description).toHaveClass('text-left', 'truncate');
-    expect(description).not.toHaveClass('ml-auto', 'text-right');
+    expect(description).not.toHaveClass('ml-auto', 'text-right', 'mt-0.5');
   });
 
   it('does not render the channel description on mobile so short names keep the header width', () => {
