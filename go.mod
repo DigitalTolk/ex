@@ -19,8 +19,8 @@ require (
 	github.com/oklog/ulid/v2 v2.1.1
 	github.com/redis/go-redis/v9 v9.19.0
 	github.com/testcontainers/testcontainers-go v0.42.0
-	golang.org/x/crypto v0.50.0
-	golang.org/x/image v0.39.0
+	golang.org/x/crypto v0.51.0
+	golang.org/x/image v0.40.0
 	golang.org/x/oauth2 v0.36.0
 )
 
@@ -89,6 +89,6 @@ require (
 	go.opentelemetry.io/otel/metric v1.41.0 // indirect
 	go.opentelemetry.io/otel/trace v1.41.0 // indirect
 	go.uber.org/atomic v1.11.0 // indirect
-	golang.org/x/sys v0.43.0 // indirect
+	golang.org/x/sys v0.44.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
