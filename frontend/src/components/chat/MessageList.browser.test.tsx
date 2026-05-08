@@ -129,15 +129,36 @@ describe('MessageList browser behavior', () => {
       browserMedia.attachmentListeners.forEach((listener) => listener());
     });
 
+    let visibleThumb: HTMLElement | null = null;
     await vi.waitFor(() => {
-      const image = document.querySelector('[data-testid="message-image-thumb"]');
+      const thumb = visibleElement('[data-testid="message-image-thumb"]');
+      expect(thumb).not.toBeNull();
+      const image = thumb!.querySelector('img') as HTMLImageElement | null;
       expect(image).not.toBeNull();
-      expectPaintedAtCenter(image!);
+      expect(image!.complete).toBe(true);
+      expect(image!.naturalWidth).toBeGreaterThan(0);
+      visibleThumb = thumb;
     });
 
     await vi.waitFor(() => {
       const distanceFromBottom = scroller!.scrollHeight - scroller!.scrollTop - scroller!.clientHeight;
       expect(distanceFromBottom).toBeLessThan(4);
     });
+
+    const paintedImage = visibleThumb!.querySelector('img');
+    expect(paintedImage).not.toBeNull();
+    expectPaintedAtCenter(visibleThumb!);
   });
 });
+
+function visibleElement(selector: string): HTMLElement | null {
+  const elements = Array.from(document.querySelectorAll<HTMLElement>(selector));
+  return elements.find((element) => {
+    const rect = element.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return false;
+    const x = Math.max(rect.left, 0) + (Math.min(rect.right, window.innerWidth) - Math.max(rect.left, 0)) / 2;
+    const y = Math.max(rect.top, 0) + (Math.min(rect.bottom, window.innerHeight) - Math.max(rect.top, 0)) / 2;
+    const painted = document.elementFromPoint(x, y);
+    return painted ? element.contains(painted) : false;
+  }) ?? null;
+}
