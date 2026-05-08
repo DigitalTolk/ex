@@ -30,16 +30,13 @@ function Probe() {
 describe('useServerVersion', () => {
   beforeEach(() => {
     captured = null;
-    resetServerVersionForTests();
-    globalThis.fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ version: BUILD_VERSION }), {
-      status: 200,
-      headers: { 'Content-Type': 'application/json' },
-    }));
+    act(() => resetServerVersionForTests());
+    globalThis.fetch = vi.fn(() => new Promise<Response>(() => undefined));
   });
 
   afterEach(() => {
     vi.useRealTimers();
-    resetServerVersionForTests();
+    act(() => resetServerVersionForTests());
     globalThis.fetch = originalFetch;
   });
 

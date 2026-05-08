@@ -61,6 +61,21 @@ type stubPresence struct {
 
 func (p *stubPresence) IsOnline(userID string) bool { return p.online[userID] }
 
+type recordingMobilePush struct {
+	calls []mobilePushCall
+	err   error
+}
+
+type mobilePushCall struct {
+	userID string
+	notif  Notification
+}
+
+func (p *recordingMobilePush) Send(_ context.Context, userID string, notif Notification) error {
+	p.calls = append(p.calls, mobilePushCall{userID: userID, notif: notif})
+	return p.err
+}
+
 // publishedKinds returns the Notification.Kind for every published event,
 // keyed by the recipient channel. Helpful for asserting both who was
 // notified AND with what kind in one assertion.
@@ -117,6 +132,79 @@ func TestNotificationService_NotifyForMessage_ChannelFanout(t *testing.T) {
 	}
 	if gotChannels[pubsub.UserChannel("u-author")] {
 		t.Error("author should be excluded from notification fanout")
+	}
+}
+
+func TestNotificationService_NotifyForMessage_SendsMobilePushToSameRecipients(t *testing.T) {
+	svc, pub, members, _, chans, users := setupNotifier(t)
+	push := &recordingMobilePush{}
+	svc.SetMobilePushSender(push)
+	ctx := context.Background()
+
+	chans.channels["ch1"] = &model.Channel{ID: "ch1", Name: "general", Slug: "general", Type: model.ChannelTypePublic}
+	users.users["u-author"] = &model.User{ID: "u-author", DisplayName: "Alice"}
+	for _, uid := range []string{"u-author", "u-bob", "u-carol"} {
+		members.memberships["ch1#"+uid] = &model.ChannelMembership{ChannelID: "ch1", UserID: uid}
+	}
+
+	svc.NotifyForMessage(ctx, &model.Message{ID: "m1", ParentID: "ch1", AuthorID: "u-author", Body: "hello"}, ParentChannel)
+
+	if got := len(pub.published); got != 2 {
+		t.Fatalf("websocket publish count = %d, want 2", got)
+	}
+	if got := len(push.calls); got != 2 {
+		t.Fatalf("mobile push count = %d, want 2", got)
+	}
+	got := map[string]bool{}
+	for _, call := range push.calls {
+		got[call.userID] = true
+		if call.notif.DeepLink != "/channel/general" {
+			t.Errorf("DeepLink = %q", call.notif.DeepLink)
+		}
+		if call.notif.Body != "hello" {
+			t.Errorf("Body = %q", call.notif.Body)
+		}
+	}
+	if got["u-author"] {
+		t.Fatal("sender must not receive mobile push")
+	}
+	if !got["u-bob"] || !got["u-carol"] {
+		t.Fatalf("mobile push recipients = %#v", got)
+	}
+}
+
+func TestNotificationService_MissingMobilePushConfigDoesNotBlockMessageDelivery(t *testing.T) {
+	svc, pub, members, _, chans, users := setupNotifier(t)
+	ctx := context.Background()
+	chans.channels["ch1"] = &model.Channel{ID: "ch1", Name: "general", Slug: "general", Type: model.ChannelTypePublic}
+	users.users["u-author"] = &model.User{ID: "u-author", DisplayName: "Alice"}
+	members.memberships["ch1#u-author"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u-author"}
+	members.memberships["ch1#u-bob"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u-bob"}
+
+	svc.NotifyForMessage(ctx, &model.Message{ID: "m1", ParentID: "ch1", AuthorID: "u-author", Body: "hello"}, ParentChannel)
+
+	if got := len(pub.published); got != 1 {
+		t.Fatalf("publish count = %d, want 1", got)
+	}
+}
+
+func TestNotificationService_MobilePushFailureDoesNotBlockMessageDelivery(t *testing.T) {
+	svc, pub, members, _, chans, users := setupNotifier(t)
+	push := &recordingMobilePush{err: errors.New("provider unavailable")}
+	svc.SetMobilePushSender(push)
+	ctx := context.Background()
+	chans.channels["ch1"] = &model.Channel{ID: "ch1", Name: "general", Slug: "general", Type: model.ChannelTypePublic}
+	users.users["u-author"] = &model.User{ID: "u-author", DisplayName: "Alice"}
+	members.memberships["ch1#u-author"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u-author"}
+	members.memberships["ch1#u-bob"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u-bob"}
+
+	svc.NotifyForMessage(ctx, &model.Message{ID: "m1", ParentID: "ch1", AuthorID: "u-author", Body: "hello"}, ParentChannel)
+
+	if got := len(pub.published); got != 1 {
+		t.Fatalf("publish count = %d, want 1", got)
+	}
+	if got := len(push.calls); got != 1 {
+		t.Fatalf("mobile push attempts = %d, want 1", got)
 	}
 }
 
@@ -372,6 +460,8 @@ func TestNotificationService_NotifyForMessage_ThreadReply_StillNotifiesExplicitM
 
 func TestNotificationService_NotifyForMessage_RespectsMute(t *testing.T) {
 	svc, pub, members, _, chans, users := setupNotifier(t)
+	push := &recordingMobilePush{}
+	svc.SetMobilePushSender(push)
 	ctx := context.Background()
 
 	chans.channels["ch1"] = &model.Channel{ID: "ch1", Name: "general", Slug: "general"}
@@ -393,6 +483,12 @@ func TestNotificationService_NotifyForMessage_RespectsMute(t *testing.T) {
 	}
 	if pub.published[0].channel != pubsub.UserChannel("u-carol") {
 		t.Errorf("expected only carol to be notified, got %s", pub.published[0].channel)
+	}
+	if got := len(push.calls); got != 1 {
+		t.Fatalf("mobile push count = %d, want 1", got)
+	}
+	if push.calls[0].userID != "u-carol" {
+		t.Fatalf("mobile push recipient = %q, want u-carol", push.calls[0].userID)
 	}
 }
 

@@ -33,6 +33,7 @@ export function resetServerVersionForTests(): void {
   pollerCleanup?.();
   pollerCleanup = null;
   pollerStarted = false;
+  if (subscribers.size === 0) return;
   for (const cb of subscribers) cb();
 }
 

@@ -7,6 +7,21 @@ import { AuthProvider, useAuth } from './AuthContext';
 
 const originalFetch = globalThis.fetch;
 
+function installOneSignalPlugin() {
+  const oneSignal = {
+    login: vi.fn().mockResolvedValue(undefined),
+    addTags: vi.fn().mockResolvedValue(undefined),
+    logout: vi.fn().mockResolvedValue(undefined),
+    removeTags: vi.fn().mockResolvedValue(undefined),
+  };
+  window.Capacitor = {
+    Plugins: {
+      OneSignalCapacitor: oneSignal,
+    },
+  };
+  return oneSignal;
+}
+
 function AuthTestConsumer() {
   const { isAuthenticated, isLoading, user, logout, setAuth } = useAuth();
   return (
@@ -48,6 +63,7 @@ describe('AuthContext - setAuth', () => {
 
   afterEach(() => {
     globalThis.fetch = originalFetch;
+    delete window.Capacitor;
   });
 
   it('setAuth sets user and makes authenticated true', async () => {
@@ -64,6 +80,43 @@ describe('AuthContext - setAuth', () => {
     expect(screen.getByTestId('user-name')).toHaveTextContent('Test User');
   });
 
+  it('identifies the mobile OneSignal user after login state is set', async () => {
+    const oneSignal = installOneSignalPlugin();
+    const user = userEvent.setup();
+    renderWithProviders(<AuthTestConsumer />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('loading')).toHaveTextContent('false');
+    });
+
+    await user.click(screen.getByText('Set Auth'));
+
+    await waitFor(() => {
+      expect(oneSignal.login).toHaveBeenCalledWith({ externalId: 'u-1' });
+    });
+    expect(oneSignal.addTags).toHaveBeenCalledWith({
+      tags: {
+        app: 'ex-mobile',
+        server_url: window.location.origin,
+        user_id: 'u-1',
+      },
+    });
+  });
+
+  it('does not identify push users in normal desktop browsers', async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<AuthTestConsumer />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('loading')).toHaveTextContent('false');
+    });
+
+    await user.click(screen.getByText('Set Auth'));
+
+    expect(window.Capacitor).toBeUndefined();
+    expect(screen.getByTestId('authenticated')).toHaveTextContent('true');
+  });
+
 });
 
 describe('AuthContext - logout', () => {
@@ -77,6 +130,7 @@ describe('AuthContext - logout', () => {
 
   afterEach(() => {
     globalThis.fetch = originalFetch;
+    delete window.Capacitor;
   });
 
   it('logout clears user and sets authenticated to false', async () => {
@@ -99,11 +153,34 @@ describe('AuthContext - logout', () => {
     });
     expect(screen.getByTestId('user-name')).toHaveTextContent('none');
   });
+
+  it('clears the mobile OneSignal identity on explicit logout', async () => {
+    const oneSignal = installOneSignalPlugin();
+    const user = userEvent.setup();
+    renderWithProviders(<AuthTestConsumer />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('loading')).toHaveTextContent('false');
+    });
+
+    await user.click(screen.getByText('Set Auth'));
+    await waitFor(() => {
+      expect(oneSignal.login).toHaveBeenCalledWith({ externalId: 'u-1' });
+    });
+
+    await user.click(screen.getByText('Logout'));
+
+    await waitFor(() => {
+      expect(oneSignal.logout).toHaveBeenCalledTimes(1);
+    });
+    expect(oneSignal.removeTags).toHaveBeenCalledWith({ keys: ['user_id'] });
+  });
 });
 
 describe('AuthContext - successful restore', () => {
   afterEach(() => {
     globalThis.fetch = originalFetch;
+    delete window.Capacitor;
   });
 
   it('restores user from refresh token on mount', async () => {
@@ -139,6 +216,43 @@ describe('AuthContext - successful restore', () => {
 
     expect(screen.getByTestId('authenticated')).toHaveTextContent('true');
     expect(screen.getByTestId('user-name')).toHaveTextContent('Restored User');
+  });
+
+  it('identifies the mobile OneSignal user after restoring an existing session', async () => {
+    const oneSignal = installOneSignalPlugin();
+    globalThis.fetch = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ accessToken: 'tok-refreshed' }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({
+          id: 'u-restored',
+          email: 'restored@test.com',
+          displayName: 'Restored User',
+          systemRole: 'admin',
+          status: 'active',
+        }),
+      } as Response);
+
+    renderWithProviders(<AuthTestConsumer />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('loading')).toHaveTextContent('false');
+    });
+
+    await waitFor(() => {
+      expect(oneSignal.login).toHaveBeenCalledWith({ externalId: 'u-restored' });
+    });
+    expect(oneSignal.addTags).toHaveBeenCalledWith({
+      tags: {
+        app: 'ex-mobile',
+        server_url: window.location.origin,
+        user_id: 'u-restored',
+      },
+    });
   });
 });
 

@@ -15,7 +15,7 @@ func clearEnv(t *testing.T) {
 		"REDIS_URL", "OIDC_ISSUER", "OIDC_CLIENT_ID", "OIDC_CLIENT_SECRET",
 		"JWT_SECRET", "JWT_ACCESS_TTL", "JWT_REFRESH_TTL",
 		"SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASS", "SMTP_FROM",
-		"BASE_URL",
+		"BASE_URL", "ONESIGNAL_APP_ID", "ONESIGNAL_REST_API_KEY",
 	}
 
 	saved := make(map[string]string)
@@ -76,6 +76,12 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.BaseURL != "http://localhost:8080" {
 		t.Errorf("BaseURL = %q, want %q", cfg.BaseURL, "http://localhost:8080")
 	}
+	if cfg.OneSignalAppID != "" {
+		t.Errorf("OneSignalAppID = %q, want empty", cfg.OneSignalAppID)
+	}
+	if cfg.OneSignalRESTAPIKey != "" {
+		t.Errorf("OneSignalRESTAPIKey = %q, want empty", cfg.OneSignalRESTAPIKey)
+	}
 }
 
 func TestLoadCustomEnv(t *testing.T) {
@@ -88,6 +94,8 @@ func TestLoadCustomEnv(t *testing.T) {
 	t.Setenv("JWT_REFRESH_TTL", "168h")
 	t.Setenv("BASE_URL", "https://example.com")
 	t.Setenv("AWS_REGION", "eu-west-1")
+	t.Setenv("ONESIGNAL_APP_ID", "onesignal-app")
+	t.Setenv("ONESIGNAL_REST_API_KEY", "onesignal-secret")
 
 	cfg, err := Load()
 	if err != nil {
@@ -114,6 +122,12 @@ func TestLoadCustomEnv(t *testing.T) {
 	}
 	if cfg.AWSRegion != "eu-west-1" {
 		t.Errorf("AWSRegion = %q, want %q", cfg.AWSRegion, "eu-west-1")
+	}
+	if cfg.OneSignalAppID != "onesignal-app" {
+		t.Errorf("OneSignalAppID = %q, want onesignal-app", cfg.OneSignalAppID)
+	}
+	if cfg.OneSignalRESTAPIKey != "onesignal-secret" {
+		t.Errorf("OneSignalRESTAPIKey = %q, want onesignal-secret", cfg.OneSignalRESTAPIKey)
 	}
 }
 

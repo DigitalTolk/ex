@@ -13,6 +13,7 @@ import {
   apiFetch,
   refreshAccessToken,
 } from '@/lib/api';
+import { clearMobilePushUser, identifyMobilePushUser } from '@/lib/mobile-push-identity';
 
 interface AuthState {
   user: User | null;
@@ -42,6 +43,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           setAccessToken(token);
           const me = await apiFetch<User>('/api/v1/users/me');
           setUser(me);
+          void identifyMobilePushUser(me).catch(() => undefined);
         }
       } catch {
         // not authenticated
@@ -65,6 +67,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch {
       // ignore
     }
+    void clearMobilePushUser().catch(() => undefined);
     clearAccessToken();
     setUser(null);
   }, []);
@@ -72,6 +75,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const setAuth = useCallback((token: string, userData: User) => {
     setAccessToken(token);
     setUser(userData);
+    void identifyMobilePushUser(userData).catch(() => undefined);
   }, []);
 
   const patchUser = useCallback((patch: Partial<User>) => {

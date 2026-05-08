@@ -64,6 +64,10 @@ type PresenceLookup interface {
 	IsOnline(userID string) bool
 }
 
+type MobilePushSender interface {
+	Send(ctx context.Context, recipientUserID string, n Notification) error
+}
+
 // NotificationService dispatches notifications to interested users while
 // honoring per-user mute preferences. It is intentionally tiny and parallel
 // to the events package: events update *every* connected client; this fans
@@ -79,6 +83,7 @@ type NotificationService struct {
 	presence  PresenceLookup
 	follows   ThreadFollowStore
 	userState *UserStateService
+	push      MobilePushSender
 }
 
 // NewNotificationService builds a NotificationService. messages is used
@@ -98,6 +103,10 @@ func (s *NotificationService) SetThreadFollowStore(f ThreadFollowStore) { s.foll
 
 func (s *NotificationService) SetUserStateService(userState *UserStateService) {
 	s.userState = userState
+}
+
+func (s *NotificationService) SetMobilePushSender(push MobilePushSender) {
+	s.push = push
 }
 
 // memberSnapshot is everything NotifyForMessage and its helpers need to
@@ -224,6 +233,7 @@ func (s *NotificationService) NotifyForMessage(ctx context.Context, msg *model.M
 			s.markThreadNotification(ctx, uid, msg, parentType)
 		}
 		events.Publish(ctx, s.publisher, pubsub.UserChannel(uid), events.EventNotificationNew, notif)
+		s.sendMobilePush(ctx, uid, notif)
 	}
 
 	if len(mentionRecipients) > 0 {
@@ -237,7 +247,25 @@ func (s *NotificationService) NotifyForMessage(ctx context.Context, msg *model.M
 				s.markChannelNotification(ctx, uid, msg.ParentID)
 			}
 			events.Publish(ctx, s.publisher, pubsub.UserChannel(uid), events.EventNotificationNew, mentionNotif)
+			s.sendMobilePush(ctx, uid, mentionNotif)
 		}
+	}
+}
+
+func (s *NotificationService) sendMobilePush(ctx context.Context, recipientUserID string, notif Notification) {
+	if s.push == nil {
+		return
+	}
+	if err := s.push.Send(ctx, recipientUserID, notif); err != nil {
+		slog.Warn(
+			"mobile push send failed",
+			"userID", recipientUserID,
+			"parentID", notif.ParentID,
+			"parentType", notif.ParentType,
+			"messageID", notif.MessageID,
+			"kind", notif.Kind,
+			"error", err,
+		)
 	}
 }
 

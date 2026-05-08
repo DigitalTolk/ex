@@ -70,21 +70,6 @@ interface SidebarProps {
   onClose: () => void;
 }
 
-interface NativeServerNavigation {
-  resetServer?: () => Promise<void>;
-}
-
-declare global {
-  interface Window {
-    Capacitor?: {
-      isNativePlatform?: () => boolean;
-      Plugins?: {
-        ServerNavigation?: NativeServerNavigation;
-      };
-    };
-  }
-}
-
 const SIDEBAR_POSITION_STEP = 1000;
 const CONVERSATION_SORT_STORAGE_KEY = 'sidebar.conversationSort';
 const CATEGORY_DROP_END = '__category-end__';

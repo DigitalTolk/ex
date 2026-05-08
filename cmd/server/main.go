@@ -156,6 +156,16 @@ func main() {
 	notificationSvc.SetPresence(presenceSvc)
 	notificationSvc.SetThreadFollowStore(threadFollowStore)
 	notificationSvc.SetUserStateService(userStateSvc)
+	oneSignalPush, err := service.NewOneSignalPushSender(service.OneSignalConfig{
+		AppID:     cfg.OneSignalAppID,
+		APIKey:    cfg.OneSignalRESTAPIKey,
+		PublicURL: cfg.BaseURL,
+	})
+	if err != nil {
+		slog.Warn("OneSignal mobile push disabled", "error", err)
+	} else if oneSignalPush != nil {
+		notificationSvc.SetMobilePushSender(oneSignalPush)
+	}
 	messageSvc.SetNotifier(notificationSvc)
 	settingsSvc := service.NewSettingsService(store.NewSettingsStore(db))
 	attachmentSvc.SetUploadLimits(settingsSvc)

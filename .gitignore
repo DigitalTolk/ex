@@ -25,6 +25,7 @@ Thumbs.db
 *.dylib
 *.test
 *.out
+/.gocache/
 /vendor/
 
 # Frontend

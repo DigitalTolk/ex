@@ -47,6 +47,11 @@ type Config struct {
 	// App
 	BaseURL string
 
+	// OneSignal mobile push. REST API key is server-only and must never be
+	// exposed through frontend config.
+	OneSignalAppID      string
+	OneSignalRESTAPIKey string
+
 	// OpenSearch — leave empty to disable search features. (The wire
 	// protocol is ES-compatible for the operations we use, so the
 	// underlying client is unchanged from when this was Elasticsearch.)
@@ -84,6 +89,8 @@ func Load() (*Config, error) {
 		S3SecretKey:          os.Getenv("S3_SECRET_KEY"),
 		S3Region:             envOr("S3_REGION", "us-east-1"),
 		BaseURL:              envOr("BASE_URL", "http://localhost:8080"),
+		OneSignalAppID:       os.Getenv("ONESIGNAL_APP_ID"),
+		OneSignalRESTAPIKey:  os.Getenv("ONESIGNAL_REST_API_KEY"),
 		OpenSearchURL:        os.Getenv("OPENSEARCH_URL"),
 		OpenSearchAWSRegion:  os.Getenv("OPENSEARCH_AWS_REGION"),
 		OpenSearchAWSService: envOr("OPENSEARCH_AWS_SERVICE", "es"),
