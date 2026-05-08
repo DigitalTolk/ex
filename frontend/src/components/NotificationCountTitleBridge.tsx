@@ -11,7 +11,7 @@ export function NotificationCountTitleBridge() {
   const { unreadChannelNotifications, unreadConversations, unreadThreadNotifications } = useUnread();
   const { data: threads = [] } = useUserThreads({ enabled: isAuthenticated });
   const { data: userState } = useUserState({ enabled: isAuthenticated });
-  const { data: conversations = [] } = useUserConversations();
+  const { data: conversations = [] } = useUserConversations({ enabled: isAuthenticated });
   const [localSeenMap, setLocalSeenMap] = useState(() => getSeenMap());
 
   useEffect(() => {

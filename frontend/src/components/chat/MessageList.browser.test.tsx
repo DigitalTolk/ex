@@ -2,13 +2,15 @@ import { describe, expect, it, vi } from 'vitest';
 import { render } from 'vitest-browser-react';
 import { MessageList } from './MessageList';
 import type { Attachment, Message } from '@/types';
-import type { ReactNode } from 'react';
+import { act, type ReactNode } from 'react';
 import { expectPaintedAtCenter } from '@/test/browser-assertions';
 
 const browserMedia = vi.hoisted(() => ({
   imageURL: `data:image/svg+xml,${encodeURIComponent(
     '<svg xmlns="http://www.w3.org/2000/svg" width="900" height="700"><rect width="900" height="700" fill="#16a34a"/></svg>',
   )}`,
+  attachmentsReady: false,
+  attachmentListeners: new Set<() => void>(),
 }));
 
 vi.mock('@/components/UserHoverCard', () => ({
@@ -61,10 +63,13 @@ vi.mock('@/hooks/useAttachments', async () => {
     useAttachment: () => ({ data: undefined, isLoading: false }),
     useDeleteDraftAttachment: () => ({ mutate: vi.fn(), isPending: false }),
     useAttachmentsBatch: (ids: string[]) => {
-      const [ready, setReady] = React.useState(false);
+      const [ready, setReady] = React.useState(browserMedia.attachmentsReady);
       React.useEffect(() => {
-        const timer = window.setTimeout(() => setReady(true), 80);
-        return () => window.clearTimeout(timer);
+        const listener = () => setReady(browserMedia.attachmentsReady);
+        browserMedia.attachmentListeners.add(listener);
+        return () => {
+          browserMedia.attachmentListeners.delete(listener);
+        };
       }, []);
       return {
         map: ready && ids.includes('att-1') ? new Map([['att-1', attachment]]) : new Map(),
@@ -118,6 +123,11 @@ describe('MessageList browser behavior', () => {
 
     const scroller = document.querySelector('[data-testid="virtuoso-scroller"]') as HTMLElement | null;
     expect(scroller).not.toBeNull();
+
+    act(() => {
+      browserMedia.attachmentsReady = true;
+      browserMedia.attachmentListeners.forEach((listener) => listener());
+    });
 
     await vi.waitFor(() => {
       const image = document.querySelector('[data-testid="message-image-thumb"]');

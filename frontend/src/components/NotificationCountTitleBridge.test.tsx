@@ -16,6 +16,7 @@ const mockState = vi.hoisted(() => ({
   channelNotifications: [] as string[],
   threadNotifications: [] as string[],
   threadSeen: {} as Record<string, string>,
+  useUserConversations: vi.fn(),
 }));
 
 vi.mock('@/context/AuthContext', () => ({
@@ -51,7 +52,10 @@ vi.mock('@/hooks/useUserState', () => ({
 }));
 
 vi.mock('@/hooks/useConversations', () => ({
-  useUserConversations: () => ({ data: mockState.conversations }),
+  useUserConversations: (options?: { enabled?: boolean }) => {
+    mockState.useUserConversations(options);
+    return { data: mockState.conversations };
+  },
 }));
 
 function TitleConsumer() {
@@ -77,6 +81,7 @@ describe('NotificationCountTitleBridge', () => {
     mockState.channelNotifications = [];
     mockState.threadNotifications = [];
     mockState.threadSeen = {};
+    mockState.useUserConversations.mockClear();
   });
 
   afterEach(() => {
@@ -307,6 +312,20 @@ describe('NotificationCountTitleBridge', () => {
       </>,
     );
 
+    await waitFor(() => expect(document.title).toBe('Threads · ex'));
+  });
+
+  it('does not request conversations before auth restore has completed', async () => {
+    mockState.isAuthenticated = false;
+
+    render(
+      <>
+        <NotificationCountTitleBridge />
+        <TitleConsumer />
+      </>,
+    );
+
+    expect(mockState.useUserConversations).toHaveBeenCalledWith({ enabled: false });
     await waitFor(() => expect(document.title).toBe('Threads · ex'));
   });
 });

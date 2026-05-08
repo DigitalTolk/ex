@@ -205,7 +205,7 @@ export function Header({
                 )}
               </DropdownMenuContent>
             </DropdownMenu>
-            {channel && !isMobile && (
+            {!isMobile && (
               isEditingDesc ? (
                 <input
                   className="mt-0.5 hidden w-full max-w-xl border-b border-input bg-transparent text-left text-sm outline-none md:block"
