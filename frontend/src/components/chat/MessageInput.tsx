@@ -554,6 +554,103 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
     }
   }
 
+  const renderToolbar = (placement: 'top' | 'bottom') => (
+    <div
+      className={`flex items-center gap-0.5 px-2 py-1 ${placement === 'top' ? 'border-b' : 'border-t'}`}
+      role="toolbar"
+      aria-label="Formatting"
+      data-toolbar-placement={placement}
+      onMouseDown={(event) => {
+        if (event.currentTarget.contains(event.target as Node)) event.preventDefault();
+      }}
+      onPointerDown={(event) => {
+        if (event.currentTarget.contains(event.target as Node)) event.preventDefault();
+      }}
+    >
+      <ToolbarBtn label="Bold (Ctrl+B)" active={active.has('bold')} onClick={() => editorRef.current?.applyMark('bold')}><Bold className="h-3.5 w-3.5" /></ToolbarBtn>
+      <ToolbarBtn label="Italic (Ctrl+I)" active={active.has('italic')} onClick={() => editorRef.current?.applyMark('italic')}><Italic className="h-3.5 w-3.5" /></ToolbarBtn>
+      <ToolbarBtn label="Strikethrough" active={active.has('strike')} onClick={() => editorRef.current?.applyMark('strike')}><Strikethrough className="h-3.5 w-3.5" /></ToolbarBtn>
+      {!isEditingMode && !hideCodeButton && (
+        <ToolbarBtn label="Code (Ctrl+E)" active={active.has('code')} onClick={() => editorRef.current?.applyMark('code')}><Code className="h-3.5 w-3.5" /></ToolbarBtn>
+      )}
+      {!isMobile && (
+        <>
+          <ToolbarBtn label="Quote" active={active.has('quote')} onClick={() => editorRef.current?.applyBlock('quote')}><Quote className="h-3.5 w-3.5" /></ToolbarBtn>
+          <ToolbarBtn label="List" active={active.has('ul')} onClick={() => editorRef.current?.applyBlock('ul')}><List className="h-3.5 w-3.5" /></ToolbarBtn>
+          <ToolbarBtn label="Numbered list" active={active.has('ol')} onClick={() => editorRef.current?.applyBlock('ol')}><ListOrdered className="h-3.5 w-3.5" /></ToolbarBtn>
+        </>
+      )}
+      <ToolbarBtn label="Link" onClick={openLinkDialog}><LinkIcon className="h-3.5 w-3.5" /></ToolbarBtn>
+      <span className="mx-1 h-4 w-px bg-border" aria-hidden />
+      <EmojiPicker
+        onSelect={insertEmojiShortcode}
+        mode="shortcode"
+        onOpenChange={setToolbarPickerOpen}
+        trigger={
+          <ToolbarBtn label="Emoji"><Smile className="h-3.5 w-3.5" /></ToolbarBtn>
+        }
+      />
+      {giphyEnabled && (
+        <GiphyPicker
+          apiKey={giphyAPIKey}
+          onSelect={insertGiphyGIF}
+          onOpenChange={setToolbarPickerOpen}
+          trigger={
+            <ToolbarBtn label="GIF"><ImagePlay className="h-3.5 w-3.5" /></ToolbarBtn>
+          }
+        />
+      )}
+      <button
+        type="button"
+        onClick={() => fileInputRef.current?.click()}
+        disabled={isUploading}
+        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50 max-md:h-9 max-md:w-9"
+        aria-label="Attach file"
+      >
+        <Paperclip className="h-3.5 w-3.5" />
+      </button>
+      {showToolbarSend && (
+        <>
+          <span className="ml-auto" aria-hidden />
+          <Button
+            onClick={handleSend}
+            disabled={!canSend}
+            size="icon"
+            className="h-7 w-7 rounded-md max-md:h-9 max-md:w-9"
+            aria-label="Send message"
+          >
+            <Send className="h-4 w-4" />
+          </Button>
+        </>
+      )}
+      {isEditingMode && (
+        <>
+          <span className="mx-1 h-4 w-px bg-border" aria-hidden />
+          {onCancel && (
+            <Button
+              onClick={onCancel}
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7 rounded-md max-md:h-9 max-md:w-9"
+              aria-label="Cancel"
+            >
+              <X className="h-4 w-4" />
+            </Button>
+          )}
+          <Button
+            onClick={handleSend}
+            disabled={!canSend}
+            size="icon"
+            className="h-7 w-7 rounded-md max-md:h-9 max-md:w-9"
+            aria-label={submitLabel ?? 'Send message'}
+          >
+            <Save className="h-4 w-4" />
+          </Button>
+        </>
+      )}
+    </div>
+  );
+
   return (
     <div
       ref={rootRef}
@@ -588,101 +685,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
         </div>
       )}
       <div className="rounded-lg border bg-muted/40 dark:bg-input/30 focus-within:ring-1 focus-within:ring-ring" data-message-composer>
-        {showToolbar && (
-          <div
-            className="flex items-center gap-0.5 border-b px-2 py-1"
-            role="toolbar"
-            aria-label="Formatting"
-            onMouseDown={(event) => {
-              if (event.currentTarget.contains(event.target as Node)) event.preventDefault();
-            }}
-            onPointerDown={(event) => {
-              if (event.currentTarget.contains(event.target as Node)) event.preventDefault();
-            }}
-          >
-            <ToolbarBtn label="Bold (Ctrl+B)" active={active.has('bold')} onClick={() => editorRef.current?.applyMark('bold')}><Bold className="h-3.5 w-3.5" /></ToolbarBtn>
-            <ToolbarBtn label="Italic (Ctrl+I)" active={active.has('italic')} onClick={() => editorRef.current?.applyMark('italic')}><Italic className="h-3.5 w-3.5" /></ToolbarBtn>
-            <ToolbarBtn label="Strikethrough" active={active.has('strike')} onClick={() => editorRef.current?.applyMark('strike')}><Strikethrough className="h-3.5 w-3.5" /></ToolbarBtn>
-            {!isEditingMode && !hideCodeButton && (
-              <ToolbarBtn label="Code (Ctrl+E)" active={active.has('code')} onClick={() => editorRef.current?.applyMark('code')}><Code className="h-3.5 w-3.5" /></ToolbarBtn>
-            )}
-            {!isMobile && (
-              <>
-                <ToolbarBtn label="Quote" active={active.has('quote')} onClick={() => editorRef.current?.applyBlock('quote')}><Quote className="h-3.5 w-3.5" /></ToolbarBtn>
-                <ToolbarBtn label="List" active={active.has('ul')} onClick={() => editorRef.current?.applyBlock('ul')}><List className="h-3.5 w-3.5" /></ToolbarBtn>
-                <ToolbarBtn label="Numbered list" active={active.has('ol')} onClick={() => editorRef.current?.applyBlock('ol')}><ListOrdered className="h-3.5 w-3.5" /></ToolbarBtn>
-              </>
-            )}
-            <ToolbarBtn label="Link" onClick={openLinkDialog}><LinkIcon className="h-3.5 w-3.5" /></ToolbarBtn>
-            <span className="mx-1 h-4 w-px bg-border" aria-hidden />
-            <EmojiPicker
-              onSelect={insertEmojiShortcode}
-              mode="shortcode"
-              onOpenChange={setToolbarPickerOpen}
-              trigger={
-                <ToolbarBtn label="Emoji"><Smile className="h-3.5 w-3.5" /></ToolbarBtn>
-              }
-            />
-            {giphyEnabled && (
-              <GiphyPicker
-                apiKey={giphyAPIKey}
-                onSelect={insertGiphyGIF}
-                onOpenChange={setToolbarPickerOpen}
-                trigger={
-                  <ToolbarBtn label="GIF"><ImagePlay className="h-3.5 w-3.5" /></ToolbarBtn>
-                }
-              />
-            )}
-            <button
-              type="button"
-              onClick={() => fileInputRef.current?.click()}
-              disabled={isUploading}
-              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50 max-md:h-9 max-md:w-9"
-              aria-label="Attach file"
-            >
-              <Paperclip className="h-3.5 w-3.5" />
-            </button>
-            {showToolbarSend && (
-              <>
-                <span className="ml-auto" aria-hidden />
-                <Button
-                  onClick={handleSend}
-                  disabled={!canSend}
-                  size="icon"
-                  className="h-7 w-7 rounded-md max-md:h-9 max-md:w-9"
-                  aria-label="Send message"
-                >
-                  <Send className="h-4 w-4" />
-                </Button>
-              </>
-            )}
-            {isEditingMode && (
-              <>
-                <span className="mx-1 h-4 w-px bg-border" aria-hidden />
-                {onCancel && (
-                  <Button
-                    onClick={onCancel}
-                    variant="ghost"
-                    size="icon"
-                    className="h-7 w-7 rounded-md max-md:h-9 max-md:w-9"
-                    aria-label="Cancel"
-                  >
-                    <X className="h-4 w-4" />
-                  </Button>
-                )}
-                <Button
-                  onClick={handleSend}
-                  disabled={!canSend}
-                  size="icon"
-                  className="h-7 w-7 rounded-md max-md:h-9 max-md:w-9"
-                  aria-label={submitLabel ?? 'Send message'}
-                >
-                  <Save className="h-4 w-4" />
-                </Button>
-              </>
-            )}
-          </div>
-        )}
+        {showToolbar && !isMobile && renderToolbar('top')}
 
         {drafts.length > 0 && (
           <div className="flex flex-wrap gap-1.5 border-b p-2" aria-label="Draft attachments">
@@ -736,6 +739,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
             </div>
           )}
         </div>
+        {showToolbar && isMobile && renderToolbar('bottom')}
       </div>
       <input
         ref={fileInputRef}

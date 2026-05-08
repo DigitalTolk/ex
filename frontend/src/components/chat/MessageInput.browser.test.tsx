@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { render } from 'vitest-browser-react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MessageInput } from './MessageInput';
+import { expectPaintedAtCenter } from '@/test/browser-assertions';
 
 const uploadAttachmentMock = vi.hoisted(() => vi.fn());
 
@@ -89,6 +90,13 @@ describe('MessageInput browser behavior', () => {
 
     const attach = screen.getByLabelText('Attach file');
     await expect.element(attach).toBeVisible();
+    expectPaintedAtCenter(attach.element());
+    const toolbar = screen.getByRole('toolbar', { name: 'Formatting' });
+    const editor = screen.getByLabelText('Message input');
+    if (window.innerWidth <= 767) {
+      expect(toolbar.element()).toHaveAttribute('data-toolbar-placement', 'bottom');
+      expect(editor.element().compareDocumentPosition(toolbar.element()) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    }
 
     const input = document.querySelector('input[type="file"]') as HTMLInputElement | null;
     expect(input).not.toBeNull();
@@ -103,11 +111,13 @@ describe('MessageInput browser behavior', () => {
     });
     const attachments = screen.getByLabelText('Draft attachments');
     await expect.element(attachments).toBeVisible();
+    expectPaintedAtCenter(attachments.element());
     await expect.element(screen.getByText('42%')).toBeVisible();
     await expect.element(screen.getByRole('progressbar', { name: 'Uploading camera-photo.png' })).toBeVisible();
     const preview = document.querySelector('[data-testid="attachment-chip-thumb"]') as HTMLImageElement | null;
     expect(preview).not.toBeNull();
     await expect.element(preview!).toBeVisible();
+    expectPaintedAtCenter(preview!);
     expect(preview!.src).toMatch(/^blob:/);
     completeUpload?.();
   });
@@ -137,6 +147,7 @@ describe('MessageInput browser behavior', () => {
     const preview = document.querySelector('[data-testid="attachment-chip-thumb"]') as HTMLImageElement | null;
     expect(preview).not.toBeNull();
     await expect.element(preview!).toBeVisible();
+    expectPaintedAtCenter(preview!);
     expect(preview!.src).toBe(previewPNG);
   });
 });

@@ -22,6 +22,7 @@ import SearchResultsPage from '@/pages/SearchResultsPage';
 import { NotFoundPage } from '@/pages/NotFoundPage';
 import { GENERAL_CHANNEL_SLUG } from '@/lib/roles';
 import { useIsMobile } from '@/hooks/useIsMobile';
+import { useServerVersion } from '@/hooks/useServerVersion';
 import type { ReactNode } from 'react';
 
 const queryClient = new QueryClient({
@@ -39,12 +40,10 @@ function ProtectedRoute({ children }: { children: ReactNode }) {
   if (isLoading) {
     return (
       <div
-        className="flex min-h-screen items-center justify-center bg-[#1a1d21]"
+        className="min-h-screen bg-[#1a1d21]"
         aria-label="Loading chat"
         data-testid="app-auth-loading"
-      >
-        <img className="h-14 w-14" src="/logo.svg" alt="ex" />
-      </div>
+      />
     );
   }
 
@@ -59,6 +58,11 @@ function ChatHomeRoute() {
   const isMobile = useIsMobile();
   if (!isMobile) return <Navigate to={`/channel/${GENERAL_CHANNEL_SLUG}`} replace />;
   return <div className="hidden" data-testid="mobile-channel-home" aria-hidden="true" />;
+}
+
+function ServerVersionBootstrap() {
+  useServerVersion();
+  return null;
 }
 
 function AppRoutes() {
@@ -106,6 +110,7 @@ export default function App() {
                 <NotificationProvider>
                   <TypingProvider>
                     <TooltipProvider>
+                      <ServerVersionBootstrap />
                       <NotificationCountTitleBridge />
                       <div className="flex h-dvh flex-col bg-[#1a1d21] pt-[env(safe-area-inset-top)]">
                         <div className="min-h-0 flex-1 bg-background">

@@ -63,6 +63,7 @@ describe('AuthContext - setAuth', () => {
     expect(screen.getByTestId('authenticated')).toHaveTextContent('true');
     expect(screen.getByTestId('user-name')).toHaveTextContent('Test User');
   });
+
 });
 
 describe('AuthContext - logout', () => {

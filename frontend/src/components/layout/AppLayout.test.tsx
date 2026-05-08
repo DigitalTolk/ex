@@ -195,7 +195,7 @@ describe('AppLayout', () => {
     const pane = screen.getByTestId('mobile-channel-sidebar');
     fireEvent.click(within(pane).getByText('Close sidebar'));
 
-    expect(pane).toHaveAttribute('aria-hidden', 'true');
+    expect(pane).not.toHaveAttribute('aria-hidden');
     expect(pane).toHaveAttribute('inert');
     expect(document.querySelector('main')).toHaveAttribute('data-mobile-channels-open', 'false');
   });
@@ -304,7 +304,7 @@ describe('AppLayout', () => {
     renderLayout();
 
     const pane = screen.getByTestId('mobile-channel-sidebar');
-    expect(pane).toHaveAttribute('aria-hidden', 'true');
+    expect(pane).not.toHaveAttribute('aria-hidden');
     expect(pane).toHaveAttribute('inert');
   });
 
@@ -317,7 +317,7 @@ describe('AppLayout', () => {
     touchDrag(main, 12, 92);
 
     const pane = screen.getByTestId('mobile-channel-sidebar');
-    expect(pane).toHaveAttribute('aria-hidden', 'true');
+    expect(pane).not.toHaveAttribute('aria-hidden');
     expect(pane).toHaveAttribute('inert');
   });
 

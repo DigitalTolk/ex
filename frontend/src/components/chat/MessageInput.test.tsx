@@ -152,6 +152,8 @@ describe('MessageInput', () => {
 
     const toolbar = await screen.findByRole('toolbar', { name: 'Formatting' });
     const send = within(toolbar).getByLabelText('Send message');
+    expect(toolbar).toHaveAttribute('data-toolbar-placement', 'bottom');
+    expect(editor.compareDocumentPosition(toolbar) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(send).toHaveClass('h-7', 'w-7', 'max-md:h-9', 'max-md:w-9');
     expect(send.closest('[data-message-composer]')).toBeInTheDocument();
     expect(screen.getAllByLabelText('Send message')).toHaveLength(1);
@@ -242,6 +244,8 @@ describe('MessageInput', () => {
     });
 
     const toolbar = screen.getByRole('toolbar', { name: 'Formatting' });
+    expect(toolbar).toHaveAttribute('data-toolbar-placement', 'top');
+    expect(toolbar.compareDocumentPosition(editor) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(within(toolbar).getByLabelText('Send message')).toBeInTheDocument();
     expect(screen.getByLabelText('Send message').closest('[role="toolbar"]')).toBe(toolbar);
     expect(screen.getAllByLabelText('Send message')).toHaveLength(1);

@@ -4,6 +4,7 @@ import { BrowserRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Sidebar } from './Sidebar';
 import type { User, UserChannel } from '@/types';
+import { expectPaintedAtCenter } from '@/test/browser-assertions';
 
 const mockUser: User = {
   id: 'u-1',
@@ -134,7 +135,9 @@ describe('Sidebar browser behavior', () => {
     await vi.waitFor(() => {
       expect(viewport!.scrollTop).toBeGreaterThan(0);
     });
-    await expect.element(screen.getByText('channel-49')).toBeVisible();
+    const lowerChannel = screen.getByText('channel-9');
+    await expect.element(lowerChannel).toBeVisible();
+    expectPaintedAtCenter(lowerChannel.element());
   });
 
   it('runs under the configured desktop and mobile browser sizes', () => {

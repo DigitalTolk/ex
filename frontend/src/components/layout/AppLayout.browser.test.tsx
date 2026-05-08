@@ -6,6 +6,7 @@ import { AppLayout } from './AppLayout';
 import { Header } from './Header';
 import { PageContainer } from './PageContainer';
 import { SidePanel } from '@/components/chat/SidePanel';
+import { expectPaintedAtCenter } from '@/test/browser-assertions';
 
 vi.mock('@/components/SearchBar', () => ({
   SearchBar: () => <div aria-label="Search">Search</div>,
@@ -66,6 +67,7 @@ describe('AppLayout browser behavior', () => {
     expect(banner!.getBoundingClientRect().top).toBeGreaterThanOrEqual(
       Math.floor(appHeader!.getBoundingClientRect().bottom),
     );
+    expectPaintedAtCenter(banner!, '[data-testid="update-banner"]');
   });
 
   it('places mobile right panels below the measured channel header, including taller headers', async () => {
@@ -102,6 +104,7 @@ describe('AppLayout browser behavior', () => {
       expect(gap).toBeGreaterThanOrEqual(-0.5);
       expect(gap).toBeLessThanOrEqual(1);
     });
+    expectPaintedAtCenter(panel!, '[aria-label="Pinned messages"]');
   });
 
 });

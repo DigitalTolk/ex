@@ -172,7 +172,7 @@ export function AppLayout({ children }: AppLayoutProps) {
           </div>
           <div className="h-11 w-11 lg:hidden" aria-hidden />
         </header>
-        <div className="shrink-0 bg-[#1a1d21]" data-testid="app-layout-banners">
+        <div className="relative z-20 shrink-0 bg-[#1a1d21]" data-testid="app-layout-banners">
           <UpdateBanner />
           <NotificationPermissionBanner />
         </div>
@@ -184,7 +184,6 @@ export function AppLayout({ children }: AppLayoutProps) {
           {isMobile && (
             <aside
               className="fixed inset-x-0 bottom-0 top-[calc(2.75rem+env(safe-area-inset-top))] z-0 bg-[#1a1d21] text-zinc-100 lg:hidden"
-              aria-hidden={mobileChannelsOpen ? undefined : 'true'}
               inert={mobileChannelsOpen ? undefined : true}
               data-testid="mobile-channel-sidebar"
             >

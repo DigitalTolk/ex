@@ -3,6 +3,7 @@ import { render } from 'vitest-browser-react';
 import { MessageList } from './MessageList';
 import type { Attachment, Message } from '@/types';
 import type { ReactNode } from 'react';
+import { expectPaintedAtCenter } from '@/test/browser-assertions';
 
 const browserMedia = vi.hoisted(() => ({
   imageURL: `data:image/svg+xml,${encodeURIComponent(
@@ -119,7 +120,9 @@ describe('MessageList browser behavior', () => {
     expect(scroller).not.toBeNull();
 
     await vi.waitFor(() => {
-      expect(document.querySelector('[data-testid="message-image-thumb"]')).not.toBeNull();
+      const image = document.querySelector('[data-testid="message-image-thumb"]');
+      expect(image).not.toBeNull();
+      expectPaintedAtCenter(image!);
     });
 
     await vi.waitFor(() => {

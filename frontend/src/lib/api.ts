@@ -43,7 +43,7 @@ async function errorMessageFromResponse(res: Response): Promise<string> {
   return text;
 }
 
-function captureServerVersion(res: Response): void {
+export function captureServerVersion(res: Response): void {
   const version = res.headers?.get(APP_VERSION_HEADER);
   if (version) setServerVersion(version);
 }
@@ -56,6 +56,7 @@ export async function refreshAccessToken(): Promise<string | null> {
           method: 'POST',
           credentials: 'include',
         });
+        captureServerVersion(res);
         if (!res.ok) {
           clearAccessToken();
           return null;
@@ -123,6 +124,9 @@ export async function apiFetch<T>(
   }
 
   if (!res.ok) {
+    if (res.status === 401) {
+      clearAccessToken();
+    }
     throw new ApiError(res.status, await errorMessageFromResponse(res));
   }
 

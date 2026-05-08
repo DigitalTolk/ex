@@ -10,6 +10,7 @@ import {
   setAccessToken,
   getAccessToken,
   clearAccessToken,
+  refreshAccessToken,
   apiFetch,
   ApiError,
 } from './api';
@@ -113,6 +114,20 @@ describe('apiFetch', () => {
 
     await expect(apiFetch('/api/v1/channels/general')).rejects.toThrow(ApiError);
     expect(setServerVersionMock).toHaveBeenCalledWith('server-build-2');
+  });
+
+  it('captures app version headers when token refresh fails before the app shell mounts', async () => {
+    const mockResponse = {
+      ok: false,
+      status: 401,
+      headers: new Headers({ 'X-EX-App-Version': 'server-build-3' }),
+      json: () => Promise.resolve({ error: 'missing or invalid token' }),
+    } as Response;
+
+    vi.mocked(globalThis.fetch).mockResolvedValue(mockResponse);
+
+    await expect(refreshAccessToken()).resolves.toBeNull();
+    expect(setServerVersionMock).toHaveBeenCalledWith('server-build-3');
   });
 
   it('uses structured backend error messages instead of raw JSON', async () => {

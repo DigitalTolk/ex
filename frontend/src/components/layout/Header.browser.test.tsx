@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { render } from 'vitest-browser-react';
 import { Header } from './Header';
+import { expectPaintedAtCenter } from '@/test/browser-assertions';
 
 const channel = {
   id: 'ch-1',
@@ -31,6 +32,8 @@ describe('Header browser behavior', () => {
     await expect.element(title).toBeVisible();
     expect(document.body.textContent).not.toContain(channel.description);
     expect(title.element().scrollWidth).toBeLessThanOrEqual(title.element().clientWidth + 1);
+    expectPaintedAtCenter(title.element());
+    expectPaintedAtCenter(screen.getByLabelText('View shared files').element());
   });
 
   it('keeps the desktop channel description aligned with the title area, not the right actions', async () => {
@@ -59,5 +62,7 @@ describe('Header browser behavior', () => {
 
     expect(descriptionRect.left).toBeLessThan(titleRect.left + 4);
     expect(descriptionRect.right).toBeLessThan(filesRect.left - 8);
+    expectPaintedAtCenter(description.element());
+    expectPaintedAtCenter(files.element());
   });
 });

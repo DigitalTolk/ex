@@ -4,7 +4,7 @@ import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { Globe, Search, MessageSquare, MoreVertical } from 'lucide-react';
 import { PageContainer } from '@/components/layout/PageContainer';
-import { Button } from '@/components/ui/button';
+import { Button, buttonVariants } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
@@ -393,10 +393,10 @@ function MembersTab({ isAdmin, currentUserId }: MembersTabProps) {
                   {isAdmin && !isSelf && (
                     <DropdownMenu>
                       <DropdownMenuTrigger
-                        className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-input bg-background hover:bg-accent hover:text-accent-foreground"
+                        className={buttonVariants({ size: 'sm', variant: 'outline', className: 'h-8 w-8 shrink-0 p-0' })}
                         aria-label={`Manage ${u.displayName}`}
                       >
-                        <MoreVertical className="h-4 w-4" />
+                        <MoreVertical className="h-3.5 w-3.5" />
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="end" className="w-52">
                         <DropdownMenuItem

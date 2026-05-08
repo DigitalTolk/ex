@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { render } from 'vitest-browser-react';
 import { ImageLightbox } from './ImageLightbox';
+import { expectPaintedAtCenter } from '@/test/browser-assertions';
 
 const imageURL = `data:image/svg+xml,${encodeURIComponent(
   '<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="800"><rect width="1200" height="800" fill="#3b82f6"/><circle cx="600" cy="400" r="180" fill="#f8fafc"/></svg>',
@@ -41,6 +42,7 @@ describe('ImageLightbox browser behavior', () => {
     const lightboxRect = document.querySelector('[data-testid="image-lightbox"]')!.getBoundingClientRect();
     expect(stageRect.width).toBeGreaterThan(window.innerWidth * 0.9);
     expect(stageRect.height).toBeGreaterThan(lightboxRect.height * 0.55);
+    expectPaintedAtCenter(stage!, '[data-testid="image-lightbox-zoom-stage"]');
 
     const before = image!.getBoundingClientRect();
     await screen.getByTestId('image-lightbox-zoom-in').click();

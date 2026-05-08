@@ -4,6 +4,7 @@ import { act, fireEvent, render, screen } from '@testing-library/react';
 import {
   BUILD_DISPLAY_VERSION,
   BUILD_VERSION,
+  resetServerVersionForTests,
   setServerVersion,
   useServerVersion,
 } from '@/hooks/useServerVersion';
@@ -17,6 +18,7 @@ import { UpdateBanner } from '@/components/UpdateBanner';
 // once; the others rely on subsequent setServerVersion calls overwriting.
 
 let captured: ReturnType<typeof useServerVersion> | null = null;
+const originalFetch = globalThis.fetch;
 function Probe() {
   const v = useServerVersion();
   useEffect(() => {
@@ -28,10 +30,17 @@ function Probe() {
 describe('useServerVersion', () => {
   beforeEach(() => {
     captured = null;
+    resetServerVersionForTests();
+    globalThis.fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ version: BUILD_VERSION }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }));
   });
 
   afterEach(() => {
     vi.useRealTimers();
+    resetServerVersionForTests();
+    globalThis.fetch = originalFetch;
   });
 
   it('reports outdated=false before the server reports a version', () => {
@@ -108,6 +117,28 @@ describe('useServerVersion', () => {
     act(() => setServerVersion('v4.0.0'));
     expect(captured?.serverVersion).toBe('v4.0.0');
     expect(captured?.outdated).toBe(before?.outdated);
+  });
+
+  it('retries soon after a failed version poll so mobile reconnects do not wait for focus', async () => {
+    vi.useFakeTimers();
+    vi.mocked(globalThis.fetch)
+      .mockRejectedValueOnce(new TypeError('connection refused'))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ version: 'mobile-reconnected' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }));
+
+    render(<Probe />);
+    await act(async () => undefined);
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    await act(async () => undefined);
+
+    expect(captured?.serverVersion).toBe('mobile-reconnected');
+    expect(captured?.outdated).toBe(true);
   });
 });
 

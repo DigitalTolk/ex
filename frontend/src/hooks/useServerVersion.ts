@@ -30,6 +30,9 @@ export function setServerVersion(v: string): void {
 export function resetServerVersionForTests(): void {
   serverVersion = null;
   lastETag = null;
+  pollerCleanup?.();
+  pollerCleanup = null;
+  pollerStarted = false;
   for (const cb of subscribers) cb();
 }
 
@@ -48,6 +51,7 @@ function getSnapshot(): string | null {
 // minute is small enough that users see the banner shortly after a
 // deploy and large enough that the check is invisible at scale.
 const POLL_INTERVAL_MS = 60_000;
+const RETRY_AFTER_FAILURE_MS = 5_000;
 
 // Cached ETag from the previous /api/v1/version response. Sending it
 // back as If-None-Match makes the server resolve the steady-state poll
@@ -55,29 +59,70 @@ const POLL_INTERVAL_MS = 60_000;
 let lastETag: string | null = null;
 
 let pollerStarted = false;
+let pollerCleanup: (() => void) | null = null;
 function startPoller(): void {
   if (pollerStarted) return;
   pollerStarted = true;
   if (typeof window === 'undefined') return;
+  let retryTimeoutID: number | null = null;
+  const clearRetry = () => {
+    if (retryTimeoutID === null) return;
+    window.clearTimeout(retryTimeoutID);
+    retryTimeoutID = null;
+  };
+  const scheduleRetry = () => {
+    if (retryTimeoutID !== null) return;
+    retryTimeoutID = window.setTimeout(() => {
+      retryTimeoutID = null;
+      void tick();
+    }, RETRY_AFTER_FAILURE_MS);
+  };
   const tick = async () => {
     try {
       const headers: HeadersInit = {};
       if (lastETag) headers['If-None-Match'] = lastETag;
       const res = await fetch('/api/v1/version', { headers, credentials: 'include' });
       if (res.status === 304) return;
-      if (!res.ok) return;
+      if (!res.ok) {
+        scheduleRetry();
+        return;
+      }
+      clearRetry();
       const etag = res.headers.get('ETag');
       if (etag) lastETag = etag;
       const data = (await res.json()) as { version?: string };
       if (data?.version) setServerVersion(data.version);
     } catch {
-      // Network blip — retry on next tick. A failed poll never surfaces
-      // the banner; that's deliberate.
+      // Network blip or app resume while the server is still restarting.
+      // Mobile webviews do not always fire focus again after connectivity
+      // returns, so retry soon instead of waiting for the next minute tick.
+      scheduleRetry();
     }
   };
-  window.addEventListener('focus', tick);
+  const tickWhenVisible = () => {
+    if (document.visibilityState === 'hidden') return;
+    void tick();
+  };
+  const tickOnPageShow = () => {
+    void tick();
+  };
+  const tickOnOnline = () => {
+    void tick();
+  };
+  window.addEventListener('focus', tickWhenVisible);
+  window.addEventListener('online', tickOnOnline);
+  window.addEventListener('pageshow', tickOnPageShow);
+  document.addEventListener('visibilitychange', tickWhenVisible);
   void tick();
-  window.setInterval(tick, POLL_INTERVAL_MS);
+  const intervalID = window.setInterval(tick, POLL_INTERVAL_MS);
+  pollerCleanup = () => {
+    clearRetry();
+    window.removeEventListener('focus', tickWhenVisible);
+    window.removeEventListener('online', tickOnOnline);
+    window.removeEventListener('pageshow', tickOnPageShow);
+    document.removeEventListener('visibilitychange', tickWhenVisible);
+    window.clearInterval(intervalID);
+  };
 }
 
 export function useServerVersion(): {
