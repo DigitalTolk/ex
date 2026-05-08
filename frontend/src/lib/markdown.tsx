@@ -21,6 +21,7 @@ export interface RenderOpts {
   // onTagClick turns `#tag` tokens into clickable buttons that surface
   // the tag-search side panel. Without it, hashtags render as plain text.
   onTagClick?: (tag: string) => void;
+  onMediaLoad?: () => void;
   // Browser key for resolving persisted `giphy:<id>` references. The
   // saved message stores only the GIPHY ID; media URLs are fetched
   // directly from GIPHY on render.
@@ -255,6 +256,7 @@ function findInline(src: string, opts: RenderOpts | undefined, keyPrefix: string
           width={m[3] ? Number(m[3]) : undefined}
           height={m[4] ? Number(m[4]) : undefined}
           apiKey={opts?.giphyAPIKey}
+          onMediaLoad={opts?.onMediaLoad}
         />
       );
     }
@@ -275,6 +277,7 @@ function findInline(src: string, opts: RenderOpts | undefined, keyPrefix: string
           muted
           playsInline
           preload="metadata"
+          onLoadedMetadata={opts?.onMediaLoad}
         />
       );
     }
@@ -287,6 +290,7 @@ function findInline(src: string, opts: RenderOpts | undefined, keyPrefix: string
         height={h}
         className="my-1 max-h-80 max-w-full rounded-md border"
         loading="lazy"
+        onLoad={opts?.onMediaLoad}
       />
     );
   });

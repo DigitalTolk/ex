@@ -148,7 +148,7 @@ describe('ChatPage', () => {
     renderChatPage();
 
     expect(screen.getByTestId('mobile-chat-loading')).toBeInTheDocument();
-    expect(screen.queryByTestId('app-layout')).not.toBeInTheDocument();
+    expect(screen.getByTestId('app-layout')).toBeInTheDocument();
   });
 
   it('renders the mobile chat shell after initial sidebar data has loaded', async () => {
@@ -169,8 +169,8 @@ describe('ChatPage', () => {
     renderChatPage();
 
     expect(screen.getByTestId('mobile-chat-loading')).toBeInTheDocument();
-    await waitFor(() => expect(screen.getByTestId('app-layout')).toBeInTheDocument());
-    expect(screen.queryByTestId('mobile-chat-loading')).not.toBeInTheDocument();
+    expect(screen.getByTestId('app-layout')).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByTestId('mobile-chat-loading')).not.toBeInTheDocument());
   });
 
   it('does not keep mobile users stuck on the loading page when a startup query fails', async () => {

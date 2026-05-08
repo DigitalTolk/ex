@@ -181,6 +181,23 @@ describe('ThreadPanel', () => {
     expect(screen.getByLabelText('Close thread').parentElement).toHaveClass('gap-1', 'max-md:gap-3');
   });
 
+  it('aligns the mobile thread panel directly under the app header without a safe-area gap', () => {
+    mockApiFetch.mockResolvedValueOnce([]);
+    renderWithProviders(
+      <ThreadPanel
+        channelId="ch-1"
+        threadRootID="m-1"
+        onClose={vi.fn()}
+        userMap={userMap}
+        currentUserId="u-1"
+      />,
+    );
+
+    const panel = screen.getByLabelText('Thread');
+    expect(panel).toHaveClass('max-md:top-[var(--mobile-right-panel-top,6rem)]');
+    expect(panel.className).not.toContain('safe-area-inset-top');
+  });
+
   it('does not close on a mobile right-to-left swipe', () => {
     mockApiFetch.mockResolvedValueOnce([]);
     const onClose = vi.fn();
@@ -216,7 +233,7 @@ describe('ThreadPanel', () => {
 
     const panel = screen.getByLabelText('Thread');
     vi.useFakeTimers();
-    touchSwipe(panel, 120, 240);
+    touchSwipe(panel, 12, 132);
 
     expect(panel).toHaveAttribute('data-swipe-dismissing', 'true');
     expect(panel).toHaveClass('max-md:translate-x-full');
@@ -240,9 +257,30 @@ describe('ThreadPanel', () => {
     );
 
     const panel = screen.getByLabelText('Thread');
-    touchDrag(panel, 120, 190);
+    touchDrag(panel, 12, 82);
 
     expect(panel).toHaveStyle({ transform: 'translateX(70px)', transition: 'none' });
+    expect(panel).toHaveAttribute('data-swipe-dismissing', 'false');
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('ignores middle-of-panel drags so scrolling does not dismiss the thread', () => {
+    mockApiFetch.mockResolvedValueOnce([]);
+    const onClose = vi.fn();
+    renderWithProviders(
+      <ThreadPanel
+        channelId="ch-1"
+        threadRootID="m-1"
+        onClose={onClose}
+        userMap={userMap}
+        currentUserId="u-1"
+      />,
+    );
+
+    const panel = screen.getByLabelText('Thread');
+    touchDrag(panel, 120, 190);
+
+    expect(panel).not.toHaveStyle({ transform: 'translateX(70px)' });
     expect(panel).toHaveAttribute('data-swipe-dismissing', 'false');
     expect(onClose).not.toHaveBeenCalled();
   });

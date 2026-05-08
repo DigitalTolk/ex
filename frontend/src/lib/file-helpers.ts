@@ -18,6 +18,10 @@ export function isImageContentType(ct: string): boolean {
   return /^image\//i.test(ct);
 }
 
+export function isImageAttachment(contentType: string, filename = ''): boolean {
+  return isImageContentType(contentType) || isImageURL(filename);
+}
+
 // Resolves a Lucide icon component for a given attachment. Falls back to
 // the generic File glyph when nothing matches. The mapping checks the
 // MIME type first (more reliable when present) then the extension —

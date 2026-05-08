@@ -14,7 +14,7 @@ interface PageContainerProps {
 // consistent and uses the full content width.
 export function PageContainer({ title, description, actions, children }: PageContainerProps) {
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto" data-testid="page-container">
+    <div className="min-h-0 flex-1 overflow-y-auto" data-page-scroll="true" data-testid="page-container">
       <div className="space-y-6 p-4 sm:p-6">
         <header className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div className="min-w-0">

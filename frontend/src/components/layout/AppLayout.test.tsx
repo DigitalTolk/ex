@@ -13,6 +13,14 @@ vi.mock('./Sidebar', () => ({
   ),
 }));
 
+vi.mock('@/components/UpdateBanner', () => ({
+  UpdateBanner: () => <div data-testid="update-banner" />,
+}));
+
+vi.mock('@/components/NotificationPermissionBanner', () => ({
+  NotificationPermissionBanner: () => <div data-testid="notification-permission-banner" />,
+}));
+
 function renderLayout(children: React.ReactNode = <div>Main content</div>) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
@@ -118,10 +126,21 @@ describe('AppLayout', () => {
   it('keeps flex scroll containers shrinkable on mobile Safari', () => {
     const { container } = renderLayout();
 
-    const bodyShell = container.querySelector('header')!.nextElementSibling as HTMLElement;
+    const bodyShell = container.querySelector('header')!.nextElementSibling!.nextElementSibling as HTMLElement;
     const main = bodyShell.querySelector('main')!;
     expect(bodyShell).toHaveClass('min-h-0', 'overflow-hidden');
     expect(main).toHaveClass('min-h-0', 'overflow-hidden');
+  });
+
+  it('renders reload and notification banners directly below the app header', () => {
+    const { container } = renderLayout();
+
+    const header = container.querySelector('header')!;
+    const bannerBlock = header.nextElementSibling as HTMLElement;
+    expect(bannerBlock).toHaveAttribute('data-testid', 'app-layout-banners');
+    expect(bannerBlock).toContainElement(screen.getByTestId('update-banner'));
+    expect(bannerBlock).toContainElement(screen.getByTestId('notification-permission-banner'));
+    expect(bannerBlock.nextElementSibling?.querySelector('main')).toBeInTheDocument();
   });
 
   it('keeps the desktop sidebar as a persistent rail', () => {
@@ -176,7 +195,7 @@ describe('AppLayout', () => {
     const pane = screen.getByTestId('mobile-channel-sidebar');
     fireEvent.click(within(pane).getByText('Close sidebar'));
 
-    expect(pane).toHaveAttribute('aria-hidden', 'true');
+    expect(pane).not.toHaveAttribute('aria-hidden');
     expect(pane).toHaveAttribute('inert');
     expect(document.querySelector('main')).toHaveAttribute('data-mobile-channels-open', 'false');
   });
@@ -266,13 +285,26 @@ describe('AppLayout', () => {
     expect(main).toHaveAttribute('data-channel-dragging', 'true');
   });
 
+  it('requires a distinct left-edge swipe before moving the mobile chat view', () => {
+    setMobileMatch(true);
+    window.history.pushState({}, '', '/channel/general');
+    const { container } = renderLayout();
+    const main = container.querySelector('main')!;
+
+    touchDrag(main, 96, 176);
+
+    expect(main).toHaveAttribute('data-channel-dragging', 'false');
+    expect(main).not.toHaveStyle({ transform: 'translate3d(80px, 0, 0)' });
+    expect(screen.getByTestId('mobile-channel-sidebar')).toHaveAttribute('inert');
+  });
+
   it('keeps the covered mobile channel pane inert', () => {
     setMobileMatch(true);
     window.history.pushState({}, '', '/channel/general');
     renderLayout();
 
     const pane = screen.getByTestId('mobile-channel-sidebar');
-    expect(pane).toHaveAttribute('aria-hidden', 'true');
+    expect(pane).not.toHaveAttribute('aria-hidden');
     expect(pane).toHaveAttribute('inert');
   });
 
@@ -285,7 +317,7 @@ describe('AppLayout', () => {
     touchDrag(main, 12, 92);
 
     const pane = screen.getByTestId('mobile-channel-sidebar');
-    expect(pane).toHaveAttribute('aria-hidden', 'true');
+    expect(pane).not.toHaveAttribute('aria-hidden');
     expect(pane).toHaveAttribute('inert');
   });
 

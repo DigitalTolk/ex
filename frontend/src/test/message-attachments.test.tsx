@@ -47,6 +47,26 @@ describe('MessageAttachments', () => {
     expect(screen.getByAltText('cat.png')).toBeInTheDocument();
   });
 
+  it('keeps single-image thumbnails inside the mobile message column', () => {
+    const att: Attachment = {
+      id: 'a-mobile-img',
+      filename: 'mobile.png',
+      contentType: 'image/png',
+      size: 12345,
+      url: 'https://cdn/mobile.png',
+      width: 1600,
+      height: 1200,
+    };
+    useAttachmentsBatchMock.mockReturnValue({
+      map: new Map([['a-mobile-img', att]]),
+      isLoading: false,
+    });
+    render(<MessageAttachments {...baseProps} ids={['a-mobile-img']} />);
+
+    expect(screen.getByLabelText('Open image mobile.png')).toHaveClass('max-md:max-w-full');
+    expect(screen.getByAltText('mobile.png')).toHaveClass('max-w-full');
+  });
+
   it('uses rendered thumbnail dimensions in image width and height attributes', () => {
     const att: Attachment = {
       id: 'wide-1',
@@ -125,6 +145,35 @@ describe('MessageAttachments', () => {
     // lucide icon (no thumbnail).
     const boxes = screen.getAllByTestId('message-attachment-box');
     expect(boxes).toHaveLength(2);
+  });
+
+  it('lets compact attachment boxes shrink to the mobile message width', () => {
+    const att1: Attachment = {
+      id: 'mobile-file-1',
+      filename: 'one.pdf',
+      contentType: 'application/pdf',
+      size: 100,
+      url: 'https://cdn/one.pdf',
+    };
+    const att2: Attachment = {
+      id: 'mobile-file-2',
+      filename: 'two.pdf',
+      contentType: 'application/pdf',
+      size: 200,
+      url: 'https://cdn/two.pdf',
+    };
+    useAttachmentsBatchMock.mockReturnValue({
+      map: new Map<string, Attachment>([
+        ['mobile-file-1', att1],
+        ['mobile-file-2', att2],
+      ]),
+      isLoading: false,
+    });
+    render(<MessageAttachments {...baseProps} ids={['mobile-file-1', 'mobile-file-2']} />);
+
+    for (const row of screen.getAllByTestId('message-attachment-box')) {
+      expect(row.closest('.w-64')).toHaveClass('max-w-full', 'max-md:w-full');
+    }
   });
 
   it('attachment-box and thumbnail buttons suppress click-focus outline but keep a keyboard ring', () => {
@@ -307,7 +356,7 @@ describe('MessageAttachments', () => {
     expect(lightbox.textContent).toContain('~general');
     const image = screen.getByTestId('image-lightbox-image');
     expect(image).toHaveAttribute('src', 'https://cdn/pic.png');
-    expect(image).toHaveClass('max-md:max-h-[calc(100dvh-env(safe-area-inset-top)-env(safe-area-inset-bottom)-6rem)]');
+    expect(image).toHaveClass('max-h-full', 'max-w-full');
     expect(screen.getByTestId('image-lightbox-zoom-stage')).toHaveClass('touch-none', 'overscroll-contain');
   });
 
@@ -369,10 +418,10 @@ describe('MessageAttachments', () => {
     expect(image).toHaveStyle({ transform: 'translate(0px, 0px) scale(1)' });
 
     fireEvent.click(screen.getByTestId('image-lightbox-zoom-in'));
-    expect(image).toHaveStyle({ transform: 'translate(0px, 0px) scale(1.5)' });
+    expect(image).toHaveStyle({ transform: 'translate(0px, 0px) scale(1.8)' });
 
-    fireEvent.doubleClick(image);
-    expect(image).toHaveStyle({ transform: 'translate(0px, 0px) scale(1)' });
+    fireEvent.click(screen.getByTestId('image-lightbox-zoom-out'));
+    expect(image).toHaveStyle({ transform: 'translate(0px, 0px) scale(1.1)' });
   });
 
   it('pans a zoomed lightbox image on touch-style pointer drag', () => {
@@ -398,7 +447,7 @@ describe('MessageAttachments', () => {
     fireEvent.pointerMove(stage, { pointerId: 1, clientX: 152, clientY: 118, pointerType: 'touch' });
     fireEvent.pointerUp(stage, { pointerId: 1, clientX: 152, clientY: 118, pointerType: 'touch' });
 
-    expect(image).toHaveStyle({ transform: 'translate(32px, -22px) scale(1.5)' });
+    expect(image).toHaveStyle({ transform: 'translate(32px, -22px) scale(1.8)' });
     expect(image).toHaveAttribute('data-pan-x', '32');
     expect(image).toHaveAttribute('data-pan-y', '-22');
   });

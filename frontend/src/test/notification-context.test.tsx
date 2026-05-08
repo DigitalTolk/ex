@@ -98,6 +98,7 @@ describe('NotificationProvider', () => {
 
   afterEach(() => {
     delete (window as Window & { __EX_DESKTOP__?: boolean }).__EX_DESKTOP__;
+    delete window.Capacitor;
     if (origNotification) {
       Object.defineProperty(window, 'Notification', { value: origNotification, configurable: true });
     }
@@ -134,6 +135,33 @@ describe('NotificationProvider', () => {
     expect(notificationCtor).toHaveBeenCalledTimes(1);
     const opts = notificationCtor.mock.calls[0][1] as NotificationOptions;
     expect(opts.icon).toBeUndefined();
+  });
+
+  it('keeps desktop notification behavior unchanged when the mobile OneSignal plugin exists', () => {
+    Object.defineProperty(window, '__EX_DESKTOP__', {
+      value: true,
+      configurable: true,
+    });
+    window.Capacitor = {
+      Plugins: {
+        OneSignalCapacitor: {
+          login: vi.fn().mockResolvedValue(undefined),
+          addTags: vi.fn().mockResolvedValue(undefined),
+          logout: vi.fn().mockResolvedValue(undefined),
+          removeTags: vi.fn().mockResolvedValue(undefined),
+        },
+      },
+    };
+
+    renderProbe();
+    act(() => {
+      dispatchSpy!(samplePayload);
+    });
+
+    expect(notificationCtor).toHaveBeenCalledTimes(1);
+    const opts = notificationCtor.mock.calls[0][1] as NotificationOptions;
+    expect(opts.icon).toBeUndefined();
+    expect(window.Capacitor.Plugins?.OneSignalCapacitor?.login).not.toHaveBeenCalled();
   });
 
   it('suppresses conversation-message notifications when that DM is already on screen', () => {

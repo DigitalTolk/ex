@@ -210,7 +210,7 @@ describe('GiphyPicker', () => {
     expect(document.activeElement).not.toBe(screen.getByLabelText('Search GIFs'));
   });
 
-  it('uses a shorter mobile sheet height so it fits mobile browsers', async () => {
+  it('caps the mobile sheet at half the viewport so it overlays the composer without taking the page', async () => {
     setMobileMatch(true);
     giphyFetchMocks.trending.mockResolvedValue(sampleResponse);
     const user = userEvent.setup();
@@ -220,7 +220,8 @@ describe('GiphyPicker', () => {
 
     const dialog = await screen.findByRole('dialog');
     expect(dialog).toHaveAttribute('data-mobile-sheet', 'true');
-    expect(dialog.className).toContain('max-md:h-[min(58vh,calc(100dvh-9rem))]');
+    expect(dialog.className).toContain('max-md:h-[50dvh]');
+    expect(dialog).toHaveStyle({ maxHeight: '50dvh', overscrollBehaviorY: 'contain' });
   });
 
   it('closes the mobile sheet on swipe down', async () => {

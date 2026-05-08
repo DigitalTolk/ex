@@ -25,6 +25,7 @@ Thumbs.db
 *.dylib
 *.test
 *.out
+/.gocache/
 /vendor/
 
 # Frontend
@@ -44,5 +45,6 @@ Thumbs.db
 
 # Coverage
 /frontend/coverage/
+/frontend/coverage-browser/
 coverage.out
 coverage.html

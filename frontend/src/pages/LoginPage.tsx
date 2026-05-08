@@ -4,9 +4,10 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useAuth } from '@/context/AuthContext';
-import { apiFetch, setAccessToken } from '@/lib/api';
+import { apiFetch, captureServerVersion, setAccessToken } from '@/lib/api';
 import { GENERAL_CHANNEL_SLUG } from '@/lib/roles';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
+import { UpdateBanner } from '@/components/UpdateBanner';
 import type { User } from '@/types';
 
 export default function LoginPage() {
@@ -33,6 +34,7 @@ export default function LoginPage() {
         credentials: 'include',
         body: JSON.stringify({ email, password }),
       });
+      captureServerVersion(res);
       if (!res.ok) {
         const data = await res.json().catch(() => ({ error: 'Login failed' }));
         throw new Error(data.error?.message || data.error || 'Login failed');
@@ -60,6 +62,7 @@ export default function LoginPage() {
         credentials: 'include',
         body: JSON.stringify({ token: inviteToken, displayName, password }),
       });
+      captureServerVersion(res);
       if (!res.ok) {
         const data = await res
           .json()
@@ -81,8 +84,10 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-muted/40 px-4">
-      <div className="w-full max-w-sm space-y-6">
+    <div className="flex min-h-screen flex-col bg-muted/40">
+      <UpdateBanner />
+      <div className="flex min-h-0 flex-1 items-center justify-center px-4">
+        <div className="w-full max-w-sm space-y-6">
         <div className="text-center space-y-2">
           <h1 className="text-2xl font-bold tracking-tight">
             {isInviteMode ? 'Accept Invitation' : 'Welcome back'}
@@ -114,6 +119,7 @@ export default function LoginPage() {
                 placeholder="Your name"
                 required
                 autoFocus
+                autoComplete="name"
               />
             </div>
             <div className="space-y-2">
@@ -126,6 +132,7 @@ export default function LoginPage() {
                 placeholder="Choose a password"
                 required
                 minLength={8}
+                autoComplete="new-password"
               />
             </div>
             <Button
@@ -169,6 +176,7 @@ export default function LoginPage() {
                   placeholder="you@example.com"
                   required
                   autoFocus
+                  autoComplete="email"
                 />
               </div>
               <div className="space-y-2">
@@ -180,6 +188,7 @@ export default function LoginPage() {
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="Your password"
                   required
+                  autoComplete="current-password"
                 />
               </div>
               <Button
@@ -193,6 +202,7 @@ export default function LoginPage() {
             </form>
           </>
         )}
+        </div>
       </div>
     </div>
   );

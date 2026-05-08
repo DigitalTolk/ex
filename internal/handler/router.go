@@ -219,14 +219,26 @@ func NewRouter(
 		mux.Handle("/", spa)
 	}
 
+	var base http.Handler = mux
+	if appVersion != "" {
+		base = appVersionHeader(base, appVersion)
+	}
+
 	// Apply global middleware: CORS, RequestID, Logging.
-	handler := middleware.Wrap(mux,
+	handler := middleware.Wrap(base,
 		middleware.CORS(allowOrigins...),
 		middleware.RequestID,
 		middleware.Logging,
 	)
 
 	return handler
+}
+
+func appVersionHeader(next http.Handler, version string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set(AppVersionHeaderName, version)
+		next.ServeHTTP(w, r)
+	})
 }
 
 // spaHandler serves the embedded SPA. Static asset requests pass through

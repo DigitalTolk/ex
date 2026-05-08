@@ -130,6 +130,8 @@ func main() {
 	channelSvc := service.NewChannelService(channelStore, membershipStore, userStore, messageStore, redisCache, brokerAdapter, redisPubSub)
 	authSvc.SetChannelJoiner(channelSvc)
 	convSvc := service.NewConversationService(conversationStore, userStore, redisCache, brokerAdapter, redisPubSub)
+	convSvc.SetMediaURLCache(redisCache)
+	convSvc.SetUserProfileResolver(userSvc)
 	messageSvc := service.NewMessageService(messageStore, membershipStore, conversationStore, redisPubSub, brokerAdapter)
 	messageSvc.SetThreadFollowStore(threadFollowStore)
 	messageSvc.SetUserStateStore(userStateStore)
@@ -154,6 +156,18 @@ func main() {
 	notificationSvc.SetPresence(presenceSvc)
 	notificationSvc.SetThreadFollowStore(threadFollowStore)
 	notificationSvc.SetUserStateService(userStateSvc)
+	oneSignalPush, err := service.NewOneSignalPushSender(service.OneSignalConfig{
+		AppID:     cfg.OneSignalAppID,
+		APIKey:    cfg.OneSignalRESTAPIKey,
+		PublicURL: cfg.BaseURL,
+	})
+	if err != nil {
+		slog.Warn("OneSignal mobile push disabled", "error", err)
+	} else if oneSignalPush != nil {
+		asyncOneSignalPush := service.NewAsyncMobilePushSender(oneSignalPush, 0, 0)
+		defer asyncOneSignalPush.Close()
+		notificationSvc.SetMobilePushSender(asyncOneSignalPush)
+	}
 	messageSvc.SetNotifier(notificationSvc)
 	settingsSvc := service.NewSettingsService(store.NewSettingsStore(db))
 	attachmentSvc.SetUploadLimits(settingsSvc)

@@ -473,7 +473,7 @@ describe('WysiwygEditor', () => {
     renderEditor({ ref });
     await waitFor(() => expect(ref.current).not.toBeNull());
 
-    expect(getEditor()).toHaveClass('text-base', 'md:text-sm', 'md:max-h-[37.5rem]');
+    expect(getEditor()).toHaveClass('text-base', 'md:text-sm', 'md:max-h-[31.25rem]');
   });
 
   it('focusEnd() parks inserted text at the end of existing content', async () => {

@@ -196,6 +196,8 @@ describe('MessageItem - mobile actions', () => {
     await userEvent.click(reaction);
 
     expect(await screen.findByRole('dialog', { name: /Emoji picker/i })).toBeInTheDocument();
+    expect(sheet).toHaveAttribute('data-actions-suppressed', 'true');
+    expect(sheet).toHaveClass('hidden');
   });
 
   it('closes the mobile action sheet on swipe down', async () => {

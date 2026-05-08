@@ -21,6 +21,7 @@ vi.mock('@/context/AuthContext', () => ({
 
 vi.mock('@/lib/api', () => ({
   setAccessToken: vi.fn(),
+  captureServerVersion: vi.fn(),
   apiFetch: vi.fn().mockResolvedValue({ id: 'u-1', displayName: 'Test', email: 't@t.com', systemRole: 'member', status: 'active' }),
 }));
 

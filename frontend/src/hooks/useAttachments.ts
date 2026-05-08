@@ -1,6 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useMemo } from 'react';
 import { apiFetch } from '@/lib/api';
+import { isImageAttachment } from '@/lib/file-helpers';
 import { queryKeys } from '@/lib/query-keys';
 import type { Attachment } from '@/types';
 
@@ -32,7 +33,7 @@ async function sha256Hex(buf: ArrayBuffer): Promise<string> {
 // can't decode (e.g. corrupt file). The upload still proceeds; the
 // server-side backfill will pick up the dimensions later.
 async function readImageDimensions(file: File): Promise<{ width?: number; height?: number }> {
-  if (!file.type.startsWith('image/')) return {};
+  if (!isImageAttachment(file.type, file.name)) return {};
   return new Promise((resolve) => {
     const url = URL.createObjectURL(file);
     const img = new Image();

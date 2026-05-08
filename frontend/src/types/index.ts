@@ -134,6 +134,9 @@ export interface UserConversation {
   type: 'dm' | 'group';
   displayName: string;
   participantIDs?: string[];
+  avatarURL?: string;
+  userStatus?: UserStatus;
+  profileResolved?: boolean;
   lastReadMsgID?: string;
   unread?: boolean;
   favorite?: boolean;

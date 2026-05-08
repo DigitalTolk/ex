@@ -1,5 +1,5 @@
 import { beforeEach, afterEach, describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { act, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { BrowserRouter } from 'react-router-dom';
@@ -63,6 +63,81 @@ describe('Header', () => {
     render(<Header channel={makeChannel({ name: 'general' })} />);
 
     expect(screen.getByText('general')).toBeInTheDocument();
+  });
+
+  it('keeps right-side actions visible when the channel name is long', () => {
+    render(
+      <Header
+        channel={makeChannel({ name: 'a-very-long-channel-name-that-still-needs-actions-visible' })}
+        onFilesClick={vi.fn()}
+        onPinnedClick={vi.fn()}
+        memberCount={12}
+      />,
+    );
+
+    expect(screen.getByRole('heading', { name: /a-very-long-channel-name/ })).toHaveClass('min-w-0', 'truncate');
+    expect(screen.getByLabelText('View shared files')).toBeInTheDocument();
+    expect(screen.getByTestId('files-toggle').parentElement).toHaveClass('shrink-0');
+  });
+
+  it('publishes the measured channel header bottom for mobile right panels', () => {
+    const { container, unmount } = render(<Header channel={makeChannel({ name: 'general' })} />);
+    const shell = container.firstElementChild as HTMLElement;
+    vi.spyOn(shell, 'getBoundingClientRect').mockReturnValue({
+      bottom: 123.4,
+      height: 60,
+      left: 0,
+      right: 390,
+      top: 63,
+      width: 390,
+      x: 0,
+      y: 63,
+      toJSON: () => ({}),
+    } as DOMRect);
+
+    act(() => window.dispatchEvent(new Event('resize')));
+
+    expect(document.documentElement.style.getPropertyValue('--mobile-right-panel-top')).toBe('123.4px');
+    unmount();
+    expect(document.documentElement.style.getPropertyValue('--mobile-right-panel-top')).toBe('');
+  });
+
+  it('publishes mobile right-panel top relative to the transformed app main container', () => {
+    const { container, unmount } = render(
+      <main data-app-main="true">
+        <Header channel={makeChannel({ name: 'general' })} />
+      </main>,
+    );
+    const main = container.querySelector('[data-app-main="true"]') as HTMLElement;
+    const shell = container.querySelector('[data-testid="channel-header-shell"]') as HTMLElement;
+    vi.spyOn(main, 'getBoundingClientRect').mockReturnValue({
+      bottom: 700,
+      height: 600,
+      left: 0,
+      right: 390,
+      top: 105,
+      width: 390,
+      x: 0,
+      y: 105,
+      toJSON: () => ({}),
+    } as DOMRect);
+    vi.spyOn(shell, 'getBoundingClientRect').mockReturnValue({
+      bottom: 223,
+      height: 118,
+      left: 0,
+      right: 390,
+      top: 105,
+      width: 390,
+      x: 0,
+      y: 105,
+      toJSON: () => ({}),
+    } as DOMRect);
+
+    act(() => window.dispatchEvent(new Event('resize')));
+
+    expect(document.documentElement.style.getPropertyValue('--mobile-right-panel-top')).toBe('118px');
+    unmount();
+    expect(document.documentElement.style.getPropertyValue('--mobile-right-panel-top')).toBe('');
   });
 
   it('shows hash icon for public channels', () => {
@@ -129,6 +204,38 @@ describe('Header', () => {
     );
 
     expect(screen.getByText('General discussion')).toBeInTheDocument();
+  });
+
+  it('keeps the desktop channel description in the title row', () => {
+    render(
+      <Header
+        channel={makeChannel({ description: 'General discussion' })}
+        memberCount={4}
+        onFilesClick={vi.fn()}
+      />,
+    );
+
+    const description = screen.getByText('General discussion');
+    expect(screen.getByTestId('channel-title-stack')).toContainElement(description);
+    expect(screen.getByTestId('channel-title-stack')).toHaveClass('items-center', 'gap-2');
+    expect(description).toHaveClass('text-left', 'truncate');
+    expect(description).not.toHaveClass('ml-auto', 'text-right', 'mt-0.5');
+  });
+
+  it('does not render the channel description on mobile so short names keep the header width', () => {
+    setMobileMatch(true);
+    render(
+      <Header
+        channel={makeChannel({ name: 'general', description: 'General discussion' })}
+        memberCount={4}
+        onFilesClick={vi.fn()}
+      />,
+    );
+
+    const title = screen.getByRole('heading', { name: 'general' });
+    expect(title).toHaveClass('truncate');
+    expect(screen.getByTestId('channel-title-stack')).toHaveClass('flex-1', 'min-w-0');
+    expect(screen.queryByText('General discussion')).not.toBeInTheDocument();
   });
 
   it('keeps the channel dropdown trigger as a desktop dropdown without mobile menu state', () => {

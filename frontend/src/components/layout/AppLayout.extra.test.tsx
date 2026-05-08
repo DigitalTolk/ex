@@ -12,6 +12,14 @@ vi.mock('./Sidebar', () => ({
   ),
 }));
 
+vi.mock('@/components/UpdateBanner', () => ({
+  UpdateBanner: () => null,
+}));
+
+vi.mock('@/components/NotificationPermissionBanner', () => ({
+  NotificationPermissionBanner: () => null,
+}));
+
 function renderLayout() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(

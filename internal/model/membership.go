@@ -61,6 +61,12 @@ type UserConversation struct {
 	UpdatedAt      time.Time        `json:"updatedAt,omitempty" dynamodbav:"updatedAt,omitempty"`
 	LastReadMsgID  string           `json:"lastReadMsgID,omitempty" dynamodbav:"lastReadMsgID,omitempty"`
 	Unread         bool             `json:"unread,omitempty" dynamodbav:"-"`
+	// AvatarURL and UserStatus are read-time enrichments for DM sidebar rows.
+	// They are intentionally not persisted so profile changes stay single
+	// sourced from the User record.
+	AvatarURL       string      `json:"avatarURL,omitempty" dynamodbav:"-"`
+	UserStatus      *UserStatus `json:"userStatus,omitempty" dynamodbav:"-"`
+	ProfileResolved bool        `json:"profileResolved,omitempty" dynamodbav:"-"`
 	// Favorite pins this DM/group to the user's "Favorites" sidebar
 	// section. Same per-user semantics as on UserChannel.
 	Favorite bool `json:"favorite,omitempty" dynamodbav:"favorite,omitempty"`

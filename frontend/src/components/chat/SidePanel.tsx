@@ -18,7 +18,7 @@ export function SidePanel({ title, ariaLabel, closeLabel, onClose, children }: S
   const { dismissing, dragStyle, swipeHandlers } = useAnimatedSwipeDismiss('right', onClose);
   return (
     <aside
-      className={`mobile-right-sidebar-enter flex w-[28rem] flex-col border-l bg-background max-md:fixed max-md:inset-x-0 max-md:bottom-0 max-md:top-[calc(2.75rem+env(safe-area-inset-top))] max-md:z-40 max-md:w-auto max-md:touch-pan-y max-md:transform-gpu max-md:transition-transform max-md:duration-200 max-md:ease-out ${dismissing ? 'max-md:translate-x-full' : ''}`}
+      className={`mobile-right-sidebar-enter flex w-[28rem] flex-col border-l bg-background max-md:fixed max-md:inset-x-0 max-md:bottom-0 max-md:top-[var(--mobile-right-panel-top,6rem)] max-md:z-40 max-md:w-auto max-md:touch-pan-y max-md:transform-gpu max-md:transition-transform max-md:duration-200 max-md:ease-out ${dismissing ? 'max-md:translate-x-full' : ''}`}
       aria-label={ariaLabel}
       data-mobile-right-sidebar="true"
       data-swipe-dismissing={dismissing ? 'true' : 'false'}

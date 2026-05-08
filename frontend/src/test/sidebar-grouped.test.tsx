@@ -177,6 +177,11 @@ describe('Sidebar grouped rendering', () => {
   it('renders Favorites group with the favorited channel', () => {
     renderSidebar();
     const scrollArea = screen.getByTestId('sidebar-scroll-area');
+    expect(scrollArea.parentElement).toHaveClass(
+      'max-md:select-none',
+      'max-md:[-webkit-touch-callout:none]',
+      'max-md:[-webkit-user-select:none]',
+    );
     expect(scrollArea).toHaveClass('min-h-0', 'flex-1');
     expect(scrollArea.querySelector('[data-slot="scroll-area-scrollbar"]')).toHaveClass(
       'opacity-0',
@@ -203,6 +208,13 @@ describe('Sidebar grouped rendering', () => {
     renderSidebar();
     const empty = screen.getByTestId('sidebar-group-cat-empty');
     expect(within(empty).getByText('Reading List')).toBeInTheDocument();
+  });
+
+  it('keeps the category kebab visible on mobile where hover is unavailable', () => {
+    renderSidebar();
+
+    const menu = screen.getByTestId('sidebar-category-menu-cat-work');
+    expect(menu).toHaveClass('opacity-0', 'group-hover/sec:opacity-100', 'max-md:opacity-100');
   });
 
   it('renders default Channels group with uncategorised channels', () => {

@@ -161,7 +161,7 @@ export function GiphyPicker({ apiKey, onSelect, trigger, ariaLabel = 'Giphy pick
         preferredAlign="end"
         ariaLabel={ariaLabel}
         mobileSheet
-        className="flex h-[460px] max-w-[calc(100vw-16px)] flex-col rounded-md border bg-popover p-2 shadow-md max-md:h-[min(58vh,calc(100dvh-9rem))] max-md:w-screen max-md:max-w-none max-md:rounded-b-none max-md:rounded-t-xl"
+        className="flex h-[460px] max-w-[calc(100vw-16px)] flex-col rounded-md border bg-popover p-2 shadow-md max-md:h-[50dvh] max-md:w-screen max-md:max-w-none max-md:rounded-b-none max-md:rounded-t-xl"
       >
         <Input
           ref={inputRef}

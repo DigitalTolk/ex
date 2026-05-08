@@ -207,6 +207,20 @@ function renderSidebar(onClose = vi.fn()) {
   );
 }
 
+function setMobileMatch(matches: boolean) {
+  Object.defineProperty(window, 'matchMedia', {
+    configurable: true,
+    value: vi.fn(() => ({
+      matches,
+      media: '(max-width: 767px)',
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+    })),
+  });
+}
+
 function mockRect(element: Element, rect: Partial<DOMRect>) {
   Object.defineProperty(element, 'getBoundingClientRect', {
     configurable: true,
@@ -256,6 +270,7 @@ describe('Sidebar', () => {
     localStorage.clear();
     window.history.pushState({}, '', '/');
     delete window.Capacitor;
+    setMobileMatch(false);
   });
 
   it('renders user display name', () => {
@@ -295,6 +310,21 @@ describe('Sidebar', () => {
     expect(menu).toHaveClass('md:hidden', 'border-b');
     expect(menu.compareDocumentPosition(scrollArea) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.getByTestId('mobile-user-menu-admin')).toHaveClass('h-12', 'px-3');
+  });
+
+  it('keeps the mobile channel list scrollable instead of registering row drag handlers', async () => {
+    setMobileMatch(true);
+    renderSidebar();
+
+    const scrollArea = screen.getByTestId('sidebar-scroll-area');
+    const channelRow = screen.getByTestId('channel-row-ch-1') as HTMLElement;
+
+    expect(scrollArea).toHaveClass('min-h-0', 'flex-1', 'max-md:touch-pan-y');
+    expect(scrollArea.querySelector('[data-slot="scroll-area-viewport"]')).toHaveClass('overflow-y-auto');
+    expect(channelRow).not.toHaveClass('cursor-grab');
+    await waitFor(() => {
+      expect(channelRow.ondragstart).toBeNull();
+    });
   });
 
   it('hides the desktop dropdown content on mobile so it does not cover channels', async () => {

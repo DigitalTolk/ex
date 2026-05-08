@@ -42,12 +42,10 @@ import { useIsMobile } from '@/hooks/useIsMobile';
 function MobileChatLoadingPage() {
   return (
     <div
-      className="flex h-full min-h-0 flex-1 items-center justify-center bg-[#1a1d21]"
+      className="h-full min-h-0 flex-1 bg-[#1a1d21]"
       aria-label="Loading chat"
       data-testid="mobile-chat-loading"
-    >
-      <img className="h-14 w-14" src="/logo.svg" alt="ex" />
-    </div>
+    />
   );
 }
 
@@ -335,10 +333,10 @@ export default function ChatPage() {
   });
 
   return (
-    <MobileChatReadyGate>
-      <AppLayout>
+    <AppLayout>
+      <MobileChatReadyGate>
         <Outlet />
-      </AppLayout>
-    </MobileChatReadyGate>
+      </MobileChatReadyGate>
+    </AppLayout>
   );
 }

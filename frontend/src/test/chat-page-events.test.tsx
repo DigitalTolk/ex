@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Routes, Route, useLocation } from 'react-router-dom';
 import ChatPage from '@/pages/ChatPage';
 import { apiFetch } from '@/lib/api';
+import { resetServerVersionForTests } from '@/hooks/useServerVersion';
 
 let capturedOptions: Record<string, ((data: unknown) => void) | boolean | undefined> = {};
 const authUserMock = vi.hoisted(() => ({
@@ -149,6 +150,7 @@ function renderAt(path: string, qcSeed?: (qc: QueryClient) => void) {
 
 describe('ChatPage WebSocket handlers', () => {
   beforeEach(() => {
+    act(() => resetServerVersionForTests());
     capturedOptions = {};
     authUserMock.current = {
       id: 'u-me',
@@ -659,7 +661,9 @@ describe('ChatPage WebSocket handlers', () => {
     // it here to avoid coupling the test to the hook's internals; the
     // server-version test covers that contract. This test only verifies
     // ChatPage actually wires the event.
-    (capturedOptions.onServerVersion as (d: unknown) => void)({ version: 'v9.9.9' });
+    act(() => {
+      (capturedOptions.onServerVersion as (d: unknown) => void)({ version: 'v9.9.9' });
+    });
     // No assertion on side effects — failure mode is an unhandled error.
   });
 

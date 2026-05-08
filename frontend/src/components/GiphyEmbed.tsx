@@ -8,6 +8,7 @@ interface GiphyEmbedProps {
   apiKey?: string;
   width?: number;
   height?: number;
+  onMediaLoad?: () => void;
 }
 
 type GiphyMedia =
@@ -170,30 +171,32 @@ function Placeholder({
   );
 }
 
-export function GiphyEmbed({ id, apiKey, width, height }: GiphyEmbedProps) {
+export function GiphyEmbed({ id, apiKey, width, height, onMediaLoad }: GiphyEmbedProps) {
   if (apiKey !== undefined) {
-    return <GiphyEmbedMedia id={id} apiKey={apiKey} width={width} height={height} />;
+    return <GiphyEmbedMedia id={id} apiKey={apiKey} width={width} height={height} onMediaLoad={onMediaLoad} />;
   }
-  return <GiphyEmbedFromSettings id={id} width={width} height={height} />;
+  return <GiphyEmbedFromSettings id={id} width={width} height={height} onMediaLoad={onMediaLoad} />;
 }
 
 function GiphyEmbedFromSettings({
   id,
   width,
   height,
+  onMediaLoad,
 }: {
   id?: string;
   width?: number;
   height?: number;
+  onMediaLoad?: () => void;
 }) {
   const { data: settings, isLoading } = useWorkspaceSettings();
   if (!settings && isLoading) {
     return <Placeholder width={width} height={height}>Loading GIPHY...</Placeholder>;
   }
-  return <GiphyEmbedMedia id={id} apiKey={settings?.giphyAPIKey ?? ''} width={width} height={height} />;
+  return <GiphyEmbedMedia id={id} apiKey={settings?.giphyAPIKey ?? ''} width={width} height={height} onMediaLoad={onMediaLoad} />;
 }
 
-function GiphyEmbedMedia({ id, apiKey, width, height }: GiphyEmbedProps & { apiKey: string }) {
+function GiphyEmbedMedia({ id, apiKey, width, height, onMediaLoad }: GiphyEmbedProps & { apiKey: string }) {
   const trimmedKey = apiKey.trim();
   const gf = useMemo(() => (trimmedKey ? new GiphyFetch(trimmedKey) : null), [trimmedKey]);
   const requestKey = `${trimmedKey}:${id}`;
@@ -254,6 +257,7 @@ function GiphyEmbedMedia({ id, apiKey, width, height }: GiphyEmbedProps & { apiK
           muted
           playsInline
           preload="metadata"
+          onLoadedMetadata={onMediaLoad}
         />
       </GiphyFrame>
     );
@@ -270,6 +274,7 @@ function GiphyEmbedMedia({ id, apiKey, width, height }: GiphyEmbedProps & { apiK
         className="rounded-md"
         style={{ width: box.width, height: box.height }}
         loading="lazy"
+        onLoad={onMediaLoad}
       />
     </GiphyFrame>
   );

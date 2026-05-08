@@ -24,6 +24,30 @@ describe('WysiwygEditor placeholder', () => {
     });
   });
 
+  it('caps the desktop composer growth at roughly 25 text rows', async () => {
+    render(
+      <Providers>
+        <WysiwygEditor initialBody="" placeholder="Write to ~general" />
+      </Providers>,
+    );
+
+    expect(await screen.findByLabelText('Message input')).toHaveClass('md:max-h-[31.25rem]');
+  });
+
+  it('keeps long placeholders on one clipped line', async () => {
+    render(
+      <Providers>
+        <WysiwygEditor initialBody="" placeholder="Write to ~a-very-long-channel-name-that-should-not-overflow-the-composer" />
+      </Providers>,
+    );
+
+    expect(await screen.findByText(/Write to ~a-very-long-channel-name/)).toHaveClass(
+      'right-0',
+      'truncate',
+      'whitespace-nowrap',
+    );
+  });
+
   it('does not render the placeholder when the editor has content', async () => {
     render(
       <Providers>

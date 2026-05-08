@@ -7,8 +7,6 @@ import { PresenceProvider } from '@/context/PresenceContext';
 import { NotificationProvider } from '@/context/NotificationContext';
 import { TypingProvider } from '@/context/TypingContext';
 import { ThemeProvider } from '@/context/ThemeContext';
-import { UpdateBanner } from '@/components/UpdateBanner';
-import { NotificationPermissionBanner } from '@/components/NotificationPermissionBanner';
 import { NotificationCountTitleBridge } from '@/components/NotificationCountTitleBridge';
 import LoginPage from '@/pages/LoginPage';
 import OIDCCallbackPage from '@/pages/OIDCCallbackPage';
@@ -24,6 +22,7 @@ import SearchResultsPage from '@/pages/SearchResultsPage';
 import { NotFoundPage } from '@/pages/NotFoundPage';
 import { GENERAL_CHANNEL_SLUG } from '@/lib/roles';
 import { useIsMobile } from '@/hooks/useIsMobile';
+import { useServerVersion } from '@/hooks/useServerVersion';
 import type { ReactNode } from 'react';
 
 const queryClient = new QueryClient({
@@ -40,9 +39,11 @@ function ProtectedRoute({ children }: { children: ReactNode }) {
 
   if (isLoading) {
     return (
-      <div className="flex min-h-screen items-center justify-center">
-        <p className="text-muted-foreground">Loading...</p>
-      </div>
+      <div
+        className="min-h-screen bg-[#1a1d21]"
+        aria-label="Loading chat"
+        data-testid="app-auth-loading"
+      />
     );
   }
 
@@ -57,6 +58,11 @@ function ChatHomeRoute() {
   const isMobile = useIsMobile();
   if (!isMobile) return <Navigate to={`/channel/${GENERAL_CHANNEL_SLUG}`} replace />;
   return <div className="hidden" data-testid="mobile-channel-home" aria-hidden="true" />;
+}
+
+function ServerVersionBootstrap() {
+  useServerVersion();
+  return null;
 }
 
 function AppRoutes() {
@@ -104,15 +110,9 @@ export default function App() {
                 <NotificationProvider>
                   <TypingProvider>
                     <TooltipProvider>
+                      <ServerVersionBootstrap />
                       <NotificationCountTitleBridge />
-                      {/* h-dvh + flex-col viewport constraint so the
-                          UpdateBanner sits as a normal block above the
-                          app and never has to overlay scrolling content. */}
                       <div className="flex h-dvh flex-col bg-[#1a1d21] pt-[env(safe-area-inset-top)]">
-                        <div className="shrink-0 bg-[#1a1d21]">
-                          <UpdateBanner />
-                          <NotificationPermissionBanner />
-                        </div>
                         <div className="min-h-0 flex-1 bg-background">
                           <AppRoutes />
                         </div>

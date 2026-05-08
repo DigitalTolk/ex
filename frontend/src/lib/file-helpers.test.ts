@@ -9,7 +9,7 @@ import {
   FileText,
   FileVideo,
 } from 'lucide-react';
-import { isImageURL, isImageContentType, iconForAttachment } from './file-helpers';
+import { isImageURL, isImageContentType, isImageAttachment, iconForAttachment } from './file-helpers';
 
 describe('isImageURL', () => {
   it.each([
@@ -40,6 +40,17 @@ describe('isImageContentType', () => {
     ['', false],
   ])('%s → %s', (input, expected) => {
     expect(isImageContentType(input)).toBe(expected);
+  });
+});
+
+describe('isImageAttachment', () => {
+  it.each([
+    ['image/png', 'anything.bin', true],
+    ['application/octet-stream', 'photo.JPG', true],
+    ['', 'photo.png', true],
+    ['application/octet-stream', 'document.pdf', false],
+  ])('%s + %s → %s', (contentType, filename, expected) => {
+    expect(isImageAttachment(contentType, filename)).toBe(expected);
   });
 });
 

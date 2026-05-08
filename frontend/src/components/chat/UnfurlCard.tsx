@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ImageOff, X } from 'lucide-react';
 import { useUnfurl } from '@/hooks/useUnfurl';
 import { useSetNoUnfurl } from '@/hooks/useMessages';
@@ -14,6 +14,7 @@ interface UnfurlCardProps {
   channelId?: string;
   conversationId?: string;
   isAuthor: boolean;
+  onContentHeightChange?: () => void;
 }
 
 export function UnfurlCard({
@@ -22,6 +23,7 @@ export function UnfurlCard({
   channelId,
   conversationId,
   isAuthor,
+  onContentHeightChange,
 }: UnfurlCardProps) {
   const { data: preview, isLoading } = useUnfurl(url);
   const dismiss = useSetNoUnfurl();
@@ -29,6 +31,11 @@ export function UnfurlCard({
   // CORS). The card stays — we just swap the image slot for an inert
   // placeholder so the user doesn't see the browser's broken-image icon.
   const [imageBroken, setImageBroken] = useState(false);
+  useEffect(() => {
+    if (!preview || (!preview.title && !preview.description && !preview.image)) return;
+    const frame = requestAnimationFrame(() => onContentHeightChange?.());
+    return () => cancelAnimationFrame(frame);
+  }, [onContentHeightChange, preview]);
   if (isLoading || !preview) return null;
   if (!preview.title && !preview.description && !preview.image) return null;
   return (
@@ -44,7 +51,11 @@ export function UnfurlCard({
             src={preview.image}
             alt=""
             loading="lazy"
-            onError={() => setImageBroken(true)}
+            onLoad={onContentHeightChange}
+            onError={() => {
+              setImageBroken(true);
+              onContentHeightChange?.();
+            }}
             data-testid="unfurl-card-image"
             className="h-16 w-16 shrink-0 rounded object-cover"
           />

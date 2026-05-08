@@ -98,7 +98,7 @@ describe('MessageInput focusKey', () => {
     expect(editor).not.toHaveClass('max-md:max-h-[1.5rem]');
   });
 
-  it('keeps the mobile composer as a single input until focus reveals a non-scrolling toolbar', () => {
+  it('keeps the mobile composer compact until focus reveals the full toolbar and attachment action', () => {
     setMobileMatch(true);
     render(<MessageInput onSend={vi.fn()} focusKey="ch-1" />);
     const editor = screen.getByLabelText('Message input');
@@ -111,7 +111,8 @@ describe('MessageInput focusKey', () => {
 
     expect(toolbar).not.toHaveClass('overflow-x-auto', 'max-md:touch-pan-x');
     expect(screen.getByLabelText('Bold (Ctrl+B)')).toHaveClass('max-md:h-9', 'max-md:w-9');
-    expect(attach).toHaveClass('max-md:h-9', 'max-md:w-9', 'max-md:ml-0');
+    expect(screen.getAllByLabelText('Attach file')).toHaveLength(1);
+    expect(attach).toHaveClass('text-muted-foreground', 'hover:text-foreground', 'max-md:h-9', 'max-md:w-9', 'shrink-0');
     expect(screen.queryByLabelText('Quote')).not.toBeInTheDocument();
     expect(screen.queryByLabelText('List')).not.toBeInTheDocument();
   });

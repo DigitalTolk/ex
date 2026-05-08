@@ -18,6 +18,11 @@ const AppVersionMetaName = "app-version"
 // stay the same across frontend artifact rebuilds in local and CI workflows.
 const BuildVersionMetaName = "build-version"
 
+// AppVersionHeaderName is sent with HTTP responses so stale clients can
+// discover a deployed frontend change even when their first API request fails
+// before the websocket version handshake arrives.
+const AppVersionHeaderName = "X-EX-App-Version"
+
 // BuildVersion can be set by release builds via:
 //
 //	-ldflags "-X github.com/DigitalTolk/ex/internal/handler.BuildVersion=<tag-or-sha>"

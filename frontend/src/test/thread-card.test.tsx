@@ -35,31 +35,36 @@ vi.mock('@/components/chat/MessageItem', () => ({
 // Stub MessageInput similarly — a plain Send button that pipes the body
 // into onSend so the reply-composer test can drive it without dealing
 // with the WYSIWYG editor.
+const lastMessageInputProps: { current: Record<string, unknown> | null } = { current: null };
 vi.mock('@/components/chat/MessageInput', () => ({
   MessageInput: ({
     onSend,
     disabled,
     focusKey,
+    ...props
   }: {
     onSend: (v: { body: string; attachmentIDs: string[] }) => void;
     disabled?: boolean;
     focusKey?: string;
-  }) => (
-    <div data-focus-key={focusKey ?? ''}>
-      <textarea aria-label="Reply body" data-testid="reply-body" disabled={disabled} />
-      <button
-        type="button"
-        aria-label="Send reply"
-        disabled={disabled}
-        onClick={() => {
-          const ta = document.querySelector('[data-testid="reply-body"]') as HTMLTextAreaElement;
-          onSend({ body: ta.value, attachmentIDs: [] });
-        }}
-      >
-        Send
-      </button>
-    </div>
-  ),
+  } & Record<string, unknown>) => {
+    lastMessageInputProps.current = { ...props, onSend, disabled, focusKey };
+    return (
+      <div data-focus-key={focusKey ?? ''}>
+        <textarea aria-label="Reply body" data-testid="reply-body" disabled={disabled} />
+        <button
+          type="button"
+          aria-label="Send reply"
+          disabled={disabled}
+          onClick={() => {
+            const ta = document.querySelector('[data-testid="reply-body"]') as HTMLTextAreaElement;
+            onSend({ body: ta.value, attachmentIDs: [] });
+          }}
+        >
+          Send
+        </button>
+      </div>
+    );
+  },
 }));
 
 function makeSummary(overrides: Partial<ThreadSummary> = {}): ThreadSummary {
@@ -108,6 +113,7 @@ describe('ThreadCard', () => {
     sendMutate.mockReset();
     localStorage.clear();
     resetSeenCache();
+    lastMessageInputProps.current = null;
     // Default: useUsersBatch sees /api/v1/users/batch — return [].
     apiFetchMock.mockImplementation((url: string) => {
       if (typeof url === 'string' && url.includes('/users/batch')) {
@@ -242,6 +248,24 @@ describe('ThreadCard', () => {
     renderCard(makeSummary());
     const replyBody = await screen.findByTestId('reply-body');
     expect(replyBody.closest('[data-focus-key]')?.getAttribute('data-focus-key')).toBe('');
+  });
+
+  it('uses the same thread-aware MessageInput context as the thread panel composer', async () => {
+    apiFetchMock.mockImplementation((url: string) => {
+      if (url.includes('/messages/msg-root/thread')) {
+        return Promise.resolve([makeMessage('msg-root')]);
+      }
+      return Promise.resolve([]);
+    });
+    renderCard(makeSummary());
+    await screen.findByTestId('reply-body');
+
+    expect(lastMessageInputProps.current).toMatchObject({
+      typingParentID: 'ch-1',
+      typingParentType: 'channel',
+      typingThreadRootID: 'msg-root',
+      hideCodeButton: true,
+    });
   });
 
   it('unfollows the thread from the /threads card header', async () => {

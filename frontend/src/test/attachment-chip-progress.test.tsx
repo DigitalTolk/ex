@@ -29,4 +29,21 @@ describe('AttachmentChip — upload progress', () => {
     render(<AttachmentChip att={makeDraft({ progress: 1 })} />);
     expect(screen.queryByRole('progressbar')).toBeNull();
   });
+
+  it('renders an image preview when mobile upload metadata falls back to an image filename', () => {
+    render(
+      <AttachmentChip
+        att={makeDraft({
+          filename: 'camera-photo.jpg',
+          contentType: 'application/octet-stream',
+          url: 'https://cdn.example.test/camera-photo.jpg',
+        })}
+      />,
+    );
+
+    expect(screen.getByTestId('attachment-chip-thumb')).toHaveAttribute(
+      'src',
+      'https://cdn.example.test/camera-photo.jpg',
+    );
+  });
 });

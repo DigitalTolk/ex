@@ -137,7 +137,7 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, Props>(function Wys
           contentEditable={
             <ContentEditable
               aria-label={ariaLabel}
-              className={`wysiwyg-editor min-h-[60px] max-h-[200px] overflow-y-auto whitespace-pre-wrap break-words text-base focus:outline-none md:max-h-[37.5rem] md:text-sm ${editorClassName}`}
+              className={`wysiwyg-editor min-h-[60px] max-h-[200px] overflow-y-auto whitespace-pre-wrap break-words text-base focus:outline-none md:max-h-[31.25rem] md:text-sm ${editorClassName}`}
               onFocus={() => onFocusChange?.(true)}
               onBlur={() => onFocusChange?.(false)}
               role="textbox"
@@ -147,7 +147,7 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, Props>(function Wys
           ErrorBoundary={LexicalErrorBoundary}
         />
         {placeholder && isEmpty && (
-          <div className="pointer-events-none absolute left-0 top-0 select-none text-base text-muted-foreground md:text-sm">
+          <div className="pointer-events-none absolute left-0 right-0 top-0 select-none truncate whitespace-nowrap text-base text-muted-foreground md:text-sm">
             {placeholder}
           </div>
         )}

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { beforeEach, describe, it, expect, vi } from 'vitest';
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { BrowserRouter } from 'react-router-dom';
@@ -9,6 +9,7 @@ const mockEditMutate = vi.fn();
 const mockDeleteMutate = vi.fn();
 const mockReactMutate = vi.fn();
 const mockPinMutate = vi.fn();
+const useAttachmentsBatchMock = vi.hoisted(() => vi.fn(() => ({ map: new Map(), isLoading: false })));
 
 vi.mock('@/hooks/useMessages', () => ({
   useEditMessage: () => ({ mutate: mockEditMutate, isPending: false }),
@@ -20,6 +21,13 @@ vi.mock('@/hooks/useMessages', () => ({
 vi.mock('@/hooks/useEmoji', () => ({
   useEmojis: () => ({ data: [] }),
   useEmojiMap: () => ({ data: {} }),
+}));
+
+vi.mock('@/hooks/useAttachments', () => ({
+  uploadAttachment: vi.fn(),
+  useDeleteDraftAttachment: () => ({ mutateAsync: vi.fn(), mutate: vi.fn(), isPending: false }),
+  useAttachment: () => ({ data: undefined, isLoading: false }),
+  useAttachmentsBatch: (...args: unknown[]) => useAttachmentsBatchMock(...args),
 }));
 
 // Mock the dropdown menu so menu items render directly in jsdom
@@ -69,6 +77,11 @@ function setMobileMatch(matches: boolean) {
 }
 
 describe('MessageItem', () => {
+  beforeEach(() => {
+    useAttachmentsBatchMock.mockReset();
+    useAttachmentsBatchMock.mockReturnValue({ map: new Map(), isLoading: false });
+  });
+
   it('renders author name and message body', () => {
     renderWithProviders(
       <MessageItem
@@ -80,6 +93,46 @@ describe('MessageItem', () => {
 
     expect(screen.getByText('Alice Johnson')).toBeInTheDocument();
     expect(screen.getByText('Hello world')).toBeInTheDocument();
+  });
+
+  it('renders attachment-only messages on mobile', () => {
+    setMobileMatch(true);
+    useAttachmentsBatchMock.mockReturnValue({
+      map: new Map([
+        ['att-mobile', {
+          id: 'att-mobile',
+          sha256: 'sha',
+          filename: 'photo.png',
+          contentType: 'image/png',
+          size: 42,
+          url: 'https://cdn/photo.png',
+          createdBy: 'user-1',
+          createdAt: '2026-04-24T10:30:00Z',
+        }],
+      ]),
+      isLoading: false,
+    });
+
+    renderWithProviders(
+      <MessageItem
+        message={makeMessage({ body: '', attachmentIDs: ['att-mobile'] })}
+        authorName="Alice Johnson"
+        isOwn={false}
+        channelId="channel-1"
+      />,
+    );
+
+    expect(screen.getByLabelText('Open image photo.png')).toBeInTheDocument();
+    expect(screen.getByAltText('photo.png')).toHaveClass('max-w-full');
+    expect(useAttachmentsBatchMock).toHaveBeenCalledWith(
+      ['att-mobile'],
+      expect.objectContaining({
+        parentID: 'channel-1',
+        parentType: 'channel',
+        messageID: 'msg-1',
+      }),
+    );
+    setMobileMatch(false);
   });
 
   it('keeps rendered user and channel mention pills on the text baseline', () => {

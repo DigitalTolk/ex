@@ -1,5 +1,8 @@
+import { setServerVersion } from '@/hooks/useServerVersion';
+
 let accessToken: string | null = null;
 let refreshPromise: Promise<string | null> | null = null;
+const APP_VERSION_HEADER = 'X-EX-App-Version';
 
 export function setAccessToken(token: string) {
   accessToken = token;
@@ -40,6 +43,11 @@ async function errorMessageFromResponse(res: Response): Promise<string> {
   return text;
 }
 
+export function captureServerVersion(res: Response): void {
+  const version = res.headers?.get(APP_VERSION_HEADER);
+  if (version) setServerVersion(version);
+}
+
 export async function refreshAccessToken(): Promise<string | null> {
   if (!refreshPromise) {
     refreshPromise = (async () => {
@@ -48,6 +56,7 @@ export async function refreshAccessToken(): Promise<string | null> {
           method: 'POST',
           credentials: 'include',
         });
+        captureServerVersion(res);
         if (!res.ok) {
           clearAccessToken();
           return null;
@@ -60,7 +69,6 @@ export async function refreshAccessToken(): Promise<string | null> {
         clearAccessToken();
         return null;
       } catch {
-        clearAccessToken();
         return null;
       }
     })().finally(() => {
@@ -93,8 +101,9 @@ export async function apiFetch<T>(
     headers,
     credentials: 'include',
   });
+  captureServerVersion(res);
 
-  if (res.status === 401 && accessToken) {
+  if (res.status === 401) {
     const refreshedToken = await refreshAccessToken();
     if (refreshedToken) {
       headers.set('Authorization', `Bearer ${accessToken}`);
@@ -103,6 +112,7 @@ export async function apiFetch<T>(
         headers,
         credentials: 'include',
       });
+      captureServerVersion(retry);
       if (!retry.ok) {
         throw new ApiError(retry.status, await errorMessageFromResponse(retry));
       }
@@ -113,6 +123,9 @@ export async function apiFetch<T>(
   }
 
   if (!res.ok) {
+    if (res.status === 401) {
+      clearAccessToken();
+    }
     throw new ApiError(res.status, await errorMessageFromResponse(res));
   }
 

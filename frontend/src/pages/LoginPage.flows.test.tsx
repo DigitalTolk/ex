@@ -27,8 +27,10 @@ vi.mock('@/context/AuthContext', () => ({
 
 const mockApiFetch = vi.fn();
 const mockSetAccessToken = vi.fn();
+const mockCaptureServerVersion = vi.fn();
 vi.mock('@/lib/api', () => ({
   setAccessToken: (...args: unknown[]) => mockSetAccessToken(...args),
+  captureServerVersion: (...args: unknown[]) => mockCaptureServerVersion(...args),
   apiFetch: (...args: unknown[]) => mockApiFetch(...args),
 }));
 

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
 import { Users, ChevronDown, LogOut, Archive, Pencil, Bell, BellOff, Pin, Paperclip } from 'lucide-react';
 import { ChannelIcon } from '@/components/ChannelIcon';
 import { UserAvatar } from '@/components/UserAvatar';
@@ -84,7 +84,41 @@ export function Header({
   const [descDraft, setDescDraft] = useState('');
   const [archiveConfirmOpen, setArchiveConfirmOpen] = useState(false);
   const [mobileChannelMenuOpen, setMobileChannelMenuOpen] = useState(false);
+  const headerShellRef = useRef<HTMLDivElement>(null);
   const isMobile = useIsMobile();
+
+  useLayoutEffect(() => {
+    const node = headerShellRef.current;
+    if (!node || typeof document === 'undefined') return;
+    const measuredNode = node;
+
+    function updateMobilePanelTop() {
+      const bottom = measuredNode.getBoundingClientRect().bottom;
+      const containingBlockTop =
+        measuredNode.closest<HTMLElement>('[data-app-main="true"]')?.getBoundingClientRect().top ?? 0;
+      const panelTop = Math.max(0, bottom - containingBlockTop);
+      document.documentElement.style.setProperty('--mobile-right-panel-top', `${Number(panelTop.toFixed(2))}px`);
+    }
+
+    updateMobilePanelTop();
+    const resizeObserver = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(updateMobilePanelTop);
+    resizeObserver?.observe(measuredNode);
+    const mutationObserver = typeof MutationObserver === 'undefined'
+      ? null
+      : new MutationObserver(() => requestAnimationFrame(updateMobilePanelTop));
+    mutationObserver?.observe(document.body, { childList: true, subtree: true, attributes: true });
+    window.addEventListener('resize', updateMobilePanelTop);
+    window.visualViewport?.addEventListener('resize', updateMobilePanelTop);
+    window.visualViewport?.addEventListener('scroll', updateMobilePanelTop);
+    return () => {
+      resizeObserver?.disconnect();
+      mutationObserver?.disconnect();
+      window.removeEventListener('resize', updateMobilePanelTop);
+      window.visualViewport?.removeEventListener('resize', updateMobilePanelTop);
+      window.visualViewport?.removeEventListener('scroll', updateMobilePanelTop);
+      document.documentElement.style.removeProperty('--mobile-right-panel-top');
+    };
+  }, []);
 
   function editDescription() {
     setDescDraft(channel?.description || '');
@@ -117,63 +151,92 @@ export function Header({
   }
 
   return (
-    <div className="shrink-0 border-b bg-background">
+    <div ref={headerShellRef} className="shrink-0 border-b bg-background" data-testid="channel-header-shell">
     <header className="flex shrink-0 items-center gap-3 px-4 py-3">
-      <div className="flex items-center gap-2">
+      <div className="flex min-w-0 flex-1 items-center gap-2">
         {channel ? (
-          <DropdownMenu modal={false}>
-            <DropdownMenuTrigger
-              className="flex items-center gap-1 rounded-md px-1 -ml-1 hover:bg-muted/50"
-              onClick={() => {
-                if (isMobile) setMobileChannelMenuOpen((open) => !open);
-              }}
-              aria-expanded={isMobile ? mobileChannelMenuOpen : undefined}
-              aria-controls={isMobile ? 'mobile-channel-menu' : undefined}
-            >
-              <ChannelIcon type={channel.type} className="h-5 w-5 text-muted-foreground" />
-              <h1 className="text-lg font-semibold">{displayTitle}</h1>
-              <ChevronDown className="h-4 w-4 text-muted-foreground" />
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" className="w-56 max-md:hidden">
-              {canEdit && (
-                <DropdownMenuItem
-                  onClick={editDescription}
-                >
-                  <Pencil className="mr-2 h-4 w-4" /> Edit description
-                </DropdownMenuItem>
-              )}
-              {onToggleMute && (
-                <DropdownMenuItem onClick={toggleMute} aria-label={muted ? 'Unmute channel' : 'Mute channel'}>
-                  {muted ? (
-                    <>
-                      <Bell className="mr-2 h-4 w-4" /> Unmute channel
-                    </>
-                  ) : (
-                    <>
-                      <BellOff className="mr-2 h-4 w-4" /> Mute channel
-                    </>
-                  )}
-                </DropdownMenuItem>
-              )}
-              {canLeave && (
-                <DropdownMenuItem onClick={leaveChannel}>
-                  <LogOut className="mr-2 h-4 w-4" /> Leave channel
-                </DropdownMenuItem>
-              )}
-              {canArchive && (
-                <DropdownMenuItem
-                  onClick={confirmArchive}
-                  className="text-destructive"
-                >
-                  <Archive className="mr-2 h-4 w-4" /> Archive channel
-                </DropdownMenuItem>
-              )}
-            </DropdownMenuContent>
-          </DropdownMenu>
+          <div className="flex min-w-0 flex-1 items-center gap-2" data-testid="channel-title-stack">
+            <DropdownMenu modal={false}>
+              <DropdownMenuTrigger
+                className="-ml-1 flex min-w-0 max-w-full items-center gap-1 rounded-md px-1 hover:bg-muted/50"
+                onClick={() => {
+                  if (isMobile) setMobileChannelMenuOpen((open) => !open);
+                }}
+                aria-expanded={isMobile ? mobileChannelMenuOpen : undefined}
+                aria-controls={isMobile ? 'mobile-channel-menu' : undefined}
+              >
+                <ChannelIcon type={channel.type} className="h-5 w-5 shrink-0 text-muted-foreground" />
+                <h1 className="min-w-0 truncate text-lg font-semibold">{displayTitle}</h1>
+                <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" className="w-56 max-md:hidden">
+                {canEdit && (
+                  <DropdownMenuItem
+                    onClick={editDescription}
+                  >
+                    <Pencil className="mr-2 h-4 w-4" /> Edit description
+                  </DropdownMenuItem>
+                )}
+                {onToggleMute && (
+                  <DropdownMenuItem onClick={toggleMute} aria-label={muted ? 'Unmute channel' : 'Mute channel'}>
+                    {muted ? (
+                      <>
+                        <Bell className="mr-2 h-4 w-4" /> Unmute channel
+                      </>
+                    ) : (
+                      <>
+                        <BellOff className="mr-2 h-4 w-4" /> Mute channel
+                      </>
+                    )}
+                  </DropdownMenuItem>
+                )}
+                {canLeave && (
+                  <DropdownMenuItem onClick={leaveChannel}>
+                    <LogOut className="mr-2 h-4 w-4" /> Leave channel
+                  </DropdownMenuItem>
+                )}
+                {canArchive && (
+                  <DropdownMenuItem
+                    onClick={confirmArchive}
+                    className="text-destructive"
+                  >
+                    <Archive className="mr-2 h-4 w-4" /> Archive channel
+                  </DropdownMenuItem>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
+            {!isMobile && (
+              isEditingDesc ? (
+                <input
+                  className="hidden min-w-0 max-w-xl flex-1 border-b border-input bg-transparent text-left text-sm outline-none md:block"
+                  value={descDraft}
+                  onChange={e => setDescDraft(e.target.value)}
+                  onBlur={saveDescription}
+                  onKeyDown={e => { if (e.key === 'Enter') saveDescription(); if (e.key === 'Escape') cancelDescriptionEdit(); }}
+                  placeholder="Add a description..."
+                  autoFocus
+                />
+              ) : channel.description ? (
+                canEdit ? (
+                  <button
+                    onClick={() => { setDescDraft(channel.description || ''); setIsEditingDesc(true); }}
+                    className="hidden min-w-0 max-w-full truncate text-left text-sm text-muted-foreground hover:text-foreground md:block"
+                    title="Click to edit description"
+                  >
+                    {channel.description}
+                  </button>
+                ) : (
+                  <span className="hidden min-w-0 max-w-full truncate text-left text-sm text-muted-foreground md:block">
+                    {channel.description}
+                  </span>
+                )
+              ) : null
+            )}
+          </div>
         ) : (
-          <div className="flex items-center gap-2">
+          <div className="flex min-w-0 items-center gap-2">
             {userId ? (
-              <div>
+              <div className="min-w-0">
                 <UserHoverCard
                   userId={userId}
                   displayName={displayTitle}
@@ -182,21 +245,21 @@ export function Header({
                   online={avatarOnline}
                   currentUserId={currentUserId}
                 >
-                  <span className="inline-flex items-center gap-2">
+                  <span className="inline-flex min-w-0 items-center gap-2">
                     {showAvatar && (
                       <UserAvatar
                         key={avatarURL ?? '__none__'}
                         displayName={displayTitle || '??'}
                         avatarURL={avatarURL}
                         online={avatarOnline}
-                        className="h-7 w-7"
+                        className="h-7 w-7 shrink-0"
                       />
                     )}
-                    <h1 className="text-lg font-semibold">{displayTitle}</h1>
+                    <h1 className="min-w-0 truncate text-lg font-semibold">{displayTitle}</h1>
                   </span>
                 </UserHoverCard>
                 {subtitle && (
-                  <p className="text-xs text-muted-foreground">{subtitle}</p>
+                  <p className="truncate text-xs text-muted-foreground">{subtitle}</p>
                 )}
               </div>
             ) : (
@@ -211,16 +274,16 @@ export function Header({
                     displayName={displayTitle || '??'}
                     avatarURL={avatarURL}
                     online={avatarOnline}
-                    className="h-7 w-7"
+                    className="h-7 w-7 shrink-0"
                   />
                 )}
-                <div>
-                  <div className="flex items-center gap-1.5">
-                    <h1 className="text-lg font-semibold">{displayTitle}</h1>
+                <div className="min-w-0">
+                  <div className="flex min-w-0 items-center gap-1.5">
+                    <h1 className="min-w-0 truncate text-lg font-semibold">{displayTitle}</h1>
                     {userStatus && <UserStatusIndicator status={userStatus} />}
                   </div>
                   {subtitle && (
-                    <p className="text-xs text-muted-foreground">{subtitle}</p>
+                    <p className="truncate text-xs text-muted-foreground">{subtitle}</p>
                   )}
                 </div>
               </>
@@ -228,34 +291,6 @@ export function Header({
           </div>
         )}
       </div>
-
-      {channel && !isMobile && (
-        isEditingDesc ? (
-          <input
-            className="hidden text-sm border-b border-input bg-transparent outline-none sm:inline"
-            value={descDraft}
-            onChange={e => setDescDraft(e.target.value)}
-            onBlur={saveDescription}
-            onKeyDown={e => { if (e.key === 'Enter') saveDescription(); if (e.key === 'Escape') cancelDescriptionEdit(); }}
-            placeholder="Add a description..."
-            autoFocus
-          />
-        ) : channel.description ? (
-          canEdit ? (
-            <button
-              onClick={() => { setDescDraft(channel.description || ''); setIsEditingDesc(true); }}
-              className="hidden text-sm text-muted-foreground hover:text-foreground sm:inline"
-              title="Click to edit description"
-            >
-              {channel.description}
-            </button>
-          ) : (
-            <span className="hidden text-sm text-muted-foreground sm:inline">
-              {channel.description}
-            </span>
-          )
-        ) : null
-      )}
 
       {channel && isMobile && (
         <Dialog open={isEditingDesc} onOpenChange={(open) => { if (!open) cancelDescriptionEdit(); }}>
@@ -288,7 +323,7 @@ export function Header({
         </Dialog>
       )}
 
-      <div className="ml-auto flex items-center gap-2">
+      <div className="ml-auto flex shrink-0 items-center gap-2">
         {onPinnedClick && (
           <button
             onClick={onPinnedClick}

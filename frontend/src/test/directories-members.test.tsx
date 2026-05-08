@@ -168,8 +168,16 @@ describe('DirectoriesPage - members tab', () => {
     expect(screen.getByTestId('directory-meta-local-time')).toHaveClass('md:flex', 'md:justify-between');
     expect(screen.getByText('Local time')).toHaveClass('md:font-normal');
     expect(screen.getByText('Timezone').nextElementSibling).toHaveClass('md:text-right', 'md:text-muted-foreground');
+    const message = screen.getByLabelText('Message Alice');
     const manage = screen.getByLabelText('Manage Alice');
-    expect(manage.querySelector('svg')).not.toBeNull();
+    const messageIcon = message.querySelector('svg');
+    const manageIcon = manage.querySelector('svg');
+    expect(messageIcon).not.toBeNull();
+    expect(manageIcon).not.toBeNull();
+    expect(message).toHaveClass('h-8');
+    expect(manage).toHaveClass('h-8', 'w-8', 'p-0');
+    expect(messageIcon).toHaveClass('h-3.5', 'w-3.5');
+    expect(manageIcon).toHaveClass('h-3.5', 'w-3.5');
     expect(manage).not.toHaveTextContent('Manage');
   });
 

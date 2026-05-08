@@ -47,6 +47,19 @@ func TestRouterHealthEndpoint(t *testing.T) {
 	}
 }
 
+func TestRouterAddsAppVersionHeaderToAPIResponses(t *testing.T) {
+	jwtMgr := auth.NewJWTManager("test-secret", 15*time.Minute, 24*time.Hour)
+	router := NewRouter(&AuthHandler{}, &UserHandler{}, nil, &ChannelHandler{}, &ConversationHandler{}, &WSHandler{}, nil, nil, nil, nil, nil, nil, nil, NewVersionHandler("server-build-2"), nil, nil, nil, jwtMgr, nil, "server-build-2", []string{"*"})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/channels/missing", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if got := rec.Header().Get(AppVersionHeaderName); got != "server-build-2" {
+		t.Fatalf("%s = %q, want server-build-2", AppVersionHeaderName, got)
+	}
+}
+
 // TestRouterRegisteredRoutes verifies that key routes are registered and don't
 // 404 due to path mismatches. We check for non-404 responses (401 is fine —
 // it means the route matched but auth middleware rejected the request).

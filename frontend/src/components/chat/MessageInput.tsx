@@ -31,7 +31,7 @@ import { GiphyPicker, type PickedGIF } from '@/components/GiphyPicker';
 import { useWorkspaceSettings } from '@/hooks/useSettings';
 import { AttachmentChip, type DraftAttachment } from '@/components/chat/AttachmentChip';
 import { uploadAttachment, useDeleteDraftAttachment } from '@/hooks/useAttachments';
-import { isImageContentType } from '@/lib/file-helpers';
+import { isImageAttachment } from '@/lib/file-helpers';
 import { WysiwygEditor, type WysiwygEditorHandle, type ActiveFormat } from '@/components/chat/WysiwygEditor';
 import { sendWS } from '@/lib/ws-sender';
 import {
@@ -66,6 +66,8 @@ interface MessageInputProps {
   initialBody?: string;
   initialDrafts?: DraftAttachment[];
   onDraftChange?: (value: MessageInputValue) => void;
+  cancelOnOutsidePointer?: boolean;
+  hideCodeButton?: boolean;
   submitLabel?: string;
   // When true, the input renders compactly without a top border (used by
   // inline edit mode inside MessageItem).
@@ -107,6 +109,8 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
   typingThreadRootID,
   lastOwnMessageId,
   onDraftChange,
+  cancelOnOutsidePointer,
+  hideCodeButton,
 }, ref) {
   const [body, setBody] = useState(initialBody);
   const [drafts, setDrafts] = useState<DraftAttachment[]>(initialDrafts);
@@ -115,6 +119,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
   const [toolbarPickerOpen, setToolbarPickerOpen] = useState(false);
   const [uploadError, setUploadError] = useState('');
   const editorRef = useRef<WysiwygEditorHandle>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const lastTypingPingRef = useRef(0);
   const deleteDraft = useDeleteDraftAttachment();
@@ -148,13 +153,33 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
 
   const hasInitialDraftValue = initialBody !== '' || initialDrafts.length > 0;
   const suppressAutoFocus = isMobile && variant === 'composer';
+  const hasComposerContent = body.trim() !== '' || drafts.length > 0;
   const compactMobileComposer =
-    variant === 'composer' && !editorFocused && body.trim() === '' && drafts.length === 0;
-  const showToolbar = variant !== 'composer' || !isMobile || editorFocused || toolbarPickerOpen || isEditingMode;
+    variant === 'composer' && !editorFocused && !hasComposerContent;
+  const showToolbar =
+    variant !== 'composer' ||
+    !isMobile ||
+    editorFocused ||
+    toolbarPickerOpen ||
+    isEditingMode ||
+    hasComposerContent;
+  const showToolbarSend = showToolbar && !isEditingMode && (!isMobile || variant === 'composer');
 
   useEffect(() => {
     latestDraftValueRef.current = { body, attachmentIDs: drafts.map((d) => d.id) };
   }, [body, drafts]);
+
+  useEffect(() => {
+    if (!cancelOnOutsidePointer || !isMobile || !isEditingMode || !onCancel) return;
+    const handlePointerDown = (event: PointerEvent) => {
+      const root = rootRef.current;
+      if (!root) return;
+      if (event.target instanceof Node && root.contains(event.target)) return;
+      onCancel();
+    };
+    document.addEventListener('pointerdown', handlePointerDown);
+    return () => document.removeEventListener('pointerdown', handlePointerDown);
+  }, [cancelOnOutsidePointer, isMobile, isEditingMode, onCancel]);
 
   useEffect(() => {
     hasInitialDraftValueRef.current = hasInitialDraftValue;
@@ -432,7 +457,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
         filename: file.name,
         contentType: file.type || 'application/octet-stream',
         size: file.size,
-        localURL: isImageContentType(file.type) ? URL.createObjectURL(file) : undefined,
+        localURL: isImageAttachment(file.type, file.name) ? URL.createObjectURL(file) : undefined,
         progress: 0,
       })),
     ]);
@@ -529,8 +554,113 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
     }
   }
 
+  const renderToolbar = (placement: 'top' | 'bottom') => (
+    <div
+      className={`flex items-center gap-0.5 px-2 py-1 ${placement === 'top' ? 'border-b' : 'border-t'}`}
+      role="toolbar"
+      aria-label="Formatting"
+      data-toolbar-placement={placement}
+      onMouseDown={(event) => {
+        if (event.currentTarget.contains(event.target as Node)) event.preventDefault();
+      }}
+      onPointerDown={(event) => {
+        if (event.currentTarget.contains(event.target as Node)) event.preventDefault();
+      }}
+    >
+      <ToolbarBtn label="Bold (Ctrl+B)" active={active.has('bold')} onClick={() => editorRef.current?.applyMark('bold')}><Bold className="h-3.5 w-3.5" /></ToolbarBtn>
+      <ToolbarBtn label="Italic (Ctrl+I)" active={active.has('italic')} onClick={() => editorRef.current?.applyMark('italic')}><Italic className="h-3.5 w-3.5" /></ToolbarBtn>
+      <ToolbarBtn label="Strikethrough" active={active.has('strike')} onClick={() => editorRef.current?.applyMark('strike')}><Strikethrough className="h-3.5 w-3.5" /></ToolbarBtn>
+      {!isEditingMode && !hideCodeButton && (
+        <ToolbarBtn label="Code (Ctrl+E)" active={active.has('code')} onClick={() => editorRef.current?.applyMark('code')}><Code className="h-3.5 w-3.5" /></ToolbarBtn>
+      )}
+      {!isMobile && (
+        <>
+          <ToolbarBtn label="Quote" active={active.has('quote')} onClick={() => editorRef.current?.applyBlock('quote')}><Quote className="h-3.5 w-3.5" /></ToolbarBtn>
+          <ToolbarBtn label="List" active={active.has('ul')} onClick={() => editorRef.current?.applyBlock('ul')}><List className="h-3.5 w-3.5" /></ToolbarBtn>
+          <ToolbarBtn label="Numbered list" active={active.has('ol')} onClick={() => editorRef.current?.applyBlock('ol')}><ListOrdered className="h-3.5 w-3.5" /></ToolbarBtn>
+        </>
+      )}
+      <ToolbarBtn label="Link" onClick={openLinkDialog}><LinkIcon className="h-3.5 w-3.5" /></ToolbarBtn>
+      <span className="mx-1 h-4 w-px bg-border" aria-hidden />
+      <EmojiPicker
+        onSelect={insertEmojiShortcode}
+        mode="shortcode"
+        onOpenChange={setToolbarPickerOpen}
+        trigger={
+          <ToolbarBtn label="Emoji"><Smile className="h-3.5 w-3.5" /></ToolbarBtn>
+        }
+      />
+      {giphyEnabled && (
+        <GiphyPicker
+          apiKey={giphyAPIKey}
+          onSelect={insertGiphyGIF}
+          onOpenChange={setToolbarPickerOpen}
+          trigger={
+            <ToolbarBtn label="GIF"><ImagePlay className="h-3.5 w-3.5" /></ToolbarBtn>
+          }
+        />
+      )}
+      <button
+        type="button"
+        onClick={() => fileInputRef.current?.click()}
+        disabled={isUploading}
+        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50 max-md:h-9 max-md:w-9"
+        aria-label="Attach file"
+      >
+        <Paperclip className="h-3.5 w-3.5" />
+      </button>
+      {showToolbarSend && (
+        <>
+          <span className="ml-auto" aria-hidden />
+          <Button
+            onClick={handleSend}
+            disabled={!canSend}
+            size="icon"
+            className="h-7 w-7 rounded-md max-md:h-9 max-md:w-9"
+            aria-label="Send message"
+          >
+            <Send className="h-4 w-4" />
+          </Button>
+        </>
+      )}
+      {isEditingMode && (
+        <>
+          <span className="mx-1 h-4 w-px bg-border" aria-hidden />
+          {onCancel && (
+            <Button
+              onClick={onCancel}
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7 rounded-md max-md:h-9 max-md:w-9"
+              aria-label="Cancel"
+            >
+              <X className="h-4 w-4" />
+            </Button>
+          )}
+          <Button
+            onClick={handleSend}
+            disabled={!canSend}
+            size="icon"
+            className="h-7 w-7 rounded-md max-md:h-9 max-md:w-9"
+            aria-label={submitLabel ?? 'Send message'}
+          >
+            <Save className="h-4 w-4" />
+          </Button>
+        </>
+      )}
+    </div>
+  );
+
   return (
-    <div className={variant === 'inline' ? 'p-0' : 'border-t p-3 max-md:pb-[calc(0.75rem+env(safe-area-inset-bottom))]'}>
+    <div
+      ref={rootRef}
+      className={
+        variant === 'inline'
+          ? 'p-0'
+          : `border-t p-3 ${editorFocused || toolbarPickerOpen ? 'max-md:pb-2' : 'max-md:pb-[calc(0.75rem+env(safe-area-inset-bottom))]'}`
+      }
+      data-composer-focused={editorFocused ? 'true' : 'false'}
+    >
       {uploadError && (
         <div className="mb-2 rounded-md bg-destructive/10 p-2 text-xs text-destructive" role="alert">
           {uploadError}
@@ -555,95 +685,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
         </div>
       )}
       <div className="rounded-lg border bg-muted/40 dark:bg-input/30 focus-within:ring-1 focus-within:ring-ring" data-message-composer>
-        {showToolbar && (
-          <div
-            className="flex items-center gap-0.5 border-b px-2 py-1"
-            role="toolbar"
-            aria-label="Formatting"
-            onMouseDown={(event) => {
-              if (event.currentTarget.contains(event.target as Node)) event.preventDefault();
-            }}
-            onPointerDown={(event) => {
-              if (event.currentTarget.contains(event.target as Node)) event.preventDefault();
-            }}
-          >
-            <ToolbarBtn label="Bold (Ctrl+B)" active={active.has('bold')} onClick={() => editorRef.current?.applyMark('bold')}><Bold className="h-3.5 w-3.5" /></ToolbarBtn>
-            <ToolbarBtn label="Italic (Ctrl+I)" active={active.has('italic')} onClick={() => editorRef.current?.applyMark('italic')}><Italic className="h-3.5 w-3.5" /></ToolbarBtn>
-            <ToolbarBtn label="Strikethrough" active={active.has('strike')} onClick={() => editorRef.current?.applyMark('strike')}><Strikethrough className="h-3.5 w-3.5" /></ToolbarBtn>
-            {!isEditingMode && (
-              <ToolbarBtn label="Code (Ctrl+E)" active={active.has('code')} onClick={() => editorRef.current?.applyMark('code')}><Code className="h-3.5 w-3.5" /></ToolbarBtn>
-            )}
-            {!isMobile && (
-              <>
-                <ToolbarBtn label="Quote" active={active.has('quote')} onClick={() => editorRef.current?.applyBlock('quote')}><Quote className="h-3.5 w-3.5" /></ToolbarBtn>
-                <ToolbarBtn label="List" active={active.has('ul')} onClick={() => editorRef.current?.applyBlock('ul')}><List className="h-3.5 w-3.5" /></ToolbarBtn>
-                <ToolbarBtn label="Numbered list" active={active.has('ol')} onClick={() => editorRef.current?.applyBlock('ol')}><ListOrdered className="h-3.5 w-3.5" /></ToolbarBtn>
-              </>
-            )}
-            <ToolbarBtn label="Link" onClick={openLinkDialog}><LinkIcon className="h-3.5 w-3.5" /></ToolbarBtn>
-            <span className="mx-1 h-4 w-px bg-border" aria-hidden />
-            <EmojiPicker
-              onSelect={insertEmojiShortcode}
-              mode="shortcode"
-              onOpenChange={setToolbarPickerOpen}
-              trigger={
-                <ToolbarBtn label="Emoji"><Smile className="h-3.5 w-3.5" /></ToolbarBtn>
-              }
-            />
-            {giphyEnabled && (
-              <GiphyPicker
-                apiKey={giphyAPIKey}
-                onSelect={insertGiphyGIF}
-                onOpenChange={setToolbarPickerOpen}
-                trigger={
-                  <ToolbarBtn label="GIF"><ImagePlay className="h-3.5 w-3.5" /></ToolbarBtn>
-                }
-              />
-            )}
-            <button
-              type="button"
-              onClick={() => fileInputRef.current?.click()}
-              disabled={isUploading}
-              className="ml-auto flex h-7 w-7 items-center justify-center rounded-md hover:bg-muted disabled:opacity-50 max-md:ml-0 max-md:h-9 max-md:w-9 max-md:shrink-0"
-              aria-label="Attach file"
-            >
-              <Paperclip className="h-3.5 w-3.5" />
-            </button>
-            <input
-              ref={fileInputRef}
-              type="file"
-              multiple
-              className="hidden"
-              onChange={handleFileUpload}
-              aria-label="File input"
-            />
-            {isEditingMode && (
-              <>
-                <span className="mx-1 h-4 w-px bg-border" aria-hidden />
-                {onCancel && (
-                  <Button
-                    onClick={onCancel}
-                    variant="ghost"
-                    size="icon"
-                    className="h-7 w-7 rounded-md max-md:h-9 max-md:w-9"
-                    aria-label="Cancel"
-                  >
-                    <X className="h-4 w-4" />
-                  </Button>
-                )}
-                <Button
-                  onClick={handleSend}
-                  disabled={!canSend}
-                  size="icon"
-                  className="h-7 w-7 rounded-md max-md:h-9 max-md:w-9"
-                  aria-label={submitLabel ?? 'Send message'}
-                >
-                  <Save className="h-4 w-4" />
-                </Button>
-              </>
-            )}
-          </div>
-        )}
+        {showToolbar && !isMobile && renderToolbar('top')}
 
         {drafts.length > 0 && (
           <div className="flex flex-wrap gap-1.5 border-b p-2" aria-label="Draft attachments">
@@ -683,7 +725,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
             }
             onFocusChange={isMobile && variant === 'composer' ? setEditorFocused : undefined}
           />
-          {!isEditingMode && (
+          {!isEditingMode && !showToolbarSend && (
             <div className="flex shrink-0 self-end items-center gap-1">
               <Button
                 onClick={handleSend}
@@ -697,7 +739,16 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
             </div>
           )}
         </div>
+        {showToolbar && isMobile && renderToolbar('bottom')}
       </div>
+      <input
+        ref={fileInputRef}
+        type="file"
+        multiple
+        className="hidden"
+        onChange={handleFileUpload}
+        aria-label="File input"
+      />
       <Dialog open={linkDialogOpen} onOpenChange={setLinkDialogOpen}>
         <DialogContent aria-label="Insert link">
           <DialogHeader>
