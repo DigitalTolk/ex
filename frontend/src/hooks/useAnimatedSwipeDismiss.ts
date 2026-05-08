@@ -4,6 +4,7 @@ import { useSwipeable } from 'react-swipeable';
 export const SWIPE_DISMISS_MS = 180;
 const MIN_SWIPE = 72;
 const MAX_CROSS_AXIS = 48;
+const RIGHT_DISMISS_EDGE_PX = 32;
 
 export function useAnimatedSwipeDismiss(direction: 'right' | 'down', onDismiss: () => void) {
   const [dismissing, setDismissing] = useState(false);
@@ -30,11 +31,11 @@ export function useAnimatedSwipeDismiss(direction: 'right' | 'down', onDismiss: 
   const swipeHandlers = useSwipeable({
     delta: 4,
     trackMouse: false,
-    preventScrollOnSwipe: false,
-    onSwiping: ({ absX, absY, deltaX, deltaY }) => {
+    preventScrollOnSwipe: direction === 'down',
+    onSwiping: ({ absX, absY, deltaX, deltaY, initial }) => {
       if (timeoutRef.current !== null) return;
       if (direction === 'right') {
-        if (deltaX <= 0 || absY > MAX_CROSS_AXIS) {
+        if (initial[0] > RIGHT_DISMISS_EDGE_PX || deltaX <= 0 || absY > MAX_CROSS_AXIS) {
           setDragOffset(0);
           return;
         }
@@ -47,8 +48,8 @@ export function useAnimatedSwipeDismiss(direction: 'right' | 'down', onDismiss: 
       }
       setDragOffset(deltaY);
     },
-    onSwipedRight: ({ absY, deltaX }) => {
-      if (direction === 'right' && deltaX >= MIN_SWIPE && absY <= MAX_CROSS_AXIS) {
+    onSwipedRight: ({ absY, deltaX, initial }) => {
+      if (direction === 'right' && initial[0] <= RIGHT_DISMISS_EDGE_PX && deltaX >= MIN_SWIPE && absY <= MAX_CROSS_AXIS) {
         dismissWithAnimation();
       } else {
         setDragOffset(0);

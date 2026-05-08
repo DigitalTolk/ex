@@ -58,9 +58,10 @@ describe('MemberList', () => {
       'w-80',
       'max-md:fixed',
       'max-md:inset-x-0',
-      'max-md:top-[calc(2.75rem+env(safe-area-inset-top))]',
+      'max-md:top-[var(--mobile-right-panel-top,6rem)]',
       'max-md:w-auto',
     );
+    expect(panel.className).not.toContain('safe-area-inset-top');
     expect(scrollArea).toHaveClass('min-h-0', 'flex-1');
     expect(scrollArea.querySelector('[data-slot="scroll-area-scrollbar"]')).toHaveClass(
       'opacity-0',
@@ -99,7 +100,7 @@ describe('MemberList', () => {
     renderWithProviders(<MemberList members={[makeMember()]} onClose={onClose} />);
 
     const panel = screen.getByTestId('member-list-scroll-area').parentElement!;
-    touchSwipe(panel, 120, 240);
+    touchSwipe(panel, 12, 132);
 
     expect(panel).toHaveAttribute('data-swipe-dismissing', 'true');
     expect(panel).toHaveClass('max-md:translate-x-full');
@@ -114,9 +115,21 @@ describe('MemberList', () => {
     renderWithProviders(<MemberList members={[makeMember()]} onClose={onClose} />);
 
     const panel = screen.getByTestId('member-list-scroll-area').parentElement!;
-    touchDrag(panel, 120, 190);
+    touchDrag(panel, 12, 82);
 
     expect(panel).toHaveStyle({ transform: 'translateX(70px)', transition: 'none' });
+    expect(panel).toHaveAttribute('data-swipe-dismissing', 'false');
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('ignores middle-of-panel drags so scrolling does not dismiss the member list', () => {
+    const onClose = vi.fn();
+    renderWithProviders(<MemberList members={[makeMember()]} onClose={onClose} />);
+
+    const panel = screen.getByTestId('member-list-scroll-area').parentElement!;
+    touchDrag(panel, 120, 190);
+
+    expect(panel).not.toHaveStyle({ transform: 'translateX(70px)' });
     expect(panel).toHaveAttribute('data-swipe-dismissing', 'false');
     expect(onClose).not.toHaveBeenCalled();
   });

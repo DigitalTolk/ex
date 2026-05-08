@@ -82,3 +82,5 @@ check:
 			exit 1; \
 		fi; \
 		rm -f "$$tmp"
+	@echo "=== Frontend browser test ==="
+	cd frontend && npm run test:browser

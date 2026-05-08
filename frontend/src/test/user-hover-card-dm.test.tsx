@@ -121,6 +121,21 @@ describe('UserHoverCard — click-to-open + DM action', () => {
     expect(screen.queryByRole('button', { name: /Direct message/i })).toBeNull();
   });
 
+  it('pads the mobile card content away from iPhone rounded corners', async () => {
+    setMobileMatch(true);
+    apiFetchMock.mockResolvedValue({ id: 'u-other', displayName: 'Bob', status: 'active' });
+    renderCard();
+
+    fireEvent.click(screen.getByText('trigger'));
+    const dialog = await screen.findByRole('tooltip');
+
+    expect(dialog).toHaveClass(
+      'max-md:pb-[calc(env(safe-area-inset-bottom)+0.75rem)]',
+      'max-md:pl-[max(0.75rem,env(safe-area-inset-left))]',
+      'max-md:pr-[max(0.75rem,env(safe-area-inset-right))]',
+    );
+  });
+
   it('hides the Direct message button when viewing your own card', async () => {
     apiFetchMock.mockResolvedValue({ id: 'u-me', displayName: 'Bob', status: 'active' });
     renderCard({ userId: 'u-me', currentUserId: 'u-me' });

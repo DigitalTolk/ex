@@ -20,8 +20,9 @@ export function NotificationPermissionBanner() {
   const { isAuthenticated } = useAuth();
   const [dismissed, setDismissed] = useState(readDismissed);
   const [busy, setBusy] = useState(false);
+  const browserNotificationsEnabled = prefs?.browserEnabled ?? true;
 
-  if (!isAuthenticated || dismissed || !prefs.browserEnabled || permission !== 'default') {
+  if (!isAuthenticated || dismissed || !browserNotificationsEnabled || permission !== 'default') {
     return null;
   }
 

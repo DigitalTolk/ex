@@ -29,6 +29,18 @@ describe('SidePanel', () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
+  it('aligns mobile right sidebars directly under the app header without a safe-area gap', () => {
+    render(
+      <SidePanel title="Files" ariaLabel="Files" closeLabel="Close files" onClose={vi.fn()}>
+        <p>body</p>
+      </SidePanel>,
+    );
+
+    const panel = screen.getByLabelText('Files');
+    expect(panel).toHaveClass('max-md:top-[var(--mobile-right-panel-top,6rem)]');
+    expect(panel.className).not.toContain('safe-area-inset-top');
+  });
+
   it('closes on a right-sidebar mobile left-to-right swipe', () => {
     vi.useFakeTimers();
     const onClose = vi.fn();
@@ -39,7 +51,7 @@ describe('SidePanel', () => {
     );
 
     const panel = screen.getByLabelText('Files');
-    touchSwipe(panel, 120, 220);
+    touchSwipe(panel, 12, 112);
 
     expect(panel).toHaveAttribute('data-swipe-dismissing', 'true');
     expect(panel).toHaveClass('max-md:translate-x-full');
@@ -58,9 +70,25 @@ describe('SidePanel', () => {
     );
 
     const panel = screen.getByLabelText('Files');
-    touchDrag(panel, 120, 180);
+    touchDrag(panel, 12, 72);
 
     expect(panel).toHaveStyle({ transform: 'translateX(60px)', transition: 'none' });
+    expect(panel).toHaveAttribute('data-swipe-dismissing', 'false');
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('ignores middle-of-panel drags so vertical scrolling does not start dismissal', () => {
+    const onClose = vi.fn();
+    render(
+      <SidePanel title="Files" ariaLabel="Files" closeLabel="Close files" onClose={onClose}>
+        <p>body</p>
+      </SidePanel>,
+    );
+
+    const panel = screen.getByLabelText('Files');
+    touchDrag(panel, 120, 180);
+
+    expect(panel).not.toHaveStyle({ transform: 'translateX(60px)' });
     expect(panel).toHaveAttribute('data-swipe-dismissing', 'false');
     expect(onClose).not.toHaveBeenCalled();
   });
@@ -74,7 +102,7 @@ describe('SidePanel', () => {
     );
 
     const panel = screen.getByLabelText('Files');
-    touchSwipe(panel, 120, 170);
+    touchSwipe(panel, 12, 62);
 
     expect(panel).not.toHaveStyle({ transform: 'translateX(50px)' });
     expect(panel).toHaveAttribute('data-swipe-dismissing', 'false');

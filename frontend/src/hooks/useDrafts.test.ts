@@ -374,6 +374,7 @@ describe('useDrafts', () => {
         filename: 'first.png',
         contentType: 'image/png',
         size: 10,
+        url: 'https://cdn.example.test/first.png',
         createdBy: 'u-1',
         createdAt: '2026-05-03T10:00:00Z',
       },
@@ -391,6 +392,7 @@ describe('useDrafts', () => {
         filename: 'first.png',
         contentType: 'image/png',
         size: 10,
+        url: 'https://cdn.example.test/first.png',
         progress: 1,
       },
       {

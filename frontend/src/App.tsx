@@ -7,8 +7,6 @@ import { PresenceProvider } from '@/context/PresenceContext';
 import { NotificationProvider } from '@/context/NotificationContext';
 import { TypingProvider } from '@/context/TypingContext';
 import { ThemeProvider } from '@/context/ThemeContext';
-import { UpdateBanner } from '@/components/UpdateBanner';
-import { NotificationPermissionBanner } from '@/components/NotificationPermissionBanner';
 import { NotificationCountTitleBridge } from '@/components/NotificationCountTitleBridge';
 import LoginPage from '@/pages/LoginPage';
 import OIDCCallbackPage from '@/pages/OIDCCallbackPage';
@@ -105,14 +103,7 @@ export default function App() {
                   <TypingProvider>
                     <TooltipProvider>
                       <NotificationCountTitleBridge />
-                      {/* h-dvh + flex-col viewport constraint so the
-                          UpdateBanner sits as a normal block above the
-                          app and never has to overlay scrolling content. */}
                       <div className="flex h-dvh flex-col bg-[#1a1d21] pt-[env(safe-area-inset-top)]">
-                        <div className="shrink-0 bg-[#1a1d21]">
-                          <UpdateBanner />
-                          <NotificationPermissionBanner />
-                        </div>
                         <div className="min-h-0 flex-1 bg-background">
                           <AppRoutes />
                         </div>

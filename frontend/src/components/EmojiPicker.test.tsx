@@ -189,7 +189,7 @@ describe('EmojiPicker', () => {
     const dialog = screen.getByRole('dialog');
     expect(dialog.className).toContain('w-[336px]');
     expect(dialog.className).toContain('h-[460px]');
-    expect(dialog.className).toContain('max-md:h-[min(58vh,calc(100dvh-9rem))]');
+    expect(dialog.className).toContain('max-md:h-[50dvh]');
 
     const tabs = screen.getAllByTestId('emoji-category-tab');
     expect(tabs).toHaveLength(10);
@@ -215,6 +215,20 @@ describe('EmojiPicker', () => {
     expect(list.className).toContain('max-md:grid-cols-[repeat(7,2.75rem)]');
     expect(tile.className).toContain('max-md:h-11');
     expect(tile.className).toContain('max-md:w-11');
+    Object.defineProperty(window, 'matchMedia', { configurable: true, value: originalMatchMedia });
+  });
+
+  it('caps the mobile sheet at half the viewport and contains its own scroll', async () => {
+    const originalMatchMedia = window.matchMedia;
+    setMobileMatch(true);
+    const user = userEvent.setup();
+    render(<EmojiPicker onSelect={vi.fn()} />);
+    await user.click(screen.getByRole('button', { name: /open emoji picker/i }));
+
+    const dialog = screen.getByRole('dialog');
+    expect(dialog).toHaveAttribute('data-mobile-sheet', 'true');
+    expect(dialog.className).toContain('max-md:h-[50dvh]');
+    expect(dialog).toHaveStyle({ maxHeight: '50dvh', overscrollBehaviorY: 'contain' });
     Object.defineProperty(window, 'matchMedia', { configurable: true, value: originalMatchMedia });
   });
 

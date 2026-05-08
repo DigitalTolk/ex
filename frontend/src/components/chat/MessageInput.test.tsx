@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { act, fireEvent, render as rtlRender, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render as rtlRender, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MessageInput } from './MessageInput';
@@ -139,6 +139,80 @@ describe('MessageInput', () => {
 
     expect(onSend).not.toHaveBeenCalled();
     setMobileMatch(false);
+  });
+
+  it('moves the mobile send action into the formatting toolbar while focused', async () => {
+    setMobileMatch(true);
+    render(<MessageInput onSend={vi.fn()} initialBody="Hello" />);
+
+    const editor = await screen.findByLabelText('Message input');
+    act(() => {
+      editor.focus();
+    });
+
+    const toolbar = await screen.findByRole('toolbar', { name: 'Formatting' });
+    const send = within(toolbar).getByLabelText('Send message');
+    expect(send).toHaveClass('h-7', 'w-7', 'max-md:h-9', 'max-md:w-9');
+    expect(send.closest('[data-message-composer]')).toBeInTheDocument();
+    expect(screen.getAllByLabelText('Send message')).toHaveLength(1);
+    setMobileMatch(false);
+  });
+
+  it('renders hydrated mobile image attachment thumbnails in the message box', async () => {
+    setMobileMatch(true);
+    render(
+      <MessageInput
+        onSend={vi.fn()}
+        initialDrafts={[
+          {
+            id: 'att-1',
+            filename: 'photo.png',
+            contentType: 'image/png',
+            size: 1234,
+            url: 'https://cdn.example.test/photo.png',
+            progress: 1,
+          },
+        ]}
+      />,
+    );
+
+    const attachments = await screen.findByLabelText('Draft attachments');
+    const thumb = within(attachments).getByTestId('attachment-chip-thumb');
+    expect(thumb).toHaveAttribute('src', 'https://cdn.example.test/photo.png');
+    expect(screen.getByTestId('attachment-chip')).toBeInTheDocument();
+    setMobileMatch(false);
+  });
+
+  it('minimizes the mobile bottom safe-area padding while the message box is focused', async () => {
+    setMobileMatch(true);
+    render(<MessageInput onSend={vi.fn()} />);
+
+    const editor = await screen.findByLabelText('Message input');
+    const composerShell = editor.closest('[data-composer-focused]')!;
+    expect(composerShell).toHaveClass('max-md:pb-[calc(0.75rem+env(safe-area-inset-bottom))]');
+
+    act(() => {
+      editor.focus();
+    });
+
+    await waitFor(() => expect(composerShell).toHaveAttribute('data-composer-focused', 'true'));
+    expect(composerShell).toHaveClass('max-md:pb-2');
+    expect(composerShell).not.toHaveClass('max-md:pb-[calc(0.75rem+env(safe-area-inset-bottom))]');
+    setMobileMatch(false);
+  });
+
+  it('keeps the desktop send action below the editor instead of moving it into the toolbar', async () => {
+    setMobileMatch(false);
+    render(<MessageInput onSend={vi.fn()} initialBody="Hello" />);
+
+    const editor = await screen.findByLabelText('Message input');
+    act(() => {
+      editor.focus();
+    });
+
+    const toolbar = screen.getByRole('toolbar', { name: 'Formatting' });
+    expect(within(toolbar).queryByLabelText('Send message')).toBeNull();
+    expect(screen.getByLabelText('Send message').closest('[role="toolbar"]')).toBeNull();
   });
 
   it('blurs and returns to single-line mobile composer after saving an edit', async () => {

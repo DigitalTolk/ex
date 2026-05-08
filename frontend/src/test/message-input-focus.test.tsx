@@ -111,7 +111,7 @@ describe('MessageInput focusKey', () => {
 
     expect(toolbar).not.toHaveClass('overflow-x-auto', 'max-md:touch-pan-x');
     expect(screen.getByLabelText('Bold (Ctrl+B)')).toHaveClass('max-md:h-9', 'max-md:w-9');
-    expect(attach).toHaveClass('max-md:h-9', 'max-md:w-9', 'max-md:ml-0');
+    expect(attach).toHaveClass('text-muted-foreground', 'hover:text-foreground', 'max-md:h-9', 'max-md:w-9', 'max-md:ml-0');
     expect(screen.queryByLabelText('Quote')).not.toBeInTheDocument();
     expect(screen.queryByLabelText('List')).not.toBeInTheDocument();
   });

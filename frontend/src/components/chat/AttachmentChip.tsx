@@ -9,6 +9,8 @@ interface DraftAttachment {
   size: number;
   // Object-URL preview for the local file, valid until upload completes.
   localURL?: string;
+  // Resolved server preview URL for persisted draft/edit attachments.
+  url?: string;
   // [0, 1] while uploading; undefined or 1 means done.
   progress?: number;
 }
@@ -20,6 +22,7 @@ interface AttachmentChipProps {
 
 export function AttachmentChip({ att, onRemove }: AttachmentChipProps) {
   const isImage = isImageContentType(att.contentType);
+  const previewURL = att.localURL ?? att.url;
   const uploading = att.progress !== undefined && att.progress < 1;
   const pct = Math.max(0, Math.min(1, att.progress ?? 1));
   return (
@@ -29,10 +32,11 @@ export function AttachmentChip({ att, onRemove }: AttachmentChipProps) {
       className="group relative flex w-64 items-center gap-2 rounded-md border bg-background p-1.5 pr-2 shadow-sm"
     >
       <div className="relative h-10 w-10 shrink-0 overflow-hidden rounded bg-muted flex items-center justify-center">
-        {isImage && att.localURL ? (
+        {isImage && previewURL ? (
           <img
-            src={att.localURL}
+            src={previewURL}
             alt=""
+            data-testid="attachment-chip-thumb"
             className={`h-full w-full object-cover ${uploading ? 'opacity-60' : ''}`}
           />
         ) : (

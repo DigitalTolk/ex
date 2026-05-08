@@ -44,5 +44,6 @@ Thumbs.db
 
 # Coverage
 /frontend/coverage/
+/frontend/coverage-browser/
 coverage.out
 coverage.html

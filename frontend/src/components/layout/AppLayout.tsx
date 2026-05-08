@@ -7,6 +7,8 @@ import { TagSearchProvider } from '@/context/TagSearchContext';
 import { Button } from '@/components/ui/button';
 import { Menu } from 'lucide-react';
 import { useIsMobile } from '@/hooks/useIsMobile';
+import { UpdateBanner } from '@/components/UpdateBanner';
+import { NotificationPermissionBanner } from '@/components/NotificationPermissionBanner';
 
 interface AppLayoutProps {
   children: ReactNode;
@@ -14,6 +16,7 @@ interface AppLayoutProps {
 
 const CHANNEL_OPEN_MIN_SWIPE = 72;
 const CHANNEL_OPEN_MAX_CROSS_AXIS = 48;
+const CHANNEL_OPEN_EDGE_PX = 32;
 
 export function AppLayout({ children }: AppLayoutProps) {
   const location = useLocation();
@@ -30,6 +33,8 @@ export function AppLayout({ children }: AppLayoutProps) {
     return true;
   }, [isHome]);
 
+  const isChannelOpenEdgeSwipe = useCallback((initialX: number) => initialX <= CHANNEL_OPEN_EDGE_PX, []);
+
   const openChannelsWithAnimation = useCallback(() => {
     setChannelDragOffset(0);
     setManualChannelsOpen(true);
@@ -44,8 +49,13 @@ export function AppLayout({ children }: AppLayoutProps) {
     delta: 4,
     trackMouse: false,
     preventScrollOnSwipe: false,
-    onSwiping: ({ absY, deltaX, event }) => {
-      if (!isMobile || mobileChannelsOpen || !canOpenChannelsFromSwipe(event.target)) {
+    onSwiping: ({ absY, deltaX, event, initial }) => {
+      if (
+        !isMobile ||
+        mobileChannelsOpen ||
+        !canOpenChannelsFromSwipe(event.target) ||
+        !isChannelOpenEdgeSwipe(initial[0])
+      ) {
         setChannelDragOffset(0);
         return;
       }
@@ -55,11 +65,12 @@ export function AppLayout({ children }: AppLayoutProps) {
       }
       setChannelDragOffset(deltaX);
     },
-    onSwipedRight: ({ absY, deltaX, event }) => {
+    onSwipedRight: ({ absY, deltaX, event, initial }) => {
       if (
         isMobile &&
         !mobileChannelsOpen &&
         canOpenChannelsFromSwipe(event.target) &&
+        isChannelOpenEdgeSwipe(initial[0]) &&
         deltaX >= CHANNEL_OPEN_MIN_SWIPE &&
         absY <= CHANNEL_OPEN_MAX_CROSS_AXIS
       ) {
@@ -102,6 +113,10 @@ export function AppLayout({ children }: AppLayoutProps) {
           </div>
           <div className="h-11 w-11 lg:hidden" aria-hidden />
         </header>
+        <div className="shrink-0 bg-[#1a1d21]" data-testid="app-layout-banners">
+          <UpdateBanner />
+          <NotificationPermissionBanner />
+        </div>
 
         <div className="flex min-h-0 flex-1 overflow-hidden bg-background">
           <aside className="hidden w-72 shrink-0 bg-[#1a1d21] lg:block">

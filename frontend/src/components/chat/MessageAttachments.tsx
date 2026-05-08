@@ -65,7 +65,7 @@ export function MessageAttachments({
 
   return (
     <>
-      <div className="mt-1.5 flex flex-wrap gap-1.5">
+      <div className="mt-1.5 flex max-w-full flex-wrap gap-1.5">
         {showThumb ? (
           <ThumbnailButton att={onlyAttachment} onOpen={() => open(ids[0])} />
         ) : (
@@ -105,7 +105,7 @@ function ThumbnailButton({ att, onOpen }: { att: Attachment; onOpen: () => void 
     <button
       type="button"
       onClick={onOpen}
-      className="block max-w-xs overflow-hidden rounded-md border outline-none hover:opacity-90 focus-visible:ring-2 focus-visible:ring-ring/50"
+      className="block max-w-xs overflow-hidden rounded-md border outline-none hover:opacity-90 focus-visible:ring-2 focus-visible:ring-ring/50 max-md:max-w-full"
       aria-label={`Open image ${att.filename}`}
       data-testid="message-image-thumb"
     >
@@ -139,7 +139,7 @@ function AttachmentRow({ att, onOpen }: { att: Attachment; onOpen: () => void })
   const isImage = att.url && isImageContentType(att.contentType);
   const iconType = iconForAttachment(att.contentType, att.filename);
   return (
-    <div className="flex h-12 w-64 items-center gap-1 rounded-md border bg-background pr-1 hover:bg-muted/50">
+    <div className="flex h-12 w-64 max-w-full items-center gap-1 rounded-md border bg-background pr-1 hover:bg-muted/50 max-md:w-full">
       <button
         type="button"
         onClick={onOpen}

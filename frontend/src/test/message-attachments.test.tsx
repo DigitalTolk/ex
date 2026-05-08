@@ -47,6 +47,26 @@ describe('MessageAttachments', () => {
     expect(screen.getByAltText('cat.png')).toBeInTheDocument();
   });
 
+  it('keeps single-image thumbnails inside the mobile message column', () => {
+    const att: Attachment = {
+      id: 'a-mobile-img',
+      filename: 'mobile.png',
+      contentType: 'image/png',
+      size: 12345,
+      url: 'https://cdn/mobile.png',
+      width: 1600,
+      height: 1200,
+    };
+    useAttachmentsBatchMock.mockReturnValue({
+      map: new Map([['a-mobile-img', att]]),
+      isLoading: false,
+    });
+    render(<MessageAttachments {...baseProps} ids={['a-mobile-img']} />);
+
+    expect(screen.getByLabelText('Open image mobile.png')).toHaveClass('max-md:max-w-full');
+    expect(screen.getByAltText('mobile.png')).toHaveClass('max-w-full');
+  });
+
   it('uses rendered thumbnail dimensions in image width and height attributes', () => {
     const att: Attachment = {
       id: 'wide-1',
@@ -125,6 +145,35 @@ describe('MessageAttachments', () => {
     // lucide icon (no thumbnail).
     const boxes = screen.getAllByTestId('message-attachment-box');
     expect(boxes).toHaveLength(2);
+  });
+
+  it('lets compact attachment boxes shrink to the mobile message width', () => {
+    const att1: Attachment = {
+      id: 'mobile-file-1',
+      filename: 'one.pdf',
+      contentType: 'application/pdf',
+      size: 100,
+      url: 'https://cdn/one.pdf',
+    };
+    const att2: Attachment = {
+      id: 'mobile-file-2',
+      filename: 'two.pdf',
+      contentType: 'application/pdf',
+      size: 200,
+      url: 'https://cdn/two.pdf',
+    };
+    useAttachmentsBatchMock.mockReturnValue({
+      map: new Map<string, Attachment>([
+        ['mobile-file-1', att1],
+        ['mobile-file-2', att2],
+      ]),
+      isLoading: false,
+    });
+    render(<MessageAttachments {...baseProps} ids={['mobile-file-1', 'mobile-file-2']} />);
+
+    for (const row of screen.getAllByTestId('message-attachment-box')) {
+      expect(row.closest('.w-64')).toHaveClass('max-w-full', 'max-md:w-full');
+    }
   });
 
   it('attachment-box and thumbnail buttons suppress click-focus outline but keep a keyboard ring', () => {

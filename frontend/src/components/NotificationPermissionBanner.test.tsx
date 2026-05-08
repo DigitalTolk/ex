@@ -78,6 +78,18 @@ describe('NotificationPermissionBanner', () => {
     expect(screen.queryByTestId('notification-permission-banner')).not.toBeInTheDocument();
   });
 
+  it('keeps rendering with older test contexts that do not provide prefs', () => {
+    setup();
+    useNotificationsMock.mockReturnValue({
+      permission: 'default',
+      requestPermission: vi.fn().mockResolvedValue('granted'),
+    });
+
+    render(<NotificationPermissionBanner />);
+
+    expect(screen.getByTestId('notification-permission-banner')).toBeInTheDocument();
+  });
+
   it('does not render when the user previously dismissed the banner', () => {
     setup();
     localStorage.setItem('ex.notifications.banner.dismissed.v1', '1');

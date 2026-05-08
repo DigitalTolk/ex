@@ -113,6 +113,8 @@ export function MessageItem({
   const [hovered, setHovered] = useState(false);
   const [actionsMenuOpen, setActionsMenuOpen] = useState(false);
   const [mobileActionsOpen, setMobileActionsOpen] = useState(false);
+  const [mobileActionsSuppressed, setMobileActionsSuppressed] = useState(false);
+  const [mobileReactionPickerOpen, setMobileReactionPickerOpen] = useState(false);
   const longPressTimerRef = useRef<number | null>(null);
   const mobileActionsRef = useRef<HTMLDivElement>(null);
   const mobileActionsSheetRef = useRef<HTMLDivElement>(null);
@@ -227,6 +229,8 @@ export function MessageItem({
   function closeMobileActions() {
     cancelLongPress();
     setMobileActionsOpen(false);
+    setMobileActionsSuppressed(false);
+    setMobileReactionPickerOpen(false);
   }
   const {
     dismissing: swipeDismissing,
@@ -268,6 +272,7 @@ export function MessageItem({
             filename: attachment.filename,
             contentType: attachment.contentType,
             size: attachment.size,
+            url: attachment.url,
           };
         })
         .filter((draft): draft is DraftAttachment => draft !== null)
@@ -343,6 +348,7 @@ export function MessageItem({
     window.addEventListener('pointerup', cancelPendingLongPress, { once: true });
     window.addEventListener('pointercancel', cancelPendingLongPress, { once: true });
     longPressTimerRef.current = window.setTimeout(() => {
+      setMobileActionsSuppressed(false);
       setMobileActionsOpen(true);
       notifyMessageHovered(message.id);
       longPressTimerRef.current = null;
@@ -677,25 +683,29 @@ export function MessageItem({
           </DropdownMenu>
         </div>
       )}
-      {!isEditing && !message.deleted && mobileActionsOpen && (
+      {!isEditing && !message.deleted && (mobileActionsOpen || mobileReactionPickerOpen) && (
         <div
           ref={mobileActionsRef}
           className="fixed inset-0 z-[120] select-none [-webkit-touch-callout:none] [-webkit-user-select:none] md:hidden"
           role="presentation"
           onContextMenu={(event) => event.preventDefault()}
         >
-          <button
-            type="button"
-            className="absolute inset-0 bg-black/35"
-            aria-label="Close message actions"
-            onClick={closeMobileActions}
-          />
+          {!mobileActionsSuppressed && (
+            <button
+              type="button"
+              className="absolute inset-0 bg-black/35"
+              aria-label="Close message actions"
+              onClick={closeMobileActions}
+            />
+          )}
+          {mobileActionsOpen && (
           <div
             role="dialog"
             aria-modal="true"
             aria-label="Message actions"
-            className={`mobile-bottom-sheet-enter absolute inset-x-0 bottom-0 max-h-[calc(100dvh-env(safe-area-inset-top)-0.75rem)] overflow-y-auto rounded-t-xl border-x-0 border-b-0 border-t bg-popover p-3 pb-[calc(env(safe-area-inset-bottom)+0.75rem)] text-popover-foreground shadow-lg transform-gpu transition-transform duration-200 ease-out ${swipeDismissing ? 'translate-y-full' : ''}`}
+            className={`mobile-bottom-sheet-enter absolute inset-x-0 bottom-0 max-h-[calc(100dvh-env(safe-area-inset-top)-0.75rem)] overflow-y-auto rounded-t-xl border-x-0 border-b-0 border-t bg-popover p-3 pb-[calc(env(safe-area-inset-bottom)+0.75rem)] text-popover-foreground shadow-lg transform-gpu transition-transform duration-200 ease-out ${swipeDismissing ? 'translate-y-full' : ''} ${mobileActionsSuppressed ? 'hidden' : ''}`}
             data-testid="mobile-message-actions"
+            data-actions-suppressed={mobileActionsSuppressed ? 'true' : 'false'}
             data-swipe-dismissing={swipeDismissing ? 'true' : 'false'}
             style={mobileActionsDragStyle}
             ref={setMobileActionsNode}
@@ -716,6 +726,14 @@ export function MessageItem({
               onSelect={(emoji) => {
                 handleReact(emoji);
                 closeMobileActions();
+              }}
+              onOpenChange={(open) => {
+                setMobileReactionPickerOpen(open);
+                if (open) {
+                  setMobileActionsSuppressed(true);
+                } else {
+                  closeMobileActions();
+                }
               }}
               triggerClassName="block w-full"
               trigger={
@@ -781,6 +799,7 @@ export function MessageItem({
               )}
             </div>
           </div>
+          )}
         </div>
       )}
       <ConfirmDialog

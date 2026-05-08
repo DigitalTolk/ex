@@ -151,6 +151,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
   const compactMobileComposer =
     variant === 'composer' && !editorFocused && body.trim() === '' && drafts.length === 0;
   const showToolbar = variant !== 'composer' || !isMobile || editorFocused || toolbarPickerOpen || isEditingMode;
+  const showMobileToolbarSend = isMobile && variant === 'composer' && showToolbar && !isEditingMode;
 
   useEffect(() => {
     latestDraftValueRef.current = { body, attachmentIDs: drafts.map((d) => d.id) };
@@ -530,7 +531,14 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
   }
 
   return (
-    <div className={variant === 'inline' ? 'p-0' : 'border-t p-3 max-md:pb-[calc(0.75rem+env(safe-area-inset-bottom))]'}>
+    <div
+      className={
+        variant === 'inline'
+          ? 'p-0'
+          : `border-t p-3 ${editorFocused || toolbarPickerOpen ? 'max-md:pb-2' : 'max-md:pb-[calc(0.75rem+env(safe-area-inset-bottom))]'}`
+      }
+      data-composer-focused={editorFocused ? 'true' : 'false'}
+    >
       {uploadError && (
         <div className="mb-2 rounded-md bg-destructive/10 p-2 text-xs text-destructive" role="alert">
           {uploadError}
@@ -604,7 +612,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
               type="button"
               onClick={() => fileInputRef.current?.click()}
               disabled={isUploading}
-              className="ml-auto flex h-7 w-7 items-center justify-center rounded-md hover:bg-muted disabled:opacity-50 max-md:ml-0 max-md:h-9 max-md:w-9 max-md:shrink-0"
+              className="ml-auto flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50 max-md:ml-0 max-md:h-9 max-md:w-9 max-md:shrink-0"
               aria-label="Attach file"
             >
               <Paperclip className="h-3.5 w-3.5" />
@@ -617,6 +625,20 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
               onChange={handleFileUpload}
               aria-label="File input"
             />
+            {showMobileToolbarSend && (
+              <>
+                <span className="mx-1 h-4 w-px bg-border" aria-hidden />
+                <Button
+                  onClick={handleSend}
+                  disabled={!canSend}
+                  size="icon"
+                  className="h-7 w-7 rounded-md max-md:h-9 max-md:w-9"
+                  aria-label="Send message"
+                >
+                  <Send className="h-4 w-4" />
+                </Button>
+              </>
+            )}
             {isEditingMode && (
               <>
                 <span className="mx-1 h-4 w-px bg-border" aria-hidden />
@@ -683,7 +705,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
             }
             onFocusChange={isMobile && variant === 'composer' ? setEditorFocused : undefined}
           />
-          {!isEditingMode && (
+          {!isEditingMode && !showMobileToolbarSend && (
             <div className="flex shrink-0 self-end items-center gap-1">
               <Button
                 onClick={handleSend}

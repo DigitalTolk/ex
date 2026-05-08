@@ -15,7 +15,11 @@ describe('mobile shell invariants', () => {
     const layout = readProjectFile('src/components/layout/AppLayout.tsx');
 
     expect(app).toContain('className="flex h-dvh flex-col bg-[#1a1d21] pt-[env(safe-area-inset-top)]"');
-    expect(app).toContain('className="shrink-0 bg-[#1a1d21]"');
+    expect(app).not.toContain('<UpdateBanner />');
+    expect(app).not.toContain('<NotificationPermissionBanner />');
+    expect(layout).toContain('data-testid="app-layout-banners"');
+    expect(layout).toContain('<UpdateBanner />');
+    expect(layout).toContain('<NotificationPermissionBanner />');
     expect(layout).not.toContain('pt-[env(safe-area-inset-top)]');
   });
 

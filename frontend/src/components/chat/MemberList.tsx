@@ -98,7 +98,7 @@ export function MemberList({ members, channelId, currentUserId, currentUserRole,
 
   return (
     <div
-      className={`mobile-right-sidebar-enter flex h-full min-h-0 w-80 flex-col border-l bg-background max-md:fixed max-md:inset-x-0 max-md:bottom-0 max-md:top-[calc(2.75rem+env(safe-area-inset-top))] max-md:z-40 max-md:w-auto max-md:touch-pan-y max-md:border-l-0 max-md:transform-gpu max-md:transition-transform max-md:duration-200 max-md:ease-out ${dismissing ? 'max-md:translate-x-full' : ''}`}
+      className={`mobile-right-sidebar-enter flex h-full min-h-0 w-80 flex-col border-l bg-background max-md:fixed max-md:inset-x-0 max-md:bottom-0 max-md:top-[var(--mobile-right-panel-top,6rem)] max-md:z-40 max-md:w-auto max-md:touch-pan-y max-md:border-l-0 max-md:transform-gpu max-md:transition-transform max-md:duration-200 max-md:ease-out ${dismissing ? 'max-md:translate-x-full' : ''}`}
       data-mobile-right-sidebar="true"
       data-swipe-dismissing={dismissing ? 'true' : 'false'}
       style={dragStyle}

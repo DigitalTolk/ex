@@ -51,6 +51,7 @@ import { useUserConversations } from '@/hooks/useConversations';
 import { getSeenMap, THREAD_SEEN_CHANGED_EVENT, unreadThreadIDs, useUserThreads } from '@/hooks/useThreads';
 import { useUserState } from '@/hooks/useUserState';
 import { useDrafts } from '@/hooks/useDrafts';
+import { useIsMobile } from '@/hooks/useIsMobile';
 import { useCategories, useCreateCategory, useDeleteCategory, useFavoriteChannel, useSetCategory, useSetConversationCategory, useReorderCategories } from '@/hooks/useSidebar';
 import { groupSidebarItems, SidebarSectionKeys, type SidebarItem, type ConversationSidebarSort } from '@/lib/sidebar-groups';
 import type { SidebarCategory, UserChannel, UserConversation } from '@/types';
@@ -304,11 +305,13 @@ function PragmaticChannelRow({
   sectionKey,
   index,
   channel,
+  disabled,
   children,
 }: {
   sectionKey: string;
   index: number;
   channel: UserChannel;
+  disabled?: boolean;
   children: (args: {
     dragRef?: (node: HTMLElement | null) => void;
     dragStyle?: CSSProperties;
@@ -319,7 +322,7 @@ function PragmaticChannelRow({
 
   useEffect(() => {
     const element = elementRef.current;
-    if (!element) return undefined;
+    if (!element || disabled) return undefined;
     return combine(
       makeDraggable({
         element,
@@ -341,7 +344,7 @@ function PragmaticChannelRow({
           ),
       }),
     );
-  }, [channel, index, sectionKey]);
+  }, [channel, disabled, index, sectionKey]);
 
   const setElementRef = useCallback((node: HTMLElement | null) => {
     elementRef.current = node;
@@ -362,11 +365,13 @@ function PragmaticConversationRow({
   sectionKey,
   index,
   conversation,
+  disabled,
   children,
 }: {
   sectionKey: string;
   index: number;
   conversation: UserConversation;
+  disabled?: boolean;
   children: (args: {
     dragRef?: (node: HTMLElement | null) => void;
     dragStyle?: CSSProperties;
@@ -377,7 +382,7 @@ function PragmaticConversationRow({
 
   useEffect(() => {
     const element = elementRef.current;
-    if (!element) return undefined;
+    if (!element || disabled) return undefined;
     return combine(
       makeDraggable({
         element,
@@ -399,7 +404,7 @@ function PragmaticConversationRow({
           ),
       }),
     );
-  }, [conversation, index, sectionKey]);
+  }, [conversation, disabled, index, sectionKey]);
 
   const setElementRef = useCallback((node: HTMLElement | null) => {
     elementRef.current = node;
@@ -455,6 +460,7 @@ export function Sidebar({ onClose }: SidebarProps) {
   const [categoryCreateError, setCategoryCreateError] = useState('');
   const navigate = useNavigate();
   const location = useLocation();
+  const isMobile = useIsMobile();
   const directoryActive = location.pathname === '/directory' || location.pathname.startsWith('/directory/');
   const [createChannelOpen, setCreateChannelOpen] = useState(false);
   const [inviteOpen, setInviteOpen] = useState(false);
@@ -1266,7 +1272,7 @@ export function Sidebar({ onClose }: SidebarProps) {
   }, []);
 
   return (
-    <div className="flex h-full w-full min-w-0 flex-col text-gray-300">
+    <div className="flex h-full w-full min-w-0 flex-col text-gray-300 max-md:select-none max-md:touch-pan-y max-md:[-webkit-touch-callout:none] max-md:[-webkit-user-select:none]">
       {/* User section */}
       <div className="flex items-center gap-2 border-b border-white/10 p-3">
         <DropdownMenu open={userMenuOpen} onOpenChange={setUserMenuOpen} modal={false}>
@@ -1451,7 +1457,7 @@ export function Sidebar({ onClose }: SidebarProps) {
       )}
 
       <ScrollArea
-        className="min-h-0 w-full flex-1"
+        className="min-h-0 w-full flex-1 max-md:touch-pan-y"
         scrollbarClassName="opacity-0 transition-opacity data-[scrolling]:opacity-100"
         data-testid="sidebar-scroll-area"
       >
@@ -1611,7 +1617,7 @@ export function Sidebar({ onClose }: SidebarProps) {
                 <div key={section.key} className="relative mt-2" data-testid={`sidebar-group-${section.key}`}>
                   {(isFavorites || isUserCategory || isChannelsDefault) && (
                     <PragmaticCategoryDropHitbox
-                      active={isDraggingCategory}
+                      active={!isMobile && isDraggingCategory}
                       data={{
                         type: 'section-header-target',
                         sectionKey: section.key,
@@ -1622,9 +1628,9 @@ export function Sidebar({ onClose }: SidebarProps) {
                   )}
                   <PragmaticCategoryHeader
                     id={section.key}
-                    draggable={isUserCategory}
+                    draggable={isUserCategory && !isMobile}
                     dropData={
-                      isFavorites || isUserCategory || isChannelsDefault
+                      !isMobile && (isFavorites || isUserCategory || isChannelsDefault)
                         ? {
                             type: 'section-header-target',
                             sectionKey: section.key,
@@ -1707,7 +1713,7 @@ export function Sidebar({ onClose }: SidebarProps) {
                         <DropdownMenuTrigger
                           aria-label={`Manage ${section.title} category`}
                           data-testid={`sidebar-category-menu-${section.key}`}
-                          className="absolute right-1 top-1/2 -translate-y-1/2 h-5 w-5 flex items-center justify-center rounded text-gray-400 opacity-0 group-hover/sec:opacity-100 hover:bg-white/20 hover:text-white"
+                          className="absolute right-1 top-1/2 -translate-y-1/2 h-5 w-5 flex items-center justify-center rounded text-gray-400 opacity-0 group-hover/sec:opacity-100 hover:bg-white/20 hover:text-white max-md:h-10 max-md:w-10 max-md:opacity-100"
                         >
                           <MoreVertical className="h-3.5 w-3.5" />
                         </DropdownMenuTrigger>
@@ -1747,6 +1753,7 @@ export function Sidebar({ onClose }: SidebarProps) {
                               sectionKey={section.key}
                               index={channelDropIndex}
                               channel={item.channel}
+                              disabled={isMobile}
                             >
                               {(dragProps) => (
                                 <ChannelRow
@@ -1756,7 +1763,7 @@ export function Sidebar({ onClose }: SidebarProps) {
                                     (userState?.channelNotifications ?? []).includes(item.channel.channelID)
                                   }
                                   onClose={onClose}
-                                  draggable
+                                  draggable={!isMobile}
                                   suppressNavigation={suppressChannelNavigationID === item.channel.channelID}
                                   onSuppressNavigationConsumed={clearSuppressedChannelNavigation}
                                   {...dragProps}
@@ -1784,6 +1791,7 @@ export function Sidebar({ onClose }: SidebarProps) {
                               sectionKey={section.key}
                               index={conversationDropIndex}
                               conversation={conv}
+                              disabled={isMobile}
                             >
                               {(dragProps) => (
                                 <ConversationRow
@@ -1794,7 +1802,7 @@ export function Sidebar({ onClose }: SidebarProps) {
                                   dmOnline={dmOnline}
                                   onClose={onClose}
                                   onHide={hideConversation}
-                                  draggable
+                                  draggable={!isMobile}
                                   suppressNavigation={suppressChannelNavigationID === conv.conversationID}
                                   onSuppressNavigationConsumed={clearSuppressedChannelNavigation}
                                   {...dragProps}

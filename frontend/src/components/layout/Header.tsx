@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
 import { Users, ChevronDown, LogOut, Archive, Pencil, Bell, BellOff, Pin, Paperclip } from 'lucide-react';
 import { ChannelIcon } from '@/components/ChannelIcon';
 import { UserAvatar } from '@/components/UserAvatar';
@@ -84,7 +84,29 @@ export function Header({
   const [descDraft, setDescDraft] = useState('');
   const [archiveConfirmOpen, setArchiveConfirmOpen] = useState(false);
   const [mobileChannelMenuOpen, setMobileChannelMenuOpen] = useState(false);
+  const headerShellRef = useRef<HTMLDivElement>(null);
   const isMobile = useIsMobile();
+
+  useLayoutEffect(() => {
+    const node = headerShellRef.current;
+    if (!node || typeof document === 'undefined') return;
+    const measuredNode = node;
+
+    function updateMobilePanelTop() {
+      const bottom = measuredNode.getBoundingClientRect().bottom;
+      document.documentElement.style.setProperty('--mobile-right-panel-top', `${Math.max(0, Math.round(bottom))}px`);
+    }
+
+    updateMobilePanelTop();
+    const resizeObserver = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(updateMobilePanelTop);
+    resizeObserver?.observe(measuredNode);
+    window.addEventListener('resize', updateMobilePanelTop);
+    return () => {
+      resizeObserver?.disconnect();
+      window.removeEventListener('resize', updateMobilePanelTop);
+      document.documentElement.style.removeProperty('--mobile-right-panel-top');
+    };
+  }, []);
 
   function editDescription() {
     setDescDraft(channel?.description || '');
@@ -117,22 +139,22 @@ export function Header({
   }
 
   return (
-    <div className="shrink-0 border-b bg-background">
+    <div ref={headerShellRef} className="shrink-0 border-b bg-background">
     <header className="flex shrink-0 items-center gap-3 px-4 py-3">
-      <div className="flex items-center gap-2">
+      <div className="flex min-w-0 flex-1 items-center gap-2">
         {channel ? (
           <DropdownMenu modal={false}>
             <DropdownMenuTrigger
-              className="flex items-center gap-1 rounded-md px-1 -ml-1 hover:bg-muted/50"
+              className="flex min-w-0 items-center gap-1 rounded-md px-1 -ml-1 hover:bg-muted/50"
               onClick={() => {
                 if (isMobile) setMobileChannelMenuOpen((open) => !open);
               }}
               aria-expanded={isMobile ? mobileChannelMenuOpen : undefined}
               aria-controls={isMobile ? 'mobile-channel-menu' : undefined}
             >
-              <ChannelIcon type={channel.type} className="h-5 w-5 text-muted-foreground" />
-              <h1 className="text-lg font-semibold">{displayTitle}</h1>
-              <ChevronDown className="h-4 w-4 text-muted-foreground" />
+              <ChannelIcon type={channel.type} className="h-5 w-5 shrink-0 text-muted-foreground" />
+              <h1 className="min-w-0 truncate text-lg font-semibold">{displayTitle}</h1>
+              <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
             </DropdownMenuTrigger>
             <DropdownMenuContent align="start" className="w-56 max-md:hidden">
               {canEdit && (
@@ -171,9 +193,9 @@ export function Header({
             </DropdownMenuContent>
           </DropdownMenu>
         ) : (
-          <div className="flex items-center gap-2">
+          <div className="flex min-w-0 items-center gap-2">
             {userId ? (
-              <div>
+              <div className="min-w-0">
                 <UserHoverCard
                   userId={userId}
                   displayName={displayTitle}
@@ -182,21 +204,21 @@ export function Header({
                   online={avatarOnline}
                   currentUserId={currentUserId}
                 >
-                  <span className="inline-flex items-center gap-2">
+                  <span className="inline-flex min-w-0 items-center gap-2">
                     {showAvatar && (
                       <UserAvatar
                         key={avatarURL ?? '__none__'}
                         displayName={displayTitle || '??'}
                         avatarURL={avatarURL}
                         online={avatarOnline}
-                        className="h-7 w-7"
+                        className="h-7 w-7 shrink-0"
                       />
                     )}
-                    <h1 className="text-lg font-semibold">{displayTitle}</h1>
+                    <h1 className="min-w-0 truncate text-lg font-semibold">{displayTitle}</h1>
                   </span>
                 </UserHoverCard>
                 {subtitle && (
-                  <p className="text-xs text-muted-foreground">{subtitle}</p>
+                  <p className="truncate text-xs text-muted-foreground">{subtitle}</p>
                 )}
               </div>
             ) : (
@@ -211,16 +233,16 @@ export function Header({
                     displayName={displayTitle || '??'}
                     avatarURL={avatarURL}
                     online={avatarOnline}
-                    className="h-7 w-7"
+                    className="h-7 w-7 shrink-0"
                   />
                 )}
-                <div>
-                  <div className="flex items-center gap-1.5">
-                    <h1 className="text-lg font-semibold">{displayTitle}</h1>
+                <div className="min-w-0">
+                  <div className="flex min-w-0 items-center gap-1.5">
+                    <h1 className="min-w-0 truncate text-lg font-semibold">{displayTitle}</h1>
                     {userStatus && <UserStatusIndicator status={userStatus} />}
                   </div>
                   {subtitle && (
-                    <p className="text-xs text-muted-foreground">{subtitle}</p>
+                    <p className="truncate text-xs text-muted-foreground">{subtitle}</p>
                   )}
                 </div>
               </>
@@ -288,7 +310,7 @@ export function Header({
         </Dialog>
       )}
 
-      <div className="ml-auto flex items-center gap-2">
+      <div className="ml-auto flex shrink-0 items-center gap-2">
         {onPinnedClick && (
           <button
             onClick={onPinnedClick}
