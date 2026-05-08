@@ -385,6 +385,7 @@ export function ChannelView() {
               initialBody={activeEditingMessage?.body ?? draft?.body ?? ''}
               initialDrafts={activeEditingMessage ? editDraftAttachments : draftAttachments}
               onDraftChange={activeEditingMessage ? undefined : handleDraftChange}
+              cancelOnOutsidePointer={!!activeEditingMessage}
               submitLabel={activeEditingMessage ? 'Save' : undefined}
               typingParentID={activeEditingMessage ? undefined : channel?.id}
               typingParentType={activeEditingMessage ? undefined : 'channel'}

@@ -54,24 +54,47 @@ export function ImageLightbox({
     originX: number;
     originY: number;
   } | null>(null);
+  const activePointersRef = useRef(new Map<number, { x: number; y: number }>());
+  const pinchGestureRef = useRef<{
+    startDistance: number;
+    startZoom: number;
+    centerX: number;
+    centerY: number;
+    originX: number;
+    originY: number;
+  } | null>(null);
   const zoom = zoomState.key === imageKey ? zoomState.value : 1;
   const pan = panState.key === imageKey && zoom > 1 ? panState : { key: imageKey, x: 0, y: 0 };
   useTransientOverlayCleanup(open, { rootRef: lightboxRef, lockScroll: true });
 
   function setCurrentZoom(update: (value: number) => number) {
-    const next = update(zoom);
+    const next = Math.min(6, Math.max(1, update(zoom)));
     setZoomState({ key: imageKey, value: next });
     if (next <= 1) {
       setPanState({ key: imageKey, x: 0, y: 0 });
       panGestureRef.current = null;
+      pinchGestureRef.current = null;
     }
   }
 
   const handleClose = useCallback(() => {
     setZoomState({ key: '', value: 1 });
     setPanState({ key: '', x: 0, y: 0 });
+    activePointersRef.current.clear();
+    pinchGestureRef.current = null;
+    panGestureRef.current = null;
     onClose();
   }, [onClose]);
+
+  function pointerDistance(points: Array<{ x: number; y: number }>) {
+    const [a, b] = points;
+    return Math.hypot(a.x - b.x, a.y - b.y);
+  }
+
+  function pointerCenter(points: Array<{ x: number; y: number }>) {
+    const [a, b] = points;
+    return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+  }
 
   useEffect(() => {
     if (!open) return;
@@ -118,11 +141,12 @@ export function ImageLightbox({
       aria-modal="true"
       aria-label={`Attachment preview: ${current.filename}`}
       data-testid="image-lightbox"
-      className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 p-6 pt-[calc(2.75rem+1.5rem)] max-md:px-3 max-md:pb-[calc(env(safe-area-inset-bottom)+0.75rem)] max-md:pt-[calc(env(safe-area-inset-top)+4.5rem)]"
+      className="fixed inset-0 isolate z-[100] flex items-center justify-center bg-black/80 p-6 pt-[calc(2.75rem+1.5rem)] max-md:px-3 max-md:pb-[calc(env(safe-area-inset-bottom)+0.75rem)] max-md:pt-[calc(env(safe-area-inset-top)+4.5rem)]"
       onClick={handleClose}
     >
       <div
-        className="absolute inset-x-0 top-11 flex items-center gap-3 bg-gradient-to-b from-black/70 to-transparent px-4 pb-3 pt-3 text-white max-md:top-0 max-md:pt-[calc(env(safe-area-inset-top)+0.75rem)]"
+        className="fixed inset-x-0 top-11 flex items-center gap-3 bg-gradient-to-b from-black/70 to-transparent px-4 pb-3 pt-3 text-white max-md:top-0 max-md:pt-[calc(env(safe-area-inset-top)+0.75rem)]"
+        style={{ zIndex: 130 }}
         data-testid="image-lightbox-toolbar"
         onClick={(e) => e.stopPropagation()}
       >
@@ -146,7 +170,7 @@ export function ImageLightbox({
               type="button"
               onClick={(e) => {
                 e.stopPropagation();
-                setCurrentZoom((value) => Math.max(1, Math.round((value - 0.5) * 10) / 10));
+                setCurrentZoom((value) => Math.round((value - 0.75) * 10) / 10);
               }}
               aria-label="Zoom out"
               data-testid="image-lightbox-zoom-out"
@@ -159,7 +183,7 @@ export function ImageLightbox({
               type="button"
               onClick={(e) => {
                 e.stopPropagation();
-                setCurrentZoom((value) => Math.min(4, Math.round((value + 0.5) * 10) / 10));
+                setCurrentZoom((value) => Math.round((value + 0.75) * 10) / 10);
               }}
               aria-label="Zoom in"
               data-testid="image-lightbox-zoom-in"
@@ -173,6 +197,7 @@ export function ImageLightbox({
           href={current.downloadURL ?? current.url}
           download={current.filename}
           onClick={(e) => e.stopPropagation()}
+          onDoubleClick={() => setCurrentZoom((value) => (value > 1 ? 1 : 2))}
           aria-label={`Download ${current.filename}`}
           data-testid="image-lightbox-download"
           className="flex h-9 w-9 items-center justify-center rounded-md text-white/80 hover:bg-white/15 hover:text-white"
@@ -200,7 +225,8 @@ export function ImageLightbox({
             }}
             aria-label="Previous attachment"
             data-testid="image-lightbox-prev"
-            className="absolute left-3 top-1/2 -translate-y-1/2 flex h-10 w-10 items-center justify-center rounded-full bg-black/40 text-white hover:bg-black/60"
+            className="fixed left-3 top-1/2 -translate-y-1/2 flex h-10 w-10 items-center justify-center rounded-full bg-black/40 text-white hover:bg-black/60"
+            style={{ zIndex: 130 }}
           >
             <ChevronLeft className="h-6 w-6" />
           </button>
@@ -212,7 +238,8 @@ export function ImageLightbox({
             }}
             aria-label="Next attachment"
             data-testid="image-lightbox-next"
-            className="absolute right-3 top-1/2 -translate-y-1/2 flex h-10 w-10 items-center justify-center rounded-full bg-black/40 text-white hover:bg-black/60"
+            className="fixed right-3 top-1/2 -translate-y-1/2 flex h-10 w-10 items-center justify-center rounded-full bg-black/40 text-white hover:bg-black/60"
+            style={{ zIndex: 130 }}
           >
             <ChevronRight className="h-6 w-6" />
           </button>
@@ -221,7 +248,8 @@ export function ImageLightbox({
 
       {isImage ? (
         <div
-          className="flex max-h-full max-w-full items-center justify-center overflow-auto touch-none overscroll-contain"
+          className="fixed inset-0 flex items-center justify-center overflow-hidden touch-none overscroll-contain px-3 pb-[calc(env(safe-area-inset-bottom)+0.75rem)] pt-[calc(env(safe-area-inset-top)+4.5rem)] md:p-16"
+          style={{ zIndex: 110 }}
           data-testid="image-lightbox-zoom-stage"
           onClick={(e) => e.stopPropagation()}
           onWheel={(e) => {
@@ -233,18 +261,59 @@ export function ImageLightbox({
             });
           }}
           onPointerDown={(e) => {
-            if (zoom <= 1) return;
             e.stopPropagation();
-            e.currentTarget.setPointerCapture?.(e.pointerId);
-            panGestureRef.current = {
-              pointerId: e.pointerId,
-              startX: e.clientX,
-              startY: e.clientY,
-              originX: pan.x,
-              originY: pan.y,
-            };
+            try {
+              e.currentTarget.setPointerCapture?.(e.pointerId);
+            } catch {
+              // Synthetic browser-test PointerEvents are not active pointers.
+            }
+            activePointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+            const pointers = Array.from(activePointersRef.current.values());
+            if (pointers.length >= 2) {
+              const two = pointers.slice(0, 2);
+              const center = pointerCenter(two);
+              pinchGestureRef.current = {
+                startDistance: Math.max(1, pointerDistance(two)),
+                startZoom: zoom,
+                centerX: center.x,
+                centerY: center.y,
+                originX: pan.x,
+                originY: pan.y,
+              };
+              panGestureRef.current = null;
+              return;
+            }
+            if (zoom > 1) {
+              panGestureRef.current = {
+                pointerId: e.pointerId,
+                startX: e.clientX,
+                startY: e.clientY,
+                originX: pan.x,
+                originY: pan.y,
+              };
+            }
           }}
           onPointerMove={(e) => {
+            if (activePointersRef.current.has(e.pointerId)) {
+              activePointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+            }
+            const pointers = Array.from(activePointersRef.current.values());
+            const pinch = pinchGestureRef.current;
+            if (pinch && pointers.length >= 2) {
+              e.preventDefault();
+              e.stopPropagation();
+              const two = pointers.slice(0, 2);
+              const distance = Math.max(1, pointerDistance(two));
+              const center = pointerCenter(two);
+              const nextZoom = Math.min(6, Math.max(1, Math.round((pinch.startZoom * distance / pinch.startDistance) * 100) / 100));
+              setZoomState({ key: imageKey, value: nextZoom });
+              setPanState({
+                key: imageKey,
+                x: pinch.originX + center.x - pinch.centerX,
+                y: pinch.originY + center.y - pinch.centerY,
+              });
+              return;
+            }
             const gesture = panGestureRef.current;
             if (!gesture || gesture.pointerId !== e.pointerId) return;
             e.preventDefault();
@@ -256,25 +325,40 @@ export function ImageLightbox({
             });
           }}
           onPointerUp={(e) => {
+            activePointersRef.current.delete(e.pointerId);
+            if (activePointersRef.current.size < 2) {
+              pinchGestureRef.current = null;
+            }
             if (panGestureRef.current?.pointerId === e.pointerId) {
               e.stopPropagation();
               panGestureRef.current = null;
-              e.currentTarget.releasePointerCapture?.(e.pointerId);
+              try {
+                e.currentTarget.releasePointerCapture?.(e.pointerId);
+              } catch {
+                // Pointer capture may not have been acquired.
+              }
             }
           }}
           onPointerCancel={(e) => {
+            activePointersRef.current.delete(e.pointerId);
+            if (activePointersRef.current.size < 2) {
+              pinchGestureRef.current = null;
+            }
             if (panGestureRef.current?.pointerId === e.pointerId) {
               panGestureRef.current = null;
-              e.currentTarget.releasePointerCapture?.(e.pointerId);
+              try {
+                e.currentTarget.releasePointerCapture?.(e.pointerId);
+              } catch {
+                // Pointer capture may not have been acquired.
+              }
             }
           }}
         >
           <img
             src={current.url}
             alt={current.filename}
-            className={`max-h-[88vh] max-w-[92vw] rounded-md object-contain shadow-2xl transition-transform max-md:max-h-[calc(100dvh-env(safe-area-inset-top)-env(safe-area-inset-bottom)-6rem)] ${zoom > 1 ? 'cursor-grab active:cursor-grabbing' : ''}`}
+            className={`pointer-events-none max-h-full max-w-full rounded-md object-contain shadow-2xl transition-transform ${zoom > 1 ? 'cursor-grab active:cursor-grabbing' : ''}`}
             style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})` }}
-            onDoubleClick={() => setCurrentZoom((value) => (value > 1 ? 1 : 2))}
             data-testid="image-lightbox-image"
             data-zoom={zoom}
             data-pan-x={pan.x}

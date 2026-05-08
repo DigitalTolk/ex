@@ -4,6 +4,9 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 const mockUploadAttachment = vi.fn();
 const mockDeleteDraftMutateAsync = vi.fn().mockResolvedValue(undefined);
+const workspaceSettings = vi.hoisted(() => ({
+  current: { maxUploadBytes: 0, allowedExtensions: [], giphyEnabled: false, giphyAPIKey: '' },
+}));
 
 vi.mock('@/hooks/useAttachments', () => ({
   uploadAttachment: (...args: unknown[]) => mockUploadAttachment(...args),
@@ -12,6 +15,11 @@ vi.mock('@/hooks/useAttachments', () => ({
 }));
 
 vi.mock('@/lib/api', () => ({ apiFetch: vi.fn() }));
+
+vi.mock('@/hooks/useSettings', () => ({
+  useWorkspaceSettings: () => ({ data: workspaceSettings.current }),
+  useUpdateWorkspaceSettings: () => ({ mutate: vi.fn(), isPending: false }),
+}));
 
 vi.mock('@/hooks/useEmoji', () => ({
   useEmojis: () => ({ data: [] }),
@@ -44,6 +52,7 @@ function setMobileMatch(matches: boolean) {
 describe('MessageInput toolbar buttons', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    workspaceSettings.current = { maxUploadBytes: 0, allowedExtensions: [], giphyEnabled: false, giphyAPIKey: '' };
     setMobileMatch(false);
   });
 
@@ -59,6 +68,25 @@ describe('MessageInput toolbar buttons', () => {
     expect(screen.getByLabelText('Quote')).toBeInTheDocument();
     expect(screen.getByLabelText('List')).toBeInTheDocument();
     expect(screen.getByLabelText('Numbered list')).toBeInTheDocument();
+  });
+
+  it('keeps desktop attachment beside media actions and send on the toolbar right edge', async () => {
+    workspaceSettings.current = {
+      maxUploadBytes: 0,
+      allowedExtensions: [],
+      giphyEnabled: true,
+      giphyAPIKey: 'browser-key',
+    };
+    renderWithClient(<MessageInput onSend={vi.fn()} initialBody="hello" />);
+
+    const toolbar = await screen.findByRole('toolbar', { name: 'Formatting' });
+    const buttonLabels = Array.from(toolbar.querySelectorAll('button'))
+      .map((button) => button.getAttribute('aria-label'));
+
+    expect(buttonLabels.indexOf('GIF')).toBeLessThan(buttonLabels.indexOf('Attach file'));
+    expect(buttonLabels.indexOf('Attach file')).toBeLessThan(buttonLabels.indexOf('Send message'));
+    expect(screen.getByLabelText('Send message').closest('[role="toolbar"]')).toBe(toolbar);
+    expect(screen.getAllByLabelText('Send message')).toHaveLength(1);
   });
 
   it('removes quote and list toolbar buttons only from the focused mobile composer', async () => {

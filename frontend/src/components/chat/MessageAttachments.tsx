@@ -1,8 +1,8 @@
-import { createElement, useMemo } from 'react';
+import { createElement, useEffect, useMemo } from 'react';
 import { Download } from 'lucide-react';
 import { useAttachmentsBatch } from '@/hooks/useAttachments';
 import { useAttachmentLightbox } from '@/hooks/useAttachmentLightbox';
-import { iconForAttachment, isImageContentType } from '@/lib/file-helpers';
+import { iconForAttachment, isImageAttachment } from '@/lib/file-helpers';
 import { formatBytes } from '@/lib/format';
 import type { Attachment } from '@/types';
 
@@ -17,6 +17,7 @@ interface MessageAttachmentsProps {
   // "~general" or "Direct message". Optional.
   postedIn?: string;
   postedAt: string;
+  onContentHeightChange?: () => void;
 }
 
 const THUMBNAIL_MAX_WIDTH = 320;
@@ -31,6 +32,7 @@ export function MessageAttachments({
   authorAvatarURL,
   postedIn,
   postedAt,
+  onContentHeightChange,
 }: MessageAttachmentsProps) {
   const { map, isLoading } = useAttachmentsBatch(ids, { parentID, parentType, messageID });
 
@@ -52,6 +54,13 @@ export function MessageAttachments({
   );
   const { open, lightbox } = useAttachmentLightbox({ sources, postedIn });
 
+  useEffect(() => {
+    if (!onContentHeightChange || isLoading || ids.length === 0) return;
+    if (!ids.every((id) => map.has(id))) return;
+    const frame = requestAnimationFrame(onContentHeightChange);
+    return () => cancelAnimationFrame(frame);
+  }, [ids, isLoading, map, onContentHeightChange]);
+
   if (ids.length === 0) return null;
 
   // Big inline thumbnail only when this message has exactly one image
@@ -61,13 +70,17 @@ export function MessageAttachments({
   const showThumb =
     onlyAttachment &&
     onlyAttachment.url &&
-    isImageContentType(onlyAttachment.contentType);
+    isImageAttachment(onlyAttachment.contentType, onlyAttachment.filename);
 
   return (
     <>
       <div className="mt-1.5 flex max-w-full flex-wrap gap-1.5">
         {showThumb ? (
-          <ThumbnailButton att={onlyAttachment} onOpen={() => open(ids[0])} />
+          <ThumbnailButton
+            att={onlyAttachment}
+            onOpen={() => open(ids[0])}
+            onLoad={onContentHeightChange}
+          />
         ) : (
           ids.map((id) => {
             const data = map.get(id);
@@ -96,7 +109,7 @@ function AttachmentSkeleton({ loading }: { loading: boolean }) {
   );
 }
 
-function ThumbnailButton({ att, onOpen }: { att: Attachment; onOpen: () => void }) {
+function ThumbnailButton({ att, onOpen, onLoad }: { att: Attachment; onOpen: () => void; onLoad?: () => void }) {
   // width/height attrs reserve the layout box pre-decode; CSS caps
   // visible size. Use the rendered thumbnail box, not the full
   // intrinsic image, so the reserved layout matches the chat message.
@@ -116,6 +129,7 @@ function ThumbnailButton({ att, onOpen }: { att: Attachment; onOpen: () => void 
           className="h-auto max-h-72 max-w-full"
           width={thumbnailDims.width}
           height={thumbnailDims.height}
+          onLoad={onLoad}
         />
       )}
     </button>
@@ -136,7 +150,7 @@ function getThumbnailDimensions(att: Attachment): { width?: number; height?: num
 // lightbox; the download icon is its own action so users don't have to
 // open then download.
 function AttachmentRow({ att, onOpen }: { att: Attachment; onOpen: () => void }) {
-  const isImage = att.url && isImageContentType(att.contentType);
+  const isImage = att.url && isImageAttachment(att.contentType, att.filename);
   const iconType = iconForAttachment(att.contentType, att.filename);
   return (
     <div className="flex h-12 w-64 max-w-full items-center gap-1 rounded-md border bg-background pr-1 hover:bg-muted/50 max-md:w-full">

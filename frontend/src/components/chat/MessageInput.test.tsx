@@ -183,6 +183,37 @@ describe('MessageInput', () => {
     setMobileMatch(false);
   });
 
+  it('shows full mobile formatting controls for an attachment-only draft before focus', async () => {
+    setMobileMatch(true);
+    render(
+      <MessageInput
+        onSend={vi.fn()}
+        initialDrafts={[
+          {
+            id: 'att-1',
+            filename: 'photo.png',
+            contentType: 'image/png',
+            size: 1234,
+            url: 'https://cdn.example.test/photo.png',
+            progress: 1,
+          },
+        ]}
+      />,
+    );
+
+    const editor = await screen.findByLabelText('Message input');
+    expect(document.activeElement).not.toBe(editor);
+    expect(editor).not.toHaveClass('max-md:min-h-[1.5rem]', 'max-md:max-h-[1.5rem]');
+
+    const toolbar = screen.getByRole('toolbar', { name: 'Formatting' });
+    expect(toolbar).toBeInTheDocument();
+    expect(within(toolbar).getByLabelText('Bold (Ctrl+B)')).toBeInTheDocument();
+    expect(within(toolbar).getByLabelText('Emoji')).toBeInTheDocument();
+    expect(within(toolbar).getByLabelText('Send message')).toBeInTheDocument();
+    expect(screen.getByLabelText('Draft attachments')).toBeInTheDocument();
+    setMobileMatch(false);
+  });
+
   it('minimizes the mobile bottom safe-area padding while the message box is focused', async () => {
     setMobileMatch(true);
     render(<MessageInput onSend={vi.fn()} />);
@@ -201,7 +232,7 @@ describe('MessageInput', () => {
     setMobileMatch(false);
   });
 
-  it('keeps the desktop send action below the editor instead of moving it into the toolbar', async () => {
+  it('moves the desktop send action into the formatting toolbar', async () => {
     setMobileMatch(false);
     render(<MessageInput onSend={vi.fn()} initialBody="Hello" />);
 
@@ -211,8 +242,9 @@ describe('MessageInput', () => {
     });
 
     const toolbar = screen.getByRole('toolbar', { name: 'Formatting' });
-    expect(within(toolbar).queryByLabelText('Send message')).toBeNull();
-    expect(screen.getByLabelText('Send message').closest('[role="toolbar"]')).toBeNull();
+    expect(within(toolbar).getByLabelText('Send message')).toBeInTheDocument();
+    expect(screen.getByLabelText('Send message').closest('[role="toolbar"]')).toBe(toolbar);
+    expect(screen.getAllByLabelText('Send message')).toHaveLength(1);
   });
 
   it('blurs and returns to single-line mobile composer after saving an edit', async () => {
@@ -258,6 +290,31 @@ describe('MessageInput', () => {
     expect(toolbar).toContainElement(save);
     expect(save).toHaveClass('h-7', 'w-7', 'max-md:h-9', 'max-md:w-9');
     expect(save).toHaveTextContent('');
+    setMobileMatch(false);
+  });
+
+  it('cancels mobile composer editing when pressing outside the edit box', async () => {
+    const onCancel = vi.fn();
+    setMobileMatch(true);
+    render(
+      <div>
+        <button type="button" data-testid="outside">Outside</button>
+        <MessageInput
+          onSend={vi.fn()}
+          onCancel={onCancel}
+          initialBody="Edited text"
+          submitLabel="Save"
+          cancelOnOutsidePointer
+        />
+      </div>,
+    );
+
+    const toolbar = await screen.findByRole('toolbar', { name: 'Formatting' });
+    fireEvent.pointerDown(toolbar);
+    expect(onCancel).not.toHaveBeenCalled();
+
+    fireEvent.pointerDown(screen.getByTestId('outside'));
+    expect(onCancel).toHaveBeenCalledTimes(1);
     setMobileMatch(false);
   });
 
@@ -556,6 +613,38 @@ describe('MessageInput', () => {
     await user.keyboard('{ArrowUp}');
     window.removeEventListener('ex:edit-message', listener);
     expect(listener).not.toHaveBeenCalled();
+  });
+
+  it('shows attachment-only mobile drafts as a full composer with upload progress before focus', async () => {
+    setMobileMatch(true);
+    render(
+      <MessageInput
+        onSend={vi.fn()}
+        initialDrafts={[
+          {
+            id: 'att-uploading-1',
+            filename: 'photo.png',
+            contentType: 'image/png',
+            size: 2048,
+            localURL: 'blob:uploading-photo',
+            progress: 0.42,
+          },
+        ]}
+      />,
+    );
+
+    expect(await screen.findByRole('toolbar', { name: 'Formatting' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Draft attachments')).toBeInTheDocument();
+    expect(screen.getByText('42%')).toBeInTheDocument();
+    expect(screen.getByRole('progressbar', { name: 'Uploading photo.png' })).toHaveAttribute('aria-valuenow', '42');
+    expect(screen.getByLabelText('Attach file')).toBeInTheDocument();
+  });
+
+  it('can hide the code toolbar button for constrained composers', async () => {
+    render(<MessageInput onSend={vi.fn()} initialBody="hello" hideCodeButton />);
+
+    expect(await screen.findByRole('toolbar', { name: 'Formatting' })).toBeInTheDocument();
+    expect(screen.queryByLabelText('Code (Ctrl+E)')).not.toBeInTheDocument();
   });
 
   it('refocuses on ex:focus-composer when parent + scope match (main composer)', async () => {

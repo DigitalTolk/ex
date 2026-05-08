@@ -27,6 +27,12 @@ export function setServerVersion(v: string): void {
   for (const cb of subscribers) cb();
 }
 
+export function resetServerVersionForTests(): void {
+  serverVersion = null;
+  lastETag = null;
+  for (const cb of subscribers) cb();
+}
+
 function subscribe(cb: () => void): () => void {
   subscribers.add(cb);
   return () => {
@@ -90,6 +96,7 @@ export function useServerVersion(): {
   // Banner shows only after we've heard a server version AND it differs
   // from the bundle-baked one. Suppressed entirely in dev where the
   // bundle has no embedded version.
-  const outdated = v !== null && v !== BUILD_VERSION && BUILD_VERSION !== 'dev';
+  const devBuildWithoutServerStamp = BUILD_VERSION === 'dev' && import.meta.env.DEV;
+  const outdated = v !== null && v !== BUILD_VERSION && !devBuildWithoutServerStamp;
   return { serverVersion: v, outdated };
 }

@@ -31,7 +31,7 @@ import { GiphyPicker, type PickedGIF } from '@/components/GiphyPicker';
 import { useWorkspaceSettings } from '@/hooks/useSettings';
 import { AttachmentChip, type DraftAttachment } from '@/components/chat/AttachmentChip';
 import { uploadAttachment, useDeleteDraftAttachment } from '@/hooks/useAttachments';
-import { isImageContentType } from '@/lib/file-helpers';
+import { isImageAttachment } from '@/lib/file-helpers';
 import { WysiwygEditor, type WysiwygEditorHandle, type ActiveFormat } from '@/components/chat/WysiwygEditor';
 import { sendWS } from '@/lib/ws-sender';
 import {
@@ -66,6 +66,8 @@ interface MessageInputProps {
   initialBody?: string;
   initialDrafts?: DraftAttachment[];
   onDraftChange?: (value: MessageInputValue) => void;
+  cancelOnOutsidePointer?: boolean;
+  hideCodeButton?: boolean;
   submitLabel?: string;
   // When true, the input renders compactly without a top border (used by
   // inline edit mode inside MessageItem).
@@ -107,6 +109,8 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
   typingThreadRootID,
   lastOwnMessageId,
   onDraftChange,
+  cancelOnOutsidePointer,
+  hideCodeButton,
 }, ref) {
   const [body, setBody] = useState(initialBody);
   const [drafts, setDrafts] = useState<DraftAttachment[]>(initialDrafts);
@@ -115,6 +119,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
   const [toolbarPickerOpen, setToolbarPickerOpen] = useState(false);
   const [uploadError, setUploadError] = useState('');
   const editorRef = useRef<WysiwygEditorHandle>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const lastTypingPingRef = useRef(0);
   const deleteDraft = useDeleteDraftAttachment();
@@ -148,14 +153,33 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
 
   const hasInitialDraftValue = initialBody !== '' || initialDrafts.length > 0;
   const suppressAutoFocus = isMobile && variant === 'composer';
+  const hasComposerContent = body.trim() !== '' || drafts.length > 0;
   const compactMobileComposer =
-    variant === 'composer' && !editorFocused && body.trim() === '' && drafts.length === 0;
-  const showToolbar = variant !== 'composer' || !isMobile || editorFocused || toolbarPickerOpen || isEditingMode;
-  const showMobileToolbarSend = isMobile && variant === 'composer' && showToolbar && !isEditingMode;
+    variant === 'composer' && !editorFocused && !hasComposerContent;
+  const showToolbar =
+    variant !== 'composer' ||
+    !isMobile ||
+    editorFocused ||
+    toolbarPickerOpen ||
+    isEditingMode ||
+    hasComposerContent;
+  const showToolbarSend = showToolbar && !isEditingMode && (!isMobile || variant === 'composer');
 
   useEffect(() => {
     latestDraftValueRef.current = { body, attachmentIDs: drafts.map((d) => d.id) };
   }, [body, drafts]);
+
+  useEffect(() => {
+    if (!cancelOnOutsidePointer || !isMobile || !isEditingMode || !onCancel) return;
+    const handlePointerDown = (event: PointerEvent) => {
+      const root = rootRef.current;
+      if (!root) return;
+      if (event.target instanceof Node && root.contains(event.target)) return;
+      onCancel();
+    };
+    document.addEventListener('pointerdown', handlePointerDown);
+    return () => document.removeEventListener('pointerdown', handlePointerDown);
+  }, [cancelOnOutsidePointer, isMobile, isEditingMode, onCancel]);
 
   useEffect(() => {
     hasInitialDraftValueRef.current = hasInitialDraftValue;
@@ -433,7 +457,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
         filename: file.name,
         contentType: file.type || 'application/octet-stream',
         size: file.size,
-        localURL: isImageContentType(file.type) ? URL.createObjectURL(file) : undefined,
+        localURL: isImageAttachment(file.type, file.name) ? URL.createObjectURL(file) : undefined,
         progress: 0,
       })),
     ]);
@@ -532,6 +556,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
 
   return (
     <div
+      ref={rootRef}
       className={
         variant === 'inline'
           ? 'p-0'
@@ -578,7 +603,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
             <ToolbarBtn label="Bold (Ctrl+B)" active={active.has('bold')} onClick={() => editorRef.current?.applyMark('bold')}><Bold className="h-3.5 w-3.5" /></ToolbarBtn>
             <ToolbarBtn label="Italic (Ctrl+I)" active={active.has('italic')} onClick={() => editorRef.current?.applyMark('italic')}><Italic className="h-3.5 w-3.5" /></ToolbarBtn>
             <ToolbarBtn label="Strikethrough" active={active.has('strike')} onClick={() => editorRef.current?.applyMark('strike')}><Strikethrough className="h-3.5 w-3.5" /></ToolbarBtn>
-            {!isEditingMode && (
+            {!isEditingMode && !hideCodeButton && (
               <ToolbarBtn label="Code (Ctrl+E)" active={active.has('code')} onClick={() => editorRef.current?.applyMark('code')}><Code className="h-3.5 w-3.5" /></ToolbarBtn>
             )}
             {!isMobile && (
@@ -612,22 +637,14 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
               type="button"
               onClick={() => fileInputRef.current?.click()}
               disabled={isUploading}
-              className="ml-auto flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50 max-md:ml-0 max-md:h-9 max-md:w-9 max-md:shrink-0"
+              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50 max-md:h-9 max-md:w-9"
               aria-label="Attach file"
             >
               <Paperclip className="h-3.5 w-3.5" />
             </button>
-            <input
-              ref={fileInputRef}
-              type="file"
-              multiple
-              className="hidden"
-              onChange={handleFileUpload}
-              aria-label="File input"
-            />
-            {showMobileToolbarSend && (
+            {showToolbarSend && (
               <>
-                <span className="mx-1 h-4 w-px bg-border" aria-hidden />
+                <span className="ml-auto" aria-hidden />
                 <Button
                   onClick={handleSend}
                   disabled={!canSend}
@@ -705,7 +722,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
             }
             onFocusChange={isMobile && variant === 'composer' ? setEditorFocused : undefined}
           />
-          {!isEditingMode && !showMobileToolbarSend && (
+          {!isEditingMode && !showToolbarSend && (
             <div className="flex shrink-0 self-end items-center gap-1">
               <Button
                 onClick={handleSend}
@@ -720,6 +737,14 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
           )}
         </div>
       </div>
+      <input
+        ref={fileInputRef}
+        type="file"
+        multiple
+        className="hidden"
+        onChange={handleFileUpload}
+        aria-label="File input"
+      />
       <Dialog open={linkDialogOpen} onOpenChange={setLinkDialogOpen}>
         <DialogContent aria-label="Insert link">
           <DialogHeader>

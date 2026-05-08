@@ -97,7 +97,45 @@ describe('Header', () => {
 
     act(() => window.dispatchEvent(new Event('resize')));
 
-    expect(document.documentElement.style.getPropertyValue('--mobile-right-panel-top')).toBe('123px');
+    expect(document.documentElement.style.getPropertyValue('--mobile-right-panel-top')).toBe('123.4px');
+    unmount();
+    expect(document.documentElement.style.getPropertyValue('--mobile-right-panel-top')).toBe('');
+  });
+
+  it('publishes mobile right-panel top relative to the transformed app main container', () => {
+    const { container, unmount } = render(
+      <main data-app-main="true">
+        <Header channel={makeChannel({ name: 'general' })} />
+      </main>,
+    );
+    const main = container.querySelector('[data-app-main="true"]') as HTMLElement;
+    const shell = container.querySelector('[data-testid="channel-header-shell"]') as HTMLElement;
+    vi.spyOn(main, 'getBoundingClientRect').mockReturnValue({
+      bottom: 700,
+      height: 600,
+      left: 0,
+      right: 390,
+      top: 105,
+      width: 390,
+      x: 0,
+      y: 105,
+      toJSON: () => ({}),
+    } as DOMRect);
+    vi.spyOn(shell, 'getBoundingClientRect').mockReturnValue({
+      bottom: 223,
+      height: 118,
+      left: 0,
+      right: 390,
+      top: 105,
+      width: 390,
+      x: 0,
+      y: 105,
+      toJSON: () => ({}),
+    } as DOMRect);
+
+    act(() => window.dispatchEvent(new Event('resize')));
+
+    expect(document.documentElement.style.getPropertyValue('--mobile-right-panel-top')).toBe('118px');
     unmount();
     expect(document.documentElement.style.getPropertyValue('--mobile-right-panel-top')).toBe('');
   });
@@ -166,6 +204,37 @@ describe('Header', () => {
     );
 
     expect(screen.getByText('General discussion')).toBeInTheDocument();
+  });
+
+  it('keeps the desktop channel description left-aligned under the channel title', () => {
+    render(
+      <Header
+        channel={makeChannel({ description: 'General discussion' })}
+        memberCount={4}
+        onFilesClick={vi.fn()}
+      />,
+    );
+
+    const description = screen.getByText('General discussion');
+    expect(screen.getByTestId('channel-title-stack')).toContainElement(description);
+    expect(description).toHaveClass('text-left', 'truncate');
+    expect(description).not.toHaveClass('ml-auto', 'text-right');
+  });
+
+  it('does not render the channel description on mobile so short names keep the header width', () => {
+    setMobileMatch(true);
+    render(
+      <Header
+        channel={makeChannel({ name: 'general', description: 'General discussion' })}
+        memberCount={4}
+        onFilesClick={vi.fn()}
+      />,
+    );
+
+    const title = screen.getByRole('heading', { name: 'general' });
+    expect(title).toHaveClass('truncate');
+    expect(screen.getByTestId('channel-title-stack')).toHaveClass('flex-1', 'min-w-0');
+    expect(screen.queryByText('General discussion')).not.toBeInTheDocument();
   });
 
   it('keeps the channel dropdown trigger as a desktop dropdown without mobile menu state', () => {

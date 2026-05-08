@@ -482,6 +482,7 @@ export function ThreadPanel({
             initialBody={activeEditingMessage?.body ?? draft?.body ?? ''}
             initialDrafts={activeEditingMessage ? editDraftAttachments : draftAttachments}
             onDraftChange={activeEditingMessage ? undefined : handleDraftChange}
+            cancelOnOutsidePointer={!!activeEditingMessage}
             submitLabel={activeEditingMessage ? 'Save' : undefined}
             typingParentID={activeEditingMessage ? undefined : channelId ?? conversationId}
             typingParentType={activeEditingMessage ? undefined : channelId ? 'channel' : 'conversation'}

@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso';
 import { Skeleton } from '@/components/ui/skeleton';
 import { MessageItem } from './MessageItem';
@@ -75,6 +75,7 @@ function VirtuosoMessageList({
   anchorRevision,
 }: MessageListProps) {
   const virtuosoRef = useRef<VirtuosoHandle>(null);
+  const atBottomRef = useRef(true);
 
   // Ready gate: Virtuoso can fire `startReached` during its initial
   // measurement pass before the user has actually scrolled — most
@@ -155,6 +156,13 @@ function VirtuosoMessageList({
   // `rows` prop — this is what guarantees `data` and `firstItemIndex`
   // hit Virtuoso atomically.
   const renderRows = virtuosoData.rows;
+  const handleContentHeightChange = useCallback((forceLiveTail = false) => {
+    if (anchorMsgId || hasPreviousPage || (!forceLiveTail && !atBottomRef.current)) return;
+    requestAnimationFrame(() => {
+      virtuosoRef.current?.autoscrollToBottom();
+      virtuosoRef.current?.scrollToIndex({ index: 'LAST', align: 'end' });
+    });
+  }, [anchorMsgId, hasPreviousPage]);
 
   // Force-scroll-to-bottom when the bottom message becomes the
   // current user's own send. `followOutput="auto"` only sticks when
@@ -270,6 +278,9 @@ function VirtuosoMessageList({
       // 'auto' still snaps for incoming WS messages when the user is
       // at the bottom — the canonical chat behaviour.
       followOutput={hasPreviousPage ? false : 'auto'}
+      atBottomStateChange={(atBottom) => {
+        atBottomRef.current = atBottom;
+      }}
       startReached={() => {
         if (!readyForFetchRef.current) return;
         if (hasNextPage && !isFetchingNextPage) fetchNextPage();
@@ -308,6 +319,8 @@ function VirtuosoMessageList({
             onReplyInThread={onReplyInThread}
             onEditMessage={onEditMessage}
             highlighted={row.message.id === highlightedMessageId}
+            isLiveTailRow={row.key === renderRows[renderRows.length - 1]?.key}
+            onContentHeightChange={handleContentHeightChange}
           />
         );
       }}
@@ -344,6 +357,8 @@ function MessageRow({
   onReplyInThread,
   onEditMessage,
   highlighted,
+  isLiveTailRow,
+  onContentHeightChange,
 }: {
   row: { kind: 'message'; key: string; message: Message };
   userMap: Record<string, UserMapEntry>;
@@ -356,8 +371,14 @@ function MessageRow({
   onReplyInThread?: (id: string) => void;
   onEditMessage?: (message: Message) => void;
   highlighted?: boolean;
+  isLiveTailRow?: boolean;
+  onContentHeightChange?: (forceLiveTail?: boolean) => void;
 }) {
   const msg = row.message;
+  const handleContentHeightChange = useCallback(() => {
+    onContentHeightChange?.(isLiveTailRow);
+  }, [isLiveTailRow, onContentHeightChange]);
+
   if (msg.system) {
     return (
       <div className="flex justify-center px-4 py-1" role="status">
@@ -396,6 +417,7 @@ function MessageRow({
         onEditMessage={onEditMessage}
         userMap={userLookup}
         highlighted={highlighted}
+        onContentHeightChange={handleContentHeightChange}
       />
     </div>
   );

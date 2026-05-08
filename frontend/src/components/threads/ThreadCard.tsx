@@ -275,17 +275,19 @@ export function ThreadCard({ summary, title, deepLink, currentUserId, unread = f
         {/* Reply composer — sends with parentMessageID set so the post
             lands as a thread reply. Disabled while the previous reply is
             still in flight so a stuttering double-Enter can't double-post. */}
-        <div className="border-t bg-background">
-          <MessageInput
-            ref={inputRef}
-            onSend={handleReply}
-            disabled={send.isPending}
-            placeholder="Reply…"
-            initialBody={draft?.body ?? ''}
-            initialDrafts={draftAttachments}
-            onDraftChange={handleDraftChange}
-          />
-        </div>
+        <MessageInput
+          ref={inputRef}
+          onSend={handleReply}
+          disabled={send.isPending}
+          placeholder="Reply…"
+          initialBody={draft?.body ?? ''}
+          initialDrafts={draftAttachments}
+          onDraftChange={handleDraftChange}
+          typingParentID={parentID}
+          typingParentType={parentType}
+          typingThreadRootID={summary.threadRootID}
+          hideCodeButton
+        />
       </MessageDropZone>
     </article>
   );

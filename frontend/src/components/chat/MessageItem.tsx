@@ -71,6 +71,7 @@ interface MessageItemProps {
   // surrounding list's anchor effect; the surrounding list also
   // clears the flag after the flash window so the ring auto-removes.
   highlighted?: boolean;
+  onContentHeightChange?: () => void;
 }
 
 function formatTime(dateStr: string): string {
@@ -103,6 +104,7 @@ export function MessageItem({
   onEditMessage,
   userMap,
   highlighted,
+  onContentHeightChange,
 }: MessageItemProps) {
   const isMobile = useIsMobile();
   const [isEditing, setIsEditing] = useState(false);
@@ -488,6 +490,7 @@ export function MessageItem({
               {renderMarkdown(message.body, {
                 emojiMap,
                 currentUserId,
+                onMediaLoad: onContentHeightChange,
                 onTagClick: openTag,
                 renderUserMention: (userId, displayName, _isSelf, pill) => (
                   <UserHoverCard
@@ -515,6 +518,7 @@ export function MessageItem({
                   channelId={channelId}
                   conversationId={conversationId}
                   isAuthor={isOwn}
+                  onContentHeightChange={onContentHeightChange}
                 />
               ) : null;
             })()}
@@ -534,6 +538,7 @@ export function MessageItem({
                       : undefined
                 }
                 postedAt={message.createdAt}
+                onContentHeightChange={onContentHeightChange}
               />
             )}
             {reactionEntries.length > 0 && (

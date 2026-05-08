@@ -1,4 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+
+const setServerVersionMock = vi.hoisted(() => vi.fn());
+
+vi.mock('@/hooks/useServerVersion', () => ({
+  setServerVersion: setServerVersionMock,
+}));
+
 import {
   setAccessToken,
   getAccessToken,
@@ -37,6 +44,7 @@ describe('apiFetch', () => {
 
   beforeEach(() => {
     clearAccessToken();
+    setServerVersionMock.mockReset();
     globalThis.fetch = vi.fn();
   });
 
@@ -91,6 +99,20 @@ describe('apiFetch', () => {
     await expect(apiFetch('/api/v1/missing')).rejects.toMatchObject({
       status: 404,
     });
+  });
+
+  it('captures app version headers even when the API response fails', async () => {
+    const mockResponse = {
+      ok: false,
+      status: 500,
+      headers: new Headers({ 'X-EX-App-Version': 'server-build-2' }),
+      text: () => Promise.resolve('channel unavailable'),
+    } as Response;
+
+    vi.mocked(globalThis.fetch).mockResolvedValue(mockResponse);
+
+    await expect(apiFetch('/api/v1/channels/general')).rejects.toThrow(ApiError);
+    expect(setServerVersionMock).toHaveBeenCalledWith('server-build-2');
   });
 
   it('uses structured backend error messages instead of raw JSON', async () => {

@@ -1,10 +1,39 @@
 import { defineConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react';
+import tailwindcss from '@tailwindcss/vite';
 import { playwright } from '@vitest/browser-playwright';
 import path from 'path';
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), tailwindcss()],
+  optimizeDeps: {
+    include: [
+      '@giphy/js-fetch-api',
+      '@giphy/react-components',
+      '@lexical/code',
+      '@lexical/link',
+      '@lexical/list',
+      '@lexical/markdown',
+      '@lexical/react/LexicalComposer',
+      '@lexical/react/LexicalComposerContext',
+      '@lexical/react/LexicalContentEditable',
+      '@lexical/react/LexicalErrorBoundary',
+      '@lexical/react/LexicalHistoryPlugin',
+      '@lexical/react/LexicalLinkPlugin',
+      '@lexical/react/LexicalListPlugin',
+      '@lexical/react/LexicalMarkdownShortcutPlugin',
+      '@lexical/react/LexicalRichTextPlugin',
+      '@lexical/react/LexicalTabIndentationPlugin',
+      '@lexical/react/LexicalTypeaheadMenuPlugin',
+      '@lexical/rich-text',
+      '@lexical/selection',
+      '@lexical/utils',
+      'lexical',
+      'react-dom/client',
+      'react-virtuoso',
+      'zod',
+    ],
+  },
   test: {
     include: ['src/**/*.browser.test.{ts,tsx}'],
     setupFiles: ['./src/test/browser-setup.ts'],

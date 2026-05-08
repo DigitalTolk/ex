@@ -1,0 +1,107 @@
+import { describe, expect, it, vi } from 'vitest';
+import { render } from 'vitest-browser-react';
+import { MemoryRouter } from 'react-router-dom';
+import type { ReactNode } from 'react';
+import { AppLayout } from './AppLayout';
+import { Header } from './Header';
+import { PageContainer } from './PageContainer';
+import { SidePanel } from '@/components/chat/SidePanel';
+
+vi.mock('@/components/SearchBar', () => ({
+  SearchBar: () => <div aria-label="Search">Search</div>,
+}));
+
+vi.mock('./Sidebar', () => ({
+  Sidebar: () => <div>Sidebar</div>,
+}));
+
+vi.mock('@/components/NotificationPermissionBanner', () => ({
+  NotificationPermissionBanner: () => null,
+}));
+
+vi.mock('@/hooks/useServerVersion', () => ({
+  BUILD_DISPLAY_VERSION: 'browser-test',
+  BUILD_VERSION: 'browser-test',
+  setServerVersion: vi.fn(),
+  useServerVersion: () => ({ outdated: true }),
+}));
+
+const channel = {
+  id: 'ch-1',
+  name: 'very-long-channel-name-that-wraps-the-mobile-header',
+  slug: 'very-long-channel-name-that-wraps-the-mobile-header',
+  type: 'public' as const,
+  createdBy: 'u-1',
+  archived: false,
+  createdAt: '2026-05-08T10:00:00.000Z',
+};
+
+function LayoutHarness({ children }: { children: ReactNode }) {
+  return (
+    <MemoryRouter initialEntries={['/threads']}>
+      <div style={{ height: 500 }}>
+        <AppLayout>{children}</AppLayout>
+      </div>
+    </MemoryRouter>
+  );
+}
+
+describe('AppLayout browser behavior', () => {
+  it('keeps the reload banner visible below the app header', async () => {
+    const screen = await render(
+      <LayoutHarness>
+        <PageContainer title="Threads">
+          <div style={{ height: 1200 }}>Thread content</div>
+        </PageContainer>
+      </LayoutHarness>,
+    );
+
+    const reload = screen.getByTestId('update-banner-reload');
+    await expect.element(reload).toBeVisible();
+
+    const appHeader = document.querySelector('[data-testid="app-shell-header"]');
+    const banner = document.querySelector('[data-testid="update-banner"]') as HTMLElement | null;
+    expect(appHeader).not.toBeNull();
+    expect(banner).not.toBeNull();
+    expect(banner!.getBoundingClientRect().top).toBeGreaterThanOrEqual(
+      Math.floor(appHeader!.getBoundingClientRect().bottom),
+    );
+  });
+
+  it('places mobile right panels below the measured channel header, including taller headers', async () => {
+    const screen = await render(
+      <LayoutHarness>
+        <div className="flex min-h-0 flex-1 overflow-hidden">
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+            <Header channel={channel} memberCount={3} canEdit onDescriptionSave={vi.fn()} />
+            <div className="min-h-0 flex-1">Messages</div>
+          </div>
+          <SidePanel title="Pinned" ariaLabel="Pinned messages" closeLabel="Close pinned messages" onClose={vi.fn()}>
+            <div>Pinned content</div>
+          </SidePanel>
+        </div>
+      </LayoutHarness>,
+    );
+
+    if (window.innerWidth > 767) {
+      await expect.element(screen.getByText('Pinned content')).toBeVisible();
+      return;
+    }
+
+    await screen.getByText(channel.name).click();
+
+    const header = document.querySelector('[data-testid="channel-header-shell"]') as HTMLElement | null;
+    const panel = document.querySelector('[aria-label="Pinned messages"]') as HTMLElement | null;
+    expect(header).not.toBeNull();
+    expect(panel).not.toBeNull();
+
+    await vi.waitFor(() => {
+      const headerBottom = header!.getBoundingClientRect().bottom;
+      const panelTop = panel!.getBoundingClientRect().top;
+      const gap = panelTop - headerBottom;
+      expect(gap).toBeGreaterThanOrEqual(-0.5);
+      expect(gap).toBeLessThanOrEqual(1);
+    });
+  });
+
+});

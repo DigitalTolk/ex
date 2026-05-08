@@ -1,5 +1,8 @@
+import { setServerVersion } from '@/hooks/useServerVersion';
+
 let accessToken: string | null = null;
 let refreshPromise: Promise<string | null> | null = null;
+const APP_VERSION_HEADER = 'X-EX-App-Version';
 
 export function setAccessToken(token: string) {
   accessToken = token;
@@ -38,6 +41,11 @@ async function errorMessageFromResponse(res: Response): Promise<string> {
     // Plain-text error response.
   }
   return text;
+}
+
+function captureServerVersion(res: Response): void {
+  const version = res.headers?.get(APP_VERSION_HEADER);
+  if (version) setServerVersion(version);
 }
 
 export async function refreshAccessToken(): Promise<string | null> {
@@ -93,6 +101,7 @@ export async function apiFetch<T>(
     headers,
     credentials: 'include',
   });
+  captureServerVersion(res);
 
   if (res.status === 401 && accessToken) {
     const refreshedToken = await refreshAccessToken();
@@ -103,6 +112,7 @@ export async function apiFetch<T>(
         headers,
         credentials: 'include',
       });
+      captureServerVersion(retry);
       if (!retry.ok) {
         throw new ApiError(retry.status, await errorMessageFromResponse(retry));
       }

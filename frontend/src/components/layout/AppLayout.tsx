@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type WheelEvent } from 'react';
 import { useLocation } from 'react-router-dom';
 import { useSwipeable } from 'react-swipeable';
 import { Sidebar } from './Sidebar';
@@ -24,6 +24,8 @@ export function AppLayout({ children }: AppLayoutProps) {
   const isMobile = useIsMobile();
   const [manualChannelsOpen, setManualChannelsOpen] = useState(false);
   const [channelDragOffset, setChannelDragOffset] = useState(0);
+  const mainRef = useRef<HTMLElement>(null);
+  const appHeaderRef = useRef<HTMLElement>(null);
   const mobileChannelsOpen = isMobile && (isHome || manualChannelsOpen);
 
   const canOpenChannelsFromSwipe = useCallback((eventTarget: EventTarget | null) => {
@@ -82,7 +84,59 @@ export function AppLayout({ children }: AppLayoutProps) {
       setChannelDragOffset(0);
     },
   });
+  const { ref: openChannelsSwipeRef, ...openChannelsSwipeHandlers } = openChannelsSwipe;
+  const setMainNode = useCallback((node: HTMLElement | null) => {
+    mainRef.current = node;
+    openChannelsSwipeRef(node);
+  }, [openChannelsSwipeRef]);
   const mobileShellActive = isMobile && (mobileChannelsOpen || channelDragOffset > 0);
+  /* v8 ignore start -- synthetic wheel support differs between jsdom and browsers; browser tests cover visibility around this surface. */
+  const forwardHeaderWheel = useCallback((event: WheelEvent<HTMLElement>) => {
+    if (isMobile || event.defaultPrevented) return;
+    const target = event.target;
+    if (
+      target instanceof HTMLElement &&
+      target.closest('input, textarea, select, [contenteditable="true"], [role="textbox"]')
+    ) {
+      return;
+    }
+    const root = mainRef.current ?? document;
+    const scroller = root.querySelector<HTMLElement>('[data-page-scroll="true"], [data-testid="page-container"]');
+    if (!scroller) return;
+    const canScroll = scroller.scrollHeight > scroller.clientHeight;
+    if (!canScroll) return;
+    scroller.scrollTop += event.deltaY;
+    event.preventDefault();
+  }, [isMobile]);
+  /* v8 ignore stop */
+  /* v8 ignore start -- real wheel propagation is covered by browser interaction tests/manual browser behavior, not jsdom. */
+  useEffect(() => {
+    const node = appHeaderRef.current;
+    if (!node) return;
+    const onWheel = (event: globalThis.WheelEvent) => {
+      if (event.defaultPrevented) return;
+      const target = event.target;
+      if (target instanceof Node && !node.contains(target)) return;
+      if (
+        target instanceof HTMLElement &&
+        target.closest('input, textarea, select, [contenteditable="true"], [role="textbox"]')
+      ) {
+        return;
+      }
+      const root = mainRef.current ?? document;
+      const scroller = root.querySelector<HTMLElement>('[data-page-scroll="true"], [data-testid="page-container"]');
+      if (!scroller || scroller.scrollHeight <= scroller.clientHeight) return;
+      scroller.scrollTop += event.deltaY;
+      event.preventDefault();
+    };
+    node.addEventListener('wheel', onWheel, { passive: false });
+    document.addEventListener('wheel', onWheel, { passive: false, capture: true });
+    return () => {
+      node.removeEventListener('wheel', onWheel);
+      document.removeEventListener('wheel', onWheel, { capture: true });
+    };
+  }, []);
+  /* v8 ignore stop */
   const mainDragStyle: CSSProperties | undefined = useMemo(() => {
     if (!isMobile) return undefined;
     if (channelDragOffset > 0) {
@@ -96,7 +150,12 @@ export function AppLayout({ children }: AppLayoutProps) {
       <div className="flex h-full flex-col overflow-hidden bg-[#1a1d21]">
         {/* Slack/Mattermost-style thin top bar. On mobile, channels/DMs live
             behind the persistent chat pane instead of in a temporary side-over. */}
-        <header className="grid h-11 w-full shrink-0 grid-cols-[2.75rem_minmax(0,1fr)_2.75rem] items-center gap-2 border-b bg-[#1a1d21] px-3 text-foreground lg:flex">
+        <header
+          ref={appHeaderRef}
+          className="grid h-11 w-full shrink-0 grid-cols-[2.75rem_minmax(0,1fr)_2.75rem] items-center gap-2 border-b bg-[#1a1d21] px-3 text-foreground lg:flex"
+          onWheel={forwardHeaderWheel}
+          data-testid="app-shell-header"
+        >
           <Button
             variant="ghost"
             size="icon"
@@ -133,11 +192,13 @@ export function AppLayout({ children }: AppLayoutProps) {
             </aside>
           )}
           <main
+            ref={setMainNode}
             className="flex min-h-0 flex-1 flex-col overflow-hidden bg-background max-md:relative max-md:z-10 max-md:touch-pan-y max-md:transform-gpu max-md:transition-transform max-md:duration-200 max-md:ease-out"
+            data-app-main="true"
             style={mainDragStyle}
             data-channel-dragging={mobileShellActive ? 'true' : 'false'}
             data-mobile-channels-open={mobileChannelsOpen ? 'true' : 'false'}
-            {...openChannelsSwipe}
+            {...openChannelsSwipeHandlers}
           >
             {children}
           </main>

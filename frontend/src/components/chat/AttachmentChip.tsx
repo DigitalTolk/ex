@@ -1,5 +1,5 @@
 import { File as FileIcon, X } from 'lucide-react';
-import { isImageContentType } from '@/lib/file-helpers';
+import { isImageAttachment } from '@/lib/file-helpers';
 import { formatBytes } from '@/lib/format';
 
 interface DraftAttachment {
@@ -21,7 +21,7 @@ interface AttachmentChipProps {
 }
 
 export function AttachmentChip({ att, onRemove }: AttachmentChipProps) {
-  const isImage = isImageContentType(att.contentType);
+  const isImage = isImageAttachment(att.contentType, att.filename);
   const previewURL = att.localURL ?? att.url;
   const uploading = att.progress !== undefined && att.progress < 1;
   const pct = Math.max(0, Math.min(1, att.progress ?? 1));

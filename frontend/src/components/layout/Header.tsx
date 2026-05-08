@@ -94,16 +94,28 @@ export function Header({
 
     function updateMobilePanelTop() {
       const bottom = measuredNode.getBoundingClientRect().bottom;
-      document.documentElement.style.setProperty('--mobile-right-panel-top', `${Math.max(0, Math.round(bottom))}px`);
+      const containingBlockTop =
+        measuredNode.closest<HTMLElement>('[data-app-main="true"]')?.getBoundingClientRect().top ?? 0;
+      const panelTop = Math.max(0, bottom - containingBlockTop);
+      document.documentElement.style.setProperty('--mobile-right-panel-top', `${Number(panelTop.toFixed(2))}px`);
     }
 
     updateMobilePanelTop();
     const resizeObserver = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(updateMobilePanelTop);
     resizeObserver?.observe(measuredNode);
+    const mutationObserver = typeof MutationObserver === 'undefined'
+      ? null
+      : new MutationObserver(() => requestAnimationFrame(updateMobilePanelTop));
+    mutationObserver?.observe(document.body, { childList: true, subtree: true, attributes: true });
     window.addEventListener('resize', updateMobilePanelTop);
+    window.visualViewport?.addEventListener('resize', updateMobilePanelTop);
+    window.visualViewport?.addEventListener('scroll', updateMobilePanelTop);
     return () => {
       resizeObserver?.disconnect();
+      mutationObserver?.disconnect();
       window.removeEventListener('resize', updateMobilePanelTop);
+      window.visualViewport?.removeEventListener('resize', updateMobilePanelTop);
+      window.visualViewport?.removeEventListener('scroll', updateMobilePanelTop);
       document.documentElement.style.removeProperty('--mobile-right-panel-top');
     };
   }, []);
@@ -139,59 +151,88 @@ export function Header({
   }
 
   return (
-    <div ref={headerShellRef} className="shrink-0 border-b bg-background">
+    <div ref={headerShellRef} className="shrink-0 border-b bg-background" data-testid="channel-header-shell">
     <header className="flex shrink-0 items-center gap-3 px-4 py-3">
       <div className="flex min-w-0 flex-1 items-center gap-2">
         {channel ? (
-          <DropdownMenu modal={false}>
-            <DropdownMenuTrigger
-              className="flex min-w-0 items-center gap-1 rounded-md px-1 -ml-1 hover:bg-muted/50"
-              onClick={() => {
-                if (isMobile) setMobileChannelMenuOpen((open) => !open);
-              }}
-              aria-expanded={isMobile ? mobileChannelMenuOpen : undefined}
-              aria-controls={isMobile ? 'mobile-channel-menu' : undefined}
-            >
-              <ChannelIcon type={channel.type} className="h-5 w-5 shrink-0 text-muted-foreground" />
-              <h1 className="min-w-0 truncate text-lg font-semibold">{displayTitle}</h1>
-              <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" className="w-56 max-md:hidden">
-              {canEdit && (
-                <DropdownMenuItem
-                  onClick={editDescription}
-                >
-                  <Pencil className="mr-2 h-4 w-4" /> Edit description
-                </DropdownMenuItem>
-              )}
-              {onToggleMute && (
-                <DropdownMenuItem onClick={toggleMute} aria-label={muted ? 'Unmute channel' : 'Mute channel'}>
-                  {muted ? (
-                    <>
-                      <Bell className="mr-2 h-4 w-4" /> Unmute channel
-                    </>
-                  ) : (
-                    <>
-                      <BellOff className="mr-2 h-4 w-4" /> Mute channel
-                    </>
-                  )}
-                </DropdownMenuItem>
-              )}
-              {canLeave && (
-                <DropdownMenuItem onClick={leaveChannel}>
-                  <LogOut className="mr-2 h-4 w-4" /> Leave channel
-                </DropdownMenuItem>
-              )}
-              {canArchive && (
-                <DropdownMenuItem
-                  onClick={confirmArchive}
-                  className="text-destructive"
-                >
-                  <Archive className="mr-2 h-4 w-4" /> Archive channel
-                </DropdownMenuItem>
-              )}
-            </DropdownMenuContent>
-          </DropdownMenu>
+          <div className="flex min-w-0 flex-1 flex-col items-start" data-testid="channel-title-stack">
+            <DropdownMenu modal={false}>
+              <DropdownMenuTrigger
+                className="-ml-1 flex min-w-0 max-w-full items-center gap-1 rounded-md px-1 hover:bg-muted/50"
+                onClick={() => {
+                  if (isMobile) setMobileChannelMenuOpen((open) => !open);
+                }}
+                aria-expanded={isMobile ? mobileChannelMenuOpen : undefined}
+                aria-controls={isMobile ? 'mobile-channel-menu' : undefined}
+              >
+                <ChannelIcon type={channel.type} className="h-5 w-5 shrink-0 text-muted-foreground" />
+                <h1 className="min-w-0 truncate text-lg font-semibold">{displayTitle}</h1>
+                <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" className="w-56 max-md:hidden">
+                {canEdit && (
+                  <DropdownMenuItem
+                    onClick={editDescription}
+                  >
+                    <Pencil className="mr-2 h-4 w-4" /> Edit description
+                  </DropdownMenuItem>
+                )}
+                {onToggleMute && (
+                  <DropdownMenuItem onClick={toggleMute} aria-label={muted ? 'Unmute channel' : 'Mute channel'}>
+                    {muted ? (
+                      <>
+                        <Bell className="mr-2 h-4 w-4" /> Unmute channel
+                      </>
+                    ) : (
+                      <>
+                        <BellOff className="mr-2 h-4 w-4" /> Mute channel
+                      </>
+                    )}
+                  </DropdownMenuItem>
+                )}
+                {canLeave && (
+                  <DropdownMenuItem onClick={leaveChannel}>
+                    <LogOut className="mr-2 h-4 w-4" /> Leave channel
+                  </DropdownMenuItem>
+                )}
+                {canArchive && (
+                  <DropdownMenuItem
+                    onClick={confirmArchive}
+                    className="text-destructive"
+                  >
+                    <Archive className="mr-2 h-4 w-4" /> Archive channel
+                  </DropdownMenuItem>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
+            {channel && !isMobile && (
+              isEditingDesc ? (
+                <input
+                  className="mt-0.5 hidden w-full max-w-xl border-b border-input bg-transparent text-left text-sm outline-none md:block"
+                  value={descDraft}
+                  onChange={e => setDescDraft(e.target.value)}
+                  onBlur={saveDescription}
+                  onKeyDown={e => { if (e.key === 'Enter') saveDescription(); if (e.key === 'Escape') cancelDescriptionEdit(); }}
+                  placeholder="Add a description..."
+                  autoFocus
+                />
+              ) : channel.description ? (
+                canEdit ? (
+                  <button
+                    onClick={() => { setDescDraft(channel.description || ''); setIsEditingDesc(true); }}
+                    className="mt-0.5 hidden max-w-full truncate text-left text-sm text-muted-foreground hover:text-foreground md:block"
+                    title="Click to edit description"
+                  >
+                    {channel.description}
+                  </button>
+                ) : (
+                  <span className="mt-0.5 hidden max-w-full truncate text-left text-sm text-muted-foreground md:block">
+                    {channel.description}
+                  </span>
+                )
+              ) : null
+            )}
+          </div>
         ) : (
           <div className="flex min-w-0 items-center gap-2">
             {userId ? (
@@ -250,34 +291,6 @@ export function Header({
           </div>
         )}
       </div>
-
-      {channel && !isMobile && (
-        isEditingDesc ? (
-          <input
-            className="hidden text-sm border-b border-input bg-transparent outline-none sm:inline"
-            value={descDraft}
-            onChange={e => setDescDraft(e.target.value)}
-            onBlur={saveDescription}
-            onKeyDown={e => { if (e.key === 'Enter') saveDescription(); if (e.key === 'Escape') cancelDescriptionEdit(); }}
-            placeholder="Add a description..."
-            autoFocus
-          />
-        ) : channel.description ? (
-          canEdit ? (
-            <button
-              onClick={() => { setDescDraft(channel.description || ''); setIsEditingDesc(true); }}
-              className="hidden text-sm text-muted-foreground hover:text-foreground sm:inline"
-              title="Click to edit description"
-            >
-              {channel.description}
-            </button>
-          ) : (
-            <span className="hidden text-sm text-muted-foreground sm:inline">
-              {channel.description}
-            </span>
-          )
-        ) : null
-      )}
 
       {channel && isMobile && (
         <Dialog open={isEditingDesc} onOpenChange={(open) => { if (!open) cancelDescriptionEdit(); }}>

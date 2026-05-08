@@ -356,7 +356,7 @@ describe('MessageAttachments', () => {
     expect(lightbox.textContent).toContain('~general');
     const image = screen.getByTestId('image-lightbox-image');
     expect(image).toHaveAttribute('src', 'https://cdn/pic.png');
-    expect(image).toHaveClass('max-md:max-h-[calc(100dvh-env(safe-area-inset-top)-env(safe-area-inset-bottom)-6rem)]');
+    expect(image).toHaveClass('max-h-full', 'max-w-full');
     expect(screen.getByTestId('image-lightbox-zoom-stage')).toHaveClass('touch-none', 'overscroll-contain');
   });
 
@@ -418,10 +418,10 @@ describe('MessageAttachments', () => {
     expect(image).toHaveStyle({ transform: 'translate(0px, 0px) scale(1)' });
 
     fireEvent.click(screen.getByTestId('image-lightbox-zoom-in'));
-    expect(image).toHaveStyle({ transform: 'translate(0px, 0px) scale(1.5)' });
+    expect(image).toHaveStyle({ transform: 'translate(0px, 0px) scale(1.8)' });
 
-    fireEvent.doubleClick(image);
-    expect(image).toHaveStyle({ transform: 'translate(0px, 0px) scale(1)' });
+    fireEvent.click(screen.getByTestId('image-lightbox-zoom-out'));
+    expect(image).toHaveStyle({ transform: 'translate(0px, 0px) scale(1.1)' });
   });
 
   it('pans a zoomed lightbox image on touch-style pointer drag', () => {
@@ -447,7 +447,7 @@ describe('MessageAttachments', () => {
     fireEvent.pointerMove(stage, { pointerId: 1, clientX: 152, clientY: 118, pointerType: 'touch' });
     fireEvent.pointerUp(stage, { pointerId: 1, clientX: 152, clientY: 118, pointerType: 'touch' });
 
-    expect(image).toHaveStyle({ transform: 'translate(32px, -22px) scale(1.5)' });
+    expect(image).toHaveStyle({ transform: 'translate(32px, -22px) scale(1.8)' });
     expect(image).toHaveAttribute('data-pan-x', '32');
     expect(image).toHaveAttribute('data-pan-y', '-22');
   });

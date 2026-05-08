@@ -24,12 +24,11 @@ describe('App', () => {
 
   it('renders without crashing', async () => {
     render(<App />);
-    // Initially shows Loading... from ProtectedRoute, then redirects to login
+    expect(screen.getByTestId('app-auth-loading')).toBeInTheDocument();
+    expect(screen.queryByText('Loading...')).toBeNull();
     await waitFor(() => {
       // After auth finishes loading, unauthenticated user sees login page
-      expect(
-        screen.getByText('Welcome back') || screen.getByText('Loading...'),
-      ).toBeInTheDocument();
+      expect(screen.getByText('Welcome back')).toBeInTheDocument();
     });
   });
 

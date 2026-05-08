@@ -38,8 +38,12 @@ function ProtectedRoute({ children }: { children: ReactNode }) {
 
   if (isLoading) {
     return (
-      <div className="flex min-h-screen items-center justify-center">
-        <p className="text-muted-foreground">Loading...</p>
+      <div
+        className="flex min-h-screen items-center justify-center bg-[#1a1d21]"
+        aria-label="Loading chat"
+        data-testid="app-auth-loading"
+      >
+        <img className="h-14 w-14" src="/logo.svg" alt="ex" />
       </div>
     );
   }
