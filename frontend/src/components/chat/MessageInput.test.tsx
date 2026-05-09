@@ -154,7 +154,7 @@ describe('MessageInput', () => {
     const send = within(toolbar).getByLabelText('Send message');
     expect(toolbar).toHaveAttribute('data-toolbar-placement', 'bottom');
     expect(editor.compareDocumentPosition(toolbar) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(send).toHaveClass('h-7', 'w-7', 'max-md:h-9', 'max-md:w-9');
+    expect(send).toHaveClass('h-7', 'w-7', 'rounded-md', 'max-md:h-9', 'max-md:w-9', 'max-md:rounded-full');
     expect(send.closest('[data-message-composer]')).toBeInTheDocument();
     expect(screen.getAllByLabelText('Send message')).toHaveLength(1);
     setMobileMatch(false);
@@ -216,21 +216,22 @@ describe('MessageInput', () => {
     setMobileMatch(false);
   });
 
-  it('minimizes the mobile bottom safe-area padding while the message box is focused', async () => {
+  it('keeps mobile bottom padding compact so the rounded message box sits lower', async () => {
     setMobileMatch(true);
     render(<MessageInput onSend={vi.fn()} />);
 
     const editor = await screen.findByLabelText('Message input');
     const composerShell = editor.closest('[data-composer-focused]')!;
-    expect(composerShell).toHaveClass('max-md:pb-[calc(0.75rem+env(safe-area-inset-bottom))]');
+    expect(composerShell).toHaveClass('max-md:pb-[max(0.25rem,env(safe-area-inset-bottom))]');
+    expect(composerShell).not.toHaveClass('max-md:pb-[calc(0.75rem+env(safe-area-inset-bottom))]');
 
     act(() => {
       editor.focus();
     });
 
     await waitFor(() => expect(composerShell).toHaveAttribute('data-composer-focused', 'true'));
-    expect(composerShell).toHaveClass('max-md:pb-2');
-    expect(composerShell).not.toHaveClass('max-md:pb-[calc(0.75rem+env(safe-area-inset-bottom))]');
+    expect(composerShell).toHaveClass('max-md:pb-[max(0.25rem,env(safe-area-inset-bottom))]');
+    expect(composerShell).not.toHaveClass('max-md:pb-2');
     setMobileMatch(false);
   });
 
@@ -292,7 +293,7 @@ describe('MessageInput', () => {
     expect(toolbar).toContainElement(screen.getByLabelText('Cancel'));
     const save = screen.getByLabelText('Save');
     expect(toolbar).toContainElement(save);
-    expect(save).toHaveClass('h-7', 'w-7', 'max-md:h-9', 'max-md:w-9');
+    expect(save).toHaveClass('h-7', 'w-7', 'rounded-md', 'max-md:h-9', 'max-md:w-9', 'max-md:rounded-full');
     expect(save).toHaveTextContent('');
     setMobileMatch(false);
   });

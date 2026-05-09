@@ -83,8 +83,11 @@ func TestOneSignalPushSender_RequestConstruction(t *testing.T) {
 	if got.Contents["en"] != "Short preview" {
 		t.Fatalf("contents = %#v", got.Contents)
 	}
-	if got.URL != "https://chat.example.com/base/channel/general?thread=root-1#msg-root-1" {
-		t.Fatalf("url = %q", got.URL)
+	if got.URL != "" {
+		t.Fatalf("top-level url = %q, want empty", got.URL)
+	}
+	if got.Data["url"] != "https://chat.example.com/base/channel/general?thread=root-1#msg-root-1" {
+		t.Fatalf("data.url = %q", got.Data["url"])
 	}
 	if got.Data["message_id"] != "m-1" || got.Data["parent_message_id"] != "root-1" {
 		t.Fatalf("data = %#v", got.Data)
@@ -153,12 +156,14 @@ func TestOneSignalPushSender_NoopsForNilSenderAndEmptyRecipient(t *testing.T) {
 
 func TestOneSignalPushSender_AbsoluteDeepLinkAndEmptyDeepLink(t *testing.T) {
 	var gotURLs []string
+	var gotTopLevelURLs []string
 	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		var got oneSignalNotificationRequest
 		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
 			t.Fatalf("decode request: %v", err)
 		}
-		gotURLs = append(gotURLs, got.URL)
+		gotURLs = append(gotURLs, got.Data["url"])
+		gotTopLevelURLs = append(gotTopLevelURLs, got.URL)
 		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader("{}"))}, nil
 	})}
 	sender, err := NewOneSignalPushSender(OneSignalConfig{
@@ -178,10 +183,13 @@ func TestOneSignalPushSender_AbsoluteDeepLinkAndEmptyDeepLink(t *testing.T) {
 		t.Fatalf("Send empty: %v", err)
 	}
 	if gotURLs[0] != "https://chat.example.com/channel/general" {
-		t.Fatalf("absolute URL = %q", gotURLs[0])
+		t.Fatalf("absolute data.url = %q", gotURLs[0])
 	}
 	if gotURLs[1] != "https://chat.example.com" {
-		t.Fatalf("empty deep link URL = %q", gotURLs[1])
+		t.Fatalf("empty deep link data.url = %q", gotURLs[1])
+	}
+	if gotTopLevelURLs[0] != "" || gotTopLevelURLs[1] != "" {
+		t.Fatalf("top-level urls = %#v, want empty", gotTopLevelURLs)
 	}
 }
 

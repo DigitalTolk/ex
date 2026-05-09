@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { beforeEach, describe, it, expect, vi } from 'vitest';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { BrowserRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -42,7 +42,25 @@ function touchDrag(element: Element, fromX: number, toX: number, y = 160) {
   fireEvent.touchMove(element, { touches: [{ clientX: toX, clientY: y + 8 }] });
 }
 
+function setMobileMatch(matches: boolean) {
+  Object.defineProperty(window, 'matchMedia', {
+    configurable: true,
+    value: vi.fn(() => ({
+      matches,
+      media: '(max-width: 767px)',
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+    })),
+  });
+}
+
 describe('MemberList', () => {
+  beforeEach(() => {
+    setMobileMatch(true);
+  });
+
   it('renders all members', () => {
     const members = [
       makeMember({ userID: 'u1', displayName: 'Alice' }),

@@ -1,7 +1,14 @@
 import { useEffect, useMemo, useState } from 'react';
 import { PageContainer } from '@/components/layout/PageContainer';
 import { Skeleton } from '@/components/ui/skeleton';
-import { getSeenMap, THREAD_SEEN_CHANGED_EVENT, threadDeepLink, unreadThreadIDs, useUserThreads } from '@/hooks/useThreads';
+import {
+  getSeenMap,
+  sortThreadsByUnreadThenActivity,
+  THREAD_SEEN_CHANGED_EVENT,
+  threadDeepLink,
+  unreadThreadIDs,
+  useUserThreads,
+} from '@/hooks/useThreads';
 import { useUserChannels } from '@/hooks/useChannels';
 import { useUserConversations } from '@/hooks/useConversations';
 import { useAuth } from '@/context/AuthContext';
@@ -36,6 +43,10 @@ export default function ThreadsPage() {
       ),
     [localSeenMap, threads, unreadThreadNotifications, userState],
   );
+  const sortedThreads = useMemo(
+    () => sortThreadsByUnreadThenActivity(threads, threadUnreadIDs),
+    [threadUnreadIDs, threads],
+  );
 
   const channelName = (id: string) =>
     userChannels?.find((c) => c.channelID === id)?.channelName ?? '';
@@ -66,7 +77,7 @@ export default function ThreadsPage() {
 
       <div className="space-y-4">
         {!isLoading &&
-          threads.map((t) => {
+          sortedThreads.map((t) => {
             const where =
               t.parentType === 'channel'
                 ? `~${channelName(t.parentID) || 'channel'}`

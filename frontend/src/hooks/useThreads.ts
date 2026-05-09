@@ -137,6 +137,23 @@ export function unreadThreadIDs(
   return ids;
 }
 
+function activityTime(thread: ThreadSummary): number {
+  const time = new Date(thread.latestActivityAt).getTime();
+  return Number.isFinite(time) ? time : 0;
+}
+
+export function sortThreadsByUnreadThenActivity(
+  threads: ThreadSummary[] = [],
+  unreadIDs: Set<string> = new Set(),
+): ThreadSummary[] {
+  return [...threads].sort((a, b) => {
+    const aUnread = unreadIDs.has(a.threadRootID);
+    const bUnread = unreadIDs.has(b.threadRootID);
+    if (aUnread !== bUnread) return aUnread ? -1 : 1;
+    return activityTime(b) - activityTime(a);
+  });
+}
+
 export function getSeenMap(): Record<string, string> {
   return loadSeen();
 }

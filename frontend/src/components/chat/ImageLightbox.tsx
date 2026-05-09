@@ -1,10 +1,11 @@
-import { createElement, useCallback, useEffect, useRef, useState } from 'react';
+import { createElement, useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { ChevronLeft, ChevronRight, Download, X, ZoomIn, ZoomOut } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { getInitials, formatLongDateTime, formatBytes } from '@/lib/format';
 import { iconForAttachment, isImageContentType } from '@/lib/file-helpers';
 import { useTransientOverlayCleanup } from '@/hooks/useTransientOverlayCleanup';
+import { useIsMobile } from '@/hooks/useIsMobile';
 
 export interface LightboxImage {
   url: string;
@@ -41,18 +42,27 @@ export function ImageLightbox({
   postedAt,
 }: ImageLightboxProps) {
   const total = images.length;
+  const isMobile = useIsMobile();
   const safeIndex = total === 0 ? 0 : ((index % total) + total) % total;
   const current = images[safeIndex];
   const lightboxRef = useRef<HTMLDivElement>(null);
   const imageKey = current ? `${current.url}\u0000${safeIndex}` : '';
   const [zoomState, setZoomState] = useState({ key: '', value: 1 });
   const [panState, setPanState] = useState({ key: '', x: 0, y: 0 });
+  const [swipeDrag, setSwipeDrag] = useState({ x: 0, y: 0 });
   const panGestureRef = useRef<{
     pointerId: number;
     startX: number;
     startY: number;
     originX: number;
     originY: number;
+  } | null>(null);
+  const swipeGestureRef = useRef<{
+    pointerId: number;
+    startX: number;
+    startY: number;
+    lastX: number;
+    lastY: number;
   } | null>(null);
   const activePointersRef = useRef(new Map<number, { x: number; y: number }>());
   const pinchGestureRef = useRef<{
@@ -83,6 +93,8 @@ export function ImageLightbox({
     activePointersRef.current.clear();
     pinchGestureRef.current = null;
     panGestureRef.current = null;
+    swipeGestureRef.current = null;
+    setSwipeDrag({ x: 0, y: 0 });
     onClose();
   }, [onClose]);
 
@@ -133,6 +145,164 @@ export function ImageLightbox({
 
   const isImage = isImageContentType(current.contentType);
   const iconType = iconForAttachment(current.contentType, current.filename);
+  const swipeStageStyle = swipeDrag.x !== 0 || swipeDrag.y !== 0
+    ? { transform: `translate3d(${Math.round(swipeDrag.x)}px, ${Math.round(swipeDrag.y)}px, 0)`, transition: 'none' }
+    : undefined;
+
+  function handleLightboxPointerDown(e: ReactPointerEvent<HTMLDivElement>) {
+    e.stopPropagation();
+    try {
+      e.currentTarget.setPointerCapture?.(e.pointerId);
+    } catch {
+      // Synthetic browser-test PointerEvents are not active pointers.
+    }
+    activePointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    const pointers = Array.from(activePointersRef.current.values());
+    if (isImage && pointers.length >= 2) {
+      const two = pointers.slice(0, 2);
+      const center = pointerCenter(two);
+      pinchGestureRef.current = {
+        startDistance: Math.max(1, pointerDistance(two)),
+        startZoom: zoom,
+        centerX: center.x,
+        centerY: center.y,
+        originX: pan.x,
+        originY: pan.y,
+      };
+      panGestureRef.current = null;
+      swipeGestureRef.current = null;
+      setSwipeDrag({ x: 0, y: 0 });
+      return;
+    }
+    if (isImage && zoom > 1) {
+      panGestureRef.current = {
+        pointerId: e.pointerId,
+        startX: e.clientX,
+        startY: e.clientY,
+        originX: pan.x,
+        originY: pan.y,
+      };
+      swipeGestureRef.current = null;
+      setSwipeDrag({ x: 0, y: 0 });
+      return;
+    }
+    if (isMobile) {
+      swipeGestureRef.current = {
+        pointerId: e.pointerId,
+        startX: e.clientX,
+        startY: e.clientY,
+        lastX: e.clientX,
+        lastY: e.clientY,
+      };
+    }
+  }
+
+  function handleLightboxPointerMove(e: ReactPointerEvent<HTMLDivElement>) {
+    if (activePointersRef.current.has(e.pointerId)) {
+      activePointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    }
+    const pointers = Array.from(activePointersRef.current.values());
+    const pinch = pinchGestureRef.current;
+    if (isImage && pinch && pointers.length >= 2) {
+      e.preventDefault();
+      e.stopPropagation();
+      const two = pointers.slice(0, 2);
+      const distance = Math.max(1, pointerDistance(two));
+      const center = pointerCenter(two);
+      const nextZoom = Math.min(6, Math.max(1, Math.round((pinch.startZoom * distance / pinch.startDistance) * 100) / 100));
+      setZoomState({ key: imageKey, value: nextZoom });
+      setPanState({
+        key: imageKey,
+        x: pinch.originX + center.x - pinch.centerX,
+        y: pinch.originY + center.y - pinch.centerY,
+      });
+      return;
+    }
+    const panGesture = panGestureRef.current;
+    if (isImage && panGesture?.pointerId === e.pointerId) {
+      e.preventDefault();
+      e.stopPropagation();
+      setPanState({
+        key: imageKey,
+        x: panGesture.originX + e.clientX - panGesture.startX,
+        y: panGesture.originY + e.clientY - panGesture.startY,
+      });
+      return;
+    }
+    if (!isMobile) return;
+    const swipe = swipeGestureRef.current;
+    if (!swipe || swipe.pointerId !== e.pointerId || (isImage && zoom > 1) || pinchGestureRef.current) return;
+    swipe.lastX = e.clientX;
+    swipe.lastY = e.clientY;
+    const dx = e.clientX - swipe.startX;
+    const dy = e.clientY - swipe.startY;
+    if (Math.max(Math.abs(dx), Math.abs(dy)) > 12) {
+      e.preventDefault();
+      e.stopPropagation();
+      const horizontal = Math.abs(dx) > Math.abs(dy) * 1.15;
+      const vertical = dy > 0 && Math.abs(dy) > Math.abs(dx) * 1.15;
+      setSwipeDrag({
+        x: horizontal ? dx : 0,
+        y: vertical ? Math.max(0, dy) : 0,
+      });
+    }
+  }
+
+  function handleLightboxPointerUp(e: ReactPointerEvent<HTMLDivElement>) {
+    const swipe = isMobile ? swipeGestureRef.current : null;
+    activePointersRef.current.delete(e.pointerId);
+    if (activePointersRef.current.size < 2) {
+      pinchGestureRef.current = null;
+    }
+    if (swipe?.pointerId === e.pointerId) {
+      const dx = e.clientX - swipe.startX;
+      const dy = e.clientY - swipe.startY;
+      const absX = Math.abs(dx);
+      const absY = Math.abs(dy);
+      swipeGestureRef.current = null;
+      setSwipeDrag({ x: 0, y: 0 });
+      if (!(isImage && zoom > 1) && absY >= 70 && dy > 0 && absY > absX * 1.15) {
+        e.preventDefault();
+        e.stopPropagation();
+        handleClose();
+        return;
+      }
+      if (!(isImage && zoom > 1) && total > 1 && absX >= 70 && absX > absY * 1.15) {
+        e.preventDefault();
+        e.stopPropagation();
+        onIndexChange(dx < 0 ? (safeIndex + 1) % total : (safeIndex - 1 + total) % total);
+        return;
+      }
+    }
+    if (panGestureRef.current?.pointerId === e.pointerId) {
+      e.stopPropagation();
+      panGestureRef.current = null;
+    }
+    try {
+      e.currentTarget.releasePointerCapture?.(e.pointerId);
+    } catch {
+      // Pointer capture may not have been acquired.
+    }
+  }
+
+  function handleLightboxPointerCancel(e: ReactPointerEvent<HTMLDivElement>) {
+    activePointersRef.current.delete(e.pointerId);
+    if (swipeGestureRef.current?.pointerId === e.pointerId) {
+      swipeGestureRef.current = null;
+      setSwipeDrag({ x: 0, y: 0 });
+    }
+    if (activePointersRef.current.size < 2) {
+      pinchGestureRef.current = null;
+    }
+    if (panGestureRef.current?.pointerId === e.pointerId) {
+      panGestureRef.current = null;
+    }
+    try {
+      e.currentTarget.releasePointerCapture?.(e.pointerId);
+    } catch {
+      // Pointer capture may not have been acquired.
+    }
+  }
 
   return createPortal(
     <div
@@ -249,7 +419,7 @@ export function ImageLightbox({
       {isImage ? (
         <div
           className="fixed inset-0 flex items-center justify-center overflow-hidden touch-none overscroll-contain px-3 pb-[calc(env(safe-area-inset-bottom)+0.75rem)] pt-[calc(env(safe-area-inset-top)+4.5rem)] md:p-16"
-          style={{ zIndex: 110 }}
+          style={{ zIndex: 110, ...swipeStageStyle }}
           data-testid="image-lightbox-zoom-stage"
           onClick={(e) => e.stopPropagation()}
           onWheel={(e) => {
@@ -260,99 +430,10 @@ export function ImageLightbox({
               return Math.min(4, Math.max(1, Math.round(next * 100) / 100));
             });
           }}
-          onPointerDown={(e) => {
-            e.stopPropagation();
-            try {
-              e.currentTarget.setPointerCapture?.(e.pointerId);
-            } catch {
-              // Synthetic browser-test PointerEvents are not active pointers.
-            }
-            activePointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
-            const pointers = Array.from(activePointersRef.current.values());
-            if (pointers.length >= 2) {
-              const two = pointers.slice(0, 2);
-              const center = pointerCenter(two);
-              pinchGestureRef.current = {
-                startDistance: Math.max(1, pointerDistance(two)),
-                startZoom: zoom,
-                centerX: center.x,
-                centerY: center.y,
-                originX: pan.x,
-                originY: pan.y,
-              };
-              panGestureRef.current = null;
-              return;
-            }
-            if (zoom > 1) {
-              panGestureRef.current = {
-                pointerId: e.pointerId,
-                startX: e.clientX,
-                startY: e.clientY,
-                originX: pan.x,
-                originY: pan.y,
-              };
-            }
-          }}
-          onPointerMove={(e) => {
-            if (activePointersRef.current.has(e.pointerId)) {
-              activePointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
-            }
-            const pointers = Array.from(activePointersRef.current.values());
-            const pinch = pinchGestureRef.current;
-            if (pinch && pointers.length >= 2) {
-              e.preventDefault();
-              e.stopPropagation();
-              const two = pointers.slice(0, 2);
-              const distance = Math.max(1, pointerDistance(two));
-              const center = pointerCenter(two);
-              const nextZoom = Math.min(6, Math.max(1, Math.round((pinch.startZoom * distance / pinch.startDistance) * 100) / 100));
-              setZoomState({ key: imageKey, value: nextZoom });
-              setPanState({
-                key: imageKey,
-                x: pinch.originX + center.x - pinch.centerX,
-                y: pinch.originY + center.y - pinch.centerY,
-              });
-              return;
-            }
-            const gesture = panGestureRef.current;
-            if (!gesture || gesture.pointerId !== e.pointerId) return;
-            e.preventDefault();
-            e.stopPropagation();
-            setPanState({
-              key: imageKey,
-              x: gesture.originX + e.clientX - gesture.startX,
-              y: gesture.originY + e.clientY - gesture.startY,
-            });
-          }}
-          onPointerUp={(e) => {
-            activePointersRef.current.delete(e.pointerId);
-            if (activePointersRef.current.size < 2) {
-              pinchGestureRef.current = null;
-            }
-            if (panGestureRef.current?.pointerId === e.pointerId) {
-              e.stopPropagation();
-              panGestureRef.current = null;
-              try {
-                e.currentTarget.releasePointerCapture?.(e.pointerId);
-              } catch {
-                // Pointer capture may not have been acquired.
-              }
-            }
-          }}
-          onPointerCancel={(e) => {
-            activePointersRef.current.delete(e.pointerId);
-            if (activePointersRef.current.size < 2) {
-              pinchGestureRef.current = null;
-            }
-            if (panGestureRef.current?.pointerId === e.pointerId) {
-              panGestureRef.current = null;
-              try {
-                e.currentTarget.releasePointerCapture?.(e.pointerId);
-              } catch {
-                // Pointer capture may not have been acquired.
-              }
-            }
-          }}
+          onPointerDown={handleLightboxPointerDown}
+          onPointerMove={handleLightboxPointerMove}
+          onPointerUp={handleLightboxPointerUp}
+          onPointerCancel={handleLightboxPointerCancel}
         >
           <img
             src={current.url}
@@ -366,6 +447,16 @@ export function ImageLightbox({
           />
         </div>
       ) : (
+        <div
+          className="fixed inset-0 flex touch-none items-center justify-center overscroll-contain px-4 pb-[calc(env(safe-area-inset-bottom)+0.75rem)] pt-[calc(env(safe-area-inset-top)+4.5rem)] md:p-16"
+          style={{ zIndex: 110, ...swipeStageStyle }}
+          data-testid="image-lightbox-attachment-stage"
+          onClick={(e) => e.stopPropagation()}
+          onPointerDown={handleLightboxPointerDown}
+          onPointerMove={handleLightboxPointerMove}
+          onPointerUp={handleLightboxPointerUp}
+          onPointerCancel={handleLightboxPointerCancel}
+        >
         <div
           onClick={(e) => e.stopPropagation()}
           data-testid="image-lightbox-fileinfo"
@@ -384,6 +475,7 @@ export function ImageLightbox({
             <Download className="h-4 w-4" />
             Download
           </a>
+        </div>
         </div>
       )}
     </div>,

@@ -120,7 +120,7 @@ export function PopoverPortal({
               width: '100vw',
               maxWidth: '100vw',
               maxHeight: '50dvh',
-              overflowY: 'auto',
+              overflow: 'hidden',
               overscrollBehaviorY: 'contain',
               touchAction: 'pan-y',
               opacity: measured ? 1 : 0,

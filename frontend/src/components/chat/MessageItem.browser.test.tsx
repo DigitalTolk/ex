@@ -1,0 +1,94 @@
+import { describe, expect, it, vi } from 'vitest';
+import { render } from 'vitest-browser-react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { BrowserRouter } from 'react-router-dom';
+import { MessageItem } from './MessageItem';
+import { expectPaintedAtCenter } from '@/test/browser-assertions';
+import type { Message } from '@/types';
+
+vi.mock('@/hooks/useMessages', () => ({
+  useEditMessage: () => ({ mutate: vi.fn(), isPending: false }),
+  useDeleteMessage: () => ({ mutate: vi.fn(), isPending: false }),
+  useToggleReaction: () => ({ mutate: vi.fn(), isPending: false }),
+  useSetPinned: () => ({ mutate: vi.fn(), isPending: false }),
+  useSetNoUnfurl: () => ({ mutate: vi.fn(), isPending: false }),
+}));
+
+vi.mock('@/hooks/useEmoji', () => ({
+  useEmojis: () => ({ data: [] }),
+  useEmojiMap: () => ({ data: {} }),
+}));
+
+vi.mock('@/hooks/useAttachments', () => ({
+  uploadAttachment: vi.fn(),
+  useDeleteDraftAttachment: () => ({ mutateAsync: vi.fn(), mutate: vi.fn(), isPending: false }),
+  useAttachment: () => ({ data: undefined, isLoading: false }),
+  useAttachmentsBatch: () => ({ map: new Map(), isLoading: false }),
+}));
+
+function renderWithProviders(ui: React.ReactElement) {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(
+    <QueryClientProvider client={qc}>
+      <BrowserRouter>{ui}</BrowserRouter>
+    </QueryClientProvider>,
+  );
+}
+
+function makeMessage(overrides: Partial<Message> = {}): Message {
+  return {
+    id: 'msg-1',
+    parentID: 'channel-1',
+    authorID: 'user-1',
+    body: 'Hello world',
+    createdAt: '2026-04-24T10:30:00Z',
+    ...overrides,
+  };
+}
+
+describe('MessageItem browser behavior', () => {
+  it('keeps the mobile long-press action sheet above the bottom composer', async () => {
+    if (window.innerWidth > 767) return;
+
+    const screen = await renderWithProviders(
+      <>
+        <div style={{ position: 'relative', zIndex: 0, transform: 'translateZ(0)' }}>
+          <MessageItem
+            message={makeMessage()}
+            authorName="Alice"
+            isOwn={true}
+            channelId="channel-1"
+            currentUserId="user-1"
+          />
+        </div>
+        <div
+          data-testid="bottom-composer"
+          style={{
+            position: 'fixed',
+            inset: 'auto 0 0 0',
+            zIndex: 60,
+            height: 180,
+            background: 'rgb(220, 38, 38)',
+            color: 'white',
+          }}
+        >
+          Write to ~general
+        </div>
+      </>,
+    );
+
+    const row = screen.getByTestId('message-actions-trigger').element().closest('[data-message-id]');
+    expect(row).not.toBeNull();
+    row!.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerType: 'touch' }));
+
+    await vi.waitFor(() => {
+      const actions = document.querySelector('[data-testid="mobile-message-actions"]');
+      expect(actions).not.toBeNull();
+      expect(actions!.getBoundingClientRect().top).toBeLessThan(window.innerHeight);
+    }, { timeout: 1000 });
+
+    const sheet = document.querySelector('[data-testid="mobile-message-actions"]') as HTMLElement;
+    expect(sheet.parentElement?.parentElement).toBe(document.body);
+    expectPaintedAtCenter(sheet, '[data-testid="mobile-message-actions"]');
+  });
+});

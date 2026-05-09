@@ -120,6 +120,8 @@ describe('AppLayout', () => {
     const header = container.querySelector('header')!;
     const searchShell = screen.getByLabelText('Search').closest('header')!.querySelector('div')!;
     expect(header).toHaveClass('grid', 'w-full', 'grid-cols-[2.75rem_minmax(0,1fr)_2.75rem]');
+    expect(header).toHaveClass('bg-sidebar', 'border-sidebar-border');
+    expect(header).toHaveClass('dark:bg-[#1a1d21]', 'dark:border-white/10');
     expect(searchShell).toHaveClass('w-full', 'max-w-2xl', 'justify-self-center', 'lg:flex-1');
   });
 
@@ -156,7 +158,7 @@ describe('AppLayout', () => {
 
     expect(container.querySelector('.pt-\\[env\\(safe-area-inset-top\\)\\]')).toBeNull();
     const shell = container.firstElementChild as HTMLElement;
-    expect(shell).toHaveClass('bg-[#1a1d21]');
+    expect(shell).toHaveClass('bg-sidebar', 'dark:bg-[#1a1d21]');
   });
 
   it('keeps native server switching out of the top bar', () => {
@@ -282,6 +284,22 @@ describe('AppLayout', () => {
 
     expect(screen.getByTestId('mobile-channel-sidebar')).toHaveAttribute('inert');
     await waitFor(() => expect(main).toHaveStyle({ transform: 'translate3d(80px, 0, 0)' }));
+    expect(main).toHaveAttribute('data-channel-dragging', 'true');
+  });
+
+  it('blurs the focused mobile composer when a channel-sidebar swipe starts', async () => {
+    setMobileMatch(true);
+    window.history.pushState({}, '', '/channel/general');
+    const { container } = renderLayout(<input aria-label="Message input" />);
+    const input = screen.getByLabelText('Message input');
+    const main = container.querySelector('main')!;
+
+    input.focus();
+    expect(document.activeElement).toBe(input);
+
+    touchDrag(main, 12, 92);
+
+    await waitFor(() => expect(document.activeElement).not.toBe(input));
     expect(main).toHaveAttribute('data-channel-dragging', 'true');
   });
 

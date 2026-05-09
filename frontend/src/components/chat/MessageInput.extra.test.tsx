@@ -51,10 +51,11 @@ describe('MessageInput - file upload', () => {
     expect(clickSpy).toHaveBeenCalled();
   });
 
-  it('adds bottom safe-area padding to the mobile composer action bar', () => {
+  it('keeps bottom safe-area padding compact on the mobile composer action bar', () => {
     const { container } = render(<MessageInput onSend={vi.fn()} />);
 
-    expect(container.firstElementChild).toHaveClass('max-md:pb-[calc(0.75rem+env(safe-area-inset-bottom))]');
+    expect(container.firstElementChild).toHaveClass('max-md:pb-[max(0.25rem,env(safe-area-inset-bottom))]');
+    expect(container.firstElementChild).not.toHaveClass('max-md:pb-[calc(0.75rem+env(safe-area-inset-bottom))]');
   });
 
   it('shows a draft chip after a successful upload', async () => {

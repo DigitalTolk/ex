@@ -277,6 +277,7 @@ export function EmojiPicker({ onSelect, onClose, onOpenChange, trigger, triggerC
             className="grid min-h-0 flex-1 grid-cols-[repeat(9,2rem)] content-start justify-center gap-0.5 overflow-y-auto max-md:grid-cols-[repeat(7,2.75rem)]"
             role="list"
             aria-label={activeCategory === CUSTOM_CATEGORY_SLUG && !query.trim() ? 'Custom emojis' : 'Standard emojis'}
+            data-swipe-scroll="true"
           >
             {filteredCustom.map((e) => (
               <button

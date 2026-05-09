@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Copy, Pencil, Trash2, SmilePlus, MessageSquareReply, MoreHorizontal, Pin, PinOff, Link as LinkIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { MessageInput, type MessageInputValue } from '@/components/chat/MessageInput';
@@ -382,6 +383,126 @@ export function MessageItem({
     return extra > 0 ? `${names.join(', ')} and ${extra} more` : names.join(', ');
   }
 
+  const mobileActionsOverlay = !isEditing && !message.deleted && (mobileActionsOpen || mobileReactionPickerOpen) ? (
+    <div
+      ref={mobileActionsRef}
+      className="fixed inset-0 z-[120] select-none [-webkit-touch-callout:none] [-webkit-user-select:none] md:hidden"
+      role="presentation"
+      onContextMenu={(event) => event.preventDefault()}
+    >
+      {!mobileActionsSuppressed && (
+        <button
+          type="button"
+          className="absolute inset-0 bg-black/35"
+          aria-label="Close message actions"
+          onClick={closeMobileActions}
+        />
+      )}
+      {mobileActionsOpen && (
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="Message actions"
+        className={`mobile-bottom-sheet-enter absolute inset-x-0 bottom-0 max-h-[calc(100dvh-env(safe-area-inset-top)-0.75rem)] overflow-y-auto rounded-t-xl border-x-0 border-b-0 border-t bg-popover p-3 pb-[calc(env(safe-area-inset-bottom)+0.75rem)] text-popover-foreground shadow-lg transform-gpu transition-transform duration-200 ease-out ${swipeDismissing ? 'translate-y-full' : ''} ${mobileActionsSuppressed ? 'hidden' : ''}`}
+        data-testid="mobile-message-actions"
+        data-actions-suppressed={mobileActionsSuppressed ? 'true' : 'false'}
+        data-swipe-dismissing={swipeDismissing ? 'true' : 'false'}
+        style={mobileActionsDragStyle}
+        ref={setMobileActionsNode}
+        {...mobileActionsSwipe}
+      >
+        {!inThread && (
+          <Button
+            type="button"
+            className="mb-2 h-12 w-full justify-start gap-3 text-base max-md:h-14"
+            onClick={handleMobileReply}
+            aria-label="Reply in thread"
+          >
+            <MessageSquareReply className="h-5 w-5" />
+            Reply in thread
+          </Button>
+        )}
+        <EmojiPicker
+          onSelect={(emoji) => {
+            handleReact(emoji);
+            closeMobileActions();
+          }}
+          onOpenChange={(open) => {
+            setMobileReactionPickerOpen(open);
+            if (open) {
+              setMobileActionsSuppressed(true);
+            } else {
+              closeMobileActions();
+            }
+          }}
+          triggerClassName="block w-full"
+          trigger={
+            <button
+              type="button"
+              className="mb-2 flex h-12 w-full items-center gap-3 rounded-lg border px-3 text-left max-md:h-14"
+              aria-label="Add reaction"
+            >
+              <SmilePlus className="h-4 w-4" />
+              <span className="text-sm font-medium">Reaction</span>
+            </button>
+          }
+        />
+        <div className="flex flex-col rounded-lg border">
+          <button
+            type="button"
+            className="flex items-center gap-3 border-b px-3 py-4 text-left text-base"
+            onClick={handleMobileCopyText}
+            aria-label="Copy message text"
+          >
+            <Copy className="h-4 w-4" />
+            Copy text
+          </button>
+          <button
+            type="button"
+            className="flex items-center gap-3 border-b px-3 py-4 text-left text-base"
+            onClick={handleMobileCopyLink}
+            aria-label="Copy link to message"
+          >
+            <LinkIcon className="h-4 w-4" />
+            {linkCopied ? 'Link copied' : 'Copy link'}
+          </button>
+          <button
+            type="button"
+            className="flex items-center gap-3 border-b px-3 py-4 text-left text-base"
+            onClick={handleMobileTogglePin}
+            aria-label={message.pinned ? 'Unpin message' : 'Pin message'}
+          >
+            {message.pinned ? <PinOff className="h-4 w-4" /> : <Pin className="h-4 w-4" />}
+            {message.pinned ? 'Unpin' : 'Pin'}
+          </button>
+          {isOwn && (
+            <>
+              {canEdit && (
+                <button
+                  type="button"
+                  className="flex items-center gap-3 border-b px-3 py-4 text-left text-base"
+                  onClick={handleMobileEdit}
+                >
+                  <Pencil className="h-4 w-4" />
+                  Edit
+                </button>
+              )}
+              <button
+                type="button"
+                className="flex items-center gap-3 px-3 py-4 text-left text-base text-destructive"
+                onClick={handleMobileDelete}
+              >
+                <Trash2 className="h-4 w-4" />
+                Delete
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+      )}
+    </div>
+  ) : null;
+
   return (
     <div
       id={`msg-${message.id}`}
@@ -688,125 +809,7 @@ export function MessageItem({
           </DropdownMenu>
         </div>
       )}
-      {!isEditing && !message.deleted && (mobileActionsOpen || mobileReactionPickerOpen) && (
-        <div
-          ref={mobileActionsRef}
-          className="fixed inset-0 z-[120] select-none [-webkit-touch-callout:none] [-webkit-user-select:none] md:hidden"
-          role="presentation"
-          onContextMenu={(event) => event.preventDefault()}
-        >
-          {!mobileActionsSuppressed && (
-            <button
-              type="button"
-              className="absolute inset-0 bg-black/35"
-              aria-label="Close message actions"
-              onClick={closeMobileActions}
-            />
-          )}
-          {mobileActionsOpen && (
-          <div
-            role="dialog"
-            aria-modal="true"
-            aria-label="Message actions"
-            className={`mobile-bottom-sheet-enter absolute inset-x-0 bottom-0 max-h-[calc(100dvh-env(safe-area-inset-top)-0.75rem)] overflow-y-auto rounded-t-xl border-x-0 border-b-0 border-t bg-popover p-3 pb-[calc(env(safe-area-inset-bottom)+0.75rem)] text-popover-foreground shadow-lg transform-gpu transition-transform duration-200 ease-out ${swipeDismissing ? 'translate-y-full' : ''} ${mobileActionsSuppressed ? 'hidden' : ''}`}
-            data-testid="mobile-message-actions"
-            data-actions-suppressed={mobileActionsSuppressed ? 'true' : 'false'}
-            data-swipe-dismissing={swipeDismissing ? 'true' : 'false'}
-            style={mobileActionsDragStyle}
-            ref={setMobileActionsNode}
-            {...mobileActionsSwipe}
-          >
-            {!inThread && (
-              <Button
-                type="button"
-                className="mb-2 h-12 w-full justify-start gap-3 text-base max-md:h-14"
-                onClick={handleMobileReply}
-                aria-label="Reply in thread"
-              >
-                <MessageSquareReply className="h-5 w-5" />
-                Reply in thread
-              </Button>
-            )}
-            <EmojiPicker
-              onSelect={(emoji) => {
-                handleReact(emoji);
-                closeMobileActions();
-              }}
-              onOpenChange={(open) => {
-                setMobileReactionPickerOpen(open);
-                if (open) {
-                  setMobileActionsSuppressed(true);
-                } else {
-                  closeMobileActions();
-                }
-              }}
-              triggerClassName="block w-full"
-              trigger={
-                <button
-                  type="button"
-                  className="mb-2 flex h-12 w-full items-center gap-3 rounded-lg border px-3 text-left max-md:h-14"
-                  aria-label="Add reaction"
-                >
-                  <SmilePlus className="h-4 w-4" />
-                  <span className="text-sm font-medium">Reaction</span>
-                </button>
-              }
-            />
-            <div className="flex flex-col rounded-lg border">
-              <button
-                type="button"
-                className="flex items-center gap-3 border-b px-3 py-4 text-left text-base"
-                onClick={handleMobileCopyText}
-                aria-label="Copy message text"
-              >
-                <Copy className="h-4 w-4" />
-                Copy text
-              </button>
-              <button
-                type="button"
-                className="flex items-center gap-3 border-b px-3 py-4 text-left text-base"
-                onClick={handleMobileCopyLink}
-                aria-label="Copy link to message"
-              >
-                <LinkIcon className="h-4 w-4" />
-                {linkCopied ? 'Link copied' : 'Copy link'}
-              </button>
-              <button
-                type="button"
-                className="flex items-center gap-3 border-b px-3 py-4 text-left text-base"
-                onClick={handleMobileTogglePin}
-                aria-label={message.pinned ? 'Unpin message' : 'Pin message'}
-              >
-                {message.pinned ? <PinOff className="h-4 w-4" /> : <Pin className="h-4 w-4" />}
-                {message.pinned ? 'Unpin' : 'Pin'}
-              </button>
-              {isOwn && (
-                <>
-                  {canEdit && (
-                    <button
-                      type="button"
-                      className="flex items-center gap-3 border-b px-3 py-4 text-left text-base"
-                      onClick={handleMobileEdit}
-                    >
-                      <Pencil className="h-4 w-4" />
-                      Edit
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    className="flex items-center gap-3 px-3 py-4 text-left text-base text-destructive"
-                    onClick={handleMobileDelete}
-                  >
-                    <Trash2 className="h-4 w-4" />
-                    Delete
-                  </button>
-                </>
-              )}
-            </div>
-          </div>
-          )}
-        </div>
-      )}
+      {mobileActionsOverlay ? createPortal(mobileActionsOverlay, document.body) : null}
       <ConfirmDialog
         open={deleteConfirmOpen}
         onOpenChange={setDeleteConfirmOpen}

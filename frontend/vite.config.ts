@@ -11,6 +11,21 @@ import tailwindcss from '@tailwindcss/vite'
 // hash via /api/v1/version — no Vite-side env var to keep in sync.
 
 const distGitignorePath = path.resolve(__dirname, 'dist', '.gitignore')
+const vendorChunks: Array<[string, (id: string) => boolean]> = [
+  ['react-vendor', (id) => /node_modules\/(react|react-dom|react-router|react-router-dom)\//.test(id)],
+  ['query-vendor', (id) => id.includes('/node_modules/@tanstack/react-query/')],
+  ['editor-vendor', (id) => id.includes('/node_modules/lexical/') || id.includes('/node_modules/@lexical/')],
+  ['giphy-vendor', (id) => id.includes('/node_modules/@giphy/')],
+  ['dnd-vendor', (id) => id.includes('/node_modules/@atlaskit/pragmatic-drag-and-drop')],
+  ['ui-vendor', (id) => (
+    id.includes('/node_modules/@base-ui/') ||
+    id.includes('/node_modules/lucide-react/') ||
+    id.includes('/node_modules/class-variance-authority/') ||
+    id.includes('/node_modules/tailwind-merge/') ||
+    id.includes('/node_modules/clsx/')
+  )],
+  ['virtual-vendor', (id) => id.includes('/node_modules/react-virtuoso/')],
+]
 
 function preserveDistGitignore() {
   return {
@@ -25,6 +40,16 @@ function preserveDistGitignore() {
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react(), tailwindcss(), preserveDistGitignore()],
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (!id.includes('/node_modules/')) return undefined
+          return vendorChunks.find(([, match]) => match(id))?.[0] ?? 'vendor'
+        },
+      },
+    },
+  },
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),

@@ -47,7 +47,43 @@ function LayoutHarness({ children }: { children: ReactNode }) {
   );
 }
 
+function touchPoint(element: Element, x: number, y: number) {
+  return { identifier: 1, target: element, clientX: x, clientY: y, pageX: x, pageY: y, screenX: x, screenY: y };
+}
+
+function dispatchTouch(element: Element, type: string, x: number, y: number) {
+  const event = new Event(type, { bubbles: true, cancelable: true });
+  const touches = type === 'touchend' ? [] : [touchPoint(element, x, y)];
+  const changedTouches = [touchPoint(element, x, y)];
+  Object.defineProperty(event, 'touches', { value: touches });
+  Object.defineProperty(event, 'targetTouches', { value: touches });
+  Object.defineProperty(event, 'changedTouches', { value: changedTouches });
+  element.dispatchEvent(event);
+}
+
 describe('AppLayout browser behavior', () => {
+  it('uses a distinct light chrome color in light mode instead of dark or pure-white shell', async () => {
+    document.documentElement.classList.remove('dark');
+
+    await render(
+      <LayoutHarness>
+        <PageContainer title="Threads">
+          <div>Thread content</div>
+        </PageContainer>
+      </LayoutHarness>,
+    );
+
+    const header = document.querySelector('[data-testid="app-shell-header"]') as HTMLElement | null;
+    const sidebar = document.querySelector('[data-app-chrome="true"] aside, aside[data-app-chrome="true"]') as HTMLElement | null;
+    expect(header).not.toBeNull();
+    expect(getComputedStyle(header!).backgroundColor).not.toBe('rgb(26, 29, 33)');
+    if (sidebar) {
+      const sidebarBg = getComputedStyle(sidebar).backgroundColor;
+      expect(sidebarBg).not.toBe('rgb(26, 29, 33)');
+      expect(sidebarBg).not.toBe('rgb(255, 255, 255)');
+    }
+  });
+
   it('keeps the reload banner visible below the app header', async () => {
     const screen = await render(
       <LayoutHarness>
@@ -68,6 +104,32 @@ describe('AppLayout browser behavior', () => {
       Math.floor(appHeader!.getBoundingClientRect().bottom),
     );
     expectPaintedAtCenter(banner!, '[data-testid="update-banner"]');
+  });
+
+  it('blurs the focused composer when mobile channel-sidebar swipe begins', async () => {
+    if (window.innerWidth > 767) return;
+
+    await render(
+      <LayoutHarness>
+        <input aria-label="Message input" />
+      </LayoutHarness>,
+    );
+
+    const input = document.querySelector('input[aria-label="Message input"]') as HTMLInputElement | null;
+    const main = document.querySelector('[data-app-main="true"]') as HTMLElement | null;
+    expect(input).not.toBeNull();
+    expect(main).not.toBeNull();
+
+    input!.focus();
+    expect(document.activeElement).toBe(input);
+
+    dispatchTouch(main!, 'touchstart', 12, 220);
+    dispatchTouch(main!, 'touchmove', 92, 226);
+
+    await vi.waitFor(() => {
+      expect(document.activeElement).not.toBe(input);
+      expect(main!.dataset.channelDragging).toBe('true');
+    });
   });
 
   it('places mobile right panels below the measured channel header, including taller headers', async () => {

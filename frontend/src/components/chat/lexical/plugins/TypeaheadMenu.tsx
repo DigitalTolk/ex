@@ -5,8 +5,10 @@ import type { MenuOption } from '@lexical/react/LexicalTypeaheadMenuPlugin';
 // Shared popup chrome for the @ / ~ / : typeaheads. Lexical drives
 // keyboard navigation (arrow keys, Enter, Tab, Esc) — this component
 // renders the list and forwards mousedown back through the plugin.
-// Portals into Lexical's `anchorElementRef.current` so the popup
-// tracks the caret without us computing coordinates ourselves.
+// Portals to document.body and uses Lexical's anchor rect only for
+// measurement. Keeping the fixed popup out of composer/anchor
+// containers avoids mobile WebKit treating it as fixed relative to a
+// transformed ancestor.
 // Always opens above the trigger: the composer sits at the viewport
 // bottom, so downward placement clips out of view.
 
@@ -91,7 +93,7 @@ export function TypeaheadMenu<T extends MenuOption>({
         })
       )}
     </div>,
-    anchorEl,
+    document.body,
   );
 }
 
@@ -102,7 +104,15 @@ function useTypeaheadPosition(anchorEl: HTMLElement | null, setPosition: (positi
     function update() {
       const anchorRect = target.getBoundingClientRect();
       const composer = target.closest('[data-message-composer]');
-      const editor = composer?.querySelector<HTMLElement>('[role="textbox"]');
+      const activeElement = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      const activeEditor =
+        activeElement?.getAttribute('role') === 'textbox'
+          ? activeElement
+          : activeElement?.closest<HTMLElement>('[role="textbox"]');
+      const editor =
+        composer?.querySelector<HTMLElement>('[role="textbox"]') ??
+        activeEditor ??
+        document.querySelector<HTMLElement>('[data-message-composer] [role="textbox"]');
       const referenceTop = editor?.getBoundingClientRect().top ?? anchorRect.top;
       const visualViewport = window.visualViewport;
       const viewportTop = visualViewport?.offsetTop ?? 0;
@@ -110,8 +120,10 @@ function useTypeaheadPosition(anchorEl: HTMLElement | null, setPosition: (positi
       const visibleReferenceTop = Math.min(referenceTop, viewportBottom);
       const width = Math.min(288, window.innerWidth - 16);
       const left = Math.min(Math.max(anchorRect.left, 8), window.innerWidth - width - 8);
-      const bottom = Math.max(8, window.innerHeight - visibleReferenceTop + 8);
-      const maxHeight = Math.max(96, Math.min(288, visibleReferenceTop - viewportTop - 16));
+      const viewportOffsetBottom = Math.max(0, window.innerHeight - viewportBottom);
+      const bottom = Math.max(8 + viewportOffsetBottom, window.innerHeight - visibleReferenceTop + 8);
+      const availableAboveEditor = Math.max(32, visibleReferenceTop - viewportTop - 16);
+      const maxHeight = Math.min(288, availableAboveEditor);
 
       setPosition({
         position: 'fixed',

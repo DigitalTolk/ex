@@ -2,6 +2,7 @@ import 'vitest-browser-react';
 import '@vitest/browser/matchers';
 import '../index.css';
 import { APP_VERSION_META, BUILD_VERSION_META } from '@/lib/version-meta';
+import './console-gate';
 
 if (typeof document !== 'undefined') {
   if (!document.querySelector(`meta[name="${APP_VERSION_META}"]`)) {

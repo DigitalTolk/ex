@@ -125,10 +125,12 @@ describe('MessageList browser behavior', () => {
 
     const scroller = document.querySelector('[data-testid="virtuoso-scroller"]') as HTMLElement | null;
     expect(scroller).not.toBeNull();
+    await settleAtBottom(scroller!);
 
-    act(() => {
+    await browserAct(async () => {
       browserMedia.attachmentsReady = true;
       browserMedia.attachmentListeners.forEach((listener) => listener());
+      await animationFrames(4);
     });
 
     await vi.waitFor(() => {
@@ -150,6 +152,34 @@ describe('MessageList browser behavior', () => {
     expect(thumb).not.toBeNull();
   });
 });
+
+async function browserAct(callback: () => void | Promise<void>) {
+  const actGlobal = globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean };
+  actGlobal.IS_REACT_ACT_ENVIRONMENT = true;
+  try {
+    await act(async () => callback());
+  } finally {
+    actGlobal.IS_REACT_ACT_ENVIRONMENT = false;
+  }
+}
+
+async function settleAtBottom(scroller: HTMLElement) {
+  await vi.waitFor(() => {
+    expect(scroller.scrollHeight).toBeGreaterThan(scroller.clientHeight);
+  }, { timeout: 3000 });
+
+  for (let i = 0; i < 3; i += 1) {
+    scroller.scrollTop = scroller.scrollHeight;
+    scroller.dispatchEvent(new Event('scroll', { bubbles: true }));
+    await animationFrames(1);
+  }
+}
+
+async function animationFrames(count: number) {
+  for (let i = 0; i < count; i += 1) {
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+  }
+}
 
 function laidOutElement(selector: string): HTMLElement | null {
   const elements = Array.from(document.querySelectorAll<HTMLElement>(selector));

@@ -199,6 +199,7 @@ describe('ThreadPanel', () => {
   });
 
   it('does not close on a mobile right-to-left swipe', () => {
+    setMobileMatch(true);
     mockApiFetch.mockResolvedValueOnce([]);
     const onClose = vi.fn();
     renderWithProviders(
@@ -219,6 +220,7 @@ describe('ThreadPanel', () => {
   });
 
   it('closes on a mobile left-to-right swipe', () => {
+    setMobileMatch(true);
     mockApiFetch.mockResolvedValueOnce([]);
     const onClose = vi.fn();
     renderWithProviders(
@@ -244,6 +246,7 @@ describe('ThreadPanel', () => {
   });
 
   it('tracks the finger while the mobile thread panel is being pulled closed', () => {
+    setMobileMatch(true);
     mockApiFetch.mockResolvedValueOnce([]);
     const onClose = vi.fn();
     renderWithProviders(
@@ -265,6 +268,7 @@ describe('ThreadPanel', () => {
   });
 
   it('ignores middle-of-panel drags so scrolling does not dismiss the thread', () => {
+    setMobileMatch(true);
     mockApiFetch.mockResolvedValueOnce([]);
     const onClose = vi.fn();
     renderWithProviders(

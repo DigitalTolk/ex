@@ -3,7 +3,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import ThreadsPage from '@/pages/ThreadsPage';
-import { unreadThreadIDs, type ThreadSummary } from '@/hooks/useThreads';
+import { sortThreadsByUnreadThenActivity, unreadThreadIDs, type ThreadSummary } from '@/hooks/useThreads';
 
 const apiFetchMock = vi.fn();
 const unreadThreadNotifications = new Set<string>();
@@ -144,6 +144,24 @@ describe('ThreadsPage', () => {
     expect(cards[1]).toHaveAttribute('data-unread', 'false');
   });
 
+  it('shows unread threads first, then read threads, each by most recent activity', async () => {
+    unreadThreadNotifications.add('live-unread-older');
+    unreadThreadNotifications.add('live-unread-newer');
+    apiFetchMock.mockResolvedValueOnce([
+      { ...sample[0], threadRootID: 'read-newest', latestActivityAt: '2026-04-26T13:00:00Z' },
+      { ...sample[0], threadRootID: 'live-unread-older', latestActivityAt: '2026-04-26T10:00:00Z' },
+      { ...sample[0], threadRootID: 'read-older', latestActivityAt: '2026-04-26T09:00:00Z' },
+      { ...sample[0], threadRootID: 'live-unread-newer', latestActivityAt: '2026-04-26T12:00:00Z' },
+    ]);
+    renderPage();
+
+    const ids = (await screen.findAllByTestId('thread-card')).map((card) =>
+      card.getAttribute('data-thread-root-id'),
+    );
+
+    expect(ids).toEqual(['live-unread-newer', 'live-unread-older', 'read-newest', 'read-older']);
+  });
+
   it('shows an empty state when no threads exist', async () => {
     apiFetchMock.mockResolvedValueOnce([]);
     renderPage();
@@ -206,5 +224,17 @@ describe('ThreadsPage', () => {
     expect(ids.has('never-seen')).toBe(false);
     expect(ids.has('live-unread')).toBe(true);
     expect(ids.has('orphan-live')).toBe(false);
+  });
+
+  it('sorts thread summaries without mutating the source list', () => {
+    const threads = [
+      { ...sample[0], threadRootID: 'read-new', latestActivityAt: '2026-04-26T13:00:00Z' },
+      { ...sample[0], threadRootID: 'unread-old', latestActivityAt: '2026-04-26T10:00:00Z' },
+      { ...sample[0], threadRootID: 'unread-new', latestActivityAt: '2026-04-26T12:00:00Z' },
+    ];
+
+    expect(sortThreadsByUnreadThenActivity(threads, new Set(['unread-old', 'unread-new'])).map((t) => t.threadRootID))
+      .toEqual(['unread-new', 'unread-old', 'read-new']);
+    expect(threads.map((t) => t.threadRootID)).toEqual(['read-new', 'unread-old', 'unread-new']);
   });
 });

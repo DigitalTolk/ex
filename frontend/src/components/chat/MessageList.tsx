@@ -6,6 +6,7 @@ import { formatDayHeading } from '@/lib/format';
 import { deriveThreadMeta } from '@/lib/message-users';
 import type { Message, UserStatus } from '@/types';
 import { buildMessageListRows, nextVirtuosoState } from './MessageListRows';
+import { shouldAutoStickMessageList } from './message-list-autostick';
 
 const ANCHOR_HIGHLIGHT_MS = 2200;
 const DEFAULT_MESSAGE_ROW_HEIGHT = 88;
@@ -75,6 +76,7 @@ function VirtuosoMessageList({
   anchorRevision,
 }: MessageListProps) {
   const virtuosoRef = useRef<VirtuosoHandle>(null);
+  const scrollerRef = useRef<HTMLElement | null>(null);
   const atBottomRef = useRef(true);
 
   // Ready gate: Virtuoso can fire `startReached` during its initial
@@ -156,13 +158,36 @@ function VirtuosoMessageList({
   // `rows` prop — this is what guarantees `data` and `firstItemIndex`
   // hit Virtuoso atomically.
   const renderRows = virtuosoData.rows;
-  const handleContentHeightChange = useCallback((forceLiveTail = false) => {
-    if (anchorMsgId || hasPreviousPage || (!forceLiveTail && !atBottomRef.current)) return;
-    requestAnimationFrame(() => {
-      virtuosoRef.current?.autoscrollToBottom();
-      virtuosoRef.current?.scrollToIndex({ index: 'LAST', align: 'end' });
+  const scrollToBottom = useCallback(() => {
+    virtuosoRef.current?.autoscrollToBottom?.();
+    virtuosoRef.current?.scrollToIndex({ index: 'LAST', align: 'end' });
+    if (scrollerRef.current) {
+      scrollerRef.current.scrollTop = scrollerRef.current.scrollHeight;
+    }
+  }, []);
+
+  const handleContentHeightChange = useCallback(() => {
+    const wasAtLiveTail = shouldAutoStickMessageList({
+      anchorMsgId,
+      hasPreviousPage,
+      atBottom: atBottomRef.current,
     });
-  }, [anchorMsgId, hasPreviousPage]);
+    if (!wasAtLiveTail) return;
+
+    const scrollAfterLayout = (remainingFrames: number) => {
+      requestAnimationFrame(() => {
+        if (anchorMsgId || hasPreviousPage) return;
+        scrollToBottom();
+        if (remainingFrames > 1) scrollAfterLayout(remainingFrames - 1);
+      });
+    };
+
+    scrollAfterLayout(3);
+  }, [anchorMsgId, hasPreviousPage, scrollToBottom]);
+
+  const handleScrollerRef = useCallback((ref: HTMLElement | Window | null) => {
+    scrollerRef.current = ref instanceof HTMLElement ? ref : null;
+  }, []);
 
   // Force-scroll-to-bottom when the bottom message becomes the
   // current user's own send. `followOutput="auto"` only sticks when
@@ -193,11 +218,9 @@ function VirtuosoMessageList({
     if (!previousBottomId || previousBottomId === bottomId) return;
     if (last.message.authorID !== currentUserId) return;
     if (last.message.parentMessageID) return;
-    const scrollFrame = requestAnimationFrame(() => {
-      virtuosoRef.current?.scrollToIndex({ index: 'LAST', align: 'end' });
-    });
+    const scrollFrame = requestAnimationFrame(scrollToBottom);
     return () => cancelAnimationFrame(scrollFrame);
-  }, [anchorMsgId, renderRows, currentUserId]);
+  }, [anchorMsgId, renderRows, currentUserId, scrollToBottom]);
 
   if (renderRows.length === 0) {
     // Empty state: render the intro (channels show "This is the
@@ -278,6 +301,7 @@ function VirtuosoMessageList({
       // 'auto' still snaps for incoming WS messages when the user is
       // at the bottom — the canonical chat behaviour.
       followOutput={hasPreviousPage ? false : 'auto'}
+      scrollerRef={handleScrollerRef}
       atBottomStateChange={(atBottom) => {
         atBottomRef.current = atBottom;
       }}
@@ -319,7 +343,6 @@ function VirtuosoMessageList({
             onReplyInThread={onReplyInThread}
             onEditMessage={onEditMessage}
             highlighted={row.message.id === highlightedMessageId}
-            isLiveTailRow={row.key === renderRows[renderRows.length - 1]?.key}
             onContentHeightChange={handleContentHeightChange}
           />
         );
@@ -357,7 +380,6 @@ function MessageRow({
   onReplyInThread,
   onEditMessage,
   highlighted,
-  isLiveTailRow,
   onContentHeightChange,
 }: {
   row: { kind: 'message'; key: string; message: Message };
@@ -371,13 +393,12 @@ function MessageRow({
   onReplyInThread?: (id: string) => void;
   onEditMessage?: (message: Message) => void;
   highlighted?: boolean;
-  isLiveTailRow?: boolean;
-  onContentHeightChange?: (forceLiveTail?: boolean) => void;
+  onContentHeightChange?: () => void;
 }) {
   const msg = row.message;
   const handleContentHeightChange = useCallback(() => {
-    onContentHeightChange?.(isLiveTailRow);
-  }, [isLiveTailRow, onContentHeightChange]);
+    onContentHeightChange?.();
+  }, [onContentHeightChange]);
 
   if (msg.system) {
     return (

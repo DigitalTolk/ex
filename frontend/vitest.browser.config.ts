@@ -36,7 +36,7 @@ export default defineConfig({
   },
   test: {
     include: ['src/**/*.browser.test.{ts,tsx}'],
-    setupFiles: ['./src/test/browser-setup.ts'],
+    setupFiles: ['./src/test/react-act-setup.ts', './src/test/browser-setup.ts'],
     coverage: {
       provider: 'istanbul',
       reporter: ['text', 'lcov'],

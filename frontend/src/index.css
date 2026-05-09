@@ -82,13 +82,13 @@
   --color-chart-3: oklch(0.398 0.07 227.392);
   --color-chart-4: oklch(0.828 0.189 84.429);
   --color-chart-5: oklch(0.769 0.188 70.08);
-  --color-sidebar: oklch(0.985 0 0);
+  --color-sidebar: oklch(0.94 0 0);
   --color-sidebar-foreground: oklch(0.145 0 0);
   --color-sidebar-primary: oklch(0.205 0 0);
   --color-sidebar-primary-foreground: oklch(0.985 0 0);
-  --color-sidebar-accent: oklch(0.97 0 0);
+  --color-sidebar-accent: oklch(0.9 0 0);
   --color-sidebar-accent-foreground: oklch(0.205 0 0);
-  --color-sidebar-border: oklch(0.922 0 0);
+  --color-sidebar-border: oklch(0.86 0 0);
   --color-sidebar-ring: oklch(0.708 0 0);
   --radius: 0.625rem;
   --animate-duration: 150ms;
@@ -197,6 +197,40 @@
 
   :focus-visible {
     @apply outline-ring outline-2 outline-offset-2;
+  }
+
+  html:not(.dark) [data-app-chrome="true"] .text-white,
+  html:not(.dark) [data-app-chrome="true"] .text-gray-200,
+  html:not(.dark) [data-app-chrome="true"] .text-gray-300 {
+    color: var(--color-sidebar-foreground) !important;
+  }
+
+  html:not(.dark) [data-app-chrome="true"] .text-gray-400 {
+    color: var(--color-muted-foreground) !important;
+  }
+
+  html:not(.dark) [data-app-chrome="true"] .text-gray-500 {
+    color: oklch(0.62 0 0) !important;
+  }
+
+  html:not(.dark) [data-app-chrome="true"] .bg-white\/15,
+  html:not(.dark) [data-app-chrome="true"] .bg-white\/20 {
+    background-color: oklch(0.92 0 0) !important;
+  }
+
+  html:not(.dark) [data-app-chrome="true"] .hover\:bg-white\/10:hover,
+  html:not(.dark) [data-app-chrome="true"] .hover\:bg-white\/5:hover,
+  html:not(.dark) [data-app-chrome="true"] .hover\:bg-white\/20:hover {
+    background-color: var(--color-sidebar-accent) !important;
+  }
+
+  html:not(.dark) [data-app-chrome="true"] .hover\:text-white:hover,
+  html:not(.dark) [data-app-chrome="true"] .hover\:text-gray-300:hover {
+    color: var(--color-sidebar-foreground) !important;
+  }
+
+  html:not(.dark) [data-app-chrome="true"] .bg-white\/10 {
+    background-color: oklch(0.95 0 0) !important;
   }
 }
 

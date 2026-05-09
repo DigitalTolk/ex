@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { SidePanel } from './SidePanel';
 
@@ -13,7 +13,25 @@ function touchDrag(element: Element, fromX: number, toX: number, y = 120) {
   fireEvent.touchMove(element, { touches: [{ clientX: toX, clientY: y + 8 }] });
 }
 
+function setMobileMatch(matches: boolean) {
+  Object.defineProperty(window, 'matchMedia', {
+    configurable: true,
+    value: vi.fn(() => ({
+      matches,
+      media: '(max-width: 767px)',
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+    })),
+  });
+}
+
 describe('SidePanel', () => {
+  beforeEach(() => {
+    setMobileMatch(true);
+  });
+
   it('does not close on a right-sidebar mobile right-to-left swipe', () => {
     const onClose = vi.fn();
     render(
