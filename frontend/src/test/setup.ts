@@ -2,6 +2,7 @@ import '@testing-library/jest-dom/vitest';
 import { vi } from 'vitest';
 import { createElement, type ReactNode } from 'react';
 import { APP_VERSION_META, BUILD_VERSION_META } from '@/lib/version-meta';
+import './console-gate';
 
 // @base-ui/react/scroll-area uses ResizeObserver inside Root and emits
 // async state updates that show up in tests as "An update to
@@ -140,24 +141,6 @@ if (typeof globalThis.ClipboardEvent === 'undefined') {
   }
   globalThis.ClipboardEvent = ClipboardEvent as unknown as typeof globalThis.ClipboardEvent;
 }
-
-// @lexical/code-core warns "Using CodeNode without CodeExtension is
-// deprecated" the first time it has to fall back to the legacy
-// in-place exit logic in CodeNode.insertNewAfter. CodeExtension is
-// only registerable via LexicalBuilder (LexicalExtensionComposer);
-// our editor uses LexicalComposer with `nodes:`, which can't host
-// extensions yet. The legacy path is functionally identical to the
-// extension's command, so suppress this specific message — leaving
-// every other deprecation / warning untouched.
-const originalConsoleWarn = console.warn;
-console.warn = (...args: Parameters<Console['warn']>) => {
-  // startsWith — not strict equality — so a future Lexical patch
-  // version that appends to the message (e.g. "...; use CodeExtension
-  // instead") still gets suppressed without re-breaking the gate.
-  const first = args[0];
-  if (typeof first === 'string' && first.startsWith('Using CodeNode without CodeExtension')) return;
-  originalConsoleWarn(...args);
-};
 
 // Lexical / ProseMirror call coordsAtPos → singleRect → getClientRects on
 // DOM nodes during routine selection updates. jsdom doesn't compute

@@ -281,11 +281,13 @@ describe('ChatPage WebSocket handlers', () => {
       qc.setQueryData(['userChannels'], [{ channelID: 'ch-1', channelName: 'general' }]);
     });
 
-    (capturedOptions.onMessageNew as (d: unknown) => void)(msg({
-      parentMessageID: 'msg-root',
-      id: 'msg-reply-1',
-      createdAt: '2026-04-30T10:10:00Z',
-    }));
+    act(() => {
+      (capturedOptions.onMessageNew as (d: unknown) => void)(msg({
+        parentMessageID: 'msg-root',
+        id: 'msg-reply-1',
+        createdAt: '2026-04-30T10:10:00Z',
+      }));
+    });
 
     expect(apiFetch).toHaveBeenCalledWith('/api/v1/user-state/threads/channels/ch-1/msg-root/seen', { method: 'PUT' });
   });
@@ -294,14 +296,16 @@ describe('ChatPage WebSocket handlers', () => {
     const { qc } = renderAt('/');
     const spy = vi.spyOn(qc, 'invalidateQueries');
 
-    (capturedOptions.onNotification as (d: unknown) => void)({
-      kind: 'thread_reply',
-      parentID: 'ch-1',
-      parentType: 'channel',
-      parentMessageID: 'msg-root',
-      title: 'Alice replied',
-      body: 'hello',
-      createdAt: '2026-04-30T10:10:00Z',
+    act(() => {
+      (capturedOptions.onNotification as (d: unknown) => void)({
+        kind: 'thread_reply',
+        parentID: 'ch-1',
+        parentType: 'channel',
+        parentMessageID: 'msg-root',
+        title: 'Alice replied',
+        body: 'hello',
+        createdAt: '2026-04-30T10:10:00Z',
+      });
     });
 
     const calls = spy.mock.calls.map((c) => (c[0] as { queryKey?: unknown[] }).queryKey);
@@ -311,17 +315,20 @@ describe('ChatPage WebSocket handlers', () => {
     expect(dispatchNotification).toHaveBeenCalled();
   });
 
-  it('onNotification for the active thread does not mark the thread unread', () => {
+  it('onNotification for the active thread does not mark the thread unread', async () => {
     renderAt('/channel/general?thread=msg-root');
 
-    (capturedOptions.onNotification as (d: unknown) => void)({
-      kind: 'thread_reply',
-      parentID: 'ch-1',
-      parentType: 'channel',
-      parentMessageID: 'msg-root',
-      title: 'Alice replied',
-      body: 'hello',
-      createdAt: '2026-04-30T10:10:00Z',
+    await act(async () => {
+      (capturedOptions.onNotification as (d: unknown) => void)({
+        kind: 'thread_reply',
+        parentID: 'ch-1',
+        parentType: 'channel',
+        parentMessageID: 'msg-root',
+        title: 'Alice replied',
+        body: 'hello',
+        createdAt: '2026-04-30T10:10:00Z',
+      });
+      await Promise.resolve();
     });
 
     expect(markThreadNotificationUnread).not.toHaveBeenCalled();

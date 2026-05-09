@@ -9,7 +9,7 @@ export default defineConfig({
     environment: 'jsdom',
     include: ['src/**/*.{test,spec}.{ts,tsx}'],
     exclude: ['src/**/*.browser.test.{ts,tsx}'],
-    setupFiles: ['./src/test/setup.ts'],
+    setupFiles: ['./src/test/react-act-setup.ts', './src/test/setup.ts'],
     css: true,
     coverage: {
       provider: 'v8',
