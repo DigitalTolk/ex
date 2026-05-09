@@ -107,7 +107,7 @@ export function ThreadPanel({
   const deleteDraftMutate = deleteDraft.mutate;
   const editMessage = useEditMessage();
   const editAttachmentIDs = activeEditingMessage?.attachmentIDs ?? [];
-  const { map: editAttachmentMap } = useAttachmentsBatch(editAttachmentIDs);
+  const { map: editAttachmentMap, isLoading: editAttachmentsLoading } = useAttachmentsBatch(editAttachmentIDs);
   const editDraftAttachments: DraftAttachment[] = activeEditingMessage
     ? editAttachmentIDs
         .map((id): DraftAttachment | null => {
@@ -126,7 +126,7 @@ export function ThreadPanel({
   const editReady =
     !activeEditingMessage ||
     editAttachmentIDs.length === 0 ||
-    editDraftAttachments.length === editAttachmentIDs.length;
+    !editAttachmentsLoading;
 
   // Most recent own reply for the ArrowUp-edit-last shortcut. Thread
   // data is oldest-first; walk from the end to find the newest reply

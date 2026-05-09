@@ -73,6 +73,7 @@ export function ImageLightbox({
     originX: number;
     originY: number;
   } | null>(null);
+  const lastTapRef = useRef<{ time: number; x: number; y: number } | null>(null);
   const zoom = zoomState.key === imageKey ? zoomState.value : 1;
   const pan = panState.key === imageKey && zoom > 1 ? panState : { key: imageKey, x: 0, y: 0 };
   useTransientOverlayCleanup(open, { rootRef: lightboxRef, lockScroll: true });
@@ -87,6 +88,31 @@ export function ImageLightbox({
     }
   }
 
+  function toggleMobileDoubleTapZoom() {
+    if (zoom > 1 || pan.x !== 0 || pan.y !== 0) {
+      setZoomState({ key: imageKey, value: 1 });
+      setPanState({ key: imageKey, x: 0, y: 0 });
+      return;
+    }
+    setZoomState({ key: imageKey, value: 2 });
+    setPanState({ key: imageKey, x: 0, y: 0 });
+  }
+
+  function handlePotentialMobileTap(e: ReactPointerEvent<HTMLDivElement>) {
+    if (!isMobile || !isImage || e.pointerType === 'mouse') return false;
+    const now = Date.now();
+    const previous = lastTapRef.current;
+    if (previous && now - previous.time <= 320 && Math.hypot(e.clientX - previous.x, e.clientY - previous.y) <= 28) {
+      lastTapRef.current = null;
+      e.preventDefault();
+      e.stopPropagation();
+      toggleMobileDoubleTapZoom();
+      return true;
+    }
+    lastTapRef.current = { time: now, x: e.clientX, y: e.clientY };
+    return false;
+  }
+
   const handleClose = useCallback(() => {
     setZoomState({ key: '', value: 1 });
     setPanState({ key: '', x: 0, y: 0 });
@@ -94,6 +120,7 @@ export function ImageLightbox({
     pinchGestureRef.current = null;
     panGestureRef.current = null;
     swipeGestureRef.current = null;
+    lastTapRef.current = null;
     setSwipeDrag({ x: 0, y: 0 });
     onClose();
   }, [onClose]);
@@ -250,6 +277,8 @@ export function ImageLightbox({
 
   function handleLightboxPointerUp(e: ReactPointerEvent<HTMLDivElement>) {
     const swipe = isMobile ? swipeGestureRef.current : null;
+    const panGesture = panGestureRef.current;
+    const pinchActive = !!pinchGestureRef.current || activePointersRef.current.size >= 2;
     activePointersRef.current.delete(e.pointerId);
     if (activePointersRef.current.size < 2) {
       pinchGestureRef.current = null;
@@ -273,10 +302,14 @@ export function ImageLightbox({
         onIndexChange(dx < 0 ? (safeIndex + 1) % total : (safeIndex - 1 + total) % total);
         return;
       }
+      if (absX < 8 && absY < 8 && !pinchActive && handlePotentialMobileTap(e)) return;
     }
-    if (panGestureRef.current?.pointerId === e.pointerId) {
+    if (panGesture?.pointerId === e.pointerId) {
       e.stopPropagation();
+      const dx = e.clientX - panGesture.startX;
+      const dy = e.clientY - panGesture.startY;
       panGestureRef.current = null;
+      if (!pinchActive && Math.abs(dx) < 8 && Math.abs(dy) < 8 && handlePotentialMobileTap(e)) return;
     }
     try {
       e.currentTarget.releasePointerCapture?.(e.pointerId);
@@ -302,6 +335,13 @@ export function ImageLightbox({
     } catch {
       // Pointer capture may not have been acquired.
     }
+  }
+
+  function handleImageStageDoubleClick(e: React.MouseEvent<HTMLDivElement>) {
+    if (!isMobile || !isImage) return;
+    e.preventDefault();
+    e.stopPropagation();
+    toggleMobileDoubleTapZoom();
   }
 
   return createPortal(
@@ -434,6 +474,7 @@ export function ImageLightbox({
           onPointerMove={handleLightboxPointerMove}
           onPointerUp={handleLightboxPointerUp}
           onPointerCancel={handleLightboxPointerCancel}
+          onDoubleClick={handleImageStageDoubleClick}
         >
           <img
             src={current.url}

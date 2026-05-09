@@ -69,7 +69,7 @@ describe('MessageItem — copy-link fallback', () => {
   beforeEach(() => {
     editMutate.mockReset();
     useAttachmentsBatchMock.mockReset();
-    useAttachmentsBatchMock.mockReturnValue({ map: new Map(), data: [] });
+    useAttachmentsBatchMock.mockReturnValue({ map: new Map(), data: [], isLoading: false });
   });
 
   it('falls back to execCommand("copy") when clipboard.writeText rejects', async () => {
@@ -150,11 +150,11 @@ describe('MessageItem — edit no-op branches', () => {
   beforeEach(() => {
     editMutate.mockReset();
     useAttachmentsBatchMock.mockReset();
-    useAttachmentsBatchMock.mockReturnValue({ map: new Map(), data: [] });
+    useAttachmentsBatchMock.mockReturnValue({ map: new Map(), data: [], isLoading: false });
   });
 
   it('renders Loading… while attachments are being hydrated for a desktop inline edit', () => {
-    useAttachmentsBatchMock.mockReturnValue({ map: new Map(), data: undefined });
+    useAttachmentsBatchMock.mockReturnValue({ map: new Map(), data: undefined, isLoading: true });
     renderItem({ body: 'with files', attachmentIDs: ['a-1', 'a-2'] });
     fireEvent.click(screen.getByText('Edit'));
     expect(screen.getByText('Loading…')).toBeInTheDocument();
@@ -166,6 +166,7 @@ describe('MessageItem — edit no-op branches', () => {
         ['a-1', { id: 'a-1', filename: 'one.txt', contentType: 'text/plain', size: 1 }],
       ]),
       data: [{ id: 'a-1', filename: 'one.txt', contentType: 'text/plain', size: 1 }],
+      isLoading: false,
     });
     renderItem({ body: 'with files', attachmentIDs: ['a-1'] });
     fireEvent.click(screen.getByText('Edit'));

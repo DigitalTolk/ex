@@ -4,6 +4,7 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { ApiError, apiFetch } from '@/lib/api';
+import { useIsMobile } from '@/hooks/useIsMobile';
 
 interface InviteDialogProps {
   open: boolean;
@@ -13,6 +14,7 @@ interface InviteDialogProps {
 type Status = 'idle' | 'sent' | 'already-member';
 
 export function InviteDialog({ open, onOpenChange }: InviteDialogProps) {
+  const isMobile = useIsMobile();
   const [email, setEmail] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [inviteLink, setInviteLink] = useState('');
@@ -55,7 +57,7 @@ export function InviteDialog({ open, onOpenChange }: InviteDialogProps) {
 
   return (
     <Dialog open={open} onOpenChange={handleClose}>
-      <DialogContent className="max-w-lg min-h-[300px]" finalFocus={false} mobileCloseLabel="Cancel">
+      <DialogContent className="max-w-lg min-h-[300px] max-md:overflow-hidden" finalFocus={false} mobileCloseLabel="Cancel">
         <DialogHeader>
           <DialogTitle>Invite someone</DialogTitle>
         </DialogHeader>
@@ -100,7 +102,7 @@ export function InviteDialog({ open, onOpenChange }: InviteDialogProps) {
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="colleague@example.com"
                 required
-                autoFocus
+                autoFocus={!isMobile}
               />
             </div>
             <Button type="submit" className="w-full" disabled={isSubmitting}>

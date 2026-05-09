@@ -29,7 +29,7 @@ export function EditProfileDialog({ open, onOpenChange }: EditProfileDialogProps
   if (!user) return null;
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-lg" finalFocus={false} mobileCloseLabel="Cancel">
+      <DialogContent className="max-w-lg max-md:grid-rows-[auto_1fr]" finalFocus={false} mobileCloseLabel="Cancel">
         <DialogHeader>
           <DialogTitle>Edit profile</DialogTitle>
         </DialogHeader>
@@ -139,7 +139,7 @@ function EditProfileBody({ onOpenChange }: { onOpenChange: (open: boolean) => vo
   const initials = getInitials(user.displayName || '??');
 
   return (
-    <div className="space-y-4">
+    <div className="flex min-h-0 flex-col gap-4 max-md:pb-16">
       {error && (
         <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive" role="alert">
           {error}
@@ -231,8 +231,8 @@ function EditProfileBody({ onOpenChange }: { onOpenChange: (open: boolean) => vo
         </div>
       </div>
 
-      <div className="flex justify-end pt-2">
-        <Button onClick={handleSave} disabled={isSaving || isUploading}>
+      <div className="flex justify-end pt-2 max-md:fixed max-md:inset-x-0 max-md:bottom-0 max-md:z-10 max-md:bg-popover max-md:px-2 max-md:pb-[calc(env(safe-area-inset-bottom)+0.5rem)] max-md:pt-3">
+        <Button onClick={handleSave} disabled={isSaving || isUploading} className="max-md:h-11 max-md:w-full">
           {isSaving ? 'Saving...' : 'Save'}
         </Button>
       </div>

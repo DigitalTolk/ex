@@ -58,10 +58,22 @@ describe('useAnimatedSwipeDismiss', () => {
     expect(onDismiss).not.toHaveBeenCalled();
   });
 
-  it('blocks page scroll once right sidebars listen for horizontal dismissal', () => {
+  it('does not globally block page scroll while right sidebars listen for horizontal dismissal', () => {
     renderHook(() => useAnimatedSwipeDismiss('right', vi.fn()));
 
-    expect(swipeConfig().preventScrollOnSwipe).toBe(true);
+    expect(swipeConfig().preventScrollOnSwipe).toBe(false);
+  });
+
+  it('blocks page scroll only after intentional horizontal right-sidebar dismissal begins', () => {
+    renderHook(() => useAnimatedSwipeDismiss('right', vi.fn()));
+
+    const vertical = eventFor();
+    act(() => swipeConfig().onSwiping({ absX: 4, absY: 88, deltaX: 4, deltaY: 88, initial: [12, 120], event: vertical }));
+    expect(vertical.preventDefault).not.toHaveBeenCalled();
+
+    const horizontal = eventFor();
+    act(() => swipeConfig().onSwiping({ absX: 60, absY: 8, deltaX: 60, deltaY: 8, initial: [12, 120], event: horizontal }));
+    expect(horizontal.preventDefault).toHaveBeenCalled();
   });
 
   it('allows picker content to scroll while bottom sheets listen for swipe-down dismissal', () => {

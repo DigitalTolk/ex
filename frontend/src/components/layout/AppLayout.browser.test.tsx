@@ -59,6 +59,7 @@ function dispatchTouch(element: Element, type: string, x: number, y: number) {
   Object.defineProperty(event, 'targetTouches', { value: touches });
   Object.defineProperty(event, 'changedTouches', { value: changedTouches });
   element.dispatchEvent(event);
+  return event;
 }
 
 describe('AppLayout browser behavior', () => {
@@ -128,6 +129,52 @@ describe('AppLayout browser behavior', () => {
 
     await vi.waitFor(() => {
       expect(document.activeElement).not.toBe(input);
+      expect(main!.dataset.channelDragging).toBe('true');
+    });
+  });
+
+  it('allows vertical scrolling gestures on the mobile main content', async () => {
+    if (window.innerWidth > 767) return;
+
+    await render(
+      <LayoutHarness>
+        <PageContainer title="Threads">
+          <div style={{ height: 1600 }}>Scrollable thread content</div>
+        </PageContainer>
+      </LayoutHarness>,
+    );
+
+    const main = document.querySelector('[data-app-main="true"]') as HTMLElement | null;
+    const scroller = document.querySelector('[data-page-scroll="true"]') as HTMLElement | null;
+    expect(main).not.toBeNull();
+    expect(scroller).not.toBeNull();
+
+    dispatchTouch(main!, 'touchstart', 120, 420);
+    const verticalMove = dispatchTouch(main!, 'touchmove', 122, 260);
+
+    expect(verticalMove.defaultPrevented).toBe(false);
+    expect(main!.dataset.channelDragging).toBe('false');
+  });
+
+  it('blocks page scrolling only after an intentional mobile edge swipe starts opening channels', async () => {
+    if (window.innerWidth > 767) return;
+
+    await render(
+      <LayoutHarness>
+        <PageContainer title="Threads">
+          <div style={{ height: 1600 }}>Scrollable thread content</div>
+        </PageContainer>
+      </LayoutHarness>,
+    );
+
+    const main = document.querySelector('[data-app-main="true"]') as HTMLElement | null;
+    expect(main).not.toBeNull();
+
+    dispatchTouch(main!, 'touchstart', 12, 420);
+    const horizontalMove = dispatchTouch(main!, 'touchmove', 96, 424);
+
+    await vi.waitFor(() => {
+      expect(horizontalMove.defaultPrevented).toBe(true);
       expect(main!.dataset.channelDragging).toBe('true');
     });
   });

@@ -32,4 +32,19 @@ describe('InviteDialog browser behavior', () => {
       expect(Math.abs(inputHeight - buttonHeight)).toBeLessThanOrEqual(1);
     }
   });
+
+  it('does not make the mobile page scroll when the invite email input is focused', async () => {
+    if (window.innerWidth > 767) return;
+    const screen = await render(<InviteDialog open={true} onOpenChange={vi.fn()} />);
+    const input = screen.getByLabelText('Email address').element() as HTMLInputElement;
+    const root = document.scrollingElement ?? document.documentElement;
+
+    root.scrollTop = 0;
+    await input.focus();
+
+    await vi.waitFor(() => {
+      expect(root.scrollTop).toBe(0);
+      expect(root.scrollHeight).toBeLessThanOrEqual(root.clientHeight + 1);
+    });
+  });
 });

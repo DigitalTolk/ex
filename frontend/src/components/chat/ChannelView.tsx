@@ -42,10 +42,12 @@ import {
   useDraftForScope,
   useSaveDraft,
 } from '@/hooks/useDrafts';
+import { useAttachmentsBatch } from '@/hooks/useAttachments';
 import { useTagState } from '@/context/TagSearchContext';
 import { TagSearchPanel } from '@/components/TagSearchPanel';
 import type { Message } from '@/types';
 import type { UserMapEntry } from './MessageList';
+import type { DraftAttachment } from './AttachmentChip';
 
 function errorStatus(err: unknown): number | null {
   return typeof err === 'object' && err !== null && 'status' in err
@@ -124,10 +126,31 @@ export function ChannelView() {
   const draftAttachments = useDraftAttachmentChips(draft?.attachmentIDs);
   const [editingMessage, setEditingMessage] = useState<Message | null>(null);
   const activeEditingMessage = isMobile ? editingMessage : null;
-  const editAttachmentIDs = editingMessage?.attachmentIDs ?? [];
-  const editDraftAttachments = useDraftAttachmentChips(editAttachmentIDs);
+  const editAttachmentIDs = useMemo(
+    () => activeEditingMessage?.attachmentIDs ?? [],
+    [activeEditingMessage],
+  );
+  const { map: editAttachmentMap, isLoading: editAttachmentsLoading } = useAttachmentsBatch(editAttachmentIDs);
+  const editDraftAttachments = useMemo<DraftAttachment[]>(
+    () =>
+      editAttachmentIDs
+        .map((id): DraftAttachment | null => {
+          const att = editAttachmentMap.get(id);
+          if (!att) return null;
+          return {
+            id: att.id,
+            filename: att.filename,
+            contentType: att.contentType,
+            size: att.size,
+            progress: 1,
+            ...(att.url ? { url: att.url } : {}),
+          };
+        })
+        .filter((att): att is DraftAttachment => att !== null),
+    [editAttachmentIDs, editAttachmentMap],
+  );
   const editReady =
-    !editingMessage || editAttachmentIDs.length === 0 || editDraftAttachments.length === editAttachmentIDs.length;
+    !editingMessage || editAttachmentIDs.length === 0 || !editAttachmentsLoading;
   const editMessage = useEditMessage();
   const draftID = draft?.id;
   const saveDraft = useSaveDraft();

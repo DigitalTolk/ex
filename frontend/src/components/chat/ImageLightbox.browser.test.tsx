@@ -43,6 +43,11 @@ function dispatchSwipeStartAndMove(element: Element, from: { x: number; y: numbe
   element.dispatchEvent(new PointerEvent('pointermove', { pointerId: 1, pointerType: 'touch', clientX: to.x, clientY: to.y, bubbles: true }));
 }
 
+function dispatchTap(element: Element, point: { x: number; y: number }, pointerId = 1) {
+  element.dispatchEvent(new PointerEvent('pointerdown', { pointerId, pointerType: 'touch', clientX: point.x, clientY: point.y, bubbles: true }));
+  element.dispatchEvent(new PointerEvent('pointerup', { pointerId, pointerType: 'touch', clientX: point.x, clientY: point.y, bubbles: true }));
+}
+
 describe('ImageLightbox browser behavior', () => {
   it('zooms against the full overlay stage instead of a small scroll box', async () => {
     const screen = await render(lightbox());
@@ -198,6 +203,35 @@ describe('ImageLightbox browser behavior', () => {
       expect(Number(image!.dataset.panX)).toBeGreaterThan(100);
     });
     expect(onIndexChange).not.toHaveBeenCalled();
+  });
+
+  it('toggles mobile image zoom and pan reset on double tap', async () => {
+    if (window.innerWidth > 767) return;
+
+    await render(lightbox());
+    const stage = document.querySelector('[data-testid="image-lightbox-zoom-stage"]') as HTMLElement | null;
+    const image = document.querySelector('[data-testid="image-lightbox-image"]') as HTMLImageElement | null;
+    expect(stage).not.toBeNull();
+    expect(image).not.toBeNull();
+
+    dispatchTap(stage!, { x: window.innerWidth / 2, y: window.innerHeight / 2 }, 1);
+    dispatchTap(stage!, { x: window.innerWidth / 2 + 4, y: window.innerHeight / 2 + 4 }, 2);
+    await vi.waitFor(() => {
+      expect(Number(image!.dataset.zoom)).toBeGreaterThan(1);
+    });
+
+    dispatchSwipe(stage!, { x: 120, y: 360 }, { x: 250, y: 330 });
+    await vi.waitFor(() => {
+      expect(Math.abs(Number(image!.dataset.panX))).toBeGreaterThan(50);
+    });
+
+    dispatchTap(stage!, { x: window.innerWidth / 2, y: window.innerHeight / 2 }, 3);
+    dispatchTap(stage!, { x: window.innerWidth / 2 + 4, y: window.innerHeight / 2 + 4 }, 4);
+    await vi.waitFor(() => {
+      expect(Number(image!.dataset.zoom)).toBe(1);
+      expect(Number(image!.dataset.panX)).toBe(0);
+      expect(Number(image!.dataset.panY)).toBe(0);
+    });
   });
 
   it('supports swipe navigation and close gestures on non-image attachments', async () => {

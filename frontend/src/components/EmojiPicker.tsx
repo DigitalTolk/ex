@@ -225,7 +225,7 @@ export function EmojiPicker({ onSelect, onClose, onOpenChange, trigger, triggerC
         preferredAlign="end"
         ariaLabel={ariaLabel}
         mobileSheet
-        className="flex h-[460px] w-[336px] max-w-[calc(100vw-16px)] flex-col rounded-md border bg-popover p-2 shadow-md max-md:h-[50dvh] max-md:w-screen max-md:max-w-none max-md:rounded-b-none max-md:rounded-t-xl"
+        className="flex h-[460px] w-[336px] max-w-[calc(100vw-16px)] flex-col rounded-md border bg-popover p-2 shadow-md max-md:h-[50dvh] max-md:w-screen max-md:max-w-none max-md:rounded-b-none max-md:rounded-t-xl max-md:border-x-0 max-md:border-b-0"
       >
         <Input
           ref={inputRef}
@@ -266,7 +266,7 @@ export function EmojiPicker({ onSelect, onClose, onOpenChange, trigger, triggerC
           </div>
         )}
         <div className="flex min-h-0 flex-1 flex-col">
-          <div className="mb-1 text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+          <div className="mb-1 text-center text-sm font-semibold uppercase tracking-wider text-muted-foreground">
             {query.trim()
               ? 'Results'
               : activeCategory === CUSTOM_CATEGORY_SLUG
@@ -325,8 +325,8 @@ export function EmojiPicker({ onSelect, onClose, onOpenChange, trigger, triggerC
             )}
           </div>
         </div>
-        <div className="mt-1.5 flex shrink-0 items-center gap-0.5 border-t pt-1.5" role="radiogroup" aria-label="Emoji skin tone">
-          <span className="mr-1 text-xs font-medium text-muted-foreground">Skin tone</span>
+        <div className="mt-1.5 flex shrink-0 items-center justify-center gap-0.5 border-t pt-1.5" role="radiogroup" aria-label="Emoji skin tone">
+          <span className="text-xs font-medium text-muted-foreground">Skin tone</span>
           {EMOJI_SKIN_TONES.map((tone) => (
             <button
               key={tone.value || 'default'}

@@ -39,7 +39,8 @@ export function useAnimatedSwipeDismiss(direction: 'right' | 'down', onDismiss: 
   const swipeHandlers = useSwipeable({
     delta: 4,
     trackMouse: false,
-    preventScrollOnSwipe: direction === 'right',
+    preventScrollOnSwipe: false,
+    touchEventOptions: { passive: false },
     onSwiping: ({ absX, absY, deltaX, deltaY, initial, event }) => {
       if (!isMobile) return;
       if (timeoutRef.current !== null) return;
@@ -48,6 +49,7 @@ export function useAnimatedSwipeDismiss(direction: 'right' | 'down', onDismiss: 
           setDragOffset(0);
           return;
         }
+        if (event.cancelable) event.preventDefault();
         setDragOffset(deltaX);
         return;
       }
