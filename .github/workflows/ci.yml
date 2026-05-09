@@ -23,7 +23,7 @@ jobs:
   # containers, building images, or publishing coverage if the code doesn't
   # even pass static checks.
   lint:
-    name: Lint (backend + frontend)
+    name: Lint
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -58,7 +58,7 @@ jobs:
         run: npx tsc -p tsconfig.json --noEmit
 
   test-backend:
-    name: Backend tests + coverage
+    name: Backend
     runs-on: ubuntu-latest
     needs: lint
     steps:
@@ -84,7 +84,37 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
   test-frontend:
-    name: Frontend tests + coverage
+    name: Frontend
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Frontend deps
+        working-directory: frontend
+        run: npm ci
+
+      - name: Run vitest with coverage
+        working-directory: frontend
+        run: npx vitest run --coverage
+
+      - name: Upload frontend coverage to Coveralls
+        uses: coverallsapp/github-action@v2
+        with:
+          file: frontend/coverage/lcov.info
+          flag-name: frontend
+          parallel: true
+          base-path: frontend
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+  test-browser:
+    name: Browser
     runs-on: ubuntu-latest
     container:
       image: ghcr.io/digitaltolk/docker-builder-playwright:1.59.1
@@ -96,27 +126,14 @@ jobs:
         working-directory: frontend
         run: npm ci
 
-      - name: Run vitest with coverage
-        working-directory: frontend
-        run: npx vitest run --coverage
-
       - name: Run browser tests
         working-directory: frontend
         run: npm run test:browser:coverage
 
-      - name: Upload frontend coverage to Coveralls
-        uses: coverallsapp/github-action@v2
-        with:
-          file: frontend/coverage/lcov.info
-          flag-name: frontend
-          parallel: true
-          base-path: frontend
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-
   coverage-finish:
     # Tells Coveralls that all parallel coverage uploads are done so it can
     # combine them into a single report.
-    name: Finalize Coveralls
+    name: Coverage
     runs-on: ubuntu-latest
     needs: [test-backend, test-frontend]
     if: always()
@@ -140,7 +157,7 @@ jobs:
   # publish jobs.
   docker-build:
     name: Build (${{ matrix.arch }})
-    needs: [test-backend, test-frontend]
+    needs: [test-backend, test-frontend, test-browser]
     strategy:
       fail-fast: false
       matrix:

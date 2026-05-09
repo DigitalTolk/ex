@@ -104,12 +104,17 @@ export function AppLayout({ children }: AppLayoutProps) {
     const resizeObserver = typeof ResizeObserver === 'undefined'
       ? null
       : new ResizeObserver(updateMobileSidebarTop);
+    const mutationObserver = typeof MutationObserver === 'undefined'
+      ? null
+      : new MutationObserver(() => requestAnimationFrame(updateMobileSidebarTop));
     if (appHeaderRef.current) resizeObserver?.observe(appHeaderRef.current);
     if (bannersRef.current) resizeObserver?.observe(bannersRef.current);
+    if (bannersRef.current) mutationObserver?.observe(bannersRef.current, { childList: true, subtree: true });
     window.addEventListener('resize', updateMobileSidebarTop);
     window.visualViewport?.addEventListener('resize', updateMobileSidebarTop);
     return () => {
       resizeObserver?.disconnect();
+      mutationObserver?.disconnect();
       window.removeEventListener('resize', updateMobileSidebarTop);
       window.visualViewport?.removeEventListener('resize', updateMobileSidebarTop);
     };
