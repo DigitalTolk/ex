@@ -387,6 +387,51 @@ func TestAttachmentService_ProcessUpload_GeneratesMissingThumbnailsForDedupedExi
 	}
 }
 
+func TestAttachmentService_GetForUser_GeneratesMissingLegacyThumbnailsBeforeResolvingURLs(t *testing.T) {
+	storeM := newMockAttachmentStore()
+	object := makePNG(32, 24)
+	legacy := &model.Attachment{
+		ID:          "att-legacy",
+		SHA256:      sha256Hex(object),
+		S3Key:       "attachments/att-legacy",
+		Filename:    "screenshot.png",
+		ContentType: "image/png",
+		Size:        int64(len(object)),
+		Width:       32,
+		Height:      24,
+		CreatedBy:   "u1",
+		MessageIDs:  []string{"msg-1"},
+	}
+	storeM.byID[legacy.ID] = legacy
+	storeM.byHash[legacy.SHA256] = legacy
+	signer := &fakeAttachmentSigner{
+		objects:         map[string][]byte{legacy.S3Key: object},
+		putContentTypes: map[string]string{},
+	}
+	svc := NewAttachmentService(storeM, signer, newMockPublisher())
+	svc.SetAccessChecker(fakeAttachmentAccessChecker{})
+
+	resolved, err := svc.GetForUser(context.Background(), "u2", legacy.ID, "ch1", ParentChannel, "msg-1")
+	if err != nil {
+		t.Fatalf("GetForUser: %v", err)
+	}
+	if resolved.ThumbnailS3Key == "" || resolved.SquareThumbnailS3Key == "" {
+		t.Fatalf("expected missing thumbnail keys to be generated: %#v", resolved)
+	}
+	if resolved.ThumbnailURL == "" || resolved.SquareThumbnailURL == "" {
+		t.Fatalf("expected generated thumbnail URLs, got thumbnail=%q square=%q", resolved.ThumbnailURL, resolved.SquareThumbnailURL)
+	}
+	if resolved.URL == "" || resolved.DownloadURL == "" {
+		t.Fatalf("expected original and download URLs to remain resolved: url=%q download=%q", resolved.URL, resolved.DownloadURL)
+	}
+	if got := signer.putContentTypes[resolved.ThumbnailS3Key]; got != "image/webp" {
+		t.Fatalf("message thumbnail content type = %q, want image/webp", got)
+	}
+	if got := signer.putContentTypes[resolved.SquareThumbnailS3Key]; got != "image/webp" {
+		t.Fatalf("square thumbnail content type = %q, want image/webp", got)
+	}
+}
+
 func TestAttachmentService_ProcessUpload_ErrorsAndNonImage(t *testing.T) {
 	ctx := context.Background()
 	object := []byte("hello")
@@ -466,6 +511,9 @@ func TestAttachmentService_GenerateThumbnails_ErrorBranches(t *testing.T) {
 	if err := svc.generateThumbnails(ctx, a, object, cfg, true); err == nil {
 		t.Fatal("expected PutObject error")
 	}
+	if a.ThumbnailS3Key != "" || a.SquareThumbnailS3Key != "" {
+		t.Fatalf("thumbnail keys should not be persisted after failed object write: %#v", a)
+	}
 	if err := svc.generateThumbnails(ctx, a, []byte("not image"), cfg, true); err == nil {
 		t.Fatal("expected decode error")
 	}
@@ -504,6 +552,9 @@ func TestAttachmentService_ProcessUpload_PersistErrorBranches(t *testing.T) {
 		svc := NewAttachmentService(storeM, &fakeAttachmentSigner{objects: map[string][]byte{a.S3Key: object}}, nil)
 		if _, err := svc.ProcessUpload(ctx, "u1", a.ID); err == nil {
 			t.Fatal("expected SetThumbnailKeys error")
+		}
+		if a.ThumbnailS3Key != "" || a.SquareThumbnailS3Key != "" {
+			t.Fatalf("thumbnail keys should not be returned before persistence succeeds: %#v", a)
 		}
 	})
 }
@@ -1102,13 +1153,15 @@ func TestAttachmentService_Get_UsesStableMediaURLWhenCacheConfigured(t *testing.
 	svc := NewAttachmentService(storeM, signer, newMockPublisher())
 	svc.SetMediaURLCache(newFakeMediaCache())
 	a := &model.Attachment{
-		ID:          "a-media",
-		SHA256:      "sha-media",
-		S3Key:       "attachments/a-media",
-		Filename:    "cat pic.png",
-		ContentType: "image/png",
-		Size:        42,
-		CreatedBy:   "u1",
+		ID:                   "a-media",
+		SHA256:               "sha-media",
+		S3Key:                "attachments/a-media",
+		Filename:             "cat pic.png",
+		ContentType:          "image/png",
+		Size:                 42,
+		CreatedBy:            "u1",
+		ThumbnailS3Key:       "attachments/a-media/thumb-message@2x.webp",
+		SquareThumbnailS3Key: "attachments/a-media/thumb-square@2x.webp",
 	}
 	if err := storeM.Create(context.Background(), a); err != nil {
 		t.Fatalf("Create: %v", err)
@@ -1127,6 +1180,18 @@ func TestAttachmentService_Get_UsesStableMediaURLWhenCacheConfigured(t *testing.
 	}
 	if !strings.HasPrefix(got1.URL, "/api/v1/media/") {
 		t.Fatalf("URL = %q, want app media URL", got1.URL)
+	}
+	if got1.ThumbnailURL == "" || got1.ThumbnailURL != got2.ThumbnailURL {
+		t.Fatalf("stable thumbnail URL mismatch: first=%q second=%q", got1.ThumbnailURL, got2.ThumbnailURL)
+	}
+	if got1.SquareThumbnailURL == "" || got1.SquareThumbnailURL != got2.SquareThumbnailURL {
+		t.Fatalf("stable square thumbnail URL mismatch: first=%q second=%q", got1.SquareThumbnailURL, got2.SquareThumbnailURL)
+	}
+	if !strings.HasPrefix(got1.ThumbnailURL, "/api/v1/media/") {
+		t.Fatalf("ThumbnailURL = %q, want app media URL", got1.ThumbnailURL)
+	}
+	if !strings.HasPrefix(got1.SquareThumbnailURL, "/api/v1/media/") {
+		t.Fatalf("SquareThumbnailURL = %q, want app media URL", got1.SquareThumbnailURL)
 	}
 	if got1.DownloadURL == "" || !strings.HasPrefix(got1.DownloadURL, "https://signed.test/") {
 		t.Fatalf("DownloadURL = %q, want direct signed S3 URL", got1.DownloadURL)

@@ -216,12 +216,9 @@ func attachmentNeedsThumbnails(contentType string) bool {
 }
 
 func (s *AttachmentService) ensureThumbnailKeys(ctx context.Context, a *model.Attachment) error {
-	if a.ThumbnailS3Key == "" {
-		a.ThumbnailS3Key = "attachments/" + a.ID + "/thumb-message@2x.webp"
-	}
-	if a.SquareThumbnailS3Key == "" {
-		a.SquareThumbnailS3Key = "attachments/" + a.ID + "/thumb-square@2x.webp"
-	}
+	thumbnailKey, squareThumbnailKey := thumbnailObjectKeys(a)
+	a.ThumbnailS3Key = thumbnailKey
+	a.SquareThumbnailS3Key = squareThumbnailKey
 	if err := s.attachments.SetThumbnailKeys(ctx, a.ID, a.ThumbnailS3Key, a.SquareThumbnailS3Key); err != nil {
 		return fmt.Errorf("attachment: set thumbnail keys: %w", err)
 	}
@@ -245,6 +242,7 @@ func (s *AttachmentService) Get(ctx context.Context, id string) (*model.Attachme
 	if err != nil {
 		return nil, fmt.Errorf("attachment: get: %w", err)
 	}
+	s.ensureThumbnailsForRead(ctx, a)
 	if s.signer != nil && a.S3Key != "" {
 		s.resolveAttachmentURLs(ctx, a)
 	}
@@ -262,6 +260,7 @@ func (s *AttachmentService) GetForUser(ctx context.Context, userID, id, parentID
 	if !s.canAccessAttachment(ctx, userID, a, parentID, parentType, messageID) {
 		return nil, store.ErrNotFound
 	}
+	s.ensureThumbnailsForRead(ctx, a)
 	if s.signer != nil && a.S3Key != "" {
 		s.resolveAttachmentURLs(ctx, a)
 	}
@@ -305,25 +304,77 @@ func (s *AttachmentService) resolveAttachmentURLs(ctx context.Context, a *model.
 		a.DownloadURL = dl
 	}
 	if a.ThumbnailS3Key != "" {
-		if url, err := s.urlCache.getOrSign(ctx, presignedKey{op: "thumb", key: a.ThumbnailS3Key},
-			func(ctx context.Context) (string, error) {
-				return s.signer.PresignedGetURL(ctx, a.ThumbnailS3Key, AttachmentURLTTL)
-			}); err == nil {
-			a.ThumbnailURL = url
+		if s.mediaCache != nil {
+			if mediaURL, err := s.mediaURLForObject(ctx, "attachment-thumb", a.ID, a.ThumbnailS3Key, thumbnailFilename(a.Filename), "image/webp", 0); err == nil {
+				a.ThumbnailURL = mediaURL
+			}
+		}
+		if a.ThumbnailURL == "" {
+			if url, err := s.urlCache.getOrSign(ctx, presignedKey{op: "thumb", key: a.ThumbnailS3Key},
+				func(ctx context.Context) (string, error) {
+					return s.signer.PresignedGetURL(ctx, a.ThumbnailS3Key, AttachmentURLTTL)
+				}); err == nil {
+				a.ThumbnailURL = url
+			}
 		}
 	}
 	if a.SquareThumbnailS3Key != "" {
-		if url, err := s.urlCache.getOrSign(ctx, presignedKey{op: "square-thumb", key: a.SquareThumbnailS3Key},
-			func(ctx context.Context) (string, error) {
-				return s.signer.PresignedGetURL(ctx, a.SquareThumbnailS3Key, AttachmentURLTTL)
-			}); err == nil {
-			a.SquareThumbnailURL = url
+		if s.mediaCache != nil {
+			if mediaURL, err := s.mediaURLForObject(ctx, "attachment-square-thumb", a.ID, a.SquareThumbnailS3Key, squareThumbnailFilename(a.Filename), "image/webp", 0); err == nil {
+				a.SquareThumbnailURL = mediaURL
+			}
+		}
+		if a.SquareThumbnailURL == "" {
+			if url, err := s.urlCache.getOrSign(ctx, presignedKey{op: "square-thumb", key: a.SquareThumbnailS3Key},
+				func(ctx context.Context) (string, error) {
+					return s.signer.PresignedGetURL(ctx, a.SquareThumbnailS3Key, AttachmentURLTTL)
+				}); err == nil {
+				a.SquareThumbnailURL = url
+			}
 		}
 	}
 }
 
 func (s *AttachmentService) mediaURL(ctx context.Context, a *model.Attachment) (string, error) {
-	return StableMediaURL(ctx, s.mediaCache, "attachment", a.ID, a.S3Key, a.Filename, a.ContentType, a.Size)
+	return s.mediaURLForObject(ctx, "attachment", a.ID, a.S3Key, a.Filename, a.ContentType, a.Size)
+}
+
+func (s *AttachmentService) mediaURLForObject(ctx context.Context, namespace, id, s3Key, filename, contentType string, size int64) (string, error) {
+	return StableMediaURL(ctx, s.mediaCache, namespace, id, s3Key, filename, contentType, size)
+}
+
+func thumbnailFilename(filename string) string {
+	if filename == "" {
+		return "thumbnail.webp"
+	}
+	return filename + ".thumb.webp"
+}
+
+func squareThumbnailFilename(filename string) string {
+	if filename == "" {
+		return "thumbnail-square.webp"
+	}
+	return filename + ".square.webp"
+}
+
+func (s *AttachmentService) ensureThumbnailsForRead(ctx context.Context, a *model.Attachment) {
+	if s.signer == nil || a == nil || a.S3Key == "" || a.Size <= 0 || a.SHA256 == "" {
+		return
+	}
+	if !attachmentNeedsThumbnails(a.ContentType) || (a.ThumbnailS3Key != "" && a.SquareThumbnailS3Key != "") {
+		return
+	}
+	data, cfg, err := s.validateUploadedObject(ctx, a)
+	if err != nil {
+		return
+	}
+	if cfg.Width > 0 && cfg.Height > 0 && (a.Width != cfg.Width || a.Height != cfg.Height) {
+		if err := s.attachments.SetDimensions(ctx, a.ID, cfg.Width, cfg.Height); err == nil {
+			a.Width = cfg.Width
+			a.Height = cfg.Height
+		}
+	}
+	_ = s.generateThumbnails(ctx, a, data, cfg, false)
 }
 
 func (s *AttachmentService) OpenMedia(ctx context.Context, token string) (*MediaObject, error) {
@@ -599,9 +650,7 @@ func (s *AttachmentService) generateThumbnails(ctx context.Context, a *model.Att
 	if !force && a.ThumbnailS3Key != "" && a.SquareThumbnailS3Key != "" {
 		return nil
 	}
-	if err := s.ensureThumbnailKeys(ctx, a); err != nil {
-		return err
-	}
+	thumbnailKey, squareThumbnailKey := thumbnailObjectKeys(a)
 	img, _, err := image.Decode(bytes.NewReader(data))
 	if err != nil {
 		return fmt.Errorf("attachment: decode image for thumbnails: %w", err)
@@ -610,19 +659,36 @@ func (s *AttachmentService) generateThumbnails(ctx context.Context, a *model.Att
 	if err != nil {
 		return fmt.Errorf("attachment: encode message thumbnail: %w", err)
 	}
-	if err := s.signer.PutObject(ctx, a.ThumbnailS3Key, "image/webp", messageThumb); err != nil {
+	if err := s.signer.PutObject(ctx, thumbnailKey, "image/webp", messageThumb); err != nil {
 		return fmt.Errorf("attachment: store message thumbnail: %w", err)
 	}
 	squareThumb, err := encodeWebPThumbnail(img, thumbnailModeSquare)
 	if err != nil {
 		return fmt.Errorf("attachment: encode square thumbnail: %w", err)
 	}
-	if err := s.signer.PutObject(ctx, a.SquareThumbnailS3Key, "image/webp", squareThumb); err != nil {
+	if err := s.signer.PutObject(ctx, squareThumbnailKey, "image/webp", squareThumb); err != nil {
 		return fmt.Errorf("attachment: store square thumbnail: %w", err)
 	}
+	if err := s.attachments.SetThumbnailKeys(ctx, a.ID, thumbnailKey, squareThumbnailKey); err != nil {
+		return fmt.Errorf("attachment: set thumbnail keys: %w", err)
+	}
+	a.ThumbnailS3Key = thumbnailKey
+	a.SquareThumbnailS3Key = squareThumbnailKey
 	s.urlCache.invalidate(a.ThumbnailS3Key)
 	s.urlCache.invalidate(a.SquareThumbnailS3Key)
 	return nil
+}
+
+func thumbnailObjectKeys(a *model.Attachment) (string, string) {
+	thumbnailKey := a.ThumbnailS3Key
+	if thumbnailKey == "" {
+		thumbnailKey = "attachments/" + a.ID + "/thumb-message@2x.webp"
+	}
+	squareThumbnailKey := a.SquareThumbnailS3Key
+	if squareThumbnailKey == "" {
+		squareThumbnailKey = "attachments/" + a.ID + "/thumb-square@2x.webp"
+	}
+	return thumbnailKey, squareThumbnailKey
 }
 
 type thumbnailMode int
