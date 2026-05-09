@@ -670,7 +670,9 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
       className={
         variant === 'inline'
           ? 'p-0'
-          : 'border-t p-3 max-md:px-2 max-md:pb-[max(0.25rem,env(safe-area-inset-bottom))] max-md:pt-2'
+          : `border-t bg-background p-3 max-md:pt-1.5 max-md:pb-[max(0.375rem,env(safe-area-inset-bottom))] ${
+              compactMobileComposer && !editorFocused ? 'max-md:px-4' : 'max-md:px-2'
+            }`
       }
       data-composer-focused={editorFocused ? 'true' : 'false'}
     >
@@ -708,7 +710,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
           </div>
         )}
 
-        <div className={`flex gap-2 px-3 py-2 ${compactMobileComposer ? 'items-center' : 'items-end'}`}>
+        <div className={`flex gap-2 px-3 py-2 ${compactMobileComposer ? 'items-center max-md:py-1' : 'items-end'}`}>
           <WysiwygEditor
             ref={editorRef}
             initialBody={initialBody}

@@ -222,7 +222,8 @@ describe('MessageInput', () => {
 
     const editor = await screen.findByLabelText('Message input');
     const composerShell = editor.closest('[data-composer-focused]')!;
-    expect(composerShell).toHaveClass('max-md:pb-[max(0.25rem,env(safe-area-inset-bottom))]');
+    expect(composerShell).toHaveClass('max-md:pb-[max(0.375rem,env(safe-area-inset-bottom))]');
+    expect(composerShell).toHaveClass('max-md:px-4');
     expect(composerShell).not.toHaveClass('max-md:pb-[calc(0.75rem+env(safe-area-inset-bottom))]');
 
     act(() => {
@@ -230,7 +231,8 @@ describe('MessageInput', () => {
     });
 
     await waitFor(() => expect(composerShell).toHaveAttribute('data-composer-focused', 'true'));
-    expect(composerShell).toHaveClass('max-md:pb-[max(0.25rem,env(safe-area-inset-bottom))]');
+    expect(composerShell).toHaveClass('max-md:pb-[max(0.375rem,env(safe-area-inset-bottom))]');
+    expect(composerShell).toHaveClass('max-md:px-2');
     expect(composerShell).not.toHaveClass('max-md:pb-2');
     setMobileMatch(false);
   });

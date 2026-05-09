@@ -60,7 +60,8 @@ export function AppLayout({ children }: AppLayoutProps) {
   const openChannelsSwipe = useSwipeable({
     delta: 4,
     trackMouse: false,
-    preventScrollOnSwipe: true,
+    preventScrollOnSwipe: false,
+    touchEventOptions: { passive: false },
     onSwiping: ({ absY, deltaX, event, initial }) => {
       if (
         !isMobile ||
@@ -76,6 +77,7 @@ export function AppLayout({ children }: AppLayoutProps) {
         return;
       }
       blurActiveInput();
+      if (event.cancelable) event.preventDefault();
       setChannelDragOffset(deltaX);
     },
     onSwipedRight: ({ absY, deltaX, event, initial }) => {

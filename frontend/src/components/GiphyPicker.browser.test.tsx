@@ -42,6 +42,7 @@ describe('GiphyPicker browser behavior', () => {
     const portal = screen.getByTestId('popover-portal');
     await expect.element(portal).toBeVisible();
     expect(portal.element()).toHaveAttribute('data-mobile-sheet', 'true');
+    expect(Number.parseFloat(getComputedStyle(portal.element()).borderBottomWidth)).toBe(0);
 
     const scroller = screen.getByTestId('giphy-grid').element();
     expect(scroller).toHaveAttribute('data-swipe-scroll', 'true');

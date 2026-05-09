@@ -81,7 +81,7 @@ describe('UserStatusDialog', () => {
     render(<UserStatusDialog open onOpenChange={vi.fn()} />);
 
     expect(screen.getByLabelText(/Predefined status/i)).toHaveValue('__custom__');
-    expect(screen.getByTestId('user-status-dialog-body')).toHaveClass('min-h-[340px]');
+    expect(screen.getByTestId('user-status-dialog-body')).toHaveClass('md:min-h-[340px]');
   });
 
   it('uses end of today for sick and work-from-home presets', async () => {
@@ -220,7 +220,7 @@ describe('UserStatusDialog', () => {
 
     expect(screen.getByLabelText(/Predefined status/i)).toHaveValue('__custom__');
     expect(screen.getByLabelText(/Status text/i)).toHaveValue('');
-    expect(screen.queryByLabelText(/Custom clear time/i)).not.toBeInTheDocument();
+    expect(screen.getByLabelText(/Custom clear time/i)).toHaveClass('invisible');
   });
 
   it('keeps custom preset selected when existing status is not a predefined status', () => {

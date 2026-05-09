@@ -264,7 +264,7 @@ export function MessageItem({
   }
 
   const editAttachmentIDs = isEditing ? (message.attachmentIDs ?? []) : [];
-  const { map: editAttachmentMap } = useAttachmentsBatch(editAttachmentIDs);
+  const { map: editAttachmentMap, isLoading: editAttachmentsLoading } = useAttachmentsBatch(editAttachmentIDs);
   const initialEditDrafts: DraftAttachment[] = isEditing
     ? editAttachmentIDs
         .map((id): DraftAttachment | null => {
@@ -281,7 +281,7 @@ export function MessageItem({
         .filter((draft): draft is DraftAttachment => draft !== null)
     : [];
   const editorReady =
-    !isEditing || editAttachmentIDs.length === 0 || initialEditDrafts.length === editAttachmentIDs.length;
+    !isEditing || editAttachmentIDs.length === 0 || !editAttachmentsLoading;
 
   function endEdit() {
     setIsEditing(false);

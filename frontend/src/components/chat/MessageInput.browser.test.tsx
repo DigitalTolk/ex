@@ -69,11 +69,22 @@ describe('MessageInput browser behavior', () => {
     const styles = getComputedStyle(composer!);
     const radius = Number.parseFloat(styles.borderTopLeftRadius);
     const composerRect = composer!.getBoundingClientRect();
+    const root = composer!.parentElement as HTMLElement;
 
     if (window.innerWidth <= 767) {
       expect(radius).toBeGreaterThanOrEqual(24);
       expect(composerRect.bottom).toBeGreaterThanOrEqual(window.innerHeight - 8);
+      expect(composerRect.left).toBeGreaterThanOrEqual(15);
+      expect(window.innerWidth - composerRect.right).toBeGreaterThanOrEqual(15);
+      expect(root).not.toBeNull();
+      expect(getComputedStyle(root).backgroundColor).not.toBe('rgba(0, 0, 0, 0)');
       await screen.getByLabelText('Message input').click();
+      await vi.waitFor(() => {
+        const focusedRect = composer!.getBoundingClientRect();
+        expect(focusedRect.left).toBeLessThanOrEqual(10);
+        expect(window.innerWidth - focusedRect.right).toBeLessThanOrEqual(10);
+        expect(focusedRect.bottom).toBeGreaterThanOrEqual(window.innerHeight - 8);
+      });
       const toolbar = screen.getByRole('toolbar', { name: 'Formatting' });
       await expect.element(toolbar).toBeVisible();
       const send = screen.getByLabelText('Send message').element();
@@ -304,7 +315,15 @@ describe('MessageInput browser behavior', () => {
     const portal = screen.getByTestId('popover-portal');
     await expect.element(portal).toBeVisible();
     expect(portal.element()).toHaveAttribute('data-mobile-sheet', 'true');
+    expect(Number.parseFloat(getComputedStyle(portal.element()).borderBottomWidth)).toBe(0);
     expect(document.activeElement === editor || editor.contains(document.activeElement)).toBe(false);
+
+    const categoryTitle = portal.element().querySelector('.uppercase') as HTMLElement | null;
+    expect(categoryTitle).not.toBeNull();
+    expect(getComputedStyle(categoryTitle!).textAlign).toBe('center');
+    const skinTone = portal.element().querySelector('[aria-label="Emoji skin tone"]') as HTMLElement | null;
+    expect(skinTone).not.toBeNull();
+    expect(getComputedStyle(skinTone!).justifyContent).toBe('center');
 
     const scroller = portal.element().querySelector('[data-swipe-scroll="true"]') as HTMLElement | null;
     expect(scroller).not.toBeNull();

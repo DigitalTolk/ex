@@ -4,7 +4,10 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { BrowserRouter } from 'react-router-dom';
 import { MessageItem } from './MessageItem';
 import { expectPaintedAtCenter } from '@/test/browser-assertions';
+import { dispatchEditMessage } from '@/lib/window-events';
 import type { Message } from '@/types';
+
+const useAttachmentsBatchMock = vi.hoisted(() => vi.fn(() => ({ map: new Map(), isLoading: false })));
 
 vi.mock('@/hooks/useMessages', () => ({
   useEditMessage: () => ({ mutate: vi.fn(), isPending: false }),
@@ -23,7 +26,7 @@ vi.mock('@/hooks/useAttachments', () => ({
   uploadAttachment: vi.fn(),
   useDeleteDraftAttachment: () => ({ mutateAsync: vi.fn(), mutate: vi.fn(), isPending: false }),
   useAttachment: () => ({ data: undefined, isLoading: false }),
-  useAttachmentsBatch: () => ({ map: new Map(), isLoading: false }),
+  useAttachmentsBatch: (...args: unknown[]) => useAttachmentsBatchMock(...args),
 }));
 
 function renderWithProviders(ui: React.ReactElement) {
@@ -47,6 +50,27 @@ function makeMessage(overrides: Partial<Message> = {}): Message {
 }
 
 describe('MessageItem browser behavior', () => {
+  it('opens the desktop inline message editor after an empty settled attachment lookup', async () => {
+    if (window.innerWidth <= 767) return;
+    useAttachmentsBatchMock.mockReturnValue({ map: new Map(), isLoading: false });
+    const screen = await renderWithProviders(
+      <MessageItem
+        message={makeMessage({ attachmentIDs: ['missing-attachment'] })}
+        authorName="Alice"
+        isOwn={true}
+        channelId="channel-1"
+        currentUserId="user-1"
+      />,
+    );
+
+    dispatchEditMessage({ messageId: 'msg-1' });
+
+    const editor = screen.getByTestId('inline-edit');
+    await expect.element(editor).toBeVisible();
+    await expect.element(screen.getByLabelText('Message input')).toBeVisible();
+    expect(document.body.textContent).not.toContain('Loading');
+  });
+
   it('keeps the mobile long-press action sheet above the bottom composer', async () => {
     if (window.innerWidth > 767) return;
 
@@ -90,5 +114,35 @@ describe('MessageItem browser behavior', () => {
     const sheet = document.querySelector('[data-testid="mobile-message-actions"]') as HTMLElement;
     expect(sheet.parentElement?.parentElement).toBe(document.body);
     expectPaintedAtCenter(sheet, '[data-testid="mobile-message-actions"]');
+  });
+
+  it('routes mobile edit immediately even when an attachment lookup has settled empty', async () => {
+    if (window.innerWidth > 767) return;
+    useAttachmentsBatchMock.mockReturnValue({ map: new Map(), isLoading: false });
+    const onEditMessage = vi.fn();
+    const screen = await renderWithProviders(
+      <MessageItem
+        message={makeMessage({ attachmentIDs: ['missing-attachment'] })}
+        authorName="Alice"
+        isOwn={true}
+        channelId="channel-1"
+        currentUserId="user-1"
+        onEditMessage={onEditMessage}
+      />,
+    );
+
+    const row = screen.getByTestId('message-actions-trigger').element().closest('[data-message-id]');
+    expect(row).not.toBeNull();
+    row!.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerType: 'touch' }));
+
+    await vi.waitFor(() => {
+      expect(document.querySelector('[data-testid="mobile-message-actions"]')).not.toBeNull();
+    }, { timeout: 1000 });
+    await screen.getByText('Edit').click();
+
+    await vi.waitFor(() => {
+      expect(onEditMessage).toHaveBeenCalledWith(expect.objectContaining({ id: 'msg-1' }));
+      expect(document.body.textContent).not.toContain('Loading');
+    });
   });
 });
