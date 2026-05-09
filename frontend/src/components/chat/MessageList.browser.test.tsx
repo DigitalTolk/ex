@@ -102,7 +102,7 @@ describe('MessageList browser behavior', () => {
     }));
 
     await render(
-      <div style={{ height: 420, display: 'flex', minHeight: 0 }}>
+      <div style={{ height: 420, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
         <MessageList
           pages={[{ items: [...messages].reverse() }]}
           hasNextPage={false}
@@ -151,6 +151,72 @@ describe('MessageList browser behavior', () => {
     const thumb = laidOutElement('[data-testid="message-image-thumb"]');
     expect(thumb).not.toBeNull();
   });
+
+  it('does not yank a mobile reader back to bottom when media height changes after scrolling up', async () => {
+    browserMedia.attachmentsReady = false;
+    browserMedia.attachmentListeners.clear();
+
+    const messages = Array.from({ length: 80 }, (_, index) => msg(index));
+    messages.push(msg(199, {
+      body: `Bottom media message\n\n![inline](${browserMedia.imageURL} =320x249)\n\nhttps://example.com/story`,
+      attachmentIDs: ['att-1'],
+    }));
+
+    await render(
+      <div style={{ height: 420, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+        <MessageList
+          pages={[{ items: [...messages].reverse() }]}
+          hasNextPage={false}
+          isFetchingNextPage={false}
+          isLoading={false}
+          fetchNextPage={vi.fn()}
+          hasPreviousPage={false}
+          isFetchingPreviousPage={false}
+          fetchPreviousPage={vi.fn()}
+          currentUserId="u-1"
+          channelId="ch-1"
+          channelSlug="general"
+          userMap={{
+            'u-1': { displayName: 'Alice' },
+            'u-2': { displayName: 'Bob' },
+          }}
+        />
+      </div>,
+    );
+
+    const scroller = document.querySelector('[data-testid="virtuoso-scroller"]') as HTMLElement | null;
+    expect(scroller).not.toBeNull();
+    await settleAtBottom(scroller!);
+    await animationFrames(8);
+    await new Promise((resolve) => setTimeout(resolve, 1300));
+
+    await browserAct(async () => {
+      scroller!.scrollTop = Math.max(0, scroller!.scrollHeight - scroller!.clientHeight - 220);
+      scroller!.dispatchEvent(new Event('scroll', { bubbles: true }));
+      await animationFrames(1);
+    });
+
+    await vi.waitFor(() => {
+      expect(distanceFromBottom(scroller!)).toBeGreaterThan(40);
+    }, { timeout: 3000 });
+    const distanceBeforeMedia = distanceFromBottom(scroller!);
+
+    await browserAct(async () => {
+      browserMedia.attachmentsReady = true;
+      browserMedia.attachmentListeners.forEach((listener) => listener());
+      await animationFrames(6);
+    });
+
+    await vi.waitFor(() => {
+      const thumb = laidOutElement('[data-testid="message-image-thumb"]');
+      expect(thumb).not.toBeNull();
+    }, { timeout: 3000 });
+
+    await animationFrames(4);
+    const distanceAfterMedia = distanceFromBottom(scroller!);
+    expect(distanceAfterMedia).toBeGreaterThan(40);
+    expect(distanceAfterMedia).toBeGreaterThanOrEqual(distanceBeforeMedia - 8);
+  });
 });
 
 async function browserAct(callback: () => void | Promise<void>) {
@@ -187,4 +253,8 @@ function laidOutElement(selector: string): HTMLElement | null {
     const rect = element.getBoundingClientRect();
     return rect.width > 0 && rect.height > 0;
   }) ?? null;
+}
+
+function distanceFromBottom(scroller: HTMLElement) {
+  return scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
 }

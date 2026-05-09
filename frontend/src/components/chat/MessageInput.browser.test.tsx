@@ -74,16 +74,21 @@ describe('MessageInput browser behavior', () => {
     if (window.innerWidth <= 767) {
       expect(radius).toBeGreaterThanOrEqual(24);
       expect(composerRect.bottom).toBeGreaterThanOrEqual(window.innerHeight - 8);
+      expect(composerRect.height).toBeLessThanOrEqual(42);
       expect(composerRect.left).toBeGreaterThanOrEqual(15);
       expect(window.innerWidth - composerRect.right).toBeGreaterThanOrEqual(15);
       expect(root).not.toBeNull();
-      expect(getComputedStyle(root).backgroundColor).not.toBe('rgba(0, 0, 0, 0)');
+      const rootBackground = getComputedStyle(root).backgroundColor;
+      expect(rootBackground).not.toBe('rgba(0, 0, 0, 0)');
+      expect(getComputedStyle(document.documentElement).backgroundColor).toBe(rootBackground);
+      expect(getComputedStyle(document.body).backgroundColor).toBe(rootBackground);
       await screen.getByLabelText('Message input').click();
       await vi.waitFor(() => {
         const focusedRect = composer!.getBoundingClientRect();
         expect(focusedRect.left).toBeLessThanOrEqual(10);
         expect(window.innerWidth - focusedRect.right).toBeLessThanOrEqual(10);
         expect(focusedRect.bottom).toBeGreaterThanOrEqual(window.innerHeight - 8);
+        expect(focusedRect.height).toBeGreaterThan(composerRect.height + 8);
       });
       const toolbar = screen.getByRole('toolbar', { name: 'Formatting' });
       await expect.element(toolbar).toBeVisible();

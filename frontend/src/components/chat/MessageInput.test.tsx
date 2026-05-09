@@ -121,7 +121,7 @@ describe('MessageInput', () => {
 
     expect(onSend).toHaveBeenCalled();
     expect(document.activeElement).not.toBe(editor);
-    expect(editor).toHaveClass('max-md:min-h-[1.5rem]', 'max-md:max-h-[1.5rem]');
+    expect(editor).toHaveClass('max-md:!min-h-5', 'max-md:!max-h-5');
     setMobileMatch(false);
   });
 
@@ -222,7 +222,7 @@ describe('MessageInput', () => {
 
     const editor = await screen.findByLabelText('Message input');
     const composerShell = editor.closest('[data-composer-focused]')!;
-    expect(composerShell).toHaveClass('max-md:pb-[max(0.375rem,env(safe-area-inset-bottom))]');
+    expect(composerShell).toHaveClass('max-md:pb-[max(0.25rem,env(safe-area-inset-bottom))]');
     expect(composerShell).toHaveClass('max-md:px-4');
     expect(composerShell).not.toHaveClass('max-md:pb-[calc(0.75rem+env(safe-area-inset-bottom))]');
 
@@ -231,7 +231,7 @@ describe('MessageInput', () => {
     });
 
     await waitFor(() => expect(composerShell).toHaveAttribute('data-composer-focused', 'true'));
-    expect(composerShell).toHaveClass('max-md:pb-[max(0.375rem,env(safe-area-inset-bottom))]');
+    expect(composerShell).toHaveClass('max-md:pb-[max(0.25rem,env(safe-area-inset-bottom))]');
     expect(composerShell).toHaveClass('max-md:px-2');
     expect(composerShell).not.toHaveClass('max-md:pb-2');
     setMobileMatch(false);
@@ -271,7 +271,7 @@ describe('MessageInput', () => {
 
     expect(onSend).toHaveBeenCalledWith({ body: 'Edited text', attachmentIDs: [] });
     expect(document.activeElement).not.toBe(editor);
-    expect(editor).toHaveClass('max-md:min-h-[1.5rem]', 'max-md:max-h-[1.5rem]');
+    expect(editor).toHaveClass('max-md:!min-h-5', 'max-md:!max-h-5');
     setMobileMatch(false);
   });
 

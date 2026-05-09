@@ -54,7 +54,7 @@ describe('MessageInput - file upload', () => {
   it('keeps bottom safe-area padding compact on the mobile composer action bar', () => {
     const { container } = render(<MessageInput onSend={vi.fn()} />);
 
-    expect(container.firstElementChild).toHaveClass('max-md:pb-[max(0.375rem,env(safe-area-inset-bottom))]');
+    expect(container.firstElementChild).toHaveClass('max-md:pb-[max(0.25rem,env(safe-area-inset-bottom))]');
     expect(container.firstElementChild).not.toHaveClass('max-md:pb-[calc(0.75rem+env(safe-area-inset-bottom))]');
   });
 
