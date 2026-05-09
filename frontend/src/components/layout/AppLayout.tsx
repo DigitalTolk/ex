@@ -9,6 +9,7 @@ import { Menu } from 'lucide-react';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { UpdateBanner } from '@/components/UpdateBanner';
 import { NotificationPermissionBanner } from '@/components/NotificationPermissionBanner';
+import { useServerVersion } from '@/hooks/useServerVersion';
 
 interface AppLayoutProps {
   children: ReactNode;
@@ -22,6 +23,7 @@ export function AppLayout({ children }: AppLayoutProps) {
   const location = useLocation();
   const isHome = location.pathname === '/';
   const isMobile = useIsMobile();
+  const { outdated: updateBannerVisible } = useServerVersion();
   const [manualChannelsOpen, setManualChannelsOpen] = useState(false);
   const [channelDragOffset, setChannelDragOffset] = useState(0);
   const [mobileSidebarTop, setMobileSidebarTop] = useState<string>('calc(2.75rem + env(safe-area-inset-top))');
@@ -42,7 +44,7 @@ export function AppLayout({ children }: AppLayoutProps) {
   const openChannelsWithAnimation = useCallback(() => {
     setChannelDragOffset(0);
     setManualChannelsOpen(true);
-  }, []);
+  }, [updateBannerVisible]);
 
   const closeChannels = useCallback(() => {
     setChannelDragOffset(0);

@@ -3,6 +3,7 @@ name: CI
 on:
   push:
     branches: [main]
+    tags: ['v*.*.*']
   pull_request:
 
 permissions:
@@ -10,11 +11,6 @@ permissions:
   packages: write
 
 env:
-  REGISTRY: ghcr.io
-  # IMAGE_NAME is computed inside each Docker job because GHCR rejects
-  # mixed-case repository paths and there's no expression-level lowercase
-  # in GitHub Actions. ${{ github.repository }} preserves the configured
-  # case (e.g. DigitalTolk/ex) so we lowercase it via tr in setup steps.
   GO_VERSION: '1.26.2'
   NODE_VERSION: '24'
 
@@ -144,54 +140,3 @@ jobs:
           parallel-finished: true
           carryforward: backend,frontend
           github-token: ${{ secrets.GITHUB_TOKEN }}
-
-  # Multi-arch builds are split across two native runners (amd64 + arm64)
-  # and merged into a single manifest at the end. Building each arch on
-  # its own native runner avoids the slow QEMU emulation we used to do
-  # on a single ubuntu-latest job — typical end-to-end build time drops
-  # from 8–10 min to 2–3 min.
-  #
-  # Each per-arch job runs build-only so PRs and main pushes still gate
-  # on Dockerfile correctness. Release publishing lives in
-  # docker-publish.yml, which is tag-only so PRs do not show skipped
-  # publish jobs.
-  docker-build:
-    name: Build (${{ matrix.arch }})
-    needs: [test-backend, test-frontend, test-browser]
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - arch: amd64
-            runner: ubuntu-latest
-            platform: linux/amd64
-          - arch: arm64
-            runner: ubuntu-24.04-arm
-            platform: linux/arm64
-    runs-on: ${{ matrix.runner }}
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Lowercase image name
-        run: echo "IMAGE_NAME=$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_ENV"
-
-      - uses: docker/setup-buildx-action@v4
-
-      - name: Build image
-        id: build
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          file: ./Dockerfile
-          platforms: ${{ matrix.platform }}
-          outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push=false
-          build-args: |
-            GIT_TAG=
-            GIT_SHA=${{ github.sha }}
-          provenance: false
-          sbom: false
-          cache-from: type=gha,scope=${{ matrix.arch }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
