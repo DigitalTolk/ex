@@ -144,6 +144,7 @@ export function ChannelView() {
             size: att.size,
             progress: 1,
             ...(att.url ? { url: att.url } : {}),
+            ...(att.squareThumbnailURL ? { squareThumbnailURL: att.squareThumbnailURL } : {}),
           };
         })
         .filter((att): att is DraftAttachment => att !== null),

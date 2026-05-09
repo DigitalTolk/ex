@@ -167,17 +167,12 @@ function VirtuosoMessageList({
     () => performance.now() < autoStickSuppressedUntilRef.current,
     [],
   );
-  const getDistanceFromBottom = useCallback(() => {
-    const scroller = scrollerRef.current;
-    if (!scroller) return 0;
-    return scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
-  }, []);
   const canAutoStickToBottom = useCallback(() => shouldAutoStickMessageList({
     anchorMsgId,
     hasPreviousPage,
-    atBottom: atBottomRef.current && getDistanceFromBottom() <= MESSAGE_LIST_AT_BOTTOM_THRESHOLD_PX,
+    atBottom: atBottomRef.current,
     autoStickSuppressed: isAutoStickSuppressed(),
-  }), [anchorMsgId, getDistanceFromBottom, hasPreviousPage, isAutoStickSuppressed]);
+  }), [anchorMsgId, hasPreviousPage, isAutoStickSuppressed]);
   const followLiveOutput = useCallback((isAtBottom: boolean) => (
     shouldAutoStickMessageList({
       anchorMsgId,

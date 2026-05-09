@@ -8,6 +8,9 @@ const browserMedia = vi.hoisted(() => ({
   imageURL: `data:image/svg+xml,${encodeURIComponent(
     '<svg xmlns="http://www.w3.org/2000/svg" width="900" height="700"><rect width="900" height="700" fill="#16a34a"/></svg>',
   )}`,
+  thumbnailURL: `data:image/svg+xml,${encodeURIComponent(
+    '<svg xmlns="http://www.w3.org/2000/svg" width="640" height="498"><rect width="640" height="498" fill="#2563eb"/></svg>',
+  )}`,
   attachmentsReady: false,
   attachmentListeners: new Set<() => void>(),
 }));
@@ -52,6 +55,8 @@ vi.mock('@/hooks/useAttachments', async () => {
     contentType: 'image/png',
     size: 1000,
     url: browserMedia.imageURL,
+    thumbnailURL: browserMedia.thumbnailURL,
+    squareThumbnailURL: browserMedia.thumbnailURL,
     width: 900,
     height: 700,
     createdBy: 'u-1',
@@ -138,6 +143,7 @@ describe('MessageList browser behavior', () => {
       expect(thumb).not.toBeNull();
       const image = thumb!.querySelector('img') as HTMLImageElement | null;
       expect(image).not.toBeNull();
+      expect(image!.src).toBe(browserMedia.thumbnailURL);
       expect(image!.complete).toBe(true);
       expect(image!.naturalWidth).toBeGreaterThan(0);
       expect(image!.naturalHeight).toBeGreaterThan(0);

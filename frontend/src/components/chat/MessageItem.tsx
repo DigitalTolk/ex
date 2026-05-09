@@ -276,6 +276,7 @@ export function MessageItem({
             contentType: attachment.contentType,
             size: attachment.size,
             url: attachment.url,
+            squareThumbnailURL: attachment.squareThumbnailURL,
           };
         })
         .filter((draft): draft is DraftAttachment => draft !== null)

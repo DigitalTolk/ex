@@ -79,14 +79,16 @@ describe('uploadAttachment', () => {
   });
 
   it('returns the init payload immediately when the file already exists (dedup)', async () => {
-    vi.mocked(apiFetch).mockResolvedValueOnce({
-      id: 'att-1',
-      uploadURL: 'http://upload/u',
-      alreadyExists: true,
-      filename: 'x.txt',
-      contentType: 'text/plain',
-      size: 1,
-    });
+    vi.mocked(apiFetch)
+      .mockResolvedValueOnce({
+        id: 'att-1',
+        uploadURL: 'http://upload/u',
+        alreadyExists: true,
+        filename: 'x.txt',
+        contentType: 'text/plain',
+        size: 1,
+      })
+      .mockResolvedValueOnce({ id: 'att-1' });
     const onInit = vi.fn();
     const onProgress = vi.fn();
     const file = new File(['x'], 'x.txt', { type: 'text/plain' });
@@ -96,19 +98,24 @@ describe('uploadAttachment', () => {
     expect(result.id).toBe('att-1');
     expect(onInit).toHaveBeenCalledWith(expect.objectContaining({ id: 'att-1' }));
     expect(onProgress).toHaveBeenCalledWith(1);
+    expect(apiFetch).toHaveBeenNthCalledWith(2, '/api/v1/attachments/att-1/process', {
+      method: 'POST',
+    });
     // No XHR upload because the server already had the bytes
     expect(XHRMock.last).toBeNull();
   });
 
   it('uploads via PUT and reports progress when the file is new', async () => {
-    vi.mocked(apiFetch).mockResolvedValueOnce({
-      id: 'att-2',
-      uploadURL: 'http://upload/u',
-      alreadyExists: false,
-      filename: 'x.txt',
-      contentType: 'text/plain',
-      size: 1,
-    });
+    vi.mocked(apiFetch)
+      .mockResolvedValueOnce({
+        id: 'att-2',
+        uploadURL: 'http://upload/u',
+        alreadyExists: false,
+        filename: 'x.txt',
+        contentType: 'text/plain',
+        size: 1,
+      })
+      .mockResolvedValueOnce({ id: 'att-2' });
     const onProgress = vi.fn();
     const file = new File(['x'], 'x.txt', { type: 'text/plain' });
     const promise = uploadAttachment(file, { onProgress });
@@ -128,9 +135,13 @@ describe('uploadAttachment', () => {
     xhr.onload!();
 
     await promise;
-    // 0.5 from progress event + 1 from onload completion
-    expect(onProgress).toHaveBeenCalledWith(0.5);
+    // Original upload progress reserves the final slice for server processing.
+    expect(onProgress).toHaveBeenCalledWith(0.45);
+    expect(onProgress).toHaveBeenCalledWith(0.9);
     expect(onProgress).toHaveBeenCalledWith(1);
+    expect(apiFetch).toHaveBeenNthCalledWith(2, '/api/v1/attachments/att-2/process', {
+      method: 'POST',
+    });
   });
 
   it('rejects when the PUT returns a non-2xx status', async () => {

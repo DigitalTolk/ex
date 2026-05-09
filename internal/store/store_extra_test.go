@@ -237,6 +237,33 @@ func TestAttachmentStore_SetDimensions(t *testing.T) {
 	}
 }
 
+func TestAttachmentStore_SetThumbnailKeys(t *testing.T) {
+	db := setupDynamoDB(t)
+	s := NewAttachmentStore(db)
+	ctx := context.Background()
+
+	a := makeAttachment("att-thumbs", "hash-thumbs", "thumbs.png")
+	if err := s.Create(ctx, a); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := s.SetThumbnailKeys(ctx, a.ID, "attachments/att-thumbs/thumb-message@2x.webp", "attachments/att-thumbs/thumb-square@2x.webp"); err != nil {
+		t.Fatalf("SetThumbnailKeys: %v", err)
+	}
+	got, err := s.GetByID(ctx, a.ID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if got.ThumbnailS3Key != "attachments/att-thumbs/thumb-message@2x.webp" {
+		t.Fatalf("ThumbnailS3Key = %q", got.ThumbnailS3Key)
+	}
+	if got.SquareThumbnailS3Key != "attachments/att-thumbs/thumb-square@2x.webp" {
+		t.Fatalf("SquareThumbnailS3Key = %q", got.SquareThumbnailS3Key)
+	}
+	if err := s.SetThumbnailKeys(ctx, "att-missing", "thumb", "square"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing SetThumbnailKeys err = %v, want ErrNotFound", err)
+	}
+}
+
 func TestAttachmentStore_KeyHelpers(t *testing.T) {
 	if got := attachmentPK("a1"); got != "ATT#a1" {
 		t.Errorf("attachmentPK = %q, want %q", got, "ATT#a1")

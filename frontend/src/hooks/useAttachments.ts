@@ -78,11 +78,20 @@ export async function uploadAttachment(
   });
   callbacks.onInit?.(init);
   if (init.alreadyExists) {
+    await processAttachment(init.id);
     callbacks.onProgress?.(1);
     return init;
   }
-  await uploadWithProgress(init.uploadURL, file, callbacks.onProgress);
+  await uploadWithProgress(init.uploadURL, file, (fraction) => callbacks.onProgress?.(fraction * 0.9));
+  await processAttachment(init.id);
+  callbacks.onProgress?.(1);
   return init;
+}
+
+async function processAttachment(id: string): Promise<void> {
+  await apiFetch(`/api/v1/attachments/${encodeURIComponent(id)}/process`, {
+    method: 'POST',
+  });
 }
 
 function uploadWithProgress(

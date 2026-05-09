@@ -210,7 +210,7 @@ describe('MessageInput browser behavior', () => {
     completeUpload?.();
   });
 
-  it('renders draft image attachment previews when mobile metadata only has an image filename', async () => {
+  it('renders draft image attachment previews from square thumbnails instead of full originals', async () => {
     const screen = await renderWithProviders(
       <div style={{ width: 390 }}>
         <MessageInput
@@ -222,6 +222,7 @@ describe('MessageInput browser behavior', () => {
               contentType: 'application/octet-stream',
               size: 128,
               url: previewPNG,
+              squareThumbnailURL: `${previewPNG}#square-thumb`,
               progress: 1,
             },
           ]}
@@ -236,7 +237,7 @@ describe('MessageInput browser behavior', () => {
     expect(preview).not.toBeNull();
     await expect.element(preview!).toBeVisible();
     expectPaintedAtCenter(preview!);
-    expect(preview!.src).toBe(previewPNG);
+    expect(preview!.src).toBe(`${previewPNG}#square-thumb`);
   });
 
   it('keeps the mobile edit mention popup above the composer and inside the viewport', async () => {

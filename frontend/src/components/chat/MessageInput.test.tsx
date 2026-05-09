@@ -172,6 +172,7 @@ describe('MessageInput', () => {
             contentType: 'image/png',
             size: 1234,
             url: 'https://cdn.example.test/photo.png',
+            squareThumbnailURL: 'https://cdn.example.test/photo-square.webp',
             progress: 1,
           },
         ]}
@@ -180,7 +181,7 @@ describe('MessageInput', () => {
 
     const attachments = await screen.findByLabelText('Draft attachments');
     const thumb = within(attachments).getByTestId('attachment-chip-thumb');
-    expect(thumb).toHaveAttribute('src', 'https://cdn.example.test/photo.png');
+    expect(thumb).toHaveAttribute('src', 'https://cdn.example.test/photo-square.webp');
     expect(screen.getByTestId('attachment-chip')).toBeInTheDocument();
     setMobileMatch(false);
   });

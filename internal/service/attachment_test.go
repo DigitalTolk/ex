@@ -25,9 +25,11 @@ type mockAttachmentStore struct {
 	byID   map[string]*model.Attachment
 	byHash map[string]*model.Attachment
 	// refs[attID] is the set of message IDs referencing the attachment.
-	refs       map[string]map[string]bool
-	createErr  error
-	getHashErr error
+	refs        map[string]map[string]bool
+	createErr   error
+	getHashErr  error
+	setDimErr   error
+	setThumbErr error
 }
 
 func newMockAttachmentStore() *mockAttachmentStore {
@@ -96,12 +98,27 @@ func (m *mockAttachmentStore) Delete(_ context.Context, id string) error {
 	return nil
 }
 func (m *mockAttachmentStore) SetDimensions(_ context.Context, id string, width, height int) error {
+	if m.setDimErr != nil {
+		return m.setDimErr
+	}
 	a, ok := m.byID[id]
 	if !ok {
 		return store.ErrNotFound
 	}
 	a.Width = width
 	a.Height = height
+	return nil
+}
+func (m *mockAttachmentStore) SetThumbnailKeys(_ context.Context, id, thumbnailKey, squareThumbnailKey string) error {
+	if m.setThumbErr != nil {
+		return m.setThumbErr
+	}
+	a, ok := m.byID[id]
+	if !ok {
+		return store.ErrNotFound
+	}
+	a.ThumbnailS3Key = thumbnailKey
+	a.SquareThumbnailS3Key = squareThumbnailKey
 	return nil
 }
 
@@ -150,6 +167,7 @@ type fakeAttachmentSigner struct {
 	// this nil and GetObjectRange errors out.
 	objects           map[string][]byte
 	objectContentType string
+	putContentTypes   map[string]string
 }
 
 type fakeMediaCache struct {
@@ -182,15 +200,31 @@ func (s *fakeAttachmentSigner) PresignedDownloadURL(_ context.Context, key, file
 	s.presignDownloadCalls++
 	return fmt.Sprintf("https://signed.test/%s?download=%s&sig=%d", key, filename, s.presignDownloadCalls), nil
 }
-func (s *fakeAttachmentSigner) PresignedPutURL(_ context.Context, key string, _ string, _ time.Duration) (string, error) {
+func (s *fakeAttachmentSigner) PresignedPutURL(_ context.Context, key string, contentType string, _ time.Duration) (string, error) {
 	if s.putErr != nil {
 		return "", s.putErr
+	}
+	if s.putContentTypes != nil {
+		s.putContentTypes[key] = contentType
 	}
 	return "https://upload.test/" + key, nil
 }
 func (s *fakeAttachmentSigner) DeleteObject(_ context.Context, key string) error {
 	s.deleted = append(s.deleted, key)
 	return s.delErr
+}
+func (s *fakeAttachmentSigner) PutObject(_ context.Context, key, contentType string, body []byte) error {
+	if s.putErr != nil {
+		return s.putErr
+	}
+	if s.objects == nil {
+		s.objects = map[string][]byte{}
+	}
+	s.objects[key] = append([]byte(nil), body...)
+	if s.putContentTypes != nil {
+		s.putContentTypes[key] = contentType
+	}
+	return nil
 }
 func (s *fakeAttachmentSigner) GetObjectRange(_ context.Context, key string, _ int64) ([]byte, error) {
 	if s.objects == nil {
@@ -235,6 +269,299 @@ func TestAttachmentService_CreateUploadURL_PersistsClientReportedDimensions(t *t
 	stored := storeM.byID[res.Attachment.ID]
 	if stored.Width != 1280 || stored.Height != 720 {
 		t.Errorf("stored dimensions = %dx%d, want 1280x720", stored.Width, stored.Height)
+	}
+}
+
+func TestAttachmentService_CreateUploadURL_ImageDefersThumbnailGenerationToProcessing(t *testing.T) {
+	storeM := newMockAttachmentStore()
+	signer := &fakeAttachmentSigner{}
+	svc := NewAttachmentService(storeM, signer, newMockPublisher())
+
+	res, err := svc.CreateUploadURL(context.Background(), CreateUploadParams{
+		UserID: "u1", Filename: "pic.png", ContentType: "image/png", SHA256: testSHA256A, Size: 100,
+		Width: 1200, Height: 800,
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if res.Attachment.ThumbnailS3Key != "" || res.Attachment.SquareThumbnailS3Key != "" {
+		t.Fatalf("thumbnail keys should be assigned by ProcessUpload, not upload init: %#v", res.Attachment)
+	}
+}
+
+func TestAttachmentService_CreateUploadURL_NonImageDoesNotAllocateThumbnails(t *testing.T) {
+	storeM := newMockAttachmentStore()
+	svc := NewAttachmentService(storeM, &fakeAttachmentSigner{}, newMockPublisher())
+
+	res, err := svc.CreateUploadURL(context.Background(), CreateUploadParams{
+		UserID: "u1", Filename: "doc.pdf", ContentType: "application/pdf", SHA256: testSHA256A, Size: 100,
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if res.Attachment.ThumbnailS3Key != "" || res.Attachment.SquareThumbnailS3Key != "" {
+		t.Fatalf("non-image got thumbnail keys: %#v", res.Attachment)
+	}
+}
+
+func TestAttachmentService_CreateUploadURL_SVGDoesNotAllocateThumbnails(t *testing.T) {
+	storeM := newMockAttachmentStore()
+	svc := NewAttachmentService(storeM, &fakeAttachmentSigner{}, newMockPublisher())
+
+	res, err := svc.CreateUploadURL(context.Background(), CreateUploadParams{
+		UserID: "u1", Filename: "vector.svg", ContentType: "image/svg+xml; charset=utf-8", SHA256: testSHA256A, Size: 100,
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if res.Attachment.ThumbnailS3Key != "" || res.Attachment.SquareThumbnailS3Key != "" {
+		t.Fatalf("svg got thumbnail keys: %#v", res.Attachment)
+	}
+}
+
+func TestAttachmentService_ProcessUpload_GeneratesWebPThumbnailsAndTrustsServerDimensions(t *testing.T) {
+	storeM := newMockAttachmentStore()
+	object := makePNG(40, 20)
+	signer := &fakeAttachmentSigner{objects: map[string][]byte{}, putContentTypes: map[string]string{}}
+	svc := NewAttachmentService(storeM, signer, newMockPublisher())
+
+	res, err := svc.CreateUploadURL(context.Background(), CreateUploadParams{
+		UserID: "u1", Filename: "pic.png", ContentType: "image/png", SHA256: sha256Hex(object), Size: int64(len(object)),
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	signer.objects[res.Attachment.S3Key] = object
+	processed, err := svc.ProcessUpload(context.Background(), "u1", res.Attachment.ID)
+	if err != nil {
+		t.Fatalf("ProcessUpload: %v", err)
+	}
+	if processed.Width != 40 || processed.Height != 20 {
+		t.Fatalf("processed dimensions = %dx%d, want 40x20", processed.Width, processed.Height)
+	}
+	if processed.ThumbnailS3Key == "" || processed.SquareThumbnailS3Key == "" {
+		t.Fatalf("missing thumbnail keys after processing: %#v", processed)
+	}
+	if got := signer.putContentTypes[processed.ThumbnailS3Key]; got != "image/webp" {
+		t.Errorf("message thumbnail content type = %q, want image/webp", got)
+	}
+	if got := signer.putContentTypes[processed.SquareThumbnailS3Key]; got != "image/webp" {
+		t.Errorf("square thumbnail content type = %q, want image/webp", got)
+	}
+	if len(signer.objects[processed.ThumbnailS3Key]) == 0 || len(signer.objects[processed.SquareThumbnailS3Key]) == 0 {
+		t.Fatal("expected thumbnail objects to be written")
+	}
+}
+
+func TestAttachmentService_ProcessUpload_GeneratesMissingThumbnailsForDedupedExistingImage(t *testing.T) {
+	storeM := newMockAttachmentStore()
+	object := makePNG(12, 12)
+	existing := &model.Attachment{
+		ID: "att-existing", SHA256: sha256Hex(object), S3Key: "attachments/att-existing",
+		Filename: "pic.png", ContentType: "image/png", Size: 10, CreatedBy: "u1",
+	}
+	existing.Size = int64(len(object))
+	storeM.byID[existing.ID] = existing
+	storeM.byHash[existing.SHA256] = existing
+	signer := &fakeAttachmentSigner{objects: map[string][]byte{existing.S3Key: object}, putContentTypes: map[string]string{}}
+	svc := NewAttachmentService(storeM, signer, newMockPublisher())
+
+	res, err := svc.CreateUploadURL(context.Background(), CreateUploadParams{
+		UserID: "u1", Filename: "pic.png", ContentType: "image/png", SHA256: existing.SHA256, Size: existing.Size,
+	})
+	if err != nil {
+		t.Fatalf("dedupe: %v", err)
+	}
+	if !res.AlreadyExists {
+		t.Fatal("expected dedupe hit")
+	}
+	processed, err := svc.ProcessUpload(context.Background(), "u1", existing.ID)
+	if err != nil {
+		t.Fatalf("ProcessUpload: %v", err)
+	}
+	if processed.ThumbnailS3Key == "" || processed.SquareThumbnailS3Key == "" {
+		t.Fatal("expected thumbnail keys to be persisted on existing attachment")
+	}
+	if len(signer.objects[processed.ThumbnailS3Key]) == 0 || len(signer.objects[processed.SquareThumbnailS3Key]) == 0 {
+		t.Fatal("expected thumbnail objects to be written")
+	}
+}
+
+func TestAttachmentService_ProcessUpload_ErrorsAndNonImage(t *testing.T) {
+	ctx := context.Background()
+	object := []byte("hello")
+
+	t.Run("missing user", func(t *testing.T) {
+		svc := NewAttachmentService(newMockAttachmentStore(), &fakeAttachmentSigner{}, nil)
+		if _, err := svc.ProcessUpload(ctx, "", "a"); err == nil {
+			t.Fatal("expected missing user error")
+		}
+	})
+
+	t.Run("missing id", func(t *testing.T) {
+		svc := NewAttachmentService(newMockAttachmentStore(), &fakeAttachmentSigner{}, nil)
+		if _, err := svc.ProcessUpload(ctx, "u1", ""); err == nil {
+			t.Fatal("expected missing id error")
+		}
+	})
+
+	t.Run("forbidden owner", func(t *testing.T) {
+		storeM := newMockAttachmentStore()
+		storeM.byID["a"] = &model.Attachment{ID: "a", CreatedBy: "u2", S3Key: "attachments/a", Size: 1}
+		svc := NewAttachmentService(storeM, &fakeAttachmentSigner{}, nil)
+		if _, err := svc.ProcessUpload(ctx, "u1", "a"); !errors.Is(err, ErrForbidden) {
+			t.Fatalf("err = %v, want ErrForbidden", err)
+		}
+	})
+
+	t.Run("missing signer", func(t *testing.T) {
+		storeM := newMockAttachmentStore()
+		storeM.byID["a"] = &model.Attachment{ID: "a", CreatedBy: "u1", S3Key: "attachments/a", Size: 1}
+		svc := NewAttachmentService(storeM, nil, nil)
+		if _, err := svc.ProcessUpload(ctx, "u1", "a"); err == nil {
+			t.Fatal("expected storage not configured error")
+		}
+	})
+
+	t.Run("non image validates without thumbnails", func(t *testing.T) {
+		storeM := newMockAttachmentStore()
+		a := &model.Attachment{
+			ID: "a", CreatedBy: "u1", S3Key: "attachments/a", Filename: "note.txt",
+			ContentType: "text/plain", Size: int64(len(object)), SHA256: sha256Hex(object),
+		}
+		storeM.byID[a.ID] = a
+		signer := &fakeAttachmentSigner{
+			objects:           map[string][]byte{a.S3Key: object},
+			objectContentType: "text/plain",
+			putContentTypes:   map[string]string{},
+		}
+		svc := NewAttachmentService(storeM, signer, nil)
+		processed, err := svc.ProcessUpload(ctx, "u1", "a")
+		if err != nil {
+			t.Fatalf("ProcessUpload: %v", err)
+		}
+		if processed.ThumbnailS3Key != "" || processed.SquareThumbnailS3Key != "" {
+			t.Fatalf("non-image got thumbnail keys: %#v", processed)
+		}
+		if len(signer.putContentTypes) != 0 {
+			t.Fatalf("non-image generated thumbnail objects: %v", signer.putContentTypes)
+		}
+	})
+}
+
+func TestAttachmentService_GenerateThumbnails_ErrorBranches(t *testing.T) {
+	ctx := context.Background()
+	object := makePNG(4, 4)
+	cfg, _, err := image.DecodeConfig(bytes.NewReader(object))
+	if err != nil {
+		t.Fatalf("DecodeConfig: %v", err)
+	}
+	storeM := newMockAttachmentStore()
+	a := &model.Attachment{
+		ID: "a", CreatedBy: "u1", S3Key: "attachments/a", Filename: "p.png",
+		ContentType: "image/png", Size: int64(len(object)), SHA256: sha256Hex(object),
+	}
+	storeM.byID[a.ID] = a
+	svc := NewAttachmentService(storeM, &fakeAttachmentSigner{putErr: errors.New("put failed")}, nil)
+	if err := svc.generateThumbnails(ctx, a, object, cfg, true); err == nil {
+		t.Fatal("expected PutObject error")
+	}
+	if err := svc.generateThumbnails(ctx, a, []byte("not image"), cfg, true); err == nil {
+		t.Fatal("expected decode error")
+	}
+	if err := svc.generateThumbnails(ctx, a, object, image.Config{}, true); err != nil {
+		t.Fatalf("zero config should skip thumbnails, got %v", err)
+	}
+}
+
+func TestAttachmentService_ProcessUpload_PersistErrorBranches(t *testing.T) {
+	ctx := context.Background()
+	object := makePNG(8, 6)
+
+	t.Run("set dimensions error", func(t *testing.T) {
+		storeM := newMockAttachmentStore()
+		storeM.setDimErr = errors.New("set dimensions failed")
+		a := &model.Attachment{
+			ID: "a-dim", CreatedBy: "u1", S3Key: "attachments/a-dim", Filename: "p.png",
+			ContentType: "image/png", Size: int64(len(object)), SHA256: sha256Hex(object),
+		}
+		storeM.byID[a.ID] = a
+		svc := NewAttachmentService(storeM, &fakeAttachmentSigner{objects: map[string][]byte{a.S3Key: object}}, nil)
+		if _, err := svc.ProcessUpload(ctx, "u1", a.ID); err == nil {
+			t.Fatal("expected SetDimensions error")
+		}
+	})
+
+	t.Run("set thumbnail keys error", func(t *testing.T) {
+		storeM := newMockAttachmentStore()
+		storeM.setThumbErr = errors.New("set thumbnails failed")
+		a := &model.Attachment{
+			ID: "a-thumb", CreatedBy: "u1", S3Key: "attachments/a-thumb", Filename: "p.png",
+			ContentType: "image/png", Size: int64(len(object)), SHA256: sha256Hex(object),
+			Width: 8, Height: 6,
+		}
+		storeM.byID[a.ID] = a
+		svc := NewAttachmentService(storeM, &fakeAttachmentSigner{objects: map[string][]byte{a.S3Key: object}}, nil)
+		if _, err := svc.ProcessUpload(ctx, "u1", a.ID); err == nil {
+			t.Fatal("expected SetThumbnailKeys error")
+		}
+	})
+}
+
+func TestEncodeWebPThumbnail_ErrorBranches(t *testing.T) {
+	if _, err := encodeWebPThumbnail(nil, thumbnailModeMessage); err == nil {
+		t.Fatal("expected nil image error")
+	}
+	empty := image.NewRGBA(image.Rect(0, 0, 0, 0))
+	if _, err := encodeWebPThumbnail(empty, thumbnailModeMessage); err == nil {
+		t.Fatal("expected invalid dimensions error")
+	}
+}
+
+func TestAttachmentService_EnsureThumbnailKeysPropagatesStoreErrors(t *testing.T) {
+	storeM := newMockAttachmentStore()
+	svc := NewAttachmentService(storeM, &fakeAttachmentSigner{}, newMockPublisher())
+	err := svc.ensureThumbnailKeys(context.Background(), &model.Attachment{
+		ID: "missing", ContentType: "image/png",
+	})
+	if !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("ensureThumbnailKeys err = %v, want ErrNotFound", err)
+	}
+}
+
+func TestAttachmentService_Get_ResolvesThumbnailURLsSeparatelyFromOriginal(t *testing.T) {
+	storeM := newMockAttachmentStore()
+	att := &model.Attachment{
+		ID:                   "att-thumb",
+		SHA256:               "h",
+		S3Key:                "attachments/att-thumb",
+		ThumbnailS3Key:       "attachments/att-thumb/thumb-message@2x.webp",
+		SquareThumbnailS3Key: "attachments/att-thumb/thumb-square@2x.webp",
+		Filename:             "pic.png",
+		ContentType:          "image/png",
+		Size:                 10,
+		CreatedBy:            "u1",
+	}
+	if err := storeM.Create(context.Background(), att); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	svc := NewAttachmentService(storeM, &fakeAttachmentSigner{}, newMockPublisher())
+
+	got, err := svc.Get(context.Background(), "att-thumb")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if !strings.Contains(got.URL, "/attachments/att-thumb?") {
+		t.Fatalf("original URL = %q, want original object", got.URL)
+	}
+	if !strings.Contains(got.ThumbnailURL, "/attachments/att-thumb/thumb-message@2x.webp?") {
+		t.Fatalf("thumbnail URL = %q, want message thumbnail object", got.ThumbnailURL)
+	}
+	if !strings.Contains(got.SquareThumbnailURL, "/attachments/att-thumb/thumb-square@2x.webp?") {
+		t.Fatalf("square thumbnail URL = %q, want square thumbnail object", got.SquareThumbnailURL)
+	}
+	if !strings.Contains(got.DownloadURL, "download=pic.png") {
+		t.Fatalf("download URL = %q, want forced download URL", got.DownloadURL)
 	}
 }
 
@@ -346,11 +673,20 @@ func TestAttachmentService_CreateUploadURL_RejectsInvalidMetadata(t *testing.T) 
 	storeM := newMockAttachmentStore()
 	svc := NewAttachmentService(storeM, &fakeAttachmentSigner{}, nil)
 
+	if _, err := svc.CreateUploadURL(context.Background(), CreateUploadParams{Filename: "pic.png", ContentType: "image/png", SHA256: testSHA256A, Size: 100}); err == nil {
+		t.Fatal("expected missing userID to be rejected")
+	}
+	if _, err := svc.CreateUploadURL(context.Background(), CreateUploadParams{UserID: "u1", ContentType: "image/png", SHA256: testSHA256A, Size: 100}); err == nil {
+		t.Fatal("expected missing filename to be rejected")
+	}
 	if _, err := svc.CreateUploadURL(context.Background(), CreateUploadParams{UserID: "u1", Filename: "pic.png", ContentType: "image/png", SHA256: "not-a-sha", Size: 100}); err == nil {
 		t.Fatal("expected invalid sha256 to be rejected")
 	}
 	if _, err := svc.CreateUploadURL(context.Background(), CreateUploadParams{UserID: "u1", Filename: "pic.png", ContentType: "image/png", SHA256: testSHA256A, Size: 100, Width: -1}); err == nil {
 		t.Fatal("expected invalid dimensions to be rejected")
+	}
+	if _, err := NewAttachmentService(storeM, nil, nil).CreateUploadURL(context.Background(), CreateUploadParams{UserID: "u1", Filename: "pic.png", ContentType: "image/png", SHA256: testSHA256A, Size: 100}); err == nil {
+		t.Fatal("expected missing signer to be rejected")
 	}
 }
 
@@ -498,7 +834,7 @@ func TestAttachmentService_GetManyForUserFiltersUnauthorizedAndCapsBatch(t *test
 func TestAttachmentService_ValidateForUse_VerifiesUploadedObject(t *testing.T) {
 	storeM := newMockAttachmentStore()
 	object := makePNG(2, 2)
-	signer := &fakeAttachmentSigner{objects: map[string][]byte{}}
+	signer := &fakeAttachmentSigner{objects: map[string][]byte{}, putContentTypes: map[string]string{}}
 	svc := NewAttachmentService(storeM, signer, nil)
 
 	res, err := svc.CreateUploadURL(context.Background(), CreateUploadParams{
@@ -511,6 +847,16 @@ func TestAttachmentService_ValidateForUse_VerifiesUploadedObject(t *testing.T) {
 
 	if err := svc.ValidateForUse(context.Background(), res.Attachment.ID); err != nil {
 		t.Fatalf("ValidateForUse: %v", err)
+	}
+	stored := storeM.byID[res.Attachment.ID]
+	if stored.ThumbnailS3Key == "" || stored.SquareThumbnailS3Key == "" {
+		t.Fatal("ValidateForUse should generate missing thumbnails before message send")
+	}
+	if got := signer.putContentTypes[stored.ThumbnailS3Key]; got != "image/webp" {
+		t.Fatalf("message thumbnail content type = %q, want image/webp", got)
+	}
+	if got := signer.putContentTypes[stored.SquareThumbnailS3Key]; got != "image/webp" {
+		t.Fatalf("square thumbnail content type = %q, want image/webp", got)
 	}
 }
 
@@ -848,6 +1194,9 @@ func TestAttachmentService_Get_CachesPresignedURL(t *testing.T) {
 
 	res, _ := svc.CreateUploadURL(context.Background(), CreateUploadParams{UserID: "u1", Filename: "f.png", ContentType: "image/png", SHA256: testSHA256A, Size: 1})
 	id := res.Attachment.ID
+	if err := svc.ensureThumbnailKeys(context.Background(), res.Attachment); err != nil {
+		t.Fatalf("ensure thumbnail keys: %v", err)
+	}
 
 	first, err := svc.Get(context.Background(), id)
 	if err != nil {
@@ -864,8 +1213,8 @@ func TestAttachmentService_Get_CachesPresignedURL(t *testing.T) {
 	if first.DownloadURL != second.DownloadURL {
 		t.Errorf("DownloadURL not cached across consecutive Get() calls:\n  first:  %q\n  second: %q", first.DownloadURL, second.DownloadURL)
 	}
-	if signer.presignCalls != 1 {
-		t.Errorf("PresignedGetURL called %d times across two Get()s; expected 1 (cached)", signer.presignCalls)
+	if signer.presignCalls != 3 {
+		t.Errorf("PresignedGetURL called %d times across two Get()s; expected 3 (original + two thumbnails cached)", signer.presignCalls)
 	}
 	if signer.presignDownloadCalls != 1 {
 		t.Errorf("PresignedDownloadURL called %d times; expected 1 (cached)", signer.presignDownloadCalls)
@@ -885,13 +1234,16 @@ func TestAttachmentService_GC_InvalidatesURLCache(t *testing.T) {
 	res, _ := svc.CreateUploadURL(context.Background(), CreateUploadParams{UserID: "u1", Filename: "f.png", ContentType: "image/png", SHA256: testSHA256B, Size: 1})
 	id := res.Attachment.ID
 	key := res.Attachment.S3Key
+	if err := svc.ensureThumbnailKeys(context.Background(), res.Attachment); err != nil {
+		t.Fatalf("ensure thumbnail keys: %v", err)
+	}
 
 	// Prime the cache.
 	if _, err := svc.Get(context.Background(), id); err != nil {
 		t.Fatalf("get: %v", err)
 	}
-	if signer.presignCalls != 1 {
-		t.Fatalf("expected 1 sign call after first get, got %d", signer.presignCalls)
+	if signer.presignCalls != 3 {
+		t.Fatalf("expected 3 sign calls after first get, got %d", signer.presignCalls)
 	}
 
 	// Delete the draft — must invalidate the cached URL for that key.
@@ -907,8 +1259,8 @@ func TestAttachmentService_GC_InvalidatesURLCache(t *testing.T) {
 		}); err != nil {
 		t.Fatalf("re-sign: %v", err)
 	}
-	if signer.presignCalls != 2 {
-		t.Errorf("cache invalidation failed: signer called %d times after GC, expected 2", signer.presignCalls)
+	if signer.presignCalls != 4 {
+		t.Errorf("cache invalidation failed: signer called %d times after GC, expected 4", signer.presignCalls)
 	}
 }
 
@@ -972,7 +1324,7 @@ func TestMessageService_Delete_DerefsAttachments(t *testing.T) {
 	if _, exists := atts.byID[att.ID]; exists {
 		t.Error("attachment should be GC'd after sole-ref message deleted")
 	}
-	if len(signer.deleted) != 1 {
+	if len(signer.deleted) != 3 {
 		t.Errorf("S3 object not deleted, got %v", signer.deleted)
 	}
 }

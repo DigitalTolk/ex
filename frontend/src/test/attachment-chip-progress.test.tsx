@@ -30,7 +30,7 @@ describe('AttachmentChip — upload progress', () => {
     expect(screen.queryByRole('progressbar')).toBeNull();
   });
 
-  it('renders an image preview when mobile upload metadata falls back to an image filename', () => {
+  it('does not load the full original as the preview when a persisted thumbnail is missing', () => {
     render(
       <AttachmentChip
         att={makeDraft({
@@ -41,9 +41,22 @@ describe('AttachmentChip — upload progress', () => {
       />,
     );
 
+    expect(screen.queryByTestId('attachment-chip-thumb')).toBeNull();
+  });
+
+  it('prefers the square thumbnail for persisted image chips', () => {
+    render(
+      <AttachmentChip
+        att={makeDraft({
+          url: 'https://cdn.example.test/original.jpg',
+          squareThumbnailURL: 'https://cdn.example.test/square.webp',
+        })}
+      />,
+    );
+
     expect(screen.getByTestId('attachment-chip-thumb')).toHaveAttribute(
       'src',
-      'https://cdn.example.test/camera-photo.jpg',
+      'https://cdn.example.test/square.webp',
     );
   });
 });

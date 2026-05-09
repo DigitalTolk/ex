@@ -1,9 +1,15 @@
 package handler
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"image"
+	"image/color"
+	"image/png"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -327,8 +333,19 @@ func (s *fakeAttachmentStore) SetDimensions(_ context.Context, id string, width,
 	}
 	return nil
 }
+func (s *fakeAttachmentStore) SetThumbnailKeys(_ context.Context, id, thumbnailKey, squareThumbnailKey string) error {
+	if a, ok := s.byID[id]; ok {
+		a.ThumbnailS3Key = thumbnailKey
+		a.SquareThumbnailS3Key = squareThumbnailKey
+	}
+	return nil
+}
 
-type fakeSigner struct{}
+type fakeSigner struct {
+	objects         map[string][]byte
+	objectTypes     map[string]string
+	putContentTypes map[string]string
+}
 
 func (f *fakeSigner) PresignedGetURL(_ context.Context, key string, _ time.Duration) (string, error) {
 	return "https://signed.test/get/" + key, nil
@@ -340,10 +357,29 @@ func (f *fakeSigner) PresignedPutURL(_ context.Context, key, _ string, _ time.Du
 	return "https://signed.test/put/" + key, nil
 }
 func (f *fakeSigner) DeleteObject(_ context.Context, _ string) error { return nil }
+func (f *fakeSigner) PutObject(_ context.Context, key, contentType string, body []byte) error {
+	if f.objects == nil {
+		f.objects = map[string][]byte{}
+	}
+	f.objects[key] = append([]byte(nil), body...)
+	if f.putContentTypes != nil {
+		f.putContentTypes[key] = contentType
+	}
+	return nil
+}
 func (f *fakeSigner) GetObjectRange(_ context.Context, _ string, _ int64) ([]byte, error) {
 	return nil, nil
 }
-func (f *fakeSigner) GetObject(_ context.Context, _ string) (io.ReadCloser, string, int64, time.Time, error) {
+func (f *fakeSigner) GetObject(_ context.Context, key string) (io.ReadCloser, string, int64, time.Time, error) {
+	if f.objects != nil {
+		if body, ok := f.objects[key]; ok {
+			contentType := "image/png"
+			if f.objectTypes != nil && f.objectTypes[key] != "" {
+				contentType = f.objectTypes[key]
+			}
+			return io.NopCloser(bytes.NewReader(body)), contentType, int64(len(body)), time.Date(2026, 5, 2, 12, 0, 0, 0, time.UTC), nil
+		}
+	}
 	return io.NopCloser(strings.NewReader("body")), "text/plain", 4, time.Date(2026, 5, 2, 12, 0, 0, 0, time.UTC), nil
 }
 
@@ -376,6 +412,26 @@ func setupAttachmentHandler(t *testing.T) (*AttachmentHandler, *fakeAttachmentSt
 	svc := service.NewAttachmentService(st, signer, nil)
 	jwtMgr := auth.NewJWTManager("att-handler-secret", 15*time.Minute, 720*time.Hour)
 	return NewAttachmentHandler(svc), st, jwtMgr
+}
+
+func handlerPNG(t *testing.T, width, height int) []byte {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, width, height))
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			img.Set(x, y, color.RGBA{R: uint8(x * 20), G: uint8(y * 20), B: 180, A: 255})
+		}
+	}
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatalf("encode png: %v", err)
+	}
+	return buf.Bytes()
+}
+
+func handlerSHA256Hex(data []byte) string {
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
 }
 
 func TestAttachmentHandler_CreateUploadURL_Unauthenticated(t *testing.T) {
@@ -442,6 +498,104 @@ func TestAttachmentHandler_CreateUploadURL_DedupExisting(t *testing.T) {
 	if !got["alreadyExists"].(bool) {
 		t.Error("expected alreadyExists=true on dedupe match")
 	}
+}
+
+func TestAttachmentHandler_ProcessUpload_GeneratesServerThumbnails(t *testing.T) {
+	st := newFakeAttachmentStore()
+	signer := &fakeSigner{objects: map[string][]byte{}, putContentTypes: map[string]string{}}
+	svc := service.NewAttachmentService(st, signer, nil)
+	h := NewAttachmentHandler(svc)
+	jwtMgr := auth.NewJWTManager("att-handler-secret", 15*time.Minute, 720*time.Hour)
+	user := &model.User{ID: "u-att-process", Email: "process@x.com", SystemRole: model.SystemRoleMember}
+	token := makeTokenForUser(jwtMgr, user)
+
+	object := handlerPNG(t, 10, 8)
+	a := &model.Attachment{
+		ID:          "a-process",
+		SHA256:      handlerSHA256Hex(object),
+		Size:        int64(len(object)),
+		ContentType: "image/png",
+		Filename:    "photo.png",
+		S3Key:       "attachments/a-process",
+		CreatedBy:   user.ID,
+		CreatedAt:   time.Now(),
+	}
+	st.byID[a.ID] = a
+	st.byHash[a.SHA256] = a
+	signer.objects[a.S3Key] = object
+
+	handler := middleware.Auth(jwtMgr)(http.HandlerFunc(h.ProcessUpload))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/attachments/a-process/process", nil)
+	req.SetPathValue("id", "a-process")
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if st.byID[a.ID].ThumbnailS3Key == "" || st.byID[a.ID].SquareThumbnailS3Key == "" {
+		t.Fatal("expected process to persist thumbnail keys")
+	}
+	if got := signer.putContentTypes[st.byID[a.ID].ThumbnailS3Key]; got != "image/webp" {
+		t.Fatalf("message thumbnail content type = %q, want image/webp", got)
+	}
+	if got := signer.putContentTypes[st.byID[a.ID].SquareThumbnailS3Key]; got != "image/webp" {
+		t.Fatalf("square thumbnail content type = %q, want image/webp", got)
+	}
+}
+
+func TestAttachmentHandler_ProcessUpload_ErrorResponses(t *testing.T) {
+	h, st, jwtMgr := setupAttachmentHandler(t)
+	user := &model.User{ID: "u-att-errors", Email: "errors@x.com", SystemRole: model.SystemRoleMember}
+	token := makeTokenForUser(jwtMgr, user)
+
+	t.Run("unauthenticated", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/attachments/a/process", nil)
+		req.SetPathValue("id", "a")
+		rec := httptest.NewRecorder()
+		h.ProcessUpload(rec, req)
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
+		}
+	})
+
+	t.Run("missing id", func(t *testing.T) {
+		handler := middleware.Auth(jwtMgr)(http.HandlerFunc(h.ProcessUpload))
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/attachments//process", nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+		}
+	})
+
+	t.Run("forbidden", func(t *testing.T) {
+		st.byID["a-other"] = &model.Attachment{
+			ID: "a-other", CreatedBy: "someone-else", S3Key: "attachments/a-other", Size: 1,
+		}
+		handler := middleware.Auth(jwtMgr)(http.HandlerFunc(h.ProcessUpload))
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/attachments/a-other/process", nil)
+		req.SetPathValue("id", "a-other")
+		req.Header.Set("Authorization", "Bearer "+token)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusForbidden, rec.Body.String())
+		}
+	})
+
+	t.Run("not found", func(t *testing.T) {
+		handler := middleware.Auth(jwtMgr)(http.HandlerFunc(h.ProcessUpload))
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/attachments/missing/process", nil)
+		req.SetPathValue("id", "missing")
+		req.Header.Set("Authorization", "Bearer "+token)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusNotFound, rec.Body.String())
+		}
+	})
 }
 
 func TestAttachmentHandler_CreateUploadURL_InvalidJSON(t *testing.T) {
