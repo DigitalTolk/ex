@@ -195,6 +195,7 @@ export function useDraftAttachmentChips(attachmentIDs: string[] | undefined): Dr
             contentType: att.contentType,
             size: att.size,
             url: att.url,
+            squareThumbnailURL: att.squareThumbnailURL,
             progress: 1,
           };
         })

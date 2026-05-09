@@ -15,6 +15,7 @@ import type { Message } from '@/types';
 type Captured = {
   initialTopMostItemIndex?: unknown;
   followOutput?: unknown;
+  atBottomThreshold?: number;
   alignToBottom?: boolean;
   computeItemKey?: (index: number, row: { key: string }) => string;
   defaultItemHeight?: number;
@@ -31,6 +32,7 @@ vi.mock('react-virtuoso', () => {
   type VirtuosoMockProps = {
     initialTopMostItemIndex?: unknown;
     followOutput?: unknown;
+    atBottomThreshold?: number;
     alignToBottom?: boolean;
     computeItemKey?: (index: number, row: { key: string }) => string;
     defaultItemHeight?: number;
@@ -44,6 +46,7 @@ vi.mock('react-virtuoso', () => {
   const Virtuoso = forwardRef((props: VirtuosoMockProps, ref: Ref<unknown>) => {
     captured.initialTopMostItemIndex = props.initialTopMostItemIndex;
     captured.followOutput = props.followOutput;
+    captured.atBottomThreshold = props.atBottomThreshold;
     captured.alignToBottom = props.alignToBottom;
     captured.computeItemKey = props.computeItemKey;
     captured.defaultItemHeight = props.defaultItemHeight;
@@ -76,6 +79,7 @@ vi.mock('react-virtuoso', () => {
 beforeEach(() => {
   captured.initialTopMostItemIndex = undefined;
   captured.followOutput = undefined;
+  captured.atBottomThreshold = undefined;
   captured.alignToBottom = undefined;
   captured.computeItemKey = undefined;
   captured.defaultItemHeight = undefined;
@@ -331,11 +335,14 @@ describe('MessageList Virtuoso wiring (regression contract)', () => {
     expect(captured.initialTopMostItemIndex).toEqual({ index: 2, align: 'end' });
   });
 
-  it('live-tail mount: followOutput="auto" so live WS messages stick when at bottom', async () => {
+  it('live-tail mount: followOutput follows only while Virtuoso reports bottom', async () => {
     const captured = await renderAndCaptureVirtuoso(
       <MessageList {...defaultProps} pages={[{ items: [makeMessage()] }]} hasPreviousPage={false} />
     );
-    expect(captured.followOutput).toBe('auto');
+    expect(captured.followOutput).toEqual(expect.any(Function));
+    const followOutput = captured.followOutput as (isAtBottom: boolean) => false | 'auto';
+    expect(followOutput(true)).toBe('auto');
+    expect(followOutput(false)).toBe(false);
   });
 
   it('deep-link mount: scrollToIndex(LAST) is NEVER called — the resize-snap-to-bottom logic must not fight the anchor scroll', async () => {
@@ -450,6 +457,7 @@ describe('MessageList Virtuoso wiring (regression contract)', () => {
     );
     expect(captured.alignToBottom).toBe(true);
     expect(captured.defaultItemHeight).toBe(88);
+    expect(captured.atBottomThreshold).toBe(4);
     expect(captured.increaseViewportBy).toEqual({ top: 600, bottom: 600 });
     expect(captured.computeItemKey?.(0, { key: 'stable-key' })).toBe('stable-key');
   });
@@ -468,6 +476,10 @@ describe('MessageList Virtuoso wiring (regression contract)', () => {
     expect(shouldAutoStickMessageList({
       atBottom: true,
       anchorMsgId: 'msg-anchor',
+    })).toBe(false);
+    expect(shouldAutoStickMessageList({
+      atBottom: true,
+      autoStickSuppressed: true,
     })).toBe(false);
   });
 

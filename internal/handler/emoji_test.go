@@ -395,6 +395,13 @@ func (s *dataAttachmentStore) SetDimensions(_ context.Context, id string, width,
 	}
 	return nil
 }
+func (s *dataAttachmentStore) SetThumbnailKeys(_ context.Context, id, thumbnailKey, squareThumbnailKey string) error {
+	if a, ok := s.byID[id]; ok {
+		a.ThumbnailS3Key = thumbnailKey
+		a.SquareThumbnailS3Key = squareThumbnailKey
+	}
+	return nil
+}
 
 type fakeAttachmentSignerH struct{}
 
@@ -408,6 +415,9 @@ func (fakeAttachmentSignerH) PresignedPutURL(_ context.Context, key, _ string, _
 	return "https://upload/" + key, nil
 }
 func (fakeAttachmentSignerH) DeleteObject(_ context.Context, _ string) error { return nil }
+func (fakeAttachmentSignerH) PutObject(_ context.Context, _ string, _ string, _ []byte) error {
+	return nil
+}
 func (fakeAttachmentSignerH) GetObjectRange(_ context.Context, _ string, _ int64) ([]byte, error) {
 	return nil, nil
 }

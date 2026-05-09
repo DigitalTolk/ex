@@ -92,10 +92,10 @@ describe('MessageInput focusKey', () => {
     render(<MessageInput onSend={vi.fn()} focusKey="ch-1" />);
     const editor = screen.getByLabelText('Message input');
 
-    expect(editor).toHaveClass('max-md:min-h-[1.5rem]', 'max-md:max-h-[1.5rem]');
+    expect(editor).toHaveClass('max-md:!min-h-5', 'max-md:!max-h-5');
     fireEvent.focus(editor);
-    expect(editor).not.toHaveClass('max-md:min-h-[1.5rem]');
-    expect(editor).not.toHaveClass('max-md:max-h-[1.5rem]');
+    expect(editor).not.toHaveClass('max-md:!min-h-5');
+    expect(editor).not.toHaveClass('max-md:!max-h-5');
   });
 
   it('keeps the mobile composer compact until focus reveals the full toolbar and attachment action', () => {

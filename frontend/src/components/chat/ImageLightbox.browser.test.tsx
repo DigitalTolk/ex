@@ -43,9 +43,16 @@ function dispatchSwipeStartAndMove(element: Element, from: { x: number; y: numbe
   element.dispatchEvent(new PointerEvent('pointermove', { pointerId: 1, pointerType: 'touch', clientX: to.x, clientY: to.y, bubbles: true }));
 }
 
-function dispatchTap(element: Element, point: { x: number; y: number }, pointerId = 1) {
-  element.dispatchEvent(new PointerEvent('pointerdown', { pointerId, pointerType: 'touch', clientX: point.x, clientY: point.y, bubbles: true }));
-  element.dispatchEvent(new PointerEvent('pointerup', { pointerId, pointerType: 'touch', clientX: point.x, clientY: point.y, bubbles: true }));
+function dispatchTouchTap(element: Element, point: { x: number; y: number }) {
+  const touch = { clientX: point.x, clientY: point.y };
+  const start = new Event('touchstart', { bubbles: true, cancelable: true });
+  Object.defineProperty(start, 'touches', { value: [touch] });
+  Object.defineProperty(start, 'changedTouches', { value: [touch] });
+  element.dispatchEvent(start);
+  const end = new Event('touchend', { bubbles: true, cancelable: true });
+  Object.defineProperty(end, 'touches', { value: [] });
+  Object.defineProperty(end, 'changedTouches', { value: [touch] });
+  element.dispatchEvent(end);
 }
 
 describe('ImageLightbox browser behavior', () => {
@@ -214,8 +221,8 @@ describe('ImageLightbox browser behavior', () => {
     expect(stage).not.toBeNull();
     expect(image).not.toBeNull();
 
-    dispatchTap(stage!, { x: window.innerWidth / 2, y: window.innerHeight / 2 }, 1);
-    dispatchTap(stage!, { x: window.innerWidth / 2 + 4, y: window.innerHeight / 2 + 4 }, 2);
+    dispatchTouchTap(stage!, { x: window.innerWidth / 2, y: window.innerHeight / 2 });
+    dispatchTouchTap(stage!, { x: window.innerWidth / 2 + 42, y: window.innerHeight / 2 + 8 });
     await vi.waitFor(() => {
       expect(Number(image!.dataset.zoom)).toBeGreaterThan(1);
     });
@@ -225,8 +232,8 @@ describe('ImageLightbox browser behavior', () => {
       expect(Math.abs(Number(image!.dataset.panX))).toBeGreaterThan(50);
     });
 
-    dispatchTap(stage!, { x: window.innerWidth / 2, y: window.innerHeight / 2 }, 3);
-    dispatchTap(stage!, { x: window.innerWidth / 2 + 4, y: window.innerHeight / 2 + 4 }, 4);
+    dispatchTouchTap(stage!, { x: window.innerWidth / 2, y: window.innerHeight / 2 });
+    dispatchTouchTap(stage!, { x: window.innerWidth / 2 + 42, y: window.innerHeight / 2 + 8 });
     await vi.waitFor(() => {
       expect(Number(image!.dataset.zoom)).toBe(1);
       expect(Number(image!.dataset.panX)).toBe(0);
@@ -264,5 +271,56 @@ describe('ImageLightbox browser behavior', () => {
       expect(onClose).toHaveBeenCalledOnce();
     });
     expect(onIndexChange).not.toHaveBeenCalled();
+  });
+
+  it('keeps the centered file download link clickable without dismissing the lightbox', async () => {
+    const onClose = vi.fn();
+    await render(lightbox({
+      onClose,
+      images: [
+        {
+          url: 'https://cdn.example.test/report.pdf',
+          downloadURL: 'https://download.example.test/report.pdf',
+          filename: 'report.pdf',
+          contentType: 'application/pdf',
+          size: 4096,
+        },
+      ],
+    }));
+
+    const stage = document.querySelector('[data-testid="image-lightbox-attachment-stage"]') as HTMLElement | null;
+    const download = document.querySelector('[data-testid="image-lightbox-file-download"]') as HTMLAnchorElement | null;
+    expect(stage).not.toBeNull();
+    expect(download).not.toBeNull();
+    await expect.element(download!).toBeVisible();
+    expect(download!.href).toBe('https://download.example.test/report.pdf');
+    expect(download!.download).toBe('report.pdf');
+
+    const rect = download!.getBoundingClientRect();
+    download!.dispatchEvent(new PointerEvent('pointerdown', {
+      pointerId: 8,
+      pointerType: 'touch',
+      clientX: rect.left + rect.width / 2,
+      clientY: rect.top + rect.height / 2,
+      bubbles: true,
+    }));
+    download!.dispatchEvent(new PointerEvent('pointerup', {
+      pointerId: 8,
+      pointerType: 'touch',
+      clientX: rect.left + rect.width / 2,
+      clientY: rect.top + rect.height / 2,
+      bubbles: true,
+    }));
+    let clickReachedDownload = false;
+    download!.addEventListener('click', (event) => {
+      clickReachedDownload = true;
+      event.preventDefault();
+    }, { once: true });
+    download!.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+
+    expect(clickReachedDownload).toBe(true);
+    expect(onClose).not.toHaveBeenCalled();
+    expect(document.querySelector('[data-testid="image-lightbox"]')).not.toBeNull();
+    expect(stage!.style.transform).not.toContain('translate3d');
   });
 });

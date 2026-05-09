@@ -106,6 +106,8 @@ describe('MessageItem', () => {
           contentType: 'image/png',
           size: 42,
           url: 'https://cdn/photo.png',
+          thumbnailURL: 'https://cdn/photo-thumb.webp',
+          squareThumbnailURL: 'https://cdn/photo-square.webp',
           createdBy: 'user-1',
           createdAt: '2026-04-24T10:30:00Z',
         }],

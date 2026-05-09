@@ -72,6 +72,8 @@ export interface Attachment {
   filename: string;
   url?: string; // resolved presigned GET URL — inline (used by <img>/preview)
   downloadURL?: string; // presigned GET URL with forced Content-Disposition: attachment
+  thumbnailURL?: string; // 2x WebP preview for single-image message rendering
+  squareThumbnailURL?: string; // 2x WebP square preview for compact rows/sidebars
   // Intrinsic pixel dimensions for image attachments. Reported by
   // the browser at upload time and persisted server-side; may be
   // absent on legacy attachments uploaded before this field

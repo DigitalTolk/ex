@@ -69,7 +69,7 @@ export function MessageAttachments({
   const onlyAttachment = ids.length === 1 ? map.get(ids[0]) : null;
   const showThumb =
     onlyAttachment &&
-    onlyAttachment.url &&
+    onlyAttachment.thumbnailURL &&
     isImageAttachment(onlyAttachment.contentType, onlyAttachment.filename);
 
   return (
@@ -122,9 +122,9 @@ function ThumbnailButton({ att, onOpen, onLoad }: { att: Attachment; onOpen: () 
       aria-label={`Open image ${att.filename}`}
       data-testid="message-image-thumb"
     >
-      {att.url && (
+      {att.thumbnailURL && (
         <img
-          src={att.url}
+          src={att.thumbnailURL}
           alt={att.filename}
           className="h-auto max-h-72 max-w-full"
           width={thumbnailDims.width}
@@ -150,7 +150,7 @@ function getThumbnailDimensions(att: Attachment): { width?: number; height?: num
 // lightbox; the download icon is its own action so users don't have to
 // open then download.
 function AttachmentRow({ att, onOpen }: { att: Attachment; onOpen: () => void }) {
-  const isImage = att.url && isImageAttachment(att.contentType, att.filename);
+  const isImage = att.squareThumbnailURL && isImageAttachment(att.contentType, att.filename);
   const iconType = iconForAttachment(att.contentType, att.filename);
   return (
     <div className="flex h-12 w-64 max-w-full items-center gap-1 rounded-md border bg-background pr-1 hover:bg-muted/50 max-md:w-full">
@@ -167,7 +167,7 @@ function AttachmentRow({ att, onOpen }: { att: Attachment; onOpen: () => void })
       >
         {isImage ? (
           <img
-            src={att.url}
+            src={att.squareThumbnailURL}
             alt=""
             data-testid="message-attachment-thumb"
             className="h-8 w-8 shrink-0 rounded-sm object-cover"

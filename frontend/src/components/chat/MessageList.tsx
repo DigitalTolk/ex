@@ -11,6 +11,8 @@ import { shouldAutoStickMessageList } from './message-list-autostick';
 const ANCHOR_HIGHLIGHT_MS = 2200;
 const DEFAULT_MESSAGE_ROW_HEIGHT = 88;
 const MESSAGE_LIST_OVERSCAN_PX = 600;
+const MESSAGE_LIST_AT_BOTTOM_THRESHOLD_PX = 4;
+const USER_SCROLL_AUTOSTICK_SUPPRESSION_MS = 1200;
 
 // firstItemIndex is shifted down on every prepend (older-page fetch)
 // so Virtuoso identifies prepended rows as preceding existing ones
@@ -78,6 +80,9 @@ function VirtuosoMessageList({
   const virtuosoRef = useRef<VirtuosoHandle>(null);
   const scrollerRef = useRef<HTMLElement | null>(null);
   const atBottomRef = useRef(true);
+  const lastScrollerTopRef = useRef(0);
+  const autoStickSuppressedUntilRef = useRef(0);
+  const detachScrollerRef = useRef<(() => void) | null>(null);
 
   // Ready gate: Virtuoso can fire `startReached` during its initial
   // measurement pass before the user has actually scrolled — most
@@ -158,6 +163,24 @@ function VirtuosoMessageList({
   // `rows` prop — this is what guarantees `data` and `firstItemIndex`
   // hit Virtuoso atomically.
   const renderRows = virtuosoData.rows;
+  const isAutoStickSuppressed = useCallback(
+    () => performance.now() < autoStickSuppressedUntilRef.current,
+    [],
+  );
+  const canAutoStickToBottom = useCallback(() => shouldAutoStickMessageList({
+    anchorMsgId,
+    hasPreviousPage,
+    atBottom: atBottomRef.current,
+    autoStickSuppressed: isAutoStickSuppressed(),
+  }), [anchorMsgId, hasPreviousPage, isAutoStickSuppressed]);
+  const followLiveOutput = useCallback((isAtBottom: boolean) => (
+    shouldAutoStickMessageList({
+      anchorMsgId,
+      hasPreviousPage,
+      atBottom: isAtBottom,
+      autoStickSuppressed: isAutoStickSuppressed(),
+    }) ? 'auto' : false
+  ), [anchorMsgId, hasPreviousPage, isAutoStickSuppressed]);
   const scrollToBottom = useCallback(() => {
     virtuosoRef.current?.autoscrollToBottom?.();
     virtuosoRef.current?.scrollToIndex({ index: 'LAST', align: 'end' });
@@ -167,26 +190,45 @@ function VirtuosoMessageList({
   }, []);
 
   const handleContentHeightChange = useCallback(() => {
-    const wasAtLiveTail = shouldAutoStickMessageList({
-      anchorMsgId,
-      hasPreviousPage,
-      atBottom: atBottomRef.current,
-    });
-    if (!wasAtLiveTail) return;
+    if (!canAutoStickToBottom()) return;
 
     const scrollAfterLayout = (remainingFrames: number) => {
       requestAnimationFrame(() => {
-        if (anchorMsgId || hasPreviousPage) return;
+        if (!canAutoStickToBottom()) return;
         scrollToBottom();
         if (remainingFrames > 1) scrollAfterLayout(remainingFrames - 1);
       });
     };
 
     scrollAfterLayout(3);
-  }, [anchorMsgId, hasPreviousPage, scrollToBottom]);
+  }, [canAutoStickToBottom, scrollToBottom]);
 
   const handleScrollerRef = useCallback((ref: HTMLElement | Window | null) => {
-    scrollerRef.current = ref instanceof HTMLElement ? ref : null;
+    detachScrollerRef.current?.();
+    detachScrollerRef.current = null;
+
+    const scroller = ref instanceof HTMLElement ? ref : null;
+    scrollerRef.current = scroller;
+    if (!scroller) return;
+
+    lastScrollerTopRef.current = scroller.scrollTop;
+    const onScroll = () => {
+      const nextScrollTop = scroller.scrollTop;
+      const previousScrollTop = lastScrollerTopRef.current;
+      const distanceFromBottom = scroller.scrollHeight - nextScrollTop - scroller.clientHeight;
+      if (nextScrollTop < previousScrollTop - 2 && distanceFromBottom > MESSAGE_LIST_AT_BOTTOM_THRESHOLD_PX) {
+        autoStickSuppressedUntilRef.current = performance.now() + USER_SCROLL_AUTOSTICK_SUPPRESSION_MS;
+        atBottomRef.current = false;
+      } else if (distanceFromBottom <= MESSAGE_LIST_AT_BOTTOM_THRESHOLD_PX) {
+        autoStickSuppressedUntilRef.current = 0;
+      }
+      lastScrollerTopRef.current = nextScrollTop;
+    };
+    scroller.addEventListener('scroll', onScroll, { passive: true });
+    detachScrollerRef.current = () => scroller.removeEventListener('scroll', onScroll);
+  }, []);
+  useEffect(() => () => {
+    detachScrollerRef.current?.();
   }, []);
 
   // Force-scroll-to-bottom when the bottom message becomes the
@@ -290,6 +332,7 @@ function VirtuosoMessageList({
       computeItemKey={(_index, row) => row.key}
       defaultItemHeight={DEFAULT_MESSAGE_ROW_HEIGHT}
       increaseViewportBy={{ top: MESSAGE_LIST_OVERSCAN_PX, bottom: MESSAGE_LIST_OVERSCAN_PX }}
+      atBottomThreshold={MESSAGE_LIST_AT_BOTTOM_THRESHOLD_PX}
       // Auto-follow only when the loaded slice IS the live tail. When
       // hasPreviousPage is true (deep-link mid-history with newer
       // pages still unfetched), disable follow: each forward-pagination
@@ -300,7 +343,7 @@ function VirtuosoMessageList({
       // scroll. With hasPreviousPage=false (we're at the live tail)
       // 'auto' still snaps for incoming WS messages when the user is
       // at the bottom — the canonical chat behaviour.
-      followOutput={hasPreviousPage ? false : 'auto'}
+      followOutput={hasPreviousPage ? false : followLiveOutput}
       scrollerRef={handleScrollerRef}
       atBottomStateChange={(atBottom) => {
         atBottomRef.current = atBottom;

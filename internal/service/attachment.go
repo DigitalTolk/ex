@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"image"
+	stddraw "image/draw"
 	// Register decoders for the formats the upload pipeline accepts.
 	// image.DecodeConfig dispatches by format magic bytes; without
 	// these blank imports it returns ErrFormat for everything but
@@ -22,9 +23,8 @@ import (
 	"sync"
 	"time"
 
-	// WebP support — common enough on the modern web that not handling
-	// it would leave a noticeable backfill gap.
-	_ "golang.org/x/image/webp"
+	nativewebp "github.com/HugoSmits86/nativewebp"
+	xdraw "golang.org/x/image/draw"
 
 	"github.com/DigitalTolk/ex/internal/events"
 	"github.com/DigitalTolk/ex/internal/model"
@@ -41,6 +41,7 @@ type AttachmentStore interface {
 	RemoveRef(ctx context.Context, attachmentID, messageID string) (*model.Attachment, error)
 	Delete(ctx context.Context, id string) error
 	SetDimensions(ctx context.Context, id string, width, height int) error
+	SetThumbnailKeys(ctx context.Context, id, thumbnailKey, squareThumbnailKey string) error
 }
 
 // AttachmentSigner generates time-limited GET/PUT URLs for attachment objects
@@ -54,6 +55,7 @@ type AttachmentSigner interface {
 	DeleteObject(ctx context.Context, key string) error
 	GetObjectRange(ctx context.Context, key string, maxBytes int64) ([]byte, error)
 	GetObject(ctx context.Context, key string) (io.ReadCloser, string, int64, time.Time, error)
+	PutObject(ctx context.Context, key, contentType string, body []byte) error
 }
 
 // AttachmentService manages message attachments: dedup-by-hash uploads, signed
@@ -112,6 +114,12 @@ func (s *AttachmentService) SetAccessChecker(c AttachmentAccessChecker) { s.acce
 const AttachmentURLTTL = 24 * time.Hour
 
 const MaxAttachmentBatchIDs = 50
+
+const (
+	messageThumbnailMaxWidth  = 640
+	messageThumbnailMaxHeight = 576
+	squareThumbnailSize       = 96
+)
 
 type AttachmentAccessChecker interface {
 	CanAccessMessageAttachment(ctx context.Context, userID, parentID, parentType, messageID, attachmentID string) error
@@ -202,6 +210,21 @@ func (s *AttachmentService) CreateUploadURL(ctx context.Context, p CreateUploadP
 	return &CreateUploadResult{Attachment: a, UploadURL: uploadURL}, nil
 }
 
+func attachmentNeedsThumbnails(contentType string) bool {
+	declaredType := strings.ToLower(strings.TrimSpace(strings.Split(contentType, ";")[0]))
+	return strings.HasPrefix(declaredType, "image/") && declaredType != "image/svg+xml"
+}
+
+func (s *AttachmentService) ensureThumbnailKeys(ctx context.Context, a *model.Attachment) error {
+	thumbnailKey, squareThumbnailKey := thumbnailObjectKeys(a)
+	a.ThumbnailS3Key = thumbnailKey
+	a.SquareThumbnailS3Key = squareThumbnailKey
+	if err := s.attachments.SetThumbnailKeys(ctx, a.ID, a.ThumbnailS3Key, a.SquareThumbnailS3Key); err != nil {
+		return fmt.Errorf("attachment: set thumbnail keys: %w", err)
+	}
+	return nil
+}
+
 // Get returns an attachment with a signed GET URL. Used by clients to
 // render an attachment. URLs are served from a per-S3-key cache so
 // repeated lookups within the cache window hand out the SAME URL —
@@ -219,6 +242,7 @@ func (s *AttachmentService) Get(ctx context.Context, id string) (*model.Attachme
 	if err != nil {
 		return nil, fmt.Errorf("attachment: get: %w", err)
 	}
+	s.ensureThumbnailsForRead(ctx, a)
 	if s.signer != nil && a.S3Key != "" {
 		s.resolveAttachmentURLs(ctx, a)
 	}
@@ -236,6 +260,7 @@ func (s *AttachmentService) GetForUser(ctx context.Context, userID, id, parentID
 	if !s.canAccessAttachment(ctx, userID, a, parentID, parentType, messageID) {
 		return nil, store.ErrNotFound
 	}
+	s.ensureThumbnailsForRead(ctx, a)
 	if s.signer != nil && a.S3Key != "" {
 		s.resolveAttachmentURLs(ctx, a)
 	}
@@ -278,10 +303,78 @@ func (s *AttachmentService) resolveAttachmentURLs(ctx context.Context, a *model.
 		}); err == nil {
 		a.DownloadURL = dl
 	}
+	if a.ThumbnailS3Key != "" {
+		if s.mediaCache != nil {
+			if mediaURL, err := s.mediaURLForObject(ctx, "attachment-thumb", a.ID, a.ThumbnailS3Key, thumbnailFilename(a.Filename), "image/webp", 0); err == nil {
+				a.ThumbnailURL = mediaURL
+			}
+		}
+		if a.ThumbnailURL == "" {
+			if url, err := s.urlCache.getOrSign(ctx, presignedKey{op: "thumb", key: a.ThumbnailS3Key},
+				func(ctx context.Context) (string, error) {
+					return s.signer.PresignedGetURL(ctx, a.ThumbnailS3Key, AttachmentURLTTL)
+				}); err == nil {
+				a.ThumbnailURL = url
+			}
+		}
+	}
+	if a.SquareThumbnailS3Key != "" {
+		if s.mediaCache != nil {
+			if mediaURL, err := s.mediaURLForObject(ctx, "attachment-square-thumb", a.ID, a.SquareThumbnailS3Key, squareThumbnailFilename(a.Filename), "image/webp", 0); err == nil {
+				a.SquareThumbnailURL = mediaURL
+			}
+		}
+		if a.SquareThumbnailURL == "" {
+			if url, err := s.urlCache.getOrSign(ctx, presignedKey{op: "square-thumb", key: a.SquareThumbnailS3Key},
+				func(ctx context.Context) (string, error) {
+					return s.signer.PresignedGetURL(ctx, a.SquareThumbnailS3Key, AttachmentURLTTL)
+				}); err == nil {
+				a.SquareThumbnailURL = url
+			}
+		}
+	}
 }
 
 func (s *AttachmentService) mediaURL(ctx context.Context, a *model.Attachment) (string, error) {
-	return StableMediaURL(ctx, s.mediaCache, "attachment", a.ID, a.S3Key, a.Filename, a.ContentType, a.Size)
+	return s.mediaURLForObject(ctx, "attachment", a.ID, a.S3Key, a.Filename, a.ContentType, a.Size)
+}
+
+func (s *AttachmentService) mediaURLForObject(ctx context.Context, namespace, id, s3Key, filename, contentType string, size int64) (string, error) {
+	return StableMediaURL(ctx, s.mediaCache, namespace, id, s3Key, filename, contentType, size)
+}
+
+func thumbnailFilename(filename string) string {
+	if filename == "" {
+		return "thumbnail.webp"
+	}
+	return filename + ".thumb.webp"
+}
+
+func squareThumbnailFilename(filename string) string {
+	if filename == "" {
+		return "thumbnail-square.webp"
+	}
+	return filename + ".square.webp"
+}
+
+func (s *AttachmentService) ensureThumbnailsForRead(ctx context.Context, a *model.Attachment) {
+	if s.signer == nil || a == nil || a.S3Key == "" || a.Size <= 0 || a.SHA256 == "" {
+		return
+	}
+	if !attachmentNeedsThumbnails(a.ContentType) || (a.ThumbnailS3Key != "" && a.SquareThumbnailS3Key != "") {
+		return
+	}
+	data, cfg, err := s.validateUploadedObject(ctx, a)
+	if err != nil {
+		return
+	}
+	if cfg.Width > 0 && cfg.Height > 0 && (a.Width != cfg.Width || a.Height != cfg.Height) {
+		if err := s.attachments.SetDimensions(ctx, a.ID, cfg.Width, cfg.Height); err == nil {
+			a.Width = cfg.Width
+			a.Height = cfg.Height
+		}
+	}
+	_ = s.generateThumbnails(ctx, a, data, cfg, false)
 }
 
 func (s *AttachmentService) OpenMedia(ctx context.Context, token string) (*MediaObject, error) {
@@ -421,68 +514,229 @@ func (s *AttachmentService) ValidateForUse(ctx context.Context, attachmentID str
 	if s.signer == nil {
 		return errors.New("attachment: storage not configured")
 	}
-	body, objectContentType, objectSize, _, err := s.signer.GetObject(ctx, a.S3Key)
+	data, cfg, err := s.validateUploadedObject(ctx, a)
 	if err != nil {
-		return fmt.Errorf("attachment: object missing: %w", err)
+		return err
 	}
-	defer func() { _ = body.Close() }()
-	if objectSize > 0 && objectSize != a.Size {
-		return fmt.Errorf("attachment: object size mismatch: got %d want %d", objectSize, a.Size)
-	}
-
-	limited := io.LimitReader(body, a.Size+1)
-	data, err := io.ReadAll(limited)
-	if err != nil {
-		return fmt.Errorf("attachment: read object: %w", err)
-	}
-	if int64(len(data)) != a.Size {
-		return fmt.Errorf("attachment: object size mismatch: got %d want %d", len(data), a.Size)
-	}
-	sum := sha256.Sum256(data)
-	if !strings.EqualFold(hex.EncodeToString(sum[:]), a.SHA256) {
-		return errors.New("attachment: sha256 mismatch")
-	}
-	if err := validateAttachmentContentType(a, objectContentType, data); err != nil {
+	if err := s.generateThumbnails(ctx, a, data, cfg, false); err != nil {
 		return err
 	}
 	return nil
 }
 
-func validateAttachmentContentType(a *model.Attachment, objectContentType string, data []byte) error {
+// ProcessUpload validates the object that was uploaded via the presigned PUT
+// URL, persists trusted image dimensions, and generates server-side thumbnails.
+// The frontend calls this immediately after the direct upload completes, before
+// allowing the attachment to be posted in a message. ValidateForUse runs the
+// same path as a final guard in case a client skips this endpoint.
+func (s *AttachmentService) ProcessUpload(ctx context.Context, userID, attachmentID string) (*model.Attachment, error) {
+	if userID == "" {
+		return nil, errors.New("attachment: userID required")
+	}
+	if attachmentID == "" {
+		return nil, errors.New("attachment: id required")
+	}
+	a, err := s.attachments.GetByID(ctx, attachmentID)
+	if err != nil {
+		return nil, fmt.Errorf("attachment: get for processing: %w", err)
+	}
+	if a.CreatedBy != userID {
+		return nil, ErrForbidden
+	}
+	if s.signer == nil {
+		return nil, errors.New("attachment: storage not configured")
+	}
+	data, cfg, err := s.validateUploadedObject(ctx, a)
+	if err != nil {
+		return nil, err
+	}
+	if cfg.Width > 0 && cfg.Height > 0 && (a.Width != cfg.Width || a.Height != cfg.Height) {
+		if err := s.attachments.SetDimensions(ctx, a.ID, cfg.Width, cfg.Height); err != nil {
+			return nil, fmt.Errorf("attachment: set dimensions: %w", err)
+		}
+		a.Width = cfg.Width
+		a.Height = cfg.Height
+	}
+	if err := s.generateThumbnails(ctx, a, data, cfg, true); err != nil {
+		return nil, err
+	}
+	if s.signer != nil && a.S3Key != "" {
+		s.resolveAttachmentURLs(ctx, a)
+	}
+	return a, nil
+}
+
+func (s *AttachmentService) validateUploadedObject(ctx context.Context, a *model.Attachment) ([]byte, image.Config, error) {
+	var cfg image.Config
+	if a == nil {
+		return nil, cfg, errors.New("attachment: missing attachment")
+	}
+	if a.S3Key == "" {
+		return nil, cfg, errors.New("attachment: missing storage key")
+	}
+	if a.Size <= 0 {
+		return nil, cfg, errors.New("attachment: invalid size")
+	}
+	body, objectContentType, objectSize, _, err := s.signer.GetObject(ctx, a.S3Key)
+	if err != nil {
+		return nil, cfg, fmt.Errorf("attachment: object missing: %w", err)
+	}
+	defer func() { _ = body.Close() }()
+	if objectSize > 0 && objectSize != a.Size {
+		return nil, cfg, fmt.Errorf("attachment: object size mismatch: got %d want %d", objectSize, a.Size)
+	}
+
+	limited := io.LimitReader(body, a.Size+1)
+	data, err := io.ReadAll(limited)
+	if err != nil {
+		return nil, cfg, fmt.Errorf("attachment: read object: %w", err)
+	}
+	if int64(len(data)) != a.Size {
+		return nil, cfg, fmt.Errorf("attachment: object size mismatch: got %d want %d", len(data), a.Size)
+	}
+	sum := sha256.Sum256(data)
+	if !strings.EqualFold(hex.EncodeToString(sum[:]), a.SHA256) {
+		return nil, cfg, errors.New("attachment: sha256 mismatch")
+	}
+	cfg, err = validateAttachmentContentType(a, objectContentType, data)
+	if err != nil {
+		return nil, cfg, err
+	}
+	return data, cfg, nil
+}
+
+func validateAttachmentContentType(a *model.Attachment, objectContentType string, data []byte) (image.Config, error) {
+	var cfg image.Config
 	declared := a.ContentType
 	declared = strings.ToLower(strings.TrimSpace(strings.Split(declared, ";")[0]))
 	objectContentType = strings.ToLower(strings.TrimSpace(strings.Split(objectContentType, ";")[0]))
 	if objectContentType != "" && declared != "" && objectContentType != declared && declared != "application/octet-stream" {
-		return fmt.Errorf("attachment: object content type %q does not match declared %q", objectContentType, declared)
+		return cfg, fmt.Errorf("attachment: object content type %q does not match declared %q", objectContentType, declared)
 	}
 	if !strings.HasPrefix(declared, "image/") {
-		return nil
+		return cfg, nil
 	}
 	if declared == "image/svg+xml" {
-		return validateSVG(data)
+		return cfg, validateSVG(data)
 	}
 	detected := http.DetectContentType(data)
 	if detected == "application/octet-stream" {
-		return errors.New("attachment: could not detect image content type")
+		return cfg, errors.New("attachment: could not detect image content type")
 	}
 	cfg, format, err := image.DecodeConfig(bytes.NewReader(data))
 	if err != nil || cfg.Width <= 0 || cfg.Height <= 0 {
-		return errors.New("attachment: invalid image")
+		return cfg, errors.New("attachment: invalid image")
 	}
 	if a.Width > 0 && a.Width != cfg.Width {
-		return fmt.Errorf("attachment: image width mismatch: got %d want %d", cfg.Width, a.Width)
+		return cfg, fmt.Errorf("attachment: image width mismatch: got %d want %d", cfg.Width, a.Width)
 	}
 	if a.Height > 0 && a.Height != cfg.Height {
-		return fmt.Errorf("attachment: image height mismatch: got %d want %d", cfg.Height, a.Height)
+		return cfg, fmt.Errorf("attachment: image height mismatch: got %d want %d", cfg.Height, a.Height)
 	}
 	expectedFormat := strings.TrimPrefix(declared, "image/")
 	if expectedFormat == "jpg" {
 		expectedFormat = "jpeg"
 	}
 	if format != expectedFormat {
-		return fmt.Errorf("attachment: image format %q does not match declared %q", format, declared)
+		return cfg, fmt.Errorf("attachment: image format %q does not match declared %q", format, declared)
 	}
+	return cfg, nil
+}
+
+func (s *AttachmentService) generateThumbnails(ctx context.Context, a *model.Attachment, data []byte, cfg image.Config, force bool) error {
+	if a == nil || cfg.Width <= 0 || cfg.Height <= 0 || !attachmentNeedsThumbnails(a.ContentType) {
+		return nil
+	}
+	if !force && a.ThumbnailS3Key != "" && a.SquareThumbnailS3Key != "" {
+		return nil
+	}
+	thumbnailKey, squareThumbnailKey := thumbnailObjectKeys(a)
+	img, _, err := image.Decode(bytes.NewReader(data))
+	if err != nil {
+		return fmt.Errorf("attachment: decode image for thumbnails: %w", err)
+	}
+	messageThumb, err := encodeWebPThumbnail(img, thumbnailModeMessage)
+	if err != nil {
+		return fmt.Errorf("attachment: encode message thumbnail: %w", err)
+	}
+	if err := s.signer.PutObject(ctx, thumbnailKey, "image/webp", messageThumb); err != nil {
+		return fmt.Errorf("attachment: store message thumbnail: %w", err)
+	}
+	squareThumb, err := encodeWebPThumbnail(img, thumbnailModeSquare)
+	if err != nil {
+		return fmt.Errorf("attachment: encode square thumbnail: %w", err)
+	}
+	if err := s.signer.PutObject(ctx, squareThumbnailKey, "image/webp", squareThumb); err != nil {
+		return fmt.Errorf("attachment: store square thumbnail: %w", err)
+	}
+	if err := s.attachments.SetThumbnailKeys(ctx, a.ID, thumbnailKey, squareThumbnailKey); err != nil {
+		return fmt.Errorf("attachment: set thumbnail keys: %w", err)
+	}
+	a.ThumbnailS3Key = thumbnailKey
+	a.SquareThumbnailS3Key = squareThumbnailKey
+	s.urlCache.invalidate(a.ThumbnailS3Key)
+	s.urlCache.invalidate(a.SquareThumbnailS3Key)
 	return nil
+}
+
+func thumbnailObjectKeys(a *model.Attachment) (string, string) {
+	thumbnailKey := a.ThumbnailS3Key
+	if thumbnailKey == "" {
+		thumbnailKey = "attachments/" + a.ID + "/thumb-message@2x.webp"
+	}
+	squareThumbnailKey := a.SquareThumbnailS3Key
+	if squareThumbnailKey == "" {
+		squareThumbnailKey = "attachments/" + a.ID + "/thumb-square@2x.webp"
+	}
+	return thumbnailKey, squareThumbnailKey
+}
+
+type thumbnailMode int
+
+const (
+	thumbnailModeMessage thumbnailMode = iota
+	thumbnailModeSquare
+)
+
+func encodeWebPThumbnail(src image.Image, mode thumbnailMode) ([]byte, error) {
+	if src == nil {
+		return nil, errors.New("missing image")
+	}
+	srcBounds := src.Bounds()
+	srcWidth := srcBounds.Dx()
+	srcHeight := srcBounds.Dy()
+	if srcWidth <= 0 || srcHeight <= 0 {
+		return nil, errors.New("invalid image dimensions")
+	}
+
+	drawSrc := src
+	srcRect := srcBounds
+	var dstWidth int
+	var dstHeight int
+	if mode == thumbnailModeSquare {
+		side := min(srcWidth, srcHeight)
+		x0 := srcBounds.Min.X + (srcWidth-side)/2
+		y0 := srcBounds.Min.Y + (srcHeight-side)/2
+		srcRect = image.Rect(x0, y0, x0+side, y0+side)
+		dstWidth = squareThumbnailSize
+		dstHeight = squareThumbnailSize
+	} else {
+		scale := min(1, min(
+			float64(messageThumbnailMaxWidth)/float64(srcWidth),
+			float64(messageThumbnailMaxHeight)/float64(srcHeight),
+		))
+		dstWidth = max(1, int(float64(srcWidth)*scale+0.5))
+		dstHeight = max(1, int(float64(srcHeight)*scale+0.5))
+	}
+	dst := image.NewNRGBA(image.Rect(0, 0, dstWidth, dstHeight))
+	stddraw.Draw(dst, dst.Bounds(), image.Transparent, image.Point{}, stddraw.Src)
+	xdraw.CatmullRom.Scale(dst, dst.Bounds(), drawSrc, srcRect, stddraw.Over, nil)
+
+	var out bytes.Buffer
+	if err := nativewebp.Encode(&out, dst, nil); err != nil {
+		return nil, err
+	}
+	return out.Bytes(), nil
 }
 
 func validateSVG(data []byte) error {
@@ -541,10 +795,7 @@ func (s *AttachmentService) RemoveRef(ctx context.Context, attachmentID, message
 	}
 	if updated != nil && len(updated.MessageIDs) == 0 {
 		// Last reference gone — GC.
-		if s.signer != nil && updated.S3Key != "" {
-			_ = s.signer.DeleteObject(ctx, updated.S3Key)
-		}
-		s.urlCache.invalidate(updated.S3Key)
+		s.deleteAttachmentObjects(ctx, updated)
 		_ = s.attachments.Delete(ctx, attachmentID)
 		events.Publish(ctx, s.publisher, pubsub.GlobalChannelEvents(), events.EventAttachmentDeleted, map[string]any{
 			"id": attachmentID,
@@ -567,10 +818,7 @@ func (s *AttachmentService) DeleteDraft(ctx context.Context, userID, attachmentI
 	if len(a.MessageIDs) > 0 {
 		return errors.New("attachment: still referenced by sent messages")
 	}
-	if s.signer != nil && a.S3Key != "" {
-		_ = s.signer.DeleteObject(ctx, a.S3Key)
-	}
-	s.urlCache.invalidate(a.S3Key)
+	s.deleteAttachmentObjects(ctx, a)
 	if err := s.attachments.Delete(ctx, attachmentID); err != nil {
 		return fmt.Errorf("attachment: delete: %w", err)
 	}
@@ -578,4 +826,22 @@ func (s *AttachmentService) DeleteDraft(ctx context.Context, userID, attachmentI
 		"id": attachmentID,
 	})
 	return nil
+}
+
+func (s *AttachmentService) deleteAttachmentObjects(ctx context.Context, a *model.Attachment) {
+	if a == nil {
+		return
+	}
+	if s.signer != nil {
+		for _, key := range []string{a.S3Key, a.ThumbnailS3Key, a.SquareThumbnailS3Key} {
+			if key != "" {
+				_ = s.signer.DeleteObject(ctx, key)
+			}
+		}
+	}
+	for _, key := range []string{a.S3Key, a.ThumbnailS3Key, a.SquareThumbnailS3Key} {
+		if key != "" {
+			s.urlCache.invalidate(key)
+		}
+	}
 }

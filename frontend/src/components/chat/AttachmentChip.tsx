@@ -11,6 +11,7 @@ interface DraftAttachment {
   localURL?: string;
   // Resolved server preview URL for persisted draft/edit attachments.
   url?: string;
+  squareThumbnailURL?: string;
   // [0, 1] while uploading; undefined or 1 means done.
   progress?: number;
 }
@@ -22,7 +23,7 @@ interface AttachmentChipProps {
 
 export function AttachmentChip({ att, onRemove }: AttachmentChipProps) {
   const isImage = isImageAttachment(att.contentType, att.filename);
-  const previewURL = att.localURL ?? att.url;
+  const previewURL = att.localURL ?? att.squareThumbnailURL;
   const uploading = att.progress !== undefined && att.progress < 1;
   const pct = Math.max(0, Math.min(1, att.progress ?? 1));
   return (

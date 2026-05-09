@@ -36,6 +36,7 @@ describe('MessageAttachments', () => {
       contentType: 'image/png',
       size: 12345,
       url: 'https://cdn/cat.png',
+      thumbnailURL: 'https://cdn/cat-thumb.webp',
     };
     useAttachmentsBatchMock.mockReturnValue({
       map: new Map([['a-1', att]]),
@@ -44,7 +45,7 @@ describe('MessageAttachments', () => {
     render(<MessageAttachments {...baseProps} ids={['a-1']} />);
     const button = screen.getByLabelText('Open image cat.png');
     expect(button.tagName).toBe('BUTTON');
-    expect(screen.getByAltText('cat.png')).toBeInTheDocument();
+    expect(screen.getByAltText('cat.png')).toHaveAttribute('src', 'https://cdn/cat-thumb.webp');
   });
 
   it('keeps single-image thumbnails inside the mobile message column', () => {
@@ -54,6 +55,7 @@ describe('MessageAttachments', () => {
       contentType: 'image/png',
       size: 12345,
       url: 'https://cdn/mobile.png',
+      thumbnailURL: 'https://cdn/mobile-thumb.webp',
       width: 1600,
       height: 1200,
     };
@@ -74,6 +76,7 @@ describe('MessageAttachments', () => {
       contentType: 'image/png',
       size: 12345,
       url: 'https://cdn/wide.png',
+      thumbnailURL: 'https://cdn/wide-thumb.webp',
       width: 4000,
       height: 3000,
     };
@@ -94,6 +97,7 @@ describe('MessageAttachments', () => {
       contentType: 'image/png',
       size: 12345,
       url: 'https://cdn/tall.png',
+      thumbnailURL: 'https://cdn/tall-thumb.webp',
       width: 1000,
       height: 4000,
     };
@@ -119,6 +123,7 @@ describe('MessageAttachments', () => {
       contentType: 'image/png',
       size: 100,
       url: 'https://cdn/one.png',
+      squareThumbnailURL: 'https://cdn/one-square.webp',
     };
     const att2: Attachment = {
       id: 'p-2',
@@ -139,7 +144,7 @@ describe('MessageAttachments', () => {
     // Image row → real <img> thumbnail.
     const thumbs = screen.getAllByTestId('message-attachment-thumb');
     expect(thumbs).toHaveLength(1);
-    expect(thumbs[0]).toHaveAttribute('src', 'https://cdn/one.png');
+    expect(thumbs[0]).toHaveAttribute('src', 'https://cdn/one-square.webp');
 
     // Both rows present, but only the non-image keeps the generic
     // lucide icon (no thumbnail).
@@ -183,6 +188,7 @@ describe('MessageAttachments', () => {
       contentType: 'image/png',
       size: 100,
       url: 'https://cdn/pic.png',
+      thumbnailURL: 'https://cdn/pic-thumb.webp',
     };
     useAttachmentsBatchMock.mockReturnValue({
       map: new Map<string, Attachment>([['fok-1', att]]),
@@ -283,6 +289,7 @@ describe('MessageAttachments', () => {
       contentType: 'image/png',
       size: 1000,
       url: 'https://cdn/pic.png',
+      thumbnailURL: 'https://cdn/pic-thumb.webp',
       downloadURL: 'https://cdn/pic.png?response-content-disposition=attachment',
     };
     useAttachmentsBatchMock.mockReturnValue({
@@ -336,6 +343,7 @@ describe('MessageAttachments', () => {
       contentType: 'image/png',
       size: 1000,
       url: 'https://cdn/pic.png',
+      thumbnailURL: 'https://cdn/pic-thumb.webp',
     };
     useAttachmentsBatchMock.mockReturnValue({
       map: new Map([['a-5', att]]),
@@ -367,6 +375,7 @@ describe('MessageAttachments', () => {
       contentType: 'image/png',
       size: 100,
       url: 'https://cdn/p.png',
+      thumbnailURL: 'https://cdn/p-thumb.webp',
     };
     useAttachmentsBatchMock.mockReturnValue({
       map: new Map([['a-6', att]]),
@@ -386,6 +395,7 @@ describe('MessageAttachments', () => {
       contentType: 'image/png',
       size: 100,
       url: 'https://cdn/tap.png',
+      thumbnailURL: 'https://cdn/tap-thumb.webp',
     };
     useAttachmentsBatchMock.mockReturnValue({
       map: new Map([['a-tap-close', att]]),
@@ -406,6 +416,7 @@ describe('MessageAttachments', () => {
       contentType: 'image/png',
       size: 100,
       url: 'https://cdn/zoom.png',
+      thumbnailURL: 'https://cdn/zoom-thumb.webp',
     };
     useAttachmentsBatchMock.mockReturnValue({
       map: new Map([['a-zoom', att]]),
@@ -431,6 +442,7 @@ describe('MessageAttachments', () => {
       contentType: 'image/png',
       size: 100,
       url: 'https://cdn/pan.png',
+      thumbnailURL: 'https://cdn/pan-thumb.webp',
     };
     useAttachmentsBatchMock.mockReturnValue({
       map: new Map([['a-pan', att]]),
@@ -465,6 +477,7 @@ describe('MessageAttachments', () => {
       contentType: 'image/png',
       size: 100,
       url: 'https://cdn/pic.png',
+      thumbnailURL: 'https://cdn/pic-thumb.webp',
     };
     useAttachmentsBatchMock.mockReturnValue({
       map: new Map([['a-blur', att]]),
@@ -487,6 +500,7 @@ describe('MessageAttachments', () => {
       contentType: 'image/png',
       size: 100,
       url: 'https://cdn/p.png',
+      thumbnailURL: 'https://cdn/p-thumb.webp',
     };
     useAttachmentsBatchMock.mockReturnValue({
       map: new Map([['a-7', att]]),
@@ -505,6 +519,7 @@ describe('MessageAttachments', () => {
       contentType: 'image/png',
       size: 100,
       url: 'https://cdn/scroll.png',
+      thumbnailURL: 'https://cdn/scroll-thumb.webp',
     };
     document.body.style.overflow = 'auto';
     useAttachmentsBatchMock.mockReturnValue({
@@ -570,7 +585,17 @@ describe('MessageAttachments', () => {
 
   it('hides chevrons and ignores arrow keys when there is only one image', () => {
     const single = new Map<string, Attachment>([
-      ['x', { id: 'x', filename: 'only.png', contentType: 'image/png', size: 1, url: 'https://cdn/only.png' }],
+      [
+        'x',
+        {
+          id: 'x',
+          filename: 'only.png',
+          contentType: 'image/png',
+          size: 1,
+          url: 'https://cdn/only.png',
+          thumbnailURL: 'https://cdn/only-thumb.webp',
+        },
+      ],
     ]);
     useAttachmentsBatchMock.mockReturnValue({ map: single, isLoading: false });
     render(<MessageAttachments {...baseProps} ids={['x']} />);

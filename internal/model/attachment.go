@@ -7,14 +7,21 @@ import "time"
 // to a single S3 object; MessageIDs is the (Dynamo string-set-backed) refcount
 // — when it drops to zero the S3 object and Attachment row are removed.
 type Attachment struct {
-	ID          string    `json:"id" dynamodbav:"id"`
-	SHA256      string    `json:"sha256" dynamodbav:"sha256"`
-	Size        int64     `json:"size" dynamodbav:"size"`
-	ContentType string    `json:"contentType" dynamodbav:"contentType"`
-	Filename    string    `json:"filename" dynamodbav:"filename"`
-	S3Key       string    `json:"-" dynamodbav:"s3Key"`
-	URL         string    `json:"url,omitempty" dynamodbav:"-"`         // resolved at fetch time, inline (used by <img>/preview)
-	DownloadURL string    `json:"downloadURL,omitempty" dynamodbav:"-"` // resolved at fetch time, forces Content-Disposition: attachment
+	ID          string `json:"id" dynamodbav:"id"`
+	SHA256      string `json:"sha256" dynamodbav:"sha256"`
+	Size        int64  `json:"size" dynamodbav:"size"`
+	ContentType string `json:"contentType" dynamodbav:"contentType"`
+	Filename    string `json:"filename" dynamodbav:"filename"`
+	S3Key       string `json:"-" dynamodbav:"s3Key"`
+	URL         string `json:"url,omitempty" dynamodbav:"-"`         // resolved at fetch time, inline (used by <img>/preview)
+	DownloadURL string `json:"downloadURL,omitempty" dynamodbav:"-"` // resolved at fetch time, forces Content-Disposition: attachment
+	// ThumbnailS3Key is a 2x WebP preview for the large single-image
+	// message attachment renderer. SquareThumbnailS3Key is a 2x WebP
+	// square crop for compact multi-attachment rows and sidebars.
+	ThumbnailS3Key       string `json:"-" dynamodbav:"thumbnailS3Key,omitempty"`
+	SquareThumbnailS3Key string `json:"-" dynamodbav:"squareThumbnailS3Key,omitempty"`
+	ThumbnailURL         string `json:"thumbnailURL,omitempty" dynamodbav:"-"`
+	SquareThumbnailURL   string `json:"squareThumbnailURL,omitempty" dynamodbav:"-"`
 	// Width and Height are the intrinsic pixel dimensions of an
 	// image attachment. Detected at upload time from the image's
 	// own headers and persisted so the frontend can render the

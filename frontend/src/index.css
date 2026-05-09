@@ -172,12 +172,20 @@
 @layer base {
   html {
     font-size: 16px;
+    background-color: var(--color-background);
   }
 
   body {
     @apply bg-background text-foreground font-sans;
     font-size: 0.875rem;
     margin: 0;
+  }
+
+  html,
+  body,
+  #root {
+    min-height: 100%;
+    background-color: var(--color-background);
   }
 
   @media (max-width: 767px) {

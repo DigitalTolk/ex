@@ -4,12 +4,12 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/expression"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
-	"github.com/DigitalTolk/ex/internal/model"
 )
 
 // AttachmentStore defines persistence operations for message attachments.
@@ -132,8 +132,8 @@ func (s *AttachmentStoreImpl) GetByHash(ctx context.Context, sha256 string) (*mo
 // the same message ID twice is a no-op.
 func (s *AttachmentStoreImpl) AddRef(ctx context.Context, attachmentID, messageID string) error {
 	_, err := s.Client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
-		TableName: aws.String(s.Table),
-		Key:       compositeKey(attachmentPK(attachmentID), metaSK()),
+		TableName:        aws.String(s.Table),
+		Key:              compositeKey(attachmentPK(attachmentID), metaSK()),
 		UpdateExpression: aws.String("ADD messageIDs :m"),
 		ExpressionAttributeValues: map[string]types.AttributeValue{
 			":m": &types.AttributeValueMemberSS{Value: []string{messageID}},
@@ -150,8 +150,8 @@ func (s *AttachmentStoreImpl) AddRef(ctx context.Context, attachmentID, messageI
 // attachment so the caller can decide whether to GC the object.
 func (s *AttachmentStoreImpl) RemoveRef(ctx context.Context, attachmentID, messageID string) (*model.Attachment, error) {
 	out, err := s.Client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
-		TableName: aws.String(s.Table),
-		Key:       compositeKey(attachmentPK(attachmentID), metaSK()),
+		TableName:        aws.String(s.Table),
+		Key:              compositeKey(attachmentPK(attachmentID), metaSK()),
 		UpdateExpression: aws.String("DELETE messageIDs :m"),
 		ExpressionAttributeValues: map[string]types.AttributeValue{
 			":m": &types.AttributeValueMemberSS{Value: []string{messageID}},
@@ -204,6 +204,29 @@ func (s *AttachmentStoreImpl) SetDimensions(ctx context.Context, id string, widt
 			return ErrNotFound
 		}
 		return fmt.Errorf("store: set attachment dimensions: %w", err)
+	}
+	return nil
+}
+
+// SetThumbnailKeys persists immutable derivative object keys for an image
+// attachment. Conditional on attribute_exists(PK) so a deletion racing with a
+// late upload-init retry does not recreate the row.
+func (s *AttachmentStoreImpl) SetThumbnailKeys(ctx context.Context, id, thumbnailKey, squareThumbnailKey string) error {
+	_, err := s.Client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName:           aws.String(s.Table),
+		Key:                 compositeKey(attachmentPK(id), metaSK()),
+		UpdateExpression:    aws.String("SET thumbnailS3Key = :thumb, squareThumbnailS3Key = :square"),
+		ConditionExpression: aws.String("attribute_exists(PK)"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":thumb":  &types.AttributeValueMemberS{Value: thumbnailKey},
+			":square": &types.AttributeValueMemberS{Value: squareThumbnailKey},
+		},
+	})
+	if err != nil {
+		if isConditionCheckFailed(err) {
+			return ErrNotFound
+		}
+		return fmt.Errorf("store: set attachment thumbnail keys: %w", err)
 	}
 	return nil
 }

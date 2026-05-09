@@ -1,6 +1,7 @@
 import { createElement, useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { ChevronLeft, ChevronRight, Download, X, ZoomIn, ZoomOut } from 'lucide-react';
+import { useSwipeable } from 'react-swipeable';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { getInitials, formatLongDateTime, formatBytes } from '@/lib/format';
 import { iconForAttachment, isImageContentType } from '@/lib/file-helpers';
@@ -45,6 +46,7 @@ export function ImageLightbox({
   const isMobile = useIsMobile();
   const safeIndex = total === 0 ? 0 : ((index % total) + total) % total;
   const current = images[safeIndex];
+  const isImage = current ? isImageContentType(current.contentType) : false;
   const lightboxRef = useRef<HTMLDivElement>(null);
   const imageKey = current ? `${current.url}\u0000${safeIndex}` : '';
   const [zoomState, setZoomState] = useState({ key: '', value: 1 });
@@ -98,20 +100,33 @@ export function ImageLightbox({
     setPanState({ key: imageKey, x: 0, y: 0 });
   }
 
-  function handlePotentialMobileTap(e: ReactPointerEvent<HTMLDivElement>) {
-    if (!isMobile || !isImage || e.pointerType === 'mouse') return false;
+  function handleMobileTap(x: number, y: number) {
+    if (!isMobile || !isImage) return false;
     const now = Date.now();
     const previous = lastTapRef.current;
-    if (previous && now - previous.time <= 320 && Math.hypot(e.clientX - previous.x, e.clientY - previous.y) <= 28) {
+    if (previous && now - previous.time <= 450 && Math.hypot(x - previous.x, y - previous.y) <= 56) {
       lastTapRef.current = null;
-      e.preventDefault();
-      e.stopPropagation();
       toggleMobileDoubleTapZoom();
       return true;
     }
-    lastTapRef.current = { time: now, x: e.clientX, y: e.clientY };
+    lastTapRef.current = { time: now, x, y };
     return false;
   }
+
+  const imageTapHandlers = useSwipeable({
+    delta: 24,
+    trackMouse: false,
+    preventScrollOnSwipe: false,
+    touchEventOptions: { passive: true },
+    onTap: ({ event }) => {
+      const touchEvent = event as TouchEvent;
+      const touch = touchEvent.changedTouches?.[0];
+      if (!touch) return;
+      if (handleMobileTap(touch.clientX, touch.clientY)) {
+        event.stopPropagation();
+      }
+    },
+  });
 
   const handleClose = useCallback(() => {
     setZoomState({ key: '', value: 1 });
@@ -170,7 +185,6 @@ export function ImageLightbox({
 
   if (!open || typeof document === 'undefined' || !current) return null;
 
-  const isImage = isImageContentType(current.contentType);
   const iconType = iconForAttachment(current.contentType, current.filename);
   const swipeStageStyle = swipeDrag.x !== 0 || swipeDrag.y !== 0
     ? { transform: `translate3d(${Math.round(swipeDrag.x)}px, ${Math.round(swipeDrag.y)}px, 0)`, transition: 'none' }
@@ -278,7 +292,6 @@ export function ImageLightbox({
   function handleLightboxPointerUp(e: ReactPointerEvent<HTMLDivElement>) {
     const swipe = isMobile ? swipeGestureRef.current : null;
     const panGesture = panGestureRef.current;
-    const pinchActive = !!pinchGestureRef.current || activePointersRef.current.size >= 2;
     activePointersRef.current.delete(e.pointerId);
     if (activePointersRef.current.size < 2) {
       pinchGestureRef.current = null;
@@ -302,14 +315,10 @@ export function ImageLightbox({
         onIndexChange(dx < 0 ? (safeIndex + 1) % total : (safeIndex - 1 + total) % total);
         return;
       }
-      if (absX < 8 && absY < 8 && !pinchActive && handlePotentialMobileTap(e)) return;
     }
     if (panGesture?.pointerId === e.pointerId) {
       e.stopPropagation();
-      const dx = e.clientX - panGesture.startX;
-      const dy = e.clientY - panGesture.startY;
       panGestureRef.current = null;
-      if (!pinchActive && Math.abs(dx) < 8 && Math.abs(dy) < 8 && handlePotentialMobileTap(e)) return;
     }
     try {
       e.currentTarget.releasePointerCapture?.(e.pointerId);
@@ -475,6 +484,7 @@ export function ImageLightbox({
           onPointerUp={handleLightboxPointerUp}
           onPointerCancel={handleLightboxPointerCancel}
           onDoubleClick={handleImageStageDoubleClick}
+          {...imageTapHandlers}
         >
           <img
             src={current.url}
@@ -500,6 +510,10 @@ export function ImageLightbox({
         >
         <div
           onClick={(e) => e.stopPropagation()}
+          onPointerDown={(e) => e.stopPropagation()}
+          onPointerMove={(e) => e.stopPropagation()}
+          onPointerUp={(e) => e.stopPropagation()}
+          onPointerCancel={(e) => e.stopPropagation()}
           data-testid="image-lightbox-fileinfo"
           className="flex flex-col items-center gap-4 rounded-lg bg-card p-8 text-card-foreground shadow-2xl"
         >
@@ -511,6 +525,8 @@ export function ImageLightbox({
           <a
             href={current.downloadURL ?? current.url}
             download={current.filename}
+            onClick={(e) => e.stopPropagation()}
+            data-testid="image-lightbox-file-download"
             className="inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
           >
             <Download className="h-4 w-4" />

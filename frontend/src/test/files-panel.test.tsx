@@ -129,6 +129,7 @@ describe('FilesPanel', () => {
         contentType: 'image/png',
         filename: 'pic.png',
         url: 'https://x/pic.png',
+        squareThumbnailURL: 'https://x/pic-square.webp',
         createdBy: 'u-1',
         createdAt: '2026-04-26T10:00:00Z',
       });
@@ -136,7 +137,7 @@ describe('FilesPanel', () => {
     });
     renderPanel({ channelId: 'ch-1' });
     await waitFor(() => expect(screen.getByText('pic.png')).toBeInTheDocument());
-    expect(screen.getByTestId('files-row-thumb')).toHaveAttribute('src', 'https://x/pic.png');
+    expect(screen.getByTestId('files-row-thumb')).toHaveAttribute('src', 'https://x/pic-square.webp');
     expect(screen.queryByTestId('files-row-icon')).toBeNull();
   });
 

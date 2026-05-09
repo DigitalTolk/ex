@@ -151,9 +151,9 @@ export function FilesPanel({
                   // browsers (notably Safari) leave behind after a tap.
                   className="flex flex-1 min-w-0 items-center gap-3 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  {a?.url && isImageContentType(a.contentType) ? (
+                  {a?.squareThumbnailURL && isImageContentType(a.contentType) ? (
                     <img
-                      src={a.url}
+                      src={a.squareThumbnailURL}
                       alt=""
                       data-testid="files-row-thumb"
                       className="h-12 w-12 rounded-md border object-cover"

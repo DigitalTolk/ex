@@ -73,6 +73,34 @@ func (h *AttachmentHandler) CreateUploadURL(w http.ResponseWriter, r *http.Reque
 	})
 }
 
+// ProcessUpload handles POST /api/v1/attachments/{id}/process after the
+// browser has finished the direct-to-S3 PUT. It validates the uploaded object
+// and generates server-owned thumbnails before the attachment is sent.
+func (h *AttachmentHandler) ProcessUpload(w http.ResponseWriter, r *http.Request) {
+	userID := middleware.UserIDFromContext(r.Context())
+	if userID == "" {
+		writeError(w, http.StatusUnauthorized, "unauthorized", "authentication required")
+		return
+	}
+	id := pathParam(r, "id")
+	if id == "" {
+		writeError(w, http.StatusBadRequest, "missing_id", "attachment ID required")
+		return
+	}
+	a, err := h.svc.ProcessUpload(r.Context(), userID, id)
+	if err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, service.ErrForbidden) {
+			status = http.StatusForbidden
+		} else if errors.Is(err, store.ErrNotFound) {
+			status = http.StatusNotFound
+		}
+		writeError(w, status, "process_error", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, a)
+}
+
 // List handles GET /api/v1/attachments?ids=a,b,c and returns metadata + freshly
 // signed URLs for each requested ID. Missing IDs are silently skipped — the
 // caller compares returned IDs to detect them. Used by message renderers to

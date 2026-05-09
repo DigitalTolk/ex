@@ -264,9 +264,9 @@ func (c *S3Client) GetObject(ctx context.Context, key string) (io.ReadCloser, st
 }
 
 // PutObject uploads body bytes under key with the supplied contentType.
-// Used by the unfurl image proxy (folder `unfurl/`) and any other server-
-// side uploads. S3 lifecycle rules to expire `unfurl/` keys after N days
-// should be configured externally (Terraform / IaC).
+// Used by server-side generated media, such as unfurl cache images and
+// attachment thumbnails. S3 lifecycle rules to expire `unfurl/` keys after N
+// days should be configured externally (Terraform / IaC).
 func (c *S3Client) PutObject(ctx context.Context, key, contentType string, body []byte) error {
 	_, err := c.client.PutObject(ctx, &s3.PutObjectInput{
 		Bucket:       aws.String(c.bucket),
