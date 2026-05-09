@@ -87,7 +87,7 @@ jobs:
     name: Frontend tests + coverage
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/DigitalTolk/docker-builder-playwright:1.59.1
+      image: ghcr.io/digitaltolk/docker-builder-playwright:1.59.1
     needs: lint
     steps:
       - uses: actions/checkout@v6
