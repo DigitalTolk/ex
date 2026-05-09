@@ -113,8 +113,8 @@ export function SearchBar() {
 
   return (
     <div ref={containerRef} className="relative w-full" data-testid="searchbar">
-      <div className="flex h-7 items-center gap-2 rounded-md bg-sidebar-accent px-2 text-sidebar-foreground transition-colors focus-within:bg-sidebar-border hover:bg-sidebar-border max-md:h-9 dark:bg-white/10 dark:text-zinc-100 dark:focus-within:bg-white/20 dark:hover:bg-white/15">
-        <Search className="h-3.5 w-3.5 text-muted-foreground dark:text-zinc-300" aria-hidden="true" />
+      <div className="flex h-7 items-center gap-2 rounded-md bg-sidebar-accent px-2 text-foreground transition-colors focus-within:bg-sidebar-border hover:bg-sidebar-border max-md:h-9 dark:bg-white/10 dark:text-zinc-100 dark:focus-within:bg-white/20 dark:hover:bg-white/15">
+        <Search className="h-3.5 w-3.5 text-foreground/70 dark:text-zinc-300" aria-hidden="true" />
         <input
           ref={inputRef}
           value={q}
@@ -142,7 +142,7 @@ export function SearchBar() {
           }}
           placeholder="Search"
           aria-label="Search"
-          className="flex-1 bg-transparent text-sm text-sidebar-foreground placeholder:text-muted-foreground focus:outline-none max-md:text-base dark:text-zinc-100 dark:placeholder:text-zinc-400"
+          className="flex-1 bg-transparent text-sm text-foreground placeholder:text-foreground/60 focus:outline-none max-md:text-base dark:text-zinc-100 dark:placeholder:text-zinc-400"
           data-testid="searchbar-input"
         />
         {q && (
@@ -150,7 +150,7 @@ export function SearchBar() {
             type="button"
             onClick={clear}
             aria-label="Clear search"
-            className="inline-flex h-7 w-7 items-center justify-center rounded text-muted-foreground hover:text-sidebar-foreground dark:text-zinc-300 dark:hover:text-zinc-100"
+            className="inline-flex h-7 w-7 items-center justify-center rounded text-foreground/70 hover:text-foreground dark:text-zinc-300 dark:hover:text-zinc-100"
           >
             <X className="h-3.5 w-3.5" />
           </button>
