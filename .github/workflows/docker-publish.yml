@@ -12,73 +12,17 @@ env:
   REGISTRY: ghcr.io
 
 jobs:
-  # Multi-arch release builds are split across two native runners
-  # (amd64 + arm64) and merged into a single manifest at the end.
+  checks:
+    name: Checks
+    uses: ./.github/workflows/ci-checks.yml
+
   docker-build:
-    name: Build (${{ matrix.arch }})
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - arch: amd64
-            runner: ubuntu-latest
-            platform: linux/amd64
-          - arch: arm64
-            runner: ubuntu-24.04-arm
-            platform: linux/arm64
-    runs-on: ${{ matrix.runner }}
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Lowercase image name
-        run: echo "IMAGE_NAME=$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_ENV"
-
-      - uses: docker/setup-buildx-action@v4
-
-      - name: Log in to GHCR
-        uses: docker/login-action@v4
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build and push by digest
-        id: build
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          file: ./Dockerfile
-          platforms: ${{ matrix.platform }}
-          # Push by digest only; no tags here. The manifest job stitches
-          # the digests together under the user-facing semver tags.
-          outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
-          build-args: |
-            GIT_TAG=${{ github.ref_name }}
-            GIT_SHA=${{ github.sha }}
-          provenance: false
-          sbom: false
-          cache-from: type=gha,scope=publish-${{ matrix.arch }}
-          cache-to: type=gha,mode=max,scope=publish-${{ matrix.arch }}
-
-      # Ferry the digest to the manifest job via an artifact. Matrix
-      # job outputs collapse to the last shard's value on GitHub
-      # Actions, so an artifact-per-shard is the canonical workaround.
-      - name: Stage digest for manifest job
-        run: |
-          mkdir -p /tmp/digests
-          digest='${{ steps.build.outputs.digest }}'
-          touch "/tmp/digests/${digest#sha256:}"
-
-      - name: Upload digest
-        uses: actions/upload-artifact@v7
-        with:
-          name: digest-${{ matrix.arch }}
-          path: /tmp/digests/*
-          if-no-files-found: error
-          retention-days: 1
+    needs: checks
+    uses: ./.github/workflows/docker-build-shards.yml
+    with:
+      publish: true
+      git-tag: ${{ github.ref_name }}
+      cache-prefix: publish-
 
   docker-manifest:
     name: Publish multi-arch manifest

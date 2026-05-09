@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type WheelEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type WheelEvent } from 'react';
 import { useLocation } from 'react-router-dom';
 import { useSwipeable } from 'react-swipeable';
 import { Sidebar } from './Sidebar';
@@ -24,10 +24,8 @@ export function AppLayout({ children }: AppLayoutProps) {
   const isMobile = useIsMobile();
   const [manualChannelsOpen, setManualChannelsOpen] = useState(false);
   const [channelDragOffset, setChannelDragOffset] = useState(0);
-  const [mobileSidebarTop, setMobileSidebarTop] = useState<string>('calc(2.75rem + env(safe-area-inset-top))');
   const mainRef = useRef<HTMLElement>(null);
   const appHeaderRef = useRef<HTMLElement>(null);
-  const bannersRef = useRef<HTMLDivElement>(null);
   const mobileChannelsOpen = isMobile && (isHome || manualChannelsOpen);
 
   const canOpenChannelsFromSwipe = useCallback((eventTarget: EventTarget | null) => {
@@ -92,30 +90,6 @@ export function AppLayout({ children }: AppLayoutProps) {
     openChannelsSwipeRef(node);
   }, [openChannelsSwipeRef]);
   const mobileShellActive = isMobile && (mobileChannelsOpen || channelDragOffset > 0);
-  /* v8 ignore start -- real ResizeObserver/visualViewport layout measurement is covered by browser tests. */
-  useLayoutEffect(() => {
-    const updateMobileSidebarTop = () => {
-      const bottom = bannersRef.current?.getBoundingClientRect().bottom
-        ?? appHeaderRef.current?.getBoundingClientRect().bottom
-        ?? 0;
-      setMobileSidebarTop(`${Number(bottom.toFixed(2))}px`);
-    };
-    updateMobileSidebarTop();
-    const resizeObserver = typeof ResizeObserver === 'undefined'
-      ? null
-      : new ResizeObserver(updateMobileSidebarTop);
-    if (appHeaderRef.current) resizeObserver?.observe(appHeaderRef.current);
-    if (bannersRef.current) resizeObserver?.observe(bannersRef.current);
-    window.addEventListener('resize', updateMobileSidebarTop);
-    window.visualViewport?.addEventListener('resize', updateMobileSidebarTop);
-    return () => {
-      resizeObserver?.disconnect();
-      window.removeEventListener('resize', updateMobileSidebarTop);
-      window.visualViewport?.removeEventListener('resize', updateMobileSidebarTop);
-    };
-  }, []);
-  /* v8 ignore stop */
-
   /* v8 ignore start -- synthetic wheel support differs between jsdom and browsers; browser tests cover visibility around this surface. */
   const forwardHeaderWheel = useCallback((event: WheelEvent<HTMLElement>) => {
     if (isMobile || event.defaultPrevented) return;
@@ -198,21 +172,20 @@ export function AppLayout({ children }: AppLayoutProps) {
           </div>
           <div className="h-11 w-11 lg:hidden" aria-hidden />
         </header>
-        <div ref={bannersRef} className="relative z-20 shrink-0 bg-[#1a1d21]" data-testid="app-layout-banners">
+        <div className="relative z-20 shrink-0 bg-[#1a1d21]" data-testid="app-layout-banners">
           <UpdateBanner />
           <NotificationPermissionBanner />
         </div>
 
-        <div className="flex min-h-0 flex-1 overflow-hidden bg-background">
+        <div className="relative flex min-h-0 flex-1 overflow-hidden bg-background">
           <aside className="hidden w-72 shrink-0 bg-[#1a1d21] lg:block">
             <Sidebar onClose={() => undefined} />
           </aside>
           {isMobile && (
             <aside
-              className="fixed inset-x-0 bottom-0 top-[calc(2.75rem+env(safe-area-inset-top))] z-0 bg-[#1a1d21] text-zinc-100 lg:hidden"
+              className="absolute inset-0 z-0 bg-[#1a1d21] text-zinc-100 lg:hidden"
               inert={mobileChannelsOpen ? undefined : true}
               data-testid="mobile-channel-sidebar"
-              style={{ top: mobileSidebarTop }}
             >
               <Sidebar onClose={closeChannels} />
             </aside>

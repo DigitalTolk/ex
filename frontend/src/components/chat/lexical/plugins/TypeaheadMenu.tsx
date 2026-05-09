@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ReactNode, type RefObject } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import type { MenuOption } from '@lexical/react/LexicalTypeaheadMenuPlugin';
 
@@ -32,6 +32,7 @@ export function TypeaheadMenu<T extends MenuOption>({
   renderRow,
 }: TypeaheadMenuProps<T>) {
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const [position, setPosition] = useState<CSSProperties | null>(null);
 
   useEffect(() => {
     if (selectedIndex == null) return;
@@ -48,8 +49,10 @@ export function TypeaheadMenu<T extends MenuOption>({
   // when Lexical recreates the anchor div.
   // eslint-disable-next-line react-hooks/refs
   const anchorEl = anchorElementRef.current;
+  useTypeaheadPosition(anchorEl, setPosition);
   // eslint-disable-next-line react-hooks/refs
   if (!anchorEl) return null;
+
   if (options.length === 0 && !emptyLabel) return null;
 
   return createPortal(
@@ -57,7 +60,8 @@ export function TypeaheadMenu<T extends MenuOption>({
       ref={containerRef}
       role="listbox"
       data-testid={testId}
-      className="absolute left-0 bottom-full mb-2 z-50 max-h-72 w-72 overflow-y-auto rounded-md border bg-popover p-1 text-popover-foreground shadow-md"
+      style={position ?? { visibility: 'hidden' }}
+      className="z-50 overflow-y-auto rounded-md border bg-popover p-1 text-popover-foreground shadow-md"
     >
       {options.length === 0 ? (
         <div className="px-2 py-1.5 text-xs text-muted-foreground">{emptyLabel}</div>
@@ -89,4 +93,47 @@ export function TypeaheadMenu<T extends MenuOption>({
     </div>,
     anchorEl,
   );
+}
+
+function useTypeaheadPosition(anchorEl: HTMLElement | null, setPosition: (position: CSSProperties) => void) {
+  useLayoutEffect(() => {
+    if (!anchorEl) return;
+    const target = anchorEl;
+    function update() {
+      const anchorRect = target.getBoundingClientRect();
+      const composer = target.closest('[data-message-composer]');
+      const editor = composer?.querySelector<HTMLElement>('[role="textbox"]');
+      const referenceTop = editor?.getBoundingClientRect().top ?? anchorRect.top;
+      const visualViewport = window.visualViewport;
+      const viewportTop = visualViewport?.offsetTop ?? 0;
+      const viewportBottom = viewportTop + (visualViewport?.height ?? window.innerHeight);
+      const visibleReferenceTop = Math.min(referenceTop, viewportBottom);
+      const width = Math.min(288, window.innerWidth - 16);
+      const left = Math.min(Math.max(anchorRect.left, 8), window.innerWidth - width - 8);
+      const bottom = Math.max(8, window.innerHeight - visibleReferenceTop + 8);
+      const maxHeight = Math.max(96, Math.min(288, visibleReferenceTop - viewportTop - 16));
+
+      setPosition({
+        position: 'fixed',
+        left,
+        bottom,
+        width,
+        maxHeight,
+      });
+    }
+
+    update();
+    const frame = requestAnimationFrame(update);
+    window.addEventListener('resize', update);
+    window.addEventListener('scroll', update, true);
+    window.visualViewport?.addEventListener('resize', update);
+    window.visualViewport?.addEventListener('scroll', update);
+    return () => {
+      cancelAnimationFrame(frame);
+      window.removeEventListener('resize', update);
+      window.removeEventListener('scroll', update, true);
+      window.visualViewport?.removeEventListener('resize', update);
+      window.visualViewport?.removeEventListener('scroll', update);
+    };
+  }, [anchorEl, setPosition]);
 }

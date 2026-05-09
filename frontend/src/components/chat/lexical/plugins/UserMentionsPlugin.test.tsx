@@ -178,10 +178,10 @@ describe('UserMentionsPlugin', () => {
 
   it('renders the typeahead popup above the trigger, not below', async () => {
     // The chat composer sits at the viewport bottom, so opening the
-    // popup downward would clip it under the page chrome. The class
-    // on the popup encodes the "above" placement: `bottom-full mb-2`
-    // anchors the menu's bottom edge to the trigger's top edge.
-    // Regression test for the case where this was inverted.
+    // popup downward would clip it under the page chrome. The popup
+    // uses viewport-fixed placement with a computed bottom offset so
+    // it stays above the editor even when mobile visualViewport
+    // coordinates differ from a resized desktop browser.
     const ref = createRef<WysiwygEditorHandle>();
     render(<Providers><WysiwygEditor ref={ref} /></Providers>);
     await waitFor(() => expect(ref.current).not.toBeNull());
@@ -189,7 +189,8 @@ describe('UserMentionsPlugin', () => {
       ref.current!.insertText('@');
     });
     const popup = await screen.findByTestId('mention-popup');
-    expect(popup.className).toContain('bottom-full');
+    expect(popup.style.position).toBe('fixed');
+    expect(popup.style.bottom).not.toBe('');
     expect(popup.className).not.toContain('top-full');
   });
 
