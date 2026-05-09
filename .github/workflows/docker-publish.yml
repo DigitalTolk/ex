@@ -12,7 +12,12 @@ env:
   REGISTRY: ghcr.io
 
 jobs:
+  checks:
+    name: Checks
+    uses: ./.github/workflows/ci-checks.yml
+
   docker-build:
+    needs: checks
     uses: ./.github/workflows/docker-build-shards.yml
     with:
       publish: true
