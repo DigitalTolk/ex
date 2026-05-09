@@ -76,6 +76,7 @@ function VirtuosoMessageList({
   anchorRevision,
 }: MessageListProps) {
   const virtuosoRef = useRef<VirtuosoHandle>(null);
+  const scrollerRef = useRef<HTMLElement | null>(null);
   const atBottomRef = useRef(true);
 
   // Ready gate: Virtuoso can fire `startReached` during its initial
@@ -157,28 +158,36 @@ function VirtuosoMessageList({
   // `rows` prop — this is what guarantees `data` and `firstItemIndex`
   // hit Virtuoso atomically.
   const renderRows = virtuosoData.rows;
+  const scrollToBottom = useCallback(() => {
+    virtuosoRef.current?.autoscrollToBottom?.();
+    virtuosoRef.current?.scrollToIndex({ index: 'LAST', align: 'end' });
+    if (scrollerRef.current) {
+      scrollerRef.current.scrollTop = scrollerRef.current.scrollHeight;
+    }
+  }, []);
+
   const handleContentHeightChange = useCallback(() => {
-    const shouldStick = () => shouldAutoStickMessageList({
+    const wasAtLiveTail = shouldAutoStickMessageList({
       anchorMsgId,
       hasPreviousPage,
       atBottom: atBottomRef.current,
     });
-    if (!shouldStick()) return;
+    if (!wasAtLiveTail) return;
 
-    const scrollToBottom = () => {
-      virtuosoRef.current?.autoscrollToBottom();
-      virtuosoRef.current?.scrollToIndex({ index: 'LAST', align: 'end' });
+    const scrollAfterLayout = (remainingFrames: number) => {
+      requestAnimationFrame(() => {
+        if (anchorMsgId || hasPreviousPage) return;
+        scrollToBottom();
+        if (remainingFrames > 1) scrollAfterLayout(remainingFrames - 1);
+      });
     };
 
-    requestAnimationFrame(() => {
-      if (!shouldStick()) return;
-      scrollToBottom();
-      requestAnimationFrame(() => {
-        if (!shouldStick()) return;
-        scrollToBottom();
-      });
-    });
-  }, [anchorMsgId, hasPreviousPage]);
+    scrollAfterLayout(3);
+  }, [anchorMsgId, hasPreviousPage, scrollToBottom]);
+
+  const handleScrollerRef = useCallback((ref: HTMLElement | Window | null) => {
+    scrollerRef.current = ref instanceof HTMLElement ? ref : null;
+  }, []);
 
   // Force-scroll-to-bottom when the bottom message becomes the
   // current user's own send. `followOutput="auto"` only sticks when
@@ -209,11 +218,9 @@ function VirtuosoMessageList({
     if (!previousBottomId || previousBottomId === bottomId) return;
     if (last.message.authorID !== currentUserId) return;
     if (last.message.parentMessageID) return;
-    const scrollFrame = requestAnimationFrame(() => {
-      virtuosoRef.current?.scrollToIndex({ index: 'LAST', align: 'end' });
-    });
+    const scrollFrame = requestAnimationFrame(scrollToBottom);
     return () => cancelAnimationFrame(scrollFrame);
-  }, [anchorMsgId, renderRows, currentUserId]);
+  }, [anchorMsgId, renderRows, currentUserId, scrollToBottom]);
 
   if (renderRows.length === 0) {
     // Empty state: render the intro (channels show "This is the
@@ -294,6 +301,7 @@ function VirtuosoMessageList({
       // 'auto' still snaps for incoming WS messages when the user is
       // at the bottom — the canonical chat behaviour.
       followOutput={hasPreviousPage ? false : 'auto'}
+      scrollerRef={handleScrollerRef}
       atBottomStateChange={(atBottom) => {
         atBottomRef.current = atBottom;
       }}
