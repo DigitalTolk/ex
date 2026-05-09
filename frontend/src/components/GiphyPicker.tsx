@@ -176,6 +176,7 @@ export function GiphyPicker({ apiKey, onSelect, trigger, ariaLabel = 'Giphy pick
           className="min-h-0 flex-1 overflow-y-auto"
           style={{ width: gridWidth, maxWidth: '100%' }}
           data-testid="giphy-grid"
+          data-swipe-scroll="true"
         >
           {open && (
             <Grid

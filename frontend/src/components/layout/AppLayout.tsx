@@ -18,6 +18,16 @@ const CHANNEL_OPEN_MIN_SWIPE = 72;
 const CHANNEL_OPEN_MAX_CROSS_AXIS = 48;
 const CHANNEL_OPEN_EDGE_PX = 32;
 
+function blurActiveInput() {
+  const active = document.activeElement;
+  if (
+    active instanceof HTMLElement &&
+    active.matches('input, textarea, select, [contenteditable="true"], [role="textbox"]')
+  ) {
+    active.blur();
+  }
+}
+
 export function AppLayout({ children }: AppLayoutProps) {
   const location = useLocation();
   const isHome = location.pathname === '/';
@@ -50,7 +60,7 @@ export function AppLayout({ children }: AppLayoutProps) {
   const openChannelsSwipe = useSwipeable({
     delta: 4,
     trackMouse: false,
-    preventScrollOnSwipe: false,
+    preventScrollOnSwipe: true,
     onSwiping: ({ absY, deltaX, event, initial }) => {
       if (
         !isMobile ||
@@ -65,6 +75,7 @@ export function AppLayout({ children }: AppLayoutProps) {
         setChannelDragOffset(0);
         return;
       }
+      blurActiveInput();
       setChannelDragOffset(deltaX);
     },
     onSwipedRight: ({ absY, deltaX, event, initial }) => {
@@ -76,6 +87,7 @@ export function AppLayout({ children }: AppLayoutProps) {
         deltaX >= CHANNEL_OPEN_MIN_SWIPE &&
         absY <= CHANNEL_OPEN_MAX_CROSS_AXIS
       ) {
+        blurActiveInput();
         setManualChannelsOpen(true);
       }
       setChannelDragOffset(0);
@@ -147,14 +159,15 @@ export function AppLayout({ children }: AppLayoutProps) {
 
   return (
     <TagSearchProvider>
-      <div className="flex h-full flex-col overflow-hidden bg-[#1a1d21]">
+      <div className="flex h-full flex-col overflow-hidden bg-sidebar dark:bg-[#1a1d21]">
         {/* Slack/Mattermost-style thin top bar. On mobile, channels/DMs live
             behind the persistent chat pane instead of in a temporary side-over. */}
         <header
           ref={appHeaderRef}
-          className="grid h-11 w-full shrink-0 grid-cols-[2.75rem_minmax(0,1fr)_2.75rem] items-center gap-2 border-b bg-[#1a1d21] px-3 text-foreground lg:flex"
+          className="grid h-11 w-full shrink-0 grid-cols-[2.75rem_minmax(0,1fr)_2.75rem] items-center gap-2 border-b border-sidebar-border bg-sidebar px-3 text-sidebar-foreground dark:border-white/10 dark:bg-[#1a1d21] dark:text-foreground lg:flex"
           onWheel={forwardHeaderWheel}
           data-testid="app-shell-header"
+          data-app-chrome="true"
         >
           <Button
             variant="ghost"
@@ -163,7 +176,7 @@ export function AppLayout({ children }: AppLayoutProps) {
             aria-label="Open channels"
             aria-hidden={isHome}
             tabIndex={isHome ? -1 : 0}
-            className={`text-zinc-200 hover:bg-white/10 lg:hidden ${isHome ? 'invisible' : ''}`}
+            className={`text-sidebar-foreground hover:bg-sidebar-accent dark:text-zinc-200 dark:hover:bg-white/10 lg:hidden ${isHome ? 'invisible' : ''}`}
           >
             <Menu className="h-5 w-5" />
           </Button>
@@ -172,20 +185,28 @@ export function AppLayout({ children }: AppLayoutProps) {
           </div>
           <div className="h-11 w-11 lg:hidden" aria-hidden />
         </header>
-        <div className="relative z-20 shrink-0 bg-[#1a1d21]" data-testid="app-layout-banners">
+        <div
+          className="relative z-20 shrink-0 bg-sidebar dark:bg-[#1a1d21]"
+          data-testid="app-layout-banners"
+          data-app-chrome="true"
+        >
           <UpdateBanner />
           <NotificationPermissionBanner />
         </div>
 
         <div className="relative flex min-h-0 flex-1 overflow-hidden bg-background">
-          <aside className="hidden w-72 shrink-0 bg-[#1a1d21] lg:block">
+          <aside
+            className="hidden w-72 shrink-0 bg-sidebar text-sidebar-foreground dark:bg-[#1a1d21] dark:text-zinc-100 lg:block"
+            data-app-chrome="true"
+          >
             <Sidebar onClose={() => undefined} />
           </aside>
           {isMobile && (
             <aside
-              className="absolute inset-0 z-0 bg-[#1a1d21] text-zinc-100 lg:hidden"
+              className="absolute inset-0 z-0 bg-sidebar text-sidebar-foreground dark:bg-[#1a1d21] dark:text-zinc-100 lg:hidden"
               inert={mobileChannelsOpen ? undefined : true}
               data-testid="mobile-channel-sidebar"
+              data-app-chrome="true"
             >
               <Sidebar onClose={closeChannels} />
             </aside>

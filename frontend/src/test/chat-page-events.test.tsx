@@ -176,6 +176,7 @@ describe('ChatPage WebSocket handlers', () => {
     sendWSMock.mockReset();
     localTimeZoneMock.mockReset();
     localTimeZoneMock.mockReturnValue('Europe/Stockholm');
+    localStorage.clear();
   });
 
   // Helper for building a payload that satisfies the runtime
@@ -275,6 +276,20 @@ describe('ChatPage WebSocket handlers', () => {
     expect(calls).toContainEqual(['userThreads']);
   });
 
+  it('onMessageNew marks the active thread seen instead of leaving it unread', () => {
+    renderAt('/channel/general?thread=msg-root', (qc) => {
+      qc.setQueryData(['userChannels'], [{ channelID: 'ch-1', channelName: 'general' }]);
+    });
+
+    (capturedOptions.onMessageNew as (d: unknown) => void)(msg({
+      parentMessageID: 'msg-root',
+      id: 'msg-reply-1',
+      createdAt: '2026-04-30T10:10:00Z',
+    }));
+
+    expect(apiFetch).toHaveBeenCalledWith('/api/v1/user-state/threads/channels/ch-1/msg-root/seen', { method: 'PUT' });
+  });
+
   it('onNotification for a thread reply refreshes /threads immediately', () => {
     const { qc } = renderAt('/');
     const spy = vi.spyOn(qc, 'invalidateQueries');
@@ -286,12 +301,31 @@ describe('ChatPage WebSocket handlers', () => {
       parentMessageID: 'msg-root',
       title: 'Alice replied',
       body: 'hello',
+      createdAt: '2026-04-30T10:10:00Z',
     });
 
     const calls = spy.mock.calls.map((c) => (c[0] as { queryKey?: unknown[] }).queryKey);
     expect(markThreadNotificationUnread).toHaveBeenCalledWith('msg-root');
     expect(calls).toContainEqual(['userThreads']);
     expect(calls).toContainEqual(['userState']);
+    expect(dispatchNotification).toHaveBeenCalled();
+  });
+
+  it('onNotification for the active thread does not mark the thread unread', () => {
+    renderAt('/channel/general?thread=msg-root');
+
+    (capturedOptions.onNotification as (d: unknown) => void)({
+      kind: 'thread_reply',
+      parentID: 'ch-1',
+      parentType: 'channel',
+      parentMessageID: 'msg-root',
+      title: 'Alice replied',
+      body: 'hello',
+      createdAt: '2026-04-30T10:10:00Z',
+    });
+
+    expect(markThreadNotificationUnread).not.toHaveBeenCalled();
+    expect(apiFetch).toHaveBeenCalledWith('/api/v1/user-state/threads/channels/ch-1/msg-root/seen', { method: 'PUT' });
     expect(dispatchNotification).toHaveBeenCalled();
   });
 

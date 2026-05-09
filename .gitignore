@@ -48,3 +48,5 @@ Thumbs.db
 /frontend/coverage-browser/
 coverage.out
 coverage.html
+/frontend/.vitest-attachments/
+/frontend/src/components/__screenshots__/

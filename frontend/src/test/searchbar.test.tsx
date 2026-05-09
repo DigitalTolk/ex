@@ -45,7 +45,9 @@ describe('SearchBar', () => {
     const input = screen.getByTestId('searchbar-input');
     const shell = input.parentElement!;
     expect(shell).toHaveClass('h-7', 'max-md:h-9');
+    expect(shell).toHaveClass('bg-sidebar-accent', 'text-sidebar-foreground', 'dark:bg-white/10', 'dark:text-zinc-100');
     expect(input).toHaveClass('text-sm', 'max-md:text-base');
+    expect(input).toHaveClass('text-sidebar-foreground', 'dark:text-zinc-100');
   });
 
   it('opens a "Show results for" dropdown once the user types', () => {

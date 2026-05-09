@@ -112,7 +112,7 @@ export default function App() {
                     <TooltipProvider>
                       <ServerVersionBootstrap />
                       <NotificationCountTitleBridge />
-                      <div className="flex h-dvh flex-col bg-[#1a1d21] pt-[env(safe-area-inset-top)]">
+                      <div className="flex h-dvh flex-col bg-sidebar pt-[env(safe-area-inset-top)] dark:bg-[#1a1d21]">
                         <div className="min-h-0 flex-1 bg-background">
                           <AppRoutes />
                         </div>

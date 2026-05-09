@@ -48,11 +48,6 @@ function displayBareURL(url: string) {
   return url.startsWith('https://') ? url.slice('https://'.length) : url;
 }
 
-function isVideoAssetURL(url: string) {
-  const path = url.split(/[?#]/, 1)[0]?.toLowerCase() ?? '';
-  return path.endsWith('.mp4') || path.endsWith('.webm');
-}
-
 function codeLanguageClass(language: string | undefined) {
   if (!language) return '';
   return ` language-${normalizeCodeLanguage(language)}`;
@@ -244,9 +239,9 @@ function findInline(src: string, opts: RenderOpts | undefined, keyPrefix: string
     });
   }
 
-  // image: ![alt](url) with optional `=WxH` size suffix. Width/height
-  // attrs let the browser size the box from the markup; CSS still
-  // constrains max-width. `giphy:<id>` is resolved by GiphyEmbed.
+  // Persisted GIPHY picks use image-markdown syntax with a `giphy:<id>`
+  // pseudo URL. Raw image/video URLs are intentionally left as literal
+  // text: message markdown should not be able to inject arbitrary media.
   tryMatch(/!\[([^\]]*)\]\(([^)\s]+?)(?:\s+=(\d+)x(\d+))?\)/, (m) => {
     if (m[2].startsWith('giphy:')) {
       return (
@@ -260,39 +255,7 @@ function findInline(src: string, opts: RenderOpts | undefined, keyPrefix: string
         />
       );
     }
-    const w = m[3] ? Number(m[3]) : undefined;
-    const h = m[4] ? Number(m[4]) : undefined;
-    if (isVideoAssetURL(m[2])) {
-      return (
-        <video
-          key={`${keyPrefix}-video-${m.index}`}
-          src={m[2]}
-          aria-label={m[1] || 'Video'}
-          title={m[1] || undefined}
-          width={w}
-          height={h}
-          className="my-1 max-h-80 max-w-full rounded-md border"
-          autoPlay
-          loop
-          muted
-          playsInline
-          preload="metadata"
-          onLoadedMetadata={opts?.onMediaLoad}
-        />
-      );
-    }
-    return (
-      <img
-        key={`${keyPrefix}-img-${m.index}`}
-        src={m[2]}
-        alt={m[1] || ''}
-        width={w}
-        height={h}
-        className="my-1 max-h-80 max-w-full rounded-md border"
-        loading="lazy"
-        onLoad={opts?.onMediaLoad}
-      />
-    );
+    return <span key={`${keyPrefix}-media-literal-${m.index}`}>{m[0]}</span>;
   });
 
   // link: [text](url)

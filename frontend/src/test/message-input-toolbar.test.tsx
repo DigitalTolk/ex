@@ -68,6 +68,7 @@ describe('MessageInput toolbar buttons', () => {
     expect(screen.getByLabelText('Quote')).toBeInTheDocument();
     expect(screen.getByLabelText('List')).toBeInTheDocument();
     expect(screen.getByLabelText('Numbered list')).toBeInTheDocument();
+    expect(screen.getByLabelText('Link')).toBeInTheDocument();
   });
 
   it('keeps desktop attachment beside media actions and send on the toolbar right edge', async () => {
@@ -89,7 +90,7 @@ describe('MessageInput toolbar buttons', () => {
     expect(screen.getAllByLabelText('Send message')).toHaveLength(1);
   });
 
-  it('removes quote and list toolbar buttons only from the focused mobile composer', async () => {
+  it('removes quote, list, and link toolbar buttons from the focused mobile composer', async () => {
     setMobileMatch(true);
     renderWithClient(<MessageInput onSend={vi.fn()} initialBody="hello" />);
     fireEvent.focus(await screen.findByLabelText('Message input'));
@@ -97,6 +98,7 @@ describe('MessageInput toolbar buttons', () => {
     expect(screen.queryByLabelText('Quote')).not.toBeInTheDocument();
     expect(screen.queryByLabelText('List')).not.toBeInTheDocument();
     expect(screen.queryByLabelText('Numbered list')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Link')).not.toBeInTheDocument();
     expect(screen.getByLabelText('Bold (Ctrl+B)')).toBeInTheDocument();
   });
 

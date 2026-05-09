@@ -103,7 +103,7 @@ export function UserHoverCard({
         preferredAlign="start"
         role="tooltip"
         mobileSheet
-        className="w-72 rounded-md border bg-popover p-3 shadow-lg max-md:w-screen max-md:max-w-none max-md:rounded-b-none max-md:rounded-t-xl max-md:pb-[calc(env(safe-area-inset-bottom)+0.75rem)] max-md:pl-[max(0.75rem,env(safe-area-inset-left))] max-md:pr-[max(0.75rem,env(safe-area-inset-right))]"
+        className="w-72 rounded-md border bg-popover p-3 shadow-lg max-md:w-screen max-md:max-w-none max-md:rounded-b-none max-md:rounded-t-xl max-md:border-b-0 max-md:pb-[calc(env(safe-area-inset-bottom)+0.75rem)] max-md:pl-[max(0.75rem,env(safe-area-inset-left))] max-md:pr-[max(0.75rem,env(safe-area-inset-right))]"
       >
         <div>
           <div data-testid="hover-card-header" className="flex items-start gap-3">

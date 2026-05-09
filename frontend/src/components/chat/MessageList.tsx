@@ -6,6 +6,7 @@ import { formatDayHeading } from '@/lib/format';
 import { deriveThreadMeta } from '@/lib/message-users';
 import type { Message, UserStatus } from '@/types';
 import { buildMessageListRows, nextVirtuosoState } from './MessageListRows';
+import { shouldAutoStickMessageList } from './message-list-autostick';
 
 const ANCHOR_HIGHLIGHT_MS = 2200;
 const DEFAULT_MESSAGE_ROW_HEIGHT = 88;
@@ -156,8 +157,14 @@ function VirtuosoMessageList({
   // `rows` prop — this is what guarantees `data` and `firstItemIndex`
   // hit Virtuoso atomically.
   const renderRows = virtuosoData.rows;
-  const handleContentHeightChange = useCallback((forceLiveTail = false) => {
-    if (anchorMsgId || hasPreviousPage || (!forceLiveTail && !atBottomRef.current)) return;
+  const handleContentHeightChange = useCallback(() => {
+    if (!shouldAutoStickMessageList({
+      anchorMsgId,
+      hasPreviousPage,
+      atBottom: atBottomRef.current,
+    })) {
+      return;
+    }
     requestAnimationFrame(() => {
       virtuosoRef.current?.autoscrollToBottom();
       virtuosoRef.current?.scrollToIndex({ index: 'LAST', align: 'end' });
@@ -319,7 +326,6 @@ function VirtuosoMessageList({
             onReplyInThread={onReplyInThread}
             onEditMessage={onEditMessage}
             highlighted={row.message.id === highlightedMessageId}
-            isLiveTailRow={row.key === renderRows[renderRows.length - 1]?.key}
             onContentHeightChange={handleContentHeightChange}
           />
         );
@@ -357,7 +363,6 @@ function MessageRow({
   onReplyInThread,
   onEditMessage,
   highlighted,
-  isLiveTailRow,
   onContentHeightChange,
 }: {
   row: { kind: 'message'; key: string; message: Message };
@@ -371,13 +376,12 @@ function MessageRow({
   onReplyInThread?: (id: string) => void;
   onEditMessage?: (message: Message) => void;
   highlighted?: boolean;
-  isLiveTailRow?: boolean;
-  onContentHeightChange?: (forceLiveTail?: boolean) => void;
+  onContentHeightChange?: () => void;
 }) {
   const msg = row.message;
   const handleContentHeightChange = useCallback(() => {
-    onContentHeightChange?.(isLiveTailRow);
-  }, [isLiveTailRow, onContentHeightChange]);
+    onContentHeightChange?.();
+  }, [onContentHeightChange]);
 
   if (msg.system) {
     return (

@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { BrowserRouter } from 'react-router-dom';
 import { UnfurlCard } from './UnfurlCard';
 import type { UnfurlPreview } from '@/hooks/useUnfurl';
+import type { ComponentProps } from 'react';
 
 // useUnfurl is mocked per-test so we can drive what the card renders
 // without touching the network. Cast to a function so TS lets us
@@ -17,7 +18,7 @@ vi.mock('@/hooks/useMessages', () => ({
   useSetNoUnfurl: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 
-function renderCard() {
+function renderCard(props: Partial<ComponentProps<typeof UnfurlCard>> = {}) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={qc}>
@@ -27,6 +28,7 @@ function renderCard() {
           messageId="msg-1"
           channelId="chan-1"
           isAuthor={false}
+          {...props}
         />
       </BrowserRouter>
     </QueryClientProvider>,
@@ -53,7 +55,20 @@ describe('UnfurlCard', () => {
     renderCard();
     const img = screen.getByTestId('unfurl-card-image') as HTMLImageElement;
     expect(img.src).toBe('https://s3.example/unfurl/abc.png');
+    expect(img.getAttribute('width')).toBe('64');
+    expect(img.getAttribute('height')).toBe('64');
     expect(screen.queryByTestId('unfurl-card-image-placeholder')).toBeNull();
+  });
+
+  it('does not report height changes for fixed-size image load or error events', async () => {
+    const onContentHeightChange = vi.fn();
+    mockUseUnfurl.mockReturnValue({ data: makePreview(), isLoading: false });
+    renderCard({ onContentHeightChange });
+    await vi.waitFor(() => expect(onContentHeightChange).toHaveBeenCalledTimes(1));
+    const img = screen.getByTestId('unfurl-card-image');
+    fireEvent.load(img);
+    fireEvent.error(img);
+    expect(onContentHeightChange).toHaveBeenCalledTimes(1);
   });
 
   it('renders a placeholder when the image fails to load', () => {

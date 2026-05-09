@@ -50,12 +50,10 @@ export function UnfurlCard({
           <img
             src={preview.image}
             alt=""
+            width={64}
+            height={64}
             loading="lazy"
-            onLoad={onContentHeightChange}
-            onError={() => {
-              setImageBroken(true);
-              onContentHeightChange?.();
-            }}
+            onError={() => setImageBroken(true)}
             data-testid="unfurl-card-image"
             className="h-16 w-16 shrink-0 rounded object-cover"
           />

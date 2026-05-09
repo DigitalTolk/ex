@@ -1,5 +1,5 @@
 import { useEffect, useRef, type ReactNode } from 'react';
-import { Outlet, useNavigate } from 'react-router-dom';
+import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { useUnread } from '@/context/UnreadContext';
@@ -36,7 +36,7 @@ import { useUserChannels } from '@/hooks/useChannels';
 import { useUserConversations } from '@/hooks/useConversations';
 import { useCategories } from '@/hooks/useSidebar';
 import { useUserState } from '@/hooks/useUserState';
-import { useUserThreads } from '@/hooks/useThreads';
+import { markThreadSeen, useUserThreads } from '@/hooks/useThreads';
 import { useIsMobile } from '@/hooks/useIsMobile';
 
 function MobileChatLoadingPage() {
@@ -88,7 +88,10 @@ export default function ChatPage() {
   const { recordTyping, clearTyping, setSelfUserID } = useTyping();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
+  const location = useLocation();
   const reportedTimeZoneRef = useRef('');
+  const activeThreadID = new URLSearchParams(location.search).get('thread');
+  const isActiveThread = (threadRootID?: string) => !!threadRootID && activeThreadID === threadRootID;
 
   useEffect(() => {
     setCurrentUserID(user?.id ?? null);
@@ -145,6 +148,12 @@ export default function ChatPage() {
       // arrive via the message.edited event the backend publishes
       // alongside message.new (driven by IncrementReplyMetadata).
       if (parentMessageID) {
+        if (isActiveThread(parentMessageID)) {
+          markThreadSeen(parentMessageID, msg.createdAt, {
+            parentID,
+            parentType: msg.parentType === 'conversation' ? 'conversation' : 'channel',
+          });
+        }
         invalidateThreadBothScopes(queryClient, parentID, parentMessageID);
         queryClient.invalidateQueries({ queryKey: queryKeys.userThreads() });
       } else {
@@ -278,7 +287,14 @@ export default function ChatPage() {
       const n = data as NotificationPayload | undefined;
       if (!n || !n.kind) return;
       if (n.parentMessageID) {
-        markThreadNotificationUnread(n.parentMessageID);
+        if (isActiveThread(n.parentMessageID)) {
+          markThreadSeen(n.parentMessageID, n.createdAt, {
+            parentID: n.parentID,
+            parentType: n.parentType === 'conversation' ? 'conversation' : 'channel',
+          });
+        } else {
+          markThreadNotificationUnread(n.parentMessageID);
+        }
         queryClient.invalidateQueries({ queryKey: queryKeys.userThreads() });
         queryClient.invalidateQueries({ queryKey: queryKeys.userState() });
       } else if (n.parentType === 'channel' && n.kind === 'mention') {

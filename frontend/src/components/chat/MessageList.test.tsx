@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { BrowserRouter } from 'react-router-dom';
 import { createElement, forwardRef, useImperativeHandle, type ComponentType, type Ref } from 'react';
 import { MessageList } from './MessageList';
+import { shouldAutoStickMessageList } from './message-list-autostick';
 import type { Message } from '@/types';
 // ResizeObserver + offsetHeight/offsetWidth/clientHeight/clientWidth
 // stubs are installed globally by frontend/src/test/setup.ts.
@@ -451,6 +452,23 @@ describe('MessageList Virtuoso wiring (regression contract)', () => {
     expect(captured.defaultItemHeight).toBe(88);
     expect(captured.increaseViewportBy).toEqual({ top: 600, bottom: 600 });
     expect(captured.computeItemKey?.(0, { key: 'stable-key' })).toBe('stable-key');
+  });
+
+  it('auto-sticks only for true live-tail bottom cases', () => {
+    expect(shouldAutoStickMessageList({
+      atBottom: false,
+    })).toBe(false);
+    expect(shouldAutoStickMessageList({
+      atBottom: true,
+    })).toBe(true);
+    expect(shouldAutoStickMessageList({
+      atBottom: true,
+      hasPreviousPage: true,
+    })).toBe(false);
+    expect(shouldAutoStickMessageList({
+      atBottom: true,
+      anchorMsgId: 'msg-anchor',
+    })).toBe(false);
   });
 
   it('startReached fetches older pages only when ready and not already fetching', async () => {

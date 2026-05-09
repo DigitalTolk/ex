@@ -1,5 +1,5 @@
 import { act, renderHook } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useSwipeable } from 'react-swipeable';
 import { SWIPE_DISMISS_MS, useAnimatedSwipeDismiss } from './useAnimatedSwipeDismiss';
 
@@ -9,9 +9,9 @@ vi.mock('react-swipeable', () => ({
 
 interface SwipeConfig {
   preventScrollOnSwipe: boolean;
-  onSwiping: (event: { absX: number; absY: number; deltaX: number; deltaY: number; initial: [number, number] }) => void;
+  onSwiping: (event: { absX: number; absY: number; deltaX: number; deltaY: number; initial: [number, number]; event: Event }) => void;
   onSwipedRight: (event: { absY: number; deltaX: number; initial: [number, number] }) => void;
-  onSwipedDown: (event: { absX: number; deltaY: number }) => void;
+  onSwipedDown: (event: { absX: number; deltaY: number; event: Event }) => void;
   onSwiped: () => void;
 }
 
@@ -19,24 +19,62 @@ function swipeConfig() {
   return vi.mocked(useSwipeable).mock.calls.at(-1)?.[0] as SwipeConfig;
 }
 
-describe('useAnimatedSwipeDismiss', () => {
-  it('allows normal scroll while right sidebars listen for horizontal dismissal', () => {
-    renderHook(() => useAnimatedSwipeDismiss('right', vi.fn()));
+function setMobileMatch(matches: boolean) {
+  Object.defineProperty(window, 'matchMedia', {
+    configurable: true,
+    value: vi.fn(() => ({
+      matches,
+      media: '(max-width: 767px)',
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+    })),
+  });
+}
 
-    expect(swipeConfig().preventScrollOnSwipe).toBe(false);
+describe('useAnimatedSwipeDismiss', () => {
+  beforeEach(() => {
+    setMobileMatch(true);
   });
 
-  it('prevents page scroll while bottom sheets listen for swipe-down dismissal', () => {
-    renderHook(() => useAnimatedSwipeDismiss('down', vi.fn()));
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function eventFor(target: EventTarget = document.body) {
+    return { target, cancelable: true, preventDefault: vi.fn() } as unknown as Event;
+  }
+
+  it('ignores swipe motion on desktop-width layouts', () => {
+    setMobileMatch(false);
+    const onDismiss = vi.fn();
+    const { result } = renderHook(() => useAnimatedSwipeDismiss('down', onDismiss));
+
+    act(() => swipeConfig().onSwiping({ absX: 4, absY: 88, deltaX: 4, deltaY: 88, initial: [80, 80], event: eventFor() }));
+    expect(result.current.dragStyle).toBeUndefined();
+
+    act(() => swipeConfig().onSwipedDown({ absX: 4, deltaY: 88, event: eventFor() }));
+    expect(onDismiss).not.toHaveBeenCalled();
+  });
+
+  it('blocks page scroll once right sidebars listen for horizontal dismissal', () => {
+    renderHook(() => useAnimatedSwipeDismiss('right', vi.fn()));
 
     expect(swipeConfig().preventScrollOnSwipe).toBe(true);
+  });
+
+  it('allows picker content to scroll while bottom sheets listen for swipe-down dismissal', () => {
+    renderHook(() => useAnimatedSwipeDismiss('down', vi.fn()));
+
+    expect(swipeConfig().preventScrollOnSwipe).toBe(false);
   });
 
   it('tracks right drag offset and settles back on a cancelled swipe', () => {
     const onDismiss = vi.fn();
     const { result } = renderHook(() => useAnimatedSwipeDismiss('right', onDismiss));
 
-    act(() => swipeConfig().onSwiping({ absX: 60, absY: 8, deltaX: 60, deltaY: 8, initial: [12, 120] }));
+    act(() => swipeConfig().onSwiping({ absX: 60, absY: 8, deltaX: 60, deltaY: 8, initial: [12, 120], event: eventFor() }));
     expect(result.current.dragStyle).toEqual({
       transform: 'translateX(60px)',
       transition: 'none',
@@ -52,10 +90,10 @@ describe('useAnimatedSwipeDismiss', () => {
     const onDismiss = vi.fn();
     const { result } = renderHook(() => useAnimatedSwipeDismiss('right', onDismiss));
 
-    act(() => swipeConfig().onSwiping({ absX: 20, absY: 4, deltaX: -20, deltaY: 4, initial: [12, 120] }));
+    act(() => swipeConfig().onSwiping({ absX: 20, absY: 4, deltaX: -20, deltaY: 4, initial: [12, 120], event: eventFor() }));
     expect(result.current.dragStyle).toBeUndefined();
 
-    act(() => swipeConfig().onSwiping({ absX: 80, absY: 80, deltaX: 80, deltaY: 80, initial: [12, 120] }));
+    act(() => swipeConfig().onSwiping({ absX: 80, absY: 80, deltaX: 80, deltaY: 80, initial: [12, 120], event: eventFor() }));
     expect(result.current.dragStyle).toBeUndefined();
 
     act(() => swipeConfig().onSwipedRight({ absY: 80, deltaX: 100, initial: [12, 120] }));
@@ -67,7 +105,7 @@ describe('useAnimatedSwipeDismiss', () => {
     const onDismiss = vi.fn();
     const { result } = renderHook(() => useAnimatedSwipeDismiss('right', onDismiss));
 
-    act(() => swipeConfig().onSwiping({ absX: 80, absY: 8, deltaX: 80, deltaY: 8, initial: [120, 160] }));
+    act(() => swipeConfig().onSwiping({ absX: 80, absY: 8, deltaX: 80, deltaY: 8, initial: [120, 160], event: eventFor() }));
     expect(result.current.dragStyle).toBeUndefined();
 
     act(() => swipeConfig().onSwipedRight({ absY: 8, deltaX: 100, initial: [120, 160] }));
@@ -80,7 +118,7 @@ describe('useAnimatedSwipeDismiss', () => {
     const onDismiss = vi.fn();
     const { result } = renderHook(() => useAnimatedSwipeDismiss('right', onDismiss));
 
-    act(() => swipeConfig().onSwiping({ absX: 90, absY: 4, deltaX: 90, deltaY: 4, initial: [12, 120] }));
+    act(() => swipeConfig().onSwiping({ absX: 90, absY: 4, deltaX: 90, deltaY: 4, initial: [12, 120], event: eventFor() }));
     act(() => swipeConfig().onSwipedRight({ absY: 4, deltaX: 90, initial: [12, 120] }));
     act(() => swipeConfig().onSwipedRight({ absY: 4, deltaX: 90, initial: [12, 120] }));
     act(() => swipeConfig().onSwiped());
@@ -95,18 +133,33 @@ describe('useAnimatedSwipeDismiss', () => {
     vi.useRealTimers();
   });
 
+  it('ignores drag updates while a dismissal timer is already pending', () => {
+    vi.useFakeTimers();
+    const { result } = renderHook(() => useAnimatedSwipeDismiss('right', vi.fn()));
+
+    act(() => swipeConfig().onSwipedRight({ absY: 4, deltaX: 90, initial: [12, 120] }));
+    act(() => swipeConfig().onSwiping({ absX: 40, absY: 4, deltaX: 40, deltaY: 4, initial: [12, 120], event: eventFor() }));
+
+    expect(result.current.dismissing).toBe(true);
+    expect(result.current.dragStyle).toBeUndefined();
+    vi.useRealTimers();
+  });
+
   it('tracks down drag offset and dismisses downward sheets', () => {
     vi.useFakeTimers();
     const onDismiss = vi.fn();
     const { result } = renderHook(() => useAnimatedSwipeDismiss('down', onDismiss));
 
-    act(() => swipeConfig().onSwiping({ absX: 8, absY: 88, deltaX: 8, deltaY: 88, initial: [80, 80] }));
+    const event = eventFor();
+    act(() => swipeConfig().onSwiping({ absX: 8, absY: 88, deltaX: 8, deltaY: 88, initial: [80, 80], event }));
     expect(result.current.dragStyle).toEqual({
       transform: 'translateY(88px)',
       transition: 'none',
     });
 
-    act(() => swipeConfig().onSwipedDown({ absX: 8, deltaY: 88 }));
+    expect(event.preventDefault).toHaveBeenCalled();
+
+    act(() => swipeConfig().onSwipedDown({ absX: 8, deltaY: 88, event: eventFor() }));
     expect(result.current.dismissing).toBe(true);
     expect(result.current.dragOffset).toBe(0);
 
@@ -119,15 +172,62 @@ describe('useAnimatedSwipeDismiss', () => {
     const onDismiss = vi.fn();
     const { result } = renderHook(() => useAnimatedSwipeDismiss('down', onDismiss));
 
-    act(() => swipeConfig().onSwiping({ absX: 4, absY: 20, deltaX: 4, deltaY: -20, initial: [80, 80] }));
+    act(() => swipeConfig().onSwiping({ absX: 4, absY: 20, deltaX: 4, deltaY: -20, initial: [80, 80], event: eventFor() }));
     expect(result.current.dragStyle).toBeUndefined();
 
-    act(() => swipeConfig().onSwiping({ absX: 80, absY: 90, deltaX: 80, deltaY: 90, initial: [80, 80] }));
+    act(() => swipeConfig().onSwiping({ absX: 80, absY: 90, deltaX: 80, deltaY: 90, initial: [80, 80], event: eventFor() }));
     expect(result.current.dragStyle).toBeUndefined();
 
-    act(() => swipeConfig().onSwipedDown({ absX: 80, deltaY: 100 }));
+    act(() => swipeConfig().onSwipedDown({ absX: 80, deltaY: 100, event: eventFor() }));
     expect(result.current.dismissing).toBe(false);
     expect(onDismiss).not.toHaveBeenCalled();
+  });
+
+  it('does not hijack downward scrolling inside picker content that is already scrolled', () => {
+    const onDismiss = vi.fn();
+    const scroller = document.createElement('div');
+    scroller.dataset.swipeScroll = 'true';
+    scroller.scrollTop = 40;
+    document.body.appendChild(scroller);
+    const { result } = renderHook(() => useAnimatedSwipeDismiss('down', onDismiss));
+
+    act(() => swipeConfig().onSwiping({ absX: 4, absY: 90, deltaX: 4, deltaY: 90, initial: [80, 80], event: eventFor(scroller) }));
+    expect(result.current.dragStyle).toBeUndefined();
+    act(() => swipeConfig().onSwipedDown({ absX: 4, deltaY: 90, event: eventFor(scroller) }));
+    expect(onDismiss).not.toHaveBeenCalled();
+    scroller.remove();
+  });
+
+  it('handles non-element swipe targets without treating them as picker scrollers', () => {
+    const onDismiss = vi.fn();
+    const { result } = renderHook(() => useAnimatedSwipeDismiss('down', onDismiss));
+
+    act(() => swipeConfig().onSwiping({
+      absX: 4,
+      absY: 88,
+      deltaX: 4,
+      deltaY: 88,
+      initial: [80, 80],
+      event: eventFor(window),
+    }));
+
+    expect(result.current.dragStyle).toEqual({
+      transform: 'translateY(88px)',
+      transition: 'none',
+    });
+  });
+
+  it('does not call preventDefault for non-cancelable downward swipe events', () => {
+    const { result } = renderHook(() => useAnimatedSwipeDismiss('down', vi.fn()));
+    const event = { target: document.body, cancelable: false, preventDefault: vi.fn() } as unknown as Event;
+
+    act(() => swipeConfig().onSwiping({ absX: 4, absY: 88, deltaX: 4, deltaY: 88, initial: [80, 80], event }));
+
+    expect(result.current.dragStyle).toEqual({
+      transform: 'translateY(88px)',
+      transition: 'none',
+    });
+    expect(event.preventDefault).not.toHaveBeenCalled();
   });
 
   it('clears a pending dismissal timer on unmount', () => {

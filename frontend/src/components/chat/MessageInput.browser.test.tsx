@@ -55,6 +55,66 @@ const previewPNG =
   'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=';
 
 describe('MessageInput browser behavior', () => {
+  it('uses a lower iPhone-style rounded composer on mobile without changing desktop shape', async () => {
+    const screen = await renderWithProviders(
+      <div style={{ position: 'fixed', inset: 'auto 0 0 0', width: '100%' }}>
+        <MessageInput onSend={vi.fn()} />
+      </div>,
+    );
+
+    const composer = document.querySelector('[data-message-composer]') as HTMLElement | null;
+    expect(composer).not.toBeNull();
+    await expect.element(composer!).toBeVisible();
+
+    const styles = getComputedStyle(composer!);
+    const radius = Number.parseFloat(styles.borderTopLeftRadius);
+    const composerRect = composer!.getBoundingClientRect();
+
+    if (window.innerWidth <= 767) {
+      expect(radius).toBeGreaterThanOrEqual(24);
+      expect(composerRect.bottom).toBeGreaterThanOrEqual(window.innerHeight - 8);
+      await screen.getByLabelText('Message input').click();
+      const toolbar = screen.getByRole('toolbar', { name: 'Formatting' });
+      await expect.element(toolbar).toBeVisible();
+      const send = screen.getByLabelText('Send message').element();
+      const sendRect = send.getBoundingClientRect();
+      const sendRadius = Number.parseFloat(getComputedStyle(send).borderTopLeftRadius);
+      expect(sendRadius).toBeGreaterThanOrEqual(sendRect.width / 2 - 1);
+      expect(document.querySelector('[aria-label="Link"]')).toBeNull();
+    } else {
+      expect(radius).toBeLessThanOrEqual(12);
+      expect(screen.getByLabelText('Link').element()).toBeVisible();
+      const send = screen.getByLabelText('Send message').element();
+      const sendRect = send.getBoundingClientRect();
+      const sendRadius = Number.parseFloat(getComputedStyle(send).borderTopLeftRadius);
+      expect(sendRadius).toBeLessThan(sendRect.width / 2 - 1);
+    }
+
+    expectPaintedAtCenter(composer!);
+  });
+
+  it('renders the mobile edit save action with the same fully rounded icon shape', async () => {
+    if (window.innerWidth > 767) return;
+
+    const screen = await renderWithProviders(
+      <div style={{ position: 'fixed', inset: 'auto 0 0 0', width: '100%' }}>
+        <MessageInput
+          onSend={vi.fn()}
+          onCancel={vi.fn()}
+          initialBody="Edit me"
+          submitLabel="Save"
+        />
+      </div>,
+    );
+
+    const save = screen.getByLabelText('Save').element();
+    await expect.element(save).toBeVisible();
+    const saveRect = save.getBoundingClientRect();
+    const saveRadius = Number.parseFloat(getComputedStyle(save).borderTopLeftRadius);
+    expect(saveRadius).toBeGreaterThanOrEqual(saveRect.width / 2 - 1);
+    expectPaintedAtCenter(save);
+  });
+
   it('keeps the mobile compact composer attachment-free until focus, then renders upload progress and preview', async () => {
     let completeUpload: (() => void) | undefined;
     uploadAttachmentMock.mockImplementationOnce(
@@ -192,5 +252,74 @@ describe('MessageInput browser behavior', () => {
       expect(popupRect.bottom).toBeLessThanOrEqual(window.innerHeight);
     });
     expectPaintedAtCenter(popup.element());
+  });
+
+  it('pins desktop edit save and cancel actions to the formatting toolbar right edge', async () => {
+    if (window.innerWidth <= 767) return;
+
+    const screen = await renderWithProviders(
+      <div style={{ width: 720 }}>
+        <MessageInput
+          onSend={vi.fn()}
+          onCancel={vi.fn()}
+          initialBody="Existing edit"
+          submitLabel="Save"
+        />
+      </div>,
+    );
+
+    const toolbar = screen.getByRole('toolbar', { name: 'Formatting' }).element();
+    const cancel = screen.getByLabelText('Cancel').element();
+    const save = screen.getByLabelText('Save').element();
+
+    await vi.waitFor(() => {
+      const toolbarRect = toolbar.getBoundingClientRect();
+      const saveRect = save.getBoundingClientRect();
+      const cancelRect = cancel.getBoundingClientRect();
+      expect(saveRect.right).toBeGreaterThan(toolbarRect.right - 12);
+      expect(cancelRect.left).toBeGreaterThan(toolbarRect.left + toolbarRect.width * 0.7);
+      const saveRadius = Number.parseFloat(getComputedStyle(save).borderTopLeftRadius);
+      expect(saveRadius).toBeLessThan(saveRect.width / 2 - 1);
+    });
+    expectPaintedAtCenter(save);
+    expectPaintedAtCenter(cancel);
+  });
+
+  it('blurs the mobile editor while the emoji picker is open, keeps picker content scrollable, and refocuses after pick', async () => {
+    if (window.innerWidth > 767) return;
+
+    const screen = await renderWithProviders(
+      <div style={{ position: 'fixed', inset: 'auto 0 0 0', width: '100%' }}>
+        <MessageInput onSend={vi.fn()} />
+      </div>,
+    );
+
+    const editor = screen.getByLabelText('Message input').element();
+    await screen.getByLabelText('Message input').click();
+    await vi.waitFor(() => {
+      expect(document.activeElement === editor || editor.contains(document.activeElement)).toBe(true);
+    });
+
+    await screen.getByLabelText('Emoji').click();
+    const portal = screen.getByTestId('popover-portal');
+    await expect.element(portal).toBeVisible();
+    expect(portal.element()).toHaveAttribute('data-mobile-sheet', 'true');
+    expect(document.activeElement === editor || editor.contains(document.activeElement)).toBe(false);
+
+    const scroller = portal.element().querySelector('[data-swipe-scroll="true"]') as HTMLElement | null;
+    expect(scroller).not.toBeNull();
+    expect(scroller!.scrollHeight).toBeGreaterThan(scroller!.clientHeight);
+    scroller!.scrollTop = 120;
+    scroller!.dispatchEvent(new Event('scroll', { bubbles: true }));
+    expect(scroller!.scrollTop).toBeGreaterThan(0);
+
+    const tile = portal.element().querySelector('[data-testid="emoji-picker-tile"]') as HTMLElement | null;
+    expect(tile).not.toBeNull();
+    tile!.click();
+
+    await vi.waitFor(() => {
+      expect(document.querySelector('[data-testid="popover-portal"]')).toBeNull();
+      expect(document.activeElement === editor || editor.contains(document.activeElement)).toBe(true);
+    });
   });
 });

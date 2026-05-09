@@ -425,6 +425,16 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
     editorRef.current?.insertText(`![GIPHY](giphy:${gif.id}${dims}) `);
   }
 
+  function handleToolbarPickerOpenChange(open: boolean) {
+    setToolbarPickerOpen(open);
+    if (!isMobile) return;
+    if (open) {
+      editorRef.current?.blur();
+      return;
+    }
+    requestAnimationFrame(() => editorRef.current?.focus());
+  }
+
   async function uploadFiles(allFiles: File[]) {
     if (allFiles.length === 0) return;
     // Trim to the per-message cap before uploading. Surface a friendly
@@ -580,12 +590,14 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
           <ToolbarBtn label="Numbered list" active={active.has('ol')} onClick={() => editorRef.current?.applyBlock('ol')}><ListOrdered className="h-3.5 w-3.5" /></ToolbarBtn>
         </>
       )}
-      <ToolbarBtn label="Link" onClick={openLinkDialog}><LinkIcon className="h-3.5 w-3.5" /></ToolbarBtn>
+      {!isMobile && (
+        <ToolbarBtn label="Link" onClick={openLinkDialog}><LinkIcon className="h-3.5 w-3.5" /></ToolbarBtn>
+      )}
       <span className="mx-1 h-4 w-px bg-border" aria-hidden />
       <EmojiPicker
         onSelect={insertEmojiShortcode}
         mode="shortcode"
-        onOpenChange={setToolbarPickerOpen}
+        onOpenChange={handleToolbarPickerOpenChange}
         trigger={
           <ToolbarBtn label="Emoji"><Smile className="h-3.5 w-3.5" /></ToolbarBtn>
         }
@@ -594,7 +606,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
         <GiphyPicker
           apiKey={giphyAPIKey}
           onSelect={insertGiphyGIF}
-          onOpenChange={setToolbarPickerOpen}
+          onOpenChange={handleToolbarPickerOpenChange}
           trigger={
             <ToolbarBtn label="GIF"><ImagePlay className="h-3.5 w-3.5" /></ToolbarBtn>
           }
@@ -616,7 +628,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
             onClick={handleSend}
             disabled={!canSend}
             size="icon"
-            className="h-7 w-7 rounded-md max-md:h-9 max-md:w-9"
+            className="h-7 w-7 rounded-md max-md:h-9 max-md:w-9 max-md:rounded-full"
             aria-label="Send message"
           >
             <Send className="h-4 w-4" />
@@ -625,6 +637,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
       )}
       {isEditingMode && (
         <>
+          <span className="ml-auto" aria-hidden />
           <span className="mx-1 h-4 w-px bg-border" aria-hidden />
           {onCancel && (
             <Button
@@ -641,7 +654,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
             onClick={handleSend}
             disabled={!canSend}
             size="icon"
-            className="h-7 w-7 rounded-md max-md:h-9 max-md:w-9"
+            className="h-7 w-7 rounded-md max-md:h-9 max-md:w-9 max-md:rounded-full"
             aria-label={submitLabel ?? 'Send message'}
           >
             <Save className="h-4 w-4" />
@@ -657,7 +670,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
       className={
         variant === 'inline'
           ? 'p-0'
-          : `border-t p-3 ${editorFocused || toolbarPickerOpen ? 'max-md:pb-2' : 'max-md:pb-[calc(0.75rem+env(safe-area-inset-bottom))]'}`
+          : 'border-t p-3 max-md:px-2 max-md:pb-[max(0.25rem,env(safe-area-inset-bottom))] max-md:pt-2'
       }
       data-composer-focused={editorFocused ? 'true' : 'false'}
     >
@@ -684,7 +697,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
           Up to {MAX_ATTACHMENTS_PER_MESSAGE} attachments per message — remove a few to send.
         </div>
       )}
-      <div className="rounded-lg border bg-muted/40 dark:bg-input/30 focus-within:ring-1 focus-within:ring-ring" data-message-composer>
+      <div className="rounded-lg border bg-muted/40 dark:bg-input/30 focus-within:ring-1 focus-within:ring-ring max-md:overflow-hidden max-md:rounded-[1.75rem]" data-message-composer>
         {showToolbar && !isMobile && renderToolbar('top')}
 
         {drafts.length > 0 && (
@@ -731,7 +744,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
                 onClick={handleSend}
                 disabled={!canSend}
                 size="icon"
-                className="h-8 w-8 rounded-md max-md:h-11 max-md:w-11"
+                className="h-8 w-8 rounded-md max-md:h-11 max-md:w-11 max-md:rounded-full"
                 aria-label="Send message"
               >
                 <Send className="h-4 w-4" />
