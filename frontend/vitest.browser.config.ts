@@ -38,7 +38,7 @@ export default defineConfig({
     include: ['src/**/*.browser.test.{ts,tsx}'],
     setupFiles: ['./src/test/browser-setup.ts'],
     coverage: {
-      provider: 'v8',
+      provider: 'istanbul',
       reporter: ['text', 'lcov'],
       reportsDirectory: './coverage-browser',
       exclude: [
@@ -67,6 +67,22 @@ export default defineConfig({
           name: 'chromium-mobile',
           browser: 'chromium',
           viewport: { width: 390, height: 844 },
+        },
+        {
+          name: 'webkit-iphone',
+          browser: 'webkit',
+          viewport: { width: 393, height: 852 },
+          provider: playwright({
+            launchOptions: {
+              headless: true,
+            },
+            contextOptions: {
+              deviceScaleFactor: 3,
+              hasTouch: true,
+              isMobile: true,
+              userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 19_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/19.0 Mobile/15E148 Safari/604.1',
+            },
+          }),
         },
       ],
     },

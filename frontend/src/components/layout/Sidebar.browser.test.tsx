@@ -145,6 +145,7 @@ describe('Sidebar browser behavior', () => {
     expect([
       { width: 1280, height: 900 },
       { width: 390, height: 844 },
+      { width: 393, height: 852 },
     ]).toContainEqual(viewport);
   });
 });

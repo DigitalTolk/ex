@@ -27,6 +27,18 @@ vi.mock('@/hooks/useSettings', () => ({
   useUpdateWorkspaceSettings: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 
+vi.mock('@/hooks/useConversations', () => ({
+  useAllUsers: () => ({
+    data: [
+      {
+        id: 'u-alice',
+        displayName: 'Alice Example',
+        email: 'alice@example.test',
+      },
+    ],
+  }),
+}));
+
 vi.mock('@/hooks/useAttachments', () => ({
   uploadAttachment: uploadAttachmentMock,
   useDeleteDraftAttachment: () => ({ mutateAsync: vi.fn().mockResolvedValue(undefined), mutate: vi.fn(), isPending: false }),
@@ -149,5 +161,36 @@ describe('MessageInput browser behavior', () => {
     await expect.element(preview!).toBeVisible();
     expectPaintedAtCenter(preview!);
     expect(preview!.src).toBe(previewPNG);
+  });
+
+  it('keeps the mobile edit mention popup above the composer and inside the viewport', async () => {
+    if (window.innerWidth > 767) return;
+
+    const screen = await renderWithProviders(
+      <div style={{ position: 'fixed', inset: 'auto 0 0 0', width: '100%' }}>
+        <MessageInput
+          onSend={vi.fn()}
+          onCancel={vi.fn()}
+          initialBody=""
+          submitLabel="Save"
+        />
+      </div>,
+    );
+
+    const editor = screen.getByLabelText('Message input');
+    await editor.click();
+    await editor.fill('@a');
+
+    const popup = screen.getByTestId('mention-popup');
+    await expect.element(popup).toBeVisible();
+
+    await vi.waitFor(() => {
+      const popupRect = popup.element().getBoundingClientRect();
+      const editorRect = editor.element().getBoundingClientRect();
+      expect(popupRect.top).toBeGreaterThanOrEqual(0);
+      expect(popupRect.bottom).toBeLessThanOrEqual(editorRect.top + 1);
+      expect(popupRect.bottom).toBeLessThanOrEqual(window.innerHeight);
+    });
+    expectPaintedAtCenter(popup.element());
   });
 });

@@ -106,7 +106,7 @@ jobs:
 
       - name: Install Playwright browsers
         working-directory: frontend
-        run: npx playwright install --with-deps chromium
+        run: node node_modules/playwright/cli.js install --with-deps chromium webkit
 
       - name: Run browser tests
         working-directory: frontend
