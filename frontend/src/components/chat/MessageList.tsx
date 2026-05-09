@@ -158,16 +158,25 @@ function VirtuosoMessageList({
   // hit Virtuoso atomically.
   const renderRows = virtuosoData.rows;
   const handleContentHeightChange = useCallback(() => {
-    if (!shouldAutoStickMessageList({
+    const shouldStick = () => shouldAutoStickMessageList({
       anchorMsgId,
       hasPreviousPage,
       atBottom: atBottomRef.current,
-    })) {
-      return;
-    }
-    requestAnimationFrame(() => {
+    });
+    if (!shouldStick()) return;
+
+    const scrollToBottom = () => {
       virtuosoRef.current?.autoscrollToBottom();
       virtuosoRef.current?.scrollToIndex({ index: 'LAST', align: 'end' });
+    };
+
+    requestAnimationFrame(() => {
+      if (!shouldStick()) return;
+      scrollToBottom();
+      requestAnimationFrame(() => {
+        if (!shouldStick()) return;
+        scrollToBottom();
+      });
     });
   }, [anchorMsgId, hasPreviousPage]);
 

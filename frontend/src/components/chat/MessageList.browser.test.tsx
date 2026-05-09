@@ -125,6 +125,7 @@ describe('MessageList browser behavior', () => {
 
     const scroller = document.querySelector('[data-testid="virtuoso-scroller"]') as HTMLElement | null;
     expect(scroller).not.toBeNull();
+    await settleAtBottom(scroller!);
 
     act(() => {
       browserMedia.attachmentsReady = true;
@@ -150,6 +151,18 @@ describe('MessageList browser behavior', () => {
     expect(thumb).not.toBeNull();
   });
 });
+
+async function settleAtBottom(scroller: HTMLElement) {
+  await vi.waitFor(() => {
+    expect(scroller.scrollHeight).toBeGreaterThan(scroller.clientHeight);
+  }, { timeout: 3000 });
+
+  for (let i = 0; i < 3; i += 1) {
+    scroller.scrollTop = scroller.scrollHeight;
+    scroller.dispatchEvent(new Event('scroll', { bubbles: true }));
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+  }
+}
 
 function laidOutElement(selector: string): HTMLElement | null {
   const elements = Array.from(document.querySelectorAll<HTMLElement>(selector));
