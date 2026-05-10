@@ -43,16 +43,23 @@ function dispatchSwipeStartAndMove(element: Element, from: { x: number; y: numbe
   element.dispatchEvent(new PointerEvent('pointermove', { pointerId: 1, pointerType: 'touch', clientX: to.x, clientY: to.y, bubbles: true }));
 }
 
-function dispatchTouchTap(element: Element, point: { x: number; y: number }) {
-  const touch = { clientX: point.x, clientY: point.y };
-  const start = new Event('touchstart', { bubbles: true, cancelable: true });
-  Object.defineProperty(start, 'touches', { value: [touch] });
-  Object.defineProperty(start, 'changedTouches', { value: [touch] });
-  element.dispatchEvent(start);
-  const end = new Event('touchend', { bubbles: true, cancelable: true });
-  Object.defineProperty(end, 'touches', { value: [] });
-  Object.defineProperty(end, 'changedTouches', { value: [touch] });
-  element.dispatchEvent(end);
+function dispatchPointerTap(element: Element, point: { x: number; y: number }, pointerId = 11) {
+  element.dispatchEvent(new PointerEvent('pointerdown', {
+    pointerId,
+    pointerType: 'touch',
+    clientX: point.x,
+    clientY: point.y,
+    bubbles: true,
+    cancelable: true,
+  }));
+  element.dispatchEvent(new PointerEvent('pointerup', {
+    pointerId,
+    pointerType: 'touch',
+    clientX: point.x,
+    clientY: point.y,
+    bubbles: true,
+    cancelable: true,
+  }));
 }
 
 describe('ImageLightbox browser behavior', () => {
@@ -221,24 +228,79 @@ describe('ImageLightbox browser behavior', () => {
     expect(stage).not.toBeNull();
     expect(image).not.toBeNull();
 
-    dispatchTouchTap(stage!, { x: window.innerWidth / 2, y: window.innerHeight / 2 });
-    dispatchTouchTap(stage!, { x: window.innerWidth / 2 + 42, y: window.innerHeight / 2 + 8 });
+    // First two taps from idle: zoom should jump to 2x.
+    dispatchPointerTap(stage!, { x: window.innerWidth / 2, y: window.innerHeight / 2 }, 21);
+    dispatchPointerTap(stage!, { x: window.innerWidth / 2 + 42, y: window.innerHeight / 2 + 8 }, 22);
     await vi.waitFor(() => {
       expect(Number(image!.dataset.zoom)).toBeGreaterThan(1);
     });
 
+    // Drag to introduce pan offset so the reset path actually has
+    // something to clear on the next double-tap.
     dispatchSwipe(stage!, { x: 120, y: 360 }, { x: 250, y: 330 });
     await vi.waitFor(() => {
       expect(Math.abs(Number(image!.dataset.panX))).toBeGreaterThan(50);
     });
 
-    dispatchTouchTap(stage!, { x: window.innerWidth / 2, y: window.innerHeight / 2 });
-    dispatchTouchTap(stage!, { x: window.innerWidth / 2 + 42, y: window.innerHeight / 2 + 8 });
+    // Second double-tap while zoomed/panned: must snap back to 1x and
+    // zero out pan (no half-state).
+    dispatchPointerTap(stage!, { x: window.innerWidth / 2, y: window.innerHeight / 2 }, 23);
+    dispatchPointerTap(stage!, { x: window.innerWidth / 2 + 42, y: window.innerHeight / 2 + 8 }, 24);
     await vi.waitFor(() => {
       expect(Number(image!.dataset.zoom)).toBe(1);
       expect(Number(image!.dataset.panX)).toBe(0);
       expect(Number(image!.dataset.panY)).toBe(0);
     });
+  });
+
+  it('does not zoom when a single tap is followed by a long pause (>450ms)', async () => {
+    if (window.innerWidth > 767) return;
+
+    await render(lightbox());
+    const stage = document.querySelector('[data-testid="image-lightbox-zoom-stage"]') as HTMLElement | null;
+    const image = document.querySelector('[data-testid="image-lightbox-image"]') as HTMLImageElement | null;
+    expect(stage).not.toBeNull();
+    expect(image).not.toBeNull();
+
+    dispatchPointerTap(stage!, { x: window.innerWidth / 2, y: window.innerHeight / 2 }, 31);
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    dispatchPointerTap(stage!, { x: window.innerWidth / 2, y: window.innerHeight / 2 }, 32);
+
+    // Give React a tick to flush any zoom state change.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(Number(image!.dataset.zoom)).toBe(1);
+  });
+
+  it('does not treat a finger-drag-then-release as a tap', async () => {
+    if (window.innerWidth > 767) return;
+
+    await render(lightbox());
+    const stage = document.querySelector('[data-testid="image-lightbox-zoom-stage"]') as HTMLElement | null;
+    const image = document.querySelector('[data-testid="image-lightbox-image"]') as HTMLImageElement | null;
+    expect(stage).not.toBeNull();
+    expect(image).not.toBeNull();
+
+    // First tap is a clean tap. Second "tap" actually drags >12px,
+    // so the snapshot is invalidated and double-tap zoom must NOT fire.
+    dispatchPointerTap(stage!, { x: window.innerWidth / 2, y: window.innerHeight / 2 }, 41);
+    stage!.dispatchEvent(new PointerEvent('pointerdown', {
+      pointerId: 42, pointerType: 'touch',
+      clientX: window.innerWidth / 2, clientY: window.innerHeight / 2,
+      bubbles: true,
+    }));
+    stage!.dispatchEvent(new PointerEvent('pointermove', {
+      pointerId: 42, pointerType: 'touch',
+      clientX: window.innerWidth / 2 + 30, clientY: window.innerHeight / 2 + 30,
+      bubbles: true,
+    }));
+    stage!.dispatchEvent(new PointerEvent('pointerup', {
+      pointerId: 42, pointerType: 'touch',
+      clientX: window.innerWidth / 2 + 30, clientY: window.innerHeight / 2 + 30,
+      bubbles: true,
+    }));
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(Number(image!.dataset.zoom)).toBe(1);
   });
 
   it('supports swipe navigation and close gestures on non-image attachments', async () => {
