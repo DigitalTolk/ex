@@ -119,6 +119,14 @@ func (s *UnfurlService) SetImageStore(store UnfurlImageStore) {
 
 func (s *UnfurlService) SetMediaURLCache(c MediaURLCache) { s.mediaCache = c }
 
+// ProxyImageURL fetches and caches an arbitrary trusted-by-feature image URL
+// through the same hardened image proxy used by unfurls.
+func (s *UnfurlService) ProxyImageURL(ctx context.Context, rawURL string) string {
+	preview := &UnfurlPreview{Image: rawURL}
+	s.proxyImage(ctx, preview)
+	return preview.Image
+}
+
 // Unfurl returns a preview for rawURL. Cache is hit first; on a miss the
 // service fetches, scrapes, and caches the result. Errors are returned
 // to the caller — callers typically swallow them and just skip the

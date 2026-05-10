@@ -236,6 +236,8 @@ func threadFollowGSI1PK(parentID, threadRootID string) string {
 	return "THREADFOLLOW#" + parentID + "#" + threadRootID
 }
 func userStateSK(kind, targetID string) string { return "STATE#" + kind + "#" + targetID }
+func webhookPK(id string) string               { return "WEBHOOK#" + id }
+func webhookSK() string                        { return "META" }
 
 func categoryNameSK(name string) string {
 	return "CATEGORYNAME#" + strings.ToLower(strings.TrimSpace(name))

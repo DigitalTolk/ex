@@ -149,4 +149,101 @@ describe('AdminPage', () => {
       expect(body.allowedExtensions).toEqual(['png', 'jpg', 'pdf']);
     });
   });
+
+  it('creates incoming webhooks from the admin panel', async () => {
+    mockApiFetch.mockImplementation((path: string, init?: { method?: string; body?: string }) => {
+      if (path === '/api/v1/admin/settings') {
+        return Promise.resolve({ maxUploadBytes: 50 * 1024 * 1024, allowedExtensions: ['png'] });
+      }
+      if (path === '/api/v1/admin/search/status') {
+        return Promise.resolve({ configured: false });
+      }
+      if (path === '/api/v1/channels') {
+        return Promise.resolve([{ channelID: 'ch-1', channelName: 'general', channelType: 'public', role: 3 }]);
+      }
+      if (path === '/api/v1/admin/webhooks' && init?.method === 'POST') {
+        return Promise.resolve({ id: 'wh-1', url: 'https://chat.example/hooks/wh-1', ...JSON.parse(init.body ?? '{}') });
+      }
+      if (path === '/api/v1/admin/webhooks') {
+        return Promise.resolve([]);
+      }
+      return Promise.resolve({});
+    });
+    renderPage();
+
+    fireEvent.change(await screen.findByLabelText(/^Title$/i), { target: { value: 'CI' } });
+    fireEvent.change(screen.getByLabelText(/Profile picture URL/i), { target: { value: 'https://example.com/icon.png' } });
+    fireEvent.click(screen.getByRole('button', { name: /Create webhook/i }));
+
+    await waitFor(() => {
+      const postCall = mockApiFetch.mock.calls.find(
+        (c) => c[0] === '/api/v1/admin/webhooks' && c[1]?.method === 'POST',
+      );
+      expect(postCall).toBeDefined();
+      const body = JSON.parse(postCall![1].body) as Record<string, unknown>;
+      expect(body).toMatchObject({
+        title: 'CI',
+        channelID: 'ch-1',
+        lockToChannel: true,
+        profileImageURL: 'https://example.com/icon.png',
+      });
+    });
+  });
+
+  it('shows existing incoming webhooks and deletes them', async () => {
+    mockApiFetch.mockImplementation((path: string, init?: { method?: string }) => {
+      if (path === '/api/v1/admin/settings') {
+        return Promise.resolve({ maxUploadBytes: 50 * 1024 * 1024, allowedExtensions: ['png'] });
+      }
+      if (path === '/api/v1/admin/search/status') {
+        return Promise.resolve({ configured: false });
+      }
+      if (path === '/api/v1/channels') {
+        return Promise.resolve([{ channelID: 'ch-1', channelName: 'general', channelType: 'public', role: 3 }]);
+      }
+      if (path === '/api/v1/admin/webhooks') {
+        return Promise.resolve([{ id: 'wh-1', title: 'CI', url: 'https://chat.example/hooks/wh-1' }]);
+      }
+      if (path === '/api/v1/admin/webhooks/wh-1' && init?.method === 'DELETE') {
+        return Promise.resolve({});
+      }
+      return Promise.resolve({});
+    });
+    renderPage();
+
+    expect(await screen.findByText('CI')).toBeInTheDocument();
+    expect(screen.getByText('https://chat.example/hooks/wh-1')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Delete/i }));
+
+    await waitFor(() => {
+      expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/admin/webhooks/wh-1', { method: 'DELETE' });
+    });
+  });
+
+  it('surfaces incoming webhook creation errors', async () => {
+    mockApiFetch.mockImplementation((path: string, init?: { method?: string }) => {
+      if (path === '/api/v1/admin/settings') {
+        return Promise.resolve({ maxUploadBytes: 50 * 1024 * 1024, allowedExtensions: ['png'] });
+      }
+      if (path === '/api/v1/admin/search/status') {
+        return Promise.resolve({ configured: false });
+      }
+      if (path === '/api/v1/channels') {
+        return Promise.resolve([{ channelID: 'ch-1', channelName: 'general', channelType: 'public', role: 3 }]);
+      }
+      if (path === '/api/v1/admin/webhooks' && init?.method === 'POST') {
+        return Promise.reject(new Error('title already exists'));
+      }
+      if (path === '/api/v1/admin/webhooks') {
+        return Promise.resolve([]);
+      }
+      return Promise.resolve({});
+    });
+    renderPage();
+
+    fireEvent.change(await screen.findByLabelText(/^Title$/i), { target: { value: 'CI' } });
+    fireEvent.click(screen.getByRole('button', { name: /Create webhook/i }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('title already exists');
+  });
 });

@@ -29,6 +29,7 @@ import { EmojiGlyph } from '@/components/EmojiGlyph';
 import { MessageAttachments } from '@/components/chat/MessageAttachments';
 import { ThreadActionBar } from '@/components/chat/ThreadActionBar';
 import { UnfurlCard } from '@/components/chat/UnfurlCard';
+import { MessageRichAttachments } from '@/components/chat/MessageRichAttachments';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { extractURLs, formatLongDateTime, formatRelative } from '@/lib/format';
 import { registerEditMessageHandler } from '@/lib/window-events';
@@ -106,6 +107,8 @@ export function MessageItem({
   onContentHeightChange,
   quickReactions,
 }: MessageItemProps) {
+  const displayAuthorName = message.webhookUsername || authorName;
+  const displayAuthorAvatarURL = message.webhookAvatarURL || authorAvatarURL;
   const isMobile = useIsMobile();
   const [isEditing, setIsEditing] = useState(false);
   // Visibility tracked in JS (not Tailwind group-hover) because Radix's
@@ -534,16 +537,16 @@ export function MessageItem({
     >
       <UserHoverCard
         userId={message.authorID}
-        displayName={authorName}
-        avatarURL={authorAvatarURL}
+        displayName={displayAuthorName}
+        avatarURL={displayAuthorAvatarURL}
         userStatus={authorUserStatus}
         online={authorOnline}
         currentUserId={currentUserId}
         showInlineStatus={false}
       >
         <UserAvatar
-          displayName={authorName}
-          avatarURL={authorAvatarURL}
+          displayName={displayAuthorName}
+          avatarURL={displayAuthorAvatarURL}
           online={authorOnline}
           className="mt-0.5 h-9 w-9 cursor-pointer"
           dotClassName="h-2.5 w-2.5"
@@ -554,13 +557,13 @@ export function MessageItem({
         <div className="flex items-baseline gap-2">
           <UserHoverCard
             userId={message.authorID}
-            displayName={authorName}
-            avatarURL={authorAvatarURL}
+            displayName={displayAuthorName}
+            avatarURL={displayAuthorAvatarURL}
             userStatus={authorUserStatus}
             online={authorOnline}
             currentUserId={currentUserId}
           >
-            <span className="cursor-pointer text-sm font-semibold">{authorName}</span>
+            <span className="cursor-pointer text-sm font-semibold">{displayAuthorName}</span>
           </UserHoverCard>
           <Tooltip>
             <TooltipTrigger
@@ -648,8 +651,8 @@ export function MessageItem({
 	                parentID={channelId ?? conversationId}
 	                parentType={channelId ? 'channel' : conversationId ? 'conversation' : undefined}
 	                messageID={message.id}
-	                authorName={authorName}
-                authorAvatarURL={authorAvatarURL}
+	                authorName={displayAuthorName}
+                authorAvatarURL={displayAuthorAvatarURL}
                 postedIn={
                   channelSlug
                     ? `~${channelSlug}`
@@ -661,6 +664,7 @@ export function MessageItem({
                 onContentHeightChange={onContentHeightChange}
               />
             )}
+            <MessageRichAttachments attachments={message.messageAttachments} onContentHeightChange={onContentHeightChange} />
             {reactionEntries.length > 0 && (
               <div className="mt-1 flex flex-wrap items-center gap-1" role="list" aria-label="Reactions">
                 {reactionEntries.map(([emoji, users]) => {

@@ -40,6 +40,7 @@ func NewRouter(d *Deps) http.Handler {
 	unfurlH := d.Unfurl
 	sidebarH := d.Sidebar
 	searchH := d.Search
+	webhookH := d.Webhook
 	jwtMgr := d.JWT
 	frontendFS := d.FrontendFS
 	appVersion := d.AppVersion
@@ -216,6 +217,12 @@ func NewRouter(d *Deps) http.Handler {
 		mux.Handle("PUT /api/v1/admin/settings", middleware.WrapFunc(adminH.UpdateSettings, authMW))
 		mux.Handle("GET /api/v1/admin/search/status", middleware.WrapFunc(adminH.SearchStatus, authMW))
 		mux.Handle("POST /api/v1/admin/search/reindex", middleware.WrapFunc(adminH.StartSearchReindex, authMW))
+	}
+	if webhookH != nil {
+		mux.Handle("GET /api/v1/admin/webhooks", middleware.WrapFunc(webhookH.List, authMW))
+		mux.Handle("POST /api/v1/admin/webhooks", middleware.WrapFunc(webhookH.Create, authMW))
+		mux.Handle("DELETE /api/v1/admin/webhooks/{id}", middleware.WrapFunc(webhookH.Delete, authMW))
+		mux.HandleFunc("POST /hooks/{id}", webhookH.Execute)
 	}
 
 	// ------------------------------------------------------------------ WebSocket

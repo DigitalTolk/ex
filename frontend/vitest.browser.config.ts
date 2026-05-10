@@ -52,6 +52,11 @@ export default defineConfig({
         // Pure URL-scheme guard — exhaustively unit-tested in the jsdom suite
         // (url-safety.test.ts); graded there, not here.
         'src/lib/url-safety.ts',
+        // Webhook rich-attachment renderer — exhaustively unit-tested in the
+        // jsdom suite (MessageRichAttachments.test.tsx). It is pulled into the
+        // browser run transitively via MessageItem, but its webhook-attachment
+        // branches aren't exercised there; graded in jsdom, not here.
+        'src/components/chat/MessageRichAttachments.tsx',
       ],
       // 99% branch gate over the merged desktop + mobile browser run.
       // vitest enforces it (non-zero exit), so `npm run

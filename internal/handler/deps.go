@@ -37,6 +37,7 @@ type Deps struct {
 	Unfurl      *UnfurlHandler
 	Sidebar     *SidebarHandler
 	Search      *SearchHandler
+	Webhook     *WebhookHandler
 
 	// SPA/static.
 	FrontendFS fs.FS

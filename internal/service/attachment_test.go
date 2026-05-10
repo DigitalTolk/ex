@@ -1521,3 +1521,27 @@ func TestValidateSVG_EdgeCases(t *testing.T) {
 		})
 	}
 }
+
+func TestAttachmentThumbnailHelpers(t *testing.T) {
+	if !attachmentNeedsThumbnails(" image/png; charset=binary ") {
+		t.Fatal("png should need thumbnails")
+	}
+	if attachmentNeedsThumbnails("image/svg+xml") {
+		t.Fatal("svg should not need thumbnails")
+	}
+	if attachmentNeedsThumbnails("application/pdf") {
+		t.Fatal("pdf should not need thumbnails")
+	}
+	if got := thumbnailFilename(""); got != "thumbnail.webp" {
+		t.Fatalf("thumbnailFilename empty = %q", got)
+	}
+	if got := thumbnailFilename("photo.jpg"); got != "photo.jpg.thumb.webp" {
+		t.Fatalf("thumbnailFilename = %q", got)
+	}
+	if got := squareThumbnailFilename(""); got != "thumbnail-square.webp" {
+		t.Fatalf("squareThumbnailFilename empty = %q", got)
+	}
+	if got := squareThumbnailFilename("photo.jpg"); got != "photo.jpg.square.webp" {
+		t.Fatalf("squareThumbnailFilename = %q", got)
+	}
+}

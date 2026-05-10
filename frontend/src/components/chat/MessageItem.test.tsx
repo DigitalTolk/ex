@@ -602,6 +602,38 @@ describe('MessageItem', () => {
     );
     expect(screen.queryByRole('list', { name: /reactions/i })).not.toBeInTheDocument();
   });
+
+  it('renders Mattermost author overrides and message attachments', () => {
+    renderWithProviders(
+      <MessageItem
+        message={makeMessage({
+          authorID: 'webhook',
+          body: 'Build finished',
+          webhookUsername: 'CI Bot',
+          webhookAvatarURL: '/api/v1/media/bot/avatar.png',
+          messageAttachments: [{
+            color: '#ff8000',
+            pretext: 'Deploy',
+            title: 'Report',
+            title_link: 'https://example.com/report',
+            text: '**Passed**',
+            fields: [{ title: 'Status', value: 'OK', short: true }],
+            image_url: '/api/v1/media/image/report.webp',
+            thumb_url: '/api/v1/media/image/thumb.webp',
+            footer: 'ci',
+          }],
+        })}
+        authorName="Unknown"
+        isOwn={false}
+        currentUserId="user-1"
+      />,
+    );
+    expect(screen.getByText('CI Bot')).toBeInTheDocument();
+    expect(screen.getByTestId('message-rich-attachment')).toBeInTheDocument();
+    expect(screen.getByText('Report')).toHaveAttribute('href', 'https://example.com/report');
+    expect(screen.getByText('Status')).toBeInTheDocument();
+    expect(screen.getByText('OK')).toBeInTheDocument();
+  });
 });
 
 // Server-backed frequently-used shelf: stub so opening the picker never hits the network.

@@ -68,6 +68,7 @@ export const queryKeys = {
   // Admin / unfurl
   unfurl: (url: string) => ['unfurl', url] as const,
   adminSearchStatus: () => ['admin-search-status'] as const,
+  incomingWebhooks: () => ['incoming-webhooks'] as const,
 };
 
 // parentPath builds the slash-separated key segment that thread,

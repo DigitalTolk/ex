@@ -209,6 +209,17 @@ func main() {
 	messageSvc.SetNotifier(notificationSvc)
 	settingsSvc := service.NewSettingsService(store.NewSettingsStore(db))
 	attachmentSvc.SetUploadLimits(settingsSvc)
+	unfurlSvc := service.NewUnfurlService(redisCache)
+	if s3Client != nil {
+		// Proxy preview images through S3 (folder `unfurl/`) so viewers
+		// don't hit upstream origins directly. S3 lifecycle rule should
+		// expire `unfurl/` keys after ~30 days (configured in IaC).
+		unfurlSvc.SetImageStore(s3Client)
+	}
+	unfurlSvc.SetMediaURLCache(redisCache)
+	webhookSvc := service.NewIncomingWebhookService(store.NewIncomingWebhookStore(db), channelSvc, messageSvc, unfurlSvc, cfg.BaseURL)
+	webhookSvc.SetDMResolver(convSvc)
+	webhookSvc.SetUserResolver(userSvc)
 
 	// ------------------------------------------------------------------ Handlers
 	authH := handler.NewAuthHandler(authSvc, jwtMgr)
@@ -225,6 +236,7 @@ func main() {
 	presenceH := handler.NewPresenceHandler(presenceSvc)
 	attachmentH := handler.NewAttachmentHandler(attachmentSvc)
 	adminH := handler.NewAdminHandler(settingsSvc)
+	webhookH := handler.NewWebhookHandler(webhookSvc)
 	threadH := handler.NewThreadHandler(messageSvc)
 	draftSvc := service.NewDraftService(store.NewDraftStore(db), messageStore, membershipStore, conversationStore, redisPubSub)
 	draftH := handler.NewDraftHandler(draftSvc)
@@ -309,14 +321,6 @@ func main() {
 		}
 	}
 	wsH.SetOriginPolicy(wsOriginPatternsFromCORS(allowOrigins))
-	unfurlSvc := service.NewUnfurlService(redisCache)
-	if s3Client != nil {
-		// Proxy preview images through S3 (folder `unfurl/`) so viewers
-		// don't hit upstream origins directly. S3 lifecycle rule should
-		// expire `unfurl/` keys after ~30 days (configured in IaC).
-		unfurlSvc.SetImageStore(s3Client)
-	}
-	unfurlSvc.SetMediaURLCache(redisCache)
 	unfurlH := handler.NewUnfurlHandler(unfurlSvc)
 	router := handler.NewRouter(&handler.Deps{
 		Auth:         authH,
@@ -336,6 +340,7 @@ func main() {
 		Unfurl:       unfurlH,
 		Sidebar:      sidebarH,
 		Search:       searchH,
+		Webhook:      webhookH,
 		JWT:          jwtMgr,
 		FrontendFS:   frontendDist,
 		AppVersion:   appVersion,

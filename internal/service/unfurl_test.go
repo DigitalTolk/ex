@@ -225,6 +225,40 @@ func TestUnfurlService_FetchScrapesAndCaches(t *testing.T) {
 	}
 }
 
+func TestUnfurlService_ProxyImageURL(t *testing.T) {
+	imgSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		_, _ = w.Write([]byte{
+			0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+			0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+			0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+			0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
+			0x89,
+		})
+	}))
+	defer imgSrv.Close()
+
+	store := newFakeImageStore()
+	svc := newLoopbackUnfurlService(nil)
+	svc.SetImageStore(store)
+
+	got := svc.ProxyImageURL(context.Background(), imgSrv.URL+"/avatar.png")
+	if !strings.HasPrefix(got, "https://s3.example/unfurl/") {
+		t.Fatalf("ProxyImageURL = %q", got)
+	}
+	if store.headCalls != 1 || store.putCalls != 1 || store.signCalls != 1 {
+		t.Fatalf("image proxy calls: head=%d put=%d sign=%d", store.headCalls, store.putCalls, store.signCalls)
+	}
+}
+
+func TestUnfurlService_ProxyImageURLWithoutImageStoreKeepsURL(t *testing.T) {
+	svc := NewUnfurlService(nil)
+	got := svc.ProxyImageURL(context.Background(), "https://cdn.example/avatar.png")
+	if got != "https://cdn.example/avatar.png" {
+		t.Fatalf("ProxyImageURL without store = %q", got)
+	}
+}
+
 func TestUnfurlService_RejectsNonHTMLContentType(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/pdf")
