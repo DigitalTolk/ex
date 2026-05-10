@@ -21,20 +21,40 @@ function renderSearchBar() {
   );
 }
 
-function rgbParts(color: string) {
-  const match = color.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
-  if (!match) return null;
-  return [Number(match[1]), Number(match[2]), Number(match[3])] as const;
+// Resolve any CSS color string (rgb, rgba, oklch, named, transparent)
+// into an [r,g,b,a] sRGB tuple using a transient canvas. Hand-rolled
+// parsers were flaky because chromium serializes the same color as
+// either `oklch(...)` literal or `rgb(...)` depending on which property
+// path is read, and an incorrect parse fall-through silently produced
+// 0/0/0/0 → bogus 3.9:1 contrast assertions.
+function colorToRGBA(color: string): [number, number, number, number] {
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = 1;
+  const ctx = canvas.getContext('2d')!;
+  ctx.clearRect(0, 0, 1, 1);
+  ctx.fillStyle = color;
+  ctx.fillRect(0, 0, 1, 1);
+  const { data } = ctx.getImageData(0, 0, 1, 1);
+  return [data[0], data[1], data[2], data[3] / 255];
+}
+
+// If an element's own background is transparent, the rendered pixel
+// underneath is whatever its first opaque ancestor paints. Walk up so
+// the contrast assertion compares text against the actual visible bg
+// rather than rgba(0,0,0,0).
+function effectiveBackground(el: HTMLElement): string {
+  let node: HTMLElement | null = el;
+  while (node) {
+    const bg = getComputedStyle(node).backgroundColor;
+    const [, , , a] = colorToRGBA(bg);
+    if (a > 0) return bg;
+    node = node.parentElement;
+  }
+  return 'rgb(255, 255, 255)';
 }
 
 function relativeLuminance(color: string) {
-  const parts = rgbParts(color);
-  if (!parts) {
-    const oklch = color.match(/oklch\(([\d.]+)\s+([\d.]+)/);
-    if (oklch) return Number(oklch[1]);
-    return 0;
-  }
-  const [r, g, b] = parts.map((value) => {
+  const [r, g, b] = colorToRGBA(color).slice(0, 3).map((value) => {
     const srgb = value / 255;
     return srgb <= 0.03928 ? srgb / 12.92 : ((srgb + 0.055) / 1.055) ** 2.4;
   });
@@ -59,7 +79,7 @@ describe('SearchBar browser behavior', () => {
     await expect.element(input).toBeVisible();
 
     const inputColor = getComputedStyle(input).color;
-    const shellColor = getComputedStyle(shell).backgroundColor;
+    const shellColor = effectiveBackground(shell);
     expect(contrastRatio(inputColor, shellColor)).toBeGreaterThanOrEqual(4.5);
   });
 });

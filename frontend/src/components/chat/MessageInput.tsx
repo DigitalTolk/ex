@@ -374,18 +374,39 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [flushDraft]);
 
+  // Track focus state in a ref so visibility-change snapshot logic
+  // survives effect re-runs without re-binding listeners.
+  const editorFocusedRef = useRef(false);
+  useEffect(() => {
+    editorFocusedRef.current = editorFocused;
+  }, [editorFocused]);
+  const wasFocusedOnHideRef = useRef(false);
+
   useEffect(() => {
     if (variant !== 'composer') return;
-    const flushWhenHidden = () => {
-      if (document.visibilityState === 'hidden') flushDraft();
+    // Snapshot whether the editor was focused at hide-time. iOS keeps
+    // the on-screen keyboard up across app switches, but the
+    // contenteditable loses focus, so the composer no longer scrolls
+    // into view. On visibilitychange→visible, restore focus so the
+    // viewport snaps back to the input under the live keyboard.
+    const handleVisibility = () => {
+      if (document.visibilityState === 'hidden') {
+        wasFocusedOnHideRef.current = editorFocusedRef.current;
+        flushDraft();
+        return;
+      }
+      if (document.visibilityState === 'visible' && wasFocusedOnHideRef.current) {
+        wasFocusedOnHideRef.current = false;
+        queueMicrotask(() => editorRef.current?.focus());
+      }
     };
     window.addEventListener('blur', flushDraft);
     window.addEventListener('pagehide', flushDraft);
-    document.addEventListener('visibilitychange', flushWhenHidden);
+    document.addEventListener('visibilitychange', handleVisibility);
     return () => {
       window.removeEventListener('blur', flushDraft);
       window.removeEventListener('pagehide', flushDraft);
-      document.removeEventListener('visibilitychange', flushWhenHidden);
+      document.removeEventListener('visibilitychange', handleVisibility);
     };
   }, [flushDraft, variant]);
 
@@ -670,9 +691,16 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
       className={
         variant === 'inline'
           ? 'p-0'
-          : `border-t bg-background p-3 max-md:pt-1.5 max-md:pb-[max(0.25rem,env(safe-area-inset-bottom))] ${
-              compactMobileComposer && !editorFocused ? 'max-md:px-4' : 'max-md:px-2'
-            }`
+          : `border-t bg-background p-3 max-md:pt-1.5 ${
+              // env(safe-area-inset-bottom) on iOS does not reset to 0 when
+              // the keyboard is up, leaving a wasted ~34px gap between the
+              // composer and the keyboard. Drop the inset while focused
+              // (keyboard up) and only reserve the home-indicator space
+              // when the composer is idle.
+              editorFocused
+                ? 'max-md:pb-1'
+                : 'max-md:pb-[max(0.25rem,env(safe-area-inset-bottom))]'
+            } ${compactMobileComposer && !editorFocused ? 'max-md:px-4' : 'max-md:px-2'}`
       }
       data-composer-focused={editorFocused ? 'true' : 'false'}
     >
@@ -710,7 +738,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
           </div>
         )}
 
-        <div className={`flex gap-2 px-3 py-2 ${compactMobileComposer ? 'items-center max-md:py-0.5' : 'items-end'}`}>
+        <div className={`flex gap-2 px-3 py-2 ${compactMobileComposer ? 'items-center max-md:py-0.5' : 'items-end max-md:pt-3'}`}>
           <WysiwygEditor
             ref={editorRef}
             initialBody={initialBody}

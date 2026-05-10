@@ -232,9 +232,16 @@ describe('MessageInput', () => {
     });
 
     await waitFor(() => expect(composerShell).toHaveAttribute('data-composer-focused', 'true'));
-    expect(composerShell).toHaveClass('max-md:pb-[max(0.25rem,env(safe-area-inset-bottom))]');
+    // Once the keyboard is up, drop the safe-area inset — env(safe-area-inset-bottom)
+    // does not zero out under iOS keyboards and would leave a wasted gap.
+    expect(composerShell).toHaveClass('max-md:pb-1');
+    expect(composerShell).not.toHaveClass('max-md:pb-[max(0.25rem,env(safe-area-inset-bottom))]');
     expect(composerShell).toHaveClass('max-md:px-2');
-    expect(composerShell).not.toHaveClass('max-md:pb-2');
+
+    // Inner row gets extra top padding on mobile so the editor text
+    // doesn't crowd the rounded composer corners.
+    const editorRow = editor.closest('.flex.gap-2')!;
+    expect(editorRow).toHaveClass('max-md:pt-3');
     setMobileMatch(false);
   });
 

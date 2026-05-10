@@ -109,6 +109,41 @@ describe('MessageInput browser behavior', () => {
     expectPaintedAtCenter(composer!);
   });
 
+  it('drops the safe-area inset and adds top breathing room inside the rounded composer once focused on mobile', async () => {
+    if (window.innerWidth > 767) return;
+
+    const screen = await renderWithProviders(
+      <div style={{ position: 'fixed', inset: 'auto 0 0 0', width: '100%' }}>
+        <MessageInput onSend={vi.fn()} />
+      </div>,
+    );
+
+    const composerShell = document.querySelector('[data-composer-focused]') as HTMLElement | null;
+    expect(composerShell).not.toBeNull();
+    const idleStyles = getComputedStyle(composerShell!);
+    const idlePaddingBottom = Number.parseFloat(idleStyles.paddingBottom);
+    // While idle the composer reserves space for the iOS home indicator.
+    expect(idlePaddingBottom).toBeGreaterThanOrEqual(4);
+
+    await screen.getByLabelText('Message input').click();
+    await vi.waitFor(() => {
+      expect(composerShell!.getAttribute('data-composer-focused')).toBe('true');
+    });
+
+    // Once the keyboard is up the safe-area inset is dropped — the
+    // resolved bottom padding stays at ~4px (0.25rem) regardless of
+    // the device's home-indicator inset.
+    const focusedStyles = getComputedStyle(composerShell!);
+    expect(Number.parseFloat(focusedStyles.paddingBottom)).toBeLessThanOrEqual(6);
+
+    // The inner editor row has an extra max-md:pt-3 so the text
+    // doesn't hug the rounded composer's top edge.
+    const editor = screen.getByLabelText('Message input').element() as HTMLElement;
+    const editorRow = editor.closest('.flex.gap-2') as HTMLElement | null;
+    expect(editorRow).not.toBeNull();
+    expect(Number.parseFloat(getComputedStyle(editorRow!).paddingTop)).toBeGreaterThanOrEqual(11);
+  });
+
   it('renders the mobile edit save action with the same fully rounded icon shape', async () => {
     if (window.innerWidth > 767) return;
 

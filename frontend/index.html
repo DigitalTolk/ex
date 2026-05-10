@@ -5,6 +5,13 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, viewport-fit=cover" />
     <meta name="color-scheme" content="light dark" />
+    <!-- theme-color hints to iOS what color to paint around the system
+         chrome — including the area visible through the keyboard's
+         rounded top corners. Without this, iOS falls back to opaque
+         black in dark mode, which produces a hard seam against the
+         composer's bg-background. -->
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff" />
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#252525" />
     <title>ex</title>
     <!-- Pages override the title via useDocumentTitle on mount; this
          baseline is shown briefly before the React tree commits. -->

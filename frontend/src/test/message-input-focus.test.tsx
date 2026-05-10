@@ -98,6 +98,54 @@ describe('MessageInput focusKey', () => {
     expect(editor).not.toHaveClass('max-md:!max-h-5');
   });
 
+  it('refocuses the mobile composer when the page returns to the foreground with the keyboard up', async () => {
+    setMobileMatch(true);
+    render(<MessageInput onSend={vi.fn()} focusKey="ch-1" />);
+    const editor = screen.getByLabelText('Message input') as HTMLElement;
+    fireEvent.focus(editor);
+
+    // Simulate iOS app-switch: the contenteditable loses focus while the
+    // tab is hidden, but the keyboard is still up because the user just
+    // tapped back into our app.
+    Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true });
+    document.dispatchEvent(new Event('visibilitychange'));
+    fireEvent.blur(editor);
+
+    const elsewhere = document.createElement('input');
+    document.body.appendChild(elsewhere);
+    elsewhere.focus();
+    expect(document.activeElement).toBe(elsewhere);
+
+    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+    document.dispatchEvent(new Event('visibilitychange'));
+    await act(async () => {
+      await flushMicrotasks();
+    });
+    expect(document.activeElement).toBe(editor);
+    setMobileMatch(false);
+  });
+
+  it('does not refocus on foreground if the editor was not focused when the page hid', async () => {
+    setMobileMatch(true);
+    render(<MessageInput onSend={vi.fn()} focusKey="ch-1" />);
+    const editor = screen.getByLabelText('Message input') as HTMLElement;
+
+    Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true });
+    document.dispatchEvent(new Event('visibilitychange'));
+
+    const elsewhere = document.createElement('input');
+    document.body.appendChild(elsewhere);
+    elsewhere.focus();
+
+    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+    document.dispatchEvent(new Event('visibilitychange'));
+    await act(async () => {
+      await flushMicrotasks();
+    });
+    expect(document.activeElement).not.toBe(editor);
+    setMobileMatch(false);
+  });
+
   it('keeps the mobile composer compact until focus reveals the full toolbar and attachment action', () => {
     setMobileMatch(true);
     render(<MessageInput onSend={vi.fn()} focusKey="ch-1" />);

@@ -1,7 +1,6 @@
 import { createElement, useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { ChevronLeft, ChevronRight, Download, X, ZoomIn, ZoomOut } from 'lucide-react';
-import { useSwipeable } from 'react-swipeable';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { getInitials, formatLongDateTime, formatBytes } from '@/lib/format';
 import { iconForAttachment, isImageContentType } from '@/lib/file-helpers';
@@ -76,6 +75,11 @@ export function ImageLightbox({
     originY: number;
   } | null>(null);
   const lastTapRef = useRef<{ time: number; x: number; y: number } | null>(null);
+  // pointerdown snapshot used to classify a pointerup as a tap. iOS
+  // does not deliver dblclick on the image stage when pointer captures
+  // and pan/swipe gestures are active, so we detect taps directly off
+  // the pointer stream and chain two within 450ms into a double-tap.
+  const tapStartRef = useRef<{ pointerId: number; time: number; x: number; y: number } | null>(null);
   const zoom = zoomState.key === imageKey ? zoomState.value : 1;
   const pan = panState.key === imageKey && zoom > 1 ? panState : { key: imageKey, x: 0, y: 0 };
   useTransientOverlayCleanup(open, { rootRef: lightboxRef, lockScroll: true });
@@ -113,21 +117,6 @@ export function ImageLightbox({
     return false;
   }
 
-  const imageTapHandlers = useSwipeable({
-    delta: 24,
-    trackMouse: false,
-    preventScrollOnSwipe: false,
-    touchEventOptions: { passive: true },
-    onTap: ({ event }) => {
-      const touchEvent = event as TouchEvent;
-      const touch = touchEvent.changedTouches?.[0];
-      if (!touch) return;
-      if (handleMobileTap(touch.clientX, touch.clientY)) {
-        event.stopPropagation();
-      }
-    },
-  });
-
   const handleClose = useCallback(() => {
     setZoomState({ key: '', value: 1 });
     setPanState({ key: '', x: 0, y: 0 });
@@ -136,6 +125,7 @@ export function ImageLightbox({
     panGestureRef.current = null;
     swipeGestureRef.current = null;
     lastTapRef.current = null;
+    tapStartRef.current = null;
     setSwipeDrag({ x: 0, y: 0 });
     onClose();
   }, [onClose]);
@@ -198,6 +188,14 @@ export function ImageLightbox({
       // Synthetic browser-test PointerEvents are not active pointers.
     }
     activePointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    // Capture the first finger's start info so pointerup can classify
+    // a stationary press as a tap. A second finger arriving switches
+    // the gesture into pinch-zoom and invalidates the snapshot.
+    if (isImage && isMobile && e.pointerType !== 'mouse' && activePointersRef.current.size === 1) {
+      tapStartRef.current = { pointerId: e.pointerId, time: Date.now(), x: e.clientX, y: e.clientY };
+    } else {
+      tapStartRef.current = null;
+    }
     const pointers = Array.from(activePointersRef.current.values());
     if (isImage && pointers.length >= 2) {
       const two = pointers.slice(0, 2);
@@ -241,6 +239,12 @@ export function ImageLightbox({
   function handleLightboxPointerMove(e: ReactPointerEvent<HTMLDivElement>) {
     if (activePointersRef.current.has(e.pointerId)) {
       activePointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    }
+    const tapStart = tapStartRef.current;
+    if (tapStart?.pointerId === e.pointerId) {
+      if (Math.hypot(e.clientX - tapStart.x, e.clientY - tapStart.y) > 12) {
+        tapStartRef.current = null;
+      }
     }
     const pointers = Array.from(activePointersRef.current.values());
     const pinch = pinchGestureRef.current;
@@ -292,9 +296,35 @@ export function ImageLightbox({
   function handleLightboxPointerUp(e: ReactPointerEvent<HTMLDivElement>) {
     const swipe = isMobile ? swipeGestureRef.current : null;
     const panGesture = panGestureRef.current;
+    const tapStart = tapStartRef.current;
+    tapStartRef.current = null;
     activePointersRef.current.delete(e.pointerId);
     if (activePointersRef.current.size < 2) {
       pinchGestureRef.current = null;
+    }
+    // Stationary single-finger release on the image stage = a tap.
+    // Chain with the previous tap (≤450ms, ≤56px) to drive double-tap
+    // zoom toggle. Runs before swipe/pan branches so a clean tap wins
+    // over the swipe threshold check (swipe needs ≥70px movement
+    // anyway, so they're mutually exclusive in practice).
+    if (
+      tapStart?.pointerId === e.pointerId &&
+      activePointersRef.current.size === 0 &&
+      !pinchGestureRef.current &&
+      Date.now() - tapStart.time < 350 &&
+      Math.hypot(e.clientX - tapStart.x, e.clientY - tapStart.y) <= 12 &&
+      handleMobileTap(e.clientX, e.clientY)
+    ) {
+      e.stopPropagation();
+      swipeGestureRef.current = null;
+      panGestureRef.current = null;
+      setSwipeDrag({ x: 0, y: 0 });
+      try {
+        e.currentTarget.releasePointerCapture?.(e.pointerId);
+      } catch {
+        // Pointer capture may not have been acquired.
+      }
+      return;
     }
     if (swipe?.pointerId === e.pointerId) {
       const dx = e.clientX - swipe.startX;
@@ -329,6 +359,9 @@ export function ImageLightbox({
 
   function handleLightboxPointerCancel(e: ReactPointerEvent<HTMLDivElement>) {
     activePointersRef.current.delete(e.pointerId);
+    if (tapStartRef.current?.pointerId === e.pointerId) {
+      tapStartRef.current = null;
+    }
     if (swipeGestureRef.current?.pointerId === e.pointerId) {
       swipeGestureRef.current = null;
       setSwipeDrag({ x: 0, y: 0 });
@@ -484,7 +517,6 @@ export function ImageLightbox({
           onPointerUp={handleLightboxPointerUp}
           onPointerCancel={handleLightboxPointerCancel}
           onDoubleClick={handleImageStageDoubleClick}
-          {...imageTapHandlers}
         >
           <img
             src={current.url}
