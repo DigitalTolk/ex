@@ -9,10 +9,12 @@ import (
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/expression"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 )
 
 type ThreadFollowStore interface {
 	Set(ctx context.Context, follow *model.ThreadFollow) error
+	SetMany(ctx context.Context, follows []*model.ThreadFollow) error
 	Get(ctx context.Context, userID, parentID, threadRootID string) (*model.ThreadFollow, error)
 	ListUser(ctx context.Context, userID string) ([]*model.ThreadFollow, error)
 	ListThread(ctx context.Context, parentID, threadRootID string) ([]*model.ThreadFollow, error)
@@ -34,6 +36,70 @@ type threadFollowItem struct {
 	GSI1PK string `dynamodbav:"GSI1PK"`
 	GSI1SK string `dynamodbav:"GSI1SK"`
 	model.ThreadFollow
+}
+
+// dynamoBatchWriteLimit is the per-request cap enforced by DynamoDB's
+// BatchWriteItem (25 ops). Callers chunk larger inputs themselves.
+const dynamoBatchWriteLimit = 25
+
+// SetMany writes a slice of follows in a single BatchWriteItem call
+// (chunked to the 25-op DynamoDB limit). Used when a single message
+// touches multiple users at once — e.g. a thread reply that mentions
+// several teammates — so we hit DDB once instead of N times.
+//
+// BatchWriteItem doesn't return an error on per-item conflicts the
+// way TransactWriteItems would, but follow records are idempotent
+// PutItems anyway: re-writing an existing record with the same body
+// is a no-op for the user-visible state.
+func (s *ThreadFollowStoreImpl) SetMany(ctx context.Context, follows []*model.ThreadFollow) error {
+	if len(follows) == 0 {
+		return nil
+	}
+	requests := make([]types.WriteRequest, 0, len(follows))
+	for _, f := range follows {
+		item := threadFollowItem{
+			PK:           userPK(f.UserID),
+			SK:           threadFollowSK(f.ParentID, f.ThreadRootID),
+			GSI1PK:       threadFollowGSI1PK(f.ParentID, f.ThreadRootID),
+			GSI1SK:       userPK(f.UserID),
+			ThreadFollow: *f,
+		}
+		av, err := attributevalue.MarshalMap(item)
+		if err != nil {
+			return fmt.Errorf("store: marshal thread follow: %w", err)
+		}
+		requests = append(requests, types.WriteRequest{PutRequest: &types.PutRequest{Item: av}})
+	}
+	for i := 0; i < len(requests); i += dynamoBatchWriteLimit {
+		end := i + dynamoBatchWriteLimit
+		if end > len(requests) {
+			end = len(requests)
+		}
+		chunk := requests[i:end]
+		// DynamoDB may return UnprocessedItems on partial throttling;
+		// retry the unprocessed slice up to a small bound before
+		// surfacing an error. The retry budget is intentionally
+		// shallow — this path is best-effort for a UX nicety
+		// (auto-follow on mention) and shouldn't stall a message send
+		// indefinitely on a hot partition.
+		input := &dynamodb.BatchWriteItemInput{
+			RequestItems: map[string][]types.WriteRequest{s.Table: chunk},
+		}
+		for attempt := 0; attempt < 3; attempt++ {
+			out, err := s.Client.BatchWriteItem(ctx, input)
+			if err != nil {
+				return fmt.Errorf("store: batch set thread follows: %w", err)
+			}
+			if len(out.UnprocessedItems[s.Table]) == 0 {
+				break
+			}
+			input.RequestItems = out.UnprocessedItems
+			if attempt == 2 {
+				return fmt.Errorf("store: batch set thread follows: %d unprocessed after retries", len(out.UnprocessedItems[s.Table]))
+			}
+		}
+	}
+	return nil
 }
 
 func (s *ThreadFollowStoreImpl) Set(ctx context.Context, follow *model.ThreadFollow) error {

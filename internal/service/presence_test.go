@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/DigitalTolk/ex/internal/events"
 )
@@ -229,4 +230,65 @@ func TestPresenceService_NilPublisher(t *testing.T) {
 	svc := NewPresenceService(nil, nil)
 	svc.OnConnect(context.Background(), "u1")
 	svc.OnDisconnect(context.Background(), "u1")
+}
+
+// slowPresenceStore blocks IsPresenceOnline / OnlinePresenceUserIDs
+// until the caller's context fires Done. Used to verify the lookup
+// timeout: a wedged Redis must NOT freeze the request hot path.
+type slowPresenceStore struct {
+	*fakePresenceStore
+}
+
+func (s *slowPresenceStore) IsPresenceOnline(ctx context.Context, userID string) (bool, error) {
+	<-ctx.Done()
+	return false, ctx.Err()
+}
+
+func (s *slowPresenceStore) OnlinePresenceUserIDs(ctx context.Context) ([]string, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func TestPresenceService_IsOnline_TimesOutOnWedgedStore(t *testing.T) {
+	store := &slowPresenceStore{fakePresenceStore: newFakePresenceStore()}
+	svc := NewPresenceService(store, newMockPublisher())
+
+	start := time.Now()
+	got := svc.IsOnline("u1")
+	elapsed := time.Since(start)
+
+	if got {
+		t.Error("IsOnline should fall back to false on store timeout")
+	}
+	// Timeout is 500ms; allow ample headroom for slow CI hosts but
+	// fail loudly if the call blocked beyond ~2s (the bug we fixed).
+	if elapsed > 2*time.Second {
+		t.Errorf("IsOnline blocked for %v; expected ≤2s", elapsed)
+	}
+}
+
+func TestPresenceService_OnlineUserIDs_TimesOutOnWedgedStore(t *testing.T) {
+	store := &slowPresenceStore{fakePresenceStore: newFakePresenceStore()}
+	svc := NewPresenceService(store, newMockPublisher())
+	svc.OnConnect(context.Background(), "u-local")
+
+	start := time.Now()
+	ids := svc.OnlineUserIDs()
+	elapsed := time.Since(start)
+
+	// On store timeout, fall back to in-process map ("u-local" was
+	// just added). The fallback must contain that ID, proving we did
+	// NOT stall waiting on Redis.
+	found := false
+	for _, id := range ids {
+		if id == "u-local" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected fallback to include u-local, got %v", ids)
+	}
+	if elapsed > 2*time.Second {
+		t.Errorf("OnlineUserIDs blocked for %v; expected ≤2s", elapsed)
+	}
 }

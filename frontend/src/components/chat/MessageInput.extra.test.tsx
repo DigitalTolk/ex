@@ -3,9 +3,24 @@ import { render as rtlRender, screen, fireEvent, waitFor, act } from '@testing-l
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
-const mockApiFetch = vi.fn();
+const { mockApiFetch, TestApiError } = vi.hoisted(() => {
+  class TestApiError extends Error {
+    status: number;
+    constructor(status: number, message: string) {
+      super(message);
+      this.name = 'ApiError';
+      this.status = status;
+    }
+  }
+  return { mockApiFetch: vi.fn(), TestApiError };
+});
 vi.mock('@/lib/api', () => ({
   apiFetch: (...args: unknown[]) => mockApiFetch(...args),
+  ApiError: TestApiError,
+  getAccessToken: vi.fn(() => null),
+  setAccessToken: vi.fn(),
+  clearAccessToken: vi.fn(),
+  refreshAccessToken: vi.fn().mockResolvedValue(null),
 }));
 
 const mockUploadAttachment = vi.fn();
@@ -238,5 +253,64 @@ describe('MessageInput - file upload', () => {
     await act(async () => { inFlight[0](); });
     await waitFor(() => expect(inFlight.length).toBe(5));
     await act(async () => { inFlight.slice(1).forEach((r) => r()); });
+  });
+});
+
+describe('MessageInput - removeDraft error handling', () => {
+  it('silently swallows 409 (still-referenced) since the chip is already gone', async () => {
+    mockDeleteDraftMutateAsync.mockRejectedValueOnce(new TestApiError(409, 'still referenced'));
+    const drafts = [{
+      id: 'att-1',
+      filename: 'pic.png',
+      contentType: 'image/png',
+      size: 32,
+      progress: 1,
+    }];
+
+    render(<MessageInput onSend={vi.fn()} initialDrafts={drafts} />);
+
+    const remove = await screen.findByLabelText('Remove pic.png');
+    await act(async () => { remove.click(); });
+
+    await waitFor(() => {
+      expect(screen.queryByText('pic.png')).not.toBeInTheDocument();
+    });
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('surfaces non-409 deletion errors so the user sees a real failure', async () => {
+    mockDeleteDraftMutateAsync.mockRejectedValueOnce(new TestApiError(500, 'storage unavailable'));
+    const drafts = [{
+      id: 'att-2',
+      filename: 'doc.pdf',
+      contentType: 'application/pdf',
+      size: 100,
+      progress: 1,
+    }];
+
+    render(<MessageInput onSend={vi.fn()} initialDrafts={drafts} />);
+
+    const remove = await screen.findByLabelText('Remove doc.pdf');
+    await act(async () => { remove.click(); });
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/storage unavailable/i);
+  });
+
+  it('surfaces non-ApiError network failures so they are not silently lost', async () => {
+    mockDeleteDraftMutateAsync.mockRejectedValueOnce(new Error('network down'));
+    const drafts = [{
+      id: 'att-3',
+      filename: 'img.png',
+      contentType: 'image/png',
+      size: 64,
+      progress: 1,
+    }];
+
+    render(<MessageInput onSend={vi.fn()} initialDrafts={drafts} />);
+
+    const remove = await screen.findByLabelText('Remove img.png');
+    await act(async () => { remove.click(); });
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/network down/i);
   });
 });

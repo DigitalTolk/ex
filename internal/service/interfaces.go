@@ -72,9 +72,45 @@ type MessageStore interface {
 	IncrementReplyMetadata(ctx context.Context, parentID, msgID string, replyTime time.Time, replyAuthorID string) (*model.Message, error)
 }
 
+// ParentPinFileIndexStore is the per-parent index used by ListPinned
+// and ListFiles. Without it, both code paths fall back to scanning
+// recent messages — accurate up to 1000 items but unbounded in
+// latency. With it, both queries become O(pinned) / O(files-shared)
+// instead of O(messages).
+type ParentPinFileIndexStore interface {
+	SetPinIndex(ctx context.Context, parentID, msgID, pinnedBy string, pinnedAt time.Time) error
+	DeletePinIndex(ctx context.Context, parentID, msgID string) error
+	ListPinIndex(ctx context.Context, parentID string) ([]PinIndexEntry, error)
+
+	SetFileIndex(ctx context.Context, parentID, attachmentID, msgID, authorID string, createdAt time.Time) error
+	DeleteFileIndex(ctx context.Context, parentID, attachmentID string) error
+	ListFileIndex(ctx context.Context, parentID string) ([]FileIndexEntry, error)
+}
+
+// PinIndexEntry mirrors store.PinIndexRow at the service-interface
+// boundary so the service layer doesn't depend on the store package.
+type PinIndexEntry struct {
+	MessageID string
+	PinnedBy  string
+	PinnedAt  time.Time
+}
+
+// FileIndexEntry mirrors store.FileIndexRow at the service-interface
+// boundary.
+type FileIndexEntry struct {
+	AttachmentID string
+	MessageID    string
+	AuthorID     string
+	CreatedAt    time.Time
+}
+
 // ThreadFollowStore defines per-user follow/unfollow overrides for threads.
 type ThreadFollowStore interface {
 	SetThreadFollow(ctx context.Context, follow *model.ThreadFollow) error
+	// SetThreadFollowMany writes a batch of follows in a single
+	// underlying call. Used by the auto-follow-on-mention path so a
+	// reply that mentions N people costs one round-trip instead of N.
+	SetThreadFollowMany(ctx context.Context, follows []*model.ThreadFollow) error
 	GetThreadFollow(ctx context.Context, userID, parentID, threadRootID string) (*model.ThreadFollow, error)
 	ListUserThreadFollows(ctx context.Context, userID string) ([]*model.ThreadFollow, error)
 	ListThreadFollows(ctx context.Context, parentID, threadRootID string) ([]*model.ThreadFollow, error)

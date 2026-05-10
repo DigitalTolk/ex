@@ -7,39 +7,44 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/DigitalTolk/ex/internal/auth"
 	"github.com/DigitalTolk/ex/internal/middleware"
 )
 
 // NewRouter builds the application HTTP handler, registering all routes.
+// All dependencies are bundled in *Deps — adding a new endpoint only
+// requires adding a field to that struct (see deps.go).
 //
-// frontendFS should be the frontend/dist subtree (already sub-rooted); pass nil
-// to disable the embedded SPA. appVersion is the build identifier the SPA
-// embeds in its `<meta name="app-version">` tag — main computes it once
-// and forwards the same value here to avoid re-hashing index.html.
-func NewRouter(
-	authH *AuthHandler,
-	userH *UserHandler,
-	userStateH *UserStateHandler,
-	channelH *ChannelHandler,
-	convH *ConversationHandler,
-	wsH *WSHandler,
-	uploadH *UploadHandler,
-	emojiH *EmojiHandler,
-	presenceH *PresenceHandler,
-	attachmentH *AttachmentHandler,
-	adminH *AdminHandler,
-	threadH *ThreadHandler,
-	draftH *DraftHandler,
-	versionH *VersionHandler,
-	unfurlH *UnfurlHandler,
-	sidebarH *SidebarHandler,
-	searchH *SearchHandler,
-	jwtMgr *auth.JWTManager,
-	frontendFS fs.FS,
-	appVersion string,
-	allowOrigins []string,
-) http.Handler {
+// Deps.FrontendFS should be the frontend/dist subtree (already
+// sub-rooted); pass nil to disable the embedded SPA. Deps.AppVersion
+// is the build identifier the SPA embeds in its `<meta
+// name="app-version">` tag — main computes it once and forwards the
+// same value here to avoid re-hashing index.html.
+func NewRouter(d *Deps) http.Handler {
+	if d == nil {
+		panic("handler.NewRouter: nil Deps")
+	}
+	authH := d.Auth
+	userH := d.User
+	userStateH := d.UserState
+	channelH := d.Channel
+	convH := d.Conversation
+	wsH := d.WS
+	uploadH := d.Upload
+	emojiH := d.Emoji
+	presenceH := d.Presence
+	attachmentH := d.Attachment
+	adminH := d.Admin
+	threadH := d.Thread
+	draftH := d.Draft
+	versionH := d.Version
+	unfurlH := d.Unfurl
+	sidebarH := d.Sidebar
+	searchH := d.Search
+	jwtMgr := d.JWT
+	frontendFS := d.FrontendFS
+	appVersion := d.AppVersion
+	allowOrigins := d.AllowOrigins
+
 	mux := http.NewServeMux()
 
 	authMW := middleware.Auth(jwtMgr)

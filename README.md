@@ -174,6 +174,20 @@ aws dynamodb update-time-to-live \
 
 If you prefer Terraform / CloudFormation / CDK, replicate the same shape: `PK`+`SK` primary key, two GSIs (`GSI1`/`GSI2`) each with `*PK`+`*SK` and `ProjectionType=ALL`, and a TTL on the `ttl` attribute.
 
+### Key prefixes (per parent partition)
+
+A parent partition (`PK = CHAN#<id>` or `PK = CONV#<id>`) holds the parent's messages plus a few index rows that let the sidebar's "pinned" and "files" panes load in O(pinned) / O(files-shared) instead of scanning every message:
+
+| `SK` prefix | Item               | Lifecycle                                                                                                |
+| ----------- | ------------------ | -------------------------------------------------------------------------------------------------------- |
+| `MSG#`      | Message            | Created on send; soft-deleted on delete.                                                                 |
+| `PIN#`      | Pinned-message ref | Written when a message is pinned; removed on unpin or message delete. Listed by `Query SK begins_with`.  |
+| `FILE#`     | Shared-file ref    | Upserted per `(parent, attachmentID)` on every send/edit that references the file; removed on delete only when the row's `MessageID` still points at the deleted message (re-shares survive). |
+
+`PIN#` and `FILE#` rows live alongside the `MSG#` rows in the same DDB partition, so listing them is a single `Query` against `PK` + `begins_with(SK, "PIN#")` (no GSI). The dedicated row also lets `ListPinned` / `ListFiles` skip the legacy 1000-message scan that previously bounded both queries' accuracy.
+
+Existing deployments do **not** need to backfill these rows — the legacy scan path is preserved as a fallback when the index is empty or unavailable, and entries materialize naturally as users pin/share new content. If you want immediate parity with the new index, run a one-time job that walks each parent's `MSG#` rows and writes a `PIN#` row for every `Pinned=true` message and a `FILE#` row per attachment.
+
 ## Architecture
 
 - **Real-time**: WebSocket for server-to-client push, REST for everything else

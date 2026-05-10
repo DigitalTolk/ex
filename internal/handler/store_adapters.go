@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/DigitalTolk/ex/internal/model"
+	"github.com/DigitalTolk/ex/internal/service"
 	"github.com/DigitalTolk/ex/internal/store"
 )
 
@@ -206,6 +207,7 @@ func (a *MessageStoreAdapter) IncrementReplyMetadata(ctx context.Context, parent
 
 type threadFollowBacking interface {
 	Set(ctx context.Context, follow *model.ThreadFollow) error
+	SetMany(ctx context.Context, follows []*model.ThreadFollow) error
 	Get(ctx context.Context, userID, parentID, threadRootID string) (*model.ThreadFollow, error)
 	ListUser(ctx context.Context, userID string) ([]*model.ThreadFollow, error)
 	ListThread(ctx context.Context, parentID, threadRootID string) ([]*model.ThreadFollow, error)
@@ -222,6 +224,9 @@ func NewThreadFollowStoreAdapter(s *store.ThreadFollowStoreImpl) *ThreadFollowSt
 
 func (a *ThreadFollowStoreAdapter) SetThreadFollow(ctx context.Context, follow *model.ThreadFollow) error {
 	return a.s.Set(ctx, follow)
+}
+func (a *ThreadFollowStoreAdapter) SetThreadFollowMany(ctx context.Context, follows []*model.ThreadFollow) error {
+	return a.s.SetMany(ctx, follows)
 }
 func (a *ThreadFollowStoreAdapter) GetThreadFollow(ctx context.Context, userID, parentID, threadRootID string) (*model.ThreadFollow, error) {
 	return a.s.Get(ctx, userID, parentID, threadRootID)
@@ -298,4 +303,86 @@ func (a *TokenStoreAdapter) DeleteRefreshToken(ctx context.Context, tokenHash st
 }
 func (a *TokenStoreAdapter) DeleteAllRefreshTokensForUser(ctx context.Context, userID string) error {
 	return a.s.DeleteAllForUser(ctx, userID)
+}
+
+// ParentIndexAdapter bridges store.ParentIndexStoreImpl into the
+// service layer's ParentPinFileIndexStore interface (named after its
+// concrete consumers — ListPinned and ListFiles — so service code
+// reads as "set pin index, set file index" without importing the
+// store package).
+type ParentIndexAdapter struct {
+	s parentIndexBacking
+}
+
+// parentIndexBacking is the small surface ParentIndexAdapter needs.
+// Mirrored as an interface so tests can inject a fake without spinning
+// up DynamoDB — same pattern as the other adapters in this file.
+type parentIndexBacking interface {
+	SetPinIndex(ctx context.Context, parentID, msgID, pinnedBy string, pinnedAt time.Time) error
+	DeletePinIndex(ctx context.Context, parentID, msgID string) error
+	ListPinIndex(ctx context.Context, parentID string) ([]*store.PinIndexRow, error)
+	SetFileIndex(ctx context.Context, parentID, attachmentID, msgID, authorID string, createdAt time.Time) error
+	DeleteFileIndex(ctx context.Context, parentID, attachmentID string) error
+	ListFileIndex(ctx context.Context, parentID string) ([]*store.FileIndexRow, error)
+}
+
+func NewParentIndexAdapter(s *store.ParentIndexStoreImpl) *ParentIndexAdapter {
+	return &ParentIndexAdapter{s: s}
+}
+
+// newParentIndexAdapterFromBacking is the test-friendly variant that
+// accepts any conforming backing — used by adapter tests to swap in
+// an in-memory fake. Not exported because production callers always
+// have a real *ParentIndexStoreImpl.
+func newParentIndexAdapterFromBacking(b parentIndexBacking) *ParentIndexAdapter {
+	return &ParentIndexAdapter{s: b}
+}
+
+func (a *ParentIndexAdapter) SetPinIndex(ctx context.Context, parentID, msgID, pinnedBy string, pinnedAt time.Time) error {
+	return a.s.SetPinIndex(ctx, parentID, msgID, pinnedBy, pinnedAt)
+}
+
+func (a *ParentIndexAdapter) DeletePinIndex(ctx context.Context, parentID, msgID string) error {
+	return a.s.DeletePinIndex(ctx, parentID, msgID)
+}
+
+func (a *ParentIndexAdapter) ListPinIndex(ctx context.Context, parentID string) ([]service.PinIndexEntry, error) {
+	rows, err := a.s.ListPinIndex(ctx, parentID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]service.PinIndexEntry, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, service.PinIndexEntry{
+			MessageID: r.MessageID,
+			PinnedBy:  r.PinnedBy,
+			PinnedAt:  r.PinnedAt,
+		})
+	}
+	return out, nil
+}
+
+func (a *ParentIndexAdapter) SetFileIndex(ctx context.Context, parentID, attachmentID, msgID, authorID string, createdAt time.Time) error {
+	return a.s.SetFileIndex(ctx, parentID, attachmentID, msgID, authorID, createdAt)
+}
+
+func (a *ParentIndexAdapter) DeleteFileIndex(ctx context.Context, parentID, attachmentID string) error {
+	return a.s.DeleteFileIndex(ctx, parentID, attachmentID)
+}
+
+func (a *ParentIndexAdapter) ListFileIndex(ctx context.Context, parentID string) ([]service.FileIndexEntry, error) {
+	rows, err := a.s.ListFileIndex(ctx, parentID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]service.FileIndexEntry, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, service.FileIndexEntry{
+			AttachmentID: r.AttachmentID,
+			MessageID:    r.MessageID,
+			AuthorID:     r.AuthorID,
+			CreatedAt:    r.CreatedAt,
+		})
+	}
+	return out, nil
 }

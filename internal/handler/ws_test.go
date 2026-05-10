@@ -260,3 +260,137 @@ func TestWSHandler_Connect_DefaultsServerVersionToDevWhenUnset(t *testing.T) {
 		t.Errorf("default version = %q, want dev", payload.Version)
 	}
 }
+
+// origin-policy tests — verify the WebSocket upgrade rejects requests
+// whose Origin header isn't in the allowlist, while preserving same-
+// origin and explicit-allowlist matches. Uses raw HTTP upgrade
+// requests (not websocket.Dial) so the Origin header can be controlled.
+func newOriginUpgradeRequest(t *testing.T, target, origin, token string) *http.Request {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodGet, target+"?token="+token, nil)
+	if err != nil {
+		t.Fatalf("build upgrade request: %v", err)
+	}
+	req.Header.Set("Connection", "Upgrade")
+	req.Header.Set("Upgrade", "websocket")
+	req.Header.Set("Sec-WebSocket-Version", "13")
+	req.Header.Set("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
+	if origin != "" {
+		req.Header.Set("Origin", origin)
+	}
+	return req
+}
+
+func newWSHandlerForOriginTest(t *testing.T) (*WSHandler, *auth.JWTManager, string) {
+	t.Helper()
+	mr := miniredis.RunT(t)
+	ps, err := pubsub.NewRedisPubSub("redis://" + mr.Addr())
+	if err != nil {
+		t.Fatalf("pubsub: %v", err)
+	}
+	broker := pubsub.NewBroker(ps)
+	t.Cleanup(func() { _ = broker.Close() })
+
+	channels := newDataChannelStore()
+	memberships := newDataMembershipStore()
+	convs := newDataConversationStore()
+	users := newDataUserStoreForConv()
+	bAdapter := NewBrokerAdapter(broker)
+	chanSvc := service.NewChannelService(channels, memberships, users, nil, nil, bAdapter, nil)
+	convSvc := service.NewConversationService(convs, users, nil, bAdapter, nil)
+	presenceSvc := service.NewPresenceService(nil, nil)
+	h := NewWSHandler(broker, chanSvc, convSvc, presenceSvc)
+
+	jwtMgr := auth.NewJWTManager("ws-origin-secret", 15*time.Minute, 720*time.Hour)
+	user := &model.User{ID: "u-org", Email: "o@test.com", SystemRole: model.SystemRoleMember}
+	token := makeTokenForUser(jwtMgr, user)
+	return h, jwtMgr, token
+}
+
+// Cross-origin upgrades must fail closed when SetOriginPolicy is
+// configured with a concrete allowlist. This is the core regression
+// test for the prior `InsecureSkipVerify: true` default that allowed
+// any attacker-controlled origin to open an authenticated WS.
+func TestWSHandler_Connect_RejectsCrossOriginNotInAllowlist(t *testing.T) {
+	h, jwtMgr, token := newWSHandlerForOriginTest(t)
+	h.SetOriginPolicy([]string{"app.example.com"})
+
+	srv := httptest.NewServer(middleware.Auth(jwtMgr)(http.HandlerFunc(h.Connect)))
+	defer srv.Close()
+
+	req := newOriginUpgradeRequest(t, srv.URL+"/api/v1/ws", "https://attacker.example.com", token)
+	res, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatalf("upgrade request: %v", err)
+	}
+	defer func() { _ = res.Body.Close() }()
+	if res.StatusCode != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403 (origin rejected)", res.StatusCode)
+	}
+}
+
+// An Origin host that matches the allowlist must be upgraded
+// successfully — verifies the policy isn't a global block.
+func TestWSHandler_Connect_AcceptsAllowlistedOrigin(t *testing.T) {
+	h, jwtMgr, token := newWSHandlerForOriginTest(t)
+	h.SetOriginPolicy([]string{"app.example.com"})
+
+	srv := httptest.NewServer(middleware.Auth(jwtMgr)(http.HandlerFunc(h.Connect)))
+	defer srv.Close()
+
+	req := newOriginUpgradeRequest(t, srv.URL+"/api/v1/ws", "https://app.example.com", token)
+	res, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatalf("upgrade request: %v", err)
+	}
+	defer func() { _ = res.Body.Close() }()
+	if res.StatusCode != http.StatusSwitchingProtocols {
+		t.Fatalf("status = %d, want 101 (upgraded)", res.StatusCode)
+	}
+}
+
+// "*" preserves the prior dev-mode behaviour: any origin is accepted.
+// Production deployments must NOT pass "*" — that is enforced via the
+// CORS allow-list mirroring in main.go (a non-dev config emits a
+// concrete list).
+func TestWSHandler_SetOriginPolicy_WildcardAllowsAnyOrigin(t *testing.T) {
+	h, jwtMgr, token := newWSHandlerForOriginTest(t)
+	h.SetOriginPolicy([]string{"*"})
+
+	srv := httptest.NewServer(middleware.Auth(jwtMgr)(http.HandlerFunc(h.Connect)))
+	defer srv.Close()
+
+	req := newOriginUpgradeRequest(t, srv.URL+"/api/v1/ws", "https://anywhere.test", token)
+	res, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatalf("upgrade request: %v", err)
+	}
+	defer func() { _ = res.Body.Close() }()
+	if res.StatusCode != http.StatusSwitchingProtocols {
+		t.Fatalf("status = %d, want 101 (wildcard allows)", res.StatusCode)
+	}
+}
+
+// Without a policy set, the handler must fail closed to same-origin —
+// the request below has no Origin header and no policy, so the
+// library's default (same-origin) applies and the upgrade succeeds
+// because httptest.NewServer puts the request on the same origin.
+// The cross-origin attacker case (no Origin policy + foreign Origin)
+// is the production-concern check.
+func TestWSHandler_Connect_DefaultPolicyRejectsForeignOrigin(t *testing.T) {
+	h, jwtMgr, token := newWSHandlerForOriginTest(t)
+	// no SetOriginPolicy → empty patterns, no wildcard
+
+	srv := httptest.NewServer(middleware.Auth(jwtMgr)(http.HandlerFunc(h.Connect)))
+	defer srv.Close()
+
+	req := newOriginUpgradeRequest(t, srv.URL+"/api/v1/ws", "https://attacker.example.com", token)
+	res, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatalf("upgrade request: %v", err)
+	}
+	defer func() { _ = res.Body.Close() }()
+	if res.StatusCode != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403 (default policy rejects foreign origin)", res.StatusCode)
+	}
+}

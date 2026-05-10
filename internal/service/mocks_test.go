@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"sync"
 	"time"
 
@@ -757,7 +758,10 @@ func (m *mockMessageStore) IncrementReplyMetadata(_ context.Context, parentID, m
 // --- Mock ThreadFollowStore ---
 
 type mockThreadFollowStore struct {
-	follows map[string]*model.ThreadFollow
+	follows         map[string]*model.ThreadFollow
+	setCalls        int
+	setManyCalls    int
+	setManyMaxBatch int
 }
 
 func newMockThreadFollowStore() *mockThreadFollowStore {
@@ -769,8 +773,21 @@ func threadFollowMockKey(userID, parentID, threadRootID string) string {
 }
 
 func (m *mockThreadFollowStore) SetThreadFollow(_ context.Context, follow *model.ThreadFollow) error {
+	m.setCalls++
 	cp := *follow
 	m.follows[threadFollowMockKey(follow.UserID, follow.ParentID, follow.ThreadRootID)] = &cp
+	return nil
+}
+
+func (m *mockThreadFollowStore) SetThreadFollowMany(_ context.Context, follows []*model.ThreadFollow) error {
+	m.setManyCalls++
+	if len(follows) > m.setManyMaxBatch {
+		m.setManyMaxBatch = len(follows)
+	}
+	for _, f := range follows {
+		cp := *f
+		m.follows[threadFollowMockKey(f.UserID, f.ParentID, f.ThreadRootID)] = &cp
+	}
 	return nil
 }
 
@@ -805,4 +822,94 @@ func (m *mockThreadFollowStore) ListThreadFollows(_ context.Context, parentID, t
 		out = append(out, &cp)
 	}
 	return out, nil
+}
+
+// --- Mock ParentPinFileIndexStore ---
+
+type mockParentIndex struct {
+	pins  map[string]map[string]PinIndexEntry  // parentID -> msgID -> entry
+	files map[string]map[string]FileIndexEntry // parentID -> attachmentID -> entry
+}
+
+func newMockParentIndex() *mockParentIndex {
+	return &mockParentIndex{
+		pins:  make(map[string]map[string]PinIndexEntry),
+		files: make(map[string]map[string]FileIndexEntry),
+	}
+}
+
+func (m *mockParentIndex) SetPinIndex(_ context.Context, parentID, msgID, pinnedBy string, pinnedAt time.Time) error {
+	if m.pins[parentID] == nil {
+		m.pins[parentID] = make(map[string]PinIndexEntry)
+	}
+	m.pins[parentID][msgID] = PinIndexEntry{MessageID: msgID, PinnedBy: pinnedBy, PinnedAt: pinnedAt}
+	return nil
+}
+
+func (m *mockParentIndex) DeletePinIndex(_ context.Context, parentID, msgID string) error {
+	if m.pins[parentID] != nil {
+		delete(m.pins[parentID], msgID)
+	}
+	return nil
+}
+
+func (m *mockParentIndex) ListPinIndex(_ context.Context, parentID string) ([]PinIndexEntry, error) {
+	rows := m.pins[parentID]
+	out := make([]PinIndexEntry, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, r)
+	}
+	return out, nil
+}
+
+func (m *mockParentIndex) SetFileIndex(_ context.Context, parentID, attachmentID, msgID, authorID string, createdAt time.Time) error {
+	if m.files[parentID] == nil {
+		m.files[parentID] = make(map[string]FileIndexEntry)
+	}
+	m.files[parentID][attachmentID] = FileIndexEntry{
+		AttachmentID: attachmentID, MessageID: msgID, AuthorID: authorID, CreatedAt: createdAt,
+	}
+	return nil
+}
+
+func (m *mockParentIndex) DeleteFileIndex(_ context.Context, parentID, attachmentID string) error {
+	if m.files[parentID] != nil {
+		delete(m.files[parentID], attachmentID)
+	}
+	return nil
+}
+
+func (m *mockParentIndex) ListFileIndex(_ context.Context, parentID string) ([]FileIndexEntry, error) {
+	rows := m.files[parentID]
+	out := make([]FileIndexEntry, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, r)
+	}
+	return out, nil
+}
+
+// erroringParentIndex returns errors from every write and list,
+// while still letting the test reach through to the underlying
+// inner mock for read-side assertions. Used to exercise the slog
+// Warn fallback branches in SetPinned/Send/Edit/Delete that fire
+// when the index store is unhealthy.
+type erroringParentIndex struct{}
+
+func (erroringParentIndex) SetPinIndex(_ context.Context, _, _, _ string, _ time.Time) error {
+	return errors.New("pin index unavailable")
+}
+func (erroringParentIndex) DeletePinIndex(_ context.Context, _, _ string) error {
+	return errors.New("pin index unavailable")
+}
+func (erroringParentIndex) ListPinIndex(_ context.Context, _ string) ([]PinIndexEntry, error) {
+	return nil, errors.New("pin index unavailable")
+}
+func (erroringParentIndex) SetFileIndex(_ context.Context, _, _, _, _ string, _ time.Time) error {
+	return errors.New("file index unavailable")
+}
+func (erroringParentIndex) DeleteFileIndex(_ context.Context, _, _ string) error {
+	return errors.New("file index unavailable")
+}
+func (erroringParentIndex) ListFileIndex(_ context.Context, _ string) ([]FileIndexEntry, error) {
+	return nil, errors.New("file index unavailable")
 }

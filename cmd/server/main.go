@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"syscall"
@@ -22,6 +23,26 @@ import (
 	"github.com/DigitalTolk/ex/internal/storage"
 	"github.com/DigitalTolk/ex/internal/store"
 )
+
+// wsOriginPatternsFromCORS converts the CORS allow-list (which holds
+// scheme-qualified origins like "https://app.example.com" or
+// "tauri://localhost") into host patterns suitable for
+// websocket.AcceptOptions.OriginPatterns. The "*" sentinel is
+// preserved so downstream callers can opt back into dev wildcard mode.
+func wsOriginPatternsFromCORS(origins []string) []string {
+	out := make([]string, 0, len(origins))
+	for _, raw := range origins {
+		if raw == "*" {
+			return []string{"*"}
+		}
+		u, err := url.Parse(raw)
+		if err != nil || u.Host == "" {
+			continue
+		}
+		out = append(out, u.Hostname())
+	}
+	return out
+}
 
 func main() {
 	ctx := context.Background()
@@ -72,6 +93,7 @@ func main() {
 	conversationStore := handler.NewConversationStoreAdapter(store.NewConversationStore(db))
 	messageStore := handler.NewMessageStoreAdapter(store.NewMessageStore(db))
 	threadFollowStore := handler.NewThreadFollowStoreAdapter(store.NewThreadFollowStore(db))
+	parentIndexStore := handler.NewParentIndexAdapter(store.NewParentIndexStore(db))
 	userStateStore := handler.NewUserStateStoreAdapter(store.NewUserStateStore(db))
 	inviteStore := handler.NewInviteStoreAdapter(store.NewInviteStore(db))
 	tokenStore := handler.NewTokenStoreAdapter(store.NewTokenStore(db))
@@ -135,6 +157,7 @@ func main() {
 	messageSvc := service.NewMessageService(messageStore, membershipStore, conversationStore, redisPubSub, brokerAdapter)
 	messageSvc.SetThreadFollowStore(threadFollowStore)
 	messageSvc.SetUserStateStore(userStateStore)
+	messageSvc.SetParentIndex(parentIndexStore)
 	messageSvc.SetActivator(convSvc)
 	messageSvc.SetConversationUnreadTracker(convSvc)
 	userStateSvc := service.NewUserStateService(userStateStore, redisPubSub)
@@ -254,6 +277,10 @@ func main() {
 	appVersion := handler.AppVersion(frontendDist)
 	versionH := handler.NewVersionHandler(appVersion)
 	wsH.SetVersion(appVersion)
+	// Mirror the HTTP CORS allow-list onto the WebSocket Origin check
+	// (host-only patterns). Without this the upgrade would fail closed
+	// to same-origin in production, breaking the Tauri/Capacitor mobile
+	// shells that legitimately load from non-HTTP origins.
 
 	// ------------------------------------------------------------------ Router
 	allowOrigins := []string{"*"}
@@ -265,6 +292,7 @@ func main() {
 			"http://localhost",
 		}
 	}
+	wsH.SetOriginPolicy(wsOriginPatternsFromCORS(allowOrigins))
 	unfurlSvc := service.NewUnfurlService(redisCache)
 	if s3Client != nil {
 		// Proxy preview images through S3 (folder `unfurl/`) so viewers
@@ -274,7 +302,29 @@ func main() {
 	}
 	unfurlSvc.SetMediaURLCache(redisCache)
 	unfurlH := handler.NewUnfurlHandler(unfurlSvc)
-	router := handler.NewRouter(authH, userH, userStateH, channelH, convH, wsH, uploadH, emojiH, presenceH, attachmentH, adminH, threadH, draftH, versionH, unfurlH, sidebarH, searchH, jwtMgr, frontendDist, appVersion, allowOrigins)
+	router := handler.NewRouter(&handler.Deps{
+		Auth:         authH,
+		User:         userH,
+		UserState:    userStateH,
+		Channel:      channelH,
+		Conversation: convH,
+		WS:           wsH,
+		Upload:       uploadH,
+		Emoji:        emojiH,
+		Presence:     presenceH,
+		Attachment:   attachmentH,
+		Admin:        adminH,
+		Thread:       threadH,
+		Draft:        draftH,
+		Version:      versionH,
+		Unfurl:       unfurlH,
+		Sidebar:      sidebarH,
+		Search:       searchH,
+		JWT:          jwtMgr,
+		FrontendFS:   frontendDist,
+		AppVersion:   appVersion,
+		AllowOrigins: allowOrigins,
+	})
 
 	// ------------------------------------------------------------------ Server
 	srv := &http.Server{

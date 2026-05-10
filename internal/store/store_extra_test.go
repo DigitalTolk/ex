@@ -1253,3 +1253,243 @@ func TestThreadFollowStore_EmptyListsAndNonexistentTable(t *testing.T) {
 		t.Fatal("ListThread on nonexistent table: expected error")
 	}
 }
+
+func TestThreadFollowStore_SetMany(t *testing.T) {
+	db := setupDynamoDB(t)
+	s := NewThreadFollowStore(db)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Millisecond)
+
+	// Empty input is a no-op (no DDB call) — we should not error.
+	if err := s.SetMany(ctx, nil); err != nil {
+		t.Fatalf("SetMany(nil): %v", err)
+	}
+
+	follows := []*model.ThreadFollow{
+		{UserID: "u-a", ParentID: "ch-1", ParentType: "channel", ThreadRootID: "root-1", Following: true, UpdatedAt: now},
+		{UserID: "u-b", ParentID: "ch-1", ParentType: "channel", ThreadRootID: "root-1", Following: true, UpdatedAt: now},
+		{UserID: "u-c", ParentID: "ch-1", ParentType: "channel", ThreadRootID: "root-1", Following: true, UpdatedAt: now},
+	}
+	if err := s.SetMany(ctx, follows); err != nil {
+		t.Fatalf("SetMany: %v", err)
+	}
+
+	rows, err := s.ListThread(ctx, "ch-1", "root-1")
+	if err != nil {
+		t.Fatalf("ListThread: %v", err)
+	}
+	if len(rows) != 3 {
+		t.Fatalf("ListThread count = %d, want 3", len(rows))
+	}
+	seen := map[string]bool{}
+	for _, r := range rows {
+		seen[r.UserID] = r.Following
+	}
+	for _, id := range []string{"u-a", "u-b", "u-c"} {
+		if !seen[id] {
+			t.Errorf("expected %s to be persisted as following", id)
+		}
+	}
+}
+
+// Verify SetMany splits inputs larger than the 25-op DynamoDB
+// BatchWriteItem cap into multiple chunks transparently.
+func TestThreadFollowStore_SetMany_ChunksLargerThanBatchLimit(t *testing.T) {
+	db := setupDynamoDB(t)
+	s := NewThreadFollowStore(db)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Millisecond)
+
+	const total = 30
+	follows := make([]*model.ThreadFollow, 0, total)
+	for i := 0; i < total; i++ {
+		follows = append(follows, &model.ThreadFollow{
+			UserID:       fmt.Sprintf("u-large-%02d", i),
+			ParentID:     "ch-large",
+			ParentType:   "channel",
+			ThreadRootID: "root-large",
+			Following:    true,
+			UpdatedAt:    now,
+		})
+	}
+	if err := s.SetMany(ctx, follows); err != nil {
+		t.Fatalf("SetMany: %v", err)
+	}
+
+	rows, err := s.ListThread(ctx, "ch-large", "root-large")
+	if err != nil {
+		t.Fatalf("ListThread: %v", err)
+	}
+	if len(rows) != total {
+		t.Errorf("persisted %d rows, want %d", len(rows), total)
+	}
+}
+
+func TestParentIndexStore_PinIndexRoundTrip(t *testing.T) {
+	db := setupDynamoDB(t)
+	s := NewParentIndexStore(db)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Millisecond)
+
+	if err := s.SetPinIndex(ctx, "ch-pin", "m-1", "u-bob", now); err != nil {
+		t.Fatalf("SetPinIndex 1: %v", err)
+	}
+	if err := s.SetPinIndex(ctx, "ch-pin", "m-2", "u-bob", now.Add(time.Second)); err != nil {
+		t.Fatalf("SetPinIndex 2: %v", err)
+	}
+
+	rows, err := s.ListPinIndex(ctx, "ch-pin")
+	if err != nil {
+		t.Fatalf("ListPinIndex: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("got %d rows, want 2", len(rows))
+	}
+
+	if err := s.DeletePinIndex(ctx, "ch-pin", "m-1"); err != nil {
+		t.Fatalf("DeletePinIndex: %v", err)
+	}
+	rows, _ = s.ListPinIndex(ctx, "ch-pin")
+	if len(rows) != 1 || rows[0].MessageID != "m-2" {
+		t.Errorf("after delete: got %+v, want only m-2", rows)
+	}
+}
+
+func TestParentIndexStore_FileIndexUpsertOnReshare(t *testing.T) {
+	db := setupDynamoDB(t)
+	s := NewParentIndexStore(db)
+	ctx := context.Background()
+	earlier := time.Now().UTC().Truncate(time.Millisecond)
+	later := earlier.Add(time.Minute)
+
+	// Two messages share the same attachment (deduped by SHA upstream).
+	// The second share must overwrite the first, so the row reflects
+	// the most-recent message.
+	if err := s.SetFileIndex(ctx, "ch-files", "att-x", "m-1", "u-alice", earlier); err != nil {
+		t.Fatalf("SetFileIndex 1: %v", err)
+	}
+	if err := s.SetFileIndex(ctx, "ch-files", "att-x", "m-2", "u-bob", later); err != nil {
+		t.Fatalf("SetFileIndex 2: %v", err)
+	}
+
+	rows, err := s.ListFileIndex(ctx, "ch-files")
+	if err != nil {
+		t.Fatalf("ListFileIndex: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("got %d rows, want 1 (deduped on attachmentID)", len(rows))
+	}
+	if rows[0].MessageID != "m-2" {
+		t.Errorf("expected newer share to win, got %+v", rows[0])
+	}
+	if rows[0].AuthorID != "u-bob" {
+		t.Errorf("expected author of latest share, got %+v", rows[0])
+	}
+}
+
+func TestParentIndexStore_FileIndexEmptyAttachmentRejected(t *testing.T) {
+	db := setupDynamoDB(t)
+	s := NewParentIndexStore(db)
+	if err := s.SetFileIndex(context.Background(), "ch-files", "", "m-1", "u-alice", time.Now()); err == nil {
+		t.Fatal("expected error on empty attachmentID")
+	}
+}
+
+func TestParentIndexStore_DeleteFileIndexRemovesRow(t *testing.T) {
+	db := setupDynamoDB(t)
+	s := NewParentIndexStore(db)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Millisecond)
+
+	if err := s.SetFileIndex(ctx, "ch-del", "att-1", "m-1", "u-alice", now); err != nil {
+		t.Fatalf("SetFileIndex: %v", err)
+	}
+	if err := s.SetFileIndex(ctx, "ch-del", "att-2", "m-1", "u-alice", now); err != nil {
+		t.Fatalf("SetFileIndex att-2: %v", err)
+	}
+	if err := s.DeleteFileIndex(ctx, "ch-del", "att-1"); err != nil {
+		t.Fatalf("DeleteFileIndex: %v", err)
+	}
+	rows, err := s.ListFileIndex(ctx, "ch-del")
+	if err != nil {
+		t.Fatalf("ListFileIndex: %v", err)
+	}
+	if len(rows) != 1 || rows[0].AttachmentID != "att-2" {
+		t.Errorf("after delete: got %+v, want only att-2", rows)
+	}
+	// Deleting a nonexistent row must be a silent no-op.
+	if err := s.DeleteFileIndex(ctx, "ch-del", "att-missing"); err != nil {
+		t.Errorf("DeleteFileIndex nonexistent: %v", err)
+	}
+}
+
+// Edit that adds new attachments must populate the FILE# index;
+// edits that remove attachments must drop those FILE# rows. This
+// covers the index branches in MessageService.Edit at the store
+// layer (the service-level branches are already covered by the
+// in-memory mock tests).
+func TestParentIndexStore_EditAttachmentChangesAreRouted(t *testing.T) {
+	db := setupDynamoDB(t)
+	s := NewParentIndexStore(db)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Millisecond)
+
+	// Initial share: m-x owns att-old.
+	if err := s.SetFileIndex(ctx, "ch-edit", "att-old", "m-x", "u-bob", now); err != nil {
+		t.Fatalf("SetFileIndex initial: %v", err)
+	}
+	// Edit replaces att-old → att-new.
+	if err := s.SetFileIndex(ctx, "ch-edit", "att-new", "m-x", "u-bob", now); err != nil {
+		t.Fatalf("SetFileIndex new: %v", err)
+	}
+	if err := s.DeleteFileIndex(ctx, "ch-edit", "att-old"); err != nil {
+		t.Fatalf("DeleteFileIndex old: %v", err)
+	}
+
+	rows, err := s.ListFileIndex(ctx, "ch-edit")
+	if err != nil {
+		t.Fatalf("ListFileIndex: %v", err)
+	}
+	if len(rows) != 1 || rows[0].AttachmentID != "att-new" {
+		t.Errorf("after edit: got %+v, want only att-new", rows)
+	}
+}
+
+// Error-path coverage for ParentIndexStoreImpl: every method should
+// return a wrapped error when the underlying table doesn't exist.
+// Mirrors the TestThreadFollowStore_EmptyListsAndNonexistentTable
+// pattern used elsewhere in this file.
+func TestParentIndexStore_ErrorsOnNonexistentTable(t *testing.T) {
+	db := setupDynamoDB(t)
+	broken := NewParentIndexStore(&DB{Client: db.Client, Table: "missing-parent-index-table"})
+	ctx := context.Background()
+	now := time.Now()
+
+	if err := broken.SetPinIndex(ctx, "ch", "m-1", "u", now); err == nil {
+		t.Error("SetPinIndex on missing table: expected error")
+	}
+	if err := broken.DeletePinIndex(ctx, "ch", "m-1"); err == nil {
+		t.Error("DeletePinIndex on missing table: expected error")
+	}
+	if _, err := broken.ListPinIndex(ctx, "ch"); err == nil {
+		t.Error("ListPinIndex on missing table: expected error")
+	}
+	if err := broken.SetFileIndex(ctx, "ch", "att", "m-1", "u", now); err == nil {
+		t.Error("SetFileIndex on missing table: expected error")
+	}
+	if err := broken.DeleteFileIndex(ctx, "ch", "att"); err == nil {
+		t.Error("DeleteFileIndex on missing table: expected error")
+	}
+	if _, err := broken.ListFileIndex(ctx, "ch"); err == nil {
+		t.Error("ListFileIndex on missing table: expected error")
+	}
+
+	// Empty-list reads against a real table should not error.
+	live := NewParentIndexStore(db)
+	if rows, err := live.ListPinIndex(ctx, "ch-empty"); err != nil || len(rows) != 0 {
+		t.Errorf("ListPinIndex empty parent: rows=%+v err=%v", rows, err)
+	}
+	if rows, err := live.ListFileIndex(ctx, "ch-empty"); err != nil || len(rows) != 0 {
+		t.Errorf("ListFileIndex empty parent: rows=%+v err=%v", rows, err)
+	}
+}
