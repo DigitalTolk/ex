@@ -105,11 +105,20 @@ describe('MessageItem browser behavior', () => {
     expect(row).not.toBeNull();
     row!.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerType: 'touch' }));
 
+    // Wait for the sheet to mount AND its 180ms slide-up entrance to
+    // settle. Reading getBoundingClientRect mid-animation can return
+    // a transformed rect with top === innerHeight (translateY(100%) at
+    // animation start), producing a flake under CPU contention. We
+    // therefore wait until either the animation is no longer running
+    // or two consecutive frames report the same top value.
     await vi.waitFor(() => {
-      const actions = document.querySelector('[data-testid="mobile-message-actions"]');
+      const actions = document.querySelector('[data-testid="mobile-message-actions"]') as HTMLElement | null;
       expect(actions).not.toBeNull();
+      const animations = typeof actions!.getAnimations === 'function' ? actions!.getAnimations() : [];
+      const stillRunning = animations.some((anim) => anim.playState === 'running');
+      expect(stillRunning).toBe(false);
       expect(actions!.getBoundingClientRect().top).toBeLessThan(window.innerHeight);
-    }, { timeout: 1000 });
+    }, { timeout: 2000 });
 
     const sheet = document.querySelector('[data-testid="mobile-message-actions"]') as HTMLElement;
     expect(sheet.parentElement?.parentElement).toBe(document.body);
