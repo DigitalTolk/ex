@@ -83,4 +83,19 @@ check:
 		fi; \
 		rm -f "$$tmp"
 	@echo "=== Frontend browser test ==="
-	cd frontend && npm run test:browser
+	@tmp=$$(mktemp); \
+		cd frontend && npm run test:browser:coverage > "$$tmp" 2>&1; \
+		status=$$?; \
+		cat "$$tmp"; \
+		if [ $$status -ne 0 ]; then \
+			rm -f "$$tmp"; \
+			exit $$status; \
+		fi; \
+		coverage=$$(awk '/^Branches[[:space:]]*:/ { gsub(/%/, "", $$3); print $$3; exit }' "$$tmp"); \
+		rm -f "$$tmp"; \
+		if [ -z "$$coverage" ]; then \
+			echo "could not parse browser branch coverage from vitest output (no Branches summary line)" >&2; \
+			exit 1; \
+		fi; \
+		echo "browser branch coverage: $$coverage%"; \
+		awk -v coverage="$$coverage" 'BEGIN { if (coverage + 0 < 50) { printf "browser branch coverage %.2f%% is below 50%%\n", coverage; exit 1 } }'

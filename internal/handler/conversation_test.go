@@ -152,12 +152,13 @@ func (s *dataUserStoreForConv) HasUsers(_ context.Context) (bool, error) { retur
 
 type convHandlerEnv struct {
 	handler  *ConversationHandler
-	convs    *dataConversationStore
-	users    *dataUserStoreForConv
-	members  *dataMembershipStore
-	messages *dataMessageStore
-	cache    *mockCache
-	jwtMgr   *auth.JWTManager
+	convs       *dataConversationStore
+	users       *dataUserStoreForConv
+	members     *dataMembershipStore
+	messages    *dataMessageStore
+	parentIndex *dataParentIndexStore
+	cache       *mockCache
+	jwtMgr      *auth.JWTManager
 }
 
 func setupConversationHandlerFull(t *testing.T) *convHandlerEnv {
@@ -169,20 +170,23 @@ func setupConversationHandlerFull(t *testing.T) *convHandlerEnv {
 	messages := newDataMessageStore()
 	cache := newMockCache()
 	broker := &mockBrokerForHandler{}
+	parentIndex := newDataParentIndexStore()
 
 	convSvc := service.NewConversationService(convs, users, cache, broker, nil)
 	messageSvc := service.NewMessageService(messages, members, convs, nil, broker)
+	messageSvc.SetParentIndex(newParentIndexAdapterFromBacking(parentIndex))
 	jwtMgr := auth.NewJWTManager("test-conv-full-secret", 15*time.Minute, 720*time.Hour)
 
 	h := NewConversationHandler(convSvc, messageSvc)
 	return &convHandlerEnv{
-		handler:  h,
-		convs:    convs,
-		users:    users,
-		members:  members,
-		messages: messages,
-		cache:    cache,
-		jwtMgr:   jwtMgr,
+		handler:     h,
+		convs:       convs,
+		users:       users,
+		members:     members,
+		messages:    messages,
+		parentIndex: parentIndex,
+		cache:       cache,
+		jwtMgr:      jwtMgr,
 	}
 }
 
@@ -988,10 +992,14 @@ func TestConvHandlerFull_ListFiles(t *testing.T) {
 		Type:           model.ConversationTypeDM,
 		ParticipantIDs: []string{"u-files", "other"},
 	}
+	now := time.Now()
 	env.messages.messages["conv-files#m-1"] = &model.Message{
 		ID: "m-1", ParentID: "conv-files", AuthorID: "u-files",
-		AttachmentIDs: []string{"a-1"}, CreatedAt: time.Now(),
+		AttachmentIDs: []string{"a-1"}, CreatedAt: now,
 	}
+	// Mirror the production write: Send populates the FILE# index.
+	// ListFiles reads exclusively from there.
+	_ = env.parentIndex.SetFileIndex(context.Background(), "conv-files", "a-1", "m-1", "u-files", now)
 
 	handler := middleware.Auth(env.jwtMgr)(http.HandlerFunc(env.handler.ListFiles))
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/conversations/conv-files/files", nil)

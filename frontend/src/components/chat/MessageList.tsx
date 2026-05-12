@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso';
 import { Skeleton } from '@/components/ui/skeleton';
 import { MessageItem } from './MessageItem';
@@ -10,7 +10,12 @@ import { shouldAutoStickMessageList } from './message-list-autostick';
 
 const ANCHOR_HIGHLIGHT_MS = 2200;
 const DEFAULT_MESSAGE_ROW_HEIGHT = 88;
-const MESSAGE_LIST_OVERSCAN_PX = 600;
+// Overscan kept generous so rows ~2 screens above and below the
+// viewport stay mounted during fast scrolling. Without this, every
+// off-screen → on-screen transition tears down and rebuilds the row,
+// which makes avatar / Giphy / unfurl content flash even when the
+// underlying bytes are sitting in the HTTP cache.
+const MESSAGE_LIST_OVERSCAN_PX = 2000;
 const MESSAGE_LIST_AT_BOTTOM_THRESHOLD_PX = 4;
 const USER_SCROLL_AUTOSTICK_SUPPRESSION_MS = 1200;
 
@@ -426,7 +431,7 @@ function Skeletons() {
   );
 }
 
-function MessageRow({
+const MessageRow = memo(function MessageRow({
   row,
   userMap,
   userLookup,
@@ -500,4 +505,4 @@ function MessageRow({
       />
     </div>
   );
-}
+});

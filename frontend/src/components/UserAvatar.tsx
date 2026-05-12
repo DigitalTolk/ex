@@ -1,4 +1,4 @@
-import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import { memo, useState } from 'react';
 import { getInitials } from '@/lib/format';
 import { cn } from '@/lib/utils';
 
@@ -20,12 +20,15 @@ interface UserAvatarProps {
   dotRingClassName?: string;
 }
 
-// Avatar with an inline presence dot, sharing one set of styles
-// across the member list and the @-mention typeahead so the two
-// surfaces match. Renders as a `relative inline-block` so the dot
-// can position-absolute against the avatar without coupling the
-// caller's layout.
-export function UserAvatar({
+// Avatar with an inline presence dot. Memoized + direct `<img>` so
+// the same URL across many rows shares a single cached image instance
+// and re-mounts during virtualised scrolling don't trigger a fresh
+// probe each time. Radix's AvatarPrimitive.Image uses `new Image()`
+// on every mount to detect load/error, which means every off-screen
+// → on-screen transition flashes the initials fallback even though
+// the bytes are sitting in the browser's HTTP cache. We render the
+// `<img>` ourselves and only flip to the fallback on real error.
+export const UserAvatar = memo(function UserAvatar({
   displayName,
   avatarURL,
   online,
@@ -33,14 +36,41 @@ export function UserAvatar({
   dotClassName = 'h-2 w-2',
   dotRingClassName = 'ring-background',
 }: UserAvatarProps) {
+  const [imageBroken, setImageBroken] = useState(false);
+  const showImage = !!avatarURL && !imageBroken;
+
   return (
     <span className="relative inline-block">
-      <Avatar className={cn('shrink-0', className)}>
-        {avatarURL && <AvatarImage src={avatarURL} alt="" />}
-        <AvatarFallback className="bg-primary/10 text-[10px]">
-          {getInitials(displayName || '??')}
-        </AvatarFallback>
-      </Avatar>
+      <span
+        data-slot="avatar"
+        className={cn(
+          'relative flex shrink-0 overflow-hidden rounded-full bg-muted',
+          className,
+        )}
+      >
+        {showImage ? (
+          <img
+            src={avatarURL}
+            alt=""
+            // decoding=async + the stable URL identity keeps multiple
+            // <UserAvatar> instances pointing at the same image
+            // sharing the browser's in-memory decode cache instead of
+            // each kicking off a separate load probe.
+            decoding="async"
+            loading="lazy"
+            onError={() => setImageBroken(true)}
+            data-slot="avatar-image"
+            className="aspect-square size-full rounded-full object-cover"
+          />
+        ) : (
+          <span
+            data-slot="avatar-fallback"
+            className="flex size-full items-center justify-center rounded-full bg-primary/10 text-[10px]"
+          >
+            {getInitials(displayName || '??')}
+          </span>
+        )}
+      </span>
       {online !== undefined && (
         <span
           className={cn(
@@ -54,4 +84,4 @@ export function UserAvatar({
       )}
     </span>
   );
-}
+});

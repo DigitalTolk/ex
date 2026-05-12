@@ -458,7 +458,10 @@ describe('MessageList Virtuoso wiring (regression contract)', () => {
     expect(captured.alignToBottom).toBe(true);
     expect(captured.defaultItemHeight).toBe(88);
     expect(captured.atBottomThreshold).toBe(4);
-    expect(captured.increaseViewportBy).toEqual({ top: 600, bottom: 600 });
+    // Wide overscan keeps ~2 screens of rows mounted off-viewport so
+    // fast scrolling doesn't tear down and remount avatars / Giphy
+    // embeds / unfurl cards on every off-screen → on-screen transition.
+    expect(captured.increaseViewportBy).toEqual({ top: 2000, bottom: 2000 });
     expect(captured.computeItemKey?.(0, { key: 'stable-key' })).toBe('stable-key');
   });
 

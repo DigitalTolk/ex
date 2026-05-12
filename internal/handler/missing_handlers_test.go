@@ -986,12 +986,16 @@ func TestChannelHandler_ListPinned_OK(t *testing.T) {
 	env.memberships.memberships["ch-lp#u-lp"] = &model.ChannelMembership{
 		ChannelID: "ch-lp", UserID: "u-lp", Role: model.ChannelRoleMember,
 	}
+	now := time.Now()
 	env.messages.messages["ch-lp#m1"] = &model.Message{
 		ID: "m1", ParentID: "ch-lp", AuthorID: "u-lp", Body: "p1", Pinned: true,
 	}
 	env.messages.messages["ch-lp#m2"] = &model.Message{
 		ID: "m2", ParentID: "ch-lp", AuthorID: "u-lp", Body: "u",
 	}
+	// Mirror the production write: SetPinned populates the PIN# index.
+	// ListPinned reads exclusively from there.
+	_ = env.parentIndex.SetPinIndex(context.Background(), "ch-lp", "m1", "u-lp", now)
 	user := &model.User{ID: "u-lp", Email: "lp@x.com", SystemRole: model.SystemRoleMember}
 	token := makeTokenForUser(env.jwtMgr, user)
 	handler := middleware.Auth(env.jwtMgr)(http.HandlerFunc(env.handler.ListPinned))

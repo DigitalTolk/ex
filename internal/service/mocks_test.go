@@ -888,6 +888,7 @@ func (m *mockParentIndex) ListFileIndex(_ context.Context, parentID string) ([]F
 	return out, nil
 }
 
+
 // erroringParentIndex returns errors from every write and list,
 // while still letting the test reach through to the underlying
 // inner mock for read-side assertions. Used to exercise the slog

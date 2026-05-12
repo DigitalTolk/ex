@@ -2,8 +2,15 @@ import { Fragment, type ReactNode } from 'react';
 import { GiphyEmbed } from '@/components/GiphyEmbed';
 import { applySkinToneSuffix, shortcodeToUnicode } from './emoji-shortcodes';
 import { USER_MENTION_RE, GROUP_MENTION_RE, CHANNEL_MENTION_RE } from './mention-syntax';
+import type { HastNode } from '@/types';
+import { renderHastTree } from './markdown-hast';
 
 export interface RenderOpts {
+  // Server-rendered hast tree. When set, renderMarkdown skips the
+  // legacy regex parser entirely and just hydrates the tree with
+  // React. Per-viewer behaviour still applies via the components
+  // map (this same opts object is the closure).
+  tree?: HastNode;
   emojiMap?: Record<string, string>;
   // currentUserId enables the "you" highlight on @-mentions that target
   // the viewer — same behaviour as Slack/Teams (yellow pill instead of
@@ -388,7 +395,25 @@ function renderInlineString(src: string, opts: RenderOpts | undefined, keyPrefix
   return out;
 }
 
+// renderMarkdown is the public render entry point.
+//
+// Two paths:
+//   1. Server-rendered hast tree (preferred). Backend pre-parses
+//      every message body to hast and ships it on the message API
+//      response. Frontend just hydrates with React via the
+//      hast-util-to-jsx-runtime path. No regex parser per render.
+//   2. Legacy regex parser fallback. Used when `tree` is missing
+//      (older messages, draft compose preview, intermediate code
+//      paths that pass only a body string).
+//
+// Per-viewer behaviour (self-mention pill, hashtag click handler,
+// renderUserMention wrapper, custom emoji map, GIPHY API key) is
+// applied at the React-component level in BOTH paths — the server
+// emits viewer-agnostic ex-* sentinel tags and the components map
+// closes over `opts` to render them.
 export function renderMarkdown(body: string, opts?: RenderOpts): ReactNode {
+  // Tree path: drop straight into hast→React with no parsing cost.
+  if (opts?.tree) return renderHastTree(opts.tree, opts);
   if (!body) return null;
   const lines = body.split('\n');
   const blocks: ReactNode[] = [];

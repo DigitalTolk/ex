@@ -55,4 +55,51 @@ describe('useTransientOverlayCleanup', () => {
 
     expect(document.activeElement).not.toBe(button);
   });
+
+  it('runs the close cleanup without touching the document scroll lock when lockScroll=false', () => {
+    document.body.style.overflow = 'auto';
+    const { rerender } = render(<Harness open lockScroll={false} />);
+    expect(document.body.style.overflow).toBe('auto');
+    rerender(<Harness open={false} lockScroll={false} />);
+    expect(document.body.style.overflow).toBe('auto');
+  });
+
+  it('is a no-op when open=false from the start (effect skips both branches)', () => {
+    document.body.style.overflow = 'scroll';
+    const { unmount } = render(<Harness open={false} />);
+    expect(document.body.style.overflow).toBe('scroll');
+    unmount();
+    expect(document.body.style.overflow).toBe('scroll');
+  });
+
+  it('works without a rootRef — falls back to blurring any focused element', () => {
+    function NoRefHarness({ open }: { open: boolean }) {
+      useTransientOverlayCleanup(open);
+      return null;
+    }
+    const button = document.createElement('button');
+    document.body.appendChild(button);
+    button.focus();
+    try {
+      const { rerender } = render(<NoRefHarness open />);
+      expect(document.activeElement).toBe(button);
+      rerender(<NoRefHarness open={false} />);
+      expect(document.activeElement).not.toBe(button);
+    } finally {
+      button.remove();
+    }
+  });
+
+  it('does not blur an element that lives outside the overlay root', () => {
+    const outside = document.createElement('button');
+    document.body.appendChild(outside);
+    outside.focus();
+    try {
+      const { rerender } = render(<Harness open />);
+      rerender(<Harness open={false} />);
+      expect(document.activeElement).toBe(outside);
+    } finally {
+      outside.remove();
+    }
+  });
 });

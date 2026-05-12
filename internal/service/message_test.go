@@ -24,6 +24,11 @@ func setupMessageService() (*MessageService, *mockMessageStore, *mockMembershipS
 	publisher := newMockPublisher()
 	broker := newMockBroker()
 	svc := NewMessageService(messages, memberships, conversations, publisher, broker)
+	// Production main always wires a parent index; tests do the same
+	// so ListPinned / ListFiles take the real (indexed) code path.
+	// Tests that need to seed or inspect the index call
+	// svc.SetParentIndex(...) again with their own instance.
+	svc.SetParentIndex(newMockParentIndex())
 	return svc, messages, memberships, conversations, publisher
 }
 
@@ -1095,27 +1100,9 @@ func TestMessageService_SetThreadFollow_AccessAndMissingRootErrors(t *testing.T)
 	}
 }
 
-func TestMessageService_ListPinned(t *testing.T) {
-	svc, messages, memberships, _, _ := setupMessageService()
-	ctx := context.Background()
-	memberships.memberships["ch1#u-1"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u-1", Role: model.ChannelRoleMember}
-	messages.messages["ch1#m-1"] = &model.Message{ID: "m-1", ParentID: "ch1", AuthorID: "u-1", Pinned: true}
-	messages.messages["ch1#m-2"] = &model.Message{ID: "m-2", ParentID: "ch1", AuthorID: "u-1", Pinned: false}
-	messages.messages["ch1#m-3"] = &model.Message{ID: "m-3", ParentID: "ch1", AuthorID: "u-1", Pinned: true}
-
-	pinned, err := svc.ListPinned(ctx, "u-1", "ch1", ParentChannel)
-	if err != nil {
-		t.Fatalf("ListPinned: %v", err)
-	}
-	if len(pinned) != 2 {
-		t.Fatalf("expected 2 pinned, got %d", len(pinned))
-	}
-	for _, m := range pinned {
-		if !m.Pinned {
-			t.Errorf("ListPinned returned non-pinned message %s", m.ID)
-		}
-	}
-}
+// The general happy path is covered by TestMessageService_ListPinned_UsesIndex;
+// dropped the scan-and-filter-on-Pinned-flag variant when the legacy
+// no-index code path was removed (production always wires the index).
 
 func TestMessageService_ListPinned_NotMemberRejected(t *testing.T) {
 	svc, messages, _, _, _ := setupMessageService()
@@ -1127,64 +1114,15 @@ func TestMessageService_ListPinned_NotMemberRejected(t *testing.T) {
 	}
 }
 
-func TestMessageService_ListFiles(t *testing.T) {
-	svc, messages, memberships, _, _ := setupMessageService()
-	ctx := context.Background()
-	memberships.memberships["ch1#u-1"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u-1", Role: model.ChannelRoleMember}
-	now := time.Now()
-	messages.messages["ch1#m-1"] = &model.Message{ID: "m-1", ParentID: "ch1", AuthorID: "u-1", AttachmentIDs: []string{"a-1", "a-2"}, CreatedAt: now.Add(-2 * time.Hour)}
-	messages.messages["ch1#m-2"] = &model.Message{ID: "m-2", ParentID: "ch1", AuthorID: "u-2", CreatedAt: now.Add(-1 * time.Hour)} // no attachments
-	messages.messages["ch1#m-3"] = &model.Message{ID: "m-3", ParentID: "ch1", AuthorID: "u-3", AttachmentIDs: []string{"a-3"}, CreatedAt: now}
-
-	files, err := svc.ListFiles(ctx, "u-1", "ch1", ParentChannel)
-	if err != nil {
-		t.Fatalf("ListFiles: %v", err)
-	}
-	if len(files) != 3 {
-		t.Fatalf("expected 3 file entries, got %d", len(files))
-	}
-	if files[0].AttachmentID != "a-3" {
-		t.Errorf("expected newest first; got %q", files[0].AttachmentID)
-	}
-	// Two attachments from m-1 should both be present.
-	got := map[string]bool{}
-	for _, f := range files {
-		got[f.AttachmentID] = true
-	}
-	if !got["a-1"] || !got["a-2"] || !got["a-3"] {
-		t.Errorf("missing entries; got %+v", got)
-	}
-}
+// The general happy path is covered by TestMessageService_ListFiles_UsesIndex;
+// attachment dedup happens at the FILE# index write side
+// (SetFileIndex upserts per (parentID, attachmentID) — the latest
+// sharer wins by row identity, not by scan-time filtering).
 
 func TestMessageService_ListFiles_NotMemberRejected(t *testing.T) {
 	svc, _, _, _, _ := setupMessageService()
 	if _, err := svc.ListFiles(context.Background(), "stranger", "ch1", ParentChannel); err == nil {
 		t.Fatal("expected ListFiles to reject non-members")
-	}
-}
-
-func TestMessageService_ListFiles_DedupesByAttachmentID(t *testing.T) {
-	svc, messages, memberships, _, _ := setupMessageService()
-	memberships.memberships["ch1#u-1"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u-1", Role: model.ChannelRoleMember}
-	now := time.Now()
-	// Same physical attachment shared in three messages — only the
-	// newest one should appear in the file browser.
-	messages.messages["ch1#m-1"] = &model.Message{ID: "m-1", ParentID: "ch1", AuthorID: "u-1", AttachmentIDs: []string{"a-1"}, CreatedAt: now.Add(-3 * time.Hour)}
-	messages.messages["ch1#m-2"] = &model.Message{ID: "m-2", ParentID: "ch1", AuthorID: "u-2", AttachmentIDs: []string{"a-1"}, CreatedAt: now.Add(-1 * time.Hour)}
-	messages.messages["ch1#m-3"] = &model.Message{ID: "m-3", ParentID: "ch1", AuthorID: "u-3", AttachmentIDs: []string{"a-1"}, CreatedAt: now.Add(-2 * time.Hour)}
-
-	files, err := svc.ListFiles(context.Background(), "u-1", "ch1", ParentChannel)
-	if err != nil {
-		t.Fatalf("ListFiles: %v", err)
-	}
-	if len(files) != 1 {
-		t.Fatalf("expected 1 deduped file, got %d", len(files))
-	}
-	if files[0].MessageID != "m-2" {
-		t.Errorf("expected newest message m-2, got %q", files[0].MessageID)
-	}
-	if files[0].AuthorID != "u-2" {
-		t.Errorf("expected newest author u-2, got %q", files[0].AuthorID)
 	}
 }
 
@@ -2091,51 +2029,6 @@ func TestMessageService_Edit_MaintainsFileIndex(t *testing.T) {
 	// references att-survives.
 	if gotIDs["att-survives"] != "m-other" {
 		t.Errorf("att-survives must keep its newer-share owner m-other, got %v", gotIDs)
-	}
-}
-
-// Legacy fallback: ListPinned without an index wired must still work
-// by scanning the parent's recent messages and filtering. Tests that
-// don't wire SetParentIndex hit this path; production always wires
-// the index.
-func TestMessageService_ListPinned_LegacyScanFallback(t *testing.T) {
-	svc, messages, memberships, _, _ := setupMessageService()
-	// No SetParentIndex call — exercises the scan path.
-	ctx := context.Background()
-	memberships.memberships["ch-legacy#u-bob"] = &model.ChannelMembership{ChannelID: "ch-legacy", UserID: "u-bob", Role: model.ChannelRoleMember}
-	messages.messages["ch-legacy#m-1"] = &model.Message{ID: "m-1", ParentID: "ch-legacy", AuthorID: "u-bob", Body: "x", Pinned: true}
-	messages.messages["ch-legacy#m-2"] = &model.Message{ID: "m-2", ParentID: "ch-legacy", AuthorID: "u-bob", Body: "y", Pinned: false}
-
-	got, err := svc.ListPinned(ctx, "u-bob", "ch-legacy", ParentChannel)
-	if err != nil {
-		t.Fatalf("ListPinned: %v", err)
-	}
-	if len(got) != 1 || got[0].ID != "m-1" {
-		t.Errorf("legacy scan path returned %+v, want only m-1", got)
-	}
-}
-
-// Legacy fallback for ListFiles: when no index is wired, it falls
-// back to scanning recent messages and dedupes attachments by SHA.
-func TestMessageService_ListFiles_LegacyScanFallback(t *testing.T) {
-	svc, messages, memberships, _, _ := setupMessageService()
-	ctx := context.Background()
-	memberships.memberships["ch-legacy-files#u-bob"] = &model.ChannelMembership{ChannelID: "ch-legacy-files", UserID: "u-bob", Role: model.ChannelRoleMember}
-	older := time.Now().Add(-time.Hour)
-	newer := time.Now()
-	messages.messages["ch-legacy-files#m-1"] = &model.Message{ID: "m-1", ParentID: "ch-legacy-files", AuthorID: "u-bob", AttachmentIDs: []string{"att-shared"}, CreatedAt: older}
-	messages.messages["ch-legacy-files#m-2"] = &model.Message{ID: "m-2", ParentID: "ch-legacy-files", AuthorID: "u-bob", AttachmentIDs: []string{"att-shared", "att-only"}, CreatedAt: newer}
-
-	got, err := svc.ListFiles(ctx, "u-bob", "ch-legacy-files", ParentChannel)
-	if err != nil {
-		t.Fatalf("ListFiles: %v", err)
-	}
-	if len(got) != 2 {
-		t.Fatalf("got %d files, want 2 deduped", len(got))
-	}
-	// First entry is the newest share — m-2 wins att-shared.
-	if got[0].MessageID != "m-2" {
-		t.Errorf("expected newer message to win on dedup, got %+v", got[0])
 	}
 }
 

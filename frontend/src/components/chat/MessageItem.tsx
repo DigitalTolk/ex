@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Copy, Pencil, Trash2, SmilePlus, MessageSquareReply, MoreHorizontal, Pin, PinOff, Link as LinkIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -609,24 +609,13 @@ export function MessageItem({
         ) : (
           <>
             <div className="text-sm prose-message">
-              {renderMarkdown(message.body, {
-                emojiMap,
-                currentUserId,
-                onMediaLoad: onContentHeightChange,
-                onTagClick: openTag,
-                renderUserMention: (userId, displayName, _isSelf, pill) => (
-                  <UserHoverCard
-                    key={`mention-${userId}-${message.id}`}
-                    userId={userId}
-                    displayName={displayName}
-                    currentUserId={currentUserId}
-                    showInlineStatus={false}
-                    triggerClassName="inline cursor-pointer align-baseline"
-                  >
-                    {pill}
-                  </UserHoverCard>
-                ),
-              })}
+              <MessageBody
+                message={message}
+                emojiMap={emojiMap}
+                currentUserId={currentUserId}
+                onContentHeightChange={onContentHeightChange}
+                openTag={openTag}
+              />
             </div>
             {(() => {
               if (message.noUnfurl) return null;
@@ -824,3 +813,50 @@ export function MessageItem({
     </div>
   );
 }
+
+// MessageBody is a separately-memoized wrapper around renderMarkdown
+// so that scroll-induced re-renders of MessageItem do not call into
+// the hast hydrator (or rebuild the rendered React tree) unless one
+// of the meaningful inputs actually changed. Without this memo the
+// renderer ran on every parent re-render and — combined with the
+// previously-fresh hast components map — caused every Giphy <video>
+// in view to re-fetch its mp4 on every pixel of scroll.
+interface MessageBodyProps {
+  message: Message;
+  emojiMap: Record<string, string> | undefined;
+  currentUserId?: string;
+  onContentHeightChange?: () => void;
+  openTag: (tag: string) => void;
+}
+
+const MessageBody = memo(function MessageBody({
+  message,
+  emojiMap,
+  currentUserId,
+  onContentHeightChange,
+  openTag,
+}: MessageBodyProps) {
+  return (
+    <>
+      {renderMarkdown(message.body, {
+        tree: message.rendered,
+        emojiMap,
+        currentUserId,
+        onMediaLoad: onContentHeightChange,
+        onTagClick: openTag,
+        renderUserMention: (userId, displayName, _isSelf, pill) => (
+          <UserHoverCard
+            key={`mention-${userId}-${message.id}`}
+            userId={userId}
+            displayName={displayName}
+            currentUserId={currentUserId}
+            showInlineStatus={false}
+            triggerClassName="inline cursor-pointer align-baseline"
+          >
+            {pill}
+          </UserHoverCard>
+        ),
+      })}
+    </>
+  );
+});

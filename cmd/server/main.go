@@ -158,6 +158,7 @@ func main() {
 	messageSvc.SetThreadFollowStore(threadFollowStore)
 	messageSvc.SetUserStateStore(userStateStore)
 	messageSvc.SetParentIndex(parentIndexStore)
+	messageSvc.SetMarkdownRenderer(service.NewMarkdownRenderer())
 	messageSvc.SetActivator(convSvc)
 	messageSvc.SetConversationUnreadTracker(convSvc)
 	userStateSvc := service.NewUserStateService(userStateStore, redisPubSub)

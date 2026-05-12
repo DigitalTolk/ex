@@ -386,3 +386,4 @@ func (a *ParentIndexAdapter) ListFileIndex(ctx context.Context, parentID string)
 	}
 	return out, nil
 }
+

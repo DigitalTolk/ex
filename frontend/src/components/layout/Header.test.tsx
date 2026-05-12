@@ -340,4 +340,61 @@ describe('Header', () => {
 
     expect(screen.getAllByLabelText(/Working from home/)).toHaveLength(1);
   });
+
+  it('files toggle fires onFilesClick and reflects filesActive via aria-pressed', async () => {
+    const onFiles = vi.fn();
+    const user = userEvent.setup();
+    const { rerender } = renderHeaderWithProviders(
+      <Header channel={makeChannel()} onFilesClick={onFiles} filesActive={false} />,
+    );
+    const btn = screen.getByTestId('files-toggle');
+    expect(btn.getAttribute('aria-pressed')).toBe('false');
+    await user.click(btn);
+    expect(onFiles).toHaveBeenCalledTimes(1);
+    rerender(<Header channel={makeChannel()} onFilesClick={onFiles} filesActive />);
+    expect(screen.getByTestId('files-toggle').getAttribute('aria-pressed')).toBe('true');
+  });
+
+  it('pinned toggle fires onPinnedClick and reflects pinnedActive via aria-pressed', async () => {
+    const onPinned = vi.fn();
+    const user = userEvent.setup();
+    const { rerender } = renderHeaderWithProviders(
+      <Header channel={makeChannel()} onPinnedClick={onPinned} pinnedActive={false} />,
+    );
+    const btn = screen.getByRole('button', { name: /pinned/i });
+    await user.click(btn);
+    expect(onPinned).toHaveBeenCalledTimes(1);
+    rerender(<Header channel={makeChannel()} onPinnedClick={onPinned} pinnedActive />);
+    const next = screen.getByRole('button', { name: /pinned/i });
+    expect(next.getAttribute('aria-pressed')).toBe('true');
+  });
+
+  it('omits files toggle when onFilesClick is undefined', () => {
+    renderHeaderWithProviders(<Header channel={makeChannel()} />);
+    expect(screen.queryByTestId('files-toggle')).toBeNull();
+  });
+
+  it('omits pinned toggle when onPinnedClick is undefined', () => {
+    renderHeaderWithProviders(<Header channel={makeChannel()} />);
+    expect(screen.queryByRole('button', { name: /pinned/i })).toBeNull();
+  });
+
+  it('exposes a dropdown trigger that combines the channel icon, title, and chevron', () => {
+    renderHeaderWithProviders(<Header channel={makeChannel({ name: 'engineering' })} />);
+    const trigger = screen.getByText('engineering').closest('button');
+    expect(trigger).toBeTruthy();
+    // Same trigger carries the channel icon and the chevron-down marker.
+    expect(trigger?.querySelector('svg.lucide-chevron-down')).toBeTruthy();
+  });
+
+  it('reports the channel description in the inline edit affordance when canEdit is true', () => {
+    renderHeaderWithProviders(
+      <Header
+        channel={makeChannel({ description: 'Engineering team chat' })}
+        canEdit
+        onDescriptionSave={vi.fn()}
+      />,
+    );
+    expect(screen.getByText('Engineering team chat')).toBeTruthy();
+  });
 });

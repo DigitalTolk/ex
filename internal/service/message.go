@@ -71,6 +71,7 @@ type MessageService struct {
 	threadFollows ThreadFollowStore
 	userState     UserStateStore
 	parentIndex   ParentPinFileIndexStore
+	markdown      *MarkdownRenderer
 }
 
 // NewMessageService creates a MessageService with the given dependencies.
@@ -112,12 +113,47 @@ func (s *MessageService) SetThreadFollowStore(f ThreadFollowStore) { s.threadFol
 
 func (s *MessageService) SetUserStateStore(userState UserStateStore) { s.userState = userState }
 
-// SetParentIndex wires the per-parent pinned/file index. Optional —
-// when nil, ListPinned/ListFiles fall back to the legacy scan path
-// and operations that mutate the index degrade silently. Production
-// wiring always passes a real implementation; tests that don't care
-// about pin/file listing leave it nil to keep their setup small.
+// SetParentIndex wires the per-parent pinned/file index. Required
+// for ListPinned / ListFiles to return any data — those paths read
+// exclusively from the index now. Production wiring (cmd/server/main.go)
+// and every test helper (setupMessageService, setupChannelHandlerFull,
+// etc.) wire a real implementation. Pre-rollout data must be backfilled
+// once with `cmd/migrate-parent-index --apply` (see README).
+//
+// Write paths (Send / Edit / Delete / SetPinned) still guard with
+// `if s.parentIndex != nil` so a misconfiguration logs a warning
+// rather than panicking the request.
 func (s *MessageService) SetParentIndex(p ParentPinFileIndexStore) { s.parentIndex = p }
+
+// SetMarkdownRenderer wires the server-side markdown→hast renderer.
+// When set, every Message returned by the service has its `Rendered`
+// field populated so the frontend doesn't have to re-parse on each
+// render. Optional — tests that don't care about rendered output
+// leave it nil and the field stays empty (the frontend then falls
+// back to its legacy client-side parser).
+func (s *MessageService) SetMarkdownRenderer(m *MarkdownRenderer) { s.markdown = m }
+
+// attachRendered populates the Rendered field on every supplied
+// Message. Centralising this means every return path in the service
+// (Send, Edit, List…, publishEvent) gets the hast tree without
+// having to remember to call the renderer at each call site.
+func (s *MessageService) attachRendered(msgs ...*model.Message) {
+	if s.markdown == nil {
+		return
+	}
+	for _, m := range msgs {
+		if m == nil {
+			continue
+		}
+		// Soft-deleted messages have empty Body; skip the parse and
+		// leave Rendered nil (frontend renders the "(deleted)"
+		// placeholder, not the body).
+		if m.Deleted || m.Body == "" {
+			continue
+		}
+		m.Rendered = s.markdown.RenderToHast(m.Body)
+	}
+}
 
 func (s *MessageService) CheckAccess(ctx context.Context, userID, parentID, parentType string) error {
 	return s.checkAccess(ctx, userID, parentID, parentType)
@@ -314,6 +350,7 @@ func (s *MessageService) Send(ctx context.Context, userID, parentID, parentType,
 		s.publishEvent(ctx, parentID, parentType, events.EventMessageEdited, updatedThreadRoot)
 	}
 
+	s.attachRendered(msg)
 	return msg, nil
 }
 
@@ -378,6 +415,7 @@ func (s *MessageService) ListThreadMessages(ctx context.Context, userID, parentI
 		}
 	}
 	sort.Slice(thread, func(i, j int) bool { return thread[i].ID < thread[j].ID })
+	s.attachRendered(thread...)
 	return thread, nil
 }
 
@@ -597,21 +635,10 @@ func (s *MessageService) ListPinned(ctx context.Context, userID, parentID, paren
 	if err := s.checkAccess(ctx, userID, parentID, parentType); err != nil {
 		return nil, err
 	}
-	if s.parentIndex == nil {
-		// Legacy fallback path — kept for tests that don't wire the
-		// index. Production main always provides one.
-		msgs, _, err := s.messages.ListMessages(ctx, parentID, "", 1000)
-		if err != nil {
-			return nil, fmt.Errorf("message: list pinned: %w", err)
-		}
-		pinned := make([]*model.Message, 0)
-		for _, m := range msgs {
-			if m.Pinned {
-				pinned = append(pinned, m)
-			}
-		}
-		return pinned, nil
-	}
+	// parentIndex is mandatory — wired in cmd/server/main.go and in
+	// every test via setupMessageService. Pre-rollout legacy data
+	// must be backfilled once after deploy with
+	// `go run ./cmd/migrate-parent-index --apply` (see README).
 	rows, err := s.parentIndex.ListPinIndex(ctx, parentID)
 	if err != nil {
 		return nil, fmt.Errorf("message: list pinned index: %w", err)
@@ -622,19 +649,18 @@ func (s *MessageService) ListPinned(ctx context.Context, userID, parentID, paren
 		if err != nil {
 			// A row in the index that no longer resolves to a message
 			// (deletion-cleanup race) is a soft inconsistency — drop
-			// it from this response and best-effort the cleanup. We
-			// don't fail the whole list on a single dangling entry.
+			// it from this response and best-effort the cleanup.
 			_ = s.parentIndex.DeletePinIndex(ctx, parentID, row.MessageID)
 			continue
 		}
 		if !msg.Pinned {
 			// Index says pinned but message says no — stale index row.
-			// Same best-effort cleanup as above.
 			_ = s.parentIndex.DeletePinIndex(ctx, parentID, row.MessageID)
 			continue
 		}
 		pinned = append(pinned, msg)
 	}
+	s.attachRendered(pinned...)
 	return pinned, nil
 }
 
@@ -657,45 +683,13 @@ type FileEntry struct {
 // the same content always resolves to the same ID, and the user only
 // sees the latest message that referenced it.
 //
-// Like ListPinned, this walks recent messages — small workspaces only.
-// At larger scale this would move to a dedicated index of attachments
-// per parent.
+// Reads exclusively from the FILE# index. Pre-rollout data is invisible
+// here until the operator runs `cmd/migrate-parent-index --apply`.
 func (s *MessageService) ListFiles(ctx context.Context, userID, parentID, parentType string) ([]*FileEntry, error) {
 	if err := s.checkAccess(ctx, userID, parentID, parentType); err != nil {
 		return nil, err
 	}
-	if s.parentIndex == nil {
-		// Legacy fallback path — see ListPinned for rationale.
-		msgs, _, err := s.messages.ListMessages(ctx, parentID, "", 1000)
-		if err != nil {
-			return nil, fmt.Errorf("message: list files: %w", err)
-		}
-		latest := make(map[string]*FileEntry)
-		for _, m := range msgs {
-			for _, aid := range m.AttachmentIDs {
-				if aid == "" {
-					continue
-				}
-				if cur, ok := latest[aid]; ok && cur.CreatedAt.After(m.CreatedAt) {
-					continue
-				}
-				latest[aid] = &FileEntry{
-					AttachmentID: aid,
-					MessageID:    m.ID,
-					AuthorID:     m.AuthorID,
-					CreatedAt:    m.CreatedAt,
-				}
-			}
-		}
-		files := make([]*FileEntry, 0, len(latest))
-		for _, f := range latest {
-			files = append(files, f)
-		}
-		sort.Slice(files, func(i, j int) bool {
-			return files[i].CreatedAt.After(files[j].CreatedAt)
-		})
-		return files, nil
-	}
+	// parentIndex is mandatory (see ListPinned).
 	rows, err := s.parentIndex.ListFileIndex(ctx, parentID)
 	if err != nil {
 		return nil, fmt.Errorf("message: list file index: %w", err)
@@ -784,6 +778,7 @@ func (s *MessageService) ListAround(ctx context.Context, userID, parentID, paren
 		out = append(out, target)
 	}
 	out = append(out, older...)
+	s.attachRendered(out...)
 	return out, hasMoreOlder, hasMoreNewer, nil
 }
 
@@ -816,6 +811,7 @@ func (s *MessageService) listTopLevel(ctx context.Context, parentID, before stri
 	} else if storeHasMore {
 		hasMore = true
 	}
+	s.attachRendered(collected...)
 	return collected, hasMore, nil
 }
 
@@ -854,6 +850,7 @@ func (s *MessageService) listTopLevelAfter(ctx context.Context, parentID, after 
 	for i, j := 0, len(collected)-1; i < j; i, j = i+1, j-1 {
 		collected[i], collected[j] = collected[j], collected[i]
 	}
+	s.attachRendered(collected...)
 	return collected, hasMore, nil
 }
 
@@ -982,6 +979,7 @@ func (s *MessageService) Edit(ctx context.Context, userID, parentID, parentType,
 
 	s.indexMessage(ctx, &edited, parentType)
 
+	s.attachRendered(&edited)
 	return &edited, nil
 }
 
@@ -1124,6 +1122,7 @@ func (s *MessageService) ToggleReaction(ctx context.Context, userID, parentID, p
 
 	s.publishEvent(ctx, parentID, parentType, events.EventMessageEdited, msg)
 	s.indexMessage(ctx, msg, parentType)
+	s.attachRendered(msg)
 	return msg, nil
 }
 
@@ -1139,6 +1138,7 @@ func (s *MessageService) SetPinned(ctx context.Context, userID, parentID, parent
 		return nil, fmt.Errorf("message: get: %w", err)
 	}
 	if msg.Pinned == pinned {
+		s.attachRendered(msg)
 		return msg, nil
 	}
 	msg.Pinned = pinned
@@ -1171,6 +1171,7 @@ func (s *MessageService) SetPinned(ctx context.Context, userID, parentID, parent
 	// pick up the change without a new event handler. Pin is rare enough
 	// that a dedicated event would be over-engineered.
 	s.publishEvent(ctx, parentID, parentType, events.EventMessageEdited, msg)
+	s.attachRendered(msg)
 	return msg, nil
 }
 
@@ -1189,6 +1190,7 @@ func (s *MessageService) SetNoUnfurl(ctx context.Context, userID, parentID, pare
 		return nil, errors.New("message: only the author can dismiss the link preview")
 	}
 	if msg.NoUnfurl == noUnfurl {
+		s.attachRendered(msg)
 		return msg, nil
 	}
 	msg.NoUnfurl = noUnfurl
@@ -1196,6 +1198,7 @@ func (s *MessageService) SetNoUnfurl(ctx context.Context, userID, parentID, pare
 		return nil, fmt.Errorf("message: update no-unfurl: %w", err)
 	}
 	s.publishEvent(ctx, parentID, parentType, events.EventMessageEdited, msg)
+	s.attachRendered(msg)
 	return msg, nil
 }
 
@@ -1359,6 +1362,11 @@ func (s *MessageService) publishEvent(ctx context.Context, parentID, parentType,
 	if msg, ok := data.(*model.Message); ok && msg != nil {
 		cp := *msg
 		cp.ParentType = parentType
+		// Make sure every broadcast frame carries the rendered hast
+		// — the message-edited / message-new events ship the full
+		// model.Message and recipients shouldn't have to parse on
+		// receipt.
+		s.attachRendered(&cp)
 		data = &cp
 	}
 	events.Publish(ctx, s.publisher, channel, eventType, data)
