@@ -35,6 +35,7 @@ import { registerEditMessageHandler } from '@/lib/window-events';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { useAnimatedSwipeDismiss } from '@/hooks/useAnimatedSwipeDismiss';
 import { useTransientOverlayCleanup } from '@/hooks/useTransientOverlayCleanup';
+import { triggerMessageActionHaptic } from '@/lib/haptics';
 import type { Message, UserStatus } from '@/types';
 
 // Module-level Set so MessageList/ThreadPanel don't need to thread a
@@ -352,6 +353,7 @@ export function MessageItem({
     window.addEventListener('pointerup', cancelPendingLongPress, { once: true });
     window.addEventListener('pointercancel', cancelPendingLongPress, { once: true });
     longPressTimerRef.current = window.setTimeout(() => {
+      triggerMessageActionHaptic();
       setMobileActionsSuppressed(false);
       setMobileActionsOpen(true);
       notifyMessageHovered(message.id);

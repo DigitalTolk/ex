@@ -9,6 +9,9 @@ declare global {
         ServerNavigation?: {
           resetServer?: () => Promise<void>;
         };
+        Haptics?: {
+          impact?: (options?: { style?: 'HEAVY' | 'MEDIUM' | 'LIGHT' }) => Promise<void>;
+        };
         OneSignalCapacitor?: {
           login?: (args: { externalId: string }) => Promise<void>;
           addTags?: (args: { tags: Record<string, string> }) => Promise<void>;
