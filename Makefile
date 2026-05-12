@@ -83,19 +83,16 @@ check:
 		fi; \
 		rm -f "$$tmp"
 	@echo "=== Frontend browser test ==="
-	@tmp=$$(mktemp); \
-		cd frontend && npm run test:browser:coverage > "$$tmp" 2>&1; \
-		status=$$?; \
-		cat "$$tmp"; \
-		if [ $$status -ne 0 ]; then \
-			rm -f "$$tmp"; \
-			exit $$status; \
+	cd frontend && npm run test:browser:coverage
+	@summary=frontend/coverage-browser/coverage-summary.json; \
+		if [ ! -f "$$summary" ]; then \
+			echo "$$summary not produced by vitest — coverage gate cannot run" >&2; \
+			exit 1; \
 		fi; \
-		coverage=$$(awk '/^Branches[[:space:]]*:/ { gsub(/%/, "", $$3); print $$3; exit }' "$$tmp"); \
-		rm -f "$$tmp"; \
+		coverage=$$(node -e "const s=require('./$$summary'); process.stdout.write(String(s.total.branches.pct))"); \
 		if [ -z "$$coverage" ]; then \
-			echo "could not parse browser branch coverage from vitest output (no Branches summary line)" >&2; \
+			echo "$$summary did not contain total.branches.pct" >&2; \
 			exit 1; \
 		fi; \
 		echo "browser branch coverage: $$coverage%"; \
-		awk -v coverage="$$coverage" 'BEGIN { if (coverage + 0 < 50) { printf "browser branch coverage %.2f%% is below 50%%\n", coverage; exit 1 } }'
+		awk -v coverage="$$coverage" 'BEGIN { if (coverage + 0 < 60) { printf "browser branch coverage %.2f%% is below 60%%\n", coverage; exit 1 } }'
