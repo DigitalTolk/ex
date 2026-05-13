@@ -128,13 +128,10 @@
  * other components want to keep reserving space for the home
  * indicator regardless of keyboard state.
  */
-/* Registering --ex-keyboard-background as a typed custom property
- * means the browser resolves the var() chain at computed-value time
- * (instead of storing the literal "var(--color-background)" string),
- * type-checks assignments against <color>, and can animate it. The
- * ex-mobile bridge already works against the unregistered form via a
- * probe-element resolver, so this registration is a no-op for older
- * browsers (Safari < 16.4 / Firefox < 128) where @property is ignored. */
+/* Typed registration so the var() chain resolves at computed-value
+ * time and the property can animate. Ignored by older browsers
+ * (Safari < 16.4 / Firefox < 128); ex-mobile's probe resolver works
+ * either way. */
 @property --ex-keyboard-background {
   syntax: '<color>';
   inherits: true;
@@ -146,11 +143,9 @@
   --safe-bottom: env(safe-area-inset-bottom);
   --safe-left: env(safe-area-inset-left);
   --safe-right: env(safe-area-inset-right);
-  /* Color of the page area surrounding the chat composer, used by
-   * ex-mobile to paint the strip between the composer and the OS
-   * keyboard so it doesn't flash white as the keyboard slides up.
-   * Not the input field's own background. Aliased to
-   * --color-background so it auto-switches with light/dark mode. */
+  /* Read by ex-mobile to paint the strip between the composer and
+   * the OS keyboard. Aliased to --color-background so light/dark
+   * track automatically. */
   --ex-keyboard-background: var(--color-background);
 }
 

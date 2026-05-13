@@ -79,7 +79,8 @@ describe('UnfurlCard browser behaviour', () => {
     const img = document.querySelector('[data-testid="unfurl-card-image"]') as HTMLImageElement;
     // Synthesise the error event the broken-image path responds to.
     img.dispatchEvent(new Event('error'));
-    await new Promise((r) => setTimeout(r, 50));
-    expect(document.querySelector('[data-testid="unfurl-card-image-placeholder"]')).not.toBeNull();
+    await vi.waitFor(() => {
+      expect(document.querySelector('[data-testid="unfurl-card-image-placeholder"]')).not.toBeNull();
+    });
   });
 });

@@ -1,8 +1,5 @@
 type HapticsPlugin = {
   impact?: (options?: { style?: 'HEAVY' | 'MEDIUM' | 'LIGHT' }) => Promise<void>;
-  selectionStart?: () => Promise<void>;
-  selectionChanged?: () => Promise<void>;
-  selectionEnd?: () => Promise<void>;
 };
 
 function hapticsPlugin(): HapticsPlugin | undefined {
