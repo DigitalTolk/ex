@@ -9,11 +9,18 @@ import (
 
 	"github.com/coder/websocket"
 
+	"github.com/DigitalTolk/ex/internal/eventlog"
 	"github.com/DigitalTolk/ex/internal/events"
 	"github.com/DigitalTolk/ex/internal/middleware"
 	"github.com/DigitalTolk/ex/internal/pubsub"
 	"github.com/DigitalTolk/ex/internal/service"
 )
+
+// InboxReplayer is the subset of the durable event log used by the
+// WS handshake replay path.
+type InboxReplayer interface {
+	Replay(ctx context.Context, userID string, since string) (eventlog.ReplayResult, error)
+}
 
 // inboundMessage is the shape of a client → server WebSocket frame. Only
 // "typing" is currently understood; anything else is dropped. We keep
@@ -37,6 +44,7 @@ type WSHandler struct {
 	userSvc        *service.UserService
 	presenceSvc    *service.PresenceService
 	publisher      service.Publisher
+	replayer       InboxReplayer
 	version        string
 	originPatterns []string
 	allowAllOrigin bool
@@ -84,6 +92,12 @@ func (h *WSHandler) SetUserService(s *service.UserService) { h.userSvc = s }
 // the WS instead of polling /api/v1/version every minute keeps a chatty
 // pinger off the HTTP fast path even with many connected users.
 func (h *WSHandler) SetVersion(v string) { h.version = v }
+
+// SetReplayer wires the durable inbox so reconnects with a `since`
+// cursor can replay events missed during the disconnect. Optional —
+// when nil, the handshake skips replay and the client falls back to
+// its own refetch logic.
+func (h *WSHandler) SetReplayer(r InboxReplayer) { h.replayer = r }
 
 // Connect upgrades the HTTP connection to a WebSocket for the authenticated
 // user. Authentication is handled via the "token" query parameter by the auth
@@ -213,6 +227,21 @@ func (h *WSHandler) Connect(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Replay any events missed during a disconnect. The client sends
+	// `since=<eventID>` carrying the ULID of the last event it
+	// processed. We walk the user's inbox, write each newer entry to
+	// the socket in order, and finish with a replay.done frame (or
+	// replay.exhausted if the cursor predates retention).
+	//
+	// Replay runs AFTER Subscribe so live events that publish during
+	// the replay are buffered in client.Events for the main loop to
+	// drain immediately after; client dedups by event ID.
+	if since := r.URL.Query().Get("since"); since != "" && h.replayer != nil {
+		if !h.runReplay(ctx, conn, userID, since) {
+			return
+		}
+	}
+
 	// Read loop: parse incoming JSON frames so the typing indicator can
 	// fan out via the same pubsub fabric as ordinary events. Unknown
 	// frames are silently dropped — the protocol is forward-compatible.
@@ -259,6 +288,51 @@ func writePing(ctx context.Context, conn *websocket.Conn) error {
 	evt, _ := events.NewEvent(events.EventPing, map[string]int64{"ts": time.Now().UnixMilli()})
 	data, _ := json.Marshal(evt)
 	return conn.Write(ctx, websocket.MessageText, data)
+}
+
+// runReplay walks the user's durable inbox, emitting each entry newer
+// than `since` to the open socket. Returns false if the underlying
+// socket write fails (caller should give up on this connection).
+//
+// On exhausted cursor — the entry corresponding to `since` is no
+// longer retained — we still flush whatever entries were collected
+// (they're the most recent N) and then send a replay.exhausted frame
+// so the client knows the cursor is unreliable and falls back to its
+// existing full-refetch path. Sending the partial entries first is
+// harmless because the client dedups by event ID anyway, and it
+// avoids dropping data we already have on the floor.
+func (h *WSHandler) runReplay(ctx context.Context, conn *websocket.Conn, userID, since string) bool {
+	res, err := h.replayer.Replay(ctx, userID, since)
+	if err != nil {
+		slog.Error("ws: replay", "userID", userID, "error", err)
+		// Treat any replay failure as exhausted so the client falls
+		// back to refetch instead of believing it caught up.
+		return writeControlFrame(ctx, conn, events.EventReplayExhausted, map[string]string{"since": since})
+	}
+	for _, entry := range res.Entries {
+		if err := conn.Write(ctx, websocket.MessageText, entry.Payload); err != nil {
+			return false
+		}
+	}
+	if res.Exhausted {
+		return writeControlFrame(ctx, conn, events.EventReplayExhausted, map[string]string{"since": since})
+	}
+	return writeControlFrame(ctx, conn, events.EventReplayDone, map[string]int{"count": len(res.Entries)})
+}
+
+// writeControlFrame marshals and writes a server → client control
+// frame, returning false on socket write failure (signals the caller
+// to abandon the connection without bubbling up the specific error).
+func writeControlFrame(ctx context.Context, conn *websocket.Conn, eventType string, payload any) bool {
+	evt, err := events.NewEvent(eventType, payload)
+	if err != nil {
+		return true
+	}
+	data, err := json.Marshal(evt)
+	if err != nil {
+		return true
+	}
+	return conn.Write(ctx, websocket.MessageText, data) == nil
 }
 
 // handleInbound dispatches a single client → server frame. Currently

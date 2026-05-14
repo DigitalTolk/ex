@@ -333,16 +333,28 @@ export default function ChatPage() {
       recordTyping(evt.parentID, evt.userID, evt.parentMessageID ?? '');
     },
     onReconnect: () => {
-      // Refresh non-infinite peripheral lists outright.
+      // Refresh non-infinite peripheral lists outright. With server
+      // replay enabled, message events arrive via the durable inbox,
+      // but list metadata (channels/threads/drafts/members) isn't in
+      // the inbox so we refetch it. resyncMessageCache stays as a
+      // safety net for any inbox gap a replay didn't cover.
       queryClient.invalidateQueries({ queryKey: queryKeys.userChannels() });
       queryClient.invalidateQueries({ queryKey: queryKeys.userConversations() });
       queryClient.invalidateQueries({ queryKey: queryKeys.userThreads() });
       queryClient.invalidateQueries({ queryKey: queryKeys.userState() });
       queryClient.invalidateQueries({ queryKey: queryKeys.drafts() });
       queryClient.invalidateQueries({ queryKey: queryKeys.channelMembers() });
-      // Top up tail-mode message caches via a forward fetch so events
-      // missed during the disconnect appear without re-triggering v5's
-      // walk-forward refetch on the infinite query.
+      void resyncMessageCache(queryClient);
+    },
+    onReplayExhausted: () => {
+      // Server's durable inbox lost our cursor — same recovery as
+      // a plain reconnect: invalidate peripherals + tail-resync.
+      queryClient.invalidateQueries({ queryKey: queryKeys.userChannels() });
+      queryClient.invalidateQueries({ queryKey: queryKeys.userConversations() });
+      queryClient.invalidateQueries({ queryKey: queryKeys.userThreads() });
+      queryClient.invalidateQueries({ queryKey: queryKeys.userState() });
+      queryClient.invalidateQueries({ queryKey: queryKeys.drafts() });
+      queryClient.invalidateQueries({ queryKey: queryKeys.channelMembers() });
       void resyncMessageCache(queryClient);
     },
     enabled: !!user,

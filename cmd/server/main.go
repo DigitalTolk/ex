@@ -16,6 +16,7 @@ import (
 	"github.com/DigitalTolk/ex/internal/auth"
 	"github.com/DigitalTolk/ex/internal/cache"
 	"github.com/DigitalTolk/ex/internal/config"
+	"github.com/DigitalTolk/ex/internal/eventlog"
 	"github.com/DigitalTolk/ex/internal/handler"
 	"github.com/DigitalTolk/ex/internal/pubsub"
 	"github.com/DigitalTolk/ex/internal/search"
@@ -135,6 +136,18 @@ func main() {
 		}
 	}
 
+	// ------------------------------------------------------------------ Durable event log (per-user inbox streams for WS replay-on-reconnect)
+	// Redis Streams hold each user's recent events with MAXLEN trimming;
+	// the WS handshake replays anything newer than the client's cursor.
+	// AOF is optional — on Redis loss every client just gets a
+	// replay.exhausted frame and falls back to the existing refetch path.
+	inboxStream := eventlog.NewStream(redisPubSub.Client(), 0)
+	recipientResolver := eventlog.NewResolver(
+		handler.NewMembershipMemberLister(membershipStore.ListMembers),
+		handler.NewConversationParticipantLister(conversationStore.GetConversation),
+	)
+	redisPubSub.SetDurability(recipientResolver, inboxStream)
+
 	// ------------------------------------------------------------------ Broker
 	broker := pubsub.NewBroker(redisPubSub)
 	defer func() { _ = broker.Close() }()
@@ -205,6 +218,7 @@ func main() {
 	wsH := handler.NewWSHandler(broker, channelSvc, convSvc, presenceSvc)
 	wsH.SetPublisher(redisPubSub)
 	wsH.SetUserService(userSvc)
+	wsH.SetReplayer(inboxStream)
 	uploadH := handler.NewUploadHandler(s3Client)
 	emojiH := handler.NewEmojiHandler(emojiSvc)
 	presenceH := handler.NewPresenceHandler(presenceSvc)

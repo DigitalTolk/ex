@@ -271,4 +271,112 @@ describe('useWebSocket', () => {
 
     expect(ws.closeCalled).toBe(true);
   });
+
+  // Reconnect cursor: the last event ID seen on the live socket
+  // must be sent as `since=…` on the next reconnect so the server
+  // can replay anything missed during the disconnect.
+  it('sends the last event id as ?since on reconnect', async () => {
+    renderHook(() => useWebSocket({ enabled: true }));
+
+    const ws = MockWebSocket.instances[0];
+    ws.simulateOpen();
+    ws.simulateMessage(JSON.stringify({
+      id: '01ID0000000000000000000099',
+      type: 'message.new',
+      data: JSON.stringify({ id: 'm1' }),
+    }));
+    ws.simulateClose();
+
+    await act(async () => {
+      vi.advanceTimersByTime(1000);
+      await Promise.resolve();
+    });
+
+    expect(MockWebSocket.instances).toHaveLength(2);
+    expect(MockWebSocket.instances[1].url).toContain('since=01ID0000000000000000000099');
+  });
+
+  // First connect (no prior cursor) must not send a since param —
+  // the server interprets that as "fresh, no replay needed".
+  it('omits ?since on a fresh first connect', () => {
+    renderHook(() => useWebSocket({ enabled: true }));
+    expect(MockWebSocket.instances[0].url).not.toContain('since=');
+  });
+
+  // Replay + live race: when an event ID arrives twice (once from
+  // the durable replay, once from the live pubsub), the callback
+  // must fire exactly once. Without dedup the cache would double-
+  // apply mutations on every reconnect.
+  it('deduplicates events by id across replay + live', () => {
+    const onMessageNew = vi.fn();
+    renderHook(() => useWebSocket({ onMessageNew, enabled: true }));
+
+    const ws = MockWebSocket.instances[0];
+    ws.simulateOpen();
+    const frame = JSON.stringify({
+      id: '01ID0000000000000000000050',
+      type: 'message.new',
+      data: JSON.stringify({ id: 'm1' }),
+    });
+    ws.simulateMessage(frame);
+    ws.simulateMessage(frame);
+
+    expect(onMessageNew).toHaveBeenCalledTimes(1);
+  });
+
+  // replay.exhausted: server reports our cursor is too old. The
+  // hook clears the cursor (so we don't ask again for a hopeless
+  // window next reconnect) and fires the onReplayExhausted
+  // callback so ChatPage can trigger its full refetch path.
+  it('fires onReplayExhausted and resets cursor on replay.exhausted', async () => {
+    const onReplayExhausted = vi.fn();
+    renderHook(() =>
+      useWebSocket({ onReplayExhausted, enabled: true }),
+    );
+
+    const ws = MockWebSocket.instances[0];
+    ws.simulateOpen();
+    // Seed the cursor with a live event first.
+    ws.simulateMessage(JSON.stringify({
+      id: '01ID0000000000000000000077',
+      type: 'message.new',
+      data: JSON.stringify({ id: 'm1' }),
+    }));
+    // Now server says that cursor is exhausted.
+    ws.simulateMessage(JSON.stringify({
+      id: '01ID0000000000000000000078',
+      type: 'replay.exhausted',
+      data: JSON.stringify({ since: '01ID0000000000000000000077' }),
+    }));
+    ws.simulateClose();
+
+    await act(async () => {
+      vi.advanceTimersByTime(1000);
+      await Promise.resolve();
+    });
+
+    expect(onReplayExhausted).toHaveBeenCalledTimes(1);
+    // After exhausted the cursor is cleared — the reconnect must
+    // not carry a stale since= that we already know is hopeless.
+    expect(MockWebSocket.instances[1].url).not.toContain('since=');
+  });
+
+  // replay.done is a marker frame — no callback should fire for it,
+  // and (importantly) it should NOT advance the cursor past the
+  // last real event, otherwise the next reconnect would miss
+  // anything published right after the marker.
+  it('ignores replay.done as a no-op marker', () => {
+    const onMessageNew = vi.fn();
+    renderHook(() => useWebSocket({ onMessageNew, enabled: true }));
+
+    const ws = MockWebSocket.instances[0];
+    ws.simulateOpen();
+    ws.simulateMessage(JSON.stringify({
+      id: '01ID0000000000000000000010',
+      type: 'replay.done',
+      data: JSON.stringify({ count: 0 }),
+    }));
+
+    expect(onMessageNew).not.toHaveBeenCalled();
+  });
 });
