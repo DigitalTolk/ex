@@ -75,12 +75,9 @@ describe('UnfurlCard browser behaviour', () => {
       data: { url: 'https://example.org', title: 'X', image: 'https://example.org/missing.png' },
       isLoading: false,
     });
-    await render(<UnfurlCard url="https://example.org" messageId="m-1" isAuthor={false} />);
+    const screen = await render(<UnfurlCard url="https://example.org" messageId="m-1" isAuthor={false} />);
     const img = document.querySelector('[data-testid="unfurl-card-image"]') as HTMLImageElement;
-    // Synthesise the error event the broken-image path responds to.
     img.dispatchEvent(new Event('error'));
-    await vi.waitFor(() => {
-      expect(document.querySelector('[data-testid="unfurl-card-image-placeholder"]')).not.toBeNull();
-    });
+    await expect.element(screen.getByTestId('unfurl-card-image-placeholder')).toBeInTheDocument();
   });
 });
