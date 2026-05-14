@@ -1,0 +1,103 @@
+{
+  "id": "01J0000000000000000000MSG1",
+  "parentID": "01J0000000000000000000CH01",
+  "parentType": "channel",
+  "authorID": "01J0000000000000000000US01",
+  "body": "**Hello** @[u-2|Bob] check #BugFix at https://example.org :smile:",
+  "replyCount": 3,
+  "lastReplyAt": "2026-05-01T15:00:00Z",
+  "recentReplyAuthorIDs": [
+    "01J0000000000000000000US02"
+  ],
+  "reactions": {
+    ":+1:": [
+      "01J0000000000000000000US02"
+    ]
+  },
+  "attachmentIDs": [
+    "01J0000000000000000000AT01"
+  ],
+  "pinned": true,
+  "pinnedAt": "2026-05-01T13:00:00Z",
+  "pinnedBy": "01J0000000000000000000US01",
+  "createdAt": "2026-05-01T12:00:00Z",
+  "editedAt": "2026-05-01T14:00:00Z",
+  "rendered": {
+    "type": "root",
+    "children": [
+      {
+        "type": "element",
+        "tagName": "p",
+        "children": [
+          {
+            "type": "element",
+            "tagName": "strong",
+            "children": [
+              {
+                "type": "text",
+                "value": "Hello"
+              }
+            ]
+          },
+          {
+            "type": "text",
+            "value": " "
+          },
+          {
+            "type": "element",
+            "tagName": "ex-mention-user",
+            "properties": {
+              "data-name": "Bob",
+              "data-user-id": "u-2",
+              "data-value": "@[u-2|Bob]"
+            },
+            "children": []
+          },
+          {
+            "type": "text",
+            "value": " check"
+          },
+          {
+            "type": "text",
+            "value": " "
+          },
+          {
+            "type": "element",
+            "tagName": "ex-hashtag",
+            "properties": {
+              "data-tag": "bugfix",
+              "data-value": "#BugFix"
+            },
+            "children": []
+          },
+          {
+            "type": "text",
+            "value": " at "
+          },
+          {
+            "type": "element",
+            "tagName": "ex-bare-url",
+            "properties": {
+              "data-href": "https://example.org",
+              "data-value": "https://example.org"
+            },
+            "children": []
+          },
+          {
+            "type": "text",
+            "value": " "
+          },
+          {
+            "type": "element",
+            "tagName": "ex-emoji-shortcode",
+            "properties": {
+              "data-name": "smile",
+              "data-value": ":smile:"
+            },
+            "children": []
+          }
+        ]
+      }
+    ]
+  }
+}

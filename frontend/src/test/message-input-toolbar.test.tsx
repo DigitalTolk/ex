@@ -14,7 +14,25 @@ vi.mock('@/hooks/useAttachments', () => ({
   useAttachment: () => ({ data: undefined, isLoading: false }),
 }));
 
-vi.mock('@/lib/api', () => ({ apiFetch: vi.fn() }));
+const { TestApiError } = vi.hoisted(() => {
+  class TestApiError extends Error {
+    status: number;
+    constructor(status: number, message: string) {
+      super(message);
+      this.name = 'ApiError';
+      this.status = status;
+    }
+  }
+  return { TestApiError };
+});
+vi.mock('@/lib/api', () => ({
+  apiFetch: vi.fn(),
+  ApiError: TestApiError,
+  getAccessToken: vi.fn(() => null),
+  setAccessToken: vi.fn(),
+  clearAccessToken: vi.fn(),
+  refreshAccessToken: vi.fn().mockResolvedValue(null),
+}));
 
 vi.mock('@/hooks/useSettings', () => ({
   useWorkspaceSettings: () => ({ data: workspaceSettings.current }),
@@ -238,8 +256,12 @@ describe('MessageInput toolbar buttons', () => {
     expect(editor.textContent).toContain('hello');
   });
 
-  it('does not call delete mutation when cancelling failed remove (silent failure)', async () => {
-    mockDeleteDraftMutateAsync.mockRejectedValueOnce(new Error('still referenced'));
+  it('silently swallows a 409 conflict (SHA still referenced) on draft remove', async () => {
+    // 409 is the legitimate "still referenced" path — the chip is
+    // already gone, the server kept the bytes for another message,
+    // user-visible state is correct. Errors with any other status
+    // surface via the upload-error rail (covered separately).
+    mockDeleteDraftMutateAsync.mockRejectedValueOnce(new TestApiError(409, 'still referenced'));
     const init = {
       id: 'att-fail',
       uploadURL: 'http://upload/u',

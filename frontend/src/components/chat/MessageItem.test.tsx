@@ -78,6 +78,7 @@ function setMobileMatch(matches: boolean) {
 
 describe('MessageItem', () => {
   beforeEach(() => {
+    delete window.Capacitor;
     useAttachmentsBatchMock.mockReset();
     useAttachmentsBatchMock.mockReturnValue({ map: new Map(), isLoading: false });
   });
@@ -442,6 +443,11 @@ describe('MessageItem', () => {
 
   it('opens message actions from long press on touch pointers', async () => {
     const reply = vi.fn();
+    const impact = vi.fn().mockResolvedValue(undefined);
+    window.Capacitor = {
+      isNativePlatform: () => true,
+      Plugins: { Haptics: { impact } },
+    };
     renderWithProviders(
       <MessageItem
         message={makeMessage()}
@@ -462,6 +468,7 @@ describe('MessageItem', () => {
     const sheet = screen.getByTestId('mobile-message-actions');
     const overlay = sheet.parentElement!;
     expect(sheet).toBeInTheDocument();
+    expect(impact).toHaveBeenCalledWith({ style: 'MEDIUM' });
     expect(overlay).toHaveClass('select-none', '[-webkit-touch-callout:none]', '[-webkit-user-select:none]');
     const contextMenu = new MouseEvent('contextmenu', { bubbles: true, cancelable: true });
     overlay.dispatchEvent(contextMenu);

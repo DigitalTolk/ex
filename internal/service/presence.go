@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"sync"
+	"time"
 
 	"github.com/DigitalTolk/ex/internal/events"
 	"github.com/DigitalTolk/ex/internal/pubsub"
@@ -99,6 +100,15 @@ func (s *PresenceService) Refresh(ctx context.Context, userID string) {
 	_ = s.store.RefreshPresence(ctx, userID)
 }
 
+// presenceLookupTimeout caps how long a presence lookup can block on
+// Redis. Both IsOnline and OnlineUserIDs are called from request-
+// handling render paths (sidebar, member list); without a deadline,
+// a slow/partitioned Redis would freeze the request hot path until
+// the OS dial timeout (which is much longer than is acceptable for
+// a chat sidebar). On timeout we fall back to the in-process map,
+// which is a stale-but-safe view.
+const presenceLookupTimeout = 500 * time.Millisecond
+
 // IsOnline reports whether a user has any active connection.
 func (s *PresenceService) IsOnline(userID string) bool {
 	s.mu.RLock()
@@ -110,14 +120,18 @@ func (s *PresenceService) IsOnline(userID string) bool {
 	if s.store == nil {
 		return false
 	}
-	online, err := s.store.IsPresenceOnline(context.Background(), userID)
+	ctx, cancel := context.WithTimeout(context.Background(), presenceLookupTimeout)
+	defer cancel()
+	online, err := s.store.IsPresenceOnline(ctx, userID)
 	return err == nil && online
 }
 
 // OnlineUserIDs returns all currently online user IDs (sorted not guaranteed).
 func (s *PresenceService) OnlineUserIDs() []string {
 	if s.store != nil {
-		ids, err := s.store.OnlinePresenceUserIDs(context.Background())
+		ctx, cancel := context.WithTimeout(context.Background(), presenceLookupTimeout)
+		defer cancel()
+		ids, err := s.store.OnlinePresenceUserIDs(ctx)
 		if err == nil {
 			return ids
 		}

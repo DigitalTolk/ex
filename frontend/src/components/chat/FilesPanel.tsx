@@ -7,6 +7,7 @@ import { useAttachmentLightbox } from '@/hooks/useAttachmentLightbox';
 import { iconForAttachment, isImageContentType } from '@/lib/file-helpers';
 import { formatBytes, formatRelative } from '@/lib/format';
 import { SidePanel } from './SidePanel';
+import { attachmentURLForFile } from './files-panel-url';
 import type { Attachment } from '@/types';
 import type { UserMapEntry } from './MessageList';
 
@@ -21,19 +22,6 @@ interface FileEntry {
 // and the index map must be keyed on (attachmentID, messageID), not the
 // attachment alone.
 const rowKey = (e: FileEntry) => `${e.attachmentID}:${e.messageID}`;
-
-function attachmentURLForFile(
-  entry: FileEntry,
-  parentID: string | undefined,
-  parentType: 'channel' | 'conversation' | undefined,
-) {
-  const params = new URLSearchParams();
-  if (parentID) params.set('parentID', parentID);
-  if (parentType) params.set('parentType', parentType);
-  if (entry.messageID) params.set('messageID', entry.messageID);
-  const qs = params.toString();
-  return `/api/v1/attachments/${entry.attachmentID}${qs ? `?${qs}` : ''}`;
-}
 
 interface FilesPanelProps {
   channelId?: string;

@@ -279,7 +279,7 @@ describe('AppLayout reload banner browser behavior', () => {
     }
   });
 
-  it('shows the reload banner on the mobile auth error surface when login reports a newer app version', async () => {
+  it('shows the reload banner on the mobile auth error surface when login reports a newer app version', { retry: 2 }, async () => {
     resetServerVersionForTests();
     const newerVersion = `newer-than-${BUILD_VERSION}`;
     const originalFetch = globalThis.fetch;

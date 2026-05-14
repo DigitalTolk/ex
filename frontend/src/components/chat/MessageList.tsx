@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso';
 import { Skeleton } from '@/components/ui/skeleton';
 import { MessageItem } from './MessageItem';
@@ -10,7 +10,12 @@ import { shouldAutoStickMessageList } from './message-list-autostick';
 
 const ANCHOR_HIGHLIGHT_MS = 2200;
 const DEFAULT_MESSAGE_ROW_HEIGHT = 88;
-const MESSAGE_LIST_OVERSCAN_PX = 600;
+// Overscan kept generous so rows ~2 screens above and below the
+// viewport stay mounted during fast scrolling. Without this, every
+// off-screen → on-screen transition tears down and rebuilds the row,
+// which makes avatar / Giphy / unfurl content flash even when the
+// underlying bytes are sitting in the HTTP cache.
+const MESSAGE_LIST_OVERSCAN_PX = 2000;
 const MESSAGE_LIST_AT_BOTTOM_THRESHOLD_PX = 4;
 const USER_SCROLL_AUTOSTICK_SUPPRESSION_MS = 1200;
 
@@ -189,18 +194,33 @@ function VirtuosoMessageList({
     }
   }, []);
 
+  // When a row's content height changes (image decoded, embed
+  // rendered, font swapped), scroll to the live tail — but only if
+  // the user is currently auto-sticking to bottom. The tricky part
+  // is that some growth happens across multiple paint frames (image
+  // → next-frame layout → wider image → final layout). Instead of
+  // a fixed 3-frame cascade, we iterate until scrollHeight is
+  // stable for one frame OR we hit a generous cap.
+  //
+  // Stabilization-based replaces the previous cargo-cult fixed
+  // cascade: it stops as soon as the content actually settles
+  // (saving frames in the common case) and continues longer for
+  // slow image decodes that the prior 3-frame budget could miss.
+  const SCROLL_STABILIZE_MAX_FRAMES = 8;
   const handleContentHeightChange = useCallback(() => {
     if (!canAutoStickToBottom()) return;
-
-    const scrollAfterLayout = (remainingFrames: number) => {
+    let lastHeight = scrollerRef.current?.scrollHeight ?? -1;
+    const chase = (frames: number) => {
       requestAnimationFrame(() => {
         if (!canAutoStickToBottom()) return;
         scrollToBottom();
-        if (remainingFrames > 1) scrollAfterLayout(remainingFrames - 1);
+        const next = scrollerRef.current?.scrollHeight ?? -1;
+        if (next === lastHeight || frames <= 1) return;
+        lastHeight = next;
+        chase(frames - 1);
       });
     };
-
-    scrollAfterLayout(3);
+    chase(SCROLL_STABILIZE_MAX_FRAMES);
   }, [canAutoStickToBottom, scrollToBottom]);
 
   const handleScrollerRef = useCallback((ref: HTMLElement | Window | null) => {
@@ -411,7 +431,7 @@ function Skeletons() {
   );
 }
 
-function MessageRow({
+const MessageRow = memo(function MessageRow({
   row,
   userMap,
   userLookup,
@@ -485,4 +505,4 @@ function MessageRow({
       />
     </div>
   );
-}
+});

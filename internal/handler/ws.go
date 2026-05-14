@@ -31,18 +31,43 @@ const wsKeepAliveInterval = 30 * time.Second
 
 // WSHandler serves a WebSocket connection for real-time updates.
 type WSHandler struct {
-	broker      *pubsub.Broker
-	chanSvc     *service.ChannelService
-	convSvc     *service.ConversationService
-	userSvc     *service.UserService
-	presenceSvc *service.PresenceService
-	publisher   service.Publisher
-	version     string
+	broker         *pubsub.Broker
+	chanSvc        *service.ChannelService
+	convSvc        *service.ConversationService
+	userSvc        *service.UserService
+	presenceSvc    *service.PresenceService
+	publisher      service.Publisher
+	version        string
+	originPatterns []string
+	allowAllOrigin bool
 }
 
 // NewWSHandler creates a WSHandler.
 func NewWSHandler(broker *pubsub.Broker, chanSvc *service.ChannelService, convSvc *service.ConversationService, presenceSvc *service.PresenceService) *WSHandler {
 	return &WSHandler{broker: broker, chanSvc: chanSvc, convSvc: convSvc, presenceSvc: presenceSvc}
+}
+
+// SetOriginPolicy configures which Origin headers the WebSocket upgrade
+// will accept. Patterns are host-only (e.g. "app.example.com",
+// "localhost") and use path.Match wildcards (see coder/websocket
+// AcceptOptions.OriginPatterns). A single "*" entry disables origin
+// verification — used in local dev where the bound port may be hit
+// from arbitrary scratch origins. In production this MUST be a
+// concrete allowlist; an unset policy fails closed (same-origin only).
+func (h *WSHandler) SetOriginPolicy(patterns []string) {
+	h.allowAllOrigin = false
+	h.originPatterns = nil
+	for _, p := range patterns {
+		if p == "*" {
+			h.allowAllOrigin = true
+			h.originPatterns = nil
+			return
+		}
+		if p == "" {
+			continue
+		}
+		h.originPatterns = append(h.originPatterns, p)
+	}
 }
 
 // SetPublisher wires a publisher for inbound ephemeral events (typing
@@ -71,7 +96,13 @@ func (h *WSHandler) Connect(w http.ResponseWriter, r *http.Request) {
 	}
 
 	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-		InsecureSkipVerify: true, // allow any origin in dev; tighten in production
+		// Same-origin is always permitted by the library. OriginPatterns
+		// adds explicit cross-origin allowlist entries (host-only,
+		// path.Match-style). InsecureSkipVerify is only enabled when the
+		// operator has opted into dev mode via allowOrigins=["*"]; in
+		// production an empty patterns list fails closed to same-origin.
+		InsecureSkipVerify: h.allowAllOrigin,
+		OriginPatterns:     h.originPatterns,
 	})
 	if err != nil {
 		slog.Error("ws: accept", "error", err, "userID", userID)
@@ -88,7 +119,15 @@ func (h *WSHandler) Connect(w http.ResponseWriter, r *http.Request) {
 		}
 		h.broker.UnregisterClient(userID, client)
 		if h.presenceSvc != nil {
-			h.presenceSvc.OnDisconnect(context.Background(), userID)
+			// r.Context() is already cancelled by the time the
+			// disconnect runs (the upgrade ended). Use a fresh context
+			// with a short deadline so a slow Redis can't keep the
+			// disconnect goroutine pinned indefinitely — under bulk
+			// disconnect (page-close avalanche) this would otherwise
+			// leak goroutines until each Redis call timed out itself.
+			disconnectCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			h.presenceSvc.OnDisconnect(disconnectCtx, userID)
 		}
 	}()
 

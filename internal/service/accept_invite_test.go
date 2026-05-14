@@ -87,6 +87,34 @@ func TestAcceptInvite_NotFound(t *testing.T) {
 	}
 }
 
+// TestAcceptInvite_ValidationFailures exercises the input-validation
+// branches that fire before any store lookup happens — these are the
+// cheapest tests to write and they pin the user-visible error copy.
+func TestAcceptInvite_ValidationFailures(t *testing.T) {
+	env := setupAuthService()
+	ctx := context.Background()
+
+	cases := []struct {
+		name        string
+		displayName string
+		password    string
+		wantMsgSub  string
+	}{
+		{"empty displayName", "", "password123", "display name"},
+		{"whitespace-only displayName", "   ", "password123", "display name"},
+		{"displayName too long", string(make([]byte, 200)), "password123", "display name"},
+		{"password too short", "Name", "short", "password"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, _, _, err := env.svc.AcceptInvite(ctx, "any", tc.displayName, tc.password)
+			if err == nil {
+				t.Fatalf("expected validation error for %s", tc.name)
+			}
+		})
+	}
+}
+
 func TestAcceptInvite_Expired(t *testing.T) {
 	env := setupAuthService()
 	ctx := context.Background()
@@ -102,5 +130,27 @@ func TestAcceptInvite_Expired(t *testing.T) {
 	_, _, _, err := env.svc.AcceptInvite(ctx, "expired-token", "Name", "password123")
 	if err == nil {
 		t.Fatal("expected error for expired invite")
+	}
+}
+
+// TestAcceptInvite_BadInviteEmail exercises the normalizeEmailAddress
+// failure branch — an invite whose stored email no longer parses (bad
+// data from an older schema, or a manually-edited record) must surface
+// a clear validation error rather than crash.
+func TestAcceptInvite_BadInviteEmail(t *testing.T) {
+	env := setupAuthService()
+	ctx := context.Background()
+
+	env.invites.invites["bad-email-token"] = &model.Invite{
+		Token:     "bad-email-token",
+		Email:     "not-an-email-at-all",
+		InviterID: "inviter-1",
+		ExpiresAt: time.Now().Add(72 * time.Hour),
+		CreatedAt: time.Now(),
+	}
+
+	_, _, _, err := env.svc.AcceptInvite(ctx, "bad-email-token", "Name", "password123")
+	if err == nil {
+		t.Fatal("expected error for invite with invalid stored email")
 	}
 }

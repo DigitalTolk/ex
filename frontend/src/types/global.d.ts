@@ -1,3 +1,5 @@
+import type { HapticsPlugin } from '@/lib/haptics';
+
 export {};
 
 declare global {
@@ -9,6 +11,7 @@ declare global {
         ServerNavigation?: {
           resetServer?: () => Promise<void>;
         };
+        Haptics?: HapticsPlugin;
         OneSignalCapacitor?: {
           login?: (args: { externalId: string }) => Promise<void>;
           addTags?: (args: { tags: Record<string, string> }) => Promise<void>;

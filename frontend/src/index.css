@@ -113,6 +113,58 @@
   }
 }
 
+/*
+ * Safe-area insets are exposed as CSS custom properties so consumers
+ * can compose them with arbitrary offsets (e.g.
+ * `pt-[calc(var(--safe-top)+1rem)]`) without having to retype
+ * `env(safe-area-inset-*)` at each call site. The bare insets (no
+ * additive offset) are also covered by `pt-safe-top` / `pb-safe-bottom`
+ * / `pl-safe-left` / `pr-safe-right` utilities below.
+ *
+ * Note: env(safe-area-inset-bottom) on iOS does NOT reset to 0 when
+ * the on-screen keyboard is up. Components that anchor against the
+ * keyboard (only the chat composer today) suppress the inset locally
+ * via a `data-keyboard-up` flag rather than via this token, since
+ * other components want to keep reserving space for the home
+ * indicator regardless of keyboard state.
+ */
+/* Typed registration so the var() chain resolves at computed-value
+ * time and the property can animate. Ignored by older browsers
+ * (Safari < 16.4 / Firefox < 128); ex-mobile's probe resolver works
+ * either way. */
+@property --ex-keyboard-background {
+  syntax: '<color>';
+  inherits: true;
+  initial-value: #ffffff;
+}
+
+:root {
+  --safe-top: env(safe-area-inset-top);
+  --safe-bottom: env(safe-area-inset-bottom);
+  --safe-left: env(safe-area-inset-left);
+  --safe-right: env(safe-area-inset-right);
+  /* Read by ex-mobile to paint the strip between the composer and
+   * the OS keyboard. Aliased to --color-background so light/dark
+   * track automatically. */
+  --ex-keyboard-background: var(--color-background);
+}
+
+@utility pt-safe-top {
+  padding-top: env(safe-area-inset-top);
+}
+
+@utility pb-safe-bottom {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+@utility pl-safe-left {
+  padding-left: env(safe-area-inset-left);
+}
+
+@utility pr-safe-right {
+  padding-right: env(safe-area-inset-right);
+}
+
 @keyframes accordion-down {
   from {
     height: 0;
@@ -207,38 +259,60 @@
     @apply outline-ring outline-2 outline-offset-2;
   }
 
+}
+
+/* Sidebar / app-chrome light-mode color remap.
+ *
+ * The sidebar markup uses Tailwind dark-palette utilities
+ * (text-white, bg-white/10, …) which look correct in dark mode but
+ * blow out in light mode. Rather than threading two parallel
+ * palettes through every sidebar component, we remap the dark-only
+ * utilities to the sidebar token colors when the document is in
+ * light mode.
+ *
+ * These rules live in `@layer utilities` (alongside Tailwind's own
+ * utility output) so the higher selector specificity wins without
+ * `!important`. Putting them in `@layer base` would lose to
+ * Tailwind's later utility layer, which is why the previous
+ * implementation needed `!important` to fight the cascade.
+ *
+ * Browser tests in test/sidebar-chrome-colors.browser.test.tsx lock
+ * the computed colors so a future cascade change can't silently
+ * regress to white-on-white text.
+ */
+@layer utilities {
   html:not(.dark) [data-app-chrome="true"] .text-white,
   html:not(.dark) [data-app-chrome="true"] .text-gray-200,
   html:not(.dark) [data-app-chrome="true"] .text-gray-300 {
-    color: var(--color-sidebar-foreground) !important;
+    color: var(--color-sidebar-foreground);
   }
 
   html:not(.dark) [data-app-chrome="true"] .text-gray-400 {
-    color: var(--color-muted-foreground) !important;
+    color: var(--color-muted-foreground);
   }
 
   html:not(.dark) [data-app-chrome="true"] .text-gray-500 {
-    color: oklch(0.62 0 0) !important;
+    color: oklch(0.62 0 0);
   }
 
   html:not(.dark) [data-app-chrome="true"] .bg-white\/15,
   html:not(.dark) [data-app-chrome="true"] .bg-white\/20 {
-    background-color: oklch(0.92 0 0) !important;
+    background-color: oklch(0.92 0 0);
   }
 
   html:not(.dark) [data-app-chrome="true"] .hover\:bg-white\/10:hover,
   html:not(.dark) [data-app-chrome="true"] .hover\:bg-white\/5:hover,
   html:not(.dark) [data-app-chrome="true"] .hover\:bg-white\/20:hover {
-    background-color: var(--color-sidebar-accent) !important;
+    background-color: var(--color-sidebar-accent);
   }
 
   html:not(.dark) [data-app-chrome="true"] .hover\:text-white:hover,
   html:not(.dark) [data-app-chrome="true"] .hover\:text-gray-300:hover {
-    color: var(--color-sidebar-foreground) !important;
+    color: var(--color-sidebar-foreground);
   }
 
   html:not(.dark) [data-app-chrome="true"] .bg-white\/10 {
-    background-color: oklch(0.95 0 0) !important;
+    background-color: oklch(0.95 0 0);
   }
 }
 

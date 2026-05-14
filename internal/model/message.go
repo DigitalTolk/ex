@@ -34,4 +34,11 @@ type Message struct {
 	// the unfurl — the suppression is global (every viewer sees it
 	// off), which is what authors expect when the preview is wrong.
 	NoUnfurl bool `json:"noUnfurl,omitempty" dynamodbav:"noUnfurl,omitempty"`
+	// Rendered is the server-rendered hast tree for Body — populated
+	// at read time, never persisted (the `dynamodbav:"-"` tag keeps
+	// it out of DDB). Frontend consumers prefer this over re-parsing
+	// the markdown source per render. nil means "not yet rendered"
+	// (legacy messages, intermediate API paths) — clients fall back
+	// to client-side parsing.
+	Rendered *HastNode `json:"rendered,omitempty" dynamodbav:"-"`
 }

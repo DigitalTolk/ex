@@ -260,6 +260,7 @@ type channelHandlerEnv struct {
 	channels    *dataChannelStore
 	memberships *dataMembershipStore
 	messages    *dataMessageStore
+	parentIndex *dataParentIndexStore
 	jwtMgr      *auth.JWTManager
 }
 
@@ -271,9 +272,12 @@ func setupChannelHandlerFull(t *testing.T) *channelHandlerEnv {
 	messages := newDataMessageStore()
 	cache := &mockCache{}
 	broker := &mockBrokerForHandler{}
+	parentIndex := newDataParentIndexStore()
 
 	channelSvc := service.NewChannelService(channels, memberships, nil, messages, cache, broker, nil)
 	messageSvc := service.NewMessageService(messages, memberships, nil, nil, broker)
+	// Production main always wires a parent index, so do the same here.
+	messageSvc.SetParentIndex(newParentIndexAdapterFromBacking(parentIndex))
 	jwtMgr := auth.NewJWTManager("test-channel-handler-secret", 15*time.Minute, 720*time.Hour)
 
 	h := NewChannelHandler(channelSvc, messageSvc)
@@ -282,6 +286,7 @@ func setupChannelHandlerFull(t *testing.T) *channelHandlerEnv {
 		channels:    channels,
 		memberships: memberships,
 		messages:    messages,
+		parentIndex: parentIndex,
 		jwtMgr:      jwtMgr,
 	}
 }
@@ -1987,6 +1992,13 @@ func TestChannelHandlerFull_ListFiles(t *testing.T) {
 		ID: "m-2", ParentID: "ch-files", AuthorID: "u-files",
 		AttachmentIDs: []string{"a-3"}, CreatedAt: now,
 	}
+	// In production, Send() writes one FILE# row per attachment. The
+	// handler reads exclusively from the index now, so this test seeds
+	// the same rows the runtime would have written.
+	ctx := context.Background()
+	_ = env.parentIndex.SetFileIndex(ctx, "ch-files", "a-1", "m-1", "u-files", now.Add(-time.Hour))
+	_ = env.parentIndex.SetFileIndex(ctx, "ch-files", "a-2", "m-1", "u-files", now.Add(-time.Hour))
+	_ = env.parentIndex.SetFileIndex(ctx, "ch-files", "a-3", "m-2", "u-files", now)
 
 	handler := middleware.Auth(env.jwtMgr)(http.HandlerFunc(env.handler.ListFiles))
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/channels/ch-files/files", nil)

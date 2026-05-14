@@ -1,0 +1,347 @@
+{
+  "type": "root",
+  "children": [
+    {
+      "type": "element",
+      "tagName": "p",
+      "children": [
+        {
+          "type": "element",
+          "tagName": "strong",
+          "children": [
+            {
+              "type": "text",
+              "value": "bold"
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "value": " "
+        },
+        {
+          "type": "element",
+          "tagName": "em",
+          "children": [
+            {
+              "type": "text",
+              "value": "italic"
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "value": " "
+        },
+        {
+          "type": "element",
+          "tagName": "s",
+          "children": [
+            {
+              "type": "text",
+              "value": "strike"
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "value": " "
+        },
+        {
+          "type": "element",
+          "tagName": "code",
+          "children": [
+            {
+              "type": "text",
+              "value": "code"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "element",
+      "tagName": "p",
+      "properties": {
+        "data-blank": "true"
+      },
+      "children": [
+        {
+          "type": "text",
+          "value": " "
+        }
+      ]
+    },
+    {
+      "type": "element",
+      "tagName": "h1",
+      "children": [
+        {
+          "type": "text",
+          "value": "heading"
+        }
+      ]
+    },
+    {
+      "type": "element",
+      "tagName": "p",
+      "properties": {
+        "data-blank": "true"
+      },
+      "children": [
+        {
+          "type": "text",
+          "value": " "
+        }
+      ]
+    },
+    {
+      "type": "element",
+      "tagName": "blockquote",
+      "children": [
+        {
+          "type": "element",
+          "tagName": "p",
+          "children": [
+            {
+              "type": "text",
+              "value": "quote"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "element",
+      "tagName": "p",
+      "properties": {
+        "data-blank": "true"
+      },
+      "children": [
+        {
+          "type": "text",
+          "value": " "
+        }
+      ]
+    },
+    {
+      "type": "element",
+      "tagName": "ul",
+      "children": [
+        {
+          "type": "element",
+          "tagName": "li",
+          "children": [
+            {
+              "type": "text",
+              "value": "one"
+            }
+          ]
+        },
+        {
+          "type": "element",
+          "tagName": "li",
+          "children": [
+            {
+              "type": "text",
+              "value": "two"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "element",
+      "tagName": "p",
+      "properties": {
+        "data-blank": "true"
+      },
+      "children": [
+        {
+          "type": "text",
+          "value": " "
+        }
+      ]
+    },
+    {
+      "type": "element",
+      "tagName": "p",
+      "children": [
+        {
+          "type": "text",
+          "value": "see "
+        },
+        {
+          "type": "element",
+          "tagName": "ex-mention-user",
+          "properties": {
+            "data-name": "Alice",
+            "data-user-id": "u-1",
+            "data-value": "@[u-1|Alice]"
+          },
+          "children": []
+        },
+        {
+          "type": "text",
+          "value": " and "
+        },
+        {
+          "type": "element",
+          "tagName": "ex-mention-channel",
+          "properties": {
+            "data-channel-id": "ch-1",
+            "data-slug": "general",
+            "data-value": "~[ch-1|general]"
+          },
+          "children": []
+        },
+        {
+          "type": "text",
+          "value": " "
+        },
+        {
+          "type": "element",
+          "tagName": "ex-mention-group",
+          "properties": {
+            "data-group": "all",
+            "data-value": "@all"
+          },
+          "children": []
+        },
+        {
+          "type": "text",
+          "value": " "
+        },
+        {
+          "type": "element",
+          "tagName": "ex-hashtag",
+          "properties": {
+            "data-tag": "bugfix",
+            "data-value": "#BugFix"
+          },
+          "children": []
+        },
+        {
+          "type": "text",
+          "value": " "
+        },
+        {
+          "type": "element",
+          "tagName": "ex-emoji-shortcode",
+          "properties": {
+            "data-name": "smile",
+            "data-value": ":smile:"
+          },
+          "children": []
+        },
+        {
+          "type": "text",
+          "value": " at "
+        },
+        {
+          "type": "element",
+          "tagName": "ex-bare-url",
+          "properties": {
+            "data-href": "https://example.org",
+            "data-value": "https://example.org"
+          },
+          "children": []
+        }
+      ]
+    },
+    {
+      "type": "element",
+      "tagName": "p",
+      "properties": {
+        "data-blank": "true"
+      },
+      "children": [
+        {
+          "type": "text",
+          "value": " "
+        }
+      ]
+    },
+    {
+      "type": "element",
+      "tagName": "p",
+      "children": [
+        {
+          "type": "element",
+          "tagName": "ex-giphy",
+          "properties": {
+            "data-height": 150,
+            "data-id": "abc",
+            "data-value": "![GIPHY](giphy:abc =200x150)",
+            "data-width": 200
+          },
+          "children": []
+        }
+      ]
+    },
+    {
+      "type": "element",
+      "tagName": "p",
+      "properties": {
+        "data-blank": "true"
+      },
+      "children": [
+        {
+          "type": "text",
+          "value": " "
+        }
+      ]
+    },
+    {
+      "type": "element",
+      "tagName": "p",
+      "children": [
+        {
+          "type": "element",
+          "tagName": "ex-media-literal",
+          "properties": {
+            "data-value": "![cat](https://example.com/cat.gif =320x240)"
+          },
+          "children": []
+        }
+      ]
+    },
+    {
+      "type": "element",
+      "tagName": "p",
+      "properties": {
+        "data-blank": "true"
+      },
+      "children": [
+        {
+          "type": "text",
+          "value": " "
+        }
+      ]
+    },
+    {
+      "type": "element",
+      "tagName": "pre",
+      "properties": {
+        "data-language": "js"
+      },
+      "children": [
+        {
+          "type": "element",
+          "tagName": "code",
+          "properties": {
+            "className": [
+              "language-javascript"
+            ]
+          },
+          "children": [
+            {
+              "type": "text",
+              "value": "const x = 1;"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

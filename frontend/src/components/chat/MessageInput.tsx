@@ -43,6 +43,7 @@ import { normalizeEmojiInBody } from '@/lib/emoji-shortcodes';
 import { isHttpUrl } from '@/lib/utils';
 import { dispatchEditMessage, onFocusComposer } from '@/lib/window-events';
 import { useIsMobile } from '@/hooks/useIsMobile';
+import { ApiError } from '@/lib/api';
 
 const TYPING_PING_INTERVAL_MS = 3000;
 
@@ -579,9 +580,17 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
     setDrafts((d) => d.filter((x) => x.id !== id));
     try {
       await deleteDraft.mutateAsync(id);
-    } catch {
-      // Best-effort delete — if the server says it's still referenced
-      // (SHA dedup against another message), we silently ignore.
+    } catch (err) {
+      // 409 Conflict is the only "expected" failure: the SHA is still
+      // referenced by another message that deduped against this
+      // attachment. The chip is gone from the local draft anyway, so
+      // the user-visible outcome is correct — swallow it.
+      // Anything else (network failure, 5xx, 401) is a real problem
+      // the user should see, not silently lose. Surface it via the
+      // same upload-error rail that handles failed uploads.
+      if (err instanceof ApiError && err.status === 409) return;
+      const message = err instanceof Error ? err.message : 'Failed to remove attachment';
+      setUploadError(message);
     }
   }
 

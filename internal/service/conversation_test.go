@@ -585,6 +585,29 @@ func TestConversationService_ListUserConversations_OverlaysRedisUnread(t *testin
 	}
 }
 
+// TestConversationService_MarkClearUnread_Guards pins the cheap early
+// returns in MarkUnread / ClearUnread when the conversation cache is nil
+// or the ids are empty. The happy path is covered separately in
+// TestConversationService_ListUserConversations_OverlaysRedisUnread.
+func TestConversationService_MarkClearUnread_Guards(t *testing.T) {
+	svc, _, _, _, _ := setupConversationService()
+	ctx := context.Background()
+
+	// Empty userID / convID are no-ops on the cache (no error returned).
+	if err := svc.MarkUnread(ctx, "", "conv"); err != nil {
+		t.Fatalf("MarkUnread empty userID: %v", err)
+	}
+	if err := svc.MarkUnread(ctx, "u", ""); err != nil {
+		t.Fatalf("MarkUnread empty convID: %v", err)
+	}
+	if err := svc.ClearUnread(ctx, "", "conv"); err != nil {
+		t.Fatalf("ClearUnread empty userID: %v", err)
+	}
+	if err := svc.ClearUnread(ctx, "u", ""); err != nil {
+		t.Fatalf("ClearUnread empty convID: %v", err)
+	}
+}
+
 func TestConversationService_GetByID(t *testing.T) {
 	svc, convStore, _, _, _ := setupConversationService()
 	ctx := context.Background()

@@ -26,7 +26,7 @@ func TestNewRouterDoesNotPanic(t *testing.T) {
 	wsH := &WSHandler{}
 
 	// This is the call that panics if routes conflict.
-	router := NewRouter(authH, userH, nil, channelH, convH, wsH, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, jwtMgr, nil, "test", []string{"*"})
+	router := NewRouter(&Deps{Auth: authH, User: userH, Channel: channelH, Conversation: convH, WS: wsH, JWT: jwtMgr, AppVersion: "test", AllowOrigins: []string{"*"}})
 
 	if router == nil {
 		t.Fatal("expected non-nil router")
@@ -36,7 +36,11 @@ func TestNewRouterDoesNotPanic(t *testing.T) {
 // TestRouterHealthEndpoint verifies the health check endpoint works.
 func TestRouterHealthEndpoint(t *testing.T) {
 	jwtMgr := auth.NewJWTManager("test-secret", 15*time.Minute, 24*time.Hour)
-	router := NewRouter(&AuthHandler{}, &UserHandler{}, nil, &ChannelHandler{}, &ConversationHandler{}, &WSHandler{}, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, jwtMgr, nil, "test", []string{"*"})
+	router := NewRouter(&Deps{
+		Auth: &AuthHandler{}, User: &UserHandler{}, Channel: &ChannelHandler{},
+		Conversation: &ConversationHandler{}, WS: &WSHandler{},
+		JWT: jwtMgr, AppVersion: "test", AllowOrigins: []string{"*"},
+	})
 
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	rec := httptest.NewRecorder()
@@ -49,7 +53,12 @@ func TestRouterHealthEndpoint(t *testing.T) {
 
 func TestRouterAddsAppVersionHeaderToAPIResponses(t *testing.T) {
 	jwtMgr := auth.NewJWTManager("test-secret", 15*time.Minute, 24*time.Hour)
-	router := NewRouter(&AuthHandler{}, &UserHandler{}, nil, &ChannelHandler{}, &ConversationHandler{}, &WSHandler{}, nil, nil, nil, nil, nil, nil, nil, NewVersionHandler("server-build-2"), nil, nil, nil, jwtMgr, nil, "server-build-2", []string{"*"})
+	router := NewRouter(&Deps{
+		Auth: &AuthHandler{}, User: &UserHandler{}, Channel: &ChannelHandler{},
+		Conversation: &ConversationHandler{}, WS: &WSHandler{},
+		Version: NewVersionHandler("server-build-2"),
+		JWT: jwtMgr, AppVersion: "server-build-2", AllowOrigins: []string{"*"},
+	})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/channels/missing", nil)
 	rec := httptest.NewRecorder()
@@ -65,7 +74,11 @@ func TestRouterAddsAppVersionHeaderToAPIResponses(t *testing.T) {
 // it means the route matched but auth middleware rejected the request).
 func TestRouterRegisteredRoutes(t *testing.T) {
 	jwtMgr := auth.NewJWTManager("test-secret", 15*time.Minute, 24*time.Hour)
-	router := NewRouter(&AuthHandler{}, &UserHandler{}, nil, &ChannelHandler{}, &ConversationHandler{}, &WSHandler{}, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, jwtMgr, nil, "test", []string{"*"})
+	router := NewRouter(&Deps{
+		Auth: &AuthHandler{}, User: &UserHandler{}, Channel: &ChannelHandler{},
+		Conversation: &ConversationHandler{}, WS: &WSHandler{},
+		JWT: jwtMgr, AppVersion: "test", AllowOrigins: []string{"*"},
+	})
 
 	routes := []struct {
 		method string
@@ -163,26 +176,28 @@ func TestIsValidationError(t *testing.T) {
 // even though they are the production wiring path.
 func TestNewRouter_AllOptionalHandlersWired(t *testing.T) {
 	jwtMgr := auth.NewJWTManager("test-secret", 15*time.Minute, 24*time.Hour)
-	router := NewRouter(
-		&AuthHandler{},
-		&UserHandler{},
-		&UserStateHandler{},
-		&ChannelHandler{},
-		&ConversationHandler{},
-		&WSHandler{},
-		&UploadHandler{},
-		&EmojiHandler{},
-		&PresenceHandler{},
-		&AttachmentHandler{},
-		&AdminHandler{},
-		&ThreadHandler{},
-		&DraftHandler{},
-		&VersionHandler{},
-		&UnfurlHandler{},
-		&SidebarHandler{},
-		&SearchHandler{},
-		jwtMgr, nil, "test", []string{"*"},
-	)
+	router := NewRouter(&Deps{
+		Auth:         &AuthHandler{},
+		User:         &UserHandler{},
+		UserState:    &UserStateHandler{},
+		Channel:      &ChannelHandler{},
+		Conversation: &ConversationHandler{},
+		WS:           &WSHandler{},
+		Upload:       &UploadHandler{},
+		Emoji:        &EmojiHandler{},
+		Presence:     &PresenceHandler{},
+		Attachment:   &AttachmentHandler{},
+		Admin:        &AdminHandler{},
+		Thread:       &ThreadHandler{},
+		Draft:        &DraftHandler{},
+		Version:      &VersionHandler{},
+		Unfurl:       &UnfurlHandler{},
+		Sidebar:      &SidebarHandler{},
+		Search:       &SearchHandler{},
+		JWT:          jwtMgr,
+		AppVersion:   "test",
+		AllowOrigins: []string{"*"},
+	})
 	if router == nil {
 		t.Fatal("expected non-nil router with all handlers wired")
 	}
@@ -239,4 +254,43 @@ func TestWriteServiceError(t *testing.T) {
 			t.Errorf("status = %d, want %d", rec.Code, http.StatusForbidden)
 		}
 	})
+}
+
+// NewRouter must reject a nil Deps explicitly so a missing wire-up
+// in main.go fails loudly instead of bypassing every nil-handler
+// guard inside the router with a confusing later panic.
+func TestNewRouter_PanicsOnNilDeps(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("expected panic on nil Deps")
+		}
+	}()
+	_ = NewRouter(nil)
+}
+
+// Adding a new endpoint must only require setting one Deps field —
+// this assertion locks the contract: a freshly-constructed Deps with
+// just the required core compiles and produces a working router.
+// Future additions to Deps must keep this surface backwards-
+// compatible (zero-value optional handlers are skipped silently).
+func TestNewRouter_MinimalDepsBuilds(t *testing.T) {
+	jwtMgr := auth.NewJWTManager("min-deps-secret", 15*time.Minute, 24*time.Hour)
+	router := NewRouter(&Deps{
+		Auth:         &AuthHandler{},
+		User:         &UserHandler{},
+		Channel:      &ChannelHandler{},
+		Conversation: &ConversationHandler{},
+		WS:           &WSHandler{},
+		JWT:          jwtMgr,
+		AllowOrigins: []string{"*"},
+	})
+	if router == nil {
+		t.Fatal("minimal Deps should produce a non-nil router")
+	}
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("/healthz = %d, want 200", rec.Code)
+	}
 }

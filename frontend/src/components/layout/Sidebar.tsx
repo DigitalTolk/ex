@@ -36,6 +36,7 @@ import {
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { isAdmin, isGuest } from '@/lib/roles';
+import { getCapacitorPlugin, isNativePlatform } from '@/lib/capacitor';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -475,8 +476,8 @@ export function Sidebar({ onClose }: SidebarProps) {
   const [changeServerConfirmOpen, setChangeServerConfirmOpen] = useState(false);
   const { online } = usePresence();
   const userMenuTriggerRef = useRef<HTMLButtonElement>(null);
-  const nativePlugin = window.Capacitor?.Plugins?.ServerNavigation;
-  const serverNavigation = window.Capacitor?.isNativePlatform?.() && nativePlugin?.resetServer
+  const nativePlugin = getCapacitorPlugin('ServerNavigation');
+  const serverNavigation = isNativePlatform() && nativePlugin?.resetServer
     ? nativePlugin
     : null;
   // null = closed; otherwise the section being deleted. Modal confirm

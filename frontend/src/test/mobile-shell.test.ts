@@ -14,7 +14,9 @@ describe('mobile shell invariants', () => {
     const app = readProjectFile('src/App.tsx');
     const layout = readProjectFile('src/components/layout/AppLayout.tsx');
 
-    expect(app).toContain('pt-[env(safe-area-inset-top)]');
+    // Either the bare arbitrary value or the named utility is fine —
+    // they resolve to the same env(safe-area-inset-top) underneath.
+    expect(app).toMatch(/pt-(safe-top|\[env\(safe-area-inset-top\)\])/);
     expect(app).toContain('bg-sidebar');
     expect(app).toContain('dark:bg-[#1a1d21]');
     expect(app).not.toContain('<UpdateBanner />');

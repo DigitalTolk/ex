@@ -174,6 +174,55 @@ aws dynamodb update-time-to-live \
 
 If you prefer Terraform / CloudFormation / CDK, replicate the same shape: `PK`+`SK` primary key, two GSIs (`GSI1`/`GSI2`) each with `*PK`+`*SK` and `ProjectionType=ALL`, and a TTL on the `ttl` attribute.
 
+### Key prefixes (per parent partition)
+
+A parent partition (`PK = CHAN#<id>` or `PK = CONV#<id>`) holds the parent's messages plus a few index rows that let the sidebar's "pinned" and "files" panes load in O(pinned) / O(files-shared) instead of scanning every message:
+
+| `SK` prefix | Item               | Lifecycle                                                                                                |
+| ----------- | ------------------ | -------------------------------------------------------------------------------------------------------- |
+| `MSG#`      | Message            | Created on send; soft-deleted on delete.                                                                 |
+| `PIN#`      | Pinned-message ref | Written when a message is pinned; removed on unpin or message delete. Listed by `Query SK begins_with`.  |
+| `FILE#`     | Shared-file ref    | Upserted per `(parent, attachmentID)` on every send/edit that references the file; removed on delete only when the row's `MessageID` still points at the deleted message (re-shares survive). |
+
+`PIN#` and `FILE#` rows live alongside the `MSG#` rows in the same DDB partition, so listing them is a single `Query` against `PK` + `begins_with(SK, "PIN#")` (no GSI). The dedicated row also lets `ListPinned` / `ListFiles` skip the legacy 1000-message scan that previously bounded both queries' accuracy.
+
+**Existing deployments must run this migration once after upgrading** — `ListPinned` and `ListFiles` read exclusively from `PIN#` / `FILE#` rows when the index is wired (always, in production), so pre-rollout messages whose pins and attachments never got indexed will show up as empty Files / Pinned panels until the backfill runs.
+
+```bash
+# Preview (default — no writes)
+go run ./cmd/migrate-parent-index --dry-run
+
+# Apply: writes one PIN# row per pinned message and one FILE# row
+# per shared attachment (latest sharer wins). Idempotent; safe to
+# re-run after a crash. Requires the same AWS_REGION /
+# DYNAMODB_TABLE / DYNAMODB_ENDPOINT env vars as the server.
+go run ./cmd/migrate-parent-index --apply
+```
+
+**Local dev (docker compose)** — DynamoDB Local lives inside the `dynamodb` container; point the migrator at it from the host:
+
+```bash
+# Preview against the running stack:
+AWS_REGION=us-east-1 \
+AWS_ACCESS_KEY_ID=dummy \
+AWS_SECRET_ACCESS_KEY=dummy \
+DYNAMODB_TABLE=ex \
+DYNAMODB_ENDPOINT=http://localhost:8000 \
+  go run ./cmd/migrate-parent-index --dry-run
+
+# Same shape with --apply when you're ready to write.
+AWS_REGION=us-east-1 \
+AWS_ACCESS_KEY_ID=dummy \
+AWS_SECRET_ACCESS_KEY=dummy \
+DYNAMODB_TABLE=ex \
+DYNAMODB_ENDPOINT=http://localhost:8000 \
+  go run ./cmd/migrate-parent-index --apply
+```
+
+The AWS credentials are mandatory but their values don't matter — DynamoDB Local accepts anything; the SDK just refuses to start without a key pair set.
+
+The script is read-mostly: it scans every parent's `MSG#` rows once and writes ~1 index row per pinned message + ~1 per shared attachment. Storage impact is bounded by `parents × (pinned_messages + unique_attachments)` — typically negligible vs. message volume.
+
 ## Architecture
 
 - **Real-time**: WebSocket for server-to-client push, REST for everything else

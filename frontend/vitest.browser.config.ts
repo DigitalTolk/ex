@@ -39,7 +39,13 @@ export default defineConfig({
     setupFiles: ['./src/test/react-act-setup.ts', './src/test/browser-setup.ts'],
     coverage: {
       provider: 'istanbul',
-      reporter: ['text', 'lcov'],
+      // json-summary writes coverage-browser/coverage-summary.json
+      // with the aggregated totals. The Makefile reads that file
+      // instead of grepping the human-readable stdout summary —
+      // stdout formatting is fragile across vitest versions and
+      // hides the failure mode "tests passed but summary line
+      // wasn't emitted" behind a coverage=0 false negative.
+      reporter: ['text', 'lcov', 'json-summary'],
       reportsDirectory: './coverage-browser',
       exclude: [
         'src/main.tsx',

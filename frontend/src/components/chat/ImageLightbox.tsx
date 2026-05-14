@@ -6,6 +6,19 @@ import { getInitials, formatLongDateTime, formatBytes } from '@/lib/format';
 import { iconForAttachment, isImageContentType } from '@/lib/file-helpers';
 import { useTransientOverlayCleanup } from '@/hooks/useTransientOverlayCleanup';
 import { useIsMobile } from '@/hooks/useIsMobile';
+import {
+  type GestureState,
+  idleGesture,
+  onPointerDown as gestureOnPointerDown,
+  readPanUpdate,
+  readPinchUpdate,
+  readSwipeDrag,
+  trackSwipe,
+  tryInvalidateTap,
+  isTapRelease,
+  classifyDoubleTap,
+  classifySwipe,
+} from './lightbox-gestures';
 
 export interface LightboxImage {
   url: string;
@@ -51,35 +64,20 @@ export function ImageLightbox({
   const [zoomState, setZoomState] = useState({ key: '', value: 1 });
   const [panState, setPanState] = useState({ key: '', x: 0, y: 0 });
   const [swipeDrag, setSwipeDrag] = useState({ x: 0, y: 0 });
-  const panGestureRef = useRef<{
-    pointerId: number;
-    startX: number;
-    startY: number;
-    originX: number;
-    originY: number;
-  } | null>(null);
-  const swipeGestureRef = useRef<{
-    pointerId: number;
-    startX: number;
-    startY: number;
-    lastX: number;
-    lastY: number;
-  } | null>(null);
+  // gestureRef holds the active gesture as a tagged union — only one
+  // of pinch/pan/swipe can be active at a time, by definition. The
+  // mutual exclusivity that was previously enforced by manual null-
+  // outs across the three legacy refs is now structural. See
+  // ./lightbox-gestures.ts for the state machine.
+  const gestureRef = useRef<GestureState>(idleGesture);
   const activePointersRef = useRef(new Map<number, { x: number; y: number }>());
-  const pinchGestureRef = useRef<{
-    startDistance: number;
-    startZoom: number;
-    centerX: number;
-    centerY: number;
-    originX: number;
-    originY: number;
-  } | null>(null);
+  // tap-pending lives alongside `gestureRef` rather than inside it
+  // because a single touch is simultaneously a candidate tap AND a
+  // candidate swipe — we don't know which until the pointer either
+  // moves (swipe) or releases stationary (tap).
+  const tapStartRef = useRef<GestureState | null>(null);
+  // Last completed tap, used to chain into a double-tap zoom toggle.
   const lastTapRef = useRef<{ time: number; x: number; y: number } | null>(null);
-  // pointerdown snapshot used to classify a pointerup as a tap. iOS
-  // does not deliver dblclick on the image stage when pointer captures
-  // and pan/swipe gestures are active, so we detect taps directly off
-  // the pointer stream and chain two within 450ms into a double-tap.
-  const tapStartRef = useRef<{ pointerId: number; time: number; x: number; y: number } | null>(null);
   const zoom = zoomState.key === imageKey ? zoomState.value : 1;
   const pan = panState.key === imageKey && zoom > 1 ? panState : { key: imageKey, x: 0, y: 0 };
   useTransientOverlayCleanup(open, { rootRef: lightboxRef, lockScroll: true });
@@ -89,8 +87,12 @@ export function ImageLightbox({
     setZoomState({ key: imageKey, value: next });
     if (next <= 1) {
       setPanState({ key: imageKey, x: 0, y: 0 });
-      panGestureRef.current = null;
-      pinchGestureRef.current = null;
+      // Zooming back out cancels any in-flight pan/pinch — the
+      // tagged-union state machine doesn't allow them to apply
+      // anyway once zoom == 1, but the explicit reset keeps the
+      // gesture lifecycle deterministic.
+      const g = gestureRef.current;
+      if (g.kind === 'pan' || g.kind === 'pinch') gestureRef.current = idleGesture;
     }
   }
 
@@ -107,8 +109,7 @@ export function ImageLightbox({
   function handleMobileTap(x: number, y: number) {
     if (!isMobile || !isImage) return false;
     const now = Date.now();
-    const previous = lastTapRef.current;
-    if (previous && now - previous.time <= 450 && Math.hypot(x - previous.x, y - previous.y) <= 56) {
+    if (classifyDoubleTap(lastTapRef.current, { time: now, x, y })) {
       lastTapRef.current = null;
       toggleMobileDoubleTapZoom();
       return true;
@@ -121,24 +122,12 @@ export function ImageLightbox({
     setZoomState({ key: '', value: 1 });
     setPanState({ key: '', x: 0, y: 0 });
     activePointersRef.current.clear();
-    pinchGestureRef.current = null;
-    panGestureRef.current = null;
-    swipeGestureRef.current = null;
+    gestureRef.current = idleGesture;
     lastTapRef.current = null;
     tapStartRef.current = null;
     setSwipeDrag({ x: 0, y: 0 });
     onClose();
   }, [onClose]);
-
-  function pointerDistance(points: Array<{ x: number; y: number }>) {
-    const [a, b] = points;
-    return Math.hypot(a.x - b.x, a.y - b.y);
-  }
-
-  function pointerCenter(points: Array<{ x: number; y: number }>) {
-    const [a, b] = points;
-    return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
-  }
 
   useEffect(() => {
     if (!open) return;
@@ -180,6 +169,14 @@ export function ImageLightbox({
     ? { transform: `translate3d(${Math.round(swipeDrag.x)}px, ${Math.round(swipeDrag.y)}px, 0)`, transition: 'none' }
     : undefined;
 
+  function activePointers() {
+    return Array.from(activePointersRef.current.entries()).map(([pointerId, p]) => ({
+      pointerId,
+      x: p.x,
+      y: p.y,
+    }));
+  }
+
   function handleLightboxPointerDown(e: ReactPointerEvent<HTMLDivElement>) {
     e.stopPropagation();
     try {
@@ -188,51 +185,16 @@ export function ImageLightbox({
       // Synthetic browser-test PointerEvents are not active pointers.
     }
     activePointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    // Capture the first finger's start info so pointerup can classify
-    // a stationary press as a tap. A second finger arriving switches
-    // the gesture into pinch-zoom and invalidates the snapshot.
-    if (isImage && isMobile && e.pointerType !== 'mouse' && activePointersRef.current.size === 1) {
-      tapStartRef.current = { pointerId: e.pointerId, time: Date.now(), x: e.clientX, y: e.clientY };
-    } else {
-      tapStartRef.current = null;
-    }
-    const pointers = Array.from(activePointersRef.current.values());
-    if (isImage && pointers.length >= 2) {
-      const two = pointers.slice(0, 2);
-      const center = pointerCenter(two);
-      pinchGestureRef.current = {
-        startDistance: Math.max(1, pointerDistance(two)),
-        startZoom: zoom,
-        centerX: center.x,
-        centerY: center.y,
-        originX: pan.x,
-        originY: pan.y,
-      };
-      panGestureRef.current = null;
-      swipeGestureRef.current = null;
+    const { state, tapStart } = gestureOnPointerDown(
+      gestureRef.current,
+      { pointerId: e.pointerId, x: e.clientX, y: e.clientY, pointerType: e.pointerType, time: Date.now() },
+      activePointers(),
+      { isImage, isMobile, zoom, panX: pan.x, panY: pan.y },
+    );
+    gestureRef.current = state;
+    tapStartRef.current = tapStart;
+    if (state.kind !== 'idle') {
       setSwipeDrag({ x: 0, y: 0 });
-      return;
-    }
-    if (isImage && zoom > 1) {
-      panGestureRef.current = {
-        pointerId: e.pointerId,
-        startX: e.clientX,
-        startY: e.clientY,
-        originX: pan.x,
-        originY: pan.y,
-      };
-      swipeGestureRef.current = null;
-      setSwipeDrag({ x: 0, y: 0 });
-      return;
-    }
-    if (isMobile) {
-      swipeGestureRef.current = {
-        pointerId: e.pointerId,
-        startX: e.clientX,
-        startY: e.clientY,
-        lastX: e.clientX,
-        lastY: e.clientY,
-      };
     }
   }
 
@@ -240,143 +202,124 @@ export function ImageLightbox({
     if (activePointersRef.current.has(e.pointerId)) {
       activePointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
     }
-    const tapStart = tapStartRef.current;
-    if (tapStart?.pointerId === e.pointerId) {
-      if (Math.hypot(e.clientX - tapStart.x, e.clientY - tapStart.y) > 12) {
-        tapStartRef.current = null;
-      }
-    }
-    const pointers = Array.from(activePointersRef.current.values());
-    const pinch = pinchGestureRef.current;
-    if (isImage && pinch && pointers.length >= 2) {
+    const pointer = { pointerId: e.pointerId, x: e.clientX, y: e.clientY };
+    tapStartRef.current = tryInvalidateTap(tapStartRef.current, pointer);
+
+    const pinch = readPinchUpdate(gestureRef.current, activePointers());
+    if (pinch) {
       e.preventDefault();
       e.stopPropagation();
-      const two = pointers.slice(0, 2);
-      const distance = Math.max(1, pointerDistance(two));
-      const center = pointerCenter(two);
-      const nextZoom = Math.min(6, Math.max(1, Math.round((pinch.startZoom * distance / pinch.startDistance) * 100) / 100));
-      setZoomState({ key: imageKey, value: nextZoom });
-      setPanState({
-        key: imageKey,
-        x: pinch.originX + center.x - pinch.centerX,
-        y: pinch.originY + center.y - pinch.centerY,
-      });
+      setZoomState({ key: imageKey, value: pinch.zoom });
+      setPanState({ key: imageKey, x: pinch.panX, y: pinch.panY });
       return;
     }
-    const panGesture = panGestureRef.current;
-    if (isImage && panGesture?.pointerId === e.pointerId) {
+    const panUpdate = readPanUpdate(gestureRef.current, pointer);
+    if (panUpdate && isImage) {
       e.preventDefault();
       e.stopPropagation();
-      setPanState({
-        key: imageKey,
-        x: panGesture.originX + e.clientX - panGesture.startX,
-        y: panGesture.originY + e.clientY - panGesture.startY,
-      });
+      setPanState({ key: imageKey, x: panUpdate.panX, y: panUpdate.panY });
       return;
     }
     if (!isMobile) return;
-    const swipe = swipeGestureRef.current;
-    if (!swipe || swipe.pointerId !== e.pointerId || (isImage && zoom > 1) || pinchGestureRef.current) return;
-    swipe.lastX = e.clientX;
-    swipe.lastY = e.clientY;
-    const dx = e.clientX - swipe.startX;
-    const dy = e.clientY - swipe.startY;
-    if (Math.max(Math.abs(dx), Math.abs(dy)) > 12) {
+    // Pan/pinch already won — no swipe processing.
+    if (gestureRef.current.kind === 'pan' || gestureRef.current.kind === 'pinch') return;
+    const drag = readSwipeDrag(gestureRef.current, pointer);
+    if (drag) {
       e.preventDefault();
       e.stopPropagation();
-      const horizontal = Math.abs(dx) > Math.abs(dy) * 1.15;
-      const vertical = dy > 0 && Math.abs(dy) > Math.abs(dx) * 1.15;
-      setSwipeDrag({
-        x: horizontal ? dx : 0,
-        y: vertical ? Math.max(0, dy) : 0,
-      });
+      setSwipeDrag({ x: drag.dx, y: drag.dy });
     }
+    gestureRef.current = trackSwipe(gestureRef.current, pointer);
   }
 
   function handleLightboxPointerUp(e: ReactPointerEvent<HTMLDivElement>) {
-    const swipe = isMobile ? swipeGestureRef.current : null;
-    const panGesture = panGestureRef.current;
     const tapStart = tapStartRef.current;
     tapStartRef.current = null;
     activePointersRef.current.delete(e.pointerId);
-    if (activePointersRef.current.size < 2) {
-      pinchGestureRef.current = null;
+    const remaining = activePointers();
+    const pointer = { pointerId: e.pointerId, x: e.clientX, y: e.clientY };
+
+    // Pinch ends when fewer than 2 pointers remain. Drop the active
+    // gesture back to idle (subsequent drags will start fresh).
+    if (gestureRef.current.kind === 'pinch' && remaining.length < 2) {
+      gestureRef.current = idleGesture;
     }
-    // Stationary single-finger release on the image stage = a tap.
-    // Chain with the previous tap (≤450ms, ≤56px) to drive double-tap
-    // zoom toggle. Runs before swipe/pan branches so a clean tap wins
-    // over the swipe threshold check (swipe needs ≥70px movement
-    // anyway, so they're mutually exclusive in practice).
+
+    // Tap release: chain with previous tap into a double-tap.
     if (
-      tapStart?.pointerId === e.pointerId &&
-      activePointersRef.current.size === 0 &&
-      !pinchGestureRef.current &&
-      Date.now() - tapStart.time < 350 &&
-      Math.hypot(e.clientX - tapStart.x, e.clientY - tapStart.y) <= 12 &&
+      isTapRelease(tapStart, { ...pointer, time: Date.now() }, remaining) &&
+      gestureRef.current.kind !== 'pinch' &&
       handleMobileTap(e.clientX, e.clientY)
     ) {
       e.stopPropagation();
-      swipeGestureRef.current = null;
-      panGestureRef.current = null;
+      gestureRef.current = idleGesture;
       setSwipeDrag({ x: 0, y: 0 });
       try {
         e.currentTarget.releasePointerCapture?.(e.pointerId);
-      } catch {
-        // Pointer capture may not have been acquired.
-      }
+      } catch { /* pointer capture may not have been acquired */ }
       return;
     }
-    if (swipe?.pointerId === e.pointerId) {
-      const dx = e.clientX - swipe.startX;
-      const dy = e.clientY - swipe.startY;
-      const absX = Math.abs(dx);
-      const absY = Math.abs(dy);
-      swipeGestureRef.current = null;
+
+    // Swipe completion: classify into close / next / prev / none.
+    if (gestureRef.current.kind === 'swipe' && gestureRef.current.pointerId === e.pointerId) {
+      const outcome = classifySwipe(
+        gestureRef.current,
+        pointer,
+        isImage && zoom > 1,
+        total > 1,
+      );
+      gestureRef.current = idleGesture;
       setSwipeDrag({ x: 0, y: 0 });
-      if (!(isImage && zoom > 1) && absY >= 70 && dy > 0 && absY > absX * 1.15) {
+      if (outcome.kind === 'close') {
         e.preventDefault();
         e.stopPropagation();
         handleClose();
         return;
       }
-      if (!(isImage && zoom > 1) && total > 1 && absX >= 70 && absX > absY * 1.15) {
+      if (outcome.kind === 'next') {
         e.preventDefault();
         e.stopPropagation();
-        onIndexChange(dx < 0 ? (safeIndex + 1) % total : (safeIndex - 1 + total) % total);
+        onIndexChange((safeIndex + 1) % total);
+        return;
+      }
+      if (outcome.kind === 'prev') {
+        e.preventDefault();
+        e.stopPropagation();
+        onIndexChange((safeIndex - 1 + total) % total);
         return;
       }
     }
-    if (panGesture?.pointerId === e.pointerId) {
+
+    if (gestureRef.current.kind === 'pan' && gestureRef.current.pointerId === e.pointerId) {
       e.stopPropagation();
-      panGestureRef.current = null;
+      gestureRef.current = idleGesture;
     }
     try {
       e.currentTarget.releasePointerCapture?.(e.pointerId);
-    } catch {
-      // Pointer capture may not have been acquired.
-    }
+    } catch { /* pointer capture may not have been acquired */ }
   }
 
   function handleLightboxPointerCancel(e: ReactPointerEvent<HTMLDivElement>) {
     activePointersRef.current.delete(e.pointerId);
-    if (tapStartRef.current?.pointerId === e.pointerId) {
+    if (
+      tapStartRef.current?.kind === 'tap-pending' &&
+      tapStartRef.current.pointerId === e.pointerId
+    ) {
       tapStartRef.current = null;
     }
-    if (swipeGestureRef.current?.pointerId === e.pointerId) {
-      swipeGestureRef.current = null;
+    const remaining = activePointers();
+    const g = gestureRef.current;
+    if (g.kind === 'swipe' && g.pointerId === e.pointerId) {
+      gestureRef.current = idleGesture;
       setSwipeDrag({ x: 0, y: 0 });
-    }
-    if (activePointersRef.current.size < 2) {
-      pinchGestureRef.current = null;
-    }
-    if (panGestureRef.current?.pointerId === e.pointerId) {
-      panGestureRef.current = null;
+    } else if (g.kind === 'pan' && g.pointerId === e.pointerId) {
+      gestureRef.current = idleGesture;
+    } else if (g.kind === 'pinch' && remaining.length < 2) {
+      gestureRef.current = idleGesture;
     }
     try {
       e.currentTarget.releasePointerCapture?.(e.pointerId);
-    } catch {
-      // Pointer capture may not have been acquired.
-    }
+    } catch { /* pointer capture may not have been acquired */ }
   }
 
   function handleImageStageDoubleClick(e: React.MouseEvent<HTMLDivElement>) {

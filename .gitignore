@@ -39,6 +39,7 @@ Thumbs.db
 
 # Build
 /ex
+/migrate-parent-index
 /bin/
 /tmp/
 /node_modules/

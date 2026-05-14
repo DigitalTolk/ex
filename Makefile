@@ -83,4 +83,16 @@ check:
 		fi; \
 		rm -f "$$tmp"
 	@echo "=== Frontend browser test ==="
-	cd frontend && npm run test:browser
+	cd frontend && npm run test:browser:coverage
+	@summary=frontend/coverage-browser/coverage-summary.json; \
+		if [ ! -f "$$summary" ]; then \
+			echo "$$summary not produced by vitest — coverage gate cannot run" >&2; \
+			exit 1; \
+		fi; \
+		coverage=$$(node -e "const s=require('./$$summary'); process.stdout.write(String(s.total.branches.pct))"); \
+		if [ -z "$$coverage" ]; then \
+			echo "$$summary did not contain total.branches.pct" >&2; \
+			exit 1; \
+		fi; \
+		echo "browser branch coverage: $$coverage%"; \
+		awk -v coverage="$$coverage" 'BEGIN { if (coverage + 0 < 60) { printf "browser branch coverage %.2f%% is below 60%%\n", coverage; exit 1 } }'

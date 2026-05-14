@@ -1,7 +1,7 @@
-export async function identifyMobilePushUser(currentUser: { id: string }): Promise<void> {
-  const plugins = window.Capacitor?.Plugins;
-  const oneSignal = plugins?.OneSignalCapacitor;
+import { getCapacitorPlugin } from './capacitor';
 
+export async function identifyMobilePushUser(currentUser: { id: string }): Promise<void> {
+  const oneSignal = getCapacitorPlugin('OneSignalCapacitor');
   if (!oneSignal || !currentUser.id) return;
 
   const userId = currentUser.id;
@@ -18,7 +18,7 @@ export async function identifyMobilePushUser(currentUser: { id: string }): Promi
 }
 
 export async function clearMobilePushUser(): Promise<void> {
-  const oneSignal = window.Capacitor?.Plugins?.OneSignalCapacitor;
+  const oneSignal = getCapacitorPlugin('OneSignalCapacitor');
   if (!oneSignal) return;
 
   await oneSignal.logout?.();

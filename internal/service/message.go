@@ -70,6 +70,8 @@ type MessageService struct {
 	indexer       MessageIndexer
 	threadFollows ThreadFollowStore
 	userState     UserStateStore
+	parentIndex   ParentPinFileIndexStore
+	markdown      *MarkdownRenderer
 }
 
 // NewMessageService creates a MessageService with the given dependencies.
@@ -110,6 +112,48 @@ func (s *MessageService) SetIndexer(i MessageIndexer) { s.indexer = i }
 func (s *MessageService) SetThreadFollowStore(f ThreadFollowStore) { s.threadFollows = f }
 
 func (s *MessageService) SetUserStateStore(userState UserStateStore) { s.userState = userState }
+
+// SetParentIndex wires the per-parent pinned/file index. Required
+// for ListPinned / ListFiles to return any data — those paths read
+// exclusively from the index now. Production wiring (cmd/server/main.go)
+// and every test helper (setupMessageService, setupChannelHandlerFull,
+// etc.) wire a real implementation. Pre-rollout data must be backfilled
+// once with `cmd/migrate-parent-index --apply` (see README).
+//
+// Write paths (Send / Edit / Delete / SetPinned) still guard with
+// `if s.parentIndex != nil` so a misconfiguration logs a warning
+// rather than panicking the request.
+func (s *MessageService) SetParentIndex(p ParentPinFileIndexStore) { s.parentIndex = p }
+
+// SetMarkdownRenderer wires the server-side markdown→hast renderer.
+// When set, every Message returned by the service has its `Rendered`
+// field populated so the frontend doesn't have to re-parse on each
+// render. Optional — tests that don't care about rendered output
+// leave it nil and the field stays empty (the frontend then falls
+// back to its legacy client-side parser).
+func (s *MessageService) SetMarkdownRenderer(m *MarkdownRenderer) { s.markdown = m }
+
+// attachRendered populates the Rendered field on every supplied
+// Message. Centralising this means every return path in the service
+// (Send, Edit, List…, publishEvent) gets the hast tree without
+// having to remember to call the renderer at each call site.
+func (s *MessageService) attachRendered(msgs ...*model.Message) {
+	if s.markdown == nil {
+		return
+	}
+	for _, m := range msgs {
+		if m == nil {
+			continue
+		}
+		// Soft-deleted messages have empty Body; skip the parse and
+		// leave Rendered nil (frontend renders the "(deleted)"
+		// placeholder, not the body).
+		if m.Deleted || m.Body == "" {
+			continue
+		}
+		m.Rendered = s.markdown.RenderToHast(m.Body)
+	}
+}
 
 func (s *MessageService) CheckAccess(ctx context.Context, userID, parentID, parentType string) error {
 	return s.checkAccess(ctx, userID, parentID, parentType)
@@ -217,6 +261,23 @@ func (s *MessageService) Send(ctx context.Context, userID, parentID, parentType,
 		return nil, err
 	}
 
+	// Maintain the per-parent FILE# index. Each attached file gets one
+	// row per parent — re-shares overwrite the existing row so the
+	// index always tracks the most-recent message that referenced this
+	// file. Best-effort: failure here is logged but doesn't block the
+	// send (the file index is a UI-side affordance, not a correctness
+	// invariant).
+	if s.parentIndex != nil {
+		for _, aid := range attachmentIDs {
+			if aid == "" {
+				continue
+			}
+			if err := s.parentIndex.SetFileIndex(ctx, parentID, aid, msg.ID, msg.AuthorID, msg.CreatedAt); err != nil {
+				slog.Warn("file index set failed", "msgID", msg.ID, "attachmentID", aid, "error", err)
+			}
+		}
+	}
+
 	if parentType == ParentConversation {
 		if conv, err := s.conversations.GetConversation(ctx, parentID); err == nil && conv != nil {
 			if s.unreadTracker != nil {
@@ -289,6 +350,7 @@ func (s *MessageService) Send(ctx context.Context, userID, parentID, parentType,
 		s.publishEvent(ctx, parentID, parentType, events.EventMessageEdited, updatedThreadRoot)
 	}
 
+	s.attachRendered(msg)
 	return msg, nil
 }
 
@@ -300,23 +362,38 @@ func (s *MessageService) followMentionedThreadUsers(ctx context.Context, msg *mo
 	if len(mentions.Users) == 0 {
 		return
 	}
+	// Resolve access checks first, then issue a single batch write
+	// instead of N point writes. A reply mentioning 5 teammates
+	// previously cost 5 DynamoDB round-trips on the message-send path;
+	// this drops it to 1.
+	now := time.Now()
+	follows := make([]*model.ThreadFollow, 0, len(mentions.Users))
+	seen := make(map[string]struct{}, len(mentions.Users))
 	for _, mention := range mentions.Users {
 		if mention.UserID == "" || mention.UserID == msg.AuthorID {
+			continue
+		}
+		if _, dup := seen[mention.UserID]; dup {
 			continue
 		}
 		if err := s.checkAccess(ctx, mention.UserID, msg.ParentID, parentType); err != nil {
 			continue
 		}
-		if err := s.threadFollows.SetThreadFollow(ctx, &model.ThreadFollow{
+		seen[mention.UserID] = struct{}{}
+		follows = append(follows, &model.ThreadFollow{
 			UserID:       mention.UserID,
 			ParentID:     msg.ParentID,
 			ParentType:   parentType,
 			ThreadRootID: msg.ParentMessageID,
 			Following:    true,
-			UpdatedAt:    time.Now(),
-		}); err != nil {
-			slog.Warn("thread mention follow failed", "userID", mention.UserID, "threadRootID", msg.ParentMessageID, "error", err)
-		}
+			UpdatedAt:    now,
+		})
+	}
+	if len(follows) == 0 {
+		return
+	}
+	if err := s.threadFollows.SetThreadFollowMany(ctx, follows); err != nil {
+		slog.Warn("thread mention follow batch failed", "count", len(follows), "threadRootID", msg.ParentMessageID, "error", err)
 	}
 }
 
@@ -338,6 +415,7 @@ func (s *MessageService) ListThreadMessages(ctx context.Context, userID, parentI
 		}
 	}
 	sort.Slice(thread, func(i, j int) bool { return thread[i].ID < thread[j].ID })
+	s.attachRendered(thread...)
 	return thread, nil
 }
 
@@ -545,22 +623,44 @@ func (s *MessageService) scanParentMessages(ctx context.Context, parentID string
 }
 
 // ListPinned returns all currently-pinned messages for a parent in
-// reverse-chronological order (newest pin first by message ID). Membership
-// is checked via the parent's access guard.
+// reverse-chronological order (newest pin first by message ID).
+// Membership is checked via the parent's access guard.
+//
+// Backed by the dedicated PIN# index in the same DDB partition — the
+// query returns only the pinned rows, then we batch-fetch the full
+// messages by ID. Previously this scanned up to 1000 messages and
+// filtered in-memory, which broke past that cap and burned RCUs on
+// every sidebar click.
 func (s *MessageService) ListPinned(ctx context.Context, userID, parentID, parentType string) ([]*model.Message, error) {
 	if err := s.checkAccess(ctx, userID, parentID, parentType); err != nil {
 		return nil, err
 	}
-	msgs, _, err := s.messages.ListMessages(ctx, parentID, "", 1000)
+	// parentIndex is mandatory — wired in cmd/server/main.go and in
+	// every test via setupMessageService. Pre-rollout legacy data
+	// must be backfilled once after deploy with
+	// `go run ./cmd/migrate-parent-index --apply` (see README).
+	rows, err := s.parentIndex.ListPinIndex(ctx, parentID)
 	if err != nil {
-		return nil, fmt.Errorf("message: list pinned: %w", err)
+		return nil, fmt.Errorf("message: list pinned index: %w", err)
 	}
-	pinned := make([]*model.Message, 0)
-	for _, m := range msgs {
-		if m.Pinned {
-			pinned = append(pinned, m)
+	pinned := make([]*model.Message, 0, len(rows))
+	for _, row := range rows {
+		msg, err := s.messages.GetMessage(ctx, parentID, row.MessageID)
+		if err != nil {
+			// A row in the index that no longer resolves to a message
+			// (deletion-cleanup race) is a soft inconsistency — drop
+			// it from this response and best-effort the cleanup.
+			_ = s.parentIndex.DeletePinIndex(ctx, parentID, row.MessageID)
+			continue
 		}
+		if !msg.Pinned {
+			// Index says pinned but message says no — stale index row.
+			_ = s.parentIndex.DeletePinIndex(ctx, parentID, row.MessageID)
+			continue
+		}
+		pinned = append(pinned, msg)
 	}
+	s.attachRendered(pinned...)
 	return pinned, nil
 }
 
@@ -583,37 +683,25 @@ type FileEntry struct {
 // the same content always resolves to the same ID, and the user only
 // sees the latest message that referenced it.
 //
-// Like ListPinned, this walks recent messages — small workspaces only.
-// At larger scale this would move to a dedicated index of attachments
-// per parent.
+// Reads exclusively from the FILE# index. Pre-rollout data is invisible
+// here until the operator runs `cmd/migrate-parent-index --apply`.
 func (s *MessageService) ListFiles(ctx context.Context, userID, parentID, parentType string) ([]*FileEntry, error) {
 	if err := s.checkAccess(ctx, userID, parentID, parentType); err != nil {
 		return nil, err
 	}
-	msgs, _, err := s.messages.ListMessages(ctx, parentID, "", 1000)
+	// parentIndex is mandatory (see ListPinned).
+	rows, err := s.parentIndex.ListFileIndex(ctx, parentID)
 	if err != nil {
-		return nil, fmt.Errorf("message: list files: %w", err)
+		return nil, fmt.Errorf("message: list file index: %w", err)
 	}
-	latest := make(map[string]*FileEntry)
-	for _, m := range msgs {
-		for _, aid := range m.AttachmentIDs {
-			if aid == "" {
-				continue
-			}
-			if cur, ok := latest[aid]; ok && cur.CreatedAt.After(m.CreatedAt) {
-				continue
-			}
-			latest[aid] = &FileEntry{
-				AttachmentID: aid,
-				MessageID:    m.ID,
-				AuthorID:     m.AuthorID,
-				CreatedAt:    m.CreatedAt,
-			}
-		}
-	}
-	files := make([]*FileEntry, 0, len(latest))
-	for _, f := range latest {
-		files = append(files, f)
+	files := make([]*FileEntry, 0, len(rows))
+	for _, row := range rows {
+		files = append(files, &FileEntry{
+			AttachmentID: row.AttachmentID,
+			MessageID:    row.MessageID,
+			AuthorID:     row.AuthorID,
+			CreatedAt:    row.CreatedAt,
+		})
 	}
 	sort.Slice(files, func(i, j int) bool {
 		return files[i].CreatedAt.After(files[j].CreatedAt)
@@ -690,6 +778,7 @@ func (s *MessageService) ListAround(ctx context.Context, userID, parentID, paren
 		out = append(out, target)
 	}
 	out = append(out, older...)
+	s.attachRendered(out...)
 	return out, hasMoreOlder, hasMoreNewer, nil
 }
 
@@ -722,6 +811,7 @@ func (s *MessageService) listTopLevel(ctx context.Context, parentID, before stri
 	} else if storeHasMore {
 		hasMore = true
 	}
+	s.attachRendered(collected...)
 	return collected, hasMore, nil
 }
 
@@ -760,6 +850,7 @@ func (s *MessageService) listTopLevelAfter(ctx context.Context, parentID, after 
 	for i, j := 0, len(collected)-1; i < j; i, j = i+1, j-1 {
 		collected[i], collected[j] = collected[j], collected[i]
 	}
+	s.attachRendered(collected...)
 	return collected, hasMore, nil
 }
 
@@ -849,10 +940,46 @@ func (s *MessageService) Edit(ctx context.Context, userID, parentID, parentType,
 	}
 	s.releaseAttachments(ctx, msgID, removed)
 
+	// Reflect attachment changes onto the FILE# index. The edited
+	// message keeps its original CreatedAt, so when *adding* an
+	// attachment we only overwrite an existing row if the row points
+	// at an *older* share — otherwise the newer share already owns
+	// the row and must survive. *Removing* an attachment drops the
+	// row only when it still points at this message.
+	if s.parentIndex != nil && (len(added) > 0 || len(removed) > 0) {
+		existing, err := s.parentIndex.ListFileIndex(ctx, parentID)
+		if err != nil {
+			slog.Warn("file index lookup on edit failed", "msgID", edited.ID, "error", err)
+			existing = nil
+		}
+		existingByAtt := make(map[string]FileIndexEntry, len(existing))
+		for _, row := range existing {
+			existingByAtt[row.AttachmentID] = row
+		}
+		for _, aid := range added {
+			if cur, ok := existingByAtt[aid]; ok && cur.CreatedAt.After(edited.CreatedAt) {
+				continue
+			}
+			if err := s.parentIndex.SetFileIndex(ctx, parentID, aid, edited.ID, edited.AuthorID, edited.CreatedAt); err != nil {
+				slog.Warn("file index set on edit failed", "msgID", edited.ID, "attachmentID", aid, "error", err)
+			}
+		}
+		for _, aid := range removed {
+			cur, ok := existingByAtt[aid]
+			if !ok || cur.MessageID != edited.ID {
+				continue
+			}
+			if err := s.parentIndex.DeleteFileIndex(ctx, parentID, aid); err != nil {
+				slog.Warn("file index delete on edit failed", "msgID", edited.ID, "attachmentID", aid, "error", err)
+			}
+		}
+	}
+
 	s.publishEvent(ctx, parentID, parentType, events.EventMessageEdited, &edited)
 
 	s.indexMessage(ctx, &edited, parentType)
 
+	s.attachRendered(&edited)
 	return &edited, nil
 }
 
@@ -883,15 +1010,54 @@ func (s *MessageService) Delete(ctx context.Context, userID, parentID, parentTyp
 	}
 
 	originalAttachments := msg.AttachmentIDs
+	wasPinned := msg.Pinned
 	msg.Deleted = true
 	msg.Body = ""
 	msg.AttachmentIDs = nil
 	msg.Reactions = nil
+	msg.Pinned = false
+	msg.PinnedAt = nil
+	msg.PinnedBy = ""
 	if err := s.messages.UpdateMessage(ctx, msg); err != nil {
 		return fmt.Errorf("message: soft-delete: %w", err)
 	}
 
 	s.releaseAttachments(ctx, msgID, originalAttachments)
+
+	// Tear down the index rows that pointed at this message.
+	// - Pin index: drop unconditionally if the message was pinned.
+	// - File index: only drop the row if its current MessageID is
+	//   THIS message — otherwise the row already points at a more
+	//   recent share that should survive.
+	if s.parentIndex != nil {
+		if wasPinned {
+			if err := s.parentIndex.DeletePinIndex(ctx, parentID, msgID); err != nil {
+				slog.Warn("pin index delete on message-delete failed", "msgID", msgID, "error", err)
+			}
+		}
+		if len(originalAttachments) > 0 {
+			rows, err := s.parentIndex.ListFileIndex(ctx, parentID)
+			if err != nil {
+				slog.Warn("file index lookup on message-delete failed", "msgID", msgID, "error", err)
+			} else {
+				attached := make(map[string]struct{}, len(originalAttachments))
+				for _, aid := range originalAttachments {
+					attached[aid] = struct{}{}
+				}
+				for _, row := range rows {
+					if row.MessageID != msgID {
+						continue
+					}
+					if _, hit := attached[row.AttachmentID]; !hit {
+						continue
+					}
+					if err := s.parentIndex.DeleteFileIndex(ctx, parentID, row.AttachmentID); err != nil {
+						slog.Warn("file index delete on message-delete failed", "msgID", msgID, "attachmentID", row.AttachmentID, "error", err)
+					}
+				}
+			}
+		}
+	}
 
 	// Publish the deleted tombstone so other clients can patch their
 	// visible cache without waiting for a refetch. parentMessageID is
@@ -956,6 +1122,7 @@ func (s *MessageService) ToggleReaction(ctx context.Context, userID, parentID, p
 
 	s.publishEvent(ctx, parentID, parentType, events.EventMessageEdited, msg)
 	s.indexMessage(ctx, msg, parentType)
+	s.attachRendered(msg)
 	return msg, nil
 }
 
@@ -971,6 +1138,7 @@ func (s *MessageService) SetPinned(ctx context.Context, userID, parentID, parent
 		return nil, fmt.Errorf("message: get: %w", err)
 	}
 	if msg.Pinned == pinned {
+		s.attachRendered(msg)
 		return msg, nil
 	}
 	msg.Pinned = pinned
@@ -985,10 +1153,25 @@ func (s *MessageService) SetPinned(ctx context.Context, userID, parentID, parent
 	if err := s.messages.UpdateMessage(ctx, msg); err != nil {
 		return nil, fmt.Errorf("message: update pinned: %w", err)
 	}
+	// Mirror to the dedicated PIN# index so ListPinned doesn't have
+	// to rescan messages. Best-effort: the message itself remains the
+	// source of truth (msg.Pinned), and ListPinned reconciles drift.
+	if s.parentIndex != nil {
+		if pinned {
+			if err := s.parentIndex.SetPinIndex(ctx, parentID, msg.ID, userID, *msg.PinnedAt); err != nil {
+				slog.Warn("pin index set failed", "msgID", msg.ID, "error", err)
+			}
+		} else {
+			if err := s.parentIndex.DeletePinIndex(ctx, parentID, msg.ID); err != nil {
+				slog.Warn("pin index delete failed", "msgID", msg.ID, "error", err)
+			}
+		}
+	}
 	// Re-use message.edited so existing message-list invalidation paths
 	// pick up the change without a new event handler. Pin is rare enough
 	// that a dedicated event would be over-engineered.
 	s.publishEvent(ctx, parentID, parentType, events.EventMessageEdited, msg)
+	s.attachRendered(msg)
 	return msg, nil
 }
 
@@ -1007,6 +1190,7 @@ func (s *MessageService) SetNoUnfurl(ctx context.Context, userID, parentID, pare
 		return nil, errors.New("message: only the author can dismiss the link preview")
 	}
 	if msg.NoUnfurl == noUnfurl {
+		s.attachRendered(msg)
 		return msg, nil
 	}
 	msg.NoUnfurl = noUnfurl
@@ -1014,6 +1198,7 @@ func (s *MessageService) SetNoUnfurl(ctx context.Context, userID, parentID, pare
 		return nil, fmt.Errorf("message: update no-unfurl: %w", err)
 	}
 	s.publishEvent(ctx, parentID, parentType, events.EventMessageEdited, msg)
+	s.attachRendered(msg)
 	return msg, nil
 }
 
@@ -1177,6 +1362,11 @@ func (s *MessageService) publishEvent(ctx context.Context, parentID, parentType,
 	if msg, ok := data.(*model.Message); ok && msg != nil {
 		cp := *msg
 		cp.ParentType = parentType
+		// Make sure every broadcast frame carries the rendered hast
+		// — the message-edited / message-new events ship the full
+		// model.Message and recipients shouldn't have to parse on
+		// receipt.
+		s.attachRendered(&cp)
 		data = &cp
 	}
 	events.Publish(ctx, s.publisher, channel, eventType, data)

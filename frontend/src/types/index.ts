@@ -50,6 +50,25 @@ export interface Message {
   pinnedBy?: string;
   deleted?: boolean;
   noUnfurl?: boolean;
+  // Server-rendered hast tree for `body`. Populated on every read
+  // path; missing on legacy messages or when the server's renderer
+  // is unwired. Frontend prefers this over re-parsing the markdown
+  // source per render.
+  rendered?: HastNode;
+}
+
+// HastNode mirrors the server-side hast tree shape. Three node
+// variants share one type — root, element, text. Custom domain
+// elements use sentinel `tagName: 'ex-mention-user' | 'ex-hashtag'
+// | 'ex-giphy' | …` that the renderer's components map maps onto
+// the corresponding React component.
+export interface HastNode {
+  type: 'root' | 'element' | 'text';
+  tagName?: string;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  properties?: Record<string, any>;
+  children?: HastNode[];
+  value?: string;
 }
 
 export interface MessageDraft {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -789,6 +790,81 @@ func TestIsAllowedOIDCRedirect(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := isAllowedOIDCRedirect(tc.in); got != tc.want {
 				t.Errorf("isAllowedOIDCRedirect(%q) = %v, want %v", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestShouldUseDesktopAuthCode pins the desktop-auth-code branch: only
+// http://localhost and ex://mobile produce one-shot codes that callers
+// must POST to /auth/oidc/desktop/complete. Anything else falls into the
+// default cookie-and-redirect flow.
+func TestShouldUseDesktopAuthCode(t *testing.T) {
+	cases := []struct {
+		name string
+		raw  string
+		want bool
+	}{
+		{"nil parsed → false", "", false},
+		{"http localhost → true", "http://localhost:5173/cb", true},
+		{"https localhost → false (uses cookie path)", "https://localhost:5173/cb", false},
+		{"tauri localhost → false", "tauri://localhost/cb", false},
+		{"ex mobile → true", "ex://mobile/cb", true},
+		{"ex app (desktop deep-link) → false", "ex://app/cb", false},
+		{"unknown scheme → false", "https://evil.example/cb", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var parsed *url.URL
+			if tc.raw != "" {
+				p, err := url.Parse(tc.raw)
+				if err != nil {
+					t.Fatalf("url.Parse: %v", err)
+				}
+				parsed = p
+			}
+			if got := shouldUseDesktopAuthCode(parsed); got != tc.want {
+				t.Errorf("shouldUseDesktopAuthCode(%q) = %v, want %v", tc.raw, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestRedirectWithQuery covers the helper that drops any caller-controlled
+// duplicate query keys and re-encodes the URL exactly once. The encoding
+// is what makes oidcCallbackRedirect tolerate raw URLs that already have
+// trailing parameters from the auth provider.
+func TestRedirectWithQuery(t *testing.T) {
+	cases := []struct {
+		name  string
+		raw   string
+		query url.Values
+		want  string
+	}{
+		{
+			"appends a single key to a bare path",
+			"/oidc/callback",
+			url.Values{"token": []string{"t-1"}},
+			"/oidc/callback?token=t-1",
+		},
+		{
+			"replaces an existing key rather than duplicating it",
+			"/oidc/callback?token=stale",
+			url.Values{"token": []string{"fresh"}},
+			"/oidc/callback?token=fresh",
+		},
+		{
+			"preserves unrelated existing keys",
+			"/oidc/callback?keep=1",
+			url.Values{"token": []string{"t"}},
+			"/oidc/callback?keep=1&token=t",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := redirectWithQuery(tc.raw, tc.query)
+			if got != tc.want {
+				t.Errorf("redirectWithQuery(%q, %v) = %q, want %q", tc.raw, tc.query, got, tc.want)
 			}
 		})
 	}

@@ -1,0 +1,22 @@
+{
+  "id": "01J0000000000000000000MSG3",
+  "parentID": "01J0000000000000000000CH01",
+  "authorID": "01J0000000000000000000US01",
+  "body": "plain text",
+  "createdAt": "2026-05-01T12:00:00Z",
+  "rendered": {
+    "type": "root",
+    "children": [
+      {
+        "type": "element",
+        "tagName": "p",
+        "children": [
+          {
+            "type": "text",
+            "value": "plain text"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -986,12 +986,16 @@ func TestChannelHandler_ListPinned_OK(t *testing.T) {
 	env.memberships.memberships["ch-lp#u-lp"] = &model.ChannelMembership{
 		ChannelID: "ch-lp", UserID: "u-lp", Role: model.ChannelRoleMember,
 	}
+	now := time.Now()
 	env.messages.messages["ch-lp#m1"] = &model.Message{
 		ID: "m1", ParentID: "ch-lp", AuthorID: "u-lp", Body: "p1", Pinned: true,
 	}
 	env.messages.messages["ch-lp#m2"] = &model.Message{
 		ID: "m2", ParentID: "ch-lp", AuthorID: "u-lp", Body: "u",
 	}
+	// Mirror the production write: SetPinned populates the PIN# index.
+	// ListPinned reads exclusively from there.
+	_ = env.parentIndex.SetPinIndex(context.Background(), "ch-lp", "m1", "u-lp", now)
 	user := &model.User{ID: "u-lp", Email: "lp@x.com", SystemRole: model.SystemRoleMember}
 	token := makeTokenForUser(env.jwtMgr, user)
 	handler := middleware.Auth(env.jwtMgr)(http.HandlerFunc(env.handler.ListPinned))
@@ -1244,6 +1248,19 @@ func (s *dataThreadFollowStore) SetThreadFollow(_ context.Context, follow *model
 	return nil
 }
 
+func (s *dataThreadFollowStore) SetThreadFollowMany(ctx context.Context, follows []*model.ThreadFollow) error {
+	for _, f := range follows {
+		if err := s.SetThreadFollow(ctx, f); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *dataThreadFollowStore) SetMany(ctx context.Context, follows []*model.ThreadFollow) error {
+	return s.SetThreadFollowMany(ctx, follows)
+}
+
 func (s *dataThreadFollowStore) GetThreadFollow(_ context.Context, userID, parentID, threadRootID string) (*model.ThreadFollow, error) {
 	f, ok := s.rows[dataThreadFollowKey(userID, parentID, threadRootID)]
 	if !ok {
@@ -1435,6 +1452,23 @@ func TestThreadFollowStoreAdapter_Delegates(t *testing.T) {
 	}
 	if len(threadRows) != 1 {
 		t.Fatalf("ListThreadFollows len = %d, want 1", len(threadRows))
+	}
+
+	// SetThreadFollowMany delegates to the backing's SetMany — the
+	// rows must show up on the next ListThreadFollows.
+	batch := []*model.ThreadFollow{
+		{UserID: "u-batch-a", ParentID: "ch-1", ParentType: service.ParentChannel, ThreadRootID: "root-1", Following: true, UpdatedAt: time.Now()},
+		{UserID: "u-batch-b", ParentID: "ch-1", ParentType: service.ParentChannel, ThreadRootID: "root-1", Following: true, UpdatedAt: time.Now()},
+	}
+	if err := adapter.SetThreadFollowMany(ctx, batch); err != nil {
+		t.Fatalf("SetThreadFollowMany: %v", err)
+	}
+	rows, err := adapter.ListThreadFollows(ctx, "ch-1", "root-1")
+	if err != nil {
+		t.Fatalf("ListThreadFollows after batch: %v", err)
+	}
+	if len(rows) != 3 {
+		t.Errorf("after batch: got %d rows, want 3 (1 original + 2 batched)", len(rows))
 	}
 }
 
@@ -1908,5 +1942,111 @@ func TestUserHandler_SetUserStatus_NonGuest(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want %d (body: %s)", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+}
+
+// dataParentIndexStore is an in-memory ParentIndexStoreImpl-compatible
+// fake. It satisfies the small subset of methods ParentIndexAdapter
+// reaches for, exercising the adapter's translation between
+// store.PinIndexRow / FileIndexRow and service.PinIndexEntry /
+// FileIndexEntry without spinning up DynamoDB.
+type dataParentIndexStore struct {
+	pins  map[string]map[string]*store.PinIndexRow
+	files map[string]map[string]*store.FileIndexRow
+}
+
+func newDataParentIndexStore() *dataParentIndexStore {
+	return &dataParentIndexStore{
+		pins:  make(map[string]map[string]*store.PinIndexRow),
+		files: make(map[string]map[string]*store.FileIndexRow),
+	}
+}
+
+func (d *dataParentIndexStore) SetPinIndex(_ context.Context, parentID, msgID, pinnedBy string, pinnedAt time.Time) error {
+	if d.pins[parentID] == nil {
+		d.pins[parentID] = make(map[string]*store.PinIndexRow)
+	}
+	d.pins[parentID][msgID] = &store.PinIndexRow{ParentID: parentID, MessageID: msgID, PinnedBy: pinnedBy, PinnedAt: pinnedAt}
+	return nil
+}
+func (d *dataParentIndexStore) DeletePinIndex(_ context.Context, parentID, msgID string) error {
+	if d.pins[parentID] != nil {
+		delete(d.pins[parentID], msgID)
+	}
+	return nil
+}
+func (d *dataParentIndexStore) ListPinIndex(_ context.Context, parentID string) ([]*store.PinIndexRow, error) {
+	rows := d.pins[parentID]
+	out := make([]*store.PinIndexRow, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, r)
+	}
+	return out, nil
+}
+func (d *dataParentIndexStore) SetFileIndex(_ context.Context, parentID, attachmentID, msgID, authorID string, createdAt time.Time) error {
+	if d.files[parentID] == nil {
+		d.files[parentID] = make(map[string]*store.FileIndexRow)
+	}
+	d.files[parentID][attachmentID] = &store.FileIndexRow{
+		ParentID: parentID, AttachmentID: attachmentID, MessageID: msgID, AuthorID: authorID, CreatedAt: createdAt,
+	}
+	return nil
+}
+func (d *dataParentIndexStore) DeleteFileIndex(_ context.Context, parentID, attachmentID string) error {
+	if d.files[parentID] != nil {
+		delete(d.files[parentID], attachmentID)
+	}
+	return nil
+}
+func (d *dataParentIndexStore) ListFileIndex(_ context.Context, parentID string) ([]*store.FileIndexRow, error) {
+	rows := d.files[parentID]
+	out := make([]*store.FileIndexRow, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, r)
+	}
+	return out, nil
+}
+
+func TestParentIndexAdapter_Delegates(t *testing.T) {
+	if NewParentIndexAdapter(nil) == nil {
+		t.Fatal("NewParentIndexAdapter returned nil constructor")
+	}
+	backing := newDataParentIndexStore()
+	// Re-package as the unexported pointer the real adapter wraps. The
+	// adapter only reaches for the typed methods on store.ParentIndexStoreImpl,
+	adapter := newParentIndexAdapterFromBacking(backing)
+
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	if err := adapter.SetPinIndex(ctx, "ch-A", "m-1", "u-bob", now); err != nil {
+		t.Fatalf("SetPinIndex: %v", err)
+	}
+	if err := adapter.SetFileIndex(ctx, "ch-A", "att-1", "m-1", "u-bob", now); err != nil {
+		t.Fatalf("SetFileIndex: %v", err)
+	}
+	pins, err := adapter.ListPinIndex(ctx, "ch-A")
+	if err != nil {
+		t.Fatalf("ListPinIndex: %v", err)
+	}
+	if len(pins) != 1 || pins[0].MessageID != "m-1" {
+		t.Errorf("ListPinIndex = %+v", pins)
+	}
+	files, err := adapter.ListFileIndex(ctx, "ch-A")
+	if err != nil {
+		t.Fatalf("ListFileIndex: %v", err)
+	}
+	if len(files) != 1 || files[0].AttachmentID != "att-1" {
+		t.Errorf("ListFileIndex = %+v", files)
+	}
+	if err := adapter.DeletePinIndex(ctx, "ch-A", "m-1"); err != nil {
+		t.Fatalf("DeletePinIndex: %v", err)
+	}
+	if err := adapter.DeleteFileIndex(ctx, "ch-A", "att-1"); err != nil {
+		t.Fatalf("DeleteFileIndex: %v", err)
+	}
+	pins, _ = adapter.ListPinIndex(ctx, "ch-A")
+	files, _ = adapter.ListFileIndex(ctx, "ch-A")
+	if len(pins) != 0 || len(files) != 0 {
+		t.Errorf("after deletes, expected empty; pins=%v files=%v", pins, files)
 	}
 }

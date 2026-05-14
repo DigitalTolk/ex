@@ -24,6 +24,11 @@ func setupMessageService() (*MessageService, *mockMessageStore, *mockMembershipS
 	publisher := newMockPublisher()
 	broker := newMockBroker()
 	svc := NewMessageService(messages, memberships, conversations, publisher, broker)
+	// Production main always wires a parent index; tests do the same
+	// so ListPinned / ListFiles take the real (indexed) code path.
+	// Tests that need to seed or inspect the index call
+	// svc.SetParentIndex(...) again with their own instance.
+	svc.SetParentIndex(newMockParentIndex())
 	return svc, messages, memberships, conversations, publisher
 }
 
@@ -1095,27 +1100,9 @@ func TestMessageService_SetThreadFollow_AccessAndMissingRootErrors(t *testing.T)
 	}
 }
 
-func TestMessageService_ListPinned(t *testing.T) {
-	svc, messages, memberships, _, _ := setupMessageService()
-	ctx := context.Background()
-	memberships.memberships["ch1#u-1"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u-1", Role: model.ChannelRoleMember}
-	messages.messages["ch1#m-1"] = &model.Message{ID: "m-1", ParentID: "ch1", AuthorID: "u-1", Pinned: true}
-	messages.messages["ch1#m-2"] = &model.Message{ID: "m-2", ParentID: "ch1", AuthorID: "u-1", Pinned: false}
-	messages.messages["ch1#m-3"] = &model.Message{ID: "m-3", ParentID: "ch1", AuthorID: "u-1", Pinned: true}
-
-	pinned, err := svc.ListPinned(ctx, "u-1", "ch1", ParentChannel)
-	if err != nil {
-		t.Fatalf("ListPinned: %v", err)
-	}
-	if len(pinned) != 2 {
-		t.Fatalf("expected 2 pinned, got %d", len(pinned))
-	}
-	for _, m := range pinned {
-		if !m.Pinned {
-			t.Errorf("ListPinned returned non-pinned message %s", m.ID)
-		}
-	}
-}
+// The general happy path is covered by TestMessageService_ListPinned_UsesIndex;
+// dropped the scan-and-filter-on-Pinned-flag variant when the legacy
+// no-index code path was removed (production always wires the index).
 
 func TestMessageService_ListPinned_NotMemberRejected(t *testing.T) {
 	svc, messages, _, _, _ := setupMessageService()
@@ -1127,64 +1114,15 @@ func TestMessageService_ListPinned_NotMemberRejected(t *testing.T) {
 	}
 }
 
-func TestMessageService_ListFiles(t *testing.T) {
-	svc, messages, memberships, _, _ := setupMessageService()
-	ctx := context.Background()
-	memberships.memberships["ch1#u-1"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u-1", Role: model.ChannelRoleMember}
-	now := time.Now()
-	messages.messages["ch1#m-1"] = &model.Message{ID: "m-1", ParentID: "ch1", AuthorID: "u-1", AttachmentIDs: []string{"a-1", "a-2"}, CreatedAt: now.Add(-2 * time.Hour)}
-	messages.messages["ch1#m-2"] = &model.Message{ID: "m-2", ParentID: "ch1", AuthorID: "u-2", CreatedAt: now.Add(-1 * time.Hour)} // no attachments
-	messages.messages["ch1#m-3"] = &model.Message{ID: "m-3", ParentID: "ch1", AuthorID: "u-3", AttachmentIDs: []string{"a-3"}, CreatedAt: now}
-
-	files, err := svc.ListFiles(ctx, "u-1", "ch1", ParentChannel)
-	if err != nil {
-		t.Fatalf("ListFiles: %v", err)
-	}
-	if len(files) != 3 {
-		t.Fatalf("expected 3 file entries, got %d", len(files))
-	}
-	if files[0].AttachmentID != "a-3" {
-		t.Errorf("expected newest first; got %q", files[0].AttachmentID)
-	}
-	// Two attachments from m-1 should both be present.
-	got := map[string]bool{}
-	for _, f := range files {
-		got[f.AttachmentID] = true
-	}
-	if !got["a-1"] || !got["a-2"] || !got["a-3"] {
-		t.Errorf("missing entries; got %+v", got)
-	}
-}
+// The general happy path is covered by TestMessageService_ListFiles_UsesIndex;
+// attachment dedup happens at the FILE# index write side
+// (SetFileIndex upserts per (parentID, attachmentID) — the latest
+// sharer wins by row identity, not by scan-time filtering).
 
 func TestMessageService_ListFiles_NotMemberRejected(t *testing.T) {
 	svc, _, _, _, _ := setupMessageService()
 	if _, err := svc.ListFiles(context.Background(), "stranger", "ch1", ParentChannel); err == nil {
 		t.Fatal("expected ListFiles to reject non-members")
-	}
-}
-
-func TestMessageService_ListFiles_DedupesByAttachmentID(t *testing.T) {
-	svc, messages, memberships, _, _ := setupMessageService()
-	memberships.memberships["ch1#u-1"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u-1", Role: model.ChannelRoleMember}
-	now := time.Now()
-	// Same physical attachment shared in three messages — only the
-	// newest one should appear in the file browser.
-	messages.messages["ch1#m-1"] = &model.Message{ID: "m-1", ParentID: "ch1", AuthorID: "u-1", AttachmentIDs: []string{"a-1"}, CreatedAt: now.Add(-3 * time.Hour)}
-	messages.messages["ch1#m-2"] = &model.Message{ID: "m-2", ParentID: "ch1", AuthorID: "u-2", AttachmentIDs: []string{"a-1"}, CreatedAt: now.Add(-1 * time.Hour)}
-	messages.messages["ch1#m-3"] = &model.Message{ID: "m-3", ParentID: "ch1", AuthorID: "u-3", AttachmentIDs: []string{"a-1"}, CreatedAt: now.Add(-2 * time.Hour)}
-
-	files, err := svc.ListFiles(context.Background(), "u-1", "ch1", ParentChannel)
-	if err != nil {
-		t.Fatalf("ListFiles: %v", err)
-	}
-	if len(files) != 1 {
-		t.Fatalf("expected 1 deduped file, got %d", len(files))
-	}
-	if files[0].MessageID != "m-2" {
-		t.Errorf("expected newest message m-2, got %q", files[0].MessageID)
-	}
-	if files[0].AuthorID != "u-2" {
-		t.Errorf("expected newest author u-2, got %q", files[0].AuthorID)
 	}
 }
 
@@ -1792,4 +1730,383 @@ func TestMessageService_ToggleReaction_MessageNotFound(t *testing.T) {
 	if _, err := svc.ToggleReaction(ctx, "user-1", "ch1", ParentChannel, "missing", "👍"); err == nil {
 		t.Fatal("expected error for missing message")
 	}
+}
+
+// A reply that mentions multiple eligible members must drive the
+// auto-follow path through SetThreadFollowMany once, not a per-user
+// SetThreadFollow loop. Regression for the N round-trips bug on the
+// message-send hot path.
+func TestMessageService_Send_ThreadReplyBatchesMentionFollows(t *testing.T) {
+	svc, messages, memberships, _, _ := setupMessageService()
+	follows := newMockThreadFollowStore()
+	svc.SetThreadFollowStore(follows)
+	ctx := context.Background()
+
+	memberships.memberships["ch1#u-author"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u-author", Role: model.ChannelRoleMember}
+	for _, id := range []string{"u-bob", "u-cara", "u-dave"} {
+		memberships.memberships["ch1#"+id] = &model.ChannelMembership{ChannelID: "ch1", UserID: id, Role: model.ChannelRoleMember}
+	}
+	messages.messages["ch1#m-root"] = &model.Message{ID: "m-root", ParentID: "ch1", AuthorID: "u-other", Body: "root"}
+
+	body := "ping @[u-bob|Bob] @[u-cara|Cara] @[u-dave|Dave]"
+	if _, err := svc.Send(ctx, "u-author", "ch1", ParentChannel, body, "m-root"); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+
+	if follows.setManyCalls != 1 {
+		t.Fatalf("SetThreadFollowMany called %d times, want exactly 1", follows.setManyCalls)
+	}
+	if follows.setManyMaxBatch != 3 {
+		t.Errorf("max batch size = %d, want 3 (one per mentioned member)", follows.setManyMaxBatch)
+	}
+	if follows.setCalls != 0 {
+		t.Errorf("per-user SetThreadFollow called %d times; the batch path should be exclusive on the auto-follow flow", follows.setCalls)
+	}
+	for _, id := range []string{"u-bob", "u-cara", "u-dave"} {
+		got, err := follows.GetThreadFollow(ctx, id, "ch1", "m-root")
+		if err != nil || !got.Following {
+			t.Errorf("%s should be following thread, got %+v err=%v", id, got, err)
+		}
+	}
+}
+
+// Duplicate mentions of the same user (e.g. @bob @bob) must not
+// produce duplicate batch entries — that would inflate write cost
+// and could resurrect a stale UpdatedAt for a user who already
+// unfollowed.
+func TestMessageService_Send_ThreadReplyDeduplicatesRepeatedMentions(t *testing.T) {
+	svc, messages, memberships, _, _ := setupMessageService()
+	follows := newMockThreadFollowStore()
+	svc.SetThreadFollowStore(follows)
+	ctx := context.Background()
+
+	memberships.memberships["ch1#u-author"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u-author", Role: model.ChannelRoleMember}
+	memberships.memberships["ch1#u-bob"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u-bob", Role: model.ChannelRoleMember}
+	messages.messages["ch1#m-root"] = &model.Message{ID: "m-root", ParentID: "ch1", AuthorID: "u-other", Body: "root"}
+
+	body := "@[u-bob|Bob] hey @[u-bob|Bob] still there?"
+	if _, err := svc.Send(ctx, "u-author", "ch1", ParentChannel, body, "m-root"); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+
+	if follows.setManyMaxBatch != 1 {
+		t.Errorf("expected dedup to a single batch entry, got %d", follows.setManyMaxBatch)
+	}
+}
+
+// ListPinned via the index must return ONLY pinned messages — and
+// must do so without the legacy 1000-message scan (the index store
+// is the single source of truth in this test, no message-list scan
+// would ever surface the pinned IDs).
+func TestMessageService_ListPinned_UsesIndex(t *testing.T) {
+	svc, messages, memberships, _, _ := setupMessageService()
+	idx := newMockParentIndex()
+	svc.SetParentIndex(idx)
+	ctx := context.Background()
+
+	memberships.memberships["ch-pin#u-bob"] = &model.ChannelMembership{ChannelID: "ch-pin", UserID: "u-bob", Role: model.ChannelRoleMember}
+	messages.messages["ch-pin#m-1"] = &model.Message{ID: "m-1", ParentID: "ch-pin", AuthorID: "u-bob", Body: "first", Pinned: true}
+	messages.messages["ch-pin#m-2"] = &model.Message{ID: "m-2", ParentID: "ch-pin", AuthorID: "u-bob", Body: "noisy"}
+	messages.messages["ch-pin#m-3"] = &model.Message{ID: "m-3", ParentID: "ch-pin", AuthorID: "u-bob", Body: "third", Pinned: true}
+	// Index says only m-1 and m-3 are pinned.
+	now := time.Now()
+	_ = idx.SetPinIndex(ctx, "ch-pin", "m-1", "u-bob", now)
+	_ = idx.SetPinIndex(ctx, "ch-pin", "m-3", "u-bob", now)
+
+	got, err := svc.ListPinned(ctx, "u-bob", "ch-pin", ParentChannel)
+	if err != nil {
+		t.Fatalf("ListPinned: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("got %d messages, want 2", len(got))
+	}
+	seen := map[string]bool{}
+	for _, m := range got {
+		seen[m.ID] = true
+	}
+	if !seen["m-1"] || !seen["m-3"] {
+		t.Errorf("expected m-1 and m-3 to be returned, got %v", seen)
+	}
+}
+
+// SetPinned must mirror state into the index (pin → row created,
+// unpin → row deleted) so subsequent ListPinned returns the right
+// set without a scan fallback.
+func TestMessageService_SetPinned_MaintainsIndex(t *testing.T) {
+	svc, messages, memberships, _, _ := setupMessageService()
+	idx := newMockParentIndex()
+	svc.SetParentIndex(idx)
+	ctx := context.Background()
+
+	memberships.memberships["ch-x#u-alice"] = &model.ChannelMembership{ChannelID: "ch-x", UserID: "u-alice", Role: model.ChannelRoleMember}
+	messages.messages["ch-x#m-x"] = &model.Message{ID: "m-x", ParentID: "ch-x", AuthorID: "u-alice", Body: "hello"}
+
+	if _, err := svc.SetPinned(ctx, "u-alice", "ch-x", ParentChannel, "m-x", true); err != nil {
+		t.Fatalf("Pin: %v", err)
+	}
+	rows, _ := idx.ListPinIndex(ctx, "ch-x")
+	if len(rows) != 1 || rows[0].MessageID != "m-x" {
+		t.Errorf("after pin: expected one index row for m-x, got %+v", rows)
+	}
+
+	if _, err := svc.SetPinned(ctx, "u-alice", "ch-x", ParentChannel, "m-x", false); err != nil {
+		t.Fatalf("Unpin: %v", err)
+	}
+	rows, _ = idx.ListPinIndex(ctx, "ch-x")
+	if len(rows) != 0 {
+		t.Errorf("after unpin: expected empty index, got %+v", rows)
+	}
+}
+
+// Send with attachments must populate the FILE# index — so ListFiles
+// returns the attachment without a message-list scan.
+func TestMessageService_Send_PopulatesFileIndex(t *testing.T) {
+	svc, _, memberships, _, _ := setupMessageService()
+	idx := newMockParentIndex()
+	svc.SetParentIndex(idx)
+	ctx := context.Background()
+	memberships.memberships["ch-files#u-alice"] = &model.ChannelMembership{ChannelID: "ch-files", UserID: "u-alice", Role: model.ChannelRoleMember}
+
+	msg, err := svc.Send(ctx, "u-alice", "ch-files", ParentChannel, "see attached", "", "att-A", "att-B")
+	if err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	rows, _ := idx.ListFileIndex(ctx, "ch-files")
+	if len(rows) != 2 {
+		t.Fatalf("expected 2 file index rows, got %d", len(rows))
+	}
+	seen := map[string]string{}
+	for _, r := range rows {
+		seen[r.AttachmentID] = r.MessageID
+	}
+	if seen["att-A"] != msg.ID || seen["att-B"] != msg.ID {
+		t.Errorf("file index didn't capture both attachments: %v", seen)
+	}
+}
+
+// ListFiles via the index returns rows in reverse-chronological
+// order (newest share first) without scanning messages.
+func TestMessageService_ListFiles_UsesIndex(t *testing.T) {
+	svc, _, memberships, _, _ := setupMessageService()
+	idx := newMockParentIndex()
+	svc.SetParentIndex(idx)
+	ctx := context.Background()
+	memberships.memberships["ch-files-list#u-bob"] = &model.ChannelMembership{ChannelID: "ch-files-list", UserID: "u-bob", Role: model.ChannelRoleMember}
+
+	older := time.Now().Add(-1 * time.Hour)
+	newer := time.Now()
+	_ = idx.SetFileIndex(ctx, "ch-files-list", "att-old", "m-old", "u-bob", older)
+	_ = idx.SetFileIndex(ctx, "ch-files-list", "att-new", "m-new", "u-bob", newer)
+
+	files, err := svc.ListFiles(ctx, "u-bob", "ch-files-list", ParentChannel)
+	if err != nil {
+		t.Fatalf("ListFiles: %v", err)
+	}
+	if len(files) != 2 {
+		t.Fatalf("got %d files, want 2", len(files))
+	}
+	if files[0].AttachmentID != "att-new" {
+		t.Errorf("expected newest first, got %q", files[0].AttachmentID)
+	}
+}
+
+// Deleting a message that owned a FILE# row must clear the row so
+// ListFiles doesn't surface a tombstone reference. If a different
+// message has since claimed the row (re-share), that row must
+// survive — the test sets that up explicitly.
+func TestMessageService_Delete_CleansUpIndexRows(t *testing.T) {
+	svc, messages, memberships, _, _ := setupMessageService()
+	idx := newMockParentIndex()
+	svc.SetParentIndex(idx)
+	ctx := context.Background()
+
+	memberships.memberships["ch-del#u-alice"] = &model.ChannelMembership{ChannelID: "ch-del", UserID: "u-alice", Role: model.ChannelRoleMember}
+	messages.messages["ch-del#m-pinned"] = &model.Message{ID: "m-pinned", ParentID: "ch-del", AuthorID: "u-alice", Body: "x", Pinned: true, AttachmentIDs: []string{"att-only"}}
+	messages.messages["ch-del#m-shared-old"] = &model.Message{ID: "m-shared-old", ParentID: "ch-del", AuthorID: "u-alice", Body: "y", AttachmentIDs: []string{"att-resshared"}}
+	now := time.Now()
+	_ = idx.SetPinIndex(ctx, "ch-del", "m-pinned", "u-alice", now)
+	_ = idx.SetFileIndex(ctx, "ch-del", "att-only", "m-pinned", "u-alice", now)
+	// "att-resshared" is currently owned by a NEWER message in the
+	// index — deleting m-shared-old must not touch this row.
+	_ = idx.SetFileIndex(ctx, "ch-del", "att-resshared", "m-newer", "u-alice", now.Add(time.Hour))
+
+	if err := svc.Delete(ctx, "u-alice", "ch-del", ParentChannel, "m-pinned"); err != nil {
+		t.Fatalf("Delete pinned: %v", err)
+	}
+	if rows, _ := idx.ListPinIndex(ctx, "ch-del"); len(rows) != 0 {
+		t.Errorf("pin index should be empty after delete, got %+v", rows)
+	}
+	files, _ := idx.ListFileIndex(ctx, "ch-del")
+	if len(files) != 1 || files[0].AttachmentID != "att-resshared" {
+		t.Errorf("file index should retain only the still-shared file, got %+v", files)
+	}
+
+	// Now delete m-shared-old — its only attachment is owned by a
+	// newer message in the index, so the row must NOT be removed.
+	if err := svc.Delete(ctx, "u-alice", "ch-del", ParentChannel, "m-shared-old"); err != nil {
+		t.Fatalf("Delete old: %v", err)
+	}
+	files, _ = idx.ListFileIndex(ctx, "ch-del")
+	if len(files) != 1 || files[0].MessageID != "m-newer" {
+		t.Errorf("re-shared file row should survive delete of older sharer, got %+v", files)
+	}
+}
+
+// ListPinned must self-heal stale index rows: if the index references
+// a message that no longer exists, or a message whose Pinned flag was
+// flipped off out-of-band, the list should drop that row from the
+// response and best-effort delete it from the index.
+func TestMessageService_ListPinned_SelfHealsStaleIndexRows(t *testing.T) {
+	svc, messages, memberships, _, _ := setupMessageService()
+	idx := newMockParentIndex()
+	svc.SetParentIndex(idx)
+	ctx := context.Background()
+
+	memberships.memberships["ch-stale#u-bob"] = &model.ChannelMembership{ChannelID: "ch-stale", UserID: "u-bob", Role: model.ChannelRoleMember}
+	messages.messages["ch-stale#m-real"] = &model.Message{ID: "m-real", ParentID: "ch-stale", AuthorID: "u-bob", Body: "alive", Pinned: true}
+	// A live row.
+	now := time.Now()
+	_ = idx.SetPinIndex(ctx, "ch-stale", "m-real", "u-bob", now)
+	// A row pointing at a missing message — simulates a deletion-cleanup race.
+	_ = idx.SetPinIndex(ctx, "ch-stale", "m-missing", "u-bob", now)
+	// A row whose underlying message is no longer flagged Pinned.
+	messages.messages["ch-stale#m-unpinned"] = &model.Message{ID: "m-unpinned", ParentID: "ch-stale", AuthorID: "u-bob", Body: "x", Pinned: false}
+	_ = idx.SetPinIndex(ctx, "ch-stale", "m-unpinned", "u-bob", now)
+
+	got, err := svc.ListPinned(ctx, "u-bob", "ch-stale", ParentChannel)
+	if err != nil {
+		t.Fatalf("ListPinned: %v", err)
+	}
+	if len(got) != 1 || got[0].ID != "m-real" {
+		t.Errorf("expected only the live pinned message, got %+v", got)
+	}
+	// Stale rows should have been cleaned up.
+	rows, _ := idx.ListPinIndex(ctx, "ch-stale")
+	if len(rows) != 1 {
+		t.Errorf("expected stale rows to be reaped, got %d", len(rows))
+	}
+}
+
+// Edit that changes the attachment list must add new FILE# rows and
+// drop rows that pointed at removed attachments — but only when the
+// row's MessageID still points at the message being edited (a more-
+// recent share of the same SHA must survive).
+func TestMessageService_Edit_MaintainsFileIndex(t *testing.T) {
+	svc, messages, memberships, _, _ := setupMessageService()
+	idx := newMockParentIndex()
+	svc.SetParentIndex(idx)
+	ctx := context.Background()
+
+	memberships.memberships["ch-edit#u-alice"] = &model.ChannelMembership{ChannelID: "ch-edit", UserID: "u-alice", Role: model.ChannelRoleMember}
+	now := time.Now()
+	original := &model.Message{ID: "m-edit", ParentID: "ch-edit", AuthorID: "u-alice", Body: "x", AttachmentIDs: []string{"att-old"}, CreatedAt: now}
+	messages.messages["ch-edit#m-edit"] = original
+	// Pre-populate the file index for the original attachment.
+	_ = idx.SetFileIndex(ctx, "ch-edit", "att-old", "m-edit", "u-alice", now)
+	// Also: a row owned by a different message must NOT be removed.
+	_ = idx.SetFileIndex(ctx, "ch-edit", "att-survives", "m-other", "u-alice", now.Add(time.Hour))
+
+	if _, err := svc.Edit(ctx, "u-alice", "ch-edit", ParentChannel, "m-edit", "x edited", []string{"att-new", "att-survives"}); err != nil {
+		t.Fatalf("Edit: %v", err)
+	}
+
+	rows, _ := idx.ListFileIndex(ctx, "ch-edit")
+	gotIDs := make(map[string]string)
+	for _, r := range rows {
+		gotIDs[r.AttachmentID] = r.MessageID
+	}
+	// att-old must be removed (the only message that pointed at it
+	// dropped the attachment).
+	if _, present := gotIDs["att-old"]; present {
+		t.Error("att-old row should have been removed after edit dropped the attachment")
+	}
+	// att-new is freshly added, owned by m-edit.
+	if gotIDs["att-new"] != "m-edit" {
+		t.Errorf("att-new should be owned by m-edit, got %v", gotIDs)
+	}
+	// att-survives is still owned by m-other (newer share). The edit
+	// must NOT clobber that row with m-edit even though m-edit also
+	// references att-survives.
+	if gotIDs["att-survives"] != "m-other" {
+		t.Errorf("att-survives must keep its newer-share owner m-other, got %v", gotIDs)
+	}
+}
+
+// Index failures must be logged but not block the operation that
+// triggered them — the message itself is the source of truth.
+// These tests cover the slog Warn fallback branches.
+func TestMessageService_IndexFailuresDoNotBlockOperations(t *testing.T) {
+	t.Run("Send tolerates file index errors", func(t *testing.T) {
+		svc, _, memberships, _, _ := setupMessageService()
+		svc.SetParentIndex(erroringParentIndex{})
+		ctx := context.Background()
+		memberships.memberships["ch-err#u-alice"] = &model.ChannelMembership{ChannelID: "ch-err", UserID: "u-alice", Role: model.ChannelRoleMember}
+
+		msg, err := svc.Send(ctx, "u-alice", "ch-err", ParentChannel, "x", "", "att-1", "att-2")
+		if err != nil {
+			t.Fatalf("Send blocked by index error: %v", err)
+		}
+		if msg == nil {
+			t.Fatal("Send returned nil message")
+		}
+	})
+
+	t.Run("SetPinned tolerates pin index errors", func(t *testing.T) {
+		svc, messages, memberships, _, _ := setupMessageService()
+		svc.SetParentIndex(erroringParentIndex{})
+		ctx := context.Background()
+		memberships.memberships["ch-err2#u-alice"] = &model.ChannelMembership{ChannelID: "ch-err2", UserID: "u-alice", Role: model.ChannelRoleMember}
+		messages.messages["ch-err2#m-1"] = &model.Message{ID: "m-1", ParentID: "ch-err2", AuthorID: "u-alice", Body: "x"}
+
+		if _, err := svc.SetPinned(ctx, "u-alice", "ch-err2", ParentChannel, "m-1", true); err != nil {
+			t.Fatalf("Pin blocked by index error: %v", err)
+		}
+		if _, err := svc.SetPinned(ctx, "u-alice", "ch-err2", ParentChannel, "m-1", false); err != nil {
+			t.Fatalf("Unpin blocked by index error: %v", err)
+		}
+	})
+
+	t.Run("Delete tolerates index errors", func(t *testing.T) {
+		svc, messages, memberships, _, _ := setupMessageService()
+		svc.SetParentIndex(erroringParentIndex{})
+		ctx := context.Background()
+		memberships.memberships["ch-err3#u-alice"] = &model.ChannelMembership{ChannelID: "ch-err3", UserID: "u-alice", Role: model.ChannelRoleMember}
+		messages.messages["ch-err3#m-1"] = &model.Message{ID: "m-1", ParentID: "ch-err3", AuthorID: "u-alice", Body: "x", Pinned: true, AttachmentIDs: []string{"att-1"}}
+
+		if err := svc.Delete(ctx, "u-alice", "ch-err3", ParentChannel, "m-1"); err != nil {
+			t.Fatalf("Delete blocked by index error: %v", err)
+		}
+	})
+
+	t.Run("Edit tolerates index errors", func(t *testing.T) {
+		svc, messages, memberships, _, _ := setupMessageService()
+		svc.SetParentIndex(erroringParentIndex{})
+		ctx := context.Background()
+		memberships.memberships["ch-err4#u-alice"] = &model.ChannelMembership{ChannelID: "ch-err4", UserID: "u-alice", Role: model.ChannelRoleMember}
+		messages.messages["ch-err4#m-1"] = &model.Message{ID: "m-1", ParentID: "ch-err4", AuthorID: "u-alice", Body: "x", AttachmentIDs: []string{"att-old"}, CreatedAt: time.Now()}
+
+		if _, err := svc.Edit(ctx, "u-alice", "ch-err4", ParentChannel, "m-1", "y", []string{"att-new"}); err != nil {
+			t.Fatalf("Edit blocked by index error: %v", err)
+		}
+	})
+
+	t.Run("ListPinned propagates list errors as caller-visible failures", func(t *testing.T) {
+		svc, _, memberships, _, _ := setupMessageService()
+		svc.SetParentIndex(erroringParentIndex{})
+		ctx := context.Background()
+		memberships.memberships["ch-list#u-alice"] = &model.ChannelMembership{ChannelID: "ch-list", UserID: "u-alice", Role: model.ChannelRoleMember}
+		if _, err := svc.ListPinned(ctx, "u-alice", "ch-list", ParentChannel); err == nil {
+			t.Error("expected ListPinned to surface index list error")
+		}
+	})
+
+	t.Run("ListFiles propagates list errors as caller-visible failures", func(t *testing.T) {
+		svc, _, memberships, _, _ := setupMessageService()
+		svc.SetParentIndex(erroringParentIndex{})
+		ctx := context.Background()
+		memberships.memberships["ch-list-f#u-alice"] = &model.ChannelMembership{ChannelID: "ch-list-f", UserID: "u-alice", Role: model.ChannelRoleMember}
+		if _, err := svc.ListFiles(ctx, "u-alice", "ch-list-f", ParentChannel); err == nil {
+			t.Error("expected ListFiles to surface index list error")
+		}
+	})
 }
