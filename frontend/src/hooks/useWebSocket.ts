@@ -9,6 +9,14 @@ type WSCallback = (data: unknown) => void;
 const reconnectDelayStepsMs = [1000, 2000, 4000, 8000, 16000, 30000];
 const reconnectAttemptsPerStep = 3;
 
+// Dedup window for replay-vs-live races. On a reconnect the server
+// replays missed events from the durable inbox; any event that also
+// arrives via the live channel during the cutover would otherwise be
+// applied twice. We keep the most recent N event IDs we've delivered
+// to a callback and skip duplicates. N=512 covers the worst-case
+// burst comfortably without unbounded memory.
+const dedupCapacity = 512;
+
 interface UseWebSocketOptions {
   onMessageNew?: WSCallback;
   onMessageEdited?: WSCallback;
@@ -37,6 +45,10 @@ interface UseWebSocketOptions {
   // With auto-refetch disabled on infinite message queries, this is
   // the hook for catching up on events missed during the disconnect.
   onReconnect?: () => void;
+  // Fires when the server reports our replay cursor is too old —
+  // every event since then has been trimmed from the inbox. Caller
+  // should do a full refetch of anything that could be stale.
+  onReplayExhausted?: () => void;
   enabled?: boolean;
 }
 
@@ -46,10 +58,31 @@ export function useWebSocket(options: UseWebSocketOptions) {
   const wsRef = useRef<WebSocket | null>(null);
   const retryCountRef = useRef(0);
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  // Cursor for replay-on-reconnect. Updated on every event that
+  // carries an `id` field — both live and replay use the same ULID,
+  // so any frame moves the cursor forward.
+  const lastEventIdRef = useRef<string>('');
+  // Bounded FIFO of recently delivered event IDs for dedup. Insertion
+  // order = arrival order; on overflow we drop the oldest. A Set is
+  // O(1) for has/add/delete which is what we need.
+  const seenIdsRef = useRef<Set<string>>(new Set());
+  const seenOrderRef = useRef<string[]>([]);
 
   useEffect(() => {
     if (!options.enabled) return;
     let disposed = false;
+
+    function markSeen(id: string): boolean {
+      if (!id) return false;
+      if (seenIdsRef.current.has(id)) return true;
+      seenIdsRef.current.add(id);
+      seenOrderRef.current.push(id);
+      if (seenOrderRef.current.length > dedupCapacity) {
+        const oldest = seenOrderRef.current.shift();
+        if (oldest) seenIdsRef.current.delete(oldest);
+      }
+      return false;
+    }
 
     async function connect(refreshBeforeConnect = false) {
       let token = getAccessToken();
@@ -60,7 +93,9 @@ export function useWebSocket(options: UseWebSocketOptions) {
       }
 
       const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const url = `${proto}//${window.location.host}/api/v1/ws?token=${encodeURIComponent(token)}`;
+      const since = lastEventIdRef.current;
+      const sinceParam = since ? `&since=${encodeURIComponent(since)}` : '';
+      const url = `${proto}//${window.location.host}/api/v1/ws?token=${encodeURIComponent(token)}${sinceParam}`;
       const ws = new WebSocket(url);
       wsRef.current = ws;
 
@@ -76,6 +111,17 @@ export function useWebSocket(options: UseWebSocketOptions) {
       ws.onmessage = (event) => {
         try {
           const msg = JSON.parse(event.data);
+          // Update cursor on every frame that carries an ID. Both
+          // live and replay use the same ULID; if a live frame
+          // arrives during replay the cursor jumps forward and a
+          // later reconnect resumes from the freshest point.
+          if (typeof msg.id === 'string' && msg.id) {
+            if (markSeen(msg.id)) {
+              // Already delivered (replay/live race) — drop.
+              return;
+            }
+            lastEventIdRef.current = msg.id;
+          }
           const payload = typeof msg.data === 'string' ? JSON.parse(msg.data) : msg.data ?? msg;
           switch (msg.type) {
             case EventType.MessageNew:
@@ -140,6 +186,18 @@ export function useWebSocket(options: UseWebSocketOptions) {
               break;
             case EventType.Ping:
               callbacksRef.current.onPing?.(payload);
+              break;
+            case EventType.ReplayExhausted:
+              // Server couldn't satisfy our cursor — the inbox has
+              // been trimmed past it. Drop the cursor so the next
+              // reconnect doesn't keep asking for a hopeless window,
+              // and let the caller refetch whatever might be stale.
+              lastEventIdRef.current = '';
+              callbacksRef.current.onReplayExhausted?.();
+              break;
+            case EventType.ReplayDone:
+              // Marker frame, no-op — the replay entries that
+              // preceded it advanced the cursor already.
               break;
             case 'typing':
               callbacksRef.current.onTyping?.(payload);

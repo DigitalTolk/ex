@@ -26,6 +26,8 @@ export const EventType = {
   ForceLogout: 'auth.force_logout',
   ServerVersion: 'server.version',
   Ping: 'ping',
+  ReplayDone: 'replay.done',
+  ReplayExhausted: 'replay.exhausted',
 } as const;
 
 export type EventTypeName = (typeof EventType)[keyof typeof EventType];

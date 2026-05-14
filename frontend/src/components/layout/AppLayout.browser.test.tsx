@@ -216,4 +216,105 @@ describe('AppLayout browser behavior', () => {
     expectPaintedAtCenter(panel!, '[aria-label="Pinned messages"]');
   });
 
+  // Coverage extension — exercises sidebar open/close + remaining swipe
+  // gate branches that the visual tests above don't reach.
+
+  it('clicking the mobile menu button opens the channels sidebar', async () => {
+    if (window.innerWidth > 767) return;
+    await render(
+      <MemoryRouter initialEntries={['/threads']}>
+        <div style={{ height: 500 }}>
+          <AppLayout>
+            <PageContainer title="Threads">
+              <div>Thread content</div>
+            </PageContainer>
+          </AppLayout>
+        </div>
+      </MemoryRouter>,
+    );
+    const menu = document.querySelector('button[aria-label="Open channels"]') as HTMLButtonElement | null;
+    expect(menu).not.toBeNull();
+    menu!.click();
+    await vi.waitFor(() => {
+      // Sidebar mock renders "Sidebar"; it becomes visible when the
+      // mobile drawer opens.
+      expect(document.body.textContent).toContain('Sidebar');
+    });
+  });
+
+  it('home route on mobile auto-opens the channels sidebar (no menu click needed)', async () => {
+    if (window.innerWidth > 767) return;
+    await render(
+      <MemoryRouter initialEntries={['/']}>
+        <div style={{ height: 500 }}>
+          <AppLayout>
+            <div>Home content</div>
+          </AppLayout>
+        </div>
+      </MemoryRouter>,
+    );
+    expect(document.body.textContent).toContain('Sidebar');
+  });
+
+  it('desktop layout always shows the sidebar regardless of mobile drawer state', async () => {
+    if (window.innerWidth <= 767) return;
+    await render(
+      <MemoryRouter initialEntries={['/threads']}>
+        <div style={{ height: 500 }}>
+          <AppLayout>
+            <PageContainer title="Threads">
+              <div>Thread content</div>
+            </PageContainer>
+          </AppLayout>
+        </div>
+      </MemoryRouter>,
+    );
+    expect(document.body.textContent).toContain('Sidebar');
+  });
+
+  it('aborts the channel-open swipe when a right-side sheet is open', async () => {
+    if (window.innerWidth > 767) return;
+    await render(
+      <MemoryRouter initialEntries={['/threads']}>
+        <div data-mobile-right-sidebar="true" style={{ position: 'fixed', inset: 0, zIndex: 50 }}>
+          Right Sheet
+        </div>
+        <div style={{ height: 500 }}>
+          <AppLayout>
+            <PageContainer title="Threads">
+              <div>Thread content</div>
+            </PageContainer>
+          </AppLayout>
+        </div>
+      </MemoryRouter>,
+    );
+    const main = document.querySelector('[data-app-main="true"]') as HTMLElement;
+    dispatchTouch(main, 'touchstart', 12, 420);
+    const move = dispatchTouch(main, 'touchmove', 100, 424);
+    // The right sheet blocks edge-from-left → no preventDefault.
+    await new Promise((r) => setTimeout(r, 20));
+    expect(move.defaultPrevented).toBe(false);
+    expect(main.dataset.channelDragging).toBe('false');
+  });
+
+  it('drag offset clears after a touchend that did not cross the open threshold', async () => {
+    if (window.innerWidth > 767) return;
+    await render(
+      <MemoryRouter initialEntries={['/threads']}>
+        <div style={{ height: 500 }}>
+          <AppLayout>
+            <PageContainer title="Threads">
+              <div>Thread content</div>
+            </PageContainer>
+          </AppLayout>
+        </div>
+      </MemoryRouter>,
+    );
+    const main = document.querySelector('[data-app-main="true"]') as HTMLElement;
+    dispatchTouch(main, 'touchstart', 12, 420);
+    dispatchTouch(main, 'touchmove', 40, 424); // 28px — below the 72px threshold
+    dispatchTouch(main, 'touchend', 40, 424);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(main.dataset.channelDragging).toBe('false');
+  });
 });
