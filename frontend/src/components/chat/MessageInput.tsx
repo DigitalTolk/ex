@@ -658,7 +658,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
             onClick={handleSend}
             disabled={!canSend}
             size="icon"
-            className="h-7 w-7 rounded-md max-md:h-9 max-md:w-9 max-md:rounded-full"
+            className="h-7 w-7 rounded-md bg-foreground text-background hover:bg-foreground/85 dark:bg-brand dark:text-brand-foreground dark:hover:bg-brand-hover max-md:h-9 max-md:w-9 max-md:rounded-full"
             aria-label="Send message"
           >
             <Send className="h-4 w-4" />
@@ -684,7 +684,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
             onClick={handleSend}
             disabled={!canSend}
             size="icon"
-            className="h-7 w-7 rounded-md max-md:h-9 max-md:w-9 max-md:rounded-full"
+            className="h-7 w-7 rounded-md bg-foreground text-background hover:bg-foreground/85 dark:bg-brand dark:text-brand-foreground dark:hover:bg-brand-hover max-md:h-9 max-md:w-9 max-md:rounded-full"
             aria-label={submitLabel ?? 'Send message'}
           >
             <Save className="h-4 w-4" />
@@ -737,8 +737,6 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
         </div>
       )}
       <div className="rounded-lg border bg-muted/40 dark:bg-input/30 focus-within:ring-1 focus-within:ring-ring max-md:overflow-hidden max-md:rounded-[1.75rem]" data-message-composer>
-        {showToolbar && !isMobile && renderToolbar('top')}
-
         {drafts.length > 0 && (
           <div className="flex flex-wrap gap-1.5 border-b p-2" aria-label="Draft attachments">
             {drafts.map((d) => (
@@ -783,7 +781,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
                 onClick={handleSend}
                 disabled={!canSend}
                 size="icon"
-                className={`h-8 w-8 rounded-md max-md:rounded-full ${compactMobileComposer ? 'max-md:h-9 max-md:w-9' : 'max-md:h-11 max-md:w-11'}`}
+                className={`h-8 w-8 rounded-md bg-foreground text-background hover:bg-foreground/85 dark:bg-brand dark:text-brand-foreground dark:hover:bg-brand-hover max-md:rounded-full ${compactMobileComposer ? 'max-md:h-9 max-md:w-9' : 'max-md:h-11 max-md:w-11'}`}
                 aria-label="Send message"
               >
                 <Send className="h-4 w-4" />
@@ -791,7 +789,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
             </div>
           )}
         </div>
-        {showToolbar && isMobile && renderToolbar('bottom')}
+        {showToolbar && renderToolbar('bottom')}
       </div>
       <input
         ref={fileInputRef}

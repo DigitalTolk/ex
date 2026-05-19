@@ -45,8 +45,13 @@ describe('SearchBar', () => {
     const input = screen.getByTestId('searchbar-input');
     const shell = input.parentElement!;
     expect(shell).toHaveClass('h-7', 'max-md:h-9');
-    expect(shell).toHaveClass('bg-sidebar-accent', 'text-foreground', 'dark:bg-white/10', 'dark:text-zinc-100');
-    expect(input).toHaveClass('text-sm', 'max-md:text-base');
+    // The shell carries the design-token border/bg pair (subtle
+    // light bg + 1px border in light, white wash + thin border in
+    // dark) and rounded-md (6px) corners per the design spec — not
+    // a pill.
+    expect(shell).toHaveClass('rounded-md', 'border', 'border-border', 'bg-background', 'text-foreground');
+    expect(shell).toHaveClass('dark:bg-white/5', 'dark:text-zinc-100');
+    expect(input).toHaveClass('text-[13px]', 'max-md:text-base');
     expect(input).toHaveClass('text-foreground', 'dark:text-zinc-100');
   });
 

@@ -20,6 +20,14 @@ vi.mock('@/components/NotificationPermissionBanner', () => ({
   NotificationPermissionBanner: () => null,
 }));
 
+vi.mock('./AppTopBar', () => ({
+  AppTopBar: () => (
+    <header data-testid="app-shell-header" data-app-chrome="true">
+      <button aria-label="Open channels">menu</button>
+    </header>
+  ),
+}));
+
 function renderLayout() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(

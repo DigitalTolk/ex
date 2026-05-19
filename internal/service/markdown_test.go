@@ -304,6 +304,20 @@ func TestMarkdownRenderer_BlankLinesProduceBlankParagraphs(t *testing.T) {
 			break
 		}
 	}
+	// The middle paragraph must carry data-blank="true" so the
+	// frontend renderer can give it an explicit min-height. Without
+	// the marker, Tailwind preflight zeroes the <p>'s margin and the
+	// visible gap the user typed in the composer disappears.
+	middle := out.Children[1]
+	if got, _ := middle.Properties["data-blank"].(string); got != "true" {
+		t.Errorf("middle paragraph should have data-blank=\"true\", got %q (props=%+v)", got, middle.Properties)
+	}
+	if got, _ := out.Children[0].Properties["data-blank"].(string); got == "true" {
+		t.Errorf("first paragraph should not carry data-blank")
+	}
+	if got, _ := out.Children[2].Properties["data-blank"].(string); got == "true" {
+		t.Errorf("third paragraph should not carry data-blank")
+	}
 }
 
 func TestMarkdownRenderer_IndentedCodeBlock(t *testing.T) {

@@ -16,6 +16,31 @@ vi.mock('./Sidebar', () => ({
   Sidebar: () => <div>Sidebar</div>,
 }));
 
+vi.mock('./AppTopBar', () => ({
+  AppTopBar: ({ onOpenChannels, channelsButtonHidden }: { onOpenChannels?: () => void; channelsButtonHidden?: boolean }) => (
+    <header
+      data-testid="app-shell-header"
+      data-app-chrome="true"
+      className="grid h-14 w-full shrink-0 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 border-b border-border bg-sidebar"
+    >
+      <button
+        type="button"
+        aria-label="Open channels"
+        aria-hidden={channelsButtonHidden}
+        tabIndex={channelsButtonHidden ? -1 : 0}
+        onClick={onOpenChannels}
+        className={channelsButtonHidden ? 'invisible' : ''}
+      >
+        menu
+      </button>
+      <div>
+        <input aria-label="Search" />
+      </div>
+      <div>account</div>
+    </header>
+  ),
+}));
+
 vi.mock('@/components/NotificationPermissionBanner', () => ({
   NotificationPermissionBanner: () => null,
 }));

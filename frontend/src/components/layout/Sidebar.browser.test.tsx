@@ -332,10 +332,11 @@ beforeEach(() => {
 });
 
 describe('Sidebar browser render — rich fixtures', () => {
-  it('shows the user, admin badge, channels, favorites, categories, conversations and drafts badge', async () => {
+  it('shows the channels, favorites, categories, conversations and drafts badge', async () => {
     const screen = await render(<Frame />);
-    await expect.element(screen.getByText('Alice Smith')).toBeVisible();
-    await expect.element(screen.getByText('Admin')).toBeVisible();
+    // The user header (display name + admin badge) was moved to the
+    // top-bar account dropdown — the sidebar now only carries the
+    // navigation rail and channel/DM lists.
     await expect.element(screen.getByText('Favorites')).toBeVisible();
     await expect.element(screen.getByText('Work')).toBeVisible();
     await expect.element(screen.getByText('Channels')).toBeVisible();
@@ -671,76 +672,9 @@ describe('Sidebar browser render — rich fixtures', () => {
     });
   });
 
-  it('toggles the User menu trigger and opens the mobile user menu on mobile', async () => {
-    if (window.innerWidth >= 768) return;
-    await render(<Frame />);
-    const trigger = document.querySelector('[aria-label="User menu"]') as HTMLElement;
-    trigger.click();
-    await vi.waitFor(() => {
-      expect(document.querySelector('[data-testid="mobile-user-menu"]')).not.toBeNull();
-    });
-    // Mobile menu shows the admin-gated Admin entry because
-    // `currentUser` defaults to adminUser.
-    expect(document.querySelector('[data-testid="mobile-user-menu-admin"]')).not.toBeNull();
-  });
-
-  it('mobile menu omits Admin for member users', async () => {
-    if (window.innerWidth >= 768) return;
-    currentUser = memberUser;
-    await render(<Frame />);
-    (document.querySelector('[aria-label="User menu"]') as HTMLElement).click();
-    await vi.waitFor(() => {
-      expect(document.querySelector('[data-testid="mobile-user-menu"]')).not.toBeNull();
-    });
-    expect(document.querySelector('[data-testid="mobile-user-menu-admin"]')).toBeNull();
-  });
-
-  it('mobile menu Sign out calls logout', async () => {
-    if (window.innerWidth >= 768) return;
-    await render(<Frame />);
-    (document.querySelector('[aria-label="User menu"]') as HTMLElement).click();
-    await vi.waitFor(() => {
-      expect(document.querySelector('[data-testid="mobile-user-menu"]')).not.toBeNull();
-    });
-    const menu = document.querySelector('[data-testid="mobile-user-menu"]') as HTMLElement;
-    const items = Array.from(menu.querySelectorAll('button')) as HTMLElement[];
-    const signOut = items.find((el) => el.textContent?.includes('Sign out'));
-    expect(signOut).toBeTruthy();
-    signOut?.click();
-    await vi.waitFor(() => {
-      expect(currentLogout).toHaveBeenCalled();
-    });
-  });
-
-  it('mobile menu About Server opens the about dialog', async () => {
-    if (window.innerWidth >= 768) return;
-    await render(<Frame />);
-    (document.querySelector('[aria-label="User menu"]') as HTMLElement).click();
-    await vi.waitFor(() => {
-      expect(document.querySelector('[data-testid="mobile-user-menu"]')).not.toBeNull();
-    });
-    const items = Array.from(
-      (document.querySelector('[data-testid="mobile-user-menu"]') as HTMLElement).querySelectorAll('button'),
-    ) as HTMLElement[];
-    const about = items.find((el) => el.textContent?.includes('About Server'));
-    about?.click();
-    await vi.waitFor(() => {
-      // The mobile-user-menu collapses once an item runs.
-      expect(document.querySelector('[data-testid="mobile-user-menu"]')).toBeNull();
-    });
-  });
-
-  it('keeps Custom emojis hidden in the mobile menu for guests', async () => {
-    if (window.innerWidth >= 768) return;
-    currentUser = guestUser;
-    await render(<Frame />);
-    (document.querySelector('[aria-label="User menu"]') as HTMLElement).click();
-    await vi.waitFor(() => {
-      expect(document.querySelector('[data-testid="mobile-user-menu"]')).not.toBeNull();
-    });
-    const menu = document.querySelector('[data-testid="mobile-user-menu"]') as HTMLElement;
-    expect(menu.textContent).not.toContain('Custom emojis');
-  });
+  // The User menu was relocated to AppTopBar's account dropdown.
+  // Its behavioural coverage now lives in AppTopBar.test.tsx; the
+  // sidebar no longer renders the user header or the mobile user menu.
 
   it('renders a private-channel icon for a private channel in the Channels section', async () => {
     await render(<Frame />);
@@ -752,12 +686,15 @@ describe('Sidebar browser render — rich fixtures', () => {
     expect(row).toBeTruthy();
   });
 
-  it('renders the drafts badge with a large numeric count when there are many drafts', async () => {
+  it('renders the drafts badge clamped to "99+" when there are many drafts', async () => {
     mockDrafts = Array.from({ length: 120 }, (_, i) => ({ parentID: `ch-${i}`, parentType: 'channel' }));
     await render(<Frame />);
     const draftsLink = document.querySelector('a[href="/drafts"]') as HTMLElement;
     expect(draftsLink).not.toBeNull();
-    expect(draftsLink.textContent).toContain('120');
+    // Counts beyond 99 collapse to "99+" so the rounded-square chip
+    // stays the same visual width.
+    expect(draftsLink.textContent).toContain('99+');
+    expect(draftsLink.textContent).not.toContain('120');
   });
 
   it('shows the unread dot/style on a channel with notifications even without an unread message', async () => {
@@ -862,8 +799,13 @@ describe('Sidebar browser render — rich fixtures', () => {
 
   it('renders Directory + Threads nav links with click handlers that call onClose', async () => {
     const onClose = vi.fn();
-    const screen = await render(<Frame onClose={onClose} />);
-    await screen.getByText('Threads').click();
+    await render(<Frame onClose={onClose} />);
+    // Click directly on the Threads nav link (href-anchored) rather
+    // than `getByText('Threads')` — the unread badge now carries an
+    // sr-only "Unread threads" label which would collide with the
+    // text-only locator under Playwright strict mode.
+    const threadsLink = document.querySelector('a[href="/threads"]') as HTMLElement;
+    threadsLink?.click();
     expect(onClose).toHaveBeenCalled();
   });
 

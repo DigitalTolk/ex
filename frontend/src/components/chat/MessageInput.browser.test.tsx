@@ -382,4 +382,51 @@ describe('MessageInput browser behavior', () => {
       expect(document.activeElement === editor || editor.contains(document.activeElement)).toBe(true);
     });
   });
+
+  // CTA tokens: light theme CTA is #231F20 (near-black), dark theme is
+  // #DE5D83 (brand pink). Lock both so a future palette tweak can't
+  // accidentally re-pink the light-mode send button.
+  it('paints the send button near-black in light mode', async () => {
+    function parseRGB(rgb: string): [number, number, number] | null {
+      const m = rgb.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
+      if (!m) return null;
+      return [Number(m[1]), Number(m[2]), Number(m[3])];
+    }
+
+    document.documentElement.classList.remove('dark');
+    const screen = await renderWithProviders(
+      <MessageInput onSend={vi.fn()} initialBody="hello there" />,
+    );
+    const send = screen.getByRole('button', { name: 'Send message' }).element() as HTMLElement;
+    const rgb = parseRGB(getComputedStyle(send).backgroundColor);
+    expect(rgb).not.toBeNull();
+    // Near-black (#231F20 → rgb(35,31,32))
+    expect(rgb![0]).toBeLessThan(60);
+    expect(rgb![1]).toBeLessThan(60);
+    expect(rgb![2]).toBeLessThan(60);
+  });
+
+  it('paints the send button brand-pink in dark mode', async () => {
+    function parseRGB(rgb: string): [number, number, number] | null {
+      const m = rgb.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
+      if (!m) return null;
+      return [Number(m[1]), Number(m[2]), Number(m[3])];
+    }
+
+    document.documentElement.classList.add('dark');
+    try {
+      const screen = await renderWithProviders(
+        <MessageInput onSend={vi.fn()} initialBody="hello there" />,
+      );
+      const send = screen.getByRole('button', { name: 'Send message' }).element() as HTMLElement;
+      const rgb = parseRGB(getComputedStyle(send).backgroundColor);
+      expect(rgb).not.toBeNull();
+      // Brand pink (#DE5D83 → rgb(222,93,131))
+      expect(rgb![0]).toBeGreaterThan(180);
+      expect(rgb![1]).toBeLessThan(140);
+      expect(rgb![2]).toBeGreaterThan(90);
+    } finally {
+      document.documentElement.classList.remove('dark');
+    }
+  });
 });

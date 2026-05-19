@@ -255,8 +255,9 @@ describe('MessageInput', () => {
     });
 
     const toolbar = screen.getByRole('toolbar', { name: 'Formatting' });
-    expect(toolbar).toHaveAttribute('data-toolbar-placement', 'top');
-    expect(toolbar.compareDocumentPosition(editor) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(toolbar).toHaveAttribute('data-toolbar-placement', 'bottom');
+    // Toolbar now sits below the editor on desktop too, matching mobile.
+    expect(editor.compareDocumentPosition(toolbar) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(within(toolbar).getByLabelText('Send message')).toBeInTheDocument();
     expect(screen.getByLabelText('Send message').closest('[role="toolbar"]')).toBe(toolbar);
     expect(screen.getAllByLabelText('Send message')).toHaveLength(1);

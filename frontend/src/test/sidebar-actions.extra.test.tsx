@@ -99,25 +99,9 @@ describe('Sidebar - extra actions', () => {
     vi.clearAllMocks();
   });
 
-  it('opens InviteDialog when admin clicks Invite people', () => {
-    renderSidebar();
-    const items = screen.getAllByTestId('dropdown-item');
-    const inviteItem = items.find((b) => b.textContent?.includes('Invite people'));
-    fireEvent.click(inviteItem!);
-
-    // Invite dialog title visible
-    expect(screen.getByText('Invite someone')).toBeInTheDocument();
-  });
-
-  it('opens EditProfileDialog when Edit profile is clicked', () => {
-    renderSidebar();
-    const items = screen.getAllByTestId('dropdown-item');
-    const editItem = items.find((b) => b.textContent?.includes('Edit profile'));
-    fireEvent.click(editItem!);
-
-    // Dialog rendered: look for an input (e.g., Display name) which only exists inside the dialog body.
-    expect(screen.getByLabelText('Display name')).toBeInTheDocument();
-  });
+  // Invite people + Edit profile moved out of the sidebar dropdown
+  // into the top-bar account menu (see components/layout/AppTopBar
+  // tests). The sidebar no longer hosts a user menu.
 
   it('opens CreateChannelDialog when Create channel button is clicked', () => {
     renderSidebar();

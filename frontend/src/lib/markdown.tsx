@@ -537,8 +537,12 @@ export function renderMarkdown(body: string, opts?: RenderOpts): ReactNode {
     // composer leaves a visible gap, not a paragraph collapse.
     // Each consecutive blank line stacks an additional gap.
     if (line.trim() === '') {
+      // `data-blank` mirrors the server-side hast renderer's marker so
+      // the `.prose-message` CSS rule in index.css can give the empty
+      // paragraph an explicit min-height; otherwise Tailwind's preflight
+      // zeroes the <p>'s margin and the gap collapses.
       blocks.push(
-        <p key={`bk-${blockKey++}`} className="leading-snug">
+        <p key={`bk-${blockKey++}`} data-blank="true" className="leading-snug">
           {' '}
         </p>,
       );

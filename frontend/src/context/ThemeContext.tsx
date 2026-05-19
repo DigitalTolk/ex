@@ -45,8 +45,19 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   return <ThemeContext.Provider value={{ theme, setTheme }}>{children}</ThemeContext.Provider>;
 }
 
+// Read-only fallback used when a consumer is rendered outside the
+// ThemeProvider (e.g. isolated browser tests that mount a single
+// component). Tracks the documentElement's `.dark` class so the UI
+// at least observes the live theme even without a provider; setTheme
+// is a no-op since there is nobody to persist into.
+const fallbackTheme: ThemeState = {
+  get theme(): Theme {
+    if (typeof document === 'undefined') return 'system';
+    return document.documentElement.classList.contains('dark') ? 'dark' : 'light';
+  },
+  setTheme: () => undefined,
+};
+
 export function useTheme() {
-  const ctx = useContext(ThemeContext);
-  if (!ctx) throw new Error('useTheme must be used within ThemeProvider');
-  return ctx;
+  return useContext(ThemeContext) ?? fallbackTheme;
 }

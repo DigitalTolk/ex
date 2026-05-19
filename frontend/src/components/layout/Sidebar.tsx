@@ -17,26 +17,15 @@ import { slugify } from '@/lib/format';
 import {
   Plus,
   ChevronDown,
-  LogOut,
   BookUser,
-  UserPlus,
-  User as UserIcon,
-  Smile,
-  Settings,
-  Info,
   MessagesSquare,
   FilePenLine,
   MoreVertical,
   Trash2,
   ArrowDownAZ,
   Clock3,
-  CalendarClock,
-  ServerCog,
 } from 'lucide-react';
-import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
-import { isAdmin, isGuest } from '@/lib/roles';
-import { getCapacitorPlugin, isNativePlatform } from '@/lib/capacitor';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -44,6 +33,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { isGuest } from '@/lib/roles';
 import { useAuth } from '@/context/AuthContext';
 import { usePresence } from '@/context/PresenceContext';
 import { useUnread } from '@/context/UnreadContext';
@@ -59,12 +49,6 @@ import type { SidebarCategory, UserChannel, UserConversation } from '@/types';
 import { ChannelRow } from './ChannelRow';
 import { ConversationRow } from './ConversationRow';
 import { CreateChannelDialog } from '@/components/channels/CreateChannelDialog';
-import { InviteDialog } from '@/components/InviteDialog';
-import { EditProfileDialog } from '@/components/EditProfileDialog';
-import { UserStatusDialog } from '@/components/UserStatusDialog';
-import { UserStatusIndicator } from '@/components/UserStatusIndicator';
-import { AboutDialog } from '@/components/AboutDialog';
-import { EmojiManagerDialog } from '@/components/EmojiManagerDialog';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 
 interface SidebarProps {
@@ -77,8 +61,6 @@ const CATEGORY_DROP_END = '__category-end__';
 const SIDEBAR_DND_DEBUG_STORAGE_KEY = 'ex.sidebarDndDebug';
 const SIDEBAR_DRAGGING_OPACITY = 0.25;
 const SIDEBAR_DROP_LINE_CLASS = 'pointer-events-none absolute left-2 right-2 top-0 z-10 h-px bg-white/85';
-const USER_MENU_ITEM_CLASS = 'max-md:h-12 max-md:px-3 max-md:text-base';
-
 type ChannelDropArea = 'lead' | 'row' | 'end';
 type ResolvedDrop =
   | { kind: 'channel'; sectionKey: string; index: number; area: ChannelDropArea }
@@ -422,7 +404,7 @@ function SidebarSectionsSkeleton() {
 }
 
 export function Sidebar({ onClose }: SidebarProps) {
-  const { user, logout } = useAuth();
+  const { user } = useAuth();
   const { unreadChannels, unreadConversations, unreadThreadNotifications, hiddenConversations, hideConversation } = useUnread();
   const { data: channels } = useUserChannels();
   const conversationsQuery = useUserConversations();
@@ -466,20 +448,6 @@ export function Sidebar({ onClose }: SidebarProps) {
   const isMobile = useIsMobile();
   const directoryActive = location.pathname === '/directory' || location.pathname.startsWith('/directory/');
   const [createChannelOpen, setCreateChannelOpen] = useState(false);
-  const [inviteOpen, setInviteOpen] = useState(false);
-  const [editProfileOpen, setEditProfileOpen] = useState(false);
-  const [statusOpen, setStatusOpen] = useState(false);
-  const [emojiManagerOpen, setEmojiManagerOpen] = useState(false);
-  const [aboutOpen, setAboutOpen] = useState(false);
-  const [userMenuOpen, setUserMenuOpen] = useState(false);
-  const [mobileUserMenuOpen, setMobileUserMenuOpen] = useState(false);
-  const [changeServerConfirmOpen, setChangeServerConfirmOpen] = useState(false);
-  const { online } = usePresence();
-  const userMenuTriggerRef = useRef<HTMLButtonElement>(null);
-  const nativePlugin = getCapacitorPlugin('ServerNavigation');
-  const serverNavigation = isNativePlatform() && nativePlugin?.resetServer
-    ? nativePlugin
-    : null;
   // null = closed; otherwise the section being deleted. Modal confirm
   // replaces window.confirm so the prompt fits the rest of the app's
   // visual language (and is mockable in tests).
@@ -499,16 +467,17 @@ export function Sidebar({ onClose }: SidebarProps) {
     },
     [conversations, hiddenConversations, userState?.hiddenConversations],
   );
-  const hasThreadUpdates = useMemo(
+  const unreadThreadCount = useMemo(
     () =>
       unreadThreadIDs(
         threads ?? [],
         userState?.threadNotifications ?? [],
         unreadThreadNotifications ?? new Set(),
         { ...(userState?.threadSeen ?? {}), ...localSeenMap },
-      ).size > 0,
+      ).size,
     [localSeenMap, threads, unreadThreadNotifications, userState?.threadNotifications, userState?.threadSeen],
   );
+  const hasThreadUpdates = unreadThreadCount > 0;
   const draftCount = drafts?.length ?? 0;
 
   const sidebarSections = useMemo(
@@ -534,56 +503,7 @@ export function Sidebar({ onClose }: SidebarProps) {
     return ids;
   }, [visibleConversations, user?.id]);
   const { map: dmUserMap } = useUsersBatch(dmOtherUserIDs);
-
-  const initials = user?.displayName
-    ?.split(' ')
-    .map((n) => n[0])
-    .join('')
-    .toUpperCase()
-    .slice(0, 2) ?? '??';
-
-  async function handleLogout() {
-    await logout();
-    navigate('/login');
-  }
-
-  function closeUserMenu() {
-    setUserMenuOpen(false);
-    setMobileUserMenuOpen(false);
-  }
-
-  function openChangeServerConfirm() {
-    closeUserMenu();
-    setChangeServerConfirmOpen(true);
-  }
-
-  function clearUserMenuFocus() {
-    userMenuTriggerRef.current?.blur();
-    if (document.activeElement instanceof HTMLElement) {
-      document.activeElement.blur();
-    }
-  }
-
-  function scheduleClearUserMenuFocus() {
-    clearUserMenuFocus();
-    queueMicrotask(clearUserMenuFocus);
-    requestAnimationFrame(() => {
-      clearUserMenuFocus();
-      requestAnimationFrame(clearUserMenuFocus);
-    });
-    window.setTimeout(clearUserMenuFocus, 50);
-  }
-
-  function setAboutOpenAndClearUserFocus(open: boolean) {
-    setAboutOpen(open);
-    scheduleClearUserMenuFocus();
-  }
-
-  function setUserMenuModalOpen(setOpen: (open: boolean) => void, open: boolean) {
-    setOpen(open);
-    if (open) closeUserMenu();
-    scheduleClearUserMenuFocus();
-  }
+  const { online } = usePresence();
 
   function setConversationSortPreference(sort: ConversationSidebarSort) {
     setConversationSort(sort);
@@ -1277,197 +1197,39 @@ export function Sidebar({ onClose }: SidebarProps) {
 
   return (
     <div className="flex h-full w-full min-w-0 flex-col text-gray-300 max-md:select-none max-md:touch-pan-y max-md:[-webkit-touch-callout:none] max-md:[-webkit-user-select:none]">
-      {/* User section */}
-      <div className="flex items-center gap-2 border-b border-white/10 p-3">
-        <DropdownMenu open={userMenuOpen} onOpenChange={setUserMenuOpen} modal={false}>
-          <DropdownMenuTrigger
-            ref={userMenuTriggerRef}
-            className="flex flex-1 items-center gap-2 rounded-md p-1 text-left hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40"
-            aria-label="User menu"
-            onClick={() => setMobileUserMenuOpen((open) => !open)}
-          >
-            <Avatar className="h-8 w-8">
-              <AvatarImage src={user?.avatarURL} alt="" />
-              <AvatarFallback className="bg-emerald-700 text-white text-xs">
-                {initials}
-              </AvatarFallback>
-            </Avatar>
-            <span className="flex-1 truncate text-sm font-semibold text-white">
-              {user?.displayName}
-            </span>
-            <UserStatusIndicator status={user?.userStatus} />
-            {isAdmin(user?.systemRole) && (
-              <Badge variant="secondary" className="ml-1 text-[10px] px-1 py-0 bg-white/20 text-white border-0">
-                Admin
-              </Badge>
-            )}
-            <ChevronDown className="h-4 w-4 text-gray-400" />
-          </DropdownMenuTrigger>
-          <DropdownMenuContent
-            align="start"
-            className="w-48 max-md:hidden"
-          >
-            <DropdownMenuItem className={USER_MENU_ITEM_CLASS} onClick={() => setUserMenuModalOpen(setEditProfileOpen, true)}>
-              <UserIcon className="mr-2 h-4 w-4" />
-              Edit profile
-            </DropdownMenuItem>
-            <DropdownMenuItem className={USER_MENU_ITEM_CLASS} onClick={() => setUserMenuModalOpen(setStatusOpen, true)}>
-              <CalendarClock className="mr-2 h-4 w-4" />
-              Set status
-            </DropdownMenuItem>
-            {isAdmin(user?.systemRole) && (
-              <DropdownMenuItem className={USER_MENU_ITEM_CLASS} onClick={() => setUserMenuModalOpen(setInviteOpen, true)}>
-                <UserPlus className="mr-2 h-4 w-4" />
-                Invite people
-              </DropdownMenuItem>
-            )}
-            {!isGuest(user?.systemRole) && (
-              <DropdownMenuItem className={USER_MENU_ITEM_CLASS} onClick={() => setUserMenuModalOpen(setEmojiManagerOpen, true)}>
-                <Smile className="mr-2 h-4 w-4" />
-                Custom emojis
-              </DropdownMenuItem>
-            )}
-            {isAdmin(user?.systemRole) && (
-              <DropdownMenuItem
-                className={USER_MENU_ITEM_CLASS}
-                onClick={() => {
-                  onClose();
-                  navigate('/admin');
-                }}
-                data-testid="user-menu-admin"
-              >
-                <Settings className="mr-2 h-4 w-4" />
-                Admin
-              </DropdownMenuItem>
-            )}
-            {serverNavigation && (
-              <DropdownMenuItem
-                className={USER_MENU_ITEM_CLASS}
-                onClick={openChangeServerConfirm}
-                data-testid="user-menu-change-server"
-              >
-                <ServerCog className="mr-2 h-4 w-4" />
-                Change server
-              </DropdownMenuItem>
-            )}
-            <DropdownMenuItem
-              className={USER_MENU_ITEM_CLASS}
-              onClick={() => {
-                setAboutOpenAndClearUserFocus(true);
-              }}
-            >
-              <Info className="mr-2 h-4 w-4" />
-              About Server
-            </DropdownMenuItem>
-            <DropdownMenuItem className={USER_MENU_ITEM_CLASS} onClick={handleLogout}>
-              <LogOut className="mr-2 h-4 w-4" />
-              Sign out
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-      </div>
-
-      {mobileUserMenuOpen && (
-        <div
-          className="border-b border-white/10 p-2 text-base text-gray-200 md:hidden"
-          data-testid="mobile-user-menu"
-          onPointerDown={(event) => event.stopPropagation()}
-        >
-          <button
-            type="button"
-            className="flex h-12 w-full items-center rounded-md px-3 text-left hover:bg-white/10"
-            onClick={() => setUserMenuModalOpen(setEditProfileOpen, true)}
-          >
-            <UserIcon className="mr-2 h-4 w-4" />
-            Edit profile
-          </button>
-          <button
-            type="button"
-            className="flex h-12 w-full items-center rounded-md px-3 text-left hover:bg-white/10"
-            onClick={() => setUserMenuModalOpen(setStatusOpen, true)}
-          >
-            <CalendarClock className="mr-2 h-4 w-4" />
-            Set status
-          </button>
-          {isAdmin(user?.systemRole) && (
-            <button
-              type="button"
-              className="flex h-12 w-full items-center rounded-md px-3 text-left hover:bg-white/10"
-              onClick={() => setUserMenuModalOpen(setInviteOpen, true)}
-            >
-              <UserPlus className="mr-2 h-4 w-4" />
-              Invite people
-            </button>
-          )}
-          {!isGuest(user?.systemRole) && (
-            <button
-              type="button"
-              className="flex h-12 w-full items-center rounded-md px-3 text-left hover:bg-white/10"
-              onClick={() => setUserMenuModalOpen(setEmojiManagerOpen, true)}
-            >
-              <Smile className="mr-2 h-4 w-4" />
-              Custom emojis
-            </button>
-          )}
-          {isAdmin(user?.systemRole) && (
-            <button
-              type="button"
-              className="flex h-12 w-full items-center rounded-md px-3 text-left hover:bg-white/10"
-              onClick={() => {
-                closeUserMenu();
-                onClose();
-                navigate('/admin');
-              }}
-              data-testid="mobile-user-menu-admin"
-            >
-              <Settings className="mr-2 h-4 w-4" />
-              Admin
-            </button>
-          )}
-          {serverNavigation && (
-            <button
-              type="button"
-              className="flex h-12 w-full items-center rounded-md px-3 text-left hover:bg-white/10"
-              onClick={openChangeServerConfirm}
-              data-testid="mobile-change-server"
-            >
-              <ServerCog className="mr-2 h-4 w-4" />
-              Change server
-            </button>
-          )}
-          <button
-            type="button"
-            className="flex h-12 w-full items-center rounded-md px-3 text-left hover:bg-white/10"
-            onClick={() => {
-              setAboutOpenAndClearUserFocus(true);
-              closeUserMenu();
-            }}
-          >
-            <Info className="mr-2 h-4 w-4" />
-            About Server
-          </button>
-          <button
-            type="button"
-            className="flex h-12 w-full items-center rounded-md px-3 text-left hover:bg-white/10"
-            onClick={() => {
-              closeUserMenu();
-              void handleLogout();
-            }}
-          >
-            <LogOut className="mr-2 h-4 w-4" />
-            Sign out
-          </button>
-        </div>
-      )}
-
       <ScrollArea
         className="min-h-0 w-full flex-1 max-md:touch-pan-y"
         scrollbarClassName="opacity-0 transition-opacity data-[scrolling]:opacity-100"
         data-testid="sidebar-scroll-area"
       >
         <div className="w-full min-w-0 space-y-px p-2">
-          {/* Directories link — same row geometry (px-2 py-1) as channel
-              rows below so the eye doesn't catch on a height bump. */}
+          {/* Threads first — matches the design ordering. Same row
+              geometry (px-2 py-1) as channel rows below so the eye
+              doesn't catch on a height bump. */}
+          <NavLink
+            to="/threads"
+            onClick={onClose}
+            className={({ isActive }) =>
+              `flex items-center gap-2 rounded-md px-2 py-1 text-sm transition-colors max-md:h-12 max-md:px-3 max-md:py-0 max-md:text-base ${
+                isActive
+                  ? 'bg-white/15 text-white font-semibold'
+                  : 'text-gray-300 hover:bg-white/10 hover:text-white'
+              }`
+            }
+          >
+            <MessagesSquare className="h-4 w-4 shrink-0" aria-hidden="true" />
+            <span className={hasThreadUpdates ? 'font-bold text-white' : ''}>Threads</span>
+            {hasThreadUpdates && (
+              <Badge
+                variant="brand"
+                className="ml-auto text-[11px]"
+                data-testid="threads-unread-badge"
+              >
+                {unreadThreadCount > 99 ? '99+' : unreadThreadCount}
+              </Badge>
+            )}
+          </NavLink>
+
           <NavLink
             to="/directory/channels"
             onClick={onClose}
@@ -1484,21 +1246,6 @@ export function Sidebar({ onClose }: SidebarProps) {
           </NavLink>
 
           <NavLink
-            to="/threads"
-            onClick={onClose}
-            className={({ isActive }) =>
-              `flex items-center gap-2 rounded-md px-2 py-1 text-sm transition-colors max-md:h-12 max-md:px-3 max-md:py-0 max-md:text-base ${
-                isActive
-                  ? 'bg-white/15 text-white font-semibold'
-                  : 'text-gray-300 hover:bg-white/10 hover:text-white'
-              }`
-            }
-          >
-            <MessagesSquare className="h-4 w-4 shrink-0" aria-hidden="true" />
-            <span className={hasThreadUpdates ? 'font-bold text-white' : ''}>Threads</span>
-          </NavLink>
-
-          <NavLink
             to="/drafts"
             onClick={onClose}
             className={({ isActive }) =>
@@ -1512,8 +1259,8 @@ export function Sidebar({ onClose }: SidebarProps) {
             <FilePenLine className="h-4 w-4 shrink-0" aria-hidden="true" />
             <span>Drafts</span>
             {draftCount > 0 && (
-              <Badge variant="secondary" className="ml-auto h-5 min-w-5 px-1.5 text-[10px]">
-                {draftCount}
+              <Badge variant="brand" className="ml-auto text-[11px]">
+                {draftCount > 99 ? '99+' : draftCount}
               </Badge>
             )}
           </NavLink>
@@ -1857,31 +1604,6 @@ export function Sidebar({ onClose }: SidebarProps) {
       <CreateChannelDialog
         open={createChannelOpen}
         onOpenChange={setCreateChannelOpen}
-      />
-      <InviteDialog open={inviteOpen} onOpenChange={(open) => setUserMenuModalOpen(setInviteOpen, open)} />
-      <EditProfileDialog open={editProfileOpen} onOpenChange={(open) => setUserMenuModalOpen(setEditProfileOpen, open)} />
-      <UserStatusDialog
-        key={`${user?.id ?? ''}:${user?.userStatus?.emoji ?? ''}:${user?.userStatus?.text ?? ''}:${user?.userStatus?.clearAt ?? ''}`}
-        open={statusOpen}
-        onOpenChange={(open) => setUserMenuModalOpen(setStatusOpen, open)}
-      />
-      <EmojiManagerDialog open={emojiManagerOpen} onOpenChange={(open) => setUserMenuModalOpen(setEmojiManagerOpen, open)} />
-      <AboutDialog
-        open={aboutOpen}
-        onOpenChange={setAboutOpenAndClearUserFocus}
-        onClosed={scheduleClearUserMenuFocus}
-      />
-      <ConfirmDialog
-        open={changeServerConfirmOpen}
-        onOpenChange={setChangeServerConfirmOpen}
-        title="Change chat server?"
-        description="This returns you to the server setup screen. You may need to sign in again for the selected server."
-        confirmLabel="Change server"
-        onConfirm={() => {
-          void serverNavigation?.resetServer?.();
-        }}
-        testIDPrefix="change-server"
-        finalFocus={userMenuTriggerRef}
       />
       <ConfirmDialog
         open={categoryToDelete !== null}

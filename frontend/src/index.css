@@ -1,3 +1,10 @@
+/* Figtree is the primary UI face; Futura is reserved for display
+ * headlines. Futura ships with macOS/iOS; the Google web-font
+ * fallback for other platforms is loaded from the stylesheet to
+ * keep the design consistent. PostCSS requires every @import to
+ * precede all other statements (incl. @custom-variant), so this
+ * stays at the very top of the file. */
+@import url("https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;600;700&display=swap");
 @import "tailwindcss";
 @import "tw-animate-css";
 
@@ -57,51 +64,79 @@
 @theme {
   --animate-accordion-down: accordion-down 0.2s ease-out;
   --animate-accordion-up: accordion-up 0.2s ease-out;
-  --color-background: oklch(1 0 0);
-  --color-foreground: oklch(0.145 0 0);
-  --color-card: oklch(1 0 0);
-  --color-card-foreground: oklch(0.145 0 0);
-  --color-popover: oklch(1 0 0);
-  --color-popover-foreground: oklch(0.145 0 0);
-  --color-primary: oklch(0.205 0 0);
-  --color-primary-foreground: oklch(0.985 0 0);
-  --color-link: oklch(0.48 0.11 245);
-  --color-secondary: oklch(0.97 0 0);
-  --color-secondary-foreground: oklch(0.205 0 0);
-  --color-muted: oklch(0.97 0 0);
-  --color-muted-foreground: oklch(0.556 0 0);
-  --color-accent: oklch(0.97 0 0);
-  --color-accent-foreground: oklch(0.205 0 0);
-  --color-destructive: oklch(0.577 0.245 27.325);
-  --color-destructive-foreground: oklch(0.577 0.245 27.325);
-  --color-border: oklch(0.922 0 0);
-  --color-input: oklch(0.922 0 0);
-  --color-ring: oklch(0.708 0 0);
-  --color-chart-1: oklch(0.646 0.222 41.116);
-  --color-chart-2: oklch(0.6 0.118 184.714);
-  --color-chart-3: oklch(0.398 0.07 227.392);
-  --color-chart-4: oklch(0.828 0.189 84.429);
-  --color-chart-5: oklch(0.769 0.188 70.08);
-  --color-sidebar: oklch(0.94 0 0);
-  --color-sidebar-foreground: oklch(0.145 0 0);
-  --color-sidebar-primary: oklch(0.205 0 0);
-  --color-sidebar-primary-foreground: oklch(0.985 0 0);
-  --color-sidebar-accent: oklch(0.9 0 0);
-  --color-sidebar-accent-foreground: oklch(0.205 0 0);
-  --color-sidebar-border: oklch(0.86 0 0);
-  --color-sidebar-ring: oklch(0.708 0 0);
-  --radius: 0.625rem;
+
+  /* Light theme — design system tokens
+   * bg/base #FFFFFF · bg/level1 (sidebar, chat hover) #F5F5F5
+   * bg/level2 (chat top bar) #FFFFFF · bg/level3 (typing field) #FBFBFB
+   * text/primary #231F20 · text/secondary #4F4C4D · text/muted #7B7979 · text/disabled #A7A5A6
+   * borders/default #BDBCBC · borders/level1 #E9E9E9
+   * CTA #231F20 · CTA hover #4F4C4D · CTA disabled #A7A5A6 · badges #DE5D83
+   */
+  --color-background: #FFFFFF;
+  --color-foreground: #231F20;
+  --color-card: #FFFFFF;
+  --color-card-foreground: #231F20;
+  --color-popover: #FFFFFF;
+  --color-popover-foreground: #231F20;
+  --color-primary: #231F20;
+  --color-primary-foreground: #FFFFFF;
+  --color-primary-hover: #4F4C4D;
+  --color-link: #2563EB;
+  --color-secondary: #F5F5F5;
+  --color-secondary-foreground: #231F20;
+  --color-muted: #F5F5F5;
+  --color-muted-foreground: #7B7979;
+  --color-accent: #F5F5F5;
+  --color-accent-foreground: #231F20;
+  --color-destructive: #DC2626;
+  --color-destructive-foreground: #FFFFFF;
+  --color-border: #E9E9E9;
+  --color-border-strong: #BDBCBC;
+  --color-input: #E9E9E9;
+  --color-ring: #BDBCBC;
+  /* Brand / highlight pink — used for unread counts, mention badges,
+   * and the dark-mode CTA send button. Stays the same in both themes
+   * so it never disappears on hover or selection. */
+  --color-brand: #DE5D83;
+  --color-brand-hover: #C94E71;
+  --color-brand-foreground: #FFFFFF;
+  --color-chart-1: #DE5D83;
+  --color-chart-2: #4F4C4D;
+  --color-chart-3: #7B7979;
+  --color-chart-4: #BDBCBC;
+  --color-chart-5: #231F20;
+  --color-sidebar: #F5F5F5;
+  --color-sidebar-foreground: #231F20;
+  --color-sidebar-primary: #231F20;
+  --color-sidebar-primary-foreground: #FFFFFF;
+  --color-sidebar-accent: #E9E9E9;
+  --color-sidebar-accent-foreground: #231F20;
+  --color-sidebar-border: #E9E9E9;
+  --color-sidebar-ring: #BDBCBC;
+  --color-chat-top: #FFFFFF;
+  --color-chat-hover: #F5F5F5;
+  --color-typing-field: #FBFBFB;
+
+  /* Radius scale — radius-* utilities expand to these values
+   * (radius-none 0, xs 2, sm 4, md 6, lg 8, 2xl 16, capsule 999). */
+  --radius: 0.5rem;
+  --radius-sm: 0.25rem;
+  --radius-md: 0.375rem;
+  --radius-lg: 0.5rem;
+  --radius-xl: 0.75rem;
+  --radius-2xl: 1rem;
+  --radius-3xl: 1.25rem;
+  --radius-4xl: 1.5rem;
   --animate-duration: 150ms;
-  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+
+  /* Type stack — Figtree is the workhorse, Futura the display face.
+   * Both fall back to the host's system UI stack so the app keeps
+   * rendering before the webfont resolves. */
+  --font-sans: "Figtree", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
     Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
   --font-heading: var(--font-sans);
-  --radius-sm: calc(var(--radius) * 0.6);
-  --radius-md: calc(var(--radius) * 0.8);
-  --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) * 1.4);
-  --radius-2xl: calc(var(--radius) * 1.8);
-  --radius-3xl: calc(var(--radius) * 2.2);
-  --radius-4xl: calc(var(--radius) * 2.6);
+  --font-display: "Futura", "Figtree", -apple-system, BlinkMacSystemFont,
+    "Segoe UI", Roboto, sans-serif;
 }
 
 @utility no-scrollbar {
@@ -185,39 +220,54 @@
 
 @layer base {
   html.dark {
-    --color-background: oklch(0.145 0 0);
-    --color-foreground: oklch(0.94 0 0);
-    --color-card: oklch(0.205 0 0);
-    --color-card-foreground: oklch(0.94 0 0);
-    --color-popover: oklch(0.205 0 0);
-    --color-popover-foreground: oklch(0.94 0 0);
-    --color-primary: oklch(0.94 0 0);
-    --color-primary-foreground: oklch(0.205 0 0);
-    --color-link: oklch(0.78 0.08 245);
-    --color-secondary: oklch(0.269 0 0);
-    --color-secondary-foreground: oklch(0.94 0 0);
-    --color-muted: oklch(0.269 0 0);
-    --color-muted-foreground: oklch(0.708 0 0);
-    --color-accent: oklch(0.269 0 0);
-    --color-accent-foreground: oklch(0.94 0 0);
-    --color-destructive: oklch(0.577 0.245 27.325);
-    --color-destructive-foreground: oklch(0.577 0.245 27.325);
-    --color-border: oklch(0.35 0 0);
-    --color-input: oklch(0.35 0 0);
-    --color-ring: oklch(0.556 0 0);
-    --color-chart-1: oklch(0.488 0.243 264.376);
-    --color-chart-2: oklch(0.696 0.17 162.48);
-    --color-chart-3: oklch(0.769 0.188 70.08);
-    --color-chart-4: oklch(0.627 0.265 303.9);
-    --color-chart-5: oklch(0.645 0.246 16.439);
-    --color-sidebar: oklch(0.17 0 0);
-    --color-sidebar-foreground: oklch(0.94 0 0);
-    --color-sidebar-primary: oklch(0.94 0 0);
-    --color-sidebar-primary-foreground: oklch(0.205 0 0);
-    --color-sidebar-accent: oklch(0.269 0 0);
-    --color-sidebar-accent-foreground: oklch(0.985 0 0);
-    --color-sidebar-border: oklch(0.35 0 0);
-    --color-sidebar-ring: oklch(0.556 0 0);
+    /* Dark theme — design system tokens
+     * bg/base #231F20 · bg/level1 (sidebar) #2C2829
+     * bg/level2 (chat top bar) #353132 · bg/level3 #3F3A3B
+     * text/primary #FFFFFF · text/secondary #D3D2D2 · text/muted #A7A5A6 · text/disabled #7B7979
+     * borders/default #A7A5A6 · borders/subtle #4A4A4A
+     * CTA #DE5D83 · CTA hover #C94E71 · CTA disabled #EB9EB5 · badges #DE5D83
+     */
+    --color-background: #231F20;
+    --color-foreground: #FFFFFF;
+    --color-card: #353132;
+    --color-card-foreground: #FFFFFF;
+    --color-popover: #353132;
+    --color-popover-foreground: #FFFFFF;
+    --color-primary: #DE5D83;
+    --color-primary-foreground: #FFFFFF;
+    --color-primary-hover: #C94E71;
+    --color-link: #93C5FD;
+    --color-secondary: #3F3A3B;
+    --color-secondary-foreground: #FFFFFF;
+    --color-muted: #3F3A3B;
+    --color-muted-foreground: #A7A5A6;
+    --color-accent: #3F3A3B;
+    --color-accent-foreground: #FFFFFF;
+    --color-destructive: #F87171;
+    --color-destructive-foreground: #FFFFFF;
+    --color-border: #4A4A4A;
+    --color-border-strong: #A7A5A6;
+    --color-input: #4A4A4A;
+    --color-ring: #A7A5A6;
+    --color-brand: #DE5D83;
+    --color-brand-hover: #C94E71;
+    --color-brand-foreground: #FFFFFF;
+    --color-chart-1: #DE5D83;
+    --color-chart-2: #A7A5A6;
+    --color-chart-3: #D3D2D2;
+    --color-chart-4: #7B7979;
+    --color-chart-5: #FFFFFF;
+    --color-sidebar: #2C2829;
+    --color-sidebar-foreground: #FFFFFF;
+    --color-sidebar-primary: #DE5D83;
+    --color-sidebar-primary-foreground: #FFFFFF;
+    --color-sidebar-accent: #3F3A3B;
+    --color-sidebar-accent-foreground: #FFFFFF;
+    --color-sidebar-border: #4A4A4A;
+    --color-sidebar-ring: #A7A5A6;
+    --color-chat-top: #353132;
+    --color-chat-hover: #353132;
+    --color-typing-field: #3F3A3B;
   }
 }
 
@@ -225,11 +275,14 @@
   html {
     font-size: 16px;
     background-color: var(--color-background);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
   }
 
   body {
     @apply bg-background text-foreground font-sans;
     font-size: 0.875rem;
+    line-height: 1.5;
     margin: 0;
   }
 
@@ -292,12 +345,12 @@
   }
 
   html:not(.dark) [data-app-chrome="true"] .text-gray-500 {
-    color: oklch(0.62 0 0);
+    color: #7B7979;
   }
 
   html:not(.dark) [data-app-chrome="true"] .bg-white\/15,
   html:not(.dark) [data-app-chrome="true"] .bg-white\/20 {
-    background-color: oklch(0.92 0 0);
+    background-color: #E9E9E9;
   }
 
   html:not(.dark) [data-app-chrome="true"] .hover\:bg-white\/10:hover,
@@ -312,11 +365,28 @@
   }
 
   html:not(.dark) [data-app-chrome="true"] .bg-white\/10 {
-    background-color: oklch(0.95 0 0);
+    background-color: #EEEEEE;
   }
 }
 
 @layer components {
+  /* Rendered chat message body. Tailwind's preflight zeroes <p>
+   * margins, so consecutive paragraphs would otherwise stick to each
+   * other with no visible separation — that swallows the gap a user
+   * sees in the composer when they press Shift+Enter twice. The
+   * sibling-margin rule restores breathing room between every pair
+   * of adjacent block children, and the `[data-blank]` paragraphs
+   * emitted by the markdown renderer get an explicit height so the
+   * visual gap matches the composer's `<p>` rhythm.
+   */
+  .prose-message > * + * {
+    margin-top: 0.25rem;
+  }
+  .prose-message p[data-blank="true"] {
+    min-height: 1.25rem;
+    margin: 0;
+  }
+
   /* Placeholder rendering. Tiptap's @tiptap/extension-placeholder marks
      the first empty paragraph with `is-editor-empty` and writes the
      supplied text to `data-placeholder`. We surface it via a ::before

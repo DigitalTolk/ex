@@ -536,6 +536,59 @@ describe('WysiwygEditor', () => {
     expect(ref.current!.getMarkdown()).toBe('1. one\n2. two\nthree');
   });
 
+  // Regression: two Enters between text segments must survive the
+  // Lexical round-trip so the rendered message keeps a visible blank
+  // line. A single `\n` would join the two segments into one
+  // paragraph; two `\n`s render as paragraph-blank-paragraph in the
+  // message list.
+  it('round-trips a blank line between two text paragraphs', async () => {
+    const ref = createRef<WysiwygEditorHandle>();
+    renderEditor({ ref, initialBody: 'first\n\nsecond' });
+    await waitFor(() => expect(ref.current).not.toBeNull());
+    expect(ref.current!.getMarkdown()).toBe('first\n\nsecond');
+  });
+
+  // Hammering Enter several times must still leave the rendered output
+  // with at least one visible blank line — the export may collapse
+  // multiple empty paragraphs but it must never lose the gap entirely.
+  it('preserves at least one blank line when several empty paragraphs sit between text', async () => {
+    const ref = createRef<WysiwygEditorHandle>();
+    renderEditor({ ref, initialBody: 'first\n\n\n\nsecond' });
+    await waitFor(() => expect(ref.current).not.toBeNull());
+    const md = ref.current!.getMarkdown();
+    expect(md).toMatch(/^first\n\n+second$/);
+    // Two or more newlines = one or more blank lines.
+    const newlinesBetween = md.length - 'firstsecond'.length;
+    expect(newlinesBetween).toBeGreaterThanOrEqual(2);
+  });
+
+  // Live simulation of two Shift+Enter presses inside the editor —
+  // mirrors what a desktop user does to insert a visible blank line.
+  // The exported markdown must preserve both newlines so the rendered
+  // message keeps the gap.
+  it('preserves two consecutive Shift+Enter line breaks in live editor input', async () => {
+    const ref = createRef<WysiwygEditorHandle>();
+    renderEditor({ ref, initialBody: '', submitOnEnter: false });
+    await waitFor(() => expect(ref.current).not.toBeNull());
+    act(() => {
+      ref.current!.focusEnd();
+      ref.current!.insertText('first');
+    });
+    const editor = getEditor();
+    // Shift+Enter inserts a soft LineBreak inline rather than splitting
+    // the paragraph. Two presses in a row are the canonical recipe for
+    // a visible blank line.
+    fireEvent.keyDown(editor, { key: 'Enter', shiftKey: true });
+    fireEvent.keyDown(editor, { key: 'Enter', shiftKey: true });
+    act(() => {
+      ref.current!.insertText('second');
+    });
+    await waitFor(() => {
+      const md = ref.current!.getMarkdown();
+      expect(md).toMatch(/^first\n\n+second/);
+    });
+  });
+
   it('preserves "# Heading" as literal markdown text without rendering an <h1>', async () => {
     // Headings are deliberately not rendered in the composer (UX feedback:
     // mid-thought heading typography felt buggy). The wire format must

@@ -2,10 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, 
 import { useLocation } from 'react-router-dom';
 import { useSwipeable } from 'react-swipeable';
 import { Sidebar } from './Sidebar';
-import { SearchBar } from '@/components/SearchBar';
+import { AppTopBar } from './AppTopBar';
 import { TagSearchProvider } from '@/context/TagSearchContext';
-import { Button } from '@/components/ui/button';
-import { Menu } from 'lucide-react';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { UpdateBanner } from '@/components/UpdateBanner';
 import { NotificationPermissionBanner } from '@/components/NotificationPermissionBanner';
@@ -14,9 +12,22 @@ interface AppLayoutProps {
   children: ReactNode;
 }
 
-const CHANNEL_OPEN_MIN_SWIPE = 72;
-const CHANNEL_OPEN_MAX_CROSS_AXIS = 48;
-const CHANNEL_OPEN_EDGE_PX = 32;
+// Commit thresholds — pixels OR velocity. A slow deliberate drag
+// past CHANNEL_OPEN_PX_THRESHOLD commits, as does a quick flick that
+// exceeds CHANNEL_OPEN_VELOCITY_THRESHOLD even if the absolute travel
+// is short.
+const CHANNEL_OPEN_PX_THRESHOLD = 80;
+const CHANNEL_OPEN_VELOCITY_THRESHOLD = 0.45;
+// Initial-axis gates so the gesture only kicks in when the user
+// clearly intends a horizontal channel swipe (not a vertical scroll
+// or a chat-area horizontal pan).
+const CHANNEL_OPEN_EDGE_PX = 36;
+const CHANNEL_OPEN_MIN_DELTA_TO_COMMIT = 56;
+// Vertical drift tolerance _before_ the axis lock. After a horizontal
+// drag is committed (passes the axis lock), vertical wobble no
+// longer cancels — that was the source of "the drag glitches /
+// resets mid-flick" complaints.
+const CHANNEL_OPEN_AXIS_LOCK_PX = 12;
 
 function blurActiveInput() {
   const active = document.activeElement;
@@ -35,17 +46,15 @@ export function AppLayout({ children }: AppLayoutProps) {
   const [manualChannelsOpen, setManualChannelsOpen] = useState(false);
   const [channelDragOffset, setChannelDragOffset] = useState(0);
   const mainRef = useRef<HTMLElement>(null);
-  const appHeaderRef = useRef<HTMLElement>(null);
+  const appHeaderRef = useRef<HTMLDivElement>(null);
   const mobileChannelsOpen = isMobile && (isHome || manualChannelsOpen);
 
-  const canOpenChannelsFromSwipe = useCallback((eventTarget: EventTarget | null) => {
+  const canOpenChannelsFromGesture = useCallback((eventTarget: EventTarget | null) => {
     if (isHome) return false;
     if (eventTarget instanceof Element && eventTarget.closest('[data-mobile-right-sidebar="true"]')) return false;
     if (document.querySelector('[data-mobile-right-sidebar="true"]')) return false;
     return true;
   }, [isHome]);
-
-  const isChannelOpenEdgeSwipe = useCallback((initialX: number) => initialX <= CHANNEL_OPEN_EDGE_PX, []);
 
   const openChannelsWithAnimation = useCallback(() => {
     setChannelDragOffset(0);
@@ -57,44 +66,83 @@ export function AppLayout({ children }: AppLayoutProps) {
     setManualChannelsOpen(false);
   }, []);
 
+  // Per-swipe "committed" latch. Once a gesture has crossed the axis
+  // lock (clearly horizontal), we keep tracking finger movement even
+  // if the user wobbles vertically — the previous implementation
+  // reset the offset to 0 on every wobble, causing the "drag glitches
+  // / impossible to close mid-flick" symptom the user reported.
+  const swipeCommittedRef = useRef<'open' | 'close' | null>(null);
+
   const openChannelsSwipe = useSwipeable({
     delta: 4,
     trackMouse: false,
+    // Don't unconditionally preventDefault on every touchmove — that
+    // breaks native vertical scrolling. Our onSwiping callback below
+    // calls event.preventDefault() only AFTER the gesture has latched
+    // onto the horizontal axis, so vertical scrolls pass through.
     preventScrollOnSwipe: false,
     touchEventOptions: { passive: false },
-    onSwiping: ({ absY, deltaX, event, initial }) => {
-      if (
-        !isMobile ||
-        mobileChannelsOpen ||
-        !canOpenChannelsFromSwipe(event.target) ||
-        !isChannelOpenEdgeSwipe(initial[0])
-      ) {
-        setChannelDragOffset(0);
-        return;
+    onSwipeStart: () => {
+      swipeCommittedRef.current = null;
+    },
+    onSwiping: ({ absX, absY, deltaX, event, initial }) => {
+      if (!isMobile) return;
+      const eventTarget = event.target as EventTarget | null;
+
+      // First, decide if the gesture has CLEARLY locked onto the
+      // horizontal axis. Once latched, vertical jitter is ignored so
+      // a slow drag or a long swipe doesn't get cancelled mid-flight.
+      if (swipeCommittedRef.current === null) {
+        if (absX < CHANNEL_OPEN_AXIS_LOCK_PX) {
+          // Too early to tell — leave the resting transform alone so
+          // the user's finger lift cleanly cancels.
+          return;
+        }
+        if (absY >= absX) {
+          // Vertical drag wins — let native scroll take over.
+          return;
+        }
+        // Latch: which intent does this gesture express?
+        const isEdgeStart = initial[0] <= CHANNEL_OPEN_EDGE_PX;
+        if (!mobileChannelsOpen && deltaX > 0 && isEdgeStart && canOpenChannelsFromGesture(eventTarget)) {
+          swipeCommittedRef.current = 'open';
+          blurActiveInput();
+        } else if (mobileChannelsOpen && deltaX < 0) {
+          swipeCommittedRef.current = 'close';
+          blurActiveInput();
+        } else {
+          return;
+        }
       }
-      if (deltaX <= 0 || absY > CHANNEL_OPEN_MAX_CROSS_AXIS) {
-        setChannelDragOffset(0);
-        return;
+
+      // Past the latch — follow the finger. iOS swipe-back inertia
+      // can briefly overshoot, so clamp to [-vw, vw].
+      const viewportWidth = typeof window === 'undefined' ? Infinity : window.innerWidth;
+      let offset = deltaX;
+      if (swipeCommittedRef.current === 'open') {
+        offset = Math.max(0, Math.min(viewportWidth, offset));
+      } else {
+        offset = Math.max(-viewportWidth, Math.min(0, offset));
       }
-      blurActiveInput();
       if (event.cancelable) event.preventDefault();
-      setChannelDragOffset(deltaX);
+      setChannelDragOffset(offset);
     },
-    onSwipedRight: ({ absY, deltaX, event, initial }) => {
-      if (
-        isMobile &&
-        !mobileChannelsOpen &&
-        canOpenChannelsFromSwipe(event.target) &&
-        isChannelOpenEdgeSwipe(initial[0]) &&
-        deltaX >= CHANNEL_OPEN_MIN_SWIPE &&
-        absY <= CHANNEL_OPEN_MAX_CROSS_AXIS
-      ) {
-        blurActiveInput();
-        setManualChannelsOpen(true);
+    onSwiped: ({ absX, deltaX, velocity }) => {
+      const committed = swipeCommittedRef.current;
+      swipeCommittedRef.current = null;
+      if (!committed) {
+        setChannelDragOffset(0);
+        return;
       }
-      setChannelDragOffset(0);
-    },
-    onSwiped: () => {
+      const flicked = velocity > CHANNEL_OPEN_VELOCITY_THRESHOLD;
+      const meetsPixelThreshold = absX >= CHANNEL_OPEN_PX_THRESHOLD;
+      const meetsMinDelta = absX >= CHANNEL_OPEN_MIN_DELTA_TO_COMMIT;
+      const commit = (flicked && meetsMinDelta) || meetsPixelThreshold;
+      if (commit && committed === 'open' && deltaX > 0) {
+        setManualChannelsOpen(true);
+      } else if (commit && committed === 'close' && deltaX < 0) {
+        setManualChannelsOpen(false);
+      }
       setChannelDragOffset(0);
     },
   });
@@ -103,7 +151,7 @@ export function AppLayout({ children }: AppLayoutProps) {
     mainRef.current = node;
     openChannelsSwipeRef(node);
   }, [openChannelsSwipeRef]);
-  const mobileShellActive = isMobile && (mobileChannelsOpen || channelDragOffset > 0);
+  const mobileShellActive = isMobile && (mobileChannelsOpen || channelDragOffset !== 0);
   /* v8 ignore start -- synthetic wheel support differs between jsdom and browsers; browser tests cover visibility around this surface. */
   const forwardHeaderWheel = useCallback((event: WheelEvent<HTMLElement>) => {
     if (isMobile || event.defaultPrevented) return;
@@ -153,42 +201,35 @@ export function AppLayout({ children }: AppLayoutProps) {
   /* v8 ignore stop */
   const mainDragStyle: CSSProperties | undefined = useMemo(() => {
     if (!isMobile) return undefined;
-    if (channelDragOffset > 0) {
-      return { transform: `translate3d(${Math.round(channelDragOffset)}px, 0, 0)`, transition: 'none' };
+    if (channelDragOffset !== 0) {
+      // Live drag: blend the gesture delta on top of the resting
+      // open/closed translate. Opening drags from 0 with positive
+      // offset, closing drags from 100vw with negative offset.
+      const restingX = mobileChannelsOpen ? `100vw` : `0px`;
+      const sign = channelDragOffset > 0 ? '+' : '-';
+      const abs = Math.round(Math.abs(channelDragOffset));
+      return {
+        transform: `translate3d(calc(${restingX} ${sign} ${abs}px), 0, 0)`,
+        transition: 'none',
+      };
     }
     return { transform: mobileChannelsOpen ? 'translate3d(100vw, 0, 0)' : 'translate3d(0, 0, 0)' };
   }, [channelDragOffset, isMobile, mobileChannelsOpen]);
 
   return (
     <TagSearchProvider>
-      <div className="flex h-full flex-col overflow-hidden bg-sidebar dark:bg-[#1a1d21]">
-        {/* Slack/Mattermost-style thin top bar. On mobile, channels/DMs live
-            behind the persistent chat pane instead of in a temporary side-over. */}
-        <header
-          ref={appHeaderRef}
-          className="grid h-11 w-full shrink-0 grid-cols-[2.75rem_minmax(0,1fr)_2.75rem] items-center gap-2 border-b border-sidebar-border bg-sidebar px-3 text-sidebar-foreground dark:border-white/10 dark:bg-[#1a1d21] dark:text-foreground lg:flex"
-          onWheel={forwardHeaderWheel}
-          data-testid="app-shell-header"
-          data-app-chrome="true"
-        >
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={openChannelsWithAnimation}
-            aria-label="Open channels"
-            aria-hidden={isHome}
-            tabIndex={isHome ? -1 : 0}
-            className={`text-sidebar-foreground hover:bg-sidebar-accent dark:text-zinc-200 dark:hover:bg-white/10 lg:hidden ${isHome ? 'invisible' : ''}`}
-          >
-            <Menu className="h-5 w-5" />
-          </Button>
-          <div className="min-w-0 w-full max-w-2xl justify-self-center lg:mx-auto lg:flex-1">
-            <SearchBar />
-          </div>
-          <div className="h-11 w-11 lg:hidden" aria-hidden />
-        </header>
+      <div className="flex h-full flex-col overflow-hidden bg-sidebar">
+        {/* Branded top bar — logo on the left, global search centred,
+            theme/settings/account chips on the right. Behaviour for
+            forwarding wheel events to the page scroller is preserved. */}
         <div
-          className="relative z-20 shrink-0 bg-sidebar dark:bg-[#1a1d21]"
+          ref={appHeaderRef}
+          onWheel={forwardHeaderWheel}
+        >
+          <AppTopBar onOpenChannels={openChannelsWithAnimation} channelsButtonHidden={isHome} />
+        </div>
+        <div
+          className="relative z-20 shrink-0 bg-sidebar"
           data-testid="app-layout-banners"
           data-app-chrome="true"
         >
@@ -198,14 +239,14 @@ export function AppLayout({ children }: AppLayoutProps) {
 
         <div className="relative flex min-h-0 flex-1 overflow-hidden bg-background">
           <aside
-            className="hidden w-72 shrink-0 bg-sidebar text-sidebar-foreground dark:bg-[#1a1d21] dark:text-zinc-100 lg:block"
+            className="hidden w-72 shrink-0 bg-sidebar text-sidebar-foreground lg:block"
             data-app-chrome="true"
           >
             <Sidebar onClose={() => undefined} />
           </aside>
           {isMobile && (
             <aside
-              className="absolute inset-0 z-0 bg-sidebar text-sidebar-foreground dark:bg-[#1a1d21] dark:text-zinc-100 lg:hidden"
+              className="absolute inset-0 z-0 bg-sidebar text-sidebar-foreground lg:hidden"
               inert={mobileChannelsOpen ? undefined : true}
               data-testid="mobile-channel-sidebar"
               data-app-chrome="true"

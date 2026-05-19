@@ -546,6 +546,80 @@ describe('MessageList Virtuoso wiring (regression contract)', () => {
     expect(fetchPreviousPage).not.toHaveBeenCalled();
   });
 
+  // Regression: deep-link scroll-to-newer flow used to be covered
+  // piecewise but no test walked the whole chain end-to-end. The
+  // failure mode was: user lands on a deep link, scrolls down to load
+  // newer pages, the second fetch fires, the data lands — but the
+  // rendered Virtuoso `data` prop didn't pick it up because the
+  // append branch of `nextVirtuosoState` was returning early. Lock
+  // every step here so any future regression at any link in the chain
+  // surfaces a clearly-named failure.
+  it('deep-link → endReached → fetchPreviousPage → newer rows render via rerender', async () => {
+    const anchor = makeMessage({ id: 'msg-anchor', createdAt: '2026-04-24T10:00:00Z' });
+    const newerA = makeMessage({ id: 'msg-newer-a', createdAt: '2026-04-24T10:01:00Z' });
+    const fetchPreviousPage = vi.fn();
+    // Share a single QueryClient across the initial + rerender calls
+    // so the MessageItem mutations resolve their context across both
+    // renders. We hand-wire providers here (the helper would build a
+    // fresh QueryClient on each rerender, which loses the tree).
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrap = (node: React.ReactElement) => (
+      <QueryClientProvider client={qc}>
+        <BrowserRouter>{node}</BrowserRouter>
+      </QueryClientProvider>
+    );
+    const { rerender } = render(
+      wrap(
+        <MessageList
+          {...defaultProps}
+          // API returns newest-first; MessageList reverses to chrono.
+          pages={[{ items: [newerA, anchor] }]}
+          hasPreviousPage={true}
+          isFetchingPreviousPage={false}
+          fetchPreviousPage={fetchPreviousPage}
+          anchorMsgId="msg-anchor"
+        />,
+      ),
+    );
+    // Past the readyForFetchRef 250ms guard.
+    await new Promise((r) => setTimeout(r, 300));
+
+    // Scroll-to-end fires fetchPreviousPage.
+    captured.endReached?.();
+    expect(fetchPreviousPage).toHaveBeenCalledTimes(1);
+
+    // Server returns more newer messages → pages get a second window
+    // appended at the front (newest-first) so the chronological tail
+    // grows. Rerender with the appended data.
+    const newerB = makeMessage({ id: 'msg-newer-b', createdAt: '2026-04-24T10:02:00Z' });
+    const newerC = makeMessage({ id: 'msg-newer-c', createdAt: '2026-04-24T10:03:00Z' });
+    rerender(
+      wrap(
+        <MessageList
+          {...defaultProps}
+          pages={[{ items: [newerC, newerB] }, { items: [newerA, anchor] }]}
+          hasPreviousPage={false}
+          isFetchingPreviousPage={false}
+          fetchPreviousPage={fetchPreviousPage}
+          anchorMsgId="msg-anchor"
+        />,
+      ),
+    );
+    // Wait one frame for the layout-effect to push the new rows into
+    // Virtuoso's `data` prop atomically with firstItemIndex.
+    await new Promise((r) => requestAnimationFrame(() => r(undefined)));
+    const renderedKeys = (captured.data ?? []).map((row) => (row as { key?: string }).key);
+    expect(renderedKeys).toContain('msg-anchor');
+    expect(renderedKeys).toContain('msg-newer-a');
+    expect(renderedKeys).toContain('msg-newer-b');
+    expect(renderedKeys).toContain('msg-newer-c');
+
+    // Now that the live tail is reached, endReached must not refetch.
+    fetchPreviousPage.mockClear();
+    captured.endReached?.();
+    expect(fetchPreviousPage).not.toHaveBeenCalled();
+  });
+
   it('itemContent handles missing rows, day dividers, system messages, and unknown authors', async () => {
     const root = makeMessage({ id: 'root', authorID: 'missing-user', replyCount: 1 });
     const reply = makeMessage({

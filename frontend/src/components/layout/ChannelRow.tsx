@@ -94,6 +94,15 @@ export function ChannelRow({
         <span className={`truncate ${channel.muted ? 'text-gray-500' : ''}`}>
           {channel.channelName}
         </span>
+        {/* Brand-pink unread dot — matches the design's per-row
+            highlight. Muted channels intentionally suppress the dot. */}
+        {hasUnread && !channel.muted && (
+          <span
+            aria-label="Unread"
+            data-testid={`channel-unread-dot-${channel.channelID}`}
+            className="ml-auto inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-brand"
+          />
+        )}
         {channel.muted && (
           <BellOff className="ml-auto h-3 w-3 shrink-0 text-gray-500 group-hover/row:hidden" aria-label="Muted" />
         )}

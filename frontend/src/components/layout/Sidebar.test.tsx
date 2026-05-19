@@ -273,45 +273,6 @@ describe('Sidebar', () => {
     setMobileMatch(false);
   });
 
-  it('renders user display name', () => {
-    renderSidebar();
-    expect(screen.getByText('Alice Smith')).toBeInTheDocument();
-  });
-
-  it('renders user initials in avatar fallback', () => {
-    renderSidebar();
-    expect(screen.getByText('AS')).toBeInTheDocument();
-  });
-
-  it('shows Admin badge for admin users', () => {
-    renderSidebar();
-    // Admin role badge shows in the user header. The Admin entry was moved
-    // from a sidebar nav link into the user-menu DropdownMenuItem, but
-    // because the dropdown content stays mounted (Radix), its label is
-    // queryable here too.
-    const matches = screen.getAllByText('Admin');
-    expect(matches.length).toBeGreaterThanOrEqual(1);
-  });
-
-  it('exposes an Admin entry in the user menu for admins', async () => {
-    // Admin used to be a top-level sidebar nav link, but it now lives in
-    // the user dropdown — open the menu before asserting on the item.
-    renderSidebar();
-    fireEvent.click(screen.getByLabelText('User menu'));
-    expect(await screen.findByTestId('user-menu-admin')).toBeInTheDocument();
-  });
-
-  it('renders the mobile user menu inline above the scrollable channel list', async () => {
-    renderSidebar();
-    fireEvent.click(screen.getByLabelText('User menu'));
-    const menu = await screen.findByTestId('mobile-user-menu');
-    const scrollArea = screen.getByTestId('sidebar-scroll-area');
-
-    expect(menu).toHaveClass('md:hidden', 'border-b');
-    expect(menu.compareDocumentPosition(scrollArea) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(screen.getByTestId('mobile-user-menu-admin')).toHaveClass('h-12', 'px-3');
-  });
-
   it('keeps the mobile channel list scrollable instead of registering row drag handlers', async () => {
     setMobileMatch(true);
     renderSidebar();
@@ -325,42 +286,6 @@ describe('Sidebar', () => {
     await waitFor(() => {
       expect(channelRow.ondragstart).toBeNull();
     });
-  });
-
-  it('hides the desktop dropdown content on mobile so it does not cover channels', async () => {
-    renderSidebar();
-    fireEvent.click(screen.getByLabelText('User menu'));
-    const admin = await screen.findByTestId('user-menu-admin');
-    const menu = admin.closest('[data-slot="dropdown-menu-content"]');
-
-    expect(menu).toHaveClass('max-md:hidden');
-  });
-
-  it('confirms native server changes from the mobile user menu before resetting', async () => {
-    const user = userEvent.setup();
-    const resetServer = vi.fn().mockResolvedValue(undefined);
-    window.Capacitor = {
-      isNativePlatform: () => true,
-      Plugins: { ServerNavigation: { resetServer } },
-    };
-
-    renderSidebar();
-    await user.click(screen.getByLabelText('User menu'));
-    await user.click(await screen.findByTestId('mobile-change-server'));
-
-    expect(await screen.findByTestId('change-server')).toHaveTextContent('Change chat server?');
-    expect(resetServer).not.toHaveBeenCalled();
-
-    await user.click(screen.getByTestId('change-server-confirm'));
-    expect(resetServer).toHaveBeenCalledTimes(1);
-  });
-
-  it('keeps native server switching out of the desktop menu when not running natively', async () => {
-    renderSidebar();
-    fireEvent.click(screen.getByLabelText('User menu'));
-
-    expect(screen.queryByTestId('user-menu-change-server')).not.toBeInTheDocument();
-    expect(screen.queryByTestId('mobile-change-server')).not.toBeInTheDocument();
   });
 
   it('renders channel list', () => {
@@ -449,11 +374,6 @@ describe('Sidebar', () => {
 
     expect(screen.queryByText('Bob Jones')).not.toBeInTheDocument();
     expect(screen.getByText('Project Team')).toBeInTheDocument();
-  });
-
-  it('has user menu trigger', () => {
-    renderSidebar();
-    expect(screen.getByLabelText('User menu')).toBeInTheDocument();
   });
 
   it('uses slugified channel name in NavLink href', () => {
