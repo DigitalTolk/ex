@@ -147,8 +147,17 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, Props>(function Wys
           ErrorBoundary={LexicalErrorBoundary}
         />
         {placeholder && isEmpty && (
-          <div className="pointer-events-none absolute left-0 right-0 top-0 select-none truncate whitespace-nowrap text-base text-muted-foreground md:text-sm">
-            {placeholder}
+          // `inset-0 flex items-center` so the placeholder vertically
+          // centres inside whatever box the editor occupies — matches
+          // the compact mobile composer (36px) just as well as the
+          // default desktop (min-h-[60px]) without per-variant
+          // overrides. Without items-center the text anchored at the
+          // top, drifting away from the send-button centre on mobile.
+          // The inner span carries `right-0 truncate whitespace-nowrap`
+          // so a long placeholder clips on a single line — tested
+          // assertions live in src/test/wysiwyg-placeholder.test.tsx.
+          <div className="pointer-events-none absolute inset-0 flex items-center select-none text-base text-muted-foreground md:text-sm">
+            <span className="right-0 truncate whitespace-nowrap">{placeholder}</span>
           </div>
         )}
         <HistoryPlugin />

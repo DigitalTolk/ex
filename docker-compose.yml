@@ -2,8 +2,9 @@ services:
   dynamodb:
     image: amazon/dynamodb-local:latest
     user: root
-    ports:
-      - "8000:8000"
+    # No host port published — the app reaches it over the internal
+    # network as `dynamodb:8000`. Keeps host :8000 free so this stack
+    # can run alongside other local DynamoDB stacks without colliding.
     command: "-jar DynamoDBLocal.jar -sharedDb -dbPath /data"
     volumes:
       - dynamodb-data:/data
@@ -16,8 +17,8 @@ services:
 
   redis:
     image: redis:7-alpine
-    ports:
-      - "6379:6379"
+    # No host port published — the app reaches it as `redis:6379` on
+    # the internal network. Keeps host :6379 free for coexistence.
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -26,9 +27,13 @@ services:
 
   minio:
     image: minio/minio
+    # Remapped off the default 9000/9001 so this stack can run beside
+    # other local MinIO stacks. The browser hits MinIO directly via
+    # presigned URLs, so S3_PUBLIC_ENDPOINT below must match the host
+    # port published here (29000).
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "29000:9000"
+      - "29001:9001"
     environment:
       MINIO_ROOT_USER: minioadmin
       MINIO_ROOT_PASSWORD: minioadmin
@@ -82,11 +87,11 @@ services:
         # explicitly. Defaults to "dev" — banner stays silent.
         VERSION: ${VERSION:-dev}
     ports:
-      - "8080:8080"
+      - "8500:8500"
     restart: on-failure
     env_file: .env
     environment:
-      PORT: "8080"
+      PORT: "8500"
       ENV: development
       DYNAMODB_ENDPOINT: http://dynamodb:8000
       DYNAMODB_TABLE: exdb
@@ -95,9 +100,9 @@ services:
       AWS_SECRET_ACCESS_KEY: local
       REDIS_URL: redis://redis:6379
       JWT_SECRET: dev-secret-change-me
-      BASE_URL: http://localhost:8080
+      BASE_URL: http://localhost:8500
       S3_ENDPOINT: http://minio:9000
-      S3_PUBLIC_ENDPOINT: http://localhost:9000
+      S3_PUBLIC_ENDPOINT: http://localhost:29000
       S3_BUCKET: ex-avatars
       S3_ACCESS_KEY: minioadmin
       S3_SECRET_KEY: minioadmin

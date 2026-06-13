@@ -745,7 +745,21 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
           </div>
         )}
 
-        <div className={`flex gap-2 px-3 py-2 ${compactMobileComposer ? 'items-center max-md:py-0.5' : 'items-end max-md:pt-3'}`}>
+        <div
+          className={`flex gap-2 px-3 py-2 ${
+            compactMobileComposer
+              // Compact mobile composer (idle): row sized to match
+              // the 36px send button so the input text vertically
+              // centres against the button. `pl-4 pr-1.5` pulls the
+              // send chip close to the rounded edge — `px-3` left a
+              // noticeable gap that read as misalignment. Vertical
+              // padding stays at `py-0.5` (2px) so the total height
+              // (36 + 4 = 40px) fits inside the iPhone-composer
+              // ≤42px contract the browser test locks down.
+              ? 'items-center max-md:py-0.5 max-md:pl-4 max-md:pr-1.5'
+              : 'items-end max-md:pt-3'
+          }`}
+        >
           <WysiwygEditor
             ref={editorRef}
             initialBody={initialBody}
@@ -770,7 +784,11 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
             className="flex-1"
             editorClassName={
               compactMobileComposer
-                ? 'max-md:!min-h-5 max-md:!max-h-5 max-md:overflow-hidden'
+                // Match the editor height to the row (36px) and use
+                // `leading-9` (36px) so the single line of text /
+                // placeholder vertically centers against the round
+                // send button on the right.
+                ? 'max-md:!min-h-9 max-md:!max-h-9 max-md:overflow-hidden max-md:leading-9'
                 : ''
             }
             onFocusChange={isMobile && variant === 'composer' ? setEditorFocused : undefined}

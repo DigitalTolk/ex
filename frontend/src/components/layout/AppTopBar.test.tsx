@@ -58,6 +58,13 @@ vi.mock('@/lib/capacitor', () => ({
   isNativePlatform: () => false,
 }));
 
+// useIsMobile flips between desktop and mobile-sheet renders. Tests
+// toggle the mock through the exposed setter to exercise both paths.
+let mockIsMobile = false;
+vi.mock('@/hooks/useIsMobile', () => ({
+  useIsMobile: () => mockIsMobile,
+}));
+
 function renderTopBar(ui?: ReactNode) {
   return render(<MemoryRouter>{ui ?? <AppTopBar />}</MemoryRouter>);
 }
@@ -65,6 +72,7 @@ function renderTopBar(ui?: ReactNode) {
 describe('AppTopBar', () => {
   beforeEach(() => {
     mockSystemRole = 'admin';
+    mockIsMobile = false;
     logout.mockClear();
   });
 
@@ -161,5 +169,58 @@ describe('AppTopBar', () => {
     expect(btn).toHaveClass('invisible');
     expect(btn).toHaveAttribute('aria-hidden', 'true');
     expect(btn).toHaveAttribute('tabIndex', '-1');
+  });
+
+  describe('mobile account sheet', () => {
+    beforeEach(() => {
+      mockIsMobile = true;
+    });
+
+    it('opens the full-screen mobile sheet when the avatar is tapped', () => {
+      renderTopBar();
+      // Sheet starts closed.
+      expect(screen.queryByTestId('mobile-account-sheet')).not.toBeInTheDocument();
+      fireEvent.click(screen.getByTestId('topbar-account'));
+      // …and opens on tap, surfacing the user's name + every action.
+      expect(screen.getByTestId('mobile-account-sheet')).toBeInTheDocument();
+      expect(screen.getByText('Alice Wonder')).toBeInTheDocument();
+      expect(screen.getByText('u@x')).toBeInTheDocument();
+      expect(screen.getByTestId('user-menu-about')).toBeInTheDocument();
+      expect(screen.getByTestId('user-menu-signout')).toBeInTheDocument();
+    });
+
+    it('closes the sheet and runs the action when a menu item is tapped', () => {
+      renderTopBar();
+      fireEvent.click(screen.getByTestId('topbar-account'));
+      fireEvent.click(screen.getByTestId('user-menu-about'));
+      expect(screen.getByTestId('about-open')).toBeInTheDocument();
+      expect(screen.queryByTestId('mobile-account-sheet')).not.toBeInTheDocument();
+    });
+
+    it('omits admin-only entries for non-admin members in the sheet', () => {
+      mockSystemRole = 'member';
+      renderTopBar();
+      fireEvent.click(screen.getByTestId('topbar-account'));
+      expect(screen.queryByTestId('user-menu-admin')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('user-menu-invite')).not.toBeInTheDocument();
+      expect(screen.getByTestId('user-menu-emojis')).toBeInTheDocument();
+    });
+
+    it('omits Custom emojis for guests', () => {
+      mockSystemRole = 'guest';
+      renderTopBar();
+      fireEvent.click(screen.getByTestId('topbar-account'));
+      expect(screen.queryByTestId('user-menu-emojis')).not.toBeInTheDocument();
+    });
+
+    it('signs out from the sheet when Sign out is tapped', async () => {
+      renderTopBar();
+      fireEvent.click(screen.getByTestId('topbar-account'));
+      await act(async () => {
+        fireEvent.click(screen.getByTestId('user-menu-signout'));
+        await Promise.resolve();
+      });
+      expect(logout).toHaveBeenCalled();
+    });
   });
 });

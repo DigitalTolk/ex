@@ -121,7 +121,7 @@ describe('MessageInput', () => {
 
     expect(onSend).toHaveBeenCalled();
     expect(document.activeElement).not.toBe(editor);
-    expect(editor).toHaveClass('max-md:!min-h-5', 'max-md:!max-h-5');
+    expect(editor).toHaveClass('max-md:!min-h-9', 'max-md:!max-h-9');
     setMobileMatch(false);
   });
 
@@ -280,7 +280,7 @@ describe('MessageInput', () => {
 
     expect(onSend).toHaveBeenCalledWith({ body: 'Edited text', attachmentIDs: [] });
     expect(document.activeElement).not.toBe(editor);
-    expect(editor).toHaveClass('max-md:!min-h-5', 'max-md:!max-h-5');
+    expect(editor).toHaveClass('max-md:!min-h-9', 'max-md:!max-h-9');
     setMobileMatch(false);
   });
 

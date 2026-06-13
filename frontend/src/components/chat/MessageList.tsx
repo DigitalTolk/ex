@@ -98,13 +98,20 @@ function VirtuosoMessageList({
   // after the `around=` initial fetch with no user interaction;
   // 250ms after mount is enough for Virtuoso to commit the
   // initialTopMostItemIndex scroll.
-  const readyForFetchRef = useRef(false);
-  useEffect(() => {
-    const t = window.setTimeout(() => {
-      readyForFetchRef.current = true;
-    }, 250);
-    return () => window.clearTimeout(t);
-  }, []);
+  // No `readyForFetchRef`. A previous version gated both
+  // `startReached` and `endReached` behind a 250ms timer to suppress
+  // a layout-settling false positive — Virtuoso briefly reports the
+  // first row as visible while committing the deep-link anchor scroll,
+  // and that fired a spurious `cursor=` older fetch ~150ms after
+  // mount. The cure was worse than the disease: Virtuoso fires each
+  // side once on initial layout when the small around-window fits
+  // the viewport with the anchor centred, and the guard dropped
+  // those single fires, leaving the user pinned to the loaded slice
+  // with no way to reach older OR newer messages. Both directions
+  // now fire immediately; the single eager fetch is harmless (data
+  // we'd need anyway as soon as the user scrolls), and the
+  // `isFetchingNextPage` / `isFetchingPreviousPage` checks below
+  // coalesce any duplicate fires during settling.
 
   const userLookup = useMemo(
     () => ({ get: (id: string) => userMap[id] }),
@@ -369,11 +376,9 @@ function VirtuosoMessageList({
         atBottomRef.current = atBottom;
       }}
       startReached={() => {
-        if (!readyForFetchRef.current) return;
         if (hasNextPage && !isFetchingNextPage) fetchNextPage();
       }}
       endReached={() => {
-        if (!readyForFetchRef.current) return;
         if (hasPreviousPage && !isFetchingPreviousPage && fetchPreviousPage) {
           fetchPreviousPage();
         }
