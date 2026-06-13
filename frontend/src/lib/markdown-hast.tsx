@@ -109,7 +109,12 @@ const HAST_COMPONENTS_MAP: Record<string, AnyComponent> = {
   ),
   p: (props: { children?: ReactNode; 'data-blank'?: string }) => {
     if (props['data-blank'] === 'true') {
-      return <p className="leading-snug">{' '}</p>;
+      // Re-emit the data-blank attribute so the `.prose-message
+      // p[data-blank="true"]` rule in index.css gives the spacer its
+      // min-height. Without it the <p> collapses to ~0px and stacked
+      // blank lines (one <p> per source blank line) all vanish — the
+      // client-side render path keeps the attribute, so this matches it.
+      return <p data-blank="true" className="leading-snug">{' '}</p>;
     }
     return <p className="whitespace-pre-wrap break-words">{props.children}</p>;
   },

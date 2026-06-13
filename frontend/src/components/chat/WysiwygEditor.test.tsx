@@ -515,25 +515,29 @@ describe('WysiwygEditor', () => {
     expect(md).toMatch(/>\s+b/);
   });
 
-  it('round-trips a blockquote followed by a paragraph without inserting a blank line', async () => {
+  // A paragraph after a blockquote must stay a SEPARATE paragraph — the
+  // blank line that terminates the quote has to survive the round-trip.
+  // Previously it was stripped, so the paragraph became a lazy
+  // continuation of the quote ("> foobar" swallowed "foobar").
+  it('keeps the blank line between a blockquote and the paragraph after it', async () => {
     const ref = createRef<WysiwygEditorHandle>();
-    renderEditor({ ref, initialBody: '> foobar\nfoobar' });
+    renderEditor({ ref, initialBody: '> foobar\n\nfoobar' });
     await waitFor(() => expect(ref.current).not.toBeNull());
-    expect(ref.current!.getMarkdown()).toBe('> foobar\nfoobar');
+    expect(ref.current!.getMarkdown()).toBe('> foobar\n\nfoobar');
   });
 
-  it('round-trips a paragraph followed by a blockquote without inserting a blank line', async () => {
+  it('keeps the blank line between a paragraph and the blockquote after it', async () => {
     const ref = createRef<WysiwygEditorHandle>();
-    renderEditor({ ref, initialBody: 'foobar\n> quoted' });
+    renderEditor({ ref, initialBody: 'foobar\n\n> quoted' });
     await waitFor(() => expect(ref.current).not.toBeNull());
-    expect(ref.current!.getMarkdown()).toBe('foobar\n> quoted');
+    expect(ref.current!.getMarkdown()).toBe('foobar\n\n> quoted');
   });
 
-  it('round-trips a list followed by text without inserting a blank line', async () => {
+  it('keeps the blank line between a list and the paragraph after it', async () => {
     const ref = createRef<WysiwygEditorHandle>();
-    renderEditor({ ref, initialBody: '1. one\n2. two\nthree' });
+    renderEditor({ ref, initialBody: '1. one\n2. two\n\nthree' });
     await waitFor(() => expect(ref.current).not.toBeNull());
-    expect(ref.current!.getMarkdown()).toBe('1. one\n2. two\nthree');
+    expect(ref.current!.getMarkdown()).toBe('1. one\n2. two\n\nthree');
   });
 
   // Regression: two Enters between text segments must survive the

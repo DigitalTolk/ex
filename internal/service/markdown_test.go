@@ -387,6 +387,30 @@ func TestMarkdownRenderer_BlankLinesMultiple(t *testing.T) {
 	}
 }
 
+func TestMarkdownRenderer_MultipleBlankLinesPreserveEachGap(t *testing.T) {
+	r := NewMarkdownRenderer()
+	// Regression: two blank lines between paragraphs must yield TWO
+	// blank paragraphs (one per blank line), not collapse to one. The
+	// composer exports "abc\n\n\nadsdaad" for abc + two empty lines +
+	// adsdaad; the renderer previously stacked only a single blank <p>.
+	out := r.RenderToHast("abc\n\n\nadsdaad")
+	tags := topLevelTags(out)
+	if len(tags) != 4 {
+		t.Fatalf("expected 4 blocks (abc, blank, blank, adsdaad), got %v", tags)
+	}
+	for _, idx := range []int{1, 2} {
+		if got, _ := out.Children[idx].Properties["data-blank"].(string); got != "true" {
+			t.Errorf("child %d should be a blank paragraph, got props=%+v", idx, out.Children[idx].Properties)
+		}
+	}
+	if got, _ := out.Children[0].Properties["data-blank"].(string); got == "true" {
+		t.Errorf("first paragraph should not be blank")
+	}
+	if got, _ := out.Children[3].Properties["data-blank"].(string); got == "true" {
+		t.Errorf("last paragraph should not be blank")
+	}
+}
+
 // ----- helpers -----
 
 func topLevelTags(root *HastNode) []string {

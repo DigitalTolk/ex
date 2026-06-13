@@ -6,8 +6,8 @@ import {
   $createTextNode,
   $getRoot,
 } from 'lexical';
-import { ListItemNode, ListNode } from '@lexical/list';
-import { QuoteNode } from '@lexical/rich-text';
+import { $createListItemNode, $createListNode, ListItemNode, ListNode } from '@lexical/list';
+import { $createQuoteNode, QuoteNode } from '@lexical/rich-text';
 import { ExListNode } from './nodes/ExListNode';
 import { MentionNode } from './nodes/MentionNode';
 import { ChannelMentionNode } from './nodes/ChannelMentionNode';
@@ -146,5 +146,79 @@ describe('markdown export: blank-line preservation', () => {
     // characters, never collapsed to a single newline.
     const newlinesBetween = md.length - 'ab'.length;
     expect(newlinesBetween).toBeGreaterThanOrEqual(2);
+  });
+});
+
+describe('markdown export: block / paragraph separation', () => {
+  // Regression: a paragraph typed after a list (blank line between) used
+  // to have its gap stripped, so it became a lazy continuation of the
+  // last list item — "2. adsdas" + "adadsads" rendered as
+  // "adsdas adadsads". The blank line that ends the list must survive.
+  it('keeps the blank line between a list and a following paragraph', () => {
+    const editor = newEditor();
+    editor.update(() => {
+      const root = $getRoot();
+      const list = $createListNode('number');
+      const i1 = $createListItemNode(); i1.append($createTextNode('dad'));
+      const i2 = $createListItemNode(); i2.append($createTextNode('adsdas'));
+      list.append(i1); list.append(i2);
+      const p = $createParagraphNode(); p.append($createTextNode('adadsads'));
+      root.append(list); root.append(p);
+    }, { discrete: true });
+
+    let md = '';
+    editor.read(() => { md = $exportMarkdown(); });
+    expect(md).toBe('1. dad\n2. adsdas\n\nadadsads');
+  });
+
+  // Regression: a paragraph typed after a blockquote used to be absorbed
+  // into the quote ("> sddas" + "bar" → both inside the quote).
+  it('keeps the blank line between a blockquote and a following paragraph', () => {
+    const editor = newEditor();
+    editor.update(() => {
+      const root = $getRoot();
+      const quote = $createQuoteNode(); quote.append($createTextNode('sddas'));
+      const p = $createParagraphNode(); p.append($createTextNode('bar'));
+      root.append(quote); root.append(p);
+    }, { discrete: true });
+
+    let md = '';
+    editor.read(() => { md = $exportMarkdown(); });
+    expect(md).toBe('> sddas\n\nbar');
+  });
+
+  // Intent preserved: two adjacent QuoteNodes (Enter pressed inside a
+  // quote splits it) should still merge into one continuous quote, not
+  // render as two separate quote blocks.
+  it('merges two adjacent quote blocks into one continuous quote', () => {
+    const editor = newEditor();
+    editor.update(() => {
+      const root = $getRoot();
+      const q1 = $createQuoteNode(); q1.append($createTextNode('line one'));
+      const q2 = $createQuoteNode(); q2.append($createTextNode('line two'));
+      root.append(q1); root.append(q2);
+    }, { discrete: true });
+
+    let md = '';
+    editor.read(() => { md = $exportMarkdown(); });
+    expect(md).toBe('> line one\n> line two');
+  });
+
+  // Intent preserved: two adjacent same-type lists collapse to one tight
+  // list rather than rendering with a synthetic gap between them.
+  it('merges two adjacent same-type list blocks', () => {
+    const editor = newEditor();
+    editor.update(() => {
+      const root = $getRoot();
+      const l1 = $createListNode('bullet');
+      const i1 = $createListItemNode(); i1.append($createTextNode('a')); l1.append(i1);
+      const l2 = $createListNode('bullet');
+      const i2 = $createListItemNode(); i2.append($createTextNode('b')); l2.append(i2);
+      root.append(l1); root.append(l2);
+    }, { discrete: true });
+
+    let md = '';
+    editor.read(() => { md = $exportMarkdown(); });
+    expect(md).toBe('- a\n- b');
   });
 });

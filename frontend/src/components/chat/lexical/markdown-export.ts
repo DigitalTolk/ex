@@ -15,14 +15,30 @@ import { EX_TRANSFORMERS } from './transformers';
 // semantics our renderer respects.
 const ESCAPED_UNDERSCORE = /\\_/g;
 
-function isBlockishMarkdownLine(line: string): boolean {
-  return (
-    /^>\s?/.test(line) ||
-    /^\s*(?:[-*+]|\d+\.)\s+/.test(line) ||
-    /^(```|~~~)/.test(line)
-  );
+// Which contiguous-block kind a markdown line belongs to, or null for a
+// plain paragraph / blank line. Only `quote` and `list` participate in
+// gap-collapsing; code fences are deliberately excluded so blank lines
+// inside fenced code are preserved verbatim.
+type BlockKind = 'quote' | 'list';
+function blockKind(line: string): BlockKind | null {
+  if (/^>\s?/.test(line)) return 'quote';
+  if (/^\s*(?:[-*+]|\d+\.)\s+/.test(line)) return 'list';
+  return null;
 }
 
+// Lexical's $convertToMarkdownString separates EVERY top-level block with
+// a blank line. For two adjacent blocks of the SAME kind — e.g. two
+// QuoteNodes produced by pressing Enter inside a quote, or two ListNodes
+// — that blank line renders as two visually-distinct blocks when the
+// user meant one continuous quote / list, so we drop it.
+//
+// Crucially we only collapse when the lines on BOTH sides of the gap are
+// the same block kind. A blank line between a block and a following
+// paragraph (or vice-versa) is semantically meaningful: it terminates
+// the list / quote. Stripping it there made the next paragraph a lazy
+// continuation, so `> quote` + blank + `text` rendered as `> quote\ntext`
+// (text swallowed into the quote) and a list item swallowed the
+// paragraph after it. Preserve those gaps.
 function collapseSyntheticBlockGaps(markdown: string): string {
   const lines = markdown.split('\n');
   const out: string[] = [];
@@ -41,7 +57,8 @@ function collapseSyntheticBlockGaps(markdown: string): string {
         break;
       }
     }
-    if (prev && next && (isBlockishMarkdownLine(prev) || isBlockishMarkdownLine(next))) {
+    const prevKind = blockKind(prev);
+    if (prev && next && prevKind !== null && blockKind(next) === prevKind) {
       continue;
     }
     out.push(line);

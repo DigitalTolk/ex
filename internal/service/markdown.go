@@ -305,88 +305,80 @@ func normalizeCodeLanguageGo(language string) string {
 // you'd need a heading-then-blank-then-paragraph pattern, which the
 // regex parser also collapsed under most conditions.
 func insertBlankLineParagraphs(body string, root *HastNode) {
-	// Walk lines top-to-bottom, mirroring the structure goldmark
-	// produced. Each blank line outside a fenced code block becomes
-	// a blank paragraph. Build up a parallel slice of "expected
-	// children" matching goldmark's block stream interleaved with
-	// blank paragraphs.
-	lines := strings.Split(body, "\n")
-	type spot struct{ kind string }
-	stream := make([]spot, 0, len(lines))
-	inFence := false
-	for i, line := range lines {
-		if strings.HasPrefix(line, "```") {
-			inFence = !inFence
-			continue
-		}
-		if inFence {
-			continue
-		}
-		if strings.TrimSpace(line) == "" {
-			// Don't double-count adjacent fully-blank gaps that close
-			// a previous block — only mark when the prior non-blank
-			// line was actual content.
-			prevIsBlank := i == 0 || strings.TrimSpace(lines[i-1]) == ""
-			_ = prevIsBlank
-			stream = append(stream, spot{kind: "blank"})
-		}
+	// Number of blank lines in each source gap that separates two
+	// top-level content runs, in order. The i-th entry lines up with
+	// the gap between the i-th and (i+1)-th rendered top-level blocks
+	// for the dominant case (blocks separated by blank-line runs), so
+	// we consume it by index while walking the children.
+	gaps := gapBlankCounts(body)
+	total := 0
+	for _, g := range gaps {
+		total += g
 	}
-	if len(stream) == 0 {
+	if total == 0 {
 		return
 	}
-	// Build the new children list by walking the existing one and
-	// inserting blank paragraphs after each block until the count of
-	// blanks is exhausted.
-	blanks := 0
-	for _, s := range stream {
-		if s.kind == "blank" {
-			blanks++
-		}
-	}
-	if blanks == 0 {
-		return
-	}
-	out := make([]*HastNode, 0, len(root.Children)+blanks)
-	emitted := 0
+	out := make([]*HastNode, 0, len(root.Children)+total)
 	for i, child := range root.Children {
 		out = append(out, child)
-		if i < len(root.Children)-1 && emitted < blanks {
-			// Always insert exactly one blank paragraph between
-			// adjacent block children when blanks remain. The legacy
-			// renderer emitted one <p> per blank line; we approximate
-			// by distributing one per inter-block gap, which matches
-			// the test corpus' assertions (one blank gap == 1 <p>,
-			// two blanks == 2, three == 3 …).
-			toInsert := blanks - emitted
-			// If two adjacent blocks share a gap of multiple blanks
-			// (e.g. `a\n\n\n\nb` → 3 blanks between two paragraphs),
-			// insert all of them at the gap.
-			gapBlanks := computeGapBlanks(body, child, root.Children[i+1])
-			for k := 0; k < gapBlanks && k < toInsert; k++ {
-				out = append(out, blankParagraph())
-				emitted++
-			}
+		if i >= len(root.Children)-1 {
+			continue
+		}
+		// One blank paragraph per blank line in this gap (N blank
+		// lines → N blank <p>). A gap absent from the source (two
+		// blocks adjacent with no blank line, e.g. a heading directly
+		// above a paragraph) inserts nothing.
+		n := 0
+		if i < len(gaps) {
+			n = gaps[i]
+		}
+		for k := 0; k < n; k++ {
+			out = append(out, blankParagraph())
 		}
 	}
 	root.Children = out
 }
 
-// computeGapBlanks counts how many blank lines separate two adjacent
-// blocks in the source. Without source-position tracking this is a
-// rough heuristic; in practice the legacy renderer's tests assert
-// the count is exactly the number of blank lines between the lines
-// that produced each block. We approximate by re-tokenizing the
-// source: any run of N blank lines in the top-level (non-fenced)
-// stream corresponds to N blank paragraphs.
-func computeGapBlanks(body string, _ *HastNode, _ *HastNode) int {
-	// Heuristic: 1 blank gap per pair of adjacent blocks. This
-	// matches the `first\n\nsecond` → "first, blank, second" case
-	// which is the dominant pattern. Multi-blank gaps fall back to
-	// one — covered by the simple-gap tests; the multi-blank cases
-	// (`a\n\n\n\nb` → 5 paragraphs) are handled in
-	// emitTopLevelMultipleBlanks below for now.
-	_ = body
-	return 1
+// gapBlankCounts returns, in order, the number of blank lines in each
+// run that separates two content runs at the top level. Blank lines
+// inside fenced code blocks and leading/trailing blank runs are
+// ignored (they don't sit between two blocks). Without source-position
+// tracking from goldmark this maps 1:1 onto inter-block gaps for the
+// common case where every top-level block is separated by a blank-line
+// run — which covers ordinary chat messages and the test corpus.
+func gapBlankCounts(body string) []int {
+	lines := strings.Split(body, "\n")
+	gaps := make([]int, 0, len(lines))
+	inFence := false
+	seenContent := false
+	pending := 0
+	for _, line := range lines {
+		if strings.HasPrefix(line, "```") {
+			inFence = !inFence
+			seenContent = true
+			pending = 0
+			continue
+		}
+		if inFence {
+			seenContent = true
+			pending = 0
+			continue
+		}
+		if strings.TrimSpace(line) == "" {
+			if seenContent {
+				pending++
+			}
+			continue
+		}
+		// Non-blank content line: a blank run that preceded it closes
+		// an inter-block gap.
+		if seenContent && pending > 0 {
+			gaps = append(gaps, pending)
+		}
+		pending = 0
+		seenContent = true
+	}
+	return gaps
 }
 
 func blankParagraph() *HastNode {
