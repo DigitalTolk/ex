@@ -9,6 +9,14 @@ interface UnreadState {
   unreadConversations: Set<string>;
   unreadThreadNotifications: Set<string>;
   hiddenConversations: Set<string>;
+  // Live per-target unread message counts, accumulated from WebSocket
+  // message.new events received while the channel/conversation isn't
+  // active. Reset to 0 (entry removed) when the target is opened or its
+  // unread is cleared. Session-only — a cold load knows unread as a
+  // boolean (server-persisted) but not a count, so a target absent from
+  // these maps is rendered with the unread dot rather than a number.
+  channelUnreadCounts: Map<string, number>;
+  conversationUnreadCounts: Map<string, number>;
   markChannelUnread: (channelId: string) => void;
   markChannelNotificationUnread: (channelId: string) => void;
   markConversationUnread: (conversationId: string) => void;
@@ -50,6 +58,8 @@ export function UnreadProvider({ children }: { children: ReactNode }) {
   const [unreadConversations, setUnreadConversations] = useState<Set<string>>(new Set());
   const [unreadThreadNotifications, setUnreadThreadNotifications] = useState<Set<string>>(new Set());
   const [hiddenConversations, setHiddenConversations] = useState<Set<string>>(loadHiddenConversations);
+  const [channelUnreadCounts, setChannelUnreadCounts] = useState<Map<string, number>>(new Map());
+  const [conversationUnreadCounts, setConversationUnreadCounts] = useState<Map<string, number>>(new Map());
   // Refs (not state) so updates from onMessageNew callbacks see the latest
   // active scope without re-creating the WS handlers on every navigation.
   const activeChannelRef = useRef<string | null>(null);
@@ -58,6 +68,7 @@ export function UnreadProvider({ children }: { children: ReactNode }) {
   const markChannelUnread = useCallback((id: string) => {
     if (activeChannelRef.current === id) return;
     setUnreadChannels(prev => new Set(prev).add(id));
+    setChannelUnreadCounts(prev => new Map(prev).set(id, (prev.get(id) ?? 0) + 1));
   }, []);
   const markChannelNotificationUnread = useCallback((id: string) => {
     if (activeChannelRef.current === id) return;
@@ -67,6 +78,7 @@ export function UnreadProvider({ children }: { children: ReactNode }) {
   const markConversationUnread = useCallback((id: string) => {
     if (activeConvRef.current === id) return;
     setUnreadConversations(prev => new Set(prev).add(id));
+    setConversationUnreadCounts(prev => new Map(prev).set(id, (prev.get(id) ?? 0) + 1));
   }, []);
   const markThreadNotificationUnread = useCallback((id: string) => {
     setUnreadThreadNotifications(prev => new Set(prev).add(id));
@@ -75,12 +87,14 @@ export function UnreadProvider({ children }: { children: ReactNode }) {
   const clearChannelUnread = useCallback((id: string) => {
     setUnreadChannels(prev => { const next = new Set(prev); next.delete(id); return next; });
     setUnreadChannelNotifications(prev => { const next = new Set(prev); next.delete(id); return next; });
+    setChannelUnreadCounts(prev => { if (!prev.has(id)) return prev; const next = new Map(prev); next.delete(id); return next; });
     void apiFetch<void>(`/api/v1/user-state/channels/${encodeURIComponent(id)}/notification`, { method: 'DELETE' })
       .catch(() => undefined)
       .finally(notifyUserStateChanged);
   }, []);
   const clearConversationUnread = useCallback((id: string) => {
     setUnreadConversations(prev => { const next = new Set(prev); next.delete(id); return next; });
+    setConversationUnreadCounts(prev => { if (!prev.has(id)) return prev; const next = new Map(prev); next.delete(id); return next; });
   }, []);
 
   const hideConversation = useCallback((id: string) => {
@@ -112,6 +126,7 @@ export function UnreadProvider({ children }: { children: ReactNode }) {
     if (id) {
       setUnreadChannels(prev => { const next = new Set(prev); next.delete(id); return next; });
       setUnreadChannelNotifications(prev => { const next = new Set(prev); next.delete(id); return next; });
+      setChannelUnreadCounts(prev => { if (!prev.has(id)) return prev; const next = new Map(prev); next.delete(id); return next; });
       void apiFetch<void>(`/api/v1/user-state/channels/${encodeURIComponent(id)}/notification`, { method: 'DELETE' })
         .catch(() => undefined)
         .finally(notifyUserStateChanged);
@@ -121,6 +136,7 @@ export function UnreadProvider({ children }: { children: ReactNode }) {
     activeConvRef.current = id;
     if (id) {
       setUnreadConversations(prev => { const next = new Set(prev); next.delete(id); return next; });
+      setConversationUnreadCounts(prev => { if (!prev.has(id)) return prev; const next = new Map(prev); next.delete(id); return next; });
     }
   }, []);
   const isActiveChannel = useCallback((id: string) => activeChannelRef.current === id, []);
@@ -148,6 +164,8 @@ export function UnreadProvider({ children }: { children: ReactNode }) {
       unreadConversations,
       unreadThreadNotifications,
       hiddenConversations,
+      channelUnreadCounts,
+      conversationUnreadCounts,
       markChannelUnread,
       markChannelNotificationUnread,
       markConversationUnread,

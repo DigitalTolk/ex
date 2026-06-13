@@ -70,7 +70,12 @@
    * bg/level2 (chat top bar) #FFFFFF · bg/level3 (typing field) #FBFBFB
    * text/primary #231F20 · text/secondary #4F4C4D · text/muted #7B7979 · text/disabled #A7A5A6
    * borders/default #BDBCBC · borders/level1 #E9E9E9
-   * CTA #231F20 · CTA hover #4F4C4D · CTA disabled #A7A5A6 · badges #DE5D83
+   * primary/CTA #231F20 (neutral) · badges/highlights #DE5D83
+   *
+   * `primary` is the NEUTRAL action colour, NOT pink. Pink (#DE5D83)
+   * lives only in the `brand` token (unread counts, mention/status
+   * dots, send-button CTA). See the dark block below for the full
+   * rationale — keep the two themes symmetric.
    */
   --color-background: #FFFFFF;
   --color-foreground: #231F20;
@@ -225,7 +230,15 @@
      * bg/level2 (chat top bar) #353132 · bg/level3 #3F3A3B
      * text/primary #FFFFFF · text/secondary #D3D2D2 · text/muted #A7A5A6 · text/disabled #7B7979
      * borders/default #A7A5A6 · borders/subtle #4A4A4A
-     * CTA #DE5D83 · CTA hover #C94E71 · CTA disabled #EB9EB5 · badges #DE5D83
+     * primary/CTA #FFFFFF (neutral, inverted) · badges/highlights #DE5D83
+     *
+     * IMPORTANT: `primary` is the NEUTRAL action colour (near-black in
+     * light, white in dark) — it is NOT pink. Pink (#DE5D83) lives
+     * ONLY in the `brand` token and is reserved for unread counts,
+     * mention/status dots, and the one send-button CTA (which opts in
+     * explicitly via `dark:bg-brand`). Do not point `primary` at pink:
+     * `primary` drives every default button, focus accent, avatar
+     * fallback and mention pill, so making it pink floods the whole UI.
      */
     --color-background: #231F20;
     --color-foreground: #FFFFFF;
@@ -233,9 +246,9 @@
     --color-card-foreground: #FFFFFF;
     --color-popover: #353132;
     --color-popover-foreground: #FFFFFF;
-    --color-primary: #DE5D83;
-    --color-primary-foreground: #FFFFFF;
-    --color-primary-hover: #C94E71;
+    --color-primary: #FFFFFF;
+    --color-primary-foreground: #231F20;
+    --color-primary-hover: #D3D2D2;
     --color-link: #93C5FD;
     --color-secondary: #3F3A3B;
     --color-secondary-foreground: #FFFFFF;
@@ -259,8 +272,8 @@
     --color-chart-5: #FFFFFF;
     --color-sidebar: #2C2829;
     --color-sidebar-foreground: #FFFFFF;
-    --color-sidebar-primary: #DE5D83;
-    --color-sidebar-primary-foreground: #FFFFFF;
+    --color-sidebar-primary: #FFFFFF;
+    --color-sidebar-primary-foreground: #231F20;
     --color-sidebar-accent: #3F3A3B;
     --color-sidebar-accent-foreground: #FFFFFF;
     --color-sidebar-border: #4A4A4A;

@@ -147,17 +147,19 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, Props>(function Wys
           ErrorBoundary={LexicalErrorBoundary}
         />
         {placeholder && isEmpty && (
-          // `inset-0 flex items-center` so the placeholder vertically
-          // centres inside whatever box the editor occupies — matches
-          // the compact mobile composer (36px) just as well as the
-          // default desktop (min-h-[60px]) without per-variant
-          // overrides. Without items-center the text anchored at the
-          // top, drifting away from the send-button centre on mobile.
-          // The inner span carries `right-0 truncate whitespace-nowrap`
+          // `items-start` anchors the placeholder to the TOP of the
+          // editor box, where the caret sits on the first line — so the
+          // placeholder reads exactly where typing would begin instead
+          // of floating in the vertical centre of a tall (min-h-[60px])
+          // composer. We mirror `editorClassName` onto the overlay so
+          // the compact single-line mobile composer's `leading-9` keeps
+          // its placeholder vertically centred against the round send
+          // button (there the caret itself is centred within the 36px
+          // line). The inner span carries `truncate whitespace-nowrap`
           // so a long placeholder clips on a single line — tested
           // assertions live in src/test/wysiwyg-placeholder.test.tsx.
-          <div className="pointer-events-none absolute inset-0 flex items-center select-none text-base text-muted-foreground md:text-sm">
-            <span className="right-0 truncate whitespace-nowrap">{placeholder}</span>
+          <div className={`pointer-events-none absolute inset-0 flex items-start select-none text-base text-muted-foreground md:text-sm ${editorClassName}`}>
+            <span className="truncate whitespace-nowrap">{placeholder}</span>
           </div>
         )}
         <HistoryPlugin />

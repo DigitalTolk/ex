@@ -405,7 +405,7 @@ function SidebarSectionsSkeleton() {
 
 export function Sidebar({ onClose }: SidebarProps) {
   const { user } = useAuth();
-  const { unreadChannels, unreadConversations, unreadThreadNotifications, hiddenConversations, hideConversation } = useUnread();
+  const { unreadChannels, unreadConversations, unreadThreadNotifications, hiddenConversations, hideConversation, channelUnreadCounts, conversationUnreadCounts } = useUnread();
   const { data: channels } = useUserChannels();
   const conversationsQuery = useUserConversations();
   const { data: conversations } = conversationsQuery;
@@ -1210,9 +1210,9 @@ export function Sidebar({ onClose }: SidebarProps) {
             to="/threads"
             onClick={onClose}
             className={({ isActive }) =>
-              `flex items-center gap-2 rounded-md px-2 py-1 text-sm transition-colors max-md:h-12 max-md:px-3 max-md:py-0 max-md:text-base ${
+              `relative flex items-center gap-2 rounded-md px-2 py-1 text-sm transition-colors max-md:h-12 max-md:px-3 max-md:py-0 max-md:text-base ${
                 isActive
-                  ? 'bg-white/15 text-white font-semibold'
+                  ? 'bg-white/15 text-white font-semibold before:absolute before:inset-y-1 before:left-0 before:w-[3px] before:rounded-full before:bg-sidebar-foreground before:content-[""]'
                   : 'text-gray-300 hover:bg-white/10 hover:text-white'
               }`
             }
@@ -1234,9 +1234,9 @@ export function Sidebar({ onClose }: SidebarProps) {
             to="/directory/channels"
             onClick={onClose}
             className={() =>
-              `flex items-center gap-2 rounded-md px-2 py-1 text-sm transition-colors max-md:h-12 max-md:px-3 max-md:py-0 max-md:text-base ${
+              `relative flex items-center gap-2 rounded-md px-2 py-1 text-sm transition-colors max-md:h-12 max-md:px-3 max-md:py-0 max-md:text-base ${
                 directoryActive
-                  ? 'bg-white/15 text-white font-semibold'
+                  ? 'bg-white/15 text-white font-semibold before:absolute before:inset-y-1 before:left-0 before:w-[3px] before:rounded-full before:bg-sidebar-foreground before:content-[""]'
                   : 'text-gray-300 hover:bg-white/10 hover:text-white'
               }`
             }
@@ -1249,9 +1249,9 @@ export function Sidebar({ onClose }: SidebarProps) {
             to="/drafts"
             onClick={onClose}
             className={({ isActive }) =>
-              `flex items-center gap-2 rounded-md px-2 py-1 text-sm transition-colors max-md:h-12 max-md:px-3 max-md:py-0 max-md:text-base ${
+              `relative flex items-center gap-2 rounded-md px-2 py-1 text-sm transition-colors max-md:h-12 max-md:px-3 max-md:py-0 max-md:text-base ${
                 isActive
-                  ? 'bg-white/15 text-white font-semibold'
+                  ? 'bg-white/15 text-white font-semibold before:absolute before:inset-y-1 before:left-0 before:w-[3px] before:rounded-full before:bg-sidebar-foreground before:content-[""]'
                   : 'text-gray-300 hover:bg-white/10 hover:text-white'
               }`
             }
@@ -1514,6 +1514,7 @@ export function Sidebar({ onClose }: SidebarProps) {
                                     unreadChannels.has(item.channel.channelID) ||
                                     (userState?.channelNotifications ?? []).includes(item.channel.channelID)
                                   }
+                                  unreadCount={channelUnreadCounts?.get(item.channel.channelID) ?? 0}
                                   onClose={onClose}
                                   draggable={!isMobile}
                                   suppressNavigation={suppressChannelNavigationID === item.channel.channelID}
@@ -1551,6 +1552,7 @@ export function Sidebar({ onClose }: SidebarProps) {
                                 <ConversationRow
                                   conversation={conv}
                                   hasUnread={!!conv.unread || unreadConversations.has(conv.conversationID)}
+                                  unreadCount={conversationUnreadCounts?.get(conv.conversationID) ?? 0}
                                   dmAvatarURL={resolvedDMAvatarURL}
                                   dmUserStatus={resolvedDMUserStatus}
                                   dmOnline={dmOnline}
@@ -1567,6 +1569,7 @@ export function Sidebar({ onClose }: SidebarProps) {
                             <ConversationRow
                               conversation={conv}
                               hasUnread={!!conv.unread || unreadConversations.has(conv.conversationID)}
+                              unreadCount={conversationUnreadCounts?.get(conv.conversationID) ?? 0}
                               dmAvatarURL={resolvedDMAvatarURL}
                               dmUserStatus={resolvedDMUserStatus}
                               dmOnline={dmOnline}

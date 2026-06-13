@@ -42,10 +42,23 @@ describe('WysiwygEditor placeholder', () => {
     );
 
     expect(await screen.findByText(/Write to ~a-very-long-channel-name/)).toHaveClass(
-      'right-0',
       'truncate',
       'whitespace-nowrap',
     );
+  });
+
+  it('top-aligns the placeholder with the caret (not vertically centred)', async () => {
+    // The placeholder must sit where typing begins — the first line at
+    // the top of the box — rather than floating in the vertical centre
+    // of a tall composer. Its overlay wrapper carries `items-start`.
+    render(
+      <Providers>
+        <WysiwygEditor initialBody="" placeholder="Write to ~general" />
+      </Providers>,
+    );
+    const overlay = (await screen.findByText('Write to ~general')).parentElement!;
+    expect(overlay).toHaveClass('items-start');
+    expect(overlay).not.toHaveClass('items-center');
   });
 
   it('does not render the placeholder when the editor has content', async () => {

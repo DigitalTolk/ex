@@ -1,5 +1,6 @@
 import { NavLink } from 'react-router-dom';
 import { Star, BellOff, MoreVertical } from 'lucide-react';
+import { Badge } from '@/components/ui/badge';
 import { ChannelIcon } from '@/components/ChannelIcon';
 import {
   DropdownMenu,
@@ -15,6 +16,11 @@ import type { CSSProperties } from 'react';
 interface Props {
   channel: UserChannel;
   hasUnread: boolean;
+  // Live count of unread messages observed this session (incremented
+  // per WebSocket message.new while the channel isn't active). 0 when
+  // unknown — e.g. on a cold load, where unread is only known as a
+  // boolean — in which case the row falls back to the unread dot.
+  unreadCount?: number;
   onClose: () => void;
   draggable?: boolean;
   dragRef?: (node: HTMLElement | null) => void;
@@ -30,6 +36,7 @@ interface Props {
 export function ChannelRow({
   channel,
   hasUnread,
+  unreadCount = 0,
   onClose,
   draggable,
   dragRef,
@@ -79,9 +86,9 @@ export function ChannelRow({
         }}
         draggable={false}
         className={({ isActive }) =>
-          `flex flex-1 min-w-0 items-center gap-2 rounded-md py-1 pl-2 pr-12 text-sm transition-colors max-md:h-12 max-md:py-0 max-md:pl-3 max-md:pr-20 max-md:text-base ${
+          `relative flex flex-1 min-w-0 items-center gap-2 rounded-md py-1 pl-2 pr-12 text-sm transition-colors max-md:h-12 max-md:py-0 max-md:pl-3 max-md:pr-20 max-md:text-base ${
             isActive
-              ? 'bg-white/15 text-white font-semibold'
+              ? 'bg-white/15 text-white font-semibold before:absolute before:inset-y-1 before:left-0 before:w-[3px] before:rounded-full before:bg-sidebar-foreground before:content-[""]'
               : hasUnread
                 ? 'font-bold text-white hover:bg-white/10'
                 : 'text-gray-300 hover:bg-white/10 hover:text-white'
@@ -94,14 +101,27 @@ export function ChannelRow({
         <span className={`truncate ${channel.muted ? 'text-gray-500' : ''}`}>
           {channel.channelName}
         </span>
-        {/* Brand-pink unread dot — matches the design's per-row
-            highlight. Muted channels intentionally suppress the dot. */}
+        {/* Brand-pink unread indicator. When we have a live count
+            (messages seen via WebSocket this session) we show it as a
+            numeric badge, matching the design; otherwise — e.g. a cold
+            load where unread is only known as a boolean — we fall back
+            to a dot. Muted channels suppress both. */}
         {hasUnread && !channel.muted && (
-          <span
-            aria-label="Unread"
-            data-testid={`channel-unread-dot-${channel.channelID}`}
-            className="ml-auto inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-brand"
-          />
+          unreadCount > 0 ? (
+            <Badge
+              variant="brand"
+              className="ml-auto text-[11px]"
+              data-testid={`channel-unread-badge-${channel.channelID}`}
+            >
+              {unreadCount > 99 ? '99+' : unreadCount}
+            </Badge>
+          ) : (
+            <span
+              aria-label="Unread"
+              data-testid={`channel-unread-dot-${channel.channelID}`}
+              className="ml-auto inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-brand"
+            />
+          )
         )}
         {channel.muted && (
           <BellOff className="ml-auto h-3 w-3 shrink-0 text-gray-500 group-hover/row:hidden" aria-label="Muted" />

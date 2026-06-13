@@ -206,7 +206,7 @@ export function AppTopBar({ onOpenChannels, channelsButtonHidden }: AppTopBarPro
           <SearchBar />
         </div>
 
-        <div className="flex items-center justify-end">
+        <div className="flex items-center justify-end md:pr-2">
           {isMobile ? (
             // Mobile: tapping the avatar opens a full-screen sheet
             // dialog rather than a cramped dropdown — easier to hit

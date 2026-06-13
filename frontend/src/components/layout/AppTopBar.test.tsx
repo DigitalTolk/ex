@@ -101,7 +101,7 @@ describe('AppTopBar', () => {
     expect(screen.getByTestId('user-menu-admin')).toBeInTheDocument();
     expect(screen.getByTestId('user-menu-invite')).toBeInTheDocument();
     expect(screen.getByTestId('user-menu-emojis')).toBeInTheDocument();
-    // Theme switcher lives inside EditProfileDialog, not the dropdown.
+    // Theme switching lives inside EditProfileDialog, not the dropdown.
     expect(screen.queryByTestId('user-menu-theme')).not.toBeInTheDocument();
   });
 
