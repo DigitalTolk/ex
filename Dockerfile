@@ -26,7 +26,7 @@ RUN VERSION="${GIT_TAG:-${GIT_SHA}}" && \
       -o /ex ./cmd/server
 
 # Stage 3: Runtime
-FROM alpine:3.23
+FROM alpine:3.24
 RUN apk add --no-cache ca-certificates tzdata
 COPY --from=backend /ex /usr/local/bin/ex
 EXPOSE 8080
