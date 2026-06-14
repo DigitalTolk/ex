@@ -90,4 +90,33 @@ describe('ChannelMentionsPlugin browser typeahead', () => {
     seed(editor, '~zzzqq');
     await expect.element(screen.getByText('No channels match')).toBeVisible();
   });
+
+  it('ranks substring-only matches (non-prefix comparator side) below prefix matches', async () => {
+    // "era" is a substring of "general" (positions 3..6) but "general" does
+    // NOT start with "era" → the comparator's `: 1` non-prefix side runs for
+    // both channels (the existing `~gen` test only exercises the `? 0` side).
+    userChannels = [
+      { channelID: 'c-gen', channelName: 'general', channelType: 'public' },
+      { channelID: 'c-ops', channelName: 'operations', channelType: 'public' },
+    ];
+    const { editor, screen } = await mount();
+    seed(editor, '~era');
+    await expect.element(screen.getByTestId('channel-popup')).toBeVisible();
+    // "general" contains "era"; "operations" contains "era" (op-ER-Ations →
+    // o,p,e,r,a,t... "era" = e(2)r(3)a(4)). Both are substring matches.
+    await vi.waitFor(() => {
+      expect(document.querySelectorAll('[data-testid="channel-option"]').length).toBe(2);
+    });
+  });
+
+  it('renders the channel list with an undefined empty label on a bare ~ trigger', async () => {
+    // A bare "~" yields an empty query string: `query?.length` is 0 → the
+    // emptyLabel ternary takes its `undefined` side while options still render.
+    userChannels = [{ channelID: 'c-gen', channelName: 'general', channelType: 'public' }];
+    const { editor, screen } = await mount();
+    seed(editor, '~');
+    await expect.element(screen.getByTestId('channel-popup')).toBeVisible();
+    await expect.element(screen.getByTestId('channel-option')).toBeVisible();
+    expect(document.querySelector('[data-testid="channel-option"]')).not.toBeNull();
+  });
 });

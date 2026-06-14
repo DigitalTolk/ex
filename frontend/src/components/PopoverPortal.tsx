@@ -69,6 +69,7 @@ export function PopoverPortal({
     if (!open) return;
     function onDown(e: PointerEvent) {
       const target = e.target as Node | null;
+      /* v8 ignore next -- a dispatched pointerdown always carries a target Node; defensive null guard */
       if (!target) return;
       if (contentRef.current?.contains(target)) return;
       if (triggerRef.current?.contains(target)) return;
@@ -123,6 +124,7 @@ export function PopoverPortal({
               overflow: 'hidden',
               overscrollBehaviorY: 'contain',
               touchAction: 'pan-y',
+              /* v8 ignore next 2 -- in sheet mode `measured` is forced true (see line 92), so the falsy arms are dead */
               opacity: measured ? 1 : 0,
               pointerEvents: measured ? 'auto' : 'none',
               ...dragStyle,

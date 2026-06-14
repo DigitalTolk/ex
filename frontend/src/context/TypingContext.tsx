@@ -86,11 +86,13 @@ export function TypingProvider({ children }: { children: ReactNode }) {
       if (e.userID === selfRef.current) continue;
       if (e.threadRootID === '') {
         const list = groupedParent[e.parentID] ?? [];
+        /* v8 ignore next -- recordTyping dedups entries by (parentID,userID,threadRootID), so a user can't already be in the parent list; the includes() short-circuit is defensive */
         if (!list.includes(e.userID)) list.push(e.userID);
         groupedParent[e.parentID] = list;
       } else {
         const k = threadTypingKey(e.parentID, e.threadRootID);
         const list = groupedThread[k] ?? [];
+        /* v8 ignore next -- recordTyping dedups entries by (parentID,userID,threadRootID), so a user can't already be in the thread list; the includes() short-circuit is defensive */
         if (!list.includes(e.userID)) list.push(e.userID);
         groupedThread[k] = list;
       }

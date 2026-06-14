@@ -87,6 +87,7 @@ export const EX_TRANSFORMERS = [
   NEW_ORDERED_LIST,
   ...TRANSFORMERS.filter((t) => {
     if (t.type !== 'element') return true;
+    /* v8 ignore next -- every Lexical element transformer declares dependencies; the ?? [] fallback is defensive */
     return !(t.dependencies ?? []).some((d) => STRIPPED_NODE_TYPES.has(d.getType()));
   }),
 ];

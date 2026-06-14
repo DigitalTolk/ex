@@ -45,8 +45,9 @@ func (m mockChannelSearcher) Channels(_ context.Context, _ string, _ int) ([]str
 
 // dataChannelStore stores channels and returns them. Used for handler integration tests.
 type dataChannelStore struct {
-	channels map[string]*model.Channel
-	getErr   error
+	channels      map[string]*model.Channel
+	getErr        error
+	listPublicErr error
 }
 
 func newDataChannelStore() *dataChannelStore {
@@ -83,6 +84,9 @@ func (s *dataChannelStore) UpdateChannel(_ context.Context, ch *model.Channel) e
 	return nil
 }
 func (s *dataChannelStore) ListPublicChannels(_ context.Context, _ int, _ string) ([]*model.Channel, string, error) {
+	if s.listPublicErr != nil {
+		return nil, "", s.listPublicErr
+	}
 	var result []*model.Channel
 	for _, ch := range s.channels {
 		if ch.Type == model.ChannelTypePublic {

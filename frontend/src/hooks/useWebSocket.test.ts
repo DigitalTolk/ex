@@ -231,6 +231,27 @@ describe('useWebSocket', () => {
     }
   });
 
+  it('aborts a reconnect when the token refresh comes back empty', async () => {
+    // On reconnect the hook refreshes the token first. If the refresh
+    // returns no token (session fully expired), the connect attempt must
+    // bail out and NOT open a new socket.
+    refreshAccessTokenMock.mockResolvedValue('');
+    renderHook(() => useWebSocket({ enabled: true }));
+
+    expect(MockWebSocket.instances).toHaveLength(1);
+    MockWebSocket.instances[0].simulateClose();
+
+    await act(async () => {
+      vi.advanceTimersByTime(1000); // fire the reconnect timer
+      await Promise.resolve();
+    });
+
+    // refreshAccessToken returned '' → the connect attempt bailed at the
+    // `if (!token) return` guard, so no new socket was ever created.
+    expect(refreshAccessTokenMock).toHaveBeenCalled();
+    expect(MockWebSocket.instances).toHaveLength(1);
+  });
+
   it('resets retry count after successful open', async () => {
     renderHook(() =>
       useWebSocket({ enabled: true }),

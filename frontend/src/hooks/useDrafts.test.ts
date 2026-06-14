@@ -443,6 +443,39 @@ describe('useDrafts', () => {
     }
   });
 
+  it('dedups against a cached draft that omits parentMessageID and attachmentIDs', async () => {
+    // The cached draft has both parentMessageID and attachmentIDs undefined,
+    // exercising the `?? ''` scope fallback (sameDraftScope) and the `?? []`
+    // fallback (sortedAttachmentIDs) when comparing the incoming save.
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    queryClient.setQueryData<MessageDraft[]>(['drafts'], [
+      {
+        id: 'draft-bare',
+        userID: 'u-1',
+        parentID: 'dm-9',
+        parentType: 'conversation',
+        // parentMessageID + attachmentIDs intentionally omitted.
+        body: 'same',
+        updatedAt: '2026-05-03T10:00:00Z',
+        createdAt: '2026-05-03T10:00:00Z',
+      } as MessageDraft,
+    ]);
+    const wrapper = ({ children }: { children: ReactNode }) =>
+      createElement(QueryClientProvider, { client: queryClient }, children);
+    const { result } = renderHook(() => useSaveDraft(), { wrapper });
+
+    // Identical body + no attachments → matches the cached draft, so no PUT fires.
+    await result.current.mutateAsync({
+      parentID: 'dm-9',
+      parentType: 'conversation',
+      body: 'same',
+    });
+
+    expect(apiFetch).not.toHaveBeenCalled();
+  });
+
   it('hydrates persisted draft attachment IDs into composer attachment chips', async () => {
     vi.mocked(apiFetch).mockResolvedValue([
       {

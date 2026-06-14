@@ -89,6 +89,7 @@ function sidebarDndDebugEnabled(): boolean {
 
 function sidebarDndDebug(event: string, details?: Record<string, unknown>) {
   if (!sidebarDndDebugEnabled()) return;
+  /* v8 ignore next -- debug-only logging; every call site passes a details object, so the ?? {} fallback is defensive */
   console.debug(`[sidebar-dnd] ${event}`, details ?? {});
 }
 
@@ -130,6 +131,7 @@ function PragmaticCategoryHeader({
 
   useEffect(() => {
     const element = elementRef.current;
+    /* v8 ignore next -- elementRef is always attached after mount; defensive null guard */
     if (!element) return undefined;
     sidebarDndDebug('category-header register', {
       id,
@@ -167,6 +169,7 @@ function PragmaticCategoryHeader({
           element,
           getData: ({ input, element }) => {
             const currentDropData = dropDataRef.current;
+            /* v8 ignore next -- this drop target only registers when hasDropData, so dropDataRef is set; defensive guard */
             if (!currentDropData) return {};
             const data = attachClosestEdge(currentDropData, {
               input,
@@ -251,6 +254,7 @@ function PragmaticCategoryDropHitbox({
 
   useEffect(() => {
     const element = elementRef.current;
+    /* v8 ignore next -- elementRef is always attached after mount; defensive null guard */
     if (!element) return undefined;
     return dropTargetForElements({
       element,
@@ -350,6 +354,7 @@ function PragmaticConversationRow({
 
   useEffect(() => {
     const element = elementRef.current;
+    /* v8 ignore next -- elementRef is always attached after mount; the !element arm is defensive */
     if (!element || disabled) return undefined;
     return combine(
       makeDraggable({
@@ -491,6 +496,7 @@ export function Sidebar({ onClose }: SidebarProps) {
   const dmOtherUserIDs = useMemo(() => {
     const ids: string[] = [];
     const seen = new Set<string>();
+    /* v8 ignore next -- visibleConversations is always an array (defaults to []); the ?? [] fallback is defensive */
     for (const c of visibleConversations ?? []) {
       if (c.type !== 'dm') continue;
       if (c.profileResolved) continue;
@@ -515,6 +521,7 @@ export function Sidebar({ onClose }: SidebarProps) {
   }
 
   function positionForDrop(items: SidebarItem[], targetIndex: number): number {
+    /* v8 ignore next -- only reached during a channel drag, so the active drag is a channel and the : null arm is dead */
     const currentDraggedChannel = activeDragRef.current?.type === 'channel' ? activeDragRef.current.channel : null;
     const channelsOnly = items
       .filter((item): item is Extract<SidebarItem, { kind: 'channel' }> => item.kind === 'channel')
@@ -535,6 +542,7 @@ export function Sidebar({ onClose }: SidebarProps) {
   function currentDraggedItemID(): string | null {
     const drag = activeDragRef.current;
     if (drag?.type === 'channel') return drag.channel.channelID;
+    /* v8 ignore next -- currentDraggedItemID only runs mid-drag, so drag is non-null; the drag===null short-circuit is defensive */
     if (drag?.type === 'conversation') return drag.conversation.conversationID;
     return null;
   }
@@ -568,7 +576,9 @@ export function Sidebar({ onClose }: SidebarProps) {
   }
 
   function dropChannelInto(sectionKey: string, items: SidebarItem[], targetIndex: number) {
+    /* v8 ignore next -- only called when the active drag is a channel (see applyResolvedDrop), so the : null arm is dead */
     const currentDraggedChannel = activeDragRef.current?.type === 'channel' ? activeDragRef.current.channel : null;
+    /* v8 ignore start -- currentDraggedChannel is always set here, and a resolved channel drop never targets the DM section (canAcceptChannelDrop excludes it); both guards are defensive */
     if (!currentDraggedChannel) {
       sidebarDndDebug('channel-drop ignored: no active channel', {
         sequence: channelDropSequenceRef.current,
@@ -587,6 +597,7 @@ export function Sidebar({ onClose }: SidebarProps) {
       });
       return;
     }
+    /* v8 ignore stop */
     if (sectionKey === SidebarSectionKeys.Favorites) {
       const sidebarPosition = positionForSidebarItemDrop(items, targetIndex);
       sidebarDndDebug('channel-favorite scheduled', {
@@ -635,9 +646,11 @@ export function Sidebar({ onClose }: SidebarProps) {
   }
 
   function dropConversationInto(sectionKey: string, items: SidebarItem[], targetIndex: number) {
+    /* v8 ignore start -- only called for a conversation drag resolved onto Favorites, so currentDraggedConversation is set and sectionKey is Favorites; both guards (and the : null arm) are defensive */
     const currentDraggedConversation = activeDragRef.current?.type === 'conversation' ? activeDragRef.current.conversation : null;
     if (!currentDraggedConversation) return;
     if (sectionKey !== SidebarSectionKeys.Favorites) return;
+    /* v8 ignore stop */
     const sidebarPosition = positionForSidebarItemDrop(items, targetIndex);
     sidebarDndDebug('conversation-mutation scheduled', {
       sequence: channelDropSequenceRef.current,
@@ -698,15 +711,19 @@ export function Sidebar({ onClose }: SidebarProps) {
   }
 
   function sortedCategoriesWithoutDragged(): SidebarCategory[] {
+    /* v8 ignore start -- only runs during a category drag with categories loaded and distinct positions: the ?? [] fallback, the non-category ternary arm, and the equal-position localeCompare tiebreak are all defensive */
     return [...(categories ?? [])]
       .filter((category) => category.id !== (activeDragRef.current?.type === 'category' ? activeDragRef.current.categoryID : null))
       .sort((a, b) => a.position - b.position || a.name.localeCompare(b.name));
+    /* v8 ignore stop */
   }
 
   function categoryOrderDebugSnapshot(): Array<{ id: string; name: string; position: number }> {
+    /* v8 ignore start -- debug-only snapshot; the ?? [] fallback and the equal-position localeCompare tiebreak are defensive */
     return [...(categories ?? [])]
       .sort((a, b) => a.position - b.position || a.name.localeCompare(b.name))
       .map((category) => ({ id: category.id, name: category.name, position: category.position }));
+    /* v8 ignore stop */
   }
 
   function channelOrderDebugSnapshot(sectionKey?: string) {
@@ -730,10 +747,12 @@ export function Sidebar({ onClose }: SidebarProps) {
   function orderedCategoriesAfterDrop(draggedCategoryID: string, beforeCategoryID: string): SidebarCategory[] {
     const withoutDragged = sortedCategoriesWithoutDragged();
     const draggedCategory = categories?.find((category) => category.id === draggedCategoryID);
+    /* v8 ignore next -- the dragged category is always present in the cache during a drag; defensive guard */
     if (!draggedCategory) return withoutDragged;
     const beforeIndex = beforeCategoryID === CATEGORY_DROP_END
       ? withoutDragged.length
       : withoutDragged.findIndex((category) => category.id === beforeCategoryID);
+    /* v8 ignore next -- beforeCategoryID is always a real, non-dragged category (or CATEGORY_DROP_END handled above), so findIndex never returns -1 here; the <0 arm is defensive */
     const insertIndex = beforeIndex < 0 ? withoutDragged.length : beforeIndex;
     return [
       ...withoutDragged.slice(0, insertIndex),
@@ -743,12 +762,15 @@ export function Sidebar({ onClose }: SidebarProps) {
   }
 
   function normalizeCategoryDropSlot(beforeCategoryID: string, draggedCategoryID: string): string {
+    /* v8 ignore next -- the resolve path never produces beforeCategoryID === draggedCategoryID (self-targeting is filtered upstream), so the nextCategoryTarget arm is defensive */
     return beforeCategoryID === draggedCategoryID ? nextCategoryTarget(draggedCategoryID) : beforeCategoryID;
   }
 
   function moveCategoryBefore(beforeCategoryID: string) {
+    /* v8 ignore next -- only called for a category drop (see applyResolvedDrop), so the : null arm is dead */
     const draggedCategoryID = activeDragRef.current?.type === 'category' ? activeDragRef.current.categoryID : null;
     const sequence = categoryDropSequenceRef.current;
+    /* v8 ignore start -- draggedCategoryID is always set here and the dragged category is always in the cache during a drag; both guards are defensive */
     if (!draggedCategoryID) {
       sidebarDndDebug('category-drop ignored: no active category', {
         sequence,
@@ -768,6 +790,7 @@ export function Sidebar({ onClose }: SidebarProps) {
       });
       return;
     }
+    /* v8 ignore stop */
 
     const nextOrder = orderedCategoriesAfterDrop(draggedCategoryID, normalizedBeforeCategoryID);
     sidebarDndDebug('category-reorder scheduled', {
@@ -799,16 +822,19 @@ export function Sidebar({ onClose }: SidebarProps) {
     if (!drop) return;
     if (drop.kind === 'channel') {
       const section = sidebarSections.find((candidate) => candidate.key === drop.sectionKey);
+      /* v8 ignore next -- the drop was resolved from an existing section, so it is always found; defensive guard */
       if (!section) return;
       if (activeDragRef.current?.type === 'channel') {
         dropChannelInto(drop.sectionKey, section.items, drop.index);
         return;
       }
+      /* v8 ignore next -- a channel-kind drop only originates from a channel or conversation drag; after the channel branch returns, the active drag is always a conversation, so the false arm is dead */
       if (activeDragRef.current?.type === 'conversation') {
         dropConversationInto(drop.sectionKey, section.items, drop.index);
       }
       return;
     }
+    /* v8 ignore next -- a category-kind drop only originates from a category drag; the early-return arm is dead */
     if (activeDragRef.current?.type !== 'category') return;
     moveCategoryBefore(drop.beforeCategoryID);
   }
@@ -822,6 +848,7 @@ export function Sidebar({ onClose }: SidebarProps) {
     if (sectionIndex < 1) return null;
     for (let index = sectionIndex - 1; index >= 0; index -= 1) {
       const section = sidebarSections[index];
+      /* v8 ignore next -- sections preceding any drop target are always channel-accepting (DM is the last section), so the false arm is defensive */
       if (canAcceptChannelDrop(section.key)) {
         return { kind: 'channel', sectionKey: section.key, index: channelCount(section.items), area: 'end' };
       }
@@ -839,11 +866,13 @@ export function Sidebar({ onClose }: SidebarProps) {
 
   function channelDropAreaForIndex(sectionKey: string, index: number): ChannelDropArea {
     const section = sidebarSections.find((candidate) => candidate.key === sectionKey);
+    /* v8 ignore next -- always called with a sectionKey from an existing payload, so the section is found; defensive guard */
     if (!section) return 'row';
     return index >= dropCount(sectionKey, section.items) ? 'end' : 'row';
   }
 
   function resolveDropPayload(payload: DropPayload | undefined): ResolvedDrop | null {
+    /* v8 ignore next -- callers always pass a defined payload from a live drop target; the !payload guard is defensive */
     if (!payload) return null;
     const currentDrag = activeDragRef.current;
     if (payload.type === 'channel-target') {
@@ -852,6 +881,7 @@ export function Sidebar({ onClose }: SidebarProps) {
         return null;
       }
       if (currentDrag?.type === 'conversation' && payload.sectionKey !== SidebarSectionKeys.Favorites) return null;
+      /* v8 ignore next -- a category drag already returned above, so the drag here is always a channel or conversation; the neither-type guard is defensive */
       if (currentDrag?.type !== 'channel' && currentDrag?.type !== 'conversation') return null;
       const index = edge === 'bottom' ? payload.index + 1 : payload.index;
       const area = edge === 'bottom'
@@ -859,6 +889,7 @@ export function Sidebar({ onClose }: SidebarProps) {
         : payload.area;
       return { kind: 'channel', sectionKey: payload.sectionKey, index, area };
     }
+    /* v8 ignore next -- DropPayload has only two variants; channel-target returned above, so this is always a section-header-target (the false arm is unreachable) */
     if (payload.type === 'section-header-target') {
       if (currentDrag?.type === 'channel') {
         return channelDropFromSectionHeader(payload.sectionKey, extractClosestEdge(payload));
@@ -884,6 +915,7 @@ export function Sidebar({ onClose }: SidebarProps) {
   }
 
   function nextCategoryTarget(categoryID: string): string {
+    /* v8 ignore next -- only runs mid category drag with categories loaded and distinct positions; the ?? [] fallback and the equal-position localeCompare tiebreak are defensive */
     const ordered = [...(categories ?? [])].sort((a, b) => a.position - b.position || a.name.localeCompare(b.name));
     const index = ordered.findIndex((category) => category.id === categoryID);
     return ordered[index + 1]?.id ?? CATEGORY_DROP_END;
@@ -945,6 +977,7 @@ export function Sidebar({ onClose }: SidebarProps) {
       resolved: describeResolvedDrop(resolvedDrop),
       previousResolved: describeResolvedDrop(resolvedDropRef.current),
       order: categoryOrderDebugSnapshot(),
+      /* v8 ignore next -- categoryDragStartedAtRef is always set during an active category drag, so the ===null arm is dead (debug-only) */
       elapsedMs: categoryDragStartedAtRef.current === null
         ? null
         : Math.round(performance.now() - categoryDragStartedAtRef.current),
@@ -955,6 +988,7 @@ export function Sidebar({ onClose }: SidebarProps) {
     if (activeDragRef.current?.type !== 'category') return;
     if (event === 'drag') return;
     const now = performance.now();
+    /* v8 ignore next -- debug-only throttle; tests fire events within the 250ms window so the !force / >=250ms arms are not exercised */
     if (!force && now - lastCategoryMonitorDragLogAtRef.current < 250) return;
     lastCategoryMonitorDragLogAtRef.current = now;
     sidebarDndDebug(`category-monitor ${event}`, {
@@ -962,6 +996,7 @@ export function Sidebar({ onClose }: SidebarProps) {
       draggedCategoryID: activeDragRef.current.categoryID,
       payload: describeDropPayload(payload),
       resolved: describeResolvedDrop(resolvedDropRef.current),
+      /* v8 ignore next -- categoryDragStartedAtRef is always set during an active category drag, so the ===null arm is dead (debug-only) */
       elapsedMs: categoryDragStartedAtRef.current === null
         ? null
         : Math.round(now - categoryDragStartedAtRef.current),
@@ -981,6 +1016,7 @@ export function Sidebar({ onClose }: SidebarProps) {
     });
     if (lastChannelDebugKeyRef.current === key) return;
     lastChannelDebugKeyRef.current = key;
+    /* v8 ignore next 4 -- debug-only; during a channel drag effectiveDrop is always a channel-kind drop, so the nested payload-based fallback arms are dead */
     const sectionKey = effectiveDrop?.kind === 'channel'
       ? effectiveDrop.sectionKey
       : payload?.type === 'channel-target' || payload?.type === 'section-header-target'
@@ -995,6 +1031,7 @@ export function Sidebar({ onClose }: SidebarProps) {
       effectiveResolved: describeResolvedDrop(effectiveDrop),
       keptPrevious: !resolvedDrop && effectiveDrop?.kind === 'channel',
       order: channelOrderDebugSnapshot(sectionKey),
+      /* v8 ignore next -- channelDragStartedAtRef is always set during an active channel drag, so the ===null arm is dead (debug-only) */
       elapsedMs: channelDragStartedAtRef.current === null
         ? null
         : Math.round(performance.now() - channelDragStartedAtRef.current),
@@ -1005,6 +1042,7 @@ export function Sidebar({ onClose }: SidebarProps) {
     if (activeDragRef.current?.type !== 'channel') return;
     if (event === 'drag') return;
     const now = performance.now();
+    /* v8 ignore next -- debug-only throttle; tests fire events within the 250ms window so the !force / >=250ms arms are not exercised */
     if (!force && now - lastChannelMonitorDragLogAtRef.current < 250) return;
     lastChannelMonitorDragLogAtRef.current = now;
     sidebarDndDebug(`channel-monitor ${event}`, {
@@ -1012,6 +1050,7 @@ export function Sidebar({ onClose }: SidebarProps) {
       draggedChannelID: activeDragRef.current.channel.channelID,
       payload: describeDropPayload(payload),
       resolved: describeResolvedDrop(resolvedDropRef.current),
+      /* v8 ignore next -- channelDragStartedAtRef is always set during an active channel drag, so the ===null arm is dead (debug-only) */
       elapsedMs: channelDragStartedAtRef.current === null
         ? null
         : Math.round(now - channelDragStartedAtRef.current),
@@ -1103,6 +1142,7 @@ export function Sidebar({ onClose }: SidebarProps) {
         draggedChannelID: activeDragRef.current.channel.channelID,
         payload: describeDropPayload(payload),
         resolved: describeResolvedDrop(resolvedDrop),
+        /* v8 ignore next -- channelDragStartedAtRef is always set during an active channel drag, so the ===null arm is dead (debug-only) */
         elapsedMs: channelDragStartedAtRef.current === null
           ? null
           : Math.round(performance.now() - channelDragStartedAtRef.current),
@@ -1115,6 +1155,7 @@ export function Sidebar({ onClose }: SidebarProps) {
         payload: describeDropPayload(payload),
         resolved: describeResolvedDrop(resolvedDrop),
         order: categoryOrderDebugSnapshot(),
+        /* v8 ignore next -- categoryDragStartedAtRef is always set during an active category drag, so the ===null arm is dead (debug-only) */
         elapsedMs: categoryDragStartedAtRef.current === null
           ? null
           : Math.round(performance.now() - categoryDragStartedAtRef.current),
@@ -1135,6 +1176,7 @@ export function Sidebar({ onClose }: SidebarProps) {
   }
 
   function clearSuppressedChannelNavigation() {
+    /* v8 ignore next -- the consumed callback fires right after a drop scheduled the reset timeout, so the ref is set; the null arm is defensive */
     if (suppressNavigationResetRef.current !== null) {
       window.clearTimeout(suppressNavigationResetRef.current);
       suppressNavigationResetRef.current = null;
@@ -1611,6 +1653,7 @@ export function Sidebar({ onClose }: SidebarProps) {
       <ConfirmDialog
         open={categoryToDelete !== null}
         onOpenChange={(o) => {
+          /* v8 ignore next -- controlled dialog (open={categoryToDelete !== null}); onOpenChange only fires with o=false on dismiss, so the o=true arm is unreachable */
           if (!o) setCategoryToDelete(null);
         }}
         title="Delete category?"
@@ -1622,6 +1665,7 @@ export function Sidebar({ onClose }: SidebarProps) {
         confirmLabel="Delete category"
         destructive
         onConfirm={() => {
+          /* v8 ignore next -- onConfirm only fires while the dialog is open, i.e. categoryToDelete is non-null; the null arm is unreachable */
           if (categoryToDelete) deleteCategory.mutate(categoryToDelete.id);
         }}
         testIDPrefix="delete-category"

@@ -174,6 +174,72 @@ describe('MessageDropZone browser', () => {
     expect(document.querySelector('[data-testid="message-drop-overlay"]')).not.toBeNull();
   });
 
+  // A drag whose dataTransfer advertises a non-Files type BEFORE Files, so
+  // hasFiles()'s loop skips the first entry (the `!== 'Files'` continue arm)
+  // and only matches on the second.
+  function mixedTypesDragEvent(type: string, files: File[]) {
+    const event = new Event(type, { bubbles: true, cancelable: true }) as DragEvent;
+    Object.defineProperty(event, 'dataTransfer', {
+      value: { types: ['text/uri-list', 'Files'], files, dropEffect: '' },
+    });
+    return event;
+  }
+
+  it('matches Files even when another mime type is advertised first', async () => {
+    const onFiles = vi.fn();
+    await render(
+      <MessageDropZone onFiles={onFiles}>
+        <div data-testid="dropzone-child">drop here</div>
+      </MessageDropZone>,
+    );
+    const wrapper = (document.querySelector('[data-testid="dropzone-child"]') as HTMLElement).parentElement as HTMLElement;
+    wrapper.dispatchEvent(mixedTypesDragEvent('dragenter', [new File(['x'], 'm.png', { type: 'image/png' })]));
+    await vi.waitFor(() => expect(document.querySelector('[data-testid="message-drop-overlay"]')).not.toBeNull());
+  });
+
+  it('ignores dragover/dragleave while disabled (early-return arms)', async () => {
+    const onFiles = vi.fn();
+    await render(
+      <MessageDropZone onFiles={onFiles} disabled>
+        <div data-testid="dropzone-child">drop here</div>
+      </MessageDropZone>,
+    );
+    const wrapper = (document.querySelector('[data-testid="dropzone-child"]') as HTMLElement).parentElement as HTMLElement;
+    const file = new File(['x'], 'a.png', { type: 'image/png' });
+    // dragover while disabled: hits the `disabled || !hasFiles` early-return,
+    // so preventDefault never runs and no overlay appears.
+    const over = fileDragEvent('dragover', [file]);
+    wrapper.dispatchEvent(over);
+    expect(over.defaultPrevented).toBe(false);
+    // dragleave while disabled: hits the `if (disabled) return` arm.
+    wrapper.dispatchEvent(fileDragEvent('dragleave', [file]));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(document.querySelector('[data-testid="message-drop-overlay"]')).toBeNull();
+  });
+
+  // A drop whose dataTransfer advertises Files but exposes an undefined file
+  // list, so `e.dataTransfer.files ?? []` falls through to the empty array.
+  function undefinedFilesDropEvent() {
+    const event = new Event('drop', { bubbles: true, cancelable: true }) as DragEvent;
+    Object.defineProperty(event, 'dataTransfer', {
+      value: { types: ['Files'], files: undefined, dropEffect: '' },
+    });
+    return event;
+  }
+
+  it('treats a drop with an undefined file list as zero files', async () => {
+    const onFiles = vi.fn();
+    await render(
+      <MessageDropZone onFiles={onFiles}>
+        <div data-testid="dropzone-child">drop here</div>
+      </MessageDropZone>,
+    );
+    const wrapper = (document.querySelector('[data-testid="dropzone-child"]') as HTMLElement).parentElement as HTMLElement;
+    wrapper.dispatchEvent(undefinedFilesDropEvent());
+    await new Promise((r) => setTimeout(r, 20));
+    expect(onFiles).not.toHaveBeenCalled();
+  });
+
   it('does not call onFiles when a drop carries zero files', async () => {
     const onFiles = vi.fn();
     await render(

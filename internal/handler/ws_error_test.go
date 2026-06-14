@@ -39,14 +39,14 @@ func TestWSHandler_SetOriginPolicy_SkipsEmptyPattern(t *testing.T) {
 // membership/conversation stores before dialing to drive the subscribe loops
 // and their error arms.
 type wsConnectEnv struct {
-	h       *WSHandler
-	members *dataMembershipStore
-	convs   *dataConversationStore
+	h        *WSHandler
+	members  *dataMembershipStore
+	convs    *dataConversationStore
 	channels *dataChannelStore
-	jwtMgr  *auth.JWTManager
-	token   string
-	userID  string
-	ps      *pubsub.RedisPubSub
+	jwtMgr   *auth.JWTManager
+	token    string
+	userID   string
+	ps       *pubsub.RedisPubSub
 }
 
 func newWSConnectEnv(t *testing.T) *wsConnectEnv {

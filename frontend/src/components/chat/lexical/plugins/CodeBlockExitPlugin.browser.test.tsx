@@ -151,6 +151,51 @@ describe('CodeBlockExitPlugin (browser)', () => {
     expect(paragraphCount(editor)).toBe(0);
   });
 
+  it('ArrowDown on an empty code block removes it for a fresh paragraph', async () => {
+    // appendParagraphAfter sees an empty code node (trim() === '') and takes
+    // the removeCodeNodeForParagraph branch instead of inserting after.
+    const editor = await mount();
+    seedCode(editor, ['']);
+    editor.dispatchCommand(KEY_ARROW_DOWN_COMMAND, ev());
+    await flush();
+    expect(hasCodeNode(editor)).toBe(false);
+    expect(paragraphCount(editor)).toBeGreaterThanOrEqual(1);
+  });
+
+  it('Enter on a closing fence after a multi-line body strips the fence keeping content', async () => {
+    // Two content lines then the closing fence: after the fence line is
+    // deleted the code node's last child is a TextNode (not a LineBreak), so
+    // the trailing-LineBreak cleanup takes its false side.
+    const editor = await mount();
+    seedCode(editor, ['a', 'b', '```']);
+    editor.dispatchCommand(KEY_ENTER_COMMAND, ev());
+    await flush();
+    expect(hasCodeNode(editor)).toBe(true);
+    expect(paragraphCount(editor)).toBe(1);
+  });
+
+  it('ArrowDown stays in block when a non-linebreak sibling precedes a later break', async () => {
+    // Caret on a text node that is immediately followed by another text node
+    // (no break) which is in turn followed by a LineBreak — the
+    // hasFollowingLineBreak loop walks past the non-break sibling (its `if`
+    // false side) before finding the break and bailing.
+    const editor = await mount();
+    editor.update(() => {
+      const root = $getRoot();
+      root.clear();
+      const code = $createCodeNode();
+      const a = $createTextNode('aa');
+      const b = $createTextNode('bb');
+      code.append(a, b, $createLineBreakNode(), $createTextNode('cc'));
+      root.append(code);
+      a.select(2, 2);
+    }, { discrete: true });
+    editor.dispatchCommand(KEY_ARROW_DOWN_COMMAND, ev());
+    await flush();
+    expect(hasCodeNode(editor)).toBe(true);
+    expect(paragraphCount(editor)).toBe(0);
+  });
+
   it('Enter outside any code block leaves no code node behind', async () => {
     const editor = await mount();
     editor.update(() => {

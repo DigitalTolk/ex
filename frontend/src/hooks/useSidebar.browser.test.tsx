@@ -21,6 +21,7 @@ vi.mock('@/lib/api', () => ({
 
 beforeEach(() => {
   apiFetchMock.mockReset();
+  try { localStorage.removeItem('ex.sidebarDndDebug'); } catch { /* noop */ }
 });
 
 function MutationTrigger({
@@ -68,6 +69,25 @@ describe('useSidebar — categories', () => {
     const screen = await renderQuery(() => useCategories());
     await new Promise((r) => setTimeout(r, 100));
     expect(screen.getByTestId('probe').element().getAttribute('data-data')).toBe('[]');
+  });
+
+  it('useCategories returns the array response as-is', async () => {
+    apiFetchMock.mockResolvedValue([{ id: 'c-1', name: 'work', position: 1 }]);
+    const screen = await renderQuery(() => useCategories());
+    await new Promise((r) => setTimeout(r, 100));
+    expect(JSON.parse(screen.getByTestId('probe').element().getAttribute('data-data') ?? '[]')).toEqual([
+      { id: 'c-1', name: 'work', position: 1 },
+    ]);
+  });
+
+  it('useUpdateCategory optimistic patch is a no-op when the categories cache is empty', async () => {
+    // No seeded cache → current is undefined, so the map short-circuits
+    // to the `?? current` arm (current?.map nullish branch).
+    apiFetchMock.mockResolvedValue({ id: 'c-1', name: 'renamed', position: 1 });
+    const { qc, screen } = await renderMutation(useUpdateCategory as never, { id: 'c-1', name: 'renamed' });
+    (screen.getByTestId('trigger').element() as HTMLButtonElement).click();
+    await new Promise((r) => setTimeout(r, 50));
+    expect(qc.getQueryData(queryKeys.sidebarCategories())).toBeUndefined();
   });
 
   it('useCreateCategory POSTs to /sidebar/categories', async () => {
@@ -216,5 +236,117 @@ describe('useSidebar — optimistic cache updates', () => {
     const mid = qc.getQueryData<{ categoryID: string }[]>(queryKeys.userChannels());
     expect(mid?.[0].categoryID).toBe('c-1');
     resolveFn?.();
+  });
+
+  it('useSetConversationCategory optimistically patches the categoryID and a non-matching row is left intact', async () => {
+    apiFetchMock.mockResolvedValue(undefined);
+    const { qc, screen } = await renderMutation(
+      useSetConversationCategory as never,
+      { conversationID: 'cv-1', categoryID: 'c-9' },
+      {
+        key: queryKeys.userConversations(),
+        data: [
+          { conversationID: 'cv-1', categoryID: '', displayName: 'Bob' },
+          { conversationID: 'cv-other', categoryID: '', displayName: 'Carol' },
+        ],
+      },
+    );
+    (screen.getByTestId('trigger').element() as HTMLButtonElement).click();
+    await new Promise((r) => setTimeout(r, 50));
+    const rows = qc.getQueryData<{ conversationID: string; categoryID: string }[]>(queryKeys.userConversations());
+    // The targeted row is patched (sidebarAttrRowID conversation branch),
+    // the non-matching row is returned untouched.
+    expect(rows?.find((r) => r.conversationID === 'cv-1')?.categoryID).toBe('c-9');
+    expect(rows?.find((r) => r.conversationID === 'cv-other')?.categoryID).toBe('');
+  });
+
+  it('useSetConversationCategory includes sidebarPosition when supplied', async () => {
+    apiFetchMock.mockResolvedValue(undefined);
+    const { screen } = await renderMutation(useSetConversationCategory as never, {
+      conversationID: 'cv-1',
+      categoryID: 'c-2',
+      sidebarPosition: 7,
+    });
+    (screen.getByTestId('trigger').element() as HTMLButtonElement).click();
+    await new Promise((r) => setTimeout(r, 200));
+    const body = JSON.parse((apiFetchMock.mock.calls[0][1] as { body: string }).body);
+    expect(body).toEqual({ categoryID: 'c-2', sidebarPosition: 7 });
+  });
+});
+
+describe('useSidebar — DnD debug-instrumented category mutations', () => {
+  it('useUpdateCategory with debug disabled skips the debug log and still PATCHes', async () => {
+    // Debug OFF (default beforeEach) — sidebarDndDebug returns early
+    // before logging (the disabled branch of sidebarDndDebugEnabled).
+    apiFetchMock.mockResolvedValue({ id: 'c-1', name: 'renamed', position: 1 });
+    const { screen } = await renderMutation(
+      useUpdateCategory as never,
+      { id: 'c-1', name: 'renamed' },
+      { key: queryKeys.sidebarCategories(), data: [{ id: 'c-1', name: 'old', position: 1 }] },
+    );
+    (screen.getByTestId('trigger').element() as HTMLButtonElement).click();
+    await new Promise((r) => setTimeout(r, 200));
+    expect(apiFetchMock.mock.calls[0][0]).toBe('/api/v1/sidebar/categories/c-1');
+  });
+
+  it('useUpdateCategory with debug enabled optimistically patches position only and leaves other categories intact', async () => {
+    try { localStorage.setItem('ex.sidebarDndDebug', '1'); } catch { /* noop */ }
+    apiFetchMock.mockResolvedValue({ id: 'c-1', name: 'old', position: 2500 });
+    const { qc, screen } = await renderMutation(
+      // Only position supplied → name-undefined ternary arm, position-defined arm.
+      useUpdateCategory as never,
+      { id: 'c-1', position: 2500 },
+      {
+        key: queryKeys.sidebarCategories(),
+        data: [
+          { id: 'c-1', name: 'old', position: 1000 },
+          { id: 'c-2', name: 'other', position: 2000 },
+        ],
+      },
+    );
+    (screen.getByTestId('trigger').element() as HTMLButtonElement).click();
+    await new Promise((r) => setTimeout(r, 50));
+    const cats = qc.getQueryData<{ id: string; name: string; position: number }[]>(queryKeys.sidebarCategories());
+    expect(cats?.find((c) => c.id === 'c-1')?.position).toBe(2500);
+    expect(cats?.find((c) => c.id === 'c-1')?.name).toBe('old');
+    // Non-matching category passes through the category.id !== vars.id arm unchanged.
+    expect(cats?.find((c) => c.id === 'c-2')?.position).toBe(2000);
+    try { localStorage.removeItem('ex.sidebarDndDebug'); } catch { /* noop */ }
+  });
+
+  it('useUpdateCategory with debug enabled rolls back and formats an Error message on failure', async () => {
+    try { localStorage.setItem('ex.sidebarDndDebug', '1'); } catch { /* noop */ }
+    apiFetchMock.mockRejectedValue(new Error('patch failed'));
+    const { qc, screen } = await renderMutation(
+      useUpdateCategory as never,
+      { id: 'c-1', name: 'renamed' },
+      { key: queryKeys.sidebarCategories(), data: [{ id: 'c-1', name: 'old', position: 1000 }] },
+    );
+    (screen.getByTestId('trigger').element() as HTMLButtonElement).click();
+    await new Promise((r) => setTimeout(r, 250));
+    // Rolled back to the previous name after the rejection (onError path,
+    // which formats the Error via sidebarDndDebugError → error.message).
+    const cats = qc.getQueryData<{ id: string; name: string }[]>(queryKeys.sidebarCategories());
+    expect(cats?.[0].name).toBe('old');
+    try { localStorage.removeItem('ex.sidebarDndDebug'); } catch { /* noop */ }
+  });
+
+  it('useReorderCategories with debug enabled rolls back and formats a non-Error rejection on failure', async () => {
+    try { localStorage.setItem('ex.sidebarDndDebug', '1'); } catch { /* noop */ }
+    // Reject with a plain string → sidebarDndDebugError takes the String(error) arm.
+    apiFetchMock.mockRejectedValue('reorder boom');
+    const { qc, screen } = await renderMutation(
+      useReorderCategories as never,
+      { categories: [{ id: 'c-1', name: 'a', position: 1000 }, { id: 'c-2', name: 'b', position: 2000 }] },
+      {
+        key: queryKeys.sidebarCategories(),
+        data: [{ id: 'c-1', name: 'a', position: 1000 }, { id: 'c-2', name: 'b', position: 2000 }],
+      },
+    );
+    (screen.getByTestId('trigger').element() as HTMLButtonElement).click();
+    await new Promise((r) => setTimeout(r, 250));
+    const cats = qc.getQueryData<{ id: string }[]>(queryKeys.sidebarCategories());
+    expect(cats?.map((c) => c.id)).toEqual(['c-1', 'c-2']);
+    try { localStorage.removeItem('ex.sidebarDndDebug'); } catch { /* noop */ }
   });
 });

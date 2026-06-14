@@ -228,6 +228,44 @@ func TestAdminHandler_StartSearchReindex_AcceptedThenConflict(t *testing.T) {
 	h.reindexer.Start(context.Background(), nowUnix)
 }
 
+// TestAdminHandler_StartSearchReindex_ConflictWhenRunning deterministically
+// drives the 409 "already running" arm: a real reindex is started against a
+// cluster whose /_bulk blocks, so it stays running while the handler's own
+// Start call observes running==true and returns false → 409.
+func TestAdminHandler_StartSearchReindex_ConflictWhenRunning(t *testing.T) {
+	h, _ := setupAdminHandler(t)
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/_bulk" {
+			<-release // hold the reindex open so it stays "running"
+		}
+		_, _ = w.Write([]byte(`{"errors":false,"items":[]}`))
+	}))
+	defer srv.Close()
+	defer close(release)
+
+	client := search.NewClient(srv.URL)
+	rx := search.NewReindexer(client, &stubReindexSources{users: []*model.User{{ID: "u-1"}}})
+	h.SetSearch(&stubReporter{}, rx)
+
+	// Begin a run; it will block in /_bulk and stay running.
+	if !rx.Start(context.Background(), nowUnix) {
+		t.Fatal("initial Start should succeed")
+	}
+
+	_, jwtMgr := setupAdminHandler(t)
+	admin := &model.User{ID: "u-adm", SystemRole: model.SystemRoleAdmin}
+	token := makeTokenForUser(jwtMgr, admin)
+	handler := middleware.Auth(jwtMgr)(http.HandlerFunc(h.StartSearchReindex))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/search/reindex", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409 (already running); body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestNowUnix(t *testing.T) {
 	if nowUnix() <= 0 {
 		t.Error("nowUnix should return positive seconds")

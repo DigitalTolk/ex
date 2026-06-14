@@ -33,6 +33,24 @@ func (s *signalIndexer) DeleteMessage(_ context.Context, _ string) error {
 	return s.delErr
 }
 
+// errThreadFollowStore errors on the list used by ListUserThreads.
+type errThreadFollowStore struct{ *mockThreadFollowStore }
+
+func (errThreadFollowStore) ListUserThreadFollows(context.Context, string) ([]*model.ThreadFollow, error) {
+	return nil, errors.New("follows boom")
+}
+
+// errUserStateStore errors on ListUserState.
+type errUserStateStore struct{}
+
+func (errUserStateStore) SetUserState(context.Context, *model.UserStateItem) error { return nil }
+func (errUserStateStore) DeleteUserState(context.Context, string, model.UserStateKind, string) error {
+	return nil
+}
+func (errUserStateStore) ListUserState(context.Context, string) ([]*model.UserStateItem, error) {
+	return nil, errors.New("user state boom")
+}
+
 func TestMessage_DeleteFromIndex_LogsError(t *testing.T) {
 	svc, _, _, _, _ := setupMessageService()
 	idx := &signalIndexer{deleted: make(chan struct{}, 1), delErr: errors.New("boom")}
@@ -156,6 +174,89 @@ func TestMessage_SetNoUnfurl_UpdateError(t *testing.T) {
 	messages.updateErr = errors.New("boom")
 	if _, err := svc.SetNoUnfurl(context.Background(), "u1", "ch1", ParentChannel, "m1", true); err == nil {
 		t.Fatal("expected update error")
+	}
+}
+
+func TestMessage_ListUserThreads_ChannelsError(t *testing.T) {
+	svc, _, memberships, _, _ := setupMessageService()
+	memberships.listChannelsErr = errors.New("boom")
+	if _, err := svc.ListUserThreads(context.Background(), "u1"); err == nil {
+		t.Fatal("expected list-channels error")
+	}
+}
+
+func TestMessage_ListUserThreads_ConversationsError(t *testing.T) {
+	svc, _, _, conversations, _ := setupMessageService()
+	conversations.listErr = errors.New("boom")
+	if _, err := svc.ListUserThreads(context.Background(), "u1"); err == nil {
+		t.Fatal("expected list-conversations error")
+	}
+}
+
+func TestMessage_ListUserThreads_FollowsError(t *testing.T) {
+	svc, _, _, _, _ := setupMessageService()
+	svc.SetThreadFollowStore(&errThreadFollowStore{mockThreadFollowStore: newMockThreadFollowStore()})
+	if _, err := svc.ListUserThreads(context.Background(), "u1"); err == nil {
+		t.Fatal("expected list-follows error")
+	}
+}
+
+func TestMessage_ListUserThreads_UserStateError(t *testing.T) {
+	svc, _, _, _, _ := setupMessageService()
+	svc.SetUserStateStore(&errUserStateStore{})
+	if _, err := svc.ListUserThreads(context.Background(), "u1"); err == nil {
+		t.Fatal("expected list-user-state error")
+	}
+}
+
+func TestMessage_ListAround_NewerListError(t *testing.T) {
+	svc, messages, memberships, _, _ := setupMessageService()
+	grantChannelMember(memberships, "ch1", "u1")
+	// ListMessagesAfter (newer page) errors. mockMessageStore routes
+	// ListMessagesAfter through ListMessages, so listErr triggers it.
+	messages.listErr = errors.New("boom")
+	if _, _, _, err := svc.ListAround(context.Background(), "u1", "ch1", ParentChannel, "m1", 10, 10); err == nil {
+		t.Fatal("expected newer/older list error")
+	}
+}
+
+func TestMessage_List_TrimsToLimitAndReportsHasMore(t *testing.T) {
+	svc, messages, memberships, _, _ := setupMessageService()
+	grantChannelMember(memberships, "ch1", "u1")
+	// Seed more top-level messages than the requested limit so the collected
+	// slice is trimmed and hasMore is reported.
+	for i := 0; i < 5; i++ {
+		id := "m" + string(rune('a'+i))
+		messages.messages["ch1#"+id] = &model.Message{ID: id, ParentID: "ch1", AuthorID: "u1", Body: "x"}
+	}
+	out, hasMore, err := svc.List(context.Background(), "u1", "ch1", ParentChannel, "", 2)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(out) != 2 {
+		t.Fatalf("expected trim to 2, got %d", len(out))
+	}
+	if !hasMore {
+		t.Error("expected hasMore=true when more than limit exist")
+	}
+}
+
+func TestMessage_ListAfter_TrimsToLimitAndReportsHasMore(t *testing.T) {
+	svc, messages, memberships, _, _ := setupMessageService()
+	grantChannelMember(memberships, "ch1", "u1")
+	for i := 0; i < 5; i++ {
+		id := "m" + string(rune('a'+i))
+		messages.messages["ch1#"+id] = &model.Message{ID: id, ParentID: "ch1", AuthorID: "u1", Body: "x"}
+	}
+	out, hasMore, err := svc.ListAfter(context.Background(), "u1", "ch1", ParentChannel, "", 2)
+	if err != nil {
+		t.Fatalf("ListAfter: %v", err)
+	}
+	if len(out) != 2 {
+		t.Fatalf("expected trim to 2, got %d", len(out))
+	}
+	if !hasMore {
+		t.Error("expected hasMore=true when more than limit exist")
 	}
 }
 

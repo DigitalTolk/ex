@@ -6,13 +6,15 @@ import {
   useDraftForScope,
   useSaveDraft,
   useDeleteDraft,
+  useDraftAttachmentChips,
   shouldRefetchDraftsForRemoteUpdate,
   suppressSentDraft,
   restoreDraftScope,
   restoreDraftScopeForContent,
 } from './useDrafts';
 import { queryKeys } from '@/lib/query-keys';
-import type { MessageDraft } from '@/types';
+import type { Attachment, MessageDraft } from '@/types';
+import type { DraftAttachment } from '@/components/chat/AttachmentChip';
 
 const apiFetchMock = vi.hoisted(() => vi.fn());
 vi.mock('@/lib/api', () => ({
@@ -127,6 +129,31 @@ describe('useDrafts — suppress / restore helpers', () => {
     restoreDraftScopeForContent(scope, { body: 'still drafting' });
     restoreDraftScope(scope); // cleanup
   });
+
+  it('restoreDraftScopeForContent restores when only attachments are present (empty body)', () => {
+    // body === '' so the first `||` operand is false → exercises the
+    // `attachmentIDs?.length ?? 0 > 0` arm on line 98.
+    const scope = { parentID: 'ch-att', parentType: 'channel' as const };
+    suppressSentDraft(scope);
+    restoreDraftScopeForContent(scope, { body: '', attachmentIDs: ['a-1'] });
+    restoreDraftScope(scope); // cleanup
+  });
+
+  it('restoreDraftScopeForContent tolerates an undefined attachmentIDs (?. nullish side)', () => {
+    // body === '' AND attachmentIDs undefined → `?.length` short-circuits
+    // to undefined, `?? 0`, `0 > 0` false → no restore.
+    const scope = { parentID: 'ch-none', parentType: 'channel' as const };
+    suppressSentDraft(scope);
+    restoreDraftScopeForContent(scope, { body: '' });
+    restoreDraftScope(scope); // cleanup
+  });
+
+  it('suppress/restore tolerate a scope with no parentID (draftScopeKey ?? "" side)', () => {
+    // scope.parentID undefined → draftScopeKey's `parentID ?? ''` arm.
+    const scope = { parentType: 'conversation' as const };
+    suppressSentDraft(scope);
+    restoreDraftScope(scope);
+  });
 });
 
 describe('useDrafts — save and delete mutations', () => {
@@ -208,6 +235,23 @@ describe('useDrafts — save and delete mutations', () => {
     expect(data?.id).toBe('main');
   });
 
+  it('useSaveDraft compares against a cached draft whose attachmentIDs is undefined', async () => {
+    // existing.attachmentIDs === undefined → sortedAttachmentIDs(undefined)
+    // exercises the `ids ?? []` nullish arm (line 76). Body differs so a
+    // real PUT still fires.
+    const cached = draft({ id: 'd-1', body: 'old', attachmentIDs: undefined });
+    const saved = draft({ id: 'd-1', body: 'new' });
+    apiFetchMock.mockResolvedValue(saved);
+    const { screen } = await renderMutation(
+      useSaveDraft as never,
+      { parentID: 'ch-1', parentType: 'channel', body: 'new', attachmentIDs: [] },
+      { key: queryKeys.drafts(), data: [cached] },
+    );
+    (screen.getByTestId('trigger').element() as HTMLButtonElement).click();
+    await new Promise((r) => setTimeout(r, 200));
+    expect(apiFetchMock.mock.calls[0][0]).toBe('/api/v1/drafts');
+  });
+
   it('useDeleteDraft DELETEs the draft and removes it from the cached list', async () => {
     apiFetchMock.mockResolvedValue(undefined);
     const { qc, screen } = await renderMutation(useDeleteDraft as never, 'd-1', {
@@ -219,5 +263,95 @@ describe('useDrafts — save and delete mutations', () => {
     expect(apiFetchMock.mock.calls[0][0]).toBe('/api/v1/drafts/d-1');
     const list = qc.getQueryData<MessageDraft[]>(queryKeys.drafts()) ?? [];
     expect(list.map((d) => d.id)).toEqual(['d-2']);
+  });
+
+  it('useSaveDraft drops a stale mutation whose version was superseded', async () => {
+    // Two rapid saves on the same scope. onMutate bumps the per-scope
+    // version each time; the slower (first) resolution sees a newer
+    // version and short-circuits onSuccess (line 157 isLatestDraftMutation
+    // false arm) without patching the cache.
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    qc.setQueryData(queryKeys.drafts(), [] as MessageDraft[]);
+    let resolveFirst: (v: MessageDraft) => void = () => {};
+    apiFetchMock
+      .mockImplementationOnce(
+        () => new Promise<MessageDraft>((res) => { resolveFirst = res; }),
+      )
+      .mockImplementationOnce(() => Promise.resolve(draft({ id: 'd-2', body: 'second' })));
+
+    function TwoSaves() {
+      const save = useSaveDraft();
+      return (
+        <button
+          data-testid="trigger"
+          onClick={() => {
+            save.mutate({ parentID: 'ch-1', parentType: 'channel', body: 'first', attachmentIDs: [] });
+            save.mutate({ parentID: 'ch-1', parentType: 'channel', body: 'second', attachmentIDs: [] });
+          }}
+        />
+      );
+    }
+    const screen = await render(
+      <QueryClientProvider client={qc}>
+        <TwoSaves />
+      </QueryClientProvider>,
+    );
+    (screen.getByTestId('trigger').element() as HTMLButtonElement).click();
+    await new Promise((r) => setTimeout(r, 150));
+    // Second save resolved and patched the cache.
+    expect(qc.getQueryData<MessageDraft[]>(queryKeys.drafts())?.[0]?.id).toBe('d-2');
+    // Now resolve the first (now-stale) save — its onSuccess must NOT
+    // overwrite the cache.
+    resolveFirst(draft({ id: 'd-1', body: 'first' }));
+    await new Promise((r) => setTimeout(r, 150));
+    expect(qc.getQueryData<MessageDraft[]>(queryKeys.drafts())?.[0]?.id).toBe('d-2');
+  });
+});
+
+describe('useDrafts — useDraftAttachmentChips', () => {
+  function ChipsProbe({ ids }: { ids: string[] | undefined }) {
+    const chips = useDraftAttachmentChips(ids);
+    return (
+      <div data-testid="chips" data-ids={chips.map((c: DraftAttachment) => c.id).join(',')} />
+    );
+  }
+
+  it('maps resolved attachments to chips and skips ids with no attachment', async () => {
+    // Two IDs requested; the batch resolves only one → the unresolved id
+    // hits the `if (!att) return null` true arm, the resolved one the
+    // false arm (line 191 both sides).
+    const attachment: Attachment = {
+      id: 'a-1',
+      sha256: 'x',
+      size: 10,
+      contentType: 'image/png',
+      filename: 'pic.png',
+      url: 'blob:pic',
+      squareThumbnailURL: 'blob:thumb',
+      createdBy: 'u-1',
+      createdAt: '2026-01-01T00:00:00Z',
+    };
+    apiFetchMock.mockResolvedValue([attachment]);
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const screen = await render(
+      <QueryClientProvider client={qc}>
+        <ChipsProbe ids={['a-1', 'a-missing']} />
+      </QueryClientProvider>,
+    );
+    await vi.waitFor(() => {
+      expect(screen.getByTestId('chips').element().getAttribute('data-ids')).toBe('a-1');
+    });
+  });
+
+  it('returns no chips when given no attachment ids', async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const screen = await render(
+      <QueryClientProvider client={qc}>
+        <ChipsProbe ids={undefined} />
+      </QueryClientProvider>,
+    );
+    await new Promise((r) => setTimeout(r, 50));
+    expect(screen.getByTestId('chips').element().getAttribute('data-ids')).toBe('');
+    expect(apiFetchMock).not.toHaveBeenCalled();
   });
 });

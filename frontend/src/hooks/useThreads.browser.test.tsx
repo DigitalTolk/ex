@@ -255,4 +255,22 @@ describe('useThreads — seen-state and sorting helpers', () => {
     expect(sorted[0].threadRootID).toBe('c');
     expect(sorted[2].threadRootID).toBe('b');
   });
+
+  it('hasUnreadActivity falls back to the persisted seen-map when no map is passed', () => {
+    // Default `seen = loadSeen()` parameter (line 109). Persist a seen
+    // entry, then call without the seen arg so the default fires.
+    markThreadSeen('t-default-seen', '2026-01-11T00:00:00Z');
+    const t = threadSummary({ threadRootID: 't-default-seen', latestActivityAt: '2026-01-10T00:00:00Z' });
+    expect(hasUnreadActivity(t)).toBe(false);
+  });
+
+  it('unreadThreadIDs returns an empty set when called with no arguments (default params)', () => {
+    // Exercises the default params on lines 116-119.
+    expect(unreadThreadIDs().size).toBe(0);
+  });
+
+  it('sortThreadsByUnreadThenActivity returns [] when called with no arguments (default params)', () => {
+    // Exercises the default params on lines 146-147.
+    expect(sortThreadsByUnreadThenActivity()).toEqual([]);
+  });
 });

@@ -50,6 +50,7 @@ export function AppLayout({ children }: AppLayoutProps) {
   const mobileChannelsOpen = isMobile && (isHome || manualChannelsOpen);
 
   const canOpenChannelsFromGesture = useCallback((eventTarget: EventTarget | null) => {
+    /* v8 ignore next -- only called when !mobileChannelsOpen, which is always false on the home route, so isHome is never true here; defensive */
     if (isHome) return false;
     if (eventTarget instanceof Element && eventTarget.closest('[data-mobile-right-sidebar="true"]')) return false;
     if (document.querySelector('[data-mobile-right-sidebar="true"]')) return false;
@@ -117,6 +118,7 @@ export function AppLayout({ children }: AppLayoutProps) {
 
       // Past the latch — follow the finger. iOS swipe-back inertia
       // can briefly overshoot, so clamp to [-vw, vw].
+      /* v8 ignore next -- SSR guard; this browser-only app always has window during a touch gesture */
       const viewportWidth = typeof window === 'undefined' ? Infinity : window.innerWidth;
       let offset = deltaX;
       if (swipeCommittedRef.current === 'open') {

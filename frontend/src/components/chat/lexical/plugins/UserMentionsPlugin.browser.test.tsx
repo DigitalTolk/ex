@@ -45,7 +45,7 @@ function Capture({ onReady }: { onReady: (e: LexicalEditor) => void }) {
   return null;
 }
 
-async function mount(channelId?: string) {
+async function mount(channelId?: string, omitProps = false) {
   let editor!: LexicalEditor;
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const screen = await render(
@@ -59,7 +59,7 @@ async function mount(channelId?: string) {
             placeholder={null}
             ErrorBoundary={LexicalErrorBoundary}
           />
-          <UserMentionsPlugin channelId={channelId} />
+          {omitProps ? <UserMentionsPlugin /> : <UserMentionsPlugin channelId={channelId} />}
           <Capture onReady={(e) => { editor = e; }} />
         </LexicalComposer>
       </div>
@@ -173,6 +173,50 @@ describe('UserMentionsPlugin browser typeahead', () => {
     // Both members rendered as option rows; the online one sorts ahead.
     await vi.waitFor(() => {
       expect(document.querySelectorAll('[data-testid="mention-option"]').length).toBeGreaterThanOrEqual(3);
+    });
+  });
+
+  it('renders the roster with an undefined empty label on a bare @ trigger', async () => {
+    // Bare "@" → empty query string → `query?.length` is 0, so the emptyLabel
+    // ternary takes its `undefined` side while user options still render.
+    allUsers = [{ id: 'u-alice', displayName: 'Alice' }];
+    const { editor, screen } = await mount();
+    seed(editor, '@');
+    await expect.element(screen.getByTestId('mention-popup')).toBeVisible();
+    await expect.element(screen.getByTestId('mention-option')).toBeVisible();
+  });
+
+  it('mounts with no props at all (default parameter object)', async () => {
+    // Rendering <UserMentionsPlugin /> with no attributes triggers the
+    // `= {}` default-parameter side (channelId resolves to undefined → flat
+    // roster, no partition).
+    allUsers = [{ id: 'u-alice', displayName: 'Alice', email: 'a@x.test' }];
+    const { editor, screen } = await mount(undefined, true);
+    seed(editor, '@al');
+    await expect.element(screen.getByTestId('mention-popup')).toBeVisible();
+    await expect.element(screen.getByTestId('mention-option')).toBeVisible();
+  });
+
+  it('ranks a prefix match ahead of a substring-only match (aPref !== bPref branch)', async () => {
+    // "al" is a prefix of "Alice" (aPref 0) but only a substring of "Pascal"
+    // (p-a-s-c-AL → aPref 1), so the comparator's `aPref !== bPref` true side
+    // and the non-prefix `: 1` sides both run. Online state varies too so the
+    // online tiebreak's both sides execute when prefixes tie on other pairs.
+    allUsers = [
+      { id: 'u-alice', displayName: 'Alice' },
+      { id: 'u-pascal', displayName: 'Pascal' },
+      { id: 'u-alan', displayName: 'Alan' },
+    ];
+    onlineIds = ['u-pascal']; // the substring match is online, a prefix match isn't
+    const { editor, screen } = await mount();
+    seed(editor, '@al');
+    await expect.element(screen.getByTestId('mention-popup')).toBeVisible();
+    await vi.waitFor(() => {
+      // Alice + Alan (prefix) sort ahead of Pascal (substring) despite Pascal
+      // being the only online user.
+      const rows = [...document.querySelectorAll('[data-testid="mention-option"] .font-medium')]
+        .map((n) => n.textContent);
+      expect(rows[rows.length - 1]).toBe('Pascal');
     });
   });
 });

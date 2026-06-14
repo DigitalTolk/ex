@@ -159,6 +159,27 @@ describe('DirectoriesPage', () => {
     expect(await screen.findByText('Failed to update status')).toBeInTheDocument();
   });
 
+  it('surfaces the Error message when toggling guest status rejects with an Error', async () => {
+    mockRole = 'admin';
+    mockBrowseChannels.mockReturnValue({ data: [], isLoading: false });
+    mockUserChannels.mockReturnValue({ data: [] });
+    mockApiFetch.mockImplementation((url: string) => {
+      if (url.includes('/status')) return Promise.reject(new Error('Status API exploded'));
+      return Promise.resolve([
+        { id: 'u-g', email: 'g@b.c', displayName: 'Guesty', systemRole: 'guest', authProvider: 'guest', status: 'active' },
+      ]);
+    });
+    window.history.pushState({}, '', '/directory/users');
+    const user = userEvent.setup();
+    renderWithProviders(<DirectoriesPage />);
+    await screen.findByTestId('members-grid');
+
+    await user.click(await screen.findByLabelText('Manage Guesty'));
+    await user.click(await screen.findByTestId('deactivate-u-g'));
+    // err instanceof Error → the real message surfaces, not the fallback.
+    expect(await screen.findByText('Status API exploded')).toBeInTheDocument();
+  });
+
   it('renders an empty role label without crashing when a user has no system role', async () => {
     mockRole = 'admin';
     mockBrowseChannels.mockReturnValue({ data: [], isLoading: false });

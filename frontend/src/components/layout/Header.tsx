@@ -89,6 +89,7 @@ export function Header({
 
   useLayoutEffect(() => {
     const node = headerShellRef.current;
+    /* v8 ignore next -- headerShellRef is always attached and document always exists in this browser-only app; defensive guards */
     if (!node || typeof document === 'undefined') return;
     const measuredNode = node;
 
@@ -219,6 +220,7 @@ export function Header({
               ) : channel.description ? (
                 canEdit ? (
                   <button
+                    /* v8 ignore next -- this branch only renders when channel.description is truthy, so the || '' fallback is dead */
                     onClick={() => { setDescDraft(channel.description || ''); setIsEditingDesc(true); }}
                     className="hidden min-w-0 max-w-full truncate text-left text-sm text-muted-foreground hover:text-foreground md:block"
                     title="Click to edit description"
@@ -293,7 +295,10 @@ export function Header({
       </div>
 
       {channel && isMobile && (
-        <Dialog open={isEditingDesc} onOpenChange={(open) => { if (!open) cancelDescriptionEdit(); }}>
+        <Dialog open={isEditingDesc} onOpenChange={(open) => {
+          /* v8 ignore next -- the dialog is controlled (open={isEditingDesc}); radix only calls onOpenChange(false) on user dismiss, never with open=true, so the open=true arm is unreachable */
+          if (!open) cancelDescriptionEdit();
+        }}>
           <DialogContent className="max-w-none" data-testid="mobile-description-editor">
             <DialogHeader>
               <DialogTitle>Edit channel description</DialogTitle>

@@ -9,6 +9,7 @@ import {
   $getRoot,
   $createParagraphNode,
   $createTextNode,
+  $createLineBreakNode,
   type LexicalEditor,
 } from 'lexical';
 import { useEffect } from 'react';
@@ -125,5 +126,55 @@ describe('LineBoundaryNavigationPlugin (browser)', () => {
     key(root, { key: 'q' });
     await flush();
     expect(text(editor)).toBe('q');
+  });
+
+  it('maps the legacy "Spacebar" key name to a leading space', async () => {
+    // Older WebKit/Gecko emit key === 'Spacebar' rather than ' '. The plugin
+    // normalises it via the `event.key === 'Spacebar' ? ' '` branch.
+    const { editor, root } = await mount();
+    seed(editor, 'hi');
+    key(root, { key: 'ArrowLeft', metaKey: true });
+    key(root, { key: 'Spacebar' });
+    await flush();
+    expect(text(editor)).toBe(' hi');
+  });
+
+  it('inserts at the start when the first block is a non-element (empty root)', async () => {
+    // Clear the root to NO children: getFirstChild() is null, so both
+    // selectEditableStart and insertAtEditableStart take their
+    // `!$isElementNode(firstBlock)` true side (root.selectStart()).
+    const { editor, root } = await mount();
+    editor.update(() => {
+      const r = $getRoot();
+      r.clear();
+    }, { discrete: true });
+    await flush();
+    key(root, { key: 'ArrowLeft', metaKey: true });
+    key(root, { key: 'z' });
+    await flush();
+    expect(text(editor)).toBe('z');
+  });
+
+  it('inserts before a non-text first child (leading line break) at the editable start', async () => {
+    // First child of the paragraph is a LineBreakNode, not a TextNode: both
+    // selectEditableStart and insertAtEditableStart take the `if (firstChild)`
+    // non-text branch (insertBefore a prefix text node).
+    const { editor, root } = await mount();
+    editor.update(() => {
+      const r = $getRoot();
+      r.clear();
+      const para = $createParagraphNode();
+      para.append($createLineBreakNode());
+      para.append($createTextNode('tail'));
+      r.append(para);
+      para.selectEnd();
+    }, { discrete: true });
+    await flush();
+    key(root, { key: 'ArrowLeft', metaKey: true });
+    key(root, { key: 'w' });
+    await flush();
+    expect(text(editor)).toContain('w');
+    // The inserted character lands before the soft-break-led content.
+    expect(text(editor).startsWith('w')).toBe(true);
   });
 });

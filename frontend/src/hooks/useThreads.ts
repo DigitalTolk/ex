@@ -99,6 +99,7 @@ export function markThreadSeen(
       { method: 'PUT' },
     ).catch(() => undefined);
   }
+  /* istanbul ignore else -- SSR guard: window is always defined in the browser test env */
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new CustomEvent(THREAD_SEEN_CHANGED_EVENT, { detail: { threadRootID } }));
   }
