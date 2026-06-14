@@ -68,10 +68,11 @@ jobs:
           go tool cover -func=coverage.out | tail -1
 
       - name: Enforce backend coverage gate (>= 99% statements)
-        run: |
-          coverage=$(go tool cover -func=coverage.out | awk '/^total:/ { gsub(/%/, "", $3); print $3 }')
-          echo "backend total coverage: ${coverage}%"
-          awk -v coverage="$coverage" 'BEGIN { if (coverage + 0 < 99) { printf "backend coverage %.1f%% is below 99%%\n", coverage; exit 1 } }'
+        # Uses go-test-coverage so the gate honors the `// coverage-ignore`
+        # annotations on irreducible defensive code (see COVERAGE.md). The raw
+        # `go tool cover` total does NOT honor them, so it must not gate here —
+        # this mirrors the Makefile's `check` target exactly.
+        run: go run github.com/vladopajic/go-test-coverage/v2@v2.18.8 --config=.testcoverage.yml
 
       - name: Upload backend coverage to Coveralls
         uses: coverallsapp/github-action@v2

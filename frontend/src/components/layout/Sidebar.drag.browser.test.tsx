@@ -264,8 +264,10 @@ function channelTarget(sectionKey: string, index: number, area = 'row') {
 beforeEach(() => {
   // Enable the DnD debug logging so the (otherwise-skipped) sidebarDndDebug
   // branches scattered through the drag handlers execute. It only emits
-  // console.debug (not gated) and reads drag state defensively.
+  // console.debug (not gated) and reads drag state defensively. Stub
+  // console.debug so the branches still run but don't spam test stdout.
   try { localStorage.setItem('ex.sidebarDndDebug', '1'); } catch { /* noop */ }
+  vi.spyOn(console, 'debug').mockImplementation(() => {});
   edgeState.edge = 'top';
   setCategoryMutate.mockClear();
   setConversationCategoryMutate.mockClear();
@@ -281,6 +283,7 @@ beforeEach(() => {
 
 afterEach(() => {
   try { localStorage.removeItem('ex.sidebarDndDebug'); } catch { /* noop */ }
+  vi.restoreAllMocks();
 });
 
 describe('Sidebar drag-and-drop monitor callbacks', () => {

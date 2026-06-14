@@ -971,8 +971,12 @@ describe('channel → header toggles → files + pinned panels (full route)', ()
     await vi.waitFor(() => {
       expect(editor.element().textContent ?? '').toContain('half-written');
     }, { timeout: 15000 });
-    await editor.click();
-    await editor.fill('sending with a draft present');
+    // Send the hydrated draft as-is. We deliberately do NOT edit the editor
+    // first: editor.fill() clears-then-types the Lexical contenteditable, which
+    // fires the debounced draft-save and can transiently null this scope's draft
+    // query (→ draftID undefined → the no-delete arm) before the click lands,
+    // under slow-CI timing. The branch under test only needs a draft present at
+    // send time, which the hydrated 'half-written' draft already provides.
     await screen.getByRole('button', { name: 'Send message' }).click();
     await vi.waitFor(() => {
       const calls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls
