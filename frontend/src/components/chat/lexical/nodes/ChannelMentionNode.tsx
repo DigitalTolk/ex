@@ -72,6 +72,7 @@ export class ChannelMentionNode extends DecoratorNode<JSX.Element> {
           conversion: (node: HTMLElement): DOMConversionOutput => ({
             node: new ChannelMentionNode(
               node.getAttribute('data-channel-id') ?? '',
+              /* istanbul ignore next -- node is an HTMLElement, whose textContent is always a string (never null — only document/doctype nodes return null); the ?? '' arm is defensive. */
               node.getAttribute('data-channel-slug') ?? (node.textContent ?? '').replace(/^~/, ''),
             ),
           }),

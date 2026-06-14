@@ -284,6 +284,22 @@ describe('renderHastTree — every custom-tag branch', () => {
     expect(document.body).not.toBeNull();
   });
 
+  it('renders an ex-hashtag with no data-tag (the data-tag ?? "" fallback)', async () => {
+    // No data-tag attribute → `props['data-tag'] ?? ''` takes the `?? ''` side.
+    const tree = root([elem('p', {}, [elem('ex-hashtag', {})])]);
+    await render(wrap(<>{renderHastTree(tree)}</>));
+    // Renders the plain `#` span (no handler) without throwing.
+    expect(document.querySelector('p')).not.toBeNull();
+  });
+
+  it('renders an ex-emoji-shortcode with no data-name (the data-name ?? "" fallback)', async () => {
+    // No data-name → `props['data-name'] ?? ''` takes the `?? ''` side; with no
+    // map entry and an unknown empty name it renders the literal.
+    const tree = root([elem('p', {}, [elem('ex-emoji-shortcode', {})])]);
+    await render(wrap(<>{renderHastTree(tree)}</>));
+    expect(document.querySelector('p')).not.toBeNull();
+  });
+
   it('renders a giphy embed with no id and no dimensions (the ?? "" / : undefined sides)', async () => {
     // ex-giphy with neither data-id nor data-width/height: id falls back to '',
     // and both `props['data-...'] ? Number(...) : undefined` ternaries take the

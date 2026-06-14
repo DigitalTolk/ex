@@ -194,6 +194,11 @@ export function ChannelView() {
         value.body === editingMessage.body &&
         value.attachmentIDs.length === currentAttachmentIDs.length &&
         value.attachmentIDs.every((id, idx) => id === currentAttachmentIDs[idx]);
+      // The `!value.body.trim() && …length === 0` blank-edit arm is
+      // unreachable from the real composer here — its Save button is disabled
+      // while the body is empty and there are no attachments — so onSend never
+      // fires with a blank payload. The `same` arm is exercised by tests.
+      /* istanbul ignore next -- composer disables Save on an empty edit, so the blank-body arm cannot fire via onSend; defensive. */
       if (same || (!value.body.trim() && value.attachmentIDs.length === 0)) {
         setEditingMessage(null);
         return;
@@ -351,6 +356,12 @@ export function ChannelView() {
     return <ResourceErrorPage resource="channel" status={500} />;
   }
 
+  // Past the guards above, `channel` is loaded (any error/absent state has
+  // already returned). The `: undefined` arm is therefore unreachable here;
+  // it stays only as a type-narrowing default for the optional FilesPanel prop.
+  /* istanbul ignore next -- channel is guaranteed loaded past the error guards above, so the `: undefined` arm is unreachable; defensive. */
+  const filesPostedIn = channel ? `~${channel.name}` : undefined;
+
   return (
     <div className="flex min-h-0 flex-1 overflow-hidden">
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
@@ -451,8 +462,7 @@ export function ChannelView() {
           channelId={channel?.id}
           onClose={panels.close}
           userMap={userMap}
-          /* istanbul ignore next -- FilesPanel only renders inside the `showFiles` arm, which requires a loaded channel, so the `: undefined` arm is unreachable; defensive. */
-          postedIn={channel ? `~${channel.name}` : undefined}
+          postedIn={filesPostedIn}
         />
       ) : showMembers && members ? (
         <MemberList

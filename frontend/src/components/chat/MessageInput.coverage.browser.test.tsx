@@ -365,4 +365,252 @@ describe('MessageInput coverage flows (browser)', () => {
     });
     await settle();
   });
+
+  it('does not server-hydrate once the user has locally edited the draft', async () => {
+    const screen = await renderWithProviders(
+      <MessageInput onSend={vi.fn()} focusKey="conv-edit" initialBody="" onDraftChange={vi.fn()} />,
+    );
+    // Type locally → locallyEditedDraftRef true and body !== ''.
+    const editor = screen.getByLabelText('Message input');
+    await editor.click();
+    await editor.fill('my local text');
+    await settle();
+    // A late server draft on the same key must NOT clobber the local edit (the
+    // locallyEditedDraftRef / body!=='' guards short-circuit the hydration).
+    screen.rerenderWithProviders(
+      <MessageInput onSend={vi.fn()} focusKey="conv-edit" initialBody="server clobber" onDraftChange={vi.fn()} />,
+    );
+    await settle();
+    expect(screen.getByLabelText('Message input').element().textContent).toContain('my local text');
+    expect(screen.getByLabelText('Message input').element().textContent).not.toContain('server clobber');
+  });
+
+  it('does not dispatch edit-last on ArrowUp when there is no candidate message', async () => {
+    if (window.innerWidth <= 767) return;
+    const seen: string[] = [];
+    const handler = (e: Event) => {
+      const id = (e as CustomEvent<{ messageId: string }>).detail?.messageId;
+      if (id) seen.push(id);
+    };
+    window.addEventListener('ex:edit-message', handler);
+    try {
+      // No lastOwnMessageId → requestEditLast returns false on its
+      // `!lastOwnMessageId` arm and ArrowUp is left to the editor default.
+      const screen = await renderWithProviders(<MessageInput onSend={vi.fn()} />);
+      const editor = screen.getByLabelText('Message input');
+      await editor.click();
+      await userEvent.keyboard('{ArrowUp}');
+      await settle();
+      expect(seen).toHaveLength(0);
+    } finally {
+      window.removeEventListener('ex:edit-message', handler);
+    }
+  });
+
+  it('does nothing when Enter submits an empty composer (handleSend canSend false)', async () => {
+    if (window.innerWidth <= 767) return; // Enter-submits only on desktop
+    const onSend = vi.fn();
+    const screen = await renderWithProviders(<MessageInput onSend={onSend} />);
+    const editor = screen.getByLabelText('Message input');
+    await editor.click();
+    // Enter on an empty composer → onSubmit → handleSend, which bails on
+    // `!canSend` (nothing to send).
+    await userEvent.keyboard('{Enter}');
+    await settle();
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it('does not restore focus on visibilitychange→visible when the editor was not focused at hide', async () => {
+    if (window.innerWidth > 767) return;
+    const screen = await renderWithProviders(<MessageInput onSend={vi.fn()} />);
+    const editor = screen.getByLabelText('Message input').element() as HTMLElement;
+    editor.blur();
+    // Hide while NOT focused → wasFocusedOnHideRef stays false.
+    Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true });
+    document.dispatchEvent(new Event('visibilitychange'));
+    await settle();
+    // Visible again → the `&& wasFocusedOnHideRef.current` false arm: no refocus.
+    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+    document.dispatchEvent(new Event('visibilitychange'));
+    await settle();
+    expect(document.activeElement === editor || editor.contains(document.activeElement)).toBe(false);
+  });
+
+  it('removes an image draft, revoking its object URL, and surfaces a non-409 failure', async () => {
+    const revokeSpy = vi.spyOn(URL, 'revokeObjectURL');
+    deleteDraftMock.mockRejectedValueOnce(new Error('server exploded'));
+    const localURL = 'blob:http://localhost/draft-image';
+    const screen = await renderWithProviders(
+      <MessageInput
+        onSend={vi.fn()}
+        initialDrafts={[{ id: 'img-rm', filename: 'p.png', contentType: 'image/png', size: 1, localURL, progress: 1 }]}
+      />,
+    );
+    if (window.innerWidth <= 767) {
+      await screen.getByLabelText('Message input').click();
+    }
+    await screen.getByRole('button', { name: /Remove/ }).click();
+    // removeDraft revokes the image's object URL and surfaces the non-409 error.
+    expect(revokeSpy).toHaveBeenCalledWith(localURL);
+    await expect.element(screen.getByText('server exploded')).toBeVisible();
+    revokeSpy.mockRestore();
+  });
+
+  it('prevents default on toolbar mousedown/pointerdown so focus stays in the editor', async () => {
+    if (window.innerWidth <= 767) return;
+    const screen = await renderWithProviders(<MessageInput onSend={vi.fn()} initialBody="x" />);
+    const toolbar = screen.getByRole('toolbar', { name: 'Formatting' }).element();
+    // A mousedown / pointerdown that targets a toolbar child is preventDefaulted
+    // (keeps the contenteditable selection). Use a button inside the toolbar.
+    const child = toolbar.querySelector('button') as HTMLElement;
+    const md = new MouseEvent('mousedown', { bubbles: true, cancelable: true });
+    child.dispatchEvent(md);
+    expect(md.defaultPrevented).toBe(true);
+    const pd = new PointerEvent('pointerdown', { bubbles: true, cancelable: true });
+    child.dispatchEvent(pd);
+    expect(pd.defaultPrevented).toBe(true);
+  });
+
+  it('hides the GIF trigger when GIPHY is enabled but the API key is empty', async () => {
+    // giphyEnabled = (giphyEnabled ?? false) && giphyAPIKey !== '' → the
+    // `&& apiKey !== ''` false arm: flag on but no key → no GIF button.
+    settingsState.current = { maxUploadBytes: 0, allowedExtensions: [], giphyEnabled: true, giphyAPIKey: '' };
+    const screen = await renderWithProviders(<MessageInput onSend={vi.fn()} initialBody="x" />);
+    if (window.innerWidth <= 767) {
+      await screen.getByLabelText('Message input').click();
+    }
+    await expect.element(screen.getByLabelText('Attach file')).toBeVisible();
+    expect(document.querySelector('[aria-label="GIF"]')).toBeNull();
+  });
+
+  it('throttles rapid typing so a second keystroke within the window emits no extra frame', async () => {
+    if (window.innerWidth <= 767) return;
+    const frames: string[] = [];
+    setWSSender((f) => frames.push(f));
+    const screen = await renderWithProviders(
+      <MessageInput onSend={vi.fn()} typingParentID="ch-throttle" typingParentType="channel" />,
+    );
+    const editor = screen.getByLabelText('Message input');
+    await editor.click();
+    await editor.fill('a');
+    await vi.waitFor(() => expect(frames.length).toBe(1));
+    // A second change immediately after stays within TYPING_PING_INTERVAL_MS, so
+    // emitTyping returns at its `now - last < INTERVAL` guard (no new frame).
+    await editor.fill('ab');
+    await editor.fill('abc');
+    await new Promise((r) => setTimeout(r, 50));
+    expect(frames.length).toBe(1);
+    await settle();
+  });
+
+  it('emits a typing frame without a parentMessageID when no thread root is set', async () => {
+    if (window.innerWidth <= 767) return;
+    const frames: string[] = [];
+    setWSSender((f) => frames.push(f));
+    const screen = await renderWithProviders(
+      <MessageInput onSend={vi.fn()} typingParentID="ch-2" typingParentType="channel" />,
+    );
+    const editor = screen.getByLabelText('Message input');
+    await editor.click();
+    await editor.fill('typing here');
+    await vi.waitFor(() => {
+      expect(frames.length).toBeGreaterThanOrEqual(1);
+    });
+    const frame = JSON.parse(frames[0]);
+    // The `if (typingThreadRootID)` false arm: no parentMessageID key.
+    expect(frame.parentMessageID).toBeUndefined();
+    expect(frame).toMatchObject({ type: 'typing', parentID: 'ch-2', parentType: 'channel' });
+    await settle();
+  });
+
+  it('skips uploading when the per-message attachment cap is already reached', async () => {
+    const ref = { current: null as MessageInputHandle | null };
+    const drafts = Array.from({ length: 10 }, (_, i) => ({
+      id: `pre-${i}`, filename: `f${i}.png`, contentType: 'image/png', size: 1,
+    }));
+    const screen = await renderWithProviders(
+      <MessageInput ref={ref} onSend={vi.fn()} initialDrafts={drafts} />,
+    );
+    if (window.innerWidth <= 767) {
+      await screen.getByLabelText('Message input').click();
+    }
+    // remaining = max(0, 10 - 10) = 0 → files sliced to [] → the
+    // `if (files.length === 0) return;` early-out after the over-cap warning.
+    await ref.current!.uploadFiles([new File(['x'], 'extra.png', { type: 'image/png' })]);
+    await settle();
+    expect(uploadAttachmentMock).not.toHaveBeenCalled();
+    await expect.element(screen.getByText(/Skipped/)).toBeVisible();
+  });
+
+  it('uploads a non-image file without creating an object-URL preview', async () => {
+    uploadAttachmentMock.mockImplementation(
+      async (
+        file: File,
+        cb?: { onInit?: (i: { id: string; filename: string; contentType: string; size: number; alreadyExists: boolean; uploadURL: string }) => void; onProgress?: (f: number) => void },
+      ) => {
+        cb?.onInit?.({ id: `srv-${file.name}`, filename: file.name, contentType: 'application/pdf', size: file.size, alreadyExists: false, uploadURL: 'x' });
+        cb?.onProgress?.(1);
+        return { id: `srv-${file.name}`, filename: file.name, contentType: 'application/pdf', size: file.size, alreadyExists: false, uploadURL: 'x' };
+      },
+    );
+    const ref = { current: null as MessageInputHandle | null };
+    const screen = await renderWithProviders(<MessageInput ref={ref} onSend={vi.fn()} />);
+    // Non-image → isImageAttachment false → the optimistic chip's localURL is
+    // undefined (the `: undefined` arm).
+    await ref.current!.uploadFiles([new File(['doc'], 'report.pdf', { type: 'application/pdf' })]);
+    await expect.element(screen.getByLabelText('Draft attachments')).toBeVisible();
+    expect(document.querySelector('[data-testid="attachment-chip-thumb"]')).toBeNull();
+    await settle();
+  });
+
+  it('drops a failed non-image upload chip without revoking a (nonexistent) object URL', async () => {
+    // A non-image file has no localURL, so the failure-cleanup `if
+    // (target?.localURL)` takes its falsy arm (nothing to revoke).
+    uploadAttachmentMock.mockImplementation(async () => {
+      throw new Error('pdf upload failed');
+    });
+    const ref = { current: null as MessageInputHandle | null };
+    const screen = await renderWithProviders(<MessageInput ref={ref} onSend={vi.fn()} />);
+    await ref.current!.uploadFiles([new File(['doc'], 'doc.pdf', { type: 'application/pdf' })]);
+    await expect.element(screen.getByText('pdf upload failed')).toBeVisible();
+    // The failed chip was removed; no draft attachments remain.
+    expect(document.querySelector('[aria-label="Draft attachments"]')).toBeNull();
+    await settle();
+  });
+
+  it('reports a generic message when an upload rejects with a non-Error value', async () => {
+    // The single-file failure path with a non-Error rejection exercises the
+    // `err instanceof Error ? err.message : 'Upload failed'` false arm.
+    uploadAttachmentMock.mockImplementation(async () => {
+      return Promise.reject('just a string');
+    });
+    const ref = { current: null as MessageInputHandle | null };
+    const screen = await renderWithProviders(<MessageInput ref={ref} onSend={vi.fn()} />);
+    await ref.current!.uploadFiles([new File(['x'], 'a.png', { type: 'image/png' })]);
+    await expect.element(screen.getByText('Upload failed')).toBeVisible();
+    await settle();
+  });
+
+  it('renders an image-preview chip with an object URL when an image file is uploaded', async () => {
+    uploadAttachmentMock.mockImplementation(
+      async (
+        file: File,
+        cb?: { onInit?: (i: { id: string; filename: string; contentType: string; size: number; alreadyExists: boolean; uploadURL: string }) => void; onProgress?: (f: number) => void },
+      ) => {
+        cb?.onInit?.({ id: `srv-${file.name}`, filename: file.name, contentType: 'image/png', size: file.size, alreadyExists: false, uploadURL: 'x' });
+        cb?.onProgress?.(0.5);
+        return { id: `srv-${file.name}`, filename: file.name, contentType: 'image/png', size: file.size, alreadyExists: false, uploadURL: 'x' };
+      },
+    );
+    const ref = { current: null as MessageInputHandle | null };
+    const screen = await renderWithProviders(<MessageInput ref={ref} onSend={vi.fn()} />);
+    // An image file → the chip's localURL is created via URL.createObjectURL
+    // (the isImageAttachment true arm in the optimistic chip).
+    await ref.current!.uploadFiles([new File(['img-bytes'], 'photo.png', { type: 'image/png' })]);
+    await expect.element(screen.getByLabelText('Draft attachments')).toBeVisible();
+    const thumb = document.querySelector('[data-testid="attachment-chip-thumb"]') as HTMLImageElement | null;
+    expect(thumb).not.toBeNull();
+    expect(thumb!.src).toMatch(/^blob:/);
+    await settle();
+  });
 });

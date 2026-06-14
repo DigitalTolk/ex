@@ -213,11 +213,12 @@ describe('MessageItem desktop toolbar + menu branches', () => {
     await vi.waitFor(() => {
       expect(row.querySelector('[data-actions-pinned="true"]')).not.toBeNull();
     });
-    // Re-fire mouseenter on the SAME row → notifyMessageHovered(ownID) →
-    // the onHover guard sees activeID === ownID and DOESN'T close (line 141
-    // false arm). A raw dispatch guarantees the handler re-runs even though
-    // the cursor never left.
-    row.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+    // Move the cursor off the row, then back onto it. The re-entry fires the
+    // row's onMouseEnter → notifyMessageHovered(ownID) → the registered
+    // onHover sees activeID === ownID → the `activeID !== ownID` guard is
+    // FALSE (line 141), so the menu stays open instead of closing.
+    await userEvent.hover(document.body);
+    await userEvent.hover(row);
     await new Promise((r) => setTimeout(r, 50));
     expect(row.querySelector('[data-actions-pinned="true"]')).not.toBeNull();
     expect(screen.container).toBeTruthy();
@@ -226,10 +227,12 @@ describe('MessageItem desktop toolbar + menu branches', () => {
   it('shows the loading placeholder while edit attachments are still resolving', async () => {
     if (window.innerWidth <= 767) return;
     // isEditing + attachmentIDs present + isLoading=true → editorReady is
-    // false (line 591 else arm) so the "Loading…" placeholder renders
-    // instead of the inline composer.
+    // false (line 591 else arm) so MessageItem's own "Loading…" placeholder
+    // renders instead of the inline composer. We resolve the attachment batch
+    // as still-loading only AFTER edit mode is entered, so the pre-edit
+    // attachment skeleton doesn't mask the editor-loading branch.
     useAttachmentsBatchMock.mockReturnValue({ map: new Map(), isLoading: true });
-    const screen = await renderWithProviders(
+    await renderWithProviders(
       <MessageItem
         message={makeMessage({ body: 'with files', attachmentIDs: ['a-1'] })}
         authorName="Alice"
@@ -239,7 +242,14 @@ describe('MessageItem desktop toolbar + menu branches', () => {
       />,
     );
     dispatchEditMessage({ messageId: 'msg-1' });
-    await expect.element(screen.getByText('Loading…')).toBeVisible();
+    // Edit mode is on but the attachment metadata is still loading → the
+    // inline composer is suppressed (editorReady false) and the editor-loading
+    // placeholder (line 607, distinguished by its mt-1 text class) shows.
+    await vi.waitFor(() => {
+      const loaders = Array.from(document.querySelectorAll('p.mt-1.text-xs.text-muted-foreground'))
+        .filter((el) => el.textContent?.trim() === 'Loading…');
+      expect(loaders.length).toBeGreaterThan(0);
+    }, { timeout: 3000 });
     expect(document.querySelector('[data-testid="inline-edit"]')).toBeNull();
   });
 

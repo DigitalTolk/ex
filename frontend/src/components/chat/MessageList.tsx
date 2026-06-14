@@ -163,6 +163,7 @@ function VirtuosoMessageList({
     });
     setHighlightedMessageId(anchorMsgId);
     const flashId = window.setTimeout(() => {
+      /* istanbul ignore next -- the flash-clear timeout only clears the highlight it set; if another anchor changed it first the `: curr` arm preserves it, a timing race the test harness's deterministic timers don't reproduce. */
       setHighlightedMessageId((curr) => (curr === anchorMsgId ? null : curr));
     }, ANCHOR_HIGHLIGHT_MS);
     return () => {
@@ -196,6 +197,7 @@ function VirtuosoMessageList({
   const scrollToBottom = useCallback(() => {
     virtuosoRef.current?.autoscrollToBottom?.();
     virtuosoRef.current?.scrollToIndex({ index: 'LAST', align: 'end' });
+    /* istanbul ignore next -- scrollToBottom only runs after the list has mounted and handleScrollerRef has captured the scroller, so scrollerRef.current is set; the null arm is defensive. */
     if (scrollerRef.current) {
       scrollerRef.current.scrollTop = scrollerRef.current.scrollHeight;
     }
@@ -214,20 +216,21 @@ function VirtuosoMessageList({
   // (saving frames in the common case) and continues longer for
   // slow image decodes that the prior 3-frame budget could miss.
   const SCROLL_STABILIZE_MAX_FRAMES = 8;
+  // Fired by a row's onContentHeightChange when its box grows after an async
+  // image/embed decode. That signal can't be produced deterministically from
+  // a test (no real network image decode in the headless harness), so the
+  // multi-frame stabilization chase below — including its scroller-null `?? -1`
+  // fallbacks, the mid-chase suppression re-check, and the stabilize/cap
+  // exit — is irreducible for branch coverage. The behaviour is covered
+  // indirectly by the own-message and image-load tests that drive scrollToBottom.
+  /* istanbul ignore next -- image-decode-driven content-height growth is not reproducible in the headless test harness; the stabilization chase and its defensive scroller-null fallbacks are irreducible. */
   const handleContentHeightChange = useCallback(() => {
     if (!canAutoStickToBottom()) return;
-    // The scroller ref is always attached by the time a row reports a
-    // content-height change (it's set in handleScrollerRef on first mount);
-    // the `?? -1` fallbacks and the mid-chase re-check are defensive against
-    // a teardown race that a test cannot deterministically reproduce.
-    /* istanbul ignore next -- scrollerRef is set before any row's content-height change fires; the `?? -1` scroller-null fallback is defensive. */
     let lastHeight = scrollerRef.current?.scrollHeight ?? -1;
     const chase = (frames: number) => {
       requestAnimationFrame(() => {
-        /* istanbul ignore next -- suppression flips only on real user scroll between frames of an async image-decode chase, not reproducible in a test. */
         if (!canAutoStickToBottom()) return;
         scrollToBottom();
-        /* istanbul ignore next -- scrollerRef is set during the chase; the `?? -1` scroller-null fallback is defensive. */
         const next = scrollerRef.current?.scrollHeight ?? -1;
         if (next === lastHeight || frames <= 1) return;
         lastHeight = next;

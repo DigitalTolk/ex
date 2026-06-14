@@ -123,6 +123,7 @@ function useTypeaheadPosition(anchorEl: HTMLElement | null, setPosition: (positi
     function update() {
       const anchorRect = target.getBoundingClientRect();
       const composer = target.closest('[data-message-composer]');
+      /* istanbul ignore next -- when the typeahead is open the focused element is always the contenteditable (an HTMLElement); the `: null` arm guards against a null/SVG activeElement that the open menu never produces. */
       const activeElement = document.activeElement instanceof HTMLElement ? document.activeElement : null;
       const activeEditor =
         activeElement?.getAttribute('role') === 'textbox'

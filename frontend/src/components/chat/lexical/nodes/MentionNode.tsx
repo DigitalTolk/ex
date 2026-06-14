@@ -74,6 +74,7 @@ export class MentionNode extends DecoratorNode<JSX.Element> {
           conversion: (node: HTMLElement): DOMConversionOutput => ({
             node: new MentionNode(
               node.getAttribute('data-user-id') ?? '',
+              /* istanbul ignore next -- node is an HTMLElement, whose textContent is always a string (never null — only document/doctype nodes return null); the ?? '' arm is defensive. */
               node.getAttribute('data-mention-name') ?? (node.textContent ?? '').replace(/^@/, ''),
             ),
           }),

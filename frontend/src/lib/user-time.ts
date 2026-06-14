@@ -10,6 +10,7 @@ export function formatLastSeen(lastSeenAt?: string, online?: boolean): string | 
 }
 
 export function localTimeZone(): string {
+  /* istanbul ignore next -- resolvedOptions().timeZone is always a non-empty IANA string in every supported runtime; the || '' fallback is defensive. */
   return Intl.DateTimeFormat().resolvedOptions().timeZone || '';
 }
 
@@ -27,6 +28,7 @@ export function formatTimeZoneName(timeZone?: string): string | null {
   if (!isValidTimeZone(timeZone)) return null;
   const parts = timeZone.split('/');
   if (parts.length === 1) return parts[0].replaceAll('_', ' ');
+  /* istanbul ignore next -- parts comes from a non-empty string split, so .at(-1) is always a string; the ?? timeZone arm is defensive. */
   const city = parts.at(-1)?.replaceAll('_', ' ') ?? timeZone;
   const region = parts.slice(0, -1).join('/').replaceAll('_', ' ');
   return `${city}, ${region}`;
@@ -44,6 +46,7 @@ export function timeZoneOffsetMinutes(timeZone: string, at = new Date()): number
       minute: '2-digit',
       second: '2-digit',
     }).formatToParts(at);
+    /* istanbul ignore next -- formatToParts always emits every requested field (year/month/day/hour/minute/second), so find() never misses; the ?? 0 arm is defensive. */
     const value = (type: string) => Number(parts.find((p) => p.type === type)?.value ?? 0);
     const asUTC = Date.UTC(
       value('year'),

@@ -158,6 +158,23 @@ describe('useAnimatedSwipeDismiss (browser)', () => {
     await vi.waitFor(() => expect(onDismiss).toHaveBeenCalledTimes(1));
   });
 
+  it('onSwiped does not reset the offset while a dismissal animation is in flight (timeoutRef !== null arm)', async () => {
+    const onDismiss = vi.fn();
+    await render(<Probe direction="right" onDismiss={onDismiss} />);
+    // Build up a drag offset, then commit a dismissal so timeoutRef is set.
+    swipeConfig().onSwiping({ absX: 60, absY: 5, deltaX: 60, deltaY: 5, initial: [10, 100], event: eventFor() });
+    await vi.waitFor(() => expect(offset()).toBe('60'));
+    swipeConfig().onSwipedRight({ absY: 5, deltaX: 100, initial: [10, 100] });
+    // dismissWithAnimation sets timeoutRef and resets the offset to 0.
+    await vi.waitFor(() => expect(dismissing()).toBe('true'));
+    await vi.waitFor(() => expect(offset()).toBe('0'));
+    // onSwiped fires after the gesture ends; with the timeout pending it takes
+    // the `timeoutRef.current === null` FALSE arm and skips setDragOffset(0).
+    swipeConfig().onSwiped();
+    expect(offset()).toBe('0');
+    await vi.waitFor(() => expect(onDismiss).toHaveBeenCalledTimes(1));
+  });
+
   it('clears a pending dismissal timeout on unmount', async () => {
     const onDismiss = vi.fn();
     const screen = await render(<Probe direction="right" onDismiss={onDismiss} />);

@@ -57,6 +57,16 @@ describe('fuzzyMatch (browser)', () => {
     expect(fuzzyMatch('abc', 'xyz')).toBe(false);
   });
 
+  it('reaches the empty-token Damerau base case (m === 0)', () => {
+    // Field "-abcd" normalizes to "-abcd" (no 3+ run collapse) and splits
+    // into ['', 'abcd']. Query "wxyz" (>=4 chars) is not a substring of the
+    // field, so the L69 includes() shortcut misses and the token loop runs:
+    // the leading empty token drives damerauLevenshtein('', 'wxyz') through
+    // its `m === 0 → return n` base case. The real 'abcd' token then also
+    // fails (distance 4), so the candidate is correctly rejected.
+    expect(fuzzyMatch('wxyz', '-abcd')).toBe(false);
+  });
+
   it('matches a long query against the second token of a multi-token field via distance', () => {
     // Field "carla noice": query "noice" exact-substring matches; "noyce"
     // (one substitution) reaches the token loop and matches "noice" by

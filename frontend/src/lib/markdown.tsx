@@ -130,6 +130,7 @@ function renderCodeString(src: string, language: string | undefined, keyPrefix: 
   let cursor = 0;
   for (const match of src.matchAll(CODE_TOKEN_RE)) {
     const token = match[0];
+    /* istanbul ignore next -- String.matchAll always populates match.index; the ?? 0 fallback is defensive. */
     const index = match.index ?? 0;
     if (index > cursor) out.push(src.slice(cursor, index));
     const className = codeTokenClass(token, normalizedLanguage);
@@ -209,6 +210,7 @@ function findInline(src: string, opts: RenderOpts | undefined, keyPrefix: string
   });
 
   tryMatch(GROUP_MENTION_RE, (m) => {
+    /* istanbul ignore next -- GROUP_MENTION_RE's group 1 is `(^|[^\w@])` which always captures (empty string at start of input), so m[1] is never undefined; the ?? '' arm is defensive. */
     const lead = m[1] ?? '';
     return (
       <span key={`${keyPrefix}-mg-${m.index}`}>
@@ -227,6 +229,7 @@ function findInline(src: string, opts: RenderOpts | undefined, keyPrefix: string
   // hashtag: #tag — only when an onTagClick handler is wired.
   if (opts?.onTagClick) {
     tryMatch(HASHTAG_RE, (m) => {
+      /* istanbul ignore next -- HASHTAG_RE's group 1 is `(^|[^\w/])` which always captures (empty string at start of input), so m[1] is never undefined; the ?? '' arm is defensive. */
       const lead = m[1] ?? '';
       const tag = m[2];
       return (
@@ -381,6 +384,7 @@ function renderInlineString(src: string, opts: RenderOpts | undefined, keyPrefix
   let safety = 0;
   while (cursor < src.length) {
     safety++;
+    /* istanbul ignore next -- defensive runaway-loop guard: each iteration advances the cursor by at least one matched character, so reaching 10000 iterations would require a >10000-character single string with no progress, which the matcher never produces. */
     if (safety > 10000) break;
     const rest = src.slice(cursor);
     const match = findInline(rest, opts, `${keyPrefix}-${cursor}`);

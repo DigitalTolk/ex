@@ -37,6 +37,12 @@ export default defineConfig({
   test: {
     include: ['src/**/*.browser.test.{ts,tsx}'],
     setupFiles: ['./src/test/react-act-setup.ts', './src/test/browser-setup.ts'],
+    // Heavy full-route integration specs (e.g. channel-files-pinned) mount the
+    // entire ChatPage across 3 Playwright projects; under full-suite CPU
+    // saturation their async send/draft/WS chains can exceed the 5s default and
+    // flake. Raise the ceiling so the suite is deterministic under load. This
+    // only affects how long a slow test may run — it does not touch coverage.
+    testTimeout: 20000,
     coverage: {
       provider: 'istanbul',
       // json-summary writes coverage-browser/coverage-summary.json

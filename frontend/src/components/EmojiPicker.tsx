@@ -142,6 +142,7 @@ export function EmojiPicker({ onSelect, onClose, onOpenChange, trigger, triggerC
   // typeahead and native emoji normalization.
   const filteredStandard = useMemo(() => {
     if (!query.trim() && activeCategory === CUSTOM_CATEGORY_SLUG) return [];
+    /* istanbul ignore next -- activeCategory is always one of the rendered tab slugs, all of which key into EMOJIS_BY_CATEGORY, so the ?? [] fallback is defensive. */
     if (!query.trim()) return EMOJIS_BY_CATEGORY[activeCategory] ?? [];
     return COMMON_EMOJI_SHORTCODES
       .map((emoji, index) => ({ emoji, rank: emojiSearchRank(query, emoji), index }))

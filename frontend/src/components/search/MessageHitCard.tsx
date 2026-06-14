@@ -27,6 +27,7 @@ export function MessageHitCard({ hit, onAuthorClick }: MessageHitCardProps) {
 
   const { map: authorMap } = useUsersBatch(authorId ? [authorId] : []);
   const author = authorMap.get(authorId);
+  /* istanbul ignore next -- useEmojiMap always resolves to an object (its queryFn coerces to {}), so the destructure default {} is defensive and the data-undefined arm is unreachable. */
   const { data: emojiMap = {} } = useEmojiMap();
   const parent = useMessageParent(parentId, hit.id, threadRoot);
 

@@ -327,6 +327,7 @@ export function ThreadPanel({
   useEffect(() => {
     const el = scrollRef.current;
     const inner = innerRef.current;
+    /* istanbul ignore next -- scrollRef and innerRef are both attached once the panel renders, so this guard never short-circuits in practice; defensive. */
     if (!el || !inner) return;
     if (anchorMsgId) return;
     const onLoad = (e: Event) => {
@@ -341,6 +342,7 @@ export function ThreadPanel({
 
   const handleDraftChange = useCallback(
     (value: SendMessageInput) => {
+      /* istanbul ignore next -- ThreadPanel always renders inside a channel or conversation, so parentID (channelId ?? conversationId) is always set; defensive. */
       if (!parentID) return;
       restoreDraftScopeForContent(draftScope, value);
       saveDraftMutate({
@@ -372,6 +374,7 @@ export function ThreadPanel({
 
   const handleEditMessage = useCallback(
     (value: SendMessageInput) => {
+      /* istanbul ignore next -- handleEditMessage is only wired as the composer's onSend while editingMessage is set (mobile edit mode), so it is never called with a null editingMessage; defensive. */
       if (!editingMessage) return;
       const currentAttachmentIDs = editingMessage.attachmentIDs ?? [];
       const nextAttachmentIDs = value.attachmentIDs ?? [];

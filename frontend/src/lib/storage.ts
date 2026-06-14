@@ -4,6 +4,7 @@
 // would otherwise need its own try/catch.
 
 export function readString(key: string): string | null {
+  /* istanbul ignore next -- SSR guard: localStorage is always defined in the browser test environment; this arm is reachable only under a Node render we don't do. */
   if (typeof localStorage === 'undefined') return null;
   try {
     return localStorage.getItem(key);
@@ -13,6 +14,7 @@ export function readString(key: string): string | null {
 }
 
 export function writeString(key: string, value: string): void {
+  /* istanbul ignore next -- SSR guard: localStorage is always defined in the browser test environment; this arm is reachable only under a Node render we don't do. */
   if (typeof localStorage === 'undefined') return;
   try {
     localStorage.setItem(key, value);
@@ -22,6 +24,7 @@ export function writeString(key: string, value: string): void {
 }
 
 export function removeKey(key: string): void {
+  /* istanbul ignore next -- SSR guard: localStorage is always defined in the browser test environment; this arm is reachable only under a Node render we don't do. */
   if (typeof localStorage === 'undefined') return;
   try {
     localStorage.removeItem(key);

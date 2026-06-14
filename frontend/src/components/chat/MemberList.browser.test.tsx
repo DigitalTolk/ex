@@ -227,7 +227,6 @@ describe('MemberList browser behaviour', () => {
         return [{ id: 'u-9', displayName: 'Newbie', email: 'new@x.test' }];
       }
       if ((init as { method?: string } | undefined)?.method === 'POST') {
-        // eslint-disable-next-line @typescript-eslint/only-throw-error
         throw 'plain string failure';
       }
       return undefined;

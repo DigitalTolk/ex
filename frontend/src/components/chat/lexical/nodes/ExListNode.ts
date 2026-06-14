@@ -50,6 +50,7 @@ export class ExListNode extends ListNode {
 function $updateChildrenListItemValue(list: ListNode): void {
   let value = list.getStart();
   for (const child of list.getChildren()) {
+    /* istanbul ignore next -- Lexical's schema only permits ListItemNode children inside a ListNode, so the non-list-item (else) arm is unreachable; the guard mirrors @lexical/list's stock helper defensively. */
     if ($isListItemNode(child)) {
       if (child.getValue() !== value) child.setValue(value);
       value++;

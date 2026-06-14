@@ -107,6 +107,10 @@ export function usePopoverPosition(
       let top = side === 'bottom' ? rect.bottom + 4 : rect.top - height - 4;
       let left = align === 'start' ? rect.left : rect.right - width;
       if (top + height + margin > vh) top = Math.max(margin, vh - height - margin);
+      // Defensive lower clamp: the side-flip logic never keeps a popover on a
+      // side with too little room, and the overflow clamp above already floors
+      // `top` at `margin`, so `top < margin` cannot be reached in practice.
+      /* istanbul ignore next -- unreachable: flip + overflow clamp already keep top >= margin */
       if (top < margin) top = margin;
       if (left + width + margin > vw) left = Math.max(margin, vw - width - margin);
       if (left < margin) left = margin;

@@ -159,6 +159,7 @@ export function UserMentionsPlugin({ channelId }: UserMentionsPluginProps = {}) 
       // suggestion. (See SubmitOnEnterPlugin for the symmetric note.)
       commandPriority={COMMAND_PRIORITY_NORMAL}
       menuRenderFn={(anchorElementRef, { selectedIndex, selectOptionAndCleanUp, setHighlightedIndex }) =>
+        /* istanbul ignore next -- Lexical only invokes menuRenderFn once the typeahead anchor element is mounted, so anchorElementRef.current is always set here; the `: null` arm is defensive. */
         anchorElementRef.current ? (
           <TypeaheadMenu
             testId="mention-popup"

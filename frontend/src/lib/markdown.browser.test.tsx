@@ -240,14 +240,13 @@ describe('renderMarkdown (legacy regex pipeline)', () => {
     expect(code.querySelector('span.text-purple-700')).not.toBeNull();
   });
 
-  it('returns the raw source for a language block with no tokenizable content', async () => {
-    // A fenced block whose body is only spaces produces no CODE_TOKEN_RE
-    // matches, so renderCodeString returns `src` (the `out.length ? out : src`
-    // false side).
-    await render(wrap(<>{renderMarkdown('```js\n     \n```')}</>));
+  it('returns the raw source for an empty language block (out stays empty)', async () => {
+    // An EMPTY fenced block body (no characters at all) means renderCodeString
+    // pushes nothing and the trailing-slice append is also skipped, so `out`
+    // stays empty and the `out.length ? out : src` false side returns src.
+    await render(wrap(<>{renderMarkdown('```js\n```')}</>));
     const code = document.querySelector('pre code')!;
     expect(code.querySelector('span')).toBeNull();
-    expect(code.textContent).toContain(' ');
   });
 
   it('highlights a common keyword inside an UNKNOWN language (the ?? COMMON fallback)', async () => {

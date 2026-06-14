@@ -126,6 +126,40 @@ describe('useServerVersion poller', () => {
     if (original) Object.defineProperty(document, 'visibilityState', original);
   });
 
+  it('the poller starts only once even when a second consumer mounts (pollerStarted early-out)', async () => {
+    // Two consumers in one tree: the first effect calls startPoller and sets
+    // pollerStarted; the second calls startPoller again and hits the
+    // `if (pollerStarted) return` true side (line 65). The fetch fires once.
+    const fetchMock = vi.fn().mockResolvedValue(versionResponse('v9', 'etag-9'));
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    mounted = await render(
+      <>
+        <Probe />
+        <Probe />
+      </>,
+    );
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    // A single poller → exactly one initial poll despite two subscribers.
+    expect(fetchMock.mock.calls.length).toBe(1);
+  });
+
+  it('reset notifies live subscribers (subscribers.size !== 0 arm)', async () => {
+    // With a Probe mounted there is a live subscriber, so
+    // resetServerVersionForTests takes the `subscribers.size === 0` FALSE side
+    // (line 36) and fans the reset out to the subscriber's callback, which
+    // re-reads the now-null snapshot.
+    const fetchMock = vi.fn().mockResolvedValue(versionResponse('v10', 'etag-10'));
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    const screen = await mount();
+    await vi.waitFor(() => {
+      expect(screen.getByTestId('sv').element().getAttribute('data-version')).toBe('v10');
+    });
+    resetServerVersionForTests();
+    await vi.waitFor(() => {
+      expect(screen.getByTestId('sv').element().getAttribute('data-version')).toBe('');
+    });
+  });
+
   it('flips outdated to true once the server reports a version unlike the stamped build', async () => {
     // browser-setup.ts stamps a real meta tag, so BUILD_VERSION is
     // 'browser-test' (not 'dev') → the dev-build suppression

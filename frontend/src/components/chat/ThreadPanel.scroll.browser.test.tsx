@@ -167,7 +167,11 @@ beforeEach(() => {
   document.head.appendChild(style);
 });
 
-afterEach(() => {
+afterEach(async () => {
+  // Safety net: each test unmounts its own result, but if an assertion
+  // throws first this guarantees the panel is torn down before the next.
+  if (active) await active.unmount();
+  active = null;
   document.getElementById('tp-scroll-style')?.remove();
 });
 
@@ -184,7 +188,6 @@ describe('ThreadPanel real-scroll coverage', () => {
     const el = scroller();
     // Initial open stuck to the bottom (within a small slack).
     expect(el.scrollHeight - el.scrollTop - el.clientHeight).toBeLessThan(40);
-    await result.unmount();
   });
 
   it('follows a new reply added to an already-open thread while at the bottom', async () => {
@@ -201,7 +204,6 @@ describe('ThreadPanel real-scroll coverage', () => {
     await frame();
     const el = scroller();
     expect(el.scrollHeight - el.scrollTop - el.clientHeight).toBeLessThan(120);
-    await result.unmount();
   });
 
   it('does not yank a reader who has scrolled up when a new reply arrives', async () => {
@@ -223,7 +225,6 @@ describe('ThreadPanel real-scroll coverage', () => {
     await frame();
     // distanceFromBottom >= 120 → no stick; we stay where we were.
     expect(el.scrollTop).toBe(before);
-    await result.unmount();
   });
 
   it('auto-sticks to the bottom when a delegated <img> load grows the content', async () => {
@@ -242,7 +243,6 @@ describe('ThreadPanel real-scroll coverage', () => {
     img.dispatchEvent(new Event('load', { bubbles: false }));
     await frame();
     expect(el.scrollHeight - el.scrollTop - el.clientHeight).toBeLessThan(40);
-    await result.unmount();
   });
 
   it('ignores non-IMG load events in the delegated handler', async () => {
@@ -256,7 +256,6 @@ describe('ThreadPanel real-scroll coverage', () => {
     span.dispatchEvent(new Event('load', { bubbles: false }));
     await frame();
     expect(scroller()).not.toBeNull();
-    await result.unmount();
   });
 
   it('scrolls to and follows a deep-link anchor reply, releasing on user scroll', async () => {
@@ -278,7 +277,6 @@ describe('ThreadPanel real-scroll coverage', () => {
     await vi.waitFor(() => {
       expect(document.getElementById('msg-R2')?.classList.contains('ring-1')).toBe(true);
     }, { timeout: 3000 });
-    await result.unmount();
   });
 
   it('re-arms the sticky observer when the thread root changes', async () => {
@@ -294,7 +292,6 @@ describe('ThreadPanel real-scroll coverage', () => {
     await frame();
     await frame();
     expect(document.querySelector('aside[aria-label="Thread"]')).not.toBeNull();
-    await result.unmount();
   });
 
   it('applies the swipe-dismiss className + attribute while dismissing', async () => {
@@ -305,7 +302,6 @@ describe('ThreadPanel real-scroll coverage', () => {
     const aside = document.querySelector('aside[aria-label="Thread"]') as HTMLElement;
     expect(aside.getAttribute('data-swipe-dismissing')).toBe('true');
     expect(aside.className).toContain('max-md:translate-x-full');
-    await result.unmount();
   });
 
   it('ignores a load event when the reader has scrolled away from the bottom', async () => {
@@ -325,22 +321,23 @@ describe('ThreadPanel real-scroll coverage', () => {
     img.dispatchEvent(new Event('load', { bubbles: false }));
     await frame();
     expect(el.scrollTop).toBe(before);
-    await result.unmount();
   });
 
-  it('does not re-stick on a rerender that does not add replies (len not grown)', async () => {
+  it('does not re-stick on a rerender that removes replies (len not grown)', async () => {
     const { ui, panel } = mount();
     threadMessagesState = { data: manyReplies(20), isLoading: false };
     const result = await render(ui(panel({})));
     active = result;
     await vi.waitFor(() => expect(scroller().scrollHeight).toBeGreaterThan(scroller().clientHeight), { timeout: 3000 });
     await frame();
-    // Rerender with the SAME reply count → `len > prevLenRef.current` is false
-    // (line 224 else arm); no programmatic stick.
+    // Rerender with FEWER replies (len shrinks) → the sticky effect re-runs
+    // (data?.length dep changed) but `len > prevLenRef.current` is false
+    // (line 227 else arm); no programmatic stick.
+    threadMessagesState = { data: manyReplies(18), isLoading: false };
     result.rerender(ui(panel({})));
     await frame();
+    await frame();
     expect(document.querySelector('aside[aria-label="Thread"]')).not.toBeNull();
-    await result.unmount();
   });
 
   it('does not re-apply the anchor on a rerender with the same anchor revision', async () => {
@@ -350,14 +347,39 @@ describe('ThreadPanel real-scroll coverage', () => {
     active = result;
     await vi.waitFor(() => expect(document.getElementById('msg-R2')).not.toBeNull(), { timeout: 3000 });
     await frame();
-    // Rerender with the SAME anchor+revision → anchorAppliedRef already equals
-    // the dedup key (line 254 else arm); the follow effect re-runs and hits the
-    // userHasScrolled / deadline guards (lines 262-263) without re-centering.
+    // The user scrolls beyond the follow tolerance → the follow RO's onScroll
+    // flips userHasScrolledRef. Appending a reply (data?.length dep changes)
+    // re-runs the anchor effect with anchorAppliedRef already equal to the
+    // dedup key (line 258 else arm) → it then early-returns at the
+    // `userHasScrolledRef.current` guard (line 266).
+    const el = scroller();
+    el.scrollTop = el.scrollTop + 300;
+    el.dispatchEvent(new Event('scroll'));
+    await frame();
+    threadMessagesState = { data: manyReplies(31), isLoading: false };
     result.rerender(ui(panel({ anchorMsgId: 'R2', anchorRevision: 'rev-1' })));
     await frame();
     await frame();
     expect(document.getElementById('msg-R2')).not.toBeNull();
-    await result.unmount();
+  });
+
+  it('stops following the anchor once the follow deadline has elapsed', async () => {
+    const { ui, panel } = mount();
+    threadMessagesState = { data: manyReplies(30), isLoading: false };
+    const result = await render(ui(panel({ anchorMsgId: 'R2', anchorRevision: 'rev-1' })));
+    active = result;
+    await vi.waitFor(() => expect(document.getElementById('msg-R2')).not.toBeNull(), { timeout: 3000 });
+    await frame();
+    // Wait past the 1500ms follow window, then append a reply so the anchor
+    // effect re-runs: anchorAppliedRef still matches (line 258 else), the user
+    // has not scrolled, but `Date.now() >= followDeadlineRef.current` is now
+    // true → it early-returns at the deadline guard (line 267).
+    await new Promise((r) => setTimeout(r, 1700));
+    threadMessagesState = { data: manyReplies(31), isLoading: false };
+    result.rerender(ui(panel({ anchorMsgId: 'R2', anchorRevision: 'rev-1' })));
+    await frame();
+    await frame();
+    expect(document.getElementById('msg-R2')).not.toBeNull();
   });
 
   it('falls back to "Unknown" for a reply whose author is absent from the map', async () => {
@@ -366,7 +388,6 @@ describe('ThreadPanel real-scroll coverage', () => {
     const result = await render(ui(panel({ userMap: {} })));
     active = result;
     await expect.element(result.getByText('reply R-ghost')).toBeVisible();
-    await result.unmount();
   });
 
   it('no-ops the anchor + highlight effects when the anchored reply id is not present', async () => {
@@ -381,20 +402,19 @@ describe('ThreadPanel real-scroll coverage', () => {
     await frame();
     // No element with that id, so nothing got a highlight ring.
     expect(document.getElementById('msg-does-not-exist')).toBeNull();
-    await result.unmount();
   });
 
   it('skips the anchor effect entirely while the thread replies have not loaded', async () => {
-    // anchorMsgId set but the thread data is still empty → the anchor effect
-    // early-returns at `(data?.length ?? 0) === 0` (line 247) and the
+    // anchorMsgId set but the thread data is still UNDEFINED (loading) → the
+    // anchor effect early-returns at `(data?.length ?? 0) === 0` via the
+    // `data?.` nullish arm + the `?? 0` fallback (line 250), and the
     // repliesHaveLoaded gate keeps the highlight effect dormant.
     const { ui, panel } = mount();
-    threadMessagesState = { data: [], isLoading: true };
+    threadMessagesState = { data: undefined, isLoading: true };
     const result = await render(ui(panel({ anchorMsgId: 'R0', anchorRevision: 'rev-1' })));
     active = result;
     await expect.element(result.getByText('Loading replies...')).toBeVisible();
     await frame();
     expect(document.querySelector('aside[aria-label="Thread"]')).not.toBeNull();
-    await result.unmount();
   });
 });

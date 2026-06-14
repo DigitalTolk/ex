@@ -80,6 +80,7 @@ export function useSearchMessages(
   return useSearchQuery('messages', q, limit, enabled, opts, nonce);
 }
 
+/* istanbul ignore next -- the sole caller (SearchResultsPage) always passes an explicit limit, so the `= 8` default-parameter arm is never applied. */
 export function useSearchFiles(q: string, enabled: boolean, limit = 8, opts?: MessageQueryOpts) {
   return useSearchQuery('files', q, limit, enabled, opts);
 }

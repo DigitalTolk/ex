@@ -111,6 +111,28 @@ describe('lineUtils (browser)', () => {
     expect(text).toBe('');
   });
 
+  it('treats a line whose only earlier sibling is whitespace text as empty', () => {
+    // Line layout: <br> "   " <caret in trailing ""> — the walk-back reaches a
+    // whitespace-only TextNode, exercising the `$isTextNode(prev) &&
+    // prev.getTextContent().trim() !== ''` AND-false side in $currentLineIsEmpty.
+    const editor = createEditor({ namespace: 'lineutils-ws', onError: (e) => { throw e; } });
+    let empty = false;
+    editor.update(() => {
+      const root = $getRoot();
+      root.clear();
+      const para = $createParagraphNode();
+      const ws = $createTextNode('   ');
+      const tail = $createTextNode('');
+      para.append($createLineBreakNode(), ws, tail);
+      root.append(para);
+      const sel = $createRangeSelection();
+      sel.anchor.set(tail.getKey(), 0, 'text');
+      sel.focus.set(tail.getKey(), 0, 'text');
+      empty = $currentLineIsEmpty(sel);
+    }, { discrete: true });
+    expect(empty).toBe(true);
+  });
+
   it('skips a non-TextNode sibling (decorator mention) while walking back', () => {
     // A paragraph "before " [MentionNode] "after": when reading from a caret in
     // "after", the walk-back hits the MentionNode (not a TextNode), exercising

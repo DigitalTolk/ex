@@ -215,6 +215,24 @@ describe('PinnedPanel browser behaviour', () => {
     await vi.waitFor(() => expect(window.location.pathname).toContain('conv-1'));
   });
 
+  it('shows the empty state with no parent (query disabled, data is undefined)', async () => {
+    // No channelId/conversationId → the pinned query is disabled, so `data`
+    // stays undefined while isLoading is false. `(data?.length ?? 0) === 0`
+    // then resolves via the `?? 0` nullish arm and the empty-state renders.
+    apiFetchMock.mockReset();
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const screen = await render(
+      <QueryClientProvider client={qc}>
+        <BrowserRouter>
+          <PinnedPanel onClose={vi.fn()} userMap={{}} currentUserId="u-2" />
+        </BrowserRouter>
+      </QueryClientProvider>,
+    );
+    await expect.element(screen.getByTestId('pinned-empty')).toBeVisible();
+    // Query never fired since neither parent id was provided.
+    expect(apiFetchMock).not.toHaveBeenCalled();
+  });
+
   it('coerces a non-array pinned response to an empty list', async () => {
     apiFetchMock.mockReset();
     apiFetchMock.mockResolvedValue(null);

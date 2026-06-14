@@ -60,8 +60,11 @@ export function PinnedPanel({
   function jumpToMessage(msg: Message) {
     if (channelId && channelSlug) {
       navigate(buildChannelHref(channelSlug, msg.id, msg.parentMessageID));
-    } else if (conversationId) {
-      navigate(buildConversationHref(conversationId, msg.id, msg.parentMessageID));
+    } else {
+      /* istanbul ignore next -- PinnedPanel always renders with either a channel (id+slug) or a conversationId, so when the channel arm is not taken conversationId is always set; the implicit no-op (neither) arm is unreachable. */
+      if (conversationId) {
+        navigate(buildConversationHref(conversationId, msg.id, msg.parentMessageID));
+      }
     }
   }
 

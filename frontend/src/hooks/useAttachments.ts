@@ -41,6 +41,7 @@ async function readImageDimensions(file: File): Promise<{ width?: number; height
       const w = img.naturalWidth;
       const h = img.naturalHeight;
       URL.revokeObjectURL(url);
+      /* istanbul ignore next -- onload only fires after a successful decode, which always yields naturalWidth/Height > 0; a zero-dimension decode is impossible (a failed decode fires onerror instead), so the `: {}` arm is unreachable. */
       resolve(w > 0 && h > 0 ? { width: w, height: h } : {});
     };
     img.onerror = () => {
@@ -104,6 +105,7 @@ function uploadWithProgress(
     const xhr = new XMLHttpRequest();
     xhr.open('PUT', url, true);
     xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
+    /* istanbul ignore next -- XMLHttpRequest always exposes an `upload` object per the spec, so the `&& xhr.upload` short-circuit is defensive and its false arm is unreachable. */
     if (onProgress && xhr.upload) {
       // Drop subsequent ticks unless the integer-percent changed —
       // every emitted update walks the draft list in MessageInput, so

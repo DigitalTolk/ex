@@ -13,14 +13,16 @@ interface ProbeProps {
   triggerStyle?: React.CSSProperties;
   withContent?: boolean;
   attachTrigger?: boolean;
+  estimatedHeight?: number;
 }
 
-function Probe({ preferredSide, preferredAlign, triggerStyle, withContent, attachTrigger = true }: ProbeProps) {
+function Probe({ preferredSide, preferredAlign, triggerStyle, withContent, attachTrigger = true, estimatedHeight }: ProbeProps) {
   const triggerRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const pos = usePopoverPosition(true, triggerRef, {
     preferredSide,
     preferredAlign,
+    estimatedHeight,
     contentRef: withContent ? contentRef : undefined,
   });
   return (
@@ -154,6 +156,38 @@ describe('usePopoverPosition (browser)', () => {
     expect(top).toBeGreaterThanOrEqual(8);
     expect(left).toBeGreaterThanOrEqual(8);
     expect(left).toBeLessThanOrEqual(window.innerWidth);
+  });
+
+  it('clamps the vertical position for a popover taller than the room below', async () => {
+    // Trigger near the top (so it stays bottom-aligned — little room above to
+    // flip to) with content taller than the viewport → the bottom-side top
+    // (rect.bottom+4) plus the huge height exceeds vh, so `top + height +
+    // margin > vh` fires and pins top inside the viewport.
+    await render(
+      <Probe estimatedHeight={2000} triggerStyle={{ top: 50, left: 100 }} />,
+    );
+    await vi.waitFor(() => expect(posEl().getAttribute('data-measured')).toBe('true'));
+    const top = Number(posEl().getAttribute('data-top'));
+    expect(posEl().getAttribute('data-side')).toBe('bottom');
+    expect(top).toBeGreaterThanOrEqual(8);
+  });
+
+  it('starts measured=false and does not re-measure when opened with open=false', async () => {
+    function ClosedProbe() {
+      const triggerRef = useRef<HTMLDivElement>(null);
+      // open=false from the start → the effect's `prev.measured ? ... : prev`
+      // takes the `: prev` arm (measured already false, no state change).
+      const pos = usePopoverPosition(false, triggerRef, {});
+      return (
+        <>
+          <div ref={triggerRef} data-testid="trigger" style={{ position: 'fixed', top: 100, left: 100 }} />
+          <div data-testid="pos" data-measured={String(pos.measured)} />
+        </>
+      );
+    }
+    await render(<ClosedProbe />);
+    await new Promise((r) => setTimeout(r, 40));
+    expect(posEl().getAttribute('data-measured')).toBe('false');
   });
 
   it('clamps the left edge up to the margin when the trigger sits at the far left', async () => {

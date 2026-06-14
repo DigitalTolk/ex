@@ -409,6 +409,108 @@ describe('MessageList coverage — own-message auto-stick guards', () => {
     }, { timeout: 3000 });
   });
 
+  it('does not re-apply the anchor scroll when the index shifts under the same dedup key', async () => {
+    // First render applies the anchor (anchorAppliedRef := dedupKey). A
+    // prepend changes anchorIndex (so the effect re-runs via its anchorIndex
+    // dep) while anchorMsgId/anchorRevision stay → anchorAppliedRef already
+    // equals the dedup key → the `=== dedupKey` early return (line 159 br0).
+    function Harness() {
+      const [extra, setExtra] = useState<Message[]>([]);
+      const tail = Array.from({ length: 8 }, (_, i) =>
+        msg({ id: `dk-${i}`, body: `m${i}`, createdAt: new Date(Date.UTC(2026, 4, 1, 10, i)).toISOString() }),
+      );
+      const all = [...extra, ...tail];
+      return (
+        <>
+          <button
+            data-testid="prepend"
+            onClick={() =>
+              setExtra([msg({ id: 'older-1', body: 'older', createdAt: '2026-05-01T09:00:00Z' })])
+            }
+          >
+            prepend
+          </button>
+          <div style={{ height: 420, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+            <MessageList {...baseProps(all)} pages={[{ items: [...all].reverse() }]} anchorMsgId="dk-3" anchorRevision="rev-1" />
+          </div>
+        </>
+      );
+    }
+    const screen = await render(
+      <Wrap>
+        <Harness />
+      </Wrap>,
+    );
+    await vi.waitFor(() => expect(document.querySelector('[data-message-id="dk-3"]')).not.toBeNull(), { timeout: 3000 });
+    await screen.getByTestId('prepend').click();
+    await animationFrames(3);
+    expect(document.querySelector('[data-message-id="dk-3"]')).not.toBeNull();
+  });
+
+  it('disables follow-output while a deep-link anchor is active (followLiveOutput false arm)', async () => {
+    // hasPreviousPage is false so followOutput IS followLiveOutput, and an
+    // active anchorMsgId makes shouldAutoStickMessageList return false → the
+    // callback returns `false` (line 189 ternary false arm) for whatever
+    // at-bottom state Virtuoso reports during settling.
+    const messages = Array.from({ length: 30 }, (_, i) =>
+      msg({ id: `fo-${i}`, body: `m${i}`, createdAt: new Date(Date.UTC(2026, 4, 1, 10, i)).toISOString() }),
+    );
+    await render(
+      <div style={{ height: 300, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+        <Wrap>
+          <MessageList
+            {...baseProps(messages)}
+            pages={[{ items: [...messages].reverse() }]}
+            anchorMsgId="fo-10"
+            hasPreviousPage={false}
+          />
+        </Wrap>
+      </div>,
+    );
+    const scroller = document.querySelector('[data-testid="virtuoso-scroller"]') as HTMLElement | null;
+    expect(scroller).not.toBeNull();
+    await vi.waitFor(() => expect(scroller!.scrollHeight).toBeGreaterThan(scroller!.clientHeight), { timeout: 3000 });
+    // Scroll to bottom so Virtuoso evaluates followOutput with isAtBottom=true,
+    // yet the anchor still forces the false arm.
+    scroller!.scrollTop = scroller!.scrollHeight;
+    scroller!.dispatchEvent(new Event('scroll', { bubbles: true }));
+    await animationFrames(3);
+    expect(document.querySelector('[data-message-id="fo-10"]')).not.toBeNull();
+  });
+
+  it('does not clear the highlight flash that now belongs to a different anchor', async () => {
+    // Anchor A starts a 2.2s flash. Before it fires we switch to anchor B,
+    // which sets highlightedMessageId to B. When A's timeout finally runs,
+    // `curr` (=B) !== anchorMsgId-at-closure (A) → the `: curr` arm keeps the
+    // current highlight (line 166 else arm).
+    const messages = Array.from({ length: 8 }, (_, i) =>
+      msg({ id: `fl-${i}`, body: `m${i}`, createdAt: new Date(Date.UTC(2026, 4, 1, 10, i)).toISOString() }),
+    );
+    function Harness() {
+      const [anchor, setAnchor] = useState('fl-1');
+      return (
+        <>
+          <button data-testid="switch" onClick={() => setAnchor('fl-5')}>switch</button>
+          <div style={{ height: 420, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+            <MessageList {...baseProps(messages)} anchorMsgId={anchor} anchorRevision="rev-1" />
+          </div>
+        </>
+      );
+    }
+    const screen = await render(
+      <Wrap>
+        <Harness />
+      </Wrap>,
+    );
+    await vi.waitFor(() => expect(document.querySelector('[data-message-id="fl-1"]')).not.toBeNull(), { timeout: 3000 });
+    // Switch the anchor well before the 2200ms flash of fl-1 elapses.
+    await screen.getByTestId('switch').click();
+    await animationFrames(2);
+    // Let fl-1's original flash timeout fire; it must NOT clear fl-5's highlight.
+    await new Promise((r) => setTimeout(r, 2400));
+    expect(document.querySelector('[data-message-id="fl-5"]')).not.toBeNull();
+  });
+
   it('highlights then clears a deep-link anchor flash without clobbering a newer anchor', async () => {
     // Drives the anchor highlight timeout's `curr === anchorMsgId ? null :
     // curr` updater (line 166): when the flash timeout fires the highlight
