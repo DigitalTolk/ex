@@ -375,6 +375,73 @@ func TestMarkdownRenderer_LinkWithExplicitText(t *testing.T) {
 	}
 }
 
+func TestMarkdownRenderer_LinkUnsafeSchemeDropped(t *testing.T) {
+	r := NewMarkdownRenderer()
+	for _, body := range []string{
+		"click [here](javascript:alert(1))",
+		"click [here](JavaScript:alert(1))",
+		"see [x](data:text/html,<script>alert(1)</script>)",
+		"open [y](vbscript:msgbox(1))",
+	} {
+		out := r.RenderToHast(body)
+		if link := findFirstByTag(out, "a"); link != nil {
+			t.Errorf("%q: expected no anchor for unsafe scheme, got href=%v", body, link.Properties["href"])
+		}
+		// The visible link text is preserved.
+		if got := allText(out); !strings.Contains(got, "here") && !strings.Contains(got, "x") && !strings.Contains(got, "y") {
+			t.Errorf("%q: expected link text preserved, got %q", body, got)
+		}
+	}
+}
+
+func TestIsSafeURL(t *testing.T) {
+	cases := map[string]bool{
+		"https://example.com":     true,
+		"http://example.com":      true,
+		"HTTPS://EXAMPLE.COM":     true,
+		"mailto:x@example.com":    true,
+		"/relative/path":          true, // slash before any colon
+		"#anchor":                 true, // fragment first
+		"?q=1":                    true, // query first
+		"//cdn.example.com":       true, // scheme-relative
+		"relative":                true, // no colon at all
+		"a b:c":                   true, // space (non-scheme char) before colon
+		"javascript:alert(1)":     false,
+		"JavaScript:alert(1)":     false,
+		"data:text/html,<script>": false,
+		"vbscript:x":              false,
+		"file:///etc/passwd":      false,
+		"":                        false,
+		"   ":                     false,
+	}
+	for in, want := range cases {
+		if got := isSafeURL(in); got != want {
+			t.Errorf("isSafeURL(%q) = %v, want %v", in, got, want)
+		}
+	}
+}
+
+func TestMarkdownRenderer_LinkSafeSchemesKept(t *testing.T) {
+	r := NewMarkdownRenderer()
+	cases := map[string]string{
+		"[a](https://example.com)":  "https://example.com",
+		"[a](http://example.com)":   "http://example.com",
+		"[a](mailto:x@example.com)": "mailto:x@example.com",
+		"[a](/relative/path)":       "/relative/path",
+		"[a](#anchor)":              "#anchor",
+	}
+	for body, want := range cases {
+		out := r.RenderToHast(body)
+		link := findFirstByTag(out, "a")
+		if link == nil {
+			t.Fatalf("%q: expected an anchor", body)
+		}
+		if link.Properties["href"] != want {
+			t.Errorf("%q: href = %v, want %v", body, link.Properties["href"], want)
+		}
+	}
+}
+
 func TestMarkdownRenderer_BlankLinesMultiple(t *testing.T) {
 	r := NewMarkdownRenderer()
 	// Multiple-blank-line patterns produce one blank paragraph per

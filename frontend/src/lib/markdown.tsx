@@ -1,6 +1,11 @@
 import { Fragment, type ReactNode } from 'react';
 import { GiphyEmbed } from '@/components/GiphyEmbed';
-import { applySkinToneSuffix, shortcodeToUnicode } from './emoji-shortcodes';
+import {
+  applySkinToneSuffix,
+  shortcodeToUnicode,
+  EMOJI_SHORTCODE_RE,
+  EMOJI_SHORTCODE_TONED_RE,
+} from './emoji-shortcodes';
 import { USER_MENTION_RE, GROUP_MENTION_RE, CHANNEL_MENTION_RE } from './mention-syntax';
 import type { HastNode } from '@/types';
 import { renderHastTree } from './markdown-hast';
@@ -316,7 +321,7 @@ function findInline(src: string, opts: RenderOpts | undefined, keyPrefix: string
   // (`# title :tada:` keeps the emoji proportional to the H1 text).
   // align-middle (not align-text-bottom) centers the glyph on the text's
   // x-height so it sits visually balanced inside paragraphs and lists.
-  tryMatch(/:([a-z0-9_+-]+)::(skin-tone-[1-5]):/i, (m) => {
+  tryMatch(EMOJI_SHORTCODE_TONED_RE, (m) => {
     const name = m[1];
     const unicode = shortcodeToUnicode(`:${name}:`);
     if (unicode !== `:${name}:`) {
@@ -333,7 +338,7 @@ function findInline(src: string, opts: RenderOpts | undefined, keyPrefix: string
     return <span key={`${keyPrefix}-eu-${m.index}`}>{m[0]}</span>;
   });
 
-  tryMatch(/:([a-z0-9_+-]+):/i, (m) => {
+  tryMatch(EMOJI_SHORTCODE_RE, (m) => {
     const name = m[1];
     const url = opts?.emojiMap?.[name];
     if (url) {

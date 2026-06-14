@@ -41,23 +41,6 @@ if (typeof document !== 'undefined') {
   }
 }
 
-// The Lexical typeahead plugins (@-mentions, ~-channels, :-emojis)
-// each call React Query data hooks. Tests that mount UI containing the
-// composer (ChannelView, ConversationView, MessageInput, etc.) but
-// don't exercise typeahead behaviour would otherwise need to mock all
-// three data sources — that's repetitive scaffolding. Replace the
-// plugins with no-ops globally; suites that DO test the popups
-// (WysiwygEditor.test.tsx) override these mocks with their own factory.
-vi.mock('@/components/chat/lexical/plugins/UserMentionsPlugin', () => ({
-  UserMentionsPlugin: () => null,
-}));
-vi.mock('@/components/chat/lexical/plugins/ChannelMentionsPlugin', () => ({
-  ChannelMentionsPlugin: () => null,
-}));
-vi.mock('@/components/chat/lexical/plugins/EmojiShortcutsPlugin', () => ({
-  EmojiShortcutsPlugin: () => null,
-}));
-
 // Lexical's TypeaheadMenuPlugin and react-virtuoso both depend on
 // ResizeObserver. jsdom doesn't ship it; install a polyfill that
 // fires its callback once on observe() with a non-zero rect so
@@ -113,14 +96,10 @@ if (typeof HTMLElement !== 'undefined') {
   }
 }
 
-// jsdom doesn't ship DragEvent / ClipboardEvent. @lexical/rich-text's
-// PASTE_COMMAND handler runs eventFiles(event), which uses
-// objectKlassEquals(event, DragEvent | ClipboardEvent) to discriminate
-// drag-and-drop from paste. Without the globals defined, that throws
-// a ReferenceError; with anonymous polyfills, every event collides
-// because objectKlassEquals matches on constructor.name (== '' on
-// both sides). Polyfill with named subclasses so the discriminator
-// works as intended.
+// jsdom doesn't ship DragEvent / ClipboardEvent. Paste/drag handling in the
+// composer and drop zones constructs and discriminates these events, which
+// throws a ReferenceError without the globals. Polyfill with named subclasses
+// so any constructor.name-based discrimination still works as intended.
 if (typeof globalThis.DragEvent === 'undefined') {
   class DragEvent extends Event {
     dataTransfer: DataTransfer | null;

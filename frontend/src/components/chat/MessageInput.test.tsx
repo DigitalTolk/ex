@@ -2,9 +2,36 @@ import { describe, it, expect, vi } from 'vitest';
 import { act, fireEvent, render as rtlRender, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { EditorView } from '@codemirror/view';
 import { MessageInput } from './MessageInput';
 
+// Clear the CodeMirror composer the way the editor itself would — a synthetic
+// Backspace keydown doesn't drive CM6's input model, so we dispatch on its view.
+function clearComposer(editor: HTMLElement) {
+  const view = EditorView.findFromDOM(editor);
+  act(() => {
+    view?.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: '' } });
+  });
+}
+
 vi.mock('@/lib/api', () => ({ apiFetch: vi.fn().mockResolvedValue([]) }));
+
+// The CM6 composer (MarkdownComposer) sources autocomplete data from these
+// hooks. Stub them with static empty data so their queries don't resolve
+// asynchronously outside act() during these editor-agnostic tests.
+vi.mock('@/hooks/useConversations', async (orig) => ({
+  ...(await orig<typeof import('@/hooks/useConversations')>()),
+  useAllUsers: () => ({ data: [] }),
+}));
+vi.mock('@/hooks/useChannels', async (orig) => ({
+  ...(await orig<typeof import('@/hooks/useChannels')>()),
+  useChannelMembers: () => ({ data: [] }),
+  useUserChannels: () => ({ data: [] }),
+}));
+vi.mock('@/hooks/useEmoji', async (orig) => ({
+  ...(await orig<typeof import('@/hooks/useEmoji')>()),
+  useEmojis: () => ({ data: [] }),
+}));
 
 // Stub the workspace-settings hook so MessageInput doesn't fire a
 // real React Query against the mocked apiFetch — the late resolve
@@ -358,12 +385,7 @@ describe('MessageInput', () => {
     const { rerender } = rtlRender(renderTree('delete me'));
     const editor = await screen.findByLabelText('Message input');
 
-    const range = document.createRange();
-    range.selectNodeContents(editor);
-    const sel = window.getSelection();
-    sel?.removeAllRanges();
-    sel?.addRange(range);
-    fireEvent.keyDown(editor, { key: 'Backspace' });
+    clearComposer(editor);
 
     await waitFor(() => {
       expect((editor.textContent ?? '').trim()).toBe('');

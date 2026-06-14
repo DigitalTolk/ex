@@ -1,6 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { EditorView } from '@codemirror/view';
+
+// The CM6 composer renders `:smile:` as a live-preview glyph, so the raw
+// shortcode lives in the editor's document, not its visible textContent.
+function editorDoc(): string {
+  const el = screen.getByLabelText('Message input');
+  return EditorView.findFromDOM(el)?.state.doc.toString() ?? '';
+}
 
 vi.mock('@/lib/api', () => ({ apiFetch: vi.fn() }));
 
@@ -11,6 +19,17 @@ vi.mock('@/hooks/useAttachments', () => ({
   useAttachmentsBatch: () => ({ map: new Map(), data: [] }),
 }));
 
+// The CM6 composer sources autocomplete data from these hooks — stub them with
+// static empty data so their queries don't resolve async outside act().
+vi.mock('@/hooks/useConversations', async (orig) => ({
+  ...(await orig<typeof import('@/hooks/useConversations')>()),
+  useAllUsers: () => ({ data: [] }),
+}));
+vi.mock('@/hooks/useChannels', async (orig) => ({
+  ...(await orig<typeof import('@/hooks/useChannels')>()),
+  useChannelMembers: () => ({ data: [] }),
+  useUserChannels: () => ({ data: [] }),
+}));
 vi.mock('@/hooks/useEmoji', () => ({
   useEmojis: () => ({ data: [] }),
   useEmojiMap: () => ({ data: {} }),
@@ -67,8 +86,7 @@ describe('MessageInput — emoji picker integration', () => {
     fireEvent.click(screen.getAllByTestId('emoji-picker-tile')[0]);
 
     await waitFor(() => {
-      const editor = screen.getByLabelText('Message input');
-      expect(editor.textContent ?? '').toMatch(/:[a-z0-9_+-]+:/i);
+      expect(editorDoc()).toMatch(/:[a-z0-9_+-]+:/i);
     });
   });
 
@@ -93,7 +111,7 @@ describe('MessageInput — emoji picker integration', () => {
     fireEvent.click(screen.getByLabelText('Emoji'));
     fireEvent.click(screen.getAllByTestId('emoji-picker-tile')[0]);
     await waitFor(() => {
-      expect(screen.getByLabelText('Message input').textContent ?? '').toMatch(/:[a-z0-9_+-]+:/i);
+      expect(editorDoc()).toMatch(/:[a-z0-9_+-]+:/i);
     });
   });
 

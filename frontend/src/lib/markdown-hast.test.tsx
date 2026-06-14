@@ -29,4 +29,27 @@ describe('renderHastTree', () => {
     const { getByTestId } = render(<>{renderHastTree(tree)}</>);
     expect(getByTestId('giphy')).toHaveAttribute('data-id', '');
   });
+
+  const linkTree = (href: string): HastNode => ({
+    type: 'root',
+    children: [
+      {
+        type: 'element',
+        tagName: 'a',
+        properties: { href },
+        children: [{ type: 'text', value: 'click' }],
+      },
+    ],
+  });
+
+  it('renders a safe link as an anchor', () => {
+    const { container } = render(<>{renderHastTree(linkTree('https://example.com'))}</>);
+    expect(container.querySelector('a')).toHaveAttribute('href', 'https://example.com');
+  });
+
+  it('renders an unsafe-scheme link as plain text, no anchor', () => {
+    const { container } = render(<>{renderHastTree(linkTree('javascript:alert(1)'))}</>);
+    expect(container.querySelector('a')).toBeNull();
+    expect(container.textContent).toContain('click');
+  });
 });

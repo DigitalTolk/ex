@@ -23,8 +23,10 @@ vi.mock('@/hooks/useEmoji', () => ({
 // Stub the WYSIWYG editor to a plain textarea — onChange feeds the
 // markdown string back into MessageInput's body state. This is what the
 // validation cap reads, so it's the only behaviour the test needs.
-vi.mock('@/components/chat/WysiwygEditor', () => ({
-  WysiwygEditor: (props: {
+// Stub the composer with a plain textarea so validation tests can drive
+// onChange directly without standing up CodeMirror's contenteditable.
+vi.mock('@/components/chat/markdown/MarkdownComposer', () => ({
+  MarkdownComposer: (props: {
     onChange: (md: string) => void;
     onSubmit: () => void;
     placeholder?: string;

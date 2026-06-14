@@ -1,4 +1,32 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+// MarkdownComposer pulls in roster/channel/emoji/auth/presence data hooks these
+// view-level tests don't stub; they don't exercise the composer, so stub it with
+// a plain textarea (matches the message-input-validation stub).
+vi.mock('@/components/chat/markdown/MarkdownComposer', () => ({
+  MarkdownComposer: (props: {
+    ariaLabel?: string;
+    placeholder?: string;
+    onChange?: (md: string) => void;
+    onSubmit?: (md: string) => void;
+  }) => (
+    <div>
+      <textarea
+        aria-label={props.ariaLabel ?? 'Message input'}
+        placeholder={props.placeholder}
+        onChange={(e) => props.onChange?.(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            props.onSubmit?.((e.target as HTMLTextAreaElement).value);
+          }
+        }}
+        data-testid="composer-stub"
+      />
+      {props.placeholder ? <span>{props.placeholder}</span> : null}
+    </div>
+  ),
+}));
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
@@ -70,43 +98,6 @@ vi.mock('@/hooks/useMessages', () => ({
   useToggleReaction: () => ({ mutate: vi.fn(), isPending: false }),
   useSetPinned: () => ({ mutate: vi.fn(), isPending: false }),
 }));
-
-vi.mock('@/components/chat/WysiwygEditor', async () => {
-  const React = await import('react');
-  return {
-    WysiwygEditor: React.forwardRef(function StubEditor(
-      props: { onSubmit?: (md: string) => void; onChange?: (md: string) => void; placeholder?: string; ariaLabel?: string },
-      ref,
-    ) {
-      const taRef = React.useRef<HTMLTextAreaElement>(null);
-      React.useImperativeHandle(ref, () => ({
-        applyMark: () => {},
-        applyBlock: () => {},
-        beginLinkEdit: () => ({ selectedText: '' }),
-        commitLinkEdit: () => {},
-        insertText: (t: string) => { if (taRef.current) taRef.current.value += t; },
-        getMarkdown: () => taRef.current?.value ?? '',
-        setMarkdown: (md: string) => { if (taRef.current) taRef.current.value = md; },
-        focus: () => taRef.current?.focus(),
-      }), []);
-      return (
-        <textarea
-          ref={taRef}
-          aria-label={props.ariaLabel ?? 'Message input'}
-          placeholder={props.placeholder}
-          data-placeholder={props.placeholder ?? ''}
-          onChange={(e) => props.onChange?.(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
-              e.preventDefault();
-              props.onSubmit?.(taRef.current?.value ?? '');
-            }
-          }}
-        />
-      );
-    }),
-  };
-});
 
 vi.mock('@/hooks/useWebSocket', () => ({
   useWebSocket: vi.fn(),

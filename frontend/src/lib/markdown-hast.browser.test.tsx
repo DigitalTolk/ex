@@ -25,6 +25,21 @@ function root(children: HastNode[]): HastNode {
   return { type: 'root', children };
 }
 
+describe('renderHastTree — link scheme safety', () => {
+  it('renders a safe link as an anchor', async () => {
+    const tree = root([elem('a', { href: 'https://example.com' }, [text('click')])]);
+    await render(wrap(<>{renderHastTree(tree)}</>));
+    expect(document.querySelector('a')?.getAttribute('href')).toBe('https://example.com');
+  });
+
+  it('renders an unsafe-scheme link as plain text, no anchor', async () => {
+    const tree = root([elem('a', { href: 'javascript:alert(1)' }, [text('click')])]);
+    await render(wrap(<>{renderHastTree(tree)}</>));
+    expect(document.querySelector('a')).toBeNull();
+    expect(document.body.textContent).toContain('click');
+  });
+});
+
 describe('renderHastTree — every custom-tag branch', () => {
   it('renders a self-mention with the highlight class when currentUserId matches', async () => {
     const tree = root([

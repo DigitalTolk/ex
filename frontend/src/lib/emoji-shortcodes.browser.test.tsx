@@ -7,7 +7,31 @@ import {
   supportsEmojiSkinTone,
   unicodeToShortcode,
   normalizeEmojiInBody,
+  EMOJI_SHORTCODE_RE,
+  EMOJI_SHORTCODE_TONED_RE,
+  EMOJI_SHORTCODE_RE_GLOBAL,
 } from './emoji-shortcodes';
+
+describe('shared emoji-shortcode grammar', () => {
+  it('EMOJI_SHORTCODE_RE captures a plain :name:', () => {
+    const m = EMOJI_SHORTCODE_RE.exec('say :smile: now');
+    expect(m?.[1]).toBe('smile');
+  });
+
+  it('EMOJI_SHORTCODE_TONED_RE captures name + skin tone', () => {
+    const m = EMOJI_SHORTCODE_TONED_RE.exec(':wave::skin-tone-3:');
+    expect(m?.[1]).toBe('wave');
+    expect(m?.[2]).toBe('skin-tone-3');
+  });
+
+  it('EMOJI_SHORTCODE_RE_GLOBAL scans both toned and plain forms', () => {
+    const matches = [...':a::skin-tone-2: and :b:'.matchAll(EMOJI_SHORTCODE_RE_GLOBAL)];
+    expect(matches.map((m) => [m[1], m[2]])).toEqual([
+      ['a', 'skin-tone-2'],
+      ['b', undefined],
+    ]);
+  });
+});
 
 describe('shortcodeToUnicode', () => {
   it('resolves a known shortcode to its unicode glyph', () => {

@@ -32,7 +32,7 @@ import { useWorkspaceSettings } from '@/hooks/useSettings';
 import { AttachmentChip, type DraftAttachment } from '@/components/chat/AttachmentChip';
 import { uploadAttachment, useDeleteDraftAttachment } from '@/hooks/useAttachments';
 import { isImageAttachment } from '@/lib/file-helpers';
-import { WysiwygEditor, type WysiwygEditorHandle, type ActiveFormat } from '@/components/chat/WysiwygEditor';
+import { MarkdownComposer, type WysiwygEditorHandle, type ActiveFormat } from '@/components/chat/markdown/MarkdownComposer';
 import { sendWS } from '@/lib/ws-sender';
 import {
   MAX_ATTACHMENTS_PER_MESSAGE,
@@ -778,7 +778,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
               : 'items-end max-md:pt-3'
           }`}
         >
-          <WysiwygEditor
+          <MarkdownComposer
             ref={editorRef}
             initialBody={initialBody}
             onChange={(md) => {

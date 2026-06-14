@@ -10,6 +10,7 @@ import { toJsxRuntime, type Components as JsxComponents } from 'hast-util-to-jsx
 import type { Nodes as HastNodes } from 'hast';
 import { GiphyEmbed } from '@/components/GiphyEmbed';
 import { applySkinToneSuffix, shortcodeToUnicode } from './emoji-shortcodes';
+import { isSafeUrl } from './url-safety';
 import type { HastNode } from '@/types';
 import type { RenderOpts } from './markdown';
 
@@ -124,7 +125,8 @@ const HAST_COMPONENTS_MAP: Record<string, AnyComponent> = {
   strong: ({ children }) => <strong>{children}</strong>,
   em: ({ children }) => <em>{children}</em>,
   s: ({ children }) => <s>{children}</s>,
-  a: ({ children, href }: { children?: ReactNode; href?: string }) => (
+  a: ({ children, href }: { children?: ReactNode; href?: string }) =>
+    isSafeUrl(href) ? (
     <a
       href={href}
       target="_blank"
@@ -133,6 +135,9 @@ const HAST_COMPONENTS_MAP: Record<string, AnyComponent> = {
     >
       {children}
     </a>
+    ) : (
+      // Unsafe scheme (javascript:, data: …) — render the text only, no anchor.
+      <span>{children}</span>
   ),
   pre: (props: { children?: ReactNode; 'data-language'?: string }) => (
     <pre

@@ -173,8 +173,18 @@ func emitNode(node ast.Node, src []byte, parent *HastNode) {
 		el.Children = []*HastNode{textNode(b.String())}
 		parent.Children = append(parent.Children, el)
 	case *ast.Link:
+		dest := string(n.Destination)
+		if !isSafeURL(dest) {
+			// Disallowed scheme (javascript:, data:, vbscript: …) — drop the
+			// anchor and keep its visible text, mirroring how raw HTML and
+			// non-giphy images are handled. The frontend renders this HAST
+			// href verbatim, so neutralising it here is the authoritative XSS
+			// guard for every client (and incoming webhooks).
+			emitChildren(n, src, parent)
+			return
+		}
 		props := map[string]interface{}{
-			"href":   string(n.Destination),
+			"href":   dest,
 			"target": "_blank",
 			"rel":    "noopener noreferrer",
 		}
@@ -216,6 +226,42 @@ func emitNode(node ast.Node, src []byte, parent *HastNode) {
 
 func element(tag string, properties map[string]interface{}) *HastNode {
 	return &HastNode{Type: "element", TagName: tag, Properties: properties, Children: []*HastNode{}}
+}
+
+// isSafeURL reports whether a link destination is safe to emit as an href.
+// Absolute URLs are allowed only for the http/https/mailto schemes; anything
+// with another explicit scheme (javascript:, data:, vbscript:, file: …) is
+// rejected as a potential script-injection vector. Scheme-relative ("//host"),
+// path-relative, query, and fragment URLs carry no scheme and are allowed.
+// isSchemeChar reports whether c is a valid URL-scheme byte per RFC 3986:
+// ALPHA / DIGIT / "+" / "-" / ".".
+func isSchemeChar(c byte) bool {
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '+' || c == '-' || c == '.'
+}
+
+func isSafeURL(raw string) bool {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		// A '/', '?' or '#' before any ':' means there is no scheme — the URL
+		// is relative (or an anchor/query), which is safe.
+		if c == '/' || c == '?' || c == '#' {
+			return true
+		}
+		if c == ':' {
+			scheme := strings.ToLower(s[:i])
+			return scheme == "http" || scheme == "https" || scheme == "mailto"
+		}
+		// Any non-scheme byte before a ':' means it isn't a scheme → relative.
+		if !isSchemeChar(c) {
+			return true
+		}
+	}
+	// No ':' encountered at all → relative reference → safe.
+	return true
 }
 
 func textNode(value string) *HastNode {
