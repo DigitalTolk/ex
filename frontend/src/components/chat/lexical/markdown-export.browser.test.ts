@@ -5,11 +5,15 @@ import {
   $createTextNode,
   $getRoot,
 } from 'lexical';
+import { $convertFromMarkdownString } from '@lexical/markdown';
 import { $createListItemNode, $createListNode, ListItemNode, ListNode } from '@lexical/list';
-import { $createQuoteNode, QuoteNode } from '@lexical/rich-text';
+import { $createQuoteNode, HeadingNode, QuoteNode } from '@lexical/rich-text';
+import { CodeNode, CodeHighlightNode } from '@lexical/code';
+import { LinkNode } from '@lexical/link';
 import { ExListNode } from './nodes/ExListNode';
 import { MentionNode } from './nodes/MentionNode';
 import { ChannelMentionNode } from './nodes/ChannelMentionNode';
+import { EX_TRANSFORMERS } from './transformers';
 import { $exportMarkdown } from './markdown-export';
 
 // Browser-gate coverage for $exportMarkdown / collapseSyntheticBlockGaps
@@ -25,11 +29,28 @@ function newEditor() {
       { replace: ListNode, with: (n: ListNode) => new ExListNode(n.getListType(), n.getStart()), withKlass: ExListNode },
       ListItemNode,
       QuoteNode,
+      HeadingNode,
+      CodeNode,
+      CodeHighlightNode,
+      LinkNode,
       MentionNode,
       ChannelMentionNode,
     ],
     onError: (e) => { throw e; },
   });
+}
+
+// Import markdown into a fresh editor and re-export it. A lossless round-trip
+// is what makes "copy a posted message" reproduce exactly what was written —
+// the composer imports a body on edit/paste and exports it on send.
+function roundTrip(input: string): string {
+  const editor = newEditor();
+  editor.update(() => {
+    $convertFromMarkdownString(input, EX_TRANSFORMERS, undefined, true);
+  }, { discrete: true });
+  let out = '';
+  editor.read(() => { out = $exportMarkdown(); });
+  return out;
 }
 
 describe('$exportMarkdown (browser)', () => {
@@ -164,5 +185,34 @@ describe('$exportMarkdown (browser)', () => {
     let md = '';
     editor.read(() => { md = $exportMarkdown(); });
     expect(md).toBe('5. x\n6. y');
+  });
+
+  // Regression: $convertToMarkdownString inserts a blank line between every
+  // pair of blocks, including across a fenced code block. That synthetic blank
+  // survived into the stored body and the renderer showed it as a visible
+  // empty row — so a code block typed directly next to text gained an extra
+  // line, and copying the message reproduced that line (write != see/copy).
+  describe('code-fence boundary gaps (round-trip fidelity)', () => {
+    it('does not insert a blank line after a code block before inline code', () => {
+      // close-fence boundary (fenceRole[p] === 'close')
+      expect(roundTrip('```\nasads\n```\n`asdads`')).toBe('```\nasads\n```\n`asdads`');
+    });
+
+    it('does not insert a blank line before a code block after a paragraph', () => {
+      // open-fence boundary (fenceRole[q] === 'open')
+      expect(roundTrip('hello\n```\ncode\n```')).toBe('hello\n```\ncode\n```');
+    });
+
+    it('preserves blank lines INSIDE a fenced code block (content role)', () => {
+      expect(roundTrip('```\na\n\nb\n```')).toBe('```\na\n\nb\n```');
+    });
+
+    it('preserves a deliberate empty-paragraph spacer next to a code block (multi-blank, not isolated)', () => {
+      expect(roundTrip('```\ncode\n```\n\n\n\nafter')).toBe('```\ncode\n```\n\n\n\nafter');
+    });
+
+    it('still separates two plain paragraphs with a blank line', () => {
+      expect(roundTrip('one\n\ntwo')).toBe('one\n\ntwo');
+    });
   });
 });

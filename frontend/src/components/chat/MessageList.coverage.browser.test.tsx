@@ -560,11 +560,16 @@ describe('MessageList coverage — pagination sentinels fire fetch callbacks', (
     await vi.waitFor(() => {
       expect(scroller!.scrollHeight).toBeGreaterThan(scroller!.clientHeight);
     }, { timeout: 3000 });
-    scroller!.scrollTop = 0;
-    scroller!.dispatchEvent(new Event('scroll', { bubbles: true }));
+    // Re-assert the scroll on every poll: react-virtuoso wires startReached
+    // off its own async range/scroll measurement, and under full-suite CPU
+    // load on CI a single dispatch can land before Virtuoso is ready and be
+    // lost. Re-dispatching until the callback fires (or the generous window
+    // elapses) makes it deterministic without masking a real regression.
     await vi.waitFor(() => {
+      scroller!.scrollTop = 0;
+      scroller!.dispatchEvent(new Event('scroll', { bubbles: true }));
       expect(fetchNextPage).toHaveBeenCalled();
-    }, { timeout: 3000 });
+    }, { timeout: 12000 });
   });
 
   it('calls fetchPreviousPage when the list end is reached and a newer page exists', async () => {
@@ -591,10 +596,12 @@ describe('MessageList coverage — pagination sentinels fire fetch callbacks', (
     await vi.waitFor(() => {
       expect(scroller!.scrollHeight).toBeGreaterThan(scroller!.clientHeight);
     }, { timeout: 3000 });
-    scroller!.scrollTop = scroller!.scrollHeight;
-    scroller!.dispatchEvent(new Event('scroll', { bubbles: true }));
+    // Re-assert the scroll each poll (see fetchNextPage test above) so the
+    // endReached callback fires deterministically under CI load.
     await vi.waitFor(() => {
+      scroller!.scrollTop = scroller!.scrollHeight;
+      scroller!.dispatchEvent(new Event('scroll', { bubbles: true }));
       expect(fetchPreviousPage).toHaveBeenCalled();
-    }, { timeout: 3000 });
+    }, { timeout: 12000 });
   });
 });

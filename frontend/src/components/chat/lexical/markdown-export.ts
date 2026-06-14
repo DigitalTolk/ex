@@ -39,24 +39,69 @@ function blockKind(line: string): BlockKind | null {
 // continuation, so `> quote` + blank + `text` rendered as `> quote\ntext`
 // (text swallowed into the quote) and a list item swallowed the
 // paragraph after it. Preserve those gaps.
+// A fenced code block is self-delimiting: its closing ``` / ~~~ ends the
+// block no matter what follows, and an opening fence can interrupt the
+// preceding line. So the blank line $convertToMarkdownString inserts on
+// either side of a fence is purely cosmetic — nothing gets absorbed by
+// removing it — yet it breaks copy round-trip fidelity (the user typed a
+// code block directly adjacent to a paragraph, not separated by a blank
+// line). We drop those fence-adjacent gaps while never touching a blank
+// line INSIDE a fence (real code content). `~~~` and ``` are both matched.
+const FENCE_RE = /^\s*(?:```|~~~)/;
+
 function collapseSyntheticBlockGaps(markdown: string): string {
   const lines = markdown.split('\n');
+  const n = lines.length;
+
+  // Classify every line relative to fenced code: the fence delimiters
+  // ('open'/'close') and the code content between them ('content').
+  const fenceRole: Array<'open' | 'close' | 'content' | null> = new Array(n).fill(null);
+  let inFence = false;
+  for (let i = 0; i < n; i++) {
+    if (FENCE_RE.test(lines[i])) {
+      fenceRole[i] = inFence ? 'close' : 'open';
+      inFence = !inFence;
+    } else if (inFence) {
+      fenceRole[i] = 'content';
+    }
+  }
+
   const out: string[] = [];
-  for (let i = 0; i < lines.length; i++) {
+  for (let i = 0; i < n; i++) {
     const line = lines[i];
     if (line.trim() !== '') {
       out.push(line);
       continue;
     }
-
-    const prev = out.at(-1) ?? '';
-    let next = '';
-    for (let j = i + 1; j < lines.length; j++) {
-      if (lines[j].trim() !== '') {
-        next = lines[j];
-        break;
-      }
+    // A blank line inside a fence is literal code — preserve it verbatim.
+    if (fenceRole[i] === 'content') {
+      out.push(line);
+      continue;
     }
+
+    let p = i - 1;
+    while (p >= 0 && lines[p].trim() === '') p--;
+    let q = i + 1;
+    while (q < n && lines[q].trim() === '') q++;
+    const prev = p >= 0 ? lines[p] : '';
+    const next = q < n ? lines[q] : '';
+
+    // Drop a SINGLE synthetic separator pressed directly against a fence
+    // boundary (right after a closing fence, or right before an opening one).
+    // Only an *isolated* blank line qualifies — its nearest non-blank lines sit
+    // directly adjacent (p === i-1, q === i+1). A run of 2+ blanks encodes
+    // user-authored empty paragraphs (deliberate spacing the renderer shows as
+    // blank rows), which must survive the round-trip untouched.
+    const isIsolatedBlank = p === i - 1 && q === i + 1;
+    if (isIsolatedBlank && (fenceRole[p] === 'close' || fenceRole[q] === 'open')) {
+      continue;
+    }
+
+    // Two adjacent blocks of the SAME quote/list kind: the blank is a
+    // synthetic separator the user didn't intend (one continuous quote /
+    // list), so drop it. A gap between a block and a plain paragraph stays —
+    // it terminates the list / quote and removing it would make the
+    // paragraph a lazy continuation.
     const prevKind = blockKind(prev);
     if (prev && next && prevKind !== null && blockKind(next) === prevKind) {
       continue;

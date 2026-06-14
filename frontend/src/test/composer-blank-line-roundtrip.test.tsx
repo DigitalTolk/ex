@@ -7,11 +7,15 @@ import {
   $createTextNode,
   $getRoot,
 } from 'lexical';
+import { $convertFromMarkdownString } from '@lexical/markdown';
 import { ListItemNode, ListNode } from '@lexical/list';
-import { QuoteNode } from '@lexical/rich-text';
+import { HeadingNode, QuoteNode } from '@lexical/rich-text';
+import { CodeNode, CodeHighlightNode } from '@lexical/code';
+import { LinkNode } from '@lexical/link';
 import { ExListNode } from '@/components/chat/lexical/nodes/ExListNode';
 import { MentionNode } from '@/components/chat/lexical/nodes/MentionNode';
 import { ChannelMentionNode } from '@/components/chat/lexical/nodes/ChannelMentionNode';
+import { EX_TRANSFORMERS } from '@/components/chat/lexical/transformers';
 import { $exportMarkdown } from '@/components/chat/lexical/markdown-export';
 import { renderMarkdown } from '@/lib/markdown';
 
@@ -34,11 +38,25 @@ function newEditor() {
       { replace: ListNode, with: (n: ListNode) => new ExListNode(n.getListType(), n.getStart()), withKlass: ExListNode },
       ListItemNode,
       QuoteNode,
+      HeadingNode,
+      CodeNode,
+      CodeHighlightNode,
+      LinkNode,
       MentionNode,
       ChannelMentionNode,
     ],
     onError: (e) => { throw e; },
   });
+}
+
+function roundTrip(input: string): string {
+  const editor = newEditor();
+  editor.update(() => {
+    $convertFromMarkdownString(input, EX_TRANSFORMERS, undefined, true);
+  }, { discrete: true });
+  let md = '';
+  editor.read(() => { md = $exportMarkdown(); });
+  return md;
 }
 
 function composerBodyForShiftEnterTwice(): string {
@@ -98,5 +116,36 @@ describe('composer → render round-trip: blank line preservation', () => {
     expect(ps.length).toBeGreaterThanOrEqual(3);
     expect(ps[0].textContent).toBe('first');
     expect(ps[ps.length - 1].textContent).toBe('second');
+  });
+});
+
+describe('composer → render round-trip: code-fence boundaries add no extra line', () => {
+  it('keeps a code block directly adjacent to following inline code (no synthetic blank)', () => {
+    // The reported regression: typing a fenced code block immediately before
+    // an inline-code line. $convertToMarkdownString inserted a blank line after
+    // the closing fence; the renderer drew it as a visible empty row, so the
+    // copied/posted message gained a line the user never typed.
+    expect(roundTrip('```\nasads\n```\n`asdads`')).toBe('```\nasads\n```\n`asdads`');
+
+    const { container } = render(<>{renderMarkdown('```\nasads\n```\n`asdads`')}</>);
+    // No blank spacer paragraph between the <pre> code block and the inline
+    // code paragraph.
+    expect(container.querySelector('[data-blank="true"]')).toBeNull();
+    expect(container.querySelector('pre code')?.textContent).toBe('asads');
+    const ps = container.querySelectorAll('p');
+    expect(ps.length).toBe(1);
+    expect(ps[0].querySelector('code')?.textContent).toBe('asdads');
+  });
+
+  it('keeps a code block directly adjacent to a preceding paragraph', () => {
+    expect(roundTrip('hello\n```\ncode\n```')).toBe('hello\n```\ncode\n```');
+  });
+
+  it('preserves blank lines inside a fenced code block verbatim', () => {
+    expect(roundTrip('```\na\n\nb\n```')).toBe('```\na\n\nb\n```');
+  });
+
+  it('preserves a deliberate empty-paragraph spacer next to a code block', () => {
+    expect(roundTrip('```\ncode\n```\n\n\n\nafter')).toBe('```\ncode\n```\n\n\n\nafter');
   });
 });
