@@ -72,4 +72,45 @@ describe('ChannelRow browser behaviour', () => {
     await renderRow({ ...baseChannel, favorite: true });
     expect(document.querySelector('[aria-label="Unfavorite general"]')).not.toBeNull();
   });
+
+  it('renders a numeric unread badge, capping at 99+', async () => {
+    const screen = await render(
+      <MemoryRouter>
+        <ChannelRow channel={baseChannel} hasUnread unreadCount={150} onClose={() => {}} />
+      </MemoryRouter>,
+    );
+    await expect.element(screen.getByTestId('channel-unread-badge-ch-1')).toHaveTextContent('99+');
+  });
+
+  it('renders the exact unread count when it is under 100', async () => {
+    const screen = await render(
+      <MemoryRouter>
+        <ChannelRow channel={baseChannel} hasUnread unreadCount={7} onClose={() => {}} />
+      </MemoryRouter>,
+    );
+    await expect.element(screen.getByTestId('channel-unread-badge-ch-1')).toHaveTextContent('7');
+  });
+
+  it('suppresses navigation and notifies the consumer when suppressNavigation is set', async () => {
+    const onClose = vi.fn();
+    const onConsumed = vi.fn();
+    await render(
+      <MemoryRouter>
+        <ChannelRow channel={baseChannel} hasUnread={false} onClose={onClose} suppressNavigation onSuppressNavigationConsumed={onConsumed} />
+      </MemoryRouter>,
+    );
+    (document.querySelector('a[href="/channel/general"]') as HTMLAnchorElement).click();
+    expect(onConsumed).toHaveBeenCalledTimes(1);
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('lists existing categories in the move menu and moves the channel on select', async () => {
+    categoriesData.data = [{ id: 'cat-1', name: 'Work' }];
+    const screen = await renderRow();
+    await screen.getByTestId('row-menu-ch-1').click();
+    const item = screen.getByText('Work');
+    await expect.element(item).toBeVisible();
+    await item.click();
+    expect(setCategoryMutate).toHaveBeenCalledWith({ channelID: 'ch-1', categoryID: 'cat-1' });
+  });
 });

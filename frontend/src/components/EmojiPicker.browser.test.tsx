@@ -13,17 +13,20 @@ vi.mock('@/hooks/useEmoji', () => ({
   useEmojiMap: () => ({ data: { partyparrot: 'https://emoji.test/parrot.gif' } }),
 }));
 
+const apiFetchMock = vi.hoisted(() => vi.fn().mockResolvedValue({ id: 'u-1', emojiSkinTone: 'medium' }));
+const tokenRef = vi.hoisted(() => ({ value: null as string | null }));
 vi.mock('@/lib/api', () => ({
-  apiFetch: vi.fn().mockResolvedValue({}),
-  getAccessToken: () => null,
+  apiFetch: (...args: unknown[]) => apiFetchMock(...args),
+  getAccessToken: () => tokenRef.value,
 }));
 
+const setAuthMock = vi.hoisted(() => vi.fn());
 vi.mock('@/context/AuthContext', () => {
   const state = {
-    user: { id: 'u-1', email: 'a@x.com', displayName: 'Alice', systemRole: 'admin', status: 'active' },
+    user: { id: 'u-1', email: 'a@x.com', displayName: 'Alice', systemRole: 'admin', status: 'active', emojiSkinTone: '' },
     isAuthenticated: true,
     isLoading: false,
-    setAuth: vi.fn(),
+    setAuth: setAuthMock,
   };
   return {
     useAuth: () => state,
@@ -125,6 +128,55 @@ describe('EmojiPicker browser', () => {
     (radios[2] as HTMLElement).click();
     // No throw — the skin-tone change updates state (and persists for a user).
     expect(document.querySelector('[aria-label="Search emojis"]')).not.toBeNull();
+  });
+
+  it('persists a skin-tone change with a PATCH and setAuth when a token is present', async () => {
+    apiFetchMock.mockClear();
+    setAuthMock.mockClear();
+    tokenRef.value = 'tok-123';
+    try {
+      const { screen } = await openPicker();
+      const radios = within(screen.getByRole('radiogroup', { name: 'Emoji skin tone' }).element())
+        .querySelectorAll('button, [role="radio"]');
+      (radios[2] as HTMLElement).click();
+      await vi.waitFor(() => {
+        const call = apiFetchMock.mock.calls.find((c) => c[0] === '/api/v1/users/me');
+        expect(call).toBeDefined();
+        expect((call![1] as { method: string }).method).toBe('PATCH');
+      });
+      await vi.waitFor(() => expect(setAuthMock).toHaveBeenCalled());
+    } finally {
+      tokenRef.value = null;
+    }
+  });
+
+  it('does not PATCH when the chosen skin tone equals the current one', async () => {
+    apiFetchMock.mockClear();
+    const { screen } = await openPicker();
+    const radios = within(screen.getByRole('radiogroup', { name: 'Emoji skin tone' }).element())
+      .querySelectorAll('button, [role="radio"]');
+    // The first swatch is the default (no tone) — same as the user's '' tone.
+    (radios[0] as HTMLElement).click();
+    await new Promise((r) => setTimeout(r, 30));
+    expect(apiFetchMock.mock.calls.some((c) => c[0] === '/api/v1/users/me')).toBe(false);
+  });
+
+  it('shows the empty state when a search matches nothing', async () => {
+    const { screen } = await openPicker();
+    await screen.getByLabelText('Search emojis').fill('zzzzqqqx');
+    await expect.element(screen.getByText('No emojis found')).toBeVisible();
+  });
+
+  it('shows the custom emoji when the custom category is selected', async () => {
+    await openPicker();
+    // The custom category tab surfaces the workspace's custom emojis.
+    const customTab = Array.from(document.querySelectorAll('[data-testid="emoji-category-tab"]'))
+      .find((t) => (t as HTMLElement).getAttribute('aria-label')?.toLowerCase().includes('custom'));
+    if (!customTab) return; // build without a custom category
+    (customTab as HTMLElement).click();
+    await vi.waitFor(() => {
+      expect(document.querySelector('[data-testid="emoji-picker-tile"]')).not.toBeNull();
+    });
   });
 });
 

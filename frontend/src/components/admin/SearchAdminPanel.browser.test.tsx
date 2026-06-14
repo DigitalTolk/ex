@@ -118,4 +118,49 @@ describe('SearchAdminPanel browser behaviour', () => {
     await expect.element(screen.getByText('cluster red')).toBeVisible();
     await expect.element(screen.getByText('no indices')).toBeVisible();
   });
+
+  it('shows a default error message when the status error is not an Error instance', async () => {
+    statusState.isLoading = false;
+    statusState.isError = true;
+    statusState.error = 'a string, not an Error';
+    statusState.data = undefined;
+    const screen = await render(<SearchAdminPanel />);
+    await expect.element(screen.getByText('Could not load search status')).toBeVisible();
+  });
+
+  it('renders the reindex card idle when the reindex object is absent (running ?? false)', async () => {
+    statusState.isLoading = false;
+    statusState.isError = false;
+    statusState.data = {
+      configured: true,
+      cluster: { status: 'green', number_of_nodes: 1, active_shards: 1 },
+      // An index with no storeSize → the `|| '—'` fallback.
+      indices: [{ name: 'messages', health: 'green', docs: 0, storeSize: '' }],
+      reindex: undefined,
+    };
+    await render(<SearchAdminPanel />);
+    expect(document.querySelector('[data-testid="reindex-status"]')?.textContent).toBe('idle');
+    expect(document.querySelector('[data-testid="admin-search-panel"]')?.textContent).toContain('—');
+  });
+
+  it('surfaces a prior reindex lastError and a start-mutation error', async () => {
+    reindexState.isError = true;
+    reindexState.error = new Error('reindex kickoff failed');
+    statusState.isLoading = false;
+    statusState.isError = false;
+    statusState.data = {
+      configured: true,
+      cluster: { status: 'yellow', number_of_nodes: 1, active_shards: 1 },
+      indices: [{ name: 'messages', health: 'yellow', docs: 1, storeSize: '1mb' }],
+      reindex: { running: false, startedAt: 0, completedAt: 0, lastError: 'last run died' },
+    };
+    try {
+      const screen = await render(<SearchAdminPanel />);
+      await expect.element(screen.getByText('last run died')).toBeVisible();
+      await expect.element(screen.getByText('reindex kickoff failed')).toBeVisible();
+    } finally {
+      reindexState.isError = false;
+      reindexState.error = null;
+    }
+  });
 });

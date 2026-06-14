@@ -118,4 +118,43 @@ describe('ConversationRow browser behaviour', () => {
     const trigger = document.querySelector('[data-testid="conv-row-menu-cv-1"]') as HTMLElement;
     expect(trigger.getAttribute('aria-label')).toBe('Manage Bob sidebar placement');
   });
+
+  it('renders a numeric unread badge capping at 99+', async () => {
+    const screen = await renderRow(dm, { hasUnread: true, unreadCount: 200 });
+    await expect.element(screen.getByTestId('conversation-unread-badge-cv-1')).toHaveTextContent('99+');
+  });
+
+  it('suppresses navigation and notifies the consumer when suppressNavigation is set', async () => {
+    const onClose = vi.fn();
+    const onConsumed = vi.fn();
+    await renderRow(dm, { onClose, suppressNavigation: true, onSuppressNavigationConsumed: onConsumed });
+    (document.querySelector('a[href="/conversation/cv-1"]') as HTMLAnchorElement).click();
+    expect(onConsumed).toHaveBeenCalledTimes(1);
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('renders without crashing when a conversation has no display name (?? fallback)', async () => {
+    const screen = await renderRow({ ...dm, displayName: '' });
+    // The avatar falls back to "??"; the row still mounts.
+    await expect.element(screen.getByTestId('conversation-row-cv-1')).toBeVisible();
+  });
+
+  it('handles a group conversation with no participant ids (count falls back to 0)', async () => {
+    const screen = await renderRow({ ...group, participantIDs: undefined });
+    await expect.element(screen.getByTestId('conversation-row-cv-2')).toBeVisible();
+  });
+
+  it('marks the row active when the current route matches the conversation', async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    await render(
+      <QueryClientProvider client={qc}>
+        <MemoryRouter initialEntries={['/conversation/cv-1']}>
+          <ConversationRow conversation={dm} hasUnread={false} onClose={() => {}} onHide={() => {}} />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    // The active NavLink carries the highlight styling.
+    const link = document.querySelector('a[href="/conversation/cv-1"]') as HTMLElement;
+    expect(link.className).toMatch(/bg-white\/15|font-semibold/);
+  });
 });

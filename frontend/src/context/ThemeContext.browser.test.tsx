@@ -69,4 +69,50 @@ describe('ThemeContext', () => {
     const dark = window.matchMedia('(prefers-color-scheme: dark)').matches;
     expect(document.documentElement.classList.contains('dark')).toBe(dark);
   });
+
+  it('re-applies the system theme when prefers-color-scheme changes', async () => {
+    const cap: { handler: (() => void) | null; matches: boolean } = { handler: null, matches: false };
+    const realMatchMedia = window.matchMedia;
+    window.matchMedia = ((query: string) => ({
+      get matches() { return cap.matches; },
+      media: query,
+      onchange: null,
+      addEventListener: (_: string, h: () => void) => { cap.handler = h; },
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+      dispatchEvent: () => false,
+    })) as unknown as typeof window.matchMedia;
+    try {
+      document.documentElement.classList.remove('dark');
+      const screen = await render(<ThemeProvider><Probe /></ThemeProvider>);
+      (screen.getByTestId('set-system').element() as HTMLButtonElement).click();
+      await new Promise((r) => setTimeout(r, 50));
+      // Flip the OS preference and fire the matchMedia change → onChange
+      // re-applies 'system' (the theme === 'system' guard branch).
+      cap.matches = true;
+      cap.handler?.();
+      expect(document.documentElement.classList.contains('dark')).toBe(true);
+    } finally {
+      window.matchMedia = realMatchMedia;
+    }
+  });
+
+  it('uses the read-only fallback (reflecting the dark class) outside a provider', async () => {
+    document.documentElement.classList.add('dark');
+    const screen = await render(<Probe />);
+    // No provider → useTheme returns the fallback, whose getter reads the
+    // documentElement class.
+    expect(screen.getByTestId('theme').element().textContent).toBe('dark');
+    // setTheme is a no-op in the fallback.
+    (screen.getByTestId('set-light').element() as HTMLButtonElement).click();
+    await new Promise((r) => setTimeout(r, 30));
+    expect(document.documentElement.classList.contains('dark')).toBe(true);
+  });
+
+  it('fallback reports "light" when the dark class is absent', async () => {
+    document.documentElement.classList.remove('dark');
+    const screen = await render(<Probe />);
+    expect(screen.getByTestId('theme').element().textContent).toBe('light');
+  });
 });

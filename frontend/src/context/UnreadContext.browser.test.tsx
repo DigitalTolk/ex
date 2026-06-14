@@ -157,4 +157,23 @@ describe('UnreadContext (browser)', () => {
     await new Promise((r) => setTimeout(r, 10));
     expect(getState().unreadThreadNotifications.has('thr-keep')).toBe(true);
   });
+
+  it('setActiveConversation(null) clears the active ref without touching unread state', async () => {
+    const getState = await mountUnread();
+    getState().markConversationUnread('conv-keep');
+    await vi.waitFor(() => expect(getState().unreadConversations.has('conv-keep')).toBe(true));
+    // Passing null takes the `if (id)` false branch — no set/count mutation.
+    getState().setActiveConversation(null);
+    await new Promise((r) => setTimeout(r, 10));
+    expect(getState().unreadConversations.has('conv-keep')).toBe(true);
+  });
+
+  it('clearConversationUnread on a conversation with no recorded count is a no-op for the count map', async () => {
+    const getState = await mountUnread();
+    // Never marked → not in the unread set nor the count map; clear short-
+    // circuits both updaters (the `!prev.has(id)` early returns).
+    getState().clearConversationUnread('conv-never');
+    await new Promise((r) => setTimeout(r, 10));
+    expect(getState().unreadConversations.has('conv-never')).toBe(false);
+  });
 });

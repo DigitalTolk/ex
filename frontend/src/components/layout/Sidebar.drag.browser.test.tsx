@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { render } from 'vitest-browser-react';
 import { BrowserRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -238,6 +238,10 @@ function channelTarget(sectionKey: string, index: number, area = 'row') {
 }
 
 beforeEach(() => {
+  // Enable the DnD debug logging so the (otherwise-skipped) sidebarDndDebug
+  // branches scattered through the drag handlers execute. It only emits
+  // console.debug (not gated) and reads drag state defensively.
+  try { localStorage.setItem('ex.sidebarDndDebug', '1'); } catch { /* noop */ }
   edgeState.edge = 'top';
   setCategoryMutate.mockClear();
   setConversationCategoryMutate.mockClear();
@@ -248,6 +252,10 @@ beforeEach(() => {
   monitorCallbacks.onDropTargetChange = undefined;
   monitorCallbacks.onDrag = undefined;
   monitorCallbacks.onDrop = undefined;
+});
+
+afterEach(() => {
+  try { localStorage.removeItem('ex.sidebarDndDebug'); } catch { /* noop */ }
 });
 
 describe('Sidebar drag-and-drop monitor callbacks', () => {
@@ -308,6 +316,46 @@ describe('Sidebar drag-and-drop monitor callbacks', () => {
     monitorCallbacks.onDropTargetChange?.(dropLocation([channelTarget('__channels__', 0)]));
     monitorCallbacks.onDrop?.(dropLocation([channelTarget('__channels__', 0)]));
     expect(setCategoryMutate).toHaveBeenCalled();
+  });
+
+  it('drops a channel between two rows with a gap — positionForDrop returns the midpoint', async () => {
+    await render(<Frame />);
+    // Drag a channel that is NOT in the plain channels section (it lives in
+    // cat-work) into __channels__ between general(1000) and other(3000). The
+    // dragged id isn't found in that section, so both rows remain in the
+    // ordered list with a >1 gap → midpoint floor((1000+3000)/2)=2000.
+    monitorCallbacks.onDragStart?.(dragSource({ type: 'channel', channel: chan('ch-categorized') }));
+    monitorCallbacks.onDropTargetChange?.(dropLocation([channelTarget('__channels__', 1)]));
+    monitorCallbacks.onDrop?.(dropLocation([channelTarget('__channels__', 1)]));
+    expect(setCategoryMutate).toHaveBeenCalledWith(
+      expect.objectContaining({ channelID: 'ch-categorized', categoryID: '', sidebarPosition: 2000 }),
+    );
+  });
+
+  it('drops a channel past the last row — positionForDrop appends after the final position', async () => {
+    await render(<Frame />);
+    // Drag general(1000) to the end of __channels__ (index 2, past other(3000)).
+    // ordered (without general) = [other(3000)] → before=3000, after=undefined →
+    // before branch: 3000 + STEP(1000) = 4000.
+    monitorCallbacks.onDragStart?.(dragSource({ type: 'channel', channel: chan('ch-general') }));
+    monitorCallbacks.onDropTargetChange?.(dropLocation([channelTarget('__channels__', 2)]));
+    monitorCallbacks.onDrop?.(dropLocation([channelTarget('__channels__', 2)]));
+    expect(setCategoryMutate).toHaveBeenCalledWith(
+      expect.objectContaining({ channelID: 'ch-general', categoryID: '', sidebarPosition: 4000 }),
+    );
+  });
+
+  it('drops a channel into its own single-channel category — positionForDrop returns the base step', async () => {
+    await render(<Frame />);
+    // Drag the only channel in cat-work back into cat-work at index 0. After
+    // filtering out the dragged id the ordered list is empty → before/after both
+    // undefined → falls through to SIDEBAR_POSITION_STEP (1000).
+    monitorCallbacks.onDragStart?.(dragSource({ type: 'channel', channel: chan('ch-categorized') }));
+    monitorCallbacks.onDropTargetChange?.(dropLocation([channelTarget('cat-work', 0)]));
+    monitorCallbacks.onDrop?.(dropLocation([channelTarget('cat-work', 0)]));
+    expect(setCategoryMutate).toHaveBeenCalledWith(
+      expect.objectContaining({ channelID: 'ch-categorized', categoryID: 'cat-work', sidebarPosition: 1000 }),
+    );
   });
 
   it('drops a favorited conversation onto a channel-target in Favorites', async () => {

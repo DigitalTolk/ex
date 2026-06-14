@@ -82,4 +82,15 @@ describe('PopoverPortal browser', () => {
       expect(document.querySelector('[data-testid="popover-content"]')).not.toBeNull();
     });
   });
+
+  it('ignores a non-Escape keydown (does not dismiss)', async () => {
+    const onDismiss = vi.fn();
+    await render(<Harness open={true} onDismiss={onDismiss} />);
+    await vi.waitFor(() => {
+      expect(document.querySelector('[data-testid="popover-content"]')).not.toBeNull();
+    });
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'a', bubbles: true }));
+    await new Promise((r) => setTimeout(r, 30));
+    expect(onDismiss).not.toHaveBeenCalled();
+  });
 });

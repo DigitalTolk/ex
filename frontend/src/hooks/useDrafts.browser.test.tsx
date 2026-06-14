@@ -180,6 +180,34 @@ describe('useDrafts — save and delete mutations', () => {
     expect(list[0]?.body).toBe('edited');
   });
 
+  it('useSaveDraft tolerates an omitted attachmentIDs list (coerces to [])', async () => {
+    const saved = draft({ id: 'd-1', body: 'typed' });
+    apiFetchMock.mockResolvedValue(saved);
+    const { screen } = await renderMutation(
+      useSaveDraft as never,
+      { parentID: 'ch-1', parentType: 'channel', body: 'typed' },
+      { key: queryKeys.drafts(), data: [] as MessageDraft[] },
+    );
+    (screen.getByTestId('trigger').element() as HTMLButtonElement).click();
+    await new Promise((r) => setTimeout(r, 200));
+    expect(apiFetchMock.mock.calls[0][0]).toBe('/api/v1/drafts');
+    const body = JSON.parse((apiFetchMock.mock.calls[0][1] as { body: string }).body);
+    expect(body.attachmentIDs).toEqual([]);
+  });
+
+  it('useDraftForScope returns the main-scope draft (no parentMessageID)', async () => {
+    apiFetchMock.mockResolvedValue([
+      draft({ id: 'main', parentID: 'ch-1', parentMessageID: undefined }),
+      draft({ id: 'reply', parentID: 'ch-1', parentMessageID: 'root-1' }),
+    ]);
+    const { screen } = await renderHook(() =>
+      useDraftForScope({ parentID: 'ch-1', parentType: 'channel' }),
+    );
+    await new Promise((r) => setTimeout(r, 200));
+    const data = JSON.parse(screen.getByTestId('probe').element().getAttribute('data-data') || 'null');
+    expect(data?.id).toBe('main');
+  });
+
   it('useDeleteDraft DELETEs the draft and removes it from the cached list', async () => {
     apiFetchMock.mockResolvedValue(undefined);
     const { qc, screen } = await renderMutation(useDeleteDraft as never, 'd-1', {

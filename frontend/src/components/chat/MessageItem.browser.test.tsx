@@ -195,4 +195,36 @@ describe('MessageItem browser behavior', () => {
     replyBtn!.click();
     expect(onReplyInThread).toHaveBeenCalledWith('msg-1');
   });
+
+  it('renders a message in a conversation context (builds the conversation deep-link)', async () => {
+    await renderWithProviders(
+      <MessageItem
+        message={makeMessage({ parentID: 'conv-1', parentType: 'conversation' })}
+        authorName="Bob"
+        isOwn={false}
+        conversationId="conv-1"
+        currentUserId="user-1"
+      />,
+    );
+    // The conversation branch of the deep-link builder runs (slug is absent,
+    // conversationId present); the row renders its body either way.
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain('Hello world');
+    });
+  });
+
+  it('renders a deleted message tombstone instead of the body', async () => {
+    await renderWithProviders(
+      <MessageItem
+        message={makeMessage({ deleted: true, body: '' })}
+        authorName="Alice"
+        isOwn={false}
+        channelId="channel-1"
+        currentUserId="user-1"
+      />,
+    );
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toMatch(/deleted/i);
+    });
+  });
 });

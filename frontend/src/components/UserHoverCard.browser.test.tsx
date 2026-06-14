@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { render } from 'vitest-browser-react';
 import { BrowserRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -7,15 +7,21 @@ import { UserHoverCard } from './UserHoverCard';
 // Browser coverage for UserHoverCard — exercises trigger render,
 // open-on-click (mobile) / hover (desktop), inline status display.
 
+const apiFetchMock = vi.hoisted(() => vi.fn());
 vi.mock('@/lib/api', () => ({
-  apiFetch: vi.fn().mockResolvedValue({
+  apiFetch: (...args: unknown[]) => apiFetchMock(...args),
+}));
+
+beforeEach(() => {
+  apiFetchMock.mockReset();
+  apiFetchMock.mockResolvedValue({
     id: 'u-1',
     displayName: 'Alice',
     avatarURL: undefined,
     status: 'active',
     userStatus: undefined,
-  }),
-}));
+  });
+});
 
 vi.mock('@/context/PresenceContext', () => ({
   usePresence: () => ({
@@ -89,5 +95,30 @@ describe('UserHoverCard browser', () => {
     );
     const trigger = document.querySelector('[data-testid="online-trigger"]');
     expect(trigger).not.toBeNull();
+  });
+
+  it('renders the rich profile (email + timezone + inactive) when the card is opened', async () => {
+    apiFetchMock.mockResolvedValue({
+      id: 'u-1',
+      displayName: 'Alice',
+      email: 'alice@example.com',
+      timeZone: 'Asia/Tokyo',
+      status: 'inactive',
+      userStatus: undefined,
+    });
+    await render(
+      <Wrap>
+        <UserHoverCard userId="u-1" displayName="Alice">
+          <span data-testid="rich-trigger">Alice</span>
+        </UserHoverCard>
+      </Wrap>,
+    );
+    // Open the card (the wrapping span's onClick toggles it).
+    (document.querySelector('[data-testid="rich-trigger"]') as HTMLElement).click();
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain('alice@example.com');
+    });
+    // The valid timezone surfaces its city name (Tokyo).
+    expect(document.body.textContent).toMatch(/Tokyo/);
   });
 });

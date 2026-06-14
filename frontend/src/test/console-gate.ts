@@ -11,6 +11,19 @@ const allowedWarnings = [
   (args: unknown[]) => typeof args[0] === 'string' && args[0].startsWith('Using CodeNode without CodeExtension'),
 ];
 
+// Benign, non-actionable browser layout notices that surface intermittently
+// (when a ResizeObserver callback triggers another reflow) — e.g. popovers and
+// typeahead menus that re-measure on open. Chrome/WebKit emit these as window
+// error events that vitest-browser reports through console.error; they are not
+// real failures, so we allow exactly these known messages (and nothing else).
+const RESIZE_OBSERVER_NOISE = /ResizeObserver loop (completed with undelivered notifications|limit exceeded)/;
+const allowedErrors = [
+  (args: unknown[]) => args.some((a) => {
+    const text = a instanceof Error ? a.message : typeof a === 'string' ? a : '';
+    return RESIZE_OBSERVER_NOISE.test(text);
+  }),
+];
+
 const originalConsole = {
   error: console.error.bind(console),
   warn: console.warn.bind(console),
@@ -34,6 +47,7 @@ function formatCall(call: ConsoleCall): string {
 
 function installConsoleGate() {
   console.error = (...args: unknown[]) => {
+    if (allowedErrors.some((allow) => allow(args))) return;
     calls.push({ level: 'error', args });
   };
   console.warn = (...args: unknown[]) => {

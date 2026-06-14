@@ -14,13 +14,19 @@ vi.mock('@giphy/js-fetch-api', () => ({
 }));
 
 vi.mock('@giphy/react-components', () => ({
-  Grid: ({ onGifClick }: { onGifClick: (gif: { id: string; title: string; images: { original: { width: string; height: string } } }, event: Event) => void }) => (
+  Grid: ({ onGifClick }: { onGifClick: (gif: { id: string; title?: string; images: { original: { width: string; height: string } } }, event: Event) => void }) => (
     <div style={{ height: 900 }} data-testid="mock-giphy-results">
       <button
         type="button"
         onClick={() => onGifClick({ id: 'gif-1', title: 'Test GIF', images: { original: { width: '320', height: '180' } } }, new Event('click'))}
       >
         Pick GIF
+      </button>
+      <button
+        type="button"
+        onClick={() => onGifClick({ id: 'gif-2', images: { original: { width: '200', height: '200' } } }, new Event('click'))}
+      >
+        Pick Untitled GIF
       </button>
     </div>
   ),
@@ -80,5 +86,15 @@ describe('GiphyPicker browser behavior', () => {
     // No apiKey → the fetch resolves to an empty result, but the picker still
     // renders its search box.
     await expect.element(screen.getByLabelText('Search GIFs')).toBeVisible();
+  });
+
+  it('falls back to a "GIF" title when the selected gif has none', async () => {
+    const onSelect = vi.fn();
+    const screen = await render(
+      <GiphyPicker apiKey="real-key" onSelect={onSelect} trigger={<button type="button">Open GIFs</button>} />,
+    );
+    await screen.getByText('Open GIFs').click();
+    await screen.getByText('Pick Untitled GIF').click();
+    expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({ id: 'gif-2', title: 'GIF' }));
   });
 });

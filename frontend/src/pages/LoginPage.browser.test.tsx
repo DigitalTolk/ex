@@ -203,6 +203,41 @@ describe('LoginPage (browser)', () => {
       expect(document.querySelector('[role="alert"]')?.textContent).toContain('Invite acceptance failed');
     });
   });
+
+  it('renders a string-form server error (no nested message) on guest login', async () => {
+    // `data.error` is a plain string → the `data.error?.message || data.error`
+    // middle branch surfaces it directly.
+    fetchMock.mockResolvedValueOnce(jsonResponse({ error: 'Account is locked' }, false, 403));
+    const screen = await mount('/');
+    setReactInputValue(screen.getByLabelText('Email').element() as HTMLInputElement, 'a@a.com');
+    setReactInputValue(screen.getByLabelText('Password').element() as HTMLInputElement, 'pw');
+    await screen.getByRole('button', { name: 'Sign in', exact: true }).click();
+    await vi.waitFor(() => {
+      expect(document.querySelector('[role="alert"]')?.textContent).toContain('Account is locked');
+    });
+  });
+
+  it('falls back to the default login message when a non-Error is thrown', async () => {
+    fetchMock.mockRejectedValueOnce('a bare string rejection');
+    const screen = await mount('/');
+    setReactInputValue(screen.getByLabelText('Email').element() as HTMLInputElement, 'a@a.com');
+    setReactInputValue(screen.getByLabelText('Password').element() as HTMLInputElement, 'pw');
+    await screen.getByRole('button', { name: 'Sign in', exact: true }).click();
+    await vi.waitFor(() => {
+      expect(document.querySelector('[role="alert"]')?.textContent).toContain('Login failed');
+    });
+  });
+
+  it('falls back to the default invite message when a non-Error is thrown', async () => {
+    fetchMock.mockRejectedValueOnce('a bare string rejection');
+    const screen = await mount('/invite/tok-x');
+    setReactInputValue(screen.getByLabelText('Display Name').element() as HTMLInputElement, 'Newbie');
+    setReactInputValue(screen.getByLabelText('Password').element() as HTMLInputElement, 'pwpwpwpw');
+    await screen.getByRole('button', { name: 'Create Account' }).click();
+    await vi.waitFor(() => {
+      expect(document.querySelector('[role="alert"]')?.textContent).toContain('Invite acceptance failed');
+    });
+  });
 });
 
 function setReactInputValue(input: HTMLInputElement, value: string) {

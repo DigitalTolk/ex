@@ -27,4 +27,41 @@ describe('notification-sound — basic guards', () => {
     expect(() => mod.playNotificationPing()).not.toThrow();
     expect(() => mod.playNotificationPing()).not.toThrow();
   });
+
+  it('drives the running-context path: gesture unlock then a direct tone schedule', async () => {
+    const node = () => ({
+      type: '',
+      frequency: { setValueAtTime() {}, exponentialRampToValueAtTime() {} },
+      gain: { setValueAtTime() {}, exponentialRampToValueAtTime() {} },
+      connect(n: unknown) { return n; },
+      start() {},
+      stop() {},
+    });
+    class FakeAudioContext {
+      state = 'running';
+      currentTime = 0;
+      destination = {};
+      createOscillator() { return node(); }
+      createGain() { return node(); }
+      resume() { return Promise.resolve(); }
+      close() { this.state = 'closed'; return Promise.resolve(); }
+    }
+    const win = window as Window & { AudioContext?: unknown };
+    const original = win.AudioContext;
+    win.AudioContext = FakeAudioContext as unknown as typeof AudioContext;
+    try {
+      vi.resetModules();
+      const mod = await import('./notification-sound');
+      // A user gesture fires the unlock listener → ensureContext +
+      // resumeThenMaybePlay on a running context → schedulePendingTone with
+      // nothing pending (the no-pending early return).
+      window.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+      // With the context already running, the ping schedules the tone
+      // directly (exercises scheduleTone end to end).
+      expect(() => mod.playNotificationPing()).not.toThrow();
+      expect(() => mod.playNotificationPing()).not.toThrow();
+    } finally {
+      win.AudioContext = original;
+    }
+  });
 });
