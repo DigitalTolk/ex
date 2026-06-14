@@ -117,6 +117,11 @@ func TestUserStateService_ListAndMutations(t *testing.T) {
 	if err := svc.MarkThreadNotificationUnread(ctx, "u-1", "conv-1", ParentConversation, "root-1"); err != nil {
 		t.Fatalf("MarkThreadNotificationUnread: %v", err)
 	}
+	// A second thread notification that is never marked seen, so it survives
+	// into List and exercises the ThreadNotification case of the switch.
+	if err := svc.MarkThreadNotificationUnread(ctx, "u-1", "conv-1", ParentConversation, "root-2"); err != nil {
+		t.Fatalf("MarkThreadNotificationUnread root-2: %v", err)
+	}
 	if err := svc.HideConversation(ctx, "u-1", "conv-1"); err != nil {
 		t.Fatalf("HideConversation: %v", err)
 	}
@@ -130,8 +135,8 @@ func TestUserStateService_ListAndMutations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
-	if got := len(state.ThreadNotifications); got != 0 {
-		t.Fatalf("thread notifications = %d, want 0 after seen", got)
+	if got := state.ThreadNotifications; len(got) != 1 || got[0] != "root-2" {
+		t.Fatalf("thread notifications = %#v, want [root-2] after seen", got)
 	}
 	gotSeen, err := time.Parse(time.RFC3339Nano, state.ThreadSeen["root-1"])
 	if err != nil {

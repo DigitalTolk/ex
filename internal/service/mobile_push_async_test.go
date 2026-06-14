@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -150,6 +151,108 @@ func TestAsyncMobilePushSender_QueueFullReturnsWithoutBlocking(t *testing.T) {
 	if err := push.Send(context.Background(), "u-3", Notification{MessageID: "m3"}); !errors.Is(err, errMobilePushQueueFull) {
 		t.Fatalf("Send with full queue error = %v, want %v", err, errMobilePushQueueFull)
 	}
+}
+
+// canceledOnReleaseMobilePush blocks until released, then returns
+// context.Canceled — used to exercise the worker's shutdown-during-send
+// branch (errors.Is(context.Canceled) && s.ctx.Err() != nil).
+type canceledOnReleaseMobilePush struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+func (p *canceledOnReleaseMobilePush) Send(_ context.Context, _ string, _ Notification) error {
+	select {
+	case p.started <- struct{}{}:
+	default:
+	}
+	<-p.release
+	return context.Canceled
+}
+
+func TestAsyncMobilePushSender_WorkerReturnsOnShutdownDuringSend(t *testing.T) {
+	inner := &canceledOnReleaseMobilePush{
+		started: make(chan struct{}, 1),
+		release: make(chan struct{}),
+	}
+	push := NewAsyncMobilePushSender(inner, 1, 1)
+
+	if err := push.Send(context.Background(), "u-1", Notification{MessageID: "m1"}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	select {
+	case <-inner.started:
+	case <-time.After(time.Second):
+		t.Fatal("worker did not start the send")
+	}
+	// Cancel the sender's context while the provider Send is in flight, then
+	// release it so it returns context.Canceled.
+	push.cancel()
+	close(inner.release)
+	// Close drains the worker; it must terminate via the shutdown branch.
+	push.Close()
+}
+
+func TestAsyncMobilePushSender_SendRacesCancelWithFullQueue(t *testing.T) {
+	inner := newBlockingMobilePush()
+	push := NewAsyncMobilePushSender(inner, 1, 1)
+	defer func() {
+		close(inner.release)
+		push.Close()
+	}()
+	// Saturate the single worker and fill the 1-slot buffer so every
+	// subsequent Send hits the full-queue select.
+	if err := push.Send(context.Background(), "warm", Notification{}); err != nil {
+		t.Fatalf("warm send: %v", err)
+	}
+	<-inner.started
+	if err := push.Send(context.Background(), "fill", Notification{}); err != nil {
+		t.Fatalf("fill send: %v", err)
+	}
+	// Hammer Send with contexts cancelled concurrently. With the queue full,
+	// a cancel that lands between the two selects drives the ctx.Done arm of
+	// the second select; otherwise we get errMobilePushQueueFull. Either is a
+	// valid outcome — we only need to exercise the path many times.
+	var wg sync.WaitGroup
+	for i := 0; i < 2000; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ctx, cancel := context.WithCancel(context.Background())
+			go cancel()
+			_ = push.Send(ctx, "racer", Notification{})
+		}()
+	}
+	wg.Wait()
+}
+
+func TestAsyncMobilePushSender_SendRacesSenderShutdownWithFullQueue(t *testing.T) {
+	// The worker stays blocked inside the provider so the 1-slot queue stays
+	// full for the whole test; cancelling the sender's own context while many
+	// Sends are in their second select drives the s.ctx.Done arm.
+	inner := newBlockingMobilePush()
+	push := NewAsyncMobilePushSender(inner, 1, 1)
+	if err := push.Send(context.Background(), "warm", Notification{}); err != nil {
+		t.Fatalf("warm send: %v", err)
+	}
+	<-inner.started
+	if err := push.Send(context.Background(), "fill", Notification{}); err != nil {
+		t.Fatalf("fill send: %v", err)
+	}
+	var wg sync.WaitGroup
+	for i := 0; i < 2000; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_ = push.Send(context.Background(), "racer", Notification{})
+		}()
+	}
+	// Cancel the sender mid-flight so some Sends observe s.ctx.Done in the
+	// second select rather than the full-queue default.
+	push.cancel()
+	wg.Wait()
+	close(inner.release)
+	push.Close()
 }
 
 func TestNotificationService_AsyncMobilePushDoesNotBlockMessageDelivery(t *testing.T) {

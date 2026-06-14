@@ -101,6 +101,62 @@ func TestConv_SetCategory_NotParticipant(t *testing.T) {
 	}
 }
 
+func TestConv_ListUserConversations_UnreadCacheError(t *testing.T) {
+	convs := newMockConversationStore()
+	convs.userConvs["u1"] = []*model.UserConversation{
+		{UserID: "u1", ConversationID: "c1", Type: model.ConversationTypeGroup, Activated: true},
+	}
+	cache := newMockCache()
+	cache.getErr = errors.New("redis down") // generic, non-miss
+	svc := NewConversationService(convs, newMockUserStore(), cache, newMockBroker(), newMockPublisher())
+	if _, err := svc.ListUserConversations(context.Background(), "u1"); err == nil {
+		t.Fatal("expected unread cache error to propagate")
+	}
+}
+
+func TestConv_enrichDMProfile_NonDMSkips(t *testing.T) {
+	svc, _, _, _, _ := setupConversationService()
+	c := &model.UserConversation{Type: model.ConversationTypeGroup, ParticipantIDs: []string{"me", "other"}}
+	svc.enrichDMProfile(context.Background(), "me", c)
+	if c.ProfileResolved {
+		t.Fatal("non-DM should not be resolved")
+	}
+}
+
+func TestConv_enrichDMProfile_ProfileLookupError(t *testing.T) {
+	svc, _, users, _, _ := setupConversationService()
+	users.getUserErr = errors.New("boom")
+	c := &model.UserConversation{Type: model.ConversationTypeDM, ParticipantIDs: []string{"me", "other"}}
+	svc.enrichDMProfile(context.Background(), "me", c)
+	if c.ProfileResolved {
+		t.Fatal("profile lookup error should leave profile unresolved")
+	}
+}
+
+func TestConv_enrichDMProfile_NoAvatarNoMediaCache(t *testing.T) {
+	svc, _, users, _, _ := setupConversationService()
+	// User has neither AvatarURL nor (with no mediaCache) a derivable URL.
+	users.users["other"] = &model.User{ID: "other"}
+	c := &model.UserConversation{Type: model.ConversationTypeDM, ParticipantIDs: []string{"me", "other"}}
+	svc.enrichDMProfile(context.Background(), "me", c)
+	if !c.ProfileResolved {
+		t.Fatal("expected ProfileResolved even without an avatar")
+	}
+	if c.AvatarURL != "" {
+		t.Fatalf("expected empty AvatarURL, got %q", c.AvatarURL)
+	}
+}
+
+func TestConv_SetCategory_StoreError(t *testing.T) {
+	svc, convs, _, _, _ := setupConversationService()
+	// Participant check passes, but no user-side row exists so the store
+	// SetCategory returns ErrNotFound.
+	convs.conversations["conv1"] = &model.Conversation{ID: "conv1", ParticipantIDs: []string{"u1", "u2"}}
+	if err := svc.SetCategory(context.Background(), "u1", "conv1", "", nil); err == nil {
+		t.Fatal("expected store set-category error")
+	}
+}
+
 type fakeProfileResolver struct {
 	u   *model.User
 	err error

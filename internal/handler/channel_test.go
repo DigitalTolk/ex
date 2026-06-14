@@ -95,6 +95,11 @@ func (s *dataChannelStore) ListPublicChannels(_ context.Context, _ int, _ string
 // dataMembershipStore stores memberships. Used for handler integration tests.
 type dataMembershipStore struct {
 	memberships map[string]*model.ChannelMembership
+	// userChannels/listUserChannelsErr drive ListUserChannels for tests that
+	// need the WS subscribe loop to see channels or fail. Zero values keep the
+	// historical "no channels, no error" behaviour for existing callers.
+	userChannels        []*model.UserChannel
+	listUserChannelsErr error
 }
 
 func newDataMembershipStore() *dataMembershipStore {
@@ -134,7 +139,10 @@ func (s *dataMembershipStore) ListMembers(_ context.Context, channelID string) (
 	return result, nil
 }
 func (s *dataMembershipStore) ListUserChannels(_ context.Context, _ string) ([]*model.UserChannel, error) {
-	return nil, nil
+	if s.listUserChannelsErr != nil {
+		return nil, s.listUserChannelsErr
+	}
+	return s.userChannels, nil
 }
 func (s *dataMembershipStore) SetMute(_ context.Context, _, _ string, _ bool) error {
 	return nil

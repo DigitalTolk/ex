@@ -15,6 +15,7 @@ type stubCategoryStore struct {
 	rows      map[string]*model.UserChannelCategory // key: userID + "#" + id
 	createErr error
 	listErr   error
+	listNil   bool // when true, List returns a nil slice (no error)
 	updateErr error
 	deleteErr error
 }
@@ -44,6 +45,9 @@ func (s *stubCategoryStore) Get(_ context.Context, userID, id string) (*model.Us
 func (s *stubCategoryStore) List(_ context.Context, userID string) ([]*model.UserChannelCategory, error) {
 	if s.listErr != nil {
 		return nil, s.listErr
+	}
+	if s.listNil {
+		return nil, nil
 	}
 	out := make([]*model.UserChannelCategory, 0)
 	for _, c := range s.rows {
@@ -123,7 +127,9 @@ func TestCategoryService_Create_RejectsDuplicateName(t *testing.T) {
 }
 
 func TestCategoryService_List_ReturnsEmptySliceNotNil(t *testing.T) {
-	svc := NewCategoryService(newStubCategoryStore(), newMockPublisher())
+	cs := newStubCategoryStore()
+	cs.listNil = true // store returns nil; service must coerce to empty slice
+	svc := NewCategoryService(cs, newMockPublisher())
 	got, err := svc.List(context.Background(), "u-empty")
 	if err != nil {
 		t.Fatalf("List: %v", err)

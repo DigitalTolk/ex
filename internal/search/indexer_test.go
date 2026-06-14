@@ -11,11 +11,13 @@ import (
 )
 
 type recordingWriter struct {
-	indexed   []indexCall
-	deleted   []deleteCall
-	getDocs   map[string]map[string]any
-	indexErr  error
-	deleteErr error
+	indexed     []indexCall
+	deleted     []deleteCall
+	getDocs     map[string]map[string]any
+	indexErr    error
+	deleteErr   error
+	getDocErr   error
+	indexErrFor string // when set, IndexDoc errors only for this index
 }
 
 type indexCall struct {
@@ -30,6 +32,12 @@ type deleteCall struct {
 
 func (r *recordingWriter) IndexDoc(_ context.Context, index, id string, doc any) error {
 	r.indexed = append(r.indexed, indexCall{index, id, doc})
+	if r.indexErrFor != "" {
+		if index == r.indexErrFor {
+			return errors.New("indexdoc error for " + index)
+		}
+		return nil
+	}
 	return r.indexErr
 }
 func (r *recordingWriter) DeleteDoc(_ context.Context, index, id string) error {
@@ -37,6 +45,9 @@ func (r *recordingWriter) DeleteDoc(_ context.Context, index, id string) error {
 	return r.deleteErr
 }
 func (r *recordingWriter) GetDoc(_ context.Context, index, id string) (map[string]any, error) {
+	if r.getDocErr != nil {
+		return nil, r.getDocErr
+	}
 	if r.getDocs == nil {
 		return nil, nil
 	}
@@ -228,6 +239,60 @@ func TestLiveIndexer_IndexMessage_PropagatesGetDocError(t *testing.T) {
 	if err := idx.IndexMessage(context.Background(), &model.Message{ID: "m", AttachmentIDs: nil}, "channel"); err == nil {
 		t.Fatal("expected wrapped IndexDoc error")
 	}
+}
+
+// A nil attachment in the resolved set is skipped (continue) without
+// triggering a file upsert.
+func TestLiveIndexer_IndexMessage_SkipsNilAttachment(t *testing.T) {
+	w := &recordingWriter{}
+	idx := &LiveIndexer{w: w}
+	// Resolver returns a nil entry for the requested ID.
+	idx.SetAttachmentResolver(nilResolver{})
+	m := &model.Message{ID: "m-nil", ParentID: "ch", AuthorID: "u", Body: "x", AttachmentIDs: []string{"a-1"}}
+	if err := idx.IndexMessage(context.Background(), m, "channel"); err != nil {
+		t.Fatalf("IndexMessage: %v", err)
+	}
+	// Only the message doc is indexed; the nil attachment produced no file doc.
+	if len(w.indexed) != 1 || w.indexed[0].index != IndexMessages {
+		t.Fatalf("expected only the message index call, got %v", w.indexed)
+	}
+}
+
+// upsertFile's GetDoc failure propagates out of IndexMessage.
+func TestLiveIndexer_IndexMessage_UpsertFileGetDocError(t *testing.T) {
+	w := &recordingWriter{getDocErr: errors.New("getdoc boom")}
+	idx := &LiveIndexer{w: w}
+	idx.SetAttachmentResolver(&stubAttachmentResolver{byID: map[string]*model.Attachment{
+		"a-1": {ID: "a-1", Filename: "f.pdf"},
+	}})
+	m := &model.Message{ID: "m-1", ParentID: "ch", AuthorID: "u", Body: "x", AttachmentIDs: []string{"a-1"}}
+	if err := idx.IndexMessage(context.Background(), m, "channel"); err == nil {
+		t.Fatal("expected GetDoc error to propagate")
+	}
+}
+
+// upsertFile's IndexDoc failure (file index only) propagates out of
+// IndexMessage — the message doc indexed fine but the file write failed.
+func TestLiveIndexer_IndexMessage_UpsertFileIndexDocError(t *testing.T) {
+	w := &recordingWriter{indexErrFor: IndexFiles}
+	idx := &LiveIndexer{w: w}
+	idx.SetAttachmentResolver(&stubAttachmentResolver{byID: map[string]*model.Attachment{
+		"a-1": {ID: "a-1", Filename: "f.pdf"},
+	}})
+	m := &model.Message{ID: "m-1", ParentID: "ch", AuthorID: "u", Body: "x", AttachmentIDs: []string{"a-1"}}
+	if err := idx.IndexMessage(context.Background(), m, "channel"); err == nil {
+		t.Fatal("expected file IndexDoc error to propagate")
+	}
+}
+
+// nilResolver returns a slice containing a nil attachment for any IDs.
+type nilResolver struct{}
+
+func (nilResolver) ResolveFilenames(context.Context, []string) []string { return nil }
+func (nilResolver) ResolveAttachments(_ context.Context, ids []string) []*model.Attachment {
+	out := make([]*model.Attachment, len(ids))
+	// leave entries nil
+	return out
 }
 
 func TestLiveIndexer_IndexMessage_SkipsSystemMessages(t *testing.T) {

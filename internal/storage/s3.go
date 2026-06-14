@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -33,10 +34,28 @@ type S3Config struct {
 	Region         string
 }
 
+// s3API is the narrow slice of *s3.Client the storage layer calls. The
+// concrete SDK client satisfies it; narrowing to an interface lets tests
+// inject a fault wrapper that forces the SDK-error branches (the real
+// client can't be made to fail those deterministically via httptest).
+type s3API interface {
+	DeleteObject(ctx context.Context, in *s3.DeleteObjectInput, optFns ...func(*s3.Options)) (*s3.DeleteObjectOutput, error)
+	HeadObject(ctx context.Context, in *s3.HeadObjectInput, optFns ...func(*s3.Options)) (*s3.HeadObjectOutput, error)
+	GetObject(ctx context.Context, in *s3.GetObjectInput, optFns ...func(*s3.Options)) (*s3.GetObjectOutput, error)
+	PutObject(ctx context.Context, in *s3.PutObjectInput, optFns ...func(*s3.Options)) (*s3.PutObjectOutput, error)
+}
+
+// s3Presigner is the narrow slice of *s3.PresignClient used for browser-
+// bound URL generation. Same rationale as s3API.
+type s3Presigner interface {
+	PresignGetObject(ctx context.Context, in *s3.GetObjectInput, optFns ...func(*s3.PresignOptions)) (*v4.PresignedHTTPRequest, error)
+	PresignPutObject(ctx context.Context, in *s3.PutObjectInput, optFns ...func(*s3.PresignOptions)) (*v4.PresignedHTTPRequest, error)
+}
+
 // S3Client wraps an S3 client and a bucket name for object storage operations.
 type S3Client struct {
-	client    *s3.Client
-	presigner *s3.PresignClient
+	client    s3API
+	presigner s3Presigner
 	bucket    string
 }
 
@@ -45,6 +64,10 @@ type S3Client struct {
 // keys, so a one-year browser cache is safe for the exact presigned URL.
 // `private` keeps shared caches out.
 const BrowserObjectCacheControl = "private, max-age=31536000, immutable"
+
+// loadAWSConfig is a seam over awsconfig.LoadDefaultConfig so the
+// config-load failure branch in NewS3Client can be exercised in tests.
+var loadAWSConfig = awsconfig.LoadDefaultConfig
 
 // NewS3Client creates an S3Client configured for the given S3Config.
 //
@@ -66,7 +89,7 @@ func NewS3Client(ctx context.Context, cfg S3Config) (*S3Client, error) {
 			awsconfig.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(cfg.AccessKey, cfg.SecretKey, "")),
 		)
 	}
-	awsCfg, err := awsconfig.LoadDefaultConfig(ctx, loadOpts...)
+	awsCfg, err := loadAWSConfig(ctx, loadOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("s3: load config: %w", err)
 	}

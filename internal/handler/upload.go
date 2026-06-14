@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"net/http"
 	"strings"
 	"time"
@@ -12,13 +13,28 @@ import (
 
 const MaxGenericUploadBytes int64 = 512 * 1024
 
+// uploadSigner is the slice of *storage.S3Client the upload handler depends on.
+// Defining it as an interface lets tests inject a signer whose presign calls
+// fail, exercising the handler's presign-error branches that a real
+// *storage.S3Client (which presigns locally and never errors on a reachable
+// endpoint) cannot reach.
+type uploadSigner interface {
+	PresignedPutURL(ctx context.Context, key, contentType string, expires time.Duration) (string, error)
+	PresignedGetURL(ctx context.Context, key string, expires time.Duration) (string, error)
+}
+
 // UploadHandler exposes generic file-upload endpoints backed by S3 presigned URLs.
 type UploadHandler struct {
-	s3 *storage.S3Client
+	s3 uploadSigner
 }
 
 // NewUploadHandler creates an UploadHandler.
 func NewUploadHandler(s3 *storage.S3Client) *UploadHandler {
+	if s3 == nil {
+		// Preserve nil-interface semantics so the h.s3 == nil guard fires when
+		// no storage is configured (a typed nil would slip past == nil).
+		return &UploadHandler{}
+	}
 	return &UploadHandler{s3: s3}
 }
 

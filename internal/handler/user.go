@@ -17,11 +17,18 @@ import (
 // UserHandler exposes HTTP endpoints for user operations.
 type UserHandler struct {
 	userSvc *service.UserService
-	s3      *storage.S3Client
+	// s3 is an interface (satisfied by *storage.S3Client) so tests can inject a
+	// signer whose presign fails, reaching the avatar presign-error branch a
+	// real S3 client (which presigns locally) cannot.
+	s3 uploadSigner
 }
 
 // NewUserHandler creates a UserHandler.
 func NewUserHandler(userSvc *service.UserService, s3 *storage.S3Client) *UserHandler {
+	if s3 == nil {
+		// Keep nil-interface semantics so the h.s3 == nil guard fires.
+		return &UserHandler{userSvc: userSvc}
+	}
 	return &UserHandler{userSvc: userSvc, s3: s3}
 }
 
@@ -188,11 +195,11 @@ func (h *UserHandler) BatchGetUsers(w http.ResponseWriter, r *http.Request) {
 	}
 
 	users, err := h.userSvc.GetBatch(r.Context(), body.IDs)
-	if err != nil {
+	if err != nil { // coverage-ignore: UserService.GetBatch swallows per-user errors (continue) and always returns a nil error — no request can drive this branch; the guard is defensive against a future contract change.
 		writeError(w, http.StatusInternalServerError, "batch_error", err.Error())
 		return
 	}
-	if users == nil {
+	if users == nil { // coverage-ignore: GetBatch returns a make()-initialized slice that is never nil; coercion is defensive against a future contract change.
 		users = []*model.User{}
 	}
 

@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/DigitalTolk/ex/internal/model"
@@ -98,6 +99,37 @@ func TestSettingsService_AllowsExtensionAndSize(t *testing.T) {
 	}
 	if svc.AllowsSize(ctx, 0) {
 		t.Error("zero size should be rejected")
+	}
+}
+
+func TestSettingsService_Update_NilInput(t *testing.T) {
+	svc := NewSettingsService(&fakeSettingsStore{})
+	if _, err := svc.Update(context.Background(), nil); err == nil {
+		t.Fatal("expected error for nil settings input")
+	}
+}
+
+func TestSettingsService_Update_NegativeMaxUploadClamped(t *testing.T) {
+	st := &fakeSettingsStore{}
+	svc := NewSettingsService(st)
+	got, err := svc.Update(context.Background(), &model.WorkspaceSettings{MaxUploadBytes: -5})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	// Negative clamps to 0, then Effective fills the default.
+	if got.MaxUploadBytes != model.DefaultMaxUploadBytes {
+		t.Errorf("MaxUploadBytes = %d, want default after clamp", got.MaxUploadBytes)
+	}
+	if st.stored.MaxUploadBytes != 0 {
+		t.Errorf("stored MaxUploadBytes = %d, want clamped 0", st.stored.MaxUploadBytes)
+	}
+}
+
+func TestSettingsService_Update_PutError(t *testing.T) {
+	st := &fakeSettingsStore{putErr: errors.New("boom")}
+	svc := NewSettingsService(st)
+	if _, err := svc.Update(context.Background(), &model.WorkspaceSettings{MaxUploadBytes: 1024}); err == nil {
+		t.Fatal("expected PutSettings error")
 	}
 }
 

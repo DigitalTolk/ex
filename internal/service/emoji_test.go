@@ -253,7 +253,15 @@ type fakeEmojiSigner struct {
 	contentType string
 	objectSize  int64
 	objectErr   error
+	readErr     error // when set, the returned body errors on Read
+	emptyBody   bool  // when set, the returned body yields zero bytes
 }
+
+// errReadCloser fails on Read to exercise the ReadAll error branch.
+type errReadCloser struct{ err error }
+
+func (e errReadCloser) Read([]byte) (int, error) { return 0, e.err }
+func (e errReadCloser) Close() error             { return nil }
 
 func (f *fakeEmojiSigner) PresignedGetURL(_ context.Context, key string, _ time.Duration) (string, error) {
 	if f.err != nil {
@@ -265,6 +273,20 @@ func (f *fakeEmojiSigner) PresignedGetURL(_ context.Context, key string, _ time.
 func (f *fakeEmojiSigner) GetObject(_ context.Context, _ string) (io.ReadCloser, string, int64, time.Time, error) {
 	if f.objectErr != nil {
 		return nil, "", 0, time.Time{}, f.objectErr
+	}
+	if f.readErr != nil {
+		size := f.objectSize
+		if size == 0 {
+			size = 10
+		}
+		return errReadCloser{err: f.readErr}, "image/png", size, time.Now(), nil
+	}
+	if f.emptyBody {
+		size := f.objectSize
+		if size == 0 {
+			size = 10
+		}
+		return io.NopCloser(strings.NewReader("")), "image/png", size, time.Now(), nil
 	}
 	data := f.objectData
 	if data == "" {

@@ -146,7 +146,7 @@ func emitNode(node ast.Node, src []byte, parent *HastNode) {
 			val += "\n"
 		}
 		appendTextChild(parent, val)
-	case *ast.String:
+	case *ast.String: // coverage-ignore: goldmark configured with only the Strikethrough extension never emits *ast.String nodes (verified by walking the parse tree for escaped chars, entities, and inline HTML — all yield *ast.Text); this arm is defensive against a future extension that introduces String nodes.
 		appendTextChild(parent, string(n.Value))
 	case *ast.Emphasis:
 		tag := "em"

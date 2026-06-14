@@ -1,0 +1,25 @@
+# Backend coverage gate (replaces the awk total-check in the Makefile).
+#
+# Uses github.com/vladopajic/go-test-coverage. The profile is produced by
+# `go test -tags=integration -coverprofile=coverage.out ./internal/...`.
+#
+# Why this tool: Go's stdlib `go tool cover` has no line/block ignore. This gate
+# adds `// coverage-ignore:<reason>` block-level annotations so genuinely
+# unreachable defensive code (marshal of fixed structs, expression.Build of
+# static expressions, round-trip unmarshal of data we just wrote) can be
+# excluded from the denominator WITH a mandatory written justification, instead
+# of being faked with tautological tests. See COVERAGE.md for the policy.
+profile: coverage.out
+
+# Every `// coverage-ignore` MUST be followed by an explanation, or the gate
+# fails. This is what makes the pragma policy self-enforcing.
+force-annotation-comment: true
+
+threshold:
+  # Statement coverage of reachable (non-ignored) code.
+  total: 99
+
+exclude:
+  paths:
+    # Process entrypoint / DI wiring — exercised by the binary, not unit tests.
+    - ^cmd/server/main\.go$

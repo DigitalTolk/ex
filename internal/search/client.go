@@ -58,6 +58,11 @@ type AWSSigning struct {
 	Service string
 }
 
+// loadAWSConfig is a seam over awsconfig.LoadDefaultConfig so the
+// config-load failure branch in NewAWSClient can be exercised in tests
+// (the real loader almost never errors with a valid in-process call).
+var loadAWSConfig = awsconfig.LoadDefaultConfig
+
 // NewAWSClient returns a Client whose http transport signs every
 // request with SigV4 against the configured AWS region/service. Same
 // nil-on-empty-URL contract as NewClient. service defaults to "es".
@@ -69,7 +74,7 @@ func NewAWSClient(ctx context.Context, baseURL string, signing AWSSigning) (*Cli
 	if service == "" {
 		service = "es"
 	}
-	awsCfg, err := awsconfig.LoadDefaultConfig(ctx, awsconfig.WithRegion(signing.Region))
+	awsCfg, err := loadAWSConfig(ctx, awsconfig.WithRegion(signing.Region))
 	if err != nil {
 		return nil, fmt.Errorf("search: load aws config: %w", err)
 	}
@@ -115,7 +120,7 @@ func (t *sigV4Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if err != nil {
 		return nil, fmt.Errorf("search: sigv4 retrieve credentials: %w", err)
 	}
-	if err := t.signer.SignHTTP(req.Context(), creds, req, payloadHash, t.service, t.region, time.Now()); err != nil {
+	if err := t.signer.SignHTTP(req.Context(), creds, req, payloadHash, t.service, t.region, time.Now()); err != nil { // coverage-ignore: v4.Signer.SignHTTP only surfaces an error from buildSignature (an HMAC-SHA256 of arbitrary bytes), which cannot fail for any input — this guard is defensive against a future SDK change.
 		return nil, fmt.Errorf("search: sigv4 sign: %w", err)
 	}
 	return t.inner.RoundTrip(req)
@@ -272,7 +277,7 @@ func (c *Client) Bulk(ctx context.Context, index string, entries []BulkEntry) er
 		header := map[string]map[string]string{
 			"index": {"_index": index, "_id": e.ID},
 		}
-		if err := json.NewEncoder(&buf).Encode(header); err != nil {
+		if err := json.NewEncoder(&buf).Encode(header); err != nil { // coverage-ignore: header is a fixed map[string]map[string]string of in-function string literals; json encoding of scalar string maps cannot fail.
 			return fmt.Errorf("search: bulk header: %w", err)
 		}
 		if err := json.NewEncoder(&buf).Encode(e.Doc); err != nil {

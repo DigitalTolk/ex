@@ -25,6 +25,7 @@ type mockUserStore struct {
 	emailIndex  map[string]*model.User
 	createErr   error
 	listErr     error
+	getUserErr  error
 	hasUsersVal bool
 }
 
@@ -45,6 +46,9 @@ func (m *mockUserStore) CreateUser(_ context.Context, u *model.User) error {
 }
 
 func (m *mockUserStore) GetUser(_ context.Context, id string) (*model.User, error) {
+	if m.getUserErr != nil {
+		return nil, m.getUserErr
+	}
 	u, ok := m.users[id]
 	if !ok {
 		return nil, store.ErrNotFound
