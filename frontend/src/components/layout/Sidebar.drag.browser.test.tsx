@@ -40,9 +40,10 @@ vi.mock('@atlaskit/pragmatic-drag-and-drop/element/adapter', () => ({
 vi.mock('@atlaskit/pragmatic-drag-and-drop/combine', () => ({
   combine: (...cleanups: Array<() => void>) => () => cleanups.forEach((fn) => fn?.()),
 }));
+const edgeState = vi.hoisted(() => ({ edge: 'top' as 'top' | 'bottom' }));
 vi.mock('@atlaskit/pragmatic-drag-and-drop-hitbox/closest-edge', () => ({
   attachClosestEdge: (data: unknown) => data,
-  extractClosestEdge: () => 'top',
+  extractClosestEdge: () => edgeState.edge,
 }));
 
 vi.mock('@/lib/api', () => ({
@@ -213,15 +214,31 @@ function Frame() {
   );
 }
 
-// Helpers for crafting the pragmatic-drag-and-drop payloads.
+// Helpers for crafting the pragmatic-drag-and-drop payloads. The Sidebar's
+// drag source data is a DragPayload ({type:'channel'|'conversation'|'category'})
+// and each drop target's data is a DropPayload ({type:'channel-target'} or
+// {type:'section-header-target'}).
+function chan(id: string): UserChannel {
+  return makeChannels().find((c) => c.channelID === id)!;
+}
+function conv(id: string): UserConversation {
+  return makeConversations().find((c) => c.conversationID === id)!;
+}
 function dragSource(data: Record<string, unknown>) {
   return { source: { data } };
 }
 function dropLocation(targets: Array<Record<string, unknown>>) {
   return { location: { current: { dropTargets: targets.map((data) => ({ data })) } } };
 }
+function sectionTarget(sectionKey: string, categoryID = '') {
+  return { type: 'section-header-target', sectionKey, categoryID };
+}
+function channelTarget(sectionKey: string, index: number, area = 'row') {
+  return { type: 'channel-target', sectionKey, index, area };
+}
 
 beforeEach(() => {
+  edgeState.edge = 'top';
   setCategoryMutate.mockClear();
   setConversationCategoryMutate.mockClear();
   reorderCategoriesMutate.mockClear();
@@ -240,111 +257,126 @@ describe('Sidebar drag-and-drop monitor callbacks', () => {
     expect(monitorCallbacks.onDrag).toBeDefined();
     expect(monitorCallbacks.onDrop).toBeDefined();
 
-    monitorCallbacks.onDragStart?.(dragSource({ kind: 'sidebar-channel', channelID: 'ch-other' }));
+    monitorCallbacks.onDragStart?.(dragSource({ type: 'channel', channel: chan('ch-other') }));
     monitorCallbacks.onDrag?.(dropLocation([]));
     monitorCallbacks.onDrop?.(dropLocation([]));
   });
 
-  it('handles a channel drop on a section header (no target) without crashing', async () => {
+  it('handles a channel drop on the channels section header without crashing', async () => {
     await render(<Frame />);
-    monitorCallbacks.onDragStart?.(dragSource({ kind: 'sidebar-channel', channelID: 'ch-other' }));
-    monitorCallbacks.onDropTargetChange?.(dropLocation([{ kind: 'sidebar-section', section: '__channels__' }]));
-    monitorCallbacks.onDrop?.(dropLocation([{ kind: 'sidebar-section', section: '__channels__' }]));
+    monitorCallbacks.onDragStart?.(dragSource({ type: 'channel', channel: chan('ch-other') }));
+    monitorCallbacks.onDropTargetChange?.(dropLocation([sectionTarget('__channels__')]));
+    monitorCallbacks.onDrop?.(dropLocation([sectionTarget('__channels__')]));
+    expect(setCategoryMutate).toHaveBeenCalled();
   });
 
   it('drops a channel onto a user category — fires the set-category mutation', async () => {
     await render(<Frame />);
-    monitorCallbacks.onDragStart?.(dragSource({ kind: 'sidebar-channel', channelID: 'ch-other' }));
-    monitorCallbacks.onDropTargetChange?.(dropLocation([{ kind: 'sidebar-section', section: 'cat-work' }]));
-    monitorCallbacks.onDrop?.(dropLocation([{ kind: 'sidebar-section', section: 'cat-work' }]));
-    // The handler resolves the drop and dispatches setCategory; we
-    // just need it to NOT throw and to leave the mutation mocks
-    // available — the exact dispatch shape is over-constrained for a
-    // pure-coverage test.
+    monitorCallbacks.onDragStart?.(dragSource({ type: 'channel', channel: chan('ch-other') }));
+    monitorCallbacks.onDropTargetChange?.(dropLocation([sectionTarget('cat-work', 'cat-work')]));
+    monitorCallbacks.onDrop?.(dropLocation([sectionTarget('cat-work', 'cat-work')]));
+    expect(setCategoryMutate).toHaveBeenCalled();
   });
 
-  it('drops a conversation onto Favorites — fires favorite-conversation toggle', async () => {
+  it('drops a conversation onto Favorites — fires the conversation-category mutation', async () => {
     await render(<Frame />);
-    monitorCallbacks.onDragStart?.(dragSource({ kind: 'sidebar-conversation', conversationID: 'conv-dm' }));
-    monitorCallbacks.onDropTargetChange?.(dropLocation([{ kind: 'sidebar-section', section: '__favorites__' }]));
-    monitorCallbacks.onDrop?.(dropLocation([{ kind: 'sidebar-section', section: '__favorites__' }]));
+    monitorCallbacks.onDragStart?.(dragSource({ type: 'conversation', conversation: conv('conv-fav') }));
+    monitorCallbacks.onDropTargetChange?.(dropLocation([sectionTarget('__favorites__')]));
+    monitorCallbacks.onDrop?.(dropLocation([sectionTarget('__favorites__')]));
+    expect(setConversationCategoryMutate).toHaveBeenCalled();
   });
 
   it('drops a channel onto Favorites — fires the favorite-channel toggle', async () => {
     await render(<Frame />);
-    monitorCallbacks.onDragStart?.(dragSource({ kind: 'sidebar-channel', channelID: 'ch-other' }));
-    monitorCallbacks.onDropTargetChange?.(dropLocation([{ kind: 'sidebar-section', section: '__favorites__' }]));
-    monitorCallbacks.onDrop?.(dropLocation([{ kind: 'sidebar-section', section: '__favorites__' }]));
+    monitorCallbacks.onDragStart?.(dragSource({ type: 'channel', channel: chan('ch-other') }));
+    monitorCallbacks.onDropTargetChange?.(dropLocation([sectionTarget('__favorites__')]));
+    monitorCallbacks.onDrop?.(dropLocation([sectionTarget('__favorites__')]));
+    expect(favoriteChannelMutate).toHaveBeenCalled();
   });
 
   it('drops a category before another category — reorderCategories fires', async () => {
     await render(<Frame />);
-    monitorCallbacks.onDragStart?.(dragSource({ kind: 'sidebar-category', categoryID: 'cat-personal' }));
-    monitorCallbacks.onDropTargetChange?.(dropLocation([
-      { kind: 'sidebar-category-boundary', beforeCategoryID: 'cat-work' },
-    ]));
-    monitorCallbacks.onDrop?.(dropLocation([
-      { kind: 'sidebar-category-boundary', beforeCategoryID: 'cat-work' },
-    ]));
+    monitorCallbacks.onDragStart?.(dragSource({ type: 'category', categoryID: 'cat-personal' }));
+    monitorCallbacks.onDropTargetChange?.(dropLocation([sectionTarget('cat-work', 'cat-work')]));
+    monitorCallbacks.onDrop?.(dropLocation([sectionTarget('cat-work', 'cat-work')]));
+    expect(reorderCategoriesMutate).toHaveBeenCalled();
   });
 
   it('drops a channel onto a specific row — exercises positionForDrop', async () => {
     await render(<Frame />);
-    monitorCallbacks.onDragStart?.(dragSource({ kind: 'sidebar-channel', channelID: 'ch-other' }));
-    monitorCallbacks.onDropTargetChange?.(dropLocation([
-      { kind: 'sidebar-channel-row', sectionKey: '__channels__', channelID: 'ch-general', index: 0, area: 'row' },
-    ]));
-    monitorCallbacks.onDrop?.(dropLocation([
-      { kind: 'sidebar-channel-row', sectionKey: '__channels__', channelID: 'ch-general', index: 0, area: 'row' },
-    ]));
+    monitorCallbacks.onDragStart?.(dragSource({ type: 'channel', channel: chan('ch-other') }));
+    monitorCallbacks.onDropTargetChange?.(dropLocation([channelTarget('__channels__', 0)]));
+    monitorCallbacks.onDrop?.(dropLocation([channelTarget('__channels__', 0)]));
+    expect(setCategoryMutate).toHaveBeenCalled();
   });
 
-  it('drops a conversation onto another conversation row in favorites', async () => {
+  it('drops a favorited conversation onto a channel-target in Favorites', async () => {
     await render(<Frame />);
-    monitorCallbacks.onDragStart?.(dragSource({ kind: 'sidebar-conversation', conversationID: 'conv-dm' }));
-    monitorCallbacks.onDropTargetChange?.(dropLocation([
-      { kind: 'sidebar-conversation-row', sectionKey: '__favorites__', conversationID: 'conv-fav', index: 0, area: 'row' },
-    ]));
-    monitorCallbacks.onDrop?.(dropLocation([
-      { kind: 'sidebar-conversation-row', sectionKey: '__favorites__', conversationID: 'conv-fav', index: 0, area: 'row' },
-    ]));
+    monitorCallbacks.onDragStart?.(dragSource({ type: 'conversation', conversation: conv('conv-fav') }));
+    monitorCallbacks.onDropTargetChange?.(dropLocation([channelTarget('__favorites__', 0)]));
+    monitorCallbacks.onDrop?.(dropLocation([channelTarget('__favorites__', 0)]));
+    expect(setConversationCategoryMutate).toHaveBeenCalled();
   });
 
-  it('handles drop with an unknown target kind — falls through without crashing', async () => {
+  it('handles drop with an unknown target type — falls through without crashing', async () => {
     await render(<Frame />);
-    monitorCallbacks.onDragStart?.(dragSource({ kind: 'sidebar-channel', channelID: 'ch-other' }));
-    monitorCallbacks.onDrop?.(dropLocation([{ kind: 'something-else' }]));
+    monitorCallbacks.onDragStart?.(dragSource({ type: 'channel', channel: chan('ch-other') }));
+    monitorCallbacks.onDrop?.(dropLocation([{ type: 'something-else' }]));
   });
 
   it('emits drop-target-change repeatedly without leaking state', async () => {
     await render(<Frame />);
-    monitorCallbacks.onDragStart?.(dragSource({ kind: 'sidebar-channel', channelID: 'ch-other' }));
+    monitorCallbacks.onDragStart?.(dragSource({ type: 'channel', channel: chan('ch-other') }));
     for (let i = 0; i < 5; i++) {
-      monitorCallbacks.onDropTargetChange?.(dropLocation([
-        { kind: 'sidebar-section', section: i % 2 === 0 ? 'cat-work' : '__channels__' },
-      ]));
-      monitorCallbacks.onDrag?.(dropLocation([
-        { kind: 'sidebar-section', section: i % 2 === 0 ? 'cat-work' : '__channels__' },
-      ]));
+      const target = i % 2 === 0 ? sectionTarget('cat-work', 'cat-work') : channelTarget('__channels__', 1);
+      monitorCallbacks.onDropTargetChange?.(dropLocation([target]));
+      monitorCallbacks.onDrag?.(dropLocation([target]));
     }
     monitorCallbacks.onDrop?.(dropLocation([]));
   });
 
   it('starts a category drag and then drops it back at its own slot', async () => {
     await render(<Frame />);
-    monitorCallbacks.onDragStart?.(dragSource({ kind: 'sidebar-category', categoryID: 'cat-work' }));
-    monitorCallbacks.onDropTargetChange?.(dropLocation([
-      { kind: 'sidebar-category-boundary', beforeCategoryID: 'cat-work' },
-    ]));
-    monitorCallbacks.onDrop?.(dropLocation([
-      { kind: 'sidebar-category-boundary', beforeCategoryID: 'cat-work' },
-    ]));
+    monitorCallbacks.onDragStart?.(dragSource({ type: 'category', categoryID: 'cat-work' }));
+    monitorCallbacks.onDropTargetChange?.(dropLocation([sectionTarget('cat-work', 'cat-work')]));
+    monitorCallbacks.onDrop?.(dropLocation([sectionTarget('cat-work', 'cat-work')]));
+    expect(reorderCategoriesMutate).toHaveBeenCalled();
   });
 
   it('drag with no target on drop — clears state cleanly', async () => {
     await render(<Frame />);
-    monitorCallbacks.onDragStart?.(dragSource({ kind: 'sidebar-channel', channelID: 'ch-categorized' }));
+    monitorCallbacks.onDragStart?.(dragSource({ type: 'channel', channel: chan('ch-categorized') }));
     monitorCallbacks.onDropTargetChange?.(dropLocation([]));
     monitorCallbacks.onDrop?.(dropLocation([]));
+  });
+
+  it('drops a channel below a row on the bottom edge — index advances past the row', async () => {
+    edgeState.edge = 'bottom';
+    await render(<Frame />);
+    monitorCallbacks.onDragStart?.(dragSource({ type: 'channel', channel: chan('ch-other') }));
+    // Bottom edge → resolveDropPayload advances the index (payload.index + 1)
+    // and recomputes the drop area via channelDropAreaForIndex.
+    monitorCallbacks.onDropTargetChange?.(dropLocation([channelTarget('__channels__', 0)]));
+    monitorCallbacks.onDrop?.(dropLocation([channelTarget('__channels__', 0)]));
+    expect(setCategoryMutate).toHaveBeenCalled();
+  });
+
+  it('drops a category on the bottom edge of a header — targets the next category slot', async () => {
+    edgeState.edge = 'bottom';
+    await render(<Frame />);
+    monitorCallbacks.onDragStart?.(dragSource({ type: 'category', categoryID: 'cat-personal' }));
+    // Bottom edge → nextCategoryTarget(cat-work) resolves the slot after it.
+    monitorCallbacks.onDropTargetChange?.(dropLocation([sectionTarget('cat-work', 'cat-work')]));
+    monitorCallbacks.onDrop?.(dropLocation([sectionTarget('cat-work', 'cat-work')]));
+    expect(reorderCategoriesMutate).toHaveBeenCalled();
+  });
+
+  it('drops a channel onto a section header from the bottom edge', async () => {
+    edgeState.edge = 'bottom';
+    await render(<Frame />);
+    monitorCallbacks.onDragStart?.(dragSource({ type: 'channel', channel: chan('ch-other') }));
+    monitorCallbacks.onDropTargetChange?.(dropLocation([sectionTarget('__channels__')]));
+    monitorCallbacks.onDrop?.(dropLocation([sectionTarget('__channels__')]));
+    expect(setCategoryMutate).toHaveBeenCalled();
   });
 });

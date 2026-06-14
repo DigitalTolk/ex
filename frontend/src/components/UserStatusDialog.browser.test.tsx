@@ -1,10 +1,20 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { render } from 'vitest-browser-react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { UserStatusDialog } from './UserStatusDialog';
+import { apiFetch } from '@/lib/api';
 
-// Browser coverage for UserStatusDialog — exercises mount, preset
-// selection, the cancel/close path.
+// Browser coverage for UserStatusDialog — exercises mount, preset selection,
+// the save/clear flows, validation, and error handling.
+
+const SAVED_USER = {
+  id: 'u-1',
+  email: 'a@x.com',
+  displayName: 'Alice',
+  systemRole: 'admin',
+  status: 'active',
+  userStatus: { emoji: ':palm_tree:', text: 'On Vacation', clearAt: '' },
+};
 
 vi.mock('@/lib/api', () => ({
   apiFetch: vi.fn().mockResolvedValue({
@@ -25,7 +35,7 @@ const authState = {
     displayName: 'Alice',
     systemRole: 'admin',
     status: 'active',
-    userStatus: undefined,
+    userStatus: undefined as undefined | { emoji: string; text: string; clearAt: string },
   },
   isAuthenticated: true,
   isLoading: false,
@@ -46,21 +56,56 @@ function Wrap({ children }: { children: React.ReactNode }) {
   return <QueryClientProvider client={qc}>{children}</QueryClientProvider>;
 }
 
+// Track each mount and await unmount() so the Radix dialog portal is torn
+// down React-safely between tests (WebKit otherwise stacks portals); kill
+// animations so the exit resolves synchronously.
+const mounted: Array<{ unmount: () => Promise<void> }> = [];
+async function mount(ui: React.ReactElement) {
+  const result = await render(ui);
+  mounted.push(result);
+  return result;
+}
+let killAnims: HTMLStyleElement | null = null;
+
+// Set a native <select> value and fire the change event React listens for.
+function selectOption(id: string, value: string) {
+  const sel = document.getElementById(id) as HTMLSelectElement;
+  sel.value = value;
+  sel.dispatchEvent(new Event('change', { bubbles: true }));
+}
+
+function patchCall(method: string) {
+  return vi.mocked(apiFetch).mock.calls.find(
+    (c: unknown[]) => c[0] === '/api/v1/users/me/status'
+      && (c[1] as { method?: string } | undefined)?.method === method,
+  );
+}
+
 describe('UserStatusDialog browser', () => {
+  beforeEach(() => {
+    killAnims = document.createElement('style');
+    killAnims.textContent = '*,*::before,*::after{animation:none!important;transition:none!important}';
+    document.head.appendChild(killAnims);
+  });
+  afterEach(async () => {
+    for (const m of mounted.splice(0)) await m.unmount();
+    killAnims?.remove();
+    killAnims = null;
+    vi.mocked(apiFetch).mockClear();
+    vi.mocked(apiFetch).mockResolvedValue(SAVED_USER);
+    authState.user.userStatus = undefined;
+  });
+
   it('does not render when closed', async () => {
-    await render(
-      <Wrap>
-        <UserStatusDialog open={false} onOpenChange={vi.fn()} />
-      </Wrap>,
+    await mount(
+      <Wrap><UserStatusDialog open={false} onOpenChange={vi.fn()} /></Wrap>,
     );
     expect(document.body.textContent).not.toContain('On Vacation');
   });
 
   it('renders the preset list when open', async () => {
-    await render(
-      <Wrap>
-        <UserStatusDialog open={true} onOpenChange={vi.fn()} />
-      </Wrap>,
+    await mount(
+      <Wrap><UserStatusDialog open={true} onOpenChange={vi.fn()} /></Wrap>,
     );
     await vi.waitFor(() => {
       expect(document.body.textContent).toContain('On Vacation');
@@ -69,23 +114,84 @@ describe('UserStatusDialog browser', () => {
     expect(document.body.textContent).toContain('In a meeting');
   });
 
-  it('clicking a preset triggers a state update path', async () => {
-    await render(
-      <Wrap>
-        <UserStatusDialog open={true} onOpenChange={vi.fn()} />
-      </Wrap>,
+  it('saving a preset status PATCHes /users/me/status with a clear-after window', async () => {
+    const onOpenChange = vi.fn();
+    const screen = await mount(
+      <Wrap><UserStatusDialog open onOpenChange={onOpenChange} /></Wrap>,
     );
-    // Presets might render as button OR div / li. Find any clickable
-    // element that includes the preset text.
-    const items = Array.from(document.querySelectorAll('button, [role="button"], [data-preset]')).filter(
-      (el) => /On Vacation/.test(el.textContent ?? ''),
+    await vi.waitFor(() => expect(document.getElementById('status-preset')).not.toBeNull());
+    // "Out for Lunch" has a 30-minute clear window.
+    selectOption('status-preset', 'Out for Lunch');
+    await screen.getByRole('button', { name: 'Save status' }).click();
+    await vi.waitFor(() => {
+      const call = patchCall('PATCH');
+      expect(call).toBeDefined();
+      const body = JSON.parse((call![1] as { body: string }).body);
+      expect(body.text).toBe('Out for Lunch');
+      expect(body.clearAfterSeconds).toBeGreaterThan(0);
+    });
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  it('exercises the today / 1-hour / custom clear-after modes on save', async () => {
+    const screen = await mount(
+      <Wrap><UserStatusDialog open onOpenChange={vi.fn()} /></Wrap>,
     );
-    if (items.length > 0) {
-      (items[0] as HTMLElement).click();
-      await new Promise((r) => setTimeout(r, 50));
+    await vi.waitFor(() => expect(document.getElementById('status-text')).not.toBeNull());
+    await screen.getByLabelText('Status text').fill('Heads down');
+    for (const mode of ['today', '1h', 'custom']) {
+      selectOption('clear-after', mode);
+      await screen.getByRole('button', { name: 'Save status' }).click();
+      await vi.waitFor(() => expect(vi.mocked(apiFetch)).toHaveBeenCalled());
+      vi.mocked(apiFetch).mockClear();
     }
-    // At minimum the dialog text mentioned "On Vacation" already; the
-    // click exercised the preset handler if a clickable was found.
-    expect(document.body.textContent).toContain('On Vacation');
+  });
+
+  it('blocks saving with an empty status text and shows a validation error', async () => {
+    const screen = await mount(
+      <Wrap><UserStatusDialog open onOpenChange={vi.fn()} /></Wrap>,
+    );
+    await vi.waitFor(() => expect(document.getElementById('status-text')).not.toBeNull());
+    await screen.getByRole('button', { name: 'Save status' }).click();
+    await expect.element(screen.getByRole('alert')).toHaveTextContent('Choose an emoji and status text');
+    expect(vi.mocked(apiFetch)).not.toHaveBeenCalled();
+  });
+
+  it('surfaces an error when saving the status fails', async () => {
+    vi.mocked(apiFetch).mockRejectedValueOnce(new Error('status service down'));
+    const screen = await mount(
+      <Wrap><UserStatusDialog open onOpenChange={vi.fn()} /></Wrap>,
+    );
+    await vi.waitFor(() => expect(document.getElementById('status-text')).not.toBeNull());
+    await screen.getByLabelText('Status text').fill('Busy');
+    await screen.getByRole('button', { name: 'Save status' }).click();
+    await expect.element(screen.getByRole('alert')).toHaveTextContent('status service down');
+  });
+
+  it('selecting "Custom status" preset is a no-op for the preset fields', async () => {
+    const screen = await mount(
+      <Wrap><UserStatusDialog open onOpenChange={vi.fn()} /></Wrap>,
+    );
+    await vi.waitFor(() => expect(document.getElementById('status-preset')).not.toBeNull());
+    // Selecting the synthetic custom value hits the early return (no preset
+    // match) without mutating emoji/text.
+    selectOption('status-preset', '__custom__');
+    await screen.getByLabelText('Status text').fill('Free text');
+    expect((document.getElementById('status-text') as HTMLInputElement).value).toBe('Free text');
+  });
+
+  it('clears an existing status via DELETE and recovers from a clear error', async () => {
+    authState.user.userStatus = { emoji: ':palm_tree:', text: 'On Vacation', clearAt: '' };
+    // First clear fails (covers the catch) and keeps the dialog open with an error.
+    vi.mocked(apiFetch).mockRejectedValueOnce(new Error('cannot clear'));
+    const screen = await mount(
+      <Wrap><UserStatusDialog open onOpenChange={vi.fn()} /></Wrap>,
+    );
+    await vi.waitFor(() => expect(document.getElementById('status-text')).not.toBeNull());
+    await screen.getByRole('button', { name: 'Clear status' }).click();
+    await expect.element(screen.getByRole('alert')).toHaveTextContent('cannot clear');
+    // Second clear succeeds → DELETE.
+    await screen.getByRole('button', { name: 'Clear status' }).click();
+    await vi.waitFor(() => expect(patchCall('DELETE')).toBeDefined());
   });
 });

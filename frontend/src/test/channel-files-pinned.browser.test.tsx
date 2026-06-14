@@ -9,6 +9,7 @@ import { PresenceProvider } from '@/context/PresenceContext';
 import { NotificationProvider } from '@/context/NotificationContext';
 import { TypingProvider } from '@/context/TypingContext';
 import { resetServerVersionForTests } from '@/hooks/useServerVersion';
+import { dispatchEditMessage } from '@/lib/window-events';
 
 // REAL browser end-to-end test for the side panels: mount the full
 // chat route, stub fetch with realistic data shaped exactly like the
@@ -73,6 +74,9 @@ interface FetchPlan {
   files: { attachmentID: string; messageID: string; authorID: string; createdAt: string }[];
   pinned: unknown[];
   attachments: Record<string, unknown>;
+  // Optional override for the channel's message page (defaults to one Alice
+  // message referencing the attachment).
+  messages?: unknown[];
 }
 
 function installFetchStub(plan: FetchPlan): () => void {
@@ -124,26 +128,29 @@ function installFetchStub(plan: FetchPlan): () => void {
       ]);
     }
     if (url.includes(`/api/v1/channels/${CHANNEL_ID}/messages`) && !url.includes('/pinned') && !url.includes('/no-unfurl')) {
-      // Initial tail page with one message that references the attachment.
+      // Initial tail page with one message that references the attachment
+      // (or a caller-supplied override).
+      const items = plan.messages ?? [
+        {
+          id: 'm-1',
+          parentID: CHANNEL_ID,
+          parentType: 'channel',
+          authorID: ALICE_ID,
+          body: 'see attached',
+          createdAt: '2026-05-01T11:00:00Z',
+          attachmentIDs: [ATTACHMENT_ID],
+          pinned: true,
+          pinnedAt: '2026-05-01T11:30:00Z',
+          pinnedBy: ME_ID,
+        },
+      ];
+      const firstId = (items[0] as { id?: string })?.id ?? 'm-1';
       return apiJSON({
-        items: [
-          {
-            id: 'm-1',
-            parentID: CHANNEL_ID,
-            parentType: 'channel',
-            authorID: ALICE_ID,
-            body: 'see attached',
-            createdAt: '2026-05-01T11:00:00Z',
-            attachmentIDs: [ATTACHMENT_ID],
-            pinned: true,
-            pinnedAt: '2026-05-01T11:30:00Z',
-            pinnedBy: ME_ID,
-          },
-        ],
+        items,
         hasMoreOlder: false,
         hasMoreNewer: false,
-        oldestID: 'm-1',
-        newestID: 'm-1',
+        oldestID: firstId,
+        newestID: firstId,
       });
     }
     // Pinned list
@@ -330,5 +337,90 @@ describe('channel → header toggles → files + pinned panels (full route)', ()
     await screen.getByTestId('files-toggle').click();
     await screen.getByTestId('pinned-toggle').click();
     await expect.element(screen.getByTestId('pinned-empty')).toBeVisible();
+  });
+
+  it('toggles the MEMBERS side panel from the header member-count button', async () => {
+    teardown = installFetchStub({ files: [], pinned: [], attachments: {} });
+    const screen = await renderRoute('/channel/general');
+    await expect.element(
+      screen.getByTestId('channel-title-stack').getByRole('heading', { name: 'general' }),
+    ).toBeVisible();
+
+    // The member-count badge toggles ChannelView's MemberList panel.
+    await screen.getByLabelText('Toggle member list').click();
+    // MemberList mounts (its scroll area + the per-member row appear).
+    await vi.waitFor(() => {
+      expect(document.querySelector('[data-testid="member-list-scroll-area"]')).not.toBeNull();
+      expect(document.querySelector('[data-testid="member-name-status-u-alice"]')).not.toBeNull();
+    });
+
+    // Toggling again closes the panel (the open/close branch in ChannelView).
+    await screen.getByLabelText('Toggle member list').click();
+    await vi.waitFor(() => {
+      expect(document.querySelector('[data-testid="member-list-scroll-area"]')).toBeNull();
+    });
+  });
+
+  it('opens the thread panel from a ?thread= deep link', async () => {
+    teardown = installFetchStub({ files: [], pinned: [], attachments: {} });
+    // The thread query param drives ChannelView's deep-link thread handling
+    // (effectiveThreadRootID, markThreadSeen, panels.close) and mounts ThreadPanel.
+    const screen = await renderRoute('/channel/general?thread=m-1');
+    await expect.element(
+      screen.getByTestId('channel-title-stack').getByRole('heading', { name: 'general' }),
+    ).toBeVisible();
+    await expect.element(screen.getByRole('heading', { name: 'Thread' })).toBeVisible();
+  });
+
+  it('applies a #msg- deep-link anchor in the main message list', async () => {
+    teardown = installFetchStub({ files: [], pinned: [], attachments: {} });
+    // The hash anchor flows through ChannelView's useDeepLinkAnchor into
+    // MessageList's anchor scroll/highlight path.
+    const screen = await renderRoute('/channel/general#msg-m-1');
+    await expect.element(
+      screen.getByTestId('channel-title-stack').getByRole('heading', { name: 'general' }),
+    ).toBeVisible();
+    await expect.element(screen.getByText('see attached')).toBeVisible();
+  });
+
+  it('enters the mobile inline editor for an own message via the edit-message event', async () => {
+    // ChannelView only delegates edit to its own composer on mobile
+    // (`activeEditingMessage = isMobile ? editingMessage : null`); on
+    // desktop MessageItem handles inline edit itself.
+    if (window.innerWidth > 767) return;
+    teardown = installFetchStub({
+      files: [],
+      pinned: [],
+      attachments: {},
+      messages: [
+        {
+          id: 'own-1',
+          parentID: CHANNEL_ID,
+          parentType: 'channel',
+          authorID: ME_ID,
+          body: 'my own message',
+          createdAt: '2026-05-01T11:00:00Z',
+        },
+      ],
+    });
+    const screen = await renderRoute('/channel/general');
+    await expect.element(
+      screen.getByTestId('channel-title-stack').getByRole('heading', { name: 'general' }),
+    ).toBeVisible();
+    await expect.element(screen.getByText('my own message')).toBeVisible();
+
+    // The own MessageItem registers a startEdit handler; firing the window
+    // event routes through startEdit → onEditMessage → setEditingMessage,
+    // flipping ChannelView's composer into edit mode (L398-416 cluster).
+    // The composer's send button takes the `submitLabel` aria-label ('Save')
+    // and an explicit Cancel button appears.
+    dispatchEditMessage({ messageId: 'own-1' });
+    await expect.element(screen.getByRole('button', { name: 'Save' })).toBeVisible();
+    await expect.element(screen.getByRole('button', { name: 'Cancel' })).toBeVisible();
+
+    // Cancelling restores the normal channel composer (send button reverts
+    // to its default 'Send message' label, no Cancel button).
+    await screen.getByRole('button', { name: 'Cancel' }).click();
+    await expect.element(screen.getByRole('button', { name: 'Send message' })).toBeVisible();
   });
 });

@@ -120,6 +120,36 @@ func TestEmojiService_Create_Member(t *testing.T) {
 	}
 }
 
+func TestEmojiService_Create_UsesStableMediaURL(t *testing.T) {
+	svc, _, users, _ := setupEmojiSvc()
+	users.users["u1"] = &model.User{ID: "u1", SystemRole: model.SystemRoleMember}
+	svc.SetSigner(&fakeEmojiSigner{urls: map[string]string{
+		"uploads/u1/fire.png": "https://fresh.example/fire.png?sig=new",
+	}})
+	svc.SetMediaURLCache(newFakeMediaCache())
+
+	e, err := svc.Create(context.Background(), "u1", "fire", "uploads/u1/fire.png")
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	// Stable media URLs are token-based proxy URLs, not the raw presigned URL.
+	if strings.Contains(e.ImageURL, "sig=new") || e.ImageURL == "" {
+		t.Fatalf("ImageURL=%q, want stable media URL", e.ImageURL)
+	}
+}
+
+func TestEmojiService_Create_PresignError(t *testing.T) {
+	svc, _, users, _ := setupEmojiSvc()
+	users.users["u1"] = &model.User{ID: "u1", SystemRole: model.SystemRoleMember}
+	// GetObject succeeds (objectErr nil) so validation passes, but
+	// PresignedGetURL fails — exercise resolveCreateImageURL's sign-error path.
+	svc.SetSigner(&fakeEmojiSigner{err: errors.New("sign failed")})
+
+	if _, err := svc.Create(context.Background(), "u1", "fire", "uploads/u1/fire.png"); err == nil {
+		t.Fatal("expected presign error")
+	}
+}
+
 func TestEmojiService_Create_GuestForbidden(t *testing.T) {
 	svc, _, users, _ := setupEmojiSvc()
 	users.users["g1"] = &model.User{ID: "g1", SystemRole: model.SystemRoleGuest}

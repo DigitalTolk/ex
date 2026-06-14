@@ -86,6 +86,34 @@ describe('QuoteContinuationPlugin', () => {
     });
   });
 
+  it('Backspace on a non-empty quote line stays inside the blockquote', async () => {
+    // With visible content on the current line, the plugin bails (returns
+    // false) and lets Lexical perform its default delete. jsdom's Selection
+    // has no `modify`, which Lexical's default backspace calls — polyfill it
+    // as a no-op so the default path runs without throwing.
+    const proto = window.getSelection()!.constructor.prototype as { modify?: () => void };
+    const hadModify = 'modify' in proto;
+    if (!hadModify) proto.modify = () => {};
+    try {
+      const ref = createRef<WysiwygEditorHandle>();
+      render(<Providers><WysiwygEditor ref={ref} initialBody="> hello" /></Providers>);
+      await waitFor(() => expect(ref.current).not.toBeNull());
+      act(() => {
+        ref.current!.insertText('');
+      });
+
+      fireEvent.keyDown(screen.getByLabelText('Message input'), { key: 'Backspace' });
+
+      // The plugin did not exit the quote: the blockquote shell and its text
+      // are still present.
+      const quote = ref.current!.getElement()?.querySelector('blockquote');
+      expect(quote).not.toBeNull();
+      expect(quote?.textContent).toContain('hello');
+    } finally {
+      if (!hadModify) delete proto.modify;
+    }
+  });
+
   it('Backspace on a lone empty blockquote removes the quote shell', async () => {
     const ref = createRef<WysiwygEditorHandle>();
     render(<Providers><WysiwygEditor ref={ref} initialBody="> " /></Providers>);

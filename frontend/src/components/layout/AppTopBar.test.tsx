@@ -15,13 +15,21 @@ const baseUser = {
 };
 
 let mockSystemRole: 'admin' | 'member' | 'guest' = 'admin';
+let mockUserStatus: { emoji: string; text: string; clearAt?: string } | undefined;
+let mockOnline = new Set<string>();
+let mockUserNull = false;
 
 vi.mock('@/context/AuthContext', () => ({
-  useAuth: () => ({ user: { ...baseUser, systemRole: mockSystemRole }, logout }),
+  useAuth: () => ({
+    user: mockUserNull
+      ? null
+      : { ...baseUser, systemRole: mockSystemRole, userStatus: mockUserStatus },
+    logout,
+  }),
 }));
 
 vi.mock('@/context/PresenceContext', () => ({
-  usePresence: () => ({ online: new Set<string>(), isOnline: () => false }),
+  usePresence: () => ({ online: mockOnline, isOnline: (id: string) => mockOnline.has(id) }),
 }));
 
 vi.mock('@/components/SearchBar', () => ({
@@ -73,7 +81,46 @@ describe('AppTopBar', () => {
   beforeEach(() => {
     mockSystemRole = 'admin';
     mockIsMobile = false;
+    mockUserStatus = undefined;
+    mockOnline = new Set<string>();
+    mockUserNull = false;
     logout.mockClear();
+  });
+
+  it('falls back to "??" initials and an offline dot when there is no signed-in user', () => {
+    mockUserNull = true;
+    renderTopBar();
+    // With user null, the initials helper hits its `?? "??"` fallback, the
+    // presence check resolves to the `: false` offline branch, and the status
+    // key collapses to empty strings — the bar still renders without throwing.
+    expect(screen.getByTestId('topbar-account')).toBeInTheDocument();
+    expect(screen.getByText('??')).toBeInTheDocument();
+  });
+
+  it('renders the online presence dot and status emoji when the user is online with a status', () => {
+    mockOnline = new Set<string>(['u-1']);
+    mockUserStatus = { emoji: ':rocket:', text: 'Shipping' };
+    renderTopBar();
+    // The account trigger renders with the online (emerald) presence ring and
+    // the user's status keyed in — exercising both the online and userStatus
+    // branches without throwing.
+    expect(screen.getByTestId('topbar-account')).toBeInTheDocument();
+  });
+
+  it('shows an emerald presence dot on the mobile account button when online', () => {
+    mockIsMobile = true;
+    mockOnline = new Set<string>(['u-1']);
+    renderTopBar();
+    const dot = screen.getByTestId('topbar-account').querySelector('span[aria-hidden]')!;
+    expect(dot.className).toContain('bg-emerald-500');
+  });
+
+  it('shows a muted presence dot on the mobile account button when offline', () => {
+    mockIsMobile = true;
+    mockOnline = new Set<string>();
+    renderTopBar();
+    const dot = screen.getByTestId('topbar-account').querySelector('span[aria-hidden]')!;
+    expect(dot.className).toContain('bg-muted-foreground');
   });
 
   it('renders only mobile menu, search, and avatar dropdown trigger in the chrome', () => {

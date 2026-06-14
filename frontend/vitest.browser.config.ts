@@ -53,6 +53,14 @@ export default defineConfig({
         'src/**/*.test.{ts,tsx}',
         'src/**/*.browser.test.{ts,tsx}',
       ],
+      // 99% branch gate over the merged desktop + mobile browser run.
+      // vitest enforces it (non-zero exit), so `npm run
+      // test:browser:coverage` fails on its own in both `make check`
+      // and the CI "Run browser tests" step. The Makefile's explicit
+      // summary-json check is a redundant backstop at the same bar.
+      thresholds: {
+        branches: 99,
+      },
     },
     browser: {
       enabled: true,

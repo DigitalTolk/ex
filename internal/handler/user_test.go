@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -693,6 +694,70 @@ func TestListUsers_Search_NoResults(t *testing.T) {
 	}
 	if len(got) != 0 {
 		t.Errorf("expected 0 results, got %d", len(got))
+	}
+}
+
+func TestListUsers_SearchError(t *testing.T) {
+	h, userStore, jwtMgr := setupUserHandler(t)
+	userStore.listErr = errors.New("search backend down")
+	caller := &model.User{ID: "se-caller", Email: "se@test.com", SystemRole: model.SystemRoleMember}
+	token := makeTokenForUser(jwtMgr, caller)
+	handler := middleware.Auth(jwtMgr)(http.HandlerFunc(h.ListUsers))
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/users?q=alice", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d, want 500; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestListUsers_AllError(t *testing.T) {
+	h, userStore, jwtMgr := setupUserHandler(t)
+	userStore.listErr = errors.New("list down")
+	caller := &model.User{ID: "ae-caller", Email: "ae@test.com", SystemRole: model.SystemRoleMember}
+	token := makeTokenForUser(jwtMgr, caller)
+	handler := middleware.Auth(jwtMgr)(http.HandlerFunc(h.ListUsers))
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/users?all=true", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d, want 500; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestListUsers_PaginatedError(t *testing.T) {
+	h, userStore, jwtMgr := setupUserHandler(t)
+	userStore.listErr = errors.New("list down")
+	caller := &model.User{ID: "pe-caller", Email: "pe@test.com", SystemRole: model.SystemRoleMember}
+	token := makeTokenForUser(jwtMgr, caller)
+	handler := middleware.Auth(jwtMgr)(http.HandlerFunc(h.ListUsers))
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/users?limit=10", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d, want 500; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestPresenceHandler_List_EmptyCoercedToEmpty(t *testing.T) {
+	svc := service.NewPresenceService(nil, nil)
+	h := NewPresenceHandler(svc)
+	jwtMgr := auth.NewJWTManager("presence-empty", 15*time.Minute, 720*time.Hour)
+	u := &model.User{ID: "u1", SystemRole: model.SystemRoleMember}
+	tok := tokenFor(t, jwtMgr, u)
+	handler := middleware.Auth(jwtMgr)(http.HandlerFunc(h.List))
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/presence", nil)
+	req.Header.Set("Authorization", "Bearer "+tok)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), `"online":[]`) {
+		t.Fatalf("empty presence should serialize online as [], got %s", rec.Body.String())
 	}
 }
 

@@ -22,6 +22,7 @@ type dataConversationStore struct {
 	conversations map[string]*model.Conversation
 	userConvs     map[string][]*model.UserConversation
 	getErr        error
+	listErr       error
 }
 
 func newDataConversationStore() *dataConversationStore {
@@ -54,6 +55,9 @@ func (s *dataConversationStore) GetConversation(_ context.Context, id string) (*
 }
 
 func (s *dataConversationStore) ListUserConversations(_ context.Context, userID string) ([]*model.UserConversation, error) {
+	if s.listErr != nil {
+		return nil, s.listErr
+	}
 	return s.userConvs[userID], nil
 }
 
@@ -259,6 +263,99 @@ func TestConversationHandler_List_Authenticated(t *testing.T) {
 
 	if rec.Code != http.StatusOK {
 		t.Errorf("status = %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+}
+
+func TestConversationHandler_GetThread_Forbidden(t *testing.T) {
+	env := setupConversationHandlerFull(t)
+	ctx := middleware.ContextWithClaims(context.Background(), &model.TokenClaims{UserID: "u1"})
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/conversations/c-missing/messages/m1/thread", nil).WithContext(ctx)
+	req.SetPathValue("id", "c-missing")
+	req.SetPathValue("msgId", "m1")
+	rec := httptest.NewRecorder()
+	env.handler.GetThread(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status=%d, want 403; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestConversationHandler_List_ServiceError(t *testing.T) {
+	env := setupConversationHandlerFull(t)
+	env.convs.listErr = errors.New("dynamo down")
+	user := &model.User{ID: "u-le", Email: "le@x", SystemRole: model.SystemRoleMember}
+	token, _ := env.jwtMgr.GenerateAccessToken(user)
+
+	handler := middleware.Auth(env.jwtMgr)(http.HandlerFunc(env.handler.List))
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/conversations", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d, want 500; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestConversationHandler_SetNoUnfurl_MissingIDs(t *testing.T) {
+	env := setupConversationHandlerFull(t)
+	ctx := middleware.ContextWithClaims(context.Background(), &model.TokenClaims{UserID: "u1"})
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/conversations//messages//unfurl",
+		strings.NewReader(`{"noUnfurl":true}`)).WithContext(ctx)
+	rec := httptest.NewRecorder()
+	env.handler.SetNoUnfurl(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d, want 400", rec.Code)
+	}
+}
+
+func TestConversationHandler_SetNoUnfurl_BadJSON(t *testing.T) {
+	env := setupConversationHandlerFull(t)
+	ctx := middleware.ContextWithClaims(context.Background(), &model.TokenClaims{UserID: "u1"})
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/conversations/c1/messages/m1/unfurl",
+		strings.NewReader(`{bad json`)).WithContext(ctx)
+	req.SetPathValue("id", "c1")
+	req.SetPathValue("msgId", "m1")
+	rec := httptest.NewRecorder()
+	env.handler.SetNoUnfurl(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d, want 400; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestConversationHandler_SetNoUnfurl_Forbidden(t *testing.T) {
+	env := setupConversationHandlerFull(t)
+	ctx := middleware.ContextWithClaims(context.Background(), &model.TokenClaims{UserID: "u1"})
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/conversations/c-missing/messages/m1/unfurl",
+		strings.NewReader(`{"noUnfurl":true}`)).WithContext(ctx)
+	req.SetPathValue("id", "c-missing")
+	req.SetPathValue("msgId", "m1")
+	rec := httptest.NewRecorder()
+	env.handler.SetNoUnfurl(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status=%d, want 403; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestConversationHandler_ListFiles_MissingID(t *testing.T) {
+	env := setupConversationHandlerFull(t)
+	ctx := middleware.ContextWithClaims(context.Background(), &model.TokenClaims{UserID: "u1"})
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/conversations//files", nil).WithContext(ctx)
+	rec := httptest.NewRecorder()
+	env.handler.ListFiles(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d, want 400", rec.Code)
+	}
+}
+
+func TestConversationHandler_ListFiles_Forbidden(t *testing.T) {
+	env := setupConversationHandlerFull(t)
+	ctx := middleware.ContextWithClaims(context.Background(), &model.TokenClaims{UserID: "u1"})
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/conversations/c-missing/files", nil).WithContext(ctx)
+	req.SetPathValue("id", "c-missing")
+	rec := httptest.NewRecorder()
+	env.handler.ListFiles(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status=%d, want 403; body=%s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -608,6 +705,102 @@ func TestConvHandlerFull_CreateGroup(t *testing.T) {
 
 	if rec.Code != http.StatusCreated {
 		t.Errorf("status = %d, want %d; body: %s", rec.Code, http.StatusCreated, rec.Body.String())
+	}
+}
+
+func TestConvHandlerFull_CreateSelfDM(t *testing.T) {
+	env := setupConversationHandlerFull(t)
+	env.users.users["u-solo"] = &model.User{ID: "u-solo", Email: "solo@test.com", DisplayName: "Solo"}
+	user := &model.User{ID: "u-solo", Email: "solo@test.com", SystemRole: model.SystemRoleMember}
+	token := makeTokenForUser(env.jwtMgr, user)
+	handler := middleware.Auth(env.jwtMgr)(http.HandlerFunc(env.handler.Create))
+
+	// participantIDs == [self] → personal-notepad self-DM.
+	body := `{"type":"dm","participantIDs":["u-solo"]}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/conversations", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("self-DM status = %d; body: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestConvHandlerFull_CreateGroup_SingleOtherBecomesDM(t *testing.T) {
+	env := setupConversationHandlerFull(t)
+	env.users.users["u-x"] = &model.User{ID: "u-x", Email: "x@test.com", DisplayName: "X"}
+	env.users.users["u-y"] = &model.User{ID: "u-y", Email: "y@test.com", DisplayName: "Y"}
+	user := &model.User{ID: "u-x", Email: "x@test.com", SystemRole: model.SystemRoleMember}
+	token := makeTokenForUser(env.jwtMgr, user)
+	handler := middleware.Auth(env.jwtMgr)(http.HandlerFunc(env.handler.Create))
+
+	// A "group" with exactly one other participant collapses to a DM.
+	body := `{"type":"group","participantIDs":["u-y"],"name":"ignored"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/conversations", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("group→DM status = %d; body: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestConvHandlerFull_CreateGroup_SelfOnlyBecomesSelfDM(t *testing.T) {
+	env := setupConversationHandlerFull(t)
+	env.users.users["u-s"] = &model.User{ID: "u-s", Email: "s@test.com", DisplayName: "S"}
+	user := &model.User{ID: "u-s", Email: "s@test.com", SystemRole: model.SystemRoleMember}
+	token := makeTokenForUser(env.jwtMgr, user)
+	handler := middleware.Auth(env.jwtMgr)(http.HandlerFunc(env.handler.Create))
+
+	// A "group" whose only participant is the caller collapses to a self-DM.
+	body := `{"type":"group","participantIDs":["u-s"]}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/conversations", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("group self-only status = %d; body: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestConvHandlerFull_CreateDM_ServiceError(t *testing.T) {
+	env := setupConversationHandlerFull(t)
+	env.users.users["u-real"] = &model.User{ID: "u-real", Email: "real@test.com", DisplayName: "Real"}
+	user := &model.User{ID: "u-real", Email: "real@test.com", SystemRole: model.SystemRoleMember}
+	token := makeTokenForUser(env.jwtMgr, user)
+	handler := middleware.Auth(env.jwtMgr)(http.HandlerFunc(env.handler.Create))
+
+	// DM with a participant that doesn't exist → service rejects → dm_error.
+	body := `{"type":"dm","participantIDs":["u-ghost"]}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/conversations", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("dm service-error status = %d; body: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestConvHandlerFull_CreateGroup_ServiceError(t *testing.T) {
+	env := setupConversationHandlerFull(t)
+	env.users.users["u-creator"] = &model.User{ID: "u-creator", Email: "c@test.com", DisplayName: "C"}
+	user := &model.User{ID: "u-creator", Email: "c@test.com", SystemRole: model.SystemRoleMember}
+	token := makeTokenForUser(env.jwtMgr, user)
+	handler := middleware.Auth(env.jwtMgr)(http.HandlerFunc(env.handler.Create))
+
+	// Group with ghost participants → GetOrCreateGroup rejects → group_error.
+	body := `{"type":"group","participantIDs":["u-ghost1","u-ghost2"],"name":"Ghosts"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/conversations", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("group service-error status = %d; body: %s", rec.Code, rec.Body.String())
 	}
 }
 

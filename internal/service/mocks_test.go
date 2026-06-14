@@ -561,6 +561,8 @@ type mockConversationStore struct {
 	createErr     error
 	getErr        error
 	listErr       error
+	touchErr      error
+	activateErr   error
 }
 
 func newMockConversationStore() *mockConversationStore {
@@ -603,6 +605,9 @@ func (m *mockConversationStore) ListUserConversations(_ context.Context, userID 
 }
 
 func (m *mockConversationStore) ActivateConversation(_ context.Context, convID string, participantIDs []string) error {
+	if m.activateErr != nil {
+		return m.activateErr
+	}
 	if conv, ok := m.conversations[convID]; ok {
 		conv.Activated = true
 	}
@@ -617,6 +622,9 @@ func (m *mockConversationStore) ActivateConversation(_ context.Context, convID s
 }
 
 func (m *mockConversationStore) TouchConversation(_ context.Context, convID string, participantIDs []string, at time.Time) error {
+	if m.touchErr != nil {
+		return m.touchErr
+	}
 	if conv, ok := m.conversations[convID]; ok {
 		conv.UpdatedAt = at
 	}
@@ -656,12 +664,13 @@ func (m *mockConversationStore) SetCategory(_ context.Context, convID, userID, c
 // --- Mock MessageStore ---
 
 type mockMessageStore struct {
-	messages  map[string]*model.Message // key: parentID + "#" + msgID
-	createErr error
-	getErr    error
-	updateErr error
-	deleteErr error
-	listErr   error
+	messages    map[string]*model.Message // key: parentID + "#" + msgID
+	createErr   error
+	getErr      error
+	updateErr   error
+	deleteErr   error
+	listErr     error
+	listHasMore bool // when true, ListMessages always reports more pages
 }
 
 func newMockMessageStore() *mockMessageStore {
@@ -717,7 +726,7 @@ func (m *mockMessageStore) ListMessages(_ context.Context, parentID string, _ st
 			result = append(result, msg)
 		}
 	}
-	return result, false, nil
+	return result, m.listHasMore, nil
 }
 
 func (m *mockMessageStore) ListMessagesAfter(ctx context.Context, parentID, _ string, limit int) ([]*model.Message, bool, error) {
@@ -762,6 +771,7 @@ type mockThreadFollowStore struct {
 	setCalls        int
 	setManyCalls    int
 	setManyMaxBatch int
+	setManyErr      error
 }
 
 func newMockThreadFollowStore() *mockThreadFollowStore {
@@ -781,6 +791,9 @@ func (m *mockThreadFollowStore) SetThreadFollow(_ context.Context, follow *model
 
 func (m *mockThreadFollowStore) SetThreadFollowMany(_ context.Context, follows []*model.ThreadFollow) error {
 	m.setManyCalls++
+	if m.setManyErr != nil {
+		return m.setManyErr
+	}
 	if len(follows) > m.setManyMaxBatch {
 		m.setManyMaxBatch = len(follows)
 	}

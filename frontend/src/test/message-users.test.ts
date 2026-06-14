@@ -97,6 +97,16 @@ describe('deriveThreadMeta', () => {
     expect(meta.get('root')?.authors).toEqual(['u-a', 'u-b']);
   });
 
+  it('retains the existing lastReplyAt when a later-arriving reply is older', () => {
+    const meta = deriveThreadMeta([
+      msg({ id: 'r1', parentMessageID: 'root', authorID: 'u-a', createdAt: '2026-04-26T11:00:00Z' }),
+      // r2 arrives after r1 in iteration order but has an earlier timestamp,
+      // so the newer lastReplyAt must be kept (the `: cur.lastReplyAt` branch).
+      msg({ id: 'r2', parentMessageID: 'root', authorID: 'u-b', createdAt: '2026-04-26T10:00:00Z' }),
+    ]);
+    expect(meta.get('root')?.lastReplyAt).toBe('2026-04-26T11:00:00Z');
+  });
+
   it('skips messages that are not replies', () => {
     const meta = deriveThreadMeta([msg({ id: 'r1', authorID: 'u-a' })]);
     expect(meta.size).toBe(0);

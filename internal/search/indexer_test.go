@@ -391,3 +391,34 @@ func TestExtractHashtags(t *testing.T) {
 		}
 	}
 }
+
+func TestMergeMessageRefs_Branches(t *testing.T) {
+	// Fresh refs from nil previous state.
+	msgIDs, parentIDs := mergeMessageRefs(nil, nil, "m1", "p1")
+	if len(msgIDs) != 1 || msgIDs[0] != "m1" || len(parentIDs) != 1 || parentIDs[0] != "p1" {
+		t.Fatalf("fresh merge = %v / %v", msgIDs, parentIDs)
+	}
+
+	// Adding a new message appends to both aligned slices.
+	prevMsg := []any{"m1"}
+	prevParent := []any{"p1"}
+	msgIDs, parentIDs = mergeMessageRefs(prevMsg, prevParent, "m2", "p2")
+	if len(msgIDs) != 2 || msgIDs[1] != "m2" || parentIDs[1] != "p2" {
+		t.Fatalf("append merge = %v / %v", msgIDs, parentIDs)
+	}
+
+	// Re-adding an existing message is a no-op (arrays padded + returned).
+	msgIDs, parentIDs = mergeMessageRefs([]any{"m1", "m2"}, []any{"p1"}, "m1", "p1")
+	if len(msgIDs) != 2 || len(parentIDs) != 2 {
+		t.Fatalf("dedup merge should pad and keep length 2, got %v / %v", msgIDs, parentIDs)
+	}
+
+	// stringsFromAny ignores non-string entries.
+	got := stringsFromAny([]any{"a", 42, "b", nil})
+	if len(got) != 2 || got[0] != "a" || got[1] != "b" {
+		t.Fatalf("stringsFromAny filtered = %v", got)
+	}
+	if len(stringsFromAny("not a slice")) != 0 {
+		t.Fatal("stringsFromAny of non-slice should be empty")
+	}
+}

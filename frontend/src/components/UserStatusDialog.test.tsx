@@ -77,11 +77,49 @@ describe('UserStatusDialog', () => {
     expect(setAuthMock).toHaveBeenCalled();
   });
 
+  it('omits clearAfterSeconds when the chosen custom clear time is already in the past', async () => {
+    apiFetchMock.mockResolvedValue({ ...activeUser, userStatus: { emoji: ':tada:', text: 'Heads down' } });
+    render(<UserStatusDialog open onOpenChange={vi.fn()} />);
+
+    await userEvent.click(screen.getByLabelText('Choose status emoji'));
+    await userEvent.type(screen.getByLabelText('Status text'), 'Heads down');
+    await userEvent.selectOptions(screen.getByLabelText('Remove status after'), 'custom');
+    // A clear time in the past makes clearAfterSecondsFor compute seconds <= 0,
+    // which collapses to undefined (the `: undefined` branch).
+    fireEvent.change(screen.getByLabelText('Custom clear time'), { target: { value: '2020-01-01T00:00' } });
+    await userEvent.click(screen.getByRole('button', { name: /Save status/i }));
+
+    await waitFor(() => expect(apiFetchMock).toHaveBeenCalled());
+    const body = JSON.parse(apiFetchMock.mock.calls[0][1].body);
+    // clearAtFor returns a valid (past) ISO, so clearAfterSecondsFor reaches the
+    // seconds <= 0 → undefined branch rather than the no-clearAt early return.
+    expect(body.clearAfterSeconds).toBeUndefined();
+    expect(body.text).toBe('Heads down');
+  });
+
   it('uses a dropdown for predefined statuses and keeps the modal height stable', () => {
     render(<UserStatusDialog open onOpenChange={vi.fn()} />);
 
     expect(screen.getByLabelText(/Predefined status/i)).toHaveValue('__custom__');
     expect(screen.getByTestId('user-status-dialog-body')).toHaveClass('md:min-h-[340px]');
+  });
+
+  it('keeps custom fields untouched when the preset selector returns to Custom', async () => {
+    render(<UserStatusDialog open onOpenChange={vi.fn()} />);
+    const select = screen.getByLabelText(/Predefined status/i);
+    // Pick a real preset, then switch back to Custom — the Custom value isn't
+    // in PRESETS, so the change handler short-circuits without overwriting fields.
+    await userEvent.selectOptions(select, 'Out for Lunch');
+    await userEvent.selectOptions(select, '__custom__');
+    expect(select).toHaveValue('__custom__');
+  });
+
+  it('falls back to the local time zone when the user has none', () => {
+    // Empty user timeZone exercises the `user?.timeZone || localTimeZone()`
+    // fallback in both initial state and the preview's userTimeZone.
+    authUser = { ...activeUser, timeZone: '', userStatus: undefined };
+    render(<UserStatusDialog open onOpenChange={vi.fn()} />);
+    expect(screen.getByLabelText(/Predefined status/i)).toBeInTheDocument();
   });
 
   it('uses end of today for sick and work-from-home presets', async () => {

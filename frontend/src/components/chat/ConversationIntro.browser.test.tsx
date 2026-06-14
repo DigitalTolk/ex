@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { render } from 'vitest-browser-react';
+import { describe, expect, it, afterEach } from 'vitest';
+import { render, cleanup } from 'vitest-browser-react';
 import { ChannelIntro, DMIntro, SelfDMIntro, GroupIntro } from './ConversationIntro';
 import type { Channel } from '@/types';
 
@@ -16,6 +16,42 @@ const baseChannel: Channel = {
 };
 
 describe('ConversationIntro browser behaviour', () => {
+  afterEach(() => cleanup());
+
+  it('DMIntro takes the avatar-image branch when an avatar URL is set', async () => {
+    // Passing otherAvatarURL exercises the `otherAvatarURL && <AvatarImage>`
+    // branch (Radix only shows the <img> once it loads, so assert the intro).
+    const screen = await render(<DMIntro otherDisplayName="Bob" otherAvatarURL="https://x/bob.png" online />);
+    await expect.element(screen.getByRole('heading', { name: 'Bob' })).toBeVisible();
+  });
+
+  it('SelfDMIntro takes the avatar-image branch when an avatar URL is set', async () => {
+    const screen = await render(<SelfDMIntro selfDisplayName="Me" selfAvatarURL="https://x/me.png" />);
+    await expect.element(screen.getByRole('heading', { name: 'Me' })).toBeVisible();
+  });
+
+  it('GroupIntro joins two participant names with "and" and takes the avatar branch', async () => {
+    const screen = await render(
+      <GroupIntro participants={[
+        { id: 'u-1', displayName: 'Alice', avatarURL: 'https://x/a.png' },
+        { id: 'u-2', displayName: 'Bob', avatarURL: 'https://x/b.png' },
+      ]} />,
+    );
+    await expect.element(screen.getByText(/@Alice and @Bob/)).toBeVisible();
+  });
+
+  it('GroupIntro shows a single participant name without conjunction', async () => {
+    const screen = await render(
+      <GroupIntro participants={[{ id: 'u-1', displayName: 'Solo' }]} />,
+    );
+    await expect.element(screen.getByText(/@Solo/)).toBeVisible();
+  });
+
+  it('GroupIntro handles an empty participant list without crashing', async () => {
+    await render(<GroupIntro participants={[]} />);
+    expect(document.querySelectorAll('[data-testid="group-intro-participant"]').length).toBe(0);
+  });
+
   it('ChannelIntro renders channel name, creator, and date copy', async () => {
     const screen = await render(<ChannelIntro channel={baseChannel} creatorName="Alice" />);
     await expect.element(screen.getByText('~general')).toBeVisible();

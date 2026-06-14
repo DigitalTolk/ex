@@ -57,7 +57,7 @@ check:
 	go test -tags=integration -coverprofile=coverage.out -covermode=atomic ./internal/...
 	@coverage=$$(go tool cover -func=coverage.out | awk '/^total:/ { gsub(/%/, "", $$3); print $$3 }'); \
 		echo "backend total coverage: $$coverage%"; \
-		awk -v coverage="$$coverage" 'BEGIN { if (coverage + 0 < 92) { printf "backend coverage %.1f%% is below 92%%\n", coverage; exit 1 } }'
+		awk -v coverage="$$coverage" 'BEGIN { if (coverage + 0 < 99) { printf "backend coverage %.1f%% is below 99%%\n", coverage; exit 1 } }'
 	@echo "=== Frontend type-check ==="
 	# `tsc --noEmit` on a project-references root tsconfig is a no-op
 	# — it ignores `references` unless --build is set. The production
@@ -95,4 +95,4 @@ check:
 			exit 1; \
 		fi; \
 		echo "browser branch coverage: $$coverage%"; \
-		awk -v coverage="$$coverage" 'BEGIN { if (coverage + 0 < 63) { printf "browser branch coverage %.2f%% is below 63%%\n", coverage; exit 1 } }'
+		awk -v coverage="$$coverage" 'BEGIN { if (coverage + 0 < 99) { printf "browser branch coverage %.2f%% is below 99%%\n", coverage; exit 1 } }'

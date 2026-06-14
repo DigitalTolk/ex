@@ -1,14 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { BrowserRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CreateChannelDialog } from './CreateChannelDialog';
 
 const mockMutate = vi.fn();
+let mockIsPending = false;
 
 vi.mock('@/hooks/useChannels', () => ({
-  useCreateChannel: () => ({ mutate: mockMutate, isPending: false }),
+  useCreateChannel: () => ({ mutate: mockMutate, isPending: mockIsPending }),
 }));
 
 function renderDialog(open = true, onOpenChange = vi.fn()) {
@@ -25,6 +26,7 @@ function renderDialog(open = true, onOpenChange = vi.fn()) {
 describe('CreateChannelDialog', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockIsPending = false;
   });
 
   it('renders dialog title when open', () => {
@@ -91,6 +93,39 @@ describe('CreateChannelDialog', () => {
 
     await user.click(screen.getByText('Create Channel'));
     expect(mockMutate).not.toHaveBeenCalled();
+  });
+
+  it('returns early on a direct form submit with an empty name', () => {
+    renderDialog(true);
+    fireEvent.submit(document.querySelector('form')!);
+    expect(mockMutate).not.toHaveBeenCalled();
+  });
+
+  it('returns early when the name fails validation', async () => {
+    const user = userEvent.setup();
+    renderDialog(true);
+    // A 200-char name exceeds MAX_CHANNEL_NAME_LEN → nameError is set, so a
+    // direct submit short-circuits before calling mutate.
+    await user.type(screen.getByLabelText('Name'), 'a'.repeat(200));
+    fireEvent.submit(document.querySelector('form')!);
+    expect(mockMutate).not.toHaveBeenCalled();
+  });
+
+  it('falls back to a generic message when onError gets a non-Error', async () => {
+    const user = userEvent.setup();
+    mockMutate.mockImplementation((_vars, opts) => {
+      opts.onError('plain string failure');
+    });
+    renderDialog(true);
+    await user.type(screen.getByLabelText('Name'), 'marketing');
+    await user.click(screen.getByText('Create Channel'));
+    expect(screen.getByRole('alert')).toHaveTextContent('Failed to create channel');
+  });
+
+  it('shows the pending label while the mutation is in flight', () => {
+    mockIsPending = true;
+    renderDialog(true);
+    expect(screen.getByText('Creating...')).toBeInTheDocument();
   });
 
   it('shows the backend duplicate-name message without raw JSON', async () => {

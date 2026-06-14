@@ -56,4 +56,29 @@ describe('GiphyPicker browser behavior', () => {
       expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({ id: 'gif-1' }));
     });
   });
+
+  it('auto-focuses the search box and accepts a search term on desktop', async () => {
+    if (window.innerWidth <= 767) return;
+    const screen = await render(
+      <GiphyPicker apiKey="test-key" onSelect={vi.fn()} trigger={<button type="button">Open GIFs</button>} />,
+    );
+    await screen.getByText('Open GIFs').click();
+    const input = screen.getByLabelText('Search GIFs');
+    await expect.element(input).toBeVisible();
+    // Desktop opens with the search box focused (L78).
+    await vi.waitFor(() => expect(document.activeElement).toBe(input.element()));
+    // Typing a term drives the search() fetch path (vs trending).
+    await input.fill('cats');
+    expect((input.element() as HTMLInputElement).value).toBe('cats');
+  });
+
+  it('opens without fetching when no apiKey is configured', async () => {
+    const screen = await render(
+      <GiphyPicker apiKey="" onSelect={vi.fn()} trigger={<button type="button">Open GIFs</button>} />,
+    );
+    await screen.getByText('Open GIFs').click();
+    // No apiKey → the fetch resolves to an empty result, but the picker still
+    // renders its search box.
+    await expect.element(screen.getByLabelText('Search GIFs')).toBeVisible();
+  });
 });

@@ -781,6 +781,10 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
             onArrowUpEmpty={requestEditLast}
             placeholder={isUploading ? 'Uploading…' : placeholder}
             ariaLabel="Message input"
+            // Enables member / special / not-in-channel grouping in the
+            // @-mention typeahead. Only a channel composer has a channel
+            // roster; DMs (and the typing-less edit box) pass nothing.
+            mentionChannelId={typingParentType === 'channel' ? typingParentID : undefined}
             className="flex-1"
             editorClassName={
               compactMobileComposer

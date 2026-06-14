@@ -54,6 +54,10 @@ interface Props {
   submitOnEnter?: boolean;
   // ArrowUp on an empty editor — return true to claim the event.
   onArrowUpEmpty?: () => boolean;
+  // Channel the composer targets (when it's a channel). Lets the
+  // @-mention typeahead group suggestions into channel members /
+  // special mentions / not-in-channel. Omitted for DMs and edits.
+  mentionChannelId?: string;
 }
 
 // Lexical theme — pure class hooks the editor adds to its rendered
@@ -92,6 +96,7 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, Props>(function Wys
     onPasteFiles,
     submitOnEnter = true,
     onArrowUpEmpty,
+    mentionChannelId,
   },
   ref,
 ) {
@@ -168,7 +173,7 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, Props>(function Wys
         <TabIndentationPlugin />
         <MarkdownShortcutPlugin transformers={EX_TRANSFORMERS} />
         <MarkdownShortcutFallbackPlugin />
-        <UserMentionsPlugin />
+        <UserMentionsPlugin channelId={mentionChannelId} />
         <ChannelMentionsPlugin />
         <EmojiShortcutsPlugin />
         <QuoteContinuationPlugin />

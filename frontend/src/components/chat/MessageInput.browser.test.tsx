@@ -429,4 +429,62 @@ describe('MessageInput browser behavior', () => {
       document.documentElement.classList.remove('dark');
     }
   });
+
+  it('sends the composed body when the send button is clicked', async () => {
+    const onSend = vi.fn();
+    const screen = await renderWithProviders(
+      <MessageInput onSend={onSend} initialBody="hello world" />,
+    );
+    await screen.getByRole('button', { name: 'Send message' }).click();
+    expect(onSend).toHaveBeenCalledTimes(1);
+    expect(onSend.mock.calls[0][0]).toMatchObject({ body: 'hello world', attachmentIDs: [] });
+  });
+
+  it('disables the send button when the composer is empty', async () => {
+    const onSend = vi.fn();
+    const screen = await renderWithProviders(<MessageInput onSend={onSend} />);
+    const send = screen.getByRole('button', { name: 'Send message' }).element() as HTMLButtonElement;
+    expect(send.disabled).toBe(true);
+  });
+
+  it('renders Cancel and a labeled save action in edit mode, and Cancel fires onCancel', async () => {
+    const onSend = vi.fn();
+    const onCancel = vi.fn();
+    const screen = await renderWithProviders(
+      <MessageInput onSend={onSend} onCancel={onCancel} submitLabel="Save changes" initialBody="edit me" />,
+    );
+    // Edit mode renders a Cancel button plus a save button labeled by submitLabel.
+    await expect.element(screen.getByRole('button', { name: 'Save changes' })).toBeVisible();
+    await screen.getByRole('button', { name: 'Cancel' }).click();
+    expect(onCancel).toHaveBeenCalledTimes(1);
+  });
+
+  it('submits the edit through the labeled save action', async () => {
+    const onSend = vi.fn();
+    const screen = await renderWithProviders(
+      <MessageInput onSend={onSend} onCancel={vi.fn()} submitLabel="Save changes" initialBody="edited body" />,
+    );
+    await screen.getByRole('button', { name: 'Save changes' }).click();
+    expect(onSend).toHaveBeenCalledTimes(1);
+    expect(onSend.mock.calls[0][0]).toMatchObject({ body: 'edited body' });
+  });
+
+  it('renders draft attachment chips supplied via initialDrafts', async () => {
+    const drafts = [
+      { id: 'att-1', filename: 'a.png', contentType: 'image/png', size: 100 },
+      { id: 'att-2', filename: 'b.png', contentType: 'image/png', size: 100 },
+    ];
+    await renderWithProviders(<MessageInput onSend={vi.fn()} initialDrafts={drafts} />);
+    expect(document.querySelector('[aria-label="Draft attachments"]')).not.toBeNull();
+  });
+
+  it('warns and disables sending when attachments exceed the per-message limit', async () => {
+    const drafts = Array.from({ length: 11 }, (_, i) => ({
+      id: `att-${i}`, filename: `f${i}.png`, contentType: 'image/png', size: 100,
+    }));
+    const screen = await renderWithProviders(<MessageInput onSend={vi.fn()} initialDrafts={drafts} />);
+    await expect.element(screen.getByTestId('message-attachments-too-many')).toBeVisible();
+    const send = screen.getByRole('button', { name: 'Send message' }).element() as HTMLButtonElement;
+    expect(send.disabled).toBe(true);
+  });
 });

@@ -80,6 +80,20 @@ describe('useWebSocket', () => {
     expect(MockWebSocket.instances).toHaveLength(0);
   });
 
+  it('uses the wss scheme when the page is served over https', () => {
+    const original = window.location;
+    Object.defineProperty(window, 'location', {
+      configurable: true,
+      value: { protocol: 'https:', host: original.host },
+    });
+    try {
+      renderHook(() => useWebSocket({ enabled: true }));
+      expect(MockWebSocket.instances[0].url.startsWith('wss://')).toBe(true);
+    } finally {
+      Object.defineProperty(window, 'location', { configurable: true, value: original });
+    }
+  });
+
   it('calls onMessageNew when receiving a message.new event', () => {
     const onMessageNew = vi.fn();
     renderHook(() =>
@@ -126,6 +140,34 @@ describe('useWebSocket', () => {
     }));
 
     expect(onMessageDeleted).toHaveBeenCalledWith({ id: '3' });
+  });
+
+  it('evicts the oldest seen event id once the dedup window overflows', () => {
+    const onMessageNew = vi.fn();
+    renderHook(() =>
+      useWebSocket({ onMessageNew, enabled: true }),
+    );
+
+    const ws = MockWebSocket.instances[0];
+    ws.simulateOpen();
+    // Push 513 distinct envelope IDs (dedupCapacity is 512) so the FIFO sheds
+    // its oldest entry — exercising the eviction branch.
+    for (let i = 0; i < 513; i += 1) {
+      ws.simulateMessage(JSON.stringify({
+        type: 'message.new',
+        id: `evt-${i}`,
+        data: JSON.stringify({ id: String(i), body: 'x' }),
+      }));
+    }
+    expect(onMessageNew).toHaveBeenCalledTimes(513);
+
+    // evt-0 was evicted, so re-delivering it is treated as new (not a dup).
+    ws.simulateMessage(JSON.stringify({
+      type: 'message.new',
+      id: 'evt-0',
+      data: JSON.stringify({ id: '0', body: 'again' }),
+    }));
+    expect(onMessageNew).toHaveBeenCalledTimes(514);
   });
 
   it('handles data as object (not double-encoded string)', () => {

@@ -32,6 +32,7 @@ vi.mock('@/hooks/useConversations', () => ({
 vi.mock('@/hooks/useChannels', () => ({
   useUserChannels: () => ({ data: [] }),
   useCreateChannel: () => ({ mutate: vi.fn(), isPending: false }),
+  useChannelMembers: () => ({ data: undefined }),
 }));
 vi.mock('@/hooks/useEmoji', () => ({
   useEmojis: () => ({ data: [] }),
@@ -230,5 +231,55 @@ describe('WysiwygEditor browser plugin coverage', () => {
   it('renders without a placeholder when one is not provided', async () => {
     const { ref } = await mountEditor({ initialBody: '' });
     expect(ref.current).not.toBeNull();
+  });
+
+  function selectAllEditorContent(el: HTMLElement) {
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    const sel = window.getSelection()!;
+    sel.removeAllRanges();
+    sel.addRange(range);
+  }
+
+  it('clears the whole editor when Backspace covers a full selection', async () => {
+    const { ref } = await mountEditor({ initialBody: 'hello world' });
+    const el = getContentEditable();
+    el.focus();
+    selectAllEditorContent(el);
+    // A Backspace whose selection spans the entire editor triggers the
+    // ClearSelectedContentPlugin's full-clear path (only reachable with a real
+    // DOM Selection, hence a browser test).
+    el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Backspace', bubbles: true, cancelable: true }));
+    await vi.waitFor(() => {
+      expect(ref.current!.getMarkdown().trim()).toBe('');
+    });
+  });
+
+  it('clears the whole editor when Delete covers a full selection', async () => {
+    const { ref } = await mountEditor({ initialBody: 'delete me too' });
+    const el = getContentEditable();
+    el.focus();
+    selectAllEditorContent(el);
+    el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete', bubbles: true, cancelable: true }));
+    await vi.waitFor(() => {
+      expect(ref.current!.getMarkdown().trim()).toBe('');
+    });
+  });
+
+  it('leaves a collapsed-caret Backspace to the default handler', async () => {
+    const { ref } = await mountEditor({ initialBody: 'keep most' });
+    const el = getContentEditable();
+    el.focus();
+    // Collapse the caret at the end — the plugin should NOT clear everything
+    // (shouldClear false, no adjacent mention → returns false to default).
+    const sel = window.getSelection()!;
+    sel.removeAllRanges();
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    range.collapse(false);
+    sel.addRange(range);
+    el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Backspace', bubbles: true, cancelable: true }));
+    // The editor still holds its text (the plugin did not wipe it).
+    expect(ref.current!.getMarkdown()).toContain('keep');
   });
 });

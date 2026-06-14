@@ -83,6 +83,19 @@ func TestUserStateService_ErrorsAndNilInputs(t *testing.T) {
 	if err := NewUserStateService(store, nil).UnhideConversation(ctx, "u-1", "conv-1"); err == nil {
 		t.Fatal("expected delete error")
 	}
+
+	// Empty target/user IDs short-circuit set/delete before touching the
+	// store — no error, and the injected store errors are never reached.
+	guard := newMockUserStateStore()
+	guard.setErr = assertErr("set")
+	guard.deleteErr = assertErr("delete")
+	svc := NewUserStateService(guard, nil)
+	if err := svc.HideConversation(ctx, "u-1", ""); err != nil {
+		t.Fatalf("empty-target Hide should no-op, got %v", err)
+	}
+	if err := svc.UnhideConversation(ctx, "", "conv-1"); err != nil {
+		t.Fatalf("empty-user Unhide should no-op, got %v", err)
+	}
 }
 
 type assertErr string

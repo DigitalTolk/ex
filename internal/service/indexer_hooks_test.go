@@ -136,16 +136,17 @@ func TestMessageService_Delete_FiresIndexer(t *testing.T) {
 
 // stubChannelIndexer records IndexChannel / DeleteChannel calls.
 type stubChannelIndexer struct {
-	mu      sync.Mutex
-	indexed []string
-	deleted []string
+	mu       sync.Mutex
+	indexed  []string
+	deleted  []string
+	indexErr error
 }
 
 func (s *stubChannelIndexer) IndexChannel(_ context.Context, ch *model.Channel) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.indexed = append(s.indexed, ch.ID)
-	return nil
+	return s.indexErr
 }
 
 func (s *stubChannelIndexer) DeleteChannel(_ context.Context, id string) error {
@@ -169,6 +170,16 @@ func TestChannelService_Create_FiresIndexer(t *testing.T) {
 	}
 }
 
+func TestChannelService_Create_IndexerErrorIsSwallowed(t *testing.T) {
+	svc, _, _, _, _ := setupChannelService()
+	idx := &stubChannelIndexer{indexErr: errors.New("es down")}
+	svc.SetIndexer(idx)
+	// Index failure is logged and swallowed — Create still succeeds.
+	if _, err := svc.Create(context.Background(), "user-1", "general-3", model.ChannelTypePublic, ""); err != nil {
+		t.Fatalf("Create should succeed despite index error: %v", err)
+	}
+}
+
 func TestChannelService_Update_FiresIndexer(t *testing.T) {
 	svc, channels, memberships, _, _ := setupChannelService()
 	idx := &stubChannelIndexer{}
@@ -187,16 +198,17 @@ func TestChannelService_Update_FiresIndexer(t *testing.T) {
 
 // stubUserIndexer records IndexUser / DeleteUser calls.
 type stubUserIndexer struct {
-	mu      sync.Mutex
-	indexed []string
-	deleted []string
+	mu       sync.Mutex
+	indexed  []string
+	deleted  []string
+	indexErr error
 }
 
 func (s *stubUserIndexer) IndexUser(_ context.Context, u *model.User) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.indexed = append(s.indexed, u.ID)
-	return nil
+	return s.indexErr
 }
 
 func (s *stubUserIndexer) DeleteUser(_ context.Context, id string) error {
@@ -224,6 +236,23 @@ func TestUserService_Update_FiresIndexer(t *testing.T) {
 	}
 	if len(idx.indexed) != 1 || idx.indexed[0] != "u1" {
 		t.Fatalf("expected IndexUser on Update — got %+v", idx.indexed)
+	}
+}
+
+func TestUserService_Update_IndexerErrorIsSwallowed(t *testing.T) {
+	users := newMockUserStore()
+	users.users["u1"] = &model.User{
+		ID:           "u1",
+		Email:        "a@example.com",
+		DisplayName:  "Old",
+		AuthProvider: model.AuthProviderGuest,
+	}
+	svc := NewUserService(users, nil, nil, nil)
+	svc.SetIndexer(&stubUserIndexer{indexErr: errors.New("es down")})
+	newName := "New"
+	// Index failure is logged and swallowed — Update still succeeds.
+	if _, err := svc.Update(context.Background(), "u1", &newName, nil, nil); err != nil {
+		t.Fatalf("Update should succeed despite index error: %v", err)
 	}
 }
 
@@ -269,10 +298,11 @@ func TestUserService_Search_FallsBackOnSearcherError(t *testing.T) {
 
 type stubChannelSearcher struct {
 	ids []string
+	err error
 }
 
 func (s *stubChannelSearcher) Channels(_ context.Context, _ string, _ int) ([]string, error) {
-	return s.ids, nil
+	return s.ids, s.err
 }
 
 func TestChannelService_SearchPublic_RoutesThroughSearcher(t *testing.T) {
@@ -318,6 +348,52 @@ func TestChannelService_SearchPublic_FiltersArchivedAndPrivate(t *testing.T) {
 	if len(got) != 1 || got[0].ID != "c3" {
 		t.Fatalf("expected [c3] only, got %+v", got)
 	}
+}
+
+func TestChannelService_SearchPublic_SearcherError(t *testing.T) {
+	svc, _, _, _, _ := setupChannelService()
+	svc.SetSearcher(&stubChannelSearcher{err: errors.New("opensearch down")})
+	if _, err := svc.SearchPublic(context.Background(), "user-1", "x", 10); err == nil {
+		t.Fatal("expected searcher error")
+	}
+}
+
+func TestChannelService_SearchPublic_SkipsMissingChannel(t *testing.T) {
+	svc, channels, _, _, _ := setupChannelService()
+	channels.channels["c-real"] = &model.Channel{ID: "c-real", Name: "real", Type: model.ChannelTypePublic}
+	// "c-gone" is a stale index hit with no backing record → skipped.
+	svc.SetSearcher(&stubChannelSearcher{ids: []string{"c-gone", "c-real"}})
+	got, err := svc.SearchPublic(context.Background(), "user-1", "x", 10)
+	if err != nil {
+		t.Fatalf("SearchPublic: %v", err)
+	}
+	if len(got) != 1 || got[0].ID != "c-real" {
+		t.Fatalf("expected [c-real], got %+v", got)
+	}
+}
+
+func TestChannelService_SearchPublic_GuestScopedToMemberships(t *testing.T) {
+	svc, channels, memberships, _, _ := setupChannelServiceWithUsersGuest(t)
+	channels.channels["c-joined"] = &model.Channel{ID: "c-joined", Name: "joined", Type: model.ChannelTypePublic}
+	channels.channels["c-other"] = &model.Channel{ID: "c-other", Name: "other", Type: model.ChannelTypePublic}
+	memberships.memberships["c-joined#guest-1"] = &model.ChannelMembership{ChannelID: "c-joined", UserID: "guest-1", Role: model.ChannelRoleMember}
+	svc.SetSearcher(&stubChannelSearcher{ids: []string{"c-joined", "c-other"}})
+
+	got, err := svc.SearchPublic(context.Background(), "guest-1", "x", 10)
+	if err != nil {
+		t.Fatalf("SearchPublic: %v", err)
+	}
+	// Guest only sees the channel they belong to.
+	if len(got) != 1 || got[0].ID != "c-joined" {
+		t.Fatalf("expected [c-joined] for guest, got %+v", got)
+	}
+}
+
+func setupChannelServiceWithUsersGuest(t *testing.T) (*ChannelService, *mockChannelStore, *mockMembershipStore, *mockUserStore, *mockPublisher) {
+	t.Helper()
+	svc, channels, memberships, users, _, publisher := setupChannelServiceWithUsers()
+	users.users["guest-1"] = &model.User{ID: "guest-1", DisplayName: "Guest", SystemRole: model.SystemRoleGuest}
+	return svc, channels, memberships, users, publisher
 }
 
 // TestAuthService_SetIndexer_PropagatesOnSignup verifies the wired-after-

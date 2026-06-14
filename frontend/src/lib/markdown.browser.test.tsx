@@ -166,4 +166,56 @@ describe('renderMarkdown (legacy regex pipeline)', () => {
     expect(document.querySelector('blockquote')).not.toBeNull();
     expect(document.querySelector('pre code')?.className).toContain('language-javascript');
   });
+
+  it('syntax-highlights comments, strings, variables, keywords and numbers in a fenced block', async () => {
+    const body = '```js\n// a comment\nconst greeting = "hi"\n$ref = 42\n```';
+    await render(wrap(<>{renderMarkdown(body)}</>));
+    const code = document.querySelector('pre code')!;
+    // The tokenizer wraps recognised tokens in colour-class spans.
+    expect(code.querySelector('span.italic')).not.toBeNull(); // comment
+    expect(code.querySelector('span.text-emerald-700')).not.toBeNull(); // string
+    expect(code.querySelector('span.text-sky-700')).not.toBeNull(); // $variable
+    expect(code.querySelector('span.text-purple-700')).not.toBeNull(); // keyword (const)
+    expect(code.querySelector('span.text-amber-700')).not.toBeNull(); // number
+  });
+
+  it('renders a fenced block without a language as un-highlighted text', async () => {
+    await render(wrap(<>{renderMarkdown('```\njust plain text\n```')}</>));
+    const code = document.querySelector('pre code')!;
+    expect(code.className).not.toMatch(/language-/);
+    expect(code.textContent).toContain('just plain text');
+    // No token spans were produced for the language-less block.
+    expect(code.querySelector('span.text-purple-700')).toBeNull();
+  });
+
+  it('keeps the scheme on a bare non-https URL', async () => {
+    await render(wrap(<>{renderMarkdown('see http://example.com/path here')}</>));
+    const link = document.querySelector('a[href="http://example.com/path"]');
+    expect(link).not.toBeNull();
+    // displayBareURL only strips the https:// scheme, so http:// stays visible.
+    expect(link?.textContent).toContain('http://example.com/path');
+  });
+
+  it('delegates user mentions to a renderUserMention wrapper when provided', async () => {
+    const renderUserMention = vi.fn((_id: string, name: string, _isSelf: boolean, pill: React.ReactNode) => (
+      <span data-testid="wrapped-mention" data-name={name}>{pill}</span>
+    ));
+    await render(wrap(<>{renderMarkdown('hey @[u-1|Alice] welcome', { renderUserMention })}</>));
+    expect(document.querySelector('[data-testid="wrapped-mention"]')).not.toBeNull();
+    expect(renderUserMention).toHaveBeenCalled();
+  });
+
+  it('renders a skin-toned emoji shortcode as its unicode glyph', async () => {
+    await render(wrap(<>{renderMarkdown('wave :wave::skin-tone-3:')}</>));
+    // The :name::skin-tone-N: form resolves to a styled unicode span.
+    const span = Array.from(document.querySelectorAll('span')).find((s) => s.getAttribute('title') === ':wave::skin-tone-3:');
+    expect(span).not.toBeNull();
+  });
+
+  it('renders a custom emoji shortcode as an <img> when an emojiMap entry exists', async () => {
+    await render(wrap(<>{renderMarkdown('party :parrot:', { emojiMap: { parrot: 'https://emoji.test/parrot.gif' } })}</>));
+    const img = document.querySelector('img[alt=":parrot:"]') as HTMLImageElement | null;
+    expect(img).not.toBeNull();
+    expect(img?.src).toContain('parrot.gif');
+  });
 });

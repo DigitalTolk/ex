@@ -322,6 +322,77 @@ describe('AppLayout browser behavior', () => {
     expect(main.dataset.channelDragging).toBe('false');
   });
 
+  it('commits opening the drawer on a long edge swipe and tracks the live transform', async () => {
+    if (window.innerWidth > 767) return;
+    await render(
+      <MemoryRouter initialEntries={['/threads']}>
+        <div style={{ height: 500 }}>
+          <AppLayout>
+            <PageContainer title="Threads"><div>Thread content</div></PageContainer>
+          </AppLayout>
+        </div>
+      </MemoryRouter>,
+    );
+    const main = document.querySelector('[data-app-main="true"]') as HTMLElement;
+    dispatchTouch(main, 'touchstart', 12, 300);
+    dispatchTouch(main, 'touchmove', 70, 304);
+    dispatchTouch(main, 'touchmove', 170, 306);
+    // Mid-drag: the main element carries a live translate3d(calc(...)) transform
+    // (mainDragStyle's channelDragOffset !== 0 branch).
+    await vi.waitFor(() => {
+      expect(main.dataset.channelDragging).toBe('true');
+      expect(main.style.transform).toContain('calc');
+    });
+    // A >80px travel commits the open.
+    dispatchTouch(main, 'touchend', 170, 306);
+    await vi.waitFor(() => {
+      expect(main.dataset.mobileChannelsOpen).toBe('true');
+    });
+  });
+
+  it('commits closing the drawer on a leftward swipe when channels are open', async () => {
+    if (window.innerWidth > 767) return;
+    await render(
+      <MemoryRouter initialEntries={['/threads']}>
+        <div style={{ height: 500 }}>
+          <AppLayout>
+            <PageContainer title="Threads"><div>Thread content</div></PageContainer>
+          </AppLayout>
+        </div>
+      </MemoryRouter>,
+    );
+    const main = document.querySelector('[data-app-main="true"]') as HTMLElement;
+    // Open via the menu button first (non-home route, so it can also close).
+    (document.querySelector('button[aria-label="Open channels"]') as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(main.dataset.mobileChannelsOpen).toBe('true'));
+    // Swipe left past the threshold to close.
+    dispatchTouch(main, 'touchstart', 200, 300);
+    dispatchTouch(main, 'touchmove', 120, 304);
+    dispatchTouch(main, 'touchmove', 30, 306);
+    dispatchTouch(main, 'touchend', 30, 306);
+    await vi.waitFor(() => expect(main.dataset.mobileChannelsOpen).toBe('false'));
+  });
+
+  it('forwards wheel events over the app header to the page scroller (desktop)', async () => {
+    if (window.innerWidth <= 767) return;
+    await render(
+      <LayoutHarness>
+        <PageContainer title="Threads">
+          <div style={{ height: 2000 }}>Tall thread content</div>
+        </PageContainer>
+      </LayoutHarness>,
+    );
+    const headerInner = document.querySelector('[data-testid="app-shell-header"]') as HTMLElement;
+    const scroller = document.querySelector('[data-page-scroll="true"]') as HTMLElement;
+    expect(scroller).not.toBeNull();
+    await vi.waitFor(() => expect(scroller.scrollHeight).toBeGreaterThan(scroller.clientHeight));
+    const before = scroller.scrollTop;
+    // A wheel over the (non-input) header forwards its deltaY to the page
+    // scroller via both the React onWheel and the native capture listener.
+    headerInner.dispatchEvent(new WheelEvent('wheel', { deltaY: 160, bubbles: true, cancelable: true }));
+    await vi.waitFor(() => expect(scroller.scrollTop).toBeGreaterThan(before));
+  });
+
   it('drag offset clears after a touchend that did not cross the open threshold', async () => {
     if (window.innerWidth > 767) return;
     await render(

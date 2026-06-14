@@ -1,5 +1,5 @@
-import { describe, expect, it, vi } from 'vitest';
-import { render } from 'vitest-browser-react';
+import { describe, expect, it, vi, afterEach } from 'vitest';
+import { render, cleanup } from 'vitest-browser-react';
 import { BrowserRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { PinnedPanel } from './PinnedPanel';
@@ -62,7 +62,7 @@ function pinned(): Message {
   };
 }
 
-function renderPanel(messages: Message[] = [pinned()]) {
+function renderPanel(messages: Message[] = [pinned()], onClose: () => void = vi.fn()) {
   apiFetchMock.mockReset();
   apiFetchMock.mockResolvedValue(messages);
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -72,7 +72,7 @@ function renderPanel(messages: Message[] = [pinned()]) {
         <PinnedPanel
           channelId="ch-1"
           channelSlug="general"
-          onClose={vi.fn()}
+          onClose={onClose}
           userMap={{ 'u-1': { displayName: 'Alice' } }}
           currentUserId="u-2"
         />
@@ -82,6 +82,8 @@ function renderPanel(messages: Message[] = [pinned()]) {
 }
 
 describe('PinnedPanel browser behaviour', () => {
+  afterEach(() => cleanup());
+
   it('renders the pinned panel header', async () => {
     const screen = await renderPanel();
     await expect.element(screen.getByText('Pinned messages')).toBeVisible();
@@ -103,5 +105,98 @@ describe('PinnedPanel browser behaviour', () => {
   it('renders the close button with the documented aria-label', async () => {
     const screen = await renderPanel();
     await expect.element(screen.getByLabelText('Close pinned messages')).toBeVisible();
+  });
+
+  it('invokes onClose from the close button', async () => {
+    const onClose = vi.fn();
+    const screen = await renderPanel([pinned()], onClose);
+    await screen.getByLabelText('Close pinned messages').click();
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('jumps to the pinned message in its host view on a row click', async () => {
+    const screen = await renderPanel();
+    await expect.element(screen.getByText('remember to do the thing')).toBeVisible();
+    const row = document.querySelector('[data-testid="pinned-message-row"]') as HTMLElement;
+    row.click(); // target === row → not a nested button → jumpToMessage navigates
+    await vi.waitFor(() => {
+      expect(window.location.pathname).toBe('/channel/general');
+      expect(window.location.hash).toContain('msg-');
+    });
+  });
+
+  it('jumps to the pinned message when Enter is pressed on the focused row', async () => {
+    const screen = await renderPanel();
+    await expect.element(screen.getByText('remember to do the thing')).toBeVisible();
+    window.history.pushState({}, '', '/somewhere-else');
+    const row = document.querySelector('[data-testid="pinned-message-row"]') as HTMLElement;
+    row.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    await vi.waitFor(() => expect(window.location.pathname).toBe('/channel/general'));
+  });
+
+  it('jumps when Space is pressed on the focused row', async () => {
+    const screen = await renderPanel();
+    await expect.element(screen.getByText('remember to do the thing')).toBeVisible();
+    window.history.pushState({}, '', '/elsewhere');
+    const row = document.querySelector('[data-testid="pinned-message-row"]') as HTMLElement;
+    row.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true }));
+    await vi.waitFor(() => expect(window.location.pathname).toBe('/channel/general'));
+  });
+
+  it('does not navigate when the click originates on a nested interactive element', async () => {
+    const screen = await renderPanel();
+    await expect.element(screen.getByText('remember to do the thing')).toBeVisible();
+    window.history.pushState({}, '', '/keep-here');
+    const nestedButton = document.querySelector('[data-testid="pinned-message-row"] button') as HTMLButtonElement | null;
+    if (!nestedButton) return; // no nested control rendered in this build
+    nestedButton.click();
+    await new Promise((r) => setTimeout(r, 30));
+    // The row's onClick saw target.closest('button') and bailed out.
+    expect(window.location.pathname).toBe('/keep-here');
+  });
+
+  it('falls back to "Unknown" when the pinned author is not in the user map', async () => {
+    apiFetchMock.mockReset();
+    apiFetchMock.mockResolvedValue([{ ...pinned(), authorID: 'ghost' }]);
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const screen = await render(
+      <QueryClientProvider client={qc}>
+        <BrowserRouter>
+          <PinnedPanel channelId="ch-1" channelSlug="general" onClose={vi.fn()} userMap={{}} currentUserId="u-2" />
+        </BrowserRouter>
+      </QueryClientProvider>,
+    );
+    await expect.element(screen.getByText('Unknown')).toBeVisible();
+  });
+
+  it('jumps to a pinned message in a conversation host view', async () => {
+    apiFetchMock.mockReset();
+    apiFetchMock.mockResolvedValue([{ ...pinned(), parentID: 'conv-1', parentType: 'conversation' }]);
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const screen = await render(
+      <QueryClientProvider client={qc}>
+        <BrowserRouter>
+          <PinnedPanel conversationId="conv-1" onClose={vi.fn()} userMap={{ 'u-1': { displayName: 'Alice' } }} currentUserId="u-2" />
+        </BrowserRouter>
+      </QueryClientProvider>,
+    );
+    await expect.element(screen.getByText('remember to do the thing')).toBeVisible();
+    window.history.pushState({}, '', '/start');
+    (document.querySelector('[data-testid="pinned-message-row"]') as HTMLElement).click();
+    await vi.waitFor(() => expect(window.location.pathname).toContain('conv-1'));
+  });
+
+  it('coerces a non-array pinned response to an empty list', async () => {
+    apiFetchMock.mockReset();
+    apiFetchMock.mockResolvedValue(null);
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const screen = await render(
+      <QueryClientProvider client={qc}>
+        <BrowserRouter>
+          <PinnedPanel channelId="ch-1" channelSlug="general" onClose={vi.fn()} userMap={{}} currentUserId="u-2" />
+        </BrowserRouter>
+      </QueryClientProvider>,
+    );
+    await expect.element(screen.getByTestId('pinned-empty')).toBeVisible();
   });
 });

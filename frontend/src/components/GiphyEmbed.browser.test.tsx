@@ -130,4 +130,56 @@ describe('GiphyEmbed browser behaviour', () => {
     // Fallback width is 320 — confirm box width is set via style.
     expect(frame?.style.width).toMatch(/\d+px/);
   });
+
+  it('falls back to default title and giphy.com url when the gif omits them', async () => {
+    giphyFetchMock.mockResolvedValue({
+      data: { ...baseGif, title: undefined, url: undefined },
+    });
+    await render(<GiphyEmbed id="no-meta" apiKey="real-key" width={480} height={360} />);
+    await new Promise((r) => setTimeout(r, 100));
+    const video = document.querySelector('video') as HTMLVideoElement | null;
+    expect(video).not.toBeNull();
+    expect(video?.getAttribute('aria-label')).toBe('GIPHY GIF');
+    expect(document.querySelector('a[href="https://giphy.com"]')).not.toBeNull();
+  });
+
+  it('uses the default sticker title when a sticker omits its title', async () => {
+    giphyFetchMock.mockResolvedValue({
+      data: { ...baseGif, is_sticker: true, title: undefined },
+    });
+    await render(<GiphyEmbed id="no-title-sticker" apiKey="real-key" />);
+    await new Promise((r) => setTimeout(r, 100));
+    expect(document.querySelector('img[alt="GIPHY sticker"]')).not.toBeNull();
+  });
+
+  it('uses the original image dimensions when original_mp4 lacks them', async () => {
+    giphyFetchMock.mockResolvedValue({
+      data: {
+        ...baseGif,
+        images: {
+          original: { url: 'https://media.giphy.com/o.gif', mp4: 'https://media.giphy.com/o.mp4', width: 200, height: 150 },
+          original_mp4: { mp4: 'https://media.giphy.com/om.mp4' },
+        },
+      },
+    });
+    await render(<GiphyEmbed id="mp4-no-dim" apiKey="real-key" />);
+    await new Promise((r) => setTimeout(r, 100));
+    // Renders without throwing; dimensions fall back to the original's.
+    expect(document.querySelector('[data-testid="giphy-embed"]')).not.toBeNull();
+  });
+
+  it('serves a previously fetched gif from the in-memory cache on re-render (no second fetch)', async () => {
+    giphyFetchMock.mockResolvedValue({ data: { ...baseGif, title: 'Cached GIF' } });
+    // First render populates the module cache.
+    await render(<GiphyEmbed id="cache-x" apiKey="real-key" width={480} height={360} />);
+    await vi.waitFor(() => expect(document.querySelector('video')).not.toBeNull());
+    giphyFetchMock.mockClear();
+    // Re-rendering the same id reads readCachedGiphyMedia → renders straight
+    // from cache without issuing a new GIPHY request.
+    await render(<GiphyEmbed id="cache-x" apiKey="real-key" width={480} height={360} />);
+    await vi.waitFor(() => {
+      expect(document.querySelectorAll('video').length).toBeGreaterThanOrEqual(2);
+    });
+    expect(giphyFetchMock).not.toHaveBeenCalled();
+  });
 });

@@ -25,6 +25,16 @@ vi.mock('@/context/PresenceContext', () => ({
   usePresence: () => ({ online: new Set<string>(['u-1']) }),
 }));
 
+// Alice (u-1) is a channel member; Bob (u-2) is not. Disabled (no
+// channel id) returns undefined, matching the real query's enabled flag.
+vi.mock('@/hooks/useChannels', () => ({
+  useChannelMembers: (channelId?: string) => ({
+    data: channelId
+      ? [{ channelID: channelId, userID: 'u-1', role: 'member', displayName: 'Alice', joinedAt: '' }]
+      : undefined,
+  }),
+}));
+
 import { WysiwygEditor, type WysiwygEditorHandle } from '@/components/chat/WysiwygEditor';
 import { createRef } from 'react';
 
@@ -263,5 +273,60 @@ describe('UserMentionsPlugin', () => {
     });
 
     expect(ref.current?.getMarkdown()).toBe('S@[u-1|Alice]  hello');
+  });
+
+  // --- channel-context grouping --------------------------------------
+
+  it('groups suggestions into channel members then not-in-channel with headers', async () => {
+    const ref = createRef<WysiwygEditorHandle>();
+    render(<Providers><WysiwygEditor ref={ref} mentionChannelId="ch-1" /></Providers>);
+    await waitFor(() => expect(ref.current).not.toBeNull());
+    act(() => {
+      ref.current!.insertText('@');
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('mention-popup')).toBeInTheDocument();
+    });
+    // Section headers appear in the requested order: members first,
+    // then the not-in-channel bucket.
+    const headers = screen.getAllByTestId('typeahead-section-header').map((h) => h.textContent);
+    expect(headers).toEqual(['Channel members', 'Not in channel']);
+    // Alice (member) is listed before Bob (non-member) in the DOM.
+    const popup = screen.getByTestId('mention-popup');
+    const text = popup.textContent ?? '';
+    expect(text.indexOf('Channel members')).toBeLessThan(text.indexOf('Alice'));
+    expect(text.indexOf('Alice')).toBeLessThan(text.indexOf('Not in channel'));
+    expect(text.indexOf('Not in channel')).toBeLessThan(text.indexOf('Bob'));
+  });
+
+  it('places special mentions (@all) under their own header between members and non-members', async () => {
+    const ref = createRef<WysiwygEditorHandle>();
+    render(<Providers><WysiwygEditor ref={ref} mentionChannelId="ch-1" /></Providers>);
+    await waitFor(() => expect(ref.current).not.toBeNull());
+    act(() => {
+      ref.current!.insertText('@all');
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('mention-popup')).toBeInTheDocument();
+    });
+    const popup = screen.getByTestId('mention-popup');
+    const headers = screen.getAllByTestId('typeahead-section-header').map((h) => h.textContent);
+    expect(headers).toContain('Special mentions');
+    // The @all option (its description is unique to the suggestion row,
+    // unlike the "@all" text the user typed into the editor).
+    expect(popup.textContent).toContain('Notify everyone in this channel');
+  });
+
+  it('stays a flat list with no section headers in a DM (no channel id)', async () => {
+    const ref = createRef<WysiwygEditorHandle>();
+    render(<Providers><WysiwygEditor ref={ref} /></Providers>);
+    await waitFor(() => expect(ref.current).not.toBeNull());
+    act(() => {
+      ref.current!.insertText('@');
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('mention-popup')).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId('typeahead-section-header')).not.toBeInTheDocument();
   });
 });

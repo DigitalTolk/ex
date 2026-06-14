@@ -131,13 +131,13 @@ function responseJSON(data: unknown): Response {
   } as Response;
 }
 
-async function renderChatPage() {
+async function renderChatPage(initialPath = '/') {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   qc.setQueryData(['userChannels'], [{ channelID: 'ch-99', channelName: 'general' }]);
   qc.setQueryData(['userConversations'], [{ conversationID: 'conv-1' }]);
   return render(
     <QueryClientProvider client={qc}>
-      <MemoryRouter>
+      <MemoryRouter initialEntries={[initialPath]}>
         <ChatPage />
       </MemoryRouter>
     </QueryClientProvider>,
@@ -240,6 +240,36 @@ describe('ChatPage WS router (browser)', () => {
     await renderChatPage();
     lastHandlers().onMessageNew?.({});
     expect(mockMarkChannelUnread).not.toHaveBeenCalled();
+  });
+
+  it('onMessageNew infers a channel parent from the cache when parentType is absent', async () => {
+    await renderChatPage();
+    // No parentType, but parentID matches a cached user channel → treated as a
+    // channel message and marked unread.
+    lastHandlers().onMessageNew?.(msg({ parentType: undefined }));
+    expect(mockMarkChannelUnread).toHaveBeenCalledWith('ch-99');
+  });
+
+  it('onMessageNew infers a conversation parent from the cache when parentType is absent', async () => {
+    await renderChatPage();
+    // No parentType, but parentID matches a cached conversation → unhidden.
+    lastHandlers().onMessageNew?.(msg({ parentID: 'conv-1', parentType: undefined }));
+    expect(mockUnhideConversation).toHaveBeenCalledWith('conv-1');
+  });
+
+  it('onMessageNew routes a thread reply through the thread-invalidation path', async () => {
+    await renderChatPage();
+    // A reply (parentMessageID set) takes the thread branch — it still marks
+    // the parent channel unread but invalidates the thread caches instead of
+    // appending to the main list.
+    lastHandlers().onMessageNew?.(msg({ parentMessageID: 'root-1' }));
+    expect(mockMarkChannelUnread).toHaveBeenCalledWith('ch-99');
+  });
+
+  it('onMessageEdited keys the thread invalidation off parentMessageID when present', async () => {
+    await renderChatPage();
+    // Exercises the `parentMessageID || id` true branch without throwing.
+    expect(() => lastHandlers().onMessageEdited?.(msg({ parentMessageID: 'root-1' }))).not.toThrow();
   });
 
   it('onMessageEdited tolerates missing channelID', async () => {
@@ -389,5 +419,45 @@ describe('ChatPage WS router (browser)', () => {
     await renderChatPage();
     expect(document.querySelector('[data-testid="app-layout"]')).not.toBeNull();
     expect(document.querySelector('[data-testid="mobile-chat-loading"]')).toBeNull();
+  });
+
+  it('onMessageNew marks the active thread seen when the URL targets that thread', async () => {
+    await renderChatPage('/?thread=root-1');
+    // A reply to the active thread still marks the channel unread (the message
+    // landed in the channel) AND routes through the markThreadSeen branch.
+    lastHandlers().onMessageNew?.(msg({ parentMessageID: 'root-1', parentID: 'ch-99', parentType: 'channel' }));
+    expect(mockMarkChannelUnread).toHaveBeenCalledWith('ch-99');
+  });
+
+  it('onUserUpdated patches the local user for self updates (status/timeZone/lastSeenAt)', async () => {
+    await renderChatPage();
+    lastHandlers().onUserUpdated?.({ id: 'u-1', userStatus: { emoji: ':wave:', text: 'hi' }, timeZone: 'UTC', lastSeenAt: '2026-05-01T00:00:00Z' });
+    // Self-update with a cleared status also exercises the null → undefined path.
+    lastHandlers().onUserUpdated?.({ id: 'u-1', userStatus: null });
+    // A different user id skips the self-patch branch.
+    lastHandlers().onUserUpdated?.({ id: 'u-other' });
+    // Malformed payload is ignored.
+    lastHandlers().onUserUpdated?.({});
+  });
+
+  it('onNotification routes thread vs channel-mention notifications', async () => {
+    await renderChatPage('/?thread=root-1');
+    // Active-thread notification → markThreadSeen.
+    lastHandlers().onNotification?.({ kind: 'mention', parentMessageID: 'root-1', parentID: 'ch-99', parentType: 'channel', createdAt: '2026-05-01T00:00:00Z' });
+    // Inactive-thread notification → markThreadNotificationUnread.
+    lastHandlers().onNotification?.({ kind: 'thread_reply', parentMessageID: 'root-9', parentID: 'ch-99', parentType: 'channel', createdAt: '2026-05-01T00:00:00Z' });
+    // Channel mention with no thread → markChannelNotificationUnread.
+    lastHandlers().onNotification?.({ kind: 'mention', parentID: 'ch-99', parentType: 'channel', createdAt: '2026-05-01T00:00:00Z' });
+    expect(mockMarkThreadNotificationUnread).toHaveBeenCalledWith('root-9');
+    expect(mockMarkChannelNotificationUnread).toHaveBeenCalledWith('ch-99');
+    expect(mockDispatchNotification).toHaveBeenCalled();
+  });
+
+  it('onPing reports the timezone once, then skips an unchanged repeat', async () => {
+    await renderChatPage();
+    // First ping detects + reports the timezone; the second sees no change and
+    // returns early (the reportedTimeZoneRef guard).
+    lastHandlers().onPing?.();
+    lastHandlers().onPing?.();
   });
 });

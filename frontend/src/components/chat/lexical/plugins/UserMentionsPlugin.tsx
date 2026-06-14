@@ -7,6 +7,7 @@ import {
 } from '@lexical/react/LexicalTypeaheadMenuPlugin';
 import { $createTextNode, COMMAND_PRIORITY_NORMAL, type TextNode } from 'lexical';
 import { useAllUsers } from '@/hooks/useConversations';
+import { useChannelMembers } from '@/hooks/useChannels';
 import { usePresence } from '@/context/PresenceContext';
 import { fuzzyMatch } from '@/lib/fuzzy';
 import { topK } from '@/lib/topk';
@@ -30,8 +31,19 @@ class UserMentionOption extends MenuOption {
 type GroupName = 'all' | 'here';
 
 type Suggestion =
-  | { kind: 'user'; id: string; displayName: string; email?: string; avatarURL?: string; userStatus?: UserStatus; online: boolean }
+  | { kind: 'user'; id: string; displayName: string; email?: string; avatarURL?: string; userStatus?: UserStatus; online: boolean; inChannel?: boolean }
   | { kind: 'group'; group: GroupName };
+
+// Section header shown above a run of suggestions. Returns undefined
+// when no header applies (no channel context → flat list). Channel
+// members first, then the special @all/@here group mentions, then the
+// users who aren't in this channel.
+function sectionHeaderFor(s: Suggestion): string | undefined {
+  if (s.kind === 'group') return 'Special mentions';
+  if (s.inChannel === true) return 'Channel members';
+  if (s.inChannel === false) return 'Not in channel';
+  return undefined;
+}
 
 const GROUP_NAMES: GroupName[] = ['all', 'here'];
 const GROUP_DESCRIPTIONS: Record<GroupName, string> = {
@@ -43,11 +55,27 @@ function keyForSuggestion(s: Suggestion): string {
   return s.kind === 'user' ? `u-${s.id}` : `g-${s.group}`;
 }
 
-export function UserMentionsPlugin() {
+interface UserMentionsPluginProps {
+  // The channel the composer targets, when it's a channel (not a DM /
+  // conversation). Enables the member / non-member grouping; absent
+  // for DMs, so the list stays a flat ranked roster + group mentions.
+  channelId?: string;
+}
+
+export function UserMentionsPlugin({ channelId }: UserMentionsPluginProps = {}) {
   const [editor] = useLexicalComposerContext();
   const [query, setQuery] = useState<string | null>(null);
   const { data: users = [] } = useAllUsers();
+  const { data: memberRows } = useChannelMembers(channelId);
   const { online } = usePresence();
+
+  const memberIds = useMemo(
+    () => new Set((memberRows ?? []).map((m) => m.userID)),
+    [memberRows],
+  );
+  // Only partition once we actually know the channel roster — otherwise
+  // a mid-load empty member set would label everyone "Not in channel".
+  const partition = !!channelId && !!memberRows;
 
   const options = useMemo<UserMentionOption[]>(() => {
     if (query == null) return [];
@@ -62,8 +90,9 @@ export function UserMentionsPlugin() {
         avatarURL: u.avatarURL,
         userStatus: u.userStatus,
         online: online.has(u.id),
+        inChannel: partition ? memberIds.has(u.id) : undefined,
       }));
-    const ranked = topK(userMatches, MAX_RESULTS, (a, b) => {
+    const byRelevance = (a: Suggestion, b: Suggestion) => {
       // Prefix matches outrank substring matches; ties broken by online
       // status so present teammates float to the top.
       const aPref = a.kind === 'user' && a.displayName.toLowerCase().startsWith(q) ? 0 : 1;
@@ -72,7 +101,7 @@ export function UserMentionsPlugin() {
       const aOnline = a.kind === 'user' && a.online ? 0 : 1;
       const bOnline = b.kind === 'user' && b.online ? 0 : 1;
       return aOnline - bOnline;
-    });
+    };
     // Group mentions (@all / @here) only surface when the user has
     // typed the full keyword. Slack's pattern: a partial "@a" must NOT
     // suggest "@all" — that lets the user type "@alan" without a mid-
@@ -81,8 +110,21 @@ export function UserMentionsPlugin() {
     const groupMatches: Suggestion[] = GROUP_NAMES
       .filter((g) => g === q)
       .map((group) => ({ kind: 'group' as const, group }));
-    return [...groupMatches, ...ranked].map((s) => new UserMentionOption(s));
-  }, [users, query, online]);
+
+    let ordered: Suggestion[];
+    if (partition) {
+      // Channel context: members first, then the special @all/@here
+      // group mentions, then everyone else ("Not in channel"). Members
+      // are capped at MAX_RESULTS; non-members fill any remaining room.
+      const members = topK(userMatches.filter((u) => u.kind === 'user' && u.inChannel), MAX_RESULTS, byRelevance);
+      const remaining = Math.max(0, MAX_RESULTS - members.length);
+      const nonMembers = topK(userMatches.filter((u) => u.kind === 'user' && !u.inChannel), remaining, byRelevance);
+      ordered = [...members, ...groupMatches, ...nonMembers];
+    } else {
+      ordered = [...groupMatches, ...topK(userMatches, MAX_RESULTS, byRelevance)];
+    }
+    return ordered.map((s) => new UserMentionOption(s));
+  }, [users, query, online, partition, memberIds]);
 
   const triggerFn = useBasicTypeaheadTriggerMatch('@', { minLength: 0 });
 
@@ -127,6 +169,7 @@ export function UserMentionsPlugin() {
             selectOptionAndCleanUp={selectOptionAndCleanUp}
             anchorElementRef={anchorElementRef}
             renderRow={(option) => <MentionRow suggestion={option.suggestion} />}
+            headerFor={partition ? (option) => sectionHeaderFor(option.suggestion) : undefined}
           />
         ) : null
       }

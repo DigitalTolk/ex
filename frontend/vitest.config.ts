@@ -103,13 +103,13 @@ export default defineConfig({
         'src/pages/SearchResultsPage.tsx',
         'src/pages/ThreadsPage.tsx',
       ],
-      // FilesPanel, Header, and Sidebar are now in coverage (previously
-      // excluded). The 95% bar is the future ratchet target as more
-      // dialog/edit branches in Sidebar (82%) and Header (79%) get
-      // tested. Keep the floor at 91% so any further exclusion removal
-      // doesn't immediately fail CI before per-file tests catch up.
+      // Branch-coverage gate. Held at 99% to match the backend
+      // (statement) and browser (branch) gates — CI fails any drop
+      // below it. vitest enforces this itself (non-zero exit), so both
+      // `make check` and the CI "Run vitest with coverage" step gate on
+      // it without extra scripting.
       thresholds: {
-        branches: 91,
+        branches: 99,
       },
     },
   },

@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from 'react';
+import { Fragment, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import type { MenuOption } from '@lexical/react/LexicalTypeaheadMenuPlugin';
 
@@ -21,6 +21,11 @@ interface TypeaheadMenuProps<T extends MenuOption> {
   selectOptionAndCleanUp: (option: T) => void;
   anchorElementRef: RefObject<HTMLElement | null>;
   renderRow: (option: T, isActive: boolean) => ReactNode;
+  // Optional section grouping. When provided, a non-selectable section
+  // header is rendered before the first option whose header differs
+  // from the previous option's. Options stay in one flat array so
+  // Lexical's index-based keyboard navigation is unaffected.
+  headerFor?: (option: T) => string | undefined;
 }
 
 export function TypeaheadMenu<T extends MenuOption>({
@@ -32,6 +37,7 @@ export function TypeaheadMenu<T extends MenuOption>({
   selectOptionAndCleanUp,
   anchorElementRef,
   renderRow,
+  headerFor,
 }: TypeaheadMenuProps<T>) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [position, setPosition] = useState<CSSProperties | null>(null);
@@ -70,25 +76,38 @@ export function TypeaheadMenu<T extends MenuOption>({
       ) : (
         options.map((option, i) => {
           const isActive = i === selectedIndex;
+          const header = headerFor?.(option);
+          const prevHeader = i > 0 ? headerFor?.(options[i - 1]) : undefined;
+          const showHeader = !!header && header !== prevHeader;
           return (
-            <div
-              key={option.key}
-              role="option"
-              aria-selected={isActive}
-              data-typeahead-row={i}
-              ref={option.setRefElement}
-              onMouseDown={(e) => {
-                e.preventDefault();
-                selectOptionAndCleanUp(option);
-              }}
-              onMouseEnter={() => setHighlightedIndex(i)}
-              className={
-                'cursor-pointer rounded-sm px-2 py-1.5 text-sm ' +
-                (isActive ? 'bg-accent text-accent-foreground' : '')
-              }
-            >
-              {renderRow(option, isActive)}
-            </div>
+            <Fragment key={option.key}>
+              {showHeader && (
+                <div
+                  role="presentation"
+                  data-testid="typeahead-section-header"
+                  className="px-2 pt-1.5 pb-0.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground select-none"
+                >
+                  {header}
+                </div>
+              )}
+              <div
+                role="option"
+                aria-selected={isActive}
+                data-typeahead-row={i}
+                ref={option.setRefElement}
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  selectOptionAndCleanUp(option);
+                }}
+                onMouseEnter={() => setHighlightedIndex(i)}
+                className={
+                  'cursor-pointer rounded-sm px-2 py-1.5 text-sm ' +
+                  (isActive ? 'bg-accent text-accent-foreground' : '')
+                }
+              >
+                {renderRow(option, isActive)}
+              </div>
+            </Fragment>
           );
         })
       )}

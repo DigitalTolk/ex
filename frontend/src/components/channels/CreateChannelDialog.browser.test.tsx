@@ -6,7 +6,13 @@ import { CreateChannelDialog } from './CreateChannelDialog';
 
 // Browser coverage for CreateChannelDialog — mount and form interactions.
 
-const createChannelMutate = vi.fn();
+// Drives mutate to either resolve (onSuccess) or fail (onError) so the
+// dialog's success/navigate and error paths are both exercised.
+let mutateMode: 'success' | 'error' | 'noop' = 'noop';
+const createChannelMutate = vi.fn((_vars: unknown, opts?: { onSuccess?: (c: { slug: string }) => void; onError?: (e: unknown) => void }) => {
+  if (mutateMode === 'success') opts?.onSuccess?.({ slug: 'new-channel' });
+  else if (mutateMode === 'error') opts?.onError?.(new Error('Channel name already taken'));
+});
 vi.mock('@/hooks/useChannels', () => ({
   useCreateChannel: () => ({ mutate: createChannelMutate, isPending: false }),
 }));
@@ -69,5 +75,70 @@ describe('CreateChannelDialog browser', () => {
       await new Promise((r) => setTimeout(r, 30));
       expect(sw.getAttribute('aria-checked') === 'true' || sw.getAttribute('data-state') === 'checked').toBe(true);
     }
+  });
+
+  it('creates a private channel and navigates on success', async () => {
+    mutateMode = 'success';
+    createChannelMutate.mockClear();
+    const onOpenChange = vi.fn();
+    const screen = await render(
+      <Wrap>
+        <CreateChannelDialog open onOpenChange={onOpenChange} />
+      </Wrap>,
+    );
+    setReactInputValue(document.getElementById('channel-name') as HTMLInputElement, 'new-channel');
+    setReactInputValue(document.getElementById('channel-desc') as HTMLInputElement, 'About things');
+    // A real pointer click toggles the Radix switch (element.click() doesn't).
+    await screen.getByRole('switch').click();
+    await screen.getByRole('button', { name: 'Create Channel' }).click();
+    await vi.waitFor(() => {
+      expect(createChannelMutate).toHaveBeenCalled();
+      const [vars] = createChannelMutate.mock.calls[0];
+      expect(vars).toMatchObject({ name: 'new-channel', description: 'About things', type: 'private' });
+    });
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  it('surfaces a backend error when channel creation fails', async () => {
+    mutateMode = 'error';
+    createChannelMutate.mockClear();
+    const screen = await render(
+      <Wrap>
+        <CreateChannelDialog open onOpenChange={vi.fn()} />
+      </Wrap>,
+    );
+    setReactInputValue(document.getElementById('channel-name') as HTMLInputElement, 'taken-name');
+    await screen.getByRole('button', { name: 'Create Channel' }).click();
+    await expect.element(screen.getByRole('alert')).toHaveTextContent('Channel name already taken');
+  });
+
+  it('marks the name + counter as invalid for an over-long name', async () => {
+    await render(
+      <Wrap>
+        <CreateChannelDialog open onOpenChange={vi.fn()} />
+      </Wrap>,
+    );
+    setReactInputValue(document.getElementById('channel-name') as HTMLInputElement, 'a'.repeat(40));
+    await vi.waitFor(() => {
+      const counter = document.querySelector('[data-testid="channel-name-counter"]') as HTMLElement;
+      expect(counter.className).toContain('text-destructive');
+      // Submit stays disabled while the name is invalid.
+      expect((document.querySelector('button[type="submit"]') as HTMLButtonElement).disabled).toBe(true);
+    });
+  });
+
+  it('marks the description + counter as invalid for an over-long description', async () => {
+    await render(
+      <Wrap>
+        <CreateChannelDialog open onOpenChange={vi.fn()} />
+      </Wrap>,
+    );
+    setReactInputValue(document.getElementById('channel-name') as HTMLInputElement, 'ok-name');
+    setReactInputValue(document.getElementById('channel-desc') as HTMLInputElement, 'd'.repeat(300));
+    await vi.waitFor(() => {
+      const counter = document.querySelector('[data-testid="channel-desc-counter"]') as HTMLElement;
+      expect(counter.className).toContain('text-destructive');
+      expect((document.getElementById('channel-desc') as HTMLInputElement).getAttribute('aria-invalid')).toBe('true');
+    });
   });
 });

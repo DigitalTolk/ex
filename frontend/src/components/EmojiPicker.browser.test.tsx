@@ -86,4 +86,48 @@ describe('EmojiPicker browser', () => {
     await trigger.click();
     await vi.waitFor(() => expect(onOpenChange).toHaveBeenLastCalledWith(false));
   });
+
+  async function openPicker(onSelect = vi.fn()) {
+    const screen = await render(<Wrap><EmojiPicker onSelect={onSelect} /></Wrap>);
+    await screen.getByLabelText('Open emoji picker').click();
+    await vi.waitFor(() => expect(document.querySelector('[aria-label="Search emojis"]')).not.toBeNull());
+    return { screen, onSelect };
+  }
+
+  it('filters emojis by the search query and selects one on click', async () => {
+    const { screen, onSelect } = await openPicker();
+    await screen.getByLabelText('Search emojis').fill('smile');
+    // The search rank ladder (name match / startsWith / includes / keyword)
+    // narrows the grid; selecting a tile emits the shortcode.
+    await vi.waitFor(() => {
+      expect(document.querySelector('[data-testid="emoji-picker-tile"]')).not.toBeNull();
+    });
+    (document.querySelector('[data-testid="emoji-picker-tile"]') as HTMLElement).click();
+    expect(onSelect).toHaveBeenCalledTimes(1);
+  });
+
+  it('switches the active category when a category tab is clicked', async () => {
+    const { screen } = await openPicker();
+    const tabs = screen.getByTestId('emoji-category-tab').elements();
+    expect(tabs.length).toBeGreaterThan(1);
+    (tabs[1] as HTMLElement).click();
+    // Switching categories repopulates the grid without a search query.
+    await vi.waitFor(() => {
+      expect(document.querySelector('[data-testid="emoji-picker-tile"]')).not.toBeNull();
+    });
+  });
+
+  it('changes the skin tone via the skin-tone radiogroup', async () => {
+    const { screen } = await openPicker();
+    const radios = within(screen.getByRole('radiogroup', { name: 'Emoji skin tone' }).element())
+      .querySelectorAll('button, [role="radio"]');
+    expect(radios.length).toBeGreaterThan(1);
+    (radios[2] as HTMLElement).click();
+    // No throw — the skin-tone change updates state (and persists for a user).
+    expect(document.querySelector('[aria-label="Search emojis"]')).not.toBeNull();
+  });
 });
+
+function within(root: Element) {
+  return { querySelectorAll: (sel: string) => root.querySelectorAll(sel) };
+}

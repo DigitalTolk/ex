@@ -20,6 +20,8 @@ import (
 type handlerDraftStore struct {
 	rows      map[string]*model.MessageDraft
 	deleteErr error
+	listErr   error
+	listNil   bool
 }
 
 func newHandlerDraftStore() *handlerDraftStore {
@@ -41,6 +43,12 @@ func (s *handlerDraftStore) Get(_ context.Context, userID, id string) (*model.Me
 	return &cp, nil
 }
 func (s *handlerDraftStore) List(_ context.Context, userID string) ([]*model.MessageDraft, error) {
+	if s.listErr != nil {
+		return nil, s.listErr
+	}
+	if s.listNil {
+		return nil, nil
+	}
 	out := []*model.MessageDraft{}
 	for _, d := range s.rows {
 		if d.UserID == userID {
@@ -139,6 +147,86 @@ func setupDraftHandler(t *testing.T) (*DraftHandler, *handlerDraftStore, *auth.J
 	drafts := newHandlerDraftStore()
 	svc := service.NewDraftService(drafts, handlerMessageStore{}, handlerMembershipStore{}, handlerConversationStore{}, nil)
 	return NewDraftHandler(svc), drafts, auth.NewJWTManager("draft-secret", 15*time.Minute, 24*time.Hour)
+}
+
+func TestDraftHandler_List_ServiceError(t *testing.T) {
+	h, store, jwtMgr := setupDraftHandler(t)
+	store.listErr = errors.New("boom")
+	u := &model.User{ID: "u-1", SystemRole: model.SystemRoleMember}
+	tok, _ := jwtMgr.GenerateAccessToken(u)
+	handler := middleware.Auth(jwtMgr)(http.HandlerFunc(h.List))
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/drafts", nil)
+	req.Header.Set("Authorization", "Bearer "+tok)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d, want 500; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestDraftHandler_List_NilCoercedToEmpty(t *testing.T) {
+	h, store, jwtMgr := setupDraftHandler(t)
+	store.listNil = true
+	u := &model.User{ID: "u-1", SystemRole: model.SystemRoleMember}
+	tok, _ := jwtMgr.GenerateAccessToken(u)
+	handler := middleware.Auth(jwtMgr)(http.HandlerFunc(h.List))
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/drafts", nil)
+	req.Header.Set("Authorization", "Bearer "+tok)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if strings.TrimSpace(rec.Body.String()) != "[]" {
+		t.Fatalf("nil drafts should serialize as [], got %q", rec.Body.String())
+	}
+}
+
+func TestDraftHandler_Upsert_EmptyClearsAndReturns204(t *testing.T) {
+	h, _, jwtMgr := setupDraftHandler(t)
+	u := &model.User{ID: "u-1", SystemRole: model.SystemRoleMember}
+	tok, _ := jwtMgr.GenerateAccessToken(u)
+	handler := middleware.Auth(jwtMgr)(http.HandlerFunc(h.Upsert))
+	// Empty body + no attachments for a channel the user belongs to → the
+	// service clears the draft and returns nil, so the handler answers 204.
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/drafts",
+		strings.NewReader(`{"parentID":"ch-1","parentType":"channel","body":""}`))
+	req.Header.Set("Authorization", "Bearer "+tok)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status=%d, want 204; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestDraftHandler_Upsert_BadJSON(t *testing.T) {
+	h, _, jwtMgr := setupDraftHandler(t)
+	u := &model.User{ID: "u-1", SystemRole: model.SystemRoleMember}
+	tok, _ := jwtMgr.GenerateAccessToken(u)
+	handler := middleware.Auth(jwtMgr)(http.HandlerFunc(h.Upsert))
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/drafts", strings.NewReader(`{bad`))
+	req.Header.Set("Authorization", "Bearer "+tok)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d, want 400; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestDraftHandler_Upsert_ServiceError(t *testing.T) {
+	h, _, jwtMgr := setupDraftHandler(t)
+	u := &model.User{ID: "u-1", SystemRole: model.SystemRoleMember}
+	tok, _ := jwtMgr.GenerateAccessToken(u)
+	handler := middleware.Auth(jwtMgr)(http.HandlerFunc(h.Upsert))
+	// Channel the user is not a member of → service rejects the draft.
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/drafts",
+		strings.NewReader(`{"parentID":"ch-nope","parentType":"channel","body":"hi"}`))
+	req.Header.Set("Authorization", "Bearer "+tok)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code == http.StatusOK || rec.Code == http.StatusNoContent {
+		t.Fatalf("expected error status, got %d; body=%s", rec.Code, rec.Body.String())
+	}
 }
 
 func TestDraftHandler_UpsertListDelete(t *testing.T) {

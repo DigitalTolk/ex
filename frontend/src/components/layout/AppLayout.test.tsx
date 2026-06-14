@@ -289,6 +289,28 @@ describe('AppLayout', () => {
     expect(main).toHaveAttribute('data-mobile-channels-open', 'true');
   });
 
+  it('ignores channel-open swipes entirely on a desktop (non-mobile) layout', () => {
+    setMobileMatch(false);
+    window.history.pushState({}, '', '/channel/general');
+    const { container } = renderLayout();
+    const main = container.querySelector('main')!;
+    // On desktop the swipe handler bails immediately (!isMobile).
+    touchSwipe(main, 12, 160);
+    expect(main).not.toHaveAttribute('data-channel-dragging', 'true');
+  });
+
+  it('closes the open channel pane on a right-to-left swipe', () => {
+    setMobileMatch(true);
+    // The mobile root route renders with channels already open, so a
+    // leftward swipe commits to the "close" latch.
+    window.history.pushState({}, '', '/');
+    const { container } = renderLayout();
+    const main = container.querySelector('main')!;
+    expect(main).toHaveAttribute('data-mobile-channels-open', 'true');
+    touchSwipe(main, 220, 40);
+    expect(main).toHaveAttribute('data-channel-dragging', 'true');
+  });
+
   it('opens the persistent mobile channel pane on a left-to-right touch swipe', () => {
     setMobileMatch(true);
     window.history.pushState({}, '', '/channel/general');
@@ -300,6 +322,96 @@ describe('AppLayout', () => {
     expect(main).toHaveAttribute('data-channel-dragging', 'true');
     expect(main).toHaveAttribute('data-mobile-channels-open', 'true');
     expect(window.location.pathname).toBe('/channel/general');
+  });
+
+  it('refuses to open channels when a mobile right sidebar is mounted anywhere', () => {
+    setMobileMatch(true);
+    window.history.pushState({}, '', '/channel/general');
+    const { container } = renderLayout(
+      <div data-testid="rs" data-mobile-right-sidebar="true">Right panel</div>,
+    );
+    const main = container.querySelector('main')!;
+
+    // Swiping on main: the gesture target is not the right sidebar (so the
+    // closest() guard passes), but the document-wide right-sidebar query trips
+    // canOpenChannelsFromGesture, so the pane must not open.
+    touchSwipe(main, 12, 120);
+    expect(main).not.toHaveAttribute('data-mobile-channels-open', 'true');
+  });
+
+  it('refuses to open channels when the swipe starts on the mobile right sidebar', () => {
+    setMobileMatch(true);
+    window.history.pushState({}, '', '/channel/general');
+    const { container } = renderLayout(
+      <div data-testid="rs" data-mobile-right-sidebar="true">Right panel</div>,
+    );
+    const main = container.querySelector('main')!;
+    const rightSidebar = screen.getByTestId('rs');
+
+    // Swiping from within the right sidebar hits the closest() guard directly.
+    touchSwipe(rightSidebar, 12, 120);
+    expect(main).not.toHaveAttribute('data-mobile-channels-open', 'true');
+  });
+
+  it('still tracks a latched swipe when the touchmove event is not cancelable', () => {
+    setMobileMatch(true);
+    window.history.pushState({}, '', '/channel/general');
+    const { container } = renderLayout();
+    const main = container.querySelector('main')!;
+
+    // A non-cancelable touchmove latches the gesture but skips the
+    // event.preventDefault() branch (event.cancelable === false).
+    fireEvent.touchStart(main, {
+      touches: [{ identifier: 1, target: main, clientX: 12, clientY: 200 }],
+      targetTouches: [{ identifier: 1, target: main, clientX: 12, clientY: 200 }],
+    });
+    fireEvent.touchMove(main, {
+      cancelable: false,
+      touches: [{ identifier: 1, target: main, clientX: 120, clientY: 210 }],
+      targetTouches: [{ identifier: 1, target: main, clientX: 120, clientY: 210 }],
+    });
+    expect(main).toHaveAttribute('data-channel-dragging', 'true');
+    fireEvent.touchEnd(main, {
+      changedTouches: [{ identifier: 1, target: main, clientX: 120, clientY: 210 }],
+      targetTouches: [],
+      touches: [],
+    });
+  });
+
+  it('ignores a sub-threshold horizontal nudge (below the axis lock)', () => {
+    setMobileMatch(true);
+    window.history.pushState({}, '', '/channel/general');
+    const { container } = renderLayout();
+    const main = container.querySelector('main')!;
+
+    // 6px of horizontal movement is below CHANNEL_OPEN_AXIS_LOCK_PX (12),
+    // so the gesture never latches and the pane stays closed.
+    touchSwipe(main, 12, 18);
+    expect(main).not.toHaveAttribute('data-mobile-channels-open', 'true');
+  });
+
+  it('lets a vertical-dominant drag fall through to native scroll', () => {
+    setMobileMatch(true);
+    window.history.pushState({}, '', '/channel/general');
+    const { container } = renderLayout();
+    const main = container.querySelector('main')!;
+
+    // Large vertical movement with smaller horizontal travel → absY >= absX,
+    // so the channel-open gesture yields to native scrolling.
+    fireEvent.touchStart(main, {
+      touches: [{ identifier: 1, target: main, clientX: 12, clientY: 200 }],
+      targetTouches: [{ identifier: 1, target: main, clientX: 12, clientY: 200 }],
+    });
+    fireEvent.touchMove(main, {
+      touches: [{ identifier: 1, target: main, clientX: 30, clientY: 320 }],
+      targetTouches: [{ identifier: 1, target: main, clientX: 30, clientY: 320 }],
+    });
+    fireEvent.touchEnd(main, {
+      changedTouches: [{ identifier: 1, target: main, clientX: 30, clientY: 320 }],
+      targetTouches: [],
+      touches: [],
+    });
+    expect(main).not.toHaveAttribute('data-mobile-channels-open', 'true');
   });
 
   it('pulls the current mobile view aside while revealing channels', async () => {

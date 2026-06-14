@@ -1,5 +1,5 @@
 import { beforeEach, afterEach, describe, it, expect, vi } from 'vitest';
-import { act, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { BrowserRouter } from 'react-router-dom';
@@ -206,6 +206,53 @@ describe('Header', () => {
     expect(screen.getByText('General discussion')).toBeInTheDocument();
   });
 
+  it('opens the inline description editor when an editor clicks the desktop description', () => {
+    render(
+      <Header
+        channel={makeChannel({ description: 'General discussion' })}
+        canEdit
+        onDescriptionSave={vi.fn()}
+      />,
+    );
+    // canEdit renders the description as a button; clicking it swaps in the
+    // inline textarea editor seeded with the current description.
+    fireEvent.click(screen.getByRole('button', { name: 'General discussion' }));
+    const editor = screen.getByPlaceholderText('Add a description...') as HTMLTextAreaElement;
+    expect(editor).toBeInTheDocument();
+    expect(editor.value).toBe('General discussion');
+  });
+
+  it('renders the subtitle inside the hover-card DM header', () => {
+    renderHeaderWithProviders(
+      <Header
+        title="Alice"
+        subtitle="Active now"
+        showAvatar
+        userId="u-alice"
+        currentUserId="u-me"
+      />,
+    );
+    expect(screen.getByText('Active now')).toBeInTheDocument();
+  });
+
+  it('cancels the mobile description editor when the dialog is dismissed', async () => {
+    setMobileMatch(true);
+    const user = userEvent.setup();
+    renderHeaderWithProviders(
+      <Header channel={makeChannel()} canEdit onDescriptionSave={vi.fn()} />,
+    );
+    await user.click(screen.getByText('general').closest('button')!);
+    const menu = within(document.getElementById('mobile-channel-menu')!);
+    await user.click(menu.getByText('Edit description'));
+    const dialog = await screen.findByTestId('mobile-description-editor');
+    // Dismissing the dialog via its Close button routes through
+    // onOpenChange(false) → cancelDescriptionEdit, closing the editor.
+    await user.click(within(dialog).getByRole('button', { name: 'Close' }));
+    await waitFor(() =>
+      expect(screen.queryByTestId('mobile-description-editor')).not.toBeInTheDocument(),
+    );
+  });
+
   it('keeps the desktop channel description in the title row', () => {
     render(
       <Header
@@ -396,5 +443,148 @@ describe('Header', () => {
       />,
     );
     expect(screen.getByText('Engineering team chat')).toBeTruthy();
+  });
+
+  it('renders an empty title when neither channel nor title is provided', () => {
+    const { container } = renderHeaderWithProviders(<Header />);
+    const heading = container.querySelector('h1');
+    expect(heading?.textContent).toBe('');
+  });
+
+  it('exposes edit/mute/leave/archive actions in the desktop channel dropdown', async () => {
+    const user = userEvent.setup();
+    const onToggleMute = vi.fn();
+    renderHeaderWithProviders(
+      <Header
+        channel={makeChannel()}
+        canEdit
+        canLeave
+        canArchive
+        muted={false}
+        onToggleMute={onToggleMute}
+        onDescriptionSave={vi.fn()}
+        onLeave={vi.fn()}
+        onArchive={vi.fn()}
+      />,
+    );
+    await user.click(screen.getByText('general').closest('button')!);
+    expect(await screen.findByText('Edit description')).toBeTruthy();
+    expect(screen.getByText('Leave channel')).toBeTruthy();
+    expect(screen.getByText('Archive channel')).toBeTruthy();
+
+    await user.click(screen.getByRole('menuitem', { name: 'Mute channel' }));
+    expect(onToggleMute).toHaveBeenCalledTimes(1);
+  });
+
+  it('labels the mute action as Unmute when the channel is already muted', async () => {
+    const user = userEvent.setup();
+    renderHeaderWithProviders(
+      <Header channel={makeChannel()} muted onToggleMute={vi.fn()} />,
+    );
+    await user.click(screen.getByText('general').closest('button')!);
+    expect(await screen.findByRole('menuitem', { name: 'Unmute channel' })).toBeTruthy();
+  });
+
+  it('degrades gracefully when ResizeObserver and MutationObserver are unavailable', () => {
+    const origRO = window.ResizeObserver;
+    const origMO = window.MutationObserver;
+    // @ts-expect-error — simulate an environment without the observers.
+    delete window.ResizeObserver;
+    // @ts-expect-error — simulate an environment without the observers.
+    delete window.MutationObserver;
+    try {
+      const { unmount } = render(<Header channel={makeChannel({ name: 'general' })} />);
+      // The resize listener still drives the CSS variable without observers.
+      act(() => window.dispatchEvent(new Event('resize')));
+      expect(() => unmount()).not.toThrow();
+    } finally {
+      window.ResizeObserver = origRO;
+      window.MutationObserver = origMO;
+    }
+  });
+
+  it('toggles the inline mobile channel menu open and closed on the trigger', async () => {
+    setMobileMatch(true);
+    const user = userEvent.setup();
+    renderHeaderWithProviders(<Header channel={makeChannel()} canEdit onDescriptionSave={vi.fn()} />);
+    const trigger = screen.getByText('general').closest('button')!;
+    expect(trigger.getAttribute('aria-expanded')).toBe('false');
+    await user.click(trigger);
+    expect(trigger.getAttribute('aria-expanded')).toBe('true');
+  });
+
+  it('exposes the full action set in the inline mobile channel menu', async () => {
+    setMobileMatch(true);
+    const user = userEvent.setup();
+    const onArchive = vi.fn();
+    renderHeaderWithProviders(
+      <Header
+        channel={makeChannel()}
+        canEdit
+        canLeave
+        canArchive
+        muted
+        onToggleMute={vi.fn()}
+        onDescriptionSave={vi.fn()}
+        onLeave={vi.fn()}
+        onArchive={onArchive}
+      />,
+    );
+    await user.click(screen.getByText('general').closest('button')!);
+    // Scope to the inline mobile menu (the desktop dropdown also renders
+    // these labels but is CSS-hidden via max-md:hidden).
+    const menu = within(document.getElementById('mobile-channel-menu')!);
+    expect(menu.getByText('Edit description')).toBeTruthy();
+    // muted → 'Unmute channel' label in the mobile menu.
+    expect(menu.getByLabelText('Unmute channel')).toBeTruthy();
+    expect(menu.getByText('Leave channel')).toBeTruthy();
+    await user.click(menu.getByText('Archive channel'));
+    // Archive opens a confirmation dialog rather than calling onArchive directly.
+    expect(await screen.findByText('Archive channel?')).toBeInTheDocument();
+  });
+
+  it('renders a DM header with avatar, status indicator, and subtitle', () => {
+    renderHeaderWithProviders(
+      <Header
+        title="Alice"
+        showAvatar
+        avatarURL="https://x/a.png"
+        userStatus={{ emoji: ':wave:', text: 'Hi' }}
+        subtitle="Active now"
+        avatarOnline
+      />,
+    );
+    expect(screen.getByText('Alice')).toBeInTheDocument();
+    expect(screen.getByText('Active now')).toBeInTheDocument();
+  });
+
+  it('falls back to "?" avatar initials in the hover-card DM header when the title is empty', () => {
+    // userId + currentUserId routes through the UserHoverCard branch; an empty
+    // title hits the `displayTitle || "??"` fallback and the absent subtitle
+    // exercises the falsy `subtitle &&` branch.
+    renderHeaderWithProviders(
+      <Header showAvatar userId="u-alice" currentUserId="u-me" />,
+    );
+    expect(screen.getByText('?')).toBeInTheDocument();
+    expect(screen.queryByText('Active now')).not.toBeInTheDocument();
+  });
+
+  it('falls back to "?" avatar initials in the plain DM header when the title is empty', () => {
+    // No userId/currentUserId → the non-hover-card branch; empty title hits its
+    // own `displayTitle || "??"` fallback and there is no subtitle paragraph.
+    render(<Header showAvatar />);
+    expect(screen.getByText('?')).toBeInTheDocument();
+  });
+
+  it('labels the mobile menu mute action as Mute when the channel is not muted', async () => {
+    setMobileMatch(true);
+    const user = userEvent.setup();
+    renderHeaderWithProviders(
+      <Header channel={makeChannel()} muted={false} onToggleMute={vi.fn()} />,
+    );
+    await user.click(screen.getByText('general').closest('button')!);
+    const menu = within(document.getElementById('mobile-channel-menu')!);
+    // not muted → 'Mute channel' label in the mobile menu.
+    expect(menu.getByLabelText('Mute channel')).toBeTruthy();
   });
 });

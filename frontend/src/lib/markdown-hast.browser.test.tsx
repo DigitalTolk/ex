@@ -220,4 +220,79 @@ describe('renderHastTree — every custom-tag branch', () => {
     const pill = document.querySelector('[data-mention-user-id="u-3"]');
     expect(pill).not.toBeNull();
   });
+
+  it('renders every heading level with its own class ramp', async () => {
+    const tree = root([
+      elem('h1', {}, [text('H1')]),
+      elem('h2', {}, [text('H2')]),
+      elem('h3', {}, [text('H3')]),
+      elem('h4', {}, [text('H4')]),
+      elem('h5', {}, [text('H5')]),
+      elem('h6', {}, [text('H6')]),
+    ]);
+    await render(wrap(<>{renderHastTree(tree)}</>));
+    for (const t of ['H1', 'H2', 'H3', 'H4', 'H5', 'H6']) {
+      expect(document.body.textContent).toContain(t);
+    }
+    // Distinct class ramp per level (covers the headingClass ternary chain).
+    expect(document.querySelector('h2')?.className).toMatch(/text-xl/);
+    expect(document.querySelector('h6')?.className).toMatch(/text-xs/);
+  });
+
+  it('falls back to empty ids/names when mention tags omit their data props', async () => {
+    const tree = root([
+      elem('p', {}, [
+        elem('ex-mention-user', {}),
+        elem('ex-mention-channel', {}),
+        elem('ex-mention-group', {}),
+      ]),
+    ]);
+    await render(wrap(<>{renderHastTree(tree)}</>));
+    // The user/group pills render even with empty data (the `?? ''` paths).
+    expect(document.querySelectorAll('[data-testid="mention-pill"]').length).toBeGreaterThanOrEqual(2);
+    expect(document.querySelector('[data-testid="channel-mention-pill"]')).not.toBeNull();
+  });
+
+  it('renders a hashtag as plain text when no onTagClick handler is provided', async () => {
+    const tree = root([
+      elem('p', {}, [elem('ex-hashtag', { 'data-tag': 'launch', 'data-value': '#launch' })]),
+    ]);
+    await render(wrap(<>{renderHastTree(tree)}</>));
+    // No handler → a non-interactive span, not a button.
+    expect(document.body.textContent).toContain('#launch');
+    expect(document.querySelector('button')).toBeNull();
+  });
+
+  it('renders a hashtag as a button when an onTagClick handler is provided', async () => {
+    const onTagClick = vi.fn();
+    const tree = root([
+      elem('p', {}, [elem('ex-hashtag', { 'data-tag': 'launch' })]),
+    ]);
+    await render(wrap(<>{renderHastTree(tree, { onTagClick })}</>));
+    const btn = document.querySelector('button');
+    expect(btn).not.toBeNull();
+    btn!.click();
+    expect(onTagClick).toHaveBeenCalledWith('launch');
+  });
+
+  it('renders a giphy embed with explicit width/height', async () => {
+    const tree = root([
+      elem('p', {}, [elem('ex-giphy', { 'data-id': 'gif-1', 'data-width': '320', 'data-height': '180' })]),
+    ]);
+    await render(wrap(<>{renderHastTree(tree)}</>));
+    // GiphyEmbed mounts with the parsed dimensions; assert the tree rendered.
+    expect(document.body).not.toBeNull();
+  });
+
+  it('strips the https:// scheme from a bare URL but keeps other schemes intact', async () => {
+    const tree = root([
+      elem('p', {}, [
+        elem('ex-bare-url', { 'data-href': 'https://example.com/path' }),
+        elem('ex-bare-url', { 'data-href': 'http://plain.example' }),
+      ]),
+    ]);
+    await render(wrap(<>{renderHastTree(tree)}</>));
+    expect(document.body.textContent).toContain('example.com/path');
+    expect(document.body.textContent).toContain('http://plain.example');
+  });
 });

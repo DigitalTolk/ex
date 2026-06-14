@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/DigitalTolk/ex/internal/events"
 	"github.com/DigitalTolk/ex/internal/model"
@@ -82,6 +83,19 @@ func newDraftTestService() (*DraftService, *mockDraftStore, *mockPublisher) {
 	conversations.conversations["dm-1"] = &model.Conversation{ID: "dm-1", ParticipantIDs: []string{"u-1", "u-2"}}
 	messages.messages["ch-1#root-1"] = &model.Message{ID: "root-1", ParentID: "ch-1", AuthorID: "u-2", Body: "root"}
 	return NewDraftService(drafts, messages, memberships, conversations, publisher), drafts, publisher
+}
+
+func TestDraftService_List_SortsNewestFirst(t *testing.T) {
+	svc, drafts, _ := newDraftTestService()
+	drafts.rows["u-1#old"] = &model.MessageDraft{ID: "old", UserID: "u-1", UpdatedAt: time.Unix(1000, 0)}
+	drafts.rows["u-1#new"] = &model.MessageDraft{ID: "new", UserID: "u-1", UpdatedAt: time.Unix(2000, 0)}
+	got, err := svc.List(context.Background(), "u-1")
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(got) != 2 || got[0].ID != "new" || got[1].ID != "old" {
+		t.Fatalf("expected newest-first [new, old], got %+v", got)
+	}
 }
 
 func TestDraftService_UpsertListDeleteAndPublish(t *testing.T) {

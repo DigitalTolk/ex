@@ -117,6 +117,14 @@ func TestDisplayVersion_FallsBackToAppVersion(t *testing.T) {
 	}
 }
 
+func TestDisplayVersion_FallsBackToDev(t *testing.T) {
+	BuildVersion = ""
+	t.Cleanup(func() { BuildVersion = "" })
+	if got := DisplayVersion(""); got != "dev" {
+		t.Errorf("DisplayVersion = %q, want dev", got)
+	}
+}
+
 func TestVersionHandler_SetsETag(t *testing.T) {
 	h := NewVersionHandler("abc123")
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/version", nil)

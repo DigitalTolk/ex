@@ -6,6 +6,7 @@ import {
   useNotifications,
   type NotificationPayload,
 } from './NotificationContext';
+import * as storageModule from '@/lib/storage';
 
 // Browser coverage for NotificationContext — exercises dispatch
 // suppression rules, sound/browser prefs, and the noop fallback when
@@ -39,6 +40,9 @@ function Capture() {
 
 beforeEach(() => {
   captured = null;
+  // The storage mock persists across tests; reset it so one test's pref
+  // changes don't leak into the next (e.g. a disabled browserEnabled).
+  (storageModule as unknown as { __reset: () => void }).__reset();
   // Reset Notification permission baseline.
   if ('Notification' in window) {
     try {
@@ -49,6 +53,24 @@ beforeEach(() => {
     } catch { /* noop */ }
   }
 });
+
+// Replace the read-only `Notification` global with a granted-permission fake
+// that records constructed instances. Returns a restore function.
+function installFakeNotification(instances: Array<{ title: string; options: NotificationOptions; onclick: (() => void) | null; close: () => void }>) {
+  class FakeNotification {
+    static permission = 'granted';
+    static requestPermission = vi.fn().mockResolvedValue('granted');
+    onclick: (() => void) | null = null;
+    onclose: (() => void) | null = null;
+    constructor(public title: string, public options: NotificationOptions) { instances.push(this as never); }
+    close() {}
+  }
+  const original = Object.getOwnPropertyDescriptor(globalThis, 'Notification');
+  Object.defineProperty(globalThis, 'Notification', { configurable: true, writable: true, value: FakeNotification });
+  return () => {
+    if (original) Object.defineProperty(globalThis, 'Notification', original);
+  };
+}
 
 function basePayload(over: Partial<NotificationPayload> = {}): NotificationPayload {
   return {
@@ -142,6 +164,60 @@ describe('NotificationContext browser', () => {
     );
     const result = await captured!.requestPermission();
     expect(['default', 'denied', 'granted', 'unsupported']).toContain(result);
+  });
+
+  type FakeNote = { title: string; options: NotificationOptions; onclick: (() => void) | null; close: () => void };
+
+  it('creates a browser notification and navigates in-app on click when permission is granted', async () => {
+    const instances: FakeNote[] = [];
+    const restore = installFakeNotification(instances);
+    try {
+      await render(<NotificationProvider><Capture /></NotificationProvider>);
+      await vi.waitFor(() => expect(captured).not.toBeNull());
+      // A DM mention (not suppressed) with browser + permission → an OS banner.
+      captured!.dispatch(basePayload({ kind: 'mention', parentType: 'conversation', parentID: 'conv-9', authorID: 'u-other', deepLink: '/channel/general' }));
+      await vi.waitFor(() => expect(instances.length).toBe(1));
+      // Non-desktop build attaches the logo icon.
+      expect(instances[0].options.icon).toBe('/logo.svg');
+      window.history.pushState({}, '', '/start');
+      instances[0].onclick!();
+      await vi.waitFor(() => expect(window.location.pathname).toBe('/channel/general'));
+    } finally {
+      restore();
+    }
+  });
+
+  it('omits the icon for the desktop build', async () => {
+    const instances: FakeNote[] = [];
+    const restore = installFakeNotification(instances);
+    const realDesktop = (window as { __EX_DESKTOP__?: boolean }).__EX_DESKTOP__;
+    (window as { __EX_DESKTOP__?: boolean }).__EX_DESKTOP__ = true;
+    try {
+      await render(<NotificationProvider><Capture /></NotificationProvider>);
+      await vi.waitFor(() => expect(captured).not.toBeNull());
+      captured!.dispatch(basePayload({ kind: 'mention', parentType: 'conversation', parentID: 'conv-9', authorID: 'u-other' }));
+      await vi.waitFor(() => expect(instances.length).toBe(1));
+      expect(instances[0].options.icon).toBeUndefined();
+    } finally {
+      restore();
+      (window as { __EX_DESKTOP__?: boolean }).__EX_DESKTOP__ = realDesktop;
+    }
+  });
+
+  it('does not create a banner when browser notifications are disabled', async () => {
+    const instances: FakeNote[] = [];
+    const restore = installFakeNotification(instances);
+    try {
+      await render(<NotificationProvider><Capture /></NotificationProvider>);
+      await vi.waitFor(() => expect(captured).not.toBeNull());
+      captured!.setBrowserEnabled(false);
+      await vi.waitFor(() => expect(captured!.prefs.browserEnabled).toBe(false));
+      captured!.dispatch(basePayload({ kind: 'mention', parentType: 'conversation', parentID: 'conv-9', authorID: 'u-other' }));
+      await new Promise((r) => setTimeout(r, 30));
+      expect(instances.length).toBe(0);
+    } finally {
+      restore();
+    }
   });
 
   it('useNotifications returns the noop value outside a provider', async () => {
