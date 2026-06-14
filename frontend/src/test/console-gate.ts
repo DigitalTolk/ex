@@ -27,6 +27,7 @@ const allowedErrors = [
 const originalConsole = {
   error: console.error.bind(console),
   warn: console.warn.bind(console),
+  debug: console.debug.bind(console),
 };
 
 let calls: ConsoleCall[] = [];
@@ -54,6 +55,12 @@ function installConsoleGate() {
     if (allowedWarnings.some((allow) => allow(args))) return;
     calls.push({ level: 'warn', args });
   };
+  // Silence console.debug entirely during browser tests. It is not gated (so it
+  // can't fail a test) but some code paths intentionally exercised here emit
+  // debug logs — notably the `ex.sidebarDndDebug`-gated sidebar DnD tracing in
+  // Sidebar.tsx / useSidebar.ts, which the DnD tests turn on to cover those
+  // branches. Stubbing it keeps the suite output clean without losing coverage.
+  console.debug = () => {};
 }
 
 beforeEach(() => {
@@ -71,4 +78,5 @@ afterEach(() => {
 export function restoreConsoleForDebugging() {
   console.error = originalConsole.error;
   console.warn = originalConsole.warn;
+  console.debug = originalConsole.debug;
 }
