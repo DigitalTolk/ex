@@ -150,6 +150,21 @@ describe('MessageHitCard browser', () => {
     expect(document.querySelector('[data-testid="message-hit-card"]')).not.toBeNull();
   });
 
+  it('clicking the author name with an empty authorId does not invoke onAuthorClick', async () => {
+    parentResult = { label: '~general', href: '/channel/general' };
+    const onAuthorClick = vi.fn();
+    const screen = await render(
+      <Wrap>
+        <MessageHitCard hit={hit({ authorId: '' })} onAuthorClick={onAuthorClick} />
+      </Wrap>,
+    );
+    // authorId is empty → the `if (authorId)` guard is false, so the
+    // callback is not fired even though the name button is clicked.
+    const author = screen.getByText('Unknown');
+    await author.click();
+    expect(onAuthorClick).not.toHaveBeenCalled();
+  });
+
   it('takes the avatar-image branch when the author has an avatar URL', async () => {
     userAvatarURL = 'https://avatars.test/u-1.png';
     parentResult = { label: '~general', href: '/channel/general#msg-1' };

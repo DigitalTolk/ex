@@ -62,4 +62,14 @@ describe('ThreadTypingIndicator browser behaviour', () => {
     );
     await expect.element(screen.getByText(/Bob is typing/)).toBeVisible();
   });
+
+  it('falls back to the userID when the thread map lacks a displayName', async () => {
+    // No userMap entry for the typer → the `?? id` fallback (line 51)
+    // resolves the raw userID instead of a display name.
+    typingState.typingByThread = { 'ch-1::root-1': ['u-Z'] };
+    const screen = await render(
+      <ThreadTypingIndicator parentID="ch-1" threadRootID="root-1" userMap={{}} />,
+    );
+    await expect.element(screen.getByText(/u-Z is typing/)).toBeVisible();
+  });
 });

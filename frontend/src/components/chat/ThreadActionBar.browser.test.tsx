@@ -1,11 +1,20 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { render } from 'vitest-browser-react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ThreadActionBar } from './ThreadActionBar';
 
-vi.mock('@/hooks/useUsersBatch', () => ({
-  useUsersBatch: () => ({ map: new Map(), isLoading: false }),
+// Mutable so individual tests can seed the fallback /users/batch result
+// (the `providedMap.get() ?? fallback.map.get()` arm on line 38).
+const fallbackBatch = vi.hoisted(() => ({
+  map: new Map<string, { displayName: string; avatarURL?: string }>(),
 }));
+vi.mock('@/hooks/useUsersBatch', () => ({
+  useUsersBatch: () => ({ map: fallbackBatch.map, isLoading: false }),
+}));
+
+beforeEach(() => {
+  fallbackBatch.map = new Map();
+});
 
 function renderBar(props: Partial<Parameters<typeof ThreadActionBar>[0]> = {}) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -60,5 +69,51 @@ describe('ThreadActionBar browser behaviour', () => {
     const btn = document.querySelector('[data-testid="thread-action-bar"]') as HTMLButtonElement;
     btn.click();
     expect(onClick).toHaveBeenCalledWith('root-1');
+  });
+
+  it('renders the avatar image when the resolved author has an avatarURL', async () => {
+    // providedMap returns a user WITH an avatarURL → the
+    // `u?.avatarURL && <AvatarImage>` arm (line 61) evaluates. Radix only
+    // mounts the <img> after the source decodes, so we use a 1x1 PNG data
+    // URI (resolves synchronously enough) and wait for it.
+    const pixel =
+      'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+    await renderBar({
+      recentReplyAuthorIDs: ['u-img'],
+      userMap: {
+        get: (id) => (id === 'u-img' ? { displayName: 'Imogen', avatarURL: pixel } : undefined),
+      },
+    });
+    const avatar = document.querySelector('[data-testid="thread-action-avatar-u-img"]');
+    expect(avatar).not.toBeNull();
+    await vi.waitFor(() => {
+      expect(avatar!.querySelector('img')).not.toBeNull();
+    });
+  });
+
+  it('reads through the useUsersBatch fallback for IDs missing from the provided map', async () => {
+    // providedMap.get('u-fb') === undefined → line 38 falls through to
+    // fallback.map.get('u-fb'), which we seed here.
+    fallbackBatch.map = new Map([['u-fb', { displayName: 'Fallback Fran' }]]);
+    await renderBar({
+      recentReplyAuthorIDs: ['u-fb'],
+      userMap: { get: () => undefined },
+    });
+    // Initials "FF" come from the fallback display name.
+    const avatar = document.querySelector('[data-testid="thread-action-avatar-u-fb"]');
+    expect(avatar).not.toBeNull();
+    expect(avatar!.textContent).toContain('FF');
+  });
+
+  it('falls back to "?" initials when neither map resolves the author', async () => {
+    // Both providedMap and the (empty) fallback batch return undefined →
+    // getInitials(u?.displayName ?? '?') hits the `?? '?'` arm (line 63).
+    await renderBar({
+      recentReplyAuthorIDs: ['u-ghost'],
+      userMap: { get: () => undefined },
+    });
+    const avatar = document.querySelector('[data-testid="thread-action-avatar-u-ghost"]');
+    expect(avatar).not.toBeNull();
+    expect(avatar!.textContent).toContain('?');
   });
 });

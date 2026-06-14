@@ -86,6 +86,11 @@ function quoteLineBreaks(editor: LexicalEditor): number {
   });
   return n;
 }
+function editorText(editor: LexicalEditor): string {
+  let out = '';
+  editor.getEditorState().read(() => { out = $getRoot().getTextContent(); });
+  return out;
+}
 function ev(extra: Record<string, unknown> = {}) {
   return { preventDefault: () => {}, ...extra } as unknown as KeyboardEvent;
 }
@@ -188,5 +193,58 @@ describe('QuoteContinuationPlugin (browser)', () => {
     editor.dispatchCommand(KEY_BACKSPACE_COMMAND, ev());
     await flush();
     expect(hasQuote(editor)).toBe(false);
+  });
+
+  it('Backspace with a non-collapsed selection inside a quote is left to the default', async () => {
+    // The KEY_BACKSPACE handler bails on `!selection.isCollapsed()` (the
+    // not-collapsed false side of the collapsed-selection guard) and returns
+    // false, so Lexical's default range-delete runs instead of the plugin's
+    // quote-exit logic. The plugin does NOT inject its own paragraph break.
+    const editor = await mount();
+    seedQuote(editor, (q) => {
+      const t = $createTextNode('hello world');
+      q.append(t);
+      t.select(0, 5); // range selection over "hello"
+    });
+    editor.dispatchCommand(KEY_BACKSPACE_COMMAND, ev());
+    await flush();
+    // The plugin returned false; whatever remains was produced by the default
+    // delete, not the plugin's exitQuote (which would have inserted a paragraph
+    // sibling). The "world" tail survives.
+    expect(editorText(editor)).toContain('world');
+  });
+
+  it('Shift+Enter inside a quote is left to the default (no soft break injected)', async () => {
+    // `event.shiftKey` true → the Enter handler returns false on its
+    // `event && event.shiftKey` branch, so the plugin injects nothing.
+    const editor = await mount();
+    seedQuote(editor, (q) => {
+      const t = $createTextNode('hello');
+      q.append(t);
+      t.select(5, 5);
+    });
+    editor.dispatchCommand(KEY_ENTER_COMMAND, ev({ shiftKey: true }));
+    await flush();
+    // The plugin returned false on its shiftKey branch; the quote stays and no
+    // exit paragraph was produced (Lexical's default may add a soft break, but
+    // the plugin did not run its exitQuote logic).
+    expect(hasQuote(editor)).toBe(true);
+    expect(paragraphCount(editor)).toBe(0);
+  });
+
+  it('Enter with a null event still continues a non-empty quote line', async () => {
+    // Dispatching with `null` exercises the `event && event.shiftKey`
+    // short-circuit false side (event is falsy) and the optional
+    // `event?.preventDefault()` no-op.
+    const editor = await mount();
+    seedQuote(editor, (q) => {
+      const t = $createTextNode('hello');
+      q.append(t);
+      t.select(5, 5);
+    });
+    editor.dispatchCommand(KEY_ENTER_COMMAND, null);
+    await flush();
+    expect(hasQuote(editor)).toBe(true);
+    expect(quoteLineBreaks(editor)).toBeGreaterThanOrEqual(1);
   });
 });

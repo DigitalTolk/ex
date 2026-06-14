@@ -168,6 +168,64 @@ describe('UnreadContext (browser)', () => {
     expect(getState().unreadConversations.has('conv-keep')).toBe(true);
   });
 
+  it('useUnread throws when called outside an UnreadProvider', async () => {
+    function Boom() {
+      let threw = false;
+      try {
+        useUnread();
+      } catch {
+        threw = true;
+      }
+      return <div data-testid="boom" data-threw={String(threw)} />;
+    }
+    const screen = await render(<Boom />);
+    expect(screen.getByTestId('boom').element().getAttribute('data-threw')).toBe('true');
+  });
+
+  it('swallows API rejections from clear/hide/unhide and still updates local state', async () => {
+    apiFetchMock.mockRejectedValue(new Error('server down'));
+    const getState = await mountUnread();
+    // clearChannelUnread → DELETE rejects → `.catch(() => undefined)` arm.
+    getState().markChannelUnread('ch-rej');
+    await vi.waitFor(() => expect(getState().unreadChannels.has('ch-rej')).toBe(true));
+    getState().clearChannelUnread('ch-rej');
+    await vi.waitFor(() => expect(getState().unreadChannels.has('ch-rej')).toBe(false));
+    // hideConversation PUT + unhideConversation DELETE both reject.
+    getState().hideConversation('conv-rej');
+    await vi.waitFor(() => expect(getState().hiddenConversations.has('conv-rej')).toBe(true));
+    getState().unhideConversation('conv-rej');
+    await vi.waitFor(() => expect(getState().hiddenConversations.has('conv-rej')).toBe(false));
+    // setActiveChannel(id) also fires a DELETE that rejects.
+    getState().setActiveChannel('ch-active-rej');
+    await new Promise((r) => setTimeout(r, 20));
+  });
+
+  it('clearChannelUnread on a channel with no recorded count short-circuits the count map', async () => {
+    const getState = await mountUnread();
+    // Never marked → not in the count map; the `!prev.has(id)` early-return
+    // arm fires for setChannelUnreadCounts.
+    getState().clearChannelUnread('ch-no-count');
+    await vi.waitFor(() => expect(getState().unreadChannels.has('ch-no-count')).toBe(false));
+  });
+
+  it('setActiveConversation clears an existing live count for that conversation', async () => {
+    const getState = await mountUnread();
+    getState().markConversationUnread('conv-count');
+    await vi.waitFor(() => expect(getState().conversationUnreadCounts.has('conv-count')).toBe(true));
+    // Activating with a recorded count → the `prev.has(id)` true arm deletes it.
+    getState().setActiveConversation('conv-count');
+    await vi.waitFor(() => expect(getState().conversationUnreadCounts.has('conv-count')).toBe(false));
+  });
+
+  it('thread-seen event for an unknown thread id is a no-op (has-false arm)', async () => {
+    const getState = await mountUnread();
+    // No matching unreadThreadNotification → `!prev.has(threadRootID)` returns
+    // the previous set unchanged.
+    window.dispatchEvent(new CustomEvent('ex:thread-seen-changed', { detail: { threadRootID: 'thr-unknown' } }));
+    await new Promise((r) => setTimeout(r, 10));
+    expect(getState().unreadThreadNotifications.has('thr-unknown')).toBe(false);
+  });
+
   it('clearConversationUnread on a conversation with no recorded count is a no-op for the count map', async () => {
     const getState = await mountUnread();
     // Never marked → not in the unread set nor the count map; clear short-

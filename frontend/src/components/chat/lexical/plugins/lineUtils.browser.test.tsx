@@ -9,6 +9,7 @@ import {
   type RangeSelection,
 } from 'lexical';
 import { $readCurrentLineText, $currentLineIsEmpty } from './lineUtils';
+import { MentionNode, $createMentionNode } from '../nodes/MentionNode';
 
 // lineUtils is excluded from the jsdom gate, so its branch coverage lives in
 // the browser gate. These tests drive the helpers with a headless Lexical
@@ -108,5 +109,34 @@ describe('lineUtils (browser)', () => {
       text = $readCurrentLineText(selAt(keys.para, 0, 'element'));
     });
     expect(text).toBe('');
+  });
+
+  it('skips a non-TextNode sibling (decorator mention) while walking back', () => {
+    // A paragraph "before " [MentionNode] "after": when reading from a caret in
+    // "after", the walk-back hits the MentionNode (not a TextNode), exercising
+    // the `if ($isTextNode(prev))` false side in both $readCurrentLineText and
+    // $currentLineIsEmpty.
+    const editor = createEditor({ namespace: 'lineutils-mention', nodes: [MentionNode], onError: (e) => { throw e; } });
+    let text = 'unset';
+    let empty = true;
+    editor.update(() => {
+      const root = $getRoot();
+      root.clear();
+      const para = $createParagraphNode();
+      const before = $createTextNode('before ');
+      const mention = $createMentionNode('u-1', 'Alice');
+      const after = $createTextNode('after');
+      para.append(before, mention, after);
+      root.append(para);
+      const sel = $createRangeSelection();
+      sel.anchor.set(after.getKey(), 5, 'text');
+      sel.focus.set(after.getKey(), 5, 'text');
+      text = $readCurrentLineText(sel);
+      empty = $currentLineIsEmpty(sel);
+    }, { discrete: true });
+    // The mention contributes no text to the walked line; "before " precedes it.
+    expect(text).toContain('after');
+    expect(text).toContain('before');
+    expect(empty).toBe(false);
   });
 });

@@ -35,4 +35,29 @@ describe('EmojiGlyph browser behaviour', () => {
     const span = document.querySelector('span[title=":smile:"]') as HTMLSpanElement;
     expect(span.className).toMatch(/text-\[64px\]/);
   });
+
+  it('uses the lg size classes when size="lg"', async () => {
+    await render(<EmojiGlyph emoji=":smile:" size="lg" />);
+    const span = document.querySelector('span[title=":smile:"]') as HTMLSpanElement;
+    // lg maps the text glyph to the 22px ramp step.
+    expect(span.className).toMatch(/text-\[22px\]/);
+  });
+
+  it('uses the lg image class for a custom emoji when size="lg"', async () => {
+    await render(
+      <EmojiGlyph emoji=":custom_party:" size="lg" customMap={{ custom_party: 'https://cdn.test/p.png' }} />,
+    );
+    const img = document.querySelector('img[alt=":custom_party:"]') as HTMLImageElement;
+    expect(img.className).toMatch(/h-\[22px\]/);
+  });
+
+  it('keeps the raw toned shortcode when its base is an unknown shortcode', async () => {
+    // `:notarealemoji:` has no unicode mapping, so shortcodeToUnicode
+    // returns the base unchanged → the `unicode === base` arm keeps the
+    // original toned string verbatim rather than applying a skin tone.
+    await render(<EmojiGlyph emoji=":notarealemoji::skin-tone-3:" />);
+    const span = document.querySelector('span[title=":notarealemoji::skin-tone-3:"]') as HTMLSpanElement;
+    expect(span).not.toBeNull();
+    expect(span.textContent).toBe(':notarealemoji::skin-tone-3:');
+  });
 });

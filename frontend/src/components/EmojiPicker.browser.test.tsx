@@ -6,10 +6,13 @@ import { EmojiPicker } from './EmojiPicker';
 // Browser coverage for EmojiPicker — exercises trigger, search,
 // category switching, and skin-tone selection paths.
 
-vi.mock('@/hooks/useEmoji', () => ({
-  useEmojis: () => ({ data: [
+const customEmojiData = vi.hoisted(() => ({
+  value: [
     { name: 'partyparrot', imageURL: 'https://emoji.test/parrot.gif', createdBy: 'u-1', createdAt: '2026-05-01T10:00:00Z' },
-  ] }),
+  ] as unknown,
+}));
+vi.mock('@/hooks/useEmoji', () => ({
+  useEmojis: () => ({ data: customEmojiData.value }),
   useEmojiMap: () => ({ data: { partyparrot: 'https://emoji.test/parrot.gif' } }),
 }));
 
@@ -21,16 +24,19 @@ vi.mock('@/lib/api', () => ({
 }));
 
 const setAuthMock = vi.hoisted(() => vi.fn());
+const authUserRef = vi.hoisted(() => ({
+  value: { id: 'u-1', email: 'a@x.com', displayName: 'Alice', systemRole: 'admin', status: 'active', emojiSkinTone: '' } as Record<string, unknown> | null,
+}));
 vi.mock('@/context/AuthContext', () => {
-  const state = {
-    user: { id: 'u-1', email: 'a@x.com', displayName: 'Alice', systemRole: 'admin', status: 'active', emojiSkinTone: '' },
+  const makeState = () => ({
+    user: authUserRef.value,
     isAuthenticated: true,
     isLoading: false,
     setAuth: setAuthMock,
-  };
+  });
   return {
-    useAuth: () => state,
-    useOptionalAuth: () => state,
+    useAuth: () => makeState(),
+    useOptionalAuth: () => makeState(),
     AuthContext: { Provider: ({ children }: { children: React.ReactNode }) => <>{children}</> },
   };
 });
@@ -165,6 +171,107 @@ describe('EmojiPicker browser', () => {
     const { screen } = await openPicker();
     await screen.getByLabelText('Search emojis').fill('zzzzqqqx');
     await expect.element(screen.getByText('No emojis found')).toBeVisible();
+  });
+
+  it('shows an empty custom grid when the custom emoji list is undefined', async () => {
+    customEmojiData.value = undefined;
+    try {
+      const { screen } = await openPicker();
+      // filteredCustom returns [] via `if (!customEmojis) return []`.
+      await screen.getByLabelText('Search emojis').fill('parrot');
+      await new Promise((r) => setTimeout(r, 30));
+      // No custom tiles render; no throw.
+      expect(document.querySelector('[aria-label="Search emojis"]')).not.toBeNull();
+    } finally {
+      customEmojiData.value = [
+        { name: 'partyparrot', imageURL: 'https://emoji.test/parrot.gif', createdBy: 'u-1', createdAt: '2026-05-01T10:00:00Z' },
+      ];
+    }
+  });
+
+  it('skips the skin-tone profile sync when there is no signed-in user', async () => {
+    authUserRef.value = null;
+    try {
+      const { screen } = await openPicker();
+      // The effect's `if (!user) return` arm runs; the picker still renders.
+      expect(document.querySelector('[aria-label="Search emojis"]')).not.toBeNull();
+      void screen;
+    } finally {
+      authUserRef.value = { id: 'u-1', email: 'a@x.com', displayName: 'Alice', systemRole: 'admin', status: 'active', emojiSkinTone: '' };
+    }
+  });
+
+  it('treats a colon-only search as an empty query (rank short-circuit)', async () => {
+    const { screen } = await openPicker();
+    // ':' normalizes to '' so emojiSearchRank hits the `if (!q) return 0` arm
+    // for every entry — the grid stays populated rather than filtered.
+    await screen.getByLabelText('Search emojis').fill(':');
+    await vi.waitFor(() => expect(document.querySelector('[data-testid="emoji-picker-tile"]')).not.toBeNull());
+  });
+
+  it('defaults the skin tone to empty when the user has no stored preference', async () => {
+    // emojiSkinTone undefined → `user?.emojiSkinTone ?? ''` takes the `?? ''` arm
+    // for both the initial state and the profile-sync effect.
+    authUserRef.value = { id: 'u-1', email: 'a@x.com', displayName: 'Alice', systemRole: 'admin', status: 'active' };
+    const { screen } = await openPicker();
+    const def = within(screen.getByRole('radiogroup', { name: 'Emoji skin tone' }).element())
+      .querySelectorAll('[role="radio"][aria-checked="true"]');
+    expect(def.length).toBe(1);
+    authUserRef.value = { id: 'u-1', email: 'a@x.com', displayName: 'Alice', systemRole: 'admin', status: 'active', emojiSkinTone: '' };
+  });
+
+  it('syncs the skin tone from the profile when it changes while the picker is open', async () => {
+    // Reopening after the user's stored skin tone changes drives the effect's
+    // "profile tone differs from the last-applied tone" branch (queueMicrotask
+    // setSkinTone), rather than the early-return equal branch.
+    authUserRef.value = { id: 'u-1', email: 'a@x.com', displayName: 'Alice', systemRole: 'admin', status: 'active', emojiSkinTone: '' };
+    const screen = await render(<Wrap><EmojiPicker onSelect={vi.fn()} /></Wrap>);
+    const trigger = screen.getByLabelText('Open emoji picker');
+    await trigger.click();
+    await vi.waitFor(() => expect(document.querySelector('[aria-label="Search emojis"]')).not.toBeNull());
+    if (window.innerWidth >= 768) {
+      await trigger.click(); // close
+      authUserRef.value = { id: 'u-1', email: 'a@x.com', displayName: 'Alice', systemRole: 'admin', status: 'active', emojiSkinTone: 'dark' };
+      await trigger.click(); // reopen with a new tone
+      await vi.waitFor(() => {
+        const dark = document.querySelector('[role="radio"][aria-checked="true"]');
+        expect(dark).not.toBeNull();
+      });
+    }
+    authUserRef.value = { id: 'u-1', email: 'a@x.com', displayName: 'Alice', systemRole: 'admin', status: 'active', emojiSkinTone: '' };
+  });
+
+  it('ranks exact-name, startsWith, includes, and fuzzy search hits', async () => {
+    const { screen } = await openPicker();
+    const input = screen.getByLabelText('Search emojis');
+    // Exact name (rank 0).
+    await input.fill('grin_face');
+    await vi.waitFor(() => expect(document.querySelector('[data-testid="emoji-picker-tile"]')).not.toBeNull());
+    // startsWith (rank 1).
+    await input.fill('grin');
+    await vi.waitFor(() => expect(document.querySelector('[data-testid="emoji-picker-tile"]')).not.toBeNull());
+    // includes (rank 2).
+    await input.fill('face');
+    await vi.waitFor(() => expect(document.querySelector('[data-testid="emoji-picker-tile"]')).not.toBeNull());
+    // fuzzy subsequence (rank 4) — "gace" is a subsequence of grin_face but
+    // not a substring, so it only matches via fuzzyMatch.
+    await input.fill('gace');
+    await vi.waitFor(() => expect(document.querySelector('[data-testid="emoji-picker-tile"]')).not.toBeNull());
+  });
+
+  it('renders the Custom tab heading and custom-only grid with no search query', async () => {
+    const { screen } = await openPicker();
+    const customTab = Array.from(document.querySelectorAll('[data-testid="emoji-category-tab"]'))
+      .find((t) => (t as HTMLElement).getAttribute('data-category') === 'custom') as HTMLElement | undefined;
+    expect(customTab).toBeDefined();
+    customTab!.click();
+    // No query + custom category → header reads "Custom", the grid is labelled
+    // "Custom emojis", and filteredCustom returns the full custom list.
+    await expect.element(screen.getByText('Custom')).toBeVisible();
+    await vi.waitFor(() => {
+      expect(document.querySelector('[aria-label="Custom emojis"]')).not.toBeNull();
+      expect(document.querySelector('[data-testid="emoji-picker-tile"]')).not.toBeNull();
+    });
   });
 
   it('shows the custom emoji when the custom category is selected', async () => {

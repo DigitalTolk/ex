@@ -70,6 +70,20 @@ describe('PasteFilesPlugin (browser)', () => {
     expect(onPaste).not.toHaveBeenCalled();
   });
 
+  it('routes files even when the event has no preventDefault method', async () => {
+    // Exercises the `typeof event.preventDefault === 'function'` false side:
+    // a synthetic event object that carries clipboard items but no
+    // preventDefault still forwards the files.
+    const onPaste = vi.fn();
+    const editor = await mount(onPaste);
+    const noPreventDefault = {
+      clipboardData: { items: [{ kind: 'file', getAsFile: () => aFile }] },
+    } as unknown as ClipboardEvent;
+    editor.dispatchCommand(PASTE_COMMAND, noPreventDefault);
+    expect(onPaste).toHaveBeenCalledTimes(1);
+    expect(onPaste.mock.calls[0][0]).toEqual([aFile]);
+  });
+
   it('does not register the command when no callback is provided', async () => {
     // Mounting without onPasteFiles exercises the early-return guard; the
     // command simply isn't registered, so a paste is a no-op here.

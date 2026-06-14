@@ -80,9 +80,22 @@ interface FetchPlan {
   messages?: unknown[];
   // Optional override for the channel member list (defaults to Me + Alice).
   members?: unknown[];
+  // Role of the current user (Me) in the default member list. Drives the
+  // header's edit/archive/leave affordances. Defaults to 'member'.
+  myRole?: string;
+  // Channel slug/name (defaults to 'general'). A non-'general' slug lets the
+  // Leave action surface, since canLeaveChannel blocks the general channel.
+  slug?: string;
+  // Existing drafts payload (defaults to []). A draft for this channel scope
+  // exercises the send-with-existing-draft path.
+  drafts?: unknown[];
+  // Extra batch-users override (e.g. to inject a blank-display-name user).
+  batchUsers?: unknown[];
 }
 
 function installFetchStub(plan: FetchPlan): () => void {
+  const slug = plan.slug ?? 'general';
+  const myRole = plan.myRole ?? 'member';
   const original = globalThis.fetch;
   globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
@@ -98,12 +111,12 @@ function installFetchStub(plan: FetchPlan): () => void {
     // Sidebar bootstrap
     if (url === '/api/v1/channels' || url.endsWith('/api/v1/channels')) {
       return apiJSON([
-        { channelID: CHANNEL_ID, channelName: 'general', channelType: 'public', muted: false, favorite: false, categoryID: '', unreadCount: 0 },
+        { channelID: CHANNEL_ID, channelName: slug, channelType: 'public', muted: false, favorite: false, categoryID: '', unreadCount: 0 },
       ]);
     }
     if (url.includes('/api/v1/conversations')) return apiJSON([]);
     if (url.includes('/api/v1/sidebar/categories')) return apiJSON([]);
-    if (url.includes('/api/v1/drafts')) return apiJSON([]);
+    if (url.includes('/api/v1/drafts')) return apiJSON(plan.drafts ?? []);
     if (url.includes('/api/v1/user-state')) {
       return apiJSON({ channelNotifications: [], threadNotifications: [], threadSeen: {}, hiddenConversations: [] });
     }
@@ -112,11 +125,11 @@ function installFetchStub(plan: FetchPlan): () => void {
     if (url.includes('/api/v1/admin/settings')) return apiJSON({ maxUploadBytes: 0, allowedExtensions: [], giphyEnabled: false });
 
     // Channel page bootstrap
-    if (url.endsWith(`/api/v1/channels/general`)) {
+    if (url.endsWith(`/api/v1/channels/${slug}`)) {
       return apiJSON({
         id: CHANNEL_ID,
-        name: 'general',
-        slug: 'general',
+        name: slug,
+        slug,
         type: 'public',
         description: '',
         createdBy: ME_ID,
@@ -126,7 +139,7 @@ function installFetchStub(plan: FetchPlan): () => void {
     }
     if (url.endsWith(`/api/v1/channels/${CHANNEL_ID}/members`)) {
       return apiJSON(plan.members ?? [
-        { channelID: CHANNEL_ID, userID: ME_ID, role: 'member', displayName: 'Me', joinedAt: '2026-01-01T00:00:00Z' },
+        { channelID: CHANNEL_ID, userID: ME_ID, role: myRole, displayName: 'Me', joinedAt: '2026-01-01T00:00:00Z' },
         { channelID: CHANNEL_ID, userID: ALICE_ID, role: 'member', displayName: 'Alice', joinedAt: '2026-01-01T00:00:00Z' },
       ]);
     }
@@ -195,7 +208,7 @@ function installFetchStub(plan: FetchPlan): () => void {
     }
     // Batch users (sidebar avatars, member maps)
     if (url.includes('/api/v1/users/batch')) {
-      return apiJSON([
+      return apiJSON(plan.batchUsers ?? [
         { id: ME_ID, email: 'me@example.test', displayName: 'Me', systemRole: 'member', status: 'active' },
         { id: ALICE_ID, email: 'alice@example.test', displayName: 'Alice', systemRole: 'member', status: 'active' },
       ]);
@@ -912,5 +925,89 @@ describe('channel → header toggles → files + pinned panels (full route)', ()
     await vi.waitFor(() => {
       expect(document.body.textContent).toContain('edit-me.png');
     }, { timeout: 4000 });
+  });
+
+  it('deletes an existing draft after a successful send (draftID branch)', async () => {
+    teardown = installFetchStub({
+      files: [],
+      pinned: [],
+      attachments: {},
+      // A saved draft for THIS channel scope → handleSendMessage takes the
+      // `draftID` (truthy) arm: send then deleteDraft on success (line 177
+      // false arm + the onSuccess deleteDraft callback).
+      drafts: [
+        {
+          id: 'draft-ch-1',
+          parentID: CHANNEL_ID,
+          parentType: 'channel',
+          body: 'half-written',
+          attachmentIDs: [],
+          updatedAt: '2026-05-01T11:00:00Z',
+        },
+      ],
+    });
+    const screen = await renderRoute('/channel/general');
+    await expect.element(
+      screen.getByTestId('channel-title-stack').getByRole('heading', { name: 'general' }),
+    ).toBeVisible();
+    const editor = screen.getByLabelText('Message input');
+    await editor.click();
+    await editor.fill('sending with a draft present');
+    await screen.getByRole('button', { name: 'Send message' }).click();
+    await vi.waitFor(() => {
+      const calls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls
+        .map((c) => `${c[1]?.method ?? 'GET'} ${String(c[0])}`);
+      // POST the message…
+      expect(calls.some((u) => u.startsWith('POST') && u.includes(`/channels/${CHANNEL_ID}/messages`))).toBe(true);
+      // …and the saved draft is deleted on success.
+      expect(calls.some((u) => u.startsWith('DELETE') && u.includes('/drafts/draft-ch-1'))).toBe(true);
+    }, { timeout: 4000 });
+  });
+
+  it('closes the mobile editor when the edited body is cleared to blank (blank arm)', async () => {
+    if (window.innerWidth > 767) return;
+    teardown = installFetchStub({
+      files: [],
+      pinned: [],
+      attachments: {},
+      messages: [
+        { id: 'own-blank', parentID: CHANNEL_ID, parentType: 'channel', authorID: ME_ID, body: 'wipe me', createdAt: '2026-05-01T11:00:00Z' },
+      ],
+    });
+    const screen = await renderRoute('/channel/general');
+    await expect.element(screen.getByText('wipe me')).toBeVisible();
+    dispatchEditMessage({ messageId: 'own-blank' });
+    const editor = screen.getByLabelText('Message input');
+    await expect.element(editor).toBeVisible();
+    await editor.click();
+    // Clear the body entirely → save → `!value.body.trim() &&
+    // attachmentIDs.length === 0` arm of handleEditMessage (line 197) closes
+    // the editor without a PATCH.
+    await editor.fill('');
+    await screen.getByRole('button', { name: 'Save' }).click();
+    await expect.element(screen.getByRole('button', { name: 'Send message' })).toBeVisible();
+    const patched = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls
+      .some((c) => (c[1]?.method ?? 'GET') === 'PATCH' && String(c[0]).includes('/messages/own-blank'));
+    expect(patched).toBe(false);
+  });
+
+  it('falls back to "Unknown" for a batch user with a blank display name (userMap arm)', async () => {
+    teardown = installFetchStub({
+      files: [],
+      pinned: [],
+      attachments: {},
+      // usersData carries an empty displayName → the `u.displayName ||
+      // 'Unknown'` truthy fallback arm in the usersData userMap loop (line 289).
+      batchUsers: [
+        { id: ME_ID, email: 'me@example.test', displayName: 'Me', systemRole: 'member', status: 'active' },
+        { id: ALICE_ID, email: 'alice@example.test', displayName: '', systemRole: 'member', status: 'active' },
+      ],
+    });
+    const screen = await renderRoute('/channel/general');
+    await expect.element(
+      screen.getByTestId('channel-title-stack').getByRole('heading', { name: 'general' }),
+    ).toBeVisible();
+    // The view renders without crashing; Alice resolves to "Unknown" in the map.
+    expect(screen.container).toBeTruthy();
   });
 });

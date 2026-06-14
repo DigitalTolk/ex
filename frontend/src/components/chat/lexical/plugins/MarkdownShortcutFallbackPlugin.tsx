@@ -87,6 +87,7 @@ export function MarkdownShortcutFallbackPlugin() {
         const previousSibling = textNode.getPreviousSibling();
         const isFirstChild = paragraph.getFirstChild() === textNode;
         const afterLineBreak = $isLineBreakNode(previousSibling);
+        /* istanbul ignore next -- a text node that is neither the paragraph's first child nor preceded by a LineBreakNode requires two adjacent un-merged text nodes, a state Lexical normalizes away (adjacent text nodes always merge), so this guard's true arm is not reachable. */
         if (!isFirstChild && !afterLineBreak) return;
 
         const textContent = textNode.getTextContent();
@@ -119,6 +120,7 @@ export function MarkdownShortcutFallbackPlugin() {
           const previousSibling = anchorNode.getPreviousSibling();
           const isFirstChild = paragraph.getFirstChild() === anchorNode;
           const afterLineBreak = $isLineBreakNode(previousSibling);
+          /* istanbul ignore next -- mirrors the transform guard above: an anchor text node that is neither first child nor after a LineBreakNode requires un-merged adjacent text nodes, which Lexical normalizes away, so this true arm is unreachable. */
           if (!isFirstChild && !afterLineBreak) return false;
 
           const converted = convertOpeningFenceToCodeBlock(
@@ -143,6 +145,7 @@ export function MarkdownShortcutFallbackPlugin() {
 
           const currentSelection = $getSelection();
           const selection = $isRangeSelection(currentSelection) ? currentSelection : $getRoot().selectEnd();
+          /* istanbul ignore next -- selection is either the existing RangeSelection or $getRoot().selectEnd(), which always yields a RangeSelection, so this re-check's true arm is unreachable defensive code. */
           if (!$isRangeSelection(selection)) return false;
           const codeNode = createCodeNodeFromText(match[2], match[1]);
           const anchor = selection.anchor.getNode();

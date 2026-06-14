@@ -233,6 +233,16 @@ describe('WysiwygEditor browser plugin coverage', () => {
     expect(ref.current).not.toBeNull();
   });
 
+  it('applies the empty-string default when initialBody is omitted', async () => {
+    // No initialBody prop at all → the `initialBody = ''` default
+    // parameter (line 87) executes, which the other tests never hit
+    // because they always pass an explicit initialBody.
+    const { ref } = await mountEditor({ placeholder: 'Type here' });
+    expect(ref.current).not.toBeNull();
+    expect(ref.current!.getMarkdown().trim()).toBe('');
+    expect(document.body.textContent).toContain('Type here');
+  });
+
   function selectAllEditorContent(el: HTMLElement) {
     const range = document.createRange();
     range.selectNodeContents(el);

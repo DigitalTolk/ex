@@ -77,6 +77,7 @@ export function MemberList({ members, channelId, currentUserId, currentUserRole,
   }
 
   async function handleAdd(user: SearchUser) {
+    /* istanbul ignore next -- the Add button is only rendered when canManage is true, which requires a defined channelId, so handleAdd is never invoked without one; this guard is defensive. */
     if (!channelId) return;
     setError('');
     setPendingId(user.id);

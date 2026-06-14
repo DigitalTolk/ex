@@ -13,6 +13,7 @@ export function LineBoundaryNavigationPlugin() {
 
   useEffect(() => {
     const rootElement = editor.getRootElement();
+    /* istanbul ignore next -- the effect runs after the editor has mounted its root element, so getRootElement is never null here; defensive guard. */
     if (!rootElement) return undefined;
 
     const onKeyDown = (event: KeyboardEvent) => {

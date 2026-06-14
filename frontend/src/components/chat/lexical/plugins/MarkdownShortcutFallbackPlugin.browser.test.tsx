@@ -5,9 +5,9 @@ import { RichTextPlugin } from '@lexical/react/LexicalRichTextPlugin';
 import { ContentEditable } from '@lexical/react/LexicalContentEditable';
 import { LexicalErrorBoundary } from '@lexical/react/LexicalErrorBoundary';
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext';
-import { HeadingNode, QuoteNode } from '@lexical/rich-text';
+import { HeadingNode, QuoteNode, $createQuoteNode } from '@lexical/rich-text';
 import { ListNode, ListItemNode } from '@lexical/list';
-import { CodeNode, CodeHighlightNode } from '@lexical/code';
+import { CodeNode, CodeHighlightNode, $createCodeNode } from '@lexical/code';
 import { LinkNode } from '@lexical/link';
 import {
   $getRoot,
@@ -254,5 +254,150 @@ describe('MarkdownShortcutFallbackPlugin (browser)', () => {
     editor.dispatchCommand(PASTE_COMMAND, { clipboardData: null, preventDefault: () => {} } as unknown as ClipboardEvent);
     await flush();
     expect(firstChildType(editor)).toBe('paragraph');
+  });
+
+  it('does not transform a trigger inside a nested paragraph (grandparent not root)', async () => {
+    // The "> " text lives in a paragraph nested in a quote, so the transform's
+    // `$isRootOrShadowRoot(grandparent)` guard fails and nothing converts.
+    const editor = await mount();
+    editor.update(() => {
+      const root = $getRoot();
+      root.clear();
+      const quote = $createQuoteNode();
+      const para = $createParagraphNode();
+      const t = $createTextNode('> ');
+      para.append(t);
+      quote.append(para);
+      root.append(quote);
+      t.select(2, 2);
+    }, { discrete: true });
+    await flush();
+    // The outer quote is still a quote, but no NEW quote was produced from "> ".
+    expect(firstChildType(editor)).toBe('quote');
+  });
+
+  it('does not transform a trigger that is neither the first child nor after a break', async () => {
+    // A leading text node, then the "> " node — the trigger is the SECOND child
+    // with no preceding line break, so `!isFirstChild && !afterLineBreak` bails.
+    const editor = await mount();
+    editor.update(() => {
+      const root = $getRoot();
+      root.clear();
+      const para = $createParagraphNode();
+      para.append($createTextNode('lead'));
+      const t = $createTextNode('> ');
+      para.append(t);
+      root.append(para);
+      t.select(2, 2);
+    }, { discrete: true });
+    await flush();
+    expect(firstChildType(editor)).toBe('paragraph');
+  });
+
+  it('does not transform when the trigger text has trailing content beyond the match', async () => {
+    // "> more " matches the quote regExp at index 0 but `match[0].length !==
+    // textContent.length`, so the conservative continue-skip keeps it plain.
+    const editor = await mount();
+    seedParagraph(editor, '> more ');
+    await flush();
+    expect(firstChildType(editor)).toBe('paragraph');
+  });
+
+  it('does not convert on Enter when the caret is in an element node (no text anchor)', async () => {
+    // Empty paragraph: the anchor is the paragraph element, so the Enter
+    // handler's `!$isTextNode(anchorNode)` true side returns false.
+    const editor = await mount();
+    editor.update(() => {
+      const root = $getRoot();
+      root.clear();
+      const para = $createParagraphNode();
+      root.append(para);
+      para.selectEnd();
+    }, { discrete: true });
+    editor.dispatchCommand(KEY_ENTER_COMMAND, { preventDefault: () => {} } as unknown as KeyboardEvent);
+    await flush();
+    expect(firstChildType(editor)).toBe('paragraph');
+  });
+
+  it('does not convert on Enter when the fence text is not inside a paragraph', async () => {
+    // Put the fence text directly in a quote node so the Enter handler's
+    // `!$isParagraphNode(paragraph)` true side returns false.
+    const editor = await mount();
+    editor.update(() => {
+      const root = $getRoot();
+      root.clear();
+      const quote = $createQuoteNode();
+      const t = $createTextNode('```');
+      quote.append(t);
+      root.append(quote);
+      t.select(3, 3);
+    }, { discrete: true });
+    editor.dispatchCommand(KEY_ENTER_COMMAND, { preventDefault: () => {} } as unknown as KeyboardEvent);
+    await flush();
+    expect(firstChildType(editor)).toBe('quote');
+  });
+
+  it('does not convert on Enter when the fence is a nested paragraph (grandparent not root)', async () => {
+    // Fence text in a paragraph nested under a quote → the Enter handler's
+    // grandparent root check fails.
+    const editor = await mount();
+    editor.update(() => {
+      const root = $getRoot();
+      root.clear();
+      const quote = $createQuoteNode();
+      const para = $createParagraphNode();
+      const t = $createTextNode('```');
+      para.append(t);
+      quote.append(para);
+      root.append(quote);
+      t.select(3, 3);
+    }, { discrete: true });
+    editor.dispatchCommand(KEY_ENTER_COMMAND, { preventDefault: () => {} } as unknown as KeyboardEvent);
+    await flush();
+    // No top-level code block was created.
+    expect(firstChildType(editor)).toBe('quote');
+  });
+
+  it('does not convert on Enter when the fence is neither first child nor after a break', async () => {
+    // A leading text node before the fence in the same paragraph → the Enter
+    // handler's `!isFirstChild && !afterLineBreak` bails.
+    const editor = await mount();
+    editor.update(() => {
+      const root = $getRoot();
+      root.clear();
+      const para = $createParagraphNode();
+      para.append($createTextNode('x'));
+      const t = $createTextNode('```');
+      para.append(t);
+      root.append(para);
+      t.select(3, 3);
+    }, { discrete: true });
+    editor.dispatchCommand(KEY_ENTER_COMMAND, { preventDefault: () => {} } as unknown as KeyboardEvent);
+    await flush();
+    expect(firstChildType(editor)).toBe('paragraph');
+  });
+
+  it('ignores a fenced-code paste when the caret is not inside a paragraph', async () => {
+    // Caret inside a code node: the paste handler's `paragraph` resolution
+    // yields a non-paragraph, so `!$isParagraphNode(paragraph)` returns false.
+    const editor = await mount();
+    editor.update(() => {
+      const root = $getRoot();
+      root.clear();
+      const code = $createCodeNode();
+      const t = $createTextNode('existing');
+      code.append(t);
+      root.append(code);
+      t.select(8, 8);
+    }, { discrete: true });
+    await flush();
+    editor.dispatchCommand(PASTE_COMMAND, pasteEvent('```\nignored\n```'));
+    await flush();
+    // The original single code node is unchanged — no extra block was inserted.
+    let codeCount = 0;
+    editor.getEditorState().read(() => {
+      for (const c of $getRoot().getChildren()) if (c.getType() === 'code') codeCount++;
+    });
+    expect(codeCount).toBe(1);
   });
 });

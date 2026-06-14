@@ -52,6 +52,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
 // is a no-op since there is nobody to persist into.
 const fallbackTheme: ThemeState = {
   get theme(): Theme {
+    /* istanbul ignore next -- SSR guard: this browser-only app always has document; the typeof===undefined arm is unreachable under test */
     if (typeof document === 'undefined') return 'system';
     return document.documentElement.classList.contains('dark') ? 'dark' : 'light';
   },

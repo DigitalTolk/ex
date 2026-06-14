@@ -34,6 +34,7 @@ export function PasteLinkPlugin() {
           const sel = $getSelection();
           if (!$isRangeSelection(sel)) return;
           if (sel.isCollapsed()) return;
+          /* istanbul ignore next -- a non-collapsed range that yields empty text requires a selection spanning only zero-length element content, which Lexical normalizes to a collapsed caret, so this guard's true arm is not reachable. */
           if (sel.getTextContent().length === 0) return;
           claimed = true;
         });

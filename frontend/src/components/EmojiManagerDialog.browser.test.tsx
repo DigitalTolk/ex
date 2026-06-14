@@ -9,18 +9,22 @@ import { EmojiManagerDialog } from './EmojiManagerDialog';
 
 const uploadMutate = vi.fn().mockResolvedValue(undefined);
 const deleteMutate = vi.fn().mockResolvedValue(undefined);
-let mockEmojis: Array<{ name: string; imageURL: string; createdBy: string; createdAt: string }> = [];
+let mockEmojis: Array<{ name: string; imageURL: string; createdBy: string; createdAt: string }> | undefined = [];
+const uploadPendingRef = { value: false };
 
 vi.mock('@/hooks/useEmoji', () => ({
   // The component awaits mutateAsync, so expose that shape.
   useEmojis: () => ({ data: mockEmojis }),
-  useUploadEmoji: () => ({ mutateAsync: uploadMutate, isPending: false }),
+  useUploadEmoji: () => ({ mutateAsync: uploadMutate, isPending: uploadPendingRef.value }),
   useDeleteEmoji: () => ({ mutateAsync: deleteMutate, isPending: false }),
 }));
 
+const authUserRef = {
+  value: { id: 'u-1', email: 'a@x.com', displayName: 'Alice', systemRole: 'admin', status: 'active' } as Record<string, unknown>,
+};
 vi.mock('@/context/AuthContext', () => ({
   useAuth: () => ({
-    user: { id: 'u-1', email: 'a@x.com', displayName: 'Alice', systemRole: 'admin', status: 'active' },
+    user: authUserRef.value,
     isAuthenticated: true,
     isLoading: false,
   }),
@@ -70,6 +74,8 @@ describe('EmojiManagerDialog browser', () => {
     killAnims = null;
     deleteMutate.mockClear();
     uploadMutate.mockClear();
+    uploadPendingRef.value = false;
+    authUserRef.value = { id: 'u-1', email: 'a@x.com', displayName: 'Alice', systemRole: 'admin', status: 'active' };
   });
 
   it('does not render when closed', async () => {
@@ -200,6 +206,112 @@ describe('EmojiManagerDialog browser', () => {
       expect((nameInput.element() as HTMLInputElement).value).toBe('');
       expect(document.querySelector('button[aria-label="Remove image"]')).toBeNull();
     });
+  });
+
+  it('renders the empty state and a (0) count when the emoji list is undefined', async () => {
+    // emojis undefined → `emojis?.length ?? 0` and `(emojis ?? []).map` take
+    // their `?? 0` / `?? []` arms.
+    mockEmojis = undefined;
+    const screen = await mount(
+      <Wrap><EmojiManagerDialog open onOpenChange={vi.fn()} /></Wrap>,
+    );
+    await expect.element(screen.getByText(/No custom emojis yet/)).toBeVisible();
+    expect(document.body.textContent).toContain('(0)');
+    mockEmojis = [];
+  });
+
+  it('clears a name-only draft (no image) without revoking a preview URL', async () => {
+    mockEmojis = [];
+    const screen = await mount(
+      <Wrap><EmojiManagerDialog open onOpenChange={vi.fn()} /></Wrap>,
+    );
+    const nameInput = screen.getByLabelText('Emoji shortcode');
+    await nameInput.fill('just_a_name');
+    // Clear with a name but no file → reset() runs with previewURL null, taking
+    // the `if (previewURL)` false arm.
+    await screen.getByRole('button', { name: 'Clear' }).click();
+    await vi.waitFor(() => expect((nameInput.element() as HTMLInputElement).value).toBe(''));
+  });
+
+  it('ignores a file-input change event that carries no file', async () => {
+    mockEmojis = [];
+    await mount(
+      <Wrap><EmojiManagerDialog open onOpenChange={vi.fn()} /></Wrap>,
+    );
+    const input = document.querySelectorAll('input[type="file"]');
+    const fileInput = input[input.length - 1] as HTMLInputElement;
+    // Empty change → `e.target.files?.[0] ?? null` takes the `?? null` arm.
+    fileInput.dispatchEvent(new Event('change', { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 30));
+    expect(document.querySelector('button[aria-label="Remove image"]')).toBeNull();
+  });
+
+  it('lets a non-admin author delete their own custom emoji', async () => {
+    // Non-admin user: canDelete falls through to the `user?.id === createdBy`
+    // arm — true only for their own emoji.
+    authUserRef.value = { id: 'u-2', email: 'b@x.com', displayName: 'Bob', systemRole: 'member', status: 'active' };
+    mockEmojis = [
+      { name: 'mine', imageURL: 'https://emoji.test/mine.png', createdBy: 'u-2', createdAt: '2026-05-01T10:00:00Z' },
+      { name: 'theirs', imageURL: 'https://emoji.test/theirs.png', createdBy: 'u-9', createdAt: '2026-05-01T10:00:00Z' },
+    ];
+    const screen = await mount(
+      <Wrap><EmojiManagerDialog open onOpenChange={vi.fn()} /></Wrap>,
+    );
+    // Own emoji shows a delete button; someone else's does not.
+    await expect.element(screen.getByRole('button', { name: 'Delete :mine:' })).toBeVisible();
+    expect(document.querySelector('button[aria-label="Delete :theirs:"]')).toBeNull();
+  });
+
+  it('shows the pending label and disables Save while an upload is in flight', async () => {
+    uploadPendingRef.value = true;
+    mockEmojis = [];
+    const screen = await mount(
+      <Wrap><EmojiManagerDialog open onOpenChange={vi.fn()} /></Wrap>,
+    );
+    await pickFile();
+    await screen.getByLabelText('Emoji shortcode').fill('busy_one');
+    await expect.element(screen.getByRole('button', { name: 'Saving...' })).toBeDisabled();
+  });
+
+  it('closes the confirm dialog without deleting when cancelled', async () => {
+    mockEmojis = [
+      { name: 'partyparrot', imageURL: 'https://emoji.test/parrot.gif', createdBy: 'u-1', createdAt: '2026-05-01T10:00:00Z' },
+    ];
+    const screen = await mount(
+      <Wrap><EmojiManagerDialog open onOpenChange={vi.fn()} /></Wrap>,
+    );
+    await screen.getByRole('button', { name: 'Delete :partyparrot:' }).click();
+    // Cancel drives ConfirmDialog onOpenChange(false) → setEmojiToDelete(null).
+    await screen.getByTestId('delete-emoji-cancel').click();
+    await vi.waitFor(() => {
+      expect(document.querySelector('[data-testid="delete-emoji"]')).toBeNull();
+    });
+    expect(deleteMutate).not.toHaveBeenCalled();
+  });
+
+  it('falls back to a generic message when the upload rejects with a non-Error', async () => {
+    mockEmojis = [];
+    uploadMutate.mockRejectedValueOnce('weird');
+    const screen = await mount(
+      <Wrap><EmojiManagerDialog open onOpenChange={vi.fn()} /></Wrap>,
+    );
+    await pickFile();
+    await screen.getByLabelText('Emoji shortcode').fill('valid_name');
+    await screen.getByRole('button', { name: 'Save' }).click();
+    await expect.element(screen.getByRole('alert')).toHaveTextContent('Save failed');
+  });
+
+  it('falls back to a generic message when the delete rejects with a non-Error', async () => {
+    mockEmojis = [
+      { name: 'partyparrot', imageURL: 'https://emoji.test/parrot.gif', createdBy: 'u-1', createdAt: '2026-05-01T10:00:00Z' },
+    ];
+    deleteMutate.mockRejectedValueOnce('weird');
+    const screen = await mount(
+      <Wrap><EmojiManagerDialog open onOpenChange={vi.fn()} /></Wrap>,
+    );
+    await screen.getByRole('button', { name: 'Delete :partyparrot:' }).click();
+    await screen.getByRole('button', { name: 'Delete emoji' }).click();
+    await expect.element(screen.getByRole('alert')).toHaveTextContent('Delete failed');
   });
 
   it('surfaces an error when the delete mutation fails', async () => {

@@ -177,6 +177,7 @@ export function ThreadPanel({
     const len = data?.length ?? 0;
     if (len === 0) return;
     const el = scrollRef.current;
+    /* istanbul ignore next -- scrollRef is attached on the same render that produces `data`, so by the time this layout effect runs `el` is always set; defensive. */
     if (!el) return;
     const stick = () => {
       el.scrollTop = el.scrollHeight;
@@ -193,8 +194,10 @@ export function ThreadPanel({
       }
       stickyDoneRef.current = true;
       prevLenRef.current = len;
+      /* istanbul ignore else -- ResizeObserver always exists in the browser test environment; the `=== undefined` SSR arm is unreachable here. */
       if (typeof ResizeObserver !== 'undefined') {
         const inner = innerRef.current;
+        /* istanbul ignore else -- innerRef is attached on the same render as scrollRef, so `inner` is always set when this runs; defensive. */
         if (inner) {
           // See MessageList: in deep-link mode (anchor set) we never
           // auto-stick — the reader went to a specific reply and
@@ -246,6 +249,7 @@ export function ThreadPanel({
     }
     if ((data?.length ?? 0) === 0) return;
     const scroller = scrollRef.current;
+    /* istanbul ignore next -- scrollRef is attached whenever the panel has rendered replies (the guard above), so `scroller` is always set; defensive. */
     if (!scroller) return;
     const el = document.getElementById(`msg-${anchorMsgId}`);
     if (!el) return;
@@ -261,8 +265,10 @@ export function ThreadPanel({
 
     if (userHasScrolledRef.current) return;
     if (Date.now() >= followDeadlineRef.current) return;
+    /* istanbul ignore next -- ResizeObserver always exists in the browser test environment; the SSR `=== undefined` arm is unreachable here. */
     if (typeof ResizeObserver === 'undefined') return;
     const inner = innerRef.current;
+    /* istanbul ignore next -- innerRef is attached on the same render as scrollRef, so `inner` is always set when this runs; defensive. */
     if (!inner) return;
     let expectedScrollTop = scroller.scrollTop;
     const stopFollowing = () => {

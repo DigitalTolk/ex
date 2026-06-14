@@ -145,6 +145,51 @@ describe('useAnimatedSwipeDismiss (browser)', () => {
     scroller.remove();
   });
 
+  it('ignores further swipe motion while a dismissal animation is in flight', async () => {
+    const onDismiss = vi.fn();
+    await render(<Probe direction="right" onDismiss={onDismiss} />);
+    // Commit a dismissal → timeoutRef is set. A subsequent onSwiping then hits
+    // the `if (timeoutRef.current !== null) return` early-out.
+    swipeConfig().onSwipedRight({ absY: 5, deltaX: 100, initial: [10, 100] });
+    await vi.waitFor(() => expect(dismissing()).toBe('true'));
+    swipeConfig().onSwiping({ absX: 60, absY: 5, deltaX: 60, deltaY: 5, initial: [10, 100], event: eventFor() });
+    // Offset stays 0 (the early-out skipped setDragOffset).
+    expect(offset()).toBe('0');
+    await vi.waitFor(() => expect(onDismiss).toHaveBeenCalledTimes(1));
+  });
+
+  it('clears a pending dismissal timeout on unmount', async () => {
+    const onDismiss = vi.fn();
+    const screen = await render(<Probe direction="right" onDismiss={onDismiss} />);
+    // Start the dismissal animation, then unmount before it fires → the effect
+    // cleanup `if (timeoutRef.current !== null) clearTimeout(...)` runs.
+    swipeConfig().onSwipedRight({ absY: 5, deltaX: 100, initial: [10, 100] });
+    await vi.waitFor(() => expect(dismissing()).toBe('true'));
+    await screen.unmount();
+    // The animation timer was cleared, so onDismiss is never invoked.
+    await new Promise((r) => setTimeout(r, 250));
+    expect(onDismiss).not.toHaveBeenCalled();
+  });
+
+  it('onSwiped resets the offset when no dismissal animation is pending', async () => {
+    await render(<Probe direction="right" onDismiss={vi.fn()} />);
+    // Track an offset, then a plain onSwiped (no commit) with no pending
+    // timeout → `if (timeoutRef.current === null) setDragOffset(0)` true side.
+    swipeConfig().onSwiping({ absX: 50, absY: 5, deltaX: 50, deltaY: 5, initial: [10, 100], event: eventFor() });
+    await vi.waitFor(() => expect(transform()).toBe('translateX(50px)'));
+    swipeConfig().onSwiped();
+    await vi.waitFor(() => expect(offset()).toBe('0'));
+  });
+
+  it('treats a downward swipe over a non-Element target as not-scrollable', async () => {
+    await render(<Probe direction="down" onDismiss={vi.fn()} />);
+    // event.target is null → scrollContainerCanMoveUp's `target instanceof
+    // Element` false side runs and the drag proceeds.
+    const event = { target: null, cancelable: true, preventDefault: vi.fn() } as unknown as Event;
+    swipeConfig().onSwiping({ absX: 8, absY: 80, deltaX: 8, deltaY: 80, initial: [120, 120], event });
+    await vi.waitFor(() => expect(transform()).toBe('translateY(80px)'));
+  });
+
   it('bails out of all swipe motion on a desktop-width layout', async () => {
     setMobileMatch(false);
     const onDismiss = vi.fn();

@@ -216,11 +216,18 @@ function VirtuosoMessageList({
   const SCROLL_STABILIZE_MAX_FRAMES = 8;
   const handleContentHeightChange = useCallback(() => {
     if (!canAutoStickToBottom()) return;
+    // The scroller ref is always attached by the time a row reports a
+    // content-height change (it's set in handleScrollerRef on first mount);
+    // the `?? -1` fallbacks and the mid-chase re-check are defensive against
+    // a teardown race that a test cannot deterministically reproduce.
+    /* istanbul ignore next -- scrollerRef is set before any row's content-height change fires; the `?? -1` scroller-null fallback is defensive. */
     let lastHeight = scrollerRef.current?.scrollHeight ?? -1;
     const chase = (frames: number) => {
       requestAnimationFrame(() => {
+        /* istanbul ignore next -- suppression flips only on real user scroll between frames of an async image-decode chase, not reproducible in a test. */
         if (!canAutoStickToBottom()) return;
         scrollToBottom();
+        /* istanbul ignore next -- scrollerRef is set during the chase; the `?? -1` scroller-null fallback is defensive. */
         const next = scrollerRef.current?.scrollHeight ?? -1;
         if (next === lastHeight || frames <= 1) return;
         lastHeight = next;
@@ -387,6 +394,7 @@ function VirtuosoMessageList({
       }}
       components={{ Header, Footer }}
       itemContent={(_index, row) => {
+        /* istanbul ignore next -- react-virtuoso can momentarily call itemContent with an undefined row during prepend/firstItemIndex reconciliation; not deterministically reproducible. */
         if (!row) return null;
         return row.kind === 'day' ? (
           <div

@@ -90,6 +90,30 @@ describe('TypeaheadMenu (browser)', () => {
     expect(onHighlight).not.toHaveBeenCalled();
   });
 
+  it('positions using window.innerHeight when visualViewport is unavailable', async () => {
+    // Removing window.visualViewport drives the `?? 0` (offsetTop) and
+    // `?? window.innerHeight` (height) fallback sides, and blurring everything
+    // makes `document.activeElement instanceof HTMLElement` take a path where
+    // no role=textbox is resolved.
+    const desc = Object.getOwnPropertyDescriptor(window, 'visualViewport');
+    Object.defineProperty(window, 'visualViewport', { configurable: true, value: undefined });
+    const bare = document.createElement('span');
+    Object.assign(bare.style, { position: 'fixed', top: '220px', left: '20px' });
+    document.body.append(bare);
+    (document.activeElement as HTMLElement | null)?.blur?.();
+    try {
+      await render(
+        <TypeaheadMenu {...baseProps} options={[opt('a')]} anchorElementRef={{ current: bare }} />,
+      );
+      const list = document.querySelector('[data-testid="tm"]') as HTMLElement;
+      expect(list).not.toBeNull();
+      expect(list.style.position).toBe('fixed');
+    } finally {
+      bare.remove();
+      if (desc) Object.defineProperty(window, 'visualViewport', desc);
+    }
+  });
+
   it('positions relative to the anchor rect when no composer/editor reference exists', async () => {
     // Anchor that is NOT inside a `[data-message-composer]`, with no focused
     // role=textbox anywhere: the editor lookup chain resolves to undefined, so

@@ -97,6 +97,25 @@ describe('ChannelMentionNode (browser)', () => {
     expect(slug).toBe('ops');
   });
 
+  it('falls back to empty strings when the conversion node lacks attributes and text', () => {
+    // importDOM matches on `el` (carrying the mention class + channel id), but
+    // the conversion reads its own `node` argument. A bare element drives the
+    // `?? ''` right-hand sides of both the data-channel-id and slug fallbacks.
+    const matchEl = document.createElement('span');
+    matchEl.className = 'mention';
+    matchEl.setAttribute('data-channel-id', 'ch-match');
+    const conversion = spanConverter()(matchEl)!.conversion;
+    const bare = document.createElement('span');
+    let id = 'x', slug = 'x';
+    inEditor(() => {
+      const node = conversion(bare).node;
+      id = node.getChannelId();
+      slug = node.getSlug();
+    });
+    expect(id).toBe('');
+    expect(slug).toBe('');
+  });
+
   it('type-guards channel-mention nodes', () => {
     let isCh = false;
     inEditor(() => {

@@ -42,6 +42,19 @@ describe('window-events — edit message handlers', () => {
     expect(handler).not.toHaveBeenCalled();
   });
 
+  it('ignores an edit-message event dispatched with no messageId in detail', () => {
+    const handler = vi.fn();
+    const unsubscribe = registerEditMessageHandler('m-x', handler);
+    // A raw event with empty detail → the singleton listener's `if (id)` guard
+    // (id undefined) takes its false side and no handler is invoked.
+    window.dispatchEvent(new CustomEvent(WINDOW_EVENTS.EditMessage, { detail: {} }));
+    expect(handler).not.toHaveBeenCalled();
+    // And an event with no detail at all (ce.detail?.messageId → undefined).
+    window.dispatchEvent(new CustomEvent(WINDOW_EVENTS.EditMessage));
+    expect(handler).not.toHaveBeenCalled();
+    unsubscribe();
+  });
+
   it('unsubscribe is a no-op if a different handler has since replaced ours', () => {
     const oldHandler = vi.fn();
     const newHandler = vi.fn();

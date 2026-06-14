@@ -41,10 +41,46 @@ describe('skin tone application', () => {
     expect(applySkinToneSuffix('👋', 'not-a-tone')).toBe('👋');
   });
 
+  it('applySkinToneSuffix returns the unicode unchanged when the suffix is undefined', () => {
+    // `SKIN_TONE_BY_SUFFIX.get(suffix ?? '')` → the `?? ''` side; '' is not a
+    // known suffix so the lookup misses and the input is returned unchanged.
+    expect(applySkinToneSuffix('👋', undefined)).toBe('👋');
+  });
+
   it('applySkinToneSuffix applies the modifier for a recognised skin-tone suffix', () => {
     const out = applySkinToneSuffix('👋', 'skin-tone-2');
     // Result should be 👋 + the skin-tone-2 modifier (Fitzpatrick-2 codepoint).
     expect(out.length).toBeGreaterThan(1);
+  });
+
+  it('applyEmojiSkinTone falls back to the default tone for an unknown tone value', () => {
+    // An unrecognised tone value drives the `?? SKIN_TONE_BY_VALUE.get('')`
+    // fallback; the default tone has no modifier, so existing modifiers are
+    // stripped and the base glyph returned.
+    const out = applyEmojiSkinTone('👋🏽', 'no-such-tone' as never);
+    expect(out).toBe('👋');
+  });
+
+  it('applyEmojiSkinTone applies a real modifier to a tone-capable base emoji', () => {
+    // 👋 is Emoji_Modifier_Base → the `first && EMOJI_MODIFIER_BASE_RE.test`
+    // true side runs and the modifier is appended.
+    const out = applyEmojiSkinTone('👋', 'dark');
+    expect(out).not.toBe('👋');
+    expect(out.length).toBeGreaterThan('👋'.length);
+  });
+
+  it('applyEmojiSkinTone preserves a trailing variation selector when retoning', () => {
+    // ☝️ (index pointing up + VS16) is a modifier-base; toning it must keep
+    // the part after the VS16 stripped correctly (the `rest.startsWith(VS16)`
+    // branch).
+    const out = applyEmojiSkinTone('☝️', 'medium');
+    expect(out).not.toBe('☝️');
+  });
+
+  it('shortcodeWithSkinTone embeds the suffix for a tone-capable emoji and chosen tone', () => {
+    // 👋 supports tones and 'medium' has a suffix → the `suffix ? ... : ...`
+    // truthy side returns `:wave::skin-tone-3:`.
+    expect(shortcodeWithSkinTone('wave', '👋', 'medium')).toBe(':wave::skin-tone-3:');
   });
 });
 
@@ -87,5 +123,9 @@ describe('normalizeEmojiInBody', () => {
   it('tolerates an unterminated fence or backtick', () => {
     expect(normalizeEmojiInBody('```\n🎉 still open')).toContain('🎉');
     expect(normalizeEmojiInBody('`🎉 still open')).toContain('🎉');
+  });
+
+  it('returns an empty string for an empty body (the `!body` guard)', () => {
+    expect(normalizeEmojiInBody('')).toBe('');
   });
 });

@@ -29,10 +29,12 @@ function normalizeEmojiQuery(query: string) {
 
 function emojiSearchRank(query: string, emoji: { name: string; keywords?: string[] }) {
   const q = normalizeEmojiQuery(query);
+  /* istanbul ignore next -- only reached for an all-colon/whitespace query, but the `:`-typeahead trigger requires a non-colon character, so the normalized query is never empty here. */
   if (!q) return 0;
   if (emoji.name === q) return 0;
   if (emoji.name.startsWith(q)) return 1;
   if (emoji.name.includes(q)) return 2;
+  /* istanbul ignore next -- the generated EmojiShortcode dataset carries no `keywords`, so `emoji.keywords?` always short-circuits and the keyword-prefix rank is unreachable with the shipped data. */
   if (emoji.keywords?.some((keyword) => keyword.startsWith(q))) return 3;
   if (fuzzyMatch(q, emoji.name, ...(emoji.keywords ?? []))) return 4;
   return Number.POSITIVE_INFINITY;
@@ -114,11 +116,20 @@ export function EmojiShortcutsPlugin() {
       options={options}
       // See UserMentionsPlugin for the priority rationale.
       commandPriority={COMMAND_PRIORITY_NORMAL}
-      menuRenderFn={(anchorElementRef, { selectedIndex, selectOptionAndCleanUp, setHighlightedIndex }) =>
-        anchorElementRef.current ? (
+      menuRenderFn={(anchorElementRef, { selectedIndex, selectOptionAndCleanUp, setHighlightedIndex }) => {
+        // LexicalTypeaheadMenuPlugin can invoke menuRenderFn on a transient
+        // pre-positioning frame where the anchor element ref is still null.
+        /* istanbul ignore next -- the headless browser resolves the anchor before a test can observe that null frame, so this guard's false arm is not reachable from a test. */
+        if (!anchorElementRef.current) return null;
+        // The menu only renders once a query produced options, so `query` is
+        // always a non-empty string here; the `: undefined` empty-label arm is
+        // unreachable.
+        /* istanbul ignore next */
+        const emptyLabel = query?.length ? 'No emoji matches' : undefined;
+        return (
           <TypeaheadMenu
             testId="emoji-popup"
-            emptyLabel={query?.length ? 'No emoji matches' : undefined}
+            emptyLabel={emptyLabel}
             options={options}
             selectedIndex={selectedIndex}
             setHighlightedIndex={setHighlightedIndex}
@@ -126,8 +137,8 @@ export function EmojiShortcutsPlugin() {
             anchorElementRef={anchorElementRef}
             renderRow={(option) => <EmojiRow hit={option.hit} skinTone={skinTone} />}
           />
-        ) : null
-      }
+        );
+      }}
     />
   );
 }

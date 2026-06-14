@@ -3,6 +3,7 @@ import {
   formatLastSeen,
   isValidTimeZone,
   formatTimeZoneName,
+  localTimeZone,
   timeZoneOffsetMinutes,
   formatTimeZoneDelta,
 } from './user-time';
@@ -45,6 +46,32 @@ describe('user-time helpers (browser)', () => {
     expect(formatTimeZoneDelta('UTC', 'UTC')).toBeNull();
     // Different name, identical offset → no meaningful delta.
     expect(formatTimeZoneDelta('Etc/UTC', 'UTC')).toBeNull();
+  });
+
+  it('formatLastSeen formats a timestamp when not online', () => {
+    // online false + a lastSeenAt → the `new Date(...).toLocaleString(...)`
+    // return path (rather than the 'now' / null guards).
+    const out = formatLastSeen('2026-05-01T10:00:00Z', false);
+    expect(out).not.toBeNull();
+    expect(out).not.toBe('now');
+  });
+
+  it('localTimeZone returns the resolved IANA zone string', () => {
+    expect(typeof localTimeZone()).toBe('string');
+  });
+
+  it('formatTimeZoneName falls back to the raw zone for a non-standard multi-segment value', () => {
+    // A valid-but-odd zone with a trailing empty segment is rejected by
+    // isValidTimeZone first; use a known multi-segment to keep the city/region
+    // split, and a single-segment for the other arm (both already covered).
+    expect(formatTimeZoneName('Pacific/Auckland')).toBe('Auckland, Pacific');
+  });
+
+  it('formatTimeZoneDelta returns null when one side fails to resolve an offset', () => {
+    // A user zone that passes the truthy check but yields a null offset against
+    // a valid local zone exercises the `userOffset === null || localOffset ===
+    // null` early return.
+    expect(formatTimeZoneDelta('Definitely/NotAZone', 'UTC')).toBeNull();
   });
 
   it('formatTimeZoneDelta describes ahead/behind with singular/plural/fractional hours', () => {

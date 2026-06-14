@@ -32,6 +32,7 @@ interface Options {
   contentRef?: RefObject<HTMLElement | null>;
 }
 
+/* istanbul ignore next -- SSR guard: this browser-only app always has window, so useLayoutEffect is always chosen */
 const useIsomorphicLayoutEffect = typeof window === 'undefined' ? useEffect : useLayoutEffect;
 
 /**

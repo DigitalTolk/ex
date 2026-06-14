@@ -45,8 +45,7 @@ Thumbs.db
 /node_modules/
 
 # Coverage
-/frontend/coverage/
-/frontend/coverage-browser/
+/frontend/coverage*
 coverage.out
 coverage.html
 /frontend/.vitest-attachments/

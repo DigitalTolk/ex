@@ -159,6 +159,28 @@ describe('api.ts extended browser coverage', () => {
     await expect(apiFetch('/api/v1/x')).rejects.toThrow('msg field');
   });
 
+  it('falls back to the raw body when the error object has no message field', async () => {
+    // `{ error: {} }` → typeof error !== 'string' and error?.message is
+    // undefined and there is no top-level message → the parser falls through
+    // to `return text` (the raw JSON), exercising the `error?.message` false
+    // side (line 39).
+    const raw = JSON.stringify({ error: {} });
+    vi.mocked(globalThis.fetch).mockResolvedValueOnce(
+      buildResponse({ ok: false, status: 400, body: raw }),
+    );
+    await expect(apiFetch('/api/v1/x')).rejects.toThrow(raw);
+  });
+
+  it('refreshAccessToken clears the token and returns null on a non-ok refresh', async () => {
+    setAccessToken('stale');
+    vi.mocked(globalThis.fetch).mockResolvedValueOnce(
+      buildResponse({ ok: false, status: 401, body: '' }),
+    );
+    await expect(refreshAccessToken()).resolves.toBeNull();
+    // The `if (!res.ok)` branch ran → clearAccessToken().
+    expect(getAccessToken()).toBeNull();
+  });
+
   it('falls back to the raw text body when JSON parse fails', async () => {
     vi.mocked(globalThis.fetch).mockResolvedValueOnce(
       buildResponse({ ok: false, status: 400, body: 'not json' }),

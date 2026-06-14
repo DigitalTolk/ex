@@ -39,6 +39,7 @@ const HIDDEN_KEY = 'hidden_conversations';
 export const USER_STATE_CHANGED_EVENT = 'ex:user-state-changed';
 
 function notifyUserStateChanged() {
+  /* istanbul ignore else -- SSR guard: this browser-only app always has window */
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new Event(USER_STATE_CHANGED_EVENT));
   }

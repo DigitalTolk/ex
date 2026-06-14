@@ -16,6 +16,7 @@ const SAVED_USER = {
   userStatus: { emoji: ':palm_tree:', text: 'On Vacation', clearAt: '' },
 };
 
+const tokenRef = vi.hoisted(() => ({ value: 'token' as string | null }));
 vi.mock('@/lib/api', () => ({
   apiFetch: vi.fn().mockResolvedValue({
     id: 'u-1',
@@ -25,7 +26,7 @@ vi.mock('@/lib/api', () => ({
     status: 'active',
     userStatus: { emoji: ':palm_tree:', text: 'On Vacation', clearAt: '' },
   }),
-  getAccessToken: () => 'token',
+  getAccessToken: () => tokenRef.value,
 }));
 
 const authState = {
@@ -94,6 +95,21 @@ describe('UserStatusDialog browser', () => {
     vi.mocked(apiFetch).mockClear();
     vi.mocked(apiFetch).mockResolvedValue(SAVED_USER);
     authState.user.userStatus = undefined;
+    tokenRef.value = 'token';
+    authState.setAuth.mockClear();
+  });
+
+  it('renders nothing when there is no signed-in user', async () => {
+    const saved = authState.user;
+    (authState as { user: typeof saved | null }).user = null;
+    try {
+      await mount(<Wrap><UserStatusDialog open onOpenChange={vi.fn()} /></Wrap>);
+      // UserStatusDialog's `if (!user) return null` short-circuits before any
+      // dialog content renders.
+      expect(document.body.textContent).not.toContain('Set status');
+    } finally {
+      authState.user = saved;
+    }
   });
 
   it('does not render when closed', async () => {
@@ -178,6 +194,94 @@ describe('UserStatusDialog browser', () => {
     selectOption('status-preset', '__custom__');
     await screen.getByLabelText('Status text').fill('Free text');
     expect((document.getElementById('status-text') as HTMLInputElement).value).toBe('Free text');
+  });
+
+  it('treats a custom clear time in the past as no clear-after window', async () => {
+    const screen = await mount(
+      <Wrap><UserStatusDialog open onOpenChange={vi.fn()} /></Wrap>,
+    );
+    await vi.waitFor(() => expect(document.getElementById('clear-after')).not.toBeNull());
+    await screen.getByLabelText('Status text').fill('Past');
+    selectOption('clear-after', 'custom');
+    // A custom time well in the past → clearAfterSecondsFor computes seconds<=0
+    // and returns undefined (the `: undefined` arm).
+    await screen.getByLabelText('Custom clear time').fill('2000-01-01T00:00');
+    await screen.getByRole('button', { name: 'Save status' }).click();
+    await vi.waitFor(() => {
+      const call = patchCall('PATCH');
+      expect(call).toBeDefined();
+      const body = JSON.parse((call![1] as { body: string }).body);
+      expect(body.clearAfterSeconds).toBeUndefined();
+    });
+  });
+
+  it('saves without calling setAuth when no access token is present', async () => {
+    tokenRef.value = null;
+    const onOpenChange = vi.fn();
+    const screen = await mount(
+      <Wrap><UserStatusDialog open onOpenChange={onOpenChange} /></Wrap>,
+    );
+    await vi.waitFor(() => expect(document.getElementById('status-text')).not.toBeNull());
+    await screen.getByLabelText('Status text').fill('Heads down');
+    await screen.getByRole('button', { name: 'Save status' }).click();
+    // applyUpdated skips setAuth (token falsy) but still closes the dialog.
+    await vi.waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+    expect(authState.setAuth).not.toHaveBeenCalled();
+  });
+
+  it('falls back to a generic message when clearing rejects with a non-Error', async () => {
+    authState.user.userStatus = { emoji: ':palm_tree:', text: 'On Vacation', clearAt: '' };
+    vi.mocked(apiFetch).mockRejectedValueOnce('nope');
+    const screen = await mount(
+      <Wrap><UserStatusDialog open onOpenChange={vi.fn()} /></Wrap>,
+    );
+    await vi.waitFor(() => expect(document.getElementById('status-text')).not.toBeNull());
+    await screen.getByRole('button', { name: 'Clear status' }).click();
+    await expect.element(screen.getByRole('alert')).toHaveTextContent('Failed to clear status');
+  });
+
+  it('prefills the custom clear time from an existing status with a clearAt', async () => {
+    authState.user.userStatus = {
+      emoji: ':rocket:',
+      text: 'Launching',
+      clearAt: new Date(Date.now() + 2 * 60 * 60_000).toISOString(),
+    };
+    const screen = await mount(
+      <Wrap><UserStatusDialog open onOpenChange={vi.fn()} /></Wrap>,
+    );
+    await vi.waitFor(() => expect(document.getElementById('clear-after')).not.toBeNull());
+    // initialStateFor maps clearAt → clearAfter 'custom' and seeds customUntil
+    // from inputValueForISO instead of the +1h default.
+    const customInput = screen.getByLabelText('Custom clear time');
+    await expect.element(customInput).toBeVisible();
+    expect((document.getElementById('clear-after') as HTMLSelectElement).value).toBe('custom');
+  });
+
+  it('rejects status text longer than 32 characters', async () => {
+    const screen = await mount(
+      <Wrap><UserStatusDialog open onOpenChange={vi.fn()} /></Wrap>,
+    );
+    await vi.waitFor(() => expect(document.getElementById('status-text')).not.toBeNull());
+    // maxLength on the input is bypassed by setting the value directly so the
+    // explicit length guard (> MAX_STATUS_TEXT_LENGTH) runs.
+    const input = document.getElementById('status-text') as HTMLInputElement;
+    const native = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')!.set!;
+    native.call(input, 'x'.repeat(40));
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    await screen.getByRole('button', { name: 'Save status' }).click();
+    await expect.element(screen.getByRole('alert')).toHaveTextContent('32 characters or fewer');
+    expect(vi.mocked(apiFetch)).not.toHaveBeenCalled();
+  });
+
+  it('falls back to a generic message when saving rejects with a non-Error', async () => {
+    vi.mocked(apiFetch).mockRejectedValueOnce('boom');
+    const screen = await mount(
+      <Wrap><UserStatusDialog open onOpenChange={vi.fn()} /></Wrap>,
+    );
+    await vi.waitFor(() => expect(document.getElementById('status-text')).not.toBeNull());
+    await screen.getByLabelText('Status text').fill('Busy');
+    await screen.getByRole('button', { name: 'Save status' }).click();
+    await expect.element(screen.getByRole('alert')).toHaveTextContent('Failed to save status');
   });
 
   it('clears an existing status via DELETE and recovers from a clear error', async () => {

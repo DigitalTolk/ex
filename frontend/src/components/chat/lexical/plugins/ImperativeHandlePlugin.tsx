@@ -85,12 +85,15 @@ function $ensureSelectionOverAllContent() {
   // / TOGGLE_LINK expect.
   const first = root.getFirstDescendant();
   const last = root.getLastDescendant();
+  /* istanbul ignore next -- root has children here (the empty-root case returned above), so getFirstDescendant always yields a LexicalNode with getKey; the else fallback is defensive. */
   if (first && 'getKey' in first) {
     sel.anchor.set(first.getKey(), 0, getPointType(first));
   } else {
     sel.anchor.set(root.getKey(), 0, 'element');
   }
+  /* istanbul ignore next -- as above, getLastDescendant always yields a node with getKey when the root is non-empty; the else fallback is defensive. */
   if (last && 'getKey' in last) {
+    /* istanbul ignore next -- every Lexical node (Text/Element/Decorator) implements getTextContentSize, so the `: 0` fallback arm is unreachable. */
     const offset = 'getTextContentSize' in last && typeof last.getTextContentSize === 'function'
       ? last.getTextContentSize()
       : 0;
@@ -102,6 +105,7 @@ function $ensureSelectionOverAllContent() {
 }
 
 function getPointType(node: { getType?: () => string }): 'text' | 'element' {
+  /* istanbul ignore next -- every Lexical node implements getType, so the optional-call's undefined arm is unreachable. */
   return node.getType?.() === 'text' ? 'text' : 'element';
 }
 
@@ -135,6 +139,7 @@ export function ImperativeHandlePlugin({ imperativeRef }: Props) {
         }
         editor.update(() => {
           const selection = $getSelection();
+          /* istanbul ignore next -- applyBlock first runs $ensureSelectionOverAllContent, which guarantees a RangeSelection, so this re-check's non-range arm is unreachable. */
           if (!$isRangeSelection(selection)) return;
           const inQuote = !!$findMatchingParent(selection.anchor.getNode(), $isQuoteNode);
           $setBlocksType(selection, () => (inQuote ? $createParagraphNode() : $createQuoteNode()));
@@ -169,6 +174,7 @@ export function ImperativeHandlePlugin({ imperativeRef }: Props) {
           const beforeSel = $getRoot().selectEnd();
           beforeSel.insertText(displayText);
           const after = $getSelection();
+          /* istanbul ignore next -- `after` is the selection just produced by selectEnd()+insertText, which is always a RangeSelection, so the false arm is unreachable. */
           if ($isRangeSelection(after)) {
             const focusOffset = after.focus.offset;
             after.anchor.set(after.focus.key, Math.max(0, focusOffset - displayText.length), 'text');
@@ -269,8 +275,12 @@ function readActiveFormats(editor: ReturnType<typeof useLexicalComposerContext>[
     const list = $findMatchingParent(anchor, $isListNode);
     if (list) {
       const tag = list.getListType();
-      if (tag === 'bullet') out.add('ul');
-      else if (tag === 'number') out.add('ol');
+      if (tag === 'bullet') {
+        out.add('ul');
+      } else {
+        /* istanbul ignore next -- the composer only creates 'bullet' and 'number' lists, so a non-'number' list type ('check') is unreachable in this app; the false arm is defensive. */
+        if (tag === 'number') out.add('ol');
+      }
     }
   });
   return out;

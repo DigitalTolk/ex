@@ -155,6 +155,35 @@ describe('PinnedPanel browser behaviour', () => {
     expect(window.location.pathname).toBe('/keep-here');
   });
 
+  it('ignores keys other than Enter/Space on the focused row', async () => {
+    const screen = await renderPanel();
+    await expect.element(screen.getByText('remember to do the thing')).toBeVisible();
+    window.history.pushState({}, '', '/stay-put');
+    const row = document.querySelector('[data-testid="pinned-message-row"]') as HTMLElement;
+    // A non-activation key hits the `key !== 'Enter' && key !== ' '` guard
+    // (line 106) and returns without navigating.
+    row.dispatchEvent(new KeyboardEvent('keydown', { key: 'a', bubbles: true }));
+    await new Promise((r) => setTimeout(r, 30));
+    expect(window.location.pathname).toBe('/stay-put');
+  });
+
+  it('does not navigate when Enter originates on a nested element, not the row', async () => {
+    const screen = await renderPanel();
+    await expect.element(screen.getByText('remember to do the thing')).toBeVisible();
+    window.history.pushState({}, '', '/nested-key');
+    const row = document.querySelector('[data-testid="pinned-message-row"]') as HTMLElement;
+    const inner = row.querySelector('span, button, div') as HTMLElement | null;
+    const dispatchTarget = inner ?? row.firstElementChild;
+    expect(dispatchTarget).not.toBeNull();
+    // currentTarget is the row (the listener), but target is the nested
+    // node → the `e.target !== e.currentTarget` guard (line 107) returns.
+    (dispatchTarget as HTMLElement).dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }),
+    );
+    await new Promise((r) => setTimeout(r, 30));
+    expect(window.location.pathname).toBe('/nested-key');
+  });
+
   it('falls back to "Unknown" when the pinned author is not in the user map', async () => {
     apiFetchMock.mockReset();
     apiFetchMock.mockResolvedValue([{ ...pinned(), authorID: 'ghost' }]);

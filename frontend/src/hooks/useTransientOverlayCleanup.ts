@@ -4,6 +4,7 @@ let lockDepth = 0;
 let previousOverflow = '';
 
 function lockDocumentScroll() {
+  /* istanbul ignore next -- SSR guard: this browser-only app always has document */
   if (typeof document === 'undefined') return;
   if (lockDepth === 0) {
     previousOverflow = document.body.style.overflow;
@@ -13,6 +14,7 @@ function lockDocumentScroll() {
 }
 
 function unlockDocumentScroll() {
+  /* istanbul ignore next -- SSR guard: this browser-only app always has document */
   if (typeof document === 'undefined') return;
   lockDepth = Math.max(0, lockDepth - 1);
   if (lockDepth > 0) return;
@@ -20,6 +22,7 @@ function unlockDocumentScroll() {
 }
 
 function cleanupFocus(root: HTMLElement | null | undefined) {
+  /* istanbul ignore next -- SSR guard: this browser-only app always has document */
   if (typeof document === 'undefined') return;
   const active = document.activeElement;
   if (active instanceof HTMLElement && (!root || root.contains(active))) {

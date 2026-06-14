@@ -218,6 +218,53 @@ describe('MemberList browser behaviour', () => {
     ).toHaveTextContent('Unknown');
   });
 
+  it('falls back to the generic message when adding fails with a non-Error throw', async () => {
+    // The catch in handleAdd uses `err instanceof Error ? err.message :
+    // 'Failed to add member'`. Throwing a non-Error (a string) exercises
+    // the else arm (line 90).
+    vi.mocked(apiFetch).mockImplementation(async (url: unknown, init?: unknown) => {
+      if (typeof url === 'string' && url.includes('/users?q=')) {
+        return [{ id: 'u-9', displayName: 'Newbie', email: 'new@x.test' }];
+      }
+      if ((init as { method?: string } | undefined)?.method === 'POST') {
+        // eslint-disable-next-line @typescript-eslint/only-throw-error
+        throw 'plain string failure';
+      }
+      return undefined;
+    });
+    const screen = await renderWithProviders(
+      <MemberList members={[makeMember()]} channelId="ch-1" currentUserId="u-me" currentUserRole={4} />,
+    );
+    await screen.getByLabelText('Add member').fill('ne');
+    await screen.getByRole('button', { name: 'Add Newbie' }).click();
+    await expect.element(screen.getByRole('alert')).toHaveTextContent('Failed to add member');
+  });
+
+  it('no-ops the remove handler when no channelId is set', async () => {
+    // An actor with a managing role but NO channelId still renders the
+    // remove control for a removable member (canRemoveMember does not
+    // depend on channelId). Clicking it hits handleRemove's
+    // `if (!channelId) return` guard (line 74) — no DELETE is issued.
+    vi.mocked(apiFetch).mockClear();
+    const screen = await renderWithProviders(
+      <MemberList
+        members={[
+          makeMember({ userID: 'u-1', displayName: 'Alice', role: 'owner' }),
+          makeMember({ userID: 'u-2', displayName: 'Bob', role: 'member' }),
+        ]}
+        channelId={undefined}
+        currentUserId="u-1"
+        currentUserRole={5}
+      />,
+    );
+    await screen.getByRole('button', { name: 'Remove Bob' }).click();
+    await new Promise((r) => setTimeout(r, 30));
+    const deleteCall = vi.mocked(apiFetch).mock.calls.find(
+      (c: unknown[]) => (c[1] as { method?: string } | undefined)?.method === 'DELETE',
+    );
+    expect(deleteCall).toBeUndefined();
+  });
+
   it('removes another member via the DELETE endpoint', async () => {
     vi.mocked(apiFetch).mockClear();
     const screen = await renderWithProviders(

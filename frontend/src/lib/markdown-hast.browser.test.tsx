@@ -284,6 +284,34 @@ describe('renderHastTree — every custom-tag branch', () => {
     expect(document.body).not.toBeNull();
   });
 
+  it('renders a giphy embed with no id and no dimensions (the ?? "" / : undefined sides)', async () => {
+    // ex-giphy with neither data-id nor data-width/height: id falls back to '',
+    // and both `props['data-...'] ? Number(...) : undefined` ternaries take the
+    // undefined side.
+    const tree = root([elem('p', {}, [elem('ex-giphy', {})])]);
+    await render(wrap(<>{renderHastTree(tree)}</>));
+    expect(document.body).not.toBeNull();
+  });
+
+  it('prefers the unicode glyph over a custom emoji image when a skin tone is set', async () => {
+    // With data-skin present, `!skin ? emojiMap[name] : undefined` takes the
+    // undefined side, so even though emojiMap has the name the custom <img> is
+    // skipped and the toned unicode span renders.
+    const tree = root([
+      elem('p', {}, [elem('ex-emoji-shortcode', { 'data-name': 'wave', 'data-skin': 'skin-tone-2' })]),
+    ]);
+    await render(wrap(<>{renderHastTree(tree, { emojiMap: { wave: 'https://cdn.test/wave.png' } })}</>));
+    expect(document.querySelector('img[alt=":wave:"]')).toBeNull();
+    expect(document.querySelector('span[title=":wave::skin-tone-2:"]')).not.toBeNull();
+  });
+
+  it('renders an ex-bare-url with an empty href fallback when data-href is missing', async () => {
+    const tree = root([elem('p', {}, [elem('ex-bare-url', {})])]);
+    await render(wrap(<>{renderHastTree(tree)}</>));
+    // href falls back to '' → an anchor with an empty href still renders.
+    expect(document.querySelector('a')).not.toBeNull();
+  });
+
   it('strips the https:// scheme from a bare URL but keeps other schemes intact', async () => {
     const tree = root([
       elem('p', {}, [

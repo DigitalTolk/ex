@@ -73,7 +73,7 @@ export function SearchBar() {
   useEffect(() => {
     if (!open) return;
     function onDoc(e: MouseEvent) {
-      /* v8 ignore next -- containerRef is always attached while the dropdown is open; defensive null guard */
+      /* istanbul ignore next -- containerRef is always attached while the dropdown is open; defensive null guard */
       if (!containerRef.current) return;
       if (!containerRef.current.contains(e.target as Node)) setOpen(false);
     }
@@ -87,8 +87,9 @@ export function SearchBar() {
   function submit(idx = safeHighlight) {
     const trimmed = q.trim();
     if (!trimmed) return;
-    /* v8 ignore next -- safeHighlight is clamped in-range, so suggestions[idx] is always defined; the ?? fallback and the !sel guard below are defensive (a non-empty query always yields >= 1 suggestion) */
+    /* istanbul ignore next -- safeHighlight is clamped in-range, so suggestions[idx] is always defined; the ?? fallback and the !sel guard below are defensive (a non-empty query always yields >= 1 suggestion) */
     const sel = suggestions[idx] ?? suggestions[0];
+    /* istanbul ignore next -- defensive: a non-empty query always yields at least the "all" suggestion, so sel is never falsy here */
     if (!sel) return;
     setOpen(false);
     inputRef.current?.blur();

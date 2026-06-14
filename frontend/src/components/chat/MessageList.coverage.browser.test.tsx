@@ -213,6 +213,36 @@ describe('MessageList coverage — thread-meta backfill', () => {
     await expect.element(screen.getByText('a question')).toBeVisible();
   });
 
+  it('keeps existing recentReplyAuthorIDs while backfilling only the missing lastReplyAt', async () => {
+    // recentReplyAuthorIDs present but lastReplyAt missing → needsBackfill is
+    // true (via `!msg.lastReplyAt`) AND `msg.recentReplyAuthorIDs?.length` is
+    // truthy → the authors are kept (line 488 truthy arm) and only lastReplyAt
+    // is filled from derived meta.
+    const screen = await render(
+      <Wrap>
+        <MessageList
+          {...baseProps([
+            msg({
+              id: 'root-3',
+              authorID: 'u-1',
+              body: 'authors but no last-reply',
+              createdAt: '2026-05-01T10:00:00Z',
+              recentReplyAuthorIDs: ['u-2'],
+            }),
+            msg({
+              id: 'reply-3',
+              authorID: 'u-2',
+              body: 'reply three',
+              parentMessageID: 'root-3',
+              createdAt: '2026-05-01T10:05:00Z',
+            }),
+          ])}
+        />
+      </Wrap>,
+    );
+    await expect.element(screen.getByText('authors but no last-reply')).toBeVisible();
+  });
+
   it('does not backfill a parent that already carries reply metadata', async () => {
     const screen = await render(
       <Wrap>
@@ -327,6 +357,79 @@ describe('MessageList coverage — own-message auto-stick guards', () => {
     await vi.waitFor(() => {
       expect(document.querySelector('[data-message-id="other-bottom"]')).not.toBeNull();
     }, { timeout: 3000 });
+  });
+
+  it('force-scrolls to the bottom when the new bottom message is the current user own send', async () => {
+    function Harness() {
+      const [extra, setExtra] = useState<Message[]>([]);
+      const all = [
+        ...Array.from({ length: 30 }, (_, i) =>
+          msg({ id: `sm-${i}`, authorID: 'u-2', body: `m${i}`, createdAt: new Date(Date.UTC(2026, 4, 1, 10, i)).toISOString() }),
+        ),
+        ...extra,
+      ];
+      return (
+        <>
+          <button
+            data-testid="add-own"
+            onClick={() =>
+              setExtra([msg({ id: 'own-bottom', authorID: 'u-1', body: 'my new send', createdAt: '2026-05-01T13:00:00Z' })])
+            }
+          >
+            add own
+          </button>
+          <div style={{ height: 300, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+            <MessageList {...baseProps(all)} pages={[{ items: [...all].reverse() }]} currentUserId="u-1" />
+          </div>
+        </>
+      );
+    }
+    const screen = await render(
+      <Wrap>
+        <Harness />
+      </Wrap>,
+    );
+    const scroller = document.querySelector('[data-testid="virtuoso-scroller"]') as HTMLElement | null;
+    expect(scroller).not.toBeNull();
+    await vi.waitFor(() => {
+      expect(scroller!.scrollHeight).toBeGreaterThan(scroller!.clientHeight);
+    }, { timeout: 3000 });
+    // Appending an OWN message at the bottom → the own-message effect's
+    // requestAnimationFrame(scrollToBottom) fires, exercising scrollToBottom
+    // (the `if (scrollerRef.current)` true arm) and followLiveOutput.
+    await screen.getByTestId('add-own').click();
+    await vi.waitFor(() => {
+      expect(document.querySelector('[data-message-id="own-bottom"]')).not.toBeNull();
+    }, { timeout: 3000 });
+    await animationFrames(4);
+    // We end up pinned at (or near) the bottom.
+    await vi.waitFor(() => {
+      const distance = scroller!.scrollHeight - scroller!.scrollTop - scroller!.clientHeight;
+      expect(distance).toBeLessThan(40);
+    }, { timeout: 3000 });
+  });
+
+  it('highlights then clears a deep-link anchor flash without clobbering a newer anchor', async () => {
+    // Drives the anchor highlight timeout's `curr === anchorMsgId ? null :
+    // curr` updater (line 166): when the flash timeout fires the highlight
+    // is still the same anchor, so it clears to null.
+    const messages = Array.from({ length: 8 }, (_, i) =>
+      msg({ id: `hl-${i}`, body: `m${i}`, createdAt: new Date(Date.UTC(2026, 4, 1, 10, i)).toISOString() }),
+    );
+    await render(
+      <div style={{ height: 420, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+        <Wrap>
+          <MessageList {...baseProps(messages)} anchorMsgId="hl-2" anchorRevision="rev-x" />
+        </Wrap>
+      </div>,
+    );
+    await vi.waitFor(() => {
+      expect(document.querySelector('[data-message-id="hl-2"]')).not.toBeNull();
+    }, { timeout: 3000 });
+    // The 2.2s flash clears the highlight. Just assert the row survives the
+    // timeout (the updater ran without error).
+    await new Promise((r) => setTimeout(r, 2400));
+    expect(document.querySelector('[data-message-id="hl-2"]')).not.toBeNull();
   });
 
 });

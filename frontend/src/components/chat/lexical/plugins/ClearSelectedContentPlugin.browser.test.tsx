@@ -223,6 +223,90 @@ describe('ClearSelectedContentPlugin (browser)', () => {
     expect(root.querySelector('[data-user-id]')).toBeNull();
   });
 
+  it('clears via boundary-point comparison when the selection string differs from textContent', async () => {
+    // A document containing a mention: the mention's DOM text differs from
+    // `selection.toString()`, so `domSelectionCoversEditor` falls through the
+    // `toString() === textContent` equality (its false side) to the
+    // compareBoundaryPoints range check (both START_TO_START and END_TO_END).
+    const editor = await mount();
+    editor.update(() => {
+      const root = $getRoot();
+      root.clear();
+      const para = $createParagraphNode();
+      para.append($createTextNode('hi '));
+      para.append($createMentionNode('u-77', 'Zoe'));
+      para.append($createTextNode(' bye'));
+      root.append(para);
+    }, { discrete: true });
+    await flush();
+    const root = editor.getRootElement()!;
+    const sel = window.getSelection()!;
+    sel.removeAllRanges();
+    // Span the whole editable region with an explicit range so the boundary
+    // points exactly enclose the editor contents.
+    const range = document.createRange();
+    range.selectNodeContents(root);
+    sel.addRange(range);
+    editor.dispatchCommand(KEY_BACKSPACE_COMMAND, ev());
+    await flush();
+    expect(editorText(editor)).toBe('');
+  });
+
+  it('Delete just before a channel mention (element-node forward walk) removes it', async () => {
+    // Caret expressed as an element-node container with an offset, deleting
+    // forward → adjacentMentionElement takes its ELEMENT_NODE + forward arm
+    // (`container.childNodes[range.startOffset]`).
+    const editor = await mount();
+    editor.update(() => {
+      const root = $getRoot();
+      root.clear();
+      const para = $createParagraphNode();
+      para.append($createChannelMentionNode('c-5', 'random'));
+      root.append(para);
+    }, { discrete: true });
+    await flush();
+    const root = editor.getRootElement()!;
+    const chEl = root.querySelector('[data-channel-id]') as HTMLElement;
+    const paraEl = chEl.parentElement!;
+    const range = document.createRange();
+    // Element-node container, offset 0 → forward walk picks childNodes[0].
+    range.setStart(paraEl, 0);
+    range.collapse(true);
+    const sel = window.getSelection()!;
+    sel.removeAllRanges();
+    sel.addRange(range);
+    editor.dispatchCommand(KEY_DELETE_COMMAND, ev());
+    await flush();
+    expect(root.querySelector('[data-channel-id]')).toBeNull();
+  });
+
+  it('Backspace just after a mention via an element-node container removes it', async () => {
+    // Element-node container with offset 1, deleting backward →
+    // adjacentMentionElement ELEMENT_NODE + backward arm
+    // (`container.childNodes[range.startOffset - 1]`).
+    const editor = await mount();
+    editor.update(() => {
+      const root = $getRoot();
+      root.clear();
+      const para = $createParagraphNode();
+      para.append($createMentionNode('u-88', 'Yan'));
+      root.append(para);
+    }, { discrete: true });
+    await flush();
+    const root = editor.getRootElement()!;
+    const mentionEl = root.querySelector('[data-user-id]') as HTMLElement;
+    const paraEl = mentionEl.parentElement!;
+    const range = document.createRange();
+    range.setStart(paraEl, 1); // after the mention child
+    range.collapse(true);
+    const sel = window.getSelection()!;
+    sel.removeAllRanges();
+    sel.addRange(range);
+    editor.dispatchCommand(KEY_BACKSPACE_COMMAND, ev());
+    await flush();
+    expect(root.querySelector('[data-user-id]')).toBeNull();
+  });
+
   it('Delete at the end of a text node before a mention removes the mention', async () => {
     const editor = await mount();
     editor.update(() => {

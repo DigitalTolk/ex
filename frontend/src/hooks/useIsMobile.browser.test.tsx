@@ -36,4 +36,18 @@ describe('useIsMobile legacy matchMedia API (browser)', () => {
       window.matchMedia = original;
     }
   });
+
+  it('defaults to false and installs no listener when matchMedia is unavailable', async () => {
+    // Drives the `typeof window.matchMedia !== 'function'` guard in both
+    // readMobileMatch (initial state) and the effect (early return).
+    const original = window.matchMedia;
+    // @ts-expect-error intentionally removing matchMedia to hit the guard
+    delete window.matchMedia;
+    try {
+      const screen = await render(<Probe />);
+      expect(screen.getByTestId('mobile').element().getAttribute('data-v')).toBe('false');
+    } finally {
+      window.matchMedia = original;
+    }
+  });
 });

@@ -63,6 +63,20 @@ describe('useTransientOverlayCleanup (browser)', () => {
     expect(document.activeElement).not.toBe(input);
   });
 
+  it('mounts with no options object at all (falls back to the {} default)', async () => {
+    function Bare() {
+      // Call with a single argument so the options parameter takes its
+      // `= {}` default (rootRef undefined, lockScroll defaulting to false).
+      useTransientOverlayCleanup(true);
+      return <div data-testid="bare" />;
+    }
+    const result = await mount(<Bare />);
+    expect(result.getByTestId('bare')).toBeDefined();
+    // Cleanup runs on unmount without throwing despite no root/lock.
+    await mounted[mounted.length - 1].unmount();
+    mounted.length = 0;
+  });
+
   it('blurs the active element even without a root ref', async () => {
     const screen = await mount(<Probe />);
     const input = screen.getByTestId('overlay-input').element() as HTMLInputElement;

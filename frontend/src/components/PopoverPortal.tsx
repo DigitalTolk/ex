@@ -48,6 +48,10 @@ export function PopoverPortal({
   const isMobile = useIsMobile();
   const renderSheet = mobileSheet && isMobile;
   const { dismissing, dragStyle, swipeHandlers: { ref: swipeRef, ...swipeDown } } = useAnimatedSwipeDismiss('down', () => {
+    // The swipe handlers are only attached in sheet mode, so this
+    // callback only fires when renderSheet is true; the false arm and the
+    // onDismiss?.-undefined arm are defensive.
+    /* istanbul ignore next -- swipe-dismiss only fires in sheet mode with a provided onDismiss */
     if (renderSheet) onDismiss?.();
   });
   const setContentRef = useCallback(
@@ -69,8 +73,9 @@ export function PopoverPortal({
     if (!open) return;
     function onDown(e: PointerEvent) {
       const target = e.target as Node | null;
-      /* v8 ignore next -- a dispatched pointerdown always carries a target Node; defensive null guard */
+      /* istanbul ignore next -- a dispatched pointerdown always carries a target Node; defensive null guard */
       if (!target) return;
+      /* istanbul ignore next -- the popover is rendered (open) whenever this listener is active, so contentRef.current is non-null; the ?.-null arm is defensive */
       if (contentRef.current?.contains(target)) return;
       if (triggerRef.current?.contains(target)) return;
       onDismiss?.();
@@ -124,9 +129,11 @@ export function PopoverPortal({
               overflow: 'hidden',
               overscrollBehaviorY: 'contain',
               touchAction: 'pan-y',
-              /* v8 ignore next 2 -- in sheet mode `measured` is forced true (see line 92), so the falsy arms are dead */
-              opacity: measured ? 1 : 0,
-              pointerEvents: measured ? 'auto' : 'none',
+              // In sheet mode `measured` is forced true (see the `measured`
+              // assignment above), so the sheet is always visible — no
+              // opacity/pointer-events gating needed.
+              opacity: 1,
+              pointerEvents: 'auto',
               ...dragStyle,
             }
           : {

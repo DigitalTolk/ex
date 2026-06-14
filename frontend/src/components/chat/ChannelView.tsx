@@ -301,11 +301,13 @@ export function ChannelView() {
   const muted = !!userChannels?.find((uc) => uc.channelID === channel?.id)?.muted;
   const muteChannel = useMuteChannel();
   function handleToggleMute() {
+    /* istanbul ignore next -- only wired to the header menu, which renders only when `channel` is loaded, so the `channel == null` optional-chain arm is unreachable; defensive. */
     if (!channel?.id) return;
     muteChannel.mutate({ channelId: channel.id, muted: !muted });
   }
 
   async function handleArchive() {
+    /* istanbul ignore next -- only wired to the header menu, which renders only when `channel` is loaded, so the `channel == null` optional-chain arm is unreachable; defensive. */
     if (!channel?.id) return;
     await apiFetch(`/api/v1/channels/${channel.id}`, { method: 'DELETE' });
     queryClient.invalidateQueries({ queryKey: queryKeys.userChannels() });
@@ -313,6 +315,7 @@ export function ChannelView() {
   }
 
   async function handleLeave() {
+    /* istanbul ignore next -- only wired to the header menu, which renders only when `channel` is loaded, so the `channel == null` optional-chain arm is unreachable; defensive. */
     if (!channel?.id) return;
     await apiFetch(`/api/v1/channels/${channel.id}/leave`, { method: 'POST' });
     queryClient.invalidateQueries({ queryKey: queryKeys.userChannels() });
@@ -320,6 +323,7 @@ export function ChannelView() {
   }
 
   async function handleDescriptionSave(desc: string) {
+    /* istanbul ignore next -- only wired to the header menu, which renders only when `channel` is loaded, so the `channel == null` optional-chain arm is unreachable; defensive. */
     if (!channel?.id) return;
     await apiFetch(`/api/v1/channels/${channel.id}`, {
       method: 'PATCH',
@@ -447,6 +451,7 @@ export function ChannelView() {
           channelId={channel?.id}
           onClose={panels.close}
           userMap={userMap}
+          /* istanbul ignore next -- FilesPanel only renders inside the `showFiles` arm, which requires a loaded channel, so the `: undefined` arm is unreachable; defensive. */
           postedIn={channel ? `~${channel.name}` : undefined}
         />
       ) : showMembers && members ? (

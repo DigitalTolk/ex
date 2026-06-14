@@ -106,6 +106,26 @@ describe('MentionNode (browser)', () => {
     expect(name).toBe('Dave');
   });
 
+  it('falls back to empty strings when the conversion node lacks attributes and text', () => {
+    // importDOM matches on `el` (which carries the mention class + user id),
+    // but the returned conversion reads its own `node` argument. Passing a
+    // bare element with no data-user-id and null textContent drives the
+    // `?? ''` right-hand sides of both fallbacks.
+    const matchEl = document.createElement('span');
+    matchEl.className = 'mention';
+    matchEl.setAttribute('data-user-id', 'u-match');
+    const conversion = spanConverter()(matchEl)!.conversion;
+    const bare = document.createElement('span'); // no attrs, textContent ''
+    let userId = 'x', name = 'x';
+    inEditor(() => {
+      const node = conversion(bare).node;
+      userId = node.getUserId();
+      name = node.getDisplayName();
+    });
+    expect(userId).toBe('');
+    expect(name).toBe('');
+  });
+
   it('type-guards mention nodes', () => {
     let isMention = false;
     inEditor(() => {

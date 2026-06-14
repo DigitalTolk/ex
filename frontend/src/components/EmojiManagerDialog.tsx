@@ -40,6 +40,7 @@ export function EmojiManagerDialog({ open, onOpenChange }: Props) {
     if (previewURL) URL.revokeObjectURL(previewURL);
     setPreviewURL(null);
     setError('');
+    /* istanbul ignore next -- fileRef is always attached to the mounted file input, so the null arm is dead defensive */
     if (fileRef.current) fileRef.current.value = '';
   }
 
@@ -63,6 +64,7 @@ export function EmojiManagerDialog({ open, onOpenChange }: Props) {
       setError('Name must be 1–32 chars: lowercase letters, digits, _, +, -');
       return;
     }
+    /* istanbul ignore next -- Save is disabled until a file is chosen, so handleSave never runs without one; the guard is defensive */
     if (!file) {
       setError('Choose an image first');
       return;
@@ -230,6 +232,7 @@ export function EmojiManagerDialog({ open, onOpenChange }: Props) {
       <ConfirmDialog
         open={emojiToDelete !== null}
         onOpenChange={(o) => {
+          /* istanbul ignore else -- the confirm dialog has no internal trigger, so onOpenChange only ever fires with o=false */
           if (!o) setEmojiToDelete(null);
         }}
         title="Delete emoji?"
@@ -237,6 +240,7 @@ export function EmojiManagerDialog({ open, onOpenChange }: Props) {
         confirmLabel="Delete emoji"
         destructive
         onConfirm={() => {
+          /* istanbul ignore else -- onConfirm is only reachable while the confirm dialog is open, which requires emojiToDelete to be set */
           if (emojiToDelete) void performDelete(emojiToDelete);
         }}
         finalFocus={false}

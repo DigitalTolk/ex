@@ -215,6 +215,43 @@ describe('CodeBlockExitPlugin (browser)', () => {
     expect(paragraphCount(editor)).toBe(0);
   });
 
+  it('Enter on a fence line with a non-collapsed selection does not exit', async () => {
+    // readClosingFenceTarget bails on `!selection.isCollapsed()` (the
+    // non-collapsed false side of the collapsed guard), so the block stays.
+    const editor = await mount();
+    editor.update(() => {
+      const root = $getRoot();
+      root.clear();
+      const code = $createCodeNode();
+      const t = $createTextNode('```');
+      code.append(t);
+      root.append(code);
+      t.select(0, 3); // range selection across the fence
+    }, { discrete: true });
+    editor.dispatchCommand(KEY_ENTER_COMMAND, ev());
+    await flush();
+    expect(hasCodeNode(editor)).toBe(true);
+    expect(paragraphCount(editor)).toBe(0);
+  });
+
+  it('ArrowDown with a non-collapsed selection in a code block does not exit', async () => {
+    // readArrowDownExitTarget bails on `!selection.isCollapsed()`.
+    const editor = await mount();
+    editor.update(() => {
+      const root = $getRoot();
+      root.clear();
+      const code = $createCodeNode();
+      const t = $createTextNode('code');
+      code.append(t);
+      root.append(code);
+      t.select(0, 4);
+    }, { discrete: true });
+    editor.dispatchCommand(KEY_ARROW_DOWN_COMMAND, ev());
+    await flush();
+    expect(hasCodeNode(editor)).toBe(true);
+    expect(paragraphCount(editor)).toBe(0);
+  });
+
   it('Enter outside any code block leaves no code node behind', async () => {
     const editor = await mount();
     editor.update(() => {

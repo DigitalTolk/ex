@@ -104,6 +104,73 @@ describe('ChannelRow browser behaviour', () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
+  it('shows the unread DOT fallback when hasUnread but no live count is known', async () => {
+    const screen = await render(
+      <MemoryRouter>
+        <ChannelRow channel={baseChannel} hasUnread unreadCount={0} onClose={() => {}} />
+      </MemoryRouter>,
+    );
+    // No numeric badge — the dot fallback renders instead.
+    await expect.element(screen.getByTestId('channel-unread-dot-ch-1')).toBeVisible();
+    expect(document.querySelector('[data-testid="channel-unread-badge-ch-1"]')).toBeNull();
+  });
+
+  it('moving a favorited channel into a category first removes the favorite', async () => {
+    categoriesData.data = [{ id: 'cat-1', name: 'Work' }];
+    const screen = await render(
+      <MemoryRouter>
+        <ChannelRow channel={{ ...baseChannel, favorite: true }} hasUnread={false} onClose={() => {}} />
+      </MemoryRouter>,
+    );
+    await screen.getByTestId('row-menu-ch-1').click();
+    await screen.getByText('Work').click();
+    // isFav → favorite(false) then setCategory(cat-1).
+    expect(favoriteMutate).toHaveBeenCalledWith({ channelID: 'ch-1', favorite: false });
+    expect(setCategoryMutate).toHaveBeenCalledWith({ channelID: 'ch-1', categoryID: 'cat-1' });
+  });
+
+  it('applies the grab cursor styling when draggable', async () => {
+    const dragRef = vi.fn();
+    const screen = await render(
+      <MemoryRouter>
+        <ChannelRow channel={baseChannel} hasUnread={false} onClose={() => {}} draggable dragRef={dragRef} />
+      </MemoryRouter>,
+    );
+    const row = screen.getByTestId('channel-row-ch-1').element() as HTMLElement;
+    expect(row.className).toContain('cursor-grab');
+    expect(dragRef).toHaveBeenCalled();
+  });
+
+  it('calls onClose on a normal (non-suppressed) navigation click', async () => {
+    const onClose = vi.fn();
+    await render(
+      <MemoryRouter>
+        <ChannelRow channel={baseChannel} hasUnread={false} onClose={onClose} />
+      </MemoryRouter>,
+    );
+    (document.querySelector('a[href="/channel/general"]') as HTMLAnchorElement).click();
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('marks the row active when the current route matches the channel slug', async () => {
+    await render(
+      <MemoryRouter initialEntries={['/channel/general']}>
+        <ChannelRow channel={baseChannel} hasUnread={false} onClose={() => {}} />
+      </MemoryRouter>,
+    );
+    const link = document.querySelector('a[href="/channel/general"]') as HTMLElement;
+    expect(link.className).toMatch(/bg-white\/15|font-semibold/);
+  });
+
+  it('renders the move menu when useCategories returns no data (?? [] fallback)', async () => {
+    // categoriesData.data undefined → the `(categories ?? [])` empty-array arm.
+    (categoriesData as { data: unknown }).data = undefined;
+    const screen = await renderRow();
+    await screen.getByTestId('row-menu-ch-1').click();
+    // Only the built-in "Move to Channels" item renders (no categories).
+    await expect.element(screen.getByText('Move to Channels')).toBeVisible();
+  });
+
   it('lists existing categories in the move menu and moves the channel on select', async () => {
     categoriesData.data = [{ id: 'cat-1', name: 'Work' }];
     const screen = await renderRow();

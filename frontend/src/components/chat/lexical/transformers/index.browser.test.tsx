@@ -146,4 +146,29 @@ describe('lexical custom transformers (browser)', () => {
     });
     expect(listType).toBe('number');
   });
+
+  it('the bullet-list transformer creates a fresh unordered list for live typing (isImport=false)', async () => {
+    const editor = await mount();
+    // EX_TRANSFORMERS[2] is the unordered-list element transformer; with
+    // listType 'bullet' the `listType === 'number' ? Number(match[2]) :
+    // undefined` ternary takes its `undefined` side.
+    const bullet = EX_TRANSFORMERS[2] as {
+      replace: (parent: unknown, children: unknown[], match: string[], isImport: boolean) => void;
+    };
+    editor.update(() => {
+      const root = $getRoot();
+      root.clear();
+      const para = $createParagraphNode();
+      const text = $createTextNode('a bullet');
+      para.append(text);
+      root.append(para);
+      bullet.replace(para, [text], ['- ', ''], false);
+    }, { discrete: true });
+    let listType = '';
+    editor.getEditorState().read(() => {
+      const list = $getRoot().getChildren().find((c) => c.getType() === 'list') as { getListType?: () => string } | undefined;
+      listType = list?.getListType?.() ?? '';
+    });
+    expect(listType).toBe('bullet');
+  });
 });

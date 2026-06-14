@@ -202,6 +202,47 @@ describe('MessageItem desktop toolbar + menu branches', () => {
     expect(mutateEdit).not.toHaveBeenCalled();
   });
 
+  it('keeps the kebab menu open on a self-hover notification (activeID === ownID)', async () => {
+    if (window.innerWidth <= 767) return;
+    const screen = await renderWithProviders(
+      <MessageItem message={makeMessage({ id: 'self-hover' })} authorName="Alice" isOwn channelId="channel-1" currentUserId="user-1" />,
+    );
+    const row = document.querySelector('[data-message-id="self-hover"]') as HTMLElement;
+    await userEvent.hover(row);
+    await userEvent.click(row.querySelector('[data-testid="message-actions-trigger"]') as HTMLButtonElement);
+    await vi.waitFor(() => {
+      expect(row.querySelector('[data-actions-pinned="true"]')).not.toBeNull();
+    });
+    // Re-fire mouseenter on the SAME row → notifyMessageHovered(ownID) →
+    // the onHover guard sees activeID === ownID and DOESN'T close (line 141
+    // false arm). A raw dispatch guarantees the handler re-runs even though
+    // the cursor never left.
+    row.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(row.querySelector('[data-actions-pinned="true"]')).not.toBeNull();
+    expect(screen.container).toBeTruthy();
+  });
+
+  it('shows the loading placeholder while edit attachments are still resolving', async () => {
+    if (window.innerWidth <= 767) return;
+    // isEditing + attachmentIDs present + isLoading=true → editorReady is
+    // false (line 591 else arm) so the "Loading…" placeholder renders
+    // instead of the inline composer.
+    useAttachmentsBatchMock.mockReturnValue({ map: new Map(), isLoading: true });
+    const screen = await renderWithProviders(
+      <MessageItem
+        message={makeMessage({ body: 'with files', attachmentIDs: ['a-1'] })}
+        authorName="Alice"
+        isOwn
+        channelId="channel-1"
+        currentUserId="user-1"
+      />,
+    );
+    dispatchEditMessage({ messageId: 'msg-1' });
+    await expect.element(screen.getByText('Loading…')).toBeVisible();
+    expect(document.querySelector('[data-testid="inline-edit"]')).toBeNull();
+  });
+
   it('submits a changed body from the inline editor (mutate path)', async () => {
     if (window.innerWidth <= 767) return;
     const screen = await renderWithProviders(

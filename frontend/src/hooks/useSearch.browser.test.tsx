@@ -105,6 +105,17 @@ describe('useSearch', () => {
     expect(url).toContain('limit=12');
   });
 
+  it('useSearchFiles forwards from / in / sort options', async () => {
+    apiFetchMock.mockResolvedValue({ total: 0, hits: [] });
+    await renderProbe(() => useSearchFiles('doc', true, 8, { from: 'u-2', in: 'ch-2', sort: 'oldest' }));
+    await new Promise((r) => setTimeout(r, 200));
+    const url = apiFetchMock.mock.calls[0][0] as string;
+    expect(url).toContain('/search/files?');
+    expect(url).toContain('from=u-2');
+    expect(url).toContain('in=ch-2');
+    expect(url).toContain('sort=oldest');
+  });
+
   it('disabled hook does not fetch even when q is long enough', async () => {
     apiFetchMock.mockResolvedValue({ total: 0, hits: [] });
     await renderProbe(() => useSearchUsers('alice', false));

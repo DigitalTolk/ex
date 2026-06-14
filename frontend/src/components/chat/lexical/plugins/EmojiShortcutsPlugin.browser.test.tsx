@@ -21,16 +21,19 @@ import { EmojiShortcutsPlugin } from './EmojiShortcutsPlugin';
 // onQueryChange, which is what a real keystroke does. The menu anchor needs
 // a real DOM range rect, so this only works in the browser gate.
 
-// Custom emoji set is swapped per-test via this mutable holder.
-let customEmojis: { name: string; imageURL: string }[] = [];
+// Custom emoji set is swapped per-test via this mutable holder. When
+// `emojisData` is undefined the plugin's `useEmojis().data = []` default kicks
+// in (the no-data branch).
+let customEmojis: { name: string; imageURL: string }[] | undefined = [];
 vi.mock('@/hooks/useEmoji', () => ({
   useEmojis: () => ({ data: customEmojis }),
 }));
 
-// Skin tone is read from useOptionalAuth; swapped per-test.
-let skinTone = '';
+// Skin tone is read from useOptionalAuth; swapped per-test. When `authValue`
+// is null the plugin's `auth?.user?.emojiSkinTone ?? ''` optional chain bails.
+let authValue: { user?: { emojiSkinTone?: string } } | null = { user: { emojiSkinTone: '' } };
 vi.mock('@/context/AuthContext', () => ({
-  useOptionalAuth: () => ({ user: { emojiSkinTone: skinTone } }),
+  useOptionalAuth: () => authValue,
 }));
 
 function Capture({ onReady }: { onReady: (e: LexicalEditor) => void }) {
@@ -87,7 +90,7 @@ function editorText(editor: LexicalEditor): string {
 describe('EmojiShortcutsPlugin browser typeahead', () => {
   beforeEach(() => {
     customEmojis = [];
-    skinTone = '';
+    authValue = { user: { emojiSkinTone: '' } };
     cleanup();
   });
 
@@ -122,7 +125,7 @@ describe('EmojiShortcutsPlugin browser typeahead', () => {
   });
 
   it('applies the active skin tone to a skin-tone-capable emoji', async () => {
-    skinTone = 'dark';
+    authValue = { user: { emojiSkinTone: 'dark' } };
     const { editor, screen } = await mount();
     // `wave` (👋) supports a skin-tone modifier, exercising the
     // supportsEmojiSkinTone preview branch and shortcodeWithSkinTone insert.
@@ -139,5 +142,35 @@ describe('EmojiShortcutsPlugin browser typeahead', () => {
     const { editor, screen } = await mount();
     seed(editor, ':zzzzzzqq');
     await expect.element(screen.getByText('No emoji matches')).toBeVisible();
+  });
+
+  it('ranks an exact-name match first (emojiSearchRank name === query)', async () => {
+    // `smile` is the literal name of a standard emoji, so emojiSearchRank
+    // returns 0 on its `emoji.name === q` branch for that entry.
+    const { editor, screen } = await mount();
+    seed(editor, ':smile');
+    await expect.element(screen.getByTestId('emoji-popup')).toBeVisible();
+    await expect.element(screen.getByText(':smile:')).toBeVisible();
+  });
+
+
+  it('still opens the popup when there is no authenticated user', async () => {
+    // useOptionalAuth returns null → `auth?.user?.emojiSkinTone ?? ''` takes the
+    // optional-chain bail (skin tone defaults to '').
+    authValue = null;
+    const { editor, screen } = await mount();
+    seed(editor, ':smile');
+    await expect.element(screen.getByTestId('emoji-popup')).toBeVisible();
+    await expect.element(screen.getByTestId('emoji-option').first()).toBeVisible();
+  });
+
+  it('falls back to an empty custom-emoji list when the query has no data', async () => {
+    // useEmojis().data is undefined → the `= []` default destructure applies and
+    // only standard emoji are offered.
+    customEmojis = undefined;
+    const { editor, screen } = await mount();
+    seed(editor, ':smile');
+    await expect.element(screen.getByTestId('emoji-popup')).toBeVisible();
+    await expect.element(screen.getByText(':smile:')).toBeVisible();
   });
 });

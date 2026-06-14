@@ -46,6 +46,7 @@ export function InviteDialog({ open, onOpenChange }: InviteDialogProps) {
   }
 
   function handleClose(open: boolean) {
+    /* istanbul ignore else -- this controlled dialog only ever receives onOpenChange(false) (no internal trigger opens it), so the open===true else arm is dead */
     if (!open) {
       setEmail('');
       setInviteLink('');

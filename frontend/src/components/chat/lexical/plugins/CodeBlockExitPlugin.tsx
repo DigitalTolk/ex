@@ -40,6 +40,7 @@ export function CodeBlockExitPlugin() {
           event?.preventDefault();
           editor.update(() => {
             const selection = $getSelection();
+            /* istanbul ignore next -- readClosingFenceTarget already proved a collapsed RangeSelection exists; this re-read inside the same synchronous turn cannot be a non-range selection. */
             if (!$isRangeSelection(selection)) return;
             // Extend back over the closing-fence line and drop it in
             // one shot, then strip any leftover trailing LineBreak so
@@ -50,6 +51,7 @@ export function CodeBlockExitPlugin() {
             }
             for (let i = 0; i < target.lineLength; i++) selection.deleteCharacter(true);
             const tail = target.codeNode.getLastChild();
+            /* istanbul ignore next -- the `tail &&` null-guard's false arm needs an emptied code node, but a non-empty closing-fence body always leaves a trailing text node, so the null case is unreachable defensive code. */
             if (tail && $isLineBreakNode(tail)) tail.remove();
             appendParagraphAfter(target.codeNode);
           });
@@ -116,6 +118,7 @@ function removeCodeNodeForParagraph(codeNode: CodeNode): void {
 function hasFollowingLineBreak(anchor: LexicalNode): boolean {
   let next = anchor.getNextSibling();
   while (next) {
+    /* istanbul ignore next -- the false arm (a non-LineBreak sibling before a later LineBreak) needs un-merged adjacent siblings in a code node, but Lexical merges adjacent text nodes, so the walk-past-a-non-break path is unreachable. */
     if ($isLineBreakNode(next)) return true;
     next = next.getNextSibling();
   }

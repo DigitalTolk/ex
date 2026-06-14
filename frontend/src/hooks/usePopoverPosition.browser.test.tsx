@@ -92,4 +92,75 @@ describe('usePopoverPosition (browser)', () => {
     await new Promise((r) => setTimeout(r, 60));
     expect(posEl().getAttribute('data-measured')).toBe('false');
   });
+
+  it('uses the default options object when called with no opts argument', async () => {
+    function NoOpts() {
+      const triggerRef = useRef<HTMLDivElement>(null);
+      // No options arg → the `opts: Options = {}` default applies.
+      const pos = usePopoverPosition(true, triggerRef);
+      return (
+        <>
+          <div ref={triggerRef} data-testid="trigger" style={{ position: 'fixed', top: 120, left: 120, width: 40, height: 24 }} />
+          <div data-testid="pos" data-measured={String(pos.measured)} data-side={pos.side} />
+        </>
+      );
+    }
+    await render(<NoOpts />);
+    await vi.waitFor(() => expect(posEl().getAttribute('data-measured')).toBe('true'));
+    // Defaults: preferredSide bottom with plenty of room below.
+    expect(posEl().getAttribute('data-side')).toBe('bottom');
+  });
+
+  it('resets measured back to false when the popover closes', async () => {
+    function Toggle({ open }: { open: boolean }) {
+      const triggerRef = useRef<HTMLDivElement>(null);
+      const pos = usePopoverPosition(open, triggerRef, {});
+      return (
+        <>
+          <div ref={triggerRef} data-testid="trigger" style={{ position: 'fixed', top: 100, left: 100, width: 40, height: 24 }} />
+          <div data-testid="pos" data-measured={String(pos.measured)} />
+        </>
+      );
+    }
+    const screen = await render(<Toggle open />);
+    await vi.waitFor(() => expect(posEl().getAttribute('data-measured')).toBe('true'));
+    // Re-render closed → the `prev.measured ? { ...prev, measured:false } :
+    // prev` reset arm fires.
+    await screen.rerender(<Toggle open={false} />);
+    await vi.waitFor(() => expect(posEl().getAttribute('data-measured')).toBe('false'));
+  });
+
+  it('keeps an end-aligned popover end-aligned when it fits to the left', async () => {
+    // Trigger near the right edge so an end-aligned popover (right edges
+    // aligned) comfortably fits → the `rect.right - width - margin < 0`
+    // realign condition is false and align stays "end".
+    await render(<Probe preferredAlign="end" triggerStyle={{ top: 100, left: window.innerWidth - 100 }} />);
+    await vi.waitFor(() => expect(posEl().getAttribute('data-measured')).toBe('true'));
+    expect(posEl().getAttribute('data-align')).toBe('end');
+  });
+
+  it('clamps a popover whose trigger sits past the right/bottom edge back inside the viewport', async () => {
+    // Trigger pinned to the far bottom-right forces both the left-clamp
+    // (`left + width + margin > vw`) and top-clamp arms.
+    await render(
+      <Probe
+        withContent
+        triggerStyle={{ top: window.innerHeight - 10, left: window.innerWidth - 10 }}
+      />,
+    );
+    await vi.waitFor(() => expect(posEl().getAttribute('data-measured')).toBe('true'));
+    const top = Number(posEl().getAttribute('data-top'));
+    const left = Number(posEl().getAttribute('data-left'));
+    expect(top).toBeGreaterThanOrEqual(8);
+    expect(left).toBeGreaterThanOrEqual(8);
+    expect(left).toBeLessThanOrEqual(window.innerWidth);
+  });
+
+  it('clamps the left edge up to the margin when the trigger sits at the far left', async () => {
+    // Start-aligned trigger pinned at left:2 → computed left (rect.left=2) is
+    // below the 8px margin, so the `left < margin` clamp bumps it to 8.
+    await render(<Probe triggerStyle={{ top: 100, left: 2 }} />);
+    await vi.waitFor(() => expect(posEl().getAttribute('data-measured')).toBe('true'));
+    expect(Number(posEl().getAttribute('data-left'))).toBe(8);
+  });
 });

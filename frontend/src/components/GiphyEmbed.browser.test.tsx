@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render } from 'vitest-browser-react';
 import { GiphyEmbed } from './GiphyEmbed';
@@ -166,6 +167,149 @@ describe('GiphyEmbed browser behaviour', () => {
     await new Promise((r) => setTimeout(r, 100));
     // Renders without throwing; dimensions fall back to the original's.
     expect(document.querySelector('[data-testid="giphy-embed"]')).not.toBeNull();
+  });
+
+  it('reads media straight from the cache on a fresh mount of an already-fetched id', async () => {
+    giphyFetchMock.mockResolvedValue({ data: { ...baseGif, title: 'Warm cache' } });
+    // Prime the module cache.
+    await render(<GiphyEmbed id="warm-cache" apiKey="real-key" width={480} height={360} />);
+    await vi.waitFor(() => expect(document.querySelector('video')).not.toBeNull());
+    giphyFetchMock.mockClear();
+    // A brand-new embed of the same id: the effect's readCachedGiphyMedia hits,
+    // queueMicrotask runs setResult while the component is alive (L219-220).
+    const second = await render(<GiphyEmbed id="warm-cache" apiKey="real-key" width={480} height={360} />);
+    await vi.waitFor(() => {
+      expect(document.querySelectorAll('video').length).toBeGreaterThanOrEqual(2);
+    });
+    expect(giphyFetchMock).not.toHaveBeenCalled();
+    void second;
+  });
+
+  it('drops the cache entry when its in-flight fetch rejects', async () => {
+    giphyFetchMock.mockRejectedValue(new Error('boom'));
+    const screen = await render(<GiphyEmbed id="reject-dedupe" apiKey="real-key" width={480} height={360} />);
+    // The fetch rejection runs the .catch dedupe (`entry?.promise === promise`
+    // → delete) AND flips the embed to the unavailable placeholder.
+    await expect.element(screen.getByText('GIPHY unavailable')).toBeVisible();
+    // A subsequent successful mount re-fetches (the rejected entry was purged).
+    giphyFetchMock.mockResolvedValue({ data: { ...baseGif, title: 'Recovered' } });
+    await render(<GiphyEmbed id="reject-dedupe" apiKey="real-key" width={480} height={360} />);
+    await vi.waitFor(() => expect(document.querySelector('video')).not.toBeNull());
+  });
+
+  it('shows GIPHY unavailable when settings resolve without an API key', async () => {
+    // settings present but giphyAPIKey absent → `settings?.giphyAPIKey ?? ''`
+    // hits the `?? ''` arm and GiphyEmbedMedia renders the unavailable state.
+    useWorkspaceSettingsMock.mockReturnValue({ data: { giphyAPIKey: undefined }, isLoading: false });
+    const screen = await render(<GiphyEmbed id="from-settings" />);
+    await expect.element(screen.getByText('GIPHY unavailable')).toBeVisible();
+  });
+
+  it('renders a plain image with the default title when the gif omits its title and has no mp4', async () => {
+    giphyFetchMock.mockResolvedValue({
+      data: {
+        ...baseGif,
+        title: undefined,
+        is_sticker: false,
+        images: { original: { url: 'https://media.giphy.com/plain.gif', width: 200, height: 100 } },
+      },
+    });
+    await render(<GiphyEmbed id="plain-img-default-title" apiKey="real-key" />);
+    await new Promise((r) => setTimeout(r, 100));
+    // pickRendition's final image return with the `|| 'GIPHY GIF'` fallback title.
+    expect(document.querySelector('img[alt="GIPHY GIF"]')).not.toBeNull();
+  });
+
+  it('renders nothing actionable and never fetches when no id is provided', async () => {
+    giphyFetchMock.mockClear();
+    // No id → readCachedGiphyMedia is skipped (`id ? ... : null`), the effect
+    // returns early, and `result.media` stays null → loading placeholder.
+    const screen = await render(<GiphyEmbed id={undefined} apiKey="real-key" />);
+    await expect.element(screen.getByText('Loading GIPHY...')).toBeVisible();
+    expect(giphyFetchMock).not.toHaveBeenCalled();
+  });
+
+  it('shares the in-flight promise when a second embed of the same id mounts mid-flight', async () => {
+    let resolveGif: ((v: unknown) => void) | undefined;
+    giphyFetchMock.mockReturnValue(new Promise((res) => { resolveGif = res; }));
+    // A harness that mounts the FIRST embed immediately and the SECOND on a
+    // state flip. By the time we flip, the first embed's effect has run and
+    // stored the in-flight promise in the module cache, so the second embed's
+    // fetchGiphyMedia takes the `cached.promise` reuse branch.
+    let mountSecond: (() => void) | undefined;
+    function Harness() {
+      const [showSecond, setShowSecond] = useState(false);
+      mountSecond = () => setShowSecond(true);
+      return (
+        <>
+          <GiphyEmbed id="inflight-harness" apiKey="real-key" width={480} height={360} />
+          {showSecond && <GiphyEmbed id="inflight-harness" apiKey="real-key" width={480} height={360} />}
+        </>
+      );
+    }
+    await render(<Harness />);
+    await new Promise((r) => setTimeout(r, 30));
+    expect(giphyFetchMock).toHaveBeenCalledTimes(1);
+    mountSecond?.();
+    await new Promise((r) => setTimeout(r, 30));
+    // Still a single network call — the second embed reused the cached promise.
+    expect(giphyFetchMock).toHaveBeenCalledTimes(1);
+    resolveGif?.({ data: { ...baseGif, title: 'Inflight GIF' } });
+    await vi.waitFor(() => {
+      expect(document.querySelectorAll('video').length).toBeGreaterThanOrEqual(2);
+    });
+  });
+
+  it('re-fetches after the cached id changes on re-render (requestKey mismatch)', async () => {
+    giphyFetchMock.mockResolvedValue({ data: { ...baseGif, title: 'First' } });
+    const screen = await render(<GiphyEmbed id="switch-a" apiKey="real-key" width={480} height={360} />);
+    await vi.waitFor(() => expect(document.querySelector('video')).not.toBeNull());
+    // Re-render the SAME element with a different id — the stale result whose
+    // requestKey no longer matches yields `null` (the `: null` arm) until the
+    // new fetch lands.
+    giphyFetchMock.mockResolvedValue({ data: { ...baseGif, title: 'Second' } });
+    await screen.rerender(<GiphyEmbed id="switch-b" apiKey="real-key" width={480} height={360} />);
+    await vi.waitFor(() => expect(giphyFetchMock).toHaveBeenCalled());
+  });
+
+  it('ignores a resolved fetch after the component has unmounted', async () => {
+    let resolveGif: ((v: unknown) => void) | undefined;
+    let rejectGif: ((e: unknown) => void) | undefined;
+    giphyFetchMock.mockReturnValueOnce(new Promise((res) => { resolveGif = res; }));
+    const okMount = await render(<GiphyEmbed id="unmount-ok" apiKey="real-key" width={480} height={360} />);
+    await okMount.unmount();
+    // Resolving after unmount → the `if (alive)` guard in the .then is false.
+    resolveGif?.({ data: { ...baseGif, title: 'Late' } });
+    await new Promise((r) => setTimeout(r, 30));
+
+    giphyFetchMock.mockReturnValueOnce(new Promise((_res, rej) => { rejectGif = rej; }));
+    const errMount = await render(<GiphyEmbed id="unmount-err" apiKey="real-key" width={480} height={360} />);
+    await errMount.unmount();
+    // Rejecting after unmount → the `if (alive)` guard in the .catch is false.
+    rejectGif?.(new Error('late fail'));
+    await new Promise((r) => setTimeout(r, 30));
+    expect(true).toBe(true);
+  });
+
+  it('expires a stale cache entry and re-fetches once the TTL has passed', async () => {
+    const realNow = Date.now;
+    let clock = 1_000_000;
+    Date.now = () => clock;
+    try {
+      giphyFetchMock.mockResolvedValue({ data: { ...baseGif, title: 'TTL GIF' } });
+      await render(<GiphyEmbed id="ttl-x" apiKey="real-key" width={480} height={360} />);
+      await vi.waitFor(() => expect(document.querySelector('video')).not.toBeNull());
+      giphyFetchMock.mockClear();
+      giphyFetchMock.mockResolvedValue({ data: { ...baseGif, title: 'TTL GIF 2' } });
+      // Jump past the 24h memory-cache TTL → readCachedGiphyMedia sees an
+      // expired entry (expiresAt <= Date.now()), deletes it, and the effect
+      // issues a fresh fetch instead of serving the stale value.
+      clock += 25 * 60 * 60 * 1000;
+      await render(<GiphyEmbed id="ttl-x" apiKey="real-key" width={480} height={360} />);
+      await vi.waitFor(() => expect(giphyFetchMock).toHaveBeenCalled());
+    } finally {
+      Date.now = realNow;
+    }
   });
 
   it('serves a previously fetched gif from the in-memory cache on re-render (no second fetch)', async () => {

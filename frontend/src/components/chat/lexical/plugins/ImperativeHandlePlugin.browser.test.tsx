@@ -188,6 +188,12 @@ describe('ImperativeHandlePlugin (browser)', () => {
     await new Promise((r) => requestAnimationFrame(() => r(null)));
     const h = ref.current!;
 
+    // Italic → readActiveFormats hasFormat('italic') add('italic').
+    seed(editor, 'italic me', true);
+    h.applyMark('italic');
+    await flush();
+    expect(h.getActiveFormats().has('italic')).toBe(true);
+
     // Strikethrough → readActiveFormats hasFormat('strikethrough') add('strike').
     seed(editor, 'strike me', true);
     h.applyMark('strike');

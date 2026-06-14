@@ -147,6 +147,30 @@ describe('TypingContext browser', () => {
     expect(api!.typingByThread).toEqual({});
   });
 
+  it('rebuilds a same-length bucket whose typer changed (content diff short-circuit)', async () => {
+    const originalNow = Date.now;
+    let nowOffset = 0;
+    Date.now = () => originalNow() + nowOffset;
+    try {
+      await render(
+        <TypingProvider>
+          <Capture />
+        </TypingProvider>,
+      );
+      probe.api.recordTyping('ch-1', 'u-alice');
+      await waitParent('ch-1', ['u-alice']);
+      // Advance past alice's expiry, then record bob: the next rebuild drops
+      // alice and adds bob, so typingByParent['ch-1'] stays length-1 but its
+      // single element changed — exercising the `av[i] !== bv[i]` arm of the
+      // shallow-equality short-circuit (so the new map is committed).
+      nowOffset = 10_000;
+      probe.api.recordTyping('ch-1', 'u-bob');
+      await waitParent('ch-1', ['u-bob']);
+    } finally {
+      Date.now = originalNow;
+    }
+  });
+
   it('entries expire after EXPIRY_MS and clear the parent bucket', async () => {
     const originalNow = Date.now;
     let nowOffset = 0;

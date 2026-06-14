@@ -57,7 +57,7 @@ export function FilesPanel({
   const attachmentQueries = useQueries({
     queries: (entries ?? []).map((entry) => ({
       queryKey: queryKeys.attachment(
-        /* v8 ignore next -- entries only load when channelId||conversationId is set, so parentType/parentID are always defined here; the ?? '' fallbacks are defensive */
+        /* istanbul ignore next -- entries only load when channelId||conversationId is set, so parentType/parentID are always defined here; the ?? '' fallbacks are defensive */
         `${entry.attachmentID}:${parentType ?? ''}:${parentID ?? ''}:${entry.messageID}`,
       ),
       queryFn: () => apiFetch<Attachment>(attachmentURLForFile(entry, parentID, parentType)),

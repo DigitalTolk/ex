@@ -89,6 +89,21 @@ describe('useAttachmentsBatch', () => {
     expect(apiFetchMock).not.toHaveBeenCalled();
   });
 
+  it('forwards parentID / parentType / messageID in the batch request', async () => {
+    apiFetchMock.mockResolvedValue([{ id: 'a-9', filename: 'nine' }]);
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    await render(
+      <QueryClientProvider client={qc}>
+        <Probe hook={() => useAttachmentsBatch(['a-9'], { parentID: 'ch-7', parentType: 'channel', messageID: 'm-7' })} />
+      </QueryClientProvider>,
+    );
+    await new Promise((r) => setTimeout(r, 200));
+    const url = apiFetchMock.mock.calls[0][0] as string;
+    expect(url).toContain('parentID=ch-7');
+    expect(url).toContain('parentType=channel');
+    expect(url).toContain('messageID=m-7');
+  });
+
   it('uses a stable sorted cache key and hydrates per-id caches', async () => {
     apiFetchMock.mockResolvedValue([
       { id: 'a-1', filename: 'one' },
@@ -187,6 +202,21 @@ describe('uploadAttachment', () => {
     // Progress ticks were forwarded and the final completion is 1.
     expect(onProgress).toHaveBeenLastCalledWith(1);
     expect(onProgress.mock.calls.length).toBeGreaterThan(1);
+  });
+
+  it('uploads an undecodable image without dimensions (Image onerror branch)', async () => {
+    apiFetchMock
+      .mockResolvedValueOnce({ id: 'a-5', uploadURL: 'https://up/c', alreadyExists: false, filename: 'broken.png', contentType: 'image/png', size: 3 })
+      .mockResolvedValueOnce(undefined);
+    // Garbage bytes with an image/* type: readImageDimensions creates an Image
+    // whose decode fails → img.onerror fires → resolve({}) (no width/height),
+    // exercising the `{}` side of the `w > 0 && h > 0` resolve.
+    const file = new File([Uint8Array.from([1, 2, 3])], 'broken.png', { type: 'image/png' });
+    const init = await uploadAttachment(file);
+    expect(init.id).toBe('a-5');
+    const body = JSON.parse((apiFetchMock.mock.calls[0][1] as { body: string }).body);
+    expect(body.width).toBeUndefined();
+    expect(body.height).toBeUndefined();
   });
 
   it('rejects when the XHR upload returns a non-2xx status', async () => {

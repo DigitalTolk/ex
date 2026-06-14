@@ -11,6 +11,7 @@ import {
   $getRoot,
   $createParagraphNode,
   $createTextNode,
+  $setSelection,
   PASTE_COMMAND,
   type LexicalEditor,
 } from 'lexical';
@@ -105,5 +106,44 @@ describe('PasteLinkPlugin (browser)', () => {
     editor.dispatchCommand(PASTE_COMMAND, pasteEvent('https://example.com') as never);
     await new Promise((r) => requestAnimationFrame(() => r(undefined)));
     expect(hasLink(editor)).toBe(false);
+  });
+
+  it('treats a missing plain-text payload as empty (no link)', async () => {
+    // getData returns undefined → the `?? ''` fallback yields '' which is not
+    // an http URL, so the plugin bails.
+    const editor = await mount();
+    seed(editor, 'click here', true);
+    const evt = {
+      clipboardData: { getData: () => undefined },
+      preventDefault: () => {},
+    };
+    editor.dispatchCommand(PASTE_COMMAND, evt as never);
+    await new Promise((r) => requestAnimationFrame(() => r(undefined)));
+    expect(hasLink(editor)).toBe(false);
+  });
+
+  it('does not link when there is no range selection', async () => {
+    // A valid http URL but a null selection → `!$isRangeSelection(sel)` true
+    // side: claimed stays false and the plugin returns false.
+    const editor = await mount();
+    seed(editor, 'click here', true);
+    editor.update(() => { $setSelection(null); }, { discrete: true });
+    editor.dispatchCommand(PASTE_COMMAND, pasteEvent('https://example.com') as never);
+    await new Promise((r) => requestAnimationFrame(() => r(undefined)));
+    expect(hasLink(editor)).toBe(false);
+  });
+
+  it('wraps a selection in a link even when the event lacks preventDefault', async () => {
+    // Valid URL + non-collapsed selection, but the event object has no
+    // preventDefault method → the `typeof preventDefault === 'function'`
+    // false side is taken and the link is still applied.
+    const editor = await mount();
+    seed(editor, 'anchor text', true);
+    const evt = {
+      clipboardData: { getData: (type: string) => (type === 'text/plain' ? 'https://example.com' : '') },
+    };
+    editor.dispatchCommand(PASTE_COMMAND, evt as never);
+    await new Promise((r) => requestAnimationFrame(() => r(undefined)));
+    expect(hasLink(editor)).toBe(true);
   });
 });

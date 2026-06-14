@@ -15,6 +15,7 @@ function pngFile(name = 'avatar.png', type = 'image/png') {
 // Browser coverage for EditProfileDialog — mounts the dialog open/closed
 // and verifies the form renders + cancel/close + save paths.
 
+const tokenRef = vi.hoisted(() => ({ value: 'token' as string | null }));
 vi.mock('@/lib/api', () => ({
   apiFetch: vi.fn().mockResolvedValue({
     id: 'u-1',
@@ -23,7 +24,7 @@ vi.mock('@/lib/api', () => ({
     systemRole: 'admin',
     status: 'active',
   }),
-  getAccessToken: () => 'token',
+  getAccessToken: () => tokenRef.value,
 }));
 
 const authState = {
@@ -37,8 +38,10 @@ vi.mock('@/context/AuthContext', () => ({
   useOptionalAuth: () => authState,
 }));
 
+const themeRef = vi.hoisted(() => ({ value: 'system' as 'light' | 'dark' | 'system' }));
+const setThemeMock = vi.hoisted(() => vi.fn());
 vi.mock('@/context/ThemeContext', () => ({
-  useTheme: () => ({ theme: 'system', setTheme: vi.fn() }),
+  useTheme: () => ({ theme: themeRef.value, setTheme: setThemeMock }),
 }));
 
 function Wrap({ children }: { children: React.ReactNode }) {
@@ -50,6 +53,9 @@ describe('EditProfileDialog browser', () => {
   beforeEach(() => {
     authState.user.authProvider = 'local';
     authState.user.displayName = 'Alice';
+    tokenRef.value = 'token';
+    themeRef.value = 'system';
+    setThemeMock.mockClear();
     authState.setAuth.mockClear();
     vi.mocked(apiFetch).mockClear();
     vi.mocked(apiFetch).mockResolvedValue({
@@ -176,6 +182,91 @@ describe('EditProfileDialog browser', () => {
     } finally {
       globalThis.fetch = realFetch;
     }
+  });
+
+  it('renders an empty name field and the initials fallback when displayName is undefined', async () => {
+    // displayName undefined → `user?.displayName ?? ''` takes the `?? ''` arm,
+    // and getInitials(user.displayName || '??') takes the `|| '??'` arm.
+    (authState.user as { displayName?: string }).displayName = undefined;
+    const screen = await render(<Wrap><EditProfileDialog open onOpenChange={vi.fn()} /></Wrap>);
+    await expect.element(screen.getByText('Edit profile')).toBeVisible();
+    expect((document.getElementById('displayName') as HTMLInputElement).value).toBe('');
+    expect(document.body.textContent).toContain('?');
+  });
+
+  it('ignores an avatar file-change event with no selected file', async () => {
+    const screen = await render(<Wrap><EditProfileDialog open onOpenChange={vi.fn()} /></Wrap>);
+    const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+    // Fire change with an empty FileList → handleFileSelect's `if (!file) return`.
+    fileInput.dispatchEvent(new Event('change', { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 30));
+    // No error banner appears and the form is still interactive.
+    expect(document.querySelector('[role="alert"]')).toBeNull();
+    await expect.element(screen.getByRole('button', { name: 'Save' })).toBeVisible();
+  });
+
+  it('marks the Dark theme button active when the current theme is dark', async () => {
+    themeRef.value = 'dark';
+    const screen = await render(<Wrap><EditProfileDialog open onOpenChange={vi.fn()} /></Wrap>);
+    // theme === 'dark' ? 'default' : 'outline' → the dark button takes the
+    // default (active) variant. Clicking another option drives setTheme.
+    await expect.element(screen.getByRole('button', { name: 'Dark theme' })).toBeVisible();
+    await screen.getByRole('button', { name: 'Light theme' }).click();
+    expect(setThemeMock).toHaveBeenCalledWith('light');
+  });
+
+  it('marks the Light theme button active when the current theme is light', async () => {
+    themeRef.value = 'light';
+    const screen = await render(<Wrap><EditProfileDialog open onOpenChange={vi.fn()} /></Wrap>);
+    // theme === 'light' → the Light button takes the active (default) variant.
+    await expect.element(screen.getByRole('button', { name: 'Light theme' })).toBeVisible();
+    await screen.getByRole('button', { name: 'Dark theme' }).click();
+    expect(setThemeMock).toHaveBeenCalledWith('dark');
+  });
+
+  it('saves the avatar key without setAuth when no access token is present', async () => {
+    authState.user.authProvider = 'guest';
+    tokenRef.value = null;
+    vi.mocked(apiFetch).mockReset();
+    vi.mocked(apiFetch)
+      .mockResolvedValueOnce({ uploadURL: 'https://s3/put', key: 'avatars/u-1.png' } as never)
+      .mockResolvedValueOnce({ id: 'u-1', email: 'a@x.com', displayName: 'Alice', systemRole: 'admin', status: 'active' } as never);
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn().mockResolvedValue({ ok: true, status: 200 }) as never;
+    try {
+      const onOpenChange = vi.fn();
+      const screen = await render(<Wrap><EditProfileDialog open onOpenChange={onOpenChange} /></Wrap>);
+      const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+      await userEvent.upload(fileInput, pngFile());
+      await vi.waitFor(() => {
+        const img = document.querySelector('img');
+        expect(img?.getAttribute('src') ?? '').toMatch(/^blob:/);
+      });
+      await screen.getByRole('button', { name: 'Save' }).click();
+      await vi.waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+      // token falsy → the `if (token) setAuth(...)` guard is skipped.
+      expect(authState.setAuth).not.toHaveBeenCalled();
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
+  it('falls back to a generic message when the save rejects with a non-Error', async () => {
+    authState.user.authProvider = 'guest';
+    vi.mocked(apiFetch).mockRejectedValueOnce('weird');
+    const screen = await render(<Wrap><EditProfileDialog open onOpenChange={vi.fn()} /></Wrap>);
+    await screen.getByLabelText('Display name').fill('Changed');
+    await screen.getByRole('button', { name: 'Save' }).click();
+    await expect.element(screen.getByRole('alert')).toHaveTextContent('Failed to save profile');
+  });
+
+  it('falls back to a generic message when the avatar upload rejects with a non-Error', async () => {
+    vi.mocked(apiFetch).mockReset();
+    vi.mocked(apiFetch).mockRejectedValueOnce('weird');
+    const screen = await render(<Wrap><EditProfileDialog open onOpenChange={vi.fn()} /></Wrap>);
+    const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+    await userEvent.upload(fileInput, pngFile());
+    await expect.element(screen.getByRole('alert')).toHaveTextContent('Avatar upload failed');
   });
 
   it('surfaces an error when the avatar PUT upload fails', async () => {

@@ -218,4 +218,76 @@ describe('renderMarkdown (legacy regex pipeline)', () => {
     expect(img).not.toBeNull();
     expect(img?.src).toContain('parrot.gif');
   });
+
+  it('takes the hast-tree path when opts.tree is provided', async () => {
+    // The very first line of renderMarkdown short-circuits to renderHastTree
+    // when a tree is supplied (line 416), skipping the regex parser.
+    const tree = {
+      type: 'root',
+      children: [
+        { type: 'element', tagName: 'p', properties: {}, children: [{ type: 'text', value: 'from tree' }] },
+      ],
+    } as never;
+    await render(wrap(<>{renderMarkdown('ignored body', { tree })}</>));
+    expect(document.body.textContent).toContain('from tree');
+  });
+
+  it('highlights a common keyword absent from a language-specific keyword set', async () => {
+    // "go" code: LANGUAGE_KEYWORDS.go lacks "async" but COMMON_CODE_KEYWORDS
+    // has it → the `|| COMMON_CODE_KEYWORDS.has(lowered)` right side runs.
+    await render(wrap(<>{renderMarkdown('```go\nasync\n```')}</>));
+    const code = document.querySelector('pre code')!;
+    expect(code.querySelector('span.text-purple-700')).not.toBeNull();
+  });
+
+  it('returns the raw source for a language block with no tokenizable content', async () => {
+    // A fenced block whose body is only spaces produces no CODE_TOKEN_RE
+    // matches, so renderCodeString returns `src` (the `out.length ? out : src`
+    // false side).
+    await render(wrap(<>{renderMarkdown('```js\n     \n```')}</>));
+    const code = document.querySelector('pre code')!;
+    expect(code.querySelector('span')).toBeNull();
+    expect(code.textContent).toContain(' ');
+  });
+
+  it('highlights a common keyword inside an UNKNOWN language (the ?? COMMON fallback)', async () => {
+    // An unrecognised language → LANGUAGE_KEYWORDS[lang] is undefined, so the
+    // keyword check uses the `?? COMMON_CODE_KEYWORDS` fallback set, and
+    // "return" (a common keyword) still highlights.
+    await render(wrap(<>{renderMarkdown('```madeuplang\nreturn nil\n```')}</>));
+    const code = document.querySelector('pre code')!;
+    expect(code.querySelector('span.text-purple-700')).not.toBeNull();
+  });
+
+  it('renders a group mention with no leading character', async () => {
+    // A body that starts with "@all" → GROUP_MENTION_RE's lead capture is
+    // empty, driving the `m[1] ?? ''` empty side.
+    await render(wrap(<>{renderMarkdown('@all listen up')}</>));
+    expect(document.querySelector('[data-mention-group="all"]')).not.toBeNull();
+  });
+
+  it('renders a hashtag at the very start with no leading character', async () => {
+    const onTagClick = vi.fn();
+    await render(wrap(<>{renderMarkdown('#kickoff today', { onTagClick })}</>));
+    expect(document.querySelector('button[data-tag="kickoff"]')).not.toBeNull();
+  });
+
+  it('renders a giphy embed without width/height when dimensions are omitted', async () => {
+    // `giphy:` ref with no `=WxH` suffix → m[3]/m[4] undefined → the `: undefined`
+    // sides of both Number() ternaries.
+    await render(wrap(<>{renderMarkdown('![GIPHY](giphy:xyz)')}</>));
+    expect(document.body.textContent).toMatch(/GIPHY/);
+  });
+
+  it('leaves an unknown :shortcode: as literal text', async () => {
+    // No emojiMap entry and shortcodeToUnicode returns the input unchanged →
+    // both emoji matchers fall to their literal `:name:` span (lines 319/348).
+    const screen = await render(wrap(<>{renderMarkdown('mystery :definitely_not_an_emoji:')}</>));
+    await expect.element(screen.getByText(/:definitely_not_an_emoji:/)).toBeVisible();
+  });
+
+  it('leaves an unknown skin-toned shortcode as literal text', async () => {
+    const screen = await render(wrap(<>{renderMarkdown('x :nope_no_emoji::skin-tone-2:')}</>));
+    await expect.element(screen.getByText(/:nope_no_emoji:/)).toBeVisible();
+  });
 });

@@ -121,4 +121,56 @@ describe('UserHoverCard browser', () => {
     // The valid timezone surfaces its city name (Tokyo).
     expect(document.body.textContent).toMatch(/Tokyo/);
   });
+
+  it('shows an Inactive badge when the fetched user is deactivated', async () => {
+    apiFetchMock.mockResolvedValue({
+      id: 'u-1',
+      displayName: 'Alice',
+      status: 'deactivated',
+      userStatus: undefined,
+    });
+    await render(
+      <Wrap>
+        <UserHoverCard userId="u-1" displayName="Alice">
+          <span data-testid="inactive-trigger">Alice</span>
+        </UserHoverCard>
+      </Wrap>,
+    );
+    (document.querySelector('[data-testid="inactive-trigger"]') as HTMLElement).click();
+    await vi.waitFor(() => {
+      expect(document.querySelector('[data-testid="hover-status-inactive"]')).not.toBeNull();
+    });
+  });
+
+  it('starts a DM via the "Direct message" button when viewing someone else', async () => {
+    apiFetchMock.mockReset();
+    // First call: the lazy /users fetch on open. Second: the DM create.
+    apiFetchMock
+      .mockResolvedValueOnce({ id: 'u-1', displayName: 'Alice', status: 'active' })
+      .mockResolvedValueOnce({ id: 'conv-new', type: 'dm' });
+    await render(
+      <Wrap>
+        <UserHoverCard userId="u-1" displayName="Alice" currentUserId="u-me">
+          <span data-testid="dm-trigger">Alice</span>
+        </UserHoverCard>
+      </Wrap>,
+    );
+    (document.querySelector('[data-testid="dm-trigger"]') as HTMLElement).click();
+    // The card is open (not self) → the Direct message button renders.
+    await vi.waitFor(() => {
+      expect(document.querySelector('button')).not.toBeNull();
+    });
+    const dmBtn = Array.from(document.querySelectorAll('button')).find((b) =>
+      b.textContent?.includes('Direct message'),
+    ) as HTMLButtonElement;
+    expect(dmBtn).toBeDefined();
+    dmBtn.click();
+    // startDM.mutate → POST /conversations → onSuccess navigates.
+    await vi.waitFor(() => {
+      expect(apiFetchMock).toHaveBeenCalledWith(
+        '/api/v1/conversations',
+        expect.objectContaining({ method: 'POST' }),
+      );
+    });
+  });
 });

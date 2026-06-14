@@ -220,6 +220,45 @@ describe('NotificationContext browser', () => {
     }
   });
 
+  it('still posts a silent banner when sound is disabled (no ping)', async () => {
+    const instances: FakeNote[] = [];
+    const restore = installFakeNotification(instances);
+    const { playNotificationPing } = await import('@/lib/notification-sound');
+    try {
+      await render(<NotificationProvider><Capture /></NotificationProvider>);
+      await vi.waitFor(() => expect(captured).not.toBeNull());
+      (playNotificationPing as ReturnType<typeof vi.fn>).mockClear();
+      captured!.setSoundEnabled(false);
+      await vi.waitFor(() => expect(captured!.prefs.soundEnabled).toBe(false));
+      captured!.dispatch(basePayload({ kind: 'mention', parentType: 'conversation', parentID: 'conv-9', authorID: 'u-other' }));
+      await vi.waitFor(() => expect(instances.length).toBe(1));
+      // soundEnabled=false → no ping, and the banner is marked silent.
+      expect(playNotificationPing).not.toHaveBeenCalled();
+      expect(instances[0].options.silent).toBe(true);
+    } finally {
+      restore();
+    }
+  });
+
+  it('clicking a banner with no deepLink focuses without navigating', async () => {
+    const instances: FakeNote[] = [];
+    const restore = installFakeNotification(instances);
+    try {
+      await render(<NotificationProvider><Capture /></NotificationProvider>);
+      await vi.waitFor(() => expect(captured).not.toBeNull());
+      // Empty deepLink → the `if (n.deepLink)` false arm in onclick.
+      captured!.dispatch(basePayload({ kind: 'mention', parentType: 'conversation', parentID: 'conv-9', authorID: 'u-other', deepLink: '' }));
+      await vi.waitFor(() => expect(instances.length).toBe(1));
+      window.history.pushState({}, '', '/stay-here');
+      instances[0].onclick!();
+      await new Promise((r) => setTimeout(r, 20));
+      // No navigation occurred — we stayed on the pushed path.
+      expect(window.location.pathname).toBe('/stay-here');
+    } finally {
+      restore();
+    }
+  });
+
   it('useNotifications returns the noop value outside a provider', async () => {
     let api: ReturnType<typeof useNotifications> | null = null;
     function Inner() {

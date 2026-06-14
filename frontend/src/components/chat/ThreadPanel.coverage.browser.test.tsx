@@ -58,6 +58,18 @@ vi.mock('./MessageInput', () => ({
         >
           draft
         </button>
+        <button
+          data-testid="mi-draft-noatt"
+          onClick={() => props.onDraftChange?.({ body: 'draft no attachments' } as { body: string })}
+        >
+          draft-no-att
+        </button>
+        <button
+          data-testid="mi-send-noatt"
+          onClick={() => props.onSend({ body: 'edited no attachments' } as { body: string })}
+        >
+          send-no-att
+        </button>
         <button data-testid="mi-cancel" onClick={() => props.onCancel?.()}>
           cancel
         </button>
@@ -294,6 +306,42 @@ describe('ThreadPanel coverage — draft change', () => {
       body: 'draft text',
       attachmentIDs: [],
     });
+  });
+
+  it('defaults attachmentIDs to [] when a draft change omits them', async () => {
+    // onDraftChange payload without attachmentIDs → handleDraftChange's
+    // `value.attachmentIDs ?? []` nullish arm (line 345).
+    const screen = await mount();
+    await screen.getByTestId('mi-draft-noatt').click();
+    expect(saveDraftMutate).toHaveBeenCalledWith({
+      parentID: 'ch-1',
+      parentType: 'channel',
+      parentMessageID: 'ROOT',
+      body: 'draft no attachments',
+      attachmentIDs: [],
+    });
+  });
+});
+
+describe('ThreadPanel coverage — edit attachmentIDs default', () => {
+  it('defaults the edited attachmentIDs to [] when the payload omits them', async () => {
+    isMobileValue = true;
+    threadMessagesState = {
+      data: [rootMsg(), reply('R1', 'original body', { attachmentIDs: ['a-prev'] })],
+      isLoading: false,
+    };
+    const screen = await mount();
+    await screen.getByTestId('edit-R1').click();
+    await vi.waitFor(() => {
+      expect(lastInputProps?.submitLabel).toBe('Save');
+    });
+    // Submit an edit whose payload omits attachmentIDs → handleEditMessage's
+    // `value.attachmentIDs ?? []` nullish arm (line 371). Body changed and the
+    // attachment count differs from the original → it mutates.
+    await screen.getByTestId('mi-send-noatt').click();
+    expect(editMessageMutate).toHaveBeenCalled();
+    const vars = editMessageMutate.mock.calls[0][0];
+    expect(vars.attachmentIDs).toEqual([]);
   });
 });
 

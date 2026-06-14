@@ -14,6 +14,7 @@ import {
   $createParagraphNode,
   $createTextNode,
   $isLineBreakNode,
+  $setSelection,
   KEY_ENTER_COMMAND,
   KEY_ESCAPE_COMMAND,
   type LexicalEditor,
@@ -147,5 +148,28 @@ describe('SubmitOnEnterPlugin (browser)', () => {
     editor.dispatchCommand(KEY_ESCAPE_COMMAND, ev());
     await flush();
     expect(editor.getEditorState().read(() => $getRoot().getTextContent())).toBe('x');
+  });
+
+  it('with onSubmit, Enter with no selection treats it as top-level and submits', async () => {
+    // No range selection → selectionIsInsideStructuredBlock returns false on
+    // its `!$isRangeSelection` true side, and the submit path runs.
+    const onSubmit = vi.fn();
+    const editor = await mount({ onSubmit });
+    seedParagraph(editor, 'orphan');
+    editor.update(() => { $setSelection(null); }, { discrete: true });
+    editor.dispatchCommand(KEY_ENTER_COMMAND, ev());
+    await flush();
+    expect(onSubmit).toHaveBeenCalledWith(expect.stringContaining('orphan'));
+  });
+
+  it('without onSubmit, Enter with no selection is left to the default (no break injected)', async () => {
+    // The `if (!onSubmit)` branch hits its `!$isRangeSelection(selection)`
+    // true side and returns false — no soft break is inserted.
+    const editor = await mount({});
+    seedParagraph(editor, 'orphan');
+    editor.update(() => { $setSelection(null); }, { discrete: true });
+    editor.dispatchCommand(KEY_ENTER_COMMAND, ev());
+    await flush();
+    expect(paragraphLineBreaks(editor)).toBe(0);
   });
 });
