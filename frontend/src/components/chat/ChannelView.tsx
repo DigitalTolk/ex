@@ -187,6 +187,7 @@ export function ChannelView() {
   );
   const handleEditMessage = useCallback(
     (value: { body: string; attachmentIDs: string[] }) => {
+      /* istanbul ignore next -- handleEditMessage is only wired as the composer's onSend while activeEditingMessage (hence editingMessage) is set, so it is never invoked with a null editingMessage. */
       if (!editingMessage) return;
       const currentAttachmentIDs = editingMessage.attachmentIDs ?? [];
       const same =

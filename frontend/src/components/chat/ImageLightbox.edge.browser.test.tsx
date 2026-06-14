@@ -190,6 +190,63 @@ describe('ImageLightbox edge branches', () => {
     expect(Number(image.dataset.zoom)).toBe(1);
   });
 
+  it('ignores other keys when navigating a multi-image lightbox (non-arrow key)', async () => {
+    const onIndexChange = vi.fn();
+    const onClose = vi.fn();
+    await render(lightbox({
+      onIndexChange,
+      onClose,
+      images: [
+        { url: imageURL, filename: 'a.png', contentType: 'image/png', size: 2048 },
+        { url: imageURL, filename: 'b.png', contentType: 'image/png', size: 2048 },
+      ],
+    }));
+    // A non-arrow, non-escape key falls through both arrow guards.
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'a', bubbles: true }));
+    await new Promise((r) => setTimeout(r, 10));
+    expect(onIndexChange).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('shows the postedIn context prefix in the toolbar metadata', async () => {
+    await render(lightbox({ postedIn: '~general' }));
+    const toolbar = document.querySelector('[data-testid="image-lightbox-toolbar"]') as HTMLElement;
+    expect(toolbar.textContent).toContain('~general');
+  });
+
+  it('does not zoom from a desktop stationary tap (handleMobileTap returns false)', async () => {
+    if (window.innerWidth <= 767) return;
+    await render(lightbox());
+    const stage = document.querySelector('[data-testid="image-lightbox-zoom-stage"]') as HTMLElement;
+    const image = document.querySelector('[data-testid="image-lightbox-image"]') as HTMLImageElement;
+    // A clean pointer tap (down+up stationary) reaches the tap-release path,
+    // which calls handleMobileTap — on desktop it must bail and never zoom.
+    stage.dispatchEvent(new PointerEvent('pointerdown', { pointerId: 51, pointerType: 'mouse', clientX: 250, clientY: 250, bubbles: true }));
+    stage.dispatchEvent(new PointerEvent('pointerup', { pointerId: 51, pointerType: 'mouse', clientX: 250, clientY: 250, bubbles: true }));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(Number(image.dataset.zoom)).toBe(1);
+  });
+
+  it('cleans up a two-pointer pinch gesture on pointercancel (mobile)', async () => {
+    if (window.innerWidth > 767) return;
+    await render(lightbox());
+    const stage = document.querySelector('[data-testid="image-lightbox-zoom-stage"]') as HTMLElement;
+    const image = document.querySelector('[data-testid="image-lightbox-image"]') as HTMLImageElement;
+    const cx = window.innerWidth / 2;
+    const cy = window.innerHeight / 2;
+    // Two-finger pinch-out, then cancel one finger mid-gesture.
+    stage.dispatchEvent(new PointerEvent('pointerdown', { pointerId: 61, pointerType: 'touch', clientX: cx - 35, clientY: cy, bubbles: true }));
+    stage.dispatchEvent(new PointerEvent('pointerdown', { pointerId: 62, pointerType: 'touch', clientX: cx + 35, clientY: cy, bubbles: true }));
+    stage.dispatchEvent(new PointerEvent('pointermove', { pointerId: 61, pointerType: 'touch', clientX: cx - 120, clientY: cy, bubbles: true }));
+    stage.dispatchEvent(new PointerEvent('pointermove', { pointerId: 62, pointerType: 'touch', clientX: cx + 120, clientY: cy, bubbles: true }));
+    await vi.waitFor(() => expect(Number(image.dataset.zoom)).toBeGreaterThan(1));
+    // Cancel one pointer: remaining < 2 drops the pinch back to idle.
+    stage.dispatchEvent(new PointerEvent('pointercancel', { pointerId: 61, pointerType: 'touch', clientX: cx - 120, clientY: cy, bubbles: true }));
+    stage.dispatchEvent(new PointerEvent('pointercancel', { pointerId: 62, pointerType: 'touch', clientX: cx + 120, clientY: cy, bubbles: true }));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(document.querySelector('[data-testid="image-lightbox"]')).not.toBeNull();
+  });
+
   it('double-click toggles mobile image zoom (handleImageStageDoubleClick)', async () => {
     if (window.innerWidth > 767) return;
     await render(lightbox());
@@ -197,5 +254,24 @@ describe('ImageLightbox edge branches', () => {
     const image = document.querySelector('[data-testid="image-lightbox-image"]') as HTMLImageElement;
     stage.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true }));
     await vi.waitFor(() => expect(Number(image.dataset.zoom)).toBe(2));
+  });
+
+  it('handleMobileTap bails on a non-image attachment tap (mobile !isImage arm)', async () => {
+    if (window.innerWidth > 767) return;
+    const onClose = vi.fn();
+    await render(lightbox({
+      onClose,
+      images: [{ url: 'https://cdn.test/report.pdf', filename: 'report.pdf', contentType: 'application/pdf', size: 4096 }],
+    }));
+    const stage = document.querySelector('[data-testid="image-lightbox-attachment-stage"]') as HTMLElement;
+    expect(stage).not.toBeNull();
+    // A stationary touch tap-release on a non-image attachment reaches
+    // handleMobileTap, which returns false because isImage is false — no
+    // zoom toggle, no close.
+    stage.dispatchEvent(new PointerEvent('pointerdown', { pointerId: 71, pointerType: 'touch', clientX: 250, clientY: 250, bubbles: true }));
+    stage.dispatchEvent(new PointerEvent('pointerup', { pointerId: 71, pointerType: 'touch', clientX: 250, clientY: 250, bubbles: true }));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(onClose).not.toHaveBeenCalled();
+    expect(document.querySelector('[data-testid="image-lightbox"]')).not.toBeNull();
   });
 });

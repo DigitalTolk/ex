@@ -14,6 +14,7 @@ import {
   $createParagraphNode,
   $createTextNode,
   $createLineBreakNode,
+  $setSelection,
   KEY_ENTER_COMMAND,
   PASTE_COMMAND,
   type LexicalEditor,
@@ -228,6 +229,23 @@ describe('MarkdownShortcutFallbackPlugin (browser)', () => {
     expect(firstChildType(editor)).toBe('code');
     // The code node retained all three logical lines (blank line included).
     expect(editor.getEditorState().read(() => $getRoot().getFirstChild()?.getTextContent() ?? '')).toContain('line3');
+  });
+
+  it('pastes fenced code with no active range selection (selectEnd fallback)', async () => {
+    // Clear the Lexical selection before the paste so the handler's
+    // `$isRangeSelection(currentSelection) ? ... : $getRoot().selectEnd()`
+    // takes its right-hand selectEnd arm.
+    const editor = await mount();
+    seedParagraph(editor, '');
+    editor.update(() => { $setSelection(null); }, { discrete: true });
+    await flush();
+    editor.dispatchCommand(PASTE_COMMAND, pasteEvent('```\nselected-end\n```'));
+    await flush();
+    let hasCode = false;
+    editor.getEditorState().read(() => {
+      for (const c of $getRoot().getChildren()) if (c.getType() === 'code') hasCode = true;
+    });
+    expect(hasCode).toBe(true);
   });
 
   it('ignores a paste event with no clipboard data', async () => {

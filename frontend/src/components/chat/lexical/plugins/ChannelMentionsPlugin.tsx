@@ -102,6 +102,7 @@ function ChannelRow({ channel }: { channel: ChannelHit }) {
       <Icon className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
       <div className="min-w-0 flex-1">
         <div className="truncate font-medium">~{channel.slug}</div>
+        {/* istanbul ignore next -- channel.description is always undefined (hardcoded in the options memo above); the render branch is dead until a description source is wired up. */}
         {channel.description && (
           <div className="truncate text-xs text-muted-foreground">{channel.description}</div>
         )}

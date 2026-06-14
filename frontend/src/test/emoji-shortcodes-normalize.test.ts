@@ -149,6 +149,13 @@ describe('normalizeEmojiInBody', () => {
     expect(normalizeEmojiInBody('plain text only')).toBe('plain text only');
   });
 
+  it('returns an empty string for a falsy body (optimistic/partial message)', () => {
+    // Guard against a partial message body (undefined) reaching the
+    // normalizer; `body.length` must not throw.
+    expect(normalizeEmojiInBody(undefined as unknown as string)).toBe('');
+    expect(normalizeEmojiInBody('')).toBe('');
+  });
+
   it('does NOT touch emoticons inside code spans', () => {
     expect(normalizeEmojiInBody('use `if (a) :)` carefully')).toBe(
       'use `if (a) :)` carefully',

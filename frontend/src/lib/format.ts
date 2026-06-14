@@ -20,6 +20,7 @@ export function getInitials(name: string): string {
 const URL_RE = /https?:\/\/[^\s<>"`]+/g;
 const TRAILING_PUNCT_RE = /[.,!?;:)\]]+$/;
 export function extractURLs(body: string): string[] {
+  if (!body) return [];
   const urls: string[] = [];
   let i = 0;
   while (i < body.length) {

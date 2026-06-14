@@ -174,6 +174,7 @@ const NORMALIZE_EMOJI_RE = (() => {
 // fenced code blocks and inline `code` spans — nobody wants
 // `console.log("🎉")` rewritten on the wire.
 export function normalizeEmojiInBody(body: string): string {
+  if (!body) return '';
   let out = '';
   let i = 0;
   while (i < body.length) {

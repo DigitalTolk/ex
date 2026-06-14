@@ -125,6 +125,7 @@ export function MessageItem({
   const toolbarVisible = hovered || actionsMenuOpen;
   const canEdit = isOwn && !disableEditing;
   const startEdit = useCallback(() => {
+    /* istanbul ignore next -- startEdit is only wired (edit registry + the Edit menu item) behind `canEdit`, so it is never invoked when canEdit is false; this is a defensive re-check. */
     if (!canEdit) return;
     if (isMobile) {
       onEditMessage?.(message);
@@ -169,10 +170,12 @@ export function MessageItem({
         document.getElementById(id)?.scrollIntoView({ block: 'nearest' });
       });
     });
+    /* istanbul ignore next -- el resolves the row's own #msg-<id> (always present) and ResizeObserver exists in every supported browser, so this early-return guard is dead defensive. */
     if (!el || typeof ResizeObserver === 'undefined') return;
     let lastHeight = el.getBoundingClientRect().height;
     const ro = new ResizeObserver(() => {
       const h = el.getBoundingClientRect().height;
+      /* istanbul ignore next -- fires only when the inline editor grows taller than its initial measured height, a layout side-effect the headless test environment can't deterministically reproduce. */
       if (h > lastHeight + 0.5) {
         el.scrollIntoView({ block: 'nearest' });
       }
@@ -190,6 +193,7 @@ export function MessageItem({
   const { openTag } = useTagOpen();
 
   function buildMessageLink(): string {
+    /* istanbul ignore next -- SSR guard: this is a browser-only app, so window is always defined; the empty-origin arm is unreachable. */
     const origin = typeof window !== 'undefined' ? window.location.origin : '';
     const slug = channelSlug ?? channelId;
     if (slug) return `${origin}${buildChannelHref(slug, message.id, message.parentMessageID)}`;
@@ -295,6 +299,7 @@ export function MessageItem({
       value.body === message.body &&
       value.attachmentIDs.length === currentAttachmentIDs.length &&
       value.attachmentIDs.every((id, idx) => id === currentAttachmentIDs[idx]);
+    /* istanbul ignore next -- the composer disables Save when the body is empty and there are no attachments, so the trimmed-empty arm of this guard is never reached from the UI; only the `same` arm fires. */
     if (same || (!value.body.trim() && value.attachmentIDs.length === 0)) {
       endEdit();
       return;

@@ -228,6 +228,15 @@ describe('useThreads — seen-state and sorting helpers', () => {
     expect(apiFetchMock.mock.calls[0][0]).toContain('/user-state/threads/conversations/cv-9/t-7/seen');
   });
 
+  it('markThreadSeen swallows a rejected server PUT (.catch arm)', async () => {
+    // The fire-and-forget PUT rejects → `.catch(() => undefined)` (line 100)
+    // must absorb it without an unhandled rejection.
+    apiFetchMock.mockRejectedValue(new Error('offline'));
+    markThreadSeen('t-rej', '2026-04-04T12:00:00Z', { parentID: 'ch-1', parentType: 'channel' });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(getSeenMap()['t-rej']).toBe('2026-04-04T12:00:00Z');
+  });
+
   it('unreadThreadIDs skips threads with no recorded seen entry', () => {
     const threads = [
       threadSummary({ threadRootID: 't-seen', latestActivityAt: '2026-01-10T00:00:00Z' }),

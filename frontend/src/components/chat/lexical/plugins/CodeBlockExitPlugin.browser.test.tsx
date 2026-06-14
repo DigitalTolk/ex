@@ -142,6 +142,25 @@ describe('CodeBlockExitPlugin (browser)', () => {
     expect(paragraphCount(editor)).toBe(0);
   });
 
+  it('ArrowDown outside any code block is a no-op (codeNode null)', async () => {
+    // readArrowDownExitTarget finds no enclosing CodeNode → returns null and
+    // the handler bails (the `if (!codeNode) return null` true side).
+    const editor = await mount();
+    editor.update(() => {
+      const root = $getRoot();
+      root.clear();
+      const para = $createParagraphNode();
+      const t = $createTextNode('just a paragraph');
+      para.append(t);
+      root.append(para);
+      t.select(3, 3);
+    }, { discrete: true });
+    editor.dispatchCommand(KEY_ARROW_DOWN_COMMAND, ev());
+    await flush();
+    expect(hasCodeNode(editor)).toBe(false);
+    expect(paragraphCount(editor)).toBe(1);
+  });
+
   it('ArrowDown with a modifier key does not exit the code block', async () => {
     const editor = await mount();
     seedCode(editor, ['code']);

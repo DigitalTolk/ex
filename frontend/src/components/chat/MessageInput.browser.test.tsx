@@ -1,10 +1,17 @@
-import { describe, expect, it, vi } from 'vitest';
-import { render } from 'vitest-browser-react';
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
+import { render, cleanup } from 'vitest-browser-react';
+import { userEvent } from 'vitest/browser';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { MessageInput } from './MessageInput';
+import { MessageInput, type MessageInputHandle } from './MessageInput';
 import { expectPaintedAtCenter } from '@/test/browser-assertions';
+import { setWSSender } from '@/lib/ws-sender';
+import { dispatchFocusComposer } from '@/lib/window-events';
 
 const uploadAttachmentMock = vi.hoisted(() => vi.fn());
+const deleteDraftMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+const settingsState = vi.hoisted(() => ({
+  current: { maxUploadBytes: 0, allowedExtensions: [] as string[], giphyEnabled: false, giphyAPIKey: '' },
+}));
 
 vi.mock('@/lib/api', () => ({
   apiFetch: vi.fn().mockResolvedValue([]),
@@ -23,7 +30,7 @@ vi.mock('@/lib/api', () => ({
 }));
 
 vi.mock('@/hooks/useSettings', () => ({
-  useWorkspaceSettings: () => ({ data: { maxUploadBytes: 0, allowedExtensions: [], giphyEnabled: false } }),
+  useWorkspaceSettings: () => ({ data: settingsState.current }),
   useUpdateWorkspaceSettings: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 
@@ -41,7 +48,7 @@ vi.mock('@/hooks/useConversations', () => ({
 
 vi.mock('@/hooks/useAttachments', () => ({
   uploadAttachment: uploadAttachmentMock,
-  useDeleteDraftAttachment: () => ({ mutateAsync: vi.fn().mockResolvedValue(undefined), mutate: vi.fn(), isPending: false }),
+  useDeleteDraftAttachment: () => ({ mutateAsync: deleteDraftMock, mutate: vi.fn(), isPending: false }),
   useAttachment: () => ({ data: undefined, isLoading: false }),
   useAttachmentsBatch: () => ({ map: new Map(), isLoading: false }),
 }));
@@ -486,5 +493,279 @@ describe('MessageInput browser behavior', () => {
     await expect.element(screen.getByTestId('message-attachments-too-many')).toBeVisible();
     const send = screen.getByRole('button', { name: 'Send message' }).element() as HTMLButtonElement;
     expect(send.disabled).toBe(true);
+  });
+});
+
+// Desktop-only flow coverage: the link dialog, typing emit, ArrowUp edit,
+// draft-change debounce/flush, attachment removal error handling, the GIF
+// picker, and the upload pool's success / partial-failure paths. These run on
+// the desktop project (the mobile compact composer hides the link button and
+// some of these surfaces); they bail early on narrow viewports.
+describe('MessageInput desktop flows (browser)', () => {
+  beforeEach(() => {
+    deleteDraftMock.mockReset();
+    deleteDraftMock.mockResolvedValue(undefined);
+    setWSSender(null);
+  });
+  // Let Lexical's async update listeners (the typeahead setQuery / onChange
+  // microtasks) drain before the test ends so their state updates resolve
+  // inside the test window instead of leaking into the next test's act gate.
+  async function settle() {
+    for (let i = 0; i < 3; i++) {
+      await new Promise((r) => requestAnimationFrame(() => r(undefined)));
+      await new Promise((r) => setTimeout(r, 0));
+    }
+  }
+
+  afterEach(async () => {
+    setWSSender(null);
+    cleanup();
+    // Drain any trailing Lexical/typeahead state updates so their act
+    // warnings resolve inside this test's window — this afterEach is
+    // registered after the console-gate's, so it runs *before* the gate
+    // assertion (afterEach hooks run in reverse registration order).
+    await settle();
+  });
+
+  async function typeInComposer(screen: ReturnType<typeof renderWithProviders>, text: string) {
+    const editor = screen.getByLabelText('Message input');
+    await editor.click();
+    await editor.fill(text);
+    await settle();
+  }
+
+  it('opens the link dialog, blocks unsafe URLs, and commits an http link', async () => {
+    if (window.innerWidth <= 767) return;
+    const screen = await renderWithProviders(<MessageInput onSend={vi.fn()} initialBody="anchor text" />);
+
+    await screen.getByLabelText('Link').click();
+    const dialog = screen.getByLabelText('Insert link');
+    await expect.element(dialog).toBeVisible();
+
+    const urlInput = screen.getByLabelText('URL').element() as HTMLInputElement;
+    const insert = screen.getByRole('button', { name: 'Insert' }).element() as HTMLButtonElement;
+    // Empty URL → Insert disabled (isHttpUrl gate).
+    expect(insert.disabled).toBe(true);
+
+    // A javascript: scheme passes the <input type=url> but is rejected by
+    // isHttpUrl — Insert stays disabled.
+    await userEvent.fill(urlInput, 'javascript:alert(1)');
+    expect(insert.disabled).toBe(true);
+
+    // A real http(s) URL enables Insert; submitting closes the dialog.
+    await userEvent.fill(urlInput, 'https://example.com');
+    await vi.waitFor(() => expect(insert.disabled).toBe(false));
+    await insert.click();
+    await vi.waitFor(() => {
+      expect(document.querySelector('[aria-label="Insert link"]')).toBeNull();
+    });
+  });
+
+  it('cancels the link dialog without committing', async () => {
+    if (window.innerWidth <= 767) return;
+    const screen = await renderWithProviders(<MessageInput onSend={vi.fn()} initialBody="x" />);
+    await screen.getByLabelText('Link').click();
+    await expect.element(screen.getByLabelText('Insert link')).toBeVisible();
+    await screen.getByRole('button', { name: 'Cancel' }).click();
+    await vi.waitFor(() => {
+      expect(document.querySelector('[aria-label="Insert link"]')).toBeNull();
+    });
+  });
+
+  it('emits throttled typing frames over the websocket while composing', async () => {
+    if (window.innerWidth <= 767) return;
+    const frames: string[] = [];
+    setWSSender((f) => frames.push(f));
+    const screen = await renderWithProviders(
+      <MessageInput
+        onSend={vi.fn()}
+        typingParentID="ch-1"
+        typingParentType="channel"
+        typingThreadRootID="msg-root"
+      />,
+    );
+    await typeInComposer(screen, 'hello');
+    await vi.waitFor(() => {
+      expect(frames.length).toBeGreaterThanOrEqual(1);
+    });
+    const frame = JSON.parse(frames[0]);
+    expect(frame).toMatchObject({
+      type: 'typing',
+      parentID: 'ch-1',
+      parentType: 'channel',
+      parentMessageID: 'msg-root',
+    });
+    // Throttled: a burst of keystrokes within 3s does not flood the socket.
+    expect(frames.length).toBeLessThan(5);
+  });
+
+  it('does not emit typing frames when no typing parent is configured', async () => {
+    if (window.innerWidth <= 767) return;
+    const frames: string[] = [];
+    setWSSender((f) => frames.push(f));
+    const screen = await renderWithProviders(<MessageInput onSend={vi.fn()} />);
+    await typeInComposer(screen, 'hi');
+    // emitTyping returns early without a typingParentID/Type.
+    await new Promise((r) => setTimeout(r, 50));
+    expect(frames.length).toBe(0);
+  });
+
+  it('dispatches an edit-last request on ArrowUp in an empty composer', async () => {
+    if (window.innerWidth <= 767) return;
+    const seen: string[] = [];
+    const handler = (e: Event) => {
+      const id = (e as CustomEvent<{ messageId: string }>).detail?.messageId;
+      if (id) seen.push(id);
+    };
+    window.addEventListener('ex:edit-message', handler);
+    try {
+      const screen = await renderWithProviders(
+        <MessageInput onSend={vi.fn()} lastOwnMessageId="msg-9" />,
+      );
+      const editor = screen.getByLabelText('Message input');
+      await editor.click();
+      await userEvent.keyboard('{ArrowUp}');
+      await vi.waitFor(() => {
+        expect(seen).toContain('msg-9');
+      });
+      await settle();
+    } finally {
+      window.removeEventListener('ex:edit-message', handler);
+    }
+  });
+
+  it('debounces draft changes and flushes the latest draft on window blur', async () => {
+    if (window.innerWidth <= 767) return;
+    const onDraftChange = vi.fn();
+    const screen = await renderWithProviders(
+      <MessageInput onSend={vi.fn()} focusKey="ch-1" onDraftChange={onDraftChange} />,
+    );
+    await typeInComposer(screen, 'draft body');
+    // The 600ms debounce eventually fires onDraftChange with the typed body.
+    await vi.waitFor(() => {
+      expect(onDraftChange).toHaveBeenCalled();
+      const last = onDraftChange.mock.calls.at(-1)![0];
+      expect(last.body).toContain('draft');
+    }, { timeout: 2000 });
+
+    // A window blur flushes immediately via flushDraft.
+    onDraftChange.mockClear();
+    window.dispatchEvent(new Event('blur'));
+    await vi.waitFor(() => {
+      expect(onDraftChange).toHaveBeenCalled();
+    });
+    await settle();
+  });
+
+  it('refocuses the composer on a matching focus-composer event', async () => {
+    if (window.innerWidth <= 767) return;
+    const screen = await renderWithProviders(
+      <MessageInput onSend={vi.fn()} typingParentID="ch-7" typingParentType="channel" />,
+    );
+    const editor = screen.getByLabelText('Message input').element() as HTMLElement;
+    editor.blur();
+    dispatchFocusComposer({ parentID: 'ch-7', inThread: false });
+    await vi.waitFor(() => {
+      expect(document.activeElement === editor || editor.contains(document.activeElement)).toBe(true);
+    });
+    await settle();
+  });
+
+  it('removes a draft attachment and swallows a 409 conflict from the server', async () => {
+    const { ApiError } = await import('@/lib/api');
+    deleteDraftMock.mockRejectedValueOnce(new ApiError(409, 'still referenced'));
+    const screen = await renderWithProviders(
+      <MessageInput
+        onSend={vi.fn()}
+        initialDrafts={[{ id: 'att-x', filename: 'a.png', contentType: 'image/png', size: 10 }]}
+      />,
+    );
+    await expect.element(screen.getByLabelText('Draft attachments')).toBeVisible();
+    await screen.getByRole('button', { name: /Remove/ }).click();
+    await vi.waitFor(() => {
+      expect(deleteDraftMock).toHaveBeenCalledWith('att-x');
+    });
+    // The chip is gone and no error rail surfaced (409 is swallowed).
+    await vi.waitFor(() => {
+      expect(document.querySelector('[aria-label="Draft attachments"]')).toBeNull();
+    });
+    expect(document.querySelector('[role="alert"]')).toBeNull();
+  });
+
+  it('surfaces a non-409 error when removing a draft attachment fails', async () => {
+    deleteDraftMock.mockRejectedValueOnce(new Error('network down'));
+    const screen = await renderWithProviders(
+      <MessageInput
+        onSend={vi.fn()}
+        initialDrafts={[{ id: 'att-y', filename: 'b.png', contentType: 'image/png', size: 10 }]}
+      />,
+    );
+    await screen.getByRole('button', { name: /Remove/ }).click();
+    await expect.element(screen.getByText('network down')).toBeVisible();
+  });
+
+  it('uploads files through the imperative handle, capping at the per-message limit', async () => {
+    uploadAttachmentMock.mockImplementation(
+      async (
+        file: File,
+        cb?: { onInit?: (i: { id: string; filename: string; contentType: string; size: number; alreadyExists: boolean; uploadURL: string }) => void; onProgress?: (f: number) => void },
+      ) => {
+        cb?.onInit?.({ id: `srv-${file.name}`, filename: file.name, contentType: file.type || 'application/octet-stream', size: file.size, alreadyExists: true, uploadURL: 'x' });
+        cb?.onProgress?.(1);
+        return { id: `srv-${file.name}`, filename: file.name, contentType: 'application/octet-stream', size: file.size, alreadyExists: true, uploadURL: 'x' };
+      },
+    );
+    const ref = { current: null as MessageInputHandle | null };
+    const screen = await renderWithProviders(
+      <MessageInput ref={ref} onSend={vi.fn()} />,
+    );
+    // Drive the imperative uploadFiles entrypoint with more than the cap (11
+    // files > 10) so the over-limit warning + slice path both run.
+    const files = Array.from({ length: 11 }, (_, i) => new File([`b${i}`], `f${i}.png`, { type: 'image/png' }));
+    await ref.current!.uploadFiles(files);
+    await expect.element(screen.getByLabelText('Draft attachments')).toBeVisible();
+    // The over-limit warning rail mentions the skipped overflow.
+    await expect.element(screen.getByText(/Skipped/)).toBeVisible();
+    uploadAttachmentMock.mockReset();
+  });
+
+  it('reports a per-file upload failure without dropping the surviving chips', async () => {
+    uploadAttachmentMock.mockImplementation(
+      async (
+        file: File,
+        cb?: { onInit?: (i: { id: string; filename: string; contentType: string; size: number; alreadyExists: boolean; uploadURL: string }) => void; onProgress?: (f: number) => void },
+      ) => {
+        if (file.name === 'bad.png') throw new Error('upload exploded');
+        cb?.onInit?.({ id: `srv-${file.name}`, filename: file.name, contentType: file.type, size: file.size, alreadyExists: true, uploadURL: 'x' });
+        cb?.onProgress?.(1);
+        return { id: `srv-${file.name}`, filename: file.name, contentType: file.type, size: file.size, alreadyExists: true, uploadURL: 'x' };
+      },
+    );
+    const ref = { current: null as MessageInputHandle | null };
+    const screen = await renderWithProviders(<MessageInput ref={ref} onSend={vi.fn()} />);
+    await ref.current!.uploadFiles([
+      new File(['ok'], 'good.png', { type: 'image/png' }),
+      new File(['x'], 'bad.png', { type: 'image/png' }),
+    ]);
+    // The failure surfaces on the error rail; the good chip survives.
+    await expect.element(screen.getByText('upload exploded')).toBeVisible();
+    await expect.element(screen.getByLabelText('Draft attachments')).toBeVisible();
+    uploadAttachmentMock.mockReset();
+  });
+
+  it('renders the GIF picker trigger when GIPHY is enabled', async () => {
+    // The GiphyPicker (and thus the `giphyEnabled &&` branch) only renders
+    // when both the flag and an API key are present.
+    settingsState.current = { maxUploadBytes: 0, allowedExtensions: [], giphyEnabled: true, giphyAPIKey: 'gk-test' };
+    try {
+      const screen = await renderWithProviders(<MessageInput onSend={vi.fn()} />);
+      if (window.innerWidth <= 767) {
+        // Mobile compact composer hides the toolbar until focused.
+        await screen.getByLabelText('Message input').click();
+      }
+      await expect.element(screen.getByLabelText('GIF')).toBeVisible();
+    } finally {
+      settingsState.current = { maxUploadBytes: 0, allowedExtensions: [], giphyEnabled: false, giphyAPIKey: '' };
+    }
   });
 });

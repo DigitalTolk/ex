@@ -413,4 +413,259 @@ describe('AppLayout browser behavior', () => {
     await new Promise((r) => setTimeout(r, 20));
     expect(main.dataset.channelDragging).toBe('false');
   });
+
+  // ---- Additional branch coverage ----
+
+  it('a vertical drag past the axis-lock hands off to native scroll (absY >= absX)', async () => {
+    if (window.innerWidth > 767) return;
+    await render(
+      <LayoutHarness>
+        <PageContainer title="Threads">
+          <div style={{ height: 1600 }}>Scrollable thread content</div>
+        </PageContainer>
+      </LayoutHarness>,
+    );
+    const main = document.querySelector('[data-app-main="true"]') as HTMLElement;
+    // absX = 20 (>= axis-lock 12) but absY = 60 >= absX → vertical wins, no latch.
+    dispatchTouch(main, 'touchstart', 120, 400);
+    const move = dispatchTouch(main, 'touchmove', 140, 460);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(move.defaultPrevented).toBe(false);
+    expect(main.dataset.channelDragging).toBe('false');
+  });
+
+  it('aborts the open swipe when the gesture starts on an element inside a right-side sheet', async () => {
+    if (window.innerWidth > 767) return;
+    await render(
+      <MemoryRouter initialEntries={['/threads']}>
+        <div style={{ height: 500 }}>
+          <AppLayout>
+            <PageContainer title="Threads">
+              {/* The sheet lives INSIDE the swipeable main so the gesture's
+                  event target is itself within the right sidebar — exercises
+                  the eventTarget.closest('[data-mobile-right-sidebar]') arm. */}
+              <div data-mobile-right-sidebar="true" data-testid="inner-sheet" style={{ height: 200 }}>
+                Inner sheet
+              </div>
+            </PageContainer>
+          </AppLayout>
+        </div>
+      </MemoryRouter>,
+    );
+    const sheet = document.querySelector('[data-testid="inner-sheet"]') as HTMLElement;
+    dispatchTouch(sheet, 'touchstart', 12, 300);
+    const move = dispatchTouch(sheet, 'touchmove', 100, 304);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(move.defaultPrevented).toBe(false);
+    const main = document.querySelector('[data-app-main="true"]') as HTMLElement;
+    expect(main.dataset.channelDragging).toBe('false');
+  });
+
+  it('clears the drag offset when a latched swipe ends without crossing the threshold (committed but short)', async () => {
+    if (window.innerWidth > 767) return;
+    await render(
+      <MemoryRouter initialEntries={['/threads']}>
+        <div style={{ height: 500 }}>
+          <AppLayout>
+            <PageContainer title="Threads"><div>Thread content</div></PageContainer>
+          </AppLayout>
+        </div>
+      </MemoryRouter>,
+    );
+    const main = document.querySelector('[data-app-main="true"]') as HTMLElement;
+    // Latch open (edge start, absX>=12, horizontal), then end with total
+    // travel below the 80px pixel threshold and 0 velocity → no commit.
+    dispatchTouch(main, 'touchstart', 10, 300);
+    dispatchTouch(main, 'touchmove', 40, 302);
+    await vi.waitFor(() => expect(main.dataset.channelDragging).toBe('true'));
+    dispatchTouch(main, 'touchend', 40, 302);
+    await vi.waitFor(() => {
+      expect(main.dataset.channelDragging).toBe('false');
+      expect(main.dataset.mobileChannelsOpen).toBe('false');
+    });
+  });
+
+  it('a tiny swipe that never latches clears the offset on release (uncommitted touchend)', async () => {
+    if (window.innerWidth > 767) return;
+    await render(
+      <MemoryRouter initialEntries={['/threads']}>
+        <div style={{ height: 500 }}>
+          <AppLayout>
+            <PageContainer title="Threads"><div>Thread content</div></PageContainer>
+          </AppLayout>
+        </div>
+      </MemoryRouter>,
+    );
+    const main = document.querySelector('[data-app-main="true"]') as HTMLElement;
+    // A 6px move registers a swipe (>= delta 4) but never crosses the
+    // 12px axis-lock, so swipeCommittedRef stays null → onSwiped takes the
+    // !committed branch and resets the offset to 0.
+    dispatchTouch(main, 'touchstart', 100, 300);
+    dispatchTouch(main, 'touchmove', 106, 301);
+    dispatchTouch(main, 'touchend', 106, 301);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(main.dataset.channelDragging).toBe('false');
+    expect(main.dataset.mobileChannelsOpen).toBe('false');
+  });
+
+  it('forwards a header wheel to nothing when the page has no scroll container', async () => {
+    if (window.innerWidth <= 767) return;
+    await render(
+      <LayoutHarness>
+        {/* No PageContainer → no [data-page-scroll] element exists, so the
+            native capture handler bails without preventDefault and the React
+            forwardHeaderWheel reaches its "no scroller" return. */}
+        <div style={{ height: 50 }}>Plain content, no scroll container</div>
+      </LayoutHarness>,
+    );
+    const headerInner = document.querySelector('[data-testid="app-shell-header"]') as HTMLElement;
+    expect(document.querySelector('[data-page-scroll="true"]')).toBeNull();
+    const ev = new WheelEvent('wheel', { deltaY: 120, bubbles: true, cancelable: true });
+    headerInner.dispatchEvent(ev);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(ev.defaultPrevented).toBe(false);
+  });
+
+  it('renders the live closing transform (negative offset) while dragging an open drawer left', async () => {
+    if (window.innerWidth > 767) return;
+    await render(
+      <MemoryRouter initialEntries={['/threads']}>
+        <div style={{ height: 500 }}>
+          <AppLayout>
+            <PageContainer title="Threads"><div>Thread content</div></PageContainer>
+          </AppLayout>
+        </div>
+      </MemoryRouter>,
+    );
+    const main = document.querySelector('[data-app-main="true"]') as HTMLElement;
+    // Open the drawer first.
+    (document.querySelector('button[aria-label="Open channels"]') as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(main.dataset.mobileChannelsOpen).toBe('true'));
+    // Drag left to start closing → channelDragOffset is negative, so
+    // mainDragStyle uses restingX=100vw and the '-' sign branch.
+    dispatchTouch(main, 'touchstart', 300, 300);
+    dispatchTouch(main, 'touchmove', 260, 302);
+    dispatchTouch(main, 'touchmove', 230, 304);
+    await vi.waitFor(() => {
+      // restingX=100vw (open) blended with a negative drag offset. The
+      // browser re-serializes the calc(), so assert on its parts.
+      expect(main.style.transform).toContain('100vw');
+      expect(main.style.transform).toMatch(/-\s*\d+px/);
+    });
+    dispatchTouch(main, 'touchend', 230, 304);
+  });
+
+  it('ignores a non-cancelable touchmove during a latched swipe', async () => {
+    if (window.innerWidth > 767) return;
+    await render(
+      <MemoryRouter initialEntries={['/threads']}>
+        <div style={{ height: 500 }}>
+          <AppLayout>
+            <PageContainer title="Threads"><div>Thread content</div></PageContainer>
+          </AppLayout>
+        </div>
+      </MemoryRouter>,
+    );
+    const main = document.querySelector('[data-app-main="true"]') as HTMLElement;
+    dispatchTouch(main, 'touchstart', 10, 300);
+    // A non-cancelable move still updates the offset but skips preventDefault.
+    const ev = new Event('touchmove', { bubbles: true, cancelable: false });
+    const tp = touchPoint(main, 80, 302);
+    Object.defineProperty(ev, 'touches', { value: [tp] });
+    Object.defineProperty(ev, 'targetTouches', { value: [tp] });
+    Object.defineProperty(ev, 'changedTouches', { value: [tp] });
+    main.dispatchEvent(ev);
+    await vi.waitFor(() => expect(main.dataset.channelDragging).toBe('true'));
+    expect(ev.defaultPrevented).toBe(false);
+  });
+
+  it('on desktop the swipe handler short-circuits because the layout is not mobile', async () => {
+    if (window.innerWidth <= 767) return;
+    await render(
+      <LayoutHarness>
+        <PageContainer title="Threads"><div>Thread content</div></PageContainer>
+      </LayoutHarness>,
+    );
+    const main = document.querySelector('[data-app-main="true"]') as HTMLElement;
+    // onSwiping fires (synthetic touch), but isMobile is false → early return.
+    dispatchTouch(main, 'touchstart', 12, 300);
+    dispatchTouch(main, 'touchmove', 120, 304);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(main.dataset.channelDragging).toBe('false');
+  });
+
+  it('header wheel over a non-scrollable page is a no-op (no scroller to forward to)', async () => {
+    if (window.innerWidth <= 767) return;
+    await render(
+      <LayoutHarness>
+        {/* Short content → the page scroller is NOT scrollable, so neither
+            the native capture handler nor the React onWheel forwards. */}
+        <PageContainer title="Threads"><div style={{ height: 10 }}>Tiny</div></PageContainer>
+      </LayoutHarness>,
+    );
+    const headerInner = document.querySelector('[data-testid="app-shell-header"]') as HTMLElement;
+    const scroller = document.querySelector('[data-page-scroll="true"]') as HTMLElement;
+    await vi.waitFor(() => expect(scroller.scrollHeight).toBeLessThanOrEqual(scroller.clientHeight));
+    const ev = new WheelEvent('wheel', { deltaY: 120, bubbles: true, cancelable: true });
+    headerInner.dispatchEvent(ev);
+    await new Promise((r) => setTimeout(r, 20));
+    // No scroller could be scrolled, and nothing was prevented.
+    expect(scroller.scrollTop).toBe(0);
+  });
+
+  it('header wheel originating from a focusable input is ignored (input guard)', async () => {
+    if (window.innerWidth <= 767) return;
+    await render(
+      <LayoutHarness>
+        <PageContainer title="Threads"><div style={{ height: 2000 }}>Tall thread content</div></PageContainer>
+      </LayoutHarness>,
+    );
+    const headerInput = document.querySelector('[data-testid="app-shell-header"] input') as HTMLInputElement;
+    const scroller = document.querySelector('[data-page-scroll="true"]') as HTMLElement;
+    await vi.waitFor(() => expect(scroller.scrollHeight).toBeGreaterThan(scroller.clientHeight));
+    const before = scroller.scrollTop;
+    // Wheel over the search input → both handlers bail at the input guard,
+    // so the scroller is left untouched.
+    headerInput.dispatchEvent(new WheelEvent('wheel', { deltaY: 160, bubbles: true, cancelable: true }));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(scroller.scrollTop).toBe(before);
+  });
+
+  it('a defaultPrevented wheel over the header is ignored by the forwarders', async () => {
+    if (window.innerWidth <= 767) return;
+    await render(
+      <LayoutHarness>
+        <PageContainer title="Threads"><div style={{ height: 2000 }}>Tall thread content</div></PageContainer>
+      </LayoutHarness>,
+    );
+    const headerInner = document.querySelector('[data-testid="app-shell-header"]') as HTMLElement;
+    const scroller = document.querySelector('[data-page-scroll="true"]') as HTMLElement;
+    await vi.waitFor(() => expect(scroller.scrollHeight).toBeGreaterThan(scroller.clientHeight));
+    const before = scroller.scrollTop;
+    const ev = new WheelEvent('wheel', { deltaY: 160, bubbles: true, cancelable: true });
+    ev.preventDefault(); // already defaultPrevented before it reaches the handlers
+    headerInner.dispatchEvent(ev);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(scroller.scrollTop).toBe(before);
+  });
+
+  it('a wheel outside the app header is ignored by the native document listener', async () => {
+    if (window.innerWidth <= 767) return;
+    await render(
+      <LayoutHarness>
+        <PageContainer title="Threads"><div style={{ height: 2000 }}>Tall thread content</div></PageContainer>
+      </LayoutHarness>,
+    );
+    const scroller = document.querySelector('[data-page-scroll="true"]') as HTMLElement;
+    await vi.waitFor(() => expect(scroller.scrollHeight).toBeGreaterThan(scroller.clientHeight));
+    const before = scroller.scrollTop;
+    // A wheel dispatched on a node that is NOT inside the app header → the
+    // document-capture listener bails at the node.contains(target) guard.
+    const outside = document.createElement('div');
+    document.body.appendChild(outside);
+    outside.dispatchEvent(new WheelEvent('wheel', { deltaY: 160, bubbles: true, cancelable: true }));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(scroller.scrollTop).toBe(before);
+    outside.remove();
+  });
 });

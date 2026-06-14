@@ -15,6 +15,10 @@ import {
   useToggleReaction,
   useSetPinned,
   useSetNoUnfurl,
+  useChannelMessages,
+  useConversationMessages,
+  useSendChannelMessage,
+  useSendConversationMessage,
   type MessageWindow,
   type MessagePageParam,
 } from './useMessages';
@@ -278,5 +282,253 @@ describe('useMessages — REST mutations', () => {
     (screen.getByTestId('trigger').element() as HTMLButtonElement).click();
     await new Promise((r) => setTimeout(r, 200));
     expect(apiFetchMock.mock.calls[0][0]).toBe('/api/v1/channels/ch-1/messages/m-1/no-unfurl');
+  });
+});
+
+describe('useMessages — conversation-scope mutations (?? right-hand sides)', () => {
+  // Each mutation's onSuccess computes `vars.channelId ?? vars.conversationId`.
+  // Driving them with conversationId-only vars exercises the right-hand
+  // ?? arm (lines 366, 399, 415, 434) plus the conversationId path in
+  // invalidatePinnedList (lines 367, 400, 416, 435) and messagePath
+  // (line 32).
+  it('useEditMessage updates a conversation message and omits attachmentIDs when undefined', async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    qc.setQueryData(
+      queryKeys.conversationMessages('cv-1'),
+      withInitialPage([msg({ id: 'm-1', parentID: 'cv-1', parentType: 'conversation', body: 'old' })]),
+    );
+    apiFetchMock.mockResolvedValue(msg({ id: 'm-1', parentID: 'cv-1', parentType: 'conversation', body: 'new' }));
+    const screen = await render(
+      <QueryClientProvider client={qc}>
+        <Trigger hook={useEditMessage as never} vars={{ messageId: 'm-1', conversationId: 'cv-1', body: 'new' }} />
+      </QueryClientProvider>,
+    );
+    (screen.getByTestId('trigger').element() as HTMLButtonElement).click();
+    await new Promise((r) => setTimeout(r, 200));
+    // No attachmentIDs key in the PATCH body (line 359 false arm).
+    const init = apiFetchMock.mock.calls[0][1] as { body: string };
+    expect(JSON.parse(init.body)).toEqual({ body: 'new' });
+    const data = qc.getQueryData<InfiniteData<MessageWindow>>(queryKeys.conversationMessages('cv-1'));
+    expect(data?.pages[0].items[0].body).toBe('new');
+  });
+
+  it('useDeleteMessage marks a conversation message deleted in cache', async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    qc.setQueryData(
+      queryKeys.conversationMessages('cv-1'),
+      withInitialPage([msg({ id: 'm-1', parentID: 'cv-1', parentType: 'conversation' })]),
+    );
+    apiFetchMock.mockResolvedValue(undefined);
+    const screen = await render(
+      <QueryClientProvider client={qc}>
+        <Trigger hook={useDeleteMessage as never} vars={{ messageId: 'm-1', conversationId: 'cv-1' }} />
+      </QueryClientProvider>,
+    );
+    (screen.getByTestId('trigger').element() as HTMLButtonElement).click();
+    await new Promise((r) => setTimeout(r, 200));
+    const data = qc.getQueryData<InfiniteData<MessageWindow>>(queryKeys.conversationMessages('cv-1'));
+    expect(data?.pages[0].items[0].deleted).toBe(true);
+  });
+
+  it('useToggleReaction updates a conversation message in cache', async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    qc.setQueryData(
+      queryKeys.conversationMessages('cv-1'),
+      withInitialPage([msg({ id: 'm-1', parentID: 'cv-1', parentType: 'conversation' })]),
+    );
+    apiFetchMock.mockResolvedValue(msg({ id: 'm-1', parentID: 'cv-1', parentType: 'conversation', reactions: { ':+1:': ['u-1'] } }));
+    const screen = await render(
+      <QueryClientProvider client={qc}>
+        <Trigger hook={useToggleReaction as never} vars={{ messageId: 'm-1', conversationId: 'cv-1', emoji: ':+1:' }} />
+      </QueryClientProvider>,
+    );
+    (screen.getByTestId('trigger').element() as HTMLButtonElement).click();
+    await new Promise((r) => setTimeout(r, 200));
+    const data = qc.getQueryData<InfiniteData<MessageWindow>>(queryKeys.conversationMessages('cv-1'));
+    expect(data?.pages[0].items[0].reactions).toEqual({ ':+1:': ['u-1'] });
+  });
+
+  it('useSetPinned updates a conversation message in cache', async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    qc.setQueryData(
+      queryKeys.conversationMessages('cv-1'),
+      withInitialPage([msg({ id: 'm-1', parentID: 'cv-1', parentType: 'conversation' })]),
+    );
+    apiFetchMock.mockResolvedValue(msg({ id: 'm-1', parentID: 'cv-1', parentType: 'conversation', pinned: true }));
+    const screen = await render(
+      <QueryClientProvider client={qc}>
+        <Trigger hook={useSetPinned as never} vars={{ messageId: 'm-1', conversationId: 'cv-1', pinned: true }} />
+      </QueryClientProvider>,
+    );
+    (screen.getByTestId('trigger').element() as HTMLButtonElement).click();
+    await new Promise((r) => setTimeout(r, 200));
+    const data = qc.getQueryData<InfiniteData<MessageWindow>>(queryKeys.conversationMessages('cv-1'));
+    expect(data?.pages[0].items[0].pinned).toBe(true);
+  });
+
+  it('useSetNoUnfurl updates a conversation message in cache', async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    qc.setQueryData(
+      queryKeys.conversationMessages('cv-1'),
+      withInitialPage([msg({ id: 'm-1', parentID: 'cv-1', parentType: 'conversation' })]),
+    );
+    apiFetchMock.mockResolvedValue(msg({ id: 'm-1', parentID: 'cv-1', parentType: 'conversation', noUnfurl: true }));
+    const screen = await render(
+      <QueryClientProvider client={qc}>
+        <Trigger hook={useSetNoUnfurl as never} vars={{ messageId: 'm-1', conversationId: 'cv-1', noUnfurl: true }} />
+      </QueryClientProvider>,
+    );
+    (screen.getByTestId('trigger').element() as HTMLButtonElement).click();
+    await new Promise((r) => setTimeout(r, 200));
+    const data = qc.getQueryData<InfiniteData<MessageWindow>>(queryKeys.conversationMessages('cv-1'));
+    expect(data?.pages[0].items[0].noUnfurl).toBe(true);
+  });
+});
+
+describe('useMessages — useSendMessage thread-reply path', () => {
+  it('does NOT append to the main list and invalidates thread + userThreads when parentMessageID is set', async () => {
+    // input.parentMessageID set → line 315 `!input.parentMessageID` false
+    // (no appendMessageToCache) AND line 318 `if(input.parentMessageID)`
+    // true (invalidate thread + userThreads).
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    qc.setQueryData(queryKeys.channelMessages('ch-1'), withInitialPage([msg({ id: 'm-1' })]));
+    const invalidateSpy = vi.spyOn(qc, 'invalidateQueries');
+    apiFetchMock.mockResolvedValue(msg({ id: 'reply', parentMessageID: 'root-1' }));
+    const screen = await render(
+      <QueryClientProvider client={qc}>
+        <Trigger
+          hook={() => useSendMessage({ channelId: 'ch-1' })}
+          vars={{ body: 'a reply', parentMessageID: 'root-1' }}
+        />
+      </QueryClientProvider>,
+    );
+    (screen.getByTestId('trigger').element() as HTMLButtonElement).click();
+    await new Promise((r) => setTimeout(r, 200));
+    // Main list untouched — reply was not prepended.
+    const data = qc.getQueryData<InfiniteData<MessageWindow>>(queryKeys.channelMessages('ch-1'));
+    expect(data?.pages[0].items.map((m) => m.id)).toEqual(['m-1']);
+    // Thread + userThreads invalidations fired.
+    expect(invalidateSpy).toHaveBeenCalled();
+  });
+});
+
+describe('useMessages — infinite query hooks', () => {
+  function InfiniteProbe({
+    scope,
+    id,
+    anchor,
+  }: {
+    scope: 'channel' | 'conversation';
+    id: string | undefined;
+    anchor?: string;
+  }) {
+    // Both hooks are called unconditionally (rules-of-hooks); the
+    // inactive one is disabled because its id is undefined.
+    const channelQuery = useChannelMessages(scope === 'channel' ? id : undefined, scope === 'channel' ? anchor : undefined);
+    const conversationQuery = useConversationMessages(
+      scope === 'conversation' ? id : undefined,
+      scope === 'conversation' ? anchor : undefined,
+    );
+    const q = scope === 'channel' ? channelQuery : conversationQuery;
+    const first = q.data?.pages[0];
+    return <div data-testid="probe" data-count={first ? String(first.items.length) : 'none'} />;
+  }
+
+  it('useConversationMessages fetches the tail window for a conversation', async () => {
+    apiFetchMock.mockResolvedValue({
+      items: [msg({ id: 'm-1', parentID: 'cv-1', parentType: 'conversation' })],
+      hasMoreOlder: false,
+      hasMoreNewer: false,
+      newestID: 'm-1',
+      oldestID: 'm-1',
+    });
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const screen = await render(
+      <QueryClientProvider client={qc}>
+        <InfiniteProbe scope="conversation" id="cv-1" />
+      </QueryClientProvider>,
+    );
+    await vi.waitFor(() => {
+      expect(screen.getByTestId('probe').element().getAttribute('data-count')).toBe('1');
+    });
+    expect(apiFetchMock.mock.calls[0][0]).toMatch(/^\/api\/v1\/conversations\/cv-1\/messages\?/);
+  });
+
+  it('useChannelMessages with an anchor seeds an around-window deep-link fetch', async () => {
+    apiFetchMock.mockResolvedValue({
+      items: [msg({ id: 'anchor-msg' })],
+      hasMoreOlder: true,
+      hasMoreNewer: true,
+      newestID: 'anchor-msg',
+      oldestID: 'anchor-msg',
+    });
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const screen = await render(
+      <QueryClientProvider client={qc}>
+        <InfiniteProbe scope="channel" id="ch-1" anchor="anchor-msg" />
+      </QueryClientProvider>,
+    );
+    await vi.waitFor(() => {
+      expect(screen.getByTestId('probe').element().getAttribute('data-count')).toBe('1');
+    });
+    expect(apiFetchMock.mock.calls[0][0]).toMatch(/around=anchor-msg/);
+  });
+
+  it('useConversationMessages stays idle (no fetch) when id is undefined', async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const screen = await render(
+      <QueryClientProvider client={qc}>
+        <InfiniteProbe scope="conversation" id={undefined} />
+      </QueryClientProvider>,
+    );
+    await new Promise((r) => setTimeout(r, 80));
+    expect(screen.getByTestId('probe').element().getAttribute('data-count')).toBe('none');
+    expect(apiFetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('useMessages — legacy send aliases', () => {
+  it('useSendChannelMessage posts to the channel messages endpoint', async () => {
+    apiFetchMock.mockResolvedValue(msg({ id: 'new' }));
+    const { screen } = await renderMutation(() => useSendChannelMessage('ch-9'), { body: 'hey' });
+    (screen.getByTestId('trigger').element() as HTMLButtonElement).click();
+    await new Promise((r) => setTimeout(r, 200));
+    expect(apiFetchMock.mock.calls[0][0]).toBe('/api/v1/channels/ch-9/messages');
+  });
+
+  it('useSendConversationMessage posts to the conversation messages endpoint', async () => {
+    apiFetchMock.mockResolvedValue(msg({ id: 'new', parentID: 'cv-9', parentType: 'conversation' }));
+    const { screen } = await renderMutation(() => useSendConversationMessage('cv-9'), { body: 'hey' });
+    (screen.getByTestId('trigger').element() as HTMLButtonElement).click();
+    await new Promise((r) => setTimeout(r, 200));
+    expect(apiFetchMock.mock.calls[0][0]).toBe('/api/v1/conversations/cv-9/messages');
+  });
+});
+
+describe('useMessages — messagePath guard', () => {
+  it('useEditMessage rejects when neither channelId nor conversationId is set', async () => {
+    // messagePath throws (line 33) → the mutation rejects. Assert the
+    // mutation surfaces an error rather than calling apiFetch.
+    function ErrProbe() {
+      const m = useEditMessage();
+      return (
+        <button
+          data-testid="trigger"
+          data-error={m.isError ? '1' : '0'}
+          onClick={() => m.mutate({ messageId: 'm-1', body: 'x' })}
+        />
+      );
+    }
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    const screen = await render(
+      <QueryClientProvider client={qc}>
+        <ErrProbe />
+      </QueryClientProvider>,
+    );
+    (screen.getByTestId('trigger').element() as HTMLButtonElement).click();
+    await vi.waitFor(() => {
+      expect(screen.getByTestId('trigger').element().getAttribute('data-error')).toBe('1');
+    });
+    expect(apiFetchMock).not.toHaveBeenCalled();
   });
 });

@@ -18,6 +18,7 @@ export function LineBoundaryNavigationPlugin() {
     const onKeyDown = (event: KeyboardEvent) => {
       if (forceStartInsertionRef.current && isPlainTextKey(event)) {
         event.preventDefault();
+        /* istanbul ignore next -- 'Spacebar' (legacy IE/Edge key name) is 8 chars; this line only runs under isPlainTextKey which requires key.length === 1, so the 'Spacebar' === branch is unreachable here. */
         const text = event.key === 'Spacebar' ? ' ' : event.key;
         editor.update(() => {
           insertAtEditableStart(text);

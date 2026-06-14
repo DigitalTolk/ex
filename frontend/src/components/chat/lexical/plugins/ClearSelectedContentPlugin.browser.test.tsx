@@ -15,6 +15,7 @@ import {
 } from 'lexical';
 import { useEffect } from 'react';
 import { MentionNode, $createMentionNode } from '../nodes/MentionNode';
+import { ChannelMentionNode, $createChannelMentionNode } from '../nodes/ChannelMentionNode';
 import { ClearSelectedContentPlugin } from './ClearSelectedContentPlugin';
 
 // Browser coverage for the select-all-clear + adjacent-mention-delete logic.
@@ -30,7 +31,7 @@ function Capture({ onReady }: { onReady: (e: LexicalEditor) => void }) {
 async function mount(): Promise<LexicalEditor> {
   let editor!: LexicalEditor;
   await render(
-    <LexicalComposer initialConfig={{ namespace: 'clear-sel', nodes: [MentionNode], onError: (e) => { throw e; }, theme: {} }}>
+    <LexicalComposer initialConfig={{ namespace: 'clear-sel', nodes: [MentionNode, ChannelMentionNode], onError: (e) => { throw e; }, theme: {} }}>
       <RichTextPlugin contentEditable={<ContentEditable />} placeholder={null} ErrorBoundary={LexicalErrorBoundary} />
       <ClearSelectedContentPlugin />
       <Capture onReady={(e) => { editor = e; }} />
@@ -114,6 +115,32 @@ describe('ClearSelectedContentPlugin (browser)', () => {
     editor.dispatchCommand(KEY_BACKSPACE_COMMAND, ev());
     await flush();
     expect(root.querySelector('[data-user-id]')).toBeNull();
+  });
+
+  it('Backspace just after a channel mention removes the channel mention node', async () => {
+    // Exercises the `$isChannelMentionNode(node)` arm of the removal guard —
+    // the user-mention tests only hit the `$isMentionNode` side.
+    const editor = await mount();
+    editor.update(() => {
+      const root = $getRoot();
+      root.clear();
+      const para = $createParagraphNode();
+      para.append($createChannelMentionNode('c-1', 'general'));
+      root.append(para);
+    }, { discrete: true });
+    await flush();
+    const root = editor.getRootElement()!;
+    const chEl = root.querySelector('[data-channel-id]') as HTMLElement;
+    expect(chEl).not.toBeNull();
+    const range = document.createRange();
+    range.setStartAfter(chEl);
+    range.collapse(true);
+    const sel = window.getSelection()!;
+    sel.removeAllRanges();
+    sel.addRange(range);
+    editor.dispatchCommand(KEY_BACKSPACE_COMMAND, ev());
+    await flush();
+    expect(root.querySelector('[data-channel-id]')).toBeNull();
   });
 
   it('Delete just before a mention removes the mention node', async () => {

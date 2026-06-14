@@ -89,4 +89,29 @@ describe('TypeaheadMenu (browser)', () => {
     expect(onSelect).toHaveBeenCalled();
     expect(onHighlight).not.toHaveBeenCalled();
   });
+
+  it('positions relative to the anchor rect when no composer/editor reference exists', async () => {
+    // Anchor that is NOT inside a `[data-message-composer]`, with no focused
+    // role=textbox anywhere: the editor lookup chain resolves to undefined, so
+    // `editor?.getBoundingClientRect().top ?? anchorRect.top` and the
+    // composer?.querySelector ?? activeEditor ?? document.querySelector chain
+    // all fall through to their right-hand fallbacks.
+    const bare = document.createElement('span');
+    Object.assign(bare.style, { position: 'fixed', top: '200px', left: '30px' });
+    document.body.append(bare);
+    // Ensure nothing is focused as a textbox (blur any prior focus).
+    (document.activeElement as HTMLElement | null)?.blur?.();
+    try {
+      await render(
+        <TypeaheadMenu {...baseProps} options={[opt('a'), opt('b')]} anchorElementRef={{ current: bare }} />,
+      );
+      const list = document.querySelector('[data-testid="tm"]') as HTMLElement;
+      expect(list).not.toBeNull();
+      // Positioning ran and produced a fixed layout from the anchor rect alone.
+      expect(list.style.position).toBe('fixed');
+      expect(list.style.bottom).not.toBe('');
+    } finally {
+      bare.remove();
+    }
+  });
 });

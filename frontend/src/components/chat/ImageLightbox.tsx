@@ -92,6 +92,7 @@ export function ImageLightbox({
       // anyway once zoom == 1, but the explicit reset keeps the
       // gesture lifecycle deterministic.
       const g = gestureRef.current;
+      /* istanbul ignore next -- setCurrentZoom only runs from the zoom buttons/wheel/double-click, none of which can fire while a pointer-held pan/pinch is active, so g is always idle here. */
       if (g.kind === 'pan' || g.kind === 'pinch') gestureRef.current = idleGesture;
     }
   }
@@ -139,6 +140,7 @@ export function ImageLightbox({
         // attachment-trigger button that opened the lightbox. Blur it
         // so the trigger doesn't end up wearing a keyboard-focus ring
         // after a mouse-click → Esc round-trip.
+        /* istanbul ignore else -- document.activeElement defaults to <body> (an HTMLElement) and is never a non-HTMLElement/null in this browser, so the else arm is unreachable. */
         if (document.activeElement instanceof HTMLElement) {
           document.activeElement.blur();
         }
@@ -222,6 +224,7 @@ export function ImageLightbox({
     }
     if (!isMobile) return;
     // Pan/pinch already won — no swipe processing.
+    /* istanbul ignore next -- an active pan returns at readPanUpdate above and an active pinch returns at readPinchUpdate, so by here the gesture is never pan/pinch; this is a belt-and-braces guard. */
     if (gestureRef.current.kind === 'pan' || gestureRef.current.kind === 'pinch') return;
     const drag = readSwipeDrag(gestureRef.current, pointer);
     if (drag) {

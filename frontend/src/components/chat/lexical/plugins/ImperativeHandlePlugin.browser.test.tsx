@@ -149,6 +149,70 @@ describe('ImperativeHandlePlugin (browser)', () => {
     unsub();
   });
 
+  it('inserts text with no prior selection by falling back to selectEnd', async () => {
+    const { ref, editor } = await mount();
+    await new Promise((r) => requestAnimationFrame(() => r(null)));
+    const h = ref.current!;
+    // No range selection → insertText takes the `$getRoot().selectEnd()` arm.
+    clearDoc(editor);
+    h.insertText('dropped');
+    await flush();
+    expect(editor.getEditorState().read(() => $getRoot().getTextContent())).toContain('dropped');
+  });
+
+  it('ensures a selection over element-node descendants when applying a mark', async () => {
+    const { ref, editor } = await mount();
+    await new Promise((r) => requestAnimationFrame(() => r(null)));
+    const h = ref.current!;
+    // Build a list so the first/last descendants are element (list-item)
+    // nodes — getPointType then takes its `'element'` side rather than 'text'.
+    editor.update(() => {
+      const root = $getRoot();
+      root.clear();
+      const para = $createParagraphNode();
+      para.append($createTextNode('listme'));
+      root.append(para);
+      para.selectStart();
+    }, { discrete: true });
+    h.applyBlock('ul');
+    await flush();
+    // Clear the Lexical selection so applyMark must rebuild it over the list.
+    editor.update(() => { $setSelection(null); }, { discrete: true });
+    h.applyMark('bold');
+    await flush();
+    expect(editor.getEditorState().read(() => $getRoot().getTextContent())).toContain('listme');
+  });
+
+  it('reports strikethrough, code, and ordered/unordered list active formats', async () => {
+    const { ref, editor } = await mount();
+    await new Promise((r) => requestAnimationFrame(() => r(null)));
+    const h = ref.current!;
+
+    // Strikethrough → readActiveFormats hasFormat('strikethrough') add('strike').
+    seed(editor, 'strike me', true);
+    h.applyMark('strike');
+    await flush();
+    expect(h.getActiveFormats().has('strike')).toBe(true);
+
+    // Inline code → hasFormat('code') add('code').
+    seed(editor, 'code me', true);
+    h.applyMark('code');
+    await flush();
+    expect(h.getActiveFormats().has('code')).toBe(true);
+
+    // Unordered list → getListType() === 'bullet' add('ul').
+    seed(editor, 'bullets', true);
+    h.applyBlock('ul');
+    await flush();
+    expect(h.getActiveFormats().has('ul')).toBe(true);
+
+    // Ordered list → getListType() === 'number' add('ol').
+    seed(editor, 'numbers', true);
+    h.applyBlock('ol');
+    await flush();
+    expect(h.getActiveFormats().has('ol')).toBe(true);
+  });
+
   it('exposes focus / focusEnd / blur / getElement', async () => {
     const { ref, editor } = await mount();
     await new Promise((r) => requestAnimationFrame(() => r(null)));

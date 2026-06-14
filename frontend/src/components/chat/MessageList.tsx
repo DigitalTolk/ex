@@ -280,12 +280,14 @@ function VirtuosoMessageList({
       return;
     }
     const last = renderRows[renderRows.length - 1];
+    /* istanbul ignore next -- buildMessageListRows always ends with a message row (day dividers only precede messages), so the last row is never a 'day' */
     if (last.kind !== 'message') return;
     const bottomId = last.message.id;
     const previousBottomId = lastBottomMessageIdRef.current;
     lastBottomMessageIdRef.current = bottomId;
     if (!previousBottomId || previousBottomId === bottomId) return;
     if (last.message.authorID !== currentUserId) return;
+    /* istanbul ignore next -- buildMessageListRows filters out messages with parentMessageID, so a thread reply can never be the bottom render row */
     if (last.message.parentMessageID) return;
     const scrollFrame = requestAnimationFrame(scrollToBottom);
     return () => cancelAnimationFrame(scrollFrame);

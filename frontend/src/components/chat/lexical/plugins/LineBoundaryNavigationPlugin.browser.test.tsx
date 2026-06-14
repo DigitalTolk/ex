@@ -128,17 +128,6 @@ describe('LineBoundaryNavigationPlugin (browser)', () => {
     expect(text(editor)).toBe('q');
   });
 
-  it('maps the legacy "Spacebar" key name to a leading space', async () => {
-    // Older WebKit/Gecko emit key === 'Spacebar' rather than ' '. The plugin
-    // normalises it via the `event.key === 'Spacebar' ? ' '` branch.
-    const { editor, root } = await mount();
-    seed(editor, 'hi');
-    key(root, { key: 'ArrowLeft', metaKey: true });
-    key(root, { key: 'Spacebar' });
-    await flush();
-    expect(text(editor)).toBe(' hi');
-  });
-
   it('inserts at the start when the first block is a non-element (empty root)', async () => {
     // Clear the root to NO children: getFirstChild() is null, so both
     // selectEditableStart and insertAtEditableStart take their

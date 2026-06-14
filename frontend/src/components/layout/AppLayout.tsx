@@ -50,7 +50,7 @@ export function AppLayout({ children }: AppLayoutProps) {
   const mobileChannelsOpen = isMobile && (isHome || manualChannelsOpen);
 
   const canOpenChannelsFromGesture = useCallback((eventTarget: EventTarget | null) => {
-    /* v8 ignore next -- only called when !mobileChannelsOpen, which is always false on the home route, so isHome is never true here; defensive */
+    /* istanbul ignore next -- only called when !mobileChannelsOpen; on the home route mobileChannelsOpen is always true on mobile (and onSwiping returns early off mobile), so isHome is never true here */
     if (isHome) return false;
     if (eventTarget instanceof Element && eventTarget.closest('[data-mobile-right-sidebar="true"]')) return false;
     if (document.querySelector('[data-mobile-right-sidebar="true"]')) return false;
@@ -118,7 +118,7 @@ export function AppLayout({ children }: AppLayoutProps) {
 
       // Past the latch — follow the finger. iOS swipe-back inertia
       // can briefly overshoot, so clamp to [-vw, vw].
-      /* v8 ignore next -- SSR guard; this browser-only app always has window during a touch gesture */
+      /* istanbul ignore next -- SSR guard; this browser-only app always has window during a touch gesture */
       const viewportWidth = typeof window === 'undefined' ? Infinity : window.innerWidth;
       let offset = deltaX;
       if (swipeCommittedRef.current === 'open') {
@@ -164,10 +164,12 @@ export function AppLayout({ children }: AppLayoutProps) {
     ) {
       return;
     }
+    /* istanbul ignore next -- setMainNode always attaches mainRef before any wheel fires; the document fallback is defensive */
     const root = mainRef.current ?? document;
     const scroller = root.querySelector<HTMLElement>('[data-page-scroll="true"], [data-testid="page-container"]');
     if (!scroller) return;
     const canScroll = scroller.scrollHeight > scroller.clientHeight;
+    /* istanbul ignore next -- a scrollable scroller is always preventDefaulted first by the native capture listener below, so forwardHeaderWheel only ever sees a non-scrollable scroller (canScroll false) */
     if (!canScroll) return;
     scroller.scrollTop += event.deltaY;
     event.preventDefault();
@@ -176,6 +178,7 @@ export function AppLayout({ children }: AppLayoutProps) {
   /* v8 ignore start -- real wheel propagation is covered by browser interaction tests/manual browser behavior, not jsdom. */
   useEffect(() => {
     const node = appHeaderRef.current;
+    /* istanbul ignore next -- appHeaderRef is always attached after mount; the null guard is defensive */
     if (!node) return;
     const onWheel = (event: globalThis.WheelEvent) => {
       if (event.defaultPrevented) return;
@@ -187,6 +190,7 @@ export function AppLayout({ children }: AppLayoutProps) {
       ) {
         return;
       }
+      /* istanbul ignore next -- setMainNode always attaches mainRef before any wheel fires; the document fallback is defensive */
       const root = mainRef.current ?? document;
       const scroller = root.querySelector<HTMLElement>('[data-page-scroll="true"], [data-testid="page-container"]');
       if (!scroller || scroller.scrollHeight <= scroller.clientHeight) return;

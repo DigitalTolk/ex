@@ -236,15 +236,17 @@ describe('useDrafts — save and delete mutations', () => {
   });
 
   it('useSaveDraft compares against a cached draft whose attachmentIDs is undefined', async () => {
-    // existing.attachmentIDs === undefined → sortedAttachmentIDs(undefined)
-    // exercises the `ids ?? []` nullish arm (line 76). Body differs so a
+    // Body MATCHES the cached draft so the change-check reaches
+    // sameAttachmentIDs(existing.attachmentIDs=undefined, ['a-1']) →
+    // sortedAttachmentIDs(undefined) exercises the `ids ?? []` nullish
+    // arm (line 76). Attachment sets differ (undefined vs ['a-1']) so a
     // real PUT still fires.
-    const cached = draft({ id: 'd-1', body: 'old', attachmentIDs: undefined });
-    const saved = draft({ id: 'd-1', body: 'new' });
+    const cached = draft({ id: 'd-1', body: 'same', attachmentIDs: undefined });
+    const saved = draft({ id: 'd-1', body: 'same', attachmentIDs: ['a-1'] });
     apiFetchMock.mockResolvedValue(saved);
     const { screen } = await renderMutation(
       useSaveDraft as never,
-      { parentID: 'ch-1', parentType: 'channel', body: 'new', attachmentIDs: [] },
+      { parentID: 'ch-1', parentType: 'channel', body: 'same', attachmentIDs: ['a-1'] },
       { key: queryKeys.drafts(), data: [cached] },
     );
     (screen.getByTestId('trigger').element() as HTMLButtonElement).click();
@@ -263,6 +265,43 @@ describe('useDrafts — save and delete mutations', () => {
     expect(apiFetchMock.mock.calls[0][0]).toBe('/api/v1/drafts/d-1');
     const list = qc.getQueryData<MessageDraft[]>(queryKeys.drafts()) ?? [];
     expect(list.map((d) => d.id)).toEqual(['d-2']);
+  });
+
+  it('useSaveDraft clearing an existing draft (server returns void) removes it from the list', async () => {
+    // existing present + empty body → PUT fires, server returns void →
+    // onSuccess gets `draft === undefined` → `draft ?? null` → null →
+    // patchDraftListByScope drops the scope (line 71 `!draft` arm).
+    apiFetchMock.mockResolvedValue(undefined);
+    const { qc, screen } = await renderMutation(
+      useSaveDraft as never,
+      { parentID: 'ch-1', parentType: 'channel', body: '', attachmentIDs: [] },
+      { key: queryKeys.drafts(), data: [draft({ id: 'd-1', body: 'was here' })] },
+    );
+    (screen.getByTestId('trigger').element() as HTMLButtonElement).click();
+    await new Promise((r) => setTimeout(r, 200));
+    expect(apiFetchMock).toHaveBeenCalled();
+    expect(qc.getQueryData<MessageDraft[]>(queryKeys.drafts())).toEqual([]);
+  });
+
+  it('useSaveDraft on a suppressed-sent scope omits the returned draft from the list', async () => {
+    // saved draft belongs to a suppressed scope → patchDraftListByScope's
+    // `isSuppressedSentDraft(draft)` true arm (line 71) drops it.
+    const scope = { parentID: 'ch-sup', parentType: 'channel' as const };
+    suppressSentDraft(scope);
+    try {
+      const saved = draft({ id: 'd-sup', parentID: 'ch-sup', body: 'sent' });
+      apiFetchMock.mockResolvedValue(saved);
+      const { qc, screen } = await renderMutation(
+        useSaveDraft as never,
+        { parentID: 'ch-sup', parentType: 'channel', body: 'sent', attachmentIDs: [] },
+        { key: queryKeys.drafts(), data: [] as MessageDraft[] },
+      );
+      (screen.getByTestId('trigger').element() as HTMLButtonElement).click();
+      await new Promise((r) => setTimeout(r, 200));
+      expect(qc.getQueryData<MessageDraft[]>(queryKeys.drafts())).toEqual([]);
+    } finally {
+      restoreDraftScope(scope);
+    }
   });
 
   it('useSaveDraft drops a stale mutation whose version was superseded', async () => {
