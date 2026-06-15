@@ -33,16 +33,26 @@ export function CodeBlock({ code, language }: CodeBlockProps) {
 
   return (
     <div className="group relative my-0 overflow-hidden rounded-md bg-muted text-xs font-mono">
-      <button
-        type="button"
-        onClick={handleCopy}
-        aria-label="Copy code"
-        data-testid="code-copy-button"
-        className="absolute right-1.5 top-1.5 z-10 inline-flex h-6 items-center gap-1 rounded border bg-background/80 px-1.5 text-[11px] font-sans text-muted-foreground opacity-0 backdrop-blur transition-opacity hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100"
-      >
-        {copied ? <Check className="h-3 w-3" aria-hidden /> : <Copy className="h-3 w-3" aria-hidden />}
-        {copied ? 'Copied' : 'Copy'}
-      </button>
+      <div className="absolute right-1.5 top-1.5 z-10 flex items-center gap-1">
+        {language && (
+          <span
+            data-testid="code-language"
+            className="select-none rounded border bg-background/80 px-1.5 py-0.5 text-[10px] font-sans uppercase leading-none tracking-wide text-muted-foreground backdrop-blur"
+          >
+            {language}
+          </span>
+        )}
+        <button
+          type="button"
+          onClick={handleCopy}
+          aria-label={copied ? 'Code copied' : 'Copy code'}
+          title={copied ? 'Copied' : 'Copy code'}
+          data-testid="code-copy-button"
+          className="inline-flex h-6 w-6 items-center justify-center rounded border bg-background/80 text-muted-foreground opacity-0 backdrop-blur transition-opacity hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100"
+        >
+          {copied ? <Check className="h-3 w-3" aria-hidden /> : <Copy className="h-3 w-3" aria-hidden />}
+        </button>
+      </div>
       <div className="flex">
         {highlighted && (
           <pre
