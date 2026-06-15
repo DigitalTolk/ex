@@ -200,8 +200,17 @@ describe('renderHastTree — every custom-tag branch', () => {
     await render(wrap(<>{renderHastTree(tree)}</>));
     const inline = document.querySelector('p code') as HTMLElement;
     expect(inline.className).toMatch(/bg-muted/);
+    // Block code now routes through CodeBlock: highlighted (go is known) and
+    // carrying the language on its <pre>.
+    expect(document.querySelector('pre[data-language="go"]')).not.toBeNull();
     const block = document.querySelector('pre code') as HTMLElement;
-    expect(block.className).toContain('language-go');
+    expect(block.className).toContain('hljs');
+  });
+
+  it('renders a className-carrying <code> outside a <pre> via the code component', async () => {
+    const tree = root([elem('code', { className: 'language-x' }, [text('y')])]);
+    await render(wrap(<>{renderHastTree(tree)}</>));
+    expect(document.querySelector('code.language-x')).not.toBeNull();
   });
 
   it('renders <p data-blank="true"> as an empty paragraph (whitespace preserve)', async () => {

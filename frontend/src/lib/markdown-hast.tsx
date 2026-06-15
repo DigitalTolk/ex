@@ -1,6 +1,7 @@
 import {
   Fragment,
   createContext,
+  isValidElement,
   useContext,
   type ComponentType,
   type ReactNode,
@@ -9,6 +10,7 @@ import { jsx, jsxs } from 'react/jsx-runtime';
 import { toJsxRuntime, type Components as JsxComponents } from 'hast-util-to-jsx-runtime';
 import type { Nodes as HastNodes } from 'hast';
 import { GiphyEmbed } from '@/components/GiphyEmbed';
+import { CodeBlock } from '@/components/chat/CodeBlock';
 import { applySkinToneSuffix, shortcodeToUnicode, emojiGlyphClass, emojiImageClass } from './emoji-shortcodes';
 import { isSafeUrl } from './url-safety';
 import type { HastNode } from '@/types';
@@ -20,6 +22,20 @@ import type { RenderOpts } from './markdown';
 // loader in markdown.tsx pulls this in lazily on the first tree
 // arrival, which keeps legacy-fallback callsites — and the cold
 // initial render of any tree-less message — off the hot path).
+
+// Flattens a (already-hydrated) React subtree back to its plain text — used
+// to recover a code block's literal source from the rendered <code> child so
+// CodeBlock can re-highlight it.
+function reactNodeText(node: ReactNode): string {
+  if (node == null || node === false || node === true) return '';
+  if (typeof node === 'string') return node;
+  if (typeof node === 'number') return String(node);
+  if (Array.isArray(node)) return node.map(reactNodeText).join('');
+  if (isValidElement(node)) {
+    return reactNodeText((node.props as { children?: ReactNode }).children);
+  }
+  return '';
+}
 
 const MENTION_PILL_BASE =
   'inline align-baseline rounded px-1 font-medium leading-[inherit] no-underline';
@@ -139,13 +155,12 @@ const HAST_COMPONENTS_MAP: Record<string, AnyComponent> = {
       // Unsafe scheme (javascript:, data: …) — render the text only, no anchor.
       <span>{children}</span>
   ),
+  // A fenced code block: route the raw text + language to CodeBlock, which
+  // adds syntax highlighting, a line-number gutter, and a copy button. The
+  // backend leaves the code text untouched (custom-syntax extraction skips
+  // <pre>/<code>), so the code element's children are the literal source.
   pre: (props: { children?: ReactNode; 'data-language'?: string }) => (
-    <pre
-      className="my-0 overflow-x-auto rounded-md bg-muted p-2 text-xs font-mono"
-      data-language={props['data-language']}
-    >
-      {props.children}
-    </pre>
+    <CodeBlock code={reactNodeText(props.children)} language={props['data-language']} />
   ),
   code: ({ children, className }: { children?: ReactNode; className?: string }) => {
     if (!className) {

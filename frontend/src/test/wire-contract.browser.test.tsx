@@ -95,11 +95,14 @@ describe('wire-format contract: backend hast tree → frontend renderer', () => 
     await expect.element(screen.getByText('quote')).toBeVisible();
   });
 
-  it('renders the code fence with the server-emitted language hint', async () => {
+  it('renders the code fence with the server-emitted language hint, highlighted with a copy button', async () => {
     await render(wrap(<>{renderMarkdown('', { tree: hastAllCustomTags as import('@/types').HastNode })}</>));
-    const pre = document.querySelector('pre');
-    expect(pre?.getAttribute('data-language')).toBe('js');
-    const code = pre?.querySelector('code');
-    expect(code?.className).toContain('language-javascript');
+    // CodeBlock keeps the language on the code <pre> and highlights known
+    // languages (js → javascript) into hljs token spans.
+    const pre = document.querySelector('pre[data-language="js"]');
+    expect(pre).not.toBeNull();
+    expect(pre?.querySelector('code')?.className).toContain('hljs');
+    expect(document.querySelector('[data-testid="code-copy-button"]')).not.toBeNull();
+    expect(document.querySelector('[data-testid="code-line-numbers"]')).not.toBeNull();
   });
 });

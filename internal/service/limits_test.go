@@ -7,14 +7,14 @@ import (
 )
 
 func TestValidateMessageBody_CodepointCounting(t *testing.T) {
-	// Codepoint cap, not byte cap. 4096 ASCII chars = 4096 codepoints
-	// = 4096 bytes — fits. 4096 multibyte chars = 4096 codepoints —
-	// also fits, even though byte length is 4×.
+	// Codepoint cap, not byte cap. A string of exactly MaxMessageBodyChars
+	// ASCII chars fits; the same count of multibyte chars also fits even
+	// though its byte length is several times larger.
 	if err := ValidateMessageBody(strings.Repeat("a", MaxMessageBodyChars)); err != nil {
-		t.Errorf("4096 ASCII chars rejected: %v", err)
+		t.Errorf("at-cap ASCII chars rejected: %v", err)
 	}
 	if err := ValidateMessageBody(strings.Repeat("é", MaxMessageBodyChars)); err != nil {
-		t.Errorf("4096 multibyte chars rejected: %v", err)
+		t.Errorf("at-cap multibyte chars rejected: %v", err)
 	}
 	if err := ValidateMessageBody(strings.Repeat("a", MaxMessageBodyChars+1)); !errors.Is(err, ErrMessageTooLong) {
 		t.Errorf("over-cap accepted: %v", err)

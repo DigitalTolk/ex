@@ -54,7 +54,7 @@ describe('MessageInput validation', () => {
     vi.clearAllMocks();
   });
 
-  it('disables Send and shows the over-limit banner when body exceeds 4096 codepoints', () => {
+  it('disables Send and shows the over-limit banner when body exceeds the codepoint cap', () => {
     const onSend = vi.fn();
     renderInput(<MessageInput onSend={onSend} />);
 
@@ -73,7 +73,7 @@ describe('MessageInput validation', () => {
     expect(onSend).not.toHaveBeenCalled();
   });
 
-  it('counts emoji as one codepoint each so a 4096-emoji string sends fine', () => {
+  it('counts emoji as one codepoint each so a 1000-emoji string sends fine', () => {
     const onSend = vi.fn();
     renderInput(<MessageInput onSend={onSend} />);
 

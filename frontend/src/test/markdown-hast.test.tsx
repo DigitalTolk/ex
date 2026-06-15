@@ -82,16 +82,32 @@ describe('renderMarkdown via hast tree', () => {
     expect(container.querySelector('hr')).not.toBeNull();
   });
 
-  it('hydrates a fenced code block with the server-emitted language hint', () => {
+  it('hydrates a fenced code block into a highlighted CodeBlock with a copy button and line numbers', () => {
     const tree = root(
       el('pre', { 'data-language': 'php' },
         el('code', { className: ['language-php'] }, text("function demo() {}\n")),
       ),
     );
     const { container } = render(<>{renderMarkdown('', { tree })}</>);
-    const pre = container.querySelector('pre');
-    expect(pre?.getAttribute('data-language')).toBe('php');
-    expect(container.querySelector('code')?.className).toContain('language-php');
+    // CodeBlock keeps data-language on the code <pre> and adds the gutter +
+    // copy affordance; php is a known language so it highlights.
+    expect(container.querySelector('pre[data-language="php"]')).not.toBeNull();
+    expect(container.querySelector('[data-testid="code-copy-button"]')).not.toBeNull();
+    expect(container.querySelector('[data-testid="code-line-numbers"]')).not.toBeNull();
+    expect(container.querySelector('code.hljs')).not.toBeNull();
+    expect(container.querySelector('.hljs-keyword, .hljs-title, .hljs-function, .hljs-built_in')).not.toBeNull();
+  });
+
+  it('renders an unknown-language fenced block as plain text with a copy button and no gutter', () => {
+    const tree = root(
+      el('pre', { 'data-language': 'no-such-lang' },
+        el('code', {}, text('just text\n')),
+      ),
+    );
+    const { container } = render(<>{renderMarkdown('', { tree })}</>);
+    expect(container.querySelector('[data-testid="code-copy-button"]')).not.toBeNull();
+    expect(container.querySelector('[data-testid="code-line-numbers"]')).toBeNull();
+    expect(container.textContent).toContain('just text');
   });
 
   it('renders ex-mention-user as a pill with viewer-aware self highlight', () => {

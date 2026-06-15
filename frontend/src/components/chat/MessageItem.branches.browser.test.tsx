@@ -395,7 +395,7 @@ describe('MessageItem mobile action sheet branches', () => {
     });
   });
 
-  it('flips the copy-link label to "Link copied" when the sheet is reopened after a copy', async () => {
+  it('keeps the mobile copy-link label static after a copy (no "copied" swap)', async () => {
     if (window.innerWidth > 767) return;
     const writeText = vi.fn().mockResolvedValue(undefined);
     const original = navigator.clipboard;
@@ -414,12 +414,14 @@ describe('MessageItem mobile action sheet branches', () => {
       await vi.waitFor(() => {
         expect(document.querySelector('[data-testid="mobile-message-actions"]')).toBeNull();
       });
-      // Reopen the sheet within the 1.5s copied window → the sheet's copy-link
-      // row now reads "Link copied" (the linkCopied truthy arm).
+      // Reopen the sheet — the label stays "Copy link"; the sheet closes on tap
+      // so a "copied" swap would never be visible anyway.
       row.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerType: 'touch' }));
       await vi.waitFor(() => {
         const s = document.querySelector('[data-testid="mobile-message-actions"]') as HTMLElement | null;
-        expect(s?.textContent ?? '').toContain('Link copied');
+        expect(s).not.toBeNull();
+        expect(s?.textContent ?? '').toContain('Copy link');
+        expect(s?.textContent ?? '').not.toContain('Link copied');
       }, { timeout: 1500 });
     } finally {
       Object.defineProperty(navigator, 'clipboard', { value: original, configurable: true });
@@ -559,7 +561,7 @@ describe('MessageItem misc branches', () => {
     expect(document.querySelector('[data-testid="mobile-message-actions"]')).toBeNull();
   });
 
-  it('copies a link from the mobile sheet and flips the row label to "Link copied"', async () => {
+  it('copies a link from the mobile sheet and closes it', async () => {
     if (window.innerWidth > 767) return;
     const screen = await renderWithProviders(
       <MessageItem message={makeMessage()} authorName="Alice" isOwn channelId="channel-1" channelSlug="general" currentUserId="user-1" />,
@@ -570,8 +572,7 @@ describe('MessageItem misc branches', () => {
       expect(document.querySelector('[data-testid="mobile-message-actions"]')).not.toBeNull();
     }, { timeout: 1500 });
     await screen.getByRole('button', { name: 'Copy link to message' }).click();
-    // The sheet closes after copy; the desktop menu (hidden) still flips its
-    // label to "Link copied" via the shared linkCopied state.
+    // The sheet closes on tap (no label swap — see the static-label test above).
     await vi.waitFor(() => {
       expect(document.querySelector('[data-testid="mobile-message-actions"]')).toBeNull();
     });

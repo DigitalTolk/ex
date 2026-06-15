@@ -108,7 +108,6 @@ export function MessageItem({
 }: MessageItemProps) {
   const isMobile = useIsMobile();
   const [isEditing, setIsEditing] = useState(false);
-  const [linkCopied, setLinkCopied] = useState(false);
   // Visibility tracked in JS (not Tailwind group-hover) because Radix's
   // open dropdown changes pointer-events/focus and breaks CSS :hover
   // propagation on the row.
@@ -215,8 +214,6 @@ export function MessageItem({
 
   async function handleCopyLink() {
     await copyToClipboard(buildMessageLink());
-    setLinkCopied(true);
-    setTimeout(() => setLinkCopied(false), 1500);
   }
 
   async function handleCopyText() {
@@ -473,7 +470,9 @@ export function MessageItem({
             aria-label="Copy link to message"
           >
             <LinkIcon className="h-4 w-4" />
-            {linkCopied ? 'Link copied' : 'Copy link'}
+            {/* No "copied" swap on mobile — the sheet closes on tap, so the
+                label change would never be visible. */}
+            Copy link
           </button>
           <button
             type="button"
@@ -688,7 +687,7 @@ export function MessageItem({
                       </TooltipTrigger>
                       <TooltipContent
                         data-testid="reaction-tooltip"
-                        className="flex max-w-[16rem] flex-col items-center gap-1.5 px-4 py-3 text-center"
+                        className="flex w-[16rem] flex-col items-center gap-1.5 px-4 py-3 text-center"
                       >
                         <EmojiGlyph emoji={emoji} customMap={emojiMap} size="xl" />
                         <span className="text-xs leading-snug">
@@ -702,11 +701,12 @@ export function MessageItem({
                 })}
                 <EmojiPicker
                   onSelect={handleReact}
+                  triggerClassName="inline-flex items-center self-stretch"
                   trigger={
                     <Button
                       size="icon"
                       variant="ghost"
-                      className="h-6 w-6 rounded-full text-muted-foreground hover:text-foreground"
+                      className="h-full min-h-6 w-6 rounded-full text-muted-foreground hover:text-foreground"
                       aria-label="Add another reaction"
                     >
                       <SmilePlus className="h-3.5 w-3.5" />
