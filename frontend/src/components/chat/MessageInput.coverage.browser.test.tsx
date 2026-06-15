@@ -1,6 +1,7 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { render, cleanup } from 'vitest-browser-react';
 import { userEvent } from 'vitest/browser';
+import { EditorView } from '@codemirror/view';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MessageInput, type MessageInputHandle } from './MessageInput';
 import { setWSSender } from '@/lib/ws-sender';
@@ -224,8 +225,12 @@ describe('MessageInput coverage flows (browser)', () => {
     await editor.click();
     // Select all the text, then toggle bold via the toolbar; the
     // active-format subscription flips aria-pressed on the Bold button
-    // (ToolbarBtn active branch).
-    await userEvent.keyboard('{Meta>}a{/Meta}');
+    // (ToolbarBtn active branch). Select via the CodeMirror view rather than a
+    // keyboard shortcut: CM binds select-all to Mod-a (Cmd on macOS, Ctrl on
+    // Linux), so `{Meta>}a` only works on macOS — on Linux CI it selects
+    // nothing, bold wraps an empty `****`, and no StrongEmphasis node forms.
+    const view = EditorView.findFromDOM(editor.element() as HTMLElement)!;
+    view.dispatch({ selection: { anchor: 0, head: view.state.doc.length } });
     const bold = screen.getByLabelText('Bold (Ctrl+B)');
     await bold.click();
     await vi.waitFor(() => {
