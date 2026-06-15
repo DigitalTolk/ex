@@ -79,34 +79,103 @@ export const composerTheme = EditorView.theme({
     padding: '0.25rem',
   },
   '.cm-tooltip-autocomplete > ul > li': {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '0.5rem',
-    padding: '0.3125rem 0.5rem',
+    padding: '0.25rem 0.5rem',
     borderRadius: '0.375rem',
-    lineHeight: '1.4',
     color: 'var(--color-foreground)',
+    fontFamily: 'var(--font-sans)',
   },
   '.cm-tooltip-autocomplete > ul > li[aria-selected]': {
     backgroundColor: 'var(--color-muted)',
     color: 'var(--color-foreground)',
   },
-  '.cm-tooltip-autocomplete .cm-completionLabel': { fontWeight: '500' },
-  '.cm-tooltip-autocomplete .cm-completionDetail': {
-    marginLeft: 'auto',
-    paddingLeft: '0.75rem',
-    color: 'var(--color-muted-foreground)',
-    fontStyle: 'normal',
-    fontSize: '0.8em',
+  // Every composer option renders a custom row (see optionRender.ts), so hide
+  // CodeMirror's default label/detail (which also pull in the monospace font).
+  '.cm-tooltip-autocomplete .cm-completionLabel': { display: 'none' },
+  '.cm-tooltip-autocomplete .cm-completionDetail': { display: 'none' },
+
+  // ---- Custom option row ----
+  '.cm-option-row': {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '0.5rem',
+    minWidth: '0',
+    fontFamily: 'var(--font-sans)',
+  },
+  '.cm-option-col': { display: 'flex', flexDirection: 'column', minWidth: '0', lineHeight: '1.25' },
+  '.cm-option-title': {
+    fontWeight: '500',
     whiteSpace: 'nowrap',
     overflow: 'hidden',
     textOverflow: 'ellipsis',
   },
-  '.cm-tooltip-autocomplete .cm-completionMatchedText': {
-    textDecoration: 'none',
-    fontWeight: '700',
-    color: 'var(--color-primary)',
+  '.cm-option-sub': {
+    fontSize: '0.75rem',
+    color: 'var(--color-muted-foreground)',
+    whiteSpace: 'nowrap',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
   },
+  // Avatar (image or initial) + online dot.
+  '.cm-option-avatar': {
+    position: 'relative',
+    flex: '0 0 auto',
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '1.5rem',
+    height: '1.5rem',
+    borderRadius: '9999px',
+    backgroundColor: 'color-mix(in srgb, var(--color-primary) 10%, transparent)',
+    color: 'var(--color-primary)',
+    fontSize: '0.6875rem',
+    fontWeight: '600',
+    overflow: 'visible',
+  },
+  '.cm-option-avatar img': {
+    width: '100%',
+    height: '100%',
+    borderRadius: '9999px',
+    objectFit: 'cover',
+  },
+  '.cm-option-dot': {
+    position: 'absolute',
+    right: '-1px',
+    bottom: '-1px',
+    width: '0.5rem',
+    height: '0.5rem',
+    borderRadius: '9999px',
+    backgroundColor: 'var(--color-brand)',
+    border: '1.5px solid var(--color-card)',
+  },
+  // Channel / group icon.
+  '.cm-option-icon': {
+    flex: '0 0 auto',
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '1.5rem',
+    height: '1.5rem',
+    color: 'var(--color-muted-foreground)',
+  },
+  '.cm-option-icon svg': { width: '1rem', height: '1rem' },
+  '.cm-option-group': {
+    borderRadius: '9999px',
+    backgroundColor: 'color-mix(in srgb, var(--color-primary) 10%, transparent)',
+    color: 'var(--color-primary)',
+    fontWeight: '700',
+  },
+  // Emoji glyph — shown first and larger (Slack-style).
+  '.cm-option-emoji': {
+    flex: '0 0 auto',
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '1.5rem',
+    fontSize: '1.4rem',
+    lineHeight: '1',
+  },
+  '.cm-option-emoji img': { width: '1.4rem', height: '1.4rem', objectFit: 'contain' },
+
   // Section header row.
   '.cm-mention-section': {
     padding: '0.375rem 0.5rem 0.125rem',

@@ -14,6 +14,7 @@ import {
   type MentionUser,
   type UserSuggestion,
 } from './mentionData';
+import type { MentionCompletion } from './optionRender';
 
 // CodeMirror completion sources for @-mentions and ~-channels. The editor's
 // document stays raw markdown: selecting a suggestion inserts the canonical
@@ -60,7 +61,7 @@ const GROUP_DETAIL: Record<GroupName, string> = {
   here: 'Notify everyone currently online',
 };
 
-function userCompletion(s: UserSuggestion, partitioned: boolean): Completion {
+function userCompletion(s: UserSuggestion, partitioned: boolean): MentionCompletion {
   if (s.kind === 'group') {
     return {
       label: `@${s.group}`,
@@ -68,6 +69,7 @@ function userCompletion(s: UserSuggestion, partitioned: boolean): Completion {
       type: 'keyword',
       section: partitioned ? SECTION_SPECIAL : undefined,
       apply: applyInsert(`@${s.group} `),
+      meta: { kind: 'group', title: `@${s.group}`, description: GROUP_DETAIL[s.group] },
     };
   }
   return {
@@ -78,6 +80,7 @@ function userCompletion(s: UserSuggestion, partitioned: boolean): Completion {
     // DMs / edits show a flat ranked list with no headers.
     section: partitioned ? (s.inChannel ? SECTION_MEMBERS : SECTION_OTHERS) : undefined,
     apply: applyInsert(`@[${s.id}|${s.displayName}] `),
+    meta: { kind: 'user', displayName: s.displayName, email: s.email, avatarURL: s.avatarURL, online: s.online },
   };
 }
 
@@ -111,10 +114,11 @@ export function channelMentionSource(providers: MentionProviders): CompletionSou
     if (!before) return null;
     if (!atBoundary(context, before.from)) return null;
     const query = before.text.slice(1);
-    const options = rankChannels(query, providers.channels()).map((c) => ({
+    const options = rankChannels(query, providers.channels()).map((c): MentionCompletion => ({
       label: `~${c.slug}`,
       type: c.isPrivate ? 'class' : 'variable',
       apply: applyInsert(`~[${c.id}|${c.slug}] `),
+      meta: { kind: 'channel', slug: c.slug, isPrivate: c.isPrivate },
     }));
     return { from: before.from, to: before.to, options, filter: false };
   };

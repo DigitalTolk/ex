@@ -325,6 +325,25 @@
     @apply outline-ring outline-2 outline-offset-2;
   }
 
+  /* Every clickable/action shows a pointer cursor. Tailwind v4's preflight no
+   * longer sets this on buttons, so anything interactive (buttons, links,
+   * role-based widgets, menu/option items, the select control, labels with a
+   * target) gets it here. Disabled controls keep the default arrow. */
+  button:not(:disabled),
+  [role="button"]:not([aria-disabled="true"]),
+  [role="menuitem"],
+  [role="menuitemcheckbox"],
+  [role="menuitemradio"],
+  [role="option"],
+  [role="tab"],
+  [role="switch"],
+  a[href],
+  label[for],
+  summary,
+  select:not(:disabled) {
+    cursor: pointer;
+  }
+
 }
 
 /* Sidebar / app-chrome light-mode color remap.

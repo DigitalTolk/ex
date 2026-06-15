@@ -12,6 +12,7 @@ import {
 } from '@/lib/emoji-shortcodes';
 import { fuzzyMatch } from '@/lib/fuzzy';
 import type { CustomEmoji } from '@/types';
+import type { MentionCompletion } from './optionRender';
 
 // `:shortcode:` autocomplete for the composer. Selecting an option inserts the
 // canonical `:name:` text (with the user's skin-tone suffix for the standard
@@ -66,12 +67,24 @@ function applyInsert(text: string) {
   };
 }
 
-function hitToCompletion(hit: EmojiHit, skinTone: EmojiSkinTone): Completion {
+function hitToCompletion(hit: EmojiHit, skinTone: EmojiSkinTone): MentionCompletion {
   if (hit.kind === 'custom') {
-    return { label: `:${hit.name}:`, detail: 'custom', type: 'text', apply: applyInsert(`:${hit.name}: `) };
+    return {
+      label: `:${hit.name}:`,
+      detail: 'custom',
+      type: 'text',
+      apply: applyInsert(`:${hit.name}: `),
+      meta: { kind: 'emoji', name: hit.name, imageURL: hit.imageURL },
+    };
   }
   const shortcode = shortcodeWithSkinTone(hit.name, hit.unicode, skinTone);
-  return { label: `:${hit.name}:`, detail: hit.unicode, type: 'text', apply: applyInsert(`${shortcode} `) };
+  return {
+    label: `:${hit.name}:`,
+    detail: hit.unicode,
+    type: 'text',
+    apply: applyInsert(`${shortcode} `),
+    meta: { kind: 'emoji', name: hit.name, glyph: hit.unicode },
+  };
 }
 
 export function emojiSource(providers: EmojiProviders): CompletionSource {

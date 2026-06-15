@@ -131,22 +131,11 @@ describe('MessageItem desktop toolbar + menu branches', () => {
     expect(screen.container).toBeTruthy();
   });
 
-  it('copies a channel deep-link from the kebab menu and shows the copied label', async () => {
+  it('copies a channel deep-link from the kebab menu', async () => {
     if (window.innerWidth <= 767) return;
     const writeText = vi.fn().mockResolvedValue(undefined);
     const original = navigator.clipboard;
     Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
-    // Freeze ONLY the 1500ms `linkCopied` reset: intercept that specific
-    // timer (and pass every other timer through to the real implementation so
-    // Radix focus/animation timers keep working). This removes the race where
-    // the slow hover→click→re-open dance can exceed the reset window (the
-    // label would flip back to "Copy link" mid-assertion). The real truthy arm
-    // is still exercised — only the reset timer is held.
-    const realSetTimeout = window.setTimeout;
-    const setTimeoutSpy = vi.spyOn(window, 'setTimeout').mockImplementation(((fn: TimerHandler, ms?: number, ...rest: unknown[]) => {
-      if (ms === 1500) return 0 as unknown as ReturnType<typeof setTimeout>;
-      return realSetTimeout(fn, ms, ...rest);
-    }) as typeof window.setTimeout);
     try {
       const screen = await renderWithProviders(
         <MessageItem message={makeMessage()} authorName="Alice" isOwn channelId="channel-1" channelSlug="general" currentUserId="user-1" />,
@@ -156,18 +145,13 @@ describe('MessageItem desktop toolbar + menu branches', () => {
       await userEvent.click(row.querySelector('[data-testid="message-actions-trigger"]') as HTMLButtonElement);
       await userEvent.click(await screen.getByRole('menuitem', { name: 'Copy link to message' }));
       // The deep-link builder used the channel-slug arm (…/channel/general…).
+      // The desktop menu label stays "Copy link" (no "… copied" flip — the
+      // menu closes on click so the feedback would never be seen).
       await vi.waitFor(() => {
         expect(writeText).toHaveBeenCalled();
         expect(String(writeText.mock.calls[0][0])).toContain('general');
       });
-      // Re-open the menu (reset frozen) → the item label now reads
-      // "Link copied" (the linkCopied truthy arm of the desktop menu).
-      await userEvent.hover(row);
-      await userEvent.click(row.querySelector('[data-testid="message-actions-trigger"]') as HTMLButtonElement);
-      await expect.element(screen.getByText('Link copied')).toBeVisible();
     } finally {
-      setTimeoutSpy.mockRestore();
-      window.setTimeout = realSetTimeout;
       Object.defineProperty(navigator, 'clipboard', { value: original, configurable: true });
     }
   });
@@ -499,13 +483,6 @@ describe('MessageItem misc branches', () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     const original = navigator.clipboard;
     Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
-    // Freeze only the 1500ms linkCopied reset so the re-open + assertion is
-    // deterministic (see the channel deep-link test for the rationale).
-    const realSetTimeout = window.setTimeout;
-    const setTimeoutSpy = vi.spyOn(window, 'setTimeout').mockImplementation(((fn: TimerHandler, ms?: number, ...rest: unknown[]) => {
-      if (ms === 1500) return 0 as unknown as ReturnType<typeof setTimeout>;
-      return realSetTimeout(fn, ms, ...rest);
-    }) as typeof window.setTimeout);
     try {
       const screen = await renderWithProviders(
         <MessageItem message={makeMessage()} authorName="Alice" isOwn currentUserId="user-1" />,
@@ -519,13 +496,7 @@ describe('MessageItem misc branches', () => {
         expect(writeText).toHaveBeenCalled();
         expect(String(writeText.mock.calls[0][0])).toContain('#msg-');
       });
-      // Re-open the menu (reset frozen) → the copied label is shown.
-      await userEvent.hover(row);
-      await userEvent.click(row.querySelector('[data-testid="message-actions-trigger"]') as HTMLButtonElement);
-      await expect.element(screen.getByText('Link copied')).toBeVisible();
     } finally {
-      setTimeoutSpy.mockRestore();
-      window.setTimeout = realSetTimeout;
       Object.defineProperty(navigator, 'clipboard', { value: original, configurable: true });
     }
   });

@@ -30,7 +30,6 @@ import { ThreadActionBar } from '@/components/chat/ThreadActionBar';
 import { UnfurlCard } from '@/components/chat/UnfurlCard';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { extractURLs, formatLongDateTime } from '@/lib/format';
-import { CHANNEL_MENTION_RE_GLOBAL, USER_MENTION_RE_GLOBAL } from '@/lib/mention-syntax';
 import { registerEditMessageHandler } from '@/lib/window-events';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { useAnimatedSwipeDismiss } from '@/hooks/useAnimatedSwipeDismiss';
@@ -83,12 +82,6 @@ function formatTime(dateStr: string): string {
   });
 }
 
-function formatMessageTextForCopy(body: string): string {
-  return body
-    .replace(USER_MENTION_RE_GLOBAL, (_match, _userId: string, displayName: string) => `@${displayName}`)
-    .replace(CHANNEL_MENTION_RE_GLOBAL, (_match, _channelId: string, slug: string) => `~${slug}`);
-}
-
 export function MessageItem({
   message,
   authorName,
@@ -111,7 +104,6 @@ export function MessageItem({
   const isMobile = useIsMobile();
   const [isEditing, setIsEditing] = useState(false);
   const [linkCopied, setLinkCopied] = useState(false);
-  const [textCopied, setTextCopied] = useState(false);
   // Visibility tracked in JS (not Tailwind group-hover) because Radix's
   // open dropdown changes pointer-events/focus and breaks CSS :hover
   // propagation on the row.
@@ -223,9 +215,10 @@ export function MessageItem({
   }
 
   async function handleCopyText() {
-    await copyToClipboard(formatMessageTextForCopy(message.body));
-    setTextCopied(true);
-    setTimeout(() => setTextCopied(false), 1500);
+    // Copy the raw markdown body (mention tokens like `@[id|name]` intact) so
+    // pasting it back into the composer re-creates the mention pills / renders
+    // mentions on send — and so it round-trips as the same markdown.
+    await copyToClipboard(message.body);
   }
 
   function handleTogglePin() {
@@ -769,19 +762,21 @@ export function MessageItem({
               <MoreHorizontal className="h-3.5 w-3.5" />
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-44">
-              <DropdownMenuItem
-                onClick={handleCopyText}
-                aria-label="Copy message text"
-              >
-                <Copy className="mr-2 h-4 w-4" />
-                {textCopied ? 'Text copied' : 'Copy text'}
-              </DropdownMenuItem>
+              {/* Static labels: the menu closes on click, so a "… copied"
+                  swap would never be seen on desktop. */}
               <DropdownMenuItem
                 onClick={handleCopyLink}
                 aria-label="Copy link to message"
               >
                 <LinkIcon className="mr-2 h-4 w-4" />
-                {linkCopied ? 'Link copied' : 'Copy link'}
+                Copy link
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={handleCopyText}
+                aria-label="Copy message text"
+              >
+                <Copy className="mr-2 h-4 w-4" />
+                Copy text
               </DropdownMenuItem>
               <DropdownMenuItem
                 onClick={handleTogglePin}

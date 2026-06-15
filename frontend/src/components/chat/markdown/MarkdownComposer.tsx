@@ -54,7 +54,7 @@ export const MarkdownComposer = forwardRef<WysiwygEditorHandle, Props>(function 
 
   const completionProviders = useMemo<CompletionProviders>(
     () => ({
-      users: () => users.map((u) => ({ id: u.id, displayName: u.displayName, email: u.email })),
+      users: () => users.map((u) => ({ id: u.id, displayName: u.displayName, email: u.email, avatarURL: u.avatarURL })),
       online: () => online,
       memberIds: () => memberIds,
       channels: () =>
