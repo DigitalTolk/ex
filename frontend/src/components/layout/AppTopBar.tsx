@@ -32,7 +32,6 @@ import { EditProfileDialog } from '@/components/EditProfileDialog';
 import { UserStatusDialog } from '@/components/UserStatusDialog';
 import { AboutDialog } from '@/components/AboutDialog';
 import { InviteDialog } from '@/components/InviteDialog';
-import { EmojiManagerDialog } from '@/components/EmojiManagerDialog';
 
 interface AppTopBarProps {
   onOpenChannels?: () => void;
@@ -66,7 +65,6 @@ export function AppTopBar({ onOpenChannels, channelsButtonHidden }: AppTopBarPro
   const [statusOpen, setStatusOpen] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
   const [inviteOpen, setInviteOpen] = useState(false);
-  const [emojiManagerOpen, setEmojiManagerOpen] = useState(false);
   const [changeServerOpen, setChangeServerOpen] = useState(false);
   // Mobile account-menu sheet — full-screen Dialog opened on tap of
   // the avatar. The same set of actions on desktop renders inside a
@@ -124,7 +122,7 @@ export function AppTopBar({ onOpenChannels, channelsButtonHidden }: AppTopBarPro
             key: 'emojis',
             icon: <Smile className="h-4 w-4" />,
             label: 'Custom emojis',
-            onSelect: () => setEmojiManagerOpen(true),
+            onSelect: () => navigate('/emojis'),
             testID: 'user-menu-emojis',
           } satisfies MenuAction,
         ]
@@ -184,25 +182,31 @@ export function AppTopBar({ onOpenChannels, channelsButtonHidden }: AppTopBarPro
         // it the search input clips against the bottom border. The
         // strip is draggable-as-a-titlebar on native via Capacitor
         // (carve-outs cover the interactive children).
-        className="grid h-9 max-md:h-12 w-full shrink-0 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 border-b border-border bg-sidebar px-2 max-md:px-3 text-sidebar-foreground [-webkit-app-region:drag] [&_button,&_a,&_input]:[-webkit-app-region:no-drag]"
+        // Equal 1fr side columns keep the search field centred in the
+        // viewport regardless of how wide the left (channels) or right
+        // (account) controls are.
+        className="grid h-9 max-md:h-12 w-full shrink-0 grid-cols-[1fr_minmax(0,36rem)_1fr] items-center gap-2 border-b border-border bg-sidebar px-2 max-md:px-3 text-sidebar-foreground [-webkit-app-region:drag] [&_button,&_a,&_input]:[-webkit-app-region:no-drag]"
         data-testid="app-shell-header"
         data-app-chrome="true"
       >
         <div className="flex items-center">
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={onOpenChannels}
-            aria-label="Open channels"
-            aria-hidden={channelsButtonHidden}
-            tabIndex={channelsButtonHidden ? -1 : 0}
-            className={`h-7 w-7 max-md:h-10 max-md:w-10 text-sidebar-foreground hover:bg-sidebar-accent lg:hidden ${channelsButtonHidden ? 'invisible' : ''}`}
-          >
-            <Menu className="h-4 w-4 max-md:h-5 max-md:w-5" />
-          </Button>
+          {/* Drop the channels button entirely on the home/start page —
+              there the channel list is already the main view, so it has
+              nothing to open. */}
+          {!channelsButtonHidden && (
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={onOpenChannels}
+              aria-label="Open channels"
+              className="h-7 w-7 max-md:h-10 max-md:w-10 text-sidebar-foreground hover:bg-sidebar-accent lg:hidden"
+            >
+              <Menu className="h-4 w-4 max-md:h-5 max-md:w-5" />
+            </Button>
+          )}
         </div>
 
-        <div className="min-w-0 w-full max-w-xl justify-self-center mx-auto">
+        <div className="min-w-0 w-full">
           <SearchBar />
         </div>
 
@@ -314,7 +318,6 @@ export function AppTopBar({ onOpenChannels, channelsButtonHidden }: AppTopBarPro
         onOpenChange={setStatusOpen}
       />
       <InviteDialog open={inviteOpen} onOpenChange={setInviteOpen} />
-      <EmojiManagerDialog open={emojiManagerOpen} onOpenChange={setEmojiManagerOpen} />
       <AboutDialog open={aboutOpen} onOpenChange={setAboutOpen} />
       <ConfirmDialog
         open={changeServerOpen}

@@ -180,6 +180,7 @@ func main() {
 		emojiSvc.SetSigner(s3Client)
 	}
 	emojiSvc.SetMediaURLCache(redisCache)
+	emojiSvc.SetFrequencyStore(redisCache)
 	presenceSvc := service.NewPresenceService(redisCache, redisPubSub)
 	var attachmentSigner service.AttachmentSigner
 	if s3Client != nil {

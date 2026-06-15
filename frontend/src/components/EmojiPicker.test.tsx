@@ -1,5 +1,5 @@
-import { describe, it, expect, vi } from 'vitest';
-import { act, render as rtlRender, screen, fireEvent, waitFor } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { act, render as rtlRender, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { EmojiPicker } from './EmojiPicker';
@@ -30,6 +30,17 @@ vi.mock('@/lib/api', () => ({
   getAccessToken: () => 'tok',
 }));
 
+// Server-backed frequently-used shelf — mocked so the list is deterministic
+// and picks can be asserted without a backend.
+const freqRef = vi.hoisted(() => ({ value: [] as string[] }));
+const recordMock = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/emoji-frequency', () => ({
+  // Mirror the server's limit-honouring slice so the desktop/mobile row caps
+  // are exercised here exactly as in production.
+  getFrequentEmojis: vi.fn(async (limit: number) => freqRef.value.slice(0, limit)),
+  recordEmojiUse: (shortcode: string) => recordMock(shortcode),
+}));
+
 function render(ui: React.ReactElement) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return rtlRender(<QueryClientProvider client={qc}>{ui}</QueryClientProvider>);
@@ -55,7 +66,16 @@ function swipeDown(element: Element) {
   fireEvent.touchEnd(element, { changedTouches: [{ clientX: 168, clientY: 230 }] });
 }
 
+function seedFrequency(shortcodes: string[]) {
+  freqRef.value = shortcodes;
+}
+
 describe('EmojiPicker', () => {
+  beforeEach(() => {
+    freqRef.value = [];
+    recordMock.mockClear();
+  });
+
   it('renders trigger and is closed by default', () => {
     render(<EmojiPicker onSelect={vi.fn()} />);
     expect(screen.getByRole('button', { name: /open emoji picker/i })).toBeInTheDocument();
@@ -300,6 +320,71 @@ describe('EmojiPicker', () => {
     expect(list.compareDocumentPosition(skinToneSelector) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(skinToneSelector.className).toContain('mt-1.5');
     expect(skinToneSelector.className).toContain('border-t');
+  });
+
+  it('does not render a frequently-used shelf with no history', async () => {
+    const user = userEvent.setup();
+    render(<EmojiPicker onSelect={vi.fn()} />);
+    await user.click(screen.getByRole('button', { name: /open emoji picker/i }));
+    expect(screen.queryByRole('list', { name: /frequently used emojis/i })).not.toBeInTheDocument();
+  });
+
+  it('shows up to two rows of the most-used emojis at the top', async () => {
+    // Seed 20 entries — desktop shows 9 cols × 2 rows = 18.
+    seedFrequency(Array.from({ length: 20 }, (_, i) => `:freq${i}:`));
+    const user = userEvent.setup();
+    render(<EmojiPicker onSelect={vi.fn()} />);
+    await user.click(screen.getByRole('button', { name: /open emoji picker/i }));
+
+    const shelf = await screen.findByRole('list', { name: /frequently used emojis/i });
+    expect(within(shelf).getAllByTestId('emoji-frequent-tile')).toHaveLength(18);
+    expect(screen.getByText('Frequently used')).toBeInTheDocument();
+  });
+
+  it('caps the frequently-used shelf to two rows of seven on mobile', async () => {
+    const originalMatchMedia = window.matchMedia;
+    setMobileMatch(true);
+    seedFrequency(Array.from({ length: 20 }, (_, i) => `:freq${i}:`));
+    const user = userEvent.setup();
+    render(<EmojiPicker onSelect={vi.fn()} />);
+    await user.click(screen.getByRole('button', { name: /open emoji picker/i }));
+
+    const shelf = await screen.findByRole('list', { name: /frequently used emojis/i });
+    expect(within(shelf).getAllByTestId('emoji-frequent-tile')).toHaveLength(14);
+    Object.defineProperty(window, 'matchMedia', { configurable: true, value: originalMatchMedia });
+  });
+
+  it('selects a frequently-used emoji when its tile is clicked', async () => {
+    seedFrequency([':tada:']);
+    const onSelect = vi.fn();
+    const user = userEvent.setup();
+    render(<EmojiPicker onSelect={onSelect} />);
+    await user.click(screen.getByRole('button', { name: /open emoji picker/i }));
+
+    const shelf = await screen.findByRole('list', { name: /frequently used emojis/i });
+    await user.click(within(shelf).getByTestId('emoji-frequent-tile'));
+    expect(onSelect).toHaveBeenCalledWith(':tada:');
+    expect(recordMock).toHaveBeenCalledWith(':tada:');
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('hides the frequently-used shelf while searching', async () => {
+    seedFrequency([':tada:']);
+    const user = userEvent.setup();
+    render(<EmojiPicker onSelect={vi.fn()} />);
+    await user.click(screen.getByRole('button', { name: /open emoji picker/i }));
+    expect(await screen.findByRole('list', { name: /frequently used emojis/i })).toBeInTheDocument();
+    await user.type(screen.getByLabelText('Search emojis'), 'thumbsup');
+    expect(screen.queryByRole('list', { name: /frequently used emojis/i })).not.toBeInTheDocument();
+  });
+
+  it('records each picked emoji to the server-backed shelf', async () => {
+    const user = userEvent.setup();
+    render(<EmojiPicker onSelect={vi.fn()} />);
+    await user.click(screen.getByRole('button', { name: /open emoji picker/i }));
+    await user.type(screen.getByLabelText('Search emojis'), 'thumbsup');
+    await user.click(screen.getByLabelText('React with :thumbsup:'));
+    expect(recordMock).toHaveBeenCalledWith(':thumbsup:');
   });
 
   it('applies selected skin tone to supported standard emoji picks', async () => {

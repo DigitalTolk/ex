@@ -8,7 +8,7 @@ import { topK } from '@/lib/topk';
 // in a side-effect-free module that the CodeMirror completion source consumes
 // and that can be unit-tested exhaustively without an editor.
 
-export const MAX_MENTION_RESULTS = 12;
+export const MAX_MENTION_RESULTS = 20;
 
 export type GroupName = 'all' | 'here';
 const GROUP_NAMES: GroupName[] = ['all', 'here'];
@@ -77,9 +77,10 @@ export function rankUsers(query: string, ctx: RankUsersCtx): UserSuggestion[] {
 
   if (partition) {
     // Channel context: members first, then group mentions, then everyone else.
+    // Each section gets its own budget so non-members ("Not in channel") always
+    // surface — even in a busy channel where members alone would fill the list.
     const members = topK(matches.filter((u) => u.inChannel), MAX_MENTION_RESULTS, byRelevance);
-    const remaining = Math.max(0, MAX_MENTION_RESULTS - members.length);
-    const nonMembers = topK(matches.filter((u) => !u.inChannel), remaining, byRelevance);
+    const nonMembers = topK(matches.filter((u) => !u.inChannel), MAX_MENTION_RESULTS, byRelevance);
     return [...members.map(toSuggestion), ...groups, ...nonMembers.map(toSuggestion)];
   }
   return [...groups, ...topK(matches, MAX_MENTION_RESULTS, byRelevance).map(toSuggestion)];

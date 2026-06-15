@@ -63,6 +63,25 @@ describe('rankUsers', () => {
     expect(out.slice(1).every((s) => s.kind === 'user' && s.inChannel === false)).toBe(true);
   });
 
+  it('still shows non-members when the channel has a full page of members', () => {
+    // 14 matching members would have filled the old MAX-capped list and
+    // squeezed out every non-member; each section now has its own budget.
+    const roster: MentionUser[] = [];
+    const memberIds = new Set<string>();
+    for (let i = 0; i < 14; i++) {
+      roster.push({ id: `m${i}`, displayName: `Member${i}` });
+      memberIds.add(`m${i}`);
+    }
+    roster.push({ id: 'out', displayName: 'Memberable Outsider' });
+    const out = rankUsers('member', { users: roster, online: new Set(), memberIds });
+    const outsider = out.find((s) => s.kind === 'user' && s.id === 'out');
+    expect(outsider).toMatchObject({ kind: 'user', id: 'out', inChannel: false });
+    // The outsider sorts after every channel member.
+    const lastMemberIdx = out.map((s) => (s.kind === 'user' ? s.inChannel : null)).lastIndexOf(true);
+    const outsiderIdx = out.findIndex((s) => s.kind === 'user' && s.id === 'out');
+    expect(outsiderIdx).toBeGreaterThan(lastMemberIdx);
+  });
+
   it('places group mentions between members and non-members in a channel', () => {
     const out = rankUsers('all', {
       users,

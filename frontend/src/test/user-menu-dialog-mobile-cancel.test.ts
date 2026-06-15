@@ -14,7 +14,6 @@ describe('user menu dialog mobile close controls', () => {
     'src/components/EditProfileDialog.tsx',
     'src/components/UserStatusDialog.tsx',
     'src/components/InviteDialog.tsx',
-    'src/components/EmojiManagerDialog.tsx',
     'src/components/AboutDialog.tsx',
   ])('%s opts into a visible mobile Cancel close button', (path) => {
     expect(readComponent(path)).toContain('mobileCloseLabel="Cancel"');

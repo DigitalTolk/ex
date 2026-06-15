@@ -19,6 +19,11 @@ const userKeyPrefix = "user:"
 const userCacheTTL = 15 * time.Minute
 const presenceKeyPrefix = "presence:online:"
 const presenceTTL = 90 * time.Second
+const emojiFreqKeyPrefix = "emoji:freq:"
+
+// emojiFreqTTL ages out a user's emoji-usage history so a long-dormant
+// account doesn't keep stale favourites forever; every use refreshes it.
+const emojiFreqTTL = 90 * 24 * time.Hour
 
 // RedisCache wraps a Redis client to provide typed caching operations.
 type RedisCache struct {
@@ -196,6 +201,39 @@ func (c *RedisCache) GetUser(ctx context.Context, userID string) (*model.User, e
 func (c *RedisCache) SetUser(ctx context.Context, user *model.User) error {
 	rec := userCacheRecord{User: *user, AvatarKey: user.AvatarKey}
 	return c.Set(ctx, userKeyPrefix+user.ID, rec, userCacheTTL)
+}
+
+// IncrementEmojiFrequency bumps the per-user usage count for a picked emoji
+// shortcode, stored in a sorted set scored by frequency, and refreshes the
+// key's TTL.
+func (c *RedisCache) IncrementEmojiFrequency(ctx context.Context, userID, shortcode string) error {
+	key := emojiFreqKeyPrefix + userID
+	if err := c.client.ZIncrBy(ctx, key, 1, shortcode).Err(); err != nil {
+		return fmt.Errorf("emoji freq increment %q: %w", userID, err)
+	}
+	if err := c.client.Expire(ctx, key, emojiFreqTTL).Err(); err != nil {
+		return fmt.Errorf("emoji freq expire %q: %w", userID, err)
+	}
+	return nil
+}
+
+// FrequentEmojis returns up to limit of the user's most-used emoji shortcodes,
+// highest count first.
+func (c *RedisCache) FrequentEmojis(ctx context.Context, userID string, limit int) ([]string, error) {
+	if limit <= 0 {
+		return []string{}, nil
+	}
+	key := emojiFreqKeyPrefix + userID
+	res, err := c.client.ZRangeArgs(ctx, redis.ZRangeArgs{
+		Key:   key,
+		Start: 0,
+		Stop:  limit - 1,
+		Rev:   true,
+	}).Result()
+	if err != nil {
+		return nil, fmt.Errorf("emoji freq list %q: %w", userID, err)
+	}
+	return res, nil
 }
 
 // Client returns the underlying Redis client for advanced operations.

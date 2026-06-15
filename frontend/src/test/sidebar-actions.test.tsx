@@ -150,26 +150,6 @@ vi.mock('@/components/InviteDialog', () => ({
   ) : null,
 }));
 
-vi.mock('@/components/EmojiManagerDialog', () => ({
-  EmojiManagerDialog: ({
-    open,
-    onOpenChange,
-  }: {
-    open: boolean;
-    onOpenChange: (open: boolean) => void;
-  }) => open ? (
-    <button
-      data-testid="mock-emoji-manager-close"
-      onClick={() => {
-        document.querySelector<HTMLButtonElement>('[aria-label="User menu"]')?.focus();
-        onOpenChange(false);
-      }}
-    >
-      Close emoji manager
-    </button>
-  ) : null,
-}));
-
 vi.mock('@/components/AboutDialog', () => ({
   AboutDialog: ({
     open,

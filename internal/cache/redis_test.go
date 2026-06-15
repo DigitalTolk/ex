@@ -348,3 +348,70 @@ func TestSetUser(t *testing.T) {
 		t.Fatal("expected key 'user:u456' to exist in Redis")
 	}
 }
+
+func TestEmojiFrequency(t *testing.T) {
+	c, mr := setupTestCache(t)
+	ctx := context.Background()
+
+	// No history yet → empty list.
+	got, err := c.FrequentEmojis(ctx, "u1", 10)
+	if err != nil {
+		t.Fatalf("FrequentEmojis empty: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("expected empty, got %v", got)
+	}
+
+	// Record uses: :tada: x3, :smile: x2, :wave: x1.
+	for _, sc := range []string{":tada:", ":smile:", ":tada:", ":wave:", ":smile:", ":tada:"} {
+		if err := c.IncrementEmojiFrequency(ctx, "u1", sc); err != nil {
+			t.Fatalf("IncrementEmojiFrequency: %v", err)
+		}
+	}
+
+	got, err = c.FrequentEmojis(ctx, "u1", 10)
+	if err != nil {
+		t.Fatalf("FrequentEmojis: %v", err)
+	}
+	want := []string{":tada:", ":smile:", ":wave:"}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("rank[%d]=%q, want %q (full=%v)", i, got[i], want[i], got)
+		}
+	}
+
+	// Limit slices to the top N.
+	top, err := c.FrequentEmojis(ctx, "u1", 2)
+	if err != nil {
+		t.Fatalf("FrequentEmojis limit: %v", err)
+	}
+	if len(top) != 2 || top[0] != ":tada:" || top[1] != ":smile:" {
+		t.Fatalf("limited list = %v, want [:tada: :smile:]", top)
+	}
+
+	// A non-positive limit yields an empty list without touching Redis.
+	if zero, err := c.FrequentEmojis(ctx, "u1", 0); err != nil || len(zero) != 0 {
+		t.Fatalf("FrequentEmojis(0) = %v, %v", zero, err)
+	}
+
+	// Recording refreshes the TTL window.
+	if ttl := mr.TTL(emojiFreqKeyPrefix + "u1"); ttl <= 0 {
+		t.Fatalf("expected a positive TTL, got %v", ttl)
+	}
+}
+
+func TestEmojiFrequencyClientErrors(t *testing.T) {
+	c, mr := setupTestCache(t)
+	mr.Close()
+	ctx := context.Background()
+
+	if err := c.IncrementEmojiFrequency(ctx, "u1", ":x:"); err == nil {
+		t.Fatal("expected IncrementEmojiFrequency error from closed redis")
+	}
+	if _, err := c.FrequentEmojis(ctx, "u1", 5); err == nil {
+		t.Fatal("expected FrequentEmojis error from closed redis")
+	}
+}

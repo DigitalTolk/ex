@@ -1,7 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, Routes, Route, useLocation } from 'react-router-dom';
 import { AppTopBar } from './AppTopBar';
+
+// Surfaces the active route so navigation actions can be asserted.
+function LocationProbe() {
+  const location = useLocation();
+  return <div data-testid="location-probe">{location.pathname}</div>;
+}
 
 const logout = vi.fn().mockResolvedValue(undefined);
 vi.mock('@/context/AuthContext', () => ({
@@ -18,7 +24,6 @@ vi.mock('@/components/EditProfileDialog', () => ({ EditProfileDialog: ({ open }:
 vi.mock('@/components/UserStatusDialog', () => ({ UserStatusDialog: ({ open }: { open: boolean }) => open ? <div data-testid="status-open" /> : null }));
 vi.mock('@/components/AboutDialog', () => ({ AboutDialog: ({ open }: { open: boolean }) => open ? <div data-testid="about-open" /> : null }));
 vi.mock('@/components/InviteDialog', () => ({ InviteDialog: ({ open }: { open: boolean }) => open ? <div data-testid="invite-open" /> : null }));
-vi.mock('@/components/EmojiManagerDialog', () => ({ EmojiManagerDialog: ({ open }: { open: boolean }) => open ? <div data-testid="emoji-manager-open" /> : null }));
 vi.mock('@/hooks/useIsMobile', () => ({ useIsMobile: () => false }));
 
 let mockNative = false;
@@ -29,7 +34,14 @@ vi.mock('@/lib/capacitor', () => ({
 }));
 
 function renderTopBar() {
-  return render(<MemoryRouter><AppTopBar /></MemoryRouter>);
+  return render(
+    <MemoryRouter initialEntries={['/']}>
+      <AppTopBar />
+      <Routes>
+        <Route path="*" element={<LocationProbe />} />
+      </Routes>
+    </MemoryRouter>,
+  );
 }
 
 describe('AppTopBar menu actions', () => {
@@ -46,11 +58,11 @@ describe('AppTopBar menu actions', () => {
     expect(screen.getByTestId('status-open')).toBeInTheDocument();
   });
 
-  it('opens the emoji manager from the menu', () => {
+  it('navigates to the custom emoji page from the menu', () => {
     renderTopBar();
     fireEvent.click(screen.getByTestId('topbar-account'));
     fireEvent.click(screen.getByTestId('user-menu-emojis'));
-    expect(screen.getByTestId('emoji-manager-open')).toBeInTheDocument();
+    expect(screen.getByTestId('location-probe')).toHaveTextContent('/emojis');
   });
 
   it('triggers admin navigation from the menu without crashing', () => {

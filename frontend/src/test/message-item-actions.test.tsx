@@ -367,3 +367,9 @@ describe('MessageItem - hover bar and avatar', () => {
     expect(toolbarA.style.opacity).toBe('0');
   });
 });
+
+// Server-backed frequently-used shelf: stub so opening the picker never hits the network.
+vi.mock('@/lib/emoji-frequency', () => ({
+  getFrequentEmojis: vi.fn(async () => []),
+  recordEmojiUse: vi.fn(async () => {}),
+}));

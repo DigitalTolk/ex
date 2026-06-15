@@ -114,6 +114,7 @@ vi.mock('@/hooks/useThreads', () => ({
   useThreadMessages: () => threadMessagesState,
   useFollowThread: () => ({ mutate: followThreadMutate, isPending: false }),
   useUnfollowThread: () => ({ mutate: unfollowThreadMutate, isPending: false }),
+  markThreadSeen: vi.fn(),
 }));
 
 let draftState: { data: { id?: string; body?: string; attachmentIDs?: string[] } | undefined } = { data: undefined };

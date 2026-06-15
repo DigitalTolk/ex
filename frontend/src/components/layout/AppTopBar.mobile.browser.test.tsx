@@ -26,7 +26,6 @@ vi.mock('@/components/EditProfileDialog', () => ({ EditProfileDialog: ({ open }:
 vi.mock('@/components/UserStatusDialog', () => ({ UserStatusDialog: ({ open }: { open: boolean }) => (open ? <div data-testid="status-open" /> : null) }));
 vi.mock('@/components/AboutDialog', () => ({ AboutDialog: ({ open }: { open: boolean }) => (open ? <div data-testid="about-open" /> : null) }));
 vi.mock('@/components/InviteDialog', () => ({ InviteDialog: ({ open }: { open: boolean }) => (open ? <div data-testid="invite-open" /> : null) }));
-vi.mock('@/components/EmojiManagerDialog', () => ({ EmojiManagerDialog: ({ open }: { open: boolean }) => (open ? <div data-testid="emoji-manager-open" /> : null) }));
 // Native platform with a ServerNavigation plugin → the serverNavigation
 // branch is truthy and the "Change server" action is present.
 vi.mock('@/lib/capacitor', () => ({

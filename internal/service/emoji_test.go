@@ -431,3 +431,134 @@ func TestEmojiService_Delete_NotFound(t *testing.T) {
 		t.Fatal("expected not found error")
 	}
 }
+
+type mockFreqStore struct {
+	inc     map[string]int
+	list    []string
+	listGot int
+	incErr  error
+	listErr error
+}
+
+func (m *mockFreqStore) IncrementEmojiFrequency(_ context.Context, userID, shortcode string) error {
+	if m.incErr != nil {
+		return m.incErr
+	}
+	if m.inc == nil {
+		m.inc = map[string]int{}
+	}
+	m.inc[userID+"|"+shortcode]++
+	return nil
+}
+
+func (m *mockFreqStore) FrequentEmojis(_ context.Context, _ string, limit int) ([]string, error) {
+	if m.listErr != nil {
+		return nil, m.listErr
+	}
+	m.listGot = limit
+	return m.list, nil
+}
+
+func TestEmojiService_RecordEmojiUse(t *testing.T) {
+	t.Run("requires a shortcode", func(t *testing.T) {
+		svc, _, _, _ := setupEmojiSvc()
+		svc.SetFrequencyStore(&mockFreqStore{})
+		if err := svc.RecordEmojiUse(context.Background(), "u1", "   "); err == nil {
+			t.Fatal("expected error for empty shortcode")
+		}
+	})
+
+	t.Run("rejects an over-long shortcode", func(t *testing.T) {
+		svc, _, _, _ := setupEmojiSvc()
+		svc.SetFrequencyStore(&mockFreqStore{})
+		long := ":" + strings.Repeat("a", MaxEmojiShortcodeLen) + ":"
+		if err := svc.RecordEmojiUse(context.Background(), "u1", long); err == nil {
+			t.Fatal("expected error for over-long shortcode")
+		}
+	})
+
+	t.Run("no-op when frequency store is unset", func(t *testing.T) {
+		svc, _, _, _ := setupEmojiSvc()
+		if err := svc.RecordEmojiUse(context.Background(), "u1", ":smile:"); err != nil {
+			t.Fatalf("expected nil, got %v", err)
+		}
+	})
+
+	t.Run("records via the store", func(t *testing.T) {
+		svc, _, _, _ := setupEmojiSvc()
+		fr := &mockFreqStore{}
+		svc.SetFrequencyStore(fr)
+		if err := svc.RecordEmojiUse(context.Background(), "u1", "  :smile:  "); err != nil {
+			t.Fatalf("RecordEmojiUse: %v", err)
+		}
+		if fr.inc["u1|:smile:"] != 1 {
+			t.Fatalf("expected trimmed shortcode recorded once, got %v", fr.inc)
+		}
+	})
+
+	t.Run("wraps a store error", func(t *testing.T) {
+		svc, _, _, _ := setupEmojiSvc()
+		svc.SetFrequencyStore(&mockFreqStore{incErr: errors.New("boom")})
+		if err := svc.RecordEmojiUse(context.Background(), "u1", ":smile:"); err == nil {
+			t.Fatal("expected wrapped store error")
+		}
+	})
+}
+
+func TestEmojiService_FrequentEmojis(t *testing.T) {
+	t.Run("empty when frequency store is unset", func(t *testing.T) {
+		svc, _, _, _ := setupEmojiSvc()
+		got, err := svc.FrequentEmojis(context.Background(), "u1", 10)
+		if err != nil || len(got) != 0 {
+			t.Fatalf("got %v, %v; want empty", got, err)
+		}
+	})
+
+	t.Run("clamps non-positive and over-max limits", func(t *testing.T) {
+		svc, _, _, _ := setupEmojiSvc()
+		fr := &mockFreqStore{list: []string{":a:"}}
+		svc.SetFrequencyStore(fr)
+		if _, err := svc.FrequentEmojis(context.Background(), "u1", 0); err != nil {
+			t.Fatalf("FrequentEmojis(0): %v", err)
+		}
+		if fr.listGot != MaxFrequentEmoji {
+			t.Fatalf("limit clamp(0) = %d, want %d", fr.listGot, MaxFrequentEmoji)
+		}
+		if _, err := svc.FrequentEmojis(context.Background(), "u1", MaxFrequentEmoji+5); err != nil {
+			t.Fatalf("FrequentEmojis(over): %v", err)
+		}
+		if fr.listGot != MaxFrequentEmoji {
+			t.Fatalf("limit clamp(over) = %d, want %d", fr.listGot, MaxFrequentEmoji)
+		}
+	})
+
+	t.Run("passes through a valid limit and list", func(t *testing.T) {
+		svc, _, _, _ := setupEmojiSvc()
+		fr := &mockFreqStore{list: []string{":a:", ":b:"}}
+		svc.SetFrequencyStore(fr)
+		got, err := svc.FrequentEmojis(context.Background(), "u1", 5)
+		if err != nil {
+			t.Fatalf("FrequentEmojis: %v", err)
+		}
+		if fr.listGot != 5 || len(got) != 2 {
+			t.Fatalf("limit=%d list=%v", fr.listGot, got)
+		}
+	})
+
+	t.Run("coerces a nil list to empty", func(t *testing.T) {
+		svc, _, _, _ := setupEmojiSvc()
+		svc.SetFrequencyStore(&mockFreqStore{list: nil})
+		got, err := svc.FrequentEmojis(context.Background(), "u1", 5)
+		if err != nil || got == nil || len(got) != 0 {
+			t.Fatalf("got %#v, %v; want non-nil empty", got, err)
+		}
+	})
+
+	t.Run("wraps a store error", func(t *testing.T) {
+		svc, _, _, _ := setupEmojiSvc()
+		svc.SetFrequencyStore(&mockFreqStore{listErr: errors.New("down")})
+		if _, err := svc.FrequentEmojis(context.Background(), "u1", 5); err == nil {
+			t.Fatal("expected wrapped store error")
+		}
+	})
+}

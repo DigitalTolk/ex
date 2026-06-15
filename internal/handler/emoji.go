@@ -2,6 +2,7 @@ package handler
 
 import (
 	"net/http"
+	"strconv"
 
 	"github.com/DigitalTolk/ex/internal/middleware"
 	"github.com/DigitalTolk/ex/internal/model"
@@ -57,6 +58,53 @@ func (h *EmojiHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, emoji)
+}
+
+// ListFrequent returns the caller's most-used emoji shortcodes, highest
+// count first, capped by the optional `limit` query parameter.
+func (h *EmojiHandler) ListFrequent(w http.ResponseWriter, r *http.Request) {
+	userID := middleware.UserIDFromContext(r.Context())
+	if userID == "" {
+		writeError(w, http.StatusUnauthorized, "unauthorized", "authentication required")
+		return
+	}
+	limit := 0
+	if v := queryParam(r, "limit", ""); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			limit = n
+		}
+	}
+	emojis, err := h.emojiSvc.FrequentEmojis(r.Context(), userID, limit)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "list_error", err.Error())
+		return
+	}
+	if emojis == nil {
+		emojis = []string{}
+	}
+	writeJSON(w, http.StatusOK, emojis)
+}
+
+// RecordFrequent records one use of an emoji shortcode by the caller so it can
+// surface in their frequently-used shelf.
+func (h *EmojiHandler) RecordFrequent(w http.ResponseWriter, r *http.Request) {
+	userID := middleware.UserIDFromContext(r.Context())
+	if userID == "" {
+		writeError(w, http.StatusUnauthorized, "unauthorized", "authentication required")
+		return
+	}
+	var body struct {
+		Emoji string `json:"emoji"`
+	}
+	if err := readJSON(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", err.Error())
+		return
+	}
+	if err := h.emojiSvc.RecordEmojiUse(r.Context(), userID, body.Emoji); err != nil {
+		writeError(w, http.StatusBadRequest, "record_error", err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // Delete removes a custom emoji. Only admins or the creator may delete.
