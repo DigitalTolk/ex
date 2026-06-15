@@ -339,6 +339,30 @@ func TestMarkdownRenderer_BlankLinesProduceBlankParagraphs(t *testing.T) {
 	}
 }
 
+func TestMarkdownRenderer_BlankLinesBetweenCodeBlocks(t *testing.T) {
+	r := NewMarkdownRenderer()
+	// Two fenced code blocks separated by two blank lines. The blank run
+	// sits between two top-level blocks and must surface as two blank
+	// paragraphs — previously dropped because an opening fence reset the
+	// pending blank count without flushing it.
+	out := r.RenderToHast("```\nadadad\n```\n\n\n```\nbar\n```")
+	tags := topLevelTags(out)
+	if len(tags) != 4 {
+		t.Fatalf("expected [pre p p pre], got %v", tags)
+	}
+	if tags[0] != "pre" || tags[3] != "pre" {
+		t.Fatalf("expected code blocks at the ends, got %v", tags)
+	}
+	for _, i := range []int{1, 2} {
+		if tags[i] != "p" {
+			t.Fatalf("expected blank paragraphs in the middle, got %v", tags)
+		}
+		if got, _ := out.Children[i].Properties["data-blank"].(string); got != "true" {
+			t.Errorf("middle block %d should carry data-blank=true, got %q", i, got)
+		}
+	}
+}
+
 func TestMarkdownRenderer_IndentedCodeBlock(t *testing.T) {
 	r := NewMarkdownRenderer()
 	out := r.RenderToHast("    var x = 1\n    var y = 2")

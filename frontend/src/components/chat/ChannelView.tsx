@@ -28,6 +28,7 @@ import { markThreadSeen } from '@/hooks/useThreads';
 import { apiFetch } from '@/lib/api';
 import { queryKeys } from '@/lib/query-keys';
 import { useUsersBatch } from '@/hooks/useUsersBatch';
+import { useFrequentEmojis } from '@/hooks/useEmoji';
 import { collectMessageUserIDs, findLastOwnMessageId } from '@/lib/message-users';
 import { useSidePanels } from '@/hooks/useSidePanels';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
@@ -64,6 +65,7 @@ export function ChannelView() {
   const { clearChannelUnread, setActiveChannel } = useUnread();
   const { setActiveParent } = useNotifications();
   const { online } = usePresence();
+  const quickReactions = useFrequentEmojis(3);
   const inputRef = useRef<MessageInputHandle>(null);
   const isMobile = useIsMobile();
   const [threadRootID, setThreadRootID] = useState<string | null>(null);
@@ -397,6 +399,7 @@ export function ChannelView() {
             channelId={channel?.id}
             channelSlug={channel?.slug}
             userMap={userMap}
+            quickReactions={quickReactions}
             onReplyInThread={openThread}
             onEditMessage={isMobile ? setEditingMessage : undefined}
             anchorMsgId={mainAnchor}

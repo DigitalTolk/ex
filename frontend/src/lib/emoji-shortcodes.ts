@@ -225,3 +225,49 @@ export function normalizeEmojiInBody(body: string): string {
   }
   return out;
 }
+
+// Matches a run of unicode emoji — a base pictographic char plus optional
+// skin-tone modifiers, variation selectors, and ZWJ-joined sequences (so
+// "👍🏽" and "👨‍👩‍👧" each count as one emoji run).
+const EMOJI_UNICODE_RUN_RE = new RegExp(
+  '\\p{Extended_Pictographic}(?:\\uFE0F|\\uFE0E|\\p{Emoji_Modifier})?' +
+    '(?:\\u200D\\p{Extended_Pictographic}(?:\\uFE0F|\\uFE0E|\\p{Emoji_Modifier})?)*',
+  'gu',
+);
+
+// isEmojiOnlyMessage reports whether a message body is nothing but emoji
+// (custom `:shortcodes:`, standard shortcodes, or unicode emoji) plus
+// whitespace. Used to render "jumbomoji" at double size. A `:shortcode:`
+// only counts when it resolves to a real emoji or a known custom emoji,
+// so a stray `:word:` doesn't get blown up as literal text.
+export function isEmojiOnlyMessage(body: string, customEmoji?: Record<string, string>): boolean {
+  const trimmed = body.trim();
+  if (!trimmed) return false;
+  let hadEmoji = false;
+  let rest = trimmed.replace(EMOJI_SHORTCODE_RE_GLOBAL, (full, name: string) => {
+    const isRealEmoji = shortcodeToUnicode(`:${name}:`) !== `:${name}:`;
+    if (isRealEmoji || customEmoji?.[name]) {
+      hadEmoji = true;
+      return '';
+    }
+    return full;
+  });
+  rest = rest.replace(EMOJI_UNICODE_RUN_RE, () => {
+    hadEmoji = true;
+    return '';
+  });
+  return hadEmoji && rest.trim() === '';
+}
+
+// Tailwind classes for an emoji glyph/image in a rendered message, scaled up
+// ("jumbomoji") when the whole message is emoji-only. Lives here (not in
+// markdown.tsx) so both the legacy and hast render paths can import it
+// without forming a markdown ↔ markdown-hast import cycle.
+export function emojiGlyphClass(large: boolean | undefined): string {
+  return large ? 'text-[2.8em] leading-none align-middle' : 'text-[1.4em] leading-none align-middle';
+}
+export function emojiImageClass(large: boolean | undefined): string {
+  return large
+    ? 'inline-block h-[2.8em] w-[2.8em] align-middle'
+    : 'inline-block h-[1.4em] w-[1.4em] align-middle';
+}

@@ -25,6 +25,22 @@ function root(children: HastNode[]): HastNode {
   return { type: 'root', children };
 }
 
+describe('renderHastTree — jumbomoji scaling', () => {
+  it('renders a unicode emoji shortcode at 2.8em when largeEmoji is set', async () => {
+    const tree = root([elem('ex-emoji-shortcode', { 'data-name': 'smile' })]);
+    await render(wrap(<>{renderHastTree(tree, { largeEmoji: true })}</>));
+    expect(document.querySelector('span.text-\\[2\\.8em\\]')).not.toBeNull();
+  });
+
+  it('renders a custom emoji image at 2.8em when largeEmoji is set', async () => {
+    const tree = root([elem('ex-emoji-shortcode', { 'data-name': 'parrot' })]);
+    await render(
+      wrap(<>{renderHastTree(tree, { largeEmoji: true, emojiMap: { parrot: 'https://x/p.gif' } })}</>),
+    );
+    expect(document.querySelector('img.h-\\[2\\.8em\\]')).not.toBeNull();
+  });
+});
+
 describe('renderHastTree — link scheme safety', () => {
   it('renders a safe link as an anchor', async () => {
     const tree = root([elem('a', { href: 'https://example.com' }, [text('click')])]);

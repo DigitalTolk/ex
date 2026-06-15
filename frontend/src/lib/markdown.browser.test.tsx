@@ -45,6 +45,23 @@ describe('renderMarkdown (legacy regex pipeline)', () => {
     expect(code?.className).toContain('language-go');
   });
 
+  it('renders a standard emoji at the normal 1.4em size by default', async () => {
+    await render(wrap(<>{renderMarkdown(':smile:')}</>));
+    expect(document.querySelector('span.text-\\[1\\.4em\\]')).not.toBeNull();
+  });
+
+  it('renders a standard emoji at 2.8em when largeEmoji is set', async () => {
+    await render(wrap(<>{renderMarkdown(':smile:', { largeEmoji: true })}</>));
+    expect(document.querySelector('span.text-\\[2\\.8em\\]')).not.toBeNull();
+  });
+
+  it('renders a custom emoji image at 2.8em when largeEmoji is set', async () => {
+    await render(
+      wrap(<>{renderMarkdown(':parrot:', { largeEmoji: true, emojiMap: { parrot: 'https://x/p.gif' } })}</>),
+    );
+    expect(document.querySelector('img.h-\\[2\\.8em\\]')).not.toBeNull();
+  });
+
   it('renders a blockquote with one <div> per line', async () => {
     await render(wrap(<>{renderMarkdown('> first\n> second')}</>));
     const bq = document.querySelector('blockquote');

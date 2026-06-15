@@ -44,3 +44,36 @@ describe('emoji-shortcodes skin-tone helpers (browser)', () => {
     expect(supportsEmojiSkinTone(WAVE)).toBe(true);
   });
 });
+
+import { isEmojiOnlyMessage } from './emoji-shortcodes';
+
+describe('isEmojiOnlyMessage', () => {
+  it('returns false for an empty or whitespace body', () => {
+    expect(isEmojiOnlyMessage('')).toBe(false);
+    expect(isEmojiOnlyMessage('   ')).toBe(false);
+  });
+
+  it('detects a single real emoji shortcode', () => {
+    expect(isEmojiOnlyMessage(':smile:')).toBe(true);
+  });
+
+  it('detects multiple emoji and surrounding whitespace', () => {
+    expect(isEmojiOnlyMessage(':smile: :tada:')).toBe(true);
+  });
+
+  it('detects a unicode emoji', () => {
+    expect(isEmojiOnlyMessage('🎉')).toBe(true);
+  });
+
+  it('detects a custom emoji via the provided map', () => {
+    expect(isEmojiOnlyMessage(':partyparrot:', { partyparrot: 'https://x/p.gif' })).toBe(true);
+  });
+
+  it('is false when emoji are mixed with text', () => {
+    expect(isEmojiOnlyMessage('nice :smile:')).toBe(false);
+  });
+
+  it('is false for an unknown shortcode that is neither real nor custom', () => {
+    expect(isEmojiOnlyMessage(':definitelynotanemoji:')).toBe(false);
+  });
+});

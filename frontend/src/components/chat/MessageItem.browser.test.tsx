@@ -9,10 +9,11 @@ import type { Message } from '@/types';
 
 const useAttachmentsBatchMock = vi.hoisted(() => vi.fn(() => ({ map: new Map(), isLoading: false })));
 
+const toggleReactionMutate = vi.hoisted(() => vi.fn());
 vi.mock('@/hooks/useMessages', () => ({
   useEditMessage: () => ({ mutate: vi.fn(), isPending: false }),
   useDeleteMessage: () => ({ mutate: vi.fn(), isPending: false }),
-  useToggleReaction: () => ({ mutate: vi.fn(), isPending: false }),
+  useToggleReaction: () => ({ mutate: toggleReactionMutate, isPending: false }),
   useSetPinned: () => ({ mutate: vi.fn(), isPending: false }),
   useSetNoUnfurl: () => ({ mutate: vi.fn(), isPending: false }),
 }));
@@ -69,6 +70,25 @@ describe('MessageItem browser behavior', () => {
     await expect.element(editor).toBeVisible();
     await expect.element(screen.getByLabelText('Message input')).toBeVisible();
     expect(document.body.textContent).not.toContain('Loading');
+  });
+
+  it('renders quick-reaction shortcuts in the desktop toolbar and reacts on click', async () => {
+    if (window.innerWidth <= 767) return;
+    toggleReactionMutate.mockClear();
+    const screen = await renderWithProviders(
+      <MessageItem
+        message={makeMessage()}
+        authorName="Alice"
+        isOwn={false}
+        channelId="channel-1"
+        currentUserId="user-2"
+        quickReactions={[':tada:', ':smile:']}
+      />,
+    );
+    const btn = screen.getByRole('button', { name: 'React with :tada:' });
+    await expect.element(btn).toBeInTheDocument();
+    await btn.click();
+    expect(toggleReactionMutate).toHaveBeenCalledWith(expect.objectContaining({ emoji: ':tada:' }));
   });
 
   it('keeps the mobile long-press action sheet above the bottom composer', async () => {

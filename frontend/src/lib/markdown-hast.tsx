@@ -9,7 +9,7 @@ import { jsx, jsxs } from 'react/jsx-runtime';
 import { toJsxRuntime, type Components as JsxComponents } from 'hast-util-to-jsx-runtime';
 import type { Nodes as HastNodes } from 'hast';
 import { GiphyEmbed } from '@/components/GiphyEmbed';
-import { applySkinToneSuffix, shortcodeToUnicode } from './emoji-shortcodes';
+import { applySkinToneSuffix, shortcodeToUnicode, emojiGlyphClass, emojiImageClass } from './emoji-shortcodes';
 import { isSafeUrl } from './url-safety';
 import type { HastNode } from '@/types';
 import type { RenderOpts } from './markdown';
@@ -256,7 +256,7 @@ const HAST_COMPONENTS_MAP: Record<string, AnyComponent> = {
           src={url}
           alt={`:${name}:`}
           title={`:${name}:`}
-          className="inline-block h-[1.4em] w-[1.4em] align-middle"
+          className={emojiImageClass(opts?.largeEmoji)}
         />
       );
     }
@@ -266,7 +266,7 @@ const HAST_COMPONENTS_MAP: Record<string, AnyComponent> = {
       return (
         <span
           title={skin ? `:${name}::${skin}:` : `:${name}:`}
-          className="text-[1.4em] leading-none align-middle"
+          className={emojiGlyphClass(opts?.largeEmoji)}
         >
           {visible}
         </span>

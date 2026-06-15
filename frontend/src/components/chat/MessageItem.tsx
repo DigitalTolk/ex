@@ -22,6 +22,7 @@ import { UserAvatar } from '@/components/UserAvatar';
 import { useEditMessage, useDeleteMessage, useToggleReaction, useSetPinned } from '@/hooks/useMessages';
 import { useEmojiMap } from '@/hooks/useEmoji';
 import { renderMarkdown } from '@/lib/markdown';
+import { isEmojiOnlyMessage } from '@/lib/emoji-shortcodes';
 import { buildChannelHref, buildConversationHref } from '@/lib/message-deeplink';
 import { useTagOpen } from '@/context/TagSearchContext';
 import { EmojiGlyph } from '@/components/EmojiGlyph';
@@ -29,7 +30,7 @@ import { MessageAttachments } from '@/components/chat/MessageAttachments';
 import { ThreadActionBar } from '@/components/chat/ThreadActionBar';
 import { UnfurlCard } from '@/components/chat/UnfurlCard';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
-import { extractURLs, formatLongDateTime } from '@/lib/format';
+import { extractURLs, formatLongDateTime, formatRelative } from '@/lib/format';
 import { registerEditMessageHandler } from '@/lib/window-events';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { useAnimatedSwipeDismiss } from '@/hooks/useAnimatedSwipeDismiss';
@@ -73,6 +74,9 @@ interface MessageItemProps {
   // clears the flag after the flash window so the ring auto-removes.
   highlighted?: boolean;
   onContentHeightChange?: () => void;
+  // The viewer's most-used emoji (shortcodes), shown as one-tap reaction
+  // shortcuts in the hover action bar. Empty/omitted → no shortcuts.
+  quickReactions?: string[];
 }
 
 function formatTime(dateStr: string): string {
@@ -100,6 +104,7 @@ export function MessageItem({
   userMap,
   highlighted,
   onContentHeightChange,
+  quickReactions,
 }: MessageItemProps) {
   const isMobile = useIsMobile();
   const [isEditing, setIsEditing] = useState(false);
@@ -563,7 +568,9 @@ export function MessageItem({
               className="text-xs text-muted-foreground cursor-default"
               render={<time dateTime={message.createdAt} />}
             >
-              {formatTime(message.createdAt)}
+              {/* Threads have no day dividers, so an absolute clock time is
+                  ambiguous about which day — show a relative "… ago" label. */}
+              {inThread ? formatRelative(message.createdAt) : formatTime(message.createdAt)}
             </TooltipTrigger>
             <TooltipContent>
               {formatLongDateTime(message.createdAt)}
@@ -731,6 +738,18 @@ export function MessageItem({
           role="toolbar"
           aria-label="Message actions"
         >
+          {(quickReactions ?? []).slice(0, 3).map((emoji) => (
+            <Button
+              key={`quick-${emoji}`}
+              size="icon"
+              variant="ghost"
+              className="h-7 w-7"
+              aria-label={`React with ${emoji}`}
+              onClick={() => handleReact(emoji)}
+            >
+              <EmojiGlyph emoji={emoji} customMap={emojiMap} />
+            </Button>
+          ))}
           <EmojiPicker
             onSelect={handleReact}
             trigger={
@@ -853,6 +872,7 @@ const MessageBody = memo(function MessageBody({
       {renderMarkdown(message.body, {
         tree: message.rendered,
         emojiMap,
+        largeEmoji: isEmojiOnlyMessage(message.body, emojiMap),
         currentUserId,
         onMediaLoad: onContentHeightChange,
         onTagClick: openTag,

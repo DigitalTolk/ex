@@ -145,6 +145,13 @@ describe('ThreadPanel browser behaviour', () => {
     await expect.element(screen.getByText('thread root question')).toBeVisible();
   });
 
+  it('shows a relative "… ago" timestamp (threads have no day dividers)', async () => {
+    await renderPanel();
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toMatch(/ago|just now/);
+    });
+  });
+
   it('mounts the reply composer at the bottom of the panel', async () => {
     await renderPanel();
     // The reply composer is the WysiwygEditor — finding any
