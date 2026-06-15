@@ -165,7 +165,12 @@ describe('ThreadsPage', () => {
   it('pages thread cards in as the load-more sentinel scrolls into view', async () => {
     const callbacks: Array<(entries: { isIntersecting: boolean }[]) => void> = [];
     class MockIO {
-      constructor(cb: (entries: { isIntersecting: boolean }[]) => void) {
+      // Mirror the real IntersectionObserver signature (callback + options)
+      // so the `{ rootMargin }` argument isn't a superfluous trailing arg.
+      constructor(
+        cb: (entries: { isIntersecting: boolean }[]) => void,
+        _options?: IntersectionObserverInit,
+      ) {
         callbacks.push(cb);
       }
       observe() {}
