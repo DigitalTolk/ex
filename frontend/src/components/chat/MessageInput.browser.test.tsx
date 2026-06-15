@@ -360,10 +360,15 @@ describe('MessageInput browser behavior', () => {
 
     await vi.waitFor(() => {
       expect(document.querySelector('[data-testid="popover-portal"]')).toBeNull();
-      expect(document.activeElement === editor || editor.contains(document.activeElement)).toBe(true);
-      // The refocus chain (pick → insert → re-render → editor.focus()) can run
-      // long under full-suite CPU load on the mobile WebKit project.
     }, { timeout: 5000 });
+    // The refocus chain (pick → insert → re-render → editor.focus()) runs in
+    // its own deferred ticks and can lag well behind the portal teardown under
+    // full-suite CPU load on the mobile WebKit project — give it a separate,
+    // generous window so a slow refocus doesn't fail alongside the (already
+    // satisfied) portal-closed check.
+    await vi.waitFor(() => {
+      expect(document.activeElement === editor || editor.contains(document.activeElement)).toBe(true);
+    }, { timeout: 20000 });
   });
 
   // CTA tokens: light theme CTA is #231F20 (near-black), dark theme is
