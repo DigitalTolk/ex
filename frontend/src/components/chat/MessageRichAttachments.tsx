@@ -47,6 +47,8 @@ export function MessageRichAttachments({ attachments, onContentHeightChange }: {
             <img
               src={att.image_url}
               alt=""
+              width={att.image_width || undefined}
+              height={att.image_height || undefined}
               className="mt-2 max-h-[300px] max-w-[400px] rounded object-contain"
               onLoad={onContentHeightChange}
             />

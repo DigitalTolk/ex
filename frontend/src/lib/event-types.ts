@@ -28,6 +28,7 @@ export const EventType = {
   Ping: 'ping',
   ReplayDone: 'replay.done',
   ReplayExhausted: 'replay.exhausted',
+  WebhookChanged: 'webhook.changed',
 } as const;
 
 export type EventTypeName = (typeof EventType)[keyof typeof EventType];

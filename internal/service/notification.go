@@ -180,6 +180,12 @@ func (s *NotificationService) NotifyForMessage(ctx context.Context, msg *model.M
 
 	parentName := s.parentDisplayName(ctx, msg.ParentID, parentType)
 	authorName := s.userDisplayName(ctx, msg.AuthorID)
+	// Incoming-webhook messages display the override username, not the
+	// creator's name, and fall back to the attachment fallback text when
+	// the body is empty (attachments-only post) — both mirror Mattermost.
+	if msg.WebhookUsername != "" {
+		authorName = msg.WebhookUsername
+	}
 	snap := s.loadMemberSnapshot(ctx, msg, parentType, parentName)
 
 	deepLink := snap.deepLink
@@ -190,7 +196,7 @@ func (s *NotificationService) NotifyForMessage(ctx context.Context, msg *model.M
 	notif := Notification{
 		Kind:            kind,
 		Title:           titleFor(kind, parentType, parentName, authorName),
-		Body:            previewBody(msg.Body),
+		Body:            previewBody(notificationBody(msg)),
 		DeepLink:        deepLink,
 		ParentID:        msg.ParentID,
 		ParentType:      parentType,
@@ -504,6 +510,23 @@ func titleFor(kind NotificationKind, parentType, parentName, authorName string) 
 // Mentions in their wire form `@[userID|DisplayName]` are flattened to
 // `@DisplayName` so the popup reads "Alice mentioned: hi @Bob" rather
 // than "hi @[U-2|Bob]".
+// notificationBody is the text used for a push/notification preview. It
+// prefers the message body, but for an attachments-only message (e.g. an
+// incoming webhook posting a rich attachment with no text) it falls back
+// to the first attachment's fallback summary — the field Mattermost
+// defines for exactly this purpose.
+func notificationBody(msg *model.Message) string {
+	if msg.Body != "" {
+		return msg.Body
+	}
+	for _, a := range msg.MessageAttachments {
+		if a.Fallback != "" {
+			return a.Fallback
+		}
+	}
+	return ""
+}
+
 func previewBody(body string) string {
 	const max = 140
 	body = userMentionPattern.ReplaceAllString(body, "@$2")

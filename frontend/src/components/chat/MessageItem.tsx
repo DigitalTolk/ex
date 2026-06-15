@@ -535,23 +535,33 @@ export function MessageItem({
         message.pinned ? 'border-l-2 border-amber-500 pl-2' : ''
       } ${highlighted ? 'ring-1 ring-amber-400/50 rounded-md' : ''} max-md:select-none max-md:touch-pan-y max-md:[-webkit-touch-callout:none] max-md:[-webkit-user-select:none]`}
     >
-      <UserHoverCard
-        userId={message.authorID}
-        displayName={displayAuthorName}
-        avatarURL={displayAuthorAvatarURL}
-        userStatus={authorUserStatus}
-        online={authorOnline}
-        currentUserId={currentUserId}
-        showInlineStatus={false}
-      >
-        <UserAvatar
+      {message.webhookIconEmoji ? (
+        <div
+          className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-muted"
+          aria-label={`:${message.webhookIconEmoji}:`}
+          data-testid="webhook-emoji-avatar"
+        >
+          <EmojiGlyph emoji={`:${message.webhookIconEmoji}:`} customMap={emojiMap} size="lg" />
+        </div>
+      ) : (
+        <UserHoverCard
+          userId={message.authorID}
           displayName={displayAuthorName}
           avatarURL={displayAuthorAvatarURL}
+          userStatus={authorUserStatus}
           online={authorOnline}
-          className="mt-0.5 h-9 w-9 cursor-pointer"
-          dotClassName="h-2.5 w-2.5"
-        />
-      </UserHoverCard>
+          currentUserId={currentUserId}
+          showInlineStatus={false}
+        >
+          <UserAvatar
+            displayName={displayAuthorName}
+            avatarURL={displayAuthorAvatarURL}
+            online={authorOnline}
+            className="mt-0.5 h-9 w-9 cursor-pointer"
+            dotClassName="h-2.5 w-2.5"
+          />
+        </UserHoverCard>
+      )}
 
       <div className="flex-1 min-w-0">
         <div className="flex items-baseline gap-2">
@@ -565,6 +575,14 @@ export function MessageItem({
           >
             <span className="cursor-pointer text-sm font-semibold">{displayAuthorName}</span>
           </UserHoverCard>
+          {message.webhookUsername && (
+            <span
+              className="rounded bg-muted px-1 text-[10px] font-semibold uppercase leading-4 tracking-wide text-muted-foreground"
+              aria-label="Bot"
+            >
+              BOT
+            </span>
+          )}
           <Tooltip>
             <TooltipTrigger
               className="text-xs text-muted-foreground cursor-default"

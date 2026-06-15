@@ -36,6 +36,7 @@ interface UseWebSocketOptions {
   onChannelMuted?: WSCallback;
   onNotification?: WSCallback;
   onDraftUpdated?: WSCallback;
+  onWebhookChanged?: WSCallback;
   onForceLogout?: WSCallback;
   onServerVersion?: WSCallback;
   onPing?: WSCallback;
@@ -179,6 +180,9 @@ export function useWebSocket(options: UseWebSocketOptions) {
               break;
             case EventType.DraftUpdated:
               callbacksRef.current.onDraftUpdated?.(payload);
+              break;
+            case EventType.WebhookChanged:
+              callbacksRef.current.onWebhookChanged?.(payload);
               break;
             case EventType.ForceLogout:
               callbacksRef.current.onForceLogout?.(payload);

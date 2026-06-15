@@ -25,6 +25,8 @@ describe('MessageRichAttachments', () => {
               { title: 'Wide', value: '[Logs](https://example.com/logs)', short: false },
             ],
             image_url: '/media/image.webp',
+            image_width: 400,
+            image_height: 300,
             footer_icon: '/media/footer.webp',
             footer: 'ci',
           },
@@ -48,6 +50,12 @@ describe('MessageRichAttachments', () => {
     expect(screen.getByText('Wide')).toBeInTheDocument();
     expect(screen.getByText('Linked Bot')).toHaveAttribute('href', 'https://example.com/bot');
     expect(screen.getByText('Linked report')).toHaveAttribute('href', 'https://example.com/report');
+
+    // image_url renders explicit intrinsic dimensions when provided so the
+    // virtualised list can reserve space (no layout shift on decode).
+    const mainImage = document.querySelector('img[src="/media/image.webp"]');
+    expect(mainImage).toHaveAttribute('width', '400');
+    expect(mainImage).toHaveAttribute('height', '300');
 
     for (const image of document.querySelectorAll('img')) {
       fireEvent.load(image);

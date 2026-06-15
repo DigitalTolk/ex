@@ -57,6 +57,7 @@ export interface Message {
   rendered?: HastNode;
   webhookUsername?: string;
   webhookAvatarURL?: string;
+  webhookIconEmoji?: string;
   messageAttachments?: MessageAttachment[];
 }
 
@@ -86,6 +87,8 @@ export interface MessageAttachment {
   title_link?: string;
   fields?: MessageAttachmentField[];
   image_url?: string;
+  image_width?: number;
+  image_height?: number;
   thumb_url?: string;
   footer?: string;
   footer_icon?: string;

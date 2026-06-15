@@ -1,12 +1,14 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { useUserChannels } from '@/hooks/useChannels';
+import { useBrowseChannels, useUserChannels } from '@/hooks/useChannels';
 import { useCreateIncomingWebhook, useDeleteIncomingWebhook, useIncomingWebhooks } from '@/hooks/useWebhooks';
+import { copyToClipboard } from '@/lib/clipboard';
 
 export function IncomingWebhooksPanel() {
-  const { data: channels = [] } = useUserChannels();
+  const { data: memberships = [] } = useUserChannels();
+  const { data: publicChannels = [] } = useBrowseChannels();
   const { data: webhooks = [] } = useIncomingWebhooks();
   const create = useCreateIncomingWebhook();
   const remove = useDeleteIncomingWebhook();
@@ -16,8 +18,21 @@ export function IncomingWebhooksPanel() {
   const [lockToChannel, setLockToChannel] = useState(true);
   const [username, setUsername] = useState('');
   const [profileImageURL, setProfileImageURL] = useState('');
+  const [copiedID, setCopiedID] = useState('');
 
-  const selectedChannelID = channelID || channels[0]?.channelID || '';
+  // Webhooks may target any public channel plus any private channel the
+  // creator belongs to — mirror that by merging the public directory with
+  // the admin's own memberships (deduped by channel id).
+  const channelOptions = useMemo(() => {
+    const map = new Map<string, { id: string; name: string }>();
+    for (const ch of publicChannels) map.set(ch.id, { id: ch.id, name: ch.name });
+    for (const m of memberships) {
+      if (!map.has(m.channelID)) map.set(m.channelID, { id: m.channelID, name: m.channelName });
+    }
+    return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
+  }, [publicChannels, memberships]);
+
+  const selectedChannelID = channelID || channelOptions[0]?.id || '';
 
   function submit() {
     create.mutate({
@@ -35,6 +50,11 @@ export function IncomingWebhooksPanel() {
         setProfileImageURL('');
       },
     });
+  }
+
+  async function copyURL(id: string, url: string) {
+    await copyToClipboard(url);
+    setCopiedID(id);
   }
 
   return (
@@ -59,9 +79,9 @@ export function IncomingWebhooksPanel() {
             onChange={(e) => setChannelID(e.target.value)}
             className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm"
           >
-            {channels.map((ch) => (
-              <option key={ch.channelID} value={ch.channelID}>
-                {ch.channelName}
+            {channelOptions.map((ch) => (
+              <option key={ch.id} value={ch.id}>
+                {ch.name}
               </option>
             ))}
           </select>
@@ -97,14 +117,30 @@ export function IncomingWebhooksPanel() {
 
       <div className="space-y-2">
         {webhooks.map((wh) => (
-          <div key={wh.id} className="flex items-center justify-between gap-3 rounded-md border p-3">
-            <div className="min-w-0">
-              <p className="truncate text-sm font-medium">{wh.title}</p>
-              <p className="truncate text-xs text-muted-foreground">{wh.url}</p>
+          <div key={wh.id} className="space-y-2 rounded-md border p-3">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="truncate text-sm font-medium">{wh.title}</p>
+                <p className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted-foreground">
+                  <span>~{wh.channelSlug || wh.channelName || wh.channelID}</span>
+                  <span aria-hidden>·</span>
+                  <span>{wh.lockToChannel ? 'Locked to channel' : 'Channel override allowed'}</span>
+                  <span aria-hidden>·</span>
+                  <span>as {wh.username || 'webhook'}</span>
+                </p>
+              </div>
+              <Button variant="outline" size="sm" onClick={() => remove.mutate(wh.id)}>
+                Delete
+              </Button>
             </div>
-            <Button variant="outline" size="sm" onClick={() => remove.mutate(wh.id)}>
-              Delete
-            </Button>
+            {wh.url && (
+              <div className="flex items-center gap-2">
+                <code className="min-w-0 flex-1 truncate rounded bg-muted px-2 py-1 text-xs text-muted-foreground">{wh.url}</code>
+                <Button variant="outline" size="sm" onClick={() => copyURL(wh.id, wh.url!)}>
+                  {copiedID === wh.id ? 'Copied' : 'Copy'}
+                </Button>
+              </div>
+            )}
           </div>
         ))}
       </div>

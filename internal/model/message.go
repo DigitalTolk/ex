@@ -46,6 +46,7 @@ type Message struct {
 	// bot identifier for notifications/search, while these fields drive rendering.
 	WebhookUsername    string              `json:"webhookUsername,omitempty" dynamodbav:"webhookUsername,omitempty"`
 	WebhookAvatarURL   string              `json:"webhookAvatarURL,omitempty" dynamodbav:"webhookAvatarURL,omitempty"`
+	WebhookIconEmoji   string              `json:"webhookIconEmoji,omitempty" dynamodbav:"webhookIconEmoji,omitempty"` // emoji name (no colons) from icon_emoji; rendered as the avatar
 	MessageAttachments []MessageAttachment `json:"messageAttachments,omitempty" dynamodbav:"messageAttachments,omitempty"`
 }
 
@@ -61,9 +62,15 @@ type MessageAttachment struct {
 	TitleLink  string                   `json:"title_link,omitempty" dynamodbav:"titleLink,omitempty"`
 	Fields     []MessageAttachmentField `json:"fields,omitempty" dynamodbav:"fields,omitempty"`
 	ImageURL   string                   `json:"image_url,omitempty" dynamodbav:"imageURL,omitempty"`
-	ThumbURL   string                   `json:"thumb_url,omitempty" dynamodbav:"thumbURL,omitempty"`
-	Footer     string                   `json:"footer,omitempty" dynamodbav:"footer,omitempty"`
-	FooterIcon string                   `json:"footer_icon,omitempty" dynamodbav:"footerIcon,omitempty"`
+	// ImageWidth/ImageHeight are the intrinsic pixel dimensions of the
+	// S3-cached image_url, captured server-side at send time so the
+	// client can render <img width height> and avoid layout shift in the
+	// virtualised message list. Not part of the inbound webhook payload.
+	ImageWidth  int    `json:"image_width,omitempty" dynamodbav:"imageWidth,omitempty"`
+	ImageHeight int    `json:"image_height,omitempty" dynamodbav:"imageHeight,omitempty"`
+	ThumbURL    string `json:"thumb_url,omitempty" dynamodbav:"thumbURL,omitempty"`
+	Footer      string `json:"footer,omitempty" dynamodbav:"footer,omitempty"`
+	FooterIcon  string `json:"footer_icon,omitempty" dynamodbav:"footerIcon,omitempty"`
 }
 
 type MessageAttachmentField struct {

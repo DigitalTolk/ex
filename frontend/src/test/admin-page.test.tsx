@@ -16,6 +16,9 @@ vi.mock('@/lib/api', () => ({
   apiFetch: (...args: unknown[]) => mockApiFetch(...args),
 }));
 
+const copyMock = vi.hoisted(() => vi.fn(async () => {}));
+vi.mock('@/lib/clipboard', () => ({ copyToClipboard: copyMock }));
+
 import AdminPage from '@/pages/AdminPage';
 
 function renderPage() {
@@ -32,6 +35,7 @@ function renderPage() {
 beforeEach(() => {
   mockSystemRole = 'admin';
   mockApiFetch.mockReset();
+  copyMock.mockClear();
 });
 
 describe('AdminPage', () => {
@@ -245,5 +249,68 @@ describe('AdminPage', () => {
     fireEvent.click(screen.getByRole('button', { name: /Create webhook/i }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent('title already exists');
+  });
+
+  it('offers all public channels plus the admin memberships in the picker', async () => {
+    mockApiFetch.mockImplementation((path: string) => {
+      if (path === '/api/v1/admin/settings') {
+        return Promise.resolve({ maxUploadBytes: 50 * 1024 * 1024, allowedExtensions: ['png'] });
+      }
+      if (path === '/api/v1/admin/search/status') {
+        return Promise.resolve({ configured: false });
+      }
+      if (path === '/api/v1/channels') {
+        return Promise.resolve([{ channelID: 'ch-priv', channelName: 'secret', channelType: 'private', role: 3 }]);
+      }
+      if (path.startsWith('/api/v1/channels/browse')) {
+        return Promise.resolve([{ id: 'ch-pub', name: 'announce', slug: 'announce', type: 'public', createdBy: 'x', archived: false, createdAt: '' }]);
+      }
+      if (path === '/api/v1/admin/webhooks') {
+        return Promise.resolve([]);
+      }
+      return Promise.resolve({});
+    });
+    renderPage();
+
+    const select = (await screen.findByLabelText(/^Channel$/i)) as HTMLSelectElement;
+    await waitFor(() => {
+      const labels = Array.from(select.options).map((o) => o.textContent);
+      expect(labels).toEqual(expect.arrayContaining(['announce', 'secret']));
+    });
+  });
+
+  it('surfaces lock state, target channel and username, and copies the URL', async () => {
+    mockApiFetch.mockImplementation((path: string) => {
+      if (path === '/api/v1/admin/settings') {
+        return Promise.resolve({ maxUploadBytes: 50 * 1024 * 1024, allowedExtensions: ['png'] });
+      }
+      if (path === '/api/v1/admin/search/status') {
+        return Promise.resolve({ configured: false });
+      }
+      if (path === '/api/v1/channels') {
+        return Promise.resolve([{ channelID: 'ch-1', channelName: 'general', channelType: 'public', role: 3 }]);
+      }
+      if (path === '/api/v1/admin/webhooks') {
+        return Promise.resolve([
+          { id: 'wh-1', title: 'Locked CI', url: 'https://chat.example/hooks/wh-1', channelSlug: 'general', lockToChannel: true, username: 'CI Bot' },
+          { id: 'wh-2', title: 'Open CI', url: 'https://chat.example/hooks/wh-2', channelID: 'ch-raw', lockToChannel: false },
+        ]);
+      }
+      return Promise.resolve({});
+    });
+    renderPage();
+
+    expect(await screen.findByText('~general')).toBeInTheDocument();
+    expect(screen.getByText(/Locked to channel/i)).toBeInTheDocument();
+    expect(screen.getByText(/as CI Bot/i)).toBeInTheDocument();
+    // Second webhook falls back to channel id, override-allowed, default name.
+    expect(screen.getByText('~ch-raw')).toBeInTheDocument();
+    expect(screen.getByText(/Channel override allowed/i)).toBeInTheDocument();
+    expect(screen.getByText(/as webhook/i)).toBeInTheDocument();
+
+    const copyButtons = screen.getAllByRole('button', { name: /^Copy$/i });
+    fireEvent.click(copyButtons[0]);
+    await waitFor(() => expect(copyMock).toHaveBeenCalledWith('https://chat.example/hooks/wh-1'));
+    expect(await screen.findByRole('button', { name: /Copied/i })).toBeInTheDocument();
   });
 });

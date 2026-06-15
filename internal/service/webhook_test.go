@@ -3,11 +3,14 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/DigitalTolk/ex/internal/events"
 	"github.com/DigitalTolk/ex/internal/model"
+	"github.com/DigitalTolk/ex/internal/pubsub"
 	"github.com/DigitalTolk/ex/internal/store"
 )
 
@@ -70,6 +73,10 @@ type fakeWebhookImageProxy struct{}
 
 func (fakeWebhookImageProxy) ProxyImageURL(_ context.Context, rawURL string) string {
 	return "/api/v1/media/proxied/" + rawURL
+}
+
+func (fakeWebhookImageProxy) ProxyImageWithSize(_ context.Context, rawURL string) (string, int, int) {
+	return "/api/v1/media/proxied/" + rawURL, 320, 240
 }
 
 type fakeWebhookDMResolver struct {
@@ -469,4 +476,182 @@ func onlyStoredMessage(t *testing.T, messages *mockMessageStore) *model.Message 
 	}
 	t.Fatal("missing stored message")
 	return nil
+}
+
+type fakeWebhookMemberships struct {
+	members map[string]bool // "channelID|userID" -> member
+}
+
+func (f fakeWebhookMemberships) GetMembership(_ context.Context, channelID, userID string) (*model.ChannelMembership, error) {
+	if f.members[channelID+"|"+userID] {
+		return &model.ChannelMembership{ChannelID: channelID, UserID: userID}, nil
+	}
+	return nil, store.ErrNotFound
+}
+
+// pagingWebhookUsers serves users one page at a time, encoding the next
+// page index in the cursor so findWebhookTargetUser must walk every page.
+type pagingWebhookUsers struct {
+	pages [][]*model.User
+}
+
+func (p *pagingWebhookUsers) List(_ context.Context, _ int, cursor string) ([]*model.User, string, error) {
+	idx := 0
+	if cursor != "" {
+		_, _ = fmt.Sscanf(cursor, "%d", &idx)
+	}
+	if idx >= len(p.pages) {
+		return nil, "", nil
+	}
+	next := ""
+	if idx+1 < len(p.pages) {
+		next = fmt.Sprintf("%d", idx+1)
+	}
+	return p.pages[idx], next, nil
+}
+
+func TestIncomingWebhookService_PrivateChannelOverrideMembership(t *testing.T) {
+	ctx := context.Background()
+	pub := &model.Channel{ID: "ch-pub", Slug: "pub", Type: model.ChannelTypePublic}
+	priv := &model.Channel{ID: "ch-priv", Slug: "priv", Type: model.ChannelTypePrivate}
+	msgSvc := NewMessageService(newMockMessageStore(), nil, nil, nil, nil)
+	channels := fakeWebhookChannels{
+		byID:   map[string]*model.Channel{pub.ID: pub, priv.ID: priv},
+		bySlug: map[string]*model.Channel{pub.Slug: pub, priv.Slug: priv},
+	}
+	wh := &model.IncomingWebhook{ID: "wh", ChannelID: pub.ID, CreatedBy: "creator-1", CreatedAt: time.Now()}
+	svc := NewIncomingWebhookService(&fakeWebhookStore{items: map[string]*model.IncomingWebhook{"wh": wh}}, channels, msgSvc, fakeWebhookImageProxy{}, "")
+
+	// Public override is always allowed.
+	if ch, err := svc.targetChannel(ctx, wh, "pub"); err != nil || ch.ID != pub.ID {
+		t.Fatalf("public override = %#v %v", ch, err)
+	}
+	// Private override with no resolver wired → fail closed.
+	if _, err := svc.targetChannel(ctx, wh, "priv"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("private override w/o resolver err = %v", err)
+	}
+	// Resolver present but creator is not a member → denied.
+	svc.SetMembershipResolver(fakeWebhookMemberships{})
+	if _, err := svc.targetChannel(ctx, wh, "priv"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("private override non-member err = %v", err)
+	}
+	// Creator is a member → allowed.
+	svc.SetMembershipResolver(fakeWebhookMemberships{members: map[string]bool{"ch-priv|creator-1": true}})
+	if ch, err := svc.targetChannel(ctx, wh, "priv"); err != nil || ch.ID != priv.ID {
+		t.Fatalf("private override member = %#v %v", ch, err)
+	}
+}
+
+func TestIncomingWebhookService_IconEmojiStoresName(t *testing.T) {
+	ctx := context.Background()
+	ch := &model.Channel{ID: "ch-1", Slug: "general"}
+	messages := newMockMessageStore()
+	msgSvc := NewMessageService(messages, nil, nil, nil, nil)
+	wh := &model.IncomingWebhook{ID: "wh", ChannelID: ch.ID, ProfileImageURL: "stored-avatar", CreatedAt: time.Now()}
+	svc := NewIncomingWebhookService(&fakeWebhookStore{items: map[string]*model.IncomingWebhook{"wh": wh}}, fakeWebhookChannels{
+		byID: map[string]*model.Channel{ch.ID: ch},
+	}, msgSvc, fakeWebhookImageProxy{}, "")
+
+	if err := svc.Execute(ctx, "wh", IncomingWebhookPayload{Text: "hi", IconEmoji: " :tada: "}); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	msg := onlyStoredMessage(t, messages)
+	if msg.WebhookIconEmoji != "tada" || msg.WebhookAvatarURL != "" {
+		t.Fatalf("icon emoji message = %#v", msg)
+	}
+}
+
+func TestIncomingWebhookService_DMPaginationAndSelfBlock(t *testing.T) {
+	ctx := context.Background()
+	ch := &model.Channel{ID: "ch-1", Slug: "general"}
+	messages := newMockMessageStore()
+	msgSvc := NewMessageService(messages, nil, nil, nil, nil)
+	wh := &model.IncomingWebhook{ID: "wh", ChannelID: ch.ID, CreatedBy: "creator-1", CreatedAt: time.Now()}
+	svc := NewIncomingWebhookService(&fakeWebhookStore{items: map[string]*model.IncomingWebhook{"wh": wh}}, fakeWebhookChannels{
+		byID: map[string]*model.Channel{ch.ID: ch},
+	}, msgSvc, nil, "")
+	svc.SetDMResolver(&fakeWebhookDMResolver{})
+	svc.SetUserResolver(&pagingWebhookUsers{pages: [][]*model.User{
+		{{ID: "creator-1", DisplayName: "Alice", Email: "alice@example.com"}},
+		{{ID: "x", DisplayName: "Decoy"}},
+		{{ID: "bob-1", DisplayName: "Bob Smith", Email: "bob@example.com"}},
+	}})
+
+	// Self-DM (the @name resolves to the creator) is forbidden.
+	if err := svc.Execute(ctx, "wh", IncomingWebhookPayload{Text: "hi", Channel: "@alice"}); err == nil || !strings.Contains(err.Error(), "creator") {
+		t.Fatalf("self DM err = %v", err)
+	}
+	// A target on the third page is still resolved.
+	if err := svc.Execute(ctx, "wh", IncomingWebhookPayload{Text: "hi", Channel: "@bob"}); err != nil {
+		t.Fatalf("paged DM: %v", err)
+	}
+	if got := onlyStoredMessage(t, messages).ParentID; got != "creator-1__bob-1" {
+		t.Fatalf("paged DM parent = %q", got)
+	}
+}
+
+func TestIncomingWebhookService_PublishesChangedEvents(t *testing.T) {
+	ctx := context.Background()
+	ch := &model.Channel{ID: "ch-1", Slug: "general"}
+	msgSvc := NewMessageService(newMockMessageStore(), nil, nil, nil, nil)
+	pub := newMockPublisher()
+	svc := NewIncomingWebhookService(&fakeWebhookStore{}, fakeWebhookChannels{
+		byID: map[string]*model.Channel{ch.ID: ch},
+	}, msgSvc, nil, "")
+	svc.SetPublisher(pub)
+
+	created, err := svc.Create(ctx, "admin", &model.IncomingWebhook{Title: "CI", ChannelID: ch.ID})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := svc.Delete(ctx, created.ID); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	pub.mu.Lock()
+	defer pub.mu.Unlock()
+	if len(pub.published) != 2 {
+		t.Fatalf("published events = %d, want 2", len(pub.published))
+	}
+	for _, ev := range pub.published {
+		if ev.channel != pubsub.GlobalChannelEvents() || ev.event.Type != events.EventWebhookChanged {
+			t.Fatalf("unexpected event %#v on %q", ev.event.Type, ev.channel)
+		}
+	}
+}
+
+func TestIncomingWebhookService_ImageURLDimensionsAndBadURL(t *testing.T) {
+	ctx := context.Background()
+	ch := &model.Channel{ID: "ch-1", Slug: "general"}
+	messages := newMockMessageStore()
+	msgSvc := NewMessageService(messages, nil, nil, nil, nil)
+	wh := &model.IncomingWebhook{ID: "wh", ChannelID: ch.ID, CreatedAt: time.Now()}
+	svc := NewIncomingWebhookService(&fakeWebhookStore{items: map[string]*model.IncomingWebhook{"wh": wh}}, fakeWebhookChannels{
+		byID: map[string]*model.Channel{ch.ID: ch},
+	}, msgSvc, fakeWebhookImageProxy{}, "")
+
+	if err := svc.Execute(ctx, "wh", IncomingWebhookPayload{Attachments: []model.MessageAttachment{
+		{ImageURL: "https://example.com/a.png"},
+		{ImageURL: "ftp://bad.example/b.png"},
+	}}); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	msg := onlyStoredMessage(t, messages)
+	if msg.MessageAttachments[0].ImageWidth != 320 || msg.MessageAttachments[0].ImageHeight != 240 {
+		t.Fatalf("valid image dims = %dx%d", msg.MessageAttachments[0].ImageWidth, msg.MessageAttachments[0].ImageHeight)
+	}
+	if msg.MessageAttachments[1].ImageURL != "" || msg.MessageAttachments[1].ImageWidth != 0 {
+		t.Fatalf("bad image url not dropped: %#v", msg.MessageAttachments[1])
+	}
+}
+
+func TestMessageService_SendWebhookAttachmentCap(t *testing.T) {
+	ctx := context.Background()
+	svc := NewMessageService(newMockMessageStore(), nil, nil, newMockPublisher(), nil)
+	atts := make([]model.MessageAttachment, MaxAttachmentsPerMessage+1)
+	for i := range atts {
+		atts[i] = model.MessageAttachment{Text: "x"}
+	}
+	if _, err := svc.SendWebhook(ctx, WebhookMessageInput{ChannelID: "ch-1", Attachments: atts}); !errors.Is(err, ErrTooManyAttachments) {
+		t.Fatalf("SendWebhook over-cap err = %v", err)
+	}
 }

@@ -239,6 +239,9 @@ export default function ChatPage() {
     onEmojiRemoved: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.emojis() });
     },
+    onWebhookChanged: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.incomingWebhooks() });
+    },
     onUserUpdated: (data: unknown) => {
       const updated = data as { id?: string; userStatus?: unknown; timeZone?: string; lastSeenAt?: string } | undefined;
       if (updated?.id) {

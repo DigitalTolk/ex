@@ -362,6 +362,7 @@ type WebhookMessageInput struct {
 	Body        string
 	Username    string
 	AvatarURL   string
+	IconEmoji   string
 	Attachments []model.MessageAttachment
 }
 
@@ -387,6 +388,9 @@ func (s *MessageService) SendWebhook(ctx context.Context, in WebhookMessageInput
 	if err := ValidateMessageBody(in.Body); err != nil {
 		return nil, err
 	}
+	if err := ValidateAttachmentCount(len(in.Attachments)); err != nil {
+		return nil, err
+	}
 	msg := &model.Message{
 		ID:                 store.NewID(),
 		ParentID:           parentID,
@@ -394,6 +398,7 @@ func (s *MessageService) SendWebhook(ctx context.Context, in WebhookMessageInput
 		Body:               in.Body,
 		WebhookUsername:    in.Username,
 		WebhookAvatarURL:   in.AvatarURL,
+		WebhookIconEmoji:   in.IconEmoji,
 		MessageAttachments: in.Attachments,
 		CreatedAt:          time.Now(),
 	}

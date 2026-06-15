@@ -11,7 +11,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/DigitalTolk/ex/internal/events"
 	"github.com/DigitalTolk/ex/internal/model"
+	"github.com/DigitalTolk/ex/internal/pubsub"
 	"github.com/DigitalTolk/ex/internal/store"
 )
 
@@ -35,6 +37,7 @@ type WebhookChannelResolver interface {
 
 type WebhookImageProxy interface {
 	ProxyImageURL(ctx context.Context, rawURL string) string
+	ProxyImageWithSize(ctx context.Context, rawURL string) (string, int, int)
 }
 
 type WebhookDMResolver interface {
@@ -43,6 +46,12 @@ type WebhookDMResolver interface {
 
 type WebhookUserResolver interface {
 	List(ctx context.Context, limit int, cursor string) ([]*model.User, string, error)
+}
+
+// WebhookMembershipResolver checks whether the webhook creator is a member
+// of a channel — used to gate channel overrides into private channels.
+type WebhookMembershipResolver interface {
+	GetMembership(ctx context.Context, channelID, userID string) (*model.ChannelMembership, error)
 }
 
 type IncomingWebhookPayload struct {
@@ -55,13 +64,15 @@ type IncomingWebhookPayload struct {
 }
 
 type IncomingWebhookService struct {
-	store    IncomingWebhookStore
-	channels WebhookChannelResolver
-	messages *MessageService
-	images   WebhookImageProxy
-	dms      WebhookDMResolver
-	users    WebhookUserResolver
-	baseURL  string
+	store       IncomingWebhookStore
+	channels    WebhookChannelResolver
+	messages    *MessageService
+	images      WebhookImageProxy
+	dms         WebhookDMResolver
+	users       WebhookUserResolver
+	memberships WebhookMembershipResolver
+	publisher   Publisher
+	baseURL     string
 }
 
 func NewIncomingWebhookService(store IncomingWebhookStore, channels WebhookChannelResolver, messages *MessageService, images WebhookImageProxy, baseURL string) *IncomingWebhookService {
@@ -71,6 +82,12 @@ func NewIncomingWebhookService(store IncomingWebhookStore, channels WebhookChann
 func (s *IncomingWebhookService) SetDMResolver(dms WebhookDMResolver) { s.dms = dms }
 
 func (s *IncomingWebhookService) SetUserResolver(users WebhookUserResolver) { s.users = users }
+
+func (s *IncomingWebhookService) SetMembershipResolver(m WebhookMembershipResolver) {
+	s.memberships = m
+}
+
+func (s *IncomingWebhookService) SetPublisher(p Publisher) { s.publisher = p }
 
 func (s *IncomingWebhookService) Create(ctx context.Context, actorID string, in *model.IncomingWebhook) (*model.IncomingWebhook, error) {
 	if actorID == "" {
@@ -112,6 +129,7 @@ func (s *IncomingWebhookService) Create(ctx context.Context, actorID string, in 
 	if err := s.store.Create(ctx, wh); err != nil {
 		return nil, fmt.Errorf("webhook: create: %w", err)
 	}
+	s.publishChanged(ctx)
 	return wh, nil
 }
 
@@ -123,7 +141,22 @@ func (s *IncomingWebhookService) Delete(ctx context.Context, id string) error {
 	if id == "" {
 		return errors.New("webhook: id required")
 	}
-	return s.store.Delete(ctx, id)
+	if err := s.store.Delete(ctx, id); err != nil {
+		return err
+	}
+	s.publishChanged(ctx)
+	return nil
+}
+
+// publishChanged broadcasts a data-less nudge on the global channel so
+// connected admin clients refetch the webhook list. The payload carries
+// no webhook details — the list endpoint is admin-gated, so non-admin
+// clients learn nothing from the event itself.
+func (s *IncomingWebhookService) publishChanged(ctx context.Context) {
+	if s.publisher == nil {
+		return
+	}
+	events.Publish(ctx, s.publisher, pubsub.GlobalChannelEvents(), events.EventWebhookChanged, map[string]any{})
 }
 
 func (s *IncomingWebhookService) URL(wh *model.IncomingWebhook) string {
@@ -150,8 +183,10 @@ func (s *IncomingWebhookService) Execute(ctx context.Context, id string, payload
 		username = "webhook"
 	}
 	avatarURL := s.proxyImage(ctx, payload.IconURL)
-	iconEmojiOverride := strings.TrimSpace(payload.IconEmoji) != ""
-	if iconEmojiOverride {
+	iconEmoji := normalizeEmojiName(payload.IconEmoji)
+	if iconEmoji != "" {
+		// icon_emoji wins over icon_url and the creation-time avatar; the
+		// emoji is rendered as the avatar client-side.
 		avatarURL = ""
 	} else if avatarURL == "" {
 		avatarURL = wh.ProfileImageURL
@@ -167,9 +202,17 @@ func (s *IncomingWebhookService) Execute(ctx context.Context, id string, payload
 		Body:        s.translateMattermostMarkup(ctx, payload.Text),
 		Username:    username,
 		AvatarURL:   avatarURL,
+		IconEmoji:   iconEmoji,
 		Attachments: attachments,
 	})
 	return err
+}
+
+// normalizeEmojiName strips the optional surrounding colons and
+// whitespace from an icon_emoji value (Mattermost accepts ":tada:" or
+// "tada"). Returns "" when nothing usable remains.
+func normalizeEmojiName(raw string) string {
+	return strings.Trim(strings.TrimSpace(raw), ":")
 }
 
 func (s *IncomingWebhookService) targetParent(ctx context.Context, wh *model.IncomingWebhook, raw string) (string, string, error) {
@@ -196,13 +239,43 @@ func (s *IncomingWebhookService) targetChannel(ctx context.Context, wh *model.In
 		return nil, store.ErrNotFound
 	}
 	name = strings.TrimPrefix(name, "#")
+	ch := s.resolveChannel(ctx, name)
+	if ch == nil {
+		return nil, store.ErrNotFound
+	}
+	if err := s.ensureCreatorCanPost(ctx, wh, ch); err != nil {
+		return nil, err
+	}
+	return ch, nil
+}
+
+// resolveChannel looks up a channel by slug then by ID, skipping archived
+// channels. Returns nil when nothing matches.
+func (s *IncomingWebhookService) resolveChannel(ctx context.Context, name string) *model.Channel {
 	if ch, err := s.channels.GetBySlug(ctx, name); err == nil && ch != nil && !ch.Archived {
-		return ch, nil
+		return ch
 	}
 	if ch, err := s.channels.GetByID(ctx, name); err == nil && ch != nil && !ch.Archived {
-		return ch, nil
+		return ch
 	}
-	return nil, store.ErrNotFound
+	return nil
+}
+
+// ensureCreatorCanPost gates channel overrides: posting to a public
+// channel is always allowed, but posting to a private channel requires
+// the webhook creator to be a member (mirroring Mattermost). When the
+// membership resolver isn't wired we fail closed for private channels.
+func (s *IncomingWebhookService) ensureCreatorCanPost(ctx context.Context, wh *model.IncomingWebhook, ch *model.Channel) error {
+	if ch.Type != model.ChannelTypePrivate {
+		return nil
+	}
+	if s.memberships == nil || wh.CreatedBy == "" {
+		return store.ErrNotFound
+	}
+	if _, err := s.memberships.GetMembership(ctx, ch.ID, wh.CreatedBy); err != nil {
+		return store.ErrNotFound
+	}
+	return nil
 }
 
 func (s *IncomingWebhookService) targetDM(ctx context.Context, wh *model.IncomingWebhook, raw string) (*model.Conversation, error) {
@@ -217,15 +290,40 @@ func (s *IncomingWebhookService) targetDM(ctx context.Context, wh *model.Incomin
 	if err != nil {
 		return nil, err
 	}
+	// Mattermost forbids a webhook direct-messaging its own creator (the
+	// "DM" would just be the creator talking to themselves).
+	if target.ID == wh.CreatedBy {
+		return nil, errors.New("webhook: cannot direct-message the webhook creator")
+	}
 	return s.dms.GetOrCreateDM(ctx, wh.CreatedBy, target.ID)
 }
 
+// findWebhookTargetUser resolves a @name / id / email to a user, paging
+// through the full directory (not just the first page) so DMs and
+// in-text @mentions resolve in orgs larger than one page. The page cap
+// is a safety bound against an unterminated cursor.
 func (s *IncomingWebhookService) findWebhookTargetUser(ctx context.Context, targetName string) (*model.User, error) {
-	users, _, err := s.users.List(ctx, 200, "")
-	if err != nil {
-		return nil, fmt.Errorf("webhook: list users: %w", err)
-	}
 	needle := strings.ToLower(strings.TrimSpace(targetName))
+	cursor := ""
+	for page := 0; page < 100; page++ {
+		users, next, err := s.users.List(ctx, 200, cursor)
+		if err != nil {
+			return nil, fmt.Errorf("webhook: list users: %w", err)
+		}
+		if user := matchWebhookUser(users, targetName, needle); user != nil {
+			return user, nil
+		}
+		if next == "" {
+			break
+		}
+		cursor = next
+	}
+	return nil, store.ErrNotFound
+}
+
+// matchWebhookUser returns the first user in the page matching by ID,
+// display name, email, or email local-part.
+func matchWebhookUser(users []*model.User, targetName, needle string) *model.User {
 	for _, user := range users {
 		if user == nil {
 			continue
@@ -237,10 +335,10 @@ func (s *IncomingWebhookService) findWebhookTargetUser(ctx context.Context, targ
 			local = local[:at]
 		}
 		if user.ID == targetName || display == needle || email == needle || local == needle {
-			return user, nil
+			return user
 		}
 	}
-	return nil, store.ErrNotFound
+	return nil
 }
 
 func (s *IncomingWebhookService) sanitizeAttachment(ctx context.Context, a model.MessageAttachment) model.MessageAttachment {
@@ -250,7 +348,10 @@ func (s *IncomingWebhookService) sanitizeAttachment(ctx context.Context, a model
 		a.Fields[i].Value = s.translateMattermostMarkup(ctx, a.Fields[i].Value)
 	}
 	a.AuthorIcon = s.proxyImage(ctx, a.AuthorIcon)
-	a.ImageURL = s.proxyImage(ctx, a.ImageURL)
+	// image_url is the only attachment image with a variable display box,
+	// so we capture its intrinsic dimensions for the client to reserve
+	// space. The thumb (fixed 75×75) and 16×16 icons don't need them.
+	a.ImageURL, a.ImageWidth, a.ImageHeight = s.proxyImageWithSize(ctx, a.ImageURL)
 	a.ThumbURL = s.proxyImage(ctx, a.ThumbURL)
 	a.FooterIcon = s.proxyImage(ctx, a.FooterIcon)
 	if len(a.Footer) > 300 {
@@ -363,6 +464,20 @@ func (s *IncomingWebhookService) proxyImage(ctx context.Context, raw string) str
 		return ""
 	}
 	return s.images.ProxyImageURL(ctx, raw)
+}
+
+// proxyImageWithSize is the dimension-aware variant of proxyImage used
+// for attachment image_url. It returns the cached URL plus intrinsic
+// width/height (0,0 when unknown or when no proxy is configured).
+func (s *IncomingWebhookService) proxyImageWithSize(ctx context.Context, raw string) (string, int, int) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || s.images == nil {
+		return raw, 0, 0
+	}
+	if u, err := url.Parse(raw); err != nil || !u.IsAbs() || (u.Scheme != "http" && u.Scheme != "https") {
+		return "", 0, 0
+	}
+	return s.images.ProxyImageWithSize(ctx, raw)
 }
 
 func randomWebhookID() (string, error) {

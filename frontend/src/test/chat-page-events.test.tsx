@@ -557,6 +557,13 @@ describe('ChatPage WebSocket handlers', () => {
     }).not.toThrow();
   });
 
+  it('onWebhookChanged invalidates the incoming-webhooks cache', () => {
+    renderAt('/');
+    expect(() => {
+      (capturedOptions.onWebhookChanged as (d: unknown) => void)({});
+    }).not.toThrow();
+  });
+
   it('onUserUpdated invalidates user-batch + member + channel + conversation caches', () => {
     renderAt('/');
     expect(() => {

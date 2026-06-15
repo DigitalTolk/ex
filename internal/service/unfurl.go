@@ -1,11 +1,13 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"image"
 	"io"
 	"net"
 	"net/http"
@@ -239,18 +241,126 @@ func (s *UnfurlService) proxyImage(ctx context.Context, preview *UnfurlPreview) 
 		}
 	}
 
+	preview.Image = s.signImageKey(ctx, key)
+}
+
+// signImageKey turns an S3 object key we own into a client-facing URL:
+// a stable media-cache URL when one is configured, otherwise a presigned
+// GET. Returns "" on failure so callers can drop the image.
+func (s *UnfurlService) signImageKey(ctx context.Context, key string) string {
 	if s.mediaCache != nil {
 		if mediaURL, err := StableMediaURL(ctx, s.mediaCache, "unfurl", key, key, path.Base(key), "", 0); err == nil {
-			preview.Image = mediaURL
-			return
+			return mediaURL
 		}
 	}
 	signed, err := s.imgStore.PresignedGetURL(ctx, key, unfurlImageExpires)
 	if err != nil {
-		preview.Image = ""
+		return ""
+	}
+	return signed
+}
+
+// ProxyImageWithSize behaves like ProxyImageURL but also reports the
+// intrinsic pixel dimensions of the cached image. Width/height are
+// decoded from the upstream bytes the first time the image is cached
+// and memoised in the cache keyed by the S3 object; on a cache hit with
+// no recorded dimensions (legacy objects) the object is read back once
+// and decoded. Returns ("", 0, 0) on any failure.
+//
+// When no image store is configured it degrades to the plain proxy and
+// reports unknown dimensions.
+func (s *UnfurlService) ProxyImageWithSize(ctx context.Context, rawURL string) (string, int, int) {
+	if s == nil || s.imgStore == nil {
+		return s.ProxyImageURL(ctx, rawURL), 0, 0
+	}
+	imgURL := strings.TrimSpace(rawURL)
+	if imgURL == "" {
+		return "", 0, 0
+	}
+	parsed, err := url.Parse(imgURL)
+	if err != nil || !parsed.IsAbs() {
+		return "", 0, 0
+	}
+	if !s.skipURLValidation {
+		if err := validateURL(parsed); err != nil {
+			return "", 0, 0
+		}
+	}
+
+	key := unfurlImageKey(imgURL)
+	exists, err := s.imgStore.HeadObject(ctx, key)
+	if err != nil {
+		return "", 0, 0
+	}
+
+	var w, h int
+	if !exists {
+		body, contentType, fetchErr := s.fetchUpstreamImage(ctx, imgURL)
+		if fetchErr != nil {
+			return "", 0, 0
+		}
+		w, h = decodeImageDims(body)
+		if err := s.imgStore.PutObject(ctx, key, contentType, body); err != nil {
+			return "", 0, 0
+		}
+		s.cacheImageDims(ctx, key, w, h)
+	} else {
+		w, h = s.loadImageDims(ctx, key)
+		if w == 0 || h == 0 {
+			if body, _, _, _, err := s.imgStore.GetObject(ctx, key); err == nil {
+				data, readErr := io.ReadAll(io.LimitReader(body, unfurlImageMax+1))
+				_ = body.Close()
+				if readErr == nil {
+					w, h = decodeImageDims(data)
+					s.cacheImageDims(ctx, key, w, h)
+				}
+			}
+		}
+	}
+
+	signed := s.signImageKey(ctx, key)
+	if signed == "" {
+		return "", 0, 0
+	}
+	return signed, w, h
+}
+
+// imageDims is the cached width/height memo for a proxied image key.
+type imageDims struct {
+	W int `json:"w"`
+	H int `json:"h"`
+}
+
+func imageDimsKey(objectKey string) string { return "imgdim:" + objectKey }
+
+func (s *UnfurlService) cacheImageDims(ctx context.Context, key string, w, h int) {
+	if s.cache == nil || w <= 0 || h <= 0 {
 		return
 	}
-	preview.Image = signed
+	_ = s.cache.Set(ctx, imageDimsKey(key), imageDims{W: w, H: h}, unfurlCacheTTL)
+}
+
+func (s *UnfurlService) loadImageDims(ctx context.Context, key string) (int, int) {
+	if s.cache == nil {
+		return 0, 0
+	}
+	var d imageDims
+	if err := s.cache.Get(ctx, imageDimsKey(key), &d); err == nil {
+		return d.W, d.H
+	}
+	return 0, 0
+}
+
+// decodeImageDims reads the intrinsic dimensions from image bytes. The
+// png/jpeg/gif/webp decoders are registered package-wide (see emoji.go),
+// so DecodeConfig resolves the format by magic bytes. Returns (0,0) for
+// undecodable input.
+func decodeImageDims(data []byte) (int, int) {
+	cfg, _, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil {
+		return 0, 0
+	}
+	return cfg.Width, cfg.Height
 }
 
 // fetchUpstreamImage pulls the upstream image with the same SSRF-hardened

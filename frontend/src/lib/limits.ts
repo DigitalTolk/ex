@@ -2,7 +2,7 @@
 // Keep these constants in sync — the backend is authoritative; the frontend
 // pre-checks here are for fast feedback in the UI before a round-trip.
 
-export const MAX_MESSAGE_BODY_CHARS = 8192;
+export const MAX_MESSAGE_BODY_CHARS = 16384;
 export const MAX_ATTACHMENTS_PER_MESSAGE = 10;
 export const MAX_CHANNEL_NAME_LEN = 32;
 export const MAX_CHANNEL_DESCRIPTION_LEN = 255;

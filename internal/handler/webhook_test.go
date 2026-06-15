@@ -322,6 +322,10 @@ func (handlerWebhookImageProxy) ProxyImageURL(_ context.Context, rawURL string) 
 	return "proxied:" + rawURL
 }
 
+func (handlerWebhookImageProxy) ProxyImageWithSize(_ context.Context, rawURL string) (string, int, int) {
+	return "proxied:" + rawURL, 0, 0
+}
+
 type handlerWebhookMessageStore struct {
 	messages map[string]*model.Message
 }
