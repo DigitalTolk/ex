@@ -370,6 +370,7 @@ describe('MessageItem - hover bar and avatar', () => {
 
 // Server-backed frequently-used shelf: stub so opening the picker never hits the network.
 vi.mock('@/lib/emoji-frequency', () => ({
+  EMOJI_FREQUENCY_CHANGED_EVENT: 'emoji-frequency-changed',
   getFrequentEmojis: vi.fn(async () => []),
   recordEmojiUse: vi.fn(async () => {}),
 }));

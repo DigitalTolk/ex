@@ -27,6 +27,7 @@ type IncomingWebhookStore interface {
 	Create(ctx context.Context, wh *model.IncomingWebhook) error
 	Get(ctx context.Context, id string) (*model.IncomingWebhook, error)
 	List(ctx context.Context) ([]*model.IncomingWebhook, error)
+	Update(ctx context.Context, wh *model.IncomingWebhook) error
 	Delete(ctx context.Context, id string) error
 }
 
@@ -135,6 +136,46 @@ func (s *IncomingWebhookService) Create(ctx context.Context, actorID string, in 
 
 func (s *IncomingWebhookService) List(ctx context.Context) ([]*model.IncomingWebhook, error) {
 	return s.store.List(ctx)
+}
+
+// Update edits an existing webhook's configurable fields. The ID, secret
+// (the ID is the secret), creator, and creation time are preserved; the
+// target channel is re-resolved so name/slug stay consistent.
+func (s *IncomingWebhookService) Update(ctx context.Context, id string, in *model.IncomingWebhook) (*model.IncomingWebhook, error) {
+	if id == "" {
+		return nil, errors.New("webhook: id required")
+	}
+	if in == nil || strings.TrimSpace(in.Title) == "" || in.ChannelID == "" {
+		return nil, errors.New("webhook: title and channel are required")
+	}
+	if len([]rune(in.Description)) > 500 {
+		return nil, errors.New("webhook: description must be 500 characters or fewer")
+	}
+	existing, err := s.store.Get(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("webhook: get: %w", err)
+	}
+	ch, err := s.channels.GetByID(ctx, in.ChannelID)
+	if err != nil {
+		return nil, fmt.Errorf("webhook: channel: %w", err)
+	}
+	existing.Title = strings.TrimSpace(in.Title)
+	existing.Description = strings.TrimSpace(in.Description)
+	existing.ChannelID = ch.ID
+	existing.ChannelName = ch.Name
+	existing.ChannelSlug = ch.Slug
+	existing.LockToChannel = in.LockToChannel
+	existing.Username = strings.TrimSpace(in.Username)
+	if existing.Username == "" {
+		existing.Username = "webhook"
+	}
+	existing.ProfileImageURL = s.proxyImage(ctx, in.ProfileImageURL)
+	existing.UpdatedAt = time.Now()
+	if err := s.store.Update(ctx, existing); err != nil {
+		return nil, fmt.Errorf("webhook: update: %w", err)
+	}
+	s.publishChanged(ctx)
+	return existing, nil
 }
 
 func (s *IncomingWebhookService) Delete(ctx context.Context, id string) error {

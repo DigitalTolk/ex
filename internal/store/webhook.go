@@ -16,6 +16,7 @@ type IncomingWebhookStore interface {
 	Create(ctx context.Context, wh *model.IncomingWebhook) error
 	Get(ctx context.Context, id string) (*model.IncomingWebhook, error)
 	List(ctx context.Context) ([]*model.IncomingWebhook, error)
+	Update(ctx context.Context, wh *model.IncomingWebhook) error
 	Delete(ctx context.Context, id string) error
 }
 
@@ -100,6 +101,26 @@ func (s *IncomingWebhookStoreImpl) List(ctx context.Context) ([]*model.IncomingW
 		}
 	}
 	return items, nil
+}
+
+func (s *IncomingWebhookStoreImpl) Update(ctx context.Context, wh *model.IncomingWebhook) error {
+	item := webhookItem{PK: webhookPK(wh.ID), SK: webhookSK(), IncomingWebhook: *wh}
+	av, err := attributevalue.MarshalMap(item)
+	if err != nil {
+		return fmt.Errorf("store: marshal webhook: %w", err)
+	}
+	_, err = s.Client.PutItem(ctx, &dynamodb.PutItemInput{
+		TableName:           aws.String(s.Table),
+		Item:                av,
+		ConditionExpression: aws.String("attribute_exists(PK)"),
+	})
+	if err != nil {
+		if isConditionCheckFailed(err) {
+			return ErrNotFound
+		}
+		return fmt.Errorf("store: update webhook: %w", err)
+	}
+	return nil
 }
 
 func (s *IncomingWebhookStoreImpl) Delete(ctx context.Context, id string) error {

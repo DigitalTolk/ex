@@ -165,7 +165,12 @@ export function ThreadCard({ summary, title, deepLink, currentUserId, unread = f
       data-in-view={inView ? 'true' : 'false'}
       data-unread={unread ? 'true' : 'false'}
       className={
-        'rounded-lg border bg-card overflow-hidden ' +
+        // overflow-clip (not overflow-hidden) so the rounded corners still
+        // clip children WITHOUT establishing a scroll container — macOS
+        // WKWebView (the desktop app's webview) otherwise traps wheel events
+        // over a hidden-overflow box, blocking page scroll when the cursor is
+        // over the card header.
+        'rounded-lg border bg-card overflow-clip ' +
         (unread ? 'border-primary bg-primary/10 shadow-sm ring-1 ring-primary/30' : '')
       }
     >

@@ -141,6 +141,7 @@ describe('AppTopBar', () => {
     expect(screen.getByTestId('user-menu-about')).toBeInTheDocument();
     expect(screen.getByTestId('user-menu-signout')).toBeInTheDocument();
     expect(screen.getByTestId('user-menu-admin')).toBeInTheDocument();
+    expect(screen.getByTestId('user-menu-webhooks')).toBeInTheDocument();
     expect(screen.getByTestId('user-menu-invite')).toBeInTheDocument();
     expect(screen.getByTestId('user-menu-emojis')).toBeInTheDocument();
     // Theme switching lives inside EditProfileDialog, not the dropdown.
@@ -152,6 +153,7 @@ describe('AppTopBar', () => {
     renderTopBar();
     fireEvent.click(screen.getByTestId('topbar-account'));
     expect(screen.queryByTestId('user-menu-admin')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('user-menu-webhooks')).not.toBeInTheDocument();
     expect(screen.queryByTestId('user-menu-invite')).not.toBeInTheDocument();
     // Non-admin members can still manage emojis.
     expect(screen.getByTestId('user-menu-emojis')).toBeInTheDocument();

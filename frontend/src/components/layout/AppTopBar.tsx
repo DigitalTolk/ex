@@ -10,6 +10,7 @@ import {
   UserPlus,
   Smile,
   ServerCog,
+  Webhook,
 } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
@@ -129,6 +130,13 @@ export function AppTopBar({ onOpenChannels, channelsButtonHidden }: AppTopBarPro
       : []),
     ...(isAdmin(user?.systemRole)
       ? [
+          {
+            key: 'webhooks',
+            icon: <Webhook className="h-4 w-4" />,
+            label: 'Incoming webhooks',
+            onSelect: () => navigate('/webhooks'),
+            testID: 'user-menu-webhooks',
+          } satisfies MenuAction,
           {
             key: 'admin',
             icon: <Settings className="h-4 w-4" />,

@@ -4,6 +4,11 @@ import { apiFetch } from '@/lib/api';
 // (see internal/handler/emoji.go). Both calls are best-effort: a failure
 // never blocks emoji selection — the shelf just stays empty.
 
+// Dispatched on `window` after a successful use record so live consumers
+// (the message action bar's quick-reaction shelf) can refresh their
+// most-used list immediately instead of waiting out the query staleTime.
+export const EMOJI_FREQUENCY_CHANGED_EVENT = 'emoji-frequency-changed';
+
 export async function recordEmojiUse(shortcode: string): Promise<void> {
   if (!shortcode) return;
   try {
@@ -11,6 +16,7 @@ export async function recordEmojiUse(shortcode: string): Promise<void> {
       method: 'POST',
       body: JSON.stringify({ emoji: shortcode }),
     });
+    window.dispatchEvent(new Event(EMOJI_FREQUENCY_CHANGED_EVENT));
   } catch {
     // Recording is non-critical; swallow transient/network errors.
   }

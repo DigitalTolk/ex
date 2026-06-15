@@ -22,7 +22,7 @@ export function MessageRichAttachments({ attachments, onContentHeightChange }: {
           )}
           {att.pretext && <div className="mb-2 text-sm prose-message">{renderMarkdown(att.pretext)}</div>}
           {att.author_name && (
-            <div className="mb-1 flex items-center gap-1.5 text-xs font-medium">
+            <div className="mb-1 flex items-center gap-1.5 text-sm font-medium">
               {att.author_icon && <img src={att.author_icon} alt="" className="h-4 w-4 rounded-sm" onLoad={onContentHeightChange} />}
               {att.author_link ? <a href={att.author_link} target="_blank" rel="noreferrer" className="text-link">{att.author_name}</a> : att.author_name}
             </div>
@@ -37,7 +37,7 @@ export function MessageRichAttachments({ attachments, onContentHeightChange }: {
             <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
               {att.fields.map((field, fieldIndex) => (
                 <div key={fieldIndex} className={field.short ? '' : 'sm:col-span-2'}>
-                  {field.title && <div className="text-xs font-semibold">{field.title}</div>}
+                  {field.title && <div className="text-sm font-semibold">{field.title}</div>}
                   {field.value && <div className="text-sm prose-message">{renderMarkdown(field.value)}</div>}
                 </div>
               ))}
@@ -49,7 +49,10 @@ export function MessageRichAttachments({ attachments, onContentHeightChange }: {
               alt=""
               width={att.image_width || undefined}
               height={att.image_height || undefined}
-              className="mt-2 max-h-[300px] max-w-[400px] rounded object-contain"
+              // Responsive: never exceed the container width (so it reflows in
+              // the narrow thread sidebar) while keeping aspect ratio and the
+              // Mattermost 300px height cap. width/height attrs reserve space.
+              className="mt-2 h-auto max-h-[300px] w-auto max-w-full rounded object-contain"
               onLoad={onContentHeightChange}
             />
           )}

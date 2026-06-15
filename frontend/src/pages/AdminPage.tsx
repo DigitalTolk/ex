@@ -4,7 +4,6 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { PageContainer } from '@/components/layout/PageContainer';
 import { SearchAdminPanel } from '@/components/admin/SearchAdminPanel';
-import { IncomingWebhooksPanel } from '@/components/admin/IncomingWebhooksPanel';
 import { useAuth } from '@/context/AuthContext';
 import { useUpdateWorkspaceSettings, useWorkspaceSettings } from '@/hooks/useSettings';
 import { isAdmin } from '@/lib/roles';
@@ -169,8 +168,6 @@ export default function AdminPage() {
             </p>
           </div>
         </section>
-
-        <IncomingWebhooksPanel />
 
         <SearchAdminPanel />
     </PageContainer>

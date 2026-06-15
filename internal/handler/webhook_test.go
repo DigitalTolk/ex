@@ -140,6 +140,27 @@ func TestWebhookHandlerAdminCRUDAndExecute(t *testing.T) {
 		}
 	}
 
+	updateReq := httptest.NewRequest(http.MethodPatch, "/api/v1/admin/webhooks/"+created.ID, strings.NewReader(`{
+		"title":"CI Renamed",
+		"channelID":"ch-general",
+		"lockToChannel":true,
+		"username":"ci-bot"
+	}`))
+	updateReq.SetPathValue("id", created.ID)
+	updateReq = updateReq.WithContext(middleware.ContextWithClaims(ctx, &model.TokenClaims{UserID: "admin-1", SystemRole: model.SystemRoleAdmin}))
+	updateRes := httptest.NewRecorder()
+	h.Update(updateRes, updateReq)
+	if updateRes.Code != http.StatusOK {
+		t.Fatalf("Update status = %d body=%s", updateRes.Code, updateRes.Body.String())
+	}
+	var updated webhookResponse
+	if err := json.Unmarshal(updateRes.Body.Bytes(), &updated); err != nil {
+		t.Fatalf("decode update response: %v", err)
+	}
+	if updated.Title != "CI Renamed" || !updated.LockToChannel || updated.ID != created.ID {
+		t.Fatalf("updated webhook = %#v", updated)
+	}
+
 	deleteReq := httptest.NewRequest(http.MethodDelete, "/api/v1/admin/webhooks/"+created.ID, nil)
 	deleteReq.SetPathValue("id", created.ID)
 	deleteReq = deleteReq.WithContext(middleware.ContextWithClaims(ctx, &model.TokenClaims{UserID: "admin-1", SystemRole: model.SystemRoleAdmin}))
@@ -188,6 +209,50 @@ func TestWebhookHandlerErrorPaths(t *testing.T) {
 	h.Delete(res, req)
 	if res.Code != http.StatusBadRequest {
 		t.Fatalf("Delete missing id status = %d", res.Code)
+	}
+
+	// Update requires admin.
+	req = httptest.NewRequest(http.MethodPatch, "/api/v1/admin/webhooks/wh", strings.NewReader(`{}`))
+	req.SetPathValue("id", "wh")
+	res = httptest.NewRecorder()
+	h.Update(res, req)
+	if res.Code != http.StatusForbidden {
+		t.Fatalf("Update without admin status = %d", res.Code)
+	}
+
+	// Update rejects invalid JSON.
+	req = httptest.NewRequest(http.MethodPatch, "/api/v1/admin/webhooks/wh", strings.NewReader(`{`))
+	req.SetPathValue("id", "wh")
+	req = req.WithContext(middleware.ContextWithClaims(ctx, &model.TokenClaims{UserID: "admin-1", SystemRole: model.SystemRoleAdmin}))
+	res = httptest.NewRecorder()
+	h.Update(res, req)
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("Update invalid JSON status = %d", res.Code)
+	}
+
+	// Update on a missing webhook is a 404.
+	req = httptest.NewRequest(http.MethodPatch, "/api/v1/admin/webhooks/missing", strings.NewReader(`{"title":"x","channelID":"ch-general"}`))
+	req.SetPathValue("id", "missing")
+	req = req.WithContext(middleware.ContextWithClaims(ctx, &model.TokenClaims{UserID: "admin-1", SystemRole: model.SystemRoleAdmin}))
+	res = httptest.NewRecorder()
+	h.Update(res, req)
+	if res.Code != http.StatusNotFound {
+		t.Fatalf("Update missing webhook status = %d", res.Code)
+	}
+
+	// Update store failure surfaces as a 400.
+	updateErrStore := &handlerWebhookStore{
+		items:     map[string]*model.IncomingWebhook{"wh": {ID: "wh", Title: "CI", ChannelID: general.ID}},
+		updateErr: assertErr("update failed"),
+	}
+	hUpd := NewWebhookHandler(service.NewIncomingWebhookService(updateErrStore, channels, msgSvc, nil, ""))
+	req = httptest.NewRequest(http.MethodPatch, "/api/v1/admin/webhooks/wh", strings.NewReader(`{"title":"x","channelID":"ch-general"}`))
+	req.SetPathValue("id", "wh")
+	req = req.WithContext(middleware.ContextWithClaims(ctx, &model.TokenClaims{UserID: "admin-1", SystemRole: model.SystemRoleAdmin}))
+	res = httptest.NewRecorder()
+	hUpd.Update(res, req)
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("Update store error status = %d", res.Code)
 	}
 
 	req = httptest.NewRequest(http.MethodPost, "/hooks/wh", strings.NewReader(`{`))
@@ -247,6 +312,7 @@ type handlerWebhookStore struct {
 	items     map[string]*model.IncomingWebhook
 	createErr error
 	listErr   error
+	updateErr error
 	deleteErr error
 }
 
@@ -283,6 +349,18 @@ func (s *handlerWebhookStore) List(context.Context) ([]*model.IncomingWebhook, e
 		out = append(out, &cp)
 	}
 	return out, nil
+}
+
+func (s *handlerWebhookStore) Update(_ context.Context, wh *model.IncomingWebhook) error {
+	if s.updateErr != nil {
+		return s.updateErr
+	}
+	if s.items == nil {
+		s.items = map[string]*model.IncomingWebhook{}
+	}
+	cp := *wh
+	s.items[wh.ID] = &cp
+	return nil
 }
 
 func (s *handlerWebhookStore) Delete(_ context.Context, id string) error {

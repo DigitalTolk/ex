@@ -59,6 +59,27 @@ func (h *WebhookHandler) Create(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, webhookResponse{IncomingWebhook: wh, URL: h.svc.URL(wh)})
 }
 
+func (h *WebhookHandler) Update(w http.ResponseWriter, r *http.Request) {
+	if !requireAdmin(w, r) {
+		return
+	}
+	var body model.IncomingWebhook
+	if err := readJSON(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", err.Error())
+		return
+	}
+	wh, err := h.svc.Update(r.Context(), pathParam(r, "id"), &body)
+	if err != nil {
+		if strings.Contains(err.Error(), store.ErrNotFound.Error()) {
+			writeError(w, http.StatusNotFound, "not_found", "webhook not found")
+			return
+		}
+		writeError(w, http.StatusBadRequest, "update_error", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, webhookResponse{IncomingWebhook: wh, URL: h.svc.URL(wh)})
+}
+
 func (h *WebhookHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	if !requireAdmin(w, r) {
 		return

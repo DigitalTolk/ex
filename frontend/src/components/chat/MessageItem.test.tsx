@@ -669,10 +669,38 @@ describe('MessageItem', () => {
     expect(screen.queryByLabelText('Bot')).not.toBeInTheDocument();
     expect(screen.queryByTestId('webhook-emoji-avatar')).not.toBeInTheDocument();
   });
+
+  it('shows the integration profile card and never the creator avatar for webhook posts', () => {
+    renderWithProviders(
+      <MessageItem
+        message={makeMessage({
+          authorID: 'creator-1',
+          body: 'Deploy done',
+          webhookUsername: 'CI Bot',
+        })}
+        // authorName resolves to the creator; authorAvatarURL is the creator's
+        // photo and must NOT be used for the webhook post.
+        authorName="Günter"
+        authorAvatarURL="/api/v1/media/creator/avatar.png"
+        isOwn={false}
+        currentUserId="user-1"
+      />,
+    );
+    // The creator's avatar image is not rendered for the post.
+    expect(document.querySelector('img[src="/api/v1/media/creator/avatar.png"]')).toBeNull();
+
+    // Clicking the name opens the minimal integration card attributed to the creator.
+    fireEvent.click(screen.getByText('CI Bot'));
+    expect(screen.getByTestId('hover-card-integration')).toBeInTheDocument();
+    expect(
+      screen.getByText(/This post was created by an integration from @Günter\./i),
+    ).toBeInTheDocument();
+  });
 });
 
 // Server-backed frequently-used shelf: stub so opening the picker never hits the network.
 vi.mock('@/lib/emoji-frequency', () => ({
+  EMOJI_FREQUENCY_CHANGED_EVENT: 'emoji-frequency-changed',
   getFrequentEmojis: vi.fn(async () => []),
   recordEmojiUse: vi.fn(async () => {}),
 }));

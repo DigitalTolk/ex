@@ -221,6 +221,7 @@ func NewRouter(d *Deps) http.Handler {
 	if webhookH != nil {
 		mux.Handle("GET /api/v1/admin/webhooks", middleware.WrapFunc(webhookH.List, authMW))
 		mux.Handle("POST /api/v1/admin/webhooks", middleware.WrapFunc(webhookH.Create, authMW))
+		mux.Handle("PATCH /api/v1/admin/webhooks/{id}", middleware.WrapFunc(webhookH.Update, authMW))
 		mux.Handle("DELETE /api/v1/admin/webhooks/{id}", middleware.WrapFunc(webhookH.Delete, authMW))
 		mux.HandleFunc("POST /hooks/{id}", webhookH.Execute)
 	}

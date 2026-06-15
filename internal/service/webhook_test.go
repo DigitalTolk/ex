@@ -17,6 +17,7 @@ import (
 type fakeWebhookStore struct {
 	items     map[string]*model.IncomingWebhook
 	createErr error
+	updateErr error
 	deleteErr error
 }
 
@@ -42,6 +43,16 @@ func (f *fakeWebhookStore) List(context.Context) ([]*model.IncomingWebhook, erro
 		out = append(out, wh)
 	}
 	return out, nil
+}
+func (f *fakeWebhookStore) Update(_ context.Context, wh *model.IncomingWebhook) error {
+	if f.updateErr != nil {
+		return f.updateErr
+	}
+	if f.items == nil {
+		f.items = map[string]*model.IncomingWebhook{}
+	}
+	f.items[wh.ID] = wh
+	return nil
 }
 func (f *fakeWebhookStore) Delete(_ context.Context, id string) error {
 	if f.deleteErr != nil {
@@ -653,5 +664,70 @@ func TestMessageService_SendWebhookAttachmentCap(t *testing.T) {
 	}
 	if _, err := svc.SendWebhook(ctx, WebhookMessageInput{ChannelID: "ch-1", Attachments: atts}); !errors.Is(err, ErrTooManyAttachments) {
 		t.Fatalf("SendWebhook over-cap err = %v", err)
+	}
+}
+
+func TestIncomingWebhookService_Update(t *testing.T) {
+	ctx := context.Background()
+	ch := &model.Channel{ID: "ch-1", Name: "General", Slug: "general"}
+	other := &model.Channel{ID: "ch-2", Name: "Builds", Slug: "builds"}
+	pub := newMockPublisher()
+	msgSvc := NewMessageService(newMockMessageStore(), nil, nil, nil, nil)
+	store0 := &fakeWebhookStore{items: map[string]*model.IncomingWebhook{
+		"wh": {ID: "wh", Title: "Old", ChannelID: ch.ID, CreatedBy: "creator-1", Username: "old", CreatedAt: time.Unix(1, 0)},
+	}}
+	svc := NewIncomingWebhookService(store0, fakeWebhookChannels{
+		byID: map[string]*model.Channel{ch.ID: ch, other.ID: other},
+	}, msgSvc, fakeWebhookImageProxy{}, "https://chat.example")
+	svc.SetPublisher(pub)
+
+	// Validation failures.
+	if _, err := svc.Update(ctx, "", &model.IncomingWebhook{Title: "x", ChannelID: ch.ID}); err == nil {
+		t.Fatal("Update empty id succeeded")
+	}
+	if _, err := svc.Update(ctx, "wh", &model.IncomingWebhook{Title: "  ", ChannelID: ch.ID}); err == nil {
+		t.Fatal("Update blank title succeeded")
+	}
+	if _, err := svc.Update(ctx, "wh", &model.IncomingWebhook{Title: "x", ChannelID: ch.ID, Description: strings.Repeat("d", 501)}); err == nil {
+		t.Fatal("Update long description succeeded")
+	}
+	if _, err := svc.Update(ctx, "missing", &model.IncomingWebhook{Title: "x", ChannelID: ch.ID}); err == nil {
+		t.Fatal("Update missing webhook succeeded")
+	}
+	if _, err := svc.Update(ctx, "wh", &model.IncomingWebhook{Title: "x", ChannelID: "nope"}); err == nil {
+		t.Fatal("Update missing channel succeeded")
+	}
+
+	// Successful update re-points the channel and preserves identity.
+	updated, err := svc.Update(ctx, "wh", &model.IncomingWebhook{
+		Title: "New Title", ChannelID: other.ID, LockToChannel: true, Username: "", ProfileImageURL: "https://example.com/i.png",
+	})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if updated.Title != "New Title" || updated.ChannelID != other.ID || updated.ChannelSlug != "builds" {
+		t.Fatalf("updated channel fields = %#v", updated)
+	}
+	if updated.CreatedBy != "creator-1" || !updated.CreatedAt.Equal(time.Unix(1, 0)) {
+		t.Fatalf("Update must preserve creator/createdAt: %#v", updated)
+	}
+	if updated.Username != "webhook" || updated.ProfileImageURL == "" {
+		t.Fatalf("Update username/avatar defaults = %#v", updated)
+	}
+	if updated.ID == "wh" && !updated.UpdatedAt.After(time.Unix(1, 0)) {
+		t.Fatalf("UpdatedAt not advanced: %#v", updated)
+	}
+
+	pub.mu.Lock()
+	events := len(pub.published)
+	pub.mu.Unlock()
+	if events != 1 {
+		t.Fatalf("Update should publish 1 change event, got %d", events)
+	}
+
+	// Store error surfaces.
+	store0.updateErr = assertWebhookErr("update failed")
+	if _, err := svc.Update(ctx, "wh", &model.IncomingWebhook{Title: "x", ChannelID: ch.ID}); err == nil {
+		t.Fatal("Update store error succeeded")
 	}
 }

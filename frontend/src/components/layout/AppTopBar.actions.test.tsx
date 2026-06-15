@@ -71,6 +71,13 @@ describe('AppTopBar menu actions', () => {
     expect(() => fireEvent.click(screen.getByTestId('user-menu-admin'))).not.toThrow();
   });
 
+  it('navigates to the incoming-webhooks page from the menu', () => {
+    renderTopBar();
+    fireEvent.click(screen.getByTestId('topbar-account'));
+    fireEvent.click(screen.getByTestId('user-menu-webhooks'));
+    expect(screen.getByTestId('location-probe')).toHaveTextContent('/webhooks');
+  });
+
   it('shows the change-server item on native and resets the server on confirm', () => {
     mockNative = true;
     renderTopBar();

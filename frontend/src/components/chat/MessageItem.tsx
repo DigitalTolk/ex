@@ -23,6 +23,7 @@ import { useEditMessage, useDeleteMessage, useToggleReaction, useSetPinned } fro
 import { useEmojiMap } from '@/hooks/useEmoji';
 import { renderMarkdown } from '@/lib/markdown';
 import { isEmojiOnlyMessage } from '@/lib/emoji-shortcodes';
+import { recordEmojiUse } from '@/lib/emoji-frequency';
 import { buildChannelHref, buildConversationHref } from '@/lib/message-deeplink';
 import { useTagOpen } from '@/context/TagSearchContext';
 import { EmojiGlyph } from '@/components/EmojiGlyph';
@@ -107,8 +108,15 @@ export function MessageItem({
   onContentHeightChange,
   quickReactions,
 }: MessageItemProps) {
+  const isWebhook = !!message.webhookUsername;
   const displayAuthorName = message.webhookUsername || authorName;
-  const displayAuthorAvatarURL = message.webhookAvatarURL || authorAvatarURL;
+  // Webhook posts must NOT borrow the creator's avatar — show the
+  // integration's own avatar (override URL or initials of its username),
+  // never the creator's profile image.
+  const displayAuthorAvatarURL = isWebhook ? message.webhookAvatarURL : authorAvatarURL;
+  // For webhook posts the profile dropdown is the minimal integration card
+  // attributed to the creator (authorName resolves to the creator).
+  const integrationOwnerName = isWebhook ? authorName : undefined;
   const isMobile = useIsMobile();
   const [isEditing, setIsEditing] = useState(false);
   // Visibility tracked in JS (not Tailwind group-hover) because Radix's
@@ -535,24 +543,25 @@ export function MessageItem({
         message.pinned ? 'border-l-2 border-amber-500 pl-2' : ''
       } ${highlighted ? 'ring-1 ring-amber-400/50 rounded-md' : ''} max-md:select-none max-md:touch-pan-y max-md:[-webkit-touch-callout:none] max-md:[-webkit-user-select:none]`}
     >
-      {message.webhookIconEmoji ? (
-        <div
-          className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-muted"
-          aria-label={`:${message.webhookIconEmoji}:`}
-          data-testid="webhook-emoji-avatar"
-        >
-          <EmojiGlyph emoji={`:${message.webhookIconEmoji}:`} customMap={emojiMap} size="lg" />
-        </div>
-      ) : (
-        <UserHoverCard
-          userId={message.authorID}
-          displayName={displayAuthorName}
-          avatarURL={displayAuthorAvatarURL}
-          userStatus={authorUserStatus}
-          online={authorOnline}
-          currentUserId={currentUserId}
-          showInlineStatus={false}
-        >
+      <UserHoverCard
+        userId={message.authorID}
+        displayName={displayAuthorName}
+        avatarURL={displayAuthorAvatarURL}
+        userStatus={authorUserStatus}
+        online={authorOnline}
+        currentUserId={currentUserId}
+        showInlineStatus={false}
+        integrationOwnerName={integrationOwnerName}
+      >
+        {message.webhookIconEmoji ? (
+          <div
+            className="mt-0.5 flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center rounded-full bg-muted"
+            aria-label={`:${message.webhookIconEmoji}:`}
+            data-testid="webhook-emoji-avatar"
+          >
+            <EmojiGlyph emoji={`:${message.webhookIconEmoji}:`} customMap={emojiMap} size="lg" />
+          </div>
+        ) : (
           <UserAvatar
             displayName={displayAuthorName}
             avatarURL={displayAuthorAvatarURL}
@@ -560,8 +569,8 @@ export function MessageItem({
             className="mt-0.5 h-9 w-9 cursor-pointer"
             dotClassName="h-2.5 w-2.5"
           />
-        </UserHoverCard>
-      )}
+        )}
+      </UserHoverCard>
 
       <div className="flex-1 min-w-0">
         <div className="flex items-baseline gap-2">
@@ -572,6 +581,7 @@ export function MessageItem({
             userStatus={authorUserStatus}
             online={authorOnline}
             currentUserId={currentUserId}
+            integrationOwnerName={integrationOwnerName}
           >
             <span className="cursor-pointer text-sm font-semibold">{displayAuthorName}</span>
           </UserHoverCard>
@@ -767,7 +777,12 @@ export function MessageItem({
               variant="ghost"
               className="h-7 w-7"
               aria-label={`React with ${emoji}`}
-              onClick={() => handleReact(emoji)}
+              onClick={() => {
+                // Reacting via a quick button is also an emoji "use" — record
+                // it so the popular shelf reorders and refreshes live.
+                void recordEmojiUse(emoji);
+                handleReact(emoji);
+              }}
             >
               <EmojiGlyph emoji={emoji} customMap={emojiMap} />
             </Button>

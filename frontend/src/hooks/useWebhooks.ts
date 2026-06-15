@@ -34,6 +34,18 @@ export function useCreateIncomingWebhook() {
   });
 }
 
+export function useUpdateIncomingWebhook() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, input }: { id: string; input: CreateIncomingWebhookInput }) =>
+      apiFetch<IncomingWebhook>(`/api/v1/admin/webhooks/${encodeURIComponent(id)}`, {
+        method: 'PATCH',
+        body: JSON.stringify(input),
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.incomingWebhooks() }),
+  });
+}
+
 export function useDeleteIncomingWebhook() {
   const qc = useQueryClient();
   return useMutation({

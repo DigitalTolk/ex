@@ -35,6 +35,7 @@ vi.mock('@/lib/api', () => ({
 const freqRef = vi.hoisted(() => ({ value: [] as string[] }));
 const recordMock = vi.hoisted(() => vi.fn());
 vi.mock('@/lib/emoji-frequency', () => ({
+  EMOJI_FREQUENCY_CHANGED_EVENT: 'emoji-frequency-changed',
   // Mirror the server's limit-honouring slice so the desktop/mobile row caps
   // are exercised here exactly as in production.
   getFrequentEmojis: vi.fn(async (limit: number) => freqRef.value.slice(0, limit)),
