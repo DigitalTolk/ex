@@ -426,6 +426,14 @@ func gapBlankCounts(body string) []int {
 	pending := 0
 	for _, line := range lines {
 		if strings.HasPrefix(line, "```") {
+			// An opening fence starts a new top-level block, so a blank run
+			// that preceded it closes an inter-block gap (e.g. the blank
+			// lines between two adjacent fenced code blocks). Flush it before
+			// resetting — without this the gap between two code blocks was
+			// silently dropped.
+			if !inFence && seenContent && pending > 0 {
+				gaps = append(gaps, pending)
+			}
 			inFence = !inFence
 			seenContent = true
 			pending = 0

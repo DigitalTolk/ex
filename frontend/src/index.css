@@ -426,6 +426,98 @@
     margin: 0;
   }
 
+  /* Syntax highlighting for rendered code blocks (highlight.js token
+     classes, emitted by lowlight — see lib/code-highlight.ts). A compact
+     GitHub-style palette with a dark-mode override; hex lives here in the
+     stylesheet per the design-system rule, not in components. */
+  .hljs-comment,
+  .hljs-quote {
+    color: #6a737d;
+    font-style: italic;
+  }
+  .hljs-keyword,
+  .hljs-selector-tag,
+  .hljs-built_in,
+  .hljs-name,
+  .hljs-tag {
+    color: #d73a49;
+  }
+  .hljs-string,
+  .hljs-attr,
+  .hljs-template-tag,
+  .hljs-addition,
+  .hljs-meta-string {
+    color: #032f62;
+  }
+  .hljs-number,
+  .hljs-literal,
+  .hljs-symbol,
+  .hljs-bullet {
+    color: #005cc5;
+  }
+  .hljs-title,
+  .hljs-section,
+  .hljs-title.function_,
+  .hljs-title.class_ {
+    color: #6f42c1;
+  }
+  .hljs-type,
+  .hljs-attribute,
+  .hljs-selector-attr,
+  .hljs-selector-pseudo {
+    color: #e36209;
+  }
+  .hljs-variable,
+  .hljs-template-variable,
+  .hljs-meta {
+    color: #24292e;
+  }
+  .hljs-deletion {
+    color: #b31d28;
+  }
+
+  html.dark .hljs-comment,
+  html.dark .hljs-quote {
+    color: #8b949e;
+  }
+  html.dark .hljs-keyword,
+  html.dark .hljs-selector-tag,
+  html.dark .hljs-built_in,
+  html.dark .hljs-name,
+  html.dark .hljs-tag {
+    color: #ff7b72;
+  }
+  html.dark .hljs-string,
+  html.dark .hljs-attr,
+  html.dark .hljs-template-tag,
+  html.dark .hljs-addition,
+  html.dark .hljs-meta-string {
+    color: #a5d6ff;
+  }
+  html.dark .hljs-number,
+  html.dark .hljs-literal,
+  html.dark .hljs-symbol,
+  html.dark .hljs-bullet {
+    color: #79c0ff;
+  }
+  html.dark .hljs-title,
+  html.dark .hljs-section,
+  html.dark .hljs-title.function_,
+  html.dark .hljs-title.class_ {
+    color: #d2a8ff;
+  }
+  html.dark .hljs-type,
+  html.dark .hljs-attribute,
+  html.dark .hljs-selector-attr,
+  html.dark .hljs-selector-pseudo {
+    color: #ffa657;
+  }
+  html.dark .hljs-variable,
+  html.dark .hljs-template-variable,
+  html.dark .hljs-meta {
+    color: #c9d1d9;
+  }
+
   /* Placeholder rendering. Tiptap's @tiptap/extension-placeholder marks
      the first empty paragraph with `is-editor-empty` and writes the
      supplied text to `data-placeholder`. We surface it via a ::before

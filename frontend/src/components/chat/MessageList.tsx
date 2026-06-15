@@ -51,6 +51,9 @@ interface MessageListProps {
   intro?: ReactNode;
   anchorMsgId?: string;
   anchorRevision?: string;
+  // Viewer's most-used emoji shortcodes, forwarded to each message's action
+  // bar as one-tap reaction shortcuts.
+  quickReactions?: string[];
 }
 
 export function MessageList(props: MessageListProps) {
@@ -81,6 +84,7 @@ function VirtuosoMessageList({
   intro,
   anchorMsgId,
   anchorRevision,
+  quickReactions,
 }: MessageListProps) {
   const virtuosoRef = useRef<VirtuosoHandle>(null);
   const scrollerRef = useRef<HTMLElement | null>(null);
@@ -135,7 +139,6 @@ function VirtuosoMessageList({
     firstItemIndex: VIRTUOSO_START_INDEX,
   }));
   useLayoutEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setVirtuosoData((prev) => nextVirtuosoState(prev, rows));
   }, [rows]);
 
@@ -216,6 +219,9 @@ function VirtuosoMessageList({
   // (saving frames in the common case) and continues longer for
   // slow image decodes that the prior 3-frame budget could miss.
   const SCROLL_STABILIZE_MAX_FRAMES = 8;
+  // Frames to keep re-scrolling after the user's own send, so the composer's
+  // post-send height collapse can't leave the list parked above the bottom.
+  const OWN_SEND_SCROLL_FRAMES = 4;
   // Fired by a row's onContentHeightChange when its box grows after an async
   // image/embed decode. That signal can't be produced deterministically from
   // a test (no real network image decode in the headless harness), so the
@@ -299,8 +305,17 @@ function VirtuosoMessageList({
     if (last.message.authorID !== currentUserId) return;
     /* istanbul ignore next -- buildMessageListRows filters out messages with parentMessageID, so a thread reply can never be the bottom render row */
     if (last.message.parentMessageID) return;
-    const scrollFrame = requestAnimationFrame(scrollToBottom);
-    return () => cancelAnimationFrame(scrollFrame);
+    // Re-scroll across a few frames: sending a multi-line message collapses
+    // the composer back to one row right after the send, which grows the
+    // list's viewport a frame or two later. A single rAF would scroll to the
+    // pre-collapse bottom and then sit above the real bottom.
+    let frame = 0;
+    let raf = requestAnimationFrame(function step() {
+      scrollToBottom();
+      frame += 1;
+      if (frame < OWN_SEND_SCROLL_FRAMES) raf = requestAnimationFrame(step);
+    });
+    return () => cancelAnimationFrame(raf);
   }, [anchorMsgId, renderRows, currentUserId, scrollToBottom]);
 
   if (renderRows.length === 0) {
@@ -425,6 +440,7 @@ function VirtuosoMessageList({
             onEditMessage={onEditMessage}
             highlighted={row.message.id === highlightedMessageId}
             onContentHeightChange={handleContentHeightChange}
+            quickReactions={quickReactions}
           />
         );
       }}
@@ -462,6 +478,7 @@ const MessageRow = memo(function MessageRow({
   onEditMessage,
   highlighted,
   onContentHeightChange,
+  quickReactions,
 }: {
   row: { kind: 'message'; key: string; message: Message };
   userMap: Record<string, UserMapEntry>;
@@ -475,6 +492,7 @@ const MessageRow = memo(function MessageRow({
   onEditMessage?: (message: Message) => void;
   highlighted?: boolean;
   onContentHeightChange?: () => void;
+  quickReactions?: string[];
 }) {
   const msg = row.message;
   const handleContentHeightChange = useCallback(() => {
@@ -520,6 +538,7 @@ const MessageRow = memo(function MessageRow({
         userMap={userLookup}
         highlighted={highlighted}
         onContentHeightChange={handleContentHeightChange}
+        quickReactions={quickReactions}
       />
     </div>
   );

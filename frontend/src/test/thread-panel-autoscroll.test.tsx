@@ -40,6 +40,7 @@ vi.mock('@/hooks/useThreads', () => ({
   useUserThreads: () => ({ data: [] }),
   useFollowThread: () => ({ mutate: vi.fn(), isPending: false }),
   useUnfollowThread: () => ({ mutate: vi.fn(), isPending: false }),
+  markThreadSeen: vi.fn(),
 }));
 
 import { ThreadPanel } from '@/components/chat/ThreadPanel';

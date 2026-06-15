@@ -1,7 +1,12 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiFetch } from '@/lib/api';
 import { queryKeys } from '@/lib/query-keys';
+import { getFrequentEmojis } from '@/lib/emoji-frequency';
 import type { CustomEmoji } from '@/types';
+
+// How many frequently-used emoji to fetch for the message action bar's
+// quick-reaction shortcuts; callers slice to the few they show.
+const FREQUENT_REACTIONS_FETCH = 18;
 
 async function fetchEmojis(): Promise<CustomEmoji[]> {
   const res = await apiFetch<CustomEmoji[]>('/api/v1/emojis');
@@ -29,6 +34,19 @@ export function useEmojiMap(enabled = true) {
       return map;
     },
   });
+}
+
+// useFrequentEmojis returns the signed-in user's most-used emoji shortcodes
+// (server-backed, Redis). Used by the message action bar for quick reactions.
+// Pass a limit to cap how many are returned.
+export function useFrequentEmojis(limit?: number) {
+  const { data } = useQuery({
+    queryKey: queryKeys.frequentEmojis(),
+    queryFn: () => getFrequentEmojis(FREQUENT_REACTIONS_FETCH),
+    staleTime: 60 * 1000,
+  });
+  const list = data ?? [];
+  return limit ? list.slice(0, limit) : list;
 }
 
 export function useUploadEmoji() {

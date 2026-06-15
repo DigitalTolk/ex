@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render } from 'vitest-browser-react';
 import { MemoryRouter } from 'react-router-dom';
 import { AppTopBar } from './AppTopBar';
@@ -26,7 +26,6 @@ vi.mock('@/components/EditProfileDialog', () => ({ EditProfileDialog: ({ open }:
 vi.mock('@/components/UserStatusDialog', () => ({ UserStatusDialog: ({ open }: { open: boolean }) => (open ? <div data-testid="status-open" /> : null) }));
 vi.mock('@/components/AboutDialog', () => ({ AboutDialog: ({ open }: { open: boolean }) => (open ? <div data-testid="about-open" /> : null) }));
 vi.mock('@/components/InviteDialog', () => ({ InviteDialog: ({ open }: { open: boolean }) => (open ? <div data-testid="invite-open" /> : null) }));
-vi.mock('@/components/EmojiManagerDialog', () => ({ EmojiManagerDialog: ({ open }: { open: boolean }) => (open ? <div data-testid="emoji-manager-open" /> : null) }));
 // Native platform with a ServerNavigation plugin → the serverNavigation
 // branch is truthy and the "Change server" action is present.
 vi.mock('@/lib/capacitor', () => ({
@@ -40,10 +39,22 @@ function renderTopBar(ui = <AppTopBar />) {
 }
 
 describe('AppTopBar (mobile + native)', () => {
+  // base-ui's Dialog defers portal teardown until its exit animation ends;
+  // on WebKit headless that animationend can be flaky, leaving the closed
+  // sheet in the DOM. Disabling animations makes close() remove it
+  // synchronously so "sheet is gone" assertions are deterministic.
+  let killAnims: HTMLStyleElement | null = null;
   beforeEach(() => {
     mockOnline = new Set<string>();
     logout.mockClear();
     resetServer.mockClear();
+    killAnims = document.createElement('style');
+    killAnims.textContent = '*,*::before,*::after{animation:none!important;transition:none!important}';
+    document.head.appendChild(killAnims);
+  });
+  afterEach(() => {
+    killAnims?.remove();
+    killAnims = null;
   });
 
   it('opens the full-screen mobile account sheet on avatar tap', async () => {

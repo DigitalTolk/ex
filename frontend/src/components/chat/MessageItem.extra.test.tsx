@@ -278,3 +278,9 @@ describe('MessageItem - delete', () => {
     expect(mockDeleteMutate).not.toHaveBeenCalled();
   });
 });
+
+// Server-backed frequently-used shelf: stub so opening the picker never hits the network.
+vi.mock('@/lib/emoji-frequency', () => ({
+  getFrequentEmojis: vi.fn(async () => []),
+  recordEmojiUse: vi.fn(async () => {}),
+}));

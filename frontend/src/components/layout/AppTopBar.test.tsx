@@ -56,11 +56,6 @@ vi.mock('@/components/InviteDialog', () => ({
     open ? <div data-testid="invite-open" /> : null,
 }));
 
-vi.mock('@/components/EmojiManagerDialog', () => ({
-  EmojiManagerDialog: ({ open }: { open: boolean }) =>
-    open ? <div data-testid="emoji-manager-open" /> : null,
-}));
-
 vi.mock('@/lib/capacitor', () => ({
   getCapacitorPlugin: () => null,
   isNativePlatform: () => false,
@@ -210,12 +205,9 @@ describe('AppTopBar', () => {
     expect(onOpen).toHaveBeenCalled();
   });
 
-  it('marks the channels button hidden when channelsButtonHidden is true', () => {
+  it('omits the channels button entirely when channelsButtonHidden is true', () => {
     renderTopBar(<AppTopBar channelsButtonHidden />);
-    const btn = screen.getByLabelText('Open channels');
-    expect(btn).toHaveClass('invisible');
-    expect(btn).toHaveAttribute('aria-hidden', 'true');
-    expect(btn).toHaveAttribute('tabIndex', '-1');
+    expect(screen.queryByLabelText('Open channels')).not.toBeInTheDocument();
   });
 
   describe('mobile account sheet', () => {

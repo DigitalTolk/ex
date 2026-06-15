@@ -2,7 +2,7 @@ import type { ReactNode } from 'react';
 
 interface PageContainerProps {
   title: string;
-  description?: string;
+  description?: ReactNode;
   // Right-aligned slot in the header — actions, filters, etc.
   actions?: ReactNode;
   children: ReactNode;

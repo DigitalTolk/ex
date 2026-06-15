@@ -31,7 +31,6 @@ vi.mock('@/components/EditProfileDialog', () => ({ EditProfileDialog: ({ open }:
 vi.mock('@/components/UserStatusDialog', () => ({ UserStatusDialog: ({ open }: { open: boolean }) => (open ? <div data-testid="status-open" /> : null) }));
 vi.mock('@/components/AboutDialog', () => ({ AboutDialog: ({ open }: { open: boolean }) => (open ? <div data-testid="about-open" /> : null) }));
 vi.mock('@/components/InviteDialog', () => ({ InviteDialog: ({ open }: { open: boolean }) => (open ? <div data-testid="invite-open" /> : null) }));
-vi.mock('@/components/EmojiManagerDialog', () => ({ EmojiManagerDialog: ({ open }: { open: boolean }) => (open ? <div data-testid="emoji-manager-open" /> : null) }));
 vi.mock('@/lib/capacitor', () => ({ getCapacitorPlugin: () => null, isNativePlatform: () => false }));
 vi.mock('@/hooks/useIsMobile', () => ({ useIsMobile: () => false }));
 
@@ -75,10 +74,9 @@ describe('AppTopBar (browser)', () => {
     expect(document.querySelector('[data-testid="user-menu-invite"]')).toBeNull();
   });
 
-  it('marks the channels button hidden when channelsButtonHidden is set', async () => {
-    const screen = await renderTopBar(<AppTopBar channelsButtonHidden />);
-    const button = screen.getByLabelText('Open channels').element() as HTMLButtonElement;
-    expect(button.getAttribute('tabindex')).toBe('-1');
+  it('omits the channels button when channelsButtonHidden is set', async () => {
+    await renderTopBar(<AppTopBar channelsButtonHidden />);
+    expect(document.querySelector('[aria-label="Open channels"]')).toBeNull();
   });
 
   it('renders the account chip with an active user status', async () => {

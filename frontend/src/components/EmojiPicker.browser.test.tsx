@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { render } from 'vitest-browser-react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { EmojiPicker } from './EmojiPicker';
@@ -21,6 +21,14 @@ const tokenRef = vi.hoisted(() => ({ value: null as string | null }));
 vi.mock('@/lib/api', () => ({
   apiFetch: (...args: unknown[]) => apiFetchMock(...args),
   getAccessToken: () => tokenRef.value,
+}));
+
+// Server-backed frequently-used shelf — mocked so the list is deterministic.
+const freqRef = vi.hoisted(() => ({ value: [] as string[] }));
+const recordMock = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/emoji-frequency', () => ({
+  getFrequentEmojis: vi.fn(async (limit: number) => freqRef.value.slice(0, limit)),
+  recordEmojiUse: (shortcode: string) => recordMock(shortcode),
 }));
 
 const setAuthMock = vi.hoisted(() => vi.fn());
@@ -46,7 +54,31 @@ function Wrap({ children }: { children: React.ReactNode }) {
   return <QueryClientProvider client={qc}>{children}</QueryClientProvider>;
 }
 
+function seedFrequency(shortcodes: string[]) {
+  freqRef.value = shortcodes;
+}
+
 describe('EmojiPicker browser', () => {
+  // Keep the frequently-used shelf deterministic across tests.
+  beforeEach(() => {
+    freqRef.value = [];
+    recordMock.mockClear();
+  });
+
+  it('renders the frequently-used shelf and selects from it', async () => {
+    seedFrequency([':tada:', ':smile:']);
+    const onSelect = vi.fn();
+    const screen = await render(<Wrap><EmojiPicker onSelect={onSelect} /></Wrap>);
+    await screen.getByLabelText('Open emoji picker').click();
+    await vi.waitFor(() => {
+      expect(document.querySelector('[aria-label="Frequently used emojis"]')).not.toBeNull();
+    });
+    const tile = document.querySelector('[data-testid="emoji-frequent-tile"]') as HTMLElement;
+    expect(tile).not.toBeNull();
+    tile.click();
+    expect(onSelect).toHaveBeenCalledTimes(1);
+  });
+
   it('renders the default trigger button', async () => {
     const onSelect = vi.fn();
     const screen = await render(

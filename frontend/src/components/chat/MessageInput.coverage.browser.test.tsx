@@ -4,6 +4,7 @@ import { userEvent } from 'vitest/browser';
 import { EditorView } from '@codemirror/view';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MessageInput, type MessageInputHandle } from './MessageInput';
+import { MAX_MESSAGE_BODY_CHARS } from '@/lib/limits';
 import { setWSSender } from '@/lib/ws-sender';
 import { dispatchFocusComposer } from '@/lib/window-events';
 
@@ -304,9 +305,9 @@ describe('MessageInput coverage flows (browser)', () => {
   });
 
   it('shows the over-limit warning and disables send when the body exceeds the character cap', async () => {
-    // initialBody longer than MAX_MESSAGE_BODY_CHARS (4096) makes bodyOverLimit
+    // initialBody longer than MAX_MESSAGE_BODY_CHARS makes bodyOverLimit
     // true → the warning rail renders and canSend is false.
-    const long = 'x'.repeat(4097);
+    const long = 'x'.repeat(MAX_MESSAGE_BODY_CHARS + 1);
     const screen = await renderWithProviders(<MessageInput onSend={vi.fn()} initialBody={long} />);
     if (window.innerWidth <= 767) {
       await screen.getByLabelText('Message input').click();

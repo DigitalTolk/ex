@@ -10,7 +10,7 @@ import { useAnimatedSwipeDismiss } from '@/hooks/useAnimatedSwipeDismiss';
 import { useAttachmentsBatch } from '@/hooks/useAttachments';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { useEditMessage, useSendMessage, type SendMessageInput } from '@/hooks/useMessages';
-import { useFollowThread, useThreadMessages, useUnfollowThread, useUserThreads } from '@/hooks/useThreads';
+import { markThreadSeen, useFollowThread, useThreadMessages, useUnfollowThread, useUserThreads } from '@/hooks/useThreads';
 import { useUsersBatch } from '@/hooks/useUsersBatch';
 import { collectMessageUserIDs } from '@/lib/message-users';
 import {
@@ -88,6 +88,19 @@ export function ThreadPanel({
   const inputRef = useRef<MessageInputHandle>(null);
   const parentID = channelId ?? conversationId;
   const parentType: 'channel' | 'conversation' = channelId ? 'channel' : 'conversation';
+
+  // Mark the thread read while it's open — on first load and again whenever a
+  // new reply arrives (a WS message.new invalidates the thread query, so
+  // `data` updates and the latest timestamp changes). This is what keeps a
+  // thread you're actively viewing from lingering as unread on /threads; the
+  // URL-only "mark seen on open" in Channel/ConversationView missed both
+  // locally-opened threads and replies posted while you're reading.
+  const latestMessageAt =
+    data && data.length > 0 ? data[data.length - 1].createdAt : undefined;
+  useEffect(() => {
+    if (!parentID || !latestMessageAt) return;
+    markThreadSeen(threadRootID, latestMessageAt, { parentID, parentType });
+  }, [parentID, parentType, threadRootID, latestMessageAt]);
   const draftScope = useMemo(
     () => ({ parentID, parentType, parentMessageID: threadRootID }),
     [parentID, parentType, threadRootID],

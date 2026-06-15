@@ -13,7 +13,7 @@ const (
 	// characters (Unicode codepoints). UTF-8 is variable-width, so a
 	// byte cap would penalise non-Latin scripts; a codepoint cap is
 	// fair and predictable for the user.
-	MaxMessageBodyChars = 4096
+	MaxMessageBodyChars = 8192
 
 	// MaxAttachmentsPerMessage caps how many attachments can be bound
 	// to a single message at send time. Editing follows the same cap.

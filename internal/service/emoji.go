@@ -31,6 +31,13 @@ type EmojiStore interface {
 	Delete(ctx context.Context, name string) error
 }
 
+// EmojiFrequencyStore records and ranks a user's emoji usage. RedisCache
+// implements it; when unset the feature is simply inert (best-effort).
+type EmojiFrequencyStore interface {
+	IncrementEmojiFrequency(ctx context.Context, userID, shortcode string) error
+	FrequentEmojis(ctx context.Context, userID string, limit int) ([]string, error)
+}
+
 // EmojiURLSigner re-signs short-lived GET URLs from a stored S3 key.
 // AttachmentSigner already implements this shape; the narrower interface
 // here just documents what EmojiService actually uses.
@@ -57,7 +64,16 @@ type EmojiService struct {
 	// every emoji on every page view.
 	urlCache   *presignedURLCache
 	mediaCache MediaURLCache
+	frequency  EmojiFrequencyStore
 }
+
+// MaxFrequentEmoji caps how many frequently-used shortcodes the service will
+// ever return, regardless of the requested limit.
+const MaxFrequentEmoji = 50
+
+// MaxEmojiShortcodeLen bounds a recorded shortcode so a malicious client
+// can't store oversized members in the sorted set.
+const MaxEmojiShortcodeLen = 128
 
 // NewEmojiService constructs an EmojiService.
 func NewEmojiService(emojis EmojiStore, users UserStore, publisher Publisher) *EmojiService {
@@ -77,6 +93,47 @@ func NewEmojiService(emojis EmojiStore, users UserStore, publisher Publisher) *E
 func (s *EmojiService) SetSigner(signer EmojiURLSigner) { s.signer = signer }
 
 func (s *EmojiService) SetMediaURLCache(c MediaURLCache) { s.mediaCache = c }
+
+// SetFrequencyStore wires the per-user emoji-usage tracker. Optional — when
+// unset, RecordEmojiUse is a no-op and FrequentEmojis returns an empty list.
+func (s *EmojiService) SetFrequencyStore(f EmojiFrequencyStore) { s.frequency = f }
+
+// RecordEmojiUse increments the usage count of a picked emoji shortcode for
+// the given user. Best-effort: a nil store makes it a no-op.
+func (s *EmojiService) RecordEmojiUse(ctx context.Context, userID, shortcode string) error {
+	shortcode = strings.TrimSpace(shortcode)
+	if shortcode == "" {
+		return errors.New("emoji: shortcode is required")
+	}
+	if len(shortcode) > MaxEmojiShortcodeLen {
+		return errors.New("emoji: shortcode is too long")
+	}
+	if s.frequency == nil {
+		return nil
+	}
+	if err := s.frequency.IncrementEmojiFrequency(ctx, userID, shortcode); err != nil {
+		return fmt.Errorf("emoji: record use: %w", err)
+	}
+	return nil
+}
+
+// FrequentEmojis returns up to limit of the user's most-used emoji shortcodes.
+func (s *EmojiService) FrequentEmojis(ctx context.Context, userID string, limit int) ([]string, error) {
+	if s.frequency == nil {
+		return []string{}, nil
+	}
+	if limit <= 0 || limit > MaxFrequentEmoji {
+		limit = MaxFrequentEmoji
+	}
+	out, err := s.frequency.FrequentEmojis(ctx, userID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("emoji: frequent: %w", err)
+	}
+	if out == nil {
+		out = []string{}
+	}
+	return out, nil
+}
 
 var emojiNameRE = regexp.MustCompile(`^[a-z0-9_+-]{1,32}$`)
 

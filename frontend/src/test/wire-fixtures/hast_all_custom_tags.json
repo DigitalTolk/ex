@@ -308,6 +308,19 @@
     },
     {
       "type": "element",
+      "tagName": "p",
+      "properties": {
+        "data-blank": "true"
+      },
+      "children": [
+        {
+          "type": "text",
+          "value": " "
+        }
+      ]
+    },
+    {
+      "type": "element",
       "tagName": "pre",
       "properties": {
         "data-language": "js"

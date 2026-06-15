@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import ThreadsPage from '@/pages/ThreadsPage';
@@ -160,6 +160,42 @@ describe('ThreadsPage', () => {
     );
 
     expect(ids).toEqual(['live-unread-newer', 'live-unread-older', 'read-newest', 'read-older']);
+  });
+
+  it('pages thread cards in as the load-more sentinel scrolls into view', async () => {
+    const callbacks: Array<(entries: { isIntersecting: boolean }[]) => void> = [];
+    class MockIO {
+      // Mirror the real IntersectionObserver signature (callback + options)
+      // so the `{ rootMargin }` argument isn't a superfluous trailing arg.
+      constructor(
+        cb: (entries: { isIntersecting: boolean }[]) => void,
+        _options?: IntersectionObserverInit,
+      ) {
+        callbacks.push(cb);
+      }
+      observe() {}
+      disconnect() {}
+      unobserve() {}
+    }
+    const prev = globalThis.IntersectionObserver;
+    globalThis.IntersectionObserver = MockIO as unknown as typeof IntersectionObserver;
+    try {
+      const many = Array.from({ length: 30 }, (_, i) => ({
+        ...sample[0],
+        threadRootID: `root-${i}`,
+        latestActivityAt: `2026-04-26T${String(10 + (i % 12)).padStart(2, '0')}:00:00Z`,
+      }));
+      apiFetchMock.mockResolvedValueOnce(many);
+      renderPage();
+      // First page only — not all 30 cards mount up front.
+      await waitFor(() => expect(screen.getAllByTestId('thread-card')).toHaveLength(12));
+      expect(screen.getByTestId('threads-load-more')).toBeInTheDocument();
+      // Sentinel enters the viewport → the next page mounts.
+      act(() => callbacks[callbacks.length - 1]([{ isIntersecting: true }]));
+      await waitFor(() => expect(screen.getAllByTestId('thread-card')).toHaveLength(24));
+    } finally {
+      globalThis.IntersectionObserver = prev;
+    }
   });
 
   it('shows an empty state when no threads exist', async () => {

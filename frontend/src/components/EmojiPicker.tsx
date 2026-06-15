@@ -29,6 +29,7 @@ import {
 import { PopoverPortal } from '@/components/PopoverPortal';
 import { EmojiGlyph } from '@/components/EmojiGlyph';
 import { fuzzyMatch } from '@/lib/fuzzy';
+import { getFrequentEmojis, recordEmojiUse } from '@/lib/emoji-frequency';
 import { apiFetch, getAccessToken } from '@/lib/api';
 import * as AuthContext from '@/context/AuthContext';
 import { useIsMobile } from '@/hooks/useIsMobile';
@@ -77,6 +78,15 @@ const CATEGORY_ICONS: Record<string, LucideIcon> = {
 const CUSTOM_CATEGORY_SLUG = 'custom';
 const PICKER_WIDTH = 336;
 const PICKER_HEIGHT = 380;
+// The frequently-used shelf shows two rows; column counts match the grid
+// below (9 on desktop, 7 on mobile) so the rows line up visually.
+const FREQUENT_ROWS = 2;
+const DESKTOP_COLS = 9;
+const MOBILE_COLS = 7;
+
+function sameShortcodeList(a: string[], b: string[]) {
+  return a.length === b.length && a.every((v, i) => v === b[i]);
+}
 
 function normalizeEmojiQuery(query: string) {
   return query.trim().toLowerCase().replace(/^:+|:+$/g, '');
@@ -136,6 +146,24 @@ export function EmojiPicker({ onSelect, onClose, onOpenChange, trigger, triggerC
   // query on mount and pollute act() in unrelated tests.
   const { data: customEmojis } = useEmojis(open);
 
+  // Custom-emoji name → image URL, so the frequently-used shelf can render
+  // custom picks (which are stored as `:name:` shortcodes) as their image.
+  const customMap = useMemo(() => {
+    const map: Record<string, string> = {};
+    for (const e of customEmojis ?? []) map[e.name] = e.imageURL;
+    return map;
+  }, [customEmojis]);
+
+  // Two rows of the user's most-used emojis, fetched from the server each
+  // time the picker opens (see the trigger's onClick) so a fresh pick shows
+  // up next time. Stored per-user in Redis, not on this device.
+  const frequentLimit = (isMobile ? MOBILE_COLS : DESKTOP_COLS) * FREQUENT_ROWS;
+  const [frequent, setFrequent] = useState<string[]>([]);
+  // Mirrors `frequent` so the open handler can skip the state update entirely
+  // when the fetched list is unchanged — avoids a late, act-less re-render in
+  // consumers that mount the picker but never display a shelf.
+  const frequentRef = useRef<string[]>([]);
+
   // Searching switches the picker into a flat-results view across
   // every category; clearing the search returns to the active tab.
   // Search runs against the same generated standard catalog used by
@@ -180,6 +208,7 @@ export function EmojiPicker({ onSelect, onClose, onOpenChange, trigger, triggerC
   }
 
   function handlePick(shortcode: string) {
+    void recordEmojiUse(shortcode);
     onSelect(shortcode);
     close();
   }
@@ -209,11 +238,16 @@ export function EmojiPicker({ onSelect, onClose, onOpenChange, trigger, triggerC
         ref={triggerRef}
         className={triggerClassName}
         onClick={() => {
-          setOpen((v) => {
-            const next = !v;
-            onOpenChange?.(next);
-            return next;
-          });
+          const next = !open;
+          if (next) {
+            void getFrequentEmojis(frequentLimit).then((list) => {
+              if (sameShortcodeList(frequentRef.current, list)) return;
+              frequentRef.current = list;
+              setFrequent(list);
+            });
+          }
+          setOpen(next);
+          onOpenChange?.(next);
         }}
       >
         {trigger ?? (
@@ -274,6 +308,39 @@ export function EmojiPicker({ onSelect, onClose, onOpenChange, trigger, triggerC
           </div>
         )}
         <div className="flex min-h-0 flex-1 flex-col">
+          {!query.trim() && frequent.length > 0 && (
+            <div className="mb-1.5 shrink-0 border-b pb-1.5">
+              <div className="mb-1 text-center text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+                Frequently used
+              </div>
+              <div
+                className="grid grid-cols-[repeat(9,2rem)] content-start justify-center gap-0.5 max-md:grid-cols-[repeat(7,2.75rem)]"
+                role="list"
+                aria-label="Frequently used emojis"
+                data-testid="emoji-frequent-grid"
+              >
+                {frequent.map((shortcode) => (
+                  <button
+                    key={`frequent-${shortcode}`}
+                    type="button"
+                    role="listitem"
+                    data-testid="emoji-frequent-tile"
+                    onClick={() => handlePick(shortcode)}
+                    className="flex h-8 w-8 items-center justify-center rounded hover:bg-muted max-md:h-11 max-md:w-11"
+                    aria-label={`React with ${shortcode}`}
+                    title={shortcode}
+                  >
+                    <EmojiGlyph
+                      emoji={shortcode}
+                      customMap={customMap}
+                      size="lg"
+                      className="max-md:h-[30px] max-md:w-[30px] max-md:text-[30px]"
+                    />
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
           <div className="mb-1 text-center text-sm font-semibold uppercase tracking-wider text-muted-foreground">
             {query.trim()
               ? 'Results'

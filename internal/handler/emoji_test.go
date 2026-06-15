@@ -520,3 +520,154 @@ func TestPresenceHandler_List(t *testing.T) {
 		t.Errorf("online=%v want 2 entries", got.Online)
 	}
 }
+
+type fakeHandlerFreqStore struct {
+	recorded []string
+	list     []string
+	listErr  error
+}
+
+func (f *fakeHandlerFreqStore) IncrementEmojiFrequency(_ context.Context, _ string, sc string) error {
+	f.recorded = append(f.recorded, sc)
+	return nil
+}
+
+func (f *fakeHandlerFreqStore) FrequentEmojis(_ context.Context, _ string, limit int) ([]string, error) {
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
+	if limit < len(f.list) {
+		return f.list[:limit], nil
+	}
+	return f.list, nil
+}
+
+func setupEmojiFreqHandler(t *testing.T) (*EmojiHandler, *fakeHandlerFreqStore, *auth.JWTManager) {
+	t.Helper()
+	emojis := newDataEmojiStore()
+	users := newDataUserStoreForConv()
+	svc := service.NewEmojiService(emojis, users, nil)
+	fr := &fakeHandlerFreqStore{}
+	svc.SetFrequencyStore(fr)
+	jwtMgr := auth.NewJWTManager("emoji-test-secret", 15*time.Minute, 720*time.Hour)
+	return NewEmojiHandler(svc), fr, jwtMgr
+}
+
+func TestEmojiHandler_ListFrequent(t *testing.T) {
+	t.Run("unauthorized without claims", func(t *testing.T) {
+		h, _, _ := setupEmojiFreqHandler(t)
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/emojis/frequent", nil)
+		rec := httptest.NewRecorder()
+		h.ListFrequent(rec, req)
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("status=%d, want 401", rec.Code)
+		}
+	})
+
+	t.Run("returns the ranked list honouring limit", func(t *testing.T) {
+		h, fr, jwtMgr := setupEmojiFreqHandler(t)
+		fr.list = []string{":tada:", ":smile:", ":wave:"}
+		u := &model.User{ID: "u1", SystemRole: model.SystemRoleMember}
+		handler := middleware.Auth(jwtMgr)(http.HandlerFunc(h.ListFrequent))
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/emojis/frequent?limit=2", nil)
+		req.Header.Set("Authorization", "Bearer "+tokenFor(t, jwtMgr, u))
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+		}
+		var got []string
+		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if len(got) != 2 || got[0] != ":tada:" {
+			t.Fatalf("got %v, want top-2", got)
+		}
+	})
+
+	t.Run("ignores a non-numeric limit and returns the full list", func(t *testing.T) {
+		h, fr, jwtMgr := setupEmojiFreqHandler(t)
+		fr.list = []string{":tada:"}
+		u := &model.User{ID: "u1", SystemRole: model.SystemRoleMember}
+		handler := middleware.Auth(jwtMgr)(http.HandlerFunc(h.ListFrequent))
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/emojis/frequent?limit=abc", nil)
+		req.Header.Set("Authorization", "Bearer "+tokenFor(t, jwtMgr, u))
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+		}
+		if rec.Body.String() == "" || rec.Body.String() == "null\n" {
+			t.Fatalf("expected a JSON array, got %q", rec.Body.String())
+		}
+	})
+
+	t.Run("surfaces a store error as 500", func(t *testing.T) {
+		h, fr, jwtMgr := setupEmojiFreqHandler(t)
+		fr.listErr = errors.New("redis down")
+		u := &model.User{ID: "u1", SystemRole: model.SystemRoleMember}
+		handler := middleware.Auth(jwtMgr)(http.HandlerFunc(h.ListFrequent))
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/emojis/frequent", nil)
+		req.Header.Set("Authorization", "Bearer "+tokenFor(t, jwtMgr, u))
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusInternalServerError {
+			t.Fatalf("status=%d, want 500", rec.Code)
+		}
+	})
+}
+
+func TestEmojiHandler_RecordFrequent(t *testing.T) {
+	t.Run("unauthorized without claims", func(t *testing.T) {
+		h, _, _ := setupEmojiFreqHandler(t)
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/emojis/frequent", strings.NewReader(`{"emoji":":x:"}`))
+		rec := httptest.NewRecorder()
+		h.RecordFrequent(rec, req)
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("status=%d, want 401", rec.Code)
+		}
+	})
+
+	t.Run("rejects an invalid body", func(t *testing.T) {
+		h, _, jwtMgr := setupEmojiFreqHandler(t)
+		u := &model.User{ID: "u1", SystemRole: model.SystemRoleMember}
+		handler := middleware.Auth(jwtMgr)(http.HandlerFunc(h.RecordFrequent))
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/emojis/frequent", strings.NewReader(`not json`))
+		req.Header.Set("Authorization", "Bearer "+tokenFor(t, jwtMgr, u))
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("status=%d, want 400", rec.Code)
+		}
+	})
+
+	t.Run("rejects an empty shortcode", func(t *testing.T) {
+		h, _, jwtMgr := setupEmojiFreqHandler(t)
+		u := &model.User{ID: "u1", SystemRole: model.SystemRoleMember}
+		handler := middleware.Auth(jwtMgr)(http.HandlerFunc(h.RecordFrequent))
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/emojis/frequent", strings.NewReader(`{"emoji":"  "}`))
+		req.Header.Set("Authorization", "Bearer "+tokenFor(t, jwtMgr, u))
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("status=%d, want 400", rec.Code)
+		}
+	})
+
+	t.Run("records a valid shortcode", func(t *testing.T) {
+		h, fr, jwtMgr := setupEmojiFreqHandler(t)
+		u := &model.User{ID: "u1", SystemRole: model.SystemRoleMember}
+		handler := middleware.Auth(jwtMgr)(http.HandlerFunc(h.RecordFrequent))
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/emojis/frequent", strings.NewReader(`{"emoji":":tada:"}`))
+		req.Header.Set("Authorization", "Bearer "+tokenFor(t, jwtMgr, u))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusNoContent {
+			t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+		}
+		if len(fr.recorded) != 1 || fr.recorded[0] != ":tada:" {
+			t.Fatalf("recorded=%v, want [:tada:]", fr.recorded)
+		}
+	})
+}

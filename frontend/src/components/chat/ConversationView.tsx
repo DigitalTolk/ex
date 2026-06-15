@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { useUsersBatch } from '@/hooks/useUsersBatch';
+import { useFrequentEmojis } from '@/hooks/useEmoji';
 import { Header } from '@/components/layout/Header';
 import { MessageList } from './MessageList';
 import { MessageInput, type MessageInputHandle } from './MessageInput';
@@ -90,6 +91,7 @@ export function ConversationView() {
   const { user } = useAuth();
   const { clearConversationUnread, setActiveConversation } = useUnread();
   const { online } = usePresence();
+  const quickReactions = useFrequentEmojis(3);
   const { setActiveParent } = useNotifications();
   const { data: conversation, error: conversationError, isLoading: conversationLoading } = useConversation(id);
   const { mainAnchor, threadAnchor, threadParam, navKey } = useDeepLinkAnchor(id);
@@ -418,6 +420,7 @@ export function ConversationView() {
             currentUserId={user?.id}
             conversationId={id}
             userMap={userMap}
+            quickReactions={quickReactions}
             onReplyInThread={openThread}
             onEditMessage={isMobile ? setEditingMessage : undefined}
             anchorMsgId={mainAnchor}

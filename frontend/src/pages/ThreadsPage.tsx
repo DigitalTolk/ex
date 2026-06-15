@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { PageContainer } from '@/components/layout/PageContainer';
 import { Skeleton } from '@/components/ui/skeleton';
 import {
@@ -16,6 +16,9 @@ import { useUnread } from '@/context/UnreadContext';
 import { useUserState } from '@/hooks/useUserState';
 import { ThreadCard } from '@/components/threads/ThreadCard';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
+
+// How many thread cards to mount per page as the user scrolls.
+const THREADS_PAGE_SIZE = 12;
 
 export default function ThreadsPage() {
   useDocumentTitle('Threads');
@@ -48,6 +51,32 @@ export default function ThreadsPage() {
     [threadUnreadIDs, threads],
   );
 
+  // Render threads in pages and grow the window as the user scrolls to the
+  // bottom. Each card is a heavy snippet (a message thread + a composer), so
+  // mounting all of them at once is what made /threads slow and janky.
+  const supportsIO = typeof IntersectionObserver !== 'undefined';
+  const [visibleCount, setVisibleCount] = useState(THREADS_PAGE_SIZE);
+  const loadMoreRef = useRef<HTMLDivElement>(null);
+  const visibleThreads = supportsIO ? sortedThreads.slice(0, visibleCount) : sortedThreads;
+  const hasMore = supportsIO && visibleCount < sortedThreads.length;
+
+  useEffect(() => {
+    if (!hasMore) return;
+    const node = loadMoreRef.current;
+    if (!node) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          setVisibleCount((count) => count + THREADS_PAGE_SIZE);
+        }
+      },
+      { rootMargin: '800px' },
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+    // Re-observe after each growth so a tall viewport keeps filling.
+  }, [hasMore, visibleCount]);
+
   const channelName = (id: string) =>
     userChannels?.find((c) => c.channelID === id)?.channelName ?? '';
   const conversationName = (id: string) =>
@@ -77,7 +106,7 @@ export default function ThreadsPage() {
 
       <div className="space-y-4">
         {!isLoading &&
-          sortedThreads.map((t) => {
+          visibleThreads.map((t) => {
             const where =
               t.parentType === 'channel'
                 ? `~${channelName(t.parentID) || 'channel'}`
@@ -94,6 +123,9 @@ export default function ThreadsPage() {
             );
           })}
       </div>
+      {!isLoading && hasMore && (
+        <div ref={loadMoreRef} data-testid="threads-load-more" className="h-1" aria-hidden />
+      )}
     </PageContainer>
   );
 }

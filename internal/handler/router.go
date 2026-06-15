@@ -189,6 +189,8 @@ func NewRouter(d *Deps) http.Handler {
 	if emojiH != nil {
 		mux.Handle("GET /api/v1/emojis", middleware.WrapFunc(emojiH.List, authMW))
 		mux.Handle("POST /api/v1/emojis", middleware.WrapFunc(emojiH.Create, authMW))
+		mux.Handle("GET /api/v1/emojis/frequent", middleware.WrapFunc(emojiH.ListFrequent, authMW))
+		mux.Handle("POST /api/v1/emojis/frequent", middleware.WrapFunc(emojiH.RecordFrequent, authMW))
 		mux.Handle("DELETE /api/v1/emojis/{name}", middleware.WrapFunc(emojiH.Delete, authMW))
 	}
 

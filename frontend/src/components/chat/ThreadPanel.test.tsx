@@ -10,7 +10,9 @@ import type { Message } from '@/types';
 
 const mockApiFetch = vi.fn();
 vi.mock('@/lib/api', () => ({
-  apiFetch: (...args: unknown[]) => mockApiFetch(...args),
+  // Wrap in Promise.resolve so fire-and-forget callers (e.g. markThreadSeen's
+  // `apiFetch(...).catch(...)`) work even for endpoints a test doesn't stub.
+  apiFetch: (...args: unknown[]) => Promise.resolve(mockApiFetch(...args)),
 }));
 
 const mockReplyMutate = vi.fn();

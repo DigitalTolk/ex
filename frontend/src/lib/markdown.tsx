@@ -3,6 +3,8 @@ import { GiphyEmbed } from '@/components/GiphyEmbed';
 import {
   applySkinToneSuffix,
   shortcodeToUnicode,
+  emojiGlyphClass,
+  emojiImageClass,
   EMOJI_SHORTCODE_RE,
   EMOJI_SHORTCODE_TONED_RE,
 } from './emoji-shortcodes';
@@ -38,6 +40,9 @@ export interface RenderOpts {
   // saved message stores only the GIPHY ID; media URLs are fetched
   // directly from GIPHY on render.
   giphyAPIKey?: string;
+  // largeEmoji renders emoji at double size ("jumbomoji") — set when the
+  // whole message is nothing but emoji, à la Slack.
+  largeEmoji?: boolean;
 }
 
 // The leading-char class excludes `/` so URL fragments like
@@ -329,7 +334,7 @@ function findInline(src: string, opts: RenderOpts | undefined, keyPrefix: string
         <span
           key={`${keyPrefix}-eu-${m.index}`}
           title={`:${name}::${m[2]}:`}
-          className="text-[1.4em] leading-none align-middle"
+          className={emojiGlyphClass(opts?.largeEmoji)}
         >
           {applySkinToneSuffix(unicode, m[2])}
         </span>
@@ -348,7 +353,7 @@ function findInline(src: string, opts: RenderOpts | undefined, keyPrefix: string
           src={url}
           alt={`:${name}:`}
           title={`:${name}:`}
-          className="inline-block h-[1.4em] w-[1.4em] align-middle"
+          className={emojiImageClass(opts?.largeEmoji)}
         />
       );
     }
@@ -358,7 +363,7 @@ function findInline(src: string, opts: RenderOpts | undefined, keyPrefix: string
         <span
           key={`${keyPrefix}-eu-${m.index}`}
           title={`:${name}:`}
-          className="text-[1.4em] leading-none align-middle"
+          className={emojiGlyphClass(opts?.largeEmoji)}
         >
           {unicode}
         </span>

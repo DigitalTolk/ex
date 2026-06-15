@@ -41,13 +41,14 @@ vi.mock('@/hooks/useAttachments', () => ({
 }));
 
 let threadMessagesState: { data: unknown; isLoading: boolean } = { data: undefined, isLoading: false };
+const markThreadSeenMock = vi.hoisted(() => vi.fn());
 vi.mock('@/hooks/useThreads', () => ({
   useUserThreads: () => ({ data: [] }),
   useThreadMeta: () => undefined,
   useThreadMessages: () => threadMessagesState,
   useFollowThread: () => ({ mutate: vi.fn(), isPending: false }),
   useUnfollowThread: () => ({ mutate: vi.fn(), isPending: false }),
-  markThreadSeen: vi.fn(),
+  markThreadSeen: (...args: unknown[]) => markThreadSeenMock(...args),
 }));
 
 vi.mock('@/hooks/useReactions', () => ({
@@ -144,6 +145,13 @@ describe('ThreadPanel browser behaviour', () => {
     await expect.element(screen.getByText('thread root question')).toBeVisible();
   });
 
+  it('shows a relative "… ago" timestamp (threads have no day dividers)', async () => {
+    await renderPanel();
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toMatch(/ago|just now/);
+    });
+  });
+
   it('mounts the reply composer at the bottom of the panel', async () => {
     await renderPanel();
     // The reply composer is the WysiwygEditor — finding any
@@ -157,6 +165,27 @@ describe('ThreadPanel browser behaviour', () => {
     await renderPanel([rootMsg()]);
     const editable = document.querySelector('[contenteditable="true"]');
     expect(editable).not.toBeNull();
+  });
+
+  it('marks the thread seen at the latest reply while it is open', async () => {
+    markThreadSeenMock.mockClear();
+    await renderPanel([rootMsg(), reply()]);
+    // Marks read with the newest message's timestamp so an actively-viewed
+    // thread doesn't linger as unread on /threads.
+    await vi.waitFor(() => {
+      expect(markThreadSeenMock).toHaveBeenCalledWith(
+        '01J0000000000000000000ROOT',
+        '2026-05-01T11:00:00Z',
+        { parentID: 'ch-1', parentType: 'channel' },
+      );
+    });
+  });
+
+  it('does not mark seen when the thread has no messages yet', async () => {
+    markThreadSeenMock.mockClear();
+    await renderPanel([]);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(markThreadSeenMock).not.toHaveBeenCalled();
   });
 
   it('invokes onClose when the close-thread button is clicked', async () => {
