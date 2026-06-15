@@ -154,7 +154,9 @@ export function useSaveDraft() {
     },
     onMutate: (input) => nextDraftMutationVersion(input),
     onSuccess: (draft, input, ctx) => {
-      if (!ctx || !isLatestDraftMutation(ctx.key, ctx.version)) return;
+      /* istanbul ignore next -- ctx is always set: onMutate unconditionally returns the version object */
+      if (!ctx) return;
+      if (!isLatestDraftMutation(ctx.key, ctx.version)) return;
       qc.setQueryData<MessageDraft[]>(
         queryKeys.drafts(),
         (old) => patchDraftListByScope(old, input, draft ?? null),

@@ -19,6 +19,14 @@ const badgeVariants = cva(
         ghost:
           "hover:bg-muted hover:text-muted-foreground dark:hover:bg-muted/50",
         link: "text-link hover:text-link/80",
+        // Brand-pink unread-count chip. Per the design system the
+        // unread badges are rounded-squares (4px corners), not pills,
+        // so we override the base `rounded-4xl` here. Padding is
+        // tight (`px-1 py-0`) and the chip is a 16px square for
+        // single-digit counts — it grows naturally for double-digit
+        // via `min-w-4` rather than `min-w-5`.
+        brand:
+          "bg-brand text-brand-foreground [a]:hover:bg-brand-hover rounded-sm h-4 min-w-4 px-1 py-0 leading-none",
       },
     },
     defaultVariants: {

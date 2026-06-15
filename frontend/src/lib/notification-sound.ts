@@ -11,6 +11,7 @@ let resumeInFlight: Promise<void> | null = null;
 let pendingPing = false;
 
 function ensureContext(): AudioContext | null {
+  /* istanbul ignore next -- SSR guard: window is always defined in the browser test environment; reachable only under a Node render we don't do. */
   if (typeof window === 'undefined') return null;
   if (ctx && ctx.state !== 'closed') return ctx;
   const Ctor =
@@ -56,6 +57,7 @@ function resumeThenMaybePlay(c: AudioContext): void {
     schedulePendingTone(c);
     return;
   }
+  /* istanbul ignore next -- a closed AudioContext state cannot be produced headless: the test environment never closes the shared context, and ensureContext() recreates it; both this `closed` arm and the inner `if (next)` recursion are defensive against a browser tearing the context down mid-session. */
   if (c.state === 'closed') {
     ctx = null;
     const next = ensureContext();

@@ -1,6 +1,20 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { EditorView } from '@codemirror/view';
+
+// The CM6 composer keeps the document as raw markdown — toolbar formatting wraps
+// the selection in markdown delimiters rather than producing styled DOM spans.
+function editorView(editor: HTMLElement) {
+  return EditorView.findFromDOM(editor)!;
+}
+function selectAll(editor: HTMLElement) {
+  const v = editorView(editor);
+  act(() => v.dispatch({ selection: { anchor: 0, head: v.state.doc.length } }));
+}
+function editorDoc(editor: HTMLElement) {
+  return editorView(editor).state.doc.toString();
+}
 
 const mockUploadAttachment = vi.fn();
 const mockDeleteDraftMutateAsync = vi.fn().mockResolvedValue(undefined);
@@ -39,6 +53,17 @@ vi.mock('@/hooks/useSettings', () => ({
   useUpdateWorkspaceSettings: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 
+// The CM6 composer sources autocomplete data from these hooks — stub them with
+// static empty data so their queries don't resolve async outside act().
+vi.mock('@/hooks/useConversations', async (orig) => ({
+  ...(await orig<typeof import('@/hooks/useConversations')>()),
+  useAllUsers: () => ({ data: [] }),
+}));
+vi.mock('@/hooks/useChannels', async (orig) => ({
+  ...(await orig<typeof import('@/hooks/useChannels')>()),
+  useChannelMembers: () => ({ data: [] }),
+  useUserChannels: () => ({ data: [] }),
+}));
 vi.mock('@/hooks/useEmoji', () => ({
   useEmojis: () => ({ data: [] }),
   useEmojiMap: () => ({ data: {} }),
@@ -132,9 +157,10 @@ describe('MessageInput toolbar buttons', () => {
 
     expect(mouseDown.defaultPrevented).toBe(true);
     expect(screen.getByRole('toolbar', { name: 'Formatting' })).toBeInTheDocument();
+    selectAll(editor);
     fireEvent.click(bold);
     await waitFor(() => {
-      expect(editor.querySelector('.font-semibold')).not.toBeNull();
+      expect(editorDoc(editor)).toBe('**hello**');
     });
   });
 
@@ -143,21 +169,20 @@ describe('MessageInput toolbar buttons', () => {
     // <span data-lexical-text> with theme classes; the inline-code
     // format renders as a real <code> element. Both are observable via
     // a specific theme-class marker.
-    const cases: Array<{ label: string; marker: string }> = [
-      { label: 'Bold (Ctrl+B)', marker: 'font-semibold' },
-      { label: 'Italic (Ctrl+I)', marker: 'italic' },
-      { label: 'Strikethrough', marker: 'line-through' },
-      { label: 'Code (Ctrl+E)', marker: 'font-mono' },
+    // CM6 wraps the selection in the corresponding markdown delimiters.
+    const cases: Array<{ label: string; wrapped: string }> = [
+      { label: 'Bold (Ctrl+B)', wrapped: '**hello**' },
+      { label: 'Italic (Ctrl+I)', wrapped: '*hello*' },
+      { label: 'Strikethrough', wrapped: '~~hello~~' },
+      { label: 'Code (Ctrl+E)', wrapped: '`hello`' },
     ];
     for (const c of cases) {
       const { unmount } = renderWithClient(<MessageInput onSend={vi.fn()} initialBody="hello" />);
       const editor = await screen.findByLabelText('Message input');
+      selectAll(editor);
       fireEvent.click(screen.getByLabelText(c.label));
       await waitFor(() => {
-        // Any element inside the editor carrying the theme class is
-        // proof the format took effect.
-        const candidate = editor.querySelector(`.${c.marker.replace(/\s+/g, '.')}`);
-        expect(candidate).not.toBeNull();
+        expect(editorDoc(editor)).toBe(c.wrapped);
       });
       unmount();
     }
@@ -175,7 +200,8 @@ describe('MessageInput toolbar buttons', () => {
     fireEvent.change(urlField, { target: { value: 'https://example.com' } });
     fireEvent.click(screen.getByRole('button', { name: 'Insert' }));
     await waitFor(() => {
-      expect(editor.querySelector('a[href="https://example.com"]')).not.toBeNull();
+      // CM6 inserts the markdown link into the document (not a rendered anchor).
+      expect(editorDoc(editor)).toContain('[docs](https://example.com)');
     });
   });
 

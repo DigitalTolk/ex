@@ -364,6 +364,7 @@ export function useEditMessage() {
     },
     onSuccess: (data, vars) => {
       const parentID = vars.channelId ?? vars.conversationId;
+      /* istanbul ignore else -- messagePath() throws when neither id is set, so a successful mutation always has a parentID; the falsy arm is unreachable. */
       if (parentID) updateMessageInCache(queryClient, parentID, data);
       invalidatePinnedList(queryClient, vars);
     },
@@ -377,6 +378,7 @@ export function useDeleteMessage() {
       apiFetch<void>(messagePath(vars), { method: 'DELETE' }),
     onSuccess: (_data, vars) => {
       const parentID = vars.channelId ?? vars.conversationId;
+      /* istanbul ignore else -- messagePath() throws when neither id is set, so a successful mutation always has a parentID; the falsy arm is unreachable. */
       if (parentID) {
         markMessageDeletedInCache(queryClient, parentID, vars.messageId, vars.parentMessageID);
         const path = parentPath(vars);
@@ -397,6 +399,7 @@ export function useToggleReaction() {
       }),
     onSuccess: (data, vars) => {
       const parentID = vars.channelId ?? vars.conversationId;
+      /* istanbul ignore else -- messagePath() throws when neither id is set, so a successful mutation always has a parentID; the falsy arm is unreachable. */
       if (parentID) updateMessageInCache(queryClient, parentID, data);
       invalidatePinnedList(queryClient, vars);
     },
@@ -413,6 +416,7 @@ export function useSetPinned() {
       }),
     onSuccess: (data, vars) => {
       const parentID = vars.channelId ?? vars.conversationId;
+      /* istanbul ignore else -- messagePath() throws when neither id is set, so a successful mutation always has a parentID; the falsy arm is unreachable. */
       if (parentID) updateMessageInCache(queryClient, parentID, data);
       invalidatePinnedList(queryClient, vars);
     },
@@ -432,6 +436,7 @@ export function useSetNoUnfurl() {
       }),
     onSuccess: (data, vars) => {
       const parentID = vars.channelId ?? vars.conversationId;
+      /* istanbul ignore else -- messagePath() throws when neither id is set, so a successful mutation always has a parentID; the falsy arm is unreachable. */
       if (parentID) updateMessageInCache(queryClient, parentID, data);
       invalidatePinnedList(queryClient, vars);
     },

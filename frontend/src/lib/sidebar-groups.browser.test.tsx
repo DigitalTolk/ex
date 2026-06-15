@@ -122,4 +122,61 @@ describe('groupSidebarItems', () => {
     expect(ids[1]).toBe('ch-c');
     expect(ids[2]).toBe('ch-a');
   });
+
+  function dmIds(sections: ReturnType<typeof groupSidebarItems>) {
+    const dm = sections.find((s) => s.key === SidebarSectionKeys.DirectMessages)!;
+    return dm.items.map((i) => (i.kind === 'conversation' ? i.conversation.conversationID : ''));
+  }
+
+  it('sorts recent DMs by updatedAt descending', () => {
+    const older = conversation({ conversationID: 'cv-old', displayName: 'Old', updatedAt: '2026-01-01T00:00:00Z' });
+    const newer = conversation({ conversationID: 'cv-new', displayName: 'New', updatedAt: '2026-06-01T00:00:00Z' });
+    const ids = dmIds(groupSidebarItems([], [older, newer], []));
+    expect(ids.indexOf('cv-new')).toBeLessThan(ids.indexOf('cv-old'));
+  });
+
+  it('places timestamped DMs ahead of ones missing updatedAt (both orderings)', () => {
+    const withTime = conversation({ conversationID: 'cv-t', displayName: 'T', updatedAt: '2026-06-01T00:00:00Z' });
+    const noTime = conversation({ conversationID: 'cv-n', displayName: 'N', updatedAt: undefined });
+    expect(dmIds(groupSidebarItems([], [withTime, noTime], [])).indexOf('cv-t'))
+      .toBeLessThan(dmIds(groupSidebarItems([], [withTime, noTime], [])).indexOf('cv-n'));
+    // Reverse input order exercises the symmetric finite!==finite branch.
+    const reversed = dmIds(groupSidebarItems([], [noTime, withTime], []));
+    expect(reversed.indexOf('cv-t')).toBeLessThan(reversed.indexOf('cv-n'));
+  });
+
+  it('places a categorized conversation under its user category alongside channels', () => {
+    // Drives the `sortedConversations.filter(... categoryID === cat.id)` arm
+    // (a DM assigned to a user category), which no other test exercises.
+    const categories: SidebarCategory[] = [{ id: 'cat-1', name: 'Work', position: 0 }];
+    const sections = groupSidebarItems(
+      [channel({ channelID: 'ch-w', categoryID: 'cat-1' })],
+      [conversation({ conversationID: 'cv-w', displayName: 'Coworker', categoryID: 'cat-1' })],
+      categories,
+    );
+    const cat = sections.find((s) => s.key === 'cat-1')!;
+    expect(cat.items.some((i) => i.kind === 'conversation' && i.conversation.conversationID === 'cv-w')).toBe(true);
+    expect(cat.items.some((i) => i.kind === 'channel' && i.channel.channelID === 'ch-w')).toBe(true);
+  });
+
+  it('breaks a Favorites tie alphabetically when positions are equal', () => {
+    // Two favorited items with no sidebarPosition → compareSidebarItems falls
+    // through to itemLabel().localeCompare (line 96/97), sorting by label.
+    const sections = groupSidebarItems(
+      [channel({ channelID: 'ch-z', channelName: 'Zeta', favorite: true })],
+      [conversation({ conversationID: 'cv-a', displayName: 'Aaron', favorite: true })],
+      [],
+    );
+    const favs = sections.find((s) => s.key === SidebarSectionKeys.Favorites)!;
+    const labels = favs.items.map((i) => (i.kind === 'channel' ? i.channel.channelName : i.conversation.displayName));
+    // "Aaron" sorts before "Zeta".
+    expect(labels).toEqual(['Aaron', 'Zeta']);
+  });
+
+  it('groups a channel with an unknown category into the default Channels section', () => {
+    const orphan = channel({ channelID: 'ch-x', channelName: 'orphan', categoryID: 'category-that-was-deleted' });
+    const sections = groupSidebarItems([orphan], [], []); // no categories defined
+    const def = sections.find((s) => s.key === SidebarSectionKeys.Channels)!;
+    expect(def.items.some((i) => i.kind === 'channel' && i.channel.channelID === 'ch-x')).toBe(true);
+  });
 });

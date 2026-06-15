@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"crypto/rand"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -71,7 +70,7 @@ func mediaPath(token, filename string) string {
 
 func randomMediaToken() (string, error) {
 	var b [24]byte
-	if _, err := rand.Read(b[:]); err != nil {
+	if _, err := randRead(b[:]); err != nil {
 		return "", err
 	}
 	return base64.RawURLEncoding.EncodeToString(b[:]), nil

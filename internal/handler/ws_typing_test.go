@@ -258,6 +258,32 @@ func TestWSHandler_HandleInbound_TypingMissingParentIDIgnored(t *testing.T) {
 	}
 }
 
+func TestWSHandler_HandleInbound_TypingChannelNoChanSvcIgnored(t *testing.T) {
+	// Publisher wired but no channel service → channel typing short-circuits.
+	h := &WSHandler{convSvc: service.NewConversationService(newDataConversationStore(), newDataUserStoreForConv(), nil, nil, nil)}
+	pub := &stubPublisher{}
+	h.SetPublisher(pub)
+	raw, _ := json.Marshal(map[string]string{"type": "typing", "parentID": "ch-1", "parentType": "channel"})
+	h.handleInbound(context.Background(), "u-1", raw)
+	if len(pub.hits) != 0 {
+		t.Errorf("channel typing without chanSvc must short-circuit; got %d", len(pub.hits))
+	}
+}
+
+func TestWSHandler_HandleInbound_TypingConversationNoConvSvcIgnored(t *testing.T) {
+	// Publisher wired but no conversation service → conversation typing short-circuits.
+	channels := newDataChannelStore()
+	memberships := newDataMembershipStore()
+	h := &WSHandler{chanSvc: service.NewChannelService(channels, memberships, newDataUserStoreForConv(), nil, nil, nil, nil)}
+	pub := &stubPublisher{}
+	h.SetPublisher(pub)
+	raw, _ := json.Marshal(map[string]string{"type": "typing", "parentID": "c-1", "parentType": "conversation"})
+	h.handleInbound(context.Background(), "u-1", raw)
+	if len(pub.hits) != 0 {
+		t.Errorf("conversation typing without convSvc must short-circuit; got %d", len(pub.hits))
+	}
+}
+
 func TestWSHandler_HandleInbound_TypingUnknownParentTypeIgnored(t *testing.T) {
 	h, pub := buildHandlerWithChannel(t)
 	raw, _ := json.Marshal(map[string]string{

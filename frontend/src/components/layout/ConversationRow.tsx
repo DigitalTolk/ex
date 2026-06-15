@@ -20,6 +20,9 @@ import type { CSSProperties } from 'react';
 interface Props {
   conversation: UserConversation;
   hasUnread: boolean;
+  // Live count of unread messages observed this session (see ChannelRow).
+  // 0 when unknown (cold load) — the row falls back to the unread dot.
+  unreadCount?: number;
   dmAvatarURL?: string;
   dmUserStatus?: UserStatus;
   dmOnline?: boolean;
@@ -40,6 +43,7 @@ interface Props {
 export function ConversationRow({
   conversation,
   hasUnread,
+  unreadCount = 0,
   dmAvatarURL,
   dmUserStatus,
   dmOnline,
@@ -91,9 +95,9 @@ export function ConversationRow({
         }}
         draggable={false}
         className={({ isActive }) =>
-          `flex flex-1 min-w-0 items-center gap-2 rounded-md py-1 pl-2 pr-12 text-sm transition-colors max-md:h-12 max-md:py-0 max-md:pl-3 max-md:pr-20 max-md:text-base ${
+          `relative flex flex-1 min-w-0 items-center gap-2 rounded-md py-1 pl-2 pr-12 text-sm transition-colors max-md:h-12 max-md:py-0 max-md:pl-3 max-md:pr-20 max-md:text-base ${
             isActive
-              ? 'bg-white/15 text-white font-semibold'
+              ? 'bg-white/15 text-white font-semibold before:absolute before:inset-y-1 before:left-0 before:w-[3px] before:rounded-full before:bg-sidebar-foreground before:content-[""]'
               : hasUnread
                 ? 'font-bold text-white hover:bg-white/10'
                 : 'text-gray-300 hover:bg-white/10 hover:text-white'
@@ -123,6 +127,25 @@ export function ConversationRow({
             <span className="truncate">{conversation.displayName}</span>
             <UserStatusIndicator status={dmUserStatus} className="h-4 w-4" />
           </>
+        )}
+        {/* Brand-pink unread indicator — numeric badge when a live
+            count is known, dot fallback otherwise (see ChannelRow). */}
+        {hasUnread && (
+          unreadCount > 0 ? (
+            <Badge
+              variant="brand"
+              className="ml-auto text-[11px]"
+              data-testid={`conversation-unread-badge-${conversation.conversationID}`}
+            >
+              {unreadCount > 99 ? '99+' : unreadCount}
+            </Badge>
+          ) : (
+            <span
+              aria-label="Unread"
+              data-testid={`conversation-unread-dot-${conversation.conversationID}`}
+              className="ml-auto inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-brand"
+            />
+          )
         )}
       </NavLink>
       {/* Star — visible on hover; persistent yellow when favorited.

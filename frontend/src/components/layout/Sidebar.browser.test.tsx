@@ -1,6 +1,6 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { render } from 'vitest-browser-react';
-import { BrowserRouter } from 'react-router-dom';
+import { BrowserRouter, MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Sidebar } from './Sidebar';
 import type { User, UserChannel, UserConversation, SidebarCategory } from '@/types';
@@ -290,6 +290,21 @@ function Frame({ onClose }: { onClose?: () => void }) {
   );
 }
 
+function RouteFrame({ path }: { path: string }) {
+  return (
+    <QueryClientProvider client={queryClient()}>
+      <MemoryRouter initialEntries={[path]}>
+        <div
+          className="browser-sidebar-frame"
+          style={{ height: 600, width: Math.min(window.innerWidth, 360), background: '#1a1d21', overflow: 'hidden' }}
+        >
+          <Sidebar onClose={vi.fn()} />
+        </div>
+      </MemoryRouter>
+    </QueryClientProvider>
+  );
+}
+
 function setReactInputValue(input: HTMLInputElement, value: string) {
   const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
   setter?.call(input, value);
@@ -332,10 +347,11 @@ beforeEach(() => {
 });
 
 describe('Sidebar browser render — rich fixtures', () => {
-  it('shows the user, admin badge, channels, favorites, categories, conversations and drafts badge', async () => {
+  it('shows the channels, favorites, categories, conversations and drafts badge', async () => {
     const screen = await render(<Frame />);
-    await expect.element(screen.getByText('Alice Smith')).toBeVisible();
-    await expect.element(screen.getByText('Admin')).toBeVisible();
+    // The user header (display name + admin badge) was moved to the
+    // top-bar account dropdown — the sidebar now only carries the
+    // navigation rail and channel/DM lists.
     await expect.element(screen.getByText('Favorites')).toBeVisible();
     await expect.element(screen.getByText('Work')).toBeVisible();
     await expect.element(screen.getByText('Channels')).toBeVisible();
@@ -657,6 +673,48 @@ describe('Sidebar browser render — rich fixtures', () => {
     });
   });
 
+  it('confirms category deletion and dispatches the delete mutation', async () => {
+    await render(<Frame />);
+    const kebab = document.querySelector('[data-testid="sidebar-category-menu-cat-work"]') as HTMLElement;
+    kebab.click();
+    await vi.waitFor(() => {
+      expect(document.querySelector('[data-testid="sidebar-category-delete-cat-work"]')).not.toBeNull();
+    });
+    (document.querySelector('[data-testid="sidebar-category-delete-cat-work"]') as HTMLElement).click();
+    // Click the destructive confirm button → onConfirm fires with a non-null
+    // categoryToDelete (the truthy arm) and the delete mutation runs.
+    await vi.waitFor(() => {
+      const confirm = document.querySelector('[data-testid="delete-category-confirm"]');
+      expect(confirm).not.toBeNull();
+    });
+    (document.querySelector('[data-testid="delete-category-confirm"]') as HTMLElement).click();
+    await vi.waitFor(() => {
+      expect(deleteCategoryMutate).toHaveBeenCalledWith('cat-work');
+    });
+  });
+
+  it('dismissing the delete-category dialog clears the pending deletion', async () => {
+    await render(<Frame />);
+    const kebab = document.querySelector('[data-testid="sidebar-category-menu-cat-work"]') as HTMLElement;
+    kebab.click();
+    await vi.waitFor(() => {
+      expect(document.querySelector('[data-testid="sidebar-category-delete-cat-work"]')).not.toBeNull();
+    });
+    (document.querySelector('[data-testid="sidebar-category-delete-cat-work"]') as HTMLElement).click();
+    await vi.waitFor(() => {
+      const modals = document.querySelectorAll('[role="dialog"], [role="alertdialog"]');
+      expect(Array.from(modals).some((m) => m.textContent?.includes('Work'))).toBe(true);
+    });
+    // Escape dismisses → onOpenChange(false) takes the `!o` branch and resets
+    // categoryToDelete to null, closing the dialog.
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await vi.waitFor(() => {
+      const modals = document.querySelectorAll('[role="dialog"], [role="alertdialog"]');
+      expect(Array.from(modals).some((m) => m.textContent?.includes('Work'))).toBe(false);
+    });
+    expect(deleteCategoryMutate).not.toHaveBeenCalled();
+  });
+
   it('shows the create-channel button for admin users in the Channels section', async () => {
     if (window.innerWidth < 768) return;
     await render(<Frame />);
@@ -671,76 +729,9 @@ describe('Sidebar browser render — rich fixtures', () => {
     });
   });
 
-  it('toggles the User menu trigger and opens the mobile user menu on mobile', async () => {
-    if (window.innerWidth >= 768) return;
-    await render(<Frame />);
-    const trigger = document.querySelector('[aria-label="User menu"]') as HTMLElement;
-    trigger.click();
-    await vi.waitFor(() => {
-      expect(document.querySelector('[data-testid="mobile-user-menu"]')).not.toBeNull();
-    });
-    // Mobile menu shows the admin-gated Admin entry because
-    // `currentUser` defaults to adminUser.
-    expect(document.querySelector('[data-testid="mobile-user-menu-admin"]')).not.toBeNull();
-  });
-
-  it('mobile menu omits Admin for member users', async () => {
-    if (window.innerWidth >= 768) return;
-    currentUser = memberUser;
-    await render(<Frame />);
-    (document.querySelector('[aria-label="User menu"]') as HTMLElement).click();
-    await vi.waitFor(() => {
-      expect(document.querySelector('[data-testid="mobile-user-menu"]')).not.toBeNull();
-    });
-    expect(document.querySelector('[data-testid="mobile-user-menu-admin"]')).toBeNull();
-  });
-
-  it('mobile menu Sign out calls logout', async () => {
-    if (window.innerWidth >= 768) return;
-    await render(<Frame />);
-    (document.querySelector('[aria-label="User menu"]') as HTMLElement).click();
-    await vi.waitFor(() => {
-      expect(document.querySelector('[data-testid="mobile-user-menu"]')).not.toBeNull();
-    });
-    const menu = document.querySelector('[data-testid="mobile-user-menu"]') as HTMLElement;
-    const items = Array.from(menu.querySelectorAll('button')) as HTMLElement[];
-    const signOut = items.find((el) => el.textContent?.includes('Sign out'));
-    expect(signOut).toBeTruthy();
-    signOut?.click();
-    await vi.waitFor(() => {
-      expect(currentLogout).toHaveBeenCalled();
-    });
-  });
-
-  it('mobile menu About Server opens the about dialog', async () => {
-    if (window.innerWidth >= 768) return;
-    await render(<Frame />);
-    (document.querySelector('[aria-label="User menu"]') as HTMLElement).click();
-    await vi.waitFor(() => {
-      expect(document.querySelector('[data-testid="mobile-user-menu"]')).not.toBeNull();
-    });
-    const items = Array.from(
-      (document.querySelector('[data-testid="mobile-user-menu"]') as HTMLElement).querySelectorAll('button'),
-    ) as HTMLElement[];
-    const about = items.find((el) => el.textContent?.includes('About Server'));
-    about?.click();
-    await vi.waitFor(() => {
-      // The mobile-user-menu collapses once an item runs.
-      expect(document.querySelector('[data-testid="mobile-user-menu"]')).toBeNull();
-    });
-  });
-
-  it('keeps Custom emojis hidden in the mobile menu for guests', async () => {
-    if (window.innerWidth >= 768) return;
-    currentUser = guestUser;
-    await render(<Frame />);
-    (document.querySelector('[aria-label="User menu"]') as HTMLElement).click();
-    await vi.waitFor(() => {
-      expect(document.querySelector('[data-testid="mobile-user-menu"]')).not.toBeNull();
-    });
-    const menu = document.querySelector('[data-testid="mobile-user-menu"]') as HTMLElement;
-    expect(menu.textContent).not.toContain('Custom emojis');
-  });
+  // The User menu was relocated to AppTopBar's account dropdown.
+  // Its behavioural coverage now lives in AppTopBar.test.tsx; the
+  // sidebar no longer renders the user header or the mobile user menu.
 
   it('renders a private-channel icon for a private channel in the Channels section', async () => {
     await render(<Frame />);
@@ -752,12 +743,15 @@ describe('Sidebar browser render — rich fixtures', () => {
     expect(row).toBeTruthy();
   });
 
-  it('renders the drafts badge with a large numeric count when there are many drafts', async () => {
+  it('renders the drafts badge clamped to "99+" when there are many drafts', async () => {
     mockDrafts = Array.from({ length: 120 }, (_, i) => ({ parentID: `ch-${i}`, parentType: 'channel' }));
     await render(<Frame />);
     const draftsLink = document.querySelector('a[href="/drafts"]') as HTMLElement;
     expect(draftsLink).not.toBeNull();
-    expect(draftsLink.textContent).toContain('120');
+    // Counts beyond 99 collapse to "99+" so the rounded-square chip
+    // stays the same visual width.
+    expect(draftsLink.textContent).toContain('99+');
+    expect(draftsLink.textContent).not.toContain('120');
   });
 
   it('shows the unread dot/style on a channel with notifications even without an unread message', async () => {
@@ -862,8 +856,13 @@ describe('Sidebar browser render — rich fixtures', () => {
 
   it('renders Directory + Threads nav links with click handlers that call onClose', async () => {
     const onClose = vi.fn();
-    const screen = await render(<Frame onClose={onClose} />);
-    await screen.getByText('Threads').click();
+    await render(<Frame onClose={onClose} />);
+    // Click directly on the Threads nav link (href-anchored) rather
+    // than `getByText('Threads')` — the unread badge now carries an
+    // sr-only "Unread threads" label which would collide with the
+    // text-only locator under Playwright strict mode.
+    const threadsLink = document.querySelector('a[href="/threads"]') as HTMLElement;
+    threadsLink?.click();
     expect(onClose).toHaveBeenCalled();
   });
 
@@ -1011,5 +1010,199 @@ describe('Sidebar browser render — rich fixtures', () => {
     mockConversationsState = { data: mockConversations, isError: false };
     await render(<Frame />);
     expect(document.body.textContent).toContain('Headless');
+  });
+
+  it('clamps the Threads unread badge to "99+" when there are more than 99 unread threads', async () => {
+    mockThreads = Array.from({ length: 120 }, (_, i) => ({
+      parentID: 'ch-general',
+      parentType: 'channel' as const,
+      threadRootID: `msg-${i}`,
+      lastReplyAt: '2026-05-11T11:00:00Z',
+    }));
+    await render(<Frame />);
+    const badge = document.querySelector('[data-testid="threads-unread-badge"]') as HTMLElement;
+    expect(badge).not.toBeNull();
+    expect(badge.textContent).toBe('99+');
+  });
+
+  it('keeps unread channels and conversations visible inside a collapsed section', async () => {
+    // A favorites section holding both a channel (with a notification) and a
+    // DM (unread) — collapsing it runs the collapsed-filter for both kinds.
+    mockChannels = [
+      { channelID: 'ch-favorite', channelName: 'announcements', channelType: 'public', role: 1, favorite: true, sidebarPosition: 500 },
+    ];
+    mockConversations = [
+      {
+        conversationID: 'conv-favorite-dm',
+        type: 'dm',
+        displayName: 'Carol',
+        participantIDs: ['u-self', 'u-carol'],
+        favorite: true,
+        unread: true,
+        updatedAt: '2026-05-11T10:00:00Z',
+      },
+    ];
+    mockConversationsState = { data: mockConversations, isError: false };
+    mockCategories = [];
+    mockUnread = {
+      unreadChannels: new Set(),
+      unreadConversations: new Set(['conv-favorite-dm']),
+      unreadThreadNotifications: new Set(),
+      hiddenConversations: new Set(),
+    };
+    mockUserState = {
+      hiddenConversations: [],
+      channelNotifications: ['ch-favorite'],
+      threadNotifications: [],
+      threadSeen: {},
+    };
+    const screen = await render(<Frame />);
+    const toggle = screen.getByTestId('sidebar-group-toggle-__favorites__');
+    await toggle.click();
+    await vi.waitFor(() => {
+      const t = document.querySelector('[data-testid="sidebar-group-toggle-__favorites__"]') as HTMLElement;
+      expect(t.getAttribute('aria-expanded')).toBe('false');
+    });
+    // Both the unread channel and unread DM stay visible despite the collapse.
+    expect(document.body.textContent).toContain('announcements');
+    expect(document.body.textContent).toContain('Carol');
+  });
+
+  it('toggles a section collapse with the keyboard (Enter on the group header)', async () => {
+    await render(<Frame />);
+    const toggle = document.querySelector('[data-testid="sidebar-group-toggle-__channels__"]') as HTMLElement;
+    toggle.focus();
+    toggle.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    await vi.waitFor(() => {
+      expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    });
+    toggle.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true }));
+    await vi.waitFor(() => {
+      expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    });
+  });
+
+  it('renders the Drafts nav link in its active state on the /drafts route', async () => {
+    await render(<RouteFrame path="/drafts" />);
+    const draftsLink = document.querySelector('a[href="/drafts"]') as HTMLAnchorElement;
+    expect(draftsLink).not.toBeNull();
+    expect(draftsLink.className).toContain('font-semibold');
+  });
+
+  it('shows an error message when category creation fails with a non-Error rejection', async () => {
+    createCategoryMutate.mockImplementationOnce((_name: string, opts?: { onError?: (e: unknown) => void }) => {
+      opts?.onError?.('plain string failure');
+    });
+    const screen = await render(<Frame />);
+    await screen.getByTestId('sidebar-add-category').click();
+    const input = (await screen.getByTestId('sidebar-new-category-input').element()) as HTMLInputElement;
+    setReactInputValue(input, 'Marketing');
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    await vi.waitFor(() => {
+      const alert = document.querySelector('[role="alert"]') as HTMLElement;
+      expect(alert).not.toBeNull();
+      expect(alert.textContent).toBe('Could not create category');
+    });
+  });
+
+  it('shows the Error message when category creation fails with an Error rejection', async () => {
+    createCategoryMutate.mockImplementationOnce((_name: string, opts?: { onError?: (e: unknown) => void }) => {
+      opts?.onError?.(new Error('Name already taken'));
+    });
+    const screen = await render(<Frame />);
+    await screen.getByTestId('sidebar-add-category').click();
+    const input = (await screen.getByTestId('sidebar-new-category-input').element()) as HTMLInputElement;
+    setReactInputValue(input, 'Sales');
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    await vi.waitFor(() => {
+      const alert = document.querySelector('[role="alert"]') as HTMLElement;
+      expect(alert?.textContent).toBe('Name already taken');
+    });
+  });
+
+  it('renders from a fully cold cache where every list hook is undefined', async () => {
+    // Drives the `?? []` fallbacks for channels, threads, drafts and categories.
+    mockChannels = undefined as unknown as UserChannel[];
+    mockThreads = undefined as unknown as typeof mockThreads;
+    mockDrafts = undefined as unknown as typeof mockDrafts;
+    mockCategories = undefined as unknown as SidebarCategory[];
+    mockConversationsState = { data: [], isError: false };
+    await render(<Frame />);
+    expect(document.querySelector('[data-testid="sidebar-primary-sections"]')).not.toBeNull();
+  });
+
+  it('keeps an unread conversation visible in a collapsed section via the unreadConversations set', async () => {
+    // A favorites DM that is unread ONLY via the unreadConversations set
+    // (conv.unread is false) → the third clause of the collapsed filter.
+    mockChannels = [];
+    mockConversations = [
+      {
+        conversationID: 'conv-set-unread',
+        type: 'dm',
+        displayName: 'Dana',
+        participantIDs: ['u-self', 'u-dana'],
+        favorite: true,
+        updatedAt: '2026-05-11T10:00:00Z',
+      },
+    ];
+    mockConversationsState = { data: mockConversations, isError: false };
+    mockCategories = [];
+    mockUnread = {
+      unreadChannels: new Set(),
+      unreadConversations: new Set(['conv-set-unread']),
+      unreadThreadNotifications: new Set(),
+      hiddenConversations: new Set(),
+    };
+    // userState undefined so the collapsed channel branch also hits its
+    // `?? []` fallback for channelNotifications.
+    mockUserState = undefined;
+    const screen = await render(<Frame />);
+    const toggle = screen.getByTestId('sidebar-group-toggle-__favorites__');
+    await toggle.click();
+    await vi.waitFor(() => {
+      const t = document.querySelector('[data-testid="sidebar-group-toggle-__favorites__"]') as HTMLElement;
+      expect(t.getAttribute('aria-expanded')).toBe('false');
+    });
+    expect(document.body.textContent).toContain('Dana');
+  });
+
+  it('renders sections even when the unread-thread-notification set is undefined', async () => {
+    mockUnread = {
+      unreadChannels: new Set(),
+      unreadConversations: new Set(),
+      // Force the `unreadThreadNotifications ?? new Set()` fallback.
+      unreadThreadNotifications: undefined as unknown as Set<string>,
+      hiddenConversations: new Set(),
+    };
+    await render(<Frame />);
+    expect(document.querySelector('[data-testid="sidebar-primary-sections"]')).not.toBeNull();
+  });
+
+  it('keeps a notified channel visible in a collapsed section when user state is cold', async () => {
+    // A collapsed Channels section with a notified channel but undefined
+    // userState → the collapsed-channel filter takes its
+    // `userState?.channelNotifications ?? []` fallback.
+    mockChannels = [
+      { channelID: 'ch-urgent', channelName: 'urgent', channelType: 'public', role: 1, sidebarPosition: 1000 },
+    ];
+    mockConversations = [];
+    mockConversationsState = { data: [], isError: false };
+    mockCategories = [];
+    mockUnread = {
+      unreadChannels: new Set(['ch-urgent']),
+      unreadConversations: new Set(),
+      unreadThreadNotifications: new Set(),
+      hiddenConversations: new Set(),
+    };
+    mockUserState = undefined;
+    const screen = await render(<Frame />);
+    const toggle = screen.getByTestId('sidebar-group-toggle-__channels__');
+    await toggle.click();
+    await vi.waitFor(() => {
+      const t = document.querySelector('[data-testid="sidebar-group-toggle-__channels__"]') as HTMLElement;
+      expect(t.getAttribute('aria-expanded')).toBe('false');
+    });
+    // The unread channel stays visible despite the collapse and cold userState.
+    expect(document.body.textContent).toContain('urgent');
   });
 });

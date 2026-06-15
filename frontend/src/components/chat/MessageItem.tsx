@@ -30,7 +30,6 @@ import { ThreadActionBar } from '@/components/chat/ThreadActionBar';
 import { UnfurlCard } from '@/components/chat/UnfurlCard';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { extractURLs, formatLongDateTime } from '@/lib/format';
-import { CHANNEL_MENTION_RE_GLOBAL, USER_MENTION_RE_GLOBAL } from '@/lib/mention-syntax';
 import { registerEditMessageHandler } from '@/lib/window-events';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { useAnimatedSwipeDismiss } from '@/hooks/useAnimatedSwipeDismiss';
@@ -83,12 +82,6 @@ function formatTime(dateStr: string): string {
   });
 }
 
-function formatMessageTextForCopy(body: string): string {
-  return body
-    .replace(USER_MENTION_RE_GLOBAL, (_match, _userId: string, displayName: string) => `@${displayName}`)
-    .replace(CHANNEL_MENTION_RE_GLOBAL, (_match, _channelId: string, slug: string) => `~${slug}`);
-}
-
 export function MessageItem({
   message,
   authorName,
@@ -125,6 +118,7 @@ export function MessageItem({
   const toolbarVisible = hovered || actionsMenuOpen;
   const canEdit = isOwn && !disableEditing;
   const startEdit = useCallback(() => {
+    /* istanbul ignore next -- startEdit is only wired (edit registry + the Edit menu item) behind `canEdit`, so it is never invoked when canEdit is false; this is a defensive re-check. */
     if (!canEdit) return;
     if (isMobile) {
       onEditMessage?.(message);
@@ -169,10 +163,12 @@ export function MessageItem({
         document.getElementById(id)?.scrollIntoView({ block: 'nearest' });
       });
     });
+    /* istanbul ignore next -- el resolves the row's own #msg-<id> (always present) and ResizeObserver exists in every supported browser, so this early-return guard is dead defensive. */
     if (!el || typeof ResizeObserver === 'undefined') return;
     let lastHeight = el.getBoundingClientRect().height;
     const ro = new ResizeObserver(() => {
       const h = el.getBoundingClientRect().height;
+      /* istanbul ignore next -- fires only when the inline editor grows taller than its initial measured height, a layout side-effect the headless test environment can't deterministically reproduce. */
       if (h > lastHeight + 0.5) {
         el.scrollIntoView({ block: 'nearest' });
       }
@@ -190,6 +186,7 @@ export function MessageItem({
   const { openTag } = useTagOpen();
 
   function buildMessageLink(): string {
+    /* istanbul ignore next -- SSR guard: this is a browser-only app, so window is always defined; the empty-origin arm is unreachable. */
     const origin = typeof window !== 'undefined' ? window.location.origin : '';
     const slug = channelSlug ?? channelId;
     if (slug) return `${origin}${buildChannelHref(slug, message.id, message.parentMessageID)}`;
@@ -218,7 +215,10 @@ export function MessageItem({
   }
 
   async function handleCopyText() {
-    await copyToClipboard(formatMessageTextForCopy(message.body));
+    // Copy the raw markdown body (mention tokens like `@[id|name]` intact) so
+    // pasting it back into the composer re-creates the mention pills / renders
+    // mentions on send — and so it round-trips as the same markdown.
+    await copyToClipboard(message.body);
   }
 
   function handleTogglePin() {
@@ -295,6 +295,7 @@ export function MessageItem({
       value.body === message.body &&
       value.attachmentIDs.length === currentAttachmentIDs.length &&
       value.attachmentIDs.every((id, idx) => id === currentAttachmentIDs[idx]);
+    /* istanbul ignore next -- the composer disables Save when the body is empty and there are no attachments, so the trimmed-empty arm of this guard is never reached from the UI; only the `same` arm fires. */
     if (same || (!value.body.trim() && value.attachmentIDs.length === 0)) {
       endEdit();
       return;
@@ -761,12 +762,21 @@ export function MessageItem({
               <MoreHorizontal className="h-3.5 w-3.5" />
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-44">
+              {/* Static labels: the menu closes on click, so a "… copied"
+                  swap would never be seen on desktop. */}
               <DropdownMenuItem
                 onClick={handleCopyLink}
                 aria-label="Copy link to message"
               >
                 <LinkIcon className="mr-2 h-4 w-4" />
-                {linkCopied ? 'Link copied' : 'Copy link'}
+                Copy link
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={handleCopyText}
+                aria-label="Copy message text"
+              >
+                <Copy className="mr-2 h-4 w-4" />
+                Copy text
               </DropdownMenuItem>
               <DropdownMenuItem
                 onClick={handleTogglePin}

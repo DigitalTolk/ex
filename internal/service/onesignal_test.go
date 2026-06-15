@@ -3,8 +3,10 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -217,5 +219,72 @@ func TestOneSignalPushSender_FailureReturnsSanitizedError(t *testing.T) {
 	}
 	if got := err.Error(); got != "onesignal: request failed with status 401" {
 		t.Fatalf("error = %q", got)
+	}
+}
+
+func TestOneSignalPushSender_DefaultsAPIURLAndClient(t *testing.T) {
+	sender, err := NewOneSignalPushSender(OneSignalConfig{
+		AppID:     "app-id",
+		APIKey:    "secret",
+		PublicURL: "https://chat.example.com",
+		// APIURL empty → default; HTTPClient nil → default client.
+	})
+	if err != nil {
+		t.Fatalf("NewOneSignalPushSender: %v", err)
+	}
+	if sender == nil {
+		t.Fatal("expected non-nil sender")
+	}
+	if sender.apiURL != defaultOneSignalNotificationsURL {
+		t.Errorf("apiURL = %q, want default", sender.apiURL)
+	}
+	if sender.client == nil {
+		t.Error("expected default http client")
+	}
+}
+
+func TestOneSignalPushSender_NewRequestError(t *testing.T) {
+	// Bypass the constructor's URL validation to drive an apiURL that
+	// http.NewRequestWithContext rejects (a control character in the URL).
+	u, _ := url.Parse("https://chat.example.com")
+	sender := &OneSignalPushSender{
+		appID:     "app-id",
+		apiKey:    "secret",
+		publicURL: u,
+		apiURL:    "http://example.com/\x7f",
+		client:    &http.Client{},
+	}
+	if err := sender.Send(context.Background(), "u-1", Notification{}); err == nil {
+		t.Fatal("expected create-request error")
+	}
+}
+
+func TestOneSignalPushSender_TransportError(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+		return nil, errors.New("network down")
+	})}
+	sender, err := NewOneSignalPushSender(OneSignalConfig{
+		AppID:      "app-id",
+		APIKey:     "secret",
+		PublicURL:  "https://chat.example.com",
+		APIURL:     "https://api.onesignal.test/notifications",
+		HTTPClient: client,
+	})
+	if err != nil {
+		t.Fatalf("NewOneSignalPushSender: %v", err)
+	}
+	if err := sender.Send(context.Background(), "u-1", Notification{}); err == nil {
+		t.Fatal("expected transport error")
+	}
+}
+
+func TestOneSignalPushSender_AbsoluteURL_UnparsableDeepLinkFallback(t *testing.T) {
+	u, _ := url.Parse("https://chat.example.com/base")
+	sender := &OneSignalPushSender{publicURL: u}
+	// A deep link that fails url.Parse routes through the else fallback that
+	// appends the raw string to the base path.
+	got := sender.absoluteURL("/a/b\x7f")
+	if got == "" {
+		t.Fatal("expected a non-empty fallback URL")
 	}
 }

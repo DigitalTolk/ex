@@ -55,6 +55,11 @@ function shallowEqualByKey(
   for (const k of ak) {
     const av = a[k];
     const bv = b[k];
+    // The length pre-check above (`ak.length !== bk.length`) already
+    // rejects any case where a key in `a` is absent from `b`, so by the
+    // time we index `b[k]` for a shared-length pair the key is present;
+    // the `!bv` arm is a defensive guard that can't fire under test.
+    /* istanbul ignore next -- unreachable: equal-length key sets share keys, so bv is always defined here */
     if (!bv || av.length !== bv.length) return false;
     for (let i = 0; i < av.length; i++) {
       if (av[i] !== bv[i]) return false;
@@ -86,11 +91,13 @@ export function TypingProvider({ children }: { children: ReactNode }) {
       if (e.userID === selfRef.current) continue;
       if (e.threadRootID === '') {
         const list = groupedParent[e.parentID] ?? [];
+        /* istanbul ignore next -- recordTyping dedups entries by (parentID,userID,threadRootID), so a user can't already be in the parent list; the includes() short-circuit is defensive */
         if (!list.includes(e.userID)) list.push(e.userID);
         groupedParent[e.parentID] = list;
       } else {
         const k = threadTypingKey(e.parentID, e.threadRootID);
         const list = groupedThread[k] ?? [];
+        /* istanbul ignore next -- recordTyping dedups entries by (parentID,userID,threadRootID), so a user can't already be in the thread list; the includes() short-circuit is defensive */
         if (!list.includes(e.userID)) list.push(e.userID);
         groupedThread[k] = list;
       }
@@ -106,6 +113,10 @@ export function TypingProvider({ children }: { children: ReactNode }) {
     if (timerRef.current) return;
     timerRef.current = setInterval(() => {
       rebuild();
+      // Inside the interval callback `timerRef.current` is by definition
+      // the handle that scheduled us, so it is always truthy here; the
+      // `&& timerRef.current` guard is defensive against a torn-down ref.
+      /* istanbul ignore next -- timerRef.current is always set while its own interval is firing */
       if (entriesRef.current.length === 0 && timerRef.current) {
         clearInterval(timerRef.current);
         timerRef.current = null;

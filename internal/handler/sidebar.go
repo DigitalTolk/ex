@@ -227,9 +227,8 @@ func (h *SidebarHandler) SetConversationCategory(w http.ResponseWriter, r *http.
 		writeError(w, http.StatusBadRequest, "invalid_category", "conversations can only be favorited, not moved into categories")
 		return
 	}
-	if !h.validateUserCategory(w, r, userID, body.CategoryID) {
-		return
-	}
+	// CategoryID is guaranteed empty here (non-empty is rejected above), so
+	// there's no user-category ownership to validate — clearing/favoriting only.
 	if err := h.convSvc.SetCategory(r.Context(), userID, convID, body.CategoryID, body.SidebarPosition); err != nil {
 		writeError(w, http.StatusForbidden, "category_error", err.Error())
 		return

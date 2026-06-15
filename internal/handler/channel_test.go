@@ -45,8 +45,9 @@ func (m mockChannelSearcher) Channels(_ context.Context, _ string, _ int) ([]str
 
 // dataChannelStore stores channels and returns them. Used for handler integration tests.
 type dataChannelStore struct {
-	channels map[string]*model.Channel
-	getErr   error
+	channels      map[string]*model.Channel
+	getErr        error
+	listPublicErr error
 }
 
 func newDataChannelStore() *dataChannelStore {
@@ -83,6 +84,9 @@ func (s *dataChannelStore) UpdateChannel(_ context.Context, ch *model.Channel) e
 	return nil
 }
 func (s *dataChannelStore) ListPublicChannels(_ context.Context, _ int, _ string) ([]*model.Channel, string, error) {
+	if s.listPublicErr != nil {
+		return nil, "", s.listPublicErr
+	}
 	var result []*model.Channel
 	for _, ch := range s.channels {
 		if ch.Type == model.ChannelTypePublic {
@@ -95,6 +99,11 @@ func (s *dataChannelStore) ListPublicChannels(_ context.Context, _ int, _ string
 // dataMembershipStore stores memberships. Used for handler integration tests.
 type dataMembershipStore struct {
 	memberships map[string]*model.ChannelMembership
+	// userChannels/listUserChannelsErr drive ListUserChannels for tests that
+	// need the WS subscribe loop to see channels or fail. Zero values keep the
+	// historical "no channels, no error" behaviour for existing callers.
+	userChannels        []*model.UserChannel
+	listUserChannelsErr error
 }
 
 func newDataMembershipStore() *dataMembershipStore {
@@ -134,7 +143,10 @@ func (s *dataMembershipStore) ListMembers(_ context.Context, channelID string) (
 	return result, nil
 }
 func (s *dataMembershipStore) ListUserChannels(_ context.Context, _ string) ([]*model.UserChannel, error) {
-	return nil, nil
+	if s.listUserChannelsErr != nil {
+		return nil, s.listUserChannelsErr
+	}
+	return s.userChannels, nil
 }
 func (s *dataMembershipStore) SetMute(_ context.Context, _, _ string, _ bool) error {
 	return nil
@@ -424,6 +436,21 @@ func TestChannelHandler_List(t *testing.T) {
 	var got []interface{}
 	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
 		t.Fatalf("decode: %v", err)
+	}
+}
+
+func TestChannelHandler_List_ServiceError(t *testing.T) {
+	h, _, members, jwtMgr := setupChannelHandler(t)
+	members.listUserChannelsErr = errors.New("dynamo down")
+	user := &model.User{ID: "le-1", Email: "le@example.com", SystemRole: model.SystemRoleMember}
+	token := makeTokenForUser(jwtMgr, user)
+	handler := middleware.Auth(jwtMgr)(http.HandlerFunc(h.List))
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/channels", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d, want 500; body=%s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -830,6 +857,37 @@ func TestChannelHandlerFull_Get(t *testing.T) {
 
 	if rec.Code != http.StatusOK {
 		t.Errorf("status = %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+}
+
+func TestChannelHandler_Get_Unauthenticated(t *testing.T) {
+	h, _, _, _ := setupChannelHandler(t)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/channels/ch-x", nil)
+	req.SetPathValue("id", "ch-x")
+	rec := httptest.NewRecorder()
+	h.Get(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", rec.Code)
+	}
+}
+
+func TestChannelHandlerFull_Get_ByULID(t *testing.T) {
+	env := setupChannelHandlerFull(t)
+	const ulid = "01ARZ3NDEKTSV4RRFFQ69G5FAV"
+	env.channels.channels[ulid] = &model.Channel{ID: ulid, Name: "by-id", Slug: "by-id", Type: model.ChannelTypePublic}
+	env.memberships.memberships[ulid+"#u-id"] = &model.ChannelMembership{ChannelID: ulid, UserID: "u-id", Role: model.ChannelRoleMember}
+	user := &model.User{ID: "u-id", Email: "id@test.com", SystemRole: model.SystemRoleMember}
+	token := makeTokenForUser(env.jwtMgr, user)
+	handler := middleware.Auth(env.jwtMgr)(http.HandlerFunc(env.handler.Get))
+
+	// A ULID-shaped id routes through GetVisibleByID instead of the slug lookup.
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/channels/"+ulid, nil)
+	req.SetPathValue("id", ulid)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -1523,6 +1581,23 @@ func TestChannelHandlerFull_SetNoUnfurl_MissingIDs(t *testing.T) {
 	}
 }
 
+func TestChannelHandlerFull_SetNoUnfurl_BadJSON(t *testing.T) {
+	env := setupChannelHandlerFull(t)
+	user := &model.User{ID: "u", Email: "u@test.com", SystemRole: model.SystemRoleMember}
+	token := makeTokenForUser(env.jwtMgr, user)
+	handler := middleware.Auth(env.jwtMgr)(http.HandlerFunc(env.handler.SetNoUnfurl))
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/channels/ch-1/messages/m-1/no-unfurl",
+		strings.NewReader(`{bad`))
+	req.SetPathValue("id", "ch-1")
+	req.SetPathValue("msgId", "m-1")
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestChannelHandlerFull_EditMessage(t *testing.T) {
 	env := setupChannelHandlerFull(t)
 
@@ -2019,5 +2094,20 @@ func TestChannelHandlerFull_ListFiles(t *testing.T) {
 	}
 	if got[0].AttachmentID != "a-3" {
 		t.Errorf("expected newest first; got %q", got[0].AttachmentID)
+	}
+}
+
+func TestIsDuplicateError(t *testing.T) {
+	if isDuplicateError(nil) {
+		t.Error("nil should not be a duplicate error")
+	}
+	if !isDuplicateError(errors.New("channel name already exists")) {
+		t.Error(`"already exists" should be a duplicate error`)
+	}
+	if !isDuplicateError(errors.New("that name is already taken")) {
+		t.Error(`"already taken" should be a duplicate error`)
+	}
+	if isDuplicateError(errors.New("some unrelated failure")) {
+		t.Error("unrelated error should not be a duplicate error")
 	}
 }

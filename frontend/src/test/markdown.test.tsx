@@ -209,6 +209,14 @@ describe('renderMarkdown', () => {
     expect(ps[0].textContent).toBe('first');
     expect(ps[1].textContent?.trim()).toBe('');
     expect(ps[2].textContent).toBe('second');
+    // The middle paragraph carries `data-blank="true"` so the
+    // `.prose-message` CSS rule in index.css can give it a real
+    // min-height — without this marker Tailwind preflight collapses
+    // the empty <p> against its siblings and the user-visible gap
+    // disappears even though the markup is technically three <p>.
+    expect(ps[1].getAttribute('data-blank')).toBe('true');
+    expect(ps[0].getAttribute('data-blank')).not.toBe('true');
+    expect(ps[2].getAttribute('data-blank')).not.toBe('true');
   });
 
   it('stacks one blank paragraph per consecutive blank line', () => {

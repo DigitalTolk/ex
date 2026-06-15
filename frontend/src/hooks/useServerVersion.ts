@@ -6,15 +6,19 @@ import { APP_VERSION_META, BUILD_VERSION_META } from '@/lib/version-meta';
 // this bundle, so the meta tag and the bundle always match. In dev (no
 // meta tag), BUILD_VERSION is 'dev' and the banner stays suppressed.
 function readBootVersion(): string {
+  /* istanbul ignore next -- SSR guard: document is always defined in the browser test environment; reachable only under a Node render we don't do. */
   if (typeof document === 'undefined') return 'dev';
   const tag = document.querySelector(`meta[name="${APP_VERSION_META}"]`);
+  /* istanbul ignore next -- runs once at module load; browser-setup.ts always stamps a non-empty app-version meta tag, so the || 'dev' fallback never fires and vi.resetModules cannot re-trigger module-load evaluation in browser mode. */
   return tag?.getAttribute('content') || 'dev';
 }
 
 export const BUILD_VERSION: string = readBootVersion();
 export const BUILD_DISPLAY_VERSION: string = (() => {
+  /* istanbul ignore next -- SSR guard: document is always defined in the browser test environment; reachable only under a Node render we don't do. */
   if (typeof document === 'undefined') return BUILD_VERSION;
   const tag = document.querySelector(`meta[name="${BUILD_VERSION_META}"]`);
+  /* istanbul ignore next -- runs once at module load; browser-setup.ts always stamps a non-empty build-version meta tag, so the || BUILD_VERSION fallback never fires and vi.resetModules cannot re-trigger module-load evaluation in browser mode. */
   return tag?.getAttribute('content') || BUILD_VERSION;
 })();
 
@@ -64,6 +68,7 @@ let pollerCleanup: (() => void) | null = null;
 function startPoller(): void {
   if (pollerStarted) return;
   pollerStarted = true;
+  /* istanbul ignore next -- SSR guard: window is always defined in the browser test environment; reachable only under a Node render we don't do. */
   if (typeof window === 'undefined') return;
   let retryTimeoutID: number | null = null;
   const clearRetry = () => {
@@ -142,6 +147,7 @@ export function useServerVersion(): {
   // Banner shows only after we've heard a server version AND it differs
   // from the bundle-baked one. Suppressed entirely in dev where the
   // bundle has no embedded version.
+  /* istanbul ignore next -- BUILD_VERSION is a module-load constant read from the stamped app-version meta tag, which browser-setup.ts always sets to a real version (never 'dev'), so the && short-circuits and import.meta.env.DEV is never evaluated under the browser gate. */
   const devBuildWithoutServerStamp = BUILD_VERSION === 'dev' && import.meta.env.DEV;
   const outdated = v !== null && v !== BUILD_VERSION && !devBuildWithoutServerStamp;
   return { serverVersion: v, outdated };

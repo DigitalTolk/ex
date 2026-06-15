@@ -36,6 +36,14 @@ describe('useDeepLinkAnchor', () => {
     expect(result.current.threadAnchor).toBeUndefined();
   });
 
+  it('returns undefined when the hash is exactly "#msg-" with no id', () => {
+    const { result } = renderHook(() => useDeepLinkAnchor('ch-1'), {
+      wrapper: wrap('/channel/x#msg-'),
+    });
+    expect(result.current.mainAnchor).toBeUndefined();
+    expect(result.current.threadAnchor).toBeUndefined();
+  });
+
   it('with ?thread=R#msg-Y promotes R to mainAnchor and Y to threadAnchor', () => {
     const { result } = renderHook(() => useDeepLinkAnchor('ch-1'), {
       wrapper: wrap('/channel/x?thread=root-1#msg-reply-1'),

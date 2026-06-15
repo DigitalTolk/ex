@@ -1,5 +1,5 @@
-import { describe, expect, it, vi } from 'vitest';
-import { render } from 'vitest-browser-react';
+import { describe, expect, it, vi, afterEach } from 'vitest';
+import { render, cleanup } from 'vitest-browser-react';
 import { ImageLightbox } from './ImageLightbox';
 import { expectPaintedAtCenter } from '@/test/browser-assertions';
 import type { ComponentProps } from 'react';
@@ -63,6 +63,8 @@ function dispatchPointerTap(element: Element, point: { x: number; y: number }, p
 }
 
 describe('ImageLightbox browser behavior', () => {
+  afterEach(() => cleanup());
+
   it('zooms against the full overlay stage instead of a small scroll box', async () => {
     const screen = await render(lightbox());
     const stage = document.querySelector('[data-testid="image-lightbox-zoom-stage"]') as HTMLElement | null;
@@ -384,5 +386,51 @@ describe('ImageLightbox browser behavior', () => {
     expect(onClose).not.toHaveBeenCalled();
     expect(document.querySelector('[data-testid="image-lightbox"]')).not.toBeNull();
     expect(stage!.style.transform).not.toContain('translate3d');
+  });
+
+  const twoImages = [
+    { url: imageURL, filename: 'a.png', contentType: 'image/png', size: 2048 },
+    { url: nextImageURL, filename: 'b.png', contentType: 'image/png', size: 2048 },
+  ];
+
+  it('closes on the Escape key', async () => {
+    const onClose = vi.fn();
+    await render(lightbox({ onClose }));
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('navigates with the ArrowRight and ArrowLeft keys', async () => {
+    const onIndexChange = vi.fn();
+    await render(lightbox({ images: twoImages, index: 0, onIndexChange }));
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+    expect(onIndexChange).toHaveBeenLastCalledWith(1);
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }));
+    // From index 0, ArrowLeft wraps to the last image.
+    expect(onIndexChange).toHaveBeenLastCalledWith(1);
+  });
+
+  it('navigates via the previous/next chevron buttons', async () => {
+    const onIndexChange = vi.fn();
+    const screen = await render(lightbox({ images: twoImages, index: 0, onIndexChange }));
+    await screen.getByRole('button', { name: 'Next attachment' }).click();
+    expect(onIndexChange).toHaveBeenLastCalledWith(1);
+    await screen.getByRole('button', { name: 'Previous attachment' }).click();
+    expect(onIndexChange).toHaveBeenLastCalledWith(1);
+  });
+
+  it('enables the zoom-out control after zooming in', async () => {
+    const screen = await render(lightbox());
+    const zoomOut = screen.getByRole('button', { name: 'Zoom out' }).element() as HTMLButtonElement;
+    expect(zoomOut.disabled).toBe(true);
+    await screen.getByRole('button', { name: 'Zoom in' }).click();
+    await vi.waitFor(() => expect(zoomOut.disabled).toBe(false));
+  });
+
+  it('closes via the close button', async () => {
+    const onClose = vi.fn();
+    const screen = await render(lightbox({ onClose }));
+    await screen.getByRole('button', { name: 'Close attachment preview' }).click();
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 });

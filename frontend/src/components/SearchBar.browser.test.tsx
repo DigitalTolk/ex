@@ -1,8 +1,26 @@
 import { describe, expect, it, vi } from 'vitest';
 import { render } from 'vitest-browser-react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, useLocation } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { SearchBar } from './SearchBar';
+
+function LocationProbe() {
+  const loc = useLocation();
+  return <div data-testid="loc" data-path={loc.pathname} data-search={loc.search} />;
+}
+function renderWithLocation(initialPath = '/') {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(
+    <QueryClientProvider client={qc}>
+      <MemoryRouter initialEntries={[initialPath]}>
+        <div data-app-chrome="true">
+          <SearchBar />
+        </div>
+        <LocationProbe />
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+}
 
 const useChannelBySlugMock = vi.hoisted(() => vi.fn(() => ({ data: undefined as unknown })));
 const useUserConversationsMock = vi.hoisted(() => vi.fn(() => ({ data: undefined as unknown })));
@@ -155,5 +173,93 @@ describe('SearchBar browser behavior', () => {
     // After submission, the input is cleared.
     await new Promise((r) => setTimeout(r, 50));
     expect((input.element() as HTMLInputElement).value).toBe('');
+  });
+
+  it('submitting an in-scope channel suggestion navigates with in + type params', async () => {
+    useChannelBySlugMock.mockReturnValue({ data: { id: 'ch-1', name: 'general', slug: 'general', type: 'public' } });
+    useUserConversationsMock.mockReturnValue({ data: undefined });
+    const screen = await renderWithLocation('/channel/general');
+    await screen.getByTestId('searchbar-input').fill('bug');
+    await screen.getByTestId('searchbar-show-in-scope').click();
+    await vi.waitFor(() => {
+      const loc = screen.getByTestId('loc').element() as HTMLElement;
+      expect(loc.dataset.search).toContain('in=ch-1');
+      expect(loc.dataset.search).toContain('type=messages');
+    });
+  });
+
+  it('submitting an in-scope DM suggestion navigates with type=dms', async () => {
+    useChannelBySlugMock.mockReturnValue({ data: undefined });
+    useUserConversationsMock.mockReturnValue({ data: [{ conversationID: 'cv-1', type: 'dm', displayName: 'Bob' }] });
+    const screen = await renderWithLocation('/conversation/cv-1');
+    await screen.getByTestId('searchbar-input').fill('hey');
+    await screen.getByTestId('searchbar-show-in-scope').click();
+    await vi.waitFor(() => {
+      expect((screen.getByTestId('loc').element() as HTMLElement).dataset.search).toContain('type=dms');
+    });
+  });
+
+  it('ArrowDown / ArrowUp move the highlight and Enter submits the highlighted row', async () => {
+    useChannelBySlugMock.mockReturnValue({ data: { id: 'ch-1', name: 'general', slug: 'general', type: 'public' } });
+    useUserConversationsMock.mockReturnValue({ data: undefined });
+    const screen = await renderWithLocation('/channel/general');
+    const input = screen.getByTestId('searchbar-input');
+    await input.fill('bug');
+    await expect.element(screen.getByTestId('searchbar-dropdown')).toBeVisible();
+    const el = input.element();
+    el.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+    el.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true }));
+    el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    await vi.waitFor(() => {
+      expect((screen.getByTestId('loc').element() as HTMLElement).dataset.search).toContain('q=bug');
+    });
+  });
+
+  it('ArrowDown with no suggestions (empty query) is a no-op', async () => {
+    useChannelBySlugMock.mockReturnValue({ data: undefined });
+    useUserConversationsMock.mockReturnValue({ data: undefined });
+    const screen = await renderWithLocation();
+    const input = screen.getByTestId('searchbar-input');
+    await input.element().dispatchEvent(new Event('focus', { bubbles: true }));
+    input.element().dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+    input.element().dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true }));
+    // No navigation occurred (still on the initial route).
+    expect((screen.getByTestId('loc').element() as HTMLElement).dataset.path).toBe('/');
+  });
+
+  it('Escape closes the dropdown', async () => {
+    useChannelBySlugMock.mockReturnValue({ data: undefined });
+    useUserConversationsMock.mockReturnValue({ data: undefined });
+    const screen = await renderWithLocation();
+    const input = screen.getByTestId('searchbar-input');
+    await input.fill('foo');
+    await expect.element(screen.getByTestId('searchbar-dropdown')).toBeVisible();
+    input.element().dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await vi.waitFor(() => {
+      expect(document.querySelector('[data-testid="searchbar-dropdown"]')).toBeNull();
+    });
+  });
+
+  it('a mousedown outside the search container closes the dropdown', async () => {
+    useChannelBySlugMock.mockReturnValue({ data: undefined });
+    useUserConversationsMock.mockReturnValue({ data: undefined });
+    const screen = await renderWithLocation();
+    await screen.getByTestId('searchbar-input').fill('foo');
+    await expect.element(screen.getByTestId('searchbar-dropdown')).toBeVisible();
+    document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    await vi.waitFor(() => {
+      expect(document.querySelector('[data-testid="searchbar-dropdown"]')).toBeNull();
+    });
+  });
+
+  it('Enter with a whitespace-only query does not submit', async () => {
+    useChannelBySlugMock.mockReturnValue({ data: undefined });
+    useUserConversationsMock.mockReturnValue({ data: undefined });
+    const screen = await renderWithLocation();
+    const input = screen.getByTestId('searchbar-input');
+    await input.fill('   ');
+    input.element().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    await new Promise((r) => setTimeout(r, 30));
+    expect((screen.getByTestId('loc').element() as HTMLElement).dataset.path).toBe('/');
   });
 });

@@ -273,45 +273,6 @@ describe('Sidebar', () => {
     setMobileMatch(false);
   });
 
-  it('renders user display name', () => {
-    renderSidebar();
-    expect(screen.getByText('Alice Smith')).toBeInTheDocument();
-  });
-
-  it('renders user initials in avatar fallback', () => {
-    renderSidebar();
-    expect(screen.getByText('AS')).toBeInTheDocument();
-  });
-
-  it('shows Admin badge for admin users', () => {
-    renderSidebar();
-    // Admin role badge shows in the user header. The Admin entry was moved
-    // from a sidebar nav link into the user-menu DropdownMenuItem, but
-    // because the dropdown content stays mounted (Radix), its label is
-    // queryable here too.
-    const matches = screen.getAllByText('Admin');
-    expect(matches.length).toBeGreaterThanOrEqual(1);
-  });
-
-  it('exposes an Admin entry in the user menu for admins', async () => {
-    // Admin used to be a top-level sidebar nav link, but it now lives in
-    // the user dropdown — open the menu before asserting on the item.
-    renderSidebar();
-    fireEvent.click(screen.getByLabelText('User menu'));
-    expect(await screen.findByTestId('user-menu-admin')).toBeInTheDocument();
-  });
-
-  it('renders the mobile user menu inline above the scrollable channel list', async () => {
-    renderSidebar();
-    fireEvent.click(screen.getByLabelText('User menu'));
-    const menu = await screen.findByTestId('mobile-user-menu');
-    const scrollArea = screen.getByTestId('sidebar-scroll-area');
-
-    expect(menu).toHaveClass('md:hidden', 'border-b');
-    expect(menu.compareDocumentPosition(scrollArea) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(screen.getByTestId('mobile-user-menu-admin')).toHaveClass('h-12', 'px-3');
-  });
-
   it('keeps the mobile channel list scrollable instead of registering row drag handlers', async () => {
     setMobileMatch(true);
     renderSidebar();
@@ -325,42 +286,6 @@ describe('Sidebar', () => {
     await waitFor(() => {
       expect(channelRow.ondragstart).toBeNull();
     });
-  });
-
-  it('hides the desktop dropdown content on mobile so it does not cover channels', async () => {
-    renderSidebar();
-    fireEvent.click(screen.getByLabelText('User menu'));
-    const admin = await screen.findByTestId('user-menu-admin');
-    const menu = admin.closest('[data-slot="dropdown-menu-content"]');
-
-    expect(menu).toHaveClass('max-md:hidden');
-  });
-
-  it('confirms native server changes from the mobile user menu before resetting', async () => {
-    const user = userEvent.setup();
-    const resetServer = vi.fn().mockResolvedValue(undefined);
-    window.Capacitor = {
-      isNativePlatform: () => true,
-      Plugins: { ServerNavigation: { resetServer } },
-    };
-
-    renderSidebar();
-    await user.click(screen.getByLabelText('User menu'));
-    await user.click(await screen.findByTestId('mobile-change-server'));
-
-    expect(await screen.findByTestId('change-server')).toHaveTextContent('Change chat server?');
-    expect(resetServer).not.toHaveBeenCalled();
-
-    await user.click(screen.getByTestId('change-server-confirm'));
-    expect(resetServer).toHaveBeenCalledTimes(1);
-  });
-
-  it('keeps native server switching out of the desktop menu when not running natively', async () => {
-    renderSidebar();
-    fireEvent.click(screen.getByLabelText('User menu'));
-
-    expect(screen.queryByTestId('user-menu-change-server')).not.toBeInTheDocument();
-    expect(screen.queryByTestId('mobile-change-server')).not.toBeInTheDocument();
   });
 
   it('renders channel list', () => {
@@ -414,6 +339,25 @@ describe('Sidebar', () => {
     expect(screen.getByLabelText('New direct message')).toBeInTheDocument();
   });
 
+  it('initializes the DM sort from the stored az preference', () => {
+    localStorage.setItem('sidebar.conversationSort', 'az');
+    renderSidebar();
+    // The az-preference branch of the lazy initializer runs without error.
+    expect(screen.getByText('Direct Messages')).toBeInTheDocument();
+  });
+
+  it('persists the DM sort preference when changed via the sort menu', async () => {
+    const user = userEvent.setup();
+    renderSidebar();
+    await user.click(screen.getByLabelText('Sort direct messages'));
+    await user.click(await screen.findByText('A-Z'));
+    expect(localStorage.getItem('sidebar.conversationSort')).toBe('az');
+
+    await user.click(screen.getByLabelText('Sort direct messages'));
+    await user.click(await screen.findByText('Recent activity'));
+    expect(localStorage.getItem('sidebar.conversationSort')).toBe('recent');
+  });
+
   it('shows unread indicator for channels', () => {
     mockUnreadChannels.add('ch-1');
     renderSidebar();
@@ -451,11 +395,6 @@ describe('Sidebar', () => {
     expect(screen.getByText('Project Team')).toBeInTheDocument();
   });
 
-  it('has user menu trigger', () => {
-    renderSidebar();
-    expect(screen.getByLabelText('User menu')).toBeInTheDocument();
-  });
-
   it('uses slugified channel name in NavLink href', () => {
     renderSidebar();
     const nav = screen.getByLabelText('Channels and direct messages');
@@ -485,6 +424,97 @@ describe('Sidebar', () => {
       expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/channels/ch-2/category', {
         method: 'PUT',
         body: JSON.stringify({ categoryID: '', sidebarPosition: 1000 }),
+      });
+    });
+  });
+
+  it('favorites a channel when it is dropped onto the Favorites header', async () => {
+    // One existing favorite makes the Favorites section render.
+    mockChannels = [
+      { ...baseMockChannels[0], favorite: true },
+      { ...baseMockChannels[1] },
+      { ...baseMockChannels[2] },
+    ];
+    const dataTransfer = { effectAllowed: '', dropEffect: '', setData: vi.fn(), getData: vi.fn() };
+    renderSidebar();
+
+    const header = screen.getByTestId('sidebar-group-header-__favorites__');
+    mockRect(header, { top: -20, bottom: 0 });
+    fireEvent.pointerDown(screen.getByTestId('channel-row-ch-2'));
+    fireEvent.dragStart(screen.getByTestId('channel-row-ch-2'), { dataTransfer });
+    fireDragOver(header, dataTransfer, 19);
+    fireDrop(header, dataTransfer, 19);
+
+    await waitFor(() => {
+      expect(mockApiFetch).toHaveBeenCalledWith(
+        '/api/v1/channels/ch-2/favorite',
+        expect.objectContaining({ method: 'PUT' }),
+      );
+    });
+  });
+
+  it('unfavorites a favorited channel when it is dropped into a regular section', async () => {
+    // ch-2 is favorited (renders in Favorites); dropping it back onto a
+    // regular channel row schedules an unfavorite.
+    mockChannels = [
+      { ...baseMockChannels[0] },
+      { ...baseMockChannels[1], favorite: true },
+      { ...baseMockChannels[2] },
+    ];
+    const dataTransfer = { effectAllowed: '', dropEffect: '', setData: vi.fn(), getData: vi.fn() };
+    renderSidebar();
+
+    fireEvent.pointerDown(screen.getByTestId('channel-row-ch-2'));
+    fireEvent.dragStart(screen.getByTestId('channel-row-ch-2'), { dataTransfer });
+    fireEvent.dragOver(screen.getByTestId('channel-row-ch-1'), { dataTransfer });
+    fireEvent.drop(screen.getByTestId('channel-row-ch-1'), { dataTransfer });
+
+    await waitFor(() => {
+      expect(mockApiFetch).toHaveBeenCalledWith(
+        '/api/v1/channels/ch-2/favorite',
+        expect.objectContaining({ method: 'PUT' }),
+      );
+    });
+  });
+
+  it('ignores a channel dropped onto the Direct Messages header', async () => {
+    const dataTransfer = { effectAllowed: '', dropEffect: '', setData: vi.fn(), getData: vi.fn() };
+    renderSidebar();
+
+    const dmHeader = screen.getByTestId('sidebar-group-header-__dms__');
+    mockRect(dmHeader, { top: -20, bottom: 0 });
+    fireEvent.pointerDown(screen.getByTestId('channel-row-ch-1'));
+    fireEvent.dragStart(screen.getByTestId('channel-row-ch-1'), { dataTransfer });
+    fireDragOver(dmHeader, dataTransfer, 19);
+    fireDrop(dmHeader, dataTransfer, 19);
+
+    // A channel cannot be filed under Direct Messages → no category mutation.
+    await new Promise((r) => setTimeout(r, 0));
+    expect(mockApiFetch).not.toHaveBeenCalledWith(
+      '/api/v1/channels/ch-1/category',
+      expect.anything(),
+    );
+  });
+
+  it('drops a channel into a position gap and lands on the midpoint', async () => {
+    mockChannels = [
+      { ...baseMockChannels[0], sidebarPosition: 1000 },
+      { ...baseMockChannels[1], sidebarPosition: 3000 },
+      { ...baseMockChannels[2], sidebarPosition: 5000 },
+    ];
+    const dataTransfer = { effectAllowed: '', dropEffect: '', setData: vi.fn(), getData: vi.fn() };
+    renderSidebar();
+
+    // Drag ch-3 between ch-1 (1000) and ch-2 (3000) → midpoint 2000.
+    fireEvent.pointerDown(screen.getByTestId('channel-row-ch-3'));
+    fireEvent.dragStart(screen.getByTestId('channel-row-ch-3'), { dataTransfer });
+    fireEvent.dragOver(screen.getByTestId('channel-row-ch-2'), { dataTransfer });
+    fireEvent.drop(screen.getByTestId('channel-row-ch-2'), { dataTransfer });
+
+    await waitFor(() => {
+      expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/channels/ch-3/category', {
+        method: 'PUT',
+        body: JSON.stringify({ categoryID: '', sidebarPosition: 2000 }),
       });
     });
   });
@@ -631,6 +661,296 @@ describe('Sidebar', () => {
         method: 'PUT',
         body: JSON.stringify({ categoryID: 'cat-eng', sidebarPosition: 500 }),
       });
+    });
+  });
+
+  it('renders without crashing when channel and conversation data are undefined', () => {
+    // Exercises the `?? []` fallbacks for absent channels/conversations.
+    mockChannels = undefined as unknown as typeof mockChannels;
+    mockConversations = undefined as unknown as typeof mockConversations;
+    const { container } = renderSidebar();
+    expect(container.firstChild).toBeTruthy();
+  });
+
+  it('deletes a user category through the confirm dialog', async () => {
+    const deleted: string[] = [];
+    mockApiFetch.mockImplementation(async (url: string, opts?: { method?: string }) => {
+      if (url === '/api/v1/sidebar/categories') return [{ id: 'cat-eng', name: 'Engineering', position: 0 }];
+      if (opts?.method === 'DELETE') {
+        deleted.push(url);
+        return undefined;
+      }
+      return undefined;
+    });
+    const user = userEvent.setup();
+    renderSidebar();
+
+    await screen.findByText('Engineering');
+    await user.click(screen.getByTestId('sidebar-category-menu-cat-eng'));
+    await user.click(await screen.findByTestId('sidebar-category-delete-cat-eng'));
+    // The confirm dialog opens; confirming fires the delete mutation.
+    expect(await screen.findByText('Delete category?')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Delete category' }));
+    await waitFor(() => expect(deleted).toContain('/api/v1/sidebar/categories/cat-eng'));
+  });
+
+  it('closes the delete-category dialog without deleting when dismissed', async () => {
+    mockApiFetch.mockImplementation(async (url: string) => {
+      if (url === '/api/v1/sidebar/categories') return [{ id: 'cat-eng', name: 'Engineering', position: 0 }];
+      return undefined;
+    });
+    const user = userEvent.setup();
+    renderSidebar();
+
+    await screen.findByText('Engineering');
+    await user.click(screen.getByTestId('sidebar-category-menu-cat-eng'));
+    await user.click(await screen.findByTestId('sidebar-category-delete-cat-eng'));
+    expect(await screen.findByText('Delete category?')).toBeInTheDocument();
+    // Escape dismisses the dialog (onOpenChange(false) → clears the target).
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(screen.queryByText('Delete category?')).not.toBeInTheDocument());
+  });
+
+  it('shows a fallback error when creating a category rejects with a non-Error', async () => {
+    mockApiFetch.mockImplementation(async (url: string, opts?: { method?: string }) => {
+      if (opts?.method === 'POST') return Promise.reject('boom-string');
+      if (url === '/api/v1/sidebar/categories') return [];
+      return undefined;
+    });
+    const user = userEvent.setup();
+    renderSidebar();
+
+    await user.click(screen.getByText('+ Add category'));
+    const input = screen.getByTestId('sidebar-new-category-input');
+    await user.type(input, 'Engineering{Enter}');
+    expect(await screen.findByText('Could not create category')).toBeInTheDocument();
+  });
+
+  it('keeps only active/unread items visible when sections are collapsed', () => {
+    // ch-1 (general) is the active channel; conv-1 is unread.
+    mockUnreadConversations.add('conv-1');
+    window.history.pushState({}, '', '/channel/general');
+    renderSidebar();
+
+    // Collapse both default sections so the visible-item filter runs.
+    fireEvent.click(screen.getByTestId('sidebar-group-toggle-__channels__'));
+    fireEvent.click(screen.getByTestId('sidebar-group-toggle-__dms__'));
+
+    // Active channel and unread DM survive; the read ones are filtered out.
+    expect(screen.getByText('general')).toBeInTheDocument();
+    expect(screen.getByText('Bob Jones')).toBeInTheDocument();
+    expect(screen.queryByText('Project Team')).not.toBeInTheDocument();
+  });
+
+  it('marks the Threads link active on the /threads route', () => {
+    window.history.pushState({}, '', '/threads');
+    renderSidebar();
+    const link = screen.getByText('Threads').closest('a')!;
+    expect(link).toHaveAttribute('aria-current', 'page');
+  });
+
+  it('marks the Drafts link active and shows the exact draft count on the /drafts route', async () => {
+    const drafts = Array.from({ length: 3 }, (_, i) => ({
+      id: String(i),
+      userID: 'u-1',
+      parentID: 'ch-1',
+      parentType: 'channel',
+      parentMessageID: '',
+      body: 'd',
+      attachmentIDs: [],
+      updatedAt: '2026-05-03T10:00:00Z',
+      createdAt: '2026-05-03T10:00:00Z',
+    }));
+    mockApiFetch.mockImplementation(async (url: string) => {
+      if (url === '/api/v1/sidebar/categories') return [];
+      if (url === '/api/v1/drafts') return drafts;
+      return undefined;
+    });
+    window.history.pushState({}, '', '/drafts');
+    renderSidebar();
+    const link = screen.getByText('Drafts').closest('a')!;
+    expect(link).toHaveAttribute('aria-current', 'page');
+    expect(await within(link).findByText('3')).toBeInTheDocument();
+  });
+
+  it('toggles a section collapsed via the keyboard (Enter and Space)', () => {
+    renderSidebar();
+    const toggle = screen.getByTestId('sidebar-group-toggle-__channels__');
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    fireEvent.keyDown(toggle, { key: 'Enter' });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.keyDown(toggle, { key: ' ' });
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    // A non-activating key is ignored.
+    fireEvent.keyDown(toggle, { key: 'a' });
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  });
+
+  it('caps the threads badge at "99+" when more than 99 threads are unread', async () => {
+    const manyThreads = Array.from({ length: 120 }, (_, i) => ({
+      parentID: 'ch-1',
+      parentType: 'channel' as const,
+      threadRootID: `t-${i}`,
+      rootAuthorID: 'u-2',
+      rootBody: 'root',
+      rootCreatedAt: '2026-05-03T10:00:00Z',
+      replyCount: 1,
+      latestActivityAt: '2026-05-03T10:00:00Z',
+    }));
+    const notifications = manyThreads.map((t) => t.threadRootID);
+    mockApiFetch.mockImplementation(async (url: string) => {
+      if (url === '/api/v1/sidebar/categories') return [];
+      if (url === '/api/v1/threads') return manyThreads;
+      if (url === '/api/v1/user-state') {
+        return {
+          channelNotifications: [],
+          threadNotifications: notifications,
+          threadSeen: {},
+          hiddenConversations: [],
+        };
+      }
+      return undefined;
+    });
+    renderSidebar();
+    const badge = await screen.findByTestId('threads-unread-badge');
+    expect(badge).toHaveTextContent('99+');
+  });
+
+  it('caps the drafts badge at "99+" when there are more than 99 drafts', async () => {
+    const manyDrafts = Array.from({ length: 120 }, (_, i) => ({
+      id: String(i),
+      userID: 'u-1',
+      parentID: 'ch-1',
+      parentType: 'channel',
+      parentMessageID: '',
+      body: 'draft',
+      attachmentIDs: [],
+      updatedAt: '2026-05-03T10:00:00Z',
+      createdAt: '2026-05-03T10:00:00Z',
+    }));
+    mockApiFetch.mockImplementation(async (url: string) => {
+      if (url === '/api/v1/sidebar/categories') return [];
+      if (url === '/api/v1/drafts') return manyDrafts;
+      return undefined;
+    });
+    renderSidebar();
+    expect(await screen.findByText('99+')).toBeInTheDocument();
+  });
+
+  it('emits drag debug logs when the sidebar DnD debug flag is enabled', async () => {
+    localStorage.setItem('ex.sidebarDndDebug', '1');
+    const debugSpy = vi.spyOn(console, 'debug').mockImplementation(() => {});
+    const dataTransfer = { effectAllowed: '', dropEffect: '', setData: vi.fn(), getData: vi.fn() };
+    renderSidebar();
+
+    fireEvent.pointerDown(screen.getByTestId('channel-row-ch-2'));
+    fireEvent.dragStart(screen.getByTestId('channel-row-ch-2'), { dataTransfer });
+    fireEvent.dragOver(screen.getByTestId('channel-row-ch-1'), { dataTransfer });
+    fireEvent.drop(screen.getByTestId('channel-row-ch-1'), { dataTransfer });
+
+    await waitFor(() => {
+      expect(debugSpy.mock.calls.some((c) => String(c[0]).includes('[sidebar-dnd]'))).toBe(true);
+    });
+    debugSpy.mockRestore();
+  });
+
+  it('emits category-drag debug logs across multiple drop-target changes', async () => {
+    localStorage.setItem('ex.sidebarDndDebug', '1');
+    const debugSpy = vi.spyOn(console, 'debug').mockImplementation(() => {});
+    mockApiFetch.mockImplementation(async (url: string) => {
+      if (url === '/api/v1/sidebar/categories') {
+        return [
+          { id: 'cat-eng', name: 'Engineering', position: 1000 },
+          { id: 'cat-ops', name: 'Operations', position: 2000 },
+        ];
+      }
+      return undefined;
+    });
+    const dataTransfer = { effectAllowed: '', dropEffect: '', setData: vi.fn(), getData: vi.fn() };
+    renderSidebar();
+
+    await screen.findByText('Engineering');
+    await screen.findByText('Operations');
+
+    const engHeader = screen.getByTestId('sidebar-group-header-cat-eng');
+    mockRect(engHeader, { top: 0, bottom: 20 });
+    fireEvent.pointerDown(screen.getByTestId('sidebar-group-header-cat-ops'));
+    fireEvent.dragStart(screen.getByTestId('sidebar-group-header-cat-ops'), { dataTransfer });
+    // Two drag-over passes at different edges produce distinct resolutions,
+    // so the category resolution/monitor debug logs run (not deduped).
+    fireDragOver(engHeader, dataTransfer, 2);
+    fireDragOver(engHeader, dataTransfer, 18);
+    fireDrop(engHeader, dataTransfer, 18);
+
+    await waitFor(() => {
+      expect(
+        debugSpy.mock.calls.some((c) => String(c[0]).includes('category')),
+      ).toBe(true);
+    });
+    debugSpy.mockRestore();
+  });
+
+  it('drops a category at the end when released past the last category header', async () => {
+    mockApiFetch.mockImplementation(async (url: string) => {
+      if (url === '/api/v1/sidebar/categories') {
+        return [
+          { id: 'cat-eng', name: 'Engineering', position: 1000 },
+          { id: 'cat-ops', name: 'Operations', position: 2000 },
+        ];
+      }
+      return undefined;
+    });
+    const dataTransfer = { effectAllowed: '', dropEffect: '', setData: vi.fn(), getData: vi.fn() };
+    renderSidebar();
+
+    await screen.findByText('Engineering');
+    await screen.findByText('Operations');
+    mockApiFetch.mockClear();
+
+    // Drag cat-eng over the BOTTOM edge of the last category (cat-ops). The
+    // bottom edge resolves via nextCategoryTarget(cat-ops); since cat-ops has
+    // no successor the slot collapses to CATEGORY_DROP_END (the `?? END` path).
+    const opsHeader = screen.getByTestId('sidebar-group-header-cat-ops');
+    mockRect(opsHeader, { top: 0, bottom: 20 });
+    fireEvent.pointerDown(screen.getByTestId('sidebar-group-header-cat-eng'));
+    fireEvent.dragStart(screen.getByTestId('sidebar-group-header-cat-eng'), { dataTransfer });
+    fireDragOver(opsHeader, dataTransfer, 18);
+    fireDrop(opsHeader, dataTransfer, 18);
+
+    await waitFor(() => {
+      const calls = mockApiFetch.mock.calls.map((c) => c[0] as string);
+      expect(calls.some((u) => u.startsWith('/api/v1/sidebar/categories/'))).toBe(true);
+    });
+  });
+
+  it('reorders categories when one category header is dropped onto another', async () => {
+    mockApiFetch.mockImplementation(async (url: string) => {
+      if (url === '/api/v1/sidebar/categories') {
+        return [
+          { id: 'cat-eng', name: 'Engineering', position: 1000 },
+          { id: 'cat-ops', name: 'Operations', position: 2000 },
+        ];
+      }
+      return undefined;
+    });
+    const dataTransfer = { effectAllowed: '', dropEffect: '', setData: vi.fn(), getData: vi.fn() };
+    renderSidebar();
+
+    await screen.findByText('Engineering');
+    await screen.findByText('Operations');
+    mockApiFetch.mockClear();
+
+    const target = screen.getByTestId('sidebar-group-header-cat-eng');
+    mockRect(target, { top: 0, bottom: 20 });
+    fireEvent.pointerDown(screen.getByTestId('sidebar-group-header-cat-ops'));
+    fireEvent.dragStart(screen.getByTestId('sidebar-group-header-cat-ops'), { dataTransfer });
+    fireDragOver(target, dataTransfer, 2);
+    fireDrop(target, dataTransfer, 2);
+
+    // Reordering persists the new positions via per-category PUTs.
+    await waitFor(() => {
+      const calls = mockApiFetch.mock.calls.map((c) => c[0] as string);
+      expect(calls.some((u) => u.startsWith('/api/v1/sidebar/categories/'))).toBe(true);
     });
   });
 
@@ -839,6 +1159,209 @@ describe('Sidebar', () => {
     fireEvent.dragLeave(targetRow, { dataTransfer });
 
     expect(within(group).getByTestId('sidebar-drop-indicator')).toBeInTheDocument();
+  });
+
+  it('ignores a conversation dropped onto a category header (categories hold channels only)', async () => {
+    mockApiFetch.mockImplementation(async (url: string) => {
+      if (url === '/api/v1/sidebar/categories') return [{ id: 'cat-eng', name: 'Engineering', position: 0 }];
+      return undefined;
+    });
+    const dataTransfer = { effectAllowed: '', dropEffect: '', setData: vi.fn(), getData: vi.fn() };
+    renderSidebar();
+
+    const header = await screen.findByTestId('sidebar-group-header-cat-eng');
+    mockRect(header, { top: -20, bottom: 0 });
+    fireEvent.pointerDown(screen.getByTestId('conversation-row-conv-1'));
+    fireEvent.dragStart(screen.getByTestId('conversation-row-conv-1'), { dataTransfer });
+    fireDragOver(header, dataTransfer, 19);
+    fireDrop(header, dataTransfer, 19);
+
+    // A conversation can only be favorited via drop, never categorized.
+    await new Promise((r) => setTimeout(r, 0));
+    expect(mockApiFetch).not.toHaveBeenCalledWith(
+      '/api/v1/conversations/conv-1/category',
+      expect.anything(),
+    );
+  });
+
+  it('ignores a favorited conversation dragged over a channel row outside Favorites', async () => {
+    // conv-1 is favorited, so its row is draggable. Dropping it onto a channel
+    // in the regular channels section must be rejected — resolveDropPayload
+    // returns null for conversation drops on non-Favorites channel-targets.
+    mockConversations = [{ ...baseMockConversations[0], favorite: true, sidebarPosition: 1000 }];
+    const dataTransfer = { effectAllowed: '', dropEffect: '', setData: vi.fn(), getData: vi.fn() };
+    renderSidebar();
+
+    await screen.findByText('Favorites');
+    const target = screen.getByTestId('channel-row-ch-1');
+    mockRect(target, { top: 0, bottom: 20 });
+    fireEvent.pointerDown(screen.getByTestId('conversation-row-conv-1'));
+    fireEvent.dragStart(screen.getByTestId('conversation-row-conv-1'), { dataTransfer });
+    fireDragOver(target, dataTransfer, 5);
+    fireDrop(target, dataTransfer, 5);
+
+    await new Promise((r) => setTimeout(r, 0));
+    expect(mockApiFetch).not.toHaveBeenCalledWith(
+      '/api/v1/conversations/conv-1/category',
+      expect.anything(),
+    );
+  });
+
+  it('repositions a favorited conversation dragged onto the Favorites section header', async () => {
+    // A favorited conversation is draggable. Dropping it on the Favorites header
+    // resolves via channelDropFromSectionHeader (the conversation branch) and
+    // commits a conversation-category mutation back into Favorites.
+    mockChannels = [{ ...baseMockChannels[0], favorite: true, sidebarPosition: 1000 }];
+    mockConversations = [{ ...baseMockConversations[0], favorite: true, sidebarPosition: 2000 }];
+    const dataTransfer = { effectAllowed: '', dropEffect: '', setData: vi.fn(), getData: vi.fn() };
+    renderSidebar();
+
+    const header = await screen.findByTestId('sidebar-group-header-__favorites__');
+    mockRect(header, { top: 0, bottom: 20 });
+    fireEvent.pointerDown(screen.getByTestId('conversation-row-conv-1'));
+    fireEvent.dragStart(screen.getByTestId('conversation-row-conv-1'), { dataTransfer });
+    fireDragOver(header, dataTransfer, 5);
+    fireDrop(header, dataTransfer, 5);
+
+    await waitFor(() => {
+      const call = mockApiFetch.mock.calls.find(
+        (c: unknown[]) => c[0] === '/api/v1/conversations/conv-1/category',
+      );
+      expect(call).toBeDefined();
+      expect((call![1] as { method: string }).method).toBe('PUT');
+    });
+  });
+
+  it('steps below a position-1 first favorite when dropping before it', async () => {
+    mockChannels = [
+      { ...baseMockChannels[0], favorite: true, sidebarPosition: 1 },
+      { ...baseMockChannels[1], favorite: true, sidebarPosition: 2000 },
+      { ...baseMockChannels[2], favorite: true, sidebarPosition: 4000 },
+    ];
+    mockConversations = [];
+    const dataTransfer = { effectAllowed: '', dropEffect: '', setData: vi.fn(), getData: vi.fn() };
+    renderSidebar();
+
+    // Drop ch-3 before the first favorite (position 1) in Favorites →
+    // 1 - STEP(1000) = -999 via the sidebar-item position helper.
+    const first = screen.getByTestId('channel-row-ch-1');
+    mockRect(first, { top: 0, bottom: 20 });
+    fireEvent.pointerDown(screen.getByTestId('channel-row-ch-3'));
+    fireEvent.dragStart(screen.getByTestId('channel-row-ch-3'), { dataTransfer });
+    fireDragOver(first, dataTransfer, 2);
+    fireDrop(first, dataTransfer, 2);
+
+    await waitFor(() => {
+      expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/channels/ch-3/category', {
+        method: 'PUT',
+        body: JSON.stringify({ categoryID: '', sidebarPosition: -999 }),
+      });
+    });
+  });
+
+  it('steps below a position-1 first channel when dropping before it', async () => {
+    mockChannels = [
+      { ...baseMockChannels[0], sidebarPosition: 1 },
+      { ...baseMockChannels[1], sidebarPosition: 2000 },
+      { ...baseMockChannels[2], sidebarPosition: 4000 },
+    ];
+    mockConversations = [];
+    const dataTransfer = { effectAllowed: '', dropEffect: '', setData: vi.fn(), getData: vi.fn() };
+    renderSidebar();
+
+    // Drop ch-3 before ch-1 (position 1) → after(1) is not > 1, so the
+    // step-below branch applies: 1 - STEP(1000) = -999.
+    const first = screen.getByTestId('channel-row-ch-1');
+    mockRect(first, { top: 0, bottom: 20 });
+    fireEvent.pointerDown(screen.getByTestId('channel-row-ch-3'));
+    fireEvent.dragStart(screen.getByTestId('channel-row-ch-3'), { dataTransfer });
+    fireDragOver(first, dataTransfer, 2);
+    fireDrop(first, dataTransfer, 2);
+
+    await waitFor(() => {
+      expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/channels/ch-3/category', {
+        method: 'PUT',
+        body: JSON.stringify({ categoryID: '', sidebarPosition: -999 }),
+      });
+    });
+  });
+
+  it('appends a favorite dropped past the last item one step beyond it', async () => {
+    mockChannels = [
+      { ...baseMockChannels[0], favorite: true, sidebarPosition: 1000 },
+      { ...baseMockChannels[1], favorite: true, sidebarPosition: 3000 },
+    ];
+    mockConversations = [];
+    const dataTransfer = { effectAllowed: '', dropEffect: '', setData: vi.fn(), getData: vi.fn() };
+    renderSidebar();
+
+    // Drag ch-1 onto the bottom half of the last favorite (ch-2) → inserts
+    // after it → before(3000) + STEP(1000) = 4000.
+    const last = screen.getByTestId('channel-row-ch-2');
+    mockRect(last, { top: 0, bottom: 20 });
+    fireEvent.pointerDown(screen.getByTestId('channel-row-ch-1'));
+    fireEvent.dragStart(screen.getByTestId('channel-row-ch-1'), { dataTransfer });
+    fireDragOver(last, dataTransfer, 18);
+    fireDrop(last, dataTransfer, 18);
+
+    await waitFor(() => {
+      expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/channels/ch-1/category', {
+        method: 'PUT',
+        body: JSON.stringify({ categoryID: '', sidebarPosition: 4000 }),
+      });
+    });
+  });
+
+  it('computes a midpoint that straddles a favorited conversation neighbor', async () => {
+    mockChannels = [
+      { ...baseMockChannels[0], favorite: true, sidebarPosition: 1000 },
+      { ...baseMockChannels[1], favorite: true, sidebarPosition: 5000 },
+    ];
+    mockConversations = [
+      { ...baseMockConversations[0], favorite: true, sidebarPosition: 3000 },
+    ];
+    const dataTransfer = { effectAllowed: '', dropEffect: '', setData: vi.fn(), getData: vi.fn() };
+    renderSidebar();
+
+    // Drag ch-2 and drop onto the favorited conversation conv-1 → the
+    // position helper reads the conversation neighbor's position (3000) as
+    // the `after`, yielding the midpoint between ch-1 (1000) and conv-1.
+    fireEvent.pointerDown(screen.getByTestId('channel-row-ch-2'));
+    fireEvent.dragStart(screen.getByTestId('channel-row-ch-2'), { dataTransfer });
+    fireEvent.dragOver(screen.getByTestId('conversation-row-conv-1'), { dataTransfer });
+    fireEvent.drop(screen.getByTestId('conversation-row-conv-1'), { dataTransfer });
+
+    await waitFor(() => {
+      expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/channels/ch-2/category', {
+        method: 'PUT',
+        body: JSON.stringify({ categoryID: '', sidebarPosition: 2000 }),
+      });
+    });
+  });
+
+  it('places a favorite dropped between two others at the midpoint position', async () => {
+    mockChannels = [
+      { ...baseMockChannels[0], favorite: true, sidebarPosition: 1000 },
+      { ...baseMockChannels[1], favorite: true, sidebarPosition: 3000 },
+    ];
+    mockConversations = [
+      { ...baseMockConversations[0], favorite: true, sidebarPosition: 5000 },
+    ];
+    const dataTransfer = { effectAllowed: '', dropEffect: '', setData: vi.fn(), getData: vi.fn() };
+    renderSidebar();
+
+    // Drag conv-1 between ch-1 (1000) and ch-2 (3000) → midpoint 2000.
+    fireEvent.pointerDown(screen.getByTestId('conversation-row-conv-1'));
+    fireEvent.dragStart(screen.getByTestId('conversation-row-conv-1'), { dataTransfer });
+    fireEvent.dragOver(screen.getByTestId('channel-row-ch-2'), { dataTransfer });
+    fireEvent.drop(screen.getByTestId('channel-row-ch-2'), { dataTransfer });
+
+    await waitFor(() => {
+      expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/conversations/conv-1/category', {
+        method: 'PUT',
+        body: JSON.stringify({ categoryID: '', sidebarPosition: 2000 }),
+      });
+    });
   });
 
   it('reorders favorited conversations together with channels inside Favorites', async () => {

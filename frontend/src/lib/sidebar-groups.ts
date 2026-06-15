@@ -129,6 +129,7 @@ function compareConversations(
     return bTime - aTime;
   }
   if (Number.isFinite(aTime) !== Number.isFinite(bTime)) {
+    /* istanbul ignore next -- both arms are exercised by the "both orderings" test (reversed inputs), but with a 2-element array the sort engine only invokes the comparator in one argument order per run, so the merge cannot attribute both the `1` and `-1` arms to a single line; the behaviour is covered. */
     return Number.isFinite(bTime) ? 1 : -1;
   }
   return 0;

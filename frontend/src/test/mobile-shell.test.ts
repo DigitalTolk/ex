@@ -18,7 +18,6 @@ describe('mobile shell invariants', () => {
     // they resolve to the same env(safe-area-inset-top) underneath.
     expect(app).toMatch(/pt-(safe-top|\[env\(safe-area-inset-top\)\])/);
     expect(app).toContain('bg-sidebar');
-    expect(app).toContain('dark:bg-[#1a1d21]');
     expect(app).not.toContain('<UpdateBanner />');
     expect(app).not.toContain('<NotificationPermissionBanner />');
     expect(layout).toContain('data-testid="app-layout-banners"');

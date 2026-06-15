@@ -251,6 +251,64 @@ func TestCORSNonPreflight(t *testing.T) {
 	}
 }
 
+func TestCORSAllowedOriginEchoed(t *testing.T) {
+	handler := CORS("https://a.example.com", "https://b.example.com")(okHandler())
+
+	req := httptest.NewRequest(http.MethodGet, "/test", nil)
+	req.Header.Set("Origin", "https://b.example.com")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	// A request Origin that matches the allowlist is echoed back verbatim,
+	// not collapsed to the primary origin.
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "https://b.example.com" {
+		t.Errorf("Access-Control-Allow-Origin = %q, want %q", got, "https://b.example.com")
+	}
+}
+
+func TestLoggingHealthzSuppressed(t *testing.T) {
+	// A 2xx /healthz response is suppressed from the access log; the
+	// middleware must still pass the request through to the handler.
+	called := false
+	handler := Logging(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if !called {
+		t.Error("inner handler not called")
+	}
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+}
+
+func TestLoggingHealthzNon2xxLogged(t *testing.T) {
+	// A non-2xx /healthz still flows through (and is logged) — exercises the
+	// branch where the suppression condition is false because of the status.
+	handler := Logging(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusServiceUnavailable)
+	}
+}
+
 func TestRequestID(t *testing.T) {
 	handler := RequestID(okHandler())
 

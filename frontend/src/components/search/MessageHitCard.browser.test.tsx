@@ -7,10 +7,11 @@ import type { SearchHit } from '@/hooks/useSearch';
 
 // Browser coverage for MessageHitCard (was 0% / 37 uncovered branches).
 
+let userAvatarURL: string | undefined;
 vi.mock('@/hooks/useUsersBatch', () => ({
   useUsersBatch: (ids: string[]) => ({
     map: new Map(
-      ids.map((id) => [id, { id, displayName: 'Alice ' + id.slice(-2), avatarURL: undefined }]),
+      ids.map((id) => [id, { id, displayName: 'Alice ' + id.slice(-2), avatarURL: userAvatarURL }]),
     ),
   }),
 }));
@@ -137,5 +138,38 @@ describe('MessageHitCard browser', () => {
       </Wrap>,
     );
     expect(document.body.textContent).toContain('Unknown');
+  });
+
+  it('coerces missing source fields to safe empty values without crashing', async () => {
+    userAvatarURL = undefined;
+    parentResult = null;
+    const bareHit = { id: 'bare', _index: 'messages', _score: 1, _source: {} } as unknown as SearchHit;
+    await render(<Wrap><MessageHitCard hit={bareHit} /></Wrap>);
+    // The `?? ''` coercions for authorId/parentId/body and the absent
+    // createdAt/reactions render the card without throwing.
+    expect(document.querySelector('[data-testid="message-hit-card"]')).not.toBeNull();
+  });
+
+  it('clicking the author name with an empty authorId does not invoke onAuthorClick', async () => {
+    parentResult = { label: '~general', href: '/channel/general' };
+    const onAuthorClick = vi.fn();
+    const screen = await render(
+      <Wrap>
+        <MessageHitCard hit={hit({ authorId: '' })} onAuthorClick={onAuthorClick} />
+      </Wrap>,
+    );
+    // authorId is empty → the `if (authorId)` guard is false, so the
+    // callback is not fired even though the name button is clicked.
+    const author = screen.getByText('Unknown');
+    await author.click();
+    expect(onAuthorClick).not.toHaveBeenCalled();
+  });
+
+  it('takes the avatar-image branch when the author has an avatar URL', async () => {
+    userAvatarURL = 'https://avatars.test/u-1.png';
+    parentResult = { label: '~general', href: '/channel/general#msg-1' };
+    await render(<Wrap><MessageHitCard hit={hit()} /></Wrap>);
+    expect(document.querySelector('[data-testid="message-hit-card"]')).not.toBeNull();
+    userAvatarURL = undefined;
   });
 });

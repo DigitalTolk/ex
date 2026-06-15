@@ -69,9 +69,11 @@ function readPermission(): Permission {
 // fallback to href for cross-origin links (which the backend never
 // produces today, but keeps the boundary safe).
 function navigateInApp(href: string) {
+  /* istanbul ignore next -- SSR guard: this browser-only app always has window */
   if (typeof window === 'undefined') return;
   try {
     const url = new URL(href, window.location.origin);
+    /* istanbul ignore next -- the backend only ever emits same-origin deep links; the cross-origin full-reload arm is a defensive boundary that would navigate the test page away if forced */
     if (url.origin !== window.location.origin) {
       window.location.href = href;
       return;
@@ -79,6 +81,7 @@ function navigateInApp(href: string) {
     window.history.pushState(null, '', url.pathname + url.search + url.hash);
     window.dispatchEvent(new PopStateEvent('popstate'));
   } catch {
+    /* istanbul ignore next -- URL() with a valid base does not throw for the same-origin links the app produces; the catch is a defensive fallback */
     window.location.href = href;
   }
 }

@@ -10,25 +10,15 @@ export default defineConfig({
     include: [
       '@giphy/js-fetch-api',
       '@giphy/react-components',
-      '@lexical/code',
-      '@lexical/link',
-      '@lexical/list',
-      '@lexical/markdown',
-      '@lexical/react/LexicalComposer',
-      '@lexical/react/LexicalComposerContext',
-      '@lexical/react/LexicalContentEditable',
-      '@lexical/react/LexicalErrorBoundary',
-      '@lexical/react/LexicalHistoryPlugin',
-      '@lexical/react/LexicalLinkPlugin',
-      '@lexical/react/LexicalListPlugin',
-      '@lexical/react/LexicalMarkdownShortcutPlugin',
-      '@lexical/react/LexicalRichTextPlugin',
-      '@lexical/react/LexicalTabIndentationPlugin',
-      '@lexical/react/LexicalTypeaheadMenuPlugin',
-      '@lexical/rich-text',
-      '@lexical/selection',
-      '@lexical/utils',
-      'lexical',
+      '@codemirror/state',
+      '@codemirror/view',
+      '@codemirror/commands',
+      '@codemirror/language',
+      '@codemirror/lang-markdown',
+      '@codemirror/autocomplete',
+      '@lezer/markdown',
+      '@lezer/highlight',
+      '@lezer/common',
       'react-dom/client',
       'react-virtuoso',
       'zod',
@@ -37,6 +27,13 @@ export default defineConfig({
   test: {
     include: ['src/**/*.browser.test.{ts,tsx}'],
     setupFiles: ['./src/test/react-act-setup.ts', './src/test/browser-setup.ts'],
+    // Heavy full-route integration specs (e.g. channel-files-pinned) and the
+    // CodeMirror composer specs mount the entire ChatPage / real editor across 3
+    // Playwright projects; under full-suite CPU saturation their async
+    // send/draft/WS/zoom chains can exceed the 5s default and flake. Raise the
+    // ceiling so the suite is deterministic under load. This only affects how
+    // long a slow test may run — it does not touch coverage.
+    testTimeout: 45000,
     coverage: {
       provider: 'istanbul',
       // json-summary writes coverage-browser/coverage-summary.json
@@ -52,7 +49,18 @@ export default defineConfig({
         'src/test/**',
         'src/**/*.test.{ts,tsx}',
         'src/**/*.browser.test.{ts,tsx}',
+        // Pure URL-scheme guard — exhaustively unit-tested in the jsdom suite
+        // (url-safety.test.ts); graded there, not here.
+        'src/lib/url-safety.ts',
       ],
+      // 99% branch gate over the merged desktop + mobile browser run.
+      // vitest enforces it (non-zero exit), so `npm run
+      // test:browser:coverage` fails on its own in both `make check`
+      // and the CI "Run browser tests" step. The Makefile's explicit
+      // summary-json check is a redundant backstop at the same bar.
+      thresholds: {
+        branches: 99,
+      },
     },
     browser: {
       enabled: true,

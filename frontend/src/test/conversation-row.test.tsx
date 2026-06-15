@@ -237,4 +237,34 @@ describe('ConversationRow', () => {
     renderRow(groupConv);
     expect(screen.getByText('Alice, Bob, Charlie')).toBeInTheDocument();
   });
+
+  // --- unread indicator --------------------------------------------------
+
+  it('shows no unread indicator when nothing is unread', () => {
+    renderRow(sampleConv);
+    expect(screen.queryByTestId('conversation-unread-dot-c-1')).toBeNull();
+    expect(screen.queryByTestId('conversation-unread-badge-c-1')).toBeNull();
+  });
+
+  it('falls back to a dot when unread but no live count is known', () => {
+    renderRow(sampleConv, { hasUnread: true, unreadCount: 0 });
+    expect(screen.getByTestId('conversation-unread-dot-c-1')).toBeInTheDocument();
+    expect(screen.queryByTestId('conversation-unread-badge-c-1')).toBeNull();
+  });
+
+  it('shows a numeric count badge when a live count is known (capped at 99+)', () => {
+    renderRow(sampleConv, { hasUnread: true, unreadCount: 4 });
+    expect(screen.getByTestId('conversation-unread-badge-c-1')).toHaveTextContent('4');
+
+    renderRow({ ...sampleConv, conversationID: 'c-2' }, { hasUnread: true, unreadCount: 200 });
+    expect(screen.getByTestId('conversation-unread-badge-c-2')).toHaveTextContent('99+');
+  });
+
+  it('marks the active row with an accent bar', () => {
+    window.history.pushState({}, '', '/conversation/c-1');
+    renderRow(sampleConv);
+    const link = screen.getByText('Bob').closest('a')!;
+    expect(link.className).toContain('before:bg-sidebar-foreground');
+    window.history.pushState({}, '', '/');
+  });
 });

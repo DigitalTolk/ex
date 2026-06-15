@@ -34,6 +34,7 @@ function sidebarDndDebugEnabled(): boolean {
 
 function sidebarDndDebug(event: string, details?: Record<string, unknown>) {
   if (!sidebarDndDebugEnabled()) return;
+  /* istanbul ignore next -- every call site passes a details object, so the ?? {} fallback arm is dead defensive code */
   console.debug(`[sidebar-dnd] ${event}`, details ?? {});
 }
 

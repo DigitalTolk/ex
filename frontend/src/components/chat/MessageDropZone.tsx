@@ -47,6 +47,7 @@ export function MessageDropZone({ onFiles, disabled, className, children }: Mess
         if (disabled || !hasFiles(e)) return;
         // Without preventDefault the browser opens the file in the tab.
         e.preventDefault();
+        /* istanbul ignore next -- hasFiles() already dereferenced e.dataTransfer.types, so reaching here guarantees dataTransfer is non-null; the false arm is dead defensive. */
         if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
       }}
       onDragLeave={() => {

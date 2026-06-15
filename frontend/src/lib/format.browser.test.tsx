@@ -59,6 +59,33 @@ describe('format — extractURLs', () => {
   it('breaks out of an unterminated fence cleanly', () => {
     expect(extractURLs('```\nhttps://hidden.io')).toEqual([]);
   });
+
+  it('returns an empty array for an empty body (the !body guard)', () => {
+    expect(extractURLs('')).toEqual([]);
+  });
+
+  it('breaks out of an unterminated inline code span cleanly', () => {
+    // Opening backtick with no closing one → the inline-code `if (end === -1)
+    // break` arm runs; nothing after the backtick is scanned.
+    expect(extractURLs('see `https://hidden.io')).toEqual([]);
+  });
+});
+
+describe('format — date helpers accept string / number inputs', () => {
+  it('formatRelative, formatDayHeading and dayKey parse ISO string inputs', () => {
+    // All three use `input instanceof Date ? input : new Date(input)`; passing
+    // an ISO string drives the `new Date(input)` side of each.
+    const now = new Date(2026, 5, 15, 12, 0, 0);
+    expect(formatRelative('2026-06-15T11:30:00', now)).toMatch(/30 minutes ago/);
+    expect(formatDayHeading('2026-06-15T08:00:00', now)).toBe('Today');
+    expect(dayKey('2026-03-07T09:00:00')).toBe('2026-03-07');
+  });
+
+  it('formatLongDate and formatLongDateTime accept a numeric timestamp', () => {
+    const ts = new Date(2026, 7, 3, 18, 33, 1).getTime();
+    expect(formatLongDate(ts)).toMatch(/August 3rd, 2026/);
+    expect(formatLongDateTime(ts)).toBe('Aug 3rd at 18:33:01');
+  });
 });
 
 describe('format — byte helpers', () => {

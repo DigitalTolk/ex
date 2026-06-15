@@ -82,6 +82,15 @@ func TestUnfurlService_RejectsNonHTTPScheme(t *testing.T) {
 	}
 }
 
+func TestUnfurlService_RejectsUnparseableURL(t *testing.T) {
+	svc := NewUnfurlService(newFakeUnfurlCache())
+	// A control character makes net/url.Parse itself fail, exercising the
+	// parse-error branch ahead of the SSRF validation.
+	if _, err := svc.Unfurl(context.Background(), "http://exa\x7fmple.com/\x00"); err == nil {
+		t.Error("expected url parse error")
+	}
+}
+
 func TestUnfurlService_RejectsEmptyURL(t *testing.T) {
 	svc := NewUnfurlService(newFakeUnfurlCache())
 	if _, err := svc.Unfurl(context.Background(), ""); err == nil {

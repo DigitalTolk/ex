@@ -225,6 +225,97 @@ func TestUserStateHandler_Errors(t *testing.T) {
 	}
 }
 
+func TestUserStateHandler_MarkThreadSeen_Success(t *testing.T) {
+	stateStore := newMockUserStateStoreForHandler()
+	members := newDataMembershipStore()
+	convs := newDataConversationStore()
+	messages := newDataMessageStore()
+	broker := &mockBrokerForHandler{}
+	msgSvc := service.NewMessageService(messages, members, convs, nil, broker)
+	convSvc := service.NewConversationService(convs, newDataUserStoreForConv(), nil, broker, nil)
+	// Caller is a member of the channel → CheckAccess passes.
+	_ = members.AddMember(context.Background(),
+		&model.ChannelMembership{ChannelID: "ch-1", UserID: "u-1", Role: model.ChannelRoleMember},
+		&model.UserChannel{ChannelID: "ch-1", UserID: "u-1"})
+	handler := NewUserStateHandler(service.NewUserStateService(stateStore, nil), msgSvc, convSvc)
+
+	req := userStateAuthedRequest(http.MethodPut, "/api/v1/user-state/threads/channels/ch-1/root-1/seen", nil, "u-1")
+	req.SetPathValue("parentType", "channels")
+	req.SetPathValue("parentID", "ch-1")
+	req.SetPathValue("threadRootID", "root-1")
+	rec := httptest.NewRecorder()
+	handler.MarkThreadSeen(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestUserStateHandler_ClearChannelNotification_Unauthenticated(t *testing.T) {
+	stateSvc := service.NewUserStateService(newMockUserStateStoreForHandler(), nil)
+	msgSvc := service.NewMessageService(newDataMessageStore(), newDataMembershipStore(), newDataConversationStore(), nil, &mockBrokerForHandler{})
+	convSvc := service.NewConversationService(newDataConversationStore(), newDataUserStoreForConv(), nil, &mockBrokerForHandler{}, nil)
+	handler := NewUserStateHandler(stateSvc, msgSvc, convSvc)
+
+	// No auth context → 401 before touching the store.
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/user-state/channels/ch/notification", nil)
+	req.SetPathValue("id", "ch")
+	rec := httptest.NewRecorder()
+	handler.ClearChannelNotification(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", rec.Code)
+	}
+}
+
+func TestUserStateHandler_SetConversationHidden_Branches(t *testing.T) {
+	stateStore := newMockUserStateStoreForHandler()
+	convs := newDataConversationStore()
+	users := newDataUserStoreForConv()
+	members := newDataMembershipStore()
+	messages := newDataMessageStore()
+	broker := &mockBrokerForHandler{}
+	msgSvc := service.NewMessageService(messages, members, convs, nil, broker)
+	convSvc := service.NewConversationService(convs, users, nil, broker, nil)
+	convs.conversations["conv-1"] = &model.Conversation{ID: "conv-1", ParticipantIDs: []string{"u-1"}}
+	handler := NewUserStateHandler(service.NewUserStateService(stateStore, nil), msgSvc, convSvc)
+
+	// Unauthenticated → 401.
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/user-state/conversations/conv-1/hidden", nil)
+	req.SetPathValue("id", "conv-1")
+	handler.HideConversation(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("unauth status = %d", rec.Code)
+	}
+
+	// Missing conversation ID → 400.
+	rec = httptest.NewRecorder()
+	handler.HideConversation(rec, userStateAuthedRequest(http.MethodPut, "/api/v1/user-state/conversations//hidden", nil, "u-1"))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("missing id status = %d", rec.Code)
+	}
+
+	// Unhide (the hidden=false branch) succeeds → 204.
+	rec = httptest.NewRecorder()
+	req = userStateAuthedRequest(http.MethodDelete, "/api/v1/user-state/conversations/conv-1/hidden", nil, "u-1")
+	req.SetPathValue("id", "conv-1")
+	handler.UnhideConversation(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("unhide status = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	// Unhide store error → 500.
+	errStore := newMockUserStateStoreForHandler()
+	errStore.deleteErr = errors.New("unhide boom")
+	handler = NewUserStateHandler(service.NewUserStateService(errStore, nil), msgSvc, convSvc)
+	rec = httptest.NewRecorder()
+	req = userStateAuthedRequest(http.MethodDelete, "/api/v1/user-state/conversations/conv-1/hidden", nil, "u-1")
+	req.SetPathValue("id", "conv-1")
+	handler.UnhideConversation(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("unhide error status = %d", rec.Code)
+	}
+}
+
 func userStateAuthedRequest(method, target string, body io.Reader, userID string) *http.Request {
 	if body == nil {
 		body = bytes.NewReader(nil)

@@ -68,6 +68,19 @@ describe('lightbox-gestures.onPointerDown', () => {
     );
     expect(out.state.kind).toBe('idle');
   });
+
+  it('non-mobile pointerdown resets a previously non-idle gesture to idle', () => {
+    const stale: GestureState = { kind: 'swipe', pointerId: 9, startX: 0, startY: 0, lastX: 0, lastY: 0 };
+    const out = onPointerDown(
+      stale,
+      { pointerId: 1, x: 100, y: 100, pointerType: 'mouse', time: 1000 },
+      [{ pointerId: 1, x: 100, y: 100 }],
+      { ...baseCtx, isMobile: false, isImage: true },
+    );
+    // prev was not idle, so a fresh idle state is returned (not the stale one).
+    expect(out.state).toEqual({ kind: 'idle' });
+    expect(out.state).not.toBe(stale);
+  });
 });
 
 describe('lightbox-gestures.tryInvalidateTap', () => {
@@ -163,6 +176,12 @@ describe('lightbox-gestures.classifySwipe', () => {
   it('big downward drop → close', () => {
     const out = classifySwipe(swipe, { pointerId: 1, x: 210, y: 350 }, false, true);
     expect(out.kind).toBe('close');
+  });
+
+  it('returns none when the release pointer is not the swipe pointer', () => {
+    // pointerId mismatch trips the guard before any geometry is computed.
+    const out = classifySwipe(swipe, { pointerId: 2, x: 210, y: 350 }, false, true);
+    expect(out).toEqual({ kind: 'none', dx: 0, dy: 0 });
   });
 
   it('left swipe past threshold → next', () => {

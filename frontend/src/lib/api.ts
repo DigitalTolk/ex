@@ -123,6 +123,7 @@ export async function apiFetch<T>(
   }
 
   if (!res.ok) {
+    /* istanbul ignore next -- a 401 on the first response is fully handled by the refresh branch above (L106), which either retries or throws; control never reaches here with status 401, so this guard is defensive. */
     if (res.status === 401) {
       clearAccessToken();
     }

@@ -230,6 +230,7 @@ func TestPresenceService_NilPublisher(t *testing.T) {
 	svc := NewPresenceService(nil, nil)
 	svc.OnConnect(context.Background(), "u1")
 	svc.OnDisconnect(context.Background(), "u1")
+	svc.Refresh(context.Background(), "u1") // nil store → early return, no panic
 }
 
 // slowPresenceStore blocks IsPresenceOnline / OnlinePresenceUserIDs

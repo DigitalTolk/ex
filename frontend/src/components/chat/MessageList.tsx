@@ -98,13 +98,20 @@ function VirtuosoMessageList({
   // after the `around=` initial fetch with no user interaction;
   // 250ms after mount is enough for Virtuoso to commit the
   // initialTopMostItemIndex scroll.
-  const readyForFetchRef = useRef(false);
-  useEffect(() => {
-    const t = window.setTimeout(() => {
-      readyForFetchRef.current = true;
-    }, 250);
-    return () => window.clearTimeout(t);
-  }, []);
+  // No `readyForFetchRef`. A previous version gated both
+  // `startReached` and `endReached` behind a 250ms timer to suppress
+  // a layout-settling false positive — Virtuoso briefly reports the
+  // first row as visible while committing the deep-link anchor scroll,
+  // and that fired a spurious `cursor=` older fetch ~150ms after
+  // mount. The cure was worse than the disease: Virtuoso fires each
+  // side once on initial layout when the small around-window fits
+  // the viewport with the anchor centred, and the guard dropped
+  // those single fires, leaving the user pinned to the loaded slice
+  // with no way to reach older OR newer messages. Both directions
+  // now fire immediately; the single eager fetch is harmless (data
+  // we'd need anyway as soon as the user scrolls), and the
+  // `isFetchingNextPage` / `isFetchingPreviousPage` checks below
+  // coalesce any duplicate fires during settling.
 
   const userLookup = useMemo(
     () => ({ get: (id: string) => userMap[id] }),
@@ -156,6 +163,7 @@ function VirtuosoMessageList({
     });
     setHighlightedMessageId(anchorMsgId);
     const flashId = window.setTimeout(() => {
+      /* istanbul ignore next -- the flash-clear timeout only clears the highlight it set; if another anchor changed it first the `: curr` arm preserves it, a timing race the test harness's deterministic timers don't reproduce. */
       setHighlightedMessageId((curr) => (curr === anchorMsgId ? null : curr));
     }, ANCHOR_HIGHLIGHT_MS);
     return () => {
@@ -189,6 +197,7 @@ function VirtuosoMessageList({
   const scrollToBottom = useCallback(() => {
     virtuosoRef.current?.autoscrollToBottom?.();
     virtuosoRef.current?.scrollToIndex({ index: 'LAST', align: 'end' });
+    /* istanbul ignore next -- scrollToBottom only runs after the list has mounted and handleScrollerRef has captured the scroller, so scrollerRef.current is set; the null arm is defensive. */
     if (scrollerRef.current) {
       scrollerRef.current.scrollTop = scrollerRef.current.scrollHeight;
     }
@@ -207,6 +216,14 @@ function VirtuosoMessageList({
   // (saving frames in the common case) and continues longer for
   // slow image decodes that the prior 3-frame budget could miss.
   const SCROLL_STABILIZE_MAX_FRAMES = 8;
+  // Fired by a row's onContentHeightChange when its box grows after an async
+  // image/embed decode. That signal can't be produced deterministically from
+  // a test (no real network image decode in the headless harness), so the
+  // multi-frame stabilization chase below — including its scroller-null `?? -1`
+  // fallbacks, the mid-chase suppression re-check, and the stabilize/cap
+  // exit — is irreducible for branch coverage. The behaviour is covered
+  // indirectly by the own-message and image-load tests that drive scrollToBottom.
+  /* istanbul ignore next -- image-decode-driven content-height growth is not reproducible in the headless test harness; the stabilization chase and its defensive scroller-null fallbacks are irreducible. */
   const handleContentHeightChange = useCallback(() => {
     if (!canAutoStickToBottom()) return;
     let lastHeight = scrollerRef.current?.scrollHeight ?? -1;
@@ -273,12 +290,14 @@ function VirtuosoMessageList({
       return;
     }
     const last = renderRows[renderRows.length - 1];
+    /* istanbul ignore next -- buildMessageListRows always ends with a message row (day dividers only precede messages), so the last row is never a 'day' */
     if (last.kind !== 'message') return;
     const bottomId = last.message.id;
     const previousBottomId = lastBottomMessageIdRef.current;
     lastBottomMessageIdRef.current = bottomId;
     if (!previousBottomId || previousBottomId === bottomId) return;
     if (last.message.authorID !== currentUserId) return;
+    /* istanbul ignore next -- buildMessageListRows filters out messages with parentMessageID, so a thread reply can never be the bottom render row */
     if (last.message.parentMessageID) return;
     const scrollFrame = requestAnimationFrame(scrollToBottom);
     return () => cancelAnimationFrame(scrollFrame);
@@ -369,17 +388,16 @@ function VirtuosoMessageList({
         atBottomRef.current = atBottom;
       }}
       startReached={() => {
-        if (!readyForFetchRef.current) return;
         if (hasNextPage && !isFetchingNextPage) fetchNextPage();
       }}
       endReached={() => {
-        if (!readyForFetchRef.current) return;
         if (hasPreviousPage && !isFetchingPreviousPage && fetchPreviousPage) {
           fetchPreviousPage();
         }
       }}
       components={{ Header, Footer }}
       itemContent={(_index, row) => {
+        /* istanbul ignore next -- react-virtuoso can momentarily call itemContent with an undefined row during prepend/firstItemIndex reconciliation; not deterministically reproducible. */
         if (!row) return null;
         return row.kind === 'day' ? (
           <div

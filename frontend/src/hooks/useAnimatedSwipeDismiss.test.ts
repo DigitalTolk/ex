@@ -98,6 +98,27 @@ describe('useAnimatedSwipeDismiss', () => {
     expect(onDismiss).not.toHaveBeenCalled();
   });
 
+  it('does not call preventDefault for non-cancelable rightward swipe events', () => {
+    const { result } = renderHook(() => useAnimatedSwipeDismiss('right', vi.fn()));
+    const event = { target: document.body, cancelable: false, preventDefault: vi.fn() } as unknown as Event;
+
+    act(() => swipeConfig().onSwiping({ absX: 60, absY: 8, deltaX: 60, deltaY: 8, initial: [12, 120], event }));
+    // The drag offset still tracks, but preventDefault is skipped because the
+    // event is not cancelable.
+    expect(event.preventDefault).not.toHaveBeenCalled();
+    expect(result.current.dragStyle).toEqual({ transform: 'translateX(60px)', transition: 'none' });
+  });
+
+  it('settles a rightward swipe release back to rest on desktop layouts', () => {
+    setMobileMatch(false);
+    const onDismiss = vi.fn();
+    const { result } = renderHook(() => useAnimatedSwipeDismiss('right', onDismiss));
+
+    act(() => swipeConfig().onSwipedRight({ absY: 8, deltaX: 100, initial: [12, 120] }));
+    expect(result.current.dragOffset).toBe(0);
+    expect(onDismiss).not.toHaveBeenCalled();
+  });
+
   it('ignores wrong-direction and diagonal right drags', () => {
     const onDismiss = vi.fn();
     const { result } = renderHook(() => useAnimatedSwipeDismiss('right', onDismiss));

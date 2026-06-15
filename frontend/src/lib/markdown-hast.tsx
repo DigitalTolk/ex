@@ -10,6 +10,7 @@ import { toJsxRuntime, type Components as JsxComponents } from 'hast-util-to-jsx
 import type { Nodes as HastNodes } from 'hast';
 import { GiphyEmbed } from '@/components/GiphyEmbed';
 import { applySkinToneSuffix, shortcodeToUnicode } from './emoji-shortcodes';
+import { isSafeUrl } from './url-safety';
 import type { HastNode } from '@/types';
 import type { RenderOpts } from './markdown';
 
@@ -109,7 +110,12 @@ const HAST_COMPONENTS_MAP: Record<string, AnyComponent> = {
   ),
   p: (props: { children?: ReactNode; 'data-blank'?: string }) => {
     if (props['data-blank'] === 'true') {
-      return <p className="leading-snug">{' '}</p>;
+      // Re-emit the data-blank attribute so the `.prose-message
+      // p[data-blank="true"]` rule in index.css gives the spacer its
+      // min-height. Without it the <p> collapses to ~0px and stacked
+      // blank lines (one <p> per source blank line) all vanish — the
+      // client-side render path keeps the attribute, so this matches it.
+      return <p data-blank="true" className="leading-snug">{' '}</p>;
     }
     return <p className="whitespace-pre-wrap break-words">{props.children}</p>;
   },
@@ -119,7 +125,8 @@ const HAST_COMPONENTS_MAP: Record<string, AnyComponent> = {
   strong: ({ children }) => <strong>{children}</strong>,
   em: ({ children }) => <em>{children}</em>,
   s: ({ children }) => <s>{children}</s>,
-  a: ({ children, href }: { children?: ReactNode; href?: string }) => (
+  a: ({ children, href }: { children?: ReactNode; href?: string }) =>
+    isSafeUrl(href) ? (
     <a
       href={href}
       target="_blank"
@@ -128,6 +135,9 @@ const HAST_COMPONENTS_MAP: Record<string, AnyComponent> = {
     >
       {children}
     </a>
+    ) : (
+      // Unsafe scheme (javascript:, data: …) — render the text only, no anchor.
+      <span>{children}</span>
   ),
   pre: (props: { children?: ReactNode; 'data-language'?: string }) => (
     <pre

@@ -214,4 +214,72 @@ describe('useThreads — seen-state and sorting helpers', () => {
     );
     expect(url).toBe('/conversation/cv-1?thread=t-3#msg-t-3');
   });
+
+  it('markThreadSeen defaults the timestamp to now when none is supplied', () => {
+    markThreadSeen('t-default');
+    // A timestamp was recorded (the default `new Date().toISOString()` path).
+    expect(typeof getSeenMap()['t-default']).toBe('string');
+    expect(getSeenMap()['t-default'].length).toBeGreaterThan(0);
+  });
+
+  it('markThreadSeen targets the conversations server path for a conversation thread', () => {
+    apiFetchMock.mockResolvedValue(undefined);
+    markThreadSeen('t-7', '2026-04-04T12:00:00Z', { parentID: 'cv-9', parentType: 'conversation' });
+    expect(apiFetchMock.mock.calls[0][0]).toContain('/user-state/threads/conversations/cv-9/t-7/seen');
+  });
+
+  it('markThreadSeen swallows a rejected server PUT (.catch arm)', async () => {
+    // The fire-and-forget PUT rejects → `.catch(() => undefined)` (line 100)
+    // must absorb it without an unhandled rejection.
+    apiFetchMock.mockRejectedValue(new Error('offline'));
+    markThreadSeen('t-rej', '2026-04-04T12:00:00Z', { parentID: 'ch-1', parentType: 'channel' });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(getSeenMap()['t-rej']).toBe('2026-04-04T12:00:00Z');
+  });
+
+  it('unreadThreadIDs skips threads with no recorded seen entry', () => {
+    const threads = [
+      threadSummary({ threadRootID: 't-seen', latestActivityAt: '2026-01-10T00:00:00Z' }),
+      threadSummary({ threadRootID: 't-noseen', latestActivityAt: '2026-01-10T00:00:00Z' }),
+    ];
+    const ids = unreadThreadIDs(
+      threads,
+      [], // no server notifications
+      new Set(),
+      { 't-seen': '2026-01-01T00:00:00Z' /* unread */ }, // t-noseen has no entry → skipped
+    );
+    expect(ids.has('t-seen')).toBe(true);
+    expect(ids.has('t-noseen')).toBe(false);
+  });
+
+  it('sortThreadsByUnreadThenActivity orders two unread threads by activity and tolerates bad dates', () => {
+    const threads = [
+      threadSummary({ threadRootID: 'a', latestActivityAt: '2026-01-02T00:00:00Z' }),
+      threadSummary({ threadRootID: 'b', latestActivityAt: 'not-a-real-date' }),
+      threadSummary({ threadRootID: 'c', latestActivityAt: '2026-01-09T00:00:00Z' }),
+    ];
+    // All three unread → aUnread === bUnread, so they sort purely by activity;
+    // the invalid date coerces to 0 and sinks to the bottom.
+    const sorted = sortThreadsByUnreadThenActivity(threads, new Set(['a', 'b', 'c']));
+    expect(sorted[0].threadRootID).toBe('c');
+    expect(sorted[2].threadRootID).toBe('b');
+  });
+
+  it('hasUnreadActivity falls back to the persisted seen-map when no map is passed', () => {
+    // Default `seen = loadSeen()` parameter (line 109). Persist a seen
+    // entry, then call without the seen arg so the default fires.
+    markThreadSeen('t-default-seen', '2026-01-11T00:00:00Z');
+    const t = threadSummary({ threadRootID: 't-default-seen', latestActivityAt: '2026-01-10T00:00:00Z' });
+    expect(hasUnreadActivity(t)).toBe(false);
+  });
+
+  it('unreadThreadIDs returns an empty set when called with no arguments (default params)', () => {
+    // Exercises the default params on lines 116-119.
+    expect(unreadThreadIDs().size).toBe(0);
+  });
+
+  it('sortThreadsByUnreadThenActivity returns [] when called with no arguments (default params)', () => {
+    // Exercises the default params on lines 146-147.
+    expect(sortThreadsByUnreadThenActivity()).toEqual([]);
+  });
 });

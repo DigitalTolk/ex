@@ -164,4 +164,11 @@ describe('extractURLs', () => {
   it('returns an empty array when there are no URLs', () => {
     expect(extractURLs('plain text only')).toEqual([]);
   });
+
+  it('returns an empty array for a falsy body (optimistic/partial message)', () => {
+    // The optimistic-send path can briefly hand a partial message whose body
+    // is undefined; the guard must not throw on `body.length`.
+    expect(extractURLs(undefined as unknown as string)).toEqual([]);
+    expect(extractURLs('')).toEqual([]);
+  });
 });

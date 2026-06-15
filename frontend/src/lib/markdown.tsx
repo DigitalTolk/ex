@@ -1,6 +1,11 @@
 import { Fragment, type ReactNode } from 'react';
 import { GiphyEmbed } from '@/components/GiphyEmbed';
-import { applySkinToneSuffix, shortcodeToUnicode } from './emoji-shortcodes';
+import {
+  applySkinToneSuffix,
+  shortcodeToUnicode,
+  EMOJI_SHORTCODE_RE,
+  EMOJI_SHORTCODE_TONED_RE,
+} from './emoji-shortcodes';
 import { USER_MENTION_RE, GROUP_MENTION_RE, CHANNEL_MENTION_RE } from './mention-syntax';
 import type { HastNode } from '@/types';
 import { renderHastTree } from './markdown-hast';
@@ -130,6 +135,7 @@ function renderCodeString(src: string, language: string | undefined, keyPrefix: 
   let cursor = 0;
   for (const match of src.matchAll(CODE_TOKEN_RE)) {
     const token = match[0];
+    /* istanbul ignore next -- String.matchAll always populates match.index; the ?? 0 fallback is defensive. */
     const index = match.index ?? 0;
     if (index > cursor) out.push(src.slice(cursor, index));
     const className = codeTokenClass(token, normalizedLanguage);
@@ -209,6 +215,7 @@ function findInline(src: string, opts: RenderOpts | undefined, keyPrefix: string
   });
 
   tryMatch(GROUP_MENTION_RE, (m) => {
+    /* istanbul ignore next -- GROUP_MENTION_RE's group 1 is `(^|[^\w@])` which always captures (empty string at start of input), so m[1] is never undefined; the ?? '' arm is defensive. */
     const lead = m[1] ?? '';
     return (
       <span key={`${keyPrefix}-mg-${m.index}`}>
@@ -227,6 +234,7 @@ function findInline(src: string, opts: RenderOpts | undefined, keyPrefix: string
   // hashtag: #tag — only when an onTagClick handler is wired.
   if (opts?.onTagClick) {
     tryMatch(HASHTAG_RE, (m) => {
+      /* istanbul ignore next -- HASHTAG_RE's group 1 is `(^|[^\w/])` which always captures (empty string at start of input), so m[1] is never undefined; the ?? '' arm is defensive. */
       const lead = m[1] ?? '';
       const tag = m[2];
       return (
@@ -313,7 +321,7 @@ function findInline(src: string, opts: RenderOpts | undefined, keyPrefix: string
   // (`# title :tada:` keeps the emoji proportional to the H1 text).
   // align-middle (not align-text-bottom) centers the glyph on the text's
   // x-height so it sits visually balanced inside paragraphs and lists.
-  tryMatch(/:([a-z0-9_+-]+)::(skin-tone-[1-5]):/i, (m) => {
+  tryMatch(EMOJI_SHORTCODE_TONED_RE, (m) => {
     const name = m[1];
     const unicode = shortcodeToUnicode(`:${name}:`);
     if (unicode !== `:${name}:`) {
@@ -330,7 +338,7 @@ function findInline(src: string, opts: RenderOpts | undefined, keyPrefix: string
     return <span key={`${keyPrefix}-eu-${m.index}`}>{m[0]}</span>;
   });
 
-  tryMatch(/:([a-z0-9_+-]+):/i, (m) => {
+  tryMatch(EMOJI_SHORTCODE_RE, (m) => {
     const name = m[1];
     const url = opts?.emojiMap?.[name];
     if (url) {
@@ -381,6 +389,7 @@ function renderInlineString(src: string, opts: RenderOpts | undefined, keyPrefix
   let safety = 0;
   while (cursor < src.length) {
     safety++;
+    /* istanbul ignore next -- defensive runaway-loop guard: each iteration advances the cursor by at least one matched character, so reaching 10000 iterations would require a >10000-character single string with no progress, which the matcher never produces. */
     if (safety > 10000) break;
     const rest = src.slice(cursor);
     const match = findInline(rest, opts, `${keyPrefix}-${cursor}`);
@@ -537,8 +546,12 @@ export function renderMarkdown(body: string, opts?: RenderOpts): ReactNode {
     // composer leaves a visible gap, not a paragraph collapse.
     // Each consecutive blank line stacks an additional gap.
     if (line.trim() === '') {
+      // `data-blank` mirrors the server-side hast renderer's marker so
+      // the `.prose-message` CSS rule in index.css can give the empty
+      // paragraph an explicit min-height; otherwise Tailwind's preflight
+      // zeroes the <p>'s margin and the gap collapses.
       blocks.push(
-        <p key={`bk-${blockKey++}`} className="leading-snug">
+        <p key={`bk-${blockKey++}`} data-blank="true" className="leading-snug">
           {' '}
         </p>,
       );

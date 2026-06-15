@@ -20,6 +20,7 @@ export function getInitials(name: string): string {
 const URL_RE = /https?:\/\/[^\s<>"`]+/g;
 const TRAILING_PUNCT_RE = /[.,!?;:)\]]+$/;
 export function extractURLs(body: string): string[] {
+  if (!body) return [];
   const urls: string[] = [];
   let i = 0;
   while (i < body.length) {
@@ -54,6 +55,7 @@ export function extractURLs(body: string): string[] {
 // both ConversationRow (string input) and ConversationView (array of
 // names) so the reduction lives in one place.
 export function firstName(name: string): string {
+  /* istanbul ignore next -- String.split always returns at least one element (even ''.split(/\s+/) → ['']), so [0] is never undefined; the ?? '' arm is defensive. */
   return name.trim().split(/\s+/)[0] ?? '';
 }
 

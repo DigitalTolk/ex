@@ -42,6 +42,8 @@ function partsInTimeZone(date: Date, timeZone: string) {
     minute: '2-digit',
     hourCycle: 'h23',
   }).formatToParts(date);
+  /* v8 ignore next -- the requested part always exists for a valid date/timezone; the ?? 0 fallback is defensive */
+  /* istanbul ignore next -- the requested part always exists for a valid date/timezone; the ?? 0 fallback is defensive */
   const value = (type: string) => Number(parts.find((p) => p.type === type)?.value ?? 0);
   return {
     year: value('year'),
@@ -67,6 +69,7 @@ function inputValueForISO(iso: string, timeZone: string): string {
 
 function zonedInputToISO(value: string, timeZone: string): string | undefined {
   const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(value);
+  /* istanbul ignore next -- callers only pass values formatted by inputValueForDate or a datetime-local input, which always match; the guard is defensive */
   if (!match) return undefined;
   const desired = {
     year: Number(match[1]),
@@ -93,6 +96,8 @@ function clearAtFor(mode: ClearAfter, customUntil: string, timeZone: string): st
   if (mode === 'today') {
     const today = partsInTimeZone(now, timeZone);
     const finalMinute = zonedInputToISO(`${today.year}-${pad(today.month)}-${pad(today.day)}T23:59`, timeZone);
+    /* v8 ignore next -- the constructed string always matches zonedInputToISO's regex, so finalMinute is always defined; the : undefined arm is defensive */
+    /* istanbul ignore next -- the constructed string always matches zonedInputToISO's regex, so finalMinute is always defined; the : undefined arm is defensive */
     return finalMinute ? new Date(new Date(finalMinute).getTime() + 59_999).toISOString() : undefined;
   }
   return zonedInputToISO(customUntil, timeZone);
@@ -106,6 +111,8 @@ function clearAfterSecondsFor(mode: ClearAfter, customUntil: string, timeZone: s
 }
 
 function localTimeZone(): string {
+  /* v8 ignore next -- resolvedOptions().timeZone is always set in a real runtime; the || '' fallback is defensive */
+  /* istanbul ignore next -- resolvedOptions().timeZone is always set in a real runtime; the || '' fallback is defensive */
   return Intl.DateTimeFormat().resolvedOptions().timeZone || '';
 }
 

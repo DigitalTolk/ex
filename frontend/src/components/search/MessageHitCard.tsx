@@ -27,6 +27,7 @@ export function MessageHitCard({ hit, onAuthorClick }: MessageHitCardProps) {
 
   const { map: authorMap } = useUsersBatch(authorId ? [authorId] : []);
   const author = authorMap.get(authorId);
+  /* istanbul ignore next -- useEmojiMap always resolves to an object (its queryFn coerces to {}), so the destructure default {} is defensive and the data-undefined arm is unreachable. */
   const { data: emojiMap = {} } = useEmojiMap();
   const parent = useMessageParent(parentId, hit.id, threadRoot);
 
@@ -39,7 +40,8 @@ export function MessageHitCard({ hit, onAuthorClick }: MessageHitCardProps) {
     >
       <Avatar className="h-9 w-9 shrink-0">
         {author?.avatarURL && <AvatarImage src={author.avatarURL} alt="" />}
-        <AvatarFallback className="text-xs">{getInitials(name || '??')}</AvatarFallback>
+        {/* `name` defaults to "Unknown" above, so it is never empty here. */}
+        <AvatarFallback className="text-xs">{getInitials(name)}</AvatarFallback>
       </Avatar>
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 text-sm">

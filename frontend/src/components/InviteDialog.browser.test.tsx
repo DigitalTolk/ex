@@ -86,6 +86,16 @@ describe('InviteDialog browser behavior', () => {
     await expect.element(screen.getByText('boom')).toBeVisible();
   });
 
+  it('falls back to a generic message when the invite request rejects with a non-Error', async () => {
+    apiFetchMock.mockRejectedValueOnce('weird');
+    const screen = await render(<InviteDialog open={true} onOpenChange={vi.fn()} />);
+    await screen.getByLabelText('Email address').fill('me@example.test');
+    await screen.getByRole('button', { name: 'Send invitation' }).click();
+    // Non-Error, non-409 → the `err instanceof Error ? ... : 'Failed to create invite'`
+    // false arm supplies the message.
+    await expect.element(screen.getByText('Failed to create invite')).toBeVisible();
+  });
+
   it('resets internal state when onOpenChange flips to false', async () => {
     apiFetchMock.mockResolvedValue({ token: 't-1' });
     const onOpenChange = vi.fn();

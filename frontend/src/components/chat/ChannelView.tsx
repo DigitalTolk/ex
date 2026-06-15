@@ -187,12 +187,18 @@ export function ChannelView() {
   );
   const handleEditMessage = useCallback(
     (value: { body: string; attachmentIDs: string[] }) => {
+      /* istanbul ignore next -- handleEditMessage is only wired as the composer's onSend while activeEditingMessage (hence editingMessage) is set, so it is never invoked with a null editingMessage. */
       if (!editingMessage) return;
       const currentAttachmentIDs = editingMessage.attachmentIDs ?? [];
       const same =
         value.body === editingMessage.body &&
         value.attachmentIDs.length === currentAttachmentIDs.length &&
         value.attachmentIDs.every((id, idx) => id === currentAttachmentIDs[idx]);
+      // The `!value.body.trim() && …length === 0` blank-edit arm is
+      // unreachable from the real composer here — its Save button is disabled
+      // while the body is empty and there are no attachments — so onSend never
+      // fires with a blank payload. The `same` arm is exercised by tests.
+      /* istanbul ignore next -- composer disables Save on an empty edit, so the blank-body arm cannot fire via onSend; defensive. */
       if (same || (!value.body.trim() && value.attachmentIDs.length === 0)) {
         setEditingMessage(null);
         return;
@@ -300,11 +306,13 @@ export function ChannelView() {
   const muted = !!userChannels?.find((uc) => uc.channelID === channel?.id)?.muted;
   const muteChannel = useMuteChannel();
   function handleToggleMute() {
+    /* istanbul ignore next -- only wired to the header menu, which renders only when `channel` is loaded, so the `channel == null` optional-chain arm is unreachable; defensive. */
     if (!channel?.id) return;
     muteChannel.mutate({ channelId: channel.id, muted: !muted });
   }
 
   async function handleArchive() {
+    /* istanbul ignore next -- only wired to the header menu, which renders only when `channel` is loaded, so the `channel == null` optional-chain arm is unreachable; defensive. */
     if (!channel?.id) return;
     await apiFetch(`/api/v1/channels/${channel.id}`, { method: 'DELETE' });
     queryClient.invalidateQueries({ queryKey: queryKeys.userChannels() });
@@ -312,6 +320,7 @@ export function ChannelView() {
   }
 
   async function handleLeave() {
+    /* istanbul ignore next -- only wired to the header menu, which renders only when `channel` is loaded, so the `channel == null` optional-chain arm is unreachable; defensive. */
     if (!channel?.id) return;
     await apiFetch(`/api/v1/channels/${channel.id}/leave`, { method: 'POST' });
     queryClient.invalidateQueries({ queryKey: queryKeys.userChannels() });
@@ -319,6 +328,7 @@ export function ChannelView() {
   }
 
   async function handleDescriptionSave(desc: string) {
+    /* istanbul ignore next -- only wired to the header menu, which renders only when `channel` is loaded, so the `channel == null` optional-chain arm is unreachable; defensive. */
     if (!channel?.id) return;
     await apiFetch(`/api/v1/channels/${channel.id}`, {
       method: 'PATCH',
@@ -345,6 +355,12 @@ export function ChannelView() {
   if (channelError || (!channelLoading && !channel)) {
     return <ResourceErrorPage resource="channel" status={500} />;
   }
+
+  // Past the guards above, `channel` is loaded (any error/absent state has
+  // already returned). The `: undefined` arm is therefore unreachable here;
+  // it stays only as a type-narrowing default for the optional FilesPanel prop.
+  /* istanbul ignore next -- channel is guaranteed loaded past the error guards above, so the `: undefined` arm is unreachable; defensive. */
+  const filesPostedIn = channel ? `~${channel.name}` : undefined;
 
   return (
     <div className="flex min-h-0 flex-1 overflow-hidden">
@@ -446,7 +462,7 @@ export function ChannelView() {
           channelId={channel?.id}
           onClose={panels.close}
           userMap={userMap}
-          postedIn={channel ? `~${channel.name}` : undefined}
+          postedIn={filesPostedIn}
         />
       ) : showMembers && members ? (
         <MemberList

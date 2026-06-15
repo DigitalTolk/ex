@@ -67,6 +67,13 @@ jobs:
           go test -tags=integration -coverprofile=coverage.out -covermode=atomic ./internal/...
           go tool cover -func=coverage.out | tail -1
 
+      - name: Enforce backend coverage gate (>= 99% statements)
+        # Uses go-test-coverage so the gate honors the `// coverage-ignore`
+        # annotations on irreducible defensive code (see COVERAGE.md). The raw
+        # `go tool cover` total does NOT honor them, so it must not gate here —
+        # this mirrors the Makefile's `check` target exactly.
+        run: go run github.com/vladopajic/go-test-coverage/v2@v2.18.8 --config=.testcoverage.yml
+
       - name: Upload backend coverage to Coveralls
         uses: coverallsapp/github-action@v2
         with:

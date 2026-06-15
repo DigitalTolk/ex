@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -17,9 +18,13 @@ import (
 	"github.com/DigitalTolk/ex/internal/store"
 )
 
+var errStub = errors.New("stub failure")
+
 // dataEmojiStore implements service.EmojiStore for handler tests.
 type dataEmojiStore struct {
-	items map[string]*model.CustomEmoji
+	items   map[string]*model.CustomEmoji
+	listErr error
+	listNil bool
 }
 
 func newDataEmojiStore() *dataEmojiStore {
@@ -40,6 +45,12 @@ func (s *dataEmojiStore) GetByName(_ context.Context, name string) (*model.Custo
 	return e, nil
 }
 func (s *dataEmojiStore) List(_ context.Context) ([]*model.CustomEmoji, error) {
+	if s.listErr != nil {
+		return nil, s.listErr
+	}
+	if s.listNil {
+		return nil, nil
+	}
 	out := make([]*model.CustomEmoji, 0, len(s.items))
 	for _, e := range s.items {
 		out = append(out, e)
@@ -190,6 +201,59 @@ func TestEmojiHandler_List(t *testing.T) {
 	}
 	if len(got) != 1 || got[0].Name != "fire" {
 		t.Errorf("got %+v", got)
+	}
+}
+
+func TestEmojiHandler_List_ServiceError(t *testing.T) {
+	h, store, users, jwtMgr := setupEmojiHandler(t)
+	u := &model.User{ID: "u1", Email: "u@x", SystemRole: model.SystemRoleMember}
+	users.users[u.ID] = u
+	store.listErr = errStub
+
+	handler := middleware.Auth(jwtMgr)(http.HandlerFunc(h.List))
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/emojis", nil)
+	req.Header.Set("Authorization", "Bearer "+tokenFor(t, jwtMgr, u))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d, want 500; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestEmojiHandler_List_NilCoercedToEmpty(t *testing.T) {
+	h, store, users, jwtMgr := setupEmojiHandler(t)
+	u := &model.User{ID: "u1", Email: "u@x", SystemRole: model.SystemRoleMember}
+	users.users[u.ID] = u
+	store.listNil = true
+
+	handler := middleware.Auth(jwtMgr)(http.HandlerFunc(h.List))
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/emojis", nil)
+	req.Header.Set("Authorization", "Bearer "+tokenFor(t, jwtMgr, u))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if strings.TrimSpace(rec.Body.String()) != "[]" {
+		t.Fatalf("nil emoji list should serialize as [], got %q", rec.Body.String())
+	}
+}
+
+func TestEmojiHandler_Delete_MissingName(t *testing.T) {
+	h, _, users, _ := setupEmojiHandler(t)
+	u := &model.User{ID: "u1", SystemRole: model.SystemRoleMember}
+	users.users[u.ID] = u
+
+	// Reach the handler with an authenticated context but no {name} path value.
+	ctx := middleware.ContextWithClaims(context.Background(), &model.TokenClaims{UserID: u.ID})
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/emojis/", nil).WithContext(ctx)
+	rec := httptest.NewRecorder()
+	h.Delete(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d, want 400; body=%s", rec.Code, rec.Body.String())
 	}
 }
 

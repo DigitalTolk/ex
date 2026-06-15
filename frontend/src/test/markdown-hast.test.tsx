@@ -217,18 +217,24 @@ describe('renderMarkdown via hast tree', () => {
     expect(container.textContent).toContain('GIPHY unavailable');
   });
 
-  it('renders the data-blank paragraph as the legacy whitespace-only spacer', () => {
+  it('renders the data-blank paragraph as a whitespace spacer that re-emits data-blank', () => {
     const tree = root(
       el('p', {}, text('first')),
+      el('p', { 'data-blank': 'true' }, text(' ')),
       el('p', { 'data-blank': 'true' }, text(' ')),
       el('p', {}, text('second')),
     );
     const { container } = render(<>{renderMarkdown('', { tree })}</>);
     const ps = container.querySelectorAll('p');
-    expect(ps).toHaveLength(3);
+    expect(ps).toHaveLength(4);
     expect(ps[0].textContent).toBe('first');
+    // Both spacers must keep data-blank="true" so the `.prose-message
+    // p[data-blank="true"]` min-height rule applies — without it the
+    // <p> collapses to ~0px and stacked blank lines vanish.
+    expect(ps[1].getAttribute('data-blank')).toBe('true');
     expect(ps[1].className).toContain('leading-snug');
-    expect(ps[2].textContent).toBe('second');
+    expect(ps[2].getAttribute('data-blank')).toBe('true');
+    expect(ps[3].textContent).toBe('second');
   });
 
   it('falls back to the legacy parser when no tree is provided', () => {

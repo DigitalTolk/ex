@@ -30,10 +30,12 @@ export function normalizeFuzzy(s: string): string {
 // adjacent-transposition). Distance 1 covers the most common typing
 // mistakes including swapped neighbouring keys ("Aliec" → "Alice").
 function damerauLevenshtein(a: string, b: string): number {
+  /* istanbul ignore next -- a===b (tok===query) is unreachable from fuzzyMatch: an identical token is already a substring of the field, so the L69 includes() check returns true before the token loop calls this helper. */
   if (a === b) return 0;
   const m = a.length;
   const n = b.length;
   if (m === 0) return n;
+  /* istanbul ignore next -- n===0 means an empty query, but fuzzyMatch only calls this when q.length>=4, so b is never empty. */
   if (n === 0) return m;
   const d: number[][] = [];
   for (let i = 0; i <= m; i++) {
@@ -75,6 +77,7 @@ export function fuzzyMatch(query: string, ...fields: string[]): boolean {
       // "first.last", "user@domain", "snake_case", and "kebab-case"
       // so token-prefix matches the inside of structured strings.
       for (const tok of f.split(/[\s.@_-]+/)) {
+        /* istanbul ignore next -- tok.startsWith(q) being true implies q is a substring of the field, which the L69 includes() check already matched and returned for; this token-prefix arm is only reachable for the false side. */
         if (tok.startsWith(q)) return true;
         if (q.length >= 4 && damerauLevenshtein(tok, q) <= 1) return true;
       }

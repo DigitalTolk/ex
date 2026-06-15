@@ -73,6 +73,7 @@ export function SearchBar() {
   useEffect(() => {
     if (!open) return;
     function onDoc(e: MouseEvent) {
+      /* istanbul ignore next -- containerRef is always attached while the dropdown is open; defensive null guard */
       if (!containerRef.current) return;
       if (!containerRef.current.contains(e.target as Node)) setOpen(false);
     }
@@ -86,7 +87,9 @@ export function SearchBar() {
   function submit(idx = safeHighlight) {
     const trimmed = q.trim();
     if (!trimmed) return;
+    /* istanbul ignore next -- safeHighlight is clamped in-range, so suggestions[idx] is always defined; the ?? fallback and the !sel guard below are defensive (a non-empty query always yields >= 1 suggestion) */
     const sel = suggestions[idx] ?? suggestions[0];
+    /* istanbul ignore next -- defensive: a non-empty query always yields at least the "all" suggestion, so sel is never falsy here */
     if (!sel) return;
     setOpen(false);
     inputRef.current?.blur();
@@ -113,8 +116,14 @@ export function SearchBar() {
 
   return (
     <div ref={containerRef} className="relative w-full" data-testid="searchbar">
-      <div className="flex h-7 items-center gap-2 rounded-md bg-sidebar-accent px-2 text-foreground transition-colors focus-within:bg-sidebar-border hover:bg-sidebar-border max-md:h-9 dark:bg-white/10 dark:text-zinc-100 dark:focus-within:bg-white/20 dark:hover:bg-white/15">
-        <Search className="h-3.5 w-3.5 text-foreground/70 dark:text-zinc-300" aria-hidden="true" />
+      {/* Rectangular global search per the design — rounded-md
+          corners (6px), subtle 1px border, search glyph on the left,
+          "Search for anything" placeholder. The shell stays on the
+          base bg in light and on a slight white wash in dark so it
+          reads as a chrome-bar input rather than a body-of-page
+          input. */}
+      <div className="flex h-7 items-center gap-2 rounded-md border border-border bg-background px-3 text-foreground transition-colors focus-within:border-ring hover:border-border-strong max-md:h-9 dark:border-white/10 dark:bg-white/5 dark:text-zinc-100 dark:focus-within:bg-white/10 dark:hover:border-white/20">
+        <Search className="h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />
         <input
           ref={inputRef}
           value={q}
@@ -140,9 +149,9 @@ export function SearchBar() {
               setHighlight((p) => (p - 1 + suggestions.length) % suggestions.length);
             }
           }}
-          placeholder="Search"
+          placeholder="Search for anything"
           aria-label="Search"
-          className="flex-1 bg-transparent text-sm text-foreground placeholder:text-foreground/60 focus:outline-none max-md:text-base dark:text-zinc-100 dark:placeholder:text-zinc-400"
+          className="flex-1 bg-transparent text-[13px] text-foreground placeholder:text-muted-foreground focus:outline-none max-md:text-base dark:text-zinc-100 dark:placeholder:text-zinc-400"
           data-testid="searchbar-input"
         />
         {q && (
@@ -150,7 +159,7 @@ export function SearchBar() {
             type="button"
             onClick={clear}
             aria-label="Clear search"
-            className="inline-flex h-7 w-7 items-center justify-center rounded text-foreground/70 hover:text-foreground dark:text-zinc-300 dark:hover:text-zinc-100"
+            className="inline-flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:text-foreground dark:text-zinc-300 dark:hover:text-zinc-100"
           >
             <X className="h-3.5 w-3.5" />
           </button>

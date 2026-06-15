@@ -28,6 +28,46 @@ describe('UnreadContext', () => {
     expect(result.current.unreadConversations.has('conv1')).toBe(false);
   });
 
+  it('accumulates a live channel unread count and resets it on clear', () => {
+    const { result } = renderHook(() => useUnread(), { wrapper });
+    act(() => result.current.markChannelUnread('ch1'));
+    act(() => result.current.markChannelUnread('ch1'));
+    act(() => result.current.markChannelUnread('ch1'));
+    expect(result.current.channelUnreadCounts.get('ch1')).toBe(3);
+    act(() => result.current.clearChannelUnread('ch1'));
+    expect(result.current.channelUnreadCounts.has('ch1')).toBe(false);
+  });
+
+  it('resets the channel unread count when the channel becomes active', () => {
+    const { result } = renderHook(() => useUnread(), { wrapper });
+    act(() => result.current.markChannelUnread('ch1'));
+    act(() => result.current.markChannelUnread('ch1'));
+    expect(result.current.channelUnreadCounts.get('ch1')).toBe(2);
+    act(() => result.current.setActiveChannel('ch1'));
+    expect(result.current.channelUnreadCounts.has('ch1')).toBe(false);
+  });
+
+  it('does not count messages for the active channel', () => {
+    const { result } = renderHook(() => useUnread(), { wrapper });
+    act(() => result.current.setActiveChannel('ch1'));
+    act(() => result.current.markChannelUnread('ch1'));
+    expect(result.current.channelUnreadCounts.has('ch1')).toBe(false);
+    expect(result.current.unreadChannels.has('ch1')).toBe(false);
+  });
+
+  it('accumulates a live conversation unread count and resets it on clear and activate', () => {
+    const { result } = renderHook(() => useUnread(), { wrapper });
+    act(() => result.current.markConversationUnread('conv1'));
+    act(() => result.current.markConversationUnread('conv1'));
+    expect(result.current.conversationUnreadCounts.get('conv1')).toBe(2);
+    act(() => result.current.clearConversationUnread('conv1'));
+    expect(result.current.conversationUnreadCounts.has('conv1')).toBe(false);
+    act(() => result.current.markConversationUnread('conv1'));
+    expect(result.current.conversationUnreadCounts.get('conv1')).toBe(1);
+    act(() => result.current.setActiveConversation('conv1'));
+    expect(result.current.conversationUnreadCounts.has('conv1')).toBe(false);
+  });
+
   it('hides and unhides conversations', () => {
     const { result } = renderHook(() => useUnread(), { wrapper });
 

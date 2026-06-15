@@ -117,6 +117,90 @@ describe('useDrafts', () => {
     expect(result.current.data).toEqual([visible]);
   });
 
+  it('matches a thread-scoped draft and tolerates drafts missing parentMessageID', async () => {
+    const drafts: MessageDraft[] = [
+      {
+        id: 'd-undef',
+        userID: 'u-1',
+        parentID: 'ch-1',
+        parentType: 'channel',
+        // parentMessageID intentionally undefined → exercises the `?? ''` fallback.
+        body: 'no thread field',
+        attachmentIDs: [],
+        updatedAt: '2026-05-03T10:00:00Z',
+        createdAt: '2026-05-03T10:00:00Z',
+      } as MessageDraft,
+      {
+        id: 'd-thread',
+        userID: 'u-1',
+        parentID: 'ch-1',
+        parentType: 'channel',
+        parentMessageID: 'root-9',
+        body: 'thread draft',
+        attachmentIDs: [],
+        updatedAt: '2026-05-03T10:01:00Z',
+        createdAt: '2026-05-03T10:01:00Z',
+      },
+    ];
+    vi.mocked(apiFetch).mockResolvedValue(drafts);
+
+    const { result } = renderHook(
+      () => useDraftForScope({ parentID: 'ch-1', parentType: 'channel', parentMessageID: 'root-9' }),
+      { wrapper: createWrapper() },
+    );
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data?.id).toBe('d-thread');
+  });
+
+  it('restores a suppressed scope when only attachments are present', async () => {
+    const stale: MessageDraft = {
+      id: 'draft-att',
+      userID: 'u-1',
+      parentID: 'dm-2',
+      parentType: 'conversation',
+      parentMessageID: '',
+      body: '',
+      attachmentIDs: ['a-1'],
+      updatedAt: '2026-05-03T10:00:00Z',
+      createdAt: '2026-05-03T10:00:00Z',
+    };
+    const scope = { parentID: 'dm-2', parentType: 'conversation' as const };
+    vi.mocked(apiFetch).mockResolvedValue([stale]);
+
+    suppressSentDraft(scope);
+    // Empty body but a pending attachment → the content-aware restore fires.
+    restoreDraftScopeForContent(scope, { body: '', attachmentIDs: ['a-1'] });
+    const restored = renderHook(() => useDrafts(), { wrapper: createWrapper() });
+    await waitFor(() => expect(restored.result.current.isSuccess).toBe(true));
+    expect(restored.result.current.data).toEqual([stale]);
+  });
+
+  it('keeps a sent scope suppressed when an empty clear omits the attachmentIDs field', async () => {
+    const stale: MessageDraft = {
+      id: 'draft-noatt',
+      userID: 'u-1',
+      parentID: 'dm-3',
+      parentType: 'conversation',
+      parentMessageID: '',
+      body: 'already sent',
+      attachmentIDs: [],
+      updatedAt: '2026-05-03T10:00:00Z',
+      createdAt: '2026-05-03T10:00:00Z',
+    };
+    const scope = { parentID: 'dm-3', parentType: 'conversation' as const };
+    vi.mocked(apiFetch).mockResolvedValue([stale]);
+
+    suppressSentDraft(scope);
+    // No attachmentIDs key → `attachmentIDs?.length ?? 0` exercises the nullish
+    // fallback; empty body means the scope stays suppressed.
+    restoreDraftScopeForContent(scope, { body: '' });
+    const hidden = renderHook(() => useDrafts(), { wrapper: createWrapper() });
+
+    await waitFor(() => expect(hidden.result.current.isSuccess).toBe(true));
+    expect(hidden.result.current.data).toEqual([]);
+    restoreDraftScope(scope);
+  });
+
   it('keeps sent draft scopes suppressed for empty clears and restores them when the user edits again', async () => {
     const stale: MessageDraft = {
       id: 'draft-stale',
@@ -357,6 +441,39 @@ describe('useDrafts', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('dedups against a cached draft that omits parentMessageID and attachmentIDs', async () => {
+    // The cached draft has both parentMessageID and attachmentIDs undefined,
+    // exercising the `?? ''` scope fallback (sameDraftScope) and the `?? []`
+    // fallback (sortedAttachmentIDs) when comparing the incoming save.
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    queryClient.setQueryData<MessageDraft[]>(['drafts'], [
+      {
+        id: 'draft-bare',
+        userID: 'u-1',
+        parentID: 'dm-9',
+        parentType: 'conversation',
+        // parentMessageID + attachmentIDs intentionally omitted.
+        body: 'same',
+        updatedAt: '2026-05-03T10:00:00Z',
+        createdAt: '2026-05-03T10:00:00Z',
+      } as MessageDraft,
+    ]);
+    const wrapper = ({ children }: { children: ReactNode }) =>
+      createElement(QueryClientProvider, { client: queryClient }, children);
+    const { result } = renderHook(() => useSaveDraft(), { wrapper });
+
+    // Identical body + no attachments → matches the cached draft, so no PUT fires.
+    await result.current.mutateAsync({
+      parentID: 'dm-9',
+      parentType: 'conversation',
+      body: 'same',
+    });
+
+    expect(apiFetch).not.toHaveBeenCalled();
   });
 
   it('hydrates persisted draft attachment IDs into composer attachment chips', async () => {

@@ -118,6 +118,22 @@ describe('MessageItem - hover bar and avatar', () => {
     expect(screen.queryByText('Delete')).not.toBeInTheDocument();
   });
 
+  it('Copy text copies the raw markdown body (mention tokens intact) to the clipboard', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+    renderWithProviders(
+      <MessageItem
+        message={makeMessage({ body: 'hi @[u-9|Bob] **bold**' })}
+        authorName="Alice"
+        isOwn={false}
+      />,
+    );
+    fireEvent.click(screen.getByText('Copy text'));
+    await Promise.resolve();
+    // Raw markdown (NOT the display form) so it round-trips into the composer.
+    expect(writeText).toHaveBeenCalledWith('hi @[u-9|Bob] **bold**');
+  });
+
   it('shows edit/delete when isOwn', () => {
     renderWithProviders(
       <MessageItem

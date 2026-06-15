@@ -54,6 +54,7 @@ function emptyGiphyResult(offset: number): GifsResult {
 }
 
 function computeGridWidth() {
+  /* istanbul ignore next -- SSR guard: this app is browser-only, so window is always defined in tests */
   if (typeof window === 'undefined') return MAX_GRID_WIDTH;
   const available = window.innerWidth - POPOVER_MARGIN * 2 - POPOVER_PADDING_X;
   if (window.innerWidth <= 767) return Math.max(MIN_GRID_WIDTH, available);

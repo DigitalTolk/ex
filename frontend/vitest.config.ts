@@ -47,23 +47,9 @@ export default defineConfig({
         'src/components/chat/MessageList.tsx',
         'src/components/chat/PinnedPanel.tsx',
         'src/components/chat/ThreadPanel.tsx',
-        'src/components/chat/lexical/nodes/ExListNode.ts',
-        'src/components/chat/lexical/nodes/ChannelMentionNode.tsx',
-        'src/components/chat/lexical/nodes/MentionNode.tsx',
-        'src/components/chat/lexical/plugins/ChannelMentionsPlugin.tsx',
-        'src/components/chat/lexical/plugins/ClearSelectedContentPlugin.tsx',
-        'src/components/chat/lexical/plugins/CodeBlockExitPlugin.tsx',
-        'src/components/chat/lexical/plugins/EditLastOnArrowUpPlugin.tsx',
-        'src/components/chat/lexical/plugins/EmojiShortcutsPlugin.tsx',
-        'src/components/chat/lexical/plugins/ImperativeHandlePlugin.tsx',
-        'src/components/chat/lexical/plugins/LineBoundaryNavigationPlugin.tsx',
-        'src/components/chat/lexical/plugins/MarkdownShortcutFallbackPlugin.tsx',
-        'src/components/chat/lexical/plugins/PasteFilesPlugin.tsx',
-        'src/components/chat/lexical/plugins/PasteLinkPlugin.tsx',
-        'src/components/chat/lexical/plugins/SubmitOnEnterPlugin.tsx',
-        'src/components/chat/lexical/plugins/TypeaheadMenu.tsx',
-        'src/components/chat/lexical/plugins/UserMentionsPlugin.tsx',
-        'src/components/chat/lexical/plugins/lineUtils.ts',
+        // CodeMirror markdown composer — exercised by the browser suite
+        // (real DOM / contenteditable), graded by its 99% branch gate there.
+        'src/components/chat/markdown/**',
         'src/components/search/BucketPicker.tsx',
         'src/components/search/MessageHitCard.tsx',
         'src/components/threads/ThreadCard.tsx',
@@ -103,13 +89,13 @@ export default defineConfig({
         'src/pages/SearchResultsPage.tsx',
         'src/pages/ThreadsPage.tsx',
       ],
-      // FilesPanel, Header, and Sidebar are now in coverage (previously
-      // excluded). The 95% bar is the future ratchet target as more
-      // dialog/edit branches in Sidebar (82%) and Header (79%) get
-      // tested. Keep the floor at 91% so any further exclusion removal
-      // doesn't immediately fail CI before per-file tests catch up.
+      // Branch-coverage gate. Held at 99% to match the backend
+      // (statement) and browser (branch) gates — CI fails any drop
+      // below it. vitest enforces this itself (non-zero exit), so both
+      // `make check` and the CI "Run vitest with coverage" step gate on
+      // it without extra scripting.
       thresholds: {
-        branches: 91,
+        branches: 99,
       },
     },
   },

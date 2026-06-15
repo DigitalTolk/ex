@@ -6,9 +6,16 @@ import { CreateChannelDialog } from './CreateChannelDialog';
 
 // Browser coverage for CreateChannelDialog — mount and form interactions.
 
-const createChannelMutate = vi.fn();
+// Drives mutate to either resolve (onSuccess) or fail (onError) so the
+// dialog's success/navigate and error paths are both exercised.
+let mutateMode: 'success' | 'error' | 'noop' = 'noop';
+const createChannelMutate = vi.fn((_vars: unknown, opts?: { onSuccess?: (c: { slug: string }) => void; onError?: (e: unknown) => void }) => {
+  if (mutateMode === 'success') opts?.onSuccess?.({ slug: 'new-channel' });
+  else if (mutateMode === 'error') opts?.onError?.(new Error('Channel name already taken'));
+});
+const pendingRef = { value: false };
 vi.mock('@/hooks/useChannels', () => ({
-  useCreateChannel: () => ({ mutate: createChannelMutate, isPending: false }),
+  useCreateChannel: () => ({ mutate: createChannelMutate, isPending: pendingRef.value }),
 }));
 
 function Wrap({ children }: { children: React.ReactNode }) {
@@ -69,5 +76,115 @@ describe('CreateChannelDialog browser', () => {
       await new Promise((r) => setTimeout(r, 30));
       expect(sw.getAttribute('aria-checked') === 'true' || sw.getAttribute('data-state') === 'checked').toBe(true);
     }
+  });
+
+  it('creates a private channel and navigates on success', async () => {
+    mutateMode = 'success';
+    createChannelMutate.mockClear();
+    const onOpenChange = vi.fn();
+    const screen = await render(
+      <Wrap>
+        <CreateChannelDialog open onOpenChange={onOpenChange} />
+      </Wrap>,
+    );
+    setReactInputValue(document.getElementById('channel-name') as HTMLInputElement, 'new-channel');
+    setReactInputValue(document.getElementById('channel-desc') as HTMLInputElement, 'About things');
+    // A real pointer click toggles the Radix switch (element.click() doesn't).
+    await screen.getByRole('switch').click();
+    await screen.getByRole('button', { name: 'Create Channel' }).click();
+    await vi.waitFor(() => {
+      expect(createChannelMutate).toHaveBeenCalled();
+      const [vars] = createChannelMutate.mock.calls[0];
+      expect(vars).toMatchObject({ name: 'new-channel', description: 'About things', type: 'private' });
+    });
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  it('surfaces a backend error when channel creation fails', async () => {
+    mutateMode = 'error';
+    createChannelMutate.mockClear();
+    const screen = await render(
+      <Wrap>
+        <CreateChannelDialog open onOpenChange={vi.fn()} />
+      </Wrap>,
+    );
+    setReactInputValue(document.getElementById('channel-name') as HTMLInputElement, 'taken-name');
+    await screen.getByRole('button', { name: 'Create Channel' }).click();
+    await expect.element(screen.getByRole('alert')).toHaveTextContent('Channel name already taken');
+  });
+
+  it('marks the name + counter as invalid for an over-long name', async () => {
+    await render(
+      <Wrap>
+        <CreateChannelDialog open onOpenChange={vi.fn()} />
+      </Wrap>,
+    );
+    setReactInputValue(document.getElementById('channel-name') as HTMLInputElement, 'a'.repeat(40));
+    await vi.waitFor(() => {
+      const counter = document.querySelector('[data-testid="channel-name-counter"]') as HTMLElement;
+      expect(counter.className).toContain('text-destructive');
+      // Submit stays disabled while the name is invalid.
+      expect((document.querySelector('button[type="submit"]') as HTMLButtonElement).disabled).toBe(true);
+    });
+  });
+
+  it('shows the pending label and disables submit while creation is in flight', async () => {
+    pendingRef.value = true;
+    try {
+      const screen = await render(
+        <Wrap><CreateChannelDialog open onOpenChange={vi.fn()} /></Wrap>,
+      );
+      setReactInputValue(document.getElementById('channel-name') as HTMLInputElement, 'busy-channel');
+      await expect.element(screen.getByRole('button', { name: 'Creating...' })).toBeDisabled();
+    } finally {
+      pendingRef.value = false;
+    }
+  });
+
+  it('falls back to a generic message when creation fails with a non-Error', async () => {
+    mutateMode = 'noop';
+    createChannelMutate.mockClear();
+    createChannelMutate.mockImplementationOnce((_v: unknown, opts?: { onError?: (e: unknown) => void }) => {
+      opts?.onError?.('weird');
+    });
+    const screen = await render(
+      <Wrap><CreateChannelDialog open onOpenChange={vi.fn()} /></Wrap>,
+    );
+    setReactInputValue(document.getElementById('channel-name') as HTMLInputElement, 'ok-name');
+    await screen.getByRole('button', { name: 'Create Channel' }).click();
+    await expect.element(screen.getByRole('alert')).toHaveTextContent('Failed to create channel');
+  });
+
+  it('ignores a form submit while the name is empty or invalid', async () => {
+    createChannelMutate.mockClear();
+    await render(
+      <Wrap><CreateChannelDialog open onOpenChange={vi.fn()} /></Wrap>,
+    );
+    const form = document.querySelector('form') as HTMLFormElement;
+    // Submit with an empty name → `if (!name.trim()) return`.
+    form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(createChannelMutate).not.toHaveBeenCalled();
+    // Submit with an invalid name → `if (nameError || descriptionError) return`.
+    setReactInputValue(document.getElementById('channel-name') as HTMLInputElement, 'Bad Name!');
+    await new Promise((r) => setTimeout(r, 20));
+    form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(createChannelMutate).not.toHaveBeenCalled();
+  });
+
+  it('marks the description + counter as invalid for an over-long description', async () => {
+    await render(
+      <Wrap>
+        <CreateChannelDialog open onOpenChange={vi.fn()} />
+      </Wrap>,
+    );
+    setReactInputValue(document.getElementById('channel-name') as HTMLInputElement, 'ok-name');
+    setReactInputValue(document.getElementById('channel-desc') as HTMLInputElement, 'd'.repeat(300));
+    await vi.waitFor(() => {
+      const counter = document.querySelector('[data-testid="channel-desc-counter"]') as HTMLElement;
+      expect(counter.className).toContain('text-destructive');
+      expect((document.getElementById('channel-desc') as HTMLInputElement).getAttribute('aria-invalid')).toBe('true');
+    });
   });
 });

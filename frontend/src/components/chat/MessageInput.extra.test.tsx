@@ -31,6 +31,17 @@ vi.mock('@/hooks/useAttachments', () => ({
   useAttachment: () => ({ data: undefined, isLoading: false }),
 }));
 
+// The CM6 composer sources autocomplete data from these hooks — stub them with
+// static empty data so their queries don't resolve async outside act().
+vi.mock('@/hooks/useConversations', async (orig) => ({
+  ...(await orig<typeof import('@/hooks/useConversations')>()),
+  useAllUsers: () => ({ data: [] }),
+}));
+vi.mock('@/hooks/useChannels', async (orig) => ({
+  ...(await orig<typeof import('@/hooks/useChannels')>()),
+  useChannelMembers: () => ({ data: [] }),
+  useUserChannels: () => ({ data: [] }),
+}));
 vi.mock('@/hooks/useEmoji', () => ({
   useEmojis: () => ({ data: [] }),
   useEmojiMap: () => ({ data: {} }),

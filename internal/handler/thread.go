@@ -31,7 +31,7 @@ func (h *ThreadHandler) List(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "list_error", err.Error())
 		return
 	}
-	if summaries == nil {
+	if summaries == nil { // coverage-ignore: MessageService.ListUserThreads always returns a make()-initialized (non-nil) slice; this nil-coercion is defensive against a future contract change.
 		summaries = []*service.ThreadSummary{}
 	}
 	writeJSON(w, http.StatusOK, summaries)

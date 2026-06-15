@@ -13,6 +13,35 @@ vi.mock('./Sidebar', () => ({
   ),
 }));
 
+// Mock the top bar so we don't need to wire up Auth/Theme/Presence
+// providers for AppLayout's own structural assertions. The mock keeps
+// the open-channels button and a search input so the existing
+// mobile-shell and search-shell expectations still resolve.
+vi.mock('./AppTopBar', () => ({
+  AppTopBar: ({ onOpenChannels, channelsButtonHidden }: { onOpenChannels?: () => void; channelsButtonHidden?: boolean }) => (
+    <header
+      data-testid="app-shell-header"
+      data-app-chrome="true"
+      className="grid h-14 w-full shrink-0 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 border-b border-border bg-sidebar"
+    >
+      <button
+        type="button"
+        onClick={onOpenChannels}
+        aria-label="Open channels"
+        aria-hidden={channelsButtonHidden}
+        tabIndex={channelsButtonHidden ? -1 : 0}
+        className={channelsButtonHidden ? 'invisible' : ''}
+      >
+        menu
+      </button>
+      <div className="min-w-0 w-full max-w-xl justify-self-center mx-auto">
+        <input aria-label="Search" />
+      </div>
+      <div>account</div>
+    </header>
+  ),
+}));
+
 vi.mock('@/components/UpdateBanner', () => ({
   UpdateBanner: () => <div data-testid="update-banner" />,
 }));
@@ -115,30 +144,29 @@ describe('AppLayout', () => {
   });
 
   it('lets the mobile top bar and search fill the full viewport width', () => {
-    const { container } = renderLayout();
+    renderLayout();
 
-    const header = container.querySelector('header')!;
-    const searchShell = screen.getByLabelText('Search').closest('header')!.querySelector('div')!;
-    expect(header).toHaveClass('grid', 'w-full', 'grid-cols-[2.75rem_minmax(0,1fr)_2.75rem]');
-    expect(header).toHaveClass('bg-sidebar', 'border-sidebar-border');
-    expect(header).toHaveClass('dark:bg-[#1a1d21]', 'dark:border-white/10');
-    expect(searchShell).toHaveClass('w-full', 'max-w-2xl', 'justify-self-center', 'lg:flex-1');
+    const header = screen.getByTestId('app-shell-header');
+    const searchShell = screen.getByLabelText('Search').closest('div')!;
+    expect(header).toHaveClass('w-full', 'bg-sidebar', 'border-border');
+    expect(searchShell).toHaveClass('w-full', 'max-w-xl', 'justify-self-center');
   });
 
   it('keeps flex scroll containers shrinkable on mobile Safari', () => {
-    const { container } = renderLayout();
+    renderLayout();
 
-    const bodyShell = container.querySelector('header')!.nextElementSibling!.nextElementSibling as HTMLElement;
+    const header = screen.getByTestId('app-shell-header');
+    const bannerBlock = header.parentElement!.nextElementSibling as HTMLElement;
+    const bodyShell = bannerBlock.nextElementSibling as HTMLElement;
     const main = bodyShell.querySelector('main')!;
     expect(bodyShell).toHaveClass('min-h-0', 'overflow-hidden');
     expect(main).toHaveClass('min-h-0', 'overflow-hidden');
   });
 
   it('renders reload and notification banners directly below the app header', () => {
-    const { container } = renderLayout();
-
-    const header = container.querySelector('header')!;
-    const bannerBlock = header.nextElementSibling as HTMLElement;
+    renderLayout();
+    const header = screen.getByTestId('app-shell-header');
+    const bannerBlock = header.parentElement!.nextElementSibling as HTMLElement;
     expect(bannerBlock).toHaveAttribute('data-testid', 'app-layout-banners');
     expect(bannerBlock).toContainElement(screen.getByTestId('update-banner'));
     expect(bannerBlock).toContainElement(screen.getByTestId('notification-permission-banner'));
@@ -158,7 +186,7 @@ describe('AppLayout', () => {
 
     expect(container.querySelector('.pt-\\[env\\(safe-area-inset-top\\)\\]')).toBeNull();
     const shell = container.firstElementChild as HTMLElement;
-    expect(shell).toHaveClass('bg-sidebar', 'dark:bg-[#1a1d21]');
+    expect(shell).toHaveClass('bg-sidebar');
   });
 
   it('keeps native server switching out of the top bar', () => {
@@ -261,6 +289,28 @@ describe('AppLayout', () => {
     expect(main).toHaveAttribute('data-mobile-channels-open', 'true');
   });
 
+  it('ignores channel-open swipes entirely on a desktop (non-mobile) layout', () => {
+    setMobileMatch(false);
+    window.history.pushState({}, '', '/channel/general');
+    const { container } = renderLayout();
+    const main = container.querySelector('main')!;
+    // On desktop the swipe handler bails immediately (!isMobile).
+    touchSwipe(main, 12, 160);
+    expect(main).not.toHaveAttribute('data-channel-dragging', 'true');
+  });
+
+  it('closes the open channel pane on a right-to-left swipe', () => {
+    setMobileMatch(true);
+    // The mobile root route renders with channels already open, so a
+    // leftward swipe commits to the "close" latch.
+    window.history.pushState({}, '', '/');
+    const { container } = renderLayout();
+    const main = container.querySelector('main')!;
+    expect(main).toHaveAttribute('data-mobile-channels-open', 'true');
+    touchSwipe(main, 220, 40);
+    expect(main).toHaveAttribute('data-channel-dragging', 'true');
+  });
+
   it('opens the persistent mobile channel pane on a left-to-right touch swipe', () => {
     setMobileMatch(true);
     window.history.pushState({}, '', '/channel/general');
@@ -274,6 +324,96 @@ describe('AppLayout', () => {
     expect(window.location.pathname).toBe('/channel/general');
   });
 
+  it('refuses to open channels when a mobile right sidebar is mounted anywhere', () => {
+    setMobileMatch(true);
+    window.history.pushState({}, '', '/channel/general');
+    const { container } = renderLayout(
+      <div data-testid="rs" data-mobile-right-sidebar="true">Right panel</div>,
+    );
+    const main = container.querySelector('main')!;
+
+    // Swiping on main: the gesture target is not the right sidebar (so the
+    // closest() guard passes), but the document-wide right-sidebar query trips
+    // canOpenChannelsFromGesture, so the pane must not open.
+    touchSwipe(main, 12, 120);
+    expect(main).not.toHaveAttribute('data-mobile-channels-open', 'true');
+  });
+
+  it('refuses to open channels when the swipe starts on the mobile right sidebar', () => {
+    setMobileMatch(true);
+    window.history.pushState({}, '', '/channel/general');
+    const { container } = renderLayout(
+      <div data-testid="rs" data-mobile-right-sidebar="true">Right panel</div>,
+    );
+    const main = container.querySelector('main')!;
+    const rightSidebar = screen.getByTestId('rs');
+
+    // Swiping from within the right sidebar hits the closest() guard directly.
+    touchSwipe(rightSidebar, 12, 120);
+    expect(main).not.toHaveAttribute('data-mobile-channels-open', 'true');
+  });
+
+  it('still tracks a latched swipe when the touchmove event is not cancelable', () => {
+    setMobileMatch(true);
+    window.history.pushState({}, '', '/channel/general');
+    const { container } = renderLayout();
+    const main = container.querySelector('main')!;
+
+    // A non-cancelable touchmove latches the gesture but skips the
+    // event.preventDefault() branch (event.cancelable === false).
+    fireEvent.touchStart(main, {
+      touches: [{ identifier: 1, target: main, clientX: 12, clientY: 200 }],
+      targetTouches: [{ identifier: 1, target: main, clientX: 12, clientY: 200 }],
+    });
+    fireEvent.touchMove(main, {
+      cancelable: false,
+      touches: [{ identifier: 1, target: main, clientX: 120, clientY: 210 }],
+      targetTouches: [{ identifier: 1, target: main, clientX: 120, clientY: 210 }],
+    });
+    expect(main).toHaveAttribute('data-channel-dragging', 'true');
+    fireEvent.touchEnd(main, {
+      changedTouches: [{ identifier: 1, target: main, clientX: 120, clientY: 210 }],
+      targetTouches: [],
+      touches: [],
+    });
+  });
+
+  it('ignores a sub-threshold horizontal nudge (below the axis lock)', () => {
+    setMobileMatch(true);
+    window.history.pushState({}, '', '/channel/general');
+    const { container } = renderLayout();
+    const main = container.querySelector('main')!;
+
+    // 6px of horizontal movement is below CHANNEL_OPEN_AXIS_LOCK_PX (12),
+    // so the gesture never latches and the pane stays closed.
+    touchSwipe(main, 12, 18);
+    expect(main).not.toHaveAttribute('data-mobile-channels-open', 'true');
+  });
+
+  it('lets a vertical-dominant drag fall through to native scroll', () => {
+    setMobileMatch(true);
+    window.history.pushState({}, '', '/channel/general');
+    const { container } = renderLayout();
+    const main = container.querySelector('main')!;
+
+    // Large vertical movement with smaller horizontal travel → absY >= absX,
+    // so the channel-open gesture yields to native scrolling.
+    fireEvent.touchStart(main, {
+      touches: [{ identifier: 1, target: main, clientX: 12, clientY: 200 }],
+      targetTouches: [{ identifier: 1, target: main, clientX: 12, clientY: 200 }],
+    });
+    fireEvent.touchMove(main, {
+      touches: [{ identifier: 1, target: main, clientX: 30, clientY: 320 }],
+      targetTouches: [{ identifier: 1, target: main, clientX: 30, clientY: 320 }],
+    });
+    fireEvent.touchEnd(main, {
+      changedTouches: [{ identifier: 1, target: main, clientX: 30, clientY: 320 }],
+      targetTouches: [],
+      touches: [],
+    });
+    expect(main).not.toHaveAttribute('data-mobile-channels-open', 'true');
+  });
+
   it('pulls the current mobile view aside while revealing channels', async () => {
     setMobileMatch(true);
     window.history.pushState({}, '', '/channel/general');
@@ -283,7 +423,15 @@ describe('AppLayout', () => {
     touchDrag(main, 12, 92);
 
     expect(screen.getByTestId('mobile-channel-sidebar')).toHaveAttribute('inert');
-    await waitFor(() => expect(main).toHaveStyle({ transform: 'translate3d(80px, 0, 0)' }));
+    // @use-gesture subtracts its hold-threshold from the reported
+    // movement, so an 80px finger drag exposes ~72px of translation.
+    // Match either form so the test stays robust if the threshold is
+    // re-tuned.
+    await waitFor(() => {
+      const transform = (main as HTMLElement).style.transform;
+      expect(transform).toMatch(/translate3d\(calc\(0px \+ \d+px\),\s*0,\s*0\)/);
+      expect(transform).not.toBe('translate3d(0px, 0, 0)');
+    });
     expect(main).toHaveAttribute('data-channel-dragging', 'true');
   });
 

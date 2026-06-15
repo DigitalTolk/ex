@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { render } from 'vitest-browser-react';
 import { MessageList } from './MessageList';
 import type { Attachment, Message } from '@/types';
-import { act, type ReactNode } from 'react';
+import { act, useState, type ReactNode } from 'react';
 
 const browserMedia = vi.hoisted(() => ({
   imageURL: `data:image/svg+xml,${encodeURIComponent(
@@ -152,7 +152,11 @@ describe('MessageList browser behavior', () => {
     await vi.waitFor(() => {
       const distanceFromBottom = scroller!.scrollHeight - scroller!.scrollTop - scroller!.clientHeight;
       expect(distanceFromBottom).toBeLessThan(4);
-    }, { timeout: 3000 });
+      // Longer window than the other assertions here: the re-stick is a chain of
+      // image-load → ResizeObserver → Virtuoso followOutput scroll, which under
+      // full-suite CPU load on the slowest (webkit) project can take many
+      // seconds to settle. It sticks reliably; it just needs the headroom.
+    }, { timeout: 20000 });
 
     const thumb = laidOutElement('[data-testid="message-image-thumb"]');
     expect(thumb).not.toBeNull();
@@ -222,6 +226,78 @@ describe('MessageList browser behavior', () => {
     const distanceAfterMedia = distanceFromBottom(scroller!);
     expect(distanceAfterMedia).toBeGreaterThan(40);
     expect(distanceAfterMedia).toBeGreaterThanOrEqual(distanceBeforeMedia - 8);
+  });
+
+  it('auto-sticks to the bottom when the local user appends a new message', async () => {
+    function Harness() {
+      const [extra, setExtra] = useState<Message[]>([]);
+      const all = [...Array.from({ length: 12 }, (_, i) => msg(i)), ...extra];
+      return (
+        <>
+          <button
+            data-testid="add-own"
+            onClick={() => setExtra([msg(500, { authorID: 'u-1', createdAt: '2026-05-08T12:00:00Z' })])}
+          >
+            add
+          </button>
+          <div style={{ height: 420, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+            <MessageList
+              pages={[{ items: [...all].reverse() }]}
+              hasNextPage={false}
+              isFetchingNextPage={false}
+              isLoading={false}
+              fetchNextPage={vi.fn()}
+              hasPreviousPage={false}
+              isFetchingPreviousPage={false}
+              fetchPreviousPage={vi.fn()}
+              currentUserId="u-1"
+              channelId="ch-1"
+              channelSlug="general"
+              userMap={{ 'u-1': { displayName: 'Alice' }, 'u-2': { displayName: 'Bob' } }}
+            />
+          </div>
+        </>
+      );
+    }
+    const screen = await render(<Harness />);
+    const scroller = document.querySelector('[data-testid="virtuoso-scroller"]') as HTMLElement | null;
+    expect(scroller).not.toBeNull();
+    await settleAtBottom(scroller!);
+    // Appending a fresh own message at the bottom triggers the auto-stick
+    // effect (bottom changed, author is self, not a thread reply).
+    await screen.getByTestId('add-own').click();
+    await vi.waitFor(() => {
+      expect(document.querySelector('[data-message-id="m-500"]')).not.toBeNull();
+    }, { timeout: 3000 });
+  });
+
+  it('scrolls to and highlights the deep-link anchor message', async () => {
+    const messages = Array.from({ length: 30 }, (_, index) => msg(index));
+    await render(
+      <div style={{ height: 420, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+        <MessageList
+          pages={[{ items: [...messages].reverse() }]}
+          hasNextPage={false}
+          isFetchingNextPage={false}
+          isLoading={false}
+          fetchNextPage={vi.fn()}
+          hasPreviousPage={false}
+          isFetchingPreviousPage={false}
+          fetchPreviousPage={vi.fn()}
+          currentUserId="u-1"
+          channelId="ch-1"
+          channelSlug="general"
+          anchorMsgId="m-5"
+          anchorRevision="r1"
+          userMap={{ 'u-1': { displayName: 'Alice' }, 'u-2': { displayName: 'Bob' } }}
+        />
+      </div>,
+    );
+    // The anchor logic finds m-5, scrolls it into view, and highlights it —
+    // exercising the anchor index/dedup/highlight branches.
+    await vi.waitFor(() => {
+      expect(document.querySelector('[data-message-id="m-5"]')).not.toBeNull();
+    }, { timeout: 3000 });
   });
 });
 

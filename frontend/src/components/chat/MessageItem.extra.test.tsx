@@ -176,13 +176,14 @@ describe('MessageItem - mobile actions', () => {
     });
   });
 
-  it('copies readable mention text from the mobile copy action', async () => {
+  it('copies the raw markdown body (mention tokens intact) from the mobile copy action', async () => {
     await openMobileActions(makeMessage({ body: 'Hi @[u-2|Bob Jones] in ~[ch-1|general]' }));
 
     await userEvent.click(screen.getByRole('button', { name: /Copy message text/i }));
 
     await waitFor(() => {
-      expect(navigator.clipboard.writeText).toHaveBeenCalledWith('Hi @Bob Jones in ~general');
+      // Raw markdown so it round-trips into the composer (renders mention pills).
+      expect(navigator.clipboard.writeText).toHaveBeenCalledWith('Hi @[u-2|Bob Jones] in ~[ch-1|general]');
     });
   });
 

@@ -486,7 +486,7 @@ describe('MessageList Virtuoso wiring (regression contract)', () => {
     })).toBe(false);
   });
 
-  it('startReached fetches older pages only when ready and not already fetching', async () => {
+  it('startReached fetches older pages immediately when not already fetching', async () => {
     const fetchNextPage = vi.fn();
     const captured = await renderAndCaptureVirtuoso(
       <MessageList
@@ -497,7 +497,6 @@ describe('MessageList Virtuoso wiring (regression contract)', () => {
         fetchNextPage={fetchNextPage}
       />,
     );
-    await new Promise((r) => setTimeout(r, 300));
     captured.startReached?.();
     expect(fetchNextPage).toHaveBeenCalledTimes(1);
 
@@ -515,33 +514,172 @@ describe('MessageList Virtuoso wiring (regression contract)', () => {
     expect(fetchNextPage).not.toHaveBeenCalled();
   });
 
-  it('endReached fetches newer pages only when configured and idle', async () => {
+  // Regression: deep-link mount with a small around-window. Virtuoso
+  // fires endReached *once* during initial layout — the bottom of
+  // the loaded slice is already in view because the slice fits the
+  // viewport with the anchor centred. The previous code gated that
+  // fire behind a 250ms `readyForFetchRef` guard meant for the
+  // older-side (`startReached`) layout race, which dropped the only
+  // newer-side fire and stranded the user with no way to scroll
+  // toward newer messages. `endReached` must dispatch immediately —
+  // no guard, no timer.
+  it('endReached on deep-link mount immediately fetches newer (no guard delay)', async () => {
     const fetchPreviousPage = vi.fn();
     const captured = await renderAndCaptureVirtuoso(
       <MessageList
         {...defaultProps}
-        pages={[{ items: [makeMessage()] }]}
+        pages={[{ items: [makeMessage({ id: 'msg-anchor' })] }]}
         hasPreviousPage={true}
         isFetchingPreviousPage={false}
         fetchPreviousPage={fetchPreviousPage}
-        anchorMsgId="msg-1"
+        anchorMsgId="msg-anchor"
       />,
     );
-    await new Promise((r) => setTimeout(r, 300));
+    // No sleep — fire endReached the same way Virtuoso fires it
+    // during initial layout. The handler must dispatch the newer
+    // fetch with no 250ms wait.
     captured.endReached?.();
     expect(fetchPreviousPage).toHaveBeenCalledTimes(1);
+  });
 
-    fetchPreviousPage.mockClear();
-    renderWithProviders(
+  it('endReached does NOT fetch when there are no newer pages', async () => {
+    const fetchPreviousPage = vi.fn();
+    const captured = await renderAndCaptureVirtuoso(
       <MessageList
         {...defaultProps}
-        pages={[{ items: [makeMessage({ id: 'busy-newer' })] }]}
+        pages={[{ items: [makeMessage({ id: 'msg-tail' })] }]}
+        hasPreviousPage={false}
+        isFetchingPreviousPage={false}
+        fetchPreviousPage={fetchPreviousPage}
+      />,
+    );
+    captured.endReached?.();
+    expect(fetchPreviousPage).not.toHaveBeenCalled();
+  });
+
+  it('endReached does NOT fetch when a fetch is already in flight', async () => {
+    const fetchPreviousPage = vi.fn();
+    const captured = await renderAndCaptureVirtuoso(
+      <MessageList
+        {...defaultProps}
+        pages={[{ items: [makeMessage({ id: 'msg-anchor' })] }]}
         hasPreviousPage={true}
         isFetchingPreviousPage={true}
         fetchPreviousPage={fetchPreviousPage}
-        anchorMsgId="busy-newer"
+        anchorMsgId="msg-anchor"
       />,
     );
+    captured.endReached?.();
+    expect(fetchPreviousPage).not.toHaveBeenCalled();
+  });
+
+  // Mirror of the endReached deep-link case for the OLDER direction:
+  // Virtuoso fires startReached once during initial layout when the
+  // around-window's first row is briefly at the top of the viewport
+  // (the anchor is centred and the slice is small). The previous
+  // 250ms guard dropped that fire, leaving the user unable to scroll
+  // back to older messages — same symptom as the newer-side bug,
+  // different end of the list. Both directions must dispatch
+  // immediately on mount.
+  it('startReached on deep-link mount immediately fetches older (no guard delay)', async () => {
+    const fetchNextPage = vi.fn();
+    const captured = await renderAndCaptureVirtuoso(
+      <MessageList
+        {...defaultProps}
+        pages={[{ items: [makeMessage({ id: 'msg-anchor' })] }]}
+        hasNextPage={true}
+        isFetchingNextPage={false}
+        fetchNextPage={fetchNextPage}
+        anchorMsgId="msg-anchor"
+      />,
+    );
+    captured.startReached?.();
+    expect(fetchNextPage).toHaveBeenCalledTimes(1);
+  });
+
+  it('startReached does NOT fetch when there are no older pages', async () => {
+    const fetchNextPage = vi.fn();
+    const captured = await renderAndCaptureVirtuoso(
+      <MessageList
+        {...defaultProps}
+        pages={[{ items: [makeMessage({ id: 'msg-head' })] }]}
+        hasNextPage={false}
+        isFetchingNextPage={false}
+        fetchNextPage={fetchNextPage}
+      />,
+    );
+    captured.startReached?.();
+    expect(fetchNextPage).not.toHaveBeenCalled();
+  });
+
+  // Regression: deep-link scroll-to-newer flow used to be covered
+  // piecewise but no test walked the whole chain end-to-end. The
+  // failure mode was: user lands on a deep link, scrolls down to load
+  // newer pages, the second fetch fires, the data lands — but the
+  // rendered Virtuoso `data` prop didn't pick it up because the
+  // append branch of `nextVirtuosoState` was returning early. Lock
+  // every step here so any future regression at any link in the chain
+  // surfaces a clearly-named failure.
+  it('deep-link → endReached → fetchPreviousPage → newer rows render via rerender', async () => {
+    const anchor = makeMessage({ id: 'msg-anchor', createdAt: '2026-04-24T10:00:00Z' });
+    const newerA = makeMessage({ id: 'msg-newer-a', createdAt: '2026-04-24T10:01:00Z' });
+    const fetchPreviousPage = vi.fn();
+    // Share a single QueryClient across the initial + rerender calls
+    // so the MessageItem mutations resolve their context across both
+    // renders. We hand-wire providers here (the helper would build a
+    // fresh QueryClient on each rerender, which loses the tree).
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrap = (node: React.ReactElement) => (
+      <QueryClientProvider client={qc}>
+        <BrowserRouter>{node}</BrowserRouter>
+      </QueryClientProvider>
+    );
+    const { rerender } = render(
+      wrap(
+        <MessageList
+          {...defaultProps}
+          // API returns newest-first; MessageList reverses to chrono.
+          pages={[{ items: [newerA, anchor] }]}
+          hasPreviousPage={true}
+          isFetchingPreviousPage={false}
+          fetchPreviousPage={fetchPreviousPage}
+          anchorMsgId="msg-anchor"
+        />,
+      ),
+    );
+    // endReached is now unguarded — Virtuoso's natural fire on
+    // initial layout dispatches the newer fetch immediately.
+    captured.endReached?.();
+    expect(fetchPreviousPage).toHaveBeenCalledTimes(1);
+
+    // Server returns more newer messages → pages get a second window
+    // appended at the front (newest-first) so the chronological tail
+    // grows. Rerender with the appended data.
+    const newerB = makeMessage({ id: 'msg-newer-b', createdAt: '2026-04-24T10:02:00Z' });
+    const newerC = makeMessage({ id: 'msg-newer-c', createdAt: '2026-04-24T10:03:00Z' });
+    rerender(
+      wrap(
+        <MessageList
+          {...defaultProps}
+          pages={[{ items: [newerC, newerB] }, { items: [newerA, anchor] }]}
+          hasPreviousPage={false}
+          isFetchingPreviousPage={false}
+          fetchPreviousPage={fetchPreviousPage}
+          anchorMsgId="msg-anchor"
+        />,
+      ),
+    );
+    // Wait one frame for the layout-effect to push the new rows into
+    // Virtuoso's `data` prop atomically with firstItemIndex.
+    await new Promise((r) => requestAnimationFrame(() => r(undefined)));
+    const renderedKeys = (captured.data ?? []).map((row) => (row as { key?: string }).key);
+    expect(renderedKeys).toContain('msg-anchor');
+    expect(renderedKeys).toContain('msg-newer-a');
+    expect(renderedKeys).toContain('msg-newer-b');
+    expect(renderedKeys).toContain('msg-newer-c');
+
+    // Now that the live tail is reached, endReached must not refetch.
+    fetchPreviousPage.mockClear();
     captured.endReached?.();
     expect(fetchPreviousPage).not.toHaveBeenCalled();
   });

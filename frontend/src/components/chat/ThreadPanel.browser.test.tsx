@@ -113,7 +113,7 @@ function reply(): Message {
   };
 }
 
-function renderPanel(messages: Message[] = [rootMsg(), reply()]) {
+function renderPanel(messages: Message[] = [rootMsg(), reply()], onClose: () => void = vi.fn()) {
   apiFetchMock.mockReset();
   apiFetchMock.mockImplementation(() => Promise.resolve(null));
   threadMessagesState = { data: messages, isLoading: false };
@@ -124,7 +124,7 @@ function renderPanel(messages: Message[] = [rootMsg(), reply()]) {
         <ThreadPanel
           channelId="ch-1"
           threadRootID="01J0000000000000000000ROOT"
-          onClose={vi.fn()}
+          onClose={onClose}
           userMap={{ 'u-1': { displayName: 'Alice' } }}
           currentUserId="u-1"
         />
@@ -157,5 +157,48 @@ describe('ThreadPanel browser behaviour', () => {
     await renderPanel([rootMsg()]);
     const editable = document.querySelector('[contenteditable="true"]');
     expect(editable).not.toBeNull();
+  });
+
+  it('invokes onClose when the close-thread button is clicked', async () => {
+    const onClose = vi.fn();
+    const screen = await renderPanel([rootMsg(), reply()], onClose);
+    await screen.getByRole('button', { name: 'Close thread' }).click();
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('renders each reply body in the thread list', async () => {
+    const screen = await renderPanel([rootMsg(), reply()]);
+    await expect.element(screen.getByText('a reply')).toBeVisible();
+  });
+
+  it('skips a deleted own reply when locating the last editable reply', async () => {
+    // findLastOwnReply walks replies from newest; an own deleted reply is
+    // skipped (the `m.deleted || m.system` guard) in favour of the real one.
+    const screen = await renderPanel([
+      rootMsg(),
+      reply(),
+      { ...reply(), id: '01J0000000000000000000REP2', body: '', deleted: true },
+    ]);
+    await expect.element(screen.getByText('a reply')).toBeVisible();
+  });
+
+  it('shows the loading state while thread messages are pending', async () => {
+    threadMessagesState = { data: undefined, isLoading: true };
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const screen = await render(
+      <QueryClientProvider client={qc}>
+        <BrowserRouter>
+          <ThreadPanel
+            channelId="ch-1"
+            threadRootID="01J0000000000000000000ROOT"
+            onClose={vi.fn()}
+            userMap={{ 'u-1': { displayName: 'Alice' } }}
+            currentUserId="u-1"
+          />
+        </BrowserRouter>
+      </QueryClientProvider>,
+    );
+    // The panel header still renders while the body is loading.
+    await expect.element(screen.getByRole('heading', { name: 'Thread' })).toBeVisible();
   });
 });

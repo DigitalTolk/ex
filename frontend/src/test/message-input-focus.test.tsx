@@ -10,6 +10,17 @@ vi.mock('@/hooks/useAttachments', () => ({
 
 vi.mock('@/lib/api', () => ({ apiFetch: vi.fn() }));
 
+// The CM6 composer sources autocomplete data from these hooks — stub them with
+// static empty data so their queries don't resolve async outside act().
+vi.mock('@/hooks/useConversations', async (orig) => ({
+  ...(await orig<typeof import('@/hooks/useConversations')>()),
+  useAllUsers: () => ({ data: [] }),
+}));
+vi.mock('@/hooks/useChannels', async (orig) => ({
+  ...(await orig<typeof import('@/hooks/useChannels')>()),
+  useChannelMembers: () => ({ data: [] }),
+  useUserChannels: () => ({ data: [] }),
+}));
 vi.mock('@/hooks/useEmoji', () => ({
   useEmojis: () => ({ data: [] }),
   useEmojiMap: () => ({ data: {} }),
@@ -92,10 +103,10 @@ describe('MessageInput focusKey', () => {
     render(<MessageInput onSend={vi.fn()} focusKey="ch-1" />);
     const editor = screen.getByLabelText('Message input');
 
-    expect(editor).toHaveClass('max-md:!min-h-5', 'max-md:!max-h-5');
+    expect(editor).toHaveClass('max-md:!min-h-9', 'max-md:!max-h-9');
     fireEvent.focus(editor);
-    expect(editor).not.toHaveClass('max-md:!min-h-5');
-    expect(editor).not.toHaveClass('max-md:!max-h-5');
+    expect(editor).not.toHaveClass('max-md:!min-h-9');
+    expect(editor).not.toHaveClass('max-md:!max-h-9');
   });
 
   it('refocuses the mobile composer when the page returns to the foreground with the keyboard up', async () => {

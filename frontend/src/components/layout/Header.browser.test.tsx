@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { render } from 'vitest-browser-react';
+import { MemoryRouter } from 'react-router-dom';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Header } from './Header';
 import { expectPaintedAtCenter } from '@/test/browser-assertions';
 
@@ -67,5 +69,173 @@ describe('Header browser behavior', () => {
     expect(Math.abs(descriptionMidY - titleMidY)).toBeLessThanOrEqual(4);
     expectPaintedAtCenter(description.element());
     expectPaintedAtCenter(files.element());
+  });
+
+  it('renders a DM header subtitle and avatar (non-hover-card path)', async () => {
+    const screen = await render(
+      <Header title="Alice" subtitle="Active now" showAvatar avatarOnline />,
+    );
+    await expect.element(screen.getByText('Alice')).toBeVisible();
+    await expect.element(screen.getByText('Active now')).toBeVisible();
+  });
+
+  it('renders a DM header via the hover-card path with a status indicator (userId set)', async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const screen = await render(
+      <QueryClientProvider client={qc}>
+        <MemoryRouter>
+          <Header
+            title="Bob"
+            userId="u-bob"
+            currentUserId="u-me"
+            subtitle="In a meeting"
+            userStatus={{ emoji: '📅', text: 'In a meeting' }}
+            showAvatar
+            avatarURL="https://x/bob.png"
+            avatarOnline
+          />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    await expect.element(screen.getByRole('heading', { name: 'Bob' })).toBeVisible();
+    await expect.element(screen.getByText('In a meeting').first()).toBeVisible();
+  });
+
+  it('edits the channel description from the desktop dropdown and saves on Enter', async () => {
+    if (window.innerWidth <= 767) return;
+    const onDescriptionSave = vi.fn();
+    const screen = await render(
+      <div style={{ width: 960 }}>
+        <Header channel={channel} memberCount={3} canEdit onDescriptionSave={onDescriptionSave} />
+      </div>,
+    );
+    await screen.getByRole('button', { name: /general/ }).click();
+    await screen.getByText('Edit description').click();
+    const input = screen.getByPlaceholder('Add a description...');
+    await expect.element(input).toBeVisible();
+    await input.fill('Updated topic');
+    input.element().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    await vi.waitFor(() => expect(onDescriptionSave).toHaveBeenCalledWith('Updated topic'));
+  });
+
+  it('cancels the desktop inline description edit on Escape', async () => {
+    if (window.innerWidth <= 767) return;
+    const onDescriptionSave = vi.fn();
+    const screen = await render(
+      <div style={{ width: 960 }}>
+        <Header channel={channel} memberCount={3} canEdit onDescriptionSave={onDescriptionSave} />
+      </div>,
+    );
+    // Clicking the existing description text enters edit mode directly.
+    await screen.getByText(channel.description).click();
+    const input = screen.getByPlaceholder('Add a description...');
+    await expect.element(input).toBeVisible();
+    input.element().dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await vi.waitFor(() => {
+      expect(document.querySelector('input[placeholder="Add a description..."]')).toBeNull();
+    });
+    expect(onDescriptionSave).not.toHaveBeenCalled();
+  });
+
+  it('toggles mute (unmute label) via the desktop dropdown', async () => {
+    if (window.innerWidth <= 767) return;
+    const onToggleMute = vi.fn();
+    const screen = await render(
+      <div style={{ width: 960 }}>
+        <Header channel={channel} memberCount={3} muted onToggleMute={onToggleMute} canLeave onLeave={vi.fn()} />
+      </div>,
+    );
+    await screen.getByRole('button', { name: /general/ }).click();
+    // muted=true → the item reads "Unmute channel". Leave is also present.
+    await expect.element(screen.getByRole('menuitem', { name: 'Leave channel' })).toBeVisible();
+    await screen.getByRole('menuitem', { name: 'Unmute channel' }).click();
+    expect(onToggleMute).toHaveBeenCalledTimes(1);
+  });
+
+  it('archives via the desktop dropdown through the confirmation dialog', async () => {
+    if (window.innerWidth <= 767) return;
+    const onArchive = vi.fn();
+    const screen = await render(
+      <div style={{ width: 960 }}>
+        <Header channel={channel} memberCount={3} canArchive onArchive={onArchive} />
+      </div>,
+    );
+    await screen.getByRole('button', { name: /general/ }).click();
+    // Exact menuitem role avoids the substring clash with the "Archive
+    // channel?" dialog title.
+    await screen.getByRole('menuitem', { name: 'Archive channel' }).click();
+    await expect.element(screen.getByText('Archive channel?')).toBeVisible();
+    await screen.getByRole('button', { name: 'Archive' }).click();
+    await vi.waitFor(() => expect(onArchive).toHaveBeenCalledTimes(1));
+  });
+
+  // Open the mobile channel menu once and return its container. A single
+  // open per test keeps the Radix trigger state from desyncing on WebKit
+  // (repeated open/close cycles in one test can hang).
+  async function openMobileMenu(screen: Awaited<ReturnType<typeof render>>) {
+    await screen.getByRole('button', { name: /general/ }).click();
+    let menu: HTMLElement | null = null;
+    await vi.waitFor(() => {
+      menu = document.querySelector('[data-testid="mobile-channel-menu"]');
+      expect(menu).not.toBeNull();
+    });
+    return menu as unknown as HTMLElement;
+  }
+
+  it('fires mute from the mobile channel menu', async () => {
+    if (window.innerWidth > 767) return;
+    const onToggleMute = vi.fn();
+    const screen = await render(
+      <div style={{ width: 390 }}>
+        <Header channel={channel} memberCount={3} muted={false} onToggleMute={onToggleMute} />
+      </div>,
+    );
+    const menu = await openMobileMenu(screen);
+    (menu.querySelector('[aria-label="Mute channel"]') as HTMLButtonElement).click();
+    expect(onToggleMute).toHaveBeenCalledTimes(1);
+  });
+
+  it('fires leave from the mobile channel menu', async () => {
+    if (window.innerWidth > 767) return;
+    const onLeave = vi.fn();
+    const screen = await render(
+      <div style={{ width: 390 }}>
+        <Header channel={channel} memberCount={3} canLeave onLeave={onLeave} />
+      </div>,
+    );
+    const menu = await openMobileMenu(screen);
+    (Array.from(menu.querySelectorAll('button')).find((b) => b.textContent?.includes('Leave channel')) as HTMLButtonElement).click();
+    expect(onLeave).toHaveBeenCalledTimes(1);
+  });
+
+  it('opens the archive confirmation from the mobile channel menu', async () => {
+    if (window.innerWidth > 767) return;
+    const screen = await render(
+      <div style={{ width: 390 }}>
+        <Header channel={channel} memberCount={3} canArchive onArchive={vi.fn()} />
+      </div>,
+    );
+    const menu = await openMobileMenu(screen);
+    (Array.from(menu.querySelectorAll('button')).find((b) => b.textContent?.includes('Archive channel')) as HTMLButtonElement).click();
+    await expect.element(screen.getByText('Archive channel?')).toBeVisible();
+  });
+
+  it('edits the channel description from the mobile menu via the dialog editor', async () => {
+    if (window.innerWidth > 767) return;
+    const onDescriptionSave = vi.fn();
+    const screen = await render(
+      <div style={{ width: 390 }}>
+        <Header channel={channel} memberCount={3} canEdit onDescriptionSave={onDescriptionSave} />
+      </div>,
+    );
+    await screen.getByRole('button', { name: /general/ }).click();
+    const menu = document.querySelector('[data-testid="mobile-channel-menu"]') as HTMLElement;
+    (Array.from(menu.querySelectorAll('button')).find((b) => b.textContent?.includes('Edit description')) as HTMLButtonElement).click();
+    // The mobile editor dialog opens with a textarea + Save.
+    await expect.element(screen.getByTestId('mobile-description-editor')).toBeVisible();
+    const textarea = document.querySelector('#mobile-channel-description') as HTMLTextAreaElement;
+    expect(textarea).not.toBeNull();
+    await screen.getByRole('button', { name: 'Save' }).click();
+    await vi.waitFor(() => expect(onDescriptionSave).toHaveBeenCalled());
   });
 });

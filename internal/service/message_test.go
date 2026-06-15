@@ -431,6 +431,7 @@ type fakeAttachmentRefMgr struct {
 	removed     []string
 	validateErr error
 	addErr      error
+	removeErr   error
 }
 
 func (f *fakeAttachmentRefMgr) ValidateForUse(_ context.Context, _ string) error {
@@ -444,7 +445,107 @@ func (f *fakeAttachmentRefMgr) AddRef(_ context.Context, attachmentID, _ string)
 
 func (f *fakeAttachmentRefMgr) RemoveRef(_ context.Context, attachmentID, _ string) error {
 	f.removed = append(f.removed, attachmentID)
-	return nil
+	return f.removeErr
+}
+
+func TestMessageService_releaseAttachments_SkipsEmptyAndSwallowsError(t *testing.T) {
+	svc, _, _, _, _ := setupMessageService()
+	refs := &fakeAttachmentRefMgr{removeErr: errors.New("remove boom")}
+	svc.SetAttachmentManager(refs)
+
+	// Empty IDs are skipped; the RemoveRef error on the real ID is logged
+	// and swallowed (releaseAttachments waits on its goroutines).
+	svc.releaseAttachments(context.Background(), "msg-1", []string{"", "a1"})
+	if len(refs.removed) != 1 || refs.removed[0] != "a1" {
+		t.Fatalf("expected RemoveRef on a1 only, got %+v", refs.removed)
+	}
+}
+
+func TestMessageService_followMentionedThreadUsers_SkipsAndSwallowsBatchError(t *testing.T) {
+	svc, _, memberships, _, _ := setupMessageService()
+	follows := newMockThreadFollowStore()
+	follows.setManyErr = errors.New("batch boom")
+	svc.SetThreadFollowStore(follows)
+	memberships.memberships["ch1#u-bob"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u-bob", Role: model.ChannelRoleMember}
+
+	msg := &model.Message{
+		ID:              "m-reply",
+		ParentID:        "ch1",
+		ParentMessageID: "m-root",
+		AuthorID:        "u-author",
+		// self mention (skipped), member mentioned twice (dedup), non-member (access fail).
+		Body: "@[u-author|Author] @[u-bob|Bob] @[u-bob|Bob] @[u-outsider|Out]",
+	}
+	// One valid follow is collected, the batch write fails, and the error is
+	// logged and swallowed (no panic / no return value).
+	svc.followMentionedThreadUsers(context.Background(), msg, ParentChannel)
+	if follows.setManyCalls != 1 {
+		t.Fatalf("SetThreadFollowMany calls = %d, want 1", follows.setManyCalls)
+	}
+}
+
+func TestMessageService_followMentionedThreadUsers_NoOpGuards(t *testing.T) {
+	svc, _, _, _, _ := setupMessageService()
+	follows := newMockThreadFollowStore()
+	svc.SetThreadFollowStore(follows)
+	// Not a thread reply (no ParentMessageID) → no-op.
+	svc.followMentionedThreadUsers(context.Background(), &model.Message{ID: "m", ParentID: "ch1", Body: "@[u-bob|Bob]"}, ParentChannel)
+	// Thread reply but no mentions → no-op.
+	svc.followMentionedThreadUsers(context.Background(), &model.Message{ID: "m", ParentID: "ch1", ParentMessageID: "r", Body: "no mentions"}, ParentChannel)
+	if follows.setManyCalls != 0 {
+		t.Fatalf("expected no batch writes, got %d", follows.setManyCalls)
+	}
+}
+
+func TestMessageService_scanParentMessages_Branches(t *testing.T) {
+	ctx := context.Background()
+
+	// Error path.
+	svc, messages, _, _, _ := setupMessageService()
+	messages.listErr = errors.New("boom")
+	if _, err := svc.scanParentMessages(ctx, "ch1"); err == nil {
+		t.Fatal("expected list error")
+	}
+
+	// Empty parent → returns an empty slice, no error.
+	svc2, _, _, _, _ := setupMessageService()
+	got, err := svc2.scanParentMessages(ctx, "empty-parent")
+	if err != nil || len(got) != 0 {
+		t.Fatalf("empty scan = %v, %v; want empty slice", got, err)
+	}
+
+	// hasMore=true forever → the scan caps at maxThreadScanPages and returns.
+	svc3, messages3, _, _, _ := setupMessageService()
+	messages3.listHasMore = true
+	messages3.messages["ch1#m1"] = &model.Message{ID: "m1", ParentID: "ch1"}
+	out, err := svc3.scanParentMessages(ctx, "ch1")
+	if err != nil {
+		t.Fatalf("paginated scan: %v", err)
+	}
+	if len(out) == 0 {
+		t.Fatal("expected accumulated messages from capped scan")
+	}
+}
+
+func TestMessageService_postSystemMessage_CreateErrorSwallowed(t *testing.T) {
+	svc, messages, _, _, _ := setupMessageService()
+	messages.createErr = errors.New("boom")
+	// The create fails; postSystemMessage swallows it and publishes nothing.
+	svc.postSystemMessage(context.Background(), "ch1", "system notice")
+}
+
+func TestMessageService_releaseAttachments_NoOpWhenNilOrEmpty(t *testing.T) {
+	svc, _, _, _, _ := setupMessageService()
+	// No attachment manager wired → no-op, no panic.
+	svc.releaseAttachments(context.Background(), "msg-1", []string{"a1"})
+
+	refs := &fakeAttachmentRefMgr{}
+	svc.SetAttachmentManager(refs)
+	// Empty id list → no-op.
+	svc.releaseAttachments(context.Background(), "msg-1", nil)
+	if len(refs.removed) != 0 {
+		t.Fatalf("expected no RemoveRef calls, got %+v", refs.removed)
+	}
 }
 
 func TestMessageService_Edit_AttachmentDiff(t *testing.T) {

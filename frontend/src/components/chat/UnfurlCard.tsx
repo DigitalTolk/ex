@@ -44,7 +44,11 @@ export function UnfurlCard({
         href={preview.url}
         target="_blank"
         rel="noopener noreferrer"
-        className="flex gap-3 overflow-hidden rounded-md border border-l-4 border-l-primary bg-muted/20 p-2 hover:bg-muted/40"
+        // Left accent bar: bold near-black in light (border-l-primary).
+        // In dark, primary is white — a 4px white bar reads as a glaring
+        // stripe, so tone it down to the subtle border-strong grey to
+        // match the design's restrained dark unfurl card.
+        className="flex gap-3 overflow-hidden rounded-md border border-l-4 border-l-primary dark:border-l-border-strong bg-muted/20 p-2 hover:bg-muted/40"
       >
         {preview.image && !imageBroken && (
           <img

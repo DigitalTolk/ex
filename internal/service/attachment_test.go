@@ -30,6 +30,7 @@ type mockAttachmentStore struct {
 	getHashErr  error
 	setDimErr   error
 	setThumbErr error
+	deleteErr   error
 }
 
 func newMockAttachmentStore() *mockAttachmentStore {
@@ -90,6 +91,9 @@ func (m *mockAttachmentStore) RemoveRef(_ context.Context, attachmentID, message
 	return a, nil
 }
 func (m *mockAttachmentStore) Delete(_ context.Context, id string) error {
+	if m.deleteErr != nil {
+		return m.deleteErr
+	}
 	if a, ok := m.byID[id]; ok {
 		delete(m.byHash, a.SHA256)
 	}
@@ -1106,6 +1110,23 @@ func TestAttachmentService_DeleteDraft_OnlyOwner(t *testing.T) {
 	}
 	if _, ok := storeM.byID[id]; ok {
 		t.Error("attachment not deleted")
+	}
+}
+
+func TestAttachmentService_DeleteDraft_GetError(t *testing.T) {
+	svc := NewAttachmentService(newMockAttachmentStore(), &fakeAttachmentSigner{}, newMockPublisher())
+	if err := svc.DeleteDraft(context.Background(), "owner", "does-not-exist"); err == nil {
+		t.Fatal("expected get-for-delete error")
+	}
+}
+
+func TestAttachmentService_DeleteDraft_StoreDeleteError(t *testing.T) {
+	storeM := newMockAttachmentStore()
+	svc := NewAttachmentService(storeM, &fakeAttachmentSigner{}, newMockPublisher())
+	res, _ := svc.CreateUploadURL(context.Background(), CreateUploadParams{UserID: "owner", Filename: "f.bin", ContentType: "image/png", SHA256: testSHA256A, Size: 1})
+	storeM.deleteErr = errors.New("delete boom")
+	if err := svc.DeleteDraft(context.Background(), "owner", res.Attachment.ID); err == nil {
+		t.Fatal("expected store delete error")
 	}
 }
 

@@ -31,6 +31,25 @@ func TestMarkdownRenderer_HeadingsAndParagraphs(t *testing.T) {
 	}
 }
 
+func TestMarkdownRenderer_SetextDisabledThematicBreak(t *testing.T) {
+	r := NewMarkdownRenderer()
+	// `foobar\n---` must be a paragraph + thematic break (<hr>), NOT a setext
+	// <h2> — SetextHeading is removed so a line of `---` reads as a divider.
+	out := r.RenderToHast("foobar\n---")
+	tags := topLevelTags(out)
+	if len(tags) != 2 || tags[0] != "p" || tags[1] != "hr" {
+		t.Errorf("expected [p hr], got %v", tags)
+	}
+	if !strings.Contains(allText(out.Children[0]), "foobar") {
+		t.Errorf("paragraph lost its text: %q", allText(out.Children[0]))
+	}
+	// ATX headings (`## foo`) must still work.
+	atx := r.RenderToHast("## foo")
+	if got := topLevelTags(atx); len(got) != 1 || got[0] != "h2" {
+		t.Errorf("ATX heading broken: %v", got)
+	}
+}
+
 func TestMarkdownRenderer_BoldItalicStrike(t *testing.T) {
 	r := NewMarkdownRenderer()
 	out := r.RenderToHast("**b** *i* ~~s~~")
@@ -304,6 +323,20 @@ func TestMarkdownRenderer_BlankLinesProduceBlankParagraphs(t *testing.T) {
 			break
 		}
 	}
+	// The middle paragraph must carry data-blank="true" so the
+	// frontend renderer can give it an explicit min-height. Without
+	// the marker, Tailwind preflight zeroes the <p>'s margin and the
+	// visible gap the user typed in the composer disappears.
+	middle := out.Children[1]
+	if got, _ := middle.Properties["data-blank"].(string); got != "true" {
+		t.Errorf("middle paragraph should have data-blank=\"true\", got %q (props=%+v)", got, middle.Properties)
+	}
+	if got, _ := out.Children[0].Properties["data-blank"].(string); got == "true" {
+		t.Errorf("first paragraph should not carry data-blank")
+	}
+	if got, _ := out.Children[2].Properties["data-blank"].(string); got == "true" {
+		t.Errorf("third paragraph should not carry data-blank")
+	}
 }
 
 func TestMarkdownRenderer_IndentedCodeBlock(t *testing.T) {
@@ -361,6 +394,73 @@ func TestMarkdownRenderer_LinkWithExplicitText(t *testing.T) {
 	}
 }
 
+func TestMarkdownRenderer_LinkUnsafeSchemeDropped(t *testing.T) {
+	r := NewMarkdownRenderer()
+	for _, body := range []string{
+		"click [here](javascript:alert(1))",
+		"click [here](JavaScript:alert(1))",
+		"see [x](data:text/html,<script>alert(1)</script>)",
+		"open [y](vbscript:msgbox(1))",
+	} {
+		out := r.RenderToHast(body)
+		if link := findFirstByTag(out, "a"); link != nil {
+			t.Errorf("%q: expected no anchor for unsafe scheme, got href=%v", body, link.Properties["href"])
+		}
+		// The visible link text is preserved.
+		if got := allText(out); !strings.Contains(got, "here") && !strings.Contains(got, "x") && !strings.Contains(got, "y") {
+			t.Errorf("%q: expected link text preserved, got %q", body, got)
+		}
+	}
+}
+
+func TestIsSafeURL(t *testing.T) {
+	cases := map[string]bool{
+		"https://example.com":     true,
+		"http://example.com":      true,
+		"HTTPS://EXAMPLE.COM":     true,
+		"mailto:x@example.com":    true,
+		"/relative/path":          true, // slash before any colon
+		"#anchor":                 true, // fragment first
+		"?q=1":                    true, // query first
+		"//cdn.example.com":       true, // scheme-relative
+		"relative":                true, // no colon at all
+		"a b:c":                   true, // space (non-scheme char) before colon
+		"javascript:alert(1)":     false,
+		"JavaScript:alert(1)":     false,
+		"data:text/html,<script>": false,
+		"vbscript:x":              false,
+		"file:///etc/passwd":      false,
+		"":                        false,
+		"   ":                     false,
+	}
+	for in, want := range cases {
+		if got := isSafeURL(in); got != want {
+			t.Errorf("isSafeURL(%q) = %v, want %v", in, got, want)
+		}
+	}
+}
+
+func TestMarkdownRenderer_LinkSafeSchemesKept(t *testing.T) {
+	r := NewMarkdownRenderer()
+	cases := map[string]string{
+		"[a](https://example.com)":  "https://example.com",
+		"[a](http://example.com)":   "http://example.com",
+		"[a](mailto:x@example.com)": "mailto:x@example.com",
+		"[a](/relative/path)":       "/relative/path",
+		"[a](#anchor)":              "#anchor",
+	}
+	for body, want := range cases {
+		out := r.RenderToHast(body)
+		link := findFirstByTag(out, "a")
+		if link == nil {
+			t.Fatalf("%q: expected an anchor", body)
+		}
+		if link.Properties["href"] != want {
+			t.Errorf("%q: href = %v, want %v", body, link.Properties["href"], want)
+		}
+	}
+}
+
 func TestMarkdownRenderer_BlankLinesMultiple(t *testing.T) {
 	r := NewMarkdownRenderer()
 	// Multiple-blank-line patterns produce one blank paragraph per
@@ -370,6 +470,30 @@ func TestMarkdownRenderer_BlankLinesMultiple(t *testing.T) {
 	tags := topLevelTags(out)
 	if len(tags) < 3 {
 		t.Errorf("expected at least 3 blocks (a, blank, b), got %v", tags)
+	}
+}
+
+func TestMarkdownRenderer_MultipleBlankLinesPreserveEachGap(t *testing.T) {
+	r := NewMarkdownRenderer()
+	// Regression: two blank lines between paragraphs must yield TWO
+	// blank paragraphs (one per blank line), not collapse to one. The
+	// composer exports "abc\n\n\nadsdaad" for abc + two empty lines +
+	// adsdaad; the renderer previously stacked only a single blank <p>.
+	out := r.RenderToHast("abc\n\n\nadsdaad")
+	tags := topLevelTags(out)
+	if len(tags) != 4 {
+		t.Fatalf("expected 4 blocks (abc, blank, blank, adsdaad), got %v", tags)
+	}
+	for _, idx := range []int{1, 2} {
+		if got, _ := out.Children[idx].Properties["data-blank"].(string); got != "true" {
+			t.Errorf("child %d should be a blank paragraph, got props=%+v", idx, out.Children[idx].Properties)
+		}
+	}
+	if got, _ := out.Children[0].Properties["data-blank"].(string); got == "true" {
+		t.Errorf("first paragraph should not be blank")
+	}
+	if got, _ := out.Children[3].Properties["data-blank"].(string); got == "true" {
+		t.Errorf("last paragraph should not be blank")
 	}
 }
 

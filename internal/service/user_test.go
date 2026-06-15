@@ -1265,3 +1265,32 @@ func TestUserService_SetUserStatusMessage_StoreErrors(t *testing.T) {
 		}
 	})
 }
+
+func TestUserService_RunExpiredStatusSweeper_DefaultIntervalAndError(t *testing.T) {
+	users := newMockUserStore()
+	users.listErr = errors.New("list boom")
+	svc := NewUserService(users, newMockCache(), nil, newMockPublisher())
+
+	// Pre-cancelled context: the immediate run() hits the error/warn branch,
+	// interval<=0 falls back to the default, and the loop returns on ctx.Done.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	svc.RunExpiredStatusSweeper(ctx, 0, 10)
+}
+
+func TestUserService_RunExpiredStatusSweeper_ClearsAndTicks(t *testing.T) {
+	users := newMockUserStore()
+	past := time.Now().Add(-time.Hour)
+	users.users["u1"] = &model.User{ID: "u1", UserStatus: &model.UserStatus{Text: "afk", ClearAt: &past}}
+	svc := NewUserService(users, newMockCache(), nil, newMockPublisher())
+
+	// A short interval drives at least one ticker fire before the deadline;
+	// the first run clears the expired status (cleared>0 info branch).
+	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Millisecond)
+	defer cancel()
+	svc.RunExpiredStatusSweeper(ctx, 5*time.Millisecond, 10)
+
+	if users.users["u1"].UserStatus != nil {
+		t.Fatal("expected expired status to be cleared")
+	}
+}

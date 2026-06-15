@@ -184,6 +184,51 @@ describe('PresenceContext (browser)', () => {
     expect(() => captured!.setUserOnline('x', true)).not.toThrow();
   });
 
+  it('coerces a backfill payload with no `online` field to an empty set (?? [])', async () => {
+    // data is defined but `data.online` is undefined → the `?? []` arm.
+    apiFetchMock.mockResolvedValueOnce({});
+    let captured: ReturnType<typeof usePresence> | null = null;
+    await render(
+      <PresenceProvider>
+        <Probe onState={(s) => { captured = s; }} />
+      </PresenceProvider>,
+    );
+    // Self is still seeded; no other users came from the empty payload.
+    await vi.waitFor(() => expect(captured?.online.has('u-self')).toBe(true));
+    expect(captured?.online.size).toBe(1);
+  });
+
+  it('does not seed a self id on success when the authenticated user has no id', async () => {
+    // Authenticated but user.id missing → `if (user?.id)` false arm in the
+    // success handler; only the backfilled ids land in the set.
+    mockAuth = { ...mockAuth, user: { ...mockAuth.user, id: '' } };
+    apiFetchMock.mockResolvedValueOnce({ online: ['u-a'] });
+    let captured: ReturnType<typeof usePresence> | null = null;
+    await render(
+      <PresenceProvider>
+        <Probe onState={(s) => { captured = s; }} />
+      </PresenceProvider>,
+    );
+    await vi.waitFor(() => expect(captured?.online.has('u-a')).toBe(true));
+    expect(captured?.online.has('')).toBe(false);
+  });
+
+  it('drops the catch-path self-seed when the provider unmounts before fetch rejects', async () => {
+    let reject: (e: unknown) => void = () => undefined;
+    apiFetchMock.mockReturnValueOnce(new Promise((_, r) => { reject = r; }));
+    let captured: ReturnType<typeof usePresence> | null = null;
+    const screen = await render(
+      <PresenceProvider>
+        <Probe onState={(s) => { captured = s; }} />
+      </PresenceProvider>,
+    );
+    screen.unmount();
+    // Reject AFTER unmount → the catch's `if (cancelled) return` true arm.
+    reject(new Error('late failure'));
+    await new Promise((r) => setTimeout(r, 30));
+    expect(captured).not.toBeNull();
+  });
+
   it('drops the backfill result when the provider unmounts before fetch resolves', async () => {
     let resolve: (v: { online: string[] }) => void = () => undefined;
     apiFetchMock.mockReturnValueOnce(new Promise<{ online: string[] }>((r) => { resolve = r; }));

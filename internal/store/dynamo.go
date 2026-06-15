@@ -31,9 +31,27 @@ type DBConfig struct {
 	Table    string
 }
 
+// DynamoAPI is the subset of *dynamodb.Client used by the store package. The
+// real client satisfies it directly; narrowing to an interface lets tests
+// inject a fault-wrapping client to exercise the SDK-error branches that a live
+// DynamoDB Local instance never returns on the happy path.
+type DynamoAPI interface {
+	BatchWriteItem(ctx context.Context, params *dynamodb.BatchWriteItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.BatchWriteItemOutput, error)
+	CreateTable(ctx context.Context, params *dynamodb.CreateTableInput, optFns ...func(*dynamodb.Options)) (*dynamodb.CreateTableOutput, error)
+	DeleteItem(ctx context.Context, params *dynamodb.DeleteItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.DeleteItemOutput, error)
+	DescribeTable(ctx context.Context, params *dynamodb.DescribeTableInput, optFns ...func(*dynamodb.Options)) (*dynamodb.DescribeTableOutput, error)
+	GetItem(ctx context.Context, params *dynamodb.GetItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.GetItemOutput, error)
+	PutItem(ctx context.Context, params *dynamodb.PutItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.PutItemOutput, error)
+	Query(ctx context.Context, params *dynamodb.QueryInput, optFns ...func(*dynamodb.Options)) (*dynamodb.QueryOutput, error)
+	Scan(ctx context.Context, params *dynamodb.ScanInput, optFns ...func(*dynamodb.Options)) (*dynamodb.ScanOutput, error)
+	TransactWriteItems(ctx context.Context, params *dynamodb.TransactWriteItemsInput, optFns ...func(*dynamodb.Options)) (*dynamodb.TransactWriteItemsOutput, error)
+	UpdateItem(ctx context.Context, params *dynamodb.UpdateItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.UpdateItemOutput, error)
+	UpdateTimeToLive(ctx context.Context, params *dynamodb.UpdateTimeToLiveInput, optFns ...func(*dynamodb.Options)) (*dynamodb.UpdateTimeToLiveOutput, error)
+}
+
 // DB is the base DynamoDB store that holds the client and table name.
 type DB struct {
-	Client *dynamodb.Client
+	Client DynamoAPI
 	Table  string
 }
 
@@ -44,7 +62,7 @@ func New(ctx context.Context, cfg DBConfig) (*DB, error) {
 	}
 
 	awsCfg, err := awsconfig.LoadDefaultConfig(ctx, opts...)
-	if err != nil {
+	if err != nil { // coverage-ignore: LoadDefaultConfig with only a region fails only on a malformed on-disk AWS config; not reachable in tests
 		return nil, fmt.Errorf("store: load aws config: %w", err)
 	}
 
@@ -138,7 +156,7 @@ func (db *DB) EnsureTable(ctx context.Context) error {
 	waiter := dynamodb.NewTableExistsWaiter(db.Client)
 	if err := waiter.Wait(ctx, &dynamodb.DescribeTableInput{
 		TableName: aws.String(db.Table),
-	}, 2*time.Minute); err != nil {
+	}, 2*time.Minute); err != nil { // coverage-ignore: dev-only table bootstrap; table-never-active is an infra timeout, not reachable against a healthy local instance
 		return fmt.Errorf("store: wait for table: %w", err)
 	}
 

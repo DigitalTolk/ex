@@ -7,10 +7,19 @@ import (
 	"github.com/DigitalTolk/ex/internal/service"
 )
 
+// authProvider is the slice of *auth.OIDCProvider the adapter needs. As an
+// interface it lets tests inject a fake whose Exchange succeeds, covering the
+// OIDCUserInfo-mapping branch a real provider can't reach without a live IdP
+// (it requires a verified, signed id_token round-trip).
+type authProvider interface {
+	AuthURL(state string) string
+	Exchange(ctx context.Context, code string) (*auth.OIDCUserInfo, error)
+}
+
 // oidcAdapter wraps an auth.OIDCProvider to implement the service.OIDCProvider
 // interface, bridging the OIDCUserInfo types.
 type oidcAdapter struct {
-	p *auth.OIDCProvider
+	p authProvider
 }
 
 // NewOIDCAdapter returns an adapter that satisfies service.OIDCProvider.

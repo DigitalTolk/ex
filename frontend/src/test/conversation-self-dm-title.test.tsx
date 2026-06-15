@@ -1,4 +1,32 @@
 import { describe, it, expect, vi } from 'vitest';
+
+// MarkdownComposer pulls in roster/channel/emoji/auth/presence data hooks these
+// view-level tests don't stub; they don't exercise the composer, so stub it with
+// a plain textarea (matches the message-input-validation stub).
+vi.mock('@/components/chat/markdown/MarkdownComposer', () => ({
+  MarkdownComposer: (props: {
+    ariaLabel?: string;
+    placeholder?: string;
+    onChange?: (md: string) => void;
+    onSubmit?: (md: string) => void;
+  }) => (
+    <div>
+      <textarea
+        aria-label={props.ariaLabel ?? 'Message input'}
+        placeholder={props.placeholder}
+        onChange={(e) => props.onChange?.(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            props.onSubmit?.((e.target as HTMLTextAreaElement).value);
+          }
+        }}
+        data-testid="composer-stub"
+      />
+      {props.placeholder ? <span>{props.placeholder}</span> : null}
+    </div>
+  ),
+}));
 import { render, screen } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';

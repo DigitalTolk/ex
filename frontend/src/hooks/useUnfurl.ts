@@ -18,6 +18,7 @@ export function useUnfurl(url: string | null) {
   return useQuery<UnfurlPreview | null>({
     queryKey: queryKeys.unfurl(url ?? ''),
     queryFn: async () => {
+      /* istanbul ignore next -- the query is gated by `enabled: !!url`, so the queryFn never runs with a null/empty url; this guard is defensive (and narrows the type). */
       if (!url) return null;
       try {
         // apiFetch translates 204 → undefined; normalize to null.

@@ -22,6 +22,10 @@ import (
 // so it's consistent across all instances without coordination.
 var generalChannelID = store.DeriveID("channel:general")
 
+// randRead is a seam over crypto/rand.Read so tests can exercise the
+// (otherwise unreachable) CSPRNG-failure branches.
+var randRead = rand.Read
+
 // ChannelJoiner is the subset of ChannelService that auth flows use to
 // auto-join users to channels (e.g. #general on signup, channels listed on
 // an invite). Defined as an interface so AuthService stays testable without
@@ -100,7 +104,7 @@ func (s *AuthService) HandleOIDCLogin() (authURL, state string, err error) {
 	}
 
 	b := make([]byte, 16)
-	if _, err := rand.Read(b); err != nil {
+	if _, err := randRead(b); err != nil {
 		return "", "", fmt.Errorf("auth: generate state: %w", err)
 	}
 	state = hex.EncodeToString(b)
@@ -227,7 +231,7 @@ func (s *AuthService) CreateDesktopAuthSession(ctx context.Context, accessToken,
 	}
 
 	b := make([]byte, 32)
-	if _, err := rand.Read(b); err != nil {
+	if _, err := randRead(b); err != nil {
 		return "", fmt.Errorf("auth: generate desktop auth code: %w", err)
 	}
 	code := base64.RawURLEncoding.EncodeToString(b)
@@ -283,7 +287,7 @@ func (s *AuthService) CreateInvite(ctx context.Context, inviterID, email string,
 		return nil, err
 	}
 	b := make([]byte, 24)
-	if _, err := rand.Read(b); err != nil {
+	if _, err := randRead(b); err != nil {
 		return nil, fmt.Errorf("auth: generate invite token: %w", err)
 	}
 	token := base64.RawURLEncoding.EncodeToString(b)

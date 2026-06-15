@@ -174,7 +174,7 @@ func (s *NotificationService) NotifyForMessage(ctx context.Context, msg *model.M
 	if msg.ParentMessageID != "" {
 		kind = NotificationKindThreadReply
 	}
-	if !IsNotifiable(kind) {
+	if !IsNotifiable(kind) { // coverage-ignore: kind is set above to either NotificationKindMessage or NotificationKindThreadReply, both of which are in notifiableKinds; this guard is defensive against a future kind that is not notifiable.
 		return
 	}
 

@@ -31,6 +31,10 @@ export function PresenceProvider({ children }: { children: ReactNode }) {
       .catch(() => {
         if (cancelled) return;
         // Even if backfill fails, seed self so the user's own dot is correct.
+        // The backfill effect only runs the catch once against the initial
+        // empty set, so `prev.has(user.id)` is always false here — the
+        // `? prev` short-circuit is a defensive ref-stability guard.
+        /* istanbul ignore next -- prev never already contains self in the one-shot backfill catch */
         if (user?.id) setOnline((prev) => (prev.has(user.id) ? prev : new Set(prev).add(user.id)));
       });
     return () => { cancelled = true; };

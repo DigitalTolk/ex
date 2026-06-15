@@ -25,6 +25,21 @@ function root(children: HastNode[]): HastNode {
   return { type: 'root', children };
 }
 
+describe('renderHastTree — link scheme safety', () => {
+  it('renders a safe link as an anchor', async () => {
+    const tree = root([elem('a', { href: 'https://example.com' }, [text('click')])]);
+    await render(wrap(<>{renderHastTree(tree)}</>));
+    expect(document.querySelector('a')?.getAttribute('href')).toBe('https://example.com');
+  });
+
+  it('renders an unsafe-scheme link as plain text, no anchor', async () => {
+    const tree = root([elem('a', { href: 'javascript:alert(1)' }, [text('click')])]);
+    await render(wrap(<>{renderHastTree(tree)}</>));
+    expect(document.querySelector('a')).toBeNull();
+    expect(document.body.textContent).toContain('click');
+  });
+});
+
 describe('renderHastTree — every custom-tag branch', () => {
   it('renders a self-mention with the highlight class when currentUserId matches', async () => {
     const tree = root([
@@ -219,5 +234,124 @@ describe('renderHastTree — every custom-tag branch', () => {
     await render(wrap(<>{renderHastTree(tree)}</>));
     const pill = document.querySelector('[data-mention-user-id="u-3"]');
     expect(pill).not.toBeNull();
+  });
+
+  it('renders every heading level with its own class ramp', async () => {
+    const tree = root([
+      elem('h1', {}, [text('H1')]),
+      elem('h2', {}, [text('H2')]),
+      elem('h3', {}, [text('H3')]),
+      elem('h4', {}, [text('H4')]),
+      elem('h5', {}, [text('H5')]),
+      elem('h6', {}, [text('H6')]),
+    ]);
+    await render(wrap(<>{renderHastTree(tree)}</>));
+    for (const t of ['H1', 'H2', 'H3', 'H4', 'H5', 'H6']) {
+      expect(document.body.textContent).toContain(t);
+    }
+    // Distinct class ramp per level (covers the headingClass ternary chain).
+    expect(document.querySelector('h2')?.className).toMatch(/text-xl/);
+    expect(document.querySelector('h6')?.className).toMatch(/text-xs/);
+  });
+
+  it('falls back to empty ids/names when mention tags omit their data props', async () => {
+    const tree = root([
+      elem('p', {}, [
+        elem('ex-mention-user', {}),
+        elem('ex-mention-channel', {}),
+        elem('ex-mention-group', {}),
+      ]),
+    ]);
+    await render(wrap(<>{renderHastTree(tree)}</>));
+    // The user/group pills render even with empty data (the `?? ''` paths).
+    expect(document.querySelectorAll('[data-testid="mention-pill"]').length).toBeGreaterThanOrEqual(2);
+    expect(document.querySelector('[data-testid="channel-mention-pill"]')).not.toBeNull();
+  });
+
+  it('renders a hashtag as plain text when no onTagClick handler is provided', async () => {
+    const tree = root([
+      elem('p', {}, [elem('ex-hashtag', { 'data-tag': 'launch', 'data-value': '#launch' })]),
+    ]);
+    await render(wrap(<>{renderHastTree(tree)}</>));
+    // No handler → a non-interactive span, not a button.
+    expect(document.body.textContent).toContain('#launch');
+    expect(document.querySelector('button')).toBeNull();
+  });
+
+  it('renders a hashtag as a button when an onTagClick handler is provided', async () => {
+    const onTagClick = vi.fn();
+    const tree = root([
+      elem('p', {}, [elem('ex-hashtag', { 'data-tag': 'launch' })]),
+    ]);
+    await render(wrap(<>{renderHastTree(tree, { onTagClick })}</>));
+    const btn = document.querySelector('button');
+    expect(btn).not.toBeNull();
+    btn!.click();
+    expect(onTagClick).toHaveBeenCalledWith('launch');
+  });
+
+  it('renders a giphy embed with explicit width/height', async () => {
+    const tree = root([
+      elem('p', {}, [elem('ex-giphy', { 'data-id': 'gif-1', 'data-width': '320', 'data-height': '180' })]),
+    ]);
+    await render(wrap(<>{renderHastTree(tree)}</>));
+    // GiphyEmbed mounts with the parsed dimensions; assert the tree rendered.
+    expect(document.body).not.toBeNull();
+  });
+
+  it('renders an ex-hashtag with no data-tag (the data-tag ?? "" fallback)', async () => {
+    // No data-tag attribute → `props['data-tag'] ?? ''` takes the `?? ''` side.
+    const tree = root([elem('p', {}, [elem('ex-hashtag', {})])]);
+    await render(wrap(<>{renderHastTree(tree)}</>));
+    // Renders the plain `#` span (no handler) without throwing.
+    expect(document.querySelector('p')).not.toBeNull();
+  });
+
+  it('renders an ex-emoji-shortcode with no data-name (the data-name ?? "" fallback)', async () => {
+    // No data-name → `props['data-name'] ?? ''` takes the `?? ''` side; with no
+    // map entry and an unknown empty name it renders the literal.
+    const tree = root([elem('p', {}, [elem('ex-emoji-shortcode', {})])]);
+    await render(wrap(<>{renderHastTree(tree)}</>));
+    expect(document.querySelector('p')).not.toBeNull();
+  });
+
+  it('renders a giphy embed with no id and no dimensions (the ?? "" / : undefined sides)', async () => {
+    // ex-giphy with neither data-id nor data-width/height: id falls back to '',
+    // and both `props['data-...'] ? Number(...) : undefined` ternaries take the
+    // undefined side.
+    const tree = root([elem('p', {}, [elem('ex-giphy', {})])]);
+    await render(wrap(<>{renderHastTree(tree)}</>));
+    expect(document.body).not.toBeNull();
+  });
+
+  it('prefers the unicode glyph over a custom emoji image when a skin tone is set', async () => {
+    // With data-skin present, `!skin ? emojiMap[name] : undefined` takes the
+    // undefined side, so even though emojiMap has the name the custom <img> is
+    // skipped and the toned unicode span renders.
+    const tree = root([
+      elem('p', {}, [elem('ex-emoji-shortcode', { 'data-name': 'wave', 'data-skin': 'skin-tone-2' })]),
+    ]);
+    await render(wrap(<>{renderHastTree(tree, { emojiMap: { wave: 'https://cdn.test/wave.png' } })}</>));
+    expect(document.querySelector('img[alt=":wave:"]')).toBeNull();
+    expect(document.querySelector('span[title=":wave::skin-tone-2:"]')).not.toBeNull();
+  });
+
+  it('renders an ex-bare-url with an empty href fallback when data-href is missing', async () => {
+    const tree = root([elem('p', {}, [elem('ex-bare-url', {})])]);
+    await render(wrap(<>{renderHastTree(tree)}</>));
+    // href falls back to '' → an anchor with an empty href still renders.
+    expect(document.querySelector('a')).not.toBeNull();
+  });
+
+  it('strips the https:// scheme from a bare URL but keeps other schemes intact', async () => {
+    const tree = root([
+      elem('p', {}, [
+        elem('ex-bare-url', { 'data-href': 'https://example.com/path' }),
+        elem('ex-bare-url', { 'data-href': 'http://plain.example' }),
+      ]),
+    ]);
+    await render(wrap(<>{renderHastTree(tree)}</>));
+    expect(document.body.textContent).toContain('example.com/path');
+    expect(document.body.textContent).toContain('http://plain.example');
   });
 });

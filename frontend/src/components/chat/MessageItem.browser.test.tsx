@@ -154,4 +154,77 @@ describe('MessageItem browser behavior', () => {
       expect(document.body.textContent).not.toContain('Loading');
     });
   });
+
+  it('renders reaction badges with their counts', async () => {
+    await renderWithProviders(
+      <MessageItem
+        message={makeMessage({ reactions: { ':thumbsup:': ['user-2', 'user-3'] } })}
+        authorName="Alice"
+        isOwn={false}
+        channelId="channel-1"
+        currentUserId="user-1"
+      />,
+    );
+    await vi.waitFor(() => {
+      const badge = document.querySelector('[data-testid="reaction-badge"]');
+      expect(badge).not.toBeNull();
+      expect(badge!.textContent).toContain('2');
+    });
+  });
+
+  it('invokes onReplyInThread from the desktop thread-reply action on hover', async () => {
+    if (window.innerWidth <= 767) return;
+    const onReplyInThread = vi.fn();
+    await renderWithProviders(
+      <MessageItem
+        message={makeMessage()}
+        authorName="Alice"
+        isOwn={false}
+        channelId="channel-1"
+        currentUserId="user-1"
+        onReplyInThread={onReplyInThread}
+      />,
+    );
+    const row = document.querySelector('[data-message-id]') as HTMLElement;
+    row.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+    // The desktop hover toolbar exposes the reply control; click the first
+    // visible "Reply in thread" button.
+    const replyBtn = Array.from(document.querySelectorAll('button[aria-label="Reply in thread"]'))
+      .find((b) => (b as HTMLElement).offsetParent !== null) as HTMLButtonElement | undefined;
+    expect(replyBtn).toBeDefined();
+    replyBtn!.click();
+    expect(onReplyInThread).toHaveBeenCalledWith('msg-1');
+  });
+
+  it('renders a message in a conversation context (builds the conversation deep-link)', async () => {
+    await renderWithProviders(
+      <MessageItem
+        message={makeMessage({ parentID: 'conv-1', parentType: 'conversation' })}
+        authorName="Bob"
+        isOwn={false}
+        conversationId="conv-1"
+        currentUserId="user-1"
+      />,
+    );
+    // The conversation branch of the deep-link builder runs (slug is absent,
+    // conversationId present); the row renders its body either way.
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain('Hello world');
+    });
+  });
+
+  it('renders a deleted message tombstone instead of the body', async () => {
+    await renderWithProviders(
+      <MessageItem
+        message={makeMessage({ deleted: true, body: '' })}
+        authorName="Alice"
+        isOwn={false}
+        channelId="channel-1"
+        currentUserId="user-1"
+      />,
+    );
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toMatch(/deleted/i);
+    });
+  });
 });

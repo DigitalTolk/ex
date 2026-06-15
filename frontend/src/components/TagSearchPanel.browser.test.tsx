@@ -87,4 +87,16 @@ describe('TagSearchPanel browser behaviour', () => {
     const screen = await renderPanel();
     await expect.element(screen.getByText('boom')).toBeVisible();
   });
+
+  it('falls back to a generic "Search failed" message for a non-Error rejection', async () => {
+    tagState.activeTag = 'bug';
+    searchMessagesResult.isLoading = false;
+    searchMessagesResult.isError = true;
+    // A non-Error value (e.g. a rejected string) takes the `: "Search
+    // failed"` arm of the instanceof ternary.
+    searchMessagesResult.error = 'some string error';
+    searchMessagesResult.data = undefined;
+    const screen = await renderPanel();
+    await expect.element(screen.getByText('Search failed')).toBeVisible();
+  });
 });

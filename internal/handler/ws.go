@@ -34,7 +34,20 @@ type inboundMessage struct {
 	TimeZone        string `json:"timeZone"`        // optional — "timezone.update" heartbeat frame
 }
 
-const wsKeepAliveInterval = 30 * time.Second
+// wsKeepAliveInterval is the cadence of server → client keep-alive pings. It is
+// a var (not a const) purely so tests can shrink it to drive the keep-alive
+// branch of the connection loop deterministically; production never reassigns
+// it.
+var wsKeepAliveInterval = 30 * time.Second
+
+// wsConnWrite is the seam every server → client text write goes through. It is
+// a var (not a direct conn.Write call) so a test can force the write-failure
+// arms of the connection loop (initial ping, event fan-out, keep-alive ping)
+// deterministically — racing a real socket disconnect almost always loses to
+// the loop's context-cancellation case instead. Production never reassigns it.
+var wsConnWrite = func(ctx context.Context, conn *websocket.Conn, data []byte) error {
+	return conn.Write(ctx, websocket.MessageText, data)
+}
 
 // WSHandler serves a WebSocket connection for real-time updates.
 type WSHandler struct {
@@ -270,7 +283,7 @@ func (h *WSHandler) Connect(w http.ResponseWriter, r *http.Request) {
 		case <-client.Done():
 			return
 		case data := <-client.Events:
-			if err := conn.Write(ctx, websocket.MessageText, data); err != nil {
+			if err := wsConnWrite(ctx, conn, data); err != nil {
 				return
 			}
 		case <-ticker.C:
@@ -287,7 +300,7 @@ func (h *WSHandler) Connect(w http.ResponseWriter, r *http.Request) {
 func writePing(ctx context.Context, conn *websocket.Conn) error {
 	evt, _ := events.NewEvent(events.EventPing, map[string]int64{"ts": time.Now().UnixMilli()})
 	data, _ := json.Marshal(evt)
-	return conn.Write(ctx, websocket.MessageText, data)
+	return wsConnWrite(ctx, conn, data)
 }
 
 // runReplay walks the user's durable inbox, emitting each entry newer
@@ -325,11 +338,11 @@ func (h *WSHandler) runReplay(ctx context.Context, conn *websocket.Conn, userID,
 // to abandon the connection without bubbling up the specific error).
 func writeControlFrame(ctx context.Context, conn *websocket.Conn, eventType string, payload any) bool {
 	evt, err := events.NewEvent(eventType, payload)
-	if err != nil {
+	if err != nil { // coverage-ignore: callers pass only scalar map payloads (map[string]string / map[string]int); json.Marshal of those cannot fail, so NewEvent never errors here.
 		return true
 	}
 	data, err := json.Marshal(evt)
-	if err != nil {
+	if err != nil { // coverage-ignore: evt is an *events.Event of scalar fields plus a pre-validated json.RawMessage; re-marshaling it cannot fail.
 		return true
 	}
 	return conn.Write(ctx, websocket.MessageText, data) == nil
@@ -393,7 +406,7 @@ func (h *WSHandler) publishTyping(ctx context.Context, userID string, msg inboun
 		payload["parentMessageID"] = msg.ParentMessageID
 	}
 	evt, err := events.NewEvent(events.EventTyping, payload)
-	if err != nil {
+	if err != nil { // coverage-ignore: payload is a map of string values (plus an optional string parentMessageID); json.Marshal cannot fail, so NewEvent never errors here.
 		return
 	}
 	_ = h.publisher.Publish(ctx, topic, evt)

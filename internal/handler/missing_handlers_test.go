@@ -384,7 +384,8 @@ func (f *fakeSigner) GetObject(_ context.Context, key string) (io.ReadCloser, st
 }
 
 type fakeMediaCacheH struct {
-	items map[string]any
+	items  map[string]any
+	getErr error
 }
 
 func newFakeMediaCacheH() *fakeMediaCacheH {
@@ -392,6 +393,9 @@ func newFakeMediaCacheH() *fakeMediaCacheH {
 }
 
 func (c *fakeMediaCacheH) Get(_ context.Context, key string, dest interface{}) error {
+	if c.getErr != nil {
+		return c.getErr
+	}
 	v, ok := c.items[key]
 	if !ok {
 		return cache.ErrCacheMiss
@@ -753,6 +757,48 @@ func TestAttachmentHandler_Media_OK(t *testing.T) {
 	}
 	if got := rec.Header().Get("Content-Disposition"); got != `attachment; filename="pic.png"` {
 		t.Fatalf("Content-Disposition = %q, want attachment filename", got)
+	}
+}
+
+func TestAttachmentHandler_Media_MissingToken(t *testing.T) {
+	st := newFakeAttachmentStore()
+	svc := service.NewAttachmentService(st, &fakeSigner{}, nil)
+	h := NewAttachmentHandler(svc)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/media//x.png", nil)
+	rec := httptest.NewRecorder()
+	h.Media(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+}
+
+func TestAttachmentHandler_Media_NotFound(t *testing.T) {
+	st := newFakeAttachmentStore()
+	svc := service.NewAttachmentService(st, &fakeSigner{}, nil)
+	svc.SetMediaURLCache(newFakeMediaCacheH())
+	h := NewAttachmentHandler(svc)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/media/unknown-token/x.png", nil)
+	req.SetPathValue("token", "unknown-token")
+	rec := httptest.NewRecorder()
+	h.Media(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusNotFound, rec.Body.String())
+	}
+}
+
+func TestAttachmentHandler_Media_BadGateway(t *testing.T) {
+	st := newFakeAttachmentStore()
+	svc := service.NewAttachmentService(st, &fakeSigner{}, nil)
+	mc := newFakeMediaCacheH()
+	mc.getErr = errors.New("redis exploded")
+	svc.SetMediaURLCache(mc)
+	h := NewAttachmentHandler(svc)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/media/some-token/x.png", nil)
+	req.SetPathValue("token", "some-token")
+	rec := httptest.NewRecorder()
+	h.Media(rec, req)
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusBadGateway, rec.Body.String())
 	}
 }
 
@@ -1399,6 +1445,29 @@ func TestThreadHandler_Follow_UnauthenticatedAndBadTarget(t *testing.T) {
 	}
 }
 
+func TestThreadHandler_Follow_ServiceError(t *testing.T) {
+	// No membership for the caller → SetThreadFollow's access check fails,
+	// surfacing as a 400 follow_error.
+	messageSvc := service.NewMessageService(newDataMessageStore(), newDataMembershipStore(), newDataConversationStore(), nil, &mockBrokerForHandler{})
+	messageSvc.SetThreadFollowStore(newDataThreadFollowStore())
+	h := NewThreadHandler(messageSvc)
+	jwtMgr := auth.NewJWTManager("thread-follow-svcerr-secret", 15*time.Minute, 720*time.Hour)
+	user := &model.User{ID: "u-noaccess", Email: "na@x.com", SystemRole: model.SystemRoleMember}
+	token := makeTokenForUser(jwtMgr, user)
+	handler := middleware.Auth(jwtMgr)(http.HandlerFunc(h.Follow))
+
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/threads/channels/ch-x/root-x/follow", nil)
+	req.SetPathValue("parentType", "channels")
+	req.SetPathValue("parentID", "ch-x")
+	req.SetPathValue("threadRootID", "root-x")
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("follow service-error status = %d, want 400; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestNormalizeThreadParentType(t *testing.T) {
 	tests := []struct {
 		raw  string
@@ -1951,8 +2020,10 @@ func TestUserHandler_SetUserStatus_NonGuest(t *testing.T) {
 // store.PinIndexRow / FileIndexRow and service.PinIndexEntry /
 // FileIndexEntry without spinning up DynamoDB.
 type dataParentIndexStore struct {
-	pins  map[string]map[string]*store.PinIndexRow
-	files map[string]map[string]*store.FileIndexRow
+	pins        map[string]map[string]*store.PinIndexRow
+	files       map[string]map[string]*store.FileIndexRow
+	listPinErr  error
+	listFileErr error
 }
 
 func newDataParentIndexStore() *dataParentIndexStore {
@@ -1976,6 +2047,9 @@ func (d *dataParentIndexStore) DeletePinIndex(_ context.Context, parentID, msgID
 	return nil
 }
 func (d *dataParentIndexStore) ListPinIndex(_ context.Context, parentID string) ([]*store.PinIndexRow, error) {
+	if d.listPinErr != nil {
+		return nil, d.listPinErr
+	}
 	rows := d.pins[parentID]
 	out := make([]*store.PinIndexRow, 0, len(rows))
 	for _, r := range rows {
@@ -1999,12 +2073,33 @@ func (d *dataParentIndexStore) DeleteFileIndex(_ context.Context, parentID, atta
 	return nil
 }
 func (d *dataParentIndexStore) ListFileIndex(_ context.Context, parentID string) ([]*store.FileIndexRow, error) {
+	if d.listFileErr != nil {
+		return nil, d.listFileErr
+	}
 	rows := d.files[parentID]
 	out := make([]*store.FileIndexRow, 0, len(rows))
 	for _, r := range rows {
 		out = append(out, r)
 	}
 	return out, nil
+}
+
+func TestParentIndexAdapter_ListErrorsPropagate(t *testing.T) {
+	ctx := context.Background()
+
+	backing := newDataParentIndexStore()
+	backing.listPinErr = errors.New("pin list boom")
+	adapter := newParentIndexAdapterFromBacking(backing)
+	if _, err := adapter.ListPinIndex(ctx, "ch"); err == nil {
+		t.Error("expected ListPinIndex error to propagate")
+	}
+
+	backing2 := newDataParentIndexStore()
+	backing2.listFileErr = errors.New("file list boom")
+	adapter2 := newParentIndexAdapterFromBacking(backing2)
+	if _, err := adapter2.ListFileIndex(ctx, "ch"); err == nil {
+		t.Error("expected ListFileIndex error to propagate")
+	}
 }
 
 func TestParentIndexAdapter_Delegates(t *testing.T) {

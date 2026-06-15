@@ -89,6 +89,7 @@ export function Header({
 
   useLayoutEffect(() => {
     const node = headerShellRef.current;
+    /* istanbul ignore next -- headerShellRef is always attached and document always exists in this browser-only app; defensive guards */
     if (!node || typeof document === 'undefined') return;
     const measuredNode = node;
 
@@ -101,8 +102,10 @@ export function Header({
     }
 
     updateMobilePanelTop();
+    /* istanbul ignore next -- ResizeObserver is always defined in the supported browsers; the null arm is a defensive feature-detect */
     const resizeObserver = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(updateMobilePanelTop);
     resizeObserver?.observe(measuredNode);
+    /* istanbul ignore next -- MutationObserver is always defined in the supported browsers; the null arm is a defensive feature-detect */
     const mutationObserver = typeof MutationObserver === 'undefined'
       ? null
       : new MutationObserver(() => requestAnimationFrame(updateMobilePanelTop));
@@ -219,7 +222,7 @@ export function Header({
               ) : channel.description ? (
                 canEdit ? (
                   <button
-                    onClick={() => { setDescDraft(channel.description || ''); setIsEditingDesc(true); }}
+                    onClick={editDescription}
                     className="hidden min-w-0 max-w-full truncate text-left text-sm text-muted-foreground hover:text-foreground md:block"
                     title="Click to edit description"
                   >
@@ -293,7 +296,10 @@ export function Header({
       </div>
 
       {channel && isMobile && (
-        <Dialog open={isEditingDesc} onOpenChange={(open) => { if (!open) cancelDescriptionEdit(); }}>
+        <Dialog open={isEditingDesc} onOpenChange={(open) => {
+          /* istanbul ignore next -- the dialog is controlled (open={isEditingDesc}); radix only calls onOpenChange(false) on user dismiss, never with open=true, so the open=true arm is unreachable */
+          if (!open) cancelDescriptionEdit();
+        }}>
           <DialogContent className="max-w-none" data-testid="mobile-description-editor">
             <DialogHeader>
               <DialogTitle>Edit channel description</DialogTitle>

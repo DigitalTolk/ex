@@ -8,7 +8,9 @@ import (
 	"github.com/yuin/goldmark/ast"
 	"github.com/yuin/goldmark/extension"
 	extast "github.com/yuin/goldmark/extension/ast"
+	"github.com/yuin/goldmark/parser"
 	"github.com/yuin/goldmark/text"
+	"github.com/yuin/goldmark/util"
 )
 
 // HastNode is re-exported from the model package — the structure is
@@ -25,9 +27,33 @@ type MarkdownRenderer struct {
 	md goldmark.Markdown
 }
 
+// blockParsersWithoutSetext is goldmark's DefaultBlockParsers minus the
+// SetextHeading parser (priority 100). Removing it means `foobar\n---` is a
+// paragraph followed by a thematic break (<hr>) rather than an <h2> setext
+// heading — matching the composer (which also drops SetextHeading) and the
+// Slack-style model where a line of `---` is a divider.
+func blockParsersWithoutSetext() []util.PrioritizedValue {
+	return []util.PrioritizedValue{
+		util.Prioritized(parser.NewThematicBreakParser(), 200),
+		util.Prioritized(parser.NewListParser(), 300),
+		util.Prioritized(parser.NewListItemParser(), 400),
+		util.Prioritized(parser.NewCodeBlockParser(), 500),
+		util.Prioritized(parser.NewATXHeadingParser(), 600),
+		util.Prioritized(parser.NewFencedCodeBlockParser(), 700),
+		util.Prioritized(parser.NewBlockquoteParser(), 800),
+		util.Prioritized(parser.NewHTMLBlockParser(), 900),
+		util.Prioritized(parser.NewParagraphParser(), 1000),
+	}
+}
+
 func NewMarkdownRenderer() *MarkdownRenderer {
 	md := goldmark.New(
 		goldmark.WithExtensions(extension.Strikethrough),
+		goldmark.WithParser(parser.NewParser(
+			parser.WithBlockParsers(blockParsersWithoutSetext()...),
+			parser.WithInlineParsers(parser.DefaultInlineParsers()...),
+			parser.WithParagraphTransformers(parser.DefaultParagraphTransformers()...),
+		)),
 	)
 	return &MarkdownRenderer{md: md}
 }
@@ -146,7 +172,7 @@ func emitNode(node ast.Node, src []byte, parent *HastNode) {
 			val += "\n"
 		}
 		appendTextChild(parent, val)
-	case *ast.String:
+	case *ast.String: // coverage-ignore: goldmark configured with only the Strikethrough extension never emits *ast.String nodes (verified by walking the parse tree for escaped chars, entities, and inline HTML — all yield *ast.Text); this arm is defensive against a future extension that introduces String nodes.
 		appendTextChild(parent, string(n.Value))
 	case *ast.Emphasis:
 		tag := "em"
@@ -173,8 +199,18 @@ func emitNode(node ast.Node, src []byte, parent *HastNode) {
 		el.Children = []*HastNode{textNode(b.String())}
 		parent.Children = append(parent.Children, el)
 	case *ast.Link:
+		dest := string(n.Destination)
+		if !isSafeURL(dest) {
+			// Disallowed scheme (javascript:, data:, vbscript: …) — drop the
+			// anchor and keep its visible text, mirroring how raw HTML and
+			// non-giphy images are handled. The frontend renders this HAST
+			// href verbatim, so neutralising it here is the authoritative XSS
+			// guard for every client (and incoming webhooks).
+			emitChildren(n, src, parent)
+			return
+		}
 		props := map[string]interface{}{
-			"href":   string(n.Destination),
+			"href":   dest,
 			"target": "_blank",
 			"rel":    "noopener noreferrer",
 		}
@@ -216,6 +252,42 @@ func emitNode(node ast.Node, src []byte, parent *HastNode) {
 
 func element(tag string, properties map[string]interface{}) *HastNode {
 	return &HastNode{Type: "element", TagName: tag, Properties: properties, Children: []*HastNode{}}
+}
+
+// isSafeURL reports whether a link destination is safe to emit as an href.
+// Absolute URLs are allowed only for the http/https/mailto schemes; anything
+// with another explicit scheme (javascript:, data:, vbscript:, file: …) is
+// rejected as a potential script-injection vector. Scheme-relative ("//host"),
+// path-relative, query, and fragment URLs carry no scheme and are allowed.
+// isSchemeChar reports whether c is a valid URL-scheme byte per RFC 3986:
+// ALPHA / DIGIT / "+" / "-" / ".".
+func isSchemeChar(c byte) bool {
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '+' || c == '-' || c == '.'
+}
+
+func isSafeURL(raw string) bool {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		// A '/', '?' or '#' before any ':' means there is no scheme — the URL
+		// is relative (or an anchor/query), which is safe.
+		if c == '/' || c == '?' || c == '#' {
+			return true
+		}
+		if c == ':' {
+			scheme := strings.ToLower(s[:i])
+			return scheme == "http" || scheme == "https" || scheme == "mailto"
+		}
+		// Any non-scheme byte before a ':' means it isn't a scheme → relative.
+		if !isSchemeChar(c) {
+			return true
+		}
+	}
+	// No ':' encountered at all → relative reference → safe.
+	return true
 }
 
 func textNode(value string) *HastNode {
@@ -305,88 +377,80 @@ func normalizeCodeLanguageGo(language string) string {
 // you'd need a heading-then-blank-then-paragraph pattern, which the
 // regex parser also collapsed under most conditions.
 func insertBlankLineParagraphs(body string, root *HastNode) {
-	// Walk lines top-to-bottom, mirroring the structure goldmark
-	// produced. Each blank line outside a fenced code block becomes
-	// a blank paragraph. Build up a parallel slice of "expected
-	// children" matching goldmark's block stream interleaved with
-	// blank paragraphs.
-	lines := strings.Split(body, "\n")
-	type spot struct{ kind string }
-	stream := make([]spot, 0, len(lines))
-	inFence := false
-	for i, line := range lines {
-		if strings.HasPrefix(line, "```") {
-			inFence = !inFence
-			continue
-		}
-		if inFence {
-			continue
-		}
-		if strings.TrimSpace(line) == "" {
-			// Don't double-count adjacent fully-blank gaps that close
-			// a previous block — only mark when the prior non-blank
-			// line was actual content.
-			prevIsBlank := i == 0 || strings.TrimSpace(lines[i-1]) == ""
-			_ = prevIsBlank
-			stream = append(stream, spot{kind: "blank"})
-		}
+	// Number of blank lines in each source gap that separates two
+	// top-level content runs, in order. The i-th entry lines up with
+	// the gap between the i-th and (i+1)-th rendered top-level blocks
+	// for the dominant case (blocks separated by blank-line runs), so
+	// we consume it by index while walking the children.
+	gaps := gapBlankCounts(body)
+	total := 0
+	for _, g := range gaps {
+		total += g
 	}
-	if len(stream) == 0 {
+	if total == 0 {
 		return
 	}
-	// Build the new children list by walking the existing one and
-	// inserting blank paragraphs after each block until the count of
-	// blanks is exhausted.
-	blanks := 0
-	for _, s := range stream {
-		if s.kind == "blank" {
-			blanks++
-		}
-	}
-	if blanks == 0 {
-		return
-	}
-	out := make([]*HastNode, 0, len(root.Children)+blanks)
-	emitted := 0
+	out := make([]*HastNode, 0, len(root.Children)+total)
 	for i, child := range root.Children {
 		out = append(out, child)
-		if i < len(root.Children)-1 && emitted < blanks {
-			// Always insert exactly one blank paragraph between
-			// adjacent block children when blanks remain. The legacy
-			// renderer emitted one <p> per blank line; we approximate
-			// by distributing one per inter-block gap, which matches
-			// the test corpus' assertions (one blank gap == 1 <p>,
-			// two blanks == 2, three == 3 …).
-			toInsert := blanks - emitted
-			// If two adjacent blocks share a gap of multiple blanks
-			// (e.g. `a\n\n\n\nb` → 3 blanks between two paragraphs),
-			// insert all of them at the gap.
-			gapBlanks := computeGapBlanks(body, child, root.Children[i+1])
-			for k := 0; k < gapBlanks && k < toInsert; k++ {
-				out = append(out, blankParagraph())
-				emitted++
-			}
+		if i >= len(root.Children)-1 {
+			continue
+		}
+		// One blank paragraph per blank line in this gap (N blank
+		// lines → N blank <p>). A gap absent from the source (two
+		// blocks adjacent with no blank line, e.g. a heading directly
+		// above a paragraph) inserts nothing.
+		n := 0
+		if i < len(gaps) {
+			n = gaps[i]
+		}
+		for k := 0; k < n; k++ {
+			out = append(out, blankParagraph())
 		}
 	}
 	root.Children = out
 }
 
-// computeGapBlanks counts how many blank lines separate two adjacent
-// blocks in the source. Without source-position tracking this is a
-// rough heuristic; in practice the legacy renderer's tests assert
-// the count is exactly the number of blank lines between the lines
-// that produced each block. We approximate by re-tokenizing the
-// source: any run of N blank lines in the top-level (non-fenced)
-// stream corresponds to N blank paragraphs.
-func computeGapBlanks(body string, _ *HastNode, _ *HastNode) int {
-	// Heuristic: 1 blank gap per pair of adjacent blocks. This
-	// matches the `first\n\nsecond` → "first, blank, second" case
-	// which is the dominant pattern. Multi-blank gaps fall back to
-	// one — covered by the simple-gap tests; the multi-blank cases
-	// (`a\n\n\n\nb` → 5 paragraphs) are handled in
-	// emitTopLevelMultipleBlanks below for now.
-	_ = body
-	return 1
+// gapBlankCounts returns, in order, the number of blank lines in each
+// run that separates two content runs at the top level. Blank lines
+// inside fenced code blocks and leading/trailing blank runs are
+// ignored (they don't sit between two blocks). Without source-position
+// tracking from goldmark this maps 1:1 onto inter-block gaps for the
+// common case where every top-level block is separated by a blank-line
+// run — which covers ordinary chat messages and the test corpus.
+func gapBlankCounts(body string) []int {
+	lines := strings.Split(body, "\n")
+	gaps := make([]int, 0, len(lines))
+	inFence := false
+	seenContent := false
+	pending := 0
+	for _, line := range lines {
+		if strings.HasPrefix(line, "```") {
+			inFence = !inFence
+			seenContent = true
+			pending = 0
+			continue
+		}
+		if inFence {
+			seenContent = true
+			pending = 0
+			continue
+		}
+		if strings.TrimSpace(line) == "" {
+			if seenContent {
+				pending++
+			}
+			continue
+		}
+		// Non-blank content line: a blank run that preceded it closes
+		// an inter-block gap.
+		if seenContent && pending > 0 {
+			gaps = append(gaps, pending)
+		}
+		pending = 0
+		seenContent = true
+	}
+	return gaps
 }
 
 func blankParagraph() *HastNode {

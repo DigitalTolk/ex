@@ -80,4 +80,41 @@ describe('UnfurlCard browser behaviour', () => {
     img.dispatchEvent(new Event('error'));
     await expect.element(screen.getByTestId('unfurl-card-image-placeholder')).toBeInTheDocument();
   });
+
+  // The left accent bar is bold near-black in light. In dark, primary is
+  // white — a 4px white bar reads as a glaring stripe that doesn't match
+  // the design's restrained dark unfurl card — so it's toned to the
+  // subtle border-strong grey (#A7A5A6), never pure white.
+  function leftBarRGB(): [number, number, number] {
+    const link = document.querySelector('[data-testid="unfurl-card"] a') as HTMLElement;
+    const m = getComputedStyle(link).borderLeftColor.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/)!;
+    return [Number(m[1]), Number(m[2]), Number(m[3])];
+  }
+
+  it('paints the left bar near-black in light mode', async () => {
+    document.documentElement.classList.remove('dark');
+    useUnfurlMock.mockReturnValue({ data: { url: 'https://example.org', title: 'X' }, isLoading: false });
+    await render(<UnfurlCard url="https://example.org" messageId="m-1" isAuthor={false} />);
+    const [r, g, b] = leftBarRGB();
+    expect(r).toBeLessThan(60);
+    expect(g).toBeLessThan(60);
+    expect(b).toBeLessThan(60);
+  });
+
+  it('tones the left bar to a subtle grey in dark mode (not glaring white)', async () => {
+    document.documentElement.classList.add('dark');
+    try {
+      useUnfurlMock.mockReturnValue({ data: { url: 'https://example.org', title: 'X' }, isLoading: false });
+      await render(<UnfurlCard url="https://example.org" messageId="m-1" isAuthor={false} />);
+      const [r, g, b] = leftBarRGB();
+      // border-strong #A7A5A6 ≈ rgb(167,165,166): a mid grey, well below
+      // pure white on every channel.
+      expect(r).toBeLessThan(210);
+      expect(g).toBeLessThan(210);
+      expect(b).toBeLessThan(210);
+      expect(r).toBeGreaterThan(120);
+    } finally {
+      document.documentElement.classList.remove('dark');
+    }
+  });
 });

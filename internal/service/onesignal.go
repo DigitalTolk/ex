@@ -84,7 +84,7 @@ func (s *OneSignalPushSender) Send(ctx context.Context, recipientUserID string, 
 		},
 	}
 	body, err := json.Marshal(payload)
-	if err != nil {
+	if err != nil { // coverage-ignore: oneSignalNotificationRequest is composed solely of strings and string maps/slices; json.Marshal of such scalar data cannot fail.
 		return fmt.Errorf("onesignal: marshal request: %w", err)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.apiURL, bytes.NewReader(body))

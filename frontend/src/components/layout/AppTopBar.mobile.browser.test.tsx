@@ -1,0 +1,98 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { render } from 'vitest-browser-react';
+import { MemoryRouter } from 'react-router-dom';
+import { AppTopBar } from './AppTopBar';
+
+// Browser coverage for AppTopBar's mobile-sheet path and the native
+// "Change server" action — the existing AppTopBar.browser.test.tsx pins
+// useIsMobile=false and getCapacitorPlugin=null, leaving the mobile
+// branches and the serverNavigation menu entry uncovered in the browser
+// gate.
+
+const logout = vi.fn().mockResolvedValue(undefined);
+const baseUser = { id: 'u-1', email: 'u@x', displayName: 'Alice Wonder', avatarURL: '' };
+const resetServer = vi.fn().mockResolvedValue(undefined);
+
+let mockOnline = new Set<string>();
+
+vi.mock('@/context/AuthContext', () => ({
+  useAuth: () => ({ user: { ...baseUser, systemRole: 'admin' }, logout }),
+}));
+vi.mock('@/context/PresenceContext', () => ({
+  usePresence: () => ({ online: mockOnline, isOnline: (id: string) => mockOnline.has(id) }),
+}));
+vi.mock('@/components/SearchBar', () => ({ SearchBar: () => <div aria-label="Search">search</div> }));
+vi.mock('@/components/EditProfileDialog', () => ({ EditProfileDialog: ({ open }: { open: boolean }) => (open ? <div data-testid="edit-profile-open" /> : null) }));
+vi.mock('@/components/UserStatusDialog', () => ({ UserStatusDialog: ({ open }: { open: boolean }) => (open ? <div data-testid="status-open" /> : null) }));
+vi.mock('@/components/AboutDialog', () => ({ AboutDialog: ({ open }: { open: boolean }) => (open ? <div data-testid="about-open" /> : null) }));
+vi.mock('@/components/InviteDialog', () => ({ InviteDialog: ({ open }: { open: boolean }) => (open ? <div data-testid="invite-open" /> : null) }));
+vi.mock('@/components/EmojiManagerDialog', () => ({ EmojiManagerDialog: ({ open }: { open: boolean }) => (open ? <div data-testid="emoji-manager-open" /> : null) }));
+// Native platform with a ServerNavigation plugin → the serverNavigation
+// branch is truthy and the "Change server" action is present.
+vi.mock('@/lib/capacitor', () => ({
+  getCapacitorPlugin: (name: string) => (name === 'ServerNavigation' ? { resetServer } : null),
+  isNativePlatform: () => true,
+}));
+vi.mock('@/hooks/useIsMobile', () => ({ useIsMobile: () => true }));
+
+function renderTopBar(ui = <AppTopBar />) {
+  return render(<MemoryRouter>{ui}</MemoryRouter>);
+}
+
+describe('AppTopBar (mobile + native)', () => {
+  beforeEach(() => {
+    mockOnline = new Set<string>();
+    logout.mockClear();
+    resetServer.mockClear();
+  });
+
+  it('opens the full-screen mobile account sheet on avatar tap', async () => {
+    // The sheet DialogContent carries `md:hidden`, so it is display:none on
+    // wide viewports; only assert on the actual mobile projects.
+    if (window.innerWidth > 767) return;
+    mockOnline = new Set<string>(['u-1']);
+    const screen = await renderTopBar();
+    // The mobile account button shows an emerald online dot.
+    const account = screen.getByTestId('topbar-account').element() as HTMLElement;
+    const dot = account.querySelector('span[aria-hidden]') as HTMLElement;
+    expect(dot.className).toContain('bg-emerald-500');
+    await screen.getByTestId('topbar-account').click();
+    await expect.element(screen.getByTestId('mobile-account-sheet')).toBeVisible();
+    await expect.element(screen.getByText('Alice Wonder')).toBeVisible();
+    // The native "Change server" action is present in the sheet.
+    await expect.element(screen.getByTestId('user-menu-change-server')).toBeVisible();
+  });
+
+  it('runs an action and closes the sheet when a menu entry is tapped', async () => {
+    if (window.innerWidth > 767) return;
+    const screen = await renderTopBar();
+    await screen.getByTestId('topbar-account').click();
+    await screen.getByTestId('user-menu-about').click();
+    // The mocked AboutDialog renders an empty div once open=true.
+    await vi.waitFor(() => {
+      expect(document.querySelector('[data-testid="about-open"]')).not.toBeNull();
+    });
+    // runActionAndCloseSheet closed the sheet.
+    await vi.waitFor(() => {
+      expect(document.querySelector('[data-testid="mobile-account-sheet"]')).toBeNull();
+    });
+  });
+
+  it('opens the change-server confirm dialog and triggers resetServer on confirm', async () => {
+    if (window.innerWidth > 767) return;
+    const screen = await renderTopBar();
+    await screen.getByTestId('topbar-account').click();
+    await screen.getByTestId('user-menu-change-server').click();
+    // The ConfirmDialog opens; confirm fires serverNavigation.resetServer().
+    await screen.getByTestId('change-server-confirm').click();
+    await vi.waitFor(() => expect(resetServer).toHaveBeenCalled());
+  });
+
+  it('signs out from the mobile sheet and navigates to /login', async () => {
+    if (window.innerWidth > 767) return;
+    const screen = await renderTopBar();
+    await screen.getByTestId('topbar-account').click();
+    await screen.getByTestId('user-menu-signout').click();
+    await vi.waitFor(() => expect(logout).toHaveBeenCalled());
+  });
+});

@@ -78,6 +78,20 @@ export const COMMON_EMOJI_SHORTCODES: EmojiShortcode[] = ALL_EMOJI;
 export { EMOJI_CATEGORIES };
 export type { EmojiEntry, EmojiCategory };
 
+// Canonical emoji-shortcode grammar — the single source of truth shared by the
+// message renderer (lib/markdown.tsx), the composer's live-preview glyph widget
+// (markdown/extensions/emojiGlyphs.ts) and the autocomplete. A shortcode name is
+// ASCII letters/digits with `_ + -`; an optional `::skin-tone-N` suffix selects
+// a Fitzpatrick modifier. Keeping one definition guarantees the editor and the
+// rendered message tokenize emoji identically.
+const EMOJI_SHORTCODE_NAME = '[a-z0-9_+-]+';
+// `:name::skin-tone-N:` — must be tested before the plain form (longer match).
+export const EMOJI_SHORTCODE_TONED_RE = new RegExp(`:(${EMOJI_SHORTCODE_NAME})::(skin-tone-[1-5]):`, 'i');
+// `:name:`
+export const EMOJI_SHORTCODE_RE = new RegExp(`:(${EMOJI_SHORTCODE_NAME}):`, 'i');
+// Global scan form with the skin-tone suffix optional — used to walk a buffer.
+export const EMOJI_SHORTCODE_RE_GLOBAL = new RegExp(`:(${EMOJI_SHORTCODE_NAME})(?:::(skin-tone-[1-5]))?:`, 'gi');
+
 const NAME_TO_UNICODE: Record<string, string> = (() => {
   const map: Record<string, string> = {};
   for (const e of ALL_EMOJI) map[e.name] = e.unicode;
@@ -174,6 +188,7 @@ const NORMALIZE_EMOJI_RE = (() => {
 // fenced code blocks and inline `code` spans — nobody wants
 // `console.log("🎉")` rewritten on the wire.
 export function normalizeEmojiInBody(body: string): string {
+  if (!body) return '';
   let out = '';
   let i = 0;
   while (i < body.length) {

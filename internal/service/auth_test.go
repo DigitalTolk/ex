@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"strings"
 	"errors"
 	"testing"
 	"time"
@@ -583,5 +584,54 @@ func TestIssueTokens(t *testing.T) {
 	// Verify refresh token was stored.
 	if len(env.tokens.tokens) == 0 {
 		t.Error("expected refresh token to be stored")
+	}
+}
+
+func TestNormalizeEmailAddress_Branches(t *testing.T) {
+	if _, err := normalizeEmailAddress("  "); err == nil {
+		t.Error("empty email should error")
+	}
+	long := strings.Repeat("a", 250) + "@b.com"
+	if _, err := normalizeEmailAddress(long); err == nil {
+		t.Error("over-254 email should error")
+	}
+	if _, err := normalizeEmailAddress("not-an-email"); err == nil {
+		t.Error("malformed email should error")
+	}
+	// ParseAddress succeeds but the canonical address differs from input.
+	if _, err := normalizeEmailAddress("Name <a@b.com>"); err == nil {
+		t.Error("display-name form should error (address != input)")
+	}
+	got, err := normalizeEmailAddress("  USER@Example.COM ")
+	if err != nil || got != "user@example.com" {
+		t.Fatalf("normalizeEmailAddress = %q, %v; want user@example.com", got, err)
+	}
+}
+
+func TestAuthorizedInviteChannelIDs_Branches(t *testing.T) {
+	ctx := context.Background()
+
+	env := setupAuthService()
+	env.memberships.memberships["c1#inviter"] = &model.ChannelMembership{ChannelID: "c1", UserID: "inviter"}
+	// Empty and duplicate IDs are skipped; the deduped, authorized set comes back.
+	got, err := env.svc.authorizedInviteChannelIDs(ctx, "inviter", []string{"", "c1", "c1"})
+	if err != nil {
+		t.Fatalf("authorizedInviteChannelIDs: %v", err)
+	}
+	if len(got) != 1 || got[0] != "c1" {
+		t.Fatalf("got %+v, want [c1]", got)
+	}
+
+	// Inviter not a member of the requested channel → rejected.
+	env2 := setupAuthService()
+	if _, err := env2.svc.authorizedInviteChannelIDs(ctx, "inviter", []string{"c-nope"}); err == nil {
+		t.Error("expected not-a-member rejection")
+	}
+
+	// Membership lookup failing for a non-NotFound reason propagates.
+	env3 := setupAuthService()
+	env3.memberships.getErr = errors.New("dynamo down")
+	if _, err := env3.svc.authorizedInviteChannelIDs(ctx, "inviter", []string{"c1"}); err == nil {
+		t.Error("expected wrapped membership error")
 	}
 }

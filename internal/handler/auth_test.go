@@ -24,6 +24,8 @@ type mockUserStore struct {
 	users       map[string]*model.User
 	emailIndex  map[string]*model.User
 	createErr   error
+	listErr     error
+	getUserErr  error
 	hasUsersVal bool
 }
 
@@ -44,6 +46,9 @@ func (m *mockUserStore) CreateUser(_ context.Context, u *model.User) error {
 }
 
 func (m *mockUserStore) GetUser(_ context.Context, id string) (*model.User, error) {
+	if m.getUserErr != nil {
+		return nil, m.getUserErr
+	}
 	u, ok := m.users[id]
 	if !ok {
 		return nil, store.ErrNotFound
@@ -66,6 +71,9 @@ func (m *mockUserStore) UpdateUser(_ context.Context, u *model.User) error {
 }
 
 func (m *mockUserStore) ListUsers(_ context.Context, _ int, _ string) ([]*model.User, string, error) {
+	if m.listErr != nil {
+		return nil, "", m.listErr
+	}
 	var result []*model.User
 	for _, u := range m.users {
 		result = append(result, u)
@@ -112,15 +120,22 @@ func (m *mockTokenStore) DeleteAllRefreshTokensForUser(_ context.Context, userID
 	return nil
 }
 
-type mockInviteStore struct{}
+type mockInviteStore struct {
+	invite *model.Invite
+}
 
 func (m *mockInviteStore) CreateInvite(_ context.Context, _ *model.Invite) error { return nil }
 func (m *mockInviteStore) GetInvite(_ context.Context, _ string) (*model.Invite, error) {
+	if m.invite != nil {
+		return m.invite, nil
+	}
 	return nil, store.ErrNotFound
 }
 func (m *mockInviteStore) DeleteInvite(_ context.Context, _ string) error { return nil }
 
-type mockMembershipStore struct{}
+type mockMembershipStore struct {
+	listUserChannelsErr error
+}
 
 func (m *mockMembershipStore) AddMember(_ context.Context, _ *model.ChannelMembership, _ *model.UserChannel) error {
 	return nil
@@ -136,6 +151,9 @@ func (m *mockMembershipStore) ListMembers(_ context.Context, _ string) ([]*model
 	return nil, nil
 }
 func (m *mockMembershipStore) ListUserChannels(_ context.Context, _ string) ([]*model.UserChannel, error) {
+	if m.listUserChannelsErr != nil {
+		return nil, m.listUserChannelsErr
+	}
 	return nil, nil
 }
 func (m *mockMembershipStore) SetMute(_ context.Context, _, _ string, _ bool) error {
@@ -610,6 +628,40 @@ func TestCreateInviteHandler_Authenticated(t *testing.T) {
 	}
 }
 
+func TestCreateInviteHandler_BadJSON(t *testing.T) {
+	h, _, _ := setupAuthHandler(t)
+	jwtMgr := auth.NewJWTManager("test-handler-secret", 15*time.Minute, 720*time.Hour)
+	user := &model.User{ID: "inviter-bj", Email: "bj@example.com", SystemRole: model.SystemRoleMember}
+	token := makeTokenForUser(jwtMgr, user)
+	handler := middleware.Auth(jwtMgr)(http.HandlerFunc(h.CreateInvite))
+	req := httptest.NewRequest(http.MethodPost, "/auth/invite", strings.NewReader(`{bad`))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d, want 400; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestCreateInviteHandler_ServiceError(t *testing.T) {
+	h, _, _ := setupAuthHandler(t)
+	jwtMgr := auth.NewJWTManager("test-handler-secret", 15*time.Minute, 720*time.Hour)
+	user := &model.User{ID: "inviter-se", Email: "se@example.com", SystemRole: model.SystemRoleMember}
+	token := makeTokenForUser(jwtMgr, user)
+	handler := middleware.Auth(jwtMgr)(http.HandlerFunc(h.CreateInvite))
+	// A malformed (but non-empty) email passes the handler guard and is
+	// rejected by the service → 500 invite_error.
+	req := httptest.NewRequest(http.MethodPost, "/auth/invite", strings.NewReader(`{"email":"not-an-email"}`))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d, want 500; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestCreateInviteHandler_MissingEmail(t *testing.T) {
 	h, _, _ := setupAuthHandler(t)
 	jwtMgr := auth.NewJWTManager("test-handler-secret", 15*time.Minute, 720*time.Hour)
@@ -662,6 +714,46 @@ func TestAcceptInviteHandler_MissingFields(t *testing.T) {
 				t.Errorf("status = %d, want %d", rec.Code, http.StatusBadRequest)
 			}
 		})
+	}
+}
+
+func TestAcceptInviteHandler_BadJSON(t *testing.T) {
+	h, _, _ := setupAuthHandler(t)
+	req := httptest.NewRequest(http.MethodPost, "/auth/invite/accept", strings.NewReader(`{bad`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	h.AcceptInvite(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d, want 400", rec.Code)
+	}
+}
+
+func TestAcceptInviteHandler_Success(t *testing.T) {
+	jwtMgr := auth.NewJWTManager("accept-success-secret", 15*time.Minute, 720*time.Hour)
+	userStore := newMockUserStore()
+	tokenStore := newMockTokenStore()
+	invites := &mockInviteStore{invite: &model.Invite{
+		Email:     "guest@example.com",
+		ExpiresAt: time.Now().Add(time.Hour),
+	}}
+	authSvc := service.NewAuthService(userStore, tokenStore, invites, &mockMembershipStore{}, &mockChannelStore{}, jwtMgr, nil, newMockCache())
+	h := NewAuthHandler(authSvc, jwtMgr)
+
+	body := `{"token":"any-token","displayName":"Guest","password":"password123"}`
+	req := httptest.NewRequest(http.MethodPost, "/auth/invite/accept", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	h.AcceptInvite(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "accessToken") {
+		t.Fatalf("expected accessToken in body, got %s", rec.Body.String())
+	}
+	// The refresh token is set as an httpOnly cookie.
+	if len(rec.Result().Cookies()) == 0 {
+		t.Error("expected a refresh cookie to be set")
 	}
 }
 

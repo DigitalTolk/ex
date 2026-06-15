@@ -212,4 +212,43 @@ describe('ChannelRow', () => {
     expect(moveToAlpha.disabled).toBe(true);
   });
 
+  // --- unread indicator --------------------------------------------------
+
+  it('shows no unread indicator when there is nothing unread', () => {
+    renderRow(makeChannel({ channelID: 'ch-1' }), false);
+    expect(screen.queryByTestId('channel-unread-dot-ch-1')).toBeNull();
+    expect(screen.queryByTestId('channel-unread-badge-ch-1')).toBeNull();
+  });
+
+  it('falls back to a dot when unread but no live count is known', () => {
+    renderRow(makeChannel({ channelID: 'ch-1' }), true, { unreadCount: 0 });
+    expect(screen.getByTestId('channel-unread-dot-ch-1')).toBeInTheDocument();
+    expect(screen.queryByTestId('channel-unread-badge-ch-1')).toBeNull();
+  });
+
+  it('shows a numeric count badge when a live count is known', () => {
+    renderRow(makeChannel({ channelID: 'ch-1' }), true, { unreadCount: 3 });
+    const badge = screen.getByTestId('channel-unread-badge-ch-1');
+    expect(badge).toHaveTextContent('3');
+    expect(screen.queryByTestId('channel-unread-dot-ch-1')).toBeNull();
+  });
+
+  it('caps the count badge at 99+', () => {
+    renderRow(makeChannel({ channelID: 'ch-1' }), true, { unreadCount: 150 });
+    expect(screen.getByTestId('channel-unread-badge-ch-1')).toHaveTextContent('99+');
+  });
+
+  it('suppresses the unread indicator entirely for muted channels', () => {
+    renderRow(makeChannel({ channelID: 'ch-1', muted: true }), true, { unreadCount: 5 });
+    expect(screen.queryByTestId('channel-unread-badge-ch-1')).toBeNull();
+    expect(screen.queryByTestId('channel-unread-dot-ch-1')).toBeNull();
+  });
+
+  it('marks the active row with an accent bar', () => {
+    window.history.pushState({}, '', '/channel/general');
+    renderRow(makeChannel({ channelID: 'ch-1', channelName: 'general' }));
+    const link = screen.getByText('general').closest('a')!;
+    expect(link.className).toContain('before:bg-sidebar-foreground');
+  });
+
 });

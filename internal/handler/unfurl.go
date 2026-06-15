@@ -1,16 +1,25 @@
 package handler
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/DigitalTolk/ex/internal/service"
 )
 
+// unfurlService is the slice of *service.UnfurlService the handler depends on.
+// As an interface it lets tests inject a fake that returns a preview, covering
+// the success path a real UnfurlService cannot reach in a unit test (its SSRF
+// guard blocks the loopback hosts httptest binds to).
+type unfurlService interface {
+	Unfurl(ctx context.Context, rawURL string) (*service.UnfurlPreview, error)
+}
+
 // UnfurlHandler exposes /api/v1/unfurl?url=… so the client can render
 // link previews without each browser hitting third-party sites
 // directly (CORS would block most of them anyway).
 type UnfurlHandler struct {
-	svc *service.UnfurlService
+	svc unfurlService
 }
 
 // NewUnfurlHandler builds an UnfurlHandler.

@@ -1,8 +1,9 @@
-import { describe, expect, it, vi } from 'vitest';
-import { render } from 'vitest-browser-react';
+import { describe, expect, it, vi, afterEach } from 'vitest';
+import { render, cleanup } from 'vitest-browser-react';
 import { BrowserRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemberList } from './MemberList';
+import { apiFetch } from '@/lib/api';
 import type { ChannelMembership } from '@/types';
 
 // Browser-side coverage for the channel members rail. The dom-side
@@ -54,6 +55,8 @@ function renderWithProviders(ui: React.ReactElement) {
 }
 
 describe('MemberList browser behaviour', () => {
+  afterEach(() => cleanup());
+
   it('renders the member roster with avatars + display names', async () => {
     const screen = await renderWithProviders(
       <MemberList
@@ -127,5 +130,161 @@ describe('MemberList browser behaviour', () => {
     const node = Array.from(document.querySelectorAll('span'))
       .find((el) => el.textContent === 'X-Member');
     expect(node).toBeDefined();
+  });
+
+  it('invokes onClose from the close button', async () => {
+    const onClose = vi.fn();
+    const screen = await renderWithProviders(
+      <MemberList members={[makeMember()]} channelId="ch-1" currentUserId="u-1" currentUserRole={4} onClose={onClose} />,
+    );
+    await screen.getByRole('button', { name: 'Close member list' }).click();
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('searches for users, flags existing members, and adds a non-member', async () => {
+    vi.mocked(apiFetch).mockImplementation(async (url: unknown) => {
+      if (typeof url === 'string' && url.includes('/users?q=')) {
+        return [
+          // Already a member (memberIds.has) → Check, plus avatarURL branch.
+          { id: 'u-1', displayName: 'Alice', email: 'alice@x.test', avatarURL: 'https://x/a.png' },
+          // Empty display name → getInitials('??') fallback.
+          { id: 'u-0', displayName: '', email: 'ghost@x.test' },
+          // New user → Add button.
+          { id: 'u-9', displayName: 'Newbie', email: 'new@x.test' },
+        ];
+      }
+      return undefined;
+    });
+    const screen = await renderWithProviders(
+      <MemberList
+        members={[makeMember({ userID: 'u-1', displayName: 'Alice' })]}
+        channelId="ch-1"
+        currentUserId="u-me"
+        currentUserRole={4}
+      />,
+    );
+    await screen.getByLabelText('Add member').fill('ne');
+    // After the 300ms debounce the results render.
+    await expect.element(screen.getByLabelText('Already a member')).toBeVisible();
+    const addBtn = screen.getByRole('button', { name: 'Add Newbie' });
+    await expect.element(addBtn).toBeVisible();
+    await addBtn.click();
+    await vi.waitFor(() => {
+      const call = vi.mocked(apiFetch).mock.calls.find(
+        (c: unknown[]) => typeof c[0] === 'string' && c[0].includes('/channels/ch-1/members')
+          && (c[1] as { method?: string } | undefined)?.method === 'POST',
+      );
+      expect(call).toBeDefined();
+    });
+  });
+
+  it('shows "No users found" when a search returns nothing', async () => {
+    vi.mocked(apiFetch).mockResolvedValue([]);
+    const screen = await renderWithProviders(
+      <MemberList members={[makeMember()]} channelId="ch-1" currentUserId="u-me" currentUserRole={4} />,
+    );
+    await screen.getByLabelText('Add member').fill('zz');
+    await expect.element(screen.getByText('No users found')).toBeVisible();
+  });
+
+  it('surfaces an error message when adding a member fails', async () => {
+    vi.mocked(apiFetch).mockImplementation(async (url: unknown, init?: unknown) => {
+      if (typeof url === 'string' && url.includes('/users?q=')) {
+        return [{ id: 'u-9', displayName: 'Newbie', email: 'new@x.test' }];
+      }
+      if ((init as { method?: string } | undefined)?.method === 'POST') {
+        throw new Error('already pending invite');
+      }
+      return undefined;
+    });
+    const screen = await renderWithProviders(
+      <MemberList members={[makeMember()]} channelId="ch-1" currentUserId="u-me" currentUserRole={4} />,
+    );
+    await screen.getByLabelText('Add member').fill('ne');
+    await screen.getByRole('button', { name: 'Add Newbie' }).click();
+    await expect.element(screen.getByRole('alert')).toHaveTextContent('already pending invite');
+  });
+
+  it('falls back to "Unknown" for a member with no display name', async () => {
+    const screen = await renderWithProviders(
+      <MemberList
+        members={[makeMember({ userID: 'u-ghost', displayName: '' })]}
+        channelId="ch-1"
+        currentUserId="u-me"
+      />,
+    );
+    await expect.element(
+      screen.getByTestId('member-name-status-u-ghost'),
+    ).toHaveTextContent('Unknown');
+  });
+
+  it('falls back to the generic message when adding fails with a non-Error throw', async () => {
+    // The catch in handleAdd uses `err instanceof Error ? err.message :
+    // 'Failed to add member'`. Throwing a non-Error (a string) exercises
+    // the else arm (line 90).
+    vi.mocked(apiFetch).mockImplementation(async (url: unknown, init?: unknown) => {
+      if (typeof url === 'string' && url.includes('/users?q=')) {
+        return [{ id: 'u-9', displayName: 'Newbie', email: 'new@x.test' }];
+      }
+      if ((init as { method?: string } | undefined)?.method === 'POST') {
+        throw 'plain string failure';
+      }
+      return undefined;
+    });
+    const screen = await renderWithProviders(
+      <MemberList members={[makeMember()]} channelId="ch-1" currentUserId="u-me" currentUserRole={4} />,
+    );
+    await screen.getByLabelText('Add member').fill('ne');
+    await screen.getByRole('button', { name: 'Add Newbie' }).click();
+    await expect.element(screen.getByRole('alert')).toHaveTextContent('Failed to add member');
+  });
+
+  it('no-ops the remove handler when no channelId is set', async () => {
+    // An actor with a managing role but NO channelId still renders the
+    // remove control for a removable member (canRemoveMember does not
+    // depend on channelId). Clicking it hits handleRemove's
+    // `if (!channelId) return` guard (line 74) — no DELETE is issued.
+    vi.mocked(apiFetch).mockClear();
+    const screen = await renderWithProviders(
+      <MemberList
+        members={[
+          makeMember({ userID: 'u-1', displayName: 'Alice', role: 'owner' }),
+          makeMember({ userID: 'u-2', displayName: 'Bob', role: 'member' }),
+        ]}
+        channelId={undefined}
+        currentUserId="u-1"
+        currentUserRole={5}
+      />,
+    );
+    await screen.getByRole('button', { name: 'Remove Bob' }).click();
+    await new Promise((r) => setTimeout(r, 30));
+    const deleteCall = vi.mocked(apiFetch).mock.calls.find(
+      (c: unknown[]) => (c[1] as { method?: string } | undefined)?.method === 'DELETE',
+    );
+    expect(deleteCall).toBeUndefined();
+  });
+
+  it('removes another member via the DELETE endpoint', async () => {
+    vi.mocked(apiFetch).mockClear();
+    const screen = await renderWithProviders(
+      <MemberList
+        members={[
+          makeMember({ userID: 'u-1', displayName: 'Alice', role: 'owner' }),
+          makeMember({ userID: 'u-2', displayName: 'Bob', role: 'member' }),
+        ]}
+        channelId="ch-1"
+        currentUserId="u-1"
+        currentUserRole={5}
+      />,
+    );
+    // An owner can remove a plain member — the remove control is keyed by name.
+    await screen.getByRole('button', { name: 'Remove Bob' }).click();
+    await vi.waitFor(() => {
+      const call = vi.mocked(apiFetch).mock.calls.find(
+        (c: unknown[]) => c[0] === '/api/v1/channels/ch-1/members/u-2',
+      );
+      expect(call).toBeDefined();
+      expect((call![1] as { method: string }).method).toBe('DELETE');
+    });
   });
 });

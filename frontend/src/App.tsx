@@ -40,7 +40,7 @@ function ProtectedRoute({ children }: { children: ReactNode }) {
   if (isLoading) {
     return (
       <div
-        className="min-h-screen bg-[#1a1d21]"
+        className="min-h-screen bg-sidebar dark:bg-sidebar"
         aria-label="Loading chat"
         data-testid="app-auth-loading"
       />
@@ -112,7 +112,7 @@ export default function App() {
                     <TooltipProvider>
                       <ServerVersionBootstrap />
                       <NotificationCountTitleBridge />
-                      <div className="flex h-dvh flex-col bg-sidebar pt-safe-top dark:bg-[#1a1d21]">
+                      <div className="flex h-dvh flex-col bg-sidebar pt-safe-top">
                         <div className="min-h-0 flex-1 bg-background">
                           <AppRoutes />
                         </div>

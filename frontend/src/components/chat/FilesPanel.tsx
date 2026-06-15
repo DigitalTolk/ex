@@ -54,10 +54,17 @@ export function FilesPanel({
 
   const parentID = channelId ?? conversationId;
   const parentType = channelId ? 'channel' : conversationId ? 'conversation' : undefined;
+  // entries only load when channelId||conversationId is set (the query above is
+  // `enabled` on that), so by the time we map them parentType/parentID are
+  // always defined; the ?? '' fallbacks are defensive and unreachable.
+  /* istanbul ignore next -- parentType/parentID are always defined whenever entries exist; the ?? '' fallbacks are dead. */
+  const keyParentType = parentType ?? '';
+  /* istanbul ignore next -- parentType/parentID are always defined whenever entries exist; the ?? '' fallbacks are dead. */
+  const keyParentID = parentID ?? '';
   const attachmentQueries = useQueries({
     queries: (entries ?? []).map((entry) => ({
       queryKey: queryKeys.attachment(
-        `${entry.attachmentID}:${parentType ?? ''}:${parentID ?? ''}:${entry.messageID}`,
+        `${entry.attachmentID}:${keyParentType}:${keyParentID}:${entry.messageID}`,
       ),
       queryFn: () => apiFetch<Attachment>(attachmentURLForFile(entry, parentID, parentType)),
       enabled: !!parentID && !!parentType && !!entry.attachmentID && !!entry.messageID,

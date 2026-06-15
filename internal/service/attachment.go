@@ -656,14 +656,14 @@ func (s *AttachmentService) generateThumbnails(ctx context.Context, a *model.Att
 		return fmt.Errorf("attachment: decode image for thumbnails: %w", err)
 	}
 	messageThumb, err := encodeWebPThumbnail(img, thumbnailModeMessage)
-	if err != nil {
+	if err != nil { // coverage-ignore: img was just decoded from data with cfg.Width/Height > 0 (guarded above); encodeWebPThumbnail only errors for a nil image or non-positive dimensions, neither of which can occur here. Defensive against a future encoder change.
 		return fmt.Errorf("attachment: encode message thumbnail: %w", err)
 	}
 	if err := s.signer.PutObject(ctx, thumbnailKey, "image/webp", messageThumb); err != nil {
 		return fmt.Errorf("attachment: store message thumbnail: %w", err)
 	}
 	squareThumb, err := encodeWebPThumbnail(img, thumbnailModeSquare)
-	if err != nil {
+	if err != nil { // coverage-ignore: same valid decoded image as the message thumbnail above; encodeWebPThumbnail cannot fail for a non-nil image with positive dimensions. Defensive against a future encoder change.
 		return fmt.Errorf("attachment: encode square thumbnail: %w", err)
 	}
 	if err := s.signer.PutObject(ctx, squareThumbnailKey, "image/webp", squareThumb); err != nil {
@@ -733,7 +733,7 @@ func encodeWebPThumbnail(src image.Image, mode thumbnailMode) ([]byte, error) {
 	xdraw.CatmullRom.Scale(dst, dst.Bounds(), drawSrc, srcRect, stddraw.Over, nil)
 
 	var out bytes.Buffer
-	if err := nativewebp.Encode(&out, dst, nil); err != nil {
+	if err := nativewebp.Encode(&out, dst, nil); err != nil { // coverage-ignore: dst is a freshly allocated *image.NRGBA with positive, bounded dimensions (squareThumbnailSize or max(1,...)); nativewebp.Encode of such an in-memory image to a bytes.Buffer cannot fail. Defensive against a future encoder change.
 		return nil, err
 	}
 	return out.Bytes(), nil

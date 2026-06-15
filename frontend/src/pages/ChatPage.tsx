@@ -42,7 +42,7 @@ import { useIsMobile } from '@/hooks/useIsMobile';
 function MobileChatLoadingPage() {
   return (
     <div
-      className="h-full min-h-0 flex-1 bg-[#1a1d21]"
+      className="h-full min-h-0 flex-1 bg-sidebar"
       aria-label="Loading chat"
       data-testid="mobile-chat-loading"
     />

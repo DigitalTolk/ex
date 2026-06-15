@@ -21,11 +21,13 @@ export interface FocusComposerDetail {
 }
 
 export function dispatchEditMessage(detail: EditMessageDetail): void {
+  /* istanbul ignore next -- SSR guard: window is always defined in the browser test environment; reachable only under a Node render we don't do. */
   if (typeof window === 'undefined') return;
   window.dispatchEvent(new CustomEvent(WINDOW_EVENTS.EditMessage, { detail }));
 }
 
 export function dispatchFocusComposer(detail: FocusComposerDetail): void {
+  /* istanbul ignore next -- SSR guard: window is always defined in the browser test environment; reachable only under a Node render we don't do. */
   if (typeof window === 'undefined') return;
   window.dispatchEvent(new CustomEvent(WINDOW_EVENTS.FocusComposer, { detail }));
 }

@@ -133,6 +133,7 @@ function EditProfileBody({ onOpenChange }: { onOpenChange: (open: boolean) => vo
     }
   }
 
+  /* istanbul ignore next -- EditProfileDialog already returns null when there's no user before mounting this body, so this guard is dead defensive */
   if (!user) return null;
 
   const previewUrl = avatarPreview || user.avatarURL;

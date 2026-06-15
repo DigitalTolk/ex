@@ -73,12 +73,14 @@ export function useWebSocket(options: UseWebSocketOptions) {
     let disposed = false;
 
     function markSeen(id: string): boolean {
+      /* v8 ignore next -- markSeen is only called with a non-empty string id (guarded at the call site); the !id arm is defensive */
       if (!id) return false;
       if (seenIdsRef.current.has(id)) return true;
       seenIdsRef.current.add(id);
       seenOrderRef.current.push(id);
       if (seenOrderRef.current.length > dedupCapacity) {
         const oldest = seenOrderRef.current.shift();
+        /* v8 ignore next -- length just exceeded dedupCapacity, so shift() always returns a string; the falsy arm is defensive */
         if (oldest) seenIdsRef.current.delete(oldest);
       }
       return false;
