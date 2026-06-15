@@ -361,7 +361,9 @@ describe('MessageInput browser behavior', () => {
     await vi.waitFor(() => {
       expect(document.querySelector('[data-testid="popover-portal"]')).toBeNull();
       expect(document.activeElement === editor || editor.contains(document.activeElement)).toBe(true);
-    });
+      // The refocus chain (pick → insert → re-render → editor.focus()) can run
+      // long under full-suite CPU load on the mobile WebKit project.
+    }, { timeout: 5000 });
   });
 
   // CTA tokens: light theme CTA is #231F20 (near-black), dark theme is

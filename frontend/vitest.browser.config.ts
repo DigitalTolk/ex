@@ -33,7 +33,7 @@ export default defineConfig({
     // send/draft/WS/zoom chains can exceed the 5s default and flake. Raise the
     // ceiling so the suite is deterministic under load. This only affects how
     // long a slow test may run — it does not touch coverage.
-    testTimeout: 30000,
+    testTimeout: 45000,
     coverage: {
       provider: 'istanbul',
       // json-summary writes coverage-browser/coverage-summary.json

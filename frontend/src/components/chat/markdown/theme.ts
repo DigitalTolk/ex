@@ -15,7 +15,11 @@ export const composerTheme = EditorView.theme({
   '.cm-content': {
     padding: '0',
     fontFamily: 'var(--font-sans)',
-    lineHeight: '1.375',
+    // Line-height is set generously enough to fully contain an inline emoji
+    // glyph/image (capped below at 1.2em) so the line height is identical whether
+    // a line shows the rendered emoji or the raw `:shortcode:` — no vertical
+    // jiggle as the caret moves in/out of an emoji token.
+    lineHeight: '1.5',
     caretColor: 'var(--color-foreground)',
   },
   '.cm-line': { padding: '0' },
@@ -23,7 +27,7 @@ export const composerTheme = EditorView.theme({
   // The `.cm-content` element is the scroll container (it carries the
   // min/max-height utility classes, like the old contenteditable), so the
   // CM scroller itself must not introduce a second scroll box.
-  '.cm-scroller': { fontFamily: 'var(--font-sans)', lineHeight: '1.375', overflow: 'visible' },
+  '.cm-scroller': { fontFamily: 'var(--font-sans)', lineHeight: '1.5', overflow: 'visible' },
   '.cm-placeholder': { color: 'var(--color-muted-foreground)' },
   // Inline code + fenced code share the muted-pill look of the renderer.
   '.cm-inlineCode': {
@@ -53,17 +57,20 @@ export const composerTheme = EditorView.theme({
     fontWeight: '500',
     whiteSpace: 'nowrap',
   },
-  // Live-preview emoji glyph — matches the renderer's ~1.4em Slack-style sizing.
+  // Live-preview emoji glyph. Capped at 1.2em with line-height:1 so it never
+  // exceeds the 1.5 line box (avoids per-line height jiggle).
   '.cm-emoji-glyph': {
+    display: 'inline-block',
     fontSize: '1.2em',
     lineHeight: '1',
     verticalAlign: 'middle',
   },
-  // Custom (workspace) emoji image, rendered inline at glyph size.
+  // Custom (workspace) emoji image — same 1.2em cap as the glyph so a line with
+  // a custom emoji is exactly as tall as a text-only line.
   '.cm-emoji-img': {
     display: 'inline-block',
-    width: '1.4em',
-    height: '1.4em',
+    width: '1.2em',
+    height: '1.2em',
     objectFit: 'contain',
     verticalAlign: 'middle',
   },
@@ -194,10 +201,14 @@ export const composerTheme = EditorView.theme({
     color: 'var(--color-muted-foreground)',
   },
   '.cm-option-icon svg': { width: '1rem', height: '1rem' },
-  // @all / @here: an avatar-circle (see .cm-option-avatar) with a bolder "@".
+  // @all / @here: an avatar-circle (see .cm-option-avatar) with a bolder "@" on
+  // an amber/caution background — these mentions notify many people, so the
+  // colour nudges the user to be careful.
   '.cm-option-group': {
     fontSize: '0.875rem',
     fontWeight: '700',
+    backgroundColor: 'var(--color-caution)',
+    color: 'var(--color-caution-foreground)',
   },
   // Emoji glyph — shown first and larger (Slack-style).
   '.cm-option-emoji': {

@@ -1,6 +1,6 @@
 import { EditorSelection } from '@codemirror/state';
 import { type EditorView } from '@codemirror/view';
-import { syntaxTree } from '@codemirror/language';
+import { syntaxTree, ensureSyntaxTree } from '@codemirror/language';
 import type { ActiveFormat } from '../types';
 
 const MARK_DELIM: Record<'bold' | 'italic' | 'strike' | 'code', string> = {
@@ -92,7 +92,13 @@ const NODE_TO_FORMAT: Record<string, ActiveFormat> = {
 export function getActiveFormats(view: EditorView): Set<ActiveFormat> {
   const active = new Set<ActiveFormat>();
   const pos = view.state.selection.main.head;
-  let node = syntaxTree(view.state).resolveInner(pos, -1);
+  // Force the markdown parse up to the caret before resolving: `syntaxTree`
+  // returns whatever's been parsed so far, which under load (or right after an
+  // edit) can be stale at `pos` — leaving the toolbar's pressed state wrong
+  // until the next interaction. `ensureSyntaxTree` parses synchronously here.
+  /* istanbul ignore next -- ensureSyntaxTree resolves synchronously for composer-sized docs; the syntaxTree fallback only fires on a parse timeout, unreachable in practice. */
+  const tree = ensureSyntaxTree(view.state, pos) ?? syntaxTree(view.state);
+  let node = tree.resolveInner(pos, -1);
   while (node) {
     const fmt = NODE_TO_FORMAT[node.name];
     if (fmt) active.add(fmt);
