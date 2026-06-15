@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, act } from '@testing-library/react';
 import { BrowserRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MessageItem } from '@/components/chat/MessageItem';
@@ -116,6 +116,27 @@ describe('MessageItem - hover bar and avatar', () => {
     expect(screen.getByLabelText('More actions')).toBeInTheDocument();
     expect(screen.queryByText('Edit')).not.toBeInTheDocument();
     expect(screen.queryByText('Delete')).not.toBeInTheDocument();
+  });
+
+  it('Copy text action copies the message markdown (mentions rendered) to the clipboard', async () => {
+    vi.useFakeTimers();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+    renderWithProviders(
+      <MessageItem
+        message={makeMessage({ body: 'hi @[u-9|Bob] **bold**' })}
+        authorName="Alice"
+        isOwn={false}
+      />,
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByText('Copy text'));
+      // Flush the clipboard promise + the 1.5s "Text copied" reset timer so no
+      // state update lands outside act().
+      await vi.runAllTimersAsync();
+    });
+    expect(writeText).toHaveBeenCalledWith('hi @Bob **bold**');
+    vi.useRealTimers();
   });
 
   it('shows edit/delete when isOwn', () => {

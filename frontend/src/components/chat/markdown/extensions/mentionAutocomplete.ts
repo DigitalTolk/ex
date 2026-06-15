@@ -2,6 +2,7 @@ import {
   type Completion,
   type CompletionContext,
   type CompletionResult,
+  type CompletionSection,
   type CompletionSource,
 } from '@codemirror/autocomplete';
 import type { EditorView } from '@codemirror/view';
@@ -9,6 +10,7 @@ import {
   rankUsers,
   rankChannels,
   type ChannelInput,
+  type GroupName,
   type MentionUser,
   type UserSuggestion,
 } from './mentionData';
@@ -34,14 +36,47 @@ function applyInsert(text: string) {
   };
 }
 
-function userCompletion(s: UserSuggestion): Completion {
+// Section headers shown in the @-mention popup when there is a channel context
+// (member / not-in-channel partitioning), mirroring the old Lexical typeahead.
+// `rank` fixes their order regardless of how options interleave.
+function mkSection(name: string, rank: number): CompletionSection {
+  return {
+    name,
+    rank,
+    header: () => {
+      const el = document.createElement('div');
+      el.className = 'cm-mention-section';
+      el.textContent = name;
+      return el;
+    },
+  };
+}
+const SECTION_MEMBERS = mkSection('Channel members', 0);
+const SECTION_SPECIAL = mkSection('Special mentions', 1);
+const SECTION_OTHERS = mkSection('Not in channel', 2);
+
+const GROUP_DETAIL: Record<GroupName, string> = {
+  all: 'Notify everyone in this channel',
+  here: 'Notify everyone currently online',
+};
+
+function userCompletion(s: UserSuggestion, partitioned: boolean): Completion {
   if (s.kind === 'group') {
-    return { label: `@${s.group}`, type: 'keyword', apply: applyInsert(`@${s.group} `) };
+    return {
+      label: `@${s.group}`,
+      detail: GROUP_DETAIL[s.group],
+      type: 'keyword',
+      section: partitioned ? SECTION_SPECIAL : undefined,
+      apply: applyInsert(`@${s.group} `),
+    };
   }
   return {
     label: s.displayName,
     detail: s.email,
     type: 'variable',
+    // Only group under headers when there's a channel roster to partition by;
+    // DMs / edits show a flat ranked list with no headers.
+    section: partitioned ? (s.inChannel ? SECTION_MEMBERS : SECTION_OTHERS) : undefined,
     apply: applyInsert(`@[${s.id}|${s.displayName}] `),
   };
 }
@@ -59,11 +94,13 @@ export function userMentionSource(providers: MentionProviders): CompletionSource
     if (!before) return null;
     if (!atBoundary(context, before.from)) return null;
     const query = before.text.slice(1);
+    const memberIds = providers.memberIds();
+    const partitioned = memberIds !== null;
     const options = rankUsers(query, {
       users: providers.users(),
       online: providers.online(),
-      memberIds: providers.memberIds(),
-    }).map(userCompletion);
+      memberIds,
+    }).map((s) => userCompletion(s, partitioned));
     return { from: before.from, to: before.to, options, filter: false };
   };
 }

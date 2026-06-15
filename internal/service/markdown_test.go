@@ -31,6 +31,25 @@ func TestMarkdownRenderer_HeadingsAndParagraphs(t *testing.T) {
 	}
 }
 
+func TestMarkdownRenderer_SetextDisabledThematicBreak(t *testing.T) {
+	r := NewMarkdownRenderer()
+	// `foobar\n---` must be a paragraph + thematic break (<hr>), NOT a setext
+	// <h2> — SetextHeading is removed so a line of `---` reads as a divider.
+	out := r.RenderToHast("foobar\n---")
+	tags := topLevelTags(out)
+	if len(tags) != 2 || tags[0] != "p" || tags[1] != "hr" {
+		t.Errorf("expected [p hr], got %v", tags)
+	}
+	if !strings.Contains(allText(out.Children[0]), "foobar") {
+		t.Errorf("paragraph lost its text: %q", allText(out.Children[0]))
+	}
+	// ATX headings (`## foo`) must still work.
+	atx := r.RenderToHast("## foo")
+	if got := topLevelTags(atx); len(got) != 1 || got[0] != "h2" {
+		t.Errorf("ATX heading broken: %v", got)
+	}
+}
+
 func TestMarkdownRenderer_BoldItalicStrike(t *testing.T) {
 	r := NewMarkdownRenderer()
 	out := r.RenderToHast("**b** *i* ~~s~~")

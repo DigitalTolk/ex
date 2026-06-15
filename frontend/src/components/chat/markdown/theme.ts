@@ -59,6 +59,63 @@ export const composerTheme = EditorView.theme({
     lineHeight: '1',
     verticalAlign: 'middle',
   },
+
+  // ---- Autocomplete popup (mentions / channels / emoji) ----
+  // Styled to read like the app's shadcn popover/menu, replacing the default
+  // CodeMirror tooltip chrome. Section headers (Channel members / Not in
+  // channel / Special mentions) come from CompletionSection.
+  '.cm-tooltip.cm-tooltip-autocomplete': {
+    border: '1px solid var(--color-border)',
+    borderRadius: '0.5rem',
+    backgroundColor: 'var(--color-card)',
+    boxShadow: '0 8px 24px -6px rgba(0, 0, 0, 0.18), 0 2px 6px -2px rgba(0, 0, 0, 0.1)',
+    overflow: 'hidden',
+    fontFamily: 'var(--font-sans)',
+    fontSize: '14px',
+  },
+  '.cm-tooltip-autocomplete > ul': {
+    fontFamily: 'var(--font-sans)',
+    maxHeight: '17rem',
+    padding: '0.25rem',
+  },
+  '.cm-tooltip-autocomplete > ul > li': {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '0.5rem',
+    padding: '0.3125rem 0.5rem',
+    borderRadius: '0.375rem',
+    lineHeight: '1.4',
+    color: 'var(--color-foreground)',
+  },
+  '.cm-tooltip-autocomplete > ul > li[aria-selected]': {
+    backgroundColor: 'var(--color-muted)',
+    color: 'var(--color-foreground)',
+  },
+  '.cm-tooltip-autocomplete .cm-completionLabel': { fontWeight: '500' },
+  '.cm-tooltip-autocomplete .cm-completionDetail': {
+    marginLeft: 'auto',
+    paddingLeft: '0.75rem',
+    color: 'var(--color-muted-foreground)',
+    fontStyle: 'normal',
+    fontSize: '0.8em',
+    whiteSpace: 'nowrap',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+  },
+  '.cm-tooltip-autocomplete .cm-completionMatchedText': {
+    textDecoration: 'none',
+    fontWeight: '700',
+    color: 'var(--color-primary)',
+  },
+  // Section header row.
+  '.cm-mention-section': {
+    padding: '0.375rem 0.5rem 0.125rem',
+    fontSize: '0.6875rem',
+    fontWeight: '600',
+    letterSpacing: '0.04em',
+    textTransform: 'uppercase',
+    color: 'var(--color-muted-foreground)',
+  },
 });
 
 // Token-level highlight (bold/italic/strike/link/headings) via Lezer tags. The

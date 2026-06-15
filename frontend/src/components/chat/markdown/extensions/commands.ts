@@ -66,7 +66,15 @@ export function applyBlock(view: EditorView, block: 'quote' | 'ul' | 'ol'): void
     }
     return { from: line.from, to: line.from, insert: BLOCK_PREFIX[block](i + 1) };
   });
-  view.dispatch({ changes, scrollIntoView: true });
+  // Map the selection through the changes with forward association (+1) so a
+  // caret sitting at the line start lands AFTER the inserted prefix, not before
+  // it. A plain dispatch would keep the caret at the (unchanged) line.from.
+  const changeSet = state.changes(changes);
+  view.dispatch({
+    changes: changeSet,
+    selection: state.selection.map(changeSet, 1),
+    scrollIntoView: true,
+  });
 }
 
 // Read which formats apply at the primary selection head — drives the toolbar

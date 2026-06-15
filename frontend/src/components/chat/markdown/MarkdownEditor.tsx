@@ -64,7 +64,11 @@ interface Props {
   completionProviders?: CompletionProviders;
 }
 
-const markdownLanguage = markdown({ extensions: [Strikethrough, Autolink] });
+// Remove SetextHeading so `foobar\n---` is a paragraph followed by a thematic
+// break (a divider), not an H2 — matching the Slack-style mental model that a
+// line of `---` is a horizontal rule. Without this, the heading highlight would
+// render the preceding line bold. Keep GFM strikethrough + autolink.
+const markdownLanguage = markdown({ extensions: [Strikethrough, Autolink, { remove: ['SetextHeading'] }] });
 
 export const MarkdownEditor = forwardRef<WysiwygEditorHandle, Props>(function MarkdownEditor(
   {

@@ -43,6 +43,27 @@ describe('userMentionSource', () => {
     expect(res.options[0].detail).toBe('alice@x.test');
   });
 
+  it('has no section headers without a channel context (flat list)', () => {
+    const res = userMentionSource(providers)(ctxFor('@')) as CompletionResult;
+    expect(res.options.every((o) => o.section === undefined)).toBe(true);
+  });
+
+  it('partitions options under Channel members / Not in channel / Special mentions', () => {
+    const partitioned: MentionProviders = { ...providers, memberIds: () => new Set(['u1']) };
+    const res = userMentionSource(partitioned)(ctxFor('@')) as CompletionResult;
+    const sectionOf = (label: string) => {
+      const s = res.options.find((o) => o.label === label)?.section;
+      return typeof s === 'string' ? s : s?.name;
+    };
+    expect(sectionOf('Alice')).toBe('Channel members'); // u1 is a member
+    expect(sectionOf('Bob')).toBe('Not in channel');
+    // @all / @here (group) typed in full → Special mentions.
+    const groupRes = userMentionSource(partitioned)(ctxFor('@all')) as CompletionResult;
+    const all = groupRes.options.find((o) => o.label === '@all')!;
+    expect(typeof all.section === 'string' ? all.section : all.section?.name).toBe('Special mentions');
+    expect(all.detail).toBe('Notify everyone in this channel');
+  });
+
   it('opens on a bare @ (empty query → full roster)', () => {
     const res = userMentionSource(providers)(ctxFor('@')) as CompletionResult;
     expect(res.options.map((o) => o.label)).toEqual(['Alice', 'Bob']);

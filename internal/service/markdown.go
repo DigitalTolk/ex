@@ -8,7 +8,9 @@ import (
 	"github.com/yuin/goldmark/ast"
 	"github.com/yuin/goldmark/extension"
 	extast "github.com/yuin/goldmark/extension/ast"
+	"github.com/yuin/goldmark/parser"
 	"github.com/yuin/goldmark/text"
+	"github.com/yuin/goldmark/util"
 )
 
 // HastNode is re-exported from the model package — the structure is
@@ -25,9 +27,33 @@ type MarkdownRenderer struct {
 	md goldmark.Markdown
 }
 
+// blockParsersWithoutSetext is goldmark's DefaultBlockParsers minus the
+// SetextHeading parser (priority 100). Removing it means `foobar\n---` is a
+// paragraph followed by a thematic break (<hr>) rather than an <h2> setext
+// heading — matching the composer (which also drops SetextHeading) and the
+// Slack-style model where a line of `---` is a divider.
+func blockParsersWithoutSetext() []util.PrioritizedValue {
+	return []util.PrioritizedValue{
+		util.Prioritized(parser.NewThematicBreakParser(), 200),
+		util.Prioritized(parser.NewListParser(), 300),
+		util.Prioritized(parser.NewListItemParser(), 400),
+		util.Prioritized(parser.NewCodeBlockParser(), 500),
+		util.Prioritized(parser.NewATXHeadingParser(), 600),
+		util.Prioritized(parser.NewFencedCodeBlockParser(), 700),
+		util.Prioritized(parser.NewBlockquoteParser(), 800),
+		util.Prioritized(parser.NewHTMLBlockParser(), 900),
+		util.Prioritized(parser.NewParagraphParser(), 1000),
+	}
+}
+
 func NewMarkdownRenderer() *MarkdownRenderer {
 	md := goldmark.New(
 		goldmark.WithExtensions(extension.Strikethrough),
+		goldmark.WithParser(parser.NewParser(
+			parser.WithBlockParsers(blockParsersWithoutSetext()...),
+			parser.WithInlineParsers(parser.DefaultInlineParsers()...),
+			parser.WithParagraphTransformers(parser.DefaultParagraphTransformers()...),
+		)),
 	)
 	return &MarkdownRenderer{md: md}
 }

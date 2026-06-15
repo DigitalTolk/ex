@@ -71,6 +71,17 @@ describe('commands.applyBlock', () => {
     expect(view.state.doc.toString()).toBe('a\nplain');
     view.destroy();
   });
+  it('leaves the caret AFTER the inserted prefix, not before it', () => {
+    // Caret at the very start of the line; quoting must push it past "> ".
+    const view = makeView('hello');
+    view.dispatch({ selection: EditorSelection.cursor(0) });
+    applyBlock(view, 'quote');
+    expect(view.state.doc.toString()).toBe('> hello');
+    // Caret should sit at position 2 (right after "> "), so typing continues
+    // inside the quote rather than before the marker.
+    expect(view.state.selection.main.head).toBe(2);
+    view.destroy();
+  });
 });
 
 describe('commands.getActiveFormats', () => {

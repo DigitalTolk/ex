@@ -49,4 +49,29 @@ describe('composerAutocomplete', () => {
     });
     view.destroy();
   });
+
+  it('renders section headers in the popup when there is a channel context', async () => {
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const partitioned: CompletionProviders = {
+      ...providers,
+      users: () => [
+        { id: 'u1', displayName: 'Alice' },
+        { id: 'u2', displayName: 'Alan' },
+      ],
+      memberIds: () => new Set(['u1']),
+    };
+    const view = new EditorView({
+      parent: host,
+      state: EditorState.create({ doc: '@', selection: { anchor: 1 }, extensions: [composerAutocomplete(partitioned)] }),
+    });
+    startCompletion(view);
+    await vi.waitFor(() => {
+      const headers = Array.from(document.querySelectorAll('.cm-mention-section')).map((e) => e.textContent);
+      expect(headers).toContain('Channel members');
+      expect(headers).toContain('Not in channel');
+    });
+    view.destroy();
+    host.remove();
+  });
 });

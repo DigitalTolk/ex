@@ -3,6 +3,7 @@ import { render } from 'vitest-browser-react';
 import { createRef } from 'react';
 import { startCompletion, currentCompletions, completionStatus } from '@codemirror/autocomplete';
 import { EditorView } from '@codemirror/view';
+import { syntaxTree } from '@codemirror/language';
 import { MarkdownEditor } from './MarkdownEditor';
 import type { WysiwygEditorHandle } from './types';
 import type { CompletionProviders } from './extensions/completions';
@@ -183,6 +184,19 @@ describe('MarkdownEditor handle + keymap branches', () => {
     ref.current!.focus();
     await new Promise((r) => requestAnimationFrame(() => r(undefined)));
     expect(onFocusChange).toHaveBeenCalledWith(true);
+  });
+
+  it('does not treat `text\\n---` as a setext heading (so it is not bolded)', async () => {
+    const { ref } = await mount();
+    ref.current!.setMarkdown('foobar\n---');
+    const view = EditorView.findFromDOM(
+      ref.current!.getElement()!.querySelector('.cm-editor') as HTMLElement,
+    )!;
+    const names: string[] = [];
+    syntaxTree(view.state).iterate({ enter: (n) => { names.push(n.name); } });
+    expect(names).not.toContain('SetextHeading');
+    // `---` becomes a thematic break (HorizontalRule), not a heading underline.
+    expect(names).toContain('HorizontalRule');
   });
 
   it('sets mobile keyboard attributes; enterkeyhint=send when Enter submits', async () => {

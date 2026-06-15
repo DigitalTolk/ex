@@ -111,6 +111,7 @@ export function MessageItem({
   const isMobile = useIsMobile();
   const [isEditing, setIsEditing] = useState(false);
   const [linkCopied, setLinkCopied] = useState(false);
+  const [textCopied, setTextCopied] = useState(false);
   // Visibility tracked in JS (not Tailwind group-hover) because Radix's
   // open dropdown changes pointer-events/focus and breaks CSS :hover
   // propagation on the row.
@@ -223,6 +224,8 @@ export function MessageItem({
 
   async function handleCopyText() {
     await copyToClipboard(formatMessageTextForCopy(message.body));
+    setTextCopied(true);
+    setTimeout(() => setTextCopied(false), 1500);
   }
 
   function handleTogglePin() {
@@ -766,6 +769,13 @@ export function MessageItem({
               <MoreHorizontal className="h-3.5 w-3.5" />
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-44">
+              <DropdownMenuItem
+                onClick={handleCopyText}
+                aria-label="Copy message text"
+              >
+                <Copy className="mr-2 h-4 w-4" />
+                {textCopied ? 'Text copied' : 'Copy text'}
+              </DropdownMenuItem>
               <DropdownMenuItem
                 onClick={handleCopyLink}
                 aria-label="Copy link to message"
