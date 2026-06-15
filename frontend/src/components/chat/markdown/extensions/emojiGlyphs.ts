@@ -14,34 +14,50 @@ import {
 } from '@/lib/emoji-shortcodes';
 
 // Live-preview for `:shortcode:` emoji: the document keeps the raw shortcode
-// (portable, server-validatable) while a widget renders the actual glyph, hidden
-// and revealed whenever the caret is inside the token so it stays editable. The
-// grammar matches the message renderer exactly (lib/markdown.tsx): an optional
-// `::skin-tone-N` suffix on a `:name:`. Custom emoji (image-backed) carry no
-// unicode glyph, so they're left as literal text here.
+// (portable, server-validatable) while a widget renders the actual glyph (or the
+// custom emoji image), hidden and revealed whenever the caret is inside the
+// token so it stays editable. Grammar matches the message renderer
+// (lib/markdown.tsx): an optional `::skin-tone-N` suffix on a `:name:`. Custom
+// emoji are resolved to their image via the injected name→URL lookup.
 
-class GlyphWidget extends WidgetType {
-  readonly glyph: string;
+// name → image URL for custom (workspace) emoji.
+type CustomEmojiResolver = (name: string) => string | undefined;
+
+class EmojiWidget extends WidgetType {
   readonly title: string;
-  constructor(glyph: string, title: string) {
+  readonly glyph?: string;
+  readonly imageURL?: string;
+  constructor(title: string, glyph?: string, imageURL?: string) {
     super();
-    this.glyph = glyph;
     this.title = title;
+    this.glyph = glyph;
+    this.imageURL = imageURL;
   }
-  eq(other: GlyphWidget) {
-    return other.glyph === this.glyph;
+  eq(other: EmojiWidget) {
+    return other.glyph === this.glyph && other.imageURL === this.imageURL;
   }
   toDOM() {
+    if (this.imageURL) {
+      const img = document.createElement('img');
+      img.className = 'cm-emoji-img';
+      img.src = this.imageURL;
+      img.alt = this.title;
+      img.title = this.title;
+      return img;
+    }
     const span = document.createElement('span');
     span.className = 'cm-emoji-glyph';
-    span.textContent = this.glyph;
+    // The span path only runs for glyph widgets (imageURL is handled above), so
+    // `glyph` is always set here; the `?? ''` fallback is unreachable.
+    /* istanbul ignore next -- unreachable fallback (see above). */
+    span.textContent = this.glyph ?? '';
     span.title = this.title;
     return span;
   }
 }
 
-// Resolve a shortcode (+ optional skin tone) to its glyph, or null when the name
-// is not a known standard emoji (custom/unknown → leave as literal text).
+// Resolve a shortcode (+ optional skin tone) to its unicode glyph, or null when
+// the name is not a known standard emoji (then we try the custom-emoji map).
 function glyphFor(name: string, skin: string | undefined): string | null {
   const unicode = shortcodeToUnicode(`:${name}:`);
   if (unicode === `:${name}:`) return null;
@@ -62,44 +78,55 @@ function caretInside(view: EditorView, from: number, to: number): boolean {
   return false;
 }
 
-function buildDecorations(view: EditorView): DecorationSet {
+function buildDecorations(view: EditorView, resolveCustom: CustomEmojiResolver): DecorationSet {
   const widgets: Range<Decoration>[] = [];
   for (const { from, to } of view.visibleRanges) {
     const text = view.state.sliceDoc(from, to);
     for (const m of text.matchAll(EMOJI_SHORTCODE_RE_GLOBAL)) {
-      const glyph = glyphFor(m[1], m[2]);
-      if (glyph === null) continue; // unknown/custom shortcode → literal text
+      const name = m[1];
+      const skin = m[2];
+      const title = skin ? `:${name}::${skin}:` : `:${name}:`;
+      const glyph = glyphFor(name, skin);
+      let widget: EmojiWidget | null = null;
+      if (glyph !== null) {
+        widget = new EmojiWidget(title, glyph);
+      } else {
+        const url = resolveCustom(name);
+        if (url) widget = new EmojiWidget(title, undefined, url);
+      }
+      if (!widget) continue; // unknown shortcode → leave as literal text
       const start = from + matchStart(m);
       const end = start + m[0].length;
       if (caretInside(view, start, end)) continue; // reveal raw shortcode for editing
-      const title = m[2] ? `:${m[1]}::${m[2]}:` : `:${m[1]}:`;
-      widgets.push(
-        Decoration.replace({ widget: new GlyphWidget(glyph, title), inclusive: false }).range(start, end),
-      );
+      widgets.push(Decoration.replace({ widget, inclusive: false }).range(start, end));
     }
   }
   return Decoration.set(widgets, true);
 }
 
-const emojiGlyphsPlugin = ViewPlugin.fromClass(
-  class {
-    decorations: DecorationSet;
-    constructor(view: EditorView) {
-      this.decorations = buildDecorations(view);
-    }
-    update(update: ViewUpdate) {
-      // Rebuild on every update: the glyphs depend on both the document and the
-      // selection (caret-touch reveals the raw shortcode). Branch-free + cheap.
-      this.decorations = buildDecorations(update.view);
-    }
-  },
-  { decorations: (v) => v.decorations },
-);
+// `resolveCustom` maps a custom-emoji name to its image URL (read live so the
+// editor — built once — picks up the workspace emoji as they load).
+export function emojiGlyphs(resolveCustom: CustomEmojiResolver) {
+  const plugin = ViewPlugin.fromClass(
+    class {
+      decorations: DecorationSet;
+      constructor(view: EditorView) {
+        this.decorations = buildDecorations(view, resolveCustom);
+      }
+      update(update: ViewUpdate) {
+        // Rebuild on every update: glyphs depend on both the document and the
+        // selection (caret-touch reveals the raw shortcode). Branch-free + cheap.
+        this.decorations = buildDecorations(update.view, resolveCustom);
+      }
+    },
+    { decorations: (v) => v.decorations },
+  );
 
-const emojiAtomicRanges = EditorView.atomicRanges.of((view) => {
-  // The plugin always ships alongside this facet, so the fallback is unreachable.
-  /* istanbul ignore next -- unreachable: plugin is always present. */
-  return view.plugin(emojiGlyphsPlugin)?.decorations ?? Decoration.none;
-});
+  const atomicRanges = EditorView.atomicRanges.of((view) => {
+    // The plugin always ships alongside this facet, so the fallback is unreachable.
+    /* istanbul ignore next -- unreachable: plugin is always present. */
+    return view.plugin(plugin)?.decorations ?? Decoration.none;
+  });
 
-export const emojiGlyphs = [emojiGlyphsPlugin, emojiAtomicRanges];
+  return [plugin, atomicRanges];
+}

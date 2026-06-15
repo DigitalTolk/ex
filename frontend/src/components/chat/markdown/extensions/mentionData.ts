@@ -19,10 +19,12 @@ export interface MentionUser {
   displayName: string;
   email?: string;
   avatarURL?: string;
+  // Active custom-status emoji (already resolved by the caller), if any.
+  statusEmoji?: string;
 }
 
 export type UserSuggestion =
-  | { kind: 'user'; id: string; displayName: string; email?: string; avatarURL?: string; online: boolean; inChannel?: boolean }
+  | { kind: 'user'; id: string; displayName: string; email?: string; avatarURL?: string; statusEmoji?: string; online: boolean; inChannel?: boolean }
   | { kind: 'group'; group: GroupName };
 
 export interface RankUsersCtx {
@@ -37,12 +39,13 @@ interface UserHit {
   displayName: string;
   email?: string;
   avatarURL?: string;
+  statusEmoji?: string;
   online: boolean;
   inChannel?: boolean;
 }
 
 function toSuggestion(h: UserHit): UserSuggestion {
-  return { kind: 'user', id: h.id, displayName: h.displayName, email: h.email, avatarURL: h.avatarURL, online: h.online, inChannel: h.inChannel };
+  return { kind: 'user', id: h.id, displayName: h.displayName, email: h.email, avatarURL: h.avatarURL, statusEmoji: h.statusEmoji, online: h.online, inChannel: h.inChannel };
 }
 
 export function rankUsers(query: string, ctx: RankUsersCtx): UserSuggestion[] {
@@ -55,6 +58,7 @@ export function rankUsers(query: string, ctx: RankUsersCtx): UserSuggestion[] {
       displayName: u.displayName,
       email: u.email,
       avatarURL: u.avatarURL,
+      statusEmoji: u.statusEmoji,
       online: ctx.online.has(u.id),
       inChannel: partition ? ctx.memberIds!.has(u.id) : undefined,
     }));

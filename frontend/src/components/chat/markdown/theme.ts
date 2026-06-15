@@ -59,6 +59,14 @@ export const composerTheme = EditorView.theme({
     lineHeight: '1',
     verticalAlign: 'middle',
   },
+  // Custom (workspace) emoji image, rendered inline at glyph size.
+  '.cm-emoji-img': {
+    display: 'inline-block',
+    width: '1.4em',
+    height: '1.4em',
+    objectFit: 'contain',
+    verticalAlign: 'middle',
+  },
 
   // ---- Autocomplete popup (mentions / channels / emoji) ----
   // Styled to read like the app's shadcn popover/menu, replacing the default
@@ -66,48 +74,76 @@ export const composerTheme = EditorView.theme({
   // channel / Special mentions) come from CompletionSection.
   '.cm-tooltip.cm-tooltip-autocomplete': {
     border: '1px solid var(--color-border)',
-    borderRadius: '0.5rem',
+    borderRadius: '0.75rem',
     backgroundColor: 'var(--color-card)',
     boxShadow: '0 8px 24px -6px rgba(0, 0, 0, 0.18), 0 2px 6px -2px rgba(0, 0, 0, 0.1)',
     overflow: 'hidden',
     fontFamily: 'var(--font-sans)',
     fontSize: '14px',
+    // Wider popup so names + emails + status sit comfortably on one line.
+    minWidth: '20rem',
+    maxWidth: '24rem',
   },
-  '.cm-tooltip-autocomplete > ul': {
+  // NB: the `.cm-tooltip.cm-tooltip-autocomplete` (two-class) prefix is
+  // deliberate — CodeMirror's own baseTheme styles `ul`/`li` with that exact
+  // two-class specificity, so a single-class selector loses the cascade and our
+  // padding is silently dropped (rows glue to the edges). Match its specificity.
+  '.cm-tooltip.cm-tooltip-autocomplete > ul': {
     fontFamily: 'var(--font-sans)',
-    maxHeight: '17rem',
-    padding: '0.25rem',
+    maxHeight: '20rem',
+    padding: '0.5rem',
+    // The list is the sole scroll container; keep wheel/touch scroll from
+    // chaining out and from feeling like individual rows scroll.
+    overflowY: 'auto',
+    overscrollBehavior: 'contain',
   },
-  '.cm-tooltip-autocomplete > ul > li': {
-    padding: '0.25rem 0.5rem',
-    borderRadius: '0.375rem',
+  '.cm-tooltip.cm-tooltip-autocomplete > ul > li': {
+    padding: '0.625rem 0.875rem',
+    margin: '0.125rem 0',
+    borderRadius: '0.5rem',
     color: 'var(--color-foreground)',
     fontFamily: 'var(--font-sans)',
+    // Rows never scroll internally — only the <ul> does.
+    overflow: 'hidden',
   },
-  '.cm-tooltip-autocomplete > ul > li[aria-selected]': {
+  // Keyboard-selected OR mouse-hovered row gets the highlight.
+  '.cm-tooltip.cm-tooltip-autocomplete > ul > li[aria-selected]': {
     backgroundColor: 'var(--color-muted)',
     color: 'var(--color-foreground)',
   },
+  '.cm-tooltip.cm-tooltip-autocomplete > ul > li:hover': {
+    backgroundColor: 'var(--color-muted)',
+    color: 'var(--color-foreground)',
+  },
+  // While the pointer is over the list, only the hovered row is highlighted —
+  // drop the keyboard-selected row's highlight so there's never two at once.
+  '.cm-tooltip.cm-tooltip-autocomplete > ul:hover > li[aria-selected]:not(:hover)': {
+    backgroundColor: 'transparent',
+  },
   // Every composer option renders a custom row (see optionRender.ts), so hide
   // CodeMirror's default label/detail (which also pull in the monospace font).
-  '.cm-tooltip-autocomplete .cm-completionLabel': { display: 'none' },
-  '.cm-tooltip-autocomplete .cm-completionDetail': { display: 'none' },
+  '.cm-tooltip.cm-tooltip-autocomplete .cm-completionLabel': { display: 'none' },
+  '.cm-tooltip.cm-tooltip-autocomplete .cm-completionDetail': { display: 'none' },
 
   // ---- Custom option row ----
   '.cm-option-row': {
     display: 'flex',
     alignItems: 'center',
-    gap: '0.5rem',
+    gap: '0.625rem',
     minWidth: '0',
     fontFamily: 'var(--font-sans)',
   },
-  '.cm-option-col': { display: 'flex', flexDirection: 'column', minWidth: '0', lineHeight: '1.25' },
+  '.cm-option-col': { display: 'flex', flexDirection: 'column', minWidth: '0', lineHeight: '1.3' },
+  '.cm-option-title-row': { display: 'flex', alignItems: 'center', gap: '0.25rem', minWidth: '0' },
   '.cm-option-title': {
+    // Main information stays at the 14px body minimum.
+    fontSize: '0.875rem',
     fontWeight: '500',
     whiteSpace: 'nowrap',
     overflow: 'hidden',
     textOverflow: 'ellipsis',
   },
+  '.cm-option-status': { flex: '0 0 auto', fontSize: '0.875rem', lineHeight: '1' },
   '.cm-option-sub': {
     fontSize: '0.75rem',
     color: 'var(--color-muted-foreground)',
@@ -122,12 +158,12 @@ export const composerTheme = EditorView.theme({
     display: 'inline-flex',
     alignItems: 'center',
     justifyContent: 'center',
-    width: '1.5rem',
-    height: '1.5rem',
+    width: '1.75rem',
+    height: '1.75rem',
     borderRadius: '9999px',
     backgroundColor: 'color-mix(in srgb, var(--color-primary) 10%, transparent)',
     color: 'var(--color-primary)',
-    fontSize: '0.6875rem',
+    fontSize: '0.75rem',
     fontWeight: '600',
     overflow: 'visible',
   },
@@ -153,15 +189,14 @@ export const composerTheme = EditorView.theme({
     display: 'inline-flex',
     alignItems: 'center',
     justifyContent: 'center',
-    width: '1.5rem',
-    height: '1.5rem',
+    width: '1.75rem',
+    height: '1.75rem',
     color: 'var(--color-muted-foreground)',
   },
   '.cm-option-icon svg': { width: '1rem', height: '1rem' },
+  // @all / @here: an avatar-circle (see .cm-option-avatar) with a bolder "@".
   '.cm-option-group': {
-    borderRadius: '9999px',
-    backgroundColor: 'color-mix(in srgb, var(--color-primary) 10%, transparent)',
-    color: 'var(--color-primary)',
+    fontSize: '0.875rem',
     fontWeight: '700',
   },
   // Emoji glyph — shown first and larger (Slack-style).
@@ -170,18 +205,20 @@ export const composerTheme = EditorView.theme({
     display: 'inline-flex',
     alignItems: 'center',
     justifyContent: 'center',
-    width: '1.5rem',
-    fontSize: '1.4rem',
+    width: '1.75rem',
+    fontSize: '1.5rem',
     lineHeight: '1',
   },
   '.cm-option-emoji img': { width: '1.4rem', height: '1.4rem', objectFit: 'contain' },
 
-  // Section header row.
+  // Section header row. Uses the normal UI font (the surrounding <ul> defaults
+  // to monospace, which is why an explicit font-family is needed here).
   '.cm-mention-section': {
-    padding: '0.375rem 0.5rem 0.125rem',
+    padding: '0.5rem 0.75rem 0.25rem',
+    fontFamily: 'var(--font-sans)',
     fontSize: '0.6875rem',
-    fontWeight: '600',
-    letterSpacing: '0.04em',
+    fontWeight: '700',
+    letterSpacing: '0.05em',
     textTransform: 'uppercase',
     color: 'var(--color-muted-foreground)',
   },

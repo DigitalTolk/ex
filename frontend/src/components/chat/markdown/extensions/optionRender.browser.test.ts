@@ -18,13 +18,27 @@ describe('renderMentionOption', () => {
     expect(row.querySelector('.cm-option-dot')).not.toBeNull(); // online
   });
 
-  it('renders a user without an avatar as an initial, no dot when offline, no email row', () => {
+  it('renders a user without an avatar as an initial, no dot when offline, no email/status row', () => {
     const row = render({ kind: 'user', displayName: 'bob', online: false })!;
     const avatar = row.querySelector('.cm-option-avatar')!;
     expect(avatar.querySelector('img')).toBeNull();
     expect(avatar.textContent).toBe('B'); // uppercased initial
     expect(row.querySelector('.cm-option-dot')).toBeNull();
     expect(row.querySelector('.cm-option-sub')).toBeNull();
+    expect(row.querySelector('.cm-option-status')).toBeNull();
+  });
+
+  it('renders the user custom-status emoji (resolving a shortcode) next to the name', () => {
+    const row = render({ kind: 'user', displayName: 'Alice', online: true, statusEmoji: ':palm_tree:' })!;
+    const status = row.querySelector('.cm-option-status')!;
+    expect(status).not.toBeNull();
+    // :palm_tree: resolves to its unicode glyph (not the literal shortcode).
+    expect(status.textContent).not.toBe(':palm_tree:');
+  });
+
+  it('passes a unicode status emoji through unchanged', () => {
+    const row = render({ kind: 'user', displayName: 'Alice', online: true, statusEmoji: '🌴' })!;
+    expect(row.querySelector('.cm-option-status')?.textContent).toBe('🌴');
   });
 
   it('falls back to "?" for an empty display name', () => {
@@ -32,9 +46,12 @@ describe('renderMentionOption', () => {
     expect(row.querySelector('.cm-option-avatar')?.textContent).toBe('?');
   });
 
-  it('renders a group with the @ icon, title and description', () => {
+  it('renders a group as an avatar circle with "@", plus title and description', () => {
     const row = render({ kind: 'group', title: '@all', description: 'Notify everyone' })!;
-    expect(row.querySelector('.cm-option-group')?.textContent).toBe('@');
+    const icon = row.querySelector('.cm-option-group')!;
+    expect(icon.textContent).toBe('@');
+    // The "@" badge reuses the avatar circle styling.
+    expect(icon.classList.contains('cm-option-avatar')).toBe(true);
     expect(row.querySelector('.cm-option-title')?.textContent).toBe('@all');
     expect(row.querySelector('.cm-option-sub')?.textContent).toBe('Notify everyone');
   });

@@ -1,4 +1,5 @@
 import type { Completion } from '@codemirror/autocomplete';
+import { shortcodeToUnicode } from '@/lib/emoji-shortcodes';
 
 // Rich rendering for the composer's autocomplete options. CodeMirror only draws
 // a label + detail by default; we attach a `meta` payload to each completion and
@@ -8,7 +9,7 @@ import type { Completion } from '@codemirror/autocomplete';
 // are hidden in the theme since every composer option carries a custom row.
 
 export type OptionMeta =
-  | { kind: 'user'; displayName: string; email?: string; avatarURL?: string; online: boolean }
+  | { kind: 'user'; displayName: string; email?: string; avatarURL?: string; online: boolean; statusEmoji?: string }
   | { kind: 'group'; title: string; description: string }
   | { kind: 'channel'; slug: string; isPrivate: boolean }
   | { kind: 'emoji'; name: string; glyph?: string; imageURL?: string };
@@ -63,10 +64,20 @@ export function renderMentionOption(completion: Completion): Node | null {
   const row = el('div', 'cm-option-row');
   if (meta.kind === 'user') {
     row.appendChild(avatarEl(meta));
-    row.appendChild(textCol(meta.displayName, meta.email));
+    const col = el('div', 'cm-option-col');
+    const titleRow = el('div', 'cm-option-title-row');
+    titleRow.appendChild(el('span', 'cm-option-title', meta.displayName));
+    if (meta.statusEmoji) {
+      // Active custom-status emoji (resolve a :shortcode: to its glyph).
+      titleRow.appendChild(el('span', 'cm-option-status', shortcodeToUnicode(meta.statusEmoji)));
+    }
+    col.appendChild(titleRow);
+    if (meta.email) col.appendChild(el('div', 'cm-option-sub', meta.email));
+    row.appendChild(col);
   } else if (meta.kind === 'group') {
-    const icon = el('span', 'cm-option-icon cm-option-group', '@');
-    row.appendChild(icon);
+    // @all / @here render with an avatar-style circle showing "@", matching the
+    // user avatars beside them.
+    row.appendChild(el('span', 'cm-option-avatar cm-option-group', '@'));
     row.appendChild(textCol(meta.title, meta.description));
   } else if (meta.kind === 'channel') {
     row.appendChild(svgIcon(meta.isPrivate ? LOCK_SVG : HASH_SVG));

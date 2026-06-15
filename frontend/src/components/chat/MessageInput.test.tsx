@@ -31,6 +31,7 @@ vi.mock('@/hooks/useChannels', async (orig) => ({
 vi.mock('@/hooks/useEmoji', async (orig) => ({
   ...(await orig<typeof import('@/hooks/useEmoji')>()),
   useEmojis: () => ({ data: [] }),
+  useEmojiMap: () => ({ data: {} }),
 }));
 
 // Stub the workspace-settings hook so MessageInput doesn't fire a

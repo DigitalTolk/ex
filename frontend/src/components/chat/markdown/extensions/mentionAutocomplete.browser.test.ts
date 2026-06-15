@@ -112,6 +112,12 @@ describe('channelMentionSource', () => {
     expect(res.options[0].type).toBe('class');
   });
 
+  it('groups channels under a "My Channels" section header', () => {
+    const res = channelMentionSource(providers)(ctxFor('~')) as CompletionResult;
+    const section = res.options[0].section;
+    expect(typeof section === 'string' ? section : section?.name).toBe('My Channels');
+  });
+
   it('returns null when ~ is inside a word', () => {
     expect(channelMentionSource(providers)(ctxFor('a~b'))).toBeNull();
   });

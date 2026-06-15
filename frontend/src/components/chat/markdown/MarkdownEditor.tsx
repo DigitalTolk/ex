@@ -62,6 +62,9 @@ interface Props {
   // through a ref so the editor is still built once; absent → the sources
   // return nothing (no popup), which is the case in isolated tests.
   completionProviders?: CompletionProviders;
+  // Live name→URL lookup for custom (workspace) emoji, so `:custom:` shortcodes
+  // render as their image in the composer (matching the message renderer).
+  customEmojiMap?: () => Record<string, string>;
 }
 
 // Remove SetextHeading so `foobar\n---` is a paragraph followed by a thematic
@@ -85,6 +88,7 @@ export const MarkdownEditor = forwardRef<WysiwygEditorHandle, Props>(function Ma
     submitOnEnter = true,
     onArrowUpEmpty,
     completionProviders,
+    customEmojiMap,
   },
   ref,
 ) {
@@ -96,8 +100,8 @@ export const MarkdownEditor = forwardRef<WysiwygEditorHandle, Props>(function Ma
   const overlayRef = useRef<HTMLDivElement>(null);
   // Latest callbacks, read through refs so the editor is built exactly once and
   // never torn down on a parent re-render (which would drop focus/selection).
-  const cbRef = useRef({ onChange, onSubmit, onCancel, onFocusChange, onPasteFiles, submitOnEnter, onArrowUpEmpty, completionProviders });
-  cbRef.current = { onChange, onSubmit, onCancel, onFocusChange, onPasteFiles, submitOnEnter, onArrowUpEmpty, completionProviders };
+  const cbRef = useRef({ onChange, onSubmit, onCancel, onFocusChange, onPasteFiles, submitOnEnter, onArrowUpEmpty, completionProviders, customEmojiMap });
+  cbRef.current = { onChange, onSubmit, onCancel, onFocusChange, onPasteFiles, submitOnEnter, onArrowUpEmpty, completionProviders, customEmojiMap };
   const formatSubsRef = useRef(new Set<(active: Set<ActiveFormat>) => void>());
   const linkSelRef = useRef<{ from: number; to: number }>({ from: 0, to: 0 });
   // Compartment so the (dynamic) editorClassName can be reconfigured on the
@@ -119,7 +123,7 @@ export const MarkdownEditor = forwardRef<WysiwygEditorHandle, Props>(function Ma
           composerHighlight,
           inlinePreview,
           mentionPills,
-          emojiGlyphs,
+          emojiGlyphs((name) => (cbRef.current.customEmojiMap?.() ?? {})[name]),
           composerAutocomplete({
             users: () => (cbRef.current.completionProviders ?? EMPTY_PROVIDERS).users(),
             online: () => (cbRef.current.completionProviders ?? EMPTY_PROVIDERS).online(),

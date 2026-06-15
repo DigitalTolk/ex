@@ -63,6 +63,16 @@ describe('emojiSource', () => {
     expect(res.options[0].detail).toBeTruthy(); // the unicode glyph
   });
 
+  it('groups emoji under an "Emoji" section header', () => {
+    const res = emojiSource(providers)(ctxFor(':smile')) as CompletionResult;
+    const section = res.options[0].section;
+    const name = typeof section === 'string' ? section : section?.name;
+    expect(name).toBe('Emoji');
+    // The header renderer produces the shared section element.
+    const header = (typeof section === 'object' && section?.header)?.(section);
+    expect((header as HTMLElement | undefined)?.textContent).toBe('Emoji');
+  });
+
   it('does not trigger on a bare colon (needs a query char)', () => {
     expect(emojiSource(providers)(ctxFor('a : '))).toBeNull();
   });

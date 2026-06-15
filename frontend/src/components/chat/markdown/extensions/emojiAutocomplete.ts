@@ -2,6 +2,7 @@ import {
   type Completion,
   type CompletionContext,
   type CompletionResult,
+  type CompletionSection,
   type CompletionSource,
 } from '@codemirror/autocomplete';
 import type { EditorView } from '@codemirror/view';
@@ -67,12 +68,25 @@ function applyInsert(text: string) {
   };
 }
 
+// "EMOJI" header for the :-popup, styled by the shared `.cm-mention-section`.
+const EMOJI_SECTION: CompletionSection = {
+  name: 'Emoji',
+  rank: 0,
+  header: () => {
+    const el = document.createElement('div');
+    el.className = 'cm-mention-section';
+    el.textContent = 'Emoji';
+    return el;
+  },
+};
+
 function hitToCompletion(hit: EmojiHit, skinTone: EmojiSkinTone): MentionCompletion {
   if (hit.kind === 'custom') {
     return {
       label: `:${hit.name}:`,
       detail: 'custom',
       type: 'text',
+      section: EMOJI_SECTION,
       apply: applyInsert(`:${hit.name}: `),
       meta: { kind: 'emoji', name: hit.name, imageURL: hit.imageURL },
     };
@@ -82,6 +96,7 @@ function hitToCompletion(hit: EmojiHit, skinTone: EmojiSkinTone): MentionComplet
     label: `:${hit.name}:`,
     detail: hit.unicode,
     type: 'text',
+    section: EMOJI_SECTION,
     apply: applyInsert(`${shortcode} `),
     meta: { kind: 'emoji', name: hit.name, glyph: hit.unicode },
   };

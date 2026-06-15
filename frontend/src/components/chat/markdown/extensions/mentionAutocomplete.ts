@@ -55,6 +55,9 @@ function mkSection(name: string, rank: number): CompletionSection {
 const SECTION_MEMBERS = mkSection('Channel members', 0);
 const SECTION_SPECIAL = mkSection('Special mentions', 1);
 const SECTION_OTHERS = mkSection('Not in channel', 2);
+// `useUserChannels` returns only the channels the user has joined, so the
+// ~-popup is always "My Channels".
+const SECTION_CHANNELS = mkSection('My Channels', 0);
 
 const GROUP_DETAIL: Record<GroupName, string> = {
   all: 'Notify everyone in this channel',
@@ -80,7 +83,7 @@ function userCompletion(s: UserSuggestion, partitioned: boolean): MentionComplet
     // DMs / edits show a flat ranked list with no headers.
     section: partitioned ? (s.inChannel ? SECTION_MEMBERS : SECTION_OTHERS) : undefined,
     apply: applyInsert(`@[${s.id}|${s.displayName}] `),
-    meta: { kind: 'user', displayName: s.displayName, email: s.email, avatarURL: s.avatarURL, online: s.online },
+    meta: { kind: 'user', displayName: s.displayName, email: s.email, avatarURL: s.avatarURL, online: s.online, statusEmoji: s.statusEmoji },
   };
 }
 
@@ -117,6 +120,7 @@ export function channelMentionSource(providers: MentionProviders): CompletionSou
     const options = rankChannels(query, providers.channels()).map((c): MentionCompletion => ({
       label: `~${c.slug}`,
       type: c.isPrivate ? 'class' : 'variable',
+      section: SECTION_CHANNELS,
       apply: applyInsert(`~[${c.id}|${c.slug}] `),
       meta: { kind: 'channel', slug: c.slug, isPrivate: c.isPrivate },
     }));

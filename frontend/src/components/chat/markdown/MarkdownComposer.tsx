@@ -2,8 +2,9 @@ import { forwardRef, useMemo } from 'react';
 import { useAllUsers } from '@/hooks/useConversations';
 import { useChannelMembers, useUserChannels } from '@/hooks/useChannels';
 import { usePresence } from '@/context/PresenceContext';
-import { useEmojis } from '@/hooks/useEmoji';
+import { useEmojis, useEmojiMap } from '@/hooks/useEmoji';
 import { useOptionalAuth } from '@/context/AuthContext';
+import { activeStatus } from '@/lib/user-status';
 import type { EmojiSkinTone } from '@/lib/emoji-shortcodes';
 import { MarkdownEditor, type WysiwygEditorHandle, type ActiveFormat } from './MarkdownEditor';
 import type { CompletionProviders } from './extensions/completions';
@@ -42,6 +43,7 @@ export const MarkdownComposer = forwardRef<WysiwygEditorHandle, Props>(function 
   const { online } = usePresence();
   const { data: channels = [] } = useUserChannels();
   const { data: customEmojis = [] } = useEmojis();
+  const { data: emojiMap = {} } = useEmojiMap();
   const auth = useOptionalAuth();
   const skinTone: EmojiSkinTone = auth?.user?.emojiSkinTone ?? '';
 
@@ -54,7 +56,14 @@ export const MarkdownComposer = forwardRef<WysiwygEditorHandle, Props>(function 
 
   const completionProviders = useMemo<CompletionProviders>(
     () => ({
-      users: () => users.map((u) => ({ id: u.id, displayName: u.displayName, email: u.email, avatarURL: u.avatarURL })),
+      users: () =>
+        users.map((u) => ({
+          id: u.id,
+          displayName: u.displayName,
+          email: u.email,
+          avatarURL: u.avatarURL,
+          statusEmoji: activeStatus(u.userStatus)?.emoji,
+        })),
       online: () => online,
       memberIds: () => memberIds,
       channels: () =>
@@ -65,5 +74,12 @@ export const MarkdownComposer = forwardRef<WysiwygEditorHandle, Props>(function 
     [users, online, memberIds, channels, customEmojis, skinTone],
   );
 
-  return <MarkdownEditor ref={ref} {...editorProps} completionProviders={completionProviders} />;
+  return (
+    <MarkdownEditor
+      ref={ref}
+      {...editorProps}
+      completionProviders={completionProviders}
+      customEmojiMap={() => emojiMap}
+    />
+  );
 });
