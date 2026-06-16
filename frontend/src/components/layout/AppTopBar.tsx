@@ -176,8 +176,13 @@ export function AppTopBar({ onOpenChannels, channelsButtonHidden }: AppTopBarPro
   ];
 
   function runActionAndCloseSheet(action: MenuAction) {
-    setMobileMenuOpen(false);
+    // Run the action (navigate / open the next dialog) BEFORE closing this
+    // sheet. Closing first lets the full-screen Dialog's focus-trap + scroll
+    // lock teardown run ahead of the navigation, which on mobile webviews
+    // could swallow it — tapping "Admin"/"Incoming webhooks" then appeared to
+    // do nothing. Committing the navigation first avoids that race.
     action.onSelect();
+    setMobileMenuOpen(false);
   }
 
   return (
@@ -196,6 +201,9 @@ export function AppTopBar({ onOpenChannels, channelsButtonHidden }: AppTopBarPro
         className="grid h-9 max-md:h-12 w-full shrink-0 grid-cols-[1fr_minmax(0,36rem)_1fr] items-center gap-2 border-b border-border bg-sidebar px-2 max-md:px-3 text-sidebar-foreground [-webkit-app-region:drag] [&_button,&_a,&_input]:[-webkit-app-region:no-drag]"
         data-testid="app-shell-header"
         data-app-chrome="true"
+        // The global search field lives on this sidebar-coloured strip, so the
+        // mobile keyboard background must match the sidebar, not the chat.
+        data-keyboard-surface="sidebar"
       >
         <div className="flex items-center">
           {/* The hamburger shows whenever the channel sidebar isn't already

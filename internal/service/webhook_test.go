@@ -189,6 +189,26 @@ func TestIncomingWebhookService_LockToChannelIgnoresOverride(t *testing.T) {
 	}
 }
 
+func TestIncomingWebhookService_CreateAcceptsBracketTitle(t *testing.T) {
+	ctx := context.Background()
+	ch := &model.Channel{ID: "ch-1", Name: "General", Slug: "general"}
+	messages := newMockMessageStore()
+	msgSvc := NewMessageService(messages, nil, nil, newMockPublisher(), nil)
+	svc := NewIncomingWebhookService(&fakeWebhookStore{items: map[string]*model.IncomingWebhook{}}, fakeWebhookChannels{
+		byID: map[string]*model.Channel{ch.ID: ch},
+	}, msgSvc, fakeWebhookImageProxy{}, "https://chat.example/")
+
+	// "[]" is a valid (non-blank) title — creation must succeed, not fail
+	// silently, and the title must be preserved verbatim.
+	created, err := svc.Create(ctx, "admin", &model.IncomingWebhook{Title: "[]", ChannelID: ch.ID})
+	if err != nil {
+		t.Fatalf("Create with bracket title: %v", err)
+	}
+	if created.Title != "[]" {
+		t.Fatalf("bracket title not preserved: %#v", created)
+	}
+}
+
 func TestIncomingWebhookService_ValidationListDeleteAndOverrides(t *testing.T) {
 	ctx := context.Background()
 	ch := &model.Channel{ID: "ch-1", Name: "General", Slug: "general"}

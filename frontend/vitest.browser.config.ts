@@ -64,6 +64,7 @@ export default defineConfig({
         // they're pulled into the browser graph but graded in jsdom only.
         'src/hooks/useSwipeDismiss.ts',
         'src/hooks/useDismissKeyboardOnScroll.ts',
+        'src/hooks/useKeyboardSurfaceColor.ts',
         'src/lib/blur-input.ts',
       ],
       // 99% branch gate over the merged desktop + mobile browser run.

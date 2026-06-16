@@ -54,7 +54,7 @@ describe('MemberList - admin actions', () => {
     expect(screen.getByLabelText('Add member')).toBeInTheDocument();
   });
 
-  it('does not show Add member button for regular members', () => {
+  it('shows the Add member input for regular members (anyone can invite)', () => {
     const members = [
       makeMember({ userID: 'user-1', displayName: 'Alice' }),
     ];
@@ -68,7 +68,7 @@ describe('MemberList - admin actions', () => {
       />,
     );
 
-    expect(screen.queryByLabelText('Add member')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Add member')).toBeInTheDocument();
   });
 
   it('shows remove button for non-owner members when user is admin', () => {

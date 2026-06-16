@@ -137,6 +137,10 @@ describe('ThreadCard', () => {
     expect(link.textContent).toBe('~general');
     expect(link).toHaveClass('text-sm');
     expect(link).toHaveClass('font-semibold');
+    // Clip (not overflow-hidden via `truncate`) so the desktop webview doesn't
+    // trap wheel events over the channel name and block page scroll.
+    expect(link).toHaveClass('overflow-clip');
+    expect(link).not.toHaveClass('truncate');
     expect(link).not.toHaveClass('hover:underline');
     expect(link).not.toHaveClass('text-link');
   });

@@ -113,19 +113,13 @@ export const composerTheme = EditorView.theme({
     // Rows never scroll internally — only the <ul> does.
     overflow: 'hidden',
   },
-  // Keyboard-selected OR mouse-hovered row gets the highlight.
+  // Exactly one row is highlighted: the selected one. Hovering a row makes it
+  // the selected row (see hoverSelect in completions.ts), so the mouse and the
+  // keyboard drive the same single highlight — pointing at the list never hides
+  // the keyboard's selection, and arrow-key navigation stays visible.
   '.cm-tooltip.cm-tooltip-autocomplete > ul > li[aria-selected]': {
     backgroundColor: 'var(--color-muted)',
     color: 'var(--color-foreground)',
-  },
-  '.cm-tooltip.cm-tooltip-autocomplete > ul > li:hover': {
-    backgroundColor: 'var(--color-muted)',
-    color: 'var(--color-foreground)',
-  },
-  // While the pointer is over the list, only the hovered row is highlighted —
-  // drop the keyboard-selected row's highlight so there's never two at once.
-  '.cm-tooltip.cm-tooltip-autocomplete > ul:hover > li[aria-selected]:not(:hover)': {
-    backgroundColor: 'transparent',
   },
   // Every composer option renders a custom row (see optionRender.ts), so hide
   // CodeMirror's default label/detail (which also pull in the monospace font).

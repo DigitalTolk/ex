@@ -86,6 +86,11 @@ func (s *IncomingWebhookStoreImpl) List(ctx context.Context) ([]*model.IncomingW
 		FilterExpression:          expr.Filter(),
 		ExpressionAttributeNames:  expr.Names(),
 		ExpressionAttributeValues: expr.Values(),
+		// Strongly consistent so a just-created webhook is visible on the
+		// admin page's immediate refetch — a default (eventually consistent)
+		// scan intermittently omitted it, so creating one looked like it had
+		// silently failed until you retried.
+		ConsistentRead: aws.Bool(true),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("store: list webhooks: %w", err)

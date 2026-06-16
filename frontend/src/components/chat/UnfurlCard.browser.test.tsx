@@ -70,6 +70,45 @@ describe('UnfurlCard browser behaviour', () => {
     expect(document.querySelector('[data-testid="unfurl-card-dismiss"]')).toBeNull();
   });
 
+  it('renders the internal message-link card (avatar, author, body, image, channel)', async () => {
+    useUnfurlMock.mockReturnValue({
+      data: {
+        url: 'https://ex.test/channel/incidents#msg-1',
+        kind: 'message',
+        siteName: 'ex.test',
+        authorName: 'Günter Grodotzki',
+        authorAvatarURL: 'https://img/g.png',
+        channelLabel: '~Incidents',
+        body: 'please do proper RCA',
+        createdAt: '2026-06-15T10:00:00Z',
+        image: 'https://img/chart.png',
+      },
+      isLoading: false,
+    });
+    const screen = await render(<UnfurlCard url="https://ex.test/channel/incidents#msg-1" messageId="m-1" isAuthor={false} />);
+    await expect.element(screen.getByText('Günter Grodotzki')).toBeVisible();
+    await expect.element(screen.getByText('please do proper RCA')).toBeVisible();
+    await expect.element(screen.getByText('Only visible to users in ~Incidents')).toBeVisible();
+    expect(document.querySelector('[data-testid="unfurl-message-avatar"]')).not.toBeNull();
+    expect(document.querySelector('[data-testid="unfurl-card-image"]')).not.toBeNull();
+  });
+
+  it('renders the message card with an initials fallback and no image/body', async () => {
+    useUnfurlMock.mockReturnValue({
+      data: {
+        url: 'https://ex.test/channel/incidents#msg-2',
+        kind: 'message',
+        siteName: 'ex.test',
+        channelLabel: '~Incidents',
+        image: 'https://img/only.png',
+      },
+      isLoading: false,
+    });
+    const screen = await render(<UnfurlCard url="https://ex.test/channel/incidents#msg-2" messageId="m-2" isAuthor={false} />);
+    await expect.element(screen.getByText('Unknown')).toBeVisible();
+    expect(document.querySelector('[data-testid="unfurl-message-avatar"]')).toBeNull();
+  });
+
   it('replaces a broken image with the placeholder slot', async () => {
     useUnfurlMock.mockReturnValue({
       data: { url: 'https://example.org', title: 'X', image: 'https://example.org/missing.png' },

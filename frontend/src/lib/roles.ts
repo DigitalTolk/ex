@@ -75,7 +75,13 @@ export function canLeaveChannel(role: ChannelRoleLike, channelSlug?: string): bo
   return n > 0 && n !== ChannelRole.Owner;
 }
 
-// Admins and owners can manage (add/remove) members.
+// Any member can invite/add someone to a channel they belong to (Slack /
+// Mattermost default). The backend enforces the same floor in AddMember.
+export function canAddMembers(role: ChannelRoleLike): boolean {
+  return roleNumber(role) >= ChannelRole.Member;
+}
+
+// Admins and owners can manage members beyond inviting — i.e. remove them.
 export function canManageMembers(role: ChannelRoleLike): boolean {
   return roleNumber(role) >= ChannelRole.Admin;
 }

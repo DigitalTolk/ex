@@ -511,8 +511,18 @@ func (s *ChannelService) SetCategory(ctx context.Context, userID, channelID, cat
 // AddMember adds a user to a channel with the specified role. The actor must
 // be an admin or higher.
 func (s *ChannelService) AddMember(ctx context.Context, actorID, channelID, userID string, role model.ChannelRole) error {
-	if err := s.checkPermission(ctx, actorID, channelID, model.ChannelRoleAdmin); err != nil {
+	// Any member can invite someone into a channel they belong to (Slack /
+	// Mattermost default). Removing members and changing roles still require
+	// admin — see RemoveMember / UpdateMemberRole.
+	if err := s.checkPermission(ctx, actorID, channelID, model.ChannelRoleMember); err != nil {
 		return err
+	}
+	// Only admins may grant an elevated role; a plain member's invite always
+	// lands the newcomer as a regular member, never admin/owner.
+	if role > model.ChannelRoleMember {
+		if err := s.checkPermission(ctx, actorID, channelID, model.ChannelRoleAdmin); err != nil {
+			role = model.ChannelRoleMember
+		}
 	}
 
 	ch, err := s.channels.GetChannel(ctx, channelID)

@@ -1,5 +1,6 @@
-import { describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { InviteDialog } from './InviteDialog';
 
 vi.mock('@/lib/api', () => {
@@ -17,12 +18,36 @@ vi.mock('@/lib/api', () => {
   };
 });
 
+let mockIsMobile = false;
+vi.mock('@/hooks/useIsMobile', () => ({ useIsMobile: () => mockIsMobile }));
+
 describe('InviteDialog', () => {
+  beforeEach(() => {
+    mockIsMobile = false;
+  });
+
   it('renders email input and submit button when open', () => {
     render(<InviteDialog open={true} onOpenChange={vi.fn()} />);
 
     expect(screen.getByLabelText(/email address/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /send invitation/i })).toBeInTheDocument();
+  });
+
+  it('on mobile, sends from the top-right header action instead of an inline submit', async () => {
+    mockIsMobile = true;
+    const { apiFetch } = await import('@/lib/api');
+    (apiFetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ token: 'tok-1' });
+    const user = userEvent.setup();
+    render(<InviteDialog open={true} onOpenChange={vi.fn()} />);
+
+    await user.type(screen.getByLabelText(/email address/i), 'colleague@example.com');
+    const send = screen.getByRole('button', { name: 'Send invitation' });
+    expect(send.closest('[data-slot="dialog-mobile-actions"]')).not.toBeNull();
+    await user.click(send);
+
+    await waitFor(() =>
+      expect(apiFetch).toHaveBeenCalledWith('/auth/invite', expect.objectContaining({ method: 'POST' })),
+    );
   });
 
   it('renders dialog title', () => {

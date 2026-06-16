@@ -331,6 +331,11 @@ func main() {
 	}
 	wsH.SetOriginPolicy(wsOriginPatternsFromCORS(allowOrigins))
 	unfurlH := handler.NewUnfurlHandler(unfurlSvc)
+	// Links to other messages in this workspace unfurl as rich, access-gated
+	// message-preview cards (Slack/Mattermost style) instead of being scraped.
+	unfurlH.SetMessageLinks(service.NewMessageLinkService(
+		cfg.BaseURL, channelStore, membershipStore, conversationStore, messageStore, userSvc, attachmentSvc,
+	))
 	router := handler.NewRouter(&handler.Deps{
 		Auth:         authH,
 		User:         userH,

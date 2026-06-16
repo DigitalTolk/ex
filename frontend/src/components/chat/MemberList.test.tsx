@@ -213,6 +213,30 @@ describe('MemberList', () => {
     );
   });
 
+  it('keeps the add-member input clear of the leading icon on mobile', () => {
+    renderWithProviders(
+      <MemberList channelId="ch-1" currentUserId="owner" currentUserRole={3} members={[makeMember()]} />,
+    );
+    // Restated left padding at the mobile (max-md) variant so the Input base's
+    // max-md:px-4 can't slide the placeholder under the UserPlus icon.
+    expect(screen.getByLabelText('Add member')).toHaveClass('pl-8', 'max-md:pl-10');
+  });
+
+  it('lets a plain member invite people (add input shown) but not remove anyone', () => {
+    renderWithProviders(
+      <MemberList
+        channelId="ch-1"
+        currentUserId="me"
+        currentUserRole={1}
+        members={[makeMember({ userID: 'other', role: 'member', displayName: 'Other Person' })]}
+      />,
+    );
+    // Any member can invite → the add-member input is present.
+    expect(screen.getByLabelText('Add member')).toBeInTheDocument();
+    // …but removal stays admin-only.
+    expect(screen.queryByLabelText('Remove Other Person')).not.toBeInTheDocument();
+  });
+
   it('shows "Members" heading', () => {
     renderWithProviders(<MemberList members={[makeMember()]} />);
 

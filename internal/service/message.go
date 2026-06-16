@@ -1386,7 +1386,7 @@ func (s *MessageService) flagNonMemberMentions(ctx context.Context, msg *model.M
 		if _, err := s.memberships.GetMembership(ctx, msg.ParentID, mention.UserID); err == nil {
 			continue
 		}
-		body := "@" + mention.DisplayName + " was mentioned but isn't a member of this channel — an admin can invite them via the channel members list."
+		body := "@" + mention.DisplayName + " was mentioned but isn't a member of this channel — add them via the channel members list."
 		s.postSystemMessage(ctx, msg.ParentID, body)
 	}
 }

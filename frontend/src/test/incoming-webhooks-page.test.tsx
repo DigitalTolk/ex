@@ -110,7 +110,7 @@ describe('IncomingWebhooksPage', () => {
     expect(screen.getByText('https://chat.example/hooks/wh-1')).toBeInTheDocument();
 
     // Deleting goes through a confirmation dialog.
-    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete CI' }));
     fireEvent.click(await screen.findByRole('button', { name: /Delete webhook/i }));
 
     await waitFor(() => {
@@ -130,7 +130,7 @@ describe('IncomingWebhooksPage', () => {
     });
     renderPage();
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Delete' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete CI' }));
     fireEvent.click(await screen.findByTestId('confirm-dialog-cancel'));
 
     expect(mockApiFetch).not.toHaveBeenCalledWith('/api/v1/admin/webhooks/wh-1', { method: 'DELETE' });
@@ -153,7 +153,7 @@ describe('IncomingWebhooksPage', () => {
     });
     renderPage();
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit CI' }));
     const title = screen.getByLabelText(/^Title$/i) as HTMLInputElement;
     await waitFor(() => expect(title.value).toBe('CI'));
     fireEvent.change(title, { target: { value: 'CI Renamed' } });

@@ -21,8 +21,7 @@ export function InviteDialog({ open, onOpenChange }: InviteDialogProps) {
   const [status, setStatus] = useState<Status>('idle');
   const [error, setError] = useState('');
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
+  async function submitInvite() {
     setError('');
     setStatus('idle');
     setIsSubmitting(true);
@@ -45,6 +44,11 @@ export function InviteDialog({ open, onOpenChange }: InviteDialogProps) {
     }
   }
 
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    await submitInvite();
+  }
+
   function handleClose(open: boolean) {
     /* istanbul ignore else -- this controlled dialog only ever receives onOpenChange(false) (no internal trigger opens it), so the open===true else arm is dead */
     if (!open) {
@@ -58,7 +62,16 @@ export function InviteDialog({ open, onOpenChange }: InviteDialogProps) {
 
   return (
     <Dialog open={open} onOpenChange={handleClose}>
-      <DialogContent className="max-w-lg min-h-[300px] max-md:overflow-hidden" finalFocus={false} mobileCloseLabel="Cancel">
+      <DialogContent
+        className="max-w-lg min-h-[300px] max-md:overflow-hidden"
+        finalFocus={false}
+        mobileCloseLabel="Cancel"
+        mobileAction={
+          isMobile && status === 'idle'
+            ? { label: 'Send invitation', onClick: submitInvite, disabled: isSubmitting || !email }
+            : undefined
+        }
+      >
         <DialogHeader>
           <DialogTitle>Invite someone</DialogTitle>
         </DialogHeader>
@@ -106,9 +119,13 @@ export function InviteDialog({ open, onOpenChange }: InviteDialogProps) {
                 autoFocus={!isMobile}
               />
             </div>
-            <Button type="submit" className="w-full" disabled={isSubmitting}>
-              {isSubmitting ? 'Sending...' : 'Send invitation'}
-            </Button>
+            {/* Mobile surfaces "Send invitation" in the dialog's top-right
+                header (see mobileAction); desktop keeps the inline submit. */}
+            {!isMobile && (
+              <Button type="submit" className="w-full" disabled={isSubmitting}>
+                {isSubmitting ? 'Sending...' : 'Send invitation'}
+              </Button>
+            )}
           </form>
         )}
       </DialogContent>

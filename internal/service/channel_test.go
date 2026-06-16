@@ -641,6 +641,48 @@ func TestChannelService_AddMember(t *testing.T) {
 	}
 }
 
+func TestChannelService_AddMember_AnyMemberCanInvite(t *testing.T) {
+	svc, channels, memberships, _, _ := setupChannelService()
+	ctx := context.Background()
+
+	channels.channels["ch-invite"] = &model.Channel{ID: "ch-invite", Name: "invite", Type: model.ChannelTypePublic}
+	// Actor is a plain member, not an admin.
+	memberships.memberships["ch-invite#member-1"] = &model.ChannelMembership{
+		ChannelID: "ch-invite", UserID: "member-1", Role: model.ChannelRoleMember,
+	}
+
+	if err := svc.AddMember(ctx, "member-1", "ch-invite", "newcomer", model.ChannelRoleMember); err != nil {
+		t.Fatalf("a plain member should be able to invite: %v", err)
+	}
+	if _, ok := memberships.memberships["ch-invite#newcomer"]; !ok {
+		t.Error("newcomer membership should be created")
+	}
+
+	// A non-member still can't add anyone.
+	if err := svc.AddMember(ctx, "stranger", "ch-invite", "x", model.ChannelRoleMember); err == nil {
+		t.Error("a non-member should not be able to add members")
+	}
+}
+
+func TestChannelService_AddMember_MemberCannotGrantAdminRole(t *testing.T) {
+	svc, channels, memberships, _, _ := setupChannelService()
+	ctx := context.Background()
+
+	channels.channels["ch-cap"] = &model.Channel{ID: "ch-cap", Name: "cap", Type: model.ChannelTypePublic}
+	memberships.memberships["ch-cap#member-1"] = &model.ChannelMembership{
+		ChannelID: "ch-cap", UserID: "member-1", Role: model.ChannelRoleMember,
+	}
+
+	// A plain member invites someone as admin — the role is capped to member.
+	if err := svc.AddMember(ctx, "member-1", "ch-cap", "newcomer", model.ChannelRoleAdmin); err != nil {
+		t.Fatalf("AddMember: %v", err)
+	}
+	got := memberships.memberships["ch-cap#newcomer"]
+	if got == nil || got.Role != model.ChannelRoleMember {
+		t.Errorf("member's invite must land as a plain member, got %+v", got)
+	}
+}
+
 func TestChannelService_RemoveMember(t *testing.T) {
 	svc, _, memberships, _, _ := setupChannelService()
 	ctx := context.Background()

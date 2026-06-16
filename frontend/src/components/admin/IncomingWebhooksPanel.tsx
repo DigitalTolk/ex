@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { Pencil, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -173,12 +174,23 @@ export function IncomingWebhooksPanel() {
                   <span>Created by {creatorMap.get(wh.createdBy)?.displayName ?? 'unknown'}</span>
                 </p>
               </div>
-              <div className="flex shrink-0 items-center gap-2">
-                <Button variant="outline" size="sm" onClick={() => startEdit(wh)}>
-                  Edit
+              <div className="flex shrink-0 items-center gap-1">
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  onClick={() => startEdit(wh)}
+                  aria-label={`Edit ${wh.title}`}
+                >
+                  <Pencil className="h-4 w-4" />
                 </Button>
-                <Button variant="outline" size="sm" onClick={() => setToDelete(wh)}>
-                  Delete
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  onClick={() => setToDelete(wh)}
+                  aria-label={`Delete ${wh.title}`}
+                  className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+                >
+                  <Trash2 className="h-4 w-4" />
                 </Button>
               </div>
             </div>

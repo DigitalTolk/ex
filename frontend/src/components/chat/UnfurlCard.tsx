@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { ImageOff, X } from 'lucide-react';
-import { useUnfurl } from '@/hooks/useUnfurl';
+import { useUnfurl, type UnfurlPreview } from '@/hooks/useUnfurl';
 import { useSetNoUnfurl } from '@/hooks/useMessages';
+import { formatRelative, getInitials } from '@/lib/format';
 
 interface UnfurlCardProps {
   url: string;
@@ -15,6 +16,13 @@ interface UnfurlCardProps {
   conversationId?: string;
   isAuthor: boolean;
   onContentHeightChange?: () => void;
+}
+
+function hasContent(preview: UnfurlPreview): boolean {
+  if (preview.kind === 'message') {
+    return !!(preview.authorName || preview.body || preview.image);
+  }
+  return !!(preview.title || preview.description || preview.image);
 }
 
 export function UnfurlCard({
@@ -32,12 +40,86 @@ export function UnfurlCard({
   // placeholder so the user doesn't see the browser's broken-image icon.
   const [imageBroken, setImageBroken] = useState(false);
   useEffect(() => {
-    if (!preview || (!preview.title && !preview.description && !preview.image)) return;
+    if (!preview || !hasContent(preview)) return;
     const frame = requestAnimationFrame(() => onContentHeightChange?.());
     return () => cancelAnimationFrame(frame);
   }, [onContentHeightChange, preview]);
-  if (isLoading || !preview) return null;
-  if (!preview.title && !preview.description && !preview.image) return null;
+  if (isLoading || !preview || !hasContent(preview)) return null;
+
+  const dismissButton = isAuthor ? (
+    <button
+      type="button"
+      onClick={() => dismiss.mutate({ messageId, channelId, conversationId, noUnfurl: true })}
+      disabled={dismiss.isPending}
+      aria-label="Remove link preview"
+      data-testid="unfurl-card-dismiss"
+      className="absolute right-1 top-1 z-10 flex h-6 w-6 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
+    >
+      <X className="h-3.5 w-3.5" />
+    </button>
+  ) : null;
+
+  // Internal message link → rich Slack/Mattermost-style preview card.
+  if (preview.kind === 'message') {
+    return (
+      <div className="relative mt-1.5 max-w-xl" data-testid="unfurl-card">
+        <a
+          href={preview.url}
+          target="_blank"
+          rel="noopener noreferrer"
+          data-testid="unfurl-message-card"
+          className="flex flex-col gap-1.5 overflow-hidden rounded-md border border-l-4 border-l-primary bg-muted/20 p-3 hover:bg-muted/40 dark:border-l-border-strong"
+        >
+          <div className="flex items-center gap-2 pr-6">
+            {preview.authorAvatarURL ? (
+              <img
+                src={preview.authorAvatarURL}
+                alt=""
+                width={20}
+                height={20}
+                loading="lazy"
+                data-testid="unfurl-message-avatar"
+                className="h-5 w-5 shrink-0 rounded-full object-cover"
+              />
+            ) : (
+              <span
+                aria-hidden="true"
+                className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-primary/10 text-[10px] font-medium text-primary"
+              >
+                {getInitials(preview.authorName || '?')}
+              </span>
+            )}
+            <span className="truncate text-sm font-semibold">{preview.authorName || 'Unknown'}</span>
+            {preview.siteName && (
+              <span className="shrink-0 truncate text-xs text-muted-foreground">{preview.siteName}</span>
+            )}
+            {preview.createdAt && (
+              <span className="shrink-0 text-xs text-muted-foreground">{formatRelative(preview.createdAt)}</span>
+            )}
+          </div>
+          {preview.body && (
+            <p className="whitespace-pre-wrap break-words text-sm text-foreground">{preview.body}</p>
+          )}
+          {preview.image && !imageBroken && (
+            <img
+              src={preview.image}
+              alt=""
+              loading="lazy"
+              onError={() => setImageBroken(true)}
+              data-testid="unfurl-card-image"
+              className="max-h-72 w-auto max-w-full rounded border object-contain"
+            />
+          )}
+          {preview.channelLabel && (
+            <p className="text-xs text-muted-foreground">Only visible to users in {preview.channelLabel}</p>
+          )}
+        </a>
+        {dismissButton}
+      </div>
+    );
+  }
+
+  // Generic web link → OpenGraph card.
   return (
     <div className="relative mt-1.5 max-w-md" data-testid="unfurl-card">
       <a
@@ -87,20 +169,7 @@ export function UnfurlCard({
           )}
         </div>
       </a>
-      {isAuthor && (
-        <button
-          type="button"
-          onClick={() =>
-            dismiss.mutate({ messageId, channelId, conversationId, noUnfurl: true })
-          }
-          disabled={dismiss.isPending}
-          aria-label="Remove link preview"
-          data-testid="unfurl-card-dismiss"
-          className="absolute right-1 top-1 flex h-6 w-6 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
-        >
-          <X className="h-3.5 w-3.5" />
-        </button>
-      )}
+      {dismissButton}
     </div>
   );
 }

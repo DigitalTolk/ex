@@ -5,6 +5,7 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
+  useDialogMobileAction,
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -12,6 +13,7 @@ import { Button } from '@/components/ui/button';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { useAuth } from '@/context/AuthContext';
 import { useTheme } from '@/context/ThemeContext';
+import { useIsMobile } from '@/hooks/useIsMobile';
 import { apiFetch, getAccessToken } from '@/lib/api';
 import { AuthProvider } from '@/lib/roles';
 import { getInitials } from '@/lib/format';
@@ -42,6 +44,7 @@ export function EditProfileDialog({ open, onOpenChange }: EditProfileDialogProps
 function EditProfileBody({ onOpenChange }: { onOpenChange: (open: boolean) => void }) {
   const { user, setAuth } = useAuth();
   const { theme, setTheme } = useTheme();
+  const isMobile = useIsMobile();
   const [displayName, setDisplayName] = useState(user?.displayName ?? '');
   const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
   const [avatarKey, setAvatarKey] = useState<string | null>(null);
@@ -133,6 +136,13 @@ function EditProfileBody({ onOpenChange }: { onOpenChange: (open: boolean) => vo
     }
   }
 
+  // On mobile the Save control lives in the dialog's top-right header (next to
+  // Cancel) instead of a bottom bar that the keyboard would cover. Declared
+  // before the (dead) user guard so the hook order stays stable.
+  useDialogMobileAction(
+    isMobile ? { label: 'Save', onClick: handleSave, disabled: isSaving || isUploading } : null,
+  );
+
   /* istanbul ignore next -- EditProfileDialog already returns null when there's no user before mounting this body, so this guard is dead defensive */
   if (!user) return null;
 
@@ -140,7 +150,7 @@ function EditProfileBody({ onOpenChange }: { onOpenChange: (open: boolean) => vo
   const initials = getInitials(user.displayName || '??');
 
   return (
-    <div className="flex min-h-0 flex-col gap-4 max-md:pb-16">
+    <div className="flex min-h-0 flex-col gap-4">
       {error && (
         <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive" role="alert">
           {error}
@@ -232,11 +242,13 @@ function EditProfileBody({ onOpenChange }: { onOpenChange: (open: boolean) => vo
         </div>
       </div>
 
-      <div className="flex justify-end pt-2 max-md:fixed max-md:inset-x-0 max-md:bottom-0 max-md:z-10 max-md:bg-popover max-md:px-2 max-md:pb-[calc(env(safe-area-inset-bottom)+0.5rem)] max-md:pt-3">
-        <Button onClick={handleSave} disabled={isSaving || isUploading} className="max-md:h-11 max-md:w-full">
-          {isSaving ? 'Saving...' : 'Save'}
-        </Button>
-      </div>
+      {!isMobile && (
+        <div className="flex justify-end pt-2">
+          <Button onClick={handleSave} disabled={isSaving || isUploading}>
+            {isSaving ? 'Saving...' : 'Save'}
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

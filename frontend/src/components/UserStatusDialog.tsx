@@ -8,6 +8,7 @@ import { EmojiPicker } from '@/components/EmojiPicker';
 import { EmojiGlyph } from '@/components/EmojiGlyph';
 import { UserStatusIndicator } from '@/components/UserStatusIndicator';
 import { useAuth } from '@/context/AuthContext';
+import { useIsMobile } from '@/hooks/useIsMobile';
 import { apiFetch, getAccessToken } from '@/lib/api';
 import type { User } from '@/types';
 
@@ -164,6 +165,7 @@ function UserStatusDialogContent({
   const [customUntil, setCustomUntil] = useState(initialState.customUntil);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const isMobile = useIsMobile();
   const userTimeZone = user?.timeZone || localTimeZone();
 
   const previewStatus = useMemo(
@@ -223,7 +225,12 @@ function UserStatusDialogContent({
   }
 
   return (
-    <DialogContent className="max-w-lg max-md:grid-rows-[auto_1fr]" finalFocus={false} mobileCloseLabel="Cancel">
+    <DialogContent
+      className="max-w-lg max-md:grid-rows-[auto_1fr]"
+      finalFocus={false}
+      mobileCloseLabel="Cancel"
+      mobileAction={isMobile ? { label: 'Save status', onClick: saveStatus, disabled: saving } : undefined}
+    >
       <DialogHeader>
         <DialogTitle>Set status</DialogTitle>
       </DialogHeader>
@@ -332,15 +339,19 @@ function UserStatusDialogContent({
           )}
         </div>
 
-        <div className="flex justify-between gap-2 pt-2 max-md:fixed max-md:inset-x-0 max-md:bottom-0 max-md:z-10 max-md:bg-popover max-md:px-2 max-md:pb-[calc(env(safe-area-inset-bottom)+0.5rem)] max-md:pt-3">
+        <div className="flex justify-between gap-2 pt-2">
           <Button type="button" variant="ghost" onClick={clearStatus} disabled={saving || !user.userStatus} className="max-md:h-11 max-md:flex-1">
             <X className="mr-2 h-4 w-4" />
             Clear status
           </Button>
-          <Button type="button" onClick={saveStatus} disabled={saving} className="max-md:h-11 max-md:flex-1">
-            {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-            Save status
-          </Button>
+          {/* On mobile the Save control moves to the dialog's top-right header
+              (see mobileAction above); desktop keeps it inline here. */}
+          {!isMobile && (
+            <Button type="button" onClick={saveStatus} disabled={saving}>
+              {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Save status
+            </Button>
+          )}
         </div>
       </div>
     </DialogContent>

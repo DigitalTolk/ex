@@ -103,19 +103,19 @@ describe('MemberList browser behaviour', () => {
     expect(input).not.toBeNull();
   });
 
-  it('hides the management UI when the viewer is a plain member', async () => {
+  it('lets a plain member invite (add input shown) but not remove members', async () => {
     await renderWithProviders(
       <MemberList
-        members={[makeMember()]}
+        members={[makeMember({ userID: 'other', displayName: 'Other Person' })]}
         channelId="ch-1"
         currentUserId="u-1"
         currentUserRole={1}
       />,
     );
-    // No search input → cannot escalate. data-testid is stable across
-    // mobile/desktop variants.
-    const input = document.querySelector('input[type="text"]');
-    expect(input).toBeNull();
+    // Any member can invite → the add-member search is present…
+    expect(document.querySelector('input[aria-label="Add member"]')).not.toBeNull();
+    // …but removal stays admin-only.
+    expect(document.querySelector('[aria-label="Remove Other Person"]')).toBeNull();
   });
 
   it('renders without crashing when no userMap entries are provided', async () => {

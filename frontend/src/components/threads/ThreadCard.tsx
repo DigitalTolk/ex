@@ -185,7 +185,12 @@ export function ThreadCard({ summary, title, deepLink, currentUserId, unread = f
         <Link
           to={deepLink}
           data-testid="thread-card-title"
-          className="truncate text-sm font-semibold"
+          // overflow-clip (not `truncate`, which is overflow-hidden) for the
+          // same reason as the card wrapper: the desktop webview traps wheel
+          // events over a hidden-overflow box, so hovering the channel name
+          // here used to block page scroll. clip shrinks the flex item the
+          // same way without establishing a scroll container.
+          className="min-w-0 overflow-clip whitespace-nowrap text-ellipsis text-sm font-semibold"
           onClick={() => markSummaryThreadSeen(summary)}
         >
           {title}
