@@ -28,19 +28,19 @@ export function NonMemberInvitePrompt({ channelId, channelName, users, onDismiss
   // Keeping the guard here lets callers mount the prompt unconditionally.
   if (!channelId || users.length === 0) return null;
 
-  // Bind the now-narrowed channelId so the closure keeps the `string` type.
-  const cid = channelId;
   const addAll = async () => {
     setAdding(true);
     setError('');
     try {
-      for (const u of users) {
-        await apiFetch(`/api/v1/channels/${encodeURIComponent(cid)}/members`, {
-          method: 'POST',
-          body: JSON.stringify({ userID: u.id, role: 'member' }),
-        });
-      }
-      queryClient.invalidateQueries({ queryKey: queryKeys.channelMembers(cid) });
+      await Promise.all(
+        users.map((u) =>
+          apiFetch(`/api/v1/channels/${encodeURIComponent(channelId)}/members`, {
+            method: 'POST',
+            body: JSON.stringify({ userID: u.id, role: 'member' }),
+          }),
+        ),
+      );
+      queryClient.invalidateQueries({ queryKey: queryKeys.channelMembers(channelId) });
       onDismiss();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to add to the channel');

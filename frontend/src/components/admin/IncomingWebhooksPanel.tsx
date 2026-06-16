@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Check, Copy, Pencil, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -40,11 +40,14 @@ export function IncomingWebhooksPanel() {
   const [editingID, setEditingID] = useState<string | null>(null);
   const [copiedID, setCopiedID] = useState('');
   const [toDelete, setToDelete] = useState<IncomingWebhook | null>(null);
-  // Reset the "copied" checkmark a couple of seconds after a copy so it doesn't
-  // get stuck on. Tracked in a ref so repeated copies restart the timer and an
-  // unmount mid-timeout doesn't try to set state on a dead component.
-  const copyResetRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  useEffect(() => () => clearTimeout(copyResetRef.current), []);
+  // Auto-clear the "copied" checkmark a couple of seconds after a copy so it
+  // doesn't get stuck on. Keyed on copiedID so a fresh copy restarts the timer
+  // and the cleanup cancels it on unmount.
+  useEffect(() => {
+    if (!copiedID) return;
+    const t = setTimeout(() => setCopiedID(''), 2000);
+    return () => clearTimeout(t);
+  }, [copiedID]);
 
   // Webhooks may target any public channel plus any private channel the
   // creator belongs to — mirror that by merging the public directory with
@@ -103,8 +106,6 @@ export function IncomingWebhooksPanel() {
   async function copyURL(id: string, url: string) {
     await copyToClipboard(url);
     setCopiedID(id);
-    clearTimeout(copyResetRef.current);
-    copyResetRef.current = setTimeout(() => setCopiedID(''), 2000);
   }
 
   return (
