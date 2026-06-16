@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Pencil, Trash2 } from 'lucide-react';
+import { Check, Copy, Pencil, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -197,8 +197,13 @@ export function IncomingWebhooksPanel() {
             {wh.url && (
               <div className="flex items-center gap-2">
                 <code className="min-w-0 flex-1 truncate rounded bg-muted px-2 py-1 text-sm text-muted-foreground">{wh.url}</code>
-                <Button variant="outline" size="sm" onClick={() => copyURL(wh.id, wh.url!)}>
-                  {copiedID === wh.id ? 'Copied' : 'Copy'}
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  onClick={() => copyURL(wh.id, wh.url!)}
+                  aria-label={copiedID === wh.id ? 'Copied' : `Copy ${wh.title} URL`}
+                >
+                  {copiedID === wh.id ? <Check className="h-4 w-4 text-emerald-600" /> : <Copy className="h-4 w-4" />}
                 </Button>
               </div>
             )}

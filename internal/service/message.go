@@ -335,12 +335,6 @@ func (s *MessageService) Send(ctx context.Context, userID, parentID, parentType,
 
 	s.indexMessage(ctx, msg, parentType)
 
-	// Mentioning a user who isn't yet in the channel surfaces a system
-	// message inviting whoever can to add them. Channel-only — DMs and
-	// groups can't mention "outsiders" since there's no concept of one.
-	if parentType == ParentChannel {
-		s.flagNonMemberMentions(ctx, msg)
-	}
 
 	// Thread reply: republish the authoritative parent so subscribers see
 	// the new replyCount / avatar stack without a re-fetch. The metadata
@@ -1360,35 +1354,6 @@ func (s *MessageService) releaseAttachments(ctx context.Context, msgID string, i
 		}(aid)
 	}
 	wg.Wait()
-}
-
-// flagNonMemberMentions inspects the message body for @[id|name] markers
-// and, for each mentioned user who is NOT a member of the channel, posts
-// a system message in the channel announcing it so an admin can decide
-// to invite them. No-op when nothing matches. Errors are swallowed —
-// the user's send already succeeded and a missing audit message must
-// not be allowed to cascade into a failed publish.
-//
-// We do per-mention GetMembership rather than scanning the whole channel
-// (ListMembers): a typical message has 0–2 mentions, so 0–2 point reads
-// is cheaper than one channel-wide scan. The notifier already pays for
-// the channel-wide load on a different code path; reusing it would
-// require cross-cutting plumbing not worth the few RCUs saved.
-func (s *MessageService) flagNonMemberMentions(ctx context.Context, msg *model.Message) {
-	if s.memberships == nil {
-		return
-	}
-	mentions := ParseMentions(msg.Body)
-	if len(mentions.Users) == 0 {
-		return
-	}
-	for _, mention := range mentions.Users {
-		if _, err := s.memberships.GetMembership(ctx, msg.ParentID, mention.UserID); err == nil {
-			continue
-		}
-		body := "@" + mention.DisplayName + " was mentioned but isn't a member of this channel — add them via the channel members list."
-		s.postSystemMessage(ctx, msg.ParentID, body)
-	}
 }
 
 // postSystemMessage persists a synthetic message attributed to "system" and

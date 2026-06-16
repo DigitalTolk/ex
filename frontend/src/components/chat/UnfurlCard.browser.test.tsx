@@ -12,6 +12,10 @@ vi.mock('@/hooks/useMessages', () => ({
   useSetNoUnfurl: () => ({ mutate: dismissMutate, isPending: false }),
 }));
 
+vi.mock('@/hooks/useEmoji', () => ({
+  useEmojiMap: () => ({ data: {} }),
+}));
+
 import { UnfurlCard } from './UnfurlCard';
 
 describe('UnfurlCard browser behaviour', () => {

@@ -70,6 +70,12 @@ export default defineConfig({
         // fully unit-tested in jsdom (InAppLinkRouter.test, in-app-link.test).
         'src/components/InAppLinkRouter.tsx',
         'src/lib/in-app-link.ts',
+        // Non-member @mention invite prompt — unit-tested in jsdom
+        // (NonMemberInvitePrompt.test, non-member-mentions.test,
+        // useNonMemberInvite.test).
+        'src/components/chat/NonMemberInvitePrompt.tsx',
+        'src/lib/non-member-mentions.ts',
+        'src/hooks/useNonMemberInvite.ts',
       ],
       // 99% branch gate over the merged desktop + mobile browser run.
       // vitest enforces it (non-zero exit), so `npm run

@@ -224,6 +224,43 @@ describe('ThreadCard', () => {
     );
   });
 
+  it('offers to add a mentioned non-member after replying in a channel thread', async () => {
+    apiFetchMock.mockImplementation((url: string) => {
+      if (url.includes('/messages/msg-root/thread')) {
+        return Promise.resolve([makeMessage('msg-root')]);
+      }
+      // No members / no channel list → the mentioned user is a non-member.
+      return Promise.resolve([]);
+    });
+    renderCard(makeSummary());
+
+    fireEvent.change(await screen.findByTestId('reply-body'), {
+      target: { value: 'ping @[u-out|Outsider] take a look' },
+    });
+    fireEvent.click(screen.getByLabelText('Send reply'));
+
+    const prompt = await screen.findByTestId('non-member-invite');
+    expect(prompt).toHaveTextContent('Outsider');
+    expect(screen.getByRole('button', { name: /Add to channel/i })).toBeInTheDocument();
+  });
+
+  it('never offers an invite for a conversation (DM) thread', async () => {
+    apiFetchMock.mockImplementation((url: string) => {
+      if (url.includes('/thread')) return Promise.resolve([makeMessage('msg-root')]);
+      return Promise.resolve([]);
+    });
+    renderCard(makeSummary({ parentID: 'conv-1', parentType: 'conversation' }));
+
+    fireEvent.change(await screen.findByTestId('reply-body'), {
+      target: { value: 'ping @[u-out|Outsider]' },
+    });
+    fireEvent.click(screen.getByLabelText('Send reply'));
+
+    // A microtask flush is enough for any state update to land.
+    await act(async () => { await Promise.resolve(); });
+    expect(screen.queryByTestId('non-member-invite')).toBeNull();
+  });
+
   it('posting a reply marks the thread seen so the sidebar dot drops', async () => {
     const summary = makeSummary({ latestActivityAt: '2099-01-01T00:00:00.000Z' });
     apiFetchMock.mockImplementation((url: string) => {

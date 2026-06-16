@@ -2,6 +2,8 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { MessageItem } from './MessageItem';
 import { MessageInput, type MessageInputHandle } from './MessageInput';
 import { MessageDropZone } from './MessageDropZone';
+import { NonMemberInvitePrompt } from './NonMemberInvitePrompt';
+import { useNonMemberInvite } from '@/hooks/useNonMemberInvite';
 import { ThreadTypingIndicator } from './TypingIndicator';
 import { Button } from '@/components/ui/button';
 import { Bell, BellOff, ArrowRight } from 'lucide-react';
@@ -91,6 +93,7 @@ export function ThreadPanel({
   );
 
   const send = useSendMessage({ channelId, conversationId });
+  const { pendingInvites, channelSlug, checkMentions, clearInvites } = useNonMemberInvite(channelId, currentUserId);
   const inputRef = useRef<MessageInputHandle>(null);
   const parentID = channelId ?? conversationId;
   const parentType: 'channel' | 'conversation' = channelId ? 'channel' : 'conversation';
@@ -377,6 +380,8 @@ export function ThreadPanel({
 
   const handleReply = useCallback(
     (input: SendMessageInput) => {
+      // Offer to add any @mentioned non-members to the channel (no-op for DMs).
+      checkMentions(input.body);
       const payload = { ...input, parentMessageID: threadRootID };
       suppressSentDraft(draftScope);
       if (!draftID) {
@@ -388,7 +393,7 @@ export function ThreadPanel({
         onError: () => restoreDraftScope(draftScope),
       });
     },
-    [send, threadRootID, draftScope, draftID, deleteDraftMutate],
+    [send, threadRootID, draftScope, draftID, deleteDraftMutate, checkMentions],
   );
 
   const handleEditMessage = useCallback(
@@ -496,6 +501,12 @@ export function ThreadPanel({
           parentID={channelId ?? conversationId}
           threadRootID={threadRootID}
           userMap={mergedUserMap}
+        />
+        <NonMemberInvitePrompt
+          channelId={channelId}
+          channelName={channelSlug}
+          users={pendingInvites}
+          onDismiss={clearInvites}
         />
         {activeEditingMessage && !editReady ? (
           <div className="border-t p-3 text-sm text-muted-foreground">Loading message editor...</div>

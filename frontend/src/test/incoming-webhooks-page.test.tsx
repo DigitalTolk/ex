@@ -237,7 +237,7 @@ describe('IncomingWebhooksPage', () => {
     // The redundant "as <username>" line is intentionally gone.
     expect(screen.queryByText(/as webhook/i)).not.toBeInTheDocument();
 
-    const copyButtons = screen.getAllByRole('button', { name: /^Copy$/i });
+    const copyButtons = screen.getAllByRole('button', { name: /^Copy .* URL$/i });
     fireEvent.click(copyButtons[0]);
     await waitFor(() => expect(copyMock).toHaveBeenCalledWith('https://chat.example/hooks/wh-1'));
     expect(await screen.findByRole('button', { name: /Copied/i })).toBeInTheDocument();

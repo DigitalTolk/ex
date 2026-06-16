@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react';
 import { ImageOff, X } from 'lucide-react';
 import { useUnfurl, type UnfurlPreview } from '@/hooks/useUnfurl';
 import { useSetNoUnfurl } from '@/hooks/useMessages';
+import { useEmojiMap } from '@/hooks/useEmoji';
+import { renderMarkdown } from '@/lib/markdown';
 import { formatRelative, getInitials } from '@/lib/format';
 
 interface UnfurlCardProps {
@@ -34,6 +36,7 @@ export function UnfurlCard({
   onContentHeightChange,
 }: UnfurlCardProps) {
   const { data: preview, isLoading } = useUnfurl(url);
+  const { data: emojiMap } = useEmojiMap();
   const dismiss = useSetNoUnfurl();
   // imageBroken flips when the <img> element fails to load (404, network,
   // CORS). The card stays — we just swap the image slot for an inert
@@ -59,48 +62,57 @@ export function UnfurlCard({
     </button>
   ) : null;
 
-  // Internal message link → rich Slack/Mattermost-style preview card.
+  // Internal message link → rich Slack/Mattermost-style preview card. Not
+  // dismissible (it's a useful inline reference, not noise), no host label,
+  // and the body renders with the same markdown/mention/emoji treatment as the
+  // chat. The card isn't a single <a> wrapper (the body may contain its own
+  // links) — the header + image are the navigable affordances.
   if (preview.kind === 'message') {
     return (
-      <div className="relative mt-1.5 max-w-xl" data-testid="unfurl-card">
+      <div
+        data-testid="unfurl-card"
+        className="mt-1.5 flex max-w-xl flex-col gap-1.5 overflow-hidden rounded-md border border-l-4 border-l-primary bg-muted/20 p-3 dark:border-l-border-strong"
+      >
         <a
           href={preview.url}
           target="_blank"
           rel="noopener noreferrer"
           data-testid="unfurl-message-card"
-          className="flex flex-col gap-1.5 overflow-hidden rounded-md border border-l-4 border-l-primary bg-muted/20 p-3 hover:bg-muted/40 dark:border-l-border-strong"
+          className="flex items-center gap-2 hover:[&_[data-author]]:underline"
         >
-          <div className="flex items-center gap-2 pr-6">
-            {preview.authorAvatarURL ? (
-              <img
-                src={preview.authorAvatarURL}
-                alt=""
-                width={20}
-                height={20}
-                loading="lazy"
-                data-testid="unfurl-message-avatar"
-                className="h-5 w-5 shrink-0 rounded-full object-cover"
-              />
-            ) : (
-              <span
-                aria-hidden="true"
-                className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-primary/10 text-[10px] font-medium text-primary"
-              >
-                {getInitials(preview.authorName || '?')}
-              </span>
-            )}
-            <span className="truncate text-sm font-semibold">{preview.authorName || 'Unknown'}</span>
-            {preview.siteName && (
-              <span className="shrink-0 truncate text-xs text-muted-foreground">{preview.siteName}</span>
-            )}
-            {preview.createdAt && (
-              <span className="shrink-0 text-xs text-muted-foreground">{formatRelative(preview.createdAt)}</span>
-            )}
-          </div>
-          {preview.body && (
-            <p className="whitespace-pre-wrap break-words text-sm text-foreground">{preview.body}</p>
+          {preview.authorAvatarURL ? (
+            <img
+              src={preview.authorAvatarURL}
+              alt=""
+              width={20}
+              height={20}
+              loading="lazy"
+              data-testid="unfurl-message-avatar"
+              className="h-5 w-5 shrink-0 rounded-full object-cover"
+            />
+          ) : (
+            <span
+              aria-hidden="true"
+              className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-primary/10 text-[10px] font-medium text-primary"
+            >
+              {getInitials(preview.authorName || '?')}
+            </span>
           )}
-          {preview.image && !imageBroken && (
+          <span data-author className="truncate text-sm font-semibold">{preview.authorName || 'Unknown'}</span>
+          {preview.createdAt && (
+            <span className="shrink-0 text-xs font-normal text-muted-foreground">{formatRelative(preview.createdAt)}</span>
+          )}
+        </a>
+        {preview.body && (
+          <div
+            data-testid="unfurl-message-body"
+            className="break-words text-sm [&_p]:whitespace-pre-wrap"
+          >
+            {renderMarkdown(preview.body, { emojiMap })}
+          </div>
+        )}
+        {preview.image && !imageBroken && (
+          <a href={preview.url} target="_blank" rel="noopener noreferrer" className="block">
             <img
               src={preview.image}
               alt=""
@@ -109,12 +121,11 @@ export function UnfurlCard({
               data-testid="unfurl-card-image"
               className="max-h-72 w-auto max-w-full rounded border object-contain"
             />
-          )}
-          {preview.channelLabel && (
-            <p className="text-xs text-muted-foreground">Only visible to users in {preview.channelLabel}</p>
-          )}
-        </a>
-        {dismissButton}
+          </a>
+        )}
+        {preview.channelLabel && (
+          <p className="text-xs text-muted-foreground">Only visible to users in {preview.channelLabel}</p>
+        )}
       </div>
     );
   }

@@ -5,6 +5,8 @@ import { Button } from '@/components/ui/button';
 import { MessageItem } from '@/components/chat/MessageItem';
 import { MessageInput, type MessageInputHandle } from '@/components/chat/MessageInput';
 import { MessageDropZone } from '@/components/chat/MessageDropZone';
+import { NonMemberInvitePrompt } from '@/components/chat/NonMemberInvitePrompt';
+import { useNonMemberInvite } from '@/hooks/useNonMemberInvite';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useUsersBatch } from '@/hooks/useUsersBatch';
 import { useSendMessage, type SendMessageInput } from '@/hooks/useMessages';
@@ -109,6 +111,7 @@ export function ThreadCard({ summary, title, deepLink, currentUserId, unread = f
   // key the hook above subscribes to, so a reply lands without an
   // extra fetch from us.
   const send = useSendMessage({ channelId, conversationId });
+  const { pendingInvites, channelSlug, checkMentions, clearInvites } = useNonMemberInvite(channelId, currentUserId);
   const parentID = channelId ?? conversationId;
   const parentType: 'channel' | 'conversation' = channelId ? 'channel' : 'conversation';
   const draftScope = useMemo(
@@ -140,6 +143,8 @@ export function ThreadCard({ summary, title, deepLink, currentUserId, unread = f
 
   const handleReply = useCallback(
     (input: SendMessageInput) => {
+      // Offer to add any @mentioned non-members to the channel (no-op for DMs).
+      checkMentions(input.body);
       const payload = { ...input, parentMessageID: summary.threadRootID };
       suppressSentDraft(draftScope);
       if (draftID) {
@@ -154,7 +159,7 @@ export function ThreadCard({ summary, title, deepLink, currentUserId, unread = f
       // since the user is clearly engaged with this thread.
       markSummaryThreadSeen(summary);
     },
-    [send, summary, draftScope, draftID, deleteDraftMutate],
+    [send, summary, draftScope, draftID, deleteDraftMutate, checkMentions],
   );
 
   return (
@@ -281,6 +286,13 @@ export function ThreadCard({ summary, title, deepLink, currentUserId, unread = f
               />
             ))}
         </div>
+
+        <NonMemberInvitePrompt
+          channelId={channelId}
+          channelName={channelSlug}
+          users={pendingInvites}
+          onDismiss={clearInvites}
+        />
 
         {/* Reply composer — sends with parentMessageID set so the post
             lands as a thread reply. Disabled while the previous reply is

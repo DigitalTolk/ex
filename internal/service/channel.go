@@ -260,14 +260,8 @@ func (s *ChannelService) GetVisibleByID(ctx context.Context, actorID, id string)
 	if ch.Archived {
 		return nil, ErrForbidden
 	}
-	if isSystemAdmin(ctx) {
-		return ch, nil
-	}
-	if _, err := s.memberships.GetMembership(ctx, ch.ID, actorID); err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return nil, ErrForbidden
-		}
-		return nil, fmt.Errorf("channel: check access: %w", err)
+	if err := s.grantVisibleAccess(ctx, actorID, ch); err != nil {
+		return nil, err
 	}
 	return ch, nil
 }
@@ -821,16 +815,37 @@ func (s *ChannelService) GetVisibleBySlug(ctx context.Context, actorID, slug str
 	if ch.Archived {
 		return nil, ErrForbidden
 	}
-	if isSystemAdmin(ctx) {
-		return ch, nil
-	}
-	if _, err := s.memberships.GetMembership(ctx, ch.ID, actorID); err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return nil, ErrForbidden
-		}
-		return nil, fmt.Errorf("channel: check access: %w", err)
+	if err := s.grantVisibleAccess(ctx, actorID, ch); err != nil {
+		return nil, err
 	}
 	return ch, nil
+}
+
+// grantVisibleAccess authorises actor to open ch's chat. For a public channel
+// the actor hasn't joined yet, it self-joins them (Slack-style "open a public
+// channel to join") rather than denying access — clicking a public
+// channel/message/thread link should just let you in. Private channels and
+// anyone the Join rules reject (e.g. guests) stay forbidden.
+func (s *ChannelService) grantVisibleAccess(ctx context.Context, actorID string, ch *model.Channel) error {
+	// No system-admin bypass here: admins get the same treatment as anyone —
+	// a public channel auto-joins them, but a private channel they don't
+	// belong to stays forbidden. Admin channel management lives on dedicated
+	// endpoints with their own RBAC checks.
+	if _, err := s.memberships.GetMembership(ctx, ch.ID, actorID); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			if ch.Type == model.ChannelTypePublic {
+				// Join re-validates public/archived/guest rules and writes the
+				// membership (with the member-joined event + WS subscription).
+				if joinErr := s.Join(ctx, actorID, ch.ID); joinErr != nil {
+					return ErrForbidden
+				}
+				return nil
+			}
+			return ErrForbidden
+		}
+		return fmt.Errorf("channel: check access: %w", err)
+	}
+	return nil
 }
 
 // isSystemAdmin checks whether the authenticated user in context is a system admin.

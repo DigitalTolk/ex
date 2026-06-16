@@ -81,8 +81,9 @@ func newTestMessageLinkService() *MessageLinkService {
 	return NewMessageLinkService(
 		"https://ex.test",
 		fakeMLChannels{bySlug: map[string]*model.Channel{
-			"general":  {ID: "ch-1", Slug: "general"},
+			"general":  {ID: "ch-1", Slug: "general", Type: model.ChannelTypePrivate},
 			"archived": {ID: "ch-arch", Slug: "archived", Archived: true},
+			"public":   {ID: "ch-pub", Slug: "public", Type: model.ChannelTypePublic},
 		}},
 		fakeMLMemberships{members: map[string]bool{"ch-1#viewer": true}},
 		fakeMLConversations{byID: map[string]*model.Conversation{
@@ -93,8 +94,9 @@ func newTestMessageLinkService() *MessageLinkService {
 			"ch-1#m1": {ID: "m1", ParentID: "ch-1", AuthorID: "u-author", Body: "hello @[u-x|Jane] in ~[ch-2|other]", CreatedAt: time.Date(2026, 6, 15, 10, 0, 0, 0, time.UTC), AttachmentIDs: []string{"att-1"}},
 			"conv-1#m2": {ID: "m2", ParentID: "conv-1", AuthorID: "u-author", Body: "dm body"},
 			"grp-1#m3":  {ID: "m3", ParentID: "grp-1", WebhookUsername: "CI Bot", WebhookAvatarURL: "https://img/bot.png", Body: "build done"},
-			"ch-1#del":  {ID: "del", ParentID: "ch-1", Deleted: true},
-			"ch-1#sys":  {ID: "sys", ParentID: "ch-1", System: true, Body: "joined"},
+			"ch-1#del":   {ID: "del", ParentID: "ch-1", Deleted: true},
+			"ch-1#sys":   {ID: "sys", ParentID: "ch-1", System: true, Body: "joined"},
+			"ch-pub#pm1": {ID: "pm1", ParentID: "ch-pub", AuthorID: "u-author", Body: "public note"},
 		}},
 		fakeMLUsers{byID: map[string]*model.User{
 			"u-author": {ID: "u-author", DisplayName: "Günter", AvatarURL: "https://img/g.png"},
@@ -117,9 +119,10 @@ func TestMessageLink_Preview_Channel(t *testing.T) {
 	if p.Image != "https://img/chart.png" {
 		t.Errorf("image not resolved from file attachment: %q", p.Image)
 	}
-	// Mention wire syntax is rendered as readable @name / ~slug.
-	if p.Body != "hello @Jane in ~other" {
-		t.Errorf("body mentions not cleaned: %q", p.Body)
+	// Body is kept raw (mention/emoji markdown intact) so the client renders
+	// the excerpt with the same treatment as the chat.
+	if p.Body != "hello @[u-x|Jane] in ~[ch-2|other]" {
+		t.Errorf("body should be raw markdown: %q", p.Body)
 	}
 	if !strings.HasPrefix(p.CreatedAt, "2026-06-15T10:00:00") {
 		t.Errorf("createdAt = %q", p.CreatedAt)
@@ -141,6 +144,19 @@ func TestMessageLink_Preview_DMAndGroupAndWebhook(t *testing.T) {
 	// Webhook author identity wins over the user lookup.
 	if grp.AuthorName != "CI Bot" || grp.AuthorAvatarURL != "https://img/bot.png" {
 		t.Fatalf("webhook author = %#v", grp)
+	}
+}
+
+func TestMessageLink_Preview_PublicChannelVisibleToNonMember(t *testing.T) {
+	svc := newTestMessageLinkService()
+	// "stranger" is not a member of the public channel, but public channels
+	// are visible workspace-wide.
+	p, internal := svc.Preview(context.Background(), "stranger", "https://ex.test/channel/public#msg-pm1")
+	if !internal || p == nil {
+		t.Fatalf("public channel preview should resolve for a non-member: internal=%v p=%v", internal, p)
+	}
+	if p.ChannelLabel != "~public" || p.Body != "public note" {
+		t.Fatalf("public preview = %#v", p)
 	}
 }
 

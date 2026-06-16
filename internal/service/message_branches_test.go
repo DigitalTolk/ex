@@ -260,8 +260,3 @@ func TestMessage_ListAfter_TrimsToLimitAndReportsHasMore(t *testing.T) {
 	}
 }
 
-func TestMessage_FlagNonMemberMentions_NilMemberships(t *testing.T) {
-	// Construct a service with nil memberships to hit the early return.
-	svc := NewMessageService(newMockMessageStore(), nil, newMockConversationStore(), newMockPublisher(), newMockBroker())
-	svc.flagNonMemberMentions(context.Background(), &model.Message{Body: "@[u2|Bob] hi"})
-}

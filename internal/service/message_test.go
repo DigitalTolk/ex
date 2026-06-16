@@ -751,11 +751,13 @@ func TestMessageService_SetPinned_TogglesAndPublishesEvents(t *testing.T) {
 	}
 }
 
-func TestMessageService_Send_NonMemberMention_PostsSystemMessage(t *testing.T) {
+func TestMessageService_Send_NonMemberMention_PostsNoSystemMessage(t *testing.T) {
+	// The old behaviour posted a public "X isn't a member" system message.
+	// That's now replaced by an author-facing in-app invite prompt (frontend),
+	// so the send itself must NOT post any system audit message.
 	svc, messages, memberships, _, _ := setupMessageService()
 	ctx := context.Background()
 
-	// Author is a member, the mentioned user is NOT.
 	memberships.memberships["ch1#u-author"] = &model.ChannelMembership{
 		ChannelID: "ch1", UserID: "u-author", Role: model.ChannelRoleMember,
 	}
@@ -765,21 +767,10 @@ func TestMessageService_Send_NonMemberMention_PostsSystemMessage(t *testing.T) {
 		t.Fatalf("Send: %v", err)
 	}
 
-	// Two messages should now exist: the user's send + the system message.
-	gotSystem := 0
 	for _, m := range messages.messages {
-		if m.System && m.ParentID == "ch1" {
-			gotSystem++
-			if !strings.Contains(m.Body, "Outsider Sue") {
-				t.Errorf("system body should name the mentioned user; got %q", m.Body)
-			}
-			if !strings.Contains(m.Body, "isn't a member") {
-				t.Errorf("system body should explain non-membership; got %q", m.Body)
-			}
+		if m.System {
+			t.Errorf("send must not post a system message for a non-member mention; got %q", m.Body)
 		}
-	}
-	if gotSystem != 1 {
-		t.Errorf("expected exactly 1 system message; got %d", gotSystem)
 	}
 }
 

@@ -89,8 +89,8 @@ func TestChannelService_GetVisibleByID_AccessCases(t *testing.T) {
 	if _, err := svc.GetVisibleByID(context.Background(), "user-1", "archived"); !errors.Is(err, ErrForbidden) {
 		t.Fatalf("archived err = %v, want ErrForbidden", err)
 	}
-	if _, err := svc.GetVisibleByID(adminCtx("admin"), "admin", "visible"); err != nil {
-		t.Fatalf("admin should see private channel: %v", err)
+	if _, err := svc.GetVisibleByID(adminCtx("admin"), "admin", "visible"); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("admin must NOT auto-access a private channel: %v", err)
 	}
 	if _, err := svc.GetVisibleByID(context.Background(), "user-1", "visible"); !errors.Is(err, ErrForbidden) {
 		t.Fatalf("non-member err = %v, want ErrForbidden", err)
@@ -110,8 +110,8 @@ func TestChannelService_GetVisibleBySlug_AccessCases(t *testing.T) {
 	if _, err := svc.GetVisibleBySlug(context.Background(), "user-1", "archived-slug"); !errors.Is(err, ErrForbidden) {
 		t.Fatalf("archived slug err = %v, want ErrForbidden", err)
 	}
-	if _, err := svc.GetVisibleBySlug(adminCtx("admin"), "admin", "visible-slug"); err != nil {
-		t.Fatalf("admin should see private channel by slug: %v", err)
+	if _, err := svc.GetVisibleBySlug(adminCtx("admin"), "admin", "visible-slug"); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("admin must NOT auto-access a private channel by slug: %v", err)
 	}
 	if _, err := svc.GetVisibleBySlug(context.Background(), "user-1", "visible-slug"); !errors.Is(err, ErrForbidden) {
 		t.Fatalf("non-member slug err = %v, want ErrForbidden", err)
@@ -120,6 +120,44 @@ func TestChannelService_GetVisibleBySlug_AccessCases(t *testing.T) {
 	memberships.getErr = errors.New("membership store down")
 	if _, err := svc.GetVisibleBySlug(context.Background(), "user-1", "visible-slug"); err == nil {
 		t.Fatal("expected membership store error")
+	}
+}
+
+func TestChannelService_GetVisible_PublicChannelSelfJoins(t *testing.T) {
+	svc, channels, memberships, _, _ := setupChannelService()
+	channels.channels["pub"] = &model.Channel{ID: "pub", Slug: "pub", Type: model.ChannelTypePublic}
+
+	// Opening a public channel you're not in self-joins you rather than 403ing.
+	ch, err := svc.GetVisibleBySlug(context.Background(), "user-1", "pub")
+	if err != nil {
+		t.Fatalf("public channel should self-join via slug, got %v", err)
+	}
+	if ch == nil || ch.ID != "pub" {
+		t.Fatalf("channel = %#v", ch)
+	}
+	if _, ok := memberships.memberships["pub#user-1"]; !ok {
+		t.Error("self-join should have created a membership")
+	}
+	// The by-ID path behaves the same for a different (unseeded, non-guest) user.
+	if _, err := svc.GetVisibleByID(context.Background(), "user-2", "pub"); err != nil {
+		t.Fatalf("public channel should self-join via id, got %v", err)
+	}
+	if _, ok := memberships.memberships["pub#user-2"]; !ok {
+		t.Error("by-id self-join should have created a membership")
+	}
+}
+
+func TestChannelService_GetVisible_PublicChannelGuestDenied(t *testing.T) {
+	svc, channels, memberships, users, _, _ := setupChannelServiceWithUsers()
+	users.users["guest-1"] = &model.User{ID: "guest-1", SystemRole: model.SystemRoleGuest}
+	channels.channels["pub"] = &model.Channel{ID: "pub", Slug: "pub", Type: model.ChannelTypePublic}
+
+	// Guests can't self-join arbitrary public channels — access stays denied.
+	if _, err := svc.GetVisibleBySlug(context.Background(), "guest-1", "pub"); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("guest self-join err = %v, want ErrForbidden", err)
+	}
+	if _, ok := memberships.memberships["pub#guest-1"]; ok {
+		t.Error("guest must not have been added to the channel")
 	}
 }
 

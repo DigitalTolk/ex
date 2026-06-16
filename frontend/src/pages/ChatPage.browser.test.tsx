@@ -259,13 +259,13 @@ describe('ChatPage WS router (browser)', () => {
     expect(mockUnhideConversation).toHaveBeenCalledWith('conv-1');
   });
 
-  it('onMessageNew routes a thread reply through the thread-invalidation path', async () => {
+  it('onMessageNew routes a thread reply through the thread-invalidation path without bumping the channel', async () => {
     await renderChatPage();
-    // A reply (parentMessageID set) takes the thread branch — it still marks
-    // the parent channel unread but invalidates the thread caches instead of
-    // appending to the main list.
+    // A reply (parentMessageID set) takes the thread branch — it invalidates
+    // the thread caches and must NOT mark the parent channel unread (a thread
+    // reply isn't new top-level channel activity).
     lastHandlers().onMessageNew?.(msg({ parentMessageID: 'root-1' }));
-    expect(mockMarkChannelUnread).toHaveBeenCalledWith('ch-99');
+    expect(mockMarkChannelUnread).not.toHaveBeenCalled();
   });
 
   it('onMessageEdited keys the thread invalidation off parentMessageID when present', async () => {
@@ -423,12 +423,14 @@ describe('ChatPage WS router (browser)', () => {
     expect(document.querySelector('[data-testid="mobile-chat-loading"]')).toBeNull();
   });
 
-  it('onMessageNew marks the active thread seen when the URL targets that thread', async () => {
+  it('onMessageNew routes a reply to the active thread through markThreadSeen without bumping the channel', async () => {
     await renderChatPage('/?thread=root-1');
-    // A reply to the active thread still marks the channel unread (the message
-    // landed in the channel) AND routes through the markThreadSeen branch.
-    lastHandlers().onMessageNew?.(msg({ parentMessageID: 'root-1', parentID: 'ch-99', parentType: 'channel' }));
-    expect(mockMarkChannelUnread).toHaveBeenCalledWith('ch-99');
+    // A reply to the active thread (URL targets root-1) routes through the
+    // markThreadSeen branch and must NOT mark the channel unread.
+    expect(() =>
+      lastHandlers().onMessageNew?.(msg({ parentMessageID: 'root-1', parentID: 'ch-99', parentType: 'channel' })),
+    ).not.toThrow();
+    expect(mockMarkChannelUnread).not.toHaveBeenCalled();
   });
 
   it('onUserUpdated patches the local user for self updates (status/timeZone/lastSeenAt)', async () => {

@@ -18,6 +18,10 @@ vi.mock('@/hooks/useMessages', () => ({
   useSetNoUnfurl: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 
+vi.mock('@/hooks/useEmoji', () => ({
+  useEmojiMap: () => ({ data: {} }),
+}));
+
 function renderCard(props: Partial<ComponentProps<typeof UnfurlCard>> = {}) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
@@ -118,17 +122,20 @@ describe('UnfurlCard', () => {
       };
     }
 
-    it('renders the Slack-style author/body/channel card with avatar and image', () => {
+    it('renders the Slack-style author/body/channel card with avatar and image (no host, not dismissible)', () => {
       mockUseUnfurl.mockReturnValue({ data: messagePreview(), isLoading: false });
-      renderCard();
+      renderCard({ isAuthor: true });
       expect(screen.getByTestId('unfurl-message-card')).toBeInTheDocument();
       const avatar = screen.getByTestId('unfurl-message-avatar') as HTMLImageElement;
       expect(avatar.src).toBe('https://img/g.png');
       expect(screen.getByText('Günter Grodotzki')).toBeInTheDocument();
-      expect(screen.getByText('ex.test')).toBeInTheDocument();
+      // Hostname is not shown on message-link previews.
+      expect(screen.queryByText('ex.test')).toBeNull();
       expect(screen.getByText('please do proper RCA')).toBeInTheDocument();
       expect(screen.getByText('Only visible to users in ~Incidents')).toBeInTheDocument();
       expect((screen.getByTestId('unfurl-card-image') as HTMLImageElement).src).toBe('https://img/chart.png');
+      // Message previews are never dismissible, even for the author.
+      expect(screen.queryByTestId('unfurl-card-dismiss')).toBeNull();
     });
 
     it('falls back to author initials when there is no avatar, and renders without an image', () => {
@@ -161,12 +168,6 @@ describe('UnfurlCard', () => {
       renderCard();
       expect(screen.getByTestId('unfurl-message-card')).toBeInTheDocument();
       expect(screen.getByTestId('unfurl-card-image')).toBeInTheDocument();
-    });
-
-    it('shows the author dismiss button on the message card when the viewer is the author', () => {
-      mockUseUnfurl.mockReturnValue({ data: messagePreview(), isLoading: false });
-      renderCard({ isAuthor: true });
-      expect(screen.getByTestId('unfurl-card-dismiss')).toBeInTheDocument();
     });
 
     it('swaps a broken message image for nothing but keeps the rest of the card', () => {

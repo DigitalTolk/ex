@@ -3,22 +3,18 @@ package service
 import (
 	"context"
 	"net/url"
-	"regexp"
 	"strings"
 	"time"
 
 	"github.com/DigitalTolk/ex/internal/model"
 )
 
-// channelMentionPattern mirrors USER mention pattern for `~[channelID|slug]`,
-// so preview excerpts read "~slug" instead of the raw wire syntax.
-var channelMentionPattern = regexp.MustCompile(`~\[([^|\]]+)\|([^\]]+)\]`)
-
 // Narrow read-only surfaces the message-link resolver needs. Defined as
 // interfaces so the resolver is unit-testable with simple fakes; the concrete
 // impls are the existing store adapters / services wired in main.go.
 type messageLinkChannels interface {
 	GetChannelBySlug(ctx context.Context, slug string) (*model.Channel, error)
+	GetChannel(ctx context.Context, id string) (*model.Channel, error)
 }
 type messageLinkMemberships interface {
 	GetMembership(ctx context.Context, channelID, userID string) (*model.ChannelMembership, error)
@@ -131,8 +127,13 @@ func (s *MessageLinkService) Preview(ctx context.Context, viewerID, rawURL strin
 		if err != nil || ch == nil || ch.Archived {
 			return nil, true
 		}
-		if _, err := s.memberships.GetMembership(ctx, ch.ID, viewerID); err != nil {
-			return nil, true // viewer isn't a member — don't leak private content
+		// Public channels are visible to everyone in the workspace (even
+		// before joining); private channels require membership so we never
+		// leak their content.
+		if ch.Type != model.ChannelTypePublic {
+			if _, err := s.memberships.GetMembership(ctx, ch.ID, viewerID); err != nil {
+				return nil, true
+			}
 		}
 		parentID, label = ch.ID, "~"+ch.Slug
 	default: // "conversation"
@@ -204,10 +205,9 @@ func conversationLabel(conv *model.Conversation) string {
 }
 
 func messagePreviewBody(body string) string {
-	// Render mentions as readable text (@name / ~slug) rather than the raw
-	// `@[id|name]` wire form, since the preview body is shown as plain text.
-	body = userMentionPattern.ReplaceAllString(body, "@$2")
-	body = channelMentionPattern.ReplaceAllString(body, "~$2")
+	// Keep the raw markdown (including `@[id|name]` / `~[id|slug]` mention
+	// syntax and `:emoji:` shortcodes) so the client renders the excerpt with
+	// the same markdown/mention/emoji treatment as the chat itself.
 	body = strings.TrimSpace(body)
 	runes := []rune(body)
 	if len(runes) > messagePreviewBodyMax {
