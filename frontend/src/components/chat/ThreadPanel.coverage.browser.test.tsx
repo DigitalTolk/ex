@@ -78,7 +78,7 @@ vi.mock('./MessageInput', () => ({
   },
 }));
 
-vi.mock('@/hooks/useEmoji', () => ({ useEmojis: () => ({ data: [] }), useEmojiMap: () => ({ data: {} }) }));
+vi.mock('@/hooks/useEmoji', () => ({ useEmojis: () => ({ data: [] }), useEmojiMap: () => ({ data: {} }), useFrequentEmojis: () => ['thumbsup', 'heart', 'tada'] }));
 
 let usersBatchData: Array<{ id: string; displayName: string; avatarURL?: string }> = [];
 vi.mock('@/hooks/useUsersBatch', () => ({

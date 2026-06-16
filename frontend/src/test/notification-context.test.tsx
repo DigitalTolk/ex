@@ -186,6 +186,48 @@ describe('NotificationProvider', () => {
     expect(notificationCtor).toHaveBeenCalledTimes(1);
   });
 
+  const dmPayload: NotificationPayload = { ...samplePayload, parentType: 'conversation', parentID: 'dm-1' };
+
+  it('suppresses an on-screen DM only while the app window is focused', () => {
+    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+    renderProbe();
+    act(() => window.dispatchEvent(new Event('focus')));
+    act(() => {
+      setActiveSpy!('dm-1');
+      dispatchSpy!(dmPayload);
+    });
+    expect(playMock).not.toHaveBeenCalled();
+    expect(notificationCtor).not.toHaveBeenCalled();
+  });
+
+  it('still fires an on-screen DM when the app window is blurred (backgrounded desktop app)', () => {
+    // Regression: a backgrounded-but-visible window kept visibilityState
+    // 'visible', so a DM to the open conversation was wrongly silenced. The
+    // alert must fire once the window loses focus.
+    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+    renderProbe();
+    act(() => window.dispatchEvent(new Event('blur')));
+    act(() => {
+      setActiveSpy!('dm-1');
+      dispatchSpy!(dmPayload);
+    });
+    expect(playMock).toHaveBeenCalledTimes(1);
+    expect(notificationCtor).toHaveBeenCalledTimes(1);
+  });
+
+  it('refocusing the window re-enables on-screen DM suppression', () => {
+    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+    renderProbe();
+    act(() => window.dispatchEvent(new Event('blur')));
+    act(() => window.dispatchEvent(new Event('focus')));
+    act(() => {
+      setActiveSpy!('dm-1');
+      dispatchSpy!(dmPayload);
+    });
+    expect(playMock).not.toHaveBeenCalled();
+    expect(notificationCtor).not.toHaveBeenCalled();
+  });
+
   it('still fires browser notification when document is visible (regression: previously gated)', () => {
     // The old behavior suppressed popups whenever the tab was focused,
     // which made users believe notifications were broken — they only

@@ -19,6 +19,11 @@ vi.mock('@/context/AuthContext', () => ({
   useAuth: () => useAuthMock(),
 }));
 
+const usersBatchMap = vi.hoisted(() => new Map<string, { id: string; displayName: string }>());
+vi.mock('@/hooks/useUsersBatch', () => ({
+  useUsersBatch: () => ({ map: usersBatchMap }),
+}));
+
 import CustomEmojiPage from '@/pages/CustomEmojiPage';
 
 function renderPage() {
@@ -35,6 +40,7 @@ beforeEach(() => {
   uploadMutateAsync.mockReset();
   removeMutateAsync.mockReset();
   useAuthMock.mockReset();
+  usersBatchMap.clear();
   uploadPendingRef.value = false;
   useEmojisMock.mockReturnValue({ data: [] });
   useAuthMock.mockReturnValue({ user: { id: 'u-me', systemRole: 'admin' } });
@@ -105,6 +111,20 @@ describe('CustomEmojiPage', () => {
     renderPage();
     expect(screen.queryByLabelText('Delete :parrot:')).toBeNull();
     expect(screen.getByLabelText('Delete :cat:')).toBeInTheDocument();
+  });
+
+  it('shows who added each emoji', () => {
+    usersBatchMap.set('u-other', { id: 'u-other', displayName: 'Bob Builder' });
+    useEmojisMock.mockReturnValue({
+      data: [
+        { name: 'parrot', imageURL: 'https://cdn/p.gif', createdBy: 'u-other' },
+        { name: 'orphan', imageURL: 'https://cdn/o.gif', createdBy: 'u-gone' },
+      ],
+    });
+    renderPage();
+    expect(screen.getByText('by Bob Builder')).toBeInTheDocument();
+    // Unresolved creators fall back to "unknown".
+    expect(screen.getByText('by unknown')).toBeInTheDocument();
   });
 
   it('filters the existing list by the search box', () => {

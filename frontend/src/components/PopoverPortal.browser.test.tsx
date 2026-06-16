@@ -1,25 +1,22 @@
 import { describe, expect, it, vi } from 'vitest';
 import { useRef } from 'react';
 import { render } from 'vitest-browser-react';
-import { useSwipeable } from 'react-swipeable';
 import { PopoverPortal } from './PopoverPortal';
 
-// react-swipeable is mocked so the swipe-down dismiss gesture can be
-// driven directly via the captured config (mirrors the approach in
-// useAnimatedSwipeDismiss.browser.test.tsx). We return ONLY a ref so the
-// config keys are not spread onto the DOM (which would trip React's
-// unknown-prop console warnings and the console gate). The hook only
-// fires the dismiss when useIsMobile() is true.
-vi.mock('react-swipeable', () => ({
-  useSwipeable: vi.fn(() => ({ ref: vi.fn() })),
+// useSwipeDismiss is mocked so the swipe-down dismiss callback can be
+// fired directly and both arms of data-swipe-dismissing exercised. The
+// Motion drag physics are unit-tested in useSwipeDismiss.test. The hook
+// only fires the dismiss callback in sheet mode (renderSheet=true).
+const swipe = vi.hoisted(() => ({
+  dismissing: false,
+  fire: undefined as (() => void) | undefined,
 }));
-
-interface SwipeConfig {
-  onSwipedDown: (e: { absX: number; deltaY: number; event: Event }) => void;
-}
-function lastSwipeConfig() {
-  return vi.mocked(useSwipeable).mock.calls.at(-1)?.[0] as unknown as SwipeConfig;
-}
+vi.mock('@/hooks/useSwipeDismiss', () => ({
+  useSwipeDismiss: (_dir: string, onDismiss: () => void) => {
+    swipe.fire = onDismiss;
+    return { dismissing: swipe.dismissing, motionProps: {} };
+  },
+}));
 
 // Browser coverage for PopoverPortal — exercises open/closed render,
 // pointerdown dismissal, Escape dismissal, and mobile-sheet path.
@@ -101,22 +98,27 @@ describe('PopoverPortal browser', () => {
     });
   });
 
-  it('swipe-down on the mobile sheet animates the dismiss and calls onDismiss', async () => {
+  it('swipe-down on the mobile sheet calls onDismiss', async () => {
     if (window.innerWidth >= 768) return;
+    swipe.dismissing = false;
     const onDismiss = vi.fn();
     await render(<Harness open={true} onDismiss={onDismiss} mobileSheet={true} />);
     await vi.waitFor(() => {
       expect(document.querySelector('[data-mobile-sheet="true"]')).not.toBeNull();
     });
-    // Drive a valid downward swipe past the threshold → dismissWithAnimation
-    // sets dismissing=true (the translate-y-full class arm) and, after the
-    // animation timeout, invokes the renderSheet onDismiss callback.
-    const cfg = lastSwipeConfig();
-    cfg.onSwipedDown({ absX: 0, deltaY: 200, event: new Event('touchend') });
+    // Fire the captured swipe-down dismiss callback → renderSheet onDismiss.
+    swipe.fire?.();
+    await vi.waitFor(() => expect(onDismiss).toHaveBeenCalled());
+  });
+
+  it('reflects the mid-dismiss state via data-swipe-dismissing=true', async () => {
+    if (window.innerWidth >= 768) return;
+    swipe.dismissing = true;
+    await render(<Harness open={true} mobileSheet={true} />);
     await vi.waitFor(() => {
       expect(document.querySelector('[data-swipe-dismissing="true"]')).not.toBeNull();
     });
-    await vi.waitFor(() => expect(onDismiss).toHaveBeenCalled());
+    swipe.dismissing = false;
   });
 
   it('ignores a non-Escape keydown (does not dismiss)', async () => {

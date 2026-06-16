@@ -3,19 +3,13 @@ import { render } from 'vitest-browser-react';
 import { SidePanel } from './SidePanel';
 
 // Browser coverage for the shared right-rail shell. Both arms of the
-// `dismissing ? 'max-md:translate-x-full' : ''` className ternary and
-// the data-swipe-dismissing attribute (lines 21, 24) need the hook to
-// report dismissing=true, which only happens mid swipe-dismiss
-// animation. We drive that by mocking useAnimatedSwipeDismiss — the
-// gesture machinery itself is covered by useAnimatedSwipeDismiss.browser.test.
-const swipeState = vi.hoisted(() => ({ dismissing: false }));
-vi.mock('@/hooks/useAnimatedSwipeDismiss', () => ({
-  useAnimatedSwipeDismiss: () => ({
-    dismissing: swipeState.dismissing,
-    dragOffset: 0,
-    dragStyle: undefined,
-    swipeHandlers: {},
-  }),
+// data-swipe-dismissing attribute need the hook to report
+// dismissing=true, which only happens mid swipe-dismiss animation. We
+// drive that by mocking useSwipeDismiss — the Motion drag machinery
+// itself is covered by useSwipeDismiss's own unit test.
+const swipeState = vi.hoisted(() => ({ dismissing: false, settled: true }));
+vi.mock('@/hooks/useSwipeDismiss', () => ({
+  useSwipeDismiss: () => ({ dismissing: swipeState.dismissing, settled: swipeState.settled, motionProps: {} }),
 }));
 
 let active: { unmount: () => Promise<void> | void } | null = null;
@@ -33,6 +27,7 @@ afterEach(async () => {
   if (active) await active.unmount();
   active = null;
   swipeState.dismissing = false;
+  swipeState.settled = true;
   document.getElementById('kill-anim')?.remove();
 });
 
@@ -61,20 +56,34 @@ describe('SidePanel browser behaviour', () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it('marks data-swipe-dismissing=false and omits the slide-out class at rest', async () => {
+  it('marks data-swipe-dismissing=false at rest', async () => {
     swipeState.dismissing = false;
     await renderPanel();
     const aside = document.querySelector('aside[aria-label="My panel"]') as HTMLElement;
     expect(aside.getAttribute('data-swipe-dismissing')).toBe('false');
-    expect(aside.className).not.toContain('max-md:translate-x-full');
   });
 
-  it('applies the slide-out class and data-swipe-dismissing=true while dismissing', async () => {
-    // dismissing=true → the truthy arms of both ternaries (lines 21, 24).
+  it('marks data-swipe-dismissing=true while dismissing', async () => {
     swipeState.dismissing = true;
     await renderPanel();
     const aside = document.querySelector('aside[aria-label="My panel"]') as HTMLElement;
     expect(aside.getAttribute('data-swipe-dismissing')).toBe('true');
-    expect(aside.className).toContain('max-md:translate-x-full');
+  });
+
+  it('drops the left border on mobile once fully settled (md:border-l only)', async () => {
+    swipeState.settled = true;
+    await renderPanel();
+    const aside = document.querySelector('aside[aria-label="My panel"]') as HTMLElement;
+    expect(aside.className).toContain('md:border-l');
+    expect(aside.className).not.toMatch(/(^|\s)border-l(\s|$)/);
+  });
+
+  it('keeps a left border on mobile while sliding in / being dragged (not settled)', async () => {
+    swipeState.settled = false;
+    await renderPanel();
+    const aside = document.querySelector('aside[aria-label="My panel"]') as HTMLElement;
+    // While the panel is still moving it carries the unprefixed border-l so
+    // its edge stays separated from the content revealed behind it.
+    expect(aside.className).toMatch(/(^|\s)border-l(\s|$)/);
   });
 });

@@ -354,6 +354,68 @@ func (s *MessageService) Send(ctx context.Context, userID, parentID, parentType,
 	return msg, nil
 }
 
+type WebhookMessageInput struct {
+	ChannelID   string
+	ParentID    string
+	ParentType  string
+	AuthorID    string
+	Body        string
+	Username    string
+	AvatarURL   string
+	IconEmoji   string
+	Attachments []model.MessageAttachment
+}
+
+func (s *MessageService) SendWebhook(ctx context.Context, in WebhookMessageInput) (*model.Message, error) {
+	parentID := in.ParentID
+	if parentID == "" {
+		parentID = in.ChannelID
+	}
+	parentType := in.ParentType
+	if parentType == "" {
+		parentType = ParentChannel
+	}
+	authorID := in.AuthorID
+	if authorID == "" {
+		authorID = "webhook"
+	}
+	if parentID == "" {
+		return nil, errors.New("message: parent required")
+	}
+	if in.Body == "" && len(in.Attachments) == 0 {
+		return nil, errors.New("message: body or attachments required")
+	}
+	if err := ValidateMessageBody(in.Body); err != nil {
+		return nil, err
+	}
+	if err := ValidateAttachmentCount(len(in.Attachments)); err != nil {
+		return nil, err
+	}
+	msg := &model.Message{
+		ID:                 store.NewID(),
+		ParentID:           parentID,
+		AuthorID:           authorID,
+		Body:               in.Body,
+		WebhookUsername:    in.Username,
+		WebhookAvatarURL:   in.AvatarURL,
+		WebhookIconEmoji:   in.IconEmoji,
+		MessageAttachments: in.Attachments,
+		CreatedAt:          time.Now(),
+	}
+	if msg.WebhookUsername == "" {
+		msg.WebhookUsername = "webhook"
+	}
+	if err := s.messages.CreateMessage(ctx, msg); err != nil {
+		return nil, fmt.Errorf("message: create webhook: %w", err)
+	}
+	s.publishEvent(ctx, parentID, parentType, events.EventMessageNew, msg)
+	if s.notifier != nil {
+		s.notifier.NotifyForMessage(ctx, msg, parentType)
+	}
+	s.indexMessage(ctx, msg, parentType)
+	return msg, nil
+}
+
 func (s *MessageService) followMentionedThreadUsers(ctx context.Context, msg *model.Message, parentType string) {
 	if s.threadFollows == nil || msg == nil || msg.ParentMessageID == "" {
 		return

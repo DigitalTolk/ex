@@ -12,8 +12,10 @@ const (
 	// MaxMessageBodyChars caps the message body in user-perceived
 	// characters (Unicode codepoints). UTF-8 is variable-width, so a
 	// byte cap would penalise non-Latin scripts; a codepoint cap is
-	// fair and predictable for the user.
-	MaxMessageBodyChars = 8192
+	// fair and predictable for the user. 16383 is the Mattermost post
+	// ceiling; we round to 16384 so incoming-webhook payloads at that
+	// limit are accepted rather than rejected.
+	MaxMessageBodyChars = 16384
 
 	// MaxAttachmentsPerMessage caps how many attachments can be bound
 	// to a single message at send time. Editing follows the same cap.

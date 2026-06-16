@@ -1108,3 +1108,35 @@ func TestNotifyForMessage_MentionTitle_IncludesChannelName(t *testing.T) {
 	}
 	t.Fatal("no notification published to u-bob")
 }
+
+func TestNotificationService_WebhookUsernameAndFallbackBody(t *testing.T) {
+	svc, _, members, _, chans, users := setupNotifier(t)
+	push := &recordingMobilePush{}
+	svc.SetMobilePushSender(push)
+	ctx := context.Background()
+
+	chans.channels["ch1"] = &model.Channel{ID: "ch1", Name: "general", Slug: "general", Type: model.ChannelTypePublic}
+	users.users["u-author"] = &model.User{ID: "u-author", DisplayName: "Alice (creator)"}
+	for _, uid := range []string{"u-author", "u-bob"} {
+		members.memberships["ch1#"+uid] = &model.ChannelMembership{ChannelID: "ch1", UserID: uid}
+	}
+
+	// Attachments-only webhook message: the override username drives the
+	// title and the attachment fallback drives the body.
+	svc.NotifyForMessage(ctx, &model.Message{
+		ID: "m1", ParentID: "ch1", AuthorID: "u-author",
+		WebhookUsername:    "CI Bot",
+		MessageAttachments: []model.MessageAttachment{{Fallback: "build failed"}},
+	}, ParentChannel)
+
+	if len(push.calls) != 1 {
+		t.Fatalf("push count = %d, want 1", len(push.calls))
+	}
+	notif := push.calls[0].notif
+	if notif.Body != "build failed" {
+		t.Fatalf("notification body = %q, want fallback", notif.Body)
+	}
+	if !strings.Contains(notif.Title, "CI Bot") {
+		t.Fatalf("notification title = %q, want webhook username", notif.Title)
+	}
+}

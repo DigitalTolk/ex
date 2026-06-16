@@ -23,17 +23,21 @@ import { useEditMessage, useDeleteMessage, useToggleReaction, useSetPinned } fro
 import { useEmojiMap } from '@/hooks/useEmoji';
 import { renderMarkdown } from '@/lib/markdown';
 import { isEmojiOnlyMessage } from '@/lib/emoji-shortcodes';
+import { recordEmojiUse } from '@/lib/emoji-frequency';
+import { blurActiveInput } from '@/lib/blur-input';
 import { buildChannelHref, buildConversationHref } from '@/lib/message-deeplink';
 import { useTagOpen } from '@/context/TagSearchContext';
 import { EmojiGlyph } from '@/components/EmojiGlyph';
 import { MessageAttachments } from '@/components/chat/MessageAttachments';
 import { ThreadActionBar } from '@/components/chat/ThreadActionBar';
 import { UnfurlCard } from '@/components/chat/UnfurlCard';
+import { MessageRichAttachments } from '@/components/chat/MessageRichAttachments';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { extractURLs, formatLongDateTime, formatRelative } from '@/lib/format';
 import { registerEditMessageHandler } from '@/lib/window-events';
 import { useIsMobile } from '@/hooks/useIsMobile';
-import { useAnimatedSwipeDismiss } from '@/hooks/useAnimatedSwipeDismiss';
+import { motion } from 'motion/react';
+import { useSwipeDismiss } from '@/hooks/useSwipeDismiss';
 import { useTransientOverlayCleanup } from '@/hooks/useTransientOverlayCleanup';
 import { triggerMessageActionHaptic } from '@/lib/haptics';
 import type { Message, UserStatus } from '@/types';
@@ -106,6 +110,15 @@ export function MessageItem({
   onContentHeightChange,
   quickReactions,
 }: MessageItemProps) {
+  const isWebhook = !!message.webhookUsername;
+  const displayAuthorName = message.webhookUsername || authorName;
+  // Webhook posts must NOT borrow the creator's avatar — show the
+  // integration's own avatar (override URL or initials of its username),
+  // never the creator's profile image.
+  const displayAuthorAvatarURL = isWebhook ? message.webhookAvatarURL : authorAvatarURL;
+  // For webhook posts the profile dropdown is the minimal integration card
+  // attributed to the creator (authorName resolves to the creator).
+  const integrationOwnerName = isWebhook ? authorName : undefined;
   const isMobile = useIsMobile();
   const [isEditing, setIsEditing] = useState(false);
   // Visibility tracked in JS (not Tailwind group-hover) because Radix's
@@ -238,18 +251,13 @@ export function MessageItem({
     setMobileActionsSuppressed(false);
     setMobileReactionPickerOpen(false);
   }
-  const {
-    dismissing: swipeDismissing,
-    dragStyle: mobileActionsDragStyle,
-    swipeHandlers: { ref: mobileActionsSwipeRef, ...mobileActionsSwipe },
-  } = useAnimatedSwipeDismiss('down', closeMobileActions);
-  const setMobileActionsNode = useCallback(
-    (node: HTMLDivElement | null) => {
-      mobileActionsSheetRef.current = node;
-      mobileActionsSwipeRef(node);
-    },
-    [mobileActionsSwipeRef],
+  const { dismissing: swipeDismissing, motionProps: mobileActionsMotion } = useSwipeDismiss(
+    'down',
+    closeMobileActions,
   );
+  const setMobileActionsNode = useCallback((node: HTMLDivElement | null) => {
+    mobileActionsSheetRef.current = node;
+  }, []);
 
   function handleMobileReply() {
     closeMobileActions();
@@ -357,6 +365,9 @@ export function MessageItem({
     window.addEventListener('pointercancel', cancelPendingLongPress, { once: true });
     longPressTimerRef.current = window.setTimeout(() => {
       triggerMessageActionHaptic();
+      // Long-pressing to open the action bar should dismiss the keyboard
+      // if the composer had focus, so the sheet isn't fighting the keyboard.
+      blurActiveInput();
       setMobileActionsSuppressed(false);
       setMobileActionsOpen(true);
       notifyMessageHovered(message.id);
@@ -405,17 +416,17 @@ export function MessageItem({
         />
       )}
       {mobileActionsOpen && (
-      <div
+      <motion.div
         role="dialog"
         aria-modal="true"
         aria-label="Message actions"
-        className={`mobile-bottom-sheet-enter absolute inset-x-0 bottom-0 max-h-[calc(100dvh-env(safe-area-inset-top)-0.75rem)] overflow-y-auto rounded-t-xl border-x-0 border-b-0 border-t bg-popover p-3 pb-[calc(env(safe-area-inset-bottom)+0.75rem)] text-popover-foreground shadow-lg transform-gpu transition-transform duration-200 ease-out ${swipeDismissing ? 'translate-y-full' : ''} ${mobileActionsSuppressed ? 'hidden' : ''}`}
+        data-swipe-scroll="true"
+        className={`absolute inset-x-0 bottom-0 max-h-[calc(100dvh-env(safe-area-inset-top)-0.75rem)] overflow-y-auto rounded-t-xl border-x-0 border-b-0 border-t bg-popover p-3 pb-[calc(env(safe-area-inset-bottom)+0.75rem)] text-popover-foreground shadow-lg ${mobileActionsSuppressed ? 'hidden' : ''}`}
         data-testid="mobile-message-actions"
         data-actions-suppressed={mobileActionsSuppressed ? 'true' : 'false'}
-        data-swipe-dismissing={swipeDismissing ? 'true' : 'false'}
-        style={mobileActionsDragStyle}
+        data-swipe-dismissing={String(swipeDismissing)}
         ref={setMobileActionsNode}
-        {...mobileActionsSwipe}
+        {...mobileActionsMotion}
       >
         {!inThread && (
           <Button
@@ -506,7 +517,7 @@ export function MessageItem({
             </>
           )}
         </div>
-      </div>
+      </motion.div>
       )}
     </div>
   ) : null;
@@ -534,34 +545,54 @@ export function MessageItem({
     >
       <UserHoverCard
         userId={message.authorID}
-        displayName={authorName}
-        avatarURL={authorAvatarURL}
+        displayName={displayAuthorName}
+        avatarURL={displayAuthorAvatarURL}
         userStatus={authorUserStatus}
         online={authorOnline}
         currentUserId={currentUserId}
         showInlineStatus={false}
+        integrationOwnerName={integrationOwnerName}
       >
-        <UserAvatar
-          displayName={authorName}
-          avatarURL={authorAvatarURL}
-          online={authorOnline}
-          className="mt-0.5 h-9 w-9 cursor-pointer"
-          dotClassName="h-2.5 w-2.5"
-        />
+        {message.webhookIconEmoji ? (
+          <div
+            className="mt-0.5 flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center rounded-full bg-muted"
+            aria-label={`:${message.webhookIconEmoji}:`}
+            data-testid="webhook-emoji-avatar"
+          >
+            <EmojiGlyph emoji={`:${message.webhookIconEmoji}:`} customMap={emojiMap} size="lg" />
+          </div>
+        ) : (
+          <UserAvatar
+            displayName={displayAuthorName}
+            avatarURL={displayAuthorAvatarURL}
+            online={authorOnline}
+            className="mt-0.5 h-9 w-9 cursor-pointer"
+            dotClassName="h-2.5 w-2.5"
+          />
+        )}
       </UserHoverCard>
 
       <div className="flex-1 min-w-0">
         <div className="flex items-baseline gap-2">
           <UserHoverCard
             userId={message.authorID}
-            displayName={authorName}
-            avatarURL={authorAvatarURL}
+            displayName={displayAuthorName}
+            avatarURL={displayAuthorAvatarURL}
             userStatus={authorUserStatus}
             online={authorOnline}
             currentUserId={currentUserId}
+            integrationOwnerName={integrationOwnerName}
           >
-            <span className="cursor-pointer text-sm font-semibold">{authorName}</span>
+            <span className="cursor-pointer text-sm font-semibold">{displayAuthorName}</span>
           </UserHoverCard>
+          {message.webhookUsername && (
+            <span
+              className="rounded bg-muted px-1 text-[10px] font-semibold uppercase leading-4 tracking-wide text-muted-foreground"
+              aria-label="Bot"
+            >
+              BOT
+            </span>
+          )}
           <Tooltip>
             <TooltipTrigger
               className="text-xs text-muted-foreground cursor-default"
@@ -648,8 +679,8 @@ export function MessageItem({
 	                parentID={channelId ?? conversationId}
 	                parentType={channelId ? 'channel' : conversationId ? 'conversation' : undefined}
 	                messageID={message.id}
-	                authorName={authorName}
-                authorAvatarURL={authorAvatarURL}
+	                authorName={displayAuthorName}
+                authorAvatarURL={displayAuthorAvatarURL}
                 postedIn={
                   channelSlug
                     ? `~${channelSlug}`
@@ -661,6 +692,7 @@ export function MessageItem({
                 onContentHeightChange={onContentHeightChange}
               />
             )}
+            <MessageRichAttachments attachments={message.messageAttachments} onContentHeightChange={onContentHeightChange} />
             {reactionEntries.length > 0 && (
               <div className="mt-1 flex flex-wrap items-center gap-1" role="list" aria-label="Reactions">
                 {reactionEntries.map(([emoji, users]) => {
@@ -745,7 +777,12 @@ export function MessageItem({
               variant="ghost"
               className="h-7 w-7"
               aria-label={`React with ${emoji}`}
-              onClick={() => handleReact(emoji)}
+              onClick={() => {
+                // Reacting via a quick button is also an emoji "use" — record
+                // it so the popular shelf reorders and refreshes live.
+                void recordEmojiUse(emoji);
+                handleReact(emoji);
+              }}
             >
               <EmojiGlyph emoji={emoji} customMap={emojiMap} />
             </Button>

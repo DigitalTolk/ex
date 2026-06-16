@@ -3,7 +3,8 @@ import { createPortal } from 'react-dom';
 import { usePopoverPosition } from '@/hooks/usePopoverPosition';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { useTransientOverlayCleanup } from '@/hooks/useTransientOverlayCleanup';
-import { useAnimatedSwipeDismiss } from '@/hooks/useAnimatedSwipeDismiss';
+import { motion } from 'motion/react';
+import { useSwipeDismiss } from '@/hooks/useSwipeDismiss';
 
 interface PopoverPortalProps {
   open: boolean;
@@ -47,20 +48,21 @@ export function PopoverPortal({
   const contentRef = useRef<HTMLDivElement>(null);
   const isMobile = useIsMobile();
   const renderSheet = mobileSheet && isMobile;
-  const { dismissing, dragStyle, swipeHandlers: { ref: swipeRef, ...swipeDown } } = useAnimatedSwipeDismiss('down', () => {
-    // The swipe handlers are only attached in sheet mode, so this
-    // callback only fires when renderSheet is true; the false arm and the
+  const { dismissing, motionProps } = useSwipeDismiss('down', () => {
+    // The drag handlers are only attached in sheet mode, so this callback
+    // only fires when renderSheet is true; the false arm and the
     // onDismiss?.-undefined arm are defensive.
     /* istanbul ignore next -- swipe-dismiss only fires in sheet mode with a provided onDismiss */
     if (renderSheet) onDismiss?.();
   });
-  const setContentRef = useCallback(
-    (node: HTMLDivElement | null) => {
-      contentRef.current = node;
-      swipeRef(node);
-    },
-    [swipeRef],
-  );
+  // Motion drag (style + handlers) is only applied in mobile-sheet mode.
+  const { style: sheetDragStyle, ...sheetDragHandlers } = (renderSheet ? motionProps : {}) as {
+    style?: Record<string, unknown>;
+    [key: string]: unknown;
+  };
+  const setContentRef = useCallback((node: HTMLDivElement | null) => {
+    contentRef.current = node;
+  }, []);
   const pos = usePopoverPosition(open, triggerRef, {
     estimatedHeight,
     estimatedWidth,
@@ -105,7 +107,7 @@ export function PopoverPortal({
           onPointerDown={onDismiss}
         />
       )}
-      <div
+      <motion.div
         ref={setContentRef}
         role={role}
         aria-label={ariaLabel}
@@ -115,7 +117,8 @@ export function PopoverPortal({
         data-popover-measured={measured ? 'true' : 'false'}
         data-mobile-sheet={renderSheet ? 'true' : 'false'}
         // Hide until measured — seeded (0,0) would otherwise flash in the
-        // top-left corner before the position effect commits.
+        // top-left corner before the position effect commits. In sheet mode
+        // Motion drives the enter slide + drag-to-dismiss via the y transform.
         style={renderSheet
           ? {
               position: 'fixed',
@@ -129,12 +132,9 @@ export function PopoverPortal({
               overflow: 'hidden',
               overscrollBehaviorY: 'contain',
               touchAction: 'pan-y',
-              // In sheet mode `measured` is forced true (see the `measured`
-              // assignment above), so the sheet is always visible — no
-              // opacity/pointer-events gating needed.
               opacity: 1,
               pointerEvents: 'auto',
-              ...dragStyle,
+              ...sheetDragStyle,
             }
           : {
               position: 'fixed',
@@ -147,12 +147,12 @@ export function PopoverPortal({
               opacity: measured ? 1 : 0,
               pointerEvents: measured ? 'auto' : 'none',
             }}
-        className={`${className} ${renderSheet ? 'mobile-bottom-sheet-enter transform-gpu transition-transform duration-200 ease-out' : ''} ${renderSheet && dismissing ? 'translate-y-full' : ''}`}
-        data-swipe-dismissing={dismissing ? 'true' : 'false'}
-        {...(renderSheet ? swipeDown : {})}
+        className={className}
+        data-swipe-dismissing={String(dismissing)}
+        {...sheetDragHandlers}
       >
         {children}
-      </div>
+      </motion.div>
     </>,
     document.body,
   );

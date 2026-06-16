@@ -42,6 +42,7 @@ function setMobileMatch(matches: boolean) {
 vi.mock('@/hooks/useEmoji', () => ({
   useEmojis: () => ({ data: [] }),
   useEmojiMap: () => ({ data: {} }),
+  useFrequentEmojis: () => ['thumbsup', 'heart', 'tada'],
 }));
 
 // MessageInput is exhaustively unit-tested in isolation; here we just
@@ -72,6 +73,12 @@ vi.mock('./MessageInput', () => ({
   },
 }));
 
+// Motion drag physics are unit-tested in useSwipeDismiss.test; mock the
+// hook so the panel chrome is deterministic here.
+vi.mock('@/hooks/useSwipeDismiss', () => ({
+  useSwipeDismiss: () => ({ dismissing: false, settled: true, motionProps: {} }),
+}));
+
 function renderWithProviders(ui: React.ReactElement) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
@@ -81,17 +88,6 @@ function renderWithProviders(ui: React.ReactElement) {
       </BrowserRouter>
     </QueryClientProvider>,
   );
-}
-
-function touchSwipe(element: Element, fromX: number, toX: number, y = 160) {
-  fireEvent.touchStart(element, { touches: [{ clientX: fromX, clientY: y }] });
-  fireEvent.touchMove(element, { touches: [{ clientX: toX, clientY: y + 8 }] });
-  fireEvent.touchEnd(element, { changedTouches: [{ clientX: toX, clientY: y + 8 }] });
-}
-
-function touchDrag(element: Element, fromX: number, toX: number, y = 160) {
-  fireEvent.touchStart(element, { touches: [{ clientX: fromX, clientY: y }] });
-  fireEvent.touchMove(element, { touches: [{ clientX: toX, clientY: y + 8 }] });
 }
 
 // Bridge a TypingContext recorder out of the React tree so a test can
@@ -152,6 +148,27 @@ describe('ThreadPanel', () => {
     });
   });
 
+  it('shows the popular quick-reaction shelf on thread messages', async () => {
+    mockApiFetch.mockResolvedValueOnce(replies);
+    renderWithProviders(
+      <ThreadPanel
+        channelId="ch-1"
+        threadRootID="m-1"
+        onClose={vi.fn()}
+        userMap={userMap}
+        currentUserId="u-1"
+      />,
+    );
+
+    // useFrequentEmojis is mocked to ['thumbsup','heart','tada']; the thread
+    // sidebar must surface the same popular shelf the main message list does.
+    await waitFor(() => {
+      expect(screen.getAllByLabelText('React with thumbsup').length).toBeGreaterThan(0);
+    });
+    expect(screen.getAllByLabelText('React with heart').length).toBeGreaterThan(0);
+    expect(screen.getAllByLabelText('React with tada').length).toBeGreaterThan(0);
+  });
+
   it('calls onClose when close button is clicked', () => {
     mockApiFetch.mockResolvedValueOnce([]);
     const onClose = vi.fn();
@@ -200,7 +217,7 @@ describe('ThreadPanel', () => {
     expect(panel.className).not.toContain('safe-area-inset-top');
   });
 
-  it('does not close on a mobile right-to-left swipe', () => {
+  it('closes from the arrow close button and has no left border on mobile', () => {
     setMobileMatch(true);
     mockApiFetch.mockResolvedValueOnce([]);
     const onClose = vi.fn();
@@ -215,80 +232,10 @@ describe('ThreadPanel', () => {
     );
 
     const panel = screen.getByLabelText('Thread');
-    expect(panel).toHaveClass('mobile-right-sidebar-enter');
-    touchSwipe(panel, 240, 120);
-
-    expect(onClose).not.toHaveBeenCalled();
-  });
-
-  it('closes on a mobile left-to-right swipe', () => {
-    setMobileMatch(true);
-    mockApiFetch.mockResolvedValueOnce([]);
-    const onClose = vi.fn();
-    renderWithProviders(
-      <ThreadPanel
-        channelId="ch-1"
-        threadRootID="m-1"
-        onClose={onClose}
-        userMap={userMap}
-        currentUserId="u-1"
-      />,
-    );
-
-    const panel = screen.getByLabelText('Thread');
-    vi.useFakeTimers();
-    touchSwipe(panel, 12, 132);
-
-    expect(panel).toHaveAttribute('data-swipe-dismissing', 'true');
-    expect(panel).toHaveClass('max-md:translate-x-full');
-    expect(onClose).not.toHaveBeenCalled();
-    act(() => vi.advanceTimersByTime(180));
+    expect(panel).toHaveClass('md:border-l');
+    expect(panel.className).not.toMatch(/(^|\s)border-l(\s|$)/);
+    fireEvent.click(screen.getByLabelText('Close thread'));
     expect(onClose).toHaveBeenCalledTimes(1);
-    vi.useRealTimers();
-  });
-
-  it('tracks the finger while the mobile thread panel is being pulled closed', () => {
-    setMobileMatch(true);
-    mockApiFetch.mockResolvedValueOnce([]);
-    const onClose = vi.fn();
-    renderWithProviders(
-      <ThreadPanel
-        channelId="ch-1"
-        threadRootID="m-1"
-        onClose={onClose}
-        userMap={userMap}
-        currentUserId="u-1"
-      />,
-    );
-
-    const panel = screen.getByLabelText('Thread');
-    touchDrag(panel, 12, 82);
-
-    expect(panel).toHaveStyle({ transform: 'translateX(70px)', transition: 'none' });
-    expect(panel).toHaveAttribute('data-swipe-dismissing', 'false');
-    expect(onClose).not.toHaveBeenCalled();
-  });
-
-  it('ignores middle-of-panel drags so scrolling does not dismiss the thread', () => {
-    setMobileMatch(true);
-    mockApiFetch.mockResolvedValueOnce([]);
-    const onClose = vi.fn();
-    renderWithProviders(
-      <ThreadPanel
-        channelId="ch-1"
-        threadRootID="m-1"
-        onClose={onClose}
-        userMap={userMap}
-        currentUserId="u-1"
-      />,
-    );
-
-    const panel = screen.getByLabelText('Thread');
-    touchDrag(panel, 120, 190);
-
-    expect(panel).not.toHaveStyle({ transform: 'translateX(70px)' });
-    expect(panel).toHaveAttribute('data-swipe-dismissing', 'false');
-    expect(onClose).not.toHaveBeenCalled();
   });
 
   it('shows Follow when the thread is not in /threads and calls the follow endpoint', async () => {

@@ -225,6 +225,40 @@ func TestUnfurlService_FetchScrapesAndCaches(t *testing.T) {
 	}
 }
 
+func TestUnfurlService_ProxyImageURL(t *testing.T) {
+	imgSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		_, _ = w.Write([]byte{
+			0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+			0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+			0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+			0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
+			0x89,
+		})
+	}))
+	defer imgSrv.Close()
+
+	store := newFakeImageStore()
+	svc := newLoopbackUnfurlService(nil)
+	svc.SetImageStore(store)
+
+	got := svc.ProxyImageURL(context.Background(), imgSrv.URL+"/avatar.png")
+	if !strings.HasPrefix(got, "https://s3.example/unfurl/") {
+		t.Fatalf("ProxyImageURL = %q", got)
+	}
+	if store.headCalls != 1 || store.putCalls != 1 || store.signCalls != 1 {
+		t.Fatalf("image proxy calls: head=%d put=%d sign=%d", store.headCalls, store.putCalls, store.signCalls)
+	}
+}
+
+func TestUnfurlService_ProxyImageURLWithoutImageStoreKeepsURL(t *testing.T) {
+	svc := NewUnfurlService(nil)
+	got := svc.ProxyImageURL(context.Background(), "https://cdn.example/avatar.png")
+	if got != "https://cdn.example/avatar.png" {
+		t.Fatalf("ProxyImageURL without store = %q", got)
+	}
+}
+
 func TestUnfurlService_RejectsNonHTMLContentType(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/pdf")
@@ -651,4 +685,129 @@ func mustParseURL(t *testing.T, raw string) *url.URL {
 		t.Fatalf("parse url: %v", err)
 	}
 	return u
+}
+
+// realPNG1x1 is a minimal but decodable 1×1 PNG used to verify
+// dimension extraction in the image proxy.
+var realPNG1x1 = []byte{
+	0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+	0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+	0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+	0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
+	0x89,
+}
+
+func TestUnfurlService_ProxyImageWithSize(t *testing.T) {
+	ctx := context.Background()
+	imgSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		_, _ = w.Write(realPNG1x1)
+	}))
+	defer imgSrv.Close()
+
+	// No image store → degrade to the plain proxy URL, unknown dims.
+	if u, w, h := NewUnfurlService(nil).ProxyImageWithSize(ctx, "https://cdn.example/a.png"); u != "https://cdn.example/a.png" || w != 0 || h != 0 {
+		t.Fatalf("no-store proxy = %q %d %d", u, w, h)
+	}
+
+	cache := newFakeUnfurlCache()
+	store := newFakeImageStore()
+	svc := newLoopbackUnfurlService(cache)
+	svc.SetImageStore(store)
+
+	url1, w1, h1 := svc.ProxyImageWithSize(ctx, imgSrv.URL+"/a.png")
+	if !strings.HasPrefix(url1, "https://s3.example/unfurl/") || w1 != 1 || h1 != 1 {
+		t.Fatalf("first proxy = %q %d %d", url1, w1, h1)
+	}
+	if store.putCalls != 1 {
+		t.Fatalf("first putCalls = %d", store.putCalls)
+	}
+
+	// Second call → HEAD hit, dims served from cache, no re-upload.
+	if _, w2, h2 := svc.ProxyImageWithSize(ctx, imgSrv.URL+"/a.png"); store.putCalls != 1 || w2 != 1 || h2 != 1 {
+		t.Fatalf("cached proxy put=%d dims=%dx%d", store.putCalls, w2, h2)
+	}
+
+	// HEAD hit but no dims cache → GetObject fallback decodes the stored
+	// bytes. Same underlying store, fresh cache-less service.
+	noCache := newLoopbackUnfurlService(nil)
+	noCache.SetImageStore(store)
+	if _, w3, h3 := noCache.ProxyImageWithSize(ctx, imgSrv.URL+"/a.png"); w3 != 1 || h3 != 1 {
+		t.Fatalf("getobject-fallback dims = %dx%d", w3, h3)
+	}
+}
+
+func TestUnfurlService_ProxyImageWithSizeFailures(t *testing.T) {
+	ctx := context.Background()
+
+	svc := newLoopbackUnfurlService(nil)
+	svc.SetImageStore(newFakeImageStore())
+	if u, _, _ := svc.ProxyImageWithSize(ctx, ""); u != "" {
+		t.Fatalf("empty url proxy = %q", u)
+	}
+	if u, _, _ := svc.ProxyImageWithSize(ctx, "/relative"); u != "" {
+		t.Fatalf("relative url proxy = %q", u)
+	}
+
+	// validateURL guard runs when skipURLValidation is off — a loopback
+	// host must be rejected outright.
+	guarded := &UnfurlService{client: &http.Client{Timeout: unfurlTimeout}}
+	guarded.SetImageStore(newFakeImageStore())
+	if u, _, _ := guarded.ProxyImageWithSize(ctx, "http://127.0.0.1/x.png"); u != "" {
+		t.Fatalf("private url proxy = %q", u)
+	}
+
+	// HEAD error.
+	hs := newFakeImageStore()
+	hs.failHead = true
+	headSvc := newLoopbackUnfurlService(nil)
+	headSvc.SetImageStore(hs)
+	if u, _, _ := headSvc.ProxyImageWithSize(ctx, "https://cdn.example/a.png"); u != "" {
+		t.Fatalf("head-error proxy = %q", u)
+	}
+
+	// Upstream fetch error (HEAD miss + 500).
+	badSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer badSrv.Close()
+	fetchSvc := newLoopbackUnfurlService(nil)
+	fetchSvc.SetImageStore(newFakeImageStore())
+	if u, _, _ := fetchSvc.ProxyImageWithSize(ctx, badSrv.URL+"/a.png"); u != "" {
+		t.Fatalf("fetch-error proxy = %q", u)
+	}
+
+	imgSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		_, _ = w.Write(realPNG1x1)
+	}))
+	defer imgSrv.Close()
+
+	// PutObject error.
+	ps := newFakeImageStore()
+	ps.failPut = true
+	putSvc := newLoopbackUnfurlService(nil)
+	putSvc.SetImageStore(ps)
+	if u, _, _ := putSvc.ProxyImageWithSize(ctx, imgSrv.URL+"/a.png"); u != "" {
+		t.Fatalf("put-error proxy = %q", u)
+	}
+
+	// Sign error on a HEAD-hit (object already present).
+	ss := newFakeImageStore()
+	ss.failSign = true
+	ss.existing[unfurlImageKey(imgSrv.URL+"/a.png")] = true
+	signSvc := newLoopbackUnfurlService(nil)
+	signSvc.SetImageStore(ss)
+	if u, _, _ := signSvc.ProxyImageWithSize(ctx, imgSrv.URL+"/a.png"); u != "" {
+		t.Fatalf("sign-error proxy = %q", u)
+	}
+}
+
+func TestDecodeImageDims(t *testing.T) {
+	if w, h := decodeImageDims(realPNG1x1); w != 1 || h != 1 {
+		t.Fatalf("decodeImageDims png = %dx%d", w, h)
+	}
+	if w, h := decodeImageDims([]byte("not an image")); w != 0 || h != 0 {
+		t.Fatalf("decodeImageDims garbage = %dx%d", w, h)
+	}
 }

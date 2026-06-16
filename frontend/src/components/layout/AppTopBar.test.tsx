@@ -141,6 +141,7 @@ describe('AppTopBar', () => {
     expect(screen.getByTestId('user-menu-about')).toBeInTheDocument();
     expect(screen.getByTestId('user-menu-signout')).toBeInTheDocument();
     expect(screen.getByTestId('user-menu-admin')).toBeInTheDocument();
+    expect(screen.getByTestId('user-menu-webhooks')).toBeInTheDocument();
     expect(screen.getByTestId('user-menu-invite')).toBeInTheDocument();
     expect(screen.getByTestId('user-menu-emojis')).toBeInTheDocument();
     // Theme switching lives inside EditProfileDialog, not the dropdown.
@@ -152,6 +153,7 @@ describe('AppTopBar', () => {
     renderTopBar();
     fireEvent.click(screen.getByTestId('topbar-account'));
     expect(screen.queryByTestId('user-menu-admin')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('user-menu-webhooks')).not.toBeInTheDocument();
     expect(screen.queryByTestId('user-menu-invite')).not.toBeInTheDocument();
     // Non-admin members can still manage emojis.
     expect(screen.getByTestId('user-menu-emojis')).toBeInTheDocument();
@@ -205,9 +207,23 @@ describe('AppTopBar', () => {
     expect(onOpen).toHaveBeenCalled();
   });
 
-  it('omits the channels button entirely when channelsButtonHidden is true', () => {
+  it('keeps the channels button mounted but invisible (space reserved) when channelsButtonHidden is true', () => {
     renderTopBar(<AppTopBar channelsButtonHidden />);
-    expect(screen.queryByLabelText('Open channels')).not.toBeInTheDocument();
+    const button = screen.getByLabelText('Open channels');
+    // Still in the DOM so the grid column keeps its width and the search
+    // bar doesn't shift; just visually hidden and out of the tab order.
+    expect(button).toBeInTheDocument();
+    expect(button).toHaveClass('invisible');
+    expect(button).toHaveAttribute('aria-hidden', 'true');
+    expect(button).toHaveAttribute('tabindex', '-1');
+  });
+
+  it('shows the channels button (visible, focusable) when channelsButtonHidden is false', () => {
+    renderTopBar(<AppTopBar onOpenChannels={vi.fn()} />);
+    const button = screen.getByLabelText('Open channels');
+    expect(button).not.toHaveClass('invisible');
+    expect(button).toHaveAttribute('tabindex', '0');
+    expect(button).not.toHaveAttribute('aria-hidden');
   });
 
   describe('mobile account sheet', () => {

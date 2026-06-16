@@ -49,11 +49,12 @@ export function useBrowseChannels(q?: string) {
   const trimmed = (q ?? '').trim();
   return useQuery({
     queryKey: queryKeys.browseChannels(trimmed),
-    queryFn: () => {
+    queryFn: async () => {
       const url = trimmed
         ? `/api/v1/channels/browse?q=${encodeURIComponent(trimmed)}`
         : '/api/v1/channels/browse';
-      return apiFetch<Channel[]>(url);
+      const res = await apiFetch<Channel[]>(url);
+      return Array.isArray(res) ? res : [];
     },
   });
 }

@@ -1,9 +1,21 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { act, fireEvent, render as rtlRender, screen, waitFor } from '@testing-library/react';
+import { act, render as rtlRender, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 import { GiphyPicker } from './GiphyPicker';
+
+// GiphyPicker renders inside PopoverPortal, whose Motion swipe hook runs a
+// mount animation that hangs jsdom; stub it and capture the swipe-down
+// dismiss callback so the dismiss path can be driven directly (drag
+// physics are unit-tested in useSwipeDismiss.test).
+const swipe = vi.hoisted(() => ({ fire: undefined as (() => void) | undefined }));
+vi.mock('@/hooks/useSwipeDismiss', () => ({
+  useSwipeDismiss: (_dir: string, onDismiss: () => void) => {
+    swipe.fire = onDismiss;
+    return { dismissing: false, motionProps: {} };
+  },
+}));
 
 const giphyFetchMocks = vi.hoisted(() => ({
   search: vi.fn(),
@@ -123,12 +135,6 @@ function setMobileMatch(matches: boolean) {
   });
 }
 
-function swipeDown(element: Element) {
-  fireEvent.touchStart(element, { touches: [{ clientX: 160, clientY: 120 }] });
-  fireEvent.touchMove(element, { touches: [{ clientX: 168, clientY: 230 }] });
-  fireEvent.touchEnd(element, { changedTouches: [{ clientX: 168, clientY: 230 }] });
-}
-
 describe('GiphyPicker', () => {
   beforeEach(() => {
     giphyFetchMocks.search.mockReset();
@@ -224,22 +230,16 @@ describe('GiphyPicker', () => {
     expect(dialog).toHaveStyle({ maxHeight: '50dvh', overscrollBehaviorY: 'contain' });
   });
 
-  it('closes the mobile sheet on swipe down', async () => {
+  it('closes the mobile sheet via the swipe-down dismiss', async () => {
     setMobileMatch(true);
     giphyFetchMocks.trending.mockResolvedValue(sampleResponse);
     const user = userEvent.setup();
     renderPicker(vi.fn());
 
     await user.click(screen.getByText('open gif'));
-    const dialog = await screen.findByRole('dialog');
-    vi.useFakeTimers();
-    swipeDown(dialog);
-
-    expect(dialog).toHaveAttribute('data-swipe-dismissing', 'true');
-    expect(dialog).toHaveClass('translate-y-full');
-    act(() => vi.advanceTimersByTime(180));
-    expect(screen.queryByLabelText('Search GIFs')).toBeNull();
-    vi.useRealTimers();
+    await screen.findByRole('dialog');
+    act(() => swipe.fire?.());
+    await waitFor(() => expect(screen.queryByLabelText('Search GIFs')).toBeNull());
   });
 
   it('reopens the mobile sheet after it was dismissed by swiping down', async () => {
@@ -249,17 +249,13 @@ describe('GiphyPicker', () => {
     renderPicker(vi.fn());
     await user.click(screen.getByText('open gif'));
 
-    const dialog = await screen.findByRole('dialog');
-    vi.useFakeTimers();
-    swipeDown(dialog);
-    act(() => vi.advanceTimersByTime(180));
-    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
-    vi.useRealTimers();
+    await screen.findByRole('dialog');
+    act(() => swipe.fire?.());
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
 
     await user.click(screen.getByText('open gif'));
     const reopened = await screen.findByRole('dialog');
     expect(reopened).toHaveAttribute('data-swipe-dismissing', 'false');
-    expect(reopened).not.toHaveClass('translate-y-full');
   });
 
   it('blurs the search field before closing after GIF selection', async () => {

@@ -25,18 +25,19 @@ type Deps struct {
 	JWT          *auth.JWTManager
 
 	// Optional resource handlers — nil disables the corresponding routes.
-	UserState   *UserStateHandler
-	Upload      *UploadHandler
-	Emoji       *EmojiHandler
-	Presence    *PresenceHandler
-	Attachment  *AttachmentHandler
-	Admin       *AdminHandler
-	Thread      *ThreadHandler
-	Draft       *DraftHandler
-	Version     *VersionHandler
-	Unfurl      *UnfurlHandler
-	Sidebar     *SidebarHandler
-	Search      *SearchHandler
+	UserState  *UserStateHandler
+	Upload     *UploadHandler
+	Emoji      *EmojiHandler
+	Presence   *PresenceHandler
+	Attachment *AttachmentHandler
+	Admin      *AdminHandler
+	Thread     *ThreadHandler
+	Draft      *DraftHandler
+	Version    *VersionHandler
+	Unfurl     *UnfurlHandler
+	Sidebar    *SidebarHandler
+	Search     *SearchHandler
+	Webhook    *WebhookHandler
 
 	// SPA/static.
 	FrontendFS fs.FS

@@ -1,10 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type WheelEvent } from 'react';
 import { useLocation } from 'react-router-dom';
-import { useSwipeable } from 'react-swipeable';
+import { motion, type PanInfo } from 'motion/react';
 import { Sidebar } from './Sidebar';
 import { AppTopBar } from './AppTopBar';
 import { TagSearchProvider } from '@/context/TagSearchContext';
 import { useIsMobile } from '@/hooks/useIsMobile';
+import { useDismissKeyboardOnScroll } from '@/hooks/useDismissKeyboardOnScroll';
+import { blurActiveInput } from '@/lib/blur-input';
+import {
+  channelDragTransform,
+  clampChannelOffset,
+  latchChannelSwipe,
+  shouldCommitChannelSwipe,
+} from '@/lib/channel-swipe';
 import { UpdateBanner } from '@/components/UpdateBanner';
 import { NotificationPermissionBanner } from '@/components/NotificationPermissionBanner';
 
@@ -12,50 +20,28 @@ interface AppLayoutProps {
   children: ReactNode;
 }
 
-// Commit thresholds — pixels OR velocity. A slow deliberate drag
-// past CHANNEL_OPEN_PX_THRESHOLD commits, as does a quick flick that
-// exceeds CHANNEL_OPEN_VELOCITY_THRESHOLD even if the absolute travel
-// is short.
-const CHANNEL_OPEN_PX_THRESHOLD = 80;
-const CHANNEL_OPEN_VELOCITY_THRESHOLD = 0.45;
-// Initial-axis gates so the gesture only kicks in when the user
-// clearly intends a horizontal channel swipe (not a vertical scroll
-// or a chat-area horizontal pan).
-const CHANNEL_OPEN_EDGE_PX = 36;
-const CHANNEL_OPEN_MIN_DELTA_TO_COMMIT = 56;
-// Vertical drift tolerance _before_ the axis lock. After a horizontal
-// drag is committed (passes the axis lock), vertical wobble no
-// longer cancels — that was the source of "the drag glitches /
-// resets mid-flick" complaints.
-const CHANNEL_OPEN_AXIS_LOCK_PX = 12;
-
-function blurActiveInput() {
-  const active = document.activeElement;
-  if (
-    active instanceof HTMLElement &&
-    active.matches('input, textarea, select, [contenteditable="true"], [role="textbox"]')
-  ) {
-    active.blur();
-  }
-}
 
 export function AppLayout({ children }: AppLayoutProps) {
   const location = useLocation();
   const isHome = location.pathname === '/';
   const isMobile = useIsMobile();
+  // Mobile: dragging/scrolling outside the focused field dismisses the keyboard.
+  useDismissKeyboardOnScroll();
   const [manualChannelsOpen, setManualChannelsOpen] = useState(false);
   const [channelDragOffset, setChannelDragOffset] = useState(0);
   const mainRef = useRef<HTMLElement>(null);
   const appHeaderRef = useRef<HTMLDivElement>(null);
   const mobileChannelsOpen = isMobile && (isHome || manualChannelsOpen);
 
+  /* v8 ignore start -- only called from the Motion pan handler, which fires only in a real browser */
   const canOpenChannelsFromGesture = useCallback((eventTarget: EventTarget | null) => {
-    /* istanbul ignore next -- only called when !mobileChannelsOpen; on the home route mobileChannelsOpen is always true on mobile (and onSwiping returns early off mobile), so isHome is never true here */
+    /* istanbul ignore next -- only called when !mobileChannelsOpen; on the home route mobileChannelsOpen is always true on mobile, so isHome is never true here */
     if (isHome) return false;
     if (eventTarget instanceof Element && eventTarget.closest('[data-mobile-right-sidebar="true"]')) return false;
     if (document.querySelector('[data-mobile-right-sidebar="true"]')) return false;
     return true;
   }, [isHome]);
+  /* v8 ignore stop */
 
   const openChannelsWithAnimation = useCallback(() => {
     setChannelDragOffset(0);
@@ -74,85 +60,68 @@ export function AppLayout({ children }: AppLayoutProps) {
   // / impossible to close mid-flick" symptom the user reported.
   const swipeCommittedRef = useRef<'open' | 'close' | null>(null);
 
-  const openChannelsSwipe = useSwipeable({
-    delta: 4,
-    trackMouse: false,
-    // Don't unconditionally preventDefault on every touchmove — that
-    // breaks native vertical scrolling. Our onSwiping callback below
-    // calls event.preventDefault() only AFTER the gesture has latched
-    // onto the horizontal axis, so vertical scrolls pass through.
-    preventScrollOnSwipe: false,
-    touchEventOptions: { passive: false },
-    onSwipeStart: () => {
-      swipeCommittedRef.current = null;
-    },
-    onSwiping: ({ absX, absY, deltaX, event, initial }) => {
+  // Motion pan-gesture replacement for the old react-swipeable channel
+  // drag-to-open. The decision logic lives in lib/channel-swipe (unit
+  // tested); these handlers are thin Motion wiring. Motion's pan needs a
+  // real browser, so the handler bodies are coverage-ignored — the logic
+  // they call is covered in channel-swipe.test.
+  /* v8 ignore start -- Motion's pointer-based pan gesture only fires in a real browser, not jsdom; the decision logic is unit-tested in channel-swipe.test */
+  const onChannelPanStart = useCallback(() => {
+    swipeCommittedRef.current = null;
+  }, []);
+
+  const onChannelPan = useCallback(
+    /* istanbul ignore next -- driven by Motion pan; logic covered in channel-swipe.test */
+    (event: PointerEvent, info: PanInfo) => {
       if (!isMobile) return;
-      const eventTarget = event.target as EventTarget | null;
-
-      // First, decide if the gesture has CLEARLY locked onto the
-      // horizontal axis. Once latched, vertical jitter is ignored so
-      // a slow drag or a long swipe doesn't get cancelled mid-flight.
+      const startX = info.point.x - info.offset.x;
       if (swipeCommittedRef.current === null) {
-        if (absX < CHANNEL_OPEN_AXIS_LOCK_PX) {
-          // Too early to tell — leave the resting transform alone so
-          // the user's finger lift cleanly cancels.
-          return;
-        }
-        if (absY >= absX) {
-          // Vertical drag wins — let native scroll take over.
-          return;
-        }
-        // Latch: which intent does this gesture express?
-        const isEdgeStart = initial[0] <= CHANNEL_OPEN_EDGE_PX;
-        if (!mobileChannelsOpen && deltaX > 0 && isEdgeStart && canOpenChannelsFromGesture(eventTarget)) {
-          swipeCommittedRef.current = 'open';
-          blurActiveInput();
-        } else if (mobileChannelsOpen && deltaX < 0) {
-          swipeCommittedRef.current = 'close';
-          blurActiveInput();
-        } else {
-          return;
-        }
+        const intent = latchChannelSwipe({
+          absX: Math.abs(info.offset.x),
+          absY: Math.abs(info.offset.y),
+          deltaX: info.offset.x,
+          startX,
+          mobileChannelsOpen,
+          canOpen: canOpenChannelsFromGesture(event.target as EventTarget | null),
+        });
+        if (!intent) return;
+        swipeCommittedRef.current = intent;
+        blurActiveInput();
       }
-
-      // Past the latch — follow the finger. iOS swipe-back inertia
-      // can briefly overshoot, so clamp to [-vw, vw].
-      /* istanbul ignore next -- SSR guard; this browser-only app always has window during a touch gesture */
       const viewportWidth = typeof window === 'undefined' ? Infinity : window.innerWidth;
-      let offset = deltaX;
-      if (swipeCommittedRef.current === 'open') {
-        offset = Math.max(0, Math.min(viewportWidth, offset));
-      } else {
-        offset = Math.max(-viewportWidth, Math.min(0, offset));
-      }
-      if (event.cancelable) event.preventDefault();
-      setChannelDragOffset(offset);
+      setChannelDragOffset(clampChannelOffset(swipeCommittedRef.current, info.offset.x, viewportWidth));
     },
-    onSwiped: ({ absX, deltaX, velocity }) => {
+    [isMobile, mobileChannelsOpen, canOpenChannelsFromGesture],
+  );
+
+  const onChannelPanEnd = useCallback(
+    /* istanbul ignore next -- driven by Motion pan; logic covered in channel-swipe.test */
+    (_event: PointerEvent, info: PanInfo) => {
       const committed = swipeCommittedRef.current;
       swipeCommittedRef.current = null;
       if (!committed) {
         setChannelDragOffset(0);
         return;
       }
-      const flicked = velocity > CHANNEL_OPEN_VELOCITY_THRESHOLD;
-      const meetsPixelThreshold = absX >= CHANNEL_OPEN_PX_THRESHOLD;
-      const meetsMinDelta = absX >= CHANNEL_OPEN_MIN_DELTA_TO_COMMIT;
-      const commit = (flicked && meetsMinDelta) || meetsPixelThreshold;
-      if (commit && committed === 'open' && deltaX > 0) {
+      // react-swipeable velocity was px/ms; Motion's is px/s.
+      const commit = shouldCommitChannelSwipe({
+        absX: Math.abs(info.offset.x),
+        velocityPxPerMs: Math.abs(info.velocity.x) / 1000,
+      });
+      if (commit && committed === 'open' && info.offset.x > 0) {
         setManualChannelsOpen(true);
-      } else if (commit && committed === 'close' && deltaX < 0) {
+      } else if (commit && committed === 'close' && info.offset.x < 0) {
         setManualChannelsOpen(false);
       }
       setChannelDragOffset(0);
     },
-  });
-  const { ref: openChannelsSwipeRef, ...openChannelsSwipeHandlers } = openChannelsSwipe;
+    [],
+  );
+  /* v8 ignore stop */
+
   const setMainNode = useCallback((node: HTMLElement | null) => {
     mainRef.current = node;
-    openChannelsSwipeRef(node);
-  }, [openChannelsSwipeRef]);
+  }, []);
   const mobileShellActive = isMobile && (mobileChannelsOpen || channelDragOffset !== 0);
   /* v8 ignore start -- synthetic wheel support differs between jsdom and browsers; browser tests cover visibility around this surface. */
   const forwardHeaderWheel = useCallback((event: WheelEvent<HTMLElement>) => {
@@ -207,19 +176,11 @@ export function AppLayout({ children }: AppLayoutProps) {
   /* v8 ignore stop */
   const mainDragStyle: CSSProperties | undefined = useMemo(() => {
     if (!isMobile) return undefined;
-    if (channelDragOffset !== 0) {
-      // Live drag: blend the gesture delta on top of the resting
-      // open/closed translate. Opening drags from 0 with positive
-      // offset, closing drags from 100vw with negative offset.
-      const restingX = mobileChannelsOpen ? `100vw` : `0px`;
-      const sign = channelDragOffset > 0 ? '+' : '-';
-      const abs = Math.round(Math.abs(channelDragOffset));
-      return {
-        transform: `translate3d(calc(${restingX} ${sign} ${abs}px), 0, 0)`,
-        transition: 'none',
-      };
-    }
-    return { transform: mobileChannelsOpen ? 'translate3d(100vw, 0, 0)' : 'translate3d(0, 0, 0)' };
+    const transform = channelDragTransform(channelDragOffset, mobileChannelsOpen);
+    // The live-drag offset is only ever non-zero during a Motion pan, so
+    // the transition:'none' arm isn't reachable in jsdom.
+    /* istanbul ignore next -- driven by Motion pan; channelDragTransform is unit-tested in channel-swipe.test */
+    return channelDragOffset !== 0 ? { transform, transition: 'none' } : { transform };
   }, [channelDragOffset, isMobile, mobileChannelsOpen]);
 
   return (
@@ -232,7 +193,7 @@ export function AppLayout({ children }: AppLayoutProps) {
           ref={appHeaderRef}
           onWheel={forwardHeaderWheel}
         >
-          <AppTopBar onOpenChannels={openChannelsWithAnimation} channelsButtonHidden={isHome} />
+          <AppTopBar onOpenChannels={openChannelsWithAnimation} channelsButtonHidden={isHome || mobileChannelsOpen} />
         </div>
         <div
           className="relative z-20 shrink-0 bg-sidebar"
@@ -247,6 +208,7 @@ export function AppLayout({ children }: AppLayoutProps) {
           <aside
             className="hidden w-72 shrink-0 bg-sidebar text-sidebar-foreground lg:block"
             data-app-chrome="true"
+            data-keyboard-surface="sidebar"
           >
             <Sidebar onClose={() => undefined} />
           </aside>
@@ -256,21 +218,24 @@ export function AppLayout({ children }: AppLayoutProps) {
               inert={mobileChannelsOpen ? undefined : true}
               data-testid="mobile-channel-sidebar"
               data-app-chrome="true"
+              data-keyboard-surface="sidebar"
             >
               <Sidebar onClose={closeChannels} />
             </aside>
           )}
-          <main
+          <motion.main
             ref={setMainNode}
             className="flex min-h-0 flex-1 flex-col overflow-hidden bg-background max-md:relative max-md:z-10 max-md:touch-pan-y max-md:transform-gpu max-md:transition-transform max-md:duration-200 max-md:ease-out"
             data-app-main="true"
             style={mainDragStyle}
             data-channel-dragging={mobileShellActive ? 'true' : 'false'}
             data-mobile-channels-open={mobileChannelsOpen ? 'true' : 'false'}
-            {...openChannelsSwipeHandlers}
+            onPanStart={onChannelPanStart}
+            onPan={onChannelPan}
+            onPanEnd={onChannelPanEnd}
           >
             {children}
-          </main>
+          </motion.main>
         </div>
       </div>
     </TagSearchProvider>

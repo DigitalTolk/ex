@@ -44,6 +44,7 @@ const markConversationUnread = vi.fn();
 const markThreadNotificationUnread = vi.fn();
 const clearConversationUnread = vi.fn();
 const isActiveConversation = vi.fn(() => false);
+const isActiveThread = vi.fn(() => false);
 const unhideConversation = vi.fn();
 
 vi.mock('@/context/UnreadContext', () => ({
@@ -67,6 +68,8 @@ vi.mock('@/context/UnreadContext', () => ({
     setActiveConversation: vi.fn(),
     isActiveChannel: vi.fn(() => false),
     isActiveConversation,
+    setActiveThread: vi.fn(),
+    isActiveThread,
   }),
 }));
 
@@ -168,6 +171,8 @@ describe('ChatPage WebSocket handlers', () => {
     clearConversationUnread.mockReset();
     isActiveConversation.mockReset();
     isActiveConversation.mockReturnValue(false);
+    isActiveThread.mockReset();
+    isActiveThread.mockReturnValue(false);
     unhideConversation.mockReset();
     vi.mocked(apiFetch).mockReset();
     vi.mocked(apiFetch).mockResolvedValue(undefined);
@@ -336,6 +341,31 @@ describe('ChatPage WebSocket handlers', () => {
     expect(markThreadNotificationUnread).not.toHaveBeenCalled();
     expect(apiFetch).toHaveBeenCalledWith('/api/v1/user-state/threads/channels/ch-1/msg-root/seen', { method: 'PUT' });
     expect(dispatchNotification).toHaveBeenCalled();
+  });
+
+  it('onNotification for a locally-opened thread (no ?thread= URL) does not mark it unread', async () => {
+    // Regression: a thread opened via "Reply in thread" lives in local view
+    // state, not the URL, so isActiveThread must consult the Unread context
+    // scope. Without it, replies to the on-screen thread re-lit the Threads
+    // nav. Here the URL has no thread param but the scope reports it active.
+    isActiveThread.mockReturnValue(true);
+    renderAt('/channel/general');
+
+    await act(async () => {
+      (capturedOptions.onNotification as (d: unknown) => void)({
+        kind: 'thread_reply',
+        parentID: 'ch-1',
+        parentType: 'channel',
+        parentMessageID: 'msg-root',
+        title: 'Alice replied',
+        body: 'hello',
+        createdAt: '2026-04-30T10:10:00Z',
+      });
+      await Promise.resolve();
+    });
+
+    expect(markThreadNotificationUnread).not.toHaveBeenCalled();
+    expect(apiFetch).toHaveBeenCalledWith('/api/v1/user-state/threads/channels/ch-1/msg-root/seen', { method: 'PUT' });
   });
 
   it('onMessageDeleted on a thread reply invalidates that thread + userThreads', () => {
@@ -554,6 +584,13 @@ describe('ChatPage WebSocket handlers', () => {
     expect(() => {
       (capturedOptions.onEmojiAdded as (d: unknown) => void)({});
       (capturedOptions.onEmojiRemoved as (d: unknown) => void)({});
+    }).not.toThrow();
+  });
+
+  it('onWebhookChanged invalidates the incoming-webhooks cache', () => {
+    renderAt('/');
+    expect(() => {
+      (capturedOptions.onWebhookChanged as (d: unknown) => void)({});
     }).not.toThrow();
   });
 

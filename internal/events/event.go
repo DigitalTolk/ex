@@ -58,6 +58,7 @@ const (
 	EventPing               = "ping"
 	EventReplayDone         = "replay.done"      // server → client marker frame after a reconnect replay completes
 	EventReplayExhausted    = "replay.exhausted" // cursor too old / unknown; client must do a full refetch
+	EventWebhookChanged     = "webhook.changed"  // admin incoming-webhook list changed (created/deleted); data-less nudge to refetch
 )
 
 // ephemeralTypes are events that exist only for the live socket — they

@@ -41,4 +41,40 @@ type Message struct {
 	// (legacy messages, intermediate API paths) — clients fall back
 	// to client-side parsing.
 	Rendered *HastNode `json:"rendered,omitempty" dynamodbav:"-"`
+	// Incoming webhook messages can override the displayed author and carry
+	// Mattermost-compatible message attachments. AuthorID remains a stable
+	// bot identifier for notifications/search, while these fields drive rendering.
+	WebhookUsername    string              `json:"webhookUsername,omitempty" dynamodbav:"webhookUsername,omitempty"`
+	WebhookAvatarURL   string              `json:"webhookAvatarURL,omitempty" dynamodbav:"webhookAvatarURL,omitempty"`
+	WebhookIconEmoji   string              `json:"webhookIconEmoji,omitempty" dynamodbav:"webhookIconEmoji,omitempty"` // emoji name (no colons) from icon_emoji; rendered as the avatar
+	MessageAttachments []MessageAttachment `json:"messageAttachments,omitempty" dynamodbav:"messageAttachments,omitempty"`
+}
+
+type MessageAttachment struct {
+	Fallback   string                   `json:"fallback,omitempty" dynamodbav:"fallback,omitempty"`
+	Color      string                   `json:"color,omitempty" dynamodbav:"color,omitempty"`
+	Pretext    string                   `json:"pretext,omitempty" dynamodbav:"pretext,omitempty"`
+	Text       string                   `json:"text,omitempty" dynamodbav:"text,omitempty"`
+	AuthorName string                   `json:"author_name,omitempty" dynamodbav:"authorName,omitempty"`
+	AuthorLink string                   `json:"author_link,omitempty" dynamodbav:"authorLink,omitempty"`
+	AuthorIcon string                   `json:"author_icon,omitempty" dynamodbav:"authorIcon,omitempty"`
+	Title      string                   `json:"title,omitempty" dynamodbav:"title,omitempty"`
+	TitleLink  string                   `json:"title_link,omitempty" dynamodbav:"titleLink,omitempty"`
+	Fields     []MessageAttachmentField `json:"fields,omitempty" dynamodbav:"fields,omitempty"`
+	ImageURL   string                   `json:"image_url,omitempty" dynamodbav:"imageURL,omitempty"`
+	// ImageWidth/ImageHeight are the intrinsic pixel dimensions of the
+	// S3-cached image_url, captured server-side at send time so the
+	// client can render <img width height> and avoid layout shift in the
+	// virtualised message list. Not part of the inbound webhook payload.
+	ImageWidth  int    `json:"image_width,omitempty" dynamodbav:"imageWidth,omitempty"`
+	ImageHeight int    `json:"image_height,omitempty" dynamodbav:"imageHeight,omitempty"`
+	ThumbURL    string `json:"thumb_url,omitempty" dynamodbav:"thumbURL,omitempty"`
+	Footer      string `json:"footer,omitempty" dynamodbav:"footer,omitempty"`
+	FooterIcon  string `json:"footer_icon,omitempty" dynamodbav:"footerIcon,omitempty"`
+}
+
+type MessageAttachmentField struct {
+	Title string `json:"title,omitempty" dynamodbav:"title,omitempty"`
+	Value string `json:"value,omitempty" dynamodbav:"value,omitempty"`
+	Short bool   `json:"short,omitempty" dynamodbav:"short,omitempty"`
 }

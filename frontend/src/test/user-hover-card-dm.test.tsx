@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { act, render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { UserHoverCard } from '@/components/UserHoverCard';
@@ -13,8 +13,9 @@ function renderCard(opts: {
   userId?: string;
   currentUserId?: string;
   online?: boolean;
+  integrationOwnerName?: string;
 } = {}) {
-  const { userId = 'u-other', currentUserId = 'u-me', online } = opts;
+  const { userId = 'u-other', currentUserId = 'u-me', online, integrationOwnerName } = opts;
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={qc}>
@@ -28,6 +29,7 @@ function renderCard(opts: {
                 displayName="Bob"
                 online={online}
                 currentUserId={currentUserId}
+                integrationOwnerName={integrationOwnerName}
               >
                 <span>trigger</span>
               </UserHoverCard>
@@ -54,11 +56,6 @@ function setMobileMatch(matches: boolean) {
   });
 }
 
-function swipeDown(element: Element) {
-  fireEvent.touchStart(element, { touches: [{ clientX: 160, clientY: 120 }] });
-  fireEvent.touchMove(element, { touches: [{ clientX: 168, clientY: 230 }] });
-  fireEvent.touchEnd(element, { changedTouches: [{ clientX: 168, clientY: 230 }] });
-}
 
 describe('UserHoverCard — click-to-open + DM action', () => {
   beforeEach(() => {
@@ -105,21 +102,6 @@ describe('UserHoverCard — click-to-open + DM action', () => {
     });
   });
 
-  it('closes the mobile hover card on swipe down', async () => {
-    setMobileMatch(true);
-    apiFetchMock.mockResolvedValue({ id: 'u-other', displayName: 'Bob', status: 'active' });
-    renderCard();
-    fireEvent.click(screen.getByText('trigger'));
-    const dialog = await screen.findByRole('tooltip');
-
-    vi.useFakeTimers();
-    swipeDown(dialog);
-
-    expect(dialog).toHaveAttribute('data-swipe-dismissing', 'true');
-    expect(dialog).toHaveClass('translate-y-full');
-    act(() => vi.advanceTimersByTime(180));
-    expect(screen.queryByRole('button', { name: /Direct message/i })).toBeNull();
-  });
 
   it('pads the mobile card content away from iPhone rounded corners', async () => {
     setMobileMatch(true);
@@ -145,6 +127,19 @@ describe('UserHoverCard — click-to-open + DM action', () => {
       expect(document.querySelector('[class*="bg-popover"]')).not.toBeNull();
     });
     expect(screen.queryByRole('button', { name: /Direct message/i })).toBeNull();
+  });
+
+  it('renders the minimal integration card with no user fetch or DM action', async () => {
+    renderCard({ integrationOwnerName: 'Alice' });
+    fireEvent.click(screen.getByText('trigger'));
+    expect(await screen.findByTestId('hover-card-integration')).toBeInTheDocument();
+    expect(
+      screen.getByText(/This post was created by an integration from @Alice\./i),
+    ).toBeInTheDocument();
+    // No user record is fetched and no DM/status chrome is shown.
+    expect(apiFetchMock).not.toHaveBeenCalled();
+    expect(screen.queryByRole('button', { name: /Direct message/i })).toBeNull();
+    expect(screen.queryByTestId('hover-card-header')).toBeNull();
   });
 
   it('clicking Direct message creates a conversation and navigates to it', async () => {

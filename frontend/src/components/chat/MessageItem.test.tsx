@@ -602,10 +602,105 @@ describe('MessageItem', () => {
     );
     expect(screen.queryByRole('list', { name: /reactions/i })).not.toBeInTheDocument();
   });
+
+  it('renders Mattermost author overrides and message attachments', () => {
+    renderWithProviders(
+      <MessageItem
+        message={makeMessage({
+          authorID: 'webhook',
+          body: 'Build finished',
+          webhookUsername: 'CI Bot',
+          webhookAvatarURL: '/api/v1/media/bot/avatar.png',
+          messageAttachments: [{
+            color: '#ff8000',
+            pretext: 'Deploy',
+            title: 'Report',
+            title_link: 'https://example.com/report',
+            text: '**Passed**',
+            fields: [{ title: 'Status', value: 'OK', short: true }],
+            image_url: '/api/v1/media/image/report.webp',
+            thumb_url: '/api/v1/media/image/thumb.webp',
+            footer: 'ci',
+          }],
+        })}
+        authorName="Unknown"
+        isOwn={false}
+        currentUserId="user-1"
+      />,
+    );
+    expect(screen.getByText('CI Bot')).toBeInTheDocument();
+    // A webhook message is marked with a BOT badge (anti-phishing parity).
+    expect(screen.getByLabelText('Bot')).toHaveTextContent('BOT');
+    expect(screen.getByTestId('message-rich-attachment')).toBeInTheDocument();
+    expect(screen.getByText('Report')).toHaveAttribute('href', 'https://example.com/report');
+    expect(screen.getByText('Status')).toBeInTheDocument();
+    expect(screen.getByText('OK')).toBeInTheDocument();
+  });
+
+  it('renders an emoji avatar for icon_emoji webhook messages', () => {
+    renderWithProviders(
+      <MessageItem
+        message={makeMessage({
+          authorID: 'webhook',
+          body: 'Ship it',
+          webhookUsername: 'Release Bot',
+          webhookIconEmoji: 'tada',
+        })}
+        authorName="Unknown"
+        isOwn={false}
+        currentUserId="user-1"
+      />,
+    );
+    const emojiAvatar = screen.getByTestId('webhook-emoji-avatar');
+    expect(emojiAvatar).toHaveAttribute('aria-label', ':tada:');
+    // Resolved to the unicode glyph rather than the default user avatar.
+    expect(emojiAvatar).toHaveTextContent('🎉');
+  });
+
+  it('omits the BOT badge for normal user messages', () => {
+    renderWithProviders(
+      <MessageItem
+        message={makeMessage({ body: 'just a person' })}
+        authorName="Alice"
+        isOwn={false}
+        currentUserId="user-1"
+      />,
+    );
+    expect(screen.queryByLabelText('Bot')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('webhook-emoji-avatar')).not.toBeInTheDocument();
+  });
+
+  it('shows the integration profile card and never the creator avatar for webhook posts', () => {
+    renderWithProviders(
+      <MessageItem
+        message={makeMessage({
+          authorID: 'creator-1',
+          body: 'Deploy done',
+          webhookUsername: 'CI Bot',
+        })}
+        // authorName resolves to the creator; authorAvatarURL is the creator's
+        // photo and must NOT be used for the webhook post.
+        authorName="Günter"
+        authorAvatarURL="/api/v1/media/creator/avatar.png"
+        isOwn={false}
+        currentUserId="user-1"
+      />,
+    );
+    // The creator's avatar image is not rendered for the post.
+    expect(document.querySelector('img[src="/api/v1/media/creator/avatar.png"]')).toBeNull();
+
+    // Clicking the name opens the minimal integration card attributed to the creator.
+    fireEvent.click(screen.getByText('CI Bot'));
+    expect(screen.getByTestId('hover-card-integration')).toBeInTheDocument();
+    expect(
+      screen.getByText(/This post was created by an integration from @Günter\./i),
+    ).toBeInTheDocument();
+  });
 });
 
 // Server-backed frequently-used shelf: stub so opening the picker never hits the network.
 vi.mock('@/lib/emoji-frequency', () => ({
+  EMOJI_FREQUENCY_CHANGED_EVENT: 'emoji-frequency-changed',
   getFrequentEmojis: vi.fn(async () => []),
   recordEmojiUse: vi.fn(async () => {}),
 }));

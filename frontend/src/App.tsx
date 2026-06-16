@@ -15,6 +15,7 @@ import { ChannelView } from '@/components/chat/ChannelView';
 import { ConversationView } from '@/components/chat/ConversationView';
 import DirectoriesPage from '@/pages/DirectoriesPage';
 import AdminPage from '@/pages/AdminPage';
+import IncomingWebhooksPage from '@/pages/IncomingWebhooksPage';
 import CustomEmojiPage from '@/pages/CustomEmojiPage';
 import NewConversationPage from '@/pages/NewConversationPage';
 import ThreadsPage from '@/pages/ThreadsPage';
@@ -90,6 +91,7 @@ function AppRoutes() {
         <Route path="threads" element={<ThreadsPage />} />
         <Route path="drafts" element={<DraftsPage />} />
         <Route path="admin" element={<AdminPage />} />
+        <Route path="webhooks" element={<IncomingWebhooksPage />} />
         <Route path="emojis" element={<CustomEmojiPage />} />
         <Route path="channel/:id" element={<ChannelView />} />
         <Route path="conversations/new" element={<NewConversationPage />} />

@@ -62,7 +62,7 @@ export function ChannelView() {
   const { user } = useAuth();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const { clearChannelUnread, setActiveChannel } = useUnread();
+  const { clearChannelUnread, setActiveChannel, setActiveThread } = useUnread();
   const { setActiveParent } = useNotifications();
   const { online } = usePresence();
   const quickReactions = useFrequentEmojis(3);
@@ -256,6 +256,14 @@ export function ChannelView() {
   useEffect(() => {
     if (effectiveThreadRootID) panels.close();
   }, [effectiveThreadRootID, panels]);
+
+  // Register the open thread (URL- or locally-driven) as the active thread
+  // so a reply arriving while it's on screen is marked seen instead of
+  // lighting up the Threads nav.
+  useEffect(() => {
+    setActiveThread(effectiveThreadRootID);
+    return () => setActiveThread(null);
+  }, [effectiveThreadRootID, setActiveThread]);
 
   // If the current user is no longer a member of the open channel (e.g.
   // they were just removed by an admin), boot them back to the placeholder

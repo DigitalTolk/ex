@@ -10,6 +10,7 @@ import {
   UserPlus,
   Smile,
   ServerCog,
+  Webhook,
 } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
@@ -130,6 +131,13 @@ export function AppTopBar({ onOpenChannels, channelsButtonHidden }: AppTopBarPro
     ...(isAdmin(user?.systemRole)
       ? [
           {
+            key: 'webhooks',
+            icon: <Webhook className="h-4 w-4" />,
+            label: 'Incoming webhooks',
+            onSelect: () => navigate('/webhooks'),
+            testID: 'user-menu-webhooks',
+          } satisfies MenuAction,
+          {
             key: 'admin',
             icon: <Settings className="h-4 w-4" />,
             label: 'Admin',
@@ -190,20 +198,27 @@ export function AppTopBar({ onOpenChannels, channelsButtonHidden }: AppTopBarPro
         data-app-chrome="true"
       >
         <div className="flex items-center">
-          {/* Drop the channels button entirely on the home/start page —
-              there the channel list is already the main view, so it has
-              nothing to open. */}
-          {!channelsButtonHidden && (
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={onOpenChannels}
-              aria-label="Open channels"
-              className="h-7 w-7 max-md:h-10 max-md:w-10 text-sidebar-foreground hover:bg-sidebar-accent lg:hidden"
-            >
-              <Menu className="h-4 w-4 max-md:h-5 max-md:w-5" />
-            </Button>
-          )}
+          {/* The hamburger shows whenever the channel sidebar isn't already
+              open (mobile drawer closed, or tablet md–lg which has no
+              permanent sidebar). When it should be hidden — drawer open, or
+              the home/start page where the channel list is the main view —
+              we keep it mounted but `invisible` so the column's box never
+              changes width and the centred search bar can't shift/resize.
+              It's dropped only on desktop (lg+) where the sidebar is
+              permanent. */}
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={onOpenChannels}
+            aria-label="Open channels"
+            aria-hidden={channelsButtonHidden || undefined}
+            tabIndex={channelsButtonHidden ? -1 : 0}
+            className={`h-7 w-7 text-sidebar-foreground hover:bg-sidebar-accent lg:hidden ${
+              channelsButtonHidden ? 'invisible' : ''
+            }`}
+          >
+            <Menu className="h-4 w-4" />
+          </Button>
         </div>
 
         <div className="min-w-0 w-full">

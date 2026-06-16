@@ -52,6 +52,19 @@ export default defineConfig({
         // Pure URL-scheme guard — exhaustively unit-tested in the jsdom suite
         // (url-safety.test.ts); graded there, not here.
         'src/lib/url-safety.ts',
+        // Webhook rich-attachment renderer — exhaustively unit-tested in the
+        // jsdom suite (MessageRichAttachments.test.tsx). It is pulled into the
+        // browser run transitively via MessageItem, but its webhook-attachment
+        // branches aren't exercised there; graded in jsdom, not here.
+        'src/components/chat/MessageRichAttachments.tsx',
+        // Gesture/keyboard helpers — unit-tested in the jsdom suite
+        // (useSwipeDismiss.test, useDismissKeyboardOnScroll.test,
+        // blur-input.test). Motion's pointer-based drag isn't exercisable
+        // in jsdom and the helpers are mocked in browser component tests, so
+        // they're pulled into the browser graph but graded in jsdom only.
+        'src/hooks/useSwipeDismiss.ts',
+        'src/hooks/useDismissKeyboardOnScroll.ts',
+        'src/lib/blur-input.ts',
       ],
       // 99% branch gate over the merged desktop + mobile browser run.
       // vitest enforces it (non-zero exit), so `npm run

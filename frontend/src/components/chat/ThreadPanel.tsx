@@ -4,10 +4,12 @@ import { MessageInput, type MessageInputHandle } from './MessageInput';
 import { MessageDropZone } from './MessageDropZone';
 import { ThreadTypingIndicator } from './TypingIndicator';
 import { Button } from '@/components/ui/button';
-import { Bell, BellOff, X } from 'lucide-react';
+import { Bell, BellOff, ArrowRight } from 'lucide-react';
 import { useAtBottomRef } from '@/hooks/useAtBottomRef';
-import { useAnimatedSwipeDismiss } from '@/hooks/useAnimatedSwipeDismiss';
+import { motion } from 'motion/react';
+import { useSwipeDismiss } from '@/hooks/useSwipeDismiss';
 import { useAttachmentsBatch } from '@/hooks/useAttachments';
+import { useFrequentEmojis } from '@/hooks/useEmoji';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { useEditMessage, useSendMessage, type SendMessageInput } from '@/hooks/useMessages';
 import { markThreadSeen, useFollowThread, useThreadMessages, useUnfollowThread, useUserThreads } from '@/hooks/useThreads';
@@ -56,8 +58,12 @@ export function ThreadPanel({
   anchorRevision,
 }: ThreadPanelProps) {
   const { data, isLoading } = useThreadMessages({ channelId, conversationId, threadRootID });
-  const { dismissing, dragStyle, swipeHandlers } = useAnimatedSwipeDismiss('right', onClose);
+  const { dismissing, settled, motionProps } = useSwipeDismiss('right', onClose);
   const isMobile = useIsMobile();
+  // Most-used emoji shelf for the message action bar — same source the
+  // channel/conversation message lists use, so the thread sidebar shows
+  // (and live-reorders) the same popular reactions.
+  const quickReactions = useFrequentEmojis(3);
   const [editingMessage, setEditingMessage] = useState<Message | null>(null);
   const activeEditingMessage = isMobile ? editingMessage : null;
 
@@ -414,13 +420,12 @@ export function ThreadPanel({
   );
 
   return (
-    <aside
-      className={`mobile-right-sidebar-enter flex w-[28rem] flex-col border-l bg-background max-md:fixed max-md:inset-x-0 max-md:bottom-0 max-md:top-[var(--mobile-right-panel-top,6rem)] max-md:z-40 max-md:w-auto max-md:touch-pan-y max-md:transform-gpu max-md:transition-transform max-md:duration-200 max-md:ease-out ${dismissing ? 'max-md:translate-x-full' : ''}`}
+    <motion.aside
+      className={`flex w-[28rem] flex-col bg-background md:border-l max-md:fixed max-md:inset-x-0 max-md:bottom-0 max-md:top-[var(--mobile-right-panel-top,6rem)] max-md:z-40 max-md:w-auto max-md:touch-pan-y ${settled ? '' : 'border-l'}`}
       aria-label="Thread"
       data-mobile-right-sidebar="true"
-      data-swipe-dismissing={dismissing ? 'true' : 'false'}
-      style={dragStyle}
-      {...swipeHandlers}
+      data-swipe-dismissing={String(dismissing)}
+      {...motionProps}
     >
       <div className="flex items-center justify-between border-b px-4 py-3">
         <h2 className="text-sm font-semibold">Thread</h2>
@@ -452,7 +457,7 @@ export function ThreadPanel({
             onClick={onClose}
             aria-label="Close thread"
           >
-            <X className="h-4 w-4" />
+            <ArrowRight className="h-4 w-4" />
           </Button>
         </div>
       </div>
@@ -480,6 +485,7 @@ export function ThreadPanel({
                   currentUserId={currentUserId}
                   userMap={userLookup}
                   inThread
+                  quickReactions={quickReactions}
                   onEditMessage={isMobile ? setEditingMessage : undefined}
                 />
               );
@@ -514,6 +520,6 @@ export function ThreadPanel({
           />
         )}
       </MessageDropZone>
-    </aside>
+    </motion.aside>
   );
 }

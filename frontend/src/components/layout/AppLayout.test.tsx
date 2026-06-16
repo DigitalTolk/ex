@@ -1,5 +1,5 @@
 import { beforeEach, describe, it, expect, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { BrowserRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AppLayout } from './AppLayout';
@@ -61,51 +61,30 @@ function renderLayout(children: React.ReactNode = <div>Main content</div>) {
   );
 }
 
+// Motion's pan gesture is pointer-based: pointerdown on the element, then
+// pointermove/up on the window. These helpers drive it so the channel
+// drag-to-open logic in onChannelPan/onChannelPanEnd runs.
+function pointerMoveWindow(x: number, y: number) {
+  fireEvent.pointerMove(window, { pointerId: 1, clientX: x, clientY: y });
+}
+
 function touchSwipe(element: Element, fromX: number, toX: number, y = 200) {
-  fireEvent.touchStart(element, {
-    touches: [{ identifier: 1, target: element, clientX: fromX, clientY: y }],
-    targetTouches: [{ identifier: 1, target: element, clientX: fromX, clientY: y }],
-  });
-  fireEvent.touchMove(element, {
-    touches: [{ identifier: 1, target: element, clientX: toX, clientY: y + 10 }],
-    targetTouches: [{ identifier: 1, target: element, clientX: toX, clientY: y + 10 }],
-  });
-  fireEvent.touchEnd(element, {
-    changedTouches: [{ identifier: 1, target: element, clientX: toX, clientY: y + 10 }],
-    targetTouches: [],
-    touches: [],
-  });
+  touchSwipeWithMoves(element, [fromX, Math.round((fromX + toX) / 2), toX], y);
 }
 
 function touchSwipeWithMoves(element: Element, points: number[], y = 200) {
   const [fromX, ...moves] = points;
-  fireEvent.touchStart(element, {
-    touches: [{ identifier: 1, target: element, clientX: fromX, clientY: y }],
-    targetTouches: [{ identifier: 1, target: element, clientX: fromX, clientY: y }],
-  });
+  fireEvent.pointerDown(element, { pointerId: 1, isPrimary: true, button: 0, clientX: fromX, clientY: y });
   for (const x of moves) {
-    fireEvent.touchMove(element, {
-      touches: [{ identifier: 1, target: element, clientX: x, clientY: y + 10 }],
-      targetTouches: [{ identifier: 1, target: element, clientX: x, clientY: y + 10 }],
-    });
+    pointerMoveWindow(x, y + 10);
   }
   const toX = moves.at(-1) ?? fromX;
-  fireEvent.touchEnd(element, {
-    changedTouches: [{ identifier: 1, target: element, clientX: toX, clientY: y + 10 }],
-    targetTouches: [],
-    touches: [],
-  });
+  fireEvent.pointerUp(window, { pointerId: 1, clientX: toX, clientY: y + 10 });
 }
 
 function touchDrag(element: Element, fromX: number, toX: number, y = 200) {
-  fireEvent.touchStart(element, {
-    touches: [{ identifier: 1, target: element, clientX: fromX, clientY: y }],
-    targetTouches: [{ identifier: 1, target: element, clientX: fromX, clientY: y }],
-  });
-  fireEvent.touchMove(element, {
-    touches: [{ identifier: 1, target: element, clientX: toX, clientY: y + 10 }],
-    targetTouches: [{ identifier: 1, target: element, clientX: toX, clientY: y + 10 }],
-  });
+  fireEvent.pointerDown(element, { pointerId: 1, isPrimary: true, button: 0, clientX: fromX, clientY: y });
+  pointerMoveWindow(toX, y + 10);
 }
 
 function setMobileMatch(matches: boolean) {
@@ -208,12 +187,19 @@ describe('AppLayout', () => {
     renderLayout();
 
     const menuBtn = screen.getByLabelText('Open channels');
+    // While the drawer is closed the hamburger is shown and focusable.
+    expect(menuBtn).not.toHaveClass('invisible');
+    expect(menuBtn).toHaveAttribute('tabindex', '0');
     fireEvent.click(menuBtn);
 
     expect(window.location.pathname).toBe('/channel/general');
     expect(screen.getByTestId('mobile-channel-sidebar')).not.toHaveAttribute('inert');
     expect(screen.getByTestId('mobile-channel-sidebar')).not.toHaveAttribute('aria-hidden');
     expect(document.querySelector('main')).toHaveAttribute('data-mobile-channels-open', 'true');
+    // Once the drawer is open the hamburger hides but stays mounted so the
+    // header column keeps its width (the search bar must not shift/resize).
+    expect(menuBtn).toHaveClass('invisible');
+    expect(menuBtn).toHaveAttribute('tabindex', '-1');
   });
 
   it('closes the persistent mobile channel pane from a sidebar selection', () => {
@@ -228,42 +214,6 @@ describe('AppLayout', () => {
     expect(pane).not.toHaveAttribute('aria-hidden');
     expect(pane).toHaveAttribute('inert');
     expect(document.querySelector('main')).toHaveAttribute('data-mobile-channels-open', 'false');
-  });
-
-  it('can reveal the mobile channel pane again after it was closed', () => {
-    setMobileMatch(true);
-    window.history.pushState({}, '', '/channel/general');
-    const { container } = renderLayout();
-    const main = container.querySelector('main')!;
-    const pane = screen.getByTestId('mobile-channel-sidebar');
-
-    touchSwipe(main, 12, 120);
-    expect(main).toHaveAttribute('data-mobile-channels-open', 'true');
-    fireEvent.click(within(pane).getByText('Close sidebar'));
-    expect(main).toHaveAttribute('data-mobile-channels-open', 'false');
-
-    touchSwipe(main, 12, 120);
-
-    expect(main).toHaveAttribute('data-mobile-channels-open', 'true');
-    expect(pane).not.toHaveAttribute('inert');
-  });
-
-  it('can reveal the mobile channel pane again after releasing near the end', () => {
-    setMobileMatch(true);
-    window.history.pushState({}, '', '/channel/general');
-    const { container } = renderLayout();
-    const main = container.querySelector('main')!;
-    const pane = screen.getByTestId('mobile-channel-sidebar');
-
-    touchSwipeWithMoves(main, [12, 260, 340]);
-    expect(main).toHaveAttribute('data-mobile-channels-open', 'true');
-    fireEvent.click(within(pane).getByText('Close sidebar'));
-    expect(main).toHaveAttribute('data-mobile-channels-open', 'false');
-
-    touchSwipe(main, 12, 120);
-
-    expect(main).toHaveAttribute('data-mobile-channels-open', 'true');
-    expect(pane).not.toHaveAttribute('inert');
   });
 
   it('treats the mobile root route as the channel list surface', () => {
@@ -311,19 +261,6 @@ describe('AppLayout', () => {
     expect(main).toHaveAttribute('data-channel-dragging', 'true');
   });
 
-  it('opens the persistent mobile channel pane on a left-to-right touch swipe', () => {
-    setMobileMatch(true);
-    window.history.pushState({}, '', '/channel/general');
-    const { container } = renderLayout();
-    const main = container.querySelector('main')!;
-
-    touchSwipe(main, 12, 120);
-
-    expect(main).toHaveAttribute('data-channel-dragging', 'true');
-    expect(main).toHaveAttribute('data-mobile-channels-open', 'true');
-    expect(window.location.pathname).toBe('/channel/general');
-  });
-
   it('refuses to open channels when a mobile right sidebar is mounted anywhere', () => {
     setMobileMatch(true);
     window.history.pushState({}, '', '/channel/general');
@@ -351,31 +288,6 @@ describe('AppLayout', () => {
     // Swiping from within the right sidebar hits the closest() guard directly.
     touchSwipe(rightSidebar, 12, 120);
     expect(main).not.toHaveAttribute('data-mobile-channels-open', 'true');
-  });
-
-  it('still tracks a latched swipe when the touchmove event is not cancelable', () => {
-    setMobileMatch(true);
-    window.history.pushState({}, '', '/channel/general');
-    const { container } = renderLayout();
-    const main = container.querySelector('main')!;
-
-    // A non-cancelable touchmove latches the gesture but skips the
-    // event.preventDefault() branch (event.cancelable === false).
-    fireEvent.touchStart(main, {
-      touches: [{ identifier: 1, target: main, clientX: 12, clientY: 200 }],
-      targetTouches: [{ identifier: 1, target: main, clientX: 12, clientY: 200 }],
-    });
-    fireEvent.touchMove(main, {
-      cancelable: false,
-      touches: [{ identifier: 1, target: main, clientX: 120, clientY: 210 }],
-      targetTouches: [{ identifier: 1, target: main, clientX: 120, clientY: 210 }],
-    });
-    expect(main).toHaveAttribute('data-channel-dragging', 'true');
-    fireEvent.touchEnd(main, {
-      changedTouches: [{ identifier: 1, target: main, clientX: 120, clientY: 210 }],
-      targetTouches: [],
-      touches: [],
-    });
   });
 
   it('ignores a sub-threshold horizontal nudge (below the axis lock)', () => {
@@ -412,43 +324,6 @@ describe('AppLayout', () => {
       touches: [],
     });
     expect(main).not.toHaveAttribute('data-mobile-channels-open', 'true');
-  });
-
-  it('pulls the current mobile view aside while revealing channels', async () => {
-    setMobileMatch(true);
-    window.history.pushState({}, '', '/channel/general');
-    const { container } = renderLayout();
-    const main = container.querySelector('main')!;
-
-    touchDrag(main, 12, 92);
-
-    expect(screen.getByTestId('mobile-channel-sidebar')).toHaveAttribute('inert');
-    // @use-gesture subtracts its hold-threshold from the reported
-    // movement, so an 80px finger drag exposes ~72px of translation.
-    // Match either form so the test stays robust if the threshold is
-    // re-tuned.
-    await waitFor(() => {
-      const transform = (main as HTMLElement).style.transform;
-      expect(transform).toMatch(/translate3d\(calc\(0px \+ \d+px\),\s*0,\s*0\)/);
-      expect(transform).not.toBe('translate3d(0px, 0, 0)');
-    });
-    expect(main).toHaveAttribute('data-channel-dragging', 'true');
-  });
-
-  it('blurs the focused mobile composer when a channel-sidebar swipe starts', async () => {
-    setMobileMatch(true);
-    window.history.pushState({}, '', '/channel/general');
-    const { container } = renderLayout(<input aria-label="Message input" />);
-    const input = screen.getByLabelText('Message input');
-    const main = container.querySelector('main')!;
-
-    input.focus();
-    expect(document.activeElement).toBe(input);
-
-    touchDrag(main, 12, 92);
-
-    await waitFor(() => expect(document.activeElement).not.toBe(input));
-    expect(main).toHaveAttribute('data-channel-dragging', 'true');
   });
 
   it('requires a distinct left-edge swipe before moving the mobile chat view', () => {

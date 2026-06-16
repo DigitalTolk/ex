@@ -24,6 +24,11 @@ interface UserHoverCardProps {
   currentUserId?: string;
   showInlineStatus?: boolean;
   triggerClassName?: string;
+  // When set, the card renders the minimal "integration" variant: the
+  // display name + "This post was created by an integration from @owner",
+  // with no status/email/timezone/DM fields and no user fetch. Used for
+  // incoming-webhook posts so they read as an integration, not the creator.
+  integrationOwnerName?: string;
   children: ReactNode;
 }
 
@@ -36,6 +41,7 @@ export function UserHoverCard({
   currentUserId,
   showInlineStatus = true,
   triggerClassName = 'inline-flex cursor-pointer items-center gap-1 align-middle',
+  integrationOwnerName,
   children,
 }: UserHoverCardProps) {
   const [open, setOpen] = useState(false);
@@ -66,7 +72,7 @@ export function UserHoverCard({
   const { data: userDetails } = useQuery<Partial<User>>({
     queryKey: queryKeys.user(userId),
     queryFn: () => apiFetch<Partial<User>>(`/api/v1/users/${userId}`),
-    enabled: open,
+    enabled: open && !integrationOwnerName,
     staleTime: 30_000,
   });
   const inactive = userDetails?.status === 'deactivated';
@@ -91,7 +97,7 @@ export function UserHoverCard({
         }}
       >
         {children}
-        {showInlineStatus && <UserStatusIndicator status={effectiveStatus} />}
+        {showInlineStatus && !integrationOwnerName && <UserStatusIndicator status={effectiveStatus} />}
       </span>
       <PopoverPortal
         open={open}
@@ -105,6 +111,25 @@ export function UserHoverCard({
         mobileSheet
         className="w-72 rounded-md border bg-popover p-3 shadow-lg max-md:w-screen max-md:max-w-none max-md:rounded-b-none max-md:rounded-t-xl max-md:border-b-0 max-md:pb-[calc(env(safe-area-inset-bottom)+0.75rem)] max-md:pl-[max(0.75rem,env(safe-area-inset-left))] max-md:pr-[max(0.75rem,env(safe-area-inset-right))]"
       >
+        {integrationOwnerName ? (
+          <div data-testid="hover-card-integration">
+            <div className="flex items-start gap-3">
+              <Avatar className="h-12 w-12">
+                {avatarURL && <AvatarImage src={avatarURL} alt="" />}
+                <AvatarFallback className="bg-primary/10 text-sm">
+                  {getInitials(displayName)}
+                </AvatarFallback>
+              </Avatar>
+              <div className="flex-1 min-w-0">
+                <p className="truncate text-sm font-semibold">{displayName}</p>
+                <p className="text-xs text-muted-foreground">Integration</p>
+              </div>
+            </div>
+            <p className="mt-3 text-sm leading-snug text-muted-foreground">
+              This post was created by an integration from @{integrationOwnerName}.
+            </p>
+          </div>
+        ) : (
         <div>
           <div data-testid="hover-card-header" className="flex items-start gap-3">
             <div className="relative">
@@ -197,6 +222,7 @@ export function UserHoverCard({
             </Button>
           )}
         </div>
+        )}
       </PopoverPortal>
     </>
   );

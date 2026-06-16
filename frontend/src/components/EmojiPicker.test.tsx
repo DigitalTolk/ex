@@ -4,6 +4,18 @@ import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { EmojiPicker } from './EmojiPicker';
 
+// EmojiPicker renders inside PopoverPortal, whose Motion swipe hook runs a
+// mount animation that hangs jsdom; stub it and capture the swipe-down
+// dismiss callback so the dismiss path can be driven directly (drag
+// physics are unit-tested in useSwipeDismiss.test).
+const swipe = vi.hoisted(() => ({ fire: undefined as (() => void) | undefined }));
+vi.mock('@/hooks/useSwipeDismiss', () => ({
+  useSwipeDismiss: (_dir: string, onDismiss: () => void) => {
+    swipe.fire = onDismiss;
+    return { dismissing: false, motionProps: {} };
+  },
+}));
+
 const authMock = vi.hoisted(() => ({
   user: {
     id: 'u-1',
@@ -35,6 +47,7 @@ vi.mock('@/lib/api', () => ({
 const freqRef = vi.hoisted(() => ({ value: [] as string[] }));
 const recordMock = vi.hoisted(() => vi.fn());
 vi.mock('@/lib/emoji-frequency', () => ({
+  EMOJI_FREQUENCY_CHANGED_EVENT: 'emoji-frequency-changed',
   // Mirror the server's limit-honouring slice so the desktop/mobile row caps
   // are exercised here exactly as in production.
   getFrequentEmojis: vi.fn(async (limit: number) => freqRef.value.slice(0, limit)),
@@ -58,12 +71,6 @@ function setMobileMatch(matches: boolean) {
       removeListener: vi.fn(),
     })),
   });
-}
-
-function swipeDown(element: Element) {
-  fireEvent.touchStart(element, { touches: [{ clientX: 160, clientY: 120 }] });
-  fireEvent.touchMove(element, { touches: [{ clientX: 168, clientY: 230 }] });
-  fireEvent.touchEnd(element, { changedTouches: [{ clientX: 168, clientY: 230 }] });
 }
 
 function seedFrequency(shortcodes: string[]) {
@@ -252,22 +259,16 @@ describe('EmojiPicker', () => {
     Object.defineProperty(window, 'matchMedia', { configurable: true, value: originalMatchMedia });
   });
 
-  it('closes the mobile sheet on swipe down', async () => {
+  it('closes the mobile sheet via the swipe-down dismiss', async () => {
     const originalMatchMedia = window.matchMedia;
     setMobileMatch(true);
     const user = userEvent.setup();
     render(<EmojiPicker onSelect={vi.fn()} />);
     await user.click(screen.getByRole('button', { name: /open emoji picker/i }));
 
-    const dialog = screen.getByRole('dialog');
-    vi.useFakeTimers();
-    swipeDown(dialog);
-
-    expect(dialog).toHaveAttribute('data-swipe-dismissing', 'true');
-    expect(dialog).toHaveClass('translate-y-full');
-    act(() => vi.advanceTimersByTime(180));
-    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
-    vi.useRealTimers();
+    screen.getByRole('dialog');
+    act(() => swipe.fire?.());
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
     Object.defineProperty(window, 'matchMedia', { configurable: true, value: originalMatchMedia });
   });
 
@@ -278,34 +279,14 @@ describe('EmojiPicker', () => {
     render(<EmojiPicker onSelect={vi.fn()} />);
     await user.click(screen.getByRole('button', { name: /open emoji picker/i }));
 
-    const dialog = screen.getByRole('dialog');
-    vi.useFakeTimers();
-    swipeDown(dialog);
-    act(() => vi.advanceTimersByTime(180));
-    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
-    vi.useRealTimers();
+    screen.getByRole('dialog');
+    act(() => swipe.fire?.());
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
 
     await user.click(screen.getByRole('button', { name: /open emoji picker/i }));
     const reopened = screen.getByRole('dialog');
     expect(reopened).toBeInTheDocument();
     expect(reopened).toHaveAttribute('data-swipe-dismissing', 'false');
-    expect(reopened).not.toHaveClass('translate-y-full');
-    Object.defineProperty(window, 'matchMedia', { configurable: true, value: originalMatchMedia });
-  });
-
-  it('keeps the mobile sheet open on a diagonal downward swipe', async () => {
-    const originalMatchMedia = window.matchMedia;
-    setMobileMatch(true);
-    const user = userEvent.setup();
-    render(<EmojiPicker onSelect={vi.fn()} />);
-    await user.click(screen.getByRole('button', { name: /open emoji picker/i }));
-
-    const dialog = screen.getByRole('dialog');
-    fireEvent.touchStart(dialog, { touches: [{ clientX: 80, clientY: 120 }] });
-    fireEvent.touchMove(dialog, { touches: [{ clientX: 180, clientY: 230 }] });
-    fireEvent.touchEnd(dialog, { changedTouches: [{ clientX: 180, clientY: 230 }] });
-
-    expect(screen.getByRole('dialog')).toBeInTheDocument();
     Object.defineProperty(window, 'matchMedia', { configurable: true, value: originalMatchMedia });
   });
 

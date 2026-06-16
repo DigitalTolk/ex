@@ -29,19 +29,14 @@ vi.mock('@/lib/api', () => ({
   },
 }));
 
-// Swipe state is mockable so the `dismissing ? … : …` className +
-// data-swipe-dismissing arms (lines 396, 399) can be driven directly.
-const swipeState = vi.hoisted(() => ({ dismissing: false }));
-vi.mock('@/hooks/useAnimatedSwipeDismiss', () => ({
-  useAnimatedSwipeDismiss: () => ({
-    dismissing: swipeState.dismissing,
-    dragOffset: 0,
-    dragStyle: undefined,
-    swipeHandlers: {},
-  }),
+// Swipe state is mockable so both arms of the data-swipe-dismissing
+// attribute can be driven directly. Drag physics: useSwipeDismiss.test.
+const swipeState = vi.hoisted(() => ({ dismissing: false, settled: true }));
+vi.mock('@/hooks/useSwipeDismiss', () => ({
+  useSwipeDismiss: () => ({ dismissing: swipeState.dismissing, settled: swipeState.settled, motionProps: {} }),
 }));
 
-vi.mock('@/hooks/useEmoji', () => ({ useEmojis: () => ({ data: [] }), useEmojiMap: () => ({ data: {} }) }));
+vi.mock('@/hooks/useEmoji', () => ({ useEmojis: () => ({ data: [] }), useEmojiMap: () => ({ data: {} }), useFrequentEmojis: () => ['thumbsup', 'heart', 'tada'] }));
 
 let usersBatchData: Array<{ id: string; displayName: string; avatarURL?: string }> = [];
 vi.mock('@/hooks/useUsersBatch', () => ({
@@ -302,7 +297,6 @@ describe('ThreadPanel real-scroll coverage', () => {
     active = result;
     const aside = document.querySelector('aside[aria-label="Thread"]') as HTMLElement;
     expect(aside.getAttribute('data-swipe-dismissing')).toBe('true');
-    expect(aside.className).toContain('max-md:translate-x-full');
   });
 
   it('ignores a load event when the reader has scrolled away from the bottom', async () => {

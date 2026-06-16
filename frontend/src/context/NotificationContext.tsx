@@ -102,6 +102,23 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   const prefsRef = useLatestRef(prefs);
   const permissionRef = useLatestRef(permission);
   const initialMountRef = useRef(true);
+  // Whether the app window currently has OS focus. `visibilityState` alone
+  // isn't enough: a desktop-app (or browser) window that's been pushed to
+  // the background but not minimized stays `visible`, so a DM to the open
+  // conversation would be wrongly suppressed while the user is looking at
+  // another app. Window focus/blur is what actually tracks "is the app
+  // active". Assume focused at start (the app launches in the foreground).
+  const appFocusedRef = useRef(true);
+  useEffect(() => {
+    const onFocus = () => { appFocusedRef.current = true; };
+    const onBlur = () => { appFocusedRef.current = false; };
+    window.addEventListener('focus', onFocus);
+    window.addEventListener('blur', onBlur);
+    return () => {
+      window.removeEventListener('focus', onFocus);
+      window.removeEventListener('blur', onBlur);
+    };
+  }, []);
 
   useEffect(() => {
     if (initialMountRef.current) {
@@ -148,13 +165,17 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     if (n.parentType === 'channel' && n.kind === 'message') {
       return;
     }
-    // Regular DM notifications are suppressed only for this visible tab's
-    // active conversation. Background tabs/windows still need the alert.
+    // Regular DM notifications are suppressed only when the user is actually
+    // looking at that conversation — i.e. the app is active (window focused
+    // *and* visible) and that DM is the on-screen conversation. A
+    // backgrounded/blurred window (even if still "visible") or any other
+    // active conversation still gets the alert.
     if (
       n.kind === 'message' &&
       activeParentRef.current &&
       activeParentRef.current === n.parentID &&
-      document.visibilityState === 'visible'
+      document.visibilityState === 'visible' &&
+      appFocusedRef.current
     ) {
       return;
     }

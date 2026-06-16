@@ -189,8 +189,22 @@
   --safe-right: env(safe-area-inset-right);
   /* Read by ex-mobile to paint the strip between the composer and
    * the OS keyboard. Aliased to --color-background so light/dark
-   * track automatically. */
+   * track automatically. The token inherits, so surfaces that host a
+   * focused field above the keyboard (dialogs, the sidebar) override it
+   * below so the strip matches that surface, not the chat background. */
   --ex-keyboard-background: var(--color-background);
+}
+
+/* Full-screen mobile dialogs (set status, edit profile, …) sit on the
+ * popover surface, which differs from the chat background in dark mode —
+ * keep the keyboard strip matching the dialog. */
+[data-slot='dialog-content'] {
+  --ex-keyboard-background: var(--color-popover);
+}
+
+/* The sidebar (incl. its search field) is the sidebar surface. */
+[data-keyboard-surface='sidebar'] {
+  --ex-keyboard-background: var(--color-sidebar);
 }
 
 @utility pt-safe-top {
@@ -559,34 +573,5 @@
     border-radius: 0.25rem;
     font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
     font-size: 0.875rem;
-  }
-
-  @media (max-width: 767px) {
-    .mobile-right-sidebar-enter {
-      animation: mobile-right-sidebar-enter 180ms ease-out;
-    }
-
-    .mobile-bottom-sheet-enter {
-      animation: mobile-bottom-sheet-enter 180ms ease-out;
-    }
-
-  }
-}
-
-@keyframes mobile-right-sidebar-enter {
-  from {
-    transform: translateX(100%);
-  }
-  to {
-    transform: translateX(0);
-  }
-}
-
-@keyframes mobile-bottom-sheet-enter {
-  from {
-    transform: translateY(100%);
-  }
-  to {
-    transform: translateY(0);
   }
 }

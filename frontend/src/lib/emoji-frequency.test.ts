@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { recordEmojiUse, getFrequentEmojis } from './emoji-frequency';
+import { EMOJI_FREQUENCY_CHANGED_EVENT, recordEmojiUse, getFrequentEmojis } from './emoji-frequency';
 import { apiFetch } from '@/lib/api';
 
 vi.mock('@/lib/api', () => ({
@@ -19,18 +19,27 @@ describe('emoji-frequency', () => {
       expect(mockApiFetch).not.toHaveBeenCalled();
     });
 
-    it('POSTs the picked shortcode', async () => {
+    it('POSTs the picked shortcode and broadcasts a change event', async () => {
       mockApiFetch.mockResolvedValueOnce(undefined);
+      const onChanged = vi.fn();
+      window.addEventListener(EMOJI_FREQUENCY_CHANGED_EVENT, onChanged);
       await recordEmojiUse(':tada:');
+      window.removeEventListener(EMOJI_FREQUENCY_CHANGED_EVENT, onChanged);
       expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/emojis/frequent', {
         method: 'POST',
         body: JSON.stringify({ emoji: ':tada:' }),
       });
+      // The action bar listens for this to refresh its popular shelf live.
+      expect(onChanged).toHaveBeenCalledTimes(1);
     });
 
-    it('swallows API errors', async () => {
+    it('swallows API errors and broadcasts no event', async () => {
       mockApiFetch.mockRejectedValueOnce(new Error('offline'));
+      const onChanged = vi.fn();
+      window.addEventListener(EMOJI_FREQUENCY_CHANGED_EVENT, onChanged);
       await expect(recordEmojiUse(':tada:')).resolves.toBeUndefined();
+      window.removeEventListener(EMOJI_FREQUENCY_CHANGED_EVENT, onChanged);
+      expect(onChanged).not.toHaveBeenCalled();
     });
   });
 

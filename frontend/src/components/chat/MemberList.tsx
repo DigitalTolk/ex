@@ -4,7 +4,8 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { X, Check, UserPlus } from 'lucide-react';
+import { X, Check, UserPlus, ArrowRight } from 'lucide-react';
+import { motion } from 'motion/react';
 import { apiFetch } from '@/lib/api';
 import { queryKeys } from '@/lib/query-keys';
 import { getInitials } from '@/lib/format';
@@ -13,7 +14,7 @@ import { UserHoverCard } from '@/components/UserHoverCard';
 import { UserAvatar } from '@/components/UserAvatar';
 import { UserStatusIndicator } from '@/components/UserStatusIndicator';
 import { canManageMembers, canRemoveMember, roleNumber, ChannelRole } from '@/lib/roles';
-import { useAnimatedSwipeDismiss } from '@/hooks/useAnimatedSwipeDismiss';
+import { useSwipeDismiss } from '@/hooks/useSwipeDismiss';
 import type { ChannelMembership } from '@/types';
 import type { UserMapEntry } from './MessageList';
 
@@ -95,15 +96,14 @@ export function MemberList({ members, channelId, currentUserId, currentUserRole,
   }
 
   const canManage = canManageMembers(currentUserRole) && !!channelId;
-  const { dismissing, dragStyle, swipeHandlers } = useAnimatedSwipeDismiss('right', () => onClose?.());
+  const { dismissing, settled, motionProps } = useSwipeDismiss('right', () => onClose?.());
 
   return (
-    <div
-      className={`mobile-right-sidebar-enter flex h-full min-h-0 w-80 flex-col border-l bg-background max-md:fixed max-md:inset-x-0 max-md:bottom-0 max-md:top-[var(--mobile-right-panel-top,6rem)] max-md:z-40 max-md:w-auto max-md:touch-pan-y max-md:border-l-0 max-md:transform-gpu max-md:transition-transform max-md:duration-200 max-md:ease-out ${dismissing ? 'max-md:translate-x-full' : ''}`}
+    <motion.div
+      className={`flex h-full min-h-0 w-80 flex-col bg-background md:border-l max-md:fixed max-md:inset-x-0 max-md:bottom-0 max-md:top-[var(--mobile-right-panel-top,6rem)] max-md:z-40 max-md:w-auto max-md:touch-pan-y ${settled ? '' : 'border-l'}`}
       data-mobile-right-sidebar="true"
-      data-swipe-dismissing={dismissing ? 'true' : 'false'}
-      style={dragStyle}
-      {...swipeHandlers}
+      data-swipe-dismissing={String(dismissing)}
+      {...motionProps}
     >
       <div className="px-4 py-3 border-b flex items-center justify-between gap-2">
         <div className="min-w-0">
@@ -119,7 +119,7 @@ export function MemberList({ members, channelId, currentUserId, currentUserRole,
               onClick={onClose}
               aria-label="Close member list"
             >
-              <X className="h-4 w-4" />
+              <ArrowRight className="h-4 w-4" />
             </Button>
           )}
         </div>
@@ -235,6 +235,6 @@ export function MemberList({ members, channelId, currentUserId, currentUserRole,
           })}
         </div>
       </ScrollArea>
-    </div>
+    </motion.div>
   );
 }

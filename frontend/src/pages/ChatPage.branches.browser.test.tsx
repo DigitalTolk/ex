@@ -45,6 +45,8 @@ vi.mock('@/context/UnreadContext', () => ({
     setActiveConversation: vi.fn(),
     isActiveChannel: vi.fn(() => false),
     isActiveConversation: isActiveConversationMock,
+    setActiveThread: vi.fn(),
+    isActiveThread: vi.fn(() => false),
   }),
   UnreadProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));

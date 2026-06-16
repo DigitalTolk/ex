@@ -6,6 +6,7 @@ import { Label } from '@/components/ui/label';
 import { Trash2, ImagePlus, X, Search } from 'lucide-react';
 import { PageContainer } from '@/components/layout/PageContainer';
 import { useEmojis, useUploadEmoji, useDeleteEmoji } from '@/hooks/useEmoji';
+import { useUsersBatch } from '@/hooks/useUsersBatch';
 import { useAuth } from '@/context/AuthContext';
 import { isGuest } from '@/lib/roles';
 import { formatBytes } from '@/lib/format';
@@ -20,6 +21,8 @@ export default function CustomEmojiPage() {
   useDocumentTitle('Custom emojis');
   const { user } = useAuth();
   const { data: emojis } = useEmojis();
+  const creatorIDs = useMemo(() => [...new Set((emojis ?? []).map((e) => e.createdBy))], [emojis]);
+  const { map: creatorMap } = useUsersBatch(creatorIDs);
   const upload = useUploadEmoji();
   const remove = useDeleteEmoji();
   const [name, setName] = useState('');
@@ -173,7 +176,7 @@ export default function CustomEmojiPage() {
                 />
                 <span className="select-none px-2 text-muted-foreground">:</span>
               </div>
-              <p className="mt-1 text-[11px] text-muted-foreground">
+              <p className="mt-1 text-xs text-muted-foreground">
                 Lowercase letters, digits, <code>_</code>, <code>+</code>,{' '}
                 <code>-</code>. Max 32 chars.
               </p>
@@ -241,7 +244,12 @@ export default function CustomEmojiPage() {
               className="flex items-center gap-2 rounded-md border px-2 py-1.5"
             >
               <img src={e.imageURL} alt={`:${e.name}:`} className="h-6 w-6" />
-              <span className="flex-1 truncate font-mono text-xs">:{e.name}:</span>
+              <div className="min-w-0 flex-1">
+                <span className="block truncate font-mono text-sm">:{e.name}:</span>
+                <span className="block truncate text-xs text-muted-foreground">
+                  by {creatorMap.get(e.createdBy)?.displayName ?? 'unknown'}
+                </span>
+              </div>
               {canDelete(e.createdBy) && (
                 <button
                   type="button"

@@ -55,6 +55,10 @@ export interface Message {
   // is unwired. Frontend prefers this over re-parsing the markdown
   // source per render.
   rendered?: HastNode;
+  webhookUsername?: string;
+  webhookAvatarURL?: string;
+  webhookIconEmoji?: string;
+  messageAttachments?: MessageAttachment[];
 }
 
 // HastNode mirrors the server-side hast tree shape. Three node
@@ -69,6 +73,31 @@ export interface HastNode {
   properties?: Record<string, any>;
   children?: HastNode[];
   value?: string;
+}
+
+export interface MessageAttachment {
+  fallback?: string;
+  color?: string;
+  pretext?: string;
+  text?: string;
+  author_name?: string;
+  author_link?: string;
+  author_icon?: string;
+  title?: string;
+  title_link?: string;
+  fields?: MessageAttachmentField[];
+  image_url?: string;
+  image_width?: number;
+  image_height?: number;
+  thumb_url?: string;
+  footer?: string;
+  footer_icon?: string;
+}
+
+export interface MessageAttachmentField {
+  title?: string;
+  value?: string;
+  short?: boolean;
 }
 
 export interface MessageDraft {
@@ -129,6 +158,22 @@ export interface WorkspaceSettings {
   // directly from the client, not proxied through this app.
   giphyAPIKey?: string;
   giphyEnabled?: boolean;
+}
+
+export interface IncomingWebhook {
+  id: string;
+  title: string;
+  description?: string;
+  channelID: string;
+  channelName?: string;
+  channelSlug?: string;
+  lockToChannel: boolean;
+  username?: string;
+  profileImageURL?: string;
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+  url?: string;
 }
 
 export interface UserChannel {

@@ -8,7 +8,9 @@ vi.mock('@/lib/api', () => ({
 }));
 
 import { apiFetch } from '@/lib/api';
-import { useEmojis, useEmojiMap, useUploadEmoji, useDeleteEmoji } from './useEmoji';
+import { useEmojis, useEmojiMap, useFrequentEmojis, useUploadEmoji, useDeleteEmoji } from './useEmoji';
+import { EMOJI_FREQUENCY_CHANGED_EVENT } from '@/lib/emoji-frequency';
+import { act } from '@testing-library/react';
 
 function createWrapper() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -30,6 +32,25 @@ describe('useEmojis', () => {
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(apiFetch).toHaveBeenCalledWith('/api/v1/emojis');
     expect(result.current.data).toHaveLength(1);
+  });
+});
+
+describe('useFrequentEmojis', () => {
+  beforeEach(() => {
+    vi.mocked(apiFetch).mockReset();
+  });
+
+  it('refetches the popular shelf when an emoji-use event fires', async () => {
+    vi.mocked(apiFetch).mockResolvedValue([':tada:', ':smile:', ':wave:']);
+    const { result } = renderHook(() => useFrequentEmojis(2), { wrapper: createWrapper() });
+    await waitFor(() => expect(result.current).toEqual([':tada:', ':smile:']));
+    expect(apiFetch).toHaveBeenCalledTimes(1);
+
+    vi.mocked(apiFetch).mockResolvedValue([':rocket:', ':fire:']);
+    act(() => {
+      window.dispatchEvent(new Event(EMOJI_FREQUENCY_CHANGED_EVENT));
+    });
+    await waitFor(() => expect(result.current).toEqual([':rocket:', ':fire:']));
   });
 });
 

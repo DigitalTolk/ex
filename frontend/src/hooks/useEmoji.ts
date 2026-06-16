@@ -1,7 +1,8 @@
+import { useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiFetch } from '@/lib/api';
 import { queryKeys } from '@/lib/query-keys';
-import { getFrequentEmojis } from '@/lib/emoji-frequency';
+import { EMOJI_FREQUENCY_CHANGED_EVENT, getFrequentEmojis } from '@/lib/emoji-frequency';
 import type { CustomEmoji } from '@/types';
 
 // How many frequently-used emoji to fetch for the message action bar's
@@ -40,11 +41,22 @@ export function useEmojiMap(enabled = true) {
 // (server-backed, Redis). Used by the message action bar for quick reactions.
 // Pass a limit to cap how many are returned.
 export function useFrequentEmojis(limit?: number) {
+  const qc = useQueryClient();
   const { data } = useQuery({
     queryKey: queryKeys.frequentEmojis(),
     queryFn: () => getFrequentEmojis(FREQUENT_REACTIONS_FETCH),
     staleTime: 60 * 1000,
   });
+  // Refresh the moment any emoji is used anywhere (picker pick or quick
+  // reaction) so the action bar's popular shelf reorders live instead of
+  // waiting out staleTime.
+  useEffect(() => {
+    const onChanged = () => {
+      void qc.invalidateQueries({ queryKey: queryKeys.frequentEmojis() });
+    };
+    window.addEventListener(EMOJI_FREQUENCY_CHANGED_EVENT, onChanged);
+    return () => window.removeEventListener(EMOJI_FREQUENCY_CHANGED_EVENT, onChanged);
+  }, [qc]);
   const list = data ?? [];
   return limit ? list.slice(0, limit) : list;
 }
