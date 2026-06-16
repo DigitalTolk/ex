@@ -147,6 +147,26 @@ describe('NotificationContext browser', () => {
     );
   });
 
+  it('dispatch still fires an on-screen DM when the window is blurred (backgrounded app)', async () => {
+    const instances: FakeNote[] = [];
+    const restore = installFakeNotification(instances);
+    try {
+      await render(<NotificationProvider><Capture /></NotificationProvider>);
+      await vi.waitFor(() => expect(captured).not.toBeNull());
+      // Window loses focus → app no longer active even though still visible.
+      window.dispatchEvent(new Event('blur'));
+      captured!.setActiveParent('conv-1');
+      captured!.dispatch(
+        basePayload({ kind: 'message', parentType: 'conversation', parentID: 'conv-1', authorID: 'u-other' }),
+      );
+      await vi.waitFor(() => expect(instances.length).toBe(1));
+    } finally {
+      restore();
+      // Restore focus so later tests see an active window.
+      window.dispatchEvent(new Event('focus'));
+    }
+  });
+
   it('dispatch with mention kind plays the ping (if soundEnabled) — sound branch path', async () => {
     await render(
       <NotificationProvider>
