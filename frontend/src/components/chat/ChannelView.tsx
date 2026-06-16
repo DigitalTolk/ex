@@ -27,6 +27,8 @@ import { canEditChannel, canArchiveChannel, canLeaveChannel, roleNumber } from '
 import { markThreadSeen } from '@/hooks/useThreads';
 import { apiFetch } from '@/lib/api';
 import { queryKeys } from '@/lib/query-keys';
+import { NonMemberInvitePrompt } from './NonMemberInvitePrompt';
+import { useNonMemberInvite } from '@/hooks/useNonMemberInvite';
 import { useUsersBatch } from '@/hooks/useUsersBatch';
 import { useFrequentEmojis } from '@/hooks/useEmoji';
 import { collectMessageUserIDs, findLastOwnMessageId } from '@/lib/message-users';
@@ -155,6 +157,9 @@ export function ChannelView() {
   const editReady =
     !editingMessage || editAttachmentIDs.length === 0 || !editAttachmentsLoading;
   const editMessage = useEditMessage();
+  // After sending a message that @mentions people not in the channel, offer to
+  // invite them in one click (see NonMemberInvitePrompt).
+  const { pendingInvites, checkMentions, clearInvites } = useNonMemberInvite(channel?.id, user?.id);
   const draftID = draft?.id;
   const saveDraft = useSaveDraft();
   const deleteDraft = useDeleteDraft();
@@ -175,6 +180,9 @@ export function ChannelView() {
   );
   const handleSendMessage = useCallback(
     (value: { body: string; attachmentIDs: string[] }) => {
+      // Surface an invite prompt for any mentioned non-members (supersedes a
+      // previous prompt; empty result clears it).
+      checkMentions(value.body);
       suppressSentDraft(draftScope);
       if (!draftID) {
         sendMessage.mutate(value, { onError: () => restoreDraftScope(draftScope) });
@@ -185,7 +193,7 @@ export function ChannelView() {
         onError: () => restoreDraftScope(draftScope),
       });
     },
-    [sendMessage, draftScope, draftID, deleteDraftMutate],
+    [sendMessage, draftScope, draftID, deleteDraftMutate, checkMentions],
   );
   const handleEditMessage = useCallback(
     (value: { body: string; attachmentIDs: string[] }) => {
@@ -235,6 +243,7 @@ export function ChannelView() {
   useEffect(() => setThreadRootID(null), [channel?.id]);
   // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => setEditingMessage(null), [channel?.id]);
+  useEffect(() => clearInvites(), [channel?.id, clearInvites]);
 
   // Local "open thread via UI button" state. The URL ?thread= param
   // is the source of truth for deep-linked threads (so back/forward
@@ -422,6 +431,14 @@ export function ChannelView() {
             }
           />
           <TypingIndicator parentID={channel?.id} userMap={userMap} />
+          {channel && !activeEditingMessage && pendingInvites.length > 0 && (
+            <NonMemberInvitePrompt
+              channelId={channel.id}
+              channelName={channel.slug}
+              users={pendingInvites}
+              onDismiss={clearInvites}
+            />
+          )}
           {activeEditingMessage && !editReady ? (
             <div className="border-t p-3 text-sm text-muted-foreground">Loading message editor…</div>
           ) : (

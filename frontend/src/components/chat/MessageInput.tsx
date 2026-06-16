@@ -444,6 +444,10 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
 
   function insertEmojiShortcode(emoji: string) {
     editorRef.current?.insertText(emoji + ' ');
+    // Refocus synchronously, inside the pick tap's gesture, so iOS reopens
+    // the keyboard. A deferred focus (rAF/microtask) loses the user-gesture
+    // context and the keyboard stays closed.
+    editorRef.current?.focus();
   }
 
   function insertGiphyGIF(gif: PickedGIF) {
@@ -453,6 +457,8 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
     /* istanbul ignore next -- insertGiphyGIF is only invoked by the GiphyPicker's onSelect; exercising the width/height ternary arms requires the full GIPHY-fetch picker integration (covered in GiphyPicker.browser.test), not reachable from MessageInput's own tests. */
     const dims = gif.width && gif.height ? ` =${gif.width}x${gif.height}` : '';
     editorRef.current?.insertText(`![GIPHY](giphy:${gif.id}${dims}) `);
+    // Synchronous refocus (inside the pick gesture) reopens the iOS keyboard.
+    editorRef.current?.focus();
   }
 
   function handleToolbarPickerOpenChange(open: boolean) {

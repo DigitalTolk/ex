@@ -45,7 +45,7 @@ describe('MemberList - inline invite', () => {
     expect(screen.getByLabelText('Add member')).toBeInTheDocument();
   });
 
-  it('does not render the Add member input for non-admins', () => {
+  it('renders the Add member input for regular members (anyone can invite)', () => {
     renderWithProviders(
       <MemberList
         members={[adminMember]}
@@ -54,6 +54,11 @@ describe('MemberList - inline invite', () => {
         currentUserRole={1}
       />,
     );
+    expect(screen.queryByLabelText('Add member')).not.toBeNull();
+  });
+
+  it('does not render the Add member input without a channel context', () => {
+    renderWithProviders(<MemberList members={[adminMember]} currentUserId="admin-1" currentUserRole={1} />);
     expect(screen.queryByLabelText('Add member')).toBeNull();
   });
 

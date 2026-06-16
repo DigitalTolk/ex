@@ -1,4 +1,5 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { Check, Copy, Pencil, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -39,6 +40,14 @@ export function IncomingWebhooksPanel() {
   const [editingID, setEditingID] = useState<string | null>(null);
   const [copiedID, setCopiedID] = useState('');
   const [toDelete, setToDelete] = useState<IncomingWebhook | null>(null);
+  // Auto-clear the "copied" checkmark a couple of seconds after a copy so it
+  // doesn't get stuck on. Keyed on copiedID so a fresh copy restarts the timer
+  // and the cleanup cancels it on unmount.
+  useEffect(() => {
+    if (!copiedID) return;
+    const t = setTimeout(() => setCopiedID(''), 2000);
+    return () => clearTimeout(t);
+  }, [copiedID]);
 
   // Webhooks may target any public channel plus any private channel the
   // creator belongs to — mirror that by merging the public directory with
@@ -173,20 +182,36 @@ export function IncomingWebhooksPanel() {
                   <span>Created by {creatorMap.get(wh.createdBy)?.displayName ?? 'unknown'}</span>
                 </p>
               </div>
-              <div className="flex shrink-0 items-center gap-2">
-                <Button variant="outline" size="sm" onClick={() => startEdit(wh)}>
-                  Edit
+              <div className="flex shrink-0 items-center gap-1">
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  onClick={() => startEdit(wh)}
+                  aria-label={`Edit ${wh.title}`}
+                >
+                  <Pencil className="h-4 w-4" />
                 </Button>
-                <Button variant="outline" size="sm" onClick={() => setToDelete(wh)}>
-                  Delete
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  onClick={() => setToDelete(wh)}
+                  aria-label={`Delete ${wh.title}`}
+                  className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+                >
+                  <Trash2 className="h-4 w-4" />
                 </Button>
               </div>
             </div>
             {wh.url && (
               <div className="flex items-center gap-2">
                 <code className="min-w-0 flex-1 truncate rounded bg-muted px-2 py-1 text-sm text-muted-foreground">{wh.url}</code>
-                <Button variant="outline" size="sm" onClick={() => copyURL(wh.id, wh.url!)}>
-                  {copiedID === wh.id ? 'Copied' : 'Copy'}
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  onClick={() => copyURL(wh.id, wh.url!)}
+                  aria-label={copiedID === wh.id ? 'Copied' : `Copy ${wh.title} URL`}
+                >
+                  {copiedID === wh.id ? <Check className="h-4 w-4 text-emerald-600" /> : <Copy className="h-4 w-4" />}
                 </Button>
               </div>
             )}

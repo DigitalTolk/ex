@@ -541,7 +541,7 @@ export function MessageItem({
       }}
       className={`relative flex items-start gap-3 rounded-md px-2 py-1.5 hover:bg-muted/50 ${
         message.pinned ? 'border-l-2 border-amber-500 pl-2' : ''
-      } ${highlighted ? 'ring-1 ring-amber-400/50 rounded-md' : ''} max-md:select-none max-md:touch-pan-y max-md:[-webkit-touch-callout:none] max-md:[-webkit-user-select:none]`}
+      } ${highlighted ? 'ring-1 ring-inset ring-amber-400/50 rounded-md' : ''} max-md:select-none max-md:touch-pan-y max-md:[-webkit-touch-callout:none] max-md:[-webkit-user-select:none]`}
     >
       <UserHoverCard
         userId={message.authorID}
@@ -715,7 +715,7 @@ export function MessageItem({
                         }
                       >
                         {renderReactionVisual(emoji)}
-                        <span className="text-sm text-muted-foreground">{users.length}</span>
+                        <span className="text-xs leading-none text-muted-foreground tabular-nums">{users.length}</span>
                       </TooltipTrigger>
                       <TooltipContent
                         data-testid="reaction-tooltip"

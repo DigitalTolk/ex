@@ -6,6 +6,7 @@ import { AppTopBar } from './AppTopBar';
 import { TagSearchProvider } from '@/context/TagSearchContext';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { useDismissKeyboardOnScroll } from '@/hooks/useDismissKeyboardOnScroll';
+import { useKeyboardSurfaceColor } from '@/hooks/useKeyboardSurfaceColor';
 import { blurActiveInput } from '@/lib/blur-input';
 import {
   channelDragTransform,
@@ -27,6 +28,8 @@ export function AppLayout({ children }: AppLayoutProps) {
   const isMobile = useIsMobile();
   // Mobile: dragging/scrolling outside the focused field dismisses the keyboard.
   useDismissKeyboardOnScroll();
+  // Mobile: keep the native keyboard strip matching the focused surface.
+  useKeyboardSurfaceColor();
   const [manualChannelsOpen, setManualChannelsOpen] = useState(false);
   const [channelDragOffset, setChannelDragOffset] = useState(0);
   const mainRef = useRef<HTMLElement>(null);

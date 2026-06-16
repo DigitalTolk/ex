@@ -26,6 +26,17 @@ type UnfurlPreview struct {
 	Description string `json:"description,omitempty"`
 	Image       string `json:"image,omitempty"`
 	SiteName    string `json:"siteName,omitempty"`
+
+	// Internal message-link preview (Slack/Mattermost-style). When Kind is
+	// "message" the client renders a rich author/body/channel card instead
+	// of the generic OpenGraph card. These fields are populated only by the
+	// MessageLinkService, never by web scraping.
+	Kind            string `json:"kind,omitempty"`            // "" (web) | "message"
+	AuthorName      string `json:"authorName,omitempty"`      // display name (or webhook username)
+	AuthorAvatarURL string `json:"authorAvatarURL,omitempty"` // signed avatar URL
+	ChannelLabel    string `json:"channelLabel,omitempty"`    // "~slug" / group name / "Direct message"
+	Body            string `json:"body,omitempty"`            // message body excerpt
+	CreatedAt       string `json:"createdAt,omitempty"`       // RFC3339
 }
 
 // UnfurlCache is the slim slice of RedisCache UnfurlService uses; defined

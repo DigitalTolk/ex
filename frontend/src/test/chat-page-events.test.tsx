@@ -214,6 +214,24 @@ describe('ChatPage WebSocket handlers', () => {
     expect(unhideConversation).not.toHaveBeenCalled();
   });
 
+  it('onMessageNew does NOT mark the channel unread for a thread reply', () => {
+    renderAt('/', (qc) => {
+      qc.setQueryData(['userChannels'], [{ channelID: 'ch-1', channelName: 'general' }]);
+    });
+    const handler = capturedOptions.onMessageNew as (d: unknown) => void;
+    handler(msg({ authorID: 'u-other', parentMessageID: 'root-1' }));
+    expect(markChannelUnread).not.toHaveBeenCalled();
+  });
+
+  it('onMessageNew does NOT mark the channel unread for a system message (e.g. a join)', () => {
+    renderAt('/', (qc) => {
+      qc.setQueryData(['userChannels'], [{ channelID: 'ch-1', channelName: 'general' }]);
+    });
+    const handler = capturedOptions.onMessageNew as (d: unknown) => void;
+    handler(msg({ authorID: 'u-other', system: true, body: 'joined the channel' }));
+    expect(markChannelUnread).not.toHaveBeenCalled();
+  });
+
   it('onMessageNew uses payload parentType when channel cache is empty', () => {
     renderAt('/');
     const handler = capturedOptions.onMessageNew as (d: unknown) => void;

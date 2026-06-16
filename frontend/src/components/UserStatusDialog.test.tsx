@@ -41,16 +41,36 @@ vi.mock('@/hooks/useEmoji', () => ({
   useEmojiMap: () => ({ data: {} }),
 }));
 
+let mockIsMobile = false;
+vi.mock('@/hooks/useIsMobile', () => ({ useIsMobile: () => mockIsMobile }));
+
 describe('UserStatusDialog', () => {
   beforeEach(() => {
     apiFetchMock.mockReset();
     setAuthMock.mockReset();
     accessToken = 'token';
     authUser = { ...activeUser, userStatus: undefined };
+    mockIsMobile = false;
   });
 
   afterEach(() => {
     document.body.removeAttribute('style');
+  });
+
+  it('on mobile, saves from the top-right header action and hides the inline Save', async () => {
+    mockIsMobile = true;
+    apiFetchMock.mockResolvedValue({ ...activeUser, userStatus: { emoji: ':sandwich:', text: 'Out for Lunch' } });
+    render(<UserStatusDialog open onOpenChange={vi.fn()} />);
+
+    await userEvent.selectOptions(screen.getByLabelText(/Predefined status/i), 'Out for Lunch');
+    const save = screen.getByRole('button', { name: 'Save status' });
+    // The single Save lives in the dialog's top-right action cluster.
+    expect(save.closest('[data-slot="dialog-mobile-actions"]')).not.toBeNull();
+    await userEvent.click(save);
+
+    await waitFor(() => {
+      expect(apiFetchMock).toHaveBeenCalledWith('/api/v1/users/me/status', expect.objectContaining({ method: 'PATCH' }));
+    });
   });
 
   it('saves a preset status with its default clear time', async () => {

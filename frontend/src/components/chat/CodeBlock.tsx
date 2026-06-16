@@ -37,7 +37,7 @@ export function CodeBlock({ code, language }: CodeBlockProps) {
         {language && (
           <span
             data-testid="code-language"
-            className="select-none rounded border bg-background/80 px-1.5 py-0.5 text-[10px] font-sans uppercase leading-none tracking-wide text-muted-foreground backdrop-blur"
+            className="hidden select-none rounded border bg-background/80 px-1.5 py-0.5 text-[10px] font-sans uppercase leading-none tracking-wide text-muted-foreground backdrop-blur md:inline-block"
           >
             {language}
           </span>

@@ -6,6 +6,7 @@ import {
   canEditChannel,
   canArchiveChannel,
   canLeaveChannel,
+  canAddMembers,
   canManageMembers,
   canRemoveMember,
   isAdmin,
@@ -57,6 +58,14 @@ describe('channel role predicates', () => {
   it('canManageMembers: admin or owner', () => {
     expect(canManageMembers('admin')).toBe(true);
     expect(canManageMembers('member')).toBe(false);
+  });
+
+  it('canAddMembers: any member can invite (but not a non-member)', () => {
+    expect(canAddMembers('member')).toBe(true);
+    expect(canAddMembers('admin')).toBe(true);
+    expect(canAddMembers('owner')).toBe(true);
+    expect(canAddMembers(undefined)).toBe(false);
+    expect(canAddMembers(0)).toBe(false);
   });
   it('canRemoveMember: manager acting on a non-owner', () => {
     expect(canRemoveMember('admin', 'member')).toBe(true);

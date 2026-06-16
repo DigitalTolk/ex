@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { EditorState } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
-import { startCompletion, currentCompletions } from '@codemirror/autocomplete';
+import { startCompletion, currentCompletions, selectedCompletionIndex } from '@codemirror/autocomplete';
 import { composerAutocomplete, type CompletionProviders } from './completions';
 
 const providers: CompletionProviders = {
@@ -29,6 +29,36 @@ describe('composerAutocomplete', () => {
     await vi.waitFor(() => {
       expect(currentCompletions(view.state).some((c) => c.label === 'Alice')).toBe(true);
     });
+    view.destroy();
+  });
+
+  it('hovering an option selects it so mouse + keyboard share one highlight', async () => {
+    const view = mount(':smi');
+    startCompletion(view);
+
+    let items: HTMLLIElement[] = [];
+    await vi.waitFor(() => {
+      items = Array.from(view.dom.querySelectorAll('.cm-tooltip-autocomplete li[id]')) as HTMLLIElement[];
+      expect(items.length).toBeGreaterThan(1);
+    });
+
+    // Hovering the second row makes it the selected option…
+    items[1].dispatchEvent(new PointerEvent('pointermove', { bubbles: true }));
+    await vi.waitFor(() => expect(selectedCompletionIndex(view.state)).toBe(1));
+
+    // …and it carries the visible aria-selected highlight (only one row does).
+    await vi.waitFor(() => {
+      const selected = view.dom.querySelectorAll('.cm-tooltip-autocomplete li[aria-selected]');
+      expect(selected.length).toBe(1);
+      expect((selected[0] as HTMLElement).id.endsWith('-1')).toBe(true);
+    });
+
+    // Re-hovering the same row is a no-op (no redundant dispatch), and a move
+    // that isn't over an option row is ignored.
+    items[1].dispatchEvent(new PointerEvent('pointermove', { bubbles: true }));
+    view.dom.dispatchEvent(new PointerEvent('pointermove', { bubbles: true }));
+    expect(selectedCompletionIndex(view.state)).toBe(1);
+
     view.destroy();
   });
 

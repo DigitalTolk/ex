@@ -127,7 +127,12 @@ export default function ChatPage() {
         msg.parentType === 'conversation' || (!msg.parentType && !isCachedChannel && isCachedConversation);
       if (authorID !== user?.id) {
         if (isChannelParent) {
-          markChannelUnread(parentID);
+          // A reply posted into a thread, or a system event (someone joining
+          // /leaving), isn't "new channel activity" — only a top-level human
+          // message bumps the channel's unread indicator.
+          if (!parentMessageID && !msg.system) {
+            markChannelUnread(parentID);
+          }
         } else if (isConversationParent) {
           if (isActiveConversation(parentID)) {
             clearConversationUnread(parentID);

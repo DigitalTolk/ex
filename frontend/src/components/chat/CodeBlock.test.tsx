@@ -19,7 +19,10 @@ describe('CodeBlock', () => {
     expect(gutter.textContent).toBe('1\n2');
     expect(document.querySelector('code.hljs')).not.toBeNull();
     expect(document.querySelector('pre[data-language="js"]')).not.toBeNull();
-    expect(screen.getByTestId('code-language').textContent).toBe('js');
+    const langLabel = screen.getByTestId('code-language');
+    expect(langLabel.textContent).toBe('js');
+    // Hidden on mobile (cramped width), shown from md up.
+    expect(langLabel).toHaveClass('hidden', 'md:inline-block');
   });
 
   it('renders an icon-only copy button (no text label)', () => {

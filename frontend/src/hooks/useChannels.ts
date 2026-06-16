@@ -33,10 +33,12 @@ export function useChannelBySlug(slug: string | undefined) {
 export function useChannelMembers(channelId: string | undefined) {
   return useQuery({
     queryKey: queryKeys.channelMembers(channelId),
-    queryFn: () =>
-      apiFetch<ChannelMembership[]>(
+    queryFn: async () => {
+      const res = await apiFetch<ChannelMembership[]>(
         `/api/v1/channels/${channelId}/members`,
-      ),
+      );
+      return Array.isArray(res) ? res : [];
+    },
     enabled: !!channelId,
   });
 }

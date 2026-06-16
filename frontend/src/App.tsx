@@ -8,6 +8,7 @@ import { NotificationProvider } from '@/context/NotificationContext';
 import { TypingProvider } from '@/context/TypingContext';
 import { ThemeProvider } from '@/context/ThemeContext';
 import { NotificationCountTitleBridge } from '@/components/NotificationCountTitleBridge';
+import { InAppLinkRouter } from '@/components/InAppLinkRouter';
 import LoginPage from '@/pages/LoginPage';
 import OIDCCallbackPage from '@/pages/OIDCCallbackPage';
 import ChatPage from '@/pages/ChatPage';
@@ -107,6 +108,7 @@ export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
+        <InAppLinkRouter />
         <ThemeProvider>
           <AuthProvider>
             <UnreadProvider>

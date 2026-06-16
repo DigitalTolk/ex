@@ -45,6 +45,16 @@ vi.mock('@/hooks/useEmoji', () => ({
   useFrequentEmojis: () => ['thumbsup', 'heart', 'tada'],
 }));
 
+// The non-member-invite hook reads channel members + the user's channel list.
+// Stub both so they don't consume the per-test `mockResolvedValueOnce`
+// responses meant for the thread fetch. Empty members → any @mention counts
+// as a non-member (drives the invite-prompt test below).
+vi.mock('@/hooks/useChannels', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/hooks/useChannels')>()),
+  useChannelMembers: () => ({ data: [] }),
+  useUserChannels: () => ({ data: [] }),
+}));
+
 // MessageInput is exhaustively unit-tested in isolation; here we just
 // need a test stub that exposes onSend + records the typing-related
 // props so ThreadPanel's prop wiring can be verified without going
@@ -67,6 +77,12 @@ vi.mock('./MessageInput', () => ({
           onClick={() => props.onSend?.({ body: 'hello in thread', attachmentIDs: [] })}
         >
           Send
+        </button>
+        <button
+          aria-label="Send mention"
+          onClick={() => props.onSend?.({ body: 'ping @[u-out|Outsider]', attachmentIDs: [] })}
+        >
+          Send mention
         </button>
       </div>
     );
@@ -328,6 +344,28 @@ describe('ThreadPanel', () => {
         expect.objectContaining({ onError: expect.any(Function) }),
       );
     });
+  });
+
+  it('offers to add a mentioned non-member after replying in the thread panel', async () => {
+    mockApiFetch.mockResolvedValueOnce([]);
+    const user = userEvent.setup();
+    renderWithProviders(
+      <ThreadPanel
+        channelId="ch-1"
+        threadRootID="m-1"
+        onClose={vi.fn()}
+        userMap={userMap}
+        currentUserId="u-1"
+      />,
+    );
+
+    // No prompt before sending.
+    expect(screen.queryByTestId('non-member-invite')).toBeNull();
+    await user.click(screen.getByLabelText('Send mention'));
+
+    const prompt = await screen.findByTestId('non-member-invite');
+    expect(prompt).toHaveTextContent('Outsider');
+    expect(screen.getByRole('button', { name: /Add to channel/i })).toBeInTheDocument();
   });
 
   it('passes the newest non-deleted own reply to the composer edit shortcut', async () => {

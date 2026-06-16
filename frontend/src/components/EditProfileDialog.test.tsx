@@ -38,11 +38,32 @@ vi.mock('@/lib/api', () => ({
   getAccessToken: () => 'test-token',
 }));
 
+let mockIsMobile = false;
+vi.mock('@/hooks/useIsMobile', () => ({ useIsMobile: () => mockIsMobile }));
+
 beforeEach(() => {
   vi.clearAllMocks();
+  mockIsMobile = false;
 });
 
 describe('EditProfileDialog', () => {
+  it('on mobile, saves from the top-right header action and hides the inline Save', async () => {
+    mockIsMobile = true;
+    mockApiFetch.mockResolvedValueOnce({ ...mockUser, displayName: 'Alice Updated' });
+    const onOpenChange = vi.fn();
+    const user = userEvent.setup();
+    renderWithTheme(<EditProfileDialog open={true} onOpenChange={onOpenChange} />);
+
+    const nameInput = screen.getByLabelText('Display name');
+    await user.clear(nameInput);
+    await user.type(nameInput, 'Alice Updated');
+    const save = screen.getByRole('button', { name: 'Save' });
+    expect(save.closest('[data-slot="dialog-mobile-actions"]')).not.toBeNull();
+    await user.click(save);
+
+    await waitFor(() => expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/users/me', expect.anything()));
+  });
+
   it('renders profile fields when open', () => {
     renderWithTheme(<EditProfileDialog open={true} onOpenChange={vi.fn()} />);
 

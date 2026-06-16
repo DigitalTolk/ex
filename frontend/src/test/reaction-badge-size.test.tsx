@@ -51,7 +51,7 @@ function renderItem(msg: Message) {
 }
 
 describe('Reaction badge — 14px font size pin', () => {
-  it('badge button uses text-sm and the count span uses text-sm too', () => {
+  it('badge button is text-sm; the count is slightly smaller (text-xs) but vertically centered', () => {
     const msg: Message = {
       id: 'm-1',
       parentID: 'ch-1',
@@ -64,12 +64,14 @@ describe('Reaction badge — 14px font size pin', () => {
     const badge = screen.getByTestId('reaction-badge');
     expect(badge.className).toContain('text-sm');
     expect(badge.className).not.toContain('text-xs');
+    // The pill flex-centers its children, so the smaller count stays middle-aligned.
+    expect(badge.className).toContain('items-center');
 
-    // The numeric count must also be 14px.
+    // The numeric count is a touch smaller than the badge text.
     const count = badge.querySelector('span:last-child');
     expect(count?.textContent).toBe('2');
-    expect(count?.className).toContain('text-sm');
-    expect(count?.className).not.toContain('text-xs');
+    expect(count?.className).toContain('text-xs');
+    expect(count?.className).not.toContain('text-sm');
   });
 
   it('the emoji glyph inside the badge is rendered at text-sm', () => {

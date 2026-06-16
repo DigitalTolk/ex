@@ -8,6 +8,14 @@ export interface UnfurlPreview {
   description?: string;
   image?: string;
   siteName?: string;
+  // Internal message-link preview (Slack/Mattermost-style). Present only when
+  // kind === 'message'; the card renders an author/body/channel layout.
+  kind?: 'message';
+  authorName?: string;
+  authorAvatarURL?: string;
+  channelLabel?: string;
+  body?: string;
+  createdAt?: string;
 }
 
 // useUnfurl fetches the link preview for a single URL. Server returns

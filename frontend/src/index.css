@@ -207,6 +207,13 @@
   --ex-keyboard-background: var(--color-sidebar);
 }
 
+/* Mobile bottom-sheet popovers (emoji / GIPHY pickers) sit on the popover
+ * surface — keep the keyboard strip matching while their search field is
+ * focused. */
+[data-mobile-sheet='true'] {
+  --ex-keyboard-background: var(--color-popover);
+}
+
 @utility pt-safe-top {
   padding-top: env(safe-area-inset-top);
 }

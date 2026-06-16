@@ -13,7 +13,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { UserHoverCard } from '@/components/UserHoverCard';
 import { UserAvatar } from '@/components/UserAvatar';
 import { UserStatusIndicator } from '@/components/UserStatusIndicator';
-import { canManageMembers, canRemoveMember, roleNumber, ChannelRole } from '@/lib/roles';
+import { canAddMembers, canRemoveMember, roleNumber, ChannelRole } from '@/lib/roles';
 import { useSwipeDismiss } from '@/hooks/useSwipeDismiss';
 import type { ChannelMembership } from '@/types';
 import type { UserMapEntry } from './MessageList';
@@ -95,7 +95,7 @@ export function MemberList({ members, channelId, currentUserId, currentUserRole,
     }
   }
 
-  const canManage = canManageMembers(currentUserRole) && !!channelId;
+  const canManage = canAddMembers(currentUserRole) && !!channelId;
   const { dismissing, settled, motionProps } = useSwipeDismiss('right', () => onClose?.());
 
   return (
@@ -134,7 +134,10 @@ export function MemberList({ members, channelId, currentUserId, currentUserRole,
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Add a member by name or email..."
               aria-label="Add member"
-              className="pl-8 h-9"
+              // The Input base applies max-md:px-4, which would otherwise win
+              // over pl-8 at mobile and let the placeholder slide under the
+              // UserPlus icon — restate the left padding at the same variant.
+              className="pl-8 max-md:pl-10 h-9"
             />
           </div>
           {error && (
