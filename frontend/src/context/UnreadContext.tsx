@@ -31,6 +31,11 @@ interface UnreadState {
   setActiveConversation: (id: string | null) => void;
   isActiveChannel: (id: string) => boolean;
   isActiveConversation: (id: string) => boolean;
+  // Active thread: the thread root currently shown in the open ThreadPanel,
+  // whether opened via the URL (?thread=) or locally ("Reply in thread").
+  // A new reply to the active thread must not light up the Threads nav.
+  setActiveThread: (threadRootId: string | null) => void;
+  isActiveThread: (threadRootId: string) => boolean;
 }
 
 const UnreadContext = createContext<UnreadState | undefined>(undefined);
@@ -65,6 +70,7 @@ export function UnreadProvider({ children }: { children: ReactNode }) {
   // active scope without re-creating the WS handlers on every navigation.
   const activeChannelRef = useRef<string | null>(null);
   const activeConvRef = useRef<string | null>(null);
+  const activeThreadRef = useRef<string | null>(null);
 
   const markChannelUnread = useCallback((id: string) => {
     if (activeChannelRef.current === id) return;
@@ -142,6 +148,21 @@ export function UnreadProvider({ children }: { children: ReactNode }) {
   }, []);
   const isActiveChannel = useCallback((id: string) => activeChannelRef.current === id, []);
   const isActiveConversation = useCallback((id: string) => activeConvRef.current === id, []);
+  const setActiveThread = useCallback((id: string | null) => {
+    activeThreadRef.current = id;
+    // Opening a thread clears any pending live notification for it, so the
+    // Threads nav doesn't stay highlighted from a reply that arrived just
+    // before it was opened.
+    if (id) {
+      setUnreadThreadNotifications(prev => {
+        if (!prev.has(id)) return prev;
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+    }
+  }, []);
+  const isActiveThread = useCallback((id: string) => activeThreadRef.current === id, []);
 
   useEffect(() => {
     const handleThreadSeen = (event: Event) => {
@@ -179,6 +200,8 @@ export function UnreadProvider({ children }: { children: ReactNode }) {
       setActiveConversation,
       isActiveChannel,
       isActiveConversation,
+      setActiveThread,
+      isActiveThread,
     }}>
       {children}
     </UnreadContext.Provider>

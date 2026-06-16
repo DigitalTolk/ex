@@ -80,6 +80,7 @@ export default function ChatPage() {
     isActiveConversation,
     markConversationUnread,
     markThreadNotificationUnread,
+    isActiveThread: isActiveThreadScope,
     unhideConversation,
   } = useUnread();
   const { user, logout, patchUser } = useAuth();
@@ -91,7 +92,12 @@ export default function ChatPage() {
   const location = useLocation();
   const reportedTimeZoneRef = useRef('');
   const activeThreadID = new URLSearchParams(location.search).get('thread');
-  const isActiveThread = (threadRootID?: string) => !!threadRootID && activeThreadID === threadRootID;
+  // A thread counts as active if it's the URL-driven thread (?thread=) OR a
+  // locally-opened one ("Reply in thread"), which the views register in the
+  // Unread context. Without the latter, replies to a locally-opened thread
+  // would keep the Threads nav highlighted even while it's on screen.
+  const isActiveThread = (threadRootID?: string) =>
+    !!threadRootID && (activeThreadID === threadRootID || isActiveThreadScope(threadRootID));
 
   useEffect(() => {
     setCurrentUserID(user?.id ?? null);

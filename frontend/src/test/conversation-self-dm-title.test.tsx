@@ -43,6 +43,8 @@ vi.mock('@/context/UnreadContext', () => ({
   useUnread: () => ({
     clearConversationUnread: vi.fn(),
     setActiveConversation: vi.fn(),
+    setActiveThread: vi.fn(),
+    isActiveThread: vi.fn(() => false),
   }),
 }));
 

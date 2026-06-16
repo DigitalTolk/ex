@@ -89,7 +89,7 @@ export function ConversationView() {
   const queryClient = useQueryClient();
   const [searchParams] = useSearchParams();
   const { user } = useAuth();
-  const { clearConversationUnread, setActiveConversation } = useUnread();
+  const { clearConversationUnread, setActiveConversation, setActiveThread } = useUnread();
   const { online } = usePresence();
   const quickReactions = useFrequentEmojis(3);
   const { setActiveParent } = useNotifications();
@@ -267,6 +267,14 @@ export function ConversationView() {
   useEffect(() => {
     if (effectiveThreadRootID) panels.close();
   }, [effectiveThreadRootID, panels]);
+
+  // Register the open thread (URL- or locally-driven) as the active thread
+  // so a reply arriving while it's on screen is marked seen instead of
+  // lighting up the Threads nav.
+  useEffect(() => {
+    setActiveThread(effectiveThreadRootID);
+    return () => setActiveThread(null);
+  }, [effectiveThreadRootID, setActiveThread]);
 
   const userIDs = useMemo(() => {
     const ids = new Set<string>();

@@ -141,6 +141,35 @@ describe('UnreadContext (browser)', () => {
     expect(apiFetchMock).not.toHaveBeenCalled();
   });
 
+  it('setActiveThread tracks the active thread and clears its pending notification', async () => {
+    const getState = await mountUnread();
+    // A reply landed just before the thread was opened.
+    getState().markThreadNotificationUnread('thr-active');
+    await vi.waitFor(() => expect(getState().unreadThreadNotifications.has('thr-active')).toBe(true));
+    expect(getState().isActiveThread('thr-active')).toBe(false);
+    // Opening the thread marks it active and drops the pending highlight.
+    getState().setActiveThread('thr-active');
+    expect(getState().isActiveThread('thr-active')).toBe(true);
+    await vi.waitFor(() => expect(getState().unreadThreadNotifications.has('thr-active')).toBe(false));
+    // Closing it clears the active scope again.
+    getState().setActiveThread(null);
+    expect(getState().isActiveThread('thr-active')).toBe(false);
+  });
+
+  it('setActiveThread(null) / activating a thread with no notification leaves other notifications intact', async () => {
+    const getState = await mountUnread();
+    getState().markThreadNotificationUnread('thr-keep-2');
+    await vi.waitFor(() => expect(getState().unreadThreadNotifications.has('thr-keep-2')).toBe(true));
+    // Closing (null) doesn't touch notifications.
+    getState().setActiveThread(null);
+    // Activating an unrelated thread that has no pending notification is a
+    // no-op on the set (covers the !has(id) early return).
+    getState().setActiveThread('thr-no-notif');
+    await new Promise((r) => setTimeout(r, 10));
+    expect(getState().unreadThreadNotifications.has('thr-keep-2')).toBe(true);
+    expect(getState().isActiveThread('thr-no-notif')).toBe(true);
+  });
+
   it('thread-seen window event clears matching unreadThreadNotification', async () => {
     const getState = await mountUnread();
     getState().markThreadNotificationUnread('thr-x');
