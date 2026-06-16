@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { BrowserRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
@@ -241,5 +241,37 @@ describe('IncomingWebhooksPage', () => {
     fireEvent.click(copyButtons[0]);
     await waitFor(() => expect(copyMock).toHaveBeenCalledWith('https://chat.example/hooks/wh-1'));
     expect(await screen.findByRole('button', { name: /Copied/i })).toBeInTheDocument();
+  });
+
+  it('resets the copied checkmark a couple of seconds after copying', async () => {
+    mockApiFetch.mockImplementation((path: string) => {
+      if (path === '/api/v1/channels') {
+        return Promise.resolve([{ channelID: 'ch-1', channelName: 'general', channelType: 'public', role: 3 }]);
+      }
+      if (path === '/api/v1/admin/webhooks') {
+        return Promise.resolve([{ id: 'wh-1', title: 'CI', url: 'https://chat.example/hooks/wh-1' }]);
+      }
+      return Promise.resolve({});
+    });
+    renderPage();
+
+    const copyBtn = await screen.findByRole('button', { name: /^Copy .* URL$/i });
+
+    vi.useFakeTimers();
+    try {
+      fireEvent.click(copyBtn);
+      // Flush the async clipboard write so the checkmark appears.
+      await act(async () => {});
+      expect(screen.getByRole('button', { name: /Copied/i })).toBeInTheDocument();
+
+      // After the reset delay it reverts to the plain copy button.
+      act(() => {
+        vi.advanceTimersByTime(2000);
+      });
+      expect(screen.getByRole('button', { name: /^Copy .* URL$/i })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /Copied/i })).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

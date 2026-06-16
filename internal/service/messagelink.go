@@ -123,8 +123,11 @@ func (s *MessageLinkService) Preview(ctx context.Context, viewerID, rawURL strin
 	var parentID, label string
 	switch ref.parentKind {
 	case "channel":
-		ch, err := s.channels.GetChannelBySlug(ctx, ref.ref)
-		if err != nil || ch == nil || ch.Archived {
+		// The path segment is usually a slug (`/channel/general`) but thread
+		// permalinks use the channel ID (`/channel/<ulid>?thread=…`), so resolve
+		// either form.
+		ch := s.resolveChannel(ctx, ref.ref)
+		if ch == nil || ch.Archived {
 			return nil, true
 		}
 		// Public channels are visible to everyone in the workspace (even
@@ -160,6 +163,19 @@ func (s *MessageLinkService) Preview(ctx context.Context, viewerID, rawURL strin
 	s.resolveAuthor(ctx, msg, preview)
 	preview.Image = s.resolveImage(ctx, msg)
 	return preview, true
+}
+
+// resolveChannel looks up a channel-link ref as a slug first, then by ID — the
+// channel deep-link path can carry either (slugs for normal channel links, the
+// channel ULID for thread permalinks).
+func (s *MessageLinkService) resolveChannel(ctx context.Context, ref string) *model.Channel {
+	if ch, err := s.channels.GetChannelBySlug(ctx, ref); err == nil && ch != nil {
+		return ch
+	}
+	if ch, err := s.channels.GetChannel(ctx, ref); err == nil && ch != nil {
+		return ch
+	}
+	return nil
 }
 
 func (s *MessageLinkService) resolveAuthor(ctx context.Context, msg *model.Message, preview *UnfurlPreview) {

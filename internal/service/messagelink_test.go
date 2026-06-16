@@ -13,6 +13,7 @@ import (
 
 type fakeMLChannels struct {
 	bySlug map[string]*model.Channel
+	byID   map[string]*model.Channel
 	err    error
 }
 
@@ -21,6 +22,16 @@ func (f fakeMLChannels) GetChannelBySlug(_ context.Context, slug string) (*model
 		return nil, f.err
 	}
 	if ch, ok := f.bySlug[slug]; ok {
+		return ch, nil
+	}
+	return nil, store.ErrNotFound
+}
+
+func (f fakeMLChannels) GetChannel(_ context.Context, id string) (*model.Channel, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	if ch, ok := f.byID[id]; ok {
 		return ch, nil
 	}
 	return nil, store.ErrNotFound
@@ -80,11 +91,17 @@ func (f fakeMLAttachments) Get(_ context.Context, id string) (*model.Attachment,
 func newTestMessageLinkService() *MessageLinkService {
 	return NewMessageLinkService(
 		"https://ex.test",
-		fakeMLChannels{bySlug: map[string]*model.Channel{
-			"general":  {ID: "ch-1", Slug: "general", Type: model.ChannelTypePrivate},
-			"archived": {ID: "ch-arch", Slug: "archived", Archived: true},
-			"public":   {ID: "ch-pub", Slug: "public", Type: model.ChannelTypePublic},
-		}},
+		fakeMLChannels{
+			bySlug: map[string]*model.Channel{
+				"general":  {ID: "ch-1", Slug: "general", Type: model.ChannelTypePrivate},
+				"archived": {ID: "ch-arch", Slug: "archived", Archived: true},
+				"public":   {ID: "ch-pub", Slug: "public", Type: model.ChannelTypePublic},
+			},
+			byID: map[string]*model.Channel{
+				"ch-1":   {ID: "ch-1", Slug: "general", Type: model.ChannelTypePrivate},
+				"ch-pub": {ID: "ch-pub", Slug: "public", Type: model.ChannelTypePublic},
+			},
+		},
 		fakeMLMemberships{members: map[string]bool{"ch-1#viewer": true}},
 		fakeMLConversations{byID: map[string]*model.Conversation{
 			"conv-1": {ID: "conv-1", Type: model.ConversationTypeDM, ParticipantIDs: []string{"viewer", "other"}},
@@ -126,6 +143,22 @@ func TestMessageLink_Preview_Channel(t *testing.T) {
 	}
 	if !strings.HasPrefix(p.CreatedAt, "2026-06-15T10:00:00") {
 		t.Errorf("createdAt = %q", p.CreatedAt)
+	}
+}
+
+func TestMessageLink_Preview_ThreadLinkByChannelID(t *testing.T) {
+	svc := newTestMessageLinkService()
+	// Thread permalinks carry the channel ID in the path plus a `?thread=`
+	// query — both must still resolve to the reply message's preview.
+	p, internal := svc.Preview(
+		context.Background(), "viewer",
+		"https://ex.test/channel/ch-1?thread=root-1#msg-m1",
+	)
+	if !internal || p == nil {
+		t.Fatalf("thread link by channel id should resolve: internal=%v p=%v", internal, p)
+	}
+	if p.ChannelLabel != "~general" || p.Body != "hello @[u-x|Jane] in ~[ch-2|other]" {
+		t.Fatalf("thread preview = %#v", p)
 	}
 }
 

@@ -65,21 +65,25 @@ export function UnfurlCard({
   // Internal message link → rich Slack/Mattermost-style preview card. Not
   // dismissible (it's a useful inline reference, not noise), no host label,
   // and the body renders with the same markdown/mention/emoji treatment as the
-  // chat. The card isn't a single <a> wrapper (the body may contain its own
-  // links) — the header + image are the navigable affordances.
+  // chat. The whole card is clickable via a "stretched link" overlay (the
+  // body may contain its own links, which opt back above the overlay with a
+  // z-index bump so they remain individually clickable).
   if (preview.kind === 'message') {
     return (
       <div
         data-testid="unfurl-card"
-        className="mt-1.5 flex max-w-xl flex-col gap-1.5 overflow-hidden rounded-md border border-l-4 border-l-primary bg-muted/20 p-3 dark:border-l-border-strong"
+        className="relative mt-1.5 flex max-w-xl flex-col gap-1.5 overflow-hidden rounded-md border border-l-4 border-l-primary bg-muted/20 p-3 hover:bg-muted/40 dark:border-l-border-strong"
       >
+        {/* Stretched link covering the whole card → navigates to the message. */}
         <a
           href={preview.url}
           target="_blank"
           rel="noopener noreferrer"
           data-testid="unfurl-message-card"
-          className="flex items-center gap-2 hover:[&_[data-author]]:underline"
-        >
+          aria-label={`Open message from ${preview.authorName || 'Unknown'}`}
+          className="absolute inset-0 z-0"
+        />
+        <div className="flex items-center gap-2">
           {preview.authorAvatarURL ? (
             <img
               src={preview.authorAvatarURL}
@@ -102,26 +106,24 @@ export function UnfurlCard({
           {preview.createdAt && (
             <span className="shrink-0 text-xs font-normal text-muted-foreground">{formatRelative(preview.createdAt)}</span>
           )}
-        </a>
+        </div>
         {preview.body && (
           <div
             data-testid="unfurl-message-body"
-            className="break-words text-sm [&_p]:whitespace-pre-wrap"
+            className="break-words text-sm [&_p]:whitespace-pre-wrap [&_a]:relative [&_a]:z-10"
           >
             {renderMarkdown(preview.body, { emojiMap })}
           </div>
         )}
         {preview.image && !imageBroken && (
-          <a href={preview.url} target="_blank" rel="noopener noreferrer" className="block">
-            <img
-              src={preview.image}
-              alt=""
-              loading="lazy"
-              onError={() => setImageBroken(true)}
-              data-testid="unfurl-card-image"
-              className="max-h-72 w-auto max-w-full rounded border object-contain"
-            />
-          </a>
+          <img
+            src={preview.image}
+            alt=""
+            loading="lazy"
+            onError={() => setImageBroken(true)}
+            data-testid="unfurl-card-image"
+            className="max-h-72 w-auto max-w-full rounded border object-contain"
+          />
         )}
         {preview.channelLabel && (
           <p className="text-xs text-muted-foreground">Only visible to users in {preview.channelLabel}</p>

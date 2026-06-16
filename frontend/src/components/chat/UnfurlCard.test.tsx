@@ -138,6 +138,20 @@ describe('UnfurlCard', () => {
       expect(screen.queryByTestId('unfurl-card-dismiss')).toBeNull();
     });
 
+    it('makes the whole card a stretched link to the message without underlining the author', () => {
+      mockUseUnfurl.mockReturnValue({ data: messagePreview(), isLoading: false });
+      renderCard();
+      const link = screen.getByTestId('unfurl-message-card');
+      expect(link.tagName).toBe('A');
+      expect(link).toHaveAttribute('href', 'https://ex.test/channel/incidents#msg-1');
+      // Stretched-link overlay covers the whole card box.
+      expect(link).toHaveClass('absolute');
+      expect(link).toHaveClass('inset-0');
+      // The author name is plain text (not wrapped in the link) so hovering the
+      // card never underlines the username.
+      expect(screen.getByText('Günter Grodotzki').closest('a')).toBeNull();
+    });
+
     it('falls back to author initials when there is no avatar, and renders without an image', () => {
       mockUseUnfurl.mockReturnValue({
         data: messagePreview({ authorAvatarURL: undefined, image: undefined }),
