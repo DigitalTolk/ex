@@ -34,13 +34,17 @@ RUN VERSION="${GIT_TAG:-${GIT_SHA}}" && \
 # runs as the unprivileged `nonroot` user (uid 65532). The static binary
 # (CGO_ENABLED=0) is the only thing we add.
 FROM gcr.io/distroless/static-debian13:nonroot
-COPY --from=backend /ex /ex
+# Install to /usr/local/bin (the conventional FHS home for a locally-built
+# binary) rather than dropping it at the filesystem root. distroless sets a
+# standard PATH that includes /usr/local/bin, and Docker's exec form resolves
+# bare command names against PATH (execvp), so `ex` below needs no path.
+COPY --from=backend /ex /usr/local/bin/ex
 EXPOSE 8080
 
 # The runtime has no shell or wget, so Docker can't probe /healthz with a
 # CLI. The binary probes itself instead: `ex healthcheck` GETs the local
 # /healthz and exits 0 (healthy) or 1. Exec form — no shell required.
 HEALTHCHECK --interval=15s --timeout=3s --start-period=10s --retries=3 \
-    CMD ["/ex", "healthcheck"]
+    CMD ["ex", "healthcheck"]
 
-ENTRYPOINT ["/ex"]
+ENTRYPOINT ["ex"]
