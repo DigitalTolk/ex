@@ -25,7 +25,7 @@ vi.mock('@/lib/api', () => ({
   },
 }));
 
-vi.mock('@/hooks/useEmoji', () => ({ useEmojis: () => ({ data: [] }), useEmojiMap: () => ({ data: {} }) }));
+vi.mock('@/hooks/useEmoji', () => ({ useEmojis: () => ({ data: [] }), useEmojiMap: () => ({ data: {} }), useFrequentEmojis: () => ['thumbsup', 'heart', 'tada'] }));
 vi.mock('@/hooks/useAttachments', () => ({
   useAttachmentsBatch: () => ({ map: new Map(), isLoading: false }),
   useAttachment: () => ({ data: undefined, isLoading: false }),

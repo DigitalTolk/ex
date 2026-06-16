@@ -31,6 +31,7 @@ vi.mock('@/lib/api', () => ({
 vi.mock('@/hooks/useEmoji', () => ({
   useEmojis: () => ({ data: [] }),
   useEmojiMap: () => ({ data: {} }),
+  useFrequentEmojis: () => ['thumbsup', 'heart', 'tada'],
 }));
 
 vi.mock('@/hooks/useAttachments', () => ({

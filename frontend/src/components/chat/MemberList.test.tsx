@@ -34,7 +34,7 @@ function renderWithProviders(ui: React.ReactElement) {
 // Motion drag physics are unit-tested in useSwipeDismiss.test; mock the
 // hook so the panel chrome is deterministic here.
 vi.mock('@/hooks/useSwipeDismiss', () => ({
-  useSwipeDismiss: () => ({ dismissing: false, motionProps: {} }),
+  useSwipeDismiss: () => ({ dismissing: false, settled: true, motionProps: {} }),
 }));
 
 function setMobileMatch(matches: boolean) {

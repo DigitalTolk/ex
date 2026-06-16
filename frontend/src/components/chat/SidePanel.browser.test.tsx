@@ -7,9 +7,9 @@ import { SidePanel } from './SidePanel';
 // dismissing=true, which only happens mid swipe-dismiss animation. We
 // drive that by mocking useSwipeDismiss — the Motion drag machinery
 // itself is covered by useSwipeDismiss's own unit test.
-const swipeState = vi.hoisted(() => ({ dismissing: false }));
+const swipeState = vi.hoisted(() => ({ dismissing: false, settled: true }));
 vi.mock('@/hooks/useSwipeDismiss', () => ({
-  useSwipeDismiss: () => ({ dismissing: swipeState.dismissing, motionProps: {} }),
+  useSwipeDismiss: () => ({ dismissing: swipeState.dismissing, settled: swipeState.settled, motionProps: {} }),
 }));
 
 let active: { unmount: () => Promise<void> | void } | null = null;
@@ -27,6 +27,7 @@ afterEach(async () => {
   if (active) await active.unmount();
   active = null;
   swipeState.dismissing = false;
+  swipeState.settled = true;
   document.getElementById('kill-anim')?.remove();
 });
 
@@ -69,10 +70,20 @@ describe('SidePanel browser behaviour', () => {
     expect(aside.getAttribute('data-swipe-dismissing')).toBe('true');
   });
 
-  it('has no left border on mobile (md:border-l only)', async () => {
+  it('drops the left border on mobile once fully settled (md:border-l only)', async () => {
+    swipeState.settled = true;
     await renderPanel();
     const aside = document.querySelector('aside[aria-label="My panel"]') as HTMLElement;
     expect(aside.className).toContain('md:border-l');
     expect(aside.className).not.toMatch(/(^|\s)border-l(\s|$)/);
+  });
+
+  it('keeps a left border on mobile while sliding in / being dragged (not settled)', async () => {
+    swipeState.settled = false;
+    await renderPanel();
+    const aside = document.querySelector('aside[aria-label="My panel"]') as HTMLElement;
+    // While the panel is still moving it carries the unprefixed border-l so
+    // its edge stays separated from the content revealed behind it.
+    expect(aside.className).toMatch(/(^|\s)border-l(\s|$)/);
   });
 });

@@ -31,12 +31,12 @@ vi.mock('@/lib/api', () => ({
 
 // Swipe state is mockable so both arms of the data-swipe-dismissing
 // attribute can be driven directly. Drag physics: useSwipeDismiss.test.
-const swipeState = vi.hoisted(() => ({ dismissing: false }));
+const swipeState = vi.hoisted(() => ({ dismissing: false, settled: true }));
 vi.mock('@/hooks/useSwipeDismiss', () => ({
-  useSwipeDismiss: () => ({ dismissing: swipeState.dismissing, motionProps: {} }),
+  useSwipeDismiss: () => ({ dismissing: swipeState.dismissing, settled: swipeState.settled, motionProps: {} }),
 }));
 
-vi.mock('@/hooks/useEmoji', () => ({ useEmojis: () => ({ data: [] }), useEmojiMap: () => ({ data: {} }) }));
+vi.mock('@/hooks/useEmoji', () => ({ useEmojis: () => ({ data: [] }), useEmojiMap: () => ({ data: {} }), useFrequentEmojis: () => ['thumbsup', 'heart', 'tada'] }));
 
 let usersBatchData: Array<{ id: string; displayName: string; avatarURL?: string }> = [];
 vi.mock('@/hooks/useUsersBatch', () => ({

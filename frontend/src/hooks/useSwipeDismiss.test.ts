@@ -19,10 +19,12 @@ function pan(x: number, y: number, vx = 0, vy = 0): PanInfo {
   };
 }
 
+type MotionValue = { set: (v: number) => void; get: () => number };
 type MotionProps = ReturnType<typeof useSwipeDismiss>['motionProps'] & {
   drag?: 'x' | 'y' | false;
   onDragEnd?: (e: PointerEvent, info: PanInfo) => void;
   onPointerDown?: (e: React.PointerEvent) => void;
+  style?: { x?: MotionValue; y?: MotionValue };
 };
 
 describe('useSwipeDismiss', () => {
@@ -30,7 +32,23 @@ describe('useSwipeDismiss', () => {
     mobileRef.value = false;
     const { result } = renderHook(() => useSwipeDismiss('right', vi.fn()));
     expect(result.current.dismissing).toBe(false);
+    expect(result.current.settled).toBe(true);
     expect(result.current.motionProps).toEqual({});
+  });
+
+  it('is unsettled while the panel is off its resting position and settled at rest', () => {
+    const { result } = renderHook(() => useSwipeDismiss('right', vi.fn()));
+    const x = (result.current.motionProps as MotionProps).style!.x!;
+    // A non-zero transform (sliding in / being dragged) un-settles it so the
+    // right-rail panels keep their left border.
+    act(() => x.set(140));
+    expect(result.current.settled).toBe(false);
+    // Back at rest → settled, border drops.
+    act(() => x.set(0));
+    expect(result.current.settled).toBe(true);
+    // A sub-pixel residual still counts as settled.
+    act(() => x.set(0.2));
+    expect(result.current.settled).toBe(true);
   });
 
   it('arms horizontal drag and dismisses past the distance threshold', async () => {

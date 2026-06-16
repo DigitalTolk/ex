@@ -198,24 +198,27 @@ export function AppTopBar({ onOpenChannels, channelsButtonHidden }: AppTopBarPro
         data-app-chrome="true"
       >
         <div className="flex items-center">
-          {/* The hamburger is hidden on mobile (max-md): there the channel
-              list opens by swiping from the left edge, and the grid layout
-              keeps this column's space so the centred search bar doesn't
-              shift. It still shows on tablet (md–lg) where there's no
-              permanent sidebar and no edge-swipe affordance. It's dropped
-              on the home/start page where the channel list is already the
-              main view. */}
-          {!channelsButtonHidden && (
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={onOpenChannels}
-              aria-label="Open channels"
-              className="h-7 w-7 max-md:hidden text-sidebar-foreground hover:bg-sidebar-accent lg:hidden"
-            >
-              <Menu className="h-4 w-4" />
-            </Button>
-          )}
+          {/* The hamburger shows whenever the channel sidebar isn't already
+              open (mobile drawer closed, or tablet md–lg which has no
+              permanent sidebar). When it should be hidden — drawer open, or
+              the home/start page where the channel list is the main view —
+              we keep it mounted but `invisible` so the column's box never
+              changes width and the centred search bar can't shift/resize.
+              It's dropped only on desktop (lg+) where the sidebar is
+              permanent. */}
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={onOpenChannels}
+            aria-label="Open channels"
+            aria-hidden={channelsButtonHidden || undefined}
+            tabIndex={channelsButtonHidden ? -1 : 0}
+            className={`h-7 w-7 text-sidebar-foreground hover:bg-sidebar-accent lg:hidden ${
+              channelsButtonHidden ? 'invisible' : ''
+            }`}
+          >
+            <Menu className="h-4 w-4" />
+          </Button>
         </div>
 
         <div className="min-w-0 w-full">

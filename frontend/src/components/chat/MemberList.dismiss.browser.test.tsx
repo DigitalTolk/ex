@@ -8,9 +8,9 @@ import type { ChannelMembership } from '@/types';
 // Covers both arms of the data-swipe-dismissing attribute by driving the
 // Motion swipe hook into its mid-dismiss state. The drag physics are
 // unit-tested in useSwipeDismiss.test.
-const swipeState = vi.hoisted(() => ({ dismissing: false }));
+const swipeState = vi.hoisted(() => ({ dismissing: false, settled: true }));
 vi.mock('@/hooks/useSwipeDismiss', () => ({
-  useSwipeDismiss: () => ({ dismissing: swipeState.dismissing, motionProps: {} }),
+  useSwipeDismiss: () => ({ dismissing: swipeState.dismissing, settled: swipeState.settled, motionProps: {} }),
 }));
 
 vi.mock('@/lib/api', () => ({

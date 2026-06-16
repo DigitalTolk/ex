@@ -193,7 +193,7 @@ export function AppLayout({ children }: AppLayoutProps) {
           ref={appHeaderRef}
           onWheel={forwardHeaderWheel}
         >
-          <AppTopBar onOpenChannels={openChannelsWithAnimation} channelsButtonHidden={isHome} />
+          <AppTopBar onOpenChannels={openChannelsWithAnimation} channelsButtonHidden={isHome || mobileChannelsOpen} />
         </div>
         <div
           className="relative z-20 shrink-0 bg-sidebar"

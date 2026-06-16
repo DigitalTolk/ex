@@ -74,9 +74,12 @@ describe('AppTopBar (browser)', () => {
     expect(document.querySelector('[data-testid="user-menu-invite"]')).toBeNull();
   });
 
-  it('omits the channels button when channelsButtonHidden is set', async () => {
+  it('keeps the channels button mounted but invisible when channelsButtonHidden is set', async () => {
     await renderTopBar(<AppTopBar channelsButtonHidden />);
-    expect(document.querySelector('[aria-label="Open channels"]')).toBeNull();
+    const button = document.querySelector('[aria-label="Open channels"]') as HTMLElement | null;
+    expect(button).not.toBeNull();
+    expect(button!.classList.contains('invisible')).toBe(true);
+    expect(button!.getAttribute('aria-hidden')).toBe('true');
   });
 
   it('renders the account chip with an active user status', async () => {

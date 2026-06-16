@@ -5,7 +5,7 @@ import { SidePanel } from './SidePanel';
 // The drag physics live in useSwipeDismiss (Motion, pointer-based) and are
 // unit-tested there; here we mock it so the panel chrome is deterministic.
 vi.mock('@/hooks/useSwipeDismiss', () => ({
-  useSwipeDismiss: () => ({ dismissing: false, motionProps: {} }),
+  useSwipeDismiss: () => ({ dismissing: false, settled: true, motionProps: {} }),
 }));
 
 describe('SidePanel', () => {

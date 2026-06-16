@@ -96,11 +96,11 @@ export function MemberList({ members, channelId, currentUserId, currentUserRole,
   }
 
   const canManage = canManageMembers(currentUserRole) && !!channelId;
-  const { dismissing, motionProps } = useSwipeDismiss('right', () => onClose?.());
+  const { dismissing, settled, motionProps } = useSwipeDismiss('right', () => onClose?.());
 
   return (
     <motion.div
-      className="flex h-full min-h-0 w-80 flex-col bg-background md:border-l max-md:fixed max-md:inset-x-0 max-md:bottom-0 max-md:top-[var(--mobile-right-panel-top,6rem)] max-md:z-40 max-md:w-auto max-md:touch-pan-y"
+      className={`flex h-full min-h-0 w-80 flex-col bg-background md:border-l max-md:fixed max-md:inset-x-0 max-md:bottom-0 max-md:top-[var(--mobile-right-panel-top,6rem)] max-md:z-40 max-md:w-auto max-md:touch-pan-y ${settled ? '' : 'border-l'}`}
       data-mobile-right-sidebar="true"
       data-swipe-dismissing={String(dismissing)}
       {...motionProps}

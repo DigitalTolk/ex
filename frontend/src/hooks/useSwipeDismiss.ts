@@ -38,6 +38,12 @@ export function useSwipeDismiss(direction: 'right' | 'down', onDismiss: () => vo
   const offset = useMotionValue(0);
   const [dismissing, setDismissing] = useState(false);
   const [armed, setArmed] = useState(true);
+  // Whether the live transform is currently displaced from its resting
+  // position. Starts true on mobile (the panel mounts off-screen and
+  // slides in) so the right-rail panels carry a left border while moving,
+  // and is driven thereafter by the motion value: any drag/enter/exit
+  // displaces it, resting at ≈0 clears it.
+  const [displaced, setDisplaced] = useState(true);
   const dismissingRef = useRef(false);
 
   // Mobile enter: start off-screen and spring in. useLayoutEffect runs
@@ -49,6 +55,23 @@ export function useSwipeDismiss(direction: 'right' | 'down', onDismiss: () => vo
     const controls = animate(offset, 0, SWIPE_DISMISS_SPRING);
     return () => controls.stop();
   }, [isMobile, horizontal, offset]);
+
+  // Track displacement off the live transform. Only the horizontal
+  // (right-rail) panels consume `settled` for their mobile border, so we
+  // subscribe only there — the vertical bottom-sheets don't pay for an
+  // extra re-render when the enter spring settles. Updates flow solely
+  // through the motion value's change events (never a synchronous setState
+  // in the effect body), so there are no cascading renders.
+  useLayoutEffect(() => {
+    if (!isMobile || !horizontal) return;
+    return offset.on('change', (v) => {
+      const away = Math.abs(v) >= 0.5;
+      setDisplaced((prev) => (prev === away ? prev : away));
+    });
+  }, [isMobile, horizontal, offset]);
+
+  // Settled everywhere except a horizontal panel mid-motion on mobile.
+  const settled = !isMobile || !horizontal || !displaced;
 
   const onPointerDown = useCallback(
     (e: React.PointerEvent) => {
@@ -76,11 +99,12 @@ export function useSwipeDismiss(direction: 'right' | 'down', onDismiss: () => vo
   );
 
   if (!isMobile) {
-    return { dismissing: false, motionProps: {} as Record<string, never> };
+    return { dismissing: false, settled: true, motionProps: {} as Record<string, never> };
   }
 
   return {
     dismissing,
+    settled,
     motionProps: {
       drag: (armed ? (horizontal ? 'x' : 'y') : false) as 'x' | 'y' | false,
       dragDirectionLock: true,

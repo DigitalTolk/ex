@@ -16,10 +16,10 @@ interface SidePanelProps {
 // Centralises the title bar + close button + scroll body so each panel
 // stays focused on its own content.
 export function SidePanel({ title, ariaLabel, closeLabel, onClose, children }: SidePanelProps) {
-  const { dismissing, motionProps } = useSwipeDismiss('right', onClose);
+  const { dismissing, settled, motionProps } = useSwipeDismiss('right', onClose);
   return (
     <motion.aside
-      className="flex w-[28rem] flex-col bg-background md:border-l max-md:fixed max-md:inset-x-0 max-md:bottom-0 max-md:top-[var(--mobile-right-panel-top,6rem)] max-md:z-40 max-md:w-auto max-md:touch-pan-y"
+      className={`flex w-[28rem] flex-col bg-background md:border-l max-md:fixed max-md:inset-x-0 max-md:bottom-0 max-md:top-[var(--mobile-right-panel-top,6rem)] max-md:z-40 max-md:w-auto max-md:touch-pan-y ${settled ? '' : 'border-l'}`}
       aria-label={ariaLabel}
       data-mobile-right-sidebar="true"
       data-swipe-dismissing={String(dismissing)}

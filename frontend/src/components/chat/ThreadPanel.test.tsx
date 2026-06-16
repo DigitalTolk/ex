@@ -42,6 +42,7 @@ function setMobileMatch(matches: boolean) {
 vi.mock('@/hooks/useEmoji', () => ({
   useEmojis: () => ({ data: [] }),
   useEmojiMap: () => ({ data: {} }),
+  useFrequentEmojis: () => ['thumbsup', 'heart', 'tada'],
 }));
 
 // MessageInput is exhaustively unit-tested in isolation; here we just
@@ -75,7 +76,7 @@ vi.mock('./MessageInput', () => ({
 // Motion drag physics are unit-tested in useSwipeDismiss.test; mock the
 // hook so the panel chrome is deterministic here.
 vi.mock('@/hooks/useSwipeDismiss', () => ({
-  useSwipeDismiss: () => ({ dismissing: false, motionProps: {} }),
+  useSwipeDismiss: () => ({ dismissing: false, settled: true, motionProps: {} }),
 }));
 
 function renderWithProviders(ui: React.ReactElement) {
@@ -145,6 +146,27 @@ describe('ThreadPanel', () => {
     await waitFor(() => {
       expect(screen.getByText('reply one')).toBeInTheDocument();
     });
+  });
+
+  it('shows the popular quick-reaction shelf on thread messages', async () => {
+    mockApiFetch.mockResolvedValueOnce(replies);
+    renderWithProviders(
+      <ThreadPanel
+        channelId="ch-1"
+        threadRootID="m-1"
+        onClose={vi.fn()}
+        userMap={userMap}
+        currentUserId="u-1"
+      />,
+    );
+
+    // useFrequentEmojis is mocked to ['thumbsup','heart','tada']; the thread
+    // sidebar must surface the same popular shelf the main message list does.
+    await waitFor(() => {
+      expect(screen.getAllByLabelText('React with thumbsup').length).toBeGreaterThan(0);
+    });
+    expect(screen.getAllByLabelText('React with heart').length).toBeGreaterThan(0);
+    expect(screen.getAllByLabelText('React with tada').length).toBeGreaterThan(0);
   });
 
   it('calls onClose when close button is clicked', () => {

@@ -187,12 +187,19 @@ describe('AppLayout', () => {
     renderLayout();
 
     const menuBtn = screen.getByLabelText('Open channels');
+    // While the drawer is closed the hamburger is shown and focusable.
+    expect(menuBtn).not.toHaveClass('invisible');
+    expect(menuBtn).toHaveAttribute('tabindex', '0');
     fireEvent.click(menuBtn);
 
     expect(window.location.pathname).toBe('/channel/general');
     expect(screen.getByTestId('mobile-channel-sidebar')).not.toHaveAttribute('inert');
     expect(screen.getByTestId('mobile-channel-sidebar')).not.toHaveAttribute('aria-hidden');
     expect(document.querySelector('main')).toHaveAttribute('data-mobile-channels-open', 'true');
+    // Once the drawer is open the hamburger hides but stays mounted so the
+    // header column keeps its width (the search bar must not shift/resize).
+    expect(menuBtn).toHaveClass('invisible');
+    expect(menuBtn).toHaveAttribute('tabindex', '-1');
   });
 
   it('closes the persistent mobile channel pane from a sidebar selection', () => {

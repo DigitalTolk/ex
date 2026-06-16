@@ -207,9 +207,23 @@ describe('AppTopBar', () => {
     expect(onOpen).toHaveBeenCalled();
   });
 
-  it('omits the channels button entirely when channelsButtonHidden is true', () => {
+  it('keeps the channels button mounted but invisible (space reserved) when channelsButtonHidden is true', () => {
     renderTopBar(<AppTopBar channelsButtonHidden />);
-    expect(screen.queryByLabelText('Open channels')).not.toBeInTheDocument();
+    const button = screen.getByLabelText('Open channels');
+    // Still in the DOM so the grid column keeps its width and the search
+    // bar doesn't shift; just visually hidden and out of the tab order.
+    expect(button).toBeInTheDocument();
+    expect(button).toHaveClass('invisible');
+    expect(button).toHaveAttribute('aria-hidden', 'true');
+    expect(button).toHaveAttribute('tabindex', '-1');
+  });
+
+  it('shows the channels button (visible, focusable) when channelsButtonHidden is false', () => {
+    renderTopBar(<AppTopBar onOpenChannels={vi.fn()} />);
+    const button = screen.getByLabelText('Open channels');
+    expect(button).not.toHaveClass('invisible');
+    expect(button).toHaveAttribute('tabindex', '0');
+    expect(button).not.toHaveAttribute('aria-hidden');
   });
 
   describe('mobile account sheet', () => {

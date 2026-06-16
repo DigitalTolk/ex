@@ -9,6 +9,7 @@ import { useAtBottomRef } from '@/hooks/useAtBottomRef';
 import { motion } from 'motion/react';
 import { useSwipeDismiss } from '@/hooks/useSwipeDismiss';
 import { useAttachmentsBatch } from '@/hooks/useAttachments';
+import { useFrequentEmojis } from '@/hooks/useEmoji';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { useEditMessage, useSendMessage, type SendMessageInput } from '@/hooks/useMessages';
 import { markThreadSeen, useFollowThread, useThreadMessages, useUnfollowThread, useUserThreads } from '@/hooks/useThreads';
@@ -57,8 +58,12 @@ export function ThreadPanel({
   anchorRevision,
 }: ThreadPanelProps) {
   const { data, isLoading } = useThreadMessages({ channelId, conversationId, threadRootID });
-  const { dismissing, motionProps } = useSwipeDismiss('right', onClose);
+  const { dismissing, settled, motionProps } = useSwipeDismiss('right', onClose);
   const isMobile = useIsMobile();
+  // Most-used emoji shelf for the message action bar — same source the
+  // channel/conversation message lists use, so the thread sidebar shows
+  // (and live-reorders) the same popular reactions.
+  const quickReactions = useFrequentEmojis(3);
   const [editingMessage, setEditingMessage] = useState<Message | null>(null);
   const activeEditingMessage = isMobile ? editingMessage : null;
 
@@ -416,7 +421,7 @@ export function ThreadPanel({
 
   return (
     <motion.aside
-      className="flex w-[28rem] flex-col bg-background md:border-l max-md:fixed max-md:inset-x-0 max-md:bottom-0 max-md:top-[var(--mobile-right-panel-top,6rem)] max-md:z-40 max-md:w-auto max-md:touch-pan-y"
+      className={`flex w-[28rem] flex-col bg-background md:border-l max-md:fixed max-md:inset-x-0 max-md:bottom-0 max-md:top-[var(--mobile-right-panel-top,6rem)] max-md:z-40 max-md:w-auto max-md:touch-pan-y ${settled ? '' : 'border-l'}`}
       aria-label="Thread"
       data-mobile-right-sidebar="true"
       data-swipe-dismissing={String(dismissing)}
@@ -480,6 +485,7 @@ export function ThreadPanel({
                   currentUserId={currentUserId}
                   userMap={userLookup}
                   inThread
+                  quickReactions={quickReactions}
                   onEditMessage={isMobile ? setEditingMessage : undefined}
                 />
               );
