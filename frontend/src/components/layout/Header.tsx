@@ -363,7 +363,7 @@ export function Header({
             onClick={onMembersClick}
             aria-label="Toggle member list"
           >
-            <Badge variant="secondary" className="gap-1 cursor-pointer hover:bg-secondary/80">
+            <Badge variant="secondary" className="h-7 gap-1 cursor-pointer hover:bg-secondary/80">
               <Users className="h-3 w-3" aria-hidden="true" />
               {memberCount}
             </Badge>

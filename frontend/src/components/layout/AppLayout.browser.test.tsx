@@ -72,19 +72,34 @@ function LayoutHarness({ children }: { children: ReactNode }) {
   );
 }
 
-function touchPoint(element: Element, x: number, y: number) {
-  return { identifier: 1, target: element, clientX: x, clientY: y, pageX: x, pageY: y, screenX: x, screenY: y };
+// Motion's pan gesture is pointer-based: it binds `pointerdown` on the
+// element and `pointermove`/`pointerup` on the window, throttling the
+// offset updates through requestAnimationFrame. We drive the real gesture
+// by dispatching genuine PointerEvents and letting frames settle — the
+// decision logic itself is unit-tested in lib/channel-swipe.test.
+function pointer(target: EventTarget, type: string, x: number, y: number) {
+  const event = new PointerEvent(type, {
+    bubbles: true,
+    cancelable: true,
+    pointerId: 1,
+    pointerType: 'touch',
+    isPrimary: true,
+    clientX: x,
+    clientY: y,
+  });
+  target.dispatchEvent(event);
+  return event;
 }
 
-function dispatchTouch(element: Element, type: string, x: number, y: number) {
-  const event = new Event(type, { bubbles: true, cancelable: true });
-  const touches = type === 'touchend' ? [] : [touchPoint(element, x, y)];
-  const changedTouches = [touchPoint(element, x, y)];
-  Object.defineProperty(event, 'touches', { value: touches });
-  Object.defineProperty(event, 'targetTouches', { value: touches });
-  Object.defineProperty(event, 'changedTouches', { value: changedTouches });
-  element.dispatchEvent(event);
-  return event;
+// Begin a pan at (x, y) on `element`, then drag through the given points
+// (dispatched on the window, where Motion listens for moves).
+function panMove(element: Element, start: [number, number], ...points: Array<[number, number]>) {
+  pointer(element, 'pointerdown', start[0], start[1]);
+  for (const [x, y] of points) pointer(window, 'pointermove', x, y);
+}
+
+function panEnd(point: [number, number]) {
+  pointer(window, 'pointerup', point[0], point[1]);
 }
 
 describe('AppLayout browser behavior', () => {
@@ -149,13 +164,13 @@ describe('AppLayout browser behavior', () => {
     input!.focus();
     expect(document.activeElement).toBe(input);
 
-    dispatchTouch(main!, 'touchstart', 12, 220);
-    dispatchTouch(main!, 'touchmove', 92, 226);
+    panMove(main!, [12, 220], [60, 224], [92, 226]);
 
     await vi.waitFor(() => {
       expect(document.activeElement).not.toBe(input);
       expect(main!.dataset.channelDragging).toBe('true');
     });
+    panEnd([92, 226]);
   });
 
   it('allows vertical scrolling gestures on the mobile main content', async () => {
@@ -174,11 +189,12 @@ describe('AppLayout browser behavior', () => {
     expect(main).not.toBeNull();
     expect(scroller).not.toBeNull();
 
-    dispatchTouch(main!, 'touchstart', 120, 420);
-    const verticalMove = dispatchTouch(main!, 'touchmove', 122, 260);
-
-    expect(verticalMove.defaultPrevented).toBe(false);
+    // A predominantly vertical pan never latches (absY >= absX), so the
+    // channel drawer stays put and native scrolling is left to the browser.
+    panMove(main!, [120, 420], [122, 340], [122, 260]);
+    await new Promise((r) => setTimeout(r, 40));
     expect(main!.dataset.channelDragging).toBe('false');
+    panEnd([122, 260]);
   });
 
   it('blocks page scrolling only after an intentional mobile edge swipe starts opening channels', async () => {
@@ -195,13 +211,14 @@ describe('AppLayout browser behavior', () => {
     const main = document.querySelector('[data-app-main="true"]') as HTMLElement | null;
     expect(main).not.toBeNull();
 
-    dispatchTouch(main!, 'touchstart', 12, 420);
-    const horizontalMove = dispatchTouch(main!, 'touchmove', 96, 424);
+    // An intentional left-edge horizontal pan latches "open" and starts
+    // dragging the drawer in, which flips the channel-dragging flag.
+    panMove(main!, [12, 420], [60, 422], [96, 424]);
 
     await vi.waitFor(() => {
-      expect(horizontalMove.defaultPrevented).toBe(true);
       expect(main!.dataset.channelDragging).toBe('true');
     });
+    panEnd([96, 424]);
   });
 
   it('places mobile right panels below the measured channel header, including taller headers', async () => {
@@ -314,12 +331,11 @@ describe('AppLayout browser behavior', () => {
       </MemoryRouter>,
     );
     const main = document.querySelector('[data-app-main="true"]') as HTMLElement;
-    dispatchTouch(main, 'touchstart', 12, 420);
-    const move = dispatchTouch(main, 'touchmove', 100, 424);
-    // The right sheet blocks edge-from-left → no preventDefault.
-    await new Promise((r) => setTimeout(r, 20));
-    expect(move.defaultPrevented).toBe(false);
+    // A right-side sheet is open, so the edge-from-left open swipe is refused.
+    panMove(main, [12, 420], [60, 422], [100, 424]);
+    await new Promise((r) => setTimeout(r, 40));
     expect(main.dataset.channelDragging).toBe('false');
+    panEnd([100, 424]);
   });
 
   it('commits opening the drawer on a long edge swipe and tracks the live transform', async () => {
@@ -334,9 +350,7 @@ describe('AppLayout browser behavior', () => {
       </MemoryRouter>,
     );
     const main = document.querySelector('[data-app-main="true"]') as HTMLElement;
-    dispatchTouch(main, 'touchstart', 12, 300);
-    dispatchTouch(main, 'touchmove', 70, 304);
-    dispatchTouch(main, 'touchmove', 170, 306);
+    panMove(main, [12, 300], [70, 304], [170, 306]);
     // Mid-drag: the main element carries a live translate3d(calc(...)) transform
     // (mainDragStyle's channelDragOffset !== 0 branch).
     await vi.waitFor(() => {
@@ -344,7 +358,7 @@ describe('AppLayout browser behavior', () => {
       expect(main.style.transform).toContain('calc');
     });
     // A >80px travel commits the open.
-    dispatchTouch(main, 'touchend', 170, 306);
+    panEnd([170, 306]);
     await vi.waitFor(() => {
       expect(main.dataset.mobileChannelsOpen).toBe('true');
     });
@@ -365,11 +379,15 @@ describe('AppLayout browser behavior', () => {
     // Open via the menu button first (non-home route, so it can also close).
     (document.querySelector('button[aria-label="Open channels"]') as HTMLButtonElement).click();
     await vi.waitFor(() => expect(main.dataset.mobileChannelsOpen).toBe('true'));
-    // Swipe left past the threshold to close.
-    dispatchTouch(main, 'touchstart', 200, 300);
-    dispatchTouch(main, 'touchmove', 120, 304);
-    dispatchTouch(main, 'touchmove', 30, 306);
-    dispatchTouch(main, 'touchend', 30, 306);
+    // Swipe left past the threshold to close. Confirm the close intent
+    // latches mid-drag (negative blend onto the 100vw resting position)
+    // before releasing past the commit threshold.
+    panMove(main, [200, 300], [120, 304], [40, 306]);
+    await vi.waitFor(() => {
+      expect(main.style.transform).toContain('100vw');
+      expect(main.style.transform).toMatch(/-\s*\d+px/);
+    });
+    panEnd([40, 306]);
     await vi.waitFor(() => expect(main.dataset.mobileChannelsOpen).toBe('false'));
   });
 
@@ -407,10 +425,9 @@ describe('AppLayout browser behavior', () => {
       </MemoryRouter>,
     );
     const main = document.querySelector('[data-app-main="true"]') as HTMLElement;
-    dispatchTouch(main, 'touchstart', 12, 420);
-    dispatchTouch(main, 'touchmove', 40, 424); // 28px — below the 72px threshold
-    dispatchTouch(main, 'touchend', 40, 424);
-    await new Promise((r) => setTimeout(r, 20));
+    panMove(main, [12, 420], [30, 422], [40, 424]); // 28px — below the 80px threshold
+    panEnd([40, 424]);
+    await new Promise((r) => setTimeout(r, 40));
     expect(main.dataset.channelDragging).toBe('false');
   });
 
@@ -427,11 +444,10 @@ describe('AppLayout browser behavior', () => {
     );
     const main = document.querySelector('[data-app-main="true"]') as HTMLElement;
     // absX = 20 (>= axis-lock 12) but absY = 60 >= absX → vertical wins, no latch.
-    dispatchTouch(main, 'touchstart', 120, 400);
-    const move = dispatchTouch(main, 'touchmove', 140, 460);
-    await new Promise((r) => setTimeout(r, 20));
-    expect(move.defaultPrevented).toBe(false);
+    panMove(main, [120, 400], [130, 430], [140, 460]);
+    await new Promise((r) => setTimeout(r, 40));
     expect(main.dataset.channelDragging).toBe('false');
+    panEnd([140, 460]);
   });
 
   it('aborts the open swipe when the gesture starts on an element inside a right-side sheet', async () => {
@@ -453,12 +469,13 @@ describe('AppLayout browser behavior', () => {
       </MemoryRouter>,
     );
     const sheet = document.querySelector('[data-testid="inner-sheet"]') as HTMLElement;
-    dispatchTouch(sheet, 'touchstart', 12, 300);
-    const move = dispatchTouch(sheet, 'touchmove', 100, 304);
-    await new Promise((r) => setTimeout(r, 20));
-    expect(move.defaultPrevented).toBe(false);
+    // The pointerdown originates on an element inside the right sidebar, so
+    // canOpenChannelsFromGesture refuses via the eventTarget.closest() arm.
+    panMove(sheet, [12, 300], [60, 302], [100, 304]);
+    await new Promise((r) => setTimeout(r, 40));
     const main = document.querySelector('[data-app-main="true"]') as HTMLElement;
     expect(main.dataset.channelDragging).toBe('false');
+    panEnd([100, 304]);
   });
 
   it('clears the drag offset when a latched swipe ends without crossing the threshold (committed but short)', async () => {
@@ -474,11 +491,10 @@ describe('AppLayout browser behavior', () => {
     );
     const main = document.querySelector('[data-app-main="true"]') as HTMLElement;
     // Latch open (edge start, absX>=12, horizontal), then end with total
-    // travel below the 80px pixel threshold and 0 velocity → no commit.
-    dispatchTouch(main, 'touchstart', 10, 300);
-    dispatchTouch(main, 'touchmove', 40, 302);
+    // travel below the 80px pixel threshold and low velocity → no commit.
+    panMove(main, [10, 300], [25, 301], [40, 302]);
     await vi.waitFor(() => expect(main.dataset.channelDragging).toBe('true'));
-    dispatchTouch(main, 'touchend', 40, 302);
+    panEnd([40, 302]);
     await vi.waitFor(() => {
       expect(main.dataset.channelDragging).toBe('false');
       expect(main.dataset.mobileChannelsOpen).toBe('false');
@@ -497,13 +513,12 @@ describe('AppLayout browser behavior', () => {
       </MemoryRouter>,
     );
     const main = document.querySelector('[data-app-main="true"]') as HTMLElement;
-    // A 6px move registers a swipe (>= delta 4) but never crosses the
-    // 12px axis-lock, so swipeCommittedRef stays null → onSwiped takes the
-    // !committed branch and resets the offset to 0.
-    dispatchTouch(main, 'touchstart', 100, 300);
-    dispatchTouch(main, 'touchmove', 106, 301);
-    dispatchTouch(main, 'touchend', 106, 301);
-    await new Promise((r) => setTimeout(r, 20));
+    // A 6px move never crosses the 12px axis-lock, so swipeCommittedRef
+    // stays null → onChannelPanEnd takes the !committed branch and resets
+    // the offset to 0.
+    panMove(main, [100, 300], [103, 301], [106, 301]);
+    panEnd([106, 301]);
+    await new Promise((r) => setTimeout(r, 40));
     expect(main.dataset.channelDragging).toBe('false');
     expect(main.dataset.mobileChannelsOpen).toBe('false');
   });
@@ -543,19 +558,17 @@ describe('AppLayout browser behavior', () => {
     await vi.waitFor(() => expect(main.dataset.mobileChannelsOpen).toBe('true'));
     // Drag left to start closing → channelDragOffset is negative, so
     // mainDragStyle uses restingX=100vw and the '-' sign branch.
-    dispatchTouch(main, 'touchstart', 300, 300);
-    dispatchTouch(main, 'touchmove', 260, 302);
-    dispatchTouch(main, 'touchmove', 230, 304);
+    panMove(main, [300, 300], [260, 302], [230, 304]);
     await vi.waitFor(() => {
       // restingX=100vw (open) blended with a negative drag offset. The
       // browser re-serializes the calc(), so assert on its parts.
       expect(main.style.transform).toContain('100vw');
       expect(main.style.transform).toMatch(/-\s*\d+px/);
     });
-    dispatchTouch(main, 'touchend', 230, 304);
+    panEnd([230, 304]);
   });
 
-  it('ignores a non-cancelable touchmove during a latched swipe', async () => {
+  it('clamps the live open offset to a positive translate while latched', async () => {
     if (window.innerWidth > 767) return;
     await render(
       <MemoryRouter initialEntries={['/threads']}>
@@ -567,16 +580,16 @@ describe('AppLayout browser behavior', () => {
       </MemoryRouter>,
     );
     const main = document.querySelector('[data-app-main="true"]') as HTMLElement;
-    dispatchTouch(main, 'touchstart', 10, 300);
-    // A non-cancelable move still updates the offset but skips preventDefault.
-    const ev = new Event('touchmove', { bubbles: true, cancelable: false });
-    const tp = touchPoint(main, 80, 302);
-    Object.defineProperty(ev, 'touches', { value: [tp] });
-    Object.defineProperty(ev, 'targetTouches', { value: [tp] });
-    Object.defineProperty(ev, 'changedTouches', { value: [tp] });
-    main.dispatchEvent(ev);
-    await vi.waitFor(() => expect(main.dataset.channelDragging).toBe('true'));
-    expect(ev.defaultPrevented).toBe(false);
+    // Latch open from the edge; mid-drag the transform blends a positive
+    // offset onto the closed resting position (0px). The browser collapses
+    // calc(0px + Npx) to calc(Npx), so assert on the positive pixel value.
+    panMove(main, [10, 300], [40, 301], [70, 302]);
+    await vi.waitFor(() => {
+      expect(main.dataset.channelDragging).toBe('true');
+      expect(main.style.transform).toMatch(/calc\(\s*\d+px\s*\)/);
+      expect(main.style.transform).not.toContain('-');
+    });
+    panEnd([70, 302]);
   });
 
   it('on desktop the swipe handler short-circuits because the layout is not mobile', async () => {
@@ -587,11 +600,11 @@ describe('AppLayout browser behavior', () => {
       </LayoutHarness>,
     );
     const main = document.querySelector('[data-app-main="true"]') as HTMLElement;
-    // onSwiping fires (synthetic touch), but isMobile is false → early return.
-    dispatchTouch(main, 'touchstart', 12, 300);
-    dispatchTouch(main, 'touchmove', 120, 304);
-    await new Promise((r) => setTimeout(r, 20));
+    // Motion's onPan fires, but isMobile is false → onChannelPan early-returns.
+    panMove(main, [12, 300], [60, 302], [120, 304]);
+    await new Promise((r) => setTimeout(r, 40));
     expect(main.dataset.channelDragging).toBe('false');
+    panEnd([120, 304]);
   });
 
   it('header wheel over a non-scrollable page is a no-op (no scroller to forward to)', async () => {

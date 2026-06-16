@@ -198,18 +198,22 @@ export function AppTopBar({ onOpenChannels, channelsButtonHidden }: AppTopBarPro
         data-app-chrome="true"
       >
         <div className="flex items-center">
-          {/* Drop the channels button entirely on the home/start page —
-              there the channel list is already the main view, so it has
-              nothing to open. */}
+          {/* The hamburger is hidden on mobile (max-md): there the channel
+              list opens by swiping from the left edge, and the grid layout
+              keeps this column's space so the centred search bar doesn't
+              shift. It still shows on tablet (md–lg) where there's no
+              permanent sidebar and no edge-swipe affordance. It's dropped
+              on the home/start page where the channel list is already the
+              main view. */}
           {!channelsButtonHidden && (
             <Button
               variant="ghost"
               size="icon"
               onClick={onOpenChannels}
               aria-label="Open channels"
-              className="h-7 w-7 max-md:h-10 max-md:w-10 text-sidebar-foreground hover:bg-sidebar-accent lg:hidden"
+              className="h-7 w-7 max-md:hidden text-sidebar-foreground hover:bg-sidebar-accent lg:hidden"
             >
-              <Menu className="h-4 w-4 max-md:h-5 max-md:w-5" />
+              <Menu className="h-4 w-4" />
             </Button>
           )}
         </div>

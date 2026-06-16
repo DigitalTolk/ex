@@ -76,12 +76,6 @@ function setMobileMatch(matches: boolean) {
   });
 }
 
-function swipeDown(element: Element) {
-  fireEvent.touchStart(element, { touches: [{ clientX: 160, clientY: 120 }] });
-  fireEvent.touchMove(element, { touches: [{ clientX: 168, clientY: 230 }] });
-  fireEvent.touchEnd(element, { changedTouches: [{ clientX: 168, clientY: 230 }] });
-}
-
 async function openMobileActions(message: Message = makeMessage()) {
   vi.useFakeTimers();
   setMobileMatch(true);
@@ -201,18 +195,13 @@ describe('MessageItem - mobile actions', () => {
     expect(sheet).toHaveClass('hidden');
   });
 
-  it('closes the mobile action sheet on swipe down', async () => {
+  it('closes the mobile action sheet from the backdrop', async () => {
     await openMobileActions();
-    vi.useFakeTimers();
-    const sheet = screen.getByTestId('mobile-message-actions');
-
-    swipeDown(sheet);
-
-    expect(sheet).toHaveAttribute('data-swipe-dismissing', 'true');
-    expect(sheet).toHaveClass('translate-y-full');
-    act(() => vi.advanceTimersByTime(180));
-    expect(screen.queryByTestId('mobile-message-actions')).not.toBeInTheDocument();
-    vi.useRealTimers();
+    expect(screen.getByTestId('mobile-message-actions')).toBeInTheDocument();
+    // The swipe-to-dismiss drag is Motion-driven (unit-tested in
+    // useSwipeDismiss.test); here we verify the backdrop close path.
+    fireEvent.click(screen.getByLabelText('Close message actions'));
+    await waitFor(() => expect(screen.queryByTestId('mobile-message-actions')).not.toBeInTheDocument());
   });
 
   it('does not open the mobile action sheet from a short tap', () => {

@@ -12,14 +12,10 @@ vi.mock('@/hooks/useTransientOverlayCleanup', () => ({
 }));
 // Capture the swipe-down dismiss callback so a test can fire it directly.
 let capturedSwipeDismiss: (() => void) | undefined;
-vi.mock('@/hooks/useAnimatedSwipeDismiss', () => ({
-  useAnimatedSwipeDismiss: (_dir: string, onDismiss: () => void) => {
+vi.mock('@/hooks/useSwipeDismiss', () => ({
+  useSwipeDismiss: (_dir: string, onDismiss: () => void) => {
     capturedSwipeDismiss = onDismiss;
-    return {
-      dismissing: false,
-      dragStyle: {},
-      swipeHandlers: { ref: vi.fn() },
-    };
+    return { dismissing: false, motionProps: {} };
   },
 }));
 

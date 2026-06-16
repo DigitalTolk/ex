@@ -46,6 +46,13 @@ func wsOriginPatternsFromCORS(origins []string) []string {
 }
 
 func main() {
+	// `ex healthcheck` is a self-probe used by the container HEALTHCHECK:
+	// the distroless runtime has no shell or wget, so the binary checks
+	// its own /healthz endpoint and exits 0 (healthy) or 1.
+	if len(os.Args) > 1 && os.Args[1] == "healthcheck" {
+		os.Exit(healthCheckCommand())
+	}
+
 	ctx := context.Background()
 
 	// ------------------------------------------------------------------ Config

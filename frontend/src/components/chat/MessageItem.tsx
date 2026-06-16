@@ -24,6 +24,7 @@ import { useEmojiMap } from '@/hooks/useEmoji';
 import { renderMarkdown } from '@/lib/markdown';
 import { isEmojiOnlyMessage } from '@/lib/emoji-shortcodes';
 import { recordEmojiUse } from '@/lib/emoji-frequency';
+import { blurActiveInput } from '@/lib/blur-input';
 import { buildChannelHref, buildConversationHref } from '@/lib/message-deeplink';
 import { useTagOpen } from '@/context/TagSearchContext';
 import { EmojiGlyph } from '@/components/EmojiGlyph';
@@ -35,7 +36,8 @@ import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { extractURLs, formatLongDateTime, formatRelative } from '@/lib/format';
 import { registerEditMessageHandler } from '@/lib/window-events';
 import { useIsMobile } from '@/hooks/useIsMobile';
-import { useAnimatedSwipeDismiss } from '@/hooks/useAnimatedSwipeDismiss';
+import { motion } from 'motion/react';
+import { useSwipeDismiss } from '@/hooks/useSwipeDismiss';
 import { useTransientOverlayCleanup } from '@/hooks/useTransientOverlayCleanup';
 import { triggerMessageActionHaptic } from '@/lib/haptics';
 import type { Message, UserStatus } from '@/types';
@@ -249,18 +251,13 @@ export function MessageItem({
     setMobileActionsSuppressed(false);
     setMobileReactionPickerOpen(false);
   }
-  const {
-    dismissing: swipeDismissing,
-    dragStyle: mobileActionsDragStyle,
-    swipeHandlers: { ref: mobileActionsSwipeRef, ...mobileActionsSwipe },
-  } = useAnimatedSwipeDismiss('down', closeMobileActions);
-  const setMobileActionsNode = useCallback(
-    (node: HTMLDivElement | null) => {
-      mobileActionsSheetRef.current = node;
-      mobileActionsSwipeRef(node);
-    },
-    [mobileActionsSwipeRef],
+  const { dismissing: swipeDismissing, motionProps: mobileActionsMotion } = useSwipeDismiss(
+    'down',
+    closeMobileActions,
   );
+  const setMobileActionsNode = useCallback((node: HTMLDivElement | null) => {
+    mobileActionsSheetRef.current = node;
+  }, []);
 
   function handleMobileReply() {
     closeMobileActions();
@@ -368,6 +365,9 @@ export function MessageItem({
     window.addEventListener('pointercancel', cancelPendingLongPress, { once: true });
     longPressTimerRef.current = window.setTimeout(() => {
       triggerMessageActionHaptic();
+      // Long-pressing to open the action bar should dismiss the keyboard
+      // if the composer had focus, so the sheet isn't fighting the keyboard.
+      blurActiveInput();
       setMobileActionsSuppressed(false);
       setMobileActionsOpen(true);
       notifyMessageHovered(message.id);
@@ -416,17 +416,17 @@ export function MessageItem({
         />
       )}
       {mobileActionsOpen && (
-      <div
+      <motion.div
         role="dialog"
         aria-modal="true"
         aria-label="Message actions"
-        className={`mobile-bottom-sheet-enter absolute inset-x-0 bottom-0 max-h-[calc(100dvh-env(safe-area-inset-top)-0.75rem)] overflow-y-auto rounded-t-xl border-x-0 border-b-0 border-t bg-popover p-3 pb-[calc(env(safe-area-inset-bottom)+0.75rem)] text-popover-foreground shadow-lg transform-gpu transition-transform duration-200 ease-out ${swipeDismissing ? 'translate-y-full' : ''} ${mobileActionsSuppressed ? 'hidden' : ''}`}
+        data-swipe-scroll="true"
+        className={`absolute inset-x-0 bottom-0 max-h-[calc(100dvh-env(safe-area-inset-top)-0.75rem)] overflow-y-auto rounded-t-xl border-x-0 border-b-0 border-t bg-popover p-3 pb-[calc(env(safe-area-inset-bottom)+0.75rem)] text-popover-foreground shadow-lg ${mobileActionsSuppressed ? 'hidden' : ''}`}
         data-testid="mobile-message-actions"
         data-actions-suppressed={mobileActionsSuppressed ? 'true' : 'false'}
-        data-swipe-dismissing={swipeDismissing ? 'true' : 'false'}
-        style={mobileActionsDragStyle}
+        data-swipe-dismissing={String(swipeDismissing)}
         ref={setMobileActionsNode}
-        {...mobileActionsSwipe}
+        {...mobileActionsMotion}
       >
         {!inThread && (
           <Button
@@ -517,7 +517,7 @@ export function MessageItem({
             </>
           )}
         </div>
-      </div>
+      </motion.div>
       )}
     </div>
   ) : null;

@@ -5,19 +5,12 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemberList } from './MemberList';
 import type { ChannelMembership } from '@/types';
 
-// Covers the `dismissing ? … : …` className + data-swipe-dismissing arms
-// (MemberList lines 101, 103) by driving the swipe hook into its
-// mid-dismiss state. The real gesture path is covered separately in
-// useAnimatedSwipeDismiss.browser.test; here we only need the consumer's
-// truthy branch.
+// Covers both arms of the data-swipe-dismissing attribute by driving the
+// Motion swipe hook into its mid-dismiss state. The drag physics are
+// unit-tested in useSwipeDismiss.test.
 const swipeState = vi.hoisted(() => ({ dismissing: false }));
-vi.mock('@/hooks/useAnimatedSwipeDismiss', () => ({
-  useAnimatedSwipeDismiss: () => ({
-    dismissing: swipeState.dismissing,
-    dragOffset: 0,
-    dragStyle: undefined,
-    swipeHandlers: {},
-  }),
+vi.mock('@/hooks/useSwipeDismiss', () => ({
+  useSwipeDismiss: () => ({ dismissing: swipeState.dismissing, motionProps: {} }),
 }));
 
 vi.mock('@/lib/api', () => ({
@@ -75,19 +68,17 @@ async function renderList() {
 }
 
 describe('MemberList swipe-dismiss state', () => {
-  it('marks the rail at rest (data-swipe-dismissing=false, no slide-out)', async () => {
+  it('marks the rail at rest (data-swipe-dismissing=false)', async () => {
     swipeState.dismissing = false;
     await renderList();
     const rail = document.querySelector('[data-mobile-right-sidebar="true"]') as HTMLElement;
     expect(rail.getAttribute('data-swipe-dismissing')).toBe('false');
-    expect(rail.className).not.toContain('max-md:translate-x-full');
   });
 
-  it('applies the slide-out class + data-swipe-dismissing=true while dismissing', async () => {
+  it('marks the rail data-swipe-dismissing=true while dismissing', async () => {
     swipeState.dismissing = true;
     await renderList();
     const rail = document.querySelector('[data-mobile-right-sidebar="true"]') as HTMLElement;
     expect(rail.getAttribute('data-swipe-dismissing')).toBe('true');
-    expect(rail.className).toContain('max-md:translate-x-full');
   });
 });

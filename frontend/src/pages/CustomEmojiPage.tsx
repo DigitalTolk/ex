@@ -176,7 +176,7 @@ export default function CustomEmojiPage() {
                 />
                 <span className="select-none px-2 text-muted-foreground">:</span>
               </div>
-              <p className="mt-1 text-[11px] text-muted-foreground">
+              <p className="mt-1 text-xs text-muted-foreground">
                 Lowercase letters, digits, <code>_</code>, <code>+</code>,{' '}
                 <code>-</code>. Max 32 chars.
               </p>
@@ -245,8 +245,8 @@ export default function CustomEmojiPage() {
             >
               <img src={e.imageURL} alt={`:${e.name}:`} className="h-6 w-6" />
               <div className="min-w-0 flex-1">
-                <span className="block truncate font-mono text-xs">:{e.name}:</span>
-                <span className="block truncate text-[11px] text-muted-foreground">
+                <span className="block truncate font-mono text-sm">:{e.name}:</span>
+                <span className="block truncate text-xs text-muted-foreground">
                   by {creatorMap.get(e.createdBy)?.displayName ?? 'unknown'}
                 </span>
               </div>

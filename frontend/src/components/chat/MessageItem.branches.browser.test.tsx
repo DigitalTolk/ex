@@ -16,6 +16,13 @@ const mutateEdit = vi.hoisted(() => vi.fn());
 const mutatePin = vi.hoisted(() => vi.fn());
 const mutateReact = vi.hoisted(() => vi.fn());
 const useAttachmentsBatchMock = vi.hoisted(() => vi.fn(() => ({ map: new Map(), isLoading: false })));
+// The action sheet's swipe-to-dismiss is Motion-driven (unit-tested in
+// useSwipeDismiss.test). Mock it so the sheet's data-swipe-dismissing arms
+// are deterministically drivable here without real drag physics.
+const swipe = vi.hoisted(() => ({ dismissing: false }));
+vi.mock('@/hooks/useSwipeDismiss', () => ({
+  useSwipeDismiss: () => ({ dismissing: swipe.dismissing, motionProps: {} }),
+}));
 
 vi.mock('@/hooks/useMessages', () => ({
   useEditMessage: () => ({ mutate: mutateEdit, isPending: false }),
@@ -50,21 +57,6 @@ function renderWithProviders(ui: React.ReactElement) {
   );
 }
 
-function touchPoint(element: Element, x: number, y: number) {
-  return { identifier: 1, target: element, clientX: x, clientY: y, pageX: x, pageY: y, screenX: x, screenY: y };
-}
-
-function dispatchTouch(element: Element, type: string, x: number, y: number) {
-  const event = new Event(type, { bubbles: true, cancelable: true });
-  const touches = type === 'touchend' ? [] : [touchPoint(element, x, y)];
-  const changedTouches = [touchPoint(element, x, y)];
-  Object.defineProperty(event, 'touches', { value: touches });
-  Object.defineProperty(event, 'targetTouches', { value: touches });
-  Object.defineProperty(event, 'changedTouches', { value: changedTouches });
-  element.dispatchEvent(event);
-  return event;
-}
-
 function makeMessage(overrides: Partial<Message> = {}): Message {
   return {
     id: 'msg-1',
@@ -81,6 +73,7 @@ beforeEach(() => {
   mutateEdit.mockClear();
   mutatePin.mockClear();
   mutateReact.mockClear();
+  swipe.dismissing = false;
   useAttachmentsBatchMock.mockReturnValue({ map: new Map(), isLoading: false });
 });
 
@@ -578,39 +571,18 @@ describe('MessageItem misc branches', () => {
     });
   });
 
-  it('dismisses the mobile sheet with a downward swipe (swipeDismissing arms)', async () => {
+  it('marks the mobile sheet data-swipe-dismissing=true mid-dismiss', async () => {
     if (window.innerWidth > 767) return;
+    swipe.dismissing = true;
     await renderWithProviders(
       <MessageItem message={makeMessage()} authorName="Alice" isOwn channelId="channel-1" currentUserId="user-1" />,
     );
     const row = document.querySelector('[data-message-id]') as HTMLElement;
     row.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerType: 'touch' }));
-    const sheet = await vi.waitFor(() => {
-      const s = document.querySelector('[data-testid="mobile-message-actions"]') as HTMLElement | null;
-      expect(s).not.toBeNull();
-      return s!;
-    }, { timeout: 1500 });
-    // Swipe the sheet down past the dismiss threshold; the swipe handler sets
-    // swipeDismissing=true (the translate-y-full class + data attribute arms).
-    // react-swipeable listens for touch events, not pointer events.
-    const rect = sheet.getBoundingClientRect();
-    const x = rect.left + rect.width / 2;
-    const y0 = rect.top + 20;
-    dispatchTouch(sheet, 'touchstart', x, y0);
-    dispatchTouch(sheet, 'touchmove', x, y0 + 60);
-    dispatchTouch(sheet, 'touchmove', x, y0 + 160);
-    await vi.waitFor(() => {
-      const s = document.querySelector('[data-testid="mobile-message-actions"]') as HTMLElement | null;
-      expect(s?.style.transform ?? '').toContain('translateY');
-    });
-    dispatchTouch(sheet, 'touchend', x, y0 + 160);
     await vi.waitFor(() => {
       const s = document.querySelector('[data-testid="mobile-message-actions"]') as HTMLElement | null;
       expect(s?.dataset.swipeDismissing).toBe('true');
-    });
-    await vi.waitFor(() => {
-      expect(document.querySelector('[data-testid="mobile-message-actions"]')).toBeNull();
-    }, { timeout: 2000 });
+    }, { timeout: 1500 });
   });
 
   it('builds a conversation deep-link for copy when there is no channel slug', async () => {
