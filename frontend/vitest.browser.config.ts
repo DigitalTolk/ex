@@ -66,6 +66,10 @@ export default defineConfig({
         'src/hooks/useDismissKeyboardOnScroll.ts',
         'src/hooks/useKeyboardSurfaceColor.ts',
         'src/lib/blur-input.ts',
+        // Delegated same-origin link router — a document-level click handler
+        // fully unit-tested in jsdom (InAppLinkRouter.test, in-app-link.test).
+        'src/components/InAppLinkRouter.tsx',
+        'src/lib/in-app-link.ts',
       ],
       // 99% branch gate over the merged desktop + mobile browser run.
       // vitest enforces it (non-zero exit), so `npm run
