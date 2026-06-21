@@ -134,7 +134,15 @@ export function ChannelView() {
     () => activeEditingMessage?.attachmentIDs ?? [],
     [activeEditingMessage],
   );
-  const { map: editAttachmentMap, isLoading: editAttachmentsLoading } = useAttachmentsBatch(editAttachmentIDs);
+  // Pass the access context so the server authorizes the resolve — without
+  // it the batch returns nothing, the edit composer opens with no attachment
+  // chips, and saving would wipe the message's attachments.
+  const { map: editAttachmentMap, isLoading: editAttachmentsLoading } = useAttachmentsBatch(
+    editAttachmentIDs,
+    activeEditingMessage
+      ? { parentID: channelID, parentType: 'channel', messageID: activeEditingMessage.id }
+      : undefined,
+  );
   const editDraftAttachments = useMemo<DraftAttachment[]>(
     () =>
       editAttachmentIDs

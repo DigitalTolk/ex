@@ -283,7 +283,19 @@ export function MessageItem({
   }
 
   const editAttachmentIDs = isEditing ? (message.attachmentIDs ?? []) : [];
-  const { map: editAttachmentMap, isLoading: editAttachmentsLoading } = useAttachmentsBatch(editAttachmentIDs);
+  // Pass the access context so the server authorizes the resolve — without
+  // it the batch returns nothing, the edit composer opens with no attachment
+  // chips, and saving would wipe the message's attachments.
+  const { map: editAttachmentMap, isLoading: editAttachmentsLoading } = useAttachmentsBatch(
+    editAttachmentIDs,
+    isEditing
+      ? {
+          parentID: channelId ?? conversationId,
+          parentType: channelId ? 'channel' : 'conversation',
+          messageID: message.id,
+        }
+      : undefined,
+  );
   const initialEditDrafts: DraftAttachment[] = isEditing
     ? editAttachmentIDs
         .map((id): DraftAttachment | null => {
@@ -309,8 +321,15 @@ export function MessageItem({
 
   function handleEditSubmit(value: MessageInputValue) {
     const currentAttachmentIDs = message.attachmentIDs ?? [];
+    // Defense against the de-link race: only trust the composer's attachment
+    // list when every original attachment actually loaded into it. If some
+    // didn't (resolve failed/raced), send `undefined` so the server preserves
+    // the originals instead of replacing them with an incomplete list.
+    const attachmentsFullyLoaded = initialEditDrafts.length === currentAttachmentIDs.length;
+    const nextAttachmentIDs = attachmentsFullyLoaded ? value.attachmentIDs : undefined;
     const same =
       value.body === message.body &&
+      attachmentsFullyLoaded &&
       value.attachmentIDs.length === currentAttachmentIDs.length &&
       value.attachmentIDs.every((id, idx) => id === currentAttachmentIDs[idx]);
     /* istanbul ignore next -- the composer disables Save when the body is empty and there are no attachments, so the trimmed-empty arm of this guard is never reached from the UI; only the `same` arm fires. */
@@ -322,7 +341,7 @@ export function MessageItem({
       {
         messageId: message.id,
         body: value.body,
-        attachmentIDs: value.attachmentIDs,
+        attachmentIDs: nextAttachmentIDs,
         channelId,
         conversationId,
       },
@@ -582,11 +601,14 @@ export function MessageItem({
         </UserHoverCard>
       ) : (
         // Compact continuation: keep the avatar gutter width so the body
-        // stays aligned, and reveal the message time there on hover.
+        // stays aligned, and reveal the message time there on hover. The
+        // time must stay on one line — wrapping inside the narrow gutter
+        // reserved a second line of height on every grouped row (even while
+        // invisible at opacity-0), bloating the message list vertically.
         <div className="w-9 shrink-0 select-none text-center" data-testid="group-time-gutter">
           <time
             dateTime={message.createdAt}
-            className={`text-[10px] leading-5 tabular-nums text-muted-foreground transition-opacity ${
+            className={`whitespace-nowrap text-[10px] leading-5 tabular-nums text-muted-foreground transition-opacity ${
               hovered ? 'opacity-100' : 'opacity-0'
             }`}
           >

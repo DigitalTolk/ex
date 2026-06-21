@@ -128,6 +128,21 @@ export function invalidateThreadBothScopes(qc: QueryClient, parentID: string, th
   qc.invalidateQueries({ queryKey: queryKeys.thread(`conversations/${parentID}`, threadRootID) });
 }
 
+// When a message is edited or deleted, any internal-link preview card
+// pointing at it (rendered elsewhere) is now stale. Unfurl queries are
+// keyed by the raw URL, and a message permalink always embeds `msg-<id>`,
+// so invalidate every unfurl query whose URL references this message —
+// active cards refetch the fresh (or now-gone) preview.
+export function invalidateUnfurlsForMessage(qc: QueryClient, messageID: string) {
+  if (!messageID) return;
+  qc.invalidateQueries({
+    predicate: (q) =>
+      q.queryKey[0] === 'unfurl' &&
+      typeof q.queryKey[1] === 'string' &&
+      q.queryKey[1].includes(`msg-${messageID}`),
+  });
+}
+
 export function appendMessageToCache(qc: QueryClient, parentID: string, msg: Message) {
   patchBothScopes(qc, parentID, (old) => {
     if (!old || old.pages.length === 0) return old;

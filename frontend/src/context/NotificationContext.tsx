@@ -18,6 +18,10 @@ export interface NotificationPayload {
   messageID?: string;
   parentMessageID?: string;
   authorID?: string;
+  // True for incoming-webhook posts (CI/deploy/alert bots). These bypass
+  // the own-author and quiet-channel suppression below so the integration
+  // alerts the user actually set up always surface.
+  webhook?: boolean;
   createdAt: string;
 }
 
@@ -180,14 +184,18 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       }
     }
     // Server-side recipient filtering already excludes the author, but
-    // echoes via shared subscriptions can slip through.
-    if (n.authorID && currentUserIDRef.current && n.authorID === currentUserIDRef.current) {
+    // echoes via shared subscriptions can slip through. Webhook posts are
+    // exempt: their authorID is the webhook's creator, who explicitly
+    // wants the alert, so we never self-suppress them.
+    if (!n.webhook && n.authorID && currentUserIDRef.current && n.authorID === currentUserIDRef.current) {
       return;
     }
     // Channels are noisy by default — only escalate when the message is
     // *for you*. Backend filters thread_reply notifications to actual
     // thread participants, so receiving one implies you replied in it.
-    if (n.parentType === 'channel' && n.kind === 'message') {
+    // Webhook posts (CI/deploy/alert bots) are the exception: they're
+    // automated alerts the user wired up, so they banner even in channels.
+    if (!n.webhook && n.parentType === 'channel' && n.kind === 'message') {
       return;
     }
     // Regular DM notifications are suppressed only when the user is actually

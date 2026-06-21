@@ -191,5 +191,46 @@ describe('UnfurlCard', () => {
       expect(screen.queryByTestId('unfurl-card-image')).toBeNull();
       expect(screen.getByText('Günter Grodotzki')).toBeInTheDocument();
     });
+
+    it('renders file-type icon rows for non-image attachments (instead of a paperclip emoji)', () => {
+      mockUseUnfurl.mockReturnValue({
+        data: messagePreview({
+          body: undefined,
+          image: undefined,
+          // One with a content type, one without — exercises the `?? ''`
+          // fallback into iconForAttachment.
+          attachments: [
+            { filename: 'report.pdf', contentType: 'application/pdf' },
+            { filename: 'notes.txt' },
+          ],
+        }),
+        isLoading: false,
+      });
+      renderCard();
+      const rows = screen.getByTestId('unfurl-card-attachments');
+      expect(rows).toBeInTheDocument();
+      expect(screen.getByText('report.pdf')).toBeInTheDocument();
+      expect(screen.getByText('notes.txt')).toBeInTheDocument();
+      // No paperclip emoji baked into a body.
+      expect(screen.queryByText(/📎/)).toBeNull();
+    });
+
+    it('renders an attachments-only message preview (no author/body/image)', () => {
+      mockUseUnfurl.mockReturnValue({
+        data: messagePreview({
+          authorName: undefined,
+          authorAvatarURL: undefined,
+          body: undefined,
+          image: undefined,
+          channelLabel: undefined,
+          attachments: [{ filename: 'archive.zip', contentType: 'application/zip' }],
+        }),
+        isLoading: false,
+      });
+      renderCard();
+      // hasContent() is satisfied by attachments alone, so the card renders.
+      expect(screen.getByTestId('unfurl-card')).toBeInTheDocument();
+      expect(screen.getByText('archive.zip')).toBeInTheDocument();
+    });
   });
 });

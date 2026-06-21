@@ -1159,8 +1159,21 @@ func TestNotificationService_WebhookUsernameAndFallbackBody(t *testing.T) {
 		MessageAttachments: []model.MessageAttachment{{Fallback: "build failed"}},
 	}, ParentChannel)
 
-	if len(push.calls) != 1 {
-		t.Fatalf("push count = %d, want 1", len(push.calls))
+	// Webhook posts notify EVERY member, including u-author — the webhook's
+	// creator wired up the alert and wants it, they didn't write the message.
+	// (A regular message would exclude the author, leaving only u-bob.)
+	if len(push.calls) != 2 {
+		t.Fatalf("push count = %d, want 2 (both members incl. webhook creator)", len(push.calls))
+	}
+	recipients := map[string]bool{}
+	for _, c := range push.calls {
+		recipients[c.userID] = true
+		if !c.notif.Webhook {
+			t.Errorf("notif.Webhook = false, want true for webhook post")
+		}
+	}
+	if !recipients["u-author"] || !recipients["u-bob"] {
+		t.Fatalf("recipients = %v, want both u-author and u-bob", recipients)
 	}
 	notif := push.calls[0].notif
 	if notif.Body != "build failed" {

@@ -137,6 +137,25 @@ describe('NotificationContext browser', () => {
     // Returned early; we don't need to assert side-effects — branch covered.
   });
 
+  it('does NOT suppress a webhook channel "message" (integration alerts always banner, even from your own webhook)', async () => {
+    const instances: FakeNote[] = [];
+    const restore = installFakeNotification(instances);
+    try {
+      await render(<NotificationProvider><Capture /></NotificationProvider>);
+      await vi.waitFor(() => expect(captured).not.toBeNull());
+      captured!.setCurrentUserID('u-me');
+      // A plain channel "message" is suppressed, and an own-author one is too.
+      // The webhook flag bypasses BOTH guards so the alert still banners —
+      // authorID is the webhook's creator (u-me), who wired it up and wants it.
+      captured!.dispatch(
+        basePayload({ kind: 'message', parentType: 'channel', authorID: 'u-me', webhook: true }),
+      );
+      await vi.waitFor(() => expect(instances.length).toBe(1));
+    } finally {
+      restore();
+    }
+  });
+
   it('dispatch suppresses DM "message" kind when active parent matches and tab is visible', async () => {
     await render(
       <NotificationProvider>

@@ -95,6 +95,12 @@ interface MessageInputProps {
   // edit on this message via the `ex:edit-message` window event;
   // omitted (or undefined) disables the shortcut.
   lastOwnMessageId?: string;
+  // Whether this composer is docked at the bottom of the viewport (the
+  // main channel/conversation composer). Only then should it reserve
+  // home-indicator space via env(safe-area-inset-bottom). In-list
+  // composers (e.g. the /threads ThreadCards) are mid-page, so that inset
+  // just adds a dead ~34px gap below them — they pass false.
+  bottomInset?: boolean;
 }
 
 export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(function MessageInput({
@@ -106,6 +112,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
   initialDrafts = [],
   submitLabel,
   variant = 'composer',
+  bottomInset = true,
   focusKey,
   typingParentID,
   typingParentType,
@@ -734,7 +741,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
               // composer and the keyboard. Drop the inset while focused
               // (keyboard up) and only reserve the home-indicator space
               // when the composer is idle.
-              editorFocused
+              editorFocused || !bottomInset
                 ? 'max-md:pb-1'
                 : 'max-md:pb-[max(0.25rem,env(safe-area-inset-bottom))]'
             } ${compactMobileComposer && !editorFocused ? 'max-md:px-4' : 'max-md:px-2'}`

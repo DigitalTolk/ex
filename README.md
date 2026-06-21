@@ -223,6 +223,22 @@ The AWS credentials are mandatory but their values don't matter — DynamoDB Loc
 
 The script is read-mostly: it scans every parent's `MSG#` rows once and writes ~1 index row per pinned message + ~1 per shared attachment. Storage impact is bounded by `parents × (pinned_messages + unique_attachments)` — typically negligible vs. message volume.
 
+### Thread-delete backfill (`cmd/migrate-thread-delete`)
+
+Deleting a thread root now cascades: every reply is soft-deleted too, and the server rejects new replies to a deleted thread (`409`). Threads deleted **before** this shipped left their replies live — the root renders as a "(Message deleted)" tombstone while its replies are still visible. Run this one-off once after upgrading to tombstone those orphaned replies so historical data matches the new invariant.
+
+```bash
+# Preview (default — no writes)
+go run ./cmd/migrate-thread-delete --dry-run
+
+# Apply: tombstones every reply whose thread root is already deleted.
+# Idempotent (already-deleted replies are skipped); safe to re-run.
+# Same AWS_REGION / DYNAMODB_TABLE / DYNAMODB_ENDPOINT env vars as the server.
+go run ./cmd/migrate-thread-delete --apply
+```
+
+The same DynamoDB Local env-var shape shown above for `migrate-parent-index` applies here. No events are published — these threads were closed long ago and no client is watching them.
+
 ## Architecture
 
 - **Real-time**: WebSocket for server-to-client push, REST for everything else

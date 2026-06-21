@@ -212,6 +212,18 @@ describe('ThreadPanel browser behaviour', () => {
     await expect.element(screen.getByText('a reply')).toBeVisible();
   });
 
+  it('replaces the composer with a notice when the thread root is deleted', async () => {
+    // The server cascades a root delete to every reply and rejects new
+    // ones (409). When the root comes back as a tombstone, the panel must
+    // hide the composer and explain the thread is gone.
+    const screen = await renderPanel([
+      { ...rootMsg(), body: '', deleted: true },
+      { ...reply(), body: '', deleted: true },
+    ]);
+    await expect.element(screen.getByText('This thread has been deleted.')).toBeVisible();
+    expect(document.querySelector('[contenteditable="true"]')).toBeNull();
+  });
+
   it('shows the loading state while thread messages are pending', async () => {
     threadMessagesState = { data: undefined, isLoading: true };
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });

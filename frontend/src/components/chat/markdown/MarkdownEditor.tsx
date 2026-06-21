@@ -1,7 +1,7 @@
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef } from 'react';
 import { EditorState, EditorSelection, Compartment } from '@codemirror/state';
-import { EditorView, keymap } from '@codemirror/view';
-import { history, historyKeymap, defaultKeymap } from '@codemirror/commands';
+import { EditorView, keymap, tooltips } from '@codemirror/view';
+import { history, historyKeymap, defaultKeymap, insertNewlineAndIndent } from '@codemirror/commands';
 import { markdown } from '@codemirror/lang-markdown';
 import { Strikethrough, Autolink } from '@lezer/markdown';
 import type { WysiwygEditorHandle, ActiveFormat } from './types';
@@ -133,6 +133,13 @@ export const MarkdownEditor = forwardRef<WysiwygEditorHandle, Props>(function Ma
             skinTone: () => (cbRef.current.completionProviders ?? EMPTY_PROVIDERS).skinTone(),
           }),
           composerTheme,
+          // Position the autocomplete popup with `fixed` so it escapes the
+          // composer box's `overflow-hidden` (the mobile rounded pill) and the
+          // /threads card's `overflow-clip`. Without this the mention/emoji
+          // typeahead opened clipped behind those layers on mobile. The
+          // tooltip DOM stays under the editor, so it's still themed and
+          // queryable in tests.
+          tooltips({ position: 'fixed' }),
           EditorView.lineWrapping,
           EditorView.contentAttributes.of({
             'aria-label': ariaLabel,
@@ -153,11 +160,23 @@ export const MarkdownEditor = forwardRef<WysiwygEditorHandle, Props>(function Ma
             {
               key: 'Enter',
               run: (v) => {
-                if (!cbRef.current.submitOnEnter) return false;
-                cbRef.current.onSubmit?.(v.state.doc.toString());
-                return true;
+                if (cbRef.current.submitOnEnter) {
+                  cbRef.current.onSubmit?.(v.state.doc.toString());
+                  return true;
+                }
+                // Mobile / no-submit-on-Enter: insert exactly one newline and
+                // CONSUME the event. Previously this returned false and fell
+                // through to defaultKeymap, but on iOS the soft keyboard's
+                // return also fires a `beforeinput` paragraph insertion — so
+                // the doc got two newlines ("extra line"), and the stored
+                // markdown no longer matched what the user saw. Handling Enter
+                // explicitly preventDefaults the keydown and stops the
+                // double-insert.
+                return insertNewlineAndIndent(v);
               },
-              shift: () => false, // Shift+Enter falls through to insert a newline.
+              // Shift+Enter always inserts a single newline (same path), so
+              // desktop multi-line composing is unaffected.
+              shift: insertNewlineAndIndent,
             },
             {
               key: 'ArrowUp',

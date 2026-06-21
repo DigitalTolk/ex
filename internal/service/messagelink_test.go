@@ -162,17 +162,21 @@ func TestMessageLink_Preview_AttachmentOnlyBodyFallback(t *testing.T) {
 		name     string
 		url      string
 		wantBody string
+		// Uploaded (non-image) file attachments now carry no emoji body — the
+		// client renders them as icon+filename rows from preview.Attachments.
+		wantAttachments []string
 	}{
-		// Single uploaded file → paperclip + filename.
-		{"single file", "https://ex.test/channel/general#msg-fileonly", "📎 report.pdf"},
-		// Multiple files → first filename + remaining count.
-		{"multiple files", "https://ex.test/channel/general#msg-multifile", "📎 report.pdf +1"},
+		// Single uploaded file → empty body, one attachment row.
+		{"single file", "https://ex.test/channel/general#msg-fileonly", "", []string{"report.pdf"}},
+		// Multiple files → empty body; the image file is surfaced via the card
+		// image and excluded from the attachment rows, leaving just the pdf.
+		{"multiple files", "https://ex.test/channel/general#msg-multifile", "", []string{"report.pdf"}},
 		// Incoming-webhook rich attachment → prefer title, then text, then fallback.
-		{"rich attachment title preferred", "https://ex.test/channel/general#msg-richtitle", "Build #42 passed"},
-		{"rich attachment text when no title", "https://ex.test/channel/general#msg-richtext", "Coverage at 99%"},
-		{"rich attachment fallback when no title/text", "https://ex.test/channel/general#msg-richonly", "Deploy succeeded"},
+		{"rich attachment title preferred", "https://ex.test/channel/general#msg-richtitle", "Build #42 passed", nil},
+		{"rich attachment text when no title", "https://ex.test/channel/general#msg-richtext", "Coverage at 99%", nil},
+		{"rich attachment fallback when no title/text", "https://ex.test/channel/general#msg-richonly", "Deploy succeeded", nil},
 		// Attachment ID that no longer resolves → empty (no crash, no junk).
-		{"unresolvable attachment", "https://ex.test/channel/general#msg-ghostatt", ""},
+		{"unresolvable attachment", "https://ex.test/channel/general#msg-ghostatt", "", nil},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -182,6 +186,13 @@ func TestMessageLink_Preview_AttachmentOnlyBodyFallback(t *testing.T) {
 			}
 			if p.Body != tc.wantBody {
 				t.Fatalf("body = %q, want %q", p.Body, tc.wantBody)
+			}
+			gotNames := make([]string, 0, len(p.Attachments))
+			for _, a := range p.Attachments {
+				gotNames = append(gotNames, a.Filename)
+			}
+			if strings.Join(gotNames, ",") != strings.Join(tc.wantAttachments, ",") {
+				t.Fatalf("attachments = %v, want %v", gotNames, tc.wantAttachments)
 			}
 		})
 	}

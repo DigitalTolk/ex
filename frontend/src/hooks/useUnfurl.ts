@@ -16,6 +16,14 @@ export interface UnfurlPreview {
   channelLabel?: string;
   body?: string;
   createdAt?: string;
+  // Non-image file attachments on the linked message; rendered as
+  // icon+filename rows using the same file-type icons as the message list.
+  attachments?: UnfurlAttachment[];
+}
+
+export interface UnfurlAttachment {
+  filename: string;
+  contentType?: string;
 }
 
 // useUnfurl fetches the link preview for a single URL. Server returns

@@ -125,13 +125,17 @@ describe('MarkdownEditor handle + keymap branches', () => {
     expect(onSubmit).not.toHaveBeenCalled();
   });
 
-  it('Enter does not submit when submitOnEnter is false', async () => {
+  it('Enter inserts exactly one newline (and never submits) when submitOnEnter is false', async () => {
+    const onChange = vi.fn();
     const onSubmit = vi.fn();
-    const { ref } = await mount({ onSubmit, submitOnEnter: false });
+    const { ref } = await mount({ onChange, onSubmit, submitOnEnter: false });
     ref.current!.setMarkdown('hi');
     ref.current!.focusEnd();
-    await userEvent.keyboard('{Enter}');
+    await userEvent.keyboard('{Enter}there');
     expect(onSubmit).not.toHaveBeenCalled();
+    // Exactly one newline — Enter is handled explicitly and consumes the
+    // event, so iOS can't double-insert via a parallel beforeinput.
+    expect(ref.current!.getMarkdown()).toBe('hi\nthere');
   });
 
   it('ArrowUp on an empty editor invokes onArrowUpEmpty', async () => {

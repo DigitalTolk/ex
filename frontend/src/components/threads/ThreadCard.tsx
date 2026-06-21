@@ -309,6 +309,7 @@ export function ThreadCard({ summary, title, deepLink, currentUserId, unread = f
           typingParentType={parentType}
           typingThreadRootID={summary.threadRootID}
           hideCodeButton
+          bottomInset={false}
         />
       </MessageDropZone>
     </article>

@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"fmt"
 	"net/url"
 	"strings"
 	"time"
@@ -169,7 +168,31 @@ func (s *MessageLinkService) Preview(ctx context.Context, viewerID, rawURL strin
 	}
 	s.resolveAuthor(ctx, msg, preview)
 	preview.Image = s.resolveImage(ctx, msg)
+	preview.Attachments = s.resolveAttachmentList(ctx, msg)
 	return preview, true
+}
+
+// resolveAttachmentList returns the message's non-image uploaded file
+// attachments (filename + content type) so the client renders the same
+// file-type icons it uses in the message list. Image files are surfaced as
+// the card image via resolveImage and intentionally skipped here to avoid
+// listing them twice.
+func (s *MessageLinkService) resolveAttachmentList(ctx context.Context, msg *model.Message) []UnfurlAttachment {
+	if s.attachments == nil || len(msg.AttachmentIDs) == 0 {
+		return nil
+	}
+	out := make([]UnfurlAttachment, 0, len(msg.AttachmentIDs))
+	for _, id := range msg.AttachmentIDs {
+		att, err := s.attachments.Get(ctx, id)
+		if err != nil || att == nil || att.IsImage() {
+			continue
+		}
+		out = append(out, UnfurlAttachment{Filename: att.Filename, ContentType: att.ContentType})
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // resolveChannel looks up a channel-link ref as a slug first, then by ID — the
@@ -223,10 +246,12 @@ func (s *MessageLinkService) resolveImage(ctx context.Context, msg *model.Messag
 // attachmentPreviewBody produces a short stand-in body for an
 // attachment-only message (empty text) so the unfurl card isn't blank.
 // Incoming-webhook (Mattermost-style) rich attachments contribute their
-// most human-readable field — title, then text, then the fallback string;
-// uploaded files contribute a paperclip + filename ("📎 photo.png", or
-// "📎 photo.png +2" when several are attached).
-func (s *MessageLinkService) attachmentPreviewBody(ctx context.Context, msg *model.Message) string {
+// most human-readable field — title, then text, then the fallback string.
+// Uploaded file attachments contribute no body text: they're surfaced as
+// icon+filename rows (UnfurlPreview.Attachments) the client renders with
+// the same file-type icons as the message list, so a paperclip emoji here
+// would be redundant.
+func (s *MessageLinkService) attachmentPreviewBody(_ context.Context, msg *model.Message) string {
 	for _, a := range msg.MessageAttachments {
 		for _, candidate := range []string{a.Title, a.Text, a.Fallback} {
 			if t := strings.TrimSpace(candidate); t != "" {
@@ -234,31 +259,7 @@ func (s *MessageLinkService) attachmentPreviewBody(ctx context.Context, msg *mod
 			}
 		}
 	}
-	if s.attachments == nil || len(msg.AttachmentIDs) == 0 {
-		return ""
-	}
-	var first string
-	count := 0
-	for _, id := range msg.AttachmentIDs {
-		att, err := s.attachments.Get(ctx, id)
-		if err != nil || att == nil {
-			continue
-		}
-		count++
-		if first == "" {
-			first = strings.TrimSpace(att.Filename)
-		}
-	}
-	if count == 0 {
-		return ""
-	}
-	if first == "" {
-		first = "attachment"
-	}
-	if count == 1 {
-		return "📎 " + first
-	}
-	return fmt.Sprintf("📎 %s +%d", first, count-1)
+	return ""
 }
 
 func conversationLabel(conv *model.Conversation) string {

@@ -76,6 +76,48 @@ func (s *AttachmentStoreImpl) Create(ctx context.Context, a *model.Attachment) e
 	return nil
 }
 
+// ListAll scans every attachment META row in the table. It exists for
+// offline maintenance tooling (e.g. the attachment-relink migration that
+// repairs links severed by the historical edit bug) — the hot request
+// paths look attachments up by ID or hash and must never scan.
+func (s *AttachmentStoreImpl) ListAll(ctx context.Context) ([]*model.Attachment, error) {
+	expr, err := expression.NewBuilder().WithFilter(
+		expression.Name("PK").BeginsWith("ATT#").And(
+			expression.Name("SK").Equal(expression.Value(metaSK())),
+		),
+	).Build()
+	if err != nil { // coverage-ignore: static filter built from constants; Build cannot fail
+		return nil, fmt.Errorf("store: build attachments-scan expression: %w", err)
+	}
+	attachments := make([]*model.Attachment, 0)
+	var startKey map[string]types.AttributeValue
+	for {
+		out, err := s.Client.Scan(ctx, &dynamodb.ScanInput{
+			TableName:                 aws.String(s.Table),
+			FilterExpression:          expr.Filter(),
+			ExpressionAttributeNames:  expr.Names(),
+			ExpressionAttributeValues: expr.Values(),
+			ExclusiveStartKey:         startKey,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("store: scan attachments: %w", err)
+		}
+		for _, item := range out.Items {
+			var ai attachmentItem
+			if err := attributevalue.UnmarshalMap(item, &ai); err != nil { // coverage-ignore: round-trip of items this store wrote; cannot fail
+				return nil, fmt.Errorf("store: unmarshal attachment: %w", err)
+			}
+			a := ai.Attachment
+			attachments = append(attachments, &a)
+		}
+		if len(out.LastEvaluatedKey) == 0 {
+			break
+		}
+		startKey = out.LastEvaluatedKey
+	}
+	return attachments, nil
+}
+
 func (s *AttachmentStoreImpl) GetByID(ctx context.Context, id string) (*model.Attachment, error) {
 	out, err := s.Client.GetItem(ctx, &dynamodb.GetItemInput{
 		TableName: aws.String(s.Table),

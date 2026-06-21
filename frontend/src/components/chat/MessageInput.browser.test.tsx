@@ -151,6 +151,18 @@ describe('MessageInput browser behavior', () => {
     expect(Number.parseFloat(getComputedStyle(editorRow!).paddingTop)).toBeGreaterThanOrEqual(11);
   });
 
+  it('drops the safe-area inset when bottomInset is false (in-list composers like /threads cards)', async () => {
+    if (window.innerWidth > 767) return;
+    // An in-list composer (e.g. the /threads ThreadCards) is not docked at
+    // the viewport bottom, so it must NOT reserve home-indicator space —
+    // that inset just left a dead ~34px gap below it.
+    await renderWithProviders(<MessageInput onSend={vi.fn()} bottomInset={false} />);
+    const composerShell = document.querySelector('[data-composer-focused]') as HTMLElement | null;
+    expect(composerShell).not.toBeNull();
+    // Idle + bottomInset=false → tight 4px padding, no safe-area inset.
+    expect(Number.parseFloat(getComputedStyle(composerShell!).paddingBottom)).toBeLessThanOrEqual(6);
+  });
+
   it('renders the mobile edit save action with the same fully rounded icon shape', async () => {
     if (window.innerWidth > 767) return;
 

@@ -1391,6 +1391,164 @@ func TestMessageService_Delete_ThreadReplyEventCarriesParentMessageID(t *testing
 	}
 }
 
+func TestMessageService_Delete_CascadesThreadReplies(t *testing.T) {
+	svc, messages, memberships, _, publisher := setupMessageService()
+	ctx := context.Background()
+
+	memberships.memberships["ch1#user-1"] = &model.ChannelMembership{
+		ChannelID: "ch1", UserID: "user-1", Role: model.ChannelRoleMember,
+	}
+
+	// A thread: one root + two replies, plus an unrelated top-level
+	// message that must be left untouched.
+	messages.messages["ch1#root"] = &model.Message{
+		ID: "root", ParentID: "ch1", AuthorID: "user-1", Body: "root", ReplyCount: 2,
+	}
+	messages.messages["ch1#r1"] = &model.Message{
+		ID: "r1", ParentID: "ch1", AuthorID: "user-2", ParentMessageID: "root", Body: "first reply",
+	}
+	messages.messages["ch1#r2"] = &model.Message{
+		ID: "r2", ParentID: "ch1", AuthorID: "user-3", ParentMessageID: "root", Body: "second reply",
+	}
+	messages.messages["ch1#other"] = &model.Message{
+		ID: "other", ParentID: "ch1", AuthorID: "user-1", Body: "unrelated",
+	}
+
+	if err := svc.Delete(ctx, "user-1", "ch1", ParentChannel, "root"); err != nil {
+		t.Fatalf("Delete root: %v", err)
+	}
+
+	for _, id := range []string{"root", "r1", "r2"} {
+		got := messages.messages["ch1#"+id]
+		if !got.Deleted {
+			t.Errorf("%s: expected Deleted=true after cascade", id)
+		}
+		if got.Body != "" {
+			t.Errorf("%s: expected body cleared, got %q", id, got.Body)
+		}
+	}
+	if messages.messages["ch1#other"].Deleted {
+		t.Error("unrelated top-level message must not be cascade-deleted")
+	}
+
+	// One message.deleted event per tombstoned message: root + 2 replies.
+	deletedEvents := 0
+	for _, p := range publisher.published {
+		if p.event.Type == "message.deleted" {
+			deletedEvents++
+		}
+	}
+	if deletedEvents != 3 {
+		t.Errorf("message.deleted events = %d, want 3 (root + 2 replies)", deletedEvents)
+	}
+}
+
+func TestMessageService_Delete_ReplyDoesNotCascade(t *testing.T) {
+	svc, messages, memberships, _, _ := setupMessageService()
+	ctx := context.Background()
+
+	memberships.memberships["ch1#user-1"] = &model.ChannelMembership{
+		ChannelID: "ch1", UserID: "user-1", Role: model.ChannelRoleMember,
+	}
+	messages.messages["ch1#root"] = &model.Message{ID: "root", ParentID: "ch1", AuthorID: "user-1", Body: "root"}
+	messages.messages["ch1#r1"] = &model.Message{ID: "r1", ParentID: "ch1", AuthorID: "user-1", ParentMessageID: "root", Body: "keep me"}
+	messages.messages["ch1#r2"] = &model.Message{ID: "r2", ParentID: "ch1", AuthorID: "user-1", ParentMessageID: "root", Body: "delete me"}
+
+	if err := svc.Delete(ctx, "user-1", "ch1", ParentChannel, "r2"); err != nil {
+		t.Fatalf("Delete reply: %v", err)
+	}
+
+	if !messages.messages["ch1#r2"].Deleted {
+		t.Error("deleted reply should be Deleted=true")
+	}
+	if messages.messages["ch1#root"].Deleted {
+		t.Error("deleting a reply must not delete the thread root")
+	}
+	if messages.messages["ch1#r1"].Deleted {
+		t.Error("deleting a reply must not delete sibling replies")
+	}
+}
+
+// A reply whose tombstone Update fails is logged but doesn't fail the root
+// delete — the root tombstone already closed the thread to new replies.
+func TestMessageService_Delete_CascadeReplyUpdateError_Swallowed(t *testing.T) {
+	svc, messages, memberships, _, _ := setupMessageService()
+	ctx := context.Background()
+
+	memberships.memberships["ch1#user-1"] = &model.ChannelMembership{
+		ChannelID: "ch1", UserID: "user-1", Role: model.ChannelRoleMember,
+	}
+	messages.messages["ch1#root"] = &model.Message{ID: "root", ParentID: "ch1", AuthorID: "user-1", Body: "root"}
+	messages.messages["ch1#r1"] = &model.Message{ID: "r1", ParentID: "ch1", AuthorID: "user-1", ParentMessageID: "root", Body: "reply"}
+	// Fail the Update for the reply only — the root tombstone must still succeed.
+	messages.updateErrID = "r1"
+
+	if err := svc.Delete(ctx, "user-1", "ch1", ParentChannel, "root"); err != nil {
+		t.Fatalf("Delete root should swallow reply cascade error: %v", err)
+	}
+	if !messages.messages["ch1#root"].Deleted {
+		t.Error("root should be tombstoned despite reply cascade failure")
+	}
+}
+
+// If the cascade scan fails after the root is tombstoned, the root delete
+// still succeeds — the scan error is best-effort and logged.
+func TestMessageService_Delete_CascadeScanError_Swallowed(t *testing.T) {
+	svc, messages, memberships, _, _ := setupMessageService()
+	ctx := context.Background()
+
+	memberships.memberships["ch1#user-1"] = &model.ChannelMembership{
+		ChannelID: "ch1", UserID: "user-1", Role: model.ChannelRoleMember,
+	}
+	messages.messages["ch1#root"] = &model.Message{ID: "root", ParentID: "ch1", AuthorID: "user-1", Body: "root"}
+	// GetMessage + UpdateMessage (root delete) still work; only the
+	// reply-scan via ListMessages fails.
+	messages.listErr = errors.New("boom")
+
+	if err := svc.Delete(ctx, "user-1", "ch1", ParentChannel, "root"); err != nil {
+		t.Fatalf("Delete root should swallow cascade scan error: %v", err)
+	}
+	if !messages.messages["ch1#root"].Deleted {
+		t.Error("root should be tombstoned despite cascade scan failure")
+	}
+}
+
+func TestMessageService_Send_RejectsReplyToDeletedThread(t *testing.T) {
+	svc, messages, memberships, _, _ := setupMessageService()
+	ctx := context.Background()
+
+	memberships.memberships["ch1#user-1"] = &model.ChannelMembership{
+		ChannelID: "ch1", UserID: "user-1", Role: model.ChannelRoleMember,
+	}
+	// A soft-deleted thread root: the thread is closed for good.
+	messages.messages["ch1#root"] = &model.Message{
+		ID: "root", ParentID: "ch1", AuthorID: "user-1", Deleted: true,
+	}
+
+	_, err := svc.Send(ctx, "user-1", "ch1", ParentChannel, "late reply", "root")
+	if !errors.Is(err, ErrThreadDeleted) {
+		t.Fatalf("Send to deleted thread err = %v, want ErrThreadDeleted", err)
+	}
+	// No message row should have been created for the rejected reply.
+	if len(messages.messages) != 1 {
+		t.Errorf("expected no new message, store has %d", len(messages.messages))
+	}
+}
+
+func TestMessageService_Send_ThreadRootMissing(t *testing.T) {
+	svc, _, memberships, _, _ := setupMessageService()
+	ctx := context.Background()
+
+	memberships.memberships["ch1#user-1"] = &model.ChannelMembership{
+		ChannelID: "ch1", UserID: "user-1", Role: model.ChannelRoleMember,
+	}
+
+	_, err := svc.Send(ctx, "user-1", "ch1", ParentChannel, "orphan reply", "no-such-root")
+	if err == nil {
+		t.Fatal("expected error replying to a non-existent thread root")
+	}
+}
+
 func TestMessageService_Delete_ByChannelAdmin(t *testing.T) {
 	svc, messages, memberships, _, _ := setupMessageService()
 	ctx := context.Background()

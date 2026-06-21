@@ -249,6 +249,14 @@ func TestWriteServiceError(t *testing.T) {
 		}
 	})
 
+	t.Run("deleted-thread reply becomes 409", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		writeServiceError(rec, service.ErrThreadDeleted, http.StatusForbidden, "send_error")
+		if rec.Code != http.StatusConflict {
+			t.Errorf("status = %d, want %d", rec.Code, http.StatusConflict)
+		}
+	})
+
 	t.Run("nil error still uses fallback", func(t *testing.T) {
 		rec := httptest.NewRecorder()
 		writeServiceError(rec, errors.New("anything"), http.StatusForbidden, "forbidden")

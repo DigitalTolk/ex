@@ -1,10 +1,11 @@
-import { useEffect, useState } from 'react';
+import { createElement, useEffect, useState } from 'react';
 import { ImageOff, X } from 'lucide-react';
 import { useUnfurl, type UnfurlPreview } from '@/hooks/useUnfurl';
 import { useSetNoUnfurl } from '@/hooks/useMessages';
 import { useEmojiMap } from '@/hooks/useEmoji';
 import { renderMarkdown } from '@/lib/markdown';
 import { formatRelative, getInitials } from '@/lib/format';
+import { iconForAttachment } from '@/lib/file-helpers';
 
 interface UnfurlCardProps {
   url: string;
@@ -22,7 +23,7 @@ interface UnfurlCardProps {
 
 function hasContent(preview: UnfurlPreview): boolean {
   if (preview.kind === 'message') {
-    return !!(preview.authorName || preview.body || preview.image);
+    return !!(preview.authorName || preview.body || preview.image || preview.attachments?.length);
   }
   return !!(preview.title || preview.description || preview.image);
 }
@@ -124,6 +125,19 @@ export function UnfurlCard({
             data-testid="unfurl-card-image"
             className="max-h-72 w-auto max-w-full rounded border object-contain"
           />
+        )}
+        {preview.attachments && preview.attachments.length > 0 && (
+          <div data-testid="unfurl-card-attachments" className="flex flex-col gap-1">
+            {preview.attachments.map((att, i) => (
+              <div key={`${att.filename}-${i}`} className="flex items-center gap-1.5 text-sm text-muted-foreground">
+                {createElement(iconForAttachment(att.contentType ?? '', att.filename), {
+                  className: 'h-4 w-4 shrink-0',
+                  'aria-hidden': true,
+                })}
+                <span className="truncate">{att.filename}</span>
+              </div>
+            ))}
+          </div>
         )}
         {preview.channelLabel && (
           <p className="text-xs text-muted-foreground">Only visible to users in {preview.channelLabel}</p>
