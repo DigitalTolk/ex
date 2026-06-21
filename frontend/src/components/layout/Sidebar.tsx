@@ -1279,7 +1279,7 @@ export function Sidebar({ onClose }: SidebarProps) {
             className={({ isActive }) =>
               `relative flex items-center gap-2 rounded-md px-2 py-1 text-sm transition-colors max-md:h-12 max-md:px-3 max-md:py-0 max-md:text-base ${
                 isActive
-                  ? 'bg-white/15 text-white font-semibold before:absolute before:inset-y-1 before:left-0 before:w-[3px] before:rounded-full before:bg-sidebar-foreground before:content-[""]'
+                  ? 'bg-background text-white font-semibold before:absolute before:inset-y-1 before:left-0 before:w-[3px] before:rounded-full before:bg-sidebar-foreground before:content-[""]'
                   : 'text-gray-300 hover:bg-white/10 hover:text-white'
               }`
             }
@@ -1303,7 +1303,7 @@ export function Sidebar({ onClose }: SidebarProps) {
             className={() =>
               `relative flex items-center gap-2 rounded-md px-2 py-1 text-sm transition-colors max-md:h-12 max-md:px-3 max-md:py-0 max-md:text-base ${
                 directoryActive
-                  ? 'bg-white/15 text-white font-semibold before:absolute before:inset-y-1 before:left-0 before:w-[3px] before:rounded-full before:bg-sidebar-foreground before:content-[""]'
+                  ? 'bg-background text-white font-semibold before:absolute before:inset-y-1 before:left-0 before:w-[3px] before:rounded-full before:bg-sidebar-foreground before:content-[""]'
                   : 'text-gray-300 hover:bg-white/10 hover:text-white'
               }`
             }
@@ -1318,7 +1318,7 @@ export function Sidebar({ onClose }: SidebarProps) {
             className={({ isActive }) =>
               `relative flex items-center gap-2 rounded-md px-2 py-1 text-sm transition-colors max-md:h-12 max-md:px-3 max-md:py-0 max-md:text-base ${
                 isActive
-                  ? 'bg-white/15 text-white font-semibold before:absolute before:inset-y-1 before:left-0 before:w-[3px] before:rounded-full before:bg-sidebar-foreground before:content-[""]'
+                  ? 'bg-background text-white font-semibold before:absolute before:inset-y-1 before:left-0 before:w-[3px] before:rounded-full before:bg-sidebar-foreground before:content-[""]'
                   : 'text-gray-300 hover:bg-white/10 hover:text-white'
               }`
             }

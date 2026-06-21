@@ -73,7 +73,7 @@ export function UnfurlCard({
     return (
       <div
         data-testid="unfurl-card"
-        className="relative mt-1.5 flex max-w-xl flex-col gap-1.5 overflow-hidden rounded-md border border-l-4 border-l-primary bg-muted/20 p-3 hover:bg-muted/40 dark:border-l-border-strong"
+        className="relative mt-1.5 flex max-w-xl flex-col gap-1.5 overflow-hidden rounded-md border border-l-4 border-l-primary bg-background p-3 hover:bg-muted dark:border-l-border-strong"
       >
         {/* Stretched link covering the whole card → navigates to the message. */}
         <a
@@ -153,11 +153,10 @@ export function UnfurlCard({
         href={preview.url}
         target="_blank"
         rel="noopener noreferrer"
-        // Left accent bar: bold near-black in light (border-l-primary).
-        // In dark, primary is white — a 4px white bar reads as a glaring
-        // stripe, so tone it down to the subtle border-strong grey to
-        // match the design's restrained dark unfurl card.
-        className="flex gap-3 overflow-hidden rounded-md border border-l-4 border-l-primary dark:border-l-border-strong bg-muted/20 p-2 hover:bg-muted/40"
+        // Per the design spec the web (OpenGraph) card is bg/base with a
+        // uniform subtle border (no coloured left accent) — matches the
+        // GitHub card in the reference screenshots.
+        className="flex gap-3 overflow-hidden rounded-md border border-border bg-background p-2 hover:bg-muted"
       >
         {preview.image && !imageBroken && (
           <img

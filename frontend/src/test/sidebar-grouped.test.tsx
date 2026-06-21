@@ -404,7 +404,9 @@ describe('Sidebar grouped rendering', () => {
   it('keeps Directory highlighted on nested directory routes', () => {
     renderSidebarAt('/directory/users');
 
-    expect(screen.getByText('Directory').closest('a')).toHaveClass('bg-white/15');
+    // Active nav rows use the base background (bg/base) per the design spec,
+    // not the lighter bg-white/15 tint.
+    expect(screen.getByText('Directory').closest('a')).toHaveClass('bg-background');
     expect(screen.getByText('Directory').closest('a')).toHaveClass('font-semibold');
   });
 

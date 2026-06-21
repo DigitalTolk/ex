@@ -97,7 +97,7 @@ export function ConversationRow({
         className={({ isActive }) =>
           `relative flex flex-1 min-w-0 items-center gap-2 rounded-md py-1 pl-2 pr-12 text-sm transition-colors max-md:h-12 max-md:py-0 max-md:pl-3 max-md:pr-20 max-md:text-base ${
             isActive
-              ? 'bg-white/15 text-white font-semibold before:absolute before:inset-y-1 before:left-0 before:w-[3px] before:rounded-full before:bg-sidebar-foreground before:content-[""]'
+              ? 'bg-background text-white font-semibold before:absolute before:inset-y-1 before:left-0 before:w-[3px] before:rounded-full before:bg-sidebar-foreground before:content-[""]'
               : hasUnread
                 ? 'font-bold text-white hover:bg-white/10'
                 : 'text-gray-300 hover:bg-white/10 hover:text-white'
