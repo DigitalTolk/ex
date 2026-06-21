@@ -56,6 +56,13 @@ function notifyMessageHovered(id: string) {
 
 interface MessageItemProps {
   message: Message;
+  // First message of an author group. When false the row renders compact:
+  // the avatar + name + timestamp header are replaced by a hover-only
+  // timestamp in the avatar gutter, and vertical padding tightens — the
+  // Slack/Mattermost "consecutive messages" grouping. Each message is still
+  // a full, independently-hoverable row (own action bar, reactions, edit).
+  // Defaults to true so standalone usages render a full header.
+  firstInGroup?: boolean;
   authorName: string;
   authorAvatarURL?: string;
   authorUserStatus?: UserStatus;
@@ -92,6 +99,7 @@ function formatTime(dateStr: string): string {
 
 export function MessageItem({
   message,
+  firstInGroup = true,
   authorName,
   authorAvatarURL,
   authorUserStatus,
@@ -539,40 +547,56 @@ export function MessageItem({
         if (!isMobile) return;
         event.preventDefault();
       }}
-      className={`relative flex items-start gap-3 rounded-md px-2 py-1.5 hover:bg-muted/50 ${
+      className={`relative flex items-start gap-3 rounded-md px-2 ${firstInGroup ? 'py-1.5' : 'py-0.5'} hover:bg-muted/50 ${
         message.pinned ? 'border-l-2 border-amber-500 pl-2' : ''
       } ${highlighted ? 'ring-1 ring-inset ring-amber-400/50 rounded-md' : ''} max-md:select-none max-md:touch-pan-y max-md:[-webkit-touch-callout:none] max-md:[-webkit-user-select:none]`}
     >
-      <UserHoverCard
-        userId={message.authorID}
-        displayName={displayAuthorName}
-        avatarURL={displayAuthorAvatarURL}
-        userStatus={authorUserStatus}
-        online={authorOnline}
-        currentUserId={currentUserId}
-        showInlineStatus={false}
-        integrationOwnerName={integrationOwnerName}
-      >
-        {message.webhookIconEmoji ? (
-          <div
-            className="mt-0.5 flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center rounded-full bg-muted"
-            aria-label={`:${message.webhookIconEmoji}:`}
-            data-testid="webhook-emoji-avatar"
+      {firstInGroup ? (
+        <UserHoverCard
+          userId={message.authorID}
+          displayName={displayAuthorName}
+          avatarURL={displayAuthorAvatarURL}
+          userStatus={authorUserStatus}
+          online={authorOnline}
+          currentUserId={currentUserId}
+          showInlineStatus={false}
+          integrationOwnerName={integrationOwnerName}
+        >
+          {message.webhookIconEmoji ? (
+            <div
+              className="mt-0.5 flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center rounded-full bg-muted"
+              aria-label={`:${message.webhookIconEmoji}:`}
+              data-testid="webhook-emoji-avatar"
+            >
+              <EmojiGlyph emoji={`:${message.webhookIconEmoji}:`} customMap={emojiMap} size="lg" />
+            </div>
+          ) : (
+            <UserAvatar
+              displayName={displayAuthorName}
+              avatarURL={displayAuthorAvatarURL}
+              online={authorOnline}
+              className="mt-0.5 h-9 w-9 cursor-pointer"
+              dotClassName="h-2.5 w-2.5"
+            />
+          )}
+        </UserHoverCard>
+      ) : (
+        // Compact continuation: keep the avatar gutter width so the body
+        // stays aligned, and reveal the message time there on hover.
+        <div className="w-9 shrink-0 select-none text-center" data-testid="group-time-gutter">
+          <time
+            dateTime={message.createdAt}
+            className={`text-[10px] leading-5 tabular-nums text-muted-foreground transition-opacity ${
+              hovered ? 'opacity-100' : 'opacity-0'
+            }`}
           >
-            <EmojiGlyph emoji={`:${message.webhookIconEmoji}:`} customMap={emojiMap} size="lg" />
-          </div>
-        ) : (
-          <UserAvatar
-            displayName={displayAuthorName}
-            avatarURL={displayAuthorAvatarURL}
-            online={authorOnline}
-            className="mt-0.5 h-9 w-9 cursor-pointer"
-            dotClassName="h-2.5 w-2.5"
-          />
-        )}
-      </UserHoverCard>
+            {formatTime(message.createdAt)}
+          </time>
+        </div>
+      )}
 
       <div className="flex-1 min-w-0">
+        {firstInGroup && (
         <div className="flex items-baseline gap-2">
           <UserHoverCard
             userId={message.authorID}
@@ -619,6 +643,7 @@ export function MessageItem({
             </span>
           )}
         </div>
+        )}
 
         {isEditing ? (
           editorReady ? (
@@ -715,7 +740,7 @@ export function MessageItem({
                         }
                       >
                         {renderReactionVisual(emoji)}
-                        <span className="text-xs leading-none text-muted-foreground tabular-nums">{users.length}</span>
+                        <span className="text-xs leading-5 text-muted-foreground tabular-nums">{users.length}</span>
                       </TooltipTrigger>
                       <TooltipContent
                         data-testid="reaction-tooltip"

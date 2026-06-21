@@ -386,29 +386,54 @@ describe('useMessages — conversation-scope mutations (?? right-hand sides)', (
 });
 
 describe('useMessages — useSendMessage thread-reply path', () => {
-  it('does NOT append to the main list and invalidates thread + userThreads when parentMessageID is set', async () => {
-    // input.parentMessageID set → line 315 `!input.parentMessageID` false
-    // (no appendMessageToCache) AND line 318 `if(input.parentMessageID)`
-    // true (invalidate thread + userThreads).
-    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    qc.setQueryData(queryKeys.channelMessages('ch-1'), withInitialPage([msg({ id: 'm-1' })]));
-    const invalidateSpy = vi.spyOn(qc, 'invalidateQueries');
-    apiFetchMock.mockResolvedValue(msg({ id: 'reply', parentMessageID: 'root-1' }));
+  async function sendReply(qc: QueryClient, vars: { body: string; parentMessageID: string }) {
     const screen = await render(
       <QueryClientProvider client={qc}>
-        <Trigger
-          hook={() => useSendMessage({ channelId: 'ch-1' })}
-          vars={{ body: 'a reply', parentMessageID: 'root-1' }}
-        />
+        <Trigger hook={() => useSendMessage({ channelId: 'ch-1' })} vars={vars} />
       </QueryClientProvider>,
     );
     (screen.getByTestId('trigger').element() as HTMLButtonElement).click();
     await new Promise((r) => setTimeout(r, 200));
-    // Main list untouched — reply was not prepended.
+  }
+
+  it('leaves the main list untouched and refreshes userThreads (no thread cache to patch)', async () => {
+    // parentMessageID set → no appendMessageToCache to the main list; with no
+    // open thread query, the optimistic patch updater hits its `: old`
+    // (undefined) arm and creates nothing, while userThreads still refreshes.
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    qc.setQueryData(queryKeys.channelMessages('ch-1'), withInitialPage([msg({ id: 'm-1' })]));
+    const invalidateSpy = vi.spyOn(qc, 'invalidateQueries');
+    apiFetchMock.mockResolvedValue(msg({ id: 'reply', parentMessageID: 'root-1' }));
+    await sendReply(qc, { body: 'a reply', parentMessageID: 'root-1' });
+
     const data = qc.getQueryData<InfiniteData<MessageWindow>>(queryKeys.channelMessages('ch-1'));
     expect(data?.pages[0].items.map((m) => m.id)).toEqual(['m-1']);
-    // Thread + userThreads invalidations fired.
-    expect(invalidateSpy).toHaveBeenCalled();
+    expect(qc.getQueryData(queryKeys.thread('channels/ch-1', 'root-1'))).toBeUndefined();
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: queryKeys.userThreads() });
+    // The thread query itself is NOT invalidated (optimistic append is authoritative).
+    expect(invalidateSpy).not.toHaveBeenCalledWith({ queryKey: queryKeys.thread('channels/ch-1', 'root-1') });
+  });
+
+  it('optimistically appends the reply to an open thread', async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const root = msg({ id: 'root-1', body: 'root' });
+    qc.setQueryData<Message[]>(queryKeys.thread('channels/ch-1', 'root-1'), [root]);
+    apiFetchMock.mockResolvedValue(msg({ id: 'reply', parentMessageID: 'root-1', body: 'a reply' }));
+    await sendReply(qc, { body: 'a reply', parentMessageID: 'root-1' });
+
+    expect(qc.getQueryData<Message[]>(queryKeys.thread('channels/ch-1', 'root-1'))?.map((m) => m.id))
+      .toEqual(['root-1', 'reply']);
+  });
+
+  it('does not duplicate a reply already present in the open thread', async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const reply = msg({ id: 'reply', parentMessageID: 'root-1', body: 'a reply' });
+    qc.setQueryData<Message[]>(queryKeys.thread('channels/ch-1', 'root-1'), [reply]);
+    apiFetchMock.mockResolvedValue(reply);
+    await sendReply(qc, { body: 'a reply', parentMessageID: 'root-1' });
+
+    expect(qc.getQueryData<Message[]>(queryKeys.thread('channels/ch-1', 'root-1'))?.map((m) => m.id))
+      .toEqual(['reply']);
   });
 });
 

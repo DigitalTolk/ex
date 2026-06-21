@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { MessageItem } from './MessageItem';
+import { isGroupedWithPrevious } from './MessageListRows';
 import { MessageInput, type MessageInputHandle } from './MessageInput';
 import { MessageDropZone } from './MessageDropZone';
 import { NonMemberInvitePrompt } from './NonMemberInvitePrompt';
@@ -468,19 +469,20 @@ export function ThreadPanel({
       </div>
       <MessageDropZone onFiles={(files) => void inputRef.current?.uploadFiles(files)}>
         <div ref={scrollRef} className="flex-1 overflow-y-auto">
-          <div ref={innerRef} className="p-2 space-y-2">
+          <div ref={innerRef} className="p-2">
             {isLoading && (
               <p className="text-xs text-muted-foreground p-2">Loading replies...</p>
             )}
             {data?.length === 0 && (
               <p className="text-xs text-muted-foreground p-2">No replies yet. Start the thread!</p>
             )}
-            {data?.map((msg) => {
+            {data?.map((msg, index) => {
               const u = mergedUserMap[msg.authorID];
               return (
                 <MessageItem
                   key={msg.id}
                   message={msg}
+                  firstInGroup={!isGroupedWithPrevious(index > 0 ? data[index - 1] : null, msg)}
                   authorName={u?.displayName ?? 'Unknown'}
                   authorAvatarURL={u?.avatarURL}
                   authorOnline={u?.online}

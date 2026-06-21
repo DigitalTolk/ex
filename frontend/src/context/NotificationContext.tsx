@@ -93,6 +93,16 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   const [permission, setPermission] = useState<Permission>(readPermission);
   const activeParentRef = useRef<string | null>(null);
   const currentUserIDRef = useRef<string | null>(null);
+  // Per-message dedup. The backend emits exactly one notification per
+  // recipient per message, but the same alert can still reach this client
+  // more than once: the broker fans out to every WebSocket session a user
+  // has, and reconnect replay races re-deliver buffered events. Each copy
+  // carries a fresh event-frame id (so the socket-level dedup misses it) but
+  // the same messageID — so we dedup here by message identity to guarantee a
+  // single message never pops two banners (or double-pings). Bounded FIFO so
+  // memory stays flat over a long session.
+  const seenMessageIDsRef = useRef<Set<string>>(new Set());
+  const seenMessageOrderRef = useRef<string[]>([]);
   // Mirror reactive state into refs so `dispatch` can be a stable callback
   // — recreating it on every prefs/permission change would invalidate the
   // memoized context value and re-render every consumer of useNotifications.
@@ -154,6 +164,21 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const dispatch = useCallback((n: NotificationPayload) => {
+    // Drop a repeat of a message we've already alerted on (multi-session
+    // fan-out / reconnect replay). Done first so a duplicate neither pings
+    // nor banners. Notifications without a messageID (defensive) skip dedup.
+    if (n.messageID) {
+      if (seenMessageIDsRef.current.has(n.messageID)) {
+        return;
+      }
+      seenMessageIDsRef.current.add(n.messageID);
+      seenMessageOrderRef.current.push(n.messageID);
+      if (seenMessageOrderRef.current.length > 256) {
+        const oldest = seenMessageOrderRef.current.shift();
+        /* istanbul ignore next -- length just exceeded 256 so shift() always returns a string; the falsy arm is defensive */
+        if (oldest) seenMessageIDsRef.current.delete(oldest);
+      }
+    }
     // Server-side recipient filtering already excludes the author, but
     // echoes via shared subscriptions can slip through.
     if (n.authorID && currentUserIDRef.current && n.authorID === currentUserIDRef.current) {

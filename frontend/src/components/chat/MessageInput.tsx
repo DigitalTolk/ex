@@ -66,7 +66,9 @@ interface MessageInputProps {
   placeholder?: string;
   initialBody?: string;
   initialDrafts?: DraftAttachment[];
-  onDraftChange?: (value: MessageInputValue) => void;
+  // `notify` distinguishes a focus-loss flush (true → surface the draft in
+  // the sidebar) from a keystroke save (omitted/false → persist silently).
+  onDraftChange?: (value: MessageInputValue, options?: { notify?: boolean }) => void;
   cancelOnOutsidePointer?: boolean;
   hideCodeButton?: boolean;
   submitLabel?: string;
@@ -203,7 +205,9 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
       hasInitialDraftValueRef.current ||
       mountedDraftChangeRef.current;
     if (!shouldFlush) return;
-    scopedDraftChangeRef.current?.(value);
+    // A flush means the composer lost focus / is going away — this is the
+    // moment the draft should surface in the sidebar, so notify.
+    scopedDraftChangeRef.current?.(value, { notify: true });
   }, [variant]);
 
   // Link dialog state. Opening the dialog calls editor.beginLinkEdit

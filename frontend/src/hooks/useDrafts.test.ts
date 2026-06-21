@@ -250,6 +250,8 @@ describe('useDrafts', () => {
         parentMessageID: '',
         body: '  hello\n\n',
         attachmentIDs: [],
+        // A default (non-silent) save broadcasts so the sidebar indicator shows.
+        notify: true,
       }),
     });
 
@@ -327,6 +329,51 @@ describe('useDrafts', () => {
         'draft-other',
       ]);
     });
+  });
+
+  it('a silent save persists with notify:false but does NOT surface the draft in the sidebar cache', async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    queryClient.setQueryData<MessageDraft[]>(['drafts'], []);
+    const wrapper = ({ children }: { children: ReactNode }) =>
+      createElement(QueryClientProvider, { client: queryClient }, children);
+    const saved: MessageDraft = {
+      id: 'draft-typing',
+      userID: 'u-1',
+      parentID: 'dm-1',
+      parentType: 'conversation',
+      parentMessageID: '',
+      body: 'typing…',
+      attachmentIDs: [],
+      updatedAt: '2026-05-03T10:01:00Z',
+      createdAt: '2026-05-03T10:00:00Z',
+    };
+    vi.mocked(apiFetch).mockResolvedValue(saved);
+
+    const { result } = renderHook(() => useSaveDraft(), { wrapper });
+    result.current.mutate({
+      parentID: 'dm-1',
+      parentType: 'conversation',
+      body: 'typing…',
+      silent: true,
+    });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    // Request carried notify:false…
+    expect(apiFetch).toHaveBeenCalledWith('/api/v1/drafts', {
+      method: 'PUT',
+      body: JSON.stringify({
+        parentID: 'dm-1',
+        parentType: 'conversation',
+        parentMessageID: '',
+        body: 'typing…',
+        attachmentIDs: [],
+        notify: false,
+      }),
+    });
+    // …and the local list stays empty (no sidebar indicator yet).
+    expect(queryClient.getQueryData<MessageDraft[]>(['drafts'])).toEqual([]);
   });
 
   it('does not PUT duplicate draft saves or empty clears without a cached draft', async () => {

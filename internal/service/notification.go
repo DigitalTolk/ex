@@ -262,6 +262,16 @@ func (s *NotificationService) sendMobilePush(ctx context.Context, recipientUserI
 	if s.push == nil {
 		return
 	}
+	// Don't double-notify. A user with any live WebSocket connection already
+	// receives the in-app banner published just above, so a parallel push
+	// would land a second alert on the same device (native push + in-app on
+	// the mobile app) or a redundant ping on another. Push therefore targets
+	// only users who are offline — app backgrounded/closed, so the socket has
+	// dropped — matching the Slack/Mattermost model. IsOnline is Redis-backed,
+	// so the check holds across every backend instance and device.
+	if s.presence != nil && s.presence.IsOnline(recipientUserID) {
+		return
+	}
 	if err := s.push.Send(ctx, recipientUserID, notif); err != nil {
 		slog.Warn(
 			"mobile push send failed",

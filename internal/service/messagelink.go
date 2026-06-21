@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"net/url"
 	"strings"
 	"time"
@@ -152,12 +153,18 @@ func (s *MessageLinkService) Preview(ctx context.Context, viewerID, rawURL strin
 		return nil, true
 	}
 
+	body := messagePreviewBody(msg.Body)
+	if body == "" {
+		// Attachment-only message: a blank card body reads as broken, so
+		// stand in a short descriptor of the attachment(s).
+		body = s.attachmentPreviewBody(ctx, msg)
+	}
 	preview := &UnfurlPreview{
 		Kind:         "message",
 		URL:          rawURL,
 		SiteName:     s.host,
 		ChannelLabel: label,
-		Body:         messagePreviewBody(msg.Body),
+		Body:         body,
 		CreatedAt:    msg.CreatedAt.UTC().Format(time.RFC3339),
 	}
 	s.resolveAuthor(ctx, msg, preview)
@@ -211,6 +218,47 @@ func (s *MessageLinkService) resolveImage(ctx context.Context, msg *model.Messag
 		}
 	}
 	return ""
+}
+
+// attachmentPreviewBody produces a short stand-in body for an
+// attachment-only message (empty text) so the unfurl card isn't blank.
+// Incoming-webhook (Mattermost-style) rich attachments contribute their
+// most human-readable field — title, then text, then the fallback string;
+// uploaded files contribute a paperclip + filename ("📎 photo.png", or
+// "📎 photo.png +2" when several are attached).
+func (s *MessageLinkService) attachmentPreviewBody(ctx context.Context, msg *model.Message) string {
+	for _, a := range msg.MessageAttachments {
+		for _, candidate := range []string{a.Title, a.Text, a.Fallback} {
+			if t := strings.TrimSpace(candidate); t != "" {
+				return messagePreviewBody(t)
+			}
+		}
+	}
+	if s.attachments == nil || len(msg.AttachmentIDs) == 0 {
+		return ""
+	}
+	var first string
+	count := 0
+	for _, id := range msg.AttachmentIDs {
+		att, err := s.attachments.Get(ctx, id)
+		if err != nil || att == nil {
+			continue
+		}
+		count++
+		if first == "" {
+			first = strings.TrimSpace(att.Filename)
+		}
+	}
+	if count == 0 {
+		return ""
+	}
+	if first == "" {
+		first = "attachment"
+	}
+	if count == 1 {
+		return "📎 " + first
+	}
+	return fmt.Sprintf("📎 %s +%d", first, count-1)
 }
 
 func conversationLabel(conv *model.Conversation) string {

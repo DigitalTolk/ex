@@ -309,15 +309,19 @@ export function useSendMessage(scope: SendMessageScope) {
       }),
     onSuccess: (data, input) => {
       const parentID = channelId ?? conversationId;
-      // Top-level only — sender sees their post immediately. Thread
-      // replies are reconciled via the message.edited event the
-      // backend publishes alongside message.new.
+      // Sender sees their post immediately. Top-level posts append to the
+      // main list; thread replies append to the thread cache so the reply
+      // shows instantly instead of waiting for the server round-trip (the
+      // message.new echo + a userThreads refetch reconcile the rest).
       if (parentID && !input.parentMessageID) {
         appendMessageToCache(queryClient, parentID, data);
       }
       if (input.parentMessageID) {
         const path = parentPath({ channelId, conversationId });
-        queryClient.invalidateQueries({ queryKey: queryKeys.thread(path, input.parentMessageID) });
+        queryClient.setQueryData<Message[]>(
+          queryKeys.thread(path, input.parentMessageID),
+          (old) => (old ? (old.some((m) => m.id === data.id) ? old : [...old, data]) : old),
+        );
         queryClient.invalidateQueries({ queryKey: queryKeys.userThreads() });
       }
     },

@@ -3,7 +3,25 @@ import type { Message } from '@/types';
 
 export type MessageListRow =
   | { kind: 'day'; key: string; date: string }
-  | { kind: 'message'; key: string; message: Message };
+  | { kind: 'message'; key: string; message: Message; firstInGroup: boolean };
+
+// Consecutive messages from the same author within this window collapse
+// into one visual group (Slack/Mattermost use ~5 minutes): only the first
+// shows the avatar + name + timestamp header, the rest render compact.
+const GROUP_WINDOW_MS = 5 * 60 * 1000;
+
+// isGroupedWithPrevious reports whether `msg` should render as a compact
+// continuation of `prev` (same author, close in time) rather than starting
+// a fresh group with its own avatar/name/timestamp header. System messages
+// never group (they render as standalone centered notices), and distinct
+// webhook identities under the shared bot author are kept separate.
+export function isGroupedWithPrevious(prev: Message | null | undefined, msg: Message): boolean {
+  if (!prev || prev.system || msg.system) return false;
+  if (prev.authorID !== msg.authorID) return false;
+  if ((prev.webhookUsername ?? '') !== (msg.webhookUsername ?? '')) return false;
+  const gap = new Date(msg.createdAt).getTime() - new Date(prev.createdAt).getTime();
+  return gap >= 0 && gap <= GROUP_WINDOW_MS;
+}
 
 // Build the flat row list with day dividers, in chronological order.
 // Thread replies belong to ThreadPanel; they are skipped here. Lives
@@ -11,17 +29,24 @@ export type MessageListRow =
 // testable without spinning up Virtuoso — and so the file containing
 // the React component only exports components, satisfying React Fast
 // Refresh's contract.
+//
+// Each message row carries `firstInGroup`: false marks a compact
+// continuation of the message above it. A day divider always resets
+// grouping so the first message under a new day shows its full header.
 export function buildMessageListRows(allMessages: Message[]): MessageListRow[] {
   const out: MessageListRow[] = [];
   let lastDate = '';
+  let prev: Message | null = null;
   for (const msg of allMessages) {
     if (msg.parentMessageID) continue;
     const d = dayKey(msg.createdAt);
     if (d !== lastDate) {
       lastDate = d;
       out.push({ kind: 'day', key: `day-${d}`, date: msg.createdAt });
+      prev = null;
     }
-    out.push({ kind: 'message', key: msg.id, message: msg });
+    out.push({ kind: 'message', key: msg.id, message: msg, firstInGroup: !isGroupedWithPrevious(prev, msg) });
+    prev = msg;
   }
   return out;
 }

@@ -48,12 +48,20 @@ func (h *DraftHandler) Upsert(w http.ResponseWriter, r *http.Request) {
 		ParentMessageID string   `json:"parentMessageID"`
 		Body            string   `json:"body"`
 		AttachmentIDs   []string `json:"attachmentIDs"`
+		// Notify controls whether saving broadcasts the draft.updated event
+		// (which surfaces the sidebar "draft available" indicator on this
+		// and other devices). Omitted/true → broadcast, preserving legacy
+		// behavior. The composer sends false for keystroke saves so the
+		// indicator only appears once the field loses focus, then a final
+		// save with notify=true (or omitted) surfaces it.
+		Notify *bool `json:"notify"`
 	}
 	if err := readJSON(r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_body", err.Error())
 		return
 	}
-	draft, err := h.draftSvc.Upsert(r.Context(), userID, body.ParentID, body.ParentType, body.ParentMessageID, body.Body, body.AttachmentIDs)
+	silent := body.Notify != nil && !*body.Notify
+	draft, err := h.draftSvc.Upsert(r.Context(), userID, body.ParentID, body.ParentType, body.ParentMessageID, body.Body, body.AttachmentIDs, service.WithSilent(silent))
 	if err != nil {
 		writeDraftError(w, err)
 		return

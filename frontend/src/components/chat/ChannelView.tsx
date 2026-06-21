@@ -166,7 +166,7 @@ export function ChannelView() {
   const saveDraftMutate = saveDraft.mutate;
   const deleteDraftMutate = deleteDraft.mutate;
   const handleDraftChange = useCallback(
-    (value: { body: string; attachmentIDs: string[] }) => {
+    (value: { body: string; attachmentIDs: string[] }, options?: { notify?: boolean }) => {
       if (!channelID) return;
       restoreDraftScopeForContent(draftScope, value);
       saveDraftMutate({
@@ -174,6 +174,9 @@ export function ChannelView() {
         parentType: 'channel',
         body: value.body,
         attachmentIDs: value.attachmentIDs,
+        // Keystroke saves persist silently; the focus-loss flush (notify)
+        // is what surfaces the draft in the sidebar.
+        silent: !options?.notify,
       });
     },
     [channelID, draftScope, saveDraftMutate],

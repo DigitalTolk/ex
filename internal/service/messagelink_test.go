@@ -109,6 +109,14 @@ func newTestMessageLinkService() *MessageLinkService {
 		}},
 		fakeMLMessages{byKey: map[string]*model.Message{
 			"ch-1#m1": {ID: "m1", ParentID: "ch-1", AuthorID: "u-author", Body: "hello @[u-x|Jane] in ~[ch-2|other]", CreatedAt: time.Date(2026, 6, 15, 10, 0, 0, 0, time.UTC), AttachmentIDs: []string{"att-1"}},
+			// Attachment-only messages (empty text) — exercise the unfurl
+			// body fallback paths.
+			"ch-1#fileonly":  {ID: "fileonly", ParentID: "ch-1", AuthorID: "u-author", Body: "", AttachmentIDs: []string{"att-file"}},
+			"ch-1#multifile": {ID: "multifile", ParentID: "ch-1", AuthorID: "u-author", Body: "   ", AttachmentIDs: []string{"att-file", "att-img2"}},
+			"ch-1#richonly":   {ID: "richonly", ParentID: "ch-1", AuthorID: "u-author", Body: "", MessageAttachments: []model.MessageAttachment{{Fallback: "Deploy succeeded"}}},
+			"ch-1#richtitle":  {ID: "richtitle", ParentID: "ch-1", WebhookUsername: "CI Bot", Body: "", MessageAttachments: []model.MessageAttachment{{Title: "Build #42 passed", Text: "all green", Fallback: "build ok"}}},
+			"ch-1#richtext":   {ID: "richtext", ParentID: "ch-1", WebhookUsername: "CI Bot", Body: "", MessageAttachments: []model.MessageAttachment{{Text: "Coverage at 99%", Fallback: "coverage"}}},
+			"ch-1#ghostatt":  {ID: "ghostatt", ParentID: "ch-1", AuthorID: "u-author", Body: "", AttachmentIDs: []string{"missing-att"}},
 			"conv-1#m2": {ID: "m2", ParentID: "conv-1", AuthorID: "u-author", Body: "dm body"},
 			"grp-1#m3":  {ID: "m3", ParentID: "grp-1", WebhookUsername: "CI Bot", WebhookAvatarURL: "https://img/bot.png", Body: "build done"},
 			"ch-1#del":   {ID: "del", ParentID: "ch-1", Deleted: true},
@@ -119,7 +127,9 @@ func newTestMessageLinkService() *MessageLinkService {
 			"u-author": {ID: "u-author", DisplayName: "Günter", AvatarURL: "https://img/g.png"},
 		}},
 		fakeMLAttachments{byID: map[string]*model.Attachment{
-			"att-1": {ID: "att-1", ContentType: "image/png", URL: "https://img/chart.png"},
+			"att-1":    {ID: "att-1", ContentType: "image/png", URL: "https://img/chart.png"},
+			"att-file": {ID: "att-file", ContentType: "application/pdf", Filename: "report.pdf"},
+			"att-img2": {ID: "att-img2", ContentType: "image/png", Filename: "photo.png", URL: "https://img/photo.png"},
 		}},
 	)
 }
@@ -143,6 +153,37 @@ func TestMessageLink_Preview_Channel(t *testing.T) {
 	}
 	if !strings.HasPrefix(p.CreatedAt, "2026-06-15T10:00:00") {
 		t.Errorf("createdAt = %q", p.CreatedAt)
+	}
+}
+
+func TestMessageLink_Preview_AttachmentOnlyBodyFallback(t *testing.T) {
+	svc := newTestMessageLinkService()
+	cases := []struct {
+		name     string
+		url      string
+		wantBody string
+	}{
+		// Single uploaded file → paperclip + filename.
+		{"single file", "https://ex.test/channel/general#msg-fileonly", "📎 report.pdf"},
+		// Multiple files → first filename + remaining count.
+		{"multiple files", "https://ex.test/channel/general#msg-multifile", "📎 report.pdf +1"},
+		// Incoming-webhook rich attachment → prefer title, then text, then fallback.
+		{"rich attachment title preferred", "https://ex.test/channel/general#msg-richtitle", "Build #42 passed"},
+		{"rich attachment text when no title", "https://ex.test/channel/general#msg-richtext", "Coverage at 99%"},
+		{"rich attachment fallback when no title/text", "https://ex.test/channel/general#msg-richonly", "Deploy succeeded"},
+		// Attachment ID that no longer resolves → empty (no crash, no junk).
+		{"unresolvable attachment", "https://ex.test/channel/general#msg-ghostatt", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p, internal := svc.Preview(context.Background(), "viewer", tc.url)
+			if !internal || p == nil {
+				t.Fatalf("expected internal preview, got internal=%v p=%v", internal, p)
+			}
+			if p.Body != tc.wantBody {
+				t.Fatalf("body = %q, want %q", p.Body, tc.wantBody)
+			}
+		})
 	}
 }
 
