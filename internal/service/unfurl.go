@@ -25,6 +25,11 @@ type UnfurlPreview struct {
 	Title       string `json:"title,omitempty"`
 	Description string `json:"description,omitempty"`
 	Image       string `json:"image,omitempty"`
+	// Intrinsic pixel dimensions of Image (0 when unknown). For internal
+	// message-link previews this lets the client size a shared image exactly
+	// as the original message does, rather than expanding it to fill the card.
+	ImageWidth  int    `json:"imageWidth,omitempty"`
+	ImageHeight int    `json:"imageHeight,omitempty"`
 	SiteName    string `json:"siteName,omitempty"`
 
 	// Internal message-link preview (Slack/Mattermost-style). When Kind is

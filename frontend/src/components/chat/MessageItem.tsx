@@ -648,7 +648,10 @@ export function MessageItem({
           )}
           <Tooltip>
             <TooltipTrigger
-              className="text-xs text-muted-foreground cursor-default"
+              // Right-align the timestamp on standalone (first-in-group)
+              // messages so it sits at the row's trailing edge rather than
+              // crowding the author name.
+              className="ml-auto text-xs text-muted-foreground cursor-default"
               render={<time dateTime={message.createdAt} />}
             >
               {/* Threads have no day dividers, so an absolute clock time is

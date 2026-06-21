@@ -333,18 +333,16 @@ describe('Sidebar grouped rendering', () => {
   });
 
   it('Directory + Threads links use the same vertical padding as channel rows', () => {
-    // Channel rows use px-2 py-1; Directory and Threads must match so
-    // the eye doesn't catch on a height bump between the top-level
-    // links and the channel list. Margin-bottom (mb-*) is the
-    // separator's job now, not per-row spacing.
+    // Channel rows use px-2 py-1.5 (the spec's airy list-row rhythm);
+    // Directory and Threads must match so the eye doesn't catch on a height
+    // bump between the top-level links and the channel list. Margin-bottom
+    // (mb-*) is the separator's job now, not per-row spacing.
     renderSidebar();
     const directory = screen.getByText('Directory').closest('a');
     const threads = screen.getByText('Threads').closest('a');
-    expect(directory?.className).toMatch(/\bpy-1\b/);
-    expect(directory?.className).not.toMatch(/\bpy-1\.5\b/);
+    expect(directory?.className).toMatch(/\bpy-1\.5\b/);
     expect(directory?.className).not.toMatch(/\bmb-2\b/);
-    expect(threads?.className).toMatch(/\bpy-1\b/);
-    expect(threads?.className).not.toMatch(/\bpy-1\.5\b/);
+    expect(threads?.className).toMatch(/\bpy-1\.5\b/);
     expect(threads?.className).not.toMatch(/\bmb-2\b/);
   });
 

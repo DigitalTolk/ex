@@ -317,7 +317,10 @@
        "chat hover" is level1 #F5F5F5). Was #353132 (level2), a step too
        light vs the reference screenshots. */
     --color-chat-hover: #2C2829;
-    --color-typing-field: #3F3A3B;
+    /* Composer / typing field. The reference dark screenshot shows it at
+       bg/base #231F20 (not the lighter level3 #3F3A3B the token sheet
+       labels) — a #3F3A3B field read as a washed-out light box in dark. */
+    --color-typing-field: #231F20;
   }
 }
 

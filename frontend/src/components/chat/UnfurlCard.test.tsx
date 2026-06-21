@@ -215,6 +215,18 @@ describe('UnfurlCard', () => {
       expect(screen.queryByText(/📎/)).toBeNull();
     });
 
+    it('sizes a shared image to the same scaled dimensions as the original (not the card width)', () => {
+      mockUseUnfurl.mockReturnValue({
+        // 1920×1080 → scaled by min(1, 320/1920, 288/1080) = 0.1667 → 320×180.
+        data: messagePreview({ image: 'https://img/big.png', imageWidth: 1920, imageHeight: 1080 }),
+        isLoading: false,
+      });
+      renderCard();
+      const img = screen.getByTestId('unfurl-card-image');
+      expect(img.getAttribute('width')).toBe('320');
+      expect(img.getAttribute('height')).toBe('180');
+    });
+
     it('renders an attachments-only message preview (no author/body/image)', () => {
       mockUseUnfurl.mockReturnValue({
         data: messagePreview({

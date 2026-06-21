@@ -21,6 +21,16 @@ interface UnfurlCardProps {
   onContentHeightChange?: () => void;
 }
 
+// Matches the original message image cap (MessageAttachments THUMBNAIL_MAX)
+// so a shared image preview is the same size as in the source channel.
+const UNFURL_IMG_MAX_W = 320;
+const UNFURL_IMG_MAX_H = 288;
+function scaledPreviewImage(w?: number, h?: number): { width?: number; height?: number } {
+  if (!w || !h) return {};
+  const scale = Math.min(1, UNFURL_IMG_MAX_W / w, UNFURL_IMG_MAX_H / h);
+  return { width: Math.round(w * scale), height: Math.round(h * scale) };
+}
+
 function hasContent(preview: UnfurlPreview): boolean {
   if (preview.kind === 'message') {
     return !!(preview.authorName || preview.body || preview.image || preview.attachments?.length);
@@ -73,7 +83,7 @@ export function UnfurlCard({
     return (
       <div
         data-testid="unfurl-card"
-        className="relative mt-1.5 flex max-w-xl flex-col gap-1.5 overflow-hidden rounded-md border border-l-4 border-l-primary bg-background p-3 hover:bg-muted dark:border-l-border-strong"
+        className="relative mt-1.5 flex max-w-xl flex-col gap-1.5 overflow-hidden rounded-md border border-l-4 border-l-primary bg-background p-3 dark:border-l-border-strong"
       >
         {/* Stretched link covering the whole card → navigates to the message. */}
         <a
@@ -123,7 +133,12 @@ export function UnfurlCard({
             loading="lazy"
             onError={() => setImageBroken(true)}
             data-testid="unfurl-card-image"
-            className="max-h-72 w-auto max-w-full rounded border object-contain"
+            // Render at the same scaled dimensions the original message uses
+            // (THUMBNAIL_MAX 320×288) so a shared image isn't blown up to the
+            // card width. Falls back to the CSS caps when dimensions are
+            // unknown (e.g. webhook images without intrinsic size).
+            {...scaledPreviewImage(preview.imageWidth, preview.imageHeight)}
+            className="h-auto max-h-72 w-auto max-w-xs rounded border object-contain"
           />
         )}
         {preview.attachments && preview.attachments.length > 0 && (
@@ -156,7 +171,7 @@ export function UnfurlCard({
         // Per the design spec the web (OpenGraph) card is bg/base with a
         // uniform subtle border (no coloured left accent) — matches the
         // GitHub card in the reference screenshots.
-        className="flex gap-3 overflow-hidden rounded-md border border-border bg-background p-2 hover:bg-muted"
+        className="flex gap-3 overflow-hidden rounded-md border border-border bg-background p-2"
       >
         {preview.image && !imageBroken && (
           <img

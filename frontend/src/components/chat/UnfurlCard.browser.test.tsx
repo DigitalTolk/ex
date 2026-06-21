@@ -122,6 +122,26 @@ describe('UnfurlCard browser behaviour', () => {
     expect(document.body.textContent).not.toContain('📎');
   });
 
+  it('sizes a shared image to the same scaled dimensions as the original message', async () => {
+    useUnfurlMock.mockReturnValue({
+      data: {
+        url: 'https://ex.test/channel/incidents#msg-img',
+        kind: 'message',
+        siteName: 'ex.test',
+        authorName: 'Günter Grodotzki',
+        // 1920×1080 → min(1, 320/1920, 288/1080) = 0.1667 → 320×180.
+        image: 'https://img/big.png',
+        imageWidth: 1920,
+        imageHeight: 1080,
+      },
+      isLoading: false,
+    });
+    const screen = await render(<UnfurlCard url="https://ex.test/channel/incidents#msg-img" messageId="m-img" isAuthor={false} />);
+    const img = (screen.getByTestId('unfurl-card-image').element() as HTMLImageElement);
+    expect(img.getAttribute('width')).toBe('320');
+    expect(img.getAttribute('height')).toBe('180');
+  });
+
   it('renders the message card with an initials fallback and no image/body', async () => {
     useUnfurlMock.mockReturnValue({
       data: {

@@ -167,7 +167,7 @@ func (s *MessageLinkService) Preview(ctx context.Context, viewerID, rawURL strin
 		CreatedAt:    msg.CreatedAt.UTC().Format(time.RFC3339),
 	}
 	s.resolveAuthor(ctx, msg, preview)
-	preview.Image = s.resolveImage(ctx, msg)
+	preview.Image, preview.ImageWidth, preview.ImageHeight = s.resolveImage(ctx, msg)
 	preview.Attachments = s.resolveAttachmentList(ctx, msg)
 	return preview, true
 }
@@ -221,15 +221,18 @@ func (s *MessageLinkService) resolveAuthor(ctx context.Context, msg *model.Messa
 }
 
 // resolveImage returns the first displayable image for the message: a rich
-// (webhook) attachment image, else the first image file attachment.
-func (s *MessageLinkService) resolveImage(ctx context.Context, msg *model.Message) string {
+// (webhook) attachment image, else the first image file attachment, along
+// with its intrinsic pixel dimensions (0 when unknown) so the client can
+// render the preview at the SAME size the original message shows it, instead
+// of blowing it up to the card's max width.
+func (s *MessageLinkService) resolveImage(ctx context.Context, msg *model.Message) (url string, width, height int) {
 	for _, a := range msg.MessageAttachments {
 		if a.ImageURL != "" {
-			return a.ImageURL
+			return a.ImageURL, a.ImageWidth, a.ImageHeight
 		}
 	}
 	if s.attachments == nil {
-		return ""
+		return "", 0, 0
 	}
 	for _, id := range msg.AttachmentIDs {
 		att, err := s.attachments.Get(ctx, id)
@@ -237,10 +240,10 @@ func (s *MessageLinkService) resolveImage(ctx context.Context, msg *model.Messag
 			continue
 		}
 		if att.URL != "" {
-			return att.URL
+			return att.URL, att.Width, att.Height
 		}
 	}
-	return ""
+	return "", 0, 0
 }
 
 // attachmentPreviewBody produces a short stand-in body for an

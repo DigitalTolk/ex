@@ -153,7 +153,7 @@ function AttachmentRow({ att, onOpen }: { att: Attachment; onOpen: () => void })
   const isImage = att.squareThumbnailURL && isImageAttachment(att.contentType, att.filename);
   const iconType = iconForAttachment(att.contentType, att.filename);
   return (
-    <div className="flex h-12 w-64 max-w-full items-center gap-1 rounded-md border bg-background pr-1 hover:bg-muted/50 max-md:w-full">
+    <div className="flex h-12 w-64 max-w-full items-center gap-1 rounded-md border bg-background pr-1 max-md:w-full">
       <button
         type="button"
         onClick={onOpen}
