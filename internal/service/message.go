@@ -1107,13 +1107,7 @@ func (s *MessageService) Delete(ctx context.Context, userID, parentID, parentTyp
 func (s *MessageService) softDeleteMessage(ctx context.Context, msg *model.Message, parentID, parentType string) error {
 	originalAttachments := msg.AttachmentIDs
 	wasPinned := msg.Pinned
-	msg.Deleted = true
-	msg.Body = ""
-	msg.AttachmentIDs = nil
-	msg.Reactions = nil
-	msg.Pinned = false
-	msg.PinnedAt = nil
-	msg.PinnedBy = ""
+	msg.Tombstone()
 	if err := s.messages.UpdateMessage(ctx, msg); err != nil {
 		return fmt.Errorf("message: soft-delete: %w", err)
 	}

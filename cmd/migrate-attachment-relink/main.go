@@ -109,7 +109,11 @@ func main() {
 	if err != nil {
 		fatal("collect victims", err)
 	}
-	slog.Info("scanned messages", "total", msgCount, "edited_attachmentless", countVictims(victimsByAuthor))
+	victimCount := 0
+	for _, vs := range victimsByAuthor {
+		victimCount += len(vs)
+	}
+	slog.Info("scanned messages", "total", msgCount, "edited_attachmentless", victimCount)
 
 	// 3. Match each orphan to exactly one candidate, then apply.
 	t := totals{}
@@ -250,13 +254,6 @@ func collectVictims(
 	return byAuthor, count, nil
 }
 
-func countVictims(byAuthor map[string][]victim) int {
-	n := 0
-	for _, vs := range byAuthor {
-		n += len(vs)
-	}
-	return n
-}
 
 // applyRelink writes the repair: the message regains the attachment IDs, the
 // attachment refcount regains the message, and the FILE# index row is

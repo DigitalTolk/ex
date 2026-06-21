@@ -2,7 +2,7 @@ import { createElement, useEffect, useMemo } from 'react';
 import { Download } from 'lucide-react';
 import { useAttachmentsBatch } from '@/hooks/useAttachments';
 import { useAttachmentLightbox } from '@/hooks/useAttachmentLightbox';
-import { iconForAttachment, isImageAttachment } from '@/lib/file-helpers';
+import { iconForAttachment, isImageAttachment, scaleToThumbnail } from '@/lib/file-helpers';
 import { formatBytes } from '@/lib/format';
 import type { Attachment } from '@/types';
 
@@ -20,8 +20,6 @@ interface MessageAttachmentsProps {
   onContentHeightChange?: () => void;
 }
 
-const THUMBNAIL_MAX_WIDTH = 320;
-const THUMBNAIL_MAX_HEIGHT = 288;
 
 export function MessageAttachments({
   ids,
@@ -113,7 +111,7 @@ function ThumbnailButton({ att, onOpen, onLoad }: { att: Attachment; onOpen: () 
   // width/height attrs reserve the layout box pre-decode; CSS caps
   // visible size. Use the rendered thumbnail box, not the full
   // intrinsic image, so the reserved layout matches the chat message.
-  const thumbnailDims = getThumbnailDimensions(att);
+  const thumbnailDims = scaleToThumbnail(att.width, att.height);
   // GIFs animate only in the full file — the generated thumbnail is a static
   // first frame. Render the original so it plays inline; everything else uses
   // the lighter thumbnail.
@@ -139,15 +137,6 @@ function ThumbnailButton({ att, onOpen, onLoad }: { att: Attachment; onOpen: () 
       )}
     </button>
   );
-}
-
-function getThumbnailDimensions(att: Attachment): { width?: number; height?: number } {
-  if (!att.width || !att.height) return {};
-  const scale = Math.min(1, THUMBNAIL_MAX_WIDTH / att.width, THUMBNAIL_MAX_HEIGHT / att.height);
-  return {
-    width: Math.round(att.width * scale),
-    height: Math.round(att.height * scale),
-  };
 }
 
 // AttachmentRow is the compact box used whenever a message has multiple

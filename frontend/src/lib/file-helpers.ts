@@ -22,6 +22,21 @@ export function isImageAttachment(contentType: string, filename = ''): boolean {
   return isImageContentType(contentType) || isImageURL(filename);
 }
 
+// Max display box for an inline image thumbnail — shared by the chat
+// message list and the message-link preview card so a shared image renders
+// at the same size in both.
+export const THUMBNAIL_MAX_WIDTH = 320;
+export const THUMBNAIL_MAX_HEIGHT = 288;
+
+// Scales intrinsic image dimensions into the thumbnail box, never upscaling.
+// Returns {} when the dimensions are unknown so the caller falls back to its
+// CSS max-width/height caps.
+export function scaleToThumbnail(width?: number, height?: number): { width?: number; height?: number } {
+  if (!width || !height) return {};
+  const scale = Math.min(1, THUMBNAIL_MAX_WIDTH / width, THUMBNAIL_MAX_HEIGHT / height);
+  return { width: Math.round(width * scale), height: Math.round(height * scale) };
+}
+
 // Resolves a Lucide icon component for a given attachment. Falls back to
 // the generic File glyph when nothing matches. The mapping checks the
 // MIME type first (more reliable when present) then the extension —

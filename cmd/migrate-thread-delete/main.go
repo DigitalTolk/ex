@@ -194,7 +194,7 @@ func backfillParent(
 			tombstoned++
 			continue
 		}
-		tombstone(m)
+		m.Tombstone()
 		if err := messageStore.Update(ctx, parentID, m); err != nil {
 			slog.Warn("tombstone reply failed", "parentID", parentID, "msgID", m.ID, "error", err)
 			t.errors++
@@ -213,18 +213,6 @@ func backfillParent(
 		)
 	}
 	return nil
-}
-
-// tombstone mutates m in place to match the service-layer soft-delete:
-// flagged Deleted with body / attachments / reactions / pin-state cleared.
-func tombstone(m *model.Message) {
-	m.Deleted = true
-	m.Body = ""
-	m.AttachmentIDs = nil
-	m.Reactions = nil
-	m.Pinned = false
-	m.PinnedAt = nil
-	m.PinnedBy = ""
 }
 
 func fatal(msg string, err error) {

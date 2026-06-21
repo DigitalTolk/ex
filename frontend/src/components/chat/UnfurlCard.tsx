@@ -5,7 +5,7 @@ import { useSetNoUnfurl } from '@/hooks/useMessages';
 import { useEmojiMap } from '@/hooks/useEmoji';
 import { renderMarkdown } from '@/lib/markdown';
 import { formatRelative, getInitials } from '@/lib/format';
-import { iconForAttachment } from '@/lib/file-helpers';
+import { iconForAttachment, scaleToThumbnail } from '@/lib/file-helpers';
 
 interface UnfurlCardProps {
   url: string;
@@ -19,16 +19,6 @@ interface UnfurlCardProps {
   conversationId?: string;
   isAuthor: boolean;
   onContentHeightChange?: () => void;
-}
-
-// Matches the original message image cap (MessageAttachments THUMBNAIL_MAX)
-// so a shared image preview is the same size as in the source channel.
-const UNFURL_IMG_MAX_W = 320;
-const UNFURL_IMG_MAX_H = 288;
-function scaledPreviewImage(w?: number, h?: number): { width?: number; height?: number } {
-  if (!w || !h) return {};
-  const scale = Math.min(1, UNFURL_IMG_MAX_W / w, UNFURL_IMG_MAX_H / h);
-  return { width: Math.round(w * scale), height: Math.round(h * scale) };
 }
 
 function hasContent(preview: UnfurlPreview): boolean {
@@ -137,7 +127,7 @@ export function UnfurlCard({
             // (THUMBNAIL_MAX 320×288) so a shared image isn't blown up to the
             // card width. Falls back to the CSS caps when dimensions are
             // unknown (e.g. webhook images without intrinsic size).
-            {...scaledPreviewImage(preview.imageWidth, preview.imageHeight)}
+            {...scaleToThumbnail(preview.imageWidth, preview.imageHeight)}
             // self-start is critical: the card is a flex-col whose default
             // align-items:stretch would otherwise blow the image up to the
             // full max-w-xs width (320px) even for a small thumbnail. With

@@ -50,6 +50,21 @@ type Message struct {
 	MessageAttachments []MessageAttachment `json:"messageAttachments,omitempty" dynamodbav:"messageAttachments,omitempty"`
 }
 
+// Tombstone clears a message's content in place for a soft delete: it flags
+// Deleted and wipes the body, attachments, reactions, and pin state. The row
+// itself is kept so replies can still resolve their thread root. This is the
+// single source of truth for the soft-delete field contract — the service
+// soft-delete path and the offline migrations both call it.
+func (m *Message) Tombstone() {
+	m.Deleted = true
+	m.Body = ""
+	m.AttachmentIDs = nil
+	m.Reactions = nil
+	m.Pinned = false
+	m.PinnedAt = nil
+	m.PinnedBy = ""
+}
+
 type MessageAttachment struct {
 	Fallback   string                   `json:"fallback,omitempty" dynamodbav:"fallback,omitempty"`
 	Color      string                   `json:"color,omitempty" dynamodbav:"color,omitempty"`
