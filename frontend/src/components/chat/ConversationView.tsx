@@ -119,7 +119,15 @@ export function ConversationView() {
     () => activeEditingMessage?.attachmentIDs ?? [],
     [activeEditingMessage],
   );
-  const { map: editAttachmentMap, isLoading: editAttachmentsLoading } = useAttachmentsBatch(editAttachmentIDs);
+  // Pass the access context so the server authorizes the resolve — without
+  // it the batch returns nothing, the edit composer opens with no attachment
+  // chips, and saving would wipe the message's attachments.
+  const { map: editAttachmentMap, isLoading: editAttachmentsLoading } = useAttachmentsBatch(
+    editAttachmentIDs,
+    activeEditingMessage
+      ? { parentID: id, parentType: 'conversation', messageID: activeEditingMessage.id }
+      : undefined,
+  );
   const editDraftAttachments = useMemo<DraftAttachment[]>(
     () =>
       editAttachmentIDs
@@ -148,7 +156,7 @@ export function ConversationView() {
   const saveDraftMutate = saveDraft.mutate;
   const deleteDraftMutate = deleteDraft.mutate;
   const handleDraftChange = useCallback(
-    (value: { body: string; attachmentIDs: string[] }) => {
+    (value: { body: string; attachmentIDs: string[] }, options?: { notify?: boolean }) => {
       if (!id) return;
       restoreDraftScopeForContent(draftScope, value);
       saveDraftMutate({
@@ -156,6 +164,9 @@ export function ConversationView() {
         parentType: 'conversation',
         body: value.body,
         attachmentIDs: value.attachmentIDs,
+        // Keystroke saves persist silently; the focus-loss flush (notify)
+        // is what surfaces the draft in the sidebar.
+        silent: !options?.notify,
       });
     },
     [id, draftScope, saveDraftMutate],

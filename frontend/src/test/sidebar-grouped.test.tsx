@@ -333,18 +333,16 @@ describe('Sidebar grouped rendering', () => {
   });
 
   it('Directory + Threads links use the same vertical padding as channel rows', () => {
-    // Channel rows use px-2 py-1; Directory and Threads must match so
-    // the eye doesn't catch on a height bump between the top-level
-    // links and the channel list. Margin-bottom (mb-*) is the
-    // separator's job now, not per-row spacing.
+    // Channel rows use px-2 py-1.5 (the spec's airy list-row rhythm);
+    // Directory and Threads must match so the eye doesn't catch on a height
+    // bump between the top-level links and the channel list. Margin-bottom
+    // (mb-*) is the separator's job now, not per-row spacing.
     renderSidebar();
     const directory = screen.getByText('Directory').closest('a');
     const threads = screen.getByText('Threads').closest('a');
-    expect(directory?.className).toMatch(/\bpy-1\b/);
-    expect(directory?.className).not.toMatch(/\bpy-1\.5\b/);
+    expect(directory?.className).toMatch(/\bpy-1\.5\b/);
     expect(directory?.className).not.toMatch(/\bmb-2\b/);
-    expect(threads?.className).toMatch(/\bpy-1\b/);
-    expect(threads?.className).not.toMatch(/\bpy-1\.5\b/);
+    expect(threads?.className).toMatch(/\bpy-1\.5\b/);
     expect(threads?.className).not.toMatch(/\bmb-2\b/);
   });
 
@@ -404,7 +402,9 @@ describe('Sidebar grouped rendering', () => {
   it('keeps Directory highlighted on nested directory routes', () => {
     renderSidebarAt('/directory/users');
 
-    expect(screen.getByText('Directory').closest('a')).toHaveClass('bg-white/15');
+    // Active nav rows use the base background (bg/base) per the design spec,
+    // not the lighter bg-white/15 tint.
+    expect(screen.getByText('Directory').closest('a')).toHaveClass('bg-background');
     expect(screen.getByText('Directory').closest('a')).toHaveClass('font-semibold');
   });
 

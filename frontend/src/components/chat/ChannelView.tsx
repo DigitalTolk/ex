@@ -134,7 +134,15 @@ export function ChannelView() {
     () => activeEditingMessage?.attachmentIDs ?? [],
     [activeEditingMessage],
   );
-  const { map: editAttachmentMap, isLoading: editAttachmentsLoading } = useAttachmentsBatch(editAttachmentIDs);
+  // Pass the access context so the server authorizes the resolve — without
+  // it the batch returns nothing, the edit composer opens with no attachment
+  // chips, and saving would wipe the message's attachments.
+  const { map: editAttachmentMap, isLoading: editAttachmentsLoading } = useAttachmentsBatch(
+    editAttachmentIDs,
+    activeEditingMessage
+      ? { parentID: channelID, parentType: 'channel', messageID: activeEditingMessage.id }
+      : undefined,
+  );
   const editDraftAttachments = useMemo<DraftAttachment[]>(
     () =>
       editAttachmentIDs
@@ -166,7 +174,7 @@ export function ChannelView() {
   const saveDraftMutate = saveDraft.mutate;
   const deleteDraftMutate = deleteDraft.mutate;
   const handleDraftChange = useCallback(
-    (value: { body: string; attachmentIDs: string[] }) => {
+    (value: { body: string; attachmentIDs: string[] }, options?: { notify?: boolean }) => {
       if (!channelID) return;
       restoreDraftScopeForContent(draftScope, value);
       saveDraftMutate({
@@ -174,6 +182,9 @@ export function ChannelView() {
         parentType: 'channel',
         body: value.body,
         attachmentIDs: value.attachmentIDs,
+        // Keystroke saves persist silently; the focus-loss flush (notify)
+        // is what surfaces the draft in the sidebar.
+        silent: !options?.notify,
       });
     },
     [channelID, draftScope, saveDraftMutate],

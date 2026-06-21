@@ -15,6 +15,7 @@ import { slugify } from '@/lib/format';
 import {
   appendMessageToCache,
   invalidateThreadBothScopes,
+  invalidateUnfurlsForMessage,
   markMessageDeletedInCache,
   resyncMessageCache,
   updateMessageInCache,
@@ -177,6 +178,9 @@ export default function ChatPage() {
       const { parentID, parentMessageID, id } = msg;
       updateMessageInCache(queryClient, parentID, msg);
       invalidateThreadBothScopes(queryClient, parentID, parentMessageID || id);
+      // Link-preview cards pointing at this message (in other channels)
+      // are now stale — refetch them so the edited body/attachments show.
+      invalidateUnfurlsForMessage(queryClient, id);
     },
     onMessageDeleted: (data: unknown) => {
       const msg = parseMessageDeleted(data);
@@ -184,6 +188,7 @@ export default function ChatPage() {
       const { parentID, parentMessageID, id } = msg;
       markMessageDeletedInCache(queryClient, parentID, id, parentMessageID, msg);
       invalidateThreadBothScopes(queryClient, parentID, parentMessageID || id);
+      invalidateUnfurlsForMessage(queryClient, id);
       // /threads page reads body + replyCount via the userThreads list;
       // a deletion can change either, so refresh the list too.
       queryClient.invalidateQueries({ queryKey: queryKeys.userThreads() });

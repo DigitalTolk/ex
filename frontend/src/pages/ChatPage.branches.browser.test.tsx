@@ -91,6 +91,7 @@ const mockMarkThreadSeen = vi.hoisted(() => vi.fn());
 vi.mock('@/hooks/useMessages', () => ({
   appendMessageToCache: vi.fn(),
   invalidateThreadBothScopes: vi.fn(),
+  invalidateUnfurlsForMessage: vi.fn(),
   markMessageDeletedInCache: vi.fn(),
   resyncMessageCache: vi.fn().mockResolvedValue(undefined),
   updateMessageInCache: vi.fn(),

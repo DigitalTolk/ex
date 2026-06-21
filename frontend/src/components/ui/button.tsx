@@ -8,7 +8,13 @@ const buttonVariants = cva(
   {
     variants: {
       variant: {
-        default: "bg-primary text-primary-foreground [a]:hover:bg-primary/80",
+        // Primary CTA. Per the design spec the CTA is near-black in light
+        // and PINK in dark (#DE5D83 / hover #C94E71). The pink lives on the
+        // CTA *button* only — via the brand token — so it doesn't flood the
+        // neutral `primary` accents (focus rings, avatar fallbacks, @mention
+        // pills, switches), which stay neutral in both themes.
+        default:
+          "bg-primary text-primary-foreground [a]:hover:bg-primary/80 dark:bg-brand dark:text-brand-foreground dark:[a]:hover:bg-brand-hover dark:disabled:bg-brand-disabled dark:disabled:opacity-100",
         outline:
           "border-border bg-background hover:bg-muted hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground dark:border-input dark:bg-input/30 dark:hover:bg-input/50",
         secondary:

@@ -18,6 +18,10 @@ export interface NotificationPayload {
   messageID?: string;
   parentMessageID?: string;
   authorID?: string;
+  // True for incoming-webhook posts (CI/deploy/alert bots). These bypass
+  // the own-author and quiet-channel suppression below so the integration
+  // alerts the user actually set up always surface.
+  webhook?: boolean;
   createdAt: string;
 }
 
@@ -93,6 +97,16 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   const [permission, setPermission] = useState<Permission>(readPermission);
   const activeParentRef = useRef<string | null>(null);
   const currentUserIDRef = useRef<string | null>(null);
+  // Per-message dedup. The backend emits exactly one notification per
+  // recipient per message, but the same alert can still reach this client
+  // more than once: the broker fans out to every WebSocket session a user
+  // has, and reconnect replay races re-deliver buffered events. Each copy
+  // carries a fresh event-frame id (so the socket-level dedup misses it) but
+  // the same messageID — so we dedup here by message identity to guarantee a
+  // single message never pops two banners (or double-pings). Bounded FIFO so
+  // memory stays flat over a long session.
+  const seenMessageIDsRef = useRef<Set<string>>(new Set());
+  const seenMessageOrderRef = useRef<string[]>([]);
   // Mirror reactive state into refs so `dispatch` can be a stable callback
   // — recreating it on every prefs/permission change would invalidate the
   // memoized context value and re-render every consumer of useNotifications.
@@ -154,15 +168,34 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const dispatch = useCallback((n: NotificationPayload) => {
+    // Drop a repeat of a message we've already alerted on (multi-session
+    // fan-out / reconnect replay). Done first so a duplicate neither pings
+    // nor banners. Notifications without a messageID (defensive) skip dedup.
+    if (n.messageID) {
+      if (seenMessageIDsRef.current.has(n.messageID)) {
+        return;
+      }
+      seenMessageIDsRef.current.add(n.messageID);
+      seenMessageOrderRef.current.push(n.messageID);
+      if (seenMessageOrderRef.current.length > 256) {
+        const oldest = seenMessageOrderRef.current.shift();
+        /* istanbul ignore next -- length just exceeded 256 so shift() always returns a string; the falsy arm is defensive */
+        if (oldest) seenMessageIDsRef.current.delete(oldest);
+      }
+    }
     // Server-side recipient filtering already excludes the author, but
-    // echoes via shared subscriptions can slip through.
-    if (n.authorID && currentUserIDRef.current && n.authorID === currentUserIDRef.current) {
+    // echoes via shared subscriptions can slip through. Webhook posts are
+    // exempt: their authorID is the webhook's creator, who explicitly
+    // wants the alert, so we never self-suppress them.
+    if (!n.webhook && n.authorID && currentUserIDRef.current && n.authorID === currentUserIDRef.current) {
       return;
     }
     // Channels are noisy by default — only escalate when the message is
     // *for you*. Backend filters thread_reply notifications to actual
     // thread participants, so receiving one implies you replied in it.
-    if (n.parentType === 'channel' && n.kind === 'message') {
+    // Webhook posts (CI/deploy/alert bots) are the exception: they're
+    // automated alerts the user wired up, so they banner even in channels.
+    if (!n.webhook && n.parentType === 'channel' && n.kind === 'message') {
       return;
     }
     // Regular DM notifications are suppressed only when the user is actually

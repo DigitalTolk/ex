@@ -129,6 +129,41 @@ func TestDraftService_UpsertListDeleteAndPublish(t *testing.T) {
 	}
 }
 
+func TestDraftService_SilentUpsertPersistsWithoutBroadcast(t *testing.T) {
+	svc, drafts, publisher := newDraftTestService()
+	ctx := context.Background()
+
+	// A silent (keystroke) save persists the draft but emits no event, so the
+	// sidebar "draft available" indicator doesn't surface mid-typing.
+	draft, err := svc.Upsert(ctx, "u-1", "ch-1", ParentChannel, "", "typing…", nil, WithSilent(true))
+	if err != nil {
+		t.Fatalf("silent Upsert: %v", err)
+	}
+	if stored, getErr := drafts.Get(ctx, "u-1", draft.ID); getErr != nil || stored.Body != "typing…" {
+		t.Fatalf("draft not persisted by silent upsert: stored=%+v err=%v", stored, getErr)
+	}
+	if len(publisher.published) != 0 {
+		t.Fatalf("silent upsert must not publish; got %+v", publisher.published)
+	}
+
+	// The follow-up non-silent save (composer blur) broadcasts so the
+	// indicator appears on this and other devices.
+	if _, err := svc.Upsert(ctx, "u-1", "ch-1", ParentChannel, "", "typing done", nil); err != nil {
+		t.Fatalf("notify Upsert: %v", err)
+	}
+	if len(publisher.published) != 1 || publisher.published[0].event.Type != events.EventDraftUpdated {
+		t.Fatalf("expected one draft.updated after notify save; got %+v", publisher.published)
+	}
+
+	// A silent delete (cleared composer mid-typing) also stays quiet.
+	if _, err := svc.Upsert(ctx, "u-1", "ch-1", ParentChannel, "", "", nil, WithSilent(true)); err != nil {
+		t.Fatalf("silent empty Upsert: %v", err)
+	}
+	if len(publisher.published) != 1 {
+		t.Fatalf("silent delete must not publish; got %+v", publisher.published)
+	}
+}
+
 func TestDraftService_RejectsUnauthorizedParent(t *testing.T) {
 	svc, _, _ := newDraftTestService()
 

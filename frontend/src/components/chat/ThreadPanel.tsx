@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { MessageItem } from './MessageItem';
+import { isGroupedWithPrevious } from './MessageListRows';
 import { MessageInput, type MessageInputHandle } from './MessageInput';
 import { MessageDropZone } from './MessageDropZone';
 import { NonMemberInvitePrompt } from './NonMemberInvitePrompt';
@@ -129,7 +130,15 @@ export function ThreadPanel({
   const deleteDraftMutate = deleteDraft.mutate;
   const editMessage = useEditMessage();
   const editAttachmentIDs = activeEditingMessage?.attachmentIDs ?? [];
-  const { map: editAttachmentMap, isLoading: editAttachmentsLoading } = useAttachmentsBatch(editAttachmentIDs);
+  // Pass the access context so the server authorizes the resolve — without
+  // it the batch returns nothing, the edit composer opens with no attachment
+  // chips, and saving would wipe the message's attachments.
+  const { map: editAttachmentMap, isLoading: editAttachmentsLoading } = useAttachmentsBatch(
+    editAttachmentIDs,
+    activeEditingMessage
+      ? { parentID, parentType, messageID: activeEditingMessage.id }
+      : undefined,
+  );
   const editDraftAttachments: DraftAttachment[] = activeEditingMessage
     ? editAttachmentIDs
         .map((id): DraftAttachment | null => {
@@ -166,6 +175,14 @@ export function ThreadPanel({
     }
     return undefined;
   }, [data, currentUserId, threadRootID]);
+  // When the thread root has been soft-deleted, the whole thread is
+  // closed: the server cascades the delete to every reply and rejects new
+  // ones with 409. Swap the composer for a notice so the user can't type
+  // into a dead thread. Thread data is oldest-first with the root first.
+  const rootDeleted = useMemo(
+    () => data?.some((m) => m.id === threadRootID && m.deleted) ?? false,
+    [data, threadRootID],
+  );
   const scrollRef = useRef<HTMLDivElement>(null);
   // Inner messages container — observed by the ResizeObservers below
   // (NOT scroller.lastElementChild, which can be a fixed-height
@@ -468,19 +485,20 @@ export function ThreadPanel({
       </div>
       <MessageDropZone onFiles={(files) => void inputRef.current?.uploadFiles(files)}>
         <div ref={scrollRef} className="flex-1 overflow-y-auto">
-          <div ref={innerRef} className="p-2 space-y-2">
+          <div ref={innerRef} className="p-2">
             {isLoading && (
               <p className="text-xs text-muted-foreground p-2">Loading replies...</p>
             )}
             {data?.length === 0 && (
               <p className="text-xs text-muted-foreground p-2">No replies yet. Start the thread!</p>
             )}
-            {data?.map((msg) => {
+            {data?.map((msg, index) => {
               const u = mergedUserMap[msg.authorID];
               return (
                 <MessageItem
                   key={msg.id}
                   message={msg}
+                  firstInGroup={!isGroupedWithPrevious(index > 0 ? data[index - 1] : null, msg)}
                   authorName={u?.displayName ?? 'Unknown'}
                   authorAvatarURL={u?.avatarURL}
                   authorOnline={u?.online}
@@ -508,7 +526,11 @@ export function ThreadPanel({
           users={pendingInvites}
           onDismiss={clearInvites}
         />
-        {activeEditingMessage && !editReady ? (
+        {rootDeleted ? (
+          <div className="border-t p-3 text-sm text-muted-foreground" role="status">
+            This thread has been deleted.
+          </div>
+        ) : activeEditingMessage && !editReady ? (
           <div className="border-t p-3 text-sm text-muted-foreground">Loading message editor...</div>
         ) : (
           <MessageInput

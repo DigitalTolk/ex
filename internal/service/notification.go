@@ -54,7 +54,14 @@ type Notification struct {
 	MessageID       string           `json:"messageID,omitempty"`
 	ParentMessageID string           `json:"parentMessageID,omitempty"`
 	AuthorID        string           `json:"authorID,omitempty"` // for client-side own-author suppression
-	CreatedAt       time.Time        `json:"createdAt"`
+	// Webhook marks a notification that originated from an incoming
+	// webhook (CI alerts, deploy bots, etc.). These are external/automated
+	// posts the user explicitly wired up, so the client treats them as
+	// always-notifiable: it bypasses both the own-author suppression (the
+	// "author" is just the webhook's creator, not a real sender) and the
+	// "channel messages are quiet" rule that mutes ordinary chatter.
+	Webhook   bool      `json:"webhook,omitempty"`
+	CreatedAt time.Time `json:"createdAt"`
 }
 
 // PresenceLookup is the slice of PresenceService NotificationService cares
@@ -125,6 +132,13 @@ type memberSnapshot struct {
 // to notify by default" — a direct @-mention can still reach a muted
 // member via the mentions path.
 func (s *NotificationService) loadMemberSnapshot(ctx context.Context, msg *model.Message, parentType, parentName string) memberSnapshot {
+	// Webhook posts notify everyone, including the webhook's creator —
+	// the creator wired up the integration to be alerted, they didn't
+	// write the message. So there's no "author" to exclude.
+	excludeID := msg.AuthorID
+	if msg.WebhookUsername != "" {
+		excludeID = ""
+	}
 	switch parentType {
 	case ParentChannel:
 		members, err := s.members.ListMembers(ctx, msg.ParentID)
@@ -133,7 +147,7 @@ func (s *NotificationService) loadMemberSnapshot(ctx context.Context, msg *model
 		}
 		ids := make([]string, 0, len(members))
 		for _, m := range members {
-			if m.UserID == msg.AuthorID {
+			if m.UserID == excludeID {
 				continue
 			}
 			ids = append(ids, m.UserID)
@@ -152,7 +166,7 @@ func (s *NotificationService) loadMemberSnapshot(ctx context.Context, msg *model
 		}
 		ids := make([]string, 0, len(c.ParticipantIDs))
 		for _, p := range c.ParticipantIDs {
-			if p == msg.AuthorID {
+			if p == excludeID {
 				continue
 			}
 			ids = append(ids, p)
@@ -203,6 +217,7 @@ func (s *NotificationService) NotifyForMessage(ctx context.Context, msg *model.M
 		MessageID:       msg.ID,
 		ParentMessageID: msg.ParentMessageID,
 		AuthorID:        msg.AuthorID,
+		Webhook:         msg.WebhookUsername != "",
 		CreatedAt:       time.Now(),
 	}
 
@@ -260,6 +275,16 @@ func (s *NotificationService) NotifyForMessage(ctx context.Context, msg *model.M
 
 func (s *NotificationService) sendMobilePush(ctx context.Context, recipientUserID string, notif Notification) {
 	if s.push == nil {
+		return
+	}
+	// Don't double-notify. A user with any live WebSocket connection already
+	// receives the in-app banner published just above, so a parallel push
+	// would land a second alert on the same device (native push + in-app on
+	// the mobile app) or a redundant ping on another. Push therefore targets
+	// only users who are offline — app backgrounded/closed, so the socket has
+	// dropped — matching the Slack/Mattermost model. IsOnline is Redis-backed,
+	// so the check holds across every backend instance and device.
+	if s.presence != nil && s.presence.IsOnline(recipientUserID) {
 		return
 	}
 	if err := s.push.Send(ctx, recipientUserID, notif); err != nil {

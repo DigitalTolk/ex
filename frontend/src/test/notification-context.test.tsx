@@ -444,6 +444,60 @@ describe('NotificationProvider', () => {
     expect(playMock).toHaveBeenCalledTimes(1);
   });
 
+  it('shows a message only once when the same notification arrives twice (multi-session fan-out)', () => {
+    // The broker fans the same alert out to every WebSocket session a user
+    // has, and reconnect replay can re-deliver it. Each copy carries a fresh
+    // event-frame id but the same messageID — dedup must collapse them to a
+    // single banner (and a single ping), not one per copy.
+    renderProbe();
+    act(() => {
+      dispatchSpy!(samplePayload);
+      dispatchSpy!(samplePayload);
+    });
+    expect(playMock).toHaveBeenCalledTimes(1);
+    expect(notificationCtor).toHaveBeenCalledTimes(1);
+  });
+
+  it('fires separately for distinct messages', () => {
+    renderProbe();
+    act(() => {
+      dispatchSpy!({ ...samplePayload, messageID: 'm-1' });
+      dispatchSpy!({ ...samplePayload, messageID: 'm-2' });
+    });
+    expect(playMock).toHaveBeenCalledTimes(2);
+    expect(notificationCtor).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not dedup notifications that carry no messageID', () => {
+    // Defensive: a payload without a messageID can't be deduped, so it must
+    // always fire rather than being silently swallowed.
+    const noID: NotificationPayload = { ...samplePayload, messageID: undefined };
+    renderProbe();
+    act(() => {
+      dispatchSpy!(noID);
+      dispatchSpy!(noID);
+    });
+    expect(notificationCtor).toHaveBeenCalledTimes(2);
+  });
+
+  it('evicts the oldest messageID once the dedup window overflows', () => {
+    // The seen-set is a bounded FIFO (cap 256). After 256 newer messages,
+    // the very first id is evicted, so a late duplicate of it fires again
+    // rather than being suppressed forever.
+    renderProbe();
+    act(() => {
+      dispatchSpy!({ ...samplePayload, messageID: 'm-old' });
+      for (let i = 0; i < 256; i++) {
+        dispatchSpy!({ ...samplePayload, messageID: `m-${i}` });
+      }
+      // m-old has now been pushed out of the window — this re-fires.
+      dispatchSpy!({ ...samplePayload, messageID: 'm-old' });
+    });
+    const oldCalls = notificationCtor.mock.calls.filter((c) => (c[1] as NotificationOptions).body === 'hello there');
+    // 1 (m-old) + 256 (m-0..m-255) + 1 (m-old re-fired) = 258.
+    expect(oldCalls).toHaveLength(258);
+  });
+
   it('falls back to no-op when used outside the provider', () => {
     // Render Probe without NotificationProvider — useNotifications returns
     // safe defaults so unrelated tests don't have to set up the context.

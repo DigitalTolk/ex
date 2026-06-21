@@ -175,13 +175,17 @@ export function ThreadCard({ summary, title, deepLink, currentUserId, unread = f
         // WKWebView (the desktop app's webview) otherwise traps wheel events
         // over a hidden-overflow box, blocking page scroll when the cursor is
         // over the card header.
+        // Unread emphasis is NEUTRAL (a stronger border + gentle shadow) plus
+        // the pink "Unread" badge below — never a `primary` wash/border/ring,
+        // which in dark mode is white and floods the card with a glaring
+        // light accent.
         'rounded-lg border bg-card overflow-clip ' +
-        (unread ? 'border-primary bg-primary/10 shadow-sm ring-1 ring-primary/30' : '')
+        (unread ? 'border-border-strong shadow-sm' : '')
       }
     >
       {/* Title — same shape as a channel/conversation header. Clicking
           opens the thread in its parent view. */}
-      <header className={'flex items-center gap-2 border-b px-4 py-2.5 ' + (unread ? 'bg-primary/10' : '')}>
+      <header className="flex items-center gap-2 border-b px-4 py-2.5">
         {summary.parentType === 'channel' ? (
           <Globe className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
         ) : (
@@ -203,7 +207,7 @@ export function ThreadCard({ summary, title, deepLink, currentUserId, unread = f
         {unread && (
           <span
             data-testid="thread-card-unread"
-            className="rounded-full bg-primary px-2 py-0.5 text-[11px] font-semibold text-primary-foreground"
+            className="rounded-full bg-brand px-2 py-0.5 text-[11px] font-semibold text-brand-foreground"
           >
             Unread
           </span>
@@ -309,6 +313,7 @@ export function ThreadCard({ summary, title, deepLink, currentUserId, unread = f
           typingParentType={parentType}
           typingThreadRootID={summary.threadRootID}
           hideCodeButton
+          bottomInset={false}
         />
       </MessageDropZone>
     </article>

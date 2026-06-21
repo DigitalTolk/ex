@@ -239,6 +239,21 @@ func (s *MessageService) Send(ctx context.Context, userID, parentID, parentType,
 		return nil, err
 	}
 
+	// Thread replies may not be added to a deleted thread. The root is the
+	// source of truth: once it's soft-deleted (which cascades to every
+	// existing reply, see Delete) the thread is closed for good. Enforced
+	// server-side so a stale client that still shows the composer can't
+	// resurrect the thread.
+	if parentMessageID != "" {
+		root, err := s.messages.GetMessage(ctx, parentID, parentMessageID)
+		if err != nil {
+			return nil, fmt.Errorf("message: thread root: %w", err)
+		}
+		if root.Deleted {
+			return nil, ErrThreadDeleted
+		}
+	}
+
 	now := time.Now()
 	msg := &model.Message{
 		ID:              store.NewID(),
@@ -1065,20 +1080,39 @@ func (s *MessageService) Delete(ctx context.Context, userID, parentID, parentTyp
 		}
 	}
 
+	if err := s.softDeleteMessage(ctx, msg, parentID, parentType); err != nil {
+		return err
+	}
+
+	// Cascade: deleting a thread root closes the whole thread. Every
+	// existing reply is tombstoned too, and Send refuses new replies once
+	// the root is gone (see ErrThreadDeleted). Only top-level messages are
+	// thread roots — deleting a reply (ParentMessageID != "") never
+	// cascades. Best-effort: a reply that fails to delete is logged but
+	// doesn't fail the root delete, since the root tombstone already
+	// closed the thread to new replies.
+	if msg.ParentMessageID == "" {
+		s.cascadeDeleteThreadReplies(ctx, parentID, parentType, msgID)
+	}
+
+	return nil
+}
+
+// softDeleteMessage tombstones a single message: clears its body /
+// attachments / reactions / pin state, persists the Deleted=true row (so
+// replies referencing it can still resolve their root), releases attachment
+// refs, tears down the PIN# / FILE# index rows it owned, publishes the
+// deleted event, and drops it from the search index. Shared by Delete (the
+// target) and its thread-reply cascade.
+func (s *MessageService) softDeleteMessage(ctx context.Context, msg *model.Message, parentID, parentType string) error {
 	originalAttachments := msg.AttachmentIDs
 	wasPinned := msg.Pinned
-	msg.Deleted = true
-	msg.Body = ""
-	msg.AttachmentIDs = nil
-	msg.Reactions = nil
-	msg.Pinned = false
-	msg.PinnedAt = nil
-	msg.PinnedBy = ""
+	msg.Tombstone()
 	if err := s.messages.UpdateMessage(ctx, msg); err != nil {
 		return fmt.Errorf("message: soft-delete: %w", err)
 	}
 
-	s.releaseAttachments(ctx, msgID, originalAttachments)
+	s.releaseAttachments(ctx, msg.ID, originalAttachments)
 
 	// Tear down the index rows that pointed at this message.
 	// - Pin index: drop unconditionally if the message was pinned.
@@ -1087,28 +1121,28 @@ func (s *MessageService) Delete(ctx context.Context, userID, parentID, parentTyp
 	//   recent share that should survive.
 	if s.parentIndex != nil {
 		if wasPinned {
-			if err := s.parentIndex.DeletePinIndex(ctx, parentID, msgID); err != nil {
-				slog.Warn("pin index delete on message-delete failed", "msgID", msgID, "error", err)
+			if err := s.parentIndex.DeletePinIndex(ctx, parentID, msg.ID); err != nil {
+				slog.Warn("pin index delete on message-delete failed", "msgID", msg.ID, "error", err)
 			}
 		}
 		if len(originalAttachments) > 0 {
 			rows, err := s.parentIndex.ListFileIndex(ctx, parentID)
 			if err != nil {
-				slog.Warn("file index lookup on message-delete failed", "msgID", msgID, "error", err)
+				slog.Warn("file index lookup on message-delete failed", "msgID", msg.ID, "error", err)
 			} else {
 				attached := make(map[string]struct{}, len(originalAttachments))
 				for _, aid := range originalAttachments {
 					attached[aid] = struct{}{}
 				}
 				for _, row := range rows {
-					if row.MessageID != msgID {
+					if row.MessageID != msg.ID {
 						continue
 					}
 					if _, hit := attached[row.AttachmentID]; !hit {
 						continue
 					}
 					if err := s.parentIndex.DeleteFileIndex(ctx, parentID, row.AttachmentID); err != nil {
-						slog.Warn("file index delete on message-delete failed", "msgID", msgID, "attachmentID", row.AttachmentID, "error", err)
+						slog.Warn("file index delete on message-delete failed", "msgID", msg.ID, "attachmentID", row.AttachmentID, "error", err)
 					}
 				}
 			}
@@ -1120,9 +1154,29 @@ func (s *MessageService) Delete(ctx context.Context, userID, parentID, parentTyp
 	// included by the model and lets clients refresh the right thread.
 	s.publishEvent(ctx, parentID, parentType, events.EventMessageDeleted, msg)
 
-	s.deleteFromIndex(ctx, msgID)
+	s.deleteFromIndex(ctx, msg.ID)
 
 	return nil
+}
+
+// cascadeDeleteThreadReplies soft-deletes every reply belonging to a thread
+// whose root (rootID) was just deleted. Each reply gets the same tombstone
+// treatment + deleted event as a directly-deleted message, so connected
+// clients patch the thread in real time. Best-effort per reply.
+func (s *MessageService) cascadeDeleteThreadReplies(ctx context.Context, parentID, parentType, rootID string) {
+	msgs, err := s.scanParentMessages(ctx, parentID)
+	if err != nil {
+		slog.Warn("thread cascade scan failed", "rootID", rootID, "error", err)
+		return
+	}
+	for _, m := range msgs {
+		if m.ParentMessageID != rootID || m.Deleted {
+			continue
+		}
+		if err := s.softDeleteMessage(ctx, m, parentID, parentType); err != nil {
+			slog.Warn("thread reply cascade delete failed", "msgID", m.ID, "rootID", rootID, "error", err)
+		}
+	}
 }
 
 // ToggleReaction adds the given emoji from the user to a message, or removes

@@ -59,15 +59,18 @@ describe('useSendChannelMessage', () => {
     });
   });
 
-  it('posting a thread reply invalidates userThreads so the /threads count refreshes immediately', async () => {
-    // Without this invalidation the sender sees their own reply count
-    // stay stale until the WS round-trip lands. The /threads page
-    // user-reported "only updates after page refresh" was this exact
-    // gap.
+  it('posting a thread reply optimistically appends to the open thread and refreshes the /threads count', async () => {
+    // The sender's reply must show immediately rather than waiting for the
+    // WS round-trip (the user-reported "visible delay" posting in threads).
+    // We append the returned reply straight into the thread cache and
+    // refresh userThreads for the count; the thread query itself is NOT
+    // invalidated — a refetch could briefly drop the just-added reply.
     const reply = { id: 'r-1', parentID: 'ch-1', parentMessageID: 'root', authorID: 'u-1', body: 'r', createdAt: '' };
     vi.mocked(apiFetch).mockResolvedValue(reply);
 
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const root = { id: 'root', parentID: 'ch-1', authorID: 'u-2', body: 'root', createdAt: '' };
+    queryClient.setQueryData(['thread', 'channels/ch-1', 'root'], [root]);
     const spy = vi.spyOn(queryClient, 'invalidateQueries');
     const wrapper = ({ children }: { children: ReactNode }) =>
       createElement(QueryClientProvider, { client: queryClient }, children);
@@ -76,9 +79,38 @@ describe('useSendChannelMessage', () => {
     result.current.mutate({ body: 'r', attachmentIDs: [], parentMessageID: 'root' });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
+    // Reply is visible in the thread immediately.
+    expect(queryClient.getQueryData(['thread', 'channels/ch-1', 'root'])).toEqual([root, reply]);
     const keys = spy.mock.calls.map((c) => (c[0] as { queryKey?: unknown[] }).queryKey);
     expect(keys).toContainEqual(['userThreads']);
-    expect(keys).toContainEqual(['thread', 'channels/ch-1', 'root']);
+    expect(keys).not.toContainEqual(['thread', 'channels/ch-1', 'root']);
+  });
+
+  it('does not duplicate a thread reply already present in the cache (echo dedup)', async () => {
+    const reply = { id: 'r-1', parentID: 'ch-1', parentMessageID: 'root', authorID: 'u-1', body: 'r', createdAt: '' };
+    vi.mocked(apiFetch).mockResolvedValue(reply);
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    // Reply id already in the thread (e.g. WS echo landed first).
+    queryClient.setQueryData(['thread', 'channels/ch-1', 'root'], [reply]);
+    const wrapper = ({ children }: { children: ReactNode }) =>
+      createElement(QueryClientProvider, { client: queryClient }, children);
+    const { result } = renderHook(() => useSendChannelMessage('ch-1'), { wrapper });
+    result.current.mutate({ body: 'r', attachmentIDs: [], parentMessageID: 'root' });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(queryClient.getQueryData(['thread', 'channels/ch-1', 'root'])).toEqual([reply]);
+  });
+
+  it('skips the optimistic thread append when the thread is not open (no cache to patch)', async () => {
+    const reply = { id: 'r-1', parentID: 'ch-1', parentMessageID: 'root', authorID: 'u-1', body: 'r', createdAt: '' };
+    vi.mocked(apiFetch).mockResolvedValue(reply);
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper = ({ children }: { children: ReactNode }) =>
+      createElement(QueryClientProvider, { client: queryClient }, children);
+    const { result } = renderHook(() => useSendChannelMessage('ch-1'), { wrapper });
+    result.current.mutate({ body: 'r', attachmentIDs: [], parentMessageID: 'root' });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    // No thread cache existed → nothing created (avoids a partial one-item list).
+    expect(queryClient.getQueryData(['thread', 'channels/ch-1', 'root'])).toBeUndefined();
   });
 
   it('non-thread send does NOT invalidate userThreads (avoids needless /threads refetches)', async () => {

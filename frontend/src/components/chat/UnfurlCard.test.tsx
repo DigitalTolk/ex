@@ -191,5 +191,60 @@ describe('UnfurlCard', () => {
       expect(screen.queryByTestId('unfurl-card-image')).toBeNull();
       expect(screen.getByText('Günter Grodotzki')).toBeInTheDocument();
     });
+
+    it('renders file-type icon rows for non-image attachments (instead of a paperclip emoji)', () => {
+      mockUseUnfurl.mockReturnValue({
+        data: messagePreview({
+          body: undefined,
+          image: undefined,
+          // One with a content type, one without — exercises the `?? ''`
+          // fallback into iconForAttachment.
+          attachments: [
+            { filename: 'report.pdf', contentType: 'application/pdf' },
+            { filename: 'notes.txt' },
+          ],
+        }),
+        isLoading: false,
+      });
+      renderCard();
+      const rows = screen.getByTestId('unfurl-card-attachments');
+      expect(rows).toBeInTheDocument();
+      expect(screen.getByText('report.pdf')).toBeInTheDocument();
+      expect(screen.getByText('notes.txt')).toBeInTheDocument();
+      // No paperclip emoji baked into a body.
+      expect(screen.queryByText(/📎/)).toBeNull();
+    });
+
+    it('sizes a shared image to the same scaled dimensions as the original (not the card width)', () => {
+      mockUseUnfurl.mockReturnValue({
+        // 1920×1080 → scaled by min(1, 320/1920, 288/1080) = 0.1667 → 320×180.
+        data: messagePreview({ image: 'https://img/big.png', imageWidth: 1920, imageHeight: 1080 }),
+        isLoading: false,
+      });
+      renderCard();
+      const img = screen.getByTestId('unfurl-card-image');
+      expect(img.getAttribute('width')).toBe('320');
+      expect(img.getAttribute('height')).toBe('180');
+      // self-start stops the flex-col from stretching it to the card width.
+      expect(img.className).toContain('self-start');
+    });
+
+    it('renders an attachments-only message preview (no author/body/image)', () => {
+      mockUseUnfurl.mockReturnValue({
+        data: messagePreview({
+          authorName: undefined,
+          authorAvatarURL: undefined,
+          body: undefined,
+          image: undefined,
+          channelLabel: undefined,
+          attachments: [{ filename: 'archive.zip', contentType: 'application/zip' }],
+        }),
+        isLoading: false,
+      });
+      renderCard();
+      // hasContent() is satisfied by attachments alone, so the card renders.
+      expect(screen.getByTestId('unfurl-card')).toBeInTheDocument();
+      expect(screen.getByText('archive.zip')).toBeInTheDocument();
+    });
   });
 });

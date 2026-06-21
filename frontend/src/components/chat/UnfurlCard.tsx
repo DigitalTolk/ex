@@ -1,10 +1,11 @@
-import { useEffect, useState } from 'react';
+import { createElement, useEffect, useState } from 'react';
 import { ImageOff, X } from 'lucide-react';
 import { useUnfurl, type UnfurlPreview } from '@/hooks/useUnfurl';
 import { useSetNoUnfurl } from '@/hooks/useMessages';
 import { useEmojiMap } from '@/hooks/useEmoji';
 import { renderMarkdown } from '@/lib/markdown';
 import { formatRelative, getInitials } from '@/lib/format';
+import { iconForAttachment, scaleToThumbnail } from '@/lib/file-helpers';
 
 interface UnfurlCardProps {
   url: string;
@@ -22,7 +23,7 @@ interface UnfurlCardProps {
 
 function hasContent(preview: UnfurlPreview): boolean {
   if (preview.kind === 'message') {
-    return !!(preview.authorName || preview.body || preview.image);
+    return !!(preview.authorName || preview.body || preview.image || preview.attachments?.length);
   }
   return !!(preview.title || preview.description || preview.image);
 }
@@ -72,7 +73,7 @@ export function UnfurlCard({
     return (
       <div
         data-testid="unfurl-card"
-        className="relative mt-1.5 flex max-w-xl flex-col gap-1.5 overflow-hidden rounded-md border border-l-4 border-l-primary bg-muted/20 p-3 hover:bg-muted/40 dark:border-l-border-strong"
+        className="relative mt-1.5 flex max-w-xl flex-col gap-1.5 overflow-hidden rounded-md border border-l-4 border-l-primary bg-background p-3 dark:border-l-border-strong"
       >
         {/* Stretched link covering the whole card → navigates to the message. */}
         <a
@@ -122,8 +123,31 @@ export function UnfurlCard({
             loading="lazy"
             onError={() => setImageBroken(true)}
             data-testid="unfurl-card-image"
-            className="max-h-72 w-auto max-w-full rounded border object-contain"
+            // Render at the same scaled dimensions the original message uses
+            // (THUMBNAIL_MAX 320×288) so a shared image isn't blown up to the
+            // card width. Falls back to the CSS caps when dimensions are
+            // unknown (e.g. webhook images without intrinsic size).
+            {...scaleToThumbnail(preview.imageWidth, preview.imageHeight)}
+            // self-start is critical: the card is a flex-col whose default
+            // align-items:stretch would otherwise blow the image up to the
+            // full max-w-xs width (320px) even for a small thumbnail. With
+            // self-start it renders at its natural size, exactly like the
+            // original message image.
+            className="h-auto max-h-72 w-auto max-w-xs self-start rounded border object-contain"
           />
+        )}
+        {preview.attachments && preview.attachments.length > 0 && (
+          <div data-testid="unfurl-card-attachments" className="flex flex-col gap-1">
+            {preview.attachments.map((att, i) => (
+              <div key={`${att.filename}-${i}`} className="flex items-center gap-1.5 text-sm text-muted-foreground">
+                {createElement(iconForAttachment(att.contentType ?? '', att.filename), {
+                  className: 'h-4 w-4 shrink-0',
+                  'aria-hidden': true,
+                })}
+                <span className="truncate">{att.filename}</span>
+              </div>
+            ))}
+          </div>
         )}
         {preview.channelLabel && (
           <p className="text-xs text-muted-foreground">Only visible to users in {preview.channelLabel}</p>
@@ -139,11 +163,10 @@ export function UnfurlCard({
         href={preview.url}
         target="_blank"
         rel="noopener noreferrer"
-        // Left accent bar: bold near-black in light (border-l-primary).
-        // In dark, primary is white — a 4px white bar reads as a glaring
-        // stripe, so tone it down to the subtle border-strong grey to
-        // match the design's restrained dark unfurl card.
-        className="flex gap-3 overflow-hidden rounded-md border border-l-4 border-l-primary dark:border-l-border-strong bg-muted/20 p-2 hover:bg-muted/40"
+        // Per the design spec the web (OpenGraph) card is bg/base with a
+        // uniform subtle border (no coloured left accent) — matches the
+        // GitHub card in the reference screenshots.
+        className="flex gap-3 overflow-hidden rounded-md border border-border bg-background p-2"
       >
         {preview.image && !imageBroken && (
           <img

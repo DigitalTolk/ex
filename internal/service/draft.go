@@ -34,9 +34,30 @@ func NewDraftService(drafts DraftStore, messages MessageStore, memberships Membe
 	}
 }
 
+// upsertConfig tunes a single Upsert call.
+type upsertConfig struct {
+	silent bool
+}
+
+// UpsertOption configures Upsert behavior.
+type UpsertOption func(*upsertConfig)
+
+// WithSilent suppresses the draft.updated broadcast for this upsert when
+// silent is true. The draft is still persisted — only the cross-device
+// "a draft is available" signal is withheld. Used for keystroke-by-keystroke
+// saves while the user is still typing; the composer fires a non-silent
+// upsert when it loses focus so the indicator surfaces only then.
+func WithSilent(silent bool) UpsertOption {
+	return func(c *upsertConfig) { c.silent = silent }
+}
+
 // Upsert creates or replaces the draft for a single composer scope. Empty
 // content deletes that scope's draft and returns nil.
-func (s *DraftService) Upsert(ctx context.Context, userID, parentID, parentType, parentMessageID, body string, attachmentIDs []string) (*model.MessageDraft, error) {
+func (s *DraftService) Upsert(ctx context.Context, userID, parentID, parentType, parentMessageID, body string, attachmentIDs []string, opts ...UpsertOption) (*model.MessageDraft, error) {
+	var cfg upsertConfig
+	for _, opt := range opts {
+		opt(&cfg)
+	}
 	if strings.TrimSpace(userID) == "" {
 		return nil, errors.New("draft: user required")
 	}
@@ -67,7 +88,9 @@ func (s *DraftService) Upsert(ctx context.Context, userID, parentID, parentType,
 		if err := s.drafts.Delete(ctx, userID, id); err != nil && !errors.Is(err, store.ErrNotFound) {
 			return nil, fmt.Errorf("draft: delete empty: %w", err)
 		}
-		s.publishUpdated(ctx, userID, id)
+		if !cfg.silent {
+			s.publishUpdated(ctx, userID, id)
+		}
 		return nil, nil
 	}
 
@@ -93,7 +116,9 @@ func (s *DraftService) Upsert(ctx context.Context, userID, parentID, parentType,
 	if err := s.drafts.Upsert(ctx, draft); err != nil {
 		return nil, fmt.Errorf("draft: upsert: %w", err)
 	}
-	s.publishUpdated(ctx, userID, id)
+	if !cfg.silent {
+		s.publishUpdated(ctx, userID, id)
+	}
 	return draft, nil
 }
 

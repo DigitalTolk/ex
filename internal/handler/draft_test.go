@@ -199,6 +199,32 @@ func TestDraftHandler_Upsert_EmptyClearsAndReturns204(t *testing.T) {
 	}
 }
 
+func TestDraftHandler_Upsert_SilentStillSaves(t *testing.T) {
+	h, store, jwtMgr := setupDraftHandler(t)
+	u := &model.User{ID: "u-1", SystemRole: model.SystemRoleMember}
+	tok, _ := jwtMgr.GenerateAccessToken(u)
+	handler := middleware.Auth(jwtMgr)(http.HandlerFunc(h.Upsert))
+	// notify:false → keystroke save; the draft is persisted (200 + body)
+	// while the broadcast is suppressed at the service layer.
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/drafts",
+		strings.NewReader(`{"parentID":"ch-1","parentType":"channel","body":"typing","notify":false}`))
+	req.Header.Set("Authorization", "Bearer "+tok)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	found := false
+	for _, d := range store.rows {
+		if d.UserID == "u-1" && d.Body == "typing" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("silent save did not persist the draft")
+	}
+}
+
 func TestDraftHandler_Upsert_BadJSON(t *testing.T) {
 	h, _, jwtMgr := setupDraftHandler(t)
 	u := &model.User{ID: "u-1", SystemRole: model.SystemRoleMember}

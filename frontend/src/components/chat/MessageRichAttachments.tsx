@@ -9,7 +9,7 @@ export function MessageRichAttachments({ attachments, onContentHeightChange }: {
         <div
           key={index}
           data-testid="message-rich-attachment"
-          className="relative overflow-hidden rounded-md border bg-muted/20 p-3"
+          className="relative overflow-hidden rounded-md border bg-background p-3"
           style={{ borderLeftWidth: 4, borderLeftColor: validColor(att.color) ?? 'var(--border)' }}
         >
           {att.thumb_url && (

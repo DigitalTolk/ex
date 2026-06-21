@@ -166,7 +166,7 @@ export function MemberList({ members, channelId, currentUserId, currentUserRole,
                     </div>
                     {alreadyMember ? (
                       <span
-                        className="flex h-7 w-7 items-center justify-center text-emerald-600"
+                        className="flex h-7 w-7 items-center justify-center text-online"
                         aria-label="Already a member"
                         title="Already a member"
                       >

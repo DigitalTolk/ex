@@ -128,6 +128,21 @@ export function invalidateThreadBothScopes(qc: QueryClient, parentID: string, th
   qc.invalidateQueries({ queryKey: queryKeys.thread(`conversations/${parentID}`, threadRootID) });
 }
 
+// When a message is edited or deleted, any internal-link preview card
+// pointing at it (rendered elsewhere) is now stale. Unfurl queries are
+// keyed by the raw URL, and a message permalink always embeds `msg-<id>`,
+// so invalidate every unfurl query whose URL references this message —
+// active cards refetch the fresh (or now-gone) preview.
+export function invalidateUnfurlsForMessage(qc: QueryClient, messageID: string) {
+  if (!messageID) return;
+  qc.invalidateQueries({
+    predicate: (q) =>
+      q.queryKey[0] === 'unfurl' &&
+      typeof q.queryKey[1] === 'string' &&
+      q.queryKey[1].includes(`msg-${messageID}`),
+  });
+}
+
 export function appendMessageToCache(qc: QueryClient, parentID: string, msg: Message) {
   patchBothScopes(qc, parentID, (old) => {
     if (!old || old.pages.length === 0) return old;
@@ -309,15 +324,19 @@ export function useSendMessage(scope: SendMessageScope) {
       }),
     onSuccess: (data, input) => {
       const parentID = channelId ?? conversationId;
-      // Top-level only — sender sees their post immediately. Thread
-      // replies are reconciled via the message.edited event the
-      // backend publishes alongside message.new.
+      // Sender sees their post immediately. Top-level posts append to the
+      // main list; thread replies append to the thread cache so the reply
+      // shows instantly instead of waiting for the server round-trip (the
+      // message.new echo + a userThreads refetch reconcile the rest).
       if (parentID && !input.parentMessageID) {
         appendMessageToCache(queryClient, parentID, data);
       }
       if (input.parentMessageID) {
         const path = parentPath({ channelId, conversationId });
-        queryClient.invalidateQueries({ queryKey: queryKeys.thread(path, input.parentMessageID) });
+        queryClient.setQueryData<Message[]>(
+          queryKeys.thread(path, input.parentMessageID),
+          (old) => (old ? (old.some((m) => m.id === data.id) ? old : [...old, data]) : old),
+        );
         queryClient.invalidateQueries({ queryKey: queryKeys.userThreads() });
       }
     },

@@ -480,7 +480,7 @@ const MessageRow = memo(function MessageRow({
   onContentHeightChange,
   quickReactions,
 }: {
-  row: { kind: 'message'; key: string; message: Message };
+  row: { kind: 'message'; key: string; message: Message; firstInGroup: boolean };
   userMap: Record<string, UserMapEntry>;
   userLookup: { get(id: string): UserMapEntry | undefined };
   threadMeta: ReturnType<typeof deriveThreadMeta>;
@@ -524,6 +524,7 @@ const MessageRow = memo(function MessageRow({
     <div className="px-4">
       <MessageItem
         message={augmented}
+        firstInGroup={row.firstInGroup}
         authorName={u?.displayName ?? 'Unknown'}
         authorAvatarURL={u?.avatarURL}
         authorUserStatus={u?.userStatus}

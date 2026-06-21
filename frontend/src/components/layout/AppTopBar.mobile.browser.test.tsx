@@ -63,10 +63,10 @@ describe('AppTopBar (mobile + native)', () => {
     if (window.innerWidth > 767) return;
     mockOnline = new Set<string>(['u-1']);
     const screen = await renderTopBar();
-    // The mobile account button shows an emerald online dot.
+    // The mobile account button shows an online presence dot.
     const account = screen.getByTestId('topbar-account').element() as HTMLElement;
     const dot = account.querySelector('span[aria-hidden]') as HTMLElement;
-    expect(dot.className).toContain('bg-emerald-500');
+    expect(dot.className).toContain('bg-online');
     await screen.getByTestId('topbar-account').click();
     await expect.element(screen.getByTestId('mobile-account-sheet')).toBeVisible();
     await expect.element(screen.getByText('Alice Wonder')).toBeVisible();
@@ -83,10 +83,12 @@ describe('AppTopBar (mobile + native)', () => {
     await vi.waitFor(() => {
       expect(document.querySelector('[data-testid="about-open"]')).not.toBeNull();
     });
-    // runActionAndCloseSheet closed the sheet.
+    // runActionAndCloseSheet closed the sheet. Allow generous time — the
+    // dialog lingers in the DOM through its exit animation, which can run
+    // long on webkit under the full-suite load (otherwise this flakes).
     await vi.waitFor(() => {
       expect(document.querySelector('[data-testid="mobile-account-sheet"]')).toBeNull();
-    });
+    }, { timeout: 5000 });
   });
 
   it('opens the change-server confirm dialog and triggers resetServer on confirm', async () => {

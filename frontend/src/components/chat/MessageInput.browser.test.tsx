@@ -105,7 +105,13 @@ describe('MessageInput browser behavior', () => {
       expect(sendRadius).toBeGreaterThanOrEqual(sendRect.width / 2 - 1);
       expect(document.querySelector('[aria-label="Link"]')).toBeNull();
     } else {
-      expect(radius).toBeLessThanOrEqual(12);
+      // Desktop composer is rounded-2xl (16px) per spec — rounder than the
+      // old rounded-lg, but still well short of the mobile pill (≥24).
+      expect(radius).toBeGreaterThanOrEqual(14);
+      expect(radius).toBeLessThanOrEqual(18);
+      // Spec border width is 2px (the screenshot measured #E9E9E9 over 2px),
+      // not the default 1px.
+      expect(Number.parseFloat(getComputedStyle(composer!).borderTopWidth)).toBeGreaterThanOrEqual(2);
       expect(screen.getByLabelText('Link').element()).toBeVisible();
       const send = screen.getByLabelText('Send message').element();
       const sendRect = send.getBoundingClientRect();
@@ -149,6 +155,18 @@ describe('MessageInput browser behavior', () => {
     const editorRow = editor.closest('.flex.gap-2') as HTMLElement | null;
     expect(editorRow).not.toBeNull();
     expect(Number.parseFloat(getComputedStyle(editorRow!).paddingTop)).toBeGreaterThanOrEqual(11);
+  });
+
+  it('drops the safe-area inset when bottomInset is false (in-list composers like /threads cards)', async () => {
+    if (window.innerWidth > 767) return;
+    // An in-list composer (e.g. the /threads ThreadCards) is not docked at
+    // the viewport bottom, so it must NOT reserve home-indicator space —
+    // that inset just left a dead ~34px gap below it.
+    await renderWithProviders(<MessageInput onSend={vi.fn()} bottomInset={false} />);
+    const composerShell = document.querySelector('[data-composer-focused]') as HTMLElement | null;
+    expect(composerShell).not.toBeNull();
+    // Idle + bottomInset=false → tight 4px padding, no safe-area inset.
+    expect(Number.parseFloat(getComputedStyle(composerShell!).paddingBottom)).toBeLessThanOrEqual(6);
   });
 
   it('renders the mobile edit save action with the same fully rounded icon shape', async () => {
@@ -386,12 +404,16 @@ describe('MessageInput browser behavior', () => {
       <MessageInput onSend={vi.fn()} initialBody="hello there" />,
     );
     const send = screen.getByRole('button', { name: 'Send message' }).element() as HTMLElement;
-    const rgb = parseRGB(getComputedStyle(send).backgroundColor);
-    expect(rgb).not.toBeNull();
-    // Near-black (#231F20 → rgb(35,31,32))
-    expect(rgb![0]).toBeLessThan(60);
-    expect(rgb![1]).toBeLessThan(60);
-    expect(rgb![2]).toBeLessThan(60);
+    // Poll the computed color — under a heavy full browser run the theme CSS
+    // can resolve a tick after render, which flaked a synchronous read.
+    await vi.waitFor(() => {
+      const rgb = parseRGB(getComputedStyle(send).backgroundColor);
+      expect(rgb).not.toBeNull();
+      // Near-black (#231F20 → rgb(35,31,32))
+      expect(rgb![0]).toBeLessThan(60);
+      expect(rgb![1]).toBeLessThan(60);
+      expect(rgb![2]).toBeLessThan(60);
+    });
   });
 
   it('paints the send button brand-pink in dark mode', async () => {
@@ -407,12 +429,14 @@ describe('MessageInput browser behavior', () => {
         <MessageInput onSend={vi.fn()} initialBody="hello there" />,
       );
       const send = screen.getByRole('button', { name: 'Send message' }).element() as HTMLElement;
-      const rgb = parseRGB(getComputedStyle(send).backgroundColor);
-      expect(rgb).not.toBeNull();
-      // Brand pink (#DE5D83 → rgb(222,93,131))
-      expect(rgb![0]).toBeGreaterThan(180);
-      expect(rgb![1]).toBeLessThan(140);
-      expect(rgb![2]).toBeGreaterThan(90);
+      await vi.waitFor(() => {
+        const rgb = parseRGB(getComputedStyle(send).backgroundColor);
+        expect(rgb).not.toBeNull();
+        // Brand pink (#DE5D83 → rgb(222,93,131))
+        expect(rgb![0]).toBeGreaterThan(180);
+        expect(rgb![1]).toBeLessThan(140);
+        expect(rgb![2]).toBeGreaterThan(90);
+      });
     } finally {
       document.documentElement.classList.remove('dark');
     }

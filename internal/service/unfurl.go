@@ -25,6 +25,11 @@ type UnfurlPreview struct {
 	Title       string `json:"title,omitempty"`
 	Description string `json:"description,omitempty"`
 	Image       string `json:"image,omitempty"`
+	// Intrinsic pixel dimensions of Image (0 when unknown). For internal
+	// message-link previews this lets the client size a shared image exactly
+	// as the original message does, rather than expanding it to fill the card.
+	ImageWidth  int    `json:"imageWidth,omitempty"`
+	ImageHeight int    `json:"imageHeight,omitempty"`
 	SiteName    string `json:"siteName,omitempty"`
 
 	// Internal message-link preview (Slack/Mattermost-style). When Kind is
@@ -37,6 +42,18 @@ type UnfurlPreview struct {
 	ChannelLabel    string `json:"channelLabel,omitempty"`    // "~slug" / group name / "Direct message"
 	Body            string `json:"body,omitempty"`            // message body excerpt
 	CreatedAt       string `json:"createdAt,omitempty"`       // RFC3339
+	// Attachments lists the message's non-image uploaded file attachments so
+	// the client renders the same file-type icons it uses in the message
+	// list (instead of a paperclip emoji baked into the body). Image files
+	// are surfaced via Image above and omitted here.
+	Attachments []UnfurlAttachment `json:"attachments,omitempty"`
+}
+
+// UnfurlAttachment is the minimal file descriptor a message-link preview
+// carries so the client can pick a file-type icon by content type / name.
+type UnfurlAttachment struct {
+	Filename    string `json:"filename"`
+	ContentType string `json:"contentType,omitempty"`
 }
 
 // UnfurlCache is the slim slice of RedisCache UnfurlService uses; defined

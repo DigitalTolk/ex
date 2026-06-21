@@ -18,6 +18,11 @@ export interface SaveDraftInput {
   parentMessageID?: string;
   body: string;
   attachmentIDs?: string[];
+  // Keystroke save: persist the draft but don't surface the sidebar "draft
+  // available" indicator (no broadcast, no local cache patch). The composer
+  // sends a non-silent save when it loses focus so the indicator appears
+  // only then.
+  silent?: boolean;
 }
 
 const suppressedSentDraftScopes = new Set<string>();
@@ -149,6 +154,7 @@ export function useSaveDraft() {
           parentMessageID: input.parentMessageID ?? '',
           body: input.body,
           attachmentIDs,
+          notify: !input.silent,
         }),
       });
     },
@@ -157,6 +163,10 @@ export function useSaveDraft() {
       /* istanbul ignore next -- ctx is always set: onMutate unconditionally returns the version object */
       if (!ctx) return;
       if (!isLatestDraftMutation(ctx.key, ctx.version)) return;
+      // Silent (keystroke) saves persist server-side but must not surface the
+      // draft in the sidebar yet — leave the local list untouched so the
+      // indicator stays hidden until the non-silent focus-loss save patches it.
+      if (input.silent) return;
       qc.setQueryData<MessageDraft[]>(
         queryKeys.drafts(),
         (old) => patchDraftListByScope(old, input, draft ?? null),

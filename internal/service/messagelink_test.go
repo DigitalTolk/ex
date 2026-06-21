@@ -109,6 +109,15 @@ func newTestMessageLinkService() *MessageLinkService {
 		}},
 		fakeMLMessages{byKey: map[string]*model.Message{
 			"ch-1#m1": {ID: "m1", ParentID: "ch-1", AuthorID: "u-author", Body: "hello @[u-x|Jane] in ~[ch-2|other]", CreatedAt: time.Date(2026, 6, 15, 10, 0, 0, 0, time.UTC), AttachmentIDs: []string{"att-1"}},
+			// Attachment-only messages (empty text) — exercise the unfurl
+			// body fallback paths.
+			"ch-1#fileonly":  {ID: "fileonly", ParentID: "ch-1", AuthorID: "u-author", Body: "", AttachmentIDs: []string{"att-file"}},
+			"ch-1#multifile": {ID: "multifile", ParentID: "ch-1", AuthorID: "u-author", Body: "   ", AttachmentIDs: []string{"att-file", "att-img2"}},
+			"ch-1#richonly":   {ID: "richonly", ParentID: "ch-1", AuthorID: "u-author", Body: "", MessageAttachments: []model.MessageAttachment{{Fallback: "Deploy succeeded"}}},
+			"ch-1#richtitle":  {ID: "richtitle", ParentID: "ch-1", WebhookUsername: "CI Bot", Body: "", MessageAttachments: []model.MessageAttachment{{Title: "Build #42 passed", Text: "all green", Fallback: "build ok"}}},
+			"ch-1#richtext":   {ID: "richtext", ParentID: "ch-1", WebhookUsername: "CI Bot", Body: "", MessageAttachments: []model.MessageAttachment{{Text: "Coverage at 99%", Fallback: "coverage"}}},
+			"ch-1#ghostatt":  {ID: "ghostatt", ParentID: "ch-1", AuthorID: "u-author", Body: "", AttachmentIDs: []string{"missing-att"}},
+			"ch-1#gifmsg":    {ID: "gifmsg", ParentID: "ch-1", AuthorID: "u-author", Body: "look", AttachmentIDs: []string{"att-gif"}},
 			"conv-1#m2": {ID: "m2", ParentID: "conv-1", AuthorID: "u-author", Body: "dm body"},
 			"grp-1#m3":  {ID: "m3", ParentID: "grp-1", WebhookUsername: "CI Bot", WebhookAvatarURL: "https://img/bot.png", Body: "build done"},
 			"ch-1#del":   {ID: "del", ParentID: "ch-1", Deleted: true},
@@ -119,7 +128,10 @@ func newTestMessageLinkService() *MessageLinkService {
 			"u-author": {ID: "u-author", DisplayName: "Günter", AvatarURL: "https://img/g.png"},
 		}},
 		fakeMLAttachments{byID: map[string]*model.Attachment{
-			"att-1": {ID: "att-1", ContentType: "image/png", URL: "https://img/chart.png"},
+			"att-1":    {ID: "att-1", ContentType: "image/png", URL: "https://img/chart.png", ThumbnailURL: "https://img/chart-thumb.png", Width: 1920, Height: 1080},
+			"att-file": {ID: "att-file", ContentType: "application/pdf", Filename: "report.pdf"},
+			"att-img2": {ID: "att-img2", ContentType: "image/png", Filename: "photo.png", URL: "https://img/photo.png"},
+			"att-gif":  {ID: "att-gif", ContentType: "image/gif", Filename: "anim.gif", URL: "https://img/anim.gif", ThumbnailURL: "https://img/anim-thumb.png", Width: 200, Height: 200},
 		}},
 	)
 }
@@ -133,8 +145,14 @@ func TestMessageLink_Preview_Channel(t *testing.T) {
 	if p.Kind != "message" || p.ChannelLabel != "~general" || p.AuthorName != "Günter" || p.AuthorAvatarURL != "https://img/g.png" {
 		t.Fatalf("preview = %#v", p)
 	}
-	if p.Image != "https://img/chart.png" {
-		t.Errorf("image not resolved from file attachment: %q", p.Image)
+	// The preview uses the THUMBNAIL (same source + size the original message
+	// renders), not the full-resolution URL, plus the intrinsic dimensions so
+	// the client sizes it identically to the channel.
+	if p.Image != "https://img/chart-thumb.png" {
+		t.Errorf("image should resolve to the thumbnail: %q", p.Image)
+	}
+	if p.ImageWidth != 1920 || p.ImageHeight != 1080 {
+		t.Errorf("image dims = %dx%d, want 1920x1080", p.ImageWidth, p.ImageHeight)
 	}
 	// Body is kept raw (mention/emoji markdown intact) so the client renders
 	// the excerpt with the same treatment as the chat.
@@ -143,6 +161,61 @@ func TestMessageLink_Preview_Channel(t *testing.T) {
 	}
 	if !strings.HasPrefix(p.CreatedAt, "2026-06-15T10:00:00") {
 		t.Errorf("createdAt = %q", p.CreatedAt)
+	}
+}
+
+func TestMessageLink_Preview_GIFUsesAnimatedOriginal(t *testing.T) {
+	svc := newTestMessageLinkService()
+	p, internal := svc.Preview(context.Background(), "viewer", "https://ex.test/channel/general#msg-gifmsg")
+	if !internal || p == nil {
+		t.Fatalf("expected internal preview, got internal=%v p=%v", internal, p)
+	}
+	// A shared GIF must preview the animated original, not the static
+	// thumbnail frame — so it animates just like in its channel.
+	if p.Image != "https://img/anim.gif" {
+		t.Errorf("gif image = %q, want the animated original", p.Image)
+	}
+}
+
+func TestMessageLink_Preview_AttachmentOnlyBodyFallback(t *testing.T) {
+	svc := newTestMessageLinkService()
+	cases := []struct {
+		name     string
+		url      string
+		wantBody string
+		// Uploaded (non-image) file attachments now carry no emoji body — the
+		// client renders them as icon+filename rows from preview.Attachments.
+		wantAttachments []string
+	}{
+		// Single uploaded file → empty body, one attachment row.
+		{"single file", "https://ex.test/channel/general#msg-fileonly", "", []string{"report.pdf"}},
+		// Multiple files → empty body; the image file is surfaced via the card
+		// image and excluded from the attachment rows, leaving just the pdf.
+		{"multiple files", "https://ex.test/channel/general#msg-multifile", "", []string{"report.pdf"}},
+		// Incoming-webhook rich attachment → prefer title, then text, then fallback.
+		{"rich attachment title preferred", "https://ex.test/channel/general#msg-richtitle", "Build #42 passed", nil},
+		{"rich attachment text when no title", "https://ex.test/channel/general#msg-richtext", "Coverage at 99%", nil},
+		{"rich attachment fallback when no title/text", "https://ex.test/channel/general#msg-richonly", "Deploy succeeded", nil},
+		// Attachment ID that no longer resolves → empty (no crash, no junk).
+		{"unresolvable attachment", "https://ex.test/channel/general#msg-ghostatt", "", nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p, internal := svc.Preview(context.Background(), "viewer", tc.url)
+			if !internal || p == nil {
+				t.Fatalf("expected internal preview, got internal=%v p=%v", internal, p)
+			}
+			if p.Body != tc.wantBody {
+				t.Fatalf("body = %q, want %q", p.Body, tc.wantBody)
+			}
+			gotNames := make([]string, 0, len(p.Attachments))
+			for _, a := range p.Attachments {
+				gotNames = append(gotNames, a.Filename)
+			}
+			if strings.Join(gotNames, ",") != strings.Join(tc.wantAttachments, ",") {
+				t.Fatalf("attachments = %v, want %v", gotNames, tc.wantAttachments)
+			}
+		})
 	}
 }
 

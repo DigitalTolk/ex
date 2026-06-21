@@ -66,7 +66,9 @@ interface MessageInputProps {
   placeholder?: string;
   initialBody?: string;
   initialDrafts?: DraftAttachment[];
-  onDraftChange?: (value: MessageInputValue) => void;
+  // `notify` distinguishes a focus-loss flush (true → surface the draft in
+  // the sidebar) from a keystroke save (omitted/false → persist silently).
+  onDraftChange?: (value: MessageInputValue, options?: { notify?: boolean }) => void;
   cancelOnOutsidePointer?: boolean;
   hideCodeButton?: boolean;
   submitLabel?: string;
@@ -93,6 +95,12 @@ interface MessageInputProps {
   // edit on this message via the `ex:edit-message` window event;
   // omitted (or undefined) disables the shortcut.
   lastOwnMessageId?: string;
+  // Whether this composer is docked at the bottom of the viewport (the
+  // main channel/conversation composer). Only then should it reserve
+  // home-indicator space via env(safe-area-inset-bottom). In-list
+  // composers (e.g. the /threads ThreadCards) are mid-page, so that inset
+  // just adds a dead ~34px gap below them — they pass false.
+  bottomInset?: boolean;
 }
 
 export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(function MessageInput({
@@ -104,6 +112,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
   initialDrafts = [],
   submitLabel,
   variant = 'composer',
+  bottomInset = true,
   focusKey,
   typingParentID,
   typingParentType,
@@ -203,7 +212,9 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
       hasInitialDraftValueRef.current ||
       mountedDraftChangeRef.current;
     if (!shouldFlush) return;
-    scopedDraftChangeRef.current?.(value);
+    // A flush means the composer lost focus / is going away — this is the
+    // moment the draft should surface in the sidebar, so notify.
+    scopedDraftChangeRef.current?.(value, { notify: true });
   }, [variant]);
 
   // Link dialog state. Opening the dialog calls editor.beginLinkEdit
@@ -613,11 +624,12 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
   }
 
   const renderToolbar = (placement: 'top' | 'bottom') => {
-    /* istanbul ignore next -- renderToolbar is only ever called with 'bottom'; the 'top' border class arm is dead. */
-    const borderClass = placement === 'top' ? 'border-b' : 'border-t';
+    // No divider between the message field and the formatting buttons — the
+    // spec composer has the toolbar sit flush under the input, not separated
+    // by an hr/border.
     return (
     <div
-      className={`flex items-center gap-0.5 px-2 py-1 ${borderClass}`}
+      className="flex items-center gap-0.5 px-2 py-1"
       role="toolbar"
       aria-label="Formatting"
       data-toolbar-placement={placement}
@@ -724,13 +736,13 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
       className={
         variant === 'inline'
           ? 'p-0'
-          : `border-t bg-background p-3 max-md:pt-1.5 ${
+          : `bg-background p-3 max-md:pt-1.5 ${
               // env(safe-area-inset-bottom) on iOS does not reset to 0 when
               // the keyboard is up, leaving a wasted ~34px gap between the
               // composer and the keyboard. Drop the inset while focused
               // (keyboard up) and only reserve the home-indicator space
               // when the composer is idle.
-              editorFocused
+              editorFocused || !bottomInset
                 ? 'max-md:pb-1'
                 : 'max-md:pb-[max(0.25rem,env(safe-area-inset-bottom))]'
             } ${compactMobileComposer && !editorFocused ? 'max-md:px-4' : 'max-md:px-2'}`
@@ -760,7 +772,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
           Up to {MAX_ATTACHMENTS_PER_MESSAGE} attachments per message — remove a few to send.
         </div>
       )}
-      <div className="rounded-lg border bg-muted/40 dark:bg-input/30 focus-within:ring-1 focus-within:ring-ring max-md:overflow-hidden max-md:rounded-[1.75rem]" data-message-composer>
+      <div className="rounded-2xl border md:border-2 border-border bg-typing-field max-md:overflow-hidden max-md:rounded-[1.75rem]" data-message-composer>
         {drafts.length > 0 && (
           <div className="flex flex-wrap gap-1.5 border-b p-2" aria-label="Draft attachments">
             {drafts.map((d) => (

@@ -56,6 +56,13 @@ function notifyMessageHovered(id: string) {
 
 interface MessageItemProps {
   message: Message;
+  // First message of an author group. When false the row renders compact:
+  // the avatar + name + timestamp header are replaced by a hover-only
+  // timestamp in the avatar gutter, and vertical padding tightens — the
+  // Slack/Mattermost "consecutive messages" grouping. Each message is still
+  // a full, independently-hoverable row (own action bar, reactions, edit).
+  // Defaults to true so standalone usages render a full header.
+  firstInGroup?: boolean;
   authorName: string;
   authorAvatarURL?: string;
   authorUserStatus?: UserStatus;
@@ -92,6 +99,7 @@ function formatTime(dateStr: string): string {
 
 export function MessageItem({
   message,
+  firstInGroup = true,
   authorName,
   authorAvatarURL,
   authorUserStatus,
@@ -275,7 +283,19 @@ export function MessageItem({
   }
 
   const editAttachmentIDs = isEditing ? (message.attachmentIDs ?? []) : [];
-  const { map: editAttachmentMap, isLoading: editAttachmentsLoading } = useAttachmentsBatch(editAttachmentIDs);
+  // Pass the access context so the server authorizes the resolve — without
+  // it the batch returns nothing, the edit composer opens with no attachment
+  // chips, and saving would wipe the message's attachments.
+  const { map: editAttachmentMap, isLoading: editAttachmentsLoading } = useAttachmentsBatch(
+    editAttachmentIDs,
+    isEditing
+      ? {
+          parentID: channelId ?? conversationId,
+          parentType: channelId ? 'channel' : 'conversation',
+          messageID: message.id,
+        }
+      : undefined,
+  );
   const initialEditDrafts: DraftAttachment[] = isEditing
     ? editAttachmentIDs
         .map((id): DraftAttachment | null => {
@@ -301,8 +321,15 @@ export function MessageItem({
 
   function handleEditSubmit(value: MessageInputValue) {
     const currentAttachmentIDs = message.attachmentIDs ?? [];
+    // Defense against the de-link race: only trust the composer's attachment
+    // list when every original attachment actually loaded into it. If some
+    // didn't (resolve failed/raced), send `undefined` so the server preserves
+    // the originals instead of replacing them with an incomplete list.
+    const attachmentsFullyLoaded = initialEditDrafts.length === currentAttachmentIDs.length;
+    const nextAttachmentIDs = attachmentsFullyLoaded ? value.attachmentIDs : undefined;
     const same =
       value.body === message.body &&
+      attachmentsFullyLoaded &&
       value.attachmentIDs.length === currentAttachmentIDs.length &&
       value.attachmentIDs.every((id, idx) => id === currentAttachmentIDs[idx]);
     /* istanbul ignore next -- the composer disables Save when the body is empty and there are no attachments, so the trimmed-empty arm of this guard is never reached from the UI; only the `same` arm fires. */
@@ -314,7 +341,7 @@ export function MessageItem({
       {
         messageId: message.id,
         body: value.body,
-        attachmentIDs: value.attachmentIDs,
+        attachmentIDs: nextAttachmentIDs,
         channelId,
         conversationId,
       },
@@ -539,40 +566,66 @@ export function MessageItem({
         if (!isMobile) return;
         event.preventDefault();
       }}
-      className={`relative flex items-start gap-3 rounded-md px-2 py-1.5 hover:bg-muted/50 ${
-        message.pinned ? 'border-l-2 border-amber-500 pl-2' : ''
+      className={`relative flex items-start gap-3 rounded-md px-2 ${firstInGroup ? 'py-1.5' : 'py-0.5'} hover:bg-chat-hover ${
+        message.pinned ? 'border-l-2 border-pinned pl-2' : ''
       } ${highlighted ? 'ring-1 ring-inset ring-amber-400/50 rounded-md' : ''} max-md:select-none max-md:touch-pan-y max-md:[-webkit-touch-callout:none] max-md:[-webkit-user-select:none]`}
     >
-      <UserHoverCard
-        userId={message.authorID}
-        displayName={displayAuthorName}
-        avatarURL={displayAuthorAvatarURL}
-        userStatus={authorUserStatus}
-        online={authorOnline}
-        currentUserId={currentUserId}
-        showInlineStatus={false}
-        integrationOwnerName={integrationOwnerName}
-      >
-        {message.webhookIconEmoji ? (
-          <div
-            className="mt-0.5 flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center rounded-full bg-muted"
-            aria-label={`:${message.webhookIconEmoji}:`}
-            data-testid="webhook-emoji-avatar"
+      {firstInGroup ? (
+        <UserHoverCard
+          userId={message.authorID}
+          displayName={displayAuthorName}
+          avatarURL={displayAuthorAvatarURL}
+          userStatus={authorUserStatus}
+          online={authorOnline}
+          currentUserId={currentUserId}
+          showInlineStatus={false}
+          integrationOwnerName={integrationOwnerName}
+          // Match the continuation gutter width (w-14) so the body aligns
+          // identically on first-in-group and grouped rows; the avatar
+          // hugs the right of the wider left column so it sits close to the
+          // text, leaving the extra breathing room on the far left.
+          triggerClassName="inline-flex w-14 shrink-0 cursor-pointer items-center justify-end"
+        >
+          {message.webhookIconEmoji ? (
+            <div
+              className="mt-0.5 flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center rounded-full bg-muted"
+              aria-label={`:${message.webhookIconEmoji}:`}
+              data-testid="webhook-emoji-avatar"
+            >
+              <EmojiGlyph emoji={`:${message.webhookIconEmoji}:`} customMap={emojiMap} size="lg" />
+            </div>
+          ) : (
+            <UserAvatar
+              displayName={displayAuthorName}
+              avatarURL={displayAuthorAvatarURL}
+              online={authorOnline}
+              className="mt-0.5 h-9 w-9 cursor-pointer"
+              dotClassName="h-2.5 w-2.5"
+            />
+          )}
+        </UserHoverCard>
+      ) : (
+        // Compact continuation: the left column matches the avatar slot
+        // (w-12) so the body aligns with first-in-group rows, and reveals
+        // the message time there on hover. Right-aligned so the time sits
+        // under the right-hugging avatar, close to the text. Wide enough to
+        // fit a readable 12px (text-xs) EU-style "15:55" on one line —
+        // wrapping would reserve a second line of height on every grouped
+        // row (even while invisible at opacity-0), bloating the list.
+        <div className="w-14 shrink-0 select-none text-right" data-testid="group-time-gutter">
+          <time
+            dateTime={message.createdAt}
+            className={`whitespace-nowrap text-xs leading-5 tabular-nums text-muted-foreground transition-opacity ${
+              hovered ? 'opacity-100' : 'opacity-0'
+            }`}
           >
-            <EmojiGlyph emoji={`:${message.webhookIconEmoji}:`} customMap={emojiMap} size="lg" />
-          </div>
-        ) : (
-          <UserAvatar
-            displayName={displayAuthorName}
-            avatarURL={displayAuthorAvatarURL}
-            online={authorOnline}
-            className="mt-0.5 h-9 w-9 cursor-pointer"
-            dotClassName="h-2.5 w-2.5"
-          />
-        )}
-      </UserHoverCard>
+            {formatTime(message.createdAt)}
+          </time>
+        </div>
+      )}
 
       <div className="flex-1 min-w-0">
+        {firstInGroup && (
         <div className="flex items-baseline gap-2">
           <UserHoverCard
             userId={message.authorID}
@@ -595,7 +648,10 @@ export function MessageItem({
           )}
           <Tooltip>
             <TooltipTrigger
-              className="text-xs text-muted-foreground cursor-default"
+              // Right-align the timestamp on standalone (first-in-group)
+              // messages so it sits at the row's trailing edge rather than
+              // crowding the author name.
+              className="ml-auto text-xs text-muted-foreground cursor-default"
               render={<time dateTime={message.createdAt} />}
             >
               {/* Threads have no day dividers, so an absolute clock time is
@@ -611,7 +667,7 @@ export function MessageItem({
           )}
           {message.pinned && (
             <span
-              className="inline-flex items-center gap-0.5 text-xs text-amber-600"
+              className="inline-flex items-center gap-0.5 text-xs text-pinned"
               aria-label="Pinned"
             >
               <Pin className="h-3 w-3" />
@@ -619,6 +675,7 @@ export function MessageItem({
             </span>
           )}
         </div>
+        )}
 
         {isEditing ? (
           editorReady ? (
@@ -715,7 +772,7 @@ export function MessageItem({
                         }
                       >
                         {renderReactionVisual(emoji)}
-                        <span className="text-xs leading-none text-muted-foreground tabular-nums">{users.length}</span>
+                        <span className="text-xs leading-5 text-muted-foreground tabular-nums">{users.length}</span>
                       </TooltipTrigger>
                       <TooltipContent
                         data-testid="reaction-tooltip"

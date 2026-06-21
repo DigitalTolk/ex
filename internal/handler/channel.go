@@ -90,6 +90,10 @@ func writeServiceError(w http.ResponseWriter, err error, fallbackStatus int, fal
 		writeError(w, http.StatusConflict, "conflict", err.Error())
 		return
 	}
+	if errors.Is(err, service.ErrThreadDeleted) {
+		writeError(w, http.StatusConflict, "thread_deleted", err.Error())
+		return
+	}
 	if isValidationError(err) {
 		writeError(w, http.StatusBadRequest, "invalid_body", err.Error())
 		return

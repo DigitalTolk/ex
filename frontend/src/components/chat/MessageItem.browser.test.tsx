@@ -247,4 +247,46 @@ describe('MessageItem browser behavior', () => {
       expect(document.body.textContent).toMatch(/deleted/i);
     });
   });
+
+  it('shows the full avatar + name header for the first message of a group', async () => {
+    const screen = await renderWithProviders(
+      <MessageItem
+        message={makeMessage({ body: 'first of group' })}
+        firstInGroup
+        authorName="Alice"
+        isOwn={false}
+        channelId="channel-1"
+        currentUserId="user-1"
+      />,
+    );
+    await expect.element(screen.getByText('Alice')).toBeVisible();
+    // The first message keeps a real timestamp header, not a gutter stand-in.
+    expect(document.querySelector('[data-testid="group-time-gutter"]')).toBeNull();
+  });
+
+  it('renders a compact continuation (no name header, hover-only gutter time) when grouped', async () => {
+    await renderWithProviders(
+      <MessageItem
+        message={makeMessage({ body: 'second of group' })}
+        firstInGroup={false}
+        authorName="Alice"
+        isOwn={false}
+        channelId="channel-1"
+        currentUserId="user-1"
+      />,
+    );
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain('second of group');
+    });
+    // Author name header is suppressed on a continuation row…
+    expect(document.body.textContent).not.toContain('Alice');
+    // …replaced by the gutter timestamp element, whose visibility is tied to
+    // row hover via an opacity class (covered across the hovered desktop and
+    // non-hovered mobile browser projects).
+    const gutter = document.querySelector('[data-testid="group-time-gutter"]');
+    expect(gutter).not.toBeNull();
+    const time = gutter?.querySelector('time');
+    expect(time).not.toBeNull();
+    expect(time?.className).toMatch(/opacity-(0|100)/);
+  });
 });

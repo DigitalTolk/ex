@@ -72,6 +72,8 @@ function installFakeNotification(instances: Array<{ title: string; options: Noti
   };
 }
 
+type FakeNote = { title: string; options: NotificationOptions; onclick: (() => void) | null; close: () => void };
+
 function basePayload(over: Partial<NotificationPayload> = {}): NotificationPayload {
   return {
     kind: 'mention',
@@ -135,6 +137,25 @@ describe('NotificationContext browser', () => {
     // Returned early; we don't need to assert side-effects — branch covered.
   });
 
+  it('does NOT suppress a webhook channel "message" (integration alerts always banner, even from your own webhook)', async () => {
+    const instances: FakeNote[] = [];
+    const restore = installFakeNotification(instances);
+    try {
+      await render(<NotificationProvider><Capture /></NotificationProvider>);
+      await vi.waitFor(() => expect(captured).not.toBeNull());
+      captured!.setCurrentUserID('u-me');
+      // A plain channel "message" is suppressed, and an own-author one is too.
+      // The webhook flag bypasses BOTH guards so the alert still banners —
+      // authorID is the webhook's creator (u-me), who wired it up and wants it.
+      captured!.dispatch(
+        basePayload({ kind: 'message', parentType: 'channel', authorID: 'u-me', webhook: true }),
+      );
+      await vi.waitFor(() => expect(instances.length).toBe(1));
+    } finally {
+      restore();
+    }
+  });
+
   it('dispatch suppresses DM "message" kind when active parent matches and tab is visible', async () => {
     await render(
       <NotificationProvider>
@@ -185,8 +206,6 @@ describe('NotificationContext browser', () => {
     const result = await captured!.requestPermission();
     expect(['default', 'denied', 'granted', 'unsupported']).toContain(result);
   });
-
-  type FakeNote = { title: string; options: NotificationOptions; onclick: (() => void) | null; close: () => void };
 
   it('creates a browser notification and navigates in-app on click when permission is granted', async () => {
     const instances: FakeNote[] = [];
@@ -274,6 +293,55 @@ describe('NotificationContext browser', () => {
       await new Promise((r) => setTimeout(r, 20));
       // No navigation occurred — we stayed on the pushed path.
       expect(window.location.pathname).toBe('/stay-here');
+    } finally {
+      restore();
+    }
+  });
+
+  it('dispatch dedupes repeats of the same message and fires once per distinct messageID', async () => {
+    const instances: FakeNote[] = [];
+    const restore = installFakeNotification(instances);
+    try {
+      await render(<NotificationProvider><Capture /></NotificationProvider>);
+      await vi.waitFor(() => expect(captured).not.toBeNull());
+      const dup = basePayload({ kind: 'mention', authorID: 'u-other', messageID: 'm-1' });
+      captured!.dispatch(dup);
+      captured!.dispatch(dup); // same messageID → collapsed
+      captured!.dispatch(basePayload({ kind: 'mention', authorID: 'u-other', messageID: 'm-2' }));
+      await vi.waitFor(() => expect(instances.length).toBe(2));
+    } finally {
+      restore();
+    }
+  });
+
+  it('dispatch does not dedupe notifications that carry no messageID', async () => {
+    const instances: FakeNote[] = [];
+    const restore = installFakeNotification(instances);
+    try {
+      await render(<NotificationProvider><Capture /></NotificationProvider>);
+      await vi.waitFor(() => expect(captured).not.toBeNull());
+      const noID = basePayload({ kind: 'mention', authorID: 'u-other', messageID: undefined });
+      captured!.dispatch(noID);
+      captured!.dispatch(noID);
+      await vi.waitFor(() => expect(instances.length).toBe(2));
+    } finally {
+      restore();
+    }
+  });
+
+  it('dispatch evicts the oldest messageID once the dedup window overflows', async () => {
+    const instances: FakeNote[] = [];
+    const restore = installFakeNotification(instances);
+    try {
+      await render(<NotificationProvider><Capture /></NotificationProvider>);
+      await vi.waitFor(() => expect(captured).not.toBeNull());
+      captured!.dispatch(basePayload({ kind: 'mention', authorID: 'u-other', messageID: 'm-old' }));
+      for (let i = 0; i < 256; i++) {
+        captured!.dispatch(basePayload({ kind: 'mention', authorID: 'u-other', messageID: `m-${i}` }));
+      }
+      // m-old has been pushed out of the 256-entry window → it fires again.
+      captured!.dispatch(basePayload({ kind: 'mention', authorID: 'u-other', messageID: 'm-old' }));
+      await vi.waitFor(() => expect(instances.length).toBe(258));
     } finally {
       restore();
     }

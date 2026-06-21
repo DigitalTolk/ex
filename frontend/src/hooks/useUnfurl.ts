@@ -7,6 +7,10 @@ export interface UnfurlPreview {
   title?: string;
   description?: string;
   image?: string;
+  // Intrinsic pixel dimensions of `image` (0/absent when unknown) so a
+  // shared image preview renders at the same size as the original message.
+  imageWidth?: number;
+  imageHeight?: number;
   siteName?: string;
   // Internal message-link preview (Slack/Mattermost-style). Present only when
   // kind === 'message'; the card renders an author/body/channel layout.
@@ -16,6 +20,14 @@ export interface UnfurlPreview {
   channelLabel?: string;
   body?: string;
   createdAt?: string;
+  // Non-image file attachments on the linked message; rendered as
+  // icon+filename rows using the same file-type icons as the message list.
+  attachments?: UnfurlAttachment[];
+}
+
+export interface UnfurlAttachment {
+  filename: string;
+  contentType?: string;
 }
 
 // useUnfurl fetches the link preview for a single URL. Server returns

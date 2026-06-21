@@ -48,6 +48,24 @@ describe('MessageAttachments', () => {
     expect(screen.getByAltText('cat.png')).toHaveAttribute('src', 'https://cdn/cat-thumb.webp');
   });
 
+  it('renders a GIF from the original file so it animates (not the static thumbnail)', () => {
+    const att: Attachment = {
+      id: 'gif-1',
+      filename: 'party.gif',
+      contentType: 'image/gif',
+      size: 200000,
+      url: 'https://cdn/party.gif',
+      thumbnailURL: 'https://cdn/party-thumb.webp',
+    };
+    useAttachmentsBatchMock.mockReturnValue({
+      map: new Map([['gif-1', att]]),
+      isLoading: false,
+    });
+    render(<MessageAttachments {...baseProps} ids={['gif-1']} />);
+    // The animated original, not the static thumbnail frame.
+    expect(screen.getByAltText('party.gif')).toHaveAttribute('src', 'https://cdn/party.gif');
+  });
+
   it('keeps single-image thumbnails inside the mobile message column', () => {
     const att: Attachment = {
       id: 'a-mobile-img',

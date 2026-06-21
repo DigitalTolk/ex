@@ -60,11 +60,14 @@ describe('MarkdownEditor (CM6) — Phase 1 core', () => {
 
   it('Enter submits the markdown when submitOnEnter is set', async () => {
     const onSubmit = vi.fn();
-    const { ref } = await mount({ onSubmit, submitOnEnter: true });
+    const { ref, screen } = await mount({ onSubmit, submitOnEnter: true });
     ref.current!.setMarkdown('send me');
-    ref.current!.focus();
+    // Focus via a real click — programmatic ref.focus() doesn't reliably make
+    // webkit dispatch the subsequent key event, which flaked this test. Then
+    // poll the assertion so any keyboard→keymap latency is absorbed.
+    await userEvent.click(screen.getByLabelText('Message input'));
     await userEvent.keyboard('{Enter}');
-    expect(onSubmit).toHaveBeenCalledWith('send me');
+    await vi.waitFor(() => expect(onSubmit).toHaveBeenCalledWith('send me'));
   });
 
   it('reports active formats from the caret position', async () => {
@@ -125,13 +128,17 @@ describe('MarkdownEditor handle + keymap branches', () => {
     expect(onSubmit).not.toHaveBeenCalled();
   });
 
-  it('Enter does not submit when submitOnEnter is false', async () => {
+  it('Enter inserts exactly one newline (and never submits) when submitOnEnter is false', async () => {
+    const onChange = vi.fn();
     const onSubmit = vi.fn();
-    const { ref } = await mount({ onSubmit, submitOnEnter: false });
+    const { ref } = await mount({ onChange, onSubmit, submitOnEnter: false });
     ref.current!.setMarkdown('hi');
     ref.current!.focusEnd();
-    await userEvent.keyboard('{Enter}');
+    await userEvent.keyboard('{Enter}there');
     expect(onSubmit).not.toHaveBeenCalled();
+    // Exactly one newline — Enter is handled explicitly and consumes the
+    // event, so iOS can't double-insert via a parallel beforeinput.
+    expect(ref.current!.getMarkdown()).toBe('hi\nthere');
   });
 
   it('ArrowUp on an empty editor invokes onArrowUpEmpty', async () => {

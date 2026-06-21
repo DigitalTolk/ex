@@ -465,6 +465,44 @@ func TestChannelStore_ListAll_ReturnsPublicAndPrivate(t *testing.T) {
 	}
 }
 
+func TestAttachmentStore_ListAll(t *testing.T) {
+	db := setupDynamoDB(t)
+	s := NewAttachmentStore(db)
+	ctx := context.Background()
+
+	a1 := makeAttachment("att-listall-1", "hash-la1", "one.png")
+	a2 := makeAttachment("att-listall-2", "hash-la2", "two.pdf")
+	if err := s.Create(ctx, a1); err != nil {
+		t.Fatalf("Create a1: %v", err)
+	}
+	if err := s.Create(ctx, a2); err != nil {
+		t.Fatalf("Create a2: %v", err)
+	}
+	// a1 keeps a ref; a2 stays orphaned (empty MessageIDs) — the shape the
+	// relink migration scans for.
+	if err := s.AddRef(ctx, a1.ID, "m-owner"); err != nil {
+		t.Fatalf("AddRef: %v", err)
+	}
+
+	all, err := s.ListAll(ctx)
+	if err != nil {
+		t.Fatalf("ListAll: %v", err)
+	}
+	byID := map[string]*model.Attachment{}
+	for _, a := range all {
+		byID[a.ID] = a
+	}
+	if byID[a1.ID] == nil || byID[a2.ID] == nil {
+		t.Fatalf("ListAll missed attachment(s): got %v", byID)
+	}
+	if len(byID[a1.ID].MessageIDs) != 1 {
+		t.Errorf("a1 MessageIDs = %v, want one ref", byID[a1.ID].MessageIDs)
+	}
+	if len(byID[a2.ID].MessageIDs) != 0 {
+		t.Errorf("a2 should be orphaned, got MessageIDs = %v", byID[a2.ID].MessageIDs)
+	}
+}
+
 func TestConversationStore_ListAll(t *testing.T) {
 	db := setupDynamoDB(t)
 	s := NewConversationStore(db)

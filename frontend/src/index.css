@@ -105,6 +105,17 @@
   --color-brand: #DE5D83;
   --color-brand-hover: #C94E71;
   --color-brand-foreground: #FFFFFF;
+  /* Disabled state of the dark-mode pink CTA button (spec: #EB9EB5). Applied
+   * only via `dark:disabled:bg-brand-disabled` on the default Button variant;
+   * the light CTA disabled keeps the neutral opacity-50 convention. */
+  --color-brand-disabled: #EB9EB5;
+  /* Online / presence green — the one non-monochrome, non-pink accent in the
+   * palette. Tokenised so presence dots/labels don't sprinkle raw
+   * `emerald-*` palette classes through the components. */
+  --color-online: #10B981;
+  /* Pinned-message affordance (amber accent bar + "Pinned" label). Tokenised
+   * so the pin marker stops using raw `amber-*` palette classes. */
+  --color-pinned: #D97706;
   /* Caution accent (amber) — for "notify everyone" group mentions etc. Matches
      the amber the pinned-message affordance already uses. */
   --color-caution: #FEF3C7;
@@ -267,16 +278,28 @@
      */
     --color-background: #231F20;
     --color-foreground: #FFFFFF;
-    --color-card: #353132;
+    /* Cards = bg/base in dark. The previous level2 #353132 made every
+     * card-backed surface (thread cards + their messages, admin/drafts/
+     * directory/search panels) read noticeably LIGHTER than the chat, so a
+     * message inside a thread card looked brighter than the same message in
+     * its channel. Anchoring `card` to base makes those surfaces match the
+     * chat; their borders still delineate them. This is the single
+     * fundamental knob — fix it here, not per component. */
+    --color-card: #231F20;
     --color-card-foreground: #FFFFFF;
-    --color-popover: #353132;
+    /* Floating surfaces (menus, dialogs, hover cards, tooltips) keep a
+     * subtle one-step elevation above base — but level1 #2C2829, not the
+     * glaring level2 #353132 they used before. */
+    --color-popover: #2C2829;
     --color-popover-foreground: #FFFFFF;
     --color-primary: #FFFFFF;
     --color-primary-foreground: #231F20;
     --color-primary-hover: #D3D2D2;
     --color-link: #93C5FD;
     --color-secondary: #3F3A3B;
-    --color-secondary-foreground: #FFFFFF;
+    /* text/secondary per spec sheet (lower-emphasis body text) — #D3D2D2,
+       not pure white, so secondary text reads a step below primary. */
+    --color-secondary-foreground: #D3D2D2;
     --color-muted: #3F3A3B;
     --color-muted-foreground: #A7A5A6;
     --color-accent: #3F3A3B;
@@ -290,6 +313,10 @@
     --color-brand: #DE5D83;
     --color-brand-hover: #C94E71;
     --color-brand-foreground: #FFFFFF;
+    /* Presence green, slightly brighter so it reads on the dark surfaces. */
+    --color-online: #34D399;
+    /* Pinned amber, brighter gold for the dark surface. */
+    --color-pinned: #FBBF24;
     /* Caution accent (amber), tuned for the dark surface. */
     --color-caution: #3B2F12;
     --color-caution-foreground: #FCD34D;
@@ -307,8 +334,14 @@
     --color-sidebar-border: #4A4A4A;
     --color-sidebar-ring: #A7A5A6;
     --color-chat-top: #353132;
-    --color-chat-hover: #353132;
-    --color-typing-field: #3F3A3B;
+    /* Chat message-row hover = bg/level1, mirroring the light spec (where
+       "chat hover" is level1 #F5F5F5). Was #353132 (level2), a step too
+       light vs the reference screenshots. */
+    --color-chat-hover: #2C2829;
+    /* Composer / typing field. The reference dark screenshot shows it at
+       bg/base #231F20 (not the lighter level3 #3F3A3B the token sheet
+       labels) — a #3F3A3B field read as a washed-out light box in dark. */
+    --color-typing-field: #231F20;
   }
 }
 

@@ -152,17 +152,47 @@ func (s *MessageLinkService) Preview(ctx context.Context, viewerID, rawURL strin
 		return nil, true
 	}
 
+	body := messagePreviewBody(msg.Body)
+	if body == "" {
+		// Attachment-only message: a blank card body reads as broken, so
+		// stand in a short descriptor of the attachment(s).
+		body = s.attachmentPreviewBody(ctx, msg)
+	}
 	preview := &UnfurlPreview{
 		Kind:         "message",
 		URL:          rawURL,
 		SiteName:     s.host,
 		ChannelLabel: label,
-		Body:         messagePreviewBody(msg.Body),
+		Body:         body,
 		CreatedAt:    msg.CreatedAt.UTC().Format(time.RFC3339),
 	}
 	s.resolveAuthor(ctx, msg, preview)
-	preview.Image = s.resolveImage(ctx, msg)
+	preview.Image, preview.ImageWidth, preview.ImageHeight = s.resolveImage(ctx, msg)
+	preview.Attachments = s.resolveAttachmentList(ctx, msg)
 	return preview, true
+}
+
+// resolveAttachmentList returns the message's non-image uploaded file
+// attachments (filename + content type) so the client renders the same
+// file-type icons it uses in the message list. Image files are surfaced as
+// the card image via resolveImage and intentionally skipped here to avoid
+// listing them twice.
+func (s *MessageLinkService) resolveAttachmentList(ctx context.Context, msg *model.Message) []UnfurlAttachment {
+	if s.attachments == nil || len(msg.AttachmentIDs) == 0 {
+		return nil
+	}
+	out := make([]UnfurlAttachment, 0, len(msg.AttachmentIDs))
+	for _, id := range msg.AttachmentIDs {
+		att, err := s.attachments.Get(ctx, id)
+		if err != nil || att == nil || att.IsImage() {
+			continue
+		}
+		out = append(out, UnfurlAttachment{Filename: att.Filename, ContentType: att.ContentType})
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // resolveChannel looks up a channel-link ref as a slug first, then by ID — the
@@ -191,23 +221,58 @@ func (s *MessageLinkService) resolveAuthor(ctx context.Context, msg *model.Messa
 }
 
 // resolveImage returns the first displayable image for the message: a rich
-// (webhook) attachment image, else the first image file attachment.
-func (s *MessageLinkService) resolveImage(ctx context.Context, msg *model.Message) string {
+// (webhook) attachment image, else the first image file attachment, along
+// with its intrinsic pixel dimensions (0 when unknown) so the client can
+// render the preview at the SAME size the original message shows it, instead
+// of blowing it up to the card's max width.
+func (s *MessageLinkService) resolveImage(ctx context.Context, msg *model.Message) (url string, width, height int) {
 	for _, a := range msg.MessageAttachments {
 		if a.ImageURL != "" {
-			return a.ImageURL
+			return a.ImageURL, a.ImageWidth, a.ImageHeight
 		}
 	}
 	if s.attachments == nil {
-		return ""
+		return "", 0, 0
 	}
 	for _, id := range msg.AttachmentIDs {
 		att, err := s.attachments.Get(ctx, id)
 		if err != nil || att == nil || !att.IsImage() {
 			continue
 		}
+		// GIFs only animate in the full file — the thumbnail is a static
+		// frame. Use the original so the shared preview animates just like
+		// the message in its channel.
+		if att.ContentType == "image/gif" && att.URL != "" {
+			return att.URL, att.Width, att.Height
+		}
+		// Otherwise prefer the thumbnail — the SAME smaller image the original
+		// message renders. Using the full-resolution URL made a shared image
+		// render much larger than in its channel (the thumbnail is naturally
+		// smaller). Fall back to the full image only when no thumbnail exists.
+		if att.ThumbnailURL != "" {
+			return att.ThumbnailURL, att.Width, att.Height
+		}
 		if att.URL != "" {
-			return att.URL
+			return att.URL, att.Width, att.Height
+		}
+	}
+	return "", 0, 0
+}
+
+// attachmentPreviewBody produces a short stand-in body for an
+// attachment-only message (empty text) so the unfurl card isn't blank.
+// Incoming-webhook (Mattermost-style) rich attachments contribute their
+// most human-readable field — title, then text, then the fallback string.
+// Uploaded file attachments contribute no body text: they're surfaced as
+// icon+filename rows (UnfurlPreview.Attachments) the client renders with
+// the same file-type icons as the message list, so a paperclip emoji here
+// would be redundant.
+func (s *MessageLinkService) attachmentPreviewBody(_ context.Context, msg *model.Message) string {
+	for _, a := range msg.MessageAttachments {
+		for _, candidate := range []string{a.Title, a.Text, a.Fallback} {
+			if t := strings.TrimSpace(candidate); t != "" {
+				return messagePreviewBody(t)
+			}
 		}
 	}
 	return ""

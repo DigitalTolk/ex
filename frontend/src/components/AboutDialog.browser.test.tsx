@@ -46,7 +46,9 @@ describe('AboutDialog browser behaviour', () => {
     // onOpenChangeComplete(false) runs `if (!nextOpen) onClosed?.()`.
     const closeBtn = document.querySelector('[data-slot="dialog-mobile-close"], [data-slot="dialog-close"]') as HTMLElement;
     closeBtn.click();
-    await vi.waitFor(() => expect(onClosed).toHaveBeenCalled());
+    // Generous timeout: base-ui's onOpenChangeComplete can land a few frames
+    // late on webkit under the full-suite load even with animations disabled.
+    await vi.waitFor(() => expect(onClosed).toHaveBeenCalled(), { timeout: 5000 });
     style.remove();
   });
 });

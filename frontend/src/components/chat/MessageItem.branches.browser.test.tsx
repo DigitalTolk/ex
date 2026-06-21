@@ -245,6 +245,34 @@ describe('MessageItem desktop toolbar + menu branches', () => {
       expect(mutateEdit).toHaveBeenCalled();
     });
   });
+
+  it('preserves attachments (sends attachmentIDs:undefined) when they did not all load into the editor', async () => {
+    if (window.innerWidth <= 767) return;
+    // Message has an attachment, but the batch resolve came back empty (not
+    // loading) — the editor opens with no chips. Saving a body change must
+    // NOT wipe the attachment: it sends attachmentIDs:undefined so the server
+    // keeps the original. Regression guard for the edit de-link bug.
+    useAttachmentsBatchMock.mockReturnValue({ map: new Map(), isLoading: false });
+    const screen = await renderWithProviders(
+      <MessageItem
+        message={makeMessage({ body: 'has a file', attachmentIDs: ['a-1'] })}
+        authorName="Alice"
+        isOwn
+        channelId="channel-1"
+        currentUserId="user-1"
+      />,
+    );
+    dispatchEditMessage({ messageId: 'msg-1' });
+    await expect.element(screen.getByTestId('inline-edit')).toBeVisible();
+    const editor = screen.getByLabelText('Message input');
+    await editor.click();
+    await editor.fill('has a file edited');
+    await screen.getByRole('button', { name: 'Save' }).click();
+    await vi.waitFor(() => {
+      expect(mutateEdit).toHaveBeenCalled();
+    });
+    expect(mutateEdit.mock.calls[0][0].attachmentIDs).toBeUndefined();
+  });
 });
 
 describe('MessageItem content branches', () => {

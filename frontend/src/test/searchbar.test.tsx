@@ -39,20 +39,20 @@ describe('SearchBar', () => {
     expect(screen.getByTestId('searchbar-input')).toBeInTheDocument();
   });
 
-  it('keeps desktop search compact while adding mobile-only touch sizing', () => {
+  it('sizes the desktop search with comfortable padding and mobile touch sizing', () => {
     wrap();
 
     const input = screen.getByTestId('searchbar-input');
     const shell = input.parentElement!;
-    expect(shell).toHaveClass('h-7', 'max-md:h-9');
-    // The shell carries the design-token border/bg pair (subtle
-    // light bg + 1px border in light, white wash + thin border in
-    // dark) and rounded-md (6px) corners per the design spec — not
-    // a pill.
+    expect(shell).toHaveClass('h-8', 'max-md:h-11');
+    // The shell carries the design-token border/bg pair (base bg + 1px border
+    // in light, the level3 muted surface in dark — solid tokens, no glassy
+    // white wash) and rounded-md (6px) corners per the design spec — not a pill.
     expect(shell).toHaveClass('rounded-md', 'border', 'border-border', 'bg-background', 'text-foreground');
-    expect(shell).toHaveClass('dark:bg-white/5', 'dark:text-zinc-100');
-    expect(input).toHaveClass('text-[13px]', 'max-md:text-base');
-    expect(input).toHaveClass('text-foreground', 'dark:text-zinc-100');
+    expect(shell).toHaveClass('dark:bg-muted');
+    expect(shell).not.toHaveClass('dark:bg-white/5');
+    expect(input).toHaveClass('text-sm', 'max-md:text-base');
+    expect(input).toHaveClass('text-foreground');
   });
 
   it('opens a "Show results for" dropdown once the user types', () => {

@@ -173,6 +173,36 @@ func TestNotificationService_NotifyForMessage_SendsMobilePushToSameRecipients(t 
 	}
 }
 
+func TestNotificationService_NotifyForMessage_SkipsMobilePushForOnlineRecipients(t *testing.T) {
+	svc, pub, members, _, chans, users := setupNotifier(t)
+	push := &recordingMobilePush{}
+	svc.SetMobilePushSender(push)
+	// u-bob is connected (has a live WebSocket) and so already gets the
+	// in-app banner; u-carol is offline and must still receive a push.
+	svc.SetPresence(&stubPresence{online: map[string]bool{"u-bob": true}})
+	ctx := context.Background()
+
+	chans.channels["ch1"] = &model.Channel{ID: "ch1", Name: "general", Slug: "general", Type: model.ChannelTypePublic}
+	users.users["u-author"] = &model.User{ID: "u-author", DisplayName: "Alice"}
+	for _, uid := range []string{"u-author", "u-bob", "u-carol"} {
+		members.memberships["ch1#"+uid] = &model.ChannelMembership{ChannelID: "ch1", UserID: uid}
+	}
+
+	svc.NotifyForMessage(ctx, &model.Message{ID: "m1", ParentID: "ch1", AuthorID: "u-author", Body: "hello"}, ParentChannel)
+
+	// Both recipients still get the in-app WebSocket event — presence only
+	// gates the parallel push, never the in-app banner.
+	if got := len(pub.published); got != 2 {
+		t.Fatalf("websocket publish count = %d, want 2", got)
+	}
+	if got := len(push.calls); got != 1 {
+		t.Fatalf("mobile push count = %d, want 1 (online u-bob suppressed)", got)
+	}
+	if push.calls[0].userID != "u-carol" {
+		t.Fatalf("mobile push recipient = %q, want u-carol (offline)", push.calls[0].userID)
+	}
+}
+
 func TestNotificationService_MissingMobilePushConfigDoesNotBlockMessageDelivery(t *testing.T) {
 	svc, pub, members, _, chans, users := setupNotifier(t)
 	ctx := context.Background()
@@ -1129,8 +1159,21 @@ func TestNotificationService_WebhookUsernameAndFallbackBody(t *testing.T) {
 		MessageAttachments: []model.MessageAttachment{{Fallback: "build failed"}},
 	}, ParentChannel)
 
-	if len(push.calls) != 1 {
-		t.Fatalf("push count = %d, want 1", len(push.calls))
+	// Webhook posts notify EVERY member, including u-author — the webhook's
+	// creator wired up the alert and wants it, they didn't write the message.
+	// (A regular message would exclude the author, leaving only u-bob.)
+	if len(push.calls) != 2 {
+		t.Fatalf("push count = %d, want 2 (both members incl. webhook creator)", len(push.calls))
+	}
+	recipients := map[string]bool{}
+	for _, c := range push.calls {
+		recipients[c.userID] = true
+		if !c.notif.Webhook {
+			t.Errorf("notif.Webhook = false, want true for webhook post")
+		}
+	}
+	if !recipients["u-author"] || !recipients["u-bob"] {
+		t.Fatalf("recipients = %v, want both u-author and u-bob", recipients)
 	}
 	notif := push.calls[0].notif
 	if notif.Body != "build failed" {

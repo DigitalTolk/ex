@@ -664,13 +664,15 @@ func (m *mockConversationStore) SetCategory(_ context.Context, convID, userID, c
 // --- Mock MessageStore ---
 
 type mockMessageStore struct {
-	messages    map[string]*model.Message // key: parentID + "#" + msgID
-	createErr   error
-	getErr      error
-	updateErr   error
-	deleteErr   error
-	listErr     error
-	listHasMore bool // when true, ListMessages always reports more pages
+	messages       map[string]*model.Message // key: parentID + "#" + msgID
+	createErr      error
+	getErr         error
+	updateErr      error
+	updateErrID    string // when set, UpdateMessage fails only for this msg ID
+	updateErrForID error  // error returned for updateErrID (defaults to a generic error)
+	deleteErr      error
+	listErr        error
+	listHasMore    bool // when true, ListMessages always reports more pages
 }
 
 func newMockMessageStore() *mockMessageStore {
@@ -701,6 +703,12 @@ func (m *mockMessageStore) GetMessage(_ context.Context, parentID, msgID string)
 func (m *mockMessageStore) UpdateMessage(_ context.Context, msg *model.Message) error {
 	if m.updateErr != nil {
 		return m.updateErr
+	}
+	if m.updateErrID != "" && msg.ID == m.updateErrID {
+		if m.updateErrForID != nil {
+			return m.updateErrForID
+		}
+		return errors.New("mock: update failed")
 	}
 	key := msg.ParentID + "#" + msg.ID
 	m.messages[key] = msg
@@ -900,7 +908,6 @@ func (m *mockParentIndex) ListFileIndex(_ context.Context, parentID string) ([]F
 	}
 	return out, nil
 }
-
 
 // erroringParentIndex returns errors from every write and list,
 // while still letting the test reach through to the underlying
