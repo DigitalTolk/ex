@@ -127,7 +127,7 @@ func newTestMessageLinkService() *MessageLinkService {
 			"u-author": {ID: "u-author", DisplayName: "Günter", AvatarURL: "https://img/g.png"},
 		}},
 		fakeMLAttachments{byID: map[string]*model.Attachment{
-			"att-1":    {ID: "att-1", ContentType: "image/png", URL: "https://img/chart.png"},
+			"att-1":    {ID: "att-1", ContentType: "image/png", URL: "https://img/chart.png", ThumbnailURL: "https://img/chart-thumb.png", Width: 1920, Height: 1080},
 			"att-file": {ID: "att-file", ContentType: "application/pdf", Filename: "report.pdf"},
 			"att-img2": {ID: "att-img2", ContentType: "image/png", Filename: "photo.png", URL: "https://img/photo.png"},
 		}},
@@ -143,8 +143,14 @@ func TestMessageLink_Preview_Channel(t *testing.T) {
 	if p.Kind != "message" || p.ChannelLabel != "~general" || p.AuthorName != "Günter" || p.AuthorAvatarURL != "https://img/g.png" {
 		t.Fatalf("preview = %#v", p)
 	}
-	if p.Image != "https://img/chart.png" {
-		t.Errorf("image not resolved from file attachment: %q", p.Image)
+	// The preview uses the THUMBNAIL (same source + size the original message
+	// renders), not the full-resolution URL, plus the intrinsic dimensions so
+	// the client sizes it identically to the channel.
+	if p.Image != "https://img/chart-thumb.png" {
+		t.Errorf("image should resolve to the thumbnail: %q", p.Image)
+	}
+	if p.ImageWidth != 1920 || p.ImageHeight != 1080 {
+		t.Errorf("image dims = %dx%d, want 1920x1080", p.ImageWidth, p.ImageHeight)
 	}
 	// Body is kept raw (mention/emoji markdown intact) so the client renders
 	// the excerpt with the same treatment as the chat.

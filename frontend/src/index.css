@@ -271,9 +271,19 @@
      */
     --color-background: #231F20;
     --color-foreground: #FFFFFF;
-    --color-card: #353132;
+    /* Cards = bg/base in dark. The previous level2 #353132 made every
+     * card-backed surface (thread cards + their messages, admin/drafts/
+     * directory/search panels) read noticeably LIGHTER than the chat, so a
+     * message inside a thread card looked brighter than the same message in
+     * its channel. Anchoring `card` to base makes those surfaces match the
+     * chat; their borders still delineate them. This is the single
+     * fundamental knob — fix it here, not per component. */
+    --color-card: #231F20;
     --color-card-foreground: #FFFFFF;
-    --color-popover: #353132;
+    /* Floating surfaces (menus, dialogs, hover cards, tooltips) keep a
+     * subtle one-step elevation above base — but level1 #2C2829, not the
+     * glaring level2 #353132 they used before. */
+    --color-popover: #2C2829;
     --color-popover-foreground: #FFFFFF;
     --color-primary: #FFFFFF;
     --color-primary-foreground: #231F20;

@@ -114,6 +114,11 @@ function ThumbnailButton({ att, onOpen, onLoad }: { att: Attachment; onOpen: () 
   // visible size. Use the rendered thumbnail box, not the full
   // intrinsic image, so the reserved layout matches the chat message.
   const thumbnailDims = getThumbnailDimensions(att);
+  // GIFs animate only in the full file — the generated thumbnail is a static
+  // first frame. Render the original so it plays inline; everything else uses
+  // the lighter thumbnail.
+  const isGif = att.contentType === 'image/gif';
+  const src = isGif ? (att.url ?? att.thumbnailURL) : att.thumbnailURL;
   return (
     <button
       type="button"
@@ -122,9 +127,9 @@ function ThumbnailButton({ att, onOpen, onLoad }: { att: Attachment; onOpen: () 
       aria-label={`Open image ${att.filename}`}
       data-testid="message-image-thumb"
     >
-      {att.thumbnailURL && (
+      {src && (
         <img
-          src={att.thumbnailURL}
+          src={src}
           alt={att.filename}
           className="h-auto max-h-72 max-w-full"
           width={thumbnailDims.width}

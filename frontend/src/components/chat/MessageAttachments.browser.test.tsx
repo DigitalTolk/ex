@@ -74,6 +74,14 @@ describe('MessageAttachments browser', () => {
     expect(openSpy).toHaveBeenCalledWith('img');
   });
 
+  it('renders a GIF from its animated original, not the static thumbnail', async () => {
+    const gif = att({ id: 'gif', filename: 'party.gif', contentType: 'image/gif', url: 'https://files/party.gif', thumbnailURL: 'https://files/party-thumb.png', squareThumbnailURL: 'https://files/party-sq.png' });
+    batch = { map: mapOf(gif), isLoading: false };
+    await mount(<MessageAttachments ids={['gif']} {...base()} />);
+    const img = document.querySelector('[data-testid="message-image-thumb"] img') as HTMLImageElement;
+    expect(img.getAttribute('src')).toBe('https://files/party.gif');
+  });
+
   it('renders a single image without intrinsic dimensions (no width/height attrs)', async () => {
     const image = att({ id: 'img2', filename: 'pic.png', contentType: 'image/png', thumbnailURL: 'https://files/pic-thumb.png', squareThumbnailURL: 'https://files/pic-sq.png' });
     batch = { map: mapOf(image), isLoading: false };

@@ -60,11 +60,14 @@ describe('MarkdownEditor (CM6) — Phase 1 core', () => {
 
   it('Enter submits the markdown when submitOnEnter is set', async () => {
     const onSubmit = vi.fn();
-    const { ref } = await mount({ onSubmit, submitOnEnter: true });
+    const { ref, screen } = await mount({ onSubmit, submitOnEnter: true });
     ref.current!.setMarkdown('send me');
-    ref.current!.focus();
+    // Focus via a real click — programmatic ref.focus() doesn't reliably make
+    // webkit dispatch the subsequent key event, which flaked this test. Then
+    // poll the assertion so any keyboard→keymap latency is absorbed.
+    await userEvent.click(screen.getByLabelText('Message input'));
     await userEvent.keyboard('{Enter}');
-    expect(onSubmit).toHaveBeenCalledWith('send me');
+    await vi.waitFor(() => expect(onSubmit).toHaveBeenCalledWith('send me'));
   });
 
   it('reports active formats from the caret position', async () => {

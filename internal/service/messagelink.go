@@ -239,6 +239,13 @@ func (s *MessageLinkService) resolveImage(ctx context.Context, msg *model.Messag
 		if err != nil || att == nil || !att.IsImage() {
 			continue
 		}
+		// Prefer the thumbnail — the SAME smaller image the original message
+		// renders. Using the full-resolution URL made a shared image render
+		// much larger than in its channel (the thumbnail is naturally
+		// smaller). Fall back to the full image only when no thumbnail exists.
+		if att.ThumbnailURL != "" {
+			return att.ThumbnailURL, att.Width, att.Height
+		}
 		if att.URL != "" {
 			return att.URL, att.Width, att.Height
 		}

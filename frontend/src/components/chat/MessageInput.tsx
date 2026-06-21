@@ -624,11 +624,12 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
   }
 
   const renderToolbar = (placement: 'top' | 'bottom') => {
-    /* istanbul ignore next -- renderToolbar is only ever called with 'bottom'; the 'top' border class arm is dead. */
-    const borderClass = placement === 'top' ? 'border-b' : 'border-t';
+    // No divider between the message field and the formatting buttons — the
+    // spec composer has the toolbar sit flush under the input, not separated
+    // by an hr/border.
     return (
     <div
-      className={`flex items-center gap-0.5 px-2 py-1 ${borderClass}`}
+      className="flex items-center gap-0.5 px-2 py-1"
       role="toolbar"
       aria-label="Formatting"
       data-toolbar-placement={placement}

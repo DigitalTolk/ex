@@ -580,11 +580,11 @@ export function MessageItem({
           currentUserId={currentUserId}
           showInlineStatus={false}
           integrationOwnerName={integrationOwnerName}
-          // Match the continuation gutter width (w-12) so the body aligns
+          // Match the continuation gutter width (w-14) so the body aligns
           // identically on first-in-group and grouped rows; the avatar
           // hugs the right of the wider left column so it sits close to the
           // text, leaving the extra breathing room on the far left.
-          triggerClassName="inline-flex w-12 shrink-0 cursor-pointer items-center justify-end"
+          triggerClassName="inline-flex w-14 shrink-0 cursor-pointer items-center justify-end"
         >
           {message.webhookIconEmoji ? (
             <div
@@ -612,7 +612,7 @@ export function MessageItem({
         // fit a readable 12px (text-xs) EU-style "15:55" on one line —
         // wrapping would reserve a second line of height on every grouped
         // row (even while invisible at opacity-0), bloating the list.
-        <div className="w-12 shrink-0 select-none text-right" data-testid="group-time-gutter">
+        <div className="w-14 shrink-0 select-none text-right" data-testid="group-time-gutter">
           <time
             dateTime={message.createdAt}
             className={`whitespace-nowrap text-xs leading-5 tabular-nums text-muted-foreground transition-opacity ${
