@@ -97,6 +97,31 @@ describe('UnfurlCard browser behaviour', () => {
     expect(document.querySelector('[data-testid="unfurl-card-image"]')).not.toBeNull();
   });
 
+  it('renders file-type icon rows for non-image attachments (no paperclip emoji)', async () => {
+    useUnfurlMock.mockReturnValue({
+      data: {
+        url: 'https://ex.test/channel/incidents#msg-att',
+        kind: 'message',
+        siteName: 'ex.test',
+        authorName: 'Günter Grodotzki',
+        channelLabel: '~Incidents',
+        // No body/image — the card stands on the attachment rows alone,
+        // exercising hasContent()'s attachments branch too. One entry has
+        // no contentType to cover the `?? ''` icon fallback.
+        attachments: [
+          { filename: 'report.pdf', contentType: 'application/pdf' },
+          { filename: 'notes.txt' },
+        ],
+      },
+      isLoading: false,
+    });
+    const screen = await render(<UnfurlCard url="https://ex.test/channel/incidents#msg-att" messageId="m-att" isAuthor={false} />);
+    await expect.element(screen.getByTestId('unfurl-card-attachments')).toBeVisible();
+    await expect.element(screen.getByText('report.pdf')).toBeVisible();
+    await expect.element(screen.getByText('notes.txt')).toBeVisible();
+    expect(document.body.textContent).not.toContain('📎');
+  });
+
   it('renders the message card with an initials fallback and no image/body', async () => {
     useUnfurlMock.mockReturnValue({
       data: {

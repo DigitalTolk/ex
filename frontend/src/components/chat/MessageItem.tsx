@@ -580,6 +580,11 @@ export function MessageItem({
           currentUserId={currentUserId}
           showInlineStatus={false}
           integrationOwnerName={integrationOwnerName}
+          // Match the continuation gutter width (w-12) so the body aligns
+          // identically on first-in-group and grouped rows; the avatar
+          // hugs the right of the wider left column so it sits close to the
+          // text, leaving the extra breathing room on the far left.
+          triggerClassName="inline-flex w-12 shrink-0 cursor-pointer items-center justify-end"
         >
           {message.webhookIconEmoji ? (
             <div
@@ -600,15 +605,17 @@ export function MessageItem({
           )}
         </UserHoverCard>
       ) : (
-        // Compact continuation: keep the avatar gutter width so the body
-        // stays aligned, and reveal the message time there on hover. The
-        // time must stay on one line — wrapping inside the narrow gutter
-        // reserved a second line of height on every grouped row (even while
-        // invisible at opacity-0), bloating the message list vertically.
-        <div className="w-9 shrink-0 select-none text-center" data-testid="group-time-gutter">
+        // Compact continuation: the left column matches the avatar slot
+        // (w-12) so the body aligns with first-in-group rows, and reveals
+        // the message time there on hover. Right-aligned so the time sits
+        // under the right-hugging avatar, close to the text. Wide enough to
+        // fit a readable 12px (text-xs) EU-style "15:55" on one line —
+        // wrapping would reserve a second line of height on every grouped
+        // row (even while invisible at opacity-0), bloating the list.
+        <div className="w-12 shrink-0 select-none text-right" data-testid="group-time-gutter">
           <time
             dateTime={message.createdAt}
-            className={`whitespace-nowrap text-[10px] leading-5 tabular-nums text-muted-foreground transition-opacity ${
+            className={`whitespace-nowrap text-xs leading-5 tabular-nums text-muted-foreground transition-opacity ${
               hovered ? 'opacity-100' : 'opacity-0'
             }`}
           >

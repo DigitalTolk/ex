@@ -5,6 +5,7 @@ import {
   updateMessageInCache,
   markMessageDeletedInCache,
   removeMessageFromCache,
+  invalidateUnfurlsForMessage,
 } from './useMessages';
 import { queryKeys } from '@/lib/query-keys';
 import type { Message } from '@/types';
@@ -95,6 +96,30 @@ describe('message cache patch helpers (browser)', () => {
     seed(qc, [msg('m1')]);
     removeMessageFromCache(qc, 'ch-1', 'nope');
     expect(read(qc).map((m) => m.id)).toEqual(['m1']);
+  });
+
+  it('invalidateUnfurlsForMessage invalidates only unfurl previews whose URL references the message', () => {
+    const qc = new QueryClient();
+    const matchKey = queryKeys.unfurl('https://ex.test/channel/g#msg-target');
+    const otherKey = queryKeys.unfurl('https://ex.test/channel/g#msg-other');
+    const malformedKey = ['unfurl', 12345]; // non-string url → typeof guard arm
+    const nonUnfurlKey = queryKeys.channelMessages('ch-1', null);
+    qc.setQueryData(matchKey, { url: 'x' });
+    qc.setQueryData(otherKey, { url: 'y' });
+    qc.setQueryData(malformedKey, { url: 'z' });
+    qc.setQueryData(nonUnfurlKey, { pages: [] });
+
+    // Empty id → guarded no-op (nothing invalidated).
+    invalidateUnfurlsForMessage(qc, '');
+    expect(qc.getQueryState(matchKey)?.isInvalidated).toBe(false);
+
+    invalidateUnfurlsForMessage(qc, 'target');
+    expect(qc.getQueryState(matchKey)?.isInvalidated).toBe(true);
+    // A different message's preview, a non-string key, and a non-unfurl
+    // query are all left untouched.
+    expect(qc.getQueryState(otherKey)?.isInvalidated).toBe(false);
+    expect(qc.getQueryState(malformedKey)?.isInvalidated).toBe(false);
+    expect(qc.getQueryState(nonUnfurlKey)?.isInvalidated).toBe(false);
   });
 
   // patchBothScopes patches both the channel- and conversation-keyed caches;
