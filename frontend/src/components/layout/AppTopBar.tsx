@@ -198,7 +198,7 @@ export function AppTopBar({ onOpenChannels, channelsButtonHidden }: AppTopBarPro
         // Equal 1fr side columns keep the search field centred in the
         // viewport regardless of how wide the left (channels) or right
         // (account) controls are.
-        className="grid h-9 max-md:h-12 w-full shrink-0 grid-cols-[1fr_minmax(0,36rem)_1fr] items-center gap-2 border-b border-border bg-sidebar px-2 max-md:px-3 text-sidebar-foreground [-webkit-app-region:drag] [&_button,&_a,&_input]:[-webkit-app-region:no-drag]"
+        className="grid h-12 max-md:h-14 w-full shrink-0 grid-cols-[1fr_minmax(0,36rem)_1fr] items-center gap-2 border-b border-border bg-sidebar px-2 max-md:px-3 text-sidebar-foreground [-webkit-app-region:drag] [&_button,&_a,&_input]:[-webkit-app-region:no-drag]"
         data-testid="app-shell-header"
         data-app-chrome="true"
         // The global search field lives on this sidebar-coloured strip, so the
@@ -251,23 +251,23 @@ export function AppTopBar({ onOpenChannels, channelsButtonHidden }: AppTopBarPro
               </Avatar>
               <span
                 aria-hidden
-                className={`absolute bottom-0 right-0 h-2.5 w-2.5 rounded-full border-2 border-sidebar ${userOnline ? 'bg-emerald-500' : 'bg-muted-foreground'}`}
+                className={`absolute bottom-0 right-0 h-2.5 w-2.5 rounded-full border-2 border-sidebar ${userOnline ? 'bg-online' : 'bg-muted-foreground'}`}
               />
             </button>
           ) : (
             <DropdownMenu modal={false}>
               <DropdownMenuTrigger
-                className="relative inline-flex h-7 w-7 items-center justify-center rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+                className="relative inline-flex h-10 w-10 items-center justify-center rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
                 aria-label="Account menu"
                 data-testid="topbar-account"
               >
-                <Avatar className="h-6 w-6">
+                <Avatar className="h-10 w-10">
                   <AvatarImage src={user?.avatarURL} alt="" />
-                  <AvatarFallback className="bg-muted text-foreground text-[10px]">{initials}</AvatarFallback>
+                  <AvatarFallback className="bg-muted text-foreground text-xs">{initials}</AvatarFallback>
                 </Avatar>
                 <span
                   aria-hidden
-                  className={`absolute bottom-0 right-0 h-2 w-2 rounded-full border-2 border-sidebar ${userOnline ? 'bg-emerald-500' : 'bg-muted-foreground'}`}
+                  className={`absolute bottom-0 right-0 h-2.5 w-2.5 rounded-full border-2 border-sidebar ${userOnline ? 'bg-online' : 'bg-muted-foreground'}`}
                 />
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="w-56">

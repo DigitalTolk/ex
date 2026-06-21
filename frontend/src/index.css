@@ -109,6 +109,13 @@
    * only via `dark:disabled:bg-brand-disabled` on the default Button variant;
    * the light CTA disabled keeps the neutral opacity-50 convention. */
   --color-brand-disabled: #EB9EB5;
+  /* Online / presence green — the one non-monochrome, non-pink accent in the
+   * palette. Tokenised so presence dots/labels don't sprinkle raw
+   * `emerald-*` palette classes through the components. */
+  --color-online: #10B981;
+  /* Pinned-message affordance (amber accent bar + "Pinned" label). Tokenised
+   * so the pin marker stops using raw `amber-*` palette classes. */
+  --color-pinned: #D97706;
   /* Caution accent (amber) — for "notify everyone" group mentions etc. Matches
      the amber the pinned-message affordance already uses. */
   --color-caution: #FEF3C7;
@@ -306,6 +313,10 @@
     --color-brand: #DE5D83;
     --color-brand-hover: #C94E71;
     --color-brand-foreground: #FFFFFF;
+    /* Presence green, slightly brighter so it reads on the dark surfaces. */
+    --color-online: #34D399;
+    /* Pinned amber, brighter gold for the dark surface. */
+    --color-pinned: #FBBF24;
     /* Caution accent (amber), tuned for the dark surface. */
     --color-caution: #3B2F12;
     --color-caution-foreground: #FCD34D;

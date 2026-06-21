@@ -117,6 +117,7 @@ func newTestMessageLinkService() *MessageLinkService {
 			"ch-1#richtitle":  {ID: "richtitle", ParentID: "ch-1", WebhookUsername: "CI Bot", Body: "", MessageAttachments: []model.MessageAttachment{{Title: "Build #42 passed", Text: "all green", Fallback: "build ok"}}},
 			"ch-1#richtext":   {ID: "richtext", ParentID: "ch-1", WebhookUsername: "CI Bot", Body: "", MessageAttachments: []model.MessageAttachment{{Text: "Coverage at 99%", Fallback: "coverage"}}},
 			"ch-1#ghostatt":  {ID: "ghostatt", ParentID: "ch-1", AuthorID: "u-author", Body: "", AttachmentIDs: []string{"missing-att"}},
+			"ch-1#gifmsg":    {ID: "gifmsg", ParentID: "ch-1", AuthorID: "u-author", Body: "look", AttachmentIDs: []string{"att-gif"}},
 			"conv-1#m2": {ID: "m2", ParentID: "conv-1", AuthorID: "u-author", Body: "dm body"},
 			"grp-1#m3":  {ID: "m3", ParentID: "grp-1", WebhookUsername: "CI Bot", WebhookAvatarURL: "https://img/bot.png", Body: "build done"},
 			"ch-1#del":   {ID: "del", ParentID: "ch-1", Deleted: true},
@@ -130,6 +131,7 @@ func newTestMessageLinkService() *MessageLinkService {
 			"att-1":    {ID: "att-1", ContentType: "image/png", URL: "https://img/chart.png", ThumbnailURL: "https://img/chart-thumb.png", Width: 1920, Height: 1080},
 			"att-file": {ID: "att-file", ContentType: "application/pdf", Filename: "report.pdf"},
 			"att-img2": {ID: "att-img2", ContentType: "image/png", Filename: "photo.png", URL: "https://img/photo.png"},
+			"att-gif":  {ID: "att-gif", ContentType: "image/gif", Filename: "anim.gif", URL: "https://img/anim.gif", ThumbnailURL: "https://img/anim-thumb.png", Width: 200, Height: 200},
 		}},
 	)
 }
@@ -159,6 +161,19 @@ func TestMessageLink_Preview_Channel(t *testing.T) {
 	}
 	if !strings.HasPrefix(p.CreatedAt, "2026-06-15T10:00:00") {
 		t.Errorf("createdAt = %q", p.CreatedAt)
+	}
+}
+
+func TestMessageLink_Preview_GIFUsesAnimatedOriginal(t *testing.T) {
+	svc := newTestMessageLinkService()
+	p, internal := svc.Preview(context.Background(), "viewer", "https://ex.test/channel/general#msg-gifmsg")
+	if !internal || p == nil {
+		t.Fatalf("expected internal preview, got internal=%v p=%v", internal, p)
+	}
+	// A shared GIF must preview the animated original, not the static
+	// thumbnail frame — so it animates just like in its channel.
+	if p.Image != "https://img/anim.gif" {
+		t.Errorf("gif image = %q, want the animated original", p.Image)
 	}
 }
 

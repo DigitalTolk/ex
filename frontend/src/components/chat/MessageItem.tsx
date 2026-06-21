@@ -567,7 +567,7 @@ export function MessageItem({
         event.preventDefault();
       }}
       className={`relative flex items-start gap-3 rounded-md px-2 ${firstInGroup ? 'py-1.5' : 'py-0.5'} hover:bg-chat-hover ${
-        message.pinned ? 'border-l-2 border-amber-500 pl-2' : ''
+        message.pinned ? 'border-l-2 border-pinned pl-2' : ''
       } ${highlighted ? 'ring-1 ring-inset ring-amber-400/50 rounded-md' : ''} max-md:select-none max-md:touch-pan-y max-md:[-webkit-touch-callout:none] max-md:[-webkit-user-select:none]`}
     >
       {firstInGroup ? (
@@ -667,7 +667,7 @@ export function MessageItem({
           )}
           {message.pinned && (
             <span
-              className="inline-flex items-center gap-0.5 text-xs text-amber-600"
+              className="inline-flex items-center gap-0.5 text-xs text-pinned"
               aria-label="Pinned"
             >
               <Pin className="h-3 w-3" />

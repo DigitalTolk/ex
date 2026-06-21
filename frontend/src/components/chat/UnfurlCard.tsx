@@ -138,7 +138,12 @@ export function UnfurlCard({
             // card width. Falls back to the CSS caps when dimensions are
             // unknown (e.g. webhook images without intrinsic size).
             {...scaledPreviewImage(preview.imageWidth, preview.imageHeight)}
-            className="h-auto max-h-72 w-auto max-w-xs rounded border object-contain"
+            // self-start is critical: the card is a flex-col whose default
+            // align-items:stretch would otherwise blow the image up to the
+            // full max-w-xs width (320px) even for a small thumbnail. With
+            // self-start it renders at its natural size, exactly like the
+            // original message image.
+            className="h-auto max-h-72 w-auto max-w-xs self-start rounded border object-contain"
           />
         )}
         {preview.attachments && preview.attachments.length > 0 && (

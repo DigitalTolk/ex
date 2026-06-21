@@ -77,7 +77,7 @@ export const UserAvatar = memo(function UserAvatar({
             'absolute bottom-0 right-0 rounded-full ring-2',
             dotClassName,
             dotRingClassName,
-            online ? 'bg-emerald-500' : 'bg-muted-foreground',
+            online ? 'bg-online' : 'bg-muted-foreground',
           )}
           aria-label={online ? 'Online' : 'Offline'}
         />

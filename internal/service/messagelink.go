@@ -239,9 +239,15 @@ func (s *MessageLinkService) resolveImage(ctx context.Context, msg *model.Messag
 		if err != nil || att == nil || !att.IsImage() {
 			continue
 		}
-		// Prefer the thumbnail — the SAME smaller image the original message
-		// renders. Using the full-resolution URL made a shared image render
-		// much larger than in its channel (the thumbnail is naturally
+		// GIFs only animate in the full file — the thumbnail is a static
+		// frame. Use the original so the shared preview animates just like
+		// the message in its channel.
+		if att.ContentType == "image/gif" && att.URL != "" {
+			return att.URL, att.Width, att.Height
+		}
+		// Otherwise prefer the thumbnail — the SAME smaller image the original
+		// message renders. Using the full-resolution URL made a shared image
+		// render much larger than in its channel (the thumbnail is naturally
 		// smaller). Fall back to the full image only when no thumbnail exists.
 		if att.ThumbnailURL != "" {
 			return att.ThumbnailURL, att.Width, att.Height

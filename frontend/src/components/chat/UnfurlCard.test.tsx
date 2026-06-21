@@ -225,6 +225,8 @@ describe('UnfurlCard', () => {
       const img = screen.getByTestId('unfurl-card-image');
       expect(img.getAttribute('width')).toBe('320');
       expect(img.getAttribute('height')).toBe('180');
+      // self-start stops the flex-col from stretching it to the card width.
+      expect(img.className).toContain('self-start');
     });
 
     it('renders an attachments-only message preview (no author/body/image)', () => {

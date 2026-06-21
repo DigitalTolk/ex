@@ -63,10 +63,10 @@ describe('AppTopBar (mobile + native)', () => {
     if (window.innerWidth > 767) return;
     mockOnline = new Set<string>(['u-1']);
     const screen = await renderTopBar();
-    // The mobile account button shows an emerald online dot.
+    // The mobile account button shows an online presence dot.
     const account = screen.getByTestId('topbar-account').element() as HTMLElement;
     const dot = account.querySelector('span[aria-hidden]') as HTMLElement;
-    expect(dot.className).toContain('bg-emerald-500');
+    expect(dot.className).toContain('bg-online');
     await screen.getByTestId('topbar-account').click();
     await expect.element(screen.getByTestId('mobile-account-sheet')).toBeVisible();
     await expect.element(screen.getByText('Alice Wonder')).toBeVisible();

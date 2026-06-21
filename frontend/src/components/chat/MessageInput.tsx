@@ -736,7 +736,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
       className={
         variant === 'inline'
           ? 'p-0'
-          : `border-t bg-background p-3 max-md:pt-1.5 ${
+          : `bg-background p-3 max-md:pt-1.5 ${
               // env(safe-area-inset-bottom) on iOS does not reset to 0 when
               // the keyboard is up, leaving a wasted ~34px gap between the
               // composer and the keyboard. Drop the inset while focused
@@ -772,7 +772,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
           Up to {MAX_ATTACHMENTS_PER_MESSAGE} attachments per message — remove a few to send.
         </div>
       )}
-      <div className="rounded-lg border bg-typing-field focus-within:ring-1 focus-within:ring-ring max-md:overflow-hidden max-md:rounded-[1.75rem]" data-message-composer>
+      <div className="rounded-2xl border md:border-2 border-border bg-typing-field max-md:overflow-hidden max-md:rounded-[1.75rem]" data-message-composer>
         {drafts.length > 0 && (
           <div className="flex flex-wrap gap-1.5 border-b p-2" aria-label="Draft attachments">
             {drafts.map((d) => (

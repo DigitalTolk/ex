@@ -96,18 +96,18 @@ describe('AppTopBar', () => {
     mockOnline = new Set<string>(['u-1']);
     mockUserStatus = { emoji: ':rocket:', text: 'Shipping' };
     renderTopBar();
-    // The account trigger renders with the online (emerald) presence ring and
+    // The account trigger renders with the online presence ring and
     // the user's status keyed in — exercising both the online and userStatus
     // branches without throwing.
     expect(screen.getByTestId('topbar-account')).toBeInTheDocument();
   });
 
-  it('shows an emerald presence dot on the mobile account button when online', () => {
+  it('shows an online presence dot on the mobile account button when online', () => {
     mockIsMobile = true;
     mockOnline = new Set<string>(['u-1']);
     renderTopBar();
     const dot = screen.getByTestId('topbar-account').querySelector('span[aria-hidden]')!;
-    expect(dot.className).toContain('bg-emerald-500');
+    expect(dot.className).toContain('bg-online');
   });
 
   it('shows a muted presence dot on the mobile account button when offline', () => {
