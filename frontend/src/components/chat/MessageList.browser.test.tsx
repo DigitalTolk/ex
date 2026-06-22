@@ -155,8 +155,9 @@ describe('MessageList browser behavior', () => {
       // Longer window than the other assertions here: the re-stick is a chain of
       // image-load → ResizeObserver → Virtuoso followOutput scroll, which under
       // full-suite CPU load on the slowest (webkit) project can take many
-      // seconds to settle. It sticks reliably; it just needs the headroom.
-    }, { timeout: 20000 });
+      // seconds to settle. It sticks reliably; it just needs the headroom (kept
+      // comfortably under the 45s testTimeout).
+    }, { timeout: 35000 });
 
     const thumb = laidOutElement('[data-testid="message-image-thumb"]');
     expect(thumb).not.toBeNull();
