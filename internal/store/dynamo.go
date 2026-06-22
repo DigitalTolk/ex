@@ -36,6 +36,7 @@ type DBConfig struct {
 // inject a fault-wrapping client to exercise the SDK-error branches that a live
 // DynamoDB Local instance never returns on the happy path.
 type DynamoAPI interface {
+	BatchGetItem(ctx context.Context, params *dynamodb.BatchGetItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.BatchGetItemOutput, error)
 	BatchWriteItem(ctx context.Context, params *dynamodb.BatchWriteItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.BatchWriteItemOutput, error)
 	CreateTable(ctx context.Context, params *dynamodb.CreateTableInput, optFns ...func(*dynamodb.Options)) (*dynamodb.CreateTableOutput, error)
 	DeleteItem(ctx context.Context, params *dynamodb.DeleteItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.DeleteItemOutput, error)
@@ -235,6 +236,12 @@ func threadFollowSK(parentID, threadRootID string) string {
 func threadFollowGSI1PK(parentID, threadRootID string) string {
 	return "THREADFOLLOW#" + parentID + "#" + threadRootID
 }
+
+// threadGSI1PK indexes a thread's replies under GSI1 so the whole thread can be
+// fetched with one Query instead of scanning the parent's message partition.
+// threadRootID is a globally-unique message ULID, so it alone identifies the
+// thread. Only reply rows (ParentMessageID != "") carry this key.
+func threadGSI1PK(threadRootID string) string { return "THREAD#" + threadRootID }
 func userStateSK(kind, targetID string) string { return "STATE#" + kind + "#" + targetID }
 func webhookPK(id string) string               { return "WEBHOOK#" + id }
 func webhookSK() string                        { return "META" }

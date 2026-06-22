@@ -97,7 +97,7 @@ function formatTime(dateStr: string): string {
   });
 }
 
-export function MessageItem({
+function MessageItemImpl({
   message,
   firstInGroup = true,
   authorName,
@@ -938,6 +938,13 @@ export function MessageItem({
     </div>
   );
 }
+
+// Memoised so a re-render of a parent that renders many rows (notably
+// ThreadPanel, which maps MessageItem directly without an intermediate
+// memoised row) only re-renders the rows whose props actually changed. In the
+// main MessageList each row already sits behind a memoised MessageRow; this
+// guards the other call sites.
+export const MessageItem = memo(MessageItemImpl);
 
 // MessageBody is a separately-memoized wrapper around renderMarkdown
 // so that scroll-induced re-renders of MessageItem do not call into

@@ -87,6 +87,9 @@ func (handlerMembershipStore) ListMembers(context.Context, string) ([]*model.Cha
 func (handlerMembershipStore) ListUserChannels(context.Context, string) ([]*model.UserChannel, error) {
 	return nil, nil
 }
+func (handlerMembershipStore) MutedUserIDs(context.Context, string, []string) (map[string]bool, error) {
+	return map[string]bool{}, nil
+}
 func (handlerMembershipStore) SetMute(context.Context, string, string, bool) error     { return nil }
 func (handlerMembershipStore) SetFavorite(context.Context, string, string, bool) error { return nil }
 func (handlerMembershipStore) SetCategory(context.Context, string, string, string, *int) error {
@@ -131,6 +134,9 @@ func (handlerMessageStore) UpdateMessage(context.Context, *model.Message) error 
 func (handlerMessageStore) DeleteMessage(context.Context, string, string) error { return nil }
 func (handlerMessageStore) ListMessages(context.Context, string, string, int) ([]*model.Message, bool, error) {
 	return nil, false, nil
+}
+func (handlerMessageStore) ListThreadReplies(context.Context, string) ([]*model.Message, error) {
+	return nil, nil
 }
 func (handlerMessageStore) ListMessagesAfter(context.Context, string, string, int) ([]*model.Message, bool, error) {
 	return nil, false, nil

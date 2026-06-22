@@ -1801,6 +1801,53 @@ func TestMessageService_ListThreadMessages(t *testing.T) {
 	}
 }
 
+// An un-backfilled thread (GSI returns nothing but the root records replies)
+// falls back to the parent scan so historical threads stay complete.
+func TestMessageService_ListThreadMessages_FallbackScan(t *testing.T) {
+	svc, messages, memberships, _, _ := setupMessageService()
+	ctx := context.Background()
+	memberships.memberships["ch-fb#user-1"] = &model.ChannelMembership{
+		ChannelID: "ch-fb", UserID: "user-1", Role: model.ChannelRoleMember,
+	}
+	messages.messages["ch-fb#01-root"] = &model.Message{
+		ID: "01-root", ParentID: "ch-fb", AuthorID: "user-1", Body: "root", ReplyCount: 2,
+	}
+	messages.messages["ch-fb#02-r1"] = &model.Message{
+		ID: "02-r1", ParentID: "ch-fb", AuthorID: "user-1", Body: "r1", ParentMessageID: "01-root",
+	}
+	messages.messages["ch-fb#03-r2"] = &model.Message{
+		ID: "03-r2", ParentID: "ch-fb", AuthorID: "user-1", Body: "r2", ParentMessageID: "01-root",
+	}
+	// Index empty (pre-migration) → service must scan to find the replies.
+	messages.noThreadIndex = true
+
+	thread, err := svc.ListThreadMessages(ctx, "user-1", "ch-fb", ParentChannel, "01-root")
+	if err != nil {
+		t.Fatalf("ListThreadMessages: %v", err)
+	}
+	if len(thread) != 3 {
+		t.Fatalf("len(thread) = %d, want 3 via scan fallback", len(thread))
+	}
+
+	// And the fallback scan propagates its errors.
+	messages.listErr = errors.New("scan boom")
+	if _, err := svc.ListThreadMessages(ctx, "user-1", "ch-fb", ParentChannel, "01-root"); err == nil {
+		t.Fatal("expected scan-fallback error")
+	}
+}
+
+// A non-NotFound error fetching the root surfaces as an error.
+func TestMessageService_ListThreadMessages_RootGetError(t *testing.T) {
+	svc, messages, memberships, _, _ := setupMessageService()
+	memberships.memberships["ch-rge#user-1"] = &model.ChannelMembership{
+		ChannelID: "ch-rge", UserID: "user-1", Role: model.ChannelRoleMember,
+	}
+	messages.getErr = errors.New("get boom")
+	if _, err := svc.ListThreadMessages(context.Background(), "user-1", "ch-rge", ParentChannel, "root"); err == nil {
+		t.Fatal("expected root-get error")
+	}
+}
+
 func TestMessageService_ListThreadMessages_Empty(t *testing.T) {
 	svc, _, memberships, _, _ := setupMessageService()
 	ctx := context.Background()

@@ -207,6 +207,9 @@ func TestConversationAndMessageStoreAdapterDelegates(t *testing.T) {
 	if msg.ID != "root-1" || msg.ReplyCount != 1 {
 		t.Fatalf("message = %+v", msg)
 	}
+	if _, err := msgAdapter.ListThreadReplies(ctx, "root-1"); err != nil {
+		t.Fatalf("ListThreadReplies: %v", err)
+	}
 }
 
 type adapterConversationBacking struct {
@@ -253,6 +256,9 @@ func (b *adapterMessageBacking) ListAround(context.Context, string, string, int,
 }
 func (b *adapterMessageBacking) List(context.Context, string, string, int) ([]*model.Message, bool, error) {
 	return nil, false, nil
+}
+func (b *adapterMessageBacking) ListThreadReplies(context.Context, string) ([]*model.Message, error) {
+	return nil, nil
 }
 func (b *adapterMessageBacking) IncrementReplyMetadata(_ context.Context, parentID, msgID string, _ time.Time, _ string) (*model.Message, error) {
 	return &model.Message{ID: msgID, ParentID: parentID, ReplyCount: 1}, nil

@@ -245,25 +245,41 @@ func (s *ConversationStoreImpl) Touch(ctx context.Context, convID string, partic
 		return fmt.Errorf("store: build touch conversation expression: %w", err)
 	}
 
-	keys := make([]map[string]types.AttributeValue, 0, 1+len(participantIDs))
-	keys = append(keys, compositeKey(convPK(convID), metaSK()))
-	for _, uid := range participantIDs {
-		keys = append(keys, compositeKey(userPK(uid), convSK(convID)))
-	}
-	for _, key := range keys {
-		if _, err := s.Client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+	// One TransactWriteItems instead of a sequential UpdateItem per row: a
+	// group-conversation send previously cost 1+N serial round-trips (META +
+	// each participant's user-side row). The META row keeps the existence
+	// guard so a missing conversation still surfaces as ErrNotFound. Group
+	// sizes are far below the 100-item transaction cap.
+	txItems := make([]types.TransactWriteItem, 0, 1+len(participantIDs))
+	txItems = append(txItems, types.TransactWriteItem{
+		Update: &types.Update{
 			TableName:                 aws.String(s.Table),
-			Key:                       key,
+			Key:                       compositeKey(convPK(convID), metaSK()),
 			UpdateExpression:          expr.Update(),
 			ExpressionAttributeNames:  expr.Names(),
 			ExpressionAttributeValues: expr.Values(),
 			ConditionExpression:       aws.String("attribute_exists(PK)"),
-		}); err != nil {
-			if isConditionCheckFailed(err) {
-				return ErrNotFound
-			}
-			return fmt.Errorf("store: touch conversation: %w", err)
+		},
+	})
+	for _, uid := range participantIDs {
+		txItems = append(txItems, types.TransactWriteItem{
+			Update: &types.Update{
+				TableName:                 aws.String(s.Table),
+				Key:                       compositeKey(userPK(uid), convSK(convID)),
+				UpdateExpression:          expr.Update(),
+				ExpressionAttributeNames:  expr.Names(),
+				ExpressionAttributeValues: expr.Values(),
+			},
+		})
+	}
+
+	if _, err := s.Client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
+		TransactItems: txItems,
+	}); err != nil {
+		if isTransactionCancelledWithCondition(err) {
+			return ErrNotFound
 		}
+		return fmt.Errorf("store: touch conversation: %w", err)
 	}
 	return nil
 }

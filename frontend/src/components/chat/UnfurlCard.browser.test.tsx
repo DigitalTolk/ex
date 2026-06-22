@@ -142,6 +142,27 @@ describe('UnfurlCard browser behaviour', () => {
     expect(img.getAttribute('height')).toBe('180');
   });
 
+  it('drops an unsafe message-card href and unsafe image src', async () => {
+    useUnfurlMock.mockReturnValue({
+      data: {
+        url: 'javascript:alert(1)',
+        kind: 'message',
+        siteName: 'ex.test',
+        authorName: 'Günter Grodotzki',
+        image: 'javascript:alert(1)',
+        imageWidth: 1920,
+        imageHeight: 1080,
+      },
+      isLoading: false,
+    });
+    const screen = await render(<UnfurlCard url="https://ex.test/channel/incidents#msg-x" messageId="m-x" isAuthor={false} />);
+    // Card renders (author is shown) but the stretched link has no href and
+    // the javascript: image is never mounted.
+    await expect.element(screen.getByText('Günter Grodotzki')).toBeVisible();
+    expect(document.querySelector('[data-testid="unfurl-message-card"]')?.getAttribute('href')).toBeNull();
+    expect(document.querySelector('[data-testid="unfurl-card-image"]')).toBeNull();
+  });
+
   it('renders the message card with an initials fallback and no image/body', async () => {
     useUnfurlMock.mockReturnValue({
       data: {

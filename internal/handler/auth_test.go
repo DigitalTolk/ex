@@ -156,6 +156,12 @@ func (m *mockMembershipStore) ListUserChannels(_ context.Context, _ string) ([]*
 	}
 	return nil, nil
 }
+func (m *mockMembershipStore) MutedUserIDs(_ context.Context, _ string, _ []string) (map[string]bool, error) {
+	if m.listUserChannelsErr != nil {
+		return nil, m.listUserChannelsErr
+	}
+	return map[string]bool{}, nil
+}
 func (m *mockMembershipStore) SetMute(_ context.Context, _, _ string, _ bool) error {
 	return nil
 }

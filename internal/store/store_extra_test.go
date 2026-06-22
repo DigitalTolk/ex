@@ -884,6 +884,49 @@ func TestMembershipStore_SetUserChannelMute(t *testing.T) {
 	}
 }
 
+func TestMembershipStore_MutedUserIDs(t *testing.T) {
+	db := setupDynamoDB(t)
+	ms := NewMembershipStore(db)
+	cs := NewChannelStore(db)
+	ctx := context.Background()
+
+	ch := makeChannel("ch-mm", "mm", "mm-slug", model.ChannelTypePublic)
+	if err := cs.Create(ctx, ch); err != nil {
+		t.Fatalf("Create channel: %v", err)
+	}
+	for _, uid := range []string{"u-mm-a", "u-mm-b"} {
+		member := &model.ChannelMembership{ChannelID: "ch-mm", UserID: uid, Role: model.ChannelRoleMember, JoinedAt: time.Now()}
+		userChan := &model.UserChannel{UserID: uid, ChannelID: "ch-mm", Role: model.ChannelRoleMember, JoinedAt: time.Now()}
+		if err := ms.AddChannelMember(ctx, ch, member, userChan); err != nil {
+			t.Fatalf("AddChannelMember %s: %v", uid, err)
+		}
+	}
+	// Only u-mm-a mutes the channel.
+	if err := ms.SetUserChannelMute(ctx, "ch-mm", "u-mm-a", true); err != nil {
+		t.Fatalf("SetUserChannelMute: %v", err)
+	}
+
+	muted, err := ms.MutedUserIDs(ctx, "ch-mm", []string{"u-mm-a", "u-mm-b", "u-mm-absent"})
+	if err != nil {
+		t.Fatalf("MutedUserIDs: %v", err)
+	}
+	if !muted["u-mm-a"] {
+		t.Error("expected u-mm-a muted")
+	}
+	if muted["u-mm-b"] {
+		t.Error("u-mm-b did not mute the channel")
+	}
+	if muted["u-mm-absent"] {
+		t.Error("a user with no membership row is never muted")
+	}
+
+	// Error path: a failing BatchGetItem surfaces the error.
+	fs := NewMembershipStore(withFault(db, func(f *faultClient) { f.failBatchGetItem = true }))
+	if _, err := fs.MutedUserIDs(ctx, "ch-mm", []string{"u-mm-a"}); !errors.Is(err, errInjected) {
+		t.Fatalf("MutedUserIDs fault: want errInjected, got %v", err)
+	}
+}
+
 func TestMembershipStore_SetUserChannelMute_NotFound(t *testing.T) {
 	db := setupDynamoDB(t)
 	ms := NewMembershipStore(db)

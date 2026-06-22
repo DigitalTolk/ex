@@ -6,6 +6,19 @@ import { useEmojiMap } from '@/hooks/useEmoji';
 import { renderMarkdown } from '@/lib/markdown';
 import { formatRelative, getInitials } from '@/lib/format';
 import { iconForAttachment, scaleToThumbnail } from '@/lib/file-helpers';
+import { isSafeUrl } from '@/lib/url-safety';
+
+// Defense-in-depth for server-supplied preview URLs. The card href and image
+// srcs come from the unfurl response; reject any non-http(s) scheme so a
+// javascript:/data:/file: URL can never reach an <a href> or <img src>. (The
+// unfurl fetcher already restricts to http/https, so this is belt-and-braces.)
+function safeHref(url?: string): string | undefined {
+  return url && isSafeUrl(url) ? url : undefined;
+}
+function safeImg(url?: string): string | undefined {
+  if (!url || !isSafeUrl(url) || /^\s*mailto:/i.test(url)) return undefined;
+  return url;
+}
 
 interface UnfurlCardProps {
   url: string;
@@ -77,7 +90,7 @@ export function UnfurlCard({
       >
         {/* Stretched link covering the whole card → navigates to the message. */}
         <a
-          href={preview.url}
+          href={safeHref(preview.url)}
           target="_blank"
           rel="noopener noreferrer"
           data-testid="unfurl-message-card"
@@ -85,9 +98,9 @@ export function UnfurlCard({
           className="absolute inset-0 z-0"
         />
         <div className="flex items-center gap-2">
-          {preview.authorAvatarURL ? (
+          {safeImg(preview.authorAvatarURL) ? (
             <img
-              src={preview.authorAvatarURL}
+              src={safeImg(preview.authorAvatarURL)}
               alt=""
               width={20}
               height={20}
@@ -116,9 +129,9 @@ export function UnfurlCard({
             {renderMarkdown(preview.body, { emojiMap })}
           </div>
         )}
-        {preview.image && !imageBroken && (
+        {safeImg(preview.image) && !imageBroken && (
           <img
-            src={preview.image}
+            src={safeImg(preview.image)}
             alt=""
             loading="lazy"
             onError={() => setImageBroken(true)}
@@ -160,7 +173,7 @@ export function UnfurlCard({
   return (
     <div className="relative mt-1.5 max-w-md" data-testid="unfurl-card">
       <a
-        href={preview.url}
+        href={safeHref(preview.url)}
         target="_blank"
         rel="noopener noreferrer"
         // Per the design spec the web (OpenGraph) card is bg/base with a
@@ -168,9 +181,9 @@ export function UnfurlCard({
         // GitHub card in the reference screenshots.
         className="flex gap-3 overflow-hidden rounded-md border border-border bg-background p-2"
       >
-        {preview.image && !imageBroken && (
+        {safeImg(preview.image) && !imageBroken && (
           <img
-            src={preview.image}
+            src={safeImg(preview.image)}
             alt=""
             width={64}
             height={64}
@@ -180,7 +193,7 @@ export function UnfurlCard({
             className="h-16 w-16 shrink-0 rounded object-cover"
           />
         )}
-        {preview.image && imageBroken && (
+        {safeImg(preview.image) && imageBroken && (
           <div
             data-testid="unfurl-card-image-placeholder"
             aria-hidden="true"

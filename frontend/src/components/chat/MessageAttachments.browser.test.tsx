@@ -82,6 +82,14 @@ describe('MessageAttachments browser', () => {
     expect(img.getAttribute('src')).toBe('https://files/party.gif');
   });
 
+  it('falls back to the thumbnail for a GIF that has no original url', async () => {
+    const gif = att({ id: 'gif2', filename: 'nourl.gif', contentType: 'image/gif', url: undefined, thumbnailURL: 'https://files/nourl-thumb.png', squareThumbnailURL: 'https://files/nourl-sq.png' });
+    batch = { map: mapOf(gif), isLoading: false };
+    await mount(<MessageAttachments ids={['gif2']} {...base()} />);
+    const img = document.querySelector('[data-testid="message-image-thumb"] img') as HTMLImageElement;
+    expect(img.getAttribute('src')).toBe('https://files/nourl-thumb.png');
+  });
+
   it('renders a single image without intrinsic dimensions (no width/height attrs)', async () => {
     const image = att({ id: 'img2', filename: 'pic.png', contentType: 'image/png', thumbnailURL: 'https://files/pic-thumb.png', squareThumbnailURL: 'https://files/pic-sq.png' });
     batch = { map: mapOf(image), isLoading: false };

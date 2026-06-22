@@ -9,6 +9,7 @@ import {
   EMOJI_SHORTCODE_TONED_RE,
 } from './emoji-shortcodes';
 import { USER_MENTION_RE, GROUP_MENTION_RE, CHANNEL_MENTION_RE } from './mention-syntax';
+import { isSafeUrl } from './url-safety';
 import type { HastNode } from '@/types';
 import { renderHastTree } from './markdown-hast';
 
@@ -278,18 +279,24 @@ function findInline(src: string, opts: RenderOpts | undefined, keyPrefix: string
     return <span key={`${keyPrefix}-media-literal-${m.index}`}>{m[0]}</span>;
   });
 
-  // link: [text](url)
-  tryMatch(/\[([^\]]+)\]\(([^)\s]+)\)/, (m) => (
-    <a
-      key={`${keyPrefix}-a-${m.index}`}
-      href={m[2]}
-      target="_blank"
-      rel="noopener noreferrer"
-      className="text-link transition-colors hover:text-link/80"
-    >
-      {m[1]}
-    </a>
-  ));
+  // link: [text](url) — reject unsafe schemes (javascript:, data:, …) so this
+  // fallback path matches the server HAST renderer's isSafeUrl guard; an unsafe
+  // link renders as its literal source text instead of a clickable href.
+  tryMatch(/\[([^\]]+)\]\(([^)\s]+)\)/, (m) =>
+    isSafeUrl(m[2]) ? (
+      <a
+        key={`${keyPrefix}-a-${m.index}`}
+        href={m[2]}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="text-link transition-colors hover:text-link/80"
+      >
+        {m[1]}
+      </a>
+    ) : (
+      <span key={`${keyPrefix}-a-${m.index}`}>{m[0]}</span>
+    ),
+  );
 
   // bold: **text**
   tryMatch(/\*\*([^*]+)\*\*/, (m) => (

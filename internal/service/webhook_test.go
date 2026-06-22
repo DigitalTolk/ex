@@ -433,6 +433,9 @@ func TestIncomingWebhookService_ChannelOverridesAndSanitization(t *testing.T) {
 			Pretext:    "<!all>",
 			Text:       "<https://example.com/doc|doc>",
 			AuthorIcon: "ftp://bad.example/icon.png",
+			AuthorLink: "javascript:alert(1)",
+			Title:      "Title",
+			TitleLink:  "https://example.com/ok",
 			Fields:     []model.MessageAttachmentField{{Title: "Link", Value: "<https://example.com/field>"}},
 			Footer:     strings.Repeat("x", 305),
 		}},
@@ -449,6 +452,10 @@ func TestIncomingWebhookService_ChannelOverridesAndSanitization(t *testing.T) {
 	}
 	if att.AuthorIcon != "" || len(att.Footer) != 303 {
 		t.Fatalf("sanitized attachment = %#v", att)
+	}
+	// The javascript: author link is dropped; the http title link survives.
+	if att.AuthorLink != "" || att.TitleLink != "https://example.com/ok" {
+		t.Fatalf("sanitized links author=%q title=%q", att.AuthorLink, att.TitleLink)
 	}
 
 	if err := svc.Execute(ctx, "wh", IncomingWebhookPayload{Text: "hello", Channel: "#archived"}); err == nil {
@@ -570,6 +577,20 @@ func TestIncomingWebhookService_PrivateChannelOverrideMembership(t *testing.T) {
 	svc.SetMembershipResolver(fakeWebhookMemberships{members: map[string]bool{"ch-priv|creator-1": true}})
 	if ch, err := svc.targetChannel(ctx, wh, "priv"); err != nil || ch.ID != priv.ID {
 		t.Fatalf("private override member = %#v %v", ch, err)
+	}
+
+	// A webhook LOCKED to a private channel must also re-check membership on
+	// its default channel (no override), not just on overrides — otherwise a
+	// creator removed from the channel keeps posting.
+	locked := &model.IncomingWebhook{ID: "wh2", ChannelID: priv.ID, LockToChannel: true, CreatedBy: "creator-1", CreatedAt: time.Now()}
+	lockedSvc := NewIncomingWebhookService(&fakeWebhookStore{items: map[string]*model.IncomingWebhook{"wh2": locked}}, channels, msgSvc, fakeWebhookImageProxy{}, "")
+	lockedSvc.SetMembershipResolver(fakeWebhookMemberships{})
+	if _, err := lockedSvc.targetChannel(ctx, locked, ""); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("locked private default non-member err = %v", err)
+	}
+	lockedSvc.SetMembershipResolver(fakeWebhookMemberships{members: map[string]bool{"ch-priv|creator-1": true}})
+	if ch, err := lockedSvc.targetChannel(ctx, locked, ""); err != nil || ch.ID != priv.ID {
+		t.Fatalf("locked private default member = %#v %v", ch, err)
 	}
 }
 

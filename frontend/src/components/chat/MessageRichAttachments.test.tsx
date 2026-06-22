@@ -62,4 +62,30 @@ describe('MessageRichAttachments', () => {
     }
     expect(onContentHeightChange).toHaveBeenCalledTimes(4);
   });
+
+  it('strips unsafe-scheme links and image srcs', () => {
+    render(
+      <MessageRichAttachments
+        attachments={[
+          {
+            author_name: 'Evil Bot',
+            author_icon: 'javascript:alert(1)',
+            author_link: 'javascript:alert(1)',
+            title: 'Evil title',
+            title_link: 'data:text/html,<script>alert(1)</script>',
+            thumb_url: 'javascript:alert(1)',
+            image_url: 'data:text/html,evil',
+            footer: 'ci',
+            footer_icon: 'vbscript:msgbox(1)',
+          },
+        ]}
+      />,
+    );
+
+    // Author name + title still render as plain text, but without an href.
+    expect(screen.getByText('Evil Bot').closest('a')).toBeNull();
+    expect(screen.getByText('Evil title').closest('a')).toBeNull();
+    // No <img> survives the unsafe scheme filter.
+    expect(document.querySelectorAll('img')).toHaveLength(0);
+  });
 });

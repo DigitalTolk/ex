@@ -167,8 +167,12 @@ func (s *MessageLinkService) Preview(ctx context.Context, viewerID, rawURL strin
 		CreatedAt:    msg.CreatedAt.UTC().Format(time.RFC3339),
 	}
 	s.resolveAuthor(ctx, msg, preview)
-	preview.Image, preview.ImageWidth, preview.ImageHeight = s.resolveImage(ctx, msg)
-	preview.Attachments = s.resolveAttachmentList(ctx, msg)
+	// Fetch each uploaded attachment once and share the slice between the image
+	// picker and the file-list builder — previously each looped msg.AttachmentIDs
+	// with its own Get, costing up to 2×N presigned-URL resolutions per preview.
+	atts := s.loadAttachments(ctx, msg)
+	preview.Image, preview.ImageWidth, preview.ImageHeight = s.resolveImage(msg, atts)
+	preview.Attachments = s.resolveAttachmentList(atts)
 	return preview, true
 }
 
@@ -177,14 +181,29 @@ func (s *MessageLinkService) Preview(ctx context.Context, viewerID, rawURL strin
 // file-type icons it uses in the message list. Image files are surfaced as
 // the card image via resolveImage and intentionally skipped here to avoid
 // listing them twice.
-func (s *MessageLinkService) resolveAttachmentList(ctx context.Context, msg *model.Message) []UnfurlAttachment {
+// loadAttachments fetches every uploaded attachment referenced by the message
+// once (in order), skipping any that error or are missing. Both resolveImage
+// and resolveAttachmentList read from this slice so a preview costs one Get per
+// attachment rather than one per resolver.
+func (s *MessageLinkService) loadAttachments(ctx context.Context, msg *model.Message) []*model.Attachment {
 	if s.attachments == nil || len(msg.AttachmentIDs) == 0 {
 		return nil
 	}
-	out := make([]UnfurlAttachment, 0, len(msg.AttachmentIDs))
+	out := make([]*model.Attachment, 0, len(msg.AttachmentIDs))
 	for _, id := range msg.AttachmentIDs {
 		att, err := s.attachments.Get(ctx, id)
-		if err != nil || att == nil || att.IsImage() {
+		if err != nil || att == nil {
+			continue
+		}
+		out = append(out, att)
+	}
+	return out
+}
+
+func (s *MessageLinkService) resolveAttachmentList(atts []*model.Attachment) []UnfurlAttachment {
+	out := make([]UnfurlAttachment, 0, len(atts))
+	for _, att := range atts {
+		if att.IsImage() {
 			continue
 		}
 		out = append(out, UnfurlAttachment{Filename: att.Filename, ContentType: att.ContentType})
@@ -225,18 +244,14 @@ func (s *MessageLinkService) resolveAuthor(ctx context.Context, msg *model.Messa
 // with its intrinsic pixel dimensions (0 when unknown) so the client can
 // render the preview at the SAME size the original message shows it, instead
 // of blowing it up to the card's max width.
-func (s *MessageLinkService) resolveImage(ctx context.Context, msg *model.Message) (url string, width, height int) {
+func (s *MessageLinkService) resolveImage(msg *model.Message, atts []*model.Attachment) (url string, width, height int) {
 	for _, a := range msg.MessageAttachments {
 		if a.ImageURL != "" {
 			return a.ImageURL, a.ImageWidth, a.ImageHeight
 		}
 	}
-	if s.attachments == nil {
-		return "", 0, 0
-	}
-	for _, id := range msg.AttachmentIDs {
-		att, err := s.attachments.Get(ctx, id)
-		if err != nil || att == nil || !att.IsImage() {
+	for _, att := range atts {
+		if !att.IsImage() {
 			continue
 		}
 		// GIFs only animate in the full file — the thumbnail is a static
