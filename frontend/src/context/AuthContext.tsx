@@ -3,6 +3,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useMemo,
   useState,
   type ReactNode,
 } from 'react';
@@ -82,13 +83,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser((current) => (current ? { ...current, ...patch } : current));
   }, []);
 
-  return (
-    <AuthContext.Provider
-      value={{ user, isAuthenticated, isLoading, login, logout, setAuth, patchUser }}
-    >
-      {children}
-    </AuthContext.Provider>
+  // Memoize so the context value only changes when auth state does — the
+  // callbacks are already stable, so consumers don't re-render on every
+  // unrelated parent render.
+  const value = useMemo(
+    () => ({ user, isAuthenticated, isLoading, login, logout, setAuth, patchUser }),
+    [user, isAuthenticated, isLoading, login, logout, setAuth, patchUser],
   );
+
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
 export function useAuth(): AuthState {

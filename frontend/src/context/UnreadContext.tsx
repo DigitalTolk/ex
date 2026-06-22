@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState, useCallback, useRef, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useMemo, useState, useCallback, useRef, type ReactNode } from 'react';
 import { readJSON, writeJSON } from '@/lib/storage';
 import { apiFetch } from '@/lib/api';
 import { THREAD_SEEN_CHANGED_EVENT } from '@/hooks/useThreads';
@@ -179,8 +179,12 @@ export function UnreadProvider({ children }: { children: ReactNode }) {
     return () => window.removeEventListener(THREAD_SEEN_CHANGED_EVENT, handleThreadSeen);
   }, []);
 
-  return (
-    <UnreadContext.Provider value={{
+  // The callbacks are all stable (useCallback), so memoizing here means the
+  // context value's identity only changes when unread/hidden state actually
+  // changes — not on every unrelated re-render — sparing all sidebar/nav
+  // consumers a re-render per parent tick.
+  const value = useMemo(
+    () => ({
       unreadChannels,
       unreadChannelNotifications,
       unreadConversations,
@@ -202,10 +206,33 @@ export function UnreadProvider({ children }: { children: ReactNode }) {
       isActiveConversation,
       setActiveThread,
       isActiveThread,
-    }}>
-      {children}
-    </UnreadContext.Provider>
+    }),
+    [
+      unreadChannels,
+      unreadChannelNotifications,
+      unreadConversations,
+      unreadThreadNotifications,
+      hiddenConversations,
+      channelUnreadCounts,
+      conversationUnreadCounts,
+      markChannelUnread,
+      markChannelNotificationUnread,
+      markConversationUnread,
+      markThreadNotificationUnread,
+      clearChannelUnread,
+      clearConversationUnread,
+      hideConversation,
+      unhideConversation,
+      setActiveChannel,
+      setActiveConversation,
+      isActiveChannel,
+      isActiveConversation,
+      setActiveThread,
+      isActiveThread,
+    ],
   );
+
+  return <UnreadContext.Provider value={value}>{children}</UnreadContext.Provider>;
 }
 
 export function useUnread() {

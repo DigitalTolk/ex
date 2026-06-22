@@ -11,6 +11,14 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
+// jwtIssuer / jwtAudience pin the `iss` and `aud` claims so a token minted for
+// this app can't be replayed against a different service that happens to share
+// the signing secret. Validation rejects any token missing or mismatching them.
+const (
+	jwtIssuer   = "ex"
+	jwtAudience = "ex"
+)
+
 // JWTManager handles creation and validation of JWT access tokens and refresh tokens.
 type JWTManager struct {
 	secret     []byte
@@ -38,6 +46,8 @@ func (m *JWTManager) GenerateAccessToken(user *model.User) (string, error) {
 	claims := model.TokenClaims{
 		RegisteredClaims: jwt.RegisteredClaims{
 			Subject:   user.ID,
+			Issuer:    jwtIssuer,
+			Audience:  jwt.ClaimStrings{jwtAudience},
 			IssuedAt:  jwt.NewNumericDate(now),
 			ExpiresAt: jwt.NewNumericDate(now.Add(m.accessTTL)),
 		},
@@ -73,7 +83,7 @@ func (m *JWTManager) ValidateToken(tokenStr string) (*model.TokenClaims, error) 
 			return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
 		}
 		return m.secret, nil
-	})
+	}, jwt.WithIssuer(jwtIssuer), jwt.WithAudience(jwtAudience))
 	if err != nil {
 		return nil, fmt.Errorf("invalid token: %w", err)
 	}

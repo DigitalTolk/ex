@@ -24,13 +24,23 @@ type mobilePushJob struct {
 // notification; this wrapper only bounds provider work and drops excess jobs
 // instead of letting OneSignal latency stall message delivery.
 type AsyncMobilePushSender struct {
-	inner  MobilePushSender
-	queue  chan mobilePushJob
-	ctx    context.Context
-	cancel context.CancelFunc
+	inner    MobilePushSender
+	queue    chan mobilePushJob
+	presence PresenceLookup
+	ctx      context.Context
+	cancel   context.CancelFunc
 
 	closeOnce sync.Once
 	wg        sync.WaitGroup
+}
+
+// SetPresence wires a presence lookup so the worker can re-check, right before
+// delivery, whether the recipient came online during the queue-latency window —
+// avoiding a push that lands alongside their live in-app notification.
+func (s *AsyncMobilePushSender) SetPresence(p PresenceLookup) {
+	if s != nil {
+		s.presence = p
+	}
 }
 
 func NewAsyncMobilePushSender(inner MobilePushSender, queueSize, workers int) *AsyncMobilePushSender {
@@ -98,6 +108,12 @@ func (s *AsyncMobilePushSender) worker() {
 		case <-s.ctx.Done():
 			return
 		case job := <-s.queue:
+			// Re-check presence at delivery time: if the recipient reconnected
+			// while the job sat in the queue, suppress the push — they'll get the
+			// live in-app notification instead.
+			if s.presence != nil && s.presence.IsOnline(job.recipientUserID) {
+				continue
+			}
 			if err := s.inner.Send(s.ctx, job.recipientUserID, job.notification); err != nil {
 				if errors.Is(err, context.Canceled) && s.ctx.Err() != nil {
 					return

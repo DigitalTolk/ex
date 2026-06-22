@@ -491,15 +491,25 @@ func TestMessageService_SendWebhookValidationAndHooks(t *testing.T) {
 	if msg.WebhookUsername != "webhook" || msg.AuthorID != "webhook" {
 		t.Fatalf("message identity = %#v", msg)
 	}
-	notifier.mu.Lock()
-	notifierCalls := len(notifier.calls)
-	notifierParent := ""
-	if len(notifier.parents) > 0 {
-		notifierParent = notifier.parents[0]
+	// NotifyForMessage is dispatched off the send path, so poll for the call.
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		notifier.mu.Lock()
+		n := len(notifier.calls)
+		notifier.mu.Unlock()
+		if n == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("notifier calls=%d, want 1", n)
+		}
+		time.Sleep(time.Millisecond)
 	}
+	notifier.mu.Lock()
+	notifierParent := notifier.parents[0]
 	notifier.mu.Unlock()
-	if notifierCalls != 1 || notifierParent != ParentChannel {
-		t.Fatalf("notifier calls=%d parent=%q", notifierCalls, notifierParent)
+	if notifierParent != ParentChannel {
+		t.Fatalf("notifier parent=%q, want %q", notifierParent, ParentChannel)
 	}
 	indexer.waitForCalls(t, 1)
 }

@@ -731,6 +731,13 @@ func TestAttachmentHandler_Media_OK(t *testing.T) {
 	if got := rec.Header().Get("Content-Type"); got != "text/plain" {
 		t.Fatalf("Content-Type = %q, want text/plain", got)
 	}
+	if got := rec.Header().Get("Content-Security-Policy"); got != "sandbox" {
+		t.Fatalf("Content-Security-Policy = %q, want sandbox", got)
+	}
+	// text/plain is not script-bearing, so it serves inline (no disposition).
+	if got := rec.Header().Get("Content-Disposition"); got != "" {
+		t.Fatalf("Content-Disposition = %q, want empty for inline text/plain", got)
+	}
 	lastModified := rec.Header().Get("Last-Modified")
 	if lastModified != "Sat, 02 May 2026 12:00:00 GMT" {
 		t.Fatalf("Last-Modified = %q, want object timestamp", lastModified)
@@ -757,6 +764,29 @@ func TestAttachmentHandler_Media_OK(t *testing.T) {
 	}
 	if got := rec.Header().Get("Content-Disposition"); got != `attachment; filename="pic.png"` {
 		t.Fatalf("Content-Disposition = %q, want attachment filename", got)
+	}
+}
+
+func TestIsInlineUnsafeContentType(t *testing.T) {
+	cases := map[string]bool{
+		"text/html":                true,
+		"text/html; charset=utf-8": true, // parameters stripped
+		"application/xhtml+xml":    true,
+		"image/svg+xml":            true,
+		"application/xml":          true,
+		"text/xml":                 true,
+		"application/foo+xml":      true, // any +xml is scriptable
+		"image/png":                false,
+		"image/jpeg":               false,
+		"video/mp4":                false,
+		"application/pdf":          false,
+		"text/plain":               false,
+		"":                         false,
+	}
+	for ct, want := range cases {
+		if got := isInlineUnsafeContentType(ct); got != want {
+			t.Errorf("isInlineUnsafeContentType(%q) = %v, want %v", ct, got, want)
+		}
 	}
 }
 

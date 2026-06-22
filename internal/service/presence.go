@@ -16,9 +16,21 @@ import (
 type PresenceService struct {
 	publisher Publisher
 	store     PresenceStore
+	// audience resolves the pub/sub topics that should receive a user's presence
+	// change — the channels and DM conversations they belong to. When set, a
+	// presence change fans out only to people who actually share a context with
+	// the subject instead of to every connected client on a single global topic.
+	audience func(ctx context.Context, userID string) []string
 
 	mu     sync.RWMutex
 	online map[string]int // userID -> connection count
+}
+
+// SetPresenceAudienceResolver wires the function that maps a user to the pub/sub
+// topics their presence change should reach (shared channels + DM conversations).
+// Without it, presence falls back to the single global broadcast topic.
+func (s *PresenceService) SetPresenceAudienceResolver(fn func(ctx context.Context, userID string) []string) {
+	s.audience = fn
 }
 
 type PresenceStore interface {
@@ -146,8 +158,14 @@ func (s *PresenceService) OnlineUserIDs() []string {
 }
 
 func (s *PresenceService) publish(ctx context.Context, userID string, online bool) {
-	events.Publish(ctx, s.publisher, pubsub.PresenceEvents(), events.EventPresenceChanged, map[string]any{
-		"userID": userID,
-		"online": online,
-	})
+	data := map[string]any{"userID": userID, "online": online}
+	if s.audience != nil {
+		// Scoped fan-out: only people who share a channel or DM with the subject
+		// need to know. A subject in no shared context reaches no one.
+		for _, topic := range s.audience(ctx, userID) {
+			events.Publish(ctx, s.publisher, topic, events.EventPresenceChanged, data)
+		}
+		return
+	}
+	events.Publish(ctx, s.publisher, pubsub.PresenceEvents(), events.EventPresenceChanged, data)
 }

@@ -35,6 +35,7 @@ type RedisPubSub struct {
 	client   *redis.Client
 	resolver RecipientResolver
 	inbox    InboxAppender
+	fanOut   sync.WaitGroup
 }
 
 // SetDurability wires the recipient resolver and inbox writer used to
@@ -77,12 +78,27 @@ func (ps *RedisPubSub) Publish(ctx context.Context, channel string, event *event
 	if err != nil {
 		return fmt.Errorf("marshal event: %w", err)
 	}
-	ps.appendToInboxes(ctx, channel, event, data)
+	// Live delivery is the primary contract, so PUBLISH first. The durable inbox
+	// fan-out (a member resolve + one XADD per recipient) is a best-effort
+	// recovery aid — run it off the publish path in a detached goroutine so a
+	// large channel's fan-out never adds latency to every connected client's
+	// delivery, nor blocks the message-send request that triggered it.
 	if err := ps.client.Publish(ctx, channel, data).Err(); err != nil {
 		return fmt.Errorf("redis publish: %w", err)
 	}
+	if ps.resolver != nil && ps.inbox != nil && event != nil && events.IsPersistent(event.Type) {
+		ps.fanOut.Add(1)
+		go func() {
+			defer ps.fanOut.Done()
+			ps.appendToInboxes(context.WithoutCancel(ctx), channel, event, data)
+		}()
+	}
 	return nil
 }
+
+// WaitForInboxFanOut blocks until all in-flight inbox fan-outs complete. Used by
+// tests (and graceful shutdown) to observe the async appends deterministically.
+func (ps *RedisPubSub) WaitForInboxFanOut() { ps.fanOut.Wait() }
 
 // appendToInboxes fans the serialized event out to every recipient's
 // per-user inbox stream. Recipients are resolved from the topic; for

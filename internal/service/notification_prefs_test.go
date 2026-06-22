@@ -30,6 +30,14 @@ func TestMatchesKeywords(t *testing.T) {
 		{"blank keyword skipped", "anything", []string{"   "}, false},
 		{"second keyword matches", "ship it", []string{"deploy", "ship"}, true},
 		{"digit boundary", "v2 release", []string{"v2"}, true},
+		// Unicode word boundaries: accented/non-Latin keywords match whole words,
+		// and an ASCII keyword must not fire as a prefix of a word continued by a
+		// non-ASCII letter.
+		{"accented whole word", "ping andré now", []string{"andré"}, true},
+		{"ascii prefix before non-ascii letter does not match", "the annüal report", []string{"ann"}, false},
+		{"accented keyword not mid-word", "annürep", []string{"andré"}, false},
+		{"cjk keyword matches in cjk text", "我们测试一下", []string{"测试"}, true},
+		{"cjk keyword absent", "我们一下", []string{"测试"}, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

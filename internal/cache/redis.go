@@ -86,6 +86,24 @@ func (c *RedisCache) Delete(ctx context.Context, key string) error {
 	return nil
 }
 
+// AllowRequest implements a fixed-window rate limiter: it increments the per-key
+// counter and, on the first hit of a window, sets the window TTL. It reports
+// whether the request is within `limit` for the current window. Used by the
+// middleware.RateLimit middleware to throttle auth and webhook endpoints.
+func (c *RedisCache) AllowRequest(ctx context.Context, key string, limit int, window time.Duration) (bool, error) {
+	fullKey := "ratelimit:" + key
+	count, err := c.client.Incr(ctx, fullKey).Result()
+	if err != nil {
+		return false, fmt.Errorf("rate limit increment %q: %w", key, err)
+	}
+	if count == 1 {
+		if err := c.client.Expire(ctx, fullKey, window).Err(); err != nil {
+			return false, fmt.Errorf("rate limit expire %q: %w", key, err)
+		}
+	}
+	return count <= int64(limit), nil
+}
+
 // IncrementPresence records one active websocket connection for a user. It
 // returns true when this connection transitions the user from offline to online.
 func (c *RedisCache) IncrementPresence(ctx context.Context, userID string) (bool, error) {

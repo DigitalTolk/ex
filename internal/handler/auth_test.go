@@ -272,10 +272,10 @@ type stubOIDCProvider struct {
 	userInfo *service.OIDCUserInfo
 }
 
-func (s *stubOIDCProvider) AuthURL(state string) string {
-	return s.url + "?state=" + state
+func (s *stubOIDCProvider) AuthURL(state, nonce string) string {
+	return s.url + "?state=" + state + "&nonce=" + nonce
 }
-func (s *stubOIDCProvider) Exchange(_ context.Context, _ string) (*service.OIDCUserInfo, error) {
+func (s *stubOIDCProvider) Exchange(_ context.Context, _, _ string) (*service.OIDCUserInfo, error) {
 	if s.userInfo == nil {
 		return nil, nil
 	}
@@ -860,6 +860,45 @@ func TestOIDCCallback_NoOIDCConfigured(t *testing.T) {
 
 	if rec.Code != http.StatusInternalServerError {
 		t.Errorf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
+	}
+}
+
+func TestOIDCLogin_SetsNonceCookie(t *testing.T) {
+	h, _, _ := setupAuthHandlerWithOIDC(t)
+	req := httptest.NewRequest(http.MethodGet, "/auth/oidc/login", nil)
+	rec := httptest.NewRecorder()
+	h.OIDCLogin(rec, req)
+
+	var nonce string
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == "oauth_nonce" {
+			nonce = c.Value
+		}
+	}
+	if nonce == "" {
+		t.Fatal("expected oauth_nonce cookie to be set at login")
+	}
+}
+
+func TestOIDCCallback_ConsumesAndClearsNonceCookie(t *testing.T) {
+	h, _, _ := setupAuthHandlerWithOIDCSuccess(t)
+	req := httptest.NewRequest(http.MethodGet, "/auth/oidc/callback?state=s&code=c", nil)
+	req.AddCookie(&http.Cookie{Name: "oauth_state", Value: "s"})
+	req.AddCookie(&http.Cookie{Name: "oauth_nonce", Value: "n"})
+	rec := httptest.NewRecorder()
+
+	h.OIDCCallback(rec, req)
+	if rec.Code != http.StatusFound {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusFound)
+	}
+	var cleared bool
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == "oauth_nonce" && c.MaxAge < 0 {
+			cleared = true
+		}
+	}
+	if !cleared {
+		t.Error("expected oauth_nonce cookie to be cleared on callback")
 	}
 }
 

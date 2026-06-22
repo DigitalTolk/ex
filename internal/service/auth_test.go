@@ -2,8 +2,8 @@ package service
 
 import (
 	"context"
-	"strings"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -62,7 +62,7 @@ func setupAuthService() *authTestEnv {
 func TestHandleOIDCLogin(t *testing.T) {
 	env := setupAuthService()
 
-	authURL, state, err := env.svc.HandleOIDCLogin()
+	authURL, state, nonce, err := env.svc.HandleOIDCLogin()
 	if err != nil {
 		t.Fatalf("HandleOIDCLogin: %v", err)
 	}
@@ -72,13 +72,22 @@ func TestHandleOIDCLogin(t *testing.T) {
 	if state == "" {
 		t.Error("expected non-empty state")
 	}
+	if nonce == "" {
+		t.Error("expected non-empty nonce")
+	}
+	if nonce == state {
+		t.Error("nonce and state must be distinct values")
+	}
+	if !strings.Contains(authURL, "nonce="+nonce) {
+		t.Errorf("authURL %q should bind nonce=%s", authURL, nonce)
+	}
 }
 
 func TestHandleOIDCLoginNoOIDC(t *testing.T) {
 	env := setupAuthService()
 	env.svc.oidc = nil
 
-	_, _, err := env.svc.HandleOIDCLogin()
+	_, _, _, err := env.svc.HandleOIDCLogin()
 	if err == nil {
 		t.Fatal("expected error when OIDC not configured")
 	}
@@ -90,7 +99,7 @@ func TestHandleOIDCCallback_FirstUserGetsAdmin(t *testing.T) {
 	env.oidc.userInfo.Email = " OIDC@Example.COM "
 
 	ctx := context.Background()
-	accessToken, refreshToken, user, err := env.svc.HandleOIDCCallback(ctx, "auth-code", "state")
+	accessToken, refreshToken, user, err := env.svc.HandleOIDCCallback(ctx, "auth-code", "state", "nonce")
 	if err != nil {
 		t.Fatalf("HandleOIDCCallback: %v", err)
 	}
@@ -120,7 +129,7 @@ func TestHandleOIDCCallback_SecondUserGetsMember(t *testing.T) {
 	env.users.hasUsersVal = true // existing users
 
 	ctx := context.Background()
-	_, _, user, err := env.svc.HandleOIDCCallback(ctx, "auth-code", "state")
+	_, _, user, err := env.svc.HandleOIDCCallback(ctx, "auth-code", "state", "nonce")
 	if err != nil {
 		t.Fatalf("HandleOIDCCallback: %v", err)
 	}
@@ -146,7 +155,7 @@ func TestHandleOIDCCallback_ExistingUser(t *testing.T) {
 	env.users.emailIndex["oidc@example.com"] = existing
 
 	ctx := context.Background()
-	_, _, user, err := env.svc.HandleOIDCCallback(ctx, "auth-code", "state")
+	_, _, user, err := env.svc.HandleOIDCCallback(ctx, "auth-code", "state", "nonce")
 	if err != nil {
 		t.Fatalf("HandleOIDCCallback: %v", err)
 	}
@@ -165,7 +174,7 @@ func TestHandleOIDCCallback_NoOIDC(t *testing.T) {
 	env.svc.oidc = nil
 
 	ctx := context.Background()
-	_, _, _, err := env.svc.HandleOIDCCallback(ctx, "code", "state")
+	_, _, _, err := env.svc.HandleOIDCCallback(ctx, "code", "state", "nonce")
 	if err == nil {
 		t.Fatal("expected error when OIDC not configured")
 	}
@@ -194,12 +203,22 @@ func TestRefreshAccessToken_Valid(t *testing.T) {
 		CreatedAt: time.Now(),
 	}
 
-	accessToken, err := env.svc.RefreshAccessToken(ctx, rawToken)
+	accessToken, newRefresh, err := env.svc.RefreshAccessToken(ctx, rawToken)
 	if err != nil {
 		t.Fatalf("RefreshAccessToken: %v", err)
 	}
 	if accessToken == "" {
 		t.Error("expected non-empty accessToken")
+	}
+	// Rotation: a fresh refresh token is issued and the presented one is revoked.
+	if newRefresh == "" || newRefresh == rawToken {
+		t.Errorf("expected a rotated refresh token, got %q", newRefresh)
+	}
+	if _, ok := env.tokens.tokens[hash]; ok {
+		t.Error("expected the old refresh token hash to be deleted after rotation")
+	}
+	if _, ok := env.tokens.tokens[env.jwt.refreshHash]; !ok {
+		t.Error("expected the new refresh token hash to be stored")
 	}
 }
 
@@ -216,7 +235,7 @@ func TestRefreshAccessToken_Expired(t *testing.T) {
 		CreatedAt: time.Now().Add(-25 * time.Hour),
 	}
 
-	_, err := env.svc.RefreshAccessToken(ctx, rawToken)
+	_, _, err := env.svc.RefreshAccessToken(ctx, rawToken)
 	if err == nil {
 		t.Fatal("expected error for expired token")
 	}
@@ -226,9 +245,36 @@ func TestRefreshAccessToken_NotFound(t *testing.T) {
 	env := setupAuthService()
 	ctx := context.Background()
 
-	_, err := env.svc.RefreshAccessToken(ctx, "nonexistent-token")
+	_, _, err := env.svc.RefreshAccessToken(ctx, "nonexistent-token")
 	if err == nil {
 		t.Fatal("expected error for missing token")
+	}
+}
+
+func validRefreshEnv(t *testing.T, raw string) (*authTestEnv, string) {
+	t.Helper()
+	env := setupAuthService()
+	user := &model.User{ID: "u-rot-" + raw, Email: raw + "@e.com", Status: "active", SystemRole: model.SystemRoleMember}
+	env.users.users[user.ID] = user
+	env.tokens.tokens[hashToken(raw)] = &model.RefreshToken{
+		TokenHash: hashToken(raw), UserID: user.ID, ExpiresAt: time.Now().Add(time.Hour), CreatedAt: time.Now(),
+	}
+	return env, raw
+}
+
+func TestRefreshAccessToken_RotationGenerateError(t *testing.T) {
+	env, raw := validRefreshEnv(t, "rot-gen")
+	env.jwt.refreshTokenErr = errors.New("rng down")
+	if _, _, err := env.svc.RefreshAccessToken(context.Background(), raw); err == nil {
+		t.Fatal("expected error when refresh-token generation fails during rotation")
+	}
+}
+
+func TestRefreshAccessToken_RotationStoreError(t *testing.T) {
+	env, raw := validRefreshEnv(t, "rot-store")
+	env.tokens.storeErr = errors.New("dynamo down")
+	if _, _, err := env.svc.RefreshAccessToken(context.Background(), raw); err == nil {
+		t.Fatal("expected error when storing the rotated refresh token fails")
 	}
 }
 

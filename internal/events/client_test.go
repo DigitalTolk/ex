@@ -33,11 +33,18 @@ func TestClientSendDropsWhenFull(t *testing.T) {
 	for i := 0; i < eventBufferSize; i++ {
 		c.Send([]byte("msg"))
 	}
+	// The first overflow drops AND closes the client (force reconnect+replay).
 	c.Send([]byte("overflow"))
+	// Subsequent sends are no-ops on the now-closed client.
 	c.Send([]byte("overflow2"))
 
-	if got := c.DropCount(); got != 2 {
-		t.Errorf("DropCount = %d, want 2", got)
+	if got := c.DropCount(); got != 1 {
+		t.Errorf("DropCount = %d, want 1 (first overflow drops then closes)", got)
+	}
+	select {
+	case <-c.Done():
+	default:
+		t.Fatal("client should be closed after a drop")
 	}
 
 	count := 0

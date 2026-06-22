@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/DigitalTolk/ex/internal/events"
+	"github.com/DigitalTolk/ex/internal/pubsub"
 )
 
 type fakePresenceStore struct {
@@ -81,6 +82,49 @@ func TestPresenceService_Connect_FirstReturnsTrue(t *testing.T) {
 	}
 	if pub.published[0].event.Type != events.EventPresenceChanged {
 		t.Errorf("event type=%q want %q", pub.published[0].event.Type, events.EventPresenceChanged)
+	}
+}
+
+func TestPresenceService_Connect_ScopedToAudienceTopics(t *testing.T) {
+	pub := newMockPublisher()
+	svc := NewPresenceService(nil, pub)
+	svc.SetPresenceAudienceResolver(func(_ context.Context, userID string) []string {
+		if userID != "u1" {
+			t.Errorf("resolver called for %q, want u1", userID)
+		}
+		return []string{pubsub.ChannelName("c1"), pubsub.ConversationName("d1")}
+	})
+
+	if !svc.OnConnect(context.Background(), "u1") {
+		t.Fatal("first connect should report the transition")
+	}
+	if len(pub.published) != 2 {
+		t.Fatalf("expected 2 scoped publishes (channel + DM), got %d", len(pub.published))
+	}
+	topics := map[string]bool{}
+	for _, p := range pub.published {
+		topics[p.channel] = true
+		if p.event.Type != events.EventPresenceChanged {
+			t.Errorf("event type=%q want %q", p.event.Type, events.EventPresenceChanged)
+		}
+	}
+	if !topics[pubsub.ChannelName("c1")] || !topics[pubsub.ConversationName("d1")] {
+		t.Errorf("presence not published to scoped topics: %v", topics)
+	}
+	if topics[pubsub.PresenceEvents()] {
+		t.Error("scoped presence must not publish to the global topic")
+	}
+}
+
+func TestPresenceService_Connect_NoSharedContextPublishesNothing(t *testing.T) {
+	pub := newMockPublisher()
+	svc := NewPresenceService(nil, pub)
+	svc.SetPresenceAudienceResolver(func(context.Context, string) []string { return nil })
+	if !svc.OnConnect(context.Background(), "loner") {
+		t.Fatal("first connect should report the transition")
+	}
+	if len(pub.published) != 0 {
+		t.Fatalf("a user sharing no channel/DM should reach no one, got %d publishes", len(pub.published))
 	}
 }
 

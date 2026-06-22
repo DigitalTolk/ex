@@ -557,11 +557,11 @@ type mockOIDCProvider struct {
 	exchangeErr error
 }
 
-func (m *mockOIDCProvider) AuthURL(state string) string {
-	return m.authURL + "?state=" + state
+func (m *mockOIDCProvider) AuthURL(state, nonce string) string {
+	return m.authURL + "?state=" + state + "&nonce=" + nonce
 }
 
-func (m *mockOIDCProvider) Exchange(_ context.Context, _ string) (*OIDCUserInfo, error) {
+func (m *mockOIDCProvider) Exchange(_ context.Context, _, _ string) (*OIDCUserInfo, error) {
 	if m.exchangeErr != nil {
 		return nil, m.exchangeErr
 	}

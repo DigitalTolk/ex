@@ -187,8 +187,8 @@ type JWTProvider interface {
 
 // OIDCProvider handles OpenID Connect authentication flows.
 type OIDCProvider interface {
-	AuthURL(state string) string
-	Exchange(ctx context.Context, code string) (*OIDCUserInfo, error)
+	AuthURL(state, nonce string) string
+	Exchange(ctx context.Context, code, nonce string) (*OIDCUserInfo, error)
 }
 
 // OIDCUserInfo holds user profile data returned by the identity provider.

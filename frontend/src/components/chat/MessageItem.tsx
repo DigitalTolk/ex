@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Copy, Pencil, Trash2, SmilePlus, MessageSquareReply, MoreHorizontal, Pin, PinOff, Link as LinkIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -405,8 +405,16 @@ function MessageItemImpl({
   useEffect(() => cancelLongPress, []);
   useTransientOverlayCleanup(mobileActionsOpen, { rootRef: mobileActionsRef, lockScroll: true });
 
-  const reactions = message.reactions ?? {};
-  const reactionEntries = Object.entries(reactions).filter(([, users]) => users && users.length > 0);
+  // The unfurl scan walks the whole body; memoize so it only runs when the
+  // body changes, not on unrelated re-renders.
+  const bodyURLs = useMemo(() => extractURLs(message.body), [message.body]);
+
+  // Recomputed only when the reactions map changes, not on every re-render
+  // (presence/hover ticks would otherwise re-filter on each paint).
+  const reactionEntries = useMemo(
+    () => Object.entries(message.reactions ?? {}).filter(([, users]) => users && users.length > 0),
+    [message.reactions],
+  );
 
   function renderReactionLabel(emoji: string): string {
     return emoji;
@@ -718,7 +726,7 @@ function MessageItemImpl({
               if (message.noUnfurl) return null;
               // First URL in the body (skipping code) gets a preview
               // card. Capped at one to keep messages compact.
-              const urls = extractURLs(message.body);
+              const urls = bodyURLs;
               return urls[0] ? (
                 <UnfurlCard
                   url={urls[0]}

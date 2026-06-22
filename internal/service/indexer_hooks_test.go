@@ -408,7 +408,7 @@ func TestAuthService_SetIndexer_PropagatesOnSignup(t *testing.T) {
 	env.svc.SetIndexer(idx)
 
 	ctx := context.Background()
-	if _, _, _, err := env.svc.HandleOIDCCallback(ctx, "code", "state"); err != nil {
+	if _, _, _, err := env.svc.HandleOIDCCallback(ctx, "code", "state", "nonce"); err != nil {
 		t.Fatalf("HandleOIDCCallback (create): %v", err)
 	}
 
@@ -421,7 +421,7 @@ func TestAuthService_SetIndexer_PropagatesOnSignup(t *testing.T) {
 
 	// Second callback for the same email should hit the "existing user"
 	// branch and re-index the refreshed profile.
-	if _, _, _, err := env.svc.HandleOIDCCallback(ctx, "code", "state"); err != nil {
+	if _, _, _, err := env.svc.HandleOIDCCallback(ctx, "code", "state", "nonce"); err != nil {
 		t.Fatalf("HandleOIDCCallback (refresh): %v", err)
 	}
 	idx.mu.Lock()
@@ -463,10 +463,26 @@ func TestMessageService_SetNotifier_FiresOnSend(t *testing.T) {
 		t.Fatalf("Send: %v", err)
 	}
 
+	// NotifyForMessage is dispatched off the send path in a goroutine, so poll
+	// for the recorded call instead of reading immediately.
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		notifier.mu.Lock()
+		n := len(notifier.calls)
+		notifier.mu.Unlock()
+		if n == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("expected one NotifyForMessage(%s), got %d calls", msg.ID, n)
+		}
+		time.Sleep(time.Millisecond)
+	}
+
 	notifier.mu.Lock()
 	defer notifier.mu.Unlock()
-	if len(notifier.calls) != 1 || notifier.calls[0] != msg.ID {
-		t.Fatalf("expected one NotifyForMessage(%s), got %v", msg.ID, notifier.calls)
+	if notifier.calls[0] != msg.ID {
+		t.Fatalf("expected NotifyForMessage(%s), got %v", msg.ID, notifier.calls)
 	}
 	if notifier.parents[0] != ParentChannel {
 		t.Errorf("parentType = %q, want %q", notifier.parents[0], ParentChannel)

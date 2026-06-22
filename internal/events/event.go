@@ -71,6 +71,12 @@ const (
 // fired-and-forget at the moment they happened (force_logout). Keeping
 // them out of the per-user inbox stream avoids wasting MAXLEN budget on
 // noise that would just be discarded by the client anyway.
+//
+// notification.new is ephemeral on purpose: a notification is a "fire at the
+// moment" alert (sound + popup + push). Replaying it on reconnect would re-pop
+// a toast the user already saw — a duplicate-notification bug — and the
+// underlying unread/thread state is re-reconciled by the client's onReconnect
+// refetch anyway. A missed toast on reconnect is far better than a dupe.
 var ephemeralTypes = map[string]struct{}{
 	EventTyping:          {},
 	EventPing:            {},
@@ -79,6 +85,7 @@ var ephemeralTypes = map[string]struct{}{
 	EventForceLogout:     {},
 	EventReplayDone:      {},
 	EventReplayExhausted: {},
+	EventNotificationNew: {},
 }
 
 // IsPersistent reports whether an event of this type should be appended

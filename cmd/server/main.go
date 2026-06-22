@@ -189,6 +189,26 @@ func main() {
 	emojiSvc.SetMediaURLCache(redisCache)
 	emojiSvc.SetFrequencyStore(redisCache)
 	presenceSvc := service.NewPresenceService(redisCache, redisPubSub)
+	// Scope presence changes to the channels and DMs the subject belongs to, so a
+	// connect/disconnect fans out only to people who share a context with them
+	// rather than to every connected client. Uses a fresh context because a
+	// disconnect's request context is already cancelled.
+	presenceSvc.SetPresenceAudienceResolver(func(_ context.Context, userID string) []string {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		var topics []string
+		if ucs, err := channelSvc.ListUserChannels(ctx, userID); err == nil {
+			for _, c := range ucs {
+				topics = append(topics, pubsub.ChannelName(c.ChannelID))
+			}
+		}
+		if convs, err := convSvc.ListUserConversations(ctx, userID); err == nil {
+			for _, c := range convs {
+				topics = append(topics, pubsub.ConversationName(c.ConversationID))
+			}
+		}
+		return topics
+	})
 	var attachmentSigner service.AttachmentSigner
 	if s3Client != nil {
 		attachmentSigner = s3Client
@@ -210,6 +230,7 @@ func main() {
 		slog.Warn("OneSignal mobile push disabled", "error", err)
 	} else if oneSignalPush != nil {
 		asyncOneSignalPush := service.NewAsyncMobilePushSender(oneSignalPush, 0, 0)
+		asyncOneSignalPush.SetPresence(presenceSvc)
 		defer asyncOneSignalPush.Close()
 		notificationSvc.SetMobilePushSender(asyncOneSignalPush)
 	}
@@ -359,6 +380,7 @@ func main() {
 		FrontendFS:   frontendDist,
 		AppVersion:   appVersion,
 		AllowOrigins: allowOrigins,
+		RateLimiter:  redisCache,
 	})
 
 	// ------------------------------------------------------------------ Server

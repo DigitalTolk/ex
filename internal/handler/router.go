@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/DigitalTolk/ex/internal/middleware"
 )
@@ -69,13 +70,18 @@ func NewRouter(d *Deps) http.Handler {
 	}
 
 	// ------------------------------------------------------------------ Auth (public)
+	// Throttle the unauthenticated, brute-forceable endpoints per client IP
+	// (no-op when d.RateLimiter is nil). Credential/invite/refresh guessing and
+	// token churn are the threats; logout and the provider-driven OIDC handshake
+	// stay unthrottled.
+	authLimit := middleware.RateLimit(d.RateLimiter, 20, time.Minute)
 	mux.HandleFunc("GET /auth/oidc/login", authH.OIDCLogin)
 	mux.HandleFunc("GET /auth/oidc/callback", authH.OIDCCallback)
 	mux.HandleFunc("GET /auth/desktop/complete", authH.DesktopComplete)
-	mux.HandleFunc("POST /auth/token/refresh", authH.RefreshToken)
+	mux.Handle("POST /auth/token/refresh", middleware.WrapFunc(authH.RefreshToken, authLimit))
 	mux.HandleFunc("POST /auth/logout", authH.Logout)
-	mux.HandleFunc("POST /auth/invite/accept", authH.AcceptInvite)
-	mux.HandleFunc("POST /auth/login", authH.GuestLogin)
+	mux.Handle("POST /auth/invite/accept", middleware.WrapFunc(authH.AcceptInvite, authLimit))
+	mux.Handle("POST /auth/login", middleware.WrapFunc(authH.GuestLogin, authLimit))
 
 	// ------------------------------------------------------------------ Auth (protected)
 	mux.Handle("POST /auth/invite", middleware.WrapFunc(authH.CreateInvite, authMW))
@@ -225,7 +231,10 @@ func NewRouter(d *Deps) http.Handler {
 		mux.Handle("POST /api/v1/admin/webhooks", middleware.WrapFunc(webhookH.Create, authMW))
 		mux.Handle("PATCH /api/v1/admin/webhooks/{id}", middleware.WrapFunc(webhookH.Update, authMW))
 		mux.Handle("DELETE /api/v1/admin/webhooks/{id}", middleware.WrapFunc(webhookH.Delete, authMW))
-		mux.HandleFunc("POST /hooks/{id}", webhookH.Execute)
+		// Public webhook ingress: throttle per IP to blunt ID-enumeration and
+		// spam amplification (a touch higher than the auth limit since busy
+		// integrations legitimately post more often).
+		mux.Handle("POST /hooks/{id}", middleware.WrapFunc(webhookH.Execute, middleware.RateLimit(d.RateLimiter, 60, time.Minute)))
 	}
 
 	// ------------------------------------------------------------------ WebSocket

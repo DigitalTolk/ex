@@ -5,6 +5,8 @@ import (
 	"log/slog"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/DigitalTolk/ex/internal/events"
 	"github.com/DigitalTolk/ex/internal/model"
@@ -516,6 +518,9 @@ func keywordsMatchLower(lowerBody string, keywords []string) bool {
 // containsWord reports whether needle appears in haystack bounded by non-word
 // characters on both sides (a lightweight \bneedle\b without compiling a regex
 // per keyword per message). Both arguments are expected to be lowercased.
+// Boundaries are Unicode-aware so accented and non-Latin keywords (common at a
+// translation company, and seeded from display names) match on whole words
+// rather than mid-word — e.g. "ann" must not fire inside "annü".
 func containsWord(haystack, needle string) bool {
 	from := 0
 	for {
@@ -525,23 +530,47 @@ func containsWord(haystack, needle string) bool {
 		}
 		start := from + idx
 		end := start + len(needle)
-		if wordBoundary(haystack, start-1) && wordBoundary(haystack, end) {
+		if boundaryBefore(haystack, start) && boundaryAfter(haystack, end) {
 			return true
 		}
 		from = start + 1
 	}
 }
 
-// wordBoundary reports whether position i in s is a word boundary — i.e. out of
-// range or a non-[a-z0-9_] byte. Used by containsWord on already-lowercased
-// strings, so only ASCII word bytes need checking.
-func wordBoundary(s string, i int) bool {
-	if i < 0 || i >= len(s) {
+// boundaryBefore reports whether byte offset i begins a word — true at the start
+// of the string or when the preceding rune is not a word rune.
+func boundaryBefore(s string, i int) bool {
+	if i <= 0 {
 		return true
 	}
-	c := s[i]
-	isWord := (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_'
-	return !isWord
+	r, _ := utf8.DecodeLastRuneInString(s[:i])
+	return !isWordRune(r)
+}
+
+// boundaryAfter reports whether byte offset i ends a word — true at the end of
+// the string or when the following rune is not a word rune.
+func boundaryAfter(s string, i int) bool {
+	if i >= len(s) {
+		return true
+	}
+	r, _ := utf8.DecodeRuneInString(s[i:])
+	return !isWordRune(r)
+}
+
+// isWordRune treats Unicode letters and digits (plus underscore) as word
+// characters so whole-word boundaries hold for accented and non-Latin alphabets
+// (e.g. "ann" must not fire inside "annü"). Ideographic / syllabic scripts
+// (Han, Kana, Hangul) are excluded because they're written without spaces — each
+// such rune is its own word, so a CJK keyword still matches as a substring of
+// CJK text rather than being blocked by a non-existent word boundary.
+func isWordRune(r rune) bool {
+	if r == '_' {
+		return true
+	}
+	if !unicode.IsLetter(r) && !unicode.IsDigit(r) {
+		return false
+	}
+	return !unicode.In(r, unicode.Han, unicode.Hiragana, unicode.Katakana, unicode.Hangul)
 }
 
 // resolveThreadRecipients returns the user IDs that should receive a
@@ -566,21 +595,24 @@ func (s *NotificationService) resolveThreadRecipients(ctx context.Context, msg *
 			}
 		}
 	}
-	// Pull every message under the parent and filter for the thread.
-	// 1000 matches the cap ListThreadMessages uses; threads larger
-	// than that are vanishingly rare and the worst case is just that
-	// the longest tail of replies doesn't get notified — acceptable
-	// while we don't have a parent-message-indexed store query.
-	all, _, err := s.messages.ListMessages(ctx, msg.ParentID, "", 1000)
+	// Fetch the thread's replies via the GSI1 thread index (one Query, exactly
+	// this thread) rather than scanning up to 1000 of the parent's recent
+	// messages, and resolve the root author with a direct GetMessage.
+	replies, err := s.messages.ListThreadReplies(ctx, msg.ParentMessageID)
 	if err != nil {
 		return nil
 	}
-	var rootAuthor string
 	repliers := make([]string, 0)
 	seen := make(map[string]bool)
 	currentMembers := make(map[string]bool, len(snap.memberIDs))
 	for _, uid := range snap.memberIDs {
 		currentMembers[uid] = true
+	}
+	var rootAuthor string
+	if root, err := s.messages.GetMessage(ctx, msg.ParentID, msg.ParentMessageID); err == nil && root != nil &&
+		root.AuthorID != "" && root.AuthorID != msg.AuthorID && !unfollowed[root.AuthorID] && currentMembers[root.AuthorID] {
+		rootAuthor = root.AuthorID
+		seen[root.AuthorID] = true
 	}
 	// resolveThreadRecipients is only ever called for channel parents now —
 	// conversations always notify every participant, so NotifyForMessage
@@ -595,16 +627,11 @@ func (s *NotificationService) resolveThreadRecipients(ctx context.Context, msg *
 		seen[uid] = true
 		*dst = append(*dst, uid)
 	}
-	for _, m := range all {
-		switch {
-		case m.ID == msg.ParentMessageID:
-			if rootAuthor == "" && m.AuthorID != "" && m.AuthorID != msg.AuthorID && !unfollowed[m.AuthorID] && currentMembers[m.AuthorID] {
-				rootAuthor = m.AuthorID
-				seen[m.AuthorID] = true
-			}
-		case m.ParentMessageID == msg.ParentMessageID && m.ID != msg.ID:
-			add(&repliers, m.AuthorID)
+	for _, m := range replies {
+		if m.ID == msg.ID {
+			continue
 		}
+		add(&repliers, m.AuthorID)
 	}
 	for _, uid := range explicitFollowers {
 		add(&repliers, uid)

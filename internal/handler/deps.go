@@ -4,6 +4,7 @@ import (
 	"io/fs"
 
 	"github.com/DigitalTolk/ex/internal/auth"
+	"github.com/DigitalTolk/ex/internal/middleware"
 )
 
 // Deps is the single set of dependencies the HTTP router needs to wire
@@ -46,4 +47,8 @@ type Deps struct {
 	// CORS / cross-origin policy. The first non-empty entry is treated
 	// as the canonical primary origin in the middleware.
 	AllowOrigins []string
+
+	// RateLimiter throttles unauthenticated auth + webhook endpoints per client
+	// IP. Nil disables rate limiting (e.g. in tests).
+	RateLimiter middleware.RateLimitCounter
 }

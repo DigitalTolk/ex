@@ -10,9 +10,19 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/cenkalti/backoff/v4"
 )
 
 const defaultOneSignalNotificationsURL = "https://api.onesignal.com/notifications?c=push"
+
+// defaultOneSignalRetries / defaultOneSignalRetryInterval bound the retry of a
+// transient OneSignal failure (network error or 5xx). A push that loses to a
+// blip would otherwise just vanish; 4xx responses are permanent and not retried.
+const (
+	defaultOneSignalRetries       = 3
+	defaultOneSignalRetryInterval = 250 * time.Millisecond
+)
 
 type OneSignalConfig struct {
 	AppID      string
@@ -20,14 +30,21 @@ type OneSignalConfig struct {
 	PublicURL  string
 	APIURL     string
 	HTTPClient *http.Client
+	// MaxRetries / RetryInterval override the transient-failure retry policy.
+	// Zero values fall back to the defaults; tests set RetryInterval tiny so the
+	// retry path runs instantly.
+	MaxRetries    int
+	RetryInterval time.Duration
 }
 
 type OneSignalPushSender struct {
-	appID     string
-	apiKey    string
-	publicURL *url.URL
-	apiURL    string
-	client    *http.Client
+	appID         string
+	apiKey        string
+	publicURL     *url.URL
+	apiURL        string
+	client        *http.Client
+	maxRetries    uint64
+	retryInterval time.Duration
 }
 
 func NewOneSignalPushSender(cfg OneSignalConfig) (*OneSignalPushSender, error) {
@@ -49,12 +66,22 @@ func NewOneSignalPushSender(cfg OneSignalConfig) (*OneSignalPushSender, error) {
 	if client == nil {
 		client = &http.Client{Timeout: 5 * time.Second}
 	}
+	retries := uint64(defaultOneSignalRetries)
+	if cfg.MaxRetries > 0 {
+		retries = uint64(cfg.MaxRetries)
+	}
+	interval := cfg.RetryInterval
+	if interval <= 0 {
+		interval = defaultOneSignalRetryInterval
+	}
 	return &OneSignalPushSender{
-		appID:     strings.TrimSpace(cfg.AppID),
-		apiKey:    strings.TrimSpace(cfg.APIKey),
-		publicURL: publicURL,
-		apiURL:    apiURL,
-		client:    client,
+		appID:         strings.TrimSpace(cfg.AppID),
+		apiKey:        strings.TrimSpace(cfg.APIKey),
+		publicURL:     publicURL,
+		apiURL:        apiURL,
+		client:        client,
+		maxRetries:    retries,
+		retryInterval: interval,
 	}, nil
 }
 
@@ -87,21 +114,30 @@ func (s *OneSignalPushSender) Send(ctx context.Context, recipientUserID string, 
 	if err != nil { // coverage-ignore: oneSignalNotificationRequest is composed solely of strings and string maps/slices; json.Marshal of such scalar data cannot fail.
 		return fmt.Errorf("onesignal: marshal request: %w", err)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.apiURL, bytes.NewReader(body))
-	if err != nil {
-		return fmt.Errorf("onesignal: create request: %w", err)
+	// Retry transient failures (network error / 5xx); 4xx is permanent. A push
+	// that loses to a momentary blip would otherwise just disappear.
+	attempt := func() error {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.apiURL, bytes.NewReader(body))
+		if err != nil { // coverage-ignore: a POST to a pre-validated apiURL with a non-nil body cannot fail to construct.
+			return backoff.Permanent(fmt.Errorf("onesignal: create request: %w", err))
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Key "+s.apiKey)
+		res, err := s.client.Do(req)
+		if err != nil {
+			return fmt.Errorf("onesignal: send request: %w", err)
+		}
+		defer func() { _, _ = io.Copy(io.Discard, res.Body); _ = res.Body.Close() }()
+		if res.StatusCode >= 500 {
+			return fmt.Errorf("onesignal: request failed with status %d", res.StatusCode)
+		}
+		if res.StatusCode < 200 || res.StatusCode >= 300 {
+			return backoff.Permanent(fmt.Errorf("onesignal: request failed with status %d", res.StatusCode))
+		}
+		return nil
 	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Key "+s.apiKey)
-	res, err := s.client.Do(req)
-	if err != nil {
-		return fmt.Errorf("onesignal: send request: %w", err)
-	}
-	defer func() { _, _ = io.Copy(io.Discard, res.Body); _ = res.Body.Close() }()
-	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return fmt.Errorf("onesignal: request failed with status %d", res.StatusCode)
-	}
-	return nil
+	policy := backoff.WithContext(backoff.WithMaxRetries(backoff.NewConstantBackOff(s.retryInterval), s.maxRetries), ctx)
+	return backoff.Retry(attempt, policy)
 }
 
 func (s *OneSignalPushSender) absoluteURL(deepLink string) string {

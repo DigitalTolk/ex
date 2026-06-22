@@ -3,19 +3,25 @@ package events
 import (
 	"context"
 	"errors"
+	"sync"
 	"sync/atomic"
 	"testing"
 )
 
 type capturePublisher struct {
 	calls atomic.Uint64
+	mu    sync.Mutex
 	last  *Event
 	err   error
 }
 
 func (p *capturePublisher) Publish(_ context.Context, _ string, e *Event) error {
 	p.calls.Add(1)
+	// PublishMany invokes Publish from one goroutine per channel, so guard the
+	// shared field against concurrent writes.
+	p.mu.Lock()
 	p.last = e
+	p.mu.Unlock()
 	return p.err
 }
 

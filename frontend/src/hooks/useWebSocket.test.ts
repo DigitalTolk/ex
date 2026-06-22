@@ -359,6 +359,37 @@ describe('useWebSocket', () => {
     expect(MockWebSocket.instances[1].url).toContain('since=01ID0000000000000000000099');
   });
 
+  // Cursor must be monotonic: an out-of-order live frame with a SMALLER ULID
+  // (e.g. raced in from another instance) must not move the cursor backwards,
+  // or the next reconnect would replay the in-between window and re-deliver.
+  it('does not regress the reconnect cursor on an out-of-order frame', async () => {
+    renderHook(() => useWebSocket({ enabled: true }));
+
+    const ws = MockWebSocket.instances[0];
+    ws.simulateOpen();
+    ws.simulateMessage(JSON.stringify({
+      id: '01ID0000000000000000000099',
+      type: 'message.new',
+      data: JSON.stringify({ id: 'm1' }),
+    }));
+    // A later frame carrying a smaller id (clock skew / cross-instance order).
+    ws.simulateMessage(JSON.stringify({
+      id: '01ID0000000000000000000042',
+      type: 'message.new',
+      data: JSON.stringify({ id: 'm2' }),
+    }));
+    ws.simulateClose();
+
+    await act(async () => {
+      vi.advanceTimersByTime(1000);
+      await Promise.resolve();
+    });
+
+    expect(MockWebSocket.instances).toHaveLength(2);
+    expect(MockWebSocket.instances[1].url).toContain('since=01ID0000000000000000000099');
+    expect(MockWebSocket.instances[1].url).not.toContain('since=01ID0000000000000000000042');
+  });
+
   // First connect (no prior cursor) must not send a since param —
   // the server interprets that as "fresh, no replay needed".
   it('omits ?since on a fresh first connect', () => {

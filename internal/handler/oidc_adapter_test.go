@@ -41,7 +41,7 @@ func TestOIDCAdapter_AuthURL(t *testing.T) {
 		t.Fatalf("NewOIDCProvider: %v", err)
 	}
 	a := NewOIDCAdapter(p)
-	got := a.AuthURL("STATE")
+	got := a.AuthURL("STATE", "NONCE")
 	if !strings.Contains(got, "state=STATE") {
 		t.Errorf("AuthURL missing state: %q", got)
 	}
@@ -55,7 +55,7 @@ func TestOIDCAdapter_Exchange_Error(t *testing.T) {
 		t.Fatalf("NewOIDCProvider: %v", err)
 	}
 	a := NewOIDCAdapter(p)
-	if _, err := a.Exchange(context.Background(), "bad-code"); err == nil {
+	if _, err := a.Exchange(context.Background(), "bad-code", "NONCE"); err == nil {
 		t.Fatal("expected exchange error")
 	}
 }

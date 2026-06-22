@@ -47,12 +47,12 @@ func TestNotification_ResolveThreadRecipients_NilMessagesAndNoParentMsg(t *testi
 	}
 }
 
-func TestNotification_ResolveThreadRecipients_ListMessagesError(t *testing.T) {
+func TestNotification_ResolveThreadRecipients_ListThreadRepliesError(t *testing.T) {
 	svc, _, _, _, _, msgs := setupNotifierWithMessages(t)
-	msgs.listErr = errors.New("boom")
+	msgs.threadReplyErr = errors.New("boom")
 	got := svc.resolveThreadRecipients(context.Background(), &model.Message{ParentID: "ch1", ParentMessageID: "root1"}, memberSnapshot{})
 	if got != nil {
-		t.Fatalf("expected nil on ListMessages error, got %v", got)
+		t.Fatalf("expected nil on ListThreadReplies error, got %v", got)
 	}
 }
 

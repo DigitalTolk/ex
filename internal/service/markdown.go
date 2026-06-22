@@ -259,6 +259,20 @@ func element(tag string, properties map[string]interface{}) *HastNode {
 // with another explicit scheme (javascript:, data:, vbscript:, file: …) is
 // rejected as a potential script-injection vector. Scheme-relative ("//host"),
 // path-relative, query, and fragment URLs carry no scheme and are allowed.
+// stripURLControlBytes removes ASCII control characters and spaces (<= 0x20)
+// and DEL (0x7f) from a URL — the bytes a browser drops before navigating, and
+// the ones an attacker uses to split a "java\tscript:" scheme past a naive scan.
+func stripURLControlBytes(raw string) string {
+	var b strings.Builder
+	b.Grow(len(raw))
+	for i := 0; i < len(raw); i++ {
+		if c := raw[i]; c > 0x20 && c != 0x7f {
+			b.WriteByte(c)
+		}
+	}
+	return b.String()
+}
+
 // isSchemeChar reports whether c is a valid URL-scheme byte per RFC 3986:
 // ALPHA / DIGIT / "+" / "-" / ".".
 func isSchemeChar(c byte) bool {
@@ -266,7 +280,12 @@ func isSchemeChar(c byte) bool {
 }
 
 func isSafeURL(raw string) bool {
-	s := strings.TrimSpace(raw)
+	// Browsers strip ASCII control characters and spaces from a URL before
+	// navigating, so "java\tscript:alert(1)" would still execute. Strip them
+	// first (matching frontend/src/lib/url-safety.ts) so the scheme scan below
+	// evaluates what the browser will act on instead of being fooled into
+	// treating a split scheme as a relative reference.
+	s := stripURLControlBytes(raw)
 	if s == "" {
 		return false
 	}

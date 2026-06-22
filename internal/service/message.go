@@ -203,6 +203,18 @@ func (s *MessageService) indexMessage(ctx context.Context, m *model.Message, par
 	}()
 }
 
+// notify dispatches user-facing notifications off the send path. Like
+// indexMessage it runs in a detached goroutine with a cancellation-free context:
+// the recipient fan-out (member read + per-recipient prefs + mobile push) is
+// best-effort and must never add to the sender's request latency, nor can a
+// notify failure affect the already-committed message or its event publish.
+func (s *MessageService) notify(ctx context.Context, msg *model.Message, parentType string) {
+	if s.notifier == nil || msg == nil {
+		return
+	}
+	go s.notifier.NotifyForMessage(context.WithoutCancel(ctx), msg, parentType)
+}
+
 func (s *MessageService) deleteFromIndex(ctx context.Context, id string) {
 	if s.indexer == nil {
 		return
@@ -342,11 +354,9 @@ func (s *MessageService) Send(ctx context.Context, userID, parentID, parentType,
 	s.publishEvent(ctx, parentID, parentType, events.EventMessageNew, msg)
 
 	// Fire user-facing notifications (sound + popup) to recipients who
-	// haven't muted the parent. Decoupled from event publishing so failure
-	// here never affects state propagation.
-	if s.notifier != nil {
-		s.notifier.NotifyForMessage(ctx, msg, parentType)
-	}
+	// haven't muted the parent. Decoupled from event publishing (and run off
+	// the send path) so failure or latency here never affects state propagation.
+	s.notify(ctx, msg, parentType)
 
 	s.indexMessage(ctx, msg, parentType)
 
@@ -418,9 +428,7 @@ func (s *MessageService) SendWebhook(ctx context.Context, in WebhookMessageInput
 		return nil, fmt.Errorf("message: create webhook: %w", err)
 	}
 	s.publishEvent(ctx, parentID, parentType, events.EventMessageNew, msg)
-	if s.notifier != nil {
-		s.notifier.NotifyForMessage(ctx, msg, parentType)
-	}
+	s.notify(ctx, msg, parentType)
 	s.indexMessage(ctx, msg, parentType)
 	return msg, nil
 }
@@ -748,22 +756,42 @@ func (s *MessageService) ListPinned(ctx context.Context, userID, parentID, paren
 	if err != nil {
 		return nil, fmt.Errorf("message: list pinned index: %w", err)
 	}
+	// Resolve the pinned messages concurrently rather than one serial GetItem
+	// per pin (a channel can have dozens). Results are kept index-aligned so
+	// the pin order from the index is preserved; stale rows are cleaned up after.
+	resolved := make([]*model.Message, len(rows))
+	stale := make([]bool, len(rows))
+	sem := make(chan struct{}, 16)
+	var wg sync.WaitGroup
+	for i, row := range rows {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(i int, msgID string) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			msg, err := s.messages.GetMessage(ctx, parentID, msgID)
+			switch {
+			case err != nil:
+				// A row that no longer resolves to a message (deletion-cleanup
+				// race) is a soft inconsistency — drop it and clean up below.
+				stale[i] = true
+			case !msg.Pinned:
+				// Index says pinned but the message says no — stale index row.
+				stale[i] = true
+			default:
+				resolved[i] = msg
+			}
+		}(i, row.MessageID)
+	}
+	wg.Wait()
+
 	pinned := make([]*model.Message, 0, len(rows))
-	for _, row := range rows {
-		msg, err := s.messages.GetMessage(ctx, parentID, row.MessageID)
-		if err != nil {
-			// A row in the index that no longer resolves to a message
-			// (deletion-cleanup race) is a soft inconsistency — drop
-			// it from this response and best-effort the cleanup.
+	for i, row := range rows {
+		if stale[i] {
 			_ = s.parentIndex.DeletePinIndex(ctx, parentID, row.MessageID)
 			continue
 		}
-		if !msg.Pinned {
-			// Index says pinned but message says no — stale index row.
-			_ = s.parentIndex.DeletePinIndex(ctx, parentID, row.MessageID)
-			continue
-		}
-		pinned = append(pinned, msg)
+		pinned = append(pinned, resolved[i])
 	}
 	s.attachRendered(pinned...)
 	return pinned, nil
