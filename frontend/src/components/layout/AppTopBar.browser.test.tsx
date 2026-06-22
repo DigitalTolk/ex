@@ -28,6 +28,7 @@ vi.mock('@/context/PresenceContext', () => ({
 }));
 vi.mock('@/components/SearchBar', () => ({ SearchBar: () => <div aria-label="Search">search</div> }));
 vi.mock('@/components/EditProfileDialog', () => ({ EditProfileDialog: ({ open }: { open: boolean }) => (open ? <div data-testid="edit-profile-open" /> : null) }));
+vi.mock('@/components/NotificationSettingsDialog', () => ({ NotificationSettingsDialog: ({ open }: { open: boolean }) => (open ? <div data-testid="notifications-open" /> : null) }));
 vi.mock('@/components/UserStatusDialog', () => ({ UserStatusDialog: ({ open }: { open: boolean }) => (open ? <div data-testid="status-open" /> : null) }));
 vi.mock('@/components/AboutDialog', () => ({ AboutDialog: ({ open }: { open: boolean }) => (open ? <div data-testid="about-open" /> : null) }));
 vi.mock('@/components/InviteDialog', () => ({ InviteDialog: ({ open }: { open: boolean }) => (open ? <div data-testid="invite-open" /> : null) }));
@@ -64,6 +65,12 @@ describe('AppTopBar (browser)', () => {
     await screen.getByTestId('topbar-account').click();
     await expect.element(screen.getByTestId('user-menu-invite')).toBeVisible();
     expect(document.querySelector('[data-testid="user-menu-emojis"]')).not.toBeNull();
+  });
+
+  it('exposes the notification-settings item in the account menu', async () => {
+    const screen = await renderTopBar();
+    await screen.getByTestId('topbar-account').click();
+    await expect.element(screen.getByTestId('user-menu-notifications')).toBeVisible();
   });
 
   it('hides the invite item for a guest account', async () => {

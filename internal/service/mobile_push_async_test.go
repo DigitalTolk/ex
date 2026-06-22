@@ -267,6 +267,7 @@ func TestNotificationService_AsyncMobilePushDoesNotBlockMessageDelivery(t *testi
 
 	chans.channels["ch1"] = &model.Channel{ID: "ch1", Name: "general", Slug: "general", Type: model.ChannelTypePublic}
 	users.users["u-author"] = &model.User{ID: "u-author", DisplayName: "Alice"}
+	seedAllLevel(users, "u-1", "u-2", "u-3", "u-4", "u-5")
 	members.memberships["ch1#u-author"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u-author"}
 	for _, uid := range []string{"u-1", "u-2", "u-3", "u-4", "u-5"} {
 		members.memberships["ch1#"+uid] = &model.ChannelMembership{ChannelID: "ch1", UserID: uid}

@@ -325,6 +325,59 @@ func (s *UserStoreImpl) HasUsers(ctx context.Context) (bool, error) {
 	return len(out.Items) > 0, nil
 }
 
+// NotificationSettingsFor batch-reads the account-level notification settings
+// for the supplied users in a single fan-out (chunked BatchGetItem of 100),
+// projecting only the id + settings attributes. Users with no saved settings
+// resolve to DefaultNotificationSettings; users with no profile row at all are
+// simply absent from the returned map (the caller defaults them).
+func (s *UserStoreImpl) NotificationSettingsFor(ctx context.Context, userIDs []string) (map[string]model.NotificationSettings, error) {
+	out := make(map[string]model.NotificationSettings)
+	const batchSize = 100 // DynamoDB BatchGetItem hard limit
+	for start := 0; start < len(userIDs); start += batchSize {
+		end := min(start+batchSize, len(userIDs))
+		keys := make([]map[string]types.AttributeValue, 0, end-start)
+		for _, uid := range userIDs[start:end] {
+			keys = append(keys, compositeKey(userPK(uid), profileSK()))
+		}
+		req := map[string]types.KeysAndAttributes{
+			s.Table: {
+				Keys:                     keys,
+				ProjectionExpression:     aws.String("#id, #ns"),
+				ExpressionAttributeNames: map[string]string{"#id": "id", "#ns": "notificationSettings"},
+			},
+		}
+		for {
+			res, err := s.Client.BatchGetItem(ctx, &dynamodb.BatchGetItemInput{RequestItems: req})
+			if err != nil {
+				return nil, fmt.Errorf("store: batch get notification settings: %w", err)
+			}
+			for _, item := range res.Responses[s.Table] {
+				var row struct {
+					ID       string                      `dynamodbav:"id"`
+					Settings *model.NotificationSettings `dynamodbav:"notificationSettings"`
+				}
+				if err := attributevalue.UnmarshalMap(item, &row); err != nil { // coverage-ignore: round-trip of rows this store wrote; cannot fail
+					return nil, fmt.Errorf("store: unmarshal notification settings row: %w", err)
+				}
+				if row.ID == "" {
+					continue
+				}
+				if row.Settings != nil {
+					out[row.ID] = *row.Settings
+				} else {
+					out[row.ID] = model.DefaultNotificationSettings()
+				}
+			}
+			unproc, ok := res.UnprocessedKeys[s.Table]
+			if !ok || len(unproc.Keys) == 0 {
+				break
+			}
+			req = map[string]types.KeysAndAttributes{s.Table: unproc}
+		}
+	}
+	return out, nil
+}
+
 // compositeKey builds a DynamoDB key map from PK and SK strings.
 func compositeKey(pk, sk string) map[string]types.AttributeValue {
 	return map[string]types.AttributeValue{

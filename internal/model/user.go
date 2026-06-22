@@ -32,7 +32,12 @@ type User struct {
 	EmojiSkinTone string       `json:"emojiSkinTone,omitempty" dynamodbav:"emojiSkinTone,omitempty"`
 	UserStatus    *UserStatus  `json:"userStatus,omitempty" dynamodbav:"userStatus,omitempty"`
 	TimeZone      string       `json:"timeZone,omitempty" dynamodbav:"timeZone,omitempty"`
-	Status        string       `json:"status" dynamodbav:"status"` // "active", "deactivated"
+	// NotificationSettings is the user's account-level notification baseline
+	// (desktop/mobile levels, thread replies, group mentions, follow-all, and
+	// the global keyword list). Nil means the user has never customised it and
+	// DefaultNotificationSettings applies.
+	NotificationSettings *NotificationSettings `json:"notificationSettings,omitempty" dynamodbav:"notificationSettings,omitempty"`
+	Status               string                `json:"status" dynamodbav:"status"` // "active", "deactivated"
 	LastSeenAt    *time.Time   `json:"lastSeenAt,omitempty" dynamodbav:"lastSeenAt,omitempty"`
 	CreatedAt     time.Time    `json:"createdAt" dynamodbav:"createdAt"`
 	UpdatedAt     time.Time    `json:"updatedAt" dynamodbav:"updatedAt"`

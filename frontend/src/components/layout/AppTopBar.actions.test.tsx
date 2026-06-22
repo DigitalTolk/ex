@@ -21,6 +21,7 @@ vi.mock('@/context/PresenceContext', () => ({
 }));
 vi.mock('@/components/SearchBar', () => ({ SearchBar: () => <div aria-label="Search" /> }));
 vi.mock('@/components/EditProfileDialog', () => ({ EditProfileDialog: ({ open }: { open: boolean }) => open ? <div data-testid="edit-profile-open" /> : null }));
+vi.mock('@/components/NotificationSettingsDialog', () => ({ NotificationSettingsDialog: ({ open }: { open: boolean }) => open ? <div data-testid="notifications-open" /> : null }));
 vi.mock('@/components/UserStatusDialog', () => ({ UserStatusDialog: ({ open }: { open: boolean }) => open ? <div data-testid="status-open" /> : null }));
 vi.mock('@/components/AboutDialog', () => ({ AboutDialog: ({ open }: { open: boolean }) => open ? <div data-testid="about-open" /> : null }));
 vi.mock('@/components/InviteDialog', () => ({ InviteDialog: ({ open }: { open: boolean }) => open ? <div data-testid="invite-open" /> : null }));
@@ -56,6 +57,13 @@ describe('AppTopBar menu actions', () => {
     fireEvent.click(screen.getByTestId('topbar-account'));
     fireEvent.click(screen.getByText('Set status'));
     expect(screen.getByTestId('status-open')).toBeInTheDocument();
+  });
+
+  it('opens the notification settings dialog from the menu', () => {
+    renderTopBar();
+    fireEvent.click(screen.getByTestId('topbar-account'));
+    fireEvent.click(screen.getByTestId('user-menu-notifications'));
+    expect(screen.getByTestId('notifications-open')).toBeInTheDocument();
   });
 
   it('navigates to the custom emoji page from the menu', () => {

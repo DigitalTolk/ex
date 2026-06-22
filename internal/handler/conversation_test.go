@@ -153,6 +153,19 @@ func (s *dataUserStoreForConv) ListUsers(_ context.Context, _ int, _ string) ([]
 	return nil, "", nil
 }
 func (s *dataUserStoreForConv) HasUsers(_ context.Context) (bool, error) { return true, nil }
+func (s *dataUserStoreForConv) NotificationSettingsFor(_ context.Context, userIDs []string) (map[string]model.NotificationSettings, error) {
+	out := make(map[string]model.NotificationSettings)
+	for _, uid := range userIDs {
+		if u, ok := s.users[uid]; ok {
+			if u.NotificationSettings != nil {
+				out[uid] = *u.NotificationSettings
+			} else {
+				out[uid] = model.DefaultNotificationSettings()
+			}
+		}
+	}
+	return out, nil
+}
 
 type convHandlerEnv struct {
 	handler  *ConversationHandler

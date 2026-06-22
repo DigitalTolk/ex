@@ -1041,6 +1041,77 @@ func TestUpdateMe_StoreError(t *testing.T) {
 	}
 }
 
+func TestSetMyNotificationSettings_OK(t *testing.T) {
+	h, userStore, jwtMgr := setupUserHandler(t)
+	user := &model.User{ID: "ns-1", Email: "ns@x.com", DisplayName: "NS", SystemRole: model.SystemRoleMember, Status: "active"}
+	userStore.users[user.ID] = user
+	userStore.emailIndex[user.Email] = user
+	token := makeTokenForUser(jwtMgr, user)
+	handler := middleware.Auth(jwtMgr)(http.HandlerFunc(h.SetMyNotificationSettings))
+
+	body := `{"desktopLevel":"all","mobileLevel":"default","threadReplies":true,"keywords":["deploy"]}`
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/users/me/notification-settings", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
+	}
+	var got model.User
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got.NotificationSettings == nil || got.NotificationSettings.DesktopLevel != model.NotificationLevelAll {
+		t.Errorf("response missing updated settings: %+v", got.NotificationSettings)
+	}
+}
+
+func TestSetMyNotificationSettings_InvalidLevel(t *testing.T) {
+	h, userStore, jwtMgr := setupUserHandler(t)
+	user := &model.User{ID: "ns-2", Email: "ns2@x.com", SystemRole: model.SystemRoleMember, Status: "active"}
+	userStore.users[user.ID] = user
+	token := makeTokenForUser(jwtMgr, user)
+	handler := middleware.Auth(jwtMgr)(http.HandlerFunc(h.SetMyNotificationSettings))
+
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/users/me/notification-settings", strings.NewReader(`{"desktopLevel":"bogus"}`))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", rec.Code)
+	}
+}
+
+func TestSetMyNotificationSettings_InvalidJSON(t *testing.T) {
+	h, userStore, jwtMgr := setupUserHandler(t)
+	user := &model.User{ID: "ns-3", Email: "ns3@x.com", SystemRole: model.SystemRoleMember, Status: "active"}
+	userStore.users[user.ID] = user
+	token := makeTokenForUser(jwtMgr, user)
+	handler := middleware.Auth(jwtMgr)(http.HandlerFunc(h.SetMyNotificationSettings))
+
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/users/me/notification-settings", strings.NewReader("{bad"))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", rec.Code)
+	}
+}
+
+func TestSetMyNotificationSettings_Unauthenticated(t *testing.T) {
+	h, _, _ := setupUserHandler(t)
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/users/me/notification-settings", strings.NewReader(`{"desktopLevel":"all","mobileLevel":"default"}`))
+	rec := httptest.NewRecorder()
+	h.SetMyNotificationSettings(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", rec.Code)
+	}
+}
+
 func TestGetMe_StoreError(t *testing.T) {
 	h, _, jwtMgr := setupUserHandler(t)
 	user := &model.User{ID: "missing-get", Email: "x@x.com", SystemRole: model.SystemRoleMember}

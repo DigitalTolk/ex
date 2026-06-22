@@ -85,6 +85,7 @@ func NewRouter(d *Deps) http.Handler {
 	mux.Handle("PATCH /api/v1/users/me", middleware.WrapFunc(userH.UpdateMe, authMW))
 	mux.Handle("PATCH /api/v1/users/me/status", middleware.WrapFunc(userH.SetMyUserStatus, authMW))
 	mux.Handle("DELETE /api/v1/users/me/status", middleware.WrapFunc(userH.ClearMyUserStatus, authMW))
+	mux.Handle("PUT /api/v1/users/me/notification-settings", middleware.WrapFunc(userH.SetMyNotificationSettings, authMW))
 	mux.Handle("POST /api/v1/users/me/avatar/upload-url", middleware.WrapFunc(userH.CreateAvatarUploadURL, authMW))
 	mux.Handle("POST /api/v1/users/batch", middleware.WrapFunc(userH.BatchGetUsers, authMW))
 	mux.Handle("GET /api/v1/users/{id}", middleware.WrapFunc(userH.GetUser, authMW))
@@ -111,6 +112,7 @@ func NewRouter(d *Deps) http.Handler {
 	mux.Handle("POST /api/v1/channels/{id}/join", middleware.WrapFunc(channelH.Join, authMW))
 	mux.Handle("POST /api/v1/channels/{id}/leave", middleware.WrapFunc(channelH.Leave, authMW))
 	mux.Handle("PUT /api/v1/channels/{id}/mute", middleware.WrapFunc(channelH.SetMute, authMW))
+	mux.Handle("PUT /api/v1/channels/{id}/notification-preferences", middleware.WrapFunc(channelH.SetNotificationPrefs, authMW))
 
 	mux.Handle("GET /api/v1/channels/{id}/members", middleware.WrapFunc(channelH.ListMembers, authMW))
 	mux.Handle("POST /api/v1/channels/{id}/members", middleware.WrapFunc(channelH.AddMember, authMW))

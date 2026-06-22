@@ -36,6 +36,9 @@ func (a *UserStoreAdapter) ListUsers(ctx context.Context, limit int, cursor stri
 func (a *UserStoreAdapter) HasUsers(ctx context.Context) (bool, error) {
 	return a.s.HasUsers(ctx)
 }
+func (a *UserStoreAdapter) NotificationSettingsFor(ctx context.Context, userIDs []string) (map[string]model.NotificationSettings, error) {
+	return a.s.NotificationSettingsFor(ctx, userIDs)
+}
 
 // ChannelStoreAdapter wraps store.ChannelStoreImpl to satisfy service.ChannelStore.
 type ChannelStoreAdapter struct {
@@ -101,11 +104,14 @@ func (a *MembershipStoreAdapter) ListMembers(ctx context.Context, channelID stri
 func (a *MembershipStoreAdapter) ListUserChannels(ctx context.Context, userID string) ([]*model.UserChannel, error) {
 	return a.s.ListUserChannels(ctx, userID)
 }
-func (a *MembershipStoreAdapter) MutedUserIDs(ctx context.Context, channelID string, userIDs []string) (map[string]bool, error) {
-	return a.s.MutedUserIDs(ctx, channelID, userIDs)
+func (a *MembershipStoreAdapter) UserChannelNotifPrefs(ctx context.Context, channelID string, userIDs []string) (map[string]*model.UserChannel, error) {
+	return a.s.UserChannelNotifPrefs(ctx, channelID, userIDs)
 }
 func (a *MembershipStoreAdapter) SetMute(ctx context.Context, channelID, userID string, muted bool) error {
 	return a.s.SetUserChannelMute(ctx, channelID, userID, muted)
+}
+func (a *MembershipStoreAdapter) SetNotifPrefs(ctx context.Context, channelID, userID string, override model.ChannelNotificationOverride) error {
+	return a.s.SetUserChannelNotifPrefs(ctx, channelID, userID, override)
 }
 func (a *MembershipStoreAdapter) SetFavorite(ctx context.Context, channelID, userID string, favorite bool) error {
 	return a.s.SetUserChannelFavorite(ctx, channelID, userID, favorite)

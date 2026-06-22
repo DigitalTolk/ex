@@ -634,6 +634,22 @@ describe('ChatPage WebSocket handlers', () => {
     });
   });
 
+  it('onNotificationSettingsUpdated patches the authenticated user settings', () => {
+    renderAt('/');
+    (capturedOptions.onNotificationSettingsUpdated as (d: unknown) => void)({
+      settings: { desktopLevel: 'all', mobileLevel: 'default', threadReplies: true, ignoreGroupMentions: false, followAllThreads: false, keywords: [] },
+    });
+    expect(patchUserMock).toHaveBeenCalledWith({
+      notificationSettings: expect.objectContaining({ desktopLevel: 'all' }),
+    });
+  });
+
+  it('onNotificationSettingsUpdated ignores a payload without settings', () => {
+    renderAt('/');
+    (capturedOptions.onNotificationSettingsUpdated as (d: unknown) => void)({});
+    expect(patchUserMock).not.toHaveBeenCalled();
+  });
+
   it('onPing sends timezone.update on the first ping, then only after browser timezone changes', () => {
     renderAt('/');
 

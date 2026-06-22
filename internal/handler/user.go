@@ -84,6 +84,31 @@ func (h *UserHandler) UpdateMe(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, user)
 }
 
+// SetMyNotificationSettings replaces the authenticated user's account-level
+// notification settings (levels, toggles, keywords) and returns the updated
+// profile. Body is the full NotificationSettings object.
+func (h *UserHandler) SetMyNotificationSettings(w http.ResponseWriter, r *http.Request) {
+	userID := middleware.UserIDFromContext(r.Context())
+	if userID == "" {
+		writeError(w, http.StatusUnauthorized, "unauthorized", "authentication required")
+		return
+	}
+
+	var settings model.NotificationSettings
+	if err := readJSON(r, &settings); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", err.Error())
+		return
+	}
+
+	user, err := h.userSvc.SetNotificationSettings(r.Context(), userID, settings)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "notification_settings_error", err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, user)
+}
+
 // SetMyUserStatus sets the authenticated user's visible status message.
 func (h *UserHandler) SetMyUserStatus(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserIDFromContext(r.Context())

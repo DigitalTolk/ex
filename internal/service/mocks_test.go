@@ -24,6 +24,7 @@ type mockUserStore struct {
 	getEmailErr error
 	updateErr   error
 	listErr     error
+	notifErr    error
 }
 
 func newMockUserStore() *mockUserStore {
@@ -89,6 +90,25 @@ func (m *mockUserStore) HasUsers(_ context.Context) (bool, error) {
 		return false, m.hasUsersErr
 	}
 	return m.hasUsersVal, nil
+}
+
+func (m *mockUserStore) NotificationSettingsFor(_ context.Context, userIDs []string) (map[string]model.NotificationSettings, error) {
+	if m.notifErr != nil {
+		return nil, m.notifErr
+	}
+	out := make(map[string]model.NotificationSettings)
+	for _, uid := range userIDs {
+		u, ok := m.users[uid]
+		if !ok {
+			continue
+		}
+		if u.NotificationSettings != nil {
+			out[uid] = *u.NotificationSettings
+		} else {
+			out[uid] = model.DefaultNotificationSettings()
+		}
+	}
+	return out, nil
 }
 
 // --- Mock TokenStore ---
@@ -196,6 +216,7 @@ type mockMembershipStore struct {
 	listMembersErr  error
 	listChannelsErr error
 	setMuteErr      error
+	setNotifErr     error
 }
 
 func newMockMembershipStore() *mockMembershipStore {
@@ -285,7 +306,7 @@ func (m *mockMembershipStore) ListUserChannels(_ context.Context, userID string)
 	return nil, nil
 }
 
-func (m *mockMembershipStore) MutedUserIDs(_ context.Context, channelID string, userIDs []string) (map[string]bool, error) {
+func (m *mockMembershipStore) UserChannelNotifPrefs(_ context.Context, channelID string, userIDs []string) (map[string]*model.UserChannel, error) {
 	if m.listChannelsErr != nil {
 		return nil, m.listChannelsErr
 	}
@@ -293,15 +314,21 @@ func (m *mockMembershipStore) MutedUserIDs(_ context.Context, channelID string, 
 	for _, uid := range userIDs {
 		want[uid] = true
 	}
-	out := make(map[string]bool)
+	out := make(map[string]*model.UserChannel)
 	for _, uc := range m.userChannels {
-		if uc.ChannelID == channelID && uc.Muted && want[uc.UserID] {
-			out[uc.UserID] = true
+		if uc.ChannelID == channelID && want[uc.UserID] {
+			cp := *uc
+			out[uc.UserID] = &cp
 		}
 	}
 	for _, uid := range userIDs {
-		if m.mutes[channelID+"#"+uid] {
-			out[uid] = true
+		if !m.mutes[channelID+"#"+uid] {
+			continue
+		}
+		if existing, ok := out[uid]; ok {
+			existing.Muted = true
+		} else {
+			out[uid] = &model.UserChannel{UserID: uid, ChannelID: channelID, Muted: true}
 		}
 	}
 	return out, nil
@@ -313,6 +340,23 @@ func (m *mockMembershipStore) SetMute(_ context.Context, channelID, userID strin
 	}
 	m.mutes[channelID+"#"+userID] = muted
 	return nil
+}
+
+func (m *mockMembershipStore) SetNotifPrefs(_ context.Context, channelID, userID string, o model.ChannelNotificationOverride) error {
+	if m.setNotifErr != nil {
+		return m.setNotifErr
+	}
+	for _, uc := range m.userChannels {
+		if uc.UserID == userID && uc.ChannelID == channelID {
+			uc.DesktopLevel = o.DesktopLevel
+			uc.MobileLevel = o.MobileLevel
+			uc.ThreadReplies = o.ThreadReplies
+			uc.IgnoreGroupMentions = o.IgnoreGroupMentions
+			uc.FollowAllThreads = o.FollowAllThreads
+			return nil
+		}
+	}
+	return store.ErrNotFound
 }
 
 func (m *mockMembershipStore) SetFavorite(_ context.Context, channelID, userID string, favorite bool) error {

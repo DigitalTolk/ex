@@ -1,7 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiFetch } from '@/lib/api';
 import { queryKeys } from '@/lib/query-keys';
-import type { UserChannel, Channel, ChannelMembership } from '@/types';
+import type { UserChannel, Channel, ChannelMembership, ChannelNotificationOverride } from '@/types';
 
 export function useUserChannels(options?: { enabled?: boolean }) {
   return useQuery({
@@ -101,6 +101,24 @@ export function useMuteChannel() {
     // Refresh the user's channel list so the sidebar bell-slash indicator
     // updates. The server also broadcasts channel.muted via WebSocket so
     // other tabs/devices stay in sync.
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.userChannels() });
+    },
+  });
+}
+
+// useSetChannelNotificationPrefs persists per-channel notification overrides.
+// A nil/omitted field means "inherit the account default". The server echoes
+// userchannel.updated over WebSocket so other tabs/devices stay in sync; we
+// also refresh userChannels locally so the modal reflects the saved state.
+export function useSetChannelNotificationPrefs() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: { channelId: string; override: ChannelNotificationOverride }) =>
+      apiFetch<void>(`/api/v1/channels/${vars.channelId}/notification-preferences`, {
+        method: 'PUT',
+        body: JSON.stringify(vars.override),
+      }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.userChannels() });
     },

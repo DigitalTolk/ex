@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { Header } from '@/components/layout/Header';
+import { NotificationPreferencesDialog } from '@/components/channels/NotificationPreferencesDialog';
 import { MessageList } from './MessageList';
 import { MessageInput, type MessageInputHandle } from './MessageInput';
 import { MessageDropZone } from './MessageDropZone';
@@ -335,6 +336,7 @@ export function ChannelView() {
   const { data: userChannels } = useUserChannels();
   const muted = !!userChannels?.find((uc) => uc.channelID === channel?.id)?.muted;
   const muteChannel = useMuteChannel();
+  const [notifPrefsOpen, setNotifPrefsOpen] = useState(false);
   function handleToggleMute() {
     /* istanbul ignore next -- only wired to the header menu, which renders only when `channel` is loaded, so the `channel == null` optional-chain arm is unreachable; defensive. */
     if (!channel?.id) return;
@@ -392,6 +394,16 @@ export function ChannelView() {
   /* istanbul ignore next -- channel is guaranteed loaded past the error guards above, so the `: undefined` arm is unreachable; defensive. */
   const filesPostedIn = channel ? `~${channel.name}` : undefined;
 
+  /* istanbul ignore next -- channel is guaranteed loaded past the error guards above, so the `: null` arm is unreachable; mirrors filesPostedIn. */
+  const notifPrefsDialog = channel ? (
+    <NotificationPreferencesDialog
+      open={notifPrefsOpen}
+      onOpenChange={setNotifPrefsOpen}
+      channelId={channel.id}
+      channelName={channel.name}
+    />
+  ) : null;
+
   return (
     <div className="flex min-h-0 flex-1 overflow-hidden">
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
@@ -408,6 +420,7 @@ export function ChannelView() {
           onLeave={handleLeave}
           muted={muted}
           onToggleMute={handleToggleMute}
+          onNotificationPrefsClick={() => setNotifPrefsOpen(true)}
           onPinnedClick={togglePinned}
           pinnedActive={showPinned}
           onFilesClick={toggleFiles}
@@ -513,6 +526,7 @@ export function ChannelView() {
           onClose={closeMembers}
         />
       ) : null}
+      {notifPrefsDialog}
     </div>
   );
 }

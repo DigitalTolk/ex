@@ -19,10 +19,6 @@ func (f *fakeSearchMemberships) ListUserChannels(_ context.Context, userID strin
 	return append([]*model.UserChannel(nil), f.chans[userID]...), nil
 }
 
-func (f *fakeSearchMemberships) MutedUserIDs(context.Context, string, []string) (map[string]bool, error) {
-	return map[string]bool{}, nil
-}
-
 type fakeSearchConversations struct {
 	calls int
 	convs map[string][]*model.UserConversation

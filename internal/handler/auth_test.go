@@ -85,6 +85,20 @@ func (m *mockUserStore) HasUsers(_ context.Context) (bool, error) {
 	return m.hasUsersVal, nil
 }
 
+func (m *mockUserStore) NotificationSettingsFor(_ context.Context, userIDs []string) (map[string]model.NotificationSettings, error) {
+	out := make(map[string]model.NotificationSettings)
+	for _, uid := range userIDs {
+		if u, ok := m.users[uid]; ok {
+			if u.NotificationSettings != nil {
+				out[uid] = *u.NotificationSettings
+			} else {
+				out[uid] = model.DefaultNotificationSettings()
+			}
+		}
+	}
+	return out, nil
+}
+
 type mockTokenStore struct {
 	tokens map[string]*model.RefreshToken
 }
@@ -156,13 +170,16 @@ func (m *mockMembershipStore) ListUserChannels(_ context.Context, _ string) ([]*
 	}
 	return nil, nil
 }
-func (m *mockMembershipStore) MutedUserIDs(_ context.Context, _ string, _ []string) (map[string]bool, error) {
+func (m *mockMembershipStore) UserChannelNotifPrefs(_ context.Context, _ string, _ []string) (map[string]*model.UserChannel, error) {
 	if m.listUserChannelsErr != nil {
 		return nil, m.listUserChannelsErr
 	}
-	return map[string]bool{}, nil
+	return map[string]*model.UserChannel{}, nil
 }
 func (m *mockMembershipStore) SetMute(_ context.Context, _, _ string, _ bool) error {
+	return nil
+}
+func (m *mockMembershipStore) SetNotifPrefs(_ context.Context, _, _ string, _ model.ChannelNotificationOverride) error {
 	return nil
 }
 func (m *mockMembershipStore) SetFavorite(_ context.Context, _, _ string, _ bool) error {

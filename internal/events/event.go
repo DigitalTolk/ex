@@ -49,8 +49,12 @@ const (
 	EventUserUpdated        = "user.updated"
 	EventAttachmentDeleted  = "attachment.deleted"
 	EventChannelMuted       = "channel.muted"
-	EventUserChannelUpdated = "userchannel.updated" // per-user user-side state changed (favorite/category)
+	EventUserChannelUpdated = "userchannel.updated" // per-user user-side state changed (favorite/category/notification prefs)
 	EventNotificationNew    = "notification.new"
+	// EventNotificationSettingsUpdated is sent to a user's own clients when
+	// their account-level notification settings (levels, keywords, etc.)
+	// change, so every open tab/device stays in sync.
+	EventNotificationSettingsUpdated = "notification.settings_updated"
 	EventDraftUpdated       = "draft.updated"
 	EventForceLogout        = "auth.force_logout" // sent to a user's personal channel when their session must end (e.g. deactivation)
 	EventServerVersion      = "server.version"    // sent once on connect so clients can detect deploys without polling

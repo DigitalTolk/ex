@@ -35,6 +35,7 @@ interface UseWebSocketOptions {
   onAttachmentDeleted?: WSCallback;
   onChannelMuted?: WSCallback;
   onNotification?: WSCallback;
+  onNotificationSettingsUpdated?: WSCallback;
   onDraftUpdated?: WSCallback;
   onWebhookChanged?: WSCallback;
   onForceLogout?: WSCallback;
@@ -177,6 +178,9 @@ export function useWebSocket(options: UseWebSocketOptions) {
               break;
             case EventType.NotificationNew:
               callbacksRef.current.onNotification?.(payload);
+              break;
+            case EventType.NotificationSettingsUpdated:
+              callbacksRef.current.onNotificationSettingsUpdated?.(payload);
               break;
             case EventType.DraftUpdated:
               callbacksRef.current.onDraftUpdated?.(payload);

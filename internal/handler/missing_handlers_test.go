@@ -948,6 +948,71 @@ func TestChannelHandler_SetMute_NotMember(t *testing.T) {
 	}
 }
 
+// --- Channel SetNotificationPrefs tests ---
+
+func TestChannelHandler_SetNotificationPrefs_MissingID(t *testing.T) {
+	h, _, _, _ := setupChannelHandler(t)
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/channels//notification-preferences", strings.NewReader(`{}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	h.SetNotificationPrefs(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+}
+
+func TestChannelHandler_SetNotificationPrefs_InvalidJSON(t *testing.T) {
+	h, _, _, _ := setupChannelHandler(t)
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/channels/c1/notification-preferences", strings.NewReader("{bad"))
+	req.SetPathValue("id", "c1")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	h.SetNotificationPrefs(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+}
+
+func TestChannelHandler_SetNotificationPrefs_OK(t *testing.T) {
+	env := setupChannelHandlerFull(t)
+	env.memberships.memberships["ch-np#u-np"] = &model.ChannelMembership{
+		ChannelID: "ch-np", UserID: "u-np", Role: model.ChannelRoleMember,
+	}
+	user := &model.User{ID: "u-np", Email: "np@x.com", SystemRole: model.SystemRoleMember}
+	token := makeTokenForUser(env.jwtMgr, user)
+	handler := middleware.Auth(env.jwtMgr)(http.HandlerFunc(env.handler.SetNotificationPrefs))
+
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/channels/ch-np/notification-preferences", strings.NewReader(`{"desktopLevel":"all","threadReplies":false}`))
+	req.SetPathValue("id", "ch-np")
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Errorf("status = %d, want %d (body: %s)", rec.Code, http.StatusNoContent, rec.Body.String())
+	}
+}
+
+func TestChannelHandler_SetNotificationPrefs_InvalidLevel(t *testing.T) {
+	env := setupChannelHandlerFull(t)
+	env.memberships.memberships["ch-np#u-np"] = &model.ChannelMembership{
+		ChannelID: "ch-np", UserID: "u-np", Role: model.ChannelRoleMember,
+	}
+	user := &model.User{ID: "u-np", Email: "np@x.com", SystemRole: model.SystemRoleMember}
+	token := makeTokenForUser(env.jwtMgr, user)
+	handler := middleware.Auth(env.jwtMgr)(http.HandlerFunc(env.handler.SetNotificationPrefs))
+
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/channels/ch-np/notification-preferences", strings.NewReader(`{"desktopLevel":"bogus"}`))
+	req.SetPathValue("id", "ch-np")
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+}
+
 func TestChannelHandler_SetPinned_MissingIDs(t *testing.T) {
 	h, _, _, _ := setupChannelHandler(t)
 	req := httptest.NewRequest(http.MethodPut, "/api/v1/channels//messages//pin", strings.NewReader(`{"pinned":true}`))

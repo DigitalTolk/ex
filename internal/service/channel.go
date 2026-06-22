@@ -460,6 +460,31 @@ func (s *ChannelService) SetMute(ctx context.Context, userID, channelID string, 
 	return nil
 }
 
+// SetNotificationPrefs persists the caller's per-channel notification
+// overrides. Each field is "use my account default" when nil, or an explicit
+// override otherwise. Like mute it's a per-user preference, so only the user's
+// own clients are notified (via userchannel.updated) to keep tabs in sync.
+func (s *ChannelService) SetNotificationPrefs(ctx context.Context, userID, channelID string, override model.ChannelNotificationOverride) error {
+	if override.DesktopLevel != nil && !override.DesktopLevel.Valid() {
+		return errors.New("channel: invalid desktop notification level")
+	}
+	if override.MobileLevel != nil && !override.MobileLevel.Valid() {
+		return errors.New("channel: invalid mobile notification level")
+	}
+	if _, err := s.memberships.GetMembership(ctx, channelID, userID); err != nil {
+		return fmt.Errorf("channel: get membership: %w", err)
+	}
+	if err := s.memberships.SetNotifPrefs(ctx, channelID, userID, override); err != nil {
+		return fmt.Errorf("channel: set notification prefs: %w", err)
+	}
+	events.Publish(ctx, s.publisher, pubsub.UserChannel(userID), events.EventUserChannelUpdated, map[string]any{
+		"channelID":         channelID,
+		"userID":            userID,
+		"notificationPrefs": override,
+	})
+	return nil
+}
+
 // SetFavorite pins or unpins a channel in the user's sidebar. Per-user.
 // The user must already be a member — pinning a channel you can't see
 // would create an orphan row in the user-side index.

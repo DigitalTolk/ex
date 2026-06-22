@@ -297,6 +297,31 @@ func (h *ChannelHandler) SetMute(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// SetNotificationPrefs sets the authenticated user's per-channel notification
+// overrides. Body is the override object: each field may be omitted/null to
+// inherit the account default, or set to an explicit value.
+func (h *ChannelHandler) SetNotificationPrefs(w http.ResponseWriter, r *http.Request) {
+	userID := middleware.UserIDFromContext(r.Context())
+	id := pathParam(r, "id")
+	if id == "" {
+		writeError(w, http.StatusBadRequest, "missing_id", "channel ID is required")
+		return
+	}
+
+	var override model.ChannelNotificationOverride
+	if err := readJSON(r, &override); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", err.Error())
+		return
+	}
+
+	if err := h.channelSvc.SetNotificationPrefs(r.Context(), userID, id, override); err != nil {
+		writeError(w, http.StatusBadRequest, "notification_prefs_error", err.Error())
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // Leave removes the authenticated user from a channel.
 func (h *ChannelHandler) Leave(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserIDFromContext(r.Context())

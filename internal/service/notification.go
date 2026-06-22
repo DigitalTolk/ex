@@ -118,12 +118,15 @@ func (s *NotificationService) SetMobilePushSender(push MobilePushSender) {
 
 // memberSnapshot is everything NotifyForMessage and its helpers need to
 // reason about a parent's audience: the IDs of every recipient (author
-// excluded) and which of them muted the channel. Loading it once per
-// message keeps the hot path to a single ListMembers + a single mute
-// scan even when the body contains @all/@here.
+// excluded), which of them muted the channel, and each one's effective
+// notification settings (account defaults folded with per-channel overrides).
+// Loading it once per message keeps the hot path to a single ListMembers + a
+// single batched override read + a single batched account-settings read even
+// when the body contains @all/@here.
 type memberSnapshot struct {
-	memberIDs []string        // every parent member except the author
-	muted     map[string]bool // userID → true if muted (channels only; empty for conversations)
+	memberIDs []string                              // every parent member except the author
+	muted     map[string]bool                       // userID → true if muted (channels only; empty for conversations)
+	prefs     map[string]model.NotificationSettings // userID → effective settings
 	deepLink  string
 }
 
@@ -152,15 +155,23 @@ func (s *NotificationService) loadMemberSnapshot(ctx context.Context, msg *model
 			}
 			ids = append(ids, m.UserID)
 		}
-		// One batched read of the members' mute flags rather than a
-		// ListUserChannels query per member (O(members) queries on every
-		// channel message). On failure, fall back to "no one muted" — a
-		// missed mute is a minor over-notification, not a correctness bug.
-		muted, err := s.members.MutedUserIDs(ctx, msg.ParentID, ids)
+		// One batched read of the members' per-channel overrides (incl. mute)
+		// rather than a ListUserChannels query per member (O(members) queries
+		// on every channel message). On failure, fall back to "no overrides" —
+		// a missed mute/override is a minor over-notification, not a
+		// correctness bug.
+		overrides, err := s.members.UserChannelNotifPrefs(ctx, msg.ParentID, ids)
 		if err != nil {
-			muted = map[string]bool{}
+			overrides = map[string]*model.UserChannel{}
 		}
-		return memberSnapshot{memberIDs: ids, muted: muted, deepLink: "/channel/" + parentName}
+		muted := make(map[string]bool, len(ids))
+		for uid, uc := range overrides {
+			if uc != nil && uc.Muted {
+				muted[uid] = true
+			}
+		}
+		prefs := s.resolvePrefs(ctx, ids, overrides)
+		return memberSnapshot{memberIDs: ids, muted: muted, prefs: prefs, deepLink: "/channel/" + parentName}
 	case ParentConversation:
 		c, err := s.conv.GetConversation(ctx, msg.ParentID)
 		if err != nil || c == nil {
@@ -173,9 +184,36 @@ func (s *NotificationService) loadMemberSnapshot(ctx context.Context, msg *model
 			}
 			ids = append(ids, p)
 		}
-		return memberSnapshot{memberIDs: ids, muted: map[string]bool{}, deepLink: "/conversation/" + msg.ParentID}
+		prefs := s.resolvePrefs(ctx, ids, nil)
+		return memberSnapshot{memberIDs: ids, muted: map[string]bool{}, prefs: prefs, deepLink: "/conversation/" + msg.ParentID}
 	}
 	return memberSnapshot{}
+}
+
+// resolvePrefs batch-loads each member's account-level settings and folds the
+// per-channel override (if any) on top. Missing account settings default to
+// DefaultNotificationSettings; a nil overrides map (conversations) means every
+// member resolves to their pure account baseline.
+func (s *NotificationService) resolvePrefs(ctx context.Context, ids []string, overrides map[string]*model.UserChannel) map[string]model.NotificationSettings {
+	prefs := make(map[string]model.NotificationSettings, len(ids))
+	accounts := map[string]model.NotificationSettings{}
+	if s.users != nil {
+		if got, err := s.users.NotificationSettingsFor(ctx, ids); err == nil {
+			accounts = got
+		}
+	}
+	for _, uid := range ids {
+		acct, ok := accounts[uid]
+		if !ok {
+			acct = model.DefaultNotificationSettings()
+		}
+		var uc *model.UserChannel
+		if overrides != nil {
+			uc = overrides[uid]
+		}
+		prefs[uid] = model.ResolveNotificationPrefs(acct, uc)
+	}
+	return prefs
 }
 
 // NotifyForMessage emits a notification to every channel/conversation member
@@ -209,7 +247,7 @@ func (s *NotificationService) NotifyForMessage(ctx context.Context, msg *model.M
 		deepLink = deepLink + "?thread=" + msg.ParentMessageID + "#msg-" + msg.ParentMessageID
 	}
 
-	notif := Notification{
+	baseNotif := Notification{
 		Kind:            kind,
 		Title:           titleFor(kind, parentType, parentName, authorName),
 		Body:            previewBody(notificationBody(msg)),
@@ -222,57 +260,153 @@ func (s *NotificationService) NotifyForMessage(ctx context.Context, msg *model.M
 		Webhook:         msg.WebhookUsername != "",
 		CreatedAt:       time.Now(),
 	}
+	mentionNotif := baseNotif
+	mentionNotif.Kind = NotificationKindMention
 
-	// A direct @-mention bypasses mute; @all/@here respect it. The
-	// mentions path therefore needs the audience snapshot too — passing
-	// it in keeps both paths to a single ListMembers + mute scan.
+	isThreadReply := kind == NotificationKindThreadReply
+
+	// Mentions are resolved into two sets so per-channel preferences can treat
+	// them differently: an explicit @-mention bypasses mute and notification
+	// level entirely, while @all/@here ("group" mentions) are gated by the
+	// recipient's "ignore @all/@here" preference and their mute flag.
 	mentions := ParseMentions(msg.Body)
-	mentionRecipients := s.resolveMentionRecipients(msg, parentType, mentions, snap)
-
-	mentionedSet := make(map[string]bool, len(mentionRecipients))
-	for _, uid := range mentionRecipients {
-		mentionedSet[uid] = true
+	mentionNotif.Title = mentionTitleFor(mentions, parentType, parentName, authorName)
+	explicitSet := make(map[string]bool)
+	for _, m := range mentions.Users {
+		if m.UserID != "" && m.UserID != msg.AuthorID {
+			explicitSet[m.UserID] = true
+		}
+	}
+	groupSet := make(map[string]bool)
+	if mentions.All || mentions.Here {
+		for _, uid := range snap.memberIDs {
+			if mentions.Here && (s.presence == nil || !s.presence.IsOnline(uid)) {
+				continue
+			}
+			groupSet[uid] = true
+		}
 	}
 
-	// Audience differs by kind:
-	//   - Regular message: every member who didn't mute and isn't
-	//     already getting a higher-priority mention.
-	//   - Thread reply: scoped to the root author + everyone who has
-	//     replied earlier in the thread. A bystander who never opened
-	//     the thread does NOT get pinged when an unrelated thread
-	//     bubbles new replies — that was a regression where channel
-	//     members were being woken up for conversations they're not in.
-	var audience []string
-	if kind == NotificationKindThreadReply {
-		audience = s.resolveThreadRecipients(ctx, msg, parentType, snap)
-	} else {
-		audience = snap.memberIDs
+	// Thread replies are scoped to participants (root author + prior repliers +
+	// explicit followers), expanded with anyone whose preferences enable
+	// "follow all threads". A bystander who never opened the thread and didn't
+	// opt into follow-all is not pinged for unrelated thread chatter.
+	threadParticipants := make(map[string]bool)
+	if isThreadReply && parentType == ParentChannel {
+		for _, uid := range s.resolveThreadRecipients(ctx, msg, parentType, snap) {
+			threadParticipants[uid] = true
+		}
+		for uid, eff := range snap.prefs {
+			if eff.FollowAllThreads {
+				threadParticipants[uid] = true
+			}
+		}
 	}
-	for _, uid := range audience {
-		if mentionedSet[uid] || snap.muted[uid] {
+
+	// Incoming-webhook posts are integrations the user explicitly wired up to
+	// be alerted on, so they notify every (non-muted) member regardless of the
+	// quiet "mentions only" level — the same always-notifiable treatment the
+	// client gives the Webhook flag.
+	isWebhook := msg.WebhookUsername != ""
+
+	for _, uid := range snap.memberIDs {
+		eff := snap.prefs[uid]
+		r := recipientReasons{
+			explicitMention:   explicitSet[uid],
+			groupMention:      groupSet[uid] && !eff.IgnoreGroupMentions,
+			muted:             snap.muted[uid],
+			forceAll:          isWebhook,
+			threadReply:       isThreadReply,
+			threadParticipant: parentType == ParentConversation || threadParticipants[uid],
+			threadReplies:     eff.ThreadReplies,
+			keyword:           matchesKeywords(msg.Body, eff.Keywords),
+		}
+
+		// DMs always notify their participants — "direct messages" is part of
+		// even the quiet "mentions, DMs & keywords" level — so they short-
+		// circuit the level machinery.
+		desktop := parentType == ParentConversation || eligibleAtLevel(eff.DesktopLevel, r)
+		mobile := parentType == ParentConversation
+		if !mobile {
+			switch eff.MobileLevel {
+			case model.MobileNotificationDefault:
+				mobile = desktop
+			case model.MobileNotificationAll:
+				mobile = eligibleAtLevel(model.NotificationLevelAll, r)
+			case model.MobileNotificationMentions:
+				mobile = eligibleAtLevel(model.NotificationLevelMentions, r)
+			}
+		}
+		if !desktop && !mobile {
 			continue
 		}
-		if kind == NotificationKindThreadReply {
-			s.markThreadNotification(ctx, uid, msg, parentType)
-		}
-		events.Publish(ctx, s.publisher, pubsub.UserChannel(uid), events.EventNotificationNew, notif)
-		s.sendMobilePush(ctx, uid, notif)
-	}
 
-	if len(mentionRecipients) > 0 {
-		mentionNotif := notif
-		mentionNotif.Kind = NotificationKindMention
-		mentionNotif.Title = mentionTitleFor(mentions, parentType, parentName, authorName)
-		for _, uid := range mentionRecipients {
-			if kind == NotificationKindThreadReply {
-				s.markThreadNotification(ctx, uid, msg, parentType)
-			} else if parentType == ParentChannel {
-				s.markChannelNotification(ctx, uid, msg.ParentID)
-			}
-			events.Publish(ctx, s.publisher, pubsub.UserChannel(uid), events.EventNotificationNew, mentionNotif)
-			s.sendMobilePush(ctx, uid, mentionNotif)
+		notif := baseNotif
+		mentioned := r.explicitMention || r.groupMention
+		if mentioned {
+			notif = mentionNotif
+		}
+
+		// Mirror the unread-indicator marking the previous notifier did:
+		// thread replies mark the thread; channel mentions mark the channel.
+		if isThreadReply {
+			s.markThreadNotification(ctx, uid, msg, parentType)
+		} else if mentioned && parentType == ParentChannel {
+			s.markChannelNotification(ctx, uid, msg.ParentID)
+		}
+
+		if desktop {
+			events.Publish(ctx, s.publisher, pubsub.UserChannel(uid), events.EventNotificationNew, notif)
+		}
+		if mobile {
+			s.sendMobilePush(ctx, uid, notif)
 		}
 	}
+}
+
+// recipientReasons captures, for one recipient and one message, the precomputed
+// signals eligibleAtLevel needs. Keeping it a plain struct makes the decision a
+// pure function that is trivial to unit-test across the level matrix.
+type recipientReasons struct {
+	explicitMention   bool // @-mentioned by user id (bypasses mute + level)
+	groupMention      bool // @all/@here applies after the ignore preference
+	muted             bool // channel muted (suppresses everything but explicit @)
+	forceAll          bool // webhook post — notify every non-muted member regardless of level
+	threadReply       bool // the message is a reply within a thread
+	threadParticipant bool // recipient participates in / follows the thread
+	threadReplies     bool // recipient wants thread-reply notifications
+	keyword           bool // message body matched one of the recipient's keywords
+}
+
+// eligibleAtLevel decides whether a channel recipient should be notified at the
+// given notification level. Conversations are handled by the caller (always
+// notified) and never reach here.
+func eligibleAtLevel(level model.NotificationLevel, r recipientReasons) bool {
+	if r.explicitMention {
+		return true
+	}
+	if r.muted {
+		return false
+	}
+	if r.forceAll {
+		return true
+	}
+	if r.groupMention {
+		return true
+	}
+	if r.threadReply {
+		if !r.threadParticipant {
+			return false
+		}
+		if level == model.NotificationLevelAll {
+			return true
+		}
+		return r.threadReplies || r.keyword
+	}
+	if level == model.NotificationLevelAll {
+		return true
+	}
+	return r.keyword
 }
 
 func (s *NotificationService) sendMobilePush(ctx context.Context, recipientUserID string, notif Notification) {
@@ -343,54 +477,63 @@ func (s *NotificationService) markThreadNotification(ctx context.Context, userID
 	}
 }
 
-// resolveMentionRecipients fans the parsed mentions out to user IDs:
-//   - explicit user mentions → that user (regardless of mute, but never
-//     the author themselves)
-//   - @all → every channel/conversation member except the author (respects mute)
-//   - @here → online subset of @all (respects mute)
-//
-// Returned IDs are de-duplicated; ordering is stable: explicit mentions
-// first, then @all/@here members in member-list order.
-func (s *NotificationService) resolveMentionRecipients(msg *model.Message, parentType string, mentions ParsedMentions, snap memberSnapshot) []string {
-	if mentions.Empty() {
-		return nil
+// matchesKeywords reports whether body contains any of the recipient's
+// notification keywords as a whole word, case-insensitively. Keywords let the
+// quiet "mentions, DMs & keywords only" level still surface messages a user
+// cares about even when they're not @-mentioned.
+func matchesKeywords(body string, keywords []string) bool {
+	if body == "" || len(keywords) == 0 {
+		return false
 	}
-
-	out := make([]string, 0)
-	seen := make(map[string]bool)
-	add := func(uid string) {
-		if uid == "" || uid == msg.AuthorID || seen[uid] {
-			return
-		}
-		seen[uid] = true
-		out = append(out, uid)
-	}
-
-	for _, m := range mentions.Users {
-		add(m.UserID)
-	}
-
-	if !mentions.All && !mentions.Here {
-		return out
-	}
-
-	for _, uid := range snap.memberIDs {
-		if parentType == ParentChannel && snap.muted[uid] {
+	lower := strings.ToLower(body)
+	for _, kw := range keywords {
+		kw = strings.ToLower(strings.TrimSpace(kw))
+		if kw == "" {
 			continue
 		}
-		if mentions.Here && (s.presence == nil || !s.presence.IsOnline(uid)) {
-			continue
+		if containsWord(lower, kw) {
+			return true
 		}
-		add(uid)
 	}
-	return out
+	return false
+}
+
+// containsWord reports whether needle appears in haystack bounded by non-word
+// characters on both sides (a lightweight \bneedle\b without compiling a regex
+// per keyword per message). Both arguments are expected to be lowercased.
+func containsWord(haystack, needle string) bool {
+	from := 0
+	for {
+		idx := strings.Index(haystack[from:], needle)
+		if idx < 0 {
+			return false
+		}
+		start := from + idx
+		end := start + len(needle)
+		if wordBoundary(haystack, start-1) && wordBoundary(haystack, end) {
+			return true
+		}
+		from = start + 1
+	}
+}
+
+// wordBoundary reports whether position i in s is a word boundary — i.e. out of
+// range or a non-[a-z0-9_] byte. Used by containsWord on already-lowercased
+// strings, so only ASCII word bytes need checking.
+func wordBoundary(s string, i int) bool {
+	if i < 0 || i >= len(s) {
+		return true
+	}
+	c := s[i]
+	isWord := (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_'
+	return !isWord
 }
 
 // resolveThreadRecipients returns the user IDs that should receive a
 // thread-reply notification: the thread root's author plus everyone
 // who has already replied in this thread. The current message's author
 // is excluded; duplicates are removed.
-func (s *NotificationService) resolveThreadRecipients(ctx context.Context, msg *model.Message, parentType string, snap memberSnapshot) []string {
+func (s *NotificationService) resolveThreadRecipients(ctx context.Context, msg *model.Message, _ string, snap memberSnapshot) []string {
 	if s.messages == nil || msg.ParentMessageID == "" {
 		return nil
 	}
@@ -424,22 +567,18 @@ func (s *NotificationService) resolveThreadRecipients(ctx context.Context, msg *
 	for _, uid := range snap.memberIDs {
 		currentMembers[uid] = true
 	}
+	// resolveThreadRecipients is only ever called for channel parents now —
+	// conversations always notify every participant, so NotifyForMessage
+	// short-circuits them without scoping to thread participation.
 	add := func(dst *[]string, uid string) {
 		if uid == "" || uid == msg.AuthorID || seen[uid] || unfollowed[uid] {
 			return
 		}
-		if parentType == ParentChannel && !currentMembers[uid] {
+		if !currentMembers[uid] {
 			return
 		}
 		seen[uid] = true
 		*dst = append(*dst, uid)
-	}
-	if parentType == ParentConversation {
-		out := make([]string, 0, len(snap.memberIDs))
-		for _, uid := range snap.memberIDs {
-			add(&out, uid)
-		}
-		return out
 	}
 	for _, m := range all {
 		switch {

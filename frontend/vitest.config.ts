@@ -33,6 +33,12 @@ export default defineConfig({
         'src/components/GiphyPicker.tsx',
         'src/components/InviteDialog.tsx',
         'src/components/NotificationCountTitleBridge.tsx',
+        // Notification dialogs + their shared control — real-DOM form flows
+        // (segmented controls, switches, keyword chips), graded by the browser
+        // suite's 99% gate alongside the other dialogs above.
+        'src/components/NotificationSettingsDialog.tsx',
+        'src/components/channels/NotificationPreferencesDialog.tsx',
+        'src/components/notifications/NotificationOptionGroup.tsx',
         'src/components/admin/SearchAdminPanel.tsx',
         'src/components/channels/ChannelBrowser.tsx',
         'src/components/chat/ChannelView.tsx',
