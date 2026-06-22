@@ -18,6 +18,12 @@ services:
     image: redis:7-alpine
     # No host port published — the app reaches it as `redis:6379` on
     # the internal network. Keeps host :6379 free for coexistence.
+    # Enable AOF and persist /data to a named volume so the per-user inbox
+    # streams (WS replay-on-reconnect) survive a container restart instead of
+    # every client falling back to a full refetch.
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -117,5 +123,6 @@ services:
 
 volumes:
   dynamodb-data:
+  redis-data:
   minio-data:
   opensearch-data:
