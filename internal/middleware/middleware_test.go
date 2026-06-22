@@ -409,3 +409,93 @@ func TestWrapFunc(t *testing.T) {
 		t.Error("inner handler not called")
 	}
 }
+
+type fakeRateCounter struct {
+	allow  bool
+	err    error
+	gotKey string
+	gotLim int
+	gotWin time.Duration
+	calls  int
+}
+
+func (f *fakeRateCounter) AllowRequest(_ context.Context, key string, limit int, window time.Duration) (bool, error) {
+	f.calls++
+	f.gotKey, f.gotLim, f.gotWin = key, limit, window
+	return f.allow, f.err
+}
+
+func TestRateLimit_AllowsWithinLimit(t *testing.T) {
+	c := &fakeRateCounter{allow: true}
+	h := RateLimit(c, 5, time.Minute)(okHandler())
+	req := httptest.NewRequest(http.MethodPost, "/auth/login", nil)
+	req.RemoteAddr = "203.0.113.7:5555"
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if c.gotLim != 5 || c.gotWin != time.Minute {
+		t.Errorf("limit/window = %d/%v, want 5/1m", c.gotLim, c.gotWin)
+	}
+	if want := "rl:/auth/login:203.0.113.7"; c.gotKey != want {
+		t.Errorf("key = %q, want %q", c.gotKey, want)
+	}
+}
+
+func TestRateLimit_RejectsOverLimit(t *testing.T) {
+	h := RateLimit(&fakeRateCounter{allow: false}, 1, time.Minute)(okHandler())
+	req := httptest.NewRequest(http.MethodPost, "/auth/login", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want 429", rec.Code)
+	}
+	if rec.Header().Get("Retry-After") != "60" {
+		t.Errorf("Retry-After = %q, want 60", rec.Header().Get("Retry-After"))
+	}
+}
+
+func TestRateLimit_FailsOpenOnError(t *testing.T) {
+	h := RateLimit(&fakeRateCounter{err: context.DeadlineExceeded}, 1, time.Minute)(okHandler())
+	req := httptest.NewRequest(http.MethodPost, "/auth/login", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("counter error must fail open (200), got %d", rec.Code)
+	}
+}
+
+func TestRateLimit_NilCounterPassThrough(t *testing.T) {
+	c := &fakeRateCounter{}
+	_ = c
+	h := RateLimit(nil, 1, time.Minute)(okHandler())
+	req := httptest.NewRequest(http.MethodPost, "/auth/login", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("nil counter must pass through (200), got %d", rec.Code)
+	}
+}
+
+func TestRateLimit_ClientIPSources(t *testing.T) {
+	c := &fakeRateCounter{allow: true}
+	h := RateLimit(c, 5, time.Minute)(okHandler())
+
+	// X-Forwarded-For multi-hop → first hop wins.
+	req := httptest.NewRequest(http.MethodPost, "/auth/login", nil)
+	req.Header.Set("X-Forwarded-For", "198.51.100.9, 10.0.0.1")
+	req.RemoteAddr = "10.0.0.1:1"
+	h.ServeHTTP(httptest.NewRecorder(), req)
+	if want := "rl:/auth/login:198.51.100.9"; c.gotKey != want {
+		t.Errorf("XFF key = %q, want %q", c.gotKey, want)
+	}
+
+	// No XFF, unparseable RemoteAddr → used verbatim.
+	req2 := httptest.NewRequest(http.MethodPost, "/auth/login", nil)
+	req2.RemoteAddr = "weird-addr"
+	h.ServeHTTP(httptest.NewRecorder(), req2)
+	if want := "rl:/auth/login:weird-addr"; c.gotKey != want {
+		t.Errorf("fallback key = %q, want %q", c.gotKey, want)
+	}
+}

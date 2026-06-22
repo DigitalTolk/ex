@@ -253,6 +253,19 @@ describe('Header', () => {
     );
   });
 
+  it('fires onNotificationPrefsClick from the channel menu', async () => {
+    setMobileMatch(true);
+    const user = userEvent.setup();
+    const onNotificationPrefsClick = vi.fn();
+    renderHeaderWithProviders(
+      <Header channel={makeChannel()} onNotificationPrefsClick={onNotificationPrefsClick} />,
+    );
+    await user.click(screen.getByText('general').closest('button')!);
+    const menu = within(document.getElementById('mobile-channel-menu')!);
+    await user.click(menu.getByText('Notification preferences'));
+    expect(onNotificationPrefsClick).toHaveBeenCalledTimes(1);
+  });
+
   it('keeps the desktop channel description in the title row', () => {
     render(
       <Header

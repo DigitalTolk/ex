@@ -21,6 +21,7 @@ import {
   updateMessageInCache,
 } from '@/hooks/useMessages';
 import { queryKeys } from '@/lib/query-keys';
+import type { NotificationSettings } from '@/types';
 import {
   parseAttachmentDeleted,
   parseChannelID,
@@ -301,6 +302,14 @@ export default function ChatPage() {
       // Either tab toggled mute — refetch the user's channel list so the
       // sidebar bell-slash indicator stays in sync across browser tabs.
       queryClient.invalidateQueries({ queryKey: queryKeys.userChannels() });
+    },
+    onNotificationSettingsUpdated: (data: unknown) => {
+      // Account-level notification settings changed (another tab/device).
+      // Patch the in-memory user so every open settings surface reflects it.
+      const evt = data as { settings?: NotificationSettings } | undefined;
+      if (evt?.settings) {
+        patchUser({ notificationSettings: evt.settings });
+      }
     },
     onNotification: (data: unknown) => {
       const n = data as NotificationPayload | undefined;

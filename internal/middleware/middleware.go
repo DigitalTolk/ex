@@ -3,7 +3,9 @@ package middleware
 import (
 	"context"
 	"log/slog"
+	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -203,6 +205,58 @@ func RequestID(next http.Handler) http.Handler {
 func RequestIDFromContext(ctx context.Context) string {
 	id, _ := ctx.Value(requestIDKey).(string)
 	return id
+}
+
+// RateLimitCounter is the minimal Redis-backed counter the RateLimit middleware
+// needs: AllowRequest atomically increments the per-key counter for the current
+// window and reports whether the request is within the limit.
+type RateLimitCounter interface {
+	AllowRequest(ctx context.Context, key string, limit int, window time.Duration) (bool, error)
+}
+
+// RateLimit returns middleware that rejects (HTTP 429) more than `limit`
+// requests per `window` from a single client IP per route. It fails OPEN: if
+// the counter errors (e.g. a Redis hiccup) the request is allowed, so an infra
+// blip can never lock everyone out of login. A nil counter disables limiting.
+func RateLimit(counter RateLimitCounter, limit int, window time.Duration) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		if counter == nil {
+			return next
+		}
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			key := "rl:" + r.URL.Path + ":" + clientIP(r)
+			allowed, err := counter.AllowRequest(r.Context(), key, limit, window)
+			if err != nil {
+				slog.Warn("rate limit check failed; allowing request", "error", err)
+				next.ServeHTTP(w, r)
+				return
+			}
+			if !allowed {
+				w.Header().Set("Retry-After", strconv.Itoa(int(window.Seconds())))
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusTooManyRequests)
+				_, _ = w.Write([]byte(`{"error":"rate_limited","message":"too many requests, please slow down"}`))
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// clientIP extracts a best-effort client IP: the first X-Forwarded-For hop when
+// present (set by the trusted reverse proxy), else the connection's remote host.
+func clientIP(r *http.Request) string {
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		if i := strings.IndexByte(xff, ','); i >= 0 {
+			return strings.TrimSpace(xff[:i])
+		}
+		return strings.TrimSpace(xff)
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
 }
 
 // Wrap applies a chain of middleware to a handler in the order provided,

@@ -11,6 +11,7 @@ import {
   Smile,
   ServerCog,
   Webhook,
+  Bell,
 } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
@@ -30,6 +31,7 @@ import { useIsMobile } from '@/hooks/useIsMobile';
 import { isAdmin, isGuest } from '@/lib/roles';
 import { getCapacitorPlugin, isNativePlatform } from '@/lib/capacitor';
 import { EditProfileDialog } from '@/components/EditProfileDialog';
+import { NotificationSettingsDialog } from '@/components/NotificationSettingsDialog';
 import { UserStatusDialog } from '@/components/UserStatusDialog';
 import { AboutDialog } from '@/components/AboutDialog';
 import { InviteDialog } from '@/components/InviteDialog';
@@ -63,6 +65,7 @@ export function AppTopBar({ onOpenChannels, channelsButtonHidden }: AppTopBarPro
   const navigate = useNavigate();
   const isMobile = useIsMobile();
   const [profileOpen, setProfileOpen] = useState(false);
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [statusOpen, setStatusOpen] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
   const [inviteOpen, setInviteOpen] = useState(false);
@@ -105,6 +108,13 @@ export function AppTopBar({ onOpenChannels, channelsButtonHidden }: AppTopBarPro
       icon: <CalendarClock className="h-4 w-4" />,
       label: 'Set status',
       onSelect: () => setStatusOpen(true),
+    },
+    {
+      key: 'notifications',
+      icon: <Bell className="h-4 w-4" />,
+      label: 'Notification settings',
+      onSelect: () => setNotificationsOpen(true),
+      testID: 'user-menu-notifications',
     },
     ...(isAdmin(user?.systemRole)
       ? [
@@ -245,7 +255,7 @@ export function AppTopBar({ onOpenChannels, channelsButtonHidden }: AppTopBarPro
               data-testid="topbar-account"
               className="relative inline-flex h-10 w-10 items-center justify-center rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
             >
-              <Avatar className="h-9 w-9">
+              <Avatar className="size-8">
                 <AvatarImage src={user?.avatarURL} alt="" />
                 <AvatarFallback className="bg-muted text-foreground text-xs">{initials}</AvatarFallback>
               </Avatar>
@@ -261,7 +271,7 @@ export function AppTopBar({ onOpenChannels, channelsButtonHidden }: AppTopBarPro
                 aria-label="Account menu"
                 data-testid="topbar-account"
               >
-                <Avatar className="h-10 w-10">
+                <Avatar className="size-8">
                   <AvatarImage src={user?.avatarURL} alt="" />
                   <AvatarFallback className="bg-muted text-foreground text-xs">{initials}</AvatarFallback>
                 </Avatar>
@@ -297,7 +307,7 @@ export function AppTopBar({ onOpenChannels, channelsButtonHidden }: AppTopBarPro
           above + this sheet below means no behaviour duplication —
           both surfaces dispatch the same `menuActions` list. */}
       <Dialog open={mobileMenuOpen} onOpenChange={setMobileMenuOpen}>
-        <DialogContent className="max-w-sm md:hidden" mobileCloseLabel="Close" data-testid="mobile-account-sheet">
+        <DialogContent className="md:hidden" mobileCloseLabel="Close" data-testid="mobile-account-sheet">
           <DialogHeader>
             <DialogTitle>Account</DialogTitle>
           </DialogHeader>
@@ -335,6 +345,7 @@ export function AppTopBar({ onOpenChannels, channelsButtonHidden }: AppTopBarPro
       </Dialog>
 
       <EditProfileDialog open={profileOpen} onOpenChange={setProfileOpen} />
+      <NotificationSettingsDialog open={notificationsOpen} onOpenChange={setNotificationsOpen} />
       <UserStatusDialog
         key={`${user?.id ?? ''}:${user?.userStatus?.emoji ?? ''}:${user?.userStatus?.text ?? ''}:${user?.userStatus?.clearAt ?? ''}`}
         open={statusOpen}

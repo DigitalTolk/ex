@@ -148,7 +148,7 @@ func (s *dataMembershipStore) ListUserChannels(_ context.Context, _ string) ([]*
 	}
 	return s.userChannels, nil
 }
-func (s *dataMembershipStore) MutedUserIDs(_ context.Context, channelID string, userIDs []string) (map[string]bool, error) {
+func (s *dataMembershipStore) UserChannelNotifPrefs(_ context.Context, channelID string, userIDs []string) (map[string]*model.UserChannel, error) {
 	if s.listUserChannelsErr != nil {
 		return nil, s.listUserChannelsErr
 	}
@@ -156,15 +156,19 @@ func (s *dataMembershipStore) MutedUserIDs(_ context.Context, channelID string, 
 	for _, uid := range userIDs {
 		want[uid] = true
 	}
-	out := make(map[string]bool)
+	out := make(map[string]*model.UserChannel)
 	for _, uc := range s.userChannels {
-		if uc.ChannelID == channelID && uc.Muted && want[uc.UserID] {
-			out[uc.UserID] = true
+		if uc.ChannelID == channelID && want[uc.UserID] {
+			cp := *uc
+			out[uc.UserID] = &cp
 		}
 	}
 	return out, nil
 }
 func (s *dataMembershipStore) SetMute(_ context.Context, _, _ string, _ bool) error {
+	return nil
+}
+func (s *dataMembershipStore) SetNotifPrefs(_ context.Context, _, _ string, _ model.ChannelNotificationOverride) error {
 	return nil
 }
 func (s *dataMembershipStore) SetFavorite(_ context.Context, _, _ string, _ bool) error {

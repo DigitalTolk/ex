@@ -37,22 +37,22 @@ func TestNotification_LoadMemberSnapshot_UnknownParentType(t *testing.T) {
 func TestNotification_ResolveThreadRecipients_NilMessagesAndNoParentMsg(t *testing.T) {
 	// messages nil → nil.
 	svc := &NotificationService{}
-	if got := svc.resolveThreadRecipients(context.Background(), &model.Message{ParentMessageID: "root"}, ParentChannel, memberSnapshot{}); got != nil {
+	if got := svc.resolveThreadRecipients(context.Background(), &model.Message{ParentMessageID: "root"}, memberSnapshot{}); got != nil {
 		t.Fatalf("expected nil with nil messages, got %v", got)
 	}
 	// messages present but no ParentMessageID → nil.
 	svc2, _, _, _, _, _ := setupNotifier(t)
-	if got := svc2.resolveThreadRecipients(context.Background(), &model.Message{}, ParentChannel, memberSnapshot{}); got != nil {
+	if got := svc2.resolveThreadRecipients(context.Background(), &model.Message{}, memberSnapshot{}); got != nil {
 		t.Fatalf("expected nil with empty ParentMessageID, got %v", got)
 	}
 }
 
-func TestNotification_ResolveThreadRecipients_ListMessagesError(t *testing.T) {
+func TestNotification_ResolveThreadRecipients_ListThreadRepliesError(t *testing.T) {
 	svc, _, _, _, _, msgs := setupNotifierWithMessages(t)
-	msgs.listErr = errors.New("boom")
-	got := svc.resolveThreadRecipients(context.Background(), &model.Message{ParentID: "ch1", ParentMessageID: "root1"}, ParentChannel, memberSnapshot{})
+	msgs.threadReplyErr = errors.New("boom")
+	got := svc.resolveThreadRecipients(context.Background(), &model.Message{ParentID: "ch1", ParentMessageID: "root1"}, memberSnapshot{})
 	if got != nil {
-		t.Fatalf("expected nil on ListMessages error, got %v", got)
+		t.Fatalf("expected nil on ListThreadReplies error, got %v", got)
 	}
 }
 
@@ -74,8 +74,9 @@ func TestNotification_LoadMemberSnapshot_MutedBatchError(t *testing.T) {
 	svc, _, members, _, _, _ := setupNotifier(t)
 	members.memberships["ch1#u1"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u1"}
 	members.listChannelsErr = errors.New("boom")
-	// MutedUserIDs errors → fall back to "no one muted" while still listing the
-	// member as a recipient (a missed mute over-notifies, never drops a member).
+	// UserChannelNotifPrefs errors → fall back to "no overrides / no one muted"
+	// while still listing the member as a recipient (a missed mute over-
+	// notifies, never drops a member).
 	snap := svc.loadMemberSnapshot(context.Background(), &model.Message{ParentID: "ch1", AuthorID: "author"}, ParentChannel, "general")
 	if len(snap.muted) != 0 {
 		t.Fatalf("expected empty muted on batch error, got %v", snap.muted)

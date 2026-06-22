@@ -498,12 +498,16 @@ describe('MessageInput coverage flows (browser)', () => {
     );
     const editor = screen.getByLabelText('Message input');
     await editor.click();
+    // Type three characters back-to-back. The first emits one typing frame;
+    // the next two stay within TYPING_PING_INTERVAL_MS, so emitTyping returns at
+    // its `now - last < INTERVAL` guard (no new frame). Keeping the keystrokes
+    // consecutive (no slow waitFor between them) keeps the whole burst well
+    // inside the 3s window even under heavy full-suite CPU load — otherwise the
+    // gap could drift past the interval and legitimately emit a second frame.
     await editor.fill('a');
-    await vi.waitFor(() => expect(frames.length).toBe(1));
-    // A second change immediately after stays within TYPING_PING_INTERVAL_MS, so
-    // emitTyping returns at its `now - last < INTERVAL` guard (no new frame).
     await editor.fill('ab');
     await editor.fill('abc');
+    await vi.waitFor(() => expect(frames.length).toBe(1));
     await new Promise((r) => setTimeout(r, 50));
     expect(frames.length).toBe(1);
     await settle();

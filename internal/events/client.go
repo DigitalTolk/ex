@@ -30,7 +30,11 @@ func NewClient(userID string) *Client {
 
 // Send performs a non-blocking send of data to the client's event channel.
 // If the client is already closed, the send is skipped. If the buffer is full
-// the message is dropped and the drop counter incremented (read via DropCount).
+// the message is dropped, the drop counter incremented, and the client is
+// closed: a full buffer means this consumer is too slow, and silently dropping
+// a (possibly persistent) event would desync its view until some later
+// reconnect. Closing forces a clean reconnect that replays the gap via the
+// per-user inbox `since=` cursor (or replay.exhausted → full refetch).
 func (c *Client) Send(data []byte) {
 	select {
 	case <-c.done:
@@ -41,6 +45,7 @@ func (c *Client) Send(data []byte) {
 	case c.Events <- data:
 	default:
 		c.drops.Add(1)
+		c.Close()
 	}
 }
 

@@ -18,6 +18,82 @@ func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
 	return f(r)
 }
 
+func resp(code int) *http.Response {
+	return &http.Response{StatusCode: code, Body: io.NopCloser(strings.NewReader("{}")), Header: make(http.Header)}
+}
+
+func newRetrySender(t *testing.T, maxRetries int, rt roundTripFunc) *OneSignalPushSender {
+	t.Helper()
+	s, err := NewOneSignalPushSender(OneSignalConfig{
+		AppID: "app", APIKey: "key", PublicURL: "https://chat.example.com/",
+		APIURL: "https://api.onesignal.test/notifications", HTTPClient: &http.Client{Transport: rt},
+		MaxRetries: maxRetries, RetryInterval: time.Nanosecond,
+	})
+	if err != nil {
+		t.Fatalf("NewOneSignalPushSender: %v", err)
+	}
+	return s
+}
+
+func TestOneSignalPushSender_RetriesTransientThenSucceeds(t *testing.T) {
+	var calls int
+	s := newRetrySender(t, 3, func(*http.Request) (*http.Response, error) {
+		calls++
+		if calls < 3 {
+			return resp(http.StatusServiceUnavailable), nil // 5xx → retryable
+		}
+		return resp(http.StatusOK), nil
+	})
+	if err := s.Send(context.Background(), "u-1", Notification{}); err != nil {
+		t.Fatalf("Send after transient 5xx: %v", err)
+	}
+	if calls != 3 {
+		t.Errorf("calls = %d, want 3 (2 retries then success)", calls)
+	}
+}
+
+func TestOneSignalPushSender_RetryExhaustsOn5xx(t *testing.T) {
+	var calls int
+	s := newRetrySender(t, 2, func(*http.Request) (*http.Response, error) {
+		calls++
+		return resp(http.StatusBadGateway), nil
+	})
+	if err := s.Send(context.Background(), "u-1", Notification{}); err == nil {
+		t.Fatal("expected error after exhausting retries")
+	}
+	if calls != 3 {
+		t.Errorf("calls = %d, want 3 (initial + 2 retries)", calls)
+	}
+}
+
+func TestOneSignalPushSender_4xxIsPermanentNoRetry(t *testing.T) {
+	var calls int
+	s := newRetrySender(t, 3, func(*http.Request) (*http.Response, error) {
+		calls++
+		return resp(http.StatusBadRequest), nil
+	})
+	if err := s.Send(context.Background(), "u-1", Notification{}); err == nil {
+		t.Fatal("expected error for 4xx")
+	}
+	if calls != 1 {
+		t.Errorf("calls = %d, want 1 (4xx is permanent, no retry)", calls)
+	}
+}
+
+func TestOneSignalPushSender_RetriesNetworkError(t *testing.T) {
+	var calls int
+	s := newRetrySender(t, 1, func(*http.Request) (*http.Response, error) {
+		calls++
+		return nil, errors.New("dial timeout")
+	})
+	if err := s.Send(context.Background(), "u-1", Notification{}); err == nil {
+		t.Fatal("expected error after network failures")
+	}
+	if calls != 2 {
+		t.Errorf("calls = %d, want 2 (initial + 1 retry)", calls)
+	}
+}
+
 func TestOneSignalPushSender_RequestConstruction(t *testing.T) {
 	var gotAuth string
 	var gotURL string

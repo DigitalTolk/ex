@@ -1,5 +1,5 @@
 import { useLayoutEffect, useRef, useState } from 'react';
-import { Users, ChevronDown, LogOut, Archive, Pencil, Bell, BellOff, Pin, Paperclip } from 'lucide-react';
+import { Users, ChevronDown, LogOut, Archive, Pencil, Bell, BellOff, Pin, Paperclip, SlidersHorizontal } from 'lucide-react';
 import { ChannelIcon } from '@/components/ChannelIcon';
 import { UserAvatar } from '@/components/UserAvatar';
 import { UserStatusIndicator } from '@/components/UserStatusIndicator';
@@ -47,6 +47,7 @@ interface HeaderProps {
   onLeave?: () => void;
   muted?: boolean;
   onToggleMute?: () => void;
+  onNotificationPrefsClick?: () => void;
   onPinnedClick?: () => void;
   pinnedActive?: boolean;
   onFilesClick?: () => void;
@@ -73,6 +74,7 @@ export function Header({
   onLeave,
   muted,
   onToggleMute,
+  onNotificationPrefsClick,
   onPinnedClick,
   pinnedActive,
   onFilesClick,
@@ -143,6 +145,11 @@ export function Header({
     setMobileChannelMenuOpen(false);
   }
 
+  function openNotificationPrefs() {
+    onNotificationPrefsClick?.();
+    setMobileChannelMenuOpen(false);
+  }
+
   function leaveChannel() {
     onLeave?.();
     setMobileChannelMenuOpen(false);
@@ -191,6 +198,11 @@ export function Header({
                         <BellOff className="mr-2 h-4 w-4" /> Mute channel
                       </>
                     )}
+                  </DropdownMenuItem>
+                )}
+                {onNotificationPrefsClick && (
+                  <DropdownMenuItem onClick={openNotificationPrefs}>
+                    <SlidersHorizontal className="mr-2 h-4 w-4" /> Notification preferences
                   </DropdownMenuItem>
                 )}
                 {canLeave && (
@@ -394,6 +406,15 @@ export function Header({
               {muted ? 'Unmute channel' : 'Mute channel'}
             </button>
           )}
+          {onNotificationPrefsClick && (
+            <button
+              type="button"
+              className="flex h-12 w-full items-center rounded-md px-3 text-left hover:bg-muted"
+              onClick={openNotificationPrefs}
+            >
+              <SlidersHorizontal className="mr-2 h-4 w-4" /> Notification preferences
+            </button>
+          )}
           {canLeave && (
             <button
               type="button"
@@ -417,7 +438,7 @@ export function Header({
 
       {/* Archive confirmation dialog */}
       <Dialog open={archiveConfirmOpen} onOpenChange={setArchiveConfirmOpen}>
-        <DialogContent className="max-w-sm">
+        <DialogContent>
           <DialogHeader>
             <DialogTitle>Archive channel?</DialogTitle>
           </DialogHeader>

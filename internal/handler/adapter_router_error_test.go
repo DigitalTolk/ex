@@ -21,8 +21,8 @@ type fakeAuthProvider struct {
 	err  error
 }
 
-func (f fakeAuthProvider) AuthURL(string) string { return "https://idp/auth" }
-func (f fakeAuthProvider) Exchange(context.Context, string) (*auth.OIDCUserInfo, error) {
+func (f fakeAuthProvider) AuthURL(string, string) string { return "https://idp/auth" }
+func (f fakeAuthProvider) Exchange(context.Context, string, string) (*auth.OIDCUserInfo, error) {
 	return f.info, f.err
 }
 
@@ -32,7 +32,7 @@ func TestOIDCAdapter_Exchange_Success(t *testing.T) {
 	a := &oidcAdapter{p: fakeAuthProvider{info: &auth.OIDCUserInfo{
 		Email: "u@example.com", Name: "U Ser", Picture: "https://img/u.png",
 	}}}
-	got, err := a.Exchange(context.Background(), "code")
+	got, err := a.Exchange(context.Background(), "code", "nonce")
 	if err != nil {
 		t.Fatalf("Exchange: %v", err)
 	}

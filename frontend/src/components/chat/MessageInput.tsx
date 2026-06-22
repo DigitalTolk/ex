@@ -693,7 +693,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
             onClick={handleSend}
             disabled={!canSend}
             size="icon"
-            className="h-7 w-7 rounded-md bg-foreground text-background hover:bg-foreground/85 dark:bg-brand dark:text-brand-foreground dark:hover:bg-brand-hover max-md:h-9 max-md:w-9 max-md:rounded-full"
+            className="h-7 w-7 rounded-md bg-foreground text-background hover:bg-foreground/85 dark:bg-brand dark:text-brand-foreground dark:hover:bg-brand-hover dark:disabled:bg-brand-disabled dark:disabled:text-brand-foreground max-md:h-9 max-md:w-9 max-md:rounded-full"
             aria-label="Send message"
           >
             <Send className="h-4 w-4" />

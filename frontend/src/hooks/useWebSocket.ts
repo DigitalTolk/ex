@@ -35,6 +35,7 @@ interface UseWebSocketOptions {
   onAttachmentDeleted?: WSCallback;
   onChannelMuted?: WSCallback;
   onNotification?: WSCallback;
+  onNotificationSettingsUpdated?: WSCallback;
   onDraftUpdated?: WSCallback;
   onWebhookChanged?: WSCallback;
   onForceLogout?: WSCallback;
@@ -114,16 +115,20 @@ export function useWebSocket(options: UseWebSocketOptions) {
       ws.onmessage = (event) => {
         try {
           const msg = JSON.parse(event.data);
-          // Update cursor on every frame that carries an ID. Both
-          // live and replay use the same ULID; if a live frame
-          // arrives during replay the cursor jumps forward and a
-          // later reconnect resumes from the freshest point.
+          // Advance the cursor monotonically. ULIDs sort lexicographically, so
+          // only move forward when this frame's id is greater than the current
+          // cursor. A live frame that races in with a smaller id than an
+          // already-replayed one must NOT regress the cursor — otherwise the
+          // next reconnect would replay the in-between window again and
+          // re-deliver (or re-banner) those frames.
           if (typeof msg.id === 'string' && msg.id) {
             if (markSeen(msg.id)) {
               // Already delivered (replay/live race) — drop.
               return;
             }
-            lastEventIdRef.current = msg.id;
+            if (msg.id > lastEventIdRef.current) {
+              lastEventIdRef.current = msg.id;
+            }
           }
           const payload = typeof msg.data === 'string' ? JSON.parse(msg.data) : msg.data ?? msg;
           switch (msg.type) {
@@ -177,6 +182,9 @@ export function useWebSocket(options: UseWebSocketOptions) {
               break;
             case EventType.NotificationNew:
               callbacksRef.current.onNotification?.(payload);
+              break;
+            case EventType.NotificationSettingsUpdated:
+              callbacksRef.current.onNotificationSettingsUpdated?.(payload);
               break;
             case EventType.DraftUpdated:
               callbacksRef.current.onDraftUpdated?.(payload);

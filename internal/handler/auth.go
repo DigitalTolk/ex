@@ -25,7 +25,7 @@ func NewAuthHandler(authSvc *service.AuthService, jwt *auth.JWTManager) *AuthHan
 // An optional ?redirect_to=<url> query parameter overrides where the browser is
 // sent after a successful callback (must be a localhost, tauri://, or ex:// URL).
 func (h *AuthHandler) OIDCLogin(w http.ResponseWriter, r *http.Request) {
-	authURL, state, err := h.authSvc.HandleOIDCLogin()
+	authURL, state, nonce, err := h.authSvc.HandleOIDCLogin()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "oidc_error", err.Error())
 		return
@@ -34,6 +34,15 @@ func (h *AuthHandler) OIDCLogin(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     "oauth_state",
 		Value:    state,
+		Path:     "/auth",
+		MaxAge:   600, // 10 minutes
+		HttpOnly: true,
+		Secure:   true,
+		SameSite: http.SameSiteLaxMode,
+	})
+	http.SetCookie(w, &http.Cookie{
+		Name:     "oauth_nonce",
+		Value:    nonce,
 		Path:     "/auth",
 		MaxAge:   600, // 10 minutes
 		HttpOnly: true,
@@ -70,16 +79,26 @@ func (h *AuthHandler) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Clear the state cookie.
-	http.SetCookie(w, &http.Cookie{
-		Name:     "oauth_state",
-		Value:    "",
-		Path:     "/auth",
-		MaxAge:   -1,
-		HttpOnly: true,
-		Secure:   true,
-		SameSite: http.SameSiteLaxMode,
-	})
+	// The nonce bound at login time is verified against the ID token's nonce
+	// claim inside HandleOIDCCallback. A missing nonce cookie yields an empty
+	// expected value, which will not match a provider-issued nonce → rejected.
+	nonce := ""
+	if nonceCookie, err := r.Cookie("oauth_nonce"); err == nil {
+		nonce = nonceCookie.Value
+	}
+
+	// Clear the state + nonce cookies.
+	for _, name := range []string{"oauth_state", "oauth_nonce"} {
+		http.SetCookie(w, &http.Cookie{
+			Name:     name,
+			Value:    "",
+			Path:     "/auth",
+			MaxAge:   -1,
+			HttpOnly: true,
+			Secure:   true,
+			SameSite: http.SameSiteLaxMode,
+		})
+	}
 
 	code := r.URL.Query().Get("code")
 	if code == "" {
@@ -87,7 +106,7 @@ func (h *AuthHandler) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	accessToken, refreshToken, _, err := h.authSvc.HandleOIDCCallback(r.Context(), code, queryState)
+	accessToken, refreshToken, _, err := h.authSvc.HandleOIDCCallback(r.Context(), code, queryState, nonce)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "callback_error", err.Error())
 		return
@@ -201,12 +220,14 @@ func (h *AuthHandler) RefreshToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	accessToken, err := h.authSvc.RefreshAccessToken(r.Context(), rawToken)
+	accessToken, newRefresh, err := h.authSvc.RefreshAccessToken(r.Context(), rawToken)
 	if err != nil {
 		writeError(w, http.StatusUnauthorized, "refresh_error", err.Error())
 		return
 	}
 
+	// Rotation: replace the cookie with the freshly-issued refresh token.
+	h.setRefreshCookie(w, newRefresh, h.jwt.RefreshTTL())
 	writeJSON(w, http.StatusOK, JSON{"accessToken": accessToken})
 }
 

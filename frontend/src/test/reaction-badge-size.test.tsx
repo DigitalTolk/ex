@@ -74,7 +74,7 @@ describe('Reaction badge — 14px font size pin', () => {
     expect(count?.className).not.toContain('text-sm');
   });
 
-  it('the emoji glyph inside the badge is rendered at text-sm', () => {
+  it('the emoji glyph inside the badge is rendered at text-base (16px, to match the add-reaction icon)', () => {
     const msg: Message = {
       id: 'm-1',
       parentID: 'ch-1',
@@ -85,10 +85,12 @@ describe('Reaction badge — 14px font size pin', () => {
     };
     renderItem(msg);
     const badge = screen.getByTestId('reaction-badge');
-    // EmojiGlyph for raw unicode renders a <span> with leading-none + text-sm.
+    // The emoji glyph uses EmojiGlyph size="md" (text-base) so it reads at the
+    // same visual weight as the 16px SmilePlus placeholder rather than looking
+    // undersized; the badge text/count stay at text-sm/text-xs.
     const glyph = badge.querySelector('span.leading-none');
     expect(glyph).not.toBeNull();
-    expect(glyph?.className).toContain('text-sm');
+    expect(glyph?.className).toContain('text-base');
   });
 
   it('renders split skin-tone reaction shortcodes as one emoji glyph', () => {

@@ -760,7 +760,7 @@ func TestHandleOIDCCallback_ExchangeError(t *testing.T) {
 	env := setupAuthService()
 	env.oidc.exchangeErr = errors.New("exchange boom")
 
-	if _, _, _, err := env.svc.HandleOIDCCallback(context.Background(), "code", "state"); err == nil {
+	if _, _, _, err := env.svc.HandleOIDCCallback(context.Background(), "code", "state", "nonce"); err == nil {
 		t.Fatal("expected error from exchange")
 	}
 }
@@ -769,7 +769,7 @@ func TestHandleOIDCCallback_GetUserByEmail_GenericError(t *testing.T) {
 	env := setupAuthService()
 	env.users.getEmailErr = errors.New("db boom")
 
-	if _, _, _, err := env.svc.HandleOIDCCallback(context.Background(), "code", "state"); err == nil {
+	if _, _, _, err := env.svc.HandleOIDCCallback(context.Background(), "code", "state", "nonce"); err == nil {
 		t.Fatal("expected wrapped DB error")
 	}
 }
@@ -778,7 +778,7 @@ func TestHandleOIDCCallback_HasUsersError(t *testing.T) {
 	env := setupAuthService()
 	env.users.hasUsersErr = errors.New("count boom")
 
-	if _, _, _, err := env.svc.HandleOIDCCallback(context.Background(), "code", "state"); err == nil {
+	if _, _, _, err := env.svc.HandleOIDCCallback(context.Background(), "code", "state", "nonce"); err == nil {
 		t.Fatal("expected error from HasUsers")
 	}
 }
@@ -787,7 +787,7 @@ func TestHandleOIDCCallback_CreateUserError(t *testing.T) {
 	env := setupAuthService()
 	env.users.createErr = errors.New("create user boom")
 
-	if _, _, _, err := env.svc.HandleOIDCCallback(context.Background(), "code", "state"); err == nil {
+	if _, _, _, err := env.svc.HandleOIDCCallback(context.Background(), "code", "state", "nonce"); err == nil {
 		t.Fatal("expected error from CreateUser")
 	}
 }
@@ -803,7 +803,7 @@ func TestHandleOIDCCallback_UpdateUserError(t *testing.T) {
 	env.users.emailIndex[existing.Email] = existing
 	env.users.updateErr = errors.New("update user boom")
 
-	if _, _, _, err := env.svc.HandleOIDCCallback(context.Background(), "code", "state"); err == nil {
+	if _, _, _, err := env.svc.HandleOIDCCallback(context.Background(), "code", "state", "nonce"); err == nil {
 		t.Fatal("expected error from UpdateUser")
 	}
 }
@@ -813,7 +813,7 @@ func TestHandleOIDCCallback_IssueTokensError(t *testing.T) {
 	env := setupAuthService()
 	env.jwt.accessTokenErr = errors.New("access boom")
 
-	if _, _, _, err := env.svc.HandleOIDCCallback(context.Background(), "code", "state"); err == nil {
+	if _, _, _, err := env.svc.HandleOIDCCallback(context.Background(), "code", "state", "nonce"); err == nil {
 		t.Fatal("expected error from issueTokens")
 	}
 }
@@ -825,7 +825,7 @@ func TestHandleOIDCCallback_IssueTokensError(t *testing.T) {
 func TestRefreshAccessToken_GetTokenGenericError(t *testing.T) {
 	env := setupAuthService()
 	env.tokens.getErr = errors.New("token store boom")
-	if _, err := env.svc.RefreshAccessToken(context.Background(), "any"); err == nil {
+	if _, _, err := env.svc.RefreshAccessToken(context.Background(), "any"); err == nil {
 		t.Fatal("expected error")
 	}
 }
@@ -840,7 +840,7 @@ func TestRefreshAccessToken_GetUserError(t *testing.T) {
 		ExpiresAt: time.Now().Add(time.Hour),
 	}
 	// User does not exist -> ErrNotFound from store.
-	if _, err := env.svc.RefreshAccessToken(context.Background(), raw); err == nil {
+	if _, _, err := env.svc.RefreshAccessToken(context.Background(), raw); err == nil {
 		t.Fatal("expected error")
 	}
 }
@@ -859,7 +859,7 @@ func TestRefreshAccessToken_GenerateAccessTokenError(t *testing.T) {
 	}
 	env.jwt.accessTokenErr = errors.New("jwt boom")
 
-	if _, err := env.svc.RefreshAccessToken(context.Background(), raw); err == nil {
+	if _, _, err := env.svc.RefreshAccessToken(context.Background(), raw); err == nil {
 		t.Fatal("expected error from GenerateAccessToken")
 	}
 }

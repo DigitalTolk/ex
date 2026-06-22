@@ -34,6 +34,16 @@ type UserChannel struct {
 	// SidebarPosition is a sparse per-user ordering key inside the
 	// channel's current sidebar bucket.
 	SidebarPosition int `json:"sidebarPosition,omitempty" dynamodbav:"sidebarPosition,omitempty"`
+	// Per-channel notification preference overrides. A nil pointer means
+	// "inherit the user's account-level NotificationSettings" and is stored
+	// as an absent attribute. ResolveNotificationPrefs folds these onto the
+	// account baseline. Keywords are global (account-only) and not overridable
+	// here. Muted (above) is independent and always suppresses everything.
+	DesktopLevel        *NotificationLevel       `json:"desktopLevel,omitempty" dynamodbav:"notifDesktopLevel,omitempty"`
+	MobileLevel         *MobileNotificationLevel `json:"mobileLevel,omitempty" dynamodbav:"notifMobileLevel,omitempty"`
+	ThreadReplies       *bool                    `json:"threadReplies,omitempty" dynamodbav:"notifThreadReplies,omitempty"`
+	IgnoreGroupMentions *bool                    `json:"ignoreGroupMentions,omitempty" dynamodbav:"notifIgnoreGroupMentions,omitempty"`
+	FollowAllThreads    *bool                    `json:"followAllThreads,omitempty" dynamodbav:"notifFollowAllThreads,omitempty"`
 }
 
 // UserChannelCategory is a user-defined grouping for the sidebar. Users

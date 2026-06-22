@@ -167,6 +167,15 @@ func TestUserStoreAdapter(t *testing.T) {
 	if !has {
 		t.Error("expected HasUsers=true")
 	}
+
+	// NotificationSettingsFor
+	settings, err := adapter.NotificationSettingsFor(ctx, []string{"u-adapt-1"})
+	if err != nil {
+		t.Fatalf("NotificationSettingsFor: %v", err)
+	}
+	if s, ok := settings["u-adapt-1"]; !ok || s.DesktopLevel != model.NotificationLevelMentions {
+		t.Errorf("expected default notification settings, got %+v", settings["u-adapt-1"])
+	}
 }
 
 func TestChannelStoreAdapter(t *testing.T) {
@@ -288,8 +297,15 @@ func TestMembershipStoreAdapter(t *testing.T) {
 	if err := adapter.SetMute(ctx, "ch-ma-1", "u-ma-1", true); err != nil {
 		t.Fatalf("SetMute: %v", err)
 	}
-	if muted, err := adapter.MutedUserIDs(ctx, "ch-ma-1", []string{"u-ma-1"}); err != nil || !muted["u-ma-1"] {
-		t.Fatalf("MutedUserIDs after mute: muted=%v err=%v", muted, err)
+	if prefs, err := adapter.UserChannelNotifPrefs(ctx, "ch-ma-1", []string{"u-ma-1"}); err != nil || prefs["u-ma-1"] == nil || !prefs["u-ma-1"].Muted {
+		t.Fatalf("UserChannelNotifPrefs after mute: prefs=%v err=%v", prefs, err)
+	}
+	mentionsLevel := model.NotificationLevelMentions
+	if err := adapter.SetNotifPrefs(ctx, "ch-ma-1", "u-ma-1", model.ChannelNotificationOverride{DesktopLevel: &mentionsLevel}); err != nil {
+		t.Fatalf("SetNotifPrefs: %v", err)
+	}
+	if prefs, err := adapter.UserChannelNotifPrefs(ctx, "ch-ma-1", []string{"u-ma-1"}); err != nil || prefs["u-ma-1"] == nil || prefs["u-ma-1"].DesktopLevel == nil || *prefs["u-ma-1"].DesktopLevel != model.NotificationLevelMentions {
+		t.Fatalf("UserChannelNotifPrefs after SetNotifPrefs: prefs=%v err=%v", prefs, err)
 	}
 
 	if err := adapter.SetFavorite(ctx, "ch-ma-1", "u-ma-1", true); err != nil {

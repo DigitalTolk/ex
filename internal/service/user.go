@@ -140,6 +140,94 @@ func backfillAuthProvider(user *model.User) {
 
 func normalizeUserProfile(user *model.User) {
 	backfillAuthProvider(user)
+	// Populate notification settings with the defaults on read so every client
+	// gets concrete values to render, without persisting a default record for
+	// users who never customised it.
+	if user != nil && user.NotificationSettings == nil {
+		def := model.DefaultNotificationSettings()
+		user.NotificationSettings = &def
+	}
+}
+
+// MaxNotificationKeywords / MaxNotificationKeywordLen bound the global keyword
+// list so a single user can't bloat their record (and the per-message keyword
+// scan) without limit.
+const (
+	MaxNotificationKeywords   = 50
+	MaxNotificationKeywordLen = 100
+)
+
+// normalizeKeywords trims, de-dupes (case-insensitively), length-clamps and
+// caps the keyword list. Returns nil for an empty result so the attribute is
+// omitted entirely.
+func normalizeKeywords(in []string) []string {
+	if len(in) == 0 {
+		return nil
+	}
+	seen := make(map[string]bool, len(in))
+	out := make([]string, 0, len(in))
+	for _, kw := range in {
+		kw = strings.TrimSpace(kw)
+		if kw == "" {
+			continue
+		}
+		if utf8.RuneCountInString(kw) > MaxNotificationKeywordLen {
+			kw = string([]rune(kw)[:MaxNotificationKeywordLen])
+		}
+		key := strings.ToLower(kw)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, kw)
+		if len(out) >= MaxNotificationKeywords {
+			break
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// SetNotificationSettings persists the caller's account-level notification
+// settings (levels, toggles, and the global keyword list) and notifies the
+// user's own connected clients so every tab/device stays in sync.
+func (s *UserService) SetNotificationSettings(ctx context.Context, userID string, settings model.NotificationSettings) (*model.User, error) {
+	if !settings.DesktopLevel.Valid() {
+		return nil, errors.New("user: invalid desktop notification level")
+	}
+	if !settings.MobileLevel.Valid() {
+		return nil, errors.New("user: invalid mobile notification level")
+	}
+	settings.Keywords = normalizeKeywords(settings.Keywords)
+
+	user, err := s.users.GetUser(ctx, userID)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, fmt.Errorf("user: not found: %w", err)
+		}
+		return nil, fmt.Errorf("user: get: %w", err)
+	}
+	cp := settings
+	user.NotificationSettings = &cp
+	user.UpdatedAt = time.Now()
+
+	if err := s.users.UpdateUser(ctx, user); err != nil {
+		return nil, fmt.Errorf("user: update notification settings: %w", err)
+	}
+	if s.cache != nil {
+		_ = s.cache.Delete(ctx, "user:"+userID)
+	}
+	s.resolveAvatar(ctx, user)
+
+	// Notification settings are private to the user — fan out only to their own
+	// channel, never the global user.updated broadcast.
+	events.Publish(ctx, s.publisher, pubsub.UserChannel(userID), events.EventNotificationSettingsUpdated, map[string]any{
+		"userID":   userID,
+		"settings": settings,
+	})
+	return user, nil
 }
 
 // GetByID returns a user by ID, checking the cache first.

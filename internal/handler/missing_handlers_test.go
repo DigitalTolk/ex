@@ -731,6 +731,13 @@ func TestAttachmentHandler_Media_OK(t *testing.T) {
 	if got := rec.Header().Get("Content-Type"); got != "text/plain" {
 		t.Fatalf("Content-Type = %q, want text/plain", got)
 	}
+	if got := rec.Header().Get("Content-Security-Policy"); got != "sandbox" {
+		t.Fatalf("Content-Security-Policy = %q, want sandbox", got)
+	}
+	// text/plain is not script-bearing, so it serves inline (no disposition).
+	if got := rec.Header().Get("Content-Disposition"); got != "" {
+		t.Fatalf("Content-Disposition = %q, want empty for inline text/plain", got)
+	}
 	lastModified := rec.Header().Get("Last-Modified")
 	if lastModified != "Sat, 02 May 2026 12:00:00 GMT" {
 		t.Fatalf("Last-Modified = %q, want object timestamp", lastModified)
@@ -757,6 +764,29 @@ func TestAttachmentHandler_Media_OK(t *testing.T) {
 	}
 	if got := rec.Header().Get("Content-Disposition"); got != `attachment; filename="pic.png"` {
 		t.Fatalf("Content-Disposition = %q, want attachment filename", got)
+	}
+}
+
+func TestIsInlineUnsafeContentType(t *testing.T) {
+	cases := map[string]bool{
+		"text/html":                true,
+		"text/html; charset=utf-8": true, // parameters stripped
+		"application/xhtml+xml":    true,
+		"image/svg+xml":            true,
+		"application/xml":          true,
+		"text/xml":                 true,
+		"application/foo+xml":      true, // any +xml is scriptable
+		"image/png":                false,
+		"image/jpeg":               false,
+		"video/mp4":                false,
+		"application/pdf":          false,
+		"text/plain":               false,
+		"":                         false,
+	}
+	for ct, want := range cases {
+		if got := isInlineUnsafeContentType(ct); got != want {
+			t.Errorf("isInlineUnsafeContentType(%q) = %v, want %v", ct, got, want)
+		}
 	}
 }
 
@@ -939,6 +969,71 @@ func TestChannelHandler_SetMute_NotMember(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPut, "/api/v1/channels/c-x/mute", strings.NewReader(`{"muted":true}`))
 	req.SetPathValue("id", "c-x")
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+}
+
+// --- Channel SetNotificationPrefs tests ---
+
+func TestChannelHandler_SetNotificationPrefs_MissingID(t *testing.T) {
+	h, _, _, _ := setupChannelHandler(t)
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/channels//notification-preferences", strings.NewReader(`{}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	h.SetNotificationPrefs(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+}
+
+func TestChannelHandler_SetNotificationPrefs_InvalidJSON(t *testing.T) {
+	h, _, _, _ := setupChannelHandler(t)
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/channels/c1/notification-preferences", strings.NewReader("{bad"))
+	req.SetPathValue("id", "c1")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	h.SetNotificationPrefs(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+}
+
+func TestChannelHandler_SetNotificationPrefs_OK(t *testing.T) {
+	env := setupChannelHandlerFull(t)
+	env.memberships.memberships["ch-np#u-np"] = &model.ChannelMembership{
+		ChannelID: "ch-np", UserID: "u-np", Role: model.ChannelRoleMember,
+	}
+	user := &model.User{ID: "u-np", Email: "np@x.com", SystemRole: model.SystemRoleMember}
+	token := makeTokenForUser(env.jwtMgr, user)
+	handler := middleware.Auth(env.jwtMgr)(http.HandlerFunc(env.handler.SetNotificationPrefs))
+
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/channels/ch-np/notification-preferences", strings.NewReader(`{"desktopLevel":"all","threadReplies":false}`))
+	req.SetPathValue("id", "ch-np")
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Errorf("status = %d, want %d (body: %s)", rec.Code, http.StatusNoContent, rec.Body.String())
+	}
+}
+
+func TestChannelHandler_SetNotificationPrefs_InvalidLevel(t *testing.T) {
+	env := setupChannelHandlerFull(t)
+	env.memberships.memberships["ch-np#u-np"] = &model.ChannelMembership{
+		ChannelID: "ch-np", UserID: "u-np", Role: model.ChannelRoleMember,
+	}
+	user := &model.User{ID: "u-np", Email: "np@x.com", SystemRole: model.SystemRoleMember}
+	token := makeTokenForUser(env.jwtMgr, user)
+	handler := middleware.Auth(env.jwtMgr)(http.HandlerFunc(env.handler.SetNotificationPrefs))
+
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/channels/ch-np/notification-preferences", strings.NewReader(`{"desktopLevel":"bogus"}`))
+	req.SetPathValue("id", "ch-np")
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()

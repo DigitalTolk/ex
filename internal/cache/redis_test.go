@@ -415,3 +415,38 @@ func TestEmojiFrequencyClientErrors(t *testing.T) {
 		t.Fatal("expected FrequentEmojis error from closed redis")
 	}
 }
+
+func TestAllowRequest_FixedWindow(t *testing.T) {
+	cache, mr := setupTestCache(t)
+	ctx := context.Background()
+
+	// First two within limit=2; third exceeds.
+	for i, want := range []bool{true, true, false} {
+		got, err := cache.AllowRequest(ctx, "k1", 2, time.Minute)
+		if err != nil {
+			t.Fatalf("AllowRequest #%d: %v", i, err)
+		}
+		if got != want {
+			t.Errorf("AllowRequest #%d = %v, want %v", i, got, want)
+		}
+	}
+
+	// A distinct key has its own window.
+	if ok, err := cache.AllowRequest(ctx, "k2", 2, time.Minute); err != nil || !ok {
+		t.Fatalf("distinct key should be allowed: ok=%v err=%v", ok, err)
+	}
+
+	// After the window elapses the counter resets.
+	mr.FastForward(time.Minute + time.Second)
+	if ok, err := cache.AllowRequest(ctx, "k1", 2, time.Minute); err != nil || !ok {
+		t.Fatalf("after window reset should be allowed: ok=%v err=%v", ok, err)
+	}
+}
+
+func TestAllowRequest_ClientError(t *testing.T) {
+	cache, mr := setupTestCache(t)
+	mr.Close() // force a connection error
+	if _, err := cache.AllowRequest(context.Background(), "k", 1, time.Minute); err == nil {
+		t.Fatal("expected error when Redis is unreachable")
+	}
+}

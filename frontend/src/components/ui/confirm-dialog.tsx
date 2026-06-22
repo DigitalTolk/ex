@@ -43,7 +43,7 @@ export function ConfirmDialog({
 }: ConfirmDialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md" data-testid={testIDPrefix} finalFocus={finalFocus} mobileCloseLabel="Cancel">
+      <DialogContent size="md" data-testid={testIDPrefix} finalFocus={finalFocus} mobileCloseLabel="Cancel">
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
           {description && <DialogDescription>{description}</DialogDescription>}

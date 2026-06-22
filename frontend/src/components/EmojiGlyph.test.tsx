@@ -55,4 +55,16 @@ describe('EmojiGlyph', () => {
     const { container } = render(<EmojiGlyph emoji="🎉" size="lg" />);
     expect(container.querySelector('span')).toHaveClass('text-[22px]');
   });
+
+  it('uses the md (16px) sizing on a unicode glyph', () => {
+    const { container } = render(<EmojiGlyph emoji="🎉" size="md" />);
+    expect(container.querySelector('span')).toHaveClass('text-base');
+  });
+
+  it('uses the md sizing classes on a custom image', () => {
+    const { container } = render(
+      <EmojiGlyph emoji=":party_parrot:" size="md" customMap={{ party_parrot: 'https://x/parrot.gif' }} />,
+    );
+    expect(container.querySelector('img')).toHaveClass('h-4', 'w-4');
+  });
 });

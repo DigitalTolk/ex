@@ -11,6 +11,35 @@ export interface User {
   status: string;
   online?: boolean;
   lastSeenAt?: string;
+  notificationSettings?: NotificationSettings;
+}
+
+// NotificationLevel gates which messages fire a sound + popup (desktop) or
+// push (mobile). "mentions" covers mentions, DMs and keyword matches.
+export type NotificationLevel = 'all' | 'mentions';
+
+// MobileNotificationLevel adds a "default" sentinel meaning "same as desktop".
+export type MobileNotificationLevel = 'default' | 'all' | 'mentions';
+
+// NotificationSettings is the account-level baseline every channel inherits.
+// Keywords are global. Per-channel overrides live on UserChannel.
+export interface NotificationSettings {
+  desktopLevel: NotificationLevel;
+  mobileLevel: MobileNotificationLevel;
+  threadReplies: boolean;
+  ignoreGroupMentions: boolean;
+  followAllThreads: boolean;
+  keywords?: string[];
+}
+
+// ChannelNotificationOverride is the per-channel override payload. Each field
+// omitted/undefined means "inherit the account default".
+export interface ChannelNotificationOverride {
+  desktopLevel?: NotificationLevel;
+  mobileLevel?: MobileNotificationLevel;
+  threadReplies?: boolean;
+  ignoreGroupMentions?: boolean;
+  followAllThreads?: boolean;
 }
 
 export interface UserStatus {
@@ -186,6 +215,12 @@ export interface UserChannel {
   favorite?: boolean;
   categoryID?: string;
   sidebarPosition?: number;
+  // Per-channel notification overrides; undefined = inherit account default.
+  desktopLevel?: NotificationLevel;
+  mobileLevel?: MobileNotificationLevel;
+  threadReplies?: boolean;
+  ignoreGroupMentions?: boolean;
+  followAllThreads?: boolean;
 }
 
 export interface SidebarCategory {

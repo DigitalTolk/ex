@@ -87,8 +87,11 @@ func (handlerMembershipStore) ListMembers(context.Context, string) ([]*model.Cha
 func (handlerMembershipStore) ListUserChannels(context.Context, string) ([]*model.UserChannel, error) {
 	return nil, nil
 }
-func (handlerMembershipStore) MutedUserIDs(context.Context, string, []string) (map[string]bool, error) {
-	return map[string]bool{}, nil
+func (handlerMembershipStore) UserChannelNotifPrefs(context.Context, string, []string) (map[string]*model.UserChannel, error) {
+	return map[string]*model.UserChannel{}, nil
+}
+func (handlerMembershipStore) SetNotifPrefs(context.Context, string, string, model.ChannelNotificationOverride) error {
+	return nil
 }
 func (handlerMembershipStore) SetMute(context.Context, string, string, bool) error     { return nil }
 func (handlerMembershipStore) SetFavorite(context.Context, string, string, bool) error { return nil }

@@ -85,6 +85,20 @@ func (m *mockUserStore) HasUsers(_ context.Context) (bool, error) {
 	return m.hasUsersVal, nil
 }
 
+func (m *mockUserStore) NotificationSettingsFor(_ context.Context, userIDs []string) (map[string]model.NotificationSettings, error) {
+	out := make(map[string]model.NotificationSettings)
+	for _, uid := range userIDs {
+		if u, ok := m.users[uid]; ok {
+			if u.NotificationSettings != nil {
+				out[uid] = *u.NotificationSettings
+			} else {
+				out[uid] = model.DefaultNotificationSettings()
+			}
+		}
+	}
+	return out, nil
+}
+
 type mockTokenStore struct {
 	tokens map[string]*model.RefreshToken
 }
@@ -156,13 +170,16 @@ func (m *mockMembershipStore) ListUserChannels(_ context.Context, _ string) ([]*
 	}
 	return nil, nil
 }
-func (m *mockMembershipStore) MutedUserIDs(_ context.Context, _ string, _ []string) (map[string]bool, error) {
+func (m *mockMembershipStore) UserChannelNotifPrefs(_ context.Context, _ string, _ []string) (map[string]*model.UserChannel, error) {
 	if m.listUserChannelsErr != nil {
 		return nil, m.listUserChannelsErr
 	}
-	return map[string]bool{}, nil
+	return map[string]*model.UserChannel{}, nil
 }
 func (m *mockMembershipStore) SetMute(_ context.Context, _, _ string, _ bool) error {
+	return nil
+}
+func (m *mockMembershipStore) SetNotifPrefs(_ context.Context, _, _ string, _ model.ChannelNotificationOverride) error {
 	return nil
 }
 func (m *mockMembershipStore) SetFavorite(_ context.Context, _, _ string, _ bool) error {
@@ -255,10 +272,10 @@ type stubOIDCProvider struct {
 	userInfo *service.OIDCUserInfo
 }
 
-func (s *stubOIDCProvider) AuthURL(state string) string {
-	return s.url + "?state=" + state
+func (s *stubOIDCProvider) AuthURL(state, nonce string) string {
+	return s.url + "?state=" + state + "&nonce=" + nonce
 }
-func (s *stubOIDCProvider) Exchange(_ context.Context, _ string) (*service.OIDCUserInfo, error) {
+func (s *stubOIDCProvider) Exchange(_ context.Context, _, _ string) (*service.OIDCUserInfo, error) {
 	if s.userInfo == nil {
 		return nil, nil
 	}
@@ -843,6 +860,45 @@ func TestOIDCCallback_NoOIDCConfigured(t *testing.T) {
 
 	if rec.Code != http.StatusInternalServerError {
 		t.Errorf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
+	}
+}
+
+func TestOIDCLogin_SetsNonceCookie(t *testing.T) {
+	h, _, _ := setupAuthHandlerWithOIDC(t)
+	req := httptest.NewRequest(http.MethodGet, "/auth/oidc/login", nil)
+	rec := httptest.NewRecorder()
+	h.OIDCLogin(rec, req)
+
+	var nonce string
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == "oauth_nonce" {
+			nonce = c.Value
+		}
+	}
+	if nonce == "" {
+		t.Fatal("expected oauth_nonce cookie to be set at login")
+	}
+}
+
+func TestOIDCCallback_ConsumesAndClearsNonceCookie(t *testing.T) {
+	h, _, _ := setupAuthHandlerWithOIDCSuccess(t)
+	req := httptest.NewRequest(http.MethodGet, "/auth/oidc/callback?state=s&code=c", nil)
+	req.AddCookie(&http.Cookie{Name: "oauth_state", Value: "s"})
+	req.AddCookie(&http.Cookie{Name: "oauth_nonce", Value: "n"})
+	rec := httptest.NewRecorder()
+
+	h.OIDCCallback(rec, req)
+	if rec.Code != http.StatusFound {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusFound)
+	}
+	var cleared bool
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == "oauth_nonce" && c.MaxAge < 0 {
+			cleared = true
+		}
+	}
+	if !cleared {
+		t.Error("expected oauth_nonce cookie to be cleared on callback")
 	}
 }
 

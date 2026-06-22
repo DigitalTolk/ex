@@ -204,29 +204,39 @@ func (s *MembershipStoreImpl) ListUserChannels(ctx context.Context, userID strin
 	return channels, nil
 }
 
-// MutedUserIDs returns, for one channel, which of the supplied users have muted
-// it. It batch-reads the user-side membership rows (point reads, chunked into
-// BatchGetItem calls of 100) instead of issuing a full ListUserChannels query
-// per user. The notifier calls this once per channel message, so the previous
-// per-member fan-out (O(members) queries, each returning all of a user's
-// channels) was the dominant cost on large channels.
-func (s *MembershipStoreImpl) MutedUserIDs(ctx context.Context, channelID string, userIDs []string) (map[string]bool, error) {
-	muted := make(map[string]bool)
+// UserChannelNotifPrefs returns, for one channel, each supplied user's
+// per-channel notification override (the muted flag plus the five inherit-or-
+// override fields). It batch-reads the user-side membership rows (point reads,
+// chunked into BatchGetItem calls of 100) instead of issuing a full
+// ListUserChannels query per user. The notifier calls this once per channel
+// message, so the previous per-member fan-out (O(members) queries, each
+// returning all of a user's channels) was the dominant cost on large channels.
+//
+// A user with no row (or one whose override attributes are absent) simply
+// won't appear / will appear with nil override pointers — both resolve to
+// "inherit account defaults" downstream.
+func (s *MembershipStoreImpl) UserChannelNotifPrefs(ctx context.Context, channelID string, userIDs []string) (map[string]*model.UserChannel, error) {
+	prefs := make(map[string]*model.UserChannel)
 	const batchSize = 100 // DynamoDB BatchGetItem hard limit
 	for start := 0; start < len(userIDs); start += batchSize {
-		end := start + batchSize
-		if end > len(userIDs) {
-			end = len(userIDs)
-		}
+		end := min(start+batchSize, len(userIDs))
 		keys := make([]map[string]types.AttributeValue, 0, end-start)
 		for _, uid := range userIDs[start:end] {
 			keys = append(keys, compositeKey(userPK(uid), chanSK(channelID)))
 		}
 		req := map[string]types.KeysAndAttributes{
 			s.Table: {
-				Keys:                     keys,
-				ProjectionExpression:     aws.String("#uid, #muted"),
-				ExpressionAttributeNames: map[string]string{"#uid": "userID", "#muted": "muted"},
+				Keys:                 keys,
+				ProjectionExpression: aws.String("#uid, #muted, #d, #m, #t, #i, #f"),
+				ExpressionAttributeNames: map[string]string{
+					"#uid":   "userID",
+					"#muted": "muted",
+					"#d":     "notifDesktopLevel",
+					"#m":     "notifMobileLevel",
+					"#t":     "notifThreadReplies",
+					"#i":     "notifIgnoreGroupMentions",
+					"#f":     "notifFollowAllThreads",
+				},
 			},
 		}
 		// Drain UnprocessedKeys (BatchGetItem may return a partial result under
@@ -234,18 +244,16 @@ func (s *MembershipStoreImpl) MutedUserIDs(ctx context.Context, channelID string
 		for {
 			out, err := s.Client.BatchGetItem(ctx, &dynamodb.BatchGetItemInput{RequestItems: req})
 			if err != nil {
-				return nil, fmt.Errorf("store: batch get muted: %w", err)
+				return nil, fmt.Errorf("store: batch get notif prefs: %w", err)
 			}
 			for _, item := range out.Responses[s.Table] {
-				var row struct {
-					UserID string `dynamodbav:"userID"`
-					Muted  bool   `dynamodbav:"muted"`
+				var uc model.UserChannel
+				if err := attributevalue.UnmarshalMap(item, &uc); err != nil { // coverage-ignore: round-trip of rows this store wrote; cannot fail
+					return nil, fmt.Errorf("store: unmarshal notif pref row: %w", err)
 				}
-				if err := attributevalue.UnmarshalMap(item, &row); err != nil { // coverage-ignore: round-trip of rows this store wrote; cannot fail
-					return nil, fmt.Errorf("store: unmarshal muted row: %w", err)
-				}
-				if row.Muted && row.UserID != "" {
-					muted[row.UserID] = true
+				if uc.UserID != "" {
+					row := uc
+					prefs[uc.UserID] = &row
 				}
 			}
 			unproc, ok := out.UnprocessedKeys[s.Table]
@@ -255,7 +263,42 @@ func (s *MembershipStoreImpl) MutedUserIDs(ctx context.Context, channelID string
 			req = map[string]types.KeysAndAttributes{s.Table: unproc}
 		}
 	}
-	return muted, nil
+	return prefs, nil
+}
+
+// SetUserChannelNotifPrefs writes the per-channel notification overrides on the
+// user-side UserChannel row. Each field is SET when the user chose an explicit
+// value and REMOVED when they chose "use my default" (nil) — so reverting to
+// inherit leaves no attribute behind for the resolver to pick up. Like the
+// other per-user toggles this is a single-row write (no channel-side mirror).
+func (s *MembershipStoreImpl) SetUserChannelNotifPrefs(ctx context.Context, channelID, userID string, o model.ChannelNotificationOverride) error {
+	upd := expression.UpdateBuilder{}
+	if o.DesktopLevel != nil {
+		upd = upd.Set(expression.Name("notifDesktopLevel"), expression.Value(*o.DesktopLevel))
+	} else {
+		upd = upd.Remove(expression.Name("notifDesktopLevel"))
+	}
+	if o.MobileLevel != nil {
+		upd = upd.Set(expression.Name("notifMobileLevel"), expression.Value(*o.MobileLevel))
+	} else {
+		upd = upd.Remove(expression.Name("notifMobileLevel"))
+	}
+	if o.ThreadReplies != nil {
+		upd = upd.Set(expression.Name("notifThreadReplies"), expression.Value(*o.ThreadReplies))
+	} else {
+		upd = upd.Remove(expression.Name("notifThreadReplies"))
+	}
+	if o.IgnoreGroupMentions != nil {
+		upd = upd.Set(expression.Name("notifIgnoreGroupMentions"), expression.Value(*o.IgnoreGroupMentions))
+	} else {
+		upd = upd.Remove(expression.Name("notifIgnoreGroupMentions"))
+	}
+	if o.FollowAllThreads != nil {
+		upd = upd.Set(expression.Name("notifFollowAllThreads"), expression.Value(*o.FollowAllThreads))
+	} else {
+		upd = upd.Remove(expression.Name("notifFollowAllThreads"))
+	}
+	return s.updateUserChannel(ctx, channelID, userID, upd, "notif prefs")
 }
 
 func (s *MembershipStoreImpl) UpdateChannelRole(ctx context.Context, channelID, userID string, role model.ChannelRole) error {

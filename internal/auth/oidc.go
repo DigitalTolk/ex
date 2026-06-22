@@ -46,14 +46,17 @@ func NewOIDCProvider(ctx context.Context, issuer, clientID, clientSecret, redire
 	}, nil
 }
 
-// AuthURL returns the URL to redirect the user to for authentication.
-func (p *OIDCProvider) AuthURL(state string) string {
-	return p.oauth2Config.AuthCodeURL(state)
+// AuthURL returns the URL to redirect the user to for authentication. The nonce
+// is bound into the request so the ID token returned on callback can be checked
+// against it, preventing ID-token replay/injection.
+func (p *OIDCProvider) AuthURL(state, nonce string) string {
+	return p.oauth2Config.AuthCodeURL(state, oidc.Nonce(nonce))
 }
 
-// Exchange trades an authorization code for tokens, verifies the ID token,
-// and extracts user profile information.
-func (p *OIDCProvider) Exchange(ctx context.Context, code string) (*OIDCUserInfo, error) {
+// Exchange trades an authorization code for tokens, verifies the ID token
+// (including that its nonce matches the one bound at AuthURL time), and extracts
+// user profile information.
+func (p *OIDCProvider) Exchange(ctx context.Context, code, nonce string) (*OIDCUserInfo, error) {
 	oauth2Token, err := p.oauth2Config.Exchange(ctx, code)
 	if err != nil {
 		return nil, fmt.Errorf("oauth2 exchange: %w", err)
@@ -67,6 +70,9 @@ func (p *OIDCProvider) Exchange(ctx context.Context, code string) (*OIDCUserInfo
 	idToken, err := p.verifier.Verify(ctx, rawIDToken)
 	if err != nil {
 		return nil, fmt.Errorf("id_token verification: %w", err)
+	}
+	if idToken.Nonce != nonce {
+		return nil, fmt.Errorf("id_token nonce mismatch")
 	}
 
 	var claims struct {

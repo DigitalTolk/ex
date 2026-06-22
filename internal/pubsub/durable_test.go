@@ -89,6 +89,7 @@ func TestRedisPubSub_PublishFansOutToInboxes(t *testing.T) {
 	if err := ps.Publish(context.Background(), "chan:c1", evt); err != nil {
 		t.Fatalf("Publish: %v", err)
 	}
+	ps.WaitForInboxFanOut() // fan-out is async; wait for it before asserting
 
 	calls := inbox.seen()
 	if len(calls) != 3 {
@@ -168,6 +169,7 @@ func TestRedisPubSub_PublishContinuesWhenInboxFails(t *testing.T) {
 	if err := ps.Publish(context.Background(), "chan:c1", evt); err != nil {
 		t.Errorf("Publish must succeed even when inbox fails, got %v", err)
 	}
+	ps.WaitForInboxFanOut()
 	if got := inbox.failed.Load(); got != 2 {
 		t.Errorf("inbox failed count = %d, want 2", got)
 	}
@@ -184,6 +186,7 @@ func TestRedisPubSub_PublishContinuesWhenResolverFails(t *testing.T) {
 	if err := ps.Publish(context.Background(), "chan:c1", evt); err != nil {
 		t.Errorf("Publish must succeed even when resolver fails, got %v", err)
 	}
+	ps.WaitForInboxFanOut()
 	if got := len(inbox.seen()); got != 0 {
 		t.Errorf("inbox saw %d appends when resolver failed, want 0", got)
 	}

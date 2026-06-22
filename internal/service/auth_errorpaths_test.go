@@ -16,7 +16,7 @@ func TestHandleOIDCLogin_RandError(t *testing.T) {
 	orig := randRead
 	randRead = func([]byte) (int, error) { return 0, errors.New("no entropy") }
 	defer func() { randRead = orig }()
-	if _, _, err := env.svc.HandleOIDCLogin(); err == nil {
+	if _, _, _, err := env.svc.HandleOIDCLogin(); err == nil {
 		t.Fatal("expected rand error from HandleOIDCLogin")
 	}
 }
@@ -24,7 +24,7 @@ func TestHandleOIDCLogin_RandError(t *testing.T) {
 func TestHandleOIDCCallback_BadEmailFromProvider(t *testing.T) {
 	env := setupAuthService()
 	env.oidc.userInfo.Email = "not-an-email"
-	if _, _, _, err := env.svc.HandleOIDCCallback(context.Background(), "code", "state"); err == nil {
+	if _, _, _, err := env.svc.HandleOIDCCallback(context.Background(), "code", "state", "nonce"); err == nil {
 		t.Fatal("expected normalize-email error")
 	}
 }
@@ -33,7 +33,7 @@ func TestHandleOIDCCallback_CreateUserAlreadyExists(t *testing.T) {
 	env := setupAuthService()
 	// New user (not in email index) but CreateUser races to ErrAlreadyExists.
 	env.users.createErr = store.ErrAlreadyExists
-	if _, _, _, err := env.svc.HandleOIDCCallback(context.Background(), "code", "state"); err == nil {
+	if _, _, _, err := env.svc.HandleOIDCCallback(context.Background(), "code", "state", "nonce"); err == nil {
 		t.Fatal("expected already-exists error")
 	}
 }

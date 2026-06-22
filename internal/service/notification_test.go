@@ -91,6 +91,25 @@ func publishedKinds(pub *mockPublisher) map[string]NotificationKind {
 	return out
 }
 
+// seedAllLevel registers user records whose account notification level is "all
+// messages", so an ordinary (non-mention) channel message reaches them. The
+// quiet "mentions, DMs & keywords only" default is deliberate (see CLAUDE.md),
+// so fanout/push/mute machinery tests opt their recipients into "all" to
+// exercise that machinery independently of the level gate.
+func seedAllLevel(users *mockUserStore, ids ...string) {
+	for _, id := range ids {
+		users.users[id] = &model.User{
+			ID:          id,
+			DisplayName: id,
+			NotificationSettings: &model.NotificationSettings{
+				DesktopLevel:  model.NotificationLevelAll,
+				MobileLevel:   model.MobileNotificationDefault,
+				ThreadReplies: true,
+			},
+		}
+	}
+}
+
 func publishedNotifications(pub *mockPublisher) map[string]Notification {
 	out := make(map[string]Notification, len(pub.published))
 	for _, p := range pub.published {
@@ -109,6 +128,7 @@ func TestNotificationService_NotifyForMessage_ChannelFanout(t *testing.T) {
 
 	chans.channels["ch1"] = &model.Channel{ID: "ch1", Name: "general", Slug: "general", Type: model.ChannelTypePublic}
 	users.users["u-author"] = &model.User{ID: "u-author", DisplayName: "Alice"}
+	seedAllLevel(users, "u-bob", "u-carol")
 	members.memberships["ch1#u-author"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u-author"}
 	members.memberships["ch1#u-bob"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u-bob"}
 	members.memberships["ch1#u-carol"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u-carol"}
@@ -143,6 +163,7 @@ func TestNotificationService_NotifyForMessage_SendsMobilePushToSameRecipients(t 
 
 	chans.channels["ch1"] = &model.Channel{ID: "ch1", Name: "general", Slug: "general", Type: model.ChannelTypePublic}
 	users.users["u-author"] = &model.User{ID: "u-author", DisplayName: "Alice"}
+	seedAllLevel(users, "u-bob", "u-carol")
 	for _, uid := range []string{"u-author", "u-bob", "u-carol"} {
 		members.memberships["ch1#"+uid] = &model.ChannelMembership{ChannelID: "ch1", UserID: uid}
 	}
@@ -184,6 +205,7 @@ func TestNotificationService_NotifyForMessage_SkipsMobilePushForOnlineRecipients
 
 	chans.channels["ch1"] = &model.Channel{ID: "ch1", Name: "general", Slug: "general", Type: model.ChannelTypePublic}
 	users.users["u-author"] = &model.User{ID: "u-author", DisplayName: "Alice"}
+	seedAllLevel(users, "u-bob", "u-carol")
 	for _, uid := range []string{"u-author", "u-bob", "u-carol"} {
 		members.memberships["ch1#"+uid] = &model.ChannelMembership{ChannelID: "ch1", UserID: uid}
 	}
@@ -208,6 +230,7 @@ func TestNotificationService_MissingMobilePushConfigDoesNotBlockMessageDelivery(
 	ctx := context.Background()
 	chans.channels["ch1"] = &model.Channel{ID: "ch1", Name: "general", Slug: "general", Type: model.ChannelTypePublic}
 	users.users["u-author"] = &model.User{ID: "u-author", DisplayName: "Alice"}
+	seedAllLevel(users, "u-bob")
 	members.memberships["ch1#u-author"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u-author"}
 	members.memberships["ch1#u-bob"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u-bob"}
 
@@ -225,6 +248,7 @@ func TestNotificationService_MobilePushFailureDoesNotBlockMessageDelivery(t *tes
 	ctx := context.Background()
 	chans.channels["ch1"] = &model.Channel{ID: "ch1", Name: "general", Slug: "general", Type: model.ChannelTypePublic}
 	users.users["u-author"] = &model.User{ID: "u-author", DisplayName: "Alice"}
+	seedAllLevel(users, "u-bob")
 	members.memberships["ch1#u-author"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u-author"}
 	members.memberships["ch1#u-bob"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u-bob"}
 
@@ -499,7 +523,8 @@ func TestNotificationService_NotifyForMessage_RespectsMute(t *testing.T) {
 	members.memberships["ch1#u-author"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u-author"}
 	members.memberships["ch1#u-bob"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u-bob"}
 	members.memberships["ch1#u-carol"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u-carol"}
-	// Bob has the channel muted; Carol does not.
+	// Both want all messages; Bob has the channel muted, Carol does not.
+	seedAllLevel(users, "u-bob", "u-carol")
 	members.userChannels = []*model.UserChannel{
 		{UserID: "u-bob", ChannelID: "ch1", Muted: true},
 		{UserID: "u-carol", ChannelID: "ch1", Muted: false},
@@ -793,6 +818,8 @@ func TestNotifyForMessage_DirectMention_NotifiesUserAsMentionKind(t *testing.T) 
 	members.memberships["ch1#u-author"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u-author"}
 	members.memberships["ch1#u-bob"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u-bob"}
 	members.memberships["ch1#u-carol"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u-carol"}
+	// Carol is a plain (non-mentioned) member who wants all messages.
+	seedAllLevel(users, "u-carol")
 
 	msg := &model.Message{
 		ID: "m1", ParentID: "ch1", AuthorID: "u-author",

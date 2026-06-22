@@ -49,8 +49,12 @@ const (
 	EventUserUpdated        = "user.updated"
 	EventAttachmentDeleted  = "attachment.deleted"
 	EventChannelMuted       = "channel.muted"
-	EventUserChannelUpdated = "userchannel.updated" // per-user user-side state changed (favorite/category)
+	EventUserChannelUpdated = "userchannel.updated" // per-user user-side state changed (favorite/category/notification prefs)
 	EventNotificationNew    = "notification.new"
+	// EventNotificationSettingsUpdated is sent to a user's own clients when
+	// their account-level notification settings (levels, keywords, etc.)
+	// change, so every open tab/device stays in sync.
+	EventNotificationSettingsUpdated = "notification.settings_updated"
 	EventDraftUpdated       = "draft.updated"
 	EventForceLogout        = "auth.force_logout" // sent to a user's personal channel when their session must end (e.g. deactivation)
 	EventServerVersion      = "server.version"    // sent once on connect so clients can detect deploys without polling
@@ -67,6 +71,12 @@ const (
 // fired-and-forget at the moment they happened (force_logout). Keeping
 // them out of the per-user inbox stream avoids wasting MAXLEN budget on
 // noise that would just be discarded by the client anyway.
+//
+// notification.new is ephemeral on purpose: a notification is a "fire at the
+// moment" alert (sound + popup + push). Replaying it on reconnect would re-pop
+// a toast the user already saw — a duplicate-notification bug — and the
+// underlying unread/thread state is re-reconciled by the client's onReconnect
+// refetch anyway. A missed toast on reconnect is far better than a dupe.
 var ephemeralTypes = map[string]struct{}{
 	EventTyping:          {},
 	EventPing:            {},
@@ -75,6 +85,7 @@ var ephemeralTypes = map[string]struct{}{
 	EventForceLogout:     {},
 	EventReplayDone:      {},
 	EventReplayExhausted: {},
+	EventNotificationNew: {},
 }
 
 // IsPersistent reports whether an event of this type should be appended

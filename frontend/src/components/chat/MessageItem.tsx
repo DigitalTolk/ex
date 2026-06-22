@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Copy, Pencil, Trash2, SmilePlus, MessageSquareReply, MoreHorizontal, Pin, PinOff, Link as LinkIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -405,15 +405,23 @@ function MessageItemImpl({
   useEffect(() => cancelLongPress, []);
   useTransientOverlayCleanup(mobileActionsOpen, { rootRef: mobileActionsRef, lockScroll: true });
 
-  const reactions = message.reactions ?? {};
-  const reactionEntries = Object.entries(reactions).filter(([, users]) => users && users.length > 0);
+  // The unfurl scan walks the whole body; memoize so it only runs when the
+  // body changes, not on unrelated re-renders.
+  const bodyURLs = useMemo(() => extractURLs(message.body), [message.body]);
+
+  // Recomputed only when the reactions map changes, not on every re-render
+  // (presence/hover ticks would otherwise re-filter on each paint).
+  const reactionEntries = useMemo(
+    () => Object.entries(message.reactions ?? {}).filter(([, users]) => users && users.length > 0),
+    [message.reactions],
+  );
 
   function renderReactionLabel(emoji: string): string {
     return emoji;
   }
 
   function renderReactionVisual(emoji: string) {
-    return <EmojiGlyph emoji={emoji} customMap={emojiMap} />;
+    return <EmojiGlyph emoji={emoji} customMap={emojiMap} size="md" />;
   }
 
   const REACTOR_LIST_MAX = 20;
@@ -718,7 +726,7 @@ function MessageItemImpl({
               if (message.noUnfurl) return null;
               // First URL in the body (skipping code) gets a preview
               // card. Capped at one to keep messages compact.
-              const urls = extractURLs(message.body);
+              const urls = bodyURLs;
               return urls[0] ? (
                 <UnfurlCard
                   url={urls[0]}
@@ -763,7 +771,7 @@ function MessageItemImpl({
                             role="listitem"
                             data-testid="reaction-badge"
                             onClick={() => handleReact(emoji)}
-                            className={`flex items-center gap-1 rounded-full border px-2 py-0.5 text-sm hover:bg-muted ${
+                            className={`flex items-center gap-1 rounded-full border px-1.5 py-0 text-sm hover:bg-muted ${
                               reactedByMe ? 'border-primary bg-primary/10' : 'bg-background'
                             }`}
                             aria-label={`${renderReactionLabel(emoji)} ${users.length}, ${reactedByMe ? 'reacted' : 'react'}`}
@@ -798,7 +806,7 @@ function MessageItemImpl({
                       className="h-full min-h-6 w-6 rounded-full text-muted-foreground hover:text-foreground"
                       aria-label="Add another reaction"
                     >
-                      <SmilePlus className="h-3.5 w-3.5" />
+                      <SmilePlus className="h-4 w-4" />
                     </Button>
                   }
                 />
@@ -841,14 +849,14 @@ function MessageItemImpl({
                 handleReact(emoji);
               }}
             >
-              <EmojiGlyph emoji={emoji} customMap={emojiMap} />
+              <EmojiGlyph emoji={emoji} customMap={emojiMap} size="md" />
             </Button>
           ))}
           <EmojiPicker
             onSelect={handleReact}
             trigger={
               <Button size="icon" variant="ghost" className="h-7 w-7" aria-label="Add reaction">
-                <SmilePlus className="h-3.5 w-3.5" />
+                <SmilePlus className="h-4 w-4" />
               </Button>
             }
           />

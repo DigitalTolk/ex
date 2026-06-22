@@ -10,6 +10,7 @@ import {
   useCreateChannel,
   useJoinChannel,
   useMuteChannel,
+  useSetChannelNotificationPrefs,
 } from './useChannels';
 import { useEmojis, useEmojiMap } from './useEmoji';
 import { useUserState } from './useUserState';
@@ -156,6 +157,20 @@ describe('useChannels — mutations', () => {
     expect(url).toBe('/api/v1/channels/ch-1/mute');
     expect((init as { method: string }).method).toBe('PUT');
     expect(JSON.parse((init as { body: string }).body)).toEqual({ muted: true });
+  });
+
+  it('useSetChannelNotificationPrefs PUTs the override to /notification-preferences', async () => {
+    apiFetchMock.mockResolvedValue(undefined);
+    const screen = await renderMutation(useSetChannelNotificationPrefs as never, {
+      channelId: 'ch-1',
+      override: { desktopLevel: 'all', threadReplies: false },
+    });
+    (screen.getByTestId('trigger').element() as HTMLButtonElement).click();
+    await new Promise((r) => setTimeout(r, 200));
+    const [url, init] = apiFetchMock.mock.calls[0];
+    expect(url).toBe('/api/v1/channels/ch-1/notification-preferences');
+    expect((init as { method: string }).method).toBe('PUT');
+    expect(JSON.parse((init as { body: string }).body)).toEqual({ desktopLevel: 'all', threadReplies: false });
   });
 });
 

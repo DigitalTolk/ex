@@ -16,6 +16,10 @@ type UserStore interface {
 	UpdateUser(ctx context.Context, user *model.User) error
 	ListUsers(ctx context.Context, limit int, cursor string) ([]*model.User, string, error)
 	HasUsers(ctx context.Context) (bool, error)
+	// NotificationSettingsFor batch-loads account-level notification settings
+	// for a set of users so the notifier can decide per-recipient without an
+	// N+1 fan-out. Missing users default to DefaultNotificationSettings.
+	NotificationSettingsFor(ctx context.Context, userIDs []string) (map[string]model.NotificationSettings, error)
 }
 
 // ChannelStore defines persistence operations for channels.
@@ -35,12 +39,16 @@ type MembershipStore interface {
 	UpdateMemberRole(ctx context.Context, channelID, userID string, role model.ChannelRole) error
 	ListMembers(ctx context.Context, channelID string) ([]*model.ChannelMembership, error)
 	ListUserChannels(ctx context.Context, userID string) ([]*model.UserChannel, error)
-	// MutedUserIDs returns which of the given users have muted the channel,
-	// batched into a single fan-out instead of one query per user.
-	MutedUserIDs(ctx context.Context, channelID string, userIDs []string) (map[string]bool, error)
+	// UserChannelNotifPrefs returns each user's per-channel notification
+	// override (muted + the five inherit-or-override fields), batched into a
+	// single fan-out instead of one query per user.
+	UserChannelNotifPrefs(ctx context.Context, channelID string, userIDs []string) (map[string]*model.UserChannel, error)
 	SetMute(ctx context.Context, channelID, userID string, muted bool) error
 	SetFavorite(ctx context.Context, channelID, userID string, favorite bool) error
 	SetCategory(ctx context.Context, channelID, userID, categoryID string, sidebarPosition *int) error
+	// SetNotifPrefs persists a user's per-channel notification overrides;
+	// nil fields clear the override back to "inherit account default".
+	SetNotifPrefs(ctx context.Context, channelID, userID string, override model.ChannelNotificationOverride) error
 }
 
 // ConversationStore defines persistence operations for conversations.
@@ -179,8 +187,8 @@ type JWTProvider interface {
 
 // OIDCProvider handles OpenID Connect authentication flows.
 type OIDCProvider interface {
-	AuthURL(state string) string
-	Exchange(ctx context.Context, code string) (*OIDCUserInfo, error)
+	AuthURL(state, nonce string) string
+	Exchange(ctx context.Context, code, nonce string) (*OIDCUserInfo, error)
 }
 
 // OIDCUserInfo holds user profile data returned by the identity provider.

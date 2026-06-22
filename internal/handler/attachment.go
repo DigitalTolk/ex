@@ -182,11 +182,16 @@ func (h *AttachmentHandler) Media(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer func() { _ = media.Body.Close() }()
-	if media.ContentType != "" {
-		w.Header().Set("Content-Type", media.ContentType)
+	contentType := media.ContentType
+	if contentType == "" {
+		contentType = "application/octet-stream"
 	}
+	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Cache-Control", storage.BrowserObjectCacheControl)
 	w.Header().Set("X-Content-Type-Options", "nosniff")
+	// Defense-in-depth: sandbox any object the browser might still try to render
+	// so attacker-uploaded markup can't run script in the app origin.
+	w.Header().Set("Content-Security-Policy", "sandbox")
 	lastModified := media.LastModified.Truncate(time.Second)
 	if !lastModified.IsZero() {
 		w.Header().Set("Last-Modified", lastModified.UTC().Format(http.TimeFormat))
@@ -195,7 +200,10 @@ func (h *AttachmentHandler) Media(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if r.URL.Query().Get("download") == "1" {
+	// Force a download for scriptable content types (text/html, SVG, XML, …) so a
+	// same-origin /api/v1/media/{token} URL can't be used to land stored XSS by
+	// uploading HTML and luring a victim to open it. ?download=1 always forces it.
+	if r.URL.Query().Get("download") == "1" || isInlineUnsafeContentType(contentType) {
 		w.Header().Set("Content-Disposition", attachmentDisposition(media.Filename))
 	}
 	if media.Size > 0 {
@@ -203,6 +211,20 @@ func (h *AttachmentHandler) Media(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(http.StatusOK)
 	_, _ = io.Copy(w, media.Body)
+}
+
+// isInlineUnsafeContentType reports whether a content type can carry executable
+// markup (and so must never be served inline from the same-origin media route).
+func isInlineUnsafeContentType(ct string) bool {
+	base := strings.ToLower(strings.TrimSpace(ct))
+	if i := strings.IndexByte(base, ';'); i >= 0 {
+		base = strings.TrimSpace(base[:i])
+	}
+	switch base {
+	case "text/html", "application/xhtml+xml", "image/svg+xml", "application/xml", "text/xml":
+		return true
+	}
+	return strings.HasSuffix(base, "+xml")
 }
 
 func notModifiedSince(r *http.Request, lastModified time.Time) bool {

@@ -444,6 +444,16 @@ describe('ChatPage WS router (browser)', () => {
     lastHandlers().onUserUpdated?.({});
   });
 
+  it('onNotificationSettingsUpdated patches self settings and ignores an empty payload', async () => {
+    await renderChatPage();
+    expect(() => {
+      lastHandlers().onNotificationSettingsUpdated?.({
+        settings: { desktopLevel: 'all', mobileLevel: 'default', threadReplies: true, ignoreGroupMentions: false, followAllThreads: false, keywords: [] },
+      });
+      lastHandlers().onNotificationSettingsUpdated?.({});
+    }).not.toThrow();
+  });
+
   it('onNotification routes thread vs channel-mention notifications', async () => {
     await renderChatPage('/?thread=root-1');
     // Active-thread notification → markThreadSeen.

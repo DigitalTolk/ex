@@ -12,8 +12,8 @@ import (
 // OIDCUserInfo-mapping branch a real provider can't reach without a live IdP
 // (it requires a verified, signed id_token round-trip).
 type authProvider interface {
-	AuthURL(state string) string
-	Exchange(ctx context.Context, code string) (*auth.OIDCUserInfo, error)
+	AuthURL(state, nonce string) string
+	Exchange(ctx context.Context, code, nonce string) (*auth.OIDCUserInfo, error)
 }
 
 // oidcAdapter wraps an auth.OIDCProvider to implement the service.OIDCProvider
@@ -27,12 +27,12 @@ func NewOIDCAdapter(p *auth.OIDCProvider) *oidcAdapter {
 	return &oidcAdapter{p: p}
 }
 
-func (a *oidcAdapter) AuthURL(state string) string {
-	return a.p.AuthURL(state)
+func (a *oidcAdapter) AuthURL(state, nonce string) string {
+	return a.p.AuthURL(state, nonce)
 }
 
-func (a *oidcAdapter) Exchange(ctx context.Context, code string) (*service.OIDCUserInfo, error) {
-	info, err := a.p.Exchange(ctx, code)
+func (a *oidcAdapter) Exchange(ctx context.Context, code, nonce string) (*service.OIDCUserInfo, error) {
+	info, err := a.p.Exchange(ctx, code, nonce)
 	if err != nil {
 		return nil, err
 	}

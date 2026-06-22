@@ -255,6 +255,36 @@ func TestAsyncMobilePushSender_SendRacesSenderShutdownWithFullQueue(t *testing.T
 	push.Close()
 }
 
+func TestAsyncMobilePushSender_WorkerSkipsRecipientWhoCameOnline(t *testing.T) {
+	inner := &immediateMobilePush{called: make(chan string, 2)}
+	push := NewAsyncMobilePushSender(inner, 2, 1)
+	defer push.Close()
+	push.SetPresence(&stubPresence{online: map[string]bool{"u-online": true}})
+
+	// Online recipient: the worker re-checks presence and suppresses the push.
+	if err := push.Send(context.Background(), "u-online", Notification{MessageID: "m1"}); err != nil {
+		t.Fatalf("Send online: %v", err)
+	}
+	// Offline recipient: delivered. Processed after the online one (FIFO, 1 worker),
+	// so its delivery proves the online job was reached and skipped.
+	if err := push.Send(context.Background(), "u-offline", Notification{MessageID: "m2"}); err != nil {
+		t.Fatalf("Send offline: %v", err)
+	}
+	select {
+	case got := <-inner.called:
+		if got != "u-offline" {
+			t.Fatalf("delivered to %q, want only u-offline", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("offline recipient push not delivered")
+	}
+	select {
+	case got := <-inner.called:
+		t.Fatalf("online recipient must be skipped, but got delivery to %q", got)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
 func TestNotificationService_AsyncMobilePushDoesNotBlockMessageDelivery(t *testing.T) {
 	svc, pub, members, _, chans, users := setupNotifier(t)
 	inner := newBlockingMobilePush()
@@ -267,6 +297,7 @@ func TestNotificationService_AsyncMobilePushDoesNotBlockMessageDelivery(t *testi
 
 	chans.channels["ch1"] = &model.Channel{ID: "ch1", Name: "general", Slug: "general", Type: model.ChannelTypePublic}
 	users.users["u-author"] = &model.User{ID: "u-author", DisplayName: "Alice"}
+	seedAllLevel(users, "u-1", "u-2", "u-3", "u-4", "u-5")
 	members.memberships["ch1#u-author"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u-author"}
 	for _, uid := range []string{"u-1", "u-2", "u-3", "u-4", "u-5"} {
 		members.memberships["ch1#"+uid] = &model.ChannelMembership{ChannelID: "ch1", UserID: uid}

@@ -98,29 +98,32 @@ func (s *AuthService) indexUser(ctx context.Context, u *model.User) {
 // HandleOIDCLogin generates a random state string and returns the OIDC
 // provider's authorization URL. The caller is responsible for storing the
 // state in an HTTP-only cookie.
-func (s *AuthService) HandleOIDCLogin() (authURL, state string, err error) {
+func (s *AuthService) HandleOIDCLogin() (authURL, state, nonce string, err error) {
 	if s.oidc == nil {
-		return "", "", errors.New("auth: OIDC is not configured")
+		return "", "", "", errors.New("auth: OIDC is not configured")
 	}
 
-	b := make([]byte, 16)
+	b := make([]byte, 32)
 	if _, err := randRead(b); err != nil {
-		return "", "", fmt.Errorf("auth: generate state: %w", err)
+		return "", "", "", fmt.Errorf("auth: generate state: %w", err)
 	}
-	state = hex.EncodeToString(b)
-	authURL = s.oidc.AuthURL(state)
-	return authURL, state, nil
+	state = hex.EncodeToString(b[:16])
+	// A nonce is bound into the auth request and verified against the returned
+	// ID token's nonce claim, preventing ID-token replay/injection.
+	nonce = hex.EncodeToString(b[16:])
+	authURL = s.oidc.AuthURL(state, nonce)
+	return authURL, state, nonce, nil
 }
 
 // HandleOIDCCallback exchanges the authorization code for tokens,
 // upserts the user (creating with SystemRoleMember if new), generates
 // an access/refresh token pair, and stores the refresh token.
-func (s *AuthService) HandleOIDCCallback(ctx context.Context, code, state string) (accessToken, refreshTokenRaw string, user *model.User, err error) {
+func (s *AuthService) HandleOIDCCallback(ctx context.Context, code, state, nonce string) (accessToken, refreshTokenRaw string, user *model.User, err error) {
 	if s.oidc == nil {
 		return "", "", nil, errors.New("auth: OIDC is not configured")
 	}
 
-	info, err := s.oidc.Exchange(ctx, code)
+	info, err := s.oidc.Exchange(ctx, code, nonce)
 	if err != nil {
 		return "", "", nil, fmt.Errorf("auth: oidc exchange: %w", err)
 	}
@@ -147,17 +150,19 @@ func (s *AuthService) HandleOIDCCallback(ctx context.Context, code, state string
 		}
 
 		now := time.Now()
+		ns := model.DefaultNotificationSettingsForNewUser(info.Name)
 		user = &model.User{
-			ID:           store.NewID(),
-			Email:        email,
-			DisplayName:  info.Name,
-			AvatarURL:    info.Picture,
-			SystemRole:   role,
-			AuthProvider: model.AuthProviderOIDC,
-			Status:       "active",
-			LastSeenAt:   &now,
-			CreatedAt:    now,
-			UpdatedAt:    now,
+			ID:                   store.NewID(),
+			Email:                email,
+			DisplayName:          info.Name,
+			AvatarURL:            info.Picture,
+			SystemRole:           role,
+			AuthProvider:         model.AuthProviderOIDC,
+			NotificationSettings: &ns,
+			Status:               "active",
+			LastSeenAt:           &now,
+			CreatedAt:            now,
+			UpdatedAt:            now,
 		}
 		if err := s.users.CreateUser(ctx, user); err != nil {
 			if errors.Is(err, store.ErrAlreadyExists) {
@@ -192,37 +197,54 @@ func (s *AuthService) HandleOIDCCallback(ctx context.Context, code, state string
 // RefreshAccessToken validates the raw refresh token, looks it up in the
 // store, checks expiry, loads the associated user, and returns a new
 // access token.
-func (s *AuthService) RefreshAccessToken(ctx context.Context, refreshTokenRaw string) (string, error) {
+func (s *AuthService) RefreshAccessToken(ctx context.Context, refreshTokenRaw string) (accessToken, newRefreshRaw string, err error) {
 	hash := hashToken(refreshTokenRaw)
 
 	rt, err := s.tokens.GetRefreshToken(ctx, hash)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return "", errors.New("auth: refresh token not found")
+			return "", "", errors.New("auth: refresh token not found")
 		}
-		return "", fmt.Errorf("auth: get refresh token: %w", err)
+		return "", "", fmt.Errorf("auth: get refresh token: %w", err)
 	}
 
 	if time.Now().After(rt.ExpiresAt) {
 		// Clean up expired token.
 		_ = s.tokens.DeleteRefreshToken(ctx, hash)
-		return "", errors.New("auth: refresh token expired")
+		return "", "", errors.New("auth: refresh token expired")
 	}
 
 	user, err := s.users.GetUser(ctx, rt.UserID)
 	if err != nil {
-		return "", fmt.Errorf("auth: get user: %w", err)
+		return "", "", fmt.Errorf("auth: get user: %w", err)
 	}
 
 	now := time.Now()
 	user.LastSeenAt = &now
 	_ = s.users.UpdateUser(ctx, user)
 
-	accessToken, err := s.jwt.GenerateAccessToken(user)
+	accessToken, err = s.jwt.GenerateAccessToken(user)
 	if err != nil {
-		return "", fmt.Errorf("auth: generate access token: %w", err)
+		return "", "", fmt.Errorf("auth: generate access token: %w", err)
 	}
-	return accessToken, nil
+
+	// Rotate the refresh token: issue a fresh one and revoke the presented one,
+	// so a captured refresh token can't be silently replayed for its full TTL.
+	newRefreshRaw, newHash, err := s.jwt.GenerateRefreshToken()
+	if err != nil {
+		return "", "", fmt.Errorf("auth: generate refresh token: %w", err)
+	}
+	if err := s.tokens.StoreRefreshToken(ctx, &model.RefreshToken{
+		TokenHash: newHash,
+		UserID:    user.ID,
+		ExpiresAt: now.Add(s.jwt.RefreshTTL()),
+		CreatedAt: now,
+	}); err != nil {
+		return "", "", fmt.Errorf("auth: store refresh token: %w", err)
+	}
+	_ = s.tokens.DeleteRefreshToken(ctx, hash)
+
+	return accessToken, newRefreshRaw, nil
 }
 
 func (s *AuthService) CreateDesktopAuthSession(ctx context.Context, accessToken, refreshToken string) (string, error) {
@@ -340,16 +362,18 @@ func (s *AuthService) AcceptInvite(ctx context.Context, token, displayName, pass
 	}
 
 	now := time.Now()
+	ns := model.DefaultNotificationSettingsForNewUser(displayName)
 	user = &model.User{
-		ID:           store.NewID(),
-		Email:        email,
-		DisplayName:  displayName,
-		SystemRole:   model.SystemRoleGuest,
-		AuthProvider: model.AuthProviderGuest,
-		PasswordHash: string(hashed),
-		Status:       "active",
-		CreatedAt:    now,
-		UpdatedAt:    now,
+		ID:                   store.NewID(),
+		Email:                email,
+		DisplayName:          displayName,
+		SystemRole:           model.SystemRoleGuest,
+		AuthProvider:         model.AuthProviderGuest,
+		PasswordHash:         string(hashed),
+		NotificationSettings: &ns,
+		Status:               "active",
+		CreatedAt:            now,
+		UpdatedAt:            now,
 	}
 	if err := s.users.CreateUser(ctx, user); err != nil {
 		if errors.Is(err, store.ErrAlreadyExists) {

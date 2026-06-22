@@ -884,7 +884,43 @@ func TestMembershipStore_SetUserChannelMute(t *testing.T) {
 	}
 }
 
-func TestMembershipStore_MutedUserIDs(t *testing.T) {
+func TestUserStore_NotificationSettingsFor(t *testing.T) {
+	db := setupDynamoDB(t)
+	us := NewUserStore(db)
+	ctx := context.Background()
+
+	custom := model.DefaultNotificationSettings()
+	custom.DesktopLevel = model.NotificationLevelAll
+	custom.Keywords = []string{"deploy"}
+	if err := us.Create(ctx, &model.User{ID: "u-ns-a", Email: "ns-a@x.com", DisplayName: "A", NotificationSettings: &custom, CreatedAt: time.Now()}); err != nil {
+		t.Fatalf("create u-ns-a: %v", err)
+	}
+	if err := us.Create(ctx, &model.User{ID: "u-ns-b", Email: "ns-b@x.com", DisplayName: "B", CreatedAt: time.Now()}); err != nil {
+		t.Fatalf("create u-ns-b: %v", err)
+	}
+
+	got, err := us.NotificationSettingsFor(ctx, []string{"u-ns-a", "u-ns-b", "u-ns-absent"})
+	if err != nil {
+		t.Fatalf("NotificationSettingsFor: %v", err)
+	}
+	if a, ok := got["u-ns-a"]; !ok || a.DesktopLevel != model.NotificationLevelAll || len(a.Keywords) != 1 || a.Keywords[0] != "deploy" {
+		t.Errorf("u-ns-a settings = %+v, want custom all+deploy", got["u-ns-a"])
+	}
+	if b, ok := got["u-ns-b"]; !ok || b.DesktopLevel != model.NotificationLevelMentions {
+		t.Errorf("u-ns-b should default to mentions, got %+v", got["u-ns-b"])
+	}
+	if _, ok := got["u-ns-absent"]; ok {
+		t.Error("absent user should not appear in the map")
+	}
+
+	// Error path: a failing BatchGetItem surfaces the error.
+	fs := NewUserStore(withFault(db, func(f *faultClient) { f.failBatchGetItem = true }))
+	if _, err := fs.NotificationSettingsFor(ctx, []string{"u-ns-a"}); !errors.Is(err, errInjected) {
+		t.Fatalf("NotificationSettingsFor fault: want errInjected, got %v", err)
+	}
+}
+
+func TestMembershipStore_UserChannelNotifPrefs(t *testing.T) {
 	db := setupDynamoDB(t)
 	ms := NewMembershipStore(db)
 	cs := NewChannelStore(db)
@@ -905,25 +941,55 @@ func TestMembershipStore_MutedUserIDs(t *testing.T) {
 	if err := ms.SetUserChannelMute(ctx, "ch-mm", "u-mm-a", true); err != nil {
 		t.Fatalf("SetUserChannelMute: %v", err)
 	}
-
-	muted, err := ms.MutedUserIDs(ctx, "ch-mm", []string{"u-mm-a", "u-mm-b", "u-mm-absent"})
-	if err != nil {
-		t.Fatalf("MutedUserIDs: %v", err)
+	// u-mm-b overrides every field so each SET branch is exercised.
+	allLevel := model.NotificationLevelAll
+	mobileAll := model.MobileNotificationAll
+	threadOff := false
+	ignore := true
+	follow := true
+	if err := ms.SetUserChannelNotifPrefs(ctx, "ch-mm", "u-mm-b", model.ChannelNotificationOverride{
+		DesktopLevel:        &allLevel,
+		MobileLevel:         &mobileAll,
+		ThreadReplies:       &threadOff,
+		IgnoreGroupMentions: &ignore,
+		FollowAllThreads:    &follow,
+	}); err != nil {
+		t.Fatalf("SetUserChannelNotifPrefs: %v", err)
 	}
-	if !muted["u-mm-a"] {
+
+	prefs, err := ms.UserChannelNotifPrefs(ctx, "ch-mm", []string{"u-mm-a", "u-mm-b", "u-mm-absent"})
+	if err != nil {
+		t.Fatalf("UserChannelNotifPrefs: %v", err)
+	}
+	if prefs["u-mm-a"] == nil || !prefs["u-mm-a"].Muted {
 		t.Error("expected u-mm-a muted")
 	}
-	if muted["u-mm-b"] {
-		t.Error("u-mm-b did not mute the channel")
+	if prefs["u-mm-b"] == nil || prefs["u-mm-b"].DesktopLevel == nil || *prefs["u-mm-b"].DesktopLevel != model.NotificationLevelAll {
+		t.Errorf("expected u-mm-b desktop override 'all', got %+v", prefs["u-mm-b"])
 	}
-	if muted["u-mm-absent"] {
-		t.Error("a user with no membership row is never muted")
+	if prefs["u-mm-b"].IgnoreGroupMentions == nil || !*prefs["u-mm-b"].IgnoreGroupMentions {
+		t.Error("expected u-mm-b ignoreGroupMentions override")
+	}
+	if prefs["u-mm-absent"] != nil {
+		t.Error("a user with no membership row has no override row")
+	}
+
+	// Clearing an override (nil fields) removes the stored attributes.
+	if err := ms.SetUserChannelNotifPrefs(ctx, "ch-mm", "u-mm-b", model.ChannelNotificationOverride{}); err != nil {
+		t.Fatalf("SetUserChannelNotifPrefs clear: %v", err)
+	}
+	cleared, err := ms.UserChannelNotifPrefs(ctx, "ch-mm", []string{"u-mm-b"})
+	if err != nil {
+		t.Fatalf("UserChannelNotifPrefs after clear: %v", err)
+	}
+	if cleared["u-mm-b"] != nil && cleared["u-mm-b"].DesktopLevel != nil {
+		t.Errorf("expected u-mm-b desktop override cleared, got %+v", cleared["u-mm-b"])
 	}
 
 	// Error path: a failing BatchGetItem surfaces the error.
 	fs := NewMembershipStore(withFault(db, func(f *faultClient) { f.failBatchGetItem = true }))
-	if _, err := fs.MutedUserIDs(ctx, "ch-mm", []string{"u-mm-a"}); !errors.Is(err, errInjected) {
-		t.Fatalf("MutedUserIDs fault: want errInjected, got %v", err)
+	if _, err := fs.UserChannelNotifPrefs(ctx, "ch-mm", []string{"u-mm-a"}); !errors.Is(err, errInjected) {
+		t.Fatalf("UserChannelNotifPrefs fault: want errInjected, got %v", err)
 	}
 }
 

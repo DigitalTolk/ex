@@ -51,7 +51,7 @@ func TestOIDCProvider_AuthURL(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewOIDCProvider: %v", err)
 	}
-	got := p.AuthURL("state-xyz")
+	got := p.AuthURL("state-xyz", "nonce-xyz")
 	if !strings.Contains(got, "state=state-xyz") {
 		t.Errorf("AuthURL missing state param: %q", got)
 	}
@@ -69,7 +69,7 @@ func TestOIDCProvider_Exchange_BadCode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewOIDCProvider: %v", err)
 	}
-	if _, err := p.Exchange(context.Background(), "bad-code"); err == nil {
+	if _, err := p.Exchange(context.Background(), "bad-code", "nonce"); err == nil {
 		t.Fatal("expected exchange error")
 	}
 }
@@ -84,7 +84,7 @@ func TestOIDCProvider_Exchange_NoIDToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewOIDCProvider: %v", err)
 	}
-	_, err = p.Exchange(context.Background(), "code")
+	_, err = p.Exchange(context.Background(), "code", "nonce")
 	if err == nil || !strings.Contains(err.Error(), "id_token") {
 		t.Fatalf("expected no id_token error, got %v", err)
 	}
@@ -102,7 +102,7 @@ func TestOIDCProvider_Exchange_BadIDToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewOIDCProvider: %v", err)
 	}
-	_, err = p.Exchange(context.Background(), "code")
+	_, err = p.Exchange(context.Background(), "code", "nonce")
 	if err == nil {
 		t.Fatal("expected verification error")
 	}
@@ -119,7 +119,7 @@ func TestOIDCProvider_AuthURL_Direct(t *testing.T) {
 			Scopes:      []string{oidc.ScopeOpenID},
 		},
 	}
-	got := p.AuthURL("S")
+	got := p.AuthURL("S", "N")
 	if !strings.Contains(got, "state=S") {
 		t.Errorf("AuthURL: %q", got)
 	}

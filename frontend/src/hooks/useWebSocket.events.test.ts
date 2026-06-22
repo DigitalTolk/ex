@@ -40,6 +40,15 @@ describe('useWebSocket event coverage', () => {
     expect(onDraftUpdated).toHaveBeenCalled();
   });
 
+  it('routes notification.settings_updated to onNotificationSettingsUpdated', () => {
+    const onNotificationSettingsUpdated = vi.fn();
+    renderHook(() => useWebSocket({ onNotificationSettingsUpdated, enabled: true }));
+    const ws = MockWebSocket.instances[0];
+    ws.simulateOpen();
+    ws.simulateMessage(JSON.stringify({ id: 'ns1', type: 'notification.settings_updated', data: JSON.stringify({ settings: { desktopLevel: 'all' } }) }));
+    expect(onNotificationSettingsUpdated).toHaveBeenCalled();
+  });
+
   it('routes webhook.changed to onWebhookChanged', () => {
     const onWebhookChanged = vi.fn();
     renderHook(() => useWebSocket({ onWebhookChanged, enabled: true }));

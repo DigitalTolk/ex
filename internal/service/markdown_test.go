@@ -448,9 +448,14 @@ func TestIsSafeURL(t *testing.T) {
 		"?q=1":                    true, // query first
 		"//cdn.example.com":       true, // scheme-relative
 		"relative":                true, // no colon at all
-		"a b:c":                   true, // space (non-scheme char) before colon
+		"  https://example.com  ": true, // surrounding whitespace stripped
+		"a b:c":                   false, // space stripped → "ab:c", unknown scheme
 		"javascript:alert(1)":     false,
 		"JavaScript:alert(1)":     false,
+		"java\tscript:alert(1)":   false, // tab-split scheme
+		"java\nscript:alert(1)":   false, // newline-split scheme
+		"java script:alert(1)":    false, // space-split scheme
+		" javascript:alert(1)":    false, // leading space
 		"data:text/html,<script>": false,
 		"vbscript:x":              false,
 		"file:///etc/passwd":      false,

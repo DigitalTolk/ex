@@ -169,6 +169,33 @@ describe('Header browser behavior', () => {
     await vi.waitFor(() => expect(onArchive).toHaveBeenCalledTimes(1));
   });
 
+  it('opens notification preferences via the desktop dropdown', async () => {
+    if (window.innerWidth <= 767) return;
+    const onNotificationPrefsClick = vi.fn();
+    const screen = await render(
+      <div style={{ width: 960 }}>
+        <Header channel={channel} memberCount={3} onNotificationPrefsClick={onNotificationPrefsClick} />
+      </div>,
+    );
+    await screen.getByRole('button', { name: /general/ }).click();
+    await screen.getByRole('menuitem', { name: 'Notification preferences' }).click();
+    expect(onNotificationPrefsClick).toHaveBeenCalledTimes(1);
+  });
+
+  it('opens notification preferences via the mobile channel menu', async () => {
+    if (window.innerWidth > 767) return;
+    const onNotificationPrefsClick = vi.fn();
+    const screen = await render(
+      <div style={{ width: 390 }}>
+        <Header channel={channel} memberCount={3} onNotificationPrefsClick={onNotificationPrefsClick} />
+      </div>,
+    );
+    await screen.getByRole('button', { name: /general/ }).click();
+    const menu = document.querySelector('[data-testid="mobile-channel-menu"]') as HTMLElement;
+    (Array.from(menu.querySelectorAll('button')).find((b) => b.textContent?.includes('Notification preferences')) as HTMLButtonElement).click();
+    expect(onNotificationPrefsClick).toHaveBeenCalledTimes(1);
+  });
+
   // Open the mobile channel menu once and return its container. A single
   // open per test keeps the Radix trigger state from desyncing on WebKit
   // (repeated open/close cycles in one test can hang).
