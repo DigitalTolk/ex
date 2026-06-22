@@ -149,15 +149,17 @@ describe('MessageList browser behavior', () => {
       expect(image!.naturalHeight).toBeGreaterThan(0);
     }, { timeout: 3000 });
 
-    await vi.waitFor(() => {
-      const distanceFromBottom = scroller!.scrollHeight - scroller!.scrollTop - scroller!.clientHeight;
-      expect(distanceFromBottom).toBeLessThan(4);
-      // Longer window than the other assertions here: the re-stick is a chain of
-      // image-load → ResizeObserver → Virtuoso followOutput scroll, which under
-      // full-suite CPU load on the slowest (webkit) project can take many
-      // seconds to settle. It sticks reliably; it just needs the headroom (kept
-      // comfortably under the 45s testTimeout).
-    }, { timeout: 35000 });
+    // The re-stick is a chain of image-load → ResizeObserver → Virtuoso
+    // followOutput scroll. Rather than passively waiting for it to settle — which
+    // under full-suite CPU load on the slowest (webkit) project can starve and
+    // time out even though it re-sticks reliably — actively pump animation frames
+    // so the chain gets CPU ticks each iteration, with a generous deadline kept
+    // comfortably under the 45s testTimeout.
+    const deadline = Date.now() + 30000;
+    while (distanceFromBottom(scroller!) >= 4 && Date.now() < deadline) {
+      await animationFrames(2);
+    }
+    expect(distanceFromBottom(scroller!)).toBeLessThan(4);
 
     const thumb = laidOutElement('[data-testid="message-image-thumb"]');
     expect(thumb).not.toBeNull();
