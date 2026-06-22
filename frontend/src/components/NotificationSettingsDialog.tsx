@@ -10,8 +10,12 @@ import {
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
-import { Switch } from '@/components/ui/switch';
-import { NotificationOptionGroup } from '@/components/notifications/NotificationOptionGroup';
+import { NotificationOptionGroup, NotificationToggleRow } from '@/components/notifications/NotificationOptionGroup';
+import {
+  DEFAULT_NOTIFICATION_SETTINGS,
+  DESKTOP_LEVEL_OPTIONS,
+  MOBILE_LEVEL_OPTIONS,
+} from '@/components/notifications/notification-options';
 import { useAuth } from '@/context/AuthContext';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { apiFetch } from '@/lib/api';
@@ -27,19 +31,19 @@ interface NotificationSettingsDialogProps {
   onOpenChange: (open: boolean) => void;
 }
 
-const DEFAULT_SETTINGS: NotificationSettings = {
-  desktopLevel: 'mentions',
-  mobileLevel: 'default',
-  threadReplies: true,
-  ignoreGroupMentions: false,
-  followAllThreads: false,
-  keywords: [],
-};
+// withKeyword appends a trimmed keyword unless it's blank or a case-insensitive
+// duplicate — the dedupe rule shared by the "Add" button and the save-time
+// commit of a still-typed keyword.
+function withKeyword(list: string[], raw: string): string[] {
+  const kw = raw.trim();
+  if (!kw || list.some((k) => k.toLowerCase() === kw.toLowerCase())) return list;
+  return [...list, kw];
+}
 
 export function NotificationSettingsDialog({ open, onOpenChange }: NotificationSettingsDialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-2xl max-md:grid-rows-[auto_1fr]" finalFocus={false} mobileCloseLabel="Cancel">
+      <DialogContent size="2xl" className="max-md:grid-rows-[auto_1fr]" finalFocus={false} mobileCloseLabel="Cancel">
         <DialogHeader>
           <DialogTitle>Notification settings</DialogTitle>
         </DialogHeader>
@@ -52,7 +56,7 @@ export function NotificationSettingsDialog({ open, onOpenChange }: NotificationS
 function NotificationSettingsBody({ onOpenChange }: { onOpenChange: (open: boolean) => void }) {
   const { user, patchUser } = useAuth();
   const isMobile = useIsMobile();
-  const initial = user?.notificationSettings ?? DEFAULT_SETTINGS;
+  const initial = user?.notificationSettings ?? DEFAULT_NOTIFICATION_SETTINGS;
 
   const [desktopLevel, setDesktopLevel] = useState<NotificationLevel>(initial.desktopLevel);
   const [mobileLevel, setMobileLevel] = useState<MobileNotificationLevel>(initial.mobileLevel);
@@ -67,11 +71,8 @@ function NotificationSettingsBody({ onOpenChange }: { onOpenChange: (open: boole
   const [error, setError] = useState('');
 
   function addKeyword() {
-    const kw = keywordDraft.trim();
+    setKeywords((prev) => withKeyword(prev, keywordDraft));
     setKeywordDraft('');
-    if (!kw) return;
-    if (keywords.some((k) => k.toLowerCase() === kw.toLowerCase())) return;
-    setKeywords((prev) => [...prev, kw]);
   }
 
   function removeKeyword(kw: string) {
@@ -91,11 +92,7 @@ function NotificationSettingsBody({ onOpenChange }: { onOpenChange: (open: boole
     try {
       // Commit any keyword still sitting in the input — saving should not
       // silently drop a word the user typed but didn't click "Add" for.
-      const pending = keywordDraft.trim();
-      const effectiveKeywords =
-        pending && !keywords.some((k) => k.toLowerCase() === pending.toLowerCase())
-          ? [...keywords, pending]
-          : keywords;
+      const effectiveKeywords = withKeyword(keywords, keywordDraft);
       setKeywords(effectiveKeywords);
       setKeywordDraft('');
       const body: NotificationSettings = {
@@ -135,10 +132,7 @@ function NotificationSettingsBody({ onOpenChange }: { onOpenChange: (open: boole
         label="Desktop notifications"
         value={desktopLevel}
         onChange={(v) => setDesktopLevel(v as NotificationLevel)}
-        options={[
-          { value: 'all', label: 'All messages' },
-          { value: 'mentions', label: 'Mentions, DMs & keywords' },
-        ]}
+        options={DESKTOP_LEVEL_OPTIONS}
         hint="The default for every channel. Override individual channels from the channel menu."
       />
 
@@ -146,27 +140,23 @@ function NotificationSettingsBody({ onOpenChange }: { onOpenChange: (open: boole
         label="Mobile notifications"
         value={mobileLevel}
         onChange={(v) => setMobileLevel(v as MobileNotificationLevel)}
-        options={[
-          { value: 'default', label: 'Same as desktop' },
-          { value: 'all', label: 'All messages' },
-          { value: 'mentions', label: 'Mentions, DMs & keywords' },
-        ]}
+        options={MOBILE_LEVEL_OPTIONS}
         hint="Mobile push is delivered when you're away from your desktop."
       />
 
-      <ToggleRow
+      <NotificationToggleRow
         label="Thread replies"
         description="Notify me about replies to threads I'm following."
         checked={threadReplies}
         onChange={setThreadReplies}
       />
-      <ToggleRow
+      <NotificationToggleRow
         label="Ignore @all and @here"
         description="Suppress notifications from channel-wide mentions."
         checked={ignoreGroupMentions}
         onChange={setIgnoreGroupMentions}
       />
-      <ToggleRow
+      <NotificationToggleRow
         label="Follow all threads"
         description="Get thread replies even for threads I haven't joined."
         checked={followAllThreads}
@@ -220,28 +210,6 @@ function NotificationSettingsBody({ onOpenChange }: { onOpenChange: (open: boole
           </Button>
         </div>
       )}
-    </div>
-  );
-}
-
-function ToggleRow({
-  label,
-  description,
-  checked,
-  onChange,
-}: {
-  label: string;
-  description: string;
-  checked: boolean;
-  onChange: (checked: boolean) => void;
-}) {
-  return (
-    <div className="flex items-start justify-between gap-4">
-      <div className="space-y-0.5">
-        <Label>{label}</Label>
-        <p className="text-xs text-muted-foreground">{description}</p>
-      </div>
-      <Switch checked={checked} onCheckedChange={onChange} aria-label={label} />
     </div>
   );
 }

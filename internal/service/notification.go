@@ -293,7 +293,7 @@ func (s *NotificationService) NotifyForMessage(ctx context.Context, msg *model.M
 	// opt into follow-all is not pinged for unrelated thread chatter.
 	threadParticipants := make(map[string]bool)
 	if isThreadReply && parentType == ParentChannel {
-		for _, uid := range s.resolveThreadRecipients(ctx, msg, parentType, snap) {
+		for _, uid := range s.resolveThreadRecipients(ctx, msg, snap) {
 			threadParticipants[uid] = true
 		}
 		for uid, eff := range snap.prefs {
@@ -308,6 +308,7 @@ func (s *NotificationService) NotifyForMessage(ctx context.Context, msg *model.M
 	// quiet "mentions only" level — the same always-notifiable treatment the
 	// client gives the Webhook flag.
 	isWebhook := msg.WebhookUsername != ""
+	bodyLower := strings.ToLower(msg.Body)
 
 	for _, uid := range snap.memberIDs {
 		eff := snap.prefs[uid]
@@ -319,7 +320,15 @@ func (s *NotificationService) NotifyForMessage(ctx context.Context, msg *model.M
 			threadReply:       isThreadReply,
 			threadParticipant: parentType == ParentConversation || threadParticipants[uid],
 			threadReplies:     eff.ThreadReplies,
-			keyword:           matchesKeywords(msg.Body, eff.Keywords),
+		}
+		// The keyword scan is the one per-recipient cost that walks the whole
+		// body, and eligibleAtLevel only consults it once the cheaper signals
+		// (explicit mention, mute, webhook, group mention) haven't already
+		// decided. Skip it entirely in those cases and when the user has no
+		// keywords — the dominant case now that names are seeded but most
+		// channel members still aren't @-mentioned.
+		if len(eff.Keywords) > 0 && !r.explicitMention && !r.muted && !r.forceAll && !r.groupMention {
+			r.keyword = keywordsMatchLower(bodyLower, eff.Keywords)
 		}
 
 		// DMs always notify their participants — "direct messages" is part of
@@ -485,13 +494,19 @@ func matchesKeywords(body string, keywords []string) bool {
 	if body == "" || len(keywords) == 0 {
 		return false
 	}
-	lower := strings.ToLower(body)
+	return keywordsMatchLower(strings.ToLower(body), keywords)
+}
+
+// keywordsMatchLower is matchesKeywords with the body already lowercased. The
+// per-message hot path lowercases msg.Body once and reuses it across every
+// recipient's keyword list rather than re-lowercasing the whole body per member.
+func keywordsMatchLower(lowerBody string, keywords []string) bool {
 	for _, kw := range keywords {
 		kw = strings.ToLower(strings.TrimSpace(kw))
 		if kw == "" {
 			continue
 		}
-		if containsWord(lower, kw) {
+		if containsWord(lowerBody, kw) {
 			return true
 		}
 	}
@@ -533,7 +548,7 @@ func wordBoundary(s string, i int) bool {
 // thread-reply notification: the thread root's author plus everyone
 // who has already replied in this thread. The current message's author
 // is excluded; duplicates are removed.
-func (s *NotificationService) resolveThreadRecipients(ctx context.Context, msg *model.Message, _ string, snap memberSnapshot) []string {
+func (s *NotificationService) resolveThreadRecipients(ctx context.Context, msg *model.Message, snap memberSnapshot) []string {
 	if s.messages == nil || msg.ParentMessageID == "" {
 		return nil
 	}

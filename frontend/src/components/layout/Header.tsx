@@ -438,7 +438,7 @@ export function Header({
 
       {/* Archive confirmation dialog */}
       <Dialog open={archiveConfirmOpen} onOpenChange={setArchiveConfirmOpen}>
-        <DialogContent className="sm:max-w-sm">
+        <DialogContent>
           <DialogHeader>
             <DialogTitle>Archive channel?</DialogTitle>
           </DialogHeader>

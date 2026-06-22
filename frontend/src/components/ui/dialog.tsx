@@ -78,17 +78,34 @@ export function useDialogMobileAction(action: DialogMobileAction | null) {
   }, [setAction, label, disabled])
 }
 
+// Desktop max-width is set via the `size` prop rather than a raw `max-w-*`
+// className: the base must carry the width as a `sm:`-scoped utility (so it sits
+// alongside the always-on `max-w-[calc(100%-2rem)]` viewport cap without
+// tailwind-merge dropping one), and a plain `max-w-*` from a caller silently
+// loses to it. Mapping `size` to the literal class here keeps that detail in one
+// place — callers just say `size="lg"`. Mobile is always full-screen regardless.
+const DIALOG_SIZE: Record<DialogSize, string> = {
+  sm: "sm:max-w-sm",
+  md: "sm:max-w-md",
+  lg: "sm:max-w-lg",
+  xl: "sm:max-w-xl",
+  "2xl": "sm:max-w-2xl",
+}
+type DialogSize = "sm" | "md" | "lg" | "xl" | "2xl"
+
 function DialogContent({
   className,
   children,
   showCloseButton = true,
   mobileCloseLabel,
   mobileAction,
+  size = "sm",
   ...props
 }: DialogPrimitive.Popup.Props & {
   showCloseButton?: boolean
   mobileCloseLabel?: string
   mobileAction?: DialogMobileAction
+  size?: DialogSize
 }) {
   const [registeredAction, setRegisteredAction] = React.useState<DialogMobileAction | null>(null)
   const effectiveAction = mobileAction ?? registeredAction
@@ -96,16 +113,6 @@ function DialogContent({
   return (
     <DialogPortal>
       <DialogOverlay />
-      {/*
-        Desktop width: the default is `sm:max-w-sm` (alongside the always-on
-        `max-w-[calc(100%-2rem)]` viewport cap). To make a dialog wider, pass a
-        width override that ALSO carries the `sm:` modifier — e.g.
-        `sm:max-w-lg` / `sm:max-w-2xl`. A plain `max-w-lg` (no `sm:`) does NOT
-        win: tailwind-merge treats it as a different modifier scope from
-        `sm:max-w-sm`, so on desktop the base `sm:` variant still applies and
-        the dialog stays 384px. Standard sizes in use: sm (confirmations),
-        md (confirm-dialog), lg (forms), 2xl (notification settings).
-      */}
       <DialogPrimitive.Popup
         data-slot="dialog-content"
         className={cn(
@@ -113,7 +120,8 @@ function DialogContent({
           // internally, so a tall dialog on a short window stays fully reachable
           // instead of overflowing off-screen. Mobile resets to full-screen
           // (max-h-none + inset-0) and scrolls the whole sheet.
-          "fixed top-1/2 left-1/2 z-50 grid w-full max-w-[calc(100%-2rem)] max-h-[calc(100dvh-2rem)] -translate-x-1/2 -translate-y-1/2 gap-4 overflow-y-auto rounded-xl bg-popover p-4 text-sm text-popover-foreground ring-1 ring-foreground/10 duration-100 outline-none max-md:inset-0 max-md:max-h-none max-md:max-w-none max-md:translate-x-0 max-md:translate-y-0 max-md:overflow-y-auto max-md:rounded-none max-md:p-[calc(env(safe-area-inset-top)+1rem)_1rem_calc(env(safe-area-inset-bottom)+1rem)] sm:max-w-sm data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+          "fixed top-1/2 left-1/2 z-50 grid w-full max-w-[calc(100%-2rem)] max-h-[calc(100dvh-2rem)] -translate-x-1/2 -translate-y-1/2 gap-4 overflow-y-auto rounded-xl bg-popover p-4 text-sm text-popover-foreground ring-1 ring-foreground/10 duration-100 outline-none max-md:inset-0 max-md:max-h-none max-md:max-w-none max-md:translate-x-0 max-md:translate-y-0 max-md:overflow-y-auto max-md:rounded-none max-md:p-[calc(env(safe-area-inset-top)+1rem)_1rem_calc(env(safe-area-inset-bottom)+1rem)] data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+          DIALOG_SIZE[size],
           hasMobileBar && "max-md:[&_[data-slot=dialog-header]]:pr-20",
           mobileCloseLabel && effectiveAction && "max-md:[&_[data-slot=dialog-header]]:pr-40",
           className

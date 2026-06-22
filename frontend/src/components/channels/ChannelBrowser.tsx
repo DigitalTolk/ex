@@ -37,7 +37,7 @@ export function ChannelBrowser({ open, onOpenChange }: ChannelBrowserProps) {
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent size="lg">
         <DialogHeader>
           <DialogTitle>Browse channels</DialogTitle>
         </DialogHeader>

@@ -307,7 +307,7 @@ export function AppTopBar({ onOpenChannels, channelsButtonHidden }: AppTopBarPro
           above + this sheet below means no behaviour duplication —
           both surfaces dispatch the same `menuActions` list. */}
       <Dialog open={mobileMenuOpen} onOpenChange={setMobileMenuOpen}>
-        <DialogContent className="max-w-sm md:hidden" mobileCloseLabel="Close" data-testid="mobile-account-sheet">
+        <DialogContent className="md:hidden" mobileCloseLabel="Close" data-testid="mobile-account-sheet">
           <DialogHeader>
             <DialogTitle>Account</DialogTitle>
           </DialogHeader>

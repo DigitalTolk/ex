@@ -1,10 +1,7 @@
 import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
-
-export interface NotificationOption {
-  value: string;
-  label: string;
-}
+import { Switch } from '@/components/ui/switch';
+import type { NotificationOption } from './notification-options';
 
 interface NotificationOptionGroupProps {
   label: string;
@@ -45,6 +42,27 @@ export function NotificationOptionGroup({
         ))}
       </div>
       <p className="text-xs text-muted-foreground">{hint}</p>
+    </div>
+  );
+}
+
+interface NotificationToggleRowProps {
+  label: string;
+  description: string;
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+}
+
+// NotificationToggleRow is the label + description + Switch row shared by both
+// dialogs (the account-level toggles and the per-channel mute switch).
+export function NotificationToggleRow({ label, description, checked, onChange }: NotificationToggleRowProps) {
+  return (
+    <div className="flex items-start justify-between gap-4">
+      <div className="space-y-0.5">
+        <Label>{label}</Label>
+        <p className="text-xs text-muted-foreground">{description}</p>
+      </div>
+      <Switch checked={checked} onCheckedChange={onChange} aria-label={label} />
     </div>
   );
 }

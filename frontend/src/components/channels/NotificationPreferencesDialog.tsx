@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import {
   Dialog,
   DialogContent,
@@ -6,10 +6,16 @@ import {
   DialogTitle,
   useDialogMobileAction,
 } from '@/components/ui/dialog';
-import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
-import { Switch } from '@/components/ui/switch';
-import { NotificationOptionGroup } from '@/components/notifications/NotificationOptionGroup';
+import { NotificationOptionGroup, NotificationToggleRow } from '@/components/notifications/NotificationOptionGroup';
+import {
+  DEFAULT_NOTIFICATION_SETTINGS,
+  DESKTOP_LEVEL_OPTIONS,
+  MOBILE_LEVEL_OPTIONS,
+  DESKTOP_LEVEL_LABEL,
+  MOBILE_LEVEL_LABEL,
+  INHERIT_OPTION,
+} from '@/components/notifications/notification-options';
 import { useUserChannels, useMuteChannel, useSetChannelNotificationPrefs } from '@/hooks/useChannels';
 import { useAuth } from '@/context/AuthContext';
 import { useIsMobile } from '@/hooks/useIsMobile';
@@ -17,7 +23,6 @@ import type {
   ChannelNotificationOverride,
   MobileNotificationLevel,
   NotificationLevel,
-  NotificationSettings,
 } from '@/types';
 
 interface NotificationPreferencesDialogProps {
@@ -27,26 +32,13 @@ interface NotificationPreferencesDialogProps {
   channelName: string;
 }
 
-const ACCOUNT_FALLBACK: NotificationSettings = {
-  desktopLevel: 'mentions',
-  mobileLevel: 'default',
-  threadReplies: true,
-  ignoreGroupMentions: false,
-  followAllThreads: false,
-  keywords: [],
-};
-
 type TriState = 'inherit' | 'on' | 'off';
 
-const DESKTOP_LABEL: Record<NotificationLevel, string> = {
-  all: 'All messages',
-  mentions: 'Mentions, DMs & keywords',
-};
-const MOBILE_LABEL: Record<MobileNotificationLevel, string> = {
-  default: 'Same as desktop',
-  all: 'All messages',
-  mentions: 'Mentions, DMs & keywords',
-};
+// The per-channel level rows prepend "Use default" to the shared account-level
+// options. Tri-state booleans reuse the same inherit/on/off shape.
+const DESKTOP_OVERRIDE_OPTIONS = [INHERIT_OPTION, ...DESKTOP_LEVEL_OPTIONS];
+const MOBILE_OVERRIDE_OPTIONS = [INHERIT_OPTION, ...MOBILE_LEVEL_OPTIONS];
+const TRI_OPTIONS = [INHERIT_OPTION, { value: 'on', label: 'On' }, { value: 'off', label: 'Off' }];
 
 export function NotificationPreferencesDialog({
   open,
@@ -56,7 +48,7 @@ export function NotificationPreferencesDialog({
 }: NotificationPreferencesDialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-2xl max-md:grid-rows-[auto_1fr]" finalFocus={false} mobileCloseLabel="Cancel">
+      <DialogContent size="2xl" className="max-md:grid-rows-[auto_1fr]" finalFocus={false} mobileCloseLabel="Cancel">
         <DialogHeader>
           <DialogTitle>Notification preferences</DialogTitle>
         </DialogHeader>
@@ -87,8 +79,11 @@ function NotificationPreferencesBody({
   const setPrefs = useSetChannelNotificationPrefs();
   const muteChannel = useMuteChannel();
 
-  const uc = userChannels?.find((c) => c.channelID === channelId);
-  const account = user?.notificationSettings ?? ACCOUNT_FALLBACK;
+  const uc = useMemo(
+    () => userChannels?.find((c) => c.channelID === channelId),
+    [userChannels, channelId],
+  );
+  const account = user?.notificationSettings ?? DEFAULT_NOTIFICATION_SETTINGS;
 
   const [muted, setMuted] = useState(!!uc?.muted);
   const [desktopLevel, setDesktopLevel] = useState<string>(uc?.desktopLevel ?? 'inherit');
@@ -126,10 +121,12 @@ function NotificationPreferencesBody({
     isMobile ? { label: 'Save', onClick: handleSave, disabled: isSaving } : null,
   );
 
-  const triOptions = [
-    { value: 'inherit', label: 'Use default' },
-    { value: 'on', label: 'On' },
-    { value: 'off', label: 'Off' },
+  // The three boolean overrides share one shape; drive them from a list so the
+  // markup isn't three copy-pasted blocks.
+  const toggleOverrides = [
+    { label: 'Thread replies', value: threadReplies, set: setThreadReplies, def: account.threadReplies },
+    { label: 'Ignore @all and @here', value: ignoreGroupMentions, set: setIgnoreGroupMentions, def: account.ignoreGroupMentions },
+    { label: 'Follow all threads', value: followAllThreads, set: setFollowAllThreads, def: account.followAllThreads },
   ];
 
   return (
@@ -144,62 +141,39 @@ function NotificationPreferencesBody({
         default" follows your account-level notification settings.
       </p>
 
-      <div className="flex items-start justify-between gap-4">
-        <div className="space-y-0.5">
-          <Label>Mute channel</Label>
-          <p className="text-xs text-muted-foreground">
-            No sound or popup, and hide unread emphasis in the sidebar.
-          </p>
-        </div>
-        <Switch checked={muted} onCheckedChange={setMuted} aria-label="Mute channel" />
-      </div>
+      <NotificationToggleRow
+        label="Mute channel"
+        description="No sound or popup, and hide unread emphasis in the sidebar."
+        checked={muted}
+        onChange={setMuted}
+      />
 
       <NotificationOptionGroup
         label="Desktop notifications"
         value={desktopLevel}
         onChange={setDesktopLevel}
-        options={[
-          { value: 'inherit', label: 'Use default' },
-          { value: 'all', label: 'All messages' },
-          { value: 'mentions', label: 'Mentions, DMs & keywords' },
-        ]}
-        hint={`Default: ${DESKTOP_LABEL[account.desktopLevel]}`}
+        options={DESKTOP_OVERRIDE_OPTIONS}
+        hint={`Default: ${DESKTOP_LEVEL_LABEL[account.desktopLevel]}`}
       />
 
       <NotificationOptionGroup
         label="Mobile notifications"
         value={mobileLevel}
         onChange={setMobileLevel}
-        options={[
-          { value: 'inherit', label: 'Use default' },
-          { value: 'default', label: 'Same as desktop' },
-          { value: 'all', label: 'All messages' },
-          { value: 'mentions', label: 'Mentions, DMs & keywords' },
-        ]}
-        hint={`Default: ${MOBILE_LABEL[account.mobileLevel]}`}
+        options={MOBILE_OVERRIDE_OPTIONS}
+        hint={`Default: ${MOBILE_LEVEL_LABEL[account.mobileLevel]}`}
       />
 
-      <NotificationOptionGroup
-        label="Thread replies"
-        value={threadReplies}
-        onChange={(v) => setThreadReplies(v as TriState)}
-        options={triOptions}
-        hint={`Default: ${account.threadReplies ? 'On' : 'Off'}`}
-      />
-      <NotificationOptionGroup
-        label="Ignore @all and @here"
-        value={ignoreGroupMentions}
-        onChange={(v) => setIgnoreGroupMentions(v as TriState)}
-        options={triOptions}
-        hint={`Default: ${account.ignoreGroupMentions ? 'On' : 'Off'}`}
-      />
-      <NotificationOptionGroup
-        label="Follow all threads"
-        value={followAllThreads}
-        onChange={(v) => setFollowAllThreads(v as TriState)}
-        options={triOptions}
-        hint={`Default: ${account.followAllThreads ? 'On' : 'Off'}`}
-      />
+      {toggleOverrides.map((t) => (
+        <NotificationOptionGroup
+          key={t.label}
+          label={t.label}
+          value={t.value}
+          onChange={(v) => t.set(v as TriState)}
+          options={TRI_OPTIONS}
+          hint={`Default: ${t.def ? 'On' : 'Off'}`}
+        />
+      ))}
 
       {!isMobile && (
         <div className="flex justify-end pt-2">
