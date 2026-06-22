@@ -1018,12 +1018,6 @@ func (s *MessageService) Edit(ctx context.Context, userID, parentID, parentType,
 	if err := ValidateAttachmentCount(len(finalAttachments)); err != nil {
 		return nil, err
 	}
-	if attachmentIDs != nil {
-		if err := s.validateAttachmentsForUse(ctx, attachmentIDs); err != nil {
-			return nil, err
-		}
-	}
-
 	edited := *msg
 	edited.AttachmentIDs = append([]string(nil), msg.AttachmentIDs...)
 	edited.Body = newBody
@@ -1064,6 +1058,14 @@ func (s *MessageService) Edit(ctx context.Context, userID, parentID, parentType,
 		edited.AttachmentIDs = clean
 	}
 
+	// Only validate attachments newly added by this edit. Files already on the
+	// message were validated when first attached; re-validating them here would
+	// pointlessly re-download + re-decode the object (and fail for non-image or
+	// otherwise un-re-validatable attachments), which surfaced as a 403 on any
+	// edit of a message that carries an attachment.
+	if err := s.validateAttachmentsForUse(ctx, added); err != nil {
+		return nil, err
+	}
 	if err := s.bindAttachments(ctx, msgID, added); err != nil {
 		return nil, err
 	}

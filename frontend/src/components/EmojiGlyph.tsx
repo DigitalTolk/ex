@@ -1,6 +1,6 @@
 import { applySkinToneSuffix, shortcodeToUnicode } from '@/lib/emoji-shortcodes';
 
-type EmojiGlyphSize = 'sm' | 'lg' | 'xl';
+type EmojiGlyphSize = 'sm' | 'md' | 'lg' | 'xl';
 
 interface EmojiGlyphProps {
   emoji: string;
@@ -12,10 +12,13 @@ interface EmojiGlyphProps {
 export function EmojiGlyph({ emoji, customMap, size = 'sm', className = '' }: EmojiGlyphProps) {
   // 'lg' is sized at −2px from text-2xl to match the picker grid's
   // visual rhythm; 'xl' is the hero size used in tooltips and intros.
+  // 'md' matches a 16px control icon (reaction pills / quick-react buttons) so
+  // the emoji reads at the same visual weight as the SmilePlus placeholder
+  // rather than looking undersized at text-sm.
   const imgCls =
-    size === 'xl' ? 'h-16 w-16' : size === 'lg' ? 'h-[22px] w-[22px]' : 'h-3.5 w-3.5';
+    size === 'xl' ? 'h-16 w-16' : size === 'lg' ? 'h-[22px] w-[22px]' : size === 'md' ? 'h-4 w-4' : 'h-3.5 w-3.5';
   const textCls =
-    size === 'xl' ? 'text-[64px]' : size === 'lg' ? 'text-[22px]' : 'text-sm';
+    size === 'xl' ? 'text-[64px]' : size === 'lg' ? 'text-[22px]' : size === 'md' ? 'text-base' : 'text-sm';
 
   const toned = /^:([a-z0-9_+-]+)::(skin-tone-[1-5]):$/i.exec(emoji);
   if (toned) {

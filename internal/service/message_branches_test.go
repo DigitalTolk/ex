@@ -136,6 +136,25 @@ func TestMessage_Edit_ValidateAttachmentsForUseError(t *testing.T) {
 	}
 }
 
+// Editing a message that KEEPS an attachment it already has must not re-validate
+// that attachment (re-validation re-downloads + re-decodes the S3 object and was
+// surfacing as a 403 on any edit of an attachment-bearing message). Only newly
+// added attachments are validated.
+func TestMessage_Edit_KeepingExistingAttachmentDoesNotRevalidate(t *testing.T) {
+	svc, messages, memberships, _, _ := setupMessageService()
+	grantChannelMember(memberships, "ch1", "u1")
+	messages.messages["ch1#m1"] = &model.Message{
+		ID: "m1", ParentID: "ch1", AuthorID: "u1", Body: "orig", AttachmentIDs: []string{"a1"},
+	}
+	// A manager that fails ANY ValidateForUse — so the test only passes if the
+	// kept attachment "a1" is never re-validated.
+	svc.SetAttachmentManager(&fakeAttachmentRefMgr{validateErr: errors.New("revalidation would fail")})
+
+	if _, err := svc.Edit(context.Background(), "u1", "ch1", ParentChannel, "m1", "edited body", []string{"a1"}); err != nil {
+		t.Fatalf("editing a message that keeps its existing attachment must not re-validate it: %v", err)
+	}
+}
+
 func TestMessage_Edit_DedupesAttachmentIDs(t *testing.T) {
 	svc, messages, memberships, _, _ := setupMessageService()
 	grantChannelMember(memberships, "ch1", "u1")
