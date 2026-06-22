@@ -1,5 +1,15 @@
 import type { MessageAttachment } from '@/types';
 import { renderMarkdown } from '@/lib/markdown';
+import { isSafeUrl } from '@/lib/url-safety';
+
+// Image src must be a real fetchable URL — http(s) only. isSafeUrl also admits
+// mailto (fine for links, not images), so narrow it here. The backend already
+// proxies these through the SSRF-guarded image proxy; this is defense-in-depth
+// so a javascript:/data:/file: URL never reaches an <img src>.
+function safeImg(url?: string): string | undefined {
+  if (!url || !isSafeUrl(url) || /^\s*mailto:/i.test(url)) return undefined;
+  return url;
+}
 
 export function MessageRichAttachments({ attachments, onContentHeightChange }: { attachments?: MessageAttachment[]; onContentHeightChange?: () => void }) {
   if (!attachments?.length) return null;
@@ -12,9 +22,9 @@ export function MessageRichAttachments({ attachments, onContentHeightChange }: {
           className="relative overflow-hidden rounded-md border bg-background p-3"
           style={{ borderLeftWidth: 4, borderLeftColor: validColor(att.color) ?? 'var(--border)' }}
         >
-          {att.thumb_url && (
+          {safeImg(att.thumb_url) && (
             <img
-              src={att.thumb_url}
+              src={safeImg(att.thumb_url)}
               alt=""
               className="float-right ml-3 h-[75px] w-[75px] rounded object-cover"
               onLoad={onContentHeightChange}
@@ -23,13 +33,13 @@ export function MessageRichAttachments({ attachments, onContentHeightChange }: {
           {att.pretext && <div className="mb-2 text-sm prose-message">{renderMarkdown(att.pretext)}</div>}
           {att.author_name && (
             <div className="mb-1 flex items-center gap-1.5 text-sm font-medium">
-              {att.author_icon && <img src={att.author_icon} alt="" className="h-4 w-4 rounded-sm" onLoad={onContentHeightChange} />}
-              {att.author_link ? <a href={att.author_link} target="_blank" rel="noreferrer" className="text-link">{att.author_name}</a> : att.author_name}
+              {safeImg(att.author_icon) && <img src={safeImg(att.author_icon)} alt="" className="h-4 w-4 rounded-sm" onLoad={onContentHeightChange} />}
+              {att.author_link && isSafeUrl(att.author_link) ? <a href={att.author_link} target="_blank" rel="noreferrer" className="text-link">{att.author_name}</a> : att.author_name}
             </div>
           )}
           {att.title && (
             <div className="mb-1 text-sm font-semibold">
-              {att.title_link ? <a href={att.title_link} target="_blank" rel="noreferrer" className="text-link">{att.title}</a> : att.title}
+              {att.title_link && isSafeUrl(att.title_link) ? <a href={att.title_link} target="_blank" rel="noreferrer" className="text-link">{att.title}</a> : att.title}
             </div>
           )}
           {att.text && <div className="text-sm prose-message">{renderMarkdown(att.text)}</div>}
@@ -43,9 +53,9 @@ export function MessageRichAttachments({ attachments, onContentHeightChange }: {
               ))}
             </div>
           ) : null}
-          {att.image_url && (
+          {safeImg(att.image_url) && (
             <img
-              src={att.image_url}
+              src={safeImg(att.image_url)}
               alt=""
               width={att.image_width || undefined}
               height={att.image_height || undefined}
@@ -58,7 +68,7 @@ export function MessageRichAttachments({ attachments, onContentHeightChange }: {
           )}
           {(att.footer || att.footer_icon) && (
             <div className="mt-2 flex items-center gap-1.5 text-xs text-muted-foreground">
-              {att.footer_icon && <img src={att.footer_icon} alt="" className="h-4 w-4 rounded-sm" onLoad={onContentHeightChange} />}
+              {safeImg(att.footer_icon) && <img src={safeImg(att.footer_icon)} alt="" className="h-4 w-4 rounded-sm" onLoad={onContentHeightChange} />}
               {att.footer}
             </div>
           )}

@@ -152,11 +152,13 @@ func (s *NotificationService) loadMemberSnapshot(ctx context.Context, msg *model
 			}
 			ids = append(ids, m.UserID)
 		}
-		muted := make(map[string]bool, len(ids))
-		for _, uid := range ids {
-			if s.userMutedChannel(ctx, uid, msg.ParentID) {
-				muted[uid] = true
-			}
+		// One batched read of the members' mute flags rather than a
+		// ListUserChannels query per member (O(members) queries on every
+		// channel message). On failure, fall back to "no one muted" — a
+		// missed mute is a minor over-notification, not a correctness bug.
+		muted, err := s.members.MutedUserIDs(ctx, msg.ParentID, ids)
+		if err != nil {
+			muted = map[string]bool{}
 		}
 		return memberSnapshot{memberIDs: ids, muted: muted, deepLink: "/channel/" + parentName}
 	case ParentConversation:
@@ -495,18 +497,6 @@ func (s *NotificationService) userDisplayName(ctx context.Context, userID string
 	return u.DisplayName
 }
 
-func (s *NotificationService) userMutedChannel(ctx context.Context, userID, channelID string) bool {
-	chans, err := s.members.ListUserChannels(ctx, userID)
-	if err != nil {
-		return false
-	}
-	for _, c := range chans {
-		if c.ChannelID == channelID {
-			return c.Muted
-		}
-	}
-	return false
-}
 
 func titleFor(kind NotificationKind, parentType, parentName, authorName string) string {
 	switch kind {

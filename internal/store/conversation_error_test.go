@@ -83,14 +83,14 @@ func TestConversationStore_Activate_TransactError(t *testing.T) {
 	}
 }
 
-func TestConversationStore_Touch_UpdateItemError(t *testing.T) {
+func TestConversationStore_Touch_TransactError(t *testing.T) {
 	db := setupDynamoDB(t)
 	ctx := context.Background()
 	conv, members := makeConv("conv-t", "u-ct-a", "u-ct-b")
 	if err := NewConversationStore(db).Create(ctx, conv, members); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	s := NewConversationStore(withFault(db, func(f *faultClient) { f.failUpdateItem = true }))
+	s := NewConversationStore(withFault(db, func(f *faultClient) { f.failTransactWriteItems = true }))
 	err := s.Touch(ctx, "conv-t", []string{"u-ct-a"}, time.Now())
 	if !errors.Is(err, errInjected) {
 		t.Fatalf("Touch: want errInjected, got %v", err)

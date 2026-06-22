@@ -148,6 +148,22 @@ func (s *dataMembershipStore) ListUserChannels(_ context.Context, _ string) ([]*
 	}
 	return s.userChannels, nil
 }
+func (s *dataMembershipStore) MutedUserIDs(_ context.Context, channelID string, userIDs []string) (map[string]bool, error) {
+	if s.listUserChannelsErr != nil {
+		return nil, s.listUserChannelsErr
+	}
+	want := make(map[string]bool, len(userIDs))
+	for _, uid := range userIDs {
+		want[uid] = true
+	}
+	out := make(map[string]bool)
+	for _, uc := range s.userChannels {
+		if uc.ChannelID == channelID && uc.Muted && want[uc.UserID] {
+			out[uc.UserID] = true
+		}
+	}
+	return out, nil
+}
 func (s *dataMembershipStore) SetMute(_ context.Context, _, _ string, _ bool) error {
 	return nil
 }
@@ -222,6 +238,19 @@ func (s *dataMessageStore) ListMessages(_ context.Context, parentID string, befo
 		result = result[:limit]
 	}
 	return result, hasMore, nil
+}
+
+func (s *dataMessageStore) ListThreadReplies(_ context.Context, threadRootID string) ([]*model.Message, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var result []*model.Message
+	for _, msg := range s.messages {
+		if msg.ParentMessageID == threadRootID {
+			result = append(result, msg)
+		}
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
+	return result, nil
 }
 
 func (s *dataMessageStore) ListMessagesAfter(ctx context.Context, parentID, _ string, limit int) ([]*model.Message, bool, error) {

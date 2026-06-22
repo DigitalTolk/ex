@@ -39,7 +39,29 @@ func NewMessageStore(db *DB) *MessageStoreImpl {
 type messageItem struct {
 	PK string `dynamodbav:"PK"`
 	SK string `dynamodbav:"SK"`
+	// GSI1 indexes thread replies (only set when ParentMessageID != "") so a
+	// thread can be read with a single GSI Query rather than a parent-partition
+	// scan. Omitted on roots/standalone messages so they stay out of the index.
+	GSI1PK string `dynamodbav:"GSI1PK,omitempty"`
+	GSI1SK string `dynamodbav:"GSI1SK,omitempty"`
 	model.Message
+}
+
+// newMessageItem builds the DynamoDB row for a message, stamping the thread
+// GSI keys on replies. Both Create and Update full-Put the whole item, so
+// centralising the key derivation here keeps the index consistent on edits and
+// soft-delete tombstones (which re-Put the row).
+func newMessageItem(parentID string, msg *model.Message) messageItem {
+	item := messageItem{
+		PK:      parentPK(parentID),
+		SK:      msgSK(msg.ID),
+		Message: *msg,
+	}
+	if msg.ParentMessageID != "" {
+		item.GSI1PK = threadGSI1PK(msg.ParentMessageID)
+		item.GSI1SK = msgSK(msg.ID)
+	}
+	return item
 }
 
 // parentPK returns the partition key for the message's parent (channel or conversation).
@@ -69,11 +91,7 @@ func parentPK(parentID string) string {
 }
 
 func (s *MessageStoreImpl) Create(ctx context.Context, msg *model.Message) error {
-	item := messageItem{
-		PK:      parentPK(msg.ParentID),
-		SK:      msgSK(msg.ID),
-		Message: *msg,
-	}
+	item := newMessageItem(msg.ParentID, msg)
 
 	av, err := attributevalue.MarshalMap(item)
 	if err != nil { // coverage-ignore: messageItem has only scalar/string/slice/time fields; MarshalMap cannot fail
@@ -185,6 +203,77 @@ func (s *MessageStoreImpl) List(ctx context.Context, parentID string, before str
 	return messages, hasMore, nil
 }
 
+// ListThreadReplies returns every reply to threadRootID, oldest first, via the
+// GSI1 thread index — one Query (paginated) rather than scanning the parent's
+// message partition. The GSI is eventually consistent: a just-posted reply can
+// lag, but clients receive it over the WebSocket broadcast, so the index only
+// needs to be authoritative for the historical thread. Tombstoned replies keep
+// their key (Update re-stamps), so deleted replies still appear as placeholders.
+func (s *MessageStoreImpl) ListThreadReplies(ctx context.Context, threadRootID string) ([]*model.Message, error) {
+	keyCond := expression.Key("GSI1PK").Equal(expression.Value(threadGSI1PK(threadRootID)))
+	expr, err := expression.NewBuilder().WithKeyCondition(keyCond).Build()
+	if err != nil { // coverage-ignore: static key-condition built from constants; Build cannot fail
+		return nil, fmt.Errorf("store: build thread query: %w", err)
+	}
+	var replies []*model.Message
+	var startKey map[string]types.AttributeValue
+	for {
+		out, err := s.Client.Query(ctx, &dynamodb.QueryInput{
+			TableName:                 aws.String(s.Table),
+			IndexName:                 aws.String("GSI1"),
+			KeyConditionExpression:    expr.KeyCondition(),
+			ExpressionAttributeNames:  expr.Names(),
+			ExpressionAttributeValues: expr.Values(),
+			ExclusiveStartKey:         startKey,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("store: list thread replies: %w", err)
+		}
+		for _, av := range out.Items {
+			var mi messageItem
+			if err := attributevalue.UnmarshalMap(av, &mi); err != nil { // coverage-ignore: round-trip of rows this store wrote; cannot fail
+				return nil, fmt.Errorf("store: unmarshal thread reply: %w", err)
+			}
+			m := mi.Message
+			replies = append(replies, &m)
+		}
+		if len(out.LastEvaluatedKey) == 0 {
+			break
+		}
+		startKey = out.LastEvaluatedKey
+	}
+	return replies, nil
+}
+
+// StampThreadIndex sets just the GSI1 thread keys on an existing reply row via
+// a targeted UpdateItem — used by the one-off backfill migration so it indexes
+// historical replies without rewriting (and potentially clobbering) the rest of
+// the message. Idempotent: re-running writes the same keys.
+func (s *MessageStoreImpl) StampThreadIndex(ctx context.Context, parentID, msgID, threadRootID string) error {
+	upd := expression.
+		Set(expression.Name("GSI1PK"), expression.Value(threadGSI1PK(threadRootID))).
+		Set(expression.Name("GSI1SK"), expression.Value(msgSK(msgID)))
+	expr, err := expression.NewBuilder().WithUpdate(upd).Build()
+	if err != nil { // coverage-ignore: static update expression; Build cannot fail
+		return fmt.Errorf("store: build thread-index update: %w", err)
+	}
+	_, err = s.Client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName:                 aws.String(s.Table),
+		Key:                       compositeKey(parentPK(parentID), msgSK(msgID)),
+		UpdateExpression:          expr.Update(),
+		ExpressionAttributeNames:  expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
+		ConditionExpression:       aws.String("attribute_exists(PK)"),
+	})
+	if err != nil {
+		if isConditionCheckFailed(err) {
+			return ErrNotFound
+		}
+		return fmt.Errorf("store: stamp thread index: %w", err)
+	}
+	return nil
+}
+
 // ListAfter returns up to `limit` messages strictly newer than the
 // `after` cursor (a message ID), ordered newest-first like List.
 // Used by the bidirectional message paginator when a user is anchored
@@ -284,11 +373,7 @@ func (s *MessageStoreImpl) ListAround(ctx context.Context, parentID, msgID strin
 }
 
 func (s *MessageStoreImpl) Update(ctx context.Context, parentID string, msg *model.Message) error {
-	item := messageItem{
-		PK:      parentPK(parentID),
-		SK:      msgSK(msg.ID),
-		Message: *msg,
-	}
+	item := newMessageItem(parentID, msg)
 
 	av, err := attributevalue.MarshalMap(item)
 	if err != nil { // coverage-ignore: messageItem has only scalar/string/slice/time fields; MarshalMap cannot fail

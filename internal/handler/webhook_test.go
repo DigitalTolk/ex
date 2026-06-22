@@ -445,6 +445,17 @@ func (s *handlerWebhookMessageStore) ListMessages(_ context.Context, parentID st
 	return out, false, nil
 }
 
+func (s *handlerWebhookMessageStore) ListThreadReplies(_ context.Context, threadRootID string) ([]*model.Message, error) {
+	out := []*model.Message{}
+	for _, msg := range s.messages {
+		if msg.ParentMessageID == threadRootID {
+			cp := *msg
+			out = append(out, &cp)
+		}
+	}
+	return out, nil
+}
+
 func (s *handlerWebhookMessageStore) ListMessagesAfter(ctx context.Context, parentID, _ string, limit int) ([]*model.Message, bool, error) {
 	return s.ListMessages(ctx, parentID, "", limit)
 }

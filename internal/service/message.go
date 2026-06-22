@@ -475,6 +475,37 @@ func (s *MessageService) ListThreadMessages(ctx context.Context, userID, parentI
 	if err := s.checkAccess(ctx, userID, parentID, parentType); err != nil {
 		return nil, err
 	}
+	// The root is fetched directly; only replies are indexed in GSI1.
+	root, err := s.messages.GetMessage(ctx, parentID, threadRootID)
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
+		return nil, fmt.Errorf("message: list thread root: %w", err)
+	}
+	replies, err := s.messages.ListThreadReplies(ctx, threadRootID)
+	if err != nil {
+		return nil, fmt.Errorf("message: list thread: %w", err)
+	}
+	// Fallback: a thread whose replies predate the GSI backfill returns zero
+	// indexed replies even though the root records some — scan the parent so
+	// historical threads stay complete until the migration runs. New replies
+	// are always indexed; the eventual-consistency lag of the very latest reply
+	// is covered by the client's WebSocket stream, so we don't scan for that.
+	if len(replies) == 0 && root != nil && root.ReplyCount > 0 {
+		return s.listThreadByScan(ctx, parentID, threadRootID)
+	}
+	thread := make([]*model.Message, 0, len(replies)+1)
+	if root != nil {
+		thread = append(thread, root)
+	}
+	thread = append(thread, replies...)
+	sort.Slice(thread, func(i, j int) bool { return thread[i].ID < thread[j].ID })
+	s.attachRendered(thread...)
+	return thread, nil
+}
+
+// listThreadByScan is the pre-GSI fallback: scan the parent partition and
+// filter for the thread root + its replies. Retained for threads whose replies
+// haven't been backfilled into the GSI yet.
+func (s *MessageService) listThreadByScan(ctx context.Context, parentID, threadRootID string) ([]*model.Message, error) {
 	msgs, err := s.scanParentMessages(ctx, parentID)
 	if err != nil {
 		return nil, fmt.Errorf("message: list thread: %w", err)

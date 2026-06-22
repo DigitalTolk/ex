@@ -14,7 +14,11 @@ const distGitignorePath = path.resolve(__dirname, 'dist', '.gitignore')
 const vendorChunks: Array<[string, (id: string) => boolean]> = [
   ['react-vendor', (id) => /node_modules\/(react|react-dom|react-router|react-router-dom)\//.test(id)],
   ['query-vendor', (id) => id.includes('/node_modules/@tanstack/react-query/')],
-  ['editor-vendor', (id) => id.includes('/node_modules/lexical/') || id.includes('/node_modules/@lexical/')],
+  // The composer is CodeMirror 6 (Lexical was removed) — split CodeMirror +
+  // Lezer out of the catch-all vendor chunk.
+  ['editor-vendor', (id) => id.includes('/node_modules/@codemirror/') || id.includes('/node_modules/codemirror/') || id.includes('/node_modules/@lezer/')],
+  ['motion-vendor', (id) => id.includes('/node_modules/motion/') || id.includes('/node_modules/framer-motion/')],
+  ['emoji-vendor', (id) => id.includes('/node_modules/unicode-emoji-json/')],
   ['giphy-vendor', (id) => id.includes('/node_modules/@giphy/')],
   ['dnd-vendor', (id) => id.includes('/node_modules/@atlaskit/pragmatic-drag-and-drop')],
   ['ui-vendor', (id) => (
@@ -41,6 +45,13 @@ function preserveDistGitignore() {
 export default defineConfig({
   plugins: [react(), tailwindcss(), preserveDistGitignore()],
   build: {
+    // Two cohesive chunks sit just over the 500 kB default after the vendor
+    // split: `editor-vendor` (the full CodeMirror 6 editor, ~181 kB gzip) and
+    // `index` (first-party app code, ~128 kB gzip). Neither splits cleanly —
+    // CodeMirror is one library and the app is loaded as a unit — and the gzip
+    // sizes are fine, so lift the warning bar to keep it meaningful (it still
+    // fires if any chunk balloons past this) rather than noisy.
+    chunkSizeWarningLimit: 600,
     rollupOptions: {
       output: {
         manualChunks(id) {

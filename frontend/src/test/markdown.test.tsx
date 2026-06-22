@@ -161,6 +161,14 @@ describe('renderMarkdown', () => {
     expect(links[0]).not.toHaveClass('underline');
   });
 
+  it('renders an unsafe-scheme markdown link as literal text, not an href', () => {
+    const { container } = render(
+      <>{renderMarkdown('click [here](javascript:alert(1)) now')}</>,
+    );
+    expect(container.querySelector('a')).toBeNull();
+    expect(container.textContent).toContain('[here](javascript:alert(1))');
+  });
+
   it('keeps http protocol visible for bare URLs', () => {
     const { container } = render(<>{renderMarkdown('see http://example.org')}</>);
     const link = container.querySelector('a');

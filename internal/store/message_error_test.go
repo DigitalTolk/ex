@@ -53,6 +53,103 @@ func TestMessageStore_List_QueryError(t *testing.T) {
 	}
 }
 
+func TestMessageStore_ListThreadReplies(t *testing.T) {
+	db := setupDynamoDB(t)
+	ctx := context.Background()
+	s := NewMessageStore(db)
+
+	if err := s.Create(ctx, makeMessage("ch-thr", "01-root", "u-a", "root")); err != nil {
+		t.Fatalf("create root: %v", err)
+	}
+	for _, id := range []string{"02-r1", "03-r2"} {
+		r := makeMessage("ch-thr", id, "u-a", "reply")
+		r.ParentMessageID = "01-root"
+		if err := s.Create(ctx, r); err != nil {
+			t.Fatalf("create %s: %v", id, err)
+		}
+	}
+	// A top-level message (no GSI key) and a reply to a different root must
+	// not appear in this thread's index.
+	if err := s.Create(ctx, makeMessage("ch-thr", "04-other", "u-a", "other")); err != nil {
+		t.Fatalf("create other: %v", err)
+	}
+	otherReply := makeMessage("ch-thr", "05-x", "u-a", "x")
+	otherReply.ParentMessageID = "99-diff"
+	if err := s.Create(ctx, otherReply); err != nil {
+		t.Fatalf("create other reply: %v", err)
+	}
+
+	replies, err := s.ListThreadReplies(ctx, "01-root")
+	if err != nil {
+		t.Fatalf("ListThreadReplies: %v", err)
+	}
+	if len(replies) != 2 || replies[0].ID != "02-r1" || replies[1].ID != "03-r2" {
+		t.Fatalf("replies = %+v, want [02-r1 03-r2]", replies)
+	}
+
+	// Edit/tombstone re-Puts the whole row — the GSI key must survive so the
+	// reply doesn't drop out of the thread.
+	replies[0].Body = "edited"
+	if err := s.Update(ctx, "ch-thr", replies[0]); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	again, err := s.ListThreadReplies(ctx, "01-root")
+	if err != nil {
+		t.Fatalf("ListThreadReplies after update: %v", err)
+	}
+	if len(again) != 2 {
+		t.Fatalf("after update len = %d, want 2 (GSI key preserved on Update)", len(again))
+	}
+}
+
+func TestMessageStore_ListThreadReplies_QueryError(t *testing.T) {
+	db := setupDynamoDB(t)
+	ctx := context.Background()
+	s := NewMessageStore(withFault(db, func(f *faultClient) { f.failQuery = true }))
+	if _, err := s.ListThreadReplies(ctx, "root"); !errors.Is(err, errInjected) {
+		t.Fatalf("ListThreadReplies: want errInjected, got %v", err)
+	}
+}
+
+func TestMessageStore_StampThreadIndex(t *testing.T) {
+	db := setupDynamoDB(t)
+	ctx := context.Background()
+	s := NewMessageStore(db)
+
+	// A reply that predates the index: created as a plain message (no
+	// ParentMessageID), so Create didn't stamp a GSI key. The backfill stamps
+	// it after the fact.
+	legacy := makeMessage("ch-st", "01-legacy", "u-a", "old reply")
+	if err := s.Create(ctx, legacy); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if r, err := s.ListThreadReplies(ctx, "00-root"); err != nil || len(r) != 0 {
+		t.Fatalf("pre-stamp: err=%v len=%d", err, len(r))
+	}
+
+	if err := s.StampThreadIndex(ctx, "ch-st", "01-legacy", "00-root"); err != nil {
+		t.Fatalf("StampThreadIndex: %v", err)
+	}
+	r, err := s.ListThreadReplies(ctx, "00-root")
+	if err != nil || len(r) != 1 || r[0].ID != "01-legacy" {
+		t.Fatalf("post-stamp: err=%v replies=%+v", err, r)
+	}
+
+	// Stamping a non-existent row → ErrNotFound.
+	if err := s.StampThreadIndex(ctx, "ch-st", "missing", "00-root"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("stamp missing: want ErrNotFound, got %v", err)
+	}
+}
+
+func TestMessageStore_StampThreadIndex_UpdateError(t *testing.T) {
+	db := setupDynamoDB(t)
+	ctx := context.Background()
+	s := NewMessageStore(withFault(db, func(f *faultClient) { f.failUpdateItem = true }))
+	if err := s.StampThreadIndex(ctx, "ch-st", "m", "root"); !errors.Is(err, errInjected) {
+		t.Fatalf("StampThreadIndex: want errInjected, got %v", err)
+	}
+}
+
 // ListAfter with an empty cursor short-circuits to an empty result.
 func TestMessageStore_ListAfter_EmptyCursor(t *testing.T) {
 	db := setupDynamoDB(t)

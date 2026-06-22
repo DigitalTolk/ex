@@ -1514,7 +1514,7 @@ func TestMessageService_Send_CreateError(t *testing.T) {
 	}
 }
 
-// ListThreadMessages: ListMessages error.
+// ListThreadMessages: ListThreadReplies (GSI) error.
 func TestMessageService_ListThreadMessages_ListError(t *testing.T) {
 	svc, messages, memberships, _, _ := setupMessageService()
 	memberships.memberships["ch1#user-1"] = &model.ChannelMembership{
@@ -1522,7 +1522,7 @@ func TestMessageService_ListThreadMessages_ListError(t *testing.T) {
 		UserID:    "user-1",
 		Role:      model.ChannelRoleMember,
 	}
-	messages.listErr = errors.New("list boom")
+	messages.threadReplyErr = errors.New("thread boom")
 	if _, err := svc.ListThreadMessages(context.Background(), "user-1", "ch1", ParentChannel, "root"); err == nil {
 		t.Fatal("expected error")
 	}

@@ -160,6 +160,12 @@ describe('renderMarkdown (legacy regex pipeline)', () => {
     expect(a?.textContent).toBe('here');
   });
 
+  it('renders an unsafe-scheme markdown link as literal text, never an href', async () => {
+    await render(wrap(<>{renderMarkdown('click [here](javascript:alert(1)) now')}</>));
+    expect(document.querySelector('a')).toBeNull();
+    expect(document.body.textContent).toContain('[here](javascript:alert(1))');
+  });
+
   it('renders a giphy: image markdown reference as a GiphyEmbed', async () => {
     await render(wrap(<>{renderMarkdown('![GIPHY](giphy:abc =200x150)')}</>));
     // Without a real apiKey the GiphyEmbed renders the unavailable

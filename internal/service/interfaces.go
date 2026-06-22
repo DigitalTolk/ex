@@ -35,6 +35,9 @@ type MembershipStore interface {
 	UpdateMemberRole(ctx context.Context, channelID, userID string, role model.ChannelRole) error
 	ListMembers(ctx context.Context, channelID string) ([]*model.ChannelMembership, error)
 	ListUserChannels(ctx context.Context, userID string) ([]*model.UserChannel, error)
+	// MutedUserIDs returns which of the given users have muted the channel,
+	// batched into a single fan-out instead of one query per user.
+	MutedUserIDs(ctx context.Context, channelID string, userIDs []string) (map[string]bool, error)
 	SetMute(ctx context.Context, channelID, userID string, muted bool) error
 	SetFavorite(ctx context.Context, channelID, userID string, favorite bool) error
 	SetCategory(ctx context.Context, channelID, userID, categoryID string, sidebarPosition *int) error
@@ -58,6 +61,9 @@ type MessageStore interface {
 	UpdateMessage(ctx context.Context, msg *model.Message) error
 	DeleteMessage(ctx context.Context, parentID, msgID string) error
 	ListMessages(ctx context.Context, parentID string, before string, limit int) ([]*model.Message, bool, error)
+	// ListThreadReplies returns every reply to a thread root via the GSI1
+	// thread index (one Query, oldest-first) instead of a parent scan.
+	ListThreadReplies(ctx context.Context, threadRootID string) ([]*model.Message, error)
 	// ListMessagesAfter returns messages strictly newer than the given
 	// cursor, oldest-first within the page but with the same
 	// newest-first ordering as ListMessages overall.

@@ -70,11 +70,18 @@ func TestNotification_UserDisplayName_NilUserStore(t *testing.T) {
 	}
 }
 
-func TestNotification_UserMutedChannel_ListError(t *testing.T) {
+func TestNotification_LoadMemberSnapshot_MutedBatchError(t *testing.T) {
 	svc, _, members, _, _, _ := setupNotifier(t)
+	members.memberships["ch1#u1"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u1"}
 	members.listChannelsErr = errors.New("boom")
-	if svc.userMutedChannel(context.Background(), "u1", "ch1") {
-		t.Fatal("expected false when ListUserChannels errors")
+	// MutedUserIDs errors → fall back to "no one muted" while still listing the
+	// member as a recipient (a missed mute over-notifies, never drops a member).
+	snap := svc.loadMemberSnapshot(context.Background(), &model.Message{ParentID: "ch1", AuthorID: "author"}, ParentChannel, "general")
+	if len(snap.muted) != 0 {
+		t.Fatalf("expected empty muted on batch error, got %v", snap.muted)
+	}
+	if len(snap.memberIDs) != 1 || snap.memberIDs[0] != "u1" {
+		t.Fatalf("expected u1 still a recipient, got %v", snap.memberIDs)
 	}
 }
 

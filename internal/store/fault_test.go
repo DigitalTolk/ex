@@ -21,6 +21,7 @@ var errInjected = errors.New("injected dynamodb fault")
 type faultClient struct {
 	DynamoAPI // embedded real client
 
+	failBatchGetItem       bool
 	failBatchWriteItem     bool
 	failCreateTable        bool
 	failDeleteItem         bool
@@ -32,6 +33,13 @@ type faultClient struct {
 	failTransactWriteItems bool
 	failUpdateItem         bool
 	failUpdateTimeToLive   bool
+}
+
+func (f *faultClient) BatchGetItem(ctx context.Context, in *dynamodb.BatchGetItemInput, opts ...func(*dynamodb.Options)) (*dynamodb.BatchGetItemOutput, error) {
+	if f.failBatchGetItem {
+		return nil, errInjected
+	}
+	return f.DynamoAPI.BatchGetItem(ctx, in, opts...)
 }
 
 func (f *faultClient) BatchWriteItem(ctx context.Context, in *dynamodb.BatchWriteItemInput, opts ...func(*dynamodb.Options)) (*dynamodb.BatchWriteItemOutput, error) {

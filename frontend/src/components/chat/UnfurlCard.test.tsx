@@ -91,6 +91,23 @@ describe('UnfurlCard', () => {
     expect(screen.getByText('About things')).toBeInTheDocument();
   });
 
+  it('drops an unsafe card href and unsafe image src', () => {
+    mockUseUnfurl.mockReturnValue({
+      data: makePreview({
+        url: 'javascript:alert(1)',
+        image: 'javascript:alert(1)',
+      }),
+      isLoading: false,
+    });
+    renderCard();
+    // The whole-card link is rendered but carries no href (non-navigable).
+    const card = screen.getByTestId('unfurl-card').querySelector('a');
+    expect(card).not.toBeNull();
+    expect(card?.getAttribute('href')).toBeNull();
+    // The javascript: image is not rendered at all.
+    expect(screen.queryByTestId('unfurl-card-image')).toBeNull();
+  });
+
   it('renders nothing when preview has no fields', () => {
     mockUseUnfurl.mockReturnValue({
       data: { url: 'https://example.com/x' },

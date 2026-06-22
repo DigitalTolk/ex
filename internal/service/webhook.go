@@ -273,7 +273,18 @@ func (s *IncomingWebhookService) targetParent(ctx context.Context, wh *model.Inc
 
 func (s *IncomingWebhookService) targetChannel(ctx context.Context, wh *model.IncomingWebhook, raw string) (*model.Channel, error) {
 	if wh.LockToChannel || strings.TrimSpace(raw) == "" {
-		return s.channels.GetByID(ctx, wh.ChannelID)
+		ch, err := s.channels.GetByID(ctx, wh.ChannelID)
+		if err != nil {
+			return nil, err
+		}
+		// Re-check the creator can still post: a webhook bound to a private
+		// channel must stop posting once its creator loses access to that
+		// channel (same gate as channel overrides). Public channels always
+		// pass, so default public webhooks are unaffected.
+		if err := s.ensureCreatorCanPost(ctx, wh, ch); err != nil {
+			return nil, err
+		}
+		return ch, nil
 	}
 	name := strings.TrimSpace(raw)
 	if strings.HasPrefix(name, "@") {
@@ -387,6 +398,16 @@ func (s *IncomingWebhookService) sanitizeAttachment(ctx context.Context, a model
 	a.Text = s.translateMattermostMarkup(ctx, a.Text)
 	for i := range a.Fields {
 		a.Fields[i].Value = s.translateMattermostMarkup(ctx, a.Fields[i].Value)
+	}
+	// Clickable link fields are author-controlled and rendered as <a href> by
+	// the client — drop any non-http(s)/mailto scheme (javascript:, data:, …)
+	// so a webhook payload can't smuggle a script-URL into a link. Mirrors the
+	// markdown link authority (isSafeURL); image fields go through proxyImage.
+	if !isSafeURL(a.AuthorLink) {
+		a.AuthorLink = ""
+	}
+	if !isSafeURL(a.TitleLink) {
+		a.TitleLink = ""
 	}
 	a.AuthorIcon = s.proxyImage(ctx, a.AuthorIcon)
 	// image_url is the only attachment image with a variable display box,

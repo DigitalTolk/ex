@@ -285,6 +285,28 @@ func (m *mockMembershipStore) ListUserChannels(_ context.Context, userID string)
 	return nil, nil
 }
 
+func (m *mockMembershipStore) MutedUserIDs(_ context.Context, channelID string, userIDs []string) (map[string]bool, error) {
+	if m.listChannelsErr != nil {
+		return nil, m.listChannelsErr
+	}
+	want := make(map[string]bool, len(userIDs))
+	for _, uid := range userIDs {
+		want[uid] = true
+	}
+	out := make(map[string]bool)
+	for _, uc := range m.userChannels {
+		if uc.ChannelID == channelID && uc.Muted && want[uc.UserID] {
+			out[uc.UserID] = true
+		}
+	}
+	for _, uid := range userIDs {
+		if m.mutes[channelID+"#"+uid] {
+			out[uid] = true
+		}
+	}
+	return out, nil
+}
+
 func (m *mockMembershipStore) SetMute(_ context.Context, channelID, userID string, muted bool) error {
 	if m.setMuteErr != nil {
 		return m.setMuteErr
@@ -672,7 +694,9 @@ type mockMessageStore struct {
 	updateErrForID error  // error returned for updateErrID (defaults to a generic error)
 	deleteErr      error
 	listErr        error
-	listHasMore    bool // when true, ListMessages always reports more pages
+	listHasMore    bool  // when true, ListMessages always reports more pages
+	threadReplyErr error // when set, ListThreadReplies returns this error
+	noThreadIndex  bool  // when true, ListThreadReplies returns nothing (simulates an un-backfilled thread → scan fallback)
 }
 
 func newMockMessageStore() *mockMessageStore {
@@ -735,6 +759,22 @@ func (m *mockMessageStore) ListMessages(_ context.Context, parentID string, _ st
 		}
 	}
 	return result, m.listHasMore, nil
+}
+
+func (m *mockMessageStore) ListThreadReplies(_ context.Context, threadRootID string) ([]*model.Message, error) {
+	if m.threadReplyErr != nil {
+		return nil, m.threadReplyErr
+	}
+	if m.noThreadIndex {
+		return nil, nil
+	}
+	var result []*model.Message
+	for _, msg := range m.messages {
+		if msg.ParentMessageID == threadRootID {
+			result = append(result, msg)
+		}
+	}
+	return result, nil
 }
 
 func (m *mockMessageStore) ListMessagesAfter(ctx context.Context, parentID, _ string, limit int) ([]*model.Message, bool, error) {

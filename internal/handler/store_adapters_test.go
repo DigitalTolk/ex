@@ -254,6 +254,9 @@ func (b *adapterMessageBacking) ListAround(context.Context, string, string, int,
 func (b *adapterMessageBacking) List(context.Context, string, string, int) ([]*model.Message, bool, error) {
 	return nil, false, nil
 }
+func (b *adapterMessageBacking) ListThreadReplies(context.Context, string) ([]*model.Message, error) {
+	return nil, nil
+}
 func (b *adapterMessageBacking) IncrementReplyMetadata(_ context.Context, parentID, msgID string, _ time.Time, _ string) (*model.Message, error) {
 	return &model.Message{ID: msgID, ParentID: parentID, ReplyCount: 1}, nil
 }

@@ -101,6 +101,9 @@ func (a *MembershipStoreAdapter) ListMembers(ctx context.Context, channelID stri
 func (a *MembershipStoreAdapter) ListUserChannels(ctx context.Context, userID string) ([]*model.UserChannel, error) {
 	return a.s.ListUserChannels(ctx, userID)
 }
+func (a *MembershipStoreAdapter) MutedUserIDs(ctx context.Context, channelID string, userIDs []string) (map[string]bool, error) {
+	return a.s.MutedUserIDs(ctx, channelID, userIDs)
+}
 func (a *MembershipStoreAdapter) SetMute(ctx context.Context, channelID, userID string, muted bool) error {
 	return a.s.SetUserChannelMute(ctx, channelID, userID, muted)
 }
@@ -173,6 +176,7 @@ type messageBacking interface {
 	ListAfter(ctx context.Context, parentID, after string, limit int) ([]*model.Message, bool, error)
 	ListAround(ctx context.Context, parentID, msgID string, before, after int) ([]*model.Message, bool, bool, error)
 	List(ctx context.Context, parentID string, before string, limit int) ([]*model.Message, bool, error)
+	ListThreadReplies(ctx context.Context, threadRootID string) ([]*model.Message, error)
 	IncrementReplyMetadata(ctx context.Context, parentID, msgID string, replyTime time.Time, replyAuthorID string) (*model.Message, error)
 }
 
@@ -197,6 +201,9 @@ func (a *MessageStoreAdapter) ListMessagesAfter(ctx context.Context, parentID, a
 }
 func (a *MessageStoreAdapter) ListMessagesAround(ctx context.Context, parentID, msgID string, before, after int) ([]*model.Message, bool, bool, error) {
 	return a.s.ListAround(ctx, parentID, msgID, before, after)
+}
+func (a *MessageStoreAdapter) ListThreadReplies(ctx context.Context, threadRootID string) ([]*model.Message, error) {
+	return a.s.ListThreadReplies(ctx, threadRootID)
 }
 func (a *MessageStoreAdapter) ListMessages(ctx context.Context, parentID string, before string, limit int) ([]*model.Message, bool, error) {
 	return a.s.List(ctx, parentID, before, limit)

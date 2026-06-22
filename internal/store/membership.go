@@ -204,6 +204,60 @@ func (s *MembershipStoreImpl) ListUserChannels(ctx context.Context, userID strin
 	return channels, nil
 }
 
+// MutedUserIDs returns, for one channel, which of the supplied users have muted
+// it. It batch-reads the user-side membership rows (point reads, chunked into
+// BatchGetItem calls of 100) instead of issuing a full ListUserChannels query
+// per user. The notifier calls this once per channel message, so the previous
+// per-member fan-out (O(members) queries, each returning all of a user's
+// channels) was the dominant cost on large channels.
+func (s *MembershipStoreImpl) MutedUserIDs(ctx context.Context, channelID string, userIDs []string) (map[string]bool, error) {
+	muted := make(map[string]bool)
+	const batchSize = 100 // DynamoDB BatchGetItem hard limit
+	for start := 0; start < len(userIDs); start += batchSize {
+		end := start + batchSize
+		if end > len(userIDs) {
+			end = len(userIDs)
+		}
+		keys := make([]map[string]types.AttributeValue, 0, end-start)
+		for _, uid := range userIDs[start:end] {
+			keys = append(keys, compositeKey(userPK(uid), chanSK(channelID)))
+		}
+		req := map[string]types.KeysAndAttributes{
+			s.Table: {
+				Keys:                     keys,
+				ProjectionExpression:     aws.String("#uid, #muted"),
+				ExpressionAttributeNames: map[string]string{"#uid": "userID", "#muted": "muted"},
+			},
+		}
+		// Drain UnprocessedKeys (BatchGetItem may return a partial result under
+		// throttling) before moving to the next chunk.
+		for {
+			out, err := s.Client.BatchGetItem(ctx, &dynamodb.BatchGetItemInput{RequestItems: req})
+			if err != nil {
+				return nil, fmt.Errorf("store: batch get muted: %w", err)
+			}
+			for _, item := range out.Responses[s.Table] {
+				var row struct {
+					UserID string `dynamodbav:"userID"`
+					Muted  bool   `dynamodbav:"muted"`
+				}
+				if err := attributevalue.UnmarshalMap(item, &row); err != nil { // coverage-ignore: round-trip of rows this store wrote; cannot fail
+					return nil, fmt.Errorf("store: unmarshal muted row: %w", err)
+				}
+				if row.Muted && row.UserID != "" {
+					muted[row.UserID] = true
+				}
+			}
+			unproc, ok := out.UnprocessedKeys[s.Table]
+			if !ok || len(unproc.Keys) == 0 {
+				break
+			}
+			req = map[string]types.KeysAndAttributes{s.Table: unproc}
+		}
+	}
+	return muted, nil
+}
+
 func (s *MembershipStoreImpl) UpdateChannelRole(ctx context.Context, channelID, userID string, role model.ChannelRole) error {
 	// Update both the channel-side membership and user-side channel items.
 	memberUpdate := expression.Set(expression.Name("role"), expression.Value(role))
