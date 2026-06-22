@@ -484,12 +484,15 @@ func (s *MessageService) ListThreadMessages(ctx context.Context, userID, parentI
 	if err != nil {
 		return nil, fmt.Errorf("message: list thread: %w", err)
 	}
-	// Fallback: a thread whose replies predate the GSI backfill returns zero
-	// indexed replies even though the root records some — scan the parent so
-	// historical threads stay complete until the migration runs. New replies
-	// are always indexed; the eventual-consistency lag of the very latest reply
-	// is covered by the client's WebSocket stream, so we don't scan for that.
-	if len(replies) == 0 && root != nil && root.ReplyCount > 0 {
+	// Fallback: if the GSI returns fewer replies than the root records, some
+	// replies aren't indexed — either the thread predates the backfill, or it's
+	// partially migrated (old replies unindexed + newer ones indexed). Scan the
+	// parent so historical threads stay complete until the migration runs.
+	// (Tombstoned replies keep their index key, so a fully-indexed thread has
+	// len(replies) >= ReplyCount and never trips this.) The transient case where
+	// the very latest reply lags the GSI also scans here — correct, just slower
+	// for that sub-second window; already-open clients got it over the WebSocket.
+	if root != nil && len(replies) < root.ReplyCount {
 		return s.listThreadByScan(ctx, parentID, threadRootID)
 	}
 	thread := make([]*model.Message, 0, len(replies)+1)

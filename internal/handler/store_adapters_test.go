@@ -207,6 +207,9 @@ func TestConversationAndMessageStoreAdapterDelegates(t *testing.T) {
 	if msg.ID != "root-1" || msg.ReplyCount != 1 {
 		t.Fatalf("message = %+v", msg)
 	}
+	if _, err := msgAdapter.ListThreadReplies(ctx, "root-1"); err != nil {
+		t.Fatalf("ListThreadReplies: %v", err)
+	}
 }
 
 type adapterConversationBacking struct {

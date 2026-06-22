@@ -288,6 +288,9 @@ func TestMembershipStoreAdapter(t *testing.T) {
 	if err := adapter.SetMute(ctx, "ch-ma-1", "u-ma-1", true); err != nil {
 		t.Fatalf("SetMute: %v", err)
 	}
+	if muted, err := adapter.MutedUserIDs(ctx, "ch-ma-1", []string{"u-ma-1"}); err != nil || !muted["u-ma-1"] {
+		t.Fatalf("MutedUserIDs after mute: muted=%v err=%v", muted, err)
+	}
 
 	if err := adapter.SetFavorite(ctx, "ch-ma-1", "u-ma-1", true); err != nil {
 		t.Fatalf("SetFavorite: %v", err)
