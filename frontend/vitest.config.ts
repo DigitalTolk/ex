@@ -57,7 +57,6 @@ export default defineConfig({
         'src/components/chat/markdown/**',
         'src/components/search/BucketPicker.tsx',
         'src/components/search/MessageHitCard.tsx',
-        'src/components/threads/ThreadCard.tsx',
         'src/context/AuthContext.tsx',
         'src/context/NotificationContext.tsx',
         'src/context/PresenceContext.tsx',

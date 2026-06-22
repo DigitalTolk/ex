@@ -39,7 +39,7 @@ const DEFAULT_SETTINGS: NotificationSettings = {
 export function NotificationSettingsDialog({ open, onOpenChange }: NotificationSettingsDialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-lg max-md:grid-rows-[auto_1fr]" mobileCloseLabel="Cancel">
+      <DialogContent className="sm:max-w-2xl max-md:grid-rows-[auto_1fr]" finalFocus={false} mobileCloseLabel="Cancel">
         <DialogHeader>
           <DialogTitle>Notification settings</DialogTitle>
         </DialogHeader>
@@ -59,6 +59,8 @@ function NotificationSettingsBody({ onOpenChange }: { onOpenChange: (open: boole
   const [threadReplies, setThreadReplies] = useState(initial.threadReplies);
   const [ignoreGroupMentions, setIgnoreGroupMentions] = useState(initial.ignoreGroupMentions);
   const [followAllThreads, setFollowAllThreads] = useState(initial.followAllThreads);
+  // New accounts are seeded with name-derived keywords server-side at sign-up,
+  // so the list here is simply whatever the user has saved.
   const [keywords, setKeywords] = useState<string[]>(initial.keywords ?? []);
   const [keywordDraft, setKeywordDraft] = useState('');
   const [isSaving, setIsSaving] = useState(false);
@@ -87,13 +89,22 @@ function NotificationSettingsBody({ onOpenChange }: { onOpenChange: (open: boole
     setError('');
     setIsSaving(true);
     try {
+      // Commit any keyword still sitting in the input — saving should not
+      // silently drop a word the user typed but didn't click "Add" for.
+      const pending = keywordDraft.trim();
+      const effectiveKeywords =
+        pending && !keywords.some((k) => k.toLowerCase() === pending.toLowerCase())
+          ? [...keywords, pending]
+          : keywords;
+      setKeywords(effectiveKeywords);
+      setKeywordDraft('');
       const body: NotificationSettings = {
         desktopLevel,
         mobileLevel,
         threadReplies,
         ignoreGroupMentions,
         followAllThreads,
-        keywords,
+        keywords: effectiveKeywords,
       };
       const updated = await apiFetch<User>('/api/v1/users/me/notification-settings', {
         method: 'PUT',
@@ -113,7 +124,7 @@ function NotificationSettingsBody({ onOpenChange }: { onOpenChange: (open: boole
   );
 
   return (
-    <div className="flex min-h-0 flex-col gap-5 overflow-y-auto">
+    <div className="flex min-h-0 min-w-0 flex-col gap-5 overflow-y-auto overflow-x-hidden">
       {error && (
         <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive" role="alert">
           {error}

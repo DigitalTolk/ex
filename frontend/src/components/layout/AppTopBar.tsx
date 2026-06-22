@@ -255,7 +255,7 @@ export function AppTopBar({ onOpenChannels, channelsButtonHidden }: AppTopBarPro
               data-testid="topbar-account"
               className="relative inline-flex h-10 w-10 items-center justify-center rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
             >
-              <Avatar className="h-9 w-9">
+              <Avatar className="size-8">
                 <AvatarImage src={user?.avatarURL} alt="" />
                 <AvatarFallback className="bg-muted text-foreground text-xs">{initials}</AvatarFallback>
               </Avatar>
@@ -271,7 +271,7 @@ export function AppTopBar({ onOpenChannels, channelsButtonHidden }: AppTopBarPro
                 aria-label="Account menu"
                 data-testid="topbar-account"
               >
-                <Avatar className="h-10 w-10">
+                <Avatar className="size-8">
                   <AvatarImage src={user?.avatarURL} alt="" />
                   <AvatarFallback className="bg-muted text-foreground text-xs">{initials}</AvatarFallback>
                 </Avatar>

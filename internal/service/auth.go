@@ -147,17 +147,19 @@ func (s *AuthService) HandleOIDCCallback(ctx context.Context, code, state string
 		}
 
 		now := time.Now()
+		ns := model.DefaultNotificationSettingsForNewUser(info.Name)
 		user = &model.User{
-			ID:           store.NewID(),
-			Email:        email,
-			DisplayName:  info.Name,
-			AvatarURL:    info.Picture,
-			SystemRole:   role,
-			AuthProvider: model.AuthProviderOIDC,
-			Status:       "active",
-			LastSeenAt:   &now,
-			CreatedAt:    now,
-			UpdatedAt:    now,
+			ID:                   store.NewID(),
+			Email:                email,
+			DisplayName:          info.Name,
+			AvatarURL:            info.Picture,
+			SystemRole:           role,
+			AuthProvider:         model.AuthProviderOIDC,
+			NotificationSettings: &ns,
+			Status:               "active",
+			LastSeenAt:           &now,
+			CreatedAt:            now,
+			UpdatedAt:            now,
 		}
 		if err := s.users.CreateUser(ctx, user); err != nil {
 			if errors.Is(err, store.ErrAlreadyExists) {
@@ -340,16 +342,18 @@ func (s *AuthService) AcceptInvite(ctx context.Context, token, displayName, pass
 	}
 
 	now := time.Now()
+	ns := model.DefaultNotificationSettingsForNewUser(displayName)
 	user = &model.User{
-		ID:           store.NewID(),
-		Email:        email,
-		DisplayName:  displayName,
-		SystemRole:   model.SystemRoleGuest,
-		AuthProvider: model.AuthProviderGuest,
-		PasswordHash: string(hashed),
-		Status:       "active",
-		CreatedAt:    now,
-		UpdatedAt:    now,
+		ID:                   store.NewID(),
+		Email:                email,
+		DisplayName:          displayName,
+		SystemRole:           model.SystemRoleGuest,
+		AuthProvider:         model.AuthProviderGuest,
+		PasswordHash:         string(hashed),
+		NotificationSettings: &ns,
+		Status:               "active",
+		CreatedAt:            now,
+		UpdatedAt:            now,
 	}
 	if err := s.users.CreateUser(ctx, user); err != nil {
 		if errors.Is(err, store.ErrAlreadyExists) {

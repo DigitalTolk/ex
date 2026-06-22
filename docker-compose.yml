@@ -2,9 +2,8 @@ services:
   dynamodb:
     image: amazon/dynamodb-local:latest
     user: root
-    # No host port published — the app reaches it over the internal
-    # network as `dynamodb:8000`. Keeps host :8000 free so this stack
-    # can run alongside other local DynamoDB stacks without colliding.
+    ports:
+      - "28000:8000"
     command: "-jar DynamoDBLocal.jar -sharedDb -dbPath /data"
     volumes:
       - dynamodb-data:/data

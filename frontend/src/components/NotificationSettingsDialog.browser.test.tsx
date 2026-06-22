@@ -119,6 +119,29 @@ describe('NotificationSettingsDialog browser', () => {
     expect(chips.length).toBe(3);
   });
 
+  it('commits a typed-but-not-added keyword when saving', async () => {
+    const screen = await render(<NotificationSettingsDialog open onOpenChange={vi.fn()} />);
+    await screen.getByLabelText('Keywords').fill('urgent');
+    // No "Add" click — Save must still capture it.
+    await screen.getByRole('button', { name: 'Save' }).click();
+    await vi.waitFor(() => {
+      const call = vi.mocked(apiFetch).mock.calls.find((c: unknown[]) => c[0] === '/api/v1/users/me/notification-settings');
+      expect(call).toBeDefined();
+      expect(JSON.parse((call![1] as { body: string }).body).keywords).toEqual(['deploy', 'urgent']);
+    });
+  });
+
+  it('does not duplicate a pending keyword that already exists on save', async () => {
+    const screen = await render(<NotificationSettingsDialog open onOpenChange={vi.fn()} />);
+    await screen.getByLabelText('Keywords').fill('DEPLOY');
+    await screen.getByRole('button', { name: 'Save' }).click();
+    await vi.waitFor(() => {
+      const call = vi.mocked(apiFetch).mock.calls.find((c: unknown[]) => c[0] === '/api/v1/users/me/notification-settings');
+      expect(call).toBeDefined();
+      expect(JSON.parse((call![1] as { body: string }).body).keywords).toEqual(['deploy']);
+    });
+  });
+
   it('falls back to the request body when the response omits settings', async () => {
     vi.mocked(apiFetch).mockResolvedValue(okUser({ notificationSettings: undefined }) as never);
     const screen = await render(<NotificationSettingsDialog open onOpenChange={vi.fn()} />);
@@ -149,7 +172,7 @@ describe('NotificationSettingsDialog browser', () => {
     await expect.element(screen.getByRole('radio', { name: 'Mentions, DMs & keywords' }).first()).toHaveAttribute('aria-checked', 'true');
   });
 
-  it('defaults the keyword list to empty when settings omit it', async () => {
+  it('shows no keyword chips when the saved list is empty', async () => {
     authState.user.notificationSettings = {
       desktopLevel: 'mentions', mobileLevel: 'default', threadReplies: true,
       ignoreGroupMentions: false, followAllThreads: false,

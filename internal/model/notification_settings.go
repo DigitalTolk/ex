@@ -1,5 +1,7 @@
 package model
 
+import "strings"
+
 // NotificationLevel controls which messages fire a user-facing notification
 // (sound + popup on desktop; push on mobile). It is deliberately small: the
 // "all" firehose or the quiet "mentions, DMs & keywords only" default.
@@ -54,6 +56,33 @@ func DefaultNotificationSettings() NotificationSettings {
 		MobileLevel:   MobileNotificationDefault,
 		ThreadReplies: true,
 	}
+}
+
+// NotificationKeywordsFromName seeds a new user's keyword list from their
+// display name: first name + full name, deduped (case-insensitively), blanks
+// dropped. "John Smith" → ["John", "John Smith"]; a single-word name yields one
+// entry. So @-name mentions and plain name references notify out of the box.
+func NotificationKeywordsFromName(displayName string) []string {
+	full := strings.TrimSpace(displayName)
+	if full == "" {
+		return nil
+	}
+	first := strings.Fields(full)[0]
+	out := []string{first}
+	if !strings.EqualFold(full, first) {
+		out = append(out, full)
+	}
+	return out
+}
+
+// DefaultNotificationSettingsForNewUser is the baseline seeded onto a user at
+// account creation: the standard defaults plus name-derived keywords, so they
+// are notified about messages mentioning their name immediately (no migration
+// or first-visit-to-settings required).
+func DefaultNotificationSettingsForNewUser(displayName string) NotificationSettings {
+	s := DefaultNotificationSettings()
+	s.Keywords = NotificationKeywordsFromName(displayName)
+	return s
 }
 
 // ChannelNotificationOverride carries the per-channel override values a user

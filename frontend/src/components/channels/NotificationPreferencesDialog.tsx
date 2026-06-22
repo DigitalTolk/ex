@@ -56,7 +56,7 @@ export function NotificationPreferencesDialog({
 }: NotificationPreferencesDialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-lg max-md:grid-rows-[auto_1fr]" mobileCloseLabel="Cancel">
+      <DialogContent className="sm:max-w-2xl max-md:grid-rows-[auto_1fr]" finalFocus={false} mobileCloseLabel="Cancel">
         <DialogHeader>
           <DialogTitle>Notification preferences</DialogTitle>
         </DialogHeader>
@@ -133,7 +133,7 @@ function NotificationPreferencesBody({
   ];
 
   return (
-    <div className="flex min-h-0 flex-col gap-5 overflow-y-auto">
+    <div className="flex min-h-0 min-w-0 flex-col gap-5 overflow-y-auto overflow-x-hidden">
       {error && (
         <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive" role="alert">
           {error}

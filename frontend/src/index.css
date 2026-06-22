@@ -106,8 +106,10 @@
   --color-brand-hover: #C94E71;
   --color-brand-foreground: #FFFFFF;
   /* Disabled state of the dark-mode pink CTA button (spec: #EB9EB5). Applied
-   * only via `dark:disabled:bg-brand-disabled` on the default Button variant;
-   * the light CTA disabled keeps the neutral opacity-50 convention. */
+   * only to the message send button (via `dark:disabled:bg-brand-disabled` on
+   * its className); every other dark-mode disabled button uses the neutral
+   * muted-chip treatment from the base Button variant, and light-mode disabled
+   * keeps the neutral opacity-50 convention. */
   --color-brand-disabled: #EB9EB5;
   /* Online / presence green — the one non-monochrome, non-pink accent in the
    * palette. Tokenised so presence dots/labels don't sprinkle raw

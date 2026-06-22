@@ -1,6 +1,43 @@
 package model
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+)
+
+func TestNotificationKeywordsFromName(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want []string
+	}{
+		{"empty", "", nil},
+		{"whitespace only", "   ", nil},
+		{"single word", "Cher", []string{"Cher"}},
+		{"first + full", "John Smith", []string{"John", "John Smith"}},
+		{"trims surrounding space", "  Alice Wong  ", []string{"Alice", "Alice Wong"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := NotificationKeywordsFromName(c.in); !reflect.DeepEqual(got, c.want) {
+				t.Errorf("NotificationKeywordsFromName(%q) = %v, want %v", c.in, got, c.want)
+			}
+		})
+	}
+}
+
+func TestDefaultNotificationSettingsForNewUser(t *testing.T) {
+	s := DefaultNotificationSettingsForNewUser("John Smith")
+	if s.DesktopLevel != NotificationLevelMentions || !s.ThreadReplies {
+		t.Errorf("new-user settings lost the defaults: %+v", s)
+	}
+	if !reflect.DeepEqual(s.Keywords, []string{"John", "John Smith"}) {
+		t.Errorf("keywords = %v, want [John, John Smith]", s.Keywords)
+	}
+	if empty := DefaultNotificationSettingsForNewUser(""); len(empty.Keywords) != 0 {
+		t.Errorf("empty-name keywords = %v, want none", empty.Keywords)
+	}
+}
 
 func TestDefaultNotificationSettings(t *testing.T) {
 	d := DefaultNotificationSettings()

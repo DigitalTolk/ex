@@ -66,7 +66,7 @@ export function AddMemberDialog({ open, onOpenChange, channelId }: AddMemberDial
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-lg min-h-[400px]">
+      <DialogContent className="sm:max-w-lg min-h-[400px]">
         <DialogHeader><DialogTitle>Add member</DialogTitle></DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-4">
           {error && <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">{error}</div>}

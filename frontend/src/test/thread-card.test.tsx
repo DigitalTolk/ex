@@ -16,6 +16,22 @@ vi.mock('@/hooks/useMessages', () => ({
   useSendMessage: () => ({ mutate: sendMutate, isPending: false }),
 }));
 
+// Controllable draft state so we can drive both the "no draft" (else) and
+// "draft present" (delete-on-send) arms of the reply handler, plus the
+// draft-save path triggered by onDraftChange.
+let mockDraft: { id: string; body: string; attachmentIDs?: string[] } | undefined;
+const saveDraftMutate = vi.fn();
+const deleteDraftMutate = vi.fn();
+vi.mock('@/hooks/useDrafts', () => ({
+  useDraftForScope: () => ({ data: mockDraft }),
+  useDraftAttachmentChips: () => [],
+  useSaveDraft: () => ({ mutate: saveDraftMutate }),
+  useDeleteDraft: () => ({ mutate: deleteDraftMutate }),
+  restoreDraftScope: vi.fn(),
+  restoreDraftScopeForContent: vi.fn(),
+  suppressSentDraft: vi.fn(),
+}));
+
 vi.mock('@/context/PresenceContext', () => ({
   usePresence: () => ({ isOnline: () => false, online: new Set<string>(), setUserOnline: () => undefined }),
 }));
@@ -111,6 +127,9 @@ describe('ThreadCard', () => {
   beforeEach(() => {
     apiFetchMock.mockReset();
     sendMutate.mockReset();
+    saveDraftMutate.mockReset();
+    deleteDraftMutate.mockReset();
+    mockDraft = undefined;
     localStorage.clear();
     resetSeenCache();
     lastMessageInputProps.current = null;
@@ -222,6 +241,52 @@ describe('ThreadCard', () => {
       }),
       expect.objectContaining({ onError: expect.any(Function) }),
     );
+  });
+
+  it('saves a draft via onDraftChange, defaulting missing attachmentIDs to []', async () => {
+    apiFetchMock.mockImplementation((url: string) => {
+      if (url.includes('/messages/msg-root/thread')) return Promise.resolve([makeMessage('msg-root')]);
+      return Promise.resolve([]);
+    });
+    renderCard(makeSummary());
+    await screen.findByTestId('reply-body');
+    const onDraftChange = lastMessageInputProps.current!.onDraftChange as (
+      i: { body: string; attachmentIDs?: string[] },
+    ) => void;
+    act(() => onDraftChange({ body: 'wip', attachmentIDs: ['a-1'] }));
+    expect(saveDraftMutate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        parentID: 'ch-1',
+        parentType: 'channel',
+        parentMessageID: 'msg-root',
+        body: 'wip',
+        attachmentIDs: ['a-1'],
+      }),
+    );
+    // Omitting attachmentIDs exercises the `?? []` fallback.
+    act(() => onDraftChange({ body: 'wip2' }));
+    expect(saveDraftMutate).toHaveBeenLastCalledWith(
+      expect.objectContaining({ body: 'wip2', attachmentIDs: [] }),
+    );
+  });
+
+  it('deletes the saved draft after a successful reply when one exists', async () => {
+    mockDraft = { id: 'd-1', body: 'saved draft' };
+    apiFetchMock.mockImplementation((url: string) => {
+      if (url.includes('/messages/msg-root/thread')) return Promise.resolve([makeMessage('msg-root')]);
+      return Promise.resolve([]);
+    });
+    renderCard(makeSummary());
+    fireEvent.change(await screen.findByTestId('reply-body'), { target: { value: 'reply' } });
+    fireEvent.click(screen.getByLabelText('Send reply'));
+    // draftID present → send.mutate gets an onSuccess that clears the draft.
+    expect(sendMutate).toHaveBeenCalledWith(
+      expect.objectContaining({ body: 'reply', parentMessageID: 'msg-root' }),
+      expect.objectContaining({ onSuccess: expect.any(Function), onError: expect.any(Function) }),
+    );
+    const opts = sendMutate.mock.calls[0][1] as { onSuccess: () => void };
+    act(() => opts.onSuccess());
+    expect(deleteDraftMutate).toHaveBeenCalledWith('d-1');
   });
 
   it('offers to add a mentioned non-member after replying in a channel thread', async () => {

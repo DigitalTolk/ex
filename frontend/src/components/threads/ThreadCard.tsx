@@ -3,8 +3,10 @@ import { Link } from 'react-router-dom';
 import { BellOff, Globe, MessageSquare } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { MessageItem } from '@/components/chat/MessageItem';
+import { isGroupedWithPrevious } from '@/components/chat/MessageListRows';
 import { MessageInput, type MessageInputHandle } from '@/components/chat/MessageInput';
 import { MessageDropZone } from '@/components/chat/MessageDropZone';
+import { useFrequentEmojis } from '@/hooks/useEmoji';
 import { NonMemberInvitePrompt } from '@/components/chat/NonMemberInvitePrompt';
 import { useNonMemberInvite } from '@/hooks/useNonMemberInvite';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -105,7 +107,14 @@ export function ThreadCard({ summary, title, deepLink, currentUserId, unread = f
   );
   const { map: userMap } = useUsersBatch(userIDs);
   const presence = usePresence();
+  const quickReactions = useFrequentEmojis(3);
   const unfollowThread = useUnfollowThread();
+
+  // The "previous" message for the first visible reply: the root when the
+  // thread is shown in full, or null when the middle is collapsed (the real
+  // predecessor is hidden, so the first visible reply must start a fresh
+  // group rather than merging into a message that isn't on screen).
+  const firstVisiblePrev = expanded || !isLong ? root : null;
 
   // useSendMessage invalidates the same ['thread', parentPath, rootID]
   // key the hook above subscribes to, so a reply lands without an
@@ -128,6 +137,7 @@ export function ThreadCard({ summary, title, deepLink, currentUserId, unread = f
 
   const handleDraftChange = useCallback(
     (input: SendMessageInput) => {
+      /* istanbul ignore next -- parentID is channelId ?? conversationId and parentType is always 'channel' | 'conversation', so one is always set; this guard is unreachable defensive code. */
       if (!parentID) return;
       restoreDraftScopeForContent(draftScope, input);
       saveDraftMutate({
@@ -256,6 +266,7 @@ export function ThreadCard({ summary, title, deepLink, currentUserId, unread = f
               conversationId={conversationId}
               currentUserId={currentUserId}
               userMap={userMap}
+              quickReactions={quickReactions}
               inThread
               disableEditing
             />
@@ -268,15 +279,19 @@ export function ThreadCard({ summary, title, deepLink, currentUserId, unread = f
               data-testid="thread-card-expand"
               className="my-1 ml-12 block text-xs font-medium text-link transition-colors hover:text-link/80"
             >
-              Show {hiddenCount} more {hiddenCount === 1 ? 'reply' : 'replies'}
+              {/* hiddenCount is always ≥ 8 here: the toggle only shows when the
+                  thread exceeds FULL_RENDER_CAP (10), so replies − TAIL_LENGTH ≥ 8.
+                  Always plural — a "1 reply" case can't occur. */}
+              Show {hiddenCount} more replies
             </button>
           )}
 
           {!isLoading &&
-            visibleReplies.map((msg) => (
+            visibleReplies.map((msg, i) => (
               <MessageItem
                 key={msg.id}
                 message={msg}
+                firstInGroup={!isGroupedWithPrevious(i === 0 ? firstVisiblePrev : visibleReplies[i - 1], msg)}
                 authorName={userMap.get(msg.authorID)?.displayName ?? 'Unknown'}
                 authorAvatarURL={userMap.get(msg.authorID)?.avatarURL}
                 authorOnline={presence.isOnline(msg.authorID)}
@@ -285,6 +300,7 @@ export function ThreadCard({ summary, title, deepLink, currentUserId, unread = f
                 conversationId={conversationId}
                 currentUserId={currentUserId}
                 userMap={userMap}
+                quickReactions={quickReactions}
                 inThread
                 disableEditing
               />
