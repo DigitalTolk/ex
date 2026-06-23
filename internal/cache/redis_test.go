@@ -170,6 +170,54 @@ func TestPresenceKeysExpire(t *testing.T) {
 	}
 }
 
+func TestNotificationAck(t *testing.T) {
+	c, mr := setupTestCache(t)
+	ctx := context.Background()
+
+	if c.WasNotificationAcked(ctx, "u1", "m1") {
+		t.Fatal("no ack recorded yet, want false")
+	}
+	if err := c.MarkNotificationAcked(ctx, "u1", "m1"); err != nil {
+		t.Fatalf("MarkNotificationAcked: %v", err)
+	}
+	if !c.WasNotificationAcked(ctx, "u1", "m1") {
+		t.Fatal("ack recorded, want true")
+	}
+	// Scoped per (user, message).
+	if c.WasNotificationAcked(ctx, "u1", "m2") {
+		t.Fatal("a different messageID must not read as acked")
+	}
+	if c.WasNotificationAcked(ctx, "u2", "m1") {
+		t.Fatal("a different user must not read as acked")
+	}
+	// Empty args are no-ops / false (defensive).
+	if err := c.MarkNotificationAcked(ctx, "", "m1"); err != nil {
+		t.Fatalf("empty userID mark: %v", err)
+	}
+	if c.WasNotificationAcked(ctx, "", "m1") || c.WasNotificationAcked(ctx, "u1", "") {
+		t.Fatal("empty args must read false")
+	}
+	// Expires after the TTL so a stale ack can't suppress a future push.
+	mr.FastForward(notifAckTTL + time.Second)
+	if c.WasNotificationAcked(ctx, "u1", "m1") {
+		t.Fatal("ack should expire after notifAckTTL")
+	}
+}
+
+func TestNotificationAckClientErrors(t *testing.T) {
+	c, mr := setupTestCache(t)
+	mr.Close()
+	ctx := context.Background()
+	if err := c.MarkNotificationAcked(ctx, "u1", "m1"); err == nil {
+		t.Fatal("MarkNotificationAcked should error when Redis is down")
+	}
+	// Fails toward "not acked" so a Redis blip makes the fallback push fire
+	// rather than silently swallow an incident alert.
+	if c.WasNotificationAcked(ctx, "u1", "m1") {
+		t.Fatal("WasNotificationAcked must read false on Redis error (fail toward delivery)")
+	}
+}
+
 func TestPresenceClientErrors(t *testing.T) {
 	c, mr := setupTestCache(t)
 	mr.Close()

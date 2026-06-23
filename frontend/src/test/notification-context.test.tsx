@@ -6,10 +6,17 @@ import {
   useNotifications,
   type NotificationPayload,
 } from '@/context/NotificationContext';
+import { resetNotificationDedup } from '@/lib/notification-dedup';
 
 const playMock = vi.fn();
 vi.mock('@/lib/notification-sound', () => ({
   playNotificationPing: () => playMock(),
+}));
+
+const sendWSMock = vi.fn();
+vi.mock('@/lib/ws-sender', () => ({
+  sendWS: (payload: unknown) => sendWSMock(payload),
+  setWSSender: vi.fn(),
 }));
 
 // Default payload is a DM message — DMs always notify, so this represents
@@ -89,6 +96,8 @@ describe('NotificationProvider', () => {
 
   beforeEach(() => {
     playMock.mockReset();
+    sendWSMock.mockReset();
+    resetNotificationDedup();
     dispatchSpy = null;
     setActiveSpy = null;
     setUserSpy = null;
@@ -500,22 +509,37 @@ describe('NotificationProvider', () => {
     expect(notificationCtor).toHaveBeenCalledTimes(2);
   });
 
-  it('evicts the oldest messageID once the dedup window overflows', () => {
-    // The seen-set is a bounded FIFO (cap 256). After 256 newer messages,
-    // the very first id is evicted, so a late duplicate of it fires again
-    // rather than being suppressed forever.
+  it('acks desktop delivery when an alert is surfaced (so the backend cancels the mobile push)', () => {
     renderProbe();
     act(() => {
-      dispatchSpy!({ ...samplePayload, messageID: 'm-old' });
-      for (let i = 0; i < 256; i++) {
-        dispatchSpy!({ ...samplePayload, messageID: `m-${i}` });
-      }
-      // m-old has now been pushed out of the window — this re-fires.
-      dispatchSpy!({ ...samplePayload, messageID: 'm-old' });
+      dispatchSpy!({ ...samplePayload, messageID: 'm-ack' });
     });
-    const oldCalls = notificationCtor.mock.calls.filter((c) => (c[1] as NotificationOptions).body === 'hello there');
-    // 1 (m-old) + 256 (m-0..m-255) + 1 (m-old re-fired) = 258.
-    expect(oldCalls).toHaveLength(258);
+    expect(sendWSMock).toHaveBeenCalledWith({ type: 'notification.ack', messageID: 'm-ack' });
+  });
+
+  it('acks when suppressed because the user is already viewing the channel', () => {
+    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+    renderProbe();
+    act(() => {
+      setActiveSpy!('ch-1');
+      dispatchSpy!({ ...channelMessagePayload, messageID: 'm-view' });
+    });
+    expect(notificationCtor).not.toHaveBeenCalled();
+    // They saw it on desktop → ack so the mobile fallback stands down.
+    expect(sendWSMock).toHaveBeenCalledWith({ type: 'notification.ack', messageID: 'm-view' });
+  });
+
+  it('does NOT ack when nothing was surfaced (so the mobile fallback still fires)', () => {
+    renderProbe();
+    act(() => {
+      setSoundSpy!(false);
+      setBrowserSpy!(false);
+    });
+    act(() => {
+      dispatchSpy!({ ...samplePayload, messageID: 'm-silent' });
+    });
+    expect(playMock).not.toHaveBeenCalled();
+    expect(sendWSMock).not.toHaveBeenCalled();
   });
 
   it('a copy suppressed because you were viewing the channel does not dedup a later deliverable copy', () => {

@@ -32,6 +32,15 @@ type inboundMessage struct {
 	ParentType      string `json:"parentType"`      // "channel" | "conversation"
 	ParentMessageID string `json:"parentMessageID"` // optional — set when typing inside a thread reply
 	TimeZone        string `json:"timeZone"`        // optional — "timezone.update" heartbeat frame
+	MessageID       string `json:"messageID"`       // optional — set on a "notification.ack" frame
+}
+
+// NotificationAckRecorder records a client's acknowledgement that it received
+// (and surfaced) the desktop notification for a message. The deferred
+// mobile-push fallback reads these to avoid double-notifying a desktop that
+// actually delivered. Implemented by the Redis cache.
+type NotificationAckRecorder interface {
+	MarkNotificationAcked(ctx context.Context, userID, messageID string) error
 }
 
 // wsKeepAliveInterval is the cadence of server → client keep-alive pings AND
@@ -71,6 +80,7 @@ type WSHandler struct {
 	presenceSvc    *service.PresenceService
 	publisher      service.Publisher
 	replayer       InboxReplayer
+	notifAck       NotificationAckRecorder
 	version        string
 	originPatterns []string
 	allowAllOrigin bool
@@ -124,6 +134,11 @@ func (h *WSHandler) SetVersion(v string) { h.version = v }
 // when nil, the handshake skips replay and the client falls back to
 // its own refetch logic.
 func (h *WSHandler) SetReplayer(r InboxReplayer) { h.replayer = r }
+
+// SetNotificationAckRecorder wires the store that records desktop-delivery acks
+// (a `notification.ack` inbound frame). Optional — without it, acks are ignored
+// and the deferred mobile-push fallback degrades to presence-only behaviour.
+func (h *WSHandler) SetNotificationAckRecorder(r NotificationAckRecorder) { h.notifAck = r }
 
 // Connect upgrades the HTTP connection to a WebSocket for the authenticated
 // user. Authentication is handled via the "token" query parameter by the auth
@@ -400,6 +415,14 @@ func (h *WSHandler) handleInbound(ctx context.Context, userID string, raw []byte
 	case "timezone.update":
 		if h.userSvc != nil {
 			_, _ = h.userSvc.PatchTimeZoneIfChanged(ctx, userID, msg.TimeZone)
+		}
+	case "notification.ack":
+		// The client confirms it received (and surfaced) the desktop
+		// notification, so the deferred mobile-push fallback can stand down.
+		if h.notifAck != nil && msg.MessageID != "" {
+			if err := h.notifAck.MarkNotificationAcked(ctx, userID, msg.MessageID); err != nil {
+				slog.Warn("notification ack record failed", "userID", userID, "messageID", msg.MessageID, "error", err)
+			}
 		}
 	}
 }

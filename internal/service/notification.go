@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -77,6 +78,24 @@ type MobilePushSender interface {
 	Send(ctx context.Context, recipientUserID string, n Notification) error
 }
 
+// NotificationAckStore records and reports desktop-delivery acknowledgements.
+// When a client receives a `notification.new` it acks over its WebSocket; the
+// deferred mobile-push fallback consults WasNotificationAcked to decide whether
+// the desktop actually delivered the alert (ack present) or merely looked online
+// (no ack → the socket was dead/reconnecting → push must fire). Redis-backed in
+// production so an ack on one backend instance is visible to the deferred push
+// running on another.
+type NotificationAckStore interface {
+	WasNotificationAcked(ctx context.Context, userID, messageID string) bool
+}
+
+// ackFallbackDelay is how long the deferred mobile push waits for the desktop
+// client to ack before giving up and pushing. Long enough to cover a healthy
+// round-trip (publish → client receives → acks) plus slack, short enough that an
+// incident alert that the desktop dropped still reaches mobile quickly. A var so
+// tests can shrink it. Must stay below the ack marker TTL (cache.notifAckTTL).
+var ackFallbackDelay = 8 * time.Second
+
 // NotificationService dispatches notifications to interested users while
 // honoring per-user mute preferences. It is intentionally tiny and parallel
 // to the events package: events update *every* connected client; this fans
@@ -93,6 +112,13 @@ type NotificationService struct {
 	follows   ThreadFollowStore
 	userState *UserStateService
 	push      MobilePushSender
+	ackStore  NotificationAckStore
+
+	// shutdown is closed by Close() to stop in-flight deferred ack-fallback
+	// pushes promptly on server shutdown rather than letting them sleep out the
+	// full ackFallbackDelay.
+	shutdown  chan struct{}
+	closeOnce sync.Once
 }
 
 // NewNotificationService builds a NotificationService. messages is used
@@ -100,7 +126,13 @@ type NotificationService struct {
 // participants). Pass nil and the thread path will degrade gracefully
 // to "no recipients beyond explicit @-mentions".
 func NewNotificationService(p Publisher, m MembershipStore, c ConversationStore, ch ChannelStore, u UserStore, msgs MessageStore) *NotificationService {
-	return &NotificationService{publisher: p, members: m, conv: c, channels: ch, users: u, messages: msgs}
+	return &NotificationService{publisher: p, members: m, conv: c, channels: ch, users: u, messages: msgs, shutdown: make(chan struct{})}
+}
+
+// Close signals in-flight deferred ack-fallback pushes to stop waiting and
+// exit. Idempotent and safe to call without ever having scheduled a push.
+func (s *NotificationService) Close() {
+	s.closeOnce.Do(func() { close(s.shutdown) })
 }
 
 // SetPresence wires a presence lookup so the @here mention can target only
@@ -116,6 +148,14 @@ func (s *NotificationService) SetUserStateService(userState *UserStateService) {
 
 func (s *NotificationService) SetMobilePushSender(push MobilePushSender) {
 	s.push = push
+}
+
+// SetAckStore wires the desktop-delivery acknowledgement store that gates the
+// deferred mobile-push fallback. Without it, an online recipient's push falls
+// back to the old presence-only behaviour (skipped) — so wiring this is what
+// closes the dead-socket delivery hole.
+func (s *NotificationService) SetAckStore(store NotificationAckStore) {
+	s.ackStore = store
 }
 
 // memberSnapshot is everything NotifyForMessage and its helpers need to
@@ -424,16 +464,53 @@ func (s *NotificationService) sendMobilePush(ctx context.Context, recipientUserI
 	if s.push == nil {
 		return
 	}
-	// Don't double-notify. A user with any live WebSocket connection already
-	// receives the in-app banner published just above, so a parallel push
-	// would land a second alert on the same device (native push + in-app on
-	// the mobile app) or a redundant ping on another. Push therefore targets
-	// only users who are offline — app backgrounded/closed, so the socket has
-	// dropped — matching the Slack/Mattermost model. IsOnline is Redis-backed,
-	// so the check holds across every backend instance and device.
-	if s.presence != nil && s.presence.IsOnline(recipientUserID) {
+	// Offline (no live WebSocket): nothing can ack, so the desktop can't be
+	// delivering this — push immediately. IsOnline is Redis-backed so the check
+	// holds across every backend instance and device.
+	if s.presence == nil || !s.presence.IsOnline(recipientUserID) {
+		s.deliverPush(ctx, recipientUserID, notif)
 		return
 	}
+	// Online: the desktop SHOULD deliver this, so we don't want to double-notify
+	// a healthy desktop with a redundant push. But "online" only means presence
+	// SAYS so — a half-open / asleep socket reads online for up to the
+	// dead-socket detection window. Trusting presence here is exactly the hole
+	// that drops incident alerts. So instead of skipping the push outright, we
+	// DEFER it and cancel only when the client actually ACKs the desktop
+	// notification. No ack within the window → the desktop never delivered →
+	// the push fires. Presence can now be wrong in EITHER direction without
+	// losing an alert.
+	if s.ackStore == nil || notif.MessageID == "" {
+		// No ack tracking (or nothing to key on) — fall back to the old
+		// presence-only behaviour: skip the push for an online user.
+		return
+	}
+	// Read the delay here (synchronously) rather than inside the goroutine so it
+	// is sequenced with the caller, not racing a test that swaps ackFallbackDelay.
+	go s.ackFallbackPush(context.WithoutCancel(ctx), recipientUserID, notif, ackFallbackDelay)
+}
+
+// ackFallbackPush waits `delay` for the desktop client to acknowledge the
+// notification, then pushes only if no ack arrived (desktop didn't deliver).
+func (s *NotificationService) ackFallbackPush(ctx context.Context, recipientUserID string, notif Notification, delay time.Duration) {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+	case <-s.shutdown:
+		// Server shutting down — drop the pending push rather than sleep it out.
+		return
+	}
+	if s.ackStore.WasNotificationAcked(ctx, recipientUserID, notif.MessageID) {
+		// Desktop confirmed delivery — no push needed.
+		return
+	}
+	s.deliverPush(ctx, recipientUserID, notif)
+}
+
+// deliverPush hands the notification to the push sender, logging an enqueue
+// failure. (Provider-side delivery failures are logged by the async worker.)
+func (s *NotificationService) deliverPush(ctx context.Context, recipientUserID string, notif Notification) {
 	if err := s.push.Send(ctx, recipientUserID, notif); err != nil {
 		slog.Warn(
 			"mobile push send failed",

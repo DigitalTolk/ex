@@ -218,9 +218,15 @@ func main() {
 	attachmentSvc.SetAccessChecker(messageSvc)
 	messageSvc.SetAttachmentManager(attachmentSvc)
 	notificationSvc := service.NewNotificationService(redisPubSub, membershipStore, conversationStore, channelStore, userStore, messageStore)
+	defer notificationSvc.Close() // stop in-flight deferred ack-fallback pushes on shutdown
 	notificationSvc.SetPresence(presenceSvc)
 	notificationSvc.SetThreadFollowStore(threadFollowStore)
 	notificationSvc.SetUserStateService(userStateSvc)
+	// Desktop-delivery acks: the notifier reads them to gate the deferred
+	// mobile-push fallback; the WS handler (below) records them. Both share the
+	// same Redis-backed store so an ack and the deferred push can live on
+	// different backend instances.
+	notificationSvc.SetAckStore(redisCache)
 	oneSignalPush, err := service.NewOneSignalPushSender(service.OneSignalConfig{
 		AppID:     cfg.OneSignalAppID,
 		APIKey:    cfg.OneSignalRESTAPIKey,
@@ -258,6 +264,7 @@ func main() {
 	channelH := handler.NewChannelHandler(channelSvc, messageSvc)
 	convH := handler.NewConversationHandler(convSvc, messageSvc)
 	wsH := handler.NewWSHandler(broker, channelSvc, convSvc, presenceSvc)
+	wsH.SetNotificationAckRecorder(redisCache)
 	wsH.SetPublisher(redisPubSub)
 	wsH.SetUserService(userSvc)
 	wsH.SetReplayer(inboxStream)

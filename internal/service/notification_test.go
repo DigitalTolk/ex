@@ -225,6 +225,141 @@ func TestNotificationService_NotifyForMessage_SkipsMobilePushForOnlineRecipients
 	}
 }
 
+// signalPush records each push recipient on a channel so a test can wait on
+// (or confirm the absence of) the deferred ack-fallback push deterministically.
+type signalPush struct{ sent chan string }
+
+func (p *signalPush) Send(_ context.Context, recipientUserID string, _ Notification) error {
+	p.sent <- recipientUserID
+	return nil
+}
+
+// stubAckStore reports a fixed set of (userID, messageID) acks as delivered.
+type stubAckStore struct{ acked map[string]bool }
+
+func (s *stubAckStore) WasNotificationAcked(_ context.Context, userID, messageID string) bool {
+	return s.acked[userID+":"+messageID]
+}
+
+func withShortAckDelay(t *testing.T) {
+	t.Helper()
+	orig := ackFallbackDelay
+	ackFallbackDelay = 10 * time.Millisecond
+	t.Cleanup(func() { ackFallbackDelay = orig })
+}
+
+func dmNotifier(t *testing.T) (*NotificationService, *signalPush) {
+	t.Helper()
+	svc, _, _, conv, _, users := setupNotifier(t)
+	push := &signalPush{sent: make(chan string, 4)}
+	svc.SetMobilePushSender(push)
+	users.users["u-author"] = &model.User{ID: "u-author", DisplayName: "Alice"}
+	users.users["u-bob"] = &model.User{ID: "u-bob", DisplayName: "Bob"}
+	conv.conversations["c1"] = &model.Conversation{
+		ID: "c1", Type: model.ConversationTypeDM, ParticipantIDs: []string{"u-author", "u-bob"},
+	}
+	return svc, push
+}
+
+func notifyDM(svc *NotificationService) {
+	svc.NotifyForMessage(context.Background(),
+		&model.Message{ID: "m1", ParentID: "c1", AuthorID: "u-author", Body: "incident!"}, ParentConversation)
+}
+
+// THE core fix: an "online" recipient whose desktop NEVER acks (dead/half-open
+// socket) must still get the mobile push once the ack window lapses. This is the
+// hole the presence-only gate left open.
+func TestNotificationService_MobilePush_OnlineButNoAck_FallsBackToPush(t *testing.T) {
+	withShortAckDelay(t)
+	svc, push := dmNotifier(t)
+	svc.SetPresence(&stubPresence{online: map[string]bool{"u-bob": true}})
+	svc.SetAckStore(&stubAckStore{acked: map[string]bool{}}) // nobody acked
+
+	notifyDM(svc)
+
+	select {
+	case uid := <-push.sent:
+		if uid != "u-bob" {
+			t.Fatalf("deferred push to %q, want u-bob", uid)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("online recipient never acked → mobile push must fire as fallback, but it didn't")
+	}
+}
+
+// An online recipient whose desktop DID ack must NOT get a redundant push.
+func TestNotificationService_MobilePush_OnlineAndAcked_NoPush(t *testing.T) {
+	withShortAckDelay(t)
+	svc, push := dmNotifier(t)
+	svc.SetPresence(&stubPresence{online: map[string]bool{"u-bob": true}})
+	svc.SetAckStore(&stubAckStore{acked: map[string]bool{"u-bob:m1": true}}) // desktop confirmed
+
+	notifyDM(svc)
+
+	select {
+	case uid := <-push.sent:
+		t.Fatalf("desktop ack must cancel the deferred push, but it pushed to %q", uid)
+	case <-time.After(200 * time.Millisecond): // ack delay is 10ms; 200ms proves no push fired
+	}
+}
+
+// An offline recipient (no socket to ack) is pushed immediately, no waiting.
+func TestNotificationService_MobilePush_Offline_PushesImmediately(t *testing.T) {
+	svc, push := dmNotifier(t)
+	svc.SetPresence(&stubPresence{online: map[string]bool{}}) // u-bob offline
+	svc.SetAckStore(&stubAckStore{acked: map[string]bool{}})
+
+	notifyDM(svc)
+
+	select {
+	case uid := <-push.sent:
+		if uid != "u-bob" {
+			t.Fatalf("immediate push to %q, want u-bob", uid)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("offline recipient must be pushed immediately")
+	}
+}
+
+// Server shutdown drops a pending deferred push rather than sleeping out the
+// full delay then pushing into a closing process.
+func TestNotificationService_MobilePush_ShutdownStopsDeferredPush(t *testing.T) {
+	svc, push := dmNotifier(t)
+	svc.SetPresence(&stubPresence{online: map[string]bool{"u-bob": true}})
+	svc.SetAckStore(&stubAckStore{acked: map[string]bool{}})
+	// A long delay so Close() reliably wins the race against the timer.
+	orig := ackFallbackDelay
+	ackFallbackDelay = 10 * time.Second
+	t.Cleanup(func() { ackFallbackDelay = orig })
+
+	notifyDM(svc) // spawns the deferred-push goroutine (waiting 10s)
+	svc.Close()   // signal shutdown → the goroutine returns without pushing
+	svc.Close()   // idempotent
+
+	select {
+	case uid := <-push.sent:
+		t.Fatalf("shutdown must cancel the deferred push, but pushed to %q", uid)
+	case <-time.After(200 * time.Millisecond):
+	}
+}
+
+// Without an ack store wired, an online recipient falls back to the old
+// presence-only behaviour (push skipped) — no deferred goroutine, no panic.
+func TestNotificationService_MobilePush_OnlineNoAckStore_SkipsPush(t *testing.T) {
+	withShortAckDelay(t)
+	svc, push := dmNotifier(t)
+	svc.SetPresence(&stubPresence{online: map[string]bool{"u-bob": true}})
+	// No SetAckStore.
+
+	notifyDM(svc)
+
+	select {
+	case uid := <-push.sent:
+		t.Fatalf("no ack store → online push should be skipped, but pushed to %q", uid)
+	case <-time.After(150 * time.Millisecond):
+	}
+}
+
 func TestNotificationService_MissingMobilePushConfigDoesNotBlockMessageDelivery(t *testing.T) {
 	svc, pub, members, _, chans, users := setupNotifier(t)
 	ctx := context.Background()
@@ -660,6 +795,68 @@ func TestNotificationService_NotifyForMessage_ChannelKeywordAtDefault_Publishes(
 
 	if got := publishedKinds(pub)[pubsub.UserChannel("u-bob")]; got != NotificationKindMessage {
 		t.Fatalf("keyword hit at default published kind %q, want message", got)
+	}
+}
+
+// --- Mobile notification level matrix. Offline recipients keep the push path
+// synchronous (no ack/timer), isolating the eff.MobileLevel switch arms that
+// the default-level tests (which only exercise MobileNotificationDefault) miss.
+
+func mobileLevelSetup(t *testing.T, mobile model.MobileNotificationLevel) (*NotificationService, *mockPublisher, *recordingMobilePush, *mockMembershipStore, *mockChannelStore, *mockUserStore) {
+	t.Helper()
+	svc, pub, members, _, chans, users := setupNotifier(t)
+	push := &recordingMobilePush{}
+	svc.SetMobilePushSender(push)
+	svc.SetPresence(&stubPresence{online: map[string]bool{}}) // recipient offline → immediate push
+	chans.channels["ch1"] = &model.Channel{ID: "ch1", Name: "general", Slug: "general", Type: model.ChannelTypePublic}
+	users.users["u-author"] = &model.User{ID: "u-author", DisplayName: "Alice"}
+	users.users["u-bob"] = &model.User{ID: "u-bob", DisplayName: "Bob", NotificationSettings: &model.NotificationSettings{
+		DesktopLevel: model.NotificationLevelMentions, // quiet desktop
+		MobileLevel:  mobile,
+	}}
+	members.memberships["ch1#u-author"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u-author"}
+	members.memberships["ch1#u-bob"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u-bob"}
+	return svc, pub, push, members, chans, users
+}
+
+func TestNotificationService_MobileLevelAll_PushesPlainChannelMessage(t *testing.T) {
+	svc, pub, push, _, _, _ := mobileLevelSetup(t, model.MobileNotificationAll)
+	svc.NotifyForMessage(context.Background(),
+		&model.Message{ID: "m1", ParentID: "ch1", AuthorID: "u-author", Body: "deploy started"}, ParentChannel)
+
+	// Desktop is quiet (mentions-only) so no banner; mobile is "all" so it pushes.
+	if len(pub.published) != 0 {
+		t.Fatalf("desktop published %d, want 0 (desktop level is mentions)", len(pub.published))
+	}
+	if len(push.calls) != 1 || push.calls[0].userID != "u-bob" {
+		t.Fatalf("mobile push calls = %#v, want one to u-bob (mobile level all)", push.calls)
+	}
+}
+
+func TestNotificationService_MobileLevelMentions_SuppressesPlainChannelMessage(t *testing.T) {
+	svc, pub, push, _, _, _ := mobileLevelSetup(t, model.MobileNotificationMentions)
+	svc.NotifyForMessage(context.Background(),
+		&model.Message{ID: "m1", ParentID: "ch1", AuthorID: "u-author", Body: "deploy started"}, ParentChannel)
+
+	if len(pub.published) != 0 {
+		t.Fatalf("desktop published %d, want 0", len(pub.published))
+	}
+	if len(push.calls) != 0 {
+		t.Fatalf("mobile push calls = %#v, want 0 (plain message, mobile level mentions)", push.calls)
+	}
+}
+
+func TestNotificationService_MobileLevelMentions_PushesAnExplicitMention(t *testing.T) {
+	svc, pub, push, _, _, _ := mobileLevelSetup(t, model.MobileNotificationMentions)
+	svc.NotifyForMessage(context.Background(),
+		&model.Message{ID: "m1", ParentID: "ch1", AuthorID: "u-author", Body: "paging @[u-bob|Bob]"}, ParentChannel)
+
+	// An explicit @-mention is eligible at the mentions level on BOTH surfaces.
+	if got := publishedKinds(pub)[pubsub.UserChannel("u-bob")]; got != NotificationKindMention {
+		t.Fatalf("desktop kind = %q, want mention", got)
+	}
+	if len(push.calls) != 1 || push.calls[0].userID != "u-bob" {
+		t.Fatalf("mobile push calls = %#v, want one to u-bob", push.calls)
 	}
 }
 

@@ -2,6 +2,18 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { playNotificationPing } from '@/lib/notification-sound';
 import { readJSON, writeJSON } from '@/lib/storage';
 import { useLatestRef } from '@/hooks/useLatestRef';
+import { sendWS } from '@/lib/ws-sender';
+import { hasSeenNotification, recordNotification } from '@/lib/notification-dedup';
+
+// ackDesktopDelivery tells the backend the desktop made the user aware of this
+// message (we surfaced it, or they were already looking at the channel), so the
+// deferred mobile-push fallback stands down. A dead/absent socket can't send
+// this — so no ack → the backend pushes to mobile. This is what closes the
+// "desktop looked online but never delivered" hole.
+function ackDesktopDelivery(messageID: string | undefined): void {
+  if (!messageID) return;
+  sendWS({ type: 'notification.ack', messageID });
+}
 
 // NotificationKind mirrors backend service.NotificationKind. Adding a new
 // kind here is the single client-side place where a new alert flavor is
@@ -97,16 +109,10 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   const [permission, setPermission] = useState<Permission>(readPermission);
   const activeParentRef = useRef<string | null>(null);
   const currentUserIDRef = useRef<string | null>(null);
-  // Per-message dedup. The backend emits exactly one notification per
-  // recipient per message, but the same alert can still reach this client
-  // more than once: the broker fans out to every WebSocket session a user
-  // has, and reconnect replay races re-deliver buffered events. Each copy
-  // carries a fresh event-frame id (so the socket-level dedup misses it) but
-  // the same messageID — so we dedup here by message identity to guarantee a
-  // single message never pops two banners (or double-pings). Bounded FIFO so
-  // memory stays flat over a long session.
-  const seenMessageIDsRef = useRef<Set<string>>(new Set());
-  const seenMessageOrderRef = useRef<string[]>([]);
+  // Per-message dedup lives in @/lib/notification-dedup — a localStorage-backed
+  // store SHARED across all of this user's browser tabs, so the same message
+  // never pops once per tab. (A per-tab in-memory set, the old design, only
+  // deduped within a single tab — where duplicates barely occur.)
   // Mirror reactive state into refs so `dispatch` can be a stable callback
   // — recreating it on every prefs/permission change would invalidate the
   // memoized context value and re-render every consumer of useNotifications.
@@ -168,17 +174,20 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const dispatch = useCallback((n: NotificationPayload) => {
-    // Drop a repeat of a message we've ALREADY alerted on (multi-session
-    // fan-out / a double-publish). Only a *check* here — we record the
-    // messageID as alerted at the very end, and only once we actually surface
-    // sound or a popup. Recording up-front (the previous behaviour) meant a
-    // copy that was merely suppressed (you were viewing the channel) or that
-    // failed to surface (popup threw in a webview, or permission not yet
-    // granted) permanently deduped the messageID, so a later legitimate
-    // delivery for it was silently swallowed. For an incident channel that is
-    // exactly the alert you cannot afford to lose. Notifications without a
-    // messageID (defensive) skip dedup entirely.
-    if (n.messageID && seenMessageIDsRef.current.has(n.messageID)) {
+    const now = Date.now();
+    // Drop a repeat of a message we've ALREADY alerted on (multi-tab fan-out /
+    // a double-publish). Only a *check* here — we record the messageID as
+    // alerted at the very end, and only once we actually surface sound or a
+    // popup. Recording up-front (the previous behaviour) meant a copy that was
+    // merely suppressed (you were viewing the channel) or that failed to
+    // surface (popup threw in a webview, or permission not yet granted)
+    // permanently deduped the messageID, so a later legitimate delivery was
+    // silently swallowed. For an incident channel that is exactly the alert you
+    // cannot afford to lose. Notifications without a messageID (defensive) skip
+    // dedup entirely. A duplicate still acks: it proves the desktop is alive and
+    // already aware, so the mobile-push fallback should stand down.
+    if (n.messageID && hasSeenNotification(n.messageID, now)) {
+      ackDesktopDelivery(n.messageID);
       return;
     }
     // Server-side recipient filtering already excludes the author, but
@@ -211,6 +220,9 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       document.visibilityState === 'visible' &&
       appFocusedRef.current
     ) {
+      // Suppressed because the user is looking right at it on desktop — they're
+      // aware, so ack to stand the mobile fallback down (no redundant push).
+      ackDesktopDelivery(n.messageID);
       return;
     }
     const { soundEnabled, browserEnabled } = prefsRef.current;
@@ -258,17 +270,13 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
         // (if sound also didn't fire) so a retry isn't deduped away.
       }
     }
-    // Record as alerted only after we actually surfaced something, so a
-    // duplicate delivery doesn't double-ping/double-banner, while a delivery
-    // that surfaced nothing stays eligible for a later retry.
+    // Record as alerted (shared across tabs) only after we actually surfaced
+    // something, so a duplicate delivery doesn't double-ping/double-banner,
+    // while a delivery that surfaced nothing stays eligible for a later retry.
+    // Ack desktop delivery so the backend cancels the deferred mobile push.
     if (n.messageID && delivered) {
-      seenMessageIDsRef.current.add(n.messageID);
-      seenMessageOrderRef.current.push(n.messageID);
-      if (seenMessageOrderRef.current.length > 256) {
-        const oldest = seenMessageOrderRef.current.shift();
-        /* istanbul ignore next -- length just exceeded 256 so shift() always returns a string; the falsy arm is defensive */
-        if (oldest) seenMessageIDsRef.current.delete(oldest);
-      }
+      recordNotification(n.messageID, now);
+      ackDesktopDelivery(n.messageID);
     }
   }, [permissionRef, prefsRef]);
 

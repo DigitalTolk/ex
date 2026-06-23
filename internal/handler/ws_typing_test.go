@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"sync"
 	"testing"
 
@@ -11,6 +12,62 @@ import (
 	"github.com/DigitalTolk/ex/internal/pubsub"
 	"github.com/DigitalTolk/ex/internal/service"
 )
+
+// fakeAckRecorder records desktop-delivery acks for the inbound-frame tests.
+type fakeAckRecorder struct {
+	mu    sync.Mutex
+	calls map[string]string // userID -> last acked messageID
+	err   error
+}
+
+func (f *fakeAckRecorder) MarkNotificationAcked(_ context.Context, userID, messageID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.calls == nil {
+		f.calls = map[string]string{}
+	}
+	f.calls[userID] = messageID
+	return f.err
+}
+
+func TestWSHandler_HandleInbound_NotificationAckRecorded(t *testing.T) {
+	rec := &fakeAckRecorder{}
+	h := &WSHandler{}
+	h.SetNotificationAckRecorder(rec)
+	raw, _ := json.Marshal(map[string]string{"type": "notification.ack", "messageID": "m-42"})
+	h.handleInbound(context.Background(), "u-1", raw)
+	if rec.calls["u-1"] != "m-42" {
+		t.Fatalf("ack recorded = %q, want m-42", rec.calls["u-1"])
+	}
+}
+
+func TestWSHandler_HandleInbound_NotificationAckNoRecorderOrEmptyID(t *testing.T) {
+	// No recorder wired → no-op, no panic.
+	h := &WSHandler{}
+	raw, _ := json.Marshal(map[string]string{"type": "notification.ack", "messageID": "m-1"})
+	h.handleInbound(context.Background(), "u-1", raw)
+
+	// Recorder wired but an empty messageID is skipped.
+	rec := &fakeAckRecorder{}
+	h.SetNotificationAckRecorder(rec)
+	raw2, _ := json.Marshal(map[string]string{"type": "notification.ack"})
+	h.handleInbound(context.Background(), "u-1", raw2)
+	if len(rec.calls) != 0 {
+		t.Fatalf("empty messageID must not record an ack; got %v", rec.calls)
+	}
+}
+
+func TestWSHandler_HandleInbound_NotificationAckRecorderErrorLogged(t *testing.T) {
+	// A recorder error is logged, never fatal.
+	rec := &fakeAckRecorder{err: errors.New("redis down")}
+	h := &WSHandler{}
+	h.SetNotificationAckRecorder(rec)
+	raw, _ := json.Marshal(map[string]string{"type": "notification.ack", "messageID": "m-1"})
+	h.handleInbound(context.Background(), "u-1", raw) // must not panic
+	if rec.calls["u-1"] != "m-1" {
+		t.Fatal("recorder should still have been invoked")
+	}
+}
 
 // stubPublisher records every Publish call so the test can assert on
 // the topic + payload that the WSHandler emitted.
