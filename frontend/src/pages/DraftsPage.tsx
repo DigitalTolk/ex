@@ -10,7 +10,7 @@ import { useUserConversations } from '@/hooks/useConversations';
 import { useDeleteDraft, useDrafts } from '@/hooks/useDrafts';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { formatLongDateTime, slugify } from '@/lib/format';
-import { CHANNEL_MENTION_RE_GLOBAL, USER_MENTION_RE_GLOBAL } from '@/lib/mention-syntax';
+import { toPlainTextPreview } from '@/lib/message-preview';
 import type { MessageDraft } from '@/types';
 
 export default function DraftsPage() {
@@ -147,9 +147,5 @@ function draftHref(draft: MessageDraft, channelName: string): string {
 }
 
 function draftPreview(draft: MessageDraft): string {
-  return draft.body
-    .replace(USER_MENTION_RE_GLOBAL, '@$2')
-    .replace(CHANNEL_MENTION_RE_GLOBAL, '~$2')
-    .replace(/\s+/g, ' ')
-    .trim() || 'Attachment draft';
+  return toPlainTextPreview(draft.body) || 'Attachment draft';
 }

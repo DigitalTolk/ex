@@ -76,6 +76,18 @@ const WORD_REPLACEMENTS = new Map([
   ['wheelchair', 'wheelchair'],
 ]);
 
+// CANONICAL_EMOJI_NAMES MUST mirror the map of the same name in
+// src/lib/emoji-shortcodes.ts. The frontend remaps these generated names to
+// friendlier shortcodes and the composer stores THOSE, so the backend's Go map
+// must key by the canonical form or it won't render them in notifications. Keep
+// the two in sync.
+const CANONICAL_EMOJI_NAMES = new Map([
+  ['beam_face_smile_eyes', 'grin'],
+  ['flexed_biceps', 'muscle'],
+  ['person_bowing', 'bow'],
+  ['thinking_face', 'thinking'],
+]);
+
 const NAME_OVERRIDES = new Map([
   ['grinning_face_with_smiling_eyes', 'smile'],
   ['grinning_face_with_sweat', 'sweat_smile'],
@@ -194,7 +206,9 @@ for (const g of groups) {
     lines.push(
       `  { name: ${JSON.stringify(name)}, unicode: ${JSON.stringify(e.emoji)}, category: ${JSON.stringify(g.slug)} },`,
     );
-    shortcodePairs.push([name, e.emoji]);
+    // The Go map keys by the canonical (composer-stored) name, mirroring the
+    // frontend's runtime remap in emoji-shortcodes.ts.
+    shortcodePairs.push([CANONICAL_EMOJI_NAMES.get(name) ?? name, e.emoji]);
   }
 }
 lines.push('];');

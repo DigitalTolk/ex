@@ -973,6 +973,7 @@ func TestPreviewBody_FlattensMentionsAndRendersEmoji(t *testing.T) {
 		{"channel mention", "see ~[ch-1|general]", "see ~general"},
 		{"both mention kinds", "@[u-1|Bob] check ~[ch-9|incidents]", "@Bob check ~incidents"},
 		{"known emoji shortcode", "deploy done :tada:", "deploy done 🎉"},
+		{"canonical-name emoji (frontend remap)", "hmm :thinking: :muscle:", "hmm 🤔 💪"},
 		{"multiple emoji", ":fire: prod is :fire:", "🔥 prod is 🔥"},
 		{"toned emoji renders base glyph", "nice :thumbsup::skin-tone-3:", "nice 👍"},
 		{"unknown toned shortcode left as-is", "x :notareal::skin-tone-2:", "x :notareal::skin-tone-2:"},
@@ -995,7 +996,7 @@ func TestEmojiShortcodeMap_Wired(t *testing.T) {
 	if len(emojiShortcodeToUnicode) < 1000 {
 		t.Fatalf("emoji shortcode map has %d entries, want a full set (regenerate via build-emoji-data.mjs)", len(emojiShortcodeToUnicode))
 	}
-	for sc, want := range map[string]string{"smile": "😄", "thumbsup": "👍", "tada": "🎉"} {
+	for sc, want := range map[string]string{"smile": "😄", "thumbsup": "👍", "tada": "🎉", "thinking": "🤔", "muscle": "💪"} {
 		if got := emojiShortcodeToUnicode[sc]; got != want {
 			t.Errorf("emojiShortcodeToUnicode[%q] = %q, want %q", sc, got, want)
 		}

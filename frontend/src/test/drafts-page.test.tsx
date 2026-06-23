@@ -86,7 +86,7 @@ describe('DraftsPage', () => {
             userID: 'u-1',
             parentID: 'ch-1',
             parentType: 'channel',
-            body: 'ping @[u-2|Ada Lovelace] in ~[ch-2|engineering]',
+            body: 'ping @[u-2|Ada Lovelace] in ~[ch-2|engineering] :tada:',
             updatedAt: '2026-05-03T12:00:00Z',
             createdAt: '2026-05-03T11:00:00Z',
           },
@@ -102,9 +102,10 @@ describe('DraftsPage', () => {
     renderPage();
 
     const row = await screen.findByTestId('draft-row');
-    expect(row).toHaveTextContent('ping @Ada Lovelace in ~engineering');
+    expect(row).toHaveTextContent('ping @Ada Lovelace in ~engineering 🎉');
     expect(row).not.toHaveTextContent('@[u-2|Ada Lovelace]');
     expect(row).not.toHaveTextContent('~[ch-2|engineering]');
+    expect(row).not.toHaveTextContent(':tada:');
   });
 
   it('shows the empty state', async () => {
