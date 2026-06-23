@@ -149,50 +149,22 @@ func arMatchCandidates(orphan *model.Attachment, victims []arVictim, window time
 func arCollectVictims(ctx context.Context, channelStore *store.ChannelStoreImpl, convStore *store.ConversationStoreImpl, messageStore *store.MessageStoreImpl) (map[string][]arVictim, int, error) {
 	byAuthor := map[string][]arVictim{}
 	count := 0
+	var scanErr error
 
-	scanParent := func(parentID, parentType string) error {
-		cursor := ""
-		for {
-			msgs, hasMore, err := messageStore.List(ctx, parentID, cursor, scanPageSize)
-			if err != nil {
-				return fmt.Errorf("scan messages: %w", err)
-			}
-			if len(msgs) == 0 {
+	forEachParent(ctx, channelStore, convStore, func(parentID, parentType, _ string) {
+		if scanErr != nil {
+			return
+		}
+		scanErr = forEachMessage(ctx, messageStore, parentID, func(m *model.Message) error {
+			count++
+			if m.Deleted || m.EditedAt == nil || len(m.AttachmentIDs) > 0 || m.AuthorID == "" {
 				return nil
 			}
-			for _, m := range msgs {
-				count++
-				if m.Deleted || m.EditedAt == nil || len(m.AttachmentIDs) > 0 || m.AuthorID == "" {
-					continue
-				}
-				byAuthor[m.AuthorID] = append(byAuthor[m.AuthorID], arVictim{parentID: parentID, parentType: parentType, msg: m})
-			}
-			if !hasMore {
-				return nil
-			}
-			cursor = msgs[len(msgs)-1].ID
-		}
-	}
-
-	channels, err := channelStore.ListAll(ctx)
-	if err != nil {
-		return nil, 0, fmt.Errorf("list channels: %w", err)
-	}
-	for _, ch := range channels {
-		if err := scanParent(ch.ID, "channel"); err != nil {
-			return nil, 0, err
-		}
-	}
-	convs, err := convStore.ListAll(ctx)
-	if err != nil {
-		return nil, 0, fmt.Errorf("list conversations: %w", err)
-	}
-	for _, c := range convs {
-		if err := scanParent(c.ID, "conversation"); err != nil {
-			return nil, 0, err
-		}
-	}
-	return byAuthor, count, nil
+			byAuthor[m.AuthorID] = append(byAuthor[m.AuthorID], arVictim{parentID: parentID, parentType: parentType, msg: m})
+			return nil
+		})
+	})
+	return byAuthor, count, scanErr
 }
 
 // arApplyRelink writes the repair: the message regains the attachment IDs, the

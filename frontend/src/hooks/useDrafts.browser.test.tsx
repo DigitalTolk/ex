@@ -273,7 +273,9 @@ describe('useDrafts — save and delete mutations', () => {
     // for an instant sidebar / Drafts-page update.
     const scope = { parentID: 'ch-c', parentType: 'channel' as const };
     apiFetchMock.mockResolvedValue(undefined);
-    const { qc, screen } = await renderMutation(useClearDraftForScope as never, scope, {
+    // useClearDraftForScope returns a plain function now; adapt it to the
+    // { mutate } shape renderMutation drives.
+    const { qc, screen } = await renderMutation((() => ({ mutate: useClearDraftForScope() })) as never, scope, {
       key: queryKeys.drafts(),
       data: [draft({ id: 'd-c', parentID: 'ch-c' }), draft({ id: 'd-other', parentID: 'ch-x' })],
     });

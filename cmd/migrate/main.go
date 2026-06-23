@@ -33,6 +33,7 @@ import (
 	"strings"
 
 	"github.com/DigitalTolk/ex/internal/config"
+	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/DigitalTolk/ex/internal/store"
 )
 
@@ -134,4 +135,52 @@ func fatal(msg string, err error) {
 	}
 	slog.Error(msg, "error", err)
 	os.Exit(1)
+}
+
+// forEachParent walks every channel then every conversation — the message
+// partitions every backfill scans — invoking fn(parentID, parentType, name) for
+// each. name is the channel name (empty for conversations) for log context. A
+// store list failure is fatal (the migration can't proceed without the full set).
+func forEachParent(ctx context.Context, channelStore *store.ChannelStoreImpl, convStore *store.ConversationStoreImpl, fn func(parentID, parentType, name string)) {
+	channels, err := channelStore.ListAll(ctx)
+	if err != nil {
+		fatal("list channels", err)
+	}
+	slog.Info("scanned channels", "count", len(channels))
+	for _, ch := range channels {
+		fn(ch.ID, "channel", ch.Name)
+	}
+	convs, err := convStore.ListAll(ctx)
+	if err != nil {
+		fatal("list conversations", err)
+	}
+	slog.Info("scanned conversations", "count", len(convs))
+	for _, c := range convs {
+		fn(c.ID, "conversation", "")
+	}
+}
+
+// forEachMessage pages through every MSG# row under one parent (oldest cursor
+// forward, scanPageSize at a time) and calls fn for each. fn's error aborts the
+// walk for that parent.
+func forEachMessage(ctx context.Context, messageStore *store.MessageStoreImpl, parentID string, fn func(*model.Message) error) error {
+	cursor := ""
+	for {
+		msgs, hasMore, err := messageStore.List(ctx, parentID, cursor, scanPageSize)
+		if err != nil {
+			return fmt.Errorf("scan messages: %w", err)
+		}
+		if len(msgs) == 0 {
+			return nil
+		}
+		for _, m := range msgs {
+			if err := fn(m); err != nil {
+				return err
+			}
+		}
+		if !hasMore {
+			return nil
+		}
+		cursor = msgs[len(msgs)-1].ID
+	}
 }

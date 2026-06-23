@@ -5,7 +5,7 @@ import { useUsersBatch } from '@/hooks/useUsersBatch';
 import { useFrequentEmojis } from '@/hooks/useEmoji';
 import { Header } from '@/components/layout/Header';
 import { MessageList } from './MessageList';
-import { MessageInput, type MessageInputHandle } from './MessageInput';
+import { MessageInput, type MessageInputHandle, type MessageInputValue } from './MessageInput';
 import { MessageDropZone } from './MessageDropZone';
 import { MemberList } from './MemberList';
 import { ThreadPanel } from './ThreadPanel';
@@ -151,11 +151,10 @@ export function ConversationView() {
     !editingMessage || editAttachmentIDs.length === 0 || !editAttachmentsLoading;
   const editMessage = useEditMessage();
   const saveDraft = useSaveDraft();
-  const clearDraft = useClearDraftForScope();
+  const clearDraftMutate = useClearDraftForScope();
   const saveDraftMutate = saveDraft.mutate;
-  const clearDraftMutate = clearDraft.mutate;
   const handleDraftChange = useCallback(
-    (value: { body: string; attachmentIDs: string[]; ts?: number }, options?: { notify?: boolean }) => {
+    (value: MessageInputValue, options?: { notify?: boolean }) => {
       if (!id) return;
       restoreDraftScopeForContent(draftScope, value);
       saveDraftMutate({

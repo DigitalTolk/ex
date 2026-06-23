@@ -19,17 +19,22 @@ type DraftClearer interface {
 	DeleteForScope(ctx context.Context, userID, parentID, parentType, parentMessageID string, ts int64) error
 }
 
-// clearSentDraft removes the scope's draft after a successful send. Best-effort:
-// the message is already created, so a clear failure is logged, not surfaced. ts
-// is the client's send time, used for last-write-wins ordering so a keystroke
-// save still in flight can't resurrect the just-sent draft.
+// clearSentDraft removes the scope's draft after a successful send. Best-effort
+// and OFF the hot path: like the notify/index side effects of a send, it runs in
+// a detached goroutine so the response doesn't wait on the draft store + pub/sub.
+// A failure is only logged (the message is already created). ts is the client's
+// send time, used for last-write-wins so a keystroke save still in flight can't
+// resurrect the just-sent draft.
 func clearSentDraft(ctx context.Context, clearer DraftClearer, userID, parentID, parentType, parentMessageID string, ts int64) {
 	if clearer == nil {
 		return
 	}
-	if err := clearer.DeleteForScope(ctx, userID, parentID, parentType, parentMessageID, ts); err != nil {
-		slog.Warn("clear sent draft failed", "userID", userID, "parentID", parentID, "parentType", parentType, "error", err)
-	}
+	bg := context.WithoutCancel(ctx)
+	go func() {
+		if err := clearer.DeleteForScope(bg, userID, parentID, parentType, parentMessageID, ts); err != nil {
+			slog.Warn("clear sent draft failed", "userID", userID, "parentID", parentID, "parentType", parentType, "error", err)
+		}
+	}()
 }
 
 // DraftHandler exposes server-side message draft endpoints.

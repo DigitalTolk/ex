@@ -4,7 +4,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { Header } from '@/components/layout/Header';
 import { NotificationPreferencesDialog } from '@/components/channels/NotificationPreferencesDialog';
 import { MessageList } from './MessageList';
-import { MessageInput, type MessageInputHandle } from './MessageInput';
+import { MessageInput, type MessageInputHandle, type MessageInputValue } from './MessageInput';
 import { MessageDropZone } from './MessageDropZone';
 import { MemberList } from './MemberList';
 import { ThreadPanel } from './ThreadPanel';
@@ -170,11 +170,10 @@ export function ChannelView() {
   // invite them in one click (see NonMemberInvitePrompt).
   const { pendingInvites, checkMentions, clearInvites } = useNonMemberInvite(channel?.id, user?.id);
   const saveDraft = useSaveDraft();
-  const clearDraft = useClearDraftForScope();
+  const clearDraftMutate = useClearDraftForScope();
   const saveDraftMutate = saveDraft.mutate;
-  const clearDraftMutate = clearDraft.mutate;
   const handleDraftChange = useCallback(
-    (value: { body: string; attachmentIDs: string[]; ts?: number }, options?: { notify?: boolean }) => {
+    (value: MessageInputValue, options?: { notify?: boolean }) => {
       if (!channelID) return;
       restoreDraftScopeForContent(draftScope, value);
       saveDraftMutate({

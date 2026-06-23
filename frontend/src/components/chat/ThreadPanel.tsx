@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { MessageItem } from './MessageItem';
 import { isGroupedWithPrevious } from './MessageListRows';
-import { MessageInput, type MessageInputHandle } from './MessageInput';
+import { MessageInput, type MessageInputHandle, type MessageInputValue } from './MessageInput';
 import { MessageDropZone } from './MessageDropZone';
 import { NonMemberInvitePrompt } from './NonMemberInvitePrompt';
 import { useNonMemberInvite } from '@/hooks/useNonMemberInvite';
@@ -124,9 +124,8 @@ export function ThreadPanel({
   const { data: draft } = useDraftForScope(draftScope);
   const draftAttachments = useDraftAttachmentChips(draft?.attachmentIDs);
   const saveDraft = useSaveDraft();
-  const clearDraft = useClearDraftForScope();
+  const clearDraftMutate = useClearDraftForScope();
   const saveDraftMutate = saveDraft.mutate;
-  const clearDraftMutate = clearDraft.mutate;
   const editMessage = useEditMessage();
   const editAttachmentIDs = activeEditingMessage?.attachmentIDs ?? [];
   // Pass the access context so the server authorizes the resolve — without
@@ -379,7 +378,7 @@ export function ThreadPanel({
   }, [anchorMsgId, wasAtBottomRef]);
 
   const handleDraftChange = useCallback(
-    (value: SendMessageInput & { ts?: number }, options?: { notify?: boolean }) => {
+    (value: MessageInputValue, options?: { notify?: boolean }) => {
       /* istanbul ignore next -- ThreadPanel always renders inside a channel or conversation, so parentID (channelId ?? conversationId) is always set; defensive. */
       if (!parentID) return;
       restoreDraftScopeForContent(draftScope, value);

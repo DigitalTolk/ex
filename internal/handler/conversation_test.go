@@ -918,7 +918,7 @@ func TestConvHandlerFull_SendMessage_ClearsDraftByScope(t *testing.T) {
 	env.convs.conversations["conv-msg"] = &model.Conversation{
 		ID: "conv-msg", Type: model.ConversationTypeDM, ParticipantIDs: []string{"u-sender", "u-receiver"},
 	}
-	fake := &fakeDraftClearer{}
+	fake := &fakeDraftClearer{done: make(chan struct{}, 1)}
 	env.handler.SetDraftClearer(fake)
 	user := &model.User{ID: "u-sender", Email: "sender@test.com", SystemRole: model.SystemRoleMember}
 	token := makeTokenForUser(env.jwtMgr, user)
@@ -933,6 +933,7 @@ func TestConvHandlerFull_SendMessage_ClearsDraftByScope(t *testing.T) {
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
 	}
+	fake.waitForCall(t)
 	if len(fake.calls) != 1 || fake.calls[0] != (draftClearCall{"u-sender", "conv-msg", service.ParentConversation, "", 99}) {
 		t.Fatalf("clear call = %+v", fake.calls)
 	}

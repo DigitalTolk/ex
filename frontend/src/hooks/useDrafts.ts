@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useMemo } from 'react';
+import { useCallback, useMemo } from 'react';
 import type { DraftAttachment } from '@/components/chat/AttachmentChip';
 import { apiFetch } from '@/lib/api';
 import { queryKeys } from '@/lib/query-keys';
@@ -38,12 +38,9 @@ function draftScopeKey(scope: DraftScope): string {
   return `${scope.parentType}:${scope.parentID ?? ''}:${scope.parentMessageID ?? ''}`;
 }
 
-function isSuppressedSentDraft(draft: MessageDraft): boolean {
-  return suppressedSentDraftScopes.has(draftScopeKey(draft));
-}
-
 // isScopeSuppressed reports whether a scope was just sent (so any draft for it
 // should be cleared, not surfaced). Restored when the user types new content.
+// A MessageDraft is a valid DraftScope (shares parentID/parentType/parentMessageID).
 function isScopeSuppressed(scope: DraftScope): boolean {
   return suppressedSentDraftScopes.has(draftScopeKey(scope));
 }
@@ -83,7 +80,7 @@ function patchDraftListByScope(
 ): MessageDraft[] | undefined {
   if (!drafts) return drafts;
   const withoutScope = drafts.filter((item) => !sameDraftScope(item, scope));
-  if (!draft || isSuppressedSentDraft(draft)) return withoutScope;
+  if (!draft || isScopeSuppressed(draft)) return withoutScope;
   return [draft, ...withoutScope];
 }
 
@@ -120,7 +117,7 @@ export function useDrafts(options?: { enabled?: boolean }) {
     queryKey: queryKeys.drafts(),
     queryFn: async () => {
       const res = await apiFetch<MessageDraft[]>('/api/v1/drafts');
-      return Array.isArray(res) ? res.filter((draft) => !isSuppressedSentDraft(draft)) : [];
+      return Array.isArray(res) ? res.filter((draft) => !isScopeSuppressed(draft)) : [];
     },
     enabled: options?.enabled ?? true,
     staleTime: 15_000,
@@ -129,15 +126,7 @@ export function useDrafts(options?: { enabled?: boolean }) {
 
 export function useDraftForScope(scope: DraftScope) {
   const drafts = useDrafts();
-  return {
-    ...drafts,
-    data: drafts.data?.find(
-      (d) =>
-        d.parentID === scope.parentID &&
-        d.parentType === scope.parentType &&
-        (d.parentMessageID ?? '') === (scope.parentMessageID ?? ''),
-    ),
-  };
+  return { ...drafts, data: findDraftByScope(drafts.data, scope) };
 }
 
 export function useSaveDraft() {
@@ -190,15 +179,15 @@ export function useSaveDraft() {
   });
 }
 
-// useClearDraftForScope drops a sent scope's draft from the LOCAL cache for an
-// instant UI update. The SERVER-side delete is folded into the message-send call
-// (the backend clears the draft as it creates the message, ordered by client ts
-// last-write-wins), so this makes NO network request of its own.
+// useClearDraftForScope returns a function that drops a sent scope's draft from
+// the LOCAL cache for an instant UI update. The SERVER-side delete is folded
+// into the message-send call (the backend clears the draft as it creates the
+// message, ordered by client ts last-write-wins), so this makes NO network
+// request — it's a plain cache patch, not a mutation.
 export function useClearDraftForScope() {
   const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (_scope: DraftScope) => Promise.resolve(),
-    onMutate: (scope: DraftScope) => {
+  return useCallback(
+    (scope: DraftScope) => {
       // Ignore the server's resulting draft.updated echo, then optimistically
       // remove the scope so the sidebar / Drafts page update without waiting.
       markLocalDraftDelete();
@@ -207,7 +196,8 @@ export function useClearDraftForScope() {
         (old) => old?.filter((d) => !sameDraftScope(d, scope)),
       );
     },
-  });
+    [qc],
+  );
 }
 
 export function useDeleteDraft() {

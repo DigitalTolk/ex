@@ -93,10 +93,7 @@ func (s *DraftService) Upsert(ctx context.Context, userID, parentID, parentType,
 	}
 
 	now := time.Now()
-	ts := cfg.ts
-	if ts == 0 {
-		ts = now.UnixMilli()
-	}
+	ts := tsOrNow(cfg.ts)
 
 	id := draftID(userID, parentType, parentID, parentMessageID)
 	if body == "" && len(attachmentIDs) == 0 {
@@ -155,10 +152,7 @@ func (s *DraftService) Delete(ctx context.Context, userID, id string, ts int64) 
 	if id == "" {
 		return errors.New("draft: id required")
 	}
-	if ts == 0 {
-		ts = time.Now().UnixMilli()
-	}
-	if err := s.drafts.Delete(ctx, userID, id, ts); err != nil {
+	if err := s.drafts.Delete(ctx, userID, id, tsOrNow(ts)); err != nil {
 		return fmt.Errorf("draft: delete: %w", err)
 	}
 	s.publishUpdated(ctx, userID, id)
@@ -171,10 +165,7 @@ func (s *DraftService) Delete(ctx context.Context, userID, id string, ts int64) 
 // the caller knowing the draft id.
 func (s *DraftService) DeleteForScope(ctx context.Context, userID, parentID, parentType, parentMessageID string, ts int64) error {
 	id := draftID(userID, parentType, parentID, parentMessageID)
-	if ts == 0 {
-		ts = time.Now().UnixMilli()
-	}
-	if err := s.drafts.Delete(ctx, userID, id, ts); err != nil {
+	if err := s.drafts.Delete(ctx, userID, id, tsOrNow(ts)); err != nil {
 		return fmt.Errorf("draft: delete for scope: %w", err)
 	}
 	s.publishUpdated(ctx, userID, id)
@@ -223,6 +214,15 @@ func (s *DraftService) publishUpdated(ctx context.Context, userID, draftID strin
 	events.Publish(ctx, s.publisher, pubsub.UserChannel(userID), events.EventDraftUpdated, map[string]string{
 		"id": draftID,
 	})
+}
+
+// tsOrNow defaults a missing client timestamp (0) to server time, in epoch ms.
+// It's the single home for the last-write-wins clock fallback.
+func tsOrNow(ts int64) int64 {
+	if ts == 0 {
+		return time.Now().UnixMilli()
+	}
+	return ts
 }
 
 func draftID(userID, parentType, parentID, parentMessageID string) string {

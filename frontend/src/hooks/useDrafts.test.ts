@@ -241,8 +241,7 @@ describe('useDrafts', () => {
     ]);
     const wrapper = ({ children }: { children: ReactNode }) => createElement(QueryClientProvider, { client: qc }, children);
     const { result } = renderHook(() => useClearDraftForScope(), { wrapper });
-    act(() => result.current.mutate({ parentID: 'dm-1', parentType: 'conversation' }));
-    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    act(() => result.current({ parentID: 'dm-1', parentType: 'conversation' }));
     expect(apiFetch).not.toHaveBeenCalled();
     expect((qc.getQueryData<MessageDraft[]>(['drafts']) ?? []).map((d) => d.id)).toEqual(['keep']);
   });

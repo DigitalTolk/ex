@@ -2,11 +2,11 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"sort"
 	"time"
 
+	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/DigitalTolk/ex/internal/store"
 )
 
@@ -27,28 +27,12 @@ func runParentIndex(ctx context.Context, db *store.DB, args []string) int {
 	slog.Info("starting parent-index backfill", "mode", mode, "table", db.Table)
 
 	t := piTotals{}
-	channels, err := channelStore.ListAll(ctx)
-	if err != nil {
-		fatal("list channels", err)
-	}
-	slog.Info("scanned channels", "count", len(channels))
-	for _, ch := range channels {
-		if err := piBackfill(ctx, messageStore, indexStore, ch.ID, "channel", dryRun, verbose, &t); err != nil {
-			slog.Error("channel backfill failed", "channelID", ch.ID, "name", ch.Name, "error", err)
+	forEachParent(ctx, channelStore, convStore, func(parentID, parentType, name string) {
+		if err := piBackfill(ctx, messageStore, indexStore, parentID, parentType, dryRun, verbose, &t); err != nil {
+			slog.Error("backfill failed", "parentID", parentID, "parentType", parentType, "name", name, "error", err)
 			t.errors++
 		}
-	}
-	convs, err := convStore.ListAll(ctx)
-	if err != nil {
-		fatal("list conversations", err)
-	}
-	slog.Info("scanned conversations", "count", len(convs))
-	for _, c := range convs {
-		if err := piBackfill(ctx, messageStore, indexStore, c.ID, "conversation", dryRun, verbose, &t); err != nil {
-			slog.Error("conversation backfill failed", "conversationID", c.ID, "error", err)
-			t.errors++
-		}
-	}
+	})
 
 	slog.Info("backfill complete",
 		"mode", mode,
@@ -90,41 +74,30 @@ func piBackfill(ctx context.Context, messageStore *store.MessageStoreImpl, index
 	pinned := map[string]pinClaim{}
 	attachments := map[string]attachmentClaim{}
 
-	cursor := ""
-	for {
-		msgs, hasMore, err := messageStore.List(ctx, parentID, cursor, scanPageSize)
-		if err != nil {
-			return fmt.Errorf("scan messages: %w", err)
+	if err := forEachMessage(ctx, messageStore, parentID, func(m *model.Message) error {
+		t.messages++
+		if m.Deleted {
+			return nil
 		}
-		if len(msgs) == 0 {
-			break
+		if m.Pinned {
+			when := time.Time{}
+			if m.PinnedAt != nil {
+				when = *m.PinnedAt
+			}
+			pinned[m.ID] = pinClaim{pinnedBy: m.PinnedBy, pinnedAt: when}
 		}
-		for _, m := range msgs {
-			t.messages++
-			if m.Deleted {
+		for _, aid := range m.AttachmentIDs {
+			if aid == "" {
 				continue
 			}
-			if m.Pinned {
-				when := time.Time{}
-				if m.PinnedAt != nil {
-					when = *m.PinnedAt
-				}
-				pinned[m.ID] = pinClaim{pinnedBy: m.PinnedBy, pinnedAt: when}
+			if cur, ok := attachments[aid]; ok && cur.createdAt.After(m.CreatedAt) {
+				continue
 			}
-			for _, aid := range m.AttachmentIDs {
-				if aid == "" {
-					continue
-				}
-				if cur, ok := attachments[aid]; ok && cur.createdAt.After(m.CreatedAt) {
-					continue
-				}
-				attachments[aid] = attachmentClaim{messageID: m.ID, authorID: m.AuthorID, createdAt: m.CreatedAt}
-			}
+			attachments[aid] = attachmentClaim{messageID: m.ID, authorID: m.AuthorID, createdAt: m.CreatedAt}
 		}
-		if !hasMore {
-			break
-		}
-		cursor = msgs[len(msgs)-1].ID
+		return nil
+	}); err != nil {
+		return err
 	}
 
 	pinIDs := make([]string, 0, len(pinned))

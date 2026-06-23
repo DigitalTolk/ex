@@ -1305,6 +1305,7 @@ type fakeDraftClearer struct {
 	mu    sync.Mutex
 	calls []draftClearCall
 	err   error
+	done  chan struct{} // signaled after each call; the clear runs async
 }
 
 type draftClearCall struct {
@@ -1314,9 +1315,22 @@ type draftClearCall struct {
 
 func (f *fakeDraftClearer) DeleteForScope(_ context.Context, userID, parentID, parentType, parentMessageID string, ts int64) error {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.calls = append(f.calls, draftClearCall{userID, parentID, parentType, parentMessageID, ts})
+	f.mu.Unlock()
+	if f.done != nil {
+		f.done <- struct{}{}
+	}
 	return f.err
+}
+
+// waitForCall blocks until the (async) draft clear has run once.
+func (f *fakeDraftClearer) waitForCall(t *testing.T) {
+	t.Helper()
+	select {
+	case <-f.done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for async draft clear")
+	}
 }
 
 func TestChannelHandlerFull_SendMessage_ClearsDraftByScope(t *testing.T) {
@@ -1324,7 +1338,7 @@ func TestChannelHandlerFull_SendMessage_ClearsDraftByScope(t *testing.T) {
 	env.memberships.memberships["ch-msg#u-sender"] = &model.ChannelMembership{
 		ChannelID: "ch-msg", UserID: "u-sender", Role: model.ChannelRoleMember,
 	}
-	fake := &fakeDraftClearer{}
+	fake := &fakeDraftClearer{done: make(chan struct{}, 1)}
 	env.handler.SetDraftClearer(fake)
 	user := &model.User{ID: "u-sender", Email: "sender@test.com", SystemRole: model.SystemRoleMember}
 	token := makeTokenForUser(env.jwtMgr, user)
@@ -1339,6 +1353,7 @@ func TestChannelHandlerFull_SendMessage_ClearsDraftByScope(t *testing.T) {
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
 	}
+	fake.waitForCall(t)
 	if len(fake.calls) != 1 {
 		t.Fatalf("draft clear calls = %d, want 1", len(fake.calls))
 	}

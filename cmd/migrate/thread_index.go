@@ -2,9 +2,9 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 
+	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/DigitalTolk/ex/internal/store"
 )
 
@@ -26,28 +26,12 @@ func runThreadIndex(ctx context.Context, db *store.DB, args []string) int {
 	slog.Info("starting thread-index backfill", "mode", mode, "table", db.Table)
 
 	t := tiTotals{}
-	channels, err := channelStore.ListAll(ctx)
-	if err != nil {
-		fatal("list channels", err)
-	}
-	slog.Info("scanned channels", "count", len(channels))
-	for _, ch := range channels {
-		if err := tiBackfill(ctx, messageStore, ch.ID, dryRun, verbose, &t); err != nil {
-			slog.Error("channel backfill failed", "channelID", ch.ID, "name", ch.Name, "error", err)
+	forEachParent(ctx, channelStore, convStore, func(parentID, parentType, name string) {
+		if err := tiBackfill(ctx, messageStore, parentID, dryRun, verbose, &t); err != nil {
+			slog.Error("backfill failed", "parentID", parentID, "parentType", parentType, "name", name, "error", err)
 			t.errors++
 		}
-	}
-	convs, err := convStore.ListAll(ctx)
-	if err != nil {
-		fatal("list conversations", err)
-	}
-	slog.Info("scanned conversations", "count", len(convs))
-	for _, c := range convs {
-		if err := tiBackfill(ctx, messageStore, c.ID, dryRun, verbose, &t); err != nil {
-			slog.Error("conversation backfill failed", "conversationID", c.ID, "error", err)
-			t.errors++
-		}
-	}
+	})
 
 	slog.Info("backfill complete",
 		"mode", mode,
@@ -73,38 +57,27 @@ type tiTotals struct {
 // keys on each reply (ParentMessageID != "").
 func tiBackfill(ctx context.Context, messageStore *store.MessageStoreImpl, parentID string, dryRun, verbose bool, t *tiTotals) error {
 	t.parents++
-	cursor := ""
-	for {
-		msgs, hasMore, err := messageStore.List(ctx, parentID, cursor, scanPageSize)
-		if err != nil {
-			return fmt.Errorf("scan messages: %w", err)
+	if err := forEachMessage(ctx, messageStore, parentID, func(m *model.Message) error {
+		t.messages++
+		if m.ParentMessageID == "" {
+			return nil // roots / standalone messages aren't indexed
 		}
-		if len(msgs) == 0 {
-			break
+		if verbose {
+			slog.Info("thread index", "parentID", parentID, "msgID", m.ID, "root", m.ParentMessageID)
 		}
-		for _, m := range msgs {
-			t.messages++
-			if m.ParentMessageID == "" {
-				continue // roots / standalone messages aren't indexed
-			}
-			if verbose {
-				slog.Info("thread index", "parentID", parentID, "msgID", m.ID, "root", m.ParentMessageID)
-			}
-			if dryRun {
-				t.replies++
-				continue
-			}
-			if err := messageStore.StampThreadIndex(ctx, parentID, m.ID, m.ParentMessageID); err != nil {
-				slog.Warn("stamp thread index failed", "parentID", parentID, "msgID", m.ID, "error", err)
-				t.errors++
-				continue
-			}
+		if dryRun {
 			t.replies++
+			return nil
 		}
-		if !hasMore {
-			break
+		if err := messageStore.StampThreadIndex(ctx, parentID, m.ID, m.ParentMessageID); err != nil {
+			slog.Warn("stamp thread index failed", "parentID", parentID, "msgID", m.ID, "error", err)
+			t.errors++
+			return nil
 		}
-		cursor = msgs[len(msgs)-1].ID
+		t.replies++
+		return nil
+	}); err != nil {
+		return err
 	}
 	slog.Info("backfilled parent", "parentID", parentID, "dry_run", dryRun)
 	return nil

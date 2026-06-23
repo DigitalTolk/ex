@@ -16,6 +16,9 @@ import (
 // every write so an actively-used composer never lapses.
 const draftHashTTL = 180 * 24 * time.Hour
 
+// draftHashTTLSeconds is the TTL the Lua scripts EXPIRE with — computed once.
+var draftHashTTLSeconds = int(draftHashTTL.Seconds())
+
 func draftHashKey(userID string) string { return "draft:" + userID }
 func draftTSKey(userID string) string   { return "draftts:" + userID }
 
@@ -65,10 +68,9 @@ func (s *RedisDraftStore) Upsert(ctx context.Context, draft *model.MessageDraft)
 	if err != nil { // coverage-ignore: MessageDraft is scalar fields + slices; Marshal cannot fail
 		return fmt.Errorf("store: marshal draft: %w", err)
 	}
-	ttl := int(draftHashTTL.Seconds())
 	if err := draftUpsertScript.Run(ctx, s.client,
 		[]string{draftHashKey(draft.UserID), draftTSKey(draft.UserID)},
-		draft.ID, payload, draft.Ts, ttl,
+		draft.ID, payload, draft.Ts, draftHashTTLSeconds,
 	).Err(); err != nil {
 		return fmt.Errorf("store: upsert draft: %w", err)
 	}
@@ -109,10 +111,9 @@ func (s *RedisDraftStore) List(ctx context.Context, userID string) ([]*model.Mes
 // Delete tombstones the scope's draft at the given client ts (epoch ms). A
 // delete older than the recorded ts is a no-op (a newer draft exists).
 func (s *RedisDraftStore) Delete(ctx context.Context, userID, id string, ts int64) error {
-	ttl := int(draftHashTTL.Seconds())
 	if err := draftDeleteScript.Run(ctx, s.client,
 		[]string{draftHashKey(userID), draftTSKey(userID)},
-		id, ts, ttl,
+		id, ts, draftHashTTLSeconds,
 	).Err(); err != nil {
 		return fmt.Errorf("store: delete draft: %w", err)
 	}
