@@ -19,7 +19,7 @@ require (
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/uuid v1.6.0
 	github.com/oklog/ulid/v2 v2.1.1
-	github.com/redis/go-redis/v9 v9.20.1
+	github.com/redis/go-redis/v9 v9.21.0
 	github.com/testcontainers/testcontainers-go v0.43.0
 	github.com/yuin/goldmark v1.8.2
 	golang.org/x/crypto v0.53.0
