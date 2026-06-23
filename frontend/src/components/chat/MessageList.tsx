@@ -88,6 +88,15 @@ function VirtuosoMessageList({
 }: MessageListProps) {
   const virtuosoRef = useRef<VirtuosoHandle>(null);
   const scrollerRef = useRef<HTMLElement | null>(null);
+  // Tracks whether the user is parked at the live tail. Driven purely by the
+  // scroll handler below (true when scrolled to the bottom, false when the
+  // user scrolls up) — deliberately NOT by Virtuoso's atBottomStateChange.
+  // When the bottom message grows (image decode pushes the tail below the
+  // viewport) Virtuoso reports atBottom=false, but pure content growth fires
+  // no scroll event to set it back. If the content-height re-stick gate read
+  // that transient false it would race the ResizeObserver and intermittently
+  // refuse to re-stick (the webkit "184px from bottom" flake). The scroll
+  // handler only flips this on genuine user scrolls, so growth can't poison it.
   const atBottomRef = useRef(true);
   const lastScrollerTopRef = useRef(0);
   const autoStickSuppressedUntilRef = useRef(0);
@@ -264,6 +273,7 @@ function VirtuosoMessageList({
         atBottomRef.current = false;
       } else if (distanceFromBottom <= MESSAGE_LIST_AT_BOTTOM_THRESHOLD_PX) {
         autoStickSuppressedUntilRef.current = 0;
+        atBottomRef.current = true;
       }
       lastScrollerTopRef.current = nextScrollTop;
     };
@@ -399,9 +409,6 @@ function VirtuosoMessageList({
       // at the bottom — the canonical chat behaviour.
       followOutput={hasPreviousPage ? false : followLiveOutput}
       scrollerRef={handleScrollerRef}
-      atBottomStateChange={(atBottom) => {
-        atBottomRef.current = atBottom;
-      }}
       startReached={() => {
         if (hasNextPage && !isFetchingNextPage) fetchNextPage();
       }}
