@@ -275,7 +275,11 @@ func main() {
 	adminH := handler.NewAdminHandler(settingsSvc)
 	webhookH := handler.NewWebhookHandler(webhookSvc)
 	threadH := handler.NewThreadHandler(messageSvc)
-	draftSvc := service.NewDraftService(store.NewDraftStore(db), messageStore, membershipStore, conversationStore, redisPubSub)
+	draftSvc := service.NewDraftService(store.NewRedisDraftStore(redisCache.Client()), messageStore, membershipStore, conversationStore, redisPubSub)
+	// Fold draft-clear into message send: a successful send clears the scope's
+	// draft server-side, so the client makes no separate clear request.
+	channelH.SetDraftClearer(draftSvc)
+	convH.SetDraftClearer(draftSvc)
 	draftH := handler.NewDraftHandler(draftSvc)
 	categorySvc := service.NewCategoryService(store.NewCategoryStore(db), redisPubSub)
 	sidebarH := handler.NewSidebarHandler(channelSvc, convSvc, categorySvc)

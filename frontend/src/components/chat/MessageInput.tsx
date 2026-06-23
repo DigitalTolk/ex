@@ -50,6 +50,11 @@ const TYPING_PING_INTERVAL_MS = 3000;
 export interface MessageInputValue {
   body: string;
   attachmentIDs: string[];
+  // ts is the moment this content was last edited (epoch ms). It rides with the
+  // (debounced) draft save so the backend can order saves vs the send by client
+  // edit time — a delayed keystroke save carries its OLD edit time, so it can't
+  // supersede a later send (last-write-wins). Optional for older callers.
+  ts?: number;
 }
 
 // Imperative API exposed via forwardRef so the surrounding chat view can
@@ -178,7 +183,9 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
   const showToolbarSend = showToolbar && !isEditingMode && (!isMobile || variant === 'composer');
 
   useEffect(() => {
-    latestDraftValueRef.current = { body, attachmentIDs: drafts.map((d) => d.id) };
+    // Stamp the edit time here (on content change), NOT when the debounced save
+    // fires — so a delayed save carries its OLD edit time for last-write-wins.
+    latestDraftValueRef.current = { body, attachmentIDs: drafts.map((d) => d.id), ts: Date.now() };
   }, [body, drafts]);
 
   useEffect(() => {
@@ -806,6 +813,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
               latestDraftValueRef.current = {
                 body: md,
                 attachmentIDs: drafts.map((d) => d.id),
+                ts: Date.now(),
               };
               setBody(md);
               emitTyping();

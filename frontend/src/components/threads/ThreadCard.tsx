@@ -135,7 +135,7 @@ export function ThreadCard({ summary, title, deepLink, currentUserId, unread = f
   const clearDraftMutate = clearDraft.mutate;
 
   const handleDraftChange = useCallback(
-    (input: SendMessageInput, options?: { notify?: boolean }) => {
+    (input: SendMessageInput & { ts?: number }, options?: { notify?: boolean }) => {
       /* istanbul ignore next -- parentID is channelId ?? conversationId and parentType is always 'channel' | 'conversation', so one is always set; this guard is unreachable defensive code. */
       if (!parentID) return;
       restoreDraftScopeForContent(draftScope, input);
@@ -148,6 +148,7 @@ export function ThreadCard({ summary, title, deepLink, currentUserId, unread = f
         // Keystroke saves persist silently; the focus-loss flush (notify)
         // is what surfaces the draft in the sidebar.
         silent: !options?.notify,
+        ts: input.ts,
       });
     },
     [parentID, parentType, summary.threadRootID, draftScope, saveDraftMutate],

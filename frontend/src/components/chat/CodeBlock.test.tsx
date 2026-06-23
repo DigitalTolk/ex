@@ -44,6 +44,15 @@ describe('CodeBlock', () => {
     expect(screen.getByText('just text')).toBeInTheDocument();
   });
 
+  it('labels an unsupported fence "plain" instead of leaking the raw token', () => {
+    render(<CodeBlock code={'just text'} language="<script>" />);
+    // The arbitrary token never reaches the label or the attribute.
+    expect(screen.getByTestId('code-language').textContent).toBe('plain');
+    expect(document.querySelector('pre[data-language="plain"]')).not.toBeNull();
+    expect(document.body.innerHTML).not.toContain('&lt;script&gt;');
+    expect(document.querySelector('code.hljs')).toBeNull();
+  });
+
   it('renders plain text with no gutter when no language is given', () => {
     render(<CodeBlock code={'plain'} />);
     expect(screen.queryByTestId('code-line-numbers')).toBeNull();

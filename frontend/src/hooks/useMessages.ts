@@ -320,6 +320,11 @@ export function useSendMessage(scope: SendMessageScope) {
           body: input.body,
           parentMessageID: input.parentMessageID ?? '',
           attachmentIDs: input.attachmentIDs ?? [],
+          // The server folds the draft-clear into this send and orders it
+          // against in-flight keystroke saves by client time (last-write-wins),
+          // so a delayed save can't resurrect the just-sent draft. Stamped here
+          // at send time — the same clock the draft saves use.
+          clientTs: Date.now(),
         }),
       }),
     onSuccess: (data, input) => {

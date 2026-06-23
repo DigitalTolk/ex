@@ -155,7 +155,7 @@ export function ConversationView() {
   const saveDraftMutate = saveDraft.mutate;
   const clearDraftMutate = clearDraft.mutate;
   const handleDraftChange = useCallback(
-    (value: { body: string; attachmentIDs: string[] }, options?: { notify?: boolean }) => {
+    (value: { body: string; attachmentIDs: string[]; ts?: number }, options?: { notify?: boolean }) => {
       if (!id) return;
       restoreDraftScopeForContent(draftScope, value);
       saveDraftMutate({
@@ -166,6 +166,7 @@ export function ConversationView() {
         // Keystroke saves persist silently; the focus-loss flush (notify)
         // is what surfaces the draft in the sidebar.
         silent: !options?.notify,
+        ts: value.ts,
       });
     },
     [id, draftScope, saveDraftMutate],

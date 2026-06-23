@@ -207,6 +207,20 @@ describe('renderHastTree — every custom-tag branch', () => {
     expect(block.className).toContain('hljs');
   });
 
+  it('routes an unsupported or absent fence language to a plain CodeBlock', async () => {
+    const tree = root([
+      elem('pre', { 'data-language': 'no-such-lang' }, [elem('code', {}, [text('arbitrary')])]),
+      elem('pre', {}, [elem('code', {}, [text('no fence lang')])]),
+    ]);
+    await render(wrap(<>{renderHastTree(tree)}</>));
+    // Unsupported fence → "plain", never the raw token.
+    expect(document.querySelector('pre[data-language="plain"]')).not.toBeNull();
+    expect(document.querySelector('pre[data-language="no-such-lang"]')).toBeNull();
+    const labels = Array.from(document.querySelectorAll('[data-testid="code-language"]'));
+    // Exactly one indicator (the "plain" one); the no-language block shows none.
+    expect(labels.map((l) => l.textContent)).toEqual(['plain']);
+  });
+
   it('renders a className-carrying <code> outside a <pre> via the code component', async () => {
     const tree = root([elem('code', { className: 'language-x' }, [text('y')])]);
     await render(wrap(<>{renderHastTree(tree)}</>));

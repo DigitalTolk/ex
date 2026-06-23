@@ -412,10 +412,10 @@ describe('MessageInput', () => {
     unmount();
 
     // Flush (composer going away) notifies so the draft surfaces in the sidebar.
-    expect(onDraftChange).toHaveBeenCalledWith({
-      body: 'fast navigation draft',
-      attachmentIDs: [],
-    }, { notify: true });
+    expect(onDraftChange).toHaveBeenCalledWith(
+      expect.objectContaining({ body: 'fast navigation draft', attachmentIDs: [] }),
+      { notify: true },
+    );
   });
 
   it('flushes whitespace-only drafts without treating them as empty', async () => {
@@ -431,10 +431,10 @@ describe('MessageInput', () => {
 
     unmount();
 
-    expect(onDraftChange).toHaveBeenCalledWith({
-      body: '  \n\n',
-      attachmentIDs: [],
-    }, { notify: true });
+    expect(onDraftChange).toHaveBeenCalledWith(
+      expect.objectContaining({ body: '  \n\n', attachmentIDs: [] }),
+      { notify: true },
+    );
   });
 
   it('flushes the current draft immediately when the window loses focus', async () => {
@@ -450,10 +450,10 @@ describe('MessageInput', () => {
 
     window.dispatchEvent(new Event('blur'));
 
-    expect(onDraftChange).toHaveBeenCalledWith({
-      body: 'switching windows',
-      attachmentIDs: [],
-    }, { notify: true });
+    expect(onDraftChange).toHaveBeenCalledWith(
+      expect.objectContaining({ body: 'switching windows', attachmentIDs: [] }),
+      { notify: true },
+    );
   });
 
   it('flushes the previous draft to the previous focusKey scope before resetting the composer', async () => {
@@ -484,10 +484,10 @@ describe('MessageInput', () => {
       await flushMicrotasks();
     });
 
-    expect(ch1DraftChange).toHaveBeenCalledWith({
-      body: 'channel one draft',
-      attachmentIDs: [],
-    }, { notify: true });
+    expect(ch1DraftChange).toHaveBeenCalledWith(
+      expect.objectContaining({ body: 'channel one draft', attachmentIDs: [] }),
+      { notify: true },
+    );
     expect(ch2DraftChange).not.toHaveBeenCalled();
   });
 

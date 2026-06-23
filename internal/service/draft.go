@@ -37,10 +37,19 @@ func NewDraftService(drafts DraftStore, messages MessageStore, memberships Membe
 // upsertConfig tunes a single Upsert call.
 type upsertConfig struct {
 	silent bool
+	ts     int64 // client edit time (epoch ms) for LWW; 0 → server now
 }
 
 // UpsertOption configures Upsert behavior.
 type UpsertOption func(*upsertConfig)
+
+// WithClientTs sets the client edit time (epoch ms) used for last-write-wins
+// ordering. The store keeps a save only if its ts is newer than the stored
+// value's, so a delayed keystroke can't supersede a later send. Defaults to
+// server time when unset (0).
+func WithClientTs(ts int64) UpsertOption {
+	return func(c *upsertConfig) { c.ts = ts }
+}
 
 // WithSilent suppresses the draft.updated broadcast for this upsert when
 // silent is true. The draft is still persisted — only the cross-device
@@ -83,9 +92,15 @@ func (s *DraftService) Upsert(ctx context.Context, userID, parentID, parentType,
 		return nil, err
 	}
 
+	now := time.Now()
+	ts := cfg.ts
+	if ts == 0 {
+		ts = now.UnixMilli()
+	}
+
 	id := draftID(userID, parentType, parentID, parentMessageID)
 	if body == "" && len(attachmentIDs) == 0 {
-		if err := s.drafts.Delete(ctx, userID, id); err != nil && !errors.Is(err, store.ErrNotFound) {
+		if err := s.drafts.Delete(ctx, userID, id, ts); err != nil && !errors.Is(err, store.ErrNotFound) {
 			return nil, fmt.Errorf("draft: delete empty: %w", err)
 		}
 		if !cfg.silent {
@@ -94,7 +109,6 @@ func (s *DraftService) Upsert(ctx context.Context, userID, parentID, parentType,
 		return nil, nil
 	}
 
-	now := time.Now()
 	createdAt := now
 	if existing, err := s.drafts.Get(ctx, userID, id); err == nil && existing != nil {
 		createdAt = existing.CreatedAt
@@ -112,6 +126,7 @@ func (s *DraftService) Upsert(ctx context.Context, userID, parentID, parentType,
 		AttachmentIDs:   attachmentIDs,
 		CreatedAt:       createdAt,
 		UpdatedAt:       now,
+		Ts:              ts,
 	}
 	if err := s.drafts.Upsert(ctx, draft); err != nil {
 		return nil, fmt.Errorf("draft: upsert: %w", err)
@@ -134,14 +149,33 @@ func (s *DraftService) List(ctx context.Context, userID string) ([]*model.Messag
 	return drafts, nil
 }
 
-// Delete removes a draft by ID.
-func (s *DraftService) Delete(ctx context.Context, userID, id string) error {
+// Delete removes a draft by ID at client ts (epoch ms; 0 → server now).
+func (s *DraftService) Delete(ctx context.Context, userID, id string, ts int64) error {
 	id = strings.TrimSpace(id)
 	if id == "" {
 		return errors.New("draft: id required")
 	}
-	if err := s.drafts.Delete(ctx, userID, id); err != nil {
+	if ts == 0 {
+		ts = time.Now().UnixMilli()
+	}
+	if err := s.drafts.Delete(ctx, userID, id, ts); err != nil {
 		return fmt.Errorf("draft: delete: %w", err)
+	}
+	s.publishUpdated(ctx, userID, id)
+	return nil
+}
+
+// DeleteForScope removes the draft for a composer scope at client ts (epoch ms;
+// 0 → server now). Used by the message-send path to clear the scope's draft as
+// the message is created — the id is derived from the scope, so it works without
+// the caller knowing the draft id.
+func (s *DraftService) DeleteForScope(ctx context.Context, userID, parentID, parentType, parentMessageID string, ts int64) error {
+	id := draftID(userID, parentType, parentID, parentMessageID)
+	if ts == 0 {
+		ts = time.Now().UnixMilli()
+	}
+	if err := s.drafts.Delete(ctx, userID, id, ts); err != nil {
+		return fmt.Errorf("draft: delete for scope: %w", err)
 	}
 	s.publishUpdated(ctx, userID, id)
 	return nil

@@ -205,7 +205,9 @@ describe('useMessages — REST mutations', () => {
     await new Promise((r) => setTimeout(r, 200));
     expect(apiFetchMock.mock.calls[0][0]).toBe('/api/v1/channels/ch-1/messages');
     const body = JSON.parse((apiFetchMock.mock.calls[0][1] as { body: string }).body);
-    expect(body).toEqual({ body: 'hi', parentMessageID: '', attachmentIDs: [] });
+    expect(body).toMatchObject({ body: 'hi', parentMessageID: '', attachmentIDs: [] });
+    // The send carries clientTs so the server folds the draft-clear into it.
+    expect(body.clientTs).toBeGreaterThan(0);
   });
 
   it('useSendMessage routes to /conversations/:id/messages when conversationId is set', async () => {

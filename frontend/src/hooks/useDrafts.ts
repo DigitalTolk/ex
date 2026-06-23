@@ -23,6 +23,10 @@ export interface SaveDraftInput {
   // sends a non-silent save when it loses focus so the indicator appears
   // only then.
   silent?: boolean;
+  // ts is the client edit time (epoch ms). The backend orders saves vs the
+  // send-fold delete by this, last-write-wins, so a delayed keystroke can't
+  // resurrect a sent draft. Omitted → the server uses its own clock.
+  ts?: number;
 }
 
 const suppressedSentDraftScopes = new Set<string>();
@@ -161,6 +165,7 @@ export function useSaveDraft() {
           body: input.body,
           attachmentIDs,
           notify: !input.silent,
+          ts: input.ts,
         }),
       });
     },
@@ -169,16 +174,10 @@ export function useSaveDraft() {
       /* istanbul ignore next -- ctx is always set: onMutate unconditionally returns the version object */
       if (!ctx) return;
       if (!isLatestDraftMutation(ctx.key, ctx.version)) return;
-      // Self-heal a send/save race: on a slow connection a keystroke save can be
-      // in flight when the user sends. By the time it lands, the scope is
-      // suppressed (sent) — so the draft we just (re)created on the server would
-      // linger. Delete it. (Skipped once the user types NEW content, which
-      // un-suppresses the scope.) Fall through so the cache-patch below also
-      // drops it from the list.
-      if (draft?.id && isScopeSuppressed(input)) {
-        markLocalDraftDelete();
-        void apiFetch<void>(`/api/v1/drafts/${draft.id}`, { method: 'DELETE' }).catch(() => undefined);
-      }
+      // The scope was just sent: the server's send-fold already cleared it
+      // (last-write-wins drops this stale save), so don't re-surface it in the
+      // cache. Restored when the user types new content (un-suppresses).
+      if (isScopeSuppressed(input)) return;
       // Silent (keystroke) saves persist server-side but must not surface the
       // draft in the sidebar yet — leave the local list untouched so the
       // indicator stays hidden until the non-silent focus-loss save patches it.
@@ -191,34 +190,18 @@ export function useSaveDraft() {
   });
 }
 
-// useClearDraftForScope deletes the server-side draft for a composer scope on
-// send. It empty-PUTs (the server deletes the scope's draft, whose id is derived
-// from the scope) so it works even when the draft was only ever saved SILENTLY
-// this session and its id was never cached — the case that left a draft behind
-// after sending on a slow connection. Gated on the scope still being suppressed
-// so it can't clobber a fresh draft the user started right after sending.
+// useClearDraftForScope drops a sent scope's draft from the LOCAL cache for an
+// instant UI update. The SERVER-side delete is folded into the message-send call
+// (the backend clears the draft as it creates the message, ordered by client ts
+// last-write-wins), so this makes NO network request of its own.
 export function useClearDraftForScope() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (scope: DraftScope) => {
-      if (!scope.parentID || !isScopeSuppressed(scope)) {
-        // Not suppressed → the user started a new draft after sending; leave it.
-        return Promise.resolve();
-      }
+    mutationFn: (_scope: DraftScope) => Promise.resolve(),
+    onMutate: (scope: DraftScope) => {
+      // Ignore the server's resulting draft.updated echo, then optimistically
+      // remove the scope so the sidebar / Drafts page update without waiting.
       markLocalDraftDelete();
-      return apiFetch<void>('/api/v1/drafts', {
-        method: 'PUT',
-        body: JSON.stringify({
-          parentID: scope.parentID,
-          parentType: scope.parentType,
-          parentMessageID: scope.parentMessageID ?? '',
-          body: '',
-          attachmentIDs: [],
-          notify: false,
-        }),
-      });
-    },
-    onSuccess: (_data, scope) => {
       qc.setQueryData<MessageDraft[]>(
         queryKeys.drafts(),
         (old) => old?.filter((d) => !sameDraftScope(d, scope)),

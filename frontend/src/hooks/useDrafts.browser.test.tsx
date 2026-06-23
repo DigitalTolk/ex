@@ -268,53 +268,22 @@ describe('useDrafts — save and delete mutations', () => {
     expect(list.map((d) => d.id)).toEqual(['d-2']);
   });
 
-  it('useClearDraftForScope empty-PUTs to delete a suppressed scope and drops it from the list', async () => {
-    // The send-time clear: deletes by SCOPE (server derives the id) so a
-    // silently-saved draft whose id was never cached is cleared too.
+  it('useClearDraftForScope drops the scope from the local cache without any network call', async () => {
+    // The SERVER delete is folded into the send; this clear is local-only,
+    // for an instant sidebar / Drafts-page update.
     const scope = { parentID: 'ch-c', parentType: 'channel' as const };
-    suppressSentDraft(scope);
-    try {
-      apiFetchMock.mockResolvedValue(undefined);
-      const { qc, screen } = await renderMutation(useClearDraftForScope as never, scope, {
-        key: queryKeys.drafts(),
-        data: [draft({ id: 'd-c', parentID: 'ch-c' }), draft({ id: 'd-other', parentID: 'ch-x' })],
-      });
-      (screen.getByTestId('trigger').element() as HTMLButtonElement).click();
-      await new Promise((r) => setTimeout(r, 200));
-      // Empty-body PUT for the scope → server deletes it.
-      expect(apiFetchMock).toHaveBeenCalledWith('/api/v1/drafts', expect.objectContaining({ method: 'PUT' }));
-      const body = JSON.parse((apiFetchMock.mock.calls[0][1] as { body: string }).body);
-      expect(body).toMatchObject({ parentID: 'ch-c', parentType: 'channel', body: '', notify: false });
-      // The scope is dropped from the cached list; unrelated scopes remain.
-      const list = qc.getQueryData<MessageDraft[]>(queryKeys.drafts()) ?? [];
-      expect(list.map((d) => d.id)).toEqual(['d-other']);
-    } finally {
-      restoreDraftScope(scope);
-    }
-  });
-
-  it('useClearDraftForScope is a no-op when the scope is no longer suppressed (user typed after sending)', async () => {
-    // Not suppressed → must NOT clobber a fresh draft the user just started.
-    const scope = { parentID: 'ch-fresh', parentType: 'channel' as const };
     apiFetchMock.mockResolvedValue(undefined);
-    const { screen } = await renderMutation(useClearDraftForScope as never, scope);
+    const { qc, screen } = await renderMutation(useClearDraftForScope as never, scope, {
+      key: queryKeys.drafts(),
+      data: [draft({ id: 'd-c', parentID: 'ch-c' }), draft({ id: 'd-other', parentID: 'ch-x' })],
+    });
     (screen.getByTestId('trigger').element() as HTMLButtonElement).click();
-    await new Promise((r) => setTimeout(r, 150));
+    await new Promise((r) => setTimeout(r, 200));
+    // No network request of its own.
     expect(apiFetchMock).not.toHaveBeenCalled();
-  });
-
-  it('useClearDraftForScope is a no-op for a scope with no parentID', async () => {
-    const scope = { parentType: 'channel' as const };
-    suppressSentDraft(scope);
-    try {
-      apiFetchMock.mockResolvedValue(undefined);
-      const { screen } = await renderMutation(useClearDraftForScope as never, scope);
-      (screen.getByTestId('trigger').element() as HTMLButtonElement).click();
-      await new Promise((r) => setTimeout(r, 150));
-      expect(apiFetchMock).not.toHaveBeenCalled();
-    } finally {
-      restoreDraftScope(scope);
-    }
+    // The scope is dropped from the cached list; unrelated scopes remain.
+    const list = qc.getQueryData<MessageDraft[]>(queryKeys.drafts()) ?? [];
+    expect(list.map((d) => d.id)).toEqual(['d-other']);
   });
 
   it('useSaveDraft clearing an existing draft (server returns void) removes it from the list', async () => {
@@ -333,10 +302,10 @@ describe('useDrafts — save and delete mutations', () => {
     expect(qc.getQueryData<MessageDraft[]>(queryKeys.drafts())).toEqual([]);
   });
 
-  it('useSaveDraft self-heals a save that lands on an already-sent scope', async () => {
+  it('useSaveDraft does not re-surface (or DELETE) a save that lands on an already-sent scope', async () => {
     // A keystroke save in flight when the user sends: by the time it resolves
-    // the scope is suppressed (sent). The draft it created on the server must be
-    // DELETEd (self-heal), and patchDraftListByScope drops it from the cache.
+    // the scope is suppressed (sent). It must NOT re-surface in the cache, and
+    // there is no client DELETE — the server's send-fold LWW already dropped it.
     const scope = { parentID: 'ch-sup', parentType: 'channel' as const };
     suppressSentDraft(scope);
     try {
@@ -344,14 +313,17 @@ describe('useDrafts — save and delete mutations', () => {
       apiFetchMock.mockResolvedValue(saved);
       const { qc, screen } = await renderMutation(
         useSaveDraft as never,
-        { parentID: 'ch-sup', parentType: 'channel', body: 'sent', attachmentIDs: [] },
+        { parentID: 'ch-sup', parentType: 'channel', body: 'sent', attachmentIDs: [], ts: 5 },
         { key: queryKeys.drafts(), data: [] as MessageDraft[] },
       );
       (screen.getByTestId('trigger').element() as HTMLButtonElement).click();
       await new Promise((r) => setTimeout(r, 200));
       expect(qc.getQueryData<MessageDraft[]>(queryKeys.drafts())).toEqual([]);
-      // Self-heal fired a DELETE for the just-created server draft.
-      expect(apiFetchMock).toHaveBeenCalledWith('/api/v1/drafts/d-sup', { method: 'DELETE' });
+      // The save PUT carried the client ts...
+      const putBody = JSON.parse((apiFetchMock.mock.calls[0][1] as { body: string }).body);
+      expect(putBody.ts).toBe(5);
+      // ...but no self-heal DELETE was issued.
+      expect(apiFetchMock).not.toHaveBeenCalledWith('/api/v1/drafts/d-sup', { method: 'DELETE' });
     } finally {
       restoreDraftScope(scope);
     }

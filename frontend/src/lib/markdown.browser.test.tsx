@@ -37,12 +37,13 @@ describe('renderMarkdown (legacy regex pipeline)', () => {
     expect(document.querySelector('hr')).not.toBeNull();
   });
 
-  it('renders a fenced code block with the language hint', async () => {
+  it('renders a fenced code block with the language hint (lowlight hljs)', async () => {
     await render(wrap(<>{renderMarkdown('```go\nfunc main() {}\n```')}</>));
     const pre = document.querySelector('pre');
     expect(pre?.getAttribute('data-language')).toBe('go');
     const code = pre?.querySelector('code');
-    expect(code?.className).toContain('language-go');
+    expect(code?.className).toContain('hljs');
+    expect(code?.querySelector('span.hljs-keyword')).not.toBeNull(); // func
   });
 
   it('renders a standard emoji at the normal 1.4em size by default', async () => {
@@ -187,28 +188,27 @@ describe('renderMarkdown (legacy regex pipeline)', () => {
     expect(document.querySelector('h1')).not.toBeNull();
     expect(document.querySelector('ul li')).not.toBeNull();
     expect(document.querySelector('blockquote')).not.toBeNull();
-    expect(document.querySelector('pre code')?.className).toContain('language-javascript');
+    expect(document.querySelector('pre code')?.className).toContain('hljs');
   });
 
-  it('syntax-highlights comments, strings, variables, keywords and numbers in a fenced block', async () => {
-    const body = '```js\n// a comment\nconst greeting = "hi"\n$ref = 42\n```';
+  it('syntax-highlights a fenced block via the shared lowlight engine (hljs spans)', async () => {
+    const body = '```js\n// a comment\nconst greeting = "hi"\nconst n = 42\n```';
     await render(wrap(<>{renderMarkdown(body)}</>));
     const code = document.querySelector('pre code')!;
-    // The tokenizer wraps recognised tokens in colour-class spans.
-    expect(code.querySelector('span.italic')).not.toBeNull(); // comment
-    expect(code.querySelector('span.text-emerald-700')).not.toBeNull(); // string
-    expect(code.querySelector('span.text-sky-700')).not.toBeNull(); // $variable
-    expect(code.querySelector('span.text-purple-700')).not.toBeNull(); // keyword (const)
-    expect(code.querySelector('span.text-amber-700')).not.toBeNull(); // number
+    expect(code.className).toContain('hljs');
+    expect(code.querySelector('span.hljs-comment')).not.toBeNull(); // comment
+    expect(code.querySelector('span.hljs-string')).not.toBeNull(); // "hi"
+    expect(code.querySelector('span.hljs-keyword')).not.toBeNull(); // const
+    expect(code.querySelector('span.hljs-number')).not.toBeNull(); // 42
   });
 
   it('renders a fenced block without a language as un-highlighted text', async () => {
     await render(wrap(<>{renderMarkdown('```\njust plain text\n```')}</>));
     const code = document.querySelector('pre code')!;
-    expect(code.className).not.toMatch(/language-/);
+    expect(code.className).not.toContain('hljs');
     expect(code.textContent).toContain('just plain text');
-    // No token spans were produced for the language-less block.
-    expect(code.querySelector('span.text-purple-700')).toBeNull();
+    // No highlight spans for a language-less block.
+    expect(code.querySelector('span')).toBeNull();
   });
 
   it('keeps the scheme on a bare non-https URL', async () => {
@@ -255,30 +255,30 @@ describe('renderMarkdown (legacy regex pipeline)', () => {
     expect(document.body.textContent).toContain('from tree');
   });
 
-  it('highlights a common keyword absent from a language-specific keyword set', async () => {
-    // "go" code: LANGUAGE_KEYWORDS.go lacks "async" but COMMON_CODE_KEYWORDS
-    // has it → the `|| COMMON_CODE_KEYWORDS.has(lowered)` right side runs.
-    await render(wrap(<>{renderMarkdown('```go\nasync\n```')}</>));
-    const code = document.querySelector('pre code')!;
-    expect(code.querySelector('span.text-purple-700')).not.toBeNull();
+  it('treats an unsupported fence language as plain (no highlight, never the raw token)', async () => {
+    await render(wrap(<>{renderMarkdown('```malware-lang\nconst x = 1\n```')}</>));
+    const pre = document.querySelector('pre')!;
+    // The arbitrary token is replaced with "plain"; it never reaches the DOM.
+    expect(pre.getAttribute('data-language')).toBe('plain');
+    const code = pre.querySelector('code')!;
+    expect(code.className).not.toContain('hljs');
+    expect(code.className).not.toMatch(/malware/);
+    expect(code.querySelector('span')).toBeNull();
+    expect(code.textContent).toContain('const x = 1');
   });
 
-  it('returns the raw source for an empty language block (out stays empty)', async () => {
-    // An EMPTY fenced block body (no characters at all) means renderCodeString
-    // pushes nothing and the trailing-slice append is also skipped, so `out`
-    // stays empty and the `out.length ? out : src` false side returns src.
+  it('renders an empty fenced block without errors', async () => {
     await render(wrap(<>{renderMarkdown('```js\n```')}</>));
     const code = document.querySelector('pre code')!;
     expect(code.querySelector('span')).toBeNull();
   });
 
-  it('highlights a common keyword inside an UNKNOWN language (the ?? COMMON fallback)', async () => {
-    // An unrecognised language → LANGUAGE_KEYWORDS[lang] is undefined, so the
-    // keyword check uses the `?? COMMON_CODE_KEYWORDS` fallback set, and
-    // "return" (a common keyword) still highlights.
+  it('does NOT highlight an unsupported language (renders plain, labelled plain)', async () => {
     await render(wrap(<>{renderMarkdown('```madeuplang\nreturn nil\n```')}</>));
     const code = document.querySelector('pre code')!;
-    expect(code.querySelector('span.text-purple-700')).not.toBeNull();
+    expect(code.querySelector('span')).toBeNull();
+    expect(code.className).not.toContain('hljs');
+    expect(document.querySelector('pre')?.getAttribute('data-language')).toBe('plain');
   });
 
   it('renders a group mention with no leading character', async () => {

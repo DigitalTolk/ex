@@ -1,7 +1,9 @@
 package handler
 
 import (
+	"context"
 	"errors"
+	"log/slog"
 	"net/http"
 
 	"github.com/DigitalTolk/ex/internal/middleware"
@@ -9,6 +11,26 @@ import (
 	"github.com/DigitalTolk/ex/internal/service"
 	"github.com/DigitalTolk/ex/internal/store"
 )
+
+// DraftClearer clears the composer draft for a scope when its message is sent —
+// folding the draft cleanup into the message-create call so the client makes no
+// separate request. Implemented by *service.DraftService.
+type DraftClearer interface {
+	DeleteForScope(ctx context.Context, userID, parentID, parentType, parentMessageID string, ts int64) error
+}
+
+// clearSentDraft removes the scope's draft after a successful send. Best-effort:
+// the message is already created, so a clear failure is logged, not surfaced. ts
+// is the client's send time, used for last-write-wins ordering so a keystroke
+// save still in flight can't resurrect the just-sent draft.
+func clearSentDraft(ctx context.Context, clearer DraftClearer, userID, parentID, parentType, parentMessageID string, ts int64) {
+	if clearer == nil {
+		return
+	}
+	if err := clearer.DeleteForScope(ctx, userID, parentID, parentType, parentMessageID, ts); err != nil {
+		slog.Warn("clear sent draft failed", "userID", userID, "parentID", parentID, "parentType", parentType, "error", err)
+	}
+}
 
 // DraftHandler exposes server-side message draft endpoints.
 type DraftHandler struct {
@@ -55,13 +77,16 @@ func (h *DraftHandler) Upsert(w http.ResponseWriter, r *http.Request) {
 		// indicator only appears once the field loses focus, then a final
 		// save with notify=true (or omitted) surfaces it.
 		Notify *bool `json:"notify"`
+		// Ts is the client edit-time (epoch ms) used for last-write-wins
+		// ordering in the store. Omitted (0) → the server uses its own clock.
+		Ts int64 `json:"ts"`
 	}
 	if err := readJSON(r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_body", err.Error())
 		return
 	}
 	silent := body.Notify != nil && !*body.Notify
-	draft, err := h.draftSvc.Upsert(r.Context(), userID, body.ParentID, body.ParentType, body.ParentMessageID, body.Body, body.AttachmentIDs, service.WithSilent(silent))
+	draft, err := h.draftSvc.Upsert(r.Context(), userID, body.ParentID, body.ParentType, body.ParentMessageID, body.Body, body.AttachmentIDs, service.WithSilent(silent), service.WithClientTs(body.Ts))
 	if err != nil {
 		writeDraftError(w, err)
 		return
@@ -79,7 +104,9 @@ func (h *DraftHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "unauthorized", "authentication required")
 		return
 	}
-	if err := h.draftSvc.Delete(r.Context(), userID, pathParam(r, "id")); err != nil {
+	// Explicit delete from the Drafts page — a deliberate latest action, so the
+	// server clock (ts=0 → now) wins LWW; no concurrent-save race here.
+	if err := h.draftSvc.Delete(r.Context(), userID, pathParam(r, "id"), 0); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			writeError(w, http.StatusNotFound, "not_found", "draft not found")
 			return
