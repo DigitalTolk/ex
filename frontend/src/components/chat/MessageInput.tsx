@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useImperativeHandle, forwardRef } from 'react';
+import { useState, useRef, useCallback, useImperativeHandle, forwardRef, type ReactNode } from 'react';
 import {
   Send,
   Paperclip,
@@ -106,6 +106,12 @@ interface MessageInputProps {
   // composers (e.g. the /threads ThreadCards) are mid-page, so that inset
   // just adds a dead ~34px gap below them — they pass false.
   bottomInset?: boolean;
+  // Rendered inside the composer's padded wrapper, directly above the input
+  // box — used for the "<user> is typing" indicator so it sits glued to the
+  // input (the wrapper's top padding becomes the gap to the message list
+  // above the indicator) instead of floating in that padding as an outside
+  // sibling. Only the composer variant renders it.
+  aboveInput?: ReactNode;
 }
 
 export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(function MessageInput({
@@ -126,6 +132,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
   onDraftChange,
   cancelOnOutsidePointer,
   hideCodeButton,
+  aboveInput,
 }, ref) {
   const [body, setBody] = useState(initialBody);
   const [drafts, setDrafts] = useState<DraftAttachment[]>(initialDrafts);
@@ -743,7 +750,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
       className={
         variant === 'inline'
           ? 'p-0'
-          : `bg-background p-3 max-md:pt-1.5 ${
+          : `relative bg-background p-3 max-md:pt-1.5 ${
               // env(safe-area-inset-bottom) on iOS does not reset to 0 when
               // the keyboard is up, leaving a wasted ~34px gap between the
               // composer and the keyboard. Drop the inset while focused
@@ -777,6 +784,19 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
           data-testid="message-attachments-too-many"
         >
           Up to {MAX_ATTACHMENTS_PER_MESSAGE} attachments per message — remove a few to send.
+        </div>
+      )}
+      {variant === 'composer' && aboveInput && (
+        // Overlay, not normal flow: floats in the free space just above the
+        // composer (`bottom-full` = bottom edge sits on the wrapper's top
+        // edge) so showing / hiding the "<user> is typing" line never pushes
+        // the input box or changes the composer's height. pointer-events-none
+        // so it can't intercept clicks on the message underneath.
+        <div
+          className="pointer-events-none absolute inset-x-0 bottom-full"
+          data-testid="composer-above-input-overlay"
+        >
+          {aboveInput}
         </div>
       )}
       <div className="rounded-2xl border md:border-2 border-border bg-typing-field max-md:overflow-hidden max-md:rounded-[1.75rem]" data-message-composer>

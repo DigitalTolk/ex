@@ -180,18 +180,16 @@ describe('ChannelView', () => {
     expect(screen.getByLabelText('Public channel')).toBeInTheDocument();
   });
 
-  it('typing indicator renders between the message list and the message input (not under the input)', () => {
-    // Regression: TypingIndicator was `absolute bottom-0` of its
-    // nearest positioned ancestor. That ancestor was MessageDropZone,
-    // which wraps the MessageInput too — so the indicator anchored to
-    // the dropzone's bottom edge, *below* the input. The fix puts it
-    // in normal flow as a sibling of MessageList, sitting naturally
-    // above the input.
-    //
-    // Earlier attempts to wrap MessageList + indicator in their own
-    // `relative` flex-1 container broke MessageList's overflow scroll
-    // (DMs stopped scrolling, channels drifted on send), so we keep
-    // the surrounding DOM flat and just rely on DOM order.
+  it('keeps the message list above the input as flat siblings of MessageDropZone', () => {
+    // Regression: TypingIndicator was once `absolute bottom-0` of its
+    // nearest positioned ancestor (MessageDropZone, which wraps the input
+    // too) so it anchored *below* the input. It later moved into normal
+    // flow, and now lives inside MessageInput's `aboveInput` slot (glued
+    // directly above the input box). Either way the dropzone DOM must stay
+    // flat — MessageList a direct child, above the input child — because an
+    // earlier attempt to wrap MessageList in its own `relative flex-1`
+    // container broke overflow scroll (DMs stopped scrolling, channels
+    // drifted on send).
     const { container } = renderChannelView();
     const dropzone = container.querySelector('div.relative.flex.flex-1.flex-col.min-h-0');
     expect(dropzone).not.toBeNull();

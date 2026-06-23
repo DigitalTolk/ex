@@ -84,6 +84,42 @@ describe('MessageInput - file upload', () => {
     expect(container.firstElementChild).not.toHaveClass('max-md:pb-[calc(0.75rem+env(safe-area-inset-bottom))]');
   });
 
+  it('renders the aboveInput slot as an overlay that does not push the input box', () => {
+    // Regression: the typing indicator must float in the free space just above
+    // the composer WITHOUT reflowing it — showing/hiding it can't change the
+    // composer height or push the input box down. So the slot is wrapped in an
+    // absolute, out-of-flow overlay anchored to the composer wrapper's top.
+    const { container } = render(
+      <MessageInput onSend={vi.fn()} aboveInput={<div data-testid="typing-probe">Alice is typing…</div>} />,
+    );
+    const wrapper = container.firstElementChild as HTMLElement;
+    const overlay = screen.getByTestId('composer-above-input-overlay');
+    const probe = screen.getByTestId('typing-probe');
+    // The wrapper is the positioning context…
+    expect(wrapper).toHaveClass('relative');
+    expect(wrapper).toContainElement(overlay);
+    expect(overlay).toContainElement(probe);
+    // …and the slot is an absolute overlay floating above the composer
+    // (bottom-full), out of normal flow so it never pushes the input box.
+    expect(overlay).toHaveClass('absolute');
+    expect(overlay).toHaveClass('bottom-full');
+    expect(overlay).toHaveClass('pointer-events-none');
+    // The first IN-FLOW child of the wrapper is unaffected by the overlay: the
+    // input box stays put (the overlay is not its layout sibling).
+    expect(container.querySelector('[data-message-composer]')).not.toBeNull();
+  });
+
+  it('does not render the aboveInput slot for the inline (edit) variant', () => {
+    render(
+      <MessageInput
+        variant="inline"
+        onSend={vi.fn()}
+        aboveInput={<div data-testid="typing-probe">Alice is typing…</div>}
+      />,
+    );
+    expect(screen.queryByTestId('typing-probe')).toBeNull();
+  });
+
   it('shows a draft chip after a successful upload', async () => {
     const init = {
       id: 'att-99',

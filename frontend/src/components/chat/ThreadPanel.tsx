@@ -515,11 +515,6 @@ export function ThreadPanel({
             })}
           </div>
         </div>
-        <ThreadTypingIndicator
-          parentID={channelId ?? conversationId}
-          threadRootID={threadRootID}
-          userMap={mergedUserMap}
-        />
         <NonMemberInvitePrompt
           channelId={channelId}
           channelName={channelSlug}
@@ -550,6 +545,15 @@ export function ThreadPanel({
             typingParentType={activeEditingMessage ? undefined : channelId ? 'channel' : 'conversation'}
             typingThreadRootID={activeEditingMessage ? undefined : threadRootID}
             lastOwnMessageId={activeEditingMessage ? undefined : lastOwnMessageId}
+            aboveInput={
+              activeEditingMessage ? undefined : (
+                <ThreadTypingIndicator
+                  parentID={channelId ?? conversationId}
+                  threadRootID={threadRootID}
+                  userMap={mergedUserMap}
+                />
+              )
+            }
           />
         )}
       </MessageDropZone>

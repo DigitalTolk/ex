@@ -170,7 +170,12 @@ export function useSaveDraft() {
       // Silent (keystroke) saves persist server-side but must not surface the
       // draft in the sidebar yet — leave the local list untouched so the
       // indicator stays hidden until the non-silent focus-loss save patches it.
-      if (input.silent) return;
+      // EXCEPTION: a silent save that empties the draft is a *removal*, never a
+      // surface — patch it through immediately so clearing the composer drops
+      // the sidebar badge at once, instead of lingering until focus loss /
+      // channel switch (the server already deleted it, returning a nil draft).
+      const isEmptyDraft = input.body === '' && (input.attachmentIDs?.length ?? 0) === 0;
+      if (input.silent && !isEmptyDraft) return;
       qc.setQueryData<MessageDraft[]>(
         queryKeys.drafts(),
         (old) => patchDraftListByScope(old, input, draft ?? null),

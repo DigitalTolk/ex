@@ -157,7 +157,7 @@ describe('ConversationView', () => {
     // `relative flex-1 flex-col min-h-0` container. That nested flex
     // layer broke the height-propagation chain so MessageList stopped
     // scrolling in DMs and drifted on send in channels. The typing
-    // indicator now uses normal-flow positioning instead.
+    // indicator now lives inside MessageInput's aboveInput slot instead.
     const { container } = renderConversationView();
     const dropzone = container.querySelector('div.relative.flex.flex-1.flex-col.min-h-0');
     expect(dropzone).not.toBeNull();

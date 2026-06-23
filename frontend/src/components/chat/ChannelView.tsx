@@ -452,7 +452,6 @@ export function ChannelView() {
               ) : undefined
             }
           />
-          <TypingIndicator parentID={channel?.id} userMap={userMap} />
           {channel && !activeEditingMessage && pendingInvites.length > 0 && (
             <NonMemberInvitePrompt
               channelId={channel.id}
@@ -480,6 +479,11 @@ export function ChannelView() {
               typingParentID={activeEditingMessage ? undefined : channel?.id}
               typingParentType={activeEditingMessage ? undefined : 'channel'}
               lastOwnMessageId={activeEditingMessage ? undefined : lastOwnMessageId}
+              aboveInput={
+                activeEditingMessage ? undefined : (
+                  <TypingIndicator parentID={channel?.id} userMap={userMap} />
+                )
+              }
             />
           )}
         </MessageDropZone>

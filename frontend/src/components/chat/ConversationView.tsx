@@ -443,7 +443,6 @@ export function ConversationView() {
             anchorRevision={navKey}
             intro={intro ?? undefined}
           />
-          <TypingIndicator parentID={id} userMap={userMap} />
           {activeEditingMessage && !editReady ? (
             <div className="border-t p-3 text-sm text-muted-foreground">Loading message editor…</div>
           ) : (
@@ -463,6 +462,11 @@ export function ConversationView() {
               typingParentID={activeEditingMessage ? undefined : id}
               typingParentType={activeEditingMessage ? undefined : 'conversation'}
               lastOwnMessageId={activeEditingMessage ? undefined : lastOwnMessageId}
+              aboveInput={
+                activeEditingMessage ? undefined : (
+                  <TypingIndicator parentID={id} userMap={userMap} />
+                )
+              }
             />
           )}
         </MessageDropZone>

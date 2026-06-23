@@ -169,9 +169,19 @@ function VirtuosoMessageList({
     if (anchorIndex === -1) return;
     const dedupKey = anchorRevision ? `${anchorMsgId}@${anchorRevision}` : anchorMsgId;
     if (anchorAppliedRef.current === dedupKey) return;
-    anchorAppliedRef.current = dedupKey;
     const scrollFrame = requestAnimationFrame(() => {
       virtuosoRef.current?.scrollToIndex({ index: anchorIndex, align: 'center' });
+      // Record "applied" only AFTER the scroll actually runs. On a cold
+      // deeplink / notification open the `around` window mounts with the
+      // anchor present, but Virtuoso's natural startReached prepends an
+      // older page moments later — shifting anchorIndex and re-running this
+      // effect. The cleanup cancels this frame before it fires; recording
+      // the dedup up-front (the old bug) then made the re-run bail, so the
+      // scroll was lost and the deeplink landed nowhere until a manual
+      // retry. Recording here instead lets the re-run re-schedule at the
+      // corrected index, while still firing scrollToIndex exactly once (the
+      // frame is cancelled, never re-fired — no timer chase).
+      anchorAppliedRef.current = dedupKey;
     });
     setHighlightedMessageId(anchorMsgId);
     const flashId = window.setTimeout(() => {
