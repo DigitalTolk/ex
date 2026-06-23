@@ -17,7 +17,7 @@ import {
   restoreDraftScope,
   restoreDraftScopeForContent,
   suppressSentDraft,
-  useDeleteDraft,
+  useClearDraftForScope,
   useDraftAttachmentChips,
   useDraftForScope,
   useSaveDraft,
@@ -129,11 +129,10 @@ export function ThreadCard({ summary, title, deepLink, currentUserId, unread = f
   );
   const { data: draft } = useDraftForScope(draftScope);
   const draftAttachments = useDraftAttachmentChips(draft?.attachmentIDs);
-  const draftID = draft?.id;
   const saveDraft = useSaveDraft();
-  const deleteDraft = useDeleteDraft();
+  const clearDraft = useClearDraftForScope();
   const saveDraftMutate = saveDraft.mutate;
-  const deleteDraftMutate = deleteDraft.mutate;
+  const clearDraftMutate = clearDraft.mutate;
 
   const handleDraftChange = useCallback(
     (input: SendMessageInput, options?: { notify?: boolean }) => {
@@ -160,19 +159,17 @@ export function ThreadCard({ summary, title, deepLink, currentUserId, unread = f
       checkMentions(input.body);
       const payload = { ...input, parentMessageID: summary.threadRootID };
       suppressSentDraft(draftScope);
-      if (draftID) {
-        send.mutate(payload, {
-          onSuccess: () => deleteDraftMutate(draftID),
-          onError: () => restoreDraftScope(draftScope),
-        });
-      } else {
-        send.mutate(payload, { onError: () => restoreDraftScope(draftScope) });
-      }
+      send.mutate(payload, {
+        // Clear by SCOPE on confirmed send so a silently-saved thread draft
+        // (id never cached) is cleared too.
+        onSuccess: () => clearDraftMutate(draftScope),
+        onError: () => restoreDraftScope(draftScope),
+      });
       // Treat sending as "seeing" — drops the unread dot in the sidebar
       // since the user is clearly engaged with this thread.
       markSummaryThreadSeen(summary);
     },
-    [send, summary, draftScope, draftID, deleteDraftMutate, checkMentions],
+    [send, summary, draftScope, clearDraftMutate, checkMentions],
   );
 
   return (

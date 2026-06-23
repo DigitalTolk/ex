@@ -37,7 +37,7 @@ import {
   restoreDraftScope,
   restoreDraftScopeForContent,
   suppressSentDraft,
-  useDeleteDraft,
+  useClearDraftForScope,
   useDraftAttachmentChips,
   useDraftForScope,
   useSaveDraft,
@@ -150,11 +150,10 @@ export function ConversationView() {
   const editReady =
     !editingMessage || editAttachmentIDs.length === 0 || !editAttachmentsLoading;
   const editMessage = useEditMessage();
-  const draftID = draft?.id;
   const saveDraft = useSaveDraft();
-  const deleteDraft = useDeleteDraft();
+  const clearDraft = useClearDraftForScope();
   const saveDraftMutate = saveDraft.mutate;
-  const deleteDraftMutate = deleteDraft.mutate;
+  const clearDraftMutate = clearDraft.mutate;
   const handleDraftChange = useCallback(
     (value: { body: string; attachmentIDs: string[] }, options?: { notify?: boolean }) => {
       if (!id) return;
@@ -174,16 +173,14 @@ export function ConversationView() {
   const handleSendMessage = useCallback(
     (value: { body: string; attachmentIDs: string[] }) => {
       suppressSentDraft(draftScope);
-      if (!draftID) {
-        sendMessage.mutate(value, { onError: () => restoreDraftScope(draftScope) });
-        return;
-      }
       sendMessage.mutate(value, {
-        onSuccess: () => deleteDraftMutate(draftID),
+        // Clear the scope's server draft on confirmed send — by SCOPE so a
+        // silently-saved draft (id never cached) is cleared too.
+        onSuccess: () => clearDraftMutate(draftScope),
         onError: () => restoreDraftScope(draftScope),
       });
     },
-    [sendMessage, draftScope, draftID, deleteDraftMutate],
+    [sendMessage, draftScope, clearDraftMutate],
   );
   const handleEditMessage = useCallback(
     (value: { body: string; attachmentIDs: string[] }) => {

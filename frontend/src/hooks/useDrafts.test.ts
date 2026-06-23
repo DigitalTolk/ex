@@ -7,6 +7,7 @@ import {
   restoreDraftScopeForContent,
   shouldRefetchDraftsForRemoteUpdate,
   suppressSentDraft,
+  useClearDraftForScope,
   useDeleteDraft,
   useDraftAttachmentChips,
   useDraftForScope,
@@ -228,6 +229,71 @@ describe('useDrafts', () => {
 
     await waitFor(() => expect(restored.result.current.isSuccess).toBe(true));
     expect(restored.result.current.data).toEqual([stale]);
+  });
+
+  it('useClearDraftForScope empty-PUTs to clear a suppressed (just-sent) scope', async () => {
+    vi.mocked(apiFetch).mockResolvedValue(undefined);
+    const scope = { parentID: 'dm-1', parentType: 'conversation' as const };
+    suppressSentDraft(scope);
+    try {
+      const { result } = renderHook(() => useClearDraftForScope(), { wrapper: createWrapper() });
+      act(() => result.current.mutate(scope));
+      await waitFor(() => expect(result.current.isSuccess).toBe(true));
+      expect(apiFetch).toHaveBeenCalledWith('/api/v1/drafts', {
+        method: 'PUT',
+        body: JSON.stringify({
+          parentID: 'dm-1',
+          parentType: 'conversation',
+          parentMessageID: '',
+          body: '',
+          attachmentIDs: [],
+          notify: false,
+        }),
+      });
+    } finally {
+      restoreDraftScope(scope);
+    }
+  });
+
+  it('useClearDraftForScope is a no-op when the scope is not suppressed (fresh draft after send)', async () => {
+    vi.mocked(apiFetch).mockResolvedValue(undefined);
+    const scope = { parentID: 'dm-9', parentType: 'conversation' as const };
+    const { result } = renderHook(() => useClearDraftForScope(), { wrapper: createWrapper() });
+    act(() => result.current.mutate(scope));
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(apiFetch).not.toHaveBeenCalled();
+  });
+
+  it('useClearDraftForScope is a no-op for a scope with no parentID', async () => {
+    vi.mocked(apiFetch).mockResolvedValue(undefined);
+    const scope = { parentType: 'conversation' as const };
+    suppressSentDraft(scope);
+    try {
+      const { result } = renderHook(() => useClearDraftForScope(), { wrapper: createWrapper() });
+      act(() => result.current.mutate(scope));
+      await waitFor(() => expect(result.current.isSuccess).toBe(true));
+      expect(apiFetch).not.toHaveBeenCalled();
+    } finally {
+      restoreDraftScope(scope);
+    }
+  });
+
+  it('useSaveDraft self-heals a save that resolves on an already-sent scope', async () => {
+    const saved: MessageDraft = {
+      id: 'd-heal', userID: 'u-1', parentID: 'dm-1', parentType: 'conversation', parentMessageID: '',
+      body: 'sent', attachmentIDs: [], updatedAt: '2026-05-03T10:00:00Z', createdAt: '2026-05-03T10:00:00Z',
+    };
+    vi.mocked(apiFetch).mockResolvedValue(saved);
+    const scope = { parentID: 'dm-1', parentType: 'conversation' as const };
+    suppressSentDraft(scope);
+    try {
+      const { result } = renderHook(() => useSaveDraft(), { wrapper: createWrapper() });
+      act(() => result.current.mutate({ parentID: 'dm-1', parentType: 'conversation', body: 'sent', attachmentIDs: [] }));
+      await waitFor(() => expect(result.current.isSuccess).toBe(true));
+      await waitFor(() => expect(apiFetch).toHaveBeenCalledWith('/api/v1/drafts/d-heal', { method: 'DELETE' }));
+    } finally {
+      restoreDraftScope(scope);
+    }
   });
 
   it('saves and deletes drafts without trimming request bodies', async () => {

@@ -21,12 +21,12 @@ vi.mock('@/hooks/useMessages', () => ({
 // draft-save path triggered by onDraftChange.
 let mockDraft: { id: string; body: string; attachmentIDs?: string[] } | undefined;
 const saveDraftMutate = vi.fn();
-const deleteDraftMutate = vi.fn();
+const clearDraftMutate = vi.fn();
 vi.mock('@/hooks/useDrafts', () => ({
   useDraftForScope: () => ({ data: mockDraft }),
   useDraftAttachmentChips: () => [],
   useSaveDraft: () => ({ mutate: saveDraftMutate }),
-  useDeleteDraft: () => ({ mutate: deleteDraftMutate }),
+  useClearDraftForScope: () => ({ mutate: clearDraftMutate }),
   restoreDraftScope: vi.fn(),
   restoreDraftScopeForContent: vi.fn(),
   suppressSentDraft: vi.fn(),
@@ -128,7 +128,7 @@ describe('ThreadCard', () => {
     apiFetchMock.mockReset();
     sendMutate.mockReset();
     saveDraftMutate.mockReset();
-    deleteDraftMutate.mockReset();
+    clearDraftMutate.mockReset();
     mockDraft = undefined;
     localStorage.clear();
     resetSeenCache();
@@ -279,8 +279,7 @@ describe('ThreadCard', () => {
     );
   });
 
-  it('deletes the saved draft after a successful reply when one exists', async () => {
-    mockDraft = { id: 'd-1', body: 'saved draft' };
+  it('clears the draft scope after a successful reply', async () => {
     apiFetchMock.mockImplementation((url: string) => {
       if (url.includes('/messages/msg-root/thread')) return Promise.resolve([makeMessage('msg-root')]);
       return Promise.resolve([]);
@@ -288,14 +287,17 @@ describe('ThreadCard', () => {
     renderCard(makeSummary());
     fireEvent.change(await screen.findByTestId('reply-body'), { target: { value: 'reply' } });
     fireEvent.click(screen.getByLabelText('Send reply'));
-    // draftID present → send.mutate gets an onSuccess that clears the draft.
+    // send.mutate gets an onSuccess that clears the draft by SCOPE (so a
+    // silently-saved draft whose id was never cached is cleared too).
     expect(sendMutate).toHaveBeenCalledWith(
       expect.objectContaining({ body: 'reply', parentMessageID: 'msg-root' }),
       expect.objectContaining({ onSuccess: expect.any(Function), onError: expect.any(Function) }),
     );
     const opts = sendMutate.mock.calls[0][1] as { onSuccess: () => void };
     act(() => opts.onSuccess());
-    expect(deleteDraftMutate).toHaveBeenCalledWith('d-1');
+    expect(clearDraftMutate).toHaveBeenCalledWith(
+      expect.objectContaining({ parentType: 'channel', parentMessageID: 'msg-root' }),
+    );
   });
 
   it('offers to add a mentioned non-member after replying in a channel thread', async () => {

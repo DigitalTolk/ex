@@ -55,7 +55,7 @@ vi.mock('@/hooks/useDrafts', () => ({
   useDraftForScope: () => ({ data: undefined }),
   useDraftAttachmentChips: () => [],
   useSaveDraft: () => ({ mutate: vi.fn() }),
-  useDeleteDraft: () => ({ mutate: vi.fn() }),
+  useClearDraftForScope: () => ({ mutate: vi.fn() }),
   restoreDraftScope: vi.fn(),
   restoreDraftScopeForContent: vi.fn(),
   suppressSentDraft: vi.fn(),

@@ -125,7 +125,7 @@ vi.mock('@/hooks/useThreads', () => ({
 
 let draftState: { data: { id?: string; body?: string; attachmentIDs?: string[] } | undefined } = { data: undefined };
 const saveDraftMutate = vi.fn();
-const deleteDraftMutate = vi.fn();
+const clearDraftMutate = vi.fn();
 const restoreDraftScopeForContentMock = vi.fn();
 const suppressSentDraftMock = vi.fn();
 const restoreDraftScopeMock = vi.fn();
@@ -133,7 +133,7 @@ vi.mock('@/hooks/useDrafts', () => ({
   useDraftForScope: () => draftState,
   useDraftAttachmentChips: () => [],
   useSaveDraft: () => ({ mutate: saveDraftMutate }),
-  useDeleteDraft: () => ({ mutate: deleteDraftMutate }),
+  useClearDraftForScope: () => ({ mutate: clearDraftMutate }),
   restoreDraftScope: (...a: unknown[]) => restoreDraftScopeMock(...a),
   restoreDraftScopeForContent: (...a: unknown[]) => restoreDraftScopeForContentMock(...a),
   suppressSentDraft: (...a: unknown[]) => suppressSentDraftMock(...a),
@@ -221,7 +221,7 @@ beforeEach(() => {
   followThreadMutate.mockReset();
   unfollowThreadMutate.mockReset();
   saveDraftMutate.mockReset();
-  deleteDraftMutate.mockReset();
+  clearDraftMutate.mockReset();
   restoreDraftScopeForContentMock.mockReset();
   suppressSentDraftMock.mockReset();
   restoreDraftScopeMock.mockReset();
@@ -264,28 +264,32 @@ describe('ThreadPanel coverage — merged user map', () => {
 });
 
 describe('ThreadPanel coverage — reply send', () => {
-  it('sends a reply with no existing draft (no draftID delete path)', async () => {
+  it('sends a reply even when no draft is cached (still clears by scope)', async () => {
     draftState = { data: undefined };
     const screen = await mount();
     await screen.getByTestId('mi-send').click();
     expect(suppressSentDraftMock).toHaveBeenCalled();
     expect(sendMutate).toHaveBeenCalled();
-    // No draftID → the no-draft branch fired; the onSuccess/onError config
-    // passed to send.mutate has no deleteDraft callback.
     const call = sendMutate.mock.calls[0];
     expect(call[0].parentMessageID).toBe('ROOT');
+    // onSuccess clears by scope regardless of whether a draft id was cached —
+    // the fix for drafts left behind after sending on a slow connection.
+    (call[1] as { onSuccess?: () => void }).onSuccess?.();
+    expect(clearDraftMutate).toHaveBeenCalledWith(
+      expect.objectContaining({ parentType: 'channel', parentMessageID: 'ROOT' }),
+    );
   });
 
-  it('sends a reply that clears an existing saved draft on success', async () => {
+  it('clears the draft scope on a successful reply, restores it on error', async () => {
     draftState = { data: { id: 'draft-9', body: 'saved' } };
     const screen = await mount();
     await screen.getByTestId('mi-send').click();
     expect(sendMutate).toHaveBeenCalled();
-    // Invoke the onSuccess handler the panel passed to send.mutate → it
-    // deletes the saved draft (line 360).
     const options = sendMutate.mock.calls[0][1] as { onSuccess?: () => void; onError?: () => void };
     options.onSuccess?.();
-    expect(deleteDraftMutate).toHaveBeenCalledWith('draft-9');
+    expect(clearDraftMutate).toHaveBeenCalledWith(
+      expect.objectContaining({ parentType: 'channel', parentMessageID: 'ROOT' }),
+    );
     // The onError path restores the suppressed draft scope.
     options.onError?.();
     expect(restoreDraftScopeMock).toHaveBeenCalled();
