@@ -118,8 +118,25 @@ func (s *AsyncMobilePushSender) worker() {
 				if errors.Is(err, context.Canceled) && s.ctx.Err() != nil {
 					return
 				}
+				// An undeliverable push (no registered device / provider 4xx)
+				// means the OFFLINE fallback surfaced nothing — the recipient
+				// got no desktop popup (they're offline) and no mobile push.
+				// For an incident channel that is a silent miss, so log it at
+				// ERROR with an explicit marker rather than burying it in WARN.
+				if errors.Is(err, ErrPushUndeliverable) {
+					slog.Error(
+						"mobile push UNDELIVERABLE — recipient has no reachable device; offline fallback produced no alert",
+						"userID", job.recipientUserID,
+						"parentID", job.notification.ParentID,
+						"parentType", job.notification.ParentType,
+						"messageID", job.notification.MessageID,
+						"kind", job.notification.Kind,
+						"error", err,
+					)
+					continue
+				}
 				slog.Warn(
-					"mobile push send failed",
+					"mobile push send failed (transient, retries exhausted)",
 					"userID", job.recipientUserID,
 					"parentID", job.notification.ParentID,
 					"parentType", job.notification.ParentType,

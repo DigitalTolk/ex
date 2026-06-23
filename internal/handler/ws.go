@@ -34,11 +34,24 @@ type inboundMessage struct {
 	TimeZone        string `json:"timeZone"`        // optional — "timezone.update" heartbeat frame
 }
 
-// wsKeepAliveInterval is the cadence of server → client keep-alive pings. It is
-// a var (not a const) purely so tests can shrink it to drive the keep-alive
-// branch of the connection loop deterministically; production never reassigns
-// it.
-var wsKeepAliveInterval = 30 * time.Second
+// wsKeepAliveInterval is the cadence of server → client keep-alive pings AND
+// presence-TTL refreshes. It is a var (not a const) purely so tests can shrink
+// it to drive the keep-alive branch of the connection loop deterministically;
+// production never reassigns it.
+//
+// Kept comfortably below presenceTTL (internal/cache) so a live connection's
+// presence never lapses between refreshes, and short enough that a *dead*
+// connection is noticed quickly: every tick fires a WebSocket protocol ping
+// whose missing pong (peer asleep / network-partitioned / crashed without a
+// TCP close) trips the connection's context — clearing presence so the
+// mobile-push fallback fires. See NOTIFICATIONS.md / CLAUDE.md: incident
+// alerts depend on presence reflecting reality within seconds, not minutes.
+var wsKeepAliveInterval = 15 * time.Second
+
+// wsPongTimeout bounds how long we wait for a protocol pong before declaring the
+// peer dead. A var for the same test-shrinking reason. The dead-connection
+// detection window is at most wsKeepAliveInterval + wsPongTimeout.
+var wsPongTimeout = 10 * time.Second
 
 // wsConnWrite is the seam every server → client text write goes through. It is
 // a var (not a direct conn.Write call) so a test can force the write-failure
@@ -293,7 +306,33 @@ func (h *WSHandler) Connect(w http.ResponseWriter, r *http.Request) {
 			if err := writePing(ctx, conn); err != nil {
 				return
 			}
+			// Protocol-level liveness probe. writePing above only *writes* an
+			// app-level ping frame — on a half-open socket (peer asleep /
+			// network-partitioned) that write can sit in the TCP buffer for
+			// minutes without erroring, during which the loop keeps refreshing
+			// presence and the user looks "online" forever. A real ws Ping waits
+			// for the pong (processed by the read loop); no pong within
+			// wsPongTimeout means the peer is gone, so we cancel the connection
+			// context: the loop returns, the deferred OnDisconnect clears
+			// presence, and the offline mobile-push fallback fires. Run in a
+			// goroutine so the wait never stalls live event delivery on
+			// client.Events. Bounded: at most one in flight (timeout < interval).
+			go pingLiveness(ctx, conn, cancel)
 		}
+	}
+}
+
+// pingLiveness sends a WebSocket protocol ping and cancels the connection if no
+// pong arrives within wsPongTimeout. This is what makes presence reflect a
+// dead socket within seconds so the mobile-push fallback can engage.
+func pingLiveness(ctx context.Context, conn *websocket.Conn, cancel context.CancelFunc) {
+	pingCtx, pingCancel := context.WithTimeout(ctx, wsPongTimeout)
+	defer pingCancel()
+	if err := conn.Ping(pingCtx); err != nil {
+		// Distinguish a genuine missed pong from the connection simply being
+		// torn down concurrently (parent ctx already cancelled) — either way,
+		// cancelling is correct and idempotent.
+		cancel()
 	}
 }
 

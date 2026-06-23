@@ -547,6 +547,122 @@ func TestNotificationService_NotifyForMessage_RespectsMute(t *testing.T) {
 	}
 }
 
+// --- Default-level matrix (the real account default is "mentions, DMs &
+// keywords only"; the fanout/mute tests above opt into "all" via seedAllLevel).
+// These pin the behavior an end user actually experiences out of the box, plus
+// the per-channel "all messages" override that the client-side regression was
+// silently dropping. ---
+
+func TestNotificationService_NotifyForMessage_ChannelPlainMessageAtDefault_Suppressed(t *testing.T) {
+	svc, pub, members, _, chans, users := setupNotifier(t)
+	ctx := context.Background()
+
+	chans.channels["ch1"] = &model.Channel{ID: "ch1", Name: "general", Slug: "general", Type: model.ChannelTypePublic}
+	users.users["u-author"] = &model.User{ID: "u-author", DisplayName: "Alice"}
+	// u-bob has no saved settings → resolves to the quiet default (mentions
+	// only, no keywords). A plain, non-mention channel message must NOT notify.
+	users.users["u-bob"] = &model.User{ID: "u-bob", DisplayName: "Bob"}
+	members.memberships["ch1#u-author"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u-author"}
+	members.memberships["ch1#u-bob"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u-bob"}
+
+	svc.NotifyForMessage(ctx, &model.Message{ID: "m1", ParentID: "ch1", AuthorID: "u-author", Body: "hello everyone"}, ParentChannel)
+
+	if got := len(pub.published); got != 0 {
+		t.Fatalf("plain channel message at default level published %d, want 0", got)
+	}
+}
+
+func TestNotificationService_NotifyForMessage_ChannelOverrideAllLevel_Publishes(t *testing.T) {
+	// The exact scenario the user hit: account default is quiet, but the user
+	// set THIS channel's desktop level to "all messages". A plain channel
+	// message must then publish a notification.new (kind=message) to them.
+	svc, pub, members, _, chans, users := setupNotifier(t)
+	ctx := context.Background()
+
+	chans.channels["ch1"] = &model.Channel{ID: "ch1", Name: "general", Slug: "general", Type: model.ChannelTypePublic}
+	users.users["u-author"] = &model.User{ID: "u-author", DisplayName: "Alice"}
+	users.users["u-bob"] = &model.User{ID: "u-bob", DisplayName: "Bob"} // default account settings
+	members.memberships["ch1#u-author"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u-author"}
+	members.memberships["ch1#u-bob"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u-bob"}
+	all := model.NotificationLevelAll
+	members.userChannels = []*model.UserChannel{
+		{UserID: "u-bob", ChannelID: "ch1", DesktopLevel: &all},
+	}
+
+	svc.NotifyForMessage(ctx, &model.Message{ID: "m1", ParentID: "ch1", AuthorID: "u-author", Body: "hello everyone"}, ParentChannel)
+
+	if got := len(pub.published); got != 1 {
+		t.Fatalf("channel-override 'all' published %d, want 1", got)
+	}
+	if got := publishedKinds(pub)[pubsub.UserChannel("u-bob")]; got != NotificationKindMessage {
+		t.Errorf("kind = %q, want message", got)
+	}
+	if pub.published[0].channel != pubsub.UserChannel("u-bob") {
+		t.Errorf("recipient channel = %q, want u-bob", pub.published[0].channel)
+	}
+}
+
+func TestNotificationService_NotifyForMessage_DMPlainMessageAtDefault_Publishes(t *testing.T) {
+	// DMs are always notifiable — "direct messages" is part of even the quiet
+	// default level — so a plain DM at default settings still pings.
+	svc, pub, _, conv, _, users := setupNotifier(t)
+	ctx := context.Background()
+
+	users.users["u-author"] = &model.User{ID: "u-author", DisplayName: "Alice"}
+	users.users["u-bob"] = &model.User{ID: "u-bob", DisplayName: "Bob"} // default settings
+	conv.conversations["conv1"] = &model.Conversation{
+		ID: "conv1", Type: model.ConversationTypeDM, ParticipantIDs: []string{"u-author", "u-bob"},
+	}
+
+	svc.NotifyForMessage(ctx, &model.Message{ID: "m1", ParentID: "conv1", AuthorID: "u-author", Body: "yo"}, ParentConversation)
+
+	if got := len(pub.published); got != 1 {
+		t.Fatalf("DM at default level published %d, want 1", got)
+	}
+	if got := publishedKinds(pub)[pubsub.UserChannel("u-bob")]; got != NotificationKindMessage {
+		t.Errorf("kind = %q, want message", got)
+	}
+}
+
+func TestNotificationService_NotifyForMessage_ChannelMentionAtDefault_Publishes(t *testing.T) {
+	// An explicit @-mention bypasses the level gate entirely, so it pings even
+	// at the quiet default with no per-channel override.
+	svc, pub, members, _, chans, users := setupNotifier(t)
+	ctx := context.Background()
+
+	chans.channels["ch1"] = &model.Channel{ID: "ch1", Name: "general", Slug: "general", Type: model.ChannelTypePublic}
+	users.users["u-author"] = &model.User{ID: "u-author", DisplayName: "Alice"}
+	users.users["u-bob"] = &model.User{ID: "u-bob", DisplayName: "Bob"} // default settings
+	members.memberships["ch1#u-author"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u-author"}
+	members.memberships["ch1#u-bob"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u-bob"}
+
+	svc.NotifyForMessage(ctx, &model.Message{ID: "m1", ParentID: "ch1", AuthorID: "u-author", Body: "hey @[u-bob|Bob] look"}, ParentChannel)
+
+	if got := publishedKinds(pub)[pubsub.UserChannel("u-bob")]; got != NotificationKindMention {
+		t.Fatalf("mention at default published kind %q, want mention", got)
+	}
+}
+
+func TestNotificationService_NotifyForMessage_ChannelKeywordAtDefault_Publishes(t *testing.T) {
+	// A keyword hit (here the user's seeded name keyword) surfaces a message at
+	// the quiet default even without an @-mention or per-channel override.
+	svc, pub, members, _, chans, users := setupNotifier(t)
+	ctx := context.Background()
+
+	chans.channels["ch1"] = &model.Channel{ID: "ch1", Name: "general", Slug: "general", Type: model.ChannelTypePublic}
+	users.users["u-author"] = &model.User{ID: "u-author", DisplayName: "Alice"}
+	kwSettings := model.DefaultNotificationSettingsForNewUser("Bob")
+	users.users["u-bob"] = &model.User{ID: "u-bob", DisplayName: "Bob", NotificationSettings: &kwSettings}
+	members.memberships["ch1#u-author"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u-author"}
+	members.memberships["ch1#u-bob"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u-bob"}
+
+	svc.NotifyForMessage(ctx, &model.Message{ID: "m1", ParentID: "ch1", AuthorID: "u-author", Body: "has anyone seen Bob today?"}, ParentChannel)
+
+	if got := publishedKinds(pub)[pubsub.UserChannel("u-bob")]; got != NotificationKindMessage {
+		t.Fatalf("keyword hit at default published kind %q, want message", got)
+	}
+}
+
 func TestNotificationService_NotifyForMessage_SkipsSystemMessages(t *testing.T) {
 	svc, pub, _, _, _, _ := setupNotifier(t)
 	ctx := context.Background()

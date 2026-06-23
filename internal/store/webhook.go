@@ -10,6 +10,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/expression"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 )
 
 type IncomingWebhookStore interface {
@@ -81,29 +82,44 @@ func (s *IncomingWebhookStoreImpl) List(ctx context.Context) ([]*model.IncomingW
 	if err != nil {
 		return nil, fmt.Errorf("store: build webhook scan: %w", err)
 	}
-	out, err := s.Client.Scan(ctx, &dynamodb.ScanInput{
-		TableName:                 aws.String(s.Table),
-		FilterExpression:          expr.Filter(),
-		ExpressionAttributeNames:  expr.Names(),
-		ExpressionAttributeValues: expr.Values(),
-		// Strongly consistent so a just-created webhook is visible on the
-		// admin page's immediate refetch — a default (eventually consistent)
-		// scan intermittently omitted it, so creating one looked like it had
-		// silently failed until you retried.
-		ConsistentRead: aws.Bool(true),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("store: list webhooks: %w", err)
-	}
-	items := make([]*model.IncomingWebhook, 0, len(out.Items))
-	for _, av := range out.Items {
-		var item webhookItem
-		if err := attributevalue.UnmarshalMap(av, &item); err != nil {
-			return nil, fmt.Errorf("store: unmarshal webhook: %w", err)
+	// Page through LastEvaluatedKey. DynamoDB applies the 1MB read limit to the
+	// raw items scanned *before* the filter runs, so a single Scan over a
+	// non-trivial table returns only the webhooks that happened to fall in the
+	// first 1MB scanned — the rest are silently dropped from the admin list even
+	// though they still resolve by ID and post fine. As the table grows (every
+	// message/channel/membership shares this table) that window stops covering
+	// all WEBHOOK# items, so webhooks "disappear" from admin without pagination.
+	items := make([]*model.IncomingWebhook, 0)
+	var startKey map[string]types.AttributeValue
+	for {
+		out, err := s.Client.Scan(ctx, &dynamodb.ScanInput{
+			TableName:                 aws.String(s.Table),
+			FilterExpression:          expr.Filter(),
+			ExpressionAttributeNames:  expr.Names(),
+			ExpressionAttributeValues: expr.Values(),
+			ExclusiveStartKey:         startKey,
+			// Strongly consistent so a just-created webhook is visible on the
+			// admin page's immediate refetch — a default (eventually consistent)
+			// scan intermittently omitted it, so creating one looked like it had
+			// silently failed until you retried.
+			ConsistentRead: aws.Bool(true),
+		})
+		if err != nil {
+			return nil, fmt.Errorf("store: list webhooks: %w", err)
 		}
-		if strings.HasPrefix(item.PK, "WEBHOOK#") {
-			items = append(items, &item.IncomingWebhook)
+		for _, av := range out.Items {
+			var item webhookItem
+			if err := attributevalue.UnmarshalMap(av, &item); err != nil {
+				return nil, fmt.Errorf("store: unmarshal webhook: %w", err)
+			}
+			if strings.HasPrefix(item.PK, "WEBHOOK#") {
+				items = append(items, &item.IncomingWebhook)
+			}
 		}
+		if len(out.LastEvaluatedKey) == 0 {
+			break
+		}
+		startKey = out.LastEvaluatedKey
 	}
 	return items, nil
 }

@@ -1905,6 +1905,66 @@ func TestMessageService_ToggleReaction_Add(t *testing.T) {
 	}
 }
 
+// recordingNotifier captures the message IDs NotifyForMessage is invoked with,
+// so a test can assert which send paths do (and do not) fan out a user-facing
+// notification. NotifyForMessage runs in a detached goroutine, hence the
+// buffered channel.
+type recordingNotifier struct {
+	calls chan string
+}
+
+func (r *recordingNotifier) NotifyForMessage(_ context.Context, msg *model.Message, _ string) {
+	r.calls <- msg.ID
+}
+
+// Reacting to a message must NEVER produce a user-facing notification (sound /
+// popup / push). A reaction only publishes message.edited to refresh the UI;
+// it does not go through the notifier. A user reported "I got a ping when
+// someone reacted" — this guards against that, and against a future change that
+// wires the shared message.edited path into notifications. The positive control
+// (a real Send DOES notify) guarantees the negative assertion isn't vacuous:
+// once Send's notification has landed, a reaction notification (spawned earlier)
+// would have landed too.
+func TestMessageService_ToggleReaction_DoesNotNotify(t *testing.T) {
+	svc, messages, memberships, _, _ := setupMessageService()
+	rec := &recordingNotifier{calls: make(chan string, 8)}
+	svc.SetNotifier(rec)
+	ctx := context.Background()
+
+	memberships.memberships["ch1#user-1"] = &model.ChannelMembership{
+		ChannelID: "ch1", UserID: "user-1", Role: model.ChannelRoleMember,
+	}
+	messages.messages["ch1#m1"] = &model.Message{ID: "m1", ParentID: "ch1", AuthorID: "user-2", Body: "hi"}
+
+	// Reacting — must not notify.
+	if _, err := svc.ToggleReaction(ctx, "user-1", "ch1", ParentChannel, "m1", "👍"); err != nil {
+		t.Fatalf("ToggleReaction: %v", err)
+	}
+	// Positive control — a real send DOES notify.
+	sent, err := svc.Send(ctx, "user-1", "ch1", ParentChannel, "real message", "")
+	if err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+
+	select {
+	case id := <-rec.calls:
+		if id == "m1" {
+			t.Fatalf("reaction on m1 triggered a notification; reactions must never notify")
+		}
+		if id != sent.ID {
+			t.Fatalf("unexpected notification for %q, want the sent message %q", id, sent.ID)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("positive control failed: a real Send did not notify")
+	}
+	// No further notification may arrive — in particular not the reaction's.
+	select {
+	case extra := <-rec.calls:
+		t.Fatalf("a second notification fired for %q; the reaction must not notify", extra)
+	case <-time.After(200 * time.Millisecond):
+	}
+}
+
 // Adding a 17th distinct emoji to a message must be rejected. Toggling
 // an emoji that's already on the message (whether the user reacted with
 // it or not) must still work — the cap is on distinct *kinds* of

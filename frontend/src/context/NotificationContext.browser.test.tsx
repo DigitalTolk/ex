@@ -125,16 +125,24 @@ describe('NotificationContext browser', () => {
     captured!.dispatch(basePayload({ authorID: 'u-me' }));
   });
 
-  it('dispatch suppresses channel "message" kind (noisy by default)', async () => {
-    await render(
-      <NotificationProvider>
-        <Capture />
-      </NotificationProvider>,
-    );
-    captured!.dispatch(
-      basePayload({ kind: 'message', parentType: 'channel', authorID: 'u-other' }),
-    );
-    // Returned early; we don't need to assert side-effects — branch covered.
+  it('dispatch banners a channel "message" kind — the backend already decided it should notify', async () => {
+    // Regression: the client used to drop every channel `message` payload,
+    // which silently swallowed notifications the user opted into via a
+    // per-channel "all messages" override. The backend is the source of truth;
+    // if it published one for a channel we're not actively viewing, it banners.
+    const instances: FakeNote[] = [];
+    const restore = installFakeNotification(instances);
+    try {
+      await render(<NotificationProvider><Capture /></NotificationProvider>);
+      await vi.waitFor(() => expect(captured).not.toBeNull());
+      captured!.setCurrentUserID('u-me');
+      captured!.dispatch(
+        basePayload({ kind: 'message', parentType: 'channel', authorID: 'u-other' }),
+      );
+      await vi.waitFor(() => expect(instances.length).toBe(1));
+    } finally {
+      restore();
+    }
   });
 
   it('does NOT suppress a webhook channel "message" (integration alerts always banner, even from your own webhook)', async () => {
@@ -144,8 +152,8 @@ describe('NotificationContext browser', () => {
       await render(<NotificationProvider><Capture /></NotificationProvider>);
       await vi.waitFor(() => expect(captured).not.toBeNull());
       captured!.setCurrentUserID('u-me');
-      // A plain channel "message" is suppressed, and an own-author one is too.
-      // The webhook flag bypasses BOTH guards so the alert still banners —
+      // An own-author message is normally suppressed (echo of your own send).
+      // The webhook flag bypasses that guard so the alert still banners —
       // authorID is the webhook's creator (u-me), who wired it up and wants it.
       captured!.dispatch(
         basePayload({ kind: 'message', parentType: 'channel', authorID: 'u-me', webhook: true }),

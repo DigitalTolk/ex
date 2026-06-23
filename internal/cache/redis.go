@@ -18,7 +18,17 @@ var ErrCacheMiss = errors.New("cache miss")
 const userKeyPrefix = "user:"
 const userCacheTTL = 15 * time.Minute
 const presenceKeyPrefix = "presence:online:"
-const presenceTTL = 90 * time.Second
+
+// presenceTTL is the backstop expiry for a user's "online" marker. The WS
+// keep-alive refreshes it every wsKeepAliveInterval (15s), so it must stay
+// comfortably above that to avoid a live user flapping offline between
+// refreshes. It is also the *latest* a dead connection can keep a user looking
+// online if the graceful OnDisconnect cleanup never runs (e.g. Redis hiccup) —
+// so it is deliberately tight (40s, was 90s) to bound the window in which a
+// dead desktop socket would suppress the mobile-push fallback. Primary
+// dead-socket detection is the protocol ping/pong in the WS keep-alive loop;
+// this TTL is the secondary safety net. See CLAUDE.md (Notifications).
+const presenceTTL = 40 * time.Second
 const emojiFreqKeyPrefix = "emoji:freq:"
 
 // emojiFreqTTL ages out a user's emoji-usage history so a long-dormant

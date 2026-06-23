@@ -34,7 +34,7 @@ vi.mock('@/lib/api', () => ({
 interface InputDoubleProps {
   onSend: (v: { body: string; attachmentIDs?: string[] }) => void;
   onCancel?: () => void;
-  onDraftChange?: (v: { body: string; attachmentIDs?: string[] }) => void;
+  onDraftChange?: (v: { body: string; attachmentIDs?: string[] }, options?: { notify?: boolean }) => void;
   placeholder?: string;
   submitLabel?: string;
   initialBody?: string;
@@ -63,6 +63,12 @@ vi.mock('./MessageInput', () => ({
           onClick={() => props.onDraftChange?.({ body: 'draft no attachments' } as { body: string })}
         >
           draft-no-att
+        </button>
+        <button
+          data-testid="mi-draft-notify"
+          onClick={() => props.onDraftChange?.({ body: 'draft text', attachmentIDs: [] }, { notify: true })}
+        >
+          draft-notify
         </button>
         <button
           data-testid="mi-send-noatt"
@@ -296,7 +302,7 @@ describe('ThreadPanel coverage — reply send', () => {
 });
 
 describe('ThreadPanel coverage — draft change', () => {
-  it('persists a draft change through the save mutation', async () => {
+  it('persists a keystroke draft change SILENTLY so the indicator stays hidden', async () => {
     const screen = await mount();
     await screen.getByTestId('mi-draft').click();
     expect(restoreDraftScopeForContentMock).toHaveBeenCalled();
@@ -306,6 +312,20 @@ describe('ThreadPanel coverage — draft change', () => {
       parentMessageID: 'ROOT',
       body: 'draft text',
       attachmentIDs: [],
+      silent: true,
+    });
+  });
+
+  it('surfaces the draft (silent=false) on a focus-loss flush (notify)', async () => {
+    const screen = await mount();
+    await screen.getByTestId('mi-draft-notify').click();
+    expect(saveDraftMutate).toHaveBeenCalledWith({
+      parentID: 'ch-1',
+      parentType: 'channel',
+      parentMessageID: 'ROOT',
+      body: 'draft text',
+      attachmentIDs: [],
+      silent: false,
     });
   });
 
@@ -320,6 +340,7 @@ describe('ThreadPanel coverage — draft change', () => {
       parentMessageID: 'ROOT',
       body: 'draft no attachments',
       attachmentIDs: [],
+      silent: true,
     });
   });
 });

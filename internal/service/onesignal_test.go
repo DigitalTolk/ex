@@ -72,8 +72,12 @@ func TestOneSignalPushSender_4xxIsPermanentNoRetry(t *testing.T) {
 		calls++
 		return resp(http.StatusBadRequest), nil
 	})
-	if err := s.Send(context.Background(), "u-1", Notification{}); err == nil {
+	err := s.Send(context.Background(), "u-1", Notification{})
+	if err == nil {
 		t.Fatal("expected error for 4xx")
+	}
+	if !errors.Is(err, ErrPushUndeliverable) {
+		t.Errorf("4xx error %q should wrap ErrPushUndeliverable", err)
 	}
 	if calls != 1 {
 		t.Errorf("calls = %d, want 1 (4xx is permanent, no retry)", calls)
@@ -293,8 +297,13 @@ func TestOneSignalPushSender_FailureReturnsSanitizedError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	if got := err.Error(); got != "onesignal: request failed with status 401" {
-		t.Fatalf("error = %q", got)
+	// Still sanitized: reports the status, never leaks the provider's response body.
+	if got := err.Error(); !strings.Contains(got, "request failed with status 401") || strings.Contains(got, "private provider body") {
+		t.Fatalf("error = %q (must report status, must not leak provider body)", got)
+	}
+	// A 4xx is a permanent, undeliverable failure so the caller can escalate it.
+	if !errors.Is(err, ErrPushUndeliverable) {
+		t.Fatalf("4xx error %q should wrap ErrPushUndeliverable", err)
 	}
 }
 

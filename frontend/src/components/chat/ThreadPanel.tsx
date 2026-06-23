@@ -380,7 +380,7 @@ export function ThreadPanel({
   }, [anchorMsgId, wasAtBottomRef]);
 
   const handleDraftChange = useCallback(
-    (value: SendMessageInput) => {
+    (value: SendMessageInput, options?: { notify?: boolean }) => {
       /* istanbul ignore next -- ThreadPanel always renders inside a channel or conversation, so parentID (channelId ?? conversationId) is always set; defensive. */
       if (!parentID) return;
       restoreDraftScopeForContent(draftScope, value);
@@ -390,6 +390,9 @@ export function ThreadPanel({
         parentMessageID: threadRootID,
         body: value.body,
         attachmentIDs: value.attachmentIDs ?? [],
+        // Keystroke saves persist silently; the focus-loss flush (notify)
+        // is what surfaces the draft in the sidebar.
+        silent: !options?.notify,
       });
     },
     [parentID, parentType, threadRootID, draftScope, saveDraftMutate],

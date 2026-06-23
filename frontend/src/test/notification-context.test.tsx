@@ -40,16 +40,20 @@ const channelMessagePayload: NotificationPayload = {
 let dispatchSpy: ((n: NotificationPayload) => void) | null = null;
 let setActiveSpy: ((id: string | null) => void) | null = null;
 let setUserSpy: ((id: string | null) => void) | null = null;
+let setSoundSpy: ((v: boolean) => void) | null = null;
+let setBrowserSpy: ((v: boolean) => void) | null = null;
 let permissionSpy: string | null = null;
 
 function Probe() {
-  const { dispatch, setActiveParent, setCurrentUserID, permission } = useNotifications();
+  const { dispatch, setActiveParent, setCurrentUserID, setSoundEnabled, setBrowserEnabled, permission } = useNotifications();
   useEffect(() => {
     dispatchSpy = dispatch;
     setActiveSpy = setActiveParent;
     setUserSpy = setCurrentUserID;
+    setSoundSpy = setSoundEnabled;
+    setBrowserSpy = setBrowserEnabled;
     permissionSpy = permission;
-  }, [dispatch, setActiveParent, setCurrentUserID, permission]);
+  }, [dispatch, setActiveParent, setCurrentUserID, setSoundEnabled, setBrowserEnabled, permission]);
   return <div data-testid="probe">{permission}</div>;
 }
 
@@ -294,12 +298,28 @@ describe('NotificationProvider', () => {
     expect(notificationCtor).toHaveBeenCalledTimes(1);
   });
 
-  it('suppresses regular channel messages even when not on the active parent', () => {
-    // Channels are noisy — joining one shouldn't mean every message
-    // pings you. Only @mentions / @all / @here / thread replies
-    // (kinds 'mention' and 'thread_reply') escalate from a channel.
+  it('fires a regular channel message when the backend published it (e.g. channel set to "all messages")', () => {
+    // Regression: the client used to drop EVERY channel `message` payload by
+    // kind/parentType, which silently swallowed notifications the user opted
+    // into via a per-channel "all messages" override. The backend is the
+    // source of truth for *whether* to notify; if a notification.new arrives
+    // for a channel message and the user isn't looking at that channel, it
+    // must ping + popup.
     renderProbe();
     act(() => {
+      dispatchSpy!(channelMessagePayload);
+    });
+    expect(playMock).toHaveBeenCalledTimes(1);
+    expect(notificationCtor).toHaveBeenCalledTimes(1);
+  });
+
+  it('suppresses a channel message only while that channel is the active on-screen parent', () => {
+    // The active-view guard is the one remaining client suppression for
+    // channel messages: no need to ping the channel you're staring at.
+    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+    renderProbe();
+    act(() => {
+      setActiveSpy!('ch-1');
       dispatchSpy!(channelMessagePayload);
     });
     expect(playMock).not.toHaveBeenCalled();
@@ -496,6 +516,54 @@ describe('NotificationProvider', () => {
     const oldCalls = notificationCtor.mock.calls.filter((c) => (c[1] as NotificationOptions).body === 'hello there');
     // 1 (m-old) + 256 (m-0..m-255) + 1 (m-old re-fired) = 258.
     expect(oldCalls).toHaveLength(258);
+  });
+
+  it('a copy suppressed because you were viewing the channel does not dedup a later deliverable copy', () => {
+    // Incident-critical: the per-message dedup must record a messageID as
+    // "alerted" only when it actually surfaces an alert — NOT when a copy is
+    // merely suppressed. Otherwise the first (suppressed) copy poisons the
+    // dedup set and a later copy that should alert is silently swallowed.
+    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+    renderProbe();
+    const payload = { ...channelMessagePayload, messageID: 'm-incident' };
+    act(() => {
+      setActiveSpy!('ch-1'); // looking right at the channel → first copy suppressed
+      dispatchSpy!(payload);
+    });
+    expect(playMock).not.toHaveBeenCalled();
+    expect(notificationCtor).not.toHaveBeenCalled();
+    act(() => {
+      setActiveSpy!(null); // looked away → a later copy must still alert
+      dispatchSpy!(payload);
+    });
+    expect(playMock).toHaveBeenCalledTimes(1);
+    expect(notificationCtor).toHaveBeenCalledTimes(1);
+  });
+
+  it('a copy that surfaces nothing (sound+browser off) is not deduped, so a retry still alerts', () => {
+    // Covers the `delivered === false` path: when neither sound nor a popup
+    // fired, the messageID is left unrecorded so re-enabling alerts and
+    // re-dispatching the same message still surfaces it.
+    renderProbe();
+    const payload = { ...samplePayload, messageID: 'm-quiet' };
+    // Separate act() blocks so each pref change re-renders and reaches the
+    // dispatch refs before the next dispatch.
+    act(() => {
+      setSoundSpy!(false);
+      setBrowserSpy!(false);
+    });
+    act(() => {
+      dispatchSpy!(payload); // surfaces nothing → not recorded as seen
+    });
+    expect(playMock).not.toHaveBeenCalled();
+    expect(notificationCtor).not.toHaveBeenCalled();
+    act(() => {
+      setSoundSpy!(true); // alerts back on
+    });
+    act(() => {
+      dispatchSpy!(payload); // same messageID — must NOT be deduped away
+    });
+    expect(playMock).toHaveBeenCalledTimes(1);
   });
 
   it('falls back to no-op when used outside the provider', () => {

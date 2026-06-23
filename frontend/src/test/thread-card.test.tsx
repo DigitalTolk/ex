@@ -252,7 +252,10 @@ describe('ThreadCard', () => {
     await screen.findByTestId('reply-body');
     const onDraftChange = lastMessageInputProps.current!.onDraftChange as (
       i: { body: string; attachmentIDs?: string[] },
+      options?: { notify?: boolean },
     ) => void;
+    // A keystroke save (no notify) must persist SILENTLY so the /threads
+    // draft indicator doesn't surface mid-typing.
     act(() => onDraftChange({ body: 'wip', attachmentIDs: ['a-1'] }));
     expect(saveDraftMutate).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -261,12 +264,18 @@ describe('ThreadCard', () => {
         parentMessageID: 'msg-root',
         body: 'wip',
         attachmentIDs: ['a-1'],
+        silent: true,
       }),
     );
     // Omitting attachmentIDs exercises the `?? []` fallback.
     act(() => onDraftChange({ body: 'wip2' }));
     expect(saveDraftMutate).toHaveBeenLastCalledWith(
-      expect.objectContaining({ body: 'wip2', attachmentIDs: [] }),
+      expect.objectContaining({ body: 'wip2', attachmentIDs: [], silent: true }),
+    );
+    // The focus-loss flush (notify) is what surfaces the draft.
+    act(() => onDraftChange({ body: 'wip3' }, { notify: true }));
+    expect(saveDraftMutate).toHaveBeenLastCalledWith(
+      expect.objectContaining({ body: 'wip3', silent: false }),
     );
   });
 

@@ -94,6 +94,22 @@ func TestWritePing_WriteFails(t *testing.T) {
 	})
 }
 
+// TestPingLiveness_CancelsOnDeadPeer covers the liveness probe: when the
+// WebSocket protocol Ping fails (the peer is gone — no pong, or the socket is
+// dead), pingLiveness MUST cancel the connection context. That is what makes the
+// keep-alive loop return, run the deferred OnDisconnect to clear presence, and
+// let the offline mobile-push fallback engage. Without this, a half-open desktop
+// socket keeps the user "online" and silently swallows incident alerts.
+func TestPingLiveness_CancelsOnDeadPeer(t *testing.T) {
+	withDeadServerConn(t, func(ctx context.Context, conn *websocket.Conn) {
+		cancelled := false
+		pingLiveness(ctx, conn, func() { cancelled = true })
+		if !cancelled {
+			t.Error("pingLiveness must cancel the connection when the ping fails on a dead peer")
+		}
+	})
+}
+
 // --- Integration: keep-alive ticker branch + initial-ping success ----------
 
 // TestWSHandler_Connect_KeepAliveTickerFires shrinks the keep-alive interval so

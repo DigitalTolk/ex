@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -13,6 +14,15 @@ import (
 
 	"github.com/cenkalti/backoff/v4"
 )
+
+// ErrPushUndeliverable marks a push failure that retrying cannot fix — a 4xx
+// from the push provider, most commonly "no registered device for this user"
+// (the user never installed/enabled the mobile app, or their device token
+// lapsed). The async worker logs these LOUDLY (ERROR), because for an incident
+// channel it means the offline fallback produced no alert at all and a human
+// should know that recipient is unreachable on mobile. Transient failures
+// (network blip / 5xx) that merely exhausted retries stay at WARN.
+var ErrPushUndeliverable = errors.New("push undeliverable (no device / rejected by provider)")
 
 const defaultOneSignalNotificationsURL = "https://api.onesignal.com/notifications?c=push"
 
@@ -132,7 +142,10 @@ func (s *OneSignalPushSender) Send(ctx context.Context, recipientUserID string, 
 			return fmt.Errorf("onesignal: request failed with status %d", res.StatusCode)
 		}
 		if res.StatusCode < 200 || res.StatusCode >= 300 {
-			return backoff.Permanent(fmt.Errorf("onesignal: request failed with status %d", res.StatusCode))
+			// 4xx: permanent. Tag it ErrPushUndeliverable so the caller can tell
+			// "this recipient cannot receive a push" (e.g. no registered device)
+			// from a transient failure and escalate accordingly.
+			return backoff.Permanent(fmt.Errorf("onesignal: request failed with status %d: %w", res.StatusCode, ErrPushUndeliverable))
 		}
 		return nil
 	}
