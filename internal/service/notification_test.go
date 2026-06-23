@@ -965,6 +965,94 @@ func TestNotificationService_PreviewBody_ClampsAndStripsNewlines(t *testing.T) {
 	}
 }
 
+func TestPreviewBody_FlattensMentionsAndRendersEmoji(t *testing.T) {
+	cases := []struct {
+		name, in, want string
+	}{
+		{"user mention", "hi @[u-1|Alice]", "hi @Alice"},
+		{"channel mention", "see ~[ch-1|general]", "see ~general"},
+		{"both mention kinds", "@[u-1|Bob] check ~[ch-9|incidents]", "@Bob check ~incidents"},
+		{"known emoji shortcode", "deploy done :tada:", "deploy done 🎉"},
+		{"multiple emoji", ":fire: prod is :fire:", "🔥 prod is 🔥"},
+		{"toned emoji renders base glyph", "nice :thumbsup::skin-tone-3:", "nice 👍"},
+		{"unknown toned shortcode left as-is", "x :notareal::skin-tone-2:", "x :notareal::skin-tone-2:"},
+		{"unknown/custom shortcode is left as-is", "love :my_custom_logo:", "love :my_custom_logo:"},
+		{"mention + emoji together", "@[u-1|Ann] :wave:", "@Ann 👋"},
+		{"plain text untouched", "all clear", "all clear"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := previewBody(tc.in); got != tc.want {
+				t.Errorf("previewBody(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+// The generated shortcode map must be wired and contain the common shortcodes
+// the picker emits — a guard against the generator/map silently going missing.
+func TestEmojiShortcodeMap_Wired(t *testing.T) {
+	if len(emojiShortcodeToUnicode) < 1000 {
+		t.Fatalf("emoji shortcode map has %d entries, want a full set (regenerate via build-emoji-data.mjs)", len(emojiShortcodeToUnicode))
+	}
+	for sc, want := range map[string]string{"smile": "😄", "thumbsup": "👍", "tada": "🎉"} {
+		if got := emojiShortcodeToUnicode[sc]; got != want {
+			t.Errorf("emojiShortcodeToUnicode[%q] = %q, want %q", sc, got, want)
+		}
+	}
+}
+
+func TestNotificationBody_WebhookAttachmentSynthesis(t *testing.T) {
+	att := func(a model.MessageAttachment) *model.Message {
+		return &model.Message{ID: "m", WebhookUsername: "CI Bot", MessageAttachments: []model.MessageAttachment{a}}
+	}
+	cases := []struct {
+		name string
+		msg  *model.Message
+		want string
+	}{
+		{"body wins over attachments", &model.Message{Body: "hello", MessageAttachments: []model.MessageAttachment{{Title: "ignored"}}}, "hello"},
+		{"fallback wins when present", att(model.MessageAttachment{Fallback: "build failed", Title: "Build #42"}), "build failed"},
+		{"title+text synthesized when no fallback", att(model.MessageAttachment{Title: "Build #42 failed", Text: "commit abc on main"}), "Build #42 failed — commit abc on main"},
+		{"pretext+title+text ordered", att(model.MessageAttachment{Pretext: "Deploy", Title: "prod", Text: "v1.2.3"}), "Deploy — prod — v1.2.3"},
+		{"fields rendered title: value", att(model.MessageAttachment{Fields: []model.MessageAttachmentField{{Title: "Status", Value: "failed"}, {Title: "Env", Value: "prod"}}}), "Status: failed — Env: prod"},
+		{"field value-only and title-only", att(model.MessageAttachment{Fields: []model.MessageAttachmentField{{Value: "just a value"}, {Title: "just a title"}}}), "just a value — just a title"},
+		{"footer as last resort", att(model.MessageAttachment{Footer: "via Jenkins"}), "via Jenkins"},
+		{"author name as final resort", att(model.MessageAttachment{AuthorName: "Grafana"}), "Grafana"},
+		{"whitespace-only fields are skipped", att(model.MessageAttachment{Fallback: "   ", Title: "  Real title  "}), "Real title"},
+		{"entirely empty attachment yields empty", att(model.MessageAttachment{}), ""},
+		{"falls through to a later non-empty attachment", &model.Message{MessageAttachments: []model.MessageAttachment{{}, {Title: "second one"}}}, "second one"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := notificationBody(tc.msg); got != tc.want {
+				t.Errorf("notificationBody = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// An attachments-only webhook with NO fallback must still produce a meaningful
+// popup body (the regression: it arrived near-empty).
+func TestNotificationService_WebhookAttachmentNoFallback_PopupNotEmpty(t *testing.T) {
+	svc, pub, members, _, chans, users := setupNotifier(t)
+	ctx := context.Background()
+	chans.channels["ch1"] = &model.Channel{ID: "ch1", Name: "general", Slug: "general", Type: model.ChannelTypePublic}
+	users.users["u-author"] = &model.User{ID: "u-author", DisplayName: "Alice"}
+	members.memberships["ch1#u-author"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u-author"}
+	members.memberships["ch1#u-bob"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u-bob"}
+
+	svc.NotifyForMessage(ctx, &model.Message{
+		ID: "m1", ParentID: "ch1", AuthorID: "u-author", WebhookUsername: "CI Bot",
+		MessageAttachments: []model.MessageAttachment{{Title: "Build #42 failed", Text: "main is red"}},
+	}, ParentChannel)
+
+	notif := publishedNotifications(pub)[pubsub.UserChannel("u-bob")]
+	if notif.Body != "Build #42 failed — main is red" {
+		t.Fatalf("notification body = %q, want the synthesized summary", notif.Body)
+	}
+}
+
 // Thread-reply notifications must include the thread query + #msg-
 // fragment so clicking the popup opens the thread panel and highlights
 // the root, not just the parent channel scrolled to the bottom.

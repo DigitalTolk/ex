@@ -793,19 +793,87 @@ func notificationBody(msg *model.Message) string {
 		return msg.Body
 	}
 	for _, a := range msg.MessageAttachments {
-		if a.Fallback != "" {
-			return a.Fallback
+		if s := attachmentSummary(a); s != "" {
+			return s
 		}
 	}
 	return ""
 }
 
+// attachmentSummary produces the notification-preview text for a rich
+// (webhook) attachment. `fallback` is the field Slack/Mattermost define for
+// exactly this — a plain-text summary — so it wins when present. But many
+// webhook senders omit it (CI/deploy bots that only set title/text/fields),
+// which left the popup empty. So when there's no fallback we synthesize a
+// readable summary from the visible fields, mirroring what the attachment
+// renders, rather than show a near-empty notification.
+func attachmentSummary(a model.MessageAttachment) string {
+	if s := strings.TrimSpace(a.Fallback); s != "" {
+		return s
+	}
+	var parts []string
+	addPart := func(s string) {
+		if s = strings.TrimSpace(s); s != "" {
+			parts = append(parts, s)
+		}
+	}
+	addPart(a.Pretext)
+	addPart(a.Title)
+	addPart(a.Text)
+	for _, f := range a.Fields {
+		title, value := strings.TrimSpace(f.Title), strings.TrimSpace(f.Value)
+		switch {
+		case title != "" && value != "":
+			addPart(title + ": " + value)
+		case value != "":
+			addPart(value)
+		default:
+			addPart(title)
+		}
+	}
+	if len(parts) > 0 {
+		return strings.Join(parts, " — ")
+	}
+	// Last resort: chrome-only fields, so the popup still says *something*
+	// rather than arriving blank.
+	if s := strings.TrimSpace(a.Footer); s != "" {
+		return s
+	}
+	return strings.TrimSpace(a.AuthorName)
+}
+
 func previewBody(body string) string {
 	const max = 140
 	body = userMentionPattern.ReplaceAllString(body, "@$2")
+	body = channelMentionRE.ReplaceAllString(body, "~$2")
+	body = renderEmojiShortcodes(body)
 	body = strings.ReplaceAll(body, "\n", " ")
-	if len(body) > max {
-		return body[:max-1] + "…"
+	// Rune-aware clamp: byte-slicing would split a multi-byte emoji glyph into
+	// invalid UTF-8.
+	if runes := []rune(body); len(runes) > max {
+		return string(runes[:max-1]) + "…"
 	}
 	return body
+}
+
+// renderEmojiShortcodes replaces known emoji shortcodes with their unicode
+// glyph so a popup shows 😄 rather than ":smile:". The toned form is handled
+// first so the bare matcher can't eat part of it; a toned shortcode renders as
+// the base glyph (the skin-tone modifier is dropped in the flat preview).
+// Unknown/custom shortcodes pass through unchanged — there is no glyph to show.
+func renderEmojiShortcodes(body string) string {
+	body = emojiTonedRE.ReplaceAllStringFunc(body, func(s string) string {
+		m := emojiTonedRE.FindStringSubmatch(s)
+		if g, ok := emojiShortcodeToUnicode[strings.ToLower(m[1])]; ok {
+			return g
+		}
+		return s
+	})
+	return emojiBareRE.ReplaceAllStringFunc(body, func(s string) string {
+		m := emojiBareRE.FindStringSubmatch(s)
+		if g, ok := emojiShortcodeToUnicode[strings.ToLower(m[1])]; ok {
+			return g
+		}
+		return s
+	})
 }
