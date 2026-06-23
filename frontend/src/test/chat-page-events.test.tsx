@@ -703,7 +703,11 @@ describe('ChatPage WebSocket handlers', () => {
     expect(dispatchNotification).toHaveBeenCalledTimes(1);
   });
 
-  it('onNotification counts channel mentions but not ordinary channel messages', () => {
+  it('onNotification marks the channel unread for BOTH messages and mentions', () => {
+    // The backend is the single source of truth for whether to alert. If a
+    // top-level channel notification.new arrived, the sidebar must light up
+    // regardless of kind — re-gating on kind === 'mention' here let per-channel
+    // "all messages"/keyword alerts play a sound with no badge.
     renderAt('/');
     const payload = {
       title: 't',
@@ -715,8 +719,9 @@ describe('ChatPage WebSocket handlers', () => {
     };
 
     (capturedOptions.onNotification as (d: unknown) => void)({ ...payload, kind: 'message' });
-    expect(markChannelNotificationUnread).not.toHaveBeenCalled();
+    expect(markChannelNotificationUnread).toHaveBeenCalledWith('ch-1');
 
+    markChannelNotificationUnread.mockClear();
     (capturedOptions.onNotification as (d: unknown) => void)({ ...payload, kind: 'mention' });
     expect(markChannelNotificationUnread).toHaveBeenCalledWith('ch-1');
   });

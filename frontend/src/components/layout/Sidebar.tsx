@@ -424,7 +424,7 @@ function SidebarSectionsSkeleton() {
 
 export function Sidebar({ onClose }: SidebarProps) {
   const { user } = useAuth();
-  const { unreadChannels, unreadConversations, unreadThreadNotifications, hiddenConversations, hideConversation, channelUnreadCounts, conversationUnreadCounts } = useUnread();
+  const { unreadChannels, unreadChannelNotifications, unreadConversations, unreadThreadNotifications, hiddenConversations, hideConversation, channelUnreadCounts, conversationUnreadCounts } = useUnread();
   const { data: channels } = useUserChannels();
   const conversationsQuery = useUserConversations();
   const { data: conversations } = conversationsQuery;
@@ -1422,7 +1422,9 @@ export function Sidebar({ onClose }: SidebarProps) {
                       const ch = item.channel;
                       const isActive =
                         location.pathname === `/channel/${slugify(ch.channelName)}`;
-                      const hasNotification = (userState?.channelNotifications ?? []).includes(ch.channelID);
+                      const hasNotification =
+                        unreadChannelNotifications.has(ch.channelID) ||
+                        (userState?.channelNotifications ?? []).includes(ch.channelID);
                       return isActive || (!ch.muted && (unreadChannels.has(ch.channelID) || hasNotification));
                     }
                     const conv = item.conversation;
@@ -1579,6 +1581,7 @@ export function Sidebar({ onClose }: SidebarProps) {
                                   channel={item.channel}
                                   hasUnread={
                                     unreadChannels.has(item.channel.channelID) ||
+                                    unreadChannelNotifications.has(item.channel.channelID) ||
                                     (userState?.channelNotifications ?? []).includes(item.channel.channelID)
                                   }
                                   unreadCount={channelUnreadCounts?.get(item.channel.channelID) ?? 0}

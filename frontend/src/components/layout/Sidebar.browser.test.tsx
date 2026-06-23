@@ -85,11 +85,13 @@ vi.mock('@/context/AuthContext', () => ({
 
 let mockUnread: {
   unreadChannels: Set<string>;
+  unreadChannelNotifications: Set<string>;
   unreadConversations: Set<string>;
   unreadThreadNotifications: Set<string>;
   hiddenConversations: Set<string>;
 } = {
   unreadChannels: new Set(),
+  unreadChannelNotifications: new Set(),
   unreadConversations: new Set(),
   unreadThreadNotifications: new Set(),
   hiddenConversations: new Set(),
@@ -101,6 +103,7 @@ vi.mock('@/context/UnreadContext', () => ({
     hideConversation: hideConversationMock,
     unhideConversation: vi.fn(),
     markChannelUnread: vi.fn(),
+    markChannelNotificationUnread: vi.fn(),
     markConversationUnread: vi.fn(),
     clearChannelUnread: vi.fn(),
     clearConversationUnread: vi.fn(),
@@ -316,6 +319,7 @@ beforeEach(() => {
   currentLogout = vi.fn().mockResolvedValue(undefined);
   mockUnread = {
     unreadChannels: new Set(['ch-unread']),
+    unreadChannelNotifications: new Set(),
     unreadConversations: new Set(),
     unreadThreadNotifications: new Set(),
     hiddenConversations: new Set(),
@@ -764,6 +768,22 @@ describe('Sidebar browser render — rich fixtures', () => {
     expect(row).toBeTruthy();
   });
 
+  it('lights up a channel unread via a live notification (no message.new, no server state)', async () => {
+    // The "sound but no badge" regression: a top-level channel notification.new
+    // marks unreadChannelNotifications. The sidebar row must surface that on its
+    // own — without unreadChannels (message.new) or server channelNotifications.
+    mockUnread = {
+      unreadChannels: new Set(),
+      unreadChannelNotifications: new Set(['ch-general']),
+      unreadConversations: new Set(),
+      unreadThreadNotifications: new Set(),
+      hiddenConversations: new Set(),
+    };
+    mockUserState = { hiddenConversations: [], channelNotifications: [], threadNotifications: [], threadSeen: {} };
+    await render(<Frame />);
+    expect(document.querySelector('[data-testid="channel-unread-dot-ch-general"]')).toBeTruthy();
+  });
+
   it('renders empty state with no channels and no DMs (just nav links)', async () => {
     mockChannels = [];
     mockConversations = [];
@@ -890,6 +910,7 @@ describe('Sidebar browser render — rich fixtures', () => {
   it('renders with every conversation marked as unread', async () => {
     mockUnread = {
       unreadChannels: new Set(),
+      unreadChannelNotifications: new Set(),
       unreadConversations: new Set(mockConversations.map((c) => c.conversationID)),
       unreadThreadNotifications: new Set(),
       hiddenConversations: new Set(),
@@ -901,6 +922,7 @@ describe('Sidebar browser render — rich fixtures', () => {
   it('renders thread-notifications driving the Threads link bold', async () => {
     mockUnread = {
       unreadChannels: new Set(),
+      unreadChannelNotifications: new Set(),
       unreadConversations: new Set(),
       unreadThreadNotifications: new Set(['thr-1']),
       hiddenConversations: new Set(),
@@ -1046,6 +1068,7 @@ describe('Sidebar browser render — rich fixtures', () => {
     mockCategories = [];
     mockUnread = {
       unreadChannels: new Set(),
+      unreadChannelNotifications: new Set(),
       unreadConversations: new Set(['conv-favorite-dm']),
       unreadThreadNotifications: new Set(),
       hiddenConversations: new Set(),
@@ -1149,6 +1172,7 @@ describe('Sidebar browser render — rich fixtures', () => {
     mockCategories = [];
     mockUnread = {
       unreadChannels: new Set(),
+      unreadChannelNotifications: new Set(),
       unreadConversations: new Set(['conv-set-unread']),
       unreadThreadNotifications: new Set(),
       hiddenConversations: new Set(),
@@ -1169,6 +1193,7 @@ describe('Sidebar browser render — rich fixtures', () => {
   it('renders sections even when the unread-thread-notification set is undefined', async () => {
     mockUnread = {
       unreadChannels: new Set(),
+      unreadChannelNotifications: new Set(),
       unreadConversations: new Set(),
       // Force the `unreadThreadNotifications ?? new Set()` fallback.
       unreadThreadNotifications: undefined as unknown as Set<string>,
@@ -1190,6 +1215,7 @@ describe('Sidebar browser render — rich fixtures', () => {
     mockCategories = [];
     mockUnread = {
       unreadChannels: new Set(['ch-urgent']),
+      unreadChannelNotifications: new Set(),
       unreadConversations: new Set(),
       unreadThreadNotifications: new Set(),
       hiddenConversations: new Set(),

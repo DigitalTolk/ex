@@ -325,7 +325,13 @@ export default function ChatPage() {
         }
         queryClient.invalidateQueries({ queryKey: queryKeys.userThreads() });
         queryClient.invalidateQueries({ queryKey: queryKeys.userState() });
-      } else if (n.parentType === 'channel' && n.kind === 'mention') {
+      } else if (n.parentType === 'channel') {
+        // The backend is the single source of truth for whether to alert: if a
+        // top-level channel notification.new arrived, this user should see the
+        // channel light up — regardless of kind. Do NOT re-gate on
+        // kind === 'mention' here; that silently dropped per-channel "all
+        // messages"/keyword alerts, leaving a sound playing with no sidebar
+        // badge when the separate message.new path was missed.
         markChannelNotificationUnread(n.parentID);
       }
       dispatchNotification(n);
