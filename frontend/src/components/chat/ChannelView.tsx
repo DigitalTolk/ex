@@ -4,7 +4,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { Header } from '@/components/layout/Header';
 import { NotificationPreferencesDialog } from '@/components/channels/NotificationPreferencesDialog';
 import { MessageList } from './MessageList';
-import { MessageInput, type MessageInputHandle } from './MessageInput';
+import { MessageInput, type MessageInputHandle, type MessageInputValue } from './MessageInput';
 import { MessageDropZone } from './MessageDropZone';
 import { MemberList } from './MemberList';
 import { ThreadPanel } from './ThreadPanel';
@@ -41,7 +41,7 @@ import {
   restoreDraftScope,
   restoreDraftScopeForContent,
   suppressSentDraft,
-  useDeleteDraft,
+  useClearDraftForScope,
   useDraftAttachmentChips,
   useDraftForScope,
   useSaveDraft,
@@ -169,13 +169,11 @@ export function ChannelView() {
   // After sending a message that @mentions people not in the channel, offer to
   // invite them in one click (see NonMemberInvitePrompt).
   const { pendingInvites, checkMentions, clearInvites } = useNonMemberInvite(channel?.id, user?.id);
-  const draftID = draft?.id;
   const saveDraft = useSaveDraft();
-  const deleteDraft = useDeleteDraft();
+  const clearDraftMutate = useClearDraftForScope();
   const saveDraftMutate = saveDraft.mutate;
-  const deleteDraftMutate = deleteDraft.mutate;
   const handleDraftChange = useCallback(
-    (value: { body: string; attachmentIDs: string[] }, options?: { notify?: boolean }) => {
+    (value: MessageInputValue, options?: { notify?: boolean }) => {
       if (!channelID) return;
       restoreDraftScopeForContent(draftScope, value);
       saveDraftMutate({
@@ -186,6 +184,7 @@ export function ChannelView() {
         // Keystroke saves persist silently; the focus-loss flush (notify)
         // is what surfaces the draft in the sidebar.
         silent: !options?.notify,
+        ts: value.ts,
       });
     },
     [channelID, draftScope, saveDraftMutate],
@@ -196,16 +195,15 @@ export function ChannelView() {
       // previous prompt; empty result clears it).
       checkMentions(value.body);
       suppressSentDraft(draftScope);
-      if (!draftID) {
-        sendMessage.mutate(value, { onError: () => restoreDraftScope(draftScope) });
-        return;
-      }
       sendMessage.mutate(value, {
-        onSuccess: () => deleteDraftMutate(draftID),
+        // Clear the scope's server draft once the message is confirmed sent —
+        // by SCOPE, so a draft saved silently this session (whose id was never
+        // cached) is cleared too. onError restores the scope so it returns.
+        onSuccess: () => clearDraftMutate(draftScope),
         onError: () => restoreDraftScope(draftScope),
       });
     },
-    [sendMessage, draftScope, draftID, deleteDraftMutate, checkMentions],
+    [sendMessage, draftScope, clearDraftMutate, checkMentions],
   );
   const handleEditMessage = useCallback(
     (value: { body: string; attachmentIDs: string[] }) => {

@@ -138,10 +138,14 @@ type UserStateStore interface {
 
 // DraftStore defines persistence operations for server-side message drafts.
 type DraftStore interface {
+	// Upsert applies the draft using last-write-wins on draft.Ts (client edit
+	// time, epoch ms): stale writes are silently dropped by the store.
 	Upsert(ctx context.Context, draft *model.MessageDraft) error
 	Get(ctx context.Context, userID, id string) (*model.MessageDraft, error)
 	List(ctx context.Context, userID string) ([]*model.MessageDraft, error)
-	Delete(ctx context.Context, userID, id string) error
+	// Delete tombstones the draft at client ts (epoch ms). A delete older than
+	// the stored write is a no-op, so it can't remove a newer draft.
+	Delete(ctx context.Context, userID, id string, ts int64) error
 }
 
 // InviteStore defines persistence operations for invitations.

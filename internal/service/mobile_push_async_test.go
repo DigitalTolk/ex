@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -95,6 +96,30 @@ func TestAsyncMobilePushSender_WorkerHandlesProviderFailure(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("worker did not call provider")
+	}
+}
+
+// An undeliverable push (provider 4xx / no registered device) takes the loud
+// ERROR branch and then continues processing the queue — it must not crash or
+// stall the worker. Covers the errors.Is(err, ErrPushUndeliverable) arm.
+func TestAsyncMobilePushSender_WorkerHandlesUndeliverable(t *testing.T) {
+	inner := &immediateMobilePush{
+		called: make(chan string, 1),
+		err:    fmt.Errorf("onesignal: request failed with status 404: %w", ErrPushUndeliverable),
+	}
+	push := NewAsyncMobilePushSender(inner, 1, 1)
+	defer push.Close()
+
+	if err := push.Send(context.Background(), "u-1", Notification{MessageID: "m1"}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	select {
+	case got := <-inner.called:
+		if got != "u-1" {
+			t.Fatalf("provider userID = %q, want u-1", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("worker did not process the undeliverable push")
 	}
 }
 

@@ -76,6 +76,12 @@ export default defineConfig({
         'src/components/chat/NonMemberInvitePrompt.tsx',
         'src/lib/non-member-mentions.ts',
         'src/hooks/useNonMemberInvite.ts',
+        // Cross-tab notification dedup — a pure localStorage helper exhaustively
+        // unit-tested in jsdom (notification-dedup.test.ts), including its
+        // storage-throw / corrupt-payload fallback branches, which real browser
+        // localStorage never exercises. Pulled into the browser graph via
+        // NotificationContext; graded in jsdom, not here.
+        'src/lib/notification-dedup.ts',
       ],
       // 99% branch gate over the merged desktop + mobile browser run.
       // vitest enforces it (non-zero exit), so `npm run

@@ -7,6 +7,7 @@ import {
   restoreDraftScopeForContent,
   shouldRefetchDraftsForRemoteUpdate,
   suppressSentDraft,
+  useClearDraftForScope,
   useDeleteDraft,
   useDraftAttachmentChips,
   useDraftForScope,
@@ -228,6 +229,49 @@ describe('useDrafts', () => {
 
     await waitFor(() => expect(restored.result.current.isSuccess).toBe(true));
     expect(restored.result.current.data).toEqual([stale]);
+  });
+
+  it('useClearDraftForScope drops the scope from the local cache without any network call', async () => {
+    // The SERVER delete is folded into the send; this is local-only for instant UI.
+    vi.mocked(apiFetch).mockResolvedValue(undefined);
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    qc.setQueryData<MessageDraft[]>(['drafts'], [
+      { id: 'keep', userID: 'u-1', parentID: 'ch-x', parentType: 'channel', parentMessageID: '', body: 'keep', attachmentIDs: [], updatedAt: '', createdAt: '' },
+      { id: 'go', userID: 'u-1', parentID: 'dm-1', parentType: 'conversation', parentMessageID: '', body: 'go', attachmentIDs: [], updatedAt: '', createdAt: '' },
+    ]);
+    const wrapper = ({ children }: { children: ReactNode }) => createElement(QueryClientProvider, { client: qc }, children);
+    const { result } = renderHook(() => useClearDraftForScope(), { wrapper });
+    act(() => result.current({ parentID: 'dm-1', parentType: 'conversation' }));
+    expect(apiFetch).not.toHaveBeenCalled();
+    expect((qc.getQueryData<MessageDraft[]>(['drafts']) ?? []).map((d) => d.id)).toEqual(['keep']);
+  });
+
+  it('useSaveDraft sends the client ts and does not re-surface a save for an already-sent scope', async () => {
+    const saved: MessageDraft = {
+      id: 'd-1', userID: 'u-1', parentID: 'dm-1', parentType: 'conversation', parentMessageID: '',
+      body: 'sent', attachmentIDs: [], updatedAt: '2026-05-03T10:00:00Z', createdAt: '2026-05-03T10:00:00Z',
+    };
+    vi.mocked(apiFetch).mockResolvedValue(saved);
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    qc.setQueryData<MessageDraft[]>(['drafts'], []);
+    const wrapper = ({ children }: { children: ReactNode }) => createElement(QueryClientProvider, { client: qc }, children);
+    const scope = { parentID: 'dm-1', parentType: 'conversation' as const };
+    suppressSentDraft(scope);
+    try {
+      const { result } = renderHook(() => useSaveDraft(), { wrapper });
+      act(() => result.current.mutate({ parentID: 'dm-1', parentType: 'conversation', body: 'sent', attachmentIDs: [], ts: 42 }));
+      await waitFor(() => expect(result.current.isSuccess).toBe(true));
+      // The save carries the client ts for LWW...
+      expect(apiFetch).toHaveBeenCalledWith('/api/v1/drafts', expect.objectContaining({
+        body: expect.stringContaining('"ts":42'),
+      }));
+      // ...there is NO DELETE self-heal (the server's send-fold LWW handles it)...
+      expect(apiFetch).not.toHaveBeenCalledWith('/api/v1/drafts/d-1', { method: 'DELETE' });
+      // ...and a save on a just-sent scope is not re-surfaced in the cache.
+      expect(qc.getQueryData<MessageDraft[]>(['drafts'])).toEqual([]);
+    } finally {
+      restoreDraftScope(scope);
+    }
   });
 
   it('saves and deletes drafts without trimming request bodies', async () => {

@@ -2,7 +2,7 @@ import { useMemo, useState, type ReactNode } from 'react';
 import { Check, Copy } from 'lucide-react';
 import { toJsxRuntime } from 'hast-util-to-jsx-runtime';
 import { Fragment, jsx, jsxs } from 'react/jsx-runtime';
-import { highlightToHast } from '@/lib/code-highlight';
+import { highlightToHast, codeFenceLabel } from '@/lib/code-highlight';
 import { copyToClipboard } from '@/lib/clipboard';
 
 interface CodeBlockProps {
@@ -16,6 +16,10 @@ interface CodeBlockProps {
 export function CodeBlock({ code, language }: CodeBlockProps) {
   const [copied, setCopied] = useState(false);
   const tree = useMemo(() => highlightToHast(code, language), [code, language]);
+  // Validate the fence token against the supported set: a supported language
+  // keeps its label, but an unknown one degrades to "plain" rather than leaking
+  // an arbitrary token into the label/attribute.
+  const langLabel = codeFenceLabel(language);
   // Fences usually carry a trailing newline; drop one so the gutter doesn't
   // show a phantom final line.
   const display = code.replace(/\n$/, '');
@@ -34,12 +38,12 @@ export function CodeBlock({ code, language }: CodeBlockProps) {
   return (
     <div className="group relative my-0 overflow-hidden rounded-md bg-muted text-xs font-mono">
       <div className="absolute right-1.5 top-1.5 z-10 flex items-center gap-1">
-        {language && (
+        {langLabel && (
           <span
             data-testid="code-language"
             className="hidden select-none rounded border bg-background/80 px-1.5 py-0.5 text-[10px] font-sans uppercase leading-none tracking-wide text-muted-foreground backdrop-blur md:inline-block"
           >
-            {language}
+            {langLabel}
           </span>
         )}
         <button
@@ -65,7 +69,7 @@ export function CodeBlock({ code, language }: CodeBlockProps) {
         )}
         <pre
           className="min-w-0 flex-1 overflow-x-auto px-2 py-2 leading-5"
-          data-language={language}
+          data-language={langLabel}
         >
           <code className={highlighted ? 'hljs' : undefined}>{rendered}</code>
         </pre>

@@ -27,7 +27,7 @@ export function TypingIndicator({ parentID, userMap }: Props) {
     <div
       data-testid="typing-indicator"
       aria-live="polite"
-      className="shrink-0 px-4 py-1 text-xs italic text-muted-foreground"
+      className="shrink-0 px-4 pt-0.5 text-xs italic text-muted-foreground"
     >
       {formatTypingPhrase(names)}
     </div>
@@ -53,7 +53,7 @@ export function ThreadTypingIndicator({ parentID, threadRootID, userMap }: Threa
     <div
       data-testid="thread-typing-indicator"
       aria-live="polite"
-      className="shrink-0 px-4 py-1 text-xs italic text-muted-foreground"
+      className="shrink-0 px-4 pt-0.5 text-xs italic text-muted-foreground"
     >
       {formatTypingPhrase(names)}
     </div>

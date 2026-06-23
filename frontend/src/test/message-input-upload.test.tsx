@@ -139,7 +139,7 @@ describe('MessageInput - file upload', () => {
 
     await waitFor(
       () => {
-        expect(onDraftChange).toHaveBeenCalledWith({ body: '', attachmentIDs: [] });
+        expect(onDraftChange).toHaveBeenCalledWith(expect.objectContaining({ body: '', attachmentIDs: [] }));
       },
       { timeout: 1500 },
     );

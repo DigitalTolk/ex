@@ -13,11 +13,12 @@ import (
 )
 
 type mockDraftStore struct {
-	rows      map[string]*model.MessageDraft
-	upsertErr error
-	getErr    error
-	listErr   error
-	deleteErr error
+	rows         map[string]*model.MessageDraft
+	upsertErr    error
+	getErr       error
+	listErr      error
+	deleteErr    error
+	lastDeleteTs int64
 }
 
 func newMockDraftStore() *mockDraftStore {
@@ -65,7 +66,8 @@ func (m *mockDraftStore) List(_ context.Context, userID string) ([]*model.Messag
 	return out, nil
 }
 
-func (m *mockDraftStore) Delete(_ context.Context, userID, id string) error {
+func (m *mockDraftStore) Delete(_ context.Context, userID, id string, ts int64) error {
+	m.lastDeleteTs = ts
 	if m.deleteErr != nil {
 		return m.deleteErr
 	}
@@ -184,11 +186,48 @@ func TestDraftService_DeleteAndConversationDraft(t *testing.T) {
 	if draft.ParentType != ParentConversation {
 		t.Fatalf("ParentType = %q", draft.ParentType)
 	}
-	if err := svc.Delete(ctx, "u-1", draft.ID); err != nil {
+	if err := svc.Delete(ctx, "u-1", draft.ID, 0); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
-	if err := svc.Delete(ctx, "u-1", ""); err == nil {
+	if err := svc.Delete(ctx, "u-1", "", 0); err == nil {
 		t.Fatal("Delete empty ID: expected error")
+	}
+}
+
+func TestDraftService_DeleteForScope(t *testing.T) {
+	svc, drafts, publisher := newDraftTestService()
+	ctx := context.Background()
+
+	d, err := svc.Upsert(ctx, "u-1", "ch-1", ParentChannel, "", "draft", nil)
+	if err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+	if err := svc.DeleteForScope(ctx, "u-1", "ch-1", ParentChannel, "", 5000); err != nil {
+		t.Fatalf("DeleteForScope: %v", err)
+	}
+	if _, err := drafts.Get(ctx, "u-1", d.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("draft should be cleared, got err=%v", err)
+	}
+	if drafts.lastDeleteTs != 5000 {
+		t.Fatalf("delete ts = %d, want 5000", drafts.lastDeleteTs)
+	}
+	if len(publisher.published) == 0 {
+		t.Fatal("DeleteForScope should publish a draft.updated event")
+	}
+
+	// ts=0 falls back to server now (non-zero).
+	drafts.lastDeleteTs = 0
+	if err := svc.DeleteForScope(ctx, "u-1", "ch-1", ParentChannel, "", 0); err != nil {
+		t.Fatalf("DeleteForScope ts=0: %v", err)
+	}
+	if drafts.lastDeleteTs == 0 {
+		t.Fatal("ts=0 must default to server now")
+	}
+
+	// Store error surfaces.
+	drafts.deleteErr = errors.New("redis down")
+	if err := svc.DeleteForScope(ctx, "u-1", "ch-1", ParentChannel, "", 1); err == nil {
+		t.Fatal("DeleteForScope should surface a store error")
 	}
 }
 
@@ -243,7 +282,7 @@ func TestDraftService_StoreErrors(t *testing.T) {
 	if _, err := svc.Upsert(ctx, "u-1", "ch-1", ParentChannel, "", "", nil); err == nil {
 		t.Fatal("expected empty delete error")
 	}
-	if err := svc.Delete(ctx, "u-1", "draft-1"); err == nil {
+	if err := svc.Delete(ctx, "u-1", "draft-1", 0); err == nil {
 		t.Fatal("expected delete error")
 	}
 }

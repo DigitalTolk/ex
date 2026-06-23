@@ -4,7 +4,7 @@ import { BellOff, Globe, MessageSquare } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { MessageItem } from '@/components/chat/MessageItem';
 import { isGroupedWithPrevious } from '@/components/chat/MessageListRows';
-import { MessageInput, type MessageInputHandle } from '@/components/chat/MessageInput';
+import { MessageInput, type MessageInputHandle, type MessageInputValue } from '@/components/chat/MessageInput';
 import { MessageDropZone } from '@/components/chat/MessageDropZone';
 import { useFrequentEmojis } from '@/hooks/useEmoji';
 import { NonMemberInvitePrompt } from '@/components/chat/NonMemberInvitePrompt';
@@ -17,7 +17,7 @@ import {
   restoreDraftScope,
   restoreDraftScopeForContent,
   suppressSentDraft,
-  useDeleteDraft,
+  useClearDraftForScope,
   useDraftAttachmentChips,
   useDraftForScope,
   useSaveDraft,
@@ -129,14 +129,12 @@ export function ThreadCard({ summary, title, deepLink, currentUserId, unread = f
   );
   const { data: draft } = useDraftForScope(draftScope);
   const draftAttachments = useDraftAttachmentChips(draft?.attachmentIDs);
-  const draftID = draft?.id;
   const saveDraft = useSaveDraft();
-  const deleteDraft = useDeleteDraft();
+  const clearDraftMutate = useClearDraftForScope();
   const saveDraftMutate = saveDraft.mutate;
-  const deleteDraftMutate = deleteDraft.mutate;
 
   const handleDraftChange = useCallback(
-    (input: SendMessageInput) => {
+    (input: MessageInputValue, options?: { notify?: boolean }) => {
       /* istanbul ignore next -- parentID is channelId ?? conversationId and parentType is always 'channel' | 'conversation', so one is always set; this guard is unreachable defensive code. */
       if (!parentID) return;
       restoreDraftScopeForContent(draftScope, input);
@@ -146,6 +144,10 @@ export function ThreadCard({ summary, title, deepLink, currentUserId, unread = f
         parentMessageID: summary.threadRootID,
         body: input.body,
         attachmentIDs: input.attachmentIDs ?? [],
+        // Keystroke saves persist silently; the focus-loss flush (notify)
+        // is what surfaces the draft in the sidebar.
+        silent: !options?.notify,
+        ts: input.ts,
       });
     },
     [parentID, parentType, summary.threadRootID, draftScope, saveDraftMutate],
@@ -157,19 +159,17 @@ export function ThreadCard({ summary, title, deepLink, currentUserId, unread = f
       checkMentions(input.body);
       const payload = { ...input, parentMessageID: summary.threadRootID };
       suppressSentDraft(draftScope);
-      if (draftID) {
-        send.mutate(payload, {
-          onSuccess: () => deleteDraftMutate(draftID),
-          onError: () => restoreDraftScope(draftScope),
-        });
-      } else {
-        send.mutate(payload, { onError: () => restoreDraftScope(draftScope) });
-      }
+      send.mutate(payload, {
+        // Clear by SCOPE on confirmed send so a silently-saved thread draft
+        // (id never cached) is cleared too.
+        onSuccess: () => clearDraftMutate(draftScope),
+        onError: () => restoreDraftScope(draftScope),
+      });
       // Treat sending as "seeing" — drops the unread dot in the sidebar
       // since the user is clearly engaged with this thread.
       markSummaryThreadSeen(summary);
     },
-    [send, summary, draftScope, draftID, deleteDraftMutate, checkMentions],
+    [send, summary, draftScope, clearDraftMutate, checkMentions],
   );
 
   return (

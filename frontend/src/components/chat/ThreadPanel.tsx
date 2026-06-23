@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { MessageItem } from './MessageItem';
 import { isGroupedWithPrevious } from './MessageListRows';
-import { MessageInput, type MessageInputHandle } from './MessageInput';
+import { MessageInput, type MessageInputHandle, type MessageInputValue } from './MessageInput';
 import { MessageDropZone } from './MessageDropZone';
 import { NonMemberInvitePrompt } from './NonMemberInvitePrompt';
 import { useNonMemberInvite } from '@/hooks/useNonMemberInvite';
@@ -22,7 +22,7 @@ import {
   restoreDraftScope,
   restoreDraftScopeForContent,
   suppressSentDraft,
-  useDeleteDraft,
+  useClearDraftForScope,
   useDraftAttachmentChips,
   useDraftForScope,
   useSaveDraft,
@@ -123,11 +123,9 @@ export function ThreadPanel({
   const unfollowThread = useUnfollowThread();
   const { data: draft } = useDraftForScope(draftScope);
   const draftAttachments = useDraftAttachmentChips(draft?.attachmentIDs);
-  const draftID = draft?.id;
   const saveDraft = useSaveDraft();
-  const deleteDraft = useDeleteDraft();
+  const clearDraftMutate = useClearDraftForScope();
   const saveDraftMutate = saveDraft.mutate;
-  const deleteDraftMutate = deleteDraft.mutate;
   const editMessage = useEditMessage();
   const editAttachmentIDs = activeEditingMessage?.attachmentIDs ?? [];
   // Pass the access context so the server authorizes the resolve — without
@@ -380,7 +378,7 @@ export function ThreadPanel({
   }, [anchorMsgId, wasAtBottomRef]);
 
   const handleDraftChange = useCallback(
-    (value: SendMessageInput) => {
+    (value: MessageInputValue, options?: { notify?: boolean }) => {
       /* istanbul ignore next -- ThreadPanel always renders inside a channel or conversation, so parentID (channelId ?? conversationId) is always set; defensive. */
       if (!parentID) return;
       restoreDraftScopeForContent(draftScope, value);
@@ -390,6 +388,10 @@ export function ThreadPanel({
         parentMessageID: threadRootID,
         body: value.body,
         attachmentIDs: value.attachmentIDs ?? [],
+        // Keystroke saves persist silently; the focus-loss flush (notify)
+        // is what surfaces the draft in the sidebar.
+        silent: !options?.notify,
+        ts: value.ts,
       });
     },
     [parentID, parentType, threadRootID, draftScope, saveDraftMutate],
@@ -401,16 +403,14 @@ export function ThreadPanel({
       checkMentions(input.body);
       const payload = { ...input, parentMessageID: threadRootID };
       suppressSentDraft(draftScope);
-      if (!draftID) {
-        send.mutate(payload, { onError: () => restoreDraftScope(draftScope) });
-        return;
-      }
       send.mutate(payload, {
-        onSuccess: () => deleteDraftMutate(draftID),
+        // Clear by SCOPE on confirmed send so a silently-saved thread draft
+        // (id never cached) is cleared too.
+        onSuccess: () => clearDraftMutate(draftScope),
         onError: () => restoreDraftScope(draftScope),
       });
     },
-    [send, threadRootID, draftScope, draftID, deleteDraftMutate, checkMentions],
+    [send, threadRootID, draftScope, clearDraftMutate, checkMentions],
   );
 
   const handleEditMessage = useCallback(

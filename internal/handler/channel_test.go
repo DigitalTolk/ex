@@ -1301,6 +1301,90 @@ func TestChannelHandlerFull_SendMessage(t *testing.T) {
 	}
 }
 
+type fakeDraftClearer struct {
+	mu    sync.Mutex
+	calls []draftClearCall
+	err   error
+	done  chan struct{} // signaled after each call; the clear runs async
+}
+
+type draftClearCall struct {
+	userID, parentID, parentType, parentMessageID string
+	ts                                            int64
+}
+
+func (f *fakeDraftClearer) DeleteForScope(_ context.Context, userID, parentID, parentType, parentMessageID string, ts int64) error {
+	f.mu.Lock()
+	f.calls = append(f.calls, draftClearCall{userID, parentID, parentType, parentMessageID, ts})
+	f.mu.Unlock()
+	if f.done != nil {
+		f.done <- struct{}{}
+	}
+	return f.err
+}
+
+// waitForCall blocks until the (async) draft clear has run once.
+func (f *fakeDraftClearer) waitForCall(t *testing.T) {
+	t.Helper()
+	select {
+	case <-f.done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for async draft clear")
+	}
+}
+
+func TestChannelHandlerFull_SendMessage_ClearsDraftByScope(t *testing.T) {
+	env := setupChannelHandlerFull(t)
+	env.memberships.memberships["ch-msg#u-sender"] = &model.ChannelMembership{
+		ChannelID: "ch-msg", UserID: "u-sender", Role: model.ChannelRoleMember,
+	}
+	fake := &fakeDraftClearer{done: make(chan struct{}, 1)}
+	env.handler.SetDraftClearer(fake)
+	user := &model.User{ID: "u-sender", Email: "sender@test.com", SystemRole: model.SystemRoleMember}
+	token := makeTokenForUser(env.jwtMgr, user)
+	h := middleware.Auth(env.jwtMgr)(http.HandlerFunc(env.handler.SendMessage))
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/channels/ch-msg/messages", strings.NewReader(`{"body":"hi","clientTs":1234}`))
+	req.SetPathValue("id", "ch-msg")
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+	}
+	fake.waitForCall(t)
+	if len(fake.calls) != 1 {
+		t.Fatalf("draft clear calls = %d, want 1", len(fake.calls))
+	}
+	got := fake.calls[0]
+	if got != (draftClearCall{"u-sender", "ch-msg", service.ParentChannel, "", 1234}) {
+		t.Fatalf("clear call = %+v", got)
+	}
+}
+
+func TestChannelHandlerFull_SendMessage_DraftClearErrorDoesNotFailSend(t *testing.T) {
+	env := setupChannelHandlerFull(t)
+	env.memberships.memberships["ch-msg#u-sender"] = &model.ChannelMembership{
+		ChannelID: "ch-msg", UserID: "u-sender", Role: model.ChannelRoleMember,
+	}
+	env.handler.SetDraftClearer(&fakeDraftClearer{err: errors.New("redis down")})
+	user := &model.User{ID: "u-sender", Email: "sender@test.com", SystemRole: model.SystemRoleMember}
+	token := makeTokenForUser(env.jwtMgr, user)
+	h := middleware.Auth(env.jwtMgr)(http.HandlerFunc(env.handler.SendMessage))
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/channels/ch-msg/messages", strings.NewReader(`{"body":"hi"}`))
+	req.SetPathValue("id", "ch-msg")
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	// A clear failure is best-effort; the message must still be created.
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201 (clear error must not fail send): %s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestChannelHandlerFull_SendMessage_EmptyBody(t *testing.T) {
 	env := setupChannelHandlerFull(t)
 

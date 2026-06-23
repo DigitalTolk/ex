@@ -10,14 +10,19 @@ import (
 
 // ConversationHandler exposes HTTP endpoints for conversation operations.
 type ConversationHandler struct {
-	convSvc    *service.ConversationService
-	messageSvc *service.MessageService
+	convSvc      *service.ConversationService
+	messageSvc   *service.MessageService
+	draftClearer DraftClearer
 }
 
 // NewConversationHandler creates a ConversationHandler.
 func NewConversationHandler(convSvc *service.ConversationService, messageSvc *service.MessageService) *ConversationHandler {
 	return &ConversationHandler{convSvc: convSvc, messageSvc: messageSvc}
 }
+
+// SetDraftClearer wires the draft cleaner so a successful send clears the
+// scope's composer draft server-side (no separate client request).
+func (h *ConversationHandler) SetDraftClearer(c DraftClearer) { h.draftClearer = c }
 
 // Create starts a new direct message or group conversation.
 func (h *ConversationHandler) Create(w http.ResponseWriter, r *http.Request) {
@@ -201,6 +206,9 @@ func (h *ConversationHandler) SendMessage(w http.ResponseWriter, r *http.Request
 		Body            string   `json:"body"`
 		ParentMessageID string   `json:"parentMessageID"`
 		AttachmentIDs   []string `json:"attachmentIDs"`
+		// ClientTs is the client's send time (epoch ms) for last-write-wins
+		// draft clearing — see clearSentDraft.
+		ClientTs int64 `json:"clientTs"`
 	}
 	if err := readJSON(r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_body", err.Error())
@@ -216,6 +224,7 @@ func (h *ConversationHandler) SendMessage(w http.ResponseWriter, r *http.Request
 		writeServiceError(w, err, http.StatusForbidden, "send_error")
 		return
 	}
+	clearSentDraft(r.Context(), h.draftClearer, userID, id, service.ParentConversation, body.ParentMessageID, body.ClientTs)
 
 	writeJSON(w, http.StatusCreated, msg)
 }

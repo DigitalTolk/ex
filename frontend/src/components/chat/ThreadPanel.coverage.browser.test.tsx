@@ -34,7 +34,7 @@ vi.mock('@/lib/api', () => ({
 interface InputDoubleProps {
   onSend: (v: { body: string; attachmentIDs?: string[] }) => void;
   onCancel?: () => void;
-  onDraftChange?: (v: { body: string; attachmentIDs?: string[] }) => void;
+  onDraftChange?: (v: { body: string; attachmentIDs?: string[] }, options?: { notify?: boolean }) => void;
   placeholder?: string;
   submitLabel?: string;
   initialBody?: string;
@@ -63,6 +63,12 @@ vi.mock('./MessageInput', () => ({
           onClick={() => props.onDraftChange?.({ body: 'draft no attachments' } as { body: string })}
         >
           draft-no-att
+        </button>
+        <button
+          data-testid="mi-draft-notify"
+          onClick={() => props.onDraftChange?.({ body: 'draft text', attachmentIDs: [] }, { notify: true })}
+        >
+          draft-notify
         </button>
         <button
           data-testid="mi-send-noatt"
@@ -119,7 +125,7 @@ vi.mock('@/hooks/useThreads', () => ({
 
 let draftState: { data: { id?: string; body?: string; attachmentIDs?: string[] } | undefined } = { data: undefined };
 const saveDraftMutate = vi.fn();
-const deleteDraftMutate = vi.fn();
+const clearDraftMutate = vi.fn();
 const restoreDraftScopeForContentMock = vi.fn();
 const suppressSentDraftMock = vi.fn();
 const restoreDraftScopeMock = vi.fn();
@@ -127,7 +133,7 @@ vi.mock('@/hooks/useDrafts', () => ({
   useDraftForScope: () => draftState,
   useDraftAttachmentChips: () => [],
   useSaveDraft: () => ({ mutate: saveDraftMutate }),
-  useDeleteDraft: () => ({ mutate: deleteDraftMutate }),
+  useClearDraftForScope: () => clearDraftMutate,
   restoreDraftScope: (...a: unknown[]) => restoreDraftScopeMock(...a),
   restoreDraftScopeForContent: (...a: unknown[]) => restoreDraftScopeForContentMock(...a),
   suppressSentDraft: (...a: unknown[]) => suppressSentDraftMock(...a),
@@ -215,7 +221,7 @@ beforeEach(() => {
   followThreadMutate.mockReset();
   unfollowThreadMutate.mockReset();
   saveDraftMutate.mockReset();
-  deleteDraftMutate.mockReset();
+  clearDraftMutate.mockReset();
   restoreDraftScopeForContentMock.mockReset();
   suppressSentDraftMock.mockReset();
   restoreDraftScopeMock.mockReset();
@@ -258,28 +264,32 @@ describe('ThreadPanel coverage — merged user map', () => {
 });
 
 describe('ThreadPanel coverage — reply send', () => {
-  it('sends a reply with no existing draft (no draftID delete path)', async () => {
+  it('sends a reply even when no draft is cached (still clears by scope)', async () => {
     draftState = { data: undefined };
     const screen = await mount();
     await screen.getByTestId('mi-send').click();
     expect(suppressSentDraftMock).toHaveBeenCalled();
     expect(sendMutate).toHaveBeenCalled();
-    // No draftID → the no-draft branch fired; the onSuccess/onError config
-    // passed to send.mutate has no deleteDraft callback.
     const call = sendMutate.mock.calls[0];
     expect(call[0].parentMessageID).toBe('ROOT');
+    // onSuccess clears by scope regardless of whether a draft id was cached —
+    // the fix for drafts left behind after sending on a slow connection.
+    (call[1] as { onSuccess?: () => void }).onSuccess?.();
+    expect(clearDraftMutate).toHaveBeenCalledWith(
+      expect.objectContaining({ parentType: 'channel', parentMessageID: 'ROOT' }),
+    );
   });
 
-  it('sends a reply that clears an existing saved draft on success', async () => {
+  it('clears the draft scope on a successful reply, restores it on error', async () => {
     draftState = { data: { id: 'draft-9', body: 'saved' } };
     const screen = await mount();
     await screen.getByTestId('mi-send').click();
     expect(sendMutate).toHaveBeenCalled();
-    // Invoke the onSuccess handler the panel passed to send.mutate → it
-    // deletes the saved draft (line 360).
     const options = sendMutate.mock.calls[0][1] as { onSuccess?: () => void; onError?: () => void };
     options.onSuccess?.();
-    expect(deleteDraftMutate).toHaveBeenCalledWith('draft-9');
+    expect(clearDraftMutate).toHaveBeenCalledWith(
+      expect.objectContaining({ parentType: 'channel', parentMessageID: 'ROOT' }),
+    );
     // The onError path restores the suppressed draft scope.
     options.onError?.();
     expect(restoreDraftScopeMock).toHaveBeenCalled();
@@ -296,7 +306,7 @@ describe('ThreadPanel coverage — reply send', () => {
 });
 
 describe('ThreadPanel coverage — draft change', () => {
-  it('persists a draft change through the save mutation', async () => {
+  it('persists a keystroke draft change SILENTLY so the indicator stays hidden', async () => {
     const screen = await mount();
     await screen.getByTestId('mi-draft').click();
     expect(restoreDraftScopeForContentMock).toHaveBeenCalled();
@@ -306,6 +316,20 @@ describe('ThreadPanel coverage — draft change', () => {
       parentMessageID: 'ROOT',
       body: 'draft text',
       attachmentIDs: [],
+      silent: true,
+    });
+  });
+
+  it('surfaces the draft (silent=false) on a focus-loss flush (notify)', async () => {
+    const screen = await mount();
+    await screen.getByTestId('mi-draft-notify').click();
+    expect(saveDraftMutate).toHaveBeenCalledWith({
+      parentID: 'ch-1',
+      parentType: 'channel',
+      parentMessageID: 'ROOT',
+      body: 'draft text',
+      attachmentIDs: [],
+      silent: false,
     });
   });
 
@@ -320,6 +344,7 @@ describe('ThreadPanel coverage — draft change', () => {
       parentMessageID: 'ROOT',
       body: 'draft no attachments',
       attachmentIDs: [],
+      silent: true,
     });
   });
 });

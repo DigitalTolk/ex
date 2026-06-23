@@ -48,89 +48,47 @@ describe('renderMarkdown', () => {
     expect(pre?.textContent).toContain('let x = 1;');
   });
 
-  it('preserves fenced code block language hints', () => {
-    const examples = [
-      ['php', 'php'],
-      ['javascript', 'javascript'],
-      ['js', 'javascript'],
-      ['typescript', 'typescript'],
-      ['ts', 'typescript'],
-      ['python', 'python'],
-      ['py', 'python'],
-      ['go', 'go'],
-      ['rust', 'rust'],
-      ['ruby', 'ruby'],
-      ['rb', 'ruby'],
-      ['bash', 'bash'],
-      ['sh', 'bash'],
-      ['ini', 'ini'],
-      ['hcl', 'hcl'],
-      ['java', 'java'],
-      ['c', 'c'],
-      ['c++', 'cpp'],
-      ['c#', 'csharp'],
-      ['f#', 'fsharp'],
-      ['objective-c', 'objective-c'],
-      ['swift', 'swift'],
-      ['kotlin', 'kotlin'],
-      ['sql', 'sql'],
-      ['html', 'html'],
-      ['css', 'css'],
-      ['json', 'json'],
-      ['yaml', 'yaml'],
+  it('keeps a supported fence hint (or alias) as the label and highlights via lowlight', () => {
+    // The author's token is kept as the data-language label for a supported
+    // language (alias or not); highlighting uses the shared lowlight engine, so
+    // the code carries the `hljs` class.
+    const supported = [
+      'php', 'javascript', 'js', 'typescript', 'ts', 'python', 'py', 'go', 'rust', 'ruby', 'rb',
+      'bash', 'sh', 'ini', 'toml', 'hcl', 'terraform', 'html', 'xml', 'java', 'c', 'c++', 'c#',
+      'swift', 'kotlin', 'sql', 'css', 'json', 'yaml',
     ] as const;
-
-    for (const [hint, className] of examples) {
+    for (const hint of supported) {
       const { container, unmount } = render(<>{renderMarkdown(`\`\`\`${hint}\ncode\n\`\`\``)}</>);
       const pre = container.querySelector('pre');
       const code = container.querySelector('code');
       expect(pre?.getAttribute('data-language')).toBe(hint);
-      expect(code).toHaveClass(`language-${className}`);
+      expect(code).toHaveClass('hljs');
       expect(code?.textContent).toBe('code');
       unmount();
     }
   });
 
-  it('renders visible syntax tokens for language-hinted code blocks', () => {
-    const { container } = render(<>{renderMarkdown("```php\n// comment\nfunction demo() {\n  $value = 'ok';\n  return 123;\n}\n```")}</>);
-    const spans = Array.from(container.querySelectorAll('code span'));
-    expect(spans.some((span) => span.textContent === '// comment' && span.className.includes('muted-foreground'))).toBe(true);
-    expect(spans.some((span) => span.textContent === 'function' && span.className.includes('purple'))).toBe(true);
-    expect(spans.some((span) => span.textContent === '$value' && span.className.includes('sky'))).toBe(true);
-    expect(spans.some((span) => span.textContent === "'ok'" && span.className.includes('emerald'))).toBe(true);
-    expect(spans.some((span) => span.textContent === '123' && span.className.includes('amber'))).toBe(true);
+  it('renders an unsupported fence hint as plain instead of trusting the token', () => {
+    for (const hint of ['f#', 'objective-c', 'haskell', 'totally-made-up'] as const) {
+      const { container, unmount } = render(<>{renderMarkdown(`\`\`\`${hint}\ncode\n\`\`\``)}</>);
+      const pre = container.querySelector('pre');
+      const code = container.querySelector('code');
+      expect(pre?.getAttribute('data-language')).toBe('plain');
+      expect(code?.className ?? '').not.toContain('hljs');
+      expect(code?.className ?? '').not.toMatch(/objective|haskell|totally/);
+      expect(code?.textContent).toBe('code');
+      unmount();
+    }
   });
 
-  it.each([
-    ['python', 'def'],
-    ['javascript', 'const'],
-    ['typescript', 'interface'],
-    ['go', 'func'],
-    ['rust', 'fn'],
-    ['ruby', 'end'],
-    ['bash', 'then'],
-    ['hcl', 'resource'],
-    ['sql', 'select'],
-    ['swift', 'let'],
-    ['kotlin', 'fun'],
-    ['java', 'public'],
-    ['c', 'int'],
-    ['c++', 'namespace'],
-    ['c#', 'using'],
-    ['ini', 'true'],
-    ['yaml', 'false'],
-    ['json', 'null'],
-  ])('highlights %s language keywords', (language, keyword) => {
-    const { container } = render(<>{renderMarkdown(`\`\`\`${language}\n${keyword}\n\`\`\``)}</>);
-    const span = container.querySelector('code span');
-    expect(span?.textContent).toBe(keyword);
-    expect(span?.className).toContain('purple');
-  });
-
-  it('leaves unrecognized code tokens unwrapped', () => {
-    const { container } = render(<>{renderMarkdown('```php\nplainIdentifier\n```')}</>);
-    expect(container.querySelectorAll('code span')).toHaveLength(0);
-    expect(container.querySelector('code')?.textContent).toBe('plainIdentifier');
+  it('syntax-highlights a language-hinted code block via lowlight (hljs spans)', () => {
+    const { container } = render(<>{renderMarkdown("```php\n<?php\n// comment\nfunction demo() {\n  $value = 'ok';\n  return 123;\n}\n```")}</>);
+    const code = container.querySelector('code')!;
+    expect(code.className).toContain('hljs');
+    expect(code.querySelector('span.hljs-comment')).not.toBeNull();
+    expect(code.querySelector('span.hljs-keyword')).not.toBeNull(); // function / return
+    expect(code.querySelector('span.hljs-string')).not.toBeNull(); // 'ok'
+    expect(code.querySelector('span.hljs-number')).not.toBeNull(); // 123
   });
 
   it('does not add synthetic vertical margin to fenced code blocks', () => {

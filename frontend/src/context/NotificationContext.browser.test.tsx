@@ -7,6 +7,7 @@ import {
   type NotificationPayload,
 } from './NotificationContext';
 import * as storageModule from '@/lib/storage';
+import { resetNotificationDedup } from '@/lib/notification-dedup';
 
 // Browser coverage for NotificationContext — exercises dispatch
 // suppression rules, sound/browser prefs, and the noop fallback when
@@ -43,6 +44,10 @@ beforeEach(() => {
   // The storage mock persists across tests; reset it so one test's pref
   // changes don't leak into the next (e.g. a disabled browserEnabled).
   (storageModule as unknown as { __reset: () => void }).__reset();
+  // The cross-tab dedup store is backed by real localStorage — clear it (and the
+  // module's latch) so a messageID alerted in one test isn't deduped in the next.
+  resetNotificationDedup();
+  try { localStorage.removeItem('ex.notif.seen.v1'); } catch { /* ignore */ }
   // Reset Notification permission baseline.
   if ('Notification' in window) {
     try {
@@ -56,7 +61,7 @@ beforeEach(() => {
 
 // Replace the read-only `Notification` global with a granted-permission fake
 // that records constructed instances. Returns a restore function.
-function installFakeNotification(instances: Array<{ title: string; options: NotificationOptions; onclick: (() => void) | null; close: () => void }>) {
+function installFakeNotification(instances: Array<{ title: string; options: NotificationOptions; onclick: (() => void) | null; onclose: (() => void) | null; close: () => void }>) {
   class FakeNotification {
     static permission = 'granted';
     static requestPermission = vi.fn().mockResolvedValue('granted');
@@ -72,7 +77,7 @@ function installFakeNotification(instances: Array<{ title: string; options: Noti
   };
 }
 
-type FakeNote = { title: string; options: NotificationOptions; onclick: (() => void) | null; close: () => void };
+type FakeNote = { title: string; options: NotificationOptions; onclick: (() => void) | null; onclose: (() => void) | null; close: () => void };
 
 function basePayload(over: Partial<NotificationPayload> = {}): NotificationPayload {
   return {
@@ -125,16 +130,24 @@ describe('NotificationContext browser', () => {
     captured!.dispatch(basePayload({ authorID: 'u-me' }));
   });
 
-  it('dispatch suppresses channel "message" kind (noisy by default)', async () => {
-    await render(
-      <NotificationProvider>
-        <Capture />
-      </NotificationProvider>,
-    );
-    captured!.dispatch(
-      basePayload({ kind: 'message', parentType: 'channel', authorID: 'u-other' }),
-    );
-    // Returned early; we don't need to assert side-effects — branch covered.
+  it('dispatch banners a channel "message" kind — the backend already decided it should notify', async () => {
+    // Regression: the client used to drop every channel `message` payload,
+    // which silently swallowed notifications the user opted into via a
+    // per-channel "all messages" override. The backend is the source of truth;
+    // if it published one for a channel we're not actively viewing, it banners.
+    const instances: FakeNote[] = [];
+    const restore = installFakeNotification(instances);
+    try {
+      await render(<NotificationProvider><Capture /></NotificationProvider>);
+      await vi.waitFor(() => expect(captured).not.toBeNull());
+      captured!.setCurrentUserID('u-me');
+      captured!.dispatch(
+        basePayload({ kind: 'message', parentType: 'channel', authorID: 'u-other' }),
+      );
+      await vi.waitFor(() => expect(instances.length).toBe(1));
+    } finally {
+      restore();
+    }
   });
 
   it('does NOT suppress a webhook channel "message" (integration alerts always banner, even from your own webhook)', async () => {
@@ -144,8 +157,8 @@ describe('NotificationContext browser', () => {
       await render(<NotificationProvider><Capture /></NotificationProvider>);
       await vi.waitFor(() => expect(captured).not.toBeNull());
       captured!.setCurrentUserID('u-me');
-      // A plain channel "message" is suppressed, and an own-author one is too.
-      // The webhook flag bypasses BOTH guards so the alert still banners —
+      // An own-author message is normally suppressed (echo of your own send).
+      // The webhook flag bypasses that guard so the alert still banners —
       // authorID is the webhook's creator (u-me), who wired it up and wants it.
       captured!.dispatch(
         basePayload({ kind: 'message', parentType: 'channel', authorID: 'u-me', webhook: true }),
@@ -221,6 +234,10 @@ describe('NotificationContext browser', () => {
       window.history.pushState({}, '', '/start');
       instances[0].onclick!();
       await vi.waitFor(() => expect(window.location.pathname).toBe('/channel/general'));
+      // OS dismissal drops the handler refs so the click closure can be GC'd.
+      instances[0].onclose!();
+      expect(instances[0].onclick).toBeNull();
+      expect(instances[0].onclose).toBeNull();
     } finally {
       restore();
     }
@@ -324,24 +341,6 @@ describe('NotificationContext browser', () => {
       captured!.dispatch(noID);
       captured!.dispatch(noID);
       await vi.waitFor(() => expect(instances.length).toBe(2));
-    } finally {
-      restore();
-    }
-  });
-
-  it('dispatch evicts the oldest messageID once the dedup window overflows', async () => {
-    const instances: FakeNote[] = [];
-    const restore = installFakeNotification(instances);
-    try {
-      await render(<NotificationProvider><Capture /></NotificationProvider>);
-      await vi.waitFor(() => expect(captured).not.toBeNull());
-      captured!.dispatch(basePayload({ kind: 'mention', authorID: 'u-other', messageID: 'm-old' }));
-      for (let i = 0; i < 256; i++) {
-        captured!.dispatch(basePayload({ kind: 'mention', authorID: 'u-other', messageID: `m-${i}` }));
-      }
-      // m-old has been pushed out of the 256-entry window → it fires again.
-      captured!.dispatch(basePayload({ kind: 'mention', authorID: 'u-other', messageID: 'm-old' }));
-      await vi.waitFor(() => expect(instances.length).toBe(258));
     } finally {
       restore();
     }

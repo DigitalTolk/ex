@@ -58,7 +58,7 @@ func (s *handlerDraftStore) List(_ context.Context, userID string) ([]*model.Mes
 	}
 	return out, nil
 }
-func (s *handlerDraftStore) Delete(_ context.Context, userID, id string) error {
+func (s *handlerDraftStore) Delete(_ context.Context, userID, id string, _ int64) error {
 	if s.deleteErr != nil {
 		return s.deleteErr
 	}

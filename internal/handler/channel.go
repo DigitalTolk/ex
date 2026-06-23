@@ -13,14 +13,19 @@ import (
 
 // ChannelHandler exposes HTTP endpoints for channel operations.
 type ChannelHandler struct {
-	channelSvc *service.ChannelService
-	messageSvc *service.MessageService
+	channelSvc   *service.ChannelService
+	messageSvc   *service.MessageService
+	draftClearer DraftClearer
 }
 
 // NewChannelHandler creates a ChannelHandler.
 func NewChannelHandler(channelSvc *service.ChannelService, messageSvc *service.MessageService) *ChannelHandler {
 	return &ChannelHandler{channelSvc: channelSvc, messageSvc: messageSvc}
 }
+
+// SetDraftClearer wires the draft cleaner so a successful send clears the
+// scope's composer draft server-side (no separate client request).
+func (h *ChannelHandler) SetDraftClearer(c DraftClearer) { h.draftClearer = c }
 
 // Create creates a new channel.
 func (h *ChannelHandler) Create(w http.ResponseWriter, r *http.Request) {
@@ -465,6 +470,9 @@ func (h *ChannelHandler) SendMessage(w http.ResponseWriter, r *http.Request) {
 		Body            string   `json:"body"`
 		ParentMessageID string   `json:"parentMessageID"`
 		AttachmentIDs   []string `json:"attachmentIDs"`
+		// ClientTs is the client's send time (epoch ms), used to clear this
+		// scope's draft with last-write-wins ordering — see clearSentDraft.
+		ClientTs int64 `json:"clientTs"`
 	}
 	if err := readJSON(r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_body", err.Error())
@@ -480,6 +488,7 @@ func (h *ChannelHandler) SendMessage(w http.ResponseWriter, r *http.Request) {
 		writeServiceError(w, err, http.StatusForbidden, "send_error")
 		return
 	}
+	clearSentDraft(r.Context(), h.draftClearer, userID, id, service.ParentChannel, body.ParentMessageID, body.ClientTs)
 
 	writeJSON(w, http.StatusCreated, msg)
 }

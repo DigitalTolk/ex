@@ -5,7 +5,7 @@ import { useUsersBatch } from '@/hooks/useUsersBatch';
 import { useFrequentEmojis } from '@/hooks/useEmoji';
 import { Header } from '@/components/layout/Header';
 import { MessageList } from './MessageList';
-import { MessageInput, type MessageInputHandle } from './MessageInput';
+import { MessageInput, type MessageInputHandle, type MessageInputValue } from './MessageInput';
 import { MessageDropZone } from './MessageDropZone';
 import { MemberList } from './MemberList';
 import { ThreadPanel } from './ThreadPanel';
@@ -37,7 +37,7 @@ import {
   restoreDraftScope,
   restoreDraftScopeForContent,
   suppressSentDraft,
-  useDeleteDraft,
+  useClearDraftForScope,
   useDraftAttachmentChips,
   useDraftForScope,
   useSaveDraft,
@@ -150,13 +150,11 @@ export function ConversationView() {
   const editReady =
     !editingMessage || editAttachmentIDs.length === 0 || !editAttachmentsLoading;
   const editMessage = useEditMessage();
-  const draftID = draft?.id;
   const saveDraft = useSaveDraft();
-  const deleteDraft = useDeleteDraft();
+  const clearDraftMutate = useClearDraftForScope();
   const saveDraftMutate = saveDraft.mutate;
-  const deleteDraftMutate = deleteDraft.mutate;
   const handleDraftChange = useCallback(
-    (value: { body: string; attachmentIDs: string[] }, options?: { notify?: boolean }) => {
+    (value: MessageInputValue, options?: { notify?: boolean }) => {
       if (!id) return;
       restoreDraftScopeForContent(draftScope, value);
       saveDraftMutate({
@@ -167,6 +165,7 @@ export function ConversationView() {
         // Keystroke saves persist silently; the focus-loss flush (notify)
         // is what surfaces the draft in the sidebar.
         silent: !options?.notify,
+        ts: value.ts,
       });
     },
     [id, draftScope, saveDraftMutate],
@@ -174,16 +173,14 @@ export function ConversationView() {
   const handleSendMessage = useCallback(
     (value: { body: string; attachmentIDs: string[] }) => {
       suppressSentDraft(draftScope);
-      if (!draftID) {
-        sendMessage.mutate(value, { onError: () => restoreDraftScope(draftScope) });
-        return;
-      }
       sendMessage.mutate(value, {
-        onSuccess: () => deleteDraftMutate(draftID),
+        // Clear the scope's server draft on confirmed send — by SCOPE so a
+        // silently-saved draft (id never cached) is cleared too.
+        onSuccess: () => clearDraftMutate(draftScope),
         onError: () => restoreDraftScope(draftScope),
       });
     },
-    [sendMessage, draftScope, draftID, deleteDraftMutate],
+    [sendMessage, draftScope, clearDraftMutate],
   );
   const handleEditMessage = useCallback(
     (value: { body: string; attachmentIDs: string[] }) => {

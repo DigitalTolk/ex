@@ -656,10 +656,9 @@ function MessageItemImpl({
           )}
           <Tooltip>
             <TooltipTrigger
-              // Right-align the timestamp on standalone (first-in-group)
-              // messages so it sits at the row's trailing edge rather than
-              // crowding the author name.
-              className="ml-auto text-xs text-muted-foreground cursor-default"
+              // Timestamp sits right after the author name (Slack-style),
+              // separated by the header row's gap-2.
+              className="text-xs text-muted-foreground cursor-default"
               render={<time dateTime={message.createdAt} />}
             >
               {/* Threads have no day dividers, so an absolute clock time is

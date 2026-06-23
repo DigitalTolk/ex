@@ -613,8 +613,7 @@ describe('channel → header toggles → files + pinned panels (full route)', ()
     const editor = screen.getByLabelText('Message input');
     await editor.click();
     await editor.fill('a fresh message');
-    // No draft exists for this scope → handleSendMessage's `!draftID` arm
-    // fires sendMessage.mutate directly (no deleteDraft).
+    // Sending posts the message; the draft clear (by scope) happens on success.
     await screen.getByRole('button', { name: 'Send message' }).click();
     await vi.waitFor(() => {
       const calls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls
@@ -927,7 +926,7 @@ describe('channel → header toggles → files + pinned panels (full route)', ()
     }, { timeout: 15000 });
   });
 
-  it('deletes an existing draft after a successful send (draftID branch)', async () => {
+  it('sends the draft with a clientTs and makes no separate clear request (server folds the clear into the send)', async () => {
     // Use a DISTINCT channel id/slug so this test's draft scope key does not
     // collide with the module-level suppressed-scope set that the plain
     // send-message test populates for CHANNEL_ID/general.
@@ -953,11 +952,14 @@ describe('channel → header toggles → files + pinned panels (full route)', ()
         return apiJSON({ id: 'm-draft-sent', parentID: DRAFT_CH, parentType: 'channel', authorID: ME_ID, body: 'x', createdAt: '2026-05-01T12:00:00Z', attachmentIDs: [] });
       }
       if (url.endsWith('/api/v1/drafts') && (init?.method ?? 'GET') === 'GET') {
-        // A saved draft for THIS channel scope → handleSendMessage takes the
-        // `draftID` (truthy) arm: send then deleteDraft on success.
+        // A saved draft for THIS channel scope → on send, the server folds the
+        // clear into the message-create call; the client makes no clear request.
         return apiJSON([
           { id: 'draft-ch-1', parentID: DRAFT_CH, parentType: 'channel', parentMessageID: '', body: 'half-written', attachmentIDs: [], updatedAt: '2026-05-01T11:00:00Z' },
         ]);
+      }
+      if (url.endsWith('/api/v1/drafts') && init?.method === 'PUT') {
+        return new Response(null, { status: 204 });
       }
       return base(input, init);
     }) as typeof fetch;
@@ -971,19 +973,29 @@ describe('channel → header toggles → files + pinned panels (full route)', ()
     await vi.waitFor(() => {
       expect(editor.element().textContent ?? '').toContain('half-written');
     }, { timeout: 15000 });
-    // Send the hydrated draft as-is. We deliberately do NOT edit the editor
-    // first: editor.fill() clears-then-types the Lexical contenteditable, which
-    // fires the debounced draft-save and can transiently null this scope's draft
-    // query (→ draftID undefined → the no-delete arm) before the click lands,
-    // under slow-CI timing. The branch under test only needs a draft present at
-    // send time, which the hydrated 'half-written' draft already provides.
+    // Send the hydrated draft as-is (no editor edit, to avoid firing a
+    // debounced save that would race the assertion under slow-CI timing).
     await screen.getByRole('button', { name: 'Send message' }).click();
     await vi.waitFor(() => {
-      const calls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls
-        .map((c) => `${c[1]?.method ?? 'GET'} ${String(c[0])}`);
-      expect(calls.some((u) => u.startsWith('POST') && u.includes(`/channels/${DRAFT_CH}/messages`))).toBe(true);
-      expect(calls.some((u) => u.startsWith('DELETE') && u.includes('/drafts/draft-ch-1'))).toBe(true);
+      const calls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls;
+      // The send POST carries clientTs so the server folds the draft-clear into
+      // message creation (last-write-wins against any in-flight save).
+      const sendPost = calls.find(
+        (c) => (c[1]?.method) === 'POST' && String(c[0]).includes(`/channels/${DRAFT_CH}/messages`),
+      );
+      expect(sendPost).toBeTruthy();
+      expect(JSON.parse(String(sendPost?.[1]?.body ?? '{}')).clientTs).toBeGreaterThan(0);
     }, { timeout: 15000 });
+    // The client issues NO separate clear request: neither an empty-body PUT nor
+    // a DELETE to /drafts — the server-side send-fold owns the clear now.
+    const allCalls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls;
+    expect(allCalls.some(
+      (c) => (c[1]?.method) === 'PUT' && String(c[0]).endsWith('/api/v1/drafts')
+        && String(c[1]?.body ?? '').includes('"body":""'),
+    )).toBe(false);
+    expect(allCalls.some(
+      (c) => (c[1]?.method) === 'DELETE' && String(c[0]).includes('/api/v1/drafts/'),
+    )).toBe(false);
   });
 
   it('falls back to "Unknown" for a batch user with a blank display name (userMap arm)', async () => {

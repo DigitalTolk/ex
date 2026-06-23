@@ -18,7 +18,28 @@ var ErrCacheMiss = errors.New("cache miss")
 const userKeyPrefix = "user:"
 const userCacheTTL = 15 * time.Minute
 const presenceKeyPrefix = "presence:online:"
-const presenceTTL = 90 * time.Second
+
+// notifAckKeyPrefix / notifAckTTL back the desktop-delivery acknowledgement
+// marker. When a client receives a `notification.new` it acks over its
+// WebSocket; the backend records the ack here so the deferred mobile-push
+// fallback can tell "the desktop actually delivered this" from "presence merely
+// claimed the user was online". The TTL only needs to outlive the deferred-push
+// window (a handful of seconds) plus slack — 30s is generous. Cross-instance by
+// construction (Redis), so the ack and the deferred push can land on different
+// backend instances. See CLAUDE.md (Notifications).
+const notifAckKeyPrefix = "notifack:"
+const notifAckTTL = 30 * time.Second
+
+// presenceTTL is the backstop expiry for a user's "online" marker. The WS
+// keep-alive refreshes it every wsKeepAliveInterval (15s), so it must stay
+// comfortably above that to avoid a live user flapping offline between
+// refreshes. It is also the *latest* a dead connection can keep a user looking
+// online if the graceful OnDisconnect cleanup never runs (e.g. Redis hiccup) —
+// so it is deliberately tight (40s, was 90s) to bound the window in which a
+// dead desktop socket would suppress the mobile-push fallback. Primary
+// dead-socket detection is the protocol ping/pong in the WS keep-alive loop;
+// this TTL is the secondary safety net. See CLAUDE.md (Notifications).
+const presenceTTL = 40 * time.Second
 const emojiFreqKeyPrefix = "emoji:freq:"
 
 // emojiFreqTTL ages out a user's emoji-usage history so a long-dormant
@@ -163,6 +184,34 @@ func (c *RedisCache) IsPresenceOnline(ctx context.Context, userID string) (bool,
 		return false, fmt.Errorf("presence get %q: %w", userID, err)
 	}
 	return count > 0, nil
+}
+
+// MarkNotificationAcked records that the user's client confirmed receipt of the
+// desktop notification for messageID. Used by the deferred mobile-push fallback
+// to cancel a push once the desktop has actually delivered the alert.
+func (c *RedisCache) MarkNotificationAcked(ctx context.Context, userID, messageID string) error {
+	if userID == "" || messageID == "" {
+		return nil
+	}
+	if err := c.client.Set(ctx, notifAckKeyPrefix+userID+":"+messageID, "1", notifAckTTL).Err(); err != nil {
+		return fmt.Errorf("notification ack set %q/%q: %w", userID, messageID, err)
+	}
+	return nil
+}
+
+// WasNotificationAcked reports whether the user's client has acknowledged the
+// desktop notification for messageID. A Redis error or a missing key both
+// resolve to false — "not acked" — so an ack lookup failure makes the fallback
+// FedEx the push rather than silently swallow it (fail toward delivery).
+func (c *RedisCache) WasNotificationAcked(ctx context.Context, userID, messageID string) bool {
+	if userID == "" || messageID == "" {
+		return false
+	}
+	n, err := c.client.Exists(ctx, notifAckKeyPrefix+userID+":"+messageID).Result()
+	if err != nil {
+		return false
+	}
+	return n > 0
 }
 
 // OnlinePresenceUserIDs returns all users with at least one active websocket

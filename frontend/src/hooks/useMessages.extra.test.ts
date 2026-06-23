@@ -53,10 +53,13 @@ describe('useSendChannelMessage', () => {
     const { result } = renderHook(() => useSendChannelMessage('ch-1'), { wrapper: createWrapper() });
     result.current.mutate({ body: 'hello', attachmentIDs: [] });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(apiFetch).toHaveBeenCalledWith('/api/v1/channels/ch-1/messages', {
-      method: 'POST',
-      body: JSON.stringify({ body: 'hello', parentMessageID: '', attachmentIDs: [] }),
-    });
+    const calls = vi.mocked(apiFetch).mock.calls as Array<[string, { method?: string; body?: string }?]>;
+    const call = calls.find((c) => c[0] === '/api/v1/channels/ch-1/messages');
+    expect(call?.[1]?.method).toBe('POST');
+    const sent = JSON.parse(String(call?.[1]?.body));
+    expect(sent).toMatchObject({ body: 'hello', parentMessageID: '', attachmentIDs: [] });
+    // The send carries clientTs so the server folds the draft-clear into it.
+    expect(sent.clientTs).toBeGreaterThan(0);
   });
 
   it('posting a thread reply optimistically appends to the open thread and refreshes the /threads count', async () => {
@@ -141,10 +144,12 @@ describe('useSendConversationMessage', () => {
     const { result } = renderHook(() => useSendConversationMessage('conv-1'), { wrapper: createWrapper() });
     result.current.mutate({ body: 'hi there', attachmentIDs: [] });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(apiFetch).toHaveBeenCalledWith('/api/v1/conversations/conv-1/messages', {
-      method: 'POST',
-      body: JSON.stringify({ body: 'hi there', parentMessageID: '', attachmentIDs: [] }),
-    });
+    const calls = vi.mocked(apiFetch).mock.calls as Array<[string, { method?: string; body?: string }?]>;
+    const call = calls.find((c) => c[0] === '/api/v1/conversations/conv-1/messages');
+    expect(call?.[1]?.method).toBe('POST');
+    const sent = JSON.parse(String(call?.[1]?.body));
+    expect(sent).toMatchObject({ body: 'hi there', parentMessageID: '', attachmentIDs: [] });
+    expect(sent.clientTs).toBeGreaterThan(0);
   });
 });
 
