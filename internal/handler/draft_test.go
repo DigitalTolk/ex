@@ -94,6 +94,9 @@ func (handlerMembershipStore) SetNotifPrefs(context.Context, string, string, mod
 	return nil
 }
 func (handlerMembershipStore) SetMute(context.Context, string, string, bool) error     { return nil }
+func (handlerMembershipStore) SetChannelLastRead(context.Context, string, string, int64) error {
+	return nil
+}
 func (handlerMembershipStore) SetFavorite(context.Context, string, string, bool) error { return nil }
 func (handlerMembershipStore) SetCategory(context.Context, string, string, string, *int) error {
 	return nil
@@ -114,6 +117,12 @@ func (handlerConversationStore) ListUserConversations(context.Context, string) (
 	return nil, nil
 }
 func (handlerConversationStore) ActivateConversation(context.Context, string, []string) error {
+	return nil
+}
+func (handlerConversationStore) IncrementMessageSeq(context.Context, string) (int64, error) {
+	return 0, nil
+}
+func (handlerConversationStore) SetConversationLastRead(context.Context, string, string, int64) error {
 	return nil
 }
 func (handlerConversationStore) TouchConversation(context.Context, string, []string, time.Time) error {

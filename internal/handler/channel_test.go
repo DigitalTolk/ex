@@ -168,6 +168,9 @@ func (s *dataMembershipStore) UserChannelNotifPrefs(_ context.Context, channelID
 func (s *dataMembershipStore) SetMute(_ context.Context, _, _ string, _ bool) error {
 	return nil
 }
+func (s *dataMembershipStore) SetChannelLastRead(_ context.Context, _, _ string, _ int64) error {
+	return nil
+}
 func (s *dataMembershipStore) SetNotifPrefs(_ context.Context, _, _ string, _ model.ChannelNotificationOverride) error {
 	return nil
 }
@@ -564,6 +567,54 @@ func TestChannelHandler_Join(t *testing.T) {
 	// pathParam("id") will be empty since we don't use the Go 1.22 mux here.
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+}
+
+func TestChannelHandler_MarkRead(t *testing.T) {
+	env := setupChannelHandlerFull(t)
+	env.channels.channels["ch-read"] = &model.Channel{ID: "ch-read", Name: "read", Type: model.ChannelTypePublic, MessageSeq: 4}
+	user := &model.User{ID: "reader-1", Email: "r@example.com", SystemRole: model.SystemRoleMember}
+	token := makeTokenForUser(env.jwtMgr, user)
+	handler := middleware.Auth(env.jwtMgr)(http.HandlerFunc(env.handler.MarkRead))
+
+	// Success → 204.
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/channels/ch-read/read", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.SetPathValue("id", "ch-read")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", rec.Code)
+	}
+
+	// Missing channel → 404 (GetChannel ErrNotFound surfaces via writeReadResourceError).
+	req = httptest.NewRequest(http.MethodPut, "/api/v1/channels/ghost/read", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.SetPathValue("id", "ghost")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("missing-channel status = %d, want 404", rec.Code)
+	}
+
+	// Missing id → 400.
+	req = httptest.NewRequest(http.MethodPut, "/api/v1/channels//read", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("missing-id status = %d, want 400", rec.Code)
+	}
+}
+
+func TestChannelHandler_MarkRead_Unauthenticated(t *testing.T) {
+	env := setupChannelHandlerFull(t)
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/channels/ch1/read", nil)
+	req.SetPathValue("id", "ch1")
+	rec := httptest.NewRecorder()
+	env.handler.MarkRead(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", rec.Code)
 	}
 }
 

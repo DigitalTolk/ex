@@ -211,6 +211,11 @@ export interface UserChannel {
   channelType: 'public' | 'private';
   role: number;
   lastReadMsgID?: string;
+  // Server-computed unread state (channel.MessageSeq - membership.LastReadSeq).
+  // The authoritative source for the sidebar badge on cold load / after
+  // reconnect; live message.new events layer a session delta on top.
+  unread?: boolean;
+  unreadCount?: number;
   muted?: boolean;
   favorite?: boolean;
   categoryID?: string;
@@ -240,6 +245,10 @@ export interface UserConversation {
   profileResolved?: boolean;
   lastReadMsgID?: string;
   unread?: boolean;
+  // Server-computed exact unread count (Conversation.MessageSeq -
+  // UserConversation.LastReadSeq) — same seq model as channels. The sidebar
+  // layers the live session delta on top.
+  unreadCount?: number;
   favorite?: boolean;
   categoryID?: string;
   sidebarPosition?: number;

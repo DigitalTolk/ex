@@ -311,6 +311,61 @@ describe('MessageList Virtuoso wiring (regression contract)', () => {
     expect(anchorCalls).toHaveLength(1);
   });
 
+  it('deep-link mount: a pending anchor scroll re-schedules at the corrected index when an older page prepends before the frame fires', async () => {
+    // Regression (intermittent deeplink/notification scroll): the `around`
+    // window mounts with the anchor present and queues a scrollToIndex in a
+    // frame. Virtuoso's natural startReached then prepends an older page,
+    // shifting the anchor's row index and re-running the scroll effect — its
+    // cleanup cancels the queued frame before it fires. The old code recorded
+    // the dedup up-front, so the re-run bailed and the scroll was lost (the
+    // deeplink landed nowhere until a manual retry). The scroll must instead
+    // re-schedule and fire exactly once, at the anchor's FINAL index.
+    const anchor = makeMessage({ id: 'msg-anchor', createdAt: '2026-04-24T10:30:00Z' });
+    const older1 = makeMessage({ id: 'msg-older-1', createdAt: '2026-04-24T10:00:00Z' });
+    const older0a = makeMessage({ id: 'msg-older-0a', createdAt: '2026-04-24T09:30:00Z' });
+    const older0b = makeMessage({ id: 'msg-older-0b', createdAt: '2026-04-24T09:00:00Z' });
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrap = (node: React.ReactElement) => (
+      <QueryClientProvider client={qc}>
+        <BrowserRouter>{node}</BrowserRouter>
+      </QueryClientProvider>
+    );
+    // Initial deeplink window: chrono [older1, anchor] → rows
+    // [divider(0), older1(1), anchor(2)] → anchorIndex 2.
+    const { rerender } = render(
+      wrap(
+        <MessageList
+          {...defaultProps}
+          pages={[{ items: [anchor, older1] }]}
+          hasNextPage={true}
+          fetchNextPage={vi.fn()}
+          anchorMsgId="msg-anchor"
+          anchorRevision="nav-1"
+        />,
+      ),
+    );
+    // Older page lands (fetchNextPage resolved) BEFORE the queued frame fires
+    // — same navigation (anchorRevision unchanged), so the dedup would block a
+    // re-scroll if it were recorded up-front. Chrono now
+    // [older0b, older0a, older1, anchor] → anchor shifts to row index 4.
+    rerender(
+      wrap(
+        <MessageList
+          {...defaultProps}
+          pages={[{ items: [anchor, older1] }, { items: [older0a, older0b] }]}
+          hasNextPage={false}
+          fetchNextPage={vi.fn()}
+          anchorMsgId="msg-anchor"
+          anchorRevision="nav-1"
+        />,
+      ),
+    );
+    await new Promise((r) => requestAnimationFrame(() => r(undefined)));
+    // The scroll fired exactly once, at the anchor's shifted final index.
+    const anchorCalls = captured.scrollToIndexCalls.filter((c) => c.align === 'center');
+    expect(anchorCalls).toEqual([{ index: 4, align: 'center' }]);
+  });
+
   it('deep-link forward pagination: followOutput=false while hasPreviousPage=true (prevents spam-scroll on append)', async () => {
     const captured = await renderAndCaptureVirtuoso(
       <MessageList

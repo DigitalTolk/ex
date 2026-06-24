@@ -157,7 +157,7 @@ func (h *ConversationHandler) MarkRead(w http.ResponseWriter, r *http.Request) {
 		writeReadResourceError(w, err, "conversation")
 		return
 	}
-	if err := h.convSvc.ClearUnread(r.Context(), userID, id); err != nil {
+	if err := h.convSvc.MarkConversationRead(r.Context(), userID, id); err != nil {
 		writeError(w, http.StatusInternalServerError, "read_error", err.Error())
 		return
 	}

@@ -9,23 +9,16 @@ import (
 	"sync"
 	"time"
 
-	"github.com/DigitalTolk/ex/internal/cache"
 	"github.com/DigitalTolk/ex/internal/events"
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/DigitalTolk/ex/internal/pubsub"
 	"github.com/DigitalTolk/ex/internal/store"
 )
 
-const conversationUnreadKeyPrefix = "unread:conversation:"
-
 // publishConversationNew is a small wrapper so the activation pathway is the
 // single place that broadcasts conversation.new events.
 func publishConversationNew(ctx context.Context, p Publisher, channels []string, payload map[string]any) {
 	events.PublishMany(ctx, p, channels, events.EventConversationNew, payload)
-}
-
-func conversationUnreadKey(userID, convID string) string {
-	return conversationUnreadKeyPrefix + userID + ":" + convID
 }
 
 // ConversationService manages direct messages and group conversations.
@@ -35,18 +28,19 @@ type ConversationService struct {
 	userProfiles  interface {
 		GetByID(context.Context, string) (*model.User, error)
 	}
-	cache      Cache
 	mediaCache MediaURLCache
 	broker     Broker
 	publisher  Publisher
 }
 
-// NewConversationService creates a ConversationService with the given dependencies.
-func NewConversationService(conversations ConversationStore, users UserStore, cache Cache, broker Broker, publisher Publisher) *ConversationService {
+// NewConversationService creates a ConversationService with the given
+// dependencies. The cache param is retained for call-site compatibility but is
+// no longer used: unread is now persisted via the Conversation.MessageSeq seq
+// counter (the same mechanism channels use), not a Redis flag.
+func NewConversationService(conversations ConversationStore, users UserStore, _ Cache, broker Broker, publisher Publisher) *ConversationService {
 	return &ConversationService{
 		conversations: conversations,
 		users:         users,
-		cache:         cache,
 		broker:        broker,
 		publisher:     publisher,
 	}
@@ -301,18 +295,9 @@ func (s *ConversationService) ListUserConversations(ctx context.Context, userID 
 			continue
 		}
 		row := *c
-		if s.cache != nil {
-			var unread bool
-			if err := s.cache.Get(ctx, conversationUnreadKey(userID, row.ConversationID), &unread); err == nil && unread {
-				row.Unread = true
-			} else if err == nil || errors.Is(err, cache.ErrCacheMiss) || errors.Is(err, store.ErrNotFound) {
-				row.Unread = false
-			} else if err != nil && !errors.Is(err, cache.ErrCacheMiss) && !errors.Is(err, store.ErrNotFound) {
-				return nil, fmt.Errorf("conversation: unread cache: %w", err)
-			}
-		}
 		out = append(out, &row)
 	}
+	s.enrichUnread(ctx, out)
 	s.enrichDMProfiles(ctx, userID, out)
 	return out, nil
 }
@@ -377,18 +362,45 @@ func (s *ConversationService) getUserProfile(ctx context.Context, id string) (*m
 	return s.users.GetUser(ctx, id)
 }
 
-func (s *ConversationService) MarkUnread(ctx context.Context, userID, convID string) error {
-	if s.cache == nil || userID == "" || convID == "" {
-		return nil
+// enrichUnread fills each row's Unread/UnreadCount from the seq pair
+// (Conversation.MessageSeq - UserConversation.LastReadSeq), concurrently —
+// mirrors ChannelService.ListUserChannels. Conversations are small-N (a DM is
+// two people), so a GetConversation per row is cheap.
+func (s *ConversationService) enrichUnread(ctx context.Context, rows []*model.UserConversation) {
+	var wg sync.WaitGroup
+	for _, row := range rows {
+		wg.Add(1)
+		go func(row *model.UserConversation) {
+			defer wg.Done()
+			conv, err := s.conversations.GetConversation(ctx, row.ConversationID)
+			if err != nil || conv == nil {
+				return
+			}
+			if n := conv.MessageSeq - row.LastReadSeq; n > 0 {
+				row.UnreadCount = int(n)
+				row.Unread = true
+			}
+		}(row)
 	}
-	return s.cache.Set(ctx, conversationUnreadKey(userID, convID), true, 0)
+	wg.Wait()
 }
 
-func (s *ConversationService) ClearUnread(ctx context.Context, userID, convID string) error {
-	if s.cache == nil || userID == "" || convID == "" {
-		return nil
+// MarkConversationRead catches the user up to the conversation's current
+// MessageSeq so the sidebar badge clears and stays cleared across reloads, and
+// notifies the caller's other tabs. Mirrors ChannelService.MarkChannelRead.
+// Returns ErrNotFound when the caller isn't a participant.
+func (s *ConversationService) MarkConversationRead(ctx context.Context, userID, convID string) error {
+	conv, err := s.conversations.GetConversation(ctx, convID)
+	if err != nil {
+		return fmt.Errorf("conversation: get: %w", err)
 	}
-	return s.cache.Delete(ctx, conversationUnreadKey(userID, convID))
+	if err := s.conversations.SetConversationLastRead(ctx, convID, userID, conv.MessageSeq); err != nil {
+		return err
+	}
+	events.Publish(ctx, s.publisher, pubsub.UserChannel(userID), events.EventUserChannelUpdated, map[string]any{
+		"conversationID": convID,
+	})
+	return nil
 }
 
 // Activate marks the conversation as activated and broadcasts EventConversationNew

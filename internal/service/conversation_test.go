@@ -2,10 +2,12 @@ package service
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/DigitalTolk/ex/internal/model"
+	"github.com/DigitalTolk/ex/internal/store"
 )
 
 func setupConversationService() (*ConversationService, *mockConversationStore, *mockUserStore, *mockBroker, *mockPublisher) {
@@ -551,9 +553,15 @@ func TestConversationService_ListUserConversations(t *testing.T) {
 	}
 }
 
-func TestConversationService_ListUserConversations_OverlaysRedisUnread(t *testing.T) {
+// Unread now derives from the seq pair (Conversation.MessageSeq -
+// UserConversation.LastReadSeq), the same mechanism channels use, and
+// MarkConversationRead catches the user up.
+func TestConversationService_ListUserConversations_ComputesUnreadFromSeq(t *testing.T) {
 	svc, convStore, _, _, _ := setupConversationService()
 	ctx := context.Background()
+	convStore.conversations["conv-unread"] = &model.Conversation{
+		ID: "conv-unread", Type: model.ConversationTypeDM, ParticipantIDs: []string{"u-1", "u-2"}, Activated: true, MessageSeq: 2,
+	}
 	convStore.userConvs["u-1"] = []*model.UserConversation{{
 		UserID:         "u-1",
 		ConversationID: "conv-unread",
@@ -562,49 +570,38 @@ func TestConversationService_ListUserConversations_OverlaysRedisUnread(t *testin
 		Activated:      true,
 	}}
 
-	if err := svc.MarkUnread(ctx, "u-1", "conv-unread"); err != nil {
-		t.Fatalf("MarkUnread: %v", err)
-	}
 	convs, err := svc.ListUserConversations(ctx, "u-1")
 	if err != nil {
 		t.Fatalf("ListUserConversations: %v", err)
 	}
-	if len(convs) != 1 || !convs[0].Unread {
-		t.Fatalf("unread overlay missing: %+v", convs)
+	if len(convs) != 1 || !convs[0].Unread || convs[0].UnreadCount != 2 {
+		t.Fatalf("unread/count from seq missing: %+v", convs[0])
 	}
 
-	if err := svc.ClearUnread(ctx, "u-1", "conv-unread"); err != nil {
-		t.Fatalf("ClearUnread: %v", err)
+	if err := svc.MarkConversationRead(ctx, "u-1", "conv-unread"); err != nil {
+		t.Fatalf("MarkConversationRead: %v", err)
 	}
 	convs, err = svc.ListUserConversations(ctx, "u-1")
 	if err != nil {
-		t.Fatalf("ListUserConversations after clear: %v", err)
+		t.Fatalf("ListUserConversations after read: %v", err)
 	}
-	if len(convs) != 1 || convs[0].Unread {
-		t.Fatalf("unread overlay should be cleared: %+v", convs)
+	if len(convs) != 1 || convs[0].Unread || convs[0].UnreadCount != 0 {
+		t.Fatalf("should be caught up after MarkConversationRead: %+v", convs[0])
 	}
 }
 
-// TestConversationService_MarkClearUnread_Guards pins the cheap early
-// returns in MarkUnread / ClearUnread when the conversation cache is nil
-// or the ids are empty. The happy path is covered separately in
-// TestConversationService_ListUserConversations_OverlaysRedisUnread.
-func TestConversationService_MarkClearUnread_Guards(t *testing.T) {
-	svc, _, _, _, _ := setupConversationService()
+func TestConversationService_MarkConversationRead_Errors(t *testing.T) {
+	svc, convStore, _, _, _ := setupConversationService()
 	ctx := context.Background()
 
-	// Empty userID / convID are no-ops on the cache (no error returned).
-	if err := svc.MarkUnread(ctx, "", "conv"); err != nil {
-		t.Fatalf("MarkUnread empty userID: %v", err)
+	// Missing conversation → wrapped GetConversation error.
+	if err := svc.MarkConversationRead(ctx, "u-1", "nope"); err == nil {
+		t.Fatal("expected error for missing conversation")
 	}
-	if err := svc.MarkUnread(ctx, "u", ""); err != nil {
-		t.Fatalf("MarkUnread empty convID: %v", err)
-	}
-	if err := svc.ClearUnread(ctx, "", "conv"); err != nil {
-		t.Fatalf("ClearUnread empty userID: %v", err)
-	}
-	if err := svc.ClearUnread(ctx, "u", ""); err != nil {
-		t.Fatalf("ClearUnread empty convID: %v", err)
+	// Non-participant → SetConversationLastRead has no user-side row → ErrNotFound.
+	convStore.conversations["conv-x"] = &model.Conversation{ID: "conv-x", MessageSeq: 1}
+	if err := svc.MarkConversationRead(ctx, "stranger", "conv-x"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound", err)
 	}
 }
 

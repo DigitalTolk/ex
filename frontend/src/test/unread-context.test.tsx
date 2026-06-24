@@ -38,6 +38,20 @@ describe('UnreadContext', () => {
     expect(result.current.channelUnreadCounts.has('ch1')).toBe(false);
   });
 
+  it('resetSessionUnread drops the whole live session delta layer', () => {
+    const { result } = renderHook(() => useUnread(), { wrapper });
+    act(() => result.current.markChannelUnread('ch1'));
+    act(() => result.current.markChannelUnread('ch2'));
+    expect(result.current.unreadChannels.size).toBe(2);
+    expect(result.current.channelUnreadCounts.size).toBe(2);
+    act(() => result.current.resetSessionUnread());
+    expect(result.current.unreadChannels.size).toBe(0);
+    expect(result.current.channelUnreadCounts.size).toBe(0);
+    // Safe to call again on already-empty state.
+    act(() => result.current.resetSessionUnread());
+    expect(result.current.unreadChannels.size).toBe(0);
+  });
+
   it('resets the channel unread count when the channel becomes active', () => {
     const { result } = renderHook(() => useUnread(), { wrapper });
     act(() => result.current.markChannelUnread('ch1'));

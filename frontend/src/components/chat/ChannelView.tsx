@@ -49,7 +49,7 @@ import {
 import { useAttachmentsBatch } from '@/hooks/useAttachments';
 import { useTagState } from '@/context/TagSearchContext';
 import { TagSearchPanel } from '@/components/TagSearchPanel';
-import type { Message } from '@/types';
+import type { Message, UserChannel } from '@/types';
 import type { UserMapEntry } from './MessageList';
 import type { DraftAttachment } from './AttachmentChip';
 
@@ -237,14 +237,26 @@ export function ChannelView() {
   );
   useEffect(() => {
     if (!channel?.id) return;
-    clearChannelUnread(channel.id);
-    setActiveChannel(channel.id);
-    setActiveParent(channel.id);
+    const openedID = channel.id;
+    clearChannelUnread(openedID);
+    setActiveChannel(openedID);
+    setActiveParent(openedID);
+    // Optimistically drop the server-side unread badge for this channel so the
+    // sidebar clears instantly, then persist the read so it stays cleared on a
+    // reload (mirrors the conversation read-on-open).
+    queryClient.setQueryData<UserChannel[]>(queryKeys.userChannels(), (prev) =>
+      prev?.map((c) => (c.channelID === openedID ? { ...c, unread: false, unreadCount: 0 } : c)),
+    );
+    void apiFetch<void>(`/api/v1/channels/${openedID}/read`, { method: 'PUT' })
+      .catch(() => undefined)
+      .finally(() => {
+        queryClient.invalidateQueries({ queryKey: queryKeys.userChannels() });
+      });
     return () => {
       setActiveChannel(null);
       setActiveParent(null);
     };
-  }, [channel?.id, clearChannelUnread, setActiveChannel, setActiveParent]);
+  }, [channel?.id, clearChannelUnread, setActiveChannel, setActiveParent, queryClient]);
 
   // Reset locally-opened thread when the channel changes; deliberate
   // synchronous reset. URL-driven thread state (?thread=…) doesn't need
@@ -452,7 +464,6 @@ export function ChannelView() {
               ) : undefined
             }
           />
-          <TypingIndicator parentID={channel?.id} userMap={userMap} />
           {channel && !activeEditingMessage && pendingInvites.length > 0 && (
             <NonMemberInvitePrompt
               channelId={channel.id}
@@ -480,6 +491,11 @@ export function ChannelView() {
               typingParentID={activeEditingMessage ? undefined : channel?.id}
               typingParentType={activeEditingMessage ? undefined : 'channel'}
               lastOwnMessageId={activeEditingMessage ? undefined : lastOwnMessageId}
+              aboveInput={
+                activeEditingMessage ? undefined : (
+                  <TypingIndicator parentID={channel?.id} userMap={userMap} />
+                )
+              }
             />
           )}
         </MessageDropZone>

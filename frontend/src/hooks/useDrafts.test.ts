@@ -420,6 +420,70 @@ describe('useDrafts', () => {
     expect(queryClient.getQueryData<MessageDraft[]>(['drafts'])).toEqual([]);
   });
 
+  it('a silent save that EMPTIES the draft removes it from the sidebar cache immediately', async () => {
+    // Regression: emptying the composer fires a silent keystroke save. That is a
+    // removal, not a surface, so the sidebar badge must clear at once instead of
+    // lingering until focus loss / channel switch.
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    queryClient.setQueryData<MessageDraft[]>(['drafts'], [
+      {
+        id: 'draft-existing',
+        userID: 'u-1',
+        parentID: 'dm-1',
+        parentType: 'conversation',
+        parentMessageID: '',
+        body: 'lingering',
+        attachmentIDs: [],
+        updatedAt: '2026-05-03T10:00:00Z',
+        createdAt: '2026-05-03T10:00:00Z',
+      },
+      {
+        id: 'draft-other',
+        userID: 'u-1',
+        parentID: 'dm-2',
+        parentType: 'conversation',
+        parentMessageID: '',
+        body: 'other',
+        attachmentIDs: [],
+        updatedAt: '2026-05-03T10:00:00Z',
+        createdAt: '2026-05-03T10:00:00Z',
+      },
+    ]);
+    const wrapper = ({ children }: { children: ReactNode }) =>
+      createElement(QueryClientProvider, { client: queryClient }, children);
+    // Server deletes the now-empty draft and returns 204 (nil draft).
+    vi.mocked(apiFetch).mockResolvedValueOnce(undefined);
+
+    const { result } = renderHook(() => useSaveDraft(), { wrapper });
+    result.current.mutate({
+      parentID: 'dm-1',
+      parentType: 'conversation',
+      body: '',
+      attachmentIDs: [],
+      silent: true,
+    });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    // The silent empty save still hit the server with notify:false…
+    expect(apiFetch).toHaveBeenCalledWith('/api/v1/drafts', {
+      method: 'PUT',
+      body: JSON.stringify({
+        parentID: 'dm-1',
+        parentType: 'conversation',
+        parentMessageID: '',
+        body: '',
+        attachmentIDs: [],
+        notify: false,
+      }),
+    });
+    // …and the lingering draft is dropped from the cache right away.
+    expect(queryClient.getQueryData<MessageDraft[]>(['drafts'])?.map((draft) => draft.id)).toEqual([
+      'draft-other',
+    ]);
+  });
+
   it('does not PUT duplicate draft saves or empty clears without a cached draft', async () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -447,11 +511,12 @@ describe('useDrafts', () => {
       body: 'same',
       attachmentIDs: ['a-1', 'a-2'],
     });
+    // attachmentIDs omitted (undefined) so the empty-draft check exercises its
+    // `?? 0` fallback for a missing attachment list.
     await result.current.mutateAsync({
       parentID: 'dm-2',
       parentType: 'conversation',
       body: '',
-      attachmentIDs: [],
     });
 
     expect(apiFetch).not.toHaveBeenCalled();

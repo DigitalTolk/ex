@@ -6,12 +6,15 @@ interface Props {
   userMap?: Record<string, UserMapEntry>;
 }
 
-// TypingIndicator renders inline between MessageList and MessageInput.
-// It used to be absolute-positioned to "overlay" the bottom of the
-// messages — but that anchored it to MessageDropZone's bottom (which
-// extends past the input) and tucked it under the input. Owners now
-// just drop it as a normal-flow sibling of MessageList; appearing /
-// disappearing causes a tiny height shift, same as Slack/Discord do.
+// TypingIndicator is passed to MessageInput's `aboveInput` slot, which
+// renders it as an OVERLAY (absolute, `bottom-full`) floating in the free
+// space just above the composer — not in normal flow. That means showing /
+// hiding the "<user> is typing" line never pushes the input box or changes
+// the composer's height; it just occupies the gap that's already there
+// between the last message and the composer. (It used to be an absolute
+// overlay anchored to the wrong ancestor — MessageDropZone's bottom, below
+// the input — then a normal-flow sibling that reflowed on show/hide; this is
+// the overlay done right, anchored to the composer wrapper.)
 //
 // This component renders ONLY main-list typing (typingByParent), so a
 // reply being composed inside an open ThreadPanel does not show up
@@ -27,7 +30,7 @@ export function TypingIndicator({ parentID, userMap }: Props) {
     <div
       data-testid="typing-indicator"
       aria-live="polite"
-      className="shrink-0 px-4 pt-0.5 text-xs italic text-muted-foreground"
+      className="shrink-0 px-1 pb-1 text-xs italic text-muted-foreground"
     >
       {formatTypingPhrase(names)}
     </div>
@@ -53,7 +56,7 @@ export function ThreadTypingIndicator({ parentID, threadRootID, userMap }: Threa
     <div
       data-testid="thread-typing-indicator"
       aria-live="polite"
-      className="shrink-0 px-4 pt-0.5 text-xs italic text-muted-foreground"
+      className="shrink-0 px-1 pb-1 text-xs italic text-muted-foreground"
     >
       {formatTypingPhrase(names)}
     </div>

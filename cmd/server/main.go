@@ -175,12 +175,17 @@ func main() {
 	convSvc.SetMediaURLCache(redisCache)
 	convSvc.SetUserProfileResolver(userSvc)
 	messageSvc := service.NewMessageService(messageStore, membershipStore, conversationStore, redisPubSub, brokerAdapter)
+	// Unread is tracked with one seq counter per parent (channel or
+	// conversation). The counter lives on the parent store; the per-user
+	// last-read on the membership store for channels and the conversation store
+	// for conversations — UnreadSeqAdapter binds the two halves.
+	messageSvc.SetChannelSeqStore(handler.NewUnreadSeqAdapter(channelStore.IncrementMessageSeq, membershipStore.SetChannelLastRead))
+	messageSvc.SetConversationSeqStore(handler.NewUnreadSeqAdapter(conversationStore.IncrementMessageSeq, conversationStore.SetConversationLastRead))
 	messageSvc.SetThreadFollowStore(threadFollowStore)
 	messageSvc.SetUserStateStore(userStateStore)
 	messageSvc.SetParentIndex(parentIndexStore)
 	messageSvc.SetMarkdownRenderer(service.NewMarkdownRenderer())
 	messageSvc.SetActivator(convSvc)
-	messageSvc.SetConversationUnreadTracker(convSvc)
 	userStateSvc := service.NewUserStateService(userStateStore, redisPubSub)
 	emojiSvc := service.NewEmojiService(emojiStore, userStore, redisPubSub)
 	if s3Client != nil {

@@ -32,7 +32,7 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ChannelView } from './ChannelView';
 import type { Channel, ChannelMembership } from '@/types';
-import { ApiError } from '@/lib/api';
+import { ApiError, apiFetch } from '@/lib/api';
 
 // --- mocks ---------------------------------------------------------------
 
@@ -67,8 +67,10 @@ vi.mock('@/context/AuthContext', () => ({
 vi.mock('@/context/UnreadContext', () => ({
   useUnread: () => ({
     unreadChannels: new Set(),
+    unreadChannelNotifications: new Set(),
     unreadConversations: new Set(),
     markChannelUnread: vi.fn(),
+    markChannelNotificationUnread: vi.fn(),
     markConversationUnread: vi.fn(),
     clearChannelUnread: vi.fn(),
     clearConversationUnread: vi.fn(),
@@ -122,7 +124,7 @@ vi.mock('@/lib/api', async () => {
   const actual = await vi.importActual<typeof import('@/lib/api')>('@/lib/api');
   return {
     ...actual,
-    apiFetch: vi.fn(),
+    apiFetch: vi.fn().mockResolvedValue(undefined),
   };
 });
 
@@ -147,6 +149,32 @@ describe('ChannelView', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     channelQuery = { data: mockChannel, isLoading: false };
+  });
+
+  it('marks the channel read on open (optimistic cache patch + PUT)', async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    qc.setQueryData(['userChannels'], [
+      { channelID: 'ch-other', channelName: 'other', unread: true, unreadCount: 2 },
+      { channelID: 'ch-1', channelName: 'general', unread: true, unreadCount: 4 },
+    ]);
+    render(
+      <QueryClientProvider client={qc}>
+        <MemoryRouter initialEntries={['/channel/general']}>
+          <Routes>
+            <Route path="/channel/:id" element={<ChannelView />} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    await screen.findByRole('heading', { name: 'general' });
+    // Optimistic: the cached row is zeroed immediately so the sidebar clears.
+    const cached = qc.getQueryData<{ channelID: string; unread?: boolean; unreadCount?: number }[]>(['userChannels']);
+    const opened = cached?.find((c) => c.channelID === 'ch-1');
+    const untouched = cached?.find((c) => c.channelID === 'ch-other');
+    expect(opened).toMatchObject({ unread: false, unreadCount: 0 });
+    expect(untouched).toMatchObject({ unread: true, unreadCount: 2 });
+    // Persisted server-side.
+    expect(vi.mocked(apiFetch)).toHaveBeenCalledWith('/api/v1/channels/ch-1/read', { method: 'PUT' });
   });
 
   it('renders channel name in header', () => {
@@ -180,18 +208,16 @@ describe('ChannelView', () => {
     expect(screen.getByLabelText('Public channel')).toBeInTheDocument();
   });
 
-  it('typing indicator renders between the message list and the message input (not under the input)', () => {
-    // Regression: TypingIndicator was `absolute bottom-0` of its
-    // nearest positioned ancestor. That ancestor was MessageDropZone,
-    // which wraps the MessageInput too — so the indicator anchored to
-    // the dropzone's bottom edge, *below* the input. The fix puts it
-    // in normal flow as a sibling of MessageList, sitting naturally
-    // above the input.
-    //
-    // Earlier attempts to wrap MessageList + indicator in their own
-    // `relative` flex-1 container broke MessageList's overflow scroll
-    // (DMs stopped scrolling, channels drifted on send), so we keep
-    // the surrounding DOM flat and just rely on DOM order.
+  it('keeps the message list above the input as flat siblings of MessageDropZone', () => {
+    // Regression: TypingIndicator was once `absolute bottom-0` of its
+    // nearest positioned ancestor (MessageDropZone, which wraps the input
+    // too) so it anchored *below* the input. It later moved into normal
+    // flow, and now lives inside MessageInput's `aboveInput` slot (glued
+    // directly above the input box). Either way the dropzone DOM must stay
+    // flat — MessageList a direct child, above the input child — because an
+    // earlier attempt to wrap MessageList in its own `relative flex-1`
+    // container broke overflow scroll (DMs stopped scrolling, channels
+    // drifted on send).
     const { container } = renderChannelView();
     const dropzone = container.querySelector('div.relative.flex.flex-1.flex-col.min-h-0');
     expect(dropzone).not.toBeNull();

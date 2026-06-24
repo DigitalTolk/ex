@@ -210,6 +210,42 @@ func TestConversationAndMessageStoreAdapterDelegates(t *testing.T) {
 	if _, err := msgAdapter.ListThreadReplies(ctx, "root-1"); err != nil {
 		t.Fatalf("ListThreadReplies: %v", err)
 	}
+
+	// Conversation unread-seq delegates.
+	if _, err := convAdapter.IncrementMessageSeq(ctx, "conv-1"); err != nil {
+		t.Fatalf("IncrementMessageSeq: %v", err)
+	}
+	if err := convAdapter.SetConversationLastRead(ctx, "conv-1", "u-1", 5); err != nil {
+		t.Fatalf("SetConversationLastRead: %v", err)
+	}
+}
+
+// TestUnreadSeqAdapter pins the function-value adapter that binds a parent's
+// seq incrementer + last-read setter into one service.UnreadSeqStore.
+func TestUnreadSeqAdapter(t *testing.T) {
+	ctx := context.Background()
+	var gotInc, gotParent, gotUser string
+	var gotSeq int64
+	adapter := NewUnreadSeqAdapter(
+		func(_ context.Context, parentID string) (int64, error) {
+			gotInc = parentID
+			return 7, nil
+		},
+		func(_ context.Context, parentID, userID string, seq int64) error {
+			gotParent, gotUser, gotSeq = parentID, userID, seq
+			return nil
+		},
+	)
+	seq, err := adapter.IncrementMessageSeq(ctx, "p-1")
+	if err != nil || seq != 7 || gotInc != "p-1" {
+		t.Fatalf("IncrementMessageSeq seq=%d err=%v inc=%q", seq, err, gotInc)
+	}
+	if err := adapter.SetLastRead(ctx, "p-1", "u-9", 7); err != nil {
+		t.Fatalf("SetLastRead: %v", err)
+	}
+	if gotParent != "p-1" || gotUser != "u-9" || gotSeq != 7 {
+		t.Fatalf("SetLastRead got parent=%q user=%q seq=%d", gotParent, gotUser, gotSeq)
+	}
 }
 
 type adapterConversationBacking struct {
@@ -228,6 +264,12 @@ func (b *adapterConversationBacking) ListUserConversations(context.Context, stri
 func (b *adapterConversationBacking) Activate(context.Context, string, []string) error { return nil }
 func (b *adapterConversationBacking) Touch(_ context.Context, _ string, _ []string, at time.Time) error {
 	b.touched = at
+	return nil
+}
+func (b *adapterConversationBacking) IncrementMessageSeq(context.Context, string) (int64, error) {
+	return 0, nil
+}
+func (b *adapterConversationBacking) SetConversationLastRead(context.Context, string, string, int64) error {
 	return nil
 }
 func (b *adapterConversationBacking) SetUserConversationFavorite(context.Context, string, string, bool) error {

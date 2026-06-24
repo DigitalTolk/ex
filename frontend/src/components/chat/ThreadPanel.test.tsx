@@ -67,10 +67,14 @@ vi.mock('./MessageInput', () => ({
     typingParentID?: string;
     typingParentType?: string;
     typingThreadRootID?: string;
+    aboveInput?: React.ReactNode;
   }) => {
     lastMessageInputProps.current = props as Record<string, unknown>;
     return (
       <div>
+        {/* The thread typing indicator is now passed via the aboveInput slot
+            (rendered glued above the input box in the real component). */}
+        {props.aboveInput}
         <textarea aria-label="Message input" data-testid="message-input-stub" />
         <button
           aria-label="Send message"

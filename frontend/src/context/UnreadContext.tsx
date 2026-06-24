@@ -23,6 +23,12 @@ interface UnreadState {
   markThreadNotificationUnread: (threadRootId: string) => void;
   clearChannelUnread: (channelId: string) => void;
   clearConversationUnread: (conversationId: string) => void;
+  // Drop the live session delta (unread sets + per-target counts, channels AND
+  // conversations) so the server-computed unread (UserChannel/UserConversation
+  // .unread/.unreadCount) becomes the sole source again. Called after a
+  // reconnect/replay-exhausted refetch, where the refreshed server counts
+  // already include everything the deltas tracked — keeping them double-counts.
+  resetSessionUnread: () => void;
   hideConversation: (id: string) => void;
   unhideConversation: (id: string) => void;
   // Active scope: marking unread is suppressed when the user is currently
@@ -102,6 +108,14 @@ export function UnreadProvider({ children }: { children: ReactNode }) {
   const clearConversationUnread = useCallback((id: string) => {
     setUnreadConversations(prev => { const next = new Set(prev); next.delete(id); return next; });
     setConversationUnreadCounts(prev => { if (!prev.has(id)) return prev; const next = new Map(prev); next.delete(id); return next; });
+  }, []);
+  const resetSessionUnread = useCallback(() => {
+    // Reconnect is rare, so don't bother short-circuiting the already-empty
+    // case — just drop every session delta unconditionally.
+    setUnreadChannels(new Set());
+    setChannelUnreadCounts(new Map());
+    setUnreadConversations(new Set());
+    setConversationUnreadCounts(new Map());
   }, []);
 
   const hideConversation = useCallback((id: string) => {
@@ -198,6 +212,7 @@ export function UnreadProvider({ children }: { children: ReactNode }) {
       markThreadNotificationUnread,
       clearChannelUnread,
       clearConversationUnread,
+      resetSessionUnread,
       hideConversation,
       unhideConversation,
       setActiveChannel,
@@ -221,6 +236,7 @@ export function UnreadProvider({ children }: { children: ReactNode }) {
       markThreadNotificationUnread,
       clearChannelUnread,
       clearConversationUnread,
+      resetSessionUnread,
       hideConversation,
       unhideConversation,
       setActiveChannel,

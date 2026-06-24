@@ -398,11 +398,17 @@ func (s *NotificationService) NotifyForMessage(ctx context.Context, msg *model.M
 			notif = mentionNotif
 		}
 
-		// Mirror the unread-indicator marking the previous notifier did:
-		// thread replies mark the thread; channel mentions mark the channel.
+		// Persist the unread-indicator so the sidebar lights up on a cold
+		// reload too: thread replies mark the thread; channel alerts mark the
+		// channel. We mark the channel for ANY desktop-alerted top-level
+		// message (not just mentions) — otherwise a per-channel "all
+		// messages"/keyword alert plays a sound but leaves no badge once the
+		// live message.new path is missed (sleep/reconnect/cache gap). The
+		// `mentioned ||` keeps the prior mention-marking even when desktop is
+		// off (e.g. a mobile-only mention).
 		if isThreadReply {
 			s.markThreadNotification(ctx, uid, msg, parentType)
-		} else if mentioned && parentType == ParentChannel {
+		} else if parentType == ParentChannel && (mentioned || desktop) {
 			s.markChannelNotification(ctx, uid, msg.ParentID)
 		}
 

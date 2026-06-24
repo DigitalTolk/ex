@@ -432,6 +432,54 @@ func TestNotificationService_PersistsNotificationState(t *testing.T) {
 	}
 }
 
+func TestNotificationService_PersistsChannelNotification_ForNonMentionAllLevel(t *testing.T) {
+	// Regression: the exact "sound but no sidebar badge" report. u-bob set THIS
+	// channel's desktop level to "all messages" but isn't @-mentioned. The
+	// previous code only persisted channel-notification state for mentions, so a
+	// plain channel message played a sound (notification.new published) yet the
+	// sidebar stayed read on a cold reload. Persisting for any desktop-alerted
+	// channel message fixes that.
+	svc, _, members, _, chans, users, _, _ := setupNotifierWithMessagesAndFollows(t)
+	ctx := context.Background()
+	stateStore := newMockUserStateStore()
+	svc.SetUserStateService(NewUserStateService(stateStore, nil))
+
+	chans.channels["ch1"] = &model.Channel{ID: "ch1", Name: "general", Slug: "general", Type: model.ChannelTypePublic}
+	for _, uid := range []string{"u-author", "u-bob"} {
+		users.users[uid] = &model.User{ID: uid, DisplayName: uid}
+		members.memberships["ch1#"+uid] = &model.ChannelMembership{ChannelID: "ch1", UserID: uid}
+	}
+	all := model.NotificationLevelAll
+	members.userChannels = []*model.UserChannel{{UserID: "u-bob", ChannelID: "ch1", DesktopLevel: &all}}
+
+	svc.NotifyForMessage(ctx, &model.Message{ID: "m1", ParentID: "ch1", AuthorID: "u-author", Body: "hello everyone"}, ParentChannel)
+
+	if _, ok := stateStore.rows[stateStore.key("u-bob", model.UserStateChannelNotification, "ch1")]; !ok {
+		t.Fatal("expected channel notification persisted for non-mention 'all'-level desktop alert")
+	}
+}
+
+func TestNotificationService_DoesNotPersistChannelNotification_WhenNotDesktopAlerted(t *testing.T) {
+	// The complement: a plain channel message at the quiet default neither
+	// publishes nor persists — the channel must stay read.
+	svc, _, members, _, chans, users, _, _ := setupNotifierWithMessagesAndFollows(t)
+	ctx := context.Background()
+	stateStore := newMockUserStateStore()
+	svc.SetUserStateService(NewUserStateService(stateStore, nil))
+
+	chans.channels["ch1"] = &model.Channel{ID: "ch1", Name: "general", Slug: "general", Type: model.ChannelTypePublic}
+	for _, uid := range []string{"u-author", "u-bob"} {
+		users.users[uid] = &model.User{ID: uid, DisplayName: uid}
+		members.memberships["ch1#"+uid] = &model.ChannelMembership{ChannelID: "ch1", UserID: uid}
+	}
+
+	svc.NotifyForMessage(ctx, &model.Message{ID: "m1", ParentID: "ch1", AuthorID: "u-author", Body: "hello everyone"}, ParentChannel)
+
+	if _, ok := stateStore.rows[stateStore.key("u-bob", model.UserStateChannelNotification, "ch1")]; ok {
+		t.Fatal("did not expect channel notification for a non-alerted plain message")
+	}
+}
+
 func TestNotificationService_NotificationStateNoops(t *testing.T) {
 	svc, _, _, _, _, _ := setupNotifier(t)
 	svc.markChannelNotification(context.Background(), "u-1", "ch-1")

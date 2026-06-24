@@ -1170,6 +1170,96 @@ func TestListUserChannels_FiltersArchived(t *testing.T) {
 	}
 }
 
+// ListUserChannels enriches each row with an exact unread count derived from
+// the channel's MessageSeq minus the user's LastReadSeq. This is the
+// cold-load / post-reconnect source of truth for the sidebar badge.
+func TestListUserChannels_ComputesUnreadFromSeq(t *testing.T) {
+	svc, channels, memberships, _, _ := setupChannelService()
+	ctx := context.Background()
+
+	channels.channels["ch-behind"] = &model.Channel{ID: "ch-behind", Name: "behind", Type: model.ChannelTypePublic, MessageSeq: 5}
+	channels.channels["ch-caught-up"] = &model.Channel{ID: "ch-caught-up", Name: "caught", Type: model.ChannelTypePublic, MessageSeq: 2}
+	memberships.userChannels = []*model.UserChannel{
+		{UserID: "user-1", ChannelID: "ch-behind", ChannelName: "behind", LastReadSeq: 2},
+		{UserID: "user-1", ChannelID: "ch-caught-up", ChannelName: "caught", LastReadSeq: 2},
+	}
+
+	result, err := svc.ListUserChannels(ctx, "user-1")
+	if err != nil {
+		t.Fatalf("ListUserChannels: %v", err)
+	}
+	got := map[string]*model.UserChannel{}
+	for _, uc := range result {
+		got[uc.ChannelID] = uc
+	}
+	if !got["ch-behind"].Unread || got["ch-behind"].UnreadCount != 3 {
+		t.Errorf("ch-behind unread=%v count=%d, want true/3", got["ch-behind"].Unread, got["ch-behind"].UnreadCount)
+	}
+	if got["ch-caught-up"].Unread || got["ch-caught-up"].UnreadCount != 0 {
+		t.Errorf("ch-caught-up unread=%v count=%d, want false/0", got["ch-caught-up"].Unread, got["ch-caught-up"].UnreadCount)
+	}
+}
+
+// MarkChannelRead stamps the channel's current MessageSeq onto the user's row
+// (so unread derives to 0) and publishes user.channel.updated to the caller's
+// own topic so other tabs/devices drop the badge too.
+func TestMarkChannelRead_StampsSeqAndPublishes(t *testing.T) {
+	svc, channels, memberships, _, publisher := setupChannelService()
+	ctx := context.Background()
+	channels.channels["ch-7"] = &model.Channel{ID: "ch-7", Name: "seven", Type: model.ChannelTypePublic, MessageSeq: 7}
+
+	if err := svc.MarkChannelRead(ctx, "user-1", "ch-7"); err != nil {
+		t.Fatalf("MarkChannelRead: %v", err)
+	}
+	if got := memberships.lastReadSeqs["ch-7#user-1"]; got != 7 {
+		t.Errorf("lastReadSeq = %d, want 7", got)
+	}
+	var found bool
+	for _, e := range publisher.published {
+		if e.channel == "user:user-1" && e.event.Type == "userchannel.updated" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected userchannel.updated published to user:user-1 topic")
+	}
+}
+
+func TestMarkChannelRead_Errors(t *testing.T) {
+	svc, channels, memberships, _, _ := setupChannelService()
+	ctx := context.Background()
+
+	// Missing channel → wrapped GetChannel error.
+	if err := svc.MarkChannelRead(ctx, "user-1", "nope"); err == nil {
+		t.Fatal("expected error for missing channel")
+	}
+
+	// Non-member → SetChannelLastRead error surfaces (here forced).
+	channels.channels["ch-x"] = &model.Channel{ID: "ch-x", Name: "x", Type: model.ChannelTypePublic, MessageSeq: 1}
+	memberships.setLastReadErr = store.ErrNotFound
+	if err := svc.MarkChannelRead(ctx, "stranger", "ch-x"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound", err)
+	}
+}
+
+// A newly added member starts caught up: their LastReadSeq is seeded to the
+// channel's current MessageSeq so the pre-join backlog isn't all "unread".
+func TestAddMember_SeedsLastReadSeq(t *testing.T) {
+	svc, channels, memberships, users, _, _ := setupChannelServiceWithUsers()
+	ctx := context.Background()
+	channels.channels["ch-seed"] = &model.Channel{ID: "ch-seed", Name: "seed", Type: model.ChannelTypePublic, MessageSeq: 9}
+	users.users["owner"] = &model.User{ID: "owner", DisplayName: "Owner"}
+	users.users["newbie"] = &model.User{ID: "newbie", DisplayName: "Newbie"}
+	memberships.memberships["ch-seed#owner"] = &model.ChannelMembership{ChannelID: "ch-seed", UserID: "owner", Role: model.ChannelRoleAdmin}
+
+	if err := svc.AddMember(ctx, "owner", "ch-seed", "newbie", model.ChannelRoleMember); err != nil {
+		t.Fatalf("AddMember: %v", err)
+	}
+	if got := memberships.addedUserChannels["ch-seed#newbie"]; got == nil || got.LastReadSeq != 9 {
+		t.Fatalf("seeded LastReadSeq = %v, want 9", got)
+	}
+}
+
 // Bug #6: joining a channel must post a system message announcing the join,
 // so the chat shows "Alice joined the channel" inline.
 func TestJoin_PostsSystemMessage(t *testing.T) {

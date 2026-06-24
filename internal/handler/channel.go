@@ -278,6 +278,26 @@ func (h *ChannelHandler) Join(w http.ResponseWriter, r *http.Request) {
 // SetMute toggles the muted flag for the authenticated user on a channel.
 // Body: { "muted": true|false }. Mute is a per-user preference and only
 // affects notification dispatch, not real-time event delivery.
+// MarkRead catches the caller up to the channel's latest message, clearing the
+// sidebar unread badge. Idempotent — safe to call on an already-read channel.
+func (h *ChannelHandler) MarkRead(w http.ResponseWriter, r *http.Request) {
+	userID := middleware.UserIDFromContext(r.Context())
+	id := pathParam(r, "id")
+	if userID == "" {
+		writeError(w, http.StatusUnauthorized, "unauthorized", "authentication required")
+		return
+	}
+	if id == "" {
+		writeError(w, http.StatusBadRequest, "missing_id", "channel ID is required")
+		return
+	}
+	if err := h.channelSvc.MarkChannelRead(r.Context(), userID, id); err != nil {
+		writeReadResourceError(w, err, "channel")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (h *ChannelHandler) SetMute(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserIDFromContext(r.Context())
 	id := pathParam(r, "id")

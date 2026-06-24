@@ -32,6 +32,104 @@ func setupMessageService() (*MessageService, *mockMessageStore, *mockMembershipS
 	return svc, messages, memberships, conversations, publisher
 }
 
+// writeUnreadSeq (the synchronous core of the detached bump) advances the
+// counter and marks the author caught up — their own post never shows as unread
+// to them. Tested directly so the assertion doesn't race the goroutine.
+func TestMessageService_WriteUnreadSeq(t *testing.T) {
+	svc, _, _, _, _ := setupMessageService()
+	seqStore := &mockUnreadSeqStore{}
+	ctx := context.Background()
+
+	svc.writeUnreadSeq(ctx, seqStore, "ch1", "user-1")
+	if seqStore.count("ch1") != 1 {
+		t.Errorf("MessageSeq = %d, want 1", seqStore.count("ch1"))
+	}
+	if seq, ok := seqStore.lastRead("ch1", "user-1"); !ok || seq != 1 {
+		t.Errorf("author last-read = %d (set=%v), want 1 (own post reads the parent)", seq, ok)
+	}
+}
+
+// IncrementMessageSeq failing must not set the author's last-read (and must not
+// panic) — unread tracking is best-effort, message delivery is not.
+func TestMessageService_WriteUnreadSeq_IncrementErrorIsNonFatal(t *testing.T) {
+	svc, _, _, _, _ := setupMessageService()
+	seqStore := &mockUnreadSeqStore{err: errors.New("boom")}
+
+	svc.writeUnreadSeq(context.Background(), seqStore, "ch1", "user-1")
+	if _, ok := seqStore.lastRead("ch1", "user-1"); ok {
+		t.Error("author last-read should not be set when increment failed")
+	}
+}
+
+// A SetLastRead failure after a successful increment is logged, not fatal.
+func TestMessageService_WriteUnreadSeq_SetLastReadErrorIsNonFatal(t *testing.T) {
+	svc, _, _, _, _ := setupMessageService()
+	seqStore := &mockUnreadSeqStore{lastErr: errors.New("boom")}
+
+	svc.writeUnreadSeq(context.Background(), seqStore, "ch1", "user-1")
+	if seqStore.count("ch1") != 1 {
+		t.Errorf("seq = %d, want 1 (increment still happened)", seqStore.count("ch1"))
+	}
+}
+
+// Send dispatches the (detached) unread-seq bump for a top-level channel
+// message. The bump runs in a goroutine, so poll for it.
+func TestMessageService_Send_BumpsChannelSeq(t *testing.T) {
+	svc, _, memberships, _, _ := setupMessageService()
+	seqStore := &mockUnreadSeqStore{}
+	svc.SetChannelSeqStore(seqStore)
+	ctx := context.Background()
+	memberships.memberships["ch1#user-1"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "user-1", Role: model.ChannelRoleMember}
+
+	if _, err := svc.Send(ctx, "user-1", "ch1", ParentChannel, "first", ""); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	waitForCond(t, func() bool { return seqStore.count("ch1") == 1 }, "channel seq to bump after send")
+}
+
+// A conversation message bumps the conversation's seq counter the same way —
+// the unified mechanism, no Redis flag.
+func TestMessageService_Send_BumpsConversationSeq(t *testing.T) {
+	svc, _, _, conversations, _ := setupMessageService()
+	seqStore := &mockUnreadSeqStore{}
+	svc.SetConversationSeqStore(seqStore)
+	ctx := context.Background()
+	conversations.conversations["conv1"] = &model.Conversation{ID: "conv1", Type: model.ConversationTypeDM, ParticipantIDs: []string{"user-1", "user-2"}}
+
+	if _, err := svc.Send(ctx, "user-1", "conv1", ParentConversation, "hey", ""); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	waitForCond(t, func() bool { return seqStore.count("conv1") == 1 }, "conversation seq to bump after send")
+}
+
+// A webhook posting into a channel or DM bumps the unread counter too, so an
+// incident-bot alert lights the sidebar like any other message.
+func TestMessageService_SendWebhook_BumpsChannelSeq(t *testing.T) {
+	svc, _, _, _, _ := setupMessageService()
+	seqStore := &mockUnreadSeqStore{}
+	svc.SetChannelSeqStore(seqStore)
+	ctx := context.Background()
+
+	if _, err := svc.SendWebhook(ctx, WebhookMessageInput{ParentID: "ch1", ParentType: ParentChannel, AuthorID: "bot", Body: "alert"}); err != nil {
+		t.Fatalf("SendWebhook: %v", err)
+	}
+	waitForCond(t, func() bool { return seqStore.count("ch1") == 1 }, "channel seq to bump after webhook send")
+}
+
+// A webhook posting into a DM bumps the conversation counter too (closes the
+// old gap where webhook DMs left no unread).
+func TestMessageService_SendWebhook_BumpsConversationSeq(t *testing.T) {
+	svc, _, _, _, _ := setupMessageService()
+	seqStore := &mockUnreadSeqStore{}
+	svc.SetConversationSeqStore(seqStore)
+	ctx := context.Background()
+
+	if _, err := svc.SendWebhook(ctx, WebhookMessageInput{ParentID: "conv1", ParentType: ParentConversation, AuthorID: "bot", Body: "alert"}); err != nil {
+		t.Fatalf("SendWebhook: %v", err)
+	}
+	waitForCond(t, func() bool { return seqStore.count("conv1") == 1 }, "conversation seq to bump after webhook send")
+}
+
 func TestMessageService_Send_Channel(t *testing.T) {
 	svc, messages, memberships, _, publisher := setupMessageService()
 	ctx := context.Background()

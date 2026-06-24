@@ -25,6 +25,7 @@ const mockMarkThreadNotificationUnread = vi.fn();
 const mockUnhideConversation = vi.fn();
 const mockClearConversationUnread = vi.fn();
 const isActiveConversationMock = vi.fn(() => true);
+const isActiveChannelMock = vi.fn(() => false);
 
 vi.mock('@/context/UnreadContext', () => ({
   useUnread: () => ({
@@ -38,12 +39,13 @@ vi.mock('@/context/UnreadContext', () => ({
     markConversationUnread: mockMarkConversationUnread,
     markThreadNotificationUnread: mockMarkThreadNotificationUnread,
     clearChannelUnread: vi.fn(),
+    resetSessionUnread: vi.fn(),
     clearConversationUnread: mockClearConversationUnread,
     hideConversation: vi.fn(),
     unhideConversation: mockUnhideConversation,
     setActiveChannel: vi.fn(),
     setActiveConversation: vi.fn(),
-    isActiveChannel: vi.fn(() => false),
+    isActiveChannel: isActiveChannelMock,
     isActiveConversation: isActiveConversationMock,
     setActiveThread: vi.fn(),
     isActiveThread: vi.fn(() => false),
@@ -179,6 +181,7 @@ describe('ChatPage WS router — divergent-mock branch arms (browser)', () => {
     mockApiFetch.mockClear();
     navigateMock.mockClear();
     isActiveConversationMock.mockReturnValue(true);
+    isActiveChannelMock.mockReturnValue(false);
     shouldRefetchRef.value = true;
     userRef.value = { id: 'u-1', displayName: 'Test', email: 't@t.com', systemRole: 'member', status: 'active' };
     setMobileViewport(false);
@@ -200,6 +203,17 @@ describe('ChatPage WS router — divergent-mock branch arms (browser)', () => {
     });
     // The active conversation is NOT unhidden (author is not self and it is active).
     expect(mockUnhideConversation).not.toHaveBeenCalled();
+  });
+
+  it('onMessageNew on the ACTIVE channel PUTs the read marker instead of marking unread', async () => {
+    isActiveChannelMock.mockReturnValue(true);
+    await renderChatPage();
+    lastHandlers().onMessageNew?.(msg({ parentID: 'ch-99', parentType: 'channel', authorID: 'other-user' }));
+    expect(mockMarkChannelUnread).not.toHaveBeenCalled();
+    await vi.waitFor(() => {
+      const call = mockApiFetch.mock.calls.find((c) => String(c[0]).includes('/channels/ch-99/read'));
+      expect(call).toBeDefined();
+    });
   });
 
   it('onMessageNew unhides an active conversation when the author is the local user', async () => {
@@ -274,14 +288,16 @@ describe('ChatPage WS router — divergent-mock branch arms (browser)', () => {
     expect(mockPatchUser).toHaveBeenCalledWith(expect.objectContaining({ timeZone: 'Europe/Berlin' }));
   });
 
-  it('onNotification dispatches a non-mention channel notification without marking it', async () => {
+  it('onNotification marks AND dispatches a non-mention top-level channel notification', async () => {
     await renderChatPage();
-    // parentType 'channel' but kind !== 'mention' → the `&& n.kind === 'mention'`
-    // false arm; it still dispatches but does not mark a channel notification.
+    // A top-level channel notification.new lights up the sidebar regardless of
+    // kind — the backend already decided this user should be alerted. Re-gating
+    // on kind === 'mention' here is the bug that left a sound playing with no
+    // badge when the separate message.new path was missed.
     lastHandlers().onNotification?.({
-      kind: 'reaction', parentID: 'ch-99', parentType: 'channel', createdAt: '2026-05-01T00:00:00Z',
+      kind: 'message', parentID: 'ch-99', parentType: 'channel', createdAt: '2026-05-01T00:00:00Z',
     });
-    expect(mockMarkChannelNotificationUnread).not.toHaveBeenCalled();
+    expect(mockMarkChannelNotificationUnread).toHaveBeenCalledWith('ch-99');
     expect(mockDispatchNotification).toHaveBeenCalled();
   });
 
