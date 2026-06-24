@@ -23,6 +23,12 @@ interface UnreadState {
   markThreadNotificationUnread: (threadRootId: string) => void;
   clearChannelUnread: (channelId: string) => void;
   clearConversationUnread: (conversationId: string) => void;
+  // Drop the live session delta (unreadChannels + per-channel counts) so the
+  // server-computed unread (UserChannel.unread/unreadCount) becomes the sole
+  // source again. Called after a reconnect/replay-exhausted refetch, where the
+  // refreshed server counts already include everything the deltas tracked —
+  // keeping them would double-count.
+  resetChannelSessionUnread: () => void;
   hideConversation: (id: string) => void;
   unhideConversation: (id: string) => void;
   // Active scope: marking unread is suppressed when the user is currently
@@ -102,6 +108,10 @@ export function UnreadProvider({ children }: { children: ReactNode }) {
   const clearConversationUnread = useCallback((id: string) => {
     setUnreadConversations(prev => { const next = new Set(prev); next.delete(id); return next; });
     setConversationUnreadCounts(prev => { if (!prev.has(id)) return prev; const next = new Map(prev); next.delete(id); return next; });
+  }, []);
+  const resetChannelSessionUnread = useCallback(() => {
+    setUnreadChannels(prev => (prev.size ? new Set() : prev));
+    setChannelUnreadCounts(prev => (prev.size ? new Map() : prev));
   }, []);
 
   const hideConversation = useCallback((id: string) => {
@@ -198,6 +208,7 @@ export function UnreadProvider({ children }: { children: ReactNode }) {
       markThreadNotificationUnread,
       clearChannelUnread,
       clearConversationUnread,
+      resetChannelSessionUnread,
       hideConversation,
       unhideConversation,
       setActiveChannel,
@@ -221,6 +232,7 @@ export function UnreadProvider({ children }: { children: ReactNode }) {
       markThreadNotificationUnread,
       clearChannelUnread,
       clearConversationUnread,
+      resetChannelSessionUnread,
       hideConversation,
       unhideConversation,
       setActiveChannel,

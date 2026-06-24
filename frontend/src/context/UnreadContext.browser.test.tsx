@@ -102,6 +102,21 @@ describe('UnreadContext (browser)', () => {
     window.removeEventListener(USER_STATE_CHANGED_EVENT, handler);
   });
 
+  it('resetChannelSessionUnread clears the live channel delta layer (and no-ops when empty)', async () => {
+    const getState = await mountUnread();
+    getState().markChannelUnread('ch-a');
+    getState().markChannelUnread('ch-b');
+    await vi.waitFor(() => expect(getState().unreadChannels.size).toBe(2));
+    getState().resetChannelSessionUnread();
+    await vi.waitFor(() => {
+      expect(getState().unreadChannels.size).toBe(0);
+      expect(getState().channelUnreadCounts.size).toBe(0);
+    });
+    // Idempotent: a second reset on already-empty state is a no-op.
+    getState().resetChannelSessionUnread();
+    expect(getState().unreadChannels.size).toBe(0);
+  });
+
   it('markConversationUnread skips active conversation; markThreadNotificationUnread always adds', async () => {
     const getState = await mountUnread();
     getState().setActiveConversation('conv-c');

@@ -21,6 +21,7 @@ type MembershipStore interface {
 	ListUserChannels(ctx context.Context, userID string) ([]*model.UserChannel, error)
 	UpdateChannelRole(ctx context.Context, channelID, userID string, role model.ChannelRole) error
 	SetUserChannelMute(ctx context.Context, channelID, userID string, muted bool) error
+	SetChannelLastRead(ctx context.Context, channelID, userID string, seq int64) error
 }
 
 // MembershipStoreImpl implements MembershipStore backed by DynamoDB.
@@ -353,6 +354,13 @@ func (s *MembershipStoreImpl) UpdateChannelRole(ctx context.Context, channelID, 
 // need to dual-write the channel-side membership.
 func (s *MembershipStoreImpl) SetUserChannelMute(ctx context.Context, channelID, userID string, muted bool) error {
 	return s.setUserChannelAttribute(ctx, channelID, userID, "muted", muted)
+}
+
+// SetChannelLastRead records how far this user has read in the channel by
+// stamping the channel's current MessageSeq onto their user-side row. unread
+// then derives as Channel.MessageSeq - LastReadSeq.
+func (s *MembershipStoreImpl) SetChannelLastRead(ctx context.Context, channelID, userID string, seq int64) error {
+	return s.setUserChannelAttribute(ctx, channelID, userID, "lastReadSeq", seq)
 }
 
 // SetUserChannelFavorite flips the favorite flag on the user-side

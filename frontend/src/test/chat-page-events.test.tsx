@@ -43,6 +43,8 @@ const markChannelNotificationUnread = vi.fn();
 const markConversationUnread = vi.fn();
 const markThreadNotificationUnread = vi.fn();
 const clearConversationUnread = vi.fn();
+const resetChannelSessionUnread = vi.fn();
+const isActiveChannel = vi.fn(() => false);
 const isActiveConversation = vi.fn(() => false);
 const isActiveThread = vi.fn(() => false);
 const unhideConversation = vi.fn();
@@ -63,10 +65,11 @@ vi.mock('@/context/UnreadContext', () => ({
     hiddenConversations: new Set(),
     hideConversation: vi.fn(),
     clearChannelUnread: vi.fn(),
+    resetChannelSessionUnread,
     clearConversationUnread,
     setActiveChannel: vi.fn(),
     setActiveConversation: vi.fn(),
-    isActiveChannel: vi.fn(() => false),
+    isActiveChannel,
     isActiveConversation,
     setActiveThread: vi.fn(),
     isActiveThread,
@@ -169,6 +172,9 @@ describe('ChatPage WebSocket handlers', () => {
     markConversationUnread.mockReset();
     markThreadNotificationUnread.mockReset();
     clearConversationUnread.mockReset();
+    isActiveChannel.mockReset();
+    isActiveChannel.mockReturnValue(false);
+    resetChannelSessionUnread.mockReset();
     isActiveConversation.mockReset();
     isActiveConversation.mockReturnValue(false);
     isActiveThread.mockReset();
@@ -212,6 +218,17 @@ describe('ChatPage WebSocket handlers', () => {
     expect(markChannelUnread).toHaveBeenCalledWith('ch-1');
     expect(markConversationUnread).not.toHaveBeenCalled();
     expect(unhideConversation).not.toHaveBeenCalled();
+  });
+
+  it('onMessageNew on the ACTIVE channel PUTs the read marker instead of marking unread', () => {
+    isActiveChannel.mockReturnValue(true);
+    renderAt('/', (qc) => {
+      qc.setQueryData(['userChannels'], [{ channelID: 'ch-1', channelName: 'general' }]);
+    });
+    const handler = capturedOptions.onMessageNew as (d: unknown) => void;
+    handler(msg({ authorID: 'u-other', parentType: 'channel' }));
+    expect(markChannelUnread).not.toHaveBeenCalled();
+    expect(vi.mocked(apiFetch)).toHaveBeenCalledWith('/api/v1/channels/ch-1/read', { method: 'PUT' });
   });
 
   it('onMessageNew does NOT mark the channel unread for a thread reply', () => {
@@ -463,6 +480,9 @@ describe('ChatPage WebSocket handlers', () => {
     expect(calls).toContainEqual(['userThreads']);
     expect(calls).toContainEqual(['userState']);
     expect(calls).toContainEqual(['channelMembers']);
+    // Live session deltas are dropped so the refetched server counts (which
+    // already include them) aren't double-added.
+    expect(resetChannelSessionUnread).toHaveBeenCalled();
   });
 
   it('onMessageEdited / onMessageDeleted gracefully ignore missing parentID and invalidate when present', () => {

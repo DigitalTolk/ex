@@ -61,6 +61,9 @@ func (a *ChannelStoreAdapter) GetChannelBySlug(ctx context.Context, slug string)
 func (a *ChannelStoreAdapter) UpdateChannel(ctx context.Context, ch *model.Channel) error {
 	return a.s.Update(ctx, ch)
 }
+func (a *ChannelStoreAdapter) IncrementMessageSeq(ctx context.Context, channelID string) (int64, error) {
+	return a.s.IncrementMessageSeq(ctx, channelID)
+}
 func (a *ChannelStoreAdapter) ListPublicChannels(ctx context.Context, limit int, cursor string) ([]*model.Channel, string, error) {
 	return a.s.ListPublic(ctx, limit, cursor)
 }
@@ -109,6 +112,9 @@ func (a *MembershipStoreAdapter) UserChannelNotifPrefs(ctx context.Context, chan
 }
 func (a *MembershipStoreAdapter) SetMute(ctx context.Context, channelID, userID string, muted bool) error {
 	return a.s.SetUserChannelMute(ctx, channelID, userID, muted)
+}
+func (a *MembershipStoreAdapter) SetChannelLastRead(ctx context.Context, channelID, userID string, seq int64) error {
+	return a.s.SetChannelLastRead(ctx, channelID, userID, seq)
 }
 func (a *MembershipStoreAdapter) SetNotifPrefs(ctx context.Context, channelID, userID string, override model.ChannelNotificationOverride) error {
 	return a.s.SetUserChannelNotifPrefs(ctx, channelID, userID, override)

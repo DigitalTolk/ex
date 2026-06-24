@@ -32,7 +32,7 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ChannelView } from './ChannelView';
 import type { Channel, ChannelMembership } from '@/types';
-import { ApiError } from '@/lib/api';
+import { ApiError, apiFetch } from '@/lib/api';
 
 // --- mocks ---------------------------------------------------------------
 
@@ -124,7 +124,7 @@ vi.mock('@/lib/api', async () => {
   const actual = await vi.importActual<typeof import('@/lib/api')>('@/lib/api');
   return {
     ...actual,
-    apiFetch: vi.fn(),
+    apiFetch: vi.fn().mockResolvedValue(undefined),
   };
 });
 
@@ -149,6 +149,32 @@ describe('ChannelView', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     channelQuery = { data: mockChannel, isLoading: false };
+  });
+
+  it('marks the channel read on open (optimistic cache patch + PUT)', async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    qc.setQueryData(['userChannels'], [
+      { channelID: 'ch-other', channelName: 'other', unread: true, unreadCount: 2 },
+      { channelID: 'ch-1', channelName: 'general', unread: true, unreadCount: 4 },
+    ]);
+    render(
+      <QueryClientProvider client={qc}>
+        <MemoryRouter initialEntries={['/channel/general']}>
+          <Routes>
+            <Route path="/channel/:id" element={<ChannelView />} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    await screen.findByRole('heading', { name: 'general' });
+    // Optimistic: the cached row is zeroed immediately so the sidebar clears.
+    const cached = qc.getQueryData<{ channelID: string; unread?: boolean; unreadCount?: number }[]>(['userChannels']);
+    const opened = cached?.find((c) => c.channelID === 'ch-1');
+    const untouched = cached?.find((c) => c.channelID === 'ch-other');
+    expect(opened).toMatchObject({ unread: false, unreadCount: 0 });
+    expect(untouched).toMatchObject({ unread: true, unreadCount: 2 });
+    // Persisted server-side.
+    expect(vi.mocked(apiFetch)).toHaveBeenCalledWith('/api/v1/channels/ch-1/read', { method: 'PUT' });
   });
 
   it('renders channel name in header', () => {

@@ -40,6 +40,7 @@ vi.mock('@/context/UnreadContext', () => ({
     markConversationUnread: mockMarkConversationUnread,
     markThreadNotificationUnread: mockMarkThreadNotificationUnread,
     clearChannelUnread: vi.fn(),
+    resetChannelSessionUnread: vi.fn(),
     clearConversationUnread: mockClearConversationUnread,
     hideConversation: vi.fn(),
     unhideConversation: mockUnhideConversation,

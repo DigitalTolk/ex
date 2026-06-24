@@ -32,6 +32,7 @@ vi.mock('@/context/UnreadContext', () => ({
     hiddenConversations: new Set(),
     hideConversation: vi.fn(),
     clearChannelUnread: vi.fn(),
+    resetChannelSessionUnread: vi.fn(),
     clearConversationUnread: vi.fn(),
     setActiveChannel: vi.fn(),
     setActiveConversation: vi.fn(),

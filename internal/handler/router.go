@@ -117,6 +117,7 @@ func NewRouter(d *Deps) http.Handler {
 
 	mux.Handle("POST /api/v1/channels/{id}/join", middleware.WrapFunc(channelH.Join, authMW))
 	mux.Handle("POST /api/v1/channels/{id}/leave", middleware.WrapFunc(channelH.Leave, authMW))
+	mux.Handle("PUT /api/v1/channels/{id}/read", middleware.WrapFunc(channelH.MarkRead, authMW))
 	mux.Handle("PUT /api/v1/channels/{id}/mute", middleware.WrapFunc(channelH.SetMute, authMW))
 	mux.Handle("PUT /api/v1/channels/{id}/notification-preferences", middleware.WrapFunc(channelH.SetNotificationPrefs, authMW))
 

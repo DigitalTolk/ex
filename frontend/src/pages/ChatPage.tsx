@@ -79,9 +79,11 @@ export default function ChatPage() {
     markChannelUnread,
     markChannelNotificationUnread,
     clearConversationUnread,
+    isActiveChannel,
     isActiveConversation,
     markConversationUnread,
     markThreadNotificationUnread,
+    resetChannelSessionUnread,
     isActiveThread: isActiveThreadScope,
     unhideConversation,
   } = useUnread();
@@ -133,7 +135,14 @@ export default function ChatPage() {
           // /leaving), isn't "new channel activity" — only a top-level human
           // message bumps the channel's unread indicator.
           if (!parentMessageID && !msg.system) {
-            markChannelUnread(parentID);
+            if (isActiveChannel(parentID)) {
+              // Already viewing it — keep the server caught up so the badge
+              // doesn't reappear on a reload (mirrors the conversation path).
+              void apiFetch<void>(`/api/v1/channels/${encodeURIComponent(parentID)}/read`, { method: 'PUT' })
+                .catch(() => undefined);
+            } else {
+              markChannelUnread(parentID);
+            }
           }
         } else if (isConversationParent) {
           if (isActiveConversation(parentID)) {
@@ -378,6 +387,9 @@ export default function ChatPage() {
       queryClient.invalidateQueries({ queryKey: queryKeys.userState() });
       queryClient.invalidateQueries({ queryKey: queryKeys.drafts() });
       queryClient.invalidateQueries({ queryKey: queryKeys.channelMembers() });
+      // The refetched userChannels carry authoritative server unread counts;
+      // drop the live session deltas so they aren't added on top (double-count).
+      resetChannelSessionUnread();
       void resyncMessageCache(queryClient);
     },
     onReplayExhausted: () => {
@@ -389,6 +401,7 @@ export default function ChatPage() {
       queryClient.invalidateQueries({ queryKey: queryKeys.userState() });
       queryClient.invalidateQueries({ queryKey: queryKeys.drafts() });
       queryClient.invalidateQueries({ queryKey: queryKeys.channelMembers() });
+      resetChannelSessionUnread();
       void resyncMessageCache(queryClient);
     },
     enabled: !!user,

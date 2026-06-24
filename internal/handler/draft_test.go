@@ -94,6 +94,9 @@ func (handlerMembershipStore) SetNotifPrefs(context.Context, string, string, mod
 	return nil
 }
 func (handlerMembershipStore) SetMute(context.Context, string, string, bool) error     { return nil }
+func (handlerMembershipStore) SetChannelLastRead(context.Context, string, string, int64) error {
+	return nil
+}
 func (handlerMembershipStore) SetFavorite(context.Context, string, string, bool) error { return nil }
 func (handlerMembershipStore) SetCategory(context.Context, string, string, string, *int) error {
 	return nil

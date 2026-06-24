@@ -179,6 +179,9 @@ func (m *mockMembershipStore) UserChannelNotifPrefs(_ context.Context, _ string,
 func (m *mockMembershipStore) SetMute(_ context.Context, _, _ string, _ bool) error {
 	return nil
 }
+func (m *mockMembershipStore) SetChannelLastRead(_ context.Context, _, _ string, _ int64) error {
+	return nil
+}
 func (m *mockMembershipStore) SetNotifPrefs(_ context.Context, _, _ string, _ model.ChannelNotificationOverride) error {
 	return nil
 }

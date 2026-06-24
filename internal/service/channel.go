@@ -125,6 +125,9 @@ func (s *ChannelService) addMemberWithEvents(ctx context.Context, ch *model.Chan
 		ChannelType: ch.Type,
 		Role:        role,
 		JoinedAt:    now,
+		// Start caught up: a new member shouldn't see the channel's entire
+		// pre-join history as unread.
+		LastReadSeq: ch.MessageSeq,
 	}
 	if err := s.memberships.AddMember(ctx, membership, uc); err != nil {
 		return fmt.Errorf("channel: add member: %w", err)
@@ -565,6 +568,9 @@ func (s *ChannelService) AddMember(ctx context.Context, actorID, channelID, user
 		ChannelType: ch.Type,
 		Role:        role,
 		JoinedAt:    now,
+		// Start caught up: an invited member shouldn't inherit the channel's
+		// pre-join backlog as unread.
+		LastReadSeq: ch.MessageSeq,
 	}
 	if err := s.memberships.AddMember(ctx, membership, uc); err != nil {
 		return fmt.Errorf("channel: add member: %w", err)
@@ -696,6 +702,13 @@ func (s *ChannelService) ListUserChannels(ctx context.Context, userID string) ([
 			if !ch.Archived || uc.Role == model.ChannelRoleOwner {
 				keep[i] = true
 			}
+			// Exact unread: messages added since this user last read. O(1) from
+			// the seq pair — no per-channel count query. Survives reload and
+			// reconnect because both numbers are persisted.
+			if n := ch.MessageSeq - uc.LastReadSeq; n > 0 {
+				uc.UnreadCount = int(n)
+				uc.Unread = true
+			}
 		}(i, uc)
 	}
 	wg.Wait()
@@ -707,6 +720,24 @@ func (s *ChannelService) ListUserChannels(ctx context.Context, userID string) ([
 		}
 	}
 	return filtered, nil
+}
+
+// MarkChannelRead catches the user up to the channel's current MessageSeq, so
+// the sidebar unread badge clears and stays cleared across reloads. Publishes a
+// user.channel.updated to the caller's own topic so other tabs/devices refetch
+// and drop the badge too. Returns ErrNotFound when the caller isn't a member.
+func (s *ChannelService) MarkChannelRead(ctx context.Context, userID, channelID string) error {
+	ch, err := s.channels.GetChannel(ctx, channelID)
+	if err != nil {
+		return fmt.Errorf("channel: get: %w", err)
+	}
+	if err := s.memberships.SetChannelLastRead(ctx, channelID, userID, ch.MessageSeq); err != nil {
+		return err
+	}
+	events.Publish(ctx, s.publisher, pubsub.UserChannel(userID), events.EventUserChannelUpdated, map[string]any{
+		"channelID": channelID,
+	})
+	return nil
 }
 
 // SearchPublic returns matched public channels visible to the caller

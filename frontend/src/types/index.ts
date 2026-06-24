@@ -211,6 +211,11 @@ export interface UserChannel {
   channelType: 'public' | 'private';
   role: number;
   lastReadMsgID?: string;
+  // Server-computed unread state (channel.MessageSeq - membership.LastReadSeq).
+  // The authoritative source for the sidebar badge on cold load / after
+  // reconnect; live message.new events layer a session delta on top.
+  unread?: boolean;
+  unreadCount?: number;
   muted?: boolean;
   favorite?: boolean;
   categoryID?: string;

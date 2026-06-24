@@ -25,6 +25,7 @@ const mockMarkThreadNotificationUnread = vi.fn();
 const mockUnhideConversation = vi.fn();
 const mockClearConversationUnread = vi.fn();
 const isActiveConversationMock = vi.fn(() => true);
+const isActiveChannelMock = vi.fn(() => false);
 
 vi.mock('@/context/UnreadContext', () => ({
   useUnread: () => ({
@@ -38,12 +39,13 @@ vi.mock('@/context/UnreadContext', () => ({
     markConversationUnread: mockMarkConversationUnread,
     markThreadNotificationUnread: mockMarkThreadNotificationUnread,
     clearChannelUnread: vi.fn(),
+    resetChannelSessionUnread: vi.fn(),
     clearConversationUnread: mockClearConversationUnread,
     hideConversation: vi.fn(),
     unhideConversation: mockUnhideConversation,
     setActiveChannel: vi.fn(),
     setActiveConversation: vi.fn(),
-    isActiveChannel: vi.fn(() => false),
+    isActiveChannel: isActiveChannelMock,
     isActiveConversation: isActiveConversationMock,
     setActiveThread: vi.fn(),
     isActiveThread: vi.fn(() => false),
@@ -179,6 +181,7 @@ describe('ChatPage WS router — divergent-mock branch arms (browser)', () => {
     mockApiFetch.mockClear();
     navigateMock.mockClear();
     isActiveConversationMock.mockReturnValue(true);
+    isActiveChannelMock.mockReturnValue(false);
     shouldRefetchRef.value = true;
     userRef.value = { id: 'u-1', displayName: 'Test', email: 't@t.com', systemRole: 'member', status: 'active' };
     setMobileViewport(false);
@@ -200,6 +203,17 @@ describe('ChatPage WS router — divergent-mock branch arms (browser)', () => {
     });
     // The active conversation is NOT unhidden (author is not self and it is active).
     expect(mockUnhideConversation).not.toHaveBeenCalled();
+  });
+
+  it('onMessageNew on the ACTIVE channel PUTs the read marker instead of marking unread', async () => {
+    isActiveChannelMock.mockReturnValue(true);
+    await renderChatPage();
+    lastHandlers().onMessageNew?.(msg({ parentID: 'ch-99', parentType: 'channel', authorID: 'other-user' }));
+    expect(mockMarkChannelUnread).not.toHaveBeenCalled();
+    await vi.waitFor(() => {
+      const call = mockApiFetch.mock.calls.find((c) => String(c[0]).includes('/channels/ch-99/read'));
+      expect(call).toBeDefined();
+    });
   });
 
   it('onMessageNew unhides an active conversation when the author is the local user', async () => {

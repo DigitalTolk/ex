@@ -884,6 +884,90 @@ func TestMembershipStore_SetUserChannelMute(t *testing.T) {
 	}
 }
 
+// IncrementMessageSeq is the per-channel unread counter. It must atomically
+// return a monotonically increasing value (ADD on a missing attribute starts
+// at 0, so the first message is 1) and persist it on the channel row.
+func TestChannelStore_IncrementMessageSeq(t *testing.T) {
+	db := setupDynamoDB(t)
+	ctx := context.Background()
+	cs := NewChannelStore(db)
+	ch := makeChannel("ch-seq", "seq", "seq-slug", model.ChannelTypePublic)
+	if err := cs.Create(ctx, ch); err != nil {
+		t.Fatalf("Create channel: %v", err)
+	}
+
+	for want := int64(1); want <= 3; want++ {
+		got, err := cs.IncrementMessageSeq(ctx, "ch-seq")
+		if err != nil {
+			t.Fatalf("IncrementMessageSeq: %v", err)
+		}
+		if got != want {
+			t.Fatalf("IncrementMessageSeq returned %d, want %d", got, want)
+		}
+	}
+	reloaded, err := cs.GetByID(ctx, "ch-seq")
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if reloaded.MessageSeq != 3 {
+		t.Errorf("persisted MessageSeq = %d, want 3", reloaded.MessageSeq)
+	}
+}
+
+func TestChannelStore_IncrementMessageSeq_NotFound(t *testing.T) {
+	db := setupDynamoDB(t)
+	ctx := context.Background()
+	if _, err := NewChannelStore(db).IncrementMessageSeq(ctx, "ghost"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("IncrementMessageSeq missing channel: want ErrNotFound, got %v", err)
+	}
+}
+
+func TestChannelStore_IncrementMessageSeq_UpdateError(t *testing.T) {
+	db := setupDynamoDB(t)
+	ctx := context.Background()
+	s := NewChannelStore(withFault(db, func(f *faultClient) { f.failUpdateItem = true }))
+	if _, err := s.IncrementMessageSeq(ctx, "ch-x"); !errors.Is(err, errInjected) {
+		t.Fatalf("IncrementMessageSeq: want errInjected, got %v", err)
+	}
+}
+
+// SetChannelLastRead stamps how far a user has read; ListUserChannels reads it
+// back so unread = channel.MessageSeq - LastReadSeq can be computed.
+func TestMembershipStore_SetChannelLastRead(t *testing.T) {
+	db := setupDynamoDB(t)
+	ctx := context.Background()
+	cs := NewChannelStore(db)
+	ms := NewMembershipStore(db)
+	ch := makeChannel("ch-lr", "lr", "lr-slug", model.ChannelTypePublic)
+	if err := cs.Create(ctx, ch); err != nil {
+		t.Fatalf("Create channel: %v", err)
+	}
+	member := &model.ChannelMembership{ChannelID: "ch-lr", UserID: "u-lr", Role: model.ChannelRoleMember, JoinedAt: time.Now().Truncate(time.Millisecond)}
+	userChan := &model.UserChannel{UserID: "u-lr", ChannelID: "ch-lr", Role: model.ChannelRoleMember, JoinedAt: time.Now().Truncate(time.Millisecond)}
+	if err := ms.AddChannelMember(ctx, ch, member, userChan); err != nil {
+		t.Fatalf("AddChannelMember: %v", err)
+	}
+
+	if err := ms.SetChannelLastRead(ctx, "ch-lr", "u-lr", 12); err != nil {
+		t.Fatalf("SetChannelLastRead: %v", err)
+	}
+	chans, err := ms.ListUserChannels(ctx, "u-lr")
+	if err != nil {
+		t.Fatalf("ListUserChannels: %v", err)
+	}
+	if len(chans) != 1 || chans[0].LastReadSeq != 12 {
+		t.Fatalf("LastReadSeq = %v, want 12", chans)
+	}
+}
+
+func TestMembershipStore_SetChannelLastRead_NotMember(t *testing.T) {
+	db := setupDynamoDB(t)
+	ctx := context.Background()
+	if err := NewMembershipStore(db).SetChannelLastRead(ctx, "ch-none", "u-none", 1); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("SetChannelLastRead non-member: want ErrNotFound, got %v", err)
+	}
+}
+
 func TestUserStore_NotificationSettingsFor(t *testing.T) {
 	db := setupDynamoDB(t)
 	us := NewUserStore(db)

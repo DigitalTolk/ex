@@ -784,6 +784,19 @@ describe('Sidebar browser render — rich fixtures', () => {
     expect(document.querySelector('[data-testid="channel-unread-dot-ch-general"]')).toBeTruthy();
   });
 
+  it('shows the server-computed unread count on cold load (no live events)', async () => {
+    // Channel carries server-side unread state from /api/v1/channels — the
+    // authoritative source after a reload, with empty session maps. The badge
+    // must render the exact count without any message.new having arrived.
+    mockChannels = [
+      { channelID: 'ch-cold', channelName: 'ops', channelType: 'public', role: 1, sidebarPosition: 1000, unread: true, unreadCount: 7 },
+    ];
+    mockUserState = { hiddenConversations: [], channelNotifications: [], threadNotifications: [], threadSeen: {} };
+    await render(<Frame />);
+    const badge = document.querySelector('[data-testid="channel-unread-badge-ch-cold"]');
+    expect(badge?.textContent).toBe('7');
+  });
+
   it('renders empty state with no channels and no DMs (just nav links)', async () => {
     mockChannels = [];
     mockConversations = [];
@@ -1230,5 +1243,33 @@ describe('Sidebar browser render — rich fixtures', () => {
     });
     // The unread channel stays visible despite the collapse and cold userState.
     expect(document.body.textContent).toContain('urgent');
+  });
+
+  it('keeps a server-unread channel visible in a collapsed section (no live events)', async () => {
+    // The collapsed-channel filter must honour the server-computed
+    // UserChannel.unread, not just the session unreadChannels set — otherwise a
+    // channel that went unread before this tab loaded would vanish on collapse.
+    mockChannels = [
+      { channelID: 'ch-srv', channelName: 'srvunread', channelType: 'public', role: 1, sidebarPosition: 1000, unread: true, unreadCount: 3 },
+    ];
+    mockConversations = [];
+    mockConversationsState = { data: [], isError: false };
+    mockCategories = [];
+    mockUnread = {
+      unreadChannels: new Set(),
+      unreadChannelNotifications: new Set(),
+      unreadConversations: new Set(),
+      unreadThreadNotifications: new Set(),
+      hiddenConversations: new Set(),
+    };
+    mockUserState = { hiddenConversations: [], channelNotifications: [], threadNotifications: [], threadSeen: {} };
+    const screen = await render(<Frame />);
+    const toggle = screen.getByTestId('sidebar-group-toggle-__channels__');
+    await toggle.click();
+    await vi.waitFor(() => {
+      const t = document.querySelector('[data-testid="sidebar-group-toggle-__channels__"]') as HTMLElement;
+      expect(t.getAttribute('aria-expanded')).toBe('false');
+    });
+    expect(document.body.textContent).toContain('srvunread');
   });
 });

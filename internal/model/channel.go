@@ -51,4 +51,10 @@ type Channel struct {
 	Archived    bool        `json:"archived" dynamodbav:"archived"`
 	CreatedAt   time.Time   `json:"createdAt" dynamodbav:"createdAt"`
 	UpdatedAt   time.Time   `json:"updatedAt" dynamodbav:"updatedAt"`
+	// MessageSeq is a monotonic counter bumped once per top-level human
+	// message (not thread replies, not system events). Paired with each
+	// member's UserChannel.LastReadSeq it yields an exact, O(1) unread count
+	// without per-member writes or count queries. Starts at 0, so on rollout
+	// every member is "caught up" and only new messages count — no backfill.
+	MessageSeq int64 `json:"messageSeq,omitempty" dynamodbav:"messageSeq,omitempty"`
 }

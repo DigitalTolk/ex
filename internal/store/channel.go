@@ -20,6 +20,7 @@ type ChannelStore interface {
 	GetByName(ctx context.Context, name string) (*model.Channel, error)
 	GetBySlug(ctx context.Context, slug string) (*model.Channel, error)
 	Update(ctx context.Context, ch *model.Channel) error
+	IncrementMessageSeq(ctx context.Context, channelID string) (int64, error)
 	ListPublic(ctx context.Context, limit int, lastKey string) ([]*model.Channel, string, error)
 	ListAll(ctx context.Context) ([]*model.Channel, error)
 }
@@ -225,6 +226,41 @@ func (s *ChannelStoreImpl) Update(ctx context.Context, ch *model.Channel) error 
 		return fmt.Errorf("store: update channel: %w", err)
 	}
 	return nil
+}
+
+// IncrementMessageSeq atomically bumps the channel's MessageSeq by one and
+// returns the new value. ADD on a missing attribute treats it as 0, so the
+// first message returns 1 — no initialization needed.
+func (s *ChannelStoreImpl) IncrementMessageSeq(ctx context.Context, channelID string) (int64, error) {
+	upd := expression.Add(expression.Name("messageSeq"), expression.Value(1))
+	expr, err := expression.NewBuilder().WithUpdate(upd).Build()
+	if err != nil { // coverage-ignore: static single-attribute ADD; Build cannot fail
+		return 0, fmt.Errorf("store: build message seq expression: %w", err)
+	}
+
+	out, err := s.Client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName:                 aws.String(s.Table),
+		Key:                       compositeKey(channelPK(channelID), metaSK()),
+		UpdateExpression:          expr.Update(),
+		ExpressionAttributeNames:  expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
+		ConditionExpression:       aws.String("attribute_exists(PK)"),
+		ReturnValues:              types.ReturnValueUpdatedNew,
+	})
+	if err != nil {
+		if isConditionCheckFailed(err) {
+			return 0, ErrNotFound
+		}
+		return 0, fmt.Errorf("store: increment message seq: %w", err)
+	}
+
+	var attrs struct {
+		MessageSeq int64 `dynamodbav:"messageSeq"`
+	}
+	if err := attributevalue.UnmarshalMap(out.Attributes, &attrs); err != nil { // coverage-ignore: DynamoDB returns a numeric attribute we just wrote; cannot fail
+		return 0, fmt.Errorf("store: unmarshal message seq: %w", err)
+	}
+	return attrs.MessageSeq, nil
 }
 
 func (s *ChannelStoreImpl) ListPublic(ctx context.Context, limit int, lastKey string) ([]*model.Channel, string, error) {

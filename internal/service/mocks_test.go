@@ -217,6 +217,9 @@ type mockMembershipStore struct {
 	listChannelsErr error
 	setMuteErr      error
 	setNotifErr     error
+	lastReadSeqs      map[string]int64               // key: channelID + "#" + userID
+	setLastReadErr    error
+	addedUserChannels map[string]*model.UserChannel // key: channelID + "#" + userID
 }
 
 func newMockMembershipStore() *mockMembershipStore {
@@ -226,13 +229,35 @@ func newMockMembershipStore() *mockMembershipStore {
 	}
 }
 
-func (m *mockMembershipStore) AddMember(_ context.Context, mem *model.ChannelMembership, _ *model.UserChannel) error {
+func (m *mockMembershipStore) AddMember(_ context.Context, mem *model.ChannelMembership, uc *model.UserChannel) error {
 	if m.addErr != nil {
 		return m.addErr
 	}
 	key := mem.ChannelID + "#" + mem.UserID
 	m.memberships[key] = mem
+	if m.addedUserChannels == nil {
+		m.addedUserChannels = make(map[string]*model.UserChannel)
+	}
+	m.addedUserChannels[key] = uc
 	return nil
+}
+
+// mockChannelSeqStore records IncrementMessageSeq calls and returns a
+// monotonically increasing per-channel counter, mirroring the real store.
+type mockChannelSeqStore struct {
+	seq map[string]int64
+	err error
+}
+
+func (m *mockChannelSeqStore) IncrementMessageSeq(_ context.Context, channelID string) (int64, error) {
+	if m.err != nil {
+		return 0, m.err
+	}
+	if m.seq == nil {
+		m.seq = make(map[string]int64)
+	}
+	m.seq[channelID]++
+	return m.seq[channelID], nil
 }
 
 func (m *mockMembershipStore) RemoveMember(_ context.Context, channelID, userID string) error {
@@ -339,6 +364,17 @@ func (m *mockMembershipStore) SetMute(_ context.Context, channelID, userID strin
 		return m.setMuteErr
 	}
 	m.mutes[channelID+"#"+userID] = muted
+	return nil
+}
+
+func (m *mockMembershipStore) SetChannelLastRead(_ context.Context, channelID, userID string, seq int64) error {
+	if m.setLastReadErr != nil {
+		return m.setLastReadErr
+	}
+	if m.lastReadSeqs == nil {
+		m.lastReadSeqs = make(map[string]int64)
+	}
+	m.lastReadSeqs[channelID+"#"+userID] = seq
 	return nil
 }
 

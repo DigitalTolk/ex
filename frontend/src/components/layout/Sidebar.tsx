@@ -1425,7 +1425,7 @@ export function Sidebar({ onClose }: SidebarProps) {
                       const hasNotification =
                         unreadChannelNotifications.has(ch.channelID) ||
                         (userState?.channelNotifications ?? []).includes(ch.channelID);
-                      return isActive || (!ch.muted && (unreadChannels.has(ch.channelID) || hasNotification));
+                      return isActive || (!ch.muted && (!!ch.unread || unreadChannels.has(ch.channelID) || hasNotification));
                     }
                     const conv = item.conversation;
                     const isActive =
@@ -1580,11 +1580,15 @@ export function Sidebar({ onClose }: SidebarProps) {
                                 <ChannelRow
                                   channel={item.channel}
                                   hasUnread={
+                                    !!item.channel.unread ||
                                     unreadChannels.has(item.channel.channelID) ||
                                     unreadChannelNotifications.has(item.channel.channelID) ||
                                     (userState?.channelNotifications ?? []).includes(item.channel.channelID)
                                   }
-                                  unreadCount={channelUnreadCounts?.get(item.channel.channelID) ?? 0}
+                                  unreadCount={
+                                    (item.channel.unreadCount ?? 0) +
+                                    (channelUnreadCounts?.get(item.channel.channelID) ?? 0)
+                                  }
                                   onClose={onClose}
                                   draggable={!isMobile}
                                   suppressNavigation={suppressChannelNavigationID === item.channel.channelID}

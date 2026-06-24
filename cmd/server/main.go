@@ -175,6 +175,7 @@ func main() {
 	convSvc.SetMediaURLCache(redisCache)
 	convSvc.SetUserProfileResolver(userSvc)
 	messageSvc := service.NewMessageService(messageStore, membershipStore, conversationStore, redisPubSub, brokerAdapter)
+	messageSvc.SetChannelSeqStore(channelStore)
 	messageSvc.SetThreadFollowStore(threadFollowStore)
 	messageSvc.SetUserStateStore(userStateStore)
 	messageSvc.SetParentIndex(parentIndexStore)

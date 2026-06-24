@@ -88,7 +88,7 @@ vi.mock('@/hooks/useMessages', () => ({
 }));
 
 vi.mock('@/hooks/useWebSocket', () => ({ useWebSocket: vi.fn() }));
-vi.mock('@/lib/api', () => ({ apiFetch: vi.fn() }));
+vi.mock('@/lib/api', () => ({ apiFetch: vi.fn().mockResolvedValue(undefined) }));
 
 function renderAt(slug: string) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
