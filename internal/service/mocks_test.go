@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"sync"
+	"testing"
 	"time"
 
 	"github.com/DigitalTolk/ex/internal/events"
@@ -242,22 +243,81 @@ func (m *mockMembershipStore) AddMember(_ context.Context, mem *model.ChannelMem
 	return nil
 }
 
-// mockChannelSeqStore records IncrementMessageSeq calls and returns a
-// monotonically increasing per-channel counter, mirroring the real store.
-type mockChannelSeqStore struct {
-	seq map[string]int64
-	err error
+// mockUnreadSeqStore is the shared UnreadSeqStore fake for both channels and
+// conversations: a monotonically increasing per-parent counter plus a recorded
+// per-(parent,user) last-read. Mutex-guarded because bumpUnreadSeq writes it
+// from a detached goroutine while the test reads it back.
+type mockUnreadSeqStore struct {
+	mu        sync.Mutex
+	seq       map[string]int64
+	lastReads map[string]int64 // key: parentID + "#" + userID
+	err       error
+	lastErr   error
 }
 
-func (m *mockChannelSeqStore) IncrementMessageSeq(_ context.Context, channelID string) (int64, error) {
+func (m *mockUnreadSeqStore) IncrementMessageSeq(_ context.Context, parentID string) (int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.err != nil {
 		return 0, m.err
 	}
 	if m.seq == nil {
 		m.seq = make(map[string]int64)
 	}
-	m.seq[channelID]++
-	return m.seq[channelID], nil
+	m.seq[parentID]++
+	return m.seq[parentID], nil
+}
+
+func (m *mockUnreadSeqStore) SetLastRead(_ context.Context, parentID, userID string, seq int64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.lastErr != nil {
+		return m.lastErr
+	}
+	if m.lastReads == nil {
+		m.lastReads = make(map[string]int64)
+	}
+	m.lastReads[parentID+"#"+userID] = seq
+	return nil
+}
+
+func (m *mockUnreadSeqStore) count(parentID string) int64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.seq[parentID]
+}
+
+func (m *mockUnreadSeqStore) lastRead(parentID, userID string) (int64, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	v, ok := m.lastReads[parentID+"#"+userID]
+	return v, ok
+}
+
+// convSeqStore adapts a mockConversationStore to UnreadSeqStore so an
+// end-to-end test's seq bump lands on the same store ListUserConversations
+// reads (mirrors handler.UnreadSeqAdapter). The conversation store owns both
+// the counter and the per-user last-read.
+type convSeqStore struct{ s *mockConversationStore }
+
+func (a convSeqStore) IncrementMessageSeq(ctx context.Context, parentID string) (int64, error) {
+	return a.s.IncrementMessageSeq(ctx, parentID)
+}
+func (a convSeqStore) SetLastRead(ctx context.Context, parentID, userID string, seq int64) error {
+	return a.s.SetConversationLastRead(ctx, parentID, userID, seq)
+}
+
+// waitForCond polls cond until it holds (or fails the test), for asserting the
+// effects of detached goroutines without a sleep-and-hope.
+func waitForCond(t *testing.T, cond func() bool, desc string) {
+	t.Helper()
+	for range 200 {
+		if cond() {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s", desc)
 }
 
 func (m *mockMembershipStore) RemoveMember(_ context.Context, channelID, userID string) error {
@@ -738,6 +798,25 @@ func (m *mockConversationStore) TouchConversation(_ context.Context, convID stri
 		}
 	}
 	return nil
+}
+
+func (m *mockConversationStore) IncrementMessageSeq(_ context.Context, convID string) (int64, error) {
+	conv, ok := m.conversations[convID]
+	if !ok {
+		return 0, store.ErrNotFound
+	}
+	conv.MessageSeq++
+	return conv.MessageSeq, nil
+}
+
+func (m *mockConversationStore) SetConversationLastRead(_ context.Context, convID, userID string, seq int64) error {
+	for _, uc := range m.userConvs[userID] {
+		if uc.ConversationID == convID {
+			uc.LastReadSeq = seq
+			return nil
+		}
+	}
+	return store.ErrNotFound
 }
 
 func (m *mockConversationStore) SetFavorite(_ context.Context, convID, userID string, favorite bool) error {

@@ -32,67 +32,77 @@ func setupMessageService() (*MessageService, *mockMessageStore, *mockMembershipS
 	return svc, messages, memberships, conversations, publisher
 }
 
-// A top-level channel message bumps the channel's MessageSeq and marks the
-// author caught up (their own post never shows as unread to them). Thread
-// replies and conversation messages don't touch the channel counter.
-func TestMessageService_Send_BumpsChannelSeq(t *testing.T) {
-	svc, messages, memberships, _, _ := setupMessageService()
-	seqStore := &mockChannelSeqStore{}
-	svc.SetChannelSeqStore(seqStore)
+// writeUnreadSeq (the synchronous core of the detached bump) advances the
+// counter and marks the author caught up — their own post never shows as unread
+// to them. Tested directly so the assertion doesn't race the goroutine.
+func TestMessageService_WriteUnreadSeq(t *testing.T) {
+	svc, _, _, _, _ := setupMessageService()
+	seqStore := &mockUnreadSeqStore{}
 	ctx := context.Background()
-	memberships.memberships["ch1#user-1"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "user-1", Role: model.ChannelRoleMember}
-	messages.messages["ch1#root-msg"] = &model.Message{ID: "root-msg", ParentID: "ch1", AuthorID: "user-1", Body: "root"}
 
-	if _, err := svc.Send(ctx, "user-1", "ch1", ParentChannel, "first", ""); err != nil {
-		t.Fatalf("Send: %v", err)
+	svc.writeUnreadSeq(ctx, seqStore, "ch1", "user-1")
+	if seqStore.count("ch1") != 1 {
+		t.Errorf("MessageSeq = %d, want 1", seqStore.count("ch1"))
 	}
-	if seqStore.seq["ch1"] != 1 {
-		t.Errorf("MessageSeq = %d, want 1", seqStore.seq["ch1"])
-	}
-	if memberships.lastReadSeqs["ch1#user-1"] != 1 {
-		t.Errorf("author LastReadSeq = %d, want 1 (own post reads the channel)", memberships.lastReadSeqs["ch1#user-1"])
-	}
-
-	// A thread reply must NOT bump the channel counter — it surfaces via thread
-	// notifications, not the channel unread badge.
-	if _, err := svc.Send(ctx, "user-1", "ch1", ParentChannel, "reply", "root-msg"); err != nil {
-		t.Fatalf("Send reply: %v", err)
-	}
-	if seqStore.seq["ch1"] != 1 {
-		t.Errorf("MessageSeq after thread reply = %d, want still 1", seqStore.seq["ch1"])
+	if seq, ok := seqStore.lastRead("ch1", "user-1"); !ok || seq != 1 {
+		t.Errorf("author last-read = %d (set=%v), want 1 (own post reads the parent)", seq, ok)
 	}
 }
 
-// IncrementMessageSeq failing must not fail the send — unread tracking is
-// best-effort, message delivery is not.
-func TestMessageService_Send_ChannelSeqErrorIsNonFatal(t *testing.T) {
-	svc, _, memberships, _, _ := setupMessageService()
-	svc.SetChannelSeqStore(&mockChannelSeqStore{err: errors.New("boom")})
-	ctx := context.Background()
-	memberships.memberships["ch1#user-1"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "user-1", Role: model.ChannelRoleMember}
+// IncrementMessageSeq failing must not set the author's last-read (and must not
+// panic) — unread tracking is best-effort, message delivery is not.
+func TestMessageService_WriteUnreadSeq_IncrementErrorIsNonFatal(t *testing.T) {
+	svc, _, _, _, _ := setupMessageService()
+	seqStore := &mockUnreadSeqStore{err: errors.New("boom")}
 
-	if _, err := svc.Send(ctx, "user-1", "ch1", ParentChannel, "hi", ""); err != nil {
-		t.Fatalf("Send should tolerate seq error, got %v", err)
-	}
-	if _, ok := memberships.lastReadSeqs["ch1#user-1"]; ok {
+	svc.writeUnreadSeq(context.Background(), seqStore, "ch1", "user-1")
+	if _, ok := seqStore.lastRead("ch1", "user-1"); ok {
 		t.Error("author last-read should not be set when increment failed")
 	}
 }
 
-// A webhook posting into a channel bumps the unread counter too, so an
+// Send dispatches the (detached) unread-seq bump for a top-level channel
+// message. The bump runs in a goroutine, so poll for it.
+func TestMessageService_Send_BumpsChannelSeq(t *testing.T) {
+	svc, _, memberships, _, _ := setupMessageService()
+	seqStore := &mockUnreadSeqStore{}
+	svc.SetChannelSeqStore(seqStore)
+	ctx := context.Background()
+	memberships.memberships["ch1#user-1"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "user-1", Role: model.ChannelRoleMember}
+
+	if _, err := svc.Send(ctx, "user-1", "ch1", ParentChannel, "first", ""); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	waitForCond(t, func() bool { return seqStore.count("ch1") == 1 }, "channel seq to bump after send")
+}
+
+// A conversation message bumps the conversation's seq counter the same way —
+// the unified mechanism, no Redis flag.
+func TestMessageService_Send_BumpsConversationSeq(t *testing.T) {
+	svc, _, _, conversations, _ := setupMessageService()
+	seqStore := &mockUnreadSeqStore{}
+	svc.SetConversationSeqStore(seqStore)
+	ctx := context.Background()
+	conversations.conversations["conv1"] = &model.Conversation{ID: "conv1", Type: model.ConversationTypeDM, ParticipantIDs: []string{"user-1", "user-2"}}
+
+	if _, err := svc.Send(ctx, "user-1", "conv1", ParentConversation, "hey", ""); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	waitForCond(t, func() bool { return seqStore.count("conv1") == 1 }, "conversation seq to bump after send")
+}
+
+// A webhook posting into a channel or DM bumps the unread counter too, so an
 // incident-bot alert lights the sidebar like any other message.
 func TestMessageService_SendWebhook_BumpsChannelSeq(t *testing.T) {
 	svc, _, _, _, _ := setupMessageService()
-	seqStore := &mockChannelSeqStore{}
+	seqStore := &mockUnreadSeqStore{}
 	svc.SetChannelSeqStore(seqStore)
 	ctx := context.Background()
 
 	if _, err := svc.SendWebhook(ctx, WebhookMessageInput{ParentID: "ch1", ParentType: ParentChannel, AuthorID: "bot", Body: "alert"}); err != nil {
 		t.Fatalf("SendWebhook: %v", err)
 	}
-	if seqStore.seq["ch1"] != 1 {
-		t.Errorf("MessageSeq = %d, want 1", seqStore.seq["ch1"])
-	}
+	waitForCond(t, func() bool { return seqStore.count("ch1") == 1 }, "channel seq to bump after webhook send")
 }
 
 func TestMessageService_Send_Channel(t *testing.T) {

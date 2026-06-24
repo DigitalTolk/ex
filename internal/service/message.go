@@ -31,16 +31,15 @@ type ConversationActivator interface {
 	Activate(ctx context.Context, convID string) error
 }
 
-type ConversationUnreadTracker interface {
-	MarkUnread(ctx context.Context, userID, convID string) error
-}
-
-// ChannelSeqStore bumps a channel's monotonic message counter. Paired with
-// each member's UserChannel.LastReadSeq it drives the exact channel unread
-// count (see model.Channel.MessageSeq). Optional dependency — when unset
-// (e.g. in a narrow unit test) channel unread tracking is simply skipped.
-type ChannelSeqStore interface {
-	IncrementMessageSeq(ctx context.Context, channelID string) (int64, error)
+// UnreadSeqStore drives the per-parent unread counter shared by channels and
+// conversations: a monotonic message seq on the parent, plus a per-user
+// last-read stamp. unread = parent.MessageSeq - member.LastReadSeq. Adapters
+// bind the underlying stores (for channels the two operations live on different
+// stores; for conversations both live on the conversation store). Optional
+// dependency — when unset (e.g. a narrow unit test) the bump is simply skipped.
+type UnreadSeqStore interface {
+	IncrementMessageSeq(ctx context.Context, parentID string) (int64, error)
+	SetLastRead(ctx context.Context, parentID, userID string, seq int64) error
 }
 
 // AttachmentRefManager is the AttachmentService capability MessageService uses
@@ -72,7 +71,6 @@ type MessageService struct {
 	publisher     Publisher
 	broker        Broker
 	activator     ConversationActivator
-	unreadTracker ConversationUnreadTracker
 	attachments   AttachmentRefManager
 	notifier      MessageNotifier
 	indexer       MessageIndexer
@@ -80,7 +78,8 @@ type MessageService struct {
 	userState     UserStateStore
 	parentIndex   ParentPinFileIndexStore
 	markdown      *MarkdownRenderer
-	channelSeq    ChannelSeqStore
+	channelSeq    UnreadSeqStore
+	convSeq       UnreadSeqStore
 }
 
 // NewMessageService creates a MessageService with the given dependencies.
@@ -104,9 +103,10 @@ func NewMessageService(
 // both services are constructed to avoid a constructor cycle.
 func (s *MessageService) SetActivator(a ConversationActivator) { s.activator = a }
 
-func (s *MessageService) SetConversationUnreadTracker(t ConversationUnreadTracker) {
-	s.unreadTracker = t
-}
+// SetConversationSeqStore wires the conversation message-counter (the same
+// seq-based unread mechanism channels use). Optional — left unset, conversation
+// unread isn't persisted.
+func (s *MessageService) SetConversationSeqStore(c UnreadSeqStore) { s.convSeq = c }
 
 // SetAttachmentManager wires the attachment ref manager. Called from main
 // wiring after both services are constructed to avoid a constructor cycle.
@@ -144,7 +144,7 @@ func (s *MessageService) SetMarkdownRenderer(m *MarkdownRenderer) { s.markdown =
 
 // SetChannelSeqStore wires the channel message-counter used for server-side
 // unread tracking. Optional — left unset, channel unread isn't persisted.
-func (s *MessageService) SetChannelSeqStore(c ChannelSeqStore) { s.channelSeq = c }
+func (s *MessageService) SetChannelSeqStore(c UnreadSeqStore) { s.channelSeq = c }
 
 // attachRendered populates the Rendered field on every supplied
 // Message. Centralising this means every return path in the service
@@ -228,22 +228,32 @@ func (s *MessageService) notify(ctx context.Context, msg *model.Message, parentT
 	go s.notifier.NotifyForMessage(context.WithoutCancel(ctx), msg, parentType)
 }
 
-// bumpChannelMessageSeq advances the channel's unread counter for a new
-// top-level human message and marks the author caught up (posting reads the
-// channel for you, so your own message never shows as unread to you). O(1) —
-// two row writes regardless of member count, unlike the per-member conversation
-// fan-out. No-op when the seq store isn't wired or the parent isn't a channel.
-func (s *MessageService) bumpChannelMessageSeq(ctx context.Context, channelID, authorID string) {
-	if s.channelSeq == nil {
+// bumpUnreadSeq advances a parent's unread counter for a new top-level message
+// and marks the author caught up (posting reads the parent for you, so your own
+// message never shows as unread to you). The same mechanism serves channels and
+// conversations — only the store differs. Like notify and indexMessage it runs
+// detached with a cancellation-free context: the two row writes are best-effort
+// unread bookkeeping that must never add to the sender's request latency, and
+// the count only has to be durable before the recipient reloads — not before
+// the send returns. No-op when the seq store isn't wired.
+func (s *MessageService) bumpUnreadSeq(ctx context.Context, store UnreadSeqStore, parentID, authorID string) {
+	if store == nil {
 		return
 	}
-	seq, err := s.channelSeq.IncrementMessageSeq(ctx, channelID)
+	go s.writeUnreadSeq(context.WithoutCancel(ctx), store, parentID, authorID)
+}
+
+// writeUnreadSeq is the synchronous core of bumpUnreadSeq, split out so it can
+// be unit-tested without racing the detached goroutine. O(1) — two row writes
+// regardless of member count, unlike a per-member fan-out.
+func (s *MessageService) writeUnreadSeq(ctx context.Context, store UnreadSeqStore, parentID, authorID string) {
+	seq, err := store.IncrementMessageSeq(ctx, parentID)
 	if err != nil {
-		slog.Warn("channel message seq increment failed", "channelID", channelID, "error", err)
+		slog.Warn("unread seq increment failed", "parentID", parentID, "error", err)
 		return
 	}
-	if err := s.memberships.SetChannelLastRead(ctx, channelID, authorID, seq); err != nil {
-		slog.Warn("channel author last-read mark failed", "channelID", channelID, "userID", authorID, "error", err)
+	if err := store.SetLastRead(ctx, parentID, authorID, seq); err != nil {
+		slog.Warn("author last-read mark failed", "parentID", parentID, "userID", authorID, "error", err)
 	}
 }
 
@@ -339,16 +349,11 @@ func (s *MessageService) Send(ctx context.Context, userID, parentID, parentType,
 
 	if parentType == ParentConversation {
 		if conv, err := s.conversations.GetConversation(ctx, parentID); err == nil && conv != nil {
-			if s.unreadTracker != nil {
-				for _, participantID := range conv.ParticipantIDs {
-					if participantID == userID {
-						continue
-					}
-					if err := s.unreadTracker.MarkUnread(ctx, participantID, parentID); err != nil {
-						slog.Warn("conversation unread mark failed", "convID", parentID, "userID", participantID, "error", err)
-					}
-				}
-			}
+			// Unread is tracked with the same per-parent seq counter channels use
+			// — one increment + the author's last-read, instead of a Redis write
+			// per recipient. The author is marked caught up so their own message
+			// never shows as unread to them.
+			s.bumpUnreadSeq(ctx, s.convSeq, parentID, userID)
 			if err := s.conversations.TouchConversation(ctx, parentID, conv.ParticipantIDs, now); err != nil {
 				slog.Warn("conversation activity touch failed", "convID", parentID, "error", err)
 			} else {
@@ -376,7 +381,7 @@ func (s *MessageService) Send(ctx context.Context, userID, parentID, parentType,
 	// join/leave events aren't "new activity"). Mirrors the frontend rule in
 	// onMessageNew so the live and persisted counts agree.
 	if parentType == ParentChannel && parentMessageID == "" && !msg.System {
-		s.bumpChannelMessageSeq(ctx, parentID, userID)
+		s.bumpUnreadSeq(ctx, s.channelSeq, parentID, userID)
 	}
 
 	var updatedThreadRoot *model.Message
@@ -467,8 +472,11 @@ func (s *MessageService) SendWebhook(ctx context.Context, in WebhookMessageInput
 	if err := s.messages.CreateMessage(ctx, msg); err != nil {
 		return nil, fmt.Errorf("message: create webhook: %w", err)
 	}
-	if parentType == ParentChannel {
-		s.bumpChannelMessageSeq(ctx, parentID, authorID)
+	switch parentType {
+	case ParentChannel:
+		s.bumpUnreadSeq(ctx, s.channelSeq, parentID, authorID)
+	case ParentConversation:
+		s.bumpUnreadSeq(ctx, s.convSeq, parentID, authorID)
 	}
 	s.publishEvent(ctx, parentID, parentType, events.EventMessageNew, msg)
 	s.notify(ctx, msg, parentType)

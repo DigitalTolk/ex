@@ -797,6 +797,19 @@ describe('Sidebar browser render — rich fixtures', () => {
     expect(badge?.textContent).toBe('7');
   });
 
+  it('shows the server-computed conversation unread count on cold load', async () => {
+    // Conversations now carry the same server-side seq-based unread as channels.
+    mockChannels = [];
+    mockConversations = makeConversations().map((c) =>
+      c.conversationID === 'conv-dm' ? { ...c, unread: true, unreadCount: 4 } : c,
+    );
+    mockConversationsState = { data: mockConversations, isError: false };
+    mockUserState = { hiddenConversations: [], channelNotifications: [], threadNotifications: [], threadSeen: {} };
+    await render(<Frame />);
+    const badge = document.querySelector('[data-testid="conversation-unread-badge-conv-dm"]');
+    expect(badge?.textContent).toBe('4');
+  });
+
   it('renders empty state with no channels and no DMs (just nav links)', async () => {
     mockChannels = [];
     mockConversations = [];

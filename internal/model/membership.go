@@ -81,7 +81,14 @@ type UserConversation struct {
 	JoinedAt       time.Time        `json:"joinedAt" dynamodbav:"joinedAt"`
 	UpdatedAt      time.Time        `json:"updatedAt,omitempty" dynamodbav:"updatedAt,omitempty"`
 	LastReadMsgID  string           `json:"lastReadMsgID,omitempty" dynamodbav:"lastReadMsgID,omitempty"`
-	Unread         bool             `json:"unread,omitempty" dynamodbav:"-"`
+	// LastReadSeq mirrors UserChannel.LastReadSeq: unread = Conversation.MessageSeq
+	// - LastReadSeq. The same exact-count seq model backs channels and
+	// conversations alike (no more Redis unread boolean).
+	LastReadSeq int64 `json:"lastReadSeq,omitempty" dynamodbav:"lastReadSeq,omitempty"`
+	// Unread / UnreadCount are read-time enrichments computed in
+	// ListUserConversations from the seq pair — never persisted.
+	Unread      bool `json:"unread,omitempty" dynamodbav:"-"`
+	UnreadCount int  `json:"unreadCount,omitempty" dynamodbav:"-"`
 	// AvatarURL and UserStatus are read-time enrichments for DM sidebar rows.
 	// They are intentionally not persisted so profile changes stay single
 	// sourced from the User record.

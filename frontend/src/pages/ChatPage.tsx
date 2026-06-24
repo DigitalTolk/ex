@@ -83,7 +83,7 @@ export default function ChatPage() {
     isActiveConversation,
     markConversationUnread,
     markThreadNotificationUnread,
-    resetChannelSessionUnread,
+    resetSessionUnread,
     isActiveThread: isActiveThreadScope,
     unhideConversation,
   } = useUnread();
@@ -389,7 +389,7 @@ export default function ChatPage() {
       queryClient.invalidateQueries({ queryKey: queryKeys.channelMembers() });
       // The refetched userChannels carry authoritative server unread counts;
       // drop the live session deltas so they aren't added on top (double-count).
-      resetChannelSessionUnread();
+      resetSessionUnread();
       void resyncMessageCache(queryClient);
     },
     onReplayExhausted: () => {
@@ -401,7 +401,7 @@ export default function ChatPage() {
       queryClient.invalidateQueries({ queryKey: queryKeys.userState() });
       queryClient.invalidateQueries({ queryKey: queryKeys.drafts() });
       queryClient.invalidateQueries({ queryKey: queryKeys.channelMembers() });
-      resetChannelSessionUnread();
+      resetSessionUnread();
       void resyncMessageCache(queryClient);
     },
     enabled: !!user,

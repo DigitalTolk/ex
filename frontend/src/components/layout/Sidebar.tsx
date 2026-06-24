@@ -1425,7 +1425,7 @@ export function Sidebar({ onClose }: SidebarProps) {
                       const hasNotification =
                         unreadChannelNotifications.has(ch.channelID) ||
                         (userState?.channelNotifications ?? []).includes(ch.channelID);
-                      return isActive || (!ch.muted && (!!ch.unread || unreadChannels.has(ch.channelID) || hasNotification));
+                      return isActive || (!ch.muted && (ch.unread || unreadChannels.has(ch.channelID) || hasNotification));
                     }
                     const conv = item.conversation;
                     const isActive =
@@ -1580,7 +1580,7 @@ export function Sidebar({ onClose }: SidebarProps) {
                                 <ChannelRow
                                   channel={item.channel}
                                   hasUnread={
-                                    !!item.channel.unread ||
+                                    item.channel.unread ||
                                     unreadChannels.has(item.channel.channelID) ||
                                     unreadChannelNotifications.has(item.channel.channelID) ||
                                     (userState?.channelNotifications ?? []).includes(item.channel.channelID)
@@ -1625,8 +1625,11 @@ export function Sidebar({ onClose }: SidebarProps) {
                               {(dragProps) => (
                                 <ConversationRow
                                   conversation={conv}
-                                  hasUnread={!!conv.unread || unreadConversations.has(conv.conversationID)}
-                                  unreadCount={conversationUnreadCounts?.get(conv.conversationID) ?? 0}
+                                  hasUnread={conv.unread || unreadConversations.has(conv.conversationID)}
+                                  unreadCount={
+                                    (conv.unreadCount ?? 0) +
+                                    (conversationUnreadCounts?.get(conv.conversationID) ?? 0)
+                                  }
                                   dmAvatarURL={resolvedDMAvatarURL}
                                   dmUserStatus={resolvedDMUserStatus}
                                   dmOnline={dmOnline}
@@ -1642,8 +1645,11 @@ export function Sidebar({ onClose }: SidebarProps) {
                           ) : (
                             <ConversationRow
                               conversation={conv}
-                              hasUnread={!!conv.unread || unreadConversations.has(conv.conversationID)}
-                              unreadCount={conversationUnreadCounts?.get(conv.conversationID) ?? 0}
+                              hasUnread={conv.unread || unreadConversations.has(conv.conversationID)}
+                              unreadCount={
+                                (conv.unreadCount ?? 0) +
+                                (conversationUnreadCounts?.get(conv.conversationID) ?? 0)
+                              }
                               dmAvatarURL={resolvedDMAvatarURL}
                               dmUserStatus={resolvedDMUserStatus}
                               dmOnline={dmOnline}

@@ -38,17 +38,17 @@ describe('UnreadContext', () => {
     expect(result.current.channelUnreadCounts.has('ch1')).toBe(false);
   });
 
-  it('resetChannelSessionUnread drops the whole live session delta layer', () => {
+  it('resetSessionUnread drops the whole live session delta layer', () => {
     const { result } = renderHook(() => useUnread(), { wrapper });
     act(() => result.current.markChannelUnread('ch1'));
     act(() => result.current.markChannelUnread('ch2'));
     expect(result.current.unreadChannels.size).toBe(2);
     expect(result.current.channelUnreadCounts.size).toBe(2);
-    act(() => result.current.resetChannelSessionUnread());
+    act(() => result.current.resetSessionUnread());
     expect(result.current.unreadChannels.size).toBe(0);
     expect(result.current.channelUnreadCounts.size).toBe(0);
-    // Idempotent no-op when already empty (returns the same refs).
-    act(() => result.current.resetChannelSessionUnread());
+    // Safe to call again on already-empty state.
+    act(() => result.current.resetSessionUnread());
     expect(result.current.unreadChannels.size).toBe(0);
   });
 

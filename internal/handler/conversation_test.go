@@ -23,6 +23,7 @@ type dataConversationStore struct {
 	userConvs     map[string][]*model.UserConversation
 	getErr        error
 	listErr       error
+	lastReadErr   error
 }
 
 func newDataConversationStore() *dataConversationStore {
@@ -87,6 +88,28 @@ func (s *dataConversationStore) TouchConversation(_ context.Context, convID stri
 		}
 	}
 	return nil
+}
+
+func (s *dataConversationStore) IncrementMessageSeq(_ context.Context, convID string) (int64, error) {
+	conv, ok := s.conversations[convID]
+	if !ok {
+		return 0, store.ErrNotFound
+	}
+	conv.MessageSeq++
+	return conv.MessageSeq, nil
+}
+
+func (s *dataConversationStore) SetConversationLastRead(_ context.Context, convID, userID string, seq int64) error {
+	if s.lastReadErr != nil {
+		return s.lastReadErr
+	}
+	for _, uc := range s.userConvs[userID] {
+		if uc.ConversationID == convID {
+			uc.LastReadSeq = seq
+			return nil
+		}
+	}
+	return store.ErrNotFound
 }
 
 func (s *dataConversationStore) SetFavorite(_ context.Context, convID, userID string, favorite bool) error {
@@ -174,7 +197,6 @@ type convHandlerEnv struct {
 	members     *dataMembershipStore
 	messages    *dataMessageStore
 	parentIndex *dataParentIndexStore
-	cache       *mockCache
 	jwtMgr      *auth.JWTManager
 }
 
@@ -202,7 +224,6 @@ func setupConversationHandlerFull(t *testing.T) *convHandlerEnv {
 		members:     members,
 		messages:    messages,
 		parentIndex: parentIndex,
-		cache:       cache,
 		jwtMgr:      jwtMgr,
 	}
 }
@@ -386,6 +407,7 @@ func TestConversationHandler_MarkRead_ClearsSharedUnread(t *testing.T) {
 		ParticipantIDs: []string{"u-read", "u-other"},
 		Activated:      true,
 	}
+	env.convs.conversations["conv-read"].MessageSeq = 3
 	env.convs.userConvs["u-read"] = []*model.UserConversation{{
 		UserID:         "u-read",
 		ConversationID: "conv-read",
@@ -393,7 +415,6 @@ func TestConversationHandler_MarkRead_ClearsSharedUnread(t *testing.T) {
 		DisplayName:    "Other",
 		Activated:      true,
 	}}
-	env.cache.values["unread:conversation:u-read:conv-read"] = true
 
 	handler := middleware.Auth(env.jwtMgr)(http.HandlerFunc(env.handler.MarkRead))
 	req := httptest.NewRequest(http.MethodPut, "/api/v1/conversations/conv-read/read", nil)
@@ -406,8 +427,9 @@ func TestConversationHandler_MarkRead_ClearsSharedUnread(t *testing.T) {
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusNoContent, rec.Body.String())
 	}
-	if _, ok := env.cache.values["unread:conversation:u-read:conv-read"]; ok {
-		t.Fatal("unread marker was not cleared")
+	// Read catches the user up to the conversation's current MessageSeq.
+	if got := env.convs.userConvs["u-read"][0].LastReadSeq; got != 3 {
+		t.Fatalf("LastReadSeq = %d, want 3 (caught up)", got)
 	}
 }
 
@@ -455,14 +477,14 @@ func TestConversationHandler_MarkRead_Errors(t *testing.T) {
 		DisplayName:    "Self",
 		Activated:      true,
 	}}
-	env.cache.deleteErr = errors.New("redis down")
+	env.convs.lastReadErr = errors.New("dynamo down")
 	req = httptest.NewRequest(http.MethodPut, "/api/v1/conversations/conv-read/read", nil)
 	req.SetPathValue("id", "conv-read")
 	req.Header.Set("Authorization", "Bearer "+token)
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusInternalServerError {
-		t.Fatalf("cache error status = %d, want %d", rec.Code, http.StatusInternalServerError)
+		t.Fatalf("read error status = %d, want %d", rec.Code, http.StatusInternalServerError)
 	}
 }
 
@@ -470,6 +492,13 @@ func TestConversationHandler_List_IncludesSharedUnread(t *testing.T) {
 	env := setupConversationHandlerFull(t)
 	user := &model.User{ID: "u-list", Email: "list@example.com", SystemRole: model.SystemRoleMember}
 	token, _ := env.jwtMgr.GenerateAccessToken(user)
+	env.convs.conversations["conv-unread"] = &model.Conversation{
+		ID:             "conv-unread",
+		Type:           model.ConversationTypeDM,
+		ParticipantIDs: []string{"u-list", "u-other"},
+		Activated:      true,
+		MessageSeq:     1,
+	}
 	env.convs.userConvs["u-list"] = []*model.UserConversation{{
 		UserID:         "u-list",
 		ConversationID: "conv-unread",
@@ -477,7 +506,6 @@ func TestConversationHandler_List_IncludesSharedUnread(t *testing.T) {
 		DisplayName:    "Unread",
 		Activated:      true,
 	}}
-	env.cache.values["unread:conversation:u-list:conv-unread"] = true
 
 	handler := middleware.Auth(env.jwtMgr)(http.HandlerFunc(env.handler.List))
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/conversations", nil)

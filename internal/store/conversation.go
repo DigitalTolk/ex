@@ -22,6 +22,8 @@ type ConversationStore interface {
 	IsMember(ctx context.Context, convID, userID string) (bool, error)
 	Activate(ctx context.Context, convID string, participantIDs []string) error
 	Touch(ctx context.Context, convID string, participantIDs []string, at time.Time) error
+	IncrementMessageSeq(ctx context.Context, convID string) (int64, error)
+	SetConversationLastRead(ctx context.Context, convID, userID string, seq int64) error
 	ListAll(ctx context.Context) ([]*model.Conversation, error)
 }
 
@@ -282,6 +284,47 @@ func (s *ConversationStoreImpl) Touch(ctx context.Context, convID string, partic
 		return fmt.Errorf("store: touch conversation: %w", err)
 	}
 	return nil
+}
+
+// IncrementMessageSeq atomically bumps the conversation's MessageSeq by one and
+// returns the new value (ADD treats a missing attribute as 0). Mirrors
+// ChannelStore.IncrementMessageSeq — the shared per-parent unread counter.
+func (s *ConversationStoreImpl) IncrementMessageSeq(ctx context.Context, convID string) (int64, error) {
+	upd := expression.Add(expression.Name("messageSeq"), expression.Value(1))
+	expr, err := expression.NewBuilder().WithUpdate(upd).Build()
+	if err != nil { // coverage-ignore: static single-attribute ADD; Build cannot fail
+		return 0, fmt.Errorf("store: build conversation message seq expression: %w", err)
+	}
+
+	out, err := s.Client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName:                 aws.String(s.Table),
+		Key:                       compositeKey(convPK(convID), metaSK()),
+		UpdateExpression:          expr.Update(),
+		ExpressionAttributeNames:  expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
+		ConditionExpression:       aws.String("attribute_exists(PK)"),
+		ReturnValues:              types.ReturnValueUpdatedNew,
+	})
+	if err != nil {
+		if isConditionCheckFailed(err) {
+			return 0, ErrNotFound
+		}
+		return 0, fmt.Errorf("store: increment conversation message seq: %w", err)
+	}
+
+	var attrs struct {
+		MessageSeq int64 `dynamodbav:"messageSeq"`
+	}
+	if err := attributevalue.UnmarshalMap(out.Attributes, &attrs); err != nil { // coverage-ignore: round-trip of a numeric attribute we just wrote; cannot fail
+		return 0, fmt.Errorf("store: unmarshal conversation message seq: %w", err)
+	}
+	return attrs.MessageSeq, nil
+}
+
+// SetConversationLastRead stamps the conversation's current MessageSeq onto the
+// user-side row; unread then derives as MessageSeq - LastReadSeq.
+func (s *ConversationStoreImpl) SetConversationLastRead(ctx context.Context, convID, userID string, seq int64) error {
+	return s.setUserConversationAttribute(ctx, convID, userID, "lastReadSeq", seq)
 }
 
 // SetUserConversationFavorite flips the favorite flag on the user-side

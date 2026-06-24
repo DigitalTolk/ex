@@ -119,6 +119,12 @@ func (handlerConversationStore) ListUserConversations(context.Context, string) (
 func (handlerConversationStore) ActivateConversation(context.Context, string, []string) error {
 	return nil
 }
+func (handlerConversationStore) IncrementMessageSeq(context.Context, string) (int64, error) {
+	return 0, nil
+}
+func (handlerConversationStore) SetConversationLastRead(context.Context, string, string, int64) error {
+	return nil
+}
 func (handlerConversationStore) TouchConversation(context.Context, string, []string, time.Time) error {
 	return nil
 }

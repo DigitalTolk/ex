@@ -245,6 +245,10 @@ export interface UserConversation {
   profileResolved?: boolean;
   lastReadMsgID?: string;
   unread?: boolean;
+  // Server-computed exact unread count (Conversation.MessageSeq -
+  // UserConversation.LastReadSeq) — same seq model as channels. The sidebar
+  // layers the live session delta on top.
+  unreadCount?: number;
   favorite?: boolean;
   categoryID?: string;
   sidebarPosition?: number;

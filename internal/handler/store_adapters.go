@@ -137,6 +137,8 @@ type conversationBacking interface {
 	ListUserConversations(ctx context.Context, userID string) ([]*model.UserConversation, error)
 	Activate(ctx context.Context, convID string, participantIDs []string) error
 	Touch(ctx context.Context, convID string, participantIDs []string, at time.Time) error
+	IncrementMessageSeq(ctx context.Context, convID string) (int64, error)
+	SetConversationLastRead(ctx context.Context, convID, userID string, seq int64) error
 	SetUserConversationFavorite(ctx context.Context, convID, userID string, favorite bool) error
 	SetUserConversationCategory(ctx context.Context, convID, userID, categoryID string, sidebarPosition *int) error
 	ListAll(ctx context.Context) ([]*model.Conversation, error)
@@ -161,6 +163,12 @@ func (a *ConversationStoreAdapter) ActivateConversation(ctx context.Context, con
 func (a *ConversationStoreAdapter) TouchConversation(ctx context.Context, convID string, participantIDs []string, at time.Time) error {
 	return a.s.Touch(ctx, convID, participantIDs, at)
 }
+func (a *ConversationStoreAdapter) IncrementMessageSeq(ctx context.Context, convID string) (int64, error) {
+	return a.s.IncrementMessageSeq(ctx, convID)
+}
+func (a *ConversationStoreAdapter) SetConversationLastRead(ctx context.Context, convID, userID string, seq int64) error {
+	return a.s.SetConversationLastRead(ctx, convID, userID, seq)
+}
 func (a *ConversationStoreAdapter) SetFavorite(ctx context.Context, convID, userID string, favorite bool) error {
 	return a.s.SetUserConversationFavorite(ctx, convID, userID, favorite)
 }
@@ -173,6 +181,29 @@ func (a *ConversationStoreAdapter) SetCategory(ctx context.Context, convID, user
 // ListAllChannels above — not service-layer surface.
 func (a *ConversationStoreAdapter) ListAllConversations(ctx context.Context) ([]*model.Conversation, error) {
 	return a.s.ListAll(ctx)
+}
+
+// UnreadSeqAdapter binds a parent's message-seq incrementer and per-user
+// last-read setter into one service.UnreadSeqStore. It lets channels (counter
+// on the channel store, last-read on the membership store) and conversations
+// (both on the conversation store) share the same MessageService unread path.
+type UnreadSeqAdapter struct {
+	incr    func(ctx context.Context, parentID string) (int64, error)
+	lastRead func(ctx context.Context, parentID, userID string, seq int64) error
+}
+
+func NewUnreadSeqAdapter(
+	incr func(ctx context.Context, parentID string) (int64, error),
+	lastRead func(ctx context.Context, parentID, userID string, seq int64) error,
+) *UnreadSeqAdapter {
+	return &UnreadSeqAdapter{incr: incr, lastRead: lastRead}
+}
+
+func (a *UnreadSeqAdapter) IncrementMessageSeq(ctx context.Context, parentID string) (int64, error) {
+	return a.incr(ctx, parentID)
+}
+func (a *UnreadSeqAdapter) SetLastRead(ctx context.Context, parentID, userID string, seq int64) error {
+	return a.lastRead(ctx, parentID, userID, seq)
 }
 
 // MessageStoreAdapter wraps store.MessageStoreImpl to satisfy service.MessageStore.

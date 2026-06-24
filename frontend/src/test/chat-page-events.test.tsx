@@ -43,7 +43,7 @@ const markChannelNotificationUnread = vi.fn();
 const markConversationUnread = vi.fn();
 const markThreadNotificationUnread = vi.fn();
 const clearConversationUnread = vi.fn();
-const resetChannelSessionUnread = vi.fn();
+const resetSessionUnread = vi.fn();
 const isActiveChannel = vi.fn(() => false);
 const isActiveConversation = vi.fn(() => false);
 const isActiveThread = vi.fn(() => false);
@@ -65,7 +65,7 @@ vi.mock('@/context/UnreadContext', () => ({
     hiddenConversations: new Set(),
     hideConversation: vi.fn(),
     clearChannelUnread: vi.fn(),
-    resetChannelSessionUnread,
+    resetSessionUnread,
     clearConversationUnread,
     setActiveChannel: vi.fn(),
     setActiveConversation: vi.fn(),
@@ -174,7 +174,7 @@ describe('ChatPage WebSocket handlers', () => {
     clearConversationUnread.mockReset();
     isActiveChannel.mockReset();
     isActiveChannel.mockReturnValue(false);
-    resetChannelSessionUnread.mockReset();
+    resetSessionUnread.mockReset();
     isActiveConversation.mockReset();
     isActiveConversation.mockReturnValue(false);
     isActiveThread.mockReset();
@@ -482,7 +482,7 @@ describe('ChatPage WebSocket handlers', () => {
     expect(calls).toContainEqual(['channelMembers']);
     // Live session deltas are dropped so the refetched server counts (which
     // already include them) aren't double-added.
-    expect(resetChannelSessionUnread).toHaveBeenCalled();
+    expect(resetSessionUnread).toHaveBeenCalled();
   });
 
   it('onMessageEdited / onMessageDeleted gracefully ignore missing parentID and invalidate when present', () => {

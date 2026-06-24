@@ -61,6 +61,8 @@ type ConversationStore interface {
 	ListUserConversations(ctx context.Context, userID string) ([]*model.UserConversation, error)
 	ActivateConversation(ctx context.Context, convID string, participantIDs []string) error
 	TouchConversation(ctx context.Context, convID string, participantIDs []string, at time.Time) error
+	IncrementMessageSeq(ctx context.Context, convID string) (int64, error)
+	SetConversationLastRead(ctx context.Context, convID, userID string, seq int64) error
 	SetFavorite(ctx context.Context, convID, userID string, favorite bool) error
 	SetCategory(ctx context.Context, convID, userID, categoryID string, sidebarPosition *int) error
 }

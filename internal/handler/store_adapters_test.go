@@ -230,6 +230,12 @@ func (b *adapterConversationBacking) Touch(_ context.Context, _ string, _ []stri
 	b.touched = at
 	return nil
 }
+func (b *adapterConversationBacking) IncrementMessageSeq(context.Context, string) (int64, error) {
+	return 0, nil
+}
+func (b *adapterConversationBacking) SetConversationLastRead(context.Context, string, string, int64) error {
+	return nil
+}
 func (b *adapterConversationBacking) SetUserConversationFavorite(context.Context, string, string, bool) error {
 	return nil
 }

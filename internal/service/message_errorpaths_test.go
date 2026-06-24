@@ -248,32 +248,20 @@ func (m *mockActivator) Activate(_ context.Context, _ string) error {
 	return m.err
 }
 
-type mockUnreadTracker struct {
-	err   error
-	calls int
-}
-
-func (m *mockUnreadTracker) MarkUnread(_ context.Context, _, _ string) error {
-	m.calls++
-	return m.err
-}
-
-func TestSend_ConversationActivatesAndMarksUnread(t *testing.T) {
+func TestSend_ConversationActivatesAndBumpsSeq(t *testing.T) {
 	svc, _, _, conversations, _ := setupMessageService()
 	conversations.conversations["c1"] = &model.Conversation{ID: "c1", ParticipantIDs: []string{"u1", "u2"}}
 	act := &mockActivator{}
-	ut := &mockUnreadTracker{}
+	seqStore := &mockUnreadSeqStore{}
 	svc.SetActivator(act)
-	svc.SetConversationUnreadTracker(ut)
+	svc.SetConversationSeqStore(seqStore)
 	if _, err := svc.Send(context.Background(), "u1", "c1", ParentConversation, "hi", ""); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
 	if !act.called {
 		t.Error("first top-level message should activate the conversation")
 	}
-	if ut.calls == 0 {
-		t.Error("should mark non-author participants unread")
-	}
+	waitForCond(t, func() bool { return seqStore.count("c1") == 1 }, "conversation seq to bump")
 }
 
 func TestSend_ConversationActivateError(t *testing.T) {
@@ -286,11 +274,11 @@ func TestSend_ConversationActivateError(t *testing.T) {
 	}
 }
 
-func TestSend_ConversationUnreadError(t *testing.T) {
+func TestSend_ConversationSeqErrorIsNonFatal(t *testing.T) {
 	svc, _, _, conversations, _ := setupMessageService()
 	conversations.conversations["c1"] = &model.Conversation{ID: "c1", ParticipantIDs: []string{"u1", "u2"}}
-	svc.SetConversationUnreadTracker(&mockUnreadTracker{err: errors.New("boom")})
+	svc.SetConversationSeqStore(&mockUnreadSeqStore{err: errors.New("boom")})
 	if _, err := svc.Send(context.Background(), "u1", "c1", ParentConversation, "hi", ""); err != nil {
-		t.Fatalf("Send should tolerate unread-mark failure, got %v", err)
+		t.Fatalf("Send should tolerate seq failure, got %v", err)
 	}
 }

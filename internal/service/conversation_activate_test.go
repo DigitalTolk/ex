@@ -155,7 +155,7 @@ func TestMessageService_SendActivatesConversation(t *testing.T) {
 	memberStore := newMockMembershipStore()
 	msgSvc := NewMessageService(messageStore, memberStore, convs, pub, newMockBroker())
 	msgSvc.SetActivator(convSvc)
-	msgSvc.SetConversationUnreadTracker(convSvc)
+	msgSvc.SetConversationSeqStore(convSeqStore{convs})
 
 	pub.published = nil
 	if _, err := msgSvc.Send(context.Background(), "a", conv.ID, ParentConversation, "hello", ""); err != nil {
@@ -173,11 +173,10 @@ func TestMessageService_SendActivatesConversation(t *testing.T) {
 		t.Error("first message did not trigger conversation activation event")
 	}
 
-	listB, err := convSvc.ListUserConversations(context.Background(), "b")
-	if err != nil {
-		t.Fatalf("ListUserConversations(b): %v", err)
-	}
-	if len(listB) != 1 || !listB[0].Unread {
-		t.Fatalf("recipient conversation should be unread from shared cache: %+v", listB)
-	}
+	// The seq bump is detached; poll until the recipient's conversation shows
+	// unread (MessageSeq advanced past B's LastReadSeq).
+	waitForCond(t, func() bool {
+		listB, err := convSvc.ListUserConversations(context.Background(), "b")
+		return err == nil && len(listB) == 1 && listB[0].Unread
+	}, "recipient conversation to become unread")
 }

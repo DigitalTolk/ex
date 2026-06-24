@@ -968,6 +968,77 @@ func TestMembershipStore_SetChannelLastRead_NotMember(t *testing.T) {
 	}
 }
 
+// Conversations share the channel unread mechanism: a per-conversation
+// MessageSeq counter and a per-user LastReadSeq.
+func TestConversationStore_IncrementMessageSeq(t *testing.T) {
+	db := setupDynamoDB(t)
+	ctx := context.Background()
+	cs := NewConversationStore(db)
+	conv := &model.Conversation{ID: "conv-seq", Type: model.ConversationTypeDM, ParticipantIDs: []string{"u-a", "u-b"}, CreatedBy: "u-a"}
+	members := []*model.UserConversation{
+		{UserID: "u-a", ConversationID: "conv-seq", JoinedAt: time.Now()},
+		{UserID: "u-b", ConversationID: "conv-seq", JoinedAt: time.Now()},
+	}
+	if err := cs.Create(ctx, conv, members); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	for want := int64(1); want <= 3; want++ {
+		got, err := cs.IncrementMessageSeq(ctx, "conv-seq")
+		if err != nil {
+			t.Fatalf("IncrementMessageSeq: %v", err)
+		}
+		if got != want {
+			t.Fatalf("IncrementMessageSeq returned %d, want %d", got, want)
+		}
+	}
+	reloaded, err := cs.GetByID(ctx, "conv-seq")
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if reloaded.MessageSeq != 3 {
+		t.Errorf("persisted MessageSeq = %d, want 3", reloaded.MessageSeq)
+	}
+
+	// SetConversationLastRead stamps the user-side row; ListUserConversations
+	// reads it back.
+	if err := cs.SetConversationLastRead(ctx, "conv-seq", "u-b", 2); err != nil {
+		t.Fatalf("SetConversationLastRead: %v", err)
+	}
+	rows, err := cs.ListUserConversations(ctx, "u-b")
+	if err != nil {
+		t.Fatalf("ListUserConversations: %v", err)
+	}
+	if len(rows) != 1 || rows[0].LastReadSeq != 2 {
+		t.Fatalf("LastReadSeq = %v, want 2", rows)
+	}
+}
+
+func TestConversationStore_IncrementMessageSeq_NotFound(t *testing.T) {
+	db := setupDynamoDB(t)
+	ctx := context.Background()
+	if _, err := NewConversationStore(db).IncrementMessageSeq(ctx, "ghost"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("IncrementMessageSeq missing conversation: want ErrNotFound, got %v", err)
+	}
+}
+
+func TestConversationStore_IncrementMessageSeq_UpdateError(t *testing.T) {
+	db := setupDynamoDB(t)
+	ctx := context.Background()
+	s := NewConversationStore(withFault(db, func(f *faultClient) { f.failUpdateItem = true }))
+	if _, err := s.IncrementMessageSeq(ctx, "conv-x"); !errors.Is(err, errInjected) {
+		t.Fatalf("IncrementMessageSeq: want errInjected, got %v", err)
+	}
+}
+
+func TestConversationStore_SetConversationLastRead_NotMember(t *testing.T) {
+	db := setupDynamoDB(t)
+	ctx := context.Background()
+	if err := NewConversationStore(db).SetConversationLastRead(ctx, "conv-none", "u-none", 1); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("SetConversationLastRead non-member: want ErrNotFound, got %v", err)
+	}
+}
+
 func TestUserStore_NotificationSettingsFor(t *testing.T) {
 	db := setupDynamoDB(t)
 	us := NewUserStore(db)

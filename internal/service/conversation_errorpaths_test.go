@@ -101,16 +101,21 @@ func TestConv_SetCategory_NotParticipant(t *testing.T) {
 	}
 }
 
-func TestConv_ListUserConversations_UnreadCacheError(t *testing.T) {
+func TestConv_ListUserConversations_EnrichUnreadToleratesMissingEntity(t *testing.T) {
 	convs := newMockConversationStore()
 	convs.userConvs["u1"] = []*model.UserConversation{
 		{UserID: "u1", ConversationID: "c1", Type: model.ConversationTypeGroup, Activated: true},
 	}
-	cache := newMockCache()
-	cache.getErr = errors.New("redis down") // generic, non-miss
-	svc := NewConversationService(convs, newMockUserStore(), cache, newMockBroker(), newMockPublisher())
-	if _, err := svc.ListUserConversations(context.Background(), "u1"); err == nil {
-		t.Fatal("expected unread cache error to propagate")
+	// No conversation entity seeded → enrichUnread's GetConversation returns
+	// ErrNotFound, which it swallows: the row is simply rendered not-unread
+	// rather than failing the whole list.
+	svc := NewConversationService(convs, newMockUserStore(), nil, newMockBroker(), newMockPublisher())
+	got, err := svc.ListUserConversations(context.Background(), "u1")
+	if err != nil {
+		t.Fatalf("ListUserConversations should tolerate a missing conversation entity: %v", err)
+	}
+	if len(got) != 1 || got[0].Unread {
+		t.Fatalf("row should be present and not unread: %+v", got)
 	}
 }
 
