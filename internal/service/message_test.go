@@ -61,6 +61,17 @@ func TestMessageService_WriteUnreadSeq_IncrementErrorIsNonFatal(t *testing.T) {
 	}
 }
 
+// A SetLastRead failure after a successful increment is logged, not fatal.
+func TestMessageService_WriteUnreadSeq_SetLastReadErrorIsNonFatal(t *testing.T) {
+	svc, _, _, _, _ := setupMessageService()
+	seqStore := &mockUnreadSeqStore{lastErr: errors.New("boom")}
+
+	svc.writeUnreadSeq(context.Background(), seqStore, "ch1", "user-1")
+	if seqStore.count("ch1") != 1 {
+		t.Errorf("seq = %d, want 1 (increment still happened)", seqStore.count("ch1"))
+	}
+}
+
 // Send dispatches the (detached) unread-seq bump for a top-level channel
 // message. The bump runs in a goroutine, so poll for it.
 func TestMessageService_Send_BumpsChannelSeq(t *testing.T) {
@@ -103,6 +114,20 @@ func TestMessageService_SendWebhook_BumpsChannelSeq(t *testing.T) {
 		t.Fatalf("SendWebhook: %v", err)
 	}
 	waitForCond(t, func() bool { return seqStore.count("ch1") == 1 }, "channel seq to bump after webhook send")
+}
+
+// A webhook posting into a DM bumps the conversation counter too (closes the
+// old gap where webhook DMs left no unread).
+func TestMessageService_SendWebhook_BumpsConversationSeq(t *testing.T) {
+	svc, _, _, _, _ := setupMessageService()
+	seqStore := &mockUnreadSeqStore{}
+	svc.SetConversationSeqStore(seqStore)
+	ctx := context.Background()
+
+	if _, err := svc.SendWebhook(ctx, WebhookMessageInput{ParentID: "conv1", ParentType: ParentConversation, AuthorID: "bot", Body: "alert"}); err != nil {
+		t.Fatalf("SendWebhook: %v", err)
+	}
+	waitForCond(t, func() bool { return seqStore.count("conv1") == 1 }, "conversation seq to bump after webhook send")
 }
 
 func TestMessageService_Send_Channel(t *testing.T) {

@@ -235,6 +235,11 @@ func TestChannelStoreAdapter(t *testing.T) {
 	if len(all) < 1 {
 		t.Error("expected ListAllChannels to return at least 1 channel")
 	}
+
+	seq, err := adapter.IncrementMessageSeq(ctx, "ch-adapt-1")
+	if err != nil || seq != 1 {
+		t.Fatalf("IncrementMessageSeq seq=%d err=%v, want 1/nil", seq, err)
+	}
 }
 
 func TestMembershipStoreAdapter(t *testing.T) {
@@ -264,6 +269,10 @@ func TestMembershipStoreAdapter(t *testing.T) {
 
 	if err := adapter.AddMember(ctx, mem, uc); err != nil {
 		t.Fatalf("AddMember: %v", err)
+	}
+
+	if err := adapter.SetChannelLastRead(ctx, "ch-ma-1", "u-ma-1", 4); err != nil {
+		t.Fatalf("SetChannelLastRead: %v", err)
 	}
 
 	got, err := adapter.GetMembership(ctx, "ch-ma-1", "u-ma-1")
