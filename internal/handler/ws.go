@@ -198,22 +198,31 @@ func (h *WSHandler) Connect(w http.ResponseWriter, r *http.Request) {
 	convCh := make(chan subResult, 1)
 
 	go func() {
-		defer safe.Recover()
-		uc, err := h.chanSvc.ListUserChannels(r.Context(), userID)
 		var chs []string
+		var err error
+		// Always send a result, even on panic: the receive below is unconditional,
+		// so a recovered panic that skipped the send would hang the connection
+		// forever. This defer runs AFTER safe.Recover (LIFO) — on panic it sends a
+		// zero result (no extra subscriptions) and the handler proceeds; the panic
+		// itself is already logged by safe.Recover.
+		defer func() { chanCh <- subResult{chs, err} }()
+		defer safe.Recover()
+		uc, e := h.chanSvc.ListUserChannels(r.Context(), userID)
+		err = e
 		for _, c := range uc {
 			chs = append(chs, pubsub.ChannelName(c.ChannelID))
 		}
-		chanCh <- subResult{chs, err}
 	}()
 	go func() {
-		defer safe.Recover()
-		uc, err := h.convSvc.ListUserConversations(r.Context(), userID)
 		var chs []string
+		var err error
+		defer func() { convCh <- subResult{chs, err} }()
+		defer safe.Recover()
+		uc, e := h.convSvc.ListUserConversations(r.Context(), userID)
+		err = e
 		for _, c := range uc {
 			chs = append(chs, pubsub.ConversationName(c.ConversationID))
 		}
-		convCh <- subResult{chs, err}
 	}()
 
 	cr := <-chanCh

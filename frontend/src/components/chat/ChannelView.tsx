@@ -28,6 +28,7 @@ import { canEditChannel, canArchiveChannel, canLeaveChannel, roleNumber } from '
 import { markThreadSeen } from '@/hooks/useThreads';
 import { apiFetch } from '@/lib/api';
 import { queryKeys } from '@/lib/query-keys';
+import { clearChannelUnreadInCache } from '@/lib/unread-cache';
 import { NonMemberInvitePrompt } from './NonMemberInvitePrompt';
 import { useNonMemberInvite } from '@/hooks/useNonMemberInvite';
 import { useUsersBatch } from '@/hooks/useUsersBatch';
@@ -49,7 +50,7 @@ import {
 import { useAttachmentsBatch } from '@/hooks/useAttachments';
 import { useTagState } from '@/context/TagSearchContext';
 import { TagSearchPanel } from '@/components/TagSearchPanel';
-import type { Message, UserChannel } from '@/types';
+import type { Message } from '@/types';
 import type { UserMapEntry } from './MessageList';
 import type { DraftAttachment } from './AttachmentChip';
 
@@ -242,10 +243,10 @@ export function ChannelView() {
     setActiveParent(openedID);
     // Optimistically drop the server-side unread badge for this channel so the
     // sidebar clears instantly, then persist the read so it stays cleared on a
-    // reload (mirrors the conversation read-on-open).
-    queryClient.setQueryData<UserChannel[]>(queryKeys.userChannels(), (prev) =>
-      prev?.map((c) => (c.channelID === openedID ? { ...c, unread: false, unreadCount: 0 } : c)),
-    );
+    // reload (mirrors the conversation read-on-open). The helper guards the
+    // not-yet-loaded list — an inline `prev?.map` would resolve undefined on a
+    // cold deep-link and clobber the cache.
+    clearChannelUnreadInCache(queryClient, openedID);
     void apiFetch<void>(`/api/v1/channels/${openedID}/read`, { method: 'PUT' })
       .catch(() => undefined)
       .finally(() => {

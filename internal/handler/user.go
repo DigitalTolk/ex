@@ -256,11 +256,24 @@ func publicUserList(users []*model.User) []JSON {
 	return out
 }
 
+// usersForCaller returns the FULL user objects to an admin caller (the admin
+// directory page needs systemRole/authProvider to render roles and gate
+// promote/demote) and the limited public projection to everyone else, so a
+// regular member or guest can't read those admin-only fields.
+func usersForCaller(r *http.Request, users []*model.User) any {
+	claims := middleware.ClaimsFromContext(r.Context())
+	if claims != nil && claims.SystemRole == model.SystemRoleAdmin {
+		return users
+	}
+	return publicUserList(users)
+}
+
 // ListUsers returns a paginated list of users. If the "q" query parameter is
 // provided, it searches users by display name or email prefix instead.
-// `?all=true` returns the whole roster by paginating internally — used
-// by the mention popup which caches the list client-side. Every variant returns
-// the limited public projection (no systemRole/authProvider leak).
+// `?all=true` returns the whole roster by paginating internally — used by the
+// mention popup which caches the list client-side, so it's ALWAYS the limited
+// public projection. The directory (default + `?q=`) paths give the full record
+// to admins and the public projection to everyone else (see usersForCaller).
 func (h *UserHandler) ListUsers(w http.ResponseWriter, r *http.Request) {
 	q := queryParam(r, "q", "")
 	if q != "" {
@@ -269,7 +282,7 @@ func (h *UserHandler) ListUsers(w http.ResponseWriter, r *http.Request) {
 			writeInternalError(w, r, "search_error", err)
 			return
 		}
-		writeJSON(w, http.StatusOK, publicUserList(users))
+		writeJSON(w, http.StatusOK, usersForCaller(r, users))
 		return
 	}
 
@@ -294,7 +307,7 @@ func (h *UserHandler) ListUsers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, publicUserList(users))
+	writeJSON(w, http.StatusOK, usersForCaller(r, users))
 }
 
 // UpdateUserRole changes a user's system role. Admin-only.

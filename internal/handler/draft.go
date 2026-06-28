@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/DigitalTolk/ex/internal/middleware"
 	"github.com/DigitalTolk/ex/internal/model"
@@ -30,8 +31,13 @@ func clearSentDraft(ctx context.Context, clearer DraftClearer, userID, parentID,
 	if clearer == nil {
 		return
 	}
+	// Detached so the response doesn't wait, but bounded by a finite deadline:
+	// the AWS SDK has no default per-call timeout, so a hung draft store/pub-sub
+	// must not pin this goroutine indefinitely.
 	bg := context.WithoutCancel(ctx)
 	safe.Go(func() {
+		bg, cancel := context.WithTimeout(bg, 30*time.Second)
+		defer cancel()
 		if err := clearer.DeleteForScope(bg, userID, parentID, parentType, parentMessageID, ts); err != nil {
 			slog.Warn("clear sent draft failed", "userID", userID, "parentID", parentID, "parentType", parentType, "error", err)
 		}

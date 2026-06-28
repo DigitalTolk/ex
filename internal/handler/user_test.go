@@ -575,39 +575,51 @@ func TestBatchGetUsers_TooManyIDs(t *testing.T) {
 func TestListUsers(t *testing.T) {
 	h, userStore, jwtMgr := setupUserHandler(t)
 
-	user := &model.User{
+	// A user in the roster that carries admin-only fields.
+	userStore.users["list-1"] = &model.User{
 		ID:           "list-1",
 		Email:        "list@example.com",
 		DisplayName:  "List User",
 		SystemRole:   model.SystemRoleAdmin,
 		AuthProvider: "oidc",
 	}
-	userStore.users[user.ID] = user
-	token := makeTokenForUser(jwtMgr, user)
-
 	handler := middleware.Auth(jwtMgr)(http.HandlerFunc(h.ListUsers))
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/users?limit=10", nil)
-	req.Header.Set("Authorization", "Bearer "+token)
-	rec := httptest.NewRecorder()
-
-	handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)
+	listAs := func(caller *model.User) []map[string]any {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/users?limit=10", nil)
+		req.Header.Set("Authorization", "Bearer "+makeTokenForUser(jwtMgr, caller))
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+		}
+		var rows []map[string]any
+		if err := json.NewDecoder(rec.Body).Decode(&rows); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		return rows
 	}
-	// The default roster fetch must NOT leak admin-only fields to a member.
-	var rows []map[string]any
-	if err := json.NewDecoder(rec.Body).Decode(&rows); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	for _, row := range rows {
+
+	// A non-admin (member) caller must NOT see admin-only fields.
+	for _, row := range listAs(&model.User{ID: "caller-m", Email: "m@t.co", SystemRole: model.SystemRoleMember}) {
 		if _, ok := row["systemRole"]; ok {
-			t.Errorf("ListUsers leaked systemRole: %v", row)
+			t.Errorf("ListUsers leaked systemRole to a member: %v", row)
 		}
 		if _, ok := row["authProvider"]; ok {
-			t.Errorf("ListUsers leaked authProvider: %v", row)
+			t.Errorf("ListUsers leaked authProvider to a member: %v", row)
 		}
+	}
+
+	// An admin caller MUST see systemRole/authProvider (the directory page needs them).
+	adminRows := listAs(&model.User{ID: "caller-a", Email: "a@t.co", SystemRole: model.SystemRoleAdmin})
+	var sawAdminFields bool
+	for _, row := range adminRows {
+		if row["systemRole"] != nil {
+			sawAdminFields = true
+		}
+	}
+	if !sawAdminFields {
+		t.Error("ListUsers must return systemRole to an admin caller")
 	}
 }
 
