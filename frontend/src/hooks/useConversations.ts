@@ -17,8 +17,9 @@ export function useUserConversations(options?: { enabled?: boolean }) {
 export function useConversation(conversationId: string | undefined) {
   return useQuery({
     queryKey: queryKeys.conversation(conversationId ?? ''),
-    queryFn: () =>
-      apiFetch<Conversation>(`/api/v1/conversations/${conversationId}`),
+    // Coerce a 204/empty body to null — a queryFn must never resolve undefined.
+    queryFn: async () =>
+      (await apiFetch<Conversation>(`/api/v1/conversations/${conversationId}`)) ?? null,
     enabled: !!conversationId,
   });
 }
@@ -44,10 +45,12 @@ export function useCreateConversation() {
 export function useSearchUsers(query: string) {
   return useQuery({
     queryKey: queryKeys.searchUsers(query),
-    queryFn: () =>
-      apiFetch<{ id: string; email: string; displayName: string }[]>(
+    queryFn: async () => {
+      const res = await apiFetch<{ id: string; email: string; displayName: string }[]>(
         `/api/v1/users?q=${encodeURIComponent(query)}`,
-      ),
+      );
+      return Array.isArray(res) ? res : [];
+    },
     enabled: query.length >= 2,
   });
 }
@@ -61,7 +64,10 @@ export function useSearchUsers(query: string) {
 export function useAllUsers() {
   return useQuery({
     queryKey: queryKeys.allUsers(),
-    queryFn: () => apiFetch<User[]>('/api/v1/users?all=true'),
+    queryFn: async () => {
+      const res = await apiFetch<User[]>('/api/v1/users?all=true');
+      return Array.isArray(res) ? res : [];
+    },
     staleTime: 5 * 60 * 1000,
   });
 }

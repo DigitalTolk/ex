@@ -432,7 +432,12 @@ func (s *AuthService) GuestLogin(ctx context.Context, email, password string) (a
 	}
 
 	if user.SystemRole != model.SystemRoleGuest {
-		return "", "", nil, errors.New("auth: not a guest account")
+		// A real (e.g. SSO) account exists at this email. Spend the same dummy
+		// bcrypt the not-found path does and return the SAME generic message, so
+		// an unauthenticated caller can't enumerate non-guest accounts by timing
+		// OR by error text.
+		_ = bcrypt.CompareHashAndPassword(dummyBcryptHash, []byte(password))
+		return "", "", nil, errors.New("auth: invalid credentials")
 	}
 
 	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)); err != nil {

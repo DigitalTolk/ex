@@ -17,7 +17,9 @@ export function useUserChannels(options?: { enabled?: boolean }) {
 export function useChannel(channelId: string | undefined) {
   return useQuery({
     queryKey: queryKeys.channel(channelId ?? ''),
-    queryFn: () => apiFetch<Channel>(`/api/v1/channels/${channelId}`),
+    // Coerce a 204/empty body to null — a queryFn must never resolve undefined
+    // (React Query warns); null is the "loaded, absent" sentinel.
+    queryFn: async () => (await apiFetch<Channel>(`/api/v1/channels/${channelId}`)) ?? null,
     enabled: !!channelId,
   });
 }
@@ -25,7 +27,7 @@ export function useChannel(channelId: string | undefined) {
 export function useChannelBySlug(slug: string | undefined) {
   return useQuery({
     queryKey: queryKeys.channelBySlug(slug),
-    queryFn: () => apiFetch<Channel>(`/api/v1/channels/${slug}`),
+    queryFn: async () => (await apiFetch<Channel>(`/api/v1/channels/${slug}`)) ?? null,
     enabled: !!slug,
   });
 }

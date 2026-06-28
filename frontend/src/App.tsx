@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { queryClient } from '@/lib/query-client';
 import { TooltipProvider } from '@/components/ui/tooltip';
@@ -61,6 +61,13 @@ function ServerVersionBootstrap() {
   return null;
 }
 
+// RoutedErrorBoundary keys the boundary on the current path so navigating to a
+// different route clears a latched render error (in-app recovery, no hard reload).
+function RoutedErrorBoundary({ children }: { children: React.ReactNode }) {
+  const location = useLocation();
+  return <ErrorBoundary resetKey={location.pathname}>{children}</ErrorBoundary>;
+}
+
 function AppRoutes() {
   return (
     <Routes>
@@ -113,9 +120,9 @@ export default function App() {
                       <NotificationCountTitleBridge />
                       <div className="flex h-dvh flex-col bg-sidebar pt-safe-top">
                         <div className="min-h-0 flex-1 bg-background">
-                          <ErrorBoundary>
+                          <RoutedErrorBoundary>
                             <AppRoutes />
-                          </ErrorBoundary>
+                          </RoutedErrorBoundary>
                         </div>
                       </div>
                     </TooltipProvider>

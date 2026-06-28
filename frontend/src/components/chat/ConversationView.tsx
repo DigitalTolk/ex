@@ -215,9 +215,11 @@ export function ConversationView() {
     clearConversationUnreadInCache(queryClient, id);
     setActiveConversation(id);
     setActiveParent(id);
-    void apiFetch<void>(`/api/v1/conversations/${id}/read`, { method: 'PUT' }).finally(() => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.userConversations() });
-    });
+    void apiFetch<void>(`/api/v1/conversations/${id}/read`, { method: 'PUT' })
+      .catch(() => undefined)
+      .finally(() => {
+        queryClient.invalidateQueries({ queryKey: queryKeys.userConversations() });
+      });
     return () => {
       setActiveConversation(null);
       setActiveParent(null);

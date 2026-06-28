@@ -573,14 +573,16 @@ func TestBatchGetUsers_TooManyIDs(t *testing.T) {
 }
 
 func TestListUsers(t *testing.T) {
-	h, _, jwtMgr := setupUserHandler(t)
+	h, userStore, jwtMgr := setupUserHandler(t)
 
 	user := &model.User{
-		ID:          "list-1",
-		Email:       "list@example.com",
-		DisplayName: "List User",
-		SystemRole:  model.SystemRoleMember,
+		ID:           "list-1",
+		Email:        "list@example.com",
+		DisplayName:  "List User",
+		SystemRole:   model.SystemRoleAdmin,
+		AuthProvider: "oidc",
 	}
+	userStore.users[user.ID] = user
 	token := makeTokenForUser(jwtMgr, user)
 
 	handler := middleware.Auth(jwtMgr)(http.HandlerFunc(h.ListUsers))
@@ -593,6 +595,19 @@ func TestListUsers(t *testing.T) {
 
 	if rec.Code != http.StatusOK {
 		t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	// The default roster fetch must NOT leak admin-only fields to a member.
+	var rows []map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&rows); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	for _, row := range rows {
+		if _, ok := row["systemRole"]; ok {
+			t.Errorf("ListUsers leaked systemRole: %v", row)
+		}
+		if _, ok := row["authProvider"]; ok {
+			t.Errorf("ListUsers leaked authProvider: %v", row)
+		}
 	}
 }
 

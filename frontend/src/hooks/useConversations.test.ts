@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createElement, type ReactNode } from 'react';
-import { useUserConversations } from './useConversations';
+import { useUserConversations, useConversation, useSearchUsers, useAllUsers } from './useConversations';
 
 vi.mock('@/lib/api', () => ({
   apiFetch: vi.fn(),
@@ -24,6 +24,31 @@ function createWrapper() {
     );
   };
 }
+
+describe('single-object/array coercion to a non-undefined queryFn result', () => {
+  beforeEach(() => vi.mocked(apiFetch).mockReset());
+
+  it('useConversation coerces an empty response to null', async () => {
+    vi.mocked(apiFetch).mockResolvedValue(undefined);
+    const { result } = renderHook(() => useConversation('conv-1'), { wrapper: createWrapper() });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data).toBeNull();
+  });
+
+  it('useSearchUsers coerces a non-array response to []', async () => {
+    vi.mocked(apiFetch).mockResolvedValue(undefined);
+    const { result } = renderHook(() => useSearchUsers('al'), { wrapper: createWrapper() });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data).toEqual([]);
+  });
+
+  it('useAllUsers coerces a non-array response to []', async () => {
+    vi.mocked(apiFetch).mockResolvedValue(undefined);
+    const { result } = renderHook(() => useAllUsers(), { wrapper: createWrapper() });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data).toEqual([]);
+  });
+});
 
 describe('useUserConversations', () => {
   beforeEach(() => {

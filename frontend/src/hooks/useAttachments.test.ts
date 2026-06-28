@@ -198,6 +198,14 @@ describe('useAttachment', () => {
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(apiFetch).toHaveBeenCalledWith('/api/v1/attachments/a-1');
   });
+
+  it('coerces an empty attachment response to null', async () => {
+    vi.mocked(apiFetch).mockResolvedValueOnce(undefined);
+    const { Wrapper } = createWrapper();
+    const { result } = renderHook(() => useAttachment('a-1'), { wrapper: Wrapper });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data).toBeNull();
+  });
 });
 
 describe('useAttachmentsBatch', () => {

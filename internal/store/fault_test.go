@@ -7,6 +7,7 @@ import (
 	"errors"
 
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 )
 
 // errInjected is the canonical error returned by a faultClient for the method
@@ -33,6 +34,13 @@ type faultClient struct {
 	failTransactWriteItems bool
 	failUpdateItem         bool
 	failUpdateTimeToLive   bool
+
+	// pageQueryOnce drives a manual LastEvaluatedKey drain loop through a second
+	// iteration: the first Query returns the real page plus a synthetic cursor,
+	// the follow-up Query (carrying ExclusiveStartKey) returns an empty page to
+	// end the loop. Exercises the >1MB pagination-continuation branch that a
+	// small DynamoDB Local table never produces on its own.
+	pageQueryOnce bool
 }
 
 func (f *faultClient) BatchGetItem(ctx context.Context, in *dynamodb.BatchGetItemInput, opts ...func(*dynamodb.Options)) (*dynamodb.BatchGetItemOutput, error) {
@@ -87,6 +95,20 @@ func (f *faultClient) PutItem(ctx context.Context, in *dynamodb.PutItemInput, op
 func (f *faultClient) Query(ctx context.Context, in *dynamodb.QueryInput, opts ...func(*dynamodb.Options)) (*dynamodb.QueryOutput, error) {
 	if f.failQuery {
 		return nil, errInjected
+	}
+	if f.pageQueryOnce {
+		if in.ExclusiveStartKey != nil {
+			return &dynamodb.QueryOutput{}, nil // second page: empty → ends the drain loop
+		}
+		out, err := f.DynamoAPI.Query(ctx, in, opts...)
+		if err != nil {
+			return out, err
+		}
+		out.LastEvaluatedKey = map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: "cursor"},
+			"SK": &types.AttributeValueMemberS{Value: "cursor"},
+		}
+		return out, nil
 	}
 	return f.DynamoAPI.Query(ctx, in, opts...)
 }

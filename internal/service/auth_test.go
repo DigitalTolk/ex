@@ -439,6 +439,11 @@ func TestGuestLogin_NotGuest(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for non-guest user")
 	}
+	// Must NOT leak that a non-guest account exists — same generic message as a
+	// wrong password / unknown email (no enumeration via error text).
+	if !strings.Contains(err.Error(), "invalid credentials") || strings.Contains(err.Error(), "not a guest") {
+		t.Fatalf("non-guest error must be generic 'invalid credentials', got %v", err)
+	}
 }
 
 func TestGuestLogin_WrongPassword(t *testing.T) {

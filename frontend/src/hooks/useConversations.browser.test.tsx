@@ -90,6 +90,20 @@ describe('useConversations queries', () => {
     expect(screen.getByTestId('probe').element().getAttribute('data-call')).toBe('/api/v1/conversations/cv-9');
   });
 
+  it('useConversation coerces an empty response to null', async () => {
+    apiFetchMock.mockResolvedValue(undefined);
+    const screen = await renderHook(() => useConversation('cv-9'));
+    await new Promise((r) => setTimeout(r, 100));
+    expect(screen.getByTestId('probe').element().getAttribute('data-data')).toBe('null');
+  });
+
+  it('useSearchUsers coerces a non-array response to []', async () => {
+    apiFetchMock.mockResolvedValue(undefined);
+    const screen = await renderHook(() => useSearchUsers('alice'));
+    await new Promise((r) => setTimeout(r, 100));
+    expect(screen.getByTestId('probe').element().getAttribute('data-data')).toBe('[]');
+  });
+
   it('useSearchUsers stays disabled under 2 chars', async () => {
     await renderHook(() => useSearchUsers('a'));
     await new Promise((r) => setTimeout(r, 50));

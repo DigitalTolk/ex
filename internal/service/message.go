@@ -879,6 +879,7 @@ func (s *MessageService) ListPinned(ctx context.Context, userID, parentID, paren
 		sem <- struct{}{}
 		go func(i int, msgID string) {
 			defer wg.Done()
+			defer safe.Recover()
 			defer func() { <-sem }()
 			msg, err := s.messages.GetMessage(ctx, parentID, msgID)
 			switch {
@@ -996,14 +997,17 @@ func (s *MessageService) ListAround(ctx context.Context, userID, parentID, paren
 	wg.Add(3)
 	go func() {
 		defer wg.Done()
+		defer safe.Recover()
 		target, errTarget = s.messages.GetMessage(ctx, parentID, msgID)
 	}()
 	go func() {
 		defer wg.Done()
+		defer safe.Recover()
 		older, hasMoreOlder, errOlder = s.listTopLevel(ctx, parentID, msgID, before)
 	}()
 	go func() {
 		defer wg.Done()
+		defer safe.Recover()
 		newer, hasMoreNewer, errNewer = s.listTopLevelAfter(ctx, parentID, msgID, after)
 	}()
 	wg.Wait()
@@ -1550,6 +1554,7 @@ func (s *MessageService) bindAttachments(ctx context.Context, msgID string, ids 
 		wg.Add(1)
 		go func(aid string) {
 			defer wg.Done()
+			defer safe.Recover()
 			if err := s.attachments.AddRef(ctx, aid, msgID); err != nil {
 				errCh <- fmt.Errorf("message: bind attachment %q: %w", aid, err)
 			}
@@ -1577,6 +1582,7 @@ func (s *MessageService) releaseAttachments(ctx context.Context, msgID string, i
 		wg.Add(1)
 		go func(aid string) {
 			defer wg.Done()
+			defer safe.Recover()
 			if err := s.attachments.RemoveRef(ctx, aid, msgID); err != nil {
 				slog.Warn("attachment remove ref failed", "attID", aid, "msgID", msgID, "error", err)
 			}

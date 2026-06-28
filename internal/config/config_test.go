@@ -92,6 +92,35 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.OneSignalRESTAPIKey != "" {
 		t.Errorf("OneSignalRESTAPIKey = %q, want empty", cfg.OneSignalRESTAPIKey)
 	}
+	if cfg.TrustedProxyCount != 1 {
+		t.Errorf("TrustedProxyCount = %d, want default 1", cfg.TrustedProxyCount)
+	}
+}
+
+func TestLoadTrustedProxyCount(t *testing.T) {
+	t.Run("custom value", func(t *testing.T) {
+		clearEnv(t)
+		t.Setenv("ENV", "development")
+		t.Setenv("TRUSTED_PROXY_COUNT", "2")
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if cfg.TrustedProxyCount != 2 {
+			t.Errorf("TrustedProxyCount = %d, want 2", cfg.TrustedProxyCount)
+		}
+	})
+
+	for _, bad := range []string{"abc", "-1"} {
+		t.Run("rejects "+bad, func(t *testing.T) {
+			clearEnv(t)
+			t.Setenv("ENV", "development")
+			t.Setenv("TRUSTED_PROXY_COUNT", bad)
+			if _, err := Load(); err == nil {
+				t.Fatalf("Load with TRUSTED_PROXY_COUNT=%q should fail", bad)
+			}
+		})
+	}
 }
 
 func TestLoadCustomEnv(t *testing.T) {

@@ -130,23 +130,32 @@ func (s *ThreadFollowStoreImpl) ListThread(ctx context.Context, parentID, thread
 	if err != nil { // coverage-ignore: static key-condition built from constants; Build cannot fail
 		return nil, fmt.Errorf("store: build thread follows expression: %w", err)
 	}
-	out, err := s.Client.Query(ctx, &dynamodb.QueryInput{
+	// Drain every page: these are the thread's watchers, i.e. notification
+	// recipients for a reply, so truncation would drop alerts.
+	input := &dynamodb.QueryInput{
 		TableName:                 aws.String(s.Table),
 		IndexName:                 aws.String("GSI1"),
 		KeyConditionExpression:    expr.KeyCondition(),
 		ExpressionAttributeNames:  expr.Names(),
 		ExpressionAttributeValues: expr.Values(),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("store: list thread follows: %w", err)
 	}
-	follows := make([]*model.ThreadFollow, 0, len(out.Items))
-	for _, raw := range out.Items {
-		var item threadFollowItem
-		if err := attributevalue.UnmarshalMap(raw, &item); err != nil { // coverage-ignore: round-trip of items this store wrote; cannot fail
-			return nil, fmt.Errorf("store: unmarshal thread follow: %w", err)
+	var follows []*model.ThreadFollow
+	for {
+		out, err := s.Client.Query(ctx, input)
+		if err != nil {
+			return nil, fmt.Errorf("store: list thread follows: %w", err)
 		}
-		follows = append(follows, &item.ThreadFollow)
+		for _, raw := range out.Items {
+			var item threadFollowItem
+			if err := attributevalue.UnmarshalMap(raw, &item); err != nil { // coverage-ignore: round-trip of items this store wrote; cannot fail
+				return nil, fmt.Errorf("store: unmarshal thread follow: %w", err)
+			}
+			follows = append(follows, &item.ThreadFollow)
+		}
+		if len(out.LastEvaluatedKey) == 0 {
+			break
+		}
+		input.ExclusiveStartKey = out.LastEvaluatedKey
 	}
 	return follows, nil
 }
@@ -178,22 +187,29 @@ func (s *ThreadFollowStoreImpl) ListUser(ctx context.Context, userID string) ([]
 	if err != nil { // coverage-ignore: static key-condition built from constants; Build cannot fail
 		return nil, fmt.Errorf("store: build thread follow expression: %w", err)
 	}
-	out, err := s.Client.Query(ctx, &dynamodb.QueryInput{
+	input := &dynamodb.QueryInput{
 		TableName:                 aws.String(s.Table),
 		KeyConditionExpression:    expr.KeyCondition(),
 		ExpressionAttributeNames:  expr.Names(),
 		ExpressionAttributeValues: expr.Values(),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("store: list thread follows: %w", err)
 	}
-	follows := make([]*model.ThreadFollow, 0, len(out.Items))
-	for _, raw := range out.Items {
-		var item threadFollowItem
-		if err := attributevalue.UnmarshalMap(raw, &item); err != nil { // coverage-ignore: round-trip of items this store wrote; cannot fail
-			return nil, fmt.Errorf("store: unmarshal thread follow: %w", err)
+	var follows []*model.ThreadFollow
+	for {
+		out, err := s.Client.Query(ctx, input)
+		if err != nil {
+			return nil, fmt.Errorf("store: list thread follows: %w", err)
 		}
-		follows = append(follows, &item.ThreadFollow)
+		for _, raw := range out.Items {
+			var item threadFollowItem
+			if err := attributevalue.UnmarshalMap(raw, &item); err != nil { // coverage-ignore: round-trip of items this store wrote; cannot fail
+				return nil, fmt.Errorf("store: unmarshal thread follow: %w", err)
+			}
+			follows = append(follows, &item.ThreadFollow)
+		}
+		if len(out.LastEvaluatedKey) == 0 {
+			break
+		}
+		input.ExclusiveStartKey = out.LastEvaluatedKey
 	}
 	return follows, nil
 }

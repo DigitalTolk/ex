@@ -198,10 +198,17 @@ func TestRedisPubSub_PublishMany(t *testing.T) {
 		t.Errorf("empty PublishMany should be a no-op, got %v", err)
 	}
 
-	// Pipeline Exec error surfaces (server gone).
+	// Pipeline Exec error surfaces (server gone) — BUT the durable inbox fan-out
+	// must still run so the persistent event can be replayed on reconnect even
+	// when the best-effort live PUBLISH failed.
 	mr.Close()
+	before := len(inbox.seen())
 	if err := ps.PublishMany(context.Background(), []string{"chan:a"}, evt); err == nil {
 		t.Error("PublishMany against a dead server should return the pipeline error")
+	}
+	ps.WaitForInboxFanOut()
+	if got := len(inbox.seen()); got != before+1 {
+		t.Errorf("durable fan-out must run despite the live PUBLISH error: appends=%d, want %d", got, before+1)
 	}
 }
 

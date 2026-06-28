@@ -253,10 +253,36 @@ func (h *UserHandler) BatchGetUsers(w http.ResponseWriter, r *http.Request) {
 const listAllMaxRounds = 200
 const listAllPageSize = 500
 
+// publicUserJSON projects a user to the fields safe for ANY authenticated member
+// (the limited shape BatchGetUsers returns to non-admins, plus email for mention
+// matching). systemRole / authProvider are admin-only and must never leak
+// through a roster fetch by a regular member or guest.
+func publicUserJSON(u *model.User) JSON {
+	return JSON{
+		"id":          u.ID,
+		"displayName": u.DisplayName,
+		"email":       u.Email,
+		"avatarURL":   u.AvatarURL,
+		"status":      u.Status,
+		"userStatus":  u.UserStatus,
+		"timeZone":    u.TimeZone,
+		"lastSeenAt":  u.LastSeenAt,
+	}
+}
+
+func publicUserList(users []*model.User) []JSON {
+	out := make([]JSON, 0, len(users))
+	for _, u := range users {
+		out = append(out, publicUserJSON(u))
+	}
+	return out
+}
+
 // ListUsers returns a paginated list of users. If the "q" query parameter is
 // provided, it searches users by display name or email prefix instead.
 // `?all=true` returns the whole roster by paginating internally — used
-// by the mention popup which caches the list client-side.
+// by the mention popup which caches the list client-side. Every variant returns
+// the limited public projection (no systemRole/authProvider leak).
 func (h *UserHandler) ListUsers(w http.ResponseWriter, r *http.Request) {
 	q := queryParam(r, "q", "")
 	if q != "" {
@@ -265,10 +291,7 @@ func (h *UserHandler) ListUsers(w http.ResponseWriter, r *http.Request) {
 			writeInternalError(w, r, "search_error", err)
 			return
 		}
-		if users == nil {
-			users = []*model.User{}
-		}
-		writeJSON(w, http.StatusOK, users)
+		writeJSON(w, http.StatusOK, publicUserList(users))
 		return
 	}
 
@@ -280,24 +303,7 @@ func (h *UserHandler) ListUsers(w http.ResponseWriter, r *http.Request) {
 			writeInternalError(w, r, "list_error", err)
 			return
 		}
-		// Project to the same limited shape BatchGetUsers returns to
-		// non-admins, plus email (mention popup matches against it).
-		// systemRole / lastSeenAt / authProvider are admin-only fields
-		// and have no business in a roster fetched by every member.
-		out := make([]JSON, 0, len(users))
-		for _, u := range users {
-			out = append(out, JSON{
-				"id":          u.ID,
-				"displayName": u.DisplayName,
-				"email":       u.Email,
-				"avatarURL":   u.AvatarURL,
-				"status":      u.Status,
-				"userStatus":  u.UserStatus,
-				"timeZone":    u.TimeZone,
-				"lastSeenAt":  u.LastSeenAt,
-			})
-		}
-		writeJSON(w, http.StatusOK, out)
+		writeJSON(w, http.StatusOK, publicUserList(users))
 		return
 	}
 
@@ -309,11 +315,8 @@ func (h *UserHandler) ListUsers(w http.ResponseWriter, r *http.Request) {
 		writeInternalError(w, r, "list_error", err)
 		return
 	}
-	if users == nil {
-		users = []*model.User{}
-	}
 
-	writeJSON(w, http.StatusOK, users)
+	writeJSON(w, http.StatusOK, publicUserList(users))
 }
 
 // UpdateUserRole changes a user's system role. Admin-only.

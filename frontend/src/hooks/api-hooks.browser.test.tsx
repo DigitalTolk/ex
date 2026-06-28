@@ -97,6 +97,20 @@ describe('useChannels — queries', () => {
     expect(apiFetchMock).not.toHaveBeenCalled();
   });
 
+  it('useChannel coerces an empty (204) response to null', async () => {
+    apiFetchMock.mockResolvedValue(undefined);
+    const screen = await renderHook(() => useChannel('ch-1'));
+    await new Promise((r) => setTimeout(r, 100));
+    expect(screen.getByTestId('probe').element().getAttribute('data-data')).toBe('null');
+  });
+
+  it('useChannelBySlug coerces an empty response to null', async () => {
+    apiFetchMock.mockResolvedValue(undefined);
+    const screen = await renderHook(() => useChannelBySlug('general'));
+    await new Promise((r) => setTimeout(r, 100));
+    expect(screen.getByTestId('probe').element().getAttribute('data-data')).toBe('null');
+  });
+
   it('useChannelMembers fetches /channels/:id/members', async () => {
     apiFetchMock.mockResolvedValue([]);
     await renderHook(() => useChannelMembers('ch-1'));

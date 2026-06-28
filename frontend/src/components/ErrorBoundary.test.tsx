@@ -37,6 +37,41 @@ describe('ErrorBoundary', () => {
     expect(reload).toHaveBeenCalled();
   });
 
+  it('clears a latched error when resetKey changes (route navigation recovers)', () => {
+    const { rerender } = render(
+      <ErrorBoundary resetKey="/a">
+        <Boom when={true} />
+      </ErrorBoundary>,
+    );
+    expect(screen.getByRole('alert')).toBeInTheDocument();
+
+    // Navigating to another route (new resetKey) clears the error; the child no
+    // longer throws, so its content renders again — no hard reload needed.
+    rerender(
+      <ErrorBoundary resetKey="/b">
+        <Boom when={false} />
+      </ErrorBoundary>,
+    );
+    expect(screen.getByText('safe content')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('keeps the fallback when resetKey is unchanged', () => {
+    const { rerender } = render(
+      <ErrorBoundary resetKey="/a">
+        <Boom when={true} />
+      </ErrorBoundary>,
+    );
+    expect(screen.getByRole('alert')).toBeInTheDocument();
+    // Same resetKey → error stays latched (componentDidUpdate no-op branch).
+    rerender(
+      <ErrorBoundary resetKey="/a">
+        <Boom when={false} />
+      </ErrorBoundary>,
+    );
+    expect(screen.getByRole('alert')).toBeInTheDocument();
+  });
+
   it('renders a custom fallback with the error and a working reset', () => {
     function Wrapper() {
       return (

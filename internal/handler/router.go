@@ -152,7 +152,7 @@ func NewRouter(d *Deps) http.Handler {
 	mux.Handle("PATCH /api/v1/conversations/{id}/messages/{msgId}", middleware.WrapFunc(convH.EditMessage, authMW))
 	mux.Handle("DELETE /api/v1/conversations/{id}/messages/{msgId}", middleware.WrapFunc(convH.DeleteMessage, authMW))
 	mux.Handle("GET /api/v1/conversations/{id}/messages/{msgId}/thread", middleware.WrapFunc(convH.GetThread, authMW))
-	mux.Handle("POST /api/v1/conversations/{id}/messages/{msgId}/reactions", middleware.WrapFunc(convH.ToggleReaction, authMW))
+	mux.Handle("POST /api/v1/conversations/{id}/messages/{msgId}/reactions", middleware.WrapFunc(convH.ToggleReaction, authMW, writeLimit))
 	mux.Handle("PUT /api/v1/conversations/{id}/messages/{msgId}/pinned", middleware.WrapFunc(convH.SetPinned, authMW))
 	mux.Handle("PUT /api/v1/conversations/{id}/messages/{msgId}/no-unfurl", middleware.WrapFunc(convH.SetNoUnfurl, authMW))
 	mux.Handle("GET /api/v1/conversations/{id}/pinned", middleware.WrapFunc(convH.ListPinned, authMW))

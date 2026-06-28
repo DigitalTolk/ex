@@ -74,10 +74,11 @@ export function useWebSocket(options: UseWebSocketOptions) {
     if (!options.enabled) return;
     let disposed = false;
 
-    function markSeen(id: string): boolean {
-      /* v8 ignore next -- markSeen is only called with a non-empty string id (guarded at the call site); the !id arm is defensive */
-      if (!id) return false;
-      if (seenIdsRef.current.has(id)) return true;
+    // recordSeen marks an id as delivered AFTER its handler ran, so a replay/live
+    // duplicate is dropped by the peek (seenIdsRef.has) at the top of onmessage.
+    // Bounded ring of the last `dedupCapacity` ids. The caller guards a non-empty,
+    // not-yet-seen id, so this just appends.
+    function recordSeen(id: string) {
       seenIdsRef.current.add(id);
       seenOrderRef.current.push(id);
       if (seenOrderRef.current.length > dedupCapacity) {
@@ -85,7 +86,6 @@ export function useWebSocket(options: UseWebSocketOptions) {
         /* v8 ignore next -- length just exceeded dedupCapacity, so shift() always returns a string; the falsy arm is defensive */
         if (oldest) seenIdsRef.current.delete(oldest);
       }
-      return false;
     }
 
     async function connect(refreshBeforeConnect = false) {
@@ -113,28 +113,19 @@ export function useWebSocket(options: UseWebSocketOptions) {
       };
 
       ws.onmessage = (event) => {
+        let msg: { id?: unknown; type?: string; data?: unknown };
         try {
-          const msg = JSON.parse(event.data);
-          // Advance the cursor monotonically. ULIDs sort lexicographically, so
-          // only move forward when this frame's id is greater than the current
-          // cursor. A live frame that races in with a smaller id than an
-          // already-replayed one must NOT regress the cursor — otherwise the
-          // next reconnect would replay the in-between window again and
-          // re-deliver (or re-banner) those frames.
-          if (typeof msg.id === 'string' && msg.id) {
-            if (markSeen(msg.id)) {
-              // Already delivered (replay/live race) — drop.
-              return;
-            }
-            // Only DURABLE events are replayed from the inbox on reconnect, so
-            // only they may advance the replay cursor. Advancing it for an
-            // ephemeral frame (typing/presence/notification.new/ping) whose id
-            // outruns an in-flight durable message.new would skip that message
-            // on the next reconnect replay.
-            if (!EPHEMERAL_EVENT_TYPES.has(msg.type) && msg.id > lastEventIdRef.current) {
-              lastEventIdRef.current = msg.id;
-            }
-          }
+          msg = JSON.parse(event.data);
+        } catch (err) {
+          console.debug('ws message handler skipped a malformed frame', err);
+          return;
+        }
+        // Dedup PEEK only (don't record yet): an already-delivered frame
+        // (replay/live race) is dropped without re-running its handler.
+        if (typeof msg.id === 'string' && msg.id && seenIdsRef.current.has(msg.id)) {
+          return;
+        }
+        try {
           const payload = typeof msg.data === 'string' ? JSON.parse(msg.data) : msg.data ?? msg;
           switch (msg.type) {
             case EventType.MessageNew:
@@ -223,11 +214,24 @@ export function useWebSocket(options: UseWebSocketOptions) {
               break;
           }
         } catch (err) {
-          // A malformed frame or a throwing handler must never kill the receive
-          // loop. Surface at debug level so a real bug in a cache-patch handler
-          // is greppable, without tripping warning gates or spamming on routine
-          // parse failures.
+          // The handler threw — do NOT record the id as seen or advance the
+          // cursor, so this (possibly durable) frame can still be replayed on the
+          // next reconnect and isn't swallowed by dedup. Surface at debug level
+          // so a real bug in a cache-patch handler is greppable.
           console.debug('ws message handler skipped a frame', err);
+          return;
+        }
+        // The handler delivered successfully. ONLY NOW commit the dedup record
+        // and advance the replay cursor — committing before delivery (the old
+        // ordering) let a throwing handler permanently lose a durable event.
+        // ULIDs sort lexicographically, so the cursor only moves forward, and
+        // only for DURABLE events (an ephemeral frame whose id outruns an
+        // in-flight message.new must not skip it on the next reconnect replay).
+        if (typeof msg.id === 'string' && msg.id) {
+          recordSeen(msg.id);
+          if (typeof msg.type === 'string' && !EPHEMERAL_EVENT_TYPES.has(msg.type) && msg.id > lastEventIdRef.current) {
+            lastEventIdRef.current = msg.id;
+          }
         }
       };
 

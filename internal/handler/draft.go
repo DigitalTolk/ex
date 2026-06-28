@@ -8,6 +8,7 @@ import (
 
 	"github.com/DigitalTolk/ex/internal/middleware"
 	"github.com/DigitalTolk/ex/internal/model"
+	"github.com/DigitalTolk/ex/internal/safe"
 	"github.com/DigitalTolk/ex/internal/service"
 	"github.com/DigitalTolk/ex/internal/store"
 )
@@ -30,11 +31,11 @@ func clearSentDraft(ctx context.Context, clearer DraftClearer, userID, parentID,
 		return
 	}
 	bg := context.WithoutCancel(ctx)
-	go func() {
+	safe.Go(func() {
 		if err := clearer.DeleteForScope(bg, userID, parentID, parentType, parentMessageID, ts); err != nil {
 			slog.Warn("clear sent draft failed", "userID", userID, "parentID", parentID, "parentType", parentType, "error", err)
 		}
-	}()
+	})
 }
 
 // DraftHandler exposes server-side message draft endpoints.

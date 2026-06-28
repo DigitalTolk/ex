@@ -153,23 +153,32 @@ func (s *MembershipStoreImpl) ListChannelMembers(ctx context.Context, channelID 
 		return nil, fmt.Errorf("store: build expression: %w", err)
 	}
 
-	out, err := s.Client.Query(ctx, &dynamodb.QueryInput{
+	// Drain every page: this is the notification audience for a channel, so a
+	// 1MB Query cap that silently truncated a large incident channel would drop
+	// alert recipients.
+	input := &dynamodb.QueryInput{
 		TableName:                 aws.String(s.Table),
 		KeyConditionExpression:    expr.KeyCondition(),
 		ExpressionAttributeNames:  expr.Names(),
 		ExpressionAttributeValues: expr.Values(),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("store: list channel members: %w", err)
 	}
-
-	members := make([]*model.ChannelMembership, 0, len(out.Items))
-	for _, item := range out.Items {
-		var mi channelMemberItem
-		if err := attributevalue.UnmarshalMap(item, &mi); err != nil { // coverage-ignore: round-trip of items this store wrote; cannot fail
-			return nil, fmt.Errorf("store: unmarshal channel member: %w", err)
+	var members []*model.ChannelMembership
+	for {
+		out, err := s.Client.Query(ctx, input)
+		if err != nil {
+			return nil, fmt.Errorf("store: list channel members: %w", err)
 		}
-		members = append(members, &mi.ChannelMembership)
+		for _, item := range out.Items {
+			var mi channelMemberItem
+			if err := attributevalue.UnmarshalMap(item, &mi); err != nil { // coverage-ignore: round-trip of items this store wrote; cannot fail
+				return nil, fmt.Errorf("store: unmarshal channel member: %w", err)
+			}
+			members = append(members, &mi.ChannelMembership)
+		}
+		if len(out.LastEvaluatedKey) == 0 {
+			break
+		}
+		input.ExclusiveStartKey = out.LastEvaluatedKey
 	}
 	return members, nil
 }
@@ -184,23 +193,29 @@ func (s *MembershipStoreImpl) ListUserChannels(ctx context.Context, userID strin
 		return nil, fmt.Errorf("store: build expression: %w", err)
 	}
 
-	out, err := s.Client.Query(ctx, &dynamodb.QueryInput{
+	input := &dynamodb.QueryInput{
 		TableName:                 aws.String(s.Table),
 		KeyConditionExpression:    expr.KeyCondition(),
 		ExpressionAttributeNames:  expr.Names(),
 		ExpressionAttributeValues: expr.Values(),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("store: list user channels: %w", err)
 	}
-
-	channels := make([]*model.UserChannel, 0, len(out.Items))
-	for _, item := range out.Items {
-		var uci userChannelItem
-		if err := attributevalue.UnmarshalMap(item, &uci); err != nil { // coverage-ignore: round-trip of items this store wrote; cannot fail
-			return nil, fmt.Errorf("store: unmarshal user channel: %w", err)
+	var channels []*model.UserChannel
+	for {
+		out, err := s.Client.Query(ctx, input)
+		if err != nil {
+			return nil, fmt.Errorf("store: list user channels: %w", err)
 		}
-		channels = append(channels, &uci.UserChannel)
+		for _, item := range out.Items {
+			var uci userChannelItem
+			if err := attributevalue.UnmarshalMap(item, &uci); err != nil { // coverage-ignore: round-trip of items this store wrote; cannot fail
+				return nil, fmt.Errorf("store: unmarshal user channel: %w", err)
+			}
+			channels = append(channels, &uci.UserChannel)
+		}
+		if len(out.LastEvaluatedKey) == 0 {
+			break
+		}
+		input.ExclusiveStartKey = out.LastEvaluatedKey
 	}
 	return channels, nil
 }

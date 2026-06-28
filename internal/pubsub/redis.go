@@ -115,9 +115,11 @@ func (ps *RedisPubSub) PublishMany(ctx context.Context, channels []string, event
 	for _, ch := range channels {
 		pipe.Publish(ctx, ch, data)
 	}
-	if _, err := pipe.Exec(ctx); err != nil {
-		return fmt.Errorf("redis publish pipeline: %w", err)
-	}
+	_, execErr := pipe.Exec(ctx)
+	// Durability is independent of best-effort live delivery: a persistent event
+	// must still fan out to every recipient's inbox even if some live PUBLISH in
+	// the pipeline failed — otherwise those recipients couldn't replay it on
+	// reconnect. So run the inbox fan-out regardless of execErr, then surface it.
 	if ps.resolver != nil && ps.inbox != nil && event != nil && events.IsPersistent(event.Type) {
 		for _, ch := range channels {
 			ps.fanOut.Add(1)
@@ -127,6 +129,9 @@ func (ps *RedisPubSub) PublishMany(ctx context.Context, channels []string, event
 				ps.appendToInboxes(context.WithoutCancel(ctx), ch, event, data)
 			}(ch)
 		}
+	}
+	if execErr != nil {
+		return fmt.Errorf("redis publish pipeline: %w", execErr)
 	}
 	return nil
 }

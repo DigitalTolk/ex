@@ -2,6 +2,9 @@ import { Component, type ErrorInfo, type ReactNode } from 'react';
 
 interface Props {
   children: ReactNode;
+  // When resetKey changes (e.g. the route path), a latched error is cleared so
+  // navigating away from a broken view recovers in-app without a hard reload.
+  resetKey?: unknown;
   // Optional custom fallback; defaults to a minimal reload card. A render
   // function receives the error so callers can show details if they want.
   fallback?: (error: Error, reset: () => void) => ReactNode;
@@ -26,6 +29,14 @@ export class ErrorBoundary extends Component<Props, State> {
   componentDidCatch(error: Error, info: ErrorInfo) {
     // Surface it for telemetry/console rather than swallowing silently.
     console.error('ErrorBoundary caught a render error', error, info.componentStack);
+  }
+
+  componentDidUpdate(prevProps: Props) {
+    // A route change (resetKey) clears a latched error so the user isn't pinned
+    // on the fallback for the whole session after one view throws.
+    if (this.state.error && prevProps.resetKey !== this.props.resetKey) {
+      this.setState({ error: null });
+    }
   }
 
   reset = () => this.setState({ error: null });

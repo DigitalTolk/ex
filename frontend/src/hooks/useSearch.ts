@@ -55,7 +55,7 @@ function useSearchQuery(
   const filterOnly = !!(opts?.from || opts?.in);
   return useQuery({
     queryKey: queryKeys.search(index, trimmed, limit, opts ?? {}, nonce ?? 0),
-    queryFn: () => apiFetch<SearchResult>(buildURL(index, trimmed, limit, opts)),
+    queryFn: async () => (await apiFetch<SearchResult>(buildURL(index, trimmed, limit, opts))) ?? null,
     enabled: enabled && (trimmed.length >= MIN_QUERY_CHARS || filterOnly),
     placeholderData: keepPreviousData,
     staleTime: 30_000,

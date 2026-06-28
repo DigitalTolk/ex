@@ -170,6 +170,33 @@ describe('useWebSocket', () => {
     expect(onMessageNew).toHaveBeenCalledTimes(514);
   });
 
+  it('does not commit dedup/cursor when a handler throws, so a durable event survives for replay', () => {
+    const debugSpy = vi.spyOn(console, 'debug').mockImplementation(() => {});
+    // First delivery throws; the second (re-delivery of the same id) succeeds.
+    const onMessageNew = vi.fn().mockImplementationOnce(() => {
+      throw new Error('cache patch boom');
+    });
+    renderHook(() => useWebSocket({ onMessageNew, enabled: true }));
+
+    const ws = MockWebSocket.instances[0];
+    ws.simulateOpen();
+    const frame = JSON.stringify({
+      type: 'message.new',
+      id: 'evt-throw',
+      data: JSON.stringify({ id: 'x', body: 'hi' }),
+    });
+
+    // Handler throws → the event must NOT be recorded as seen.
+    ws.simulateMessage(frame);
+    expect(onMessageNew).toHaveBeenCalledTimes(1);
+
+    // Re-delivering the SAME id is treated as new (not swallowed by dedup), so
+    // the durable event is delivered rather than lost.
+    ws.simulateMessage(frame);
+    expect(onMessageNew).toHaveBeenCalledTimes(2);
+    debugSpy.mockRestore();
+  });
+
   it('handles data as object (not double-encoded string)', () => {
     const onMessageNew = vi.fn();
     renderHook(() =>
