@@ -104,13 +104,23 @@ describe('ChannelRow browser behaviour', () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
-  it('shows the unread DOT fallback when hasUnread but no live count is known', async () => {
+  it('floors the unread badge to 1 when hasUnread but no live count is known', async () => {
     const screen = await render(
       <MemoryRouter>
         <ChannelRow channel={baseChannel} hasUnread unreadCount={0} onClose={() => {}} />
       </MemoryRouter>,
     );
-    // No numeric badge — the dot fallback renders instead.
+    // Any unread non-muted channel shows a NUMBER box (floored to 1) — no dot.
+    await expect.element(screen.getByTestId('channel-unread-badge-ch-1')).toHaveTextContent('1');
+    expect(document.querySelector('[data-testid="channel-unread-dot-ch-1"]')).toBeNull();
+  });
+
+  it('shows a subtle dot (not a badge) for a muted channel with unread', async () => {
+    const screen = await render(
+      <MemoryRouter>
+        <ChannelRow channel={{ ...baseChannel, muted: true }} hasUnread unreadCount={5} onClose={() => {}} />
+      </MemoryRouter>,
+    );
     await expect.element(screen.getByTestId('channel-unread-dot-ch-1')).toBeVisible();
     expect(document.querySelector('[data-testid="channel-unread-badge-ch-1"]')).toBeNull();
   });

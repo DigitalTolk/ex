@@ -9,12 +9,16 @@ function TestConsumer() {
     unreadConversations,
     unreadThreadNotifications,
     hiddenConversations,
+    channelUnreadCounts,
+    conversationUnreadCounts,
+    syncServerCounts,
     markChannelUnread,
     markChannelNotificationUnread,
     markConversationUnread,
     markThreadNotificationUnread,
     clearChannelUnread,
     clearConversationUnread,
+    resetSessionUnread,
     hideConversation,
     unhideConversation,
     setActiveChannel,
@@ -30,6 +34,8 @@ function TestConsumer() {
       <span data-testid="conversations">{JSON.stringify([...unreadConversations])}</span>
       <span data-testid="thread-notifications">{JSON.stringify([...unreadThreadNotifications])}</span>
       <span data-testid="hidden">{JSON.stringify([...hiddenConversations])}</span>
+      <span data-testid="channel-counts">{JSON.stringify([...channelUnreadCounts])}</span>
+      <span data-testid="conv-counts">{JSON.stringify([...conversationUnreadCounts])}</span>
       <span data-testid="is-active-ch">{String(isActiveChannel('ch-1'))}</span>
       <span data-testid="is-active-conv">{String(isActiveConversation('conv-1'))}</span>
       <button onClick={() => markChannelUnread('ch-1')}>markChannel</button>
@@ -38,6 +44,9 @@ function TestConsumer() {
       <button onClick={() => markConversationUnread('conv-1')}>markConvo</button>
       <button onClick={() => markThreadNotificationUnread('root-1')}>markThreadNotification</button>
       <button onClick={() => clearConversationUnread('conv-1')}>clearConvo</button>
+      <button onClick={() => resetSessionUnread()}>resetSession</button>
+      <button onClick={() => syncServerCounts(new Map([['ch-1', 3], ['ch-2', 0]]), new Map([['conv-1', 2]]))}>syncSeed</button>
+      <button onClick={() => syncServerCounts(new Map([['ch-1', 3]]), new Map([['conv-1', 1]]))}>syncOne</button>
       <button onClick={() => hideConversation('conv-1')}>hideConvo</button>
       <button onClick={() => unhideConversation('conv-1')}>unhideConvo</button>
       <button onClick={() => setActiveChannel('ch-1')}>activateCh</button>
@@ -208,6 +217,63 @@ describe('UnreadContext', () => {
     act(() => screen.getByText('activateCh').click());
     expect(screen.getByTestId('channels')).toHaveTextContent('[]');
     expect(screen.getByTestId('channel-notifications')).toHaveTextContent('[]');
+  });
+
+  it('syncServerCounts seeds absolute unread counts and drops zero/missing entries', () => {
+    render(
+      <UnreadProvider>
+        <TestConsumer />
+      </UnreadProvider>,
+    );
+    act(() => screen.getByText('syncSeed').click());
+    // ch-2 had a server count of 0 → dropped; ch-1 and conv-1 are seeded.
+    expect(screen.getByTestId('channel-counts')).toHaveTextContent('[["ch-1",3]]');
+    expect(screen.getByTestId('conv-counts')).toHaveTextContent('[["conv-1",2]]');
+  });
+
+  it('a single live DM message reads as 1, never doubled against the server base', () => {
+    // Regression for the "DM counter always shows 2" bug: the count map is the
+    // SINGLE source. A read DM (server 0) that gets one live message is 1, and
+    // a follow-up server sync (now 1) keeps it at 1 — never 1 + 1.
+    render(
+      <UnreadProvider>
+        <TestConsumer />
+      </UnreadProvider>,
+    );
+    act(() => screen.getByText('markConvo').click());
+    expect(screen.getByTestId('conv-counts')).toHaveTextContent('[["conv-1",1]]');
+    act(() => screen.getByText('syncOne').click()); // server now reports 1
+    expect(screen.getByTestId('conv-counts')).toHaveTextContent('[["conv-1",1]]');
+  });
+
+  it('syncServerCounts never resurrects the channel/conversation being viewed', () => {
+    render(
+      <UnreadProvider>
+        <TestConsumer />
+      </UnreadProvider>,
+    );
+    act(() => screen.getByText('activateConv').click());
+    act(() => screen.getByText('activateCh').click());
+    // Server still reports unread for both active targets — they must be skipped
+    // so the open channel/DM isn't lit up while you're looking at it.
+    act(() => screen.getByText('syncSeed').click());
+    expect(screen.getByTestId('channel-counts')).toHaveTextContent('[]');
+    expect(screen.getByTestId('conv-counts')).toHaveTextContent('[]');
+  });
+
+  it('resetSessionUnread clears the live unread sets and counts', () => {
+    render(
+      <UnreadProvider>
+        <TestConsumer />
+      </UnreadProvider>,
+    );
+    act(() => screen.getByText('markChannel').click());
+    act(() => screen.getByText('markConvo').click());
+    expect(screen.getByTestId('channel-counts')).toHaveTextContent('[["ch-1",1]]');
+    act(() => screen.getByText('resetSession').click());
+    expect(screen.getByTestId('channels')).toHaveTextContent('[]');
+    expect(screen.getByTestId('channel-counts')).toHaveTextContent('[]');
+    expect(screen.getByTestId('conv-counts')).toHaveTextContent('[]');
   });
 
   it('setActiveConversation suppresses markConversationUnread for that id', () => {

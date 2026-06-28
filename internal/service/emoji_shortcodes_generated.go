@@ -1551,7 +1551,7 @@ var emojiShortcodeToUnicode = map[string]string{
 	"name_badge":                       "📛",
 	"jp_symbol_beginner":               "🔰",
 	"hollow_red_circle":                "⭕",
-	"check_mark_btn":                   "✅",
+	"white_check_mark":                 "✅",
 	"check_box_check":                  "☑️",
 	"check_mark":                       "✔️",
 	"cross_mark":                       "❌",

@@ -246,10 +246,12 @@ describe('ConversationRow', () => {
     expect(screen.queryByTestId('conversation-unread-badge-c-1')).toBeNull();
   });
 
-  it('falls back to a dot when unread but no live count is known', () => {
+  it('floors the badge to 1 when unread but no live count is known', () => {
+    // A DM is never muted, so any unread DM shows a NUMBER box (floored to 1),
+    // never a bare dot.
     renderRow(sampleConv, { hasUnread: true, unreadCount: 0 });
-    expect(screen.getByTestId('conversation-unread-dot-c-1')).toBeInTheDocument();
-    expect(screen.queryByTestId('conversation-unread-badge-c-1')).toBeNull();
+    expect(screen.getByTestId('conversation-unread-badge-c-1')).toHaveTextContent('1');
+    expect(screen.queryByTestId('conversation-unread-dot-c-1')).toBeNull();
   });
 
   it('shows a numeric count badge when a live count is known (capped at 99+)', () => {

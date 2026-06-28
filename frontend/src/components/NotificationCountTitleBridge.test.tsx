@@ -5,18 +5,18 @@ import { setDocumentNotificationCount } from '@/lib/document-title';
 import { resetSeenCache, type ThreadSummary } from '@/hooks/useThreads';
 import { NotificationCountTitleBridge } from './NotificationCountTitleBridge';
 
+// The title bridge sums the authoritative per-target unread MESSAGE counts
+// (the same maps the sidebar badges read, seeded from the server seq count by
+// UnreadServerCountSync) plus the unread-thread count — so multiple messages in
+// one parent climb the tab title instead of being collapsed to a single "(1)".
 const mockState = vi.hoisted(() => ({
   isAuthenticated: true,
-  unreadChannels: new Set<string>(),
-  unreadChannelNotifications: new Set<string>(),
-  unreadConversations: new Set<string>(),
+  channelUnreadCounts: new Map<string, number>(),
+  conversationUnreadCounts: new Map<string, number>(),
   unreadThreadNotifications: new Set<string>(),
-  conversations: [] as { conversationID: string; displayName: string; type: 'dm' | 'group'; unread?: boolean }[],
   threads: [] as ThreadSummary[],
-  channelNotifications: [] as string[],
   threadNotifications: [] as string[],
   threadSeen: {} as Record<string, string>,
-  useUserConversations: vi.fn(),
 }));
 
 vi.mock('@/context/AuthContext', () => ({
@@ -25,9 +25,8 @@ vi.mock('@/context/AuthContext', () => ({
 
 vi.mock('@/context/UnreadContext', () => ({
   useUnread: () => ({
-    unreadChannels: mockState.unreadChannels,
-    unreadChannelNotifications: mockState.unreadChannelNotifications,
-    unreadConversations: mockState.unreadConversations,
+    channelUnreadCounts: mockState.channelUnreadCounts,
+    conversationUnreadCounts: mockState.conversationUnreadCounts,
     unreadThreadNotifications: mockState.unreadThreadNotifications,
   }),
 }));
@@ -43,19 +42,11 @@ vi.mock('@/hooks/useThreads', async () => {
 vi.mock('@/hooks/useUserState', () => ({
   useUserState: () => ({
     data: {
-      channelNotifications: mockState.channelNotifications,
       threadNotifications: mockState.threadNotifications,
       threadSeen: { ...mockState.threadSeen, ...JSON.parse(localStorage.getItem('ex.threads.seen.v1') ?? '{}') },
       hiddenConversations: [],
     },
   }),
-}));
-
-vi.mock('@/hooks/useConversations', () => ({
-  useUserConversations: (options?: { enabled?: boolean }) => {
-    mockState.useUserConversations(options);
-    return { data: mockState.conversations };
-  },
 }));
 
 function TitleConsumer() {
@@ -72,16 +63,12 @@ describe('NotificationCountTitleBridge', () => {
     });
     document.title = 'ex';
     mockState.isAuthenticated = true;
-    mockState.unreadChannels = new Set();
-    mockState.unreadChannelNotifications = new Set();
-    mockState.unreadConversations = new Set();
+    mockState.channelUnreadCounts = new Map();
+    mockState.conversationUnreadCounts = new Map();
     mockState.unreadThreadNotifications = new Set();
-    mockState.conversations = [];
     mockState.threads = [];
-    mockState.channelNotifications = [];
     mockState.threadNotifications = [];
     mockState.threadSeen = {};
-    mockState.useUserConversations.mockClear();
   });
 
   afterEach(() => {
@@ -90,10 +77,9 @@ describe('NotificationCountTitleBridge', () => {
     });
   });
 
-  it('prefixes the document title with channel ping, DM, and thread unread totals', async () => {
-    mockState.unreadChannels = new Set(['ch-1', 'ch-2']);
-    mockState.unreadChannelNotifications = new Set(['ch-2']);
-    mockState.unreadConversations = new Set(['conv-1']);
+  it('sums channel + DM message counts and the thread count into the title', async () => {
+    mockState.channelUnreadCounts = new Map([['ch-1', 2], ['ch-2', 1]]);
+    mockState.conversationUnreadCounts = new Map([['conv-1', 3]]);
     mockState.threads = [
       makeThread({ threadRootID: 'root-unread', latestActivityAt: '2026-05-04T08:00:00.000Z' }),
       makeThread({ threadRootID: 'root-seen', latestActivityAt: '2026-05-04T08:00:00.000Z' }),
@@ -113,22 +99,30 @@ describe('NotificationCountTitleBridge', () => {
       </>,
     );
 
+    // 2 + 1 (channels) + 3 (DM) + 1 (unread thread) = 7
     await waitFor(() => {
-      expect(document.title).toBe('(3) Threads · ex');
+      expect(document.title).toBe('(7) Threads · ex');
     });
   });
 
-  it('does not count ordinary unread channel messages', async () => {
-    mockState.unreadChannels = new Set(['ch-1']);
-
-    render(
+  it('climbs as more messages arrive in a single channel (was stuck at 1)', async () => {
+    mockState.channelUnreadCounts = new Map([['ch-1', 1]]);
+    const { rerender } = render(
       <>
         <NotificationCountTitleBridge />
         <TitleConsumer />
       </>,
     );
+    await waitFor(() => expect(document.title).toBe('(1) Threads · ex'));
 
-    await waitFor(() => expect(document.title).toBe('Threads · ex'));
+    mockState.channelUnreadCounts = new Map([['ch-1', 4]]);
+    rerender(
+      <>
+        <NotificationCountTitleBridge />
+        <TitleConsumer />
+      </>,
+    );
+    await waitFor(() => expect(document.title).toBe('(4) Threads · ex'));
   });
 
   it('drops thread unread count when a thread is marked seen', async () => {
@@ -155,7 +149,7 @@ describe('NotificationCountTitleBridge', () => {
     await waitFor(() => expect(document.title).toBe('Threads · ex'));
   });
 
-  it('does not count existing unbaselined threads as unread DMs arrive and clear', async () => {
+  it('reflects a DM unread count appearing and clearing', async () => {
     mockState.threads = [
       makeThread({ threadRootID: 'existing-thread', latestActivityAt: '2026-05-04T08:00:00.000Z' }),
     ];
@@ -168,7 +162,7 @@ describe('NotificationCountTitleBridge', () => {
     );
     await waitFor(() => expect(document.title).toBe('Threads · ex'));
 
-    mockState.unreadConversations = new Set(['conv-1']);
+    mockState.conversationUnreadCounts = new Map([['conv-1', 1]]);
     rerender(
       <>
         <NotificationCountTitleBridge />
@@ -177,7 +171,7 @@ describe('NotificationCountTitleBridge', () => {
     );
     await waitFor(() => expect(document.title).toBe('(1) Threads · ex'));
 
-    mockState.unreadConversations = new Set();
+    mockState.conversationUnreadCounts = new Map();
     rerender(
       <>
         <NotificationCountTitleBridge />
@@ -187,11 +181,8 @@ describe('NotificationCountTitleBridge', () => {
     await waitFor(() => expect(document.title).toBe('Threads · ex'));
   });
 
-  it('counts unread conversations refetched from the server after reconnect', async () => {
-    mockState.conversations = [
-      { conversationID: 'conv-1', type: 'dm', displayName: 'Ada Lovelace', unread: true },
-      { conversationID: 'conv-2', type: 'group', displayName: 'Project Group', unread: false },
-    ];
+  it('counts a server-seeded unread conversation', async () => {
+    mockState.conversationUnreadCounts = new Map([['conv-1', 1]]);
 
     render(
       <>
@@ -203,11 +194,10 @@ describe('NotificationCountTitleBridge', () => {
     await waitFor(() => expect(document.title).toBe('(1) Threads · ex'));
   });
 
-  it('does not double-count the same conversation from live and refetched unread state', async () => {
-    mockState.unreadConversations = new Set(['conv-1']);
-    mockState.conversations = [
-      { conversationID: 'conv-1', type: 'dm', displayName: 'Ada Lovelace', unread: true },
-    ];
+  it('counts a DM as exactly its single source count (no double-count)', async () => {
+    // The count map is the single source — there is no separate live set to
+    // sum against, so one unread DM message is exactly "(1)", never "(2)".
+    mockState.conversationUnreadCounts = new Map([['conv-1', 1]]);
 
     render(
       <>
@@ -220,7 +210,7 @@ describe('NotificationCountTitleBridge', () => {
   });
 
   it('counts thread notifications in addition to the unread DM parent', async () => {
-    mockState.unreadConversations = new Set(['conv-1']);
+    mockState.conversationUnreadCounts = new Map([['conv-1', 1]]);
     mockState.unreadThreadNotifications = new Set(['root-in-dm']);
     mockState.threads = [
       makeThread({
@@ -297,9 +287,8 @@ describe('NotificationCountTitleBridge', () => {
 
   it('does not count unread notifications while signed out', async () => {
     mockState.isAuthenticated = false;
-    mockState.unreadChannels = new Set(['ch-1']);
-    mockState.unreadChannelNotifications = new Set(['ch-1']);
-    mockState.unreadConversations = new Set(['conv-1']);
+    mockState.channelUnreadCounts = new Map([['ch-1', 2]]);
+    mockState.conversationUnreadCounts = new Map([['conv-1', 1]]);
     mockState.unreadThreadNotifications = new Set(['root-unread']);
     mockState.threads = [
       makeThread({ threadRootID: 'root-unread', latestActivityAt: '2026-05-04T08:00:00.000Z' }),
@@ -312,20 +301,6 @@ describe('NotificationCountTitleBridge', () => {
       </>,
     );
 
-    await waitFor(() => expect(document.title).toBe('Threads · ex'));
-  });
-
-  it('does not request conversations before auth restore has completed', async () => {
-    mockState.isAuthenticated = false;
-
-    render(
-      <>
-        <NotificationCountTitleBridge />
-        <TitleConsumer />
-      </>,
-    );
-
-    expect(mockState.useUserConversations).toHaveBeenCalledWith({ enabled: false });
     await waitFor(() => expect(document.title).toBe('Threads · ex'));
   });
 });

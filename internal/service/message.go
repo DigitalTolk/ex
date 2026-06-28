@@ -347,7 +347,14 @@ func (s *MessageService) Send(ctx context.Context, userID, parentID, parentType,
 		}
 	}
 
-	if parentType == ParentConversation {
+	// Conversation activity: only a top-level message counts as new
+	// conversation activity. A thread-only reply must NOT bump the unread
+	// counter, re-touch/re-order the conversation, or fan out
+	// userchannel.updated — otherwise the DM lights up as if a fresh top-level
+	// message arrived. Thread replies still reach participants via message.new
+	// (conversation topic) and notification.new (thread participants). This
+	// mirrors the channel rule below and the frontend gate in onMessageNew.
+	if parentType == ParentConversation && parentMessageID == "" {
 		if conv, err := s.conversations.GetConversation(ctx, parentID); err == nil && conv != nil {
 			// Unread is tracked with the same per-parent seq counter channels use
 			// — one increment + the author's last-read, instead of a Redis write
@@ -368,7 +375,7 @@ func (s *MessageService) Send(ctx context.Context, userID, parentID, parentType,
 			}
 			// Activate the conversation on first top-level message so non-creator
 			// participants see it appear in their sidebars only after activity exists.
-			if parentMessageID == "" && s.activator != nil {
+			if s.activator != nil {
 				if err := s.activator.Activate(ctx, parentID); err != nil {
 					slog.Warn("conversation activate failed", "convID", parentID, "error", err)
 				}
@@ -378,8 +385,8 @@ func (s *MessageService) Send(ctx context.Context, userID, parentID, parentType,
 
 	// Channel unread: only a top-level human message bumps the channel's
 	// unread counter (thread replies surface via thread notifications; system
-	// join/leave events aren't "new activity"). Mirrors the frontend rule in
-	// onMessageNew so the live and persisted counts agree.
+	// join/leave events aren't "new activity"). Mirrors the conversation rule
+	// above and the frontend rule in onMessageNew so live and persisted counts agree.
 	if parentType == ParentChannel && parentMessageID == "" && !msg.System {
 		s.bumpUnreadSeq(ctx, s.channelSeq, parentID, userID)
 	}

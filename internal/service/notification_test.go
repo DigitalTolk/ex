@@ -248,6 +248,26 @@ func withShortAckDelay(t *testing.T) {
 	t.Cleanup(func() { ackFallbackDelay = orig })
 }
 
+// TestAckFallbackDelayInvariants guards the timing contract that keeps the
+// ack-gated mobile fallback from double-notifying an online desktop user. The
+// deferred push must not fire before a healthy socket has had a full WS
+// keep-alive cycle to prove liveness and surface+ack the alert, and the ack
+// marker must still be alive in Redis when the timer reads it.
+//
+// Source constants (kept in sync by comment, since they live in sibling
+// packages): handler.wsKeepAliveInterval = 15s, handler.wsPongTimeout = 10s,
+// cache.notifAckTTL = 60s.
+func TestAckFallbackDelayInvariants(t *testing.T) {
+	const keepAliveCycle = 15*time.Second + 10*time.Second // wsKeepAliveInterval + wsPongTimeout
+	const ackMarkerTTL = 60 * time.Second                  // cache.notifAckTTL
+	if ackFallbackDelay < keepAliveCycle {
+		t.Errorf("ackFallbackDelay = %v, must be >= one keep-alive cycle (%v) so a healthy socket can ack before the push fires", ackFallbackDelay, keepAliveCycle)
+	}
+	if ackFallbackDelay >= ackMarkerTTL {
+		t.Errorf("ackFallbackDelay = %v, must be < notifAckTTL (%v) so a recorded ack is still visible when the deferred push reads it", ackFallbackDelay, ackMarkerTTL)
+	}
+}
+
 func dmNotifier(t *testing.T) (*NotificationService, *signalPush) {
 	t.Helper()
 	svc, _, _, conv, _, users := setupNotifier(t)

@@ -253,7 +253,12 @@ func TestMessageService_CanAccessMessageAttachment(t *testing.T) {
 	}
 }
 
-func TestMessageService_Send_ConversationThreadReplyTouchesActivity(t *testing.T) {
+// A thread-only reply in a conversation must NOT count as new conversation
+// activity: it must not re-touch/re-order the conversation or fan out
+// userchannel.updated. Otherwise the DM lights up and jumps to the top of the
+// sidebar as if a fresh top-level message arrived. This mirrors the channel
+// rule (a thread reply doesn't bump the channel unread counter either).
+func TestMessageService_Send_ConversationThreadReplyDoesNotTouchActivity(t *testing.T) {
 	svc, messages, _, conversations, publisher := setupMessageService()
 	ctx := context.Background()
 	old := time.Date(2026, 5, 1, 10, 0, 0, 0, time.UTC)
@@ -288,12 +293,12 @@ func TestMessageService_Send_ConversationThreadReplyTouchesActivity(t *testing.T
 	if reply.ParentMessageID != "root-msg" {
 		t.Errorf("ParentMessageID = %q, want root-msg", reply.ParentMessageID)
 	}
-	if !conversations.conversations["conv-thread"].UpdatedAt.After(old) {
-		t.Errorf("conversation UpdatedAt = %v, want after %v", conversations.conversations["conv-thread"].UpdatedAt, old)
+	if !conversations.conversations["conv-thread"].UpdatedAt.Equal(old) {
+		t.Errorf("conversation UpdatedAt = %v, want unchanged %v (thread reply must not re-touch)", conversations.conversations["conv-thread"].UpdatedAt, old)
 	}
 	for userID, userConvs := range conversations.userConvs {
-		if len(userConvs) != 1 || !userConvs[0].UpdatedAt.After(old) {
-			t.Errorf("%s user conversation UpdatedAt = %+v, want after %v", userID, userConvs, old)
+		if len(userConvs) != 1 || !userConvs[0].UpdatedAt.Equal(old) {
+			t.Errorf("%s user conversation UpdatedAt = %+v, want unchanged %v", userID, userConvs, old)
 		}
 	}
 	var sidebarEvents int
@@ -302,8 +307,8 @@ func TestMessageService_Send_ConversationThreadReplyTouchesActivity(t *testing.T
 			sidebarEvents++
 		}
 	}
-	if sidebarEvents != 2 {
-		t.Fatalf("userchannel.updated events = %d, want 2 participant sidebar refreshes", sidebarEvents)
+	if sidebarEvents != 0 {
+		t.Fatalf("userchannel.updated events = %d, want 0 (a thread reply is not new conversation activity)", sidebarEvents)
 	}
 }
 

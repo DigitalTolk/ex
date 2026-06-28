@@ -9,14 +9,19 @@ interface UnreadState {
   unreadConversations: Set<string>;
   unreadThreadNotifications: Set<string>;
   hiddenConversations: Set<string>;
-  // Live per-target unread message counts, accumulated from WebSocket
-  // message.new events received while the channel/conversation isn't
-  // active. Reset to 0 (entry removed) when the target is opened or its
-  // unread is cleared. Session-only — a cold load knows unread as a
-  // boolean (server-persisted) but not a count, so a target absent from
-  // these maps is rendered with the unread dot rather than a number.
+  // Authoritative per-target unread message counts — the SINGLE source the
+  // sidebar/title read (never summed with anything else, which was the old
+  // double-count bug). Seeded from the server seq count
+  // (channel.MessageSeq - LastReadSeq) by syncServerCounts whenever the
+  // userChannels/userConversations lists land, then bumped live by
+  // markChannelUnread/markConversationUnread for immediacy and re-confirmed by
+  // the next sync (server is always >= the live value, so a sync never loses a
+  // live bump and never double-counts one already folded into the server base).
+  // A target absent from the map has no known unread count; the row falls back
+  // to the server boolean and floors the badge to 1.
   channelUnreadCounts: Map<string, number>;
   conversationUnreadCounts: Map<string, number>;
+  syncServerCounts: (channelCounts: Map<string, number>, conversationCounts: Map<string, number>) => void;
   markChannelUnread: (channelId: string) => void;
   markChannelNotificationUnread: (channelId: string) => void;
   markConversationUnread: (conversationId: string) => void;
@@ -60,6 +65,27 @@ function loadHiddenConversations(): Set<string> {
   return new Set(readJSON<string[]>(HIDDEN_KEY, []));
 }
 
+// reconcileCounts rebuilds an absolute unread-count map from the authoritative
+// server values: it keeps only positive counts, drops the active target (so the
+// channel/DM you're currently viewing is never resurrected as unread by a stale
+// refetch), and returns the previous map unchanged when nothing differs so
+// consumers don't re-render needlessly.
+function reconcileCounts(
+  prev: Map<string, number>,
+  server: Map<string, number>,
+  activeID: string | null,
+): Map<string, number> {
+  const next = new Map<string, number>();
+  for (const [id, count] of server) {
+    if (id === activeID || count <= 0) continue;
+    next.set(id, count);
+  }
+  if (prev.size === next.size && [...next].every(([id, count]) => prev.get(id) === count)) {
+    return prev;
+  }
+  return next;
+}
+
 function persistHiddenConversations(set: Set<string>) {
   writeJSON(HIDDEN_KEY, [...set]);
 }
@@ -78,6 +104,10 @@ export function UnreadProvider({ children }: { children: ReactNode }) {
   const activeConvRef = useRef<string | null>(null);
   const activeThreadRef = useRef<string | null>(null);
 
+  const syncServerCounts = useCallback((channelCounts: Map<string, number>, conversationCounts: Map<string, number>) => {
+    setChannelUnreadCounts(prev => reconcileCounts(prev, channelCounts, activeChannelRef.current));
+    setConversationUnreadCounts(prev => reconcileCounts(prev, conversationCounts, activeConvRef.current));
+  }, []);
   const markChannelUnread = useCallback((id: string) => {
     if (activeChannelRef.current === id) return;
     setUnreadChannels(prev => new Set(prev).add(id));
@@ -206,6 +236,7 @@ export function UnreadProvider({ children }: { children: ReactNode }) {
       hiddenConversations,
       channelUnreadCounts,
       conversationUnreadCounts,
+      syncServerCounts,
       markChannelUnread,
       markChannelNotificationUnread,
       markConversationUnread,
@@ -230,6 +261,7 @@ export function UnreadProvider({ children }: { children: ReactNode }) {
       hiddenConversations,
       channelUnreadCounts,
       conversationUnreadCounts,
+      syncServerCounts,
       markChannelUnread,
       markChannelNotificationUnread,
       markConversationUnread,

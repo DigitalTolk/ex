@@ -24,11 +24,14 @@ const presenceKeyPrefix = "presence:online:"
 // WebSocket; the backend records the ack here so the deferred mobile-push
 // fallback can tell "the desktop actually delivered this" from "presence merely
 // claimed the user was online". The TTL only needs to outlive the deferred-push
-// window (a handful of seconds) plus slack — 30s is generous. Cross-instance by
-// construction (Redis), so the ack and the deferred push can land on different
-// backend instances. See CLAUDE.md (Notifications).
+// window plus slack, so it MUST stay above service.ackFallbackDelay (30s) —
+// otherwise a recorded ack could expire before the deferred-push timer reads it
+// and the push would fire despite a healthy desktop. 60s clears the 30s delay
+// with margin. Cross-instance by construction (Redis), so the ack and the
+// deferred push can land on different backend instances. See CLAUDE.md
+// (Notifications).
 const notifAckKeyPrefix = "notifack:"
-const notifAckTTL = 30 * time.Second
+const notifAckTTL = 60 * time.Second
 
 // presenceTTL is the backstop expiry for a user's "online" marker. The WS
 // keep-alive refreshes it every wsKeepAliveInterval (15s), so it must stay

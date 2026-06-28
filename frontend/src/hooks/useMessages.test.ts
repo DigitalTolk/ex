@@ -625,6 +625,36 @@ describe('resyncMessageCache (WS reconnect catch-up)', () => {
     expect(out?.pages[0].items[0]).toMatchObject({ id: 'm-1', body: '', deleted: true });
   });
 
+  it('reaction/pin/edit on a thread message also patches the thread cache (so /threads updates instantly)', async () => {
+    const qc = new QueryClient();
+    const wrap = ({ children }: { children: ReactNode }) =>
+      createElement(QueryClientProvider, { client: qc }, children);
+    // The Threads view reads from ['thread', 'channels/ch-1', 'root-1'].
+    qc.setQueryData(['thread', 'channels/ch-1', 'root-1'], [
+      makeMsg({ id: 'root-1', body: 'root' }),
+      makeMsg({ id: 'reply-1', body: 'reply', parentID: 'ch-1' } as Partial<Message>),
+    ]);
+
+    // React on a thread REPLY — rootID comes from parentMessageID.
+    vi.mocked(apiFetch).mockResolvedValueOnce(
+      makeMsg({ id: 'reply-1', body: 'reply', reactions: { '🎉': ['u-1'] } } as Partial<Message>),
+    );
+    const react = renderHook(() => useToggleReaction(), { wrapper: wrap });
+    react.result.current.mutate({ channelId: 'ch-1', messageId: 'reply-1', parentMessageID: 'root-1', emoji: '🎉' });
+    await waitFor(() => expect(react.result.current.isSuccess).toBe(true));
+
+    const thread = qc.getQueryData<Message[]>(['thread', 'channels/ch-1', 'root-1']);
+    expect(thread?.find((m) => m.id === 'reply-1')?.reactions).toEqual({ '🎉': ['u-1'] });
+
+    // Edit on the thread ROOT — rootID is the message itself (no parentMessageID).
+    vi.mocked(apiFetch).mockResolvedValueOnce(makeMsg({ id: 'root-1', body: 'root edited' }));
+    const edit = renderHook(() => useEditMessage(), { wrapper: wrap });
+    edit.result.current.mutate({ channelId: 'ch-1', messageId: 'root-1', body: 'root edited' });
+    await waitFor(() => expect(edit.result.current.isSuccess).toBe(true));
+    const afterEdit = qc.getQueryData<Message[]>(['thread', 'channels/ch-1', 'root-1']);
+    expect(afterEdit?.find((m) => m.id === 'root-1')?.body).toBe('root edited');
+  });
+
   it('catches up conversations the same way as channels', async () => {
     const qc = new QueryClient();
     qc.setQueryData(['conversationMessages', 'dm-1', null], {

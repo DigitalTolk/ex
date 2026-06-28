@@ -8,6 +8,7 @@ import {
   markMessageDeletedInCache,
   removeMessageFromCache,
   invalidateThreadBothScopes,
+  patchMessageInThreadCache,
   resyncMessageCache,
   useSendMessage,
   useEditMessage,
@@ -127,6 +128,22 @@ describe('useMessages — cache patch helpers', () => {
     const spy = vi.spyOn(qc, 'invalidateQueries');
     invalidateThreadBothScopes(qc, 'ch-1', 't-1');
     expect(spy.mock.calls.length).toBe(2);
+  });
+
+  it('patchMessageInThreadCache replaces the message in a populated thread cache (and no-ops when empty)', () => {
+    const qc = new QueryClient();
+    // Populated channel-scope thread cache → the message is replaced in place.
+    qc.setQueryData(queryKeys.thread('channels/ch-1', 'root-1'), [
+      msg({ id: 'root-1' }),
+      msg({ id: 'reply-1', body: 'before' }),
+    ]);
+    patchMessageInThreadCache(qc, 'ch-1', 'root-1', msg({ id: 'reply-1', body: 'after', reactions: { ':tada:': ['u-2'] } }));
+    const thread = qc.getQueryData<Message[]>(queryKeys.thread('channels/ch-1', 'root-1'));
+    expect(thread?.find((m) => m.id === 'reply-1')?.body).toBe('after');
+    expect(thread?.find((m) => m.id === 'reply-1')?.reactions).toEqual({ ':tada:': ['u-2'] });
+    // The conversation-scope key was never populated → the updater hits the
+    // undefined branch and leaves it untouched.
+    expect(qc.getQueryData(queryKeys.thread('conversations/ch-1', 'root-1'))).toBeUndefined();
   });
 });
 

@@ -90,11 +90,26 @@ type NotificationAckStore interface {
 }
 
 // ackFallbackDelay is how long the deferred mobile push waits for the desktop
-// client to ack before giving up and pushing. Long enough to cover a healthy
-// round-trip (publish → client receives → acks) plus slack, short enough that an
-// incident alert that the desktop dropped still reaches mobile quickly. A var so
-// tests can shrink it. Must stay below the ack marker TTL (cache.notifAckTTL).
-var ackFallbackDelay = 8 * time.Second
+// client to ack before giving up and pushing. A var so tests can shrink it.
+//
+// INVARIANT (asserted by TestAckFallbackDelayInvariants): the delay must be at
+// least one full WS keep-alive cycle —
+//
+//	ackFallbackDelay >= wsKeepAliveInterval (15s) + wsPongTimeout (10s)
+//
+// so a HEALTHY socket has time to prove liveness (and surface + ack the alert)
+// before the push fires, and a DEAD socket is detected by the keep-alive within
+// the same window — otherwise the deferred push races the very presence signal
+// it depends on and double-notifies an online desktop user. It must also stay
+// below the ack-marker TTL so a recorded ack is still visible when the timer
+// fires —
+//
+//	ackFallbackDelay < cache.notifAckTTL (60s)
+//
+// At 8s (the previous value) the push fired before a live desktop — under
+// fan-out latency — could round-trip its ack, so every online user got a
+// redundant mobile push. 30s covers the keep-alive cycle plus surfacing slack.
+var ackFallbackDelay = 30 * time.Second
 
 // NotificationService dispatches notifications to interested users while
 // honoring per-user mute preferences. It is intentionally tiny and parallel

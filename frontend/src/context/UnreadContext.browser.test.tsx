@@ -276,6 +276,31 @@ describe('UnreadContext (browser)', () => {
     expect(getState().unreadThreadNotifications.has('thr-unknown')).toBe(false);
   });
 
+  it('syncServerCounts seeds absolute counts, drops zeros, and skips the active target', async () => {
+    const getState = await mountUnread();
+    getState().setActiveConversation('conv-active');
+    getState().syncServerCounts(
+      new Map([['ch-1', 3], ['ch-zero', 0]]),
+      new Map([['conv-1', 2], ['conv-active', 9]]),
+    );
+    await vi.waitFor(() => {
+      expect(getState().channelUnreadCounts.get('ch-1')).toBe(3);
+      expect(getState().channelUnreadCounts.has('ch-zero')).toBe(false); // count <= 0 dropped
+      expect(getState().conversationUnreadCounts.get('conv-1')).toBe(2);
+      expect(getState().conversationUnreadCounts.has('conv-active')).toBe(false); // active skipped
+    });
+  });
+
+  it('a single live DM stays 1 after a server sync (no double; equality short-circuit returns prev)', async () => {
+    const getState = await mountUnread();
+    getState().markConversationUnread('dm-1');
+    await vi.waitFor(() => expect(getState().conversationUnreadCounts.get('dm-1')).toBe(1));
+    // Server now reports the same 1 → reconcile is identical → returns prev.
+    getState().syncServerCounts(new Map(), new Map([['dm-1', 1]]));
+    await new Promise((r) => setTimeout(r, 10));
+    expect(getState().conversationUnreadCounts.get('dm-1')).toBe(1);
+  });
+
   it('clearConversationUnread on a conversation with no recorded count is a no-op for the count map', async () => {
     const getState = await mountUnread();
     // Never marked → not in the unread set nor the count map; clear short-

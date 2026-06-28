@@ -8,6 +8,7 @@ import { NotificationProvider } from '@/context/NotificationContext';
 import { TypingProvider } from '@/context/TypingContext';
 import { ThemeProvider } from '@/context/ThemeContext';
 import { NotificationCountTitleBridge } from '@/components/NotificationCountTitleBridge';
+import { UnreadServerCountSync } from '@/components/UnreadServerCountSync';
 import { InAppLinkRouter } from '@/components/InAppLinkRouter';
 import LoginPage from '@/pages/LoginPage';
 import OIDCCallbackPage from '@/pages/OIDCCallbackPage';
@@ -117,6 +118,7 @@ export default function App() {
                   <TypingProvider>
                     <TooltipProvider>
                       <ServerVersionBootstrap />
+                      <UnreadServerCountSync />
                       <NotificationCountTitleBridge />
                       <div className="flex h-dvh flex-col bg-sidebar pt-safe-top">
                         <div className="min-h-0 flex-1 bg-background">

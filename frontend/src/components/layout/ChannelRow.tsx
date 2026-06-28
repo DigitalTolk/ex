@@ -101,26 +101,26 @@ export function ChannelRow({
         <span className={`truncate ${channel.muted ? 'text-gray-500' : ''}`}>
           {channel.channelName}
         </span>
-        {/* Brand-pink unread indicator. When we have a live count
-            (messages seen via WebSocket this session) we show it as a
-            numeric badge, matching the design; otherwise — e.g. a cold
-            load where unread is only known as a boolean — we fall back
-            to a dot. Muted channels suppress both. */}
-        {hasUnread && !channel.muted && (
-          unreadCount > 0 ? (
-            <Badge
-              variant="brand"
-              className="ml-auto text-[11px]"
-              data-testid={`channel-unread-badge-${channel.channelID}`}
-            >
-              {unreadCount > 99 ? '99+' : unreadCount}
-            </Badge>
-          ) : (
+        {/* Brand-pink unread indicator. Any unread channel shows a NUMBERED
+            count box (floored to 1 — even a cold load where the exact count
+            isn't seeded yet reads as "1" rather than a bare dot, which is the
+            behaviour the design calls for). A muted channel shows only a subtle
+            dot instead, so its activity is visible without the loud count. */}
+        {hasUnread && (
+          channel.muted ? (
             <span
               aria-label="Unread"
               data-testid={`channel-unread-dot-${channel.channelID}`}
               className="ml-auto inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-brand"
             />
+          ) : (
+            <Badge
+              variant="brand"
+              className="ml-auto text-[11px]"
+              data-testid={`channel-unread-badge-${channel.channelID}`}
+            >
+              {unreadCount > 99 ? '99+' : Math.max(1, unreadCount)}
+            </Badge>
           )
         )}
         {channel.muted && (

@@ -1586,8 +1586,9 @@ export function Sidebar({ onClose }: SidebarProps) {
                                     (userState?.channelNotifications ?? []).includes(item.channel.channelID)
                                   }
                                   unreadCount={
-                                    (item.channel.unreadCount ?? 0) +
-                                    (channelUnreadCounts?.get(item.channel.channelID) ?? 0)
+                                    channelUnreadCounts?.get(item.channel.channelID) ??
+                                    item.channel.unreadCount ??
+                                    0
                                   }
                                   onClose={onClose}
                                   draggable={!isMobile}
@@ -1627,8 +1628,9 @@ export function Sidebar({ onClose }: SidebarProps) {
                                   conversation={conv}
                                   hasUnread={conv.unread || unreadConversations.has(conv.conversationID)}
                                   unreadCount={
-                                    (conv.unreadCount ?? 0) +
-                                    (conversationUnreadCounts?.get(conv.conversationID) ?? 0)
+                                    conversationUnreadCounts?.get(conv.conversationID) ??
+                                    conv.unreadCount ??
+                                    0
                                   }
                                   dmAvatarURL={resolvedDMAvatarURL}
                                   dmUserStatus={resolvedDMUserStatus}

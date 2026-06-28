@@ -17,6 +17,7 @@ import {
   invalidateThreadBothScopes,
   invalidateUnfurlsForMessage,
   markMessageDeletedInCache,
+  patchMessageInThreadCache,
   resyncMessageCache,
   updateMessageInCache,
 } from '@/hooks/useMessages';
@@ -145,16 +146,22 @@ export default function ChatPage() {
             }
           }
         } else if (isConversationParent) {
-          if (isActiveConversation(parentID)) {
-            clearConversationUnread(parentID);
-            void apiFetch<void>(`/api/v1/conversations/${encodeURIComponent(parentID)}/read`, { method: 'PUT' })
-              .catch(() => undefined)
-              .finally(() => {
-                queryClient.invalidateQueries({ queryKey: queryKeys.userConversations() });
-              });
-          } else {
-            markConversationUnread(parentID);
-            queryClient.invalidateQueries({ queryKey: queryKeys.userConversations() });
+          // Mirror the channel rule: only a top-level human message is "new
+          // conversation activity". A thread-only reply (or a system event)
+          // must NOT bump the DM's unread count — the backend no longer bumps
+          // the conversation seq for thread replies either, so the two agree.
+          if (!parentMessageID && !msg.system) {
+            if (isActiveConversation(parentID)) {
+              clearConversationUnread(parentID);
+              void apiFetch<void>(`/api/v1/conversations/${encodeURIComponent(parentID)}/read`, { method: 'PUT' })
+                .catch(() => undefined)
+                .finally(() => {
+                  queryClient.invalidateQueries({ queryKey: queryKeys.userConversations() });
+                });
+            } else {
+              markConversationUnread(parentID);
+              queryClient.invalidateQueries({ queryKey: queryKeys.userConversations() });
+            }
           }
         }
       }
@@ -187,7 +194,11 @@ export default function ChatPage() {
       if (!msg) return;
       const { parentID, parentMessageID, id } = msg;
       updateMessageInCache(queryClient, parentID, msg);
-      invalidateThreadBothScopes(queryClient, parentID, parentMessageID || id);
+      // Patch the thread cache in place instead of invalidating it, so a
+      // reaction/edit/pin echoed over WS updates the message in /threads and
+      // the ThreadPanel immediately (no refetch flicker), matching the in-place
+      // update the main message list gets above.
+      patchMessageInThreadCache(queryClient, parentID, parentMessageID || id, msg);
       // Link-preview cards pointing at this message (in other channels)
       // are now stale — refetch them so the edited body/attachments show.
       invalidateUnfurlsForMessage(queryClient, id);

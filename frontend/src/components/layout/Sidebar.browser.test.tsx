@@ -772,6 +772,7 @@ describe('Sidebar browser render — rich fixtures', () => {
     // The "sound but no badge" regression: a top-level channel notification.new
     // marks unreadChannelNotifications. The sidebar row must surface that on its
     // own — without unreadChannels (message.new) or server channelNotifications.
+    // With no known count, the badge floors to "1" (a NUMBER box, never a dot).
     mockUnread = {
       unreadChannels: new Set(),
       unreadChannelNotifications: new Set(['ch-general']),
@@ -781,7 +782,8 @@ describe('Sidebar browser render — rich fixtures', () => {
     };
     mockUserState = { hiddenConversations: [], channelNotifications: [], threadNotifications: [], threadSeen: {} };
     await render(<Frame />);
-    expect(document.querySelector('[data-testid="channel-unread-dot-ch-general"]')).toBeTruthy();
+    expect(document.querySelector('[data-testid="channel-unread-badge-ch-general"]')?.textContent).toBe('1');
+    expect(document.querySelector('[data-testid="channel-unread-dot-ch-general"]')).toBeNull();
   });
 
   it('shows the server-computed unread count on cold load (no live events)', async () => {

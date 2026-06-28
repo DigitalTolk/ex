@@ -95,6 +95,7 @@ vi.mock('@/hooks/useMessages', () => ({
   invalidateThreadBothScopes: vi.fn(),
   invalidateUnfurlsForMessage: vi.fn(),
   markMessageDeletedInCache: vi.fn(),
+  patchMessageInThreadCache: vi.fn(),
   resyncMessageCache: vi.fn().mockResolvedValue(undefined),
   updateMessageInCache: vi.fn(),
 }));
@@ -214,6 +215,27 @@ describe('ChatPage WS router — divergent-mock branch arms (browser)', () => {
       const call = mockApiFetch.mock.calls.find((c) => String(c[0]).includes('/channels/ch-99/read'));
       expect(call).toBeDefined();
     });
+  });
+
+  it('onMessageNew for a conversation THREAD reply does not mark or clear DM unread', async () => {
+    // The new conversation gate mirrors channels: a thread-only reply is not
+    // new DM activity, so neither markConversationUnread nor the active-read
+    // path runs.
+    await renderChatPage();
+    lastHandlers().onMessageNew?.(msg({
+      parentID: 'conv-1', parentType: 'conversation', parentMessageID: 'root-1', authorID: 'other-user',
+    }));
+    expect(mockMarkConversationUnread).not.toHaveBeenCalled();
+    expect(mockClearConversationUnread).not.toHaveBeenCalled();
+  });
+
+  it('onMessageNew marks a non-active conversation unread for a top-level message', async () => {
+    isActiveConversationMock.mockReturnValue(false);
+    await renderChatPage();
+    lastHandlers().onMessageNew?.(msg({
+      parentID: 'conv-1', parentType: 'conversation', authorID: 'other-user',
+    }));
+    expect(mockMarkConversationUnread).toHaveBeenCalledWith('conv-1');
   });
 
   it('onMessageNew unhides an active conversation when the author is the local user', async () => {
