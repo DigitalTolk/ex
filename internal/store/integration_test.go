@@ -178,6 +178,40 @@ func TestUserStore_CreateAndGet(t *testing.T) {
 	}
 }
 
+func TestUserStore_GetUsersByIDs(t *testing.T) {
+	db := setupDynamoDB(t)
+	s := NewUserStore(db)
+	ctx := context.Background()
+
+	for _, u := range []*model.User{
+		makeUser("bu-1", "a@test.com", "Alice"),
+		makeUser("bu-2", "b@test.com", "Bob"),
+		makeUser("bu-3", "c@test.com", "Carol"),
+	} {
+		if err := s.Create(ctx, u); err != nil {
+			t.Fatalf("Create %s: %v", u.ID, err)
+		}
+	}
+
+	got, err := s.GetUsersByIDs(ctx, []string{"bu-1", "bu-3", "bu-missing"})
+	if err != nil {
+		t.Fatalf("GetUsersByIDs: %v", err)
+	}
+	ids := map[string]bool{}
+	for _, u := range got {
+		ids[u.ID] = true
+	}
+	if !ids["bu-1"] || !ids["bu-3"] || ids["bu-missing"] || len(got) != 2 {
+		t.Fatalf("GetUsersByIDs returned %d users %v, want bu-1 + bu-3 only", len(got), ids)
+	}
+
+	// Empty input → empty result, no error.
+	empty, err := s.GetUsersByIDs(ctx, nil)
+	if err != nil || len(empty) != 0 {
+		t.Fatalf("empty GetUsersByIDs = %v, %v; want [], nil", empty, err)
+	}
+}
+
 func TestUserStore_GetByID_NotFound(t *testing.T) {
 	db := setupDynamoDB(t)
 	s := NewUserStore(db)

@@ -338,6 +338,42 @@ function VirtuosoMessageList({
     return () => cancelAnimationFrame(raf);
   }, [anchorMsgId, renderRows, currentUserId, scrollToBottom]);
 
+  // Memoize the Virtuoso Header/Footer COMPONENT identities so they only change
+  // when their inputs do — defining them inline gave a fresh function every
+  // render, which react-virtuoso treats as a new component type and unmounts +
+  // remounts the header/footer subtree on every unrelated parent re-render
+  // (e.g. a WS message landing elsewhere), flickering the loading indicators.
+  // Declared before the empty-state early return to satisfy rules-of-hooks.
+  const Header = useMemo(() => {
+    const Cmp = () => (
+      <>
+        {intro && !hasNextPage ? <div className="px-4 pt-2">{intro}</div> : null}
+        {hasNextPage ? (
+          <div
+            data-testid="message-list-load-more"
+            className="flex h-8 items-center justify-center text-xs text-muted-foreground"
+          >
+            {isFetchingNextPage ? 'Loading earlier messages…' : ''}
+          </div>
+        ) : null}
+      </>
+    );
+    return Cmp;
+  }, [intro, hasNextPage, isFetchingNextPage]);
+
+  const Footer = useMemo(() => {
+    const Cmp = () =>
+      hasPreviousPage ? (
+        <div
+          data-testid="message-list-load-newer"
+          className="flex h-8 items-center justify-center text-xs text-muted-foreground"
+        >
+          {isFetchingPreviousPage ? 'Loading newer messages…' : ''}
+        </div>
+      ) : null;
+    return Cmp;
+  }, [hasPreviousPage, isFetchingPreviousPage]);
+
   if (renderRows.length === 0) {
     // Empty state: render the intro (channels show "This is the
     // very beginning of …" right away; DMs/groups gate the intro
@@ -361,30 +397,6 @@ function VirtuosoMessageList({
   // messages below it. Without this wrapper, the intro renders
   // flush-left while messages still get their MessageRow px-4,
   // making the intro visibly shifted after the first message lands.
-  const Header = () => (
-    <>
-      {intro && !hasNextPage ? <div className="px-4 pt-2">{intro}</div> : null}
-      {hasNextPage ? (
-        <div
-          data-testid="message-list-load-more"
-          className="flex h-8 items-center justify-center text-xs text-muted-foreground"
-        >
-          {isFetchingNextPage ? 'Loading earlier messages…' : ''}
-        </div>
-      ) : null}
-    </>
-  );
-
-  const Footer = () =>
-    hasPreviousPage ? (
-      <div
-        data-testid="message-list-load-newer"
-        className="flex h-8 items-center justify-center text-xs text-muted-foreground"
-      >
-        {isFetchingPreviousPage ? 'Loading newer messages…' : ''}
-      </div>
-    ) : null;
-
   return (
     <Virtuoso
       ref={virtuosoRef}

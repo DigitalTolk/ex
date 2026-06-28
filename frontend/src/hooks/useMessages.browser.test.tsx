@@ -60,30 +60,30 @@ function withInitialPage(items: Message[], options: Partial<MessageWindow> = {})
 }
 
 describe('useMessages — cache patch helpers', () => {
-  it('appendMessageToCache prepends the new message at the head page', () => {
+  it('appendMessageToCache prepends the new message at the head page (returns true)', () => {
     const qc = new QueryClient();
     qc.setQueryData(queryKeys.channelMessages('ch-1'), withInitialPage([msg({ id: 'm-1' })]));
-    appendMessageToCache(qc, 'ch-1', msg({ id: 'm-2', body: 'second' }));
+    expect(appendMessageToCache(qc, 'ch-1', msg({ id: 'm-2', body: 'second' }))).toBe(true);
     const data = qc.getQueryData<InfiniteData<MessageWindow>>(queryKeys.channelMessages('ch-1'));
     expect(data?.pages[0].items[0].id).toBe('m-2');
     expect(data?.pages[0].newestID).toBe('m-2');
   });
 
-  it('appendMessageToCache is a no-op when hasMoreNewer is true (deep-link mode)', () => {
+  it('appendMessageToCache is a no-op returning false when hasMoreNewer (deep-link mode)', () => {
     const qc = new QueryClient();
     qc.setQueryData(
       queryKeys.channelMessages('ch-1'),
       withInitialPage([msg({ id: 'm-1' })], { hasMoreNewer: true }),
     );
-    appendMessageToCache(qc, 'ch-1', msg({ id: 'm-2' }));
+    expect(appendMessageToCache(qc, 'ch-1', msg({ id: 'm-2' }))).toBe(false);
     const data = qc.getQueryData<InfiniteData<MessageWindow>>(queryKeys.channelMessages('ch-1'));
     expect(data?.pages[0].items.map((m) => m.id)).toEqual(['m-1']);
   });
 
-  it('appendMessageToCache deduplicates when the id already exists in head page', () => {
+  it('appendMessageToCache deduplicates (returns true) when the id already exists', () => {
     const qc = new QueryClient();
     qc.setQueryData(queryKeys.channelMessages('ch-1'), withInitialPage([msg({ id: 'm-1' })]));
-    appendMessageToCache(qc, 'ch-1', msg({ id: 'm-1' }));
+    expect(appendMessageToCache(qc, 'ch-1', msg({ id: 'm-1' }))).toBe(true);
     const data = qc.getQueryData<InfiniteData<MessageWindow>>(queryKeys.channelMessages('ch-1'));
     expect(data?.pages[0].items.length).toBe(1);
   });
@@ -212,6 +212,25 @@ async function renderMutation<T>(
 }
 
 describe('useMessages — REST mutations', () => {
+  it('useSendMessage jumps to the tail (resetQueries) when the sender is deep-linked mid-history', async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    // Deep-link window: head still has newer pages, so the just-sent message
+    // can't be appended and must trigger a reset-to-tail.
+    qc.setQueryData(
+      queryKeys.channelMessages('ch-1'),
+      withInitialPage([msg({ id: 'm-old' })], { hasMoreNewer: true }),
+    );
+    const resetSpy = vi.spyOn(qc, 'resetQueries');
+    apiFetchMock.mockResolvedValue(msg({ id: 'sent' }));
+    const screen = await render(
+      <QueryClientProvider client={qc}>
+        <Trigger hook={() => useSendMessage({ channelId: 'ch-1' })} vars={{ body: 'hi' }} />
+      </QueryClientProvider>,
+    );
+    (screen.getByTestId('trigger').element() as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(resetSpy).toHaveBeenCalled());
+  });
+
   it('useSendMessage POSTs to /channels/:id/messages with body+parent+attachments defaults', async () => {
     apiFetchMock.mockResolvedValue(msg({ id: 'new' }));
     const { screen } = await renderMutation(

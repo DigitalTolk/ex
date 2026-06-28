@@ -22,10 +22,9 @@ func NewUserStateService(store UserStateStore, publisher Publisher) *UserStateSe
 
 func (s *UserStateService) List(ctx context.Context, userID string) (*model.UserState, error) {
 	state := &model.UserState{
-		ChannelNotifications: []string{},
-		ThreadNotifications:  []string{},
-		ThreadSeen:           map[string]string{},
-		HiddenConversations:  []string{},
+		ThreadNotifications: []string{},
+		ThreadSeen:          map[string]string{},
+		HiddenConversations: []string{},
 	}
 	if s.store == nil || userID == "" {
 		return state, nil
@@ -36,8 +35,6 @@ func (s *UserStateService) List(ctx context.Context, userID string) (*model.User
 	}
 	for _, item := range items {
 		switch item.Kind {
-		case model.UserStateChannelNotification:
-			state.ChannelNotifications = append(state.ChannelNotifications, item.TargetID)
 		case model.UserStateThreadNotification:
 			state.ThreadNotifications = append(state.ThreadNotifications, item.TargetID)
 		case model.UserStateThreadSeen:
@@ -48,23 +45,9 @@ func (s *UserStateService) List(ctx context.Context, userID string) (*model.User
 			state.HiddenConversations = append(state.HiddenConversations, item.TargetID)
 		}
 	}
-	sort.Strings(state.ChannelNotifications)
 	sort.Strings(state.ThreadNotifications)
 	sort.Strings(state.HiddenConversations)
 	return state, nil
-}
-
-func (s *UserStateService) MarkChannelNotificationUnread(ctx context.Context, userID, channelID string) error {
-	return s.set(ctx, &model.UserStateItem{
-		UserID:    userID,
-		Kind:      model.UserStateChannelNotification,
-		TargetID:  channelID,
-		UpdatedAt: time.Now(),
-	})
-}
-
-func (s *UserStateService) ClearChannelNotifications(ctx context.Context, userID, channelID string) error {
-	return s.delete(ctx, userID, model.UserStateChannelNotification, channelID)
 }
 
 func (s *UserStateService) MarkThreadNotificationUnread(ctx context.Context, userID, parentID, parentType, threadRootID string) error {

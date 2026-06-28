@@ -67,8 +67,13 @@ type Config struct {
 
 func Load() (*Config, error) {
 	c := &Config{
-		Port:                 envOr("PORT", "8080"),
-		Env:                  envOr("ENV", "development"),
+		Port: envOr("PORT", "8080"),
+		// Fail CLOSED: an unset ENV means production, not development. Defaulting
+		// to development meant a prod deploy that forgot ENV=production would boot
+		// with the hardcoded "dev-secret-change-me" JWT key (forgeable admin
+		// tokens) plus wildcard CORS/WS origins. Local dev sets ENV=development
+		// explicitly (docker-compose.yml), so this only tightens the default.
+		Env:                  envOr("ENV", "production"),
 		AWSRegion:            envOr("AWS_REGION", "us-east-1"),
 		DynamoDBTable:        envOr("DYNAMODB_TABLE", "ex"),
 		DynamoDBEndpoint:     os.Getenv("DYNAMODB_ENDPOINT"),

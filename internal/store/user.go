@@ -136,6 +136,42 @@ func (s *UserStoreImpl) GetByID(ctx context.Context, id string) (*model.User, er
 	return &item.User, nil
 }
 
+// GetUsersByIDs fetches full user profiles for many IDs in chunked BatchGetItem
+// calls (100 per chunk, the DynamoDB limit) instead of N serial GetItems.
+// Missing users are simply absent from the result; order is not guaranteed.
+func (s *UserStoreImpl) GetUsersByIDs(ctx context.Context, ids []string) ([]*model.User, error) {
+	out := make([]*model.User, 0, len(ids))
+	const batchSize = 100
+	for start := 0; start < len(ids); start += batchSize {
+		end := min(start+batchSize, len(ids))
+		keys := make([]map[string]types.AttributeValue, 0, end-start)
+		for _, id := range ids[start:end] {
+			keys = append(keys, compositeKey(userPK(id), profileSK()))
+		}
+		req := map[string]types.KeysAndAttributes{s.Table: {Keys: keys}}
+		for {
+			res, err := s.Client.BatchGetItem(ctx, &dynamodb.BatchGetItemInput{RequestItems: req})
+			if err != nil {
+				return nil, fmt.Errorf("store: batch get users: %w", err)
+			}
+			for _, raw := range res.Responses[s.Table] {
+				var ui userItem
+				if err := attributevalue.UnmarshalMap(raw, &ui); err != nil { // coverage-ignore: round-trip of items this store wrote; cannot fail
+					return nil, fmt.Errorf("store: unmarshal user: %w", err)
+				}
+				u := ui.User
+				out = append(out, &u)
+			}
+			unproc, ok := res.UnprocessedKeys[s.Table]
+			if !ok || len(unproc.Keys) == 0 {
+				break
+			}
+			req = map[string]types.KeysAndAttributes{s.Table: unproc}
+		}
+	}
+	return out, nil
+}
+
 func (s *UserStoreImpl) GetByEmail(ctx context.Context, email string) (*model.User, error) {
 	out, err := s.Client.GetItem(ctx, &dynamodb.GetItemInput{
 		TableName: aws.String(s.Table),

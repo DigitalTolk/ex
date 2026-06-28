@@ -54,7 +54,7 @@ func (h *SidebarHandler) validateUserCategory(w http.ResponseWriter, r *http.Req
 	}
 	cats, err := h.categorySvc.List(r.Context(), userID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "list_error", err.Error())
+		writeInternalError(w, r, "list_error", err)
 		return false
 	}
 	for _, c := range cats {
@@ -98,7 +98,7 @@ func (h *SidebarHandler) ListCategories(w http.ResponseWriter, r *http.Request) 
 	userID := middleware.UserIDFromContext(r.Context())
 	cats, err := h.categorySvc.List(r.Context(), userID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "list_error", err.Error())
+		writeInternalError(w, r, "list_error", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, cats)
@@ -168,7 +168,7 @@ func (h *SidebarHandler) DeleteCategory(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if err := h.categorySvc.Delete(r.Context(), userID, id); err != nil {
-		writeError(w, http.StatusInternalServerError, "delete_error", err.Error())
+		writeInternalError(w, r, "delete_error", err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

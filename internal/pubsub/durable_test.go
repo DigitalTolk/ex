@@ -54,6 +54,21 @@ func (c *captureInbox) Append(_ context.Context, userID, eventID string, payload
 	return nil
 }
 
+func (c *captureInbox) AppendMany(_ context.Context, userIDs []string, eventID string, payload []byte) error {
+	if c.err != nil {
+		c.failed.Add(1)
+		return c.err
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, uid := range userIDs {
+		cp := make([]byte, len(payload))
+		copy(cp, payload)
+		c.calls = append(c.calls, inboxCall{userID: uid, eventID: eventID, payload: cp})
+	}
+	return nil
+}
+
 func (c *captureInbox) seen() []inboxCall {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -159,6 +174,37 @@ func TestRedisPubSub_PublishWithoutDurabilityLiveOnly(t *testing.T) {
 // Inbox write failures must NOT fail the publish — live delivery is
 // the contract; durability is best-effort. The error gets logged
 // (verified separately via slog) but Publish returns nil for live.
+func TestRedisPubSub_PublishMany(t *testing.T) {
+	ps, mr := setupDurable(t)
+	resolver := &fakeResolver{m: map[string][]string{
+		"chan:a": {"u1"},
+		"chan:b": {"u2"},
+	}}
+	inbox := &captureInbox{}
+	ps.SetDurability(resolver, inbox)
+
+	evt, _ := events.NewEvent(events.EventMessageNew, map[string]string{"x": "1"})
+	if err := ps.PublishMany(context.Background(), []string{"chan:a", "chan:b"}, evt); err != nil {
+		t.Fatalf("PublishMany: %v", err)
+	}
+	ps.WaitForInboxFanOut()
+	// Persistent event → each channel's recipient gets one inbox append.
+	if got := len(inbox.seen()); got != 2 {
+		t.Errorf("inbox appends = %d, want 2", got)
+	}
+
+	// Empty channel list → no-op, no error.
+	if err := ps.PublishMany(context.Background(), nil, evt); err != nil {
+		t.Errorf("empty PublishMany should be a no-op, got %v", err)
+	}
+
+	// Pipeline Exec error surfaces (server gone).
+	mr.Close()
+	if err := ps.PublishMany(context.Background(), []string{"chan:a"}, evt); err == nil {
+		t.Error("PublishMany against a dead server should return the pipeline error")
+	}
+}
+
 func TestRedisPubSub_PublishContinuesWhenInboxFails(t *testing.T) {
 	ps, _ := setupDurable(t)
 	resolver := &fakeResolver{m: map[string][]string{"chan:c1": {"u1", "u2"}}}
@@ -170,8 +216,10 @@ func TestRedisPubSub_PublishContinuesWhenInboxFails(t *testing.T) {
 		t.Errorf("Publish must succeed even when inbox fails, got %v", err)
 	}
 	ps.WaitForInboxFanOut()
-	if got := inbox.failed.Load(); got != 2 {
-		t.Errorf("inbox failed count = %d, want 2", got)
+	// The fan-out is now a single pipelined AppendMany, so a failure is recorded
+	// once for the batch (not once per recipient).
+	if got := inbox.failed.Load(); got != 1 {
+		t.Errorf("inbox failed count = %d, want 1 (batched fan-out)", got)
 	}
 }
 

@@ -32,8 +32,14 @@ import {
   parsePresence,
   parseServerVersion,
   parseTyping,
+  parseUserUpdated,
 } from '@/lib/ws-schemas';
 import { apiFetch } from '@/lib/api';
+import {
+  bumpChannelUnread,
+  bumpConversationUnread,
+  clearConversationUnreadInCache,
+} from '@/lib/unread-cache';
 import { shouldRefetchDraftsForRemoteUpdate, useDrafts } from '@/hooks/useDrafts';
 import { useUserChannels } from '@/hooks/useChannels';
 import { useUserConversations } from '@/hooks/useConversations';
@@ -77,14 +83,9 @@ function MobileChatReadyGate({ children }: { children: ReactNode }) {
 
 export default function ChatPage() {
   const {
-    markChannelUnread,
-    markChannelNotificationUnread,
-    clearConversationUnread,
     isActiveChannel,
     isActiveConversation,
-    markConversationUnread,
     markThreadNotificationUnread,
-    resetSessionUnread,
     isActiveThread: isActiveThreadScope,
     unhideConversation,
   } = useUnread();
@@ -142,7 +143,9 @@ export default function ChatPage() {
               void apiFetch<void>(`/api/v1/channels/${encodeURIComponent(parentID)}/read`, { method: 'PUT' })
                 .catch(() => undefined);
             } else {
-              markChannelUnread(parentID);
+              // Patch the unread count straight into the list cache (single
+              // source) — no session delta to reconcile.
+              bumpChannelUnread(queryClient, parentID);
             }
           }
         } else if (isConversationParent) {
@@ -152,15 +155,11 @@ export default function ChatPage() {
           // the conversation seq for thread replies either, so the two agree.
           if (!parentMessageID && !msg.system) {
             if (isActiveConversation(parentID)) {
-              clearConversationUnread(parentID);
+              clearConversationUnreadInCache(queryClient, parentID);
               void apiFetch<void>(`/api/v1/conversations/${encodeURIComponent(parentID)}/read`, { method: 'PUT' })
-                .catch(() => undefined)
-                .finally(() => {
-                  queryClient.invalidateQueries({ queryKey: queryKeys.userConversations() });
-                });
+                .catch(() => undefined);
             } else {
-              markConversationUnread(parentID);
-              queryClient.invalidateQueries({ queryKey: queryKeys.userConversations() });
+              bumpConversationUnread(queryClient, parentID);
             }
           }
         }
@@ -280,12 +279,11 @@ export default function ChatPage() {
       queryClient.invalidateQueries({ queryKey: queryKeys.incomingWebhooks() });
     },
     onUserUpdated: (data: unknown) => {
-      const updated = data as { id?: string; userStatus?: unknown; timeZone?: string; lastSeenAt?: string } | undefined;
-      if (updated?.id) {
-        queryClient.invalidateQueries({ queryKey: queryKeys.user(updated.id) });
-      }
+      const updated = parseUserUpdated(data);
+      if (!updated) return;
+      queryClient.invalidateQueries({ queryKey: queryKeys.user(updated.id) });
       const currentUser = user;
-      if (updated?.id && currentUser && updated.id === currentUser.id) {
+      if (currentUser && updated.id === currentUser.id) {
         patchUser({
           ...(Object.prototype.hasOwnProperty.call(updated, 'userStatus')
             ? { userStatus: updated.userStatus === null ? undefined : updated.userStatus as typeof currentUser.userStatus }
@@ -345,15 +343,11 @@ export default function ChatPage() {
         }
         queryClient.invalidateQueries({ queryKey: queryKeys.userThreads() });
         queryClient.invalidateQueries({ queryKey: queryKeys.userState() });
-      } else if (n.parentType === 'channel') {
-        // The backend is the single source of truth for whether to alert: if a
-        // top-level channel notification.new arrived, this user should see the
-        // channel light up — regardless of kind. Do NOT re-gate on
-        // kind === 'mention' here; that silently dropped per-channel "all
-        // messages"/keyword alerts, leaving a sound playing with no sidebar
-        // badge when the separate message.new path was missed.
-        markChannelNotificationUnread(n.parentID);
       }
+      // A top-level channel/DM notification.new is the ALERT (popup/sound, handled
+      // by NotificationContext). The sidebar badge for it rides the separate
+      // message.new event, which patches the list cache (and replays from the
+      // durable inbox on reconnect) — so there's nothing to mark here.
       dispatchNotification(n);
     },
     onDraftUpdated: () => {
@@ -398,9 +392,8 @@ export default function ChatPage() {
       queryClient.invalidateQueries({ queryKey: queryKeys.userState() });
       queryClient.invalidateQueries({ queryKey: queryKeys.drafts() });
       queryClient.invalidateQueries({ queryKey: queryKeys.channelMembers() });
-      // The refetched userChannels carry authoritative server unread counts;
-      // drop the live session deltas so they aren't added on top (double-count).
-      resetSessionUnread();
+      // The refetched userChannels/userConversations carry authoritative server
+      // unread counts — the single source — so there's nothing else to reset.
       void resyncMessageCache(queryClient);
     },
     onReplayExhausted: () => {
@@ -412,7 +405,6 @@ export default function ChatPage() {
       queryClient.invalidateQueries({ queryKey: queryKeys.userState() });
       queryClient.invalidateQueries({ queryKey: queryKeys.drafts() });
       queryClient.invalidateQueries({ queryKey: queryKeys.channelMembers() });
-      resetSessionUnread();
       void resyncMessageCache(queryClient);
     },
     enabled: !!user,

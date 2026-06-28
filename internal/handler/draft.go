@@ -54,7 +54,7 @@ func (h *DraftHandler) List(w http.ResponseWriter, r *http.Request) {
 	}
 	drafts, err := h.draftSvc.List(r.Context(), userID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "list_error", err.Error())
+		writeInternalError(w, r, "list_error", err)
 		return
 	}
 	if drafts == nil {

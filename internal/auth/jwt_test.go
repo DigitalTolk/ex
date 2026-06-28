@@ -131,8 +131,12 @@ func TestValidateTokenRejectsUnexpectedSigningMethod(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected unexpected signing method to be rejected")
 	}
-	if !strings.Contains(err.Error(), "unexpected signing method") {
-		t.Fatalf("error = %v, want unexpected signing method", err)
+	// WithValidMethods(["HS256"]) now rejects a non-HS256 alg before the keyfunc
+	// runs, so the message is "signing method none is invalid" rather than the
+	// keyfunc's "unexpected signing method". Either way the alg:none token is
+	// refused — assert on the signing-method rejection, not the exact wording.
+	if !strings.Contains(err.Error(), "signing method") {
+		t.Fatalf("error = %v, want a signing-method rejection", err)
 	}
 }
 

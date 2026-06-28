@@ -89,6 +89,8 @@ let mockUnread: {
   unreadConversations: Set<string>;
   unreadThreadNotifications: Set<string>;
   hiddenConversations: Set<string>;
+  channelUnreadCounts?: Map<string, number>;
+  conversationUnreadCounts?: Map<string, number>;
 } = {
   unreadChannels: new Set(),
   unreadChannelNotifications: new Set(),
@@ -768,18 +770,11 @@ describe('Sidebar browser render — rich fixtures', () => {
     expect(row).toBeTruthy();
   });
 
-  it('lights up a channel unread via a live notification (no message.new, no server state)', async () => {
-    // The "sound but no badge" regression: a top-level channel notification.new
-    // marks unreadChannelNotifications. The sidebar row must surface that on its
-    // own — without unreadChannels (message.new) or server channelNotifications.
-    // With no known count, the badge floors to "1" (a NUMBER box, never a dot).
-    mockUnread = {
-      unreadChannels: new Set(),
-      unreadChannelNotifications: new Set(['ch-general']),
-      unreadConversations: new Set(),
-      unreadThreadNotifications: new Set(),
-      hiddenConversations: new Set(),
-    };
+  it('floors the badge to 1 when a channel is unread but carries no count', async () => {
+    // A channel the server flags unread but with an unknown/zero count still
+    // shows a NUMBER box floored to "1", never a dot. (The single source is the
+    // server seq flag on the list row — no session set.)
+    mockChannels = makeChannels().map((c) => (c.channelID === 'ch-general' ? { ...c, unread: true } : c));
     mockUserState = { hiddenConversations: [], channelNotifications: [], threadNotifications: [], threadSeen: {} };
     await render(<Frame />);
     expect(document.querySelector('[data-testid="channel-unread-badge-ch-general"]')?.textContent).toBe('1');
@@ -806,6 +801,30 @@ describe('Sidebar browser render — rich fixtures', () => {
       c.conversationID === 'conv-dm' ? { ...c, unread: true, unreadCount: 4 } : c,
     );
     mockConversationsState = { data: mockConversations, isError: false };
+    mockUserState = { hiddenConversations: [], channelNotifications: [], threadNotifications: [], threadSeen: {} };
+    await render(<Frame />);
+    const badge = document.querySelector('[data-testid="conversation-unread-badge-conv-dm"]');
+    expect(badge?.textContent).toBe('4');
+  });
+
+  it('does NOT double-count a non-favorite DM when the session map is seeded from the server', async () => {
+    // Regression: UnreadServerCountSync seeds conversationUnreadCounts from the
+    // SAME server unreadCount the row also reads. The non-favorite DM row must
+    // use the map as the single source (== 4), not sum map+server (== 8).
+    mockChannels = [];
+    mockConversations = makeConversations().map((c) =>
+      c.conversationID === 'conv-dm' ? { ...c, unread: true, unreadCount: 4 } : c,
+    );
+    mockConversationsState = { data: mockConversations, isError: false };
+    mockUnread = {
+      unreadChannels: new Set(),
+      unreadChannelNotifications: new Set(),
+      unreadConversations: new Set(),
+      unreadThreadNotifications: new Set(),
+      hiddenConversations: new Set(),
+      channelUnreadCounts: new Map(),
+      conversationUnreadCounts: new Map([['conv-dm', 4]]),
+    };
     mockUserState = { hiddenConversations: [], channelNotifications: [], threadNotifications: [], threadSeen: {} };
     await render(<Frame />);
     const badge = document.querySelector('[data-testid="conversation-unread-badge-conv-dm"]');
@@ -1079,7 +1098,7 @@ describe('Sidebar browser render — rich fixtures', () => {
     // A favorites section holding both a channel (with a notification) and a
     // DM (unread) — collapsing it runs the collapsed-filter for both kinds.
     mockChannels = [
-      { channelID: 'ch-favorite', channelName: 'announcements', channelType: 'public', role: 1, favorite: true, sidebarPosition: 500 },
+      { channelID: 'ch-favorite', channelName: 'announcements', channelType: 'public', role: 1, favorite: true, sidebarPosition: 500, unread: true },
     ];
     mockConversations = [
       {
@@ -1094,16 +1113,9 @@ describe('Sidebar browser render — rich fixtures', () => {
     ];
     mockConversationsState = { data: mockConversations, isError: false };
     mockCategories = [];
-    mockUnread = {
-      unreadChannels: new Set(),
-      unreadChannelNotifications: new Set(),
-      unreadConversations: new Set(['conv-favorite-dm']),
-      unreadThreadNotifications: new Set(),
-      hiddenConversations: new Set(),
-    };
     mockUserState = {
       hiddenConversations: [],
-      channelNotifications: ['ch-favorite'],
+      channelNotifications: [],
       threadNotifications: [],
       threadSeen: {},
     };
@@ -1182,9 +1194,9 @@ describe('Sidebar browser render — rich fixtures', () => {
     expect(document.querySelector('[data-testid="sidebar-primary-sections"]')).not.toBeNull();
   });
 
-  it('keeps an unread conversation visible in a collapsed section via the unreadConversations set', async () => {
-    // A favorites DM that is unread ONLY via the unreadConversations set
-    // (conv.unread is false) → the third clause of the collapsed filter.
+  it('keeps an unread conversation visible in a collapsed section', async () => {
+    // A favorites DM flagged unread by the server seq count → the conversation
+    // clause of the collapsed filter keeps it visible.
     mockChannels = [];
     mockConversations = [
       {
@@ -1193,20 +1205,13 @@ describe('Sidebar browser render — rich fixtures', () => {
         displayName: 'Dana',
         participantIDs: ['u-self', 'u-dana'],
         favorite: true,
+        unread: true,
         updatedAt: '2026-05-11T10:00:00Z',
       },
     ];
     mockConversationsState = { data: mockConversations, isError: false };
     mockCategories = [];
-    mockUnread = {
-      unreadChannels: new Set(),
-      unreadChannelNotifications: new Set(),
-      unreadConversations: new Set(['conv-set-unread']),
-      unreadThreadNotifications: new Set(),
-      hiddenConversations: new Set(),
-    };
-    // userState undefined so the collapsed channel branch also hits its
-    // `?? []` fallback for channelNotifications.
+    // userState undefined so the render also exercises its `?? []` fallbacks.
     mockUserState = undefined;
     const screen = await render(<Frame />);
     const toggle = screen.getByTestId('sidebar-group-toggle-__favorites__');
@@ -1231,23 +1236,15 @@ describe('Sidebar browser render — rich fixtures', () => {
     expect(document.querySelector('[data-testid="sidebar-primary-sections"]')).not.toBeNull();
   });
 
-  it('keeps a notified channel visible in a collapsed section when user state is cold', async () => {
-    // A collapsed Channels section with a notified channel but undefined
-    // userState → the collapsed-channel filter takes its
-    // `userState?.channelNotifications ?? []` fallback.
+  it('keeps an unread channel visible in a collapsed section when user state is cold', async () => {
+    // A collapsed Channels section with a server-unread channel but undefined
+    // userState → the collapsed-channel filter keeps it visible via ch.unread.
     mockChannels = [
-      { channelID: 'ch-urgent', channelName: 'urgent', channelType: 'public', role: 1, sidebarPosition: 1000 },
+      { channelID: 'ch-urgent', channelName: 'urgent', channelType: 'public', role: 1, sidebarPosition: 1000, unread: true },
     ];
     mockConversations = [];
     mockConversationsState = { data: [], isError: false };
     mockCategories = [];
-    mockUnread = {
-      unreadChannels: new Set(['ch-urgent']),
-      unreadChannelNotifications: new Set(),
-      unreadConversations: new Set(),
-      unreadThreadNotifications: new Set(),
-      hiddenConversations: new Set(),
-    };
     mockUserState = undefined;
     const screen = await render(<Frame />);
     const toggle = screen.getByTestId('sidebar-group-toggle-__channels__');

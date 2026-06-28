@@ -4,11 +4,20 @@ import (
 	"context"
 	"log/slog"
 	"sync"
+
+	"github.com/DigitalTolk/ex/internal/safe"
 )
 
 // Publisher publishes real-time events to a Redis-backed pub/sub channel.
 type Publisher interface {
 	Publish(ctx context.Context, channel string, event *Event) error
+}
+
+// ManyPublisher is an optional capability: publish one event to many channels
+// in a single round-trip (pipelined). Callers type-assert for it and fall back
+// to a Publish loop when unavailable.
+type ManyPublisher interface {
+	PublishMany(ctx context.Context, channels []string, event *Event) error
 }
 
 // Member-action labels used as the "action" field on EventMembersChanged payloads.
@@ -55,6 +64,7 @@ func PublishMany(ctx context.Context, p Publisher, channels []string, eventType 
 	for _, ch := range channels {
 		go func(ch string) {
 			defer wg.Done()
+			defer safe.Recover()
 			if err := p.Publish(ctx, ch, evt); err != nil {
 				slog.Error("events: publish", "channel", ch, "type", eventType, "error", err)
 			}

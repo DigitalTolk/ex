@@ -513,18 +513,61 @@ func normalizeWritableTimeZone(timeZone string) (string, bool) {
 	return timeZone, true
 }
 
-// GetBatch returns users by a list of IDs. Missing users are silently skipped.
-// AvatarURLs are resolved on each user via GetByID.
+// batchUserStore is an optional capability: fetch many users in one batched
+// store call. UserService uses it for cache misses when available.
+type batchUserStore interface {
+	GetUsersByIDs(ctx context.Context, ids []string) ([]*model.User, error)
+}
+
+// GetBatch returns users by a list of IDs (input order, missing users skipped).
+// Cache hits are served first; the misses are resolved in a SINGLE batched
+// store read when the store supports it (instead of N serial GetItems on a cold
+// cache), falling back to per-id reads otherwise.
 func (s *UserService) GetBatch(ctx context.Context, ids []string) ([]*model.User, error) {
-	users := make([]*model.User, 0, len(ids))
+	byID := make(map[string]*model.User, len(ids))
+	misses := make([]string, 0, len(ids))
 	for _, id := range ids {
-		u, err := s.GetByID(ctx, id) // uses cache + resolves avatar
-		if err != nil {
-			continue // skip missing users
+		if s.cache != nil {
+			if u, err := s.cache.GetUser(ctx, id); err == nil {
+				normalizeUserProfile(u)
+				s.resolveAvatar(ctx, u)
+				byID[id] = u
+				continue
+			}
 		}
-		users = append(users, u)
+		misses = append(misses, id)
 	}
-	return users, nil
+
+	bs, batchable := s.users.(batchUserStore)
+	if batchable && len(misses) > 0 {
+		if fetched, err := bs.GetUsersByIDs(ctx, misses); err == nil {
+			for _, u := range fetched {
+				normalizeUserProfile(u)
+				if s.cache != nil {
+					_ = s.cache.SetUser(ctx, u)
+				}
+				s.resolveAvatar(ctx, u)
+				byID[u.ID] = u
+			}
+			misses = nil // resolved via the batch
+		}
+		// On a batch error, fall through to the per-id resolution below.
+	}
+	for _, id := range misses {
+		if u, err := s.GetByID(ctx, id); err == nil { // cached + avatar
+			byID[id] = u
+		}
+	}
+
+	out := make([]*model.User, 0, len(byID))
+	seen := make(map[string]bool, len(byID))
+	for _, id := range ids {
+		if u, ok := byID[id]; ok && !seen[id] {
+			out = append(out, u)
+			seen[id] = true
+		}
+	}
+	return out, nil
 }
 
 // Search returns users whose display name or email matches the query.

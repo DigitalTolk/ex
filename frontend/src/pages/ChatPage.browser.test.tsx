@@ -21,27 +21,29 @@ vi.mock('@/components/layout/AppLayout', () => ({
   ),
 }));
 
-const mockMarkChannelUnread = vi.fn();
-const mockMarkChannelNotificationUnread = vi.fn();
-const mockMarkConversationUnread = vi.fn();
 const mockMarkThreadNotificationUnread = vi.fn();
 const mockUnhideConversation = vi.fn();
-const mockClearConversationUnread = vi.fn();
+
+const {
+  bumpChannelUnread: mockBumpChannelUnread,
+  bumpConversationUnread: mockBumpConversationUnread,
+  clearConversationUnreadInCache: mockClearConversationUnreadInCache,
+} = vi.hoisted(() => ({
+  bumpChannelUnread: vi.fn(),
+  bumpConversationUnread: vi.fn(),
+  clearConversationUnreadInCache: vi.fn(),
+}));
+vi.mock('@/lib/unread-cache', () => ({
+  bumpChannelUnread: mockBumpChannelUnread,
+  bumpConversationUnread: mockBumpConversationUnread,
+  clearConversationUnreadInCache: mockClearConversationUnreadInCache,
+}));
 
 vi.mock('@/context/UnreadContext', () => ({
   useUnread: () => ({
-    unreadChannels: new Set(),
-    unreadChannelNotifications: new Set(),
-    unreadConversations: new Set(),
     unreadThreadNotifications: new Set(),
     hiddenConversations: new Set(),
-    markChannelUnread: mockMarkChannelUnread,
-    markChannelNotificationUnread: mockMarkChannelNotificationUnread,
-    markConversationUnread: mockMarkConversationUnread,
     markThreadNotificationUnread: mockMarkThreadNotificationUnread,
-    clearChannelUnread: vi.fn(),
-    resetSessionUnread: vi.fn(),
-    clearConversationUnread: mockClearConversationUnread,
     hideConversation: vi.fn(),
     unhideConversation: mockUnhideConversation,
     setActiveChannel: vi.fn(),
@@ -167,8 +169,8 @@ function msg(overrides: Record<string, unknown> = {}): Record<string, unknown> {
 describe('ChatPage WS router (browser)', () => {
   beforeEach(() => {
     mockUseWebSocket.mockClear();
-    mockMarkChannelUnread.mockClear();
-    mockMarkConversationUnread.mockClear();
+    mockBumpChannelUnread.mockClear();
+    mockBumpConversationUnread.mockClear();
     mockUnhideConversation.mockClear();
     mockDispatchNotification.mockClear();
     mockRecordTyping.mockClear();
@@ -224,13 +226,13 @@ describe('ChatPage WS router (browser)', () => {
   it('onMessageNew marks unread for messages from other users to a channel', async () => {
     await renderChatPage();
     lastHandlers().onMessageNew?.(msg());
-    expect(mockMarkChannelUnread).toHaveBeenCalledWith('ch-99');
+    expect(mockBumpChannelUnread).toHaveBeenCalledWith(expect.anything(), "ch-99");
   });
 
   it('onMessageNew skips the unread mark for the local user', async () => {
     await renderChatPage();
     lastHandlers().onMessageNew?.(msg({ authorID: 'u-1' }));
-    expect(mockMarkChannelUnread).not.toHaveBeenCalled();
+    expect(mockBumpChannelUnread).not.toHaveBeenCalled();
   });
 
   it('onMessageNew unhides a conversation when a new message lands in it', async () => {
@@ -242,7 +244,7 @@ describe('ChatPage WS router (browser)', () => {
   it('onMessageNew ignores invalid payloads', async () => {
     await renderChatPage();
     lastHandlers().onMessageNew?.({});
-    expect(mockMarkChannelUnread).not.toHaveBeenCalled();
+    expect(mockBumpChannelUnread).not.toHaveBeenCalled();
   });
 
   it('onMessageNew infers a channel parent from the cache when parentType is absent', async () => {
@@ -250,7 +252,7 @@ describe('ChatPage WS router (browser)', () => {
     // No parentType, but parentID matches a cached user channel → treated as a
     // channel message and marked unread.
     lastHandlers().onMessageNew?.(msg({ parentType: undefined }));
-    expect(mockMarkChannelUnread).toHaveBeenCalledWith('ch-99');
+    expect(mockBumpChannelUnread).toHaveBeenCalledWith(expect.anything(), "ch-99");
   });
 
   it('onMessageNew infers a conversation parent from the cache when parentType is absent', async () => {
@@ -266,7 +268,7 @@ describe('ChatPage WS router (browser)', () => {
     // the thread caches and must NOT mark the parent channel unread (a thread
     // reply isn't new top-level channel activity).
     lastHandlers().onMessageNew?.(msg({ parentMessageID: 'root-1' }));
-    expect(mockMarkChannelUnread).not.toHaveBeenCalled();
+    expect(mockBumpChannelUnread).not.toHaveBeenCalled();
   });
 
   it('onMessageEdited keys the thread invalidation off parentMessageID when present', async () => {
@@ -431,7 +433,7 @@ describe('ChatPage WS router (browser)', () => {
     expect(() =>
       lastHandlers().onMessageNew?.(msg({ parentMessageID: 'root-1', parentID: 'ch-99', parentType: 'channel' })),
     ).not.toThrow();
-    expect(mockMarkChannelUnread).not.toHaveBeenCalled();
+    expect(mockBumpChannelUnread).not.toHaveBeenCalled();
   });
 
   it('onUserUpdated patches the local user for self updates (status/timeZone/lastSeenAt)', async () => {
@@ -461,10 +463,11 @@ describe('ChatPage WS router (browser)', () => {
     lastHandlers().onNotification?.({ kind: 'mention', parentMessageID: 'root-1', parentID: 'ch-99', parentType: 'channel', createdAt: '2026-05-01T00:00:00Z' });
     // Inactive-thread notification → markThreadNotificationUnread.
     lastHandlers().onNotification?.({ kind: 'thread_reply', parentMessageID: 'root-9', parentID: 'ch-99', parentType: 'channel', createdAt: '2026-05-01T00:00:00Z' });
-    // Channel mention with no thread → markChannelNotificationUnread.
+    // Top-level channel mention → alert only; the badge rides message.new, so the
+    // notification handler must NOT touch the unread cache.
     lastHandlers().onNotification?.({ kind: 'mention', parentID: 'ch-99', parentType: 'channel', createdAt: '2026-05-01T00:00:00Z' });
     expect(mockMarkThreadNotificationUnread).toHaveBeenCalledWith('root-9');
-    expect(mockMarkChannelNotificationUnread).toHaveBeenCalledWith('ch-99');
+    expect(mockBumpChannelUnread).not.toHaveBeenCalled();
     expect(mockDispatchNotification).toHaveBeenCalled();
   });
 

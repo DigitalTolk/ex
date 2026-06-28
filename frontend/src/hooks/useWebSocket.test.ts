@@ -390,6 +390,35 @@ describe('useWebSocket', () => {
     expect(MockWebSocket.instances[1].url).not.toContain('since=01ID0000000000000000000042');
   });
 
+  // An EPHEMERAL frame (presence/typing/notification.new) is never replayed, so
+  // it must not advance the cursor — even with a higher ULID than a durable
+  // message — or a reconnect would skip replaying messages between them.
+  it('does not advance the reconnect cursor for an ephemeral frame', async () => {
+    renderHook(() => useWebSocket({ enabled: true }));
+
+    const ws = MockWebSocket.instances[0];
+    ws.simulateOpen();
+    ws.simulateMessage(JSON.stringify({
+      id: '01ID0000000000000000000099',
+      type: 'message.new',
+      data: JSON.stringify({ id: 'm1' }),
+    }));
+    ws.simulateMessage(JSON.stringify({
+      id: '01ID0000000000000000000150',
+      type: 'presence.changed',
+      data: JSON.stringify({ userID: 'u1' }),
+    }));
+    ws.simulateClose();
+
+    await act(async () => {
+      vi.advanceTimersByTime(1000);
+      await Promise.resolve();
+    });
+
+    expect(MockWebSocket.instances[1].url).toContain('since=01ID0000000000000000000099');
+    expect(MockWebSocket.instances[1].url).not.toContain('since=01ID0000000000000000000150');
+  });
+
   // First connect (no prior cursor) must not send a since param —
   // the server interprets that as "fresh, no replay needed".
   it('omits ?since on a fresh first connect', () => {

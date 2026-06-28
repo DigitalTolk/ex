@@ -13,6 +13,30 @@ import (
 
 const MaxGenericUploadBytes int64 = 512 * 1024
 
+// sanitizeUploadFilename reduces a client-supplied filename to a safe trailing
+// component of an S3 key: anything outside [A-Za-z0-9._-] (path separators,
+// control chars, NULs) becomes '_', and leading/trailing dots are trimmed so a
+// ".." or hidden-file name can't form. The key already carries a unique ULID
+// prefix, so this is defense-in-depth against odd keys, not the sole guard.
+func sanitizeUploadFilename(name string) string {
+	name = strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '.', r == '_', r == '-':
+			return r
+		default:
+			return '_'
+		}
+	}, name)
+	name = strings.Trim(name, ".")
+	if name == "" {
+		return "file"
+	}
+	if len(name) > 128 {
+		name = name[len(name)-128:]
+	}
+	return name
+}
+
 // uploadSigner is the slice of *storage.S3Client the upload handler depends on.
 // Defining it as an interface lets tests inject a signer whose presign calls
 // fail, exercising the handler's presign-error branches that a real
@@ -75,15 +99,15 @@ func (h *UploadHandler) CreateUploadURL(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	key := "uploads/" + userID + "/" + store.NewID() + "/" + body.Filename
+	key := "uploads/" + userID + "/" + store.NewID() + "/" + sanitizeUploadFilename(body.Filename)
 	uploadURL, err := h.s3.PresignedPutURL(r.Context(), key, body.ContentType, 10*time.Minute)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "presign_error", err.Error())
+		writeInternalError(w, r, "presign_error", err)
 		return
 	}
 	fileURL, err := h.s3.PresignedGetURL(r.Context(), key, 7*24*time.Hour)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "presign_error", err.Error())
+		writeInternalError(w, r, "presign_error", err)
 		return
 	}
 

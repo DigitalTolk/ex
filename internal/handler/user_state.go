@@ -25,28 +25,10 @@ func (h *UserStateHandler) Get(w http.ResponseWriter, r *http.Request) {
 	}
 	state, err := h.stateSvc.List(r.Context(), userID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "state_error", err.Error())
+		writeInternalError(w, r, "state_error", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, state)
-}
-
-func (h *UserStateHandler) ClearChannelNotification(w http.ResponseWriter, r *http.Request) {
-	userID := middleware.UserIDFromContext(r.Context())
-	channelID := pathParam(r, "id")
-	if userID == "" {
-		writeError(w, http.StatusUnauthorized, "unauthorized", "authentication required")
-		return
-	}
-	if channelID == "" {
-		writeError(w, http.StatusBadRequest, "missing_id", "channel ID is required")
-		return
-	}
-	if err := h.stateSvc.ClearChannelNotifications(r.Context(), userID, channelID); err != nil {
-		writeError(w, http.StatusInternalServerError, "state_error", err.Error())
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *UserStateHandler) MarkThreadSeen(w http.ResponseWriter, r *http.Request) {
@@ -63,11 +45,11 @@ func (h *UserStateHandler) MarkThreadSeen(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if err := h.msgSvc.CheckAccess(r.Context(), userID, parentID, parentType); err != nil {
-		writeReadResourceError(w, err, "thread")
+		writeReadResourceError(w, r, err, "thread")
 		return
 	}
 	if err := h.stateSvc.MarkThreadSeen(r.Context(), userID, parentID, parentType, threadRootID); err != nil {
-		writeError(w, http.StatusInternalServerError, "state_error", err.Error())
+		writeInternalError(w, r, "state_error", err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -93,7 +75,7 @@ func (h *UserStateHandler) setConversationHidden(w http.ResponseWriter, r *http.
 		return
 	}
 	if _, err := h.convSvc.GetByID(r.Context(), userID, convID); err != nil {
-		writeReadResourceError(w, err, "conversation")
+		writeReadResourceError(w, r, err, "conversation")
 		return
 	}
 	var err error
@@ -103,7 +85,7 @@ func (h *UserStateHandler) setConversationHidden(w http.ResponseWriter, r *http.
 		err = h.stateSvc.UnhideConversation(r.Context(), userID, convID)
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "state_error", err.Error())
+		writeInternalError(w, r, "state_error", err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

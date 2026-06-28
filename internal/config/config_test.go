@@ -37,8 +37,18 @@ func clearEnv(t *testing.T) {
 	})
 }
 
+func TestLoadFailsClosedWithoutEnv(t *testing.T) {
+	clearEnv(t)
+	// Fail-closed: with ENV unset, Env defaults to production, so an unset
+	// JWT_SECRET must abort startup rather than silently use the dev secret.
+	if _, err := Load(); err == nil {
+		t.Fatal("Load() with no ENV and no JWT_SECRET should fail closed, got nil error")
+	}
+}
+
 func TestLoadDefaults(t *testing.T) {
 	clearEnv(t)
+	t.Setenv("ENV", "development") // dev defaults are opt-in now (fail-closed)
 
 	cfg, err := Load()
 	if err != nil {

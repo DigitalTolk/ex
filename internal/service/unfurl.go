@@ -513,6 +513,20 @@ func safeDialContext(ctx context.Context, network, addr string) (net.Conn, error
 	return d.DialContext(ctx, network, net.JoinHostPort(ips[0].String(), port))
 }
 
+// ssrfDeniedCIDRs are ranges that net.IP's built-in predicates don't cover but
+// can still reach infrastructure: carrier-grade NAT (RFC 6598) is routable to
+// an upstream provider's internal network, and NAT64 (RFC 6052) embeds an
+// arbitrary IPv4 — including private ones — behind a synthesized IPv6 address.
+var ssrfDeniedCIDRs = func() []*net.IPNet {
+	out := make([]*net.IPNet, 0, 2)
+	for _, c := range []string{"100.64.0.0/10", "64:ff9b::/96"} {
+		if _, n, err := net.ParseCIDR(c); err == nil {
+			out = append(out, n)
+		}
+	}
+	return out
+}()
+
 func isPublicIP(ip net.IP) bool {
 	if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
 		ip.IsInterfaceLocalMulticast() || ip.IsMulticast() || ip.IsUnspecified() {
@@ -520,6 +534,11 @@ func isPublicIP(ip net.IP) bool {
 	}
 	if ip.IsPrivate() {
 		return false
+	}
+	for _, n := range ssrfDeniedCIDRs {
+		if n.Contains(ip) {
+			return false
+		}
 	}
 	return true
 }

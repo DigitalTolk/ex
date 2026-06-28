@@ -222,6 +222,24 @@ describe('useThreads — seen-state and sorting helpers', () => {
     expect(getSeenMap()['t-default'].length).toBeGreaterThan(0);
   });
 
+  it('caps the seen-map, evicting the oldest entries past the limit', () => {
+    // Seed 500 OLD entries directly, then mark one NEW thread seen — the map is
+    // capped at 500, so the new entry is kept and an old one is evicted.
+    const seed: Record<string, string> = {};
+    for (let i = 0; i < 500; i += 1) {
+      seed[`old-${i}`] = `2020-01-01T00:${String(i % 60).padStart(2, '0')}:00Z`;
+    }
+    localStorage.setItem('ex.threads.seen.v1', JSON.stringify(seed));
+    resetSeenCache();
+
+    markThreadSeen('brand-new', '2030-01-01T00:00:00Z');
+
+    const map = getSeenMap();
+    expect(Object.keys(map).length).toBe(500);
+    expect(map['brand-new']).toBe('2030-01-01T00:00:00Z'); // newest kept
+    expect(map['old-0']).toBeUndefined(); // an oldest entry evicted
+  });
+
   it('markThreadSeen targets the conversations server path for a conversation thread', () => {
     apiFetchMock.mockResolvedValue(undefined);
     markThreadSeen('t-7', '2026-04-04T12:00:00Z', { parentID: 'cv-9', parentType: 'conversation' });

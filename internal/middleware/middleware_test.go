@@ -4,12 +4,38 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/DigitalTolk/ex/internal/auth"
 	"github.com/DigitalTolk/ex/internal/model"
 )
+
+func TestSecurityHeaders(t *testing.T) {
+	h := SecurityHeaders(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+
+	want := map[string]string{
+		"X-Frame-Options":        "DENY",
+		"X-Content-Type-Options": "nosniff",
+		"Referrer-Policy":        "no-referrer",
+	}
+	for k, v := range want {
+		if got := rec.Header().Get(k); got != v {
+			t.Errorf("%s = %q, want %q", k, got, v)
+		}
+	}
+	if csp := rec.Header().Get("Content-Security-Policy"); !strings.Contains(csp, "frame-ancestors 'none'") {
+		t.Errorf("CSP missing frame-ancestors 'none': %q", csp)
+	}
+	if rec.Header().Get("Strict-Transport-Security") == "" {
+		t.Error("missing Strict-Transport-Security header")
+	}
+}
 
 func newTestJWTManager() *auth.JWTManager {
 	return auth.NewJWTManager("test-secret-middleware", 15*time.Minute, 720*time.Hour)
@@ -478,20 +504,116 @@ func TestRateLimit_NilCounterPassThrough(t *testing.T) {
 	}
 }
 
+func TestRequestTimeout(t *testing.T) {
+	var hadDeadline bool
+	capture := func(w http.ResponseWriter, r *http.Request) {
+		_, hadDeadline = r.Context().Deadline()
+		w.WriteHeader(http.StatusOK)
+	}
+
+	// Normal request → a deadline is attached.
+	RequestTimeout(time.Second)(http.HandlerFunc(capture)).
+		ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/x", nil))
+	if !hadDeadline {
+		t.Error("expected a context deadline on a normal request")
+	}
+
+	// WebSocket upgrade → exempt (no deadline, or the socket dies).
+	wsReq := httptest.NewRequest(http.MethodGet, "/api/v1/ws", nil)
+	wsReq.Header.Set("Upgrade", "websocket")
+	RequestTimeout(time.Second)(http.HandlerFunc(capture)).ServeHTTP(httptest.NewRecorder(), wsReq)
+	if hadDeadline {
+		t.Error("WebSocket upgrade must not get a deadline")
+	}
+
+	// Non-positive duration → passthrough, no deadline.
+	RequestTimeout(0)(http.HandlerFunc(capture)).
+		ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/x", nil))
+	if hadDeadline {
+		t.Error("zero duration must not set a deadline")
+	}
+}
+
+func TestRateLimitPerUser(t *testing.T) {
+	c := &fakeRateCounter{allow: true}
+	h := RateLimitPerUser(c, 5, time.Minute)(okHandler())
+
+	// Authenticated → keyed by user ID (route-agnostic), not IP.
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/channels/x/messages", nil)
+	req = req.WithContext(ContextWithClaims(req.Context(), &model.TokenClaims{UserID: "u-42"}))
+	req.RemoteAddr = "203.0.113.7:9"
+	h.ServeHTTP(httptest.NewRecorder(), req)
+	if want := "rlu:write:u-42"; c.gotKey != want {
+		t.Errorf("per-user key = %q, want %q", c.gotKey, want)
+	}
+
+	// Unauthenticated → falls back to client IP.
+	req2 := httptest.NewRequest(http.MethodPost, "/api/v1/channels/x/messages", nil)
+	req2.RemoteAddr = "203.0.113.7:9"
+	h.ServeHTTP(httptest.NewRecorder(), req2)
+	if want := "rlu:write:203.0.113.7"; c.gotKey != want {
+		t.Errorf("fallback key = %q, want %q", c.gotKey, want)
+	}
+
+	// Over-limit → 429.
+	blocked := RateLimitPerUser(&fakeRateCounter{allow: false}, 1, time.Minute)(okHandler())
+	rec := httptest.NewRecorder()
+	blocked.ServeHTTP(rec, req)
+	if rec.Code != http.StatusTooManyRequests {
+		t.Errorf("over-limit status = %d, want 429", rec.Code)
+	}
+
+	// Counter error → fail open; nil counter → pass through.
+	failOpen := RateLimitPerUser(&fakeRateCounter{err: context.DeadlineExceeded}, 1, time.Minute)(okHandler())
+	recOpen := httptest.NewRecorder()
+	failOpen.ServeHTTP(recOpen, req)
+	if recOpen.Code != http.StatusOK {
+		t.Errorf("fail-open status = %d, want 200", recOpen.Code)
+	}
+	recNil := httptest.NewRecorder()
+	RateLimitPerUser(nil, 1, time.Minute)(okHandler()).ServeHTTP(recNil, req)
+	if recNil.Code != http.StatusOK {
+		t.Errorf("nil-counter status = %d, want 200", recNil.Code)
+	}
+}
+
 func TestRateLimit_ClientIPSources(t *testing.T) {
 	c := &fakeRateCounter{allow: true}
 	h := RateLimit(c, 5, time.Minute)(okHandler())
 
-	// X-Forwarded-For multi-hop → first hop wins.
+	// X-Forwarded-For multi-hop with one trusted proxy (default): the entry the
+	// proxy appended (right-most) wins, NOT the spoofable leading hop.
 	req := httptest.NewRequest(http.MethodPost, "/auth/login", nil)
 	req.Header.Set("X-Forwarded-For", "198.51.100.9, 10.0.0.1")
 	req.RemoteAddr = "10.0.0.1:1"
 	h.ServeHTTP(httptest.NewRecorder(), req)
-	if want := "rl:/auth/login:198.51.100.9"; c.gotKey != want {
+	if want := "rl:/auth/login:10.0.0.1"; c.gotKey != want {
 		t.Errorf("XFF key = %q, want %q", c.gotKey, want)
 	}
 
+	// A forged leading X-Forwarded-For can't change the key — the trusted
+	// proxy's appended real client IP is still used.
+	req3 := httptest.NewRequest(http.MethodPost, "/auth/login", nil)
+	req3.Header.Set("X-Forwarded-For", "1.2.3.4, 203.0.113.7")
+	req3.RemoteAddr = "10.0.0.1:1"
+	h.ServeHTTP(httptest.NewRecorder(), req3)
+	if want := "rl:/auth/login:203.0.113.7"; c.gotKey != want {
+		t.Errorf("forged XFF key = %q, want %q (trusted hop)", c.gotKey, want)
+	}
+
+	// trustedProxyCount = 0 → ignore X-Forwarded-For, key on RemoteAddr.
+	SetTrustedProxyCount(0)
+	t.Cleanup(func() { SetTrustedProxyCount(1) })
+	req4 := httptest.NewRequest(http.MethodPost, "/auth/login", nil)
+	req4.Header.Set("X-Forwarded-For", "1.2.3.4")
+	req4.RemoteAddr = "203.0.113.7:9"
+	h.ServeHTTP(httptest.NewRecorder(), req4)
+	if want := "rl:/auth/login:203.0.113.7"; c.gotKey != want {
+		t.Errorf("no-trust key = %q, want %q", c.gotKey, want)
+	}
+
 	// No XFF, unparseable RemoteAddr → used verbatim.
+	SetTrustedProxyCount(1)
 	req2 := httptest.NewRequest(http.MethodPost, "/auth/login", nil)
 	req2.RemoteAddr = "weird-addr"
 	h.ServeHTTP(httptest.NewRecorder(), req2)

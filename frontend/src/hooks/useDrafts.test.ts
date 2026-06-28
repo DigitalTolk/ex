@@ -3,6 +3,7 @@ import { act, renderHook, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createElement, type ReactNode } from 'react';
 import {
+  resetDraftSessionState,
   restoreDraftScope,
   restoreDraftScopeForContent,
   shouldRefetchDraftsForRemoteUpdate,
@@ -38,6 +39,13 @@ describe('useDrafts', () => {
   beforeEach(() => {
     vi.mocked(apiFetch).mockReset();
     restoreDraftScope({ parentID: 'dm-1', parentType: 'conversation' });
+  });
+
+  it('resetDraftSessionState clears suppression and the remote-update ignore window', () => {
+    suppressSentDraft({ parentID: 'reset-me', parentType: 'channel' });
+    resetDraftSessionState();
+    // ignoreDraftEventsUntil reset to 0 → remote draft updates are processed again.
+    expect(shouldRefetchDraftsForRemoteUpdate()).toBe(true);
   });
 
   it('loads drafts and normalizes invalid responses to an empty list', async () => {

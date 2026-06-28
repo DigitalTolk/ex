@@ -126,7 +126,7 @@ func (h *AttachmentHandler) List(w http.ResponseWriter, r *http.Request) {
 	messageID := queryParam(r, "messageID", "")
 	atts, err := h.svc.GetManyForUser(r.Context(), userID, ids, parentID, parentType, messageID)
 	if err != nil { // coverage-ignore: GetManyForUser swallows per-id errors and only errors on len(ids) > MaxAttachmentBatchIDs, which the handler already rejected above; this branch is unreachable from a request and defensive against a future contract change.
-		writeError(w, http.StatusInternalServerError, "list_error", err.Error())
+		writeInternalError(w, r, "list_error", err)
 		return
 	}
 	if atts == nil { // coverage-ignore: GetManyForUser returns a make()-initialized slice that is never nil; coercion is defensive against a future contract change.

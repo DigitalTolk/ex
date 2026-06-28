@@ -14,6 +14,9 @@ import {
   apiFetch,
   refreshAccessToken,
 } from '@/lib/api';
+import { AUTH_INVALID_EVENT } from '@/lib/auth-events';
+import { queryClient } from '@/lib/query-client';
+import { resetDraftSessionState } from '@/hooks/useDrafts';
 import { clearMobilePushUser, identifyMobilePushUser } from '@/lib/mobile-push-identity';
 
 interface AuthState {
@@ -71,6 +74,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     void clearMobilePushUser().catch(() => undefined);
     clearAccessToken();
     setUser(null);
+    // Drop every cached query + process-wide draft state so a subsequent
+    // (different) user in the same document can't read the previous session's
+    // messages/channels/drafts.
+    queryClient.clear();
+    resetDraftSessionState();
+  }, []);
+
+  // A terminally-invalid session (refresh failed mid-session) broadcasts
+  // AUTH_INVALID_EVENT from apiFetch. React to it here so the app drops the
+  // user and ProtectedRoute redirects to /login, instead of leaving a
+  // "logged-in" shell whose queries all silently 401.
+  useEffect(() => {
+    const onInvalid = () => {
+      clearAccessToken();
+      setUser(null);
+      queryClient.clear();
+      resetDraftSessionState();
+    };
+    window.addEventListener(AUTH_INVALID_EVENT, onInvalid);
+    return () => window.removeEventListener(AUTH_INVALID_EVENT, onInvalid);
   }, []);
 
   const setAuth = useCallback((token: string, userData: User) => {

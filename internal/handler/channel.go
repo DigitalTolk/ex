@@ -116,7 +116,7 @@ func (h *ChannelHandler) List(w http.ResponseWriter, r *http.Request) {
 
 	channels, err := h.channelSvc.ListUserChannels(r.Context(), userID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "list_error", err.Error())
+		writeInternalError(w, r, "list_error", err)
 		return
 	}
 	if channels == nil {
@@ -140,7 +140,7 @@ func (h *ChannelHandler) BrowsePublic(w http.ResponseWriter, r *http.Request) {
 	if q != "" {
 		hits, err := h.channelSvc.SearchPublic(r.Context(), userID, q, limit)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "browse_error", err.Error())
+			writeInternalError(w, r, "browse_error", err)
 			return
 		}
 		if hits != nil {
@@ -151,7 +151,7 @@ func (h *ChannelHandler) BrowsePublic(w http.ResponseWriter, r *http.Request) {
 
 	channels, _, err := h.channelSvc.BrowsePublic(r.Context(), userID, limit, cursor)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "browse_error", err.Error())
+		writeInternalError(w, r, "browse_error", err)
 		return
 	}
 	if channels == nil {
@@ -196,21 +196,21 @@ func (h *ChannelHandler) Get(w http.ResponseWriter, r *http.Request) {
 		ch, err = h.channelSvc.GetVisibleBySlug(r.Context(), userID, val)
 	}
 	if err != nil {
-		writeReadResourceError(w, err, "channel")
+		writeReadResourceError(w, r, err, "channel")
 		return
 	}
 
 	writeJSON(w, http.StatusOK, ch)
 }
 
-func writeReadResourceError(w http.ResponseWriter, err error, resource string) {
+func writeReadResourceError(w http.ResponseWriter, r *http.Request, err error, resource string) {
 	switch {
 	case errors.Is(err, store.ErrNotFound):
 		writeError(w, http.StatusNotFound, "not_found", resource+" not found")
 	case errors.Is(err, service.ErrForbidden):
 		writeError(w, http.StatusForbidden, "forbidden", "you do not have access to this "+resource)
 	default:
-		writeError(w, http.StatusInternalServerError, "server_error", err.Error())
+		writeInternalError(w, r, "server_error", err)
 	}
 }
 
@@ -292,7 +292,7 @@ func (h *ChannelHandler) MarkRead(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.channelSvc.MarkChannelRead(r.Context(), userID, id); err != nil {
-		writeReadResourceError(w, err, "channel")
+		writeReadResourceError(w, r, err, "channel")
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

@@ -65,7 +65,7 @@ export function ChannelView() {
   const { user } = useAuth();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const { clearChannelUnread, setActiveChannel, setActiveThread } = useUnread();
+  const { setActiveChannel, setActiveThread } = useUnread();
   const { setActiveParent } = useNotifications();
   const { online } = usePresence();
   const quickReactions = useFrequentEmojis(3);
@@ -238,7 +238,6 @@ export function ChannelView() {
   useEffect(() => {
     if (!channel?.id) return;
     const openedID = channel.id;
-    clearChannelUnread(openedID);
     setActiveChannel(openedID);
     setActiveParent(openedID);
     // Optimistically drop the server-side unread badge for this channel so the
@@ -256,7 +255,7 @@ export function ChannelView() {
       setActiveChannel(null);
       setActiveParent(null);
     };
-  }, [channel?.id, clearChannelUnread, setActiveChannel, setActiveParent, queryClient]);
+  }, [channel?.id, setActiveChannel, setActiveParent, queryClient]);
 
   // Reset locally-opened thread when the channel changes; deliberate
   // synchronous reset. URL-driven thread state (?thread=…) doesn't need

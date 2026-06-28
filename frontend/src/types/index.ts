@@ -274,7 +274,6 @@ export interface PresenceEvent {
 }
 
 export interface UserState {
-  channelNotifications: string[];
   threadNotifications: string[];
   threadSeen: Record<string, string>;
   hiddenConversations: string[];

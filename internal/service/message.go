@@ -13,6 +13,7 @@ import (
 	"github.com/DigitalTolk/ex/internal/events"
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/DigitalTolk/ex/internal/pubsub"
+	"github.com/DigitalTolk/ex/internal/safe"
 	"github.com/DigitalTolk/ex/internal/store"
 )
 
@@ -202,6 +203,18 @@ func (s *MessageService) CanAccessMessageAttachment(ctx context.Context, userID,
 	return errors.New("message: attachment is not referenced by message")
 }
 
+// detachedTimeout bounds best-effort work that runs off the request path with a
+// cancellation-free context. Without it a hung DynamoDB/OpenSearch could pin the
+// goroutine indefinitely (the AWS SDK has no default per-call deadline), and
+// under load those goroutines accumulate without bound.
+const detachedTimeout = 30 * time.Second
+
+// detachedContext returns a cancellation-free copy of ctx (so the work survives
+// the request ending) but with a finite deadline so it can't hang forever.
+func detachedContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), detachedTimeout)
+}
+
 // indexMessage / deleteFromIndex dispatch on a detached goroutine so a
 // slow OpenSearch never adds to user-perceived send latency. Failures
 // are logged; the admin reindex is the recovery path.
@@ -209,11 +222,13 @@ func (s *MessageService) indexMessage(ctx context.Context, m *model.Message, par
 	if s.indexer == nil || m == nil {
 		return
 	}
-	go func() {
-		if err := s.indexer.IndexMessage(context.WithoutCancel(ctx), m, parentType); err != nil {
+	safe.Go(func() {
+		bg, cancel := detachedContext(ctx)
+		defer cancel()
+		if err := s.indexer.IndexMessage(bg, m, parentType); err != nil {
 			slog.Warn("search index message failed", "id", m.ID, "error", err)
 		}
-	}()
+	})
 }
 
 // notify dispatches user-facing notifications off the send path. Like
@@ -225,7 +240,11 @@ func (s *MessageService) notify(ctx context.Context, msg *model.Message, parentT
 	if s.notifier == nil || msg == nil {
 		return
 	}
-	go s.notifier.NotifyForMessage(context.WithoutCancel(ctx), msg, parentType)
+	safe.Go(func() {
+		bg, cancel := detachedContext(ctx)
+		defer cancel()
+		s.notifier.NotifyForMessage(bg, msg, parentType)
+	})
 }
 
 // bumpUnreadSeq advances a parent's unread counter for a new top-level message
@@ -240,7 +259,11 @@ func (s *MessageService) bumpUnreadSeq(ctx context.Context, store UnreadSeqStore
 	if store == nil {
 		return
 	}
-	go s.writeUnreadSeq(context.WithoutCancel(ctx), store, parentID, authorID)
+	safe.Go(func() {
+		bg, cancel := detachedContext(ctx)
+		defer cancel()
+		s.writeUnreadSeq(bg, store, parentID, authorID)
+	})
 }
 
 // writeUnreadSeq is the synchronous core of bumpUnreadSeq, split out so it can
@@ -261,11 +284,13 @@ func (s *MessageService) deleteFromIndex(ctx context.Context, id string) {
 	if s.indexer == nil {
 		return
 	}
-	go func() {
-		if err := s.indexer.DeleteMessage(context.WithoutCancel(ctx), id); err != nil {
+	safe.Go(func() {
+		bg, cancel := detachedContext(ctx)
+		defer cancel()
+		if err := s.indexer.DeleteMessage(bg, id); err != nil {
 			slog.Warn("search delete message failed", "id", id, "error", err)
 		}
-	}()
+	})
 }
 
 // Send creates a new message in the given parent (channel or conversation).
@@ -400,6 +425,11 @@ func (s *MessageService) Send(ctx context.Context, userID, parentID, parentType,
 		s.followMentionedThreadUsers(ctx, msg, parentType)
 		if updated, err := s.messages.IncrementReplyMetadata(ctx, parentID, parentMessageID, msg.CreatedAt, userID); err == nil {
 			updatedThreadRoot = updated
+		} else {
+			// The reply is saved but the root's replyCount/lastReplyAt didn't
+			// advance, so the thread shows a stale count until the next refetch.
+			// Log it rather than dropping the error silently.
+			slog.Warn("thread reply metadata increment failed", "rootID", parentMessageID, "replyID", msg.ID, "error", err)
 		}
 	}
 
@@ -698,9 +728,32 @@ func (s *MessageService) ListUserThreads(ctx context.Context, userID string) ([]
 		}
 	}
 
-	for _, p := range parents {
-		msgs, err := s.scanParentMessages(ctx, p.id)
-		if err != nil {
+	// Fetch each parent's messages concurrently (bounded to 8 in flight) — the
+	// per-parent scans are the dominant, independent I/O cost. The in-memory
+	// aggregation below stays serial (it mutates shared maps), so only the scans
+	// are parallelized.
+	parentMsgs := make([][]*model.Message, len(parents))
+	{
+		sem := make(chan struct{}, 8)
+		var wg sync.WaitGroup
+		for i, p := range parents {
+			wg.Add(1)
+			sem <- struct{}{}
+			go func(i int, id string) {
+				defer wg.Done()
+				defer safe.Recover()
+				defer func() { <-sem }()
+				if msgs, err := s.scanParentMessages(ctx, id); err == nil {
+					parentMsgs[i] = msgs
+				}
+			}(i, p.id)
+		}
+		wg.Wait()
+	}
+
+	for i, p := range parents {
+		msgs := parentMsgs[i]
+		if msgs == nil {
 			continue
 		}
 		// Index messages by ID so we can resolve thread roots without a second fetch.

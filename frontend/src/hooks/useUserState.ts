@@ -4,7 +4,6 @@ import { queryKeys } from '@/lib/query-keys';
 import type { UserState } from '@/types';
 
 const EMPTY_USER_STATE: UserState = {
-  channelNotifications: [],
   threadNotifications: [],
   threadSeen: {},
   hiddenConversations: [],
@@ -16,7 +15,6 @@ export function useUserState(options?: { enabled?: boolean }) {
     queryFn: async () => {
       const state = await apiFetch<UserState>('/api/v1/user-state');
       return {
-        channelNotifications: state.channelNotifications ?? [],
         threadNotifications: state.threadNotifications ?? [],
         threadSeen: state.threadSeen ?? {},
         hiddenConversations: state.hiddenConversations ?? [],

@@ -4,18 +4,74 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 )
 
 type fakeMembers struct {
-	ids map[string][]string
-	err error
+	ids   map[string][]string
+	err   error
+	calls int
 }
 
 func (f *fakeMembers) MemberIDs(_ context.Context, channelID string) ([]string, error) {
+	f.calls++
 	if f.err != nil {
 		return nil, f.err
 	}
 	return f.ids[channelID], nil
+}
+
+// With caching enabled, repeated resolutions of the same topic within the TTL
+// are served from cache; an expired entry re-fetches; a fetch error is not
+// cached.
+func TestResolver_CacheTTL(t *testing.T) {
+	m := &fakeMembers{ids: map[string][]string{"c1": {"u1", "u2"}}}
+	r := NewResolver(m, nil)
+	r.SetCacheTTL(time.Minute)
+	offset := time.Duration(0)
+	r.now = func() time.Time { return time.Unix(1000, 0).Add(offset) }
+
+	if _, err := r.Resolve(context.Background(), "chan:c1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Resolve(context.Background(), "chan:c1"); err != nil {
+		t.Fatal(err)
+	}
+	if m.calls != 1 {
+		t.Fatalf("store called %d times, want 1 (second served from cache)", m.calls)
+	}
+
+	// Advance past the TTL → re-fetch.
+	offset = 2 * time.Minute
+	if _, err := r.Resolve(context.Background(), "chan:c1"); err != nil {
+		t.Fatal(err)
+	}
+	if m.calls != 2 {
+		t.Fatalf("store called %d times after expiry, want 2", m.calls)
+	}
+
+	// Expire again and make the fetch fail — the error propagates and is NOT cached.
+	offset = 4 * time.Minute
+	m.err = errors.New("boom")
+	if _, err := r.Resolve(context.Background(), "chan:c1"); err == nil {
+		t.Error("expected fetch error to propagate")
+	}
+}
+
+// Covers the default (time.Now) clock path when caching is on but no clock is injected.
+func TestResolver_CacheDefaultClock(t *testing.T) {
+	m := &fakeMembers{ids: map[string][]string{"c1": {"u1"}}}
+	r := NewResolver(m, nil)
+	r.SetCacheTTL(time.Minute)
+	if _, err := r.Resolve(context.Background(), "chan:c1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Resolve(context.Background(), "chan:c1"); err != nil {
+		t.Fatal(err)
+	}
+	if m.calls != 1 {
+		t.Fatalf("store called %d times, want 1 with the default clock", m.calls)
+	}
 }
 
 type fakeParticipants struct {

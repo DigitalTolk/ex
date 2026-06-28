@@ -42,7 +42,7 @@ func (h *UserHandler) GetMe(w http.ResponseWriter, r *http.Request) {
 
 	user, err := h.userSvc.GetByID(r.Context(), userID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "user_error", err.Error())
+		writeInternalError(w, r, "user_error", err)
 		return
 	}
 
@@ -77,7 +77,7 @@ func (h *UserHandler) UpdateMe(w http.ResponseWriter, r *http.Request) {
 
 	user, err := h.userSvc.Update(r.Context(), userID, body.DisplayName, body.AvatarKey, body.EmojiSkinTone)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "update_error", err.Error())
+		writeInternalError(w, r, "update_error", err)
 		return
 	}
 
@@ -178,7 +178,7 @@ func (h *UserHandler) GetUser(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, "not_found", "user not found")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "user_error", err.Error())
+		writeInternalError(w, r, "user_error", err)
 		return
 	}
 
@@ -221,7 +221,7 @@ func (h *UserHandler) BatchGetUsers(w http.ResponseWriter, r *http.Request) {
 
 	users, err := h.userSvc.GetBatch(r.Context(), body.IDs)
 	if err != nil { // coverage-ignore: UserService.GetBatch swallows per-user errors (continue) and always returns a nil error — no request can drive this branch; the guard is defensive against a future contract change.
-		writeError(w, http.StatusInternalServerError, "batch_error", err.Error())
+		writeInternalError(w, r, "batch_error", err)
 		return
 	}
 	if users == nil { // coverage-ignore: GetBatch returns a make()-initialized slice that is never nil; coercion is defensive against a future contract change.
@@ -262,7 +262,7 @@ func (h *UserHandler) ListUsers(w http.ResponseWriter, r *http.Request) {
 	if q != "" {
 		users, err := h.userSvc.Search(r.Context(), q, 20)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "search_error", err.Error())
+			writeInternalError(w, r, "search_error", err)
 			return
 		}
 		if users == nil {
@@ -277,7 +277,7 @@ func (h *UserHandler) ListUsers(w http.ResponseWriter, r *http.Request) {
 			return h.userSvc.List(ctx, listAllPageSize, cursor)
 		}, listAllMaxRounds)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "list_error", err.Error())
+			writeInternalError(w, r, "list_error", err)
 			return
 		}
 		// Project to the same limited shape BatchGetUsers returns to
@@ -306,7 +306,7 @@ func (h *UserHandler) ListUsers(w http.ResponseWriter, r *http.Request) {
 
 	users, _, err := h.userSvc.List(r.Context(), limit, cursor)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "list_error", err.Error())
+		writeInternalError(w, r, "list_error", err)
 		return
 	}
 	if users == nil {
@@ -347,7 +347,7 @@ func (h *UserHandler) UpdateUserRole(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, "not_found", "user not found")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "update_error", err.Error())
+		writeInternalError(w, r, "update_error", err)
 		return
 	}
 
@@ -422,7 +422,7 @@ func (h *UserHandler) CreateAvatarUploadURL(w http.ResponseWriter, r *http.Reque
 	key := "avatars/" + userID + "/" + store.NewID()
 	url, err := h.s3.PresignedPutURL(r.Context(), key, body.ContentType, 10*time.Minute)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "presign_error", err.Error())
+		writeInternalError(w, r, "presign_error", err)
 		return
 	}
 

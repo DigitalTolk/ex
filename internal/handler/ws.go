@@ -13,6 +13,7 @@ import (
 	"github.com/DigitalTolk/ex/internal/events"
 	"github.com/DigitalTolk/ex/internal/middleware"
 	"github.com/DigitalTolk/ex/internal/pubsub"
+	"github.com/DigitalTolk/ex/internal/safe"
 	"github.com/DigitalTolk/ex/internal/service"
 )
 
@@ -197,6 +198,7 @@ func (h *WSHandler) Connect(w http.ResponseWriter, r *http.Request) {
 	convCh := make(chan subResult, 1)
 
 	go func() {
+		defer safe.Recover()
 		uc, err := h.chanSvc.ListUserChannels(r.Context(), userID)
 		var chs []string
 		for _, c := range uc {
@@ -205,6 +207,7 @@ func (h *WSHandler) Connect(w http.ResponseWriter, r *http.Request) {
 		chanCh <- subResult{chs, err}
 	}()
 	go func() {
+		defer safe.Recover()
 		uc, err := h.convSvc.ListUserConversations(r.Context(), userID)
 		var chs []string
 		for _, c := range uc {
@@ -288,6 +291,7 @@ func (h *WSHandler) Connect(w http.ResponseWriter, r *http.Request) {
 	// frames are silently dropped — the protocol is forward-compatible.
 	go func() {
 		defer cancel()
+		defer safe.Recover()
 		for {
 			_, data, err := conn.Read(ctx)
 			if err != nil {
@@ -332,7 +336,7 @@ func (h *WSHandler) Connect(w http.ResponseWriter, r *http.Request) {
 			// presence, and the offline mobile-push fallback fires. Run in a
 			// goroutine so the wait never stalls live event delivery on
 			// client.Events. Bounded: at most one in flight (timeout < interval).
-			go pingLiveness(ctx, conn, cancel)
+			safe.Go(func() { pingLiveness(ctx, conn, cancel) })
 		}
 	}
 }

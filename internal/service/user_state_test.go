@@ -61,7 +61,7 @@ func TestUserStateService_ErrorsAndNilInputs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("nil List: %v", err)
 	}
-	if len(empty.ChannelNotifications) != 0 || len(empty.HiddenConversations) != 0 {
+	if len(empty.ThreadNotifications) != 0 || len(empty.HiddenConversations) != 0 {
 		t.Fatalf("nil List state = %#v", empty)
 	}
 
@@ -108,14 +108,11 @@ func TestUserStateService_ListAndMutations(t *testing.T) {
 	publisher := newMockPublisher()
 	svc := NewUserStateService(store, publisher)
 
-	if err := svc.MarkChannelNotificationUnread(ctx, "u-1", "ch-1"); err != nil {
-		t.Fatalf("MarkChannelNotificationUnread: %v", err)
+	if err := svc.MarkThreadNotificationUnread(ctx, "u-1", "conv-1", ParentConversation, "root-1"); err != nil {
+		t.Fatalf("MarkThreadNotificationUnread: %v", err)
 	}
 	if len(publisher.published) == 0 {
 		t.Fatal("expected user state change event")
-	}
-	if err := svc.MarkThreadNotificationUnread(ctx, "u-1", "conv-1", ParentConversation, "root-1"); err != nil {
-		t.Fatalf("MarkThreadNotificationUnread: %v", err)
 	}
 	// A second thread notification that is never marked seen, so it survives
 	// into List and exercises the ThreadNotification case of the switch.
@@ -145,16 +142,10 @@ func TestUserStateService_ListAndMutations(t *testing.T) {
 	if gotSeen.Before(beforeSeen) || gotSeen.After(afterSeen) {
 		t.Fatalf("thread seen = %s, want server time between %s and %s", gotSeen, beforeSeen, afterSeen)
 	}
-	if got := state.ChannelNotifications; len(got) != 1 || got[0] != "ch-1" {
-		t.Fatalf("channel notifications = %#v", got)
-	}
 	if got := state.HiddenConversations; len(got) != 1 || got[0] != "conv-1" {
 		t.Fatalf("hidden conversations = %#v", got)
 	}
 
-	if err := svc.ClearChannelNotifications(ctx, "u-1", "ch-1"); err != nil {
-		t.Fatalf("ClearChannelNotifications: %v", err)
-	}
 	if err := svc.UnhideConversation(ctx, "u-1", "conv-1"); err != nil {
 		t.Fatalf("UnhideConversation: %v", err)
 	}
@@ -162,7 +153,7 @@ func TestUserStateService_ListAndMutations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("List after clear: %v", err)
 	}
-	if len(state.ChannelNotifications) != 0 || len(state.HiddenConversations) != 0 {
+	if len(state.HiddenConversations) != 0 {
 		t.Fatalf("state after clear = %#v", state)
 	}
 }

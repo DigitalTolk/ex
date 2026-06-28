@@ -33,3 +33,20 @@ export const EventType = {
 } as const;
 
 export type EventTypeName = (typeof EventType)[keyof typeof EventType];
+
+// EPHEMERAL_EVENT_TYPES mirrors the backend `ephemeralTypes` set: events that
+// live only on the socket and are NEVER written to the durable inbox, so they
+// are never replayed on reconnect. The replay cursor must not advance on these
+// — a typing/presence/notification.new frame whose ULID outruns an in-flight
+// durable message.new would otherwise push the cursor past that message, and
+// the next reconnect (`?since=<cursor>`) would skip replaying it → lost message.
+export const EPHEMERAL_EVENT_TYPES = new Set<string>([
+  EventType.PresenceChanged,
+  EventType.NotificationNew,
+  EventType.ServerVersion,
+  EventType.Ping,
+  EventType.ForceLogout,
+  EventType.ReplayDone,
+  EventType.ReplayExhausted,
+  'typing',
+]);

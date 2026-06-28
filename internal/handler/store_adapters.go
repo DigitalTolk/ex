@@ -24,6 +24,9 @@ func (a *UserStoreAdapter) CreateUser(ctx context.Context, user *model.User) err
 func (a *UserStoreAdapter) GetUser(ctx context.Context, id string) (*model.User, error) {
 	return a.s.GetByID(ctx, id)
 }
+func (a *UserStoreAdapter) GetUsersByIDs(ctx context.Context, ids []string) ([]*model.User, error) {
+	return a.s.GetUsersByIDs(ctx, ids)
+}
 func (a *UserStoreAdapter) GetUserByEmail(ctx context.Context, email string) (*model.User, error) {
 	return a.s.GetByEmail(ctx, email)
 }

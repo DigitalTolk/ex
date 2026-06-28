@@ -159,7 +159,13 @@ export function invalidateUnfurlsForMessage(qc: QueryClient, messageID: string) 
   });
 }
 
-export function appendMessageToCache(qc: QueryClient, parentID: string, msg: Message) {
+// appendMessageToCache prepends a new message to the live-tail page. Returns
+// true when the message is now present in pages[0] (appended, or already there)
+// — false means the head is a deep-link window mid-history (hasMoreNewer) where
+// the message belongs to a not-yet-loaded future page, so the caller may need
+// to jump to the tail to surface it.
+export function appendMessageToCache(qc: QueryClient, parentID: string, msg: Message): boolean {
+  let present = false;
   patchBothScopes(qc, parentID, (old) => {
     if (!old || old.pages.length === 0) return old;
     // Only safely appendable when pages[0] is the live tail. In deep-
@@ -168,14 +174,19 @@ export function appendMessageToCache(qc: QueryClient, parentID: string, msg: Mes
     // leave the chain untouched and let the load-newer sentinel fetch.
     const head = old.pages[0];
     if (head.hasMoreNewer) return old;
-    if (head.items.some((m) => m.id === msg.id)) return old;
+    if (head.items.some((m) => m.id === msg.id)) {
+      present = true;
+      return old;
+    }
     const patched: MessageWindow = {
       ...head,
       items: [msg, ...head.items],
       newestID: msg.id,
     };
+    present = true;
     return { ...old, pages: [patched, ...old.pages.slice(1)] };
   });
+  return present;
 }
 
 export function updateMessageInCache(qc: QueryClient, parentID: string, msg: Message) {
@@ -350,7 +361,15 @@ export function useSendMessage(scope: SendMessageScope) {
       // shows instantly instead of waiting for the server round-trip (the
       // message.new echo + a userThreads refetch reconcile the rest).
       if (parentID && !input.parentMessageID) {
-        appendMessageToCache(queryClient, parentID, data);
+        const present = appendMessageToCache(queryClient, parentID, data);
+        if (!present) {
+          // The sender is reading a deep-linked window mid-history, so their
+          // message lives in a future page that isn't loaded. Reset the chain
+          // to the live tail so they actually see what they just sent instead
+          // of the composer silently clearing.
+          queryClient.resetQueries({ queryKey: queryKeys.channelMessagesAll(parentID) });
+          queryClient.resetQueries({ queryKey: queryKeys.conversationMessagesAll(parentID) });
+        }
       }
       if (input.parentMessageID) {
         const path = parentPath({ channelId, conversationId });

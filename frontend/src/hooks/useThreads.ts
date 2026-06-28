@@ -81,6 +81,19 @@ export function resetSeenCache() {
   seenCache = null;
 }
 
+// Bound the seen-map so it can't grow without limit in localStorage as the user
+// views more threads over time. When over the cap, keep the most-recently-seen
+// entries (highest ISO timestamp) and drop the oldest.
+const SEEN_MAX = 500;
+function capSeenMap(map: Record<string, string>): Record<string, string> {
+  const keys = Object.keys(map);
+  if (keys.length <= SEEN_MAX) return map;
+  const kept = keys.sort((a, b) => (map[a] < map[b] ? 1 : -1)).slice(0, SEEN_MAX);
+  const next: Record<string, string> = {};
+  for (const k of kept) next[k] = map[k];
+  return next;
+}
+
 // markThreadSeen records an optimistic local timestamp for immediate UI updates.
 // The persisted server state deliberately uses server time; the client never
 // sends its local clock as authoritative read state.
@@ -91,7 +104,7 @@ export function markThreadSeen(
 ) {
   const map = { ...loadSeen() };
   map[threadRootID] = at;
-  saveSeen(map);
+  saveSeen(capSeenMap(map));
   if (target) {
     const parentType = target.parentType === 'channel' ? 'channels' : 'conversations';
     void apiFetch<void>(

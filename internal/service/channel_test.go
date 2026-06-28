@@ -805,6 +805,40 @@ func TestChannelService_UpdateMemberRole_PromoteToOwner_Requires_Owner(t *testin
 	}
 }
 
+func TestChannelService_UpdateMemberRole_AdminCannotDemoteOwner(t *testing.T) {
+	svc, _, memberships, _, _ := setupChannelService()
+	ctx := context.Background()
+
+	memberships.memberships["ch16#admin-1"] = &model.ChannelMembership{
+		ChannelID: "ch16", UserID: "admin-1", Role: model.ChannelRoleAdmin,
+	}
+	memberships.memberships["ch16#owner-1"] = &model.ChannelMembership{
+		ChannelID: "ch16", UserID: "owner-1", Role: model.ChannelRoleOwner,
+	}
+
+	// A channel admin must not be able to demote the owner.
+	if err := svc.UpdateMemberRole(ctx, "admin-1", "ch16", "owner-1", model.ChannelRoleMember); err == nil {
+		t.Fatal("expected error: an admin cannot demote the owner")
+	}
+}
+
+func TestChannelService_UpdateMemberRole_OwnerCanDemoteOwner(t *testing.T) {
+	svc, _, memberships, _, _ := setupChannelService()
+	ctx := context.Background()
+
+	memberships.memberships["ch17#owner-1"] = &model.ChannelMembership{
+		ChannelID: "ch17", UserID: "owner-1", Role: model.ChannelRoleOwner,
+	}
+	memberships.memberships["ch17#owner-2"] = &model.ChannelMembership{
+		ChannelID: "ch17", UserID: "owner-2", Role: model.ChannelRoleOwner,
+	}
+
+	// An owner may demote a co-owner.
+	if err := svc.UpdateMemberRole(ctx, "owner-1", "ch17", "owner-2", model.ChannelRoleAdmin); err != nil {
+		t.Fatalf("owner demoting a co-owner should succeed: %v", err)
+	}
+}
+
 func TestChannelService_ListMembers(t *testing.T) {
 	svc, _, memberships, _, _ := setupChannelService()
 	ctx := context.Background()

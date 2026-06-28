@@ -4,40 +4,19 @@ import { apiFetch } from '@/lib/api';
 import { THREAD_SEEN_CHANGED_EVENT } from '@/hooks/useThreads';
 
 interface UnreadState {
-  unreadChannels: Set<string>;
-  unreadChannelNotifications: Set<string>;
-  unreadConversations: Set<string>;
+  // Thread-unread is the only unread state that still lives in the client: thread
+  // replies don't bump the parent's seq, so there's no server-computed count to
+  // read — this Set tracks live thread-reply notifications until the thread is
+  // seen. Channel/DM unread counts come straight from the userChannels /
+  // userConversations list cache (server seq-derived), patched live via
+  // @/lib/unread-cache — NOT from this context.
   unreadThreadNotifications: Set<string>;
   hiddenConversations: Set<string>;
-  // Authoritative per-target unread message counts — the SINGLE source the
-  // sidebar/title read (never summed with anything else, which was the old
-  // double-count bug). Seeded from the server seq count
-  // (channel.MessageSeq - LastReadSeq) by syncServerCounts whenever the
-  // userChannels/userConversations lists land, then bumped live by
-  // markChannelUnread/markConversationUnread for immediacy and re-confirmed by
-  // the next sync (server is always >= the live value, so a sync never loses a
-  // live bump and never double-counts one already folded into the server base).
-  // A target absent from the map has no known unread count; the row falls back
-  // to the server boolean and floors the badge to 1.
-  channelUnreadCounts: Map<string, number>;
-  conversationUnreadCounts: Map<string, number>;
-  syncServerCounts: (channelCounts: Map<string, number>, conversationCounts: Map<string, number>) => void;
-  markChannelUnread: (channelId: string) => void;
-  markChannelNotificationUnread: (channelId: string) => void;
-  markConversationUnread: (conversationId: string) => void;
   markThreadNotificationUnread: (threadRootId: string) => void;
-  clearChannelUnread: (channelId: string) => void;
-  clearConversationUnread: (conversationId: string) => void;
-  // Drop the live session delta (unread sets + per-target counts, channels AND
-  // conversations) so the server-computed unread (UserChannel/UserConversation
-  // .unread/.unreadCount) becomes the sole source again. Called after a
-  // reconnect/replay-exhausted refetch, where the refreshed server counts
-  // already include everything the deltas tracked — keeping them double-counts.
-  resetSessionUnread: () => void;
   hideConversation: (id: string) => void;
   unhideConversation: (id: string) => void;
   // Active scope: marking unread is suppressed when the user is currently
-  // looking at the channel or conversation.
+  // looking at the channel or conversation (read it as you go instead).
   setActiveChannel: (id: string | null) => void;
   setActiveConversation: (id: string | null) => void;
   isActiveChannel: (id: string) => boolean;
@@ -65,87 +44,22 @@ function loadHiddenConversations(): Set<string> {
   return new Set(readJSON<string[]>(HIDDEN_KEY, []));
 }
 
-// reconcileCounts rebuilds an absolute unread-count map from the authoritative
-// server values: it keeps only positive counts, drops the active target (so the
-// channel/DM you're currently viewing is never resurrected as unread by a stale
-// refetch), and returns the previous map unchanged when nothing differs so
-// consumers don't re-render needlessly.
-function reconcileCounts(
-  prev: Map<string, number>,
-  server: Map<string, number>,
-  activeID: string | null,
-): Map<string, number> {
-  const next = new Map<string, number>();
-  for (const [id, count] of server) {
-    if (id === activeID || count <= 0) continue;
-    next.set(id, count);
-  }
-  if (prev.size === next.size && [...next].every(([id, count]) => prev.get(id) === count)) {
-    return prev;
-  }
-  return next;
-}
-
 function persistHiddenConversations(set: Set<string>) {
   writeJSON(HIDDEN_KEY, [...set]);
 }
 
 export function UnreadProvider({ children }: { children: ReactNode }) {
-  const [unreadChannels, setUnreadChannels] = useState<Set<string>>(new Set());
-  const [unreadChannelNotifications, setUnreadChannelNotifications] = useState<Set<string>>(new Set());
-  const [unreadConversations, setUnreadConversations] = useState<Set<string>>(new Set());
   const [unreadThreadNotifications, setUnreadThreadNotifications] = useState<Set<string>>(new Set());
   const [hiddenConversations, setHiddenConversations] = useState<Set<string>>(loadHiddenConversations);
-  const [channelUnreadCounts, setChannelUnreadCounts] = useState<Map<string, number>>(new Map());
-  const [conversationUnreadCounts, setConversationUnreadCounts] = useState<Map<string, number>>(new Map());
   // Refs (not state) so updates from onMessageNew callbacks see the latest
   // active scope without re-creating the WS handlers on every navigation.
   const activeChannelRef = useRef<string | null>(null);
   const activeConvRef = useRef<string | null>(null);
   const activeThreadRef = useRef<string | null>(null);
 
-  const syncServerCounts = useCallback((channelCounts: Map<string, number>, conversationCounts: Map<string, number>) => {
-    setChannelUnreadCounts(prev => reconcileCounts(prev, channelCounts, activeChannelRef.current));
-    setConversationUnreadCounts(prev => reconcileCounts(prev, conversationCounts, activeConvRef.current));
-  }, []);
-  const markChannelUnread = useCallback((id: string) => {
-    if (activeChannelRef.current === id) return;
-    setUnreadChannels(prev => new Set(prev).add(id));
-    setChannelUnreadCounts(prev => new Map(prev).set(id, (prev.get(id) ?? 0) + 1));
-  }, []);
-  const markChannelNotificationUnread = useCallback((id: string) => {
-    if (activeChannelRef.current === id) return;
-    setUnreadChannelNotifications(prev => new Set(prev).add(id));
-    notifyUserStateChanged();
-  }, []);
-  const markConversationUnread = useCallback((id: string) => {
-    if (activeConvRef.current === id) return;
-    setUnreadConversations(prev => new Set(prev).add(id));
-    setConversationUnreadCounts(prev => new Map(prev).set(id, (prev.get(id) ?? 0) + 1));
-  }, []);
   const markThreadNotificationUnread = useCallback((id: string) => {
     setUnreadThreadNotifications(prev => new Set(prev).add(id));
     notifyUserStateChanged();
-  }, []);
-  const clearChannelUnread = useCallback((id: string) => {
-    setUnreadChannels(prev => { const next = new Set(prev); next.delete(id); return next; });
-    setUnreadChannelNotifications(prev => { const next = new Set(prev); next.delete(id); return next; });
-    setChannelUnreadCounts(prev => { if (!prev.has(id)) return prev; const next = new Map(prev); next.delete(id); return next; });
-    void apiFetch<void>(`/api/v1/user-state/channels/${encodeURIComponent(id)}/notification`, { method: 'DELETE' })
-      .catch(() => undefined)
-      .finally(notifyUserStateChanged);
-  }, []);
-  const clearConversationUnread = useCallback((id: string) => {
-    setUnreadConversations(prev => { const next = new Set(prev); next.delete(id); return next; });
-    setConversationUnreadCounts(prev => { if (!prev.has(id)) return prev; const next = new Map(prev); next.delete(id); return next; });
-  }, []);
-  const resetSessionUnread = useCallback(() => {
-    // Reconnect is rare, so don't bother short-circuiting the already-empty
-    // case — just drop every session delta unconditionally.
-    setUnreadChannels(new Set());
-    setChannelUnreadCounts(new Map());
-    setUnreadConversations(new Set());
-    setConversationUnreadCounts(new Map());
   }, []);
 
   const hideConversation = useCallback((id: string) => {
@@ -174,21 +88,9 @@ export function UnreadProvider({ children }: { children: ReactNode }) {
 
   const setActiveChannel = useCallback((id: string | null) => {
     activeChannelRef.current = id;
-    if (id) {
-      setUnreadChannels(prev => { const next = new Set(prev); next.delete(id); return next; });
-      setUnreadChannelNotifications(prev => { const next = new Set(prev); next.delete(id); return next; });
-      setChannelUnreadCounts(prev => { if (!prev.has(id)) return prev; const next = new Map(prev); next.delete(id); return next; });
-      void apiFetch<void>(`/api/v1/user-state/channels/${encodeURIComponent(id)}/notification`, { method: 'DELETE' })
-        .catch(() => undefined)
-        .finally(notifyUserStateChanged);
-    }
   }, []);
   const setActiveConversation = useCallback((id: string | null) => {
     activeConvRef.current = id;
-    if (id) {
-      setUnreadConversations(prev => { const next = new Set(prev); next.delete(id); return next; });
-      setConversationUnreadCounts(prev => { if (!prev.has(id)) return prev; const next = new Map(prev); next.delete(id); return next; });
-    }
   }, []);
   const isActiveChannel = useCallback((id: string) => activeChannelRef.current === id, []);
   const isActiveConversation = useCallback((id: string) => activeConvRef.current === id, []);
@@ -229,21 +131,9 @@ export function UnreadProvider({ children }: { children: ReactNode }) {
   // consumers a re-render per parent tick.
   const value = useMemo(
     () => ({
-      unreadChannels,
-      unreadChannelNotifications,
-      unreadConversations,
       unreadThreadNotifications,
       hiddenConversations,
-      channelUnreadCounts,
-      conversationUnreadCounts,
-      syncServerCounts,
-      markChannelUnread,
-      markChannelNotificationUnread,
-      markConversationUnread,
       markThreadNotificationUnread,
-      clearChannelUnread,
-      clearConversationUnread,
-      resetSessionUnread,
       hideConversation,
       unhideConversation,
       setActiveChannel,
@@ -254,21 +144,9 @@ export function UnreadProvider({ children }: { children: ReactNode }) {
       isActiveThread,
     }),
     [
-      unreadChannels,
-      unreadChannelNotifications,
-      unreadConversations,
       unreadThreadNotifications,
       hiddenConversations,
-      channelUnreadCounts,
-      conversationUnreadCounts,
-      syncServerCounts,
-      markChannelUnread,
-      markChannelNotificationUnread,
-      markConversationUnread,
       markThreadNotificationUnread,
-      clearChannelUnread,
-      clearConversationUnread,
-      resetSessionUnread,
       hideConversation,
       unhideConversation,
       setActiveChannel,

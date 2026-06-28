@@ -28,7 +28,7 @@ func (h *ThreadHandler) List(w http.ResponseWriter, r *http.Request) {
 	}
 	summaries, err := h.messageSvc.ListUserThreads(r.Context(), userID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "list_error", err.Error())
+		writeInternalError(w, r, "list_error", err)
 		return
 	}
 	if summaries == nil { // coverage-ignore: MessageService.ListUserThreads always returns a make()-initialized (non-nil) slice; this nil-coercion is defensive against a future contract change.

@@ -153,6 +153,10 @@ func main() {
 		handler.NewMembershipMemberLister(membershipStore.ListMembers),
 		handler.NewConversationParticipantLister(conversationStore.GetConversation),
 	)
+	// Cache topic→recipient lists for a few seconds so the durable-inbox fan-out
+	// doesn't re-query DynamoDB membership on every persistent event. Bounded
+	// staleness; live delivery (broker subscription) stays correct on join/leave.
+	recipientResolver.SetCacheTTL(10 * time.Second)
 	redisPubSub.SetDurability(recipientResolver, inboxStream)
 
 	// ------------------------------------------------------------------ Broker
@@ -232,6 +236,7 @@ func main() {
 	// same Redis-backed store so an ack and the deferred push can live on
 	// different backend instances.
 	notificationSvc.SetAckStore(redisCache)
+	notificationSvc.SetNameCache(redisCache) // cache channel/author names off the per-message notify path
 	oneSignalPush, err := service.NewOneSignalPushSender(service.OneSignalConfig{
 		AppID:     cfg.OneSignalAppID,
 		APIKey:    cfg.OneSignalRESTAPIKey,
@@ -439,6 +444,10 @@ func main() {
 		slog.Error("server forced to shutdown", "error", err)
 		os.Exit(1)
 	}
+
+	// HTTP is drained; now wait for any in-flight durable-inbox fan-out appends
+	// to finish so a reconnecting client can still replay the last events.
+	redisPubSub.WaitForInboxFanOut()
 
 	slog.Info("server stopped")
 }

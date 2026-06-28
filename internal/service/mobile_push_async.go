@@ -5,6 +5,8 @@ import (
 	"errors"
 	"log/slog"
 	"sync"
+
+	"github.com/DigitalTolk/ex/internal/safe"
 )
 
 const (
@@ -103,6 +105,9 @@ func (s *AsyncMobilePushSender) Close() {
 
 func (s *AsyncMobilePushSender) worker() {
 	defer s.wg.Done()
+	// A panic in a push Send must not crash the process (and with it every WS
+	// client on this instance); recover and let the worker exit cleanly.
+	defer safe.Recover()
 	for {
 		select {
 		case <-s.ctx.Done():

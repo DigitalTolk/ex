@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"crypto/subtle"
 	"net/http"
 	"net/url"
 	"time"
@@ -27,7 +28,7 @@ func NewAuthHandler(authSvc *service.AuthService, jwt *auth.JWTManager) *AuthHan
 func (h *AuthHandler) OIDCLogin(w http.ResponseWriter, r *http.Request) {
 	authURL, state, nonce, err := h.authSvc.HandleOIDCLogin()
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "oidc_error", err.Error())
+		writeInternalError(w, r, "oidc_error", err)
 		return
 	}
 
@@ -74,7 +75,7 @@ func (h *AuthHandler) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	queryState := r.URL.Query().Get("state")
-	if queryState == "" || queryState != stateCookie.Value {
+	if queryState == "" || subtle.ConstantTimeCompare([]byte(queryState), []byte(stateCookie.Value)) != 1 {
 		writeError(w, http.StatusBadRequest, "invalid_state", "OAuth state mismatch")
 		return
 	}
@@ -108,7 +109,7 @@ func (h *AuthHandler) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 
 	accessToken, refreshToken, _, err := h.authSvc.HandleOIDCCallback(r.Context(), code, queryState, nonce)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "callback_error", err.Error())
+		writeInternalError(w, r, "callback_error", err)
 		return
 	}
 
@@ -122,7 +123,7 @@ func (h *AuthHandler) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 		if shouldUseDesktopAuthCode(parsed) {
 			code, err := h.authSvc.CreateDesktopAuthSession(r.Context(), accessToken, refreshToken)
 			if err != nil {
-				writeError(w, http.StatusInternalServerError, "desktop_auth_error", err.Error())
+				writeInternalError(w, r, "desktop_auth_error", err)
 				return
 			}
 			target = redirectWithQuery(redirectCookie.Value, url.Values{"desktop_code": []string{code}})
@@ -268,7 +269,7 @@ func (h *AuthHandler) CreateInvite(w http.ResponseWriter, r *http.Request) {
 
 	invite, err := h.authSvc.CreateInvite(r.Context(), userID, body.Email, body.ChannelIDs)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "invite_error", err.Error())
+		writeInternalError(w, r, "invite_error", err)
 		return
 	}
 

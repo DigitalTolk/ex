@@ -41,7 +41,7 @@ func (h *SearchHandler) SearchUsers(w http.ResponseWriter, r *http.Request) {
 	limit := queryInt(r, "limit", 10)
 	res, err := h.searcher.Users(r.Context(), q, limit)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "search_failed", err.Error())
+		writeInternalError(w, r, "search_failed", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, res)
@@ -65,7 +65,7 @@ func (h *SearchHandler) SearchChannels(w http.ResponseWriter, r *http.Request) {
 	}
 	ids, err := h.access.AllowedParentIDs(r.Context(), userID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "access_failed", err.Error())
+		writeInternalError(w, r, "access_failed", err)
 		return
 	}
 	allowed = ids
@@ -77,7 +77,7 @@ func (h *SearchHandler) SearchChannels(w http.ResponseWriter, r *http.Request) {
 		Limit:             limit,
 	})
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "search_failed", err.Error())
+		writeInternalError(w, r, "search_failed", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, res)
@@ -112,7 +112,7 @@ func (h *SearchHandler) searchOver(w http.ResponseWriter, r *http.Request, files
 	if h.access != nil {
 		ids, err := h.access.AllowedParentIDs(r.Context(), userID)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "access_failed", err.Error())
+			writeInternalError(w, r, "access_failed", err)
 			return
 		}
 		allowed = ids
@@ -135,7 +135,7 @@ func (h *SearchHandler) searchOver(w http.ResponseWriter, r *http.Request, files
 		res, err = h.searcher.Messages(r.Context(), opts)
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "search_failed", err.Error())
+		writeInternalError(w, r, "search_failed", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, res)

@@ -1470,7 +1470,7 @@ func TestUserStateStore_SetListDelete(t *testing.T) {
 	seenAt := time.Now().UTC().Truncate(time.Millisecond)
 
 	if err := s.Set(ctx, &model.UserStateItem{
-		UserID: "u-1", Kind: model.UserStateChannelNotification, TargetID: "ch-1", UpdatedAt: seenAt,
+		UserID: "u-1", Kind: model.UserStateThreadNotification, TargetID: "ch-1", UpdatedAt: seenAt,
 	}); err != nil {
 		t.Fatalf("Set channel notification: %v", err)
 	}
@@ -1487,7 +1487,7 @@ func TestUserStateStore_SetListDelete(t *testing.T) {
 	if len(rows) != 2 {
 		t.Fatalf("List count = %d, want 2", len(rows))
 	}
-	if err := s.Delete(ctx, "u-1", model.UserStateChannelNotification, "ch-1"); err != nil {
+	if err := s.Delete(ctx, "u-1", model.UserStateThreadNotification, "ch-1"); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
 	rows, err = s.List(ctx, "u-1")

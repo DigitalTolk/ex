@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { getAccessToken, refreshAccessToken } from '@/lib/api';
-import { EventType } from '@/lib/event-types';
+import { EventType, EPHEMERAL_EVENT_TYPES } from '@/lib/event-types';
 import { setWSSender } from '@/lib/ws-sender';
 import { useLatestRef } from '@/hooks/useLatestRef';
 
@@ -126,7 +126,12 @@ export function useWebSocket(options: UseWebSocketOptions) {
               // Already delivered (replay/live race) — drop.
               return;
             }
-            if (msg.id > lastEventIdRef.current) {
+            // Only DURABLE events are replayed from the inbox on reconnect, so
+            // only they may advance the replay cursor. Advancing it for an
+            // ephemeral frame (typing/presence/notification.new/ping) whose id
+            // outruns an in-flight durable message.new would skip that message
+            // on the next reconnect replay.
+            if (!EPHEMERAL_EVENT_TYPES.has(msg.type) && msg.id > lastEventIdRef.current) {
               lastEventIdRef.current = msg.id;
             }
           }
@@ -217,8 +222,12 @@ export function useWebSocket(options: UseWebSocketOptions) {
               callbacksRef.current.onTyping?.(payload);
               break;
           }
-        } catch {
-          // ignore parse errors
+        } catch (err) {
+          // A malformed frame or a throwing handler must never kill the receive
+          // loop. Surface at debug level so a real bug in a cache-patch handler
+          // is greppable, without tripping warning gates or spamming on routine
+          // parse failures.
+          console.debug('ws message handler skipped a frame', err);
         }
       };
 

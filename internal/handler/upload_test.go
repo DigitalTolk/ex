@@ -15,6 +15,23 @@ import (
 	"github.com/DigitalTolk/ex/internal/storage"
 )
 
+func TestSanitizeUploadFilename(t *testing.T) {
+	cases := map[string]string{
+		"photo.png":            "photo.png",
+		"../../etc/passwd":     "_.._etc_passwd", // separators→_, leading dots trimmed
+		"a/b\\c.png":           "a_b_c.png",
+		"weird\x00name.jpg":    "weird_name.jpg",
+		"....":                 "file", // all dots → trimmed to empty → fallback
+		"":                     "file",
+		strings.Repeat("a", 200): strings.Repeat("a", 128), // capped at 128
+	}
+	for in, want := range cases {
+		if got := sanitizeUploadFilename(in); got != want {
+			t.Errorf("sanitizeUploadFilename(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 func TestCreateUploadURL_Unauthenticated(t *testing.T) {
 	h := NewUploadHandler(nil)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/uploads/url", strings.NewReader(`{"filename":"f.txt","contentType":"text/plain"}`))
