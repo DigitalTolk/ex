@@ -3,9 +3,38 @@ package eventlog
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 )
+
+// At the cache cap, inserting another entry sweeps the expired ones so the map
+// can't grow without bound from dormant topics.
+func TestResolver_CacheEvictsExpiredAtCap(t *testing.T) {
+	m := &fakeMembers{ids: map[string][]string{}} // any topic resolves to nil, no error
+	r := NewResolver(m, nil)
+	r.SetCacheTTL(time.Minute)
+	base := time.Unix(1000, 0)
+	r.now = func() time.Time { return base }
+
+	for i := 0; i < recipientCacheMaxEntries; i++ {
+		if _, err := r.Resolve(context.Background(), fmt.Sprintf("chan:c%d", i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Advance past the TTL so the cap-fill is all expired, then one more insert
+	// trips the cap and sweeps them.
+	base = base.Add(2 * time.Minute)
+	if _, err := r.Resolve(context.Background(), "chan:fresh"); err != nil {
+		t.Fatal(err)
+	}
+	r.mu.Lock()
+	got := len(r.cache)
+	r.mu.Unlock()
+	if got != 1 {
+		t.Fatalf("cache size after cap-sweep = %d, want 1 (expired entries evicted)", got)
+	}
+}
 
 type fakeMembers struct {
 	ids   map[string][]string

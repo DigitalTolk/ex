@@ -247,18 +247,17 @@ type RateLimitCounter interface {
 	AllowRequest(ctx context.Context, key string, limit int, window time.Duration) (bool, error)
 }
 
-// RateLimit returns middleware that rejects (HTTP 429) more than `limit`
-// requests per `window` from a single client IP per route. It fails OPEN: if
-// the counter errors (e.g. a Redis hiccup) the request is allowed, so an infra
-// blip can never lock everyone out of login. A nil counter disables limiting.
-func RateLimit(counter RateLimitCounter, limit int, window time.Duration) func(http.Handler) http.Handler {
+// rateLimitByKey is the shared core for the rate-limit middlewares: it derives a
+// bucket key per request via keyFn and rejects (HTTP 429) once that key exceeds
+// `limit` per `window`. Fails OPEN — a counter error allows the request, so an
+// infra blip can never lock everyone out. A nil counter disables limiting.
+func rateLimitByKey(counter RateLimitCounter, keyFn func(*http.Request) string, limit int, window time.Duration) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		if counter == nil {
 			return next
 		}
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			key := "rl:" + r.URL.Path + ":" + clientIP(r)
-			allowed, err := counter.AllowRequest(r.Context(), key, limit, window)
+			allowed, err := counter.AllowRequest(r.Context(), keyFn(r), limit, window)
 			if err != nil {
 				slog.Warn("rate limit check failed; allowing request", "error", err)
 				next.ServeHTTP(w, r)
@@ -274,6 +273,14 @@ func RateLimit(counter RateLimitCounter, limit int, window time.Duration) func(h
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+// RateLimit rejects more than `limit` requests per `window` from a single client
+// IP per route.
+func RateLimit(counter RateLimitCounter, limit int, window time.Duration) func(http.Handler) http.Handler {
+	return rateLimitByKey(counter, func(r *http.Request) string {
+		return "rl:" + r.URL.Path + ":" + clientIP(r)
+	}, limit, window)
 }
 
 // trustedProxyCount is how many reverse proxies sit in front of the app and
@@ -320,31 +327,13 @@ func RequestTimeout(d time.Duration) func(http.Handler) http.Handler {
 // across every route it wraps (keyed by user, not path). Fails OPEN like
 // RateLimit. Must run AFTER the auth middleware so the user ID is in context.
 func RateLimitPerUser(counter RateLimitCounter, limit int, window time.Duration) func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		if counter == nil {
-			return next
+	return rateLimitByKey(counter, func(r *http.Request) string {
+		id := UserIDFromContext(r.Context())
+		if id == "" {
+			id = clientIP(r)
 		}
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			id := UserIDFromContext(r.Context())
-			if id == "" {
-				id = clientIP(r)
-			}
-			allowed, err := counter.AllowRequest(r.Context(), "rlu:write:"+id, limit, window)
-			if err != nil {
-				slog.Warn("per-user rate limit check failed; allowing request", "error", err)
-				next.ServeHTTP(w, r)
-				return
-			}
-			if !allowed {
-				w.Header().Set("Retry-After", strconv.Itoa(int(window.Seconds())))
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusTooManyRequests)
-				_, _ = w.Write([]byte(`{"error":"rate_limited","message":"too many requests, please slow down"}`))
-				return
-			}
-			next.ServeHTTP(w, r)
-		})
-	}
+		return "rlu:write:" + id
+	}, limit, window)
 }
 
 // clientIP extracts the real client IP for rate-limit keying. With trusted

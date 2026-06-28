@@ -72,32 +72,25 @@ func (s *UserStateStoreImpl) List(ctx context.Context, userID string) ([]*model.
 	if err != nil { // coverage-ignore: static key-condition built from constants; Build cannot fail
 		return nil, fmt.Errorf("store: build user state expression: %w", err)
 	}
-	input := &dynamodb.QueryInput{
+	rows, err := s.queryAll(ctx, &dynamodb.QueryInput{
 		TableName:                 aws.String(s.Table),
 		KeyConditionExpression:    expr.KeyCondition(),
 		ExpressionAttributeNames:  expr.Names(),
 		ExpressionAttributeValues: expr.Values(),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("store: list user state: %w", err)
 	}
-	var items []*model.UserStateItem
-	for {
-		out, err := s.Client.Query(ctx, input)
-		if err != nil {
-			return nil, fmt.Errorf("store: list user state: %w", err)
+	items := make([]*model.UserStateItem, 0, len(rows))
+	for _, raw := range rows {
+		var item userStateItem
+		if err := attributevalue.UnmarshalMap(raw, &item); err != nil { // coverage-ignore: round-trip of items this store wrote; cannot fail
+			return nil, fmt.Errorf("store: unmarshal user state: %w", err)
 		}
-		for _, raw := range out.Items {
-			var item userStateItem
-			if err := attributevalue.UnmarshalMap(raw, &item); err != nil { // coverage-ignore: round-trip of items this store wrote; cannot fail
-				return nil, fmt.Errorf("store: unmarshal user state: %w", err)
-			}
-			if item.Kind == "" {
-				item.Kind = userStateKindFromSK(item.SK)
-			}
-			items = append(items, &item.UserStateItem)
+		if item.Kind == "" {
+			item.Kind = userStateKindFromSK(item.SK)
 		}
-		if len(out.LastEvaluatedKey) == 0 {
-			break
-		}
-		input.ExclusiveStartKey = out.LastEvaluatedKey
+		items = append(items, &item.UserStateItem)
 	}
 	return items, nil
 }

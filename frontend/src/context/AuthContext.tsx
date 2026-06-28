@@ -62,6 +62,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     window.location.href = '/auth/oidc/login';
   }, []);
 
+  // resetLocalSession drops all in-memory + cached session state (token, user,
+  // every cached query, process-wide draft state) so a subsequent (different)
+  // user in the same document can't read the previous session's
+  // messages/channels/drafts. Shared by logout and the terminal-invalid handler.
+  const resetLocalSession = useCallback(() => {
+    clearAccessToken();
+    setUser(null);
+    queryClient.clear();
+    resetDraftSessionState();
+  }, []);
+
   const logout = useCallback(async () => {
     try {
       await fetch('/auth/logout', {
@@ -72,29 +83,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // ignore
     }
     void clearMobilePushUser().catch(() => undefined);
-    clearAccessToken();
-    setUser(null);
-    // Drop every cached query + process-wide draft state so a subsequent
-    // (different) user in the same document can't read the previous session's
-    // messages/channels/drafts.
-    queryClient.clear();
-    resetDraftSessionState();
-  }, []);
+    resetLocalSession();
+  }, [resetLocalSession]);
 
   // A terminally-invalid session (refresh failed mid-session) broadcasts
   // AUTH_INVALID_EVENT from apiFetch. React to it here so the app drops the
   // user and ProtectedRoute redirects to /login, instead of leaving a
   // "logged-in" shell whose queries all silently 401.
   useEffect(() => {
-    const onInvalid = () => {
-      clearAccessToken();
-      setUser(null);
-      queryClient.clear();
-      resetDraftSessionState();
-    };
-    window.addEventListener(AUTH_INVALID_EVENT, onInvalid);
-    return () => window.removeEventListener(AUTH_INVALID_EVENT, onInvalid);
-  }, []);
+    window.addEventListener(AUTH_INVALID_EVENT, resetLocalSession);
+    return () => window.removeEventListener(AUTH_INVALID_EVENT, resetLocalSession);
+  }, [resetLocalSession]);
 
   const setAuth = useCallback((token: string, userData: User) => {
     setAccessToken(token);

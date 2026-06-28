@@ -182,19 +182,10 @@ func (h *UserHandler) GetUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Non-admins see a limited view.
+	// Non-admins see the limited public projection.
 	claims := middleware.ClaimsFromContext(r.Context())
 	if claims == nil || claims.SystemRole != model.SystemRoleAdmin {
-		writeJSON(w, http.StatusOK, JSON{
-			"id":          user.ID,
-			"displayName": user.DisplayName,
-			"email":       user.Email,
-			"avatarURL":   user.AvatarURL,
-			"status":      user.Status,
-			"userStatus":  user.UserStatus,
-			"timeZone":    user.TimeZone,
-			"lastSeenAt":  user.LastSeenAt,
-		})
+		writeJSON(w, http.StatusOK, publicUserJSON(user))
 		return
 	}
 
@@ -228,21 +219,8 @@ func (h *UserHandler) BatchGetUsers(w http.ResponseWriter, r *http.Request) {
 		users = []*model.User{}
 	}
 
-	// Return limited fields (same as GetUser for non-admins).
-	result := make([]JSON, 0, len(users))
-	for _, u := range users {
-		result = append(result, JSON{
-			"id":          u.ID,
-			"displayName": u.DisplayName,
-			"email":       u.Email,
-			"avatarURL":   u.AvatarURL,
-			"status":      u.Status,
-			"userStatus":  u.UserStatus,
-			"timeZone":    u.TimeZone,
-			"lastSeenAt":  u.LastSeenAt,
-		})
-	}
-	writeJSON(w, http.StatusOK, result)
+	// Return the same limited public projection as GetUser / ListUsers.
+	writeJSON(w, http.StatusOK, publicUserList(users))
 }
 
 // listAllMaxRounds caps the inner pagination loop served by

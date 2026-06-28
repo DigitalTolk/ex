@@ -47,6 +47,12 @@ type cachedRecipients struct {
 	expiresAt time.Time
 }
 
+// recipientCacheMaxEntries bounds the cache: a channel that publishes once and
+// goes dormant would otherwise retain its recipient slice forever (it's never
+// re-resolved to refresh/expire it). At the cap we sweep expired entries — the
+// short TTL means most are stale — keeping retention ~the active topic set.
+const recipientCacheMaxEntries = 4096
+
 // SetCacheTTL enables (ttl>0) or disables (ttl<=0) the recipient cache.
 func (r *Resolver) SetCacheTTL(ttl time.Duration) {
 	r.mu.Lock()
@@ -80,11 +86,19 @@ func (r *Resolver) cachedResolve(topic string, fetch func() ([]string, error)) (
 		return nil, err
 	}
 	if r.ttl > 0 {
+		now := r.clock()
 		r.mu.Lock()
 		if r.cache == nil {
 			r.cache = make(map[string]cachedRecipients)
 		}
-		r.cache[topic] = cachedRecipients{ids: ids, expiresAt: r.clock().Add(r.ttl)}
+		if len(r.cache) >= recipientCacheMaxEntries {
+			for k, e := range r.cache {
+				if !now.Before(e.expiresAt) {
+					delete(r.cache, k)
+				}
+			}
+		}
+		r.cache[topic] = cachedRecipients{ids: ids, expiresAt: now.Add(r.ttl)}
 		r.mu.Unlock()
 	}
 	return ids, nil

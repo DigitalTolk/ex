@@ -206,6 +206,15 @@ type memberSnapshot struct {
 // memberIDs is a valid result (e.g., empty channel) and signals "nobody
 // to notify by default" — a direct @-mention can still reach a muted
 // member via the mentions path.
+// logAudienceLoadFailed reports an audience-resolution failure at ERROR. Losing
+// the audience loses the ENTIRE recipient set for a message — no desktop alert
+// AND no mobile fallback — which for an incident channel is a missed alert, so
+// it must be LOUD, never silent.
+func logAudienceLoadFailed(msg *model.Message, parentType string, err error) {
+	slog.Error("notification audience load failed — message will notify NOBODY",
+		"parentID", msg.ParentID, "parentType", parentType, "messageID", msg.ID, "error", err)
+}
+
 func (s *NotificationService) loadMemberSnapshot(ctx context.Context, msg *model.Message, parentType, parentName string) memberSnapshot {
 	// Webhook posts notify everyone, including the webhook's creator —
 	// the creator wired up the integration to be alerted, they didn't
@@ -218,13 +227,10 @@ func (s *NotificationService) loadMemberSnapshot(ctx context.Context, msg *model
 	case ParentChannel:
 		members, err := s.members.ListMembers(ctx, msg.ParentID)
 		if err != nil {
-			// Losing the member list loses the ENTIRE audience for this message —
-			// no desktop alert AND no mobile fallback. For an incident channel
-			// that is a missed alert, so it must be LOUD (ERROR), never silent.
-			// (Unlike per-member overrides/prefs below, which degrade gracefully:
-			// a lost override is a minor over-notification, the member list is not.)
-			slog.Error("notification audience load failed — message will notify NOBODY",
-				"parentID", msg.ParentID, "parentType", parentType, "messageID", msg.ID, "error", err)
+			// (Unlike the per-member overrides/prefs below, which degrade
+			// gracefully — a lost override is a minor over-notification — losing
+			// the member list loses the whole audience.)
+			logAudienceLoadFailed(msg, parentType, err)
 			return memberSnapshot{}
 		}
 		ids := make([]string, 0, len(members))
@@ -254,11 +260,7 @@ func (s *NotificationService) loadMemberSnapshot(ctx context.Context, msg *model
 	case ParentConversation:
 		c, err := s.conv.GetConversation(ctx, msg.ParentID)
 		if err != nil || c == nil {
-			// Same as the channel case: no participants resolved → nobody is
-			// notified. A transient store error here is a missed DM alert, so
-			// log it loudly rather than dropping the audience in silence.
-			slog.Error("notification audience load failed — message will notify NOBODY",
-				"parentID", msg.ParentID, "parentType", parentType, "messageID", msg.ID, "error", err)
+			logAudienceLoadFailed(msg, parentType, err)
 			return memberSnapshot{}
 		}
 		ids := make([]string, 0, len(c.ParticipantIDs))

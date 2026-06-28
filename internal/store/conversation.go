@@ -175,29 +175,22 @@ func (s *ConversationStoreImpl) ListUserConversations(ctx context.Context, userI
 		return nil, fmt.Errorf("store: build expression: %w", err)
 	}
 
-	input := &dynamodb.QueryInput{
+	items, err := s.queryAll(ctx, &dynamodb.QueryInput{
 		TableName:                 aws.String(s.Table),
 		KeyConditionExpression:    expr.KeyCondition(),
 		ExpressionAttributeNames:  expr.Names(),
 		ExpressionAttributeValues: expr.Values(),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("store: list user conversations: %w", err)
 	}
-	var convs []*model.UserConversation
-	for {
-		out, err := s.Client.Query(ctx, input)
-		if err != nil {
-			return nil, fmt.Errorf("store: list user conversations: %w", err)
+	convs := make([]*model.UserConversation, 0, len(items))
+	for _, item := range items {
+		var uci userConversationItem
+		if err := attributevalue.UnmarshalMap(item, &uci); err != nil { // coverage-ignore: round-trip of items this store wrote; cannot fail
+			return nil, fmt.Errorf("store: unmarshal user conversation: %w", err)
 		}
-		for _, item := range out.Items {
-			var uci userConversationItem
-			if err := attributevalue.UnmarshalMap(item, &uci); err != nil { // coverage-ignore: round-trip of items this store wrote; cannot fail
-				return nil, fmt.Errorf("store: unmarshal user conversation: %w", err)
-			}
-			convs = append(convs, &uci.UserConversation)
-		}
-		if len(out.LastEvaluatedKey) == 0 {
-			break
-		}
-		input.ExclusiveStartKey = out.LastEvaluatedKey
+		convs = append(convs, &uci.UserConversation)
 	}
 	return convs, nil
 }
