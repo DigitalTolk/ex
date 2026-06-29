@@ -236,9 +236,15 @@ describe('CustomEmojiPage browser', () => {
     const screen = await mount(<Wrap><CustomEmojiPage /></Wrap>);
     await screen.getByRole('button', { name: 'Delete :partyparrot:' }).click();
     await screen.getByTestId('delete-emoji-cancel').click();
-    await vi.waitFor(() => {
-      expect(document.querySelector('[data-testid="delete-emoji"]')).toBeNull();
-    });
+    // The dialog unmounts on its exit-animation `animationend` (Base UI,
+    // duration-100). Under heavy full-suite parallel load that occasionally
+    // outlasts vi.waitFor's default 1000ms, so give the removal generous slack.
+    await vi.waitFor(
+      () => {
+        expect(document.querySelector('[data-testid="delete-emoji"]')).toBeNull();
+      },
+      { timeout: 5000 },
+    );
     expect(deleteMutate).not.toHaveBeenCalled();
   });
 
