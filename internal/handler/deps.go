@@ -39,6 +39,7 @@ type Deps struct {
 	Sidebar    *SidebarHandler
 	Search     *SearchHandler
 	Webhook    *WebhookHandler
+	Activity   *ActivityHandler
 
 	// SPA/static.
 	FrontendFS fs.FS

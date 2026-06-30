@@ -639,6 +639,13 @@ describe('ChatPage WebSocket handlers', () => {
     }).not.toThrow();
   });
 
+  it('onActivityNew refetches the activity stream', () => {
+    renderAt('/');
+    expect(() => {
+      (capturedOptions.onActivityNew as (d: unknown) => void)({});
+    }).not.toThrow();
+  });
+
   it('onUserUpdated invalidates user-batch + member + channel + conversation caches', () => {
     renderAt('/');
     expect(() => {

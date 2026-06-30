@@ -298,6 +298,17 @@ func main() {
 	channelH.SetDraftClearer(draftSvc)
 	convH.SetDraftClearer(draftSvc)
 	draftH := handler.NewDraftHandler(draftSvc)
+
+	// ------------------------------------------------------------ Activity + reminders
+	// Reaction hints land in the message author's activity stream; reminders fire
+	// into it at their due time plus a desktop/mobile alert (NotifyDirect).
+	activitySvc := service.NewActivityService(store.NewRedisActivityStore(redisCache.Client()), redisPubSub)
+	messageSvc.SetReactionRecorder(activitySvc)
+	reminderStore := store.NewRedisReminderStore(redisCache.Client())
+	reminderSvc := service.NewReminderService(reminderStore, messageStore, messageSvc)
+	reminderSvc.SetDelivery(activitySvc, notificationSvc)
+	activityH := handler.NewActivityHandler(activitySvc, reminderSvc)
+
 	categorySvc := service.NewCategoryService(store.NewCategoryStore(db), redisPubSub)
 	sidebarH := handler.NewSidebarHandler(channelSvc, convSvc, categorySvc)
 
@@ -404,6 +415,7 @@ func main() {
 		Sidebar:      sidebarH,
 		Search:       searchH,
 		Webhook:      webhookH,
+		Activity:     activityH,
 		JWT:          jwtMgr,
 		FrontendFS:   frontendDist,
 		AppVersion:   appVersion,
@@ -423,6 +435,9 @@ func main() {
 	backgroundCtx, stopBackground := context.WithCancel(context.Background())
 	defer stopBackground()
 	go userSvc.RunExpiredStatusSweeper(backgroundCtx, time.Minute, 0)
+	// Fire due reminders into their owners' activity streams + alerts. Claiming
+	// is atomic in Redis, so running this on every instance never double-fires.
+	go runReminderPoller(backgroundCtx, reminderSvc, 20*time.Second)
 
 	// Start in a goroutine so we can listen for shutdown signals.
 	go func() {
@@ -469,4 +484,24 @@ func main() {
 	}
 
 	slog.Info("server stopped")
+}
+
+// runReminderPoller fires due reminders on a fixed interval until the context is
+// cancelled. ProcessDue claims reminders atomically, so multiple instances each
+// running this loop never double-deliver. Panics are isolated so a single bad
+// tick can't take the process down.
+func runReminderPoller(ctx context.Context, svc *service.ReminderService, interval time.Duration) {
+	defer safe.Recover()
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if _, err := svc.ProcessDue(ctx); err != nil {
+				slog.Warn("reminder poll failed", "error", err)
+			}
+		}
+	}
 }

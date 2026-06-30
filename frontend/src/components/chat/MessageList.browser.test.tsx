@@ -34,6 +34,12 @@ vi.mock('@/hooks/useMessages', () => ({
   useSetNoUnfurl: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 
+// MessageItem now also calls useCreateReminder; this suite renders MessageList
+// (hence MessageItem) without a QueryClientProvider, so stub the hook.
+vi.mock('@/hooks/useActivity', () => ({
+  useCreateReminder: () => ({ mutate: vi.fn(), isPending: false }),
+}));
+
 vi.mock('@/hooks/useUnfurl', () => ({
   useUnfurl: () => ({
     data: {

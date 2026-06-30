@@ -22,6 +22,11 @@ vi.mock('@/hooks/useEmoji', () => ({
 // tests can drive the menu's open state and observe whether the host
 // component (MessageItem) closes it on mouseLeave.
 vi.mock('@/components/ui/dropdown-menu', () => ({
+  DropdownMenuSub: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  DropdownMenuSubTrigger: ({ children, ...rest }: { children: React.ReactNode; [k: string]: unknown }) => (
+    <button {...rest}>{children}</button>
+  ),
+  DropdownMenuSubContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
   DropdownMenu: ({
     children,
     open,

@@ -82,6 +82,16 @@ export default defineConfig({
         // localStorage never exercises. Pulled into the browser graph via
         // NotificationContext; graded in jsdom, not here.
         'src/lib/notification-dedup.ts',
+        // Activity stream + reminders — pure date math, a React-Query hook
+        // module, the activity page, and the custom-time dialog are all
+        // exhaustively unit-tested in jsdom (reminder-times.test, useActivity.test,
+        // activity-page.test, reminder-dialog.test). Pulled into the browser graph
+        // via MessageItem/Sidebar; graded in jsdom, not here. The browser-only
+        // surface (the MessageItem "Remind me" submenu) IS exercised here.
+        'src/lib/reminder-times.ts',
+        'src/hooks/useActivity.ts',
+        'src/pages/ActivityPage.tsx',
+        'src/components/chat/ReminderDialog.tsx',
       ],
       // 99% branch gate over the merged desktop + mobile browser run.
       // vitest enforces it (non-zero exit), so `npm run

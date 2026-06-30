@@ -81,6 +81,14 @@ type MessageService struct {
 	markdown      *MarkdownRenderer
 	channelSeq    UnreadSeqStore
 	convSeq       UnreadSeqStore
+	reactions     ReactionActivityRecorder
+}
+
+// ReactionActivityRecorder records "someone reacted to your message" hints into
+// the message author's activity stream. Implemented by ActivityService; wired
+// optionally so the message service degrades gracefully when activity is off.
+type ReactionActivityRecorder interface {
+	RecordReaction(ctx context.Context, msg *model.Message, parentType, actorID, emoji string)
 }
 
 // NewMessageService creates a MessageService with the given dependencies.
@@ -146,6 +154,9 @@ func (s *MessageService) SetMarkdownRenderer(m *MarkdownRenderer) { s.markdown =
 // SetChannelSeqStore wires the channel message-counter used for server-side
 // unread tracking. Optional — left unset, channel unread isn't persisted.
 func (s *MessageService) SetChannelSeqStore(c UnreadSeqStore) { s.channelSeq = c }
+
+// SetReactionRecorder wires the activity recorder used to log reaction hints.
+func (s *MessageService) SetReactionRecorder(r ReactionActivityRecorder) { s.reactions = r }
 
 // attachRendered populates the Rendered field on every supplied
 // Message. Centralising this means every return path in the service
@@ -1392,7 +1403,9 @@ func (s *MessageService) ToggleReaction(ctx context.Context, userID, parentID, p
 		} else {
 			msg.Reactions[emoji] = users
 		}
-	} else {
+	}
+	added := idx < 0
+	if added {
 		// Distinct-emoji cap. Adding a brand new emoji to a message that
 		// already has the maximum is rejected; toggling an existing emoji
 		// (path above) always works since it doesn't grow the map.
@@ -1411,6 +1424,11 @@ func (s *MessageService) ToggleReaction(ctx context.Context, userID, parentID, p
 
 	s.publishEvent(ctx, parentID, parentType, events.EventMessageEdited, msg)
 	s.indexMessage(ctx, msg, parentType)
+	// Only a freshly-ADDED reaction (not an un-react) is worth an activity hint;
+	// the recorder itself drops self-reactions and bot messages.
+	if added && s.reactions != nil {
+		s.reactions.RecordReaction(ctx, msg, parentType, userID, emoji)
+	}
 	s.attachRendered(msg)
 	return msg, nil
 }

@@ -278,3 +278,36 @@ export interface UserState {
   threadSeen: Record<string, string>;
   hiddenConversations: string[];
 }
+
+export type ActivityType = 'reaction' | 'reminder';
+
+export interface ActivityItem {
+  id: string;
+  type: ActivityType;
+  createdAt: string;
+  messageID: string;
+  parentID: string;
+  parentType: 'channel' | 'conversation';
+  channelSlug?: string;
+  messagePreview?: string;
+  // reaction-only
+  actorID?: string;
+  emoji?: string;
+}
+
+export interface ActivityFeed {
+  items: ActivityItem[];
+  unread: number;
+}
+
+export interface Reminder {
+  id: string;
+  userID: string;
+  messageID: string;
+  parentID: string;
+  parentType: 'channel' | 'conversation';
+  channelSlug?: string;
+  messagePreview?: string;
+  remindAt: string;
+  createdAt: string;
+}

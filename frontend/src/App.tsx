@@ -23,6 +23,7 @@ import CustomEmojiPage from '@/pages/CustomEmojiPage';
 import NewConversationPage from '@/pages/NewConversationPage';
 import ThreadsPage from '@/pages/ThreadsPage';
 import DraftsPage from '@/pages/DraftsPage';
+import ActivityPage from '@/pages/ActivityPage';
 import SearchResultsPage from '@/pages/SearchResultsPage';
 import { NotFoundPage } from '@/pages/NotFoundPage';
 import { GENERAL_CHANNEL_SLUG } from '@/lib/roles';
@@ -89,6 +90,7 @@ function AppRoutes() {
         <Route path="directory" element={<Navigate to="/directory/channels" replace />} />
         <Route path="directory/:section" element={<DirectoriesPage />} />
         <Route path="search" element={<SearchResultsPage />} />
+        <Route path="activity" element={<ActivityPage />} />
         <Route path="threads" element={<ThreadsPage />} />
         <Route path="drafts" element={<DraftsPage />} />
         <Route path="admin" element={<AdminPage />} />

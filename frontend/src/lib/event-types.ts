@@ -30,6 +30,7 @@ export const EventType = {
   ReplayDone: 'replay.done',
   ReplayExhausted: 'replay.exhausted',
   WebhookChanged: 'webhook.changed',
+  ActivityNew: 'activity.new',
 } as const;
 
 export type EventTypeName = (typeof EventType)[keyof typeof EventType];
@@ -48,5 +49,6 @@ export const EPHEMERAL_EVENT_TYPES = new Set<string>([
   EventType.ForceLogout,
   EventType.ReplayDone,
   EventType.ReplayExhausted,
+  EventType.ActivityNew,
   'typing',
 ]);

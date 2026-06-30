@@ -35,6 +35,11 @@ import type { Channel, ChannelMembership } from '@/types';
 
 // Mock dropdown to a simple structure so we can click items in jsdom
 vi.mock('@/components/ui/dropdown-menu', () => ({
+  DropdownMenuSub: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  DropdownMenuSubTrigger: ({ children, ...rest }: { children: React.ReactNode; [k: string]: unknown }) => (
+    <button {...rest}>{children}</button>
+  ),
+  DropdownMenuSubContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
   DropdownMenu: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
   DropdownMenuTrigger: ({ children }: { children: React.ReactNode }) => <button>{children}</button>,
   DropdownMenuContent: ({ children }: { children: React.ReactNode }) => <div data-testid="dropdown-content">{children}</div>,

@@ -285,6 +285,11 @@ export default function ChatPage() {
     onWebhookChanged: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.incomingWebhooks() });
     },
+    onActivityNew: () => {
+      // A reaction hint or fired reminder landed — refetch the durable activity
+      // stream (source of truth) so the sidebar badge + list update live.
+      queryClient.invalidateQueries({ queryKey: queryKeys.activity() });
+    },
     onUserUpdated: (data: unknown) => {
       const updated = parseUserUpdated(data);
       if (!updated) return;

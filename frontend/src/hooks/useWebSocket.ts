@@ -38,6 +38,7 @@ interface UseWebSocketOptions {
   onNotificationSettingsUpdated?: WSCallback;
   onDraftUpdated?: WSCallback;
   onWebhookChanged?: WSCallback;
+  onActivityNew?: WSCallback;
   onForceLogout?: WSCallback;
   onServerVersion?: WSCallback;
   onPing?: WSCallback;
@@ -187,6 +188,9 @@ export function useWebSocket(options: UseWebSocketOptions) {
               break;
             case EventType.WebhookChanged:
               callbacksRef.current.onWebhookChanged?.(payload);
+              break;
+            case EventType.ActivityNew:
+              callbacksRef.current.onActivityNew?.(payload);
               break;
             case EventType.ForceLogout:
               callbacksRef.current.onForceLogout?.(payload);

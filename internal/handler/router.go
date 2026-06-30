@@ -42,6 +42,7 @@ func NewRouter(d *Deps) http.Handler {
 	sidebarH := d.Sidebar
 	searchH := d.Search
 	webhookH := d.Webhook
+	activityH := d.Activity
 	jwtMgr := d.JWT
 	frontendFS := d.FrontendFS
 	appVersion := d.AppVersion
@@ -170,6 +171,15 @@ func NewRouter(d *Deps) http.Handler {
 		mux.Handle("GET /api/v1/drafts", middleware.WrapFunc(draftH.List, authMW))
 		mux.Handle("PUT /api/v1/drafts", middleware.WrapFunc(draftH.Upsert, authMW))
 		mux.Handle("DELETE /api/v1/drafts/{id}", middleware.WrapFunc(draftH.Delete, authMW))
+	}
+
+	// ----------------------------------------------------------- Activity + reminders
+	if activityH != nil {
+		mux.Handle("GET /api/v1/activity", middleware.WrapFunc(activityH.Feed, authMW))
+		mux.Handle("PUT /api/v1/activity/read", middleware.WrapFunc(activityH.MarkRead, authMW))
+		mux.Handle("POST /api/v1/reminders", middleware.WrapFunc(activityH.CreateReminder, authMW, writeLimit))
+		mux.Handle("GET /api/v1/reminders", middleware.WrapFunc(activityH.ListReminders, authMW))
+		mux.Handle("DELETE /api/v1/reminders/{id}", middleware.WrapFunc(activityH.CancelReminder, authMW))
 	}
 
 	// ------------------------------------------------------------------ Sidebar (per-user)
