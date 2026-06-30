@@ -236,10 +236,16 @@ func (s *IncomingWebhookService) Execute(ctx context.Context, id string, payload
 	for _, a := range payload.Attachments {
 		attachments = append(attachments, s.sanitizeAttachment(ctx, a))
 	}
+	// Webhook posts are authored by the webhook bot, NOT the human who created
+	// the webhook. Attributing them to wh.CreatedBy would make the message
+	// "their own" everywhere that keys off AuthorID — suppressing their unread
+	// badge, hiding their desktop alert's counterpart, and even letting them
+	// edit/delete the bot's message. The creator is just the configurer; routing
+	// and the private-channel post gate still use wh.CreatedBy from the webhook
+	// record. Leave AuthorID empty so SendWebhook stamps the "webhook" sentinel.
 	_, err = s.messages.SendWebhook(ctx, WebhookMessageInput{
 		ParentID:    parentID,
 		ParentType:  parentType,
-		AuthorID:    wh.CreatedBy,
 		Body:        s.translateMattermostMarkup(ctx, payload.Text),
 		Username:    username,
 		AvatarURL:   avatarURL,

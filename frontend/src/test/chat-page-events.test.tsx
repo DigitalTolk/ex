@@ -215,6 +215,19 @@ describe('ChatPage WebSocket handlers', () => {
     expect(unhideConversation).not.toHaveBeenCalled();
   });
 
+  it('onMessageNew marks unread for a webhook message authored by the current user', () => {
+    // A webhook carries its creator's userID as authorID, but the bot posted
+    // it — so the creator must still get the unread badge (matching the desktop
+    // notification the backend already sends them). Regression: this was being
+    // suppressed as if it were the user's own message.
+    renderAt('/', (qc) => {
+      qc.setQueryData(['userChannels'], [{ channelID: 'ch-1', channelName: 'general' }]);
+    });
+    const handler = capturedOptions.onMessageNew as (d: unknown) => void;
+    handler(msg({ authorID: 'u-me', webhookUsername: 'alertbot' }));
+    expect(bumpChannelUnread).toHaveBeenCalledWith(expect.anything(), 'ch-1');
+  });
+
   it('onMessageNew on the ACTIVE channel PUTs the read marker instead of marking unread', () => {
     isActiveChannel.mockReturnValue(true);
     renderAt('/', (qc) => {

@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import { apiFetch } from '@/lib/api';
 import { queryKeys, parentPath } from '@/lib/query-keys';
 import { buildChannelHref, buildConversationHref } from '@/lib/message-deeplink';
+import { isOwnMessage } from '@/lib/message-users';
 import { MessageItem } from './MessageItem';
 import { SidePanel } from './SidePanel';
 import type { Message } from '@/types';
@@ -118,7 +119,7 @@ export function PinnedPanel({
                 authorName={u?.displayName ?? 'Unknown'}
                 authorAvatarURL={u?.avatarURL}
                 authorOnline={u?.online}
-                isOwn={msg.authorID === currentUserId}
+                isOwn={isOwnMessage(msg, currentUserId)}
                 channelId={channelId}
                 channelSlug={channelSlug}
                 conversationId={conversationId}
