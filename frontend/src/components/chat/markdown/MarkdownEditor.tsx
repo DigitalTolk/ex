@@ -11,6 +11,7 @@ import { mentionPills } from './extensions/mentionPills';
 import { emojiGlyphs } from './extensions/emojiGlyphs';
 import { composerAutocomplete, type CompletionProviders } from './extensions/completions';
 import { applyMark, applyBlock, getActiveFormats } from './extensions/commands';
+import { composerTooltipSpace } from './tooltipSpace';
 
 export type { WysiwygEditorHandle, ActiveFormat };
 
@@ -139,7 +140,14 @@ export const MarkdownEditor = forwardRef<WysiwygEditorHandle, Props>(function Ma
           // typeahead opened clipped behind those layers on mobile. The
           // tooltip DOM stays under the editor, so it's still themed and
           // queryable in tests.
-          tooltips({ position: 'fixed' }),
+          //
+          // tooltipSpace bounds the placement to the VISUAL viewport (the area
+          // above the on-screen keyboard). Without it CM measures against
+          // window.innerHeight — which does NOT shrink when the mobile keyboard
+          // opens — so it thinks there's room below the cursor and renders the
+          // typeahead behind the keyboard. Constraining `bottom` to the keyboard
+          // top makes CM flip it ABOVE the cursor when needed.
+          tooltips({ position: 'fixed', tooltipSpace: composerTooltipSpace }),
           EditorView.lineWrapping,
           EditorView.contentAttributes.of({
             'aria-label': ariaLabel,

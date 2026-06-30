@@ -128,18 +128,16 @@ export function ConversationRow({
             <UserStatusIndicator status={dmUserStatus} className="h-4 w-4" />
           </>
         )}
-        {/* Brand-pink unread indicator — any unread DM/group shows a NUMBERED
-            count box, floored to 1 so even a not-yet-seeded count reads as "1"
-            rather than a bare dot. Conversations can't be muted, so there is no
-            dot variant here (unlike ChannelRow). */}
+        {/* Brand-pink unread count, floored to 1 so even a not-yet-seeded count
+            reads as "1". Absolutely positioned (flush to the edge, never
+            reflows); fades on desktop hover so the row actions take its place,
+            stays on touch shifted left of them. Mirrors ChannelRow. */}
         {hasUnread && (
-          <Badge
-            variant="brand"
-            className="ml-auto text-[11px]"
-            data-testid={`conversation-unread-badge-${conversation.conversationID}`}
-          >
-            {unreadCount > 99 ? '99+' : Math.max(1, unreadCount)}
-          </Badge>
+          <span className="pointer-events-none absolute right-2 top-1/2 flex -translate-y-1/2 items-center transition-opacity group-hover/row:opacity-0 max-md:right-14 max-md:opacity-100">
+            <Badge variant="brand" className="text-[11px]" data-testid={`conversation-unread-badge-${conversation.conversationID}`}>
+              {unreadCount > 99 ? '99+' : Math.max(1, unreadCount)}
+            </Badge>
+          </span>
         )}
       </NavLink>
       {/* Star — visible on hover; persistent yellow when favorited.

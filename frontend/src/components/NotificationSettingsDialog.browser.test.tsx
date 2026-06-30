@@ -33,6 +33,18 @@ vi.mock('@/context/AuthContext', () => ({
 const isMobileRef = vi.hoisted(() => ({ value: false }));
 vi.mock('@/hooks/useIsMobile', () => ({ useIsMobile: () => isMobileRef.value }));
 
+const notif = vi.hoisted(() => ({
+  prefs: { soundEnabled: true, browserEnabled: true },
+  permission: 'granted' as string,
+  dispatch: vi.fn(),
+  requestPermission: vi.fn(async () => 'granted' as string),
+  setBrowserEnabled: vi.fn(),
+  setSoundEnabled: vi.fn(),
+}));
+vi.mock('@/context/NotificationContext', () => ({
+  useNotifications: () => notif,
+}));
+
 function okUser(overrides?: Record<string, unknown>) {
   return {
     id: 'u-1', email: 'a@x.com', displayName: 'Alice', systemRole: 'member', status: 'active',
@@ -48,6 +60,13 @@ describe('NotificationSettingsDialog browser', () => {
   beforeEach(() => {
     isMobileRef.value = false;
     patchUser.mockClear();
+    notif.dispatch.mockClear();
+    notif.requestPermission.mockClear();
+    notif.requestPermission.mockResolvedValue('granted');
+    notif.setBrowserEnabled.mockClear();
+    notif.setSoundEnabled.mockClear();
+    notif.permission = 'granted';
+    notif.prefs = { soundEnabled: true, browserEnabled: true };
     vi.mocked(apiFetch).mockReset();
     vi.mocked(apiFetch).mockResolvedValue(okUser() as never);
     authState.user.notificationSettings = {
@@ -181,6 +200,56 @@ describe('NotificationSettingsDialog browser', () => {
     const screen = await render(<NotificationSettingsDialog open onOpenChange={vi.fn()} />);
     await expect.element(screen.getByText('Notification settings')).toBeVisible();
     expect(document.querySelectorAll('[data-testid="keyword-chip"]').length).toBe(0);
+  });
+
+  it('sends a test notification through the dispatch path with a unique id', async () => {
+    const screen = await render(<NotificationSettingsDialog open onOpenChange={vi.fn()} />);
+    await screen.getByTestId('send-test-notification').click();
+    expect(notif.dispatch).toHaveBeenCalledTimes(1);
+    const payload = notif.dispatch.mock.calls[0][0] as { kind: string; messageID: string; parentType: string };
+    expect(payload.kind).toBe('mention'); // not "message" → can't be active-view-suppressed
+    expect(payload.messageID).toMatch(/^test-/); // unique → never deduped
+    expect(payload.parentType).toBe('channel');
+    await expect.element(screen.getByTestId('test-notification-status')).toHaveTextContent(/Sent/i);
+  });
+
+  it('requests permission first when it has not been granted yet', async () => {
+    notif.permission = 'default';
+    const screen = await render(<NotificationSettingsDialog open onOpenChange={vi.fn()} />);
+    await screen.getByTestId('send-test-notification').click();
+    expect(notif.requestPermission).toHaveBeenCalled();
+  });
+
+  it('explains when browser permission is blocked', async () => {
+    notif.permission = 'denied';
+    const screen = await render(<NotificationSettingsDialog open onOpenChange={vi.fn()} />);
+    await screen.getByTestId('send-test-notification').click();
+    await expect.element(screen.getByTestId('test-notification-status')).toHaveTextContent(/blocked/i);
+  });
+
+  it('explains when web notifications are unsupported', async () => {
+    notif.permission = 'unsupported';
+    const screen = await render(<NotificationSettingsDialog open onOpenChange={vi.fn()} />);
+    await screen.getByTestId('send-test-notification').click();
+    await expect.element(screen.getByTestId('test-notification-status')).toHaveTextContent(/does not support/i);
+  });
+
+  it('explains when popups are turned off but sound played', async () => {
+    notif.prefs = { soundEnabled: true, browserEnabled: false };
+    const screen = await render(<NotificationSettingsDialog open onOpenChange={vi.fn()} />);
+    await screen.getByTestId('send-test-notification').click();
+    await expect.element(screen.getByTestId('test-notification-status')).toHaveTextContent(/popup/i);
+  });
+
+  it('toggling browser popups on requests permission when not yet asked', async () => {
+    notif.permission = 'default';
+    notif.prefs = { soundEnabled: true, browserEnabled: false }; // start OFF so the click turns it ON
+    const screen = await render(<NotificationSettingsDialog open onOpenChange={vi.fn()} />);
+    await screen.getByRole('switch', { name: 'Browser popups' }).click();
+    expect(notif.setBrowserEnabled).toHaveBeenCalledWith(true);
+    expect(notif.requestPermission).toHaveBeenCalled();
+    await screen.getByRole('switch', { name: 'Notification sound' }).click();
+    expect(notif.setSoundEnabled).toHaveBeenCalled();
   });
 
   it('hides the desktop footer Save button on mobile', async () => {

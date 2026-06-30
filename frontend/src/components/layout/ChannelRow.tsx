@@ -101,31 +101,34 @@ export function ChannelRow({
         <span className={`truncate ${channel.muted ? 'text-gray-500' : ''}`}>
           {channel.channelName}
         </span>
-        {/* Brand-pink unread indicator. Any unread channel shows a NUMBERED
-            count box (floored to 1 — even a cold load where the exact count
-            isn't seeded yet reads as "1" rather than a bare dot, which is the
-            behaviour the design calls for). A muted channel shows only a subtle
-            dot instead, so its activity is visible without the loud count. */}
-        {hasUnread && (
-          channel.muted ? (
-            <span
-              aria-label="Unread"
-              data-testid={`channel-unread-dot-${channel.channelID}`}
-              className="ml-auto inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-brand"
-            />
-          ) : (
-            <Badge
-              variant="brand"
-              className="ml-auto text-[11px]"
-              data-testid={`channel-unread-badge-${channel.channelID}`}
-            >
-              {unreadCount > 99 ? '99+' : Math.max(1, unreadCount)}
-            </Badge>
-          )
-        )}
-        {channel.muted && (
-          <BellOff className="ml-auto h-3 w-3 shrink-0 text-gray-500 group-hover/row:hidden" aria-label="Muted" />
-        )}
+        {/* Right-edge status, absolutely positioned so it sits flush to the edge
+            and NEVER reflows: an unread channel shows a brand-pink NUMBERED count
+            box (floored to 1 — a cold load where the exact count isn't seeded yet
+            reads as "1", per the design), a muted+unread channel a subtle dot
+            instead of the loud count, and a muted+read channel the bell. It
+            fades out on desktop hover so the row actions (star/kebab) take the
+            space, and stays visible on touch where those actions are persistent
+            (shifted left of them). pointer-events-none keeps the row clickable. */}
+        {hasUnread ? (
+          <span className="pointer-events-none absolute right-2 top-1/2 flex -translate-y-1/2 items-center transition-opacity group-hover/row:opacity-0 max-md:right-14 max-md:opacity-100">
+            {channel.muted ? (
+              <span
+                aria-label="Unread"
+                data-testid={`channel-unread-dot-${channel.channelID}`}
+                className="h-2 w-2 rounded-full bg-brand"
+              />
+            ) : (
+              <Badge variant="brand" className="text-[11px]" data-testid={`channel-unread-badge-${channel.channelID}`}>
+                {unreadCount > 99 ? '99+' : Math.max(1, unreadCount)}
+              </Badge>
+            )}
+          </span>
+        ) : channel.muted ? (
+          <BellOff
+            className="pointer-events-none absolute right-2 top-1/2 h-3 w-3 -translate-y-1/2 text-gray-500 transition-opacity group-hover/row:opacity-0 max-md:opacity-100"
+            aria-label="Muted"
+          />
+        ) : null}
       </NavLink>
       {/* Star — visible on hover; persistent yellow when favorited. Always visible on touch screens. */}
       <button
