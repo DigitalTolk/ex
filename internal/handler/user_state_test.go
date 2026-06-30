@@ -33,8 +33,8 @@ func TestUserStateHandler_GetAndMutations(t *testing.T) {
 	convs.conversations["conv-1"] = &model.Conversation{ID: "conv-1", ParticipantIDs: []string{userID, "u-2"}}
 	members.memberships["ch-1#"+userID] = &model.ChannelMembership{ChannelID: "ch-1", UserID: userID}
 	messages.messages["ch-1#root-1"] = &model.Message{ID: "root-1", ParentID: "ch-1", AuthorID: "u-2", CreatedAt: time.Now()}
-	if err := stateSvc.MarkChannelNotificationUnread(ctx, userID, "ch-1"); err != nil {
-		t.Fatalf("MarkChannelNotificationUnread: %v", err)
+	if err := stateSvc.MarkThreadNotificationUnread(ctx, userID, "ch-1", "channel", "root-1"); err != nil {
+		t.Fatalf("MarkThreadNotificationUnread: %v", err)
 	}
 
 	req := userStateAuthedRequest(http.MethodGet, "/api/v1/user-state", nil, userID)
@@ -47,16 +47,8 @@ func TestUserStateHandler_GetAndMutations(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
 		t.Fatalf("decode state: %v", err)
 	}
-	if len(got.ChannelNotifications) != 1 || got.ChannelNotifications[0] != "ch-1" {
-		t.Fatalf("channel notifications = %#v", got.ChannelNotifications)
-	}
-
-	req = userStateAuthedRequest(http.MethodDelete, "/api/v1/user-state/channels/ch-1/notification", nil, userID)
-	req.SetPathValue("id", "ch-1")
-	rec = httptest.NewRecorder()
-	handler.ClearChannelNotification(rec, req)
-	if rec.Code != http.StatusNoContent {
-		t.Fatalf("ClearChannelNotification status = %d body=%s", rec.Code, rec.Body.String())
+	if len(got.ThreadNotifications) != 1 || got.ThreadNotifications[0] != "root-1" {
+		t.Fatalf("thread notifications = %#v", got.ThreadNotifications)
 	}
 
 	clientSeenAt := time.Date(2001, 2, 3, 4, 5, 6, 0, time.UTC)
@@ -124,12 +116,6 @@ func TestUserStateHandler_Errors(t *testing.T) {
 	handler.Get(rec, httptest.NewRequest(http.MethodGet, "/api/v1/user-state", nil))
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("Get unauth status = %d", rec.Code)
-	}
-
-	rec = httptest.NewRecorder()
-	handler.ClearChannelNotification(rec, userStateAuthedRequest(http.MethodDelete, "/api/v1/user-state/channels//notification", nil, "u-1"))
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("ClearChannelNotification missing id status = %d", rec.Code)
 	}
 
 	req := userStateAuthedRequest(http.MethodPut, "/api/v1/user-state/threads/bogus/ch/root/seen", nil, "u-1")
@@ -202,17 +188,6 @@ func TestUserStateHandler_Errors(t *testing.T) {
 	}
 
 	stateStore = newMockUserStateStoreForHandler()
-	stateStore.deleteErr = errors.New("delete boom")
-	handler = NewUserStateHandler(service.NewUserStateService(stateStore, nil), msgSvc, convSvc)
-	req = userStateAuthedRequest(http.MethodDelete, "/api/v1/user-state/channels/ch/notification", nil, "u-1")
-	req.SetPathValue("id", "ch")
-	rec = httptest.NewRecorder()
-	handler.ClearChannelNotification(rec, req)
-	if rec.Code != http.StatusInternalServerError {
-		t.Fatalf("ClearChannelNotification delete error status = %d", rec.Code)
-	}
-
-	stateStore = newMockUserStateStoreForHandler()
 	stateStore.setErr = errors.New("set boom")
 	handler = NewUserStateHandler(service.NewUserStateService(stateStore, nil), msgSvc, convSvc)
 	req = userStateAuthedRequest(http.MethodPut, "/api/v1/user-state/conversations/conv-err/hidden", nil, "u-1")
@@ -247,22 +222,6 @@ func TestUserStateHandler_MarkThreadSeen_Success(t *testing.T) {
 	handler.MarkThreadSeen(rec, req)
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("status = %d, want 204; body=%s", rec.Code, rec.Body.String())
-	}
-}
-
-func TestUserStateHandler_ClearChannelNotification_Unauthenticated(t *testing.T) {
-	stateSvc := service.NewUserStateService(newMockUserStateStoreForHandler(), nil)
-	msgSvc := service.NewMessageService(newDataMessageStore(), newDataMembershipStore(), newDataConversationStore(), nil, &mockBrokerForHandler{})
-	convSvc := service.NewConversationService(newDataConversationStore(), newDataUserStoreForConv(), nil, &mockBrokerForHandler{}, nil)
-	handler := NewUserStateHandler(stateSvc, msgSvc, convSvc)
-
-	// No auth context → 401 before touching the store.
-	req := httptest.NewRequest(http.MethodDelete, "/api/v1/user-state/channels/ch/notification", nil)
-	req.SetPathValue("id", "ch")
-	rec := httptest.NewRecorder()
-	handler.ClearChannelNotification(rec, req)
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("status = %d, want 401", rec.Code)
 	}
 }
 

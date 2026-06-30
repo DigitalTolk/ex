@@ -12,9 +12,18 @@ vi.mock('@/lib/api', () => ({
 }));
 
 const sendMutate = vi.fn();
+// Invoke onSuccess like a real successful mutation so the onSuccess handler
+// (which clears edit mode) is exercised.
+const editMutate = vi.fn((_vars: unknown, opts?: { onSuccess?: () => void }) => {
+  opts?.onSuccess?.();
+});
 vi.mock('@/hooks/useMessages', () => ({
   useSendMessage: () => ({ mutate: sendMutate, isPending: false }),
+  useEditMessage: () => ({ mutate: editMutate, isPending: false }),
 }));
+
+const isMobileRef = vi.hoisted(() => ({ value: false }));
+vi.mock('@/hooks/useIsMobile', () => ({ useIsMobile: () => isMobileRef.value }));
 
 // Controllable draft state so we can drive both the "no draft" (else) and
 // "draft present" (delete-on-send) arms of the reply handler, plus the
@@ -41,9 +50,26 @@ vi.mock('@/context/PresenceContext', () => ({
 // these tests focused on slicing/collapse logic, not on MessageItem
 // internals (which have their own thorough suite).
 vi.mock('@/components/chat/MessageItem', () => ({
-  MessageItem: ({ message }: { message: Message }) => (
-    <div data-testid="thread-card-msg" data-msg-id={message.id}>
+  MessageItem: ({
+    message,
+    onEditMessage,
+    disableEditing,
+  }: {
+    message: Message;
+    onEditMessage?: (m: Message) => void;
+    disableEditing?: boolean;
+  }) => (
+    <div
+      data-testid="thread-card-msg"
+      data-msg-id={message.id}
+      data-disable-editing={disableEditing ? 'true' : 'false'}
+    >
       {message.body}
+      {onEditMessage && (
+        <button data-testid={`edit-${message.id}`} onClick={() => onEditMessage(message)}>
+          edit
+        </button>
+      )}
     </div>
   ),
 }));
@@ -127,6 +153,8 @@ describe('ThreadCard', () => {
   beforeEach(() => {
     apiFetchMock.mockReset();
     sendMutate.mockReset();
+    editMutate.mockClear();
+    isMobileRef.value = false;
     saveDraftMutate.mockReset();
     clearDraftMutate.mockReset();
     mockDraft = undefined;
@@ -144,7 +172,7 @@ describe('ThreadCard', () => {
 
   it('renders the title as a link to the deep-link target', async () => {
     apiFetchMock.mockImplementation((url: string) => {
-      if (url === '/api/v1/channels/ch-1/messages/msg-root/thread') {
+      if (url.includes('/messages/msg-root/thread')) {
         return Promise.resolve([makeMessage('msg-root', 'root')]);
       }
       return Promise.resolve([]);
@@ -467,6 +495,10 @@ describe('ThreadCard — viewport gating', () => {
   beforeEach(() => {
     localStorage.clear();
     resetSeenCache();
+    editMutate.mockClear();
+    sendMutate.mockReset();
+    isMobileRef.value = false;
+    lastMessageInputProps.current = null;
     originalIO = (globalThis as { IntersectionObserver?: typeof IntersectionObserver }).IntersectionObserver;
     FakeObserver.instances = [];
     Object.defineProperty(globalThis, 'IntersectionObserver', {
@@ -564,6 +596,133 @@ describe('ThreadCard — viewport gating', () => {
       (c) => typeof c[0] === 'string' && c[0].includes('/user-state/threads/'),
     );
     expect(seenCalls).toHaveLength(0);
+  });
+
+  // Regression: #85 ("Mobile fixes 3") slapped `disableEditing` on the card's
+  // MessageItems, which silently killed editing on /threads for BOTH desktop
+  // and mobile. The card must NOT disable editing.
+  it('does not disable editing on its messages (the /threads edit regression)', async () => {
+    apiFetchMock.mockImplementation((url: string) => {
+      if (url.includes('/messages/msg-root/thread')) {
+        return Promise.resolve([{ ...makeMessage('msg-root', 'root'), authorID: 'u-me' }]);
+      }
+      return Promise.resolve([]);
+    });
+    renderCard(makeSummary());
+    await Promise.resolve();
+    act(() => {
+      FakeObserver.instances[0].fire(true);
+    });
+    const msgs = await screen.findAllByTestId('thread-card-msg');
+    for (const m of msgs) {
+      expect(m.getAttribute('data-disable-editing')).toBe('false');
+    }
+  });
+
+  it('edits a thread reply via the card composer on mobile (body-only, preserving attachments)', async () => {
+    isMobileRef.value = true;
+    apiFetchMock.mockImplementation((url: string) => {
+      if (url.includes('/messages/msg-root/thread')) {
+        return Promise.resolve([
+          { ...makeMessage('msg-root', 'root'), authorID: 'u-me' },
+          { ...makeMessage('r0', 'old body'), authorID: 'u-me', parentID: 'ch-1', parentMessageID: 'msg-root' },
+        ]);
+      }
+      return Promise.resolve([]);
+    });
+    renderCard(makeSummary({ replyCount: 1 }));
+    await Promise.resolve();
+    act(() => {
+      FakeObserver.instances[0].fire(true);
+    });
+    // Mobile routes the edit to the card's bottom composer (inline is cramped
+    // behind the keyboard), so clicking edit flips the composer into edit mode.
+    const editBtn = await screen.findByTestId('edit-r0');
+    act(() => {
+      editBtn.click();
+    });
+    await waitFor(() => {
+      expect(lastMessageInputProps.current?.initialBody).toBe('old body');
+      expect(lastMessageInputProps.current?.submitLabel).toBe('Save');
+    });
+    const onSend = lastMessageInputProps.current!.onSend as (v: { body: string; attachmentIDs: string[] }) => void;
+    act(() => {
+      onSend({ body: 'edited body', attachmentIDs: [] });
+    });
+    expect(editMutate).toHaveBeenCalledTimes(1);
+    const [vars] = editMutate.mock.calls[0] as [Record<string, unknown>, unknown];
+    expect(vars).toMatchObject({ messageId: 'r0', body: 'edited body', channelId: 'ch-1' });
+    // Body-only: NO attachmentIDs key, so the server preserves the originals
+    // rather than stripping them.
+    expect(vars).not.toHaveProperty('attachmentIDs');
+  });
+
+  it('an unchanged or empty edit just closes the editor without mutating', async () => {
+    isMobileRef.value = true;
+    apiFetchMock.mockImplementation((url: string) => {
+      if (url.includes('/messages/msg-root/thread')) {
+        return Promise.resolve([{ ...makeMessage('msg-root', 'root'), authorID: 'u-me' }]);
+      }
+      return Promise.resolve([]);
+    });
+    renderCard(makeSummary());
+    await Promise.resolve();
+    act(() => {
+      FakeObserver.instances[0].fire(true);
+    });
+    const editBtn = await screen.findByTestId('edit-msg-root');
+    act(() => {
+      editBtn.click();
+    });
+    await waitFor(() => expect(lastMessageInputProps.current?.submitLabel).toBe('Save'));
+    // Same body → no-op early return, editor closes (back to reply mode).
+    act(() => {
+      (lastMessageInputProps.current!.onSend as (v: { body: string; attachmentIDs: string[] }) => void)({
+        body: 'root',
+        attachmentIDs: [],
+      });
+    });
+    await waitFor(() => expect(lastMessageInputProps.current?.submitLabel).toBeUndefined());
+    expect(editMutate).not.toHaveBeenCalled();
+
+    // Re-open and submit a blank body → also a no-op close.
+    act(() => {
+      editBtn.click();
+    });
+    await waitFor(() => expect(lastMessageInputProps.current?.submitLabel).toBe('Save'));
+    act(() => {
+      (lastMessageInputProps.current!.onSend as (v: { body: string; attachmentIDs: string[] }) => void)({
+        body: '   ',
+        attachmentIDs: [],
+      });
+    });
+    await waitFor(() => expect(lastMessageInputProps.current?.submitLabel).toBeUndefined());
+    expect(editMutate).not.toHaveBeenCalled();
+  });
+
+  it('cancelling an edit returns the composer to reply mode', async () => {
+    isMobileRef.value = true;
+    apiFetchMock.mockImplementation((url: string) => {
+      if (url.includes('/messages/msg-root/thread')) {
+        return Promise.resolve([{ ...makeMessage('msg-root', 'root'), authorID: 'u-me' }]);
+      }
+      return Promise.resolve([]);
+    });
+    renderCard(makeSummary());
+    await Promise.resolve();
+    act(() => {
+      FakeObserver.instances[0].fire(true);
+    });
+    const editBtn = await screen.findByTestId('edit-msg-root');
+    act(() => {
+      editBtn.click();
+    });
+    await waitFor(() => expect(lastMessageInputProps.current?.onCancel).toBeTruthy());
+    act(() => {
+      (lastMessageInputProps.current!.onCancel as () => void)();
+    });
+    await waitFor(() => expect(lastMessageInputProps.current?.submitLabel).toBeUndefined());
+    expect(editMutate).not.toHaveBeenCalled();
   });
 });
 

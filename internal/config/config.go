@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"time"
 	"unicode/utf8"
 )
@@ -47,6 +48,14 @@ type Config struct {
 	// App
 	BaseURL string
 
+	// TrustedProxyCount is how many reverse proxies (LB, CDN) sit in front of the
+	// app and append to X-Forwarded-For. The rate-limit IP is taken just inside
+	// these trusted hops so a client can't forge its identity with a leading XFF.
+	// MUST match the deployment topology: 1 for a single LB (default), 0 for
+	// direct exposure (ignore XFF entirely), N for N chained proxies. A wrong
+	// value either trusts a spoofable hop or rate-limits the wrong IP.
+	TrustedProxyCount int
+
 	// OneSignal mobile push. REST API key is server-only and must never be
 	// exposed through frontend config.
 	OneSignalAppID      string
@@ -67,8 +76,13 @@ type Config struct {
 
 func Load() (*Config, error) {
 	c := &Config{
-		Port:                 envOr("PORT", "8080"),
-		Env:                  envOr("ENV", "development"),
+		Port: envOr("PORT", "8080"),
+		// Fail CLOSED: an unset ENV means production, not development. Defaulting
+		// to development meant a prod deploy that forgot ENV=production would boot
+		// with the hardcoded "dev-secret-change-me" JWT key (forgeable admin
+		// tokens) plus wildcard CORS/WS origins. Local dev sets ENV=development
+		// explicitly (docker-compose.yml), so this only tightens the default.
+		Env:                  envOr("ENV", "production"),
 		AWSRegion:            envOr("AWS_REGION", "us-east-1"),
 		DynamoDBTable:        envOr("DYNAMODB_TABLE", "ex"),
 		DynamoDBEndpoint:     os.Getenv("DYNAMODB_ENDPOINT"),
@@ -119,6 +133,13 @@ func Load() (*Config, error) {
 	if c.Env != "development" && utf8.RuneCountInString(c.JWTSecret) < 32 {
 		return nil, fmt.Errorf("JWT_SECRET must be at least 32 characters outside development")
 	}
+
+	proxyCount := envOr("TRUSTED_PROXY_COUNT", "1")
+	n, err := strconv.Atoi(proxyCount)
+	if err != nil || n < 0 {
+		return nil, fmt.Errorf("invalid TRUSTED_PROXY_COUNT %q: must be a non-negative integer", proxyCount)
+	}
+	c.TrustedProxyCount = n
 
 	return c, nil
 }

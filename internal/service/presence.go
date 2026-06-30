@@ -159,13 +159,25 @@ func (s *PresenceService) OnlineUserIDs() []string {
 
 func (s *PresenceService) publish(ctx context.Context, userID string, online bool) {
 	data := map[string]any{"userID": userID, "online": online}
+	// Scoped fan-out: only people who share a channel or DM with the subject need
+	// to know. A subject in no shared context reaches no one.
+	topics := []string{pubsub.PresenceEvents()}
 	if s.audience != nil {
-		// Scoped fan-out: only people who share a channel or DM with the subject
-		// need to know. A subject in no shared context reaches no one.
-		for _, topic := range s.audience(ctx, userID) {
-			events.Publish(ctx, s.publisher, topic, events.EventPresenceChanged, data)
-		}
+		topics = s.audience(ctx, userID)
+	}
+	if len(topics) == 0 {
 		return
 	}
-	events.Publish(ctx, s.publisher, pubsub.PresenceEvents(), events.EventPresenceChanged, data)
+	// Pipeline the fan-out into one round-trip when the publisher supports it
+	// (a presence transition for a user in N channels otherwise did N serial
+	// PUBLISHes on every connect/disconnect). Fall back to a per-topic loop.
+	if bp, ok := s.publisher.(events.ManyPublisher); ok {
+		if evt, err := events.NewEvent(events.EventPresenceChanged, data); err == nil {
+			_ = bp.PublishMany(ctx, topics, evt)
+			return
+		}
+	}
+	for _, topic := range topics {
+		events.Publish(ctx, s.publisher, topic, events.EventPresenceChanged, data)
+	}
 }

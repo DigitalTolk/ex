@@ -407,6 +407,63 @@ func TestUserService_GetBatch(t *testing.T) {
 	}
 }
 
+// batchMockUserStore adds the optional GetUsersByIDs capability so GetBatch
+// exercises its batched path.
+type batchMockUserStore struct {
+	*mockUserStore
+	batchErr   error
+	batchCalls int
+}
+
+func (m *batchMockUserStore) GetUsersByIDs(_ context.Context, ids []string) ([]*model.User, error) {
+	m.batchCalls++
+	if m.batchErr != nil {
+		return nil, m.batchErr
+	}
+	out := make([]*model.User, 0, len(ids))
+	for _, id := range ids {
+		if u, ok := m.users[id]; ok {
+			out = append(out, u)
+		}
+	}
+	return out, nil
+}
+
+func TestUserService_GetBatch_CacheHitPlusBatchedMisses(t *testing.T) {
+	users := &batchMockUserStore{mockUserStore: newMockUserStore()}
+	cache := newMockCache()
+	svc := NewUserService(users, cache, nil, nil)
+	users.users["b1"] = &model.User{ID: "b1", DisplayName: "Alice"}
+	users.users["b2"] = &model.User{ID: "b2", DisplayName: "Bob"}
+
+	// Warm the cache for b1; b2 + missing are resolved via the batch.
+	_ = cache.SetUser(context.Background(), users.users["b1"])
+	got, err := svc.GetBatch(context.Background(), []string{"b1", "b2", "missing"})
+	if err != nil {
+		t.Fatalf("GetBatch: %v", err)
+	}
+	if len(got) != 2 || got[0].ID != "b1" || got[1].ID != "b2" {
+		t.Fatalf("got %+v, want [b1 b2] in order", got)
+	}
+	if users.batchCalls != 1 {
+		t.Errorf("batch store called %d times, want exactly 1", users.batchCalls)
+	}
+}
+
+func TestUserService_GetBatch_BatchErrorFallsBackToPerID(t *testing.T) {
+	users := &batchMockUserStore{mockUserStore: newMockUserStore(), batchErr: errors.New("batch down")}
+	svc := NewUserService(users, nil, nil, nil) // no cache → all misses
+	users.users["b1"] = &model.User{ID: "b1", DisplayName: "Alice"}
+
+	got, err := svc.GetBatch(context.Background(), []string{"b1", "missing"})
+	if err != nil {
+		t.Fatalf("GetBatch must not error on a batch failure: %v", err)
+	}
+	if len(got) != 1 || got[0].ID != "b1" {
+		t.Fatalf("fallback got %+v, want [b1]", got)
+	}
+}
+
 func TestUserService_GetBatch_Empty(t *testing.T) {
 	users := newMockUserStore()
 	svc := NewUserService(users, nil, nil, nil)

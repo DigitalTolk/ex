@@ -116,6 +116,41 @@ func TestPresenceService_Connect_ScopedToAudienceTopics(t *testing.T) {
 	}
 }
 
+// manyPub implements events.ManyPublisher so the presence fan-out takes the
+// pipelined PublishMany path instead of the per-topic Publish loop.
+type manyPub struct {
+	manyCalls [][]string
+	single    int
+}
+
+func (m *manyPub) Publish(_ context.Context, _ string, _ *events.Event) error {
+	m.single++
+	return nil
+}
+
+func (m *manyPub) PublishMany(_ context.Context, channels []string, _ *events.Event) error {
+	m.manyCalls = append(m.manyCalls, channels)
+	return nil
+}
+
+func TestPresenceService_Connect_PipelinesViaPublishMany(t *testing.T) {
+	pub := &manyPub{}
+	svc := NewPresenceService(nil, pub)
+	svc.SetPresenceAudienceResolver(func(context.Context, string) []string {
+		return []string{pubsub.ChannelName("c1"), pubsub.ConversationName("d1")}
+	})
+
+	if !svc.OnConnect(context.Background(), "u1") {
+		t.Fatal("first connect should report the transition")
+	}
+	if len(pub.manyCalls) != 1 || len(pub.manyCalls[0]) != 2 {
+		t.Fatalf("expected one pipelined PublishMany with 2 topics, got %v", pub.manyCalls)
+	}
+	if pub.single != 0 {
+		t.Errorf("batch path must not also call Publish per topic, got %d", pub.single)
+	}
+}
+
 func TestPresenceService_Connect_NoSharedContextPublishesNothing(t *testing.T) {
 	pub := newMockPublisher()
 	svc := NewPresenceService(nil, pub)

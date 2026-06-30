@@ -23,7 +23,7 @@ func NewEmojiHandler(s *service.EmojiService) *EmojiHandler {
 func (h *EmojiHandler) List(w http.ResponseWriter, r *http.Request) {
 	emojis, err := h.emojiSvc.List(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "list_error", err.Error())
+		writeInternalError(w, r, "list_error", err)
 		return
 	}
 	if emojis == nil {
@@ -76,7 +76,7 @@ func (h *EmojiHandler) ListFrequent(w http.ResponseWriter, r *http.Request) {
 	}
 	emojis, err := h.emojiSvc.FrequentEmojis(r.Context(), userID, limit)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "list_error", err.Error())
+		writeInternalError(w, r, "list_error", err)
 		return
 	}
 	if emojis == nil {

@@ -52,6 +52,13 @@ describe('GiphyEmbed browser behaviour', () => {
     await expect.element(screen.getByText('GIPHY unavailable')).toBeVisible();
   });
 
+  it('rejects an unsafe (non-alphanumeric) id without fetching', async () => {
+    giphyFetchMock.mockClear();
+    const screen = await render(<GiphyEmbed id="../../evil" apiKey="real-key" />);
+    await expect.element(screen.getByText('GIPHY unavailable')).toBeVisible();
+    expect(giphyFetchMock).not.toHaveBeenCalled();
+  });
+
   it('shows the loading placeholder while workspace settings are loading', async () => {
     useWorkspaceSettingsMock.mockReturnValue({ data: undefined, isLoading: true });
     const screen = await render(<GiphyEmbed id="abc" />);

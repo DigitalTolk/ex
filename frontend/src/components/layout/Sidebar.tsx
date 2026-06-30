@@ -424,7 +424,7 @@ function SidebarSectionsSkeleton() {
 
 export function Sidebar({ onClose }: SidebarProps) {
   const { user } = useAuth();
-  const { unreadChannels, unreadChannelNotifications, unreadConversations, unreadThreadNotifications, hiddenConversations, hideConversation, channelUnreadCounts, conversationUnreadCounts } = useUnread();
+  const { unreadThreadNotifications, hiddenConversations, hideConversation } = useUnread();
   const { data: channels } = useUserChannels();
   const conversationsQuery = useUserConversations();
   const { data: conversations } = conversationsQuery;
@@ -1422,15 +1422,12 @@ export function Sidebar({ onClose }: SidebarProps) {
                       const ch = item.channel;
                       const isActive =
                         location.pathname === `/channel/${slugify(ch.channelName)}`;
-                      const hasNotification =
-                        unreadChannelNotifications.has(ch.channelID) ||
-                        (userState?.channelNotifications ?? []).includes(ch.channelID);
-                      return isActive || (!ch.muted && (ch.unread || unreadChannels.has(ch.channelID) || hasNotification));
+                      return isActive || (!ch.muted && !!ch.unread);
                     }
                     const conv = item.conversation;
                     const isActive =
                       location.pathname === `/conversation/${conv.conversationID}`;
-                    return isActive || conv.unread || unreadConversations.has(conv.conversationID);
+                    return isActive || !!conv.unread;
                   })
                 : section.items;
 
@@ -1579,16 +1576,8 @@ export function Sidebar({ onClose }: SidebarProps) {
                               {(dragProps) => (
                                 <ChannelRow
                                   channel={item.channel}
-                                  hasUnread={
-                                    item.channel.unread ||
-                                    unreadChannels.has(item.channel.channelID) ||
-                                    unreadChannelNotifications.has(item.channel.channelID) ||
-                                    (userState?.channelNotifications ?? []).includes(item.channel.channelID)
-                                  }
-                                  unreadCount={
-                                    (item.channel.unreadCount ?? 0) +
-                                    (channelUnreadCounts?.get(item.channel.channelID) ?? 0)
-                                  }
+                                  hasUnread={!!item.channel.unread}
+                                  unreadCount={item.channel.unreadCount ?? 0}
                                   onClose={onClose}
                                   draggable={!isMobile}
                                   suppressNavigation={suppressChannelNavigationID === item.channel.channelID}
@@ -1625,11 +1614,8 @@ export function Sidebar({ onClose }: SidebarProps) {
                               {(dragProps) => (
                                 <ConversationRow
                                   conversation={conv}
-                                  hasUnread={conv.unread || unreadConversations.has(conv.conversationID)}
-                                  unreadCount={
-                                    (conv.unreadCount ?? 0) +
-                                    (conversationUnreadCounts?.get(conv.conversationID) ?? 0)
-                                  }
+                                  hasUnread={!!conv.unread}
+                                  unreadCount={conv.unreadCount ?? 0}
                                   dmAvatarURL={resolvedDMAvatarURL}
                                   dmUserStatus={resolvedDMUserStatus}
                                   dmOnline={dmOnline}
@@ -1645,11 +1631,8 @@ export function Sidebar({ onClose }: SidebarProps) {
                           ) : (
                             <ConversationRow
                               conversation={conv}
-                              hasUnread={conv.unread || unreadConversations.has(conv.conversationID)}
-                              unreadCount={
-                                (conv.unreadCount ?? 0) +
-                                (conversationUnreadCounts?.get(conv.conversationID) ?? 0)
-                              }
+                              hasUnread={!!conv.unread}
+                              unreadCount={conv.unreadCount ?? 0}
                               dmAvatarURL={resolvedDMAvatarURL}
                               dmUserStatus={resolvedDMUserStatus}
                               dmOnline={dmOnline}

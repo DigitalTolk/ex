@@ -5,6 +5,7 @@ import { startCompletion, currentCompletions, completionStatus } from '@codemirr
 import { EditorView } from '@codemirror/view';
 import { syntaxTree } from '@codemirror/language';
 import { MarkdownEditor } from './MarkdownEditor';
+import { composerTooltipSpace } from './tooltipSpace';
 import type { WysiwygEditorHandle } from './types';
 import type { CompletionProviders } from './extensions/completions';
 import { userEvent } from 'vitest/browser';
@@ -313,5 +314,38 @@ describe('MarkdownEditor handle + keymap branches', () => {
     dt.items.add(new File(['x'], 'a.png', { type: 'image/png' }));
     el.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true })); // onPasteFiles undefined
     expect(ref.current!.getMarkdown()).toContain('x');
+  });
+});
+
+describe('composerTooltipSpace — mobile typeahead opens above the keyboard', () => {
+  it('bounds the autocomplete to the visual viewport (so CM flips it above the keyboard)', () => {
+    const original = window.visualViewport;
+    // Simulate an open on-screen keyboard: the visual viewport is shorter than
+    // the layout viewport and offset. CM must place the popup within this box,
+    // not the full window — so the popup ends ABOVE the keyboard top (bottom).
+    Object.defineProperty(window, 'visualViewport', {
+      value: { offsetTop: 10, offsetLeft: 5, width: 390, height: 400 },
+      configurable: true,
+    });
+    try {
+      expect(composerTooltipSpace()).toEqual({ top: 10, left: 5, bottom: 410, right: 395 });
+    } finally {
+      Object.defineProperty(window, 'visualViewport', { value: original, configurable: true });
+    }
+  });
+
+  it('falls back to the layout viewport when visualViewport is unavailable', () => {
+    const original = window.visualViewport;
+    Object.defineProperty(window, 'visualViewport', { value: null, configurable: true });
+    try {
+      expect(composerTooltipSpace()).toEqual({
+        top: 0,
+        left: 0,
+        bottom: window.innerHeight,
+        right: window.innerWidth,
+      });
+    } finally {
+      Object.defineProperty(window, 'visualViewport', { value: original, configurable: true });
+    }
   });
 });

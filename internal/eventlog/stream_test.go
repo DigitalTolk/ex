@@ -37,6 +37,48 @@ func appendEvent(t *testing.T, s *Stream, userID, id string) []byte {
 // back out in publish order when the cursor is older than all of
 // them, and only the strictly-newer ones come back when the cursor
 // is mid-stream.
+func TestStream_AppendMany(t *testing.T) {
+	s, _, _ := newTestStream(t, 0)
+	payload, _ := json.Marshal(map[string]any{"id": "01ID0000000000000000000009", "type": "message.new"})
+
+	// Pipelines the same event into every recipient's inbox (skipping empty IDs).
+	if err := s.AppendMany(context.Background(), []string{"u1", "", "u2"}, "01ID0000000000000000000009", payload); err != nil {
+		t.Fatalf("AppendMany: %v", err)
+	}
+	for _, uid := range []string{"u1", "u2"} {
+		res, err := s.Replay(context.Background(), uid, "00ID0000000000000000000000")
+		if err != nil {
+			t.Fatalf("Replay %s: %v", uid, err)
+		}
+		if len(res.Entries) != 1 || res.Entries[0].ID != "01ID0000000000000000000009" {
+			t.Errorf("%s inbox = %+v, want the one appended event", uid, res.Entries)
+		}
+	}
+
+	// All-empty recipient list → no-op, no error.
+	if err := s.AppendMany(context.Background(), []string{"", ""}, "01ID0000000000000000000009", payload); err != nil {
+		t.Errorf("AppendMany with only empty IDs should be a no-op, got %v", err)
+	}
+
+	// Empty eventID → rejected.
+	if err := s.AppendMany(context.Background(), []string{"u1"}, "", payload); err == nil {
+		t.Error("AppendMany with empty eventID should error")
+	}
+
+	// Nil-safe.
+	var nilStream *Stream
+	if err := nilStream.AppendMany(context.Background(), []string{"u1"}, "x", payload); err != nil {
+		t.Errorf("nil stream AppendMany should be a no-op, got %v", err)
+	}
+
+	// Pipeline Exec error surfaces (closed client).
+	deadStream, _, deadClient := newTestStream(t, 0)
+	_ = deadClient.Close()
+	if err := deadStream.AppendMany(context.Background(), []string{"u1"}, "01ID0000000000000000000009", payload); err == nil {
+		t.Error("AppendMany on a closed client should return the pipeline error")
+	}
+}
+
 func TestStream_AppendReplayHappyPath(t *testing.T) {
 	s, _, _ := newTestStream(t, 0)
 	appendEvent(t, s, "u1", "01ID0000000000000000000001")

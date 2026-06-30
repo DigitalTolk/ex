@@ -147,6 +147,15 @@ describe('renderHastTree — every custom-tag branch', () => {
     expect(a.textContent).toBe('http://example.org/x');
   });
 
+  it('renders an ex-bare-url with an unsafe scheme as inert text, not an anchor', async () => {
+    const tree = root([
+      elem('p', {}, [elem('ex-bare-url', { 'data-href': 'javascript:alert(1)' })]),
+    ]);
+    await render(wrap(<>{renderHastTree(tree)}</>));
+    expect(document.querySelector('a')).toBeNull();
+    expect(document.body.textContent).toContain('javascript:alert(1)');
+  });
+
   it('renders an ex-emoji-shortcode as a custom <img> when the map has the name', async () => {
     const tree = root([
       elem('p', {}, [elem('ex-emoji-shortcode', { 'data-name': 'partyparrot' })]),
@@ -375,11 +384,12 @@ describe('renderHastTree — every custom-tag branch', () => {
     expect(document.querySelector('span[title=":wave::skin-tone-2:"]')).not.toBeNull();
   });
 
-  it('renders an ex-bare-url with an empty href fallback when data-href is missing', async () => {
+  it('renders a missing-href ex-bare-url as inert text (no empty-href anchor)', async () => {
     const tree = root([elem('p', {}, [elem('ex-bare-url', {})])]);
     await render(wrap(<>{renderHastTree(tree)}</>));
-    // href falls back to '' → an anchor with an empty href still renders.
-    expect(document.querySelector('a')).not.toBeNull();
+    // href falls back to '' which isSafeUrl rejects → rendered as a span, not
+    // a degenerate empty-href anchor.
+    expect(document.querySelector('a')).toBeNull();
   });
 
   it('strips the https:// scheme from a bare URL but keeps other schemes intact', async () => {

@@ -1568,7 +1568,7 @@ export const ALL_EMOJI: EmojiEntry[] = [
   { name: "name_badge", unicode: "📛", category: "symbols" },
   { name: "jp_symbol_beginner", unicode: "🔰", category: "symbols" },
   { name: "hollow_red_circle", unicode: "⭕", category: "symbols" },
-  { name: "check_mark_btn", unicode: "✅", category: "symbols" },
+  { name: "white_check_mark", unicode: "✅", category: "symbols" },
   { name: "check_box_check", unicode: "☑️", category: "symbols" },
   { name: "check_mark", unicode: "✔️", category: "symbols" },
   { name: "cross_mark", unicode: "❌", category: "symbols" },

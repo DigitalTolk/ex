@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -24,11 +25,14 @@ const presenceKeyPrefix = "presence:online:"
 // WebSocket; the backend records the ack here so the deferred mobile-push
 // fallback can tell "the desktop actually delivered this" from "presence merely
 // claimed the user was online". The TTL only needs to outlive the deferred-push
-// window (a handful of seconds) plus slack — 30s is generous. Cross-instance by
-// construction (Redis), so the ack and the deferred push can land on different
-// backend instances. See CLAUDE.md (Notifications).
+// window plus slack, so it MUST stay above service.ackFallbackDelay (30s) —
+// otherwise a recorded ack could expire before the deferred-push timer reads it
+// and the push would fire despite a healthy desktop. 60s clears the 30s delay
+// with margin. Cross-instance by construction (Redis), so the ack and the
+// deferred push can land on different backend instances. See CLAUDE.md
+// (Notifications).
 const notifAckKeyPrefix = "notifack:"
-const notifAckTTL = 30 * time.Second
+const notifAckTTL = 60 * time.Second
 
 // presenceTTL is the backstop expiry for a user's "online" marker. The WS
 // keep-alive refreshes it every wsKeepAliveInterval (15s), so it must stay
@@ -216,30 +220,60 @@ func (c *RedisCache) WasNotificationAcked(ctx context.Context, userID, messageID
 
 // OnlinePresenceUserIDs returns all users with at least one active websocket
 // connection across all backend processes.
+const nameCacheKeyPrefix = "name:"
+
+// nameCacheTTL is short because display names are only used in notification
+// titles (cosmetic) — a rename shows the old name in a push title for at most
+// this long, which is acceptable, and the alternative (invalidating on every
+// channel/user update) isn't worth the coupling for a title string.
+const nameCacheTTL = 5 * time.Minute
+
+// GetName returns a cached display name for key (e.g. "chan:<id>"/"user:<id>").
+func (c *RedisCache) GetName(ctx context.Context, key string) (string, bool) {
+	v, err := c.client.Get(ctx, nameCacheKeyPrefix+key).Result()
+	if err != nil {
+		return "", false
+	}
+	return v, true
+}
+
+// SetName caches a display name with a short TTL.
+func (c *RedisCache) SetName(ctx context.Context, key, val string) {
+	_ = c.client.Set(ctx, nameCacheKeyPrefix+key, val, nameCacheTTL).Err()
+}
+
 func (c *RedisCache) OnlinePresenceUserIDs(ctx context.Context) ([]string, error) {
-	var ids []string
+	var keys []string
 	var cursor uint64
 	for {
-		keys, next, err := c.client.Scan(ctx, cursor, presenceKeyPrefix+"*", 100).Result()
+		batch, next, err := c.client.Scan(ctx, cursor, presenceKeyPrefix+"*", 100).Result()
 		if err != nil {
 			return nil, fmt.Errorf("presence list: %w", err)
 		}
-		for _, key := range keys {
-			count, err := c.client.Get(ctx, key).Int()
-			if errors.Is(err, redis.Nil) {
-				continue
-			}
-			if err != nil {
-				return nil, fmt.Errorf("presence list get %q: %w", key, err)
-			}
-			if count > 0 {
-				ids = append(ids, strings.TrimPrefix(key, presenceKeyPrefix))
-			}
-		}
+		keys = append(keys, batch...)
 		if next == 0 {
 			break
 		}
 		cursor = next
+	}
+	if len(keys) == 0 {
+		return nil, nil
+	}
+	// One MGET instead of a GET per key — turns the previous O(online) Redis
+	// round-trips into a single one.
+	vals, err := c.client.MGet(ctx, keys...).Result()
+	if err != nil {
+		return nil, fmt.Errorf("presence list mget: %w", err)
+	}
+	ids := make([]string, 0, len(keys))
+	for i, v := range vals {
+		s, ok := v.(string)
+		if !ok {
+			continue // expired between scan and mget (nil), or unexpected type
+		}
+		if n, err := strconv.Atoi(s); err == nil && n > 0 {
+			ids = append(ids, strings.TrimPrefix(keys[i], presenceKeyPrefix))
+		}
 	}
 	return ids, nil
 }

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strconv"
 
@@ -31,6 +32,20 @@ func writeError(w http.ResponseWriter, status int, code, message string) {
 			"message": message,
 		},
 	})
+}
+
+// writeInternalError writes a GENERIC 500 to the client (so wrapped S3/Dynamo/
+// OIDC internals never leak), while logging the real error server-side keyed by
+// the request ID for diagnosis. Use it for any 5xx whose error is an internal
+// chain rather than a user-actionable message.
+func writeInternalError(w http.ResponseWriter, r *http.Request, code string, err error) {
+	slog.Error("request failed",
+		"code", code,
+		"requestID", middleware.RequestIDFromContext(r.Context()),
+		"method", r.Method,
+		"path", r.URL.Path,
+		"error", err)
+	writeError(w, http.StatusInternalServerError, code, "internal server error")
 }
 
 // readJSON decodes the request body (up to 1 MB) into dest.

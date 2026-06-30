@@ -6,12 +6,13 @@ import (
 	"sync"
 	"time"
 
+	"github.com/DigitalTolk/ex/internal/model"
+	"github.com/DigitalTolk/ex/internal/safe"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/expression"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
-	"github.com/DigitalTolk/ex/internal/model"
 )
 
 // MessageStore defines operations on Message entities.
@@ -338,23 +339,26 @@ func (s *MessageStoreImpl) ListAfter(ctx context.Context, parentID, after string
 // "Jump to message" so latency multiplies if they serialize.
 func (s *MessageStoreImpl) ListAround(ctx context.Context, parentID, msgID string, before, after int) ([]*model.Message, bool, bool, error) {
 	var (
-		wg                                   sync.WaitGroup
-		target                               *model.Message
-		older, newer                         []*model.Message
-		hasMoreOlder, hasMoreNewer           bool
-		errTarget, errOlder, errNewer        error
+		wg                            sync.WaitGroup
+		target                        *model.Message
+		older, newer                  []*model.Message
+		hasMoreOlder, hasMoreNewer    bool
+		errTarget, errOlder, errNewer error
 	)
 	wg.Add(3)
 	go func() {
 		defer wg.Done()
+		defer safe.Recover()
 		target, errTarget = s.GetByID(ctx, parentID, msgID)
 	}()
 	go func() {
 		defer wg.Done()
+		defer safe.Recover()
 		older, hasMoreOlder, errOlder = s.List(ctx, parentID, msgID, before)
 	}()
 	go func() {
 		defer wg.Done()
+		defer safe.Recover()
 		newer, hasMoreNewer, errNewer = s.ListAfter(ctx, parentID, msgID, after)
 	}()
 	wg.Wait()

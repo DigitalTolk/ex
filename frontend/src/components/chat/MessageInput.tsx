@@ -786,20 +786,27 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
           Up to {MAX_ATTACHMENTS_PER_MESSAGE} attachments per message — remove a few to send.
         </div>
       )}
-      {variant === 'composer' && aboveInput && (
-        // Overlay, not normal flow: floats in the free space just above the
-        // composer (`bottom-full` = bottom edge sits on the wrapper's top
-        // edge) so showing / hiding the "<user> is typing" line never pushes
-        // the input box or changes the composer's height. pointer-events-none
-        // so it can't intercept clicks on the message underneath.
-        <div
-          className="pointer-events-none absolute inset-x-0 bottom-full"
-          data-testid="composer-above-input-overlay"
-        >
-          {aboveInput}
-        </div>
-      )}
-      <div className="rounded-2xl border md:border-2 border-border bg-typing-field max-md:overflow-hidden max-md:rounded-[1.75rem]" data-message-composer>
+      {/* `relative` wrapper anchors the typing-indicator overlay to the
+          composer BOX, not the padded root. Anchoring to the root made
+          `bottom-full` sit at the root's top edge — a full `p-3` (12px)
+          above the composer box, which read as a ~10px floating gap. This
+          wrapper hugs the box so the overlay sits directly on top of it. */}
+      <div className="relative">
+        {variant === 'composer' && aboveInput && (
+          // Overlay, not normal flow: floats in the free space just above the
+          // composer (`bottom-full` = bottom edge sits on this wrapper's — and
+          // therefore the box's — top edge) so showing / hiding the "<user> is
+          // typing" line never pushes the input box or changes the composer's
+          // height. pointer-events-none so it can't intercept clicks on the
+          // message underneath.
+          <div
+            className="pointer-events-none absolute inset-x-0 bottom-full"
+            data-testid="composer-above-input-overlay"
+          >
+            {aboveInput}
+          </div>
+        )}
+        <div className="rounded-2xl border md:border-2 border-border bg-typing-field max-md:overflow-hidden max-md:rounded-[1.75rem]" data-message-composer>
         {drafts.length > 0 && (
           <div className="flex flex-wrap gap-1.5 border-b p-2" aria-label="Draft attachments">
             {drafts.map((d) => (
@@ -879,7 +886,8 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
             );
           })()}
         </div>
-        {showToolbar && renderToolbar('bottom')}
+          {showToolbar && renderToolbar('bottom')}
+        </div>
       </div>
       <input
         ref={fileInputRef}

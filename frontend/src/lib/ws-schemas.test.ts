@@ -8,6 +8,7 @@ import {
   parsePresence,
   parseServerVersion,
   parseTyping,
+  parseUserUpdated,
 } from './ws-schemas';
 
 describe('parseMessage', () => {
@@ -121,5 +122,13 @@ describe('event payload parsers', () => {
     expect(parseServerVersion({ version: 'abc' })?.version).toBe('abc');
     expect(parseServerVersion({ version: '' })).toBeNull();
     expect(parseServerVersion({ version: 0 })).toBeNull();
+  });
+
+  it('parseUserUpdated requires an id and passes through optional fields', () => {
+    const ok = parseUserUpdated({ id: 'u-1', timeZone: 'UTC', lastSeenAt: '2026-01-01', userStatus: null });
+    expect(ok?.id).toBe('u-1');
+    expect(ok?.timeZone).toBe('UTC');
+    expect(parseUserUpdated({ timeZone: 'UTC' })).toBeNull(); // missing id
+    expect(parseUserUpdated({ id: '' })).toBeNull();
   });
 });

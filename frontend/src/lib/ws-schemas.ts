@@ -43,6 +43,14 @@ const typingSchema = z.object({
   parentMessageID: z.string().min(1).optional(),
 });
 const serverVersionSchema = z.object({ version: z.string().min(1) });
+const userUpdatedSchema = z.object({
+  id: z.string().min(1),
+  // userStatus is an arbitrary object or explicit null (cleared); validate it's
+  // present-or-null without over-constraining the nested shape.
+  userStatus: z.unknown().optional(),
+  timeZone: z.string().optional(),
+  lastSeenAt: z.string().optional(),
+});
 
 function parser<T>(schema: z.ZodType<T>): (v: unknown) => T | null {
   return (v: unknown) => {
@@ -84,3 +92,11 @@ export interface ServerVersionPayload {
   version: string;
 }
 export const parseServerVersion = parser(serverVersionSchema);
+
+export interface UserUpdatedPayload {
+  id: string;
+  userStatus?: unknown;
+  timeZone?: string;
+  lastSeenAt?: string;
+}
+export const parseUserUpdated = parser(userUpdatedSchema);

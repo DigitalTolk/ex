@@ -18,29 +18,30 @@ vi.mock('@/components/layout/AppLayout', () => ({
   ),
 }));
 
-const mockMarkChannelUnread = vi.fn();
-const mockMarkChannelNotificationUnread = vi.fn();
-const mockMarkConversationUnread = vi.fn();
 const mockMarkThreadNotificationUnread = vi.fn();
 const mockUnhideConversation = vi.fn();
-const mockClearConversationUnread = vi.fn();
+const {
+  bumpChannelUnread: mockBumpChannelUnread,
+  bumpConversationUnread: mockBumpConversationUnread,
+  clearConversationUnreadInCache: mockClearConversationUnreadInCache,
+} = vi.hoisted(() => ({
+  bumpChannelUnread: vi.fn(),
+  bumpConversationUnread: vi.fn(),
+  clearConversationUnreadInCache: vi.fn(),
+}));
+vi.mock('@/lib/unread-cache', () => ({
+  bumpChannelUnread: mockBumpChannelUnread,
+  bumpConversationUnread: mockBumpConversationUnread,
+  clearConversationUnreadInCache: mockClearConversationUnreadInCache,
+}));
 const isActiveConversationMock = vi.fn(() => true);
 const isActiveChannelMock = vi.fn(() => false);
 
 vi.mock('@/context/UnreadContext', () => ({
   useUnread: () => ({
-    unreadChannels: new Set(),
-    unreadChannelNotifications: new Set(),
-    unreadConversations: new Set(),
     unreadThreadNotifications: new Set(),
     hiddenConversations: new Set(),
-    markChannelUnread: mockMarkChannelUnread,
-    markChannelNotificationUnread: mockMarkChannelNotificationUnread,
-    markConversationUnread: mockMarkConversationUnread,
     markThreadNotificationUnread: mockMarkThreadNotificationUnread,
-    clearChannelUnread: vi.fn(),
-    resetSessionUnread: vi.fn(),
-    clearConversationUnread: mockClearConversationUnread,
     hideConversation: vi.fn(),
     unhideConversation: mockUnhideConversation,
     setActiveChannel: vi.fn(),
@@ -95,6 +96,7 @@ vi.mock('@/hooks/useMessages', () => ({
   invalidateThreadBothScopes: vi.fn(),
   invalidateUnfurlsForMessage: vi.fn(),
   markMessageDeletedInCache: vi.fn(),
+  patchMessageInThreadCache: vi.fn(),
   resyncMessageCache: vi.fn().mockResolvedValue(undefined),
   updateMessageInCache: vi.fn(),
 }));
@@ -170,13 +172,12 @@ function msg(overrides: Record<string, unknown> = {}): Record<string, unknown> {
 describe('ChatPage WS router — divergent-mock branch arms (browser)', () => {
   beforeEach(() => {
     mockUseWebSocket.mockClear();
-    mockMarkChannelUnread.mockClear();
-    mockMarkConversationUnread.mockClear();
+    mockBumpChannelUnread.mockClear();
+    mockBumpConversationUnread.mockClear();
     mockUnhideConversation.mockClear();
-    mockClearConversationUnread.mockClear();
+    mockClearConversationUnreadInCache.mockClear();
     mockDispatchNotification.mockClear();
     mockMarkThreadNotificationUnread.mockClear();
-    mockMarkChannelNotificationUnread.mockClear();
     mockMarkThreadSeen.mockClear();
     mockApiFetch.mockClear();
     navigateMock.mockClear();
@@ -196,7 +197,7 @@ describe('ChatPage WS router — divergent-mock branch arms (browser)', () => {
   it('onMessageNew on an ACTIVE conversation clears unread and PUTs the read marker', async () => {
     await renderChatPage();
     lastHandlers().onMessageNew?.(msg({ parentID: 'conv-1', parentType: 'conversation' }));
-    expect(mockClearConversationUnread).toHaveBeenCalledWith('conv-1');
+    expect(mockClearConversationUnreadInCache).toHaveBeenCalledWith(expect.anything(), "conv-1");
     await vi.waitFor(() => {
       const call = mockApiFetch.mock.calls.find((c) => String(c[0]).includes('/conversations/conv-1/read'));
       expect(call).toBeDefined();
@@ -209,11 +210,32 @@ describe('ChatPage WS router — divergent-mock branch arms (browser)', () => {
     isActiveChannelMock.mockReturnValue(true);
     await renderChatPage();
     lastHandlers().onMessageNew?.(msg({ parentID: 'ch-99', parentType: 'channel', authorID: 'other-user' }));
-    expect(mockMarkChannelUnread).not.toHaveBeenCalled();
+    expect(mockBumpChannelUnread).not.toHaveBeenCalled();
     await vi.waitFor(() => {
       const call = mockApiFetch.mock.calls.find((c) => String(c[0]).includes('/channels/ch-99/read'));
       expect(call).toBeDefined();
     });
+  });
+
+  it('onMessageNew for a conversation THREAD reply does not mark or clear DM unread', async () => {
+    // The new conversation gate mirrors channels: a thread-only reply is not
+    // new DM activity, so neither markConversationUnread nor the active-read
+    // path runs.
+    await renderChatPage();
+    lastHandlers().onMessageNew?.(msg({
+      parentID: 'conv-1', parentType: 'conversation', parentMessageID: 'root-1', authorID: 'other-user',
+    }));
+    expect(mockBumpConversationUnread).not.toHaveBeenCalled();
+    expect(mockClearConversationUnreadInCache).not.toHaveBeenCalled();
+  });
+
+  it('onMessageNew marks a non-active conversation unread for a top-level message', async () => {
+    isActiveConversationMock.mockReturnValue(false);
+    await renderChatPage();
+    lastHandlers().onMessageNew?.(msg({
+      parentID: 'conv-1', parentType: 'conversation', authorID: 'other-user',
+    }));
+    expect(mockBumpConversationUnread).toHaveBeenCalledWith(expect.anything(), "conv-1");
   });
 
   it('onMessageNew unhides an active conversation when the author is the local user', async () => {
@@ -288,16 +310,15 @@ describe('ChatPage WS router — divergent-mock branch arms (browser)', () => {
     expect(mockPatchUser).toHaveBeenCalledWith(expect.objectContaining({ timeZone: 'Europe/Berlin' }));
   });
 
-  it('onNotification marks AND dispatches a non-mention top-level channel notification', async () => {
+  it('onNotification dispatches a top-level channel alert without touching the unread cache', async () => {
     await renderChatPage();
-    // A top-level channel notification.new lights up the sidebar regardless of
-    // kind — the backend already decided this user should be alerted. Re-gating
-    // on kind === 'mention' here is the bug that left a sound playing with no
-    // badge when the separate message.new path was missed.
+    // A top-level channel notification.new is just the alert (popup/sound). The
+    // sidebar badge rides the separate message.new event (list-cache patch +
+    // durable-inbox replay), so the notification handler must NOT mark unread.
     lastHandlers().onNotification?.({
       kind: 'message', parentID: 'ch-99', parentType: 'channel', createdAt: '2026-05-01T00:00:00Z',
     });
-    expect(mockMarkChannelNotificationUnread).toHaveBeenCalledWith('ch-99');
+    expect(mockBumpChannelUnread).not.toHaveBeenCalled();
     expect(mockDispatchNotification).toHaveBeenCalled();
   });
 

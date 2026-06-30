@@ -157,9 +157,6 @@ vi.mock('@/context/AuthContext', () => ({
   }),
 }));
 
-const mockUnreadChannels = new Set<string>();
-const mockUnreadConversations = new Set<string>();
-
 let mockHiddenConversations = new Set<string>();
 const mockHideConversation = vi.fn((id: string) => {
   mockHiddenConversations = new Set(mockHiddenConversations).add(id);
@@ -167,17 +164,9 @@ const mockHideConversation = vi.fn((id: string) => {
 
 vi.mock('@/context/UnreadContext', () => ({
   useUnread: () => ({
-    unreadChannels: mockUnreadChannels,
-    unreadChannelNotifications: new Set(),
-    unreadConversations: mockUnreadConversations,
+    unreadThreadNotifications: new Set(),
     hiddenConversations: mockHiddenConversations,
-    markChannelUnread: vi.fn(),
-    markChannelNotificationUnread: vi.fn(),
-    markConversationUnread: vi.fn(),
-    clearChannelUnread: vi.fn(),
-    clearConversationUnread: vi.fn(),
     hideConversation: mockHideConversation,
-    unhideConversation: vi.fn(),
   }),
 }));
 
@@ -266,8 +255,6 @@ describe('Sidebar', () => {
     mockConversations = [...baseMockConversations];
     mockUser.systemRole = 'admin';
     mockUser.displayName = 'Alice Smith';
-    mockUnreadChannels.clear();
-    mockUnreadConversations.clear();
     mockHiddenConversations.clear();
     localStorage.clear();
     window.history.pushState({}, '', '/');
@@ -361,14 +348,15 @@ describe('Sidebar', () => {
   });
 
   it('shows unread indicator for channels', () => {
-    mockUnreadChannels.add('ch-1');
+    // Unread now comes from the server-computed list-cache flag, not a context Set.
+    mockChannels = mockChannels.map((c) => (c.channelID === 'ch-1' ? { ...c, unread: true, unreadCount: 1 } : c));
     renderSidebar();
     expect(screen.getByText('general').closest('a')).toHaveClass('font-bold');
     expect(screen.queryByTestId('unread-dot')).not.toBeInTheDocument();
   });
 
   it('shows unread indicator for conversations', () => {
-    mockUnreadConversations.add('conv-1');
+    mockConversations = mockConversations.map((c) => (c.conversationID === 'conv-1' ? { ...c, unread: true, unreadCount: 1 } : c));
     renderSidebar();
     expect(screen.getByText('Bob Jones').closest('a')).toHaveClass('font-bold');
     expect(screen.queryByTestId('unread-dot')).not.toBeInTheDocument();
@@ -730,7 +718,7 @@ describe('Sidebar', () => {
 
   it('keeps only active/unread items visible when sections are collapsed', () => {
     // ch-1 (general) is the active channel; conv-1 is unread.
-    mockUnreadConversations.add('conv-1');
+    mockConversations = mockConversations.map((c) => (c.conversationID === 'conv-1' ? { ...c, unread: true } : c));
     window.history.pushState({}, '', '/channel/general');
     renderSidebar();
 
@@ -1779,7 +1767,7 @@ describe('Sidebar', () => {
   });
 
   it('collapses a channel section but keeps unread channels visible', async () => {
-    mockUnreadChannels.add('ch-1');
+    mockChannels = mockChannels.map((c) => (c.channelID === 'ch-1' ? { ...c, unread: true } : c));
     renderSidebar();
     fireEvent.click(screen.getByTestId('sidebar-group-toggle-__channels__'));
     expect(screen.getByText('general')).toBeInTheDocument();

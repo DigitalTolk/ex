@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createElement, type ReactNode } from 'react';
-import { useUserChannels, useCreateChannel } from './useChannels';
+import { useUserChannels, useCreateChannel, useChannel, useChannelBySlug } from './useChannels';
 
 // Mock the api module
 vi.mock('@/lib/api', () => ({
@@ -50,6 +50,24 @@ describe('useUserChannels', () => {
 
     expect(apiFetch).toHaveBeenCalledWith('/api/v1/channels');
     expect(result.current.data).toEqual(channels);
+  });
+});
+
+describe('useChannel / useChannelBySlug', () => {
+  beforeEach(() => vi.mocked(apiFetch).mockReset());
+
+  it('coerces an empty (204) channel response to null', async () => {
+    vi.mocked(apiFetch).mockResolvedValue(undefined);
+    const { result } = renderHook(() => useChannel('ch-1'), { wrapper: createWrapper() });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data).toBeNull();
+  });
+
+  it('coerces an empty channel-by-slug response to null', async () => {
+    vi.mocked(apiFetch).mockResolvedValue(undefined);
+    const { result } = renderHook(() => useChannelBySlug('general'), { wrapper: createWrapper() });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data).toBeNull();
   });
 });
 

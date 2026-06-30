@@ -12,7 +12,10 @@ import { hasSeenNotification, recordNotification } from '@/lib/notification-dedu
 // "desktop looked online but never delivered" hole.
 function ackDesktopDelivery(messageID: string | undefined): void {
   if (!messageID) return;
-  sendWS({ type: 'notification.ack', messageID });
+  // buffer: true so an ack sent during a reconnect blip is flushed on
+  // reconnect rather than dropped — the deferred mobile push must still be
+  // cancelled even if the socket flickered right after the popup surfaced.
+  sendWS({ type: 'notification.ack', messageID }, { buffer: true });
 }
 
 // NotificationKind mirrors backend service.NotificationKind. Adding a new
@@ -274,6 +277,9 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     // something, so a duplicate delivery doesn't double-ping/double-banner,
     // while a delivery that surfaced nothing stays eligible for a later retry.
     // Ack desktop delivery so the backend cancels the deferred mobile push.
+    // The ack stays tied to actually surfacing (or active-view suppression
+    // above): if the desktop surfaced NOTHING, we must NOT ack — the mobile
+    // fallback is then the only way the alert reaches the user.
     if (n.messageID && delivered) {
       recordNotification(n.messageID, now);
       ackDesktopDelivery(n.messageID);

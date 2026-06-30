@@ -19,6 +19,20 @@ func setupTestCache(t *testing.T) (*RedisCache, *miniredis.Miniredis) {
 	return cache, mr
 }
 
+func TestRedisCache_NameCache(t *testing.T) {
+	c, _ := setupTestCache(t)
+	ctx := context.Background()
+
+	// Miss before set.
+	if _, ok := c.GetName(ctx, "chan:c1"); ok {
+		t.Error("expected a miss for an unset name")
+	}
+	c.SetName(ctx, "chan:c1", "general")
+	if v, ok := c.GetName(ctx, "chan:c1"); !ok || v != "general" {
+		t.Errorf("GetName = %q,%v, want general,true", v, ok)
+	}
+}
+
 func TestNewRedisCache(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
 		c, _ := setupTestCache(t)

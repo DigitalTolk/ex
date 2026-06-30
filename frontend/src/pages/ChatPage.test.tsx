@@ -11,27 +11,24 @@ vi.mock('@/components/layout/AppLayout', () => ({
   ),
 }));
 
-const mockMarkChannelUnread = vi.fn();
-const mockMarkChannelNotificationUnread = vi.fn();
-const mockMarkConversationUnread = vi.fn();
 const mockMarkThreadNotificationUnread = vi.fn();
-
 const mockUnhideConversation = vi.fn();
+
+const { bumpChannelUnread: mockBumpChannelUnread, bumpConversationUnread: mockBumpConversationUnread } = vi.hoisted(() => ({
+  bumpChannelUnread: vi.fn(),
+  bumpConversationUnread: vi.fn(),
+}));
+vi.mock('@/lib/unread-cache', () => ({
+  bumpChannelUnread: mockBumpChannelUnread,
+  bumpConversationUnread: mockBumpConversationUnread,
+  clearConversationUnreadInCache: vi.fn(),
+}));
 
 vi.mock('@/context/UnreadContext', () => ({
   useUnread: () => ({
-    unreadChannels: new Set(),
-    unreadChannelNotifications: new Set(),
-    unreadConversations: new Set(),
     unreadThreadNotifications: new Set(),
     hiddenConversations: new Set(),
-    markChannelUnread: mockMarkChannelUnread,
-    markChannelNotificationUnread: mockMarkChannelNotificationUnread,
-    markConversationUnread: mockMarkConversationUnread,
     markThreadNotificationUnread: mockMarkThreadNotificationUnread,
-    clearChannelUnread: vi.fn(),
-    resetSessionUnread: vi.fn(),
-    clearConversationUnread: vi.fn(),
     hideConversation: vi.fn(),
     unhideConversation: mockUnhideConversation,
     setActiveChannel: vi.fn(),
@@ -114,8 +111,8 @@ function renderChatPage() {
 describe('ChatPage', () => {
   beforeEach(() => {
     mockUseWebSocket.mockClear();
-    mockMarkChannelUnread.mockClear();
-    mockMarkConversationUnread.mockClear();
+    mockBumpChannelUnread.mockClear();
+    mockBumpConversationUnread.mockClear();
     mockUnhideConversation.mockClear();
     setMobileViewport(false);
     globalThis.fetch = vi.fn().mockResolvedValue(responseJSON([]));
@@ -232,19 +229,19 @@ describe('ChatPage', () => {
     renderChatPage();
     const opts = mockUseWebSocket.mock.calls[0][0];
     opts.onMessageNew(msg());
-    expect(mockMarkChannelUnread).toHaveBeenCalledWith('ch-99');
-    expect(mockMarkConversationUnread).not.toHaveBeenCalledWith('ch-99');
+    expect(mockBumpChannelUnread).toHaveBeenCalledWith(expect.anything(), 'ch-99');
+    expect(mockBumpConversationUnread).not.toHaveBeenCalledWith(expect.anything(), 'ch-99');
   });
 
   it('onMessageNew does NOT mark unread for own messages', () => {
-    mockMarkChannelUnread.mockClear();
-    mockMarkConversationUnread.mockClear();
+    mockBumpChannelUnread.mockClear();
+    mockBumpConversationUnread.mockClear();
     renderChatPage();
     const opts = mockUseWebSocket.mock.calls[0][0];
     // user.id is 'u-1' from the mock
     opts.onMessageNew(msg({ authorID: 'u-1' }));
-    expect(mockMarkChannelUnread).not.toHaveBeenCalled();
-    expect(mockMarkConversationUnread).not.toHaveBeenCalled();
+    expect(mockBumpChannelUnread).not.toHaveBeenCalled();
+    expect(mockBumpConversationUnread).not.toHaveBeenCalled();
   });
 
   it('onMessageNew still invalidates queries for own messages', () => {
@@ -254,12 +251,12 @@ describe('ChatPage', () => {
   });
 
   it('onMessageNew does nothing without a valid Message payload', () => {
-    mockMarkChannelUnread.mockClear();
-    mockMarkConversationUnread.mockClear();
+    mockBumpChannelUnread.mockClear();
+    mockBumpConversationUnread.mockClear();
     renderChatPage();
     const opts = mockUseWebSocket.mock.calls[0][0];
     opts.onMessageNew({});
-    expect(mockMarkChannelUnread).not.toHaveBeenCalled();
+    expect(mockBumpChannelUnread).not.toHaveBeenCalled();
   });
 
   it('passes onMessageEdited callback that handles parentID', () => {

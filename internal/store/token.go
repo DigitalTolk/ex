@@ -148,13 +148,26 @@ func (s *TokenStoreImpl) DeleteAllForUser(ctx context.Context, userID string) er
 				})
 			}
 
-			_, err := s.Client.BatchWriteItem(ctx, &dynamodb.BatchWriteItemInput{
-				RequestItems: map[string][]types.WriteRequest{
-					s.Table: batch,
-				},
-			})
-			if err != nil {
-				return fmt.Errorf("store: batch delete refresh tokens: %w", err)
+			// Drain UnprocessedItems with a bounded retry: under throttling a
+			// hot partition returns deletes that were silently NOT applied. This
+			// is the account-deactivation revocation path, so a dropped delete
+			// leaves a live refresh token the deactivated user can keep redeeming
+			// — failing to drain here is a security gap, not a UX nicety.
+			input := &dynamodb.BatchWriteItemInput{
+				RequestItems: map[string][]types.WriteRequest{s.Table: batch},
+			}
+			for attempt := 0; attempt < 3; attempt++ {
+				out, err := s.Client.BatchWriteItem(ctx, input)
+				if err != nil {
+					return fmt.Errorf("store: batch delete refresh tokens: %w", err)
+				}
+				if len(out.UnprocessedItems[s.Table]) == 0 {
+					break
+				}
+				if attempt == 2 {
+					return fmt.Errorf("store: batch delete refresh tokens: %d unprocessed after retries", len(out.UnprocessedItems[s.Table]))
+				}
+				input.RequestItems = out.UnprocessedItems
 			}
 		}
 	}

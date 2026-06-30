@@ -5,9 +5,11 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/DigitalTolk/ex/internal/middleware"
 	"github.com/DigitalTolk/ex/internal/model"
+	"github.com/DigitalTolk/ex/internal/safe"
 	"github.com/DigitalTolk/ex/internal/service"
 	"github.com/DigitalTolk/ex/internal/store"
 )
@@ -29,12 +31,17 @@ func clearSentDraft(ctx context.Context, clearer DraftClearer, userID, parentID,
 	if clearer == nil {
 		return
 	}
+	// Detached so the response doesn't wait, but bounded by a finite deadline:
+	// the AWS SDK has no default per-call timeout, so a hung draft store/pub-sub
+	// must not pin this goroutine indefinitely.
 	bg := context.WithoutCancel(ctx)
-	go func() {
+	safe.Go(func() {
+		bg, cancel := context.WithTimeout(bg, 30*time.Second)
+		defer cancel()
 		if err := clearer.DeleteForScope(bg, userID, parentID, parentType, parentMessageID, ts); err != nil {
 			slog.Warn("clear sent draft failed", "userID", userID, "parentID", parentID, "parentType", parentType, "error", err)
 		}
-	}()
+	})
 }
 
 // DraftHandler exposes server-side message draft endpoints.
@@ -54,7 +61,7 @@ func (h *DraftHandler) List(w http.ResponseWriter, r *http.Request) {
 	}
 	drafts, err := h.draftSvc.List(r.Context(), userID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "list_error", err.Error())
+		writeInternalError(w, r, "list_error", err)
 		return
 	}
 	if drafts == nil {

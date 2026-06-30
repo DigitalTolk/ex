@@ -8,15 +8,6 @@ import (
 	"github.com/DigitalTolk/ex/internal/model"
 )
 
-func TestNotification_MarkChannelNotification_Error(t *testing.T) {
-	svc, _, _, _, _, _ := setupNotifier(t)
-	st := newMockUserStateStore()
-	st.setErr = errors.New("boom")
-	svc.SetUserStateService(NewUserStateService(st, nil))
-	// Logs the failure; must not panic.
-	svc.markChannelNotification(context.Background(), "u1", "ch1")
-}
-
 func TestNotification_MarkThreadNotification_Error(t *testing.T) {
 	svc, _, _, _, _, _ := setupNotifier(t)
 	st := newMockUserStateStore()

@@ -5,6 +5,7 @@ package store
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -76,5 +77,36 @@ func TestTokenStore_DeleteAllForUser_BatchWriteItemError(t *testing.T) {
 	err := s.DeleteAllForUser(ctx, "u-bw")
 	if !errors.Is(err, errInjected) {
 		t.Fatalf("DeleteAllForUser batch: want errInjected, got %v", err)
+	}
+}
+
+// Revocation must drain UnprocessedItems — a throttled batch that reports some
+// deletes as unprocessed is retried until they all apply.
+func TestTokenStore_DeleteAllForUser_RetriesUnprocessed(t *testing.T) {
+	db := setupDynamoDB(t)
+	ctx := context.Background()
+	if err := NewTokenStore(db).Create(ctx, makeRefreshToken("hash-rt", "u-rt")); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	uc := &unprocessedClient{DynamoAPI: db.Client, table: db.Table, remaining: 1}
+	s := NewTokenStore(&DB{Client: uc, Table: db.Table})
+	if err := s.DeleteAllForUser(ctx, "u-rt"); err != nil {
+		t.Fatalf("DeleteAllForUser retry: %v", err)
+	}
+}
+
+// If every batch keeps reporting UnprocessedItems, revocation surfaces an error
+// rather than silently leaving live tokens for the deactivated user.
+func TestTokenStore_DeleteAllForUser_ExhaustsRetries(t *testing.T) {
+	db := setupDynamoDB(t)
+	ctx := context.Background()
+	if err := NewTokenStore(db).Create(ctx, makeRefreshToken("hash-ex", "u-ex")); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	uc := &unprocessedClient{DynamoAPI: db.Client, table: db.Table, remaining: 99}
+	s := NewTokenStore(&DB{Client: uc, Table: db.Table})
+	err := s.DeleteAllForUser(ctx, "u-ex")
+	if err == nil || !strings.Contains(err.Error(), "unprocessed after retries") {
+		t.Fatalf("DeleteAllForUser exhausted: want 'unprocessed after retries', got %v", err)
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/DigitalTolk/ex/internal/model"
+	"github.com/DigitalTolk/ex/internal/safe"
 )
 
 // allowedParentIDsTTL caches a single user's allowed-parent set in-process.
@@ -64,7 +65,7 @@ func (a *searchAccess) AllowedParentIDs(ctx context.Context, userID string) ([]s
 	)
 	if a.memberships != nil {
 		wg.Add(1)
-		go func() {
+		safe.Go(func() {
 			defer wg.Done()
 			if chans, err := a.memberships.ListUserChannels(ctx, userID); err == nil {
 				channelIDs = make([]string, 0, len(chans))
@@ -72,11 +73,11 @@ func (a *searchAccess) AllowedParentIDs(ctx context.Context, userID string) ([]s
 					channelIDs = append(channelIDs, c.ChannelID)
 				}
 			}
-		}()
+		})
 	}
 	if a.conversations != nil {
 		wg.Add(1)
-		go func() {
+		safe.Go(func() {
 			defer wg.Done()
 			if convs, err := a.conversations.ListUserConversations(ctx, userID); err == nil {
 				convIDs = make([]string, 0, len(convs))
@@ -84,7 +85,7 @@ func (a *searchAccess) AllowedParentIDs(ctx context.Context, userID string) ([]s
 					convIDs = append(convIDs, c.ConversationID)
 				}
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	out := append(channelIDs, convIDs...)

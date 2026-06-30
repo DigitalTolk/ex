@@ -13,6 +13,7 @@ import (
 	"github.com/DigitalTolk/ex/internal/events"
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/DigitalTolk/ex/internal/pubsub"
+	"github.com/DigitalTolk/ex/internal/safe"
 	"github.com/DigitalTolk/ex/internal/store"
 )
 
@@ -202,6 +203,18 @@ func (s *MessageService) CanAccessMessageAttachment(ctx context.Context, userID,
 	return errors.New("message: attachment is not referenced by message")
 }
 
+// detachedTimeout bounds best-effort work that runs off the request path with a
+// cancellation-free context. Without it a hung DynamoDB/OpenSearch could pin the
+// goroutine indefinitely (the AWS SDK has no default per-call deadline), and
+// under load those goroutines accumulate without bound.
+const detachedTimeout = 30 * time.Second
+
+// detachedContext returns a cancellation-free copy of ctx (so the work survives
+// the request ending) but with a finite deadline so it can't hang forever.
+func detachedContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), detachedTimeout)
+}
+
 // indexMessage / deleteFromIndex dispatch on a detached goroutine so a
 // slow OpenSearch never adds to user-perceived send latency. Failures
 // are logged; the admin reindex is the recovery path.
@@ -209,11 +222,13 @@ func (s *MessageService) indexMessage(ctx context.Context, m *model.Message, par
 	if s.indexer == nil || m == nil {
 		return
 	}
-	go func() {
-		if err := s.indexer.IndexMessage(context.WithoutCancel(ctx), m, parentType); err != nil {
+	safe.Go(func() {
+		bg, cancel := detachedContext(ctx)
+		defer cancel()
+		if err := s.indexer.IndexMessage(bg, m, parentType); err != nil {
 			slog.Warn("search index message failed", "id", m.ID, "error", err)
 		}
-	}()
+	})
 }
 
 // notify dispatches user-facing notifications off the send path. Like
@@ -225,7 +240,11 @@ func (s *MessageService) notify(ctx context.Context, msg *model.Message, parentT
 	if s.notifier == nil || msg == nil {
 		return
 	}
-	go s.notifier.NotifyForMessage(context.WithoutCancel(ctx), msg, parentType)
+	safe.Go(func() {
+		bg, cancel := detachedContext(ctx)
+		defer cancel()
+		s.notifier.NotifyForMessage(bg, msg, parentType)
+	})
 }
 
 // bumpUnreadSeq advances a parent's unread counter for a new top-level message
@@ -240,7 +259,11 @@ func (s *MessageService) bumpUnreadSeq(ctx context.Context, store UnreadSeqStore
 	if store == nil {
 		return
 	}
-	go s.writeUnreadSeq(context.WithoutCancel(ctx), store, parentID, authorID)
+	safe.Go(func() {
+		bg, cancel := detachedContext(ctx)
+		defer cancel()
+		s.writeUnreadSeq(bg, store, parentID, authorID)
+	})
 }
 
 // writeUnreadSeq is the synchronous core of bumpUnreadSeq, split out so it can
@@ -261,11 +284,13 @@ func (s *MessageService) deleteFromIndex(ctx context.Context, id string) {
 	if s.indexer == nil {
 		return
 	}
-	go func() {
-		if err := s.indexer.DeleteMessage(context.WithoutCancel(ctx), id); err != nil {
+	safe.Go(func() {
+		bg, cancel := detachedContext(ctx)
+		defer cancel()
+		if err := s.indexer.DeleteMessage(bg, id); err != nil {
 			slog.Warn("search delete message failed", "id", id, "error", err)
 		}
-	}()
+	})
 }
 
 // Send creates a new message in the given parent (channel or conversation).
@@ -347,7 +372,14 @@ func (s *MessageService) Send(ctx context.Context, userID, parentID, parentType,
 		}
 	}
 
-	if parentType == ParentConversation {
+	// Conversation activity: only a top-level message counts as new
+	// conversation activity. A thread-only reply must NOT bump the unread
+	// counter, re-touch/re-order the conversation, or fan out
+	// userchannel.updated — otherwise the DM lights up as if a fresh top-level
+	// message arrived. Thread replies still reach participants via message.new
+	// (conversation topic) and notification.new (thread participants). This
+	// mirrors the channel rule below and the frontend gate in onMessageNew.
+	if parentType == ParentConversation && parentMessageID == "" {
 		if conv, err := s.conversations.GetConversation(ctx, parentID); err == nil && conv != nil {
 			// Unread is tracked with the same per-parent seq counter channels use
 			// — one increment + the author's last-read, instead of a Redis write
@@ -368,7 +400,7 @@ func (s *MessageService) Send(ctx context.Context, userID, parentID, parentType,
 			}
 			// Activate the conversation on first top-level message so non-creator
 			// participants see it appear in their sidebars only after activity exists.
-			if parentMessageID == "" && s.activator != nil {
+			if s.activator != nil {
 				if err := s.activator.Activate(ctx, parentID); err != nil {
 					slog.Warn("conversation activate failed", "convID", parentID, "error", err)
 				}
@@ -378,8 +410,8 @@ func (s *MessageService) Send(ctx context.Context, userID, parentID, parentType,
 
 	// Channel unread: only a top-level human message bumps the channel's
 	// unread counter (thread replies surface via thread notifications; system
-	// join/leave events aren't "new activity"). Mirrors the frontend rule in
-	// onMessageNew so the live and persisted counts agree.
+	// join/leave events aren't "new activity"). Mirrors the conversation rule
+	// above and the frontend rule in onMessageNew so live and persisted counts agree.
 	if parentType == ParentChannel && parentMessageID == "" && !msg.System {
 		s.bumpUnreadSeq(ctx, s.channelSeq, parentID, userID)
 	}
@@ -393,6 +425,11 @@ func (s *MessageService) Send(ctx context.Context, userID, parentID, parentType,
 		s.followMentionedThreadUsers(ctx, msg, parentType)
 		if updated, err := s.messages.IncrementReplyMetadata(ctx, parentID, parentMessageID, msg.CreatedAt, userID); err == nil {
 			updatedThreadRoot = updated
+		} else {
+			// The reply is saved but the root's replyCount/lastReplyAt didn't
+			// advance, so the thread shows a stale count until the next refetch.
+			// Log it rather than dropping the error silently.
+			slog.Warn("thread reply metadata increment failed", "rootID", parentMessageID, "replyID", msg.ID, "error", err)
 		}
 	}
 
@@ -691,9 +728,32 @@ func (s *MessageService) ListUserThreads(ctx context.Context, userID string) ([]
 		}
 	}
 
-	for _, p := range parents {
-		msgs, err := s.scanParentMessages(ctx, p.id)
-		if err != nil {
+	// Fetch each parent's messages concurrently (bounded to 8 in flight) — the
+	// per-parent scans are the dominant, independent I/O cost. The in-memory
+	// aggregation below stays serial (it mutates shared maps), so only the scans
+	// are parallelized.
+	parentMsgs := make([][]*model.Message, len(parents))
+	{
+		sem := make(chan struct{}, 8)
+		var wg sync.WaitGroup
+		for i, p := range parents {
+			wg.Add(1)
+			sem <- struct{}{}
+			go func(i int, id string) {
+				defer wg.Done()
+				defer safe.Recover()
+				defer func() { <-sem }()
+				if msgs, err := s.scanParentMessages(ctx, id); err == nil {
+					parentMsgs[i] = msgs
+				}
+			}(i, p.id)
+		}
+		wg.Wait()
+	}
+
+	for i, p := range parents {
+		msgs := parentMsgs[i]
+		if msgs == nil {
 			continue
 		}
 		// Index messages by ID so we can resolve thread roots without a second fetch.
@@ -819,6 +879,7 @@ func (s *MessageService) ListPinned(ctx context.Context, userID, parentID, paren
 		sem <- struct{}{}
 		go func(i int, msgID string) {
 			defer wg.Done()
+			defer safe.Recover()
 			defer func() { <-sem }()
 			msg, err := s.messages.GetMessage(ctx, parentID, msgID)
 			switch {
@@ -936,14 +997,17 @@ func (s *MessageService) ListAround(ctx context.Context, userID, parentID, paren
 	wg.Add(3)
 	go func() {
 		defer wg.Done()
+		defer safe.Recover()
 		target, errTarget = s.messages.GetMessage(ctx, parentID, msgID)
 	}()
 	go func() {
 		defer wg.Done()
+		defer safe.Recover()
 		older, hasMoreOlder, errOlder = s.listTopLevel(ctx, parentID, msgID, before)
 	}()
 	go func() {
 		defer wg.Done()
+		defer safe.Recover()
 		newer, hasMoreNewer, errNewer = s.listTopLevelAfter(ctx, parentID, msgID, after)
 	}()
 	wg.Wait()
@@ -1490,6 +1554,7 @@ func (s *MessageService) bindAttachments(ctx context.Context, msgID string, ids 
 		wg.Add(1)
 		go func(aid string) {
 			defer wg.Done()
+			defer safe.Recover()
 			if err := s.attachments.AddRef(ctx, aid, msgID); err != nil {
 				errCh <- fmt.Errorf("message: bind attachment %q: %w", aid, err)
 			}
@@ -1517,6 +1582,7 @@ func (s *MessageService) releaseAttachments(ctx context.Context, msgID string, i
 		wg.Add(1)
 		go func(aid string) {
 			defer wg.Done()
+			defer safe.Recover()
 			if err := s.attachments.RemoveRef(ctx, aid, msgID); err != nil {
 				slog.Warn("attachment remove ref failed", "attID", aid, "msgID", msgID, "error", err)
 			}

@@ -53,6 +53,18 @@ describe('useAttachment', () => {
     expect(apiFetchMock.mock.calls[0][0]).toBe('/api/v1/attachments/a-1');
   });
 
+  it('coerces an empty attachment response to null', async () => {
+    apiFetchMock.mockResolvedValue(undefined);
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const screen = await render(
+      <QueryClientProvider client={qc}>
+        <Probe hook={() => useAttachment('a-1')} />
+      </QueryClientProvider>,
+    );
+    await new Promise((r) => setTimeout(r, 200));
+    expect(screen.getByTestId('probe').element().getAttribute('data-data')).toBe('null');
+  });
+
   it('appends a context query when parentID / parentType / messageID are supplied', async () => {
     apiFetchMock.mockResolvedValue({ id: 'a-1' });
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });

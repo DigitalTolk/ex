@@ -7,15 +7,55 @@ type Sender = (frame: string) => void;
 
 let current: Sender | null = null;
 
-export function setWSSender(s: Sender | null): void {
-  current = s;
+// Frames flagged `buffer: true` (e.g. notification acks) must survive a brief
+// socket outage: if the socket is down (or the send throws) when they're sent,
+// they're queued and flushed on the next (re)connect. Without this, an ack sent
+// during a reconnect blip is silently dropped — and `notification.new` is
+// ephemeral / non-replayable, so the desktop popup the user already saw would
+// fail to cancel the deferred mobile push. Bounded so a long outage can't grow
+// the queue without limit (oldest dropped first).
+const pending: string[] = [];
+const MAX_PENDING = 64;
+
+function enqueue(frame: string): void {
+  pending.push(frame);
+  if (pending.length > MAX_PENDING) pending.shift();
 }
 
-export function sendWS(payload: unknown): void {
-  if (!current) return;
-  try {
-    current(JSON.stringify(payload));
-  } catch {
-    // ignore — we'll succeed on the next reconnect.
+export function setWSSender(s: Sender | null): void {
+  current = s;
+  if (!s) return;
+  // Flush buffered frames oldest-first. If the freshly-installed socket dies
+  // mid-flush, keep the unsent remainder queued for the next reconnect.
+  while (pending.length > 0) {
+    try {
+      s(pending[0]);
+      pending.shift();
+    } catch {
+      break;
+    }
   }
+}
+
+// sendWS serialises and sends a frame. Pass `{ buffer: true }` for frames that
+// must not be lost across a reconnect blip (acks); fire-and-forget ephemera
+// (typing pings) omit it and are simply dropped when the socket is down.
+export function sendWS(payload: unknown, opts?: { buffer?: boolean }): void {
+  let frame: string;
+  try {
+    frame = JSON.stringify(payload);
+  } catch {
+    // Unserialisable payload — nothing we can do, and buffering it is pointless.
+    return;
+  }
+  if (current) {
+    try {
+      current(frame);
+      return;
+    } catch {
+      // Socket died between the null-check and the send — fall through so a
+      // buffered frame is still queued for the next reconnect.
+    }
+  }
+  if (opts?.buffer) enqueue(frame);
 }

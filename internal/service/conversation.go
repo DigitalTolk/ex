@@ -12,6 +12,7 @@ import (
 	"github.com/DigitalTolk/ex/internal/events"
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/DigitalTolk/ex/internal/pubsub"
+	"github.com/DigitalTolk/ex/internal/safe"
 	"github.com/DigitalTolk/ex/internal/store"
 )
 
@@ -311,6 +312,7 @@ func (s *ConversationService) enrichDMProfiles(ctx context.Context, userID strin
 		wg.Add(1)
 		go func(row *model.UserConversation) {
 			defer wg.Done()
+			defer safe.Recover()
 			s.enrichDMProfile(ctx, userID, row)
 		}(row)
 	}
@@ -372,6 +374,7 @@ func (s *ConversationService) enrichUnread(ctx context.Context, rows []*model.Us
 		wg.Add(1)
 		go func(row *model.UserConversation) {
 			defer wg.Done()
+			defer safe.Recover()
 			conv, err := s.conversations.GetConversation(ctx, row.ConversationID)
 			if err != nil || conv == nil {
 				return
@@ -543,6 +546,7 @@ func (s *ConversationService) fetchParticipantNames(ctx context.Context, ids []s
 	for _, id := range ids {
 		go func(id string) {
 			defer wg.Done()
+			defer safe.Recover()
 			u, err := s.users.GetUser(ctx, id)
 			if err != nil {
 				if errors.Is(err, store.ErrNotFound) {

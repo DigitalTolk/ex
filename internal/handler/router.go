@@ -75,6 +75,11 @@ func NewRouter(d *Deps) http.Handler {
 	// token churn are the threats; logout and the provider-driven OIDC handshake
 	// stay unthrottled.
 	authLimit := middleware.RateLimit(d.RateLimiter, 20, time.Minute)
+	// Per-user flood guard on write endpoints (message sends + reactions). 120/min
+	// is generous for a human but stops a single account from flooding channels
+	// and amplifying the notification fan-out. Runs after authMW so the user is
+	// known; a nil RateLimiter makes it a no-op.
+	writeLimit := middleware.RateLimitPerUser(d.RateLimiter, 120, time.Minute)
 	mux.HandleFunc("GET /auth/oidc/login", authH.OIDCLogin)
 	mux.HandleFunc("GET /auth/oidc/callback", authH.OIDCCallback)
 	mux.HandleFunc("GET /auth/desktop/complete", authH.DesktopComplete)
@@ -101,7 +106,6 @@ func NewRouter(d *Deps) http.Handler {
 
 	if userStateH != nil {
 		mux.Handle("GET /api/v1/user-state", middleware.WrapFunc(userStateH.Get, authMW))
-		mux.Handle("DELETE /api/v1/user-state/channels/{id}/notification", middleware.WrapFunc(userStateH.ClearChannelNotification, authMW))
 		mux.Handle("PUT /api/v1/user-state/threads/{parentType}/{parentID}/{threadRootID}/seen", middleware.WrapFunc(userStateH.MarkThreadSeen, authMW))
 		mux.Handle("PUT /api/v1/user-state/conversations/{id}/hidden", middleware.WrapFunc(userStateH.HideConversation, authMW))
 		mux.Handle("DELETE /api/v1/user-state/conversations/{id}/hidden", middleware.WrapFunc(userStateH.UnhideConversation, authMW))
@@ -127,11 +131,11 @@ func NewRouter(d *Deps) http.Handler {
 	mux.Handle("PATCH /api/v1/channels/{id}/members/{uid}", middleware.WrapFunc(channelH.UpdateMemberRole, authMW))
 
 	mux.Handle("GET /api/v1/channels/{id}/messages", middleware.WrapFunc(channelH.ListMessages, authMW))
-	mux.Handle("POST /api/v1/channels/{id}/messages", middleware.WrapFunc(channelH.SendMessage, authMW))
+	mux.Handle("POST /api/v1/channels/{id}/messages", middleware.WrapFunc(channelH.SendMessage, authMW, writeLimit))
 	mux.Handle("PATCH /api/v1/channels/{id}/messages/{msgId}", middleware.WrapFunc(channelH.EditMessage, authMW))
 	mux.Handle("DELETE /api/v1/channels/{id}/messages/{msgId}", middleware.WrapFunc(channelH.DeleteMessage, authMW))
 	mux.Handle("GET /api/v1/channels/{id}/messages/{msgId}/thread", middleware.WrapFunc(channelH.GetThread, authMW))
-	mux.Handle("POST /api/v1/channels/{id}/messages/{msgId}/reactions", middleware.WrapFunc(channelH.ToggleReaction, authMW))
+	mux.Handle("POST /api/v1/channels/{id}/messages/{msgId}/reactions", middleware.WrapFunc(channelH.ToggleReaction, authMW, writeLimit))
 	mux.Handle("PUT /api/v1/channels/{id}/messages/{msgId}/pinned", middleware.WrapFunc(channelH.SetPinned, authMW))
 	mux.Handle("PUT /api/v1/channels/{id}/messages/{msgId}/no-unfurl", middleware.WrapFunc(channelH.SetNoUnfurl, authMW))
 	mux.Handle("GET /api/v1/channels/{id}/pinned", middleware.WrapFunc(channelH.ListPinned, authMW))
@@ -144,11 +148,11 @@ func NewRouter(d *Deps) http.Handler {
 	mux.Handle("PUT /api/v1/conversations/{id}/read", middleware.WrapFunc(convH.MarkRead, authMW))
 
 	mux.Handle("GET /api/v1/conversations/{id}/messages", middleware.WrapFunc(convH.ListMessages, authMW))
-	mux.Handle("POST /api/v1/conversations/{id}/messages", middleware.WrapFunc(convH.SendMessage, authMW))
+	mux.Handle("POST /api/v1/conversations/{id}/messages", middleware.WrapFunc(convH.SendMessage, authMW, writeLimit))
 	mux.Handle("PATCH /api/v1/conversations/{id}/messages/{msgId}", middleware.WrapFunc(convH.EditMessage, authMW))
 	mux.Handle("DELETE /api/v1/conversations/{id}/messages/{msgId}", middleware.WrapFunc(convH.DeleteMessage, authMW))
 	mux.Handle("GET /api/v1/conversations/{id}/messages/{msgId}/thread", middleware.WrapFunc(convH.GetThread, authMW))
-	mux.Handle("POST /api/v1/conversations/{id}/messages/{msgId}/reactions", middleware.WrapFunc(convH.ToggleReaction, authMW))
+	mux.Handle("POST /api/v1/conversations/{id}/messages/{msgId}/reactions", middleware.WrapFunc(convH.ToggleReaction, authMW, writeLimit))
 	mux.Handle("PUT /api/v1/conversations/{id}/messages/{msgId}/pinned", middleware.WrapFunc(convH.SetPinned, authMW))
 	mux.Handle("PUT /api/v1/conversations/{id}/messages/{msgId}/no-unfurl", middleware.WrapFunc(convH.SetNoUnfurl, authMW))
 	mux.Handle("GET /api/v1/conversations/{id}/pinned", middleware.WrapFunc(convH.ListPinned, authMW))
@@ -252,11 +256,15 @@ func NewRouter(d *Deps) http.Handler {
 		base = appVersionHeader(base, appVersion)
 	}
 
-	// Apply global middleware: CORS, RequestID, Logging.
+	// Apply global middleware: SecurityHeaders, CORS, RequestID, Logging, and a
+	// 30s per-request timeout (skips the WebSocket upgrade) so a hung dependency
+	// can't pin a request goroutine forever.
 	handler := middleware.Wrap(base,
+		middleware.SecurityHeaders,
 		middleware.CORS(allowOrigins...),
 		middleware.RequestID,
 		middleware.Logging,
+		middleware.RequestTimeout(30*time.Second),
 	)
 
 	return handler

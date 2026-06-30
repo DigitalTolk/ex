@@ -130,7 +130,9 @@ func (s *ThreadFollowStoreImpl) ListThread(ctx context.Context, parentID, thread
 	if err != nil { // coverage-ignore: static key-condition built from constants; Build cannot fail
 		return nil, fmt.Errorf("store: build thread follows expression: %w", err)
 	}
-	out, err := s.Client.Query(ctx, &dynamodb.QueryInput{
+	// Drain every page: these are the thread's watchers, i.e. notification
+	// recipients for a reply, so truncation would drop alerts.
+	items, err := s.queryAll(ctx, &dynamodb.QueryInput{
 		TableName:                 aws.String(s.Table),
 		IndexName:                 aws.String("GSI1"),
 		KeyConditionExpression:    expr.KeyCondition(),
@@ -140,8 +142,8 @@ func (s *ThreadFollowStoreImpl) ListThread(ctx context.Context, parentID, thread
 	if err != nil {
 		return nil, fmt.Errorf("store: list thread follows: %w", err)
 	}
-	follows := make([]*model.ThreadFollow, 0, len(out.Items))
-	for _, raw := range out.Items {
+	follows := make([]*model.ThreadFollow, 0, len(items))
+	for _, raw := range items {
 		var item threadFollowItem
 		if err := attributevalue.UnmarshalMap(raw, &item); err != nil { // coverage-ignore: round-trip of items this store wrote; cannot fail
 			return nil, fmt.Errorf("store: unmarshal thread follow: %w", err)
@@ -178,7 +180,7 @@ func (s *ThreadFollowStoreImpl) ListUser(ctx context.Context, userID string) ([]
 	if err != nil { // coverage-ignore: static key-condition built from constants; Build cannot fail
 		return nil, fmt.Errorf("store: build thread follow expression: %w", err)
 	}
-	out, err := s.Client.Query(ctx, &dynamodb.QueryInput{
+	items, err := s.queryAll(ctx, &dynamodb.QueryInput{
 		TableName:                 aws.String(s.Table),
 		KeyConditionExpression:    expr.KeyCondition(),
 		ExpressionAttributeNames:  expr.Names(),
@@ -187,8 +189,8 @@ func (s *ThreadFollowStoreImpl) ListUser(ctx context.Context, userID string) ([]
 	if err != nil {
 		return nil, fmt.Errorf("store: list thread follows: %w", err)
 	}
-	follows := make([]*model.ThreadFollow, 0, len(out.Items))
-	for _, raw := range out.Items {
+	follows := make([]*model.ThreadFollow, 0, len(items))
+	for _, raw := range items {
 		var item threadFollowItem
 		if err := attributevalue.UnmarshalMap(raw, &item); err != nil { // coverage-ignore: round-trip of items this store wrote; cannot fail
 			return nil, fmt.Errorf("store: unmarshal thread follow: %w", err)

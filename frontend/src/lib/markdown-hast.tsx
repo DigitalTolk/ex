@@ -293,6 +293,13 @@ const HAST_COMPONENTS_MAP: Record<string, AnyComponent> = {
   'ex-bare-url': ((props: CustomTagProps) => {
     const href = props['data-href'] ?? '';
     const visible = href.startsWith('https://') ? href.slice('https://'.length) : href;
+    // Guard the scheme here too — same defense-in-depth as the `a` component
+    // above. The server only emits this tag for matched http(s) bare URLs, but
+    // the client must not depend on the server staying correct: an unsafe
+    // scheme renders as inert text, never a live anchor.
+    if (!isSafeUrl(href)) {
+      return <span>{visible}</span>;
+    }
     return (
       <a
         href={href}

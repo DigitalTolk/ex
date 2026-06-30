@@ -82,6 +82,26 @@ func New(ctx context.Context, cfg DBConfig) (*DB, error) {
 	}, nil
 }
 
+// queryAll drains every page of a Query and returns the raw items. It owns the
+// LastEvaluatedKey cursor loop so individual list methods can't forget to
+// paginate — a missing drain silently truncates a single-partition result at
+// DynamoDB's 1MB page limit (e.g. dropping members from a notification audience).
+// Callers unmarshal the returned items into their concrete row type.
+func (db *DB) queryAll(ctx context.Context, input *dynamodb.QueryInput) ([]map[string]types.AttributeValue, error) {
+	var items []map[string]types.AttributeValue
+	for {
+		out, err := db.Client.Query(ctx, input)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, out.Items...)
+		if len(out.LastEvaluatedKey) == 0 {
+			return items, nil
+		}
+		input.ExclusiveStartKey = out.LastEvaluatedKey
+	}
+}
+
 // EnsureTable creates the DynamoDB table with GSI1 if it does not already exist.
 // This is intended for local development only.
 func (db *DB) EnsureTable(ctx context.Context) error {

@@ -13,6 +13,7 @@ import (
 	"github.com/DigitalTolk/ex/internal/events"
 	"github.com/DigitalTolk/ex/internal/middleware"
 	"github.com/DigitalTolk/ex/internal/pubsub"
+	"github.com/DigitalTolk/ex/internal/safe"
 	"github.com/DigitalTolk/ex/internal/service"
 )
 
@@ -197,20 +198,31 @@ func (h *WSHandler) Connect(w http.ResponseWriter, r *http.Request) {
 	convCh := make(chan subResult, 1)
 
 	go func() {
-		uc, err := h.chanSvc.ListUserChannels(r.Context(), userID)
 		var chs []string
+		var err error
+		// Always send a result, even on panic: the receive below is unconditional,
+		// so a recovered panic that skipped the send would hang the connection
+		// forever. This defer runs AFTER safe.Recover (LIFO) — on panic it sends a
+		// zero result (no extra subscriptions) and the handler proceeds; the panic
+		// itself is already logged by safe.Recover.
+		defer func() { chanCh <- subResult{chs, err} }()
+		defer safe.Recover()
+		uc, e := h.chanSvc.ListUserChannels(r.Context(), userID)
+		err = e
 		for _, c := range uc {
 			chs = append(chs, pubsub.ChannelName(c.ChannelID))
 		}
-		chanCh <- subResult{chs, err}
 	}()
 	go func() {
-		uc, err := h.convSvc.ListUserConversations(r.Context(), userID)
 		var chs []string
+		var err error
+		defer func() { convCh <- subResult{chs, err} }()
+		defer safe.Recover()
+		uc, e := h.convSvc.ListUserConversations(r.Context(), userID)
+		err = e
 		for _, c := range uc {
 			chs = append(chs, pubsub.ConversationName(c.ConversationID))
 		}
-		convCh <- subResult{chs, err}
 	}()
 
 	cr := <-chanCh
@@ -288,6 +300,7 @@ func (h *WSHandler) Connect(w http.ResponseWriter, r *http.Request) {
 	// frames are silently dropped — the protocol is forward-compatible.
 	go func() {
 		defer cancel()
+		defer safe.Recover()
 		for {
 			_, data, err := conn.Read(ctx)
 			if err != nil {
@@ -332,7 +345,7 @@ func (h *WSHandler) Connect(w http.ResponseWriter, r *http.Request) {
 			// presence, and the offline mobile-push fallback fires. Run in a
 			// goroutine so the wait never stalls live event delivery on
 			// client.Events. Bounded: at most one in flight (timeout < interval).
-			go pingLiveness(ctx, conn, cancel)
+			safe.Go(func() { pingLiveness(ctx, conn, cancel) })
 		}
 	}
 }

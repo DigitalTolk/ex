@@ -153,7 +153,10 @@ func (s *MembershipStoreImpl) ListChannelMembers(ctx context.Context, channelID 
 		return nil, fmt.Errorf("store: build expression: %w", err)
 	}
 
-	out, err := s.Client.Query(ctx, &dynamodb.QueryInput{
+	// Drain every page: this is the notification audience for a channel, so a
+	// 1MB Query cap that silently truncated a large incident channel would drop
+	// alert recipients.
+	items, err := s.queryAll(ctx, &dynamodb.QueryInput{
 		TableName:                 aws.String(s.Table),
 		KeyConditionExpression:    expr.KeyCondition(),
 		ExpressionAttributeNames:  expr.Names(),
@@ -162,9 +165,8 @@ func (s *MembershipStoreImpl) ListChannelMembers(ctx context.Context, channelID 
 	if err != nil {
 		return nil, fmt.Errorf("store: list channel members: %w", err)
 	}
-
-	members := make([]*model.ChannelMembership, 0, len(out.Items))
-	for _, item := range out.Items {
+	members := make([]*model.ChannelMembership, 0, len(items))
+	for _, item := range items {
 		var mi channelMemberItem
 		if err := attributevalue.UnmarshalMap(item, &mi); err != nil { // coverage-ignore: round-trip of items this store wrote; cannot fail
 			return nil, fmt.Errorf("store: unmarshal channel member: %w", err)
@@ -184,7 +186,7 @@ func (s *MembershipStoreImpl) ListUserChannels(ctx context.Context, userID strin
 		return nil, fmt.Errorf("store: build expression: %w", err)
 	}
 
-	out, err := s.Client.Query(ctx, &dynamodb.QueryInput{
+	items, err := s.queryAll(ctx, &dynamodb.QueryInput{
 		TableName:                 aws.String(s.Table),
 		KeyConditionExpression:    expr.KeyCondition(),
 		ExpressionAttributeNames:  expr.Names(),
@@ -193,9 +195,8 @@ func (s *MembershipStoreImpl) ListUserChannels(ctx context.Context, userID strin
 	if err != nil {
 		return nil, fmt.Errorf("store: list user channels: %w", err)
 	}
-
-	channels := make([]*model.UserChannel, 0, len(out.Items))
-	for _, item := range out.Items {
+	channels := make([]*model.UserChannel, 0, len(items))
+	for _, item := range items {
 		var uci userChannelItem
 		if err := attributevalue.UnmarshalMap(item, &uci); err != nil { // coverage-ignore: round-trip of items this store wrote; cannot fail
 			return nil, fmt.Errorf("store: unmarshal user channel: %w", err)

@@ -128,6 +128,22 @@ export function invalidateThreadBothScopes(qc: QueryClient, parentID: string, th
   qc.invalidateQueries({ queryKey: queryKeys.thread(`conversations/${parentID}`, threadRootID) });
 }
 
+// Patch a single message in the thread query cache in place (both possible
+// parent scopes) — the live-update analogue of invalidateThreadBothScopes that
+// avoids a refetch. The Threads view (/threads → ThreadCard → useThreadMessages,
+// key ['thread', path, rootID]) and the ThreadPanel render reactions / pins /
+// edits straight off this cache, so a reaction (or pin/edit/unfurl) toggled on a
+// thread message only updates immediately if we patch HERE — patchBothScopes
+// only touches the channel/conversation message lists, never ['thread', …].
+// No-op when the message isn't currently in the thread cache (the row isn't
+// shown), so it's always safe to call.
+export function patchMessageInThreadCache(qc: QueryClient, parentID: string, threadRootID: string, msg: Message) {
+  const updater = (old: Message[] | undefined) =>
+    old ? old.map((m) => (m.id === msg.id ? msg : m)) : old;
+  qc.setQueryData<Message[]>(queryKeys.thread(`channels/${parentID}`, threadRootID), updater);
+  qc.setQueryData<Message[]>(queryKeys.thread(`conversations/${parentID}`, threadRootID), updater);
+}
+
 // When a message is edited or deleted, any internal-link preview card
 // pointing at it (rendered elsewhere) is now stale. Unfurl queries are
 // keyed by the raw URL, and a message permalink always embeds `msg-<id>`,
@@ -143,7 +159,13 @@ export function invalidateUnfurlsForMessage(qc: QueryClient, messageID: string) 
   });
 }
 
-export function appendMessageToCache(qc: QueryClient, parentID: string, msg: Message) {
+// appendMessageToCache prepends a new message to the live-tail page. Returns
+// true when the message is now present in pages[0] (appended, or already there)
+// — false means the head is a deep-link window mid-history (hasMoreNewer) where
+// the message belongs to a not-yet-loaded future page, so the caller may need
+// to jump to the tail to surface it.
+export function appendMessageToCache(qc: QueryClient, parentID: string, msg: Message): boolean {
+  let present = false;
   patchBothScopes(qc, parentID, (old) => {
     if (!old || old.pages.length === 0) return old;
     // Only safely appendable when pages[0] is the live tail. In deep-
@@ -152,14 +174,19 @@ export function appendMessageToCache(qc: QueryClient, parentID: string, msg: Mes
     // leave the chain untouched and let the load-newer sentinel fetch.
     const head = old.pages[0];
     if (head.hasMoreNewer) return old;
-    if (head.items.some((m) => m.id === msg.id)) return old;
+    if (head.items.some((m) => m.id === msg.id)) {
+      present = true;
+      return old;
+    }
     const patched: MessageWindow = {
       ...head,
       items: [msg, ...head.items],
       newestID: msg.id,
     };
+    present = true;
     return { ...old, pages: [patched, ...old.pages.slice(1)] };
   });
+  return present;
 }
 
 export function updateMessageInCache(qc: QueryClient, parentID: string, msg: Message) {
@@ -334,7 +361,15 @@ export function useSendMessage(scope: SendMessageScope) {
       // shows instantly instead of waiting for the server round-trip (the
       // message.new echo + a userThreads refetch reconcile the rest).
       if (parentID && !input.parentMessageID) {
-        appendMessageToCache(queryClient, parentID, data);
+        const present = appendMessageToCache(queryClient, parentID, data);
+        if (!present) {
+          // The sender is reading a deep-linked window mid-history, so their
+          // message lives in a future page that isn't loaded. Reset the chain
+          // to the live tail so they actually see what they just sent instead
+          // of the composer silently clearing.
+          queryClient.resetQueries({ queryKey: queryKeys.channelMessagesAll(parentID) });
+          queryClient.resetQueries({ queryKey: queryKeys.conversationMessagesAll(parentID) });
+        }
       }
       if (input.parentMessageID) {
         const path = parentPath({ channelId, conversationId });
@@ -389,7 +424,13 @@ export function useEditMessage() {
     onSuccess: (data, vars) => {
       const parentID = vars.channelId ?? vars.conversationId;
       /* istanbul ignore else -- messagePath() throws when neither id is set, so a successful mutation always has a parentID; the falsy arm is unreachable. */
-      if (parentID) updateMessageInCache(queryClient, parentID, data);
+      if (parentID) {
+        updateMessageInCache(queryClient, parentID, data);
+        // Also patch the thread cache so a reaction/pin/edit/unfurl on a thread
+        // message updates instantly in /threads and the ThreadPanel. Root ID is
+        // the parent message for a reply, else the message itself (a root).
+        patchMessageInThreadCache(queryClient, parentID, vars.parentMessageID || vars.messageId, data);
+      }
       invalidatePinnedList(queryClient, vars);
     },
   });
@@ -424,7 +465,13 @@ export function useToggleReaction() {
     onSuccess: (data, vars) => {
       const parentID = vars.channelId ?? vars.conversationId;
       /* istanbul ignore else -- messagePath() throws when neither id is set, so a successful mutation always has a parentID; the falsy arm is unreachable. */
-      if (parentID) updateMessageInCache(queryClient, parentID, data);
+      if (parentID) {
+        updateMessageInCache(queryClient, parentID, data);
+        // Also patch the thread cache so a reaction/pin/edit/unfurl on a thread
+        // message updates instantly in /threads and the ThreadPanel. Root ID is
+        // the parent message for a reply, else the message itself (a root).
+        patchMessageInThreadCache(queryClient, parentID, vars.parentMessageID || vars.messageId, data);
+      }
       invalidatePinnedList(queryClient, vars);
     },
   });
@@ -441,7 +488,13 @@ export function useSetPinned() {
     onSuccess: (data, vars) => {
       const parentID = vars.channelId ?? vars.conversationId;
       /* istanbul ignore else -- messagePath() throws when neither id is set, so a successful mutation always has a parentID; the falsy arm is unreachable. */
-      if (parentID) updateMessageInCache(queryClient, parentID, data);
+      if (parentID) {
+        updateMessageInCache(queryClient, parentID, data);
+        // Also patch the thread cache so a reaction/pin/edit/unfurl on a thread
+        // message updates instantly in /threads and the ThreadPanel. Root ID is
+        // the parent message for a reply, else the message itself (a root).
+        patchMessageInThreadCache(queryClient, parentID, vars.parentMessageID || vars.messageId, data);
+      }
       invalidatePinnedList(queryClient, vars);
     },
   });
@@ -461,7 +514,13 @@ export function useSetNoUnfurl() {
     onSuccess: (data, vars) => {
       const parentID = vars.channelId ?? vars.conversationId;
       /* istanbul ignore else -- messagePath() throws when neither id is set, so a successful mutation always has a parentID; the falsy arm is unreachable. */
-      if (parentID) updateMessageInCache(queryClient, parentID, data);
+      if (parentID) {
+        updateMessageInCache(queryClient, parentID, data);
+        // Also patch the thread cache so a reaction/pin/edit/unfurl on a thread
+        // message updates instantly in /threads and the ThreadPanel. Root ID is
+        // the parent message for a reply, else the message itself (a root).
+        patchMessageInThreadCache(queryClient, parentID, vars.parentMessageID || vars.messageId, data);
+      }
       invalidatePinnedList(queryClient, vars);
     },
   });

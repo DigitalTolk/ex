@@ -13,6 +13,7 @@ import (
 	"github.com/DigitalTolk/ex/internal/middleware"
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/DigitalTolk/ex/internal/pubsub"
+	"github.com/DigitalTolk/ex/internal/safe"
 	"github.com/DigitalTolk/ex/internal/store"
 )
 
@@ -658,6 +659,26 @@ func (s *ChannelService) UpdateMemberRole(ctx context.Context, actorID, channelI
 		}
 	}
 
+	// Demoting an existing OWNER requires owner/sysadmin authority. Without this,
+	// a mere channel admin could strip the owner (the only role that can archive
+	// the channel) and then remove them — escalating from a lower role. Mirrors
+	// the owner protection in RemoveMember.
+	if newRole != model.ChannelRoleOwner {
+		target, err := s.memberships.GetMembership(ctx, channelID, targetID)
+		if err != nil && !isSystemAdmin(ctx) {
+			return fmt.Errorf("channel: get target membership: %w", err)
+		}
+		if target != nil && target.Role == model.ChannelRoleOwner && !isSystemAdmin(ctx) {
+			actor, err := s.memberships.GetMembership(ctx, channelID, actorID)
+			if err != nil {
+				return fmt.Errorf("channel: get actor membership: %w", err)
+			}
+			if actor == nil || actor.Role != model.ChannelRoleOwner {
+				return errors.New("channel: only an owner can change another owner's role")
+			}
+		}
+	}
+
 	if err := s.memberships.UpdateMemberRole(ctx, channelID, targetID, newRole); err != nil {
 		return fmt.Errorf("channel: update role: %w", err)
 	}
@@ -695,6 +716,7 @@ func (s *ChannelService) ListUserChannels(ctx context.Context, userID string) ([
 	for i, uc := range channels {
 		go func(i int, uc *model.UserChannel) {
 			defer wg.Done()
+			defer safe.Recover()
 			ch, err := s.channels.GetChannel(ctx, uc.ChannelID)
 			if err != nil || ch == nil {
 				return

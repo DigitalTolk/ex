@@ -144,10 +144,11 @@ describe('ConversationRow browser behaviour', () => {
     await expect.element(screen.getByTestId('conversation-row-cv-2')).toBeVisible();
   });
 
-  it('shows the unread DOT fallback when hasUnread but no live count', async () => {
+  it('floors the unread badge to 1 when hasUnread but no live count', async () => {
+    // DMs are never muted, so any unread DM shows a NUMBER box (floored to 1).
     const screen = await renderRow(dm, { hasUnread: true, unreadCount: 0 });
-    await expect.element(screen.getByTestId('conversation-unread-dot-cv-1')).toBeVisible();
-    expect(document.querySelector('[data-testid="conversation-unread-badge-cv-1"]')).toBeNull();
+    await expect.element(screen.getByTestId('conversation-unread-badge-cv-1')).toHaveTextContent('1');
+    expect(document.querySelector('[data-testid="conversation-unread-dot-cv-1"]')).toBeNull();
   });
 
   it('renders the exact unread count when under 100', async () => {

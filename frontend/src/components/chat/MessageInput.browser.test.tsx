@@ -76,7 +76,11 @@ describe('MessageInput browser behavior', () => {
     const styles = getComputedStyle(composer!);
     const radius = Number.parseFloat(styles.borderTopLeftRadius);
     const composerRect = composer!.getBoundingClientRect();
-    const root = composer!.parentElement as HTMLElement;
+    // The padded, background-bearing root is the docked composer's outer
+    // wrapper (the one carrying `data-composer-focused`). The composer box is
+    // nested inside an extra `relative` wrapper that anchors the typing
+    // indicator, so walk by attribute rather than a fixed parentElement hop.
+    const root = composer!.closest('[data-composer-focused]') as HTMLElement;
 
     if (window.innerWidth <= 767) {
       expect(radius).toBeGreaterThanOrEqual(24);

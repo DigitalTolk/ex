@@ -26,7 +26,7 @@ func TestUserStateStore_Set_PutItemError(t *testing.T) {
 	db := setupDynamoDB(t)
 	ctx := context.Background()
 	s := NewUserStateStore(withFault(db, func(f *faultClient) { f.failPutItem = true }))
-	err := s.Set(ctx, makeUserState("u-us", model.UserStateChannelNotification, "ch-1"))
+	err := s.Set(ctx, makeUserState("u-us", model.UserStateThreadNotification, "ch-1"))
 	if !errors.Is(err, errInjected) {
 		t.Fatalf("Set: want errInjected, got %v", err)
 	}
@@ -36,7 +36,7 @@ func TestUserStateStore_Delete_DeleteItemError(t *testing.T) {
 	db := setupDynamoDB(t)
 	ctx := context.Background()
 	s := NewUserStateStore(withFault(db, func(f *faultClient) { f.failDeleteItem = true }))
-	err := s.Delete(ctx, "u-us", model.UserStateChannelNotification, "ch-1")
+	err := s.Delete(ctx, "u-us", model.UserStateThreadNotification, "ch-1")
 	if !errors.Is(err, errInjected) {
 		t.Fatalf("Delete: want errInjected, got %v", err)
 	}

@@ -112,6 +112,11 @@ function pickRendition(gif: IGif): GiphyMedia {
   };
 }
 
+// A Giphy slug is alphanumerics plus '-'/'_' — deliberately NO '.', '/', '\\',
+// '?', '#', '%' or control chars, so an attacker-authored id can't traverse or
+// reshape the SDK's request path.
+const GIPHY_ID_RE = /^[A-Za-z0-9_-]+$/;
+
 function readCachedGiphyMedia(id: string): GiphyMedia | null {
   const entry = giphyMemoryCache.get(id);
   if (!entry) return null;
@@ -202,6 +207,10 @@ function GiphyEmbedFromSettings({
 function GiphyEmbedMedia({ id, apiKey, width, height, onMediaLoad }: GiphyEmbedProps & { apiKey: string }) {
   const trimmedKey = apiKey.trim();
   const gf = useMemo(() => (trimmedKey ? new GiphyFetch(trimmedKey) : null), [trimmedKey]);
+  // The id is attacker-authored (from `giphy:<id>` in a message) and the Giphy
+  // SDK path-interpolates it into the request URL, so reject anything that
+  // isn't a plain Giphy slug before it can shape the fetch path.
+  const idIsSafe = GIPHY_ID_RE.test(id ?? '');
   const requestKey = `${trimmedKey}:${id}`;
   const [result, setResult] = useState<{
     requestKey: string;
@@ -209,12 +218,12 @@ function GiphyEmbedMedia({ id, apiKey, width, height, onMediaLoad }: GiphyEmbedP
     failed: boolean;
   }>(() => ({
     requestKey,
-    media: id ? readCachedGiphyMedia(id) : null,
+    media: id && idIsSafe ? readCachedGiphyMedia(id) : null,
     failed: false,
   }));
 
   useEffect(() => {
-    if (!gf || !id) return;
+    if (!gf || !id || !idIsSafe) return;
     let alive = true;
     const cached = readCachedGiphyMedia(id);
     if (cached) {
@@ -236,10 +245,11 @@ function GiphyEmbedMedia({ id, apiKey, width, height, onMediaLoad }: GiphyEmbedP
     return () => {
       alive = false;
     };
-  }, [gf, id, requestKey]);
+  }, [gf, id, idIsSafe, requestKey]);
 
   const media = result.requestKey === requestKey ? result.media : null;
   const failed = result.requestKey === requestKey && result.failed;
+  if (id && !idIsSafe) return <Placeholder width={width} height={height}>GIPHY unavailable</Placeholder>;
   if (!trimmedKey) return <Placeholder width={width} height={height}>GIPHY unavailable</Placeholder>;
   if (failed) return <Placeholder width={width} height={height}>GIPHY unavailable</Placeholder>;
   if (!media) return <Placeholder width={width} height={height}>Loading GIPHY...</Placeholder>;

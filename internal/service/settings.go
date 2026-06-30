@@ -44,8 +44,15 @@ func (s *SettingsService) Effective(ctx context.Context) *model.WorkspaceSetting
 	s.mu.RUnlock()
 
 	ws, err := s.store.GetSettings(ctx)
-	if err != nil || ws == nil {
-		ws = &model.WorkspaceSettings{}
+	if err != nil {
+		// Transient store error: serve built-in defaults for THIS call but do NOT
+		// cache them — caching would pin the (more permissive) defaults until the
+		// next Update(), silently loosening admin-tightened upload limits after a
+		// single DynamoDB blip. The next read retries the store.
+		return s.applyDefaults(&model.WorkspaceSettings{})
+	}
+	if ws == nil {
+		ws = &model.WorkspaceSettings{} // no settings saved yet — a real, cacheable state
 	}
 	s.mu.Lock()
 	s.cache = ws

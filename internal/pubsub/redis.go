@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/DigitalTolk/ex/internal/events"
+	"github.com/DigitalTolk/ex/internal/safe"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -18,10 +19,11 @@ type RecipientResolver interface {
 	Resolve(ctx context.Context, topic string) ([]string, error)
 }
 
-// InboxAppender writes a serialized event into a single user's
-// durable inbox stream.
+// InboxAppender writes a serialized event into users' durable inbox streams.
+// AppendMany fans the event out to a batch of recipients in one round-trip.
 type InboxAppender interface {
 	Append(ctx context.Context, userID string, eventID string, payload []byte) error
+	AppendMany(ctx context.Context, userIDs []string, eventID string, payload []byte) error
 }
 
 // RedisPubSub wraps a Redis client for publishing real-time events to channels.
@@ -90,8 +92,46 @@ func (ps *RedisPubSub) Publish(ctx context.Context, channel string, event *event
 		ps.fanOut.Add(1)
 		go func() {
 			defer ps.fanOut.Done()
+			defer safe.Recover()
 			ps.appendToInboxes(context.WithoutCancel(ctx), channel, event, data)
 		}()
+	}
+	return nil
+}
+
+// PublishMany pipelines one event to many channels in a single round-trip,
+// instead of a separate PUBLISH (and round-trip) per channel — used for
+// fan-outs like presence transitions that notify every shared-context topic.
+// Persistent events still get their per-channel inbox fan-out (detached).
+func (ps *RedisPubSub) PublishMany(ctx context.Context, channels []string, event *events.Event) error {
+	if len(channels) == 0 {
+		return nil
+	}
+	data, err := json.Marshal(event)
+	if err != nil {
+		return fmt.Errorf("marshal event: %w", err)
+	}
+	pipe := ps.client.Pipeline()
+	for _, ch := range channels {
+		pipe.Publish(ctx, ch, data)
+	}
+	_, execErr := pipe.Exec(ctx)
+	// Durability is independent of best-effort live delivery: a persistent event
+	// must still fan out to every recipient's inbox even if some live PUBLISH in
+	// the pipeline failed — otherwise those recipients couldn't replay it on
+	// reconnect. So run the inbox fan-out regardless of execErr, then surface it.
+	if ps.resolver != nil && ps.inbox != nil && event != nil && events.IsPersistent(event.Type) {
+		for _, ch := range channels {
+			ps.fanOut.Add(1)
+			go func(ch string) {
+				defer ps.fanOut.Done()
+				defer safe.Recover()
+				ps.appendToInboxes(context.WithoutCancel(ctx), ch, event, data)
+			}(ch)
+		}
+	}
+	if execErr != nil {
+		return fmt.Errorf("redis publish pipeline: %w", execErr)
 	}
 	return nil
 }
@@ -120,17 +160,10 @@ func (ps *RedisPubSub) appendToInboxes(ctx context.Context, topic string, event 
 	if len(recipients) == 0 {
 		return
 	}
-	var wg sync.WaitGroup
-	wg.Add(len(recipients))
-	for _, userID := range recipients {
-		go func(uid string) {
-			defer wg.Done()
-			if err := ps.inbox.Append(ctx, uid, event.ID, payload); err != nil {
-				slog.Error("pubsub: inbox append", "userID", uid, "topic", topic, "type", event.Type, "error", err)
-			}
-		}(userID)
+	// One pipelined fan-out instead of a goroutine + round-trip per recipient.
+	if err := ps.inbox.AppendMany(ctx, recipients, event.ID, payload); err != nil {
+		slog.Error("pubsub: inbox append", "topic", topic, "type", event.Type, "count", len(recipients), "error", err)
 	}
-	wg.Wait()
 }
 
 // Inbox exposes the underlying inbox appender so handlers (e.g. the

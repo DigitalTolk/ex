@@ -46,6 +46,26 @@ func TestSettingsService_Effective_DefaultsWhenUnset(t *testing.T) {
 	}
 }
 
+func TestSettingsService_Effective_DoesNotCacheOnStoreError(t *testing.T) {
+	// Admin tightened the upload limit to 1 MiB.
+	st := &fakeSettingsStore{stored: &model.WorkspaceSettings{MaxUploadBytes: 1 << 20, AllowedExtensions: []string{"png"}}}
+	svc := NewSettingsService(st)
+
+	// A transient store error → built-in defaults served for this call, but they
+	// MUST NOT be cached.
+	st.getErr = errors.New("dynamo down")
+	if ws := svc.Effective(context.Background()); ws.MaxUploadBytes != model.DefaultMaxUploadBytes {
+		t.Fatalf("on store error want defaults, got MaxUploadBytes=%d", ws.MaxUploadBytes)
+	}
+
+	// Store recovers → the next read must reflect the admin's tightened limit,
+	// proving the permissive defaults were never cached.
+	st.getErr = nil
+	if ws := svc.Effective(context.Background()); ws.MaxUploadBytes != 1<<20 {
+		t.Fatalf("after recovery want tightened 1 MiB, got %d (defaults were wrongly cached)", ws.MaxUploadBytes)
+	}
+}
+
 func TestSettingsService_Update_PersistsAndNormalizes(t *testing.T) {
 	store := &fakeSettingsStore{}
 	svc := NewSettingsService(store)

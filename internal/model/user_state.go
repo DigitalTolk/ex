@@ -5,10 +5,9 @@ import "time"
 type UserStateKind string
 
 const (
-	UserStateChannelNotification UserStateKind = "channel_notification"
-	UserStateThreadNotification  UserStateKind = "thread_notification"
-	UserStateThreadSeen          UserStateKind = "thread_seen"
-	UserStateHiddenConversation  UserStateKind = "hidden_conversation"
+	UserStateThreadNotification UserStateKind = "thread_notification"
+	UserStateThreadSeen         UserStateKind = "thread_seen"
+	UserStateHiddenConversation UserStateKind = "hidden_conversation"
 )
 
 type UserStateItem struct {
@@ -23,8 +22,7 @@ type UserStateItem struct {
 }
 
 type UserState struct {
-	ChannelNotifications []string          `json:"channelNotifications"`
-	ThreadNotifications  []string          `json:"threadNotifications"`
-	ThreadSeen           map[string]string `json:"threadSeen"`
-	HiddenConversations  []string          `json:"hiddenConversations"`
+	ThreadNotifications []string          `json:"threadNotifications"`
+	ThreadSeen          map[string]string `json:"threadSeen"`
+	HiddenConversations []string          `json:"hiddenConversations"`
 }

@@ -32,7 +32,7 @@ func (h *WebhookHandler) List(w http.ResponseWriter, r *http.Request) {
 	}
 	items, err := h.svc.List(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "list_error", err.Error())
+		writeInternalError(w, r, "list_error", err)
 		return
 	}
 	out := make([]webhookResponse, 0, len(items))
@@ -115,8 +115,14 @@ func (h *WebhookHandler) Execute(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte("ok"))
 }
 
+// maxWebhookBodyBytes caps the unauthenticated webhook ingress body so the JSON
+// branch's io.ReadAll can't be used for a memory-exhaustion DoS (the form
+// branch previously got Go's default 10 MiB cap, the JSON branch had none).
+const maxWebhookBodyBytes int64 = 1 << 20 // 1 MiB
+
 func readWebhookPayload(r *http.Request) (service.IncomingWebhookPayload, error) {
 	var payload service.IncomingWebhookPayload
+	r.Body = http.MaxBytesReader(nil, r.Body, maxWebhookBodyBytes)
 	ct := strings.ToLower(r.Header.Get("Content-Type"))
 	if strings.Contains(ct, "application/x-www-form-urlencoded") || strings.Contains(ct, "multipart/form-data") {
 		if err := r.ParseForm(); err != nil {

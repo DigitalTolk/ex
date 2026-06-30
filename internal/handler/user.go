@@ -42,7 +42,7 @@ func (h *UserHandler) GetMe(w http.ResponseWriter, r *http.Request) {
 
 	user, err := h.userSvc.GetByID(r.Context(), userID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "user_error", err.Error())
+		writeInternalError(w, r, "user_error", err)
 		return
 	}
 
@@ -77,7 +77,7 @@ func (h *UserHandler) UpdateMe(w http.ResponseWriter, r *http.Request) {
 
 	user, err := h.userSvc.Update(r.Context(), userID, body.DisplayName, body.AvatarKey, body.EmojiSkinTone)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "update_error", err.Error())
+		writeInternalError(w, r, "update_error", err)
 		return
 	}
 
@@ -178,23 +178,14 @@ func (h *UserHandler) GetUser(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, "not_found", "user not found")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "user_error", err.Error())
+		writeInternalError(w, r, "user_error", err)
 		return
 	}
 
-	// Non-admins see a limited view.
+	// Non-admins see the limited public projection.
 	claims := middleware.ClaimsFromContext(r.Context())
 	if claims == nil || claims.SystemRole != model.SystemRoleAdmin {
-		writeJSON(w, http.StatusOK, JSON{
-			"id":          user.ID,
-			"displayName": user.DisplayName,
-			"email":       user.Email,
-			"avatarURL":   user.AvatarURL,
-			"status":      user.Status,
-			"userStatus":  user.UserStatus,
-			"timeZone":    user.TimeZone,
-			"lastSeenAt":  user.LastSeenAt,
-		})
+		writeJSON(w, http.StatusOK, publicUserJSON(user))
 		return
 	}
 
@@ -221,28 +212,15 @@ func (h *UserHandler) BatchGetUsers(w http.ResponseWriter, r *http.Request) {
 
 	users, err := h.userSvc.GetBatch(r.Context(), body.IDs)
 	if err != nil { // coverage-ignore: UserService.GetBatch swallows per-user errors (continue) and always returns a nil error — no request can drive this branch; the guard is defensive against a future contract change.
-		writeError(w, http.StatusInternalServerError, "batch_error", err.Error())
+		writeInternalError(w, r, "batch_error", err)
 		return
 	}
 	if users == nil { // coverage-ignore: GetBatch returns a make()-initialized slice that is never nil; coercion is defensive against a future contract change.
 		users = []*model.User{}
 	}
 
-	// Return limited fields (same as GetUser for non-admins).
-	result := make([]JSON, 0, len(users))
-	for _, u := range users {
-		result = append(result, JSON{
-			"id":          u.ID,
-			"displayName": u.DisplayName,
-			"email":       u.Email,
-			"avatarURL":   u.AvatarURL,
-			"status":      u.Status,
-			"userStatus":  u.UserStatus,
-			"timeZone":    u.TimeZone,
-			"lastSeenAt":  u.LastSeenAt,
-		})
-	}
-	writeJSON(w, http.StatusOK, result)
+	// Return the same limited public projection as GetUser / ListUsers.
+	writeJSON(w, http.StatusOK, publicUserList(users))
 }
 
 // listAllMaxRounds caps the inner pagination loop served by
@@ -253,22 +231,58 @@ func (h *UserHandler) BatchGetUsers(w http.ResponseWriter, r *http.Request) {
 const listAllMaxRounds = 200
 const listAllPageSize = 500
 
+// publicUserJSON projects a user to the fields safe for ANY authenticated member
+// (the limited shape BatchGetUsers returns to non-admins, plus email for mention
+// matching). systemRole / authProvider are admin-only and must never leak
+// through a roster fetch by a regular member or guest.
+func publicUserJSON(u *model.User) JSON {
+	return JSON{
+		"id":          u.ID,
+		"displayName": u.DisplayName,
+		"email":       u.Email,
+		"avatarURL":   u.AvatarURL,
+		"status":      u.Status,
+		"userStatus":  u.UserStatus,
+		"timeZone":    u.TimeZone,
+		"lastSeenAt":  u.LastSeenAt,
+	}
+}
+
+func publicUserList(users []*model.User) []JSON {
+	out := make([]JSON, 0, len(users))
+	for _, u := range users {
+		out = append(out, publicUserJSON(u))
+	}
+	return out
+}
+
+// usersForCaller returns the FULL user objects to an admin caller (the admin
+// directory page needs systemRole/authProvider to render roles and gate
+// promote/demote) and the limited public projection to everyone else, so a
+// regular member or guest can't read those admin-only fields.
+func usersForCaller(r *http.Request, users []*model.User) any {
+	claims := middleware.ClaimsFromContext(r.Context())
+	if claims != nil && claims.SystemRole == model.SystemRoleAdmin {
+		return users
+	}
+	return publicUserList(users)
+}
+
 // ListUsers returns a paginated list of users. If the "q" query parameter is
 // provided, it searches users by display name or email prefix instead.
-// `?all=true` returns the whole roster by paginating internally — used
-// by the mention popup which caches the list client-side.
+// `?all=true` returns the whole roster by paginating internally — used by the
+// mention popup which caches the list client-side, so it's ALWAYS the limited
+// public projection. The directory (default + `?q=`) paths give the full record
+// to admins and the public projection to everyone else (see usersForCaller).
 func (h *UserHandler) ListUsers(w http.ResponseWriter, r *http.Request) {
 	q := queryParam(r, "q", "")
 	if q != "" {
 		users, err := h.userSvc.Search(r.Context(), q, 20)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "search_error", err.Error())
+			writeInternalError(w, r, "search_error", err)
 			return
 		}
-		if users == nil {
-			users = []*model.User{}
-		}
-		writeJSON(w, http.StatusOK, users)
+		writeJSON(w, http.StatusOK, usersForCaller(r, users))
 		return
 	}
 
@@ -277,27 +291,10 @@ func (h *UserHandler) ListUsers(w http.ResponseWriter, r *http.Request) {
 			return h.userSvc.List(ctx, listAllPageSize, cursor)
 		}, listAllMaxRounds)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "list_error", err.Error())
+			writeInternalError(w, r, "list_error", err)
 			return
 		}
-		// Project to the same limited shape BatchGetUsers returns to
-		// non-admins, plus email (mention popup matches against it).
-		// systemRole / lastSeenAt / authProvider are admin-only fields
-		// and have no business in a roster fetched by every member.
-		out := make([]JSON, 0, len(users))
-		for _, u := range users {
-			out = append(out, JSON{
-				"id":          u.ID,
-				"displayName": u.DisplayName,
-				"email":       u.Email,
-				"avatarURL":   u.AvatarURL,
-				"status":      u.Status,
-				"userStatus":  u.UserStatus,
-				"timeZone":    u.TimeZone,
-				"lastSeenAt":  u.LastSeenAt,
-			})
-		}
-		writeJSON(w, http.StatusOK, out)
+		writeJSON(w, http.StatusOK, publicUserList(users))
 		return
 	}
 
@@ -306,14 +303,11 @@ func (h *UserHandler) ListUsers(w http.ResponseWriter, r *http.Request) {
 
 	users, _, err := h.userSvc.List(r.Context(), limit, cursor)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "list_error", err.Error())
+		writeInternalError(w, r, "list_error", err)
 		return
 	}
-	if users == nil {
-		users = []*model.User{}
-	}
 
-	writeJSON(w, http.StatusOK, users)
+	writeJSON(w, http.StatusOK, usersForCaller(r, users))
 }
 
 // UpdateUserRole changes a user's system role. Admin-only.
@@ -347,7 +341,7 @@ func (h *UserHandler) UpdateUserRole(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, "not_found", "user not found")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "update_error", err.Error())
+		writeInternalError(w, r, "update_error", err)
 		return
 	}
 
@@ -422,7 +416,7 @@ func (h *UserHandler) CreateAvatarUploadURL(w http.ResponseWriter, r *http.Reque
 	key := "avatars/" + userID + "/" + store.NewID()
 	url, err := h.s3.PresignedPutURL(r.Context(), key, body.ContentType, 10*time.Minute)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "presign_error", err.Error())
+		writeInternalError(w, r, "presign_error", err)
 		return
 	}
 

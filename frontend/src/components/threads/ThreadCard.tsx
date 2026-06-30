@@ -11,7 +11,9 @@ import { NonMemberInvitePrompt } from '@/components/chat/NonMemberInvitePrompt';
 import { useNonMemberInvite } from '@/hooks/useNonMemberInvite';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useUsersBatch } from '@/hooks/useUsersBatch';
-import { useSendMessage, type SendMessageInput } from '@/hooks/useMessages';
+import { useEditMessage, useSendMessage, type SendMessageInput } from '@/hooks/useMessages';
+import { useIsMobile } from '@/hooks/useIsMobile';
+import type { Message } from '@/types';
 import { useInView } from '@/hooks/useInView';
 import {
   restoreDraftScope,
@@ -120,6 +122,13 @@ export function ThreadCard({ summary, title, deepLink, currentUserId, unread = f
   // key the hook above subscribes to, so a reply lands without an
   // extra fetch from us.
   const send = useSendMessage({ channelId, conversationId });
+  const editMessage = useEditMessage();
+  const isMobile = useIsMobile();
+  // Desktop edits inline inside the MessageItem; mobile routes them to this
+  // card's bottom composer (an inline editor is cramped behind the keyboard),
+  // mirroring ThreadPanel. activeEditingMessage is only set on mobile.
+  const [editingMessage, setEditingMessage] = useState<Message | null>(null);
+  const activeEditingMessage = isMobile ? editingMessage : null;
   const { pendingInvites, channelSlug, checkMentions, clearInvites } = useNonMemberInvite(channelId, currentUserId);
   const parentID = channelId ?? conversationId;
   const parentType: 'channel' | 'conversation' = channelId ? 'channel' : 'conversation';
@@ -171,6 +180,26 @@ export function ThreadCard({ summary, title, deepLink, currentUserId, unread = f
     },
     [send, summary, draftScope, clearDraftMutate, checkMentions],
   );
+
+  // Mobile edit submit — the bottom composer doubles as the edit field while
+  // editingMessage is set (see activeEditingMessage). Desktop edits go through
+  // the MessageItem's own inline composer (which handles attachments); this card
+  // composer is BODY-ONLY, so it omits attachmentIDs to PRESERVE the message's
+  // existing attachments rather than stripping them (sending [] would delete).
+  // Not wrapped in useCallback — the React Compiler memoizes it, and a manual
+  // dep list here mismatches the compiler's inference (setEditingMessage).
+  const handleEditMessage = (value: SendMessageInput) => {
+    /* istanbul ignore next -- only wired as onSend while editingMessage is set; defensive. */
+    if (!editingMessage) return;
+    if (!value.body.trim() || value.body === editingMessage.body) {
+      setEditingMessage(null);
+      return;
+    }
+    editMessage.mutate(
+      { messageId: editingMessage.id, body: value.body, channelId, conversationId },
+      { onSuccess: () => setEditingMessage(null) },
+    );
+  };
 
   return (
     <article
@@ -268,7 +297,7 @@ export function ThreadCard({ summary, title, deepLink, currentUserId, unread = f
               userMap={userMap}
               quickReactions={quickReactions}
               inThread
-              disableEditing
+              onEditMessage={isMobile ? setEditingMessage : undefined}
             />
           )}
 
@@ -302,7 +331,7 @@ export function ThreadCard({ summary, title, deepLink, currentUserId, unread = f
                 userMap={userMap}
                 quickReactions={quickReactions}
                 inThread
-                disableEditing
+                onEditMessage={isMobile ? setEditingMessage : undefined}
               />
             ))}
         </div>
@@ -318,15 +347,20 @@ export function ThreadCard({ summary, title, deepLink, currentUserId, unread = f
             lands as a thread reply. Disabled while the previous reply is
             still in flight so a stuttering double-Enter can't double-post. */}
         <MessageInput
+          // Re-mount when switching between reply and edit so the editor
+          // re-initialises with the right body (initialBody is only "initial").
+          key={activeEditingMessage ? `edit-${activeEditingMessage.id}` : `reply-${summary.threadRootID}`}
           ref={inputRef}
-          onSend={handleReply}
-          disabled={send.isPending}
-          placeholder="Reply…"
-          initialBody={draft?.body ?? ''}
-          initialDrafts={draftAttachments}
-          onDraftChange={handleDraftChange}
-          typingParentID={parentID}
-          typingParentType={parentType}
+          onSend={activeEditingMessage ? handleEditMessage : handleReply}
+          onCancel={activeEditingMessage ? () => setEditingMessage(null) : undefined}
+          submitLabel={activeEditingMessage ? 'Save' : undefined}
+          disabled={activeEditingMessage ? editMessage.isPending : send.isPending}
+          placeholder={activeEditingMessage ? 'Edit message…' : 'Reply…'}
+          initialBody={activeEditingMessage?.body ?? draft?.body ?? ''}
+          initialDrafts={activeEditingMessage ? [] : draftAttachments}
+          onDraftChange={activeEditingMessage ? undefined : handleDraftChange}
+          typingParentID={activeEditingMessage ? undefined : parentID}
+          typingParentType={activeEditingMessage ? undefined : parentType}
           typingThreadRootID={summary.threadRootID}
           hideCodeButton
           bottomInset={false}

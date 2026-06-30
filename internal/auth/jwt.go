@@ -83,7 +83,13 @@ func (m *JWTManager) ValidateToken(tokenStr string) (*model.TokenClaims, error) 
 			return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
 		}
 		return m.secret, nil
-	}, jwt.WithIssuer(jwtIssuer), jwt.WithAudience(jwtAudience))
+	},
+		// Pin to exactly HS256 (defense-in-depth on top of the keyfunc HMAC check —
+		// blocks alg-confusion to HS384/512 or alg:none), and make `exp` mandatory
+		// so a token minted without an expiry can never validate.
+		jwt.WithValidMethods([]string{"HS256"}),
+		jwt.WithExpirationRequired(),
+		jwt.WithIssuer(jwtIssuer), jwt.WithAudience(jwtAudience))
 	if err != nil {
 		return nil, fmt.Errorf("invalid token: %w", err)
 	}

@@ -72,7 +72,7 @@ func (s *UserStateStoreImpl) List(ctx context.Context, userID string) ([]*model.
 	if err != nil { // coverage-ignore: static key-condition built from constants; Build cannot fail
 		return nil, fmt.Errorf("store: build user state expression: %w", err)
 	}
-	out, err := s.Client.Query(ctx, &dynamodb.QueryInput{
+	rows, err := s.queryAll(ctx, &dynamodb.QueryInput{
 		TableName:                 aws.String(s.Table),
 		KeyConditionExpression:    expr.KeyCondition(),
 		ExpressionAttributeNames:  expr.Names(),
@@ -81,8 +81,8 @@ func (s *UserStateStoreImpl) List(ctx context.Context, userID string) ([]*model.
 	if err != nil {
 		return nil, fmt.Errorf("store: list user state: %w", err)
 	}
-	items := make([]*model.UserStateItem, 0, len(out.Items))
-	for _, raw := range out.Items {
+	items := make([]*model.UserStateItem, 0, len(rows))
+	for _, raw := range rows {
 		var item userStateItem
 		if err := attributevalue.UnmarshalMap(raw, &item); err != nil { // coverage-ignore: round-trip of items this store wrote; cannot fail
 			return nil, fmt.Errorf("store: unmarshal user state: %w", err)

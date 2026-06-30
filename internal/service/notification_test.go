@@ -248,6 +248,26 @@ func withShortAckDelay(t *testing.T) {
 	t.Cleanup(func() { ackFallbackDelay = orig })
 }
 
+// TestAckFallbackDelayInvariants guards the timing contract that keeps the
+// ack-gated mobile fallback from double-notifying an online desktop user. The
+// deferred push must not fire before a healthy socket has had a full WS
+// keep-alive cycle to prove liveness and surface+ack the alert, and the ack
+// marker must still be alive in Redis when the timer reads it.
+//
+// Source constants (kept in sync by comment, since they live in sibling
+// packages): handler.wsKeepAliveInterval = 15s, handler.wsPongTimeout = 10s,
+// cache.notifAckTTL = 60s.
+func TestAckFallbackDelayInvariants(t *testing.T) {
+	const keepAliveCycle = 15*time.Second + 10*time.Second // wsKeepAliveInterval + wsPongTimeout
+	const ackMarkerTTL = 60 * time.Second                  // cache.notifAckTTL
+	if ackFallbackDelay < keepAliveCycle {
+		t.Errorf("ackFallbackDelay = %v, must be >= one keep-alive cycle (%v) so a healthy socket can ack before the push fires", ackFallbackDelay, keepAliveCycle)
+	}
+	if ackFallbackDelay >= ackMarkerTTL {
+		t.Errorf("ackFallbackDelay = %v, must be < notifAckTTL (%v) so a recorded ack is still visible when the deferred push reads it", ackFallbackDelay, ackMarkerTTL)
+	}
+}
+
 func dmNotifier(t *testing.T) (*NotificationService, *signalPush) {
 	t.Helper()
 	svc, _, _, conv, _, users := setupNotifier(t)
@@ -397,26 +417,28 @@ func TestNotificationService_MobilePushFailureDoesNotBlockMessageDelivery(t *tes
 	}
 }
 
-func TestNotificationService_PersistsNotificationState(t *testing.T) {
+func TestNotificationService_PersistsThreadNotificationState(t *testing.T) {
 	svc, _, members, _, chans, users, msgs, follows := setupNotifierWithMessagesAndFollows(t)
 	ctx := context.Background()
 	stateStore := newMockUserStateStore()
-	stateSvc := NewUserStateService(stateStore, nil)
-	svc.SetUserStateService(stateSvc)
+	svc.SetUserStateService(NewUserStateService(stateStore, nil))
 
 	chans.channels["ch1"] = &model.Channel{ID: "ch1", Name: "general", Slug: "general", Type: model.ChannelTypePublic}
 	for _, uid := range []string{"u-author", "u-bob"} {
 		users.users[uid] = &model.User{ID: uid, DisplayName: uid}
 		members.memberships["ch1#"+uid] = &model.ChannelMembership{ChannelID: "ch1", UserID: uid}
 	}
+
+	// A top-level channel message — even a @-mention that fires a desktop alert —
+	// persists NO per-user marker: the sidebar badge is driven by the durable seq
+	// count, so the O(recipients) write is gone (perf C3).
 	svc.NotifyForMessage(ctx, &model.Message{ID: "m1", ParentID: "ch1", AuthorID: "u-author", Body: "hi @[u-bob|Bob]"}, ParentChannel)
-	if _, ok := stateStore.rows[stateStore.key("u-bob", model.UserStateChannelNotification, "ch1")]; !ok {
-		t.Fatal("expected channel notification state for mentioned user")
-	}
-	if err := stateStore.DeleteUserState(ctx, "u-bob", model.UserStateChannelNotification, "ch1"); err != nil {
-		t.Fatalf("DeleteUserState: %v", err)
+	if len(stateStore.rows) != 0 {
+		t.Fatalf("top-level channel message must persist no user-state rows, got %d", len(stateStore.rows))
 	}
 
+	// A thread reply DOES persist a thread-notification marker — thread replies
+	// don't bump the parent seq, so this is the only durable thread-unread signal.
 	msgs.messages["ch1#root1"] = &model.Message{ID: "root1", ParentID: "ch1", AuthorID: "u-author", Body: "root", CreatedAt: time.Now()}
 	if err := follows.SetThreadFollow(ctx, &model.ThreadFollow{
 		UserID: "u-bob", ParentID: "ch1", ParentType: ParentChannel, ThreadRootID: "root1", Following: true, UpdatedAt: time.Now(),
@@ -427,18 +449,13 @@ func TestNotificationService_PersistsNotificationState(t *testing.T) {
 	if _, ok := stateStore.rows[stateStore.key("u-bob", model.UserStateThreadNotification, "root1")]; !ok {
 		t.Fatal("expected thread notification state for follower")
 	}
-	if _, ok := stateStore.rows[stateStore.key("u-bob", model.UserStateChannelNotification, "ch1")]; ok {
-		t.Fatal("did not expect channel notification state for thread mention")
-	}
 }
 
-func TestNotificationService_PersistsChannelNotification_ForNonMentionAllLevel(t *testing.T) {
-	// Regression: the exact "sound but no sidebar badge" report. u-bob set THIS
-	// channel's desktop level to "all messages" but isn't @-mentioned. The
-	// previous code only persisted channel-notification state for mentions, so a
-	// plain channel message played a sound (notification.new published) yet the
-	// sidebar stayed read on a cold reload. Persisting for any desktop-alerted
-	// channel message fixes that.
+func TestNotificationService_NoChannelMarker_EvenWhenDesktopAlerted(t *testing.T) {
+	// Perf C3: a desktop-alerted channel message must NOT write a per-recipient
+	// user-state row. The "sound but no badge" cold-load case is now covered by
+	// ListUserChannels' seq-derived unreadCount (durable, server-computed), not by
+	// an O(recipients) marker write.
 	svc, _, members, _, chans, users, _, _ := setupNotifierWithMessagesAndFollows(t)
 	ctx := context.Background()
 	stateStore := newMockUserStateStore()
@@ -454,35 +471,13 @@ func TestNotificationService_PersistsChannelNotification_ForNonMentionAllLevel(t
 
 	svc.NotifyForMessage(ctx, &model.Message{ID: "m1", ParentID: "ch1", AuthorID: "u-author", Body: "hello everyone"}, ParentChannel)
 
-	if _, ok := stateStore.rows[stateStore.key("u-bob", model.UserStateChannelNotification, "ch1")]; !ok {
-		t.Fatal("expected channel notification persisted for non-mention 'all'-level desktop alert")
-	}
-}
-
-func TestNotificationService_DoesNotPersistChannelNotification_WhenNotDesktopAlerted(t *testing.T) {
-	// The complement: a plain channel message at the quiet default neither
-	// publishes nor persists — the channel must stay read.
-	svc, _, members, _, chans, users, _, _ := setupNotifierWithMessagesAndFollows(t)
-	ctx := context.Background()
-	stateStore := newMockUserStateStore()
-	svc.SetUserStateService(NewUserStateService(stateStore, nil))
-
-	chans.channels["ch1"] = &model.Channel{ID: "ch1", Name: "general", Slug: "general", Type: model.ChannelTypePublic}
-	for _, uid := range []string{"u-author", "u-bob"} {
-		users.users[uid] = &model.User{ID: uid, DisplayName: uid}
-		members.memberships["ch1#"+uid] = &model.ChannelMembership{ChannelID: "ch1", UserID: uid}
-	}
-
-	svc.NotifyForMessage(ctx, &model.Message{ID: "m1", ParentID: "ch1", AuthorID: "u-author", Body: "hello everyone"}, ParentChannel)
-
-	if _, ok := stateStore.rows[stateStore.key("u-bob", model.UserStateChannelNotification, "ch1")]; ok {
-		t.Fatal("did not expect channel notification for a non-alerted plain message")
+	if len(stateStore.rows) != 0 {
+		t.Fatalf("desktop-alerted channel message must write no user-state rows (perf C3), got %d", len(stateStore.rows))
 	}
 }
 
 func TestNotificationService_NotificationStateNoops(t *testing.T) {
 	svc, _, _, _, _, _ := setupNotifier(t)
-	svc.markChannelNotification(context.Background(), "u-1", "ch-1")
 	svc.markThreadNotification(context.Background(), "u-1", nil, ParentChannel)
 	svc.SetUserStateService(NewUserStateService(newMockUserStateStore(), nil))
 	svc.markThreadNotification(context.Background(), "u-1", &model.Message{ID: "m1"}, ParentChannel)
@@ -632,6 +627,105 @@ func TestNotificationService_NotifyForMessage_ThreadReply_ExcludesUnfollowedPart
 	}
 	if got := kinds[pubsub.UserChannel("u-root")]; got != NotificationKindThreadReply {
 		t.Errorf("root author should still get thread_reply, got %q", got)
+	}
+}
+
+// A watched keyword landing in a thread reply must reach a member who is NOT a
+// thread participant — an explicit "always alert me on this word" interest cuts
+// across thread scope (e.g. an incident keyword in a thread reply). Bystanders
+// without the keyword still stay quiet.
+// A transient member-list load failure must NOT silently swallow the alert: it
+// notifies nobody (the audience is genuinely unknown) but that is an incident
+// (logged ERROR), not a no-op. This locks the "no silent missed alert" contract.
+type stubNameCache struct {
+	hits map[string]string
+	sets map[string]string
+}
+
+func (c *stubNameCache) GetName(_ context.Context, key string) (string, bool) {
+	v, ok := c.hits[key]
+	return v, ok
+}
+func (c *stubNameCache) SetName(_ context.Context, key, val string) { c.sets[key] = val }
+
+func TestNotificationService_NameCache(t *testing.T) {
+	svc, _, _, _, chans, users := setupNotifier(t)
+	nc := &stubNameCache{
+		hits: map[string]string{"chan:ch-cached": "cached-name"},
+		sets: map[string]string{},
+	}
+	svc.SetNameCache(nc)
+	chans.channels["ch-miss"] = &model.Channel{ID: "ch-miss", Name: "Real", Slug: "real-slug"}
+	users.users["u1"] = &model.User{ID: "u1", DisplayName: "Alice"}
+
+	// Channel cache HIT: served from cache, store not consulted.
+	if got := svc.parentDisplayName(context.Background(), "ch-cached", ParentChannel); got != "cached-name" {
+		t.Errorf("cached channel name = %q, want cached-name", got)
+	}
+	// Channel cache MISS: reads store, then caches the slug.
+	if got := svc.parentDisplayName(context.Background(), "ch-miss", ParentChannel); got != "real-slug" {
+		t.Errorf("missed channel name = %q, want real-slug", got)
+	}
+	if nc.sets["chan:ch-miss"] != "real-slug" {
+		t.Errorf("channel name not cached after miss: %v", nc.sets)
+	}
+	// User cache MISS: reads store, then caches.
+	if got := svc.userDisplayName(context.Background(), "u1"); got != "Alice" {
+		t.Errorf("user name = %q, want Alice", got)
+	}
+	if nc.sets["user:u1"] != "Alice" {
+		t.Errorf("user name not cached after miss: %v", nc.sets)
+	}
+	// User cache HIT.
+	nc.hits["user:u1"] = "Cached Alice"
+	if got := svc.userDisplayName(context.Background(), "u1"); got != "Cached Alice" {
+		t.Errorf("cached user name = %q, want Cached Alice", got)
+	}
+}
+
+func TestNotificationService_NotifyForMessage_MemberLoadError_NotifiesNobody(t *testing.T) {
+	svc, pub, members, _, chans, users := setupNotifier(t)
+	ctx := context.Background()
+
+	chans.channels["ch1"] = &model.Channel{ID: "ch1", Name: "general", Slug: "general", Type: model.ChannelTypePublic}
+	users.users["u-author"] = &model.User{ID: "u-author", DisplayName: "Alice"}
+	users.users["u-bob"] = &model.User{ID: "u-bob", DisplayName: "Bob"}
+	members.memberships["ch1#u-bob"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u-bob"}
+	members.listMembersErr = errors.New("dynamodb throttled")
+
+	svc.NotifyForMessage(ctx, &model.Message{ID: "m1", ParentID: "ch1", AuthorID: "u-author", Body: "deploy"}, ParentChannel)
+
+	if got := len(publishedKinds(pub)); got != 0 {
+		t.Errorf("member-load error should resolve no audience, got %d notifications", got)
+	}
+}
+
+func TestNotificationService_NotifyForMessage_ThreadReply_KeywordNotifiesNonParticipant(t *testing.T) {
+	svc, pub, members, _, chans, users, msgs, _ := setupNotifierWithMessagesAndFollows(t)
+	ctx := context.Background()
+
+	chans.channels["ch1"] = &model.Channel{ID: "ch1", Name: "general", Slug: "general", Type: model.ChannelTypePublic}
+	users.users["u-root"] = &model.User{ID: "u-root", DisplayName: "Root"}
+	users.users["u-author"] = &model.User{ID: "u-author", DisplayName: "Alice"}
+	kw := model.DefaultNotificationSettingsForNewUser("Watcher")
+	kw.Keywords = []string{"outage"}
+	users.users["u-watcher"] = &model.User{ID: "u-watcher", DisplayName: "Watcher", NotificationSettings: &kw}
+	users.users["u-quiet"] = &model.User{ID: "u-quiet", DisplayName: "Quiet"}
+	for _, uid := range []string{"u-root", "u-author", "u-watcher", "u-quiet"} {
+		members.memberships["ch1#"+uid] = &model.ChannelMembership{ChannelID: "ch1", UserID: uid}
+	}
+	msgs.messages["ch1#m-root"] = &model.Message{ID: "m-root", ParentID: "ch1", AuthorID: "u-root", Body: "ask"}
+
+	svc.NotifyForMessage(ctx, &model.Message{
+		ID: "m-r1", ParentID: "ch1", AuthorID: "u-author", ParentMessageID: "m-root", Body: "we have an outage",
+	}, ParentChannel)
+
+	kinds := publishedKinds(pub)
+	if _, ok := kinds[pubsub.UserChannel("u-watcher")]; !ok {
+		t.Error("keyword watcher should be notified about a thread reply containing their keyword, even as a non-participant")
+	}
+	if _, ok := kinds[pubsub.UserChannel("u-quiet")]; ok {
+		t.Error("a non-participant WITHOUT the keyword must stay quiet for thread chatter")
 	}
 }
 

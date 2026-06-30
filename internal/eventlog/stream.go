@@ -85,6 +85,43 @@ func (s *Stream) Append(ctx context.Context, userID string, eventID string, payl
 	return nil
 }
 
+// AppendMany pipelines the same event into many users' inbox streams in a
+// SINGLE Redis round-trip, instead of one XADD (and one goroutine) per
+// recipient — the previous fan-out did O(recipients) separate round-trips on
+// every persistent event (including every reaction/edit). Best-effort: a
+// pipeline error is returned for the caller to log, but partial success is
+// possible and acceptable (replay is purely additive).
+func (s *Stream) AppendMany(ctx context.Context, userIDs []string, eventID string, payload []byte) error {
+	if s == nil || s.client == nil {
+		return nil
+	}
+	if eventID == "" {
+		return errors.New("eventlog: empty eventID")
+	}
+	pipe := s.client.Pipeline()
+	queued := 0
+	for _, uid := range userIDs {
+		if uid == "" {
+			continue
+		}
+		pipe.XAdd(ctx, &redis.XAddArgs{
+			Stream: streamKey(uid),
+			MaxLen: s.maxLen,
+			Approx: true,
+			ID:     "*",
+			Values: map[string]any{payloadField: payload},
+		})
+		queued++
+	}
+	if queued == 0 {
+		return nil
+	}
+	if _, err := pipe.Exec(ctx); err != nil {
+		return fmt.Errorf("eventlog: pipeline xadd: %w", err)
+	}
+	return nil
+}
+
 // Entry is a replayed event with its embedded ID for the cursor.
 type Entry struct {
 	ID      string

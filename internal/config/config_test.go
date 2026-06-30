@@ -37,8 +37,18 @@ func clearEnv(t *testing.T) {
 	})
 }
 
+func TestLoadFailsClosedWithoutEnv(t *testing.T) {
+	clearEnv(t)
+	// Fail-closed: with ENV unset, Env defaults to production, so an unset
+	// JWT_SECRET must abort startup rather than silently use the dev secret.
+	if _, err := Load(); err == nil {
+		t.Fatal("Load() with no ENV and no JWT_SECRET should fail closed, got nil error")
+	}
+}
+
 func TestLoadDefaults(t *testing.T) {
 	clearEnv(t)
+	t.Setenv("ENV", "development") // dev defaults are opt-in now (fail-closed)
 
 	cfg, err := Load()
 	if err != nil {
@@ -81,6 +91,35 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if cfg.OneSignalRESTAPIKey != "" {
 		t.Errorf("OneSignalRESTAPIKey = %q, want empty", cfg.OneSignalRESTAPIKey)
+	}
+	if cfg.TrustedProxyCount != 1 {
+		t.Errorf("TrustedProxyCount = %d, want default 1", cfg.TrustedProxyCount)
+	}
+}
+
+func TestLoadTrustedProxyCount(t *testing.T) {
+	t.Run("custom value", func(t *testing.T) {
+		clearEnv(t)
+		t.Setenv("ENV", "development")
+		t.Setenv("TRUSTED_PROXY_COUNT", "2")
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if cfg.TrustedProxyCount != 2 {
+			t.Errorf("TrustedProxyCount = %d, want 2", cfg.TrustedProxyCount)
+		}
+	})
+
+	for _, bad := range []string{"abc", "-1"} {
+		t.Run("rejects "+bad, func(t *testing.T) {
+			clearEnv(t)
+			t.Setenv("ENV", "development")
+			t.Setenv("TRUSTED_PROXY_COUNT", bad)
+			if _, err := Load(); err == nil {
+				t.Fatalf("Load with TRUSTED_PROXY_COUNT=%q should fail", bad)
+			}
+		})
 	}
 }
 

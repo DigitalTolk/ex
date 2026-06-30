@@ -175,7 +175,7 @@ func (s *ConversationStoreImpl) ListUserConversations(ctx context.Context, userI
 		return nil, fmt.Errorf("store: build expression: %w", err)
 	}
 
-	out, err := s.Client.Query(ctx, &dynamodb.QueryInput{
+	items, err := s.queryAll(ctx, &dynamodb.QueryInput{
 		TableName:                 aws.String(s.Table),
 		KeyConditionExpression:    expr.KeyCondition(),
 		ExpressionAttributeNames:  expr.Names(),
@@ -184,9 +184,8 @@ func (s *ConversationStoreImpl) ListUserConversations(ctx context.Context, userI
 	if err != nil {
 		return nil, fmt.Errorf("store: list user conversations: %w", err)
 	}
-
-	convs := make([]*model.UserConversation, 0, len(out.Items))
-	for _, item := range out.Items {
+	convs := make([]*model.UserConversation, 0, len(items))
+	for _, item := range items {
 		var uci userConversationItem
 		if err := attributevalue.UnmarshalMap(item, &uci); err != nil { // coverage-ignore: round-trip of items this store wrote; cannot fail
 			return nil, fmt.Errorf("store: unmarshal user conversation: %w", err)

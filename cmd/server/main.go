@@ -18,7 +18,9 @@ import (
 	"github.com/DigitalTolk/ex/internal/config"
 	"github.com/DigitalTolk/ex/internal/eventlog"
 	"github.com/DigitalTolk/ex/internal/handler"
+	"github.com/DigitalTolk/ex/internal/middleware"
 	"github.com/DigitalTolk/ex/internal/pubsub"
+	"github.com/DigitalTolk/ex/internal/safe"
 	"github.com/DigitalTolk/ex/internal/search"
 	"github.com/DigitalTolk/ex/internal/service"
 	"github.com/DigitalTolk/ex/internal/storage"
@@ -61,6 +63,11 @@ func main() {
 		slog.Error("failed to load config", "error", err)
 		os.Exit(1)
 	}
+
+	// Wire the deployment's reverse-proxy depth into the rate-limit IP derivation
+	// (must match topology or the per-IP limit keys off a spoofable/wrong hop).
+	middleware.SetTrustedProxyCount(cfg.TrustedProxyCount)
+	slog.Info("trusted proxy count for rate-limit client IP", "count", cfg.TrustedProxyCount)
 
 	// ------------------------------------------------------------------ DynamoDB
 	db, err := store.New(ctx, store.DBConfig{
@@ -153,6 +160,10 @@ func main() {
 		handler.NewMembershipMemberLister(membershipStore.ListMembers),
 		handler.NewConversationParticipantLister(conversationStore.GetConversation),
 	)
+	// Cache topic→recipient lists for a few seconds so the durable-inbox fan-out
+	// doesn't re-query DynamoDB membership on every persistent event. Bounded
+	// staleness; live delivery (broker subscription) stays correct on join/leave.
+	recipientResolver.SetCacheTTL(10 * time.Second)
 	redisPubSub.SetDurability(recipientResolver, inboxStream)
 
 	// ------------------------------------------------------------------ Broker
@@ -232,6 +243,7 @@ func main() {
 	// same Redis-backed store so an ack and the deferred push can live on
 	// different backend instances.
 	notificationSvc.SetAckStore(redisCache)
+	notificationSvc.SetNameCache(redisCache) // cache channel/author names off the per-message notify path
 	oneSignalPush, err := service.NewOneSignalPushSender(service.OneSignalConfig{
 		AppID:     cfg.OneSignalAppID,
 		APIKey:    cfg.OneSignalRESTAPIKey,
@@ -438,6 +450,22 @@ func main() {
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		slog.Error("server forced to shutdown", "error", err)
 		os.Exit(1)
+	}
+
+	// HTTP is drained; now wait (bounded) for any in-flight durable-inbox fan-out
+	// appends to finish so a reconnecting client can still replay the last events.
+	// The appends run on a cancellation-free context, so a wedged backing store
+	// must not hang shutdown indefinitely — cap the wait and move on.
+	fanOutDone := make(chan struct{})
+	go func() {
+		defer safe.Recover()
+		redisPubSub.WaitForInboxFanOut()
+		close(fanOutDone)
+	}()
+	select {
+	case <-fanOutDone:
+	case <-time.After(5 * time.Second):
+		slog.Warn("timed out draining durable-inbox fan-out on shutdown")
 	}
 
 	slog.Info("server stopped")

@@ -52,6 +52,14 @@ describe('useSearch', () => {
     expect(apiFetchMock).not.toHaveBeenCalled();
   });
 
+  it('coerces an empty search response to null (queryFn never resolves undefined)', async () => {
+    apiFetchMock.mockResolvedValue(undefined);
+    const screen = await renderProbe(() => useSearchUsers('al', true));
+    await new Promise((r) => setTimeout(r, 200));
+    // Resolving to null (not undefined) lands the query in success.
+    expect(screen.getByTestId('probe').element().getAttribute('data-status')).toBe('success');
+  });
+
   it('useSearchUsers fires when enabled and query length >= 2', async () => {
     apiFetchMock.mockResolvedValue({ total: 1, hits: [{ id: 'u-1', score: 1, _source: {} }] });
     await renderProbe(() => useSearchUsers('al', true));

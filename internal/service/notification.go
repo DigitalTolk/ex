@@ -12,6 +12,7 @@ import (
 	"github.com/DigitalTolk/ex/internal/events"
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/DigitalTolk/ex/internal/pubsub"
+	"github.com/DigitalTolk/ex/internal/safe"
 )
 
 // NotificationKind tags a notification with its semantic class so the client
@@ -90,11 +91,26 @@ type NotificationAckStore interface {
 }
 
 // ackFallbackDelay is how long the deferred mobile push waits for the desktop
-// client to ack before giving up and pushing. Long enough to cover a healthy
-// round-trip (publish → client receives → acks) plus slack, short enough that an
-// incident alert that the desktop dropped still reaches mobile quickly. A var so
-// tests can shrink it. Must stay below the ack marker TTL (cache.notifAckTTL).
-var ackFallbackDelay = 8 * time.Second
+// client to ack before giving up and pushing. A var so tests can shrink it.
+//
+// INVARIANT (asserted by TestAckFallbackDelayInvariants): the delay must be at
+// least one full WS keep-alive cycle —
+//
+//	ackFallbackDelay >= wsKeepAliveInterval (15s) + wsPongTimeout (10s)
+//
+// so a HEALTHY socket has time to prove liveness (and surface + ack the alert)
+// before the push fires, and a DEAD socket is detected by the keep-alive within
+// the same window — otherwise the deferred push races the very presence signal
+// it depends on and double-notifies an online desktop user. It must also stay
+// below the ack-marker TTL so a recorded ack is still visible when the timer
+// fires —
+//
+//	ackFallbackDelay < cache.notifAckTTL (60s)
+//
+// At 8s (the previous value) the push fired before a live desktop — under
+// fan-out latency — could round-trip its ack, so every online user got a
+// redundant mobile push. 30s covers the keep-alive cycle plus surfacing slack.
+var ackFallbackDelay = 30 * time.Second
 
 // NotificationService dispatches notifications to interested users while
 // honoring per-user mute preferences. It is intentionally tiny and parallel
@@ -113,6 +129,7 @@ type NotificationService struct {
 	userState *UserStateService
 	push      MobilePushSender
 	ackStore  NotificationAckStore
+	nameCache NameCache
 
 	// shutdown is closed by Close() to stop in-flight deferred ack-fallback
 	// pushes promptly on server shutdown rather than letting them sleep out the
@@ -158,6 +175,19 @@ func (s *NotificationService) SetAckStore(store NotificationAckStore) {
 	s.ackStore = store
 }
 
+// NameCache caches the rarely-changing channel/author display names used in
+// notification titles, so the per-message notify path doesn't do two uncached
+// DynamoDB point reads (author profile + channel metadata) on every notifiable
+// message. A short TTL keeps a renamed channel/user fresh within minutes.
+type NameCache interface {
+	GetName(ctx context.Context, key string) (string, bool)
+	SetName(ctx context.Context, key, val string)
+}
+
+// SetNameCache wires the display-name cache. Optional — without it the notifier
+// reads names from the stores directly (the previous behaviour).
+func (s *NotificationService) SetNameCache(c NameCache) { s.nameCache = c }
+
 // memberSnapshot is everything NotifyForMessage and its helpers need to
 // reason about a parent's audience: the IDs of every recipient (author
 // excluded), which of them muted the channel, and each one's effective
@@ -176,6 +206,15 @@ type memberSnapshot struct {
 // memberIDs is a valid result (e.g., empty channel) and signals "nobody
 // to notify by default" — a direct @-mention can still reach a muted
 // member via the mentions path.
+// logAudienceLoadFailed reports an audience-resolution failure at ERROR. Losing
+// the audience loses the ENTIRE recipient set for a message — no desktop alert
+// AND no mobile fallback — which for an incident channel is a missed alert, so
+// it must be LOUD, never silent.
+func logAudienceLoadFailed(msg *model.Message, parentType string, err error) {
+	slog.Error("notification audience load failed — message will notify NOBODY",
+		"parentID", msg.ParentID, "parentType", parentType, "messageID", msg.ID, "error", err)
+}
+
 func (s *NotificationService) loadMemberSnapshot(ctx context.Context, msg *model.Message, parentType, parentName string) memberSnapshot {
 	// Webhook posts notify everyone, including the webhook's creator —
 	// the creator wired up the integration to be alerted, they didn't
@@ -188,6 +227,10 @@ func (s *NotificationService) loadMemberSnapshot(ctx context.Context, msg *model
 	case ParentChannel:
 		members, err := s.members.ListMembers(ctx, msg.ParentID)
 		if err != nil {
+			// (Unlike the per-member overrides/prefs below, which degrade
+			// gracefully — a lost override is a minor over-notification — losing
+			// the member list loses the whole audience.)
+			logAudienceLoadFailed(msg, parentType, err)
 			return memberSnapshot{}
 		}
 		ids := make([]string, 0, len(members))
@@ -217,6 +260,7 @@ func (s *NotificationService) loadMemberSnapshot(ctx context.Context, msg *model
 	case ParentConversation:
 		c, err := s.conv.GetConversation(ctx, msg.ParentID)
 		if err != nil || c == nil {
+			logAudienceLoadFailed(msg, parentType, err)
 			return memberSnapshot{}
 		}
 		ids := make([]string, 0, len(c.ParticipantIDs))
@@ -398,18 +442,15 @@ func (s *NotificationService) NotifyForMessage(ctx context.Context, msg *model.M
 			notif = mentionNotif
 		}
 
-		// Persist the unread-indicator so the sidebar lights up on a cold
-		// reload too: thread replies mark the thread; channel alerts mark the
-		// channel. We mark the channel for ANY desktop-alerted top-level
-		// message (not just mentions) — otherwise a per-channel "all
-		// messages"/keyword alert plays a sound but leaves no badge once the
-		// live message.new path is missed (sleep/reconnect/cache gap). The
-		// `mentioned ||` keeps the prior mention-marking even when desktop is
-		// off (e.g. a mobile-only mention).
+		// Thread replies persist a thread-notification marker so the Threads nav
+		// lights up on a cold reload — thread replies do NOT bump the parent's
+		// unread seq, so this marker is the only durable thread-unread signal.
+		// Channel/DM unread needs NO per-user marker here: the sidebar badge is
+		// driven by the durable server seq count (channel.MessageSeq −
+		// LastReadSeq), which already shows on a cold reload even when the live
+		// event was missed — so we avoid an O(recipients) write per message.
 		if isThreadReply {
 			s.markThreadNotification(ctx, uid, msg, parentType)
-		} else if parentType == ParentChannel && (mentioned || desktop) {
-			s.markChannelNotification(ctx, uid, msg.ParentID)
 		}
 
 		if desktop {
@@ -452,13 +493,21 @@ func eligibleAtLevel(level model.NotificationLevel, r recipientReasons) bool {
 		return true
 	}
 	if r.threadReply {
+		// An explicit keyword match reflects a standing "always alert me on this
+		// word" interest, so it fires even for a thread bystander (e.g. an
+		// incident keyword landing in a thread reply). Everything else stays
+		// quiet for non-participants so "all messages" doesn't spam every member
+		// with every thread reply.
+		if r.keyword {
+			return true
+		}
 		if !r.threadParticipant {
 			return false
 		}
 		if level == model.NotificationLevelAll {
 			return true
 		}
-		return r.threadReplies || r.keyword
+		return r.threadReplies
 	}
 	if level == model.NotificationLevelAll {
 		return true
@@ -493,7 +542,7 @@ func (s *NotificationService) sendMobilePush(ctx context.Context, recipientUserI
 	}
 	// Read the delay here (synchronously) rather than inside the goroutine so it
 	// is sequenced with the caller, not racing a test that swaps ackFallbackDelay.
-	go s.ackFallbackPush(context.WithoutCancel(ctx), recipientUserID, notif, ackFallbackDelay)
+	safe.Go(func() { s.ackFallbackPush(context.WithoutCancel(ctx), recipientUserID, notif, ackFallbackDelay) })
 }
 
 // ackFallbackPush waits `delay` for the desktop client to acknowledge the
@@ -550,15 +599,6 @@ func groupMentionLabel(mentions ParsedMentions) string {
 		return "@here"
 	default:
 		return ""
-	}
-}
-
-func (s *NotificationService) markChannelNotification(ctx context.Context, userID, channelID string) {
-	if s.userState == nil {
-		return
-	}
-	if err := s.userState.MarkChannelNotificationUnread(ctx, userID, channelID); err != nil {
-		slog.Warn("channel notification state failed", "channelID", channelID, "userID", userID, "error", err)
 	}
 }
 
@@ -734,15 +774,24 @@ func (s *NotificationService) parentDisplayName(ctx context.Context, parentID, p
 		if s.channels == nil {
 			return parentID
 		}
+		if s.nameCache != nil {
+			if v, ok := s.nameCache.GetName(ctx, "chan:"+parentID); ok {
+				return v
+			}
+		}
 		ch, err := s.channels.GetChannel(ctx, parentID)
 		if err != nil || ch == nil {
 			return parentID
 		}
 		// Slug is what URLs use, but Name reads more naturally in titles.
+		name := ch.Name
 		if ch.Slug != "" {
-			return ch.Slug
+			name = ch.Slug
 		}
-		return ch.Name
+		if s.nameCache != nil {
+			s.nameCache.SetName(ctx, "chan:"+parentID, name)
+		}
+		return name
 	}
 	return ""
 }
@@ -751,14 +800,23 @@ func (s *NotificationService) userDisplayName(ctx context.Context, userID string
 	if s.users == nil {
 		return userID
 	}
+	if s.nameCache != nil {
+		if v, ok := s.nameCache.GetName(ctx, "user:"+userID); ok {
+			return v
+		}
+	}
 	u, err := s.users.GetUser(ctx, userID)
 	if err != nil || u == nil {
 		return userID
 	}
-	if u.DisplayName == "" {
-		return u.Email
+	name := u.DisplayName
+	if name == "" {
+		name = u.Email
 	}
-	return u.DisplayName
+	if s.nameCache != nil {
+		s.nameCache.SetName(ctx, "user:"+userID, name)
+	}
+	return name
 }
 
 

@@ -104,6 +104,7 @@ const NAME_OVERRIDES = new Map([
   ['raising_hands', 'raised_hands'],
   ['thumbs_up', 'thumbsup'],
   ['thumbs_down', 'thumbsdown'],
+  ['check_mark_button', 'white_check_mark'],
 ]);
 
 function hashSlug(slug) {

@@ -663,6 +663,17 @@ func TestUnfurlService_ValidationAndScrapeFallbacks(t *testing.T) {
 	if isPublicIP(net.ParseIP("224.0.0.1")) {
 		t.Fatal("multicast IP must not be public")
 	}
+	// CGNAT (RFC 6598) and NAT64 (RFC 6052) can reach internal infra but aren't
+	// covered by net.IP's built-in predicates — they must be denied explicitly.
+	if isPublicIP(net.ParseIP("100.64.1.1")) {
+		t.Fatal("CGNAT IP must not be public")
+	}
+	if isPublicIP(net.ParseIP("64:ff9b::a00:1")) {
+		t.Fatal("NAT64-embedded IP must not be public")
+	}
+	if !isPublicIP(net.ParseIP("93.184.216.34")) {
+		t.Fatal("a genuine public IP must remain public")
+	}
 
 	linkPreview := scrapePreview(`<link rel="image_src" href="/cover.png">`, "https://example.com/post")
 	if linkPreview.Image != "https://example.com/cover.png" {

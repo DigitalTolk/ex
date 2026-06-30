@@ -170,6 +170,33 @@ describe('useWebSocket', () => {
     expect(onMessageNew).toHaveBeenCalledTimes(514);
   });
 
+  it('does not commit dedup/cursor when a handler throws, so a durable event survives for replay', () => {
+    const debugSpy = vi.spyOn(console, 'debug').mockImplementation(() => {});
+    // First delivery throws; the second (re-delivery of the same id) succeeds.
+    const onMessageNew = vi.fn().mockImplementationOnce(() => {
+      throw new Error('cache patch boom');
+    });
+    renderHook(() => useWebSocket({ onMessageNew, enabled: true }));
+
+    const ws = MockWebSocket.instances[0];
+    ws.simulateOpen();
+    const frame = JSON.stringify({
+      type: 'message.new',
+      id: 'evt-throw',
+      data: JSON.stringify({ id: 'x', body: 'hi' }),
+    });
+
+    // Handler throws → the event must NOT be recorded as seen.
+    ws.simulateMessage(frame);
+    expect(onMessageNew).toHaveBeenCalledTimes(1);
+
+    // Re-delivering the SAME id is treated as new (not swallowed by dedup), so
+    // the durable event is delivered rather than lost.
+    ws.simulateMessage(frame);
+    expect(onMessageNew).toHaveBeenCalledTimes(2);
+    debugSpy.mockRestore();
+  });
+
   it('handles data as object (not double-encoded string)', () => {
     const onMessageNew = vi.fn();
     renderHook(() =>
@@ -388,6 +415,35 @@ describe('useWebSocket', () => {
     expect(MockWebSocket.instances).toHaveLength(2);
     expect(MockWebSocket.instances[1].url).toContain('since=01ID0000000000000000000099');
     expect(MockWebSocket.instances[1].url).not.toContain('since=01ID0000000000000000000042');
+  });
+
+  // An EPHEMERAL frame (presence/typing/notification.new) is never replayed, so
+  // it must not advance the cursor — even with a higher ULID than a durable
+  // message — or a reconnect would skip replaying messages between them.
+  it('does not advance the reconnect cursor for an ephemeral frame', async () => {
+    renderHook(() => useWebSocket({ enabled: true }));
+
+    const ws = MockWebSocket.instances[0];
+    ws.simulateOpen();
+    ws.simulateMessage(JSON.stringify({
+      id: '01ID0000000000000000000099',
+      type: 'message.new',
+      data: JSON.stringify({ id: 'm1' }),
+    }));
+    ws.simulateMessage(JSON.stringify({
+      id: '01ID0000000000000000000150',
+      type: 'presence.changed',
+      data: JSON.stringify({ userID: 'u1' }),
+    }));
+    ws.simulateClose();
+
+    await act(async () => {
+      vi.advanceTimersByTime(1000);
+      await Promise.resolve();
+    });
+
+    expect(MockWebSocket.instances[1].url).toContain('since=01ID0000000000000000000099');
+    expect(MockWebSocket.instances[1].url).not.toContain('since=01ID0000000000000000000150');
   });
 
   // First connect (no prior cursor) must not send a since param —

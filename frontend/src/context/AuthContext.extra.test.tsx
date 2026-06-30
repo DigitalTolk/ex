@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { BrowserRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -147,6 +147,27 @@ describe('AuthContext - logout', () => {
 
     // Now logout
     await user.click(screen.getByText('Logout'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('authenticated')).toHaveTextContent('false');
+    });
+    expect(screen.getByTestId('user-name')).toHaveTextContent('none');
+  });
+
+  it('clears the session when a terminal auth-invalid event fires', async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<AuthTestConsumer />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('loading')).toHaveTextContent('false');
+    });
+    await user.click(screen.getByText('Set Auth'));
+    expect(screen.getByTestId('authenticated')).toHaveTextContent('true');
+
+    // A failed refresh mid-session broadcasts ex:auth-invalid from apiFetch.
+    act(() => {
+      window.dispatchEvent(new Event('ex:auth-invalid'));
+    });
 
     await waitFor(() => {
       expect(screen.getByTestId('authenticated')).toHaveTextContent('false');

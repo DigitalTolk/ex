@@ -150,7 +150,7 @@ function attachmentContextQuery(ctx?: AttachmentAccessContext): string {
 export function useAttachment(id: string | undefined, ctx?: AttachmentAccessContext) {
   return useQuery({
     queryKey: queryKeys.attachment(`${id ?? ''}:${ctx?.parentType ?? ''}:${ctx?.parentID ?? ''}:${ctx?.messageID ?? ''}`),
-    queryFn: () => apiFetch<Attachment>(`/api/v1/attachments/${id}${attachmentContextQuery(ctx)}`),
+    queryFn: async () => (await apiFetch<Attachment>(`/api/v1/attachments/${id}${attachmentContextQuery(ctx)}`)) ?? null,
     enabled: !!id,
     // Signed URLs can carry temporary AWS session tokens. Refetch on a short
     // cadence so long-lived tabs do not keep rendering expired-token URLs.

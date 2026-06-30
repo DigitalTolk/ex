@@ -1,4 +1,5 @@
 import { setServerVersion } from '@/hooks/useServerVersion';
+import { notifyAuthInvalid } from '@/lib/auth-events';
 
 let accessToken: string | null = null;
 let refreshPromise: Promise<string | null> | null = null;
@@ -119,6 +120,10 @@ export async function apiFetch<T>(
       return retry.json();
     }
     clearAccessToken();
+    // The refresh token is gone/revoked → the session is terminally invalid.
+    // Broadcast so AuthContext can drop the user and route to /login, instead
+    // of leaving a "logged-in" shell whose every query silently 401s.
+    notifyAuthInvalid();
     throw new ApiError(401, 'Unauthorized');
   }
 

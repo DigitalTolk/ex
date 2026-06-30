@@ -132,7 +132,7 @@ func (h *ConversationHandler) List(w http.ResponseWriter, r *http.Request) {
 
 	convs, err := h.convSvc.ListUserConversations(r.Context(), userID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "list_error", err.Error())
+		writeInternalError(w, r, "list_error", err)
 		return
 	}
 	if convs == nil { // coverage-ignore: ConversationService.ListUserConversations returns a make()-initialized (non-nil) slice; this nil-coercion is defensive against a future contract change.
@@ -154,11 +154,11 @@ func (h *ConversationHandler) MarkRead(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if _, err := h.convSvc.GetByID(r.Context(), userID, id); err != nil {
-		writeReadResourceError(w, err, "conversation")
+		writeReadResourceError(w, r, err, "conversation")
 		return
 	}
 	if err := h.convSvc.MarkConversationRead(r.Context(), userID, id); err != nil {
-		writeError(w, http.StatusInternalServerError, "read_error", err.Error())
+		writeInternalError(w, r, "read_error", err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -175,7 +175,7 @@ func (h *ConversationHandler) Get(w http.ResponseWriter, r *http.Request) {
 
 	conv, err := h.convSvc.GetByID(r.Context(), userID, id)
 	if err != nil {
-		writeReadResourceError(w, err, "conversation")
+		writeReadResourceError(w, r, err, "conversation")
 		return
 	}
 

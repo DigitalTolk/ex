@@ -29,6 +29,7 @@ import (
 	"github.com/DigitalTolk/ex/internal/events"
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/DigitalTolk/ex/internal/pubsub"
+	"github.com/DigitalTolk/ex/internal/safe"
 	"github.com/DigitalTolk/ex/internal/store"
 )
 
@@ -400,6 +401,7 @@ func (s *AttachmentService) scheduleDimensionsBackfill(id, s3Key string) {
 	s.inFlightBackfills[id] = struct{}{}
 	s.backfillMu.Unlock()
 	go func() {
+		defer safe.Recover()
 		defer func() {
 			s.backfillMu.Lock()
 			delete(s.inFlightBackfills, id)
@@ -441,6 +443,7 @@ func (s *AttachmentService) GetMany(ctx context.Context, ids []string) ([]*model
 		wg.Add(1)
 		go func(i int, id string) {
 			defer wg.Done()
+			defer safe.Recover()
 			if a, err := s.Get(ctx, id); err == nil {
 				results[i] = a
 			}
@@ -472,6 +475,7 @@ func (s *AttachmentService) GetManyForUser(ctx context.Context, userID string, i
 		wg.Add(1)
 		go func(i int, id string) {
 			defer wg.Done()
+			defer safe.Recover()
 			if a, err := s.GetForUser(ctx, userID, id, parentID, parentType, messageID); err == nil {
 				results[i] = a
 			}

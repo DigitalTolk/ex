@@ -407,6 +407,12 @@ func (s *AuthService) AcceptInvite(ctx context.Context, token, displayName, pass
 	return accessToken, refreshTokenRaw, user, nil
 }
 
+// dummyBcryptHash is a precomputed bcrypt hash used only to spend the same
+// CPU time as a real password check when an account doesn't exist, closing the
+// user-enumeration timing side-channel in GuestLogin. The password it hashes is
+// irrelevant — it never matches a user-supplied one.
+var dummyBcryptHash = []byte("$2a$10$3txrxENsY7NdXGi1zr/4ze99AUZIY36/D5qVX1bFyzncrepNRmbLy")
+
 // GuestLogin authenticates a guest user via email and password (bcrypt).
 func (s *AuthService) GuestLogin(ctx context.Context, email, password string) (accessToken, refreshTokenRaw string, user *model.User, err error) {
 	email, err = normalizeEmailAddress(email)
@@ -416,13 +422,22 @@ func (s *AuthService) GuestLogin(ctx context.Context, email, password string) (a
 	user, err = s.users.GetUserByEmail(ctx, email)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
+			// Run a bcrypt comparison against a dummy hash so a non-existent
+			// account takes the same wall time as a real one — otherwise the
+			// early return leaks account existence via a timing side-channel.
+			_ = bcrypt.CompareHashAndPassword(dummyBcryptHash, []byte(password))
 			return "", "", nil, errors.New("auth: invalid credentials")
 		}
 		return "", "", nil, fmt.Errorf("auth: get user by email: %w", err)
 	}
 
 	if user.SystemRole != model.SystemRoleGuest {
-		return "", "", nil, errors.New("auth: not a guest account")
+		// A real (e.g. SSO) account exists at this email. Spend the same dummy
+		// bcrypt the not-found path does and return the SAME generic message, so
+		// an unauthenticated caller can't enumerate non-guest accounts by timing
+		// OR by error text.
+		_ = bcrypt.CompareHashAndPassword(dummyBcryptHash, []byte(password))
+		return "", "", nil, errors.New("auth: invalid credentials")
 	}
 
 	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)); err != nil {

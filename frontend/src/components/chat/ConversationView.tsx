@@ -46,6 +46,7 @@ import { useAttachmentsBatch } from '@/hooks/useAttachments';
 import { firstName } from '@/lib/format';
 import { apiFetch } from '@/lib/api';
 import { queryKeys } from '@/lib/query-keys';
+import { clearConversationUnreadInCache } from '@/lib/unread-cache';
 import type { Conversation, Message } from '@/types';
 import type { UserMapEntry } from './MessageList';
 import type { DraftAttachment } from './AttachmentChip';
@@ -89,7 +90,7 @@ export function ConversationView() {
   const queryClient = useQueryClient();
   const [searchParams] = useSearchParams();
   const { user } = useAuth();
-  const { clearConversationUnread, setActiveConversation, setActiveThread } = useUnread();
+  const { setActiveConversation, setActiveThread } = useUnread();
   const { online } = usePresence();
   const quickReactions = useFrequentEmojis(3);
   const { setActiveParent } = useNotifications();
@@ -209,17 +210,21 @@ export function ConversationView() {
 
   useEffect(() => {
     if (!id) return;
-    clearConversationUnread(id);
+    // Drop the badge instantly in the list cache, then persist the read so it
+    // stays cleared on a reload (the refetch confirms the server count is 0).
+    clearConversationUnreadInCache(queryClient, id);
     setActiveConversation(id);
     setActiveParent(id);
-    void apiFetch<void>(`/api/v1/conversations/${id}/read`, { method: 'PUT' }).finally(() => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.userConversations() });
-    });
+    void apiFetch<void>(`/api/v1/conversations/${id}/read`, { method: 'PUT' })
+      .catch(() => undefined)
+      .finally(() => {
+        queryClient.invalidateQueries({ queryKey: queryKeys.userConversations() });
+      });
     return () => {
       setActiveConversation(null);
       setActiveParent(null);
     };
-  }, [id, clearConversationUnread, setActiveConversation, setActiveParent, queryClient]);
+  }, [id, setActiveConversation, setActiveParent, queryClient]);
 
   const [threadRootID, setThreadRootID] = useState<string | null>(null);
   const inputRef = useRef<MessageInputHandle>(null);

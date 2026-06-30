@@ -38,35 +38,32 @@ vi.mock('@/context/AuthContext', () => ({
   }),
 }));
 
-const markChannelUnread = vi.fn();
-const markChannelNotificationUnread = vi.fn();
-const markConversationUnread = vi.fn();
 const markThreadNotificationUnread = vi.fn();
-const clearConversationUnread = vi.fn();
-const resetSessionUnread = vi.fn();
 const isActiveChannel = vi.fn(() => false);
 const isActiveConversation = vi.fn(() => false);
 const isActiveThread = vi.fn(() => false);
 const unhideConversation = vi.fn();
 
+// The unread badge is now patched straight into the list cache by these helpers
+// (single source). Mock them so the handler tests assert the intent directly.
+const { bumpChannelUnread, bumpConversationUnread, clearConversationUnreadInCache } = vi.hoisted(() => ({
+  bumpChannelUnread: vi.fn(),
+  bumpConversationUnread: vi.fn(),
+  clearConversationUnreadInCache: vi.fn(),
+}));
+vi.mock('@/lib/unread-cache', () => ({
+  bumpChannelUnread,
+  bumpConversationUnread,
+  clearConversationUnreadInCache,
+}));
+
 vi.mock('@/context/UnreadContext', () => ({
   useUnread: () => ({
-    markChannelUnread,
-    markChannelNotificationUnread,
-    markConversationUnread,
     markThreadNotificationUnread,
     unhideConversation,
-    unreadChannels: new Set(),
-    unreadChannelNotifications: new Set(),
-    unreadConversations: new Set(),
     unreadThreadNotifications: new Set(),
-    channelUnreadCounts: new Map(),
-    conversationUnreadCounts: new Map(),
     hiddenConversations: new Set(),
     hideConversation: vi.fn(),
-    clearChannelUnread: vi.fn(),
-    resetSessionUnread,
-    clearConversationUnread,
     setActiveChannel: vi.fn(),
     setActiveConversation: vi.fn(),
     isActiveChannel,
@@ -167,14 +164,12 @@ describe('ChatPage WebSocket handlers', () => {
       systemRole: 'member',
       status: 'active',
     };
-    markChannelUnread.mockReset();
-    markChannelNotificationUnread.mockReset();
-    markConversationUnread.mockReset();
+    bumpChannelUnread.mockReset();
+    bumpConversationUnread.mockReset();
+    clearConversationUnreadInCache.mockReset();
     markThreadNotificationUnread.mockReset();
-    clearConversationUnread.mockReset();
     isActiveChannel.mockReset();
     isActiveChannel.mockReturnValue(false);
-    resetSessionUnread.mockReset();
     isActiveConversation.mockReset();
     isActiveConversation.mockReturnValue(false);
     isActiveThread.mockReset();
@@ -212,11 +207,11 @@ describe('ChatPage WebSocket handlers', () => {
     const handler = capturedOptions.onMessageNew as (d: unknown) => void;
     // From self — should skip the unread marking
     handler(msg({ authorID: 'u-me' }));
-    expect(markChannelUnread).not.toHaveBeenCalled();
+    expect(bumpChannelUnread).not.toHaveBeenCalled();
     // From someone else
     handler(msg({ authorID: 'u-other' }));
-    expect(markChannelUnread).toHaveBeenCalledWith('ch-1');
-    expect(markConversationUnread).not.toHaveBeenCalled();
+    expect(bumpChannelUnread).toHaveBeenCalledWith(expect.anything(), 'ch-1');
+    expect(bumpConversationUnread).not.toHaveBeenCalled();
     expect(unhideConversation).not.toHaveBeenCalled();
   });
 
@@ -227,7 +222,7 @@ describe('ChatPage WebSocket handlers', () => {
     });
     const handler = capturedOptions.onMessageNew as (d: unknown) => void;
     handler(msg({ authorID: 'u-other', parentType: 'channel' }));
-    expect(markChannelUnread).not.toHaveBeenCalled();
+    expect(bumpChannelUnread).not.toHaveBeenCalled();
     expect(vi.mocked(apiFetch)).toHaveBeenCalledWith('/api/v1/channels/ch-1/read', { method: 'PUT' });
   });
 
@@ -237,7 +232,7 @@ describe('ChatPage WebSocket handlers', () => {
     });
     const handler = capturedOptions.onMessageNew as (d: unknown) => void;
     handler(msg({ authorID: 'u-other', parentMessageID: 'root-1' }));
-    expect(markChannelUnread).not.toHaveBeenCalled();
+    expect(bumpChannelUnread).not.toHaveBeenCalled();
   });
 
   it('onMessageNew does NOT mark the channel unread for a system message (e.g. a join)', () => {
@@ -246,7 +241,7 @@ describe('ChatPage WebSocket handlers', () => {
     });
     const handler = capturedOptions.onMessageNew as (d: unknown) => void;
     handler(msg({ authorID: 'u-other', system: true, body: 'joined the channel' }));
-    expect(markChannelUnread).not.toHaveBeenCalled();
+    expect(bumpChannelUnread).not.toHaveBeenCalled();
   });
 
   it('onMessageNew uses payload parentType when channel cache is empty', () => {
@@ -255,8 +250,8 @@ describe('ChatPage WebSocket handlers', () => {
 
     handler(msg({ parentID: 'ch-not-loaded', parentType: 'channel', authorID: 'u-other' }));
 
-    expect(markChannelUnread).toHaveBeenCalledWith('ch-not-loaded');
-    expect(markConversationUnread).not.toHaveBeenCalled();
+    expect(bumpChannelUnread).toHaveBeenCalledWith(expect.anything(), 'ch-not-loaded');
+    expect(bumpConversationUnread).not.toHaveBeenCalled();
     expect(unhideConversation).not.toHaveBeenCalled();
   });
 
@@ -266,8 +261,8 @@ describe('ChatPage WebSocket handlers', () => {
 
     handler(msg({ parentID: 'ch-not-loaded', authorID: 'u-other' }));
 
-    expect(markChannelUnread).not.toHaveBeenCalled();
-    expect(markConversationUnread).not.toHaveBeenCalled();
+    expect(bumpChannelUnread).not.toHaveBeenCalled();
+    expect(bumpConversationUnread).not.toHaveBeenCalled();
     expect(unhideConversation).not.toHaveBeenCalled();
   });
 
@@ -280,9 +275,9 @@ describe('ChatPage WebSocket handlers', () => {
 
     handler(msg({ parentID: 'conv-1', authorID: 'u-other' }));
 
-    expect(markChannelUnread).not.toHaveBeenCalled();
-    expect(markConversationUnread).toHaveBeenCalledTimes(1);
-    expect(markConversationUnread).toHaveBeenCalledWith('conv-1');
+    expect(bumpChannelUnread).not.toHaveBeenCalled();
+    expect(bumpConversationUnread).toHaveBeenCalledTimes(1);
+    expect(bumpConversationUnread).toHaveBeenCalledWith(expect.anything(), 'conv-1');
     expect(unhideConversation).toHaveBeenCalledWith('conv-1');
   });
 
@@ -295,15 +290,15 @@ describe('ChatPage WebSocket handlers', () => {
 
     handler(msg({ parentID: 'conv-1', parentType: 'conversation', authorID: 'u-other' }));
 
-    expect(markConversationUnread).not.toHaveBeenCalled();
-    expect(clearConversationUnread).toHaveBeenCalledWith('conv-1');
+    expect(bumpConversationUnread).not.toHaveBeenCalled();
+    expect(clearConversationUnreadInCache).toHaveBeenCalledWith(expect.anything(), 'conv-1');
     expect(apiFetch).toHaveBeenCalledWith('/api/v1/conversations/conv-1/read', { method: 'PUT' });
   });
 
   it('onMessageNew without a valid Message payload is a no-op', () => {
     renderAt('/');
     (capturedOptions.onMessageNew as (d: unknown) => void)({});
-    expect(markChannelUnread).not.toHaveBeenCalled();
+    expect(bumpChannelUnread).not.toHaveBeenCalled();
   });
 
   it('onMessageNew with parentMessageID invalidates thread + userThreads (so the /threads count updates live)', () => {
@@ -480,9 +475,8 @@ describe('ChatPage WebSocket handlers', () => {
     expect(calls).toContainEqual(['userThreads']);
     expect(calls).toContainEqual(['userState']);
     expect(calls).toContainEqual(['channelMembers']);
-    // Live session deltas are dropped so the refetched server counts (which
-    // already include them) aren't double-added.
-    expect(resetSessionUnread).toHaveBeenCalled();
+    // The refetched userChannels/userConversations carry authoritative server
+    // unread counts — the single source — so there's nothing else to reset.
   });
 
   it('onMessageEdited / onMessageDeleted gracefully ignore missing parentID and invalidate when present', () => {
@@ -723,11 +717,11 @@ describe('ChatPage WebSocket handlers', () => {
     expect(dispatchNotification).toHaveBeenCalledTimes(1);
   });
 
-  it('onNotification marks the channel unread for BOTH messages and mentions', () => {
-    // The backend is the single source of truth for whether to alert. If a
-    // top-level channel notification.new arrived, the sidebar must light up
-    // regardless of kind — re-gating on kind === 'mention' here let per-channel
-    // "all messages"/keyword alerts play a sound with no badge.
+  it('onNotification for a top-level channel alerts but does not touch the unread badge', () => {
+    // The sidebar badge rides the separate message.new event (which patches the
+    // list cache and replays from the durable inbox on reconnect). A top-level
+    // channel notification.new is just the alert — it must NOT also mark the
+    // unread cache, regardless of kind.
     renderAt('/');
     const payload = {
       title: 't',
@@ -739,11 +733,9 @@ describe('ChatPage WebSocket handlers', () => {
     };
 
     (capturedOptions.onNotification as (d: unknown) => void)({ ...payload, kind: 'message' });
-    expect(markChannelNotificationUnread).toHaveBeenCalledWith('ch-1');
-
-    markChannelNotificationUnread.mockClear();
     (capturedOptions.onNotification as (d: unknown) => void)({ ...payload, kind: 'mention' });
-    expect(markChannelNotificationUnread).toHaveBeenCalledWith('ch-1');
+    expect(bumpChannelUnread).not.toHaveBeenCalled();
+    expect(dispatchNotification).toHaveBeenCalledTimes(2);
   });
 
   it('onNotification counts thread replies separately from their DM parent', () => {
@@ -779,7 +771,7 @@ describe('ChatPage WebSocket handlers', () => {
     });
 
     expect(markThreadNotificationUnread).toHaveBeenCalledWith('root-1');
-    expect(markChannelNotificationUnread).not.toHaveBeenCalled();
+    expect(bumpChannelUnread).not.toHaveBeenCalled();
   });
 
   it('updates current user id on mount and resets to null on unmount', () => {

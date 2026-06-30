@@ -38,6 +38,16 @@ function draftScopeKey(scope: DraftScope): string {
   return `${scope.parentType}:${scope.parentID ?? ''}:${scope.parentMessageID ?? ''}`;
 }
 
+// resetDraftSessionState clears the process-wide draft bookkeeping (sent-scope
+// suppression + per-scope mutation versions). Called on logout so a different
+// user signing in within the same document can't inherit the prior session's
+// draft state, and so the maps don't grow unbounded across long sessions.
+export function resetDraftSessionState() {
+  suppressedSentDraftScopes.clear();
+  draftMutationVersions.clear();
+  ignoreDraftEventsUntil = 0;
+}
+
 // isScopeSuppressed reports whether a scope was just sent (so any draft for it
 // should be cleared, not surfaced). Restored when the user types new content.
 // A MessageDraft is a valid DraftScope (shares parentID/parentType/parentMessageID).
