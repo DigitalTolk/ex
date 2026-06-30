@@ -300,7 +300,10 @@ func TestIncomingWebhookService_DirectMessageOverride(t *testing.T) {
 		t.Fatalf("Execute DM override: %v", err)
 	}
 	msg := onlyStoredMessage(t, messages)
-	if msg.ParentID != "creator-1__bob-1" || msg.AuthorID != "creator-1" {
+	// The DM is still routed between the creator and the target (wh.CreatedBy
+	// drives GetOrCreateDM), but the message is authored by the "webhook"
+	// sentinel — not the creator — so it's never treated as the creator's own.
+	if msg.ParentID != "creator-1__bob-1" || msg.AuthorID != "webhook" {
 		t.Fatalf("DM webhook message = %#v", msg)
 	}
 }

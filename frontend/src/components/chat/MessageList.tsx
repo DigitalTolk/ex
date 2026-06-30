@@ -3,7 +3,7 @@ import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso';
 import { Skeleton } from '@/components/ui/skeleton';
 import { MessageItem } from './MessageItem';
 import { formatDayHeading } from '@/lib/format';
-import { deriveThreadMeta } from '@/lib/message-users';
+import { deriveThreadMeta, isOwnMessage } from '@/lib/message-users';
 import type { Message, UserStatus } from '@/types';
 import { buildMessageListRows, nextVirtuosoState } from './MessageListRows';
 import { shouldAutoStickMessageList } from './message-list-autostick';
@@ -558,7 +558,7 @@ const MessageRow = memo(function MessageRow({
         authorAvatarURL={u?.avatarURL}
         authorUserStatus={u?.userStatus}
         authorOnline={u?.online}
-        isOwn={msg.authorID === currentUserId}
+        isOwn={isOwnMessage(msg, currentUserId)}
         channelId={channelId}
         channelSlug={channelSlug}
         conversationId={conversationId}

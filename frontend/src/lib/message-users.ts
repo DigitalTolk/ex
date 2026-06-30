@@ -1,5 +1,21 @@
 import type { Message } from '@/types';
 
+// isOwnMessage reports whether `msg` is the viewer's OWN human post — i.e.
+// authored by `userId` and not a webhook/bot message. Incoming-webhook messages
+// can carry their creator's userID as authorID (legacy rows persisted before
+// the server switched to the "webhook" sentinel author), but the bot posted
+// them, not the human who configured the integration. They must never be
+// treated as the viewer's own: no edit/delete affordance, no unread
+// self-suppression, no "edit my last message" shortcut. Centralising the rule
+// here keeps every call site (message rows, thread/pinned panels, the unread
+// bump, the ArrowUp shortcut) consistent.
+export function isOwnMessage(
+  msg: Pick<Message, 'authorID' | 'webhookUsername'>,
+  userId: string | undefined,
+): boolean {
+  return !!userId && msg.authorID === userId && !msg.webhookUsername;
+}
+
 // collectMessageUserIDs walks a sequence of messages and returns the set of
 // every user ID referenced by them: authors, recent thread-reply authors,
 // and reactors. Used by ChannelView and ConversationView to size a single
@@ -40,7 +56,7 @@ export function findLastOwnMessageId(
   if (!currentUserId || !pages) return undefined;
   for (const page of pages) {
     for (const m of page.items) {
-      if (m.authorID !== currentUserId) continue;
+      if (!isOwnMessage(m, currentUserId)) continue;
       if (m.deleted || m.system) continue;
       if (scope === 'main') {
         if (m.parentMessageID) continue;

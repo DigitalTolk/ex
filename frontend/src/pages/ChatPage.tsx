@@ -12,6 +12,7 @@ import { setServerVersion } from '@/hooks/useServerVersion';
 import { sendWS } from '@/lib/ws-sender';
 import { localTimeZone } from '@/lib/user-time';
 import { slugify } from '@/lib/format';
+import { isOwnMessage } from '@/lib/message-users';
 import {
   appendMessageToCache,
   invalidateThreadBothScopes,
@@ -131,7 +132,13 @@ export default function ChatPage() {
       const isChannelParent = msg.parentType === 'channel' || (!msg.parentType && isCachedChannel);
       const isConversationParent =
         msg.parentType === 'conversation' || (!msg.parentType && !isCachedChannel && isCachedConversation);
-      if (authorID !== user?.id) {
+      // A webhook message carries its creator's userID as authorID, but it is
+      // not "your own message": the bot posted it, not you. Mirror the backend
+      // notification path (which excludes the author only for non-webhook
+      // messages) so a webhook YOU created still bumps your unread indicator —
+      // otherwise it would fire a desktop alert but leave the badge unset.
+      const isOwnAuthor = isOwnMessage(msg, user?.id);
+      if (!isOwnAuthor) {
         if (isChannelParent) {
           // A reply posted into a thread, or a system event (someone joining
           // /leaving), isn't "new channel activity" — only a top-level human
@@ -165,7 +172,7 @@ export default function ChatPage() {
         }
       }
       if (isConversationParent) {
-        if (authorID === user?.id || !isActiveConversation(parentID)) {
+        if (isOwnAuthor || !isActiveConversation(parentID)) {
           unhideConversation(parentID);
         }
       }

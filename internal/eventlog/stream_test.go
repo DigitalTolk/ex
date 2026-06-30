@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/redis/go-redis/v9"
@@ -305,5 +306,102 @@ func TestStream_ReplaySkipsEntriesWithoutID(t *testing.T) {
 	}
 	if len(res.Entries) != 1 || res.Entries[0].ID != "01ID0000000000000000000002" {
 		t.Errorf("expected only the well-formed entry to come back, got %+v", res.Entries)
+	}
+}
+
+// Append refreshes the per-user inbox stream's idle TTL on every write, so an
+// actively-connected user never lets the replay buffer lapse.
+func TestStream_AppendSetsTTL(t *testing.T) {
+	s, _, client := newTestStream(t, 0)
+	appendEvent(t, s, "u1", "01ID0000000000000000000001")
+	ttl, err := client.TTL(context.Background(), "evt:u1").Result()
+	if err != nil {
+		t.Fatalf("TTL: %v", err)
+	}
+	if ttl <= 0 || ttl > streamTTL {
+		t.Errorf("Append TTL = %v, want (0, %v]", ttl, streamTTL)
+	}
+}
+
+// AppendMany sets the idle TTL on every recipient's stream — including a user
+// who only ever receives (never authors) events.
+func TestStream_AppendManySetsTTL(t *testing.T) {
+	s, _, client := newTestStream(t, 0)
+	payload, _ := json.Marshal(map[string]any{"id": "01ID0000000000000000000005", "type": "message.new"})
+	if err := s.AppendMany(context.Background(), []string{"u1", "u2"}, "01ID0000000000000000000005", payload); err != nil {
+		t.Fatalf("AppendMany: %v", err)
+	}
+	for _, uid := range []string{"u1", "u2"} {
+		ttl, err := client.TTL(context.Background(), "evt:"+uid).Result()
+		if err != nil {
+			t.Fatalf("TTL %s: %v", uid, err)
+		}
+		if ttl <= 0 || ttl > streamTTL {
+			t.Errorf("%s TTL = %v, want (0, %v]", uid, ttl, streamTTL)
+		}
+	}
+}
+
+// BackfillTTL applies the idle TTL to legacy streams that have none, leaves
+// already-expiring streams alone, and (in dry-run) reports without writing.
+func TestStream_BackfillTTL(t *testing.T) {
+	s, _, client := newTestStream(t, 0)
+	ctx := context.Background()
+	// A legacy stream with no TTL (raw XADD, bypassing Append's expire).
+	if err := client.XAdd(ctx, &redis.XAddArgs{Stream: "evt:legacy", ID: "*", Values: map[string]any{"e": "{}"}}).Err(); err != nil {
+		t.Fatalf("seed legacy: %v", err)
+	}
+	// A stream that already has a TTL (via Append).
+	appendEvent(t, s, "fresh", "01ID0000000000000000000007")
+
+	// Dry-run: counts the missing-TTL stream but writes nothing.
+	res, err := s.BackfillTTL(ctx, false)
+	if err != nil {
+		t.Fatalf("BackfillTTL dry-run: %v", err)
+	}
+	if res.Scanned != 2 || res.Missing != 1 || res.Updated != 0 {
+		t.Errorf("dry-run result = %+v, want scanned=2 missing=1 updated=0", res)
+	}
+	if ttl, _ := client.TTL(ctx, "evt:legacy").Result(); ttl != -1*time.Nanosecond {
+		t.Errorf("dry-run must not set a TTL, got %v", ttl)
+	}
+
+	// Apply: sets the TTL on the legacy stream only.
+	res, err = s.BackfillTTL(ctx, true)
+	if err != nil {
+		t.Fatalf("BackfillTTL apply: %v", err)
+	}
+	if res.Missing != 1 || res.Updated != 1 {
+		t.Errorf("apply result = %+v, want missing=1 updated=1", res)
+	}
+	if ttl, _ := client.TTL(ctx, "evt:legacy").Result(); ttl <= 0 || ttl > streamTTL {
+		t.Errorf("legacy TTL after apply = %v, want (0, %v]", ttl, streamTTL)
+	}
+
+	// Re-run is idempotent: nothing left without a TTL.
+	res, err = s.BackfillTTL(ctx, true)
+	if err != nil {
+		t.Fatalf("BackfillTTL rerun: %v", err)
+	}
+	if res.Missing != 0 || res.Updated != 0 {
+		t.Errorf("rerun result = %+v, want missing=0 updated=0", res)
+	}
+}
+
+// A nil Stream (durability disabled) no-ops rather than panicking.
+func TestStream_BackfillTTLNil(t *testing.T) {
+	var s *Stream
+	res, err := s.BackfillTTL(context.Background(), true)
+	if err != nil || res.Scanned != 0 {
+		t.Errorf("nil BackfillTTL = (%+v, %v), want (empty, nil)", res, err)
+	}
+}
+
+// A transport error during the SCAN surfaces (closed client).
+func TestStream_BackfillTTLScanError(t *testing.T) {
+	deadStream, _, deadClient := newTestStream(t, 0)
+	_ = deadClient.Close()
+	if _, err := deadStream.BackfillTTL(context.Background(), true); err == nil {
+		t.Error("BackfillTTL on a closed client should return the scan error")
 	}
 }

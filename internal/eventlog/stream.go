@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/redis/go-redis/v9"
 )
@@ -29,6 +30,17 @@ import (
 // an hour of replay for a heavy user without unbounded memory growth.
 // Reached by trimming on each XADD with MAXLEN ~ approximate.
 const DefaultMaxLen = 2000
+
+// streamTTL is the idle expiry on each per-user inbox stream, refreshed on
+// every append. MAXLEN bounds a stream's *length*, but without an expiry an
+// idle or departed user's stream would pin ~2000 event blobs in RAM forever —
+// the keys are never otherwise deleted. 24h means an actively-connected user
+// (who appends, and so refreshes, well within a day) always keeps a warm replay
+// buffer, while anyone away longer than a day simply gets the already-supported
+// `Exhausted` → full-refetch path on return (e.g. Monday back in the office).
+// Replay is purely additive, so losing the buffer is never a correctness issue,
+// only a one-off refetch. See package doc.
+const streamTTL = 24 * time.Hour
 
 // streamKey is the per-user inbox key.
 func streamKey(userID string) string {
@@ -68,7 +80,10 @@ func (s *Stream) Append(ctx context.Context, userID string, eventID string, payl
 	if eventID == "" {
 		return errors.New("eventlog: empty eventID")
 	}
-	cmd := s.client.XAdd(ctx, &redis.XAddArgs{
+	// XADD + EXPIRE in one round-trip so the stream's idle TTL is refreshed on
+	// every append (an active user never lets it lapse).
+	pipe := s.client.Pipeline()
+	pipe.XAdd(ctx, &redis.XAddArgs{
 		Stream: streamKey(userID),
 		MaxLen: s.maxLen,
 		Approx: true,
@@ -79,7 +94,8 @@ func (s *Stream) Append(ctx context.Context, userID string, eventID string, payl
 			payloadField: payload,
 		},
 	})
-	if err := cmd.Err(); err != nil {
+	pipe.Expire(ctx, streamKey(userID), streamTTL)
+	if _, err := pipe.Exec(ctx); err != nil {
 		return fmt.Errorf("eventlog: xadd: %w", err)
 	}
 	return nil
@@ -111,6 +127,9 @@ func (s *Stream) AppendMany(ctx context.Context, userIDs []string, eventID strin
 			ID:     "*",
 			Values: map[string]any{payloadField: payload},
 		})
+		// Refresh the idle TTL on every recipient's stream too, so a user who
+		// only ever receives (never authors) still keeps a live buffer.
+		pipe.Expire(ctx, streamKey(uid), streamTTL)
 		queued++
 	}
 	if queued == 0 {
@@ -120,6 +139,58 @@ func (s *Stream) AppendMany(ctx context.Context, userIDs []string, eventID strin
 		return fmt.Errorf("eventlog: pipeline xadd: %w", err)
 	}
 	return nil
+}
+
+// BackfillResult reports what BackfillTTL saw and did.
+type BackfillResult struct {
+	Scanned int // inbox streams visited
+	Missing int // streams that had no expiry set
+	Updated int // streams an expiry was actually applied to (0 in dry-run)
+}
+
+// BackfillTTL one-shot applies the idle TTL to inbox streams created before the
+// TTL existed. New appends self-heal (each refreshes the expiry), but a stream
+// belonging to a user who never receives another event would otherwise keep no
+// expiry forever — exactly the leaked memory we want to reclaim. SCANs `evt:*`,
+// and for each key with no TTL (-1) sets streamTTL when apply is true. Keys that
+// already have an expiry, or vanish mid-scan, are left alone, so this is
+// idempotent and safe to re-run.
+func (s *Stream) BackfillTTL(ctx context.Context, apply bool) (BackfillResult, error) {
+	var res BackfillResult
+	if s == nil || s.client == nil {
+		return res, nil
+	}
+	var cursor uint64
+	for {
+		keys, next, err := s.client.Scan(ctx, cursor, streamKey("*"), 200).Result()
+		if err != nil {
+			return res, fmt.Errorf("eventlog: backfill scan: %w", err)
+		}
+		for _, key := range keys {
+			res.Scanned++
+			ttl, err := s.client.TTL(ctx, key).Result()
+			if err != nil { // coverage-ignore: TTL on a key SCAN just returned only fails on a Redis transport error, which the closed-client SCAN above already exercises
+				return res, fmt.Errorf("eventlog: backfill ttl %q: %w", key, err)
+			}
+			// -1 = key exists with no expiry; -2 = key gone (raced); >0 = set.
+			if ttl != -1*time.Nanosecond {
+				continue
+			}
+			res.Missing++
+			if !apply {
+				continue
+			}
+			if err := s.client.Expire(ctx, key, streamTTL).Err(); err != nil { // coverage-ignore: same transport-only failure as the SCAN/TTL above
+				return res, fmt.Errorf("eventlog: backfill expire %q: %w", key, err)
+			}
+			res.Updated++
+		}
+		cursor = next
+		if cursor == 0 {
+			break
+		}
+	}
+	return res, nil
 }
 
 // Entry is a replayed event with its embedded ID for the cursor.

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { collectMessageUserIDs, deriveThreadMeta, findLastOwnMessageId } from '@/lib/message-users';
+import { collectMessageUserIDs, deriveThreadMeta, findLastOwnMessageId, isOwnMessage } from '@/lib/message-users';
 import type { Message } from '@/types';
 
 function msg(overrides: Partial<Message>): Message {
@@ -171,5 +171,30 @@ describe('findLastOwnMessageId', () => {
       ] },
     ];
     expect(findLastOwnMessageId(pages, 'u-me', 'root-1')).toBe('r-mine');
+  });
+
+  it('does not treat a legacy webhook message authored by the user as their own', () => {
+    // Webhook rows persisted before the "webhook" sentinel carry the creator's
+    // userID — must NOT be ArrowUp-editable as the creator's own message.
+    const pages = [{ items: [msg({ id: 'wh', authorID: 'u-me', webhookUsername: 'bot' })] }];
+    expect(findLastOwnMessageId(pages, 'u-me', 'main')).toBeUndefined();
+  });
+});
+
+describe('isOwnMessage', () => {
+  it('is true for the viewer’s own human message', () => {
+    expect(isOwnMessage(msg({ authorID: 'u-me' }), 'u-me')).toBe(true);
+  });
+
+  it('is false for someone else’s message', () => {
+    expect(isOwnMessage(msg({ authorID: 'u-other' }), 'u-me')).toBe(false);
+  });
+
+  it('is false for a webhook message even when authored by the viewer (the bot posted it)', () => {
+    expect(isOwnMessage(msg({ authorID: 'u-me', webhookUsername: 'alertbot' }), 'u-me')).toBe(false);
+  });
+
+  it('is false when there is no current user', () => {
+    expect(isOwnMessage(msg({ authorID: 'u-me' }), undefined)).toBe(false);
   });
 });

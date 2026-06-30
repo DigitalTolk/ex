@@ -17,7 +17,7 @@ import { useIsMobile } from '@/hooks/useIsMobile';
 import { useEditMessage, useSendMessage, type SendMessageInput } from '@/hooks/useMessages';
 import { markThreadSeen, useFollowThread, useThreadMessages, useUnfollowThread, useUserThreads } from '@/hooks/useThreads';
 import { useUsersBatch } from '@/hooks/useUsersBatch';
-import { collectMessageUserIDs } from '@/lib/message-users';
+import { collectMessageUserIDs, isOwnMessage } from '@/lib/message-users';
 import {
   restoreDraftScope,
   restoreDraftScopeForContent,
@@ -502,7 +502,7 @@ export function ThreadPanel({
                   authorName={u?.displayName ?? 'Unknown'}
                   authorAvatarURL={u?.avatarURL}
                   authorOnline={u?.online}
-                  isOwn={msg.authorID === currentUserId}
+                  isOwn={isOwnMessage(msg, currentUserId)}
                   channelId={channelId}
                   conversationId={conversationId}
                   currentUserId={currentUserId}
