@@ -39,7 +39,7 @@
     "codemirror": "^6.0.2",
     "hast-util-to-jsx-runtime": "^2.3.6",
     "lowlight": "^3.3.0",
-    "lucide-react": "^1.22.0",
+    "lucide-react": "^1.23.0",
     "motion": "^12.42.2",
     "next-themes": "^0.4.6",
     "react": "^19.2.7",
