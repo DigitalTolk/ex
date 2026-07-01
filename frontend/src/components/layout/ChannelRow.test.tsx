@@ -1,9 +1,12 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, act } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ChannelRow } from './ChannelRow';
 import type { UserChannel } from '@/types';
+
+// Force the mobile branch so the long-press → controlled-menu path is exercised.
+vi.mock('@/hooks/useIsMobile', () => ({ useIsMobile: () => true }));
 
 const channel: UserChannel = {
   channelID: 'ch-1',
@@ -44,5 +47,26 @@ describe('ChannelRow', () => {
 
     fireEvent.click(screen.getByText('general').closest('a')!);
     expect(onClose).toHaveBeenCalled();
+  });
+
+  it('opens the menu on a mobile long-press and swallows the follow-up nav click', () => {
+    vi.useFakeTimers();
+    try {
+      const onClose = vi.fn();
+      renderRow({ onClose });
+      const row = screen.getByTestId('channel-row-ch-1');
+      fireEvent.pointerDown(row, { pointerType: 'touch' });
+      // Hold past the long-press delay → onLongPress opens the menu.
+      act(() => {
+        vi.advanceTimersByTime(500);
+      });
+      expect(screen.getByText('Move to Channels')).toBeInTheDocument();
+      // The click a touch release fires right after must not navigate.
+      fireEvent.pointerUp(row, { pointerType: 'touch' });
+      fireEvent.click(screen.getByText('general').closest('a')!);
+      expect(onClose).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

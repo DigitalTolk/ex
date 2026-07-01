@@ -1518,27 +1518,31 @@ export function Sidebar({ onClose }: SidebarProps) {
                         aria-label="Create channel"
                         title="Create channel"
                         data-testid="sidebar-create-channel"
-                        className="absolute right-1 top-1/2 -translate-y-1/2 h-5 w-5 flex items-center justify-center rounded text-gray-400 opacity-0 group-hover/sec:opacity-100 hover:bg-white/20 hover:text-white"
+                        className="absolute right-1 top-1/2 -translate-y-1/2 h-5 w-5 flex items-center justify-center rounded text-gray-400 opacity-0 group-hover/sec:opacity-100 hover:bg-white/20 hover:text-white max-md:h-10 max-md:w-10 max-md:opacity-100"
                       >
                         <Plus className="h-3.5 w-3.5" />
                       </button>
                     )}
                     {isDMsDefault && (
-                      <div className="absolute right-1 top-1/2 flex -translate-y-1/2 items-center gap-0.5 opacity-0 group-hover/sec:opacity-100">
+                      <div className="absolute right-1 top-1/2 flex -translate-y-1/2 items-center gap-0.5">
+                        {/* New DM "+": always a real tap target on mobile;
+                            desktop keeps the hover-reveal. */}
                         <button
                           onClick={() => navigate('/conversations/new')}
                           aria-label="New direct message"
                           title="New direct message"
                           data-testid="sidebar-new-dm"
-                          className="h-5 w-5 flex items-center justify-center rounded text-gray-400 hover:bg-white/20 hover:text-white"
+                          className="h-5 w-5 flex items-center justify-center rounded text-gray-400 opacity-0 group-hover/sec:opacity-100 hover:bg-white/20 hover:text-white max-md:h-10 max-md:w-10 max-md:opacity-100"
                         >
                           <Plus className="h-3.5 w-3.5" />
                         </button>
+                        {/* Sort menu stays desktop hover-only (hidden on mobile);
+                            the header shows only the "+" on touch. */}
                         <DropdownMenu>
                           <DropdownMenuTrigger
                             aria-label="Sort direct messages"
                             data-testid="sidebar-dm-sort-menu"
-                            className="h-5 w-5 flex items-center justify-center rounded text-gray-400 hover:bg-white/20 hover:text-white"
+                            className="h-5 w-5 flex items-center justify-center rounded text-gray-400 opacity-0 group-hover/sec:opacity-100 hover:bg-white/20 hover:text-white"
                           >
                             <MoreVertical className="h-3.5 w-3.5" />
                           </DropdownMenuTrigger>

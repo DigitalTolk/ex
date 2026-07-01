@@ -14,8 +14,10 @@ import {
   useFavoriteConversation,
   useSetConversationCategory,
 } from '@/hooks/useSidebar';
+import { useIsMobile } from '@/hooks/useIsMobile';
+import { useLongPress } from '@/hooks/useLongPress';
 import type { UserConversation, UserStatus } from '@/types';
-import type { CSSProperties } from 'react';
+import { useState, type CSSProperties } from 'react';
 
 interface Props {
   conversation: UserConversation;
@@ -57,6 +59,13 @@ export function ConversationRow({
 }: Props) {
   const favorite = useFavoriteConversation();
   const setCategory = useSetConversationCategory();
+  const isMobile = useIsMobile();
+  // Controlled so a mobile long-press can open the (otherwise hidden) row menu.
+  const [menuOpen, setMenuOpen] = useState(false);
+  const { handlers: longPressHandlers, shouldSuppressClick } = useLongPress({
+    enabled: isMobile,
+    onLongPress: () => setMenuOpen(true),
+  });
 
   const isFav = !!conversation.favorite;
   const isGroup = conversation.type === 'group';
@@ -81,10 +90,18 @@ export function ConversationRow({
       className={`group/row relative flex items-center ${draggable ? 'cursor-grab active:cursor-grabbing' : ''}`}
       data-testid={`conversation-row-${conversation.conversationID}`}
       style={dragStyle}
+      {...longPressHandlers}
     >
       <NavLink
         to={`/conversation/${conversation.conversationID}`}
         onClick={(event) => {
+          // A touch long-press that opened the menu also fires a click on
+          // release; swallow it so the row doesn't navigate.
+          if (shouldSuppressClick()) {
+            event.preventDefault();
+            event.stopPropagation();
+            return;
+          }
           if (suppressNavigation) {
             event.preventDefault();
             event.stopPropagation();
@@ -133,7 +150,7 @@ export function ConversationRow({
             reflows); fades on desktop hover so the row actions take its place,
             stays on touch shifted left of them. Mirrors ChannelRow. */}
         {hasUnread && (
-          <span className="pointer-events-none absolute right-2 top-1/2 flex -translate-y-1/2 items-center transition-opacity group-hover/row:opacity-0 max-md:right-14 max-md:opacity-100">
+          <span className="pointer-events-none absolute right-2 top-1/2 flex -translate-y-1/2 items-center transition-opacity group-hover/row:opacity-0 max-md:right-12 max-md:opacity-100">
             <Badge variant="brand" className="text-[11px]" data-testid={`conversation-unread-badge-${conversation.conversationID}`}>
               {unreadCount > 99 ? '99+' : Math.max(1, unreadCount)}
             </Badge>
@@ -153,12 +170,14 @@ export function ConversationRow({
         <Star className="h-3.5 w-3.5" fill={isFav ? 'currentColor' : 'none'} />
       </button>
       {/* Kebab — close only. Category placement is intentionally channel-only;
-          DMs/groups move to Favorites through the star. */}
-      <DropdownMenu>
+          DMs/groups move to Favorites through the star. Desktop: revealed on row
+          hover. Mobile: the trigger is NOT a tap target (a long-press on the row
+          opens it) but stays mounted + hidden so Radix can anchor the menu. */}
+      <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
         <DropdownMenuTrigger
           aria-label={`Manage ${conversation.displayName} sidebar placement`}
           data-testid={`conv-row-menu-${conversation.conversationID}`}
-          className="absolute right-1 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded text-gray-400 opacity-0 hover:bg-white/20 hover:text-white group-hover/row:opacity-100 max-md:h-9 max-md:w-9 max-md:opacity-100"
+          className="absolute right-1 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded text-gray-400 opacity-0 hover:bg-white/20 hover:text-white group-hover/row:opacity-100 max-md:pointer-events-none max-md:opacity-0"
         >
           <MoreVertical className="h-3.5 w-3.5" />
         </DropdownMenuTrigger>

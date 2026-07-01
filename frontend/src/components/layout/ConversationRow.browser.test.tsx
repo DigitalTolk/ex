@@ -59,6 +59,24 @@ function renderRow(conversation: UserConversation = dm, overrides: Partial<Param
   );
 }
 
+// The kebab is a hover-reveal trigger on desktop and a hidden (long-press) menu
+// on mobile. Open it the way a real user would per viewport.
+async function openConvMenu(screen: Awaited<ReturnType<typeof renderRow>>) {
+  if (window.innerWidth <= 767) {
+    const row = document.querySelector('[data-testid="conversation-row-cv-1"]') as HTMLElement;
+    row.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerType: 'touch' }));
+    await vi.waitFor(
+      () => {
+        expect(document.querySelector('[role="menuitem"]')).not.toBeNull();
+      },
+      { timeout: 1500 },
+    );
+    row.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerType: 'touch' }));
+  } else {
+    await screen.getByTestId('conv-row-menu-cv-1').click();
+  }
+}
+
 describe('ConversationRow browser behaviour', () => {
   it('renders DM displayName and user avatar branch', async () => {
     const screen = await renderRow(dm);
@@ -199,9 +217,51 @@ describe('ConversationRow browser behaviour', () => {
   it('hides the conversation via the kebab menu', async () => {
     const onHide = vi.fn();
     const screen = await renderRow(dm, { onHide });
-    await screen.getByTestId('conv-row-menu-cv-1').click();
+    await openConvMenu(screen);
     await screen.getByTestId('conv-close-cv-1').click();
     expect(onHide).toHaveBeenCalledWith('cv-1');
+  });
+
+  it('opens the management menu via a mobile long-press (kebab is not a tap target)', async () => {
+    if (window.innerWidth > 767) return;
+    const screen = await renderRow(dm);
+    // On mobile the kebab trigger is hidden and inert — it only anchors the
+    // Radix menu; a long-press on the ROW opens it.
+    const trigger = document.querySelector('[data-testid="conv-row-menu-cv-1"]') as HTMLElement;
+    expect(getComputedStyle(trigger).pointerEvents).toBe('none');
+
+    const row = document.querySelector('[data-testid="conversation-row-cv-1"]') as HTMLElement;
+    row.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerType: 'touch' }));
+    await expect.element(screen.getByTestId('conv-close-cv-1')).toBeVisible();
+  });
+
+  it('a short tap navigates (calls onClose) and does not open the menu on mobile', async () => {
+    if (window.innerWidth > 767) return;
+    const onClose = vi.fn();
+    await renderRow(dm, { onClose });
+    const row = document.querySelector('[data-testid="conversation-row-cv-1"]') as HTMLElement;
+    row.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerType: 'touch' }));
+    row.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerType: 'touch' }));
+    (document.querySelector('a[href="/conversation/cv-1"]') as HTMLAnchorElement).dispatchEvent(
+      new MouseEvent('click', { bubbles: true, cancelable: true }),
+    );
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(document.querySelector('[role="menuitem"]')).toBeNull();
+  });
+
+  it('suppresses the navigation click that follows a long-press on mobile', async () => {
+    if (window.innerWidth > 767) return;
+    const onClose = vi.fn();
+    const screen = await renderRow(dm, { onClose });
+    const row = document.querySelector('[data-testid="conversation-row-cv-1"]') as HTMLElement;
+    row.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerType: 'touch' }));
+    await expect.element(screen.getByTestId('conv-close-cv-1')).toBeVisible();
+    row.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerType: 'touch' }));
+    const link = document.querySelector('a[href="/conversation/cv-1"]') as HTMLAnchorElement;
+    const ev = new MouseEvent('click', { bubbles: true, cancelable: true });
+    link.dispatchEvent(ev);
+    expect(onClose).not.toHaveBeenCalled();
+    expect(ev.defaultPrevented).toBe(true);
   });
 
   it('marks the row active when the current route matches the conversation', async () => {
