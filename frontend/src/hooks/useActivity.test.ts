@@ -13,7 +13,9 @@ import { queryKeys } from '@/lib/query-keys';
 import type { ActivityFeed } from '@/types';
 
 vi.mock('@/lib/api', () => ({ apiFetch: vi.fn() }));
+vi.mock('@/lib/toast', () => ({ showToast: vi.fn() }));
 import { apiFetch } from '@/lib/api';
+import { showToast } from '@/lib/toast';
 
 function makeClient() {
   return new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
@@ -26,7 +28,10 @@ function wrapperFor(client: QueryClient) {
 }
 
 describe('useActivity hooks', () => {
-  beforeEach(() => vi.mocked(apiFetch).mockReset());
+  beforeEach(() => {
+    vi.mocked(apiFetch).mockReset();
+    vi.mocked(showToast).mockClear();
+  });
 
   it('useActivity returns the feed', async () => {
     vi.mocked(apiFetch).mockResolvedValue({ items: [{ id: 'a' }], unread: 2 });
@@ -72,6 +77,16 @@ describe('useActivity hooks', () => {
     await result.current.mutateAsync({ messageID: 'm1', parentID: 'ch1', parentType: 'channel', remindAt: '2026-06-30T12:00:00Z' });
     expect(apiFetch).toHaveBeenCalledWith('/api/v1/reminders', expect.objectContaining({ method: 'POST' }));
     expect(spy).toHaveBeenCalledWith({ queryKey: queryKeys.reminders() });
+    expect(showToast).toHaveBeenCalledWith('Reminder set', 'success');
+  });
+
+  it('useCreateReminder toasts an error when the POST fails', async () => {
+    vi.mocked(apiFetch).mockRejectedValue(new Error('500'));
+    const { result } = renderHook(() => useCreateReminder(), { wrapper: wrapperFor(makeClient()) });
+    await expect(
+      result.current.mutateAsync({ messageID: 'm1', parentID: 'ch1', parentType: 'channel', remindAt: '2026-06-30T12:00:00Z' }),
+    ).rejects.toThrow();
+    expect(showToast).toHaveBeenCalledWith("Couldn't set the reminder — please try again.");
   });
 
   it('useCancelReminder DELETEs and invalidates reminders', async () => {

@@ -47,6 +47,7 @@ export default defineConfig({
       exclude: [
         'src/main.tsx',
         'src/test/**',
+        'src/**/__mocks__/**',
         'src/**/*.test.{ts,tsx}',
         'src/**/*.browser.test.{ts,tsx}',
         // Pure URL-scheme guard — exhaustively unit-tested in the jsdom suite
@@ -89,9 +90,17 @@ export default defineConfig({
         // via MessageItem/Sidebar; graded in jsdom, not here. The browser-only
         // surface (the MessageItem "Remind me" submenu) IS exercised here.
         'src/lib/reminder-times.ts',
+        // Datetime-local formatting primitives — the timezone/empty-zone branches
+        // are exhaustively unit-tested in jsdom (datetime-input.test.ts,
+        // user-time.test.ts); pulled into the browser graph via UserStatusDialog.
+        'src/lib/datetime-input.ts',
         'src/hooks/useActivity.ts',
         'src/pages/ActivityPage.tsx',
         'src/components/chat/ReminderDialog.tsx',
+        // Toast overlay — portal + window-event + fake-timer dismissal are
+        // exhaustively unit-tested in jsdom (toaster.test.tsx); pulled into the
+        // browser graph via App, graded in jsdom.
+        'src/components/Toaster.tsx',
       ],
       // 99% branch gate over the merged desktop + mobile browser run.
       // vitest enforces it (non-zero exit), so `npm run

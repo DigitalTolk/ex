@@ -41,18 +41,20 @@ export default function ActivityPage() {
     markReadMutate();
   }, [markReadMutate]);
 
-  // A channel's slug for deep-linking: prefer the activity item's own slug,
-  // else derive it from the channel cache (the message author is a member).
-  const channelSlug = (parentID: string, fallback?: string) => {
-    if (fallback) return fallback;
-    const name = channels?.find((c) => c.channelID === parentID)?.channelName;
-    return name ? slugify(name) : parentID;
-  };
+  // channelID → slug, built once from the channel cache so each row's deep link
+  // is an O(1) lookup instead of a linear scan per render.
+  const channelSlugByID = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const c of channels ?? []) m.set(c.channelID, slugify(c.channelName));
+    return m;
+  }, [channels]);
 
-  const hrefFor = (i: ActivityItem | Reminder) =>
-    i.parentType === 'channel'
-      ? buildChannelHref(channelSlug(i.parentID, i.channelSlug), i.messageID)
-      : buildConversationHref(i.parentID, i.messageID);
+  const hrefFor = (i: ActivityItem | Reminder) => {
+    if (i.parentType !== 'channel') return buildConversationHref(i.parentID, i.messageID);
+    // Prefer the item's own slug snapshot, else the channel cache, else the id.
+    const slug = i.channelSlug || channelSlugByID.get(i.parentID) || i.parentID;
+    return buildChannelHref(slug, i.messageID);
+  };
 
   const pending = reminders ?? [];
 

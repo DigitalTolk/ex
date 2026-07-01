@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiFetch } from '@/lib/api';
 import { queryKeys } from '@/lib/query-keys';
+import { showToast } from '@/lib/toast';
 import type { ActivityFeed, Reminder } from '@/types';
 
 const EMPTY_FEED: ActivityFeed = { items: [], unread: 0 };
@@ -8,7 +9,7 @@ const EMPTY_FEED: ActivityFeed = { items: [], unread: 0 };
 // useActivity loads the user's activity stream (reaction hints + fired
 // reminders) plus the unread count. WS `activity.new` invalidates this query
 // (see ChatPage) so the badge and list stay live.
-export function useActivity(options?: { enabled?: boolean }) {
+export function useActivity() {
   return useQuery({
     queryKey: queryKeys.activity(),
     queryFn: async () => {
@@ -17,20 +18,18 @@ export function useActivity(options?: { enabled?: boolean }) {
       if (!res || !Array.isArray(res.items)) return EMPTY_FEED;
       return { items: res.items, unread: typeof res.unread === 'number' ? res.unread : 0 };
     },
-    enabled: options?.enabled ?? true,
     staleTime: 10_000,
   });
 }
 
 // useReminders loads the user's pending (not-yet-fired) reminders.
-export function useReminders(options?: { enabled?: boolean }) {
+export function useReminders() {
   return useQuery({
     queryKey: queryKeys.reminders(),
     queryFn: async () => {
       const res = await apiFetch<Reminder[]>('/api/v1/reminders');
       return Array.isArray(res) ? res : [];
     },
-    enabled: options?.enabled ?? true,
     staleTime: 10_000,
   });
 }
@@ -43,7 +42,9 @@ export interface CreateReminderInput {
   remindAt: string; // ISO8601
 }
 
-// useCreateReminder schedules a reminder, then refreshes the pending list.
+// useCreateReminder schedules a reminder, then refreshes the pending list. Both
+// outcomes toast so scheduling is never silent — including the fire-and-forget
+// preset quick-picks, which don't await the result.
 export function useCreateReminder() {
   const qc = useQueryClient();
   return useMutation({
@@ -54,6 +55,10 @@ export function useCreateReminder() {
       }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: queryKeys.reminders() });
+      showToast('Reminder set', 'success');
+    },
+    onError: () => {
+      showToast("Couldn't set the reminder — please try again.");
     },
   });
 }

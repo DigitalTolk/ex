@@ -15,8 +15,10 @@ interface ReminderDialogProps {
   // initialValue is a `YYYY-MM-DDTHH:mm` seed (computed by the opener so the
   // impure clock read happens in an event handler, never during render).
   initialValue: string;
-  // onConfirm receives the chosen absolute time. The caller schedules it.
-  onConfirm: (when: Date) => void;
+  // onConfirm schedules the reminder for the chosen time. It resolves on success
+  // (the dialog then closes) and rejects on failure (the dialog stays open and
+  // surfaces the error) — so scheduling is never silent.
+  onConfirm: (when: Date) => Promise<void>;
 }
 
 // ReminderDialog is the "Custom…" reminder picker: a datetime-local input
@@ -25,15 +27,24 @@ interface ReminderDialogProps {
 export function ReminderDialog({ open, onOpenChange, initialValue, onConfirm }: ReminderDialogProps) {
   const [value, setValue] = useState(initialValue);
   const [error, setError] = useState('');
+  const [pending, setPending] = useState(false);
 
-  const confirm = () => {
+  const confirm = async () => {
     const when = new Date(value);
     if (Number.isNaN(when.getTime()) || when.getTime() <= Date.now()) {
       setError('Pick a time in the future.');
       return;
     }
-    onConfirm(when);
-    onOpenChange(false);
+    setPending(true);
+    setError('');
+    try {
+      await onConfirm(when);
+      onOpenChange(false);
+    } catch {
+      setError("Couldn't set the reminder — please try again.");
+    } finally {
+      setPending(false);
+    }
   };
 
   return (
@@ -65,8 +76,8 @@ export function ReminderDialog({ open, onOpenChange, initialValue, onConfirm }: 
           <Button variant="ghost" onClick={() => onOpenChange(false)} data-testid="reminder-cancel">
             Cancel
           </Button>
-          <Button onClick={confirm} data-testid="reminder-confirm">
-            Set reminder
+          <Button onClick={confirm} disabled={pending} data-testid="reminder-confirm">
+            {pending ? 'Setting…' : 'Set reminder'}
           </Button>
         </DialogFooter>
       </DialogContent>

@@ -111,7 +111,7 @@ func (s *ReminderService) Schedule(ctx context.Context, userID string, in Remind
 		ParentID:       in.ParentID,
 		ParentType:     in.ParentType,
 		ChannelSlug:    in.ChannelSlug,
-		MessagePreview: PreviewText(msg.Body),
+		MessagePreview: activityPreview(msg.Body),
 		RemindAt:       in.RemindAt,
 		CreatedAt:      now,
 	}

@@ -228,13 +228,22 @@ function MessageItemImpl({
     channelSlug,
   };
 
+  // One builder so the preset (mutate) and custom-dialog (mutateAsync) paths
+  // can't drift on the payload shape.
+  const reminderInput = (when: Date) => ({
+    messageID: message.id,
+    ...reminderTarget,
+    remindAt: when.toISOString(),
+  });
+
   const scheduleReminder = (when: Date) => {
-    createReminder.mutate({
-      messageID: message.id,
-      ...reminderTarget,
-      remindAt: when.toISOString(),
-    });
+    createReminder.mutate(reminderInput(when));
   };
+
+  // The custom dialog awaits the result so it can confirm (close) on success and
+  // surface the error (stay open) on failure — scheduling is never silent there.
+  const scheduleReminderAsync = (when: Date) =>
+    createReminder.mutateAsync(reminderInput(when)).then(() => undefined);
 
   const handleReminderPreset = (key: ReminderPresetKey) => {
     scheduleReminder(computeReminderTime(key, new Date()));
@@ -242,10 +251,9 @@ function MessageItemImpl({
 
   const openCustomReminder = () => {
     // Compute the seed here (an event handler) so the clock read stays out of
-    // render, then mount the dialog fresh with it. One hour from now.
-    const seed = new Date();
-    seed.setHours(seed.getHours() + 1);
-    setReminderSeed(toLocalInputValue(seed));
+    // render, then mount the dialog fresh with it. Defaults to the "in 1 hour"
+    // preset so the field reuses the same tested time math as the quick-picks.
+    setReminderSeed(toLocalInputValue(computeReminderTime('in1h', new Date())));
     setReminderDialogOpen(true);
   };
 
@@ -1040,7 +1048,7 @@ function MessageItemImpl({
           open
           onOpenChange={setReminderDialogOpen}
           initialValue={reminderSeed}
-          onConfirm={scheduleReminder}
+          onConfirm={scheduleReminderAsync}
         />
       )}
     </div>

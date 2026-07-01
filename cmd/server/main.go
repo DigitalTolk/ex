@@ -303,6 +303,7 @@ func main() {
 	// Reaction hints land in the message author's activity stream; reminders fire
 	// into it at their due time plus a desktop/mobile alert (NotifyDirect).
 	activitySvc := service.NewActivityService(store.NewRedisActivityStore(redisCache.Client()), redisPubSub)
+	activitySvc.SetChannelResolver(channelSvc) // snapshot channel slug onto reaction activity items
 	messageSvc.SetReactionRecorder(activitySvc)
 	reminderStore := store.NewRedisReminderStore(redisCache.Client())
 	reminderSvc := service.NewReminderService(reminderStore, messageStore, messageSvc)

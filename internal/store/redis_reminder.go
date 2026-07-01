@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/DigitalTolk/ex/internal/model"
@@ -67,32 +68,71 @@ func (s *RedisReminderStore) getReminder(ctx context.Context, id string) (*model
 	if err != nil {
 		return nil, fmt.Errorf("store: get reminder: %w", err)
 	}
-	var r model.Reminder
-	if err := json.Unmarshal([]byte(raw), &r); err != nil { // coverage-ignore: round-trip of a value this store wrote
-		return nil, fmt.Errorf("store: unmarshal reminder: %w", err)
+	r, ok := decodeReminder(raw)
+	if !ok { // coverage-ignore: round-trip of a value this store wrote
+		return nil, fmt.Errorf("store: unmarshal reminder %q", id)
 	}
-	return &r, nil
+	return r, nil
+}
+
+// decodeReminder turns one MGET slot into a reminder. A nil slot (missing or
+// wrong-type key) or an unparseable payload yields ok=false so the batch callers
+// can treat both as "drop this stale entry" without an extra round-trip.
+func decodeReminder(v any) (*model.Reminder, bool) {
+	raw, ok := v.(string)
+	if !ok {
+		return nil, false
+	}
+	var r model.Reminder
+	if err := json.Unmarshal([]byte(raw), &r); err != nil {
+		return nil, false
+	}
+	return &r, true
+}
+
+// payloadKeysFor maps reminder ids to their payload keys for an MGET.
+func payloadKeysFor(ids []string) []string {
+	keys := make([]string, len(ids))
+	for i, id := range ids {
+		keys[i] = reminderPayloadKey(id)
+	}
+	return keys
 }
 
 // ListPendingReminders returns the user's not-yet-fired reminders, soonest first.
+// Payloads are fetched in one MGET rather than a GET per id, and any index entry
+// whose payload has aged out is swept in a single ZREM.
 func (s *RedisReminderStore) ListPendingReminders(ctx context.Context, userID string) ([]*model.Reminder, error) {
 	ids, err := s.client.ZRange(ctx, reminderUserKey(userID), 0, -1).Result()
 	if err != nil {
 		return nil, fmt.Errorf("store: list reminders: %w", err)
 	}
-	reminders := make([]*model.Reminder, 0, len(ids))
-	for _, id := range ids {
-		r, err := s.getReminder(ctx, id)
-		if errors.Is(err, ErrNotFound) {
-			// Payload expired/raced out from under the index — drop the stale
-			// index entry and skip.
-			_ = s.client.ZRem(ctx, reminderUserKey(userID), id).Err()
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	vals, err := s.client.MGet(ctx, payloadKeysFor(ids)...).Result()
+	if err != nil { // coverage-ignore: same transport failure as the ZRANGE above, which the closed-client test exercises
+		return nil, fmt.Errorf("store: list reminders mget: %w", err)
+	}
+	now := s.now()
+	reminders := make([]*model.Reminder, 0, len(vals))
+	var stale []any
+	for i, v := range vals {
+		r, ok := decodeReminder(v)
+		// Drop the index entry when the payload is unreadable (corrupt/expired)
+		// OR the reminder is already past its fire time — a past-due entry is
+		// either a reminder that fired but whose post-claim cleanup failed (a
+		// ghost) or one the poller is about to claim; neither is "pending", and
+		// sweeping it here self-heals a ghost without racing the poller (which
+		// claims off the due queue, not this index).
+		if !ok || !r.RemindAt.After(now) {
+			stale = append(stale, ids[i])
 			continue
 		}
-		if err != nil {
-			return nil, err
-		}
 		reminders = append(reminders, r)
+	}
+	if len(stale) > 0 {
+		_ = s.client.ZRem(ctx, reminderUserKey(userID), stale...).Err()
 	}
 	return reminders, nil
 }
@@ -145,23 +185,45 @@ func (s *RedisReminderStore) ClaimDueReminders(ctx context.Context, limit int) (
 		return nil, fmt.Errorf("store: claim due reminders: %w", err)
 	}
 	raw, _ := res.([]any)
-	claimed := make([]*model.Reminder, 0, len(raw))
+	ids := make([]string, 0, len(raw))
 	for _, v := range raw {
-		id, ok := v.(string)
-		if !ok { // coverage-ignore: ZRANGEBYSCORE members are always bulk strings
+		if id, ok := v.(string); ok {
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	// One MGET for all claimed payloads, then one pipeline for the per-id cleanup
+	// — instead of a GET + ZREM + DEL round-trip per reminder.
+	vals, err := s.client.MGet(ctx, payloadKeysFor(ids)...).Result()
+	if err != nil { // coverage-ignore: same transport failure as the claim script above, which the closed-client test exercises
+		return nil, fmt.Errorf("store: claim due reminders mget: %w", err)
+	}
+	claimed := make([]*model.Reminder, 0, len(vals))
+	pipe := s.client.Pipeline()
+	for i, v := range vals {
+		r, ok := decodeReminder(v)
+		if !ok {
+			// Payload gone/corrupt but the id was already claimed off the due
+			// queue, so this reminder will NEVER fire. That is an undeliverable
+			// alert — log it loudly (per the notifications "must be loud"
+			// invariant) rather than dropping it silently. The dangling per-user
+			// index entry is swept on the owner's next list.
+			slog.Warn("reminder claimed but payload unreadable; alert lost", "reminderID", ids[i])
 			continue
 		}
-		r, err := s.getReminder(ctx, id)
-		if errors.Is(err, ErrNotFound) {
-			// Payload gone (expired) — nothing to fire; index cleanup is lazy.
-			continue
-		}
-		if err != nil {
-			return nil, err
-		}
-		_ = s.client.ZRem(ctx, reminderUserKey(r.UserID), id).Err()
-		_ = s.client.Del(ctx, reminderPayloadKey(id)).Err()
+		pipe.ZRem(ctx, reminderUserKey(r.UserID), ids[i])
+		pipe.Del(ctx, reminderPayloadKey(ids[i]))
 		claimed = append(claimed, r)
+	}
+	if len(claimed) > 0 {
+		// Cleanup is best-effort: the reminders are already claimed and will fire
+		// regardless. A failure leaves a payload+index entry behind, but the
+		// past-due sweep in ListPendingReminders keeps it out of the pending list.
+		if _, err := pipe.Exec(ctx); err != nil { // coverage-ignore: transport failure exercised by the closed-client claim test
+			slog.Warn("reminder post-claim cleanup failed; entries swept on next list", "error", err)
+		}
 	}
 	return claimed, nil
 }

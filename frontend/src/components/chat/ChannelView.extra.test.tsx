@@ -34,19 +34,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { Channel, ChannelMembership } from '@/types';
 
 // Mock dropdown to a simple structure so we can click items in jsdom
-vi.mock('@/components/ui/dropdown-menu', () => ({
-  DropdownMenuSub: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-  DropdownMenuSubTrigger: ({ children, ...rest }: { children: React.ReactNode; [k: string]: unknown }) => (
-    <button {...rest}>{children}</button>
-  ),
-  DropdownMenuSubContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-  DropdownMenu: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-  DropdownMenuTrigger: ({ children }: { children: React.ReactNode }) => <button>{children}</button>,
-  DropdownMenuContent: ({ children }: { children: React.ReactNode }) => <div data-testid="dropdown-content">{children}</div>,
-  DropdownMenuItem: ({ children, onClick, className }: { children: React.ReactNode; onClick?: () => void; className?: string }) => (
-    <button data-testid="dropdown-item" onClick={onClick} className={className}>{children}</button>
-  ),
-}));
+vi.mock('@/components/ui/dropdown-menu');
 
 // Mock dialog so the archive confirm always shows
 vi.mock('@/components/ui/dialog', () => ({

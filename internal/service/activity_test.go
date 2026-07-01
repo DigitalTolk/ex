@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"errors"
-	"strings"
 	"sync"
 	"testing"
 
@@ -84,6 +83,9 @@ func TestActivityService_RecordReactionSkips(t *testing.T) {
 	if got := store.count("u-1"); got != 0 {
 		t.Fatalf("expected no activity recorded for skip cases, got %d", got)
 	}
+
+	// A service with no store also no-ops (guard on the reaction path).
+	NewActivityService(nil, newMockPublisher()).RecordReaction(ctx, reactedMessage("u-1"), ParentChannel, "u-2", "👍")
 }
 
 func TestActivityService_RecordReactionAddsForAuthor(t *testing.T) {
@@ -102,6 +104,75 @@ func TestActivityService_RecordReactionAddsForAuthor(t *testing.T) {
 		t.Fatalf("preview = %q", items[0].MessagePreview)
 	}
 	waitForCond(t, func() bool { return activityPublishedFor(pub, "author-1") }, "activity.new published to author")
+}
+
+type fakeChannelResolver struct {
+	ch  *model.Channel
+	err error
+}
+
+func (f *fakeChannelResolver) GetByID(context.Context, string) (*model.Channel, error) {
+	return f.ch, f.err
+}
+
+func TestActivityService_RecordReactionSnapshotsChannelSlug(t *testing.T) {
+	store := newFakeActivityStore()
+	svc := NewActivityService(store, newMockPublisher())
+	svc.SetChannelResolver(&fakeChannelResolver{ch: &model.Channel{ID: "ch-1", Slug: "general"}})
+
+	svc.RecordReaction(context.Background(), reactedMessage("author-1"), ParentChannel, "reactor-2", "🎉")
+
+	waitForCond(t, func() bool { return store.count("author-1") == 1 }, "reaction recorded")
+	if got := store.items["author-1"][0].ChannelSlug; got != "general" {
+		t.Fatalf("ChannelSlug = %q, want general", got)
+	}
+}
+
+func TestActivityService_ResolveChannelSlug(t *testing.T) {
+	ctx := context.Background()
+	// No resolver → "".
+	bare := NewActivityService(newFakeActivityStore(), newMockPublisher())
+	if got := bare.resolveChannelSlug(ctx, ParentChannel, "ch-1"); got != "" {
+		t.Fatalf("no resolver = %q, want empty", got)
+	}
+	// Conversation parent → "" even with a resolver.
+	conv := NewActivityService(newFakeActivityStore(), newMockPublisher())
+	conv.SetChannelResolver(&fakeChannelResolver{ch: &model.Channel{Slug: "x"}})
+	if got := conv.resolveChannelSlug(ctx, ParentConversation, "conv-1"); got != "" {
+		t.Fatalf("conversation = %q, want empty", got)
+	}
+	// Resolver error → "".
+	errSvc := NewActivityService(newFakeActivityStore(), newMockPublisher())
+	errSvc.SetChannelResolver(&fakeChannelResolver{err: errors.New("boom")})
+	if got := errSvc.resolveChannelSlug(ctx, ParentChannel, "ch-1"); got != "" {
+		t.Fatalf("resolver error = %q, want empty", got)
+	}
+	// Resolver returns no channel (nil, nil) → "".
+	nilCh := NewActivityService(newFakeActivityStore(), newMockPublisher())
+	nilCh.SetChannelResolver(&fakeChannelResolver{})
+	if got := nilCh.resolveChannelSlug(ctx, ParentChannel, "ch-1"); got != "" {
+		t.Fatalf("nil channel = %q, want empty", got)
+	}
+}
+
+func TestActivityPreview(t *testing.T) {
+	// Collapses whitespace runs / tabs / leading-trailing.
+	if got := activityPreview("  hello\t\tthere  "); got != "hello there" {
+		t.Fatalf("collapse = %q", got)
+	}
+	// Whitespace-only body collapses to "" so the client shows its fallback.
+	if got := activityPreview(" \n\t "); got != "" {
+		t.Fatalf("whitespace-only = %q, want empty", got)
+	}
+}
+
+func TestActivityService_AddItem(t *testing.T) {
+	store := newFakeActivityStore()
+	pub := newMockPublisher()
+	svc := NewActivityService(store, pub)
+	svc.AddItem(context.Background(), "u-9", &model.ActivityItem{ID: "a", Type: model.ActivityReminder})
+	waitForCond(t, func() bool { return store.count("u-9") == 1 }, "AddItem persisted")
+	waitForCond(t, func() bool { return activityPublishedFor(pub, "u-9") }, "AddItem published")
 }
 
 func TestActivityService_AddSyncStoreErrorSkipsPublish(t *testing.T) {
@@ -158,22 +229,6 @@ func TestActivityService_AddItemNilStore(t *testing.T) {
 	svc := NewActivityService(nil, newMockPublisher())
 	svc.AddItem(context.Background(), "u-1", &model.ActivityItem{ID: "a"})
 }
-
-func TestPreviewText(t *testing.T) {
-	if got := PreviewText("  hello   world\n\tfoo "); got != "hello world foo" {
-		t.Fatalf("collapse = %q", got)
-	}
-	long := strings.Repeat("a", activityPreviewMax+50)
-	got := PreviewText(long)
-	if []rune(got)[len([]rune(got))-1] != '…' {
-		t.Fatalf("long preview should end with ellipsis, got %q", got)
-	}
-	if utf8Len(got) != activityPreviewMax+1 {
-		t.Fatalf("truncated length = %d", utf8Len(got))
-	}
-}
-
-func utf8Len(s string) int { return len([]rune(s)) }
 
 func activityPublishedFor(pub *mockPublisher, userID string) bool {
 	pub.mu.Lock()

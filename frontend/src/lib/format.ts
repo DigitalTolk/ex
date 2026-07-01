@@ -1,3 +1,5 @@
+import { pad } from '@/lib/datetime-input';
+
 export function slugify(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
 }
@@ -112,10 +114,6 @@ export function ordinalSuffix(day: number): string {
   }
 }
 
-function pad2(n: number): string {
-  return n < 10 ? `0${n}` : String(n);
-}
-
 // formatLongDate renders a date like "August 3rd, 2016" — used in
 // channel-creation and similar long-form intro copy.
 export function formatLongDate(input: Date | string | number): string {
@@ -131,7 +129,7 @@ export function formatLongDateTime(input: Date | string | number): string {
   const d = input instanceof Date ? input : new Date(input);
   const month = MONTHS_SHORT[d.getMonth()];
   const day = d.getDate();
-  return `${month} ${day}${ordinalSuffix(day)} at ${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
+  return `${month} ${day}${ordinalSuffix(day)} at ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
 // formatRelative renders a "time ago" style label — "just now", "2 hours ago",
@@ -171,5 +169,5 @@ export function formatDayHeading(input: Date | string | number, now: Date = new 
 // a list of timestamped items into calendar days.
 export function dayKey(input: Date | string | number): string {
   const d = input instanceof Date ? input : new Date(input);
-  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }

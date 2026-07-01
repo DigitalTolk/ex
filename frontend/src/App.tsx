@@ -9,6 +9,7 @@ import { NotificationProvider } from '@/context/NotificationContext';
 import { TypingProvider } from '@/context/TypingContext';
 import { ThemeProvider } from '@/context/ThemeContext';
 import { NotificationCountTitleBridge } from '@/components/NotificationCountTitleBridge';
+import { Toaster } from '@/components/Toaster';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { InAppLinkRouter } from '@/components/InAppLinkRouter';
 import LoginPage from '@/pages/LoginPage';
@@ -120,6 +121,7 @@ export default function App() {
                     <TooltipProvider>
                       <ServerVersionBootstrap />
                       <NotificationCountTitleBridge />
+                      <Toaster />
                       <div className="flex h-dvh flex-col bg-sidebar pt-safe-top">
                         <div className="min-h-0 flex-1 bg-background">
                           <RoutedErrorBoundary>

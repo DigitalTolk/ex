@@ -31,6 +31,9 @@ vi.mock('@/hooks/useAttachments', () => ({
 }));
 
 // Mock the dropdown menu so menu items render directly in jsdom
+// Inline (not the shared __mocks__): this suite asserts on the MOBILE action
+// sheet's "Copy message text" button by accessible name, so the desktop menu
+// items must NOT also carry that aria-label (which the shared mock adds).
 vi.mock('@/components/ui/dropdown-menu', () => ({
   DropdownMenuSub: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
   DropdownMenuSubTrigger: ({ children, ...rest }: { children: React.ReactNode; [k: string]: unknown }) => (

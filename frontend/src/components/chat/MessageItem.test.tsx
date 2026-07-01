@@ -31,21 +31,7 @@ vi.mock('@/hooks/useAttachments', () => ({
 }));
 
 // Mock the dropdown menu so menu items render directly in jsdom
-vi.mock('@/components/ui/dropdown-menu', () => ({
-  DropdownMenuSub: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-  DropdownMenuSubTrigger: ({ children, ...rest }: { children: React.ReactNode; [k: string]: unknown }) => (
-    <button {...rest}>{children}</button>
-  ),
-  DropdownMenuSubContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-  DropdownMenu: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-  DropdownMenuTrigger: ({ children, ...props }: { children: React.ReactNode; [k: string]: unknown }) => (
-    <button {...props}>{children}</button>
-  ),
-  DropdownMenuContent: ({ children }: { children: React.ReactNode }) => <div data-testid="dropdown-content">{children}</div>,
-  DropdownMenuItem: ({ children, onClick, ...rest }: { children: React.ReactNode; onClick?: () => void; variant?: string; 'aria-label'?: string }) => (
-    <button data-testid="dropdown-item" onClick={onClick} aria-label={rest['aria-label']}>{children}</button>
-  ),
-}));
+vi.mock('@/components/ui/dropdown-menu');
 
 function renderWithProviders(ui: React.ReactElement) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });

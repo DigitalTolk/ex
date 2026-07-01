@@ -10,8 +10,9 @@ import type { Message } from '@/types';
 // real browser) and its channel/conversation target computation + custom dialog.
 
 const createReminderMutate = vi.hoisted(() => vi.fn());
+const createReminderMutateAsync = vi.hoisted(() => vi.fn(() => Promise.resolve({ id: 'r1' })));
 vi.mock('@/hooks/useActivity', () => ({
-  useCreateReminder: () => ({ mutate: createReminderMutate, isPending: false }),
+  useCreateReminder: () => ({ mutate: createReminderMutate, mutateAsync: createReminderMutateAsync, isPending: false }),
 }));
 
 vi.mock('@/hooks/useMessages', () => ({
@@ -66,7 +67,7 @@ async function openMenu() {
   await userEvent.click(document.querySelector('[data-testid="message-actions-trigger"]') as HTMLButtonElement);
 }
 
-beforeEach(() => createReminderMutate.mockClear());
+beforeEach(() => { createReminderMutate.mockClear(); createReminderMutateAsync.mockClear(); });
 afterEach(() => cleanup());
 
 describe('MessageItem "Remind me"', () => {
@@ -111,8 +112,8 @@ describe('MessageItem "Remind me"', () => {
     const input = screen.getByTestId('reminder-datetime');
     await userEvent.fill(input, '2999-01-01T09:00');
     await userEvent.click(screen.getByTestId('reminder-confirm'));
-    expect(createReminderMutate).toHaveBeenCalledTimes(1);
-    expect((createReminderMutate.mock.calls[0][0].remindAt as string).startsWith('2999')).toBe(true);
+    await vi.waitFor(() => expect(createReminderMutateAsync).toHaveBeenCalledTimes(1));
+    expect((createReminderMutateAsync.mock.calls[0][0].remindAt as string).startsWith("2999")).toBe(true);
   });
 
   it('schedules a preset reminder from the mobile action sheet', async () => {
@@ -139,7 +140,7 @@ describe('MessageItem "Remind me"', () => {
       return el!;
     });
     await userEvent.fill(input, '2999-03-03T08:00');
-    await userEvent.click(document.querySelector('[data-testid="reminder-confirm"]') as HTMLButtonElement);
-    expect(createReminderMutate).toHaveBeenCalledTimes(1);
+    await userEvent.click(document.querySelector("[data-testid=\"reminder-confirm\"]") as HTMLButtonElement);
+    await vi.waitFor(() => expect(createReminderMutateAsync).toHaveBeenCalledTimes(1));
   });
 });
