@@ -397,6 +397,30 @@ func TestStream_BackfillTTLNil(t *testing.T) {
 	}
 }
 
+// Replay rejects an empty userID and skips structurally-malformed stream
+// entries (missing payload field, unparseable JSON) rather than failing the
+// whole replay.
+func TestStream_ReplayEmptyUserAndMalformed(t *testing.T) {
+	s, _, client := newTestStream(t, 0)
+	ctx := context.Background()
+	if _, err := s.Replay(ctx, "", "01ID0000000000000000000001"); err == nil {
+		t.Error("Replay with empty userID should error")
+	}
+	// Entry missing the payload field.
+	_ = client.XAdd(ctx, &redis.XAddArgs{Stream: "evt:u1", ID: "*", Values: map[string]any{"other": "x"}}).Err()
+	// Entry whose payload is not valid JSON.
+	_ = client.XAdd(ctx, &redis.XAddArgs{Stream: "evt:u1", ID: "*", Values: map[string]any{"e": "not-json"}}).Err()
+	// A well-formed entry that should still come back.
+	appendEvent(t, s, "u1", "01ID0000000000000000000002")
+	res, err := s.Replay(ctx, "u1", "01ID0000000000000000000000")
+	if err != nil {
+		t.Fatalf("Replay: %v", err)
+	}
+	if len(res.Entries) != 1 || res.Entries[0].ID != "01ID0000000000000000000002" {
+		t.Fatalf("malformed entries should be skipped, got %+v", res.Entries)
+	}
+}
+
 // A transport error during the SCAN surfaces (closed client).
 func TestStream_BackfillTTLScanError(t *testing.T) {
 	deadStream, _, deadClient := newTestStream(t, 0)

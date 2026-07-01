@@ -122,6 +122,32 @@ func publishedNotifications(pub *mockPublisher) map[string]Notification {
 	return out
 }
 
+func TestNotificationService_NotifyDirect(t *testing.T) {
+	svc, pub, _, _, _, _ := setupNotifier(t)
+	push := &recordingMobilePush{}
+	svc.SetMobilePushSender(push)
+	// Offline → mobile push fires immediately alongside the desktop publish.
+	svc.SetPresence(&stubPresence{online: map[string]bool{}})
+
+	notif := Notification{Kind: NotificationKindReminder, Title: "Reminder", Body: "look", MessageID: "m1"}
+	svc.NotifyDirect(context.Background(), "u-1", notif)
+
+	if got := publishedKinds(pub)[pubsub.UserChannel("u-1")]; got != NotificationKindReminder {
+		t.Fatalf("desktop publish kind = %q, want reminder", got)
+	}
+	if len(push.calls) != 1 || push.calls[0].userID != "u-1" {
+		t.Fatalf("expected one mobile push to u-1, got %+v", push.calls)
+	}
+}
+
+func TestNotificationService_NotifyDirect_EmptyUserNoOp(t *testing.T) {
+	svc, pub, _, _, _, _ := setupNotifier(t)
+	svc.NotifyDirect(context.Background(), "", Notification{Kind: NotificationKindReminder})
+	if len(pub.published) != 0 {
+		t.Fatalf("empty userID should publish nothing, got %d", len(pub.published))
+	}
+}
+
 func TestNotificationService_NotifyForMessage_ChannelFanout(t *testing.T) {
 	svc, pub, members, _, chans, users := setupNotifier(t)
 	ctx := context.Background()

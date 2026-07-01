@@ -25,6 +25,10 @@ const (
 	NotificationKindMessage     NotificationKind = "message"
 	NotificationKindMention     NotificationKind = "mention"
 	NotificationKindThreadReply NotificationKind = "thread_reply"
+	// NotificationKindReminder is a self-set "remind me about this message"
+	// alert firing at its scheduled time. Always notifiable — the user
+	// explicitly asked to be alerted, so no gating applies.
+	NotificationKindReminder NotificationKind = "reminder"
 )
 
 // notifiableKinds is the registry of kinds that should actually fire a
@@ -35,6 +39,7 @@ var notifiableKinds = map[NotificationKind]struct{}{
 	NotificationKindMessage:     {},
 	NotificationKindMention:     {},
 	NotificationKindThreadReply: {},
+	NotificationKindReminder:    {},
 }
 
 // IsNotifiable reports whether a kind should produce an actual user-facing
@@ -513,6 +518,20 @@ func eligibleAtLevel(level model.NotificationLevel, r recipientReasons) bool {
 		return true
 	}
 	return r.keyword
+}
+
+// NotifyDirect delivers a pre-built notification to a single user, bypassing all
+// message-audience gating (mute/level/mention). It is for self-targeted alerts
+// like fired reminders: publish the desktop `notification.new` and arm the same
+// ack-gated mobile-push fallback messages use, so the alert reaches the user on
+// desktop OR mobile exactly as a message notification would. No-op for an empty
+// user id.
+func (s *NotificationService) NotifyDirect(ctx context.Context, userID string, notif Notification) {
+	if userID == "" {
+		return
+	}
+	events.Publish(ctx, s.publisher, pubsub.UserChannel(userID), events.EventNotificationNew, notif)
+	s.sendMobilePush(ctx, userID, notif)
 }
 
 func (s *NotificationService) sendMobilePush(ctx context.Context, recipientUserID string, notif Notification) {

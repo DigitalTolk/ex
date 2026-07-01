@@ -48,6 +48,10 @@ export const queryKeys = {
   // Drafts
   drafts: () => ['drafts'] as const,
 
+  // Activity stream + reminders
+  activity: () => ['activity'] as const,
+  reminders: () => ['reminders'] as const,
+
   // Pinned / files (parentPath is "channels/<id>" or "conversations/<id>")
   pinned: (parentPath: string) => ['pinned', parentPath] as const,
   files: (parentPath: string) => ['files', parentPath] as const,

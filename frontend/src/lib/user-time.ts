@@ -1,3 +1,5 @@
+import { partsInTimeZone } from '@/lib/datetime-input';
+
 export function formatLastSeen(lastSeenAt?: string, online?: boolean): string | null {
   if (online) return 'now';
   if (!lastSeenAt) return null;
@@ -36,26 +38,10 @@ export function formatTimeZoneName(timeZone?: string): string | null {
 
 export function timeZoneOffsetMinutes(timeZone: string, at = new Date()): number | null {
   try {
-    const parts = new Intl.DateTimeFormat('en-US', {
-      timeZone,
-      hour12: false,
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-    }).formatToParts(at);
-    /* istanbul ignore next -- formatToParts always emits every requested field (year/month/day/hour/minute/second), so find() never misses; the ?? 0 arm is defensive. */
-    const value = (type: string) => Number(parts.find((p) => p.type === type)?.value ?? 0);
-    const asUTC = Date.UTC(
-      value('year'),
-      value('month') - 1,
-      value('day'),
-      value('hour') % 24,
-      value('minute'),
-      value('second'),
-    );
+    // Reuse the shared parts extractor (same formatToParts + numeric-field
+    // pull); it throws on an invalid IANA zone, which the catch turns into null.
+    const p = partsInTimeZone(at, timeZone);
+    const asUTC = Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second);
     return Math.round((asUTC - at.getTime()) / 60000);
   } catch {
     return null;

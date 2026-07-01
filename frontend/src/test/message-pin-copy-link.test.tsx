@@ -25,16 +25,7 @@ vi.mock('@/hooks/useAttachments', () => ({
   useAttachmentsBatch: () => ({ map: new Map(), data: [] }),
 }));
 
-vi.mock('@/components/ui/dropdown-menu', () => ({
-  DropdownMenu: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-  DropdownMenuTrigger: ({ children, ...props }: { children: React.ReactNode; [k: string]: unknown }) => (
-    <button {...props}>{children}</button>
-  ),
-  DropdownMenuContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-  DropdownMenuItem: ({ children, onClick, ...rest }: { children: React.ReactNode; onClick?: () => void; 'aria-label'?: string }) => (
-    <button onClick={onClick} aria-label={rest['aria-label']}>{children}</button>
-  ),
-}));
+vi.mock('@/components/ui/dropdown-menu');
 
 function renderItem(overrides: Partial<Message> = {}) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });

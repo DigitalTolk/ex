@@ -2008,6 +2008,42 @@ func TestMessageService_ToggleReaction_Add(t *testing.T) {
 	}
 }
 
+type spyReactionRecorder struct {
+	calls     int
+	lastEmoji string
+}
+
+func (s *spyReactionRecorder) RecordReaction(_ context.Context, _ *model.Message, _, _, emoji string) {
+	s.calls++
+	s.lastEmoji = emoji
+}
+
+// A freshly-ADDED reaction records an activity hint; toggling it back off does
+// not (you don't get "activity" for un-reacting).
+func TestMessageService_ToggleReaction_RecordsActivityOnAddOnly(t *testing.T) {
+	svc, messages, memberships, _, _ := setupMessageService()
+	ctx := context.Background()
+	spy := &spyReactionRecorder{}
+	svc.SetReactionRecorder(spy)
+
+	memberships.memberships["ch1#user-1"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "user-1", Role: model.ChannelRoleMember}
+	messages.messages["ch1#m1"] = &model.Message{ID: "m1", ParentID: "ch1", AuthorID: "user-2", Body: "hi"}
+
+	if _, err := svc.ToggleReaction(ctx, "user-1", "ch1", ParentChannel, "m1", "👍"); err != nil {
+		t.Fatalf("add reaction: %v", err)
+	}
+	if spy.calls != 1 || spy.lastEmoji != "👍" {
+		t.Fatalf("expected 1 record on add, got calls=%d emoji=%q", spy.calls, spy.lastEmoji)
+	}
+	// Toggle off — must NOT record.
+	if _, err := svc.ToggleReaction(ctx, "user-1", "ch1", ParentChannel, "m1", "👍"); err != nil {
+		t.Fatalf("remove reaction: %v", err)
+	}
+	if spy.calls != 1 {
+		t.Fatalf("un-react must not record, calls=%d", spy.calls)
+	}
+}
+
 // recordingNotifier captures the message IDs NotifyForMessage is invoked with,
 // so a test can assert which send paths do (and do not) fan out a user-facing
 // notification. NotifyForMessage runs in a detached goroutine, hence the
