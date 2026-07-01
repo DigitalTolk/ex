@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { apiFetch } from '@/lib/api';
 import { slugify } from '@/lib/format';
 import { readJSON, writeJSON } from '@/lib/storage';
@@ -31,6 +31,53 @@ export function useUserThreads(options?: { enabled?: boolean }) {
     },
     enabled: options?.enabled ?? true,
     staleTime: 15_000,
+  });
+}
+
+// userThreadInCache reports whether a thread root is already present in the
+// /threads list cache — used to gate the refetch fallback so a race-prone
+// re-read can't clobber a freshly-patched row.
+export function userThreadInCache(qc: QueryClient, threadRootID: string): boolean {
+  return (qc.getQueryData<ThreadSummary[]>(queryKeys.userThreads()) ?? []).some(
+    (t) => t.threadRootID === threadRootID,
+  );
+}
+
+// upsertUserThreadFromRoot patches the /threads list directly from a thread
+// root's `message.edited` payload (published alongside every reply), so a
+// new/updated thread appears live without the race-prone ListUserThreads refetch
+// that read stale (eventually-consistent) DynamoDB state. Only threads the viewer
+// provably participates in are ADDED: their own message's thread
+// (rootAuthorID === currentUserId) or one already in the list. Others are left to
+// the refetch fallback so /threads is never polluted with channel threads the
+// viewer isn't in. No-op for non-roots or roots with no replies.
+export function upsertUserThreadFromRoot(
+  qc: QueryClient,
+  root: Message,
+  currentUserId: string | undefined,
+): void {
+  const replyCount = root.replyCount ?? 0;
+  if (root.parentMessageID || replyCount < 1) return;
+  qc.setQueryData<ThreadSummary[]>(queryKeys.userThreads(), (old) => {
+    const list = old ?? [];
+    const idx = list.findIndex((t) => t.threadRootID === root.id);
+    const mine = !!currentUserId && root.authorID === currentUserId;
+    // Can't confirm participation for a thread we don't already track and didn't
+    // author — leave it to the refetch fallback rather than guess.
+    if (idx < 0 && !mine) return old;
+    const summary: ThreadSummary = {
+      parentID: root.parentID,
+      parentType: root.parentType === 'conversation' ? 'conversation' : 'channel',
+      threadRootID: root.id,
+      rootAuthorID: root.authorID,
+      rootBody: root.body,
+      rootCreatedAt: root.createdAt,
+      replyCount,
+      latestActivityAt: root.lastReplyAt ?? root.createdAt,
+    };
+    const next = idx >= 0 ? [...list.slice(0, idx), summary, ...list.slice(idx + 1)] : [summary, ...list];
+    // Newest activity first, matching the server ordering.
+    return next.sort((a, b) => b.latestActivityAt.localeCompare(a.latestActivityAt));
   });
 }
 

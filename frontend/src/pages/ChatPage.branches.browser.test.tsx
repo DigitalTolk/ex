@@ -91,6 +91,7 @@ vi.mock('@/context/TypingContext', () => ({
 // Heavy cache helpers are no-ops here — we assert on the router
 // branch decisions, not the cache mutations they delegate to.
 const mockMarkThreadSeen = vi.hoisted(() => vi.fn());
+const mockUserThreadInCache = vi.hoisted(() => vi.fn((..._args: unknown[]) => false));
 vi.mock('@/hooks/useMessages', () => ({
   appendMessageToCache: vi.fn(),
   invalidateThreadBothScopes: vi.fn(),
@@ -103,6 +104,8 @@ vi.mock('@/hooks/useMessages', () => ({
 vi.mock('@/hooks/useThreads', () => ({
   markThreadSeen: mockMarkThreadSeen,
   useUserThreads: () => ({ data: [], isSuccess: true, isError: false }),
+  upsertUserThreadFromRoot: vi.fn(),
+  userThreadInCache: (...args: unknown[]) => mockUserThreadInCache(...args),
 }));
 
 const shouldRefetchRef = vi.hoisted(() => ({ value: true }));
@@ -147,11 +150,14 @@ function lastHandlers(): WsHandlers {
   return mockUseWebSocket.mock.calls.at(-1)?.[0] as WsHandlers;
 }
 
-async function renderChatPage(initialPath = '/', seedCache = true) {
+async function renderChatPage(initialPath = '/', seedCache = true, seedThreads?: unknown[]) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   if (seedCache) {
     qc.setQueryData(['userChannels'], [{ channelID: 'ch-99', channelName: 'general' }]);
     qc.setQueryData(['userConversations'], [{ conversationID: 'conv-1' }]);
+  }
+  if (seedThreads) {
+    qc.setQueryData(['userThreads'], seedThreads);
   }
   return render(
     <QueryClientProvider client={qc}>
@@ -179,6 +185,8 @@ describe('ChatPage WS router — divergent-mock branch arms (browser)', () => {
     mockDispatchNotification.mockClear();
     mockMarkThreadNotificationUnread.mockClear();
     mockMarkThreadSeen.mockClear();
+    mockUserThreadInCache.mockClear();
+    mockUserThreadInCache.mockReturnValue(false);
     mockApiFetch.mockClear();
     navigateMock.mockClear();
     isActiveConversationMock.mockReturnValue(true);
@@ -331,6 +339,25 @@ describe('ChatPage WS router — divergent-mock branch arms (browser)', () => {
     expect(mockMarkThreadSeen).toHaveBeenCalledWith('root-1', '2026-05-01T00:00:00Z', {
       parentID: 'conv-1', parentType: 'conversation',
     });
+  });
+
+  it('onNotification skips the /threads refetch when the thread is already in the cache (patched, not re-read)', async () => {
+    mockUserThreadInCache.mockReturnValue(true);
+    await renderChatPage('/', true, [
+      { parentID: 'ch-99', parentType: 'channel', threadRootID: 'root-9', rootAuthorID: 'me', rootBody: 'hi', rootCreatedAt: '2026-05-01T00:00:00Z', replyCount: 1, latestActivityAt: '2026-05-01T00:01:00Z' },
+    ]);
+    mockApiFetch.mockClear();
+    // Thread already patched into /threads → the fallback refetch must not fire
+    // (it would re-run the race-prone read and could clobber the patched row).
+    expect(() =>
+      lastHandlers().onNotification?.({
+        kind: 'thread_reply', parentMessageID: 'root-9', parentID: 'ch-99',
+        parentType: 'channel', createdAt: '2026-05-01T00:02:00Z',
+      }),
+    ).not.toThrow();
+    expect(mockUserThreadInCache).toHaveBeenCalledWith(expect.anything(), 'root-9');
+    // No /threads re-read was issued for the already-cached thread.
+    expect(mockApiFetch).not.toHaveBeenCalledWith('/api/v1/threads');
   });
 
   it('onDraftUpdated returns early while local mutations are still suppressed', async () => {

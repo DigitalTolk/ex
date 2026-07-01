@@ -46,7 +46,7 @@ import { useUserChannels } from '@/hooks/useChannels';
 import { useUserConversations } from '@/hooks/useConversations';
 import { useCategories } from '@/hooks/useSidebar';
 import { useUserState } from '@/hooks/useUserState';
-import { markThreadSeen, useUserThreads } from '@/hooks/useThreads';
+import { markThreadSeen, upsertUserThreadFromRoot, userThreadInCache, useUserThreads } from '@/hooks/useThreads';
 import { useIsMobile } from '@/hooks/useIsMobile';
 
 function MobileChatLoadingPage() {
@@ -190,7 +190,12 @@ export default function ChatPage() {
           });
         }
         invalidateThreadBothScopes(queryClient, parentID, parentMessageID);
-        queryClient.invalidateQueries({ queryKey: queryKeys.userThreads() });
+        // NOTE: /threads is patched from the root's message.edited event
+        // (upsertUserThreadFromRoot in onMessageEdited), NOT invalidated here —
+        // an invalidate would refetch ListUserThreads, whose eventually-consistent
+        // DynamoDB read can race the just-written thread state and clobber the
+        // patch. The notification handler refetches only for threads we can't
+        // patch (non-member participants).
       } else {
         appendMessageToCache(queryClient, parentID, msg);
       }
@@ -205,6 +210,10 @@ export default function ChatPage() {
       // the ThreadPanel immediately (no refetch flicker), matching the in-place
       // update the main message list gets above.
       patchMessageInThreadCache(queryClient, parentID, parentMessageID || id, msg);
+      // A thread root's replyCount/lastReplyAt bump (published alongside every
+      // reply) patches the /threads list directly — this is what keeps /threads
+      // live without a refetch, avoiding the read-after-write race.
+      upsertUserThreadFromRoot(queryClient, msg, user?.id);
       // Link-preview cards pointing at this message (in other channels)
       // are now stale — refetch them so the edited body/attachments show.
       invalidateUnfurlsForMessage(queryClient, id);
@@ -353,7 +362,14 @@ export default function ChatPage() {
         } else {
           markThreadNotificationUnread(n.parentMessageID);
         }
-        queryClient.invalidateQueries({ queryKey: queryKeys.userThreads() });
+        // Only refetch /threads when we couldn't patch the row from the root's
+        // message.edited event (e.g. a thread participant who isn't a channel
+        // member, so never receives the channel-topic events). When the row is
+        // already present, refetching would just re-run the race-prone read and
+        // risk clobbering the patched row.
+        if (!userThreadInCache(queryClient, n.parentMessageID)) {
+          queryClient.invalidateQueries({ queryKey: queryKeys.userThreads() });
+        }
         queryClient.invalidateQueries({ queryKey: queryKeys.userState() });
       }
       // A top-level channel/DM notification.new is the ALERT (popup/sound, handled

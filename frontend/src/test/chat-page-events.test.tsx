@@ -314,7 +314,7 @@ describe('ChatPage WebSocket handlers', () => {
     expect(bumpChannelUnread).not.toHaveBeenCalled();
   });
 
-  it('onMessageNew with parentMessageID invalidates thread + userThreads (so the /threads count updates live)', () => {
+  it('onMessageNew with parentMessageID invalidates the thread scope but NOT userThreads (which is patched from the root edit instead)', () => {
     const { qc } = renderAt('/');
     const spy = vi.spyOn(qc, 'invalidateQueries');
     (capturedOptions.onMessageNew as (d: unknown) => void)(msg({
@@ -323,7 +323,39 @@ describe('ChatPage WebSocket handlers', () => {
     }));
     const calls = spy.mock.calls.map((c) => (c[0] as { queryKey?: unknown[] }).queryKey);
     expect(calls).toContainEqual(['thread', 'channels/ch-1', 'msg-root']);
-    expect(calls).toContainEqual(['userThreads']);
+    // No userThreads refetch — an eventually-consistent re-read would race the
+    // just-written state; /threads is patched from the root's message.edited.
+    expect(calls).not.toContainEqual(['userThreads']);
+  });
+
+  it('onMessageEdited for my thread root patches it into /threads live (no refetch)', () => {
+    const { qc } = renderAt('/');
+    const spy = vi.spyOn(qc, 'invalidateQueries');
+    // A root I authored gains a reply → replyCount bump arrives as message.edited.
+    (capturedOptions.onMessageEdited as (d: unknown) => void)(
+      msg({ id: 'msg-root', authorID: 'u-me', parentType: 'channel', replyCount: 1, lastReplyAt: '2026-05-01T10:00:00Z' }),
+    );
+    const threads = qc.getQueryData(['userThreads']) as Array<{ threadRootID: string; replyCount: number }>;
+    expect(threads?.[0]).toMatchObject({ threadRootID: 'msg-root', replyCount: 1 });
+    // Patched, not refetched.
+    expect(spy.mock.calls.map((c) => (c[0] as { queryKey?: unknown[] }).queryKey)).not.toContainEqual(['userThreads']);
+  });
+
+  it('onNotification does NOT refetch /threads when the thread is already patched into the cache', () => {
+    const { qc } = renderAt('/', (client) => {
+      client.setQueryData(['userThreads'], [
+        { parentID: 'ch-1', parentType: 'channel', threadRootID: 'msg-root', rootAuthorID: 'u-me', rootBody: 'hi', rootCreatedAt: '2026-05-01T09:00:00Z', replyCount: 1, latestActivityAt: '2026-05-01T10:00:00Z' },
+      ]);
+    });
+    const spy = vi.spyOn(qc, 'invalidateQueries');
+    (capturedOptions.onNotification as (d: unknown) => void)({
+      kind: 'thread_reply',
+      parentID: 'ch-1',
+      parentType: 'channel',
+      parentMessageID: 'msg-root',
+      createdAt: '2026-05-01T10:00:01Z',
+    });
+    expect(spy.mock.calls.map((c) => (c[0] as { queryKey?: unknown[] }).queryKey)).not.toContainEqual(['userThreads']);
   });
 
   it('onMessageNew marks the active thread seen instead of leaving it unread', () => {
