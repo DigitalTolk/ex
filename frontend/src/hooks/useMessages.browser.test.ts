@@ -2,6 +2,7 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { QueryClient } from '@tanstack/react-query';
 import {
   appendMessageToCache,
+  appendReplyToThreadCache,
   updateMessageInCache,
   markMessageDeletedInCache,
   removeMessageFromCache,
@@ -159,6 +160,32 @@ describe('useMessages cache helpers', () => {
     // are marked stale.
     expect(qc.getQueryState(queryKeys.thread('channels/ch-1', 'm-root'))?.isInvalidated).toBe(true);
     expect(qc.getQueryState(queryKeys.thread('conversations/ch-1', 'm-root'))?.isInvalidated).toBe(true);
+  });
+
+  it('appendReplyToThreadCache appends a new reply to the cached thread and reports present', () => {
+    const qc = new QueryClient();
+    qc.setQueryData(queryKeys.thread('channels/ch-1', 'm-root'), [msg('m-root'), msg('r1', { parentMessageID: 'm-root' })]);
+    const present = appendReplyToThreadCache(qc, 'ch-1', 'm-root', msg('r2', { parentMessageID: 'm-root' }));
+    expect(present).toBe(true);
+    const thread = qc.getQueryData(queryKeys.thread('channels/ch-1', 'm-root')) as Message[];
+    expect(thread.map((m) => m.id)).toEqual(['m-root', 'r1', 'r2']);
+  });
+
+  it('appendReplyToThreadCache is idempotent when the reply is already cached', () => {
+    const qc = new QueryClient();
+    qc.setQueryData(queryKeys.thread('conversations/ch-1', 'm-root'), [msg('m-root'), msg('r1', { parentMessageID: 'm-root' })]);
+    const present = appendReplyToThreadCache(qc, 'ch-1', 'm-root', msg('r1', { parentMessageID: 'm-root' }));
+    expect(present).toBe(true);
+    const thread = qc.getQueryData(queryKeys.thread('conversations/ch-1', 'm-root')) as Message[];
+    expect(thread.map((m) => m.id)).toEqual(['m-root', 'r1']);
+  });
+
+  it('appendReplyToThreadCache reports not-present when the thread is not cached', () => {
+    const qc = new QueryClient();
+    const present = appendReplyToThreadCache(qc, 'ch-1', 'm-root', msg('r1', { parentMessageID: 'm-root' }));
+    expect(present).toBe(false);
+    expect(qc.getQueryData(queryKeys.thread('channels/ch-1', 'm-root'))).toBeUndefined();
+    expect(qc.getQueryData(queryKeys.thread('conversations/ch-1', 'm-root'))).toBeUndefined();
   });
 });
 

@@ -134,12 +134,18 @@ export const MarkdownEditor = forwardRef<WysiwygEditorHandle, Props>(function Ma
             skinTone: () => (cbRef.current.completionProviders ?? EMPTY_PROVIDERS).skinTone(),
           }),
           composerTheme,
-          // Position the autocomplete popup with `fixed` so it escapes the
-          // composer box's `overflow-hidden` (the mobile rounded pill) and the
-          // /threads card's `overflow-clip`. Without this the mention/emoji
-          // typeahead opened clipped behind those layers on mobile. The
-          // tooltip DOM stays under the editor, so it's still themed and
-          // queryable in tests.
+          // Render the autocomplete popup into <body> with `fixed` positioning
+          // so it escapes EVERY clipping/stacking ancestor of the composer. A
+          // `position:fixed` element is still clipped and re-based by any
+          // ancestor that is a containing block for fixed — a `transform`
+          // (Motion's swipe-offset on the /threads ThreadPanel, the ThreadCard
+          // list), `contain`, `filter`, etc. — not just `overflow`. Keeping the
+          // tooltip under the editor meant those ancestors clipped the
+          // mention/emoji typeahead on mobile and in /threads. `parent:
+          // document.body` lifts it out of all of them; CM wraps it in a
+          // container carrying the editor's theme classes, so our composerTheme
+          // still applies (and it stays queryable at document level in tests).
+          // The theme pins its z-index above the app's top layer (see theme.ts).
           //
           // tooltipSpace bounds the placement to the VISUAL viewport (the area
           // above the on-screen keyboard). Without it CM measures against
@@ -147,7 +153,7 @@ export const MarkdownEditor = forwardRef<WysiwygEditorHandle, Props>(function Ma
           // opens — so it thinks there's room below the cursor and renders the
           // typeahead behind the keyboard. Constraining `bottom` to the keyboard
           // top makes CM flip it ABOVE the cursor when needed.
-          tooltips({ position: 'fixed', tooltipSpace: composerTooltipSpace }),
+          tooltips({ parent: document.body, position: 'fixed', tooltipSpace: composerTooltipSpace }),
           EditorView.lineWrapping,
           EditorView.contentAttributes.of({
             'aria-label': ariaLabel,

@@ -14,6 +14,7 @@ import {
   resetSeenCache,
   getSeenMap,
   upsertUserThreadFromRoot,
+  upsertUserThreadRow,
   userThreadInCache,
   type ThreadSummary,
 } from './useThreads';
@@ -381,5 +382,34 @@ describe('upsertUserThreadFromRoot / userThreadInCache', () => {
 
   it('userThreadInCache is false on an empty cache', () => {
     expect(userThreadInCache(new QueryClient(), 'root-1')).toBe(false);
+  });
+});
+
+describe('upsertUserThreadRow', () => {
+  it('inserts a new row unconditionally (participant-scoped — no author gate)', () => {
+    const qc = new QueryClient();
+    // A thread the viewer did NOT author and isn't tracking yet — this is
+    // exactly what the author-gated upsertUserThreadFromRoot skips.
+    upsertUserThreadRow(qc, threadSummary({ threadRootID: 't-9', rootAuthorID: 'someone-else' }));
+    const list = qc.getQueryData<ThreadSummary[]>(queryKeys.userThreads());
+    expect(list?.map((t) => t.threadRootID)).toEqual(['t-9']);
+  });
+
+  it('updates an existing row in place and re-sorts newest activity first', () => {
+    const qc = new QueryClient();
+    qc.setQueryData<ThreadSummary[]>(queryKeys.userThreads(), [
+      threadSummary({ threadRootID: 't-1', replyCount: 1, latestActivityAt: '2026-05-01T10:00:00Z' }),
+      threadSummary({ threadRootID: 't-2', latestActivityAt: '2026-05-01T09:00:00Z' }),
+    ]);
+    upsertUserThreadRow(qc, threadSummary({ threadRootID: 't-1', replyCount: 5, latestActivityAt: '2026-05-01T08:00:00Z' }));
+    const list = qc.getQueryData<ThreadSummary[]>(queryKeys.userThreads());
+    // t-1 updated to replyCount 5 and, now the oldest, sorts below t-2.
+    expect(list?.map((t) => [t.threadRootID, t.replyCount])).toEqual([['t-2', 1], ['t-1', 5]]);
+  });
+
+  it('is a no-op when the payload has no threadRootID', () => {
+    const qc = new QueryClient();
+    upsertUserThreadRow(qc, threadSummary({ threadRootID: '' }));
+    expect(qc.getQueryData(queryKeys.userThreads())).toBeUndefined();
   });
 });

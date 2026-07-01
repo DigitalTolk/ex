@@ -52,6 +52,20 @@ const userUpdatedSchema = z.object({
   lastSeenAt: z.string().optional(),
 });
 
+// thread.updated carries a full ThreadSummary so the client can add/patch the
+// /threads row without a refetch. The server only sends it to participants, so
+// receipt itself is the participation signal — the handler patches unconditionally.
+const threadUpdatedSchema = z.object({
+  parentID: z.string().min(1),
+  parentType: z.enum(['channel', 'conversation']),
+  threadRootID: z.string().min(1),
+  rootAuthorID: z.string().min(1),
+  rootBody: z.string(),
+  rootCreatedAt: z.string().min(1),
+  replyCount: z.number(),
+  latestActivityAt: z.string().min(1),
+}).passthrough();
+
 function parser<T>(schema: z.ZodType<T>): (v: unknown) => T | null {
   return (v: unknown) => {
     const result = schema.safeParse(v);
@@ -100,3 +114,15 @@ export interface UserUpdatedPayload {
   lastSeenAt?: string;
 }
 export const parseUserUpdated = parser(userUpdatedSchema);
+
+export interface ThreadUpdatedPayload {
+  parentID: string;
+  parentType: 'channel' | 'conversation';
+  threadRootID: string;
+  rootAuthorID: string;
+  rootBody: string;
+  rootCreatedAt: string;
+  replyCount: number;
+  latestActivityAt: string;
+}
+export const parseThreadUpdated = parser(threadUpdatedSchema) as (v: unknown) => ThreadUpdatedPayload | null;

@@ -434,10 +434,12 @@ describe('useMessages — useSendMessage thread-reply path', () => {
     await new Promise((r) => setTimeout(r, 200));
   }
 
-  it('leaves the main list untouched and refreshes userThreads (no thread cache to patch)', async () => {
+  it('leaves the main list untouched and does NOT refetch userThreads (thread.updated patches it)', async () => {
     // parentMessageID set → no appendMessageToCache to the main list; with no
     // open thread query, the optimistic patch updater hits its `: old`
-    // (undefined) arm and creates nothing, while userThreads still refreshes.
+    // (undefined) arm and creates nothing. The /threads list is patched live by
+    // the participant-scoped `thread.updated` event, so no ListUserThreads
+    // refetch fires here.
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     qc.setQueryData(queryKeys.channelMessages('ch-1'), withInitialPage([msg({ id: 'm-1' })]));
     const invalidateSpy = vi.spyOn(qc, 'invalidateQueries');
@@ -447,7 +449,7 @@ describe('useMessages — useSendMessage thread-reply path', () => {
     const data = qc.getQueryData<InfiniteData<MessageWindow>>(queryKeys.channelMessages('ch-1'));
     expect(data?.pages[0].items.map((m) => m.id)).toEqual(['m-1']);
     expect(qc.getQueryData(queryKeys.thread('channels/ch-1', 'root-1'))).toBeUndefined();
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: queryKeys.userThreads() });
+    expect(invalidateSpy).not.toHaveBeenCalledWith({ queryKey: queryKeys.userThreads() });
     // The thread query itself is NOT invalidated (optimistic append is authoritative).
     expect(invalidateSpy).not.toHaveBeenCalledWith({ queryKey: queryKeys.thread('channels/ch-1', 'root-1') });
   });

@@ -460,10 +460,142 @@ func (s *MessageService) Send(ctx context.Context, userID, parentID, parentType,
 	// refetches from racing old state.
 	if updatedThreadRoot != nil {
 		s.publishEvent(ctx, parentID, parentType, events.EventMessageEdited, updatedThreadRoot)
+		// Participant-scoped: patch each thread participant's /threads list live
+		// from the authoritative root, so a thread they didn't author appears
+		// without an eventually-consistent ListUserThreads re-read. This is what
+		// channel-topic message.edited can't do — it reaches non-participants too,
+		// so the client can't tell whether to add the row. Separate from notify():
+		// this updates the list for ALL participants, not just those we alert.
+		s.publishThreadUpdate(ctx, parentID, parentType, userID, updatedThreadRoot)
 	}
 
 	s.attachRendered(msg)
 	return msg, nil
+}
+
+// publishThreadUpdate fans a thread.updated event out to every participant of a
+// thread — the root author, everyone who has replied, explicit followers, and
+// the reply author themselves — so their /threads list patches live from the
+// reply's authoritative root instead of a race-prone refetch. Runs detached off
+// the send path (a member read + thread-index read + N per-user publishes) so it
+// never adds to the sender's latency; a failure only means those clients fall
+// back to their next ListUserThreads refresh.
+func (s *MessageService) publishThreadUpdate(ctx context.Context, parentID, parentType, replyAuthorID string, root *model.Message) {
+	if root == nil || s.publisher == nil {
+		return
+	}
+	safe.Go(func() {
+		bg, cancel := detachedContext(ctx)
+		defer cancel()
+		recipients := s.threadParticipants(bg, parentID, parentType, root, replyAuthorID)
+		if len(recipients) == 0 {
+			return
+		}
+		latest := root.CreatedAt
+		if root.LastReplyAt != nil {
+			latest = *root.LastReplyAt
+		}
+		summary := &ThreadSummary{
+			ParentID:         parentID,
+			ParentType:       parentType,
+			ThreadRootID:     root.ID,
+			RootAuthorID:     root.AuthorID,
+			RootBody:         root.Body,
+			RootCreatedAt:    root.CreatedAt,
+			ReplyCount:       root.ReplyCount,
+			LatestActivityAt: latest,
+		}
+		channels := make([]string, 0, len(recipients))
+		for _, uid := range recipients {
+			channels = append(channels, pubsub.UserChannel(uid))
+		}
+		events.PublishMany(bg, s.publisher, channels, events.EventThreadUpdated, summary)
+	})
+}
+
+// threadParticipants returns the user IDs that should see this thread in their
+// /threads list: the root author, everyone who has replied, explicit followers,
+// and the reply author (who is re-participating by posting). Users who have
+// explicitly unfollowed are dropped, and everyone is filtered to the parent's
+// current members so a departed user is never re-shown the thread. Mirrors the
+// participation rules ListUserThreads applies on a full read, but scoped to a
+// single thread from the data already in hand on the reply path.
+func (s *MessageService) threadParticipants(ctx context.Context, parentID, parentType string, root *model.Message, replyAuthorID string) []string {
+	members := s.parentMemberIDs(ctx, parentID, parentType)
+	if len(members) == 0 {
+		return nil
+	}
+	isMember := make(map[string]bool, len(members))
+	for _, uid := range members {
+		isMember[uid] = true
+	}
+	unfollowed := make(map[string]bool)
+	followers := make([]string, 0)
+	if s.threadFollows != nil {
+		if follows, err := s.threadFollows.ListThreadFollows(ctx, parentID, root.ID); err == nil {
+			for _, f := range follows {
+				if f.Following {
+					followers = append(followers, f.UserID)
+				} else {
+					unfollowed[f.UserID] = true
+				}
+			}
+		}
+	}
+	out := make([]string, 0)
+	seen := make(map[string]bool)
+	add := func(uid string, force bool) {
+		if uid == "" || seen[uid] || !isMember[uid] || (unfollowed[uid] && !force) {
+			return
+		}
+		seen[uid] = true
+		out = append(out, uid)
+	}
+	// The reply author just posted, so they participate even if they had
+	// previously unfollowed — force past the unfollow filter for them only.
+	add(replyAuthorID, true)
+	add(root.AuthorID, false)
+	if replies, err := s.messages.ListThreadReplies(ctx, root.ID); err == nil {
+		for _, m := range replies {
+			add(m.AuthorID, false)
+		}
+	}
+	for _, uid := range followers {
+		add(uid, false)
+	}
+	return out
+}
+
+// parentMemberIDs returns the current members of a channel or the participants
+// of a conversation. Empty on any error or unknown parent type — callers treat
+// "no members" as "nobody to notify".
+func (s *MessageService) parentMemberIDs(ctx context.Context, parentID, parentType string) []string {
+	switch parentType {
+	case ParentChannel:
+		if s.memberships == nil {
+			return nil
+		}
+		members, err := s.memberships.ListMembers(ctx, parentID)
+		if err != nil {
+			return nil
+		}
+		ids := make([]string, 0, len(members))
+		for _, m := range members {
+			ids = append(ids, m.UserID)
+		}
+		return ids
+	case ParentConversation:
+		if s.conversations == nil {
+			return nil
+		}
+		conv, err := s.conversations.GetConversation(ctx, parentID)
+		if err != nil || conv == nil {
+			return nil
+		}
+		return conv.ParticipantIDs
+	default:
+		return nil
+	}
 }
 
 type WebhookMessageInput struct {

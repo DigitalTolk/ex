@@ -108,11 +108,29 @@ func (s *RedisActivityStore) UnreadActivityCount(ctx context.Context, userID str
 	return int(n), nil
 }
 
-// MarkActivitySeen advances the user's seen watermark to now, so subsequent
+// MarkActivitySeen advances the user's seen watermark so subsequent
 // UnreadActivityCount calls return 0 until the next item arrives.
+//
+// The watermark is set to the max of wall-clock now and the newest existing
+// item's score. Anchoring only to `now` leaves a race: an item added in the
+// same millisecond as (or, under clock skew, just ahead of) now keeps a score
+// >= now, so the exclusive `> watermark` count in UnreadActivityCount would
+// still report it unread even though it existed when the user marked read —
+// the user clicks "mark read" but a just-landed item stays highlighted.
+// Advancing to the newest score guarantees every item present at mark time is
+// counted as read; genuinely newer items (higher score) remain unread.
 func (s *RedisActivityStore) MarkActivitySeen(ctx context.Context, userID string) error {
-	now := s.now().UnixMilli()
-	if err := s.client.Set(ctx, activitySeenKey(userID), now, activityTTL).Err(); err != nil {
+	watermark := s.now().UnixMilli()
+	top, err := s.client.ZRevRangeWithScores(ctx, activityKey(userID), 0, 0).Result()
+	if err != nil {
+		return fmt.Errorf("store: activity top score: %w", err)
+	}
+	if len(top) == 1 {
+		if score := int64(top[0].Score); score > watermark {
+			watermark = score
+		}
+	}
+	if err := s.client.Set(ctx, activitySeenKey(userID), watermark, activityTTL).Err(); err != nil {
 		return fmt.Errorf("store: activity mark seen: %w", err)
 	}
 	return nil

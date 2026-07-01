@@ -90,6 +90,14 @@ async function animationFrames(count: number) {
   }
 }
 
+// The deep-link flash ring is `ring-amber-400/50`, applied on the same element
+// that carries data-message-id (MessageItem). Asserting on this class — not just
+// row presence — is what actually verifies (de)highlighting.
+function hasRing(id: string): boolean {
+  const el = document.querySelector(`[data-message-id="${id}"]`);
+  return !!el && el.className.includes('ring-amber-400/50');
+}
+
 describe('MessageList coverage — header / footer pagination labels', () => {
   it('renders the older-messages header with the loading label while fetching next page', async () => {
     const screen = await render(
@@ -478,11 +486,9 @@ describe('MessageList coverage — own-message auto-stick guards', () => {
     expect(document.querySelector('[data-message-id="fo-10"]')).not.toBeNull();
   });
 
-  it('does not clear the highlight flash that now belongs to a different anchor', async () => {
-    // Anchor A starts a 2.2s flash. Before it fires we switch to anchor B,
-    // which sets highlightedMessageId to B. When A's timeout finally runs,
-    // `curr` (=B) !== anchorMsgId-at-closure (A) → the `: curr` arm keeps the
-    // current highlight (line 166 else arm).
+  it('moves the flash ring to a newer anchor when the anchor switches', async () => {
+    // Switching anchors tears down the old anchor's flash timer (effect cleanup)
+    // and arms a fresh one for the new anchor, so the ring follows the anchor.
     const messages = Array.from({ length: 8 }, (_, i) =>
       msg({ id: `fl-${i}`, body: `m${i}`, createdAt: new Date(Date.UTC(2026, 4, 1, 10, i)).toISOString() }),
     );
@@ -502,19 +508,16 @@ describe('MessageList coverage — own-message auto-stick guards', () => {
         <Harness />
       </Wrap>,
     );
-    await vi.waitFor(() => expect(document.querySelector('[data-message-id="fl-1"]')).not.toBeNull(), { timeout: 3000 });
+    await vi.waitFor(() => expect(hasRing('fl-1')).toBe(true), { timeout: 3000 });
     // Switch the anchor well before the 2200ms flash of fl-1 elapses.
     await screen.getByTestId('switch').click();
-    await animationFrames(2);
-    // Let fl-1's original flash timeout fire; it must NOT clear fl-5's highlight.
-    await new Promise((r) => setTimeout(r, 2400));
-    expect(document.querySelector('[data-message-id="fl-5"]')).not.toBeNull();
+    await vi.waitFor(() => expect(hasRing('fl-5')).toBe(true), { timeout: 3000 });
+    expect(hasRing('fl-1')).toBe(false);
+    // The new anchor's flash still clears on its own.
+    await vi.waitFor(() => expect(hasRing('fl-5')).toBe(false), { timeout: 4000 });
   });
 
-  it('highlights then clears a deep-link anchor flash without clobbering a newer anchor', async () => {
-    // Drives the anchor highlight timeout's `curr === anchorMsgId ? null :
-    // curr` updater (line 166): when the flash timeout fires the highlight
-    // is still the same anchor, so it clears to null.
+  it('highlights a deep-link anchor then removes the flash ring after the timeout', async () => {
     const messages = Array.from({ length: 8 }, (_, i) =>
       msg({ id: `hl-${i}`, body: `m${i}`, createdAt: new Date(Date.UTC(2026, 4, 1, 10, i)).toISOString() }),
     );
@@ -525,13 +528,52 @@ describe('MessageList coverage — own-message auto-stick guards', () => {
         </Wrap>
       </div>,
     );
-    await vi.waitFor(() => {
-      expect(document.querySelector('[data-message-id="hl-2"]')).not.toBeNull();
-    }, { timeout: 3000 });
-    // The 2.2s flash clears the highlight. Just assert the row survives the
-    // timeout (the updater ran without error).
-    await new Promise((r) => setTimeout(r, 2400));
+    // The ring appears on the anchor...
+    await vi.waitFor(() => expect(hasRing('hl-2')).toBe(true), { timeout: 3000 });
+    // ...and is genuinely removed once the 2.2s flash window elapses (not just
+    // "the row survives" — this asserts the de-highlight the old test missed).
+    await vi.waitFor(() => expect(hasRing('hl-2')).toBe(false), { timeout: 4000 });
     expect(document.querySelector('[data-message-id="hl-2"]')).not.toBeNull();
+  });
+
+  it('keeps clearing the flash after a page prepend shifts the anchor index (regression)', async () => {
+    // Regression for "highlighted messages never de-highlight": a deep link
+    // opens an `around` window, then Virtuoso prepends an older page, shifting
+    // the anchor's index. That re-ran the scroll effect, whose cleanup cancelled
+    // the flash-clear timer while the dedup early-return skipped re-arming it —
+    // so the ring stuck forever. The flash now lives in its own anchor-identity
+    // effect that an index shift can't tear down.
+    const recent = Array.from({ length: 6 }, (_, i) =>
+      msg({ id: `n-${i}`, body: `n${i}`, createdAt: new Date(Date.UTC(2026, 4, 1, 11, i)).toISOString() }),
+    );
+    const older = Array.from({ length: 6 }, (_, i) =>
+      msg({ id: `o-${i}`, body: `o${i}`, createdAt: new Date(Date.UTC(2026, 4, 1, 10, i)).toISOString() }),
+    );
+    function Harness() {
+      const [pages, setPages] = useState([{ items: recent }]);
+      return (
+        <>
+          <button data-testid="prepend" onClick={() => setPages([{ items: older }, { items: recent }])}>prepend</button>
+          <div style={{ height: 420, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+            <MessageList {...baseProps(recent)} pages={pages} hasPreviousPage anchorMsgId="n-3" anchorRevision="rev-p" />
+          </div>
+        </>
+      );
+    }
+    const screen = await render(
+      <Wrap>
+        <Harness />
+      </Wrap>,
+    );
+    await vi.waitFor(() => expect(hasRing('n-3')).toBe(true), { timeout: 3000 });
+    // Let the scroll rAF apply the anchor (records the dedup key), THEN prepend
+    // an older page so anchorIndex shifts and the scroll effect re-runs.
+    await animationFrames(2);
+    await screen.getByTestId('prepend').click();
+    await animationFrames(2);
+    expect(hasRing('n-3')).toBe(true); // still highlighted right after the shift
+    // The flash must still clear on its own — the crux of the regression.
+    await vi.waitFor(() => expect(hasRing('n-3')).toBe(false), { timeout: 4000 });
   });
 
 });

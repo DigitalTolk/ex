@@ -114,6 +114,36 @@ func TestRedisActivityStore_UnreadAndSeen(t *testing.T) {
 	}
 }
 
+func TestRedisActivityStore_MarkSeenClearsAtOrAheadOfNow(t *testing.T) {
+	s, _ := setupActivityStore(t)
+	ctx := context.Background()
+	base := time.Date(2026, 6, 30, 12, 0, 0, 0, time.UTC)
+	s.now = func() time.Time { return base }
+
+	// Marking an empty stream is a no-op that still advances the watermark.
+	if err := s.MarkActivitySeen(ctx, "u-1"); err != nil {
+		t.Fatalf("MarkActivitySeen empty: %v", err)
+	}
+
+	// An item whose score is at or beyond `now` when the user marks read (same
+	// millisecond, or clock skew). Anchoring the watermark to `now` alone leaves
+	// it counted as unread — its score is >= now and UnreadActivityCount uses an
+	// exclusive `> watermark` bound — so the user clicks "mark read" but it stays
+	// highlighted. Advancing the watermark to the newest score clears it.
+	_ = s.AddActivity(ctx, "u-1", activityAt("ahead", base.Add(time.Minute)))
+	if err := s.MarkActivitySeen(ctx, "u-1"); err != nil {
+		t.Fatalf("MarkActivitySeen: %v", err)
+	}
+	if n, _ := s.UnreadActivityCount(ctx, "u-1"); n != 0 {
+		t.Fatalf("unread after marking future-scored item = %d, want 0", n)
+	}
+	// A strictly newer item still counts as unread.
+	_ = s.AddActivity(ctx, "u-1", activityAt("newer", base.Add(2*time.Minute)))
+	if n, _ := s.UnreadActivityCount(ctx, "u-1"); n != 1 {
+		t.Fatalf("unread after newer item = %d, want 1", n)
+	}
+}
+
 func TestRedisActivityStore_UnreadCountError(t *testing.T) {
 	s, _ := setupActivityStore(t)
 	ctx := context.Background()

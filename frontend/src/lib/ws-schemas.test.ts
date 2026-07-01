@@ -7,6 +7,7 @@ import {
   parseMessageDeleted,
   parsePresence,
   parseServerVersion,
+  parseThreadUpdated,
   parseTyping,
   parseUserUpdated,
 } from './ws-schemas';
@@ -130,5 +131,35 @@ describe('event payload parsers', () => {
     expect(ok?.timeZone).toBe('UTC');
     expect(parseUserUpdated({ timeZone: 'UTC' })).toBeNull(); // missing id
     expect(parseUserUpdated({ id: '' })).toBeNull();
+  });
+
+  it('parseThreadUpdated accepts a full ThreadSummary and allows an empty rootBody', () => {
+    const ok = parseThreadUpdated({
+      parentID: 'ch-1',
+      parentType: 'channel',
+      threadRootID: 'root-1',
+      rootAuthorID: 'u-2',
+      rootBody: '',
+      rootCreatedAt: '2026-05-01T10:00:00Z',
+      replyCount: 3,
+      latestActivityAt: '2026-05-01T10:05:00Z',
+    });
+    expect(ok).toMatchObject({ threadRootID: 'root-1', replyCount: 3, parentType: 'channel' });
+  });
+
+  it('parseThreadUpdated rejects a missing threadRootID, a bad parentType, and a non-numeric replyCount', () => {
+    const base = {
+      parentID: 'ch-1',
+      parentType: 'channel',
+      threadRootID: 'root-1',
+      rootAuthorID: 'u-2',
+      rootBody: 'hi',
+      rootCreatedAt: '2026-05-01T10:00:00Z',
+      replyCount: 1,
+      latestActivityAt: '2026-05-01T10:05:00Z',
+    };
+    expect(parseThreadUpdated({ ...base, threadRootID: '' })).toBeNull();
+    expect(parseThreadUpdated({ ...base, parentType: 'nope' })).toBeNull();
+    expect(parseThreadUpdated({ ...base, replyCount: 'x' })).toBeNull();
   });
 });

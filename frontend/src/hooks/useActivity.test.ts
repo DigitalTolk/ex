@@ -108,6 +108,21 @@ describe('useActivity hooks', () => {
     expect(client.getQueryData<ActivityFeed>(queryKeys.activity())?.unread).toBe(0);
   });
 
+  it('useMarkActivityRead cancels the in-flight activity fetch and reconciles so a stale read cannot clobber the zero', async () => {
+    vi.mocked(apiFetch).mockResolvedValue(undefined);
+    const client = makeClient();
+    const cancelSpy = vi.spyOn(client, 'cancelQueries');
+    const invalidateSpy = vi.spyOn(client, 'invalidateQueries');
+    client.setQueryData<ActivityFeed>(queryKeys.activity(), { items: [{ id: 'a' } as never], unread: 3 });
+    const { result } = renderHook(() => useMarkActivityRead(), { wrapper: wrapperFor(client) });
+    await result.current.mutateAsync();
+    // In-flight GET is aborted before the optimistic zero so it can't overwrite it.
+    expect(cancelSpy).toHaveBeenCalledWith({ queryKey: queryKeys.activity() });
+    // Then a reconciling refetch against the now-advanced server watermark.
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: queryKeys.activity() });
+    expect(client.getQueryData<ActivityFeed>(queryKeys.activity())?.unread).toBe(0);
+  });
+
   it('useMarkActivityRead is a no-op on an empty cache', async () => {
     vi.mocked(apiFetch).mockResolvedValue(undefined);
     const client = makeClient();

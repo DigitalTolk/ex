@@ -62,12 +62,15 @@ describe('useSendChannelMessage', () => {
     expect(sent.clientTs).toBeGreaterThan(0);
   });
 
-  it('posting a thread reply optimistically appends to the open thread and refreshes the /threads count', async () => {
+  it('posting a thread reply optimistically appends to the open thread without any /threads refetch', async () => {
     // The sender's reply must show immediately rather than waiting for the
     // WS round-trip (the user-reported "visible delay" posting in threads).
-    // We append the returned reply straight into the thread cache and
-    // refresh userThreads for the count; the thread query itself is NOT
-    // invalidated — a refetch could briefly drop the just-added reply.
+    // We append the returned reply straight into the thread cache. The /threads
+    // list is patched live by the participant-scoped `thread.updated` event
+    // (the sender is a participant), so we no longer fire an eventually-
+    // consistent ListUserThreads refetch here that could race that patch — nor
+    // do we invalidate the thread query itself (a refetch could briefly drop
+    // the just-added reply).
     const reply = { id: 'r-1', parentID: 'ch-1', parentMessageID: 'root', authorID: 'u-1', body: 'r', createdAt: '' };
     vi.mocked(apiFetch).mockResolvedValue(reply);
 
@@ -85,7 +88,7 @@ describe('useSendChannelMessage', () => {
     // Reply is visible in the thread immediately.
     expect(queryClient.getQueryData(['thread', 'channels/ch-1', 'root'])).toEqual([root, reply]);
     const keys = spy.mock.calls.map((c) => (c[0] as { queryKey?: unknown[] }).queryKey);
-    expect(keys).toContainEqual(['userThreads']);
+    expect(keys).not.toContainEqual(['userThreads']);
     expect(keys).not.toContainEqual(['thread', 'channels/ch-1', 'root']);
   });
 

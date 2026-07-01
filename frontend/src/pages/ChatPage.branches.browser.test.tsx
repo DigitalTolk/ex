@@ -92,19 +92,27 @@ vi.mock('@/context/TypingContext', () => ({
 // branch decisions, not the cache mutations they delegate to.
 const mockMarkThreadSeen = vi.hoisted(() => vi.fn());
 const mockUserThreadInCache = vi.hoisted(() => vi.fn((..._args: unknown[]) => false));
+// Defaults to "not cached" (returns false) so a reply falls through to the
+// invalidate fallback; individual tests flip it to true to assert the live
+// append path skips the invalidate.
+const mockAppendReplyToThreadCache = vi.hoisted(() => vi.fn((..._args: unknown[]) => false));
+const mockInvalidateThreadBothScopes = vi.hoisted(() => vi.fn());
 vi.mock('@/hooks/useMessages', () => ({
   appendMessageToCache: vi.fn(),
-  invalidateThreadBothScopes: vi.fn(),
+  appendReplyToThreadCache: (...args: unknown[]) => mockAppendReplyToThreadCache(...args),
+  invalidateThreadBothScopes: (...args: unknown[]) => mockInvalidateThreadBothScopes(...args),
   invalidateUnfurlsForMessage: vi.fn(),
   markMessageDeletedInCache: vi.fn(),
   patchMessageInThreadCache: vi.fn(),
   resyncMessageCache: vi.fn().mockResolvedValue(undefined),
   updateMessageInCache: vi.fn(),
 }));
+const mockUpsertUserThreadRow = vi.hoisted(() => vi.fn());
 vi.mock('@/hooks/useThreads', () => ({
   markThreadSeen: mockMarkThreadSeen,
   useUserThreads: () => ({ data: [], isSuccess: true, isError: false }),
   upsertUserThreadFromRoot: vi.fn(),
+  upsertUserThreadRow: (...args: unknown[]) => mockUpsertUserThreadRow(...args),
   userThreadInCache: (...args: unknown[]) => mockUserThreadInCache(...args),
 }));
 
@@ -186,6 +194,10 @@ describe('ChatPage WS router — divergent-mock branch arms (browser)', () => {
     mockMarkThreadNotificationUnread.mockClear();
     mockMarkThreadSeen.mockClear();
     mockUserThreadInCache.mockClear();
+    mockAppendReplyToThreadCache.mockClear();
+    mockAppendReplyToThreadCache.mockReturnValue(false);
+    mockInvalidateThreadBothScopes.mockClear();
+    mockUpsertUserThreadRow.mockClear();
     mockUserThreadInCache.mockReturnValue(false);
     mockApiFetch.mockClear();
     navigateMock.mockClear();
@@ -266,6 +278,50 @@ describe('ChatPage WS router — divergent-mock branch arms (browser)', () => {
     await renderChatPage('/', false);
     // userChannels / userConversations getQueryData return undefined → `?? []`.
     expect(() => lastHandlers().onMessageNew?.(msg({ parentType: undefined }))).not.toThrow();
+  });
+
+  it('onMessageNew appends a thread reply and skips the invalidate when the thread is cached', async () => {
+    mockAppendReplyToThreadCache.mockReturnValue(true);
+    await renderChatPage();
+    lastHandlers().onMessageNew?.(msg({
+      parentID: 'ch-99', parentType: 'channel', parentMessageID: 'root-1', authorID: 'other-user',
+    }));
+    expect(mockAppendReplyToThreadCache).toHaveBeenCalledWith(expect.anything(), 'ch-99', 'root-1', expect.anything());
+    // Cached thread was patched in place → no refetch-driven invalidate.
+    expect(mockInvalidateThreadBothScopes).not.toHaveBeenCalled();
+  });
+
+  it('onMessageNew falls back to invalidating the thread scope when the reply is not in cache', async () => {
+    mockAppendReplyToThreadCache.mockReturnValue(false);
+    await renderChatPage();
+    lastHandlers().onMessageNew?.(msg({
+      parentID: 'ch-99', parentType: 'channel', parentMessageID: 'root-1', authorID: 'other-user',
+    }));
+    expect(mockInvalidateThreadBothScopes).toHaveBeenCalledWith(expect.anything(), 'ch-99', 'root-1');
+  });
+
+  it('onThreadUpdated patches the /threads row from a valid payload', async () => {
+    await renderChatPage();
+    lastHandlers().onThreadUpdated?.({
+      parentID: 'ch-99',
+      parentType: 'channel',
+      threadRootID: 'root-1',
+      rootAuthorID: 'someone-else',
+      rootBody: 'hi',
+      rootCreatedAt: '2026-05-01T10:00:00Z',
+      replyCount: 2,
+      latestActivityAt: '2026-05-01T10:05:00Z',
+    });
+    expect(mockUpsertUserThreadRow).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ threadRootID: 'root-1', replyCount: 2 }),
+    );
+  });
+
+  it('onThreadUpdated ignores a malformed payload', async () => {
+    await renderChatPage();
+    lastHandlers().onThreadUpdated?.({ threadRootID: '' });
+    expect(mockUpsertUserThreadRow).not.toHaveBeenCalled();
   });
 
   it('onMessageEdited keys the thread invalidation off the message id when no parentMessageID', async () => {

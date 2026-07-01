@@ -15,6 +15,7 @@ import { slugify } from '@/lib/format';
 import { isOwnMessage } from '@/lib/message-users';
 import {
   appendMessageToCache,
+  appendReplyToThreadCache,
   invalidateThreadBothScopes,
   invalidateUnfurlsForMessage,
   markMessageDeletedInCache,
@@ -32,6 +33,7 @@ import {
   parseMessageDeleted,
   parsePresence,
   parseServerVersion,
+  parseThreadUpdated,
   parseTyping,
   parseUserUpdated,
 } from '@/lib/ws-schemas';
@@ -46,7 +48,7 @@ import { useUserChannels } from '@/hooks/useChannels';
 import { useUserConversations } from '@/hooks/useConversations';
 import { useCategories } from '@/hooks/useSidebar';
 import { useUserState } from '@/hooks/useUserState';
-import { markThreadSeen, upsertUserThreadFromRoot, userThreadInCache, useUserThreads } from '@/hooks/useThreads';
+import { markThreadSeen, upsertUserThreadFromRoot, upsertUserThreadRow, userThreadInCache, useUserThreads } from '@/hooks/useThreads';
 import { useIsMobile } from '@/hooks/useIsMobile';
 
 function MobileChatLoadingPage() {
@@ -189,7 +191,15 @@ export default function ChatPage() {
             parentType: msg.parentType === 'conversation' ? 'conversation' : 'channel',
           });
         }
-        invalidateThreadBothScopes(queryClient, parentID, parentMessageID);
+        // Append the reply straight into the open thread's cache so the
+        // ThreadPanel / ThreadCard updates live. Only fall back to an
+        // invalidate when the thread isn't cached (panel closed) — a reply to
+        // a closed thread has nothing to patch, and re-opening fetches fresh,
+        // so the fallback is a near no-op that avoids a refetch-driven flicker
+        // on the visible thread.
+        if (!appendReplyToThreadCache(queryClient, parentID, parentMessageID, msg)) {
+          invalidateThreadBothScopes(queryClient, parentID, parentMessageID);
+        }
         // NOTE: /threads is patched from the root's message.edited event
         // (upsertUserThreadFromRoot in onMessageEdited), NOT invalidated here —
         // an invalidate would refetch ListUserThreads, whose eventually-consistent
@@ -298,6 +308,16 @@ export default function ChatPage() {
       // A reaction hint or fired reminder landed — refetch the durable activity
       // stream (source of truth) so the sidebar badge + list update live.
       queryClient.invalidateQueries({ queryKey: queryKeys.activity() });
+    },
+    onThreadUpdated: (data: unknown) => {
+      // Participant-scoped reply metadata: the server only sends this to users
+      // who belong in the thread, so patch the /threads row directly from the
+      // payload — no participation guess, no eventually-consistent refetch. This
+      // covers threads the viewer didn't author (which the message.edited-driven
+      // upsertUserThreadFromRoot deliberately skips) and the sender's own tabs.
+      const evt = parseThreadUpdated(data);
+      if (!evt) return;
+      upsertUserThreadRow(queryClient, evt);
     },
     onUserUpdated: (data: unknown) => {
       const updated = parseUserUpdated(data);
