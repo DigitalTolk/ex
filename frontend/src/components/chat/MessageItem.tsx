@@ -257,11 +257,7 @@ function MessageItemImpl({
     setReminderDialogOpen(true);
   };
 
-  // Mobile variants close the action sheet as they fire.
-  const handleMobileRemindPreset = (key: ReminderPresetKey) => {
-    handleReminderPreset(key);
-    closeMobileActions();
-  };
+  // Mobile closes the action sheet as it opens the reminder popup.
   const handleMobileRemindCustom = () => {
     openCustomReminder();
     closeMobileActions();
@@ -316,9 +312,13 @@ function MessageItemImpl({
     setMobileActionsSuppressed(false);
     setMobileReactionPickerOpen(false);
   }
+  // Pass mobileActionsOpen: MessageItem stays mounted while the sheet toggles,
+  // so the gesture must re-initialise on each open (otherwise a swipe-dismiss
+  // leaves it latched off-screen and it won't reopen).
   const { dismissing: swipeDismissing, motionProps: mobileActionsMotion } = useSwipeDismiss(
     'down',
     closeMobileActions,
+    mobileActionsOpen,
   );
   const setMobileActionsNode = useCallback((node: HTMLDivElement | null) => {
     mobileActionsSheetRef.current = node;
@@ -609,31 +609,20 @@ function MessageItemImpl({
             </>
           )}
         </div>
-        <div className="mt-2 flex flex-col rounded-lg border" data-testid="mobile-remind-group">
-          <div className="flex items-center gap-3 border-b px-3 py-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-            <AlarmClock className="h-4 w-4" />
-            Remind me
-          </div>
-          {REMINDER_PRESETS.map((preset) => (
-            <button
-              key={preset.key}
-              type="button"
-              className="border-b px-3 py-4 text-left text-base last:border-b-0"
-              onClick={() => handleMobileRemindPreset(preset.key)}
-              data-testid={`mobile-remind-${preset.key}`}
-            >
-              {preset.label}
-            </button>
-          ))}
-          <button
-            type="button"
-            className="px-3 py-4 text-left text-base"
-            onClick={handleMobileRemindCustom}
-            data-testid="mobile-remind-custom"
-          >
-            Custom…
-          </button>
-        </div>
+        {/* Single "Remind me" row. Tapping it closes the sheet and opens the
+            ReminderDialog (a separate popup with the date/time selector) — the
+            old inline preset list made this sheet tall enough to cover the
+            whole screen on mobile. */}
+        <button
+          type="button"
+          className="mt-2 flex w-full items-center gap-3 rounded-lg border px-3 py-4 text-left text-base"
+          onClick={handleMobileRemindCustom}
+          data-testid="mobile-remind"
+          aria-label="Remind me about this message"
+        >
+          <AlarmClock className="h-4 w-4" />
+          Remind me
+        </button>
       </motion.div>
       )}
     </div>

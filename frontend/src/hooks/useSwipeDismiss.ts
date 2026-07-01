@@ -32,7 +32,11 @@ function scrollBodyAtTop(target: EventTarget | null) {
   return !scroller || scroller.scrollTop <= 0;
 }
 
-export function useSwipeDismiss(direction: 'right' | 'down', onDismiss: () => void) {
+// `open` should be passed by callers whose host component STAYS MOUNTED while
+// the panel is toggled (e.g. a message's action sheet on an always-mounted
+// MessageItem). It re-initialises the gesture on each open. Callers whose panel
+// unmounts when closed can omit it (defaults true → the mount is the open).
+export function useSwipeDismiss(direction: 'right' | 'down', onDismiss: () => void, open = true) {
   const isMobile = useIsMobile();
   const horizontal = direction === 'right';
   const offset = useMotionValue(0);
@@ -48,13 +52,22 @@ export function useSwipeDismiss(direction: 'right' | 'down', onDismiss: () => vo
 
   // Mobile enter: start off-screen and spring in. useLayoutEffect runs
   // before paint so the panel is positioned off-screen on first frame —
-  // no flash at the resting position.
+  // no flash at the resting position. Re-runs on each `open`: this is the
+  // reopen fix. `offset` (a motion value) and the dismiss latch persist across
+  // opens when the host component doesn't unmount, so a swiped-away sheet left
+  // `offset` off-screen and `dismissingRef` armed — reopening rendered it
+  // translated off-screen ("won't pop up"). Resetting both here makes every
+  // open a fresh slide-in.
   useLayoutEffect(() => {
-    if (!isMobile) return;
+    if (!isMobile || !open) return;
+    // Ref write (not setState) — lint-safe in an effect. Clears the drag latch
+    // so a reopened panel is draggable again even if the exit animation's
+    // onComplete didn't run (interrupted dismiss).
+    dismissingRef.current = false;
     offset.set(offscreen(horizontal));
     const controls = animate(offset, 0, SWIPE_DISMISS_SPRING);
     return () => controls.stop();
-  }, [isMobile, horizontal, offset]);
+  }, [isMobile, horizontal, offset, open]);
 
   // Track displacement off the live transform. Only the horizontal
   // (right-rail) panels consume `settled` for their mobile border, so we
@@ -90,7 +103,16 @@ export function useSwipeDismiss(direction: 'right' | 'down', onDismiss: () => vo
       if (dist > DISMISS_DISTANCE || vel > DISMISS_VELOCITY) {
         dismissingRef.current = true;
         setDismissing(true);
-        animate(offset, offscreen(horizontal), { ...SWIPE_DISMISS_SPRING, onComplete: onDismiss });
+        animate(offset, offscreen(horizontal), {
+          ...SWIPE_DISMISS_SPRING,
+          // Clear the latch when the exit finishes (a callback, so setState is
+          // lint-safe here) so a reopen on the same mounted host starts clean.
+          onComplete: () => {
+            dismissingRef.current = false;
+            setDismissing(false);
+            onDismiss();
+          },
+        });
       } else {
         animate(offset, 0, SWIPE_DISMISS_SPRING);
       }

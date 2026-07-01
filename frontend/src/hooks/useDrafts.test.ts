@@ -685,4 +685,88 @@ describe('useDrafts', () => {
       },
     ]);
   });
+
+  it('suppress + ignore-window state machine: drops the self-echo inside the window, resumes refetch after it elapses', () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(1_000_000_000_000);
+      resetDraftSessionState();
+      const scope = { parentID: 'dm-echo', parentType: 'conversation' as const };
+
+      // Step 1: clean slate → a remote draft.updated event WOULD trigger a refetch.
+      expect(shouldRefetchDraftsForRemoteUpdate()).toBe(true);
+
+      // Step 2: the composer sends → the scope is suppressed AND a save fires,
+      // which opens the 1500ms self-echo ignore window (onMutate).
+      suppressSentDraft(scope);
+      vi.mocked(apiFetch).mockResolvedValueOnce(undefined);
+      const { result } = renderHook(() => useSaveDraft(), { wrapper: createWrapper() });
+      act(() => {
+        result.current.mutate({ parentID: 'dm-echo', parentType: 'conversation', body: 'echo me' });
+      });
+
+      // Step 3: our own draft.updated bounces back INSIDE the window → not refetched.
+      vi.setSystemTime(1_000_000_001_499);
+      expect(shouldRefetchDraftsForRemoteUpdate()).toBe(false);
+
+      // Step 4: once the window elapses, a genuine remote update is honored again.
+      vi.setSystemTime(1_000_000_001_500);
+      expect(shouldRefetchDraftsForRemoteUpdate()).toBe(true);
+    } finally {
+      resetDraftSessionState();
+      vi.useRealTimers();
+    }
+  });
+
+  it('LWW version guard: only the newest concurrent save patches the cache, even when older saves resolve last', async () => {
+    resetDraftSessionState();
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    qc.setQueryData<MessageDraft[]>(['drafts'], []);
+    const wrapper = ({ children }: { children: ReactNode }) =>
+      createElement(QueryClientProvider, { client: qc }, children);
+
+    const draft = (body: string): MessageDraft => ({
+      id: `d-${body}`,
+      userID: 'u-1',
+      parentID: 'dm-lww',
+      parentType: 'conversation',
+      parentMessageID: '',
+      body,
+      attachmentIDs: [],
+      updatedAt: '',
+      createdAt: '',
+    });
+
+    // The two OLDER saves stay pending; the newest resolves immediately.
+    let resolveV1!: (d: MessageDraft) => void;
+    let resolveV2!: (d: MessageDraft) => void;
+    vi.mocked(apiFetch)
+      .mockReturnValueOnce(new Promise<MessageDraft>((r) => { resolveV1 = r; }))
+      .mockReturnValueOnce(new Promise<MessageDraft>((r) => { resolveV2 = r; }))
+      .mockResolvedValueOnce(draft('three'));
+
+    const { result } = renderHook(() => useSaveDraft(), { wrapper });
+    // Three concurrent saves on the SAME scope → versions 1, 2, 3.
+    const p1 = result.current.mutateAsync({ parentID: 'dm-lww', parentType: 'conversation', body: 'one' });
+    const p2 = result.current.mutateAsync({ parentID: 'dm-lww', parentType: 'conversation', body: 'two' });
+    const p3 = result.current.mutateAsync({ parentID: 'dm-lww', parentType: 'conversation', body: 'three' });
+
+    // The newest (v3) resolves first and wins the cache.
+    await p3;
+    expect(qc.getQueryData<MessageDraft[]>(['drafts'])?.[0]?.body).toBe('three');
+
+    // Now the two STALE saves resolve LAST. Their onSuccess must be ignored by
+    // the version guard (isLatestDraftMutation) — the newer value must survive.
+    await act(async () => {
+      resolveV2(draft('two'));
+      resolveV1(draft('one'));
+      await p2;
+      await p1;
+    });
+    expect(qc.getQueryData<MessageDraft[]>(['drafts'])?.map((d) => d.body)).toEqual(['three']);
+
+    resetDraftSessionState();
+  });
 });

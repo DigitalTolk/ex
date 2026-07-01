@@ -79,6 +79,35 @@ beforeEach(() => {
 
 afterEach(() => cleanup());
 
+describe('MessageItem webhook message rendering', () => {
+  it('renders webhook attribution — icon-emoji avatar + bot badge + webhook username', async () => {
+    // No browser test rendered a webhook message, so the webhook display arms
+    // (isWebhook avatar/name, the icon-emoji avatar, the "Bot" badge) were
+    // untested. A webhook post is authored by an integration, not the creator.
+    await renderWithProviders(
+      <MessageItem
+        message={makeMessage({
+          webhookUsername: 'CI Bot',
+          webhookIconEmoji: 'robot',
+          webhookAvatarURL: 'https://example.com/bot.png',
+        })}
+        authorName="Creator"
+        isOwn={false}
+        channelId="channel-1"
+        currentUserId="user-1"
+      />,
+    );
+    await vi.waitFor(() => {
+      // Icon-emoji avatar (webhookIconEmoji ? …) and the "Bot" badge
+      // (webhookUsername && …) — the webhook display branches.
+      expect(document.querySelector('[data-testid="webhook-emoji-avatar"]')).not.toBeNull();
+      expect(document.querySelector('[aria-label="Bot"]')).not.toBeNull();
+    });
+    // The integration's username is shown, not the creator's name.
+    expect(document.body.textContent).toContain('CI Bot');
+  });
+});
+
 describe('MessageItem desktop toolbar + menu branches', () => {
   it('closes an open kebab menu when the cursor moves onto another row', async () => {
     if (window.innerWidth <= 767) return;

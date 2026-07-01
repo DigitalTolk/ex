@@ -529,4 +529,80 @@ describe('useWebSocket', () => {
 
     expect(onMessageNew).not.toHaveBeenCalled();
   });
+
+  // A transport error routes through onerror → ws.close(), which hands off to
+  // the standard onclose backoff path (the mock does not auto-fire onclose, so
+  // we assert the close was requested).
+  it('closes the socket when the underlying connection errors', () => {
+    renderHook(() => useWebSocket({ enabled: true }));
+
+    const ws = MockWebSocket.instances[0];
+    ws.simulateOpen();
+    (ws.onerror as (e: unknown) => void)({});
+
+    expect(ws.closeCalled).toBe(true);
+  });
+
+  // Full lifecycle in one flow: connect → durable event advances the replay
+  // cursor → the socket drops repeatedly and the backoff ramps 1s×3 → 2s (3
+  // attempts per step) with the cursor preserved on every reconnect URL → a
+  // successful open resets the retry counter, proven by the next drop backing
+  // off at 1s again instead of continuing the ramp.
+  it('runs a full connect → backoff → reconnect → reset lifecycle preserving the replay cursor', async () => {
+    renderHook(() => useWebSocket({ enabled: true }));
+
+    // Step 1: initial connect + a durable message.new advances lastEventId.
+    const ws0 = MockWebSocket.instances[0];
+    ws0.simulateOpen();
+    ws0.simulateMessage(JSON.stringify({
+      id: '01ID0000000000000000000100',
+      type: 'message.new',
+      data: JSON.stringify({ id: 'm1' }),
+    }));
+
+    // Step 2: the socket keeps dropping without ever re-opening → the retry
+    // counter climbs and the backoff steps 1s,1s,1s,2s.
+    const backoffs = [1000, 1000, 1000, 2000];
+    for (const [i, delay] of backoffs.entries()) {
+      MockWebSocket.instances[i].simulateClose();
+
+      // Just under the delay → the reconnect timer has NOT fired yet.
+      await act(async () => {
+        vi.advanceTimersByTime(delay - 1);
+        await Promise.resolve();
+      });
+      expect(MockWebSocket.instances).toHaveLength(i + 1);
+
+      // Crossing the delay → the next socket opens.
+      await act(async () => {
+        vi.advanceTimersByTime(1);
+        await Promise.resolve();
+      });
+      expect(MockWebSocket.instances).toHaveLength(i + 2);
+
+      // Every reconnect carries the preserved cursor so the server can replay.
+      expect(MockWebSocket.instances[i + 1].url).toContain('since=01ID0000000000000000000100');
+    }
+
+    // Step 3: the latest socket opens successfully → retryCount resets to 0.
+    const reconnected = MockWebSocket.instances[MockWebSocket.instances.length - 1];
+    reconnected.simulateOpen();
+
+    // Step 4: it drops again → the backoff is back at the FIRST step (1s),
+    // proving the reset (a non-reset counter would still be at ≥2s).
+    const beforeReset = MockWebSocket.instances.length;
+    reconnected.simulateClose();
+    await act(async () => {
+      vi.advanceTimersByTime(999);
+      await Promise.resolve();
+    });
+    expect(MockWebSocket.instances).toHaveLength(beforeReset);
+    await act(async () => {
+      vi.advanceTimersByTime(1);
+      await Promise.resolve();
+    });
+    expect(MockWebSocket.instances).toHaveLength(beforeReset + 1);
+    // The cursor is still preserved after the reset-and-reconnect.
+    expect(MockWebSocket.instances[beforeReset].url).toContain('since=01ID0000000000000000000100');
+  });
 });

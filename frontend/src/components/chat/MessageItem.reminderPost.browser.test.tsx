@@ -89,7 +89,7 @@ describe('MessageItem "Remind me" — real POST', () => {
     expect(sent.remindAt.startsWith('2999')).toBe(true);
   });
 
-  it('a mobile-sheet preset issues POST /api/v1/reminders', async () => {
+  it('a mobile-sheet reminder issues POST /api/v1/reminders via the date-selector popup', async () => {
     if (window.innerWidth > 767) return; // mobile sheet only
     await renderItem(
       <MessageItem message={makeMessage()} authorName="Alice" isOwn={false} channelId="channel-1" channelSlug="general" currentUserId="user-9" />,
@@ -97,7 +97,14 @@ describe('MessageItem "Remind me" — real POST', () => {
     const row = document.querySelector('[data-message-id]') as HTMLElement;
     row.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerType: 'touch' }));
     await vi.waitFor(() => expect(document.querySelector('[data-testid="mobile-message-actions"]')).not.toBeNull(), { timeout: 1500 });
-    await userEvent.click(document.querySelector('[data-testid="mobile-remind-in1h"]') as HTMLButtonElement);
+    await userEvent.click(document.querySelector('[data-testid="mobile-remind"]') as HTMLButtonElement);
+    const input = await vi.waitFor(() => {
+      const el = document.querySelector('[data-testid="reminder-datetime"]') as HTMLInputElement | null;
+      expect(el).not.toBeNull();
+      return el!;
+    });
+    await userEvent.fill(input, '2999-01-01T09:00');
+    await userEvent.click(document.querySelector('[data-testid="reminder-confirm"]') as HTMLButtonElement);
     await vi.waitFor(() => expect(reminderPosts().length).toBe(1));
     expect(reminderPosts()[0][1].method).toBe('POST');
   });
