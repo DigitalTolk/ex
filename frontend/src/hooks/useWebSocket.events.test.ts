@@ -58,6 +58,15 @@ describe('useWebSocket event coverage', () => {
     expect(onWebhookChanged).toHaveBeenCalled();
   });
 
+  it('routes activity.new to onActivityNew', () => {
+    const onActivityNew = vi.fn();
+    renderHook(() => useWebSocket({ onActivityNew, enabled: true }));
+    const ws = MockWebSocket.instances[0];
+    ws.simulateOpen();
+    ws.simulateMessage(JSON.stringify({ id: 'act1', type: 'activity.new', data: '{}' }));
+    expect(onActivityNew).toHaveBeenCalled();
+  });
+
   it('evicts the oldest id once the dedup buffer exceeds capacity', () => {
     const onMessageNew = vi.fn();
     renderHook(() => useWebSocket({ onMessageNew, enabled: true }));

@@ -283,6 +283,28 @@ describe('Sidebar', () => {
     expect(screen.getByText('secret')).toBeInTheDocument();
   });
 
+  it('shows the Activity row with an unread count badge', async () => {
+    mockApiFetch.mockImplementation(async (url: string) => {
+      if (url === '/api/v1/sidebar/categories') return [];
+      if (url === '/api/v1/activity') return { items: [], unread: 4 };
+      return undefined;
+    });
+    renderSidebar();
+    expect(screen.getByText('Activity').closest('a')).toHaveAttribute('href', '/activity');
+    const badge = await screen.findByTestId('activity-unread-badge');
+    expect(badge).toHaveTextContent('4');
+  });
+
+  it('caps the Activity unread badge at 99+', async () => {
+    mockApiFetch.mockImplementation(async (url: string) => {
+      if (url === '/api/v1/sidebar/categories') return [];
+      if (url === '/api/v1/activity') return { items: [], unread: 150 };
+      return undefined;
+    });
+    renderSidebar();
+    expect(await screen.findByTestId('activity-unread-badge')).toHaveTextContent('99+');
+  });
+
   it('uses the same mobile row sizing across top links, section headers, channels, and DMs', () => {
     renderSidebar();
 

@@ -10,6 +10,7 @@ import { UserStatusIndicator } from '@/components/UserStatusIndicator';
 import { useAuth } from '@/context/AuthContext';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { apiFetch, getAccessToken } from '@/lib/api';
+import { inputValueForDate, pad, partsInTimeZone } from '@/lib/datetime-input';
 import type { User } from '@/types';
 
 interface UserStatusDialogProps {
@@ -28,37 +29,6 @@ const PRESETS: Array<{ text: string; emoji: string; clearAfter: ClearAfter }> = 
 ];
 const CUSTOM_PRESET = '__custom__';
 const MAX_STATUS_TEXT_LENGTH = 32;
-
-function pad(n: number): string {
-  return String(n).padStart(2, '0');
-}
-
-function partsInTimeZone(date: Date, timeZone: string) {
-  const parts = new Intl.DateTimeFormat('en-CA', {
-    timeZone,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    hourCycle: 'h23',
-  }).formatToParts(date);
-  /* v8 ignore next -- the requested part always exists for a valid date/timezone; the ?? 0 fallback is defensive */
-  /* istanbul ignore next -- the requested part always exists for a valid date/timezone; the ?? 0 fallback is defensive */
-  const value = (type: string) => Number(parts.find((p) => p.type === type)?.value ?? 0);
-  return {
-    year: value('year'),
-    month: value('month'),
-    day: value('day'),
-    hour: value('hour'),
-    minute: value('minute'),
-  };
-}
-
-function inputValueForDate(date: Date, timeZone: string): string {
-  const p = partsInTimeZone(date, timeZone);
-  return `${p.year}-${pad(p.month)}-${pad(p.day)}T${pad(p.hour)}:${pad(p.minute)}`;
-}
 
 function defaultCustomUntil(timeZone: string): string {
   return inputValueForDate(new Date(Date.now() + 60 * 60_000), timeZone);

@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Copy, Pencil, Trash2, SmilePlus, MessageSquareReply, MoreHorizontal, Pin, PinOff, Link as LinkIcon } from 'lucide-react';
+import { Copy, Pencil, Trash2, SmilePlus, MessageSquareReply, MoreHorizontal, Pin, PinOff, Link as LinkIcon, AlarmClock } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { MessageInput, type MessageInputValue } from '@/components/chat/MessageInput';
 import type { DraftAttachment } from '@/components/chat/AttachmentChip';
@@ -14,8 +14,14 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import { ReminderDialog } from '@/components/chat/ReminderDialog';
+import { useCreateReminder } from '@/hooks/useActivity';
+import { REMINDER_PRESETS, computeReminderTime, toLocalInputValue, type ReminderPresetKey } from '@/lib/reminder-times';
 import { EmojiPicker } from '@/components/EmojiPicker';
 import { UserHoverCard } from '@/components/UserHoverCard';
 import { UserAvatar } from '@/components/UserAvatar';
@@ -207,8 +213,59 @@ function MessageItemImpl({
   const deleteMessage = useDeleteMessage();
   const toggleReaction = useToggleReaction();
   const setPinned = useSetPinned();
+  const createReminder = useCreateReminder();
+  const [reminderDialogOpen, setReminderDialogOpen] = useState(false);
+  const [reminderSeed, setReminderSeed] = useState('');
   const { data: emojiMap } = useEmojiMap();
   const { openTag } = useTagOpen();
+
+  // The reminder target derives from the message itself (its parentID is always
+  // set), with the channel slug carried for the deep link. Every message can take
+  // a reminder.
+  const reminderTarget = {
+    parentID: message.parentID,
+    parentType: message.parentType === 'conversation' ? ('conversation' as const) : ('channel' as const),
+    channelSlug,
+  };
+
+  // One builder so the preset (mutate) and custom-dialog (mutateAsync) paths
+  // can't drift on the payload shape.
+  const reminderInput = (when: Date) => ({
+    messageID: message.id,
+    ...reminderTarget,
+    remindAt: when.toISOString(),
+  });
+
+  const scheduleReminder = (when: Date) => {
+    createReminder.mutate(reminderInput(when));
+  };
+
+  // The custom dialog awaits the result so it can confirm (close) on success and
+  // surface the error (stay open) on failure — scheduling is never silent there.
+  const scheduleReminderAsync = (when: Date) =>
+    createReminder.mutateAsync(reminderInput(when)).then(() => undefined);
+
+  const handleReminderPreset = (key: ReminderPresetKey) => {
+    scheduleReminder(computeReminderTime(key, new Date()));
+  };
+
+  const openCustomReminder = () => {
+    // Compute the seed here (an event handler) so the clock read stays out of
+    // render, then mount the dialog fresh with it. Defaults to the "in 1 hour"
+    // preset so the field reuses the same tested time math as the quick-picks.
+    setReminderSeed(toLocalInputValue(computeReminderTime('in1h', new Date())));
+    setReminderDialogOpen(true);
+  };
+
+  // Mobile variants close the action sheet as they fire.
+  const handleMobileRemindPreset = (key: ReminderPresetKey) => {
+    handleReminderPreset(key);
+    closeMobileActions();
+  };
+  const handleMobileRemindCustom = () => {
+    openCustomReminder();
+    closeMobileActions();
+  };
 
   function buildMessageLink(): string {
     /* istanbul ignore next -- SSR guard: this is a browser-only app, so window is always defined; the empty-origin arm is unreachable. */
@@ -551,6 +608,31 @@ function MessageItemImpl({
               </button>
             </>
           )}
+        </div>
+        <div className="mt-2 flex flex-col rounded-lg border" data-testid="mobile-remind-group">
+          <div className="flex items-center gap-3 border-b px-3 py-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            <AlarmClock className="h-4 w-4" />
+            Remind me
+          </div>
+          {REMINDER_PRESETS.map((preset) => (
+            <button
+              key={preset.key}
+              type="button"
+              className="border-b px-3 py-4 text-left text-base last:border-b-0"
+              onClick={() => handleMobileRemindPreset(preset.key)}
+              data-testid={`mobile-remind-${preset.key}`}
+            >
+              {preset.label}
+            </button>
+          ))}
+          <button
+            type="button"
+            className="px-3 py-4 text-left text-base"
+            onClick={handleMobileRemindCustom}
+            data-testid="mobile-remind-custom"
+          >
+            Custom…
+          </button>
         </div>
       </motion.div>
       )}
@@ -912,6 +994,25 @@ function MessageItemImpl({
                   </>
                 )}
               </DropdownMenuItem>
+              <DropdownMenuSub>
+                <DropdownMenuSubTrigger data-testid="remind-me-trigger">
+                  <AlarmClock className="mr-2 h-4 w-4" /> Remind me
+                </DropdownMenuSubTrigger>
+                <DropdownMenuSubContent>
+                  {REMINDER_PRESETS.map((preset) => (
+                    <DropdownMenuItem
+                      key={preset.key}
+                      onClick={() => handleReminderPreset(preset.key)}
+                      data-testid={`remind-${preset.key}`}
+                    >
+                      {preset.label}
+                    </DropdownMenuItem>
+                  ))}
+                  <DropdownMenuItem onClick={openCustomReminder} data-testid="remind-custom">
+                    Custom…
+                  </DropdownMenuItem>
+                </DropdownMenuSubContent>
+              </DropdownMenuSub>
               {isOwn && (
                 <>
                   {canEdit && (
@@ -942,6 +1043,14 @@ function MessageItemImpl({
         onConfirm={confirmDelete}
         testIDPrefix="message-delete-confirm"
       />
+      {reminderDialogOpen && (
+        <ReminderDialog
+          open
+          onOpenChange={setReminderDialogOpen}
+          initialValue={reminderSeed}
+          onConfirm={scheduleReminderAsync}
+        />
+      )}
     </div>
   );
 }

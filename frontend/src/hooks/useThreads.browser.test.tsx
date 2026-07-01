@@ -13,8 +13,12 @@ import {
   threadDeepLink,
   resetSeenCache,
   getSeenMap,
+  upsertUserThreadFromRoot,
+  userThreadInCache,
   type ThreadSummary,
 } from './useThreads';
+import { queryKeys } from '@/lib/query-keys';
+import type { Message } from '@/types';
 
 const apiFetchMock = vi.hoisted(() => vi.fn());
 vi.mock('@/lib/api', () => ({
@@ -299,5 +303,83 @@ describe('useThreads — seen-state and sorting helpers', () => {
   it('sortThreadsByUnreadThenActivity returns [] when called with no arguments (default params)', () => {
     // Exercises the default params on lines 146-147.
     expect(sortThreadsByUnreadThenActivity()).toEqual([]);
+  });
+});
+
+function rootMsg(overrides: Partial<Message> = {}): Message {
+  return {
+    id: 'root-1',
+    parentID: 'ch-1',
+    parentType: 'channel',
+    authorID: 'me',
+    body: 'root body',
+    createdAt: '2026-05-01T09:00:00Z',
+    replyCount: 1,
+    lastReplyAt: '2026-05-01T10:00:00Z',
+    ...overrides,
+  };
+}
+
+describe('upsertUserThreadFromRoot / userThreadInCache', () => {
+  it('adds my own thread root and reports it in-cache', () => {
+    const qc = new QueryClient();
+    expect(userThreadInCache(qc, 'root-1')).toBe(false);
+    upsertUserThreadFromRoot(qc, rootMsg(), 'me');
+    const list = qc.getQueryData<ThreadSummary[]>(queryKeys.userThreads());
+    expect(list).toHaveLength(1);
+    expect(list?.[0]).toMatchObject({ threadRootID: 'root-1', replyCount: 1, rootBody: 'root body', latestActivityAt: '2026-05-01T10:00:00Z' });
+    expect(userThreadInCache(qc, 'root-1')).toBe(true);
+  });
+
+  it('updates an existing thread and re-sorts newest-first', () => {
+    const qc = new QueryClient();
+    qc.setQueryData<ThreadSummary[]>(queryKeys.userThreads(), [
+      { parentID: 'ch-1', parentType: 'channel', threadRootID: 'root-1', rootAuthorID: 'other', rootBody: 'r1', rootCreatedAt: '2026-05-01T08:00:00Z', replyCount: 1, latestActivityAt: '2026-05-01T08:30:00Z' },
+      { parentID: 'ch-1', parentType: 'channel', threadRootID: 'root-2', rootAuthorID: 'other', rootBody: 'r2', rootCreatedAt: '2026-05-01T09:00:00Z', replyCount: 2, latestActivityAt: '2026-05-01T09:30:00Z' },
+    ]);
+    // root-1 gets a newer reply — not mine, but already in the list, so it updates.
+    upsertUserThreadFromRoot(qc, rootMsg({ id: 'root-1', authorID: 'other', replyCount: 2, lastReplyAt: '2026-05-01T11:00:00Z' }), 'me');
+    const list = qc.getQueryData<ThreadSummary[]>(queryKeys.userThreads());
+    expect(list?.map((t) => t.threadRootID)).toEqual(['root-1', 'root-2']); // root-1 now newest
+    expect(list?.[0].replyCount).toBe(2);
+  });
+
+  it('does not add a thread I neither authored nor already track', () => {
+    const qc = new QueryClient();
+    upsertUserThreadFromRoot(qc, rootMsg({ authorID: 'other' }), 'me');
+    expect(qc.getQueryData(queryKeys.userThreads())).toBeUndefined();
+  });
+
+  it('is a no-op for a non-root (has parentMessageID) or a root with no replies', () => {
+    const qc = new QueryClient();
+    upsertUserThreadFromRoot(qc, rootMsg({ parentMessageID: 'root-x' }), 'me');
+    upsertUserThreadFromRoot(qc, rootMsg({ replyCount: 0 }), 'me');
+    expect(qc.getQueryData(queryKeys.userThreads())).toBeUndefined();
+  });
+
+  it('skips when there is no current user', () => {
+    const qc = new QueryClient();
+    upsertUserThreadFromRoot(qc, rootMsg(), undefined);
+    expect(qc.getQueryData(queryKeys.userThreads())).toBeUndefined();
+  });
+
+  it('carries the conversation parentType and falls back to createdAt when lastReplyAt is absent', () => {
+    const qc = new QueryClient();
+    upsertUserThreadFromRoot(
+      qc,
+      rootMsg({ parentType: 'conversation', parentID: 'cv-1', lastReplyAt: undefined }),
+      'me',
+    );
+    const list = qc.getQueryData<ThreadSummary[]>(queryKeys.userThreads());
+    expect(list?.[0]).toMatchObject({
+      parentType: 'conversation',
+      parentID: 'cv-1',
+      // no lastReplyAt → latestActivityAt falls back to createdAt
+      latestActivityAt: '2026-05-01T09:00:00Z',
+    });
+  });
+
+  it('userThreadInCache is false on an empty cache', () => {
+    expect(userThreadInCache(new QueryClient(), 'root-1')).toBe(false);
   });
 });

@@ -24,6 +24,7 @@ import {
   Trash2,
   ArrowDownAZ,
   Clock3,
+  Bell,
 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import {
@@ -42,6 +43,7 @@ import { useUserConversations } from '@/hooks/useConversations';
 import { getSeenMap, THREAD_SEEN_CHANGED_EVENT, unreadThreadIDs, useUserThreads } from '@/hooks/useThreads';
 import { useUserState } from '@/hooks/useUserState';
 import { useDrafts } from '@/hooks/useDrafts';
+import { useActivity } from '@/hooks/useActivity';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { useCategories, useCreateCategory, useDeleteCategory, useFavoriteChannel, useSetCategory, useSetConversationCategory, useReorderCategories } from '@/hooks/useSidebar';
 import { groupSidebarItems, SidebarSectionKeys, type SidebarItem, type ConversationSidebarSort } from '@/lib/sidebar-groups';
@@ -431,6 +433,8 @@ export function Sidebar({ onClose }: SidebarProps) {
   const { data: threads } = useUserThreads();
   const { data: userState } = useUserState();
   const { data: drafts } = useDrafts();
+  const { data: activityFeed } = useActivity();
+  const activityUnread = activityFeed?.unread ?? 0;
   const { data: categories } = useCategories();
   const sidebarPrimaryDataReady =
     conversations !== undefined || conversationsQuery.isError;
@@ -1270,7 +1274,32 @@ export function Sidebar({ onClose }: SidebarProps) {
         data-testid="sidebar-scroll-area"
       >
         <div className="w-full min-w-0 space-y-1 p-2">
-          {/* Threads first — matches the design ordering. Same row
+          {/* Activity sits at the very top — reaction hints + fired reminders. */}
+          <NavLink
+            to="/activity"
+            onClick={onClose}
+            className={({ isActive }) =>
+              `relative flex items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors max-md:h-12 max-md:px-3 max-md:py-0 max-md:text-base ${
+                isActive
+                  ? 'bg-background text-white font-semibold before:absolute before:inset-y-1 before:left-0 before:w-[3px] before:rounded-full before:bg-sidebar-foreground before:content-[""]'
+                  : 'text-gray-300 hover:bg-white/10 hover:text-white'
+              }`
+            }
+          >
+            <Bell className="h-4 w-4 shrink-0" aria-hidden="true" />
+            <span className={activityUnread > 0 ? 'font-bold text-white' : ''}>Activity</span>
+            {activityUnread > 0 && (
+              <Badge
+                variant="brand"
+                className="ml-auto text-[11px]"
+                data-testid="activity-unread-badge"
+              >
+                {activityUnread > 99 ? '99+' : activityUnread}
+              </Badge>
+            )}
+          </NavLink>
+
+          {/* Threads next — matches the design ordering. Same row
               geometry (px-2 py-1) as channel rows below so the eye
               doesn't catch on a height bump. */}
           <NavLink

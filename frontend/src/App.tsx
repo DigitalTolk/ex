@@ -9,6 +9,7 @@ import { NotificationProvider } from '@/context/NotificationContext';
 import { TypingProvider } from '@/context/TypingContext';
 import { ThemeProvider } from '@/context/ThemeContext';
 import { NotificationCountTitleBridge } from '@/components/NotificationCountTitleBridge';
+import { Toaster } from '@/components/Toaster';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { InAppLinkRouter } from '@/components/InAppLinkRouter';
 import LoginPage from '@/pages/LoginPage';
@@ -23,6 +24,7 @@ import CustomEmojiPage from '@/pages/CustomEmojiPage';
 import NewConversationPage from '@/pages/NewConversationPage';
 import ThreadsPage from '@/pages/ThreadsPage';
 import DraftsPage from '@/pages/DraftsPage';
+import ActivityPage from '@/pages/ActivityPage';
 import SearchResultsPage from '@/pages/SearchResultsPage';
 import { NotFoundPage } from '@/pages/NotFoundPage';
 import { GENERAL_CHANNEL_SLUG } from '@/lib/roles';
@@ -89,6 +91,7 @@ function AppRoutes() {
         <Route path="directory" element={<Navigate to="/directory/channels" replace />} />
         <Route path="directory/:section" element={<DirectoriesPage />} />
         <Route path="search" element={<SearchResultsPage />} />
+        <Route path="activity" element={<ActivityPage />} />
         <Route path="threads" element={<ThreadsPage />} />
         <Route path="drafts" element={<DraftsPage />} />
         <Route path="admin" element={<AdminPage />} />
@@ -118,6 +121,7 @@ export default function App() {
                     <TooltipProvider>
                       <ServerVersionBootstrap />
                       <NotificationCountTitleBridge />
+                      <Toaster />
                       <div className="flex h-dvh flex-col bg-sidebar pt-safe-top">
                         <div className="min-h-0 flex-1 bg-background">
                           <RoutedErrorBoundary>

@@ -246,7 +246,7 @@ func (s *Stream) Replay(ctx context.Context, userID string, since string) (Repla
 			continue
 		}
 		payloadStr, ok := payloadAny.(string)
-		if !ok {
+		if !ok { // coverage-ignore: Redis stream values are always bulk strings; this guards a type the client can't actually return
 			continue
 		}
 		// Each stream entry stores the full event envelope; pull the

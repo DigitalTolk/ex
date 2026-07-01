@@ -63,6 +63,11 @@ const (
 	EventReplayDone         = "replay.done"      // server → client marker frame after a reconnect replay completes
 	EventReplayExhausted    = "replay.exhausted" // cursor too old / unknown; client must do a full refetch
 	EventWebhookChanged     = "webhook.changed"  // admin incoming-webhook list changed (created/deleted); data-less nudge to refetch
+	// EventActivityNew nudges a user's own clients that their activity stream
+	// (reaction hints + fired reminders) changed. Data-less: the durable Redis
+	// activity store is the source of truth, so the client just refetches the
+	// list. Sent to the user's personal channel (pubsub.UserChannel).
+	EventActivityNew = "activity.new"
 )
 
 // ephemeralTypes are events that exist only for the live socket — they
@@ -86,6 +91,10 @@ var ephemeralTypes = map[string]struct{}{
 	EventReplayDone:      {},
 	EventReplayExhausted: {},
 	EventNotificationNew: {},
+	// activity.new is a data-less "your activity changed" nudge; the durable
+	// Redis activity store is the source of truth and the client refetches the
+	// list on reconnect, so replaying the nudge would be pure noise.
+	EventActivityNew: {},
 }
 
 // IsPersistent reports whether an event of this type should be appended
