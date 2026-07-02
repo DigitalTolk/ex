@@ -53,9 +53,29 @@ func TestService_Users_BuildsMultiMatch(t *testing.T) {
 	if body["size"] != 5 {
 		t.Errorf("size = %v", body["size"])
 	}
-	mm := body["query"].(map[string]any)["multi_match"].(map[string]any)
+	// The user query is now a bool.should combining the full-token fuzzy
+	// multi_match (clause 0) with an edge-ngram prefix multi_match on the
+	// `.autocomplete` subfields (clause 1), minimum_should_match=1.
+	should := body["query"].(map[string]any)["bool"].(map[string]any)["should"].([]any)
+	if len(should) != 2 {
+		t.Fatalf("should = %v, want 2 clauses", should)
+	}
+	mm := should[0].(map[string]any)["multi_match"].(map[string]any)
 	if mm["query"] != "alice" {
-		t.Errorf("query = %v", mm["query"])
+		t.Errorf("fuzzy query = %v", mm["query"])
+	}
+	if !reflect.DeepEqual(mm["fields"], []string{"displayName^3", "email"}) {
+		t.Errorf("fuzzy fields = %v", mm["fields"])
+	}
+	ng := should[1].(map[string]any)["multi_match"].(map[string]any)
+	if !reflect.DeepEqual(ng["fields"], []string{"displayName.autocomplete^3", "email.autocomplete"}) {
+		t.Errorf("ngram fields = %v, want autocomplete subfields", ng["fields"])
+	}
+	if ng["operator"] != "and" {
+		t.Errorf("ngram operator = %v, want and", ng["operator"])
+	}
+	if body["query"].(map[string]any)["bool"].(map[string]any)["minimum_should_match"] != 1 {
+		t.Errorf("minimum_should_match not set to 1")
 	}
 }
 
@@ -452,7 +472,8 @@ func TestService_Users_FuzzyMatchEmitsAutoFuzziness(t *testing.T) {
 	if _, err := svc.Users(context.Background(), "aliceeeee", 5); err != nil {
 		t.Fatal(err)
 	}
-	mm := r.called.body.(map[string]any)["query"].(map[string]any)["multi_match"].(map[string]any)
+	should := r.called.body.(map[string]any)["query"].(map[string]any)["bool"].(map[string]any)["should"].([]any)
+	mm := should[0].(map[string]any)["multi_match"].(map[string]any)
 	if mm["query"] != "alice" {
 		t.Errorf("normalized query = %v, want %q", mm["query"], "alice")
 	}
@@ -468,12 +489,19 @@ func TestService_Channels_FuzzyMatchEmitsAutoFuzziness(t *testing.T) {
 		t.Fatal(err)
 	}
 	must := r.called.body.(map[string]any)["query"].(map[string]any)["bool"].(map[string]any)["must"].([]any)
-	mm := must[0].(map[string]any)["multi_match"].(map[string]any)
+	should := must[0].(map[string]any)["bool"].(map[string]any)["should"].([]any)
+	mm := should[0].(map[string]any)["multi_match"].(map[string]any)
 	if mm["query"] != "general" {
 		t.Errorf("normalized query = %v, want %q", mm["query"], "general")
 	}
 	if mm["fuzziness"] != "AUTO" {
 		t.Errorf("fuzziness = %v, want AUTO", mm["fuzziness"])
+	}
+	// The channel autocomplete clause targets the single name.autocomplete
+	// subfield via a `match` (not multi_match).
+	ngram := should[1].(map[string]any)["match"].(map[string]any)["name.autocomplete"].(map[string]any)
+	if ngram["operator"] != "and" {
+		t.Errorf("channel ngram operator = %v, want and", ngram["operator"])
 	}
 }
 

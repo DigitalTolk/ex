@@ -188,6 +188,48 @@ func (c *Client) createIndex(ctx context.Context, name, body string) error {
 	return c.do(ctx, http.MethodPut, "/"+name, strings.NewReader(body), nil)
 }
 
+// RecreateIndex drops `name` (if it exists) and recreates it from the
+// current mapping in indexMappings. Used by the search-reindex migration
+// to roll a mapping/analyzer change onto an EXISTING cluster (EnsureIndices
+// only creates an absent index, so an analyzer change needs a fresh
+// mapping). Recreating from scratch also drops any orphaned ghost docs.
+// Returns an error for an unknown index name so a typo can't silently
+// wipe nothing.
+func (c *Client) RecreateIndex(ctx context.Context, name string) error {
+	if c == nil {
+		return nil
+	}
+	body, ok := indexMappings[name]
+	if !ok {
+		return fmt.Errorf("search: unknown index %q", name)
+	}
+	if err := c.deleteIndex(ctx, name); err != nil {
+		return fmt.Errorf("search: delete %s: %w", name, err)
+	}
+	if err := c.createIndex(ctx, name, body); err != nil {
+		return fmt.Errorf("search: create %s: %w", name, err)
+	}
+	return nil
+}
+
+// deleteIndex removes an entire index. A 404 (already gone) is treated
+// as success so recreate is idempotent.
+func (c *Client) deleteIndex(ctx context.Context, name string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, c.baseURL+"/"+name, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusNotFound {
+		return nil
+	}
+	return c.errorFromResponse(resp)
+}
+
 // GetDoc fetches a single document's _source. Returns (nil, nil) on
 // 404 so the caller can treat "doesn't exist yet" as an empty map.
 func (c *Client) GetDoc(ctx context.Context, index, id string) (map[string]any, error) {

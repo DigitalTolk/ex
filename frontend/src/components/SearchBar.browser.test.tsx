@@ -1,13 +1,44 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { render } from 'vitest-browser-react';
 import { MemoryRouter, useLocation } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { SearchBar } from './SearchBar';
 
+const useChannelBySlugMock = vi.hoisted(() => vi.fn(() => ({ data: undefined as unknown })));
+const useUserChannelsMock = vi.hoisted(() => vi.fn(() => ({ data: [] as unknown[] })));
+const useUserConversationsMock = vi.hoisted(() => vi.fn(() => ({ data: undefined as unknown })));
+const createConvMutate = vi.hoisted(() => vi.fn());
+const useSearchUsersMock = vi.hoisted(() =>
+  vi.fn(() => ({ data: { hits: [] as unknown[] }, isLoading: false })),
+);
+const useSearchChannelsMock = vi.hoisted(() =>
+  vi.fn(() => ({ data: { hits: [] as unknown[] }, isLoading: false })),
+);
+
+vi.mock('@/lib/api', () => ({
+  apiFetch: vi.fn().mockResolvedValue(null),
+}));
+vi.mock('@/hooks/useChannels', () => ({
+  useChannelBySlug: (slug?: string) => useChannelBySlugMock(slug as never),
+  useUserChannels: () => useUserChannelsMock(),
+}));
+vi.mock('@/hooks/useConversations', () => ({
+  useUserConversations: () => useUserConversationsMock(),
+  useCreateConversation: () => ({ mutate: createConvMutate }),
+}));
+vi.mock('@/hooks/useSearch', () => ({
+  useSearchUsers: (...args: unknown[]) => useSearchUsersMock(...(args as [])),
+  useSearchChannels: (...args: unknown[]) => useSearchChannelsMock(...(args as [])),
+}));
+vi.mock('@/hooks/useDebouncedValue', () => ({
+  useDebouncedValue: (v: unknown) => v,
+}));
+
 function LocationProbe() {
   const loc = useLocation();
   return <div data-testid="loc" data-path={loc.pathname} data-search={loc.search} />;
 }
+
 function renderWithLocation(initialPath = '/') {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
@@ -21,21 +52,6 @@ function renderWithLocation(initialPath = '/') {
     </QueryClientProvider>,
   );
 }
-
-const useChannelBySlugMock = vi.hoisted(() => vi.fn(() => ({ data: undefined as unknown })));
-const useUserConversationsMock = vi.hoisted(() => vi.fn(() => ({ data: undefined as unknown })));
-
-vi.mock('@/lib/api', () => ({
-  apiFetch: vi.fn().mockResolvedValue(null),
-}));
-
-vi.mock('@/hooks/useChannels', () => ({
-  useChannelBySlug: (slug?: string) => useChannelBySlugMock(slug as never),
-}));
-
-vi.mock('@/hooks/useConversations', () => ({
-  useUserConversations: () => useUserConversationsMock(),
-}));
 
 function renderSearchBar(initialPath = '/') {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -88,10 +104,17 @@ function contrastRatio(a: string, b: string) {
   return (lighter + 0.05) / (darker + 0.05);
 }
 
+beforeEach(() => {
+  useChannelBySlugMock.mockReturnValue({ data: undefined });
+  useUserChannelsMock.mockReturnValue({ data: [] });
+  useUserConversationsMock.mockReturnValue({ data: undefined });
+  useSearchUsersMock.mockReturnValue({ data: { hits: [] }, isLoading: false });
+  useSearchChannelsMock.mockReturnValue({ data: { hits: [] }, isLoading: false });
+  createConvMutate.mockReset();
+});
+
 describe('SearchBar browser behavior', () => {
   it('keeps search input text readable inside light app chrome', async () => {
-    useChannelBySlugMock.mockReturnValue({ data: undefined });
-    useUserConversationsMock.mockReturnValue({ data: undefined });
     document.documentElement.classList.remove('dark');
     const screen = await renderSearchBar();
 
@@ -104,9 +127,7 @@ describe('SearchBar browser behavior', () => {
     expect(contrastRatio(inputColor, shellColor)).toBeGreaterThanOrEqual(4.5);
   });
 
-  it('opens the dropdown with the "Show results for" row when typing on a generic route', async () => {
-    useChannelBySlugMock.mockReturnValue({ data: undefined });
-    useUserConversationsMock.mockReturnValue({ data: undefined });
+  it('opens the dropdown with the "Search messages for" row when typing on a generic route', async () => {
     const screen = await renderSearchBar('/');
     await screen.getByTestId('searchbar-input').fill('foo');
     await expect.element(screen.getByTestId('searchbar-dropdown')).toBeVisible();
@@ -114,11 +135,10 @@ describe('SearchBar browser behavior', () => {
     expect(document.querySelector('[data-testid="searchbar-show-in-scope"]')).toBeNull();
   });
 
-  it('adds a channel-scoped row when the route is /channel/:slug and the channel resolves', async () => {
+  it('adds a channel-scoped message row when the route is /channel/:slug', async () => {
     useChannelBySlugMock.mockReturnValue({
       data: { id: 'ch-1', name: 'general', slug: 'general', type: 'public' },
     });
-    useUserConversationsMock.mockReturnValue({ data: undefined });
     const screen = await renderSearchBar('/channel/general');
     await screen.getByTestId('searchbar-input').fill('bug');
     const scopeRow = await screen.getByTestId('searchbar-show-in-scope');
@@ -128,8 +148,7 @@ describe('SearchBar browser behavior', () => {
     expect(el.textContent).toContain('~general');
   });
 
-  it('adds a DM-scoped row for a 1:1 conversation route', async () => {
-    useChannelBySlugMock.mockReturnValue({ data: undefined });
+  it('adds a DM-scoped message row for a 1:1 conversation route', async () => {
     useUserConversationsMock.mockReturnValue({
       data: [{ conversationID: 'cv-1', type: 'dm', displayName: 'Bob' }],
     });
@@ -140,8 +159,7 @@ describe('SearchBar browser behavior', () => {
     expect((scopeRow.element() as HTMLElement).dataset.scopeKind).toBe('dm');
   });
 
-  it('adds a group-scoped row for a group conversation route', async () => {
-    useChannelBySlugMock.mockReturnValue({ data: undefined });
+  it('adds a group-scoped message row for a group conversation route', async () => {
     useUserConversationsMock.mockReturnValue({
       data: [{ conversationID: 'cv-2', type: 'group', displayName: 'Eng huddle' }],
     });
@@ -153,8 +171,6 @@ describe('SearchBar browser behavior', () => {
   });
 
   it('clear button empties the input', async () => {
-    useChannelBySlugMock.mockReturnValue({ data: undefined });
-    useUserConversationsMock.mockReturnValue({ data: undefined });
     const screen = await renderSearchBar();
     await screen.getByTestId('searchbar-input').fill('foo');
     const clear = await screen.getByLabelText('Clear search');
@@ -164,20 +180,17 @@ describe('SearchBar browser behavior', () => {
   });
 
   it('Enter submits and clears the input', async () => {
-    useChannelBySlugMock.mockReturnValue({ data: undefined });
-    useUserConversationsMock.mockReturnValue({ data: undefined });
     const screen = await renderSearchBar();
     const input = screen.getByTestId('searchbar-input');
     await input.fill('foo');
     await input.element().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
-    // After submission, the input is cleared.
-    await new Promise((r) => setTimeout(r, 50));
-    expect((input.element() as HTMLInputElement).value).toBe('');
+    await vi.waitFor(() => {
+      expect((input.element() as HTMLInputElement).value).toBe('');
+    });
   });
 
-  it('submitting an in-scope channel suggestion navigates with in + type params', async () => {
+  it('submitting an in-scope channel row navigates with in + type params', async () => {
     useChannelBySlugMock.mockReturnValue({ data: { id: 'ch-1', name: 'general', slug: 'general', type: 'public' } });
-    useUserConversationsMock.mockReturnValue({ data: undefined });
     const screen = await renderWithLocation('/channel/general');
     await screen.getByTestId('searchbar-input').fill('bug');
     await screen.getByTestId('searchbar-show-in-scope').click();
@@ -188,8 +201,7 @@ describe('SearchBar browser behavior', () => {
     });
   });
 
-  it('submitting an in-scope DM suggestion navigates with type=dms', async () => {
-    useChannelBySlugMock.mockReturnValue({ data: undefined });
+  it('submitting an in-scope DM row navigates with type=dms', async () => {
     useUserConversationsMock.mockReturnValue({ data: [{ conversationID: 'cv-1', type: 'dm', displayName: 'Bob' }] });
     const screen = await renderWithLocation('/conversation/cv-1');
     await screen.getByTestId('searchbar-input').fill('hey');
@@ -201,7 +213,6 @@ describe('SearchBar browser behavior', () => {
 
   it('ArrowDown / ArrowUp move the highlight and Enter submits the highlighted row', async () => {
     useChannelBySlugMock.mockReturnValue({ data: { id: 'ch-1', name: 'general', slug: 'general', type: 'public' } });
-    useUserConversationsMock.mockReturnValue({ data: undefined });
     const screen = await renderWithLocation('/channel/general');
     const input = screen.getByTestId('searchbar-input');
     await input.fill('bug');
@@ -215,21 +226,18 @@ describe('SearchBar browser behavior', () => {
     });
   });
 
-  it('ArrowDown with no suggestions (empty query) is a no-op', async () => {
-    useChannelBySlugMock.mockReturnValue({ data: undefined });
-    useUserConversationsMock.mockReturnValue({ data: undefined });
+  it('ArrowDown with no items (empty query) is a no-op', async () => {
     const screen = await renderWithLocation();
     const input = screen.getByTestId('searchbar-input');
     await input.element().dispatchEvent(new Event('focus', { bubbles: true }));
     input.element().dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
     input.element().dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true }));
-    // No navigation occurred (still on the initial route).
+    // A neutral key falls through the whole else-if chain without effect.
+    input.element().dispatchEvent(new KeyboardEvent('keydown', { key: 'a', bubbles: true }));
     expect((screen.getByTestId('loc').element() as HTMLElement).dataset.path).toBe('/');
   });
 
   it('Escape closes the dropdown', async () => {
-    useChannelBySlugMock.mockReturnValue({ data: undefined });
-    useUserConversationsMock.mockReturnValue({ data: undefined });
     const screen = await renderWithLocation();
     const input = screen.getByTestId('searchbar-input');
     await input.fill('foo');
@@ -241,8 +249,6 @@ describe('SearchBar browser behavior', () => {
   });
 
   it('a mousedown outside the search container closes the dropdown', async () => {
-    useChannelBySlugMock.mockReturnValue({ data: undefined });
-    useUserConversationsMock.mockReturnValue({ data: undefined });
     const screen = await renderWithLocation();
     await screen.getByTestId('searchbar-input').fill('foo');
     await expect.element(screen.getByTestId('searchbar-dropdown')).toBeVisible();
@@ -253,13 +259,139 @@ describe('SearchBar browser behavior', () => {
   });
 
   it('Enter with a whitespace-only query does not submit', async () => {
-    useChannelBySlugMock.mockReturnValue({ data: undefined });
-    useUserConversationsMock.mockReturnValue({ data: undefined });
     const screen = await renderWithLocation();
     const input = screen.getByTestId('searchbar-input');
     await input.fill('   ');
     input.element().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
     await new Promise((r) => setTimeout(r, 30));
     expect((screen.getByTestId('loc').element() as HTMLElement).dataset.path).toBe('/');
+  });
+
+  it('⌘K focuses and opens the search from anywhere', async () => {
+    const screen = await renderWithLocation();
+    const input = screen.getByTestId('searchbar-input').element() as HTMLInputElement;
+    expect(document.activeElement).not.toBe(input);
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true, bubbles: true }));
+    await vi.waitFor(() => {
+      expect(document.activeElement).toBe(input);
+    });
+  });
+
+  it('Ctrl+K also focuses; a non-K chord and a plain key do not', async () => {
+    const screen = await renderWithLocation();
+    const input = screen.getByTestId('searchbar-input').element() as HTMLInputElement;
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'j', metaKey: true, bubbles: true }));
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', bubbles: true }));
+    expect(document.activeElement).not.toBe(input);
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'K', ctrlKey: true, bubbles: true }));
+    await vi.waitFor(() => {
+      expect(document.activeElement).toBe(input);
+    });
+  });
+
+  it('renders Channels + People sections and opens a channel on click', async () => {
+    useUserChannelsMock.mockReturnValue({ data: [{ channelID: 'ch-1' }] });
+    useSearchChannelsMock.mockReturnValue({
+      data: {
+        hits: [
+          { id: 'ch-1', score: 1, _source: { name: 'general', slug: 'general', type: 'public' } },
+          // Slug-less private channel: click must fall back to the id.
+          { id: 'ch-2', score: 1, _source: { name: 'secret', type: 'private' } },
+        ],
+      },
+      isLoading: false,
+    });
+    useSearchUsersMock.mockReturnValue({
+      data: { hits: [{ id: 'u-1', score: 1, _source: { displayName: 'Alice', email: 'alice@x.io' } }] },
+      isLoading: false,
+    });
+    const screen = await renderWithLocation();
+    await screen.getByTestId('searchbar-input').fill('se');
+    await expect.element(screen.getByText('Channels')).toBeVisible();
+    await expect.element(screen.getByText('People')).toBeVisible();
+    // Joined vs not-joined badges.
+    expect((screen.getByTestId('searchbar-channel-ch-1-badge').element() as HTMLElement).textContent).toContain('Joined');
+    expect((screen.getByTestId('searchbar-channel-ch-2-badge').element() as HTMLElement).textContent).toContain('Join');
+    await screen.getByTestId('searchbar-channel-ch-2').click();
+    await vi.waitFor(() => {
+      expect((screen.getByTestId('loc').element() as HTMLElement).dataset.path).toBe('/channel/ch-2');
+    });
+  });
+
+  it('opens/creates a DM and navigates when a person row is clicked', async () => {
+    createConvMutate.mockImplementation((_vars, opts) => opts.onSuccess({ id: 'cv-77' }));
+    useSearchUsersMock.mockReturnValue({
+      data: { hits: [{ id: 'u-1', score: 1, _source: { displayName: 'Alice' } }] },
+      isLoading: false,
+    });
+    const screen = await renderWithLocation();
+    await screen.getByTestId('searchbar-input').fill('al');
+    await screen.getByTestId('searchbar-user-u-1').click();
+    await vi.waitFor(() => {
+      expect((screen.getByTestId('loc').element() as HTMLElement).dataset.path).toBe('/conversation/cv-77');
+    });
+    expect(createConvMutate).toHaveBeenCalledWith(
+      { type: 'dm', participantIDs: ['u-1'] },
+      expect.any(Object),
+    );
+  });
+
+  it('keyboard nav walks channels → people → message action', async () => {
+    useSearchChannelsMock.mockReturnValue({
+      data: { hits: [{ id: 'ch-1', score: 1, _source: { name: 'general', slug: 'general', type: 'public' } }] },
+      isLoading: false,
+    });
+    useSearchUsersMock.mockReturnValue({
+      data: { hits: [{ id: 'u-1', score: 1, _source: { displayName: 'Alice' } }] },
+      isLoading: false,
+    });
+    const screen = await renderWithLocation();
+    const input = screen.getByTestId('searchbar-input');
+    await input.fill('al');
+    await expect.element(screen.getByTestId('searchbar-channel-ch-1')).toBeVisible();
+    const el = input.element();
+    // Default highlight is the first channel; hover a person to move it,
+    // then arrow down to the message action.
+    await screen.getByTestId('searchbar-user-u-1').hover();
+    expect((screen.getByTestId('searchbar-user-u-1').element() as HTMLElement).getAttribute('aria-selected')).toBe('true');
+    el.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+    await vi.waitFor(() => {
+      expect((screen.getByTestId('searchbar-show-results').element() as HTMLElement).getAttribute('aria-selected')).toBe('true');
+    });
+  });
+
+  it('renders rows with id/empty fallbacks when hit fields and channel list are absent', async () => {
+    useUserChannelsMock.mockReturnValue({ data: undefined });
+    useSearchChannelsMock.mockReturnValue({
+      data: { hits: [{ id: 'ch-x', score: 1, _source: { type: 'public' } }] },
+      isLoading: false,
+    });
+    useSearchUsersMock.mockReturnValue({
+      data: { hits: [{ id: 'u-x', score: 1, _source: {} }] },
+      isLoading: false,
+    });
+    const screen = await renderWithLocation();
+    await screen.getByTestId('searchbar-input').fill('xy');
+    await expect.element(screen.getByTestId('searchbar-channel-ch-x')).toBeVisible();
+    expect((screen.getByTestId('searchbar-channel-ch-x').element() as HTMLElement).textContent).toContain('~ch-x');
+    expect((screen.getByTestId('searchbar-channel-ch-x-badge').element() as HTMLElement).textContent).toContain('Join');
+    expect((screen.getByTestId('searchbar-user-u-x').element() as HTMLElement).textContent).toContain('u-x');
+  });
+
+  it('tolerates undefined query data (nullish hit fallbacks)', async () => {
+    useSearchChannelsMock.mockReturnValue({ data: undefined, isLoading: false });
+    useSearchUsersMock.mockReturnValue({ data: undefined, isLoading: false });
+    const screen = await renderWithLocation();
+    await screen.getByTestId('searchbar-input').fill('zz');
+    await expect.element(screen.getByTestId('searchbar-show-results')).toBeVisible();
+    expect(document.querySelector('[data-testid="searchbar-loading"]')).toBeNull();
+  });
+
+  it('shows a loading row while entity results are pending', async () => {
+    useSearchChannelsMock.mockReturnValue({ data: { hits: [] }, isLoading: true });
+    useSearchUsersMock.mockReturnValue({ data: { hits: [] }, isLoading: true });
+    const screen = await renderWithLocation();
+    await screen.getByTestId('searchbar-input').fill('ab');
+    await expect.element(screen.getByTestId('searchbar-loading')).toBeVisible();
   });
 });

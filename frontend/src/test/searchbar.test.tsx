@@ -55,11 +55,11 @@ describe('SearchBar', () => {
     expect(input).toHaveClass('text-foreground');
   });
 
-  it('opens a "Show results for" dropdown once the user types', () => {
+  it('opens a "Search messages for" dropdown action once the user types', () => {
     wrap();
     fireEvent.change(screen.getByTestId('searchbar-input'), { target: { value: 'claude' } });
     expect(screen.getByTestId('searchbar-dropdown')).toBeInTheDocument();
-    expect(screen.getByTestId('searchbar-show-results')).toHaveTextContent(/Show results for/i);
+    expect(screen.getByTestId('searchbar-show-results')).toHaveTextContent(/Search messages for/i);
     expect(screen.getByTestId('searchbar-show-results')).toHaveTextContent('claude');
     expect(screen.getByTestId('searchbar-show-results')).toHaveClass('py-2', 'text-sm', 'max-md:py-3', 'max-md:text-base');
   });

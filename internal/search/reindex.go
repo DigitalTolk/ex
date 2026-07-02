@@ -25,6 +25,63 @@ type bulkWriter interface {
 	Bulk(ctx context.Context, index string, entries []BulkEntry) error
 }
 
+// UsersChannelsSource is the slim data source the search-reindex
+// migration pulls from to rebuild ex_users and ex_channels — the two
+// indices that carry the autocomplete analyzer.
+type UsersChannelsSource interface {
+	ListUsers(ctx context.Context) ([]*model.User, error)
+	ListChannels(ctx context.Context) ([]*model.Channel, error)
+}
+
+// indexRecreator drops-and-recreates a single index with the current
+// mapping. *Client satisfies it; tests stub it.
+type indexRecreator interface {
+	RecreateIndex(ctx context.Context, name string) error
+	Bulk(ctx context.Context, index string, entries []BulkEntry) error
+}
+
+// RecreateUsersChannels rolls the autocomplete mapping onto an existing
+// cluster: it drops ex_users and ex_channels, recreates them with the
+// current mapping, then bulk-reindexes every user and channel from src.
+// Because each index is rebuilt from scratch, orphaned ghost docs
+// (users/channels deleted straight from DynamoDB and never de-indexed)
+// are dropped as a side effect. Idempotent — safe to re-run.
+//
+// This reuses the same userDoc/channelDoc builders and Client.Bulk path
+// as the full Reindexer, scoped to just the two analyzer-affected
+// indices so the migration doesn't have to touch messages/files.
+func RecreateUsersChannels(ctx context.Context, rc indexRecreator, src UsersChannelsSource) (users, channels int, err error) {
+	usersList, err := src.ListUsers(ctx)
+	if err != nil {
+		return 0, 0, fmt.Errorf("search reindex: list users: %w", err)
+	}
+	channelsList, err := src.ListChannels(ctx)
+	if err != nil {
+		return 0, 0, fmt.Errorf("search reindex: list channels: %w", err)
+	}
+	if err := rc.RecreateIndex(ctx, IndexUsers); err != nil {
+		return 0, 0, err
+	}
+	userEntries := make([]BulkEntry, 0, len(usersList))
+	for _, u := range usersList {
+		userEntries = append(userEntries, BulkEntry{ID: u.ID, Doc: userDoc(u)})
+	}
+	if err := rc.Bulk(ctx, IndexUsers, userEntries); err != nil {
+		return 0, 0, fmt.Errorf("search reindex: bulk users: %w", err)
+	}
+	if err := rc.RecreateIndex(ctx, IndexChannels); err != nil {
+		return len(usersList), 0, err
+	}
+	channelEntries := make([]BulkEntry, 0, len(channelsList))
+	for _, ch := range channelsList {
+		channelEntries = append(channelEntries, BulkEntry{ID: ch.ID, Doc: channelDoc(ch)})
+	}
+	if err := rc.Bulk(ctx, IndexChannels, channelEntries); err != nil {
+		return len(usersList), 0, fmt.Errorf("search reindex: bulk channels: %w", err)
+	}
+	return len(usersList), len(channelsList), nil
+}
+
 // Reindexer rebuilds every OpenSearch index from the canonical DDB
 // data. Triggered by an admin action; runs in a goroutine. Status is
 // observable via Status() so the admin UI can show progress.

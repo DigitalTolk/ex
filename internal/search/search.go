@@ -80,8 +80,11 @@ func (s *Service) Users(ctx context.Context, q string, limit int) (*SearchResult
 		return &SearchResult{Hits: []SearchHit{}}, nil
 	}
 	body := map[string]any{
-		"size":  clampLimit(limit),
-		"query": fieldMust(q, "displayName^3", "email"),
+		"size": clampLimit(limit),
+		"query": fuzzyOrPrefix(q,
+			[]string{"displayName^3", "email"},
+			[]string{"displayName.autocomplete^3", "email.autocomplete"},
+		),
 	}
 	return s.r.Search(ctx, IndexUsers, body)
 }
@@ -106,7 +109,10 @@ func (s *Service) Channels(ctx context.Context, opts ChannelQuery) (*SearchResul
 		"size": clampLimit(opts.Limit),
 		"query": map[string]any{
 			"bool": map[string]any{
-				"must":   []any{fieldMust(q, "name^3", "description")},
+				"must": []any{fuzzyOrPrefix(q,
+					[]string{"name^3", "description"},
+					[]string{"name.autocomplete"},
+				)},
 				"filter": filters,
 				"must_not": []any{
 					map[string]any{"term": map[string]any{"archived": true}},
@@ -311,6 +317,62 @@ func stringSliceToAny(in []string) []any {
 // OpenSearch query shape than the standard fuzzy match.
 func hasWildcard(q string) bool {
 	return strings.ContainsAny(q, "*?")
+}
+
+// fuzzyOrPrefix builds the OpenSearch query for the user/channel
+// autocomplete boxes. It combines two clauses under a `bool.should`
+// (minimum_should_match=1):
+//
+//  1. the existing full-token fuzzy `multi_match`/`match` (typo + boost
+//     tolerant) against the base `text` fields, and
+//  2. a prefix/substring `match`/`multi_match` against the edge-ngram
+//     `.autocomplete` subfields.
+//
+// So "abd" reaches "Muhammad Abdur Rehman" via clause 2 (the "abd"
+// edge-gram of the "Abdur" token) while exact and typo queries still
+// resolve through clause 1 with the same field boosts.
+//
+// Wildcard queries (`*`/`?`) keep their dedicated `simple_query_string`
+// shape — they already express prefix intent, so there's no need to
+// also OR in the ngram clause.
+func fuzzyOrPrefix(q string, fuzzyFields, ngramFields []string) any {
+	if hasWildcard(q) {
+		return fieldMust(q, fuzzyFields...)
+	}
+	return map[string]any{
+		"bool": map[string]any{
+			"should": []any{
+				fieldMust(q, fuzzyFields...),
+				prefixMatch(q, ngramFields...),
+			},
+			"minimum_should_match": 1,
+		},
+	}
+}
+
+// prefixMatch matches `q` against one or more edge-ngram `.autocomplete`
+// subfields with operator=AND (every query token must prefix-match) and
+// NO fuzziness — the ngram index already provides the tolerance and
+// stacking fuzzy on top just adds noise.
+func prefixMatch(q string, fields ...string) any {
+	if len(fields) == 1 {
+		return map[string]any{
+			"match": map[string]any{
+				fields[0]: map[string]any{
+					"query":    q,
+					"operator": "and",
+				},
+			},
+		}
+	}
+	return map[string]any{
+		"multi_match": map[string]any{
+			"query":    q,
+			"fields":   fields,
+			"type":     "best_fields",
+			"operator": "and",
+		},
+	}
 }
 
 // fieldMust builds the OpenSearch `must` clause for one or more text

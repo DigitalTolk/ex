@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 )
@@ -149,6 +150,150 @@ func TestSearch_MessageMappingAndQuery_RealEngine(t *testing.T) {
 	}
 	if res.Total != 0 || len(res.Hits) != 0 {
 		t.Fatalf("absent-term query returned %d hits, want 0", res.Total)
+	}
+}
+
+func TestSearch_UserAutocompletePrefix_RealEngine(t *testing.T) {
+	c := newSearchClient(t)
+	ctx := context.Background()
+	idx := NewIndexer(c)
+	svc := NewService(c)
+
+	users := []*model.User{
+		{ID: "au1", DisplayName: "Muhammad Abdur Rehman", Email: "abdur@example.com"},
+		{ID: "au2", DisplayName: "Alice Anderson", Email: "alice@example.com"},
+	}
+	for _, u := range users {
+		if err := idx.IndexUser(ctx, u); err != nil {
+			t.Fatalf("IndexUser %s: %v", u.ID, err)
+		}
+	}
+	refreshIndex(t, c, IndexUsers)
+
+	cases := []struct {
+		name string
+		q    string
+		want string // the ID that MUST be present
+	}{
+		// The #2 bug: a mid-name substring/prefix must match.
+		{"prefix of middle token", "abd", "au1"},
+		{"prefix of last token", "reh", "au1"},
+		{"prefix of first token", "muh", "au1"},
+		// Full-token exact still works.
+		{"exact token", "Rehman", "au1"},
+		// Typo tolerance (fuzziness AUTO) still works.
+		{"typo", "Muhamad", "au1"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			res, err := svc.Users(ctx, tc.q, 10)
+			if err != nil {
+				t.Fatalf("Users(%q): %v", tc.q, err)
+			}
+			if !hitIDs(res)[tc.want] {
+				t.Fatalf("Users(%q) = %v, want %s present", tc.q, res.Hits, tc.want)
+			}
+		})
+	}
+
+	// Negative control: an unrelated prefix must NOT surface au1.
+	res, err := svc.Users(ctx, "zzz", 10)
+	if err != nil {
+		t.Fatalf("Users(zzz): %v", err)
+	}
+	if hitIDs(res)["au1"] {
+		t.Fatalf("Users(zzz) unexpectedly matched au1: %v", res.Hits)
+	}
+}
+
+func TestSearch_ChannelAutocompleteAndScoping_RealEngine(t *testing.T) {
+	c := newSearchClient(t)
+	ctx := context.Background()
+	idx := NewIndexer(c)
+	svc := NewService(c)
+
+	channels := []*model.Channel{
+		{ID: "ac1", Name: "engineering", Slug: "engineering", Type: model.ChannelTypePublic},
+		{ID: "ac2", Name: "engineering-private", Slug: "engineering-private", Type: model.ChannelTypePrivate},
+		{ID: "ac3", Name: "random", Slug: "random", Type: model.ChannelTypePublic, Archived: true},
+	}
+	for _, ch := range channels {
+		if err := idx.IndexChannel(ctx, ch); err != nil {
+			t.Fatalf("IndexChannel %s: %v", ch.ID, err)
+		}
+	}
+	refreshIndex(t, c, IndexChannels)
+
+	// Prefix "eng" must match both engineering channels via the ngram
+	// subfield.
+	res, err := svc.Channels(ctx, ChannelQuery{Q: "eng", Limit: 10})
+	if err != nil {
+		t.Fatalf("Channels(eng): %v", err)
+	}
+	if ids := hitIDs(res); !ids["ac1"] || !ids["ac2"] {
+		t.Fatalf("Channels(eng) = %v, want ac1 and ac2", res.Hits)
+	}
+
+	// Access scoping: restricting to ac1 drops the private ac2 even
+	// though it matches the query.
+	res, err = svc.Channels(ctx, ChannelQuery{Q: "eng", AllowedChannelIDs: []string{"ac1"}, Limit: 10})
+	if err != nil {
+		t.Fatalf("Channels(eng, scoped): %v", err)
+	}
+	if ids := hitIDs(res); !ids["ac1"] || ids["ac2"] {
+		t.Fatalf("scoped Channels(eng) = %v, want only ac1", res.Hits)
+	}
+}
+
+func TestSearch_RecreateUsersChannelsDropsOrphan_RealEngine(t *testing.T) {
+	c := newSearchClient(t)
+	ctx := context.Background()
+	idx := NewIndexer(c)
+	svc := NewService(c)
+
+	// Seed a ghost directly into the index — simulates a user deleted
+	// from DynamoDB whose search doc was never removed.
+	if err := idx.IndexUser(ctx, &model.User{ID: "ghost-1", DisplayName: "Ghostly Presence"}); err != nil {
+		t.Fatalf("seed ghost: %v", err)
+	}
+	refreshIndex(t, c, IndexUsers)
+	before, err := svc.Users(ctx, "ghostly", 10)
+	if err != nil {
+		t.Fatalf("pre-search: %v", err)
+	}
+	if !hitIDs(before)["ghost-1"] {
+		t.Fatal("precondition: ghost should be searchable before recreate")
+	}
+
+	// The canonical source no longer contains the ghost — only a live user.
+	src := &fakeSources{
+		users:    []*model.User{{ID: "live-1", DisplayName: "Ghostly Twin"}},
+		channels: []*model.Channel{{ID: "keep-1", Name: "kept"}},
+	}
+	if _, _, err := RecreateUsersChannels(ctx, c, src); err != nil {
+		t.Fatalf("RecreateUsersChannels: %v", err)
+	}
+	refreshIndex(t, c, IndexUsers)
+
+	afterRes, err := svc.Users(ctx, "ghostly", 10)
+	if err != nil {
+		t.Fatalf("post-search: %v", err)
+	}
+	after := hitIDs(afterRes)
+	if after["ghost-1"] {
+		t.Fatal("ghost-1 must be gone after recreate reindex")
+	}
+	if !after["live-1"] {
+		t.Fatal("live-1 must be present after recreate reindex")
+	}
+	// The rebuilt index still carries the autocomplete analyzer: a prefix
+	// query resolves the freshly reindexed user.
+	prefixRes, err := svc.Users(ctx, "gho", 10)
+	if err != nil {
+		t.Fatalf("prefix-search: %v", err)
+	}
+	if !hitIDs(prefixRes)["live-1"] {
+		t.Fatal("prefix 'gho' should match live-1 on the recreated index")
 	}
 }
 

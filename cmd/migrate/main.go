@@ -16,12 +16,14 @@
 //	attachment-relink      re-link orphaned attachments to their message [--window=1h]
 //	draft-cleanup          delete orphaned DynamoDB DRAFT# rows (drafts now live in Redis)
 //	evt-ttl                set the idle TTL on legacy durable inbox streams (Redis)
+//	search-reindex         recreate ex_users/ex_channels with the autocomplete mapping + reindex (OpenSearch)
 //
 // Required environment variables (same as the `ex` server):
 //   - AWS_REGION
 //   - DYNAMODB_TABLE
 //   - DYNAMODB_ENDPOINT (only for DynamoDB Local)
 //   - REDIS_URL (only for the evt-ttl subcommand)
+//   - OPENSEARCH_URL (only for the search-reindex subcommand)
 package main
 
 import (
@@ -60,6 +62,7 @@ func commands() map[string]command {
 		"attachment-relink":     {"re-link orphaned attachments to their message [--window=1h]", runAttachmentRelink},
 		"draft-cleanup":         {"delete orphaned DynamoDB DRAFT# rows (drafts now live in Redis)", runDraftCleanup},
 		"evt-ttl":               {"set the idle TTL on legacy durable inbox streams (Redis)", runEvtTTL},
+		"search-reindex":        {"recreate ex_users/ex_channels with the autocomplete mapping + reindex from DynamoDB (OpenSearch)", runSearchReindex},
 	}
 }
 

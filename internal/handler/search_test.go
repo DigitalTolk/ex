@@ -98,6 +98,105 @@ func TestSearchHandler_Users_OK(t *testing.T) {
 	}
 }
 
+// stubUserResolver returns only the users whose IDs it knows about,
+// omitting the rest — mirroring GetUsersByIDs dropping missing rows.
+type stubUserResolver struct {
+	byID map[string]*model.User
+	err  error
+}
+
+func (s *stubUserResolver) GetUsersByIDs(_ context.Context, ids []string) ([]*model.User, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	out := []*model.User{}
+	for _, id := range ids {
+		if u, ok := s.byID[id]; ok {
+			out = append(out, u)
+		}
+	}
+	return out, nil
+}
+
+func TestSearchHandler_Users_DropsGhostHits(t *testing.T) {
+	h, sr, _, jwtMgr := setupSearchTest(t)
+	// Two hits from the (possibly stale) index; only u-live still has a
+	// canonical store row. u-ghost was deleted straight from DynamoDB.
+	sr.usersHits = []search.SearchHit{
+		{ID: "u-live", Score: 2, Source: map[string]any{"displayName": "Live"}},
+		{ID: "u-ghost", Score: 1, Source: map[string]any{"displayName": "Ghost"}},
+	}
+	h.SetUserResolver(&stubUserResolver{byID: map[string]*model.User{
+		"u-live": {ID: "u-live"},
+	}})
+	user := &model.User{ID: "u-2", SystemRole: model.SystemRoleMember}
+	token := makeTokenForUser(jwtMgr, user)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/search/users?q=x", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	middleware.Auth(jwtMgr)(http.HandlerFunc(h.SearchUsers)).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var got search.SearchResult
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(got.Hits) != 1 || got.Hits[0].ID != "u-live" {
+		t.Fatalf("hits = %+v, want only u-live (ghost dropped)", got.Hits)
+	}
+	if got.Total != 1 {
+		t.Fatalf("total = %d, want 1", got.Total)
+	}
+}
+
+func TestSearchHandler_Users_ResolverErrorReturns500(t *testing.T) {
+	h, sr, _, jwtMgr := setupSearchTest(t)
+	sr.usersHits = []search.SearchHit{{ID: "u-1"}}
+	h.SetUserResolver(&stubUserResolver{err: errors.New("ddb down")})
+	user := &model.User{ID: "u-2", SystemRole: model.SystemRoleMember}
+	token := makeTokenForUser(jwtMgr, user)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/search/users?q=x", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	middleware.Auth(jwtMgr)(http.HandlerFunc(h.SearchUsers)).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", rec.Code)
+	}
+}
+
+func TestSearchHandler_Users_NoResolverPassesThrough(t *testing.T) {
+	// Without a resolver wired the endpoint returns raw hits unchanged
+	// (the search-disabled / test path). setupSearchTest wires none.
+	h, sr, _, jwtMgr := setupSearchTest(t)
+	sr.usersHits = []search.SearchHit{{ID: "u-1"}, {ID: "u-2"}}
+	user := &model.User{ID: "u-9", SystemRole: model.SystemRoleMember}
+	token := makeTokenForUser(jwtMgr, user)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/search/users?q=x", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	middleware.Auth(jwtMgr)(http.HandlerFunc(h.SearchUsers)).ServeHTTP(rec, req)
+
+	var got search.SearchResult
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(got.Hits) != 2 {
+		t.Fatalf("hits = %d, want 2 (passthrough)", len(got.Hits))
+	}
+}
+
+func TestSearchHandler_SetUserResolver_NilHandler(t *testing.T) {
+	var h *SearchHandler
+	// Must not panic on a nil handler.
+	h.SetUserResolver(&stubUserResolver{})
+}
+
 func TestSearchHandler_Channels_OK(t *testing.T) {
 	h, sr, ac, jwtMgr := setupSearchTest(t)
 	ac.parents = []string{"ch-public", "ch-private", "conv-ignored"}

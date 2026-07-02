@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/DigitalTolk/ex/internal/middleware"
+	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/DigitalTolk/ex/internal/search"
 )
 
@@ -16,6 +17,14 @@ type SearchAccess interface {
 	AllowedParentIDs(ctx context.Context, userID string) ([]string, error)
 }
 
+// UserResolver batch-loads users by ID so the user-search endpoint can
+// drop hits whose canonical store row no longer exists (deleted users
+// that still linger in a stale search index — "ghosts"). Missing IDs are
+// simply omitted from the returned slice.
+type UserResolver interface {
+	GetUsersByIDs(ctx context.Context, ids []string) ([]*model.User, error)
+}
+
 // SearchHandler exposes the public search endpoints. Searcher may be a
 // noop implementation when search isn't configured — in that case the
 // endpoints return empty results rather than 503 so the UI can show
@@ -23,12 +32,22 @@ type SearchAccess interface {
 type SearchHandler struct {
 	searcher search.Searcher
 	access   SearchAccess
+	users    UserResolver
 }
 
 // NewSearchHandler builds a handler. Either argument may be nil; when
 // either is, the handler degrades to empty responses.
 func NewSearchHandler(s search.Searcher, a SearchAccess) *SearchHandler {
 	return &SearchHandler{searcher: s, access: a}
+}
+
+// SetUserResolver wires the canonical user store so SearchUsers can drop
+// ghost hits (index rows whose user no longer exists). When unset the
+// endpoint returns raw hits — used by tests and the search-disabled path.
+func (h *SearchHandler) SetUserResolver(u UserResolver) {
+	if h != nil {
+		h.users = u
+	}
 }
 
 // SearchUsers handles GET /api/v1/search/users?q=&limit=
@@ -44,7 +63,46 @@ func (h *SearchHandler) SearchUsers(w http.ResponseWriter, r *http.Request) {
 		writeInternalError(w, r, "search_failed", err)
 		return
 	}
+	res, err = h.dropGhostUsers(r.Context(), res)
+	if err != nil {
+		writeInternalError(w, r, "search_failed", err)
+		return
+	}
 	writeJSON(w, http.StatusOK, res)
+}
+
+// dropGhostUsers filters the raw user-search hits down to those whose
+// canonical store row still exists, preserving the relevance ordering
+// from OpenSearch. This makes the index a hint, not the source of truth:
+// a user deleted straight from DynamoDB (there is no user hard-delete
+// service method that could de-index) never surfaces even while a stale
+// doc lingers. No resolver wired (or no hits) → results pass through
+// unchanged.
+func (h *SearchHandler) dropGhostUsers(ctx context.Context, res *search.SearchResult) (*search.SearchResult, error) {
+	if h.users == nil || res == nil || len(res.Hits) == 0 {
+		return res, nil
+	}
+	ids := make([]string, len(res.Hits))
+	for i, hit := range res.Hits {
+		ids[i] = hit.ID
+	}
+	users, err := h.users.GetUsersByIDs(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	live := make(map[string]bool, len(users))
+	for _, u := range users {
+		if u != nil {
+			live[u.ID] = true
+		}
+	}
+	kept := make([]search.SearchHit, 0, len(res.Hits))
+	for _, hit := range res.Hits {
+		if live[hit.ID] {
+			kept = append(kept, hit)
+		}
+	}
+	return &search.SearchResult{Total: len(kept), Hits: kept, Aggs: res.Aggs}, nil
 }
 
 // SearchChannels handles GET /api/v1/search/channels?q=&limit=

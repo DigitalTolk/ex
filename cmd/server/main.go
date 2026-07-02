@@ -356,6 +356,10 @@ func main() {
 	searcher := search.NewService(searchClient)
 	searchAccess := newSearchAccess(membershipStore, conversationStore)
 	searchH := handler.NewSearchHandler(searcher, searchAccess)
+	// Route /search/users through the canonical store so a user deleted
+	// straight from DynamoDB (no hard-delete service method exists to
+	// de-index) never surfaces as a ghost, even with a stale index.
+	searchH.SetUserResolver(userStore)
 	if searchClient != nil {
 		ids := newIDSearcher(searcher)
 		userSvc.SetSearcher(ids)
