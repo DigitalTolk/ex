@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { SearchBar } from './SearchBar';
 
 const useChannelBySlugMock = vi.hoisted(() => vi.fn(() => ({ data: undefined as unknown })));
+const useUserChannelsMock = vi.hoisted(() => vi.fn(() => ({ data: [] as { channelID: string }[] })));
 const useUserConversationsMock = vi.hoisted(() => vi.fn(() => ({ data: undefined as unknown })));
 // openDM defaults to its success path (runs the caller's onSuccess, which
 // resets the bar); the navigation itself belongs to the real hook and is
@@ -27,6 +28,7 @@ vi.mock('@/lib/api', () => ({
 }));
 vi.mock('@/hooks/useChannels', () => ({
   useChannelBySlug: (slug?: string) => useChannelBySlugMock(slug as never),
+  useUserChannels: () => useUserChannelsMock(),
 }));
 vi.mock('@/hooks/useConversations', () => ({
   useUserConversations: () => useUserConversationsMock(),
@@ -115,6 +117,7 @@ function contrastRatio(a: string, b: string) {
 
 beforeEach(() => {
   useChannelBySlugMock.mockReturnValue({ data: undefined });
+  useUserChannelsMock.mockReturnValue({ data: [] });
   useUserConversationsMock.mockReturnValue({ data: undefined });
   useSearchUsersMock.mockReturnValue({ data: { hits: [] }, isLoading: false });
   useSearchChannelsMock.mockReturnValue({ data: { hits: [] }, isLoading: false });
@@ -338,7 +341,9 @@ describe('SearchBar browser behavior', () => {
     expect(document.activeElement).not.toBe(input);
   });
 
-  it('renders Channels + People sections and opens a channel on click', async () => {
+  it('renders Channels + People sections, a Join hint on unjoined channels, and opens a channel on click', async () => {
+    // ch-1 is joined; ch-2 is a channel the user hasn't joined → "Join" hint.
+    useUserChannelsMock.mockReturnValue({ data: [{ channelID: 'ch-1' }] });
     useSearchChannelsMock.mockReturnValue({
       data: {
         hits: [
@@ -357,6 +362,8 @@ describe('SearchBar browser behavior', () => {
     await screen.getByTestId('searchbar-input').fill('se');
     await expect.element(screen.getByText('Channels')).toBeVisible();
     await expect.element(screen.getByText('People')).toBeVisible();
+    await expect.element(screen.getByTestId('searchbar-channel-ch-2-join')).toBeVisible();
+    expect(document.querySelector('[data-testid="searchbar-channel-ch-1-join"]')).toBeNull();
     await screen.getByTestId('searchbar-channel-ch-2').click();
     await vi.waitFor(() => {
       expect((screen.getByTestId('loc').element() as HTMLElement).dataset.path).toBe('/channel/ch-2');

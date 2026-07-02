@@ -134,7 +134,7 @@ export function ConversationRow({
               avatarURL={dmAvatarURL}
               online={dmOnline}
               className="h-5 w-5"
-              dotClassName="h-1.5 w-1.5"
+              dotSize={6}
             />
             <span className="truncate">{conversation.displayName}</span>
             <UserStatusIndicator status={dmUserStatus} className="h-4 w-4" />

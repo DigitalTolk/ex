@@ -73,7 +73,8 @@ describe('AppTopBar (mobile + native)', () => {
     const screen = await renderTopBar();
     // The mobile account button shows an online presence dot.
     const account = screen.getByTestId('topbar-account').element() as HTMLElement;
-    const dot = account.querySelector('span[aria-hidden]') as HTMLElement;
+    const dot = account.querySelector('[data-presence]') as HTMLElement;
+    expect(dot.getAttribute('data-presence')).toBe('online');
     expect(dot.className).toContain('bg-online');
     await screen.getByTestId('topbar-account').click();
     await expect.element(screen.getByTestId('mobile-account-sheet')).toBeVisible();

@@ -48,6 +48,20 @@ function renderTopBar(ui = <AppTopBar />) {
 }
 
 describe('AppTopBar (browser)', () => {
+  it('carves the presence notch out of the account avatar (Slack-style, not a painted halo)', async () => {
+    mockOnline = new Set<string>(['u-1']);
+    const screen = await renderTopBar();
+    const avatar = screen
+      .getByTestId('topbar-account')
+      .element()
+      .querySelector('[data-slot="avatar"]') as HTMLElement;
+    // The notch is a radial-gradient mask on the avatar itself — the gap
+    // around the dot shows the real backdrop instead of a painted halo.
+    expect(getComputedStyle(avatar).maskImage).toContain('radial-gradient');
+    const dot = screen.getByTestId('topbar-account').element().querySelector('[data-presence]')!;
+    expect(dot.getAttribute('data-presence')).toBe('online');
+  });
+
   beforeEach(() => {
     mockSystemRole = 'admin';
     mockUserStatus = undefined;

@@ -38,6 +38,7 @@ vi.mock('@/lib/unread-cache', () => ({
 }));
 const isActiveConversationMock = vi.fn(() => true);
 const isActiveChannelMock = vi.fn(() => false);
+const isActiveThreadMock = vi.fn(() => false);
 
 vi.mock('@/context/UnreadContext', () => ({
   useUnread: () => ({
@@ -51,7 +52,7 @@ vi.mock('@/context/UnreadContext', () => ({
     isActiveChannel: isActiveChannelMock,
     isActiveConversation: isActiveConversationMock,
     setActiveThread: vi.fn(),
-    isActiveThread: vi.fn(() => false),
+    isActiveThread: isActiveThreadMock,
   }),
   UnreadProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
@@ -268,8 +269,11 @@ describe('ChatPage WS router — divergent-mock branch arms (browser)', () => {
 
   it('onMessageNew marks the active thread seen with a conversation parentType', async () => {
     await renderChatPage('/?thread=root-1');
+    // Another participant's reply: the seen PUT persists with the
+    // conversation-typed target. (An OWN reply skips the PUT — the server
+    // marks the author seen; pinned in the seen-marking describe below.)
     lastHandlers().onMessageNew?.(msg({
-      parentID: 'conv-1', parentType: 'conversation', parentMessageID: 'root-1', authorID: 'u-1',
+      parentID: 'conv-1', parentType: 'conversation', parentMessageID: 'root-1', authorID: 'other-user',
     }));
     expect(mockMarkThreadSeen).toHaveBeenCalledWith('root-1', '2026-04-30T10:00:00Z', {
       parentID: 'conv-1', parentType: 'conversation',
@@ -435,5 +439,35 @@ describe('ChatPage WS router — divergent-mock branch arms (browser)', () => {
     await renderChatPage();
     // user?.id ?? null → null path runs in the effect; the hook is disabled.
     expect(lastHandlers().enabled).toBe(false);
+  });
+});
+
+describe('active-thread seen marking on incoming replies', () => {
+  beforeEach(() => {
+    // This describe sits outside the main one, so restore the pieces its
+    // beforeEach normally resets (a prior test nulls the user).
+    userRef.value = { id: 'u-1', displayName: 'Test', email: 't@t.com', systemRole: 'member', status: 'active' };
+    mockUseWebSocket.mockClear();
+    isActiveThreadMock.mockReturnValue(true);
+    mockMarkThreadSeen.mockClear();
+  });
+  afterEach(() => {
+    isActiveThreadMock.mockReturnValue(false);
+  });
+
+  it("the user's OWN reply marks seen locally only — no seen PUT (the backend already marked the author seen)", async () => {
+    await renderChatPage();
+    lastHandlers().onMessageNew?.(msg({ authorID: 'u-1', parentMessageID: 'root-1' }));
+    expect(mockMarkThreadSeen).toHaveBeenCalledWith('root-1', expect.any(String), undefined);
+  });
+
+  it("someone ELSE's reply while the thread is open persists the seen watermark (PUT target present)", async () => {
+    await renderChatPage();
+    lastHandlers().onMessageNew?.(msg({ authorID: 'other-user', parentMessageID: 'root-1' }));
+    expect(mockMarkThreadSeen).toHaveBeenCalledWith(
+      'root-1',
+      expect.any(String),
+      expect.objectContaining({ parentID: 'ch-99', parentType: 'channel' }),
+    );
   });
 });

@@ -79,8 +79,15 @@ describe('ConversationIntro browser behaviour', () => {
 
   it('DMIntro renders the offline dot when online is false', async () => {
     await render(<DMIntro otherDisplayName="Bob" online={false} />);
-    const dot = document.querySelector('[aria-label="Offline"]');
+    const dot = document.querySelector('[data-presence="offline"]');
     expect(dot).not.toBeNull();
+  });
+
+  it('DMIntro shows no dot and no notch when presence is not tracked', async () => {
+    const screen = await render(<DMIntro otherDisplayName="Bob" />);
+    expect(document.querySelector('[data-presence]')).toBeNull();
+    const box = screen.container.querySelector('[data-slot="avatar"]') as HTMLElement;
+    expect(getComputedStyle(box).maskImage).toBe('none');
   });
 
   it('SelfDMIntro renders the self-conversation copy', async () => {

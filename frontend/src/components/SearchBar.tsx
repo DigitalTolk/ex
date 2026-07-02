@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Search, FileSearch, X, Loader2 } from 'lucide-react';
 import { matchPath, useLocation, useNavigate } from 'react-router-dom';
-import { useChannelBySlug } from '@/hooks/useChannels';
+import { useChannelBySlug, useUserChannels } from '@/hooks/useChannels';
 import { useUserConversations, useOpenDM } from '@/hooks/useConversations';
 import { useSearchUsers, useSearchChannels, type SearchHit } from '@/hooks/useSearch';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { useUsersBatch } from '@/hooks/useUsersBatch';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import { Badge } from '@/components/ui/badge';
 import { ChannelIcon } from '@/components/ChannelIcon';
 import { getInitials } from '@/lib/format';
 import { isApplePlatform, searchShortcutLabel } from '@/lib/platform';
@@ -115,6 +116,15 @@ export function SearchBar() {
   const userHitIDs = useMemo(() => userHits.map((h) => h.id), [userHits]);
   const { map: userAvatarMap } = useUsersBatch(userHitIDs);
   const searching = searchEnabled && (usersQuery.isLoading || channelsQuery.isLoading);
+
+  // Channel search now surfaces PUBLIC channels the user hasn't joined (opening
+  // one auto-joins them), so a hit isn't necessarily a channel they're in. The
+  // joined set lets the row show a "Join" hint on the ones that aren't.
+  const { data: userChannels } = useUserChannels();
+  const joinedIDs = useMemo(
+    () => new Set((userChannels ?? []).map((c) => c.channelID)),
+    [userChannels],
+  );
 
   const { openDM } = useOpenDM();
 
@@ -336,6 +346,7 @@ export function SearchBar() {
                   <ChannelRow
                     key={hit.id}
                     hit={hit}
+                    joined={joinedIDs.has(hit.id)}
                     highlighted={flatIndex === safeHighlight}
                     onHover={() => setHighlightKey(`channel:${hit.id}`)}
                     onSelect={() => activate(flatIndex)}
@@ -451,16 +462,20 @@ function SectionHeader({ children }: { children: React.ReactNode }) {
   );
 }
 
-// Note: no Joined/Join affordance — the backend scopes channel search to
-// the caller's memberships (AllowedParentIDs), so every hit is a channel
-// the user is already in; a "Join" chip could never truthfully render.
+// Channel search surfaces public channels the user hasn't joined too, so a hit
+// may or may not be one they're in. A neutral "Join" hint marks the ones that
+// aren't (clicking the row navigates and auto-joins them, Slack-style); joined
+// channels carry no badge to keep the common case uncluttered. The hint is
+// never pink — it's a plain outline Badge per the design system.
 function ChannelRow({
   hit,
+  joined,
   highlighted,
   onHover,
   onSelect,
 }: {
   hit: SearchHit;
+  joined: boolean;
   highlighted: boolean;
   onHover: () => void;
   onSelect: () => void;
@@ -484,6 +499,11 @@ function ChannelRow({
         ariaLabel=""
       />
       <span className="flex-1 truncate font-medium">~{name}</span>
+      {!joined && (
+        <Badge variant="outline" className="shrink-0" data-testid={`searchbar-channel-${hit.id}-join`}>
+          Join
+        </Badge>
+      )}
     </button>
   );
 }

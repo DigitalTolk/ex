@@ -13,6 +13,10 @@ const setCategoryMutate = vi.fn();
 let categoriesData: SidebarCategory[] = [];
 
 vi.mock('@/hooks/useSidebar', () => ({
+  useReorderSidebar: () => ({ mutate: vi.fn(), isPending: false }),
+  markLocalSidebarReorder: vi.fn(),
+  shouldRefetchSidebarForRemoteUpdate: vi.fn(() => true),
+  resetSidebarReorderSessionState: vi.fn(),
   useFavoriteChannel: () => ({ mutate: favoriteMutate }),
   useSetCategory: () => ({ mutate: setCategoryMutate }),
   useCategories: () => ({ data: categoriesData }),

@@ -1,6 +1,8 @@
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { ChannelIcon } from '@/components/ChannelIcon';
 import { getInitials, formatLongDate } from '@/lib/format';
+import { PresenceDot } from '@/components/PresenceDot';
+import { presenceNotchStyle } from '@/lib/presence';
 import type { Channel } from '@/types';
 
 interface BaseProps {
@@ -59,18 +61,15 @@ export function DMIntro({ otherDisplayName, otherAvatarURL, online, className }:
         {/* Keyed on the URL so AvatarImage's load state resets when
             switching to a partner without an avatar — otherwise the
             previous successful image keeps the fallback hidden. */}
-        <Avatar key={otherAvatarURL ?? '__none__'} className="h-12 w-12">
+        <Avatar
+          key={otherAvatarURL ?? '__none__'}
+          className="h-12 w-12"
+          style={online !== undefined ? presenceNotchStyle(12) : undefined}
+        >
           {otherAvatarURL && <AvatarImage src={otherAvatarURL} alt="" />}
           <AvatarFallback>{getInitials(otherDisplayName)}</AvatarFallback>
         </Avatar>
-        {online !== undefined && (
-          <span
-            className={`absolute bottom-0 right-0 h-3 w-3 rounded-full ring-2 ring-background ${
-              online ? 'bg-online' : 'bg-muted-foreground'
-            }`}
-            aria-label={online ? 'Online' : 'Offline'}
-          />
-        )}
+        {online !== undefined && <PresenceDot online={online} size={12} />}
       </span>
       <div className="min-w-0">
         <h2 className="text-base font-semibold">{otherDisplayName}</h2>

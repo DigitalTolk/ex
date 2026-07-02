@@ -3,6 +3,8 @@ package search
 import (
 	"context"
 	"strings"
+
+	"github.com/DigitalTolk/ex/internal/model"
 )
 
 // SortMode names the supported result orderings. "" means "relevance"
@@ -90,9 +92,15 @@ func (s *Service) Users(ctx context.Context, q string, limit int) (*SearchResult
 }
 
 // Channels matches name (boosted) + description, excluding archived channels.
-// When AllowedChannelIDs is non-nil, results are scoped to those channel IDs so
-// callers can include private channels without leaking channels they do not
-// belong to.
+//
+// Visibility (Slack-style channel discovery): a PUBLIC channel always matches,
+// even one the caller hasn't joined — opening it from search auto-joins them
+// (grantVisibleAccess). A PRIVATE channel matches only when the caller belongs
+// to it (its ID is in AllowedChannelIDs); private channels they aren't in never
+// surface. A nil AllowedChannelIDs disables membership scoping entirely and
+// matches everything incl. private (the unscoped/admin path); RBAC callers pass
+// a non-nil slice — an EMPTY slice is fine and simply yields only public
+// channels (a brand-new user with no memberships can still find public rooms).
 func (s *Service) Channels(ctx context.Context, opts ChannelQuery) (*SearchResult, error) {
 	q := normalizeFuzzy(strings.TrimSpace(opts.Q))
 	if q == "" {
@@ -100,10 +108,19 @@ func (s *Service) Channels(ctx context.Context, opts ChannelQuery) (*SearchResul
 	}
 	filters := []any{}
 	if opts.AllowedChannelIDs != nil {
-		if len(opts.AllowedChannelIDs) == 0 {
-			return &SearchResult{Hits: []SearchHit{}}, nil
+		// public OR a private channel the caller is a member of.
+		should := []any{
+			map[string]any{"term": map[string]any{"type": string(model.ChannelTypePublic)}},
 		}
-		filters = append(filters, map[string]any{"terms": map[string]any{"id": stringSliceToAny(opts.AllowedChannelIDs)}})
+		if len(opts.AllowedChannelIDs) > 0 {
+			should = append(should, map[string]any{"terms": map[string]any{"id": stringSliceToAny(opts.AllowedChannelIDs)}})
+		}
+		filters = append(filters, map[string]any{
+			"bool": map[string]any{
+				"should":               should,
+				"minimum_should_match": 1,
+			},
+		})
 	}
 	body := map[string]any{
 		"size": clampLimit(opts.Limit),

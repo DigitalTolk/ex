@@ -5,6 +5,7 @@ import { MemoryRouter, useLocation } from 'react-router-dom';
 import { SearchBar } from './SearchBar';
 
 const useChannelBySlugMock = vi.hoisted(() => vi.fn(() => ({ data: undefined as unknown })));
+const useUserChannelsMock = vi.hoisted(() => vi.fn(() => ({ data: [] as { channelID: string }[] })));
 const useUserConversationsMock = vi.hoisted(() => vi.fn(() => ({ data: [] as unknown[] })));
 // openDM defaults to the success path: run the caller's onSuccess (which
 // resets the bar); navigation itself is the hook's job and is covered by
@@ -24,6 +25,7 @@ const useUsersBatchMock = vi.hoisted(() =>
 
 vi.mock('@/hooks/useChannels', () => ({
   useChannelBySlug: (slug?: string) => useChannelBySlugMock(slug as never),
+  useUserChannels: () => useUserChannelsMock(),
 }));
 vi.mock('@/hooks/useConversations', () => ({
   useUserConversations: () => useUserConversationsMock(),
@@ -61,6 +63,7 @@ function renderBar(initialPath = '/') {
 
 beforeEach(() => {
   useChannelBySlugMock.mockReturnValue({ data: undefined });
+  useUserChannelsMock.mockReturnValue({ data: [] });
   useUserConversationsMock.mockReturnValue({ data: [] });
   useSearchUsersMock.mockReturnValue({ data: { hits: [] }, isLoading: false });
   useSearchChannelsMock.mockReturnValue({ data: { hits: [] }, isLoading: false });
@@ -304,18 +307,34 @@ describe('SearchBar', () => {
       expect(lastLocation.pathname).toBe('/channel/ch-9');
     });
 
-    it('renders channel rows without a Join affordance (search is membership-scoped)', () => {
+    it('shows a "Join" hint on a public channel the user has NOT joined, and none on a joined one', () => {
+      // Channel search now surfaces public channels the user isn't in (e.g.
+      // ~random); the row hints "Join" on those and stays clean on joined ones.
+      useUserChannelsMock.mockReturnValue({ data: [{ channelID: 'ch-joined' }] });
       useSearchChannelsMock.mockReturnValue({
         data: {
-          hits: [{ id: 'ch-1', score: 1, _source: { name: 'general', slug: 'general', type: 'public' } }],
+          hits: [
+            { id: 'ch-joined', score: 1, _source: { name: 'general', slug: 'general', type: 'public' } },
+            { id: 'ch-random', score: 1, _source: { name: 'random', slug: 'random', type: 'public' } },
+          ],
         },
         isLoading: false,
       });
       renderBar();
       fireEvent.change(screen.getByTestId('searchbar-input'), { target: { value: 'ra' } });
-      // Every hit is a channel the user already belongs to (AllowedParentIDs
-      // scoping), so a Join/Joined chip could never truthfully render.
-      expect(screen.getByTestId('searchbar-channel-ch-1')).not.toHaveTextContent('Join');
+      expect(screen.queryByTestId('searchbar-channel-ch-joined-join')).toBeNull();
+      expect(screen.getByTestId('searchbar-channel-ch-random-join')).toHaveTextContent('Join');
+    });
+
+    it('clicking an unjoined public channel navigates to it (the server auto-joins on open)', () => {
+      useSearchChannelsMock.mockReturnValue({
+        data: { hits: [{ id: 'ch-random', score: 1, _source: { name: 'random', slug: 'random', type: 'public' } }] },
+        isLoading: false,
+      });
+      renderBar();
+      fireEvent.change(screen.getByTestId('searchbar-input'), { target: { value: 'ran' } });
+      fireEvent.click(screen.getByTestId('searchbar-channel-ch-random'));
+      expect(lastLocation.pathname).toBe('/channel/random');
     });
 
     it('opens a DM via useOpenDM and clears the bar on success when a person row is clicked', () => {

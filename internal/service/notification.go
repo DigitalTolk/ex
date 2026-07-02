@@ -428,6 +428,18 @@ func (s *NotificationService) NotifyForMessage(ctx context.Context, msg *model.M
 		if msg.AuthorID != "" {
 			threadAudience[msg.AuthorID] = true
 		}
+		// Posting a reply reads the thread for you: advance the author's
+		// seen watermark server-side (the thread analogue of bumpUnreadSeq
+		// marking the author caught up on the parent) and clear any stale
+		// thread-notification row. The client RELIES on this and does not
+		// issue a follow-up seen PUT for its own replies — removing this
+		// would resurrect one HTTP round-trip per reply and mark the
+		// author's own reply unread on their other devices.
+		if s.userState != nil && msg.AuthorID != "" && msg.WebhookUsername == "" {
+			if err := s.userState.MarkThreadSeen(ctx, msg.AuthorID, msg.ParentID, parentType, msg.ParentMessageID); err != nil {
+				slog.Warn("author thread-seen mark failed", "threadRootID", msg.ParentMessageID, "userID", msg.AuthorID, "error", err)
+			}
+		}
 	}
 
 	bodyLower := strings.ToLower(msg.Body)

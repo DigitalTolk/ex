@@ -9,6 +9,7 @@ import {
 import { apiFetch } from '@/lib/api';
 import { queryKeys, parentPath } from '@/lib/query-keys';
 import { markLocalDraftClearForSend } from '@/hooks/useDrafts';
+import { markLocalUserStateWrite } from '@/hooks/useUserState';
 import type { Message } from '@/types';
 
 export interface MessageWindow {
@@ -392,8 +393,12 @@ export function useSendMessage(scope: SendMessageScope) {
     // publishes a draft.updated echo while the POST is still in flight —
     // arm the ignore window NOW so that echo doesn't refetch /drafts on
     // every message sent (other tabs still refetch and clear their composer).
-    onMutate: () => {
+    // A THREAD reply additionally triggers the server-side author-seen mark
+    // ("posting reads the thread for you"), whose userState echo must not
+    // refetch /user-state in this tab either.
+    onMutate: (input) => {
       markLocalDraftClearForSend();
+      if (input.parentMessageID) markLocalUserStateWrite();
     },
     onSuccess: (data, input) => {
       const parentID = channelId ?? conversationId;

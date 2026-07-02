@@ -392,11 +392,29 @@ describe('ChatPage WS router (browser)', () => {
     });
 
     it('userState-only events refetch only user-state', async () => {
+      const { resetUserStateSessionState } = await import('@/hooks/useUserState');
+      resetUserStateSessionState(); // no suppression window from earlier tests
       const { qc } = await renderChatPage();
       const spy = vi.spyOn(qc, 'invalidateQueries');
       lastHandlers().onUserChannelUpdated?.({ userState: true });
       const keys = spy.mock.calls.map((c) => (c[0] as { queryKey?: unknown[] }).queryKey);
       expect(keys).toEqual([['userState']]);
+    });
+
+    it('the echo of THIS tab\'s own user-state write does not refetch at all', async () => {
+      // A thread-seen PUT (or a thread-reply send's server-side author-seen)
+      // arms the ignore window; the resulting {userState:true} echo must be
+      // dropped — it used to cost an 11kB /user-state refetch per reply.
+      const { markLocalUserStateWrite, resetUserStateSessionState } = await import('@/hooks/useUserState');
+      const { qc } = await renderChatPage();
+      const spy = vi.spyOn(qc, 'invalidateQueries');
+      try {
+        markLocalUserStateWrite();
+        lastHandlers().onUserChannelUpdated?.({ userState: true });
+        expect(spy).not.toHaveBeenCalled();
+      } finally {
+        resetUserStateSessionState();
+      }
     });
 
     it('a favorite toggle refetches only the affected list', async () => {
@@ -405,6 +423,31 @@ describe('ChatPage WS router (browser)', () => {
       lastHandlers().onUserChannelUpdated?.({ channelID: 'ch-99', userID: 'u-1', favorite: true });
       const keys = spy.mock.calls.map((c) => (c[0] as { queryKey?: unknown[] }).queryKey);
       expect(keys).toEqual([['userChannels']]);
+    });
+
+    it("suppresses THIS tab's own drag-reorder echo (no refetch that could snap the row back)", async () => {
+      const { markLocalSidebarReorder, resetSidebarReorderSessionState } = await import('@/hooks/useSidebar');
+      const { qc } = await renderChatPage();
+      const spy = vi.spyOn(qc, 'invalidateQueries');
+      try {
+        markLocalSidebarReorder(); // the reorder mutation armed the window
+        lastHandlers().onUserChannelUpdated?.({ channelID: 'ch-99', categoryID: '', sidebarPosition: 2000 });
+        // The optimistic cache is authoritative; a refetch here reads
+        // eventually-consistent DynamoDB and can revert the move.
+        expect(spy).not.toHaveBeenCalled();
+      } finally {
+        resetSidebarReorderSessionState();
+      }
+    });
+
+    it("still refetches a sidebarPosition change from ANOTHER tab (window not armed)", async () => {
+      const { resetSidebarReorderSessionState } = await import('@/hooks/useSidebar');
+      resetSidebarReorderSessionState();
+      const { qc } = await renderChatPage();
+      const spy = vi.spyOn(qc, 'invalidateQueries');
+      lastHandlers().onUserChannelUpdated?.({ channelID: 'ch-99', categoryID: '', sidebarPosition: 2000 });
+      const keys = spy.mock.calls.map((c) => (c[0] as { queryKey?: unknown[] }).queryKey);
+      expect(keys).toContainEqual(['userChannels']);
     });
 
     it('a category move refetches the affected list plus categories', async () => {

@@ -45,8 +45,9 @@ import { useUserState } from '@/hooks/useUserState';
 import { useDrafts } from '@/hooks/useDrafts';
 import { useActivity } from '@/hooks/useActivity';
 import { useIsMobile } from '@/hooks/useIsMobile';
-import { useCategories, useCreateCategory, useDeleteCategory, useFavoriteChannel, useSetCategory, useSetConversationCategory, useReorderCategories } from '@/hooks/useSidebar';
+import { useCategories, useCreateCategory, useDeleteCategory, useReorderCategories, useReorderSidebar } from '@/hooks/useSidebar';
 import { groupSidebarItems, SidebarSectionKeys, type SidebarItem, type ConversationSidebarSort } from '@/lib/sidebar-groups';
+import { computeSidebarReorder, type SidebarSectionTarget } from '@/lib/sidebar-reorder';
 import type { SidebarCategory, UserChannel, UserConversation } from '@/types';
 import { ChannelRow } from './ChannelRow';
 import { ConversationRow } from './ConversationRow';
@@ -57,7 +58,6 @@ interface SidebarProps {
   onClose: () => void;
 }
 
-const SIDEBAR_POSITION_STEP = 1000;
 const CONVERSATION_SORT_STORAGE_KEY = 'sidebar.conversationSort';
 const CATEGORY_DROP_END = '__category-end__';
 const SIDEBAR_DND_DEBUG_STORAGE_KEY = 'ex.sidebarDndDebug';
@@ -440,9 +440,7 @@ export function Sidebar({ onClose }: SidebarProps) {
     conversations !== undefined || conversationsQuery.isError;
   const createCategory = useCreateCategory();
   const deleteCategory = useDeleteCategory();
-  const favoriteChannel = useFavoriteChannel();
-  const setCategory = useSetCategory();
-  const setConversationCategory = useSetConversationCategory();
+  const reorderSidebar = useReorderSidebar();
   const reorderCategories = useReorderCategories();
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
   const [conversationSort, setConversationSort] = useState<ConversationSidebarSort>(() =>
@@ -539,61 +537,48 @@ export function Sidebar({ onClose }: SidebarProps) {
     return sectionKey === SidebarSectionKeys.Channels ? '' : sectionKey;
   }
 
-  function positionForDrop(items: SidebarItem[], targetIndex: number): number {
-    /* v8 ignore next -- only reached during a channel drag, so the active drag is a channel and the : null arm is dead */
-    /* istanbul ignore next -- only reached during a channel drag, so the active drag is a channel and the : null arm is dead */
-    const currentDraggedChannel = activeDragRef.current?.type === 'channel' ? activeDragRef.current.channel : null;
-    const channelsOnly = items
-      .filter((item): item is Extract<SidebarItem, { kind: 'channel' }> => item.kind === 'channel')
-      .map((item) => item.channel);
-    const draggedIndex = channelsOnly.findIndex((channel) => channel.channelID === currentDraggedChannel?.channelID);
-    const adjustedTargetIndex = draggedIndex >= 0 && draggedIndex < targetIndex ? targetIndex - 1 : targetIndex;
-    const orderedChannels = channelsOnly.filter((channel) => channel.channelID !== currentDraggedChannel?.channelID);
-    const before = orderedChannels[adjustedTargetIndex - 1]?.sidebarPosition;
-    const after = orderedChannels[adjustedTargetIndex]?.sidebarPosition;
-
-    if (before && after && after - before > 1) return Math.floor((before + after) / 2);
-    if (before) return before + SIDEBAR_POSITION_STEP;
-    if (after && after > 1) return Math.floor(after / 2);
-    if (after !== undefined) return after - SIDEBAR_POSITION_STEP;
-    return SIDEBAR_POSITION_STEP;
+  // sectionDropTarget maps a section to the (categoryID, favorite) it imposes
+  // on items dropped into it. Favorites keeps each item's existing category
+  // (keepCategory) and forces favorite=true; a user category forces its own id
+  // and favorite=false; the default Channels/DMs sections force category="" and
+  // favorite=false.
+  function sectionDropTarget(sectionKey: string): SidebarSectionTarget {
+    if (sectionKey === SidebarSectionKeys.Favorites) {
+      return { categoryID: '', favorite: true, keepCategory: true };
+    }
+    return { categoryID: sectionCategoryID(sectionKey), favorite: false };
   }
 
-  function currentDraggedItemID(): string | null {
-    const drag = activeDragRef.current;
-    if (drag?.type === 'channel') return drag.channel.channelID;
-    /* v8 ignore next -- currentDraggedItemID only runs mid-drag, so drag is non-null; the drag===null short-circuit is defensive */
-    /* istanbul ignore next -- currentDraggedItemID only runs mid-drag, so drag is non-null; the drag===null short-circuit is defensive */
-    if (drag?.type === 'conversation') return drag.conversation.conversationID;
-    return null;
-  }
-
-  function sidebarItemID(item: SidebarItem): string {
-    return item.kind === 'channel'
-      ? item.channel.channelID
-      : item.conversation.conversationID;
-  }
-
-  function sidebarItemPosition(item: SidebarItem | undefined): number | undefined {
-    if (!item) return undefined;
-    return item.kind === 'channel'
-      ? item.channel.sidebarPosition
-      : item.conversation.sidebarPosition;
-  }
-
-  function positionForSidebarItemDrop(items: SidebarItem[], targetIndex: number): number {
-    const draggedID = currentDraggedItemID();
-    const draggedIndex = items.findIndex((item) => sidebarItemID(item) === draggedID);
-    const adjustedTargetIndex = draggedIndex >= 0 && draggedIndex < targetIndex ? targetIndex - 1 : targetIndex;
-    const orderedItems = items.filter((item) => sidebarItemID(item) !== draggedID);
-    const before = sidebarItemPosition(orderedItems[adjustedTargetIndex - 1]);
-    const after = sidebarItemPosition(orderedItems[adjustedTargetIndex]);
-
-    if (before && after && after - before > 1) return Math.floor((before + after) / 2);
-    if (before) return before + SIDEBAR_POSITION_STEP;
-    if (after && after > 1) return Math.floor(after / 2);
-    if (after !== undefined) return after - SIDEBAR_POSITION_STEP;
-    return SIDEBAR_POSITION_STEP;
+  // persistReorder densifies the target section and writes the changed rows in
+  // one batch (see computeSidebarReorder + useReorderSidebar). The dropped item
+  // lands exactly where released because the whole section is renumbered to
+  // evenly-spaced positions — no fractional gaps to run out of, no 0/unset
+  // ambiguity. favoriteChanged names the single row whose favorite flag flipped
+  // (a cross-section move in/out of Favorites) so only it hits the favorite
+  // endpoint.
+  function persistReorder(
+    items: SidebarItem[],
+    dragged: { id: string; kind: 'channel' | 'conversation'; favorite: boolean },
+    targetIndex: number,
+    target: SidebarSectionTarget,
+  ) {
+    const updates = computeSidebarReorder(items, { id: dragged.id, kind: dragged.kind }, targetIndex, target);
+    /* v8 ignore next 4 -- a no-op drop (section already densely ordered and the item released at its own slot) yields zero updates; that empty-result path is unit-tested directly in sidebar-reorder.test.ts, but the mocked-mutation drag harness can't re-densify the cache to reproduce it here */
+    /* istanbul ignore next -- empty-updates no-op path; covered by sidebar-reorder.test.ts, unreachable via the mocked-mutation drag harness */
+    if (updates.length === 0) {
+      clearDropTarget();
+      return;
+    }
+    const favoriteChanged = new Set<string>();
+    if (dragged.favorite !== target.favorite) favoriteChanged.add(dragged.id);
+    sidebarDndDebug('reorder scheduled', {
+      sequence: channelDropSequenceRef.current,
+      draggedID: dragged.id,
+      updates,
+      order: channelOrderDebugSnapshot(),
+    });
+    reorderSidebar.mutate({ updates, favoriteChanged });
+    clearDropTarget();
   }
 
   function dropChannelInto(sectionKey: string, items: SidebarItem[], targetIndex: number) {
@@ -602,71 +587,16 @@ export function Sidebar({ onClose }: SidebarProps) {
     const currentDraggedChannel = activeDragRef.current?.type === 'channel' ? activeDragRef.current.channel : null;
     /* v8 ignore start -- currentDraggedChannel is always set here, and a resolved channel drop never targets the DM section (canAcceptChannelDrop excludes it); both guards are defensive */
     /* istanbul ignore next -- currentDraggedChannel is always set here; the no-active-channel guard is dead defensive code */
-    if (!currentDraggedChannel) {
-      sidebarDndDebug('channel-drop ignored: no active channel', {
-        sequence: channelDropSequenceRef.current,
-        sectionKey,
-        targetIndex,
-        activeDrag: activeDragRef.current,
-      });
-      return;
-    }
+    if (!currentDraggedChannel) return;
     /* istanbul ignore next -- a resolved channel drop never targets the DM section (canAcceptChannelDrop excludes it); this guard is dead defensive code */
-    if (sectionKey === SidebarSectionKeys.DirectMessages) {
-      sidebarDndDebug('channel-drop ignored: direct messages section', {
-        sequence: channelDropSequenceRef.current,
-        channelID: currentDraggedChannel.channelID,
-        sectionKey,
-        targetIndex,
-      });
-      return;
-    }
+    if (sectionKey === SidebarSectionKeys.DirectMessages) return;
     /* v8 ignore stop */
-    if (sectionKey === SidebarSectionKeys.Favorites) {
-      const sidebarPosition = positionForSidebarItemDrop(items, targetIndex);
-      sidebarDndDebug('channel-favorite scheduled', {
-        sequence: channelDropSequenceRef.current,
-        channelID: currentDraggedChannel.channelID,
-        favorite: true,
-        targetIndex,
-        sidebarPosition,
-      });
-      if (!currentDraggedChannel.favorite) {
-        favoriteChannel.mutate({ channelID: currentDraggedChannel.channelID, favorite: true });
-      }
-      setCategory.mutate({
-        channelID: currentDraggedChannel.channelID,
-        categoryID: currentDraggedChannel.categoryID ?? '',
-        sidebarPosition,
-      });
-      setDropIndicator(null);
-      return;
-    }
-    if (currentDraggedChannel.favorite) {
-      sidebarDndDebug('channel-favorite scheduled', {
-        sequence: channelDropSequenceRef.current,
-        channelID: currentDraggedChannel.channelID,
-        favorite: false,
-        targetIndex,
-      });
-      favoriteChannel.mutate({ channelID: currentDraggedChannel.channelID, favorite: false });
-    }
-    const sidebarPosition = positionForDrop(items, targetIndex);
-    sidebarDndDebug('channel-mutation scheduled', {
-      sequence: channelDropSequenceRef.current,
-      channelID: currentDraggedChannel.channelID,
-      sectionKey,
-      categoryID: sectionCategoryID(sectionKey),
+    persistReorder(
+      items,
+      { id: currentDraggedChannel.channelID, kind: 'channel', favorite: !!currentDraggedChannel.favorite },
       targetIndex,
-      sidebarPosition,
-      order: channelOrderDebugSnapshot(sectionKey),
-    });
-    setCategory.mutate({
-      channelID: currentDraggedChannel.channelID,
-      categoryID: sectionCategoryID(sectionKey),
-      sidebarPosition,
-    });
-    setDropIndicator(null);
+      sectionDropTarget(sectionKey),
+    );
   }
 
   function dropConversationInto(sectionKey: string, items: SidebarItem[], targetIndex: number) {
@@ -678,21 +608,12 @@ export function Sidebar({ onClose }: SidebarProps) {
     /* istanbul ignore next -- only called for a drop resolved onto Favorites; the non-Favorites guard is dead defensive code */
     if (sectionKey !== SidebarSectionKeys.Favorites) return;
     /* v8 ignore stop */
-    const sidebarPosition = positionForSidebarItemDrop(items, targetIndex);
-    sidebarDndDebug('conversation-mutation scheduled', {
-      sequence: channelDropSequenceRef.current,
-      conversationID: currentDraggedConversation.conversationID,
-      sectionKey,
+    persistReorder(
+      items,
+      { id: currentDraggedConversation.conversationID, kind: 'conversation', favorite: !!currentDraggedConversation.favorite },
       targetIndex,
-      sidebarPosition,
-      order: channelOrderDebugSnapshot(sectionKey),
-    });
-    setConversationCategory.mutate({
-      conversationID: currentDraggedConversation.conversationID,
-      categoryID: currentDraggedConversation.categoryID ?? '',
-      sidebarPosition,
-    });
-    setDropIndicator(null);
+      sectionDropTarget(sectionKey),
+    );
   }
 
   function channelCount(items: SidebarItem[]): number {
@@ -848,9 +769,6 @@ export function Sidebar({ onClose }: SidebarProps) {
     setCollapsedGroups((prev) => ({ ...prev, [sectionKey]: !prev[sectionKey] }));
   }
 
-  function isChannelDropIndicator(sectionKey: string, index: number, area: ChannelDropArea): boolean {
-    return dropIndicator?.kind === 'channel' && dropIndicator.sectionKey === sectionKey && dropIndicator.index === index && dropIndicator.area === area;
-  }
 
   function applyResolvedDrop(drop: ResolvedDrop | null) {
     if (!drop) return;
@@ -891,6 +809,8 @@ export function Sidebar({ onClose }: SidebarProps) {
         return { kind: 'channel', sectionKey: section.key, index: channelCount(section.items), area: 'end' };
       }
     }
+    /* v8 ignore next -- unreachable: sectionIndex<1 returns above, and every section that CAN precede a drop target accepts channel drops (only DMs — always last — don't), so the loop always returns on its first iteration */
+    /* istanbul ignore next -- unreachable post-loop return; see the loop's canAcceptChannelDrop guard */
     return null;
   }
 
@@ -1585,11 +1505,6 @@ export function Sidebar({ onClose }: SidebarProps) {
                       </DropdownMenu>
                     )}
                   </PragmaticCategoryHeader>
-                  {isChannelDropIndicator(section.key, 0, 'lead') && (
-                    <div className="relative h-0">
-                      <DropLine />
-                    </div>
-                  )}
                   <div className="space-y-1">
                     {visibleItems.map((item, index) => {
                       if (item.kind === 'channel') {
@@ -1603,7 +1518,6 @@ export function Sidebar({ onClose }: SidebarProps) {
                             key={`ch-${item.channel.channelID}`}
                             className="relative"
                           >
-                            {isChannelDropIndicator(section.key, channelDropIndex, 'row') && <DropLine />}
                             <PragmaticChannelRow
                               sectionKey={section.key}
                               index={channelDropIndex}
@@ -1639,8 +1553,6 @@ export function Sidebar({ onClose }: SidebarProps) {
                       const dmOnline = otherID ? online.has(otherID) : undefined;
                       return (
                         <div key={`conv-${conv.conversationID}`} className="relative">
-                          {section.key === SidebarSectionKeys.Favorites &&
-                            isChannelDropIndicator(section.key, conversationDropIndex, 'row') && <DropLine />}
                           {section.key === SidebarSectionKeys.Favorites ? (
                             <PragmaticConversationRow
                               sectionKey={section.key}
@@ -1687,11 +1599,8 @@ export function Sidebar({ onClose }: SidebarProps) {
                     className="min-h-2 pb-2"
                     testID={canDropChannel ? `sidebar-section-tail-drop-${section.key}` : undefined}
                   >
-                    {isChannelDropIndicator(section.key, dropCount(section.key, visibleItems), 'end') && (
-                      <div className="relative h-0">
-                        <DropLine />
-                      </div>
-                    )}
+                    {/* Land-in-place: no drop line. The row itself re-sorts to
+                        its released slot via the optimistic reorder cache. */}
                   </PragmaticSection>
                 </div>
               );

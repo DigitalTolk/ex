@@ -79,12 +79,12 @@ func TestService_Users_BuildsMultiMatch(t *testing.T) {
 	}
 }
 
-func TestService_Channels_ScopesToAllowedNonArchivedChannels(t *testing.T) {
+func TestService_Channels_ScopesToPublicOrMemberPrivate(t *testing.T) {
 	r := &stubRunner{}
 	svc := &Service{r: r}
 	if _, err := svc.Channels(context.Background(), ChannelQuery{
 		Q:                 "general",
-		AllowedChannelIDs: []string{"ch-public", "ch-private"},
+		AllowedChannelIDs: []string{"ch-mine"},
 		Limit:             10,
 	}); err != nil {
 		t.Fatal(err)
@@ -92,9 +92,19 @@ func TestService_Channels_ScopesToAllowedNonArchivedChannels(t *testing.T) {
 	body := r.called.body.(map[string]any)
 	bool_ := body["query"].(map[string]any)["bool"].(map[string]any)
 	filter := bool_["filter"].([]any)
-	wantFilter := []any{map[string]any{"terms": map[string]any{"id": []any{"ch-public", "ch-private"}}}}
+	// The visibility filter is a should-clause: public channels OR a private
+	// channel the caller belongs to (never a private one they don't).
+	wantFilter := []any{map[string]any{
+		"bool": map[string]any{
+			"should": []any{
+				map[string]any{"term": map[string]any{"type": "public"}},
+				map[string]any{"terms": map[string]any{"id": []any{"ch-mine"}}},
+			},
+			"minimum_should_match": 1,
+		},
+	}}
 	if !reflect.DeepEqual(filter, wantFilter) {
-		t.Errorf("filter = %v, want allowed channel ID filter", filter)
+		t.Errorf("filter = %#v, want public-or-member-private should clause", filter)
 	}
 	mustNot := bool_["must_not"].([]any)
 	if len(mustNot) != 1 {
@@ -102,15 +112,28 @@ func TestService_Channels_ScopesToAllowedNonArchivedChannels(t *testing.T) {
 	}
 }
 
-func TestService_Channels_EmptyAllowedScopeShortCircuits(t *testing.T) {
+// A brand-new user with zero memberships must still discover PUBLIC channels —
+// the empty allowed set no longer short-circuits to zero results (the old
+// membership-only scoping hid public rooms like ~random from non-members).
+func TestService_Channels_EmptyAllowedStillMatchesPublic(t *testing.T) {
 	r := &stubRunner{}
 	svc := &Service{r: r}
-	res, _ := svc.Channels(context.Background(), ChannelQuery{Q: "general", AllowedChannelIDs: []string{}, Limit: 10})
-	if r.called.index != "" {
-		t.Error("ES should not be queried for empty allowed channel scope")
+	if _, err := svc.Channels(context.Background(), ChannelQuery{Q: "general", AllowedChannelIDs: []string{}, Limit: 10}); err != nil {
+		t.Fatal(err)
 	}
-	if len(res.Hits) != 0 {
-		t.Error("expected empty hits")
+	if r.called.index != IndexChannels {
+		t.Fatalf("ES must be queried for public channels even with no memberships, index = %q", r.called.index)
+	}
+	body := r.called.body.(map[string]any)
+	filter := body["query"].(map[string]any)["bool"].(map[string]any)["filter"].([]any)
+	wantFilter := []any{map[string]any{
+		"bool": map[string]any{
+			"should":               []any{map[string]any{"term": map[string]any{"type": "public"}}},
+			"minimum_should_match": 1,
+		},
+	}}
+	if !reflect.DeepEqual(filter, wantFilter) {
+		t.Errorf("filter = %#v, want public-only should clause", filter)
 	}
 }
 

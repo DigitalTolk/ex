@@ -11,6 +11,7 @@ import { SearchBar } from './SearchBar';
 // hooks to the un-debounced value (a request per keystroke) or debouncing the
 // Enter action too would have failed no test.
 const useChannelBySlugMock = vi.hoisted(() => vi.fn(() => ({ data: undefined as unknown })));
+const useUserChannelsMock = vi.hoisted(() => vi.fn(() => ({ data: [] as { channelID: string }[] })));
 const useUserConversationsMock = vi.hoisted(() => vi.fn(() => ({ data: [] as unknown[] })));
 const openDMMock = vi.hoisted(() => vi.fn());
 const useSearchUsersMock = vi.hoisted(() =>
@@ -25,6 +26,7 @@ const useUsersBatchMock = vi.hoisted(() =>
 
 vi.mock('@/hooks/useChannels', () => ({
   useChannelBySlug: (slug?: string) => useChannelBySlugMock(slug as never),
+  useUserChannels: () => useUserChannelsMock(),
 }));
 vi.mock('@/hooks/useConversations', () => ({
   useUserConversations: () => useUserConversationsMock(),
@@ -60,6 +62,7 @@ function renderBar() {
 beforeEach(() => {
   vi.useFakeTimers();
   useChannelBySlugMock.mockReturnValue({ data: undefined });
+  useUserChannelsMock.mockReturnValue({ data: [] });
   useUserConversationsMock.mockReturnValue({ data: [] });
   useSearchUsersMock.mockReturnValue({ data: { hits: [] }, isLoading: false });
   useSearchChannelsMock.mockReturnValue({ data: { hits: [] }, isLoading: false });

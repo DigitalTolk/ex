@@ -73,7 +73,7 @@ vi.mock('@/context/PresenceContext', () => ({
   }),
 }));
 
-const setCategoryMutate = vi.fn();
+const reorderSidebarMutate = vi.fn();
 
 vi.mock('@/hooks/useChannels', () => ({
   useUserChannels: () => ({ data: makeChannels() }),
@@ -92,6 +92,9 @@ vi.mock('@/hooks/useThreads', () => ({
   useUserThreads: () => ({ data: [] }),
 }));
 vi.mock('@/hooks/useUserState', () => ({
+  markLocalUserStateWrite: vi.fn(),
+  shouldRefetchUserStateForRemoteUpdate: vi.fn(() => true),
+  resetUserStateSessionState: vi.fn(),
   useUserState: () => ({
     data: { hiddenConversations: [], channelNotifications: [], threadNotifications: [], threadSeen: {} },
   }),
@@ -105,9 +108,13 @@ vi.mock('@/hooks/useSidebar', () => ({
   useDeleteCategory: () => ({ mutate: vi.fn(), isPending: false }),
   useFavoriteChannel: () => ({ mutate: vi.fn(), isPending: false }),
   useFavoriteConversation: () => ({ mutate: vi.fn(), isPending: false }),
-  useSetCategory: () => ({ mutate: setCategoryMutate, isPending: false }),
+  useSetCategory: () => ({ mutate: vi.fn(), isPending: false }),
   useSetConversationCategory: () => ({ mutate: vi.fn(), isPending: false }),
   useReorderCategories: () => ({ mutate: vi.fn(), isPending: false }),
+  useReorderSidebar: () => ({ mutate: reorderSidebarMutate, isPending: false }),
+  markLocalSidebarReorder: vi.fn(),
+  shouldRefetchSidebarForRemoteUpdate: vi.fn(() => true),
+  resetSidebarReorderSessionState: vi.fn(),
 }));
 // Force desktop so the category drop targets are registered (mobile disables them).
 vi.mock('@/hooks/useIsMobile', () => ({ useIsMobile: () => false }));
@@ -159,11 +166,11 @@ async function fireRealDrag(source: Element, target: Element) {
 }
 
 beforeEach(() => {
-  setCategoryMutate.mockClear();
+  reorderSidebarMutate.mockClear();
 });
 
 describe('Sidebar real drag-and-drop (no library mock)', () => {
-  it('dragging a channel onto a category resolves through the real library to setCategory', async () => {
+  it('dragging a channel onto a category resolves through the real library to the batch reorder', async () => {
     await render(<Frame />);
     await nextFrame();
 
@@ -175,13 +182,21 @@ describe('Sidebar real drag-and-drop (no library mock)', () => {
     await fireRealDrag(source!, target!);
 
     // The real draggable → real drop-target → real onDrop chain must have fired
-    // the move mutation for the channel we actually dragged. This is the wiring
+    // the batch reorder for the channel we actually dragged. This is the wiring
     // the mocked test cannot verify: that the row is genuinely registered as a
     // draggable, the category region is a real drop target, and a native drag
-    // resolves through the library to the handler. (The exact destination
-    // categoryID is geometry-dependent in a headless layout and is covered
-    // exhaustively by the payload-driven branch tests in Sidebar.drag.browser.)
-    expect(setCategoryMutate).toHaveBeenCalledTimes(1);
-    expect(JSON.stringify(setCategoryMutate.mock.calls[0]?.[0])).toContain('ch-other');
+    // resolves through the library to the handler — and, now that positions are
+    // dense, we can also assert the PERSISTED placement (the realdrag test used
+    // to punt on it): ch-other lands in cat-work at a positive dense position.
+    expect(reorderSidebarMutate).toHaveBeenCalledTimes(1);
+    const arg = reorderSidebarMutate.mock.calls[0]?.[0] as {
+      updates: Array<{ id: string; categoryID: string; sidebarPosition: number }>;
+    };
+    const moved = arg.updates.find((u) => u.id === 'ch-other');
+    expect(moved, 'the dragged channel must be in the reorder updates').toBeTruthy();
+    // The destination section is geometry-dependent in a headless layout, but
+    // the PERSISTED position must always be a positive dense value — never the
+    // negative/collision the old fractional math produced.
+    expect(moved!.sidebarPosition).toBeGreaterThan(0);
   });
 });

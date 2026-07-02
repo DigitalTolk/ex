@@ -667,7 +667,7 @@ function MessageItemImpl({
               avatarURL={displayAuthorAvatarURL}
               online={authorOnline}
               className="mt-0.5 h-9 w-9 cursor-pointer"
-              dotClassName="h-2.5 w-2.5"
+              dotSize={10}
             />
           )}
         </UserHoverCard>

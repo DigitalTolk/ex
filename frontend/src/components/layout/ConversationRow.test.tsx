@@ -5,6 +5,10 @@ import type { UserConversation } from '@/types';
 import { ConversationRow } from './ConversationRow';
 
 vi.mock('@/hooks/useSidebar', () => ({
+  useReorderSidebar: () => ({ mutate: vi.fn(), isPending: false }),
+  markLocalSidebarReorder: vi.fn(),
+  shouldRefetchSidebarForRemoteUpdate: vi.fn(() => true),
+  resetSidebarReorderSessionState: vi.fn(),
   useFavoriteConversation: () => ({ mutate: vi.fn() }),
   useSetConversationCategory: () => ({ mutate: vi.fn() }),
 }));

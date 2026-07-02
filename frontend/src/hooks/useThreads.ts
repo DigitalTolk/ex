@@ -3,6 +3,7 @@ import { apiFetch } from '@/lib/api';
 import { slugify } from '@/lib/format';
 import { readJSON, writeJSON } from '@/lib/storage';
 import { queryKeys, parentPath } from '@/lib/query-keys';
+import { markLocalUserStateWrite } from '@/hooks/useUserState';
 import type { Message } from '@/types';
 
 export interface ThreadSummary {
@@ -170,6 +171,9 @@ export function markThreadSeen(
   map[threadRootID] = at;
   saveSeen(capSeenMap(map));
   if (target) {
+    // The PUT's userchannel.updated {userState:true} echo must not refetch
+    // /user-state in this tab (see useUserState's echo window).
+    markLocalUserStateWrite();
     const parentType = target.parentType === 'channel' ? 'channels' : 'conversations';
     void apiFetch<void>(
       `/api/v1/user-state/threads/${parentType}/${encodeURIComponent(target.parentID)}/${encodeURIComponent(threadRootID)}/seen`,

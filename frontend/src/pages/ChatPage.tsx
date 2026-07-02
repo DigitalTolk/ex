@@ -49,8 +49,8 @@ import {
 import { shouldRefetchDraftsForRemoteUpdate, useDrafts } from '@/hooks/useDrafts';
 import { useUserChannels } from '@/hooks/useChannels';
 import { useUserConversations } from '@/hooks/useConversations';
-import { useCategories } from '@/hooks/useSidebar';
-import { useUserState } from '@/hooks/useUserState';
+import { shouldRefetchSidebarForRemoteUpdate, useCategories } from '@/hooks/useSidebar';
+import { shouldRefetchUserStateForRemoteUpdate, useUserState } from '@/hooks/useUserState';
 import { markThreadSeen, upsertUserThreadFromRoot, upsertUserThreadRow, userThreadInCache, useUserThreads } from '@/hooks/useThreads';
 import { useIsMobile } from '@/hooks/useIsMobile';
 
@@ -189,10 +189,20 @@ export default function ChatPage() {
       // alongside message.new (driven by IncrementReplyMetadata).
       if (parentMessageID) {
         if (isActiveThread(parentMessageID)) {
-          markThreadSeen(parentMessageID, msg.createdAt, {
-            parentID,
-            parentType: msg.parentType === 'conversation' ? 'conversation' : 'channel',
-          });
+          // Reading OTHERS' replies persists the seen watermark. Your own
+          // reply is marked seen server-side by the backend ("posting
+          // reads the thread for you"), so skip the redundant PUT and only
+          // bump the local seen map.
+          markThreadSeen(
+            parentMessageID,
+            msg.createdAt,
+            isOwnAuthor
+              ? undefined
+              : {
+                  parentID,
+                  parentType: msg.parentType === 'conversation' ? 'conversation' : 'channel',
+                },
+          );
         }
         // Append the reply straight into the open thread's cache so the
         // ThreadPanel / ThreadCard updates live. Only fall back to an
@@ -377,7 +387,12 @@ export default function ChatPage() {
         return;
       }
       if (evt.userState) {
-        queryClient.invalidateQueries({ queryKey: queryKeys.userState() });
+        // Skip the echo of THIS tab's own user-state write (thread-seen
+        // PUTs, the server-side author-seen a thread reply triggers) — the
+        // tab already has that state; other tabs never arm the window.
+        if (shouldRefetchUserStateForRemoteUpdate()) {
+          queryClient.invalidateQueries({ queryKey: queryKeys.userState() });
+        }
         return;
       }
       if (evt.categories) {
@@ -393,6 +408,15 @@ export default function ChatPage() {
         evt.sidebarPosition !== undefined ||
         evt.notificationPrefs !== undefined
       ) {
+        // Skip the echo of THIS tab's own drag-reorder — the optimistic
+        // cache already holds the authoritative order we just wrote, and a
+        // refetch here reads eventually-consistent DynamoDB that can return
+        // the pre-reorder order and snap the row back (the "doesn't stick"
+        // bug). A position/category/favorite change from ANOTHER tab (window
+        // not armed) still refetches.
+        if (evt.sidebarPosition !== undefined && !shouldRefetchSidebarForRemoteUpdate()) {
+          return;
+        }
         // Row-level preference change (rare, user-initiated): refetch the
         // affected list; category/position moves also re-bucket.
         queryClient.invalidateQueries({

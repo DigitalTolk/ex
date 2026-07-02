@@ -9,6 +9,10 @@ const setCategoryMutate = vi.hoisted(() => vi.fn());
 const categoriesData = vi.hoisted(() => ({ data: [] as { id: string; name: string }[] }));
 
 vi.mock('@/hooks/useSidebar', () => ({
+  useReorderSidebar: () => ({ mutate: vi.fn(), isPending: false }),
+  markLocalSidebarReorder: vi.fn(),
+  shouldRefetchSidebarForRemoteUpdate: vi.fn(() => true),
+  resetSidebarReorderSessionState: vi.fn(),
   useFavoriteChannel: () => ({ mutate: favoriteMutate, isPending: false }),
   useSetCategory: () => ({ mutate: setCategoryMutate, isPending: false }),
   useCategories: () => categoriesData,

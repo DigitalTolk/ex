@@ -108,21 +108,31 @@ describe('AppTopBar', () => {
     expect(screen.getByTestId('topbar-account')).toBeInTheDocument();
   });
 
-  it('shows an online presence dot on the mobile account button when online', () => {
+  it('shows a FILLED online dot on the mobile account button when online', () => {
     mockIsMobile = true;
     mockOnline = new Set<string>(['u-1']);
     renderTopBar();
-    const dot = screen.getByTestId('topbar-account').querySelector('span[aria-hidden]')!;
+    const dot = screen.getByTestId('topbar-account').querySelector('[data-presence]')!;
+    expect(dot.getAttribute('data-presence')).toBe('online');
     expect(dot.className).toContain('bg-online');
+    // Filled, not hollow: shape encodes the state for color-blind users.
+    expect(dot.className).not.toContain('border-solid');
   });
 
-  it('shows a muted presence dot on the mobile account button when offline', () => {
+  it('shows a HOLLOW ring on the mobile account button when offline', () => {
     mockIsMobile = true;
     mockOnline = new Set<string>();
     renderTopBar();
-    const dot = screen.getByTestId('topbar-account').querySelector('span[aria-hidden]')!;
-    expect(dot.className).toContain('bg-muted-foreground');
+    const dot = screen.getByTestId('topbar-account').querySelector('[data-presence]')!;
+    expect(dot.getAttribute('data-presence')).toBe('offline');
+    // Hollow ring (border only, transparent center) — the colour-blind-safe
+    // offline shape; the old solid muted dot differed from online by hue alone.
+    expect(dot.className).toContain('border-solid');
+    expect(dot.className).toContain('border-muted-foreground');
+    expect(dot.className).toContain('bg-transparent');
+    expect(dot.className).not.toContain('bg-online');
   });
+
 
   it('renders only mobile menu, search, and avatar dropdown trigger in the chrome', () => {
     renderTopBar();

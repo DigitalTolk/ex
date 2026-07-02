@@ -169,6 +169,9 @@ let mockUserState: {
   threadSeen: {},
 };
 vi.mock('@/hooks/useUserState', () => ({
+  markLocalUserStateWrite: vi.fn(),
+  shouldRefetchUserStateForRemoteUpdate: vi.fn(() => true),
+  resetUserStateSessionState: vi.fn(),
   useUserState: () => ({ data: mockUserState }),
 }));
 
@@ -195,6 +198,10 @@ const createCategoryMutate = vi.fn((_name: string, opts?: { onSuccess?: () => vo
 });
 const deleteCategoryMutate = vi.fn();
 vi.mock('@/hooks/useSidebar', () => ({
+  useReorderSidebar: () => ({ mutate: vi.fn(), isPending: false }),
+  markLocalSidebarReorder: vi.fn(),
+  shouldRefetchSidebarForRemoteUpdate: vi.fn(() => true),
+  resetSidebarReorderSessionState: vi.fn(),
   useCategories: () => ({ data: mockCategories }),
   useCreateCategory: () => ({ mutate: createCategoryMutate, isPending: false }),
   useDeleteCategory: () => ({ mutate: deleteCategoryMutate, isPending: false }),

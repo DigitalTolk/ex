@@ -31,3 +31,19 @@ describe('upsertUserThreadRow (jsdom)', () => {
     expect(qc.getQueryData(queryKeys.userThreads())).toBeUndefined();
   });
 });
+
+describe('markThreadSeen user-state echo window', () => {
+  it('arms the ignore window only when the seen PUT is issued (target present)', async () => {
+    const { markThreadSeen } = await import('./useThreads');
+    const { resetUserStateSessionState, shouldRefetchUserStateForRemoteUpdate } = await import('./useUserState');
+    resetUserStateSessionState();
+    try {
+      markThreadSeen('root-local'); // local-only: no PUT, no echo to ignore
+      expect(shouldRefetchUserStateForRemoteUpdate()).toBe(true);
+      markThreadSeen('root-remote', new Date().toISOString(), { parentID: 'ch-1', parentType: 'channel' });
+      expect(shouldRefetchUserStateForRemoteUpdate()).toBe(false);
+    } finally {
+      resetUserStateSessionState();
+    }
+  });
+});

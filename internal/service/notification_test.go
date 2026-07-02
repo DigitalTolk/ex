@@ -475,6 +475,12 @@ func TestNotificationService_PersistsThreadNotificationState(t *testing.T) {
 	if _, ok := stateStore.rows[stateStore.key("u-bob", model.UserStateThreadNotification, "root1")]; !ok {
 		t.Fatal("expected thread notification state for follower")
 	}
+	// Posting a reply reads the thread for YOU: the author's seen watermark
+	// advances server-side (the client relies on this and skips its own
+	// seen PUT — regression guard for one HTTP round-trip per reply).
+	if _, ok := stateStore.rows[stateStore.key("u-author", model.UserStateThreadSeen, "root1")]; !ok {
+		t.Fatal("expected author thread-seen state after posting a reply")
+	}
 }
 
 func TestNotificationService_NoChannelMarker_EvenWhenDesktopAlerted(t *testing.T) {

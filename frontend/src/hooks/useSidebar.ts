@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiFetch } from '@/lib/api';
 import { queryKeys } from '@/lib/query-keys';
+import type { SidebarReorderUpdate } from '@/lib/sidebar-reorder';
 import type { SidebarCategory, UserChannel, UserConversation } from '@/types';
 
 // SidebarItemKind selects whether a sidebar attribute mutation targets a
@@ -278,4 +279,100 @@ export function useSetConversationCategory() {
       return m.mutate({ id: vars.conversationID, body });
     },
   };
+}
+
+// "Ignore our own sidebar-reorder echo" window, mirroring the drafts/user-state
+// pattern. A reorder writes N per-item rows, each publishing a
+// `userchannel.updated` event back to the acting user; without this window
+// ChatPage.onUserChannelUpdated would refetch userChannels once per item — and
+// each refetch is an eventually-consistent DynamoDB read that can return the
+// PRE-reorder order and clobber the (authoritative) optimistic update. The
+// window suppresses those self-echoes; the optimistic cache is the truth (we
+// wrote exactly those positions), so no post-write refetch is needed. Other
+// tabs never arm the window and still reconcile.
+const LOCAL_SIDEBAR_REORDER_IGNORE_MS = 2000;
+let ignoreSidebarReorderEventsUntil = 0;
+
+export function markLocalSidebarReorder() {
+  ignoreSidebarReorderEventsUntil = Date.now() + LOCAL_SIDEBAR_REORDER_IGNORE_MS;
+}
+
+export function shouldRefetchSidebarForRemoteUpdate(): boolean {
+  return Date.now() >= ignoreSidebarReorderEventsUntil;
+}
+
+export function resetSidebarReorderSessionState() {
+  ignoreSidebarReorderEventsUntil = 0;
+}
+
+// applyReorderOptimistic patches one list cache in place: for every affected
+// row, set its new category/favorite/position. The render sort re-orders from
+// these, so the dropped item lands exactly where released — no refetch.
+function applyReorderOptimistic(
+  rows: SidebarAttrRow[] | undefined,
+  kind: SidebarItemKind,
+  byID: Map<string, SidebarReorderUpdate>,
+): SidebarAttrRow[] | undefined {
+  if (!rows) return rows;
+  return rows.map((row) => {
+    const upd = byID.get(sidebarAttrRowID(kind, row));
+    if (!upd) return row;
+    return { ...row, categoryID: upd.categoryID, favorite: upd.favorite, sidebarPosition: upd.sidebarPosition };
+  });
+}
+
+// useReorderSidebar persists a whole drop: the dense-positioned updates from
+// computeSidebarReorder. It writes each row through the existing per-item
+// endpoints (category+position always; favorite only when it flipped), applies
+// an authoritative optimistic patch to BOTH list caches, rolls back on error,
+// and deliberately does NOT invalidate afterward (the optimistic state already
+// equals what we wrote — a read-after-write refetch here is exactly what caused
+// the snap-back).
+export function useReorderSidebar() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (vars: { updates: SidebarReorderUpdate[]; favoriteChanged: Set<string> }) => {
+      await Promise.all(
+        vars.updates.map((u) => {
+          const prefix = URL_PREFIX[u.kind];
+          const writes: Promise<unknown>[] = [
+            apiFetch(`${prefix}/${u.id}/category`, {
+              method: 'PUT',
+              body: JSON.stringify({ categoryID: u.categoryID, sidebarPosition: u.sidebarPosition }),
+            }),
+          ];
+          // Favorite lives on a separate endpoint; only touch it for the row
+          // whose favorite actually flipped (a cross-section move in/out of
+          // Favorites), never for the untouched neighbors being re-spaced.
+          if (vars.favoriteChanged.has(u.id)) {
+            writes.push(
+              apiFetch(`${prefix}/${u.id}/favorite`, {
+                method: 'PUT',
+                body: JSON.stringify({ favorite: u.favorite }),
+              }),
+            );
+          }
+          return Promise.all(writes);
+        }),
+      );
+    },
+    onMutate: async (vars) => {
+      markLocalSidebarReorder();
+      const channelKey = queryKeys.userChannels();
+      const convKey = queryKeys.userConversations();
+      await Promise.all([qc.cancelQueries({ queryKey: channelKey }), qc.cancelQueries({ queryKey: convKey })]);
+      const previousChannels = qc.getQueryData<SidebarAttrRow[]>(channelKey);
+      const previousConversations = qc.getQueryData<SidebarAttrRow[]>(convKey);
+      const byID = new Map(vars.updates.map((u) => [u.id, u] as const));
+      qc.setQueryData<SidebarAttrRow[]>(channelKey, (rows) => applyReorderOptimistic(rows, 'channel', byID));
+      qc.setQueryData<SidebarAttrRow[]>(convKey, (rows) => applyReorderOptimistic(rows, 'conversation', byID));
+      sidebarDndDebug('reorder optimistic applied', { updates: vars.updates });
+      return { previousChannels, previousConversations };
+    },
+    onError: (_err, _vars, context) => {
+      sidebarDndDebug('reorder rollback', { error: sidebarDndDebugError(_err) });
+      if (context?.previousChannels) qc.setQueryData(queryKeys.userChannels(), context.previousChannels);
+      if (context?.previousConversations) qc.setQueryData(queryKeys.userConversations(), context.previousConversations);
+    },
+  });
 }

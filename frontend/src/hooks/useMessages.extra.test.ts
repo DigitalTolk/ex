@@ -16,6 +16,7 @@ vi.mock('@/lib/api', () => ({
 
 import { apiFetch } from '@/lib/api';
 import { resetDraftSessionState, shouldRefetchDraftsForRemoteUpdate } from './useDrafts';
+import { resetUserStateSessionState, shouldRefetchUserStateForRemoteUpdate } from './useUserState';
 
 function createWrapper() {
   const queryClient = new QueryClient({
@@ -193,6 +194,33 @@ describe('useSendChannelMessage', () => {
       expect(shouldRefetchDraftsForRemoteUpdate()).toBe(false);
       await waitFor(() => expect(result.current.isSuccess).toBe(true));
     } finally {
+      resetDraftSessionState();
+    }
+  });
+});
+
+describe('useSendMessage user-state echo window', () => {
+  beforeEach(() => vi.mocked(apiFetch).mockReset());
+
+  it('a THREAD reply arms the user-state echo window (the backend marks the author seen); a top-level send does not', async () => {
+    resetUserStateSessionState();
+    const reply = { id: 'r-1', parentID: 'ch-1', parentMessageID: 'root', authorID: 'u-1', body: 'r', createdAt: '' };
+    vi.mocked(apiFetch).mockResolvedValue(reply);
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper = ({ children }: { children: ReactNode }) =>
+      createElement(QueryClientProvider, { client: queryClient }, children);
+    const { result } = renderHook(() => useSendChannelMessage('ch-1'), { wrapper });
+    try {
+      expect(shouldRefetchUserStateForRemoteUpdate()).toBe(true);
+      result.current.mutate({ body: 'top level', attachmentIDs: [] });
+      expect(shouldRefetchUserStateForRemoteUpdate()).toBe(true); // no author-seen echo for top-level
+      await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+      result.current.mutate({ body: 'r', attachmentIDs: [], parentMessageID: 'root' });
+      expect(shouldRefetchUserStateForRemoteUpdate()).toBe(false); // armed before the POST resolves
+      await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    } finally {
+      resetUserStateSessionState();
       resetDraftSessionState();
     }
   });

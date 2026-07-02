@@ -11,7 +11,9 @@ import {
   useSetCategory,
   useFavoriteConversation,
   useSetConversationCategory,
+  useReorderSidebar,
 } from './useSidebar';
+import type { SidebarReorderUpdate } from '@/lib/sidebar-reorder';
 import { queryKeys } from '@/lib/query-keys';
 
 const apiFetchMock = vi.hoisted(() => vi.fn());
@@ -348,5 +350,114 @@ describe('useSidebar — DnD debug-instrumented category mutations', () => {
     const cats = qc.getQueryData<{ id: string }[]>(queryKeys.sidebarCategories());
     expect(cats?.map((c) => c.id)).toEqual(['c-1', 'c-2']);
     try { localStorage.removeItem('ex.sidebarDndDebug'); } catch { /* noop */ }
+  });
+});
+
+describe('useSidebar — useReorderSidebar (batch drop persistence)', () => {
+  // Seeds BOTH list caches independently (renderMutation takes one), so the
+  // channel/conversation optimistic patches and each rollback arm are driven.
+  async function renderReorder(
+    vars: { updates: SidebarReorderUpdate[]; favoriteChanged: Set<string> },
+    seeds: { channels?: unknown[]; conversations?: unknown[] },
+  ) {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    if (seeds.channels) qc.setQueryData(queryKeys.userChannels(), seeds.channels);
+    if (seeds.conversations) qc.setQueryData(queryKeys.userConversations(), seeds.conversations);
+    const screen = await render(
+      <QueryClientProvider client={qc}>
+        <MutationTrigger hook={useReorderSidebar as never} vars={vars} />
+      </QueryClientProvider>,
+    );
+    return { qc, screen };
+  }
+
+  it('patches both caches, writes the favorite endpoint only for the flipped row, and leaves untouched rows intact', async () => {
+    apiFetchMock.mockResolvedValue(undefined);
+    const { qc, screen } = await renderReorder(
+      {
+        // ch-1 flips into Favorites (favorite endpoint fires); a conversation is
+        // re-spaced with no favorite flip.
+        updates: [
+          { id: 'ch-1', kind: 'channel', categoryID: 'work', favorite: true, sidebarPosition: 1000 },
+          { id: 'cv-1', kind: 'conversation', categoryID: '', favorite: false, sidebarPosition: 2000 },
+        ],
+        favoriteChanged: new Set(['ch-1']),
+      },
+      {
+        channels: [
+          { channelID: 'ch-1', categoryID: '', favorite: false, sidebarPosition: 0, channelName: 'general' },
+          { channelID: 'ch-2', categoryID: '', favorite: false, sidebarPosition: 0, channelName: 'random' }, // untouched → !upd branch
+        ],
+        conversations: [{ conversationID: 'cv-1', categoryID: '', favorite: false, sidebarPosition: 0, displayName: 'Bob' }],
+      },
+    );
+    (screen.getByTestId('trigger').element() as HTMLButtonElement).click();
+    await new Promise((r) => setTimeout(r, 200));
+
+    const urls = apiFetchMock.mock.calls.map((c) => c[0]);
+    expect(urls).toContain('/api/v1/channels/ch-1/category');
+    expect(urls).toContain('/api/v1/channels/ch-1/favorite'); // favoriteChanged.has(ch-1) → true arm
+    expect(urls).toContain('/api/v1/conversations/cv-1/category');
+    expect(urls).not.toContain('/api/v1/conversations/cv-1/favorite'); // not flipped → false arm
+
+    const chans = qc.getQueryData<{ channelID: string; sidebarPosition: number; favorite: boolean }[]>(queryKeys.userChannels());
+    expect(chans?.find((c) => c.channelID === 'ch-1')).toMatchObject({ sidebarPosition: 1000, favorite: true, categoryID: 'work' });
+    expect(chans?.find((c) => c.channelID === 'ch-2')).toMatchObject({ sidebarPosition: 0 }); // untouched
+    const convs = qc.getQueryData<{ conversationID: string; sidebarPosition: number }[]>(queryKeys.userConversations());
+    expect(convs?.find((c) => c.conversationID === 'cv-1')?.sidebarPosition).toBe(2000);
+  });
+
+  it('optimistic patch is a no-op on an unseeded cache (rows undefined → early return)', async () => {
+    apiFetchMock.mockResolvedValue(undefined);
+    // Only the conversations cache is seeded — the channels cache is undefined,
+    // so applyReorderOptimistic hits `if (!rows) return rows`.
+    const { qc, screen } = await renderReorder(
+      {
+        updates: [{ id: 'cv-1', kind: 'conversation', categoryID: 'c-2', favorite: false, sidebarPosition: 3000 }],
+        favoriteChanged: new Set(),
+      },
+      { conversations: [{ conversationID: 'cv-1', categoryID: '', favorite: false, sidebarPosition: 0, displayName: 'Bob' }] },
+    );
+    (screen.getByTestId('trigger').element() as HTMLButtonElement).click();
+    await new Promise((r) => setTimeout(r, 200));
+    expect(qc.getQueryData(queryKeys.userChannels())).toBeUndefined();
+    const convs = qc.getQueryData<{ conversationID: string; categoryID: string }[]>(queryKeys.userConversations());
+    expect(convs?.[0].categoryID).toBe('c-2');
+  });
+
+  it('rolls back the channels cache on error and skips the absent conversations cache', async () => {
+    apiFetchMock.mockRejectedValue(new Error('write failed'));
+    // Channels seeded (previousChannels truthy → rolled back), conversations
+    // unseeded (previousConversations falsy → skip arm).
+    const { qc, screen } = await renderReorder(
+      {
+        updates: [{ id: 'ch-1', kind: 'channel', categoryID: 'work', favorite: true, sidebarPosition: 1000 }],
+        favoriteChanged: new Set(['ch-1']),
+      },
+      { channels: [{ channelID: 'ch-1', categoryID: '', favorite: false, sidebarPosition: 500, channelName: 'general' }] },
+    );
+    (screen.getByTestId('trigger').element() as HTMLButtonElement).click();
+    await new Promise((r) => setTimeout(r, 250));
+    const chans = qc.getQueryData<{ channelID: string; sidebarPosition: number; favorite: boolean }[]>(queryKeys.userChannels());
+    expect(chans?.[0]).toMatchObject({ sidebarPosition: 500, favorite: false }); // rolled back
+    expect(qc.getQueryData(queryKeys.userConversations())).toBeUndefined();
+  });
+
+  it('rolls back the conversations cache on error and skips the absent channels cache', async () => {
+    apiFetchMock.mockRejectedValue(new Error('write failed'));
+    // Conversations seeded (previousConversations truthy → rolled back),
+    // channels unseeded (previousChannels falsy → skip arm).
+    const { qc, screen } = await renderReorder(
+      {
+        updates: [{ id: 'cv-1', kind: 'conversation', categoryID: 'c-2', favorite: false, sidebarPosition: 2000 }],
+        favoriteChanged: new Set(),
+      },
+      { conversations: [{ conversationID: 'cv-1', categoryID: '', favorite: false, sidebarPosition: 700, displayName: 'Bob' }] },
+    );
+    (screen.getByTestId('trigger').element() as HTMLButtonElement).click();
+    await new Promise((r) => setTimeout(r, 250));
+    const convs = qc.getQueryData<{ conversationID: string; sidebarPosition: number }[]>(queryKeys.userConversations());
+    expect(convs?.[0].sidebarPosition).toBe(700); // rolled back
+    expect(qc.getQueryData(queryKeys.userChannels())).toBeUndefined();
   });
 });

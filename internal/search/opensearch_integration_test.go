@@ -281,7 +281,8 @@ func TestSearch_ChannelAutocompleteAndScoping_RealEngine(t *testing.T) {
 	channels := []*model.Channel{
 		{ID: "ac1", Name: "engineering", Slug: "engineering", Type: model.ChannelTypePublic},
 		{ID: "ac2", Name: "engineering-private", Slug: "engineering-private", Type: model.ChannelTypePrivate},
-		{ID: "ac3", Name: "random", Slug: "random", Type: model.ChannelTypePublic, Archived: true},
+		{ID: "ac3", Name: "engineering-archived", Slug: "engineering-archived", Type: model.ChannelTypePublic, Archived: true},
+		{ID: "ac4", Name: "engineering-secret", Slug: "engineering-secret", Type: model.ChannelTypePrivate},
 	}
 	for _, ch := range channels {
 		if err := idx.IndexChannel(ctx, ch); err != nil {
@@ -290,24 +291,59 @@ func TestSearch_ChannelAutocompleteAndScoping_RealEngine(t *testing.T) {
 	}
 	refreshIndex(t, c, IndexChannels)
 
-	// Prefix "eng" must match both engineering channels via the ngram
-	// subfield.
+	// Unscoped (nil allowed): every non-archived channel matches, incl. private.
 	res, err := svc.Channels(ctx, ChannelQuery{Q: "eng", Limit: 10})
 	if err != nil {
 		t.Fatalf("Channels(eng): %v", err)
 	}
-	if ids := hitIDs(res); !ids["ac1"] || !ids["ac2"] {
-		t.Fatalf("Channels(eng) = %v, want ac1 and ac2", res.Hits)
+	if ids := hitIDs(res); !ids["ac1"] || !ids["ac2"] || !ids["ac4"] || ids["ac3"] {
+		t.Fatalf("Channels(eng) unscoped = %v, want ac1+ac2+ac4, not archived ac3", res.Hits)
 	}
 
-	// Access scoping: restricting to ac1 drops the private ac2 even
-	// though it matches the query.
-	res, err = svc.Channels(ctx, ChannelQuery{Q: "eng", AllowedChannelIDs: []string{"ac1"}, Limit: 10})
+	// The fix — Slack-style visibility with membership scoping. The caller
+	// belongs ONLY to the private ac4 (not ac1, not ac2):
+	//   - ac1 PUBLIC → surfaces even though the caller hasn't joined it,
+	//   - ac4 PRIVATE + member → surfaces,
+	//   - ac2 PRIVATE + non-member → hidden,
+	//   - ac3 archived → hidden.
+	res, err = svc.Channels(ctx, ChannelQuery{Q: "eng", AllowedChannelIDs: []string{"ac4"}, Limit: 10})
 	if err != nil {
 		t.Fatalf("Channels(eng, scoped): %v", err)
 	}
-	if ids := hitIDs(res); !ids["ac1"] || ids["ac2"] {
-		t.Fatalf("scoped Channels(eng) = %v, want only ac1", res.Hits)
+	if ids := hitIDs(res); !ids["ac1"] || !ids["ac4"] || ids["ac2"] || ids["ac3"] {
+		t.Fatalf("scoped Channels(eng) = %v, want public ac1 + member-private ac4, not ac2/ac3", res.Hits)
+	}
+
+	// Empty allowed set (a brand-new user with no memberships): only public.
+	res, err = svc.Channels(ctx, ChannelQuery{Q: "eng", AllowedChannelIDs: []string{}, Limit: 10})
+	if err != nil {
+		t.Fatalf("Channels(eng, empty scope): %v", err)
+	}
+	if ids := hitIDs(res); !ids["ac1"] || ids["ac2"] || ids["ac4"] {
+		t.Fatalf("empty-scope Channels(eng) = %v, want only public ac1", res.Hits)
+	}
+}
+
+// The exact user-reported case: free-text searching "random" surfaces a
+// public ~random channel the caller has NOT joined.
+func TestSearch_ChannelSearchFindsUnjoinedPublic_RealEngine(t *testing.T) {
+	c := newSearchClient(t)
+	ctx := context.Background()
+	idx := NewIndexer(c)
+	svc := NewService(c)
+
+	if err := idx.IndexChannel(ctx, &model.Channel{ID: "rnd1", Name: "random", Slug: "random", Type: model.ChannelTypePublic}); err != nil {
+		t.Fatalf("IndexChannel: %v", err)
+	}
+	refreshIndex(t, c, IndexChannels)
+
+	// Caller is a member of some OTHER channel, not ~random.
+	res, err := svc.Channels(ctx, ChannelQuery{Q: "random", AllowedChannelIDs: []string{"some-other-channel"}, Limit: 10})
+	if err != nil {
+		t.Fatalf("Channels(random): %v", err)
+	}
+	if !hitIDs(res)["rnd1"] {
+		t.Fatalf("free-text 'random' must surface the unjoined public ~random channel, got %v", res.Hits)
 	}
 }
 

@@ -9,6 +9,10 @@ const favoriteMutate = vi.hoisted(() => vi.fn());
 const setCategoryMutate = vi.hoisted(() => vi.fn());
 
 vi.mock('@/hooks/useSidebar', () => ({
+  useReorderSidebar: () => ({ mutate: vi.fn(), isPending: false }),
+  markLocalSidebarReorder: vi.fn(),
+  shouldRefetchSidebarForRemoteUpdate: vi.fn(() => true),
+  resetSidebarReorderSessionState: vi.fn(),
   useFavoriteConversation: () => ({ mutate: favoriteMutate, isPending: false }),
   useSetConversationCategory: () => ({ mutate: setCategoryMutate, isPending: false }),
 }));
