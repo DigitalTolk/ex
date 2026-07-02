@@ -58,6 +58,15 @@ async function openChannelMenu(screen: Awaited<ReturnType<typeof renderRow>>) {
     row.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerType: 'touch' }));
   } else {
     await screen.getByTestId('row-menu-ch-1').click();
+    // The Radix dropdown mounts its items in a portal ASYNCHRONOUSLY. Wait for
+    // the content (as the mobile branch does) so callers can query a specific
+    // item without racing the open under full-suite CPU load.
+    await vi.waitFor(
+      () => {
+        expect(document.querySelector('[role="menuitem"]')).not.toBeNull();
+      },
+      { timeout: 1500 },
+    );
   }
 }
 

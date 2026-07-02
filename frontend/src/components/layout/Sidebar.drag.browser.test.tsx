@@ -29,13 +29,21 @@ const draggableConfigs = vi.hoisted(() => [] as Array<{
   onDragStart?: () => void;
   onDrop?: () => void;
 }>);
+// Captured so a test can assert EVERY drop target is registered sticky — the
+// contract that keeps a live target under the cursor when it moves onto the
+// push-aside gap (a pointer-events-none layout box that is not itself a drop
+// target). Drop stickiness → preventDefault keeps firing → no native snap-back.
+const dropTargetConfigs = vi.hoisted(() => [] as Array<{ element: Element; getIsSticky?: () => boolean }>);
 
 vi.mock('@atlaskit/pragmatic-drag-and-drop/element/adapter', () => ({
   draggable: (config: { element: Element; onDragStart?: () => void; onDrop?: () => void }) => {
     draggableConfigs.push(config);
     return () => {};
   },
-  dropTargetForElements: () => () => {},
+  dropTargetForElements: (config: { element: Element; getIsSticky?: () => boolean }) => {
+    dropTargetConfigs.push(config);
+    return () => {};
+  },
   monitorForElements: (config: typeof monitorCallbacks) => {
     monitorCallbacks.onDragStart = config.onDragStart;
     monitorCallbacks.onDropTargetChange = config.onDropTargetChange;
@@ -311,6 +319,7 @@ beforeEach(() => {
   monitorCallbacks.onDrag = undefined;
   monitorCallbacks.onDrop = undefined;
   draggableConfigs.length = 0;
+  dropTargetConfigs.length = 0;
 });
 
 afterEach(() => {
@@ -405,6 +414,19 @@ describe('Sidebar drag-and-drop monitor callbacks', () => {
     monitorCallbacks.onDrop?.(dropLocation([channelTarget('__channels__', 2)]));
     // general moved to the end → its new position is greater than other's.
     expect(positionOf('ch-general')!).toBeGreaterThan(positionOf('ch-other')!);
+  });
+
+  it('registers EVERY drop target as sticky so the push-aside gap can never orphan the drop', async () => {
+    await render(<Frame />);
+    // Rows, the section tail, category headers and boundary hitboxes all register
+    // drop targets. Each MUST be sticky: when the pointer slides off a row onto
+    // the pointer-events-none gap, pragmatic retains the last target (reusing its
+    // closest-edge) so preventDefault keeps firing and the browser accepts the
+    // drop — otherwise it rejects it with the native snap-back and nothing lands.
+    expect(dropTargetConfigs.length).toBeGreaterThan(0);
+    for (const cfg of dropTargetConfigs) {
+      expect(cfg.getIsSticky?.()).toBe(true);
+    }
   });
 
   it('opens a push-aside gap at the resolved channel slot during a drag, and clears it on drop', async () => {
@@ -796,18 +818,26 @@ describe('Sidebar drag-and-drop monitor callbacks', () => {
     expect(reorderSidebarMutate).toHaveBeenCalled();
   });
 
-  it('dims a draggable row/header while it is being dragged and restores it on drop', async () => {
+  it('collapses a dragged row (lift-out) and dims a dragged category header, restoring both on drop', async () => {
     await render(<Frame />);
     // Each Pragmatic* row/header registers a draggable with onDragStart/onDrop
-    // that flip a local `dragging` flag controlling its opacity. Invoke them
-    // directly (the real pointer drag is not driveable in headless Playwright).
-    // Rows/headers are only draggable on desktop (disabled on mobile), so on
-    // the mobile projects there is nothing to dim — skip there.
+    // that flip a local `dragging` flag. Invoke them directly (the real pointer
+    // drag is not driveable in headless Playwright). Rows/headers are only
+    // draggable on desktop (disabled on mobile), so on the mobile projects there
+    // is nothing to drag — skip there.
     if (draggableConfigs.length === 0) return;
     for (const cfg of draggableConfigs) {
       cfg.onDragStart?.();
     }
     await vi.waitFor(() => {
+      // Channel/DM rows COLLAPSE their original slot to nothing (lift-out):
+      // zero height + invisible, so only the push-aside gap shows the landing.
+      const collapsed = Array.from(document.querySelectorAll<HTMLElement>('[data-testid^="channel-row-"]')).filter(
+        (el) => el.style.opacity === '0' && el.style.height === '0px',
+      );
+      expect(collapsed.length).toBeGreaterThan(0);
+      // Category headers keep the subtler in-place dim (a whole section can't
+      // sensibly collapse mid-drag).
       const dimmed = Array.from(document.querySelectorAll<HTMLElement>('[style*="opacity"]')).filter(
         (el) => el.style.opacity === '0.25',
       );
@@ -817,6 +847,10 @@ describe('Sidebar drag-and-drop monitor callbacks', () => {
       cfg.onDrop?.();
     }
     await vi.waitFor(() => {
+      const stillCollapsed = Array.from(document.querySelectorAll<HTMLElement>('[data-testid^="channel-row-"]')).filter(
+        (el) => el.style.height === '0px',
+      );
+      expect(stillCollapsed.length).toBe(0);
       const stillDimmed = Array.from(document.querySelectorAll<HTMLElement>('[style*="opacity"]')).filter(
         (el) => el.style.opacity === '0.25',
       );
@@ -872,7 +906,7 @@ describe('Sidebar drag-and-drop monitor callbacks', () => {
     monitorCallbacks.onDragStart?.(dragSource({ type: 'category', categoryID: 'cat-personal' }));
     monitorCallbacks.onDropTargetChange?.(dropLocation([sectionTarget('cat-work', 'cat-work')]));
     await vi.waitFor(() => {
-      expect(document.querySelector('[data-testid="sidebar-drop-indicator"]')).not.toBeNull();
+      expect(document.querySelector('[data-testid="sidebar-drop-gap-cat-cat-work"]')).not.toBeNull();
     });
     monitorCallbacks.onDrop?.(dropLocation([]));
   });
@@ -928,7 +962,7 @@ describe('Sidebar drag-and-drop monitor callbacks', () => {
     monitorCallbacks.onDragStart?.(dragSource({ type: 'category', categoryID: 'cat-personal' }));
     monitorCallbacks.onDropTargetChange?.(dropLocation([sectionTarget('cat-work', 'cat-work')]));
     await vi.waitFor(() => {
-      expect(document.querySelector('[data-testid="sidebar-drop-indicator"]')).not.toBeNull();
+      expect(document.querySelector('[data-testid="sidebar-drop-gap-cat-cat-work"]')).not.toBeNull();
     });
     monitorCallbacks.onDropTargetChange?.(dropLocation([sectionTarget('cat-work', 'cat-work')]));
     await new Promise((r) => setTimeout(r, 20));

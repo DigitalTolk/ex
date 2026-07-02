@@ -161,7 +161,10 @@ export function useReorderCategories() {
       return changed;
     },
     onMutate: async (vars) => {
-      await qc.cancelQueries({ queryKey });
+      // Initiate cancellation synchronously, then patch SYNCHRONOUSLY (before the
+      // await) so the reorder commits with the drop — same fix as the channel/DM
+      // reorder above; a patch behind the await snap-back-flashes the old order.
+      const cancelled = qc.cancelQueries({ queryKey });
       const previous = qc.getQueryData<SidebarCategory[]>(queryKey);
       const next = vars.categories.map((category, index) => ({
         ...category,
@@ -172,6 +175,7 @@ export function useReorderCategories() {
         previous,
         next: next.map((category) => ({ id: category.id, position: category.position })),
       });
+      await cancelled;
       return { previous };
     },
     onError: (_err, _vars, context) => {
@@ -186,7 +190,12 @@ export function useReorderCategories() {
         order: data.map((category) => ({ id: category.id, position: category.position })),
       });
     },
-    onSettled: () => qc.invalidateQueries({ queryKey }),
+    // Deliberately NO post-write invalidate. The category list read is eventually
+    // consistent (no ConsistentRead), so a read-after-write refetch here races
+    // the write and can momentarily return the OLD order — reverting the drop
+    // (a snap-back). The optimistic order already equals what we persisted; the
+    // next natural refetch (staleTime/focus/remount) reconciles. Mirrors
+    // useReorderSidebar, which dropped its post-write invalidate for the same reason.
   });
 }
 
@@ -360,13 +369,25 @@ export function useReorderSidebar() {
       markLocalSidebarReorder();
       const channelKey = queryKeys.userChannels();
       const convKey = queryKeys.userConversations();
-      await Promise.all([qc.cancelQueries({ queryKey: channelKey }), qc.cancelQueries({ queryKey: convKey })]);
+      // Initiate cancellation of any in-flight list refetch SYNCHRONOUSLY (the
+      // abort fires now; the promise only resolves once they unwind). Doing this
+      // before the patch means no late refetch can clobber the optimistic state.
+      const cancelled = Promise.all([
+        qc.cancelQueries({ queryKey: channelKey }),
+        qc.cancelQueries({ queryKey: convKey }),
+      ]);
       const previousChannels = qc.getQueryData<SidebarAttrRow[]>(channelKey);
       const previousConversations = qc.getQueryData<SidebarAttrRow[]>(convKey);
       const byID = new Map(vars.updates.map((u) => [u.id, u] as const));
+      // Patch BOTH caches SYNCHRONOUSLY — before any `await` — so the optimistic
+      // reorder commits in the SAME React pass as the drop clearing the gap and
+      // the dragged row's dim. Behind an await it landed one microtask (one
+      // commit) later, so the row painted a frame at its OLD slot on release,
+      // which read as a snap-back animation. Not a transition — a two-commit race.
       qc.setQueryData<SidebarAttrRow[]>(channelKey, (rows) => applyReorderOptimistic(rows, 'channel', byID));
       qc.setQueryData<SidebarAttrRow[]>(convKey, (rows) => applyReorderOptimistic(rows, 'conversation', byID));
       sidebarDndDebug('reorder optimistic applied', { updates: vars.updates });
+      await cancelled;
       return { previousChannels, previousConversations };
     },
     onError: (_err, _vars, context) => {

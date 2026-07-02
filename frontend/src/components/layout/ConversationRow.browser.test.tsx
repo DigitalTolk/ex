@@ -78,6 +78,16 @@ async function openConvMenu(screen: Awaited<ReturnType<typeof renderRow>>) {
     row.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerType: 'touch' }));
   } else {
     await screen.getByTestId('conv-row-menu-cv-1').click();
+    // The Radix dropdown mounts its items in a portal ASYNCHRONOUSLY. Wait for
+    // the content here (as the mobile branch above does) so callers can query a
+    // specific item without racing the open — a raw querySelector fired right
+    // after the trigger click returns null under full-suite CPU load.
+    await vi.waitFor(
+      () => {
+        expect(document.querySelector('[role="menuitem"]')).not.toBeNull();
+      },
+      { timeout: 1500 },
+    );
   }
 }
 

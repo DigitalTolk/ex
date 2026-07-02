@@ -62,7 +62,24 @@ const CONVERSATION_SORT_STORAGE_KEY = 'sidebar.conversationSort';
 const CATEGORY_DROP_END = '__category-end__';
 const SIDEBAR_DND_DEBUG_STORAGE_KEY = 'ex.sidebarDndDebug';
 const SIDEBAR_DRAGGING_OPACITY = 0.25;
-const SIDEBAR_DROP_LINE_CLASS = 'pointer-events-none absolute left-2 right-2 top-0 z-10 h-px bg-white/85';
+// When a channel/DM row is picked up, collapse its ORIGINAL slot to nothing
+// (Slack-style "lift out") rather than leaving a dimmed in-place ghost — the
+// ghost is confusing because you can drop above OR below the old position. The
+// element stays MOUNTED (native HTML5 DnD needs its drag source to persist),
+// just zero-sized and invisible; the push-aside gap alone then shows where it
+// will land. Rows are direct `space-y-1` children (no wrapper div), so
+// marginTop:0 here also eats the list gap and the slot fully vanishes.
+const SIDEBAR_DRAGGING_COLLAPSE: CSSProperties = {
+  height: 0,
+  minHeight: 0,
+  marginTop: 0,
+  marginBottom: 0,
+  paddingTop: 0,
+  paddingBottom: 0,
+  overflow: 'hidden',
+  opacity: 0,
+  pointerEvents: 'none',
+};
 type ChannelDropArea = 'lead' | 'row' | 'end';
 type ResolvedDrop =
   | { kind: 'channel'; sectionKey: string; index: number; area: ChannelDropArea }
@@ -180,6 +197,9 @@ function PragmaticCategoryHeader({
       registrations.push(
         dropTargetForElements({
           element,
+          // Sticky so a category drag that moves onto the push-aside gap above a
+          // section keeps this header as the target (see PragmaticChannelRow).
+          getIsSticky: () => true,
           getData: ({ input, element }) => {
             const currentDropData = dropDataRef.current;
             /* v8 ignore next -- this drop target only registers when hasDropData, so dropDataRef is set; defensive guard */
@@ -239,6 +259,9 @@ function PragmaticSection({
     if (!element || disabled) return undefined;
     return dropTargetForElements({
       element,
+      // Sticky so the pointer entering an adjacent push-aside gap keeps a live
+      // target (see PragmaticChannelRow) — no dead zone, no native snap-back.
+      getIsSticky: () => true,
       getData: () => dataRef.current,
     });
   }, [disabled]);
@@ -273,6 +296,9 @@ function PragmaticCategoryDropHitbox({
     if (!element) return undefined;
     return dropTargetForElements({
       element,
+      // Sticky (see PragmaticChannelRow): keeps this boundary as the target when
+      // the pointer slides onto the adjacent push-aside gap.
+      getIsSticky: () => true,
       getData: () => dataRef.current,
     });
   }, []);
@@ -320,6 +346,15 @@ function PragmaticChannelRow({
       }),
       dropTargetForElements({
         element,
+        // Sticky: when the pointer leaves this row onto the push-aside gap — a
+        // pointer-events-none LAYOUT box that is NOT itself a drop target —
+        // pragmatic RETAINS this row as the active target and reuses its last
+        // closest-edge (it deliberately doesn't recompute getData while sticky).
+        // Without this, hovering the gap leaves NO drop target under the cursor,
+        // so the browser never gets preventDefault → it rejects the drop with the
+        // native return-to-origin animation (the "snap-back") and the reorder
+        // never lands. Stickiness keeps a target under the cursor across the gap.
+        getIsSticky: () => true,
         getData: ({ input, element }) =>
           attachClosestEdge(
             { type: 'channel-target', sectionKey, index, area: 'row' } satisfies DropPayload,
@@ -342,7 +377,7 @@ function PragmaticChannelRow({
       {/* eslint-disable-next-line react-hooks/refs -- passing ref callbacks to a child render prop; refs are only assigned by React later. */}
       {children({
         dragRef: setElementRef,
-        dragStyle: { opacity: dragging ? SIDEBAR_DRAGGING_OPACITY : undefined },
+        dragStyle: dragging ? SIDEBAR_DRAGGING_COLLAPSE : undefined,
       })}
     </>
   );
@@ -382,6 +417,15 @@ function PragmaticConversationRow({
       }),
       dropTargetForElements({
         element,
+        // Sticky: when the pointer leaves this row onto the push-aside gap — a
+        // pointer-events-none LAYOUT box that is NOT itself a drop target —
+        // pragmatic RETAINS this row as the active target and reuses its last
+        // closest-edge (it deliberately doesn't recompute getData while sticky).
+        // Without this, hovering the gap leaves NO drop target under the cursor,
+        // so the browser never gets preventDefault → it rejects the drop with the
+        // native return-to-origin animation (the "snap-back") and the reorder
+        // never lands. Stickiness keeps a target under the cursor across the gap.
+        getIsSticky: () => true,
         getData: ({ input, element }) =>
           attachClosestEdge(
             { type: 'channel-target', sectionKey, index, area: 'row' } satisfies DropPayload,
@@ -404,7 +448,7 @@ function PragmaticConversationRow({
       {/* eslint-disable-next-line react-hooks/refs -- passing ref callbacks to a child render prop; refs are only assigned by React later. */}
       {children({
         dragRef: setElementRef,
-        dragStyle: { opacity: dragging ? SIDEBAR_DRAGGING_OPACITY : undefined },
+        dragStyle: dragging ? SIDEBAR_DRAGGING_COLLAPSE : undefined,
       })}
     </>
   );
@@ -1133,25 +1177,17 @@ export function Sidebar({ onClose }: SidebarProps) {
     setSuppressChannelNavigationID(null);
   }
 
-  function DropLine() {
+  // Live "push-aside" preview: while a channel/DM/category is dragged, open a
+  // row-height gap at the slot it would land in (WYSIWYG), so the rows/sections
+  // below shift down and it's obvious where a drop will go. It's driven by the
+  // same `dropIndicator` the drop itself uses, so preview == landing spot.
+  // Explicit h-8 (≈ the desktop row box) — drag is desktop-only — keeps the
+  // shift from reflowing; pointer-events-none so it never steals the live drop
+  // hitbox. Categories pass their own testId so the two gaps stay distinct.
+  function DropGap({ sectionKey, testId }: { sectionKey: string; testId?: string }) {
     return (
       <div
-        data-testid="sidebar-drop-indicator"
-        className={SIDEBAR_DROP_LINE_CLASS}
-      />
-    );
-  }
-
-  // Live "push-aside" preview: while a channel/DM is dragged, open a
-  // row-height gap at the slot it would land in (WYSIWYG), so the rows below
-  // shift down and it's obvious where a drop will go. It's driven by the same
-  // `dropIndicator` the drop itself uses, so preview == landing spot. Explicit
-  // h-8 (≈ the desktop row box) — drag is desktop-only — keeps the shift from
-  // reflowing; pointer-events-none so it never steals the live drop hitbox.
-  function DropGap({ sectionKey }: { sectionKey: string }) {
-    return (
-      <div
-        data-testid={`sidebar-drop-gap-${sectionKey}`}
+        data-testid={testId ?? `sidebar-drop-gap-${sectionKey}`}
         aria-hidden="true"
         className="pointer-events-none h-8 rounded-md border border-dashed border-white/25 bg-white/5"
       />
@@ -1402,9 +1438,16 @@ export function Sidebar({ onClose }: SidebarProps) {
                 dropIndicator?.kind === 'channel' && dropIndicator.sectionKey === section.key
                   ? dropIndicator
                   : null;
+              // A category drag that would land BEFORE this section opens a gap
+              // above it, pushing this section (and everything below) down — the
+              // same WYSIWYG push-aside the channel/DM drag gets.
+              const categoryGap =
+                dropIndicator?.kind === 'category' &&
+                dropIndicator.beforeCategoryID === (isChannelsDefault ? CATEGORY_DROP_END : section.key);
 
               return (
                 <div key={section.key} className="relative mt-2" data-testid={`sidebar-group-${section.key}`}>
+                  {categoryGap && <DropGap sectionKey={section.key} testId={`sidebar-drop-gap-cat-${section.key}`} />}
                   {(isFavorites || isUserCategory || isChannelsDefault) && (
                     <PragmaticCategoryDropHitbox
                       active={!isMobile && isDraggingCategory}
@@ -1431,10 +1474,6 @@ export function Sidebar({ onClose }: SidebarProps) {
                     className="group/sec relative flex items-center"
                     testID={`sidebar-group-header-${section.key}`}
                   >
-                    {dropIndicator?.kind === 'category' &&
-                      dropIndicator.beforeCategoryID === (isChannelsDefault ? CATEGORY_DROP_END : section.key) && (
-                        <DropLine />
-                      )}
                     <div
                       role="button"
                       tabIndex={0}
@@ -1541,11 +1580,12 @@ export function Sidebar({ onClose }: SidebarProps) {
                         const showGap =
                           channelGap != null && channelGap.area !== 'end' && channelGap.index === channelDropIndex;
                         return (
+                          // No wrapper div: the ChannelRow's own element is the
+                          // direct `space-y-1` child (and already `relative`), so
+                          // SIDEBAR_DRAGGING_COLLAPSE can fully remove its slot on
+                          // pick-up (margin included).
                           <Fragment key={`ch-${item.channel.channelID}`}>
                             {showGap && <DropGap sectionKey={section.key} />}
-                          <div
-                            className="relative"
-                          >
                             <PragmaticChannelRow
                               sectionKey={section.key}
                               index={channelDropIndex}
@@ -1565,7 +1605,6 @@ export function Sidebar({ onClose }: SidebarProps) {
                                 />
                               )}
                             </PragmaticChannelRow>
-                          </div>
                           </Fragment>
                         );
                       }
@@ -1585,9 +1624,11 @@ export function Sidebar({ onClose }: SidebarProps) {
                       const showConvGap =
                         channelGap != null && channelGap.area !== 'end' && channelGap.index === conversationDropIndex;
                       return (
+                        // No wrapper div (see the channel branch): the row's own
+                        // element is the direct `space-y-1` child so a favorited
+                        // DM's slot collapses fully on pick-up.
                         <Fragment key={`conv-${conv.conversationID}`}>
                           {showConvGap && <DropGap sectionKey={section.key} />}
-                        <div className="relative">
                           {section.key === SidebarSectionKeys.Favorites ? (
                             <PragmaticConversationRow
                               sectionKey={section.key}
@@ -1624,7 +1665,6 @@ export function Sidebar({ onClose }: SidebarProps) {
                               onHide={hideConversation}
                             />
                           )}
-                        </div>
                         </Fragment>
                       );
                     })}

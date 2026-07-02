@@ -1352,7 +1352,7 @@ describe('Sidebar', () => {
     fireEvent.pointerDown(screen.getByTestId('sidebar-group-header-cat-ops'));
     fireEvent.dragStart(screen.getByTestId('sidebar-group-header-cat-ops'), { dataTransfer });
     fireEvent.dragOver(screen.getByTestId('sidebar-group-header-cat-eng'), { dataTransfer });
-    expect(within(screen.getByTestId('sidebar-group-header-cat-eng')).getByTestId('sidebar-drop-indicator')).toBeInTheDocument();
+    expect(screen.getByTestId('sidebar-drop-gap-cat-cat-eng')).toBeInTheDocument();
     fireEvent.drop(screen.getByTestId('sidebar-group-header-cat-eng'), { dataTransfer });
 
     await waitFor(() => {
@@ -1419,7 +1419,7 @@ describe('Sidebar', () => {
     fireEvent.pointerDown(screen.getByTestId('sidebar-group-header-cat-design'));
     fireEvent.dragStart(screen.getByTestId('sidebar-group-header-cat-design'), { dataTransfer });
     fireDragOver(targetHeader, dataTransfer, 1);
-    expect(within(targetHeader).getByTestId('sidebar-drop-indicator')).toBeInTheDocument();
+    expect(screen.getByTestId('sidebar-drop-gap-cat-cat-ops')).toBeInTheDocument();
     fireDrop(targetHeader, dataTransfer, 19);
 
     await waitFor(() => {
@@ -1468,7 +1468,7 @@ describe('Sidebar', () => {
     );
   });
 
-  it('keeps the category placement line visible after crossing a category body', async () => {
+  it('keeps the category placement gap visible after crossing a category body', async () => {
     mockApiFetch.mockImplementation(async (url: string) => {
       if (url === '/api/v1/sidebar/categories') {
         return [
@@ -1490,11 +1490,11 @@ describe('Sidebar', () => {
     fireEvent.pointerDown(screen.getByTestId('sidebar-group-header-cat-ops'));
     fireEvent.dragStart(screen.getByTestId('sidebar-group-header-cat-ops'), { dataTransfer });
     fireEvent.dragOver(targetHeader, { dataTransfer });
-    expect(within(targetHeader).getByTestId('sidebar-drop-indicator')).toBeInTheDocument();
+    expect(screen.getByTestId('sidebar-drop-gap-cat-cat-eng')).toBeInTheDocument();
 
     fireEvent.dragOver(screen.getByTestId('sidebar-section-tail-drop-cat-eng'), { dataTransfer });
 
-    expect(within(targetHeader).getByTestId('sidebar-drop-indicator')).toBeInTheDocument();
+    expect(screen.getByTestId('sidebar-drop-gap-cat-cat-eng')).toBeInTheDocument();
   });
 
   it('accepts a category drop directly on the visible boundary line hitbox', async () => {
@@ -1514,9 +1514,7 @@ describe('Sidebar', () => {
     fireEvent.pointerDown(screen.getByTestId('sidebar-group-header-cat-ops'));
     fireEvent.dragStart(screen.getByTestId('sidebar-group-header-cat-ops'), { dataTransfer });
     fireEvent.dragOver(screen.getByTestId('sidebar-category-boundary-drop-cat-eng'), { dataTransfer });
-    expect(
-      within(screen.getByTestId('sidebar-group-header-cat-eng')).getByTestId('sidebar-drop-indicator'),
-    ).toBeInTheDocument();
+    expect(screen.getByTestId('sidebar-drop-gap-cat-cat-eng')).toBeInTheDocument();
     fireEvent.drop(screen.getByTestId('sidebar-category-boundary-drop-cat-eng'), { dataTransfer });
 
     await waitFor(() => {

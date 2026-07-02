@@ -137,12 +137,12 @@ describe('useReorderCategories', () => {
       ],
     });
 
-    await waitFor(() => {
-      expect(queryClient.getQueryData(['sidebarCategories'])).toEqual([
-        { id: 'c-2', name: 'Operations', position: 1000 },
-        { id: 'c-1', name: 'Engineering', position: 2000 },
-      ]);
-    });
+    // Synchronous — same snap-back guard as the channel/DM reorder: the new
+    // category order is in the cache on the next line, not an awaited tick later.
+    expect(queryClient.getQueryData(['sidebarCategories'])).toEqual([
+      { id: 'c-2', name: 'Operations', position: 1000 },
+      { id: 'c-1', name: 'Engineering', position: 2000 },
+    ]);
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
     expect(apiFetch).toHaveBeenCalledWith('/api/v1/sidebar/categories/c-2', {
@@ -153,7 +153,10 @@ describe('useReorderCategories', () => {
       method: 'PATCH',
       body: JSON.stringify({ name: undefined, position: 2000 }),
     });
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['sidebarCategories'] });
+    // Deliberately NO post-write invalidate: the eventually-consistent category
+    // list read would race the write and could revert the optimistic order (a
+    // snap-back). The optimistic cache already holds the persisted order.
+    expect(invalidateSpy).not.toHaveBeenCalledWith({ queryKey: ['sidebarCategories'] });
   });
 });
 
@@ -448,14 +451,14 @@ describe('useReorderSidebar', () => {
 
     result.current.mutate({ updates, favoriteChanged: new Set() });
 
-    // Optimistic patch lands right after onMutate's cancelQueries — the cache
-    // holds the new order well before the writes resolve (this is what makes
-    // the row "stick" instantly instead of snapping back).
-    await waitFor(() => {
-      const rows = queryClient.getQueryData(['userChannels']) as Array<{ channelID: string; sidebarPosition: number }>;
-      expect(rows.find((r) => r.channelID === 'ch-1')?.sidebarPosition).toBe(1000);
-      expect(rows.find((r) => r.channelID === 'ch-2')?.sidebarPosition).toBe(2000);
-    });
+    // SYNCHRONOUS optimistic patch: onMutate applies it BEFORE it awaits the
+    // query cancellation, so the cache already holds the new order on the very
+    // next line — no awaited tick. This is the snap-back guard: if the patch is
+    // moved back behind the await, the row commits at its OLD slot for one frame
+    // on release (a visible flash back to the old position) and this fails.
+    const rows = queryClient.getQueryData(['userChannels']) as Array<{ channelID: string; sidebarPosition: number }>;
+    expect(rows.find((r) => r.channelID === 'ch-1')?.sidebarPosition).toBe(1000);
+    expect(rows.find((r) => r.channelID === 'ch-2')?.sidebarPosition).toBe(2000);
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(apiFetch).toHaveBeenCalledWith('/api/v1/channels/ch-1/category', expect.objectContaining({ method: 'PUT' }));
