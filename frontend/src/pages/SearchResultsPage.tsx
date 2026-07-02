@@ -2,7 +2,6 @@ import { useMemo } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { File as FileIcon, Hash, MessageSquare, User as UserIcon, X } from 'lucide-react';
 import { PageContainer } from '@/components/layout/PageContainer';
-import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Skeleton } from '@/components/ui/skeleton';
 import {
   DropdownMenu,
@@ -18,11 +17,15 @@ import {
   type SearchHit,
 } from '@/hooks/useSearch';
 import { useUsersBatch } from '@/hooks/useUsersBatch';
+import { usePresence } from '@/context/PresenceContext';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { useUserChannels } from '@/hooks/useChannels';
 import { useUserConversations, useOpenDM } from '@/hooks/useConversations';
 import { useMessageParent } from '@/hooks/useMessageParent';
-import { formatLongDateTime, getInitials } from '@/lib/format';
+import { UserAvatar } from '@/components/UserAvatar';
+import { UserStatusIndicator } from '@/components/UserStatusIndicator';
+import { formatLongDateTime } from '@/lib/format';
+import type { UserStatus } from '@/types';
 import { highlight } from '@/lib/highlight';
 import { MessageHitCard } from '@/components/search/MessageHitCard';
 import { BucketPicker } from '@/components/search/BucketPicker';
@@ -93,6 +96,12 @@ export default function SearchResultsPage() {
 
   const { data: fromUserList = [] } = useUsersBatch(from ? [from] : []);
   const fromUser = fromUserList[0];
+  // Resolve fresh avatars + custom status for the people hits (the search index
+  // can't store presigned avatar URLs / live status), and presence for the dot —
+  // same "status icon" the ⌘K dropdown shows.
+  const userHitIDs = useMemo(() => userHits.map((h) => h.id), [userHits]);
+  const { map: userInfoMap } = useUsersBatch(userHitIDs);
+  const { online } = usePresence();
   const { data: userChannels = [] } = useUserChannels();
   const { data: userConversations = [] } = useUserConversations();
   const inParentLabel = useMemo(() => {
@@ -245,7 +254,13 @@ export default function SearchResultsPage() {
             <Section title="People" icon={<UserIcon className="h-4 w-4" />}>
               <ul className="space-y-2">
                 {userHits.map((h) => (
-                  <UserHitRow key={h.id} hit={h} />
+                  <UserHitRow
+                    key={h.id}
+                    hit={h}
+                    avatarURL={userInfoMap.get(h.id)?.avatarURL}
+                    online={online.has(h.id)}
+                    userStatus={userInfoMap.get(h.id)?.userStatus}
+                  />
                 ))}
               </ul>
             </Section>
@@ -363,7 +378,17 @@ function ChannelHitRow({ hit }: { hit: SearchHit }) {
   );
 }
 
-function UserHitRow({ hit }: { hit: SearchHit }) {
+function UserHitRow({
+  hit,
+  avatarURL,
+  online,
+  userStatus,
+}: {
+  hit: SearchHit;
+  avatarURL?: string;
+  online: boolean;
+  userStatus?: UserStatus | null;
+}) {
   const name = String(hit._source.displayName ?? hit.id);
   const email = String(hit._source.email ?? '');
   const role = String(hit._source.systemRole ?? '');
@@ -376,12 +401,12 @@ function UserHitRow({ hit }: { hit: SearchHit }) {
         onClick={() => openDM(hit.id)}
         className="flex w-full items-start gap-3 rounded-lg border bg-card p-3 text-left transition-colors hover:bg-muted/40"
       >
-        <Avatar className="h-9 w-9">
-          <AvatarFallback className="text-xs">{getInitials(name || '??')}</AvatarFallback>
-        </Avatar>
+        <UserAvatar displayName={name} avatarURL={avatarURL} online={online} className="h-9 w-9" dotSize={10} />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <p className="text-sm font-semibold">{name}</p>
+            {/* Custom-status emoji — self-hides when the person has no active status. */}
+            <UserStatusIndicator status={userStatus} className="h-4 w-4" />
             {role && (
               <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
                 {role}

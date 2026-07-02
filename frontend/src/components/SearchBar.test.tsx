@@ -38,6 +38,17 @@ vi.mock('@/hooks/useSearch', () => ({
 vi.mock('@/hooks/useUsersBatch', () => ({
   useUsersBatch: (...args: unknown[]) => useUsersBatchMock(...(args as [])),
 }));
+// Presence powers the online/offline dot on people rows. A shared mutable set
+// lets a test flip a user online.
+const onlineSet = vi.hoisted(() => new Set<string>());
+vi.mock('@/context/PresenceContext', () => ({
+  usePresence: () => ({ online: onlineSet }),
+}));
+// UserStatusIndicator resolves custom emojis through React Query; the bar test
+// renders no QueryClient, so stub the map (unicode emojis render directly).
+vi.mock('@/hooks/useEmoji', () => ({
+  useEmojiMap: () => ({ data: {} }),
+}));
 // Debounce is identity in tests so search results appear synchronously.
 vi.mock('@/hooks/useDebouncedValue', () => ({
   useDebouncedValue: (v: unknown) => v,
@@ -68,6 +79,7 @@ beforeEach(() => {
   useSearchUsersMock.mockReturnValue({ data: { hits: [] }, isLoading: false });
   useSearchChannelsMock.mockReturnValue({ data: { hits: [] }, isLoading: false });
   useUsersBatchMock.mockReturnValue({ map: new Map(), isLoading: false });
+  onlineSet.clear();
   openDMMock.mockClear();
   openDMMock.mockImplementation((_userID, opts) => opts?.onSuccess?.());
   lastLocation = { pathname: '/', search: '' };
@@ -283,6 +295,41 @@ describe('SearchBar', () => {
       fireEvent.change(screen.getByTestId('searchbar-input'), { target: { value: 'al' } });
       expect(screen.getByTestId('searchbar-user-u-1')).toBeInTheDocument();
       expect(screen.getByText('Alice')).toBeInTheDocument();
+    });
+
+    it('shows the presence dot (online) and the custom-status emoji on a people row', () => {
+      useSearchUsersMock.mockReturnValue({
+        data: { hits: [{ id: 'u-1', score: 1, _source: { displayName: 'Alice', email: 'alice@x.io' } }] },
+        isLoading: false,
+      });
+      useUsersBatchMock.mockReturnValue({
+        map: new Map([
+          ['u-1', { avatarURL: 'https://cdn.example/alice.png', userStatus: { emoji: '🌴', text: 'On vacation', clearAt: null } }],
+        ]),
+        isLoading: false,
+      });
+      onlineSet.add('u-1');
+      renderBar();
+      fireEvent.change(screen.getByTestId('searchbar-input'), { target: { value: 'al' } });
+      const row = screen.getByTestId('searchbar-user-u-1');
+      // Presence dot rides the avatar (online → solid).
+      expect(row.querySelector('[data-presence="online"]')).not.toBeNull();
+      // Custom-status emoji is aria-labelled by the status text.
+      expect(screen.getByLabelText(/On vacation/)).toBeInTheDocument();
+    });
+
+    it('renders a people row with no status icon and an offline dot when the person has no status', () => {
+      useSearchUsersMock.mockReturnValue({
+        data: { hits: [{ id: 'u-2', score: 1, _source: { displayName: 'Bob' } }] },
+        isLoading: false,
+      });
+      // No batch record → no avatar, no userStatus; presence set is empty → offline.
+      renderBar();
+      fireEvent.change(screen.getByTestId('searchbar-input'), { target: { value: 'bo' } });
+      const row = screen.getByTestId('searchbar-user-u-2');
+      expect(row.querySelector('[data-presence="offline"]')).not.toBeNull();
+      // UserStatusIndicator self-hides (no active status) — no status label present.
+      expect(screen.queryByLabelText(/won't clear/)).not.toBeInTheDocument();
     });
 
     it('navigates to /channel/:slug when a channel row is clicked', () => {

@@ -6,11 +6,13 @@ import { useUserConversations, useOpenDM } from '@/hooks/useConversations';
 import { useSearchUsers, useSearchChannels, type SearchHit } from '@/hooks/useSearch';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { useUsersBatch } from '@/hooks/useUsersBatch';
-import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import { usePresence } from '@/context/PresenceContext';
 import { Badge } from '@/components/ui/badge';
 import { ChannelIcon } from '@/components/ChannelIcon';
-import { getInitials } from '@/lib/format';
+import { UserAvatar } from '@/components/UserAvatar';
+import { UserStatusIndicator } from '@/components/UserStatusIndicator';
 import { isApplePlatform, searchShortcutLabel } from '@/lib/platform';
+import type { UserStatus } from '@/types';
 
 // ⌘K on Apple platforms, Ctrl K elsewhere. The keydown handler matches the
 // SAME platform chord as this hint — on Apple only Cmd+K (a bare Ctrl+K is
@@ -115,6 +117,10 @@ export function SearchBar() {
   // (same pattern as the mention list / activity feed).
   const userHitIDs = useMemo(() => userHits.map((h) => h.id), [userHits]);
   const { map: userAvatarMap } = useUsersBatch(userHitIDs);
+  // Presence powers the online/offline dot on each people row; the batch record
+  // above carries the custom status emoji. Both are the "status icon" a person
+  // row shows here and on the full /search page.
+  const { online } = usePresence();
   const searching = searchEnabled && (usersQuery.isLoading || channelsQuery.isLoading);
 
   // Channel search now surfaces PUBLIC channels the user hasn't joined (opening
@@ -368,6 +374,8 @@ export function SearchBar() {
                     key={hit.id}
                     hit={hit}
                     avatarURL={userAvatarMap.get(hit.id)?.avatarURL}
+                    online={online.has(hit.id)}
+                    userStatus={userAvatarMap.get(hit.id)?.userStatus}
                     highlighted={flatIndex === safeHighlight}
                     onHover={() => setHighlightKey(`user:${hit.id}`)}
                     onSelect={() => activate(flatIndex)}
@@ -511,12 +519,16 @@ function ChannelRow({
 function UserRow({
   hit,
   avatarURL,
+  online,
+  userStatus,
   highlighted,
   onHover,
   onSelect,
 }: {
   hit: SearchHit;
   avatarURL?: string;
+  online: boolean;
+  userStatus?: UserStatus | null;
   highlighted: boolean;
   onHover: () => void;
   onSelect: () => void;
@@ -534,13 +546,14 @@ function UserRow({
         highlighted ? 'bg-muted' : ''
       }`}
     >
-      <Avatar className="h-6 w-6 shrink-0">
-        {avatarURL && <AvatarImage src={avatarURL} alt="" />}
-        <AvatarFallback className="text-[10px]">{getInitials(name)}</AvatarFallback>
-      </Avatar>
-      <span className="min-w-0 flex-1 truncate">
-        <span className="font-medium">{name}</span>
-        {email && <span className="ml-2 text-muted-foreground">{email}</span>}
+      <UserAvatar displayName={name} avatarURL={avatarURL} online={online} className="h-6 w-6 shrink-0" dotSize={8} />
+      <span className="flex min-w-0 flex-1 items-center gap-1.5">
+        <span className="truncate font-medium">{name}</span>
+        {/* Custom-status emoji — self-hides when the person has no active
+            status, so rows stay clean. tooltip=false: nesting a TooltipTrigger
+            inside this row button would nest interactive elements. */}
+        <UserStatusIndicator status={userStatus} tooltip={false} className="h-4 w-4" />
+        {email && <span className="truncate text-muted-foreground">{email}</span>}
       </span>
     </button>
   );

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useState, useMemo, useRef, type CSSProperties, type ReactNode } from 'react';
+import { Fragment, useCallback, useEffect, useLayoutEffect, useState, useMemo, useRef, type CSSProperties, type ReactNode } from 'react';
 import { flushSync } from 'react-dom';
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import {
@@ -1142,6 +1142,22 @@ export function Sidebar({ onClose }: SidebarProps) {
     );
   }
 
+  // Live "push-aside" preview: while a channel/DM is dragged, open a
+  // row-height gap at the slot it would land in (WYSIWYG), so the rows below
+  // shift down and it's obvious where a drop will go. It's driven by the same
+  // `dropIndicator` the drop itself uses, so preview == landing spot. Explicit
+  // h-8 (≈ the desktop row box) — drag is desktop-only — keeps the shift from
+  // reflowing; pointer-events-none so it never steals the live drop hitbox.
+  function DropGap({ sectionKey }: { sectionKey: string }) {
+    return (
+      <div
+        data-testid={`sidebar-drop-gap-${sectionKey}`}
+        aria-hidden="true"
+        className="pointer-events-none h-8 rounded-md border border-dashed border-white/25 bg-white/5"
+      />
+    );
+  }
+
   const handleDragStartRef = useRef(handleDragStart);
   const updateResolvedDropRef = useRef(updateResolvedDrop);
   const handleDropRef = useRef(handleDrop);
@@ -1380,6 +1396,13 @@ export function Sidebar({ onClose }: SidebarProps) {
                   })
                 : section.items;
 
+              // The live channel/DM drop target that falls in THIS section (null
+              // otherwise) — drives the push-aside gap below.
+              const channelGap =
+                dropIndicator?.kind === 'channel' && dropIndicator.sectionKey === section.key
+                  ? dropIndicator
+                  : null;
+
               return (
                 <div key={section.key} className="relative mt-2" data-testid={`sidebar-group-${section.key}`}>
                   {(isFavorites || isUserCategory || isChannelsDefault) && (
@@ -1513,9 +1536,14 @@ export function Sidebar({ onClose }: SidebarProps) {
                           : visibleItems
                               .slice(0, index)
                               .filter((candidate) => candidate.kind === 'channel').length;
+                        // Open the push-aside gap just above this row when the
+                        // live drop target resolves to its slot (not the tail).
+                        const showGap =
+                          channelGap != null && channelGap.area !== 'end' && channelGap.index === channelDropIndex;
                         return (
+                          <Fragment key={`ch-${item.channel.channelID}`}>
+                            {showGap && <DropGap sectionKey={section.key} />}
                           <div
-                            key={`ch-${item.channel.channelID}`}
                             className="relative"
                           >
                             <PragmaticChannelRow
@@ -1538,6 +1566,7 @@ export function Sidebar({ onClose }: SidebarProps) {
                               )}
                             </PragmaticChannelRow>
                           </div>
+                          </Fragment>
                         );
                       }
                       const conv = item.conversation;
@@ -1551,8 +1580,14 @@ export function Sidebar({ onClose }: SidebarProps) {
                       const resolvedDMAvatarURL = conv.avatarURL ?? dmAvatarURL;
                       const resolvedDMUserStatus = conv.userStatus ?? dmUserStatus;
                       const dmOnline = otherID ? online.has(otherID) : undefined;
+                      // Favorited DMs are channel-drop targets too; open the gap
+                      // above one when the live target resolves to its slot.
+                      const showConvGap =
+                        channelGap != null && channelGap.area !== 'end' && channelGap.index === conversationDropIndex;
                       return (
-                        <div key={`conv-${conv.conversationID}`} className="relative">
+                        <Fragment key={`conv-${conv.conversationID}`}>
+                          {showConvGap && <DropGap sectionKey={section.key} />}
+                        <div className="relative">
                           {section.key === SidebarSectionKeys.Favorites ? (
                             <PragmaticConversationRow
                               sectionKey={section.key}
@@ -1590,8 +1625,11 @@ export function Sidebar({ onClose }: SidebarProps) {
                             />
                           )}
                         </div>
+                        </Fragment>
                       );
                     })}
+                    {/* Tail gap: drop resolves past the last row (area 'end'). */}
+                    {channelGap != null && channelGap.area === 'end' && <DropGap sectionKey={section.key} />}
                   </div>
                   <PragmaticSection
                     data={{ type: 'channel-target', sectionKey: section.key, index: dropCount(section.key, visibleItems), area: 'end' }}

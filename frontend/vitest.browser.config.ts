@@ -112,6 +112,11 @@ export default defineConfig({
         // exhaustively unit-tested in jsdom (toaster.test.tsx); pulled into the
         // browser graph via App, graded in jsdom.
         'src/components/Toaster.tsx',
+        // Incoming-webhooks admin React-Query hooks — an admin-only page not on
+        // any browser flow; its list/create/update/delete mutations (incl. the
+        // optimistic-delete cache patch + rollback) are exhaustively unit-tested
+        // in jsdom (useWebhooks.test.tsx, incoming-webhooks-page.test.tsx).
+        'src/hooks/useWebhooks.ts',
       ],
       // 99% branch gate over the merged desktop + mobile browser run.
       // vitest enforces it (non-zero exit), so `npm run

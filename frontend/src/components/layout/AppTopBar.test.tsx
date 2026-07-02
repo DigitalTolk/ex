@@ -302,11 +302,12 @@ describe('AppTopBar own custom status', () => {
     mockUserStatus = undefined;
   });
 
-  it('shows the status emoji on the desktop account avatar when set', () => {
+  it('does NOT overlay the custom status on the desktop account avatar (removed — it read as clutter)', () => {
     mockUserStatus = { emoji: '🌴', text: 'On vacation' };
     renderTopBar();
-    const badge = screen.getByLabelText("On vacation, won't clear automatically");
-    expect(screen.getByTestId('topbar-account')).toContainElement(badge);
+    // Only the presence dot rides the avatar now; the status emoji is gone.
+    expect(screen.queryByLabelText("On vacation, won't clear automatically")).toBeNull();
+    expect(screen.getByTestId('topbar-account').querySelector('[data-presence]')).not.toBeNull();
   });
 
   it('renders no status badge when the user has none', () => {
@@ -314,15 +315,14 @@ describe('AppTopBar own custom status', () => {
     expect(screen.queryByLabelText(/won't clear automatically|until /)).toBeNull();
   });
 
-  it('shows the status on the mobile account button and inside the account sheet', () => {
+  it('keeps the status OFF the mobile account button but shows it inside the opened account sheet', () => {
     mockIsMobile = true;
     mockUserStatus = { emoji: '🌴', text: 'On vacation' };
     renderTopBar();
-    const onButton = screen.getByLabelText("On vacation, won't clear automatically");
-    expect(screen.getByTestId('topbar-account')).toContainElement(onButton);
+    // Not overlaid on the avatar button anymore.
+    expect(screen.queryByLabelText("On vacation, won't clear automatically")).toBeNull();
     fireEvent.click(screen.getByTestId('topbar-account'));
-    // Sheet header repeats it next to the display name.
-    const all = screen.getAllByLabelText("On vacation, won't clear automatically");
-    expect(all.length).toBeGreaterThanOrEqual(2);
+    // The sheet header still shows it next to the display name.
+    expect(screen.getByLabelText("On vacation, won't clear automatically")).toBeInTheDocument();
   });
 });

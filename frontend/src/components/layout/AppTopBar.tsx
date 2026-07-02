@@ -265,14 +265,6 @@ export function AppTopBar({ onOpenChannels, channelsButtonHidden }: AppTopBarPro
               {/* The button is 40px around the 32px avatar; inset 4 keeps the
                   dot flush with the avatar's corner (where its notch is). */}
               <PresenceDot online={userOnline} size={10} inset={4} />
-              {/* Own custom status rides the account avatar (self-hides when
-                  none/expired). tooltip=false: a TooltipTrigger inside this
-                  button would nest interactive elements. */}
-              <UserStatusIndicator
-                status={user?.userStatus}
-                tooltip={false}
-                className="absolute -right-1.5 -top-1.5"
-              />
             </button>
           ) : (
             <DropdownMenu modal={false}>
@@ -286,14 +278,6 @@ export function AppTopBar({ onOpenChannels, channelsButtonHidden }: AppTopBarPro
                   <AvatarFallback className="bg-muted text-foreground text-xs">{initials}</AvatarFallback>
                 </Avatar>
                 <PresenceDot online={userOnline} size={10} inset={4} />
-                {/* Own custom status rides the account avatar (self-hides when
-                    none/expired). tooltip=false: the trigger is already a
-                    button, so no nested TooltipTrigger. */}
-                <UserStatusIndicator
-                  status={user?.userStatus}
-                  tooltip={false}
-                  className="absolute -right-1.5 -top-1.5"
-                />
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="w-56">
                 {menuActions.map((action, idx) => {

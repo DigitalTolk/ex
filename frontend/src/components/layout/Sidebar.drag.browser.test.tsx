@@ -407,6 +407,42 @@ describe('Sidebar drag-and-drop monitor callbacks', () => {
     expect(positionOf('ch-general')!).toBeGreaterThan(positionOf('ch-other')!);
   });
 
+  it('opens a push-aside gap at the resolved channel slot during a drag, and clears it on drop', async () => {
+    await render(<Frame />);
+    monitorCallbacks.onDragStart?.(dragSource({ type: 'channel', channel: chan('ch-other') }));
+    monitorCallbacks.onDropTargetChange?.(dropLocation([channelTarget('__channels__', 0)]));
+    // The row-height gap opens above the resolved slot (rows below shift down).
+    await vi.waitFor(() => {
+      expect(document.querySelector('[data-testid="sidebar-drop-gap-__channels__"]')).not.toBeNull();
+    });
+    monitorCallbacks.onDrop?.(dropLocation([channelTarget('__channels__', 0)]));
+    // Drop clears the indicator → the gap collapses (land-in-place).
+    await vi.waitFor(() => {
+      expect(document.querySelector('[data-testid="sidebar-drop-gap-__channels__"]')).toBeNull();
+    });
+  });
+
+  it('opens the tail gap when the drop resolves past the last row (area "end")', async () => {
+    await render(<Frame />);
+    monitorCallbacks.onDragStart?.(dragSource({ type: 'channel', channel: chan('ch-general') }));
+    monitorCallbacks.onDropTargetChange?.(dropLocation([channelTarget('__channels__', 2, 'end')]));
+    await vi.waitFor(() => {
+      expect(document.querySelector('[data-testid="sidebar-drop-gap-__channels__"]')).not.toBeNull();
+    });
+    monitorCallbacks.onDrop?.(dropLocation([channelTarget('__channels__', 2, 'end')]));
+  });
+
+  it('opens the gap on a favorited conversation slot when a DM is dragged onto it', async () => {
+    await render(<Frame />);
+    // conv-fav (Carol) has no sidebarPosition → sorts last in Favorites (index 3).
+    monitorCallbacks.onDragStart?.(dragSource({ type: 'conversation', conversation: conv('conv-fav') }));
+    monitorCallbacks.onDropTargetChange?.(dropLocation([channelTarget('__favorites__', 3)]));
+    await vi.waitFor(() => {
+      expect(document.querySelector('[data-testid="sidebar-drop-gap-__favorites__"]')).not.toBeNull();
+    });
+    monitorCallbacks.onDrop?.(dropLocation([channelTarget('__favorites__', 3)]));
+  });
+
   it('drops a channel into its own single-channel category — dense base step', async () => {
     await render(<Frame />);
     // Drag the only channel in cat-work back into cat-work at index 0. After

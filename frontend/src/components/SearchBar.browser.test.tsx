@@ -41,6 +41,17 @@ vi.mock('@/hooks/useSearch', () => ({
 vi.mock('@/hooks/useUsersBatch', () => ({
   useUsersBatch: (...args: unknown[]) => useUsersBatchMock(...(args as [])),
 }));
+// Presence powers the people-row online/offline dot. Mock it (like the jsdom
+// suite) so the real PresenceContext — which pulls AuthContext + auth-api into
+// the graph past the stubbed `@/lib/api` — stays out of this render.
+const onlineSet = vi.hoisted(() => new Set<string>());
+vi.mock('@/context/PresenceContext', () => ({
+  usePresence: () => ({ online: onlineSet }),
+}));
+// UserStatusIndicator resolves custom emojis via React Query; stub the map.
+vi.mock('@/hooks/useEmoji', () => ({
+  useEmojiMap: () => ({ data: {} }),
+}));
 vi.mock('@/hooks/useDebouncedValue', () => ({
   useDebouncedValue: (v: unknown) => v,
 }));
