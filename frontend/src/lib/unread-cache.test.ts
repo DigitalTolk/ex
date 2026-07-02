@@ -7,6 +7,7 @@ import {
   clearChannelUnreadInCache,
   bumpConversationUnread,
   clearConversationUnreadInCache,
+  touchConversationActivityInCache,
 } from './unread-cache';
 
 function makeQC() {
@@ -73,5 +74,33 @@ describe('unread-cache', () => {
     clearConversationUnreadInCache(qc, 'conv-x');
     expect(qc.getQueryData(queryKeys.userChannels())).toBeUndefined();
     expect(qc.getQueryData(queryKeys.userConversations())).toBeUndefined();
+  });
+});
+
+describe('touchConversationActivityInCache', () => {
+  it('patches the matching row updatedAt in place and reports found', () => {
+    const qc = new QueryClient();
+    qc.setQueryData(queryKeys.userConversations(), [
+      { conversationID: 'c-1', type: 'dm', displayName: 'A', updatedAt: '2026-01-01T00:00:00Z' },
+      { conversationID: 'c-2', type: 'dm', displayName: 'B', updatedAt: '2026-01-02T00:00:00Z' },
+    ]);
+    const found = touchConversationActivityInCache(qc, 'c-1', '2026-07-02T10:00:00Z');
+    expect(found).toBe(true);
+    const rows = qc.getQueryData(queryKeys.userConversations()) as Array<{ conversationID: string; updatedAt?: string }>;
+    expect(rows.find((r) => r.conversationID === 'c-1')?.updatedAt).toBe('2026-07-02T10:00:00Z');
+    expect(rows.find((r) => r.conversationID === 'c-2')?.updatedAt).toBe('2026-01-02T00:00:00Z');
+  });
+
+  it('reports not-found for an unlisted conversation (caller falls back to a refetch)', () => {
+    const qc = new QueryClient();
+    qc.setQueryData(queryKeys.userConversations(), [
+      { conversationID: 'c-1', type: 'dm', displayName: 'A' },
+    ]);
+    expect(touchConversationActivityInCache(qc, 'c-ghost', '2026-07-02T10:00:00Z')).toBe(false);
+  });
+
+  it('reports not-found when the list was never fetched', () => {
+    const qc = new QueryClient();
+    expect(touchConversationActivityInCache(qc, 'c-1', '2026-07-02T10:00:00Z')).toBe(false);
   });
 });

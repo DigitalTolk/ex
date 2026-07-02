@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render } from 'vitest-browser-react';
 import { MemoryRouter } from 'react-router-dom';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AppTopBar } from './AppTopBar';
 
 // Browser-gate coverage for AppTopBar. The jsdom AppTopBar.test.tsx exercises
@@ -36,7 +37,14 @@ vi.mock('@/lib/capacitor', () => ({ getCapacitorPlugin: () => null, isNativePlat
 vi.mock('@/hooks/useIsMobile', () => ({ useIsMobile: () => false }));
 
 function renderTopBar(ui = <AppTopBar />) {
-  return render(<MemoryRouter>{ui}</MemoryRouter>);
+  // The account avatar's UserStatusIndicator resolves custom emoji through a
+  // react-query hook, so the tree needs a provider.
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(
+    <QueryClientProvider client={qc}>
+      <MemoryRouter>{ui}</MemoryRouter>
+    </QueryClientProvider>,
+  );
 }
 
 describe('AppTopBar (browser)', () => {

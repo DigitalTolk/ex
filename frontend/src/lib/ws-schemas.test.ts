@@ -9,6 +9,7 @@ import {
   parseServerVersion,
   parseThreadUpdated,
   parseTyping,
+  parseUserChannelUpdated,
   parseUserUpdated,
 } from './ws-schemas';
 
@@ -161,5 +162,29 @@ describe('event payload parsers', () => {
     expect(parseThreadUpdated({ ...base, threadRootID: '' })).toBeNull();
     expect(parseThreadUpdated({ ...base, parentType: 'nope' })).toBeNull();
     expect(parseThreadUpdated({ ...base, replyCount: 'x' })).toBeNull();
+  });
+});
+
+describe('parseUserChannelUpdated', () => {
+  it('accepts every publisher shape (all fields optional)', () => {
+    expect(parseUserChannelUpdated({ conversationID: 'c-1', updatedAt: '2026-07-02T10:00:00Z' })).toEqual(
+      expect.objectContaining({ conversationID: 'c-1', updatedAt: '2026-07-02T10:00:00Z' }),
+    );
+    expect(parseUserChannelUpdated({ channelID: 'ch-1' })).toEqual(expect.objectContaining({ channelID: 'ch-1' }));
+    expect(parseUserChannelUpdated({ userState: true })).toEqual(expect.objectContaining({ userState: true }));
+    expect(parseUserChannelUpdated({ userID: 'u-1', categories: true })).toEqual(
+      expect.objectContaining({ categories: true }),
+    );
+    expect(parseUserChannelUpdated({ channelID: 'ch-1', userID: 'u-1', favorite: false })).toEqual(
+      expect.objectContaining({ favorite: false }),
+    );
+    expect(parseUserChannelUpdated({})).toEqual({});
+  });
+
+  it('rejects non-object and wrongly-typed payloads', () => {
+    expect(parseUserChannelUpdated(undefined)).toBeNull();
+    expect(parseUserChannelUpdated('nope')).toBeNull();
+    expect(parseUserChannelUpdated({ channelID: 42 })).toBeNull();
+    expect(parseUserChannelUpdated({ channelID: '' })).toBeNull();
   });
 });

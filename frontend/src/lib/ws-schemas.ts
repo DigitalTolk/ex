@@ -115,6 +115,38 @@ export interface UserUpdatedPayload {
 }
 export const parseUserUpdated = parser(userUpdatedSchema);
 
+// `userchannel.updated` multiplexes several per-user sidebar-state changes
+// over one event type; the payload KEYS identify which change happened
+// (conversation activity touch, mark-read, favorite, category move,
+// notification prefs, category CRUD, user-state). Every field is optional
+// so each publisher's shape validates; ChatPage dispatches on presence.
+const userChannelUpdatedSchema = z.object({
+  channelID: z.string().min(1).optional(),
+  conversationID: z.string().min(1).optional(),
+  updatedAt: z.string().optional(),
+  favorite: z.boolean().optional(),
+  categoryID: z.string().optional(),
+  sidebarPosition: z.number().optional(),
+  notificationPrefs: z.unknown().optional(),
+  categories: z.boolean().optional(),
+  userState: z.boolean().optional(),
+}).passthrough();
+
+export interface UserChannelUpdatedPayload {
+  channelID?: string;
+  conversationID?: string;
+  updatedAt?: string;
+  favorite?: boolean;
+  categoryID?: string;
+  sidebarPosition?: number;
+  notificationPrefs?: unknown;
+  categories?: boolean;
+  userState?: boolean;
+}
+export const parseUserChannelUpdated = parser(userChannelUpdatedSchema) as (
+  v: unknown,
+) => UserChannelUpdatedPayload | null;
+
 export interface ThreadUpdatedPayload {
   parentID: string;
   parentType: 'channel' | 'conversation';

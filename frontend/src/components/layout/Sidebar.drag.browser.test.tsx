@@ -158,6 +158,7 @@ vi.mock('@/hooks/useUserState', () => ({
 }));
 
 vi.mock('@/hooks/useDrafts', () => ({
+  markLocalDraftClearForSend: vi.fn(),
   useDrafts: () => ({ data: [] }),
 }));
 

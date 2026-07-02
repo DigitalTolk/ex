@@ -29,6 +29,12 @@ vi.mock('@/hooks/useIsMobile', () => ({ useIsMobile: () => false }));
 
 let mockNative = false;
 const resetServer = vi.fn();
+// The real UserStatusIndicator renders when the mocked user has a status;
+// its emoji-map hook is react-query-backed, so stub it (no provider here).
+vi.mock('@/hooks/useEmoji', () => ({
+  useEmojiMap: () => ({ data: {} }),
+}));
+
 vi.mock('@/lib/capacitor', () => ({
   isNativePlatform: () => mockNative,
   getCapacitorPlugin: (name: string) => (name === 'ServerNavigation' && mockNative ? { resetServer } : null),

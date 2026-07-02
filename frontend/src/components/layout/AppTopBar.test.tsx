@@ -68,6 +68,12 @@ vi.mock('@/hooks/useIsMobile', () => ({
   useIsMobile: () => mockIsMobile,
 }));
 
+// The real UserStatusIndicator renders in these tests; its emoji map hook
+// is react-query-backed, so stub it to an empty custom-emoji map.
+vi.mock('@/hooks/useEmoji', () => ({
+  useEmojiMap: () => ({ data: {} }),
+}));
+
 function renderTopBar(ui?: ReactNode) {
   return render(<MemoryRouter>{ui ?? <AppTopBar />}</MemoryRouter>);
 }
@@ -277,5 +283,36 @@ describe('AppTopBar', () => {
       });
       expect(logout).toHaveBeenCalled();
     });
+  });
+});
+
+describe('AppTopBar own custom status', () => {
+  beforeEach(() => {
+    mockIsMobile = false;
+    mockUserStatus = undefined;
+  });
+
+  it('shows the status emoji on the desktop account avatar when set', () => {
+    mockUserStatus = { emoji: '🌴', text: 'On vacation' };
+    renderTopBar();
+    const badge = screen.getByLabelText("On vacation, won't clear automatically");
+    expect(screen.getByTestId('topbar-account')).toContainElement(badge);
+  });
+
+  it('renders no status badge when the user has none', () => {
+    renderTopBar();
+    expect(screen.queryByLabelText(/won't clear automatically|until /)).toBeNull();
+  });
+
+  it('shows the status on the mobile account button and inside the account sheet', () => {
+    mockIsMobile = true;
+    mockUserStatus = { emoji: '🌴', text: 'On vacation' };
+    renderTopBar();
+    const onButton = screen.getByLabelText("On vacation, won't clear automatically");
+    expect(screen.getByTestId('topbar-account')).toContainElement(onButton);
+    fireEvent.click(screen.getByTestId('topbar-account'));
+    // Sheet header repeats it next to the display name.
+    const all = screen.getAllByLabelText("On vacation, won't clear automatically");
+    expect(all.length).toBeGreaterThanOrEqual(2);
   });
 });

@@ -67,6 +67,16 @@ function markLocalDraftDelete() {
   ignoreDraftEventsUntil = Date.now() + LOCAL_DRAFT_EVENT_IGNORE_MS;
 }
 
+// markLocalDraftClearForSend arms the same "ignore our own draft.updated
+// echo" window the draft mutations use. Called by useSendMessage at MUTATE
+// time: the server folds the draft-clear into message creation and
+// publishes the echo while the POST is still in flight, so arming the
+// window in the views' onSuccess clearDraftMutate was too late — the echo
+// raced it and triggered a full /drafts refetch on every send.
+export function markLocalDraftClearForSend() {
+  markLocalDraftDelete();
+}
+
 export function shouldRefetchDraftsForRemoteUpdate(): boolean {
   return Date.now() >= ignoreDraftEventsUntil;
 }

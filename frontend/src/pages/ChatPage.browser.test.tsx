@@ -27,16 +27,22 @@ const mockUnhideConversation = vi.fn();
 const {
   bumpChannelUnread: mockBumpChannelUnread,
   bumpConversationUnread: mockBumpConversationUnread,
+  clearChannelUnreadInCache: mockClearChannelUnreadInCache,
   clearConversationUnreadInCache: mockClearConversationUnreadInCache,
+  touchConversationActivityInCache: mockTouchConversationActivity,
 } = vi.hoisted(() => ({
   bumpChannelUnread: vi.fn(),
   bumpConversationUnread: vi.fn(),
+  clearChannelUnreadInCache: vi.fn(),
   clearConversationUnreadInCache: vi.fn(),
+  touchConversationActivityInCache: vi.fn(() => true),
 }));
 vi.mock('@/lib/unread-cache', () => ({
   bumpChannelUnread: mockBumpChannelUnread,
   bumpConversationUnread: mockBumpConversationUnread,
+  clearChannelUnreadInCache: mockClearChannelUnreadInCache,
   clearConversationUnreadInCache: mockClearConversationUnreadInCache,
+  touchConversationActivityInCache: mockTouchConversationActivity,
 }));
 
 vi.mock('@/context/UnreadContext', () => ({
@@ -140,13 +146,17 @@ async function renderChatPage(initialPath = '/') {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   qc.setQueryData(['userChannels'], [{ channelID: 'ch-99', channelName: 'general' }]);
   qc.setQueryData(['userConversations'], [{ conversationID: 'conv-1' }]);
-  return render(
+  const screen = await render(
     <QueryClientProvider client={qc}>
       <MemoryRouter initialEntries={[initialPath]}>
         <ChatPage />
       </MemoryRouter>
     </QueryClientProvider>,
   );
+  // Expose the query client so handler tests can spy on invalidations.
+  // (render() resolves to the screen; assign AFTER awaiting so the extra
+  // key survives the caller's own await.)
+  return Object.assign(screen, { qc });
 }
 
 type WsHandlers = Record<string, ((data?: unknown) => void) | undefined>;
@@ -171,6 +181,10 @@ describe('ChatPage WS router (browser)', () => {
     mockUseWebSocket.mockClear();
     mockBumpChannelUnread.mockClear();
     mockBumpConversationUnread.mockClear();
+    mockClearChannelUnreadInCache.mockClear();
+    mockClearConversationUnreadInCache.mockClear();
+    mockTouchConversationActivity.mockClear();
+    mockTouchConversationActivity.mockImplementation(() => true);
     mockUnhideConversation.mockClear();
     mockDispatchNotification.mockClear();
     mockRecordTyping.mockClear();
@@ -337,6 +351,92 @@ describe('ChatPage WS router (browser)', () => {
     await renderChatPage();
     expect(() => lastHandlers().onUserUpdated?.({ id: 'u-2', displayName: 'Carol' })).not.toThrow();
     expect(() => lastHandlers().onUserChannelUpdated?.({ channelID: 'ch-99' })).not.toThrow();
+  });
+
+  // userchannel.updated is dispatched by payload — the old handler blanket-
+  // invalidated four list queries on every event, which made EVERY
+  // conversation send cost four refetches (the backend fans an activity
+  // touch to all participants, including the author).
+  describe('onUserChannelUpdated payload dispatch', () => {
+    it('conversation activity patches updatedAt in place — no refetches', async () => {
+      const { qc } = await renderChatPage();
+      const spy = vi.spyOn(qc, 'invalidateQueries');
+      lastHandlers().onUserChannelUpdated?.({ conversationID: 'conv-1', updatedAt: '2026-07-02T10:00:00Z' });
+      expect(mockTouchConversationActivity).toHaveBeenCalledWith(expect.anything(), 'conv-1', '2026-07-02T10:00:00Z');
+      expect(spy).not.toHaveBeenCalled();
+    });
+
+    it('conversation activity falls back to one targeted refetch when the row is not cached', async () => {
+      mockTouchConversationActivity.mockImplementation(() => false);
+      const { qc } = await renderChatPage();
+      const spy = vi.spyOn(qc, 'invalidateQueries');
+      lastHandlers().onUserChannelUpdated?.({ conversationID: 'conv-new', updatedAt: '2026-07-02T10:00:00Z' });
+      const keys = spy.mock.calls.map((c) => (c[0] as { queryKey?: unknown[] }).queryKey);
+      expect(keys).toEqual([['userConversations']]);
+    });
+
+    it('bare channelID (mark-read echo from another tab) clears the badge in place', async () => {
+      const { qc } = await renderChatPage();
+      const spy = vi.spyOn(qc, 'invalidateQueries');
+      lastHandlers().onUserChannelUpdated?.({ channelID: 'ch-99' });
+      expect(mockClearChannelUnreadInCache).toHaveBeenCalledWith(expect.anything(), 'ch-99');
+      expect(spy).not.toHaveBeenCalled();
+    });
+
+    it('bare conversationID clears the conversation badge in place', async () => {
+      const { qc } = await renderChatPage();
+      const spy = vi.spyOn(qc, 'invalidateQueries');
+      lastHandlers().onUserChannelUpdated?.({ conversationID: 'conv-1' });
+      expect(mockClearConversationUnreadInCache).toHaveBeenCalledWith(expect.anything(), 'conv-1');
+      expect(spy).not.toHaveBeenCalled();
+    });
+
+    it('userState-only events refetch only user-state', async () => {
+      const { qc } = await renderChatPage();
+      const spy = vi.spyOn(qc, 'invalidateQueries');
+      lastHandlers().onUserChannelUpdated?.({ userState: true });
+      const keys = spy.mock.calls.map((c) => (c[0] as { queryKey?: unknown[] }).queryKey);
+      expect(keys).toEqual([['userState']]);
+    });
+
+    it('a favorite toggle refetches only the affected list', async () => {
+      const { qc } = await renderChatPage();
+      const spy = vi.spyOn(qc, 'invalidateQueries');
+      lastHandlers().onUserChannelUpdated?.({ channelID: 'ch-99', userID: 'u-1', favorite: true });
+      const keys = spy.mock.calls.map((c) => (c[0] as { queryKey?: unknown[] }).queryKey);
+      expect(keys).toEqual([['userChannels']]);
+    });
+
+    it('a category move refetches the affected list plus categories', async () => {
+      const { qc } = await renderChatPage();
+      const spy = vi.spyOn(qc, 'invalidateQueries');
+      lastHandlers().onUserChannelUpdated?.({ conversationID: 'conv-1', userID: 'u-1', categoryID: 'cat-1' });
+      const keys = spy.mock.calls.map((c) => (c[0] as { queryKey?: unknown[] }).queryKey);
+      expect(keys).toContainEqual(['userConversations']);
+      expect(keys).toContainEqual(['sidebarCategories']);
+      expect(keys).toHaveLength(2);
+    });
+
+    it('category CRUD refetches the grouping inputs', async () => {
+      const { qc } = await renderChatPage();
+      const spy = vi.spyOn(qc, 'invalidateQueries');
+      lastHandlers().onUserChannelUpdated?.({ userID: 'u-1', categories: true });
+      const keys = spy.mock.calls.map((c) => (c[0] as { queryKey?: unknown[] }).queryKey);
+      expect(keys).toContainEqual(['sidebarCategories']);
+      expect(keys).toContainEqual(['userChannels']);
+      expect(keys).toContainEqual(['userConversations']);
+    });
+
+    it('an empty/unknown payload falls back to the blanket refresh', async () => {
+      const { qc } = await renderChatPage();
+      const spy = vi.spyOn(qc, 'invalidateQueries');
+      lastHandlers().onUserChannelUpdated?.({});
+      const keys = spy.mock.calls.map((c) => (c[0] as { queryKey?: unknown[] }).queryKey);
+      expect(keys).toContainEqual(['userChannels']);
+      expect(keys).toContainEqual(['userConversations']);
+      expect(keys).toContainEqual(['sidebarCategories']);
+      expect(keys).toContainEqual(['userState']);
+    });
   });
 
   it('onAttachmentDeleted / onChannelMuted never throw', async () => {

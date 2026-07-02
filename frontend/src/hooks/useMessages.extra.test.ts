@@ -15,6 +15,7 @@ vi.mock('@/lib/api', () => ({
 }));
 
 import { apiFetch } from '@/lib/api';
+import { resetDraftSessionState, shouldRefetchDraftsForRemoteUpdate } from './useDrafts';
 
 function createWrapper() {
   const queryClient = new QueryClient({
@@ -172,6 +173,28 @@ describe('useSendChannelMessage', () => {
 
     const keys = spy.mock.calls.map((c) => (c[0] as { queryKey?: unknown[] }).queryKey);
     expect(keys).not.toContainEqual(['userThreads']);
+  });
+
+  it('arms the drafts-echo ignore window at MUTATE time, before the POST resolves', async () => {
+    // The server folds the draft-clear into message creation and publishes
+    // draft.updated while the POST is still in flight. Arming the window in
+    // the views' onSuccess was too late — the echo raced it and every send
+    // triggered a full /drafts refetch.
+    resetDraftSessionState();
+    expect(shouldRefetchDraftsForRemoteUpdate()).toBe(true);
+    const msg = { id: 'msg-w', parentID: 'ch-1', authorID: 'u-1', body: 'hi', createdAt: '' };
+    vi.mocked(apiFetch).mockResolvedValue(msg);
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper = ({ children }: { children: ReactNode }) =>
+      createElement(QueryClientProvider, { client: queryClient }, children);
+    const { result } = renderHook(() => useSendChannelMessage('ch-1'), { wrapper });
+    try {
+      result.current.mutate({ body: 'hi', attachmentIDs: [] });
+      expect(shouldRefetchDraftsForRemoteUpdate()).toBe(false);
+      await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    } finally {
+      resetDraftSessionState();
+    }
   });
 });
 

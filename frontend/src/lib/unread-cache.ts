@@ -39,3 +39,28 @@ export function bumpConversationUnread(qc: QueryClient, conversationID: string) 
 export function clearConversationUnreadInCache(qc: QueryClient, conversationID: string) {
   patchConversation(qc, conversationID, (c) => ({ ...c, unread: false, unreadCount: 0 }));
 }
+
+/**
+ * A new top-level message re-ordered this conversation: patch the row's
+ * updatedAt in place (the sidebar sorts on it) instead of refetching the
+ * whole list — a send used to trigger a four-query refetch burst via a
+ * blanket-invalidating userchannel.updated handler. Returns false when the
+ * row isn't cached (e.g. a just-activated conversation) so the caller can
+ * fall back to a refetch.
+ */
+export function touchConversationActivityInCache(
+  qc: QueryClient,
+  conversationID: string,
+  updatedAt: string,
+): boolean {
+  const prev = qc.getQueryData<UserConversation[]>(queryKeys.userConversations());
+  if (!prev) return false;
+  let found = false;
+  const next = prev.map((c) => {
+    if (c.conversationID !== conversationID) return c;
+    found = true;
+    return { ...c, updatedAt };
+  });
+  if (found) qc.setQueryData<UserConversation[]>(queryKeys.userConversations(), next);
+  return found;
+}

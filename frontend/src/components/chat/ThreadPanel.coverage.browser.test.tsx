@@ -130,6 +130,7 @@ const restoreDraftScopeForContentMock = vi.fn();
 const suppressSentDraftMock = vi.fn();
 const restoreDraftScopeMock = vi.fn();
 vi.mock('@/hooks/useDrafts', () => ({
+  markLocalDraftClearForSend: vi.fn(),
   useDraftForScope: () => draftState,
   useDraftAttachmentChips: () => [],
   useSaveDraft: () => ({ mutate: saveDraftMutate }),

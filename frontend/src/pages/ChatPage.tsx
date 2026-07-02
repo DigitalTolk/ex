@@ -35,13 +35,16 @@ import {
   parseServerVersion,
   parseThreadUpdated,
   parseTyping,
+  parseUserChannelUpdated,
   parseUserUpdated,
 } from '@/lib/ws-schemas';
 import { apiFetch } from '@/lib/api';
 import {
   bumpChannelUnread,
   bumpConversationUnread,
+  clearChannelUnreadInCache,
   clearConversationUnreadInCache,
+  touchConversationActivityInCache,
 } from '@/lib/unread-cache';
 import { shouldRefetchDraftsForRemoteUpdate, useDrafts } from '@/hooks/useDrafts';
 import { useUserChannels } from '@/hooks/useChannels';
@@ -346,11 +349,71 @@ export default function ChatPage() {
       // — broadcast a DOM event the page listens to and refetches on.
       window.dispatchEvent(new CustomEvent('ex:user-updated'));
     },
-    onUserChannelUpdated: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.userChannels() });
-      queryClient.invalidateQueries({ queryKey: queryKeys.userConversations() });
-      queryClient.invalidateQueries({ queryKey: queryKeys.sidebarCategories() });
-      queryClient.invalidateQueries({ queryKey: queryKeys.userState() });
+    onUserChannelUpdated: (data: unknown) => {
+      // userchannel.updated multiplexes several per-user sidebar changes;
+      // dispatch on the payload instead of blanket-invalidating four
+      // queries. That blanket refetch ran on EVERY conversation send (the
+      // backend fans an activity touch to all participants, including the
+      // author), so each sent DM cost four extra list fetches.
+      const evt = parseUserChannelUpdated(data);
+      const blanketRefresh = () => {
+        queryClient.invalidateQueries({ queryKey: queryKeys.userChannels() });
+        queryClient.invalidateQueries({ queryKey: queryKeys.userConversations() });
+        queryClient.invalidateQueries({ queryKey: queryKeys.sidebarCategories() });
+        queryClient.invalidateQueries({ queryKey: queryKeys.userState() });
+      };
+      if (!evt) {
+        // Unparseable/legacy payload — the old blanket refresh is the safe floor.
+        blanketRefresh();
+        return;
+      }
+      if (evt.conversationID && evt.updatedAt !== undefined) {
+        // Top-level message activity: bump the row's updatedAt in place so
+        // the sidebar re-sorts. A missing row (just-activated conversation
+        // not yet listed) falls back to one targeted refetch.
+        if (!touchConversationActivityInCache(queryClient, evt.conversationID, evt.updatedAt)) {
+          queryClient.invalidateQueries({ queryKey: queryKeys.userConversations() });
+        }
+        return;
+      }
+      if (evt.userState) {
+        queryClient.invalidateQueries({ queryKey: queryKeys.userState() });
+        return;
+      }
+      if (evt.categories) {
+        // Category CRUD re-buckets rows; refetch the grouping inputs.
+        queryClient.invalidateQueries({ queryKey: queryKeys.sidebarCategories() });
+        queryClient.invalidateQueries({ queryKey: queryKeys.userChannels() });
+        queryClient.invalidateQueries({ queryKey: queryKeys.userConversations() });
+        return;
+      }
+      if (
+        evt.favorite !== undefined ||
+        evt.categoryID !== undefined ||
+        evt.sidebarPosition !== undefined ||
+        evt.notificationPrefs !== undefined
+      ) {
+        // Row-level preference change (rare, user-initiated): refetch the
+        // affected list; category/position moves also re-bucket.
+        queryClient.invalidateQueries({
+          queryKey: evt.channelID ? queryKeys.userChannels() : queryKeys.userConversations(),
+        });
+        if (evt.categoryID !== undefined || evt.sidebarPosition !== undefined) {
+          queryClient.invalidateQueries({ queryKey: queryKeys.sidebarCategories() });
+        }
+        return;
+      }
+      if (evt.channelID) {
+        // Bare {channelID}: the user read this channel in another tab —
+        // clear the badge in place, no refetch.
+        clearChannelUnreadInCache(queryClient, evt.channelID);
+        return;
+      }
+      if (evt.conversationID) {
+        clearConversationUnreadInCache(queryClient, evt.conversationID);
+        return;
+      }
+      blanketRefresh();
     },
     onAttachmentDeleted: (data: unknown) => {
       const evt = parseAttachmentDeleted(data);

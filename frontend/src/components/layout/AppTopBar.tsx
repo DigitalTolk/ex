@@ -33,6 +33,7 @@ import { getCapacitorPlugin, isNativePlatform } from '@/lib/capacitor';
 import { EditProfileDialog } from '@/components/EditProfileDialog';
 import { NotificationSettingsDialog } from '@/components/NotificationSettingsDialog';
 import { UserStatusDialog } from '@/components/UserStatusDialog';
+import { UserStatusIndicator } from '@/components/UserStatusIndicator';
 import { AboutDialog } from '@/components/AboutDialog';
 import { InviteDialog } from '@/components/InviteDialog';
 
@@ -263,6 +264,14 @@ export function AppTopBar({ onOpenChannels, channelsButtonHidden }: AppTopBarPro
                 aria-hidden
                 className={`absolute bottom-0 right-0 h-2.5 w-2.5 rounded-full border-2 border-sidebar ${userOnline ? 'bg-online' : 'bg-muted-foreground'}`}
               />
+              {/* Own custom status rides the account avatar (self-hides when
+                  none/expired). tooltip=false: a TooltipTrigger inside this
+                  button would nest interactive elements. */}
+              <UserStatusIndicator
+                status={user?.userStatus}
+                tooltip={false}
+                className="absolute -right-1.5 -top-1.5"
+              />
             </button>
           ) : (
             <DropdownMenu modal={false}>
@@ -278,6 +287,14 @@ export function AppTopBar({ onOpenChannels, channelsButtonHidden }: AppTopBarPro
                 <span
                   aria-hidden
                   className={`absolute bottom-0 right-0 h-2.5 w-2.5 rounded-full border-2 border-sidebar ${userOnline ? 'bg-online' : 'bg-muted-foreground'}`}
+                />
+                {/* Own custom status rides the account avatar (self-hides when
+                    none/expired). tooltip=false: the trigger is already a
+                    button, so no nested TooltipTrigger. */}
+                <UserStatusIndicator
+                  status={user?.userStatus}
+                  tooltip={false}
+                  className="absolute -right-1.5 -top-1.5"
                 />
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="w-56">
@@ -317,7 +334,10 @@ export function AppTopBar({ onOpenChannels, channelsButtonHidden }: AppTopBarPro
               <AvatarFallback className="bg-muted text-foreground text-sm">{initials}</AvatarFallback>
             </Avatar>
             <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-semibold">{user?.displayName}</p>
+              <p className="truncate text-sm font-semibold">
+                {user?.displayName}
+                <UserStatusIndicator status={user?.userStatus} tooltip={false} className="ml-1" />
+              </p>
               <p className="truncate text-xs text-muted-foreground">{user?.email}</p>
             </div>
           </div>

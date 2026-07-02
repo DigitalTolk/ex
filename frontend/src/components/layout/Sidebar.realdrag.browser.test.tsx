@@ -96,7 +96,8 @@ vi.mock('@/hooks/useUserState', () => ({
     data: { hiddenConversations: [], channelNotifications: [], threadNotifications: [], threadSeen: {} },
   }),
 }));
-vi.mock('@/hooks/useDrafts', () => ({ useDrafts: () => ({ data: [] }) }));
+vi.mock('@/hooks/useDrafts', () => ({
+  markLocalDraftClearForSend: vi.fn(), useDrafts: () => ({ data: [] }) }));
 vi.mock('@/hooks/useUsersBatch', () => ({ useUsersBatch: () => ({ map: new Map() }) }));
 vi.mock('@/hooks/useSidebar', () => ({
   useCategories: () => ({ data: makeCategories() }),

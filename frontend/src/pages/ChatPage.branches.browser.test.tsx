@@ -32,7 +32,9 @@ const {
 vi.mock('@/lib/unread-cache', () => ({
   bumpChannelUnread: mockBumpChannelUnread,
   bumpConversationUnread: mockBumpConversationUnread,
+  clearChannelUnreadInCache: vi.fn(),
   clearConversationUnreadInCache: mockClearConversationUnreadInCache,
+  touchConversationActivityInCache: vi.fn(() => true),
 }));
 const isActiveConversationMock = vi.fn(() => true);
 const isActiveChannelMock = vi.fn(() => false);

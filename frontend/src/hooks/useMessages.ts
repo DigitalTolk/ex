@@ -8,6 +8,7 @@ import {
 } from '@tanstack/react-query';
 import { apiFetch } from '@/lib/api';
 import { queryKeys, parentPath } from '@/lib/query-keys';
+import { markLocalDraftClearForSend } from '@/hooks/useDrafts';
 import type { Message } from '@/types';
 
 export interface MessageWindow {
@@ -387,6 +388,13 @@ export function useSendMessage(scope: SendMessageScope) {
           clientTs: Date.now(),
         }),
       }),
+    // The server folds the draft-clear for this scope into the send and
+    // publishes a draft.updated echo while the POST is still in flight —
+    // arm the ignore window NOW so that echo doesn't refetch /drafts on
+    // every message sent (other tabs still refetch and clear their composer).
+    onMutate: () => {
+      markLocalDraftClearForSend();
+    },
     onSuccess: (data, input) => {
       const parentID = channelId ?? conversationId;
       // Sender sees their post immediately. Top-level posts append to the
