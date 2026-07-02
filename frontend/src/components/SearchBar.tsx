@@ -5,9 +5,15 @@ import { useChannelBySlug, useUserChannels } from '@/hooks/useChannels';
 import { useUserConversations, useCreateConversation } from '@/hooks/useConversations';
 import { useSearchUsers, useSearchChannels, type SearchHit } from '@/hooks/useSearch';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
-import { Avatar, AvatarFallback } from '@/components/ui/avatar';
+import { useUsersBatch } from '@/hooks/useUsersBatch';
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { ChannelIcon } from '@/components/ChannelIcon';
 import { getInitials } from '@/lib/format';
+import { searchShortcutLabel } from '@/lib/platform';
+
+// ⌘K on Apple platforms, Ctrl K elsewhere. Computed once from the UA; the keydown
+// handler accepts either modifier — this only drives the visible hint.
+const SEARCH_SHORTCUT_HINT = searchShortcutLabel(navigator.userAgent);
 
 type ScopeKind = 'channel' | 'dm' | 'group';
 
@@ -73,6 +79,11 @@ export function SearchBar() {
   const channelsQuery = useSearchChannels(debouncedQ, searchEnabled, 5);
   const userHits = useMemo(() => usersQuery.data?.hits ?? [], [usersQuery.data]);
   const channelHits = useMemo(() => channelsQuery.data?.hits ?? [], [channelsQuery.data]);
+  // The search index can't store avatar URLs (they're short-lived presigned S3
+  // links), so resolve fresh avatars for the people hits via the batch endpoint
+  // (same pattern as the mention list / activity feed).
+  const userHitIDs = useMemo(() => userHits.map((h) => h.id), [userHits]);
+  const { map: userAvatarMap } = useUsersBatch(userHitIDs);
   const searching = searchEnabled && (usersQuery.isLoading || channelsQuery.isLoading);
 
   const createConv = useCreateConversation();
@@ -231,11 +242,23 @@ export function SearchBar() {
             }}
             placeholder="Search for anything"
             aria-label="Search"
+            // Suppress native browser autofill / password-manager / spellcheck
+            // overlays — this is our own autocomplete, so a system dropdown on
+            // top of it is just noise. type="text" (not "search") avoids the
+            // browser's search-history popup too.
+            type="text"
+            autoComplete="off"
+            autoCorrect="off"
+            autoCapitalize="off"
+            spellCheck={false}
+            data-1p-ignore
+            data-lpignore="true"
+            data-form-type="other"
             className="flex-1 bg-transparent text-sm text-foreground placeholder:text-muted-foreground focus:outline-none max-md:text-base"
             data-testid="searchbar-input"
           />
           <kbd className="hidden items-center gap-0.5 rounded border border-border-strong px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground md:inline-flex">
-            ⌘K
+            {SEARCH_SHORTCUT_HINT}
           </kbd>
           {q && (
             <button
@@ -253,7 +276,10 @@ export function SearchBar() {
         <div
           role="listbox"
           data-testid="searchbar-dropdown"
-          className="absolute left-0 right-0 top-full z-40 mt-1 max-h-[70vh] overflow-y-auto rounded-md border bg-popover text-popover-foreground shadow-lg"
+          // Match the focus-expanded input width: the input row widens by -mx-2
+          // on md+ while focused, and the dropdown only ever shows while focused,
+          // so mirror that same negative margin here so their edges line up.
+          className="absolute left-0 right-0 top-full z-40 mt-1 max-h-[70vh] overflow-y-auto rounded-md border bg-popover text-popover-foreground shadow-lg md:-mx-2"
         >
           {channelHits.length > 0 && (
             <div role="group" aria-label="Channels">
@@ -287,6 +313,7 @@ export function SearchBar() {
                   <UserRow
                     key={hit.id}
                     hit={hit}
+                    avatarURL={userAvatarMap.get(hit.id)?.avatarURL}
                     highlighted={flatIndex === safeHighlight}
                     onHover={() => setHighlight(flatIndex)}
                     onSelect={() => activate(flatIndex)}
@@ -427,11 +454,13 @@ function ChannelRow({
 
 function UserRow({
   hit,
+  avatarURL,
   highlighted,
   onHover,
   onSelect,
 }: {
   hit: SearchHit;
+  avatarURL?: string;
   highlighted: boolean;
   onHover: () => void;
   onSelect: () => void;
@@ -450,6 +479,7 @@ function UserRow({
       }`}
     >
       <Avatar className="h-6 w-6 shrink-0">
+        {avatarURL && <AvatarImage src={avatarURL} alt="" />}
         <AvatarFallback className="text-[10px]">{getInitials(name)}</AvatarFallback>
       </Avatar>
       <span className="min-w-0 flex-1 truncate">

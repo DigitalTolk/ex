@@ -14,6 +14,9 @@ const useSearchUsersMock = vi.hoisted(() =>
 const useSearchChannelsMock = vi.hoisted(() =>
   vi.fn(() => ({ data: { hits: [] as unknown[] }, isLoading: false })),
 );
+const useUsersBatchMock = vi.hoisted(() =>
+  vi.fn(() => ({ map: new Map<string, { avatarURL?: string }>(), isLoading: false })),
+);
 
 vi.mock('@/hooks/useChannels', () => ({
   useChannelBySlug: (slug?: string) => useChannelBySlugMock(slug as never),
@@ -26,6 +29,9 @@ vi.mock('@/hooks/useConversations', () => ({
 vi.mock('@/hooks/useSearch', () => ({
   useSearchUsers: (...args: unknown[]) => useSearchUsersMock(...(args as [])),
   useSearchChannels: (...args: unknown[]) => useSearchChannelsMock(...(args as [])),
+}));
+vi.mock('@/hooks/useUsersBatch', () => ({
+  useUsersBatch: (...args: unknown[]) => useUsersBatchMock(...(args as [])),
 }));
 // Debounce is identity in tests so search results appear synchronously.
 vi.mock('@/hooks/useDebouncedValue', () => ({
@@ -56,6 +62,7 @@ beforeEach(() => {
   useUserConversationsMock.mockReturnValue({ data: [] });
   useSearchUsersMock.mockReturnValue({ data: { hits: [] }, isLoading: false });
   useSearchChannelsMock.mockReturnValue({ data: { hits: [] }, isLoading: false });
+  useUsersBatchMock.mockReturnValue({ map: new Map(), isLoading: false });
   createConvMutate.mockReset();
   lastLocation = { pathname: '/', search: '' };
 });
@@ -211,6 +218,25 @@ describe('SearchBar', () => {
       expect(screen.getByTestId('searchbar-user-u-1').getAttribute('aria-selected')).toBe('true');
       fireEvent.mouseEnter(screen.getByTestId('searchbar-channel-ch-1'));
       expect(screen.getByTestId('searchbar-channel-ch-1').getAttribute('aria-selected')).toBe('true');
+    });
+
+    it('renders the people row with a batch-resolved avatar (fresh presigned URL, not from the index)', () => {
+      useSearchUsersMock.mockReturnValue({
+        data: { hits: [{ id: 'u-1', score: 1, _source: { displayName: 'Alice', email: 'alice@x.io' } }] },
+        isLoading: false,
+      });
+      // The search index has no avatar URL; useUsersBatch supplies the fresh one,
+      // exercising the AvatarImage branch. Base UI's AvatarImage only paints the
+      // <img> once it loads (not in jsdom), so the real <img src> assertion lives
+      // in the browser test; here we just cover the avatar-provided render path.
+      useUsersBatchMock.mockReturnValue({
+        map: new Map([['u-1', { avatarURL: 'https://cdn.example/alice.png' }]]),
+        isLoading: false,
+      });
+      renderBar();
+      fireEvent.change(screen.getByTestId('searchbar-input'), { target: { value: 'al' } });
+      expect(screen.getByTestId('searchbar-user-u-1')).toBeInTheDocument();
+      expect(screen.getByText('Alice')).toBeInTheDocument();
     });
 
     it('navigates to /channel/:slug when a channel row is clicked', () => {

@@ -162,6 +162,7 @@ func TestSearch_UserAutocompletePrefix_RealEngine(t *testing.T) {
 	users := []*model.User{
 		{ID: "au1", DisplayName: "Muhammad Abdur Rehman", Email: "abdur@example.com"},
 		{ID: "au2", DisplayName: "Alice Anderson", Email: "alice@example.com"},
+		{ID: "au3", DisplayName: "Foo Bar123", Email: "bar123@example.com"},
 	}
 	for _, u := range users {
 		if err := idx.IndexUser(ctx, u); err != nil {
@@ -179,6 +180,11 @@ func TestSearch_UserAutocompletePrefix_RealEngine(t *testing.T) {
 		{"prefix of middle token", "abd", "au1"},
 		{"prefix of last token", "reh", "au1"},
 		{"prefix of first token", "muh", "au1"},
+		// The #4 bug: a true INFIX (not a token prefix) must match — "123" is in
+		// the MIDDLE/end of "bar123", never a prefix, so this only works with
+		// plain n-grams (edge n-grams would miss it).
+		{"infix number inside a token", "123", "au3"},
+		{"infix letters+digits inside a token", "ar12", "au3"},
 		// Full-token exact still works.
 		{"exact token", "Rehman", "au1"},
 		// Typo tolerance (fuzziness AUTO) still works.

@@ -101,3 +101,44 @@ func TestAttachmentStore_SetThumbnailKeys_UpdateItemError(t *testing.T) {
 		t.Fatalf("SetThumbnailKeys: want errInjected, got %v", err)
 	}
 }
+
+func TestAttachmentStore_ListAll_ScanError(t *testing.T) {
+	db := setupDynamoDB(t)
+	ctx := context.Background()
+	s := NewAttachmentStore(withFault(db, func(f *faultClient) { f.failScan = true }))
+	_, err := s.ListAll(ctx)
+	if !errors.Is(err, errInjected) {
+		t.Fatalf("ListAll: want errInjected, got %v", err)
+	}
+}
+
+// TestAttachmentStore_ListAll_PaginatesAcrossScanPages drives ListAll's
+// LastEvaluatedKey drain loop by serving one item per Scan page. A store that
+// issued a single un-paginated Scan would drop every attachment past the first
+// page; the loop must carry the cursor forward and return them all.
+func TestAttachmentStore_ListAll_PaginatesAcrossScanPages(t *testing.T) {
+	db := setupDynamoDB(t)
+	ctx := context.Background()
+	seed := NewAttachmentStore(db)
+	ids := []string{"att-la-a", "att-la-b", "att-la-c"}
+	for _, id := range ids {
+		if err := seed.Create(ctx, makeAttachment(id, "hash-"+id, id+".png")); err != nil {
+			t.Fatalf("seed %s: %v", id, err)
+		}
+	}
+	paged := &DB{Client: &pagedScanClient{DynamoAPI: db.Client}, Table: db.Table}
+	s := NewAttachmentStore(paged)
+	items, err := s.ListAll(ctx)
+	if err != nil {
+		t.Fatalf("ListAll: %v", err)
+	}
+	got := make(map[string]bool, len(items))
+	for _, it := range items {
+		got[it.ID] = true
+	}
+	for _, id := range ids {
+		if !got[id] {
+			t.Fatalf("ListAll dropped attachment %q across scan pages; got %d items %v", id, len(items), got)
+		}
+	}
+}

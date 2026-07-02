@@ -15,21 +15,25 @@ const (
 
 // autocompleteSettings defines a custom `autocomplete` analyzer used at
 // INDEX time on the `.autocomplete` subfields of displayName / email /
-// channel name. It case-folds and emits edge n-grams (2..20 chars) so a
-// stored token like "Abdur" is indexed as "ab", "abd", "abdu", "abdur".
-// The SEARCH-time analyzer is `standard` (see the subfield mapping) so
-// the *query* is NOT itself n-grammed — typing "abd" produces the single
-// token "abd", which then matches the "abd" edge-gram of "Abdur". This
-// gives substring/prefix autocomplete ("abd" → "Muhammad Abdur Rehman")
-// on top of the existing full-token fuzzy match.
+// channel name. It case-folds and emits n-grams (2..10 chars) of EVERY
+// position, so a stored token like "bar123" is indexed as "ba","ar",...,
+// "12","23","123","bar",...,"bar123". Unlike edge n-grams (prefix-only),
+// plain n-grams give true SUBSTRING/infix matching: "123" → "bar123" and
+// "abd" → "Abdur". The SEARCH-time analyzer is `standard` (see the subfield
+// mapping) so the *query* is NOT itself n-grammed — typing "123" produces
+// the single token "123" which matches the "123" n-gram — on top of the
+// existing full-token fuzzy match (which still handles longer queries).
+// `max_ngram_diff` must be raised: n-gram tokenizers/filters otherwise cap
+// (max_gram - min_gram) at 1.
 const autocompleteSettings = `
 	"settings": {
+		"index": { "max_ngram_diff": 10 },
 		"analysis": {
 			"filter": {
 				"autocomplete_filter": {
-					"type": "edge_ngram",
+					"type": "ngram",
 					"min_gram": 2,
-					"max_gram": 20
+					"max_gram": 10
 				}
 			},
 			"analyzer": {
@@ -43,7 +47,7 @@ const autocompleteSettings = `
 	},`
 
 // autocompleteField is the mapping fragment for a `text` field that also
-// carries an `.autocomplete` edge-ngram subfield. The base field keeps
+// carries an `.autocomplete` n-gram subfield. The base field keeps
 // the standard analyzer (full-token fuzzy match); the subfield is
 // index-analyzed with `autocomplete` and search-analyzed with `standard`.
 const autocompleteField = `{
@@ -63,7 +67,7 @@ const autocompleteField = `{
 // we filter by exactly, and a single `body` analyzer that splits on
 // whitespace and case-folds so `#tag` searches match `#TAG` and vice
 // versa. The user/channel name fields additionally carry an
-// `.autocomplete` edge-ngram subfield for prefix/substring matching.
+// `.autocomplete` n-gram subfield for substring/infix matching.
 var indexMappings = map[string]string{
 	IndexUsers: `{
 		` + autocompleteSettings + `

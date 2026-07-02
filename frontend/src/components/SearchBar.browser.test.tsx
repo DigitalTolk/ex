@@ -14,6 +14,9 @@ const useSearchUsersMock = vi.hoisted(() =>
 const useSearchChannelsMock = vi.hoisted(() =>
   vi.fn(() => ({ data: { hits: [] as unknown[] }, isLoading: false })),
 );
+const useUsersBatchMock = vi.hoisted(() =>
+  vi.fn(() => ({ map: new Map<string, { avatarURL?: string }>(), isLoading: false })),
+);
 
 vi.mock('@/lib/api', () => ({
   apiFetch: vi.fn().mockResolvedValue(null),
@@ -29,6 +32,9 @@ vi.mock('@/hooks/useConversations', () => ({
 vi.mock('@/hooks/useSearch', () => ({
   useSearchUsers: (...args: unknown[]) => useSearchUsersMock(...(args as [])),
   useSearchChannels: (...args: unknown[]) => useSearchChannelsMock(...(args as [])),
+}));
+vi.mock('@/hooks/useUsersBatch', () => ({
+  useUsersBatch: (...args: unknown[]) => useUsersBatchMock(...(args as [])),
 }));
 vi.mock('@/hooks/useDebouncedValue', () => ({
   useDebouncedValue: (v: unknown) => v,
@@ -110,6 +116,7 @@ beforeEach(() => {
   useUserConversationsMock.mockReturnValue({ data: undefined });
   useSearchUsersMock.mockReturnValue({ data: { hits: [] }, isLoading: false });
   useSearchChannelsMock.mockReturnValue({ data: { hits: [] }, isLoading: false });
+  useUsersBatchMock.mockReturnValue({ map: new Map(), isLoading: false });
   createConvMutate.mockReset();
 });
 
@@ -334,6 +341,28 @@ describe('SearchBar browser behavior', () => {
       { type: 'dm', participantIDs: ['u-1'] },
       expect.any(Object),
     );
+  });
+
+  it('paints a fresh presigned avatar image on a person row (from the batch endpoint)', async () => {
+    // A real (loadable) 1x1 PNG data URI — Base UI's AvatarImage only paints the
+    // <img> once it actually loads, so a bogus URL would never render.
+    const avatar =
+      'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+    useSearchUsersMock.mockReturnValue({
+      data: { hits: [{ id: 'u-1', score: 1, _source: { displayName: 'Alice', email: 'alice@x.io' } }] },
+      isLoading: false,
+    });
+    // The search index carries no avatar; useUsersBatch resolves the fresh one.
+    useUsersBatchMock.mockReturnValue({
+      map: new Map([['u-1', { avatarURL: avatar }]]),
+      isLoading: false,
+    });
+    const screen = await renderWithLocation();
+    await screen.getByTestId('searchbar-input').fill('al');
+    await vi.waitFor(() => {
+      const img = (screen.getByTestId('searchbar-user-u-1').element() as HTMLElement).querySelector('img');
+      expect(img?.getAttribute('src')).toBe(avatar);
+    });
   });
 
   it('keyboard nav walks channels → people → message action', async () => {

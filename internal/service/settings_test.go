@@ -46,6 +46,33 @@ func TestSettingsService_Effective_DefaultsWhenUnset(t *testing.T) {
 	}
 }
 
+// nilOKSettingsStore returns (nil, nil) — a store that reports "no settings
+// saved yet" without an error — so Effective's ws==nil normalization branch runs
+// and caches the empty (defaults-backed) state.
+type nilOKSettingsStore struct{ calls int }
+
+func (s *nilOKSettingsStore) GetSettings(context.Context) (*model.WorkspaceSettings, error) {
+	s.calls++
+	return nil, nil
+}
+func (s *nilOKSettingsStore) PutSettings(context.Context, *model.WorkspaceSettings) error {
+	return nil
+}
+
+func TestSettingsService_Effective_CachesNilAsEmptyState(t *testing.T) {
+	st := &nilOKSettingsStore{}
+	svc := NewSettingsService(st)
+	if ws := svc.Effective(context.Background()); ws.MaxUploadBytes != model.DefaultMaxUploadBytes {
+		t.Fatalf("want defaults on nil settings, got MaxUploadBytes=%d", ws.MaxUploadBytes)
+	}
+	// The empty state is real and cacheable, so the second read is served from
+	// cache without hitting the store again.
+	_ = svc.Effective(context.Background())
+	if st.calls != 1 {
+		t.Fatalf("GetSettings calls = %d, want 1 (second read cached)", st.calls)
+	}
+}
+
 func TestSettingsService_Effective_DoesNotCacheOnStoreError(t *testing.T) {
 	// Admin tightened the upload limit to 1 MiB.
 	st := &fakeSettingsStore{stored: &model.WorkspaceSettings{MaxUploadBytes: 1 << 20, AllowedExtensions: []string{"png"}}}

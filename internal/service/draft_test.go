@@ -166,6 +166,30 @@ func TestDraftService_SilentUpsertPersistsWithoutBroadcast(t *testing.T) {
 	}
 }
 
+func TestDraftService_WithClientTsPersistsClientTimestamp(t *testing.T) {
+	svc, drafts, _ := newDraftTestService()
+	ctx := context.Background()
+
+	// WithClientTs stamps the draft with the caller's edit time for last-write-wins
+	// ordering instead of server-now, so a delayed keystroke can't supersede a
+	// later send.
+	const clientTs int64 = 1_700_000_000_123
+	draft, err := svc.Upsert(ctx, "u-1", "ch-1", ParentChannel, "", "hi", nil, WithClientTs(clientTs))
+	if err != nil {
+		t.Fatalf("Upsert with client ts: %v", err)
+	}
+	if draft.Ts != clientTs {
+		t.Fatalf("draft.Ts = %d, want %d", draft.Ts, clientTs)
+	}
+	stored, err := drafts.Get(ctx, "u-1", draft.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if stored.Ts != clientTs {
+		t.Fatalf("stored.Ts = %d, want %d", stored.Ts, clientTs)
+	}
+}
+
 func TestDraftService_RejectsUnauthorizedParent(t *testing.T) {
 	svc, _, _ := newDraftTestService()
 

@@ -152,9 +152,11 @@ describe('ChannelRow browser behaviour', () => {
       </MemoryRouter>,
     );
     await openChannelMenu(screen);
-    await screen.getByText('Work').click();
+    // Native click (not the auto-retrying locator click) so a still-settling
+    // menu portal under full-suite CPU load can't hang it to the timeout.
+    (screen.getByText('Work').element() as HTMLElement).click();
     // isFav → favorite(false) then setCategory(cat-1).
-    expect(favoriteMutate).toHaveBeenCalledWith({ channelID: 'ch-1', favorite: false });
+    await vi.waitFor(() => expect(favoriteMutate).toHaveBeenCalledWith({ channelID: 'ch-1', favorite: false }));
     expect(setCategoryMutate).toHaveBeenCalledWith({ channelID: 'ch-1', categoryID: 'cat-1' });
   });
 
@@ -206,8 +208,9 @@ describe('ChannelRow browser behaviour', () => {
     await openChannelMenu(screen);
     const item = screen.getByText('Work');
     await expect.element(item).toBeVisible();
-    await item.click();
-    expect(setCategoryMutate).toHaveBeenCalledWith({ channelID: 'ch-1', categoryID: 'cat-1' });
+    // Native click — avoids the actionability-retry hang under CPU load.
+    (item.element() as HTMLElement).click();
+    await vi.waitFor(() => expect(setCategoryMutate).toHaveBeenCalledWith({ channelID: 'ch-1', categoryID: 'cat-1' }));
   });
 
   it('opens the management menu via a mobile long-press (kebab is not a tap target)', async () => {

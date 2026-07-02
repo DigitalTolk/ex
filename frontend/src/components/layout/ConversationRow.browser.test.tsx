@@ -218,8 +218,12 @@ describe('ConversationRow browser behaviour', () => {
     const onHide = vi.fn();
     const screen = await renderRow(dm, { onHide });
     await openConvMenu(screen);
-    await screen.getByTestId('conv-close-cv-1').click();
-    expect(onHide).toHaveBeenCalledWith('cv-1');
+    // Native click, not the Playwright actionability-click: the Radix menu
+    // portal can still be settling under full-suite CPU load, and the auto-
+    // retrying locator click would then hang to the test timeout (a flake). The
+    // item is already asserted present by openConvMenu.
+    (document.querySelector('[data-testid="conv-close-cv-1"]') as HTMLElement).click();
+    await vi.waitFor(() => expect(onHide).toHaveBeenCalledWith('cv-1'));
   });
 
   it('opens the management menu via a mobile long-press (kebab is not a tap target)', async () => {

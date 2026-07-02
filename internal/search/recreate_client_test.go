@@ -39,9 +39,10 @@ func TestClient_RecreateIndex_DeletesThenCreatesWithMapping(t *testing.T) {
 		methods[1] != "PUT /"+IndexUsers {
 		t.Fatalf("methods = %v, want DELETE then PUT on /%s", methods, IndexUsers)
 	}
-	// The recreate PUT carries the current autocomplete mapping.
-	if !strings.Contains(createBody, "autocomplete") || !strings.Contains(createBody, "edge_ngram") {
-		t.Fatalf("recreate body missing autocomplete analyzer: %s", createBody)
+	// The recreate PUT carries the current autocomplete mapping (n-gram infix
+	// analyzer + the raised max_ngram_diff it requires).
+	if !strings.Contains(createBody, "autocomplete") || !strings.Contains(createBody, `"ngram"`) || !strings.Contains(createBody, "max_ngram_diff") {
+		t.Fatalf("recreate body missing n-gram autocomplete analyzer: %s", createBody)
 	}
 }
 
