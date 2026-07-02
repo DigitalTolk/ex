@@ -18,6 +18,7 @@ vi.mock('@/hooks/useChannels', () => ({
 }));
 
 vi.mock('@/hooks/useConversations', () => ({
+  useOpenDM: () => ({ openDM: vi.fn(), isPending: false }),
   useCreateConversation: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 

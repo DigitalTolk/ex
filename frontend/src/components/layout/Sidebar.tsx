@@ -1537,12 +1537,16 @@ export function Sidebar({ onClose }: SidebarProps) {
                           <Plus className="h-3.5 w-3.5" />
                         </button>
                         {/* Sort menu stays desktop hover-only (hidden on mobile);
-                            the header shows only the "+" on touch. */}
+                            the header shows only the "+" on touch. opacity-0
+                            alone still hit-tests, so pointer-events-none is
+                            required on mobile — without it this was an
+                            invisible tappable target right beside the "+"
+                            (same treatment as the row kebabs). */}
                         <DropdownMenu>
                           <DropdownMenuTrigger
                             aria-label="Sort direct messages"
                             data-testid="sidebar-dm-sort-menu"
-                            className="h-5 w-5 flex items-center justify-center rounded text-gray-400 opacity-0 group-hover/sec:opacity-100 hover:bg-white/20 hover:text-white"
+                            className="h-5 w-5 flex items-center justify-center rounded text-gray-400 opacity-0 group-hover/sec:opacity-100 hover:bg-white/20 hover:text-white max-md:pointer-events-none"
                           >
                             <MoreVertical className="h-3.5 w-3.5" />
                           </DropdownMenuTrigger>

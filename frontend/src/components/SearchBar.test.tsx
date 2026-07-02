@@ -5,9 +5,13 @@ import { MemoryRouter, useLocation } from 'react-router-dom';
 import { SearchBar } from './SearchBar';
 
 const useChannelBySlugMock = vi.hoisted(() => vi.fn(() => ({ data: undefined as unknown })));
-const useUserChannelsMock = vi.hoisted(() => vi.fn(() => ({ data: [] as unknown[] })));
 const useUserConversationsMock = vi.hoisted(() => vi.fn(() => ({ data: [] as unknown[] })));
-const createConvMutate = vi.hoisted(() => vi.fn());
+// openDM defaults to the success path: run the caller's onSuccess (which
+// resets the bar); navigation itself is the hook's job and is covered by
+// the useOpenDM hook tests.
+const openDMMock = vi.hoisted(() =>
+  vi.fn((_userID: string, opts?: { onSuccess?: () => void }) => opts?.onSuccess?.()),
+);
 const useSearchUsersMock = vi.hoisted(() =>
   vi.fn(() => ({ data: { hits: [] as unknown[] }, isLoading: false })),
 );
@@ -20,11 +24,10 @@ const useUsersBatchMock = vi.hoisted(() =>
 
 vi.mock('@/hooks/useChannels', () => ({
   useChannelBySlug: (slug?: string) => useChannelBySlugMock(slug as never),
-  useUserChannels: () => useUserChannelsMock(),
 }));
 vi.mock('@/hooks/useConversations', () => ({
   useUserConversations: () => useUserConversationsMock(),
-  useCreateConversation: () => ({ mutate: createConvMutate }),
+  useOpenDM: () => ({ openDM: openDMMock, isPending: false }),
 }));
 vi.mock('@/hooks/useSearch', () => ({
   useSearchUsers: (...args: unknown[]) => useSearchUsersMock(...(args as [])),
@@ -58,14 +61,22 @@ function renderBar(initialPath = '/') {
 
 beforeEach(() => {
   useChannelBySlugMock.mockReturnValue({ data: undefined });
-  useUserChannelsMock.mockReturnValue({ data: [] });
   useUserConversationsMock.mockReturnValue({ data: [] });
   useSearchUsersMock.mockReturnValue({ data: { hits: [] }, isLoading: false });
   useSearchChannelsMock.mockReturnValue({ data: { hits: [] }, isLoading: false });
   useUsersBatchMock.mockReturnValue({ map: new Map(), isLoading: false });
-  createConvMutate.mockReset();
+  openDMMock.mockClear();
+  openDMMock.mockImplementation((_userID, opts) => opts?.onSuccess?.());
   lastLocation = { pathname: '/', search: '' };
 });
+
+// Force a specific platform for the shortcut chord. jsdom's default UA
+// contains neither "mac" nor "windows", so the non-Apple branch is the
+// ambient default; Apple behavior is opted into per test.
+function stubUserAgent(ua: string) {
+  const spy = vi.spyOn(window.navigator, 'userAgent', 'get').mockReturnValue(ua);
+  return () => spy.mockRestore();
+}
 
 describe('SearchBar', () => {
   it('opens the dropdown on input and closes it on an outside mousedown', () => {
@@ -157,30 +168,62 @@ describe('SearchBar', () => {
   });
 
   describe('⌘K / Ctrl+K', () => {
-    it('focuses and opens the search on Meta+K from anywhere', () => {
+    it('opens on Ctrl+K on non-Apple platforms (the ambient jsdom default)', () => {
       renderBar();
       const input = screen.getByTestId('searchbar-input') as HTMLInputElement;
       expect(input).not.toHaveFocus();
-      act(() => {
-        fireEvent.keyDown(document, { key: 'k', metaKey: true });
-      });
-      expect(input).toHaveFocus();
-    });
-
-    it('also opens on Ctrl+K', () => {
-      renderBar();
-      const input = screen.getByTestId('searchbar-input') as HTMLInputElement;
       act(() => {
         fireEvent.keyDown(document, { key: 'K', ctrlKey: true });
       });
       expect(input).toHaveFocus();
     });
 
+    it('ignores Meta+K on non-Apple platforms', () => {
+      renderBar();
+      const input = screen.getByTestId('searchbar-input') as HTMLInputElement;
+      act(() => {
+        fireEvent.keyDown(document, { key: 'k', metaKey: true });
+      });
+      expect(input).not.toHaveFocus();
+    });
+
+    it('opens on Meta+K on Apple platforms and ignores bare Ctrl+K there (kill-line must survive)', () => {
+      const restore = stubUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)');
+      try {
+        renderBar();
+        const input = screen.getByTestId('searchbar-input') as HTMLInputElement;
+        // Ctrl+K is macOS kill-to-end-of-line (and a CodeMirror binding) —
+        // the old handler hijacked it mid-edit.
+        act(() => {
+          fireEvent.keyDown(document, { key: 'k', ctrlKey: true });
+        });
+        expect(input).not.toHaveFocus();
+        act(() => {
+          fireEvent.keyDown(document, { key: 'k', metaKey: true });
+        });
+        expect(input).toHaveFocus();
+      } finally {
+        restore();
+      }
+    });
+
+    it('ignores Shift/Alt chords, key-repeat, and both-modifier combos', () => {
+      renderBar();
+      const input = screen.getByTestId('searchbar-input') as HTMLInputElement;
+      act(() => {
+        fireEvent.keyDown(document, { key: 'K', ctrlKey: true, shiftKey: true });
+        fireEvent.keyDown(document, { key: 'k', ctrlKey: true, altKey: true });
+        fireEvent.keyDown(document, { key: 'k', ctrlKey: true, repeat: true });
+        fireEvent.keyDown(document, { key: 'k', ctrlKey: true, metaKey: true });
+      });
+      expect(input).not.toHaveFocus();
+    });
+
     it('ignores a modifier chord that is not K', () => {
       renderBar();
       const input = screen.getByTestId('searchbar-input') as HTMLInputElement;
       act(() => {
-        fireEvent.keyDown(document, { key: 'j', metaKey: true });
+        fireEvent.keyDown(document, { key: 'j', ctrlKey: true });
       });
       expect(input).not.toHaveFocus();
     });
@@ -261,37 +304,50 @@ describe('SearchBar', () => {
       expect(lastLocation.pathname).toBe('/channel/ch-9');
     });
 
-    it('shows a Joined badge for a channel the user is already in, Join otherwise', () => {
-      useUserChannelsMock.mockReturnValue({ data: [{ channelID: 'ch-1' }] });
+    it('renders channel rows without a Join affordance (search is membership-scoped)', () => {
       useSearchChannelsMock.mockReturnValue({
         data: {
-          hits: [
-            { id: 'ch-1', score: 1, _source: { name: 'general', slug: 'general', type: 'public' } },
-            { id: 'ch-2', score: 1, _source: { name: 'random', slug: 'random', type: 'public' } },
-          ],
+          hits: [{ id: 'ch-1', score: 1, _source: { name: 'general', slug: 'general', type: 'public' } }],
         },
         isLoading: false,
       });
       renderBar();
       fireEvent.change(screen.getByTestId('searchbar-input'), { target: { value: 'ra' } });
-      expect(screen.getByTestId('searchbar-channel-ch-1-badge')).toHaveTextContent('Joined');
-      expect(screen.getByTestId('searchbar-channel-ch-2-badge')).toHaveTextContent('Join');
+      // Every hit is a channel the user already belongs to (AllowedParentIDs
+      // scoping), so a Join/Joined chip could never truthfully render.
+      expect(screen.getByTestId('searchbar-channel-ch-1')).not.toHaveTextContent('Join');
     });
 
-    it('opens/creates a DM and navigates when a person row is clicked', () => {
-      createConvMutate.mockImplementation((_vars, opts) => opts.onSuccess({ id: 'cv-77' }));
+    it('opens a DM via useOpenDM and clears the bar on success when a person row is clicked', () => {
       useSearchUsersMock.mockReturnValue({
         data: { hits: [{ id: 'u-1', score: 1, _source: { displayName: 'Alice' } }] },
         isLoading: false,
       });
       renderBar();
-      fireEvent.change(screen.getByTestId('searchbar-input'), { target: { value: 'al' } });
+      const input = screen.getByTestId('searchbar-input') as HTMLInputElement;
+      fireEvent.change(input, { target: { value: 'al' } });
       fireEvent.click(screen.getByTestId('searchbar-user-u-1'));
-      expect(createConvMutate).toHaveBeenCalledWith(
-        { type: 'dm', participantIDs: ['u-1'] },
-        expect.any(Object),
-      );
-      expect(lastLocation.pathname).toBe('/conversation/cv-77');
+      expect(openDMMock).toHaveBeenCalledWith('u-1', expect.any(Object));
+      // The default mock runs onSuccess → the bar resets.
+      expect(input.value).toBe('');
+      expect(screen.queryByTestId('searchbar-dropdown')).toBeNull();
+    });
+
+    it('keeps the typed query and open dropdown when the DM-create fails', () => {
+      // Failure path: openDM never calls onSuccess (the hook shows a toast).
+      openDMMock.mockImplementation(() => {});
+      useSearchUsersMock.mockReturnValue({
+        data: { hits: [{ id: 'u-1', score: 1, _source: { displayName: 'Alice' } }] },
+        isLoading: false,
+      });
+      renderBar();
+      const input = screen.getByTestId('searchbar-input') as HTMLInputElement;
+      fireEvent.change(input, { target: { value: 'al' } });
+      fireEvent.click(screen.getByTestId('searchbar-user-u-1'));
+      // The old code reset() BEFORE the mutate: a failed create silently
+      // wiped the search box. The query and dropdown must survive failure.
+      expect(input.value).toBe('al');
+      expect(screen.getByTestId('searchbar-dropdown')).toBeInTheDocument();
     });
 
     it('renders a user row with an id fallback and no email when fields are absent', () => {
@@ -313,23 +369,51 @@ describe('SearchBar', () => {
       expect(screen.getByTestId('searchbar-loading')).toBeInTheDocument();
     });
 
-    it('does not show entity sections for a single-character query', () => {
+    it('gates entity hits below MIN_SEARCH_CHARS: hooks called disabled and stale hits are not rendered', () => {
+      // The mock returns hits regardless of `enabled` — exactly like React
+      // Query's keepPreviousData serving the previous query's hits after
+      // the input shrank. They must neither render nor be activatable.
       useSearchChannelsMock.mockReturnValue({
         data: { hits: [{ id: 'ch-1', score: 1, _source: { name: 'general', slug: 'general', type: 'public' } }] },
         isLoading: false,
       });
       renderBar();
-      // Below MIN_SEARCH_CHARS: enabled=false, so no entity section header,
-      // but the message action is still present.
-      fireEvent.change(screen.getByTestId('searchbar-input'), { target: { value: 'g' } });
-      // hits are non-empty from the mock, but the hook returns them
-      // regardless of enabled; the Channels header still renders because
-      // gating is on hits length. Assert the message action coexists.
+      const input = screen.getByTestId('searchbar-input');
+      fireEvent.change(input, { target: { value: 'g' } });
+      expect(useSearchChannelsMock).toHaveBeenLastCalledWith('g', false, 5);
+      expect(useSearchUsersMock).toHaveBeenLastCalledWith('g', false, 5);
+      expect(screen.queryByText('Channels')).toBeNull();
+      expect(screen.queryByTestId('searchbar-channel-ch-1')).toBeNull();
       expect(screen.getByTestId('searchbar-show-results')).toBeInTheDocument();
+      // Enter runs the message search for the live query — never a stale hit.
+      fireEvent.keyDown(input, { key: 'Enter' });
+      expect(lastLocation.pathname).toBe('/search');
+      expect(lastLocation.search).toContain('q=g');
+
+      // Above the minimum the hooks are enabled and hits render.
+      fireEvent.change(input, { target: { value: 'ge' } });
+      expect(useSearchChannelsMock).toHaveBeenLastCalledWith('ge', true, 5);
+      expect(screen.getByTestId('searchbar-channel-ch-1')).toBeInTheDocument();
+    });
+
+    it('Enter with an emptied input activates nothing even while stale hits linger', () => {
+      useSearchChannelsMock.mockReturnValue({
+        data: { hits: [{ id: 'ch-1', score: 1, _source: { name: 'general', slug: 'general', type: 'public' } }] },
+        isLoading: false,
+      });
+      renderBar();
+      const input = screen.getByTestId('searchbar-input') as HTMLInputElement;
+      fireEvent.change(input, { target: { value: 'gen' } });
+      expect(screen.getByTestId('searchbar-channel-ch-1')).toBeInTheDocument();
+      // Clear the input: the dropdown hides, and Enter must be a no-op —
+      // the old handler activated the lingering keepPreviousData hit and
+      // silently navigated to ~general from an EMPTY search box.
+      fireEvent.change(input, { target: { value: '' } });
+      fireEvent.keyDown(input, { key: 'Enter' });
+      expect(lastLocation.pathname).toBe('/');
     });
 
     it('tolerates undefined query/channel-list data (nullish fallbacks)', () => {
-      useUserChannelsMock.mockReturnValue({ data: undefined });
       useSearchChannelsMock.mockReturnValue({ data: undefined, isLoading: false });
       useSearchUsersMock.mockReturnValue({ data: undefined, isLoading: false });
       renderBar();
@@ -350,7 +434,24 @@ describe('SearchBar', () => {
       expect(screen.getByTestId('searchbar-channel-ch-x')).toHaveTextContent('~ch-x');
     });
 
-    it('keyboard nav walks channels → people → message action and Enter activates', () => {
+    it('defaults the highlight to the message-search action even with entity hits present', () => {
+      useSearchChannelsMock.mockReturnValue({
+        data: { hits: [{ id: 'ch-1', score: 1, _source: { name: 'general', slug: 'general', type: 'public' } }] },
+        isLoading: false,
+      });
+      renderBar();
+      const input = screen.getByTestId('searchbar-input');
+      fireEvent.change(input, { target: { value: 'gen' } });
+      // Enter without arrowing runs the message search for the LIVE query —
+      // never whichever channel hit happened to land at index 0 first (the
+      // old index-0 default made Enter's destination fetch-timing-dependent).
+      expect(screen.getByTestId('searchbar-show-results').getAttribute('aria-selected')).toBe('true');
+      fireEvent.keyDown(input, { key: 'Enter' });
+      expect(lastLocation.pathname).toBe('/search');
+      expect(lastLocation.search).toContain('q=gen');
+    });
+
+    it('keyboard nav wraps from the message action to channels → people, and Enter activates the arrowed row', () => {
       useSearchChannelsMock.mockReturnValue({
         data: { hits: [{ id: 'ch-1', score: 1, _source: { name: 'general', slug: 'general', type: 'public' } }] },
         isLoading: false,
@@ -362,15 +463,61 @@ describe('SearchBar', () => {
       renderBar();
       const input = screen.getByTestId('searchbar-input');
       fireEvent.change(input, { target: { value: 'al' } });
-      // First item (channel) highlighted by default (index 0).
+      // Default = the message action (last item); Down wraps to the channel.
+      fireEvent.keyDown(input, { key: 'ArrowDown' });
       expect(screen.getByTestId('searchbar-channel-ch-1').getAttribute('aria-selected')).toBe('true');
-      // Down → user, Down → message action.
       fireEvent.keyDown(input, { key: 'ArrowDown' });
       expect(screen.getByTestId('searchbar-user-u-1').getAttribute('aria-selected')).toBe('true');
-      // Up back to channel, then Enter activates the channel.
+      // Up back to the channel, then Enter activates it.
       fireEvent.keyDown(input, { key: 'ArrowUp' });
       fireEvent.keyDown(input, { key: 'Enter' });
       expect(lastLocation.pathname).toBe('/channel/general');
+    });
+
+    it('typing resets an arrowed-to selection back to the message action', () => {
+      useSearchChannelsMock.mockReturnValue({
+        data: { hits: [{ id: 'ch-1', score: 1, _source: { name: 'general', slug: 'general', type: 'public' } }] },
+        isLoading: false,
+      });
+      renderBar();
+      const input = screen.getByTestId('searchbar-input');
+      fireEvent.change(input, { target: { value: 'gen' } });
+      fireEvent.keyDown(input, { key: 'ArrowDown' }); // select the channel row
+      expect(screen.getByTestId('searchbar-channel-ch-1').getAttribute('aria-selected')).toBe('true');
+      // More typing → the selection for the old query must not survive.
+      fireEvent.change(input, { target: { value: 'gene' } });
+      expect(screen.getByTestId('searchbar-show-results').getAttribute('aria-selected')).toBe('true');
+      fireEvent.keyDown(input, { key: 'Enter' });
+      expect(lastLocation.pathname).toBe('/search');
+      expect(lastLocation.search).toContain('q=gene');
+    });
+
+    it('an arrowed-to selection survives hits reordering, and a vanished selection falls back to the message action', () => {
+      const chGeneral = { id: 'ch-1', score: 1, _source: { name: 'general', slug: 'general', type: 'public' } };
+      const chGenerator = { id: 'ch-2', score: 1, _source: { name: 'generator', slug: 'generator', type: 'public' } };
+      useSearchChannelsMock.mockReturnValue({ data: { hits: [chGeneral, chGenerator] }, isLoading: false });
+      renderBar();
+      const input = screen.getByTestId('searchbar-input');
+      fireEvent.change(input, { target: { value: 'gen' } });
+      fireEvent.keyDown(input, { key: 'ArrowDown' }); // → ch-1
+      fireEvent.keyDown(input, { key: 'ArrowDown' }); // → ch-2
+      expect(screen.getByTestId('searchbar-channel-ch-2').getAttribute('aria-selected')).toBe('true');
+
+      // Async refetch reorders the hits: the highlight follows ch-2's
+      // identity to its new position instead of sticking to a raw index.
+      useSearchChannelsMock.mockReturnValue({ data: { hits: [chGenerator, chGeneral] }, isLoading: false });
+      fireEvent.focus(input); // re-render tick
+      expect(screen.getByTestId('searchbar-channel-ch-2').getAttribute('aria-selected')).toBe('true');
+      fireEvent.keyDown(input, { key: 'Enter' });
+      expect(lastLocation.pathname).toBe('/channel/generator');
+
+      // Selection vanishing entirely (list shrank) falls back to the
+      // message action, exercising the safeHighlight clamp semantics.
+      fireEvent.change(input, { target: { value: 'gen' } });
+      fireEvent.keyDown(input, { key: 'ArrowDown' }); // → ch-2 (first hit now)
+      useSearchChannelsMock.mockReturnValue({ data: { hits: [chGeneral] }, isLoading: false });
+      fireEvent.change(input, { target: { value: 'gene' } });
+      expect(screen.getByTestId('searchbar-show-results').getAttribute('aria-selected')).toBe('true');
     });
 
     it('adds an in-scope message action on a channel route and navigates with in+type', () => {
@@ -383,6 +530,19 @@ describe('SearchBar', () => {
       expect(lastLocation.pathname).toBe('/search');
       expect(lastLocation.search).toContain('in=ch-1');
       expect(lastLocation.search).toContain('type=messages');
+    });
+
+    it('hovering the in-scope action highlights it and Enter runs the scoped search', () => {
+      useChannelBySlugMock.mockReturnValue({ data: { id: 'ch-1', name: 'general', slug: 'general', type: 'public' } });
+      renderBar('/channel/general');
+      const input = screen.getByTestId('searchbar-input');
+      fireEvent.change(input, { target: { value: 'bug' } });
+      const scoped = screen.getByTestId('searchbar-show-in-scope');
+      fireEvent.mouseEnter(scoped);
+      expect(scoped.getAttribute('aria-selected')).toBe('true');
+      fireEvent.keyDown(input, { key: 'Enter' });
+      expect(lastLocation.pathname).toBe('/search');
+      expect(lastLocation.search).toContain('in=ch-1');
     });
 
     it('adds an in-scope DM message action on a conversation route', () => {

@@ -335,145 +335,55 @@ func threadUpdateRecipients(pub *mockPublisher) (map[string]bool, *ThreadSummary
 	return got, summary
 }
 
-func TestMessageService_Send_PublishesThreadUpdateToParticipants(t *testing.T) {
-	svc, messages, memberships, _, publisher := setupMessageService()
-	follows := newMockThreadFollowStore()
-	svc.SetThreadFollowStore(follows)
+// Send's contract with the notifier: a thread reply hands over the
+// authoritative POST-increment root (the notifier derives both the alert
+// fan-out and the thread.updated audience from it — the audience matrix
+// itself is pinned in notification_test.go); a top-level send passes nil;
+// and when the reply-metadata bump fails the root is nil too, so no stale
+// replyCount is ever live-patched into /threads lists.
+func TestMessageService_Send_PassesThreadRootToNotifier(t *testing.T) {
+	svc, messages, memberships, _, _ := setupMessageService()
+	rec := &recordingNotifier{calls: make(chan notifierCall, 8)}
+	svc.SetNotifier(rec)
 	ctx := context.Background()
-
-	for _, uid := range []string{"sender", "root-author", "replier", "follower", "bystander", "unfollowed-replier"} {
-		memberships.memberships["ch1#"+uid] = &model.ChannelMembership{ChannelID: "ch1", UserID: uid, Role: model.ChannelRoleMember}
-	}
+	memberships.memberships["ch1#sender"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "sender", Role: model.ChannelRoleMember}
 	created := time.Date(2026, 5, 1, 10, 0, 0, 0, time.UTC)
-	messages.messages["ch1#root"] = &model.Message{ID: "root", ParentID: "ch1", AuthorID: "root-author", Body: "root text", CreatedAt: created, ReplyCount: 2}
-	messages.messages["ch1#old-1"] = &model.Message{ID: "old-1", ParentID: "ch1", ParentMessageID: "root", AuthorID: "replier", CreatedAt: created.Add(time.Minute)}
-	messages.messages["ch1#old-2"] = &model.Message{ID: "old-2", ParentID: "ch1", ParentMessageID: "root", AuthorID: "unfollowed-replier", CreatedAt: created.Add(2 * time.Minute)}
-	// f1: explicit follower (member) → included. f2: follower who has left the
-	// channel (not a member) → excluded. f3: a replier who unfollowed → excluded
-	// despite participating. f4: the sender had unfollowed, but posting re-opts
-	// them in via the reply-author override.
-	follows.follows["f1"] = &model.ThreadFollow{UserID: "follower", ParentID: "ch1", ThreadRootID: "root", Following: true}
-	follows.follows["f2"] = &model.ThreadFollow{UserID: "left-follower", ParentID: "ch1", ThreadRootID: "root", Following: true}
-	follows.follows["f3"] = &model.ThreadFollow{UserID: "unfollowed-replier", ParentID: "ch1", ThreadRootID: "root", Following: false}
-	follows.follows["f4"] = &model.ThreadFollow{UserID: "sender", ParentID: "ch1", ThreadRootID: "root", Following: false}
+	messages.messages["ch1#root"] = &model.Message{ID: "root", ParentID: "ch1", AuthorID: "author", Body: "root", CreatedAt: created, ReplyCount: 2}
 
+	next := func() notifierCall {
+		t.Helper()
+		select {
+		case c := <-rec.calls:
+			return c
+		case <-time.After(2 * time.Second):
+			t.Fatal("notifier was not invoked")
+			return notifierCall{}
+		}
+	}
+
+	// Thread reply → the freshly incremented root rides along.
 	if _, err := svc.Send(ctx, "sender", "ch1", ParentChannel, "a reply", "root"); err != nil {
 		t.Fatalf("Send reply: %v", err)
 	}
-
-	waitForCond(t, func() bool {
-		got, _ := threadUpdateRecipients(publisher)
-		return got["sender"] && got["root-author"] && got["replier"] && got["follower"]
-	}, "thread.updated published to all participants")
-
-	got, summary := threadUpdateRecipients(publisher)
-	for _, no := range []string{"bystander", "left-follower", "unfollowed-replier"} {
-		if got[no] {
-			t.Errorf("did not expect thread.updated for non-participant %q", no)
-		}
-	}
-	if summary == nil {
-		t.Fatal("no thread.updated payload captured")
-	}
-	if summary.ThreadRootID != "root" || summary.RootAuthorID != "root-author" || summary.RootBody != "root text" {
-		t.Errorf("summary root fields = %+v", summary)
-	}
-	if summary.ReplyCount != 3 { // 2 existing + this reply
-		t.Errorf("ReplyCount = %d, want 3", summary.ReplyCount)
-	}
-	if summary.ParentType != ParentChannel {
-		t.Errorf("ParentType = %q, want channel", summary.ParentType)
-	}
-	if !summary.LatestActivityAt.After(created) {
-		t.Errorf("LatestActivityAt = %v, want after root createdAt %v", summary.LatestActivityAt, created)
-	}
-}
-
-func TestMessageService_Send_PublishesThreadUpdateToConversationParticipants(t *testing.T) {
-	svc, messages, _, conversations, publisher := setupMessageService()
-	ctx := context.Background()
-	created := time.Date(2026, 5, 1, 10, 0, 0, 0, time.UTC)
-	conversations.conversations["conv1"] = &model.Conversation{ID: "conv1", Type: model.ConversationTypeGroup, ParticipantIDs: []string{"u-1", "u-2", "u-3"}}
-	conversations.userConvs["u-1"] = []*model.UserConversation{{UserID: "u-1", ConversationID: "conv1"}}
-	messages.messages["conv1#root"] = &model.Message{ID: "root", ParentID: "conv1", AuthorID: "u-2", Body: "root", CreatedAt: created}
-
-	if _, err := svc.Send(ctx, "u-1", "conv1", ParentConversation, "reply", "root"); err != nil {
-		t.Fatalf("Send: %v", err)
+	if c := next(); c.root == nil || c.root.ID != "root" || c.root.ReplyCount != 3 {
+		t.Fatalf("thread reply notifier call = %+v, want root with ReplyCount 3", c)
 	}
 
-	// No follow store wired (nil branch) and no prior replies: recipients are the
-	// reply author (u-1) and the root author (u-2). u-3 is a conversation
-	// participant but not a thread participant → excluded.
-	waitForCond(t, func() bool {
-		got, _ := threadUpdateRecipients(publisher)
-		return got["u-1"] && got["u-2"]
-	}, "thread.updated to conversation thread participants")
-	got, _ := threadUpdateRecipients(publisher)
-	if got["u-3"] {
-		t.Error("u-3 is not a thread participant; should not receive thread.updated")
+	// Top-level send → nil root.
+	if _, err := svc.Send(ctx, "sender", "ch1", ParentChannel, "top level", ""); err != nil {
+		t.Fatalf("Send top-level: %v", err)
 	}
-}
-
-func TestMessageService_threadParticipants_EdgeCases(t *testing.T) {
-	svc, messages, memberships, _, _ := setupMessageService()
-	ctx := context.Background()
-	root := &model.Message{ID: "root", ParentID: "ch1", AuthorID: "a"}
-
-	if got := svc.threadParticipants(ctx, "empty-ch", ParentChannel, root, "sender"); got != nil {
-		t.Errorf("empty channel participants = %v, want nil", got)
-	}
-	if got := svc.threadParticipants(ctx, "ch1", "weird", root, "sender"); got != nil {
-		t.Errorf("unknown parent type participants = %v, want nil", got)
-	}
-	// ListThreadReplies error is swallowed — participants who qualify for other
-	// reasons (reply author + root author) are still returned.
-	memberships.memberships["ch1#a"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "a", Role: model.ChannelRoleMember}
-	memberships.memberships["ch1#sender"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "sender", Role: model.ChannelRoleMember}
-	messages.threadReplyErr = errors.New("gsi boom")
-	set := map[string]bool{}
-	for _, u := range svc.threadParticipants(ctx, "ch1", ParentChannel, root, "sender") {
-		set[u] = true
-	}
-	if !set["a"] || !set["sender"] {
-		t.Errorf("participants with reply error = %v, want root author + sender", set)
-	}
-}
-
-func TestMessageService_publishThreadUpdate_Guards(t *testing.T) {
-	svc, _, memberships, _, publisher := setupMessageService()
-	ctx := context.Background()
-	created := time.Date(2026, 5, 1, 10, 0, 0, 0, time.UTC)
-	root := &model.Message{ID: "root", ParentID: "ch1", AuthorID: "a", Body: "b", CreatedAt: created} // LastReplyAt nil
-
-	// nil root and nil publisher short-circuit synchronously before any goroutine,
-	// so nothing is published.
-	svc.publishThreadUpdate(ctx, "ch1", ParentChannel, "a", nil)
-	saved := svc.publisher
-	svc.publisher = nil
-	svc.publishThreadUpdate(ctx, "ch1", ParentChannel, "a", root)
-	svc.publisher = saved
-	if n := len(publisher.published); n != 0 {
-		t.Fatalf("published %d events, want 0 (guards short-circuit)", n)
+	if c := next(); c.root != nil {
+		t.Fatalf("top-level send passed root %+v, want nil", c.root)
 	}
 
-	// A thread whose parent has no members yields no recipients → the empty guard
-	// returns without publishing.
-	svc.publishThreadUpdate(ctx, "ghost-ch", ParentChannel, "nobody", &model.Message{ID: "ghost", ParentID: "ghost-ch", AuthorID: "x", CreatedAt: created})
-
-	// With a member and a LastReplyAt-nil root, LatestActivityAt falls back to
-	// the root's CreatedAt.
-	memberships.memberships["ch1#a"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "a", Role: model.ChannelRoleMember}
-	svc.publishThreadUpdate(ctx, "ch1", ParentChannel, "a", root)
-	waitForCond(t, func() bool {
-		got, _ := threadUpdateRecipients(publisher)
-		return got["a"]
-	}, "thread.updated published for member a")
-	_, summary := threadUpdateRecipients(publisher)
-	if summary == nil || !summary.LatestActivityAt.Equal(created) {
-		t.Fatalf("LatestActivityAt = %v, want createdAt fallback %v", summary, created)
+	// Metadata bump failure → reply still sends, notifier gets nil root.
+	messages.updateErr = errors.New("ddb throttled")
+	if _, err := svc.Send(ctx, "sender", "ch1", ParentChannel, "another reply", "root"); err != nil {
+		t.Fatalf("Send reply with failing metadata: %v", err)
 	}
-	if got, _ := threadUpdateRecipients(publisher); got["nobody"] || got["x"] {
-		t.Error("no-member thread must not publish to anyone")
+	if c := next(); c.root != nil {
+		t.Fatalf("failed metadata bump passed root %+v, want nil (no stale patch)", c.root)
 	}
 }
 
@@ -2209,16 +2119,22 @@ func TestMessageService_ToggleReaction_RecordsActivityOnAddOnly(t *testing.T) {
 	}
 }
 
-// recordingNotifier captures the message IDs NotifyForMessage is invoked with,
-// so a test can assert which send paths do (and do not) fan out a user-facing
-// notification. NotifyForMessage runs in a detached goroutine, hence the
-// buffered channel.
-type recordingNotifier struct {
-	calls chan string
+// recordingNotifier captures each NotifyForMessage invocation — the message ID
+// plus the threadRoot handed over — so a test can assert which send paths do
+// (and do not) fan out a user-facing notification, and that thread replies
+// carry the authoritative post-increment root. NotifyForMessage runs in a
+// detached goroutine, hence the buffered channel.
+type notifierCall struct {
+	msgID string
+	root  *model.Message
 }
 
-func (r *recordingNotifier) NotifyForMessage(_ context.Context, msg *model.Message, _ string) {
-	r.calls <- msg.ID
+type recordingNotifier struct {
+	calls chan notifierCall
+}
+
+func (r *recordingNotifier) NotifyForMessage(_ context.Context, msg *model.Message, _ string, root *model.Message) {
+	r.calls <- notifierCall{msgID: msg.ID, root: root}
 }
 
 // Reacting to a message must NEVER produce a user-facing notification (sound /
@@ -2231,7 +2147,7 @@ func (r *recordingNotifier) NotifyForMessage(_ context.Context, msg *model.Messa
 // would have landed too.
 func TestMessageService_ToggleReaction_DoesNotNotify(t *testing.T) {
 	svc, messages, memberships, _, _ := setupMessageService()
-	rec := &recordingNotifier{calls: make(chan string, 8)}
+	rec := &recordingNotifier{calls: make(chan notifierCall, 8)}
 	svc.SetNotifier(rec)
 	ctx := context.Background()
 
@@ -2251,12 +2167,12 @@ func TestMessageService_ToggleReaction_DoesNotNotify(t *testing.T) {
 	}
 
 	select {
-	case id := <-rec.calls:
-		if id == "m1" {
+	case call := <-rec.calls:
+		if call.msgID == "m1" {
 			t.Fatalf("reaction on m1 triggered a notification; reactions must never notify")
 		}
-		if id != sent.ID {
-			t.Fatalf("unexpected notification for %q, want the sent message %q", id, sent.ID)
+		if call.msgID != sent.ID {
+			t.Fatalf("unexpected notification for %q, want the sent message %q", call.msgID, sent.ID)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("positive control failed: a real Send did not notify")
@@ -2264,7 +2180,7 @@ func TestMessageService_ToggleReaction_DoesNotNotify(t *testing.T) {
 	// No further notification may arrive — in particular not the reaction's.
 	select {
 	case extra := <-rec.calls:
-		t.Fatalf("a second notification fired for %q; the reaction must not notify", extra)
+		t.Fatalf("a second notification fired for %q; the reaction must not notify", extra.msgID)
 	case <-time.After(200 * time.Millisecond):
 	}
 }

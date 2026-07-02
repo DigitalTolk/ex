@@ -16,9 +16,9 @@ vi.mock('@/hooks/useChannels', () => ({
   useJoinChannel: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 
-const mockCreateConversation = vi.fn();
+const mockOpenDM = vi.fn();
 vi.mock('@/hooks/useConversations', () => ({
-  useCreateConversation: () => ({ mutate: mockCreateConversation, isPending: false }),
+  useOpenDM: () => ({ openDM: mockOpenDM, isPending: false }),
 }));
 
 const onlineSet = new Set<string>();
@@ -91,10 +91,9 @@ describe('DirectoriesPage - members tab', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'Members' }));
     const btn = await screen.findByLabelText('Message Alice');
     fireEvent.click(btn);
-    expect(mockCreateConversation).toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'dm', participantIDs: ['u-1'] }),
-      expect.any(Object),
-    );
+    // The card delegates to the shared useOpenDM hook (which owns the
+    // create + navigate + error-toast flow, covered by its own tests).
+    expect(mockOpenDM).toHaveBeenCalledWith('u-1');
   });
 
   it('shows (you) label and notes-to-self message button for self row', async () => {

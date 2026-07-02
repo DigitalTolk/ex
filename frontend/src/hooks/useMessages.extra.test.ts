@@ -119,6 +119,44 @@ describe('useSendChannelMessage', () => {
     expect(queryClient.getQueryData(['thread', 'channels/ch-1', 'root'])).toBeUndefined();
   });
 
+  it('first reply to a thread MISSING from the cached /threads list refetches it (thread.updated may never fire)', async () => {
+    // The live `thread.updated` patch is gated on the server's reply-metadata
+    // bump succeeding. A sender whose reply just created their participation
+    // cannot depend on it: with a cached list lacking this thread's row, the
+    // send must invalidate userThreads so the row appears regardless.
+    const reply = { id: 'r-1', parentID: 'ch-1', parentMessageID: 'root', authorID: 'u-1', body: 'r', createdAt: '' };
+    vi.mocked(apiFetch).mockResolvedValue(reply);
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    queryClient.setQueryData(['userThreads'], [{ threadRootID: 'other-thread' }]);
+    const spy = vi.spyOn(queryClient, 'invalidateQueries');
+    const wrapper = ({ children }: { children: ReactNode }) =>
+      createElement(QueryClientProvider, { client: queryClient }, children);
+
+    const { result } = renderHook(() => useSendChannelMessage('ch-1'), { wrapper });
+    result.current.mutate({ body: 'r', attachmentIDs: [], parentMessageID: 'root' });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    const keys = spy.mock.calls.map((c) => (c[0] as { queryKey?: unknown[] }).queryKey);
+    expect(keys).toContainEqual(['userThreads']);
+  });
+
+  it('a reply to a thread ALREADY in the cached /threads list does not refetch (the event patch owns it)', async () => {
+    const reply = { id: 'r-1', parentID: 'ch-1', parentMessageID: 'root', authorID: 'u-1', body: 'r', createdAt: '' };
+    vi.mocked(apiFetch).mockResolvedValue(reply);
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    queryClient.setQueryData(['userThreads'], [{ threadRootID: 'root' }]);
+    const spy = vi.spyOn(queryClient, 'invalidateQueries');
+    const wrapper = ({ children }: { children: ReactNode }) =>
+      createElement(QueryClientProvider, { client: queryClient }, children);
+
+    const { result } = renderHook(() => useSendChannelMessage('ch-1'), { wrapper });
+    result.current.mutate({ body: 'r', attachmentIDs: [], parentMessageID: 'root' });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    const keys = spy.mock.calls.map((c) => (c[0] as { queryKey?: unknown[] }).queryKey);
+    expect(keys).not.toContainEqual(['userThreads']);
+  });
+
   it('non-thread send does NOT invalidate userThreads (avoids needless /threads refetches)', async () => {
     const msg = { id: 'msg-x', parentID: 'ch-1', authorID: 'u-1', body: 'hi', createdAt: '' };
     vi.mocked(apiFetch).mockResolvedValue(msg);

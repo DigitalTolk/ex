@@ -1,18 +1,21 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Search, FileSearch, X, Loader2 } from 'lucide-react';
 import { matchPath, useLocation, useNavigate } from 'react-router-dom';
-import { useChannelBySlug, useUserChannels } from '@/hooks/useChannels';
-import { useUserConversations, useCreateConversation } from '@/hooks/useConversations';
+import { useChannelBySlug } from '@/hooks/useChannels';
+import { useUserConversations, useOpenDM } from '@/hooks/useConversations';
 import { useSearchUsers, useSearchChannels, type SearchHit } from '@/hooks/useSearch';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { useUsersBatch } from '@/hooks/useUsersBatch';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { ChannelIcon } from '@/components/ChannelIcon';
 import { getInitials } from '@/lib/format';
-import { searchShortcutLabel } from '@/lib/platform';
+import { isApplePlatform, searchShortcutLabel } from '@/lib/platform';
 
-// ⌘K on Apple platforms, Ctrl K elsewhere. Computed once from the UA; the keydown
-// handler accepts either modifier — this only drives the visible hint.
+// ⌘K on Apple platforms, Ctrl K elsewhere. The keydown handler matches the
+// SAME platform chord as this hint — on Apple only Cmd+K (a bare Ctrl+K is
+// kill-to-end-of-line in text fields and a CodeMirror binding), on other
+// platforms only Ctrl+K. The handler re-reads the UA per event (trivial
+// regex) so tests can drive both platform branches.
 const SEARCH_SHORTCUT_HINT = searchShortcutLabel(navigator.userAgent);
 
 type ScopeKind = 'channel' | 'dm' | 'group';
@@ -45,10 +48,24 @@ const MIN_SEARCH_CHARS = 2;
 //  • Channel row  → navigate to /channel/:slug
 //  • Person row   → open/create a DM, navigate to /conversation/:id
 //  • Message row  → navigate to /search?q=… (unchanged message flow)
+// itemKey gives every dropdown row a stable identity so the highlight can
+// survive the item list changing under it (async hits arriving/reordering).
+function itemKey(it: Item): string {
+  if (it.kind === 'message') {
+    return `message:${it.suggestion.kind === 'in-scope' ? `in-${it.suggestion.scopeKind}` : 'all'}`;
+  }
+  return `${it.kind}:${it.hit.id}`;
+}
+
 export function SearchBar() {
   const [q, setQ] = useState('');
   const [open, setOpen] = useState(false);
-  const [highlight, setHighlight] = useState(0);
+  // Highlight tracks item IDENTITY, not index — null means "no explicit
+  // selection", which resolves to the message-search action. Index-based
+  // highlighting made Enter's destination fetch-timing-dependent: channel
+  // hits landing just before the keypress would prepend at index 0 and
+  // steal an Enter meant for "Search messages for: <q>".
+  const [highlightKey, setHighlightKey] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const navigate = useNavigate();
@@ -77,8 +94,21 @@ export function SearchBar() {
   const searchEnabled = debouncedQ.length >= MIN_SEARCH_CHARS;
   const usersQuery = useSearchUsers(debouncedQ, searchEnabled, 5);
   const channelsQuery = useSearchChannels(debouncedQ, searchEnabled, 5);
-  const userHits = useMemo(() => usersQuery.data?.hits ?? [], [usersQuery.data]);
-  const channelHits = useMemo(() => channelsQuery.data?.hits ?? [], [channelsQuery.data]);
+  // Hits render only while BOTH the live and the debounced query clear the
+  // minimum. keepPreviousData deliberately holds the previous query's hits
+  // during a refetch (no flicker mid-typing), but once the input drops
+  // below the minimum — or is cleared — those stale rows must neither
+  // render nor stay Enter-activatable (backspacing "gen" → "g" used to
+  // leave ~general in the hidden item list, and Enter navigated there).
+  const hitsEnabled = searchEnabled && trimmed.length >= MIN_SEARCH_CHARS;
+  const userHits = useMemo(
+    () => (hitsEnabled ? (usersQuery.data?.hits ?? []) : []),
+    [hitsEnabled, usersQuery.data],
+  );
+  const channelHits = useMemo(
+    () => (hitsEnabled ? (channelsQuery.data?.hits ?? []) : []),
+    [hitsEnabled, channelsQuery.data],
+  );
   // The search index can't store avatar URLs (they're short-lived presigned S3
   // links), so resolve fresh avatars for the people hits via the batch endpoint
   // (same pattern as the mention list / activity feed).
@@ -86,12 +116,7 @@ export function SearchBar() {
   const { map: userAvatarMap } = useUsersBatch(userHitIDs);
   const searching = searchEnabled && (usersQuery.isLoading || channelsQuery.isLoading);
 
-  const createConv = useCreateConversation();
-  const { data: userChannels } = useUserChannels();
-  const joinedIDs = useMemo(
-    () => new Set((userChannels ?? []).map((c) => c.channelID)),
-    [userChannels],
-  );
+  const { openDM } = useOpenDM();
 
   const suggestions = useMemo<Suggestion[]>(() => {
     if (!trimmed) return [];
@@ -137,32 +162,44 @@ export function SearchBar() {
     return () => document.removeEventListener('mousedown', onDoc);
   }, [open]);
 
-  // Global ⌘K / Ctrl+K — focus and open the search from anywhere in
-  // the app, even when focus is elsewhere. Cleaned up on unmount.
+  // Global ⌘K (Apple) / Ctrl+K (elsewhere) — focus and open the search from
+  // anywhere in the app, even while typing in the composer. Strictly the
+  // platform chord: the other modifier, Shift/Alt combos (Cmd+Shift+K etc.)
+  // and key-repeat are ignored so native text-editing bindings and other
+  // shortcuts are never hijacked. Cleaned up on unmount.
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
-        e.preventDefault();
-        inputRef.current?.focus();
-        setOpen(true);
-      }
+      const apple = isApplePlatform(navigator.userAgent);
+      const chord = apple ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey;
+      if (!chord || e.shiftKey || e.altKey || e.repeat) return;
+      if (e.key.toLowerCase() !== 'k') return;
+      e.preventDefault();
+      inputRef.current?.focus();
+      setOpen(true);
     }
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
   }, []);
 
-  // Clamp the highlighted index in case the item list shrank.
-  const safeHighlight = highlight >= items.length ? 0 : highlight;
+  // Resolve the highlight identity to today's index. A vanished selection
+  // (the list shrank or changed) and "no explicit selection" both fall back
+  // to the message-search action — the only row whose meaning is stable
+  // while fetches are in flight, and the one that always reflects the LIVE
+  // query text.
+  const defaultIdx = items.findIndex((it) => it.kind === 'message');
+  const keyedIdx = highlightKey === null ? -1 : items.findIndex((it) => itemKey(it) === highlightKey);
+  const safeHighlight = keyedIdx >= 0 ? keyedIdx : Math.max(defaultIdx, 0);
 
   function reset() {
     setOpen(false);
     inputRef.current?.blur();
     setQ('');
-    setHighlight(0);
+    setHighlightKey(null);
   }
 
   function submitSuggestion(sel: Suggestion) {
     const label = sel.label.trim();
+    /* istanbul ignore next -- suggestions are built only from non-empty trimmed input (and Enter is gated on the visible dropdown), so a message item always carries a label; defensive */
     if (!label) return;
     const params = new URLSearchParams({ q: label });
     if (sel.kind === 'in-scope') {
@@ -187,11 +224,10 @@ export function SearchBar() {
       reset();
       navigate(`/channel/${slug}`);
     } else if (item.kind === 'user') {
-      reset();
-      createConv.mutate(
-        { type: 'dm', participantIDs: [item.hit.id] },
-        { onSuccess: (conv) => navigate(`/conversation/${conv.id}`) },
-      );
+      // reset() only on success: a failed DM-create keeps the typed query
+      // and the open dropdown (plus useOpenDM's error toast) so the user
+      // can retry instead of facing a silently cleared search box.
+      openDM(item.hit.id, { onSuccess: reset });
     } else {
       submitSuggestion(item.suggestion);
     }
@@ -221,23 +257,31 @@ export function SearchBar() {
             onChange={(e) => {
               setQ(e.target.value);
               setOpen(true);
+              // Typing re-targets Enter to the message-search action for the
+              // NEW text — an arrowed-to selection for the old query must not
+              // survive the query changing under it.
+              setHighlightKey(null);
             }}
             onFocus={() => setOpen(true)}
             onKeyDown={(e) => {
+              // Enter and the arrows act only on the VISIBLE dropdown — a
+              // hidden item list (empty/cleared input) must never be
+              // activatable; the old handler navigated to stale hits on
+              // Enter with an empty search box.
               if (e.key === 'Enter') {
                 e.preventDefault();
-                if (items.length > 0) activate();
+                if (showDropdown && items.length > 0) activate();
               } else if (e.key === 'Escape') {
                 setOpen(false);
                 inputRef.current?.blur();
               } else if (e.key === 'ArrowDown') {
-                if (items.length === 0) return;
+                if (!showDropdown || items.length === 0) return;
                 e.preventDefault();
-                setHighlight((p) => (p + 1) % items.length);
+                setHighlightKey(itemKey(items[(safeHighlight + 1) % items.length]));
               } else if (e.key === 'ArrowUp') {
-                if (items.length === 0) return;
+                if (!showDropdown || items.length === 0) return;
                 e.preventDefault();
-                setHighlight((p) => (p - 1 + items.length) % items.length);
+                setHighlightKey(itemKey(items[(safeHighlight - 1 + items.length) % items.length]));
               }
             }}
             placeholder="Search for anything"
@@ -292,9 +336,8 @@ export function SearchBar() {
                   <ChannelRow
                     key={hit.id}
                     hit={hit}
-                    joined={joinedIDs.has(hit.id)}
                     highlighted={flatIndex === safeHighlight}
-                    onHover={() => setHighlight(flatIndex)}
+                    onHover={() => setHighlightKey(`channel:${hit.id}`)}
                     onSelect={() => activate(flatIndex)}
                   />
                 );
@@ -315,7 +358,7 @@ export function SearchBar() {
                     hit={hit}
                     avatarURL={userAvatarMap.get(hit.id)?.avatarURL}
                     highlighted={flatIndex === safeHighlight}
-                    onHover={() => setHighlight(flatIndex)}
+                    onHover={() => setHighlightKey(`user:${hit.id}`)}
                     onSelect={() => activate(flatIndex)}
                   />
                 );
@@ -359,7 +402,9 @@ export function SearchBar() {
                 <button
                   key={s.kind === 'in-scope' ? `in-${s.scopeKind}` : 'all'}
                   type="button"
-                  onMouseEnter={() => setHighlight(flatIndex)}
+                  onMouseEnter={() =>
+                    setHighlightKey(`message:${s.kind === 'in-scope' ? `in-${s.scopeKind}` : 'all'}`)
+                  }
                   onClick={() => activate(flatIndex)}
                   data-testid={
                     s.kind === 'in-scope'
@@ -406,15 +451,16 @@ function SectionHeader({ children }: { children: React.ReactNode }) {
   );
 }
 
+// Note: no Joined/Join affordance — the backend scopes channel search to
+// the caller's memberships (AllowedParentIDs), so every hit is a channel
+// the user is already in; a "Join" chip could never truthfully render.
 function ChannelRow({
   hit,
-  joined,
   highlighted,
   onHover,
   onSelect,
 }: {
   hit: SearchHit;
-  joined: boolean;
   highlighted: boolean;
   onHover: () => void;
   onSelect: () => void;
@@ -438,16 +484,6 @@ function ChannelRow({
         ariaLabel=""
       />
       <span className="flex-1 truncate font-medium">~{name}</span>
-      <span
-        data-testid={`searchbar-channel-${hit.id}-badge`}
-        className={
-          joined
-            ? 'rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground'
-            : 'rounded-full border border-border-strong px-2 py-0.5 text-[11px] font-medium text-foreground'
-        }
-      >
-        {joined ? 'Joined' : 'Join'}
-      </span>
     </button>
   );
 }

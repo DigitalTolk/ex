@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { File as FileIcon, Hash, MessageSquare, User as UserIcon, X } from 'lucide-react';
 import { PageContainer } from '@/components/layout/PageContainer';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
@@ -20,7 +20,7 @@ import {
 import { useUsersBatch } from '@/hooks/useUsersBatch';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { useUserChannels } from '@/hooks/useChannels';
-import { useUserConversations, useCreateConversation } from '@/hooks/useConversations';
+import { useUserConversations, useOpenDM } from '@/hooks/useConversations';
 import { useMessageParent } from '@/hooks/useMessageParent';
 import { formatLongDateTime, getInitials } from '@/lib/format';
 import { highlight } from '@/lib/highlight';
@@ -367,21 +367,13 @@ function UserHitRow({ hit }: { hit: SearchHit }) {
   const name = String(hit._source.displayName ?? hit.id);
   const email = String(hit._source.email ?? '');
   const role = String(hit._source.systemRole ?? '');
-  const navigate = useNavigate();
-  const createConv = useCreateConversation();
-
-  function openDM() {
-    createConv.mutate(
-      { type: 'dm', participantIDs: [hit.id] },
-      { onSuccess: (conv) => navigate(`/conversation/${conv.id}`) },
-    );
-  }
+  const { openDM } = useOpenDM();
 
   return (
     <li>
       <button
         type="button"
-        onClick={openDM}
+        onClick={() => openDM(hit.id)}
         className="flex w-full items-start gap-3 rounded-lg border bg-card p-3 text-left transition-colors hover:bg-muted/40"
       >
         <Avatar className="h-9 w-9">

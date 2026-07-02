@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -146,9 +147,33 @@ func hashAndResetBody(req *http.Request) (string, error) {
 // is constant — pre-computing it skips an allocation on every GET.
 const emptyPayloadHash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 
+// ClientConfig carries the OpenSearch connection settings (mirrors the
+// OPENSEARCH_* env vars) so the server and the migrate CLI share ONE
+// constructor and the SigV4-vs-plain selection can't drift between them.
+type ClientConfig struct {
+	URL        string
+	AWSRegion  string
+	AWSService string
+}
+
+// NewClientFromConfig builds the client from configuration: SigV4-signed
+// when an AWS region is set, plain otherwise, nil (no error) when no URL
+// is configured — callers degrade to no-ops exactly like NewClient.
+func NewClientFromConfig(ctx context.Context, cfg ClientConfig) (*Client, error) {
+	if cfg.AWSRegion != "" {
+		return NewAWSClient(ctx, cfg.URL, AWSSigning{
+			Region:  cfg.AWSRegion,
+			Service: cfg.AWSService,
+		})
+	}
+	return NewClient(cfg.URL), nil
+}
+
 // EnsureIndices creates each indexed-resource mapping if missing.
 // Existing indices are left as-is; reindexing is a separate flow. Safe
-// to call on every server start.
+// to call on every server start. (A rebuilt index is a physical
+// `<name>-r<nanos>` behind an alias called `<name>` — the HEAD check
+// matches aliases too, so this never fights PromoteIndex.)
 func (c *Client) EnsureIndices(ctx context.Context) error {
 	for name, body := range indexMappings {
 		exists, err := c.indexExists(ctx, name)
@@ -188,28 +213,129 @@ func (c *Client) createIndex(ctx context.Context, name, body string) error {
 	return c.do(ctx, http.MethodPut, "/"+name, strings.NewReader(body), nil)
 }
 
-// RecreateIndex drops `name` (if it exists) and recreates it from the
-// current mapping in indexMappings. Used by the search-reindex migration
-// to roll a mapping/analyzer change onto an EXISTING cluster (EnsureIndices
-// only creates an absent index, so an analyzer change needs a fresh
-// mapping). Recreating from scratch also drops any orphaned ghost docs.
-// Returns an error for an unknown index name so a typo can't silently
-// wipe nothing.
-func (c *Client) RecreateIndex(ctx context.Context, name string) error {
+// BeginIndexRebuild creates a fresh physical index carrying the CURRENT
+// mapping for logical index `name`, named `<name>-r<unix-nanos>`, and
+// returns that staging name. The live index (or alias) keeps serving
+// reads and writes untouched; the caller bulk-populates the staging
+// index, then PromoteIndex atomically swaps the logical name onto it —
+// there is never a window where `name` doesn't resolve (the old
+// delete-then-create rebuild 404'd every concurrent search and a crash
+// mid-way left NO index until the next server start). Returns an error
+// for an unknown logical name so a typo can't stage anything.
+func (c *Client) BeginIndexRebuild(ctx context.Context, name string) (string, error) {
 	if c == nil {
-		return nil
+		return "", nil
 	}
 	body, ok := indexMappings[name]
 	if !ok {
-		return fmt.Errorf("search: unknown index %q", name)
+		return "", fmt.Errorf("search: unknown index %q", name)
 	}
-	if err := c.deleteIndex(ctx, name); err != nil {
-		return fmt.Errorf("search: delete %s: %w", name, err)
+	staging := fmt.Sprintf("%s-r%d", name, time.Now().UnixNano())
+	if err := c.createIndex(ctx, staging, body); err != nil {
+		return "", fmt.Errorf("search: create %s: %w", staging, err)
 	}
-	if err := c.createIndex(ctx, name, body); err != nil {
-		return fmt.Errorf("search: create %s: %w", name, err)
+	return staging, nil
+}
+
+// PromoteIndex atomically points logical index `name` at the freshly
+// built `staging` index and retires the previous backing. All three
+// possible live states are handled:
+//   - alias `name` → old physical index: one atomic _aliases call moves
+//     the alias, then the orphaned physical index is deleted;
+//   - legacy real index named `name` (pre-alias deployments): the atomic
+//     _aliases call uses remove_index, deleting the legacy index and
+//     adding the alias in a single cluster-state update;
+//   - nothing live yet: the alias is simply added.
+//
+// In every case concurrent searches and writes against `name` never 404.
+func (c *Client) PromoteIndex(ctx context.Context, name, staging string) error {
+	if c == nil {
+		return nil
+	}
+	old, err := c.aliasBacking(ctx, name)
+	if err != nil {
+		return fmt.Errorf("search: resolve alias %s: %w", name, err)
+	}
+	add := map[string]any{"add": map[string]any{"index": staging, "alias": name}}
+	var actions []map[string]any
+	switch {
+	case old != "":
+		actions = []map[string]any{
+			{"remove": map[string]any{"index": old, "alias": name}},
+			add,
+		}
+	default:
+		exists, err := c.indexExists(ctx, name)
+		if err != nil {
+			return fmt.Errorf("search: head %s: %w", name, err)
+		}
+		if exists {
+			actions = []map[string]any{
+				{"remove_index": map[string]any{"index": name}},
+				add,
+			}
+		} else {
+			actions = []map[string]any{add}
+		}
+	}
+	payload, err := json.Marshal(map[string]any{"actions": actions})
+	if err != nil { // coverage-ignore: a map of string-keyed literals cannot fail to marshal.
+		return fmt.Errorf("search: marshal alias actions: %w", err)
+	}
+	if err := c.do(ctx, http.MethodPost, "/_aliases", bytes.NewReader(payload), nil); err != nil {
+		return fmt.Errorf("search: swap alias %s -> %s: %w", name, staging, err)
+	}
+	if old != "" {
+		// The old physical index is unreferenced now; cleanup is
+		// best-effort — an orphan wastes disk but the swap already
+		// succeeded and the logical name is healthy.
+		if err := c.deleteIndex(ctx, old); err != nil {
+			slog.Warn("search: promote: deleting retired index failed", "index", old, "error", err)
+		}
 	}
 	return nil
+}
+
+// AbortIndexRebuild deletes an abandoned staging index after a failed
+// rebuild. Best-effort: at worst the staging index lingers as
+// unreferenced garbage, and the live index was never touched.
+func (c *Client) AbortIndexRebuild(ctx context.Context, staging string) {
+	if c == nil || staging == "" {
+		return
+	}
+	if err := c.deleteIndex(ctx, staging); err != nil {
+		slog.Warn("search: abort rebuild: deleting staging index failed", "index", staging, "error", err)
+	}
+}
+
+// aliasBacking returns the physical index that alias `name` points at,
+// or "" when no such alias exists (legacy real index, or nothing).
+func (c *Client) aliasBacking(ctx context.Context, name string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/_alias/"+name, nil)
+	if err != nil {
+		return "", err
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode == http.StatusNotFound {
+		return "", nil
+	}
+	if resp.StatusCode >= 400 {
+		return "", c.errorFromResponse(resp)
+	}
+	var out map[string]struct {
+		Aliases map[string]any `json:"aliases"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return "", fmt.Errorf("search: alias decode: %w", err)
+	}
+	for physical := range out {
+		return physical, nil
+	}
+	return "", nil
 }
 
 // deleteIndex removes an entire index. A 404 (already gone) is treated
@@ -519,10 +645,22 @@ func (c *Client) IndexStats(ctx context.Context) ([]IndexStat, error) {
 		}
 	}
 	// Always return every known index in a stable order so the UI
-	// can render rows even when an index hasn't been created yet.
+	// can render rows even when an index hasn't been created yet. After
+	// an alias-swap rebuild the physical row is named `<name>-r<nanos>`,
+	// so fall back to prefix-matching and keep reporting the logical name.
 	out := make([]IndexStat, 0, 4)
 	for _, name := range []string{IndexUsers, IndexChannels, IndexMessages, IndexFiles} {
-		if s, ok := byName[name]; ok {
+		s, ok := byName[name]
+		if !ok {
+			for physical, ps := range byName {
+				if strings.HasPrefix(physical, name+"-r") {
+					s, ok = ps, true
+					s.Name = name
+					break
+				}
+			}
+		}
+		if ok {
 			out = append(out, s)
 		} else {
 			out = append(out, IndexStat{Name: name, Health: "missing"})

@@ -314,23 +314,20 @@ func main() {
 	sidebarH := handler.NewSidebarHandler(channelSvc, convSvc, categorySvc)
 
 	// ------------------------------------------------------------------ Search
-	// NewClient returns nil for an empty URL; downstream wiring degrades
-	// to no-ops when the search package isn't configured. Setting
+	// NewClientFromConfig returns nil for an empty URL; downstream wiring
+	// degrades to no-ops when the search package isn't configured. Setting
 	// OPENSEARCH_AWS_REGION switches to a SigV4-signing client backed by
 	// the SDK's default credential chain — that's the IAM-role path on
-	// AWS-hosted deployments (managed OpenSearch / Serverless).
-	var searchClient *search.Client
-	if cfg.OpenSearchAWSRegion != "" {
-		searchClient, err = search.NewAWSClient(ctx, cfg.OpenSearchURL, search.AWSSigning{
-			Region:  cfg.OpenSearchAWSRegion,
-			Service: cfg.OpenSearchAWSService,
-		})
-		if err != nil {
-			slog.Error("failed to init AWS-signed OpenSearch client", "error", err)
-			os.Exit(1)
-		}
-	} else {
-		searchClient = search.NewClient(cfg.OpenSearchURL)
+	// AWS-hosted deployments (managed OpenSearch / Serverless). The same
+	// constructor drives the migrate CLI so the wiring can't drift.
+	searchClient, err := search.NewClientFromConfig(ctx, search.ClientConfig{
+		URL:        cfg.OpenSearchURL,
+		AWSRegion:  cfg.OpenSearchAWSRegion,
+		AWSService: cfg.OpenSearchAWSService,
+	})
+	if err != nil {
+		slog.Error("failed to init AWS-signed OpenSearch client", "error", err)
+		os.Exit(1)
 	}
 	if searchClient != nil {
 		if err := searchClient.EnsureIndices(ctx); err != nil {
@@ -355,11 +352,12 @@ func main() {
 	}
 	searcher := search.NewService(searchClient)
 	searchAccess := newSearchAccess(membershipStore, conversationStore)
-	searchH := handler.NewSearchHandler(searcher, searchAccess)
-	// Route /search/users through the canonical store so a user deleted
-	// straight from DynamoDB (no hard-delete service method exists to
-	// de-index) never surfaces as a ghost, even with a stale index.
-	searchH.SetUserResolver(userStore)
+	// Ghost filtering: hits are verified against the canonical stores so a
+	// user/channel deleted straight from DynamoDB (nothing de-indexed it)
+	// never surfaces from a stale index. The user resolver is the
+	// CACHE-FIRST service — not the raw store — so per-keystroke
+	// autocomplete stays off DynamoDB for warm IDs.
+	searchH := handler.NewSearchHandler(searcher, searchAccess, userSvc, channelSvc)
 	if searchClient != nil {
 		ids := newIDSearcher(searcher)
 		userSvc.SetSearcher(ids)

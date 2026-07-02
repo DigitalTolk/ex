@@ -180,6 +180,19 @@ describe('useMessages cache helpers', () => {
     expect(thread.map((m) => m.id)).toEqual(['m-root', 'r1']);
   });
 
+  it('appendReplyToThreadCache treats a cached EMPTY thread as not-present (no rootless render)', () => {
+    // Reachable state: the thread fetch raced eventual consistency right
+    // after the root was created and cached 200 + []. Appending the reply
+    // would render it AS the root; instead the cache stays untouched and
+    // not-present makes the caller's invalidate fallback refetch
+    // root + replies together.
+    const qc = new QueryClient();
+    qc.setQueryData(queryKeys.thread('channels/ch-1', 'm-root'), []);
+    const present = appendReplyToThreadCache(qc, 'ch-1', 'm-root', msg('r1', { parentMessageID: 'm-root' }));
+    expect(present).toBe(false);
+    expect(qc.getQueryData(queryKeys.thread('channels/ch-1', 'm-root'))).toEqual([]);
+  });
+
   it('appendReplyToThreadCache reports not-present when the thread is not cached', () => {
     const qc = new QueryClient();
     const present = appendReplyToThreadCache(qc, 'ch-1', 'm-root', msg('r1', { parentMessageID: 'm-root' }));

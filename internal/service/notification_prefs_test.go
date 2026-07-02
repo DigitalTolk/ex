@@ -62,7 +62,7 @@ func TestNotifyForMessage_KeywordNotifiesAtMentionsLevel(t *testing.T) {
 		members.memberships["ch1#"+uid] = &model.ChannelMembership{ChannelID: "ch1", UserID: uid}
 	}
 
-	svc.NotifyForMessage(ctx, &model.Message{ID: "m1", ParentID: "ch1", AuthorID: "u-author", Body: "we deploy tonight"}, ParentChannel)
+	svc.NotifyForMessage(ctx, &model.Message{ID: "m1", ParentID: "ch1", AuthorID: "u-author", Body: "we deploy tonight"}, ParentChannel, nil)
 
 	kinds := publishedKinds(pub)
 	if got := kinds[pubsub.UserChannel("u-bob")]; got != NotificationKindMessage {
@@ -86,7 +86,7 @@ func TestNotifyForMessage_IgnoreGroupMentions(t *testing.T) {
 		members.memberships["ch1#"+uid] = &model.ChannelMembership{ChannelID: "ch1", UserID: uid}
 	}
 
-	svc.NotifyForMessage(ctx, &model.Message{ID: "m1", ParentID: "ch1", AuthorID: "u-author", Body: "@all hello"}, ParentChannel)
+	svc.NotifyForMessage(ctx, &model.Message{ID: "m1", ParentID: "ch1", AuthorID: "u-author", Body: "@all hello"}, ParentChannel, nil)
 
 	kinds := publishedKinds(pub)
 	if _, ok := kinds[pubsub.UserChannel("u-bob")]; ok {
@@ -112,7 +112,7 @@ func TestNotifyForMessage_ThreadRepliesOff_SuppressesThreadNotif(t *testing.T) {
 
 	svc.NotifyForMessage(ctx, &model.Message{
 		ID: "m-r1", ParentID: "ch1", AuthorID: "u-replier", ParentMessageID: "m-root", Body: "reply",
-	}, ParentChannel)
+	}, ParentChannel, nil)
 
 	if got := len(pub.published); got != 0 {
 		t.Fatalf("publish count = %d, want 0 (root author disabled thread replies)", got)
@@ -135,7 +135,7 @@ func TestNotifyForMessage_FollowAllThreads_ExpandsAudience(t *testing.T) {
 
 	svc.NotifyForMessage(ctx, &model.Message{
 		ID: "m-r1", ParentID: "ch1", AuthorID: "u-replier", ParentMessageID: "m-root", Body: "reply",
-	}, ParentChannel)
+	}, ParentChannel, nil)
 
 	kinds := publishedKinds(pub)
 	if got := kinds[pubsub.UserChannel("u-watcher")]; got != NotificationKindThreadReply {
@@ -187,7 +187,7 @@ func TestNotifyForMessage_ThreadReply_AllLevelNotifies(t *testing.T) {
 
 	svc.NotifyForMessage(ctx, &model.Message{
 		ID: "m-r1", ParentID: "ch1", AuthorID: "u-replier", ParentMessageID: "m-root", Body: "reply",
-	}, ParentChannel)
+	}, ParentChannel, nil)
 
 	if got := publishedKinds(pub)[pubsub.UserChannel("u-root")]; got != NotificationKindThreadReply {
 		t.Errorf("thread root at 'all' level should get thread_reply, got %q", got)
@@ -210,7 +210,7 @@ func TestNotifyForMessage_PerChannelOverrideBeatsAccount(t *testing.T) {
 		members.memberships["ch1#"+uid] = &model.ChannelMembership{ChannelID: "ch1", UserID: uid}
 	}
 
-	svc.NotifyForMessage(ctx, &model.Message{ID: "m1", ParentID: "ch1", AuthorID: "u-author", Body: "plain"}, ParentChannel)
+	svc.NotifyForMessage(ctx, &model.Message{ID: "m1", ParentID: "ch1", AuthorID: "u-author", Body: "plain"}, ParentChannel, nil)
 
 	if got := publishedKinds(pub)[pubsub.UserChannel("u-bob")]; got != NotificationKindMessage {
 		t.Errorf("per-channel 'all' override should notify bob, got %q", got)
@@ -231,7 +231,7 @@ func TestNotifyForMessage_MobileAll_DesktopMentions(t *testing.T) {
 		members.memberships["ch1#"+uid] = &model.ChannelMembership{ChannelID: "ch1", UserID: uid}
 	}
 
-	svc.NotifyForMessage(ctx, &model.Message{ID: "m1", ParentID: "ch1", AuthorID: "u-author", Body: "plain"}, ParentChannel)
+	svc.NotifyForMessage(ctx, &model.Message{ID: "m1", ParentID: "ch1", AuthorID: "u-author", Body: "plain"}, ParentChannel, nil)
 
 	if got := len(pub.published); got != 0 {
 		t.Errorf("desktop (mentions) should not publish for a plain message, got %d", got)
@@ -256,7 +256,7 @@ func TestNotifyForMessage_MobileMentions_DesktopAll(t *testing.T) {
 		members.memberships["ch1#"+uid] = &model.ChannelMembership{ChannelID: "ch1", UserID: uid}
 	}
 
-	svc.NotifyForMessage(ctx, &model.Message{ID: "m1", ParentID: "ch1", AuthorID: "u-author", Body: "plain"}, ParentChannel)
+	svc.NotifyForMessage(ctx, &model.Message{ID: "m1", ParentID: "ch1", AuthorID: "u-author", Body: "plain"}, ParentChannel, nil)
 
 	if got := len(pub.published); got != 1 {
 		t.Errorf("desktop (all) should publish, got %d", got)

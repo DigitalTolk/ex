@@ -14,10 +14,9 @@ import {
   useFavoriteConversation,
   useSetConversationCategory,
 } from '@/hooks/useSidebar';
-import { useIsMobile } from '@/hooks/useIsMobile';
-import { useLongPress } from '@/hooks/useLongPress';
+import { useRowLongPressMenu } from '@/hooks/useRowLongPressMenu';
 import type { UserConversation, UserStatus } from '@/types';
-import { useState, type CSSProperties } from 'react';
+import { type CSSProperties } from 'react';
 
 interface Props {
   conversation: UserConversation;
@@ -59,13 +58,9 @@ export function ConversationRow({
 }: Props) {
   const favorite = useFavoriteConversation();
   const setCategory = useSetConversationCategory();
-  const isMobile = useIsMobile();
-  // Controlled so a mobile long-press can open the (otherwise hidden) row menu.
-  const [menuOpen, setMenuOpen] = useState(false);
-  const { handlers: longPressHandlers, shouldSuppressClick } = useLongPress({
-    enabled: isMobile,
-    onLongPress: () => setMenuOpen(true),
-  });
+  // Mobile long-press opens the (otherwise hidden) row menu; shared with
+  // the other sidebar row type so the behavior can't drift.
+  const { menuOpen, setMenuOpen, rowHandlers, suppressNavClick } = useRowLongPressMenu();
 
   const isFav = !!conversation.favorite;
   const isGroup = conversation.type === 'group';
@@ -90,14 +85,14 @@ export function ConversationRow({
       className={`group/row relative flex items-center ${draggable ? 'cursor-grab active:cursor-grabbing' : ''}`}
       data-testid={`conversation-row-${conversation.conversationID}`}
       style={dragStyle}
-      {...longPressHandlers}
+      {...rowHandlers}
     >
       <NavLink
         to={`/conversation/${conversation.conversationID}`}
         onClick={(event) => {
           // A touch long-press that opened the menu also fires a click on
           // release; swallow it so the row doesn't navigate.
-          if (shouldSuppressClick()) {
+          if (suppressNavClick()) {
             event.preventDefault();
             event.stopPropagation();
             return;

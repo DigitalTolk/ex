@@ -180,6 +180,7 @@ vi.mock('@/hooks/useChannels', () => ({
 }));
 
 vi.mock('@/hooks/useConversations', () => ({
+  useOpenDM: () => ({ openDM: vi.fn(), isPending: false }),
   useUserConversations: () => ({ data: mockConversations }),
   useSearchUsers: () => ({ data: [] }),
   useCreateConversation: () => ({ mutate: vi.fn(), isPending: false }),
@@ -1762,6 +1763,16 @@ describe('Sidebar', () => {
         body: JSON.stringify({ categoryID: '', sidebarPosition: 2000 }),
       });
     });
+  });
+
+  it('the DM sort trigger is inert on mobile (pointer-events-none, not just invisible)', () => {
+    renderSidebar();
+    // opacity-0 alone still hit-tests: without pointer-events-none the
+    // hover-only trigger was an INVISIBLE tappable target right beside the
+    // always-visible mobile "+" — a stray thumb tap popped a sort menu out
+    // of nowhere. Same treatment as the row kebabs.
+    const trigger = screen.getByTestId('sidebar-dm-sort-menu');
+    expect(trigger).toHaveClass('opacity-0', 'max-md:pointer-events-none');
   });
 
   it('stores and applies the Direct Messages A-Z sort preference', async () => {

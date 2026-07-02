@@ -80,6 +80,7 @@ vi.mock('@/hooks/useChannels', () => ({
   useCreateChannel: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 vi.mock('@/hooks/useConversations', () => ({
+  useOpenDM: () => ({ openDM: vi.fn(), isPending: false }),
   useUserConversations: () => ({ data: makeConversations(), isError: false }),
   useSearchUsers: () => ({ data: [] }),
   useCreateConversation: () => ({ mutate: vi.fn(), isPending: false }),

@@ -57,6 +57,7 @@ vi.mock('@/context/NotificationContext', () => ({
 }));
 
 vi.mock('@/hooks/useConversations', () => ({
+  useOpenDM: () => ({ openDM: vi.fn(), isPending: false }),
   useConversation: () => ({
     data: {
       id: 'c-self',

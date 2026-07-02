@@ -12,17 +12,20 @@ import (
 	"log/slog"
 )
 
-// runSearchReindex drops and recreates the ex_users and ex_channels
-// OpenSearch indices with the CURRENT mapping (the edge-ngram
-// `autocomplete` analyzer) and bulk-reindexes them from DynamoDB. This is
-// how a mapping/analyzer change rolls onto an EXISTING cluster —
-// EnsureIndices only creates an absent index, so an analyzer change needs
-// a fresh mapping. Recreating from scratch also drops orphaned ghost docs
-// (users/channels deleted directly from DynamoDB and never de-indexed).
+// runSearchReindex rebuilds the ex_users and ex_channels OpenSearch
+// indices with the CURRENT mapping (the n-gram `autocomplete` analyzer)
+// from DynamoDB, with zero downtime: each index is bulk-built as a fresh
+// staging index and atomically alias-swapped live, then a repair pass
+// re-lists the canonical store so writes that raced the rebuild are
+// captured (see search.RecreateUsersChannels). This is how a
+// mapping/analyzer change rolls onto an EXISTING cluster — EnsureIndices
+// only creates absent indices. Rebuilding from scratch also drops
+// orphaned ghost docs (users/channels deleted directly from DynamoDB and
+// never de-indexed).
 //
 // Idempotent: re-running produces the same end state. Defaults to
 // --dry-run (reports the counts it WOULD reindex without touching
-// OpenSearch); pass --apply to recreate + write.
+// OpenSearch); pass --apply to rebuild + swap.
 func runSearchReindex(ctx context.Context, db *store.DB, args []string) int {
 	dryRun, _, mode := migrateFlags("search-reindex", args, nil)
 
@@ -30,7 +33,11 @@ func runSearchReindex(ctx context.Context, db *store.DB, args []string) int {
 	if err != nil {
 		fatal("config load failed", err)
 	}
-	client, err := buildSearchClient(ctx, cfg)
+	client, err := search.NewClientFromConfig(ctx, search.ClientConfig{
+		URL:        cfg.OpenSearchURL,
+		AWSRegion:  cfg.OpenSearchAWSRegion,
+		AWSService: cfg.OpenSearchAWSService,
+	})
 	if err != nil {
 		fatal("opensearch client init failed", err)
 	}
@@ -45,40 +52,38 @@ func runSearchReindex(ctx context.Context, db *store.DB, args []string) int {
 	}
 
 	slog.Info("search-reindex starting", "mode", mode, "indices", []string{search.IndexUsers, search.IndexChannels})
+	return searchReindex(ctx, client, src, dryRun)
+}
 
+// searchReindex is the flag- and env-free core of the subcommand,
+// extracted so tests can pin the dry-run/apply contract with a spy
+// rebuilder: dry-run reports counts from the SAME src listing the apply
+// path reindexes from and performs zero rebuilder calls; apply delegates
+// to search.RecreateUsersChannels.
+func searchReindex(ctx context.Context, rc search.IndexRebuilder, src search.UsersChannelsSource, dryRun bool) int {
 	if dryRun {
-		users, uerr := src.ListUsers(ctx)
-		if uerr != nil {
-			fatal("list users", uerr)
+		users, err := src.ListUsers(ctx)
+		if err != nil {
+			slog.Error("search-reindex: list users", "error", err)
+			return 1
 		}
-		channels, cerr := src.ListChannels(ctx)
-		if cerr != nil {
-			fatal("list channels", cerr)
+		channels, err := src.ListChannels(ctx)
+		if err != nil {
+			slog.Error("search-reindex: list channels", "error", err)
+			return 1
 		}
-		slog.Info("search-reindex dry-run: would recreate + reindex",
+		slog.Info("search-reindex dry-run: would rebuild + swap",
 			"users", len(users), "channels", len(channels))
 		return 0
 	}
 
-	users, channels, err := search.RecreateUsersChannels(ctx, client, src)
+	users, channels, err := search.RecreateUsersChannels(ctx, rc, src)
 	if err != nil {
-		fatal("search reindex", err)
+		slog.Error("search reindex failed — the live indices keep serving (a staging index may linger)", "error", err)
+		return 1
 	}
 	slog.Info("search-reindex complete", "users", users, "channels", channels)
 	return 0
-}
-
-// buildSearchClient mirrors the server's OpenSearch wiring: SigV4-signed
-// client when an AWS region is configured, plain client otherwise, nil
-// when no URL is set.
-func buildSearchClient(ctx context.Context, cfg *config.Config) (*search.Client, error) {
-	if cfg.OpenSearchAWSRegion != "" {
-		return search.NewAWSClient(ctx, cfg.OpenSearchURL, search.AWSSigning{
-			Region:  cfg.OpenSearchAWSRegion,
-			Service: cfg.OpenSearchAWSService,
-		})
-	}
-	return search.NewClient(cfg.OpenSearchURL), nil
 }
 
 // usersChannelsSource adapts the DynamoDB stores to

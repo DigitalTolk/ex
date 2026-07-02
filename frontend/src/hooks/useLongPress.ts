@@ -9,8 +9,8 @@ interface UseLongPressOptions {
   // `enabled: isMobile === false` so the pointer plumbing never competes with
   // the native HTML5 drag used for sidebar reordering.
   enabled?: boolean;
-  // Hold duration before the press counts as "long". Matches MessageItem (420ms
-  // there); default a touch longer so a deliberate press is required.
+  // Hold duration before the press counts as "long". MessageItem passes 420ms;
+  // the row default is a touch longer so a deliberate press is required.
   delayMs?: number;
 }
 
@@ -18,15 +18,19 @@ interface UseLongPressOptions {
 // long-press, and cancels the pending timer.
 const MOVE_CANCEL_THRESHOLD = 10;
 
-// Reusable touch long-press. Returns pointer handlers to spread onto the target
-// element plus `shouldSuppressClick()`, a one-shot getter the caller reads in
-// the element's click handler to swallow the click that a touch release fires
-// right after a long-press (so a long-press-to-open-menu doesn't also navigate).
+// THE touch long-press implementation (sidebar rows via useRowLongPressMenu,
+// the message action sheet in MessageItem — do not hand-roll another copy).
+// Returns pointer handlers to spread onto the target element, plus
+// `shouldSuppressClick()`, a one-shot getter the caller reads in the element's
+// click handler to swallow the click that a touch release fires right after a
+// long-press (so a long-press-to-open-menu doesn't also navigate), plus
+// `cancel()` for callers that need to abort a pending press programmatically
+// (e.g. closing the action sheet mid-press).
 //
-// Mirrors the robust pattern in MessageItem.startLongPress: only touch/pen
-// (pointerType !== 'mouse') arms the timer, window pointerup/pointercancel abort
-// it, and movement past a small threshold cancels. When `enabled` is false every
-// handler is a no-op, so the same row works unchanged with mouse + native drag.
+// Only touch/pen (pointerType !== 'mouse') arms the timer, window
+// pointerup/pointercancel abort it, and movement past a small threshold
+// cancels. When `enabled` is false every handler is a no-op, so the same row
+// works unchanged with mouse + native drag.
 export function useLongPress({ onLongPress, enabled = true, delayMs = 450 }: UseLongPressOptions) {
   const timerRef = useRef<number | null>(null);
   const startRef = useRef<{ x: number; y: number } | null>(null);
@@ -96,5 +100,6 @@ export function useLongPress({ onLongPress, enabled = true, delayMs = 450 }: Use
       onPointerCancel: cancel,
     },
     shouldSuppressClick,
+    cancel,
   };
 }

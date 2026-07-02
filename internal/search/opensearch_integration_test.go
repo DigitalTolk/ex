@@ -212,6 +212,66 @@ func TestSearch_UserAutocompletePrefix_RealEngine(t *testing.T) {
 	}
 }
 
+// The n-gram autocomplete subfield indexes grams of 2..10 chars. These
+// tests pin the max_gram boundary — a 10-char infix matches, an 11+-char
+// mid-token substring does NOT (it exceeds every indexed gram and is too
+// many edits for the fuzzy fallback) — and prove the lowercase+ngram
+// chain handles non-Latin scripts. Anyone tuning the analyzer (min/max
+// gram, search_analyzer) trips these instead of silently breaking search.
+func TestSearch_AutocompleteNgramBoundaryAndNonLatin_RealEngine(t *testing.T) {
+	c := newSearchClient(t)
+	ctx := context.Background()
+	idx := NewIndexer(c)
+	svc := NewService(c)
+
+	users := []*model.User{
+		// One 16-char token so mid-token substrings of length 10 vs 11
+		// straddle max_gram without full-token or fuzzy interference.
+		{ID: "ng1", DisplayName: "abcdefghijklmnop", Email: "ng1@example.com"},
+		{ID: "ng2", DisplayName: "Михаил Петров", Email: "mikhail@example.com"},
+	}
+	for _, u := range users {
+		if err := idx.IndexUser(ctx, u); err != nil {
+			t.Fatalf("IndexUser %s: %v", u.ID, err)
+		}
+	}
+	refreshIndex(t, c, IndexUsers)
+
+	t.Run("10-char infix matches (max_gram boundary)", func(t *testing.T) {
+		res, err := svc.Users(ctx, "efghijklmn", 10) // chars 5-14 of the token
+		if err != nil {
+			t.Fatalf("Users: %v", err)
+		}
+		if !hitIDs(res)["ng1"] {
+			t.Fatalf("10-char infix must match via the ngram subfield, got %v", res.Hits)
+		}
+	})
+	t.Run("11-char mid-token substring misses (documented max_gram limit)", func(t *testing.T) {
+		// 11 chars exceeds max_gram=10, and 5 edits from the full token is
+		// beyond fuzziness AUTO — so this documented limitation returns
+		// nothing (and must not error). If a mapping change makes this
+		// match, update the docs in index.go alongside this test.
+		res, err := svc.Users(ctx, "efghijklmno", 10)
+		if err != nil {
+			t.Fatalf("Users: %v", err)
+		}
+		if hitIDs(res)["ng1"] {
+			t.Fatalf("11-char mid-token substring unexpectedly matched — max_gram semantics changed, update index.go docs: %v", res.Hits)
+		}
+	})
+	t.Run("cyrillic prefix and infix", func(t *testing.T) {
+		for _, q := range []string{"Мих", "иха"} {
+			res, err := svc.Users(ctx, q, 10)
+			if err != nil {
+				t.Fatalf("Users(%q): %v", q, err)
+			}
+			if !hitIDs(res)["ng2"] {
+				t.Fatalf("Users(%q) = %v, want ng2 — lowercase+ngram must handle Cyrillic", q, res.Hits)
+			}
+		}
+	})
+}
+
 func TestSearch_ChannelAutocompleteAndScoping_RealEngine(t *testing.T) {
 	c := newSearchClient(t)
 	ctx := context.Background()
@@ -309,5 +369,68 @@ func TestSearch_EnsureIndicesIsIdempotent_RealEngine(t *testing.T) {
 	// (the indices already exist) rather than erroring.
 	if err := c.EnsureIndices(context.Background()); err != nil {
 		t.Fatalf("EnsureIndices second call should be idempotent: %v", err)
+	}
+}
+
+// A rebuild must be repeatable and zero-downtime: the first run promotes
+// a legacy real index onto an alias (atomic remove_index), the second
+// swaps alias → alias and deletes the retired physical index. The
+// logical name keeps answering searches and writes across both, and
+// IndexStats keeps reporting the logical name.
+func TestSearch_RebuildRepeatable_AliasSwap_RealEngine(t *testing.T) {
+	c := newSearchClient(t)
+	ctx := context.Background()
+	svc := NewService(c)
+
+	src := &fakeSources{
+		users:    []*model.User{{ID: "swap-u1", DisplayName: "Swapelina Vex"}},
+		channels: []*model.Channel{{ID: "swap-c1", Name: "swapchannel"}},
+	}
+	for run := 1; run <= 2; run++ {
+		users, channels, err := RecreateUsersChannels(ctx, c, src)
+		if err != nil {
+			t.Fatalf("run %d: RecreateUsersChannels: %v", run, err)
+		}
+		if users != 1 || channels != 1 {
+			t.Fatalf("run %d: counts = %d/%d, want 1/1", run, users, channels)
+		}
+		refreshIndex(t, c, IndexUsers)
+		res, err := svc.Users(ctx, "swapelina", 10)
+		if err != nil {
+			t.Fatalf("run %d: search through logical name: %v", run, err)
+		}
+		if !hitIDs(res)["swap-u1"] {
+			t.Fatalf("run %d: swap-u1 missing after rebuild: %v", run, res.Hits)
+		}
+		backing, err := c.aliasBacking(ctx, IndexUsers)
+		if err != nil || backing == "" {
+			t.Fatalf("run %d: expected %s to be an alias, backing=%q err=%v", run, IndexUsers, backing, err)
+		}
+	}
+
+	// Writes through the logical (aliased) name still land.
+	if err := NewIndexer(c).IndexUser(ctx, &model.User{ID: "post-swap", DisplayName: "Postswap Person"}); err != nil {
+		t.Fatalf("IndexDoc through alias: %v", err)
+	}
+	refreshIndex(t, c, IndexUsers)
+	res, err := svc.Users(ctx, "postswap", 10)
+	if err != nil || !hitIDs(res)["post-swap"] {
+		t.Fatalf("post-swap write not searchable through alias: %v %v", res, err)
+	}
+
+	// IndexStats maps the physical `<name>-r<nanos>` row back to the
+	// logical name so the admin UI keeps rendering stable rows.
+	stats, err := c.IndexStats(ctx)
+	if err != nil {
+		t.Fatalf("IndexStats: %v", err)
+	}
+	var userStat *IndexStat
+	for i := range stats {
+		if stats[i].Name == IndexUsers {
+			userStat = &stats[i]
+		}
+	}
+	if userStat == nil || userStat.Health == "missing" || userStat.Docs < 1 {
+		t.Fatalf("IndexStats must report the aliased %s as live, got %+v", IndexUsers, stats)
 	}
 }

@@ -162,7 +162,12 @@ export function appendReplyToThreadCache(
 ): boolean {
   let present = false;
   const updater = (old: Message[] | undefined) => {
-    if (!old) return old;
+    // A cached EMPTY thread has no root (reachable when the fetch raced
+    // eventual consistency right after the root was created and got 200 +
+    // []): appending the reply would render it AS the root. Leave the
+    // cache alone and report not-present so the caller's invalidate
+    // fallback refetches root + replies together.
+    if (!old || old.length === 0) return old;
     present = true;
     if (old.some((m) => m.id === msg.id)) return old;
     return [...old, msg];
@@ -405,10 +410,24 @@ export function useSendMessage(scope: SendMessageScope) {
           queryKeys.thread(path, input.parentMessageID),
           (old) => (old ? (old.some((m) => m.id === data.id) ? old : [...old, data]) : old),
         );
-        // The /threads list is patched live by the participant-scoped
-        // `thread.updated` event (the sender is a participant), built from the
-        // authoritative root — so we no longer fire an eventually-consistent
-        // ListUserThreads refetch here that could race and clobber that patch.
+        // The /threads list is normally patched live by the participant-scoped
+        // `thread.updated` event, built from the authoritative root. That
+        // event is gated on the reply-metadata bump succeeding server-side,
+        // so a sender whose reply just CREATED their participation (a cached
+        // list WITHOUT this thread's row) must not depend on it: refetch once
+        // so the new row appears even if the event never fires. When the row
+        // is already listed we deliberately skip the refetch — an eventually-
+        // consistent ListUserThreads response could clobber the fresher event
+        // patch (the race that removed the old blanket invalidate), and on a
+        // failed metadata bump the server has no newer count to show anyway.
+        // No cached list at all → nothing stale to heal (the first /threads
+        // visit fetches fresh).
+        const cachedThreads = queryClient.getQueryData<{ threadRootID: string }[]>(
+          queryKeys.userThreads(),
+        );
+        if (cachedThreads && !cachedThreads.some((t) => t.threadRootID === input.parentMessageID)) {
+          queryClient.invalidateQueries({ queryKey: queryKeys.userThreads() });
+        }
       }
     },
   });

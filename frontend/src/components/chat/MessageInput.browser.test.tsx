@@ -35,6 +35,7 @@ vi.mock('@/hooks/useSettings', () => ({
 }));
 
 vi.mock('@/hooks/useConversations', () => ({
+  useOpenDM: () => ({ openDM: vi.fn(), isPending: false }),
   useAllUsers: () => ({
     data: [
       {

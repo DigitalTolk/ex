@@ -18,7 +18,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { useBrowseChannels, useJoinChannel, useUserChannels } from '@/hooks/useChannels';
-import { useCreateConversation } from '@/hooks/useConversations';
+import { useOpenDM } from '@/hooks/useConversations';
 import { useAuth } from '@/context/AuthContext';
 import { usePresence } from '@/context/PresenceContext';
 import { apiFetch } from '@/lib/api';
@@ -182,8 +182,7 @@ function MembersTab({ isAdmin, currentUserId }: MembersTabProps) {
   const [debouncedQuery, setDebouncedQuery] = useState('');
   const [error, setError] = useState('');
   const { isOnline } = usePresence();
-  const createConversation = useCreateConversation();
-  const navigate = useNavigate();
+  const { openDM, isPending: openDMPending } = useOpenDM();
   const qc = useQueryClient();
 
   useEffect(() => {
@@ -245,10 +244,7 @@ function MembersTab({ isAdmin, currentUserId }: MembersTabProps) {
   }
 
   function handleMessage(userId: string) {
-    createConversation.mutate(
-      { type: 'dm', participantIDs: [userId] },
-      { onSuccess: (conv) => navigate(`/conversation/${conv.id}`) },
-    );
+    openDM(userId);
   }
 
   const onlineCount = users.reduce((n, u) => (isOnline(u.id) ? n + 1 : n), 0);
@@ -383,7 +379,7 @@ function MembersTab({ isAdmin, currentUserId }: MembersTabProps) {
                     size="sm"
                     variant="outline"
                     onClick={() => handleMessage(u.id)}
-                    disabled={createConversation.isPending}
+                    disabled={openDMPending}
                     aria-label={isSelf ? 'Open notes-to-self' : `Message ${u.displayName}`}
                     className="h-8 min-w-0 flex-1"
                   >

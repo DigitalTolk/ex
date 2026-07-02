@@ -5,9 +5,13 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { SearchBar } from './SearchBar';
 
 const useChannelBySlugMock = vi.hoisted(() => vi.fn(() => ({ data: undefined as unknown })));
-const useUserChannelsMock = vi.hoisted(() => vi.fn(() => ({ data: [] as unknown[] })));
 const useUserConversationsMock = vi.hoisted(() => vi.fn(() => ({ data: undefined as unknown })));
-const createConvMutate = vi.hoisted(() => vi.fn());
+// openDM defaults to its success path (runs the caller's onSuccess, which
+// resets the bar); the navigation itself belongs to the real hook and is
+// covered by its own tests.
+const openDMMock = vi.hoisted(() =>
+  vi.fn((_userID: string, opts?: { onSuccess?: () => void }) => opts?.onSuccess?.()),
+);
 const useSearchUsersMock = vi.hoisted(() =>
   vi.fn(() => ({ data: { hits: [] as unknown[] }, isLoading: false })),
 );
@@ -23,11 +27,10 @@ vi.mock('@/lib/api', () => ({
 }));
 vi.mock('@/hooks/useChannels', () => ({
   useChannelBySlug: (slug?: string) => useChannelBySlugMock(slug as never),
-  useUserChannels: () => useUserChannelsMock(),
 }));
 vi.mock('@/hooks/useConversations', () => ({
   useUserConversations: () => useUserConversationsMock(),
-  useCreateConversation: () => ({ mutate: createConvMutate }),
+  useOpenDM: () => ({ openDM: openDMMock, isPending: false }),
 }));
 vi.mock('@/hooks/useSearch', () => ({
   useSearchUsers: (...args: unknown[]) => useSearchUsersMock(...(args as [])),
@@ -112,13 +115,21 @@ function contrastRatio(a: string, b: string) {
 
 beforeEach(() => {
   useChannelBySlugMock.mockReturnValue({ data: undefined });
-  useUserChannelsMock.mockReturnValue({ data: [] });
   useUserConversationsMock.mockReturnValue({ data: undefined });
   useSearchUsersMock.mockReturnValue({ data: { hits: [] }, isLoading: false });
   useSearchChannelsMock.mockReturnValue({ data: { hits: [] }, isLoading: false });
   useUsersBatchMock.mockReturnValue({ map: new Map(), isLoading: false });
-  createConvMutate.mockReset();
+  openDMMock.mockClear();
+  openDMMock.mockImplementation((_userID, opts) => opts?.onSuccess?.());
 });
+
+// The shortcut is the PLATFORM chord: ⌘K where the (real) browser UA is
+// Apple, Ctrl+K elsewhere — matching what the visible hint advertises.
+// Browser projects run under real UAs (mac locally, Linux in CI, iPhone
+// in the webkit-iphone project), so derive the expectation per run.
+const APPLE_UA = /mac|iphone|ipad|ipod/i.test(navigator.userAgent);
+const chordInit: KeyboardEventInit = APPLE_UA ? { metaKey: true } : { ctrlKey: true };
+const wrongModifierInit: KeyboardEventInit = APPLE_UA ? { ctrlKey: true } : { metaKey: true };
 
 describe('SearchBar browser behavior', () => {
   it('keeps search input text readable inside light app chrome', async () => {
@@ -274,30 +285,60 @@ describe('SearchBar browser behavior', () => {
     expect((screen.getByTestId('loc').element() as HTMLElement).dataset.path).toBe('/');
   });
 
-  it('⌘K focuses and opens the search from anywhere', async () => {
+  it('the platform search chord focuses and opens the search from anywhere', async () => {
     const screen = await renderWithLocation();
     const input = screen.getByTestId('searchbar-input').element() as HTMLInputElement;
     expect(document.activeElement).not.toBe(input);
-    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true, bubbles: true }));
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ...chordInit, bubbles: true }));
     await vi.waitFor(() => {
       expect(document.activeElement).toBe(input);
     });
   });
 
-  it('Ctrl+K also focuses; a non-K chord and a plain key do not', async () => {
+  it('the platform chord wins even while the user is typing in an editable field', async () => {
+    // The real-world "from anywhere" case: focus is inside a text-editing
+    // surface (the composer). The document-level chord must still reach
+    // the search box — and the WRONG modifier must leave the editor alone
+    // (bare Ctrl+K on macOS is kill-to-end-of-line; hijacking it mid-edit
+    // was a real bug).
+    const screen = await renderWithLocation();
+    const editor = document.createElement('textarea');
+    editor.setAttribute('data-testid', 'editor');
+    document.body.appendChild(editor);
+    try {
+      editor.focus();
+      editor.value = 'drafting a message';
+      expect(document.activeElement).toBe(editor);
+
+      document.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'k', ...wrongModifierInit, bubbles: true }),
+      );
+      expect(document.activeElement).toBe(editor);
+
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ...chordInit, bubbles: true }));
+      const input = screen.getByTestId('searchbar-input').element() as HTMLInputElement;
+      await vi.waitFor(() => {
+        expect(document.activeElement).toBe(input);
+      });
+      expect(editor.value).toBe('drafting a message');
+    } finally {
+      editor.remove();
+    }
+  });
+
+  it('the wrong modifier, Shift/Alt chords, key-repeat, a non-K chord, and a plain key do not focus', async () => {
     const screen = await renderWithLocation();
     const input = screen.getByTestId('searchbar-input').element() as HTMLInputElement;
-    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'j', metaKey: true, bubbles: true }));
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ...wrongModifierInit, bubbles: true }));
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'K', ...chordInit, shiftKey: true, bubbles: true }));
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ...chordInit, altKey: true, bubbles: true }));
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ...chordInit, repeat: true, bubbles: true }));
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'j', ...chordInit, bubbles: true }));
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', bubbles: true }));
     expect(document.activeElement).not.toBe(input);
-    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'K', ctrlKey: true, bubbles: true }));
-    await vi.waitFor(() => {
-      expect(document.activeElement).toBe(input);
-    });
   });
 
   it('renders Channels + People sections and opens a channel on click', async () => {
-    useUserChannelsMock.mockReturnValue({ data: [{ channelID: 'ch-1' }] });
     useSearchChannelsMock.mockReturnValue({
       data: {
         hits: [
@@ -316,31 +357,40 @@ describe('SearchBar browser behavior', () => {
     await screen.getByTestId('searchbar-input').fill('se');
     await expect.element(screen.getByText('Channels')).toBeVisible();
     await expect.element(screen.getByText('People')).toBeVisible();
-    // Joined vs not-joined badges.
-    expect((screen.getByTestId('searchbar-channel-ch-1-badge').element() as HTMLElement).textContent).toContain('Joined');
-    expect((screen.getByTestId('searchbar-channel-ch-2-badge').element() as HTMLElement).textContent).toContain('Join');
     await screen.getByTestId('searchbar-channel-ch-2').click();
     await vi.waitFor(() => {
       expect((screen.getByTestId('loc').element() as HTMLElement).dataset.path).toBe('/channel/ch-2');
     });
   });
 
-  it('opens/creates a DM and navigates when a person row is clicked', async () => {
-    createConvMutate.mockImplementation((_vars, opts) => opts.onSuccess({ id: 'cv-77' }));
+  it('opens a DM via useOpenDM and resets the bar on success when a person row is clicked', async () => {
     useSearchUsersMock.mockReturnValue({
       data: { hits: [{ id: 'u-1', score: 1, _source: { displayName: 'Alice' } }] },
       isLoading: false,
     });
     const screen = await renderWithLocation();
-    await screen.getByTestId('searchbar-input').fill('al');
+    const input = screen.getByTestId('searchbar-input');
+    await input.fill('al');
     await screen.getByTestId('searchbar-user-u-1').click();
+    expect(openDMMock).toHaveBeenCalledWith('u-1', expect.any(Object));
+    // Default openDM mock runs onSuccess → the bar clears and closes.
     await vi.waitFor(() => {
-      expect((screen.getByTestId('loc').element() as HTMLElement).dataset.path).toBe('/conversation/cv-77');
+      expect((input.element() as HTMLInputElement).value).toBe('');
     });
-    expect(createConvMutate).toHaveBeenCalledWith(
-      { type: 'dm', participantIDs: ['u-1'] },
-      expect.any(Object),
-    );
+  });
+
+  it('a failed DM-create keeps the query and dropdown so the user can retry', async () => {
+    openDMMock.mockImplementation(() => {}); // failure: no onSuccess, hook shows a toast
+    useSearchUsersMock.mockReturnValue({
+      data: { hits: [{ id: 'u-1', score: 1, _source: { displayName: 'Alice' } }] },
+      isLoading: false,
+    });
+    const screen = await renderWithLocation();
+    const input = screen.getByTestId('searchbar-input');
+    await input.fill('al');
+    await screen.getByTestId('searchbar-user-u-1').click();
+    expect((input.element() as HTMLInputElement).value).toBe('al');
+    await expect.element(screen.getByTestId('searchbar-dropdown')).toBeVisible();
   });
 
   it('paints a fresh presigned avatar image on a person row (from the batch endpoint)', async () => {
@@ -379,8 +429,8 @@ describe('SearchBar browser behavior', () => {
     await input.fill('al');
     await expect.element(screen.getByTestId('searchbar-channel-ch-1')).toBeVisible();
     const el = input.element();
-    // Default highlight is the first channel; hover a person to move it,
-    // then arrow down to the message action.
+    // Default highlight is the message-search action; hover a person to
+    // move it, then arrow down wraps onward to the message action.
     await screen.getByTestId('searchbar-user-u-1').hover();
     expect((screen.getByTestId('searchbar-user-u-1').element() as HTMLElement).getAttribute('aria-selected')).toBe('true');
     el.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
@@ -389,8 +439,7 @@ describe('SearchBar browser behavior', () => {
     });
   });
 
-  it('renders rows with id/empty fallbacks when hit fields and channel list are absent', async () => {
-    useUserChannelsMock.mockReturnValue({ data: undefined });
+  it('renders rows with id/empty fallbacks when hit fields are absent', async () => {
     useSearchChannelsMock.mockReturnValue({
       data: { hits: [{ id: 'ch-x', score: 1, _source: { type: 'public' } }] },
       isLoading: false,
@@ -403,7 +452,6 @@ describe('SearchBar browser behavior', () => {
     await screen.getByTestId('searchbar-input').fill('xy');
     await expect.element(screen.getByTestId('searchbar-channel-ch-x')).toBeVisible();
     expect((screen.getByTestId('searchbar-channel-ch-x').element() as HTMLElement).textContent).toContain('~ch-x');
-    expect((screen.getByTestId('searchbar-channel-ch-x-badge').element() as HTMLElement).textContent).toContain('Join');
     expect((screen.getByTestId('searchbar-user-u-x').element() as HTMLElement).textContent).toContain('u-x');
   });
 

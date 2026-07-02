@@ -58,6 +58,7 @@ vi.mock('@/context/PresenceContext', () => ({
 }));
 
 vi.mock('@/hooks/useConversations', () => ({
+  useOpenDM: () => ({ openDM: vi.fn(), isPending: false }),
   useConversation: () => conversationQuery,
   useUserConversations: () => ({ data: [] }),
   useSearchUsers: () => ({ data: [] }),

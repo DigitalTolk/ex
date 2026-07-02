@@ -1,11 +1,11 @@
 package search
 
-// Index name constants. Kept simple (no aliases / per-deploy suffixes)
-// because the workspace's data volume is small enough that an in-place
-// reindex is acceptable. When the analyzer or shape of an index
-// changes, bump the suffix here — EnsureIndices will create the new
-// one fresh with the new mapping; the admin reindex then repopulates.
-// (Old indexes become orphaned and can be dropped manually.)
+// Logical index names. On a fresh cluster EnsureIndices creates each as
+// a plain physical index; a mapping/analyzer change is rolled out with
+// `migrate search-reindex`, which builds a `<name>-r<nanos>` staging
+// index and atomically swaps an alias called `<name>` onto it
+// (BeginIndexRebuild/PromoteIndex) — readers and writers always address
+// the logical name and never see a gap.
 const (
 	IndexUsers    = "ex_users"
 	IndexChannels = "ex_channels"

@@ -10,10 +10,9 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { slugify } from '@/lib/format';
 import { useFavoriteChannel, useSetCategory, useCategories } from '@/hooks/useSidebar';
-import { useIsMobile } from '@/hooks/useIsMobile';
-import { useLongPress } from '@/hooks/useLongPress';
+import { useRowLongPressMenu } from '@/hooks/useRowLongPressMenu';
 import type { UserChannel, SidebarCategory } from '@/types';
-import { useState, type CSSProperties } from 'react';
+import { type CSSProperties } from 'react';
 
 interface Props {
   channel: UserChannel;
@@ -49,13 +48,9 @@ export function ChannelRow({
   const favorite = useFavoriteChannel();
   const setCategory = useSetCategory();
   const { data: categories } = useCategories();
-  const isMobile = useIsMobile();
-  // Controlled so a mobile long-press can open the (otherwise hidden) row menu.
-  const [menuOpen, setMenuOpen] = useState(false);
-  const { handlers: longPressHandlers, shouldSuppressClick } = useLongPress({
-    enabled: isMobile,
-    onLongPress: () => setMenuOpen(true),
-  });
+  // Mobile long-press opens the (otherwise hidden) row menu; shared with
+  // the other sidebar row type so the behavior can't drift.
+  const { menuOpen, setMenuOpen, rowHandlers, suppressNavClick } = useRowLongPressMenu();
 
   const isFav = !!channel.favorite;
 
@@ -81,14 +76,14 @@ export function ChannelRow({
       className={`group/row relative flex items-center ${draggable ? 'cursor-grab active:cursor-grabbing' : ''}`}
       data-testid={`channel-row-${channel.channelID}`}
       style={dragStyle}
-      {...longPressHandlers}
+      {...rowHandlers}
     >
       <NavLink
         to={`/channel/${slugify(channel.channelName)}`}
         onClick={(event) => {
           // A touch long-press that opened the menu also fires a click on
           // release; swallow it so the row doesn't navigate.
-          if (shouldSuppressClick()) {
+          if (suppressNavClick()) {
             event.preventDefault();
             event.stopPropagation();
             return;

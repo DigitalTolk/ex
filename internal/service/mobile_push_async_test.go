@@ -330,7 +330,7 @@ func TestNotificationService_AsyncMobilePushDoesNotBlockMessageDelivery(t *testi
 
 	done := make(chan struct{})
 	go func() {
-		svc.NotifyForMessage(context.Background(), &model.Message{ID: "m1", ParentID: "ch1", AuthorID: "u-author", Body: "hello"}, ParentChannel)
+		svc.NotifyForMessage(context.Background(), &model.Message{ID: "m1", ParentID: "ch1", AuthorID: "u-author", Body: "hello"}, ParentChannel, nil)
 		close(done)
 	}()
 	select {
