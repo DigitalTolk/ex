@@ -64,11 +64,10 @@ type Notification struct {
 	ParentMessageID string           `json:"parentMessageID,omitempty"`
 	AuthorID        string           `json:"authorID,omitempty"` // for client-side own-author suppression
 	// Webhook marks a notification that originated from an incoming
-	// webhook (CI alerts, deploy bots, etc.). These are external/automated
-	// posts the user explicitly wired up, so the client treats them as
-	// always-notifiable: it bypasses both the own-author suppression (the
-	// "author" is just the webhook's creator, not a real sender) and the
-	// "channel messages are quiet" rule that mutes ordinary chatter.
+	// webhook (CI alerts, deploy bots, etc.). The "author" is the webhook,
+	// not a real sender, so the client exempts these from its own-author
+	// echo suppression. Whether to notify at all is decided server-side by
+	// the recipient's notification level, exactly like a regular message.
 	Webhook   bool      `json:"webhook,omitempty"`
 	CreatedAt time.Time `json:"createdAt"`
 }
@@ -221,9 +220,9 @@ func logAudienceLoadFailed(msg *model.Message, parentType string, err error) {
 }
 
 func (s *NotificationService) loadMemberSnapshot(ctx context.Context, msg *model.Message, parentType, parentName string) memberSnapshot {
-	// Webhook posts notify everyone, including the webhook's creator —
-	// the creator wired up the integration to be alerted, they didn't
-	// write the message. So there's no "author" to exclude.
+	// Webhook posts have no human author to exclude — the "author" is the
+	// webhook sentinel, and the creator didn't write the message, so they
+	// stay in the audience as a normal, level-gated recipient.
 	excludeID := msg.AuthorID
 	if msg.WebhookUsername != "" {
 		excludeID = ""
@@ -394,11 +393,6 @@ func (s *NotificationService) NotifyForMessage(ctx context.Context, msg *model.M
 		}
 	}
 
-	// Incoming-webhook posts are integrations the user explicitly wired up to
-	// be alerted on, so they notify every (non-muted) member regardless of the
-	// quiet "mentions only" level — the same always-notifiable treatment the
-	// client gives the Webhook flag.
-	isWebhook := msg.WebhookUsername != ""
 	bodyLower := strings.ToLower(msg.Body)
 
 	for _, uid := range snap.memberIDs {
@@ -407,18 +401,17 @@ func (s *NotificationService) NotifyForMessage(ctx context.Context, msg *model.M
 			explicitMention:   explicitSet[uid],
 			groupMention:      groupSet[uid] && !eff.IgnoreGroupMentions,
 			muted:             snap.muted[uid],
-			forceAll:          isWebhook,
 			threadReply:       isThreadReply,
 			threadParticipant: parentType == ParentConversation || threadParticipants[uid],
 			threadReplies:     eff.ThreadReplies,
 		}
 		// The keyword scan is the one per-recipient cost that walks the whole
 		// body, and eligibleAtLevel only consults it once the cheaper signals
-		// (explicit mention, mute, webhook, group mention) haven't already
+		// (explicit mention, mute, group mention) haven't already
 		// decided. Skip it entirely in those cases and when the user has no
 		// keywords — the dominant case now that names are seeded but most
 		// channel members still aren't @-mentioned.
-		if len(eff.Keywords) > 0 && !r.explicitMention && !r.muted && !r.forceAll && !r.groupMention {
+		if len(eff.Keywords) > 0 && !r.explicitMention && !r.muted && !r.groupMention {
 			r.keyword = keywordsMatchLower(bodyLower, eff.Keywords)
 		}
 
@@ -474,7 +467,6 @@ type recipientReasons struct {
 	explicitMention   bool // @-mentioned by user id (bypasses mute + level)
 	groupMention      bool // @all/@here applies after the ignore preference
 	muted             bool // channel muted (suppresses everything but explicit @)
-	forceAll          bool // webhook post — notify every non-muted member regardless of level
 	threadReply       bool // the message is a reply within a thread
 	threadParticipant bool // recipient participates in / follows the thread
 	threadReplies     bool // recipient wants thread-reply notifications
@@ -490,9 +482,6 @@ func eligibleAtLevel(level model.NotificationLevel, r recipientReasons) bool {
 	}
 	if r.muted {
 		return false
-	}
-	if r.forceAll {
-		return true
 	}
 	if r.groupMention {
 		return true
@@ -837,7 +826,6 @@ func (s *NotificationService) userDisplayName(ctx context.Context, userID string
 	}
 	return name
 }
-
 
 func titleFor(kind NotificationKind, parentType, parentName, authorName string) string {
 	switch kind {

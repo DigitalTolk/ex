@@ -33,9 +33,10 @@ export interface NotificationPayload {
   messageID?: string;
   parentMessageID?: string;
   authorID?: string;
-  // True for incoming-webhook posts (CI/deploy/alert bots). These bypass
-  // the own-author and quiet-channel suppression below so the integration
-  // alerts the user actually set up always surface.
+  // True for incoming-webhook posts (CI/deploy/alert bots). The authorID
+  // is the webhook's creator, not a real sender, so these are exempt from
+  // the own-author echo suppression below. Whether to notify at all is the
+  // backend's level-gated decision, same as any other message.
   webhook?: boolean;
   createdAt: string;
 }

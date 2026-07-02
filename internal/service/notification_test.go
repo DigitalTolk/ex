@@ -1208,6 +1208,7 @@ func TestNotificationService_WebhookAttachmentNoFallback_PopupNotEmpty(t *testin
 	ctx := context.Background()
 	chans.channels["ch1"] = &model.Channel{ID: "ch1", Name: "general", Slug: "general", Type: model.ChannelTypePublic}
 	users.users["u-author"] = &model.User{ID: "u-author", DisplayName: "Alice"}
+	seedAllLevel(users, "u-bob")
 	members.memberships["ch1#u-author"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u-author"}
 	members.memberships["ch1#u-bob"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u-bob"}
 
@@ -1743,7 +1744,7 @@ func TestNotificationService_WebhookUsernameAndFallbackBody(t *testing.T) {
 	ctx := context.Background()
 
 	chans.channels["ch1"] = &model.Channel{ID: "ch1", Name: "general", Slug: "general", Type: model.ChannelTypePublic}
-	users.users["u-author"] = &model.User{ID: "u-author", DisplayName: "Alice (creator)"}
+	seedAllLevel(users, "u-author", "u-bob")
 	for _, uid := range []string{"u-author", "u-bob"} {
 		members.memberships["ch1#"+uid] = &model.ChannelMembership{ChannelID: "ch1", UserID: uid}
 	}
@@ -1756,9 +1757,9 @@ func TestNotificationService_WebhookUsernameAndFallbackBody(t *testing.T) {
 		MessageAttachments: []model.MessageAttachment{{Fallback: "build failed"}},
 	}, ParentChannel)
 
-	// Webhook posts notify EVERY member, including u-author — the webhook's
-	// creator wired up the alert and wants it, they didn't write the message.
-	// (A regular message would exclude the author, leaving only u-bob.)
+	// Both members opted into "all messages". The creator is a normal
+	// recipient too: the webhook sentinel authored the post, so u-author is
+	// NOT excluded the way a real message author would be.
 	if len(push.calls) != 2 {
 		t.Fatalf("push count = %d, want 2 (both members incl. webhook creator)", len(push.calls))
 	}
@@ -1778,5 +1779,50 @@ func TestNotificationService_WebhookUsernameAndFallbackBody(t *testing.T) {
 	}
 	if !strings.Contains(notif.Title, "CI Bot") {
 		t.Fatalf("notification title = %q, want webhook username", notif.Title)
+	}
+}
+
+// Regression: webhook posts must respect each recipient's notification level.
+// A forceAll flag used to bypass the level machinery and alert every non-muted
+// member even when they had chosen the quiet "mentions, DMs & keywords" level
+// for the channel — a webhook post is gated exactly like a regular message.
+func TestNotifyForMessage_Webhook_RespectsNotificationLevel(t *testing.T) {
+	svc, pub, members, _, chans, users := setupNotifier(t)
+	ctx := context.Background()
+
+	chans.channels["ch1"] = &model.Channel{ID: "ch1", Name: "alerts", Slug: "alerts", Type: model.ChannelTypePublic}
+	for _, uid := range []string{"u-quiet", "u-keyword", "u-all", "u-muted"} {
+		members.memberships["ch1#"+uid] = &model.ChannelMembership{ChannelID: "ch1", UserID: uid}
+	}
+	// u-quiet stays on the quiet default (no saved settings); u-keyword is
+	// quiet but the post matches one of their keywords; u-all opted into
+	// "all messages"; u-muted opted into "all" but muted the channel.
+	users.users["u-keyword"] = &model.User{ID: "u-keyword", DisplayName: "K",
+		NotificationSettings: &model.NotificationSettings{
+			DesktopLevel: model.NotificationLevelMentions,
+			Keywords:     []string{"deploy"},
+		}}
+	seedAllLevel(users, "u-all", "u-muted")
+	members.userChannels = []*model.UserChannel{
+		{UserID: "u-muted", ChannelID: "ch1", Muted: true},
+	}
+
+	svc.NotifyForMessage(ctx, &model.Message{
+		ID: "m1", ParentID: "ch1", AuthorID: "webhook", WebhookUsername: "CI Bot",
+		Body: "deploy finished",
+	}, ParentChannel)
+
+	got := publishedNotifications(pub)
+	if _, ok := got[pubsub.UserChannel("u-quiet")]; ok {
+		t.Error("quiet-level member was notified for a webhook post — the level must gate webhooks like any message")
+	}
+	if _, ok := got[pubsub.UserChannel("u-muted")]; ok {
+		t.Error("muted member was notified for a webhook post")
+	}
+	if _, ok := got[pubsub.UserChannel("u-keyword")]; !ok {
+		t.Error("keyword match did not alert on a webhook post")
+	}
+	if _, ok := got[pubsub.UserChannel("u-all")]; !ok {
+		t.Error(`"all messages" member was not alerted for a webhook post`)
 	}
 }
