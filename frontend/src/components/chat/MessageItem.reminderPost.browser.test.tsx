@@ -104,7 +104,9 @@ describe('MessageItem "Remind me" — real POST', () => {
       return el!;
     });
     await userEvent.fill(input, '2999-01-01T09:00');
-    await userEvent.click(document.querySelector('[data-testid="reminder-confirm"]') as HTMLButtonElement);
+    // On mobile the confirm lives in the dialog's top-right header (the iOS
+    // date wheel covers a bottom footer).
+    await userEvent.click(document.querySelector('[data-slot="dialog-mobile-action"]') as HTMLButtonElement);
     await vi.waitFor(() => expect(reminderPosts().length).toBe(1));
     expect(reminderPosts()[0][1].method).toBe('POST');
   });

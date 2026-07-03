@@ -17,6 +17,11 @@ export function useDismissKeyboardOnScroll() {
         active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.isContentEditable;
       if (!editable) return;
       if (e.target instanceof Node && active.contains(e.target)) return;
+      // CodeMirror portals its typeahead (@mention / :emoji:) to document.body,
+      // so it is NOT contained by the focused editor — but scrolling that list
+      // is part of typing, and blurring here dropped the keyboard AND closed
+      // the popup (CM closes tooltips on blur) mid-autocomplete.
+      if (e.target instanceof Element && e.target.closest('.cm-tooltip')) return;
       active.blur();
     };
     document.addEventListener('touchmove', onTouchMove, { passive: true });

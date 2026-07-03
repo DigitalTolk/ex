@@ -84,7 +84,7 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="flex min-h-screen flex-col bg-muted/40">
+    <div className="flex min-h-dvh flex-col bg-muted/40">
       <UpdateBanner />
       <div className="flex min-h-0 flex-1 items-center justify-center px-4">
         <div className="w-full max-w-sm space-y-6">

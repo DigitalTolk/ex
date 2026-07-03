@@ -192,6 +192,45 @@ describe('MessageItem browser behavior', () => {
     });
   });
 
+  it('mobile: long-pressing a reaction chip lists who reacted without toggling', async () => {
+    if (window.innerWidth > 767) return;
+    toggleReactionMutate.mockClear();
+    const toasts: Array<{ message: string }> = [];
+    const onToast = (e: Event) => toasts.push((e as CustomEvent<{ message: string }>).detail);
+    window.addEventListener('app:toast', onToast);
+    try {
+      await renderWithProviders(
+        <MessageItem
+          message={makeMessage({ reactions: { ':thumbsup:': ['user-2', 'user-3'] } })}
+          authorName="Alice"
+          isOwn={false}
+          channelId="channel-1"
+          currentUserId="user-1"
+          userMap={{ get: (id: string) => ({ displayName: id === 'user-2' ? 'Bob' : 'Carol' }) }}
+        />,
+      );
+      const badge = document.querySelector('[data-testid="reaction-badge"]') as HTMLElement;
+      badge.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerType: 'touch' }));
+      // The reactor list surfaces as a toast (the hover tooltip is
+      // unreachable on touch).
+      await vi.waitFor(() => expect(toasts.length).toBe(1), { timeout: 1500 });
+      expect(toasts[0].message).toContain('Bob');
+      expect(toasts[0].message).toContain('reacted with');
+      // The chip press must NOT arm the row's long-press action sheet.
+      expect(document.querySelector('[data-testid="mobile-message-actions"]')).toBeNull();
+      // The click a touch release fires is swallowed: peeking at reactors
+      // must not toggle the viewer's reaction.
+      badge.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerType: 'touch' }));
+      badge.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+      expect(toggleReactionMutate).not.toHaveBeenCalled();
+      // A plain tap afterwards still toggles.
+      badge.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+      expect(toggleReactionMutate).toHaveBeenCalledTimes(1);
+    } finally {
+      window.removeEventListener('app:toast', onToast);
+    }
+  });
+
   it('invokes onReplyInThread from the desktop thread-reply action on hover', async () => {
     if (window.innerWidth <= 767) return;
     const onReplyInThread = vi.fn();

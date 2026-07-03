@@ -11,6 +11,7 @@ import { Bell, BellOff, ArrowRight } from 'lucide-react';
 import { useAtBottomRef } from '@/hooks/useAtBottomRef';
 import { motion } from 'motion/react';
 import { useSwipeDismiss } from '@/hooks/useSwipeDismiss';
+import { useMobileBackClose } from '@/hooks/useMobileBackClose';
 import { useAttachmentsBatch } from '@/hooks/useAttachments';
 import { useFrequentEmojis } from '@/hooks/useEmoji';
 import { useIsMobile } from '@/hooks/useIsMobile';
@@ -62,6 +63,8 @@ export function ThreadPanel({
 }: ThreadPanelProps) {
   const { data, isLoading } = useThreadMessages({ channelId, conversationId, threadRootID });
   const { dismissing, settled, motionProps } = useSwipeDismiss('right', onClose);
+  // Mounted-while-open panel: Back on mobile closes it instead of navigating.
+  useMobileBackClose(true, onClose);
   const isMobile = useIsMobile();
   // Most-used emoji shelf for the message action bar — same source the
   // channel/conversation message lists use, so the thread sidebar shows

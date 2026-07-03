@@ -346,6 +346,73 @@ describe('NotificationContext browser', () => {
     }
   });
 
+  // Webview fallback: Capacitor's WKWebView has no Notification API, so the
+  // in-app TOAST is the popup surface — it must fire (and count as delivery)
+  // or a foregrounded native user with sound off gets no in-app alert at all.
+  function removeNotificationAPI() {
+    const original = Object.getOwnPropertyDescriptor(globalThis, 'Notification');
+    delete (globalThis as { Notification?: unknown }).Notification;
+    return () => {
+      if (original) Object.defineProperty(globalThis, 'Notification', original);
+    };
+  }
+
+  it('webview (no Notification API): surfaces an in-app toast whose tap deep-links', async () => {
+    const restore = removeNotificationAPI();
+    const toasts: Array<{ message: string; title?: string; onActivate?: () => void }> = [];
+    const onToast = (e: Event) => {
+      toasts.push((e as CustomEvent<{ message: string; title?: string; onActivate?: () => void }>).detail);
+    };
+    window.addEventListener('app:toast', onToast);
+    try {
+      await render(<NotificationProvider><Capture /></NotificationProvider>);
+      await vi.waitFor(() => expect(captured).not.toBeNull());
+      captured!.setSoundEnabled(false);
+      await vi.waitFor(() => expect(captured!.prefs.soundEnabled).toBe(false));
+      captured!.dispatch(basePayload({ parentType: 'conversation', parentID: 'conv-9', authorID: 'u-other', messageID: 'm-webview-1' }));
+      await vi.waitFor(() => expect(toasts.length).toBe(1));
+      expect(toasts[0].title).toBe('Alice');
+      expect(toasts[0].message).toBe('hey there');
+      // The toast counts as delivery → a duplicate of the same message is deduped.
+      captured!.dispatch(basePayload({ parentType: 'conversation', parentID: 'conv-9', authorID: 'u-other', messageID: 'm-webview-1' }));
+      await new Promise((r) => setTimeout(r, 30));
+      expect(toasts.length).toBe(1);
+      // Tapping the toast deep-links like a popup click would.
+      const before = window.location.pathname;
+      toasts[0].onActivate?.();
+      await vi.waitFor(() => expect(window.location.pathname).toBe('/channel/general'));
+      window.history.replaceState(null, '', before);
+    } finally {
+      window.removeEventListener('app:toast', onToast);
+      restore();
+    }
+  });
+
+  it('webview toast falls back to the title as body and skips navigation without a deepLink', async () => {
+    const restore = removeNotificationAPI();
+    const toasts: Array<{ message: string; title?: string; onActivate?: () => void }> = [];
+    const onToast = (e: Event) => {
+      toasts.push((e as CustomEvent<{ message: string; title?: string; onActivate?: () => void }>).detail);
+    };
+    window.addEventListener('app:toast', onToast);
+    try {
+      await render(<NotificationProvider><Capture /></NotificationProvider>);
+      await vi.waitFor(() => expect(captured).not.toBeNull());
+      captured!.dispatch(basePayload({ body: '', deepLink: '', parentType: 'conversation', parentID: 'conv-9', authorID: 'u-other', messageID: 'm-webview-2' }));
+      await vi.waitFor(() => expect(toasts.length).toBe(1));
+      // Empty body → the title IS the message line, with no separate title.
+      expect(toasts[0].message).toBe('Alice');
+      expect(toasts[0].title).toBeUndefined();
+      const before = window.location.pathname;
+      toasts[0].onActivate?.();
+      await new Promise((r) => setTimeout(r, 30));
+      expect(window.location.pathname).toBe(before);
+    } finally {
+      window.removeEventListener('app:toast', onToast);
+      restore();
+    }
+  });
+
   it('useNotifications returns the noop value outside a provider', async () => {
     let api: ReturnType<typeof useNotifications> | null = null;
     function Inner() {

@@ -6,6 +6,7 @@ import { getInitials, formatLongDateTime, formatBytes } from '@/lib/format';
 import { iconForAttachment, isImageContentType } from '@/lib/file-helpers';
 import { useTransientOverlayCleanup } from '@/hooks/useTransientOverlayCleanup';
 import { useIsMobile } from '@/hooks/useIsMobile';
+import { useMobileBackClose } from '@/hooks/useMobileBackClose';
 import {
   type GestureState,
   idleGesture,
@@ -56,6 +57,8 @@ export function ImageLightbox({
 }: ImageLightboxProps) {
   const total = images.length;
   const isMobile = useIsMobile();
+  // Back on mobile closes the lightbox instead of leaving the channel.
+  useMobileBackClose(open, onClose);
   const safeIndex = total === 0 ? 0 : ((index % total) + total) % total;
   const current = images[safeIndex];
   const isImage = current ? isImageContentType(current.contentType) : false;

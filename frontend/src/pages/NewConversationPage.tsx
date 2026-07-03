@@ -207,6 +207,11 @@ export default function NewConversationPage() {
                       e.preventDefault();
                       pick({ id: u.id, displayName: u.displayName });
                     }}
+                    // Touch fallback: a tap that a webview interprets as a
+                    // scroll-start can suppress the emulated mousedown; pick()
+                    // is idempotent so the follow-up click is a safe no-op
+                    // when mousedown already handled it.
+                    onClick={() => pick({ id: u.id, displayName: u.displayName })}
                     onMouseEnter={() => setActiveIndex(i)}
                     className={`flex w-full items-center gap-2 px-3 py-2 text-left text-sm max-md:py-3 max-md:text-base ${
                       isActive ? 'bg-muted' : 'hover:bg-muted/50'

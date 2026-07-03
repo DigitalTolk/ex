@@ -15,6 +15,7 @@ import { UserAvatar } from '@/components/UserAvatar';
 import { UserStatusIndicator } from '@/components/UserStatusIndicator';
 import { canAddMembers, canRemoveMember, roleNumber, ChannelRole } from '@/lib/roles';
 import { useSwipeDismiss } from '@/hooks/useSwipeDismiss';
+import { useMobileBackClose } from '@/hooks/useMobileBackClose';
 import type { ChannelMembership } from '@/types';
 import type { UserMapEntry } from './MessageList';
 
@@ -97,6 +98,9 @@ export function MemberList({ members, channelId, currentUserId, currentUserRole,
 
   const canManage = canAddMembers(currentUserRole) && !!channelId;
   const { dismissing, settled, motionProps } = useSwipeDismiss('right', () => onClose?.());
+  // Mounted-while-open panel: Back on mobile closes it instead of navigating
+  // (no-op when the caller renders it without a close handler).
+  useMobileBackClose(true, onClose);
 
   return (
     <motion.div
@@ -199,7 +203,9 @@ export function MemberList({ members, channelId, currentUserId, currentUserRole,
         scrollbarClassName="opacity-0 transition-opacity data-[scrolling]:opacity-100"
         data-testid="member-list-scroll-area"
       >
-        <div className="p-2 space-y-0.5">
+        {/* Bottom inset: fixed to the screen bottom on mobile, so the last
+            member row must clear the home indicator. */}
+        <div className="p-2 space-y-0.5 max-md:pb-[calc(env(safe-area-inset-bottom)+0.5rem)]">
           {members.map((m) => {
             const entry = userMap?.[m.userID];
             const avatarURL = entry?.avatarURL;

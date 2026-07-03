@@ -5,6 +5,7 @@ import { Sidebar } from './Sidebar';
 import { AppTopBar } from './AppTopBar';
 import { TagSearchProvider } from '@/context/TagSearchContext';
 import { useIsMobile } from '@/hooks/useIsMobile';
+import { useMobileBackClose } from '@/hooks/useMobileBackClose';
 import { useDismissKeyboardOnScroll } from '@/hooks/useDismissKeyboardOnScroll';
 import { useKeyboardSurfaceColor } from '@/hooks/useKeyboardSurfaceColor';
 import { blurActiveInput } from '@/lib/blur-input';
@@ -55,6 +56,11 @@ export function AppLayout({ children }: AppLayoutProps) {
     setChannelDragOffset(0);
     setManualChannelsOpen(false);
   }, []);
+
+  // Android/browser Back closes a manually-opened drawer instead of leaving
+  // the page (on the home route the drawer IS the page, and it opens via
+  // isHome — not manualChannelsOpen — so this never arms there).
+  useMobileBackClose(manualChannelsOpen, closeChannels);
 
   // Per-swipe "committed" latch. Once a gesture has crossed the axis
   // lock (clearly horizontal), we keep tracking finger movement even

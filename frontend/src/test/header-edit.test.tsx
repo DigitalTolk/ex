@@ -17,9 +17,37 @@ vi.mock('@/components/ui/dropdown-menu', () => ({
 
 vi.mock('@/components/ui/dialog', () => ({
   Dialog: ({ children, open }: { children: React.ReactNode; open: boolean }) => open ? <div data-testid="dialog">{children}</div> : null,
-  DialogContent: ({ children, className, ...props }: { children: React.ReactNode; className?: string; [key: string]: unknown }) => <div className={className} {...props}>{children}</div>,
+  // Renders the mobile top-header action like the real DialogContent (the
+  // description editor's Save lives there now); mobileCloseLabel/mobileAction
+  // must NOT be spread onto the div (unknown-prop warnings).
+  DialogContent: ({
+    children,
+    className,
+    mobileAction,
+    mobileCloseLabel: _mobileCloseLabel,
+    finalFocus: _finalFocus,
+    ...props
+  }: {
+    children: React.ReactNode;
+    className?: string;
+    mobileAction?: { label: string; onClick: () => void; disabled?: boolean };
+    mobileCloseLabel?: string;
+    finalFocus?: unknown;
+    [key: string]: unknown;
+  }) => (
+    <div className={className} {...props}>
+      {children}
+      {mobileAction && (
+        <button data-slot="dialog-mobile-action" onClick={mobileAction.onClick} disabled={mobileAction.disabled}>
+          {mobileAction.label}
+        </button>
+      )}
+    </div>
+  ),
   DialogHeader: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
   DialogTitle: ({ children }: { children: React.ReactNode }) => <h2>{children}</h2>,
+  DialogDescription: ({ children }: { children: React.ReactNode }) => <p>{children}</p>,
+  DialogFooter: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
 }));
 
 vi.mock('@/components/ui/badge', () => ({

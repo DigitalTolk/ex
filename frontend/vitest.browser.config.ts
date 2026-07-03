@@ -78,6 +78,13 @@ export default defineConfig({
         'src/hooks/useSwipeDismiss.ts',
         'src/hooks/useDismissKeyboardOnScroll.ts',
         'src/hooks/useKeyboardSurfaceColor.ts',
+        //   • useMobileBackClose.ts — the stacked-overlay marker arms and the
+        //     consumed-sentinel-vs-real-navigation cleanup arms need scripted
+        //     history sequences that are deterministic in jsdom but racy
+        //     against a real browser's async history traversal; wiring is
+        //     proven by the dialog back-close browser test and the hook is
+        //     fully graded in jsdom (useMobileBackClose.test.ts).
+        'src/hooks/useMobileBackClose.ts',
         // Delegated same-origin link router — a document-level click handler
         // fully unit-tested in jsdom (InAppLinkRouter.test, in-app-link.test).
         'src/components/InAppLinkRouter.tsx',

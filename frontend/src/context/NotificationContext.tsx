@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { playNotificationPing } from '@/lib/notification-sound';
+import { showToast } from '@/lib/toast';
 import { readJSON, writeJSON } from '@/lib/storage';
 import { useLatestRef } from '@/hooks/useLatestRef';
 import { sendWS } from '@/lib/ws-sender';
@@ -273,6 +274,21 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
         // even after the permission check passes. Leave `delivered` false
         // (if sound also didn't fire) so a retry isn't deduped away.
       }
+    } else if (browserEnabled && !notificationsSupported()) {
+      // Webview fallback (Capacitor/WKWebView has no Notification API): an
+      // in-app toast IS the popup surface. Without it, a foregrounded native
+      // user with sound off got no in-app alert at all — the deferred OS push
+      // (the no-ack fallback) arrived seconds late for an app they were
+      // actively looking at. Surfacing the toast is a real delivery, so it
+      // acks below and stands the mobile push down; tapping it deep-links to
+      // the message like a popup click would.
+      showToast(n.body || n.title, 'success', {
+        title: n.body ? n.title : undefined,
+        onActivate: () => {
+          if (n.deepLink) navigateInApp(n.deepLink);
+        },
+      });
+      delivered = true;
     }
     // Record as alerted (shared across tabs) only after we actually surfaced
     // something, so a duplicate delivery doesn't double-ping/double-banner,

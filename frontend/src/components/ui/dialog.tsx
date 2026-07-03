@@ -4,8 +4,22 @@ import { Dialog as DialogPrimitive } from "@base-ui/react/dialog"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { XIcon } from "lucide-react"
+import { useMobileBackClose } from "@/hooks/useMobileBackClose"
 
 function Dialog({ ...props }: DialogPrimitive.Root.Props) {
+  // Mobile: hardware/browser Back closes the dialog instead of navigating
+  // away (or exiting a Capacitor Android shell). Read through a ref so the
+  // history hook stays armed across onOpenChange identity changes.
+  const propsRef = React.useRef(props)
+  React.useEffect(() => {
+    propsRef.current = props
+  })
+  const closeFromHistory = React.useCallback(() => {
+    // Our dialogs' handlers only read the boolean; base-ui's eventDetails
+    // param has no meaningful value for a history pop.
+    ;(propsRef.current.onOpenChange as ((open: boolean) => void) | undefined)?.(false)
+  }, [])
+  useMobileBackClose(!!props.open, closeFromHistory)
   return <DialogPrimitive.Root data-slot="dialog" {...props} />
 }
 
@@ -171,7 +185,12 @@ function DialogContent({
               render={
                 <Button
                   variant="ghost"
-                  className={cn("absolute top-2 right-2", hasMobileBar && "max-md:hidden")}
+                  // On the mobile full-screen sheet the X must clear the notch /
+                  // status bar; without the inset it sat under the system chrome.
+                  className={cn(
+                    "absolute top-2 right-2 max-md:top-[calc(env(safe-area-inset-top)+0.5rem)] max-md:right-3",
+                    hasMobileBar && "max-md:hidden"
+                  )}
                   size="icon-sm"
                 />
               }

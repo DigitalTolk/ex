@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AddMemberDialog } from './AddMemberDialog';
@@ -8,6 +8,9 @@ const apiFetchMock = vi.fn();
 vi.mock('@/lib/api', () => ({
   apiFetch: (...args: unknown[]) => apiFetchMock(...args),
 }));
+
+let mockIsMobile = false;
+vi.mock('@/hooks/useIsMobile', () => ({ useIsMobile: () => mockIsMobile }));
 
 function renderWithProviders(ui: React.ReactElement) {
   const queryClient = new QueryClient({
@@ -21,7 +24,10 @@ function renderWithProviders(ui: React.ReactElement) {
 }
 
 describe('AddMemberDialog', () => {
-  beforeEach(() => apiFetchMock.mockReset());
+  beforeEach(() => {
+    apiFetchMock.mockReset();
+    mockIsMobile = false;
+  });
 
   it('renders form when open', () => {
     renderWithProviders(
@@ -69,5 +75,49 @@ describe('AddMemberDialog', () => {
     await user.click(await screen.findByText('Bob'));
     await user.click(screen.getByRole('button', { name: 'Add member' }));
     expect(await screen.findByText('Failed to add member')).toBeInTheDocument();
+  });
+
+  describe('mobile', () => {
+    function mobileAction(): HTMLButtonElement {
+      const btn = document.querySelector('[data-slot="dialog-mobile-action"]');
+      expect(btn).not.toBeNull();
+      return btn as HTMLButtonElement;
+    }
+
+    it('moves the Add action to the top header, drops the footer, and skips autofocus', () => {
+      mockIsMobile = true;
+      renderWithProviders(
+        <AddMemberDialog open={true} onOpenChange={() => {}} channelId="ch-1" />,
+      );
+      expect(mobileAction()).toHaveTextContent('Add');
+      // Disabled until a user is picked (same gate as the desktop submit).
+      expect(mobileAction()).toBeDisabled();
+      expect(screen.queryByRole('button', { name: 'Add member' })).not.toBeInTheDocument();
+      // No autofocus: the keyboard shouldn't pop the moment the sheet opens.
+      expect(document.activeElement).not.toBe(
+        screen.getByPlaceholderText('Search by name or email...'),
+      );
+    });
+
+    it('adds the selected member via the top-header action', async () => {
+      mockIsMobile = true;
+      const user = userEvent.setup();
+      const onOpenChange = vi.fn();
+      apiFetchMock.mockImplementation((_url: string, opts?: { method?: string }) => {
+        if (opts?.method === 'POST') return Promise.resolve({});
+        return Promise.resolve([{ id: 'u-9', displayName: 'Bob', email: 'bob@x.com' }]);
+      });
+      renderWithProviders(
+        <AddMemberDialog open={true} onOpenChange={onOpenChange} channelId="ch-1" />,
+      );
+      await user.type(screen.getByPlaceholderText('Search by name or email...'), 'bob');
+      await user.click(await screen.findByText('Bob'));
+      await user.click(mobileAction());
+      await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+      expect(apiFetchMock).toHaveBeenCalledWith(
+        '/api/v1/channels/ch-1/members',
+        expect.objectContaining({ method: 'POST' }),
+      );
+    });
   });
 });

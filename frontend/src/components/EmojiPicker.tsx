@@ -266,7 +266,7 @@ export function EmojiPicker({ onSelect, onClose, onOpenChange, trigger, triggerC
         preferredAlign="end"
         ariaLabel={ariaLabel}
         mobileSheet
-        className="flex h-[460px] w-[336px] max-w-[calc(100vw-16px)] flex-col rounded-md border bg-popover p-2 shadow-md max-md:h-[50dvh] max-md:w-screen max-md:max-w-none max-md:rounded-b-none max-md:rounded-t-xl max-md:border-x-0 max-md:border-b-0"
+        className="flex h-[460px] w-[336px] max-w-[calc(100vw-16px)] flex-col rounded-md border bg-popover p-2 shadow-md max-md:h-[50dvh] max-md:w-screen max-md:max-w-none max-md:rounded-b-none max-md:rounded-t-xl max-md:border-x-0 max-md:border-b-0 max-md:pb-[calc(env(safe-area-inset-bottom)+0.5rem)]"
       >
         <Input
           ref={inputRef}
@@ -274,7 +274,9 @@ export function EmojiPicker({ onSelect, onClose, onOpenChange, trigger, triggerC
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Search emojis..."
           aria-label="Search emojis"
-          className="mb-1.5 h-8 shrink-0 text-sm"
+          // No text-sm override: the Input's own text-base md:text-sm keeps
+          // the field at 16px on mobile so iOS doesn't zoom on focus.
+          className="mb-1.5 h-8 max-md:h-11 shrink-0"
         />
         {!query.trim() && (
           <div

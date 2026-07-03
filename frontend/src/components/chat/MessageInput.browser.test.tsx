@@ -108,7 +108,10 @@ describe('MessageInput browser behavior', () => {
       const sendRect = send.getBoundingClientRect();
       const sendRadius = Number.parseFloat(getComputedStyle(send).borderTopLeftRadius);
       expect(sendRadius).toBeGreaterThanOrEqual(sendRect.width / 2 - 1);
+      // Link stays desktop-only (deliberate: scarce mobile toolbar width,
+      // Mobile fixes (7) #95) — like Quote/lists.
       expect(document.querySelector('[aria-label="Link"]')).toBeNull();
+      expect(document.querySelector('[aria-label="Quote"]')).toBeNull();
     } else {
       // Desktop composer is rounded-2xl (16px) per spec — rounder than the
       // old rounded-lg, but still well short of the mobile pill (≥24).
@@ -581,6 +584,7 @@ describe('MessageInput desktop flows (browser)', () => {
       expect(document.querySelector('[aria-label="Insert link"]')).toBeNull();
     });
   });
+
 
   it('emits throttled typing frames over the websocket while composing', async () => {
     if (window.innerWidth <= 767) return;

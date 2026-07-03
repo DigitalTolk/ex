@@ -1275,7 +1275,9 @@ export function Sidebar({ onClose }: SidebarProps) {
         scrollbarClassName="opacity-0 transition-opacity data-[scrolling]:opacity-100"
         data-testid="sidebar-scroll-area"
       >
-        <div className="w-full min-w-0 space-y-1 p-2">
+        {/* Bottom padding clears the home indicator on notched phones (the
+            drawer is a full-height mobile surface with no bottom chrome). */}
+        <div className="w-full min-w-0 space-y-1 p-2 max-md:pb-[calc(env(safe-area-inset-bottom)+0.5rem)]">
           {/* Activity sits at the very top — reaction hints + fired reminders. */}
           <NavLink
             to="/activity"

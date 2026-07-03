@@ -225,7 +225,7 @@ function UserStatusDialogContent({
                 setText(selected.text);
                 setClearAfter(selected.clearAfter);
               }}
-              className="h-9 w-full appearance-none rounded-md border border-input bg-background px-3 pr-9 text-sm max-md:h-11 max-md:px-4 max-md:pr-10"
+              className="h-9 w-full appearance-none rounded-md border border-input bg-background px-3 pr-9 text-base md:text-sm max-md:h-11 max-md:px-4 max-md:pr-10"
             >
               <option value={CUSTOM_PRESET}>Custom status</option>
               {PRESETS.map((p) => (
@@ -276,7 +276,7 @@ function UserStatusDialogContent({
                 setClearAfter(e.target.value as ClearAfter);
                 setPreset(CUSTOM_PRESET);
               }}
-              className="h-9 w-full appearance-none rounded-md border border-input bg-background px-3 pr-9 text-sm max-md:h-11 max-md:px-4 max-md:pr-10"
+              className="h-9 w-full appearance-none rounded-md border border-input bg-background px-3 pr-9 text-base md:text-sm max-md:h-11 max-md:px-4 max-md:pr-10"
             >
               <option value="never">Don't clear</option>
               <option value="today">Today</option>

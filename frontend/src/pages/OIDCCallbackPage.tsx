@@ -27,6 +27,21 @@ export default function OIDCCallbackPage() {
         token = searchParams.get('token') || searchParams.get('access_token');
       }
 
+      // Native/desktop deep-link handoff: the backend's OIDC callback minted a
+      // one-time desktop_code and bounced through the shell (ex://mobile /
+      // tauri://). When the shell lands the webview back on this route with
+      // that code, complete it server-side — /auth/desktop/complete consumes
+      // the code, sets the refresh cookie first-party, and redirects back
+      // here with a real token. Full-page navigation on purpose: the cookie
+      // is set on the redirect response.
+      if (!token) {
+        const desktopCode = searchParams.get('desktop_code');
+        if (desktopCode) {
+          window.location.replace(`/auth/desktop/complete?code=${encodeURIComponent(desktopCode)}`);
+          return;
+        }
+      }
+
       if (!token) {
         // Maybe the server set the cookie directly; try refreshing
         try {
@@ -63,7 +78,7 @@ export default function OIDCCallbackPage() {
   }, [navigate, searchParams, setAuth]);
 
   return (
-    <div className="flex min-h-screen items-center justify-center">
+    <div className="flex min-h-dvh items-center justify-center">
       <p className="text-muted-foreground">Completing sign in...</p>
     </div>
   );

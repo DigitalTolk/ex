@@ -37,12 +37,15 @@ export function ChannelBrowser({ open, onOpenChange }: ChannelBrowserProps) {
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent size="lg">
+      {/* mobileCloseLabel gives the full-screen mobile sheet the standard
+          safe-area top-right Close; grid-rows lets the list fill the sheet
+          instead of stopping at the desktop 400px cap. */}
+      <DialogContent size="lg" mobileCloseLabel="Close" className="max-md:grid-rows-[auto_1fr]">
         <DialogHeader>
           <DialogTitle>Browse channels</DialogTitle>
         </DialogHeader>
 
-        <ScrollArea className="max-h-[400px]">
+        <ScrollArea className="max-h-[400px] max-md:max-h-none max-md:min-h-0">
           {isLoading && (
             <div className="space-y-3 p-2">
               {Array.from({ length: 4 }).map((_, i) => (
