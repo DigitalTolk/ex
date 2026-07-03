@@ -48,7 +48,11 @@ func blockParsersWithoutSetext() []util.PrioritizedValue {
 
 func NewMarkdownRenderer() *MarkdownRenderer {
 	md := goldmark.New(
-		goldmark.WithExtensions(extension.Strikethrough),
+		// GFM strikethrough + tables. The Table extension works via a paragraph
+		// transformer (it rewrites a header+delimiter paragraph into a Table
+		// node), so it composes with the custom block-parser set below rather
+		// than needing its own block parser.
+		goldmark.WithExtensions(extension.Strikethrough, extension.Table),
 		goldmark.WithParser(parser.NewParser(
 			parser.WithBlockParsers(blockParsersWithoutSetext()...),
 			parser.WithInlineParsers(parser.DefaultInlineParsers()...),
@@ -188,6 +192,38 @@ func emitNode(node ast.Node, src []byte, parent *HastNode) {
 		el := element("s", nil)
 		emitChildren(n, src, el)
 		parent.Children = append(parent.Children, el)
+	case *extast.Table:
+		// GFM table → <table><thead><tr><th>…</th></tr></thead>
+		// <tbody><tr><td>…</td></tr>…</tbody></table>. The header row is the
+		// first child; the rest are body rows. Cell alignment (from the
+		// delimiter row's colons) rides along as a `data-align` prop the
+		// frontend maps to a text-align class — omitted for the default
+		// (left/none) so the common case stays clean.
+		table := element("table", nil)
+		var thead, tbody *HastNode
+		for row := n.FirstChild(); row != nil; row = row.NextSibling() {
+			switch row.(type) {
+			case *extast.TableHeader:
+				tr := element("tr", nil)
+				emitTableRow(row, src, tr, "th")
+				thead = element("thead", nil)
+				thead.Children = []*HastNode{tr}
+			case *extast.TableRow:
+				tr := element("tr", nil)
+				emitTableRow(row, src, tr, "td")
+				if tbody == nil {
+					tbody = element("tbody", nil)
+				}
+				tbody.Children = append(tbody.Children, tr)
+			}
+		}
+		if thead != nil {
+			table.Children = append(table.Children, thead)
+		}
+		if tbody != nil {
+			table.Children = append(table.Children, tbody)
+		}
+		parent.Children = append(parent.Children, table)
 	case *ast.CodeSpan:
 		el := element("code", nil)
 		var b strings.Builder
@@ -252,6 +288,36 @@ func emitNode(node ast.Node, src []byte, parent *HastNode) {
 
 func element(tag string, properties map[string]interface{}) *HastNode {
 	return &HastNode{Type: "element", TagName: tag, Properties: properties, Children: []*HastNode{}}
+}
+
+// emitTableRow appends one hast cell (`th` for the header, `td` for a body row)
+// per goldmark TableCell child, carrying the cell's inline content and its
+// alignment.
+func emitTableRow(row ast.Node, src []byte, tr *HastNode, cellTag string) {
+	for cell := row.FirstChild(); cell != nil; cell = cell.NextSibling() {
+		c, ok := cell.(*extast.TableCell)
+		/* v8 ignore next -- goldmark only ever nests TableCell under a header/row; the type-guard's false arm is defensive */
+		if !ok {
+			continue
+		}
+		el := element(cellTag, tableCellProps(c.Alignment))
+		emitChildren(c, src, el)
+		tr.Children = append(tr.Children, el)
+	}
+}
+
+// tableCellProps maps a GFM column alignment to the `data-align` prop the
+// frontend reads. Left/none is the rendered default, so it emits nothing to
+// keep the tree compact.
+func tableCellProps(a extast.Alignment) map[string]interface{} {
+	switch a {
+	case extast.AlignCenter:
+		return map[string]interface{}{"data-align": "center"}
+	case extast.AlignRight:
+		return map[string]interface{}{"data-align": "right"}
+	default:
+		return nil
+	}
 }
 
 // isSafeURL reports whether a link destination is safe to emit as an href.

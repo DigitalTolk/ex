@@ -339,6 +339,16 @@ func main() {
 	if searchClient != nil && searchReindexer != nil {
 		searchReindexer.SetAttachmentResolver(newAttachmentResolver(attachmentStore))
 		adminH.SetSearch(searchClient, searchReindexer)
+		// The users/channels mapping rebuild (staging + alias-swap) is
+		// coordinated through Redis: a distributed lock elects one runner so N
+		// parallel containers can't double-run it, and the status lives in Redis
+		// so the admin button is consistent cluster-wide. store.NewID mints a
+		// unique lock token per run for the token-fenced release. Guard the
+		// assignment so a nil rebuilder never lands in the interface field as a
+		// non-nil typed-nil.
+		if reb := search.NewMappingRebuilder(searchClient, reindexSrc, redisCache, store.NewID); reb != nil {
+			adminH.SetMappingRebuilder(reb)
+		}
 	}
 	if searchClient != nil {
 		idx := search.NewIndexer(searchClient)

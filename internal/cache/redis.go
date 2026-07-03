@@ -111,6 +111,47 @@ func (c *RedisCache) Delete(ctx context.Context, key string) error {
 	return nil
 }
 
+// releaseLockScript is a token-fenced compare-and-delete: it removes the lock
+// ONLY when the caller's token still owns it, so a caller whose lock already
+// expired (and was legitimately re-taken by another instance) never deletes the
+// new holder's lock. Atomic in Redis — the GET and DEL can't interleave.
+const releaseLockScript = `if redis.call("get", KEYS[1]) == ARGV[1] then return redis.call("del", KEYS[1]) else return 0 end`
+
+// AcquireLock takes a token-fenced distributed lock via SET key token NX PX ttl.
+// Returns true only if THIS caller now holds it; false if another instance holds
+// it (or a crashed holder's lock hasn't yet aged out). The token must be unique
+// per acquisition so ReleaseLock only ever drops a lock this caller still owns.
+// Backs the single-runner election for cluster-wide maintenance jobs (e.g. the
+// search mapping rebuild) so parallel containers can't double-run one.
+func (c *RedisCache) AcquireLock(ctx context.Context, key, token string, ttl time.Duration) (bool, error) {
+	ok, err := c.client.SetNX(ctx, key, token, ttl).Result()
+	if err != nil {
+		return false, fmt.Errorf("cache acquire lock %q: %w", key, err)
+	}
+	return ok, nil
+}
+
+// ReleaseLock drops the lock only if the caller's token still owns it (see
+// releaseLockScript). A no-op when the token no longer matches — safe to call
+// even after the lock's TTL lapsed and someone else re-acquired it.
+func (c *RedisCache) ReleaseLock(ctx context.Context, key, token string) error {
+	if err := c.client.Eval(ctx, releaseLockScript, []string{key}, token).Err(); err != nil {
+		return fmt.Errorf("cache release lock %q: %w", key, err)
+	}
+	return nil
+}
+
+// LockHeld reports whether the lock key currently exists. Used to reconcile a
+// "running" status whose runner crashed: once the lock's TTL lapses the panel
+// stops showing a phantom in-progress job.
+func (c *RedisCache) LockHeld(ctx context.Context, key string) (bool, error) {
+	n, err := c.client.Exists(ctx, key).Result()
+	if err != nil {
+		return false, fmt.Errorf("cache lock held %q: %w", key, err)
+	}
+	return n > 0, nil
+}
+
 // AllowRequest implements a fixed-window rate limiter: it increments the per-key
 // counter and, on the first hit of a window, sets the window TTL. It reports
 // whether the request is within `limit` for the current window. Used by the

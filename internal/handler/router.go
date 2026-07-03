@@ -240,6 +240,7 @@ func NewRouter(d *Deps) http.Handler {
 		mux.Handle("PUT /api/v1/admin/settings", middleware.WrapFunc(adminH.UpdateSettings, authMW))
 		mux.Handle("GET /api/v1/admin/search/status", middleware.WrapFunc(adminH.SearchStatus, authMW))
 		mux.Handle("POST /api/v1/admin/search/reindex", middleware.WrapFunc(adminH.StartSearchReindex, authMW))
+		mux.Handle("POST /api/v1/admin/search/rebuild-mapping", middleware.WrapFunc(adminH.StartSearchMappingRebuild, authMW))
 	}
 	if webhookH != nil {
 		mux.Handle("GET /api/v1/admin/webhooks", middleware.WrapFunc(webhookH.List, authMW))

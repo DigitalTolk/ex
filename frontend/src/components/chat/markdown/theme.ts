@@ -24,10 +24,24 @@ export const composerTheme = EditorView.theme({
   },
   '.cm-line': { padding: '0' },
   '&.cm-focused': { outline: 'none' },
-  // The `.cm-content` element is the scroll container (it carries the
-  // min/max-height utility classes, like the old contenteditable), so the
-  // CM scroller itself must not introduce a second scroll box.
-  '.cm-scroller': { fontFamily: 'var(--font-sans)', lineHeight: '1.5', overflow: 'visible' },
+  // The scroller IS CodeMirror's scroll container (`view.scrollDOM`): CM decides
+  // which lines to render from THIS element's scroll metrics and virtualizes the
+  // rest. So the height cap + overflow MUST live here. Putting the scroll box on
+  // `.cm-content` (with the scroller left `overflow: visible`) made the scroller
+  // non-scrolling, so CM only rendered the first viewport and virtualized a long
+  // document's tail away — editing a long message showed a truncated body.
+  // `.cm-content` keeps only its min-height (below) and grows freely inside here.
+  // Responsive cap mirrors the old content classes: 200px, 500px (31.25rem) ≥ md.
+  '.cm-scroller': {
+    fontFamily: 'var(--font-sans)',
+    lineHeight: '1.5',
+    overflowY: 'auto',
+    overflowX: 'hidden',
+    maxHeight: '200px',
+  },
+  '@media (min-width: 768px)': {
+    '.cm-scroller': { maxHeight: '31.25rem' },
+  },
   '.cm-placeholder': { color: 'var(--color-muted-foreground)' },
   // Inline code + fenced code share the muted-pill look of the renderer.
   '.cm-inlineCode': {

@@ -30,6 +30,29 @@ describe('MarkdownEditor (CM6) — Phase 1 core', () => {
     expect(screen.getByLabelText('Message input').element().textContent).toContain('hello');
   });
 
+  it('renders the tail of a long document when scrolled to the end (no virtualization dead zone)', async () => {
+    // A doc far taller than the editor's max-height. If the scroll box is on
+    // .cm-content while CM's scrollDOM (.cm-scroller) stays overflow:visible, CM
+    // renders only the first viewport and virtualizes the tail away — editing a
+    // long message shows a truncated body. The scroll container must be the
+    // scroller so CM re-renders lines as you scroll.
+    const lines = Array.from({ length: 200 }, (_, i) => `line-${i}`);
+    const { ref } = await mount({ initialBody: lines.join('\n') });
+    const host = ref.current!.getElement()!;
+    const scroller = host.querySelector('.cm-scroller') as HTMLElement;
+    const content = host.querySelector('.cm-content') as HTMLElement;
+
+    // view.scrollDOM === .cm-scroller must be the element that actually scrolls.
+    expect(scroller.scrollHeight).toBeGreaterThan(scroller.clientHeight);
+
+    scroller.scrollTop = scroller.scrollHeight;
+    await new Promise((r) =>
+      requestAnimationFrame(() => requestAnimationFrame(() => r(undefined))),
+    );
+    // The last line must be reachable in the rendered DOM after scrolling.
+    expect(content.textContent).toContain('line-199');
+  });
+
   it('fires onChange with the full markdown when the document changes', async () => {
     const onChange = vi.fn();
     const { ref } = await mount({ onChange });

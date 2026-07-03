@@ -102,6 +102,11 @@ export function renderHastTree(tree: HastNode, opts?: RenderOpts): ReactNode {
   return <RenderOptsContext.Provider value={opts}>{rendered}</RenderOptsContext.Provider>;
 }
 
+// GFM column alignment → text-align utility. Left is the default, so an
+// unset/left `data-align` still resolves to text-left.
+const cellAlignClass = (align?: string) =>
+  align === 'center' ? 'text-center' : align === 'right' ? 'text-right' : 'text-left';
+
 const headingClass = (level: 1 | 2 | 3 | 4 | 5 | 6) =>
   level === 1 ? 'text-2xl font-bold mt-3 mb-2'
     : level === 2 ? 'text-xl font-bold mt-3 mb-1.5'
@@ -168,6 +173,30 @@ const HAST_COMPONENTS_MAP: Record<string, AnyComponent> = {
     }
     return <code className={className}>{children}</code>;
   },
+
+  // GFM table. Wrapped in an overflow-x-auto box so a wide row scrolls inside
+  // the chat column instead of stretching it (and breaking react-virtuoso row
+  // measurement). Borders/spacing use design-system tokens only.
+  table: ({ children }: { children?: ReactNode }) => (
+    <div className="my-2 max-w-full overflow-x-auto">
+      <table className="w-auto border-collapse text-sm">{children}</table>
+    </div>
+  ),
+  thead: ({ children }: { children?: ReactNode }) => <thead className="bg-muted">{children}</thead>,
+  tbody: ({ children }: { children?: ReactNode }) => <tbody>{children}</tbody>,
+  tr: ({ children }: { children?: ReactNode }) => (
+    <tr className="border-b border-border last:border-b-0">{children}</tr>
+  ),
+  th: (props: { children?: ReactNode; 'data-align'?: string }) => (
+    <th className={`border border-border px-2 py-1 font-semibold ${cellAlignClass(props['data-align'])}`}>
+      {props.children}
+    </th>
+  ),
+  td: (props: { children?: ReactNode; 'data-align'?: string }) => (
+    <td className={`border border-border px-2 py-1 align-top ${cellAlignClass(props['data-align'])}`}>
+      {props.children}
+    </td>
+  ),
 
   'ex-mention-user': ((props: CustomTagProps) => {
     const opts = useRenderOpts();

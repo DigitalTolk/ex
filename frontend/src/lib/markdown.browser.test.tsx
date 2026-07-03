@@ -37,6 +37,72 @@ describe('renderMarkdown (legacy regex pipeline)', () => {
     expect(document.querySelector('hr')).not.toBeNull();
   });
 
+  it('renders a GFM table with header, body rows, and per-column alignment', async () => {
+    await render(
+      wrap(<>{renderMarkdown('| L | C | R |\n| :-- | :-: | --: |\n| a | b | c |\n| d | e | f |')}</>),
+    );
+    const table = document.querySelector('table');
+    expect(table).not.toBeNull();
+    const ths = table!.querySelectorAll('thead th');
+    expect(ths.length).toBe(3);
+    expect(ths[0].className).toContain('text-left'); // :-- and default
+    expect(ths[1].className).toContain('text-center'); // :-:
+    expect(ths[2].className).toContain('text-right'); // --:
+    const rows = table!.querySelectorAll('tbody tr');
+    expect(rows.length).toBe(2);
+    const firstRowCells = rows[0].querySelectorAll('td');
+    expect(firstRowCells[0].textContent).toBe('a');
+    expect(firstRowCells[2].className).toContain('text-right');
+  });
+
+  it('parses a table without outer pipes, renders inline markdown, left-aligns cells beyond the delimiter', async () => {
+    // No outer pipes; a 3-column header but only a 2-column delimiter, so the
+    // 3rd header AND body cell fall back to text-left (the `?? text-left` arm).
+    await render(wrap(<>{renderMarkdown('a | b | c\n--- | :-:\n**x** | y | z')}</>));
+    const table = document.querySelector('table');
+    expect(table).not.toBeNull();
+    const ths = table!.querySelectorAll('thead th');
+    expect(ths.length).toBe(3);
+    expect(ths[2].className).toContain('text-left'); // header beyond delimiter → fallback
+    expect(table!.querySelector('tbody td strong')?.textContent).toBe('x');
+    const cells = table!.querySelectorAll('tbody td');
+    expect(cells.length).toBe(3);
+    expect(cells[2].className).toContain('text-left');
+  });
+
+  it('renders a header-only table (no body rows) without a tbody', async () => {
+    await render(wrap(<>{renderMarkdown('| A | B |\n| --- | --- |')}</>));
+    const table = document.querySelector('table');
+    expect(table).not.toBeNull();
+    expect(table!.querySelector('thead')).not.toBeNull();
+    expect(table!.querySelector('tbody')).toBeNull();
+  });
+
+  it('does not treat a pipe line as a table when the next line is a non-delimiter (has a dash)', async () => {
+    await render(wrap(<>{renderMarkdown('x | y\n| a- | --- |')}</>));
+    expect(document.querySelector('table')).toBeNull();
+    expect(document.querySelector('p')?.textContent).toContain('x | y');
+  });
+
+  it('does not treat a pipe line as a table when the following line has no dashes', async () => {
+    await render(wrap(<>{renderMarkdown('x | y\nnope no dashes')}</>));
+    expect(document.querySelector('table')).toBeNull();
+  });
+
+  it('treats a lone pipe line with no following delimiter as a paragraph', async () => {
+    await render(wrap(<>{renderMarkdown('| a | b |')}</>));
+    expect(document.querySelector('table')).toBeNull();
+    expect(document.querySelector('p')?.textContent).toContain('a | b');
+  });
+
+  it('starts a table even when it directly follows a paragraph line (no blank line between)', async () => {
+    await render(wrap(<>{renderMarkdown('intro text\n| A | B |\n| --- | --- |\n| 1 | 2 |')}</>));
+    expect(document.querySelector('p')?.textContent).toContain('intro text');
+    const table = document.querySelector('table');
+    expect(table).not.toBeNull();
+    expect(table!.querySelectorAll('tbody td').length).toBe(2);
+  });
+
   it('renders a fenced code block with the language hint (lowlight hljs)', async () => {
     await render(wrap(<>{renderMarkdown('```go\nfunc main() {}\n```')}</>));
     const pre = document.querySelector('pre');

@@ -15,10 +15,18 @@ const reindexState = vi.hoisted(() => ({
   isError: false,
   error: null as unknown,
 }));
+const rebuildMappingMutate = vi.hoisted(() => vi.fn());
+const rebuildMappingState = vi.hoisted(() => ({
+  mutate: rebuildMappingMutate,
+  isPending: false,
+  isError: false,
+  error: null as unknown,
+}));
 
 vi.mock('@/hooks/useSearchAdmin', () => ({
   useSearchAdminStatus: () => statusState,
   useStartSearchReindex: () => reindexState,
+  useStartSearchMappingRebuild: () => rebuildMappingState,
 }));
 
 describe('SearchAdminPanel browser behaviour', () => {
@@ -203,5 +211,109 @@ describe('SearchAdminPanel browser behaviour', () => {
       reindexState.isError = false;
       reindexState.error = null;
     }
+  });
+
+  // -------- users/channels mapping rebuild card --------
+
+  const configured = (extra: Record<string, unknown> = {}) => ({
+    configured: true,
+    cluster: { status: 'green', number_of_nodes: 1, active_shards: 1 },
+    indices: [],
+    reindex: { running: false, startedAt: 0, completedAt: 0 },
+    ...extra,
+  });
+
+  it('renders the mapping-rebuild card idle by default', async () => {
+    statusState.isLoading = false;
+    statusState.isError = false;
+    statusState.data = configured();
+    await render(<SearchAdminPanel />);
+    const btn = document.querySelector('[data-testid="mapping-rebuild-start"]') as HTMLButtonElement;
+    expect(document.querySelector('[data-testid="mapping-rebuild-status"]')?.textContent).toBe('idle');
+    expect(btn.textContent).toMatch(/Rebuild users & channels/);
+    expect(btn.disabled).toBe(false);
+  });
+
+  it('disables the mapping-rebuild button and shows "Rebuilding…" while it runs', async () => {
+    statusState.isLoading = false;
+    statusState.isError = false;
+    statusState.data = configured({
+      mappingRebuild: { running: true, users: 2, channels: 1, startedAt: 1700000000, completedAt: 0 },
+    });
+    await render(<SearchAdminPanel />);
+    const btn = document.querySelector('[data-testid="mapping-rebuild-start"]') as HTMLButtonElement;
+    expect(btn.disabled).toBe(true);
+    expect(btn.textContent).toMatch(/Rebuilding/);
+    expect(document.querySelector('[data-testid="mapping-rebuild-status"]')?.textContent).toBe('running');
+    // users/channels present → the "Last run rebuilt…" line renders.
+    expect(document.querySelector('[data-testid="mapping-rebuild-card"]')?.textContent).toContain('2 users');
+  });
+
+  it('shows "Starting…" while the mapping-rebuild mutation is pending', async () => {
+    statusState.isLoading = false;
+    statusState.isError = false;
+    statusState.data = configured();
+    rebuildMappingState.isPending = true;
+    try {
+      await render(<SearchAdminPanel />);
+      const btn = document.querySelector('[data-testid="mapping-rebuild-start"]') as HTMLButtonElement;
+      expect(btn.textContent).toMatch(/Starting/);
+      expect(btn.disabled).toBe(true);
+    } finally {
+      rebuildMappingState.isPending = false;
+    }
+  });
+
+  it('clicking the mapping-rebuild button triggers its start mutation', async () => {
+    statusState.isLoading = false;
+    statusState.isError = false;
+    statusState.data = configured();
+    rebuildMappingMutate.mockReset();
+    await render(<SearchAdminPanel />);
+    const btn = document.querySelector('[data-testid="mapping-rebuild-start"]') as HTMLButtonElement;
+    btn.click();
+    expect(rebuildMappingMutate).toHaveBeenCalled();
+  });
+
+  it('surfaces the mapping-rebuild mutation error (Error instance)', async () => {
+    statusState.isLoading = false;
+    statusState.isError = false;
+    statusState.data = configured();
+    rebuildMappingState.isError = true;
+    rebuildMappingState.error = new Error('a mapping rebuild is already running');
+    try {
+      const screen = await render(<SearchAdminPanel />);
+      await expect.element(screen.getByText('a mapping rebuild is already running')).toBeVisible();
+    } finally {
+      rebuildMappingState.isError = false;
+      rebuildMappingState.error = null;
+    }
+  });
+
+  it('shows a default mapping-rebuild error when the error is not an Error', async () => {
+    statusState.isLoading = false;
+    statusState.isError = false;
+    statusState.data = configured();
+    rebuildMappingState.isError = true;
+    rebuildMappingState.error = 'a string, not an Error';
+    try {
+      const screen = await render(<SearchAdminPanel />);
+      await expect.element(screen.getByText('Could not start mapping rebuild')).toBeVisible();
+    } finally {
+      rebuildMappingState.isError = false;
+      rebuildMappingState.error = null;
+    }
+  });
+
+  it('surfaces a mapping-rebuild lastError and a mappingRebuildError from the status', async () => {
+    statusState.isLoading = false;
+    statusState.isError = false;
+    statusState.data = configured({
+      mappingRebuild: { running: false, users: 0, channels: 0, startedAt: 0, completedAt: 0, lastError: 'alias swap failed' },
+      mappingRebuildError: 'redis get failed',
+    });
+    const screen = await render(<SearchAdminPanel />);
+    await expect.element(screen.getByText('alias swap failed')).toBeVisible();
+    await expect.element(screen.getByText('redis get failed')).toBeVisible();
   });
 });

@@ -23,6 +23,18 @@ export interface SearchReindexProgress {
   completedAt?: number;
 }
 
+// SearchMappingRebuildProgress mirrors search.MappingRebuildStatus. This is the
+// cluster-coordinated users/channels mapping rebuild (staging + alias-swap) —
+// distinct from `reindex` (which repopulates docs into the live indices).
+export interface SearchMappingRebuildProgress {
+  running: boolean;
+  users: number;
+  channels: number;
+  lastError?: string;
+  startedAt?: number;
+  completedAt?: number;
+}
+
 export interface SearchAdminStatus {
   configured: boolean;
   cluster?: Record<string, unknown>;
@@ -30,6 +42,8 @@ export interface SearchAdminStatus {
   indices?: SearchIndexStat[];
   indicesError?: string;
   reindex?: SearchReindexProgress;
+  mappingRebuild?: SearchMappingRebuildProgress;
+  mappingRebuildError?: string;
 }
 
 // useSearchAdminStatus polls the admin search-status endpoint. While a
@@ -41,7 +55,7 @@ export function useSearchAdminStatus() {
     queryFn: () => apiFetch<SearchAdminStatus>('/api/v1/admin/search/status'),
     refetchInterval: (query) => {
       const data = query.state.data;
-      if (data?.reindex?.running) return 2_000;
+      if (data?.reindex?.running || data?.mappingRebuild?.running) return 2_000;
       return 30_000;
     },
     staleTime: 1_000,
@@ -56,6 +70,24 @@ export function useStartSearchReindex() {
   return useMutation({
     mutationFn: () =>
       apiFetch<SearchReindexProgress>('/api/v1/admin/search/reindex', { method: 'POST' }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: queryKeys.adminSearchStatus() });
+    },
+  });
+}
+
+// useStartSearchMappingRebuild triggers the cluster-coordinated users/channels
+// mapping rebuild (apply a new analyzer via staging + alias-swap). Like the
+// reindex it's fire-and-poll; the status query is invalidated so the panel
+// flips to "running" at once. A 409 (another instance already holds the lock)
+// surfaces as a mutation error.
+export function useStartSearchMappingRebuild() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      apiFetch<SearchMappingRebuildProgress>('/api/v1/admin/search/rebuild-mapping', {
+        method: 'POST',
+      }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: queryKeys.adminSearchStatus() });
     },

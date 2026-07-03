@@ -403,4 +403,30 @@ describe('renderHastTree — every custom-tag branch', () => {
     expect(document.body.textContent).toContain('example.com/path');
     expect(document.body.textContent).toContain('http://plain.example');
   });
+
+  it('renders a hast table with a scroll wrapper and per-column alignment classes', async () => {
+    const cell = (tag: string, value: string, align?: string) =>
+      elem(tag, align ? { 'data-align': align } : {}, [text(value)]);
+    const tree = root([
+      elem('table', {}, [
+        elem('thead', {}, [
+          elem('tr', {}, [cell('th', 'L'), cell('th', 'C', 'center'), cell('th', 'R', 'right')]),
+        ]),
+        elem('tbody', {}, [
+          elem('tr', {}, [cell('td', 'a'), cell('td', 'b', 'center'), cell('td', 'c', 'right')]),
+        ]),
+      ]),
+    ]);
+    await render(wrap(<>{renderHastTree(tree)}</>));
+    const table = document.querySelector('table');
+    expect(table).not.toBeNull();
+    expect(table!.parentElement?.className).toContain('overflow-x-auto');
+    const ths = document.querySelectorAll('thead th');
+    expect(ths[0].className).toContain('text-left'); // no data-align → default
+    expect(ths[1].className).toContain('text-center');
+    expect(ths[2].className).toContain('text-right');
+    const tds = document.querySelectorAll('tbody td');
+    expect(tds[0].textContent).toBe('a');
+    expect(tds[2].className).toContain('text-right');
+  });
 });
