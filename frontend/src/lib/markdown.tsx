@@ -331,6 +331,41 @@ function renderInlineString(src: string, opts: RenderOpts | undefined, keyPrefix
   return out;
 }
 
+// --- GFM table support for the legacy fallback / compose-preview parser ---
+// The authoritative render is the server hast tree; this mirrors it so a table
+// looks the same in the live compose preview and in older tree-less messages.
+const TABLE_DELIM_CELL_RE = /^:?-+:?$/;
+
+function splitTableCells(line: string): string[] {
+  let s = line.trim();
+  if (s.startsWith('|')) s = s.slice(1);
+  if (s.endsWith('|')) s = s.slice(0, -1);
+  // Escaped pipes aren't handled here (kept simple for the preview); the server
+  // renderer owns the full grammar.
+  return s.split('|').map((c) => c.trim());
+}
+
+function isTableDelimiterRow(line: string): boolean {
+  if (!line.includes('-')) return false;
+  // splitTableCells always yields at least one (possibly empty) cell, and an
+  // empty cell fails TABLE_DELIM_CELL_RE, so `every` alone is sufficient.
+  return splitTableCells(line).every((c) => TABLE_DELIM_CELL_RE.test(c));
+}
+
+// A table begins where a `|`-bearing header line is immediately followed by a
+// delimiter row (|---|:--:|--:|).
+function isTableStart(lines: string[], i: number): boolean {
+  return i + 1 < lines.length && lines[i].includes('|') && isTableDelimiterRow(lines[i + 1]);
+}
+
+function tableAlignClass(cell: string): string {
+  const left = cell.startsWith(':');
+  const right = cell.endsWith(':');
+  if (left && right) return 'text-center';
+  if (right) return 'text-right';
+  return 'text-left';
+}
+
 // renderMarkdown is the public render entry point.
 //
 // Two paths:
@@ -473,6 +508,55 @@ export function renderMarkdown(body: string, opts?: RenderOpts): ReactNode {
       continue;
     }
 
+    // GFM table: header row + delimiter row + body rows until a blank/non-pipe
+    // line. Mirrors the server hast renderer's table output + styling.
+    if (isTableStart(lines, i)) {
+      const headerCells = splitTableCells(line);
+      const alignCls = splitTableCells(lines[i + 1]).map(tableAlignClass);
+      i += 2;
+      const bodyRows: string[][] = [];
+      while (i < lines.length && lines[i].includes('|') && lines[i].trim() !== '') {
+        bodyRows.push(splitTableCells(lines[i]));
+        i++;
+      }
+      const tKey = blockKey++;
+      blocks.push(
+        <div key={`bk-${tKey}`} className="my-2 max-w-full overflow-x-auto">
+          <table className="w-auto border-collapse text-sm">
+            <thead className="bg-muted">
+              <tr className="border-b border-border last:border-b-0">
+                {headerCells.map((cell, ci) => (
+                  <th
+                    key={ci}
+                    className={`border border-border px-2 py-1 font-semibold ${alignCls[ci] ?? 'text-left'}`}
+                  >
+                    {renderInlineString(cell, opts, `th-${tKey}-${ci}`)}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            {bodyRows.length > 0 && (
+              <tbody>
+                {bodyRows.map((cells, ri) => (
+                  <tr key={ri} className="border-b border-border last:border-b-0">
+                    {cells.map((cell, ci) => (
+                      <td
+                        key={ci}
+                        className={`border border-border px-2 py-1 align-top ${alignCls[ci] ?? 'text-left'}`}
+                      >
+                        {renderInlineString(cell, opts, `td-${tKey}-${ri}-${ci}`)}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            )}
+          </table>
+        </div>,
+      );
+      continue;
+    }
+
     // blank line — preserve as a literal empty line in the rendered
     // output. Slack/iMessage parity: pressing Enter twice in the
     // composer leaves a visible gap, not a paragraph collapse.
@@ -501,7 +585,8 @@ export function renderMarkdown(body: string, opts?: RenderOpts): ReactNode {
       !/^[-*] /.test(lines[i]) &&
       !/^\d+[.)]\s+/.test(lines[i]) &&
       !/^#{1,6}\s+/.test(lines[i]) &&
-      !/^\s*(?:---|\*\*\*|___)\s*$/.test(lines[i])
+      !/^\s*(?:---|\*\*\*|___)\s*$/.test(lines[i]) &&
+      !isTableStart(lines, i)
     ) {
       buf.push(lines[i]);
       i++;

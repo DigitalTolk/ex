@@ -33,6 +33,66 @@ func TestRedisCache_NameCache(t *testing.T) {
 	}
 }
 
+func TestRedisCache_DistributedLock(t *testing.T) {
+	c, mr := setupTestCache(t)
+	ctx := context.Background()
+	const key = "lock:job"
+
+	// Free lock: the first acquire wins, a second (different token) loses.
+	ok, err := c.AcquireLock(ctx, key, "tok-a", time.Minute)
+	if err != nil || !ok {
+		t.Fatalf("first AcquireLock = %v,%v; want true,nil", ok, err)
+	}
+	held, err := c.LockHeld(ctx, key)
+	if err != nil || !held {
+		t.Fatalf("LockHeld after acquire = %v,%v; want true,nil", held, err)
+	}
+	if ok, _ := c.AcquireLock(ctx, key, "tok-b", time.Minute); ok {
+		t.Fatal("second AcquireLock should lose while the lock is held")
+	}
+
+	// Token-fenced release: a foreign token is a no-op; the owner's token frees it.
+	if err := c.ReleaseLock(ctx, key, "tok-b"); err != nil {
+		t.Fatalf("ReleaseLock(foreign): %v", err)
+	}
+	if held, _ := c.LockHeld(ctx, key); !held {
+		t.Fatal("a foreign-token release must NOT drop the owner's lock")
+	}
+	if err := c.ReleaseLock(ctx, key, "tok-a"); err != nil {
+		t.Fatalf("ReleaseLock(owner): %v", err)
+	}
+	if held, _ := c.LockHeld(ctx, key); held {
+		t.Fatal("owner-token release should drop the lock")
+	}
+
+	// After release the lock is re-acquirable.
+	if ok, _ := c.AcquireLock(ctx, key, "tok-c", time.Minute); !ok {
+		t.Fatal("lock should be free after the owner released it")
+	}
+
+	// TTL expiry frees a lock whose holder never released it (crash path).
+	mr.FastForward(2 * time.Minute)
+	if held, _ := c.LockHeld(ctx, key); held {
+		t.Fatal("lock should expire once its TTL lapses")
+	}
+}
+
+func TestRedisCache_LockErrorsSurface(t *testing.T) {
+	c, mr := setupTestCache(t)
+	ctx := context.Background()
+	mr.SetError("boom") // every command replies with an error (no dial-retry storm)
+
+	if _, err := c.AcquireLock(ctx, "k", "t", time.Minute); err == nil {
+		t.Error("AcquireLock should surface a Redis error")
+	}
+	if err := c.ReleaseLock(ctx, "k", "t"); err == nil {
+		t.Error("ReleaseLock should surface a Redis error")
+	}
+	if _, err := c.LockHeld(ctx, "k"); err == nil {
+		t.Error("LockHeld should surface a Redis error")
+	}
+}
+
 func TestNewRedisCache(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
 		c, _ := setupTestCache(t)

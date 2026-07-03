@@ -48,6 +48,24 @@ describe('useDismissKeyboardOnScroll', () => {
     expect(document.activeElement).toBe(btn);
   });
 
+  it('leaves the keyboard up while scrolling the CodeMirror typeahead (body-portalled)', () => {
+    // The @mention / :emoji: autocomplete tooltip portals to document.body,
+    // so it is NOT contained by the focused editor — but scrolling it is part
+    // of typing; blurring here dropped the keyboard AND closed the popup.
+    // (input stands in for the CM contenteditable — jsdom can only focus
+    // form controls; the hook treats both as editable.)
+    const editor = document.createElement('input');
+    const tooltip = document.createElement('div');
+    tooltip.className = 'cm-tooltip cm-tooltip-autocomplete';
+    const option = document.createElement('li');
+    tooltip.appendChild(option);
+    document.body.append(editor, tooltip);
+    renderHook(() => useDismissKeyboardOnScroll());
+    editor.focus();
+    fireTouchMove(option);
+    expect(document.activeElement).toBe(editor);
+  });
+
   it('does not attach the listener on desktop', () => {
     mobileRef.value = false;
     const input = document.createElement('input');

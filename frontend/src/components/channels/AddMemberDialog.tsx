@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button';
 import { apiFetch } from '@/lib/api';
 import { queryKeys } from '@/lib/query-keys';
 import { useQueryClient } from '@tanstack/react-query';
+import { useIsMobile } from '@/hooks/useIsMobile';
 
 interface AddMemberDialogProps {
   open: boolean;
@@ -19,6 +20,7 @@ export function AddMemberDialog({ open, onOpenChange, channelId }: AddMemberDial
   const [error, setError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const queryClient = useQueryClient();
+  const isMobile = useIsMobile();
 
   useEffect(() => {
     if (query.length < 2) {
@@ -39,8 +41,9 @@ export function AddMemberDialog({ open, onOpenChange, channelId }: AddMemberDial
     return () => clearTimeout(timer);
   }, [query]);
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
+  // Shared by the desktop form submit and the mobile top-bar action (which
+  // lives outside the <form>, in the dialog's mobile header).
+  async function submit() {
     if (!selectedUser) {
       setError('Please select a user from the search results');
       return;
@@ -64,9 +67,31 @@ export function AddMemberDialog({ open, onOpenChange, channelId }: AddMemberDial
     }
   }
 
+  function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    void submit();
+  }
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent size="lg" className="min-h-[400px]">
+      {/* Mobile: the Add action moves to the dialog's top-right header (the
+          keyboard is up while searching, so an in-flow bottom button could
+          sit behind it), and the search field doesn't autofocus (keyboard
+          pop on open). */}
+      <DialogContent
+        size="lg"
+        className="min-h-[400px]"
+        mobileCloseLabel="Cancel"
+        mobileAction={
+          isMobile
+            ? {
+                label: isSubmitting ? 'Adding...' : 'Add',
+                onClick: () => void submit(),
+                disabled: isSubmitting || !selectedUser,
+              }
+            : undefined
+        }
+      >
         <DialogHeader><DialogTitle>Add member</DialogTitle></DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-4">
           {error && <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">{error}</div>}
@@ -75,7 +100,7 @@ export function AddMemberDialog({ open, onOpenChange, channelId }: AddMemberDial
             onChange={e => { setQuery(e.target.value); setSelectedUser(null); }}
             placeholder="Search by name or email..."
             required
-            autoFocus
+            autoFocus={!isMobile}
           />
           {results.length > 0 && !selectedUser && (
             <div className="border rounded-md max-h-40 overflow-y-auto">
@@ -92,9 +117,11 @@ export function AddMemberDialog({ open, onOpenChange, channelId }: AddMemberDial
               ))}
             </div>
           )}
-          <Button type="submit" className="w-full" disabled={isSubmitting || !selectedUser}>
-            {isSubmitting ? 'Adding...' : 'Add member'}
-          </Button>
+          {!isMobile && (
+            <Button type="submit" className="w-full" disabled={isSubmitting || !selectedUser}>
+              {isSubmitting ? 'Adding...' : 'Add member'}
+            </Button>
+          )}
         </form>
       </DialogContent>
     </Dialog>

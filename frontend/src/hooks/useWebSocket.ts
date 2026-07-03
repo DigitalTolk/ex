@@ -9,6 +9,14 @@ type WSCallback = (data: unknown) => void;
 const reconnectDelayStepsMs = [1000, 2000, 4000, 8000, 16000, 30000];
 const reconnectAttemptsPerStep = 3;
 
+// Half-open detection window for the wake probe. The server writes an
+// app-level ping frame every 15s (internal/handler/ws.go wsKeepAliveInterval),
+// so a socket that has produced NO frame for three ping intervals after the
+// app comes back to the foreground is dead-but-doesn't-know-it — a mobile
+// OS kills background TCP without a close event, so onclose (the only other
+// reconnect trigger) never fires.
+const staleFrameMs = 45_000;
+
 // Dedup window for replay-vs-live races. On a reconnect the server
 // replays missed events from the durable inbox; any event that also
 // arrives via the live channel during the cutover would otherwise be
@@ -72,9 +80,16 @@ export function useWebSocket(options: UseWebSocketOptions) {
   const seenIdsRef = useRef<Set<string>>(new Set());
   const seenOrderRef = useRef<string[]>([]);
 
+  // Arrival time of the most recent frame (any type — the server's 15s
+  // app-ping counts), for the wake probe's half-open check.
+  const lastFrameAtRef = useRef(0);
+
   useEffect(() => {
     if (!options.enabled) return;
     let disposed = false;
+    // connect() awaits a token refresh before opening the socket, so two wake
+    // events in quick succession could otherwise race two parallel connects.
+    let connectInFlight = false;
 
     // recordSeen marks an id as delivered AFTER its handler ran, so a replay/live
     // duplicate is dropped by the peek (seenIdsRef.has) at the top of onmessage.
@@ -91,11 +106,19 @@ export function useWebSocket(options: UseWebSocketOptions) {
     }
 
     async function connect(refreshBeforeConnect = false) {
+      if (connectInFlight) return;
+      connectInFlight = true;
       let token = getAccessToken();
-      if (!token) return;
+      if (!token) {
+        connectInFlight = false;
+        return;
+      }
       if (refreshBeforeConnect) {
         token = await refreshAccessToken();
-        if (!token || disposed || !enabledRef.current) return;
+        if (!token || disposed || !enabledRef.current) {
+          connectInFlight = false;
+          return;
+        }
       }
 
       const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -104,6 +127,8 @@ export function useWebSocket(options: UseWebSocketOptions) {
       const url = `${proto}//${window.location.host}/api/v1/ws?token=${encodeURIComponent(token)}${sinceParam}`;
       const ws = new WebSocket(url);
       wsRef.current = ws;
+      lastFrameAtRef.current = Date.now();
+      connectInFlight = false;
 
       ws.onopen = () => {
         const reconnected = retryCountRef.current > 0;
@@ -115,6 +140,7 @@ export function useWebSocket(options: UseWebSocketOptions) {
       };
 
       ws.onmessage = (event) => {
+        lastFrameAtRef.current = Date.now();
         let msg: { id?: unknown; type?: string; data?: unknown };
         try {
           msg = JSON.parse(event.data);
@@ -260,10 +286,42 @@ export function useWebSocket(options: UseWebSocketOptions) {
       };
     }
 
+    // Wake probe: onclose+backoff is the only other reconnect trigger, but a
+    // mobile OS (or a network change) can kill the socket in the background
+    // WITHOUT a close event — the app then resumes with a socket that looks
+    // OPEN (or already null) and never reconnects. On every foreground /
+    // connectivity signal: reconnect immediately if the socket is gone
+    // (skipping any pending backoff), or force-close a half-open one (no
+    // frame for staleFrameMs despite the server's 15s app-ping) so the
+    // normal onclose → reconnect → replay path takes over.
+    function wakeProbe() {
+      if (disposed || !enabledRef.current) return;
+      if (document.visibilityState === 'hidden') return;
+      const ws = wsRef.current;
+      if (ws) {
+        if (ws.readyState === WebSocket.OPEN && Date.now() - lastFrameAtRef.current > staleFrameMs) {
+          ws.close();
+        }
+        // CONNECTING/CLOSING resolve on their own via onopen/onclose.
+        return;
+      }
+      if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
+      void connect(true);
+    }
+
+    const wakeTargets: Array<[EventTarget, string]> = [
+      [document, 'visibilitychange'],
+      [window, 'focus'],
+      [window, 'online'],
+      [window, 'pageshow'],
+    ];
+    for (const [target, event] of wakeTargets) target.addEventListener(event, wakeProbe);
+
     void connect();
 
     return () => {
       disposed = true;
+      for (const [target, event] of wakeTargets) target.removeEventListener(event, wakeProbe);
       if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
       if (wsRef.current) {
         wsRef.current.close();

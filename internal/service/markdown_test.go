@@ -50,6 +50,78 @@ func TestMarkdownRenderer_SetextDisabledThematicBreak(t *testing.T) {
 	}
 }
 
+func tableAlign(n *HastNode) string {
+	if n.Properties == nil {
+		return ""
+	}
+	if v, ok := n.Properties["data-align"].(string); ok {
+		return v
+	}
+	return ""
+}
+
+func tagPresent(tags []string, want string) bool {
+	for _, t := range tags {
+		if t == want {
+			return true
+		}
+	}
+	return false
+}
+
+func TestMarkdownRenderer_Table(t *testing.T) {
+	r := NewMarkdownRenderer()
+	// Three columns: left (:--), center (:-:), right (--:). A cell also carries
+	// a custom emoji shortcode to prove the custom-syntax walker reaches cells.
+	body := "| L | C | R |\n| :-- | :-: | --: |\n| a | :smile: | c |"
+	out := r.RenderToHast(body)
+
+	if tags := topLevelTags(out); len(tags) != 1 || tags[0] != "table" {
+		t.Fatalf("expected a single [table] top-level block, got %v", tags)
+	}
+	flat := flattenTags(out)
+	for _, want := range []string{"table", "thead", "tbody", "tr", "th", "td"} {
+		if !tagPresent(flat, want) {
+			t.Errorf("table tree missing <%s>: %v", want, flat)
+		}
+	}
+
+	table := out.Children[0]
+	thead := table.Children[0]
+	tbody := table.Children[1]
+	if thead.TagName != "thead" || tbody.TagName != "tbody" {
+		t.Fatalf("table children = [%s %s], want [thead tbody]", thead.TagName, tbody.TagName)
+	}
+
+	headerCells := thead.Children[0].Children // thead > tr > th…
+	if len(headerCells) != 3 || headerCells[0].TagName != "th" {
+		t.Fatalf("header cells wrong: %+v", headerCells)
+	}
+	// Left/none omits data-align; center + right carry it.
+	if got := tableAlign(headerCells[0]); got != "" {
+		t.Errorf("left column data-align = %q, want empty", got)
+	}
+	if got := tableAlign(headerCells[1]); got != "center" {
+		t.Errorf("center column data-align = %q", got)
+	}
+	if got := tableAlign(headerCells[2]); got != "right" {
+		t.Errorf("right column data-align = %q", got)
+	}
+
+	bodyCells := tbody.Children[0].Children // tbody > tr > td…
+	if len(bodyCells) != 3 || bodyCells[0].TagName != "td" {
+		t.Fatalf("body cells wrong: %+v", bodyCells)
+	}
+	// The custom-syntax walker must have turned `:smile:` inside a cell into an
+	// ex-emoji-shortcode element (cells aren't <code>, so they're walked).
+	if !tagPresent(flattenTags(tbody), "ex-emoji-shortcode") {
+		t.Errorf("emoji shortcode in a table cell was not extracted: %v", flattenTags(tbody))
+	}
+	if !strings.Contains(allText(out), "a") {
+		t.Errorf("table lost cell text: %q", allText(out))
+	}
+}
+
 func TestMarkdownRenderer_BoldItalicStrike(t *testing.T) {
 	r := NewMarkdownRenderer()
 	out := r.RenderToHast("**b** *i* ~~s~~")

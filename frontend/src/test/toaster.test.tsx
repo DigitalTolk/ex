@@ -34,4 +34,28 @@ describe('Toaster', () => {
     act(() => showToast('ignored'));
     expect(screen.queryByTestId('toast')).toBeNull();
   });
+
+  it('renders a bold title line when provided', () => {
+    render(<Toaster />);
+    act(() => showToast('New message body', 'success', { title: 'Alice in ~general' }));
+    const toast = screen.getByTestId('toast');
+    expect(toast).toHaveTextContent('Alice in ~general');
+    expect(toast).toHaveTextContent('New message body');
+    // Plain informational toast stays a non-interactive div.
+    expect(toast.tagName).toBe('DIV');
+  });
+
+  it('an actionable toast is a button: tap runs the action and dismisses immediately', () => {
+    const onActivate = vi.fn();
+    render(<Toaster />);
+    act(() => showToast('Tap to open', 'success', { title: 'Alice', onActivate }));
+    const toast = screen.getByTestId('toast');
+    expect(toast.tagName).toBe('BUTTON');
+    act(() => {
+      toast.click();
+    });
+    expect(onActivate).toHaveBeenCalledTimes(1);
+    // Dismissed on tap — no waiting for the auto-dismiss timer.
+    expect(screen.queryByTestId('toast')).toBeNull();
+  });
 });

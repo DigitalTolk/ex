@@ -19,13 +19,22 @@ type SearchStatusReporter interface {
 	IndexStats(ctx context.Context) ([]search.IndexStat, error)
 }
 
+// MappingRebuildController is the slim view AdminHandler needs to trigger and
+// report the cluster-coordinated users/channels mapping rebuild. The concrete
+// *search.MappingRebuilder satisfies it; tests inject a fake.
+type MappingRebuildController interface {
+	Start(ctx context.Context, now func() int64) (bool, error)
+	Status(ctx context.Context) (search.MappingRebuildStatus, error)
+}
+
 // AdminHandler exposes admin-only endpoints for workspace configuration.
 // Authorization is enforced inside each handler — `middleware.Auth` only
 // confirms the caller is signed in, not that they're an admin.
 type AdminHandler struct {
-	settings  *service.SettingsService
-	searchSt  SearchStatusReporter
-	reindexer *search.Reindexer
+	settings   *service.SettingsService
+	searchSt   SearchStatusReporter
+	reindexer  *search.Reindexer
+	mappingReb MappingRebuildController
 }
 
 // NewAdminHandler constructs an AdminHandler.
@@ -39,6 +48,13 @@ func NewAdminHandler(settings *service.SettingsService) *AdminHandler {
 func (h *AdminHandler) SetSearch(reporter SearchStatusReporter, reindexer *search.Reindexer) {
 	h.searchSt = reporter
 	h.reindexer = reindexer
+}
+
+// SetMappingRebuilder wires the optional cluster-coordinated users/channels
+// mapping rebuild (RecreateUsersChannels behind a Redis lock + shared status).
+// nil → the mapping-rebuild route answers 503, same as an unconfigured search.
+func (h *AdminHandler) SetMappingRebuilder(reb MappingRebuildController) {
+	h.mappingReb = reb
 }
 
 // settingsResponse is the wire shape returned from GetSettings. It
@@ -98,6 +114,13 @@ func (h *AdminHandler) SearchStatus(w http.ResponseWriter, r *http.Request) {
 		resp["indicesError"] = err.Error()
 	}
 	resp["reindex"] = h.reindexer.Status()
+	if h.mappingReb != nil {
+		if st, err := h.mappingReb.Status(ctx); err == nil {
+			resp["mappingRebuild"] = st
+		} else {
+			resp["mappingRebuildError"] = err.Error()
+		}
+	}
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -120,6 +143,36 @@ func (h *AdminHandler) StartSearchReindex(w http.ResponseWriter, r *http.Request
 		return
 	}
 	writeJSON(w, http.StatusAccepted, h.reindexer.Status())
+}
+
+// StartSearchMappingRebuild kicks off the cluster-coordinated users/channels
+// mapping rebuild (staging index → atomic alias-swap) — the path that actually
+// rolls a new analyzer onto an existing cluster. Admin-only. A Redis lock makes
+// it single-flight across every instance: 202 if THIS call won the lock and
+// started a run, 409 if another instance (or a still-cooling crashed run) holds
+// it, 503 if search isn't configured, 500 on a coordination (Redis) error.
+func (h *AdminHandler) StartSearchMappingRebuild(w http.ResponseWriter, r *http.Request) {
+	if !requireAdmin(w, r) {
+		return
+	}
+	if h.mappingReb == nil {
+		writeError(w, http.StatusServiceUnavailable, "search_disabled", "search is not configured")
+		return
+	}
+	// Detach from the request context so the lock/state writes and the detached
+	// rebuild goroutine survive the HTTP response; admins poll status afterwards.
+	started, err := h.mappingReb.Start(context.Background(), nowUnix)
+	if err != nil {
+		// Generic 500 — don't leak the Redis/coordination error to the client.
+		writeError(w, http.StatusInternalServerError, "rebuild_error", "could not start mapping rebuild")
+		return
+	}
+	if !started {
+		writeError(w, http.StatusConflict, "already_running", "a mapping rebuild is already running")
+		return
+	}
+	st, _ := h.mappingReb.Status(context.Background())
+	writeJSON(w, http.StatusAccepted, st)
 }
 
 func nowUnix() int64 { return time.Now().Unix() }

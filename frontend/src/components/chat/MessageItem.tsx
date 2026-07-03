@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { Copy, Pencil, Trash2, SmilePlus, MessageSquareReply, MoreHorizontal, Pin, PinOff, Link as LinkIcon, AlarmClock } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -31,6 +31,7 @@ import { renderMarkdown } from '@/lib/markdown';
 import { isEmojiOnlyMessage } from '@/lib/emoji-shortcodes';
 import { recordEmojiUse } from '@/lib/emoji-frequency';
 import { blurActiveInput } from '@/lib/blur-input';
+import { showToast } from '@/lib/toast';
 import { useLongPress } from '@/hooks/useLongPress';
 import { buildChannelHref, buildConversationHref } from '@/lib/message-deeplink';
 import { useTagOpen } from '@/context/TagSearchContext';
@@ -45,6 +46,7 @@ import { registerEditMessageHandler } from '@/lib/window-events';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { motion } from 'motion/react';
 import { useSwipeDismiss } from '@/hooks/useSwipeDismiss';
+import { useMobileBackClose } from '@/hooks/useMobileBackClose';
 import { useTransientOverlayCleanup } from '@/hooks/useTransientOverlayCleanup';
 import type { Message, UserStatus } from '@/types';
 
@@ -101,6 +103,76 @@ function formatTime(dateStr: string): string {
     hour: 'numeric',
     minute: '2-digit',
   });
+}
+
+// One reaction chip. Tap toggles the viewer's reaction; the "who reacted"
+// list lives in a hover tooltip, which touch can't reach — so on mobile a
+// LONG-PRESS surfaces the same reactor list as a toast instead. Split out of
+// the render loop because the long-press needs its own hook instance per chip.
+function ReactionChip({
+  reactedByMe,
+  ariaLabel,
+  reactorsText,
+  isMobile,
+  onToggle,
+  tooltipContent,
+  children,
+}: {
+  reactedByMe: boolean;
+  ariaLabel: string;
+  // Pre-formatted "Alice, Bob reacted with 👍" line for the mobile toast.
+  reactorsText: string;
+  isMobile: boolean;
+  onToggle: () => void;
+  tooltipContent: ReactNode;
+  children: ReactNode;
+}) {
+  const longPress = useLongPress({
+    enabled: isMobile,
+    onLongPress: () => showToast(reactorsText, 'success'),
+  });
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <button
+            type="button"
+            role="listitem"
+            data-testid="reaction-badge"
+            onClick={() => {
+              // The release of a long-press fires a click; swallow it so
+              // peeking at the reactor list doesn't also toggle the reaction.
+              if (longPress.shouldSuppressClick()) return;
+              onToggle();
+            }}
+            onPointerDown={(e) => {
+              // Keep the ROW's long-press (message action sheet) from arming
+              // on a chip press — the chip's own long-press shows reactors.
+              e.stopPropagation();
+              longPress.handlers.onPointerDown(e);
+            }}
+            onPointerMove={longPress.handlers.onPointerMove}
+            onPointerUp={longPress.handlers.onPointerUp}
+            onPointerLeave={longPress.handlers.onPointerLeave}
+            onPointerCancel={longPress.handlers.onPointerCancel}
+            className={`flex items-center gap-1 rounded-full border px-1.5 py-0 text-sm hover:bg-muted ${
+              reactedByMe ? 'border-primary bg-primary/10' : 'bg-background'
+            }`}
+            aria-label={ariaLabel}
+            aria-pressed={reactedByMe}
+          />
+        }
+      >
+        {children}
+      </TooltipTrigger>
+      <TooltipContent
+        data-testid="reaction-tooltip"
+        className="flex w-[16rem] flex-col items-center gap-1.5 px-4 py-3 text-center"
+      >
+        {tooltipContent}
+      </TooltipContent>
+    </Tooltip>
+  );
 }
 
 function MessageItemImpl({
@@ -319,6 +391,9 @@ function MessageItemImpl({
     closeMobileActions,
     mobileActionsOpen,
   );
+  // Back on mobile dismisses the long-press action sheet instead of leaving
+  // the channel.
+  useMobileBackClose(mobileActionsOpen, closeMobileActions);
   const setMobileActionsNode = useCallback((node: HTMLDivElement | null) => {
     mobileActionsSheetRef.current = node;
   }, []);
@@ -821,37 +896,27 @@ function MessageItemImpl({
                 {reactionEntries.map(([emoji, users]) => {
                   const reactedByMe = currentUserId ? users.includes(currentUserId) : false;
                   return (
-                    <Tooltip key={emoji}>
-                      <TooltipTrigger
-                        render={
-                          <button
-                            type="button"
-                            role="listitem"
-                            data-testid="reaction-badge"
-                            onClick={() => handleReact(emoji)}
-                            className={`flex items-center gap-1 rounded-full border px-1.5 py-0 text-sm hover:bg-muted ${
-                              reactedByMe ? 'border-primary bg-primary/10' : 'bg-background'
-                            }`}
-                            aria-label={`${renderReactionLabel(emoji)} ${users.length}, ${reactedByMe ? 'reacted' : 'react'}`}
-                            aria-pressed={reactedByMe}
-                          />
-                        }
-                      >
-                        {renderReactionVisual(emoji)}
-                        <span className="text-xs leading-5 text-muted-foreground tabular-nums">{users.length}</span>
-                      </TooltipTrigger>
-                      <TooltipContent
-                        data-testid="reaction-tooltip"
-                        className="flex w-[16rem] flex-col items-center gap-1.5 px-4 py-3 text-center"
-                      >
-                        <EmojiGlyph emoji={emoji} customMap={emojiMap} size="xl" />
-                        <span className="text-xs leading-snug">
-                          <span className="font-medium">{formatReactors(users)}</span>
-                          <span className="text-muted-foreground"> reacted with </span>
-                          <span className="font-medium">{renderReactionLabel(emoji)}</span>
-                        </span>
-                      </TooltipContent>
-                    </Tooltip>
+                    <ReactionChip
+                      key={emoji}
+                      reactedByMe={reactedByMe}
+                      ariaLabel={`${renderReactionLabel(emoji)} ${users.length}, ${reactedByMe ? 'reacted' : 'react'}`}
+                      reactorsText={`${formatReactors(users)} reacted with ${renderReactionLabel(emoji)}`}
+                      isMobile={isMobile}
+                      onToggle={() => handleReact(emoji)}
+                      tooltipContent={
+                        <>
+                          <EmojiGlyph emoji={emoji} customMap={emojiMap} size="xl" />
+                          <span className="text-xs leading-snug">
+                            <span className="font-medium">{formatReactors(users)}</span>
+                            <span className="text-muted-foreground"> reacted with </span>
+                            <span className="font-medium">{renderReactionLabel(emoji)}</span>
+                          </span>
+                        </>
+                      }
+                    >
+                      {renderReactionVisual(emoji)}
+                      <span className="text-xs leading-5 text-muted-foreground tabular-nums">{users.length}</span>
+                    </ReactionChip>
                   );
                 })}
                 <EmojiPicker

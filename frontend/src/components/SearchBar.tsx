@@ -339,7 +339,7 @@ export function SearchBar() {
           // Match the focus-expanded input width: the input row widens by -mx-2
           // on md+ while focused, and the dropdown only ever shows while focused,
           // so mirror that same negative margin here so their edges line up.
-          className="absolute left-0 right-0 top-full z-40 mt-1 max-h-[70vh] overflow-y-auto rounded-md border bg-popover text-popover-foreground shadow-lg md:-mx-2"
+          className="absolute left-0 right-0 top-full z-40 mt-1 max-h-[70dvh] overflow-y-auto rounded-md border bg-popover text-popover-foreground shadow-lg md:-mx-2"
         >
           {channelHits.length > 0 && (
             <div role="group" aria-label="Channels">

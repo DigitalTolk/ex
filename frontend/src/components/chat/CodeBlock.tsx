@@ -52,7 +52,13 @@ export function CodeBlock({ code, language }: CodeBlockProps) {
           aria-label={copied ? 'Code copied' : 'Copy code'}
           title={copied ? 'Copied' : 'Copy code'}
           data-testid="code-copy-button"
-          className="inline-flex h-6 w-6 items-center justify-center rounded border bg-background/80 text-muted-foreground opacity-0 backdrop-blur transition-opacity hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100"
+          // Hover-revealed, desktop-only. On touch there is no hover, and the
+          // mobile chrome stays minimal (whole-message copy lives in the
+          // long-press sheet) — but opacity-0 ALONE still hit-tests, leaving
+          // an invisible tap target that silently copied on stray taps, so
+          // mobile also needs pointer-events-none (same treatment as the
+          // sidebar row kebabs).
+          className="inline-flex h-6 w-6 items-center justify-center rounded border bg-background/80 text-muted-foreground opacity-0 backdrop-blur transition-opacity hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100 max-md:pointer-events-none"
         >
           {copied ? <Check className="h-3 w-3" aria-hidden /> : <Copy className="h-3 w-3" aria-hidden />}
         </button>

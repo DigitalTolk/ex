@@ -8,6 +8,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
+import { useIsMobile } from '@/hooks/useIsMobile';
 
 interface ReminderDialogProps {
   open: boolean;
@@ -28,6 +29,7 @@ export function ReminderDialog({ open, onOpenChange, initialValue, onConfirm }: 
   const [value, setValue] = useState(initialValue);
   const [error, setError] = useState('');
   const [pending, setPending] = useState(false);
+  const isMobile = useIsMobile();
 
   const confirm = async () => {
     const when = new Date(value);
@@ -49,7 +51,18 @@ export function ReminderDialog({ open, onOpenChange, initialValue, onConfirm }: 
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent size="md" data-testid="reminder-dialog" mobileCloseLabel="Cancel">
+      {/* Mobile: the confirm moves to the top-right header — the iOS date
+          wheel covers the bottom half of the screen, hiding a footer button. */}
+      <DialogContent
+        size="md"
+        data-testid="reminder-dialog"
+        mobileCloseLabel="Cancel"
+        mobileAction={
+          isMobile
+            ? { label: pending ? 'Setting…' : 'Set reminder', onClick: () => void confirm(), disabled: pending }
+            : undefined
+        }
+      >
         <DialogHeader>
           <DialogTitle>Remind me</DialogTitle>
           <DialogDescription>Choose when to be reminded about this message.</DialogDescription>
@@ -59,7 +72,7 @@ export function ReminderDialog({ open, onOpenChange, initialValue, onConfirm }: 
             type="datetime-local"
             aria-label="Reminder time"
             data-testid="reminder-datetime"
-            className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+            className="w-full rounded-md border border-border bg-background px-3 py-2 text-base md:text-sm max-md:h-11"
             value={value}
             onChange={(e) => {
               setValue(e.target.value);
@@ -72,14 +85,16 @@ export function ReminderDialog({ open, onOpenChange, initialValue, onConfirm }: 
             </p>
           )}
         </div>
-        <DialogFooter>
-          <Button variant="ghost" onClick={() => onOpenChange(false)} data-testid="reminder-cancel">
-            Cancel
-          </Button>
-          <Button onClick={confirm} disabled={pending} data-testid="reminder-confirm">
-            {pending ? 'Setting…' : 'Set reminder'}
-          </Button>
-        </DialogFooter>
+        {!isMobile && (
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => onOpenChange(false)} data-testid="reminder-cancel">
+              Cancel
+            </Button>
+            <Button onClick={confirm} disabled={pending} data-testid="reminder-confirm">
+              {pending ? 'Setting…' : 'Set reminder'}
+            </Button>
+          </DialogFooter>
+        )}
       </DialogContent>
     </Dialog>
   );

@@ -141,6 +141,8 @@ describe('MessageInput toolbar buttons', () => {
     expect(screen.queryByLabelText('Quote')).not.toBeInTheDocument();
     expect(screen.queryByLabelText('List')).not.toBeInTheDocument();
     expect(screen.queryByLabelText('Numbered list')).not.toBeInTheDocument();
+    // Link is deliberately desktop-only too — scarce mobile toolbar width
+    // (Mobile fixes (7), #95). Guard against review sweeps re-adding it.
     expect(screen.queryByLabelText('Link')).not.toBeInTheDocument();
     expect(screen.getByLabelText('Bold (Ctrl+B)')).toBeInTheDocument();
   });

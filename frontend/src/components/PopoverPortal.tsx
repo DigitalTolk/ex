@@ -5,6 +5,7 @@ import { useIsMobile } from '@/hooks/useIsMobile';
 import { useTransientOverlayCleanup } from '@/hooks/useTransientOverlayCleanup';
 import { motion } from 'motion/react';
 import { useSwipeDismiss } from '@/hooks/useSwipeDismiss';
+import { useMobileBackClose } from '@/hooks/useMobileBackClose';
 
 interface PopoverPortalProps {
   open: boolean;
@@ -63,6 +64,8 @@ export function PopoverPortal({
   const setContentRef = useCallback((node: HTMLDivElement | null) => {
     contentRef.current = node;
   }, []);
+  // Back on mobile dismisses the open popover/sheet instead of navigating.
+  useMobileBackClose(open, onDismiss);
   const pos = usePopoverPosition(open, triggerRef, {
     estimatedHeight,
     estimatedWidth,
@@ -142,7 +145,7 @@ export function PopoverPortal({
               left: pos.left,
               zIndex: 1000,
               maxWidth: 'calc(100vw - 16px)',
-              maxHeight: 'calc(100vh - 16px)',
+              maxHeight: 'calc(100dvh - 16px)',
               overflowY: 'auto',
               opacity: measured ? 1 : 0,
               pointerEvents: measured ? 'auto' : 'none',

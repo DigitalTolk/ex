@@ -7,6 +7,7 @@ import { useCreateConversation, useSearchUsers } from '@/hooks/useConversations'
 import { apiFetch } from '@/lib/api';
 import { useAuth } from '@/context/AuthContext';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
+import { useIsMobile } from '@/hooks/useIsMobile';
 import type { Message } from '@/types';
 
 interface PickedUser {
@@ -23,6 +24,7 @@ export default function NewConversationPage() {
   const inputRef = useRef<HTMLInputElement>(null);
   const navigate = useNavigate();
   const { user } = useAuth();
+  const isMobile = useIsMobile();
   const { data: searchResults } = useSearchUsers(query);
   const createConversation = useCreateConversation();
 
@@ -169,7 +171,10 @@ export default function NewConversationPage() {
               onChange={(e) => setQuery(e.target.value)}
               onKeyDown={handleKeyDown}
               placeholder={picked.length === 0 ? 'Type a name…' : ''}
-              autoFocus
+              // Desktop-only autofocus (the InviteDialog convention): on mobile
+              // an autofocused input pops the keyboard mid page-transition and
+              // forces focus-scroll inside the overflow-hidden app shell.
+              autoFocus={!isMobile}
               className="min-w-[8rem] flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground max-md:text-base"
             />
           </div>
@@ -202,6 +207,11 @@ export default function NewConversationPage() {
                       e.preventDefault();
                       pick({ id: u.id, displayName: u.displayName });
                     }}
+                    // Touch fallback: a tap that a webview interprets as a
+                    // scroll-start can suppress the emulated mousedown; pick()
+                    // is idempotent so the follow-up click is a safe no-op
+                    // when mousedown already handled it.
+                    onClick={() => pick({ id: u.id, displayName: u.displayName })}
                     onMouseEnter={() => setActiveIndex(i)}
                     className={`flex w-full items-center gap-2 px-3 py-2 text-left text-sm max-md:py-3 max-md:text-base ${
                       isActive ? 'bg-muted' : 'hover:bg-muted/50'

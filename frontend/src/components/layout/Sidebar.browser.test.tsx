@@ -326,7 +326,7 @@ function LocationProbe() {
   return <div data-testid="loc">{loc.pathname}</div>;
 }
 
-function MobileNavFrame() {
+function MobileNavFrame({ onClose }: { onClose?: () => void }) {
   return (
     <QueryClientProvider client={queryClient()}>
       <MemoryRouter>
@@ -334,7 +334,7 @@ function MobileNavFrame() {
           className="browser-sidebar-frame"
           style={{ height: 600, width: Math.min(window.innerWidth, 360), background: '#1a1d21', overflow: 'hidden' }}
         >
-          <Sidebar onClose={vi.fn()} />
+          <Sidebar onClose={onClose ?? vi.fn()} />
         </div>
         <LocationProbe />
       </MemoryRouter>
@@ -484,20 +484,29 @@ describe('Sidebar browser render — rich fixtures', () => {
 
   it('exposes the New-DM "+" as a real tap target on mobile and navigates to /conversations/new', async () => {
     if (window.innerWidth > 767) return;
-    await render(<MobileNavFrame />);
+    const onClose = vi.fn();
+    await render(<MobileNavFrame onClose={onClose} />);
     const plus = document.querySelector('[data-testid="sidebar-new-dm"]') as HTMLElement;
     expect(plus).not.toBeNull();
     // Visible + tappable on touch (no hover to reveal it).
     expect(getComputedStyle(plus).opacity).toBe('1');
-    // The sort menu stays desktop hover-only, so it's hidden on mobile — the
-    // DM header shows only the "+".
+    // The sort menu stays desktop hover-only: display:none on mobile so it
+    // also leaves the layout — an invisible 20px flex slot here pushed the
+    // "+" out of line with the Channels "+".
     const sort = document.querySelector('[data-testid="sidebar-dm-sort-menu"]') as HTMLElement;
-    expect(getComputedStyle(sort).opacity).toBe('0');
+    expect(getComputedStyle(sort).display).toBe('none');
+    // The DM "+" lines up with the Channels "+" (same right-edge inset).
+    const createChannel = document.querySelector('[data-testid="sidebar-create-channel"]') as HTMLElement;
+    expect(Math.abs(plus.getBoundingClientRect().right - createChannel.getBoundingClientRect().right)).toBeLessThanOrEqual(1);
 
     plus.click();
     await vi.waitFor(() => {
       expect(document.querySelector('[data-testid="loc"]')?.textContent).toBe('/conversations/new');
     });
+    // Navigating must also close the mobile drawer — leaving it latched open
+    // stranded the new-DM page translated off-screen (the "glitched page /
+    // can't reopen the sidebar" bug).
+    expect(onClose).toHaveBeenCalled();
   });
 
   it('exposes the create-channel "+" as a visible tap target on mobile', async () => {

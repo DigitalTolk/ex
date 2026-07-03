@@ -38,7 +38,7 @@ function ProtectedRoute({ children }: { children: ReactNode }) {
   if (isLoading) {
     return (
       <div
-        className="min-h-screen bg-sidebar dark:bg-sidebar"
+        className="min-h-dvh bg-sidebar dark:bg-sidebar"
         aria-label="Loading chat"
         data-testid="app-auth-loading"
       />

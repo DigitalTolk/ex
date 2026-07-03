@@ -179,7 +179,7 @@ export function FilesPanel({
                   <a
                     href={a.downloadURL ?? a.url}
                     download={a.filename}
-                    className="shrink-0 rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+                    className="shrink-0 rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground max-md:p-2.5"
                     aria-label={`Download ${a.filename}`}
                     data-testid="files-row-download"
                   >

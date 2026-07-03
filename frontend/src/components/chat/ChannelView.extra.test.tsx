@@ -43,6 +43,9 @@ vi.mock('@/components/ui/dialog', () => ({
   DialogHeader: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
   DialogTitle: ({ children }: { children: React.ReactNode }) => <h2>{children}</h2>,
   DialogFooter: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  // Header's archive confirm goes through the shared ConfirmDialog, which
+  // also pulls this primitive.
+  DialogDescription: ({ children }: { children: React.ReactNode }) => <p>{children}</p>,
 }));
 
 const mockNavigate = vi.fn();

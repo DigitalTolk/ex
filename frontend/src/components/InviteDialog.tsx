@@ -82,7 +82,9 @@ export function InviteDialog({ open, onOpenChange }: InviteDialogProps) {
               Invitation sent! Share this link:
             </p>
             <div className="flex items-center gap-2">
-              <Input value={inviteLink} readOnly className="text-sm" />
+              {/* No text-sm override — the Input's text-base md:text-sm keeps
+                  16px on mobile so a stray tap doesn't iOS-zoom the sheet. */}
+              <Input value={inviteLink} readOnly />
               <Button size="sm" onClick={() => navigator.clipboard.writeText(inviteLink)}>
                 Copy
               </Button>

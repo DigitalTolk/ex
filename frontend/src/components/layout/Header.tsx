@@ -5,7 +5,6 @@ import { UserAvatar } from '@/components/UserAvatar';
 import { UserStatusIndicator } from '@/components/UserStatusIndicator';
 import { UserHoverCard } from '@/components/UserHoverCard';
 import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -18,6 +17,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import type { Channel, UserStatus } from '@/types';
 
@@ -312,7 +312,15 @@ export function Header({
           /* istanbul ignore next -- the dialog is controlled (open={isEditingDesc}); radix only calls onOpenChange(false) on user dismiss, never with open=true, so the open=true arm is unreachable */
           if (!open) cancelDescriptionEdit();
         }}>
-          <DialogContent className="max-w-none" data-testid="mobile-description-editor">
+          {/* Cancel/Save live in the top-right header (the standard mobile
+              dialog pattern): the textarea autofocuses, so bottom-row buttons
+              sat hidden behind the keyboard. */}
+          <DialogContent
+            className="max-w-none max-md:grid-rows-[auto_1fr]"
+            data-testid="mobile-description-editor"
+            mobileCloseLabel="Cancel"
+            mobileAction={{ label: 'Save', onClick: saveDescription }}
+          >
             <DialogHeader>
               <DialogTitle>Edit channel description</DialogTitle>
             </DialogHeader>
@@ -328,14 +336,6 @@ export function Header({
                 placeholder="Add a description..."
                 autoFocus
               />
-            </div>
-            <div className="mt-auto flex gap-2">
-              <Button type="button" variant="ghost" className="flex-1" onClick={cancelDescriptionEdit}>
-                Cancel
-              </Button>
-              <Button type="button" className="flex-1" onClick={saveDescription}>
-                Save
-              </Button>
             </div>
           </DialogContent>
         </Dialog>
@@ -436,31 +436,19 @@ export function Header({
         </div>
       )}
 
-      {/* Archive confirmation dialog */}
-      <Dialog open={archiveConfirmOpen} onOpenChange={setArchiveConfirmOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Archive channel?</DialogTitle>
-          </DialogHeader>
-          <p className="text-sm text-muted-foreground">
-            This will hide the channel for all members. This cannot be undone.
-          </p>
-          <div className="flex justify-end gap-2 mt-4">
-            <Button variant="outline" onClick={() => setArchiveConfirmOpen(false)}>
-              Cancel
-            </Button>
-            <Button
-              variant="destructive"
-              onClick={() => {
-                setArchiveConfirmOpen(false);
-                onArchive?.();
-              }}
-            >
-              Archive
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
+      {/* Archive confirmation — the shared ConfirmDialog, so it gets the
+          standard mobile chrome (safe-area close, touch-sized buttons)
+          instead of a hand-rolled variant. */}
+      <ConfirmDialog
+        open={archiveConfirmOpen}
+        onOpenChange={setArchiveConfirmOpen}
+        title="Archive channel?"
+        description="This will hide the channel for all members. This cannot be undone."
+        confirmLabel="Archive"
+        destructive
+        onConfirm={() => onArchive?.()}
+        testIDPrefix="archive-channel"
+      />
     </div>
   );
 }

@@ -17,10 +17,15 @@ export type { WysiwygEditorHandle, ActiveFormat };
 
 const EMPTY_SET: Set<string> = new Set();
 
-// Base sizing/typography on the contenteditable (the scroll box), matching the
-// old composer. `editorClassName` is appended reactively via a compartment.
+// Base typography + min-height on the contenteditable. The height CAP and
+// vertical scroll live on `.cm-scroller` (CM's scrollDOM) in composerTheme, NOT
+// here — CM virtualizes long docs based on the scroller's scroll metrics, so the
+// scroll box must be the scroller or the tail of a long message never renders.
+// `.cm-content` grows freely inside the scroller; min-height stays here so the
+// compact mobile composer's `max-md:!min-h-9`/`!max-h-9` override still clamps
+// the single-line box. `editorClassName` is appended reactively via a compartment.
 const BASE_CONTENT_CLASS =
-  'min-h-[60px] max-h-[200px] overflow-y-auto whitespace-pre-wrap break-words text-base focus:outline-none md:max-h-[31.25rem] md:text-sm';
+  'min-h-[60px] whitespace-pre-wrap break-words text-base focus:outline-none md:text-sm';
 
 function contentClassExtension(editorClassName: string) {
   return EditorView.contentAttributes.of({ class: `${BASE_CONTENT_CLASS} ${editorClassName}`.trim() });

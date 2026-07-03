@@ -127,6 +127,27 @@ describe('OIDCCallbackPage - extra coverage', () => {
     });
   });
 
+  it('completes a native/desktop deep-link handoff via /auth/desktop/complete', async () => {
+    const replaceMock = vi.fn();
+    Object.defineProperty(window, 'location', {
+      configurable: true,
+      writable: true,
+      value: { ...originalLocation, hash: '', replace: replaceMock },
+    });
+    mockSearchParams = new URLSearchParams('desktop_code=oneshot-123');
+    globalThis.fetch = vi.fn();
+
+    renderPage();
+
+    // Full-page navigation to the server completer (the redirect response
+    // sets the refresh cookie) — no refresh probe, no SPA navigation.
+    await vi.waitFor(() => {
+      expect(replaceMock).toHaveBeenCalledWith('/auth/desktop/complete?code=oneshot-123');
+    });
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+    expect(mockNavigate).not.toHaveBeenCalled();
+  });
+
   it('shows the "Completing sign in..." spinner text', () => {
     renderPage();
     expect(screen.getByText('Completing sign in...')).toBeInTheDocument();

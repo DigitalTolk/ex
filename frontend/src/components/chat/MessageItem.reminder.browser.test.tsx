@@ -146,7 +146,9 @@ describe('MessageItem "Remind me"', () => {
       return el!;
     });
     await userEvent.fill(input, '2999-03-03T08:00');
-    await userEvent.click(document.querySelector("[data-testid=\"reminder-confirm\"]") as HTMLButtonElement);
+    // On mobile the confirm lives in the dialog's top-right header (the iOS
+    // date wheel covers a bottom footer).
+    await userEvent.click(document.querySelector('[data-slot="dialog-mobile-action"]') as HTMLButtonElement);
     await vi.waitFor(() => expect(createReminderMutateAsync).toHaveBeenCalledTimes(1));
   });
 });

@@ -17,9 +17,9 @@ export function Toaster() {
 
   useEffect(() => {
     const handler = (e: Event) => {
-      const { message, variant } = (e as CustomEvent<ToastDetail>).detail;
+      const detail = (e as CustomEvent<ToastDetail>).detail;
       const id = nextId.current++;
-      setToasts((prev) => [...prev, { id, message, variant }]);
+      setToasts((prev) => [...prev, { id, ...detail }]);
       setTimeout(() => {
         setToasts((prev) => prev.filter((t) => t.id !== id));
       }, TOAST_TTL_MS);
@@ -32,24 +32,48 @@ export function Toaster() {
 
   return createPortal(
     <div
-      className="pointer-events-none fixed inset-x-0 bottom-4 z-[100] flex flex-col items-center gap-2 px-4"
+      // z-[1100]: above the lightbox (100), the mobile action sheet (120) and
+      // the body-portalled popovers/typeahead (1000) — a transient toast must
+      // never be buried under whatever overlay happens to be open. Bottom
+      // offset clears the home indicator on notched phones.
+      className="pointer-events-none fixed inset-x-0 bottom-[calc(env(safe-area-inset-bottom)+1rem)] z-[1100] flex flex-col items-center gap-2 px-4"
       role="status"
       aria-live="polite"
     >
-      {toasts.map((t) => (
-        <div
-          key={t.id}
-          data-testid="toast"
-          data-variant={t.variant}
-          className={`pointer-events-auto max-w-sm rounded-lg border px-4 py-2 text-sm shadow-lg ${
-            t.variant === 'error'
-              ? 'border-destructive/40 bg-card text-destructive'
-              : 'border-border bg-card text-foreground'
-          }`}
-        >
-          {t.message}
-        </div>
-      ))}
+      {toasts.map((t) => {
+        const body = (
+          <>
+            {t.title && <span className="block font-semibold">{t.title}</span>}
+            {t.message}
+          </>
+        );
+        const boxClass = `pointer-events-auto max-w-sm rounded-lg border px-4 py-2 text-sm shadow-lg ${
+          t.variant === 'error'
+            ? 'border-destructive/40 bg-card text-destructive'
+            : 'border-border bg-card text-foreground'
+        }`;
+        // A toast with an action (e.g. a notification deep-link) is a real
+        // button: tapping it runs the action and dismisses immediately.
+        return t.onActivate ? (
+          <button
+            key={t.id}
+            type="button"
+            data-testid="toast"
+            data-variant={t.variant}
+            className={`${boxClass} text-left`}
+            onClick={() => {
+              t.onActivate?.();
+              setToasts((prev) => prev.filter((x) => x.id !== t.id));
+            }}
+          >
+            {body}
+          </button>
+        ) : (
+          <div key={t.id} data-testid="toast" data-variant={t.variant} className={boxClass}>
+            {body}
+          </div>
+        );
+      })}
     </div>,
     document.body,
   );

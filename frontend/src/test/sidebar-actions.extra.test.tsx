@@ -114,9 +114,13 @@ describe('Sidebar - extra actions', () => {
   });
 
   it('navigates to /conversations/new when New direct message button is clicked', () => {
-    renderSidebar();
+    const onClose = vi.fn();
+    renderSidebar(onClose);
     fireEvent.click(screen.getByLabelText('New direct message'));
     expect(window.location.pathname).toBe('/conversations/new');
+    // Must close the mobile drawer like every other sidebar navigation —
+    // leaving it latched open stranded the new-DM page off-screen.
+    expect(onClose).toHaveBeenCalled();
   });
 
   it('hides a conversation via the kebab "Close conversation" item', () => {

@@ -1,6 +1,13 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { ReminderDialog } from '@/components/chat/ReminderDialog';
+
+let mockIsMobile = false;
+vi.mock('@/hooks/useIsMobile', () => ({ useIsMobile: () => mockIsMobile }));
+
+beforeEach(() => {
+  mockIsMobile = false;
+});
 
 function setup(
   initialValue: string,
@@ -59,5 +66,36 @@ describe('ReminderDialog', () => {
     fireEvent.click(screen.getByTestId('reminder-cancel'));
     expect(onConfirm).not.toHaveBeenCalled();
     expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  describe('mobile', () => {
+    // On mobile the confirm moves to the dialog's top-right header — the iOS
+    // date wheel covers the bottom half of the screen, hiding a footer button.
+    function mobileAction(): HTMLButtonElement {
+      const btn = document.querySelector('[data-slot="dialog-mobile-action"]');
+      expect(btn).not.toBeNull();
+      return btn as HTMLButtonElement;
+    }
+
+    it('moves Set reminder into the top header and drops the footer', () => {
+      mockIsMobile = true;
+      setup('2999-01-01T09:00');
+      expect(mobileAction()).toHaveTextContent('Set reminder');
+      expect(screen.queryByTestId('reminder-confirm')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('reminder-cancel')).not.toBeInTheDocument();
+    });
+
+    it('confirms via the header action and shows the pending label while in flight', async () => {
+      mockIsMobile = true;
+      let release: () => void = () => {};
+      const slow = vi.fn(() => new Promise<void>((resolve) => { release = resolve; }));
+      const { onOpenChange } = setup('2999-01-01T09:00', slow);
+      fireEvent.click(mobileAction());
+      expect(slow).toHaveBeenCalledTimes(1);
+      await waitFor(() => expect(mobileAction()).toHaveTextContent('Setting…'));
+      expect(mobileAction()).toBeDisabled();
+      release();
+      await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+    });
   });
 });

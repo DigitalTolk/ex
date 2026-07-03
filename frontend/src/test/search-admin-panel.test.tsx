@@ -115,4 +115,118 @@ describe('SearchAdminPanel', () => {
       expect(screen.getByText(/network down/)).toBeInTheDocument(),
     );
   });
+
+  const configuredStatus = (extra: Record<string, unknown> = {}) => ({
+    configured: true,
+    cluster: { status: 'green' },
+    indices: [],
+    reindex: { running: false, users: 0, channels: 0, messages: 0 },
+    ...extra,
+  });
+
+  it('renders the mapping-rebuild card idle by default', async () => {
+    apiFetchMock.mockResolvedValueOnce(configuredStatus());
+    wrap(<SearchAdminPanel />);
+    await screen.findByTestId('mapping-rebuild-card');
+    expect(screen.getByTestId('mapping-rebuild-status').textContent).toBe('idle');
+    expect(screen.getByTestId('mapping-rebuild-start').textContent).toContain(
+      'Rebuild users & channels',
+    );
+    expect(screen.getByTestId('mapping-rebuild-start')).not.toBeDisabled();
+  });
+
+  it('clicking rebuild POSTs to /admin/search/rebuild-mapping and flips to running', async () => {
+    apiFetchMock
+      .mockResolvedValueOnce(configuredStatus())
+      .mockResolvedValueOnce({ running: true, users: 0, channels: 0 }); // POST response
+    // Fallback for the post-success refetch (and any interval polls): running.
+    apiFetchMock.mockResolvedValue(
+      configuredStatus({ mappingRebuild: { running: true, users: 0, channels: 0 } }),
+    );
+    wrap(<SearchAdminPanel />);
+    const btn = await screen.findByTestId('mapping-rebuild-start');
+    fireEvent.click(btn);
+
+    await waitFor(() => {
+      const posted = apiFetchMock.mock.calls.some(
+        (c) =>
+          c[0] === '/api/v1/admin/search/rebuild-mapping' &&
+          (c[1] as { method?: string } | undefined)?.method === 'POST',
+      );
+      expect(posted).toBe(true);
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId('mapping-rebuild-status').textContent).toBe('running'),
+    );
+    expect(screen.getByTestId('mapping-rebuild-start')).toBeDisabled();
+  });
+
+  it('shows "Starting…" and disables the button while the rebuild request is in flight', async () => {
+    let resolvePost: (v: unknown) => void = () => {};
+    apiFetchMock
+      .mockResolvedValueOnce(configuredStatus())
+      .mockImplementationOnce(
+        () =>
+          new Promise((res) => {
+            resolvePost = res as (v: unknown) => void;
+          }),
+      );
+    apiFetchMock.mockResolvedValue(
+      configuredStatus({ mappingRebuild: { running: true, users: 0, channels: 0 } }),
+    );
+    wrap(<SearchAdminPanel />);
+    const btn = await screen.findByTestId('mapping-rebuild-start');
+    fireEvent.click(btn);
+    await waitFor(() =>
+      expect(screen.getByTestId('mapping-rebuild-start').textContent).toContain('Starting'),
+    );
+    expect(screen.getByTestId('mapping-rebuild-start')).toBeDisabled();
+    // Settle the mutation so the test ends cleanly (no dangling act()).
+    resolvePost({ running: true, users: 0, channels: 0 });
+    await waitFor(() =>
+      expect(screen.getByTestId('mapping-rebuild-status').textContent).toBe('running'),
+    );
+  });
+
+  it('shows last-run counts and a mapping-rebuild error from the status', async () => {
+    apiFetchMock.mockResolvedValueOnce(
+      configuredStatus({
+        mappingRebuild: {
+          running: false,
+          users: 8,
+          channels: 3,
+          lastError: 'alias swap failed',
+          startedAt: 1000,
+          completedAt: 2000,
+        },
+      }),
+    );
+    wrap(<SearchAdminPanel />);
+    await screen.findByTestId('mapping-rebuild-card');
+    expect(screen.getByTestId('mapping-rebuild-card').textContent).toContain('8 users');
+    expect(screen.getByText('alias swap failed')).toBeInTheDocument();
+  });
+
+  it('surfaces a mappingRebuildError from the status payload', async () => {
+    apiFetchMock.mockResolvedValueOnce(
+      configuredStatus({ mappingRebuildError: 'redis get failed' }),
+    );
+    wrap(<SearchAdminPanel />);
+    await screen.findByTestId('mapping-rebuild-card');
+    expect(screen.getByText('redis get failed')).toBeInTheDocument();
+  });
+
+  it('surfaces a 409 when another instance already holds the rebuild lock', async () => {
+    apiFetchMock
+      .mockResolvedValueOnce(configuredStatus())
+      .mockRejectedValueOnce(new Error('a mapping rebuild is already running'));
+    wrap(<SearchAdminPanel />);
+    const btn = await screen.findByTestId('mapping-rebuild-start');
+    fireEvent.click(btn);
+    await waitFor(() =>
+      expect(
+        screen.getByText('a mapping rebuild is already running'),
+      ).toBeInTheDocument(),
+    );
+  });
 });

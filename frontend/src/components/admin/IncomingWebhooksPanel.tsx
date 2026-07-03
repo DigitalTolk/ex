@@ -121,7 +121,7 @@ export function IncomingWebhooksPanel() {
             id="webhook-channel"
             value={selectedChannelID}
             onChange={(e) => set('channelID', e.target.value)}
-            className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm"
+            className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-base md:text-sm max-md:h-11"
           >
             {channelOptions.map((ch) => (
               <option key={ch.id} value={ch.id}>
@@ -144,8 +144,13 @@ export function IncomingWebhooksPanel() {
         </div>
       </div>
 
-      <label className="flex items-center gap-2 text-sm">
-        <input type="checkbox" checked={form.lockToChannel} onChange={(e) => set('lockToChannel', e.target.checked)} />
+      <label className="flex items-center gap-2 text-sm max-md:py-1.5">
+        <input
+          type="checkbox"
+          checked={form.lockToChannel}
+          onChange={(e) => set('lockToChannel', e.target.checked)}
+          className="max-md:h-5 max-md:w-5"
+        />
         Lock to this channel
       </label>
 

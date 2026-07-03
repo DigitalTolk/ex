@@ -34,6 +34,19 @@ function setReactInputValue(input: HTMLInputElement | HTMLTextAreaElement, value
   input.dispatchEvent(new Event('input', { bubbles: true }));
 }
 
+const isMobileViewport = () => window.innerWidth <= 767;
+
+// The dialog's primary action lives in the bottom footer on desktop and in
+// the top-right mobile header cluster on mobile — resolve whichever this
+// viewport renders so every flow test runs on all three browser projects.
+function submitButton(): HTMLButtonElement {
+  const btn = isMobileViewport()
+    ? document.querySelector('[data-slot="dialog-mobile-action"]')
+    : document.querySelector('button[type="submit"]');
+  expect(btn).not.toBeNull();
+  return btn as HTMLButtonElement;
+}
+
 describe('CreateChannelDialog browser', () => {
   it('does not render when closed', async () => {
     await render(
@@ -91,7 +104,7 @@ describe('CreateChannelDialog browser', () => {
     setReactInputValue(document.getElementById('channel-desc') as HTMLInputElement, 'About things');
     // A real pointer click toggles the Radix switch (element.click() doesn't).
     await screen.getByRole('switch').click();
-    await screen.getByRole('button', { name: 'Create Channel' }).click();
+    submitButton().click();
     await vi.waitFor(() => {
       expect(createChannelMutate).toHaveBeenCalled();
       const [vars] = createChannelMutate.mock.calls[0];
@@ -109,7 +122,7 @@ describe('CreateChannelDialog browser', () => {
       </Wrap>,
     );
     setReactInputValue(document.getElementById('channel-name') as HTMLInputElement, 'taken-name');
-    await screen.getByRole('button', { name: 'Create Channel' }).click();
+    submitButton().click();
     await expect.element(screen.getByRole('alert')).toHaveTextContent('Channel name already taken');
   });
 
@@ -124,18 +137,22 @@ describe('CreateChannelDialog browser', () => {
       const counter = document.querySelector('[data-testid="channel-name-counter"]') as HTMLElement;
       expect(counter.className).toContain('text-destructive');
       // Submit stays disabled while the name is invalid.
-      expect((document.querySelector('button[type="submit"]') as HTMLButtonElement).disabled).toBe(true);
+      expect(submitButton().disabled).toBe(true);
     });
   });
 
   it('shows the pending label and disables submit while creation is in flight', async () => {
     pendingRef.value = true;
     try {
-      const screen = await render(
+      await render(
         <Wrap><CreateChannelDialog open onOpenChange={vi.fn()} /></Wrap>,
       );
       setReactInputValue(document.getElementById('channel-name') as HTMLInputElement, 'busy-channel');
-      await expect.element(screen.getByRole('button', { name: 'Creating...' })).toBeDisabled();
+      await vi.waitFor(() => {
+        const btn = submitButton();
+        expect(btn.textContent).toContain('Creating...');
+        expect(btn.disabled).toBe(true);
+      });
     } finally {
       pendingRef.value = false;
     }
@@ -151,7 +168,7 @@ describe('CreateChannelDialog browser', () => {
       <Wrap><CreateChannelDialog open onOpenChange={vi.fn()} /></Wrap>,
     );
     setReactInputValue(document.getElementById('channel-name') as HTMLInputElement, 'ok-name');
-    await screen.getByRole('button', { name: 'Create Channel' }).click();
+    submitButton().click();
     await expect.element(screen.getByRole('alert')).toHaveTextContent('Failed to create channel');
   });
 
@@ -171,6 +188,51 @@ describe('CreateChannelDialog browser', () => {
     form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
     await new Promise((r) => setTimeout(r, 20));
     expect(createChannelMutate).not.toHaveBeenCalled();
+  });
+
+  it('mobile: Cancel/Create live in the top header like other modals; no bottom footer', async () => {
+    if (!isMobileViewport()) return;
+    const onOpenChange = vi.fn();
+    await render(
+      <Wrap><CreateChannelDialog open onOpenChange={onOpenChange} /></Wrap>,
+    );
+    const action = document.querySelector('[data-slot="dialog-mobile-action"]') as HTMLButtonElement;
+    const cancel = document.querySelector('[data-slot="dialog-mobile-close"]') as HTMLButtonElement;
+    expect(action).not.toBeNull();
+    expect(cancel).not.toBeNull();
+    expect(action.textContent).toBe('Create');
+    // Both sit in the top header cluster — ABOVE the name field.
+    const nameTop = (document.getElementById('channel-name') as HTMLElement).getBoundingClientRect().top;
+    expect(action.getBoundingClientRect().bottom).toBeLessThanOrEqual(nameTop);
+    expect(cancel.getBoundingClientRect().bottom).toBeLessThanOrEqual(nameTop);
+    // The desktop bottom footer (with its own submit) is gone on mobile.
+    expect(document.querySelector('button[type="submit"]')).toBeNull();
+    // Empty name → the top action is disabled (same gate as the footer button).
+    expect(action.disabled).toBe(true);
+    // The mobile Cancel closes the dialog (base-ui passes extra event
+    // details after the boolean, so assert on the first arg only).
+    cancel.click();
+    await vi.waitFor(() => {
+      expect(onOpenChange).toHaveBeenCalled();
+      expect(onOpenChange.mock.calls[0][0]).toBe(false);
+    });
+  });
+
+  it('desktop: autofocuses the name field on open', async () => {
+    // Mobile deliberately drops the input autoFocus (keyboard pop); that arm
+    // is asserted in the jsdom suite (CreateChannelDialog.mobile.test.tsx) —
+    // here a PROGRAMMATIC open makes base-ui itself focus the first tabbable
+    // (its touch-open popup-focus path never runs), so the mobile behaviour
+    // isn't observable in this harness.
+    if (isMobileViewport()) return;
+    await render(
+      <Wrap><CreateChannelDialog open onOpenChange={vi.fn()} /></Wrap>,
+    );
+    const name = document.getElementById('channel-name') as HTMLInputElement;
+    expect(name).not.toBeNull();
+    await vi.waitFor(() => {
+      expect(document.activeElement).toBe(name);
+    });
   });
 
   it('marks the description + counter as invalid for an over-long description', async () => {

@@ -494,7 +494,10 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
       editorRef.current?.blur();
       return;
     }
-    requestAnimationFrame(() => editorRef.current?.focus());
+    // Synchronous refocus, like the insert paths above: a deferred focus
+    // (rAF/microtask) loses the dismiss tap's user-gesture context and the
+    // iOS keyboard stays closed.
+    editorRef.current?.focus();
   }
 
   async function uploadFiles(allFiles: File[]) {
@@ -669,6 +672,10 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
           <ToolbarBtn label="Numbered list" active={active.has('ol')} onClick={() => editorRef.current?.applyBlock('ol')}><ListOrdered className="h-3.5 w-3.5" /></ToolbarBtn>
         </>
       )}
+      {/* DELIBERATELY desktop-only (like Quote/lists above): the mobile
+          toolbar has very little width and Link was judged the least
+          important formatting control there (Mobile fixes (7), #95). Do not
+          re-add it on mobile — [text](url) remains typeable. */}
       {!isMobile && (
         <ToolbarBtn label="Link" onClick={openLinkDialog}><LinkIcon className="h-3.5 w-3.5" /></ToolbarBtn>
       )}
@@ -898,7 +905,17 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
         aria-label="File input"
       />
       <Dialog open={linkDialogOpen} onOpenChange={setLinkDialogOpen}>
-        <DialogContent aria-label="Insert link">
+        {/* Mobile: Cancel/Insert live in the top-right header — the URL field
+            autofocuses, so a bottom footer sat behind the keyboard. */}
+        <DialogContent
+          aria-label="Insert link"
+          mobileCloseLabel="Cancel"
+          mobileAction={
+            isMobile
+              ? { label: 'Insert', onClick: submitLinkDialog, disabled: !isHttpUrl(linkUrl.trim()) }
+              : undefined
+          }
+        >
           <DialogHeader>
             <DialogTitle>Insert link</DialogTitle>
           </DialogHeader>
@@ -930,14 +947,16 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
                 type="url"
               />
             </div>
-            <DialogFooter>
-              <Button type="button" variant="outline" onClick={() => setLinkDialogOpen(false)}>
-                Cancel
-              </Button>
-              <Button type="submit" disabled={!isHttpUrl(linkUrl.trim())}>
-                Insert
-              </Button>
-            </DialogFooter>
+            {!isMobile && (
+              <DialogFooter>
+                <Button type="button" variant="outline" onClick={() => setLinkDialogOpen(false)}>
+                  Cancel
+                </Button>
+                <Button type="submit" disabled={!isHttpUrl(linkUrl.trim())}>
+                  Insert
+                </Button>
+              </DialogFooter>
+            )}
           </form>
         </DialogContent>
       </Dialog>

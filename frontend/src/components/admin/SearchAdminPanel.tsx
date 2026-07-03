@@ -2,6 +2,7 @@ import { Button } from '@/components/ui/button';
 import {
   useSearchAdminStatus,
   useStartSearchReindex,
+  useStartSearchMappingRebuild,
 } from '@/hooks/useSearchAdmin';
 
 // Distilled cluster fields the panel shows. OpenSearch returns more,
@@ -21,6 +22,7 @@ function formatTime(unix?: number): string {
 export function SearchAdminPanel() {
   const { data, isLoading, isError, error } = useSearchAdminStatus();
   const start = useStartSearchReindex();
+  const rebuildMapping = useStartSearchMappingRebuild();
 
   if (isLoading) {
     return (
@@ -57,6 +59,8 @@ export function SearchAdminPanel() {
 
   const reindex = data.reindex;
   const running = reindex?.running ?? false;
+  const mappingRebuild = data.mappingRebuild;
+  const mappingRunning = mappingRebuild?.running ?? false;
 
   return (
     <section className="space-y-4 rounded-lg border bg-card p-5" data-testid="admin-search-panel">
@@ -174,6 +178,67 @@ export function SearchAdminPanel() {
         {start.isError && (
           <p className="mt-2 text-sm text-destructive" role="alert">
             {start.error instanceof Error ? start.error.message : 'Could not start reindex'}
+          </p>
+        )}
+      </div>
+
+      <div className="rounded-md border p-3" data-testid="mapping-rebuild-card">
+        <p className="text-xs uppercase tracking-wide text-muted-foreground">
+          Users &amp; channels mapping
+        </p>
+        <p className="mt-1 text-xs text-muted-foreground">
+          Rebuilds the user and channel indices with the <em>current</em> analyzer
+          (search-as-you-type autocomplete) via a zero-downtime staging index and
+          atomic alias swap. Run this once after deploying a search mapping change
+          — a plain reindex can't change an analyzer on a live index. Safe to run
+          on a cluster: one server does the work while the rest keep serving.
+        </p>
+        <div className="mt-2 flex flex-col gap-3 sm:flex-row sm:items-start">
+          <Button
+            onClick={() => rebuildMapping.mutate()}
+            disabled={mappingRunning || rebuildMapping.isPending}
+            data-testid="mapping-rebuild-start"
+          >
+            {mappingRunning
+              ? 'Rebuilding…'
+              : rebuildMapping.isPending
+                ? 'Starting…'
+                : 'Rebuild users & channels'}
+          </Button>
+          <div className="flex-1 space-y-1 text-sm">
+            <p>
+              Status:{' '}
+              <span className="font-medium" data-testid="mapping-rebuild-status">
+                {mappingRunning ? 'running' : 'idle'}
+              </span>
+            </p>
+            {mappingRebuild && (mappingRebuild.users || mappingRebuild.channels) ? (
+              <p className="text-xs text-muted-foreground">
+                Last run rebuilt {mappingRebuild.users} users, {mappingRebuild.channels}{' '}
+                channels.
+              </p>
+            ) : null}
+            <p className="text-xs text-muted-foreground">
+              Started: {formatTime(mappingRebuild?.startedAt)} · Finished:{' '}
+              {formatTime(mappingRebuild?.completedAt)}
+            </p>
+            {mappingRebuild?.lastError && (
+              <p className="text-xs text-destructive" role="alert">
+                {mappingRebuild.lastError}
+              </p>
+            )}
+          </div>
+        </div>
+        {rebuildMapping.isError && (
+          <p className="mt-2 text-sm text-destructive" role="alert">
+            {rebuildMapping.error instanceof Error
+              ? rebuildMapping.error.message
+              : 'Could not start mapping rebuild'}
+          </p>
+        )}
+        {data.mappingRebuildError && (
+          <p className="mt-2 text-xs text-destructive" role="alert">
+            {data.mappingRebuildError}
           </p>
         )}
       </div>
