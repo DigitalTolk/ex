@@ -36,6 +36,9 @@ vi.mock('@/context/AuthContext', () => ({
   useAuth: () => ({ user: { id: 'u-me', email: 'me@x.com', displayName: 'Me' } }),
 }));
 
+let mockIsMobile = false;
+vi.mock('@/hooks/useIsMobile', () => ({ useIsMobile: () => mockIsMobile }));
+
 // Stub MessageInput to a tiny form: a textarea + "Send" button. The page's
 // real composer is exercised in MessageInput's own tests; here we only
 // care that this page wires onSend correctly. The body lives on the DOM
@@ -94,6 +97,20 @@ describe('NewConversationPage', () => {
     mockCreate.mockReset();
     apiFetchMock.mockReset();
     apiFetchMock.mockResolvedValue({ id: 'msg-1' });
+    mockIsMobile = false;
+  });
+
+  it('autofocuses the recipients input on desktop but not on mobile', () => {
+    // Desktop keeps the convenience autofocus…
+    const desktop = renderPage();
+    expect(document.activeElement).toBe(screen.getByTestId('recipients-input'));
+    desktop.unmount();
+    // …mobile must not: an autofocused input pops the keyboard mid
+    // page-transition and forces focus-scroll inside the overflow-hidden
+    // app shell (part of the "new DM page loads glitched" bug).
+    mockIsMobile = true;
+    renderPage();
+    expect(document.activeElement).not.toBe(screen.getByTestId('recipients-input'));
   });
 
   it('renders the To: line with a recipients input — no separate "Search users" field, no Back arrow', () => {

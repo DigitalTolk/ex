@@ -1538,9 +1538,16 @@ export function Sidebar({ onClose }: SidebarProps) {
                     {isDMsDefault && (
                       <div className="absolute right-1 top-1/2 flex -translate-y-1/2 items-center gap-0.5">
                         {/* New DM "+": always a real tap target on mobile;
-                            desktop keeps the hover-reveal. */}
+                            desktop keeps the hover-reveal. Close the mobile
+                            drawer like every other sidebar navigation — leaving
+                            it latched open kept the new page translated
+                            off-screen (and its autofocused input then dragged
+                            the overflow-hidden shell into a garbled state). */}
                         <button
-                          onClick={() => navigate('/conversations/new')}
+                          onClick={() => {
+                            navigate('/conversations/new');
+                            onClose();
+                          }}
                           aria-label="New direct message"
                           title="New direct message"
                           data-testid="sidebar-new-dm"
@@ -1549,16 +1556,15 @@ export function Sidebar({ onClose }: SidebarProps) {
                           <Plus className="h-3.5 w-3.5" />
                         </button>
                         {/* Sort menu stays desktop hover-only (hidden on mobile);
-                            the header shows only the "+" on touch. opacity-0
-                            alone still hit-tests, so pointer-events-none is
-                            required on mobile — without it this was an
-                            invisible tappable target right beside the "+"
-                            (same treatment as the row kebabs). */}
+                            the header shows only the "+" on touch. max-md:hidden
+                            (not just opacity/pointer-events) so it also leaves
+                            the flex layout — an invisible 20px slot here pushed
+                            the "+" left, out of line with the Channels "+". */}
                         <DropdownMenu>
                           <DropdownMenuTrigger
                             aria-label="Sort direct messages"
                             data-testid="sidebar-dm-sort-menu"
-                            className="h-5 w-5 flex items-center justify-center rounded text-gray-400 opacity-0 group-hover/sec:opacity-100 hover:bg-white/20 hover:text-white max-md:pointer-events-none"
+                            className="h-5 w-5 flex items-center justify-center rounded text-gray-400 opacity-0 group-hover/sec:opacity-100 hover:bg-white/20 hover:text-white max-md:hidden"
                           >
                             <MoreVertical className="h-3.5 w-3.5" />
                           </DropdownMenuTrigger>

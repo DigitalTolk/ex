@@ -143,9 +143,10 @@ export function ConversationRow({
         {/* Brand-pink unread count, floored to 1 so even a not-yet-seeded count
             reads as "1". Absolutely positioned (flush to the edge, never
             reflows); fades on desktop hover so the row actions take its place,
-            stays on touch shifted left of them. Mirrors ChannelRow. */}
+            stays on touch at the VERY right edge (the kebab slot, unused on
+            mobile) clear of the persistent star. Mirrors ChannelRow. */}
         {hasUnread && (
-          <span className="pointer-events-none absolute right-2 top-1/2 flex -translate-y-1/2 items-center transition-opacity group-hover/row:opacity-0 max-md:right-12 max-md:opacity-100">
+          <span className="pointer-events-none absolute right-2 top-1/2 flex -translate-y-1/2 items-center transition-opacity group-hover/row:opacity-0 max-md:opacity-100">
             <Badge variant="brand" className="text-[11px]" data-testid={`conversation-unread-badge-${conversation.conversationID}`}>
               {unreadCount > 99 ? '99+' : Math.max(1, unreadCount)}
             </Badge>

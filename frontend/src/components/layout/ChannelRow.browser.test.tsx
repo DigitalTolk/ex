@@ -278,4 +278,37 @@ describe('ChannelRow browser behaviour', () => {
     expect(onClose).not.toHaveBeenCalled();
     expect(ev.defaultPrevented).toBe(true);
   });
+
+  it('mobile: the unread badge sits flush right in the kebab slot, clear of the star', async () => {
+    if (window.innerWidth > 767) return;
+    // Widest badge ("99+") so the geometry check covers the worst case.
+    await render(
+      <MemoryRouter>
+        <ChannelRow channel={baseChannel} hasUnread unreadCount={150} onClose={() => {}} />
+      </MemoryRouter>,
+    );
+    const badge = document.querySelector('[data-testid="channel-unread-badge-ch-1"]') as HTMLElement;
+    const star = document.querySelector('[data-testid="fav-toggle-ch-1"]') as HTMLElement;
+    const row = document.querySelector('[data-testid="channel-row-ch-1"]') as HTMLElement;
+    const b = badge.getBoundingClientRect();
+    const s = star.getBoundingClientRect();
+    const r = row.getBoundingClientRect();
+    // The badge must NOT overlap the always-visible favorite star: it lives
+    // fully to the right of it, in the slot the (mobile-hidden) kebab leaves.
+    expect(b.left).toBeGreaterThanOrEqual(s.right);
+    // …and it hugs the row's right edge (right-2 = 8px inset).
+    expect(r.right - b.right).toBeLessThanOrEqual(10);
+  });
+
+  it('mobile: the muted unread dot also sits clear of the star', async () => {
+    if (window.innerWidth > 767) return;
+    await render(
+      <MemoryRouter>
+        <ChannelRow channel={{ ...baseChannel, muted: true }} hasUnread onClose={() => {}} />
+      </MemoryRouter>,
+    );
+    const dot = document.querySelector('[data-testid="channel-unread-dot-ch-1"]') as HTMLElement;
+    const star = document.querySelector('[data-testid="fav-toggle-ch-1"]') as HTMLElement;
+    expect(dot.getBoundingClientRect().left).toBeGreaterThanOrEqual(star.getBoundingClientRect().right);
+  });
 });

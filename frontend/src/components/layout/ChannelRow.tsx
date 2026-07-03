@@ -119,10 +119,12 @@ export function ChannelRow({
             reads as "1", per the design), a muted+unread channel a subtle dot
             instead of the loud count, and a muted+read channel the bell. It
             fades out on desktop hover so the row actions (star/kebab) take the
-            space, and stays visible on touch where those actions are persistent
-            (shifted left of them). pointer-events-none keeps the row clickable. */}
+            space, and stays visible on touch at the VERY right edge — the kebab
+            slot, unused on mobile where a long-press opens that menu — so it
+            never overlaps the persistent star (right-10, 36px wide).
+            pointer-events-none keeps the row clickable. */}
         {hasUnread ? (
-          <span className="pointer-events-none absolute right-2 top-1/2 flex -translate-y-1/2 items-center transition-opacity group-hover/row:opacity-0 max-md:right-12 max-md:opacity-100">
+          <span className="pointer-events-none absolute right-2 top-1/2 flex -translate-y-1/2 items-center transition-opacity group-hover/row:opacity-0 max-md:opacity-100">
             {channel.muted ? (
               <span
                 aria-label="Unread"

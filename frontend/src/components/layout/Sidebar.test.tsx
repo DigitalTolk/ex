@@ -1660,14 +1660,14 @@ describe('Sidebar', () => {
     });
   });
 
-  it('the DM sort trigger is inert on mobile (pointer-events-none, not just invisible)', () => {
+  it('the DM sort trigger leaves the layout on mobile (display:none, not just invisible)', () => {
     renderSidebar();
-    // opacity-0 alone still hit-tests: without pointer-events-none the
-    // hover-only trigger was an INVISIBLE tappable target right beside the
-    // always-visible mobile "+" — a stray thumb tap popped a sort menu out
-    // of nowhere. Same treatment as the row kebabs.
+    // opacity-0 alone still hit-tests AND occupies flex space: it was an
+    // INVISIBLE tappable target beside the always-visible mobile "+" and its
+    // 20px slot pushed that "+" out of line with the Channels "+". hidden
+    // removes it from both hit-testing and layout.
     const trigger = screen.getByTestId('sidebar-dm-sort-menu');
-    expect(trigger).toHaveClass('opacity-0', 'max-md:pointer-events-none');
+    expect(trigger).toHaveClass('opacity-0', 'max-md:hidden');
   });
 
   it('stores and applies the Direct Messages A-Z sort preference', async () => {

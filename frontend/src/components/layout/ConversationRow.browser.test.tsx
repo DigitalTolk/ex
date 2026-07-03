@@ -282,6 +282,22 @@ describe('ConversationRow browser behaviour', () => {
     expect(ev.defaultPrevented).toBe(true);
   });
 
+  it('mobile: the unread badge sits flush right in the kebab slot, clear of the star', async () => {
+    if (window.innerWidth > 767) return;
+    // Widest badge ("99+") so the geometry check covers the worst case.
+    await renderRow(dm, { hasUnread: true, unreadCount: 150 });
+    const badge = document.querySelector('[data-testid="conversation-unread-badge-cv-1"]') as HTMLElement;
+    const star = document.querySelector('[data-testid="conv-fav-toggle-cv-1"]') as HTMLElement;
+    const row = document.querySelector('[data-testid="conversation-row-cv-1"]') as HTMLElement;
+    const b = badge.getBoundingClientRect();
+    const s = star.getBoundingClientRect();
+    const r = row.getBoundingClientRect();
+    // Must NOT overlap the always-visible favorite star — the badge lives in
+    // the slot the (mobile-hidden) kebab leaves at the very right edge.
+    expect(b.left).toBeGreaterThanOrEqual(s.right);
+    expect(r.right - b.right).toBeLessThanOrEqual(10);
+  });
+
   it('marks the row active when the current route matches the conversation', async () => {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     await render(

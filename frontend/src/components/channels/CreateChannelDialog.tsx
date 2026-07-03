@@ -12,6 +12,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { useCreateChannel } from '@/hooks/useChannels';
+import { useIsMobile } from '@/hooks/useIsMobile';
 import {
   MAX_CHANNEL_DESCRIPTION_LEN,
   MAX_CHANNEL_NAME_LEN,
@@ -35,6 +36,7 @@ export function CreateChannelDialog({
   const [submitError, setSubmitError] = useState('');
   const createChannel = useCreateChannel();
   const navigate = useNavigate();
+  const isMobile = useIsMobile();
 
   // Validation runs on every keystroke. We DON'T render the error while
   // the field is empty (would scream at the user before they've typed)
@@ -59,8 +61,9 @@ export function CreateChannelDialog({
     setSubmitError('');
   }
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
+  // Shared by the desktop form submit and the mobile top-bar Create button
+  // (which lives outside the <form>, in the dialog's mobile header).
+  function submit() {
     setSubmitError('');
     if (!name.trim()) return;
     if (nameError || descriptionError) return;
@@ -87,6 +90,11 @@ export function CreateChannelDialog({
     );
   }
 
+  function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    submit();
+  }
+
   const canSubmit =
     !!name.trim() &&
     !nameError &&
@@ -95,7 +103,19 @@ export function CreateChannelDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent size="lg">
+      <DialogContent
+        size="lg"
+        mobileCloseLabel="Cancel"
+        mobileAction={
+          isMobile
+            ? {
+                label: createChannel.isPending ? 'Creating...' : 'Create',
+                onClick: submit,
+                disabled: !canSubmit,
+              }
+            : undefined
+        }
+      >
         <DialogHeader>
           <DialogTitle>Create a channel</DialogTitle>
         </DialogHeader>
@@ -119,7 +139,7 @@ export function CreateChannelDialog({
               onChange={(e) => setName(e.target.value)}
               placeholder="e.g. marketing"
               required
-              autoFocus
+              autoFocus={!isMobile}
               aria-invalid={nameError ? 'true' : 'false'}
               aria-describedby="channel-name-help"
             />
@@ -199,18 +219,23 @@ export function CreateChannelDialog({
             {submitError || '\u00A0'}
           </p>
 
-          <DialogFooter>
-            <Button
-              type="button"
-              variant="ghost"
-              onClick={() => onOpenChange(false)}
-            >
-              Cancel
-            </Button>
-            <Button type="submit" disabled={!canSubmit}>
-              {createChannel.isPending ? 'Creating...' : 'Create Channel'}
-            </Button>
-          </DialogFooter>
+          {/* On mobile the Cancel/Create controls move to the dialog's
+              top-right header (see mobileCloseLabel/mobileAction above);
+              desktop keeps the classic bottom footer. */}
+          {!isMobile && (
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={() => onOpenChange(false)}
+              >
+                Cancel
+              </Button>
+              <Button type="submit" disabled={!canSubmit}>
+                {createChannel.isPending ? 'Creating...' : 'Create Channel'}
+              </Button>
+            </DialogFooter>
+          )}
         </form>
       </DialogContent>
     </Dialog>
