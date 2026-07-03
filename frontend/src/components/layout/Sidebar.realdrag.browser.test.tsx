@@ -129,10 +129,37 @@ function makeChannels(): UserChannel[] {
     { channelID: 'ch-other', channelName: 'random', channelType: 'public', role: 1, sidebarPosition: 3000 },
     { channelID: 'ch-categorized', channelName: 'engineering', channelType: 'public', role: 1, categoryID: 'cat-work', sidebarPosition: 1500 },
     { channelID: 'ch-ops', channelName: 'operations', channelType: 'public', role: 1, categoryID: 'cat-other', sidebarPosition: 1500 },
+    // A favorited channel so the Favorites section has a real draggable row to
+    // reorder a favorited DM against (exercises the conversation-row real-library
+    // drop-target path).
+    { channelID: 'fav-ch', channelName: 'starred', channelType: 'public', role: 1, favorite: true, sidebarPosition: 500 },
   ];
 }
 function makeConversations(): UserConversation[] {
-  return [];
+  // TWO favorited DMs → dragging one over the other drives EVERY branch of the
+  // real PragmaticConversationRow (the dragged one's onDragStart/onDrop/collapse,
+  // the hovered one's getData/getIsSticky) through the REAL library. Other suites
+  // mock the library, leaving these borderline → the browser gate flaked ±1.
+  return [
+    {
+      conversationID: 'conv-fav',
+      type: 'dm',
+      displayName: 'Zoe',
+      participantIDs: ['u-self', 'u-zoe'],
+      favorite: true,
+      sidebarPosition: 1400,
+      updatedAt: '2026-05-11T10:00:00Z',
+    },
+    {
+      conversationID: 'conv-fav2',
+      type: 'dm',
+      displayName: 'Yan',
+      participantIDs: ['u-self', 'u-yan'],
+      favorite: true,
+      sidebarPosition: 1600,
+      updatedAt: '2026-05-12T10:00:00Z',
+    },
+  ];
 }
 function makeCategories(): SidebarCategory[] {
   return [
@@ -331,4 +358,91 @@ describe('Sidebar real drag-and-drop (no library mock)', () => {
 
     expect(reorderCategoriesMutate).toHaveBeenCalled();
   });
+
+  // Drives EVERY branch of the real PragmaticConversationRow: dragging conv-fav
+  // (its onDragStart/onDrop/collapse) over conv-fav2 (its getData/getIsSticky).
+  it('reorders one favorited DM over another via the real conversation-row drag+drop', async () => {
+    await render(<Frame />);
+    await nextFrame();
+
+    const source = document.querySelector('[data-testid="conversation-row-conv-fav"]');
+    const target = document.querySelector('[data-testid="conversation-row-conv-fav2"]');
+    expect(source, 'favorited DM conv-fav should be draggable in Favorites').toBeTruthy();
+    expect(target, 'favorited DM conv-fav2 should be a drop target in Favorites').toBeTruthy();
+
+    const dt = new DataTransfer();
+    const fire = (type: string, el: Element, extra: DragEventInit = {}) => {
+      const e = new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer: dt, ...extra });
+      el.dispatchEvent(e);
+      return e;
+    };
+    const bottomEdge = (el: Element) => {
+      const r = el.getBoundingClientRect();
+      return { clientX: r.left + r.width / 2, clientY: r.bottom - 1 };
+    };
+
+    fire('dragstart', source!, { button: 0 });
+    await nextFrame();
+    // Hover conv-fav2's bottom edge → its real getData runs and resolves "after".
+    fire('dragenter', target!, bottomEdge(target!));
+    fire('dragover', target!, bottomEdge(target!));
+    await nextFrame();
+    fire('drop', target!, bottomEdge(target!));
+    fire('dragend', source!);
+    await nextFrame();
+
+    expect(reorderSidebarMutate).toHaveBeenCalled();
+    const moved = (reorderSidebarMutate.mock.calls[0]?.[0]?.updates as Array<{ id: string }>).find((u) => u.id === 'conv-fav');
+    expect(moved, 'the dragged favorited DM must be in the updates').toBeTruthy();
+  });
+
+  // Regression for "drag out of the preview's range, let go → orders one slot
+  // too high": the drop must land at the LATEST resolved slot, even when the
+  // last move is released before React commits the layoutEffect that syncs the
+  // (lagging) visible-indicator ref. handleDrop must read the SYNCHRONOUS
+  // resolved-drop ref, not the layout-effect mirror.
+  it('drops at the latest shown slot even when released before the last move commits', async () => {
+    await render(<Frame />);
+    await nextFrame();
+
+    // Drag ch-a (first channel) so both candidate slots are REAL moves.
+    const source = document.querySelector('[data-testid="channel-row-ch-a"]');
+    const rowB = document.querySelector('[data-testid="channel-row-ch-b"]');
+    const rowOther = document.querySelector('[data-testid="channel-row-ch-other"]');
+    expect(source).toBeTruthy();
+    expect(rowB).toBeTruthy();
+    expect(rowOther).toBeTruthy();
+
+    const dt = new DataTransfer();
+    const fire = (type: string, el: Element, extra: DragEventInit = {}) => {
+      const e = new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer: dt, ...extra });
+      el.dispatchEvent(e);
+      return e;
+    };
+    const bottomEdge = (el: Element) => {
+      const r = el.getBoundingClientRect();
+      return { clientX: r.left + r.width / 2, clientY: r.bottom - 1 };
+    };
+
+    fire('dragstart', source!, { button: 0 });
+    await nextFrame();
+    // Resolve to "after ch-b" and let it fully commit (refs + gap settle).
+    fire('dragenter', rowB!, bottomEdge(rowB!));
+    fire('dragover', rowB!, bottomEdge(rowB!));
+    await nextFrame();
+    // Move to "after ch-other" (the LATEST slot = the very end) and release
+    // IMMEDIATELY — no frame, so the layoutEffect that syncs the visible-indicator
+    // ref has NOT run. The drop must land at the end, not the stale "after ch-b".
+    fire('dragover', rowOther!, bottomEdge(rowOther!));
+    fire('drop', rowOther!, bottomEdge(rowOther!));
+    fire('dragend', source!);
+    await nextFrame();
+
+    expect(reorderSidebarMutate).toHaveBeenCalled();
+    const updates = reorderSidebarMutate.mock.calls[0]?.[0]?.updates as Array<{ id: string; sidebarPosition: number }>;
+    const posOf = (id: string) => updates.find((u) => u.id === id)?.sidebarPosition ?? -1;
+    // ch-a lands at the END (after ch-other), not the stale slot before ch-other.
+    expect(posOf('ch-a')).toBeGreaterThan(posOf('ch-other'));
+  });
+
 });

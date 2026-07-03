@@ -1131,8 +1131,15 @@ export function Sidebar({ onClose }: SidebarProps) {
   }
 
   function handleDrop(payload: DropPayload | undefined) {
+    // Prefer resolvedDropRef — it's written SYNCHRONOUSLY the moment an indicator
+    // resolves (showChannelDropIndicator), so it's always the latest slot. The
+    // visibleDropIndicatorRef mirror is synced by a useLayoutEffect and therefore
+    // LAGS by a commit; releasing right after the final move (e.g. dragging out
+    // of the preview's range and letting go before React commits) read that stale
+    // ref and dropped one slot too high, not where the preview showed. Fall back
+    // to the mirror, then to a fresh resolve of the raw drop payload.
     const resolvedDrop = activeDragRef.current
-      ? (visibleDropIndicatorRef.current ?? resolvedDropRef.current ?? resolveDropPayload(payload))
+      ? (resolvedDropRef.current ?? visibleDropIndicatorRef.current ?? resolveDropPayload(payload))
       : resolveDropPayload(payload);
     if (activeDragRef.current?.type === 'channel') {
       sidebarDndDebug('channel-drop received', {
