@@ -1,15 +1,24 @@
+# syntax=docker/dockerfile:1
+#
 # Docker builds bake release metadata into the binary. Pass GIT_TAG for
 # releases; otherwise pass GIT_SHA and the build falls back to its short SHA.
 #
 # Build stages use Debian (trixie) variants to keep parity with the
 # Debian 13 distroless runtime below; the final image is distroless so it
 # ships only the static binary — no shell, package manager, or wget.
+#
+# The compose `app` service builds with `no_cache: true`, so every
+# `docker compose up --build` re-runs `npm run build` and the Go compile from
+# scratch — you can never ship a stale embedded SPA. The `--mount=type=cache`
+# mounts below are NOT layer cache and survive `--no-cache`, so the npm package
+# downloads, the Go module cache, and the Go build cache persist between builds:
+# the guaranteed-fresh rebuild stays fast.
 
 # Stage 1: Build frontend
 FROM node:24-trixie AS frontend
 WORKDIR /app/frontend
 COPY frontend/package.json frontend/package-lock.json ./
-RUN npm ci
+RUN --mount=type=cache,target=/root/.npm npm ci
 COPY frontend/ ./
 RUN npm run build
 
@@ -19,10 +28,12 @@ ARG GIT_TAG=""
 ARG GIT_SHA=""
 WORKDIR /app
 COPY go.mod go.sum ./
-RUN go mod download
+RUN --mount=type=cache,target=/go/pkg/mod go mod download
 COPY . .
 COPY --from=frontend /app/frontend/dist ./frontend/dist
-RUN VERSION="${GIT_TAG:-${GIT_SHA}}" && \
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    VERSION="${GIT_TAG:-${GIT_SHA}}" && \
     VERSION="${VERSION:-dev}" && \
     VERSION="$(printf '%s' "$VERSION" | cut -c1-12)" && \
     CGO_ENABLED=0 GOOS=linux go build \

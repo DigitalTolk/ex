@@ -166,6 +166,46 @@ describe('computeSidebarReorder', () => {
     expect(resultingOrder(favorites, updates)).toEqual(['c1', 'c3', 'c2']);
   });
 
+  it('REPRO: drops a non-favorite channel at the END of Favorites → lands AFTER the last favorite, not before it', () => {
+    // From a real bug log: marketing (not favorited, from a category) dropped at
+    // Favorites index 3 (area 'end'), preview showed "after bozos", but it landed
+    // ABOVE bozos. Favorites = general(2000), foo-bar(3000), bozos(4000).
+    const favorites = [
+      chan('general', { sidebarPosition: 2000, favorite: true }),
+      chan('foo-bar', { sidebarPosition: 3000, favorite: true }),
+      chan('bozos', { sidebarPosition: 4000, favorite: true }),
+    ];
+    // marketing is NOT in the favorites list (cross-section move into Favorites).
+    const updates = computeSidebarReorder(favorites, { id: 'marketing', kind: 'channel' }, 3, FAVORITES);
+    // marketing must be LAST (after bozos), matching the "end" resolution.
+    expect(resultingOrder(favorites, updates)).toEqual(['general', 'foo-bar', 'bozos', 'marketing']);
+    const marketing = updates.find((u) => u.id === 'marketing')!;
+    const bozos = updates.find((u) => u.id === 'bozos');
+    // marketing's dense position is AFTER bozos's (whether or not bozos changed).
+    const bozosPos = bozos?.sidebarPosition ?? 4000;
+    expect(marketing.sidebarPosition).toBeGreaterThan(bozosPos);
+  });
+
+  it('REPRO (exact log): drop foo-bar at END of Favorites[general,bozos] → foo-bar LAST + renumbers ALL 3 rows', () => {
+    // From the user's sequence-3 log: Favorites = general(2000), bozos(5000);
+    // dropped foo-bar (non-favorite, from a category) at index 2 ('end').
+    const favorites = [
+      chan('general', { sidebarPosition: 2000, favorite: true }),
+      chan('bozos', { sidebarPosition: 5000, favorite: true }),
+    ];
+    const updates = computeSidebarReorder(favorites, { id: 'foo-bar', kind: 'channel' }, 2, FAVORITES);
+    // foo-bar lands AFTER bozos (matching the 'end' resolution).
+    expect(resultingOrder(favorites, updates)).toEqual(['general', 'bozos', 'foo-bar']);
+    // The current dense algorithm renumbers the WHOLE section: general→1000,
+    // bozos→2000, foo-bar→3000 — THREE updates. The buggy old bundle wrote only
+    // TWO (foo-bar→3000, bozos→4000, general kept 2000) → foo-bar before bozos.
+    expect(updates.map((u) => [u.id, u.sidebarPosition])).toEqual([
+      ['general', 1000],
+      ['bozos', 2000],
+      ['foo-bar', 3000],
+    ]);
+  });
+
   it('clamps an out-of-range insertion index instead of dropping the item off the list', () => {
     const section = [chan('A', { sidebarPosition: 1000 })];
     const updates = computeSidebarReorder(section, { id: 'A', kind: 'channel' }, 99, CHANNELS);

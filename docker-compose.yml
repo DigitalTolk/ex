@@ -84,6 +84,14 @@ services:
   app:
     build:
       context: .
+      # Always rebuild the image from scratch on `docker compose up --build`, so
+      # a cached `npm run build` layer can never embed a stale frontend bundle
+      # into the Go binary (the SPA is baked in via go:embed at build time — the
+      # #1 cause of "I deployed but the sidebar still runs old JS"). This forces
+      # a fresh frontend + Go compile every time; the Dockerfile's BuildKit
+      # `--mount=type=cache` mounts survive `--no-cache`, so npm/go downloads and
+      # the Go build cache are reused and the fresh rebuild stays fast.
+      no_cache: true
       args:
         # VERSION must be a unique-per-deploy identifier (git sha or
         # release tag) so the upgrade banner fires on tabs left open

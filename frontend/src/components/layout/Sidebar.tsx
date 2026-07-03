@@ -726,15 +726,30 @@ export function Sidebar({ onClose }: SidebarProps) {
       .map((section) => ({
         sectionKey: section.key,
         title: section.title,
-        channels: section.items
-          .filter((item): item is Extract<SidebarItem, { kind: 'channel' }> => item.kind === 'channel')
-          .map((item, index) => ({
-            index,
-            channelID: item.channel.channelID,
-            name: item.channel.channelName,
-            sidebarPosition: item.channel.sidebarPosition ?? null,
-            favorite: !!item.channel.favorite,
-          })),
+        // Include BOTH channels and conversations, in flat render order. The old
+        // snapshot filtered to channels only, which hid favorited DMs — and since
+        // Favorites is a flat position-sorted mix of channels AND DMs, that made a
+        // drop's "reorder scheduled" numbers impossible to reconcile against the
+        // log (the DM rows were invisible). Show every item so the order is whole.
+        items: section.items.map((item, index) =>
+          item.kind === 'channel'
+            ? {
+                index,
+                kind: 'channel' as const,
+                id: item.channel.channelID,
+                name: item.channel.channelName,
+                sidebarPosition: item.channel.sidebarPosition ?? null,
+                favorite: !!item.channel.favorite,
+              }
+            : {
+                index,
+                kind: 'conversation' as const,
+                id: item.conversation.conversationID,
+                name: item.conversation.displayName,
+                sidebarPosition: item.conversation.sidebarPosition ?? null,
+                favorite: !!item.conversation.favorite,
+              },
+        ),
       }));
   }
 
@@ -850,7 +865,15 @@ export function Sidebar({ onClose }: SidebarProps) {
       /* v8 ignore next -- sections preceding any drop target are always channel-accepting (DM is the last section), so the false arm is defensive */
       /* istanbul ignore next -- sections preceding any drop target are always channel-accepting (DM is the last section), so the false arm is dead */
       if (canAcceptChannelDrop(section.key)) {
-        return { kind: 'channel', sectionKey: section.key, index: channelCount(section.items), area: 'end' };
+        // Land at the section's TRUE end — dropCount, not channelCount. Favorites
+        // is a flat, position-sorted list that mixes channels AND favorited DMs
+        // (sidebar-groups favItems .sort), so its end is items.length; counting
+        // only channels lands the drop one slot short of the last item whenever a
+        // favorited DM sits below the channels. This mirrors the section-tail drop
+        // target (PragmaticSection below) and the push-aside preview, which both
+        // already use dropCount — the two "end of section" resolvers must agree or
+        // the drop lands where the preview didn't show.
+        return { kind: 'channel', sectionKey: section.key, index: dropCount(section.key, section.items), area: 'end' };
       }
     }
     /* v8 ignore next -- unreachable: sectionIndex<1 returns above, and every section that CAN precede a drop target accepts channel drops (only DMs — always last — don't), so the loop always returns on its first iteration */

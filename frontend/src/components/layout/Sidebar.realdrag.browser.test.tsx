@@ -237,6 +237,58 @@ describe('Sidebar real drag-and-drop (no library mock)', () => {
     expect(moved!.sidebarPosition).toBeGreaterThan(0);
   });
 
+  // Regression for the "drops one slot above the preview" bug the user hit
+  // repeatedly. Favorites is a FLAT, position-sorted list mixing channels and
+  // favorited DMs — here [fav-ch@500 (channel), conv-fav@1400 (DM), conv-fav2@1600
+  // (DM)]. Dragging a channel over the TOP edge of the section header directly
+  // below Favorites (Work) resolves to "end of Favorites" via previousChannelDrop.
+  // That resolver used channelCount (channels only = 1), landing the channel above
+  // BOTH favorited DMs — one slot short of the flat end the push-aside preview and
+  // the section-tail target both point at (dropCount = items.length = 3). The drop
+  // must land AFTER conv-fav2 (the true bottom), matching the preview.
+  it('drops a channel at the TRUE end of Favorites — after favorited DMs, where the preview showed (dropCount, not channelCount)', async () => {
+    await render(<Frame />);
+    await nextFrame();
+
+    const source = document.querySelector('[data-testid="channel-row-ch-a"]');
+    const header = document.querySelector('[data-testid="sidebar-group-header-cat-work"]');
+    expect(source, 'draggable channel ch-a should be in the DOM').toBeTruthy();
+    expect(header, 'the Work header (directly below Favorites) should be a drop target').toBeTruthy();
+
+    const dt = new DataTransfer();
+    const fire = (type: string, target: Element, extra: DragEventInit = {}) => {
+      const e = new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer: dt, ...extra });
+      target.dispatchEvent(e);
+      return e;
+    };
+    // Hover the header's TOP edge so extractClosestEdge resolves 'top' →
+    // previousChannelDrop → end of the previous section (Favorites).
+    const topEdge = (el: Element) => {
+      const r = el.getBoundingClientRect();
+      return { clientX: r.left + r.width / 2, clientY: r.top + 2 };
+    };
+
+    fire('dragstart', source!, { button: 0 });
+    await nextFrame();
+    fire('dragenter', header!, topEdge(header!));
+    fire('dragover', header!, topEdge(header!));
+    await nextFrame();
+    fire('drop', header!, topEdge(header!));
+    fire('dragend', source!);
+    await nextFrame();
+
+    expect(reorderSidebarMutate).toHaveBeenCalled();
+    const updates = reorderSidebarMutate.mock.calls[0]?.[0]?.updates as Array<{ id: string; sidebarPosition: number }>;
+    const posOf = (id: string) => updates.find((u) => u.id === id)?.sidebarPosition ?? -1;
+    expect(posOf('ch-a'), 'the dragged channel must be in the reorder updates').toBeGreaterThan(0);
+    // The whole bug in one assertion: a channel dropped at the end of Favorites
+    // must sit BELOW the last favorited DM (flat end), not one slot above it.
+    expect(
+      posOf('ch-a'),
+      'a channel dropped at the end of Favorites must land AFTER the favorited DMs, not one slot short',
+    ).toBeGreaterThan(posOf('conv-fav2'));
+  });
+
   // The regression test for the native-DnD "snap-back": the push-aside gap is a
   // pointer-events-none LAYOUT box with no drop target of its own. pragmatic's
   // element adapter calls preventDefault() on `dragover` ONLY when a drop target
