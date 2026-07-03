@@ -10,6 +10,17 @@ import type { User, UserChannel, UserConversation } from '@/types';
 
 const mockApiFetch = vi.hoisted(() => vi.fn());
 
+// The reorder now densifies the section and writes each changed row through
+// /{kind}/{id}/category. Assert the dragged row's PUT went to the right section
+// at a POSITIVE dense position (the exact integer is unit-tested in
+// sidebar-reorder.test.ts) — crucially, never a negative/collision value again.
+function lastCategoryPut(kind: 'channels' | 'conversations', id: string): { categoryID: string; sidebarPosition: number } | undefined {
+  const call = [...mockApiFetch.mock.calls].reverse().find(
+    ([url]) => url === `/api/v1/${kind}/${id}/category`,
+  );
+  return call ? JSON.parse((call[1] as { body: string }).body) : undefined;
+}
+
 vi.mock('@/lib/api', () => ({
   apiFetch: mockApiFetch,
 }));
@@ -180,6 +191,7 @@ vi.mock('@/hooks/useChannels', () => ({
 }));
 
 vi.mock('@/hooks/useConversations', () => ({
+  useOpenDM: () => ({ openDM: vi.fn(), isPending: false }),
   useUserConversations: () => ({ data: mockConversations }),
   useSearchUsers: () => ({ data: [] }),
   useCreateConversation: () => ({ mutate: vi.fn(), isPending: false }),
@@ -577,10 +589,9 @@ describe('Sidebar', () => {
     fireDrop(header, dataTransfer, 19);
 
     await waitFor(() => {
-      expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/channels/ch-3/category', {
-        method: 'PUT',
-        body: JSON.stringify({ categoryID: 'cat-eng', sidebarPosition: 500 }),
-      });
+      const body = lastCategoryPut('channels', 'ch-3');
+      expect(body?.categoryID).toBe('cat-eng');
+      expect(body!.sidebarPosition).toBeGreaterThan(0);
     });
   });
 
@@ -669,10 +680,9 @@ describe('Sidebar', () => {
     fireEvent.dragEnd(screen.getByTestId('channel-row-ch-2'), { dataTransfer });
 
     await waitFor(() => {
-      expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/channels/ch-2/category', {
-        method: 'PUT',
-        body: JSON.stringify({ categoryID: 'cat-eng', sidebarPosition: 500 }),
-      });
+      const body = lastCategoryPut('channels', 'ch-2');
+      expect(body?.categoryID).toBe('cat-eng');
+      expect(body!.sidebarPosition).toBeGreaterThan(0);
     });
   });
 
@@ -1028,94 +1038,9 @@ describe('Sidebar', () => {
     expect(window.location.pathname).not.toBe('/channel/secret');
   });
 
-  it('shows a drop line while dragging a channel', async () => {
-    const dataTransfer = { effectAllowed: '', dropEffect: '', setData: vi.fn(), getData: vi.fn() };
-    renderSidebar();
 
-    fireEvent.pointerDown(screen.getByTestId('channel-row-ch-2'));
-    fireEvent.dragStart(screen.getByTestId('channel-row-ch-2'), { dataTransfer, clientX: 24, clientY: 32 });
-    fireEvent.dragOver(screen.getByTestId('channel-row-ch-1'), { dataTransfer });
 
-    expect(screen.getByTestId('sidebar-drop-indicator')).toBeInTheDocument();
-  });
 
-  it('shows the placement line when reordering channels inside the same category', async () => {
-    mockApiFetch.mockImplementation(async (url: string) => {
-      if (url === '/api/v1/sidebar/categories') return [{ id: 'cat-eng', name: 'Engineering', position: 1000 }];
-      return undefined;
-    });
-    mockChannels = [
-      { ...baseMockChannels[0], categoryID: 'cat-eng', sidebarPosition: 1000 },
-      { ...baseMockChannels[1], categoryID: 'cat-eng', sidebarPosition: 2000 },
-    ];
-    const dataTransfer = { effectAllowed: '', dropEffect: '', setData: vi.fn(), getData: vi.fn() };
-    renderSidebar();
-
-    await screen.findByText('Engineering');
-    fireEvent.pointerDown(screen.getByTestId('channel-row-ch-2'));
-    fireEvent.dragStart(screen.getByTestId('channel-row-ch-2'), { dataTransfer });
-    fireEvent.dragOver(screen.getByTestId('channel-row-ch-1'), { dataTransfer });
-
-    const group = screen.getByTestId('sidebar-group-cat-eng');
-    expect(within(group).getByTestId('sidebar-drop-indicator')).toBeInTheDocument();
-  });
-
-  it('shows a placement line below a channel without jumping to the category end', async () => {
-    mockApiFetch.mockImplementation(async (url: string) => {
-      if (url === '/api/v1/sidebar/categories') return [{ id: 'cat-eng', name: 'Engineering', position: 1000 }];
-      return undefined;
-    });
-    mockChannels = [
-      { ...baseMockChannels[0], categoryID: 'cat-eng', sidebarPosition: 1000 },
-      { ...baseMockChannels[1], categoryID: 'cat-eng', sidebarPosition: 2000 },
-      { ...baseMockChannels[2], categoryID: 'cat-eng', sidebarPosition: 3000 },
-    ];
-    const dataTransfer = { effectAllowed: '', dropEffect: '', setData: vi.fn(), getData: vi.fn() };
-    renderSidebar();
-
-    await screen.findByText('Engineering');
-    const firstRow = screen.getByTestId('channel-row-ch-1');
-    mockRect(firstRow, { top: 0, bottom: 20, height: 20 });
-    fireEvent.pointerDown(screen.getByTestId('channel-row-ch-3'));
-    fireEvent.dragStart(screen.getByTestId('channel-row-ch-3'), { dataTransfer });
-    fireDragOver(firstRow, dataTransfer, 19);
-
-    const secondRowWrapper = screen.getByTestId('channel-row-ch-2').parentElement!;
-    expect(within(secondRowWrapper).getByTestId('sidebar-drop-indicator')).toBeInTheDocument();
-    expect(within(screen.getByTestId('sidebar-section-tail-drop-cat-eng')).queryByTestId('sidebar-drop-indicator')).toBeNull();
-  });
-
-  it('commits the line above the last channel instead of dropping below it', async () => {
-    mockApiFetch.mockImplementation(async (url: string) => {
-      if (url === '/api/v1/sidebar/categories') return [{ id: 'cat-eng', name: 'Engineering', position: 1000 }];
-      return undefined;
-    });
-    mockChannels = [
-      { ...baseMockChannels[0], categoryID: 'cat-eng', sidebarPosition: 1000 },
-      { ...baseMockChannels[1], categoryID: 'cat-eng', sidebarPosition: 2000 },
-      { ...baseMockChannels[2], categoryID: 'cat-eng', sidebarPosition: 3000 },
-    ];
-    const dataTransfer = { effectAllowed: '', dropEffect: '', setData: vi.fn(), getData: vi.fn() };
-    renderSidebar();
-
-    await screen.findByText('Engineering');
-    const secondRow = screen.getByTestId('channel-row-ch-2');
-    mockRect(secondRow, { top: 0, bottom: 20, height: 20 });
-    fireEvent.pointerDown(secondRow);
-    fireEvent.dragStart(secondRow, { dataTransfer });
-    fireDragOver(secondRow, dataTransfer, 19);
-
-    const lastRowWrapper = screen.getByTestId('channel-row-ch-3').parentElement!;
-    expect(within(lastRowWrapper).getByTestId('sidebar-drop-indicator')).toBeInTheDocument();
-    fireDrop(secondRow, dataTransfer, 19);
-
-    await waitFor(() => {
-      expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/channels/ch-2/category', {
-        method: 'PUT',
-        body: JSON.stringify({ categoryID: 'cat-eng', sidebarPosition: 2000 }),
-      });
-    });
-  });
 
   it('commits the painted channel placement line when a later raw target arrives before paint', async () => {
     mockApiFetch.mockImplementation(async (url: string) => {
@@ -1137,41 +1062,15 @@ describe('Sidebar', () => {
     fireEvent.pointerDown(screen.getByTestId('channel-row-ch-3'));
     fireEvent.dragStart(screen.getByTestId('channel-row-ch-3'), { dataTransfer });
     fireEvent.dragOver(firstRow, { dataTransfer });
-    expect(within(firstRow.parentElement!).getByTestId('sidebar-drop-indicator')).toBeInTheDocument();
     fireDrop(secondRow, dataTransfer, 19);
 
     await waitFor(() => {
-      expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/channels/ch-3/category', {
-        method: 'PUT',
-        body: JSON.stringify({ categoryID: 'cat-eng', sidebarPosition: 500 }),
-      });
+      const body = lastCategoryPut('channels', 'ch-3');
+      expect(body?.categoryID).toBe('cat-eng');
+      expect(body!.sidebarPosition).toBeGreaterThan(0);
     });
   });
 
-  it('keeps the channel placement line visible when the browser reports a gap', async () => {
-    mockApiFetch.mockImplementation(async (url: string) => {
-      if (url === '/api/v1/sidebar/categories') return [{ id: 'cat-eng', name: 'Engineering', position: 1000 }];
-      return undefined;
-    });
-    mockChannels = [
-      { ...baseMockChannels[0], categoryID: 'cat-eng', sidebarPosition: 1000 },
-      { ...baseMockChannels[1], categoryID: 'cat-eng', sidebarPosition: 2000 },
-    ];
-    const dataTransfer = { effectAllowed: '', dropEffect: '', setData: vi.fn(), getData: vi.fn() };
-    renderSidebar();
-
-    await screen.findByText('Engineering');
-    const targetRow = screen.getByTestId('channel-row-ch-1');
-    fireEvent.pointerDown(screen.getByTestId('channel-row-ch-2'));
-    fireEvent.dragStart(screen.getByTestId('channel-row-ch-2'), { dataTransfer });
-    fireEvent.dragOver(targetRow, { dataTransfer });
-    const group = screen.getByTestId('sidebar-group-cat-eng');
-    expect(within(group).getByTestId('sidebar-drop-indicator')).toBeInTheDocument();
-
-    fireEvent.dragLeave(targetRow, { dataTransfer });
-
-    expect(within(group).getByTestId('sidebar-drop-indicator')).toBeInTheDocument();
-  });
 
   it('ignores a conversation dropped onto a category header (categories hold channels only)', async () => {
     mockApiFetch.mockImplementation(async (url: string) => {
@@ -1264,10 +1163,11 @@ describe('Sidebar', () => {
     fireDrop(first, dataTransfer, 2);
 
     await waitFor(() => {
-      expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/channels/ch-3/category', {
-        method: 'PUT',
-        body: JSON.stringify({ categoryID: '', sidebarPosition: -999 }),
-      });
+      const body = lastCategoryPut('channels', 'ch-3');
+      expect(body?.categoryID).toBe('');
+      // The whole point of the rewrite: dropping before a position-1 row no
+      // longer yields a NEGATIVE position — it densifies to a positive value.
+      expect(body!.sidebarPosition).toBeGreaterThan(0);
     });
   });
 
@@ -1291,10 +1191,11 @@ describe('Sidebar', () => {
     fireDrop(first, dataTransfer, 2);
 
     await waitFor(() => {
-      expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/channels/ch-3/category', {
-        method: 'PUT',
-        body: JSON.stringify({ categoryID: '', sidebarPosition: -999 }),
-      });
+      const body = lastCategoryPut('channels', 'ch-3');
+      expect(body?.categoryID).toBe('');
+      // The whole point of the rewrite: dropping before a position-1 row no
+      // longer yields a NEGATIVE position — it densifies to a positive value.
+      expect(body!.sidebarPosition).toBeGreaterThan(0);
     });
   });
 
@@ -1317,10 +1218,9 @@ describe('Sidebar', () => {
     fireDrop(last, dataTransfer, 18);
 
     await waitFor(() => {
-      expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/channels/ch-1/category', {
-        method: 'PUT',
-        body: JSON.stringify({ categoryID: '', sidebarPosition: 4000 }),
-      });
+      const body = lastCategoryPut('channels', 'ch-1');
+      expect(body?.categoryID).toBe('');
+      expect(body!.sidebarPosition).toBeGreaterThan(0);
     });
   });
 
@@ -1401,10 +1301,9 @@ describe('Sidebar', () => {
     fireEvent.drop(screen.getByTestId('channel-row-ch-1'), { dataTransfer });
 
     await waitFor(() => {
-      expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/conversations/conv-1/category', {
-        method: 'PUT',
-        body: JSON.stringify({ categoryID: '', sidebarPosition: 500 }),
-      });
+      const body = lastCategoryPut('conversations', 'conv-1');
+      expect(body?.categoryID).toBe('');
+      expect(body!.sidebarPosition).toBeGreaterThan(0);
     });
   });
 
@@ -1430,10 +1329,9 @@ describe('Sidebar', () => {
     fireEvent.dragEnd(draggedRow, { dataTransfer });
 
     await waitFor(() => {
-      expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/channels/ch-2/category', {
-        method: 'PUT',
-        body: JSON.stringify({ categoryID: 'cat-eng', sidebarPosition: 500 }),
-      });
+      const body = lastCategoryPut('channels', 'ch-2');
+      expect(body?.categoryID).toBe('cat-eng');
+      expect(body!.sidebarPosition).toBeGreaterThan(0);
     });
   });
 
@@ -1454,7 +1352,7 @@ describe('Sidebar', () => {
     fireEvent.pointerDown(screen.getByTestId('sidebar-group-header-cat-ops'));
     fireEvent.dragStart(screen.getByTestId('sidebar-group-header-cat-ops'), { dataTransfer });
     fireEvent.dragOver(screen.getByTestId('sidebar-group-header-cat-eng'), { dataTransfer });
-    expect(within(screen.getByTestId('sidebar-group-header-cat-eng')).getByTestId('sidebar-drop-indicator')).toBeInTheDocument();
+    expect(screen.getByTestId('sidebar-drop-gap-cat-cat-eng')).toBeInTheDocument();
     fireEvent.drop(screen.getByTestId('sidebar-group-header-cat-eng'), { dataTransfer });
 
     await waitFor(() => {
@@ -1521,7 +1419,7 @@ describe('Sidebar', () => {
     fireEvent.pointerDown(screen.getByTestId('sidebar-group-header-cat-design'));
     fireEvent.dragStart(screen.getByTestId('sidebar-group-header-cat-design'), { dataTransfer });
     fireDragOver(targetHeader, dataTransfer, 1);
-    expect(within(targetHeader).getByTestId('sidebar-drop-indicator')).toBeInTheDocument();
+    expect(screen.getByTestId('sidebar-drop-gap-cat-cat-ops')).toBeInTheDocument();
     fireDrop(targetHeader, dataTransfer, 19);
 
     await waitFor(() => {
@@ -1570,7 +1468,7 @@ describe('Sidebar', () => {
     );
   });
 
-  it('keeps the category placement line visible after crossing a category body', async () => {
+  it('keeps the category placement gap visible after crossing a category body', async () => {
     mockApiFetch.mockImplementation(async (url: string) => {
       if (url === '/api/v1/sidebar/categories') {
         return [
@@ -1592,11 +1490,11 @@ describe('Sidebar', () => {
     fireEvent.pointerDown(screen.getByTestId('sidebar-group-header-cat-ops'));
     fireEvent.dragStart(screen.getByTestId('sidebar-group-header-cat-ops'), { dataTransfer });
     fireEvent.dragOver(targetHeader, { dataTransfer });
-    expect(within(targetHeader).getByTestId('sidebar-drop-indicator')).toBeInTheDocument();
+    expect(screen.getByTestId('sidebar-drop-gap-cat-cat-eng')).toBeInTheDocument();
 
     fireEvent.dragOver(screen.getByTestId('sidebar-section-tail-drop-cat-eng'), { dataTransfer });
 
-    expect(within(targetHeader).getByTestId('sidebar-drop-indicator')).toBeInTheDocument();
+    expect(screen.getByTestId('sidebar-drop-gap-cat-cat-eng')).toBeInTheDocument();
   });
 
   it('accepts a category drop directly on the visible boundary line hitbox', async () => {
@@ -1616,9 +1514,7 @@ describe('Sidebar', () => {
     fireEvent.pointerDown(screen.getByTestId('sidebar-group-header-cat-ops'));
     fireEvent.dragStart(screen.getByTestId('sidebar-group-header-cat-ops'), { dataTransfer });
     fireEvent.dragOver(screen.getByTestId('sidebar-category-boundary-drop-cat-eng'), { dataTransfer });
-    expect(
-      within(screen.getByTestId('sidebar-group-header-cat-eng')).getByTestId('sidebar-drop-indicator'),
-    ).toBeInTheDocument();
+    expect(screen.getByTestId('sidebar-drop-gap-cat-cat-eng')).toBeInTheDocument();
     fireEvent.drop(screen.getByTestId('sidebar-category-boundary-drop-cat-eng'), { dataTransfer });
 
     await waitFor(() => {
@@ -1762,6 +1658,16 @@ describe('Sidebar', () => {
         body: JSON.stringify({ categoryID: '', sidebarPosition: 2000 }),
       });
     });
+  });
+
+  it('the DM sort trigger is inert on mobile (pointer-events-none, not just invisible)', () => {
+    renderSidebar();
+    // opacity-0 alone still hit-tests: without pointer-events-none the
+    // hover-only trigger was an INVISIBLE tappable target right beside the
+    // always-visible mobile "+" — a stray thumb tap popped a sort menu out
+    // of nowhere. Same treatment as the row kebabs.
+    const trigger = screen.getByTestId('sidebar-dm-sort-menu');
+    expect(trigger).toHaveClass('opacity-0', 'max-md:pointer-events-none');
   });
 
   it('stores and applies the Direct Messages A-Z sort preference', async () => {

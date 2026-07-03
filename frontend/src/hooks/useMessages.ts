@@ -8,6 +8,8 @@ import {
 } from '@tanstack/react-query';
 import { apiFetch } from '@/lib/api';
 import { queryKeys, parentPath } from '@/lib/query-keys';
+import { markLocalDraftClearForSend } from '@/hooks/useDrafts';
+import { markLocalUserStateWrite } from '@/hooks/useUserState';
 import type { Message } from '@/types';
 
 export interface MessageWindow {
@@ -142,6 +144,39 @@ export function patchMessageInThreadCache(qc: QueryClient, parentID: string, thr
     old ? old.map((m) => (m.id === msg.id ? msg : m)) : old;
   qc.setQueryData<Message[]>(queryKeys.thread(`channels/${parentID}`, threadRootID), updater);
   qc.setQueryData<Message[]>(queryKeys.thread(`conversations/${parentID}`, threadRootID), updater);
+}
+
+// appendReplyToThreadCache appends a NEW thread reply to the thread message
+// cache in place (both possible parent scopes) — the live-update analogue of
+// invalidateThreadBothScopes for an incoming reply, so an open ThreadPanel /
+// ThreadCard shows it instantly instead of waiting on a refetch (the delay the
+// user sees: notification arrives but the thread stays empty until a refresh).
+// The thread cache is a flat root-then-replies Message[]; a reply appends to the
+// end, matching the optimistic-send path. Returns true when the reply is now
+// present in a cached thread (appended, or already there). Returns false when the
+// thread isn't cached (panel/card not showing it) — nothing to patch, and the
+// next open fetches fresh, so no refetch is needed.
+export function appendReplyToThreadCache(
+  qc: QueryClient,
+  parentID: string,
+  threadRootID: string,
+  msg: Message,
+): boolean {
+  let present = false;
+  const updater = (old: Message[] | undefined) => {
+    // A cached EMPTY thread has no root (reachable when the fetch raced
+    // eventual consistency right after the root was created and got 200 +
+    // []): appending the reply would render it AS the root. Leave the
+    // cache alone and report not-present so the caller's invalidate
+    // fallback refetches root + replies together.
+    if (!old || old.length === 0) return old;
+    present = true;
+    if (old.some((m) => m.id === msg.id)) return old;
+    return [...old, msg];
+  };
+  qc.setQueryData<Message[]>(queryKeys.thread(`channels/${parentID}`, threadRootID), updater);
+  qc.setQueryData<Message[]>(queryKeys.thread(`conversations/${parentID}`, threadRootID), updater);
+  return present;
 }
 
 // When a message is edited or deleted, any internal-link preview card
@@ -354,6 +389,17 @@ export function useSendMessage(scope: SendMessageScope) {
           clientTs: Date.now(),
         }),
       }),
+    // The server folds the draft-clear for this scope into the send and
+    // publishes a draft.updated echo while the POST is still in flight —
+    // arm the ignore window NOW so that echo doesn't refetch /drafts on
+    // every message sent (other tabs still refetch and clear their composer).
+    // A THREAD reply additionally triggers the server-side author-seen mark
+    // ("posting reads the thread for you"), whose userState echo must not
+    // refetch /user-state in this tab either.
+    onMutate: (input) => {
+      markLocalDraftClearForSend();
+      if (input.parentMessageID) markLocalUserStateWrite();
+    },
     onSuccess: (data, input) => {
       const parentID = channelId ?? conversationId;
       // Sender sees their post immediately. Top-level posts append to the
@@ -377,7 +423,24 @@ export function useSendMessage(scope: SendMessageScope) {
           queryKeys.thread(path, input.parentMessageID),
           (old) => (old ? (old.some((m) => m.id === data.id) ? old : [...old, data]) : old),
         );
-        queryClient.invalidateQueries({ queryKey: queryKeys.userThreads() });
+        // The /threads list is normally patched live by the participant-scoped
+        // `thread.updated` event, built from the authoritative root. That
+        // event is gated on the reply-metadata bump succeeding server-side,
+        // so a sender whose reply just CREATED their participation (a cached
+        // list WITHOUT this thread's row) must not depend on it: refetch once
+        // so the new row appears even if the event never fires. When the row
+        // is already listed we deliberately skip the refetch — an eventually-
+        // consistent ListUserThreads response could clobber the fresher event
+        // patch (the race that removed the old blanket invalidate), and on a
+        // failed metadata bump the server has no newer count to show anyway.
+        // No cached list at all → nothing stale to heal (the first /threads
+        // visit fetches fresh).
+        const cachedThreads = queryClient.getQueryData<{ threadRootID: string }[]>(
+          queryKeys.userThreads(),
+        );
+        if (cachedThreads && !cachedThreads.some((t) => t.threadRootID === input.parentMessageID)) {
+          queryClient.invalidateQueries({ queryKey: queryKeys.userThreads() });
+        }
       }
     },
   });

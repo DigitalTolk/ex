@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -305,6 +306,49 @@ func TestWebhookHandlerErrorPaths(t *testing.T) {
 	h.Delete(res, req)
 	if res.Code != http.StatusBadRequest {
 		t.Fatalf("Delete service error status = %d", res.Code)
+	}
+}
+
+// errBody is a request body whose Read always fails, exercising the
+// readBodyString io.ReadAll error branch in readWebhookPayload.
+type errBody struct{}
+
+func (errBody) Read([]byte) (int, error) { return 0, io.ErrUnexpectedEOF }
+func (errBody) Close() error             { return nil }
+
+func TestWebhookHandler_CreateAndDeleteRequireAdmin(t *testing.T) {
+	msgSvc := service.NewMessageService(&handlerWebhookMessageStore{messages: map[string]*model.Message{}}, nil, nil, nil, nil)
+	h := NewWebhookHandler(service.NewIncomingWebhookService(&handlerWebhookStore{}, handlerWebhookChannels{}, msgSvc, nil, ""))
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/webhooks", strings.NewReader(`{}`))
+	res := httptest.NewRecorder()
+	h.Create(res, req)
+	if res.Code != http.StatusForbidden {
+		t.Fatalf("Create without admin status = %d", res.Code)
+	}
+
+	req = httptest.NewRequest(http.MethodDelete, "/api/v1/admin/webhooks/wh", nil)
+	req.SetPathValue("id", "wh")
+	res = httptest.NewRecorder()
+	h.Delete(res, req)
+	if res.Code != http.StatusForbidden {
+		t.Fatalf("Delete without admin status = %d", res.Code)
+	}
+}
+
+func TestReadWebhookPayloadErrors(t *testing.T) {
+	// ParseForm fails on an invalid percent-escape in a urlencoded body.
+	req := httptest.NewRequest(http.MethodPost, "/hooks/abc", strings.NewReader(`%zz=1`))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	if _, err := readWebhookPayload(req); err == nil {
+		t.Fatal("readWebhookPayload: want ParseForm error, got nil")
+	}
+
+	// A body that errors on Read surfaces from the readBodyString branch.
+	req = httptest.NewRequest(http.MethodPost, "/hooks/abc", errBody{})
+	req.Header.Set("Content-Type", "application/json")
+	if _, err := readWebhookPayload(req); err == nil {
+		t.Fatal("readWebhookPayload: want read-body error, got nil")
 	}
 }
 

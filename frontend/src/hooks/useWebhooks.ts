@@ -51,6 +51,21 @@ export function useDeleteIncomingWebhook() {
   return useMutation({
     mutationFn: (id: string) =>
       apiFetch<void>(`/api/v1/admin/webhooks/${encodeURIComponent(id)}`, { method: 'DELETE' }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.incomingWebhooks() }),
+    // Drop the row from the list IMMEDIATELY rather than waiting on the refetch
+    // round-trip, so a delete never looks like it did nothing on a slow
+    // connection. Roll back if the DELETE fails; reconcile with the server via
+    // onSettled either way.
+    onMutate: async (id) => {
+      await qc.cancelQueries({ queryKey: queryKeys.incomingWebhooks() });
+      const previous = qc.getQueryData<IncomingWebhook[]>(queryKeys.incomingWebhooks());
+      qc.setQueryData<IncomingWebhook[]>(queryKeys.incomingWebhooks(), (rows) =>
+        (rows ?? []).filter((w) => w.id !== id),
+      );
+      return { previous };
+    },
+    onError: (_err, _id, context) => {
+      if (context?.previous) qc.setQueryData(queryKeys.incomingWebhooks(), context.previous);
+    },
+    onSettled: () => qc.invalidateQueries({ queryKey: queryKeys.incomingWebhooks() }),
   });
 }

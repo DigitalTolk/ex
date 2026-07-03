@@ -32,10 +32,13 @@ const {
 vi.mock('@/lib/unread-cache', () => ({
   bumpChannelUnread: mockBumpChannelUnread,
   bumpConversationUnread: mockBumpConversationUnread,
+  clearChannelUnreadInCache: vi.fn(),
   clearConversationUnreadInCache: mockClearConversationUnreadInCache,
+  touchConversationActivityInCache: vi.fn(() => true),
 }));
 const isActiveConversationMock = vi.fn(() => true);
 const isActiveChannelMock = vi.fn(() => false);
+const isActiveThreadMock = vi.fn(() => false);
 
 vi.mock('@/context/UnreadContext', () => ({
   useUnread: () => ({
@@ -49,7 +52,7 @@ vi.mock('@/context/UnreadContext', () => ({
     isActiveChannel: isActiveChannelMock,
     isActiveConversation: isActiveConversationMock,
     setActiveThread: vi.fn(),
-    isActiveThread: vi.fn(() => false),
+    isActiveThread: isActiveThreadMock,
   }),
   UnreadProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
@@ -92,19 +95,27 @@ vi.mock('@/context/TypingContext', () => ({
 // branch decisions, not the cache mutations they delegate to.
 const mockMarkThreadSeen = vi.hoisted(() => vi.fn());
 const mockUserThreadInCache = vi.hoisted(() => vi.fn((..._args: unknown[]) => false));
+// Defaults to "not cached" (returns false) so a reply falls through to the
+// invalidate fallback; individual tests flip it to true to assert the live
+// append path skips the invalidate.
+const mockAppendReplyToThreadCache = vi.hoisted(() => vi.fn((..._args: unknown[]) => false));
+const mockInvalidateThreadBothScopes = vi.hoisted(() => vi.fn());
 vi.mock('@/hooks/useMessages', () => ({
   appendMessageToCache: vi.fn(),
-  invalidateThreadBothScopes: vi.fn(),
+  appendReplyToThreadCache: (...args: unknown[]) => mockAppendReplyToThreadCache(...args),
+  invalidateThreadBothScopes: (...args: unknown[]) => mockInvalidateThreadBothScopes(...args),
   invalidateUnfurlsForMessage: vi.fn(),
   markMessageDeletedInCache: vi.fn(),
   patchMessageInThreadCache: vi.fn(),
   resyncMessageCache: vi.fn().mockResolvedValue(undefined),
   updateMessageInCache: vi.fn(),
 }));
+const mockUpsertUserThreadRow = vi.hoisted(() => vi.fn());
 vi.mock('@/hooks/useThreads', () => ({
   markThreadSeen: mockMarkThreadSeen,
   useUserThreads: () => ({ data: [], isSuccess: true, isError: false }),
   upsertUserThreadFromRoot: vi.fn(),
+  upsertUserThreadRow: (...args: unknown[]) => mockUpsertUserThreadRow(...args),
   userThreadInCache: (...args: unknown[]) => mockUserThreadInCache(...args),
 }));
 
@@ -186,6 +197,10 @@ describe('ChatPage WS router — divergent-mock branch arms (browser)', () => {
     mockMarkThreadNotificationUnread.mockClear();
     mockMarkThreadSeen.mockClear();
     mockUserThreadInCache.mockClear();
+    mockAppendReplyToThreadCache.mockClear();
+    mockAppendReplyToThreadCache.mockReturnValue(false);
+    mockInvalidateThreadBothScopes.mockClear();
+    mockUpsertUserThreadRow.mockClear();
     mockUserThreadInCache.mockReturnValue(false);
     mockApiFetch.mockClear();
     navigateMock.mockClear();
@@ -254,8 +269,11 @@ describe('ChatPage WS router — divergent-mock branch arms (browser)', () => {
 
   it('onMessageNew marks the active thread seen with a conversation parentType', async () => {
     await renderChatPage('/?thread=root-1');
+    // Another participant's reply: the seen PUT persists with the
+    // conversation-typed target. (An OWN reply skips the PUT — the server
+    // marks the author seen; pinned in the seen-marking describe below.)
     lastHandlers().onMessageNew?.(msg({
-      parentID: 'conv-1', parentType: 'conversation', parentMessageID: 'root-1', authorID: 'u-1',
+      parentID: 'conv-1', parentType: 'conversation', parentMessageID: 'root-1', authorID: 'other-user',
     }));
     expect(mockMarkThreadSeen).toHaveBeenCalledWith('root-1', '2026-04-30T10:00:00Z', {
       parentID: 'conv-1', parentType: 'conversation',
@@ -266,6 +284,50 @@ describe('ChatPage WS router — divergent-mock branch arms (browser)', () => {
     await renderChatPage('/', false);
     // userChannels / userConversations getQueryData return undefined → `?? []`.
     expect(() => lastHandlers().onMessageNew?.(msg({ parentType: undefined }))).not.toThrow();
+  });
+
+  it('onMessageNew appends a thread reply and skips the invalidate when the thread is cached', async () => {
+    mockAppendReplyToThreadCache.mockReturnValue(true);
+    await renderChatPage();
+    lastHandlers().onMessageNew?.(msg({
+      parentID: 'ch-99', parentType: 'channel', parentMessageID: 'root-1', authorID: 'other-user',
+    }));
+    expect(mockAppendReplyToThreadCache).toHaveBeenCalledWith(expect.anything(), 'ch-99', 'root-1', expect.anything());
+    // Cached thread was patched in place → no refetch-driven invalidate.
+    expect(mockInvalidateThreadBothScopes).not.toHaveBeenCalled();
+  });
+
+  it('onMessageNew falls back to invalidating the thread scope when the reply is not in cache', async () => {
+    mockAppendReplyToThreadCache.mockReturnValue(false);
+    await renderChatPage();
+    lastHandlers().onMessageNew?.(msg({
+      parentID: 'ch-99', parentType: 'channel', parentMessageID: 'root-1', authorID: 'other-user',
+    }));
+    expect(mockInvalidateThreadBothScopes).toHaveBeenCalledWith(expect.anything(), 'ch-99', 'root-1');
+  });
+
+  it('onThreadUpdated patches the /threads row from a valid payload', async () => {
+    await renderChatPage();
+    lastHandlers().onThreadUpdated?.({
+      parentID: 'ch-99',
+      parentType: 'channel',
+      threadRootID: 'root-1',
+      rootAuthorID: 'someone-else',
+      rootBody: 'hi',
+      rootCreatedAt: '2026-05-01T10:00:00Z',
+      replyCount: 2,
+      latestActivityAt: '2026-05-01T10:05:00Z',
+    });
+    expect(mockUpsertUserThreadRow).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ threadRootID: 'root-1', replyCount: 2 }),
+    );
+  });
+
+  it('onThreadUpdated ignores a malformed payload', async () => {
+    await renderChatPage();
+    lastHandlers().onThreadUpdated?.({ threadRootID: '' });
+    expect(mockUpsertUserThreadRow).not.toHaveBeenCalled();
   });
 
   it('onMessageEdited keys the thread invalidation off the message id when no parentMessageID', async () => {
@@ -377,5 +439,35 @@ describe('ChatPage WS router — divergent-mock branch arms (browser)', () => {
     await renderChatPage();
     // user?.id ?? null → null path runs in the effect; the hook is disabled.
     expect(lastHandlers().enabled).toBe(false);
+  });
+});
+
+describe('active-thread seen marking on incoming replies', () => {
+  beforeEach(() => {
+    // This describe sits outside the main one, so restore the pieces its
+    // beforeEach normally resets (a prior test nulls the user).
+    userRef.value = { id: 'u-1', displayName: 'Test', email: 't@t.com', systemRole: 'member', status: 'active' };
+    mockUseWebSocket.mockClear();
+    isActiveThreadMock.mockReturnValue(true);
+    mockMarkThreadSeen.mockClear();
+  });
+  afterEach(() => {
+    isActiveThreadMock.mockReturnValue(false);
+  });
+
+  it("the user's OWN reply marks seen locally only — no seen PUT (the backend already marked the author seen)", async () => {
+    await renderChatPage();
+    lastHandlers().onMessageNew?.(msg({ authorID: 'u-1', parentMessageID: 'root-1' }));
+    expect(mockMarkThreadSeen).toHaveBeenCalledWith('root-1', expect.any(String), undefined);
+  });
+
+  it("someone ELSE's reply while the thread is open persists the seen watermark (PUT target present)", async () => {
+    await renderChatPage();
+    lastHandlers().onMessageNew?.(msg({ authorID: 'other-user', parentMessageID: 'root-1' }));
+    expect(mockMarkThreadSeen).toHaveBeenCalledWith(
+      'root-1',
+      expect.any(String),
+      expect.objectContaining({ parentID: 'ch-99', parentType: 'channel' }),
+    );
   });
 });

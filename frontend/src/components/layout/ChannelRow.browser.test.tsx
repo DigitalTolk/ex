@@ -9,6 +9,10 @@ const setCategoryMutate = vi.hoisted(() => vi.fn());
 const categoriesData = vi.hoisted(() => ({ data: [] as { id: string; name: string }[] }));
 
 vi.mock('@/hooks/useSidebar', () => ({
+  useReorderSidebar: () => ({ mutate: vi.fn(), isPending: false }),
+  markLocalSidebarReorder: vi.fn(),
+  shouldRefetchSidebarForRemoteUpdate: vi.fn(() => true),
+  resetSidebarReorderSessionState: vi.fn(),
   useFavoriteChannel: () => ({ mutate: favoriteMutate, isPending: false }),
   useSetCategory: () => ({ mutate: setCategoryMutate, isPending: false }),
   useCategories: () => categoriesData,
@@ -36,6 +40,34 @@ function renderRow(channel: UserChannel = baseChannel, hasUnread = false) {
       <ChannelRow channel={channel} hasUnread={hasUnread} onClose={() => {}} />
     </MemoryRouter>,
   );
+}
+
+// The kebab is a hover-reveal trigger on desktop and a hidden (long-press) menu
+// on mobile. Open it the way a real user would per viewport so the row's menu
+// items are reachable on every browser project.
+async function openChannelMenu(screen: Awaited<ReturnType<typeof renderRow>>) {
+  if (window.innerWidth <= 767) {
+    const row = document.querySelector('[data-testid="channel-row-ch-1"]') as HTMLElement;
+    row.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerType: 'touch' }));
+    await vi.waitFor(
+      () => {
+        expect(document.querySelector('[role="menuitem"]')).not.toBeNull();
+      },
+      { timeout: 1500 },
+    );
+    row.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerType: 'touch' }));
+  } else {
+    await screen.getByTestId('row-menu-ch-1').click();
+    // The Radix dropdown mounts its items in a portal ASYNCHRONOUSLY. Wait for
+    // the content (as the mobile branch does) so callers can query a specific
+    // item without racing the open under full-suite CPU load.
+    await vi.waitFor(
+      () => {
+        expect(document.querySelector('[role="menuitem"]')).not.toBeNull();
+      },
+      { timeout: 1500 },
+    );
+  }
 }
 
 describe('ChannelRow browser behaviour', () => {
@@ -132,10 +164,12 @@ describe('ChannelRow browser behaviour', () => {
         <ChannelRow channel={{ ...baseChannel, favorite: true }} hasUnread={false} onClose={() => {}} />
       </MemoryRouter>,
     );
-    await screen.getByTestId('row-menu-ch-1').click();
-    await screen.getByText('Work').click();
+    await openChannelMenu(screen);
+    // Native click (not the auto-retrying locator click) so a still-settling
+    // menu portal under full-suite CPU load can't hang it to the timeout.
+    (screen.getByText('Work').element() as HTMLElement).click();
     // isFav → favorite(false) then setCategory(cat-1).
-    expect(favoriteMutate).toHaveBeenCalledWith({ channelID: 'ch-1', favorite: false });
+    await vi.waitFor(() => expect(favoriteMutate).toHaveBeenCalledWith({ channelID: 'ch-1', favorite: false }));
     expect(setCategoryMutate).toHaveBeenCalledWith({ channelID: 'ch-1', categoryID: 'cat-1' });
   });
 
@@ -176,7 +210,7 @@ describe('ChannelRow browser behaviour', () => {
     // categoriesData.data undefined → the `(categories ?? [])` empty-array arm.
     (categoriesData as { data: unknown }).data = undefined;
     const screen = await renderRow();
-    await screen.getByTestId('row-menu-ch-1').click();
+    await openChannelMenu(screen);
     // Only the built-in "Move to Channels" item renders (no categories).
     await expect.element(screen.getByText('Move to Channels')).toBeVisible();
   });
@@ -184,10 +218,64 @@ describe('ChannelRow browser behaviour', () => {
   it('lists existing categories in the move menu and moves the channel on select', async () => {
     categoriesData.data = [{ id: 'cat-1', name: 'Work' }];
     const screen = await renderRow();
-    await screen.getByTestId('row-menu-ch-1').click();
+    await openChannelMenu(screen);
     const item = screen.getByText('Work');
     await expect.element(item).toBeVisible();
-    await item.click();
-    expect(setCategoryMutate).toHaveBeenCalledWith({ channelID: 'ch-1', categoryID: 'cat-1' });
+    // Native click — avoids the actionability-retry hang under CPU load.
+    (item.element() as HTMLElement).click();
+    await vi.waitFor(() => expect(setCategoryMutate).toHaveBeenCalledWith({ channelID: 'ch-1', categoryID: 'cat-1' }));
+  });
+
+  it('opens the management menu via a mobile long-press (kebab is not a tap target)', async () => {
+    if (window.innerWidth > 767) return;
+    categoriesData.data = [{ id: 'cat-1', name: 'Work' }];
+    const screen = await renderRow();
+    // On mobile the kebab trigger is hidden and inert — it exists only so Radix
+    // can anchor the menu; a long-press on the ROW is what opens it.
+    const trigger = document.querySelector('[data-testid="row-menu-ch-1"]') as HTMLElement;
+    expect(getComputedStyle(trigger).pointerEvents).toBe('none');
+
+    const row = document.querySelector('[data-testid="channel-row-ch-1"]') as HTMLElement;
+    row.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerType: 'touch' }));
+    await expect.element(screen.getByText('Move to Channels')).toBeVisible();
+  });
+
+  it('a short tap navigates (calls onClose) and does not open the menu on mobile', async () => {
+    if (window.innerWidth > 767) return;
+    const onClose = vi.fn();
+    await render(
+      <MemoryRouter>
+        <ChannelRow channel={baseChannel} hasUnread={false} onClose={onClose} />
+      </MemoryRouter>,
+    );
+    const row = document.querySelector('[data-testid="channel-row-ch-1"]') as HTMLElement;
+    // Press + immediate release, well within the long-press delay.
+    row.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerType: 'touch' }));
+    row.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerType: 'touch' }));
+    (document.querySelector('a[href="/channel/general"]') as HTMLAnchorElement).dispatchEvent(
+      new MouseEvent('click', { bubbles: true, cancelable: true }),
+    );
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(document.querySelector('[role="menuitem"]')).toBeNull();
+  });
+
+  it('suppresses the navigation click that follows a long-press on mobile', async () => {
+    if (window.innerWidth > 767) return;
+    const onClose = vi.fn();
+    const screen = await render(
+      <MemoryRouter>
+        <ChannelRow channel={baseChannel} hasUnread={false} onClose={onClose} />
+      </MemoryRouter>,
+    );
+    const row = document.querySelector('[data-testid="channel-row-ch-1"]') as HTMLElement;
+    row.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerType: 'touch' }));
+    await expect.element(screen.getByText('Move to Channels')).toBeVisible();
+    row.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerType: 'touch' }));
+    // The click a touch release fires must be swallowed — no navigation.
+    const link = document.querySelector('a[href="/channel/general"]') as HTMLAnchorElement;
+    const ev = new MouseEvent('click', { bubbles: true, cancelable: true });
+    link.dispatchEvent(ev);
+    expect(onClose).not.toHaveBeenCalled();
+    expect(ev.defaultPrevented).toBe(true);
   });
 });

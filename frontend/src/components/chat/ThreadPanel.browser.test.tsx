@@ -57,6 +57,7 @@ vi.mock('@/hooks/useReactions', () => ({
 }));
 
 vi.mock('@/hooks/useDrafts', () => ({
+  markLocalDraftClearForSend: vi.fn(),
   useDraftForScope: () => ({ data: undefined }),
   useDraftAttachmentChips: () => [],
   useSaveDraft: () => ({ mutate: vi.fn() }),
@@ -115,7 +116,13 @@ function reply(): Message {
   };
 }
 
-function renderPanel(messages: Message[] = [rootMsg(), reply()], onClose: () => void = vi.fn()) {
+function renderPanel(
+  messages: Message[] = [rootMsg(), reply()],
+  onClose: () => void = vi.fn(),
+  userMap: Record<string, { displayName: string; avatarURL?: string; userStatus?: { emoji: string; text: string } }> = {
+    'u-1': { displayName: 'Alice' },
+  },
+) {
   apiFetchMock.mockReset();
   apiFetchMock.mockImplementation(() => Promise.resolve(null));
   threadMessagesState = { data: messages, isLoading: false };
@@ -127,7 +134,7 @@ function renderPanel(messages: Message[] = [rootMsg(), reply()], onClose: () => 
           channelId="ch-1"
           threadRootID="01J0000000000000000000ROOT"
           onClose={onClose}
-          userMap={{ 'u-1': { displayName: 'Alice' } }}
+          userMap={userMap}
           currentUserId="u-1"
         />
       </BrowserRouter>
@@ -136,6 +143,17 @@ function renderPanel(messages: Message[] = [rootMsg(), reply()], onClose: () => 
 }
 
 describe('ThreadPanel browser behaviour', () => {
+  it("shows the author's custom status next to their name (was missing in the panel)", async () => {
+    const screen = await renderPanel([rootMsg(), reply()], vi.fn(), {
+      'u-1': { displayName: 'Alice', userStatus: { emoji: '🌴', text: 'On vacation' } },
+    });
+    // The name-line hover card renders the inline UserStatusIndicator; its
+    // accessible label carries the status text.
+    await expect
+      .element(screen.getByLabelText("On vacation, won't clear automatically").first())
+      .toBeVisible();
+  });
+
   it('renders the thread panel header', async () => {
     const screen = await renderPanel();
     await expect.element(screen.getByRole('heading', { name: 'Thread' })).toBeVisible();

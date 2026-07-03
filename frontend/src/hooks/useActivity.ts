@@ -77,14 +77,26 @@ export function useCancelReminder() {
 
 // useMarkActivityRead clears the unread badge by advancing the server watermark,
 // and optimistically zeroes the local unread count.
+//
+// onMutate cancels any in-flight activity GET before applying the optimistic
+// zero: the page fires the read PUT and the activity GET together on mount, and
+// a GET whose response lands after the PUT but was computed before the watermark
+// advanced would otherwise clobber the zero back to a stale non-zero count (the
+// badge reappears despite the click). onSettled refetches to reconcile with the
+// now-advanced server watermark, correctly re-counting anything that arrived
+// mid-flight as still unread.
 export function useMarkActivityRead() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: () => apiFetch<void>('/api/v1/activity/read', { method: 'PUT' }),
-    onSuccess: () => {
+    onMutate: async () => {
+      await qc.cancelQueries({ queryKey: queryKeys.activity() });
       qc.setQueryData<ActivityFeed>(queryKeys.activity(), (old) =>
         old ? { ...old, unread: 0 } : old,
       );
+    },
+    onSettled: () => {
+      void qc.invalidateQueries({ queryKey: queryKeys.activity() });
     },
   });
 }

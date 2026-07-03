@@ -82,7 +82,7 @@ export function ThreadPanel({
     if (!extras || extras.length === 0) return userMap;
     const m: Record<string, UserMapEntry> = { ...userMap };
     for (const u of extras) {
-      m[u.id] = { displayName: u.displayName || 'Unknown', avatarURL: u.avatarURL };
+      m[u.id] = { displayName: u.displayName || 'Unknown', avatarURL: u.avatarURL, userStatus: u.userStatus };
     }
     return m;
   }, [userMap, extras]);
@@ -501,6 +501,7 @@ export function ThreadPanel({
                   firstInGroup={!isGroupedWithPrevious(index > 0 ? data[index - 1] : null, msg)}
                   authorName={u?.displayName ?? 'Unknown'}
                   authorAvatarURL={u?.avatarURL}
+                  authorUserStatus={u?.userStatus}
                   authorOnline={u?.online}
                   isOwn={isOwnMessage(msg, currentUserId)}
                   channelId={channelId}

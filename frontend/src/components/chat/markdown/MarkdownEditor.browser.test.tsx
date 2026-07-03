@@ -281,6 +281,39 @@ describe('MarkdownEditor handle + keymap branches', () => {
     await waitForLabel(view, ':smile:');
   });
 
+  it('renders the autocomplete popup in <body> and above the app top layer (no clip/transform ancestor can hide it)', async () => {
+    // Regression: on mobile and in /threads the typeahead was clipped/behind the
+    // composer because the tooltip lived inside the editor subtree, which has
+    // ancestors that are containing blocks for `position:fixed` (Motion's
+    // swipe-offset transform on ThreadPanel, the ThreadCard list) plus
+    // overflow-clip. It must portal to <body> and outrank the app's top layer.
+    const completionProviders: CompletionProviders = {
+      users: () => [{ id: 'u1', displayName: 'Alice' }],
+      online: () => new Set(),
+      memberIds: () => null,
+      channels: () => [],
+      customEmojis: () => [],
+      skinTone: () => '',
+    };
+    const { ref } = await mount({ completionProviders });
+    const view = viewOf(ref);
+    trigger(view, '@Al');
+    await waitForLabel(view, 'Alice');
+    const tooltip = await vi.waitFor(() => {
+      const el = document.querySelector('.cm-tooltip-autocomplete') as HTMLElement | null;
+      expect(el).not.toBeNull();
+      return el!;
+    });
+    const host = ref.current!.getElement()!;
+    // Lifted OUT of the editor subtree (so no ancestor transform/overflow clips
+    // it) and living directly under <body> in CM's theme-carrying container.
+    expect(host.contains(tooltip)).toBe(false);
+    expect(document.body.contains(tooltip)).toBe(true);
+    expect(tooltip.closest('body > div')).not.toBeNull();
+    // Pinned above the app's highest layer (PopoverPortal is z-999).
+    expect(getComputedStyle(tooltip).zIndex).toBe('1000');
+  });
+
   it('shows no mention/channel completions without providers, but built-in emoji still resolve', async () => {
     const { ref } = await mount();
     const view = viewOf(ref);

@@ -12,7 +12,12 @@ import {
   useSetCategory,
   useFavoriteConversation,
   useSetConversationCategory,
+  useReorderSidebar,
+  markLocalSidebarReorder,
+  shouldRefetchSidebarForRemoteUpdate,
+  resetSidebarReorderSessionState,
 } from './useSidebar';
+import type { SidebarReorderUpdate } from '@/lib/sidebar-reorder';
 
 vi.mock('@/lib/api', () => ({
   apiFetch: vi.fn(),
@@ -132,12 +137,12 @@ describe('useReorderCategories', () => {
       ],
     });
 
-    await waitFor(() => {
-      expect(queryClient.getQueryData(['sidebarCategories'])).toEqual([
-        { id: 'c-2', name: 'Operations', position: 1000 },
-        { id: 'c-1', name: 'Engineering', position: 2000 },
-      ]);
-    });
+    // Synchronous — same snap-back guard as the channel/DM reorder: the new
+    // category order is in the cache on the next line, not an awaited tick later.
+    expect(queryClient.getQueryData(['sidebarCategories'])).toEqual([
+      { id: 'c-2', name: 'Operations', position: 1000 },
+      { id: 'c-1', name: 'Engineering', position: 2000 },
+    ]);
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
     expect(apiFetch).toHaveBeenCalledWith('/api/v1/sidebar/categories/c-2', {
@@ -148,7 +153,10 @@ describe('useReorderCategories', () => {
       method: 'PATCH',
       body: JSON.stringify({ name: undefined, position: 2000 }),
     });
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['sidebarCategories'] });
+    // Deliberately NO post-write invalidate: the eventually-consistent category
+    // list read would race the write and could revert the optimistic order (a
+    // snap-back). The optimistic cache already holds the persisted order.
+    expect(invalidateSpy).not.toHaveBeenCalledWith({ queryKey: ['sidebarCategories'] });
   });
 });
 
@@ -418,5 +426,96 @@ describe('useSetConversationCategory', () => {
 
     resolvePut(undefined);
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
+  });
+});
+
+describe('useReorderSidebar', () => {
+  beforeEach(() => {
+    vi.mocked(apiFetch).mockReset();
+    resetSidebarReorderSessionState();
+  });
+
+  const updates: SidebarReorderUpdate[] = [
+    { id: 'ch-1', kind: 'channel', categoryID: '', favorite: false, sidebarPosition: 1000 },
+    { id: 'ch-2', kind: 'channel', categoryID: '', favorite: false, sidebarPosition: 2000 },
+  ];
+
+  it('optimistically re-sorts the cache and writes each row through the per-item endpoint', async () => {
+    vi.mocked(apiFetch).mockResolvedValue(undefined);
+    const { wrapper, queryClient } = createWrapperWithClient();
+    queryClient.setQueryData(['userChannels'], [
+      { channelID: 'ch-1', channelName: 'a', sidebarPosition: 5000 },
+      { channelID: 'ch-2', channelName: 'b', sidebarPosition: 1000 },
+    ]);
+    const { result } = renderHook(() => useReorderSidebar(), { wrapper });
+
+    result.current.mutate({ updates, favoriteChanged: new Set() });
+
+    // SYNCHRONOUS optimistic patch: onMutate applies it BEFORE it awaits the
+    // query cancellation, so the cache already holds the new order on the very
+    // next line — no awaited tick. This is the snap-back guard: if the patch is
+    // moved back behind the await, the row commits at its OLD slot for one frame
+    // on release (a visible flash back to the old position) and this fails.
+    const rows = queryClient.getQueryData(['userChannels']) as Array<{ channelID: string; sidebarPosition: number }>;
+    expect(rows.find((r) => r.channelID === 'ch-1')?.sidebarPosition).toBe(1000);
+    expect(rows.find((r) => r.channelID === 'ch-2')?.sidebarPosition).toBe(2000);
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(apiFetch).toHaveBeenCalledWith('/api/v1/channels/ch-1/category', expect.objectContaining({ method: 'PUT' }));
+    expect(apiFetch).toHaveBeenCalledWith('/api/v1/channels/ch-2/category', expect.objectContaining({ method: 'PUT' }));
+    // No favorite endpoint hit when nothing flipped.
+    expect(apiFetch).not.toHaveBeenCalledWith(expect.stringContaining('/favorite'), expect.anything());
+  });
+
+  it('arms the self-echo ignore window on mutate', () => {
+    vi.mocked(apiFetch).mockResolvedValue(undefined);
+    const { wrapper } = createWrapperWithClient();
+    const { result } = renderHook(() => useReorderSidebar(), { wrapper });
+    expect(shouldRefetchSidebarForRemoteUpdate()).toBe(true);
+    result.current.mutate({ updates, favoriteChanged: new Set() });
+    expect(shouldRefetchSidebarForRemoteUpdate()).toBe(false); // suppressed
+    resetSidebarReorderSessionState();
+  });
+
+  it('hits the favorite endpoint only for the row whose favorite flipped', async () => {
+    vi.mocked(apiFetch).mockResolvedValue(undefined);
+    const { wrapper, queryClient } = createWrapperWithClient();
+    queryClient.setQueryData(['userChannels'], [{ channelID: 'ch-1', channelName: 'a' }]);
+    const { result } = renderHook(() => useReorderSidebar(), { wrapper });
+    const favUpdates: SidebarReorderUpdate[] = [
+      { id: 'ch-1', kind: 'channel', categoryID: 'work', favorite: true, sidebarPosition: 1000 },
+    ];
+    result.current.mutate({ updates: favUpdates, favoriteChanged: new Set(['ch-1']) });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(apiFetch).toHaveBeenCalledWith('/api/v1/channels/ch-1/favorite', expect.objectContaining({
+      method: 'PUT', body: JSON.stringify({ favorite: true }),
+    }));
+  });
+
+  it('rolls the cache back to the pre-drop order when a write fails', async () => {
+    vi.mocked(apiFetch).mockRejectedValue(new Error('network'));
+    const { wrapper, queryClient } = createWrapperWithClient();
+    const original = [
+      { channelID: 'ch-1', channelName: 'a', sidebarPosition: 5000 },
+      { channelID: 'ch-2', channelName: 'b', sidebarPosition: 1000 },
+    ];
+    queryClient.setQueryData(['userChannels'], original);
+    const { result } = renderHook(() => useReorderSidebar(), { wrapper });
+
+    result.current.mutate({ updates, favoriteChanged: new Set() });
+    await waitFor(() => expect(result.current.isError).toBe(true));
+
+    const rows = queryClient.getQueryData(['userChannels']) as Array<{ channelID: string; sidebarPosition: number }>;
+    expect(rows.find((r) => r.channelID === 'ch-1')?.sidebarPosition).toBe(5000);
+    expect(rows.find((r) => r.channelID === 'ch-2')?.sidebarPosition).toBe(1000);
+  });
+
+  it('markLocalSidebarReorder + reset toggle the window', () => {
+    resetSidebarReorderSessionState();
+    expect(shouldRefetchSidebarForRemoteUpdate()).toBe(true);
+    markLocalSidebarReorder();
+    expect(shouldRefetchSidebarForRemoteUpdate()).toBe(false);
+    resetSidebarReorderSessionState();
+    expect(shouldRefetchSidebarForRemoteUpdate()).toBe(true);
   });
 });

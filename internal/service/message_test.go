@@ -312,6 +312,81 @@ func TestMessageService_Send_ConversationThreadReplyDoesNotTouchActivity(t *test
 	}
 }
 
+// threadUpdateRecipients returns the set of user IDs a thread.updated event was
+// published to (per-user channel "user:<id>") and the decoded ThreadSummary of
+// the first such event.
+func threadUpdateRecipients(pub *mockPublisher) (map[string]bool, *ThreadSummary) {
+	pub.mu.Lock()
+	defer pub.mu.Unlock()
+	got := make(map[string]bool)
+	var summary *ThreadSummary
+	for _, p := range pub.published {
+		if p.event.Type != events.EventThreadUpdated {
+			continue
+		}
+		got[strings.TrimPrefix(p.channel, "user:")] = true
+		if summary == nil {
+			var s ThreadSummary
+			if err := json.Unmarshal(p.event.Data, &s); err == nil {
+				summary = &s
+			}
+		}
+	}
+	return got, summary
+}
+
+// Send's contract with the notifier: a thread reply hands over the
+// authoritative POST-increment root (the notifier derives both the alert
+// fan-out and the thread.updated audience from it — the audience matrix
+// itself is pinned in notification_test.go); a top-level send passes nil;
+// and when the reply-metadata bump fails the root is nil too, so no stale
+// replyCount is ever live-patched into /threads lists.
+func TestMessageService_Send_PassesThreadRootToNotifier(t *testing.T) {
+	svc, messages, memberships, _, _ := setupMessageService()
+	rec := &recordingNotifier{calls: make(chan notifierCall, 8)}
+	svc.SetNotifier(rec)
+	ctx := context.Background()
+	memberships.memberships["ch1#sender"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "sender", Role: model.ChannelRoleMember}
+	created := time.Date(2026, 5, 1, 10, 0, 0, 0, time.UTC)
+	messages.messages["ch1#root"] = &model.Message{ID: "root", ParentID: "ch1", AuthorID: "author", Body: "root", CreatedAt: created, ReplyCount: 2}
+
+	next := func() notifierCall {
+		t.Helper()
+		select {
+		case c := <-rec.calls:
+			return c
+		case <-time.After(2 * time.Second):
+			t.Fatal("notifier was not invoked")
+			return notifierCall{}
+		}
+	}
+
+	// Thread reply → the freshly incremented root rides along.
+	if _, err := svc.Send(ctx, "sender", "ch1", ParentChannel, "a reply", "root"); err != nil {
+		t.Fatalf("Send reply: %v", err)
+	}
+	if c := next(); c.root == nil || c.root.ID != "root" || c.root.ReplyCount != 3 {
+		t.Fatalf("thread reply notifier call = %+v, want root with ReplyCount 3", c)
+	}
+
+	// Top-level send → nil root.
+	if _, err := svc.Send(ctx, "sender", "ch1", ParentChannel, "top level", ""); err != nil {
+		t.Fatalf("Send top-level: %v", err)
+	}
+	if c := next(); c.root != nil {
+		t.Fatalf("top-level send passed root %+v, want nil", c.root)
+	}
+
+	// Metadata bump failure → reply still sends, notifier gets nil root.
+	messages.updateErr = errors.New("ddb throttled")
+	if _, err := svc.Send(ctx, "sender", "ch1", ParentChannel, "another reply", "root"); err != nil {
+		t.Fatalf("Send reply with failing metadata: %v", err)
+	}
+	if c := next(); c.root != nil {
+		t.Fatalf("failed metadata bump passed root %+v, want nil (no stale patch)", c.root)
+	}
+}
+
 func TestMessageService_Send_NotMember(t *testing.T) {
 	svc, _, _, _, _ := setupMessageService()
 	ctx := context.Background()
@@ -2044,16 +2119,22 @@ func TestMessageService_ToggleReaction_RecordsActivityOnAddOnly(t *testing.T) {
 	}
 }
 
-// recordingNotifier captures the message IDs NotifyForMessage is invoked with,
-// so a test can assert which send paths do (and do not) fan out a user-facing
-// notification. NotifyForMessage runs in a detached goroutine, hence the
-// buffered channel.
-type recordingNotifier struct {
-	calls chan string
+// recordingNotifier captures each NotifyForMessage invocation — the message ID
+// plus the threadRoot handed over — so a test can assert which send paths do
+// (and do not) fan out a user-facing notification, and that thread replies
+// carry the authoritative post-increment root. NotifyForMessage runs in a
+// detached goroutine, hence the buffered channel.
+type notifierCall struct {
+	msgID string
+	root  *model.Message
 }
 
-func (r *recordingNotifier) NotifyForMessage(_ context.Context, msg *model.Message, _ string) {
-	r.calls <- msg.ID
+type recordingNotifier struct {
+	calls chan notifierCall
+}
+
+func (r *recordingNotifier) NotifyForMessage(_ context.Context, msg *model.Message, _ string, root *model.Message) {
+	r.calls <- notifierCall{msgID: msg.ID, root: root}
 }
 
 // Reacting to a message must NEVER produce a user-facing notification (sound /
@@ -2066,7 +2147,7 @@ func (r *recordingNotifier) NotifyForMessage(_ context.Context, msg *model.Messa
 // would have landed too.
 func TestMessageService_ToggleReaction_DoesNotNotify(t *testing.T) {
 	svc, messages, memberships, _, _ := setupMessageService()
-	rec := &recordingNotifier{calls: make(chan string, 8)}
+	rec := &recordingNotifier{calls: make(chan notifierCall, 8)}
 	svc.SetNotifier(rec)
 	ctx := context.Background()
 
@@ -2086,12 +2167,12 @@ func TestMessageService_ToggleReaction_DoesNotNotify(t *testing.T) {
 	}
 
 	select {
-	case id := <-rec.calls:
-		if id == "m1" {
+	case call := <-rec.calls:
+		if call.msgID == "m1" {
 			t.Fatalf("reaction on m1 triggered a notification; reactions must never notify")
 		}
-		if id != sent.ID {
-			t.Fatalf("unexpected notification for %q, want the sent message %q", id, sent.ID)
+		if call.msgID != sent.ID {
+			t.Fatalf("unexpected notification for %q, want the sent message %q", call.msgID, sent.ID)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("positive control failed: a real Send did not notify")
@@ -2099,7 +2180,7 @@ func TestMessageService_ToggleReaction_DoesNotNotify(t *testing.T) {
 	// No further notification may arrive — in particular not the reaction's.
 	select {
 	case extra := <-rec.calls:
-		t.Fatalf("a second notification fired for %q; the reaction must not notify", extra)
+		t.Fatalf("a second notification fired for %q; the reaction must not notify", extra.msgID)
 	case <-time.After(200 * time.Millisecond):
 	}
 }

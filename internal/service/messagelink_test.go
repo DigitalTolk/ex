@@ -294,6 +294,32 @@ func TestMessageLink_Preview_AccessAndMissing(t *testing.T) {
 	}
 }
 
+// TestMessageLink_Preview_AccessibleButUnavailableMessage covers the message
+// resolution guard (GetMessage error, deleted, or system) for a viewer who DOES
+// have channel access — the membership-based AccessAndMissing cases return
+// earlier at the access check and never reach this branch.
+func TestMessageLink_Preview_AccessibleButUnavailableMessage(t *testing.T) {
+	svc := newTestMessageLinkService()
+	cases := []struct {
+		name string
+		url  string
+	}{
+		{"deleted message", "https://ex.test/channel/general#msg-del"},
+		{"system message", "https://ex.test/channel/general#msg-sys"},
+		{"missing message", "https://ex.test/channel/general#msg-ghost"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			// "viewer" is a member of the private ch-1, so access passes and the
+			// message-availability guard is what suppresses the preview.
+			p, internal := svc.Preview(context.Background(), "viewer", c.url)
+			if !internal || p != nil {
+				t.Fatalf("%s: want (nil,true), got internal=%v p=%#v", c.name, internal, p)
+			}
+		})
+	}
+}
+
 func TestMessageLink_Preview_NotInternal(t *testing.T) {
 	svc := newTestMessageLinkService()
 	cases := []string{
@@ -301,7 +327,8 @@ func TestMessageLink_Preview_NotInternal(t *testing.T) {
 		"https://ex.test/channel/general",              // no message fragment
 		"https://ex.test/channel/general#frag",         // wrong fragment form
 		"https://ex.test/channel/general#msg-",         // empty message id
-		"https://ex.test/admin#msg-m1",                 // not a channel/conversation path
+		"https://ex.test/admin#msg-m1",                 // not a channel/conversation path (1 segment)
+		"https://ex.test/foo/bar#msg-m1",               // 2 segments but unknown path prefix
 		"https://ex.test/channel/general/extra#msg-m1", // too many path segments
 		"https://ex.test/channel/#msg-m1",              // empty slug
 		"://bad",                                       // unparseable

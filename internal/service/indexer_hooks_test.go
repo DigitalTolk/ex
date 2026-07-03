@@ -439,7 +439,7 @@ type stubMessageNotifier struct {
 	parents []string
 }
 
-func (s *stubMessageNotifier) NotifyForMessage(_ context.Context, m *model.Message, parentType string) {
+func (s *stubMessageNotifier) NotifyForMessage(_ context.Context, m *model.Message, parentType string, _ *model.Message) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.calls = append(s.calls, m.ID)

@@ -160,7 +160,7 @@ func TestNotificationService_NotifyForMessage_ChannelFanout(t *testing.T) {
 	members.memberships["ch1#u-carol"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u-carol"}
 
 	msg := &model.Message{ID: "m1", ParentID: "ch1", AuthorID: "u-author", Body: "hello"}
-	svc.NotifyForMessage(ctx, msg, ParentChannel)
+	svc.NotifyForMessage(ctx, msg, ParentChannel, nil)
 
 	// Author is excluded; two recipients receive the alert.
 	if got := len(pub.published); got != 2 {
@@ -194,7 +194,7 @@ func TestNotificationService_NotifyForMessage_SendsMobilePushToSameRecipients(t 
 		members.memberships["ch1#"+uid] = &model.ChannelMembership{ChannelID: "ch1", UserID: uid}
 	}
 
-	svc.NotifyForMessage(ctx, &model.Message{ID: "m1", ParentID: "ch1", AuthorID: "u-author", Body: "hello"}, ParentChannel)
+	svc.NotifyForMessage(ctx, &model.Message{ID: "m1", ParentID: "ch1", AuthorID: "u-author", Body: "hello"}, ParentChannel, nil)
 
 	if got := len(pub.published); got != 2 {
 		t.Fatalf("websocket publish count = %d, want 2", got)
@@ -236,7 +236,7 @@ func TestNotificationService_NotifyForMessage_SkipsMobilePushForOnlineRecipients
 		members.memberships["ch1#"+uid] = &model.ChannelMembership{ChannelID: "ch1", UserID: uid}
 	}
 
-	svc.NotifyForMessage(ctx, &model.Message{ID: "m1", ParentID: "ch1", AuthorID: "u-author", Body: "hello"}, ParentChannel)
+	svc.NotifyForMessage(ctx, &model.Message{ID: "m1", ParentID: "ch1", AuthorID: "u-author", Body: "hello"}, ParentChannel, nil)
 
 	// Both recipients still get the in-app WebSocket event — presence only
 	// gates the parallel push, never the in-app banner.
@@ -309,7 +309,7 @@ func dmNotifier(t *testing.T) (*NotificationService, *signalPush) {
 
 func notifyDM(svc *NotificationService) {
 	svc.NotifyForMessage(context.Background(),
-		&model.Message{ID: "m1", ParentID: "c1", AuthorID: "u-author", Body: "incident!"}, ParentConversation)
+		&model.Message{ID: "m1", ParentID: "c1", AuthorID: "u-author", Body: "incident!"}, ParentConversation, nil)
 }
 
 // THE core fix: an "online" recipient whose desktop NEVER acks (dead/half-open
@@ -415,7 +415,7 @@ func TestNotificationService_MissingMobilePushConfigDoesNotBlockMessageDelivery(
 	members.memberships["ch1#u-author"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u-author"}
 	members.memberships["ch1#u-bob"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u-bob"}
 
-	svc.NotifyForMessage(ctx, &model.Message{ID: "m1", ParentID: "ch1", AuthorID: "u-author", Body: "hello"}, ParentChannel)
+	svc.NotifyForMessage(ctx, &model.Message{ID: "m1", ParentID: "ch1", AuthorID: "u-author", Body: "hello"}, ParentChannel, nil)
 
 	if got := len(pub.published); got != 1 {
 		t.Fatalf("publish count = %d, want 1", got)
@@ -433,7 +433,7 @@ func TestNotificationService_MobilePushFailureDoesNotBlockMessageDelivery(t *tes
 	members.memberships["ch1#u-author"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u-author"}
 	members.memberships["ch1#u-bob"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u-bob"}
 
-	svc.NotifyForMessage(ctx, &model.Message{ID: "m1", ParentID: "ch1", AuthorID: "u-author", Body: "hello"}, ParentChannel)
+	svc.NotifyForMessage(ctx, &model.Message{ID: "m1", ParentID: "ch1", AuthorID: "u-author", Body: "hello"}, ParentChannel, nil)
 
 	if got := len(pub.published); got != 1 {
 		t.Fatalf("publish count = %d, want 1", got)
@@ -458,7 +458,7 @@ func TestNotificationService_PersistsThreadNotificationState(t *testing.T) {
 	// A top-level channel message — even a @-mention that fires a desktop alert —
 	// persists NO per-user marker: the sidebar badge is driven by the durable seq
 	// count, so the O(recipients) write is gone (perf C3).
-	svc.NotifyForMessage(ctx, &model.Message{ID: "m1", ParentID: "ch1", AuthorID: "u-author", Body: "hi @[u-bob|Bob]"}, ParentChannel)
+	svc.NotifyForMessage(ctx, &model.Message{ID: "m1", ParentID: "ch1", AuthorID: "u-author", Body: "hi @[u-bob|Bob]"}, ParentChannel, nil)
 	if len(stateStore.rows) != 0 {
 		t.Fatalf("top-level channel message must persist no user-state rows, got %d", len(stateStore.rows))
 	}
@@ -471,9 +471,15 @@ func TestNotificationService_PersistsThreadNotificationState(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("SetThreadFollow: %v", err)
 	}
-	svc.NotifyForMessage(ctx, &model.Message{ID: "reply1", ParentID: "ch1", ParentMessageID: "root1", AuthorID: "u-author", Body: "reply @[u-bob|Bob]"}, ParentChannel)
+	svc.NotifyForMessage(ctx, &model.Message{ID: "reply1", ParentID: "ch1", ParentMessageID: "root1", AuthorID: "u-author", Body: "reply @[u-bob|Bob]"}, ParentChannel, nil)
 	if _, ok := stateStore.rows[stateStore.key("u-bob", model.UserStateThreadNotification, "root1")]; !ok {
 		t.Fatal("expected thread notification state for follower")
+	}
+	// Posting a reply reads the thread for YOU: the author's seen watermark
+	// advances server-side (the client relies on this and skips its own
+	// seen PUT — regression guard for one HTTP round-trip per reply).
+	if _, ok := stateStore.rows[stateStore.key("u-author", model.UserStateThreadSeen, "root1")]; !ok {
+		t.Fatal("expected author thread-seen state after posting a reply")
 	}
 }
 
@@ -495,7 +501,7 @@ func TestNotificationService_NoChannelMarker_EvenWhenDesktopAlerted(t *testing.T
 	all := model.NotificationLevelAll
 	members.userChannels = []*model.UserChannel{{UserID: "u-bob", ChannelID: "ch1", DesktopLevel: &all}}
 
-	svc.NotifyForMessage(ctx, &model.Message{ID: "m1", ParentID: "ch1", AuthorID: "u-author", Body: "hello everyone"}, ParentChannel)
+	svc.NotifyForMessage(ctx, &model.Message{ID: "m1", ParentID: "ch1", AuthorID: "u-author", Body: "hello everyone"}, ParentChannel, nil)
 
 	if len(stateStore.rows) != 0 {
 		t.Fatalf("desktop-alerted channel message must write no user-state rows (perf C3), got %d", len(stateStore.rows))
@@ -534,7 +540,7 @@ func TestNotificationService_NotifyForMessage_ThreadReply_OnlyParticipantsAndRoo
 	msgs.messages["ch1#m-r1"] = &model.Message{ID: "m-r1", ParentID: "ch1", AuthorID: "u-replier", ParentMessageID: "m-root", Body: "first"}
 
 	msg := &model.Message{ID: "m-r2", ParentID: "ch1", AuthorID: "u-replier2", ParentMessageID: "m-root", Body: "second"}
-	svc.NotifyForMessage(ctx, msg, ParentChannel)
+	svc.NotifyForMessage(ctx, msg, ParentChannel, nil)
 
 	// Expected recipients: u-root (thread root author) + u-replier
 	// (prior participant). u-replier2 is excluded as the sending author.
@@ -587,7 +593,7 @@ func TestNotificationService_NotifyForMessage_ThreadReply_IncludesExplicitFollow
 
 	svc.NotifyForMessage(ctx, &model.Message{
 		ID: "m-r1", ParentID: "ch1", AuthorID: "u-replier", ParentMessageID: "m-root", Body: "reply",
-	}, ParentChannel)
+	}, ParentChannel, nil)
 
 	kinds := publishedKinds(pub)
 	if got := kinds[pubsub.UserChannel("u-follower")]; got != NotificationKindThreadReply {
@@ -615,7 +621,7 @@ func TestNotificationService_NotifyForMessage_ThreadReply_SkipsStaleExplicitFoll
 
 	svc.NotifyForMessage(ctx, &model.Message{
 		ID: "m-r1", ParentID: "ch1", AuthorID: "u-replier", ParentMessageID: "m-root", Body: "reply",
-	}, ParentChannel)
+	}, ParentChannel, nil)
 
 	kinds := publishedKinds(pub)
 	if _, ok := kinds[pubsub.UserChannel("u-stale")]; ok {
@@ -645,7 +651,7 @@ func TestNotificationService_NotifyForMessage_ThreadReply_ExcludesUnfollowedPart
 
 	svc.NotifyForMessage(ctx, &model.Message{
 		ID: "m-r2", ParentID: "ch1", AuthorID: "u-author", ParentMessageID: "m-root", Body: "reply",
-	}, ParentChannel)
+	}, ParentChannel, nil)
 
 	kinds := publishedKinds(pub)
 	if _, ok := kinds[pubsub.UserChannel("u-replier")]; ok {
@@ -719,7 +725,7 @@ func TestNotificationService_NotifyForMessage_MemberLoadError_NotifiesNobody(t *
 	members.memberships["ch1#u-bob"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u-bob"}
 	members.listMembersErr = errors.New("dynamodb throttled")
 
-	svc.NotifyForMessage(ctx, &model.Message{ID: "m1", ParentID: "ch1", AuthorID: "u-author", Body: "deploy"}, ParentChannel)
+	svc.NotifyForMessage(ctx, &model.Message{ID: "m1", ParentID: "ch1", AuthorID: "u-author", Body: "deploy"}, ParentChannel, nil)
 
 	if got := len(publishedKinds(pub)); got != 0 {
 		t.Errorf("member-load error should resolve no audience, got %d notifications", got)
@@ -744,7 +750,7 @@ func TestNotificationService_NotifyForMessage_ThreadReply_KeywordNotifiesNonPart
 
 	svc.NotifyForMessage(ctx, &model.Message{
 		ID: "m-r1", ParentID: "ch1", AuthorID: "u-author", ParentMessageID: "m-root", Body: "we have an outage",
-	}, ParentChannel)
+	}, ParentChannel, nil)
 
 	kinds := publishedKinds(pub)
 	if _, ok := kinds[pubsub.UserChannel("u-watcher")]; !ok {
@@ -769,7 +775,7 @@ func TestNotificationService_NotifyForMessage_DMThreadReply_NotifiesConversation
 
 	svc.NotifyForMessage(ctx, &model.Message{
 		ID: "m-r1", ParentID: "conv1", AuthorID: "u-author", ParentMessageID: "m-root", Body: "reply",
-	}, ParentConversation)
+	}, ParentConversation, nil)
 
 	kinds := publishedKinds(pub)
 	if got := kinds[pubsub.UserChannel("u-bob")]; got != NotificationKindThreadReply {
@@ -804,7 +810,7 @@ func TestNotificationService_NotifyForMessage_ThreadReply_StillNotifiesExplicitM
 		ID: "m-r1", ParentID: "ch1", AuthorID: "u-replier", ParentMessageID: "m-root",
 		Body: "hey @[u-mentioned|Dave] take a look",
 	}
-	svc.NotifyForMessage(ctx, msg, ParentChannel)
+	svc.NotifyForMessage(ctx, msg, ParentChannel, nil)
 
 	got := publishedKinds(pub)
 	if got[pubsub.UserChannel("u-root")] != NotificationKindThreadReply {
@@ -834,7 +840,7 @@ func TestNotificationService_NotifyForMessage_RespectsMute(t *testing.T) {
 	}
 
 	msg := &model.Message{ID: "m1", ParentID: "ch1", AuthorID: "u-author", Body: "hi"}
-	svc.NotifyForMessage(ctx, msg, ParentChannel)
+	svc.NotifyForMessage(ctx, msg, ParentChannel, nil)
 
 	if got := len(pub.published); got != 1 {
 		t.Fatalf("publish count = %d, want 1 (muted user excluded)", got)
@@ -868,7 +874,7 @@ func TestNotificationService_NotifyForMessage_ChannelPlainMessageAtDefault_Suppr
 	members.memberships["ch1#u-author"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u-author"}
 	members.memberships["ch1#u-bob"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u-bob"}
 
-	svc.NotifyForMessage(ctx, &model.Message{ID: "m1", ParentID: "ch1", AuthorID: "u-author", Body: "hello everyone"}, ParentChannel)
+	svc.NotifyForMessage(ctx, &model.Message{ID: "m1", ParentID: "ch1", AuthorID: "u-author", Body: "hello everyone"}, ParentChannel, nil)
 
 	if got := len(pub.published); got != 0 {
 		t.Fatalf("plain channel message at default level published %d, want 0", got)
@@ -892,7 +898,7 @@ func TestNotificationService_NotifyForMessage_ChannelOverrideAllLevel_Publishes(
 		{UserID: "u-bob", ChannelID: "ch1", DesktopLevel: &all},
 	}
 
-	svc.NotifyForMessage(ctx, &model.Message{ID: "m1", ParentID: "ch1", AuthorID: "u-author", Body: "hello everyone"}, ParentChannel)
+	svc.NotifyForMessage(ctx, &model.Message{ID: "m1", ParentID: "ch1", AuthorID: "u-author", Body: "hello everyone"}, ParentChannel, nil)
 
 	if got := len(pub.published); got != 1 {
 		t.Fatalf("channel-override 'all' published %d, want 1", got)
@@ -917,7 +923,7 @@ func TestNotificationService_NotifyForMessage_DMPlainMessageAtDefault_Publishes(
 		ID: "conv1", Type: model.ConversationTypeDM, ParticipantIDs: []string{"u-author", "u-bob"},
 	}
 
-	svc.NotifyForMessage(ctx, &model.Message{ID: "m1", ParentID: "conv1", AuthorID: "u-author", Body: "yo"}, ParentConversation)
+	svc.NotifyForMessage(ctx, &model.Message{ID: "m1", ParentID: "conv1", AuthorID: "u-author", Body: "yo"}, ParentConversation, nil)
 
 	if got := len(pub.published); got != 1 {
 		t.Fatalf("DM at default level published %d, want 1", got)
@@ -939,7 +945,7 @@ func TestNotificationService_NotifyForMessage_ChannelMentionAtDefault_Publishes(
 	members.memberships["ch1#u-author"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u-author"}
 	members.memberships["ch1#u-bob"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u-bob"}
 
-	svc.NotifyForMessage(ctx, &model.Message{ID: "m1", ParentID: "ch1", AuthorID: "u-author", Body: "hey @[u-bob|Bob] look"}, ParentChannel)
+	svc.NotifyForMessage(ctx, &model.Message{ID: "m1", ParentID: "ch1", AuthorID: "u-author", Body: "hey @[u-bob|Bob] look"}, ParentChannel, nil)
 
 	if got := publishedKinds(pub)[pubsub.UserChannel("u-bob")]; got != NotificationKindMention {
 		t.Fatalf("mention at default published kind %q, want mention", got)
@@ -959,7 +965,7 @@ func TestNotificationService_NotifyForMessage_ChannelKeywordAtDefault_Publishes(
 	members.memberships["ch1#u-author"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u-author"}
 	members.memberships["ch1#u-bob"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u-bob"}
 
-	svc.NotifyForMessage(ctx, &model.Message{ID: "m1", ParentID: "ch1", AuthorID: "u-author", Body: "has anyone seen Bob today?"}, ParentChannel)
+	svc.NotifyForMessage(ctx, &model.Message{ID: "m1", ParentID: "ch1", AuthorID: "u-author", Body: "has anyone seen Bob today?"}, ParentChannel, nil)
 
 	if got := publishedKinds(pub)[pubsub.UserChannel("u-bob")]; got != NotificationKindMessage {
 		t.Fatalf("keyword hit at default published kind %q, want message", got)
@@ -990,7 +996,7 @@ func mobileLevelSetup(t *testing.T, mobile model.MobileNotificationLevel) (*Noti
 func TestNotificationService_MobileLevelAll_PushesPlainChannelMessage(t *testing.T) {
 	svc, pub, push, _, _, _ := mobileLevelSetup(t, model.MobileNotificationAll)
 	svc.NotifyForMessage(context.Background(),
-		&model.Message{ID: "m1", ParentID: "ch1", AuthorID: "u-author", Body: "deploy started"}, ParentChannel)
+		&model.Message{ID: "m1", ParentID: "ch1", AuthorID: "u-author", Body: "deploy started"}, ParentChannel, nil)
 
 	// Desktop is quiet (mentions-only) so no banner; mobile is "all" so it pushes.
 	if len(pub.published) != 0 {
@@ -1004,7 +1010,7 @@ func TestNotificationService_MobileLevelAll_PushesPlainChannelMessage(t *testing
 func TestNotificationService_MobileLevelMentions_SuppressesPlainChannelMessage(t *testing.T) {
 	svc, pub, push, _, _, _ := mobileLevelSetup(t, model.MobileNotificationMentions)
 	svc.NotifyForMessage(context.Background(),
-		&model.Message{ID: "m1", ParentID: "ch1", AuthorID: "u-author", Body: "deploy started"}, ParentChannel)
+		&model.Message{ID: "m1", ParentID: "ch1", AuthorID: "u-author", Body: "deploy started"}, ParentChannel, nil)
 
 	if len(pub.published) != 0 {
 		t.Fatalf("desktop published %d, want 0", len(pub.published))
@@ -1017,7 +1023,7 @@ func TestNotificationService_MobileLevelMentions_SuppressesPlainChannelMessage(t
 func TestNotificationService_MobileLevelMentions_PushesAnExplicitMention(t *testing.T) {
 	svc, pub, push, _, _, _ := mobileLevelSetup(t, model.MobileNotificationMentions)
 	svc.NotifyForMessage(context.Background(),
-		&model.Message{ID: "m1", ParentID: "ch1", AuthorID: "u-author", Body: "paging @[u-bob|Bob]"}, ParentChannel)
+		&model.Message{ID: "m1", ParentID: "ch1", AuthorID: "u-author", Body: "paging @[u-bob|Bob]"}, ParentChannel, nil)
 
 	// An explicit @-mention is eligible at the mentions level on BOTH surfaces.
 	if got := publishedKinds(pub)[pubsub.UserChannel("u-bob")]; got != NotificationKindMention {
@@ -1032,7 +1038,7 @@ func TestNotificationService_NotifyForMessage_SkipsSystemMessages(t *testing.T) 
 	svc, pub, _, _, _, _ := setupNotifier(t)
 	ctx := context.Background()
 	msg := &model.Message{ID: "m1", ParentID: "ch1", AuthorID: "u-author", Body: "X joined", System: true}
-	svc.NotifyForMessage(ctx, msg, ParentChannel)
+	svc.NotifyForMessage(ctx, msg, ParentChannel, nil)
 	if len(pub.published) != 0 {
 		t.Errorf("system messages must not produce notifications, got %d", len(pub.published))
 	}
@@ -1040,19 +1046,19 @@ func TestNotificationService_NotifyForMessage_SkipsSystemMessages(t *testing.T) 
 
 func TestNotificationService_NotifyForMessage_SkipsNilAndBrokenAudience(t *testing.T) {
 	svc, pub, members, conv, _, _ := setupNotifier(t)
-	svc.NotifyForMessage(context.Background(), nil, ParentChannel)
+	svc.NotifyForMessage(context.Background(), nil, ParentChannel, nil)
 	if len(pub.published) != 0 {
 		t.Fatalf("nil message published %d notifications", len(pub.published))
 	}
 
 	members.listMembersErr = errors.New("members down")
-	svc.NotifyForMessage(context.Background(), &model.Message{ID: "m1", ParentID: "ch1", AuthorID: "u-author", Body: "hello"}, ParentChannel)
+	svc.NotifyForMessage(context.Background(), &model.Message{ID: "m1", ParentID: "ch1", AuthorID: "u-author", Body: "hello"}, ParentChannel, nil)
 	if len(pub.published) != 0 {
 		t.Fatalf("member load error published %d notifications", len(pub.published))
 	}
 
 	conv.getErr = errors.New("conversation down")
-	svc.NotifyForMessage(context.Background(), &model.Message{ID: "m2", ParentID: "c1", AuthorID: "u-author", Body: "hello"}, ParentConversation)
+	svc.NotifyForMessage(context.Background(), &model.Message{ID: "m2", ParentID: "c1", AuthorID: "u-author", Body: "hello"}, ParentConversation, nil)
 	if len(pub.published) != 0 {
 		t.Fatalf("conversation load error published %d notifications", len(pub.published))
 	}
@@ -1070,7 +1076,7 @@ func TestNotificationService_NotifyForMessage_Conversation(t *testing.T) {
 	}
 
 	msg := &model.Message{ID: "m1", ParentID: "c1", AuthorID: "u-author", Body: "hey"}
-	svc.NotifyForMessage(ctx, msg, ParentConversation)
+	svc.NotifyForMessage(ctx, msg, ParentConversation, nil)
 
 	if got := len(pub.published); got != 1 {
 		t.Fatalf("publish count = %d, want 1", got)
@@ -1108,7 +1114,7 @@ func TestNotificationService_NotifyForMessage_ThreadReplyKind(t *testing.T) {
 		Body:            "reply",
 		ParentMessageID: "m1",
 	}
-	svc.NotifyForMessage(ctx, msg, ParentConversation)
+	svc.NotifyForMessage(ctx, msg, ParentConversation, nil)
 
 	if len(pub.published) != 1 {
 		t.Fatalf("publish count = %d, want 1", len(pub.published))
@@ -1208,13 +1214,14 @@ func TestNotificationService_WebhookAttachmentNoFallback_PopupNotEmpty(t *testin
 	ctx := context.Background()
 	chans.channels["ch1"] = &model.Channel{ID: "ch1", Name: "general", Slug: "general", Type: model.ChannelTypePublic}
 	users.users["u-author"] = &model.User{ID: "u-author", DisplayName: "Alice"}
+	seedAllLevel(users, "u-bob")
 	members.memberships["ch1#u-author"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u-author"}
 	members.memberships["ch1#u-bob"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u-bob"}
 
 	svc.NotifyForMessage(ctx, &model.Message{
 		ID: "m1", ParentID: "ch1", AuthorID: "u-author", WebhookUsername: "CI Bot",
 		MessageAttachments: []model.MessageAttachment{{Title: "Build #42 failed", Text: "main is red"}},
-	}, ParentChannel)
+	}, ParentChannel, nil)
 
 	notif := publishedNotifications(pub)[pubsub.UserChannel("u-bob")]
 	if notif.Body != "Build #42 failed — main is red" {
@@ -1244,7 +1251,7 @@ func TestNotifyForMessage_ThreadReply_DeepLinkOpensThread(t *testing.T) {
 		ParentMessageID: "root-XYZ",
 		Body:            "hi",
 	}
-	svc.NotifyForMessage(context.Background(), msg, ParentChannel)
+	svc.NotifyForMessage(context.Background(), msg, ParentChannel, nil)
 
 	var notif Notification
 	for _, p := range pub.published {
@@ -1395,7 +1402,7 @@ func TestNotifyForMessage_DirectMention_NotifiesUserAsMentionKind(t *testing.T) 
 		ID: "m1", ParentID: "ch1", AuthorID: "u-author",
 		Body: "hey @[u-bob|Bob], can you check this?",
 	}
-	svc.NotifyForMessage(ctx, msg, ParentChannel)
+	svc.NotifyForMessage(ctx, msg, ParentChannel, nil)
 
 	kinds := publishedKinds(pub)
 	if got := kinds[pubsub.UserChannel("u-bob")]; got != NotificationKindMention {
@@ -1428,7 +1435,7 @@ func TestNotifyForMessage_DirectMention_BypassesMute(t *testing.T) {
 		ID: "m1", ParentID: "ch1", AuthorID: "u-author",
 		Body: "@[u-bob|Bob] urgent",
 	}
-	svc.NotifyForMessage(ctx, msg, ParentChannel)
+	svc.NotifyForMessage(ctx, msg, ParentChannel, nil)
 
 	kinds := publishedKinds(pub)
 	if got := kinds[pubsub.UserChannel("u-bob")]; got != NotificationKindMention {
@@ -1450,7 +1457,7 @@ func TestNotifyForMessage_AtAll_NotifiesAllMembersAsMention(t *testing.T) {
 		ID: "m1", ParentID: "ch1", AuthorID: "u-author",
 		Body: "@all please review",
 	}
-	svc.NotifyForMessage(ctx, msg, ParentChannel)
+	svc.NotifyForMessage(ctx, msg, ParentChannel, nil)
 
 	kinds := publishedKinds(pub)
 	for _, uid := range []string{"u-bob", "u-carol"} {
@@ -1473,7 +1480,7 @@ func TestNotifyForMessage_AtAll_NotificationKeepsGroupMentionCopy(t *testing.T) 
 		ID: "m1", ParentID: "ch1", AuthorID: "u-author",
 		Body: "@all please review",
 	}
-	svc.NotifyForMessage(ctx, msg, ParentChannel)
+	svc.NotifyForMessage(ctx, msg, ParentChannel, nil)
 
 	notifs := publishedNotifications(pub)
 	got := notifs[pubsub.UserChannel("u-bob")]
@@ -1507,7 +1514,7 @@ func TestNotifyForMessage_AtAll_RespectsMute(t *testing.T) {
 		ID: "m1", ParentID: "ch1", AuthorID: "u-author",
 		Body: "@all heads up",
 	}
-	svc.NotifyForMessage(ctx, msg, ParentChannel)
+	svc.NotifyForMessage(ctx, msg, ParentChannel, nil)
 
 	kinds := publishedKinds(pub)
 	if _, ok := kinds[pubsub.UserChannel("u-bob")]; ok {
@@ -1536,7 +1543,7 @@ func TestNotifyForMessage_AtHere_OnlyOnlineMembers(t *testing.T) {
 		ID: "m1", ParentID: "ch1", AuthorID: "u-author",
 		Body: "@here anyone?",
 	}
-	svc.NotifyForMessage(ctx, msg, ParentChannel)
+	svc.NotifyForMessage(ctx, msg, ParentChannel, nil)
 
 	kinds := publishedKinds(pub)
 	if got := kinds[pubsub.UserChannel("u-bob")]; got != NotificationKindMention {
@@ -1563,7 +1570,7 @@ func TestNotifyForMessage_AtHere_NotificationKeepsGroupMentionCopy(t *testing.T)
 		ID: "m1", ParentID: "ch1", AuthorID: "u-author",
 		Body: "@here anyone?",
 	}
-	svc.NotifyForMessage(ctx, msg, ParentChannel)
+	svc.NotifyForMessage(ctx, msg, ParentChannel, nil)
 
 	notifs := publishedNotifications(pub)
 	got := notifs[pubsub.UserChannel("u-bob")]
@@ -1593,7 +1600,7 @@ func TestNotifyForMessage_AtHere_NoPresenceLookup_NoOp(t *testing.T) {
 		ID: "m1", ParentID: "ch1", AuthorID: "u-author",
 		Body: "@here ?",
 	}
-	svc.NotifyForMessage(ctx, msg, ParentChannel)
+	svc.NotifyForMessage(ctx, msg, ParentChannel, nil)
 
 	kinds := publishedKinds(pub)
 	for ch, kind := range kinds {
@@ -1619,7 +1626,7 @@ func TestNotifyForMessage_AuthorNeverNotifiedByOwnMention(t *testing.T) {
 		ID: "m1", ParentID: "ch1", AuthorID: "u-author",
 		Body: "@[u-author|Alice] @here @all",
 	}
-	svc.NotifyForMessage(ctx, msg, ParentChannel)
+	svc.NotifyForMessage(ctx, msg, ParentChannel, nil)
 
 	kinds := publishedKinds(pub)
 	if _, ok := kinds[pubsub.UserChannel("u-author")]; ok {
@@ -1642,7 +1649,7 @@ func TestNotifyForMessage_MentionTakesPrecedenceOverRegularMessage(t *testing.T)
 		ID: "m1", ParentID: "ch1", AuthorID: "u-author",
 		Body: "hi @[u-bob|Bob]",
 	}
-	svc.NotifyForMessage(ctx, msg, ParentChannel)
+	svc.NotifyForMessage(ctx, msg, ParentChannel, nil)
 
 	bobChan := pubsub.UserChannel("u-bob")
 	count := 0
@@ -1673,7 +1680,7 @@ func TestNotifyForMessage_MentionInDM_StillWorks(t *testing.T) {
 		ID: "m1", ParentID: "c1", AuthorID: "u-author",
 		Body: "@[u-other|Other] please look",
 	}
-	svc.NotifyForMessage(ctx, msg, ParentConversation)
+	svc.NotifyForMessage(ctx, msg, ParentConversation, nil)
 
 	kinds := publishedKinds(pub)
 	if got := kinds[pubsub.UserChannel("u-other")]; got != NotificationKindMention {
@@ -1695,7 +1702,7 @@ func TestNotifyForMessage_AtAll_InGroupConversation(t *testing.T) {
 		ID: "m1", ParentID: "c1", AuthorID: "u-author",
 		Body: "@all heads up",
 	}
-	svc.NotifyForMessage(ctx, msg, ParentConversation)
+	svc.NotifyForMessage(ctx, msg, ParentConversation, nil)
 
 	kinds := publishedKinds(pub)
 	for _, uid := range []string{"u-x", "u-y"} {
@@ -1718,7 +1725,7 @@ func TestNotifyForMessage_MentionTitle_IncludesChannelName(t *testing.T) {
 		ID: "m1", ParentID: "ch1", AuthorID: "u-author",
 		Body: "@[u-bob|Bob] hi",
 	}
-	svc.NotifyForMessage(ctx, msg, ParentChannel)
+	svc.NotifyForMessage(ctx, msg, ParentChannel, nil)
 
 	for _, p := range pub.published {
 		if p.channel != pubsub.UserChannel("u-bob") {
@@ -1743,7 +1750,7 @@ func TestNotificationService_WebhookUsernameAndFallbackBody(t *testing.T) {
 	ctx := context.Background()
 
 	chans.channels["ch1"] = &model.Channel{ID: "ch1", Name: "general", Slug: "general", Type: model.ChannelTypePublic}
-	users.users["u-author"] = &model.User{ID: "u-author", DisplayName: "Alice (creator)"}
+	seedAllLevel(users, "u-author", "u-bob")
 	for _, uid := range []string{"u-author", "u-bob"} {
 		members.memberships["ch1#"+uid] = &model.ChannelMembership{ChannelID: "ch1", UserID: uid}
 	}
@@ -1754,11 +1761,11 @@ func TestNotificationService_WebhookUsernameAndFallbackBody(t *testing.T) {
 		ID: "m1", ParentID: "ch1", AuthorID: "u-author",
 		WebhookUsername:    "CI Bot",
 		MessageAttachments: []model.MessageAttachment{{Fallback: "build failed"}},
-	}, ParentChannel)
+	}, ParentChannel, nil)
 
-	// Webhook posts notify EVERY member, including u-author — the webhook's
-	// creator wired up the alert and wants it, they didn't write the message.
-	// (A regular message would exclude the author, leaving only u-bob.)
+	// Both members opted into "all messages". The creator is a normal
+	// recipient too: the webhook sentinel authored the post, so u-author is
+	// NOT excluded the way a real message author would be.
 	if len(push.calls) != 2 {
 		t.Fatalf("push count = %d, want 2 (both members incl. webhook creator)", len(push.calls))
 	}
@@ -1778,5 +1785,181 @@ func TestNotificationService_WebhookUsernameAndFallbackBody(t *testing.T) {
 	}
 	if !strings.Contains(notif.Title, "CI Bot") {
 		t.Fatalf("notification title = %q, want webhook username", notif.Title)
+	}
+}
+
+// Regression: webhook posts must respect each recipient's notification level.
+// A forceAll flag used to bypass the level machinery and alert every non-muted
+// member even when they had chosen the quiet "mentions, DMs & keywords" level
+// for the channel — a webhook post is gated exactly like a regular message.
+func TestNotifyForMessage_Webhook_RespectsNotificationLevel(t *testing.T) {
+	svc, pub, members, _, chans, users := setupNotifier(t)
+	ctx := context.Background()
+
+	chans.channels["ch1"] = &model.Channel{ID: "ch1", Name: "alerts", Slug: "alerts", Type: model.ChannelTypePublic}
+	for _, uid := range []string{"u-quiet", "u-keyword", "u-all", "u-muted"} {
+		members.memberships["ch1#"+uid] = &model.ChannelMembership{ChannelID: "ch1", UserID: uid}
+	}
+	// u-quiet stays on the quiet default (no saved settings); u-keyword is
+	// quiet but the post matches one of their keywords; u-all opted into
+	// "all messages"; u-muted opted into "all" but muted the channel.
+	users.users["u-keyword"] = &model.User{ID: "u-keyword", DisplayName: "K",
+		NotificationSettings: &model.NotificationSettings{
+			DesktopLevel: model.NotificationLevelMentions,
+			Keywords:     []string{"deploy"},
+		}}
+	seedAllLevel(users, "u-all", "u-muted")
+	members.userChannels = []*model.UserChannel{
+		{UserID: "u-muted", ChannelID: "ch1", Muted: true},
+	}
+
+	svc.NotifyForMessage(ctx, &model.Message{
+		ID: "m1", ParentID: "ch1", AuthorID: "webhook", WebhookUsername: "CI Bot",
+		Body: "deploy finished",
+	}, ParentChannel, nil)
+
+	got := publishedNotifications(pub)
+	if _, ok := got[pubsub.UserChannel("u-quiet")]; ok {
+		t.Error("quiet-level member was notified for a webhook post — the level must gate webhooks like any message")
+	}
+	if _, ok := got[pubsub.UserChannel("u-muted")]; ok {
+		t.Error("muted member was notified for a webhook post")
+	}
+	if _, ok := got[pubsub.UserChannel("u-keyword")]; !ok {
+		t.Error("keyword match did not alert on a webhook post")
+	}
+	if _, ok := got[pubsub.UserChannel("u-all")]; !ok {
+		t.Error(`"all messages" member was not alerted for a webhook post`)
+	}
+}
+
+// The thread.updated audience — everyone whose /threads list shows this
+// thread. Regression matrix for the two classes the old MessageService
+// copy of these rules MISSED (follow-all-threads users and bystanders
+// pulled in by this reply's own notification), alongside the invariants
+// carried over from that copy: reply author included even past an
+// unfollow, explicit followers included, unfollowed repliers and
+// departed followers excluded, quiet bystanders excluded.
+func TestNotifyForMessage_ThreadUpdated_AudienceMatrix(t *testing.T) {
+	svc, pub, members, _, chans, users, msgs, follows := setupNotifierWithMessagesAndFollows(t)
+	ctx := context.Background()
+
+	chans.channels["ch1"] = &model.Channel{ID: "ch1", Name: "general", Slug: "general"}
+	all := []string{"sender", "root-author", "replier", "follower", "bystander", "unfollowed-replier", "follow-all", "pulled-in"}
+	for _, uid := range all {
+		members.memberships["ch1#"+uid] = &model.ChannelMembership{ChannelID: "ch1", UserID: uid}
+	}
+	users.users["sender"] = &model.User{ID: "sender", DisplayName: "Sender"}
+	// follow-all opted into following every thread; quiet level otherwise.
+	users.users["follow-all"] = &model.User{ID: "follow-all", DisplayName: "FA",
+		NotificationSettings: &model.NotificationSettings{
+			DesktopLevel:     model.NotificationLevelMentions,
+			ThreadReplies:    true,
+			FollowAllThreads: true,
+		}}
+	created := time.Date(2026, 5, 1, 10, 0, 0, 0, time.UTC)
+	msgs.messages["ch1#root"] = &model.Message{ID: "root", ParentID: "ch1", AuthorID: "root-author", Body: "root text", CreatedAt: created, ReplyCount: 2}
+	msgs.messages["ch1#old-1"] = &model.Message{ID: "old-1", ParentID: "ch1", ParentMessageID: "root", AuthorID: "replier", CreatedAt: created.Add(time.Minute)}
+	msgs.messages["ch1#old-2"] = &model.Message{ID: "old-2", ParentID: "ch1", ParentMessageID: "root", AuthorID: "unfollowed-replier", CreatedAt: created.Add(2 * time.Minute)}
+	for _, f := range []*model.ThreadFollow{
+		{UserID: "follower", ParentID: "ch1", ThreadRootID: "root", Following: true},
+		{UserID: "left-follower", ParentID: "ch1", ThreadRootID: "root", Following: true}, // not a member anymore
+		{UserID: "unfollowed-replier", ParentID: "ch1", ThreadRootID: "root", Following: false},
+		{UserID: "sender", ParentID: "ch1", ThreadRootID: "root", Following: false}, // posting re-opts them in
+	} {
+		if err := follows.SetThreadFollow(ctx, f); err != nil {
+			t.Fatalf("SetThreadFollow: %v", err)
+		}
+	}
+
+	lastReply := created.Add(3 * time.Minute)
+	updatedRoot := &model.Message{ID: "root", ParentID: "ch1", AuthorID: "root-author", Body: "root text", CreatedAt: created, ReplyCount: 3, LastReplyAt: &lastReply}
+	// The reply @-mentions "pulled-in", a bystander: the mention alert gives
+	// them a notification row, so their /threads list gains this thread and
+	// they must receive the live patch too.
+	msg := &model.Message{
+		ID: "m-new", ParentID: "ch1", ParentMessageID: "root", AuthorID: "sender",
+		Body: "a reply for @[pulled-in|PI]", CreatedAt: lastReply,
+	}
+	svc.NotifyForMessage(ctx, msg, ParentChannel, updatedRoot)
+
+	got, summary := threadUpdateRecipients(pub)
+	for _, want := range []string{"sender", "root-author", "replier", "follower", "follow-all", "pulled-in"} {
+		if !got[want] {
+			t.Errorf("thread.updated missing for %q (got %v)", want, got)
+		}
+	}
+	for _, no := range []string{"bystander", "left-follower", "unfollowed-replier"} {
+		if got[no] {
+			t.Errorf("did not expect thread.updated for %q", no)
+		}
+	}
+	if summary == nil {
+		t.Fatal("no thread.updated payload captured")
+	}
+	if summary.ThreadRootID != "root" || summary.RootAuthorID != "root-author" || summary.RootBody != "root text" {
+		t.Errorf("summary root fields = %+v", summary)
+	}
+	if summary.ReplyCount != 3 {
+		t.Errorf("ReplyCount = %d, want 3", summary.ReplyCount)
+	}
+	if !summary.LatestActivityAt.Equal(lastReply) {
+		t.Errorf("LatestActivityAt = %v, want LastReplyAt %v", summary.LatestActivityAt, lastReply)
+	}
+}
+
+// Without an authoritative root (IncrementReplyMetadata failed) no
+// thread.updated may be published — a stale replyCount must never be
+// live-patched — while the reply notifications themselves still fire.
+func TestNotifyForMessage_ThreadUpdated_NilRootSkipsPatch(t *testing.T) {
+	svc, pub, members, _, chans, users, msgs, _ := setupNotifierWithMessagesAndFollows(t)
+	ctx := context.Background()
+	chans.channels["ch1"] = &model.Channel{ID: "ch1", Name: "general", Slug: "general"}
+	for _, uid := range []string{"sender", "root-author"} {
+		members.memberships["ch1#"+uid] = &model.ChannelMembership{ChannelID: "ch1", UserID: uid}
+	}
+	seedAllLevel(users, "root-author")
+	created := time.Date(2026, 5, 1, 10, 0, 0, 0, time.UTC)
+	msgs.messages["ch1#root"] = &model.Message{ID: "root", ParentID: "ch1", AuthorID: "root-author", Body: "root", CreatedAt: created, ReplyCount: 1}
+
+	msg := &model.Message{ID: "m-new", ParentID: "ch1", ParentMessageID: "root", AuthorID: "sender", Body: "reply"}
+	svc.NotifyForMessage(ctx, msg, ParentChannel, nil)
+
+	if got, _ := threadUpdateRecipients(pub); len(got) != 0 {
+		t.Fatalf("thread.updated published to %v despite nil root", got)
+	}
+	if _, ok := publishedNotifications(pub)[pubsub.UserChannel("root-author")]; !ok {
+		t.Fatal("reply notification must still fire when the metadata bump failed")
+	}
+}
+
+// Conversation thread replies notify EVERY participant (DMs bypass the
+// level machinery), and each notified recipient gains a thread-
+// notification row that surfaces the thread in their /threads list — so
+// all of them receive the live thread.updated patch too, including a
+// participant who never posted in the thread (the old MessageService
+// audience copy wrongly excluded them, leaving their freshly-added
+// /threads row stale). With no LastReplyAt on the root the summary falls
+// back to the root CreatedAt.
+func TestNotifyForMessage_ThreadUpdated_ConversationParticipants(t *testing.T) {
+	svc, pub, _, conv, _, users, msgs, _ := setupNotifierWithMessagesAndFollows(t)
+	ctx := context.Background()
+	conv.conversations["conv1"] = &model.Conversation{ID: "conv1", Type: model.ConversationTypeGroup, ParticipantIDs: []string{"u-1", "u-2", "u-3"}}
+	users.users["u-1"] = &model.User{ID: "u-1", DisplayName: "One"}
+	created := time.Date(2026, 5, 1, 10, 0, 0, 0, time.UTC)
+	msgs.messages["conv1#root"] = &model.Message{ID: "root", ParentID: "conv1", AuthorID: "u-2", Body: "root", CreatedAt: created}
+
+	root := &model.Message{ID: "root", ParentID: "conv1", AuthorID: "u-2", Body: "root", CreatedAt: created, ReplyCount: 1}
+	msg := &model.Message{ID: "m-r", ParentID: "conv1", ParentMessageID: "root", AuthorID: "u-1", Body: "reply"}
+	svc.NotifyForMessage(ctx, msg, ParentConversation, root)
+
+	got, summary := threadUpdateRecipients(pub)
+	for _, want := range []string{"u-1", "u-2", "u-3"} {
+		if !got[want] {
+			t.Fatalf("thread.updated = %v, want all participants (%s missing)", got, want)
+		}
+	}
+	if summary == nil || !summary.LatestActivityAt.Equal(created) {
+		t.Fatalf("LatestActivityAt = %+v, want CreatedAt fallback %v", summary, created)
 	}
 }

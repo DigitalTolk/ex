@@ -1,6 +1,6 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { render } from 'vitest-browser-react';
-import { BrowserRouter, MemoryRouter } from 'react-router-dom';
+import { BrowserRouter, MemoryRouter, useLocation } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Sidebar } from './Sidebar';
 import type { User, UserChannel, UserConversation, SidebarCategory } from '@/types';
@@ -135,6 +135,7 @@ vi.mock('@/hooks/useChannels', () => ({
 }));
 
 vi.mock('@/hooks/useConversations', () => ({
+  useOpenDM: () => ({ openDM: vi.fn(), isPending: false }),
   useUserConversations: () => ({
     data: mockConversationsState.data,
     isError: mockConversationsState.isError,
@@ -168,11 +169,15 @@ let mockUserState: {
   threadSeen: {},
 };
 vi.mock('@/hooks/useUserState', () => ({
+  markLocalUserStateWrite: vi.fn(),
+  shouldRefetchUserStateForRemoteUpdate: vi.fn(() => true),
+  resetUserStateSessionState: vi.fn(),
   useUserState: () => ({ data: mockUserState }),
 }));
 
 let mockDrafts: Array<{ parentID: string; parentType: string }> = [];
 vi.mock('@/hooks/useDrafts', () => ({
+  markLocalDraftClearForSend: vi.fn(),
   useDrafts: () => ({ data: mockDrafts }),
 }));
 
@@ -193,6 +198,10 @@ const createCategoryMutate = vi.fn((_name: string, opts?: { onSuccess?: () => vo
 });
 const deleteCategoryMutate = vi.fn();
 vi.mock('@/hooks/useSidebar', () => ({
+  useReorderSidebar: () => ({ mutate: vi.fn(), isPending: false }),
+  markLocalSidebarReorder: vi.fn(),
+  shouldRefetchSidebarForRemoteUpdate: vi.fn(() => true),
+  resetSidebarReorderSessionState: vi.fn(),
   useCategories: () => ({ data: mockCategories }),
   useCreateCategory: () => ({ mutate: createCategoryMutate, isPending: false }),
   useDeleteCategory: () => ({ mutate: deleteCategoryMutate, isPending: false }),
@@ -305,6 +314,29 @@ function RouteFrame({ path }: { path: string }) {
         >
           <Sidebar onClose={vi.fn()} />
         </div>
+      </MemoryRouter>
+    </QueryClientProvider>
+  );
+}
+
+// Surfaces the current pathname so a click that calls navigate() can be
+// asserted without touching the real window history.
+function LocationProbe() {
+  const loc = useLocation();
+  return <div data-testid="loc">{loc.pathname}</div>;
+}
+
+function MobileNavFrame() {
+  return (
+    <QueryClientProvider client={queryClient()}>
+      <MemoryRouter>
+        <div
+          className="browser-sidebar-frame"
+          style={{ height: 600, width: Math.min(window.innerWidth, 360), background: '#1a1d21', overflow: 'hidden' }}
+        >
+          <Sidebar onClose={vi.fn()} />
+        </div>
+        <LocationProbe />
       </MemoryRouter>
     </QueryClientProvider>
   );
@@ -448,6 +480,32 @@ describe('Sidebar browser render — rich fixtures', () => {
     currentUser = memberUser;
     await render(<Frame />);
     expect(document.querySelector('[data-testid="sidebar-create-channel"]')).not.toBeNull();
+  });
+
+  it('exposes the New-DM "+" as a real tap target on mobile and navigates to /conversations/new', async () => {
+    if (window.innerWidth > 767) return;
+    await render(<MobileNavFrame />);
+    const plus = document.querySelector('[data-testid="sidebar-new-dm"]') as HTMLElement;
+    expect(plus).not.toBeNull();
+    // Visible + tappable on touch (no hover to reveal it).
+    expect(getComputedStyle(plus).opacity).toBe('1');
+    // The sort menu stays desktop hover-only, so it's hidden on mobile — the
+    // DM header shows only the "+".
+    const sort = document.querySelector('[data-testid="sidebar-dm-sort-menu"]') as HTMLElement;
+    expect(getComputedStyle(sort).opacity).toBe('0');
+
+    plus.click();
+    await vi.waitFor(() => {
+      expect(document.querySelector('[data-testid="loc"]')?.textContent).toBe('/conversations/new');
+    });
+  });
+
+  it('exposes the create-channel "+" as a visible tap target on mobile', async () => {
+    if (window.innerWidth > 767) return;
+    await render(<Frame />);
+    const plus = document.querySelector('[data-testid="sidebar-create-channel"]') as HTMLElement;
+    expect(plus).not.toBeNull();
+    expect(getComputedStyle(plus).opacity).toBe('1');
   });
 
   it('paints the favorited and unread channels in the desktop viewport', async () => {

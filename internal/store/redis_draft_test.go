@@ -151,3 +151,62 @@ func TestRedisDraftStore_ClientErrors(t *testing.T) {
 		t.Error("Delete should error when Redis is down")
 	}
 }
+
+// Regression for the "Redis memory only ever grows" leak: draft IDs are
+// deterministic per scope, so every scope a user ever sent in left a
+// PERMANENT tombstone field in draftts:{u} (and every send refreshed the
+// hash TTL, so it never expired). Aged pure tombstones must be swept by
+// the next write; fresh tombstones and live drafts must survive.
+func TestRedisDraftStore_SweepsAgedTombstones(t *testing.T) {
+	s, mr := setupRedisDraftStore(t)
+	ctx := context.Background()
+	base := time.Now()
+	s.now = func() time.Time { return base }
+
+	// A cleared draft (the send path) leaves a tombstone…
+	if err := s.Delete(ctx, "u1", "scope-old", base.UnixMilli()); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	// …and a live draft plus a second, recent tombstone exist alongside it.
+	if err := s.Upsert(ctx, &model.MessageDraft{ID: "scope-live", UserID: "u1", Body: "wip", Ts: base.UnixMilli()}); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+	if err := s.Delete(ctx, "u1", "scope-fresh", base.Add(time.Hour).UnixMilli()); err != nil {
+		t.Fatalf("Delete fresh: %v", err)
+	}
+	if got := mr.HGet("draftts:u1", "scope-old"); got == "" {
+		t.Fatal("precondition: tombstone for scope-old must exist")
+	}
+
+	// Eight days later, ANY write sweeps the aged tombstone…
+	s.now = func() time.Time { return base.Add(8 * 24 * time.Hour) }
+	if err := s.Delete(ctx, "u1", "scope-new", base.Add(8*24*time.Hour).UnixMilli()); err != nil {
+		t.Fatalf("Delete new: %v", err)
+	}
+	if got := mr.HGet("draftts:u1", "scope-old"); got != "" {
+		t.Fatalf("aged tombstone must be swept, still present: %q", got)
+	}
+	if got := mr.HGet("draftts:u1", "scope-fresh"); got != "" {
+		t.Fatalf("aged tombstone scope-fresh must be swept too, still present: %q", got)
+	}
+	// The live draft keeps BOTH its content and its ts (it is not a tombstone)…
+	if got := mr.HGet("draft:u1", "scope-live"); got == "" {
+		t.Fatal("live draft content must never be swept")
+	}
+	if got := mr.HGet("draftts:u1", "scope-live"); got == "" {
+		t.Fatal("live draft ts must never be swept")
+	}
+	// …and the just-written tombstone survives (it is inside the window).
+	if got := mr.HGet("draftts:u1", "scope-new"); got == "" {
+		t.Fatal("fresh tombstone must survive the sweep")
+	}
+
+	// LWW is untouched for surviving tombstones: a delayed save older than
+	// the fresh tombstone still loses.
+	if err := s.Upsert(ctx, &model.MessageDraft{ID: "scope-new", UserID: "u1", Body: "stale", Ts: base.UnixMilli()}); err != nil {
+		t.Fatalf("Upsert stale: %v", err)
+	}
+	if got := mr.HGet("draft:u1", "scope-new"); got != "" {
+		t.Fatalf("delayed save must not resurrect a sent draft, got %q", got)
+	}
+}

@@ -31,6 +31,7 @@ import { renderMarkdown } from '@/lib/markdown';
 import { isEmojiOnlyMessage } from '@/lib/emoji-shortcodes';
 import { recordEmojiUse } from '@/lib/emoji-frequency';
 import { blurActiveInput } from '@/lib/blur-input';
+import { useLongPress } from '@/hooks/useLongPress';
 import { buildChannelHref, buildConversationHref } from '@/lib/message-deeplink';
 import { useTagOpen } from '@/context/TagSearchContext';
 import { EmojiGlyph } from '@/components/EmojiGlyph';
@@ -45,7 +46,6 @@ import { useIsMobile } from '@/hooks/useIsMobile';
 import { motion } from 'motion/react';
 import { useSwipeDismiss } from '@/hooks/useSwipeDismiss';
 import { useTransientOverlayCleanup } from '@/hooks/useTransientOverlayCleanup';
-import { triggerMessageActionHaptic } from '@/lib/haptics';
 import type { Message, UserStatus } from '@/types';
 
 // Module-level Set so MessageList/ThreadPanel don't need to thread a
@@ -143,7 +143,6 @@ function MessageItemImpl({
   const [mobileActionsOpen, setMobileActionsOpen] = useState(false);
   const [mobileActionsSuppressed, setMobileActionsSuppressed] = useState(false);
   const [mobileReactionPickerOpen, setMobileReactionPickerOpen] = useState(false);
-  const longPressTimerRef = useRef<number | null>(null);
   const mobileActionsRef = useRef<HTMLDivElement>(null);
   const mobileActionsSheetRef = useRef<HTMLDivElement>(null);
   const toolbarVisible = hovered || actionsMenuOpen;
@@ -257,11 +256,7 @@ function MessageItemImpl({
     setReminderDialogOpen(true);
   };
 
-  // Mobile variants close the action sheet as they fire.
-  const handleMobileRemindPreset = (key: ReminderPresetKey) => {
-    handleReminderPreset(key);
-    closeMobileActions();
-  };
+  // Mobile closes the action sheet as it opens the reminder popup.
   const handleMobileRemindCustom = () => {
     openCustomReminder();
     closeMobileActions();
@@ -311,14 +306,18 @@ function MessageItemImpl({
   }
 
   function closeMobileActions() {
-    cancelLongPress();
+    longPress.cancel();
     setMobileActionsOpen(false);
     setMobileActionsSuppressed(false);
     setMobileReactionPickerOpen(false);
   }
+  // Pass mobileActionsOpen: MessageItem stays mounted while the sheet toggles,
+  // so the gesture must re-initialise on each open (otherwise a swipe-dismiss
+  // leaves it latched off-screen and it won't reopen).
   const { dismissing: swipeDismissing, motionProps: mobileActionsMotion } = useSwipeDismiss(
     'down',
     closeMobileActions,
+    mobileActionsOpen,
   );
   const setMobileActionsNode = useCallback((node: HTMLDivElement | null) => {
     mobileActionsSheetRef.current = node;
@@ -435,31 +434,23 @@ function MessageItemImpl({
     toggleReaction.mutate({ messageId: message.id, emoji, channelId, conversationId });
   }
 
-  function cancelLongPress() {
-    if (longPressTimerRef.current === null) return;
-    window.clearTimeout(longPressTimerRef.current);
-    longPressTimerRef.current = null;
-  }
-
-  function startLongPress(e: React.PointerEvent<HTMLDivElement>) {
-    if (e.pointerType === 'mouse' || isEditing || message.deleted || message.system) return;
-    cancelLongPress();
-    const cancelPendingLongPress = () => cancelLongPress();
-    window.addEventListener('pointerup', cancelPendingLongPress, { once: true });
-    window.addEventListener('pointercancel', cancelPendingLongPress, { once: true });
-    longPressTimerRef.current = window.setTimeout(() => {
-      triggerMessageActionHaptic();
+  // Touch long-press opens the mobile action sheet via the SHARED
+  // useLongPress gesture (420ms hold; touch/pen only; scroll drift past the
+  // small threshold or release cancels; the haptic fires inside the hook).
+  // This used to be a hand-rolled copy of the same pattern — keep the one
+  // implementation in the hook.
+  const longPress = useLongPress({
+    enabled: !isEditing && !message.deleted && !message.system,
+    delayMs: 420,
+    onLongPress: () => {
       // Long-pressing to open the action bar should dismiss the keyboard
       // if the composer had focus, so the sheet isn't fighting the keyboard.
       blurActiveInput();
       setMobileActionsSuppressed(false);
       setMobileActionsOpen(true);
       notifyMessageHovered(message.id);
-      longPressTimerRef.current = null;
-    }, 420);
-  }
-
-  useEffect(() => cancelLongPress, []);
+    },
+  });
   useTransientOverlayCleanup(mobileActionsOpen, { rootRef: mobileActionsRef, lockScroll: true });
 
   // The unfurl scan walks the whole body; memoize so it only runs when the
@@ -609,31 +600,20 @@ function MessageItemImpl({
             </>
           )}
         </div>
-        <div className="mt-2 flex flex-col rounded-lg border" data-testid="mobile-remind-group">
-          <div className="flex items-center gap-3 border-b px-3 py-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-            <AlarmClock className="h-4 w-4" />
-            Remind me
-          </div>
-          {REMINDER_PRESETS.map((preset) => (
-            <button
-              key={preset.key}
-              type="button"
-              className="border-b px-3 py-4 text-left text-base last:border-b-0"
-              onClick={() => handleMobileRemindPreset(preset.key)}
-              data-testid={`mobile-remind-${preset.key}`}
-            >
-              {preset.label}
-            </button>
-          ))}
-          <button
-            type="button"
-            className="px-3 py-4 text-left text-base"
-            onClick={handleMobileRemindCustom}
-            data-testid="mobile-remind-custom"
-          >
-            Custom…
-          </button>
-        </div>
+        {/* Single "Remind me" row. Tapping it closes the sheet and opens the
+            ReminderDialog (a separate popup with the date/time selector) — the
+            old inline preset list made this sheet tall enough to cover the
+            whole screen on mobile. */}
+        <button
+          type="button"
+          className="mt-2 flex w-full items-center gap-3 rounded-lg border px-3 py-4 text-left text-base"
+          onClick={handleMobileRemindCustom}
+          data-testid="mobile-remind"
+          aria-label="Remind me about this message"
+        >
+          <AlarmClock className="h-4 w-4" />
+          Remind me
+        </button>
       </motion.div>
       )}
     </div>
@@ -648,10 +628,7 @@ function MessageItemImpl({
         notifyMessageHovered(message.id);
       }}
       onMouseLeave={() => setHovered(false)}
-      onPointerDown={startLongPress}
-      onPointerUp={cancelLongPress}
-      onPointerCancel={cancelLongPress}
-      onPointerMove={cancelLongPress}
+      {...longPress.handlers}
       onContextMenu={(event) => {
         if (!isMobile) return;
         event.preventDefault();
@@ -690,7 +667,7 @@ function MessageItemImpl({
               avatarURL={displayAuthorAvatarURL}
               online={authorOnline}
               className="mt-0.5 h-9 w-9 cursor-pointer"
-              dotClassName="h-2.5 w-2.5"
+              dotSize={10}
             />
           )}
         </UserHoverCard>

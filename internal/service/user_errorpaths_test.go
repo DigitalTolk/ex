@@ -59,6 +59,26 @@ func TestUser_SetStatus_UpdateError(t *testing.T) {
 	}
 }
 
+func TestUser_SetNotificationSettings_GetError(t *testing.T) {
+	svc, users := newUserSvc()
+	users.getUserErr = errors.New("boom") // non-NotFound → wrapped "user: get"
+	if _, err := svc.SetNotificationSettings(context.Background(), "u1", model.DefaultNotificationSettings()); err == nil {
+		t.Fatal("expected get error")
+	}
+}
+
+func TestUser_SetNotificationSettings_Success(t *testing.T) {
+	svc, users := newUserSvc()
+	users.users["u1"] = &model.User{ID: "u1", DisplayName: "U", AuthProvider: "oidc"}
+	got, err := svc.SetNotificationSettings(context.Background(), "u1", model.DefaultNotificationSettings())
+	if err != nil {
+		t.Fatalf("SetNotificationSettings: %v", err)
+	}
+	if got.NotificationSettings == nil {
+		t.Fatal("expected notification settings persisted on user")
+	}
+}
+
 func TestUser_Search_ListError(t *testing.T) {
 	svc, users := newUserSvc()
 	users.listErr = errors.New("boom")

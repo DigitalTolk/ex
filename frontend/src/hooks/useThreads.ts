@@ -3,6 +3,7 @@ import { apiFetch } from '@/lib/api';
 import { slugify } from '@/lib/format';
 import { readJSON, writeJSON } from '@/lib/storage';
 import { queryKeys, parentPath } from '@/lib/query-keys';
+import { markLocalUserStateWrite } from '@/hooks/useUserState';
 import type { Message } from '@/types';
 
 export interface ThreadSummary {
@@ -81,6 +82,23 @@ export function upsertUserThreadFromRoot(
   });
 }
 
+// upsertUserThreadRow patches the /threads list from a `thread.updated` event.
+// Unlike upsertUserThreadFromRoot (fed by the channel-topic message.edited, which
+// reaches non-participants, so it must guess at participation) this is driven by
+// a participant-scoped event: the server only sends thread.updated to users who
+// belong in the thread, so receipt IS the participation proof and we add the row
+// unconditionally. This is what closes the gap where a reply to a thread you
+// didn't author used to wait on an eventually-consistent ListUserThreads refetch.
+export function upsertUserThreadRow(qc: QueryClient, summary: ThreadSummary): void {
+  if (!summary.threadRootID) return;
+  qc.setQueryData<ThreadSummary[]>(queryKeys.userThreads(), (old) => {
+    const list = old ?? [];
+    const idx = list.findIndex((t) => t.threadRootID === summary.threadRootID);
+    const next = idx >= 0 ? [...list.slice(0, idx), summary, ...list.slice(idx + 1)] : [summary, ...list];
+    return next.sort((a, b) => b.latestActivityAt.localeCompare(a.latestActivityAt));
+  });
+}
+
 function threadFollowPath(target: ThreadFollowTarget): string {
   const parentType = target.parentType === 'channel' ? 'channels' : 'conversations';
   return `/api/v1/threads/${parentType}/${encodeURIComponent(target.parentID)}/${encodeURIComponent(target.threadRootID)}/follow`;
@@ -153,6 +171,9 @@ export function markThreadSeen(
   map[threadRootID] = at;
   saveSeen(capSeenMap(map));
   if (target) {
+    // The PUT's userchannel.updated {userState:true} echo must not refetch
+    // /user-state in this tab (see useUserState's echo window).
+    markLocalUserStateWrite();
     const parentType = target.parentType === 'channel' ? 'channels' : 'conversations';
     void apiFetch<void>(
       `/api/v1/user-state/threads/${parentType}/${encodeURIComponent(target.parentID)}/${encodeURIComponent(threadRootID)}/seen`,

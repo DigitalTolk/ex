@@ -15,6 +15,8 @@ vi.mock('@/lib/api', () => ({
 }));
 
 import { apiFetch } from '@/lib/api';
+import { resetDraftSessionState, shouldRefetchDraftsForRemoteUpdate } from './useDrafts';
+import { resetUserStateSessionState, shouldRefetchUserStateForRemoteUpdate } from './useUserState';
 
 function createWrapper() {
   const queryClient = new QueryClient({
@@ -62,12 +64,15 @@ describe('useSendChannelMessage', () => {
     expect(sent.clientTs).toBeGreaterThan(0);
   });
 
-  it('posting a thread reply optimistically appends to the open thread and refreshes the /threads count', async () => {
+  it('posting a thread reply optimistically appends to the open thread without any /threads refetch', async () => {
     // The sender's reply must show immediately rather than waiting for the
     // WS round-trip (the user-reported "visible delay" posting in threads).
-    // We append the returned reply straight into the thread cache and
-    // refresh userThreads for the count; the thread query itself is NOT
-    // invalidated — a refetch could briefly drop the just-added reply.
+    // We append the returned reply straight into the thread cache. The /threads
+    // list is patched live by the participant-scoped `thread.updated` event
+    // (the sender is a participant), so we no longer fire an eventually-
+    // consistent ListUserThreads refetch here that could race that patch — nor
+    // do we invalidate the thread query itself (a refetch could briefly drop
+    // the just-added reply).
     const reply = { id: 'r-1', parentID: 'ch-1', parentMessageID: 'root', authorID: 'u-1', body: 'r', createdAt: '' };
     vi.mocked(apiFetch).mockResolvedValue(reply);
 
@@ -85,7 +90,7 @@ describe('useSendChannelMessage', () => {
     // Reply is visible in the thread immediately.
     expect(queryClient.getQueryData(['thread', 'channels/ch-1', 'root'])).toEqual([root, reply]);
     const keys = spy.mock.calls.map((c) => (c[0] as { queryKey?: unknown[] }).queryKey);
-    expect(keys).toContainEqual(['userThreads']);
+    expect(keys).not.toContainEqual(['userThreads']);
     expect(keys).not.toContainEqual(['thread', 'channels/ch-1', 'root']);
   });
 
@@ -116,6 +121,44 @@ describe('useSendChannelMessage', () => {
     expect(queryClient.getQueryData(['thread', 'channels/ch-1', 'root'])).toBeUndefined();
   });
 
+  it('first reply to a thread MISSING from the cached /threads list refetches it (thread.updated may never fire)', async () => {
+    // The live `thread.updated` patch is gated on the server's reply-metadata
+    // bump succeeding. A sender whose reply just created their participation
+    // cannot depend on it: with a cached list lacking this thread's row, the
+    // send must invalidate userThreads so the row appears regardless.
+    const reply = { id: 'r-1', parentID: 'ch-1', parentMessageID: 'root', authorID: 'u-1', body: 'r', createdAt: '' };
+    vi.mocked(apiFetch).mockResolvedValue(reply);
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    queryClient.setQueryData(['userThreads'], [{ threadRootID: 'other-thread' }]);
+    const spy = vi.spyOn(queryClient, 'invalidateQueries');
+    const wrapper = ({ children }: { children: ReactNode }) =>
+      createElement(QueryClientProvider, { client: queryClient }, children);
+
+    const { result } = renderHook(() => useSendChannelMessage('ch-1'), { wrapper });
+    result.current.mutate({ body: 'r', attachmentIDs: [], parentMessageID: 'root' });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    const keys = spy.mock.calls.map((c) => (c[0] as { queryKey?: unknown[] }).queryKey);
+    expect(keys).toContainEqual(['userThreads']);
+  });
+
+  it('a reply to a thread ALREADY in the cached /threads list does not refetch (the event patch owns it)', async () => {
+    const reply = { id: 'r-1', parentID: 'ch-1', parentMessageID: 'root', authorID: 'u-1', body: 'r', createdAt: '' };
+    vi.mocked(apiFetch).mockResolvedValue(reply);
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    queryClient.setQueryData(['userThreads'], [{ threadRootID: 'root' }]);
+    const spy = vi.spyOn(queryClient, 'invalidateQueries');
+    const wrapper = ({ children }: { children: ReactNode }) =>
+      createElement(QueryClientProvider, { client: queryClient }, children);
+
+    const { result } = renderHook(() => useSendChannelMessage('ch-1'), { wrapper });
+    result.current.mutate({ body: 'r', attachmentIDs: [], parentMessageID: 'root' });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    const keys = spy.mock.calls.map((c) => (c[0] as { queryKey?: unknown[] }).queryKey);
+    expect(keys).not.toContainEqual(['userThreads']);
+  });
+
   it('non-thread send does NOT invalidate userThreads (avoids needless /threads refetches)', async () => {
     const msg = { id: 'msg-x', parentID: 'ch-1', authorID: 'u-1', body: 'hi', createdAt: '' };
     vi.mocked(apiFetch).mockResolvedValue(msg);
@@ -131,6 +174,55 @@ describe('useSendChannelMessage', () => {
 
     const keys = spy.mock.calls.map((c) => (c[0] as { queryKey?: unknown[] }).queryKey);
     expect(keys).not.toContainEqual(['userThreads']);
+  });
+
+  it('arms the drafts-echo ignore window at MUTATE time, before the POST resolves', async () => {
+    // The server folds the draft-clear into message creation and publishes
+    // draft.updated while the POST is still in flight. Arming the window in
+    // the views' onSuccess was too late — the echo raced it and every send
+    // triggered a full /drafts refetch.
+    resetDraftSessionState();
+    expect(shouldRefetchDraftsForRemoteUpdate()).toBe(true);
+    const msg = { id: 'msg-w', parentID: 'ch-1', authorID: 'u-1', body: 'hi', createdAt: '' };
+    vi.mocked(apiFetch).mockResolvedValue(msg);
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper = ({ children }: { children: ReactNode }) =>
+      createElement(QueryClientProvider, { client: queryClient }, children);
+    const { result } = renderHook(() => useSendChannelMessage('ch-1'), { wrapper });
+    try {
+      result.current.mutate({ body: 'hi', attachmentIDs: [] });
+      expect(shouldRefetchDraftsForRemoteUpdate()).toBe(false);
+      await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    } finally {
+      resetDraftSessionState();
+    }
+  });
+});
+
+describe('useSendMessage user-state echo window', () => {
+  beforeEach(() => vi.mocked(apiFetch).mockReset());
+
+  it('a THREAD reply arms the user-state echo window (the backend marks the author seen); a top-level send does not', async () => {
+    resetUserStateSessionState();
+    const reply = { id: 'r-1', parentID: 'ch-1', parentMessageID: 'root', authorID: 'u-1', body: 'r', createdAt: '' };
+    vi.mocked(apiFetch).mockResolvedValue(reply);
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper = ({ children }: { children: ReactNode }) =>
+      createElement(QueryClientProvider, { client: queryClient }, children);
+    const { result } = renderHook(() => useSendChannelMessage('ch-1'), { wrapper });
+    try {
+      expect(shouldRefetchUserStateForRemoteUpdate()).toBe(true);
+      result.current.mutate({ body: 'top level', attachmentIDs: [] });
+      expect(shouldRefetchUserStateForRemoteUpdate()).toBe(true); // no author-seen echo for top-level
+      await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+      result.current.mutate({ body: 'r', attachmentIDs: [], parentMessageID: 'root' });
+      expect(shouldRefetchUserStateForRemoteUpdate()).toBe(false); // armed before the POST resolves
+      await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    } finally {
+      resetUserStateSessionState();
+      resetDraftSessionState();
+    }
   });
 });
 

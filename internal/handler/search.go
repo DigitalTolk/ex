@@ -2,10 +2,14 @@ package handler
 
 import (
 	"context"
+	"errors"
+	"log/slog"
 	"net/http"
 
 	"github.com/DigitalTolk/ex/internal/middleware"
+	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/DigitalTolk/ex/internal/search"
+	"github.com/DigitalTolk/ex/internal/store"
 )
 
 // SearchAccess resolves the parent IDs (channels + conversations) the
@@ -16,6 +20,25 @@ type SearchAccess interface {
 	AllowedParentIDs(ctx context.Context, userID string) ([]string, error)
 }
 
+// UserResolver batch-loads users by ID so the user-search endpoint can
+// drop hits whose canonical row no longer exists (deleted users that
+// still linger in a stale search index — "ghosts"). Missing IDs are
+// simply omitted from the returned slice. Wire the cache-first
+// UserService.GetBatch (NOT the raw store) so the per-keystroke
+// autocomplete doesn't pay a cold DynamoDB read for warm IDs.
+type UserResolver interface {
+	GetBatch(ctx context.Context, ids []string) ([]*model.User, error)
+}
+
+// ChannelResolver loads one channel by ID so the channel-search endpoint
+// can drop ghost hits the same way: a channel hard-deleted straight from
+// DynamoDB leaves user-side membership rows behind, so its ID survives in
+// the caller's allowed set and the stale index doc would otherwise
+// surface as a clickable dead link.
+type ChannelResolver interface {
+	GetByID(ctx context.Context, id string) (*model.Channel, error)
+}
+
 // SearchHandler exposes the public search endpoints. Searcher may be a
 // noop implementation when search isn't configured — in that case the
 // endpoints return empty results rather than 503 so the UI can show
@@ -23,12 +46,16 @@ type SearchAccess interface {
 type SearchHandler struct {
 	searcher search.Searcher
 	access   SearchAccess
+	users    UserResolver
+	channels ChannelResolver
 }
 
-// NewSearchHandler builds a handler. Either argument may be nil; when
-// either is, the handler degrades to empty responses.
-func NewSearchHandler(s search.Searcher, a SearchAccess) *SearchHandler {
-	return &SearchHandler{searcher: s, access: a}
+// NewSearchHandler builds a handler. Any dependency may be nil: a nil
+// searcher/access degrades to empty responses, a nil resolver skips
+// ghost filtering. The resolvers are constructor arguments — not
+// setters — so cmd/server can't silently forget to wire them.
+func NewSearchHandler(s search.Searcher, a SearchAccess, users UserResolver, channels ChannelResolver) *SearchHandler {
+	return &SearchHandler{searcher: s, access: a, users: users, channels: channels}
 }
 
 // SearchUsers handles GET /api/v1/search/users?q=&limit=
@@ -44,7 +71,72 @@ func (h *SearchHandler) SearchUsers(w http.ResponseWriter, r *http.Request) {
 		writeInternalError(w, r, "search_failed", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, res)
+	writeJSON(w, http.StatusOK, h.dropGhostUsers(r.Context(), res))
+}
+
+// dropGhostUsers filters the raw user-search hits down to those whose
+// canonical store row still exists, preserving the relevance ordering
+// from OpenSearch. This makes the index a hint, not the source of truth:
+// a user deleted straight from DynamoDB (there is no user hard-delete
+// service method that could de-index) never surfaces even while a stale
+// doc lingers. No resolver wired (or no hits) → results pass through
+// unchanged. Filtering is best-effort: on a resolver failure the RAW
+// hits are served — the index already answered the query, and search
+// must degrade rather than 500 while DynamoDB has a bad moment.
+func (h *SearchHandler) dropGhostUsers(ctx context.Context, res *search.SearchResult) *search.SearchResult {
+	if h.users == nil || res == nil || len(res.Hits) == 0 {
+		return res
+	}
+	ids := make([]string, len(res.Hits))
+	for i, hit := range res.Hits {
+		ids[i] = hit.ID
+	}
+	users, err := h.users.GetBatch(ctx, ids)
+	if err != nil {
+		slog.Error("search: ghost-user filter failed — serving unfiltered hits", "error", err)
+		return res
+	}
+	live := make(map[string]bool, len(users))
+	for _, u := range users {
+		if u != nil {
+			live[u.ID] = true
+		}
+	}
+	kept := make([]search.SearchHit, 0, len(res.Hits))
+	for _, hit := range res.Hits {
+		if live[hit.ID] {
+			kept = append(kept, hit)
+		}
+	}
+	return &search.SearchResult{Total: len(kept), Hits: kept, Aggs: res.Aggs}
+}
+
+// dropGhostChannels mirrors dropGhostUsers for channel hits. There is no
+// batch channel getter, but hits are capped at the request limit and the
+// lookups are cheap GetItems — not surfacing a clickable dead channel
+// outweighs the reads. Fail-open per hit: a lookup error keeps the hit
+// (and logs), only a confirmed missing row drops it.
+func (h *SearchHandler) dropGhostChannels(ctx context.Context, res *search.SearchResult) *search.SearchResult {
+	if h.channels == nil || res == nil || len(res.Hits) == 0 {
+		return res
+	}
+	kept := make([]search.SearchHit, 0, len(res.Hits))
+	degraded := false
+	for _, hit := range res.Hits {
+		ch, err := h.channels.GetByID(ctx, hit.ID)
+		switch {
+		case err == nil && ch != nil:
+			kept = append(kept, hit)
+		case err != nil && !errors.Is(err, store.ErrNotFound):
+			degraded = true
+			kept = append(kept, hit)
+		}
+		// confirmed not-found → ghost, dropped
+	}
+	if degraded {
+		slog.Error("search: ghost-channel filter degraded — serving some hits unverified")
+	}
+	return &search.SearchResult{Total: len(kept), Hits: kept, Aggs: res.Aggs}
 }
 
 // SearchChannels handles GET /api/v1/search/channels?q=&limit=
@@ -80,7 +172,7 @@ func (h *SearchHandler) SearchChannels(w http.ResponseWriter, r *http.Request) {
 		writeInternalError(w, r, "search_failed", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, res)
+	writeJSON(w, http.StatusOK, h.dropGhostChannels(r.Context(), res))
 }
 
 // SearchMessages handles GET /api/v1/search/messages

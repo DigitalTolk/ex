@@ -173,4 +173,42 @@ describe('useServerVersion poller', () => {
       expect(screen.getByTestId('sv').element().getAttribute('data-outdated')).toBe('true');
     });
   });
+
+  it('drives a full poll lifecycle: caches the ETag, resends it as If-None-Match, and survives a failed tick without corrupting the cursor', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(versionResponse('v-1', 'etag-live'));
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    const headersOf = (i: number) =>
+      (fetchMock.mock.calls[i][1] as { headers?: Record<string, string> } | undefined)?.headers;
+    const lastHeaders = () =>
+      (fetchMock.mock.calls.at(-1)![1] as { headers?: Record<string, string> }).headers;
+
+    // Step 1: the first poll succeeds → version recorded, ETag cached, and it
+    // carried NO If-None-Match (nothing cached yet).
+    const screen = await mount();
+    await vi.waitFor(() => {
+      expect(screen.getByTestId('sv').element().getAttribute('data-version')).toBe('v-1');
+    });
+    expect(headersOf(0)?.['If-None-Match']).toBeUndefined();
+
+    // Step 2: a focus re-poll sends the cached ETag back as If-None-Match.
+    window.dispatchEvent(new Event('focus'));
+    await vi.waitFor(() => expect(lastHeaders()?.['If-None-Match']).toBe('etag-live'));
+
+    // Step 3: the next tick fails. A failed poll must NOT overwrite the recorded
+    // version nor the cached ETag.
+    fetchMock.mockRejectedValueOnce(new Error('offline'));
+    const beforeFail = fetchMock.mock.calls.length;
+    window.dispatchEvent(new Event('online'));
+    await vi.waitFor(() => expect(fetchMock.mock.calls.length).toBeGreaterThan(beforeFail));
+    expect(screen.getByTestId('sv').element().getAttribute('data-version')).toBe('v-1');
+
+    // Step 4: recovery — the next poll still carries the ORIGINAL etag (the
+    // failure did not clobber it) and picks up a new version.
+    fetchMock.mockResolvedValue(versionResponse('v-2', 'etag-next'));
+    window.dispatchEvent(new Event('pageshow'));
+    await vi.waitFor(() => {
+      expect(screen.getByTestId('sv').element().getAttribute('data-version')).toBe('v-2');
+    });
+    expect(lastHeaders()?.['If-None-Match']).toBe('etag-live');
+  });
 });

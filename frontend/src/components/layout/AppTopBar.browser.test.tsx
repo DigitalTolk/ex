@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render } from 'vitest-browser-react';
 import { MemoryRouter } from 'react-router-dom';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AppTopBar } from './AppTopBar';
 
 // Browser-gate coverage for AppTopBar. The jsdom AppTopBar.test.tsx exercises
@@ -36,10 +37,31 @@ vi.mock('@/lib/capacitor', () => ({ getCapacitorPlugin: () => null, isNativePlat
 vi.mock('@/hooks/useIsMobile', () => ({ useIsMobile: () => false }));
 
 function renderTopBar(ui = <AppTopBar />) {
-  return render(<MemoryRouter>{ui}</MemoryRouter>);
+  // The account avatar's UserStatusIndicator resolves custom emoji through a
+  // react-query hook, so the tree needs a provider.
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(
+    <QueryClientProvider client={qc}>
+      <MemoryRouter>{ui}</MemoryRouter>
+    </QueryClientProvider>,
+  );
 }
 
 describe('AppTopBar (browser)', () => {
+  it('carves the presence notch out of the account avatar (Slack-style, not a painted halo)', async () => {
+    mockOnline = new Set<string>(['u-1']);
+    const screen = await renderTopBar();
+    const avatar = screen
+      .getByTestId('topbar-account')
+      .element()
+      .querySelector('[data-slot="avatar"]') as HTMLElement;
+    // The notch is a radial-gradient mask on the avatar itself — the gap
+    // around the dot shows the real backdrop instead of a painted halo.
+    expect(getComputedStyle(avatar).maskImage).toContain('radial-gradient');
+    const dot = screen.getByTestId('topbar-account').element().querySelector('[data-presence]')!;
+    expect(dot.getAttribute('data-presence')).toBe('online');
+  });
+
   beforeEach(() => {
     mockSystemRole = 'admin';
     mockUserStatus = undefined;

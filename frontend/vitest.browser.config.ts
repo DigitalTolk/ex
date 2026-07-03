@@ -58,15 +58,26 @@ export default defineConfig({
         // browser run transitively via MessageItem, but its webhook-attachment
         // branches aren't exercised there; graded in jsdom, not here.
         'src/components/chat/MessageRichAttachments.tsx',
-        // Gesture/keyboard helpers — unit-tested in the jsdom suite
-        // (useSwipeDismiss.test, useDismissKeyboardOnScroll.test,
-        // blur-input.test). Motion's pointer-based drag isn't exercisable
-        // in jsdom and the helpers are mocked in browser component tests, so
-        // they're pulled into the browser graph but graded in jsdom only.
+        // Gesture/keyboard helpers graded in the jsdom suite. blur-input.ts is
+        // now ALSO graded here (real-browser focus, blur-input.browser.test.ts)
+        // and is intentionally NOT listed below. The three that remain excluded
+        // each carry a branch that a real browser can't deterministically reach,
+        // so grading them under the browser (istanbul) provider would drag the
+        // gate below 99%:
+        //   • useSwipeDismiss.ts — carries a `v8 ignore`d SSR guard (not honored
+        //     by istanbul) plus the non-Element pointer-target and re-entrant
+        //     dismiss-latch arms that native pointer input can't drive; its
+        //     wiring is proven by useSwipeDismiss.realswipe.browser.test.tsx and
+        //     fully graded in jsdom.
+        //   • useDismissKeyboardOnScroll.ts — needs synthetic TouchEvent dispatch
+        //     (not the pointer-based swipe helper) and an `activeElement not an
+        //     HTMLElement` arm real focus never produces.
+        //   • useKeyboardSurfaceColor.ts — its `activeElement instanceof Element`
+        //     false arm isn't reachable via real focus (activeElement is always
+        //     an element / falls back to <body>).
         'src/hooks/useSwipeDismiss.ts',
         'src/hooks/useDismissKeyboardOnScroll.ts',
         'src/hooks/useKeyboardSurfaceColor.ts',
-        'src/lib/blur-input.ts',
         // Delegated same-origin link router — a document-level click handler
         // fully unit-tested in jsdom (InAppLinkRouter.test, in-app-link.test).
         'src/components/InAppLinkRouter.tsx',
@@ -101,6 +112,11 @@ export default defineConfig({
         // exhaustively unit-tested in jsdom (toaster.test.tsx); pulled into the
         // browser graph via App, graded in jsdom.
         'src/components/Toaster.tsx',
+        // Incoming-webhooks admin React-Query hooks — an admin-only page not on
+        // any browser flow; its list/create/update/delete mutations (incl. the
+        // optimistic-delete cache patch + rollback) are exhaustively unit-tested
+        // in jsdom (useWebhooks.test.tsx, incoming-webhooks-page.test.tsx).
+        'src/hooks/useWebhooks.ts',
       ],
       // 99% branch gate over the merged desktop + mobile browser run.
       // vitest enforces it (non-zero exit), so `npm run

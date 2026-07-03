@@ -68,6 +68,12 @@ vi.mock('@/hooks/useIsMobile', () => ({
   useIsMobile: () => mockIsMobile,
 }));
 
+// The real UserStatusIndicator renders in these tests; its emoji map hook
+// is react-query-backed, so stub it to an empty custom-emoji map.
+vi.mock('@/hooks/useEmoji', () => ({
+  useEmojiMap: () => ({ data: {} }),
+}));
+
 function renderTopBar(ui?: ReactNode) {
   return render(<MemoryRouter>{ui ?? <AppTopBar />}</MemoryRouter>);
 }
@@ -102,21 +108,31 @@ describe('AppTopBar', () => {
     expect(screen.getByTestId('topbar-account')).toBeInTheDocument();
   });
 
-  it('shows an online presence dot on the mobile account button when online', () => {
+  it('shows a FILLED online dot on the mobile account button when online', () => {
     mockIsMobile = true;
     mockOnline = new Set<string>(['u-1']);
     renderTopBar();
-    const dot = screen.getByTestId('topbar-account').querySelector('span[aria-hidden]')!;
+    const dot = screen.getByTestId('topbar-account').querySelector('[data-presence]')!;
+    expect(dot.getAttribute('data-presence')).toBe('online');
     expect(dot.className).toContain('bg-online');
+    // Filled, not hollow: shape encodes the state for color-blind users.
+    expect(dot.className).not.toContain('border-solid');
   });
 
-  it('shows a muted presence dot on the mobile account button when offline', () => {
+  it('shows a HOLLOW ring on the mobile account button when offline', () => {
     mockIsMobile = true;
     mockOnline = new Set<string>();
     renderTopBar();
-    const dot = screen.getByTestId('topbar-account').querySelector('span[aria-hidden]')!;
-    expect(dot.className).toContain('bg-muted-foreground');
+    const dot = screen.getByTestId('topbar-account').querySelector('[data-presence]')!;
+    expect(dot.getAttribute('data-presence')).toBe('offline');
+    // Hollow ring (border only, transparent center) — the colour-blind-safe
+    // offline shape; the old solid muted dot differed from online by hue alone.
+    expect(dot.className).toContain('border-solid');
+    expect(dot.className).toContain('border-muted-foreground');
+    expect(dot.className).toContain('bg-transparent');
+    expect(dot.className).not.toContain('bg-online');
   });
+
 
   it('renders only mobile menu, search, and avatar dropdown trigger in the chrome', () => {
     renderTopBar();
@@ -277,5 +293,36 @@ describe('AppTopBar', () => {
       });
       expect(logout).toHaveBeenCalled();
     });
+  });
+});
+
+describe('AppTopBar own custom status', () => {
+  beforeEach(() => {
+    mockIsMobile = false;
+    mockUserStatus = undefined;
+  });
+
+  it('does NOT overlay the custom status on the desktop account avatar (removed — it read as clutter)', () => {
+    mockUserStatus = { emoji: '🌴', text: 'On vacation' };
+    renderTopBar();
+    // Only the presence dot rides the avatar now; the status emoji is gone.
+    expect(screen.queryByLabelText("On vacation, won't clear automatically")).toBeNull();
+    expect(screen.getByTestId('topbar-account').querySelector('[data-presence]')).not.toBeNull();
+  });
+
+  it('renders no status badge when the user has none', () => {
+    renderTopBar();
+    expect(screen.queryByLabelText(/won't clear automatically|until /)).toBeNull();
+  });
+
+  it('keeps the status OFF the mobile account button but shows it inside the opened account sheet', () => {
+    mockIsMobile = true;
+    mockUserStatus = { emoji: '🌴', text: 'On vacation' };
+    renderTopBar();
+    // Not overlaid on the avatar button anymore.
+    expect(screen.queryByLabelText("On vacation, won't clear automatically")).toBeNull();
+    fireEvent.click(screen.getByTestId('topbar-account'));
+    // The sheet header still shows it next to the display name.
+    expect(screen.getByLabelText("On vacation, won't clear automatically")).toBeInTheDocument();
   });
 });

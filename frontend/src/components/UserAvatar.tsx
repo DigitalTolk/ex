@@ -1,6 +1,8 @@
 import { memo, useState } from 'react';
 import { getInitials } from '@/lib/format';
 import { cn } from '@/lib/utils';
+import { PresenceDot } from '@/components/PresenceDot';
+import { presenceNotchStyle } from '@/lib/presence';
 
 interface UserAvatarProps {
   displayName: string;
@@ -11,13 +13,9 @@ interface UserAvatarProps {
   // Tailwind size class for the Avatar (e.g. "h-7 w-7"). Default mirrors
   // the member-list density.
   className?: string;
-  // Tailwind size class for the presence dot. Picked to read well at
-  // the default avatar size; override when the avatar is larger.
-  dotClassName?: string;
-  // Ring color for the presence dot — `ring-background` matches a
-  // sidebar/list backdrop; switch to `ring-popover` inside hover cards
-  // and similar floating surfaces.
-  dotRingClassName?: string;
+  // Presence dot diameter in px — numeric so the avatar's notch mask and
+  // the dot stay in lockstep. Default reads well at the h-7 avatar size.
+  dotSize?: number;
 }
 
 // Avatar with an inline presence dot. Memoized + direct `<img>` so
@@ -33,8 +31,7 @@ export const UserAvatar = memo(function UserAvatar({
   avatarURL,
   online,
   className = 'h-7 w-7',
-  dotClassName = 'h-2 w-2',
-  dotRingClassName = 'ring-background',
+  dotSize = 8,
 }: UserAvatarProps) {
   const [imageBroken, setImageBroken] = useState(false);
   const showImage = !!avatarURL && !imageBroken;
@@ -47,6 +44,7 @@ export const UserAvatar = memo(function UserAvatar({
           'relative flex shrink-0 overflow-hidden rounded-full bg-muted',
           className,
         )}
+        style={online !== undefined ? presenceNotchStyle(dotSize) : undefined}
       >
         {showImage ? (
           <img
@@ -71,17 +69,7 @@ export const UserAvatar = memo(function UserAvatar({
           </span>
         )}
       </span>
-      {online !== undefined && (
-        <span
-          className={cn(
-            'absolute bottom-0 right-0 rounded-full ring-2',
-            dotClassName,
-            dotRingClassName,
-            online ? 'bg-online' : 'bg-muted-foreground',
-          )}
-          aria-label={online ? 'Online' : 'Offline'}
-        />
-      )}
+      {online !== undefined && <PresenceDot online={online} size={dotSize} />}
     </span>
   );
 });

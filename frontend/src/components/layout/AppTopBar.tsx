@@ -33,6 +33,9 @@ import { getCapacitorPlugin, isNativePlatform } from '@/lib/capacitor';
 import { EditProfileDialog } from '@/components/EditProfileDialog';
 import { NotificationSettingsDialog } from '@/components/NotificationSettingsDialog';
 import { UserStatusDialog } from '@/components/UserStatusDialog';
+import { UserStatusIndicator } from '@/components/UserStatusIndicator';
+import { PresenceDot } from '@/components/PresenceDot';
+import { presenceNotchStyle } from '@/lib/presence';
 import { AboutDialog } from '@/components/AboutDialog';
 import { InviteDialog } from '@/components/InviteDialog';
 
@@ -255,14 +258,13 @@ export function AppTopBar({ onOpenChannels, channelsButtonHidden }: AppTopBarPro
               data-testid="topbar-account"
               className="relative inline-flex h-10 w-10 items-center justify-center rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
             >
-              <Avatar className="size-8">
+              <Avatar className="size-8" style={presenceNotchStyle(10)}>
                 <AvatarImage src={user?.avatarURL} alt="" />
                 <AvatarFallback className="bg-muted text-foreground text-xs">{initials}</AvatarFallback>
               </Avatar>
-              <span
-                aria-hidden
-                className={`absolute bottom-0 right-0 h-2.5 w-2.5 rounded-full border-2 border-sidebar ${userOnline ? 'bg-online' : 'bg-muted-foreground'}`}
-              />
+              {/* The button is 40px around the 32px avatar; inset 4 keeps the
+                  dot flush with the avatar's corner (where its notch is). */}
+              <PresenceDot online={userOnline} size={10} inset={4} />
             </button>
           ) : (
             <DropdownMenu modal={false}>
@@ -271,14 +273,11 @@ export function AppTopBar({ onOpenChannels, channelsButtonHidden }: AppTopBarPro
                 aria-label="Account menu"
                 data-testid="topbar-account"
               >
-                <Avatar className="size-8">
+                <Avatar className="size-8" style={presenceNotchStyle(10)}>
                   <AvatarImage src={user?.avatarURL} alt="" />
                   <AvatarFallback className="bg-muted text-foreground text-xs">{initials}</AvatarFallback>
                 </Avatar>
-                <span
-                  aria-hidden
-                  className={`absolute bottom-0 right-0 h-2.5 w-2.5 rounded-full border-2 border-sidebar ${userOnline ? 'bg-online' : 'bg-muted-foreground'}`}
-                />
+                <PresenceDot online={userOnline} size={10} inset={4} />
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="w-56">
                 {menuActions.map((action, idx) => {
@@ -317,7 +316,10 @@ export function AppTopBar({ onOpenChannels, channelsButtonHidden }: AppTopBarPro
               <AvatarFallback className="bg-muted text-foreground text-sm">{initials}</AvatarFallback>
             </Avatar>
             <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-semibold">{user?.displayName}</p>
+              <p className="truncate text-sm font-semibold">
+                {user?.displayName}
+                <UserStatusIndicator status={user?.userStatus} tooltip={false} className="ml-1" />
+              </p>
               <p className="truncate text-xs text-muted-foreground">{user?.email}</p>
             </div>
           </div>

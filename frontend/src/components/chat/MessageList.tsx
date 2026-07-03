@@ -161,6 +161,10 @@ function VirtuosoMessageList({
   // anchors — the timeout would race virtuoso's render.
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
   const anchorAppliedRef = useRef<string | null>(null);
+  // Scroll-to-anchor. Keyed on anchorIndex too, because the index shifts when
+  // Virtuoso prepends an older page and we must re-issue scrollToIndex at the
+  // corrected position; the dedup guard keeps that to exactly one scroll per
+  // anchor. The flash highlight is deliberately NOT in this effect — see below.
   useEffect(() => {
     if (!anchorMsgId) {
       anchorAppliedRef.current = null;
@@ -183,16 +187,29 @@ function VirtuosoMessageList({
       // frame is cancelled, never re-fired — no timer chase).
       anchorAppliedRef.current = dedupKey;
     });
+    return () => cancelAnimationFrame(scrollFrame);
+  }, [anchorMsgId, anchorRevision, anchorIndex]);
+
+  // Deep-link flash highlight. Keyed on the anchor IDENTITY (anchorMsgId +
+  // anchorRevision), never anchorIndex. This is load-bearing: when it lived in
+  // the scroll effect above, a page prepend that shifted anchorIndex re-ran the
+  // effect, whose cleanup cancelled the pending clear timer while the dedup
+  // early-return skipped re-arming it — so the ring stuck forever (the "never
+  // de-highlights" regression). Tying the timer to the anchor identity means an
+  // index shift can't tear it down: set the ring once per anchor, clear it after
+  // the flash window. cleanup guarantees only the current anchor's timer is
+  // ever live, so the clear is unconditional.
+  useEffect(() => {
+    if (!anchorMsgId) {
+      setHighlightedMessageId(null);
+      return;
+    }
     setHighlightedMessageId(anchorMsgId);
     const flashId = window.setTimeout(() => {
-      /* istanbul ignore next -- the flash-clear timeout only clears the highlight it set; if another anchor changed it first the `: curr` arm preserves it, a timing race the test harness's deterministic timers don't reproduce. */
-      setHighlightedMessageId((curr) => (curr === anchorMsgId ? null : curr));
+      setHighlightedMessageId(null);
     }, ANCHOR_HIGHLIGHT_MS);
-    return () => {
-      cancelAnimationFrame(scrollFrame);
-      window.clearTimeout(flashId);
-    };
-  }, [anchorMsgId, anchorRevision, anchorIndex]);
+    return () => window.clearTimeout(flashId);
+  }, [anchorMsgId, anchorRevision]);
 
   // Render against the synced internal state, not the freshly arrived
   // `rows` prop — this is what guarantees `data` and `firstItemIndex`

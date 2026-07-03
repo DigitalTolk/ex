@@ -32,6 +32,7 @@ let mockDraft: { id: string; body: string; attachmentIDs?: string[] } | undefine
 const saveDraftMutate = vi.fn();
 const clearDraftMutate = vi.fn();
 vi.mock('@/hooks/useDrafts', () => ({
+  markLocalDraftClearForSend: vi.fn(),
   useDraftForScope: () => ({ data: mockDraft }),
   useDraftAttachmentChips: () => [],
   useSaveDraft: () => ({ mutate: saveDraftMutate }),
@@ -54,15 +55,18 @@ vi.mock('@/components/chat/MessageItem', () => ({
     message,
     onEditMessage,
     disableEditing,
+    authorUserStatus,
   }: {
     message: Message;
     onEditMessage?: (m: Message) => void;
     disableEditing?: boolean;
+    authorUserStatus?: { emoji: string; text: string };
   }) => (
     <div
       data-testid="thread-card-msg"
       data-msg-id={message.id}
       data-disable-editing={disableEditing ? 'true' : 'false'}
+      data-author-status={authorUserStatus?.emoji ?? ''}
     >
       {message.body}
       {onEditMessage && (
@@ -520,6 +524,11 @@ describe('ThreadCard — viewport gating', () => {
         configurable: true,
         writable: true,
       });
+    } else {
+      // jsdom has no IntersectionObserver: REMOVE the stub rather than
+      // leaving it installed — a leaked never-firing observer makes every
+      // later describe's cards permanently "not in view".
+      delete (globalThis as { IntersectionObserver?: unknown }).IntersectionObserver;
     }
   });
 
@@ -762,5 +771,28 @@ describe('threadDeepLink', () => {
     );
     expect(url).toMatch(/\?thread=rootABC/);
     expect(url).toMatch(/#msg-rootABC$/);
+  });
+});
+
+describe('ThreadCard author custom status', () => {
+  it('passes the batch-resolved userStatus through to every message row', async () => {
+    // /threads authors resolve via /users/batch — the custom status must
+    // ride along or thread rows silently lose it (the reported bug).
+    apiFetchMock.mockImplementation((url: string) => {
+      if (url.includes('/messages/msg-root/thread')) {
+        return Promise.resolve([makeMessage('msg-root', 'root')]);
+      }
+      if (url.includes('/users/batch')) {
+        return Promise.resolve([
+          { id: 'u-1', displayName: 'Rootine', userStatus: { emoji: '🌴', text: 'On vacation' } },
+        ]);
+      }
+      return Promise.resolve([]);
+    });
+    renderCard(makeSummary());
+    await waitFor(() => {
+      const rows = screen.getAllByTestId('thread-card-msg');
+      expect(rows.some((r) => r.getAttribute('data-author-status') === '🌴')).toBe(true);
+    });
   });
 });

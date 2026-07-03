@@ -25,6 +25,119 @@ type bulkWriter interface {
 	Bulk(ctx context.Context, index string, entries []BulkEntry) error
 }
 
+// UsersChannelsSource is the slim data source the search-reindex
+// migration pulls from to rebuild ex_users and ex_channels — the two
+// indices that carry the autocomplete analyzer.
+type UsersChannelsSource interface {
+	ListUsers(ctx context.Context) ([]*model.User, error)
+	ListChannels(ctx context.Context) ([]*model.Channel, error)
+}
+
+// IndexRebuilder is the slice of Client the zero-downtime index rebuild
+// uses. *Client satisfies it; tests stub it.
+type IndexRebuilder interface {
+	BeginIndexRebuild(ctx context.Context, name string) (string, error)
+	PromoteIndex(ctx context.Context, name, staging string) error
+	AbortIndexRebuild(ctx context.Context, staging string)
+	Bulk(ctx context.Context, index string, entries []BulkEntry) error
+	DeleteDoc(ctx context.Context, index, id string) error
+}
+
+// RecreateUsersChannels rolls the autocomplete mapping onto an existing
+// cluster with zero downtime: for each of ex_users and ex_channels it
+// builds a fresh staging index with the current mapping, bulk-populates
+// it from src, atomically promotes it under the logical name, then runs
+// a repair pass. Because each index is rebuilt from scratch, orphaned
+// ghost docs (users/channels deleted straight from DynamoDB and never
+// de-indexed) are dropped as a side effect. Idempotent — safe to re-run.
+// Counts are only meaningful on success; every error path returns 0, 0.
+//
+// This reuses the same userDoc/channelDoc builders and Client.Bulk path
+// as the full Reindexer, scoped to just the two analyzer-affected
+// indices so the migration doesn't have to touch messages/files.
+func RecreateUsersChannels(ctx context.Context, rc IndexRebuilder, src UsersChannelsSource) (users, channels int, err error) {
+	users, err = rebuildIndex(ctx, rc, IndexUsers, func(ctx context.Context) ([]BulkEntry, error) {
+		list, err := src.ListUsers(ctx)
+		if err != nil {
+			return nil, err
+		}
+		entries := make([]BulkEntry, 0, len(list))
+		for _, u := range list {
+			entries = append(entries, BulkEntry{ID: u.ID, Doc: userDoc(u)})
+		}
+		return entries, nil
+	})
+	if err != nil {
+		return 0, 0, err
+	}
+	channels, err = rebuildIndex(ctx, rc, IndexChannels, func(ctx context.Context) ([]BulkEntry, error) {
+		list, err := src.ListChannels(ctx)
+		if err != nil {
+			return nil, err
+		}
+		entries := make([]BulkEntry, 0, len(list))
+		for _, ch := range list {
+			entries = append(entries, BulkEntry{ID: ch.ID, Doc: channelDoc(ch)})
+		}
+		return entries, nil
+	})
+	if err != nil {
+		return 0, 0, err
+	}
+	return users, channels, nil
+}
+
+// rebuildIndex swaps a fresh copy of `name` live without a gap:
+//
+//	list → create staging → bulk into staging → atomic promote →
+//	repair pass (list again + bulk through the live name)
+//
+// The live index keeps serving reads AND writes until the promote, so
+// concurrent searches never 404 and a failure before the promote leaves
+// the old index fully intact (the staging index is aborted). The repair
+// pass re-lists from the canonical store after the promote: entities
+// created or renamed while the rebuild ran (their live-index writes died
+// with the old index) are re-indexed, and entities deleted mid-rebuild
+// (present in pass 1, gone in pass 2) are removed from the new index.
+// The returned count is only meaningful on success; error paths return 0.
+func rebuildIndex(ctx context.Context, rc IndexRebuilder, name string, list func(ctx context.Context) ([]BulkEntry, error)) (int, error) {
+	first, err := list(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("search reindex: list %s: %w", name, err)
+	}
+	staging, err := rc.BeginIndexRebuild(ctx, name)
+	if err != nil {
+		return 0, err
+	}
+	if err := rc.Bulk(ctx, staging, first); err != nil {
+		rc.AbortIndexRebuild(ctx, staging)
+		return 0, fmt.Errorf("search reindex: bulk %s: %w", name, err)
+	}
+	if err := rc.PromoteIndex(ctx, name, staging); err != nil {
+		rc.AbortIndexRebuild(ctx, staging)
+		return 0, err
+	}
+	second, err := list(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("search reindex: repair list %s: %w", name, err)
+	}
+	if err := rc.Bulk(ctx, name, second); err != nil {
+		return 0, fmt.Errorf("search reindex: repair bulk %s: %w", name, err)
+	}
+	alive := make(map[string]bool, len(second))
+	for _, e := range second {
+		alive[e.ID] = true
+	}
+	for _, e := range first {
+		if !alive[e.ID] {
+			if err := rc.DeleteDoc(ctx, name, e.ID); err != nil {
+				return 0, fmt.Errorf("search reindex: repair delete %s/%s: %w", name, e.ID, err)
+			}
+		}
+	}
+	return len(second), nil
+}
+
 // Reindexer rebuilds every OpenSearch index from the canonical DDB
 // data. Triggered by an admin action; runs in a goroutine. Status is
 // observable via Status() so the admin UI can show progress.

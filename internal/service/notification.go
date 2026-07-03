@@ -64,11 +64,10 @@ type Notification struct {
 	ParentMessageID string           `json:"parentMessageID,omitempty"`
 	AuthorID        string           `json:"authorID,omitempty"` // for client-side own-author suppression
 	// Webhook marks a notification that originated from an incoming
-	// webhook (CI alerts, deploy bots, etc.). These are external/automated
-	// posts the user explicitly wired up, so the client treats them as
-	// always-notifiable: it bypasses both the own-author suppression (the
-	// "author" is just the webhook's creator, not a real sender) and the
-	// "channel messages are quiet" rule that mutes ordinary chatter.
+	// webhook (CI alerts, deploy bots, etc.). The "author" is the webhook,
+	// not a real sender, so the client exempts these from its own-author
+	// echo suppression. Whether to notify at all is decided server-side by
+	// the recipient's notification level, exactly like a regular message.
 	Webhook   bool      `json:"webhook,omitempty"`
 	CreatedAt time.Time `json:"createdAt"`
 }
@@ -221,9 +220,9 @@ func logAudienceLoadFailed(msg *model.Message, parentType string, err error) {
 }
 
 func (s *NotificationService) loadMemberSnapshot(ctx context.Context, msg *model.Message, parentType, parentName string) memberSnapshot {
-	// Webhook posts notify everyone, including the webhook's creator —
-	// the creator wired up the integration to be alerted, they didn't
-	// write the message. So there's no "author" to exclude.
+	// Webhook posts have no human author to exclude — the "author" is the
+	// webhook sentinel, and the creator didn't write the message, so they
+	// stay in the audience as a normal, level-gated recipient.
 	excludeID := msg.AuthorID
 	if msg.WebhookUsername != "" {
 		excludeID = ""
@@ -311,7 +310,17 @@ func (s *NotificationService) resolvePrefs(ctx context.Context, ids []string, ov
 // except the author and any user who muted the parent. Errors loading
 // recipients are swallowed (logged via the publisher path) — failure to
 // notify must never block the underlying message send.
-func (s *NotificationService) NotifyForMessage(ctx context.Context, msg *model.Message, parentType string) {
+//
+// For a thread reply, threadRoot is the authoritative root returned by
+// IncrementReplyMetadata (nil when that bump failed or for non-thread
+// messages): it drives the thread.updated fan-out that live-patches each
+// participant's /threads list. Computing that audience HERE — from the
+// same member snapshot and thread reads the notification decision uses —
+// keeps the two audiences from drifting; a previous parallel copy of the
+// participation rules in MessageService silently missed follow-all-threads
+// users and notification-pulled bystanders, and doubled the DynamoDB reads
+// on every reply.
+func (s *NotificationService) NotifyForMessage(ctx context.Context, msg *model.Message, parentType string, threadRoot *model.Message) {
 	if msg == nil || msg.System {
 		return
 	}
@@ -382,23 +391,57 @@ func (s *NotificationService) NotifyForMessage(ctx context.Context, msg *model.M
 	// explicit followers), expanded with anyone whose preferences enable
 	// "follow all threads". A bystander who never opened the thread and didn't
 	// opt into follow-all is not pinged for unrelated thread chatter.
+	//
+	// threadAudience is the SUPERSET whose /threads list shows this thread:
+	// the participants above plus the reply author (re-participating by
+	// posting, even past an earlier unfollow) plus anyone THIS reply's
+	// notifications pull in (a mention/keyword recipient gains a
+	// notification row via markThreadNotification, which surfaces the
+	// thread in their /threads list). They all receive the live
+	// thread.updated patch. Residual gap, deliberate: a bystander pulled in
+	// by an EARLIER reply's notification who stays quiet gets no live bump
+	// for later un-notifying replies (their row is already "unread"; finding
+	// them would need a per-thread reverse index over user notification
+	// state) — their list heals on the next ListUserThreads read.
 	threadParticipants := make(map[string]bool)
-	if isThreadReply && parentType == ParentChannel {
-		for _, uid := range s.resolveThreadRecipients(ctx, msg, snap) {
-			threadParticipants[uid] = true
+	var threadAudience map[string]bool
+	if isThreadReply {
+		recipients := s.resolveThreadRecipients(ctx, msg, snap)
+		threadAudience = make(map[string]bool, len(recipients)+1)
+		for _, uid := range recipients {
+			threadAudience[uid] = true
 		}
-		for uid, eff := range snap.prefs {
-			if eff.FollowAllThreads {
+		if parentType == ParentChannel {
+			for _, uid := range recipients {
 				threadParticipants[uid] = true
+			}
+			for uid, eff := range snap.prefs {
+				if eff.FollowAllThreads {
+					threadParticipants[uid] = true
+					threadAudience[uid] = true
+				}
+			}
+		}
+		// The reply author is excluded from snap.memberIDs (no self-
+		// notifications) but their /threads list must patch live too; Send
+		// already verified their membership before accepting the reply.
+		if msg.AuthorID != "" {
+			threadAudience[msg.AuthorID] = true
+		}
+		// Posting a reply reads the thread for you: advance the author's
+		// seen watermark server-side (the thread analogue of bumpUnreadSeq
+		// marking the author caught up on the parent) and clear any stale
+		// thread-notification row. The client RELIES on this and does not
+		// issue a follow-up seen PUT for its own replies — removing this
+		// would resurrect one HTTP round-trip per reply and mark the
+		// author's own reply unread on their other devices.
+		if s.userState != nil && msg.AuthorID != "" && msg.WebhookUsername == "" {
+			if err := s.userState.MarkThreadSeen(ctx, msg.AuthorID, msg.ParentID, parentType, msg.ParentMessageID); err != nil {
+				slog.Warn("author thread-seen mark failed", "threadRootID", msg.ParentMessageID, "userID", msg.AuthorID, "error", err)
 			}
 		}
 	}
 
-	// Incoming-webhook posts are integrations the user explicitly wired up to
-	// be alerted on, so they notify every (non-muted) member regardless of the
-	// quiet "mentions only" level — the same always-notifiable treatment the
-	// client gives the Webhook flag.
-	isWebhook := msg.WebhookUsername != ""
 	bodyLower := strings.ToLower(msg.Body)
 
 	for _, uid := range snap.memberIDs {
@@ -407,18 +450,17 @@ func (s *NotificationService) NotifyForMessage(ctx context.Context, msg *model.M
 			explicitMention:   explicitSet[uid],
 			groupMention:      groupSet[uid] && !eff.IgnoreGroupMentions,
 			muted:             snap.muted[uid],
-			forceAll:          isWebhook,
 			threadReply:       isThreadReply,
 			threadParticipant: parentType == ParentConversation || threadParticipants[uid],
 			threadReplies:     eff.ThreadReplies,
 		}
 		// The keyword scan is the one per-recipient cost that walks the whole
 		// body, and eligibleAtLevel only consults it once the cheaper signals
-		// (explicit mention, mute, webhook, group mention) haven't already
+		// (explicit mention, mute, group mention) haven't already
 		// decided. Skip it entirely in those cases and when the user has no
 		// keywords — the dominant case now that names are seeded but most
 		// channel members still aren't @-mentioned.
-		if len(eff.Keywords) > 0 && !r.explicitMention && !r.muted && !r.forceAll && !r.groupMention {
+		if len(eff.Keywords) > 0 && !r.explicitMention && !r.muted && !r.groupMention {
 			r.keyword = keywordsMatchLower(bodyLower, eff.Keywords)
 		}
 
@@ -439,6 +481,13 @@ func (s *NotificationService) NotifyForMessage(ctx context.Context, msg *model.M
 		}
 		if !desktop && !mobile {
 			continue
+		}
+
+		// This recipient is being alerted about the thread reply, so a
+		// notification row will surface the thread in their /threads list —
+		// include them in the live thread.updated patch below.
+		if isThreadReply && threadAudience != nil {
+			threadAudience[uid] = true
 		}
 
 		notif := baseNotif
@@ -465,6 +514,47 @@ func (s *NotificationService) NotifyForMessage(ctx context.Context, msg *model.M
 			s.sendMobilePush(ctx, uid, notif)
 		}
 	}
+
+	// Live-patch every audience member's /threads list from the
+	// authoritative root. Gated on threadRoot: when the reply-metadata bump
+	// failed there is no fresh root to patch from, and clients must fall
+	// back to their next ListUserThreads read instead of caching a stale
+	// replyCount.
+	if isThreadReply && threadRoot != nil && len(threadAudience) > 0 {
+		s.publishThreadUpdate(ctx, msg, parentType, threadRoot, threadAudience)
+	}
+}
+
+// publishThreadUpdate fans a thread.updated event out to everyone whose
+// /threads list shows this thread, so the list patches live from the
+// reply's authoritative root instead of a race-prone refetch. The
+// audience is computed by NotifyForMessage from the same member snapshot
+// and thread reads that gate notifications — keep it that way; a second
+// implementation of the participation rules WILL drift (the last one
+// missed follow-all-threads users and notification-pulled bystanders).
+func (s *NotificationService) publishThreadUpdate(ctx context.Context, msg *model.Message, parentType string, root *model.Message, audience map[string]bool) {
+	if s.publisher == nil {
+		return
+	}
+	latest := root.CreatedAt
+	if root.LastReplyAt != nil {
+		latest = *root.LastReplyAt
+	}
+	summary := &ThreadSummary{
+		ParentID:         msg.ParentID,
+		ParentType:       parentType,
+		ThreadRootID:     root.ID,
+		RootAuthorID:     root.AuthorID,
+		RootBody:         root.Body,
+		RootCreatedAt:    root.CreatedAt,
+		ReplyCount:       root.ReplyCount,
+		LatestActivityAt: latest,
+	}
+	channels := make([]string, 0, len(audience))
+	for uid := range audience {
+		channels = append(channels, pubsub.UserChannel(uid))
+	}
+	events.PublishMany(ctx, s.publisher, channels, events.EventThreadUpdated, summary)
 }
 
 // recipientReasons captures, for one recipient and one message, the precomputed
@@ -474,7 +564,6 @@ type recipientReasons struct {
 	explicitMention   bool // @-mentioned by user id (bypasses mute + level)
 	groupMention      bool // @all/@here applies after the ignore preference
 	muted             bool // channel muted (suppresses everything but explicit @)
-	forceAll          bool // webhook post — notify every non-muted member regardless of level
 	threadReply       bool // the message is a reply within a thread
 	threadParticipant bool // recipient participates in / follows the thread
 	threadReplies     bool // recipient wants thread-reply notifications
@@ -490,9 +579,6 @@ func eligibleAtLevel(level model.NotificationLevel, r recipientReasons) bool {
 	}
 	if r.muted {
 		return false
-	}
-	if r.forceAll {
-		return true
 	}
 	if r.groupMention {
 		return true
@@ -756,9 +842,9 @@ func (s *NotificationService) resolveThreadRecipients(ctx context.Context, msg *
 		rootAuthor = root.AuthorID
 		seen[root.AuthorID] = true
 	}
-	// resolveThreadRecipients is only ever called for channel parents now —
-	// conversations always notify every participant, so NotifyForMessage
-	// short-circuits them without scoping to thread participation.
+	// For channel parents this set gates who is NOTIFIED about the reply.
+	// Conversations always notify every participant, so there it only feeds
+	// the thread.updated audience (whose /threads list shows the thread).
 	add := func(dst *[]string, uid string) {
 		if uid == "" || uid == msg.AuthorID || seen[uid] || unfollowed[uid] {
 			return
@@ -837,7 +923,6 @@ func (s *NotificationService) userDisplayName(ctx context.Context, userID string
 	}
 	return name
 }
-
 
 func titleFor(kind NotificationKind, parentType, parentName, authorName string) string {
 	switch kind {

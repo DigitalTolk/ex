@@ -7,7 +7,9 @@ import {
   parseMessageDeleted,
   parsePresence,
   parseServerVersion,
+  parseThreadUpdated,
   parseTyping,
+  parseUserChannelUpdated,
   parseUserUpdated,
 } from './ws-schemas';
 
@@ -130,5 +132,59 @@ describe('event payload parsers', () => {
     expect(ok?.timeZone).toBe('UTC');
     expect(parseUserUpdated({ timeZone: 'UTC' })).toBeNull(); // missing id
     expect(parseUserUpdated({ id: '' })).toBeNull();
+  });
+
+  it('parseThreadUpdated accepts a full ThreadSummary and allows an empty rootBody', () => {
+    const ok = parseThreadUpdated({
+      parentID: 'ch-1',
+      parentType: 'channel',
+      threadRootID: 'root-1',
+      rootAuthorID: 'u-2',
+      rootBody: '',
+      rootCreatedAt: '2026-05-01T10:00:00Z',
+      replyCount: 3,
+      latestActivityAt: '2026-05-01T10:05:00Z',
+    });
+    expect(ok).toMatchObject({ threadRootID: 'root-1', replyCount: 3, parentType: 'channel' });
+  });
+
+  it('parseThreadUpdated rejects a missing threadRootID, a bad parentType, and a non-numeric replyCount', () => {
+    const base = {
+      parentID: 'ch-1',
+      parentType: 'channel',
+      threadRootID: 'root-1',
+      rootAuthorID: 'u-2',
+      rootBody: 'hi',
+      rootCreatedAt: '2026-05-01T10:00:00Z',
+      replyCount: 1,
+      latestActivityAt: '2026-05-01T10:05:00Z',
+    };
+    expect(parseThreadUpdated({ ...base, threadRootID: '' })).toBeNull();
+    expect(parseThreadUpdated({ ...base, parentType: 'nope' })).toBeNull();
+    expect(parseThreadUpdated({ ...base, replyCount: 'x' })).toBeNull();
+  });
+});
+
+describe('parseUserChannelUpdated', () => {
+  it('accepts every publisher shape (all fields optional)', () => {
+    expect(parseUserChannelUpdated({ conversationID: 'c-1', updatedAt: '2026-07-02T10:00:00Z' })).toEqual(
+      expect.objectContaining({ conversationID: 'c-1', updatedAt: '2026-07-02T10:00:00Z' }),
+    );
+    expect(parseUserChannelUpdated({ channelID: 'ch-1' })).toEqual(expect.objectContaining({ channelID: 'ch-1' }));
+    expect(parseUserChannelUpdated({ userState: true })).toEqual(expect.objectContaining({ userState: true }));
+    expect(parseUserChannelUpdated({ userID: 'u-1', categories: true })).toEqual(
+      expect.objectContaining({ categories: true }),
+    );
+    expect(parseUserChannelUpdated({ channelID: 'ch-1', userID: 'u-1', favorite: false })).toEqual(
+      expect.objectContaining({ favorite: false }),
+    );
+    expect(parseUserChannelUpdated({})).toEqual({});
+  });
+
+  it('rejects non-object and wrongly-typed payloads', () => {
+    expect(parseUserChannelUpdated(undefined)).toBeNull();
+    expect(parseUserChannelUpdated('nope')).toBeNull();
+    expect(parseUserChannelUpdated({ channelID: 42 })).toBeNull();
+    expect(parseUserChannelUpdated({ channelID: '' })).toBeNull();
   });
 });

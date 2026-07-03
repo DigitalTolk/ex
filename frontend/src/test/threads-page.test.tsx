@@ -18,6 +18,7 @@ vi.mock('@/hooks/useChannels', () => ({
 }));
 
 vi.mock('@/hooks/useConversations', () => ({
+  useOpenDM: () => ({ openDM: vi.fn(), isPending: false }),
   useUserConversations: () => ({
     data: [{ conversationID: 'conv-1', type: 'dm', displayName: 'Bob' }],
   }),
@@ -32,6 +33,9 @@ vi.mock('@/context/UnreadContext', () => ({
 }));
 
 vi.mock('@/hooks/useUserState', () => ({
+  markLocalUserStateWrite: vi.fn(),
+  shouldRefetchUserStateForRemoteUpdate: vi.fn(() => true),
+  resetUserStateSessionState: vi.fn(),
   useUserState: () => ({
     data: {
       channelNotifications: [],

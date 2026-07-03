@@ -1,6 +1,9 @@
+import { useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiFetch } from '@/lib/api';
 import { queryKeys } from '@/lib/query-keys';
+import { showToast } from '@/lib/toast';
 import type { UserConversation, Conversation, User } from '@/types';
 
 export function useUserConversations(options?: { enabled?: boolean }) {
@@ -22,6 +25,35 @@ export function useConversation(conversationId: string | undefined) {
       (await apiFetch<Conversation>(`/api/v1/conversations/${conversationId}`)) ?? null,
     enabled: !!conversationId,
   });
+}
+
+// useOpenDM is THE shared "message this person" affordance — the SearchBar
+// person rows, the search-results People tab, and the directory all open a
+// DM through here. Success navigates to the conversation (running the
+// caller's onSuccess first so it can clear its own UI state); failure is
+// loud and non-destructive: an error toast fires and the caller's state is
+// left untouched, so the user can simply retry instead of staring at a
+// silently cleared search box.
+export function useOpenDM() {
+  const createConv = useCreateConversation();
+  const navigate = useNavigate();
+  const { mutate } = createConv;
+  const openDM = useCallback(
+    (userID: string, opts?: { onSuccess?: () => void }) => {
+      mutate(
+        { type: 'dm', participantIDs: [userID] },
+        {
+          onSuccess: (conv) => {
+            opts?.onSuccess?.();
+            navigate(`/conversation/${conv.id}`);
+          },
+          onError: () => showToast('Could not open the conversation — please try again.'),
+        },
+      );
+    },
+    [mutate, navigate],
+  );
+  return { openDM, isPending: createConv.isPending };
 }
 
 export function useCreateConversation() {

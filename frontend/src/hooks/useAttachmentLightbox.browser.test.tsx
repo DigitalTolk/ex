@@ -1,4 +1,4 @@
-import { describe, expect, it, afterEach } from 'vitest';
+import { describe, expect, it, afterEach, vi } from 'vitest';
 import { render } from 'vitest-browser-react';
 import { useAttachmentLightbox, type AttachmentLightboxSource } from './useAttachmentLightbox';
 import type { Attachment } from '@/types';
@@ -67,6 +67,25 @@ describe('useAttachmentLightbox (browser)', () => {
     await new Promise((r) => setTimeout(r, 30));
     // Nothing opened — no lightbox author header rendered.
     expect(document.body.textContent).not.toContain('Alice');
+  });
+
+  it('reopens the lightbox after it was closed, on a host that stays mounted', async () => {
+    // Regression class (mirrors the useSwipeDismiss reopen bug): after closing,
+    // the internal openIndex must return to null so a later open() re-shows the
+    // lightbox instead of being stuck.
+    const screen = await mount(<Probe sources={[source('a', att())]} />);
+
+    // Step 1: open → the author header is visible.
+    await screen.getByTestId('open-a').click();
+    await expect.element(screen.getByText('Alice')).toBeVisible();
+
+    // Step 2: close via the lightbox close control → the dialog unmounts.
+    await screen.getByRole('button', { name: 'Close attachment preview' }).click();
+    await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeNull());
+
+    // Step 3: reopen on the SAME still-mounted host → it shows again.
+    await screen.getByTestId('open-a').click();
+    await expect.element(screen.getByText('Alice')).toBeVisible();
   });
 
   it('coerces a missing attachment url to an empty string in the slide list', async () => {

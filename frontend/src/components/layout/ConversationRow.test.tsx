@@ -1,13 +1,19 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, act } from '@testing-library/react';
 import { BrowserRouter } from 'react-router-dom';
 import type { UserConversation } from '@/types';
 import { ConversationRow } from './ConversationRow';
 
 vi.mock('@/hooks/useSidebar', () => ({
+  useReorderSidebar: () => ({ mutate: vi.fn(), isPending: false }),
+  markLocalSidebarReorder: vi.fn(),
+  shouldRefetchSidebarForRemoteUpdate: vi.fn(() => true),
+  resetSidebarReorderSessionState: vi.fn(),
   useFavoriteConversation: () => ({ mutate: vi.fn() }),
   useSetConversationCategory: () => ({ mutate: vi.fn() }),
 }));
+// Force the mobile branch so the long-press → controlled-menu path is exercised.
+vi.mock('@/hooks/useIsMobile', () => ({ useIsMobile: () => true }));
 vi.mock('@/hooks/useEmoji', () => ({
   useEmojiMap: () => ({ data: {} }),
 }));
@@ -60,5 +66,24 @@ describe('ConversationRow', () => {
     const { container } = renderRow({ conversation: dm({ displayName: '' }) });
     const fallback = container.querySelector('[data-slot="avatar-fallback"]');
     expect(fallback?.textContent).toBe('?');
+  });
+
+  it('opens the menu on a mobile long-press and swallows the follow-up nav click', () => {
+    vi.useFakeTimers();
+    try {
+      const onClose = vi.fn();
+      renderRow({ onClose });
+      const row = screen.getByTestId('conversation-row-c-1');
+      fireEvent.pointerDown(row, { pointerType: 'touch' });
+      act(() => {
+        vi.advanceTimersByTime(500);
+      });
+      expect(screen.getByText('Close conversation')).toBeInTheDocument();
+      fireEvent.pointerUp(row, { pointerType: 'touch' });
+      fireEvent.click(screen.getByTestId('conversation-row-c-1').querySelector('a')!);
+      expect(onClose).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

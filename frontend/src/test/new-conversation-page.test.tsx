@@ -8,6 +8,7 @@ const mockCreate = vi.fn();
 const apiFetchMock = vi.fn();
 
 vi.mock('@/hooks/useConversations', () => ({
+  useOpenDM: () => ({ openDM: vi.fn(), isPending: false }),
   useSearchUsers: (q: string) => ({
     data:
       q.trim().length >= 2

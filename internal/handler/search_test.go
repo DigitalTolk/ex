@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -14,6 +15,7 @@ import (
 	"github.com/DigitalTolk/ex/internal/middleware"
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/DigitalTolk/ex/internal/search"
+	"github.com/DigitalTolk/ex/internal/store"
 )
 
 // stubSearcher records each query and returns canned hits so we can
@@ -67,7 +69,7 @@ func setupSearchTest(t *testing.T) (*SearchHandler, *stubSearcher, *stubAccess, 
 	t.Helper()
 	s := &stubSearcher{}
 	a := &stubAccess{}
-	h := NewSearchHandler(s, a)
+	h := NewSearchHandler(s, a, nil, nil)
 	jwtMgr := auth.NewJWTManager("search-secret", 15*time.Minute, 24*time.Hour)
 	return h, s, a, jwtMgr
 }
@@ -95,6 +97,172 @@ func TestSearchHandler_Users_OK(t *testing.T) {
 	}
 	if len(sr.calls) != 1 || sr.calls[0] != "users:alice" {
 		t.Fatalf("expected stub Users(alice), got %v", sr.calls)
+	}
+}
+
+// stubUserResolver returns only the users whose IDs it knows about,
+// omitting the rest — mirroring UserService.GetBatch dropping missing rows.
+type stubUserResolver struct {
+	byID map[string]*model.User
+	err  error
+}
+
+func (s *stubUserResolver) GetBatch(_ context.Context, ids []string) ([]*model.User, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	out := []*model.User{}
+	for _, id := range ids {
+		if u, ok := s.byID[id]; ok {
+			out = append(out, u)
+		}
+	}
+	return out, nil
+}
+
+// stubChannelResolver resolves channels per ID: known IDs return a row,
+// unknown IDs return store.ErrNotFound (a confirmed ghost), and err (if
+// set) simulates a store outage for the fail-open branch.
+type stubChannelResolver struct {
+	byID map[string]*model.Channel
+	err  error
+}
+
+func (s *stubChannelResolver) GetByID(_ context.Context, id string) (*model.Channel, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	if ch, ok := s.byID[id]; ok {
+		return ch, nil
+	}
+	return nil, fmt.Errorf("channel: get: %w", store.ErrNotFound)
+}
+
+func TestSearchHandler_Users_DropsGhostHits(t *testing.T) {
+	_, sr, _, jwtMgr := setupSearchTest(t)
+	// Two hits from the (possibly stale) index; only u-live still has a
+	// canonical store row. u-ghost was deleted straight from DynamoDB.
+	sr.usersHits = []search.SearchHit{
+		{ID: "u-live", Score: 2, Source: map[string]any{"displayName": "Live"}},
+		{ID: "u-ghost", Score: 1, Source: map[string]any{"displayName": "Ghost"}},
+	}
+	h := NewSearchHandler(sr, &stubAccess{}, &stubUserResolver{byID: map[string]*model.User{
+		"u-live": {ID: "u-live"},
+	}}, nil)
+	user := &model.User{ID: "u-2", SystemRole: model.SystemRoleMember}
+	token := makeTokenForUser(jwtMgr, user)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/search/users?q=x", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	middleware.Auth(jwtMgr)(http.HandlerFunc(h.SearchUsers)).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var got search.SearchResult
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(got.Hits) != 1 || got.Hits[0].ID != "u-live" {
+		t.Fatalf("hits = %+v, want only u-live (ghost dropped)", got.Hits)
+	}
+	if got.Total != 1 {
+		t.Fatalf("total = %d, want 1", got.Total)
+	}
+}
+
+// Regression: a resolver outage must DEGRADE to unfiltered hits, not
+// 500 — OpenSearch already answered the query, and the ⌘K autocomplete
+// must keep working while DynamoDB throttles or errors.
+func TestSearchHandler_Users_ResolverErrorDegradesToUnfiltered(t *testing.T) {
+	_, sr, _, jwtMgr := setupSearchTest(t)
+	sr.usersHits = []search.SearchHit{{ID: "u-1"}, {ID: "u-2"}}
+	h := NewSearchHandler(sr, &stubAccess{}, &stubUserResolver{err: errors.New("ddb down")}, nil)
+	user := &model.User{ID: "u-2", SystemRole: model.SystemRoleMember}
+	token := makeTokenForUser(jwtMgr, user)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/search/users?q=x", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	middleware.Auth(jwtMgr)(http.HandlerFunc(h.SearchUsers)).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (degrade, not fail)", rec.Code)
+	}
+	var got search.SearchResult
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(got.Hits) != 2 {
+		t.Fatalf("hits = %d, want 2 raw hits served unfiltered on resolver failure", len(got.Hits))
+	}
+}
+
+func TestSearchHandler_Users_NoResolverPassesThrough(t *testing.T) {
+	// Without a resolver wired the endpoint returns raw hits unchanged
+	// (the search-disabled / test path). setupSearchTest wires none.
+	h, sr, _, jwtMgr := setupSearchTest(t)
+	sr.usersHits = []search.SearchHit{{ID: "u-1"}, {ID: "u-2"}}
+	user := &model.User{ID: "u-9", SystemRole: model.SystemRoleMember}
+	token := makeTokenForUser(jwtMgr, user)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/search/users?q=x", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	middleware.Auth(jwtMgr)(http.HandlerFunc(h.SearchUsers)).ServeHTTP(rec, req)
+
+	var got search.SearchResult
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(got.Hits) != 2 {
+		t.Fatalf("hits = %d, want 2 (passthrough)", len(got.Hits))
+	}
+}
+
+// Ghost channels: a channel hard-deleted from DynamoDB (membership rows
+// left behind keep its ID in the allowed set) must not surface from the
+// stale index; a resolver outage keeps hits (fail open) instead of
+// hiding results or erroring.
+func TestSearchHandler_Channels_DropsGhostsAndFailsOpen(t *testing.T) {
+	_, sr, a, jwtMgr := setupSearchTest(t)
+	a.parents = []string{"c-live", "c-ghost"}
+	sr.channelsHits = []search.SearchHit{
+		{ID: "c-live", Source: map[string]any{"name": "live"}},
+		{ID: "c-ghost", Source: map[string]any{"name": "ghost"}},
+	}
+	user := &model.User{ID: "u-2", SystemRole: model.SystemRoleMember}
+	token := makeTokenForUser(jwtMgr, user)
+
+	do := func(h *SearchHandler) *search.SearchResult {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/search/channels?q=x", nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		middleware.Auth(jwtMgr)(http.HandlerFunc(h.SearchChannels)).ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200", rec.Code)
+		}
+		var got search.SearchResult
+		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		return &got
+	}
+
+	// Confirmed-missing row → dropped.
+	h := NewSearchHandler(sr, a, nil, &stubChannelResolver{byID: map[string]*model.Channel{
+		"c-live": {ID: "c-live"},
+	}})
+	if got := do(h); len(got.Hits) != 1 || got.Hits[0].ID != "c-live" || got.Total != 1 {
+		t.Fatalf("hits = %+v, want only c-live (ghost dropped)", got.Hits)
+	}
+
+	// Resolver outage → both hits kept (fail open, no 500).
+	h = NewSearchHandler(sr, a, nil, &stubChannelResolver{err: errors.New("ddb down")})
+	if got := do(h); len(got.Hits) != 2 {
+		t.Fatalf("hits = %d, want 2 kept on resolver outage", len(got.Hits))
 	}
 }
 
@@ -165,7 +333,7 @@ func TestSearchHandler_Channels_NoAccessReturnsEmpty(t *testing.T) {
 
 func TestSearchHandler_Channels_NilAccessReturnsEmpty(t *testing.T) {
 	sr := &stubSearcher{}
-	h := NewSearchHandler(sr, nil)
+	h := NewSearchHandler(sr, nil, nil, nil)
 	jwtMgr := auth.NewJWTManager("search-nil-access", 15*time.Minute, 24*time.Hour)
 	user := &model.User{ID: "u-2", SystemRole: model.SystemRoleMember}
 	token := makeTokenForUser(jwtMgr, user)
@@ -199,7 +367,7 @@ func TestSearchHandler_Channels_NilHandlerAndUnauthenticated(t *testing.T) {
 		t.Fatalf("nil handler status = %d, want 200", rec.Code)
 	}
 
-	h := NewSearchHandler(&stubSearcher{}, &stubAccess{parents: []string{"ch-1"}})
+	h := NewSearchHandler(&stubSearcher{}, &stubAccess{parents: []string{"ch-1"}}, nil, nil)
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodGet, "/api/v1/search/channels?q=eng", nil)
 	h.SearchChannels(rec, req)
@@ -243,7 +411,7 @@ func TestSearchHandler_NilSearcher_ReturnsEmpty(t *testing.T) {
 	// results so the UI can show a clean "no results" state. Hit
 	// each endpoint so the nil-searcher branch in all three is
 	// exercised.
-	h := NewSearchHandler(nil, nil)
+	h := NewSearchHandler(nil, nil, nil, nil)
 	for _, path := range []string{"/api/v1/search/users", "/api/v1/search/channels", "/api/v1/search/messages"} {
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodGet, path+"?q=x", nil)
@@ -288,7 +456,7 @@ func (erroringSearcher) Files(context.Context, search.MessageQuery) (*search.Sea
 var errSearch = errors.New("opensearch fell over")
 
 func TestSearchHandler_BackendError_ReturnsStatus500(t *testing.T) {
-	h := NewSearchHandler(erroringSearcher{}, &stubAccess{parents: []string{"x"}})
+	h := NewSearchHandler(erroringSearcher{}, &stubAccess{parents: []string{"x"}}, nil, nil)
 	jwtMgr := auth.NewJWTManager("err-secret", 15*time.Minute, 24*time.Hour)
 	user := &model.User{ID: "u-2", SystemRole: model.SystemRoleMember}
 	token := makeTokenForUser(jwtMgr, user)
@@ -334,7 +502,7 @@ func TestSearchHandler_Files_PassesQueryParams(t *testing.T) {
 func TestSearchHandler_Messages_AccessError_Returns500(t *testing.T) {
 	// Failing to compute the user's allowed parent IDs is a hard error —
 	// returning unfiltered results would leak.
-	h := NewSearchHandler(&stubSearcher{}, &stubAccess{err: errors.New("boom")})
+	h := NewSearchHandler(&stubSearcher{}, &stubAccess{err: errors.New("boom")}, nil, nil)
 	jwtMgr := auth.NewJWTManager("err-secret-2", 15*time.Minute, 24*time.Hour)
 	user := &model.User{ID: "u-2", SystemRole: model.SystemRoleMember}
 	token := makeTokenForUser(jwtMgr, user)

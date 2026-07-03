@@ -102,6 +102,7 @@ vi.mock('@/hooks/useChannels', () => ({
 }));
 
 vi.mock('@/hooks/useConversations', () => ({
+  useOpenDM: () => ({ openDM: vi.fn(), isPending: false }),
   useUserConversations: () => ({ data: [] }),
   useCreateConversation: () => ({ mutate: vi.fn(), isPending: false }),
   useSearchUsers: () => ({ data: [] }),
@@ -326,6 +327,51 @@ describe('ChatPage WebSocket handlers', () => {
     // No userThreads refetch — an eventually-consistent re-read would race the
     // just-written state; /threads is patched from the root's message.edited.
     expect(calls).not.toContainEqual(['userThreads']);
+  });
+
+  it('onMessageNew appends a reply into an open thread cache instead of invalidating it', () => {
+    const { qc } = renderAt('/', (client) => {
+      client.setQueryData(['thread', 'channels/ch-1', 'msg-root'], [msg({ id: 'msg-root' })]);
+    });
+    const spy = vi.spyOn(qc, 'invalidateQueries');
+    (capturedOptions.onMessageNew as (d: unknown) => void)(msg({
+      parentMessageID: 'msg-root',
+      id: 'msg-reply-1',
+    }));
+    const thread = qc.getQueryData(['thread', 'channels/ch-1', 'msg-root']) as Array<{ id: string }>;
+    // The reply is patched straight into the open thread — no refetch flicker.
+    expect(thread.map((m) => m.id)).toEqual(['msg-root', 'msg-reply-1']);
+    expect(spy.mock.calls.map((c) => (c[0] as { queryKey?: unknown[] }).queryKey)).not.toContainEqual([
+      'thread',
+      'channels/ch-1',
+      'msg-root',
+    ]);
+  });
+
+  it('onThreadUpdated patches a thread the viewer did not author into /threads (participant-scoped)', () => {
+    const { qc } = renderAt('/');
+    const spy = vi.spyOn(qc, 'invalidateQueries');
+    (capturedOptions.onThreadUpdated as (d: unknown) => void)({
+      parentID: 'ch-1',
+      parentType: 'channel',
+      threadRootID: 'root-x',
+      rootAuthorID: 'someone-else',
+      rootBody: 'not mine',
+      rootCreatedAt: '2026-05-01T09:00:00Z',
+      replyCount: 4,
+      latestActivityAt: '2026-05-01T10:00:00Z',
+    });
+    const threads = qc.getQueryData(['userThreads']) as Array<{ threadRootID: string; replyCount: number }>;
+    // Added even though the viewer isn't the author — receipt is the participation proof.
+    expect(threads?.[0]).toMatchObject({ threadRootID: 'root-x', replyCount: 4 });
+    // Patched from the event payload — no ListUserThreads refetch.
+    expect(spy.mock.calls.map((c) => (c[0] as { queryKey?: unknown[] }).queryKey)).not.toContainEqual(['userThreads']);
+  });
+
+  it('onThreadUpdated ignores a malformed payload', () => {
+    const { qc } = renderAt('/');
+    (capturedOptions.onThreadUpdated as (d: unknown) => void)({ threadRootID: '' });
+    expect(qc.getQueryData(['userThreads'])).toBeUndefined();
   });
 
   it('onMessageEdited for my thread root patches it into /threads live (no refetch)', () => {

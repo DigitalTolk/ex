@@ -18,11 +18,13 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { useBrowseChannels, useJoinChannel, useUserChannels } from '@/hooks/useChannels';
-import { useCreateConversation } from '@/hooks/useConversations';
+import { useOpenDM } from '@/hooks/useConversations';
 import { useAuth } from '@/context/AuthContext';
 import { usePresence } from '@/context/PresenceContext';
 import { apiFetch } from '@/lib/api';
 import { getInitials } from '@/lib/format';
+import { PresenceDot } from '@/components/PresenceDot';
+import { presenceNotchStyle } from '@/lib/presence';
 import { formatLastSeen, formatTimeZoneDelta, formatTimeZoneName, isValidTimeZone } from '@/lib/user-time';
 import type { User } from '@/types';
 
@@ -182,8 +184,7 @@ function MembersTab({ isAdmin, currentUserId }: MembersTabProps) {
   const [debouncedQuery, setDebouncedQuery] = useState('');
   const [error, setError] = useState('');
   const { isOnline } = usePresence();
-  const createConversation = useCreateConversation();
-  const navigate = useNavigate();
+  const { openDM, isPending: openDMPending } = useOpenDM();
   const qc = useQueryClient();
 
   useEffect(() => {
@@ -245,10 +246,7 @@ function MembersTab({ isAdmin, currentUserId }: MembersTabProps) {
   }
 
   function handleMessage(userId: string) {
-    createConversation.mutate(
-      { type: 'dm', participantIDs: [userId] },
-      { onSuccess: (conv) => navigate(`/conversation/${conv.id}`) },
-    );
+    openDM(userId);
   }
 
   const onlineCount = users.reduce((n, u) => (isOnline(u.id) ? n + 1 : n), 0);
@@ -307,19 +305,16 @@ function MembersTab({ isAdmin, currentUserId }: MembersTabProps) {
               className="group items-start overflow-hidden rounded-lg border bg-card transition-colors hover:bg-muted/40"
             >
               <div className="relative aspect-square w-full bg-muted" data-testid="directory-user-avatar">
-                <Avatar className="h-full w-full rounded-none after:rounded-none">
+                <Avatar
+                  className="h-full w-full rounded-none after:rounded-none"
+                  style={presenceNotchStyle(12, 8)}
+                >
                   {u.avatarURL && <AvatarImage src={u.avatarURL} alt="" className="rounded-none" />}
                   <AvatarFallback className="rounded-none bg-primary/10 text-3xl">
                     {getInitials(u.displayName || '??')}
                   </AvatarFallback>
                 </Avatar>
-                <span
-                  data-testid={`presence-${u.id}`}
-                  className={`absolute bottom-2 right-2 h-3 w-3 rounded-full ring-2 ring-background ${
-                    online ? 'bg-online' : 'bg-muted-foreground'
-                  }`}
-                  aria-label={online ? 'Online' : 'Offline'}
-                />
+                <PresenceDot online={online} size={12} inset={8} testId={`presence-${u.id}`} />
                 <Badge
                   variant={u.systemRole === 'admin' ? 'default' : 'secondary'}
                   data-testid={`role-pill-${u.id}`}
@@ -383,7 +378,7 @@ function MembersTab({ isAdmin, currentUserId }: MembersTabProps) {
                     size="sm"
                     variant="outline"
                     onClick={() => handleMessage(u.id)}
-                    disabled={createConversation.isPending}
+                    disabled={openDMPending}
                     aria-label={isSelf ? 'Open notes-to-self' : `Message ${u.displayName}`}
                     className="h-8 min-w-0 flex-1"
                   >

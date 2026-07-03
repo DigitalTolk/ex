@@ -85,6 +85,12 @@ export const composerTheme = EditorView.theme({
     backgroundColor: 'var(--color-card)',
     boxShadow: '0 8px 24px -6px rgba(0, 0, 0, 0.18), 0 2px 6px -2px rgba(0, 0, 0, 0.1)',
     overflow: 'hidden',
+    // Sit above every app layer. The popup is portalled to <body> (see
+    // MarkdownEditor's tooltips({ parent: document.body })), so it competes with
+    // top-level surfaces — the highest today is PopoverPortal at z-999. CM's
+    // base .cm-tooltip is only z-500, which a mobile drawer/portal could cover;
+    // 1000 keeps the mention/emoji typeahead unconditionally on top.
+    zIndex: 1000,
     fontFamily: 'var(--font-sans)',
     fontSize: '14px',
     // Wider popup so names + emails + status sit comfortably on one line.

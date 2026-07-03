@@ -116,24 +116,30 @@ describe('MessageItem "Remind me"', () => {
     expect((createReminderMutateAsync.mock.calls[0][0].remindAt as string).startsWith("2999")).toBe(true);
   });
 
-  it('schedules a preset reminder from the mobile action sheet', async () => {
+  it('mobile action sheet shows a single Remind me item (no inline preset list) that opens the dialog', async () => {
     if (window.innerWidth > 767) return; // mobile sheet only
     await renderItem(
       <MessageItem message={makeMessage()} authorName="Alice" isOwn={false} channelId="channel-1" channelSlug="general" currentUserId="user-9" />,
     );
     await openMobileSheet();
-    await userEvent.click(document.querySelector('[data-testid="mobile-remind-in1h"]') as HTMLButtonElement);
-    expect(createReminderMutate).toHaveBeenCalledTimes(1);
-    expect(createReminderMutate.mock.calls[0][0]).toMatchObject({ messageID: 'msg-1', parentType: 'channel' });
+    // The old inline preset group (which made the sheet tall enough to cover the
+    // whole screen) is gone — a single item remains.
+    expect(document.querySelector('[data-testid="mobile-remind-group"]')).toBeNull();
+    expect(document.querySelector('[data-testid="mobile-remind-in1h"]')).toBeNull();
+    const remind = document.querySelector('[data-testid="mobile-remind"]') as HTMLButtonElement;
+    expect(remind).not.toBeNull();
+    // Tapping it opens the separate date-selector popup right away.
+    await userEvent.click(remind);
+    await vi.waitFor(() => expect(document.querySelector('[data-testid="reminder-datetime"]')).not.toBeNull());
   });
 
-  it('opens the custom dialog from the mobile action sheet', async () => {
+  it('schedules a reminder from the mobile action sheet via the date-selector popup', async () => {
     if (window.innerWidth > 767) return;
     await renderItem(
       <MessageItem message={makeMessage()} authorName="Alice" isOwn={false} channelId="channel-1" channelSlug="general" currentUserId="user-9" />,
     );
     await openMobileSheet();
-    await userEvent.click(document.querySelector('[data-testid="mobile-remind-custom"]') as HTMLButtonElement);
+    await userEvent.click(document.querySelector('[data-testid="mobile-remind"]') as HTMLButtonElement);
     const input = await vi.waitFor(() => {
       const el = document.querySelector('[data-testid="reminder-datetime"]') as HTMLInputElement | null;
       expect(el).not.toBeNull();

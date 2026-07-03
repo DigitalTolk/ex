@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 )
@@ -152,11 +153,320 @@ func TestSearch_MessageMappingAndQuery_RealEngine(t *testing.T) {
 	}
 }
 
+func TestSearch_UserAutocompletePrefix_RealEngine(t *testing.T) {
+	c := newSearchClient(t)
+	ctx := context.Background()
+	idx := NewIndexer(c)
+	svc := NewService(c)
+
+	users := []*model.User{
+		{ID: "au1", DisplayName: "Muhammad Abdur Rehman", Email: "abdur@example.com"},
+		{ID: "au2", DisplayName: "Alice Anderson", Email: "alice@example.com"},
+		{ID: "au3", DisplayName: "Foo Bar123", Email: "bar123@example.com"},
+	}
+	for _, u := range users {
+		if err := idx.IndexUser(ctx, u); err != nil {
+			t.Fatalf("IndexUser %s: %v", u.ID, err)
+		}
+	}
+	refreshIndex(t, c, IndexUsers)
+
+	cases := []struct {
+		name string
+		q    string
+		want string // the ID that MUST be present
+	}{
+		// The #2 bug: a mid-name substring/prefix must match.
+		{"prefix of middle token", "abd", "au1"},
+		{"prefix of last token", "reh", "au1"},
+		{"prefix of first token", "muh", "au1"},
+		// The #4 bug: a true INFIX (not a token prefix) must match — "123" is in
+		// the MIDDLE/end of "bar123", never a prefix, so this only works with
+		// plain n-grams (edge n-grams would miss it).
+		{"infix number inside a token", "123", "au3"},
+		{"infix letters+digits inside a token", "ar12", "au3"},
+		// Full-token exact still works.
+		{"exact token", "Rehman", "au1"},
+		// Typo tolerance (fuzziness AUTO) still works.
+		{"typo", "Muhamad", "au1"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			res, err := svc.Users(ctx, tc.q, 10)
+			if err != nil {
+				t.Fatalf("Users(%q): %v", tc.q, err)
+			}
+			if !hitIDs(res)[tc.want] {
+				t.Fatalf("Users(%q) = %v, want %s present", tc.q, res.Hits, tc.want)
+			}
+		})
+	}
+
+	// Negative control: an unrelated prefix must NOT surface au1.
+	res, err := svc.Users(ctx, "zzz", 10)
+	if err != nil {
+		t.Fatalf("Users(zzz): %v", err)
+	}
+	if hitIDs(res)["au1"] {
+		t.Fatalf("Users(zzz) unexpectedly matched au1: %v", res.Hits)
+	}
+}
+
+// The n-gram autocomplete subfield indexes grams of 2..10 chars. These
+// tests pin the max_gram boundary — a 10-char infix matches, an 11+-char
+// mid-token substring does NOT (it exceeds every indexed gram and is too
+// many edits for the fuzzy fallback) — and prove the lowercase+ngram
+// chain handles non-Latin scripts. Anyone tuning the analyzer (min/max
+// gram, search_analyzer) trips these instead of silently breaking search.
+func TestSearch_AutocompleteNgramBoundaryAndNonLatin_RealEngine(t *testing.T) {
+	c := newSearchClient(t)
+	ctx := context.Background()
+	idx := NewIndexer(c)
+	svc := NewService(c)
+
+	users := []*model.User{
+		// One 16-char token so mid-token substrings of length 10 vs 11
+		// straddle max_gram without full-token or fuzzy interference.
+		{ID: "ng1", DisplayName: "abcdefghijklmnop", Email: "ng1@example.com"},
+		{ID: "ng2", DisplayName: "Михаил Петров", Email: "mikhail@example.com"},
+	}
+	for _, u := range users {
+		if err := idx.IndexUser(ctx, u); err != nil {
+			t.Fatalf("IndexUser %s: %v", u.ID, err)
+		}
+	}
+	refreshIndex(t, c, IndexUsers)
+
+	t.Run("10-char infix matches (max_gram boundary)", func(t *testing.T) {
+		res, err := svc.Users(ctx, "efghijklmn", 10) // chars 5-14 of the token
+		if err != nil {
+			t.Fatalf("Users: %v", err)
+		}
+		if !hitIDs(res)["ng1"] {
+			t.Fatalf("10-char infix must match via the ngram subfield, got %v", res.Hits)
+		}
+	})
+	t.Run("11-char mid-token substring misses (documented max_gram limit)", func(t *testing.T) {
+		// 11 chars exceeds max_gram=10, and 5 edits from the full token is
+		// beyond fuzziness AUTO — so this documented limitation returns
+		// nothing (and must not error). If a mapping change makes this
+		// match, update the docs in index.go alongside this test.
+		res, err := svc.Users(ctx, "efghijklmno", 10)
+		if err != nil {
+			t.Fatalf("Users: %v", err)
+		}
+		if hitIDs(res)["ng1"] {
+			t.Fatalf("11-char mid-token substring unexpectedly matched — max_gram semantics changed, update index.go docs: %v", res.Hits)
+		}
+	})
+	t.Run("cyrillic prefix and infix", func(t *testing.T) {
+		for _, q := range []string{"Мих", "иха"} {
+			res, err := svc.Users(ctx, q, 10)
+			if err != nil {
+				t.Fatalf("Users(%q): %v", q, err)
+			}
+			if !hitIDs(res)["ng2"] {
+				t.Fatalf("Users(%q) = %v, want ng2 — lowercase+ngram must handle Cyrillic", q, res.Hits)
+			}
+		}
+	})
+}
+
+func TestSearch_ChannelAutocompleteAndScoping_RealEngine(t *testing.T) {
+	c := newSearchClient(t)
+	ctx := context.Background()
+	idx := NewIndexer(c)
+	svc := NewService(c)
+
+	channels := []*model.Channel{
+		{ID: "ac1", Name: "engineering", Slug: "engineering", Type: model.ChannelTypePublic},
+		{ID: "ac2", Name: "engineering-private", Slug: "engineering-private", Type: model.ChannelTypePrivate},
+		{ID: "ac3", Name: "engineering-archived", Slug: "engineering-archived", Type: model.ChannelTypePublic, Archived: true},
+		{ID: "ac4", Name: "engineering-secret", Slug: "engineering-secret", Type: model.ChannelTypePrivate},
+	}
+	for _, ch := range channels {
+		if err := idx.IndexChannel(ctx, ch); err != nil {
+			t.Fatalf("IndexChannel %s: %v", ch.ID, err)
+		}
+	}
+	refreshIndex(t, c, IndexChannels)
+
+	// Unscoped (nil allowed): every non-archived channel matches, incl. private.
+	res, err := svc.Channels(ctx, ChannelQuery{Q: "eng", Limit: 10})
+	if err != nil {
+		t.Fatalf("Channels(eng): %v", err)
+	}
+	if ids := hitIDs(res); !ids["ac1"] || !ids["ac2"] || !ids["ac4"] || ids["ac3"] {
+		t.Fatalf("Channels(eng) unscoped = %v, want ac1+ac2+ac4, not archived ac3", res.Hits)
+	}
+
+	// The fix — Slack-style visibility with membership scoping. The caller
+	// belongs ONLY to the private ac4 (not ac1, not ac2):
+	//   - ac1 PUBLIC → surfaces even though the caller hasn't joined it,
+	//   - ac4 PRIVATE + member → surfaces,
+	//   - ac2 PRIVATE + non-member → hidden,
+	//   - ac3 archived → hidden.
+	res, err = svc.Channels(ctx, ChannelQuery{Q: "eng", AllowedChannelIDs: []string{"ac4"}, Limit: 10})
+	if err != nil {
+		t.Fatalf("Channels(eng, scoped): %v", err)
+	}
+	if ids := hitIDs(res); !ids["ac1"] || !ids["ac4"] || ids["ac2"] || ids["ac3"] {
+		t.Fatalf("scoped Channels(eng) = %v, want public ac1 + member-private ac4, not ac2/ac3", res.Hits)
+	}
+
+	// Empty allowed set (a brand-new user with no memberships): only public.
+	res, err = svc.Channels(ctx, ChannelQuery{Q: "eng", AllowedChannelIDs: []string{}, Limit: 10})
+	if err != nil {
+		t.Fatalf("Channels(eng, empty scope): %v", err)
+	}
+	if ids := hitIDs(res); !ids["ac1"] || ids["ac2"] || ids["ac4"] {
+		t.Fatalf("empty-scope Channels(eng) = %v, want only public ac1", res.Hits)
+	}
+}
+
+// The exact user-reported case: free-text searching "random" surfaces a
+// public ~random channel the caller has NOT joined.
+func TestSearch_ChannelSearchFindsUnjoinedPublic_RealEngine(t *testing.T) {
+	c := newSearchClient(t)
+	ctx := context.Background()
+	idx := NewIndexer(c)
+	svc := NewService(c)
+
+	if err := idx.IndexChannel(ctx, &model.Channel{ID: "rnd1", Name: "random", Slug: "random", Type: model.ChannelTypePublic}); err != nil {
+		t.Fatalf("IndexChannel: %v", err)
+	}
+	refreshIndex(t, c, IndexChannels)
+
+	// Caller is a member of some OTHER channel, not ~random.
+	res, err := svc.Channels(ctx, ChannelQuery{Q: "random", AllowedChannelIDs: []string{"some-other-channel"}, Limit: 10})
+	if err != nil {
+		t.Fatalf("Channels(random): %v", err)
+	}
+	if !hitIDs(res)["rnd1"] {
+		t.Fatalf("free-text 'random' must surface the unjoined public ~random channel, got %v", res.Hits)
+	}
+}
+
+func TestSearch_RecreateUsersChannelsDropsOrphan_RealEngine(t *testing.T) {
+	c := newSearchClient(t)
+	ctx := context.Background()
+	idx := NewIndexer(c)
+	svc := NewService(c)
+
+	// Seed a ghost directly into the index — simulates a user deleted
+	// from DynamoDB whose search doc was never removed.
+	if err := idx.IndexUser(ctx, &model.User{ID: "ghost-1", DisplayName: "Ghostly Presence"}); err != nil {
+		t.Fatalf("seed ghost: %v", err)
+	}
+	refreshIndex(t, c, IndexUsers)
+	before, err := svc.Users(ctx, "ghostly", 10)
+	if err != nil {
+		t.Fatalf("pre-search: %v", err)
+	}
+	if !hitIDs(before)["ghost-1"] {
+		t.Fatal("precondition: ghost should be searchable before recreate")
+	}
+
+	// The canonical source no longer contains the ghost — only a live user.
+	src := &fakeSources{
+		users:    []*model.User{{ID: "live-1", DisplayName: "Ghostly Twin"}},
+		channels: []*model.Channel{{ID: "keep-1", Name: "kept"}},
+	}
+	if _, _, err := RecreateUsersChannels(ctx, c, src); err != nil {
+		t.Fatalf("RecreateUsersChannels: %v", err)
+	}
+	refreshIndex(t, c, IndexUsers)
+
+	afterRes, err := svc.Users(ctx, "ghostly", 10)
+	if err != nil {
+		t.Fatalf("post-search: %v", err)
+	}
+	after := hitIDs(afterRes)
+	if after["ghost-1"] {
+		t.Fatal("ghost-1 must be gone after recreate reindex")
+	}
+	if !after["live-1"] {
+		t.Fatal("live-1 must be present after recreate reindex")
+	}
+	// The rebuilt index still carries the autocomplete analyzer: a prefix
+	// query resolves the freshly reindexed user.
+	prefixRes, err := svc.Users(ctx, "gho", 10)
+	if err != nil {
+		t.Fatalf("prefix-search: %v", err)
+	}
+	if !hitIDs(prefixRes)["live-1"] {
+		t.Fatal("prefix 'gho' should match live-1 on the recreated index")
+	}
+}
+
 func TestSearch_EnsureIndicesIsIdempotent_RealEngine(t *testing.T) {
 	c := newSearchClient(t)
 	// EnsureIndices ran once in newSearchClient; a second call must be a no-op
 	// (the indices already exist) rather than erroring.
 	if err := c.EnsureIndices(context.Background()); err != nil {
 		t.Fatalf("EnsureIndices second call should be idempotent: %v", err)
+	}
+}
+
+// A rebuild must be repeatable and zero-downtime: the first run promotes
+// a legacy real index onto an alias (atomic remove_index), the second
+// swaps alias → alias and deletes the retired physical index. The
+// logical name keeps answering searches and writes across both, and
+// IndexStats keeps reporting the logical name.
+func TestSearch_RebuildRepeatable_AliasSwap_RealEngine(t *testing.T) {
+	c := newSearchClient(t)
+	ctx := context.Background()
+	svc := NewService(c)
+
+	src := &fakeSources{
+		users:    []*model.User{{ID: "swap-u1", DisplayName: "Swapelina Vex"}},
+		channels: []*model.Channel{{ID: "swap-c1", Name: "swapchannel"}},
+	}
+	for run := 1; run <= 2; run++ {
+		users, channels, err := RecreateUsersChannels(ctx, c, src)
+		if err != nil {
+			t.Fatalf("run %d: RecreateUsersChannels: %v", run, err)
+		}
+		if users != 1 || channels != 1 {
+			t.Fatalf("run %d: counts = %d/%d, want 1/1", run, users, channels)
+		}
+		refreshIndex(t, c, IndexUsers)
+		res, err := svc.Users(ctx, "swapelina", 10)
+		if err != nil {
+			t.Fatalf("run %d: search through logical name: %v", run, err)
+		}
+		if !hitIDs(res)["swap-u1"] {
+			t.Fatalf("run %d: swap-u1 missing after rebuild: %v", run, res.Hits)
+		}
+		backing, err := c.aliasBacking(ctx, IndexUsers)
+		if err != nil || backing == "" {
+			t.Fatalf("run %d: expected %s to be an alias, backing=%q err=%v", run, IndexUsers, backing, err)
+		}
+	}
+
+	// Writes through the logical (aliased) name still land.
+	if err := NewIndexer(c).IndexUser(ctx, &model.User{ID: "post-swap", DisplayName: "Postswap Person"}); err != nil {
+		t.Fatalf("IndexDoc through alias: %v", err)
+	}
+	refreshIndex(t, c, IndexUsers)
+	res, err := svc.Users(ctx, "postswap", 10)
+	if err != nil || !hitIDs(res)["post-swap"] {
+		t.Fatalf("post-swap write not searchable through alias: %v %v", res, err)
+	}
+
+	// IndexStats maps the physical `<name>-r<nanos>` row back to the
+	// logical name so the admin UI keeps rendering stable rows.
+	stats, err := c.IndexStats(ctx)
+	if err != nil {
+		t.Fatalf("IndexStats: %v", err)
+	}
+	var userStat *IndexStat
+	for i := range stats {
+		if stats[i].Name == IndexUsers {
+			userStat = &stats[i]
+		}
+	}
+	if userStat == nil || userStat.Health == "missing" || userStat.Docs < 1 {
+		t.Fatalf("IndexStats must report the aliased %s as live, got %+v", IndexUsers, stats)
 	}
 }

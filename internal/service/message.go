@@ -54,9 +54,13 @@ type AttachmentRefManager interface {
 
 // MessageNotifier is the slice of NotificationService MessageService cares
 // about. Defined as an interface so the dependency is explicit and tests
-// can stub it without instantiating the real notifier.
+// can stub it without instantiating the real notifier. threadRoot is the
+// authoritative root returned by IncrementReplyMetadata for a thread reply
+// (nil otherwise, or when the bump failed) — the notifier derives the
+// thread.updated fan-out from it alongside the notification decision, so
+// the two audiences share one snapshot and can't drift.
 type MessageNotifier interface {
-	NotifyForMessage(ctx context.Context, msg *model.Message, parentType string)
+	NotifyForMessage(ctx context.Context, msg *model.Message, parentType string, threadRoot *model.Message)
 }
 
 type MessageIndexer interface {
@@ -247,14 +251,14 @@ func (s *MessageService) indexMessage(ctx context.Context, m *model.Message, par
 // the recipient fan-out (member read + per-recipient prefs + mobile push) is
 // best-effort and must never add to the sender's request latency, nor can a
 // notify failure affect the already-committed message or its event publish.
-func (s *MessageService) notify(ctx context.Context, msg *model.Message, parentType string) {
+func (s *MessageService) notify(ctx context.Context, msg *model.Message, parentType string, threadRoot *model.Message) {
 	if s.notifier == nil || msg == nil {
 		return
 	}
 	safe.Go(func() {
 		bg, cancel := detachedContext(ctx)
 		defer cancel()
-		s.notifier.NotifyForMessage(bg, msg, parentType)
+		s.notifier.NotifyForMessage(bg, msg, parentType, threadRoot)
 	})
 }
 
@@ -447,9 +451,11 @@ func (s *MessageService) Send(ctx context.Context, userID, parentID, parentType,
 	s.publishEvent(ctx, parentID, parentType, events.EventMessageNew, msg)
 
 	// Fire user-facing notifications (sound + popup) to recipients who
-	// haven't muted the parent. Decoupled from event publishing (and run off
-	// the send path) so failure or latency here never affects state propagation.
-	s.notify(ctx, msg, parentType)
+	// haven't muted the parent, and — for a thread reply with a fresh root —
+	// the participant-scoped thread.updated fan-out that live-patches each
+	// /threads list. Decoupled from event publishing (and run off the send
+	// path) so failure or latency here never affects state propagation.
+	s.notify(ctx, msg, parentType, updatedThreadRoot)
 
 	s.indexMessage(ctx, msg, parentType)
 
@@ -457,7 +463,9 @@ func (s *MessageService) Send(ctx context.Context, userID, parentID, parentType,
 	// Thread reply: republish the authoritative parent so subscribers see
 	// the new replyCount / avatar stack without a re-fetch. The metadata
 	// itself was already persisted before message.new to keep /threads
-	// refetches from racing old state.
+	// refetches from racing old state. (The participant-scoped thread.updated
+	// fan-out rides with notify() above — the notifier computes its audience
+	// from the same snapshot as the notification decision.)
 	if updatedThreadRoot != nil {
 		s.publishEvent(ctx, parentID, parentType, events.EventMessageEdited, updatedThreadRoot)
 	}
@@ -527,7 +535,7 @@ func (s *MessageService) SendWebhook(ctx context.Context, in WebhookMessageInput
 		s.bumpUnreadSeq(ctx, s.convSeq, parentID, authorID)
 	}
 	s.publishEvent(ctx, parentID, parentType, events.EventMessageNew, msg)
-	s.notify(ctx, msg, parentType)
+	s.notify(ctx, msg, parentType, nil) // webhook posts are always top-level, never thread replies
 	s.indexMessage(ctx, msg, parentType)
 	return msg, nil
 }

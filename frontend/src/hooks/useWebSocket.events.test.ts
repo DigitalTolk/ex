@@ -67,6 +67,15 @@ describe('useWebSocket event coverage', () => {
     expect(onActivityNew).toHaveBeenCalled();
   });
 
+  it('routes thread.updated to onThreadUpdated', () => {
+    const onThreadUpdated = vi.fn();
+    renderHook(() => useWebSocket({ onThreadUpdated, enabled: true }));
+    const ws = MockWebSocket.instances[0];
+    ws.simulateOpen();
+    ws.simulateMessage(JSON.stringify({ id: 'th1', type: 'thread.updated', data: '{"threadRootID":"root-1"}' }));
+    expect(onThreadUpdated).toHaveBeenCalledWith(expect.objectContaining({ threadRootID: 'root-1' }));
+  });
+
   it('evicts the oldest id once the dedup buffer exceeds capacity', () => {
     const onMessageNew = vi.fn();
     renderHook(() => useWebSocket({ onMessageNew, enabled: true }));

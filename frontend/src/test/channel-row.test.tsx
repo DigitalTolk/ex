@@ -13,6 +13,10 @@ const setCategoryMutate = vi.fn();
 let categoriesData: SidebarCategory[] = [];
 
 vi.mock('@/hooks/useSidebar', () => ({
+  useReorderSidebar: () => ({ mutate: vi.fn(), isPending: false }),
+  markLocalSidebarReorder: vi.fn(),
+  shouldRefetchSidebarForRemoteUpdate: vi.fn(() => true),
+  resetSidebarReorderSessionState: vi.fn(),
   useFavoriteChannel: () => ({ mutate: favoriteMutate }),
   useSetCategory: () => ({ mutate: setCategoryMutate }),
   useCategories: () => ({ data: categoriesData }),
@@ -86,15 +90,20 @@ describe('ChannelRow', () => {
     expect(screen.getByText('general')).toBeInTheDocument();
   });
 
-  it('keeps row actions visible and tappable on mobile', () => {
+  it('keeps the star tappable but hides the kebab on mobile (opened via long-press)', () => {
     renderRow(makeChannel({ channelID: 'ch-1', channelName: 'general' }));
 
     const link = screen.getByText('general').closest('a')!;
     const star = screen.getByTestId('fav-toggle-ch-1');
     const menu = screen.getByTestId('row-menu-ch-1');
     expect(link).toHaveClass('max-md:pr-20');
+    // Star stays a visible tap target on mobile.
     expect(star).toHaveClass('max-md:h-9', 'max-md:w-9', 'max-md:opacity-100');
-    expect(menu).toHaveClass('max-md:h-9', 'max-md:w-9', 'max-md:opacity-100');
+    // The management kebab is NOT an always-visible tap target on mobile — it's
+    // kept mounted only so Radix can anchor the menu, and opened by long-pressing
+    // the row instead.
+    expect(menu).toHaveClass('max-md:pointer-events-none', 'max-md:opacity-0');
+    expect(menu).not.toHaveClass('max-md:opacity-100');
   });
 
   it('toggles favorite via the star button', () => {

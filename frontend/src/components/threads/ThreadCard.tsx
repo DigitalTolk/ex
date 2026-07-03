@@ -289,6 +289,7 @@ export function ThreadCard({ summary, title, deepLink, currentUserId, unread = f
               message={root}
               authorName={userMap.get(root.authorID)?.displayName ?? 'Unknown'}
               authorAvatarURL={userMap.get(root.authorID)?.avatarURL}
+              authorUserStatus={userMap.get(root.authorID)?.userStatus}
               authorOnline={presence.isOnline(root.authorID)}
               isOwn={root.authorID === currentUserId}
               channelId={channelId}
@@ -323,6 +324,7 @@ export function ThreadCard({ summary, title, deepLink, currentUserId, unread = f
                 firstInGroup={!isGroupedWithPrevious(i === 0 ? firstVisiblePrev : visibleReplies[i - 1], msg)}
                 authorName={userMap.get(msg.authorID)?.displayName ?? 'Unknown'}
                 authorAvatarURL={userMap.get(msg.authorID)?.avatarURL}
+                authorUserStatus={userMap.get(msg.authorID)?.userStatus}
                 authorOnline={presence.isOnline(msg.authorID)}
                 isOwn={msg.authorID === currentUserId}
                 channelId={channelId}

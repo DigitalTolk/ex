@@ -29,13 +29,21 @@ const draggableConfigs = vi.hoisted(() => [] as Array<{
   onDragStart?: () => void;
   onDrop?: () => void;
 }>);
+// Captured so a test can assert EVERY drop target is registered sticky — the
+// contract that keeps a live target under the cursor when it moves onto the
+// push-aside gap (a pointer-events-none layout box that is not itself a drop
+// target). Drop stickiness → preventDefault keeps firing → no native snap-back.
+const dropTargetConfigs = vi.hoisted(() => [] as Array<{ element: Element; getIsSticky?: () => boolean }>);
 
 vi.mock('@atlaskit/pragmatic-drag-and-drop/element/adapter', () => ({
   draggable: (config: { element: Element; onDragStart?: () => void; onDrop?: () => void }) => {
     draggableConfigs.push(config);
     return () => {};
   },
-  dropTargetForElements: () => () => {},
+  dropTargetForElements: (config: { element: Element; getIsSticky?: () => boolean }) => {
+    dropTargetConfigs.push(config);
+    return () => {};
+  },
   monitorForElements: (config: typeof monitorCallbacks) => {
     monitorCallbacks.onDragStart = config.onDragStart;
     monitorCallbacks.onDropTargetChange = config.onDropTargetChange;
@@ -121,8 +129,29 @@ vi.mock('@/context/PresenceContext', () => ({
 const setCategoryMutate = vi.fn();
 const setConversationCategoryMutate = vi.fn();
 const reorderCategoriesMutate = vi.fn();
+const reorderSidebarMutate = vi.fn();
 const favoriteChannelMutate = vi.fn();
 const favoriteConversationMutate = vi.fn();
+
+// Pull the dense position the reorder assigned to a given row out of the last
+// reorderSidebar.mutate({ updates }) call — the tests assert the intended
+// placement, not a fragile fractional integer.
+function lastReorderUpdates(): Array<{ id: string; categoryID: string; favorite: boolean; sidebarPosition: number }> {
+  const call = reorderSidebarMutate.mock.calls.at(-1)?.[0] as
+    | { updates: Array<{ id: string; categoryID: string; favorite: boolean; sidebarPosition: number }> }
+    | undefined;
+  return call?.updates ?? [];
+}
+function positionOf(id: string): number | undefined {
+  return lastReorderUpdates().find((u) => u.id === id)?.sidebarPosition;
+}
+function favoriteOf(id: string): boolean | undefined {
+  return lastReorderUpdates().find((u) => u.id === id)?.favorite;
+}
+function lastFavoriteChanged(): Set<string> {
+  const call = reorderSidebarMutate.mock.calls.at(-1)?.[0] as { favoriteChanged?: Set<string> } | undefined;
+  return call?.favoriteChanged ?? new Set();
+}
 
 vi.mock('@/hooks/useChannels', () => ({
   useUserChannels: () => ({ data: makeChannels() }),
@@ -130,6 +159,7 @@ vi.mock('@/hooks/useChannels', () => ({
 }));
 
 vi.mock('@/hooks/useConversations', () => ({
+  useOpenDM: () => ({ openDM: vi.fn(), isPending: false }),
   useUserConversations: () => ({
     data: makeConversations(),
     isError: false,
@@ -146,6 +176,9 @@ vi.mock('@/hooks/useThreads', () => ({
 }));
 
 vi.mock('@/hooks/useUserState', () => ({
+  markLocalUserStateWrite: vi.fn(),
+  shouldRefetchUserStateForRemoteUpdate: vi.fn(() => true),
+  resetUserStateSessionState: vi.fn(),
   useUserState: () => ({
     data: {
       hiddenConversations: [],
@@ -157,6 +190,7 @@ vi.mock('@/hooks/useUserState', () => ({
 }));
 
 vi.mock('@/hooks/useDrafts', () => ({
+  markLocalDraftClearForSend: vi.fn(),
   useDrafts: () => ({ data: [] }),
 }));
 
@@ -173,6 +207,10 @@ vi.mock('@/hooks/useSidebar', () => ({
   useSetCategory: () => ({ mutate: setCategoryMutate, isPending: false }),
   useSetConversationCategory: () => ({ mutate: setConversationCategoryMutate, isPending: false }),
   useReorderCategories: () => ({ mutate: reorderCategoriesMutate, isPending: false }),
+  useReorderSidebar: () => ({ mutate: reorderSidebarMutate, isPending: false }),
+  markLocalSidebarReorder: vi.fn(),
+  shouldRefetchSidebarForRemoteUpdate: vi.fn(() => true),
+  resetSidebarReorderSessionState: vi.fn(),
 }));
 
 vi.mock('@/hooks/useIsMobile', () => ({
@@ -273,6 +311,7 @@ beforeEach(() => {
   setCategoryMutate.mockClear();
   setConversationCategoryMutate.mockClear();
   reorderCategoriesMutate.mockClear();
+  reorderSidebarMutate.mockClear();
   favoriteChannelMutate.mockClear();
   favoriteConversationMutate.mockClear();
   monitorCallbacks.onDragStart = undefined;
@@ -280,6 +319,7 @@ beforeEach(() => {
   monitorCallbacks.onDrag = undefined;
   monitorCallbacks.onDrop = undefined;
   draggableConfigs.length = 0;
+  dropTargetConfigs.length = 0;
 });
 
 afterEach(() => {
@@ -303,7 +343,7 @@ describe('Sidebar drag-and-drop monitor callbacks', () => {
     monitorCallbacks.onDragStart?.(dragSource({ type: 'channel', channel: chan('ch-other') }));
     monitorCallbacks.onDropTargetChange?.(dropLocation([sectionTarget('__channels__')]));
     monitorCallbacks.onDrop?.(dropLocation([sectionTarget('__channels__')]));
-    expect(setCategoryMutate).toHaveBeenCalled();
+    expect(reorderSidebarMutate).toHaveBeenCalled();
   });
 
   it('drops a channel onto a user category — fires the set-category mutation', async () => {
@@ -311,7 +351,7 @@ describe('Sidebar drag-and-drop monitor callbacks', () => {
     monitorCallbacks.onDragStart?.(dragSource({ type: 'channel', channel: chan('ch-other') }));
     monitorCallbacks.onDropTargetChange?.(dropLocation([sectionTarget('cat-work', 'cat-work')]));
     monitorCallbacks.onDrop?.(dropLocation([sectionTarget('cat-work', 'cat-work')]));
-    expect(setCategoryMutate).toHaveBeenCalled();
+    expect(reorderSidebarMutate).toHaveBeenCalled();
   });
 
   it('drops a conversation onto Favorites — fires the conversation-category mutation', async () => {
@@ -319,7 +359,7 @@ describe('Sidebar drag-and-drop monitor callbacks', () => {
     monitorCallbacks.onDragStart?.(dragSource({ type: 'conversation', conversation: conv('conv-fav') }));
     monitorCallbacks.onDropTargetChange?.(dropLocation([sectionTarget('__favorites__')]));
     monitorCallbacks.onDrop?.(dropLocation([sectionTarget('__favorites__')]));
-    expect(setConversationCategoryMutate).toHaveBeenCalled();
+    expect(reorderSidebarMutate).toHaveBeenCalled();
   });
 
   it('drops a channel onto Favorites — fires the favorite-channel toggle', async () => {
@@ -327,7 +367,11 @@ describe('Sidebar drag-and-drop monitor callbacks', () => {
     monitorCallbacks.onDragStart?.(dragSource({ type: 'channel', channel: chan('ch-other') }));
     monitorCallbacks.onDropTargetChange?.(dropLocation([sectionTarget('__favorites__')]));
     monitorCallbacks.onDrop?.(dropLocation([sectionTarget('__favorites__')]));
-    expect(favoriteChannelMutate).toHaveBeenCalled();
+    // Favoriting now rides the batch reorder (favorite flips inside the updates)
+    // instead of a separate favorite mutation.
+    expect(reorderSidebarMutate).toHaveBeenCalled();
+    expect(favoriteOf('ch-other')).toBe(true);
+    expect(lastFavoriteChanged().has('ch-other')).toBe(true);
   });
 
   it('drops a category before another category — reorderCategories fires', async () => {
@@ -343,7 +387,7 @@ describe('Sidebar drag-and-drop monitor callbacks', () => {
     monitorCallbacks.onDragStart?.(dragSource({ type: 'channel', channel: chan('ch-other') }));
     monitorCallbacks.onDropTargetChange?.(dropLocation([channelTarget('__channels__', 0)]));
     monitorCallbacks.onDrop?.(dropLocation([channelTarget('__channels__', 0)]));
-    expect(setCategoryMutate).toHaveBeenCalled();
+    expect(reorderSidebarMutate).toHaveBeenCalled();
   });
 
   it('drops a channel between two rows with a gap — positionForDrop returns the midpoint', async () => {
@@ -355,12 +399,12 @@ describe('Sidebar drag-and-drop monitor callbacks', () => {
     monitorCallbacks.onDragStart?.(dragSource({ type: 'channel', channel: chan('ch-categorized') }));
     monitorCallbacks.onDropTargetChange?.(dropLocation([channelTarget('__channels__', 1)]));
     monitorCallbacks.onDrop?.(dropLocation([channelTarget('__channels__', 1)]));
-    expect(setCategoryMutate).toHaveBeenCalledWith(
-      expect.objectContaining({ channelID: 'ch-categorized', categoryID: '', sidebarPosition: 2000 }),
-    );
+    // Densified order [general(1000), ch-categorized(2000), other(3000)].
+    expect(positionOf('ch-categorized')).toBe(2000);
+    expect(lastReorderUpdates().find((u) => u.id === 'ch-categorized')?.categoryID).toBe('');
   });
 
-  it('drops a channel past the last row — positionForDrop appends after the final position', async () => {
+  it('drops a channel past the last row — lands after the final row', async () => {
     await render(<Frame />);
     // Drag general(1000) to the end of __channels__ (index 2, past other(3000)).
     // ordered (without general) = [other(3000)] → before=3000, after=undefined →
@@ -368,12 +412,60 @@ describe('Sidebar drag-and-drop monitor callbacks', () => {
     monitorCallbacks.onDragStart?.(dragSource({ type: 'channel', channel: chan('ch-general') }));
     monitorCallbacks.onDropTargetChange?.(dropLocation([channelTarget('__channels__', 2)]));
     monitorCallbacks.onDrop?.(dropLocation([channelTarget('__channels__', 2)]));
-    expect(setCategoryMutate).toHaveBeenCalledWith(
-      expect.objectContaining({ channelID: 'ch-general', categoryID: '', sidebarPosition: 4000 }),
-    );
+    // general moved to the end → its new position is greater than other's.
+    expect(positionOf('ch-general')!).toBeGreaterThan(positionOf('ch-other')!);
   });
 
-  it('drops a channel into its own single-channel category — positionForDrop returns the base step', async () => {
+  it('registers EVERY drop target as sticky so the push-aside gap can never orphan the drop', async () => {
+    await render(<Frame />);
+    // Rows, the section tail, category headers and boundary hitboxes all register
+    // drop targets. Each MUST be sticky: when the pointer slides off a row onto
+    // the pointer-events-none gap, pragmatic retains the last target (reusing its
+    // closest-edge) so preventDefault keeps firing and the browser accepts the
+    // drop — otherwise it rejects it with the native snap-back and nothing lands.
+    expect(dropTargetConfigs.length).toBeGreaterThan(0);
+    for (const cfg of dropTargetConfigs) {
+      expect(cfg.getIsSticky?.()).toBe(true);
+    }
+  });
+
+  it('opens a push-aside gap at the resolved channel slot during a drag, and clears it on drop', async () => {
+    await render(<Frame />);
+    monitorCallbacks.onDragStart?.(dragSource({ type: 'channel', channel: chan('ch-other') }));
+    monitorCallbacks.onDropTargetChange?.(dropLocation([channelTarget('__channels__', 0)]));
+    // The row-height gap opens above the resolved slot (rows below shift down).
+    await vi.waitFor(() => {
+      expect(document.querySelector('[data-testid="sidebar-drop-gap-__channels__"]')).not.toBeNull();
+    });
+    monitorCallbacks.onDrop?.(dropLocation([channelTarget('__channels__', 0)]));
+    // Drop clears the indicator → the gap collapses (land-in-place).
+    await vi.waitFor(() => {
+      expect(document.querySelector('[data-testid="sidebar-drop-gap-__channels__"]')).toBeNull();
+    });
+  });
+
+  it('opens the tail gap when the drop resolves past the last row (area "end")', async () => {
+    await render(<Frame />);
+    monitorCallbacks.onDragStart?.(dragSource({ type: 'channel', channel: chan('ch-general') }));
+    monitorCallbacks.onDropTargetChange?.(dropLocation([channelTarget('__channels__', 2, 'end')]));
+    await vi.waitFor(() => {
+      expect(document.querySelector('[data-testid="sidebar-drop-gap-__channels__"]')).not.toBeNull();
+    });
+    monitorCallbacks.onDrop?.(dropLocation([channelTarget('__channels__', 2, 'end')]));
+  });
+
+  it('opens the gap on a favorited conversation slot when a DM is dragged onto it', async () => {
+    await render(<Frame />);
+    // conv-fav (Carol) has no sidebarPosition → sorts last in Favorites (index 3).
+    monitorCallbacks.onDragStart?.(dragSource({ type: 'conversation', conversation: conv('conv-fav') }));
+    monitorCallbacks.onDropTargetChange?.(dropLocation([channelTarget('__favorites__', 3)]));
+    await vi.waitFor(() => {
+      expect(document.querySelector('[data-testid="sidebar-drop-gap-__favorites__"]')).not.toBeNull();
+    });
+    monitorCallbacks.onDrop?.(dropLocation([channelTarget('__favorites__', 3)]));
+  });
+
+  it('drops a channel into its own single-channel category — dense base step', async () => {
     await render(<Frame />);
     // Drag the only channel in cat-work back into cat-work at index 0. After
     // filtering out the dragged id the ordered list is empty → before/after both
@@ -381,9 +473,8 @@ describe('Sidebar drag-and-drop monitor callbacks', () => {
     monitorCallbacks.onDragStart?.(dragSource({ type: 'channel', channel: chan('ch-categorized') }));
     monitorCallbacks.onDropTargetChange?.(dropLocation([channelTarget('cat-work', 0)]));
     monitorCallbacks.onDrop?.(dropLocation([channelTarget('cat-work', 0)]));
-    expect(setCategoryMutate).toHaveBeenCalledWith(
-      expect.objectContaining({ channelID: 'ch-categorized', categoryID: 'cat-work', sidebarPosition: 1000 }),
-    );
+    expect(positionOf('ch-categorized')).toBe(1000);
+    expect(lastReorderUpdates().find((u) => u.id === 'ch-categorized')?.categoryID).toBe('cat-work');
   });
 
   it('drops a favorited conversation onto a channel-target in Favorites', async () => {
@@ -391,7 +482,7 @@ describe('Sidebar drag-and-drop monitor callbacks', () => {
     monitorCallbacks.onDragStart?.(dragSource({ type: 'conversation', conversation: conv('conv-fav') }));
     monitorCallbacks.onDropTargetChange?.(dropLocation([channelTarget('__favorites__', 0)]));
     monitorCallbacks.onDrop?.(dropLocation([channelTarget('__favorites__', 0)]));
-    expect(setConversationCategoryMutate).toHaveBeenCalled();
+    expect(reorderSidebarMutate).toHaveBeenCalled();
   });
 
   it('handles drop with an unknown target type — falls through without crashing', async () => {
@@ -434,7 +525,7 @@ describe('Sidebar drag-and-drop monitor callbacks', () => {
     // and recomputes the drop area via channelDropAreaForIndex.
     monitorCallbacks.onDropTargetChange?.(dropLocation([channelTarget('__channels__', 0)]));
     monitorCallbacks.onDrop?.(dropLocation([channelTarget('__channels__', 0)]));
-    expect(setCategoryMutate).toHaveBeenCalled();
+    expect(reorderSidebarMutate).toHaveBeenCalled();
   });
 
   it('drops a category on the bottom edge of a header — targets the next category slot', async () => {
@@ -453,7 +544,7 @@ describe('Sidebar drag-and-drop monitor callbacks', () => {
     monitorCallbacks.onDragStart?.(dragSource({ type: 'channel', channel: chan('ch-other') }));
     monitorCallbacks.onDropTargetChange?.(dropLocation([sectionTarget('__channels__')]));
     monitorCallbacks.onDrop?.(dropLocation([sectionTarget('__channels__')]));
-    expect(setCategoryMutate).toHaveBeenCalled();
+    expect(reorderSidebarMutate).toHaveBeenCalled();
   });
 
   // ---- Additional drag-resolve branch coverage ----
@@ -465,10 +556,9 @@ describe('Sidebar drag-and-drop monitor callbacks', () => {
     monitorCallbacks.onDragStart?.(dragSource({ type: 'channel', channel: chan('ch-favorite') }));
     monitorCallbacks.onDropTargetChange?.(dropLocation([channelTarget('__channels__', 0)]));
     monitorCallbacks.onDrop?.(dropLocation([channelTarget('__channels__', 0)]));
-    expect(favoriteChannelMutate).toHaveBeenCalledWith(
-      expect.objectContaining({ channelID: 'ch-favorite', favorite: false }),
-    );
-    expect(setCategoryMutate).toHaveBeenCalled();
+    // Un-favoriting rides the batch reorder: the row's favorite flips to false.
+    expect(favoriteOf('ch-favorite')).toBe(false);
+    expect(lastFavoriteChanged().has('ch-favorite')).toBe(true);
   });
 
   it('does not re-favorite an already-favorited channel dropped onto Favorites', async () => {
@@ -478,8 +568,9 @@ describe('Sidebar drag-and-drop monitor callbacks', () => {
     monitorCallbacks.onDragStart?.(dragSource({ type: 'channel', channel: chan('ch-favorite') }));
     monitorCallbacks.onDropTargetChange?.(dropLocation([sectionTarget('__favorites__')]));
     monitorCallbacks.onDrop?.(dropLocation([sectionTarget('__favorites__')]));
-    expect(favoriteChannelMutate).not.toHaveBeenCalled();
-    expect(setCategoryMutate).toHaveBeenCalled();
+    // Already favorited → no favorite flip; only the position re-spaces.
+    expect(lastFavoriteChanged().has('ch-favorite')).toBe(false);
+    expect(reorderSidebarMutate).toHaveBeenCalled();
   });
 
   it('positions a drop just before a row whose position is <= 1 (after-step branch)', async () => {
@@ -490,9 +581,9 @@ describe('Sidebar drag-and-drop monitor callbacks', () => {
     monitorCallbacks.onDragStart?.(dragSource({ type: 'channel', channel: chan('ch-other') }));
     monitorCallbacks.onDropTargetChange?.(dropLocation([channelTarget('cat-low', 0)]));
     monitorCallbacks.onDrop?.(dropLocation([channelTarget('cat-low', 0)]));
-    expect(setCategoryMutate).toHaveBeenCalledWith(
-      expect.objectContaining({ channelID: 'ch-other', categoryID: 'cat-low', sidebarPosition: 1 - 1000 }),
-    );
+    // No more negative positions: dropped at the front → dense 1000, cat-low.
+    expect(positionOf('ch-other')).toBe(1000);
+    expect(lastReorderUpdates().find((u) => u.id === 'ch-other')?.categoryID).toBe('cat-low');
   });
 
   it('reorders within a section by dragging a row from an earlier to a later index', async () => {
@@ -503,7 +594,7 @@ describe('Sidebar drag-and-drop monitor callbacks', () => {
     monitorCallbacks.onDragStart?.(dragSource({ type: 'channel', channel: chan('ch-general') }));
     monitorCallbacks.onDropTargetChange?.(dropLocation([channelTarget('__channels__', 1)]));
     monitorCallbacks.onDrop?.(dropLocation([channelTarget('__channels__', 1)]));
-    expect(setCategoryMutate).toHaveBeenCalled();
+    expect(reorderSidebarMutate).toHaveBeenCalled();
   });
 
   it('keeps the previous channel indicator when a re-resolve yields no target', async () => {
@@ -515,7 +606,7 @@ describe('Sidebar drag-and-drop monitor callbacks', () => {
     // indicator (the channel + channel-kind early-return branch).
     monitorCallbacks.onDropTargetChange?.(dropLocation([]));
     monitorCallbacks.onDrop?.(dropLocation([]));
-    expect(setCategoryMutate).toHaveBeenCalled();
+    expect(reorderSidebarMutate).toHaveBeenCalled();
   });
 
   it('keeps the previous category indicator when a re-resolve yields no target', async () => {
@@ -536,7 +627,7 @@ describe('Sidebar drag-and-drop monitor callbacks', () => {
     monitorCallbacks.onDropTargetChange?.(dropLocation([channelTarget('cat-work', 0)]));
     monitorCallbacks.onDropTargetChange?.(dropLocation([channelTarget('cat-work', 0)]));
     monitorCallbacks.onDrop?.(dropLocation([channelTarget('cat-work', 0)]));
-    expect(setCategoryMutate).toHaveBeenCalled();
+    expect(reorderSidebarMutate).toHaveBeenCalled();
   });
 
   it('emits an identical category resolution twice — the indicator setter returns the prior value', async () => {
@@ -556,7 +647,7 @@ describe('Sidebar drag-and-drop monitor callbacks', () => {
     // nearest channel-accepting section (canAcceptChannelDrop branch).
     monitorCallbacks.onDropTargetChange?.(dropLocation([sectionTarget('cat-personal', 'cat-personal')]));
     monitorCallbacks.onDrop?.(dropLocation([sectionTarget('cat-personal', 'cat-personal')]));
-    expect(setCategoryMutate).toHaveBeenCalled();
+    expect(reorderSidebarMutate).toHaveBeenCalled();
   });
 
   it('drops a channel past the section end on the bottom edge — area resolves to "end"', async () => {
@@ -567,7 +658,7 @@ describe('Sidebar drag-and-drop monitor callbacks', () => {
     // at/over dropCount and returns 'end'.
     monitorCallbacks.onDropTargetChange?.(dropLocation([channelTarget('__channels__', 3)]));
     monitorCallbacks.onDrop?.(dropLocation([channelTarget('__channels__', 3)]));
-    expect(setCategoryMutate).toHaveBeenCalled();
+    expect(reorderSidebarMutate).toHaveBeenCalled();
   });
 
   it('ignores a category drag dropped onto a channel-target row', async () => {
@@ -585,7 +676,7 @@ describe('Sidebar drag-and-drop monitor callbacks', () => {
     // Conversation over a non-favorites channel-target → resolveDropPayload null.
     monitorCallbacks.onDropTargetChange?.(dropLocation([channelTarget('__channels__', 0)]));
     monitorCallbacks.onDrop?.(dropLocation([channelTarget('__channels__', 0)]));
-    expect(setConversationCategoryMutate).not.toHaveBeenCalled();
+    expect(reorderSidebarMutate).not.toHaveBeenCalled();
   });
 
   it('drops with no active drag at all — resolves straight from the payload', async () => {
@@ -594,7 +685,20 @@ describe('Sidebar drag-and-drop monitor callbacks', () => {
     // handleDrop takes the no-active-drag branch and resolves from the payload.
     monitorCallbacks.onDrop?.(dropLocation([channelTarget('__channels__', 0)]));
     // Nothing scheduled because the resolved drop has no active channel.
-    expect(setCategoryMutate).not.toHaveBeenCalled();
+    expect(reorderSidebarMutate).not.toHaveBeenCalled();
+  });
+
+  it('drops a channel on the Favorites header top edge — no preceding section, resolves to the lead slot', async () => {
+    edgeState.edge = 'top';
+    await render(<Frame />);
+    monitorCallbacks.onDragStart?.(dragSource({ type: 'channel', channel: chan('ch-other') }));
+    // Favorites is the FIRST section, so previousChannelDrop finds no earlier
+    // channel-accepting section and returns null; the header resolver then
+    // falls back to the favorites lead slot and the drop still persists.
+    monitorCallbacks.onDropTargetChange?.(dropLocation([sectionTarget('__favorites__')]));
+    monitorCallbacks.onDrop?.(dropLocation([sectionTarget('__favorites__')]));
+    expect(reorderSidebarMutate).toHaveBeenCalled();
+    expect(favoriteOf('ch-other')).toBe(true);
   });
 
   it('ignores a category dragged onto the Favorites header (categories cannot live in Favorites)', async () => {
@@ -636,7 +740,7 @@ describe('Sidebar drag-and-drop monitor callbacks', () => {
     monitorCallbacks.onDragStart?.(dragSource({ type: 'conversation', conversation: conv('conv-fav') }));
     monitorCallbacks.onDropTargetChange?.(dropLocation([channelTarget('__favorites__', 1)]));
     monitorCallbacks.onDrop?.(dropLocation([channelTarget('__favorites__', 1)]));
-    expect(setConversationCategoryMutate).toHaveBeenCalled();
+    expect(reorderSidebarMutate).toHaveBeenCalled();
   });
 
   it('drops a channel between two favorites with a gap — positionForSidebarItemDrop midpoint', async () => {
@@ -647,9 +751,10 @@ describe('Sidebar drag-and-drop monitor callbacks', () => {
     monitorCallbacks.onDragStart?.(dragSource({ type: 'channel', channel: chan('ch-other') }));
     monitorCallbacks.onDropTargetChange?.(dropLocation([channelTarget('__favorites__', 2)]));
     monitorCallbacks.onDrop?.(dropLocation([channelTarget('__favorites__', 2)]));
-    expect(setCategoryMutate).toHaveBeenCalledWith(
-      expect.objectContaining({ channelID: 'ch-other', sidebarPosition: 2250 }),
-    );
+    // ch-other joins Favorites at a dense positive position (exact placement is
+    // unit-tested in sidebar-reorder.test.ts).
+    expect(favoriteOf('ch-other')).toBe(true);
+    expect(positionOf('ch-other')!).toBeGreaterThan(0);
   });
 
   it('drops a channel before a favorites row with position <= 1 — positionForSidebarItemDrop after-step', async () => {
@@ -659,9 +764,9 @@ describe('Sidebar drag-and-drop monitor callbacks', () => {
     monitorCallbacks.onDragStart?.(dragSource({ type: 'channel', channel: chan('ch-other') }));
     monitorCallbacks.onDropTargetChange?.(dropLocation([channelTarget('__favorites__', 0)]));
     monitorCallbacks.onDrop?.(dropLocation([channelTarget('__favorites__', 0)]));
-    expect(setCategoryMutate).toHaveBeenCalledWith(
-      expect.objectContaining({ channelID: 'ch-other', sidebarPosition: 1 - 1000 }),
-    );
+    // Front of Favorites → dense 1000 (no negatives), and ch-other is favorited.
+    expect(positionOf('ch-other')).toBe(1000);
+    expect(favoriteOf('ch-other')).toBe(true);
   });
 
   it('drops a channel into Favorites past the end — positionForSidebarItemDrop falls back to the base step', async () => {
@@ -672,9 +777,9 @@ describe('Sidebar drag-and-drop monitor callbacks', () => {
     monitorCallbacks.onDragStart?.(dragSource({ type: 'channel', channel: chan('ch-other') }));
     monitorCallbacks.onDropTargetChange?.(dropLocation([channelTarget('__favorites__', 25, 'end')]));
     monitorCallbacks.onDrop?.(dropLocation([channelTarget('__favorites__', 25, 'end')]));
-    expect(setCategoryMutate).toHaveBeenCalledWith(
-      expect.objectContaining({ channelID: 'ch-other', sidebarPosition: 1000 }),
-    );
+    // Clamped to the end of Favorites; ch-other is favorited at a dense position.
+    expect(favoriteOf('ch-other')).toBe(true);
+    expect(positionOf('ch-other')!).toBeGreaterThan(0);
   });
 
   it('drops a favorited channel at the head of Favorites — positionForSidebarItemDrop halves the first position', async () => {
@@ -685,9 +790,9 @@ describe('Sidebar drag-and-drop monitor callbacks', () => {
     monitorCallbacks.onDragStart?.(dragSource({ type: 'channel', channel: chan('ch-fav-low') }));
     monitorCallbacks.onDropTargetChange?.(dropLocation([channelTarget('__favorites__', 0)]));
     monitorCallbacks.onDrop?.(dropLocation([channelTarget('__favorites__', 0)]));
-    expect(setCategoryMutate).toHaveBeenCalledWith(
-      expect.objectContaining({ channelID: 'ch-fav-low', sidebarPosition: 250 }),
-    );
+    // Re-spaced to the front of Favorites at a dense position.
+    expect(reorderSidebarMutate).toHaveBeenCalled();
+    expect(positionOf('ch-fav-low')).toBe(1000);
   });
 
   it('reorders a favorited channel within Favorites to a later index — adjusts the target index down', async () => {
@@ -699,9 +804,8 @@ describe('Sidebar drag-and-drop monitor callbacks', () => {
     monitorCallbacks.onDragStart?.(dragSource({ type: 'channel', channel: chan('ch-fav-low') }));
     monitorCallbacks.onDropTargetChange?.(dropLocation([channelTarget('__favorites__', 2, 'row')]));
     monitorCallbacks.onDrop?.(dropLocation([channelTarget('__favorites__', 2, 'row')]));
-    expect(setCategoryMutate).toHaveBeenCalledWith(
-      expect.objectContaining({ channelID: 'ch-fav-low' }),
-    );
+    expect(reorderSidebarMutate).toHaveBeenCalled();
+    expect(positionOf('ch-fav-low')).toBeDefined();
   });
 
   it('reorders a favorited conversation already in Favorites to a later index', async () => {
@@ -711,21 +815,29 @@ describe('Sidebar drag-and-drop monitor callbacks', () => {
     monitorCallbacks.onDragStart?.(dragSource({ type: 'conversation', conversation: conv('conv-fav') }));
     monitorCallbacks.onDropTargetChange?.(dropLocation([channelTarget('__favorites__', 3)]));
     monitorCallbacks.onDrop?.(dropLocation([channelTarget('__favorites__', 3)]));
-    expect(setConversationCategoryMutate).toHaveBeenCalled();
+    expect(reorderSidebarMutate).toHaveBeenCalled();
   });
 
-  it('dims a draggable row/header while it is being dragged and restores it on drop', async () => {
+  it('collapses a dragged row (lift-out) and dims a dragged category header, restoring both on drop', async () => {
     await render(<Frame />);
     // Each Pragmatic* row/header registers a draggable with onDragStart/onDrop
-    // that flip a local `dragging` flag controlling its opacity. Invoke them
-    // directly (the real pointer drag is not driveable in headless Playwright).
-    // Rows/headers are only draggable on desktop (disabled on mobile), so on
-    // the mobile projects there is nothing to dim — skip there.
+    // that flip a local `dragging` flag. Invoke them directly (the real pointer
+    // drag is not driveable in headless Playwright). Rows/headers are only
+    // draggable on desktop (disabled on mobile), so on the mobile projects there
+    // is nothing to drag — skip there.
     if (draggableConfigs.length === 0) return;
     for (const cfg of draggableConfigs) {
       cfg.onDragStart?.();
     }
     await vi.waitFor(() => {
+      // Channel/DM rows COLLAPSE their original slot to nothing (lift-out):
+      // zero height + invisible, so only the push-aside gap shows the landing.
+      const collapsed = Array.from(document.querySelectorAll<HTMLElement>('[data-testid^="channel-row-"]')).filter(
+        (el) => el.style.opacity === '0' && el.style.height === '0px',
+      );
+      expect(collapsed.length).toBeGreaterThan(0);
+      // Category headers keep the subtler in-place dim (a whole section can't
+      // sensibly collapse mid-drag).
       const dimmed = Array.from(document.querySelectorAll<HTMLElement>('[style*="opacity"]')).filter(
         (el) => el.style.opacity === '0.25',
       );
@@ -735,6 +847,10 @@ describe('Sidebar drag-and-drop monitor callbacks', () => {
       cfg.onDrop?.();
     }
     await vi.waitFor(() => {
+      const stillCollapsed = Array.from(document.querySelectorAll<HTMLElement>('[data-testid^="channel-row-"]')).filter(
+        (el) => el.style.height === '0px',
+      );
+      expect(stillCollapsed.length).toBe(0);
       const stillDimmed = Array.from(document.querySelectorAll<HTMLElement>('[style*="opacity"]')).filter(
         (el) => el.style.opacity === '0.25',
       );
@@ -781,45 +897,7 @@ describe('Sidebar drag-and-drop monitor callbacks', () => {
     monitorCallbacks.onDragStart?.(dragSource({ type: 'channel', channel: chan('ch-other') }));
     monitorCallbacks.onDropTargetChange?.(dropLocation([channelTarget('cat-low', 0)]));
     monitorCallbacks.onDrop?.(dropLocation([channelTarget('cat-low', 0)]));
-    expect(setCategoryMutate).toHaveBeenCalled();
-  });
-
-  it('renders a row-level drop indicator while a channel hovers a target', async () => {
-    await render(<Frame />);
-    monitorCallbacks.onDragStart?.(dragSource({ type: 'channel', channel: chan('ch-other') }));
-    // Hover a concrete channel row target (no drop yet) → the indicator
-    // stays set, so the DropLine renders and isChannelDropIndicator runs
-    // its full clause chain against every rendered row/section.
-    monitorCallbacks.onDropTargetChange?.(dropLocation([channelTarget('__channels__', 0)]));
-    await vi.waitFor(() => {
-      expect(document.querySelector('[data-testid="sidebar-drop-indicator"]')).not.toBeNull();
-    });
-    monitorCallbacks.onDrop?.(dropLocation([]));
-  });
-
-  it('renders a lead drop indicator when hovering the top of a section header', async () => {
-    edgeState.edge = 'top';
-    await render(<Frame />);
-    monitorCallbacks.onDragStart?.(dragSource({ type: 'channel', channel: chan('ch-other') }));
-    // Top edge of the favorites header → lead indicator at index 0.
-    monitorCallbacks.onDropTargetChange?.(dropLocation([sectionTarget('__favorites__')]));
-    await vi.waitFor(() => {
-      expect(document.querySelector('[data-testid="sidebar-drop-indicator"]')).not.toBeNull();
-    });
-    monitorCallbacks.onDrop?.(dropLocation([]));
-  });
-
-  it('renders an end-of-section drop indicator on a bottom-edge tail hover', async () => {
-    edgeState.edge = 'bottom';
-    await render(<Frame />);
-    monitorCallbacks.onDragStart?.(dragSource({ type: 'channel', channel: chan('ch-other') }));
-    // Bottom edge of the last channel row → resolves to the 'end' area, so
-    // the tail DropLine renders (isChannelDropIndicator end branch).
-    monitorCallbacks.onDropTargetChange?.(dropLocation([channelTarget('__channels__', 1)]));
-    await vi.waitFor(() => {
-      expect(document.querySelector('[data-testid="sidebar-drop-indicator"]')).not.toBeNull();
-    });
-    monitorCallbacks.onDrop?.(dropLocation([]));
+    expect(reorderSidebarMutate).toHaveBeenCalled();
   });
 
   it('renders a category drop indicator on a category-header hover', async () => {
@@ -828,26 +906,11 @@ describe('Sidebar drag-and-drop monitor callbacks', () => {
     monitorCallbacks.onDragStart?.(dragSource({ type: 'category', categoryID: 'cat-personal' }));
     monitorCallbacks.onDropTargetChange?.(dropLocation([sectionTarget('cat-work', 'cat-work')]));
     await vi.waitFor(() => {
-      expect(document.querySelector('[data-testid="sidebar-drop-indicator"]')).not.toBeNull();
+      expect(document.querySelector('[data-testid="sidebar-drop-gap-cat-cat-work"]')).not.toBeNull();
     });
     monitorCallbacks.onDrop?.(dropLocation([]));
   });
 
-  it('renders a favorites conversation-row drop indicator while a conversation hovers it', async () => {
-    edgeState.edge = 'top';
-    await render(<Frame />);
-    monitorCallbacks.onDragStart?.(dragSource({ type: 'conversation', conversation: conv('conv-fav') }));
-    // conv-fav lives in __favorites__ at the conversation slot (after the
-    // favorited channels). Hovering that exact row index shows the
-    // conversation-row DropLine (isChannelDropIndicator favorites-row branch).
-    monitorCallbacks.onDropTargetChange?.(dropLocation([channelTarget('__favorites__', 3, 'row')]));
-    await vi.waitFor(() => {
-      // The favorites section's conversation row carries the drop indicator.
-      const favGroup = document.querySelector('[data-testid="sidebar-group-__favorites__"]');
-      expect(favGroup?.querySelector('[data-testid="sidebar-drop-indicator"]')).not.toBeNull();
-    });
-    monitorCallbacks.onDrop?.(dropLocation([]));
-  });
 
   it('toggles a section header with the Enter key', async () => {
     await render(<Frame />);
@@ -882,10 +945,9 @@ describe('Sidebar drag-and-drop monitor callbacks', () => {
     await render(<Frame />);
     monitorCallbacks.onDragStart?.(dragSource({ type: 'channel', channel: chan('ch-other') }));
     monitorCallbacks.onDropTargetChange?.(dropLocation([channelTarget('__channels__', 0, 'row')]));
-    // Let the first indicator commit so prev is populated for the dedup check.
-    await vi.waitFor(() => {
-      expect(document.querySelector('[data-testid="sidebar-drop-indicator"]')).not.toBeNull();
-    });
+    // Let the first resolution commit so prev is populated for the dedup check.
+    // (No visible line under land-in-place; the resolve state still updates.)
+    await new Promise((r) => setTimeout(r, 20));
     // Hover the identical target again → showChannelDropIndicator's updater
     // sees a matching prev and returns it unchanged.
     monitorCallbacks.onDropTargetChange?.(dropLocation([channelTarget('__channels__', 0, 'row')]));
@@ -900,7 +962,7 @@ describe('Sidebar drag-and-drop monitor callbacks', () => {
     monitorCallbacks.onDragStart?.(dragSource({ type: 'category', categoryID: 'cat-personal' }));
     monitorCallbacks.onDropTargetChange?.(dropLocation([sectionTarget('cat-work', 'cat-work')]));
     await vi.waitFor(() => {
-      expect(document.querySelector('[data-testid="sidebar-drop-indicator"]')).not.toBeNull();
+      expect(document.querySelector('[data-testid="sidebar-drop-gap-cat-cat-work"]')).not.toBeNull();
     });
     monitorCallbacks.onDropTargetChange?.(dropLocation([sectionTarget('cat-work', 'cat-work')]));
     await new Promise((r) => setTimeout(r, 20));
@@ -917,6 +979,6 @@ describe('Sidebar drag-and-drop monitor callbacks', () => {
     // clears it (suppressNavigationResetRef !== null branch).
     monitorCallbacks.onDragStart?.(dragSource({ type: 'channel', channel: chan('ch-general') }));
     monitorCallbacks.onDrop?.(dropLocation([channelTarget('__channels__', 0)]));
-    expect(setCategoryMutate).toHaveBeenCalled();
+    expect(reorderSidebarMutate).toHaveBeenCalled();
   });
 });

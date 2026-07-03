@@ -120,3 +120,29 @@ func TestUserStore_HasUsers_QueryError(t *testing.T) {
 		t.Fatalf("HasUsers: want errInjected, got %v", err)
 	}
 }
+
+func TestUserStore_GetUsersByIDs_BatchGetItemError(t *testing.T) {
+	db := setupDynamoDB(t)
+	ctx := context.Background()
+	s := NewUserStore(withFault(db, func(f *faultClient) { f.failBatchGetItem = true }))
+	_, err := s.GetUsersByIDs(ctx, []string{"u-1", "u-2"})
+	if !errors.Is(err, errInjected) {
+		t.Fatalf("GetUsersByIDs: want errInjected, got %v", err)
+	}
+}
+
+// TestUserStore_FindByEmailScan_PaginatesAcrossPages drives the manual
+// LastEvaluatedKey drain in findByEmailScan through a second Query iteration.
+// pageQueryOnce returns the real first page plus a synthetic cursor, then an
+// empty follow-up page — the searched email matches nothing, so the loop must
+// carry the cursor forward (input.ExclusiveStartKey = LastEvaluatedKey) before
+// terminating with ErrNotFound.
+func TestUserStore_FindByEmailScan_PaginatesAcrossPages(t *testing.T) {
+	db := setupDynamoDB(t)
+	ctx := context.Background()
+	s := NewUserStore(withFault(db, func(f *faultClient) { f.pageQueryOnce = true }))
+	_, err := s.findByEmailScan(ctx, "ghost@test.com")
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("findByEmailScan: want ErrNotFound after paging, got %v", err)
+	}
+}

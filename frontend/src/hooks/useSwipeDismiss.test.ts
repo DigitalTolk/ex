@@ -112,4 +112,39 @@ describe('useSwipeDismiss', () => {
     );
     expect((result.current.motionProps as MotionProps).drag).toBe(false);
   });
+
+  // Regression: on a host that stays mounted while the panel toggles (a
+  // message's action sheet on an always-mounted MessageItem), a swipe-dismiss
+  // left `offset` off-screen and the drag latch armed. Reopening rendered the
+  // sheet translated off-screen and undraggable — it "wouldn't pop up". The
+  // `open` param must re-initialise the gesture on each open. This exercises the
+  // REAL hook (not the component mocks), which is why the bug slipped through.
+  it('re-initialises on reopen so a swipe-dismissed panel returns to rest and is draggable again', async () => {
+    const onDismiss = vi.fn();
+    const { result, rerender } = renderHook(
+      ({ open }: { open: boolean }) => useSwipeDismiss('down', onDismiss, open),
+      { initialProps: { open: true } },
+    );
+    const y = () => (result.current.motionProps as MotionProps).style!.y!;
+    await waitFor(() => expect(y().get()).toBeLessThan(1)); // enter settles to rest
+
+    // Swipe past the threshold → animates off-screen, then onComplete fires
+    // onDismiss and clears the latch.
+    act(() => (result.current.motionProps as MotionProps).onDragEnd?.(new Event('pointerup') as PointerEvent, pan(0, 120)));
+    expect(result.current.dismissing).toBe(true);
+    await waitFor(() => expect(onDismiss).toHaveBeenCalledTimes(1));
+
+    // Close, then reopen on the SAME hook instance.
+    rerender({ open: false });
+    rerender({ open: true });
+
+    // Slides back to rest (not stuck off-screen) and the dismiss latch cleared.
+    await waitFor(() => expect(y().get()).toBeLessThan(1));
+    expect(result.current.dismissing).toBe(false);
+
+    // Draggable again: a second dismiss fires onDismiss (before the fix the
+    // latched dismissingRef made onDragEnd a no-op, so this never fired twice).
+    act(() => (result.current.motionProps as MotionProps).onDragEnd?.(new Event('pointerup') as PointerEvent, pan(0, 120)));
+    await waitFor(() => expect(onDismiss).toHaveBeenCalledTimes(2));
+  });
 });

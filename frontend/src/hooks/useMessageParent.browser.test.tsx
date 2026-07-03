@@ -9,6 +9,7 @@ vi.mock('@/hooks/useChannels', () => ({
   useUserChannels: () => ({ data: mockChannels }),
 }));
 vi.mock('@/hooks/useConversations', () => ({
+  useOpenDM: () => ({ openDM: vi.fn(), isPending: false }),
   useUserConversations: () => ({ data: mockConversations }),
 }));
 

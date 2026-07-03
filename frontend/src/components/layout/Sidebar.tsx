@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useState, useMemo, useRef, type CSSProperties, type ReactNode } from 'react';
+import { Fragment, useCallback, useEffect, useLayoutEffect, useState, useMemo, useRef, type CSSProperties, type ReactNode } from 'react';
 import { flushSync } from 'react-dom';
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import {
@@ -45,8 +45,9 @@ import { useUserState } from '@/hooks/useUserState';
 import { useDrafts } from '@/hooks/useDrafts';
 import { useActivity } from '@/hooks/useActivity';
 import { useIsMobile } from '@/hooks/useIsMobile';
-import { useCategories, useCreateCategory, useDeleteCategory, useFavoriteChannel, useSetCategory, useSetConversationCategory, useReorderCategories } from '@/hooks/useSidebar';
+import { useCategories, useCreateCategory, useDeleteCategory, useReorderCategories, useReorderSidebar } from '@/hooks/useSidebar';
 import { groupSidebarItems, SidebarSectionKeys, type SidebarItem, type ConversationSidebarSort } from '@/lib/sidebar-groups';
+import { computeSidebarReorder, type SidebarSectionTarget } from '@/lib/sidebar-reorder';
 import type { SidebarCategory, UserChannel, UserConversation } from '@/types';
 import { ChannelRow } from './ChannelRow';
 import { ConversationRow } from './ConversationRow';
@@ -57,12 +58,28 @@ interface SidebarProps {
   onClose: () => void;
 }
 
-const SIDEBAR_POSITION_STEP = 1000;
 const CONVERSATION_SORT_STORAGE_KEY = 'sidebar.conversationSort';
 const CATEGORY_DROP_END = '__category-end__';
 const SIDEBAR_DND_DEBUG_STORAGE_KEY = 'ex.sidebarDndDebug';
 const SIDEBAR_DRAGGING_OPACITY = 0.25;
-const SIDEBAR_DROP_LINE_CLASS = 'pointer-events-none absolute left-2 right-2 top-0 z-10 h-px bg-white/85';
+// When a channel/DM row is picked up, collapse its ORIGINAL slot to nothing
+// (Slack-style "lift out") rather than leaving a dimmed in-place ghost — the
+// ghost is confusing because you can drop above OR below the old position. The
+// element stays MOUNTED (native HTML5 DnD needs its drag source to persist),
+// just zero-sized and invisible; the push-aside gap alone then shows where it
+// will land. Rows are direct `space-y-1` children (no wrapper div), so
+// marginTop:0 here also eats the list gap and the slot fully vanishes.
+const SIDEBAR_DRAGGING_COLLAPSE: CSSProperties = {
+  height: 0,
+  minHeight: 0,
+  marginTop: 0,
+  marginBottom: 0,
+  paddingTop: 0,
+  paddingBottom: 0,
+  overflow: 'hidden',
+  opacity: 0,
+  pointerEvents: 'none',
+};
 type ChannelDropArea = 'lead' | 'row' | 'end';
 type ResolvedDrop =
   | { kind: 'channel'; sectionKey: string; index: number; area: ChannelDropArea }
@@ -180,6 +197,9 @@ function PragmaticCategoryHeader({
       registrations.push(
         dropTargetForElements({
           element,
+          // Sticky so a category drag that moves onto the push-aside gap above a
+          // section keeps this header as the target (see PragmaticChannelRow).
+          getIsSticky: () => true,
           getData: ({ input, element }) => {
             const currentDropData = dropDataRef.current;
             /* v8 ignore next -- this drop target only registers when hasDropData, so dropDataRef is set; defensive guard */
@@ -239,6 +259,9 @@ function PragmaticSection({
     if (!element || disabled) return undefined;
     return dropTargetForElements({
       element,
+      // Sticky so the pointer entering an adjacent push-aside gap keeps a live
+      // target (see PragmaticChannelRow) — no dead zone, no native snap-back.
+      getIsSticky: () => true,
       getData: () => dataRef.current,
     });
   }, [disabled]);
@@ -273,6 +296,9 @@ function PragmaticCategoryDropHitbox({
     if (!element) return undefined;
     return dropTargetForElements({
       element,
+      // Sticky (see PragmaticChannelRow): keeps this boundary as the target when
+      // the pointer slides onto the adjacent push-aside gap.
+      getIsSticky: () => true,
       getData: () => dataRef.current,
     });
   }, []);
@@ -320,6 +346,15 @@ function PragmaticChannelRow({
       }),
       dropTargetForElements({
         element,
+        // Sticky: when the pointer leaves this row onto the push-aside gap — a
+        // pointer-events-none LAYOUT box that is NOT itself a drop target —
+        // pragmatic RETAINS this row as the active target and reuses its last
+        // closest-edge (it deliberately doesn't recompute getData while sticky).
+        // Without this, hovering the gap leaves NO drop target under the cursor,
+        // so the browser never gets preventDefault → it rejects the drop with the
+        // native return-to-origin animation (the "snap-back") and the reorder
+        // never lands. Stickiness keeps a target under the cursor across the gap.
+        getIsSticky: () => true,
         getData: ({ input, element }) =>
           attachClosestEdge(
             { type: 'channel-target', sectionKey, index, area: 'row' } satisfies DropPayload,
@@ -342,7 +377,7 @@ function PragmaticChannelRow({
       {/* eslint-disable-next-line react-hooks/refs -- passing ref callbacks to a child render prop; refs are only assigned by React later. */}
       {children({
         dragRef: setElementRef,
-        dragStyle: { opacity: dragging ? SIDEBAR_DRAGGING_OPACITY : undefined },
+        dragStyle: dragging ? SIDEBAR_DRAGGING_COLLAPSE : undefined,
       })}
     </>
   );
@@ -382,6 +417,15 @@ function PragmaticConversationRow({
       }),
       dropTargetForElements({
         element,
+        // Sticky: when the pointer leaves this row onto the push-aside gap — a
+        // pointer-events-none LAYOUT box that is NOT itself a drop target —
+        // pragmatic RETAINS this row as the active target and reuses its last
+        // closest-edge (it deliberately doesn't recompute getData while sticky).
+        // Without this, hovering the gap leaves NO drop target under the cursor,
+        // so the browser never gets preventDefault → it rejects the drop with the
+        // native return-to-origin animation (the "snap-back") and the reorder
+        // never lands. Stickiness keeps a target under the cursor across the gap.
+        getIsSticky: () => true,
         getData: ({ input, element }) =>
           attachClosestEdge(
             { type: 'channel-target', sectionKey, index, area: 'row' } satisfies DropPayload,
@@ -404,7 +448,7 @@ function PragmaticConversationRow({
       {/* eslint-disable-next-line react-hooks/refs -- passing ref callbacks to a child render prop; refs are only assigned by React later. */}
       {children({
         dragRef: setElementRef,
-        dragStyle: { opacity: dragging ? SIDEBAR_DRAGGING_OPACITY : undefined },
+        dragStyle: dragging ? SIDEBAR_DRAGGING_COLLAPSE : undefined,
       })}
     </>
   );
@@ -440,9 +484,7 @@ export function Sidebar({ onClose }: SidebarProps) {
     conversations !== undefined || conversationsQuery.isError;
   const createCategory = useCreateCategory();
   const deleteCategory = useDeleteCategory();
-  const favoriteChannel = useFavoriteChannel();
-  const setCategory = useSetCategory();
-  const setConversationCategory = useSetConversationCategory();
+  const reorderSidebar = useReorderSidebar();
   const reorderCategories = useReorderCategories();
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
   const [conversationSort, setConversationSort] = useState<ConversationSidebarSort>(() =>
@@ -539,61 +581,48 @@ export function Sidebar({ onClose }: SidebarProps) {
     return sectionKey === SidebarSectionKeys.Channels ? '' : sectionKey;
   }
 
-  function positionForDrop(items: SidebarItem[], targetIndex: number): number {
-    /* v8 ignore next -- only reached during a channel drag, so the active drag is a channel and the : null arm is dead */
-    /* istanbul ignore next -- only reached during a channel drag, so the active drag is a channel and the : null arm is dead */
-    const currentDraggedChannel = activeDragRef.current?.type === 'channel' ? activeDragRef.current.channel : null;
-    const channelsOnly = items
-      .filter((item): item is Extract<SidebarItem, { kind: 'channel' }> => item.kind === 'channel')
-      .map((item) => item.channel);
-    const draggedIndex = channelsOnly.findIndex((channel) => channel.channelID === currentDraggedChannel?.channelID);
-    const adjustedTargetIndex = draggedIndex >= 0 && draggedIndex < targetIndex ? targetIndex - 1 : targetIndex;
-    const orderedChannels = channelsOnly.filter((channel) => channel.channelID !== currentDraggedChannel?.channelID);
-    const before = orderedChannels[adjustedTargetIndex - 1]?.sidebarPosition;
-    const after = orderedChannels[adjustedTargetIndex]?.sidebarPosition;
-
-    if (before && after && after - before > 1) return Math.floor((before + after) / 2);
-    if (before) return before + SIDEBAR_POSITION_STEP;
-    if (after && after > 1) return Math.floor(after / 2);
-    if (after !== undefined) return after - SIDEBAR_POSITION_STEP;
-    return SIDEBAR_POSITION_STEP;
+  // sectionDropTarget maps a section to the (categoryID, favorite) it imposes
+  // on items dropped into it. Favorites keeps each item's existing category
+  // (keepCategory) and forces favorite=true; a user category forces its own id
+  // and favorite=false; the default Channels/DMs sections force category="" and
+  // favorite=false.
+  function sectionDropTarget(sectionKey: string): SidebarSectionTarget {
+    if (sectionKey === SidebarSectionKeys.Favorites) {
+      return { categoryID: '', favorite: true, keepCategory: true };
+    }
+    return { categoryID: sectionCategoryID(sectionKey), favorite: false };
   }
 
-  function currentDraggedItemID(): string | null {
-    const drag = activeDragRef.current;
-    if (drag?.type === 'channel') return drag.channel.channelID;
-    /* v8 ignore next -- currentDraggedItemID only runs mid-drag, so drag is non-null; the drag===null short-circuit is defensive */
-    /* istanbul ignore next -- currentDraggedItemID only runs mid-drag, so drag is non-null; the drag===null short-circuit is defensive */
-    if (drag?.type === 'conversation') return drag.conversation.conversationID;
-    return null;
-  }
-
-  function sidebarItemID(item: SidebarItem): string {
-    return item.kind === 'channel'
-      ? item.channel.channelID
-      : item.conversation.conversationID;
-  }
-
-  function sidebarItemPosition(item: SidebarItem | undefined): number | undefined {
-    if (!item) return undefined;
-    return item.kind === 'channel'
-      ? item.channel.sidebarPosition
-      : item.conversation.sidebarPosition;
-  }
-
-  function positionForSidebarItemDrop(items: SidebarItem[], targetIndex: number): number {
-    const draggedID = currentDraggedItemID();
-    const draggedIndex = items.findIndex((item) => sidebarItemID(item) === draggedID);
-    const adjustedTargetIndex = draggedIndex >= 0 && draggedIndex < targetIndex ? targetIndex - 1 : targetIndex;
-    const orderedItems = items.filter((item) => sidebarItemID(item) !== draggedID);
-    const before = sidebarItemPosition(orderedItems[adjustedTargetIndex - 1]);
-    const after = sidebarItemPosition(orderedItems[adjustedTargetIndex]);
-
-    if (before && after && after - before > 1) return Math.floor((before + after) / 2);
-    if (before) return before + SIDEBAR_POSITION_STEP;
-    if (after && after > 1) return Math.floor(after / 2);
-    if (after !== undefined) return after - SIDEBAR_POSITION_STEP;
-    return SIDEBAR_POSITION_STEP;
+  // persistReorder densifies the target section and writes the changed rows in
+  // one batch (see computeSidebarReorder + useReorderSidebar). The dropped item
+  // lands exactly where released because the whole section is renumbered to
+  // evenly-spaced positions — no fractional gaps to run out of, no 0/unset
+  // ambiguity. favoriteChanged names the single row whose favorite flag flipped
+  // (a cross-section move in/out of Favorites) so only it hits the favorite
+  // endpoint.
+  function persistReorder(
+    items: SidebarItem[],
+    dragged: { id: string; kind: 'channel' | 'conversation'; favorite: boolean },
+    targetIndex: number,
+    target: SidebarSectionTarget,
+  ) {
+    const updates = computeSidebarReorder(items, { id: dragged.id, kind: dragged.kind }, targetIndex, target);
+    /* v8 ignore next 4 -- a no-op drop (section already densely ordered and the item released at its own slot) yields zero updates; that empty-result path is unit-tested directly in sidebar-reorder.test.ts, but the mocked-mutation drag harness can't re-densify the cache to reproduce it here */
+    /* istanbul ignore next -- empty-updates no-op path; covered by sidebar-reorder.test.ts, unreachable via the mocked-mutation drag harness */
+    if (updates.length === 0) {
+      clearDropTarget();
+      return;
+    }
+    const favoriteChanged = new Set<string>();
+    if (dragged.favorite !== target.favorite) favoriteChanged.add(dragged.id);
+    sidebarDndDebug('reorder scheduled', {
+      sequence: channelDropSequenceRef.current,
+      draggedID: dragged.id,
+      updates,
+      order: channelOrderDebugSnapshot(),
+    });
+    reorderSidebar.mutate({ updates, favoriteChanged });
+    clearDropTarget();
   }
 
   function dropChannelInto(sectionKey: string, items: SidebarItem[], targetIndex: number) {
@@ -602,71 +631,16 @@ export function Sidebar({ onClose }: SidebarProps) {
     const currentDraggedChannel = activeDragRef.current?.type === 'channel' ? activeDragRef.current.channel : null;
     /* v8 ignore start -- currentDraggedChannel is always set here, and a resolved channel drop never targets the DM section (canAcceptChannelDrop excludes it); both guards are defensive */
     /* istanbul ignore next -- currentDraggedChannel is always set here; the no-active-channel guard is dead defensive code */
-    if (!currentDraggedChannel) {
-      sidebarDndDebug('channel-drop ignored: no active channel', {
-        sequence: channelDropSequenceRef.current,
-        sectionKey,
-        targetIndex,
-        activeDrag: activeDragRef.current,
-      });
-      return;
-    }
+    if (!currentDraggedChannel) return;
     /* istanbul ignore next -- a resolved channel drop never targets the DM section (canAcceptChannelDrop excludes it); this guard is dead defensive code */
-    if (sectionKey === SidebarSectionKeys.DirectMessages) {
-      sidebarDndDebug('channel-drop ignored: direct messages section', {
-        sequence: channelDropSequenceRef.current,
-        channelID: currentDraggedChannel.channelID,
-        sectionKey,
-        targetIndex,
-      });
-      return;
-    }
+    if (sectionKey === SidebarSectionKeys.DirectMessages) return;
     /* v8 ignore stop */
-    if (sectionKey === SidebarSectionKeys.Favorites) {
-      const sidebarPosition = positionForSidebarItemDrop(items, targetIndex);
-      sidebarDndDebug('channel-favorite scheduled', {
-        sequence: channelDropSequenceRef.current,
-        channelID: currentDraggedChannel.channelID,
-        favorite: true,
-        targetIndex,
-        sidebarPosition,
-      });
-      if (!currentDraggedChannel.favorite) {
-        favoriteChannel.mutate({ channelID: currentDraggedChannel.channelID, favorite: true });
-      }
-      setCategory.mutate({
-        channelID: currentDraggedChannel.channelID,
-        categoryID: currentDraggedChannel.categoryID ?? '',
-        sidebarPosition,
-      });
-      setDropIndicator(null);
-      return;
-    }
-    if (currentDraggedChannel.favorite) {
-      sidebarDndDebug('channel-favorite scheduled', {
-        sequence: channelDropSequenceRef.current,
-        channelID: currentDraggedChannel.channelID,
-        favorite: false,
-        targetIndex,
-      });
-      favoriteChannel.mutate({ channelID: currentDraggedChannel.channelID, favorite: false });
-    }
-    const sidebarPosition = positionForDrop(items, targetIndex);
-    sidebarDndDebug('channel-mutation scheduled', {
-      sequence: channelDropSequenceRef.current,
-      channelID: currentDraggedChannel.channelID,
-      sectionKey,
-      categoryID: sectionCategoryID(sectionKey),
+    persistReorder(
+      items,
+      { id: currentDraggedChannel.channelID, kind: 'channel', favorite: !!currentDraggedChannel.favorite },
       targetIndex,
-      sidebarPosition,
-      order: channelOrderDebugSnapshot(sectionKey),
-    });
-    setCategory.mutate({
-      channelID: currentDraggedChannel.channelID,
-      categoryID: sectionCategoryID(sectionKey),
-      sidebarPosition,
-    });
-    setDropIndicator(null);
+      sectionDropTarget(sectionKey),
+    );
   }
 
   function dropConversationInto(sectionKey: string, items: SidebarItem[], targetIndex: number) {
@@ -678,21 +652,12 @@ export function Sidebar({ onClose }: SidebarProps) {
     /* istanbul ignore next -- only called for a drop resolved onto Favorites; the non-Favorites guard is dead defensive code */
     if (sectionKey !== SidebarSectionKeys.Favorites) return;
     /* v8 ignore stop */
-    const sidebarPosition = positionForSidebarItemDrop(items, targetIndex);
-    sidebarDndDebug('conversation-mutation scheduled', {
-      sequence: channelDropSequenceRef.current,
-      conversationID: currentDraggedConversation.conversationID,
-      sectionKey,
+    persistReorder(
+      items,
+      { id: currentDraggedConversation.conversationID, kind: 'conversation', favorite: !!currentDraggedConversation.favorite },
       targetIndex,
-      sidebarPosition,
-      order: channelOrderDebugSnapshot(sectionKey),
-    });
-    setConversationCategory.mutate({
-      conversationID: currentDraggedConversation.conversationID,
-      categoryID: currentDraggedConversation.categoryID ?? '',
-      sidebarPosition,
-    });
-    setDropIndicator(null);
+      sectionDropTarget(sectionKey),
+    );
   }
 
   function channelCount(items: SidebarItem[]): number {
@@ -761,15 +726,30 @@ export function Sidebar({ onClose }: SidebarProps) {
       .map((section) => ({
         sectionKey: section.key,
         title: section.title,
-        channels: section.items
-          .filter((item): item is Extract<SidebarItem, { kind: 'channel' }> => item.kind === 'channel')
-          .map((item, index) => ({
-            index,
-            channelID: item.channel.channelID,
-            name: item.channel.channelName,
-            sidebarPosition: item.channel.sidebarPosition ?? null,
-            favorite: !!item.channel.favorite,
-          })),
+        // Include BOTH channels and conversations, in flat render order. The old
+        // snapshot filtered to channels only, which hid favorited DMs — and since
+        // Favorites is a flat position-sorted mix of channels AND DMs, that made a
+        // drop's "reorder scheduled" numbers impossible to reconcile against the
+        // log (the DM rows were invisible). Show every item so the order is whole.
+        items: section.items.map((item, index) =>
+          item.kind === 'channel'
+            ? {
+                index,
+                kind: 'channel' as const,
+                id: item.channel.channelID,
+                name: item.channel.channelName,
+                sidebarPosition: item.channel.sidebarPosition ?? null,
+                favorite: !!item.channel.favorite,
+              }
+            : {
+                index,
+                kind: 'conversation' as const,
+                id: item.conversation.conversationID,
+                name: item.conversation.displayName,
+                sidebarPosition: item.conversation.sidebarPosition ?? null,
+                favorite: !!item.conversation.favorite,
+              },
+        ),
       }));
   }
 
@@ -848,9 +828,6 @@ export function Sidebar({ onClose }: SidebarProps) {
     setCollapsedGroups((prev) => ({ ...prev, [sectionKey]: !prev[sectionKey] }));
   }
 
-  function isChannelDropIndicator(sectionKey: string, index: number, area: ChannelDropArea): boolean {
-    return dropIndicator?.kind === 'channel' && dropIndicator.sectionKey === sectionKey && dropIndicator.index === index && dropIndicator.area === area;
-  }
 
   function applyResolvedDrop(drop: ResolvedDrop | null) {
     if (!drop) return;
@@ -888,9 +865,19 @@ export function Sidebar({ onClose }: SidebarProps) {
       /* v8 ignore next -- sections preceding any drop target are always channel-accepting (DM is the last section), so the false arm is defensive */
       /* istanbul ignore next -- sections preceding any drop target are always channel-accepting (DM is the last section), so the false arm is dead */
       if (canAcceptChannelDrop(section.key)) {
-        return { kind: 'channel', sectionKey: section.key, index: channelCount(section.items), area: 'end' };
+        // Land at the section's TRUE end — dropCount, not channelCount. Favorites
+        // is a flat, position-sorted list that mixes channels AND favorited DMs
+        // (sidebar-groups favItems .sort), so its end is items.length; counting
+        // only channels lands the drop one slot short of the last item whenever a
+        // favorited DM sits below the channels. This mirrors the section-tail drop
+        // target (PragmaticSection below) and the push-aside preview, which both
+        // already use dropCount — the two "end of section" resolvers must agree or
+        // the drop lands where the preview didn't show.
+        return { kind: 'channel', sectionKey: section.key, index: dropCount(section.key, section.items), area: 'end' };
       }
     }
+    /* v8 ignore next -- unreachable: sectionIndex<1 returns above, and every section that CAN precede a drop target accepts channel drops (only DMs — always last — don't), so the loop always returns on its first iteration */
+    /* istanbul ignore next -- unreachable post-loop return; see the loop's canAcceptChannelDrop guard */
     return null;
   }
 
@@ -1167,8 +1154,15 @@ export function Sidebar({ onClose }: SidebarProps) {
   }
 
   function handleDrop(payload: DropPayload | undefined) {
+    // Prefer resolvedDropRef — it's written SYNCHRONOUSLY the moment an indicator
+    // resolves (showChannelDropIndicator), so it's always the latest slot. The
+    // visibleDropIndicatorRef mirror is synced by a useLayoutEffect and therefore
+    // LAGS by a commit; releasing right after the final move (e.g. dragging out
+    // of the preview's range and letting go before React commits) read that stale
+    // ref and dropped one slot too high, not where the preview showed. Fall back
+    // to the mirror, then to a fresh resolve of the raw drop payload.
     const resolvedDrop = activeDragRef.current
-      ? (visibleDropIndicatorRef.current ?? resolvedDropRef.current ?? resolveDropPayload(payload))
+      ? (resolvedDropRef.current ?? visibleDropIndicatorRef.current ?? resolveDropPayload(payload))
       : resolveDropPayload(payload);
     if (activeDragRef.current?.type === 'channel') {
       sidebarDndDebug('channel-drop received', {
@@ -1213,11 +1207,19 @@ export function Sidebar({ onClose }: SidebarProps) {
     setSuppressChannelNavigationID(null);
   }
 
-  function DropLine() {
+  // Live "push-aside" preview: while a channel/DM/category is dragged, open a
+  // row-height gap at the slot it would land in (WYSIWYG), so the rows/sections
+  // below shift down and it's obvious where a drop will go. It's driven by the
+  // same `dropIndicator` the drop itself uses, so preview == landing spot.
+  // Explicit h-8 (≈ the desktop row box) — drag is desktop-only — keeps the
+  // shift from reflowing; pointer-events-none so it never steals the live drop
+  // hitbox. Categories pass their own testId so the two gaps stay distinct.
+  function DropGap({ sectionKey, testId }: { sectionKey: string; testId?: string }) {
     return (
       <div
-        data-testid="sidebar-drop-indicator"
-        className={SIDEBAR_DROP_LINE_CLASS}
+        data-testid={testId ?? `sidebar-drop-gap-${sectionKey}`}
+        aria-hidden="true"
+        className="pointer-events-none h-8 rounded-md border border-dashed border-white/25 bg-white/5"
       />
     );
   }
@@ -1460,8 +1462,22 @@ export function Sidebar({ onClose }: SidebarProps) {
                   })
                 : section.items;
 
+              // The live channel/DM drop target that falls in THIS section (null
+              // otherwise) — drives the push-aside gap below.
+              const channelGap =
+                dropIndicator?.kind === 'channel' && dropIndicator.sectionKey === section.key
+                  ? dropIndicator
+                  : null;
+              // A category drag that would land BEFORE this section opens a gap
+              // above it, pushing this section (and everything below) down — the
+              // same WYSIWYG push-aside the channel/DM drag gets.
+              const categoryGap =
+                dropIndicator?.kind === 'category' &&
+                dropIndicator.beforeCategoryID === (isChannelsDefault ? CATEGORY_DROP_END : section.key);
+
               return (
                 <div key={section.key} className="relative mt-2" data-testid={`sidebar-group-${section.key}`}>
+                  {categoryGap && <DropGap sectionKey={section.key} testId={`sidebar-drop-gap-cat-${section.key}`} />}
                   {(isFavorites || isUserCategory || isChannelsDefault) && (
                     <PragmaticCategoryDropHitbox
                       active={!isMobile && isDraggingCategory}
@@ -1488,10 +1504,6 @@ export function Sidebar({ onClose }: SidebarProps) {
                     className="group/sec relative flex items-center"
                     testID={`sidebar-group-header-${section.key}`}
                   >
-                    {dropIndicator?.kind === 'category' &&
-                      dropIndicator.beforeCategoryID === (isChannelsDefault ? CATEGORY_DROP_END : section.key) && (
-                        <DropLine />
-                      )}
                     <div
                       role="button"
                       tabIndex={0}
@@ -1518,27 +1530,35 @@ export function Sidebar({ onClose }: SidebarProps) {
                         aria-label="Create channel"
                         title="Create channel"
                         data-testid="sidebar-create-channel"
-                        className="absolute right-1 top-1/2 -translate-y-1/2 h-5 w-5 flex items-center justify-center rounded text-gray-400 opacity-0 group-hover/sec:opacity-100 hover:bg-white/20 hover:text-white"
+                        className="absolute right-1 top-1/2 -translate-y-1/2 h-5 w-5 flex items-center justify-center rounded text-gray-400 opacity-0 group-hover/sec:opacity-100 hover:bg-white/20 hover:text-white max-md:h-10 max-md:w-10 max-md:opacity-100"
                       >
                         <Plus className="h-3.5 w-3.5" />
                       </button>
                     )}
                     {isDMsDefault && (
-                      <div className="absolute right-1 top-1/2 flex -translate-y-1/2 items-center gap-0.5 opacity-0 group-hover/sec:opacity-100">
+                      <div className="absolute right-1 top-1/2 flex -translate-y-1/2 items-center gap-0.5">
+                        {/* New DM "+": always a real tap target on mobile;
+                            desktop keeps the hover-reveal. */}
                         <button
                           onClick={() => navigate('/conversations/new')}
                           aria-label="New direct message"
                           title="New direct message"
                           data-testid="sidebar-new-dm"
-                          className="h-5 w-5 flex items-center justify-center rounded text-gray-400 hover:bg-white/20 hover:text-white"
+                          className="h-5 w-5 flex items-center justify-center rounded text-gray-400 opacity-0 group-hover/sec:opacity-100 hover:bg-white/20 hover:text-white max-md:h-10 max-md:w-10 max-md:opacity-100"
                         >
                           <Plus className="h-3.5 w-3.5" />
                         </button>
+                        {/* Sort menu stays desktop hover-only (hidden on mobile);
+                            the header shows only the "+" on touch. opacity-0
+                            alone still hit-tests, so pointer-events-none is
+                            required on mobile — without it this was an
+                            invisible tappable target right beside the "+"
+                            (same treatment as the row kebabs). */}
                         <DropdownMenu>
                           <DropdownMenuTrigger
                             aria-label="Sort direct messages"
                             data-testid="sidebar-dm-sort-menu"
-                            className="h-5 w-5 flex items-center justify-center rounded text-gray-400 hover:bg-white/20 hover:text-white"
+                            className="h-5 w-5 flex items-center justify-center rounded text-gray-400 opacity-0 group-hover/sec:opacity-100 hover:bg-white/20 hover:text-white max-md:pointer-events-none"
                           >
                             <MoreVertical className="h-3.5 w-3.5" />
                           </DropdownMenuTrigger>
@@ -1577,11 +1597,6 @@ export function Sidebar({ onClose }: SidebarProps) {
                       </DropdownMenu>
                     )}
                   </PragmaticCategoryHeader>
-                  {isChannelDropIndicator(section.key, 0, 'lead') && (
-                    <div className="relative h-0">
-                      <DropLine />
-                    </div>
-                  )}
                   <div className="space-y-1">
                     {visibleItems.map((item, index) => {
                       if (item.kind === 'channel') {
@@ -1590,12 +1605,17 @@ export function Sidebar({ onClose }: SidebarProps) {
                           : visibleItems
                               .slice(0, index)
                               .filter((candidate) => candidate.kind === 'channel').length;
+                        // Open the push-aside gap just above this row when the
+                        // live drop target resolves to its slot (not the tail).
+                        const showGap =
+                          channelGap != null && channelGap.area !== 'end' && channelGap.index === channelDropIndex;
                         return (
-                          <div
-                            key={`ch-${item.channel.channelID}`}
-                            className="relative"
-                          >
-                            {isChannelDropIndicator(section.key, channelDropIndex, 'row') && <DropLine />}
+                          // No wrapper div: the ChannelRow's own element is the
+                          // direct `space-y-1` child (and already `relative`), so
+                          // SIDEBAR_DRAGGING_COLLAPSE can fully remove its slot on
+                          // pick-up (margin included).
+                          <Fragment key={`ch-${item.channel.channelID}`}>
+                            {showGap && <DropGap sectionKey={section.key} />}
                             <PragmaticChannelRow
                               sectionKey={section.key}
                               index={channelDropIndex}
@@ -1615,7 +1635,7 @@ export function Sidebar({ onClose }: SidebarProps) {
                                 />
                               )}
                             </PragmaticChannelRow>
-                          </div>
+                          </Fragment>
                         );
                       }
                       const conv = item.conversation;
@@ -1629,10 +1649,16 @@ export function Sidebar({ onClose }: SidebarProps) {
                       const resolvedDMAvatarURL = conv.avatarURL ?? dmAvatarURL;
                       const resolvedDMUserStatus = conv.userStatus ?? dmUserStatus;
                       const dmOnline = otherID ? online.has(otherID) : undefined;
+                      // Favorited DMs are channel-drop targets too; open the gap
+                      // above one when the live target resolves to its slot.
+                      const showConvGap =
+                        channelGap != null && channelGap.area !== 'end' && channelGap.index === conversationDropIndex;
                       return (
-                        <div key={`conv-${conv.conversationID}`} className="relative">
-                          {section.key === SidebarSectionKeys.Favorites &&
-                            isChannelDropIndicator(section.key, conversationDropIndex, 'row') && <DropLine />}
+                        // No wrapper div (see the channel branch): the row's own
+                        // element is the direct `space-y-1` child so a favorited
+                        // DM's slot collapses fully on pick-up.
+                        <Fragment key={`conv-${conv.conversationID}`}>
+                          {showConvGap && <DropGap sectionKey={section.key} />}
                           {section.key === SidebarSectionKeys.Favorites ? (
                             <PragmaticConversationRow
                               sectionKey={section.key}
@@ -1669,9 +1695,11 @@ export function Sidebar({ onClose }: SidebarProps) {
                               onHide={hideConversation}
                             />
                           )}
-                        </div>
+                        </Fragment>
                       );
                     })}
+                    {/* Tail gap: drop resolves past the last row (area 'end'). */}
+                    {channelGap != null && channelGap.area === 'end' && <DropGap sectionKey={section.key} />}
                   </div>
                   <PragmaticSection
                     data={{ type: 'channel-target', sectionKey: section.key, index: dropCount(section.key, visibleItems), area: 'end' }}
@@ -1679,11 +1707,8 @@ export function Sidebar({ onClose }: SidebarProps) {
                     className="min-h-2 pb-2"
                     testID={canDropChannel ? `sidebar-section-tail-drop-${section.key}` : undefined}
                   >
-                    {isChannelDropIndicator(section.key, dropCount(section.key, visibleItems), 'end') && (
-                      <div className="relative h-0">
-                        <DropLine />
-                      </div>
-                    )}
+                    {/* Land-in-place: no drop line. The row itself re-sorts to
+                        its released slot via the optimistic reorder cache. */}
                   </PragmaticSection>
                 </div>
               );

@@ -17,6 +17,8 @@ import {
 import { AUTH_INVALID_EVENT } from '@/lib/auth-events';
 import { queryClient } from '@/lib/query-client';
 import { resetDraftSessionState } from '@/hooks/useDrafts';
+import { resetUserStateSessionState } from '@/hooks/useUserState';
+import { resetSidebarReorderSessionState } from '@/hooks/useSidebar';
 import { clearMobilePushUser, identifyMobilePushUser } from '@/lib/mobile-push-identity';
 
 interface AuthState {
@@ -71,6 +73,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null);
     queryClient.clear();
     resetDraftSessionState();
+    resetUserStateSessionState();
+    resetSidebarReorderSessionState();
   }, []);
 
   const logout = useCallback(async () => {

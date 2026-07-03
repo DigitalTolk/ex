@@ -68,6 +68,13 @@ const (
 	// activity store is the source of truth, so the client just refetches the
 	// list. Sent to the user's personal channel (pubsub.UserChannel).
 	EventActivityNew = "activity.new"
+	// EventThreadUpdated patches a thread participant's /threads list live when a
+	// reply lands. Sent per-participant (pubsub.UserChannel) — the participant
+	// scoping is what the channel-topic message.edited can't provide, so the
+	// client can add the row without guessing at participation. Carries a
+	// ThreadSummary. Ephemeral: ListUserThreads is the durable source of truth,
+	// re-read on reconnect, so replaying this would be noise.
+	EventThreadUpdated = "thread.updated"
 )
 
 // ephemeralTypes are events that exist only for the live socket — they
@@ -95,6 +102,10 @@ var ephemeralTypes = map[string]struct{}{
 	// Redis activity store is the source of truth and the client refetches the
 	// list on reconnect, so replaying the nudge would be pure noise.
 	EventActivityNew: {},
+	// thread.updated is a live /threads-list patch; ListUserThreads is the
+	// durable source of truth and is re-read on reconnect, so replaying it
+	// would be noise (and could re-add a row the user has since left).
+	EventThreadUpdated: {},
 }
 
 // IsPersistent reports whether an event of this type should be appended

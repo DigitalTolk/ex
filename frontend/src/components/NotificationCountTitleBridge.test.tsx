@@ -38,6 +38,9 @@ vi.mock('@/hooks/useThreads', async () => {
 });
 
 vi.mock('@/hooks/useUserState', () => ({
+  markLocalUserStateWrite: vi.fn(),
+  shouldRefetchUserStateForRemoteUpdate: vi.fn(() => true),
+  resetUserStateSessionState: vi.fn(),
   useUserState: () => ({
     data: {
       threadNotifications: mockState.threadNotifications,
@@ -52,6 +55,7 @@ vi.mock('@/hooks/useChannels', () => ({
 }));
 
 vi.mock('@/hooks/useConversations', () => ({
+  useOpenDM: () => ({ openDM: vi.fn(), isPending: false }),
   useUserConversations: () => ({ data: mockState.conversations }),
 }));
 

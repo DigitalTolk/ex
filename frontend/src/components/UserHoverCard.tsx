@@ -10,6 +10,8 @@ import { queryKeys } from '@/lib/query-keys';
 import { getInitials } from '@/lib/format';
 import { PopoverPortal } from '@/components/PopoverPortal';
 import { UserStatusIndicator } from '@/components/UserStatusIndicator';
+import { PresenceDot } from '@/components/PresenceDot';
+import { presenceNotchStyle } from '@/lib/presence';
 import { usePresence } from '@/context/PresenceContext';
 import { formatStatusUntil } from '@/lib/user-status';
 import { formatLastSeen, formatTimeZoneDelta, formatTimeZoneName, isValidTimeZone } from '@/lib/user-time';
@@ -133,19 +135,13 @@ export function UserHoverCard({
         <div>
           <div data-testid="hover-card-header" className="flex items-start gap-3">
             <div className="relative">
-              <Avatar className="h-12 w-12">
+              <Avatar className="h-12 w-12" style={presenceNotchStyle(12)}>
                 {effectiveAvatar && <AvatarImage src={effectiveAvatar} alt="" />}
                 <AvatarFallback className="bg-primary/10 text-sm">
                   {getInitials(displayName)}
                 </AvatarFallback>
               </Avatar>
-              <span
-                data-testid="hover-online-dot"
-                className={`absolute bottom-0 right-0 h-3 w-3 rounded-full ring-2 ring-popover ${
-                  effectiveOnline ? 'bg-online' : 'bg-muted-foreground'
-                }`}
-                aria-label={effectiveOnline ? 'Online' : 'Offline'}
-              />
+              <PresenceDot online={effectiveOnline} size={12} testId="hover-online-dot" />
             </div>
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-1.5">

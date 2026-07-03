@@ -52,6 +52,7 @@ vi.mock('@/hooks/useReactions', () => ({
 }));
 
 vi.mock('@/hooks/useDrafts', () => ({
+  markLocalDraftClearForSend: vi.fn(),
   useDraftForScope: () => ({ data: undefined }),
   useDraftAttachmentChips: () => [],
   useSaveDraft: () => ({ mutate: vi.fn() }),

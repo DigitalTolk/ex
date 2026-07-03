@@ -8,6 +8,7 @@ import {
   parseTyping,
   parseServerVersion,
   parseMembersChanged,
+  parseThreadUpdated,
 } from './ws-schemas';
 
 describe('ws-schemas — parser branches', () => {
@@ -78,5 +79,22 @@ describe('ws-schemas — parser branches', () => {
   it('parseServerVersion requires version', () => {
     expect(parseServerVersion({ version: '1.2.3' })).toEqual({ version: '1.2.3' });
     expect(parseServerVersion({ version: '' })).toBeNull();
+  });
+
+  it('parseThreadUpdated validates the ThreadSummary shape', () => {
+    const ok = {
+      parentID: 'ch-1',
+      parentType: 'channel',
+      threadRootID: 'root-1',
+      rootAuthorID: 'u-2',
+      rootBody: 'hi',
+      rootCreatedAt: '2026-05-01T10:00:00Z',
+      replyCount: 2,
+      latestActivityAt: '2026-05-01T10:05:00Z',
+    };
+    expect(parseThreadUpdated(ok)).toMatchObject({ threadRootID: 'root-1', replyCount: 2 });
+    expect(parseThreadUpdated({ ...ok, threadRootID: '' })).toBeNull();
+    expect(parseThreadUpdated({ ...ok, parentType: 'nope' })).toBeNull();
+    expect(parseThreadUpdated({})).toBeNull();
   });
 });
