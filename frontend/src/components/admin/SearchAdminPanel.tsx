@@ -189,9 +189,12 @@ export function SearchAdminPanel() {
         <p className="mt-1 text-xs text-muted-foreground">
           Rebuilds the user and channel indices with the <em>current</em> analyzer
           (search-as-you-type autocomplete) via a zero-downtime staging index and
-          atomic alias swap. Run this once after deploying a search mapping change
-          — a plain reindex can't change an analyzer on a live index. Safe to run
-          on a cluster: one server does the work while the rest keep serving.
+          atomic alias swap — a plain reindex can't change an analyzer on a live
+          index. This runs <em>automatically</em> on server start whenever the
+          index schema is behind the deployed version, so you normally never need
+          this button. Use it only to force a rebuild (e.g. after restoring data).
+          Safe to run on a cluster: one server does the work while the rest keep
+          serving.
         </p>
         <div className="mt-2 flex flex-col gap-3 sm:flex-row sm:items-start">
           <Button

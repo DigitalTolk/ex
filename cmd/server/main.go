@@ -336,6 +336,7 @@ func main() {
 	}
 	reindexSrc := newReindexSources(userStore, channelStore, conversationStore, messageStore)
 	searchReindexer := search.NewReindexer(searchClient, reindexSrc)
+	var mappingReb *search.MappingRebuilder
 	if searchClient != nil && searchReindexer != nil {
 		searchReindexer.SetAttachmentResolver(newAttachmentResolver(attachmentStore))
 		adminH.SetSearch(searchClient, searchReindexer)
@@ -347,6 +348,7 @@ func main() {
 		// assignment so a nil rebuilder never lands in the interface field as a
 		// non-nil typed-nil.
 		if reb := search.NewMappingRebuilder(searchClient, reindexSrc, redisCache, store.NewID); reb != nil {
+			mappingReb = reb
 			adminH.SetMappingRebuilder(reb)
 		}
 	}
@@ -451,6 +453,23 @@ func main() {
 	// Fire due reminders into their owners' activity streams + alerts. Claiming
 	// is atomic in Redis, so running this on every instance never double-fires.
 	go runReminderPoller(backgroundCtx, reminderSvc, 20*time.Second)
+	// Auto-roll the users/channels mapping rebuild if the live index generation is
+	// behind this binary's (a schema/analyzer bump, a fresh empty index, or a
+	// pre-versioning upgrade). Detached so boot never blocks — search stays up on
+	// the old analyzer for the few seconds a rebuild takes. StartIfStale's Redis
+	// lock elects one runner, so all instances kicking this off at once converge
+	// without double-running the alias-swap.
+	if mappingReb != nil {
+		go func() {
+			defer safe.Recover()
+			switch started, err := mappingReb.StartIfStale(backgroundCtx, func() int64 { return time.Now().Unix() }); {
+			case err != nil:
+				slog.Warn("search: auto mapping-rebuild staleness check failed", "error", err)
+			case started:
+				slog.Info("search: users/channels index stale — auto mapping-rebuild started")
+			}
+		}()
+	}
 
 	// Start in a goroutine so we can listen for shutdown signals.
 	go func() {

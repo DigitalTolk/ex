@@ -280,6 +280,183 @@ func TestMappingRebuilder_StatusLockHeldErrorLeavesRunning(t *testing.T) {
 	}
 }
 
+// versionFunc builds a versionOf stub from a per-index (version, present, err)
+// table so StartIfStale's staleness check runs without a live cluster.
+func versionFunc(table map[string]struct {
+	version int
+	present bool
+	err     error
+}) func(context.Context, string) (int, bool, error) {
+	return func(_ context.Context, name string) (int, bool, error) {
+		e := table[name]
+		return e.version, e.present, e.err
+	}
+}
+
+// staleRebuilder wires a rebuilder whose recreate records that it ran, so tests
+// can assert whether StartIfStale actually kicked a rebuild off.
+func staleRebuilder(t *testing.T, store RebuildStore, versionOf func(context.Context, string) (int, bool, error)) (*MappingRebuilder, *bool) {
+	t.Helper()
+	m := newTestRebuilder(store)
+	m.versionOf = versionOf
+	ran := false
+	m.recreate = func(context.Context, IndexRebuilder, UsersChannelsSource) (int, int, error) {
+		ran = true
+		return 4, 2, nil
+	}
+	return m, &ran
+}
+
+func TestMappingRebuilder_StartIfStale_UpToDateSkips(t *testing.T) {
+	// Both indices stamped at the desired version → nothing to do.
+	m, ran := staleRebuilder(t, newFakeStore(), versionFunc(map[string]struct {
+		version int
+		present bool
+		err     error
+	}{
+		IndexUsers:    {version: usersChannelsSchemaVersion, present: true},
+		IndexChannels: {version: usersChannelsSchemaVersion, present: true},
+	}))
+	started, err := m.StartIfStale(context.Background(), fixedNow(1))
+	if err != nil {
+		t.Fatalf("StartIfStale error: %v", err)
+	}
+	if started {
+		t.Fatal("an up-to-date cluster must not start a rebuild")
+	}
+	if *ran {
+		t.Fatal("recreate must not run when the cluster is current")
+	}
+}
+
+func TestMappingRebuilder_StartIfStale_MissingStampRebuilds(t *testing.T) {
+	// A freshly-created / pre-versioning index carries no stamp → stale.
+	m, ran := staleRebuilder(t, newFakeStore(), versionFunc(map[string]struct {
+		version int
+		present bool
+		err     error
+	}{
+		IndexUsers:    {present: false},
+		IndexChannels: {version: usersChannelsSchemaVersion, present: true},
+	}))
+	started, err := m.StartIfStale(context.Background(), fixedNow(1))
+	if err != nil || !started {
+		t.Fatalf("expected an unstamped index to trigger a rebuild, got (%v, %v)", started, err)
+	}
+	if !*ran {
+		t.Fatal("recreate should have run for the stale cluster")
+	}
+}
+
+func TestMappingRebuilder_StartIfStale_OlderVersionRebuilds(t *testing.T) {
+	// Live generation behind the binary's → stale.
+	m, ran := staleRebuilder(t, newFakeStore(), versionFunc(map[string]struct {
+		version int
+		present bool
+		err     error
+	}{
+		IndexUsers:    {version: usersChannelsSchemaVersion - 1, present: true},
+		IndexChannels: {version: usersChannelsSchemaVersion, present: true},
+	}))
+	started, err := m.StartIfStale(context.Background(), fixedNow(1))
+	if err != nil || !started {
+		t.Fatalf("expected an older index to trigger a rebuild, got (%v, %v)", started, err)
+	}
+	if !*ran {
+		t.Fatal("recreate should have run for the older-generation cluster")
+	}
+}
+
+func TestMappingRebuilder_StartIfStale_NewerVersionSkips(t *testing.T) {
+	// Ping-pong guard: an older binary seeing a NEWER live index does nothing.
+	m, ran := staleRebuilder(t, newFakeStore(), versionFunc(map[string]struct {
+		version int
+		present bool
+		err     error
+	}{
+		IndexUsers:    {version: usersChannelsSchemaVersion + 5, present: true},
+		IndexChannels: {version: usersChannelsSchemaVersion + 5, present: true},
+	}))
+	started, err := m.StartIfStale(context.Background(), fixedNow(1))
+	if err != nil {
+		t.Fatalf("StartIfStale error: %v", err)
+	}
+	if started || *ran {
+		t.Fatal("a newer live index must be treated as fresh (no downgrade rebuild)")
+	}
+}
+
+func TestMappingRebuilder_StartIfStale_ChannelsStaleOnly(t *testing.T) {
+	// Users current, channels behind → still stale (covers the second index).
+	m, ran := staleRebuilder(t, newFakeStore(), versionFunc(map[string]struct {
+		version int
+		present bool
+		err     error
+	}{
+		IndexUsers:    {version: usersChannelsSchemaVersion, present: true},
+		IndexChannels: {present: false},
+	}))
+	started, err := m.StartIfStale(context.Background(), fixedNow(1))
+	if err != nil || !started || !*ran {
+		t.Fatalf("a stale channels index alone must trigger a rebuild, got (%v, %v, ran=%v)", started, err, *ran)
+	}
+}
+
+func TestMappingRebuilder_StartIfStale_ReadErrorSurfaced(t *testing.T) {
+	// A mapping read failure aborts the check — never masquerade as "current".
+	m, ran := staleRebuilder(t, newFakeStore(), versionFunc(map[string]struct {
+		version int
+		present bool
+		err     error
+	}{
+		IndexUsers: {err: errors.New("opensearch down")},
+	}))
+	started, err := m.StartIfStale(context.Background(), fixedNow(1))
+	if started || err == nil {
+		t.Fatalf("expected (false, err) on a read failure, got (%v, %v)", started, err)
+	}
+	if *ran {
+		t.Fatal("recreate must not run when staleness can't be determined")
+	}
+}
+
+func TestMappingRebuilder_StartIfStale_LockHeldNoDouble(t *testing.T) {
+	// Stale, but another instance already owns the rebuild lock → decline.
+	store := newFakeStore()
+	store.locks[mappingRebuildLockKey] = "someone-else"
+	m, ran := staleRebuilder(t, store, versionFunc(map[string]struct {
+		version int
+		present bool
+		err     error
+	}{
+		IndexUsers: {present: false},
+	}))
+	started, err := m.StartIfStale(context.Background(), fixedNow(1))
+	if err != nil {
+		t.Fatalf("StartIfStale error: %v", err)
+	}
+	if started || *ran {
+		t.Fatal("a held lock must prevent a second concurrent rebuild")
+	}
+}
+
+func TestMappingRebuilder_StartIfStale_AcquireErrorSurfaced(t *testing.T) {
+	// Stale, but the lock acquisition itself errors → propagate.
+	store := newFakeStore()
+	store.acquireErr = errors.New("redis down")
+	m, _ := staleRebuilder(t, store, versionFunc(map[string]struct {
+		version int
+		present bool
+		err     error
+	}{
+		IndexUsers: {present: false},
+	}))
+	started, err := m.StartIfStale(context.Background(), fixedNow(1))
+	if started || err == nil {
+		t.Fatalf("expected the lock error to surface, got (%v, %v)", started, err)
+	}
+}
+
 // TestMappingRebuilder_DefaultSpawnRunsGoroutine exercises the real `go f()`
 // spawn wired by NewMappingRebuilder (the test helper overrides it), proving the
 // detached path completes.

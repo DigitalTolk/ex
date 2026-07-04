@@ -3,6 +3,7 @@ package search
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/DigitalTolk/ex/internal/cache"
@@ -68,6 +69,10 @@ type MappingRebuilder struct {
 	// recreate is RecreateUsersChannels, injected so tests drive a spy instead
 	// of a live OpenSearch cluster.
 	recreate func(ctx context.Context, rc IndexRebuilder, src UsersChannelsSource) (users, channels int, err error)
+	// versionOf reads a logical index's live `_meta.schemaVersion` (defaults to
+	// Client.IndexSchemaVersion). Injected so StartIfStale's staleness check runs
+	// against a spy instead of a live cluster in tests.
+	versionOf func(ctx context.Context, name string) (version int, present bool, err error)
 	// spawn runs the detached rebuild; defaults to `go f()`. Tests override it
 	// to run synchronously so the goroutine body is deterministically covered.
 	spawn func(func())
@@ -81,12 +86,13 @@ func NewMappingRebuilder(client *Client, src UsersChannelsSource, store RebuildS
 		return nil
 	}
 	return &MappingRebuilder{
-		rc:       client,
-		src:      src,
-		store:    store,
-		newToken: newToken,
-		recreate: RecreateUsersChannels,
-		spawn:    func(f func()) { go f() },
+		rc:        client,
+		src:       src,
+		store:     store,
+		newToken:  newToken,
+		recreate:  RecreateUsersChannels,
+		versionOf: client.IndexSchemaVersion,
+		spawn:     func(f func()) { go f() },
 	}
 }
 
@@ -115,6 +121,52 @@ func (m *MappingRebuilder) Start(ctx context.Context, now func() int64) (bool, e
 	// on a background context immune to request cancellation.
 	m.spawn(func() { m.run(context.Background(), token, startedAt, now) })
 	return true, nil
+}
+
+// StartIfStale auto-rolls the users/channels mapping rebuild when the live index
+// generation is behind this binary's. For each of ex_users/ex_channels it reads
+// the stamped `_meta.schemaVersion`; if ANY is missing (unstamped — a
+// pre-versioning or freshly-created-empty index) or older than the desired
+// version, the indices are stale and it delegates to Start — which elects a
+// single cluster-wide runner via the SAME Redis lock the admin button uses. So N
+// instances booting at once converge without ever double-running the alias-swap,
+// and a run already in flight (lock held) is simply left alone.
+//
+// Cheap and safe to call on every boot: an up-to-date cluster does two mapping
+// GETs and returns (false, nil). Staleness uses `missing || live < desired` (not
+// `!=`), so a mixed-version rolling deploy never ping-pongs — an older binary
+// that sees a newer live index treats it as fresh.
+//
+// Returns (true, nil) when THIS call started a rebuild, (false, nil) when the
+// cluster is current or another instance owns the run, (false, err) on a mapping
+// read or Redis error. The error is surfaced (not swallowed) so the caller can
+// log it — but boot must launch this detached so it never blocks on it.
+func (m *MappingRebuilder) StartIfStale(ctx context.Context, now func() int64) (bool, error) {
+	stale, err := m.usersChannelsStale(ctx)
+	if err != nil {
+		return false, err
+	}
+	if !stale {
+		return false, nil
+	}
+	return m.Start(ctx, now)
+}
+
+// usersChannelsStale reports whether either versioned index is behind the
+// binary's desired generation (or carries no stamp yet). Any read error aborts
+// the check so a transient OpenSearch blip doesn't masquerade as "current".
+func (m *MappingRebuilder) usersChannelsStale(ctx context.Context) (bool, error) {
+	for _, name := range []string{IndexUsers, IndexChannels} {
+		desired := desiredSchemaVersion[name]
+		live, present, err := m.versionOf(ctx, name)
+		if err != nil {
+			return false, fmt.Errorf("search: read schema version %s: %w", name, err)
+		}
+		if !present || live < desired {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // run performs the rebuild, records the terminal status, then releases the lock.

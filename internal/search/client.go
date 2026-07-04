@@ -230,6 +230,16 @@ func (c *Client) BeginIndexRebuild(ctx context.Context, name string) (string, er
 	if !ok {
 		return "", fmt.Errorf("search: unknown index %q", name)
 	}
+	// Stamp the schema generation so the promoted index advertises its version
+	// and won't be seen as stale on the next boot. Only versioned indices
+	// (users/channels) carry `_meta`; the rest stage their raw mapping.
+	if version, versioned := desiredSchemaVersion[name]; versioned {
+		stamped, err := stampSchemaMeta(body, version)
+		if err != nil {
+			return "", err
+		}
+		body = stamped
+	}
 	staging := fmt.Sprintf("%s-r%d", name, time.Now().UnixNano())
 	if err := c.createIndex(ctx, staging, body); err != nil {
 		return "", fmt.Errorf("search: create %s: %w", staging, err)
@@ -667,6 +677,50 @@ func (c *Client) IndexStats(ctx context.Context) ([]IndexStat, error) {
 		}
 	}
 	return out, nil
+}
+
+// IndexSchemaVersion reads the `_meta.schemaVersion` stamped into logical index
+// `name`'s live mapping. Returns (version, true, nil) when a stamp is present,
+// and (0, false, nil) when the index exists but carries no stamp (a
+// pre-versioning or freshly-created-empty index) or doesn't exist yet — both of
+// which the caller treats as "stale, rebuild". The GET resolves through the
+// alias, so the body is keyed by the physical `<name>-r<nanos>` index; an alias
+// backs exactly one physical index, so the single entry is unambiguous.
+func (c *Client) IndexSchemaVersion(ctx context.Context, name string) (int, bool, error) {
+	if c == nil {
+		return 0, false, nil
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/"+name+"/_mapping", nil)
+	if err != nil {
+		return 0, false, err
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return 0, false, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode == http.StatusNotFound {
+		return 0, false, nil
+	}
+	if resp.StatusCode >= 400 {
+		return 0, false, c.errorFromResponse(resp)
+	}
+	var out map[string]struct {
+		Mappings struct {
+			Meta struct {
+				SchemaVersion *int `json:"schemaVersion"`
+			} `json:"_meta"`
+		} `json:"mappings"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return 0, false, fmt.Errorf("search: mapping decode %s: %w", name, err)
+	}
+	for _, entry := range out {
+		if entry.Mappings.Meta.SchemaVersion != nil {
+			return *entry.Mappings.Meta.SchemaVersion, true, nil
+		}
+	}
+	return 0, false, nil
 }
 
 func (c *Client) errorFromResponse(resp *http.Response) error {
