@@ -61,6 +61,7 @@ export function SearchAdminPanel() {
   const running = reindex?.running ?? false;
   const mappingRebuild = data.mappingRebuild;
   const mappingRunning = mappingRebuild?.running ?? false;
+  const schemaVersions = data.schemaVersions ?? [];
 
   return (
     <section className="space-y-4 rounded-lg border bg-card p-5" data-testid="admin-search-panel">
@@ -187,12 +188,29 @@ export function SearchAdminPanel() {
           Users &amp; channels mapping
         </p>
         <p className="mt-1 text-xs text-muted-foreground">
-          Rebuilds the user and channel indices with the <em>current</em> analyzer
-          (search-as-you-type autocomplete) via a zero-downtime staging index and
-          atomic alias swap. Run this once after deploying a search mapping change
-          — a plain reindex can't change an analyzer on a live index. Safe to run
-          on a cluster: one server does the work while the rest keep serving.
+          Rebuilds the users &amp; channels indices with the current analyzer.
+          Runs automatically on deploy when the schema changes; use this to force
+          a rebuild.
         </p>
+        {schemaVersions.length > 0 && (
+          <ul className="mt-2 space-y-0.5 text-xs" data-testid="schema-versions">
+            {schemaVersions.map((v) => (
+              <li key={v.index} className="flex items-center gap-2">
+                <span className="font-mono text-muted-foreground">{v.index}</span>
+                <span>
+                  v{v.current ?? '—'} / v{v.expected}
+                </span>
+                {v.stale ? (
+                  <span className="text-pinned" data-testid={`schema-stale-${v.index}`}>
+                    rebuilding
+                  </span>
+                ) : (
+                  <span className="text-online">up to date</span>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
         <div className="mt-2 flex flex-col gap-3 sm:flex-row sm:items-start">
           <Button
             onClick={() => rebuildMapping.mutate()}

@@ -316,4 +316,31 @@ describe('SearchAdminPanel browser behaviour', () => {
     await expect.element(screen.getByText('alias swap failed')).toBeVisible();
     await expect.element(screen.getByText('redis get failed')).toBeVisible();
   });
+
+  it('renders the live vs expected schema version, flagging stale indices', async () => {
+    statusState.isLoading = false;
+    statusState.isError = false;
+    statusState.data = configured({
+      schemaVersions: [
+        { index: 'ex_users', current: 2, expected: 2, stale: false },
+        { index: 'ex_channels', current: null, expected: 2, stale: true },
+      ],
+    });
+    await render(<SearchAdminPanel />);
+    const list = document.querySelector('[data-testid="schema-versions"]');
+    expect(list).not.toBeNull();
+    expect(list?.textContent).toContain('v2 / v2');
+    expect(list?.textContent).toContain('up to date');
+    // Unstamped index → dash for current and a "rebuilding" flag.
+    expect(list?.textContent).toContain('v— / v2');
+    expect(document.querySelector('[data-testid="schema-stale-ex_channels"]')).not.toBeNull();
+  });
+
+  it('omits the schema-version list when the status carries none', async () => {
+    statusState.isLoading = false;
+    statusState.isError = false;
+    statusState.data = configured({});
+    await render(<SearchAdminPanel />);
+    expect(document.querySelector('[data-testid="schema-versions"]')).toBeNull();
+  });
 });

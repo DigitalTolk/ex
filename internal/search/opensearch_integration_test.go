@@ -470,3 +470,41 @@ func TestSearch_RebuildRepeatable_AliasSwap_RealEngine(t *testing.T) {
 		t.Fatalf("IndexStats must report the aliased %s as live, got %+v", IndexUsers, stats)
 	}
 }
+
+// After a real rebuild+promote, both versioned indices must advertise the
+// desired schema generation via `_meta.schemaVersion`, and StartIfStale reading
+// the live cluster must then treat them as current (no auto-rebuild). This is
+// the end-to-end proof of the boot auto-rebuild signal against a real engine —
+// the stamp survives the alias-swap and round-trips through IndexSchemaVersion.
+func TestSearch_SchemaVersionRoundTrip_RealEngine(t *testing.T) {
+	c := newSearchClient(t)
+	ctx := context.Background()
+
+	src := &fakeSources{
+		users:    []*model.User{{ID: "sv-u1", DisplayName: "Schema Versoni"}},
+		channels: []*model.Channel{{ID: "sv-c1", Name: "schemachan"}},
+	}
+	if _, _, err := RecreateUsersChannels(ctx, c, src); err != nil {
+		t.Fatalf("RecreateUsersChannels: %v", err)
+	}
+
+	for _, name := range []string{IndexUsers, IndexChannels} {
+		v, present, err := c.IndexSchemaVersion(ctx, name)
+		if err != nil || !present || v != usersChannelsSchemaVersion {
+			t.Fatalf("%s after rebuild: got (%d,%v,%v), want (%d,true,nil)",
+				name, v, present, err, usersChannelsSchemaVersion)
+		}
+	}
+
+	// StartIfStale, reading the REAL cluster through IndexSchemaVersion, sees the
+	// promoted indices as current and declines to rebuild.
+	m := newTestRebuilder(newFakeStore())
+	m.versionOf = c.IndexSchemaVersion
+	started, err := m.StartIfStale(ctx, fixedNow(1))
+	if err != nil {
+		t.Fatalf("StartIfStale against a current cluster: %v", err)
+	}
+	if started {
+		t.Fatal("an up-to-date cluster must not auto-rebuild")
+	}
+}

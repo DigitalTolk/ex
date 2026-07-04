@@ -3,9 +3,29 @@ package search
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sync"
+	"time"
 
 	"github.com/DigitalTolk/ex/internal/model"
+)
+
+// Reindex status is persisted to DynamoDB (durable + cluster-visible) rather
+// than kept only in process memory. Unlike the mapping rebuild there is no
+// distributed lock (a bare in-process mutex guards same-instance double-runs),
+// so crash recovery rides on a heartbeat: the runner refreshes UpdatedAt as it
+// writes progress, and Status treats a "running" record whose heartbeat has gone
+// stale as an interrupted run — otherwise a crash would leave the panel wedged
+// on "running" forever (process memory used to clear on restart).
+const (
+	// reindexPersistThrottle floors how often progress is flushed to DynamoDB
+	// during a run, so a 10k-parent walk doesn't become 10k writes.
+	reindexPersistThrottle = 10 * time.Second
+	// reindexStaleAfter is how long a "running" record may go without a
+	// heartbeat before Status reports it interrupted. Comfortably exceeds the
+	// throttle so an actively-working run is never flagged, yet a dead runner
+	// un-sticks the panel within a minute.
+	reindexStaleAfter = 60 * time.Second
 )
 
 // reindexSources is the data the Reindexer pulls from. Each method
@@ -145,11 +165,14 @@ type Reindexer struct {
 	src         reindexSources
 	w           bulkWriter
 	attachments AttachmentResolver
+	status      StatusStore
+	now         func() int64
 
-	mu       sync.Mutex
-	running  bool
-	lastErr  error
-	progress ReindexProgress
+	mu          sync.Mutex
+	running     bool
+	lastErr     error
+	progress    ReindexProgress
+	lastPersist int64 // Unix secs of the last DynamoDB status flush (throttle)
 }
 
 // SetAttachmentResolver wires filename lookup so reindexed messages
@@ -159,44 +182,58 @@ func (r *Reindexer) SetAttachmentResolver(a AttachmentResolver) {
 	r.attachments = a
 }
 
-// ReindexProgress is the snapshot the admin UI polls.
+// ReindexProgress is the snapshot the admin UI polls. It is persisted to
+// DynamoDB, so `dynamodbav` tags mirror the json tags. UpdatedAt is the
+// heartbeat: refreshed on every flush so a stale value marks a dead runner.
 type ReindexProgress struct {
-	Running     bool   `json:"running"`
-	Users       int    `json:"users"`
-	Channels    int    `json:"channels"`
-	Messages    int    `json:"messages"`
-	Files       int    `json:"files"`
-	LastError   string `json:"lastError,omitempty"`
-	StartedAt   int64  `json:"startedAt,omitempty"`   // Unix seconds
-	CompletedAt int64  `json:"completedAt,omitempty"` // Unix seconds; zero while running
+	Running     bool   `json:"running" dynamodbav:"running"`
+	Users       int    `json:"users" dynamodbav:"users"`
+	Channels    int    `json:"channels" dynamodbav:"channels"`
+	Messages    int    `json:"messages" dynamodbav:"messages"`
+	Files       int    `json:"files" dynamodbav:"files"`
+	LastError   string `json:"lastError,omitempty" dynamodbav:"lastError,omitempty"`
+	StartedAt   int64  `json:"startedAt,omitempty" dynamodbav:"startedAt,omitempty"`     // Unix seconds
+	CompletedAt int64  `json:"completedAt,omitempty" dynamodbav:"completedAt,omitempty"` // Unix seconds; zero while running
+	UpdatedAt   int64  `json:"updatedAt,omitempty" dynamodbav:"updatedAt,omitempty"`     // Unix seconds; heartbeat
 }
 
-// NewReindexer constructs a Reindexer. When `client` is nil (no
-// OpenSearch configured) returns nil — handlers should treat that as
-// "search not enabled" and return 503.
-func NewReindexer(client *Client, src reindexSources) *Reindexer {
-	if client == nil || src == nil {
+// NewReindexer constructs a Reindexer. When `client` or `status` is nil (no
+// OpenSearch / no status store configured) returns nil — handlers should treat
+// that as "search not enabled" and return 503.
+func NewReindexer(client *Client, src reindexSources, status StatusStore) *Reindexer {
+	if client == nil || src == nil || status == nil {
 		return nil
 	}
-	return &Reindexer{src: src, w: client}
+	return &Reindexer{src: src, w: client, status: status, now: func() int64 { return time.Now().Unix() }}
 }
 
-// Status returns the current progress snapshot.
-func (r *Reindexer) Status() ReindexProgress {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	p := r.progress
-	p.Running = r.running
-	if r.lastErr != nil {
-		p.LastError = r.lastErr.Error()
+// Status returns the current progress snapshot, read from the durable store so
+// every instance reports the same state. A never-run reindex reports the zero
+// value. A "running" record whose heartbeat has gone stale (the runner crashed)
+// is reported not-running with an interrupted note so the panel un-sticks.
+func (r *Reindexer) Status(ctx context.Context) (ReindexProgress, error) {
+	var p ReindexProgress
+	found, err := r.status.GetSearchStatus(ctx, searchJobReindex, &p)
+	if err != nil {
+		return ReindexProgress{}, err
 	}
-	return p
+	if !found {
+		return ReindexProgress{}, nil
+	}
+	if p.Running && p.UpdatedAt > 0 && r.now()-p.UpdatedAt > int64(reindexStaleAfter.Seconds()) {
+		p.Running = false
+		if p.LastError == "" {
+			p.LastError = "reindex interrupted (runner exited before completion)"
+		}
+	}
+	return p, nil
 }
 
-// Start kicks off a reindex. Returns false if one is already running
-// (idempotent — callers can spam the admin button without queueing
-// concurrent runs).
-func (r *Reindexer) Start(ctx context.Context, now func() int64) bool {
+// Start kicks off a reindex. Returns false if one is already running ON THIS
+// INSTANCE (a bare in-process mutex — there is no distributed lock, so two
+// instances can run concurrently; the shared status just reflects the last
+// write). Idempotent per instance — callers can spam the admin button.
+func (r *Reindexer) Start(ctx context.Context) bool {
 	r.mu.Lock()
 	if r.running {
 		r.mu.Unlock()
@@ -204,19 +241,50 @@ func (r *Reindexer) Start(ctx context.Context, now func() int64) bool {
 	}
 	r.running = true
 	r.lastErr = nil
-	r.progress = ReindexProgress{StartedAt: now()}
+	r.lastPersist = 0
+	r.progress = ReindexProgress{StartedAt: r.now()}
 	r.mu.Unlock()
-	go r.run(ctx, now)
+	r.persist(ctx, true) // publish "running" immediately so the panel flips
+	go r.run(ctx)
 	return true
 }
 
-func (r *Reindexer) run(ctx context.Context, now func() int64) {
+func (r *Reindexer) run(ctx context.Context) {
 	err := r.doRun(ctx)
 	r.mu.Lock()
 	r.running = false
 	r.lastErr = err
-	r.progress.CompletedAt = now()
+	r.progress.CompletedAt = r.now()
 	r.mu.Unlock()
+	r.persist(ctx, true) // terminal status, forced past the throttle
+}
+
+// persist flushes the current progress to the durable store. Throttled unless
+// forced: the runner calls it after every bulk phase, but a write lands at most
+// once per reindexPersistThrottle so a many-parent walk doesn't storm DynamoDB.
+// Best-effort — the run is authoritative in memory; a failed flush only means a
+// staler panel, so it's logged, not fatal.
+func (r *Reindexer) persist(ctx context.Context, force bool) {
+	if r.status == nil {
+		return
+	}
+	r.mu.Lock()
+	now := r.now()
+	if !force && now-r.lastPersist < int64(reindexPersistThrottle.Seconds()) {
+		r.mu.Unlock()
+		return
+	}
+	r.lastPersist = now
+	p := r.progress
+	p.Running = r.running
+	p.UpdatedAt = now
+	if r.lastErr != nil {
+		p.LastError = r.lastErr.Error()
+	}
+	r.mu.Unlock()
+	if err := r.status.PutSearchStatus(ctx, searchJobReindex, p); err != nil {
+		slog.Warn("reindex: persist status failed", "error", err)
+	}
 }
 
 func (r *Reindexer) doRun(ctx context.Context) error {
@@ -279,6 +347,7 @@ func (r *Reindexer) bulkUsers(ctx context.Context, users []*model.User) error {
 	r.mu.Lock()
 	r.progress.Users = len(users)
 	r.mu.Unlock()
+	r.persist(ctx, false)
 	return nil
 }
 
@@ -293,6 +362,7 @@ func (r *Reindexer) bulkChannels(ctx context.Context, channels []*model.Channel)
 	r.mu.Lock()
 	r.progress.Channels = len(channels)
 	r.mu.Unlock()
+	r.persist(ctx, false)
 	return nil
 }
 
@@ -350,6 +420,7 @@ func (r *Reindexer) bulkMessages(ctx context.Context, msgs []*model.Message, par
 	r.mu.Lock()
 	r.progress.Messages += len(entries)
 	r.mu.Unlock()
+	r.persist(ctx, false)
 	return nil
 }
 
@@ -380,5 +451,6 @@ func (r *Reindexer) bulkFiles(ctx context.Context, files map[string]*fileBucket)
 	r.mu.Lock()
 	r.progress.Files = len(entries)
 	r.mu.Unlock()
+	r.persist(ctx, false)
 	return nil
 }

@@ -35,6 +35,16 @@ export interface SearchMappingRebuildProgress {
   completedAt?: number;
 }
 
+// SearchSchemaVersion mirrors search.SchemaVersionInfo: the live schema
+// generation of a versioned index vs the one this build expects. `current` is
+// null when the index carries no stamp yet (freshly created / pre-versioning).
+export interface SearchSchemaVersion {
+  index: string;
+  current: number | null;
+  expected: number;
+  stale: boolean;
+}
+
 export interface SearchAdminStatus {
   configured: boolean;
   cluster?: Record<string, unknown>;
@@ -44,6 +54,8 @@ export interface SearchAdminStatus {
   reindex?: SearchReindexProgress;
   mappingRebuild?: SearchMappingRebuildProgress;
   mappingRebuildError?: string;
+  schemaVersions?: SearchSchemaVersion[];
+  schemaVersionsError?: string;
 }
 
 // useSearchAdminStatus polls the admin search-status endpoint. While a
