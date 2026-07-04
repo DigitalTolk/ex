@@ -25,6 +25,7 @@ type SearchStatusReporter interface {
 type MappingRebuildController interface {
 	Start(ctx context.Context, now func() int64) (bool, error)
 	Status(ctx context.Context) (search.MappingRebuildStatus, error)
+	SchemaVersions(ctx context.Context) ([]search.SchemaVersionInfo, error)
 }
 
 // AdminHandler exposes admin-only endpoints for workspace configuration.
@@ -113,12 +114,21 @@ func (h *AdminHandler) SearchStatus(w http.ResponseWriter, r *http.Request) {
 	} else {
 		resp["indicesError"] = err.Error()
 	}
-	resp["reindex"] = h.reindexer.Status()
+	if rst, err := h.reindexer.Status(ctx); err == nil {
+		resp["reindex"] = rst
+	} else {
+		resp["reindexError"] = err.Error()
+	}
 	if h.mappingReb != nil {
 		if st, err := h.mappingReb.Status(ctx); err == nil {
 			resp["mappingRebuild"] = st
 		} else {
 			resp["mappingRebuildError"] = err.Error()
+		}
+		if versions, err := h.mappingReb.SchemaVersions(ctx); err == nil {
+			resp["schemaVersions"] = versions
+		} else {
+			resp["schemaVersionsError"] = err.Error()
 		}
 	}
 	writeJSON(w, http.StatusOK, resp)
@@ -138,11 +148,18 @@ func (h *AdminHandler) StartSearchReindex(w http.ResponseWriter, r *http.Request
 	// Detach the request context so the goroutine survives the HTTP
 	// response. Reindexes routinely outlive the request timeout —
 	// admins poll status via SearchStatus afterwards.
-	if !h.reindexer.Start(context.Background(), nowUnix) {
+	if !h.reindexer.Start(context.Background()) {
 		writeError(w, http.StatusConflict, "already_running", "a reindex is already running")
 		return
 	}
-	writeJSON(w, http.StatusAccepted, h.reindexer.Status())
+	st, err := h.reindexer.Status(r.Context())
+	if err != nil {
+		// The run started; a status read-back failure is non-fatal — report
+		// accepted with an empty snapshot, the panel will poll.
+		writeJSON(w, http.StatusAccepted, search.ReindexProgress{Running: true})
+		return
+	}
+	writeJSON(w, http.StatusAccepted, st)
 }
 
 // StartSearchMappingRebuild kicks off the cluster-coordinated users/channels

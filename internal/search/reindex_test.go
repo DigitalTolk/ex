@@ -64,12 +64,41 @@ func (f *fakeBulk) Bulk(_ context.Context, index string, entries []BulkEntry) er
 	return f.err
 }
 
+// testReindexer wires a Reindexer with an in-memory status store (DynamoDB
+// stand-in) and a fixed clock so Start/Status/persist run without real infra.
+func testReindexer(src reindexSources, w bulkWriter) *Reindexer {
+	return &Reindexer{src: src, w: w, status: newFakeStore(), now: fixedNow(1700000000)}
+}
+
+// waitReindex polls the durable status until the run completes, returning the
+// terminal snapshot. Fails the test if it doesn't finish in time.
+func waitReindex(t *testing.T, r *Reindexer) ReindexProgress {
+	t.Helper()
+	ctx := context.Background()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		st, err := r.Status(ctx)
+		if err != nil {
+			t.Fatalf("Status: %v", err)
+		}
+		if !st.Running {
+			return st
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("reindex did not complete in time")
+	return ReindexProgress{}
+}
+
 func TestNewReindexer_NilDepsReturnsNil(t *testing.T) {
-	if NewReindexer(nil, &fakeSources{}) != nil {
+	if NewReindexer(nil, &fakeSources{}, newFakeStore()) != nil {
 		t.Error("nil client should yield nil reindexer")
 	}
-	if NewReindexer(&Client{}, nil) != nil {
+	if NewReindexer(&Client{}, nil, newFakeStore()) != nil {
 		t.Error("nil sources should yield nil reindexer")
+	}
+	if NewReindexer(&Client{}, &fakeSources{}, nil) != nil {
+		t.Error("nil status store should yield nil reindexer")
 	}
 }
 
@@ -85,26 +114,13 @@ func TestReindexer_RunIndexesAllResources(t *testing.T) {
 		},
 	}
 	w := &fakeBulk{}
-	r := &Reindexer{src: src, w: w}
-	now := func() int64 { return 1700000000 }
+	r := testReindexer(src, w)
 
-	started := r.Start(context.Background(), now)
-	if !started {
+	if !r.Start(context.Background()) {
 		t.Fatal("Start returned false")
 	}
 
-	// Wait for the goroutine to finish.
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if !r.Status().Running {
-			break
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	st := r.Status()
-	if st.Running {
-		t.Fatal("reindex did not complete in time")
-	}
+	st := waitReindex(t, r)
 	if st.LastError != "" {
 		t.Errorf("LastError = %q", st.LastError)
 	}
@@ -139,32 +155,29 @@ func TestReindexer_BuildsExFilesFromAttachments(t *testing.T) {
 		},
 	}
 	w := &fakeBulk{}
-	r := &Reindexer{src: src, w: w}
+	r := testReindexer(src, w)
 	r.SetAttachmentResolver(&stubAttachmentResolver{byID: map[string]*model.Attachment{
 		"a-1": {ID: "a-1", Filename: "shared.pdf", CreatedBy: "u-1"},
 	}})
-	r.Start(context.Background(), func() int64 { return 0 })
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) && r.Status().Running {
-		time.Sleep(5 * time.Millisecond)
-	}
+	r.Start(context.Background())
+	st := waitReindex(t, r)
 	if w.calls[IndexFiles] != 1 {
 		t.Fatalf("indexed files = %d, want 1 (one unique attachment shared in two channels)", w.calls[IndexFiles])
 	}
-	if r.Status().Files != 1 {
-		t.Errorf("Status.Files = %d, want 1", r.Status().Files)
+	if st.Files != 1 {
+		t.Errorf("Status.Files = %d, want 1", st.Files)
 	}
 }
 
 func TestReindexer_StartIsIdempotentWhileRunning(t *testing.T) {
 	r := &Reindexer{src: &fakeSources{}, w: &fakeBulk{}, running: true}
-	if r.Start(context.Background(), func() int64 { return 0 }) {
+	if r.Start(context.Background()) {
 		t.Error("expected false when already running")
 	}
 }
 
 func TestNewReindexer_LiveDeps(t *testing.T) {
-	r := NewReindexer(NewClient("http://example.test"), &fakeSources{})
+	r := NewReindexer(NewClient("http://example.test"), &fakeSources{}, newFakeStore())
 	if r == nil {
 		t.Fatal("expected non-nil reindexer")
 	}
@@ -173,16 +186,13 @@ func TestNewReindexer_LiveDeps(t *testing.T) {
 func TestReindexer_BulkErrorSurfacesAndStops(t *testing.T) {
 	src := &fakeSources{users: []*model.User{{ID: "u-1"}}}
 	w := &fakeBulk{err: errors.New("bulk down")}
-	r := &Reindexer{src: src, w: w}
-	r.Start(context.Background(), func() int64 { return 0 })
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) && r.Status().Running {
-		time.Sleep(5 * time.Millisecond)
-	}
-	if msg := r.Status().LastError; msg == "" {
+	r := testReindexer(src, w)
+	r.Start(context.Background())
+	st := waitReindex(t, r)
+	if st.LastError == "" {
 		t.Error("expected LastError from bulk failure")
 	}
-	if r.Status().Channels != 0 {
+	if st.Channels != 0 {
 		t.Error("subsequent steps should not run after a bulk error")
 	}
 }
@@ -299,16 +309,110 @@ func TestReindexer_bulkMessages_NoEntriesEarlyReturn(t *testing.T) {
 	}
 }
 
+func TestReindexer_Status_MissIsZero(t *testing.T) {
+	r := &Reindexer{src: &fakeSources{}, w: &fakeBulk{}, status: newFakeStore(), now: fixedNow(1)}
+	st, err := r.Status(context.Background())
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if st != (ReindexProgress{}) {
+		t.Fatalf("never-run status should be zero, got %+v", st)
+	}
+}
+
+func TestReindexer_Status_SurfacesStoreError(t *testing.T) {
+	store := newFakeStore()
+	store.getErr = errors.New("ddb down")
+	r := &Reindexer{src: &fakeSources{}, w: &fakeBulk{}, status: store, now: fixedNow(1)}
+	if _, err := r.Status(context.Background()); err == nil {
+		t.Fatal("expected the store read error to surface")
+	}
+}
+
+func TestReindexer_Status_ReconcilesStaleHeartbeat(t *testing.T) {
+	store := newFakeStore()
+	r := &Reindexer{src: &fakeSources{}, w: &fakeBulk{}, status: store, now: fixedNow(1000)}
+	// A "running" record whose heartbeat is well past the stale window — the
+	// runner crashed. now(1000) - UpdatedAt(100) = 900s >> reindexStaleAfter.
+	_ = store.PutSearchStatus(context.Background(), searchJobReindex, ReindexProgress{Running: true, UpdatedAt: 100})
+	st, err := r.Status(context.Background())
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if st.Running {
+		t.Fatal("a stale-heartbeat running record must reconcile to not-running")
+	}
+	if st.LastError == "" {
+		t.Fatal("interrupted reconcile should annotate lastError")
+	}
+}
+
+func TestReindexer_Status_ReconcileKeepsExistingError(t *testing.T) {
+	store := newFakeStore()
+	r := &Reindexer{src: &fakeSources{}, w: &fakeBulk{}, status: store, now: fixedNow(1000)}
+	_ = store.PutSearchStatus(context.Background(), searchJobReindex, ReindexProgress{Running: true, UpdatedAt: 100, LastError: "prior"})
+	st, _ := r.Status(context.Background())
+	if st.Running || st.LastError != "prior" {
+		t.Fatalf("reconcile should not clobber an existing error, got %+v", st)
+	}
+}
+
+func TestReindexer_Status_FreshHeartbeatStaysRunning(t *testing.T) {
+	store := newFakeStore()
+	r := &Reindexer{src: &fakeSources{}, w: &fakeBulk{}, status: store, now: fixedNow(1000)}
+	// now(1000) - UpdatedAt(990) = 10s < reindexStaleAfter → still running.
+	_ = store.PutSearchStatus(context.Background(), searchJobReindex, ReindexProgress{Running: true, UpdatedAt: 990})
+	st, _ := r.Status(context.Background())
+	if !st.Running {
+		t.Fatal("a fresh heartbeat must keep the run marked running")
+	}
+}
+
+func TestReindexer_persist_ThrottlesUnlessForced(t *testing.T) {
+	store := newFakeStore()
+	var clock int64 = 1000
+	r := &Reindexer{src: &fakeSources{}, w: &fakeBulk{}, status: store, now: func() int64 { return clock }}
+	r.mu.Lock()
+	r.running = true
+	r.progress = ReindexProgress{Users: 1}
+	r.mu.Unlock()
+
+	r.persist(context.Background(), true) // forced → writes
+	if store.putCalls != 1 {
+		t.Fatalf("forced persist should write once, got %d", store.putCalls)
+	}
+	r.persist(context.Background(), false) // same clock → throttled, skipped
+	if store.putCalls != 1 {
+		t.Fatalf("a persist within the throttle window should skip, got %d", store.putCalls)
+	}
+	clock += int64(reindexPersistThrottle.Seconds()) + 1 // advance past the throttle
+	r.persist(context.Background(), false)
+	if store.putCalls != 2 {
+		t.Fatalf("a persist past the throttle window should write, got %d", store.putCalls)
+	}
+}
+
+func TestReindexer_persist_LogsAndSurvivesStoreError(t *testing.T) {
+	store := newFakeStore()
+	store.putErr = errors.New("ddb write down")
+	r := &Reindexer{src: &fakeSources{}, w: &fakeBulk{}, status: store, now: fixedNow(1000)}
+	r.mu.Lock()
+	r.running = true
+	r.mu.Unlock()
+	// A failed flush is best-effort: it logs and returns, never panics or blocks.
+	r.persist(context.Background(), true)
+	if store.putCalls != 1 {
+		t.Fatalf("persist should have attempted one write, got %d", store.putCalls)
+	}
+}
+
 func TestReindexer_PropagatesListError(t *testing.T) {
 	src := &fakeSources{listErr: errors.New("ddb down")}
 	w := &fakeBulk{}
-	r := &Reindexer{src: src, w: w}
-	r.Start(context.Background(), func() int64 { return 0 })
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) && r.Status().Running {
-		time.Sleep(5 * time.Millisecond)
-	}
-	if msg := r.Status().LastError; msg == "" {
+	r := testReindexer(src, w)
+	r.Start(context.Background())
+	st := waitReindex(t, r)
+	if st.LastError == "" {
 		t.Error("expected LastError to surface ddb failure")
 	}
 }

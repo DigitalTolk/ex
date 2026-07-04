@@ -335,7 +335,12 @@ func main() {
 		}
 	}
 	reindexSrc := newReindexSources(userStore, channelStore, conversationStore, messageStore)
-	searchReindexer := search.NewReindexer(searchClient, reindexSrc)
+	// Reindex + mapping-rebuild progress is persisted durably in DynamoDB (like
+	// workspace settings) so it survives the process that ran the job and every
+	// instance's admin panel shows the same state. The mapping rebuild keeps its
+	// Redis lock for single-runner election; only the status blob moves to Dynamo.
+	searchStatusStore := store.NewSearchStatusStore(db)
+	searchReindexer := search.NewReindexer(searchClient, reindexSrc, searchStatusStore)
 	var mappingReb *search.MappingRebuilder
 	if searchClient != nil && searchReindexer != nil {
 		searchReindexer.SetAttachmentResolver(newAttachmentResolver(attachmentStore))
@@ -347,7 +352,7 @@ func main() {
 		// unique lock token per run for the token-fenced release. Guard the
 		// assignment so a nil rebuilder never lands in the interface field as a
 		// non-nil typed-nil.
-		if reb := search.NewMappingRebuilder(searchClient, reindexSrc, redisCache, store.NewID); reb != nil {
+		if reb := search.NewMappingRebuilder(searchClient, reindexSrc, redisCache, searchStatusStore, store.NewID); reb != nil {
 			mappingReb = reb
 			adminH.SetMappingRebuilder(reb)
 		}

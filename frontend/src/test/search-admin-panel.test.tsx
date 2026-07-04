@@ -216,6 +216,33 @@ describe('SearchAdminPanel', () => {
     expect(screen.getByText('redis get failed')).toBeInTheDocument();
   });
 
+  it('shows the live vs expected schema version per index', async () => {
+    apiFetchMock.mockResolvedValueOnce(
+      configuredStatus({
+        schemaVersions: [
+          { index: 'ex_users', current: 2, expected: 2, stale: false },
+          { index: 'ex_channels', current: null, expected: 2, stale: true },
+        ],
+      }),
+    );
+    wrap(<SearchAdminPanel />);
+    const list = await screen.findByTestId('schema-versions');
+    // Up-to-date index reads its live version and shows the healthy label.
+    expect(list.textContent).toContain('ex_users');
+    expect(list.textContent).toContain('v2 / v2');
+    expect(list.textContent).toContain('up to date');
+    // Unstamped index renders a dash for current and flags as rebuilding.
+    expect(list.textContent).toContain('v— / v2');
+    expect(screen.getByTestId('schema-stale-ex_channels')).toBeInTheDocument();
+  });
+
+  it('omits the schema-version list when the status has none', async () => {
+    apiFetchMock.mockResolvedValueOnce(configuredStatus());
+    wrap(<SearchAdminPanel />);
+    await screen.findByTestId('mapping-rebuild-card');
+    expect(screen.queryByTestId('schema-versions')).not.toBeInTheDocument();
+  });
+
   it('surfaces a 409 when another instance already holds the rebuild lock', async () => {
     apiFetchMock
       .mockResolvedValueOnce(configuredStatus())

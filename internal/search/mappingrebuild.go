@@ -2,24 +2,23 @@ package search
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"time"
-
-	"github.com/DigitalTolk/ex/internal/cache"
 )
 
-// Keys + TTLs for the cluster-coordinated users/channels mapping rebuild.
+// Job names key each search job's durable status record (see StatusStore).
+const (
+	searchJobMappingRebuild = "mapping-rebuild"
+	searchJobReindex        = "reindex"
+)
+
+// Keys + TTL for the cluster-coordinated users/channels mapping rebuild lock.
 const (
 	// mappingRebuildLockKey elects a single runner cluster-wide: only the
 	// instance that wins SET NX runs RecreateUsersChannels. Every other
 	// instance (or a still-cooling crashed run) sees the lock and declines,
 	// so N parallel containers can never double-run the alias-swap.
 	mappingRebuildLockKey = "search:mapping-rebuild:lock"
-	// mappingRebuildStatusKey holds the shared progress the admin panel polls,
-	// so the button renders identically on every instance and the result
-	// outlives the container that started the run.
-	mappingRebuildStatusKey = "search:mapping-rebuild:status"
 
 	// mappingRebuildLockTTL bounds two things: how long a crashed run blocks a
 	// retry, and the longest a run may take before a second could race in.
@@ -27,32 +26,38 @@ const (
 	// staging index and the LAST alias swap wins — so even an overrun is safe;
 	// the TTL only has to comfortably exceed a realistic users+channels rebuild.
 	mappingRebuildLockTTL = 15 * time.Minute
-	// mappingRebuildStatusTTL keeps the last result visible long after a run so
-	// the panel can show "last rebuilt at…". A new run overwrites it.
-	mappingRebuildStatusTTL = 24 * time.Hour
 )
 
-// MappingRebuildStatus is the cluster-shared snapshot the admin panel polls.
-// It lives in Redis (not process memory) so every instance reports the same
-// state and it survives the container that kicked the rebuild off.
+// MappingRebuildStatus is the cluster-shared snapshot the admin panel polls. It
+// is persisted durably in DynamoDB (not process memory) so every instance
+// reports the same state and it survives the container that kicked the rebuild
+// off. `dynamodbav` tags mirror the json tags for the DynamoDB round-trip.
 type MappingRebuildStatus struct {
-	Running     bool   `json:"running"`
-	Users       int    `json:"users"`
-	Channels    int    `json:"channels"`
-	LastError   string `json:"lastError,omitempty"`
-	StartedAt   int64  `json:"startedAt,omitempty"`   // Unix seconds
-	CompletedAt int64  `json:"completedAt,omitempty"` // Unix seconds; zero while running
+	Running     bool   `json:"running" dynamodbav:"running"`
+	Users       int    `json:"users" dynamodbav:"users"`
+	Channels    int    `json:"channels" dynamodbav:"channels"`
+	LastError   string `json:"lastError,omitempty" dynamodbav:"lastError,omitempty"`
+	StartedAt   int64  `json:"startedAt,omitempty" dynamodbav:"startedAt,omitempty"`     // Unix seconds
+	CompletedAt int64  `json:"completedAt,omitempty" dynamodbav:"completedAt,omitempty"` // Unix seconds; zero while running
 }
 
-// RebuildStore is the slice of the Redis cache the coordinator needs: a
-// token-fenced distributed lock plus JSON get/set for the shared status.
-// *cache.RedisCache satisfies it.
-type RebuildStore interface {
+// LockStore is the token-fenced distributed lock the mapping rebuild uses to
+// elect a single cluster-wide runner. *cache.RedisCache satisfies it. Kept in
+// Redis deliberately: DynamoDB's TTL sweep is too lax for a prompt lock
+// self-heal, so the coordination stays in Redis while the durable *status*
+// (StatusStore) moves to DynamoDB.
+type LockStore interface {
 	AcquireLock(ctx context.Context, key, token string, ttl time.Duration) (bool, error)
 	ReleaseLock(ctx context.Context, key, token string) error
 	LockHeld(ctx context.Context, key string) (bool, error)
-	Set(ctx context.Context, key string, val interface{}, ttl time.Duration) error
-	Get(ctx context.Context, key string, dest interface{}) error
+}
+
+// StatusStore persists a search job's durable status (DynamoDB), replacing the
+// old Redis status blob. Keyed by job name; `found` is false when no run was
+// ever recorded. store.SearchStatusStoreImpl satisfies it.
+type StatusStore interface {
+	GetSearchStatus(ctx context.Context, job string, dest any) (found bool, err error)
+	PutSearchStatus(ctx context.Context, job string, val any) error
 }
 
 // MappingRebuilder coordinates the zero-downtime users/channels mapping rebuild
@@ -64,7 +69,8 @@ type RebuildStore interface {
 type MappingRebuilder struct {
 	rc       IndexRebuilder
 	src      UsersChannelsSource
-	store    RebuildStore
+	lock     LockStore
+	status   StatusStore
 	newToken func() string
 	// recreate is RecreateUsersChannels, injected so tests drive a spy instead
 	// of a live OpenSearch cluster.
@@ -81,14 +87,15 @@ type MappingRebuilder struct {
 // NewMappingRebuilder wires a coordinator. Returns nil when search isn't
 // configured (nil client) or any dependency is missing — handlers treat nil as
 // "search not enabled" and answer 503, exactly like NewReindexer.
-func NewMappingRebuilder(client *Client, src UsersChannelsSource, store RebuildStore, newToken func() string) *MappingRebuilder {
-	if client == nil || src == nil || store == nil || newToken == nil {
+func NewMappingRebuilder(client *Client, src UsersChannelsSource, lock LockStore, status StatusStore, newToken func() string) *MappingRebuilder {
+	if client == nil || src == nil || lock == nil || status == nil || newToken == nil {
 		return nil
 	}
 	return &MappingRebuilder{
 		rc:        client,
 		src:       src,
-		store:     store,
+		lock:      lock,
+		status:    status,
 		newToken:  newToken,
 		recreate:  RecreateUsersChannels,
 		versionOf: client.IndexSchemaVersion,
@@ -104,7 +111,7 @@ func NewMappingRebuilder(client *Client, src UsersChannelsSource, store RebuildS
 // admins/instances wins — the rest get (false, nil) → 409.
 func (m *MappingRebuilder) Start(ctx context.Context, now func() int64) (bool, error) {
 	token := m.newToken()
-	ok, err := m.store.AcquireLock(ctx, mappingRebuildLockKey, token, mappingRebuildLockTTL)
+	ok, err := m.lock.AcquireLock(ctx, mappingRebuildLockKey, token, mappingRebuildLockTTL)
 	if err != nil {
 		return false, err
 	}
@@ -116,7 +123,7 @@ func (m *MappingRebuilder) Start(ctx context.Context, now func() int64) (bool, e
 	// immediately. The lock — not this write — is the real guard, so a failed
 	// write doesn't abort the run; the panel just lacks a startedAt until the
 	// terminal status lands.
-	_ = m.store.Set(ctx, mappingRebuildStatusKey, MappingRebuildStatus{Running: true, StartedAt: startedAt}, mappingRebuildStatusTTL)
+	_ = m.status.PutSearchStatus(ctx, searchJobMappingRebuild, MappingRebuildStatus{Running: true, StartedAt: startedAt})
 	// Detach: the rebuild routinely outlives the HTTP request, and reindexes run
 	// on a background context immune to request cancellation.
 	m.spawn(func() { m.run(context.Background(), token, startedAt, now) })
@@ -152,6 +159,39 @@ func (m *MappingRebuilder) StartIfStale(ctx context.Context, now func() int64) (
 	return m.Start(ctx, now)
 }
 
+// SchemaVersionInfo reports one versioned index's live vs deployed schema
+// generation for the admin panel. Current is nil when the index carries no
+// stamp yet (freshly created or pre-versioning) — which reads as stale.
+type SchemaVersionInfo struct {
+	Index    string `json:"index"`
+	Current  *int   `json:"current"`
+	Expected int    `json:"expected"`
+	Stale    bool   `json:"stale"`
+}
+
+// SchemaVersions reads the live `_meta.schemaVersion` of each versioned index
+// and pairs it with the version this binary expects, so the admin panel can show
+// exactly where search stands. The index is the source of truth — this always
+// reflects the real cluster, never a cached copy.
+func (m *MappingRebuilder) SchemaVersions(ctx context.Context) ([]SchemaVersionInfo, error) {
+	out := make([]SchemaVersionInfo, 0, len(desiredSchemaVersion))
+	for _, name := range []string{IndexUsers, IndexChannels} {
+		desired := desiredSchemaVersion[name]
+		live, present, err := m.versionOf(ctx, name)
+		if err != nil {
+			return nil, fmt.Errorf("search: read schema version %s: %w", name, err)
+		}
+		info := SchemaVersionInfo{Index: name, Expected: desired, Stale: true}
+		if present {
+			v := live
+			info.Current = &v
+			info.Stale = live < desired
+		}
+		out = append(out, info)
+	}
+	return out, nil
+}
+
 // usersChannelsStale reports whether either versioned index is behind the
 // binary's desired generation (or carries no stamp yet). Any read error aborts
 // the check so a transient OpenSearch blip doesn't masquerade as "current".
@@ -184,8 +224,10 @@ func (m *MappingRebuilder) run(ctx context.Context, token string, startedAt int6
 	if err != nil {
 		status.LastError = err.Error()
 	}
-	_ = m.store.Set(ctx, mappingRebuildStatusKey, status, mappingRebuildStatusTTL)
-	_ = m.store.ReleaseLock(ctx, mappingRebuildLockKey, token)
+	// Persist the terminal status BEFORE releasing the lock so any poll that sees
+	// the lock gone always finds the final result, never a stale "running".
+	_ = m.status.PutSearchStatus(ctx, searchJobMappingRebuild, status)
+	_ = m.lock.ReleaseLock(ctx, mappingRebuildLockKey, token)
 }
 
 // Status returns the cluster-shared snapshot for the admin panel. A never-run
@@ -194,15 +236,15 @@ func (m *MappingRebuilder) run(ctx context.Context, token string, startedAt int6
 // (with an interrupted note) so the panel un-sticks and a retry is possible.
 func (m *MappingRebuilder) Status(ctx context.Context) (MappingRebuildStatus, error) {
 	var s MappingRebuildStatus
-	err := m.store.Get(ctx, mappingRebuildStatusKey, &s)
-	if errors.Is(err, cache.ErrCacheMiss) {
-		return MappingRebuildStatus{}, nil
-	}
+	found, err := m.status.GetSearchStatus(ctx, searchJobMappingRebuild, &s)
 	if err != nil {
 		return MappingRebuildStatus{}, err
 	}
+	if !found {
+		return MappingRebuildStatus{}, nil
+	}
 	if s.Running {
-		held, herr := m.store.LockHeld(ctx, mappingRebuildLockKey)
+		held, herr := m.lock.LockHeld(ctx, mappingRebuildLockKey)
 		if herr == nil && !held {
 			s.Running = false
 			if s.LastError == "" {

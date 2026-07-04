@@ -30,6 +30,31 @@ func (s *stubReporter) IndexStats(_ context.Context) ([]search.IndexStat, error)
 	return s.stats, s.statsErr
 }
 
+// memStatusStore is an in-memory search.StatusStore (DynamoDB stand-in) so the
+// admin tests can drive a real Reindexer without a real table.
+type memStatusStore struct {
+	m map[string][]byte
+}
+
+func newMemStatusStore() *memStatusStore { return &memStatusStore{m: map[string][]byte{}} }
+
+func (s *memStatusStore) PutSearchStatus(_ context.Context, job string, val any) error {
+	b, err := json.Marshal(val)
+	if err != nil {
+		return err
+	}
+	s.m[job] = b
+	return nil
+}
+
+func (s *memStatusStore) GetSearchStatus(_ context.Context, job string, dest any) (bool, error) {
+	b, ok := s.m[job]
+	if !ok {
+		return false, nil
+	}
+	return true, json.Unmarshal(b, dest)
+}
+
 // stubReindexSources is the minimal slice search.Reindexer needs from
 // its source. Used so the admin tests can drive a real Reindexer
 // without standing up DDB-backed adapters.
@@ -71,7 +96,7 @@ func makeAdminWithSearch(t *testing.T, reporter SearchStatusReporter) (*AdminHan
 	client := search.NewClient(srv.URL)
 	rx := search.NewReindexer(client, &stubReindexSources{
 		users: []*model.User{{ID: "u-1"}},
-	})
+	}, newMemStatusStore())
 	h.SetSearch(reporter, rx)
 	return h, srv
 }
@@ -227,7 +252,7 @@ func TestAdminHandler_StartSearchReindex_AcceptedThenConflict(t *testing.T) {
 	// — without this, the goroutine from the first call may finish
 	// before the second request hits the handler, in which case the
 	// second start would also be 202.
-	h.reindexer.Start(context.Background(), nowUnix)
+	h.reindexer.Start(context.Background())
 }
 
 // TestAdminHandler_StartSearchReindex_ConflictWhenRunning deterministically
@@ -247,11 +272,11 @@ func TestAdminHandler_StartSearchReindex_ConflictWhenRunning(t *testing.T) {
 	defer close(release)
 
 	client := search.NewClient(srv.URL)
-	rx := search.NewReindexer(client, &stubReindexSources{users: []*model.User{{ID: "u-1"}}})
+	rx := search.NewReindexer(client, &stubReindexSources{users: []*model.User{{ID: "u-1"}}}, newMemStatusStore())
 	h.SetSearch(&stubReporter{}, rx)
 
 	// Begin a run; it will block in /_bulk and stay running.
-	if !rx.Start(context.Background(), nowUnix) {
+	if !rx.Start(context.Background()) {
 		t.Fatal("initial Start should succeed")
 	}
 
@@ -277,10 +302,12 @@ func TestNowUnix(t *testing.T) {
 // stubMappingReb is a MappingRebuildController fake so the admin routes can be
 // exercised without Redis or a live cluster.
 type stubMappingReb struct {
-	started   bool
-	startErr  error
-	status    search.MappingRebuildStatus
-	statusErr error
+	started    bool
+	startErr   error
+	status     search.MappingRebuildStatus
+	statusErr  error
+	versions   []search.SchemaVersionInfo
+	versionErr error
 }
 
 func (s *stubMappingReb) Start(context.Context, func() int64) (bool, error) {
@@ -288,6 +315,9 @@ func (s *stubMappingReb) Start(context.Context, func() int64) (bool, error) {
 }
 func (s *stubMappingReb) Status(context.Context) (search.MappingRebuildStatus, error) {
 	return s.status, s.statusErr
+}
+func (s *stubMappingReb) SchemaVersions(context.Context) ([]search.SchemaVersionInfo, error) {
+	return s.versions, s.versionErr
 }
 
 func mappingRebuildRequest(t *testing.T, h *AdminHandler, jwtMgr *auth.JWTManager, user *model.User) *httptest.ResponseRecorder {
@@ -360,7 +390,14 @@ func TestAdminHandler_SearchStatus_IncludesMappingRebuild(t *testing.T) {
 	reporter := &stubReporter{health: map[string]any{"status": "green"}}
 	h, srv := makeAdminWithSearch(t, reporter)
 	defer srv.Close()
-	h.SetMappingRebuilder(&stubMappingReb{status: search.MappingRebuildStatus{Users: 9, Channels: 4}})
+	cur := 1
+	h.SetMappingRebuilder(&stubMappingReb{
+		status: search.MappingRebuildStatus{Users: 9, Channels: 4},
+		versions: []search.SchemaVersionInfo{
+			{Index: "ex_users", Current: &cur, Expected: 2, Stale: true},
+			{Index: "ex_channels", Current: &cur, Expected: 1, Stale: false},
+		},
+	})
 	_, jwtMgr := setupAdminHandler(t)
 	admin := &model.User{ID: "u-adm", SystemRole: model.SystemRoleAdmin}
 	token := makeTokenForUser(jwtMgr, admin)
@@ -380,6 +417,34 @@ func TestAdminHandler_SearchStatus_IncludesMappingRebuild(t *testing.T) {
 	}
 	if mr["users"].(float64) != 9 {
 		t.Errorf("mappingRebuild.users = %v, want 9", mr["users"])
+	}
+	versions, ok := got["schemaVersions"].([]any)
+	if !ok || len(versions) != 2 {
+		t.Fatalf("schemaVersions missing/short in status: %v", got["schemaVersions"])
+	}
+	first := versions[0].(map[string]any)
+	if first["index"] != "ex_users" || first["current"].(float64) != 1 || first["expected"].(float64) != 2 || first["stale"] != true {
+		t.Errorf("schemaVersions[0] = %v, want ex_users current=1 expected=2 stale=true", first)
+	}
+}
+
+func TestAdminHandler_SearchStatus_SchemaVersionsError(t *testing.T) {
+	reporter := &stubReporter{health: map[string]any{"status": "green"}}
+	h, srv := makeAdminWithSearch(t, reporter)
+	defer srv.Close()
+	h.SetMappingRebuilder(&stubMappingReb{versionErr: errors.New("opensearch down")})
+	_, jwtMgr := setupAdminHandler(t)
+	admin := &model.User{ID: "u-adm", SystemRole: model.SystemRoleAdmin}
+	token := makeTokenForUser(jwtMgr, admin)
+	handler := middleware.Auth(jwtMgr)(http.HandlerFunc(h.SearchStatus))
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/search/status", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	var got map[string]any
+	_ = json.NewDecoder(rec.Body).Decode(&got)
+	if _, ok := got["schemaVersionsError"]; !ok {
+		t.Errorf("expected schemaVersionsError in status, got %v", got)
 	}
 }
 
