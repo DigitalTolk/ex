@@ -1,9 +1,11 @@
 import {
+  acceptCompletion,
   autocompletion,
   selectedCompletionIndex,
   setSelectedCompletion,
 } from '@codemirror/autocomplete';
-import { ViewPlugin, type EditorView } from '@codemirror/view';
+import { Prec } from '@codemirror/state';
+import { ViewPlugin, keymap, type EditorView } from '@codemirror/view';
 import {
   userMentionSource,
   channelMentionSource,
@@ -62,6 +64,13 @@ export function composerAutocomplete(providers: CompletionProviders) {
       // column) per option; the default label/detail are hidden in the theme.
       addToOptions: [{ render: renderMentionOption, position: 20 }],
     }),
+    // Tab accepts the highlighted option while the typeahead is open —
+    // Slack/IDE muscle memory alongside the default Enter. acceptCompletion
+    // returns false when no completion is active, so Tab falls through to
+    // its normal behavior (focus navigation) everywhere else. Prec.high so a
+    // future lower-precedence Tab binding (e.g. indentation) can't shadow it
+    // while the popup is open.
+    Prec.high(keymap.of([{ key: 'Tab', run: acceptCompletion }])),
     hoverSelect,
   ];
 }
