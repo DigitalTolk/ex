@@ -1,5 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
+
+const reportErrorMock = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/sentry', () => ({
+  reportError: (...args: unknown[]) => reportErrorMock(...args),
+}));
+
 import { ErrorBoundary } from './ErrorBoundary';
 
 function Boom({ when }: { when: boolean }): React.ReactElement {
@@ -22,6 +28,18 @@ describe('ErrorBoundary', () => {
       </ErrorBoundary>,
     );
     expect(screen.getByText('safe content')).toBeInTheDocument();
+  });
+
+  it('forwards caught render errors to error reporting (React swallows them before window.onerror)', () => {
+    reportErrorMock.mockClear();
+    render(
+      <ErrorBoundary>
+        <Boom when={true} />
+      </ErrorBoundary>,
+    );
+    expect(reportErrorMock).toHaveBeenCalledTimes(1);
+    expect(reportErrorMock.mock.calls[0][0]).toBeInstanceOf(Error);
+    expect(reportErrorMock.mock.calls[0][1]).toHaveProperty('componentStack');
   });
 
   it('renders the default fallback when a child throws, and can reload', () => {

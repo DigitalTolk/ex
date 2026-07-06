@@ -3,19 +3,21 @@ package store
 import (
 	"context"
 	"fmt"
+	"time"
 
+	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/expression"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
-	"github.com/DigitalTolk/ex/internal/model"
 )
 
 // TokenStore defines operations on RefreshToken entities.
 type TokenStore interface {
 	Create(ctx context.Context, token *model.RefreshToken) error
 	GetByHash(ctx context.Context, hash string) (*model.RefreshToken, error)
+	MarkRotated(ctx context.Context, hash string, rotatedAt time.Time, supersededBy string) error
 	Delete(ctx context.Context, hash string) error
 	DeleteAllForUser(ctx context.Context, userID string) error
 }
@@ -84,6 +86,35 @@ func (s *TokenStoreImpl) GetByHash(ctx context.Context, hash string) (*model.Ref
 		return nil, fmt.Errorf("store: unmarshal refresh token: %w", err)
 	}
 	return &item.RefreshToken, nil
+}
+
+// MarkRotated stamps a refresh token as used-and-superseded without deleting
+// it. The row keeps its original TTL; whether a later reuse is honored is the
+// service's call (allowed only while the successor is itself unused).
+func (s *TokenStoreImpl) MarkRotated(ctx context.Context, hash string, rotatedAt time.Time, supersededBy string) error {
+	upd := expression.
+		Set(expression.Name("rotatedAt"), expression.Value(rotatedAt)).
+		Set(expression.Name("supersededBy"), expression.Value(supersededBy))
+	cond := expression.Name("PK").AttributeExists()
+	expr, err := expression.NewBuilder().WithUpdate(upd).WithCondition(cond).Build()
+	if err != nil { // coverage-ignore: static update+condition built from constants; Build cannot fail
+		return fmt.Errorf("store: build mark-rotated expression: %w", err)
+	}
+	_, err = s.Client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName:                 aws.String(s.Table),
+		Key:                       compositeKey(rtokenPK(hash), metaSK()),
+		UpdateExpression:          expr.Update(),
+		ConditionExpression:       expr.Condition(),
+		ExpressionAttributeNames:  expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
+	})
+	if err != nil {
+		if isConditionCheckFailed(err) {
+			return ErrNotFound
+		}
+		return fmt.Errorf("store: mark refresh token rotated: %w", err)
+	}
+	return nil
 }
 
 func (s *TokenStoreImpl) Delete(ctx context.Context, hash string) error {

@@ -7,6 +7,15 @@ import (
 	"github.com/DigitalTolk/ex/internal/middleware"
 )
 
+// SentryFrontendConfig is the frontend error-reporting opt-in served to the
+// SPA via meta tags. Rates are 0..1; zero means off.
+type SentryFrontendConfig struct {
+	DSN                     string
+	TracesSampleRate        float64
+	ReplaySessionSampleRate float64
+	ReplayErrorSampleRate   float64
+}
+
 // Deps is the single set of dependencies the HTTP router needs to wire
 // up the API surface. Bundling them into a struct (instead of a long
 // positional parameter list on NewRouter) means adding a new endpoint
@@ -44,6 +53,10 @@ type Deps struct {
 	// SPA/static.
 	FrontendFS fs.FS
 	AppVersion string
+	// SentryFrontend, when its DSN is set, is stamped into the served
+	// index.html as meta tags so the SPA (in browsers and both native shells)
+	// initializes Sentry — an ops-only opt-in, no client rebuild needed.
+	SentryFrontend SentryFrontendConfig
 
 	// CORS / cross-origin policy. The first non-empty entry is treated
 	// as the canonical primary origin in the middleware.

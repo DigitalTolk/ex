@@ -1,3 +1,4 @@
+import { reportError } from '@/lib/sentry';
 import { Component, type ErrorInfo, type ReactNode } from 'react';
 
 interface Props {
@@ -29,6 +30,9 @@ export class ErrorBoundary extends Component<Props, State> {
   componentDidCatch(error: Error, info: ErrorInfo) {
     // Surface it for telemetry/console rather than swallowing silently.
     console.error('ErrorBoundary caught a render error', error, info.componentStack);
+    // React swallows render errors before window.onerror sees them — forward
+    // to Sentry explicitly (no-op unless the server enabled reporting).
+    reportError(error, { componentStack: info.componentStack });
   }
 
   componentDidUpdate(prevProps: Props) {

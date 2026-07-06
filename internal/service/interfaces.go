@@ -165,6 +165,9 @@ type TokenStore interface {
 	StoreRefreshToken(ctx context.Context, rt *model.RefreshToken) error
 	GetRefreshToken(ctx context.Context, tokenHash string) (*model.RefreshToken, error)
 	DeleteRefreshToken(ctx context.Context, tokenHash string) error
+	// MarkRefreshTokenRotated stamps a token used-and-superseded (kept, not
+	// deleted — see AuthService.RefreshAccessToken's lost-response reuse rules).
+	MarkRefreshTokenRotated(ctx context.Context, tokenHash string, rotatedAt time.Time, supersededBy string) error
 	DeleteAllRefreshTokensForUser(ctx context.Context, userID string) error
 }
 

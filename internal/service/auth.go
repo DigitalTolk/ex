@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/mail"
 	"strings"
 	"time"
@@ -214,6 +215,48 @@ func (s *AuthService) RefreshAccessToken(ctx context.Context, refreshTokenRaw st
 		return "", "", errors.New("auth: refresh token expired")
 	}
 
+	// Reuse of an already-rotated token. The successor's raw value rode
+	// exactly one HTTP response; on mobile-grade networks that response is
+	// regularly lost (radio drop, app backgrounded mid-request, client
+	// timeout) — the client then retries with the only token it ever held.
+	// Distinguish the two possible worlds by the successor's own state:
+	//   - successor NEVER used → the response carrying it was provably lost
+	//     (its raw value was destroyed with the response; nobody can ever
+	//     present it). Honor the retry: revoke the orphan and rotate afresh.
+	//   - successor (chain) alive → two parties hold live tokens: replay.
+	//     Reject and revoke the presented token.
+	// This is what keeps "re-login multiple times a day on desktop/iOS while
+	// the SSO session is still valid" from happening without giving up
+	// rotation's replay protection.
+	if rt.RotatedAt != nil {
+		successorUsed := false
+		if rt.SupersededBy != "" {
+			successor, err := s.tokens.GetRefreshToken(ctx, rt.SupersededBy)
+			switch {
+			case err == nil:
+				successorUsed = successor.RotatedAt != nil
+			case errors.Is(err, store.ErrNotFound):
+				// Successor already revoked or expired — treat as unused;
+				// the legit holder of THIS token is the only party left.
+			default:
+				return "", "", fmt.Errorf("auth: get successor token: %w", err)
+			}
+		}
+		if successorUsed {
+			slog.Warn("auth: rotated refresh token replayed after its successor was used — revoking", "userID", rt.UserID)
+			_ = s.tokens.DeleteRefreshToken(ctx, hash)
+			return "", "", errors.New("auth: refresh token already used")
+		}
+		if rt.SupersededBy != "" {
+			// The orphaned successor is unreachable by anyone; remove it so
+			// this token's next successor is the single live continuation.
+			_ = s.tokens.DeleteRefreshToken(ctx, rt.SupersededBy)
+		}
+		// INFO (not WARN): this is the expected recovery for a lost rotation
+		// response; its frequency is a useful proxy for client network health.
+		slog.Info("auth: refresh token reused after lost rotation response — reissuing", "userID", rt.UserID)
+	}
+
 	user, err := s.users.GetUser(ctx, rt.UserID)
 	if err != nil {
 		return "", "", fmt.Errorf("auth: get user: %w", err)
@@ -228,8 +271,11 @@ func (s *AuthService) RefreshAccessToken(ctx context.Context, refreshTokenRaw st
 		return "", "", fmt.Errorf("auth: generate access token: %w", err)
 	}
 
-	// Rotate the refresh token: issue a fresh one and revoke the presented one,
-	// so a captured refresh token can't be silently replayed for its full TTL.
+	// Rotate the refresh token: issue a fresh successor and stamp the
+	// presented token as rotated. The old token is kept (not deleted) so a
+	// lost response can be retried under the successor-unused rule above; it
+	// still ages out at its original expiry, and any use after its successor
+	// chain went live is rejected as replay.
 	newRefreshRaw, newHash, err := s.jwt.GenerateRefreshToken()
 	if err != nil {
 		return "", "", fmt.Errorf("auth: generate refresh token: %w", err)
@@ -242,7 +288,13 @@ func (s *AuthService) RefreshAccessToken(ctx context.Context, refreshTokenRaw st
 	}); err != nil {
 		return "", "", fmt.Errorf("auth: store refresh token: %w", err)
 	}
-	_ = s.tokens.DeleteRefreshToken(ctx, hash)
+	if err := s.tokens.MarkRefreshTokenRotated(ctx, hash, now, newHash); err != nil {
+		// The stamp failed — the presented token would stay reusable with NO
+		// successor linkage, i.e. unlimited replay. Fall back to hard
+		// deletion (the pre-grace behavior) rather than weaken rotation.
+		slog.Warn("auth: mark refresh token rotated failed; deleting instead", "error", err)
+		_ = s.tokens.DeleteRefreshToken(ctx, hash)
+	}
 
 	return accessToken, newRefreshRaw, nil
 }

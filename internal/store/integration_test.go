@@ -1530,6 +1530,43 @@ func TestTokenStore_CreateGetDelete(t *testing.T) {
 	}
 }
 
+func TestTokenStore_MarkRotated(t *testing.T) {
+	db := setupDynamoDB(t)
+	ts := NewTokenStore(db)
+	ctx := context.Background()
+
+	token := &model.RefreshToken{
+		TokenHash: "hash-rot",
+		UserID:    "u-token",
+		ExpiresAt: time.Now().Add(720 * time.Hour).Truncate(time.Millisecond),
+		CreatedAt: time.Now().Truncate(time.Millisecond),
+	}
+	if err := ts.Create(ctx, token); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	rotatedAt := time.Now().Truncate(time.Millisecond)
+	if err := ts.MarkRotated(ctx, "hash-rot", rotatedAt, "hash-successor"); err != nil {
+		t.Fatalf("MarkRotated: %v", err)
+	}
+	got, err := ts.GetByHash(ctx, "hash-rot")
+	if err != nil {
+		t.Fatalf("GetByHash after MarkRotated: %v", err)
+	}
+	if got.RotatedAt == nil || !got.RotatedAt.Equal(rotatedAt) {
+		t.Errorf("RotatedAt = %v, want %v", got.RotatedAt, rotatedAt)
+	}
+	if got.SupersededBy != "hash-successor" {
+		t.Errorf("SupersededBy = %q, want hash-successor", got.SupersededBy)
+	}
+
+	// Stamping a nonexistent token reports ErrNotFound instead of silently
+	// creating a floating row.
+	if err := ts.MarkRotated(ctx, "hash-missing", rotatedAt, "x"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("MarkRotated missing = %v, want ErrNotFound", err)
+	}
+}
+
 func TestTokenStore_GetByHash_NotFound(t *testing.T) {
 	db := setupDynamoDB(t)
 	ts := NewTokenStore(db)

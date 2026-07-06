@@ -108,6 +108,29 @@ When SMTP is not configured, invite links are logged to the server console.
 | `SMTP_USER`          | -                                 | SMTP username                                           |
 | `SMTP_PASS`          | -                                 | SMTP password                                           |
 | `SMTP_FROM`          | -                                 | Sender email address for invites                        |
+| `SENTRY_FRONTEND_DSN`| -                                 | Enables Sentry in the SPA (served as a meta tag to browsers + both native shells) |
+| `SENTRY_FRONTEND_TRACES_SAMPLE_RATE` | `0` (off)         | Sentry browser performance tracing sample rate (0..1)  |
+| `SENTRY_FRONTEND_REPLAY_SESSION_SAMPLE_RATE` | `0` (off) | Sentry session replay: sample rate for all sessions (0..1) |
+| `SENTRY_FRONTEND_REPLAY_ERROR_SAMPLE_RATE` | `0` (off)   | Sentry session replay: sample rate for sessions with an error (0..1) |
+
+### Datadog APM (optional)
+
+The Docker image is compiled through [Orchestrion](https://github.com/DataDog/orchestrion),
+so APM instrumentation (HTTP server/client, Redis, AWS SDK v2 — the set lives in
+`orchestrion.tool.go`) is baked in at compile time. Tracing is **off by default**
+(`DD_TRACE_ENABLED=false` in the image); a deployment opts in purely via environment:
+
+| Variable                | Example          | Description                                    |
+|-------------------------|------------------|------------------------------------------------|
+| `DD_TRACE_ENABLED`      | `true`           | Turn the compiled-in tracer on                 |
+| `DD_AGENT_HOST`         | `datadog-agent`  | Datadog agent host (default `localhost`)       |
+| `DD_ENV`                | `production`     | Environment tag on all traces                  |
+| `DD_SERVICE`            | `ex` (default)   | Service name                                   |
+| `DD_VERSION`            | `v0.0.57`        | Version tag on all traces                      |
+| `DD_TRACE_SAMPLE_RATE`  | `1.0`            | Trace sampling rate                            |
+
+Plain `go build` / `go test` remain uninstrumented — Orchestrion only runs in the
+Docker build, and its version is pinned through `go.mod`.
 
 ## Build
 

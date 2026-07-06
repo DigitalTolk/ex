@@ -48,6 +48,18 @@ type Config struct {
 	// App
 	BaseURL string
 
+	// SentryFrontendDSN, when non-empty, enables Sentry error reporting in the
+	// SPA: the server stamps it into the served index.html, so browsers and
+	// the native shells all pick it up on next load. Backend observability is
+	// Datadog's job (see Dockerfile / Orchestrion) — this is frontend-only.
+	SentryFrontendDSN string
+	// Optional Sentry sample rates (0..1, zero = off), served to the SPA the
+	// same way: performance tracing, always-on session replay sampling, and
+	// the buffered capture-replay-of-sessions-that-error rate.
+	SentryFrontendTracesSampleRate        float64
+	SentryFrontendReplaySessionSampleRate float64
+	SentryFrontendReplayErrorSampleRate   float64
+
 	// TrustedProxyCount is how many reverse proxies (LB, CDN) sit in front of the
 	// app and append to X-Forwarded-For. The rate-limit IP is taken just inside
 	// these trusted hops so a client can't forge its identity with a leading XFF.
@@ -134,6 +146,17 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("JWT_SECRET must be at least 32 characters outside development")
 	}
 
+	c.SentryFrontendDSN = os.Getenv("SENTRY_FRONTEND_DSN")
+	if c.SentryFrontendTracesSampleRate, err = sampleRateEnv("SENTRY_FRONTEND_TRACES_SAMPLE_RATE"); err != nil {
+		return nil, err
+	}
+	if c.SentryFrontendReplaySessionSampleRate, err = sampleRateEnv("SENTRY_FRONTEND_REPLAY_SESSION_SAMPLE_RATE"); err != nil {
+		return nil, err
+	}
+	if c.SentryFrontendReplayErrorSampleRate, err = sampleRateEnv("SENTRY_FRONTEND_REPLAY_ERROR_SAMPLE_RATE"); err != nil {
+		return nil, err
+	}
+
 	proxyCount := envOr("TRUSTED_PROXY_COUNT", "1")
 	n, err := strconv.Atoi(proxyCount)
 	if err != nil || n < 0 {
@@ -158,4 +181,19 @@ func envOr(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// sampleRateEnv parses an optional 0..1 sampling rate from the environment.
+// Unset/empty means 0 (off); anything unparsable or out of range fails Load
+// so a typo can't silently disable (or full-throttle) telemetry.
+func sampleRateEnv(name string) (float64, error) {
+	raw := os.Getenv(name)
+	if raw == "" {
+		return 0, nil
+	}
+	v, err := strconv.ParseFloat(raw, 64)
+	if err != nil || v < 0 || v > 1 {
+		return 0, fmt.Errorf("invalid %s %q: must be a number between 0 and 1", name, raw)
+	}
+	return v, nil
 }

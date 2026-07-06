@@ -119,6 +119,7 @@ type mockTokenStore struct {
 	storeErr  error
 	getErr    error
 	deleteErr error
+	rotateErr error
 }
 
 func newMockTokenStore() *mockTokenStore {
@@ -142,6 +143,20 @@ func (m *mockTokenStore) GetRefreshToken(_ context.Context, hash string) (*model
 		return nil, store.ErrNotFound
 	}
 	return rt, nil
+}
+
+func (m *mockTokenStore) MarkRefreshTokenRotated(_ context.Context, hash string, rotatedAt time.Time, supersededBy string) error {
+	if m.rotateErr != nil {
+		return m.rotateErr
+	}
+	rt, ok := m.tokens[hash]
+	if !ok {
+		return store.ErrNotFound
+	}
+	t := rotatedAt
+	rt.RotatedAt = &t
+	rt.SupersededBy = supersededBy
+	return nil
 }
 
 func (m *mockTokenStore) DeleteRefreshToken(_ context.Context, hash string) error {
@@ -207,18 +222,18 @@ func (m *mockInviteStore) DeleteInvite(_ context.Context, token string) error {
 // --- Mock MembershipStore ---
 
 type mockMembershipStore struct {
-	memberships     map[string]*model.ChannelMembership // key: channelID + "#" + userID
-	mutes           map[string]bool                     // key: channelID + "#" + userID
-	userChannels    []*model.UserChannel                // override for ListUserChannels
-	addErr          error
-	removeErr       error
-	getErr          error
-	updateRoleErr   error
-	listMembersErr  error
-	listChannelsErr error
-	setMuteErr      error
-	setNotifErr     error
-	lastReadSeqs      map[string]int64               // key: channelID + "#" + userID
+	memberships       map[string]*model.ChannelMembership // key: channelID + "#" + userID
+	mutes             map[string]bool                     // key: channelID + "#" + userID
+	userChannels      []*model.UserChannel                // override for ListUserChannels
+	addErr            error
+	removeErr         error
+	getErr            error
+	updateRoleErr     error
+	listMembersErr    error
+	listChannelsErr   error
+	setMuteErr        error
+	setNotifErr       error
+	lastReadSeqs      map[string]int64 // key: channelID + "#" + userID
 	setLastReadErr    error
 	addedUserChannels map[string]*model.UserChannel // key: channelID + "#" + userID
 }

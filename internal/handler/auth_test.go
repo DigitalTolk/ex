@@ -4,8 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
-	"net/url"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -118,6 +118,17 @@ func (m *mockTokenStore) GetRefreshToken(_ context.Context, hash string) (*model
 		return nil, store.ErrNotFound
 	}
 	return rt, nil
+}
+
+func (m *mockTokenStore) MarkRefreshTokenRotated(_ context.Context, hash string, rotatedAt time.Time, supersededBy string) error {
+	rt, ok := m.tokens[hash]
+	if !ok {
+		return store.ErrNotFound
+	}
+	t := rotatedAt
+	rt.RotatedAt = &t
+	rt.SupersededBy = supersededBy
+	return nil
 }
 
 func (m *mockTokenStore) DeleteRefreshToken(_ context.Context, hash string) error {

@@ -7,6 +7,7 @@ import {
   type NotificationPayload,
 } from '@/context/NotificationContext';
 import { resetNotificationDedup } from '@/lib/notification-dedup';
+import { markUserActivity } from '@/lib/user-activity';
 
 const playMock = vi.fn();
 vi.mock('@/lib/notification-sound', () => ({
@@ -510,11 +511,29 @@ describe('NotificationProvider', () => {
   });
 
   it('acks desktop delivery when an alert is surfaced (so the backend cancels the mobile push)', () => {
+    // The ack requires an ACTIVE desktop: visible page + recent input (an
+    // earlier test in this file leaves visibilityState at 'hidden').
+    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+    markUserActivity();
     renderProbe();
     act(() => {
       dispatchSpy!({ ...samplePayload, messageID: 'm-ack' });
     });
     expect(sendWSMock).toHaveBeenCalledWith({ type: 'notification.ack', messageID: 'm-ack' });
+  });
+
+  it('does NOT ack a surfaced alert while the user is idle (mobile fallback must fire)', () => {
+    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+    markUserActivity(Date.now() - 10 * 60_000); // user left the desk 10 min ago
+    renderProbe();
+    act(() => {
+      dispatchSpy!({ ...samplePayload, messageID: 'm-idle-jsdom' });
+    });
+    // Popup surfaced on the (abandoned) desktop…
+    expect(notificationCtor).toHaveBeenCalledTimes(1);
+    // …but the phone must still get the deferred push: no ack.
+    expect(sendWSMock).not.toHaveBeenCalledWith({ type: 'notification.ack', messageID: 'm-idle-jsdom' });
+    markUserActivity();
   });
 
   it('acks when suppressed because the user is already viewing the channel', () => {
