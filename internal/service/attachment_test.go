@@ -886,6 +886,37 @@ func TestAttachmentService_GetManyForUserFiltersUnauthorizedAndCapsBatch(t *test
 	}
 }
 
+func TestAttachmentService_GetManyForUserFailsBatchOnTransientAccessError(t *testing.T) {
+	// Regression for "attachments disappeared until hard refresh": a
+	// TRANSIENT access-check failure (store blip — the check never ran) used
+	// to be swallowed per-id, so the batch returned a silently shrunken 200
+	// that clients cached as fresh truth for the staleTime window. The batch
+	// must fail instead — clients keep previously fetched data and retry.
+	storeM := newMockAttachmentStore()
+	svc := NewAttachmentService(storeM, &fakeAttachmentSigner{}, newMockPublisher())
+	storeM.byID["att-1"] = &model.Attachment{
+		ID: "att-1", SHA256: testSHA256A, S3Key: "attachments/att-1",
+		Filename: "one.png", ContentType: "image/png", Size: 10,
+		CreatedBy: "u-owner", MessageIDs: []string{"msg-1"},
+	}
+
+	svc.SetAccessChecker(fakeAttachmentAccessChecker{err: errors.New("dynamo timeout")})
+	if _, err := svc.GetManyForUser(context.Background(), "u-other", []string{"att-1"}, "ch-1", ParentChannel, "msg-1"); err == nil {
+		t.Fatal("transient access-check failure must fail the batch, not silently filter")
+	}
+
+	// A DEFINITIVE denial still filters the attachment without failing the
+	// batch — that is a verdict, not an outage.
+	svc.SetAccessChecker(fakeAttachmentAccessChecker{err: fmt.Errorf("not a member: %w", ErrForbidden)})
+	got, err := svc.GetManyForUser(context.Background(), "u-other", []string{"att-1"}, "ch-1", ParentChannel, "msg-1")
+	if err != nil {
+		t.Fatalf("definitive denial must not fail the batch: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("denied attachment must be filtered, got %d", len(got))
+	}
+}
+
 func TestAttachmentService_ValidateForUse_VerifiesUploadedObject(t *testing.T) {
 	storeM := newMockAttachmentStore()
 	object := makePNG(2, 2)

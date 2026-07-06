@@ -1083,11 +1083,16 @@ func TestMessageStore_IncrementReplyMetadata(t *testing.T) {
 	ctx := context.Background()
 
 	root := &model.Message{
-		ID:        "msg-root",
-		ParentID:  "ch-thread",
-		AuthorID:  "u-1",
-		Body:      "thread root",
-		CreatedAt: time.Now().Truncate(time.Millisecond),
+		ID:       "msg-root",
+		ParentID: "ch-thread",
+		AuthorID: "u-1",
+		Body:     "thread root",
+		// The returned root is republished verbatim as a message.edited
+		// event, and clients REPLACE their cached root with it — every
+		// stored field must survive the ALL_NEW round-trip or replies
+		// wipe it from every viewer's UI (the attachments bug shape).
+		AttachmentIDs: []string{"att-1", "att-2"},
+		CreatedAt:     time.Now().Truncate(time.Millisecond),
 	}
 	if err := ms.Create(ctx, root); err != nil {
 		t.Fatalf("Create root: %v", err)
@@ -1105,6 +1110,9 @@ func TestMessageStore_IncrementReplyMetadata(t *testing.T) {
 		}
 		if updated.LastReplyAt == nil || !updated.LastReplyAt.Equal(ts) {
 			t.Errorf("after bump %d: LastReplyAt=%v, want %v", i, updated.LastReplyAt, ts)
+		}
+		if len(updated.AttachmentIDs) != 2 {
+			t.Errorf("after bump %d: AttachmentIDs=%v, want [att-1 att-2] (republished root must keep every stored field)", i, updated.AttachmentIDs)
 		}
 	}
 

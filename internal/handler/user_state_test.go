@@ -153,13 +153,22 @@ func TestUserStateHandler_Errors(t *testing.T) {
 	req.SetPathValue("threadRootID", "root")
 	rec = httptest.NewRecorder()
 	handler.MarkThreadSeen(rec, req)
-	if rec.Code != http.StatusInternalServerError {
-		t.Fatalf("MarkThreadSeen denied status = %d", rec.Code)
+	// Membership denials carry service.ErrForbidden, so a non-member is a
+	// 403 (it used to fall through to a 500 because the handler couldn't
+	// recognize the denial).
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("MarkThreadSeen denied status = %d, want 403", rec.Code)
 	}
 
 	stateStore = newMockUserStateStoreForHandler()
 	stateStore.setErr = errors.New("seen boom")
 	handler = NewUserStateHandler(service.NewUserStateService(stateStore, nil), msgSvc, convSvc)
+	// Membership must exist so CheckAccess passes and the request actually
+	// reaches the failing state store — without it this case asserted the
+	// (previously indistinguishable) membership denial instead.
+	_ = members.AddMember(context.Background(),
+		&model.ChannelMembership{ChannelID: "ch", UserID: "u-1", Role: model.ChannelRoleMember},
+		&model.UserChannel{ChannelID: "ch", UserID: "u-1"})
 	req = userStateAuthedRequest(http.MethodPut, "/api/v1/user-state/threads/channels/ch/root/seen", nil, "u-1")
 	req.SetPathValue("parentType", "channels")
 	req.SetPathValue("parentID", "ch")

@@ -125,7 +125,10 @@ func (h *AttachmentHandler) List(w http.ResponseWriter, r *http.Request) {
 	parentType := queryParam(r, "parentType", "")
 	messageID := queryParam(r, "messageID", "")
 	atts, err := h.svc.GetManyForUser(r.Context(), userID, ids, parentID, parentType, messageID)
-	if err != nil { // coverage-ignore: GetManyForUser swallows per-id errors and only errors on len(ids) > MaxAttachmentBatchIDs, which the handler already rejected above; this branch is unreachable from a request and defensive against a future contract change.
+	if err != nil {
+		// Transient failure resolving/authorizing an id — fail the batch
+		// (client keeps previously fetched data and retries) instead of
+		// returning a silently shrunken 200 the client would cache as truth.
 		writeInternalError(w, r, "list_error", err)
 		return
 	}
@@ -157,7 +160,14 @@ func (h *AttachmentHandler) Get(w http.ResponseWriter, r *http.Request) {
 		queryParam(r, "messageID", ""),
 	)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "not_found", err.Error())
+		// Missing or denied reads 404; a transient failure (the access check
+		// could not run) must not masquerade as "gone" — clients would cache
+		// the disappearance.
+		if errors.Is(err, store.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "not_found", "attachment not found")
+			return
+		}
+		writeInternalError(w, r, "get_error", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, a)

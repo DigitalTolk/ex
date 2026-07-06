@@ -241,6 +241,27 @@ describe('useAttachmentsBatch', () => {
     expect(qc.getQueryData(['attachment', 'b'])).toEqual(list[0]);
   });
 
+  it('keeps previously fetched attachments when a refetch fails', async () => {
+    // Regression pin for "attachments disappeared until hard refresh": the
+    // queryFn must NOT swallow a failed refetch into a success — React Query
+    // then retains the last good data, so a server 5xx (transient
+    // access-check failure) never blanks already-rendered attachments.
+    const list = [{ id: 'a', filename: 'a.png', contentType: 'image/png', size: 1 }];
+    vi.mocked(apiFetch)
+      .mockResolvedValueOnce(list)
+      .mockRejectedValueOnce(new Error('server blip'));
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { Wrapper } = createWrapper(qc);
+    const { result } = renderHook(() => useAttachmentsBatch(['a']), { wrapper: Wrapper });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.map.get('a')).toEqual(list[0]);
+
+    await qc.refetchQueries();
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    // The last good data survives the failed refetch.
+    expect(result.current.map.get('a')).toEqual(list[0]);
+  });
+
   it('sends message context when resolving protected message attachments', async () => {
     vi.mocked(apiFetch).mockResolvedValueOnce([]);
     const { Wrapper } = createWrapper();
