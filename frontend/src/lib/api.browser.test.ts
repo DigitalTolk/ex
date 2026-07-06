@@ -8,6 +8,7 @@ import {
   refreshAccessToken,
   setAccessToken,
 } from './api';
+import { AUTH_INVALID_EVENT } from './auth-events';
 
 const originalFetch = globalThis.fetch;
 
@@ -49,18 +50,83 @@ describe('apiFetch browser auth recovery', () => {
     expect(globalThis.fetch).toHaveBeenNthCalledWith(2, '/auth/token/refresh', {
       method: 'POST',
       credentials: 'include',
+      // The refresh is time-bounded so a half-open connection can never
+      // wedge the shared single-flight promise (blank-boot-screen bug).
+      signal: expect.any(AbortSignal),
     });
     const retryHeaders = vi.mocked(globalThis.fetch).mock.calls[2][1]?.headers as Headers;
     expect(retryHeaders.get('Authorization')).toBe('Bearer fresh-after-restart');
   });
 
-  it('does not discard the current memory token when refresh fails because the server is temporarily down', async () => {
+  it('propagates a network-level refresh failure and keeps the memory token', async () => {
     setAccessToken('token-before-restart');
     vi.mocked(globalThis.fetch).mockRejectedValueOnce(new Error('connection refused'));
 
-    await expect(refreshAccessToken()).resolves.toBeNull();
+    // A rejection (network) is distinct from a resolved null (the server
+    // answered and rejected the session) — callers retry the former and
+    // log out on the latter.
+    await expect(refreshAccessToken()).rejects.toThrow('connection refused');
 
     expect(getAccessToken()).toBe('token-before-restart');
+  });
+
+  it('treats a gateway 5xx on refresh as retryable, not a session rejection', async () => {
+    // Server mid-deploy behind Cloudflare answers 522 — the session may
+    // still be perfectly valid. Must reject (callers back off and retry)
+    // and keep the memory token, never bounce to /login.
+    setAccessToken('valid-token');
+    vi.mocked(globalThis.fetch).mockResolvedValueOnce({
+      ok: false,
+      status: 522,
+      headers: new Headers(),
+      json: () => Promise.resolve({}),
+    } as Response);
+
+    await expect(refreshAccessToken()).rejects.toMatchObject({ status: 522 });
+    expect(getAccessToken()).toBe('valid-token');
+  });
+
+  it('releases the single-flight slot after a failed refresh so the next attempt goes out', async () => {
+    // Regression: the shared refreshPromise used to survive a hung/failed
+    // attempt, permanently blocking every later refresh on the page (the
+    // "app stays blank until force-kill" wedge).
+    vi.mocked(globalThis.fetch)
+      .mockRejectedValueOnce(new Error('connection refused'))
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        headers: new Headers(),
+        json: () => Promise.resolve({ accessToken: 'tok-after-recovery' }),
+      } as Response);
+
+    await expect(refreshAccessToken()).rejects.toThrow('connection refused');
+    await expect(refreshAccessToken()).resolves.toBe('tok-after-recovery');
+    expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not treat a network-failed refresh during a 401 retry as a terminal session', async () => {
+    // Regression: a connectivity blip during the 401→refresh path used to
+    // resolve null and fire the auth-invalid logout broadcast.
+    setAccessToken('stale-token');
+    const authInvalid = vi.fn();
+    window.addEventListener(AUTH_INVALID_EVENT, authInvalid);
+    try {
+      vi.mocked(globalThis.fetch)
+        .mockResolvedValueOnce({
+          ok: false,
+          status: 401,
+          headers: new Headers(),
+          text: () => Promise.resolve('expired'),
+        } as Response)
+        .mockRejectedValueOnce(new Error('network down'));
+
+      await expect(apiFetch('/api/v1/channels')).rejects.toThrow('network down');
+
+      expect(authInvalid).not.toHaveBeenCalled();
+      expect(getAccessToken()).toBe('stale-token');
+    } finally {
+      window.removeEventListener(AUTH_INVALID_EVENT, authInvalid);
+    }
   });
 });
 

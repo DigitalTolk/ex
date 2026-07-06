@@ -171,6 +171,53 @@ describe('useWebSocket wake probe', () => {
     expect(MockWebSocket.instances).toHaveLength(2);
   });
 
+  it('recovers reconnection after a network-failed wake refresh instead of wedging', async () => {
+    renderHook(() => useWebSocket({ enabled: true }));
+    act(() => {
+      MockWebSocket.instances[0].simulateOpen();
+      MockWebSocket.instances[0].simulateClose();
+    });
+    // The wake fires while the network is still down: the pre-connect token
+    // refresh fails at the network level.
+    refreshAccessTokenMock.mockRejectedValueOnce(new Error('offline'));
+    await wake('focus');
+    expect(MockWebSocket.instances).toHaveLength(1);
+    // Regression: the failed refresh used to leave the connect-in-flight
+    // latch stuck true, permanently disabling reconnection. It must instead
+    // book a backoff retry that succeeds once the network is back.
+    await act(async () => {
+      vi.advanceTimersByTime(2000);
+      await Promise.resolve();
+    });
+    expect(refreshAccessTokenMock).toHaveBeenCalledTimes(2);
+    expect(MockWebSocket.instances).toHaveLength(2);
+  });
+
+  it('does not book a reconnect when the hook unmounts while the wake refresh is failing', async () => {
+    const { unmount } = renderHook(() => useWebSocket({ enabled: true }));
+    act(() => {
+      MockWebSocket.instances[0].simulateOpen();
+      MockWebSocket.instances[0].simulateClose();
+    });
+    let rejectRefresh: (err: Error) => void = () => {};
+    refreshAccessTokenMock.mockImplementationOnce(
+      () => new Promise<string>((_resolve, reject) => { rejectRefresh = reject; }),
+    );
+    await wake('focus');
+    unmount();
+    // The refresh fails only AFTER dispose — no backoff retry may be booked
+    // for an unmounted hook.
+    await act(async () => {
+      rejectRefresh(new Error('offline'));
+      await Promise.resolve();
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(60_000);
+      await Promise.resolve();
+    });
+    expect(MockWebSocket.instances).toHaveLength(1);
+  });
+
   it('connects on wake when the initial mount had no token yet', async () => {
     vi.mocked(getAccessToken).mockReturnValueOnce(null);
     renderHook(() => useWebSocket({ enabled: true }));

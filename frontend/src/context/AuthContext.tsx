@@ -33,6 +33,16 @@ interface AuthState {
 
 const AuthContext = createContext<AuthState | undefined>(undefined);
 
+// Backoff between boot-restore attempts after a network-level failure; the
+// last step repeats until the server is reachable again. A definitive
+// rejection (server answered "no session") never retries — it goes straight
+// to the login page.
+const restoreRetryDelaysMs = [1000, 2000, 4000, 8000, 15000];
+// Bound on the /users/me boot fetch, mirroring the refresh timeout in
+// lib/api — an unbounded fetch here kept the app on the blank boot screen
+// for as long as a half-open connection stayed silent.
+const restoreTimeoutMs = 10_000;
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -40,24 +50,41 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const isAuthenticated = !!user;
 
   useEffect(() => {
-    // On mount, attempt to refresh the access token
-    // (the refresh token is in an httpOnly cookie)
+    // On mount, attempt to refresh the access token (the refresh token is in
+    // an httpOnly cookie). Network-level failures retry with backoff — a
+    // waking mobile radio or a server mid-deploy must delay boot, not park it
+    // on the loading screen forever or bounce a valid session to /login.
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
+    let attempt = 0;
     async function tryRestore() {
-      try {
-        const token = await refreshAccessToken();
-        if (token) {
-          setAccessToken(token);
-          const me = await apiFetch<User>('/api/v1/users/me');
-          setUser(me);
-          void identifyMobilePushUser(me).catch(() => undefined);
+      for (;;) {
+        try {
+          const token = await refreshAccessToken();
+          if (token) {
+            setAccessToken(token);
+            const me = await apiFetch<User>('/api/v1/users/me', {
+              signal: AbortSignal.timeout(restoreTimeoutMs),
+            });
+            setUser(me);
+            void identifyMobilePushUser(me).catch(() => undefined);
+          }
+          break; // definitive: signed in, or the server rejected the session
+        } catch {
+          const delay = restoreRetryDelaysMs[Math.min(attempt, restoreRetryDelaysMs.length - 1)];
+          attempt += 1;
+          await new Promise<void>((resolve) => {
+            retryTimer = setTimeout(resolve, delay);
+          });
         }
-      } catch {
-        // not authenticated
-      } finally {
-        setIsLoading(false);
       }
+      setIsLoading(false);
     }
-    tryRestore();
+    void tryRestore();
+    // Clearing the pending timer parks the loop on an unresolved promise, so
+    // an unmounted provider stops retrying without extra bookkeeping.
+    return () => {
+      if (retryTimer) clearTimeout(retryTimer);
+    };
   }, []);
 
   const login = useCallback(() => {

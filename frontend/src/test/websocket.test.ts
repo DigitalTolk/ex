@@ -152,6 +152,7 @@ describe('useWebSocket auth refresh', () => {
     expect(globalThis.fetch).toHaveBeenCalledWith('/auth/token/refresh', {
       method: 'POST',
       credentials: 'include',
+      signal: expect.any(AbortSignal),
     });
     expect(MockWebSocket.instances).toHaveLength(2);
     expect(MockWebSocket.instances[1].url).toContain('token=fresh-token');

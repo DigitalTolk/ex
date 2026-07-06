@@ -68,6 +68,29 @@ describe('AuthContext', () => {
     expect(identifyMock).toHaveBeenCalled();
   });
 
+  it('retries the session restore with backoff after a network-level failure', async () => {
+    // Regression for the blank-boot-screen bug: a network-failed (or
+    // timed-out) restore must retry, not park isLoading forever and not
+    // bounce a valid session to /login.
+    refreshAccessTokenMock
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockResolvedValueOnce('t-recovered');
+    apiFetchMock.mockResolvedValue({
+      id: 'u-1', email: 'a@x.io', displayName: 'Alice', systemRole: 'member', status: 'active',
+    });
+    const screen = await render(
+      <AuthProvider><Probe /></AuthProvider>,
+    );
+    // Still loading (NOT logged out) through the first backoff window.
+    await new Promise((r) => setTimeout(r, 200));
+    expect(screen.getByTestId('state').element().getAttribute('data-loading')).toBe('true');
+    // First retry fires after the 1s backoff step and succeeds.
+    await new Promise((r) => setTimeout(r, 1400));
+    expect(screen.getByTestId('state').element().textContent).toBe('Alice');
+    expect(screen.getByTestId('state').element().getAttribute('data-loading')).toBe('false');
+    expect(refreshAccessTokenMock).toHaveBeenCalledTimes(2);
+  });
+
   it('leaves the user unauthenticated when refreshAccessToken yields null', async () => {
     refreshAccessTokenMock.mockResolvedValue(null);
     const screen = await render(
@@ -79,12 +102,23 @@ describe('AuthContext', () => {
     expect(apiFetchMock).not.toHaveBeenCalled();
   });
 
-  it('treats refreshAccessToken rejection as not-authenticated and flips isLoading off', async () => {
-    refreshAccessTokenMock.mockRejectedValue(new Error('network'));
+  it('retries a failed /users/me boot fetch after a successful refresh', async () => {
+    // The restore loop must also survive the second boot request failing at
+    // the network level — refresh again and complete once the network is back.
+    refreshAccessTokenMock.mockResolvedValue('t-1');
+    apiFetchMock
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockResolvedValueOnce({
+        id: 'u-1', email: 'a@x.io', displayName: 'Alice', systemRole: 'member', status: 'active',
+      });
     const screen = await render(
       <AuthProvider><Probe /></AuthProvider>,
     );
+    // Still loading (NOT bounced to login) while the 1s backoff runs.
     await new Promise((r) => setTimeout(r, 200));
+    expect(screen.getByTestId('state').element().getAttribute('data-loading')).toBe('true');
+    await new Promise((r) => setTimeout(r, 1400));
+    expect(screen.getByTestId('state').element().textContent).toBe('Alice');
     expect(screen.getByTestId('state').element().getAttribute('data-loading')).toBe('false');
   });
 

@@ -105,20 +105,44 @@ export function useWebSocket(options: UseWebSocketOptions) {
       }
     }
 
+    // Books the next reconnect attempt on the shared backoff ladder. Used by
+    // both the onclose path and a network-failed pre-connect token refresh.
+    function scheduleReconnect() {
+      const delayStep = Math.floor(retryCountRef.current / reconnectAttemptsPerStep);
+      const backoff = reconnectDelayStepsMs[Math.min(delayStep, reconnectDelayStepsMs.length - 1)];
+      retryCountRef.current++;
+      retryTimerRef.current = setTimeout(() => {
+        void connect(true);
+      }, backoff);
+    }
+
     async function connect(refreshBeforeConnect = false) {
       if (connectInFlight) return;
       connectInFlight = true;
-      let token = getAccessToken();
-      if (!token) {
-        connectInFlight = false;
-        return;
-      }
-      if (refreshBeforeConnect) {
-        token = await refreshAccessToken();
-        if (!token || disposed || !enabledRef.current) {
-          connectInFlight = false;
-          return;
+      let token: string | null;
+      // The finally is the ONLY release of connectInFlight — every early
+      // return and the refresh await funnel through it. A refresh that
+      // rejected (or hung until its timeout) used to leave the flag latched
+      // true, which silently disabled reconnection for the life of the page.
+      // Everything after this block is synchronous, so releasing the flag
+      // before the socket is constructed cannot race a second connect.
+      try {
+        token = getAccessToken();
+        if (!token) return;
+        if (refreshBeforeConnect) {
+          try {
+            token = await refreshAccessToken();
+          } catch {
+            // Network-level refresh failure (offline, timeout, server
+            // restarting) — retry through the normal backoff instead of
+            // going dark until the next wake event.
+            if (!disposed && enabledRef.current) scheduleReconnect();
+            return;
+          }
+          if (!token || disposed || !enabledRef.current) return;
         }
+      } finally {
+        connectInFlight = false;
       }
 
       const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -128,7 +152,6 @@ export function useWebSocket(options: UseWebSocketOptions) {
       const ws = new WebSocket(url);
       wsRef.current = ws;
       lastFrameAtRef.current = Date.now();
-      connectInFlight = false;
 
       ws.onopen = () => {
         const reconnected = retryCountRef.current > 0;
@@ -273,12 +296,7 @@ export function useWebSocket(options: UseWebSocketOptions) {
         wsRef.current = null;
         setWSSender(null);
         if (disposed || !enabledRef.current) return;
-        const delayStep = Math.floor(retryCountRef.current / reconnectAttemptsPerStep);
-        const backoff = reconnectDelayStepsMs[Math.min(delayStep, reconnectDelayStepsMs.length - 1)];
-        retryCountRef.current++;
-        retryTimerRef.current = setTimeout(() => {
-          void connect(true);
-        }, backoff);
+        scheduleReconnect();
       };
 
       ws.onerror = () => {
