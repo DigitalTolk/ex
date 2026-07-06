@@ -1,3 +1,5 @@
+//go:build integration
+
 package handler
 
 import (
@@ -11,7 +13,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alicebob/miniredis/v2"
 	"github.com/coder/websocket"
 
 	"github.com/DigitalTolk/ex/internal/auth"
@@ -22,9 +23,9 @@ import (
 	"github.com/DigitalTolk/ex/internal/service"
 )
 
-// wsDisconnectEnv wires a full Connect server backed by miniredis so tests can
-// dial, then drop the client, exercising Connect's connection-write-failure
-// arms (initial ping, replay, event-loop write).
+// wsDisconnectEnv wires a full Connect server backed by the shared Redis
+// container so tests can dial, then drop the client, exercising Connect's
+// connection-write-failure arms (initial ping, replay, event-loop write).
 type wsDisconnectEnv struct {
 	h     *WSHandler
 	ps    *pubsub.RedisPubSub
@@ -35,8 +36,7 @@ type wsDisconnectEnv struct {
 
 func newWSDisconnectEnv(t *testing.T, rep InboxReplayer) *wsDisconnectEnv {
 	t.Helper()
-	mr := miniredis.RunT(t)
-	ps, err := pubsub.NewRedisPubSub("redis://" + mr.Addr())
+	ps, err := pubsub.NewRedisPubSub("redis://" + redisAddrForTest(t))
 	if err != nil {
 		t.Fatalf("pubsub: %v", err)
 	}

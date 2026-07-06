@@ -15,9 +15,8 @@ import (
 )
 
 // The rate limiter (RedisCache.AllowRequest) is INCR + EXPIRE on real Redis.
-// Unit tests run it against miniredis; this runs it against a real Redis
-// container, including a genuine TTL expiry (miniredis fakes that with
-// FastForward) so the window-reset behaviour is validated against the engine.
+// This runs it against a real Redis container, including a genuine wall-clock
+// TTL expiry, so the window-reset behaviour is validated against the engine.
 var (
 	cacheRedisAddr  string
 	cacheRedisReady bool
@@ -90,8 +89,8 @@ func TestAllowRequest_RealRedis_WindowExpires(t *testing.T) {
 		t.Fatal("second request in the same window must be blocked")
 	}
 
-	// After the real Redis key TTL elapses, the window resets and requests flow
-	// again — validates the EXPIRE that miniredis only simulates.
+	// After the real Redis key TTL elapses, the window resets and requests
+	// flow again — validates the EXPIRE against the real engine.
 	time.Sleep(1200 * time.Millisecond)
 	if ok, err := c.AllowRequest(ctx, "expiring", 1, time.Second); err != nil || !ok {
 		t.Fatalf("after the window expired the request should pass again: ok=%v err=%v", ok, err)

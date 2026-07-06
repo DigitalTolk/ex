@@ -1,16 +1,19 @@
+//go:build integration
+
 package handler
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/alicebob/miniredis/v2"
 	"github.com/coder/websocket"
 
 	"github.com/DigitalTolk/ex/internal/auth"
@@ -20,13 +23,13 @@ import (
 	"github.com/DigitalTolk/ex/internal/service"
 )
 
-// newSeamConnectServer builds a full Connect server backed by miniredis and
-// returns its dial URL plus the broker pubsub (for publishing events). The
-// caller is expected to have overridden wsConnWrite to drive write failures.
+// newSeamConnectServer builds a full Connect server backed by the shared Redis
+// container and returns its dial URL plus the broker pubsub (for publishing
+// events). The caller is expected to have overridden wsConnWrite to drive
+// write failures.
 func newSeamConnectServer(t *testing.T) (string, string, *pubsub.RedisPubSub) {
 	t.Helper()
-	mr := miniredis.RunT(t)
-	ps, err := pubsub.NewRedisPubSub("redis://" + mr.Addr())
+	ps, err := pubsub.NewRedisPubSub("redis://" + redisAddrForTest(t))
 	if err != nil {
 		t.Fatalf("pubsub: %v", err)
 	}
@@ -82,12 +85,14 @@ func TestWSHandler_Connect_InitialPingWriteFails(t *testing.T) {
 // `case data := <-client.Events:` write-error arm returns. A published event
 // triggers that write.
 func TestWSHandler_Connect_EventWriteFails(t *testing.T) {
-	var writes atomic.Int64
 	orig := wsConnWrite
 	wsConnWrite = func(ctx context.Context, conn *websocket.Conn, data []byte) error {
-		// Allow the first write (initial ping) so the loop is entered; fail the
-		// next one (the published event).
-		if writes.Add(1) <= 1 {
+		// Pings (the pre-loop initial one and keep-alives, ours or a prior
+		// test's straggler connection) pass through so the loop is entered;
+		// the first non-ping frame is the published event — fail it. Keying
+		// on frame type instead of a global write count keeps this immune to
+		// stray writes from connections still draining out of earlier tests.
+		if bytes.Contains(data, []byte(`"type":"ping"`)) {
 			return conn.Write(ctx, websocket.MessageText, data)
 		}
 		return errors.New("forced event write failure")
@@ -128,12 +133,20 @@ func TestWSHandler_Connect_KeepAlivePingWriteFails(t *testing.T) {
 	wsKeepAliveInterval = 20 * time.Millisecond
 	t.Cleanup(func() { wsKeepAliveInterval = origInterval })
 
-	var pings atomic.Int64
+	// Per-connection ping counts: each connection's first ping is the
+	// pre-loop initial one (let it through so the loop runs); its second is
+	// the first ticker-driven keep-alive — fail that. Scoping by conn keeps
+	// a straggler connection from an earlier test (whose last keep-alive can
+	// still flow through the swapped seam) from eating the pass-through slot
+	// and failing OUR initial ping instead, which would skip the ticker arm.
+	var pingsByConn sync.Map
 	orig := wsConnWrite
 	wsConnWrite = func(ctx context.Context, conn *websocket.Conn, data []byte) error {
-		// The first write is the pre-loop initial ping — let it through so the
-		// loop runs. Fail the next ping, which is the ticker-driven one.
-		if pings.Add(1) <= 1 {
+		if !bytes.Contains(data, []byte(`"type":"ping"`)) {
+			return conn.Write(ctx, websocket.MessageText, data)
+		}
+		c, _ := pingsByConn.LoadOrStore(conn, &atomic.Int64{})
+		if c.(*atomic.Int64).Add(1) <= 1 {
 			return conn.Write(ctx, websocket.MessageText, data)
 		}
 		return errors.New("forced keepalive ping failure")

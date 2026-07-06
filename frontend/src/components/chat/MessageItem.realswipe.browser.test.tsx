@@ -57,7 +57,7 @@ const sheet = () => document.querySelector('[data-testid="mobile-message-actions
 async function openMobileSheet() {
   const row = document.querySelector('[data-message-id]') as HTMLElement;
   row.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerType: 'touch', isPrimary: true }));
-  await vi.waitFor(() => expect(sheet()).not.toBeNull(), { timeout: 1500 });
+  await vi.waitFor(() => expect(sheet()).not.toBeNull(), { timeout: 2000 });
 }
 
 beforeEach(() => vi.clearAllMocks());

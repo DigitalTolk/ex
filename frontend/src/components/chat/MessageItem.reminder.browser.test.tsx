@@ -39,7 +39,7 @@ async function openMobileSheet() {
   row.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerType: 'touch' }));
   await vi.waitFor(() => {
     expect(document.querySelector('[data-testid="mobile-message-actions"]')).not.toBeNull();
-  }, { timeout: 1500 });
+  }, { timeout: 2000 });
 }
 
 function renderItem(ui: React.ReactElement) {

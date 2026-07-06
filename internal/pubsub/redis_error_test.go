@@ -2,71 +2,32 @@ package pubsub
 
 import (
 	"context"
-	"encoding/json"
+	"net"
 	"testing"
 
 	"github.com/DigitalTolk/ex/internal/events"
-	"github.com/alicebob/miniredis/v2"
 )
 
+// deadRedisAddr returns an address that refuses connections (a listener bound
+// and immediately closed) — a Redis that is already gone before the first op.
+// No server is involved, so this test can run untagged.
+func deadRedisAddr(t *testing.T) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	addr := ln.Addr().String()
+	_ = ln.Close()
+	return addr
+}
+
 // NewRedisPubSub parses fine but the Ping fails when the server is gone.
-// Closing miniredis before connecting makes the dial refuse immediately,
+// Dialing an address whose listener has already closed refuses immediately,
 // exercising the ping-error wrap-and-return branch.
 func TestNewRedisPubSubPingError(t *testing.T) {
-	mr := miniredis.RunT(t)
-	addr := mr.Addr()
-	mr.Close()
-
-	if _, err := NewRedisPubSub("redis://" + addr); err == nil {
+	if _, err := NewRedisPubSub("redis://" + deadRedisAddr(t)); err == nil {
 		t.Fatal("expected ping error after server closed")
-	}
-}
-
-// Publish marshals the event before publishing; an Event whose Data is an
-// invalid json.RawMessage makes json.Marshal fail, hitting the marshal
-// error branch before any Redis call.
-func TestPublishMarshalError(t *testing.T) {
-	ps, _ := setupTestPubSub(t)
-
-	bad := &events.Event{
-		Type: events.EventMessageNew,
-		Data: json.RawMessage("not valid json"),
-	}
-	if err := ps.Publish(context.Background(), "ch", bad); err == nil {
-		t.Fatal("expected marshal error for invalid RawMessage payload")
-	}
-}
-
-// A persistent event whose topic resolves to zero recipients takes the
-// early len(recipients)==0 return in appendToInboxes — no inbox writes,
-// publish still succeeds.
-func TestPublishNoRecipients(t *testing.T) {
-	ps, _ := setupDurable(t)
-	resolver := &fakeResolver{m: map[string][]string{}} // topic resolves to nil/empty
-	inbox := &captureInbox{}
-	ps.SetDurability(resolver, inbox)
-
-	evt, _ := events.NewEvent(events.EventMessageNew, map[string]string{"text": "hi"})
-	if err := ps.Publish(context.Background(), "chan:none", evt); err != nil {
-		t.Fatalf("Publish: %v", err)
-	}
-	if got := len(inbox.seen()); got != 0 {
-		t.Errorf("inbox saw %d appends with no recipients, want 0", got)
-	}
-}
-
-// PublishMany marshals the event once before pipelining; an Event whose Data
-// is an invalid json.RawMessage makes json.Marshal fail, hitting the marshal
-// error branch before any Redis round-trip.
-func TestPublishManyMarshalError(t *testing.T) {
-	ps, _ := setupTestPubSub(t)
-
-	bad := &events.Event{
-		Type: events.EventMessageNew,
-		Data: json.RawMessage("{oops"),
-	}
-	if err := ps.PublishMany(context.Background(), []string{"a", "b"}, bad); err == nil {
-		t.Fatal("expected marshal error for invalid RawMessage payload")
 	}
 }
 

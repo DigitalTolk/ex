@@ -15,6 +15,7 @@ import (
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/redis/go-redis/v9"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 
@@ -34,6 +35,15 @@ var (
 	adapterTableSeq  atomic.Uint64
 )
 
+// One Redis container is likewise shared by every Redis-backed handler test
+// (WS broker wiring, activity/reminder e2e, broker adapter). Mirrors the
+// pattern in internal/cache: if the container can't start, dependent tests
+// skip via redisAddrForTest.
+var (
+	handlerRedisAddr  string
+	handlerRedisReady bool
+)
+
 func TestMain(m *testing.M) {
 	ctx := context.Background()
 
@@ -49,21 +59,63 @@ func TestMain(m *testing.M) {
 	})
 	if err != nil {
 		log.Printf("adapter integration tests will skip: docker unavailable: %v", err)
-		os.Exit(m.Run())
+	} else {
+		host, herr := container.Host(ctx)
+		if herr == nil {
+			port, perr := container.MappedPort(ctx, "8000")
+			if perr == nil {
+				adapterEndpoint = fmt.Sprintf("http://%s:%s", host, port.Port())
+				adapterAvailable = true
+			}
+		}
 	}
 
-	host, herr := container.Host(ctx)
-	if herr == nil {
-		port, perr := container.MappedPort(ctx, "8000")
-		if perr == nil {
-			adapterEndpoint = fmt.Sprintf("http://%s:%s", host, port.Port())
-			adapterAvailable = true
+	redisReq := testcontainers.ContainerRequest{
+		Image:        "redis:7-alpine",
+		ExposedPorts: []string{"6379/tcp"},
+		WaitingFor:   wait.ForListeningPort("6379/tcp").WithStartupTimeout(60 * time.Second),
+	}
+	redisContainer, redisErr := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+		ContainerRequest: redisReq,
+		Started:          true,
+	})
+	if redisErr != nil {
+		log.Printf("handler redis-backed tests will skip: docker/redis unavailable: %v", redisErr)
+	} else {
+		if host, herr := redisContainer.Host(ctx); herr == nil {
+			if port, perr := redisContainer.MappedPort(ctx, "6379"); perr == nil {
+				handlerRedisAddr = fmt.Sprintf("%s:%s", host, port.Port())
+				handlerRedisReady = true
+			}
 		}
 	}
 
 	code := m.Run()
-	_ = container.Terminate(ctx)
+	if container != nil {
+		_ = container.Terminate(ctx)
+	}
+	if redisContainer != nil {
+		_ = redisContainer.Terminate(ctx)
+	}
 	os.Exit(code)
+}
+
+// redisAddrForTest returns the shared Redis container's host:port after
+// flushing every DB, so per-test state (durable evt:* streams, presence keys,
+// activity/reminder ZSETs) starts clean. Handler tests run sequentially (no
+// t.Parallel), so the flush cannot race a sibling test. Tests skip when the
+// container isn't available.
+func redisAddrForTest(t *testing.T) string {
+	t.Helper()
+	if !handlerRedisReady {
+		t.Skip("skipping: Docker / Redis not available")
+	}
+	c := redis.NewClient(&redis.Options{Addr: handlerRedisAddr})
+	defer func() { _ = c.Close() }()
+	if err := c.FlushAll(context.Background()).Err(); err != nil {
+		t.Fatalf("flush redis: %v", err)
+	}
+	return handlerRedisAddr
 }
 
 func setupDynamoForAdapters(t *testing.T) *store.DB {

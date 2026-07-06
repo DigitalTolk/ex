@@ -18,14 +18,18 @@ var errInjected = errors.New("injected redis failure")
 // cmdFailHook fails exactly the named Redis commands at the go-redis client
 // boundary — the seam for exercising Redis error arms against the real
 // container (a healthy Redis never errors on these commands). Everything else
-// passes through to the wire.
+// passes through to the wire. An EMPTY filter fails every command — for
+// exercising "the server answers each command with an error" paths (and,
+// unlike a dead connection, without dial retries).
 type cmdFailHook struct{ fail map[string]bool }
+
+func (h cmdFailHook) matches(name string) bool { return len(h.fail) == 0 || h.fail[name] }
 
 func (h cmdFailHook) DialHook(next redis.DialHook) redis.DialHook { return next }
 
 func (h cmdFailHook) ProcessHook(next redis.ProcessHook) redis.ProcessHook {
 	return func(ctx context.Context, cmd redis.Cmder) error {
-		if h.fail[cmd.Name()] {
+		if h.matches(cmd.Name()) {
 			return errInjected
 		}
 		return next(ctx, cmd)
@@ -35,7 +39,7 @@ func (h cmdFailHook) ProcessHook(next redis.ProcessHook) redis.ProcessHook {
 func (h cmdFailHook) ProcessPipelineHook(next redis.ProcessPipelineHook) redis.ProcessPipelineHook {
 	return func(ctx context.Context, cmds []redis.Cmder) error {
 		for _, cmd := range cmds {
-			if h.fail[cmd.Name()] {
+			if h.matches(cmd.Name()) {
 				return errInjected
 			}
 		}
@@ -56,7 +60,8 @@ func realRedisClient(t *testing.T) *redis.Client {
 }
 
 // cacheFailingOn returns a RedisCache for which the named commands fail with
-// errInjected; every other command hits the real container.
+// errInjected; every other command hits the real container. With NO commands
+// named, every command fails.
 func cacheFailingOn(t *testing.T, cmds ...string) *RedisCache {
 	t.Helper()
 	if !cacheRedisReady {

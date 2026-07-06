@@ -16,10 +16,11 @@ import (
 )
 
 // The per-user inbox stream (XADD MAXLEN + XREVRANGE + ULID-cursor replay) is
-// the durable side of the notification/reconnect-replay path. Unit tests run it
-// against miniredis (a Go re-implementation); these run it against REAL Redis so
-// the stream + exact-MAXLEN-trim + cursor semantics the replay-exhausted refetch
-// depends on are validated against the engine production actually uses.
+// the durable side of the notification/reconnect-replay path. This file starts
+// the shared REAL Redis container (testcontainers) the whole package's
+// integration suite runs against, so the stream + MAXLEN-trim + cursor
+// semantics the replay-exhausted refetch depends on are validated against the
+// engine production actually uses.
 var (
 	redisAddr  string
 	redisReady bool
@@ -90,7 +91,7 @@ func TestStream_AppendReplay_RealRedis(t *testing.T) {
 
 	// Cursor older than every retained entry → all entries returned AND
 	// Exhausted=true (conservative: the stream may have been trimmed past the
-	// cursor, so the client should full-refetch). Matches the miniredis contract.
+	// cursor, so the client should full-refetch).
 	res, err = s.Replay(ctx, "u1", ulid(0))
 	if err != nil {
 		t.Fatalf("Replay before-all: %v", err)
@@ -113,8 +114,8 @@ func TestStream_ReplayExhaustedAfterTrim_RealRedis(t *testing.T) {
 	// Replay only reads the newest maxLen+1 (=4) entries, so the cursor (id 1)
 	// falls outside that window and can't be confirmed → the client is told to
 	// full-refetch (Exhausted=true). This is the reconnect-after-a-long-gap
-	// path, and it's bounded by the read window (not by approximate trim), so it
-	// behaves identically on real Redis and miniredis.
+	// path, and it's bounded by the read window (not by approximate trim), so
+	// it's deterministic regardless of when Redis actually trims.
 	res, err := s.Replay(ctx, "u2", ulid(1))
 	if err != nil {
 		t.Fatalf("Replay: %v", err)

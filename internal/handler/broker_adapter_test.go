@@ -1,17 +1,15 @@
+//go:build integration
+
 package handler
 
 import (
 	"testing"
 
-	"github.com/alicebob/miniredis/v2"
-
 	"github.com/DigitalTolk/ex/internal/pubsub"
 )
 
 func TestBrokerAdapter(t *testing.T) {
-	mr := miniredis.RunT(t)
-
-	redisPubSub, err := pubsub.NewRedisPubSub("redis://" + mr.Addr())
+	redisPubSub, err := pubsub.NewRedisPubSub("redis://" + redisAddrForTest(t))
 	if err != nil {
 		t.Fatalf("NewRedisPubSub: %v", err)
 	}

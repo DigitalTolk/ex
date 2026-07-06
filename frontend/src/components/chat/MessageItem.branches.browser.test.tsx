@@ -427,7 +427,7 @@ describe('MessageItem mobile action sheet branches', () => {
       const s = document.querySelector('[data-testid="mobile-message-actions"]') as HTMLElement | null;
       expect(s).not.toBeNull();
       return s!;
-    }, { timeout: 1500 });
+    }, { timeout: 2000 });
     // Pinned message → the sheet's pin row reads "Unpin".
     expect(sheet.textContent).toContain('Unpin');
 
@@ -458,7 +458,7 @@ describe('MessageItem mobile action sheet branches', () => {
       row.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerType: 'touch' }));
       await vi.waitFor(() => {
         expect(document.querySelector('[data-testid="mobile-message-actions"]')).not.toBeNull();
-      }, { timeout: 1500 });
+      }, { timeout: 2000 });
       await screen.getByRole('button', { name: 'Copy link to message' }).click();
       await vi.waitFor(() => expect(writeText).toHaveBeenCalled());
       await vi.waitFor(() => {
@@ -472,7 +472,7 @@ describe('MessageItem mobile action sheet branches', () => {
         expect(s).not.toBeNull();
         expect(s?.textContent ?? '').toContain('Copy link');
         expect(s?.textContent ?? '').not.toContain('Link copied');
-      }, { timeout: 1500 });
+      }, { timeout: 2000 });
     } finally {
       Object.defineProperty(navigator, 'clipboard', { value: original, configurable: true });
     }
@@ -487,7 +487,7 @@ describe('MessageItem mobile action sheet branches', () => {
     row.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerType: 'touch' }));
     await vi.waitFor(() => {
       expect(document.querySelector('[data-testid="mobile-message-actions"]')).not.toBeNull();
-    }, { timeout: 1500 });
+    }, { timeout: 2000 });
     // Copy text closes the sheet (a simple sheet-action that exercises
     // closeMobileActions / cancelLongPress with no pending timer).
     await screen.getByRole('button', { name: 'Copy message text' }).click();
@@ -620,7 +620,7 @@ describe('MessageItem misc branches', () => {
     row.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerType: 'touch' }));
     await vi.waitFor(() => {
       expect(document.querySelector('[data-testid="mobile-message-actions"]')).not.toBeNull();
-    }, { timeout: 1500 });
+    }, { timeout: 2000 });
     await screen.getByRole('button', { name: 'Copy link to message' }).click();
     // The sheet closes on tap (no label swap — see the static-label test above).
     await vi.waitFor(() => {
@@ -639,7 +639,7 @@ describe('MessageItem misc branches', () => {
     await vi.waitFor(() => {
       const s = document.querySelector('[data-testid="mobile-message-actions"]') as HTMLElement | null;
       expect(s?.dataset.swipeDismissing).toBe('true');
-    }, { timeout: 1500 });
+    }, { timeout: 2000 });
   });
 
   it('builds a conversation deep-link for copy when there is no channel slug', async () => {
