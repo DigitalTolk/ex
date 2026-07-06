@@ -49,30 +49,47 @@ export function captureServerVersion(res: Response): void {
   if (version) setServerVersion(version);
 }
 
+// Bound on the refresh request. Browser fetch has NO default timeout, and the
+// single-flight promise below is shared by the app boot path, every 401 retry,
+// and the WS reconnect — one request that never settles (half-open TCP after a
+// mobile webview resume, server mid-restart) used to wedge them all forever
+// and leave the app on a blank boot screen until force-kill.
+const REFRESH_TIMEOUT_MS = 10_000;
+
+// Resolves the new access token, or null when the server DEFINITIVELY rejected
+// the session (it answered and said no). Rejects on network-level failure
+// (offline, timeout, server unreachable) — the session may still be valid, so
+// callers must retry/back off instead of treating it as a logout.
 export async function refreshAccessToken(): Promise<string | null> {
   if (!refreshPromise) {
     refreshPromise = (async () => {
-      try {
-        const res = await fetch('/auth/token/refresh', {
-          method: 'POST',
-          credentials: 'include',
-        });
-        captureServerVersion(res);
-        if (!res.ok) {
-          clearAccessToken();
-          return null;
-        }
-        const data = await res.json();
-        if (data.accessToken) {
-          setAccessToken(data.accessToken);
-          return data.accessToken;
+      const res = await fetch('/auth/token/refresh', {
+        method: 'POST',
+        credentials: 'include',
+        signal: AbortSignal.timeout(REFRESH_TIMEOUT_MS),
+      });
+      captureServerVersion(res);
+      if (!res.ok) {
+        // A 5xx here is a gateway/proxy answering for a backend that
+        // couldn't (server mid-restart, Cloudflare 52x) — not a session
+        // verdict. Reject like a network failure so callers retry instead
+        // of bouncing a still-valid session to the login page.
+        if (res.status >= 500) {
+          throw new ApiError(res.status, 'token refresh unavailable');
         }
         clearAccessToken();
         return null;
-      } catch {
-        return null;
       }
+      const data = await res.json();
+      if (data.accessToken) {
+        setAccessToken(data.accessToken);
+        return data.accessToken;
+      }
+      clearAccessToken();
+      return null;
     })().finally(() => {
+      // Always release the single-flight slot — on rejection too, so a failed
+      // attempt can never poison every future refresh on this page.
       refreshPromise = null;
     });
   }
@@ -105,6 +122,11 @@ export async function apiFetch<T>(
   captureServerVersion(res);
 
   if (res.status === 401) {
+    // A network-level refresh failure REJECTS here and propagates like any
+    // other fetch error — deliberately not caught: only a definitive null
+    // (the server answered and rejected the session) may reach the
+    // notifyAuthInvalid logout below. Treating a connectivity blip as a
+    // terminal session used to log people out on flaky networks.
     const refreshedToken = await refreshAccessToken();
     if (refreshedToken) {
       headers.set('Authorization', `Bearer ${accessToken}`);

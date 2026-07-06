@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"image"
 	"image/color"
 	"image/png"
@@ -600,6 +601,91 @@ func TestAttachmentHandler_ProcessUpload_ErrorResponses(t *testing.T) {
 			t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusNotFound, rec.Body.String())
 		}
 	})
+}
+
+// fakeTransientAccessChecker simulates the attachment access check itself
+// failing (store blip) vs. definitively denying, so handler mapping of the
+// two outcomes can be asserted.
+type fakeTransientAccessChecker struct{ err error }
+
+func (c fakeTransientAccessChecker) CanAccessMessageAttachment(context.Context, string, string, string, string, string) error {
+	return c.err
+}
+
+func TestAttachmentHandler_List_TransientAccessFailureIsAnErrorNotASubset(t *testing.T) {
+	// Regression for "attachments disappeared until hard refresh": a
+	// transient access-check failure used to be silently filtered out of a
+	// 200 response, which clients cached as fresh truth for minutes.
+	st := newFakeAttachmentStore()
+	svc := service.NewAttachmentService(st, &fakeSigner{}, nil)
+	jwtMgr := auth.NewJWTManager("att-handler-secret", 15*time.Minute, 720*time.Hour)
+	h := NewAttachmentHandler(svc)
+	user := &model.User{ID: "u-viewer", Email: "v@x.com", SystemRole: model.SystemRoleMember}
+	token := makeTokenForUser(jwtMgr, user)
+	st.byID["a-1"] = &model.Attachment{
+		ID: "a-1", CreatedBy: "u-author", S3Key: "attachments/a-1", Size: 1,
+		MessageIDs: []string{"m-1"},
+	}
+	handler := middleware.Auth(jwtMgr)(http.HandlerFunc(h.List))
+	doList := func() *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/attachments?ids=a-1&parentID=ch-1&parentType=channel&messageID=m-1", nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		return rec
+	}
+
+	svc.SetAccessChecker(fakeTransientAccessChecker{err: errors.New("dynamo timeout")})
+	if rec := doList(); rec.Code != http.StatusInternalServerError {
+		t.Fatalf("transient failure: status = %d, want 500; body: %s", rec.Code, rec.Body.String())
+	}
+
+	// Definitive denial still filters within a 200 — a verdict, not an outage.
+	svc.SetAccessChecker(fakeTransientAccessChecker{err: fmt.Errorf("no: %w", service.ErrForbidden)})
+	rec := doList()
+	if rec.Code != http.StatusOK {
+		t.Fatalf("denial: status = %d, want 200; body: %s", rec.Code, rec.Body.String())
+	}
+	if body := strings.TrimSpace(rec.Body.String()); body != "[]" {
+		t.Fatalf("denial: body = %s, want []", body)
+	}
+}
+
+func TestAttachmentHandler_Get_TransientAccessFailureIs500NotFoundIs404(t *testing.T) {
+	st := newFakeAttachmentStore()
+	svc := service.NewAttachmentService(st, &fakeSigner{}, nil)
+	jwtMgr := auth.NewJWTManager("att-handler-secret", 15*time.Minute, 720*time.Hour)
+	h := NewAttachmentHandler(svc)
+	user := &model.User{ID: "u-viewer", Email: "v@x.com", SystemRole: model.SystemRoleMember}
+	token := makeTokenForUser(jwtMgr, user)
+	st.byID["a-1"] = &model.Attachment{
+		ID: "a-1", CreatedBy: "u-author", S3Key: "attachments/a-1", Size: 1,
+		MessageIDs: []string{"m-1"},
+	}
+	handler := middleware.Auth(jwtMgr)(http.HandlerFunc(h.Get))
+	doGet := func(id string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/attachments/"+id+"?parentID=ch-1&parentType=channel&messageID=m-1", nil)
+		req.SetPathValue("id", id)
+		req.Header.Set("Authorization", "Bearer "+token)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		return rec
+	}
+
+	// The access check could not run — must NOT masquerade as "gone".
+	svc.SetAccessChecker(fakeTransientAccessChecker{err: errors.New("dynamo timeout")})
+	if rec := doGet("a-1"); rec.Code != http.StatusInternalServerError {
+		t.Fatalf("transient failure: status = %d, want 500; body: %s", rec.Code, rec.Body.String())
+	}
+
+	// Denied or missing reads 404.
+	svc.SetAccessChecker(fakeTransientAccessChecker{err: fmt.Errorf("no: %w", service.ErrForbidden)})
+	if rec := doGet("a-1"); rec.Code != http.StatusNotFound {
+		t.Fatalf("denial: status = %d, want 404; body: %s", rec.Code, rec.Body.String())
+	}
+	if rec := doGet("missing"); rec.Code != http.StatusNotFound {
+		t.Fatalf("missing: status = %d, want 404; body: %s", rec.Code, rec.Body.String())
+	}
 }
 
 func TestAttachmentHandler_CreateUploadURL_InvalidJSON(t *testing.T) {

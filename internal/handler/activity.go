@@ -160,7 +160,7 @@ func isReminderValidation(err error) bool {
 
 // isReminderAccessError matches the membership-denied errors CheckAccess returns
 // so scheduling a reminder for an inaccessible message is a 403, not a 500.
+// Denials carry service.ErrForbidden — no fragile string matching.
 func isReminderAccessError(err error) bool {
-	msg := err.Error()
-	return msg == "message: not a channel member" || msg == "message: not a conversation participant"
+	return errors.Is(err, service.ErrForbidden)
 }

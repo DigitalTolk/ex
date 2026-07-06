@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"image"
 	"image/png"
 	"testing"
 
 	"github.com/DigitalTolk/ex/internal/model"
+	"github.com/DigitalTolk/ex/internal/store"
 )
 
 func TestValidateAttachmentContentType_Branches(t *testing.T) {
@@ -101,37 +103,52 @@ func TestCanAccessAttachment_Branches(t *testing.T) {
 	ctx := context.Background()
 	svc := NewAttachmentService(newMockAttachmentStore(), &fakeAttachmentSigner{}, newMockPublisher())
 
-	// Empty user / nil attachment → no access.
-	if svc.canAccessAttachment(ctx, "", &model.Attachment{}, "p", "channel", "m") {
-		t.Error("empty userID should deny")
-	}
-	if svc.canAccessAttachment(ctx, "u1", nil, "p", "channel", "m") {
-		t.Error("nil attachment should deny")
+	assertAccess := func(t *testing.T, wantAllowed bool, wantErr bool, allowed bool, err error, label string) {
+		t.Helper()
+		if allowed != wantAllowed {
+			t.Errorf("%s: allowed = %v, want %v", label, allowed, wantAllowed)
+		}
+		if (err != nil) != wantErr {
+			t.Errorf("%s: err = %v, want err=%v", label, err, wantErr)
+		}
 	}
 
+	// Empty user / nil attachment → definitive no access.
+	allowed, err := svc.canAccessAttachment(ctx, "", &model.Attachment{}, "p", "channel", "m")
+	assertAccess(t, false, false, allowed, err, "empty userID")
+	allowed, err = svc.canAccessAttachment(ctx, "u1", nil, "p", "channel", "m")
+	assertAccess(t, false, false, allowed, err, "nil attachment")
+
 	// Owner of an unbound (no message refs) attachment → allowed.
-	if !svc.canAccessAttachment(ctx, "u1", &model.Attachment{ID: "a", CreatedBy: "u1"}, "", "", "") {
-		t.Error("owner of unbound attachment should be allowed")
-	}
+	allowed, err = svc.canAccessAttachment(ctx, "u1", &model.Attachment{ID: "a", CreatedBy: "u1"}, "", "", "")
+	assertAccess(t, true, false, allowed, err, "unbound owner")
 
 	bound := &model.Attachment{ID: "a", CreatedBy: "u1", MessageIDs: []string{"m1"}}
 	// Bound attachment but missing parent context and no access checker → deny.
-	if svc.canAccessAttachment(ctx, "u2", bound, "", "", "") {
-		t.Error("missing parent context should deny")
-	}
-	if svc.canAccessAttachment(ctx, "u2", bound, "p", "channel", "m1") {
-		t.Error("nil access checker should deny")
-	}
+	allowed, err = svc.canAccessAttachment(ctx, "u2", bound, "", "", "")
+	assertAccess(t, false, false, allowed, err, "missing parent context")
+	allowed, err = svc.canAccessAttachment(ctx, "u2", bound, "p", "channel", "m1")
+	assertAccess(t, false, false, allowed, err, "nil access checker")
 
-	// Access checker grants / denies.
+	// Access checker grants.
 	svc.SetAccessChecker(fakeAttachmentAccessChecker{})
-	if !svc.canAccessAttachment(ctx, "u2", bound, "p", "channel", "m1") {
-		t.Error("access checker should grant")
-	}
-	svc.SetAccessChecker(fakeAttachmentAccessChecker{err: errors.New("denied")})
-	if svc.canAccessAttachment(ctx, "u2", bound, "p", "channel", "m1") {
-		t.Error("access checker error should deny")
-	}
+	allowed, err = svc.canAccessAttachment(ctx, "u2", bound, "p", "channel", "m1")
+	assertAccess(t, true, false, allowed, err, "checker grants")
+
+	// Definitive denial (ErrForbidden / ErrNotFound) → false with NO error.
+	svc.SetAccessChecker(fakeAttachmentAccessChecker{err: fmt.Errorf("not a member: %w", ErrForbidden)})
+	allowed, err = svc.canAccessAttachment(ctx, "u2", bound, "p", "channel", "m1")
+	assertAccess(t, false, false, allowed, err, "forbidden denial")
+	svc.SetAccessChecker(fakeAttachmentAccessChecker{err: fmt.Errorf("message gone: %w", store.ErrNotFound)})
+	allowed, err = svc.canAccessAttachment(ctx, "u2", bound, "p", "channel", "m1")
+	assertAccess(t, false, false, allowed, err, "not-found denial")
+
+	// Transient failure (the check could not run) → error, NOT a silent deny.
+	// Regression: this used to read as "no access", which silently dropped
+	// attachments from batch responses until a hard refresh.
+	svc.SetAccessChecker(fakeAttachmentAccessChecker{err: errors.New("dynamo timeout")})
+	allowed, err = svc.canAccessAttachment(ctx, "u2", bound, "p", "channel", "m1")
+	assertAccess(t, false, true, allowed, err, "transient failure")
 }
 
 func encodePNGBytes(t *testing.T, w, h int) []byte {

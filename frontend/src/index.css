@@ -477,6 +477,19 @@
   .prose-message > * + * {
     margin-top: 0.25rem;
   }
+  /* Long unbroken tokens (a pasted URL in a list item, blockquote, heading,
+   * or table cell) must wrap exactly like they do in paragraphs. The <p>
+   * renderer carries Tailwind's `break-words`, but every other block the
+   * markdown renderer emits does not — a long link inside e.g. an ordered
+   * list forced the whole chat column into horizontal overflow.
+   * overflow-wrap inherits, so one declaration on the body root covers
+   * every present and future block type. Code blocks are unaffected
+   * (white-space: pre never soft-wraps) and tables keep their own
+   * overflow-x-auto scroll wrapper.
+   */
+  .prose-message {
+    overflow-wrap: break-word;
+  }
   .prose-message p[data-blank="true"] {
     min-height: 1.25rem;
     margin: 0;

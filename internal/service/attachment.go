@@ -258,7 +258,14 @@ func (s *AttachmentService) GetForUser(ctx context.Context, userID, id, parentID
 	if err != nil {
 		return nil, fmt.Errorf("attachment: get: %w", err)
 	}
-	if !s.canAccessAttachment(ctx, userID, a, parentID, parentType, messageID) {
+	allowed, err := s.canAccessAttachment(ctx, userID, a, parentID, parentType, messageID)
+	if err != nil {
+		// The access check could not run (transient store failure) — that is
+		// NOT a denial. Fail the read so callers retry, instead of reporting
+		// the attachment as gone.
+		return nil, err
+	}
+	if !allowed {
 		return nil, store.ErrNotFound
 	}
 	s.ensureThumbnailsForRead(ctx, a)
@@ -271,17 +278,34 @@ func (s *AttachmentService) GetForUser(ctx context.Context, userID, id, parentID
 	return a, nil
 }
 
-func (s *AttachmentService) canAccessAttachment(ctx context.Context, userID string, a *model.Attachment, parentID, parentType, messageID string) bool {
+// canAccessAttachment reports whether userID may read a. A returned error
+// means the access check could not run (transient store failure) — it is NOT
+// a verdict, and callers must fail their read rather than treat it as a
+// denial. Collapsing that error into `false` (the old behavior) silently
+// dropped attachments from batch responses on any DynamoDB blip; clients then
+// cached the shrunken list as fresh truth and the attachments "disappeared"
+// until a hard refresh.
+func (s *AttachmentService) canAccessAttachment(ctx context.Context, userID string, a *model.Attachment, parentID, parentType, messageID string) (bool, error) {
 	if userID == "" || a == nil {
-		return false
+		return false, nil
 	}
 	if a.CreatedBy == userID && len(a.MessageIDs) == 0 {
-		return true
+		return true, nil
 	}
 	if parentID == "" || parentType == "" || messageID == "" || s.accessChecker == nil {
-		return false
+		return false, nil
 	}
-	return s.accessChecker.CanAccessMessageAttachment(ctx, userID, parentID, parentType, messageID, a.ID) == nil
+	err := s.accessChecker.CanAccessMessageAttachment(ctx, userID, parentID, parentType, messageID, a.ID)
+	switch {
+	case err == nil:
+		return true, nil
+	case errors.Is(err, ErrForbidden) || errors.Is(err, store.ErrNotFound):
+		// Definitive: not a member, message gone, or the message does not
+		// reference this attachment.
+		return false, nil
+	default:
+		return false, err
+	}
 }
 
 func (s *AttachmentService) resolveAttachmentURLs(ctx context.Context, a *model.Attachment) {
@@ -467,6 +491,7 @@ func (s *AttachmentService) GetManyForUser(ctx context.Context, userID string, i
 		return nil, fmt.Errorf("attachment: too many IDs")
 	}
 	results := make([]*model.Attachment, len(ids))
+	errs := make([]error, len(ids))
 	var wg sync.WaitGroup
 	for i, id := range ids {
 		if id == "" {
@@ -476,12 +501,26 @@ func (s *AttachmentService) GetManyForUser(ctx context.Context, userID string, i
 		go func(i int, id string) {
 			defer wg.Done()
 			defer safe.Recover()
-			if a, err := s.GetForUser(ctx, userID, id, parentID, parentType, messageID); err == nil {
-				results[i] = a
+			a, err := s.GetForUser(ctx, userID, id, parentID, parentType, messageID)
+			if err != nil {
+				errs[i] = err
+				return
 			}
+			results[i] = a
 		}(i, id)
 	}
 	wg.Wait()
+	// A missing or definitively denied attachment is filtered from the
+	// response; a TRANSIENT failure fails the whole batch instead. Silently
+	// filtering on transient errors made attachments vanish from the UI: the
+	// client cached the shrunken 200 as fresh truth, and only a hard refresh
+	// brought the attachments back.
+	for _, err := range errs {
+		if err == nil || errors.Is(err, store.ErrNotFound) {
+			continue
+		}
+		return nil, err
+	}
 	out := make([]*model.Attachment, 0, len(ids))
 	for _, a := range results {
 		if a != nil {

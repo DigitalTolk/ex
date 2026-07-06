@@ -896,6 +896,76 @@ describe('ChatPage WebSocket handlers', () => {
     // No assertion on side effects — failure mode is an unhandled error.
   });
 
+  it('replying to a thread keeps every other member message field intact (attachments bug shape)', () => {
+    // Full backend event sequence for a thread reply, replayed through the
+    // real handlers against a seeded /threads card cache: message.new (the
+    // reply echo) followed by message.edited (the authoritative root
+    // republish that carries the bumped replyCount). The republished root is
+    // complete — the cached root must keep its attachments/reactions after
+    // the in-place replace, and the untouched reply must not be disturbed.
+    const threadKey = ['thread', 'channels/ch-1', 'root-1'];
+    const otherRoot = {
+      id: 'root-1',
+      parentID: 'ch-1',
+      parentType: 'channel',
+      authorID: 'u-other',
+      body: 'screenshots attached',
+      createdAt: '2026-07-06T09:00:00Z',
+      attachmentIDs: ['att-1', 'att-2'],
+      reactions: { thumbsup: ['u-me'] },
+      replyCount: 1,
+    };
+    const otherReply = {
+      id: 'reply-1',
+      parentID: 'ch-1',
+      parentType: 'channel',
+      authorID: 'u-other',
+      body: 'one more',
+      createdAt: '2026-07-06T09:05:00Z',
+      parentMessageID: 'root-1',
+      attachmentIDs: ['att-3'],
+    };
+    const { qc } = renderAt('/threads', (seed) => {
+      seed.setQueryData(threadKey, [otherRoot, otherReply]);
+      seed.setQueryData(['userThreads'], [
+        {
+          parentID: 'ch-1',
+          parentType: 'channel',
+          threadRootID: 'root-1',
+          rootAuthorID: 'u-other',
+          rootBody: 'screenshots attached',
+          rootCreatedAt: '2026-07-06T09:00:00Z',
+          replyCount: 1,
+          latestActivityAt: '2026-07-06T09:05:00Z',
+        },
+      ]);
+    });
+
+    act(() => {
+      (capturedOptions.onMessageNew as (d: unknown) => void)({
+        id: 'reply-2',
+        parentID: 'ch-1',
+        parentType: 'channel',
+        authorID: 'u-me',
+        body: 'my reply',
+        createdAt: '2026-07-06T10:00:00Z',
+        parentMessageID: 'root-1',
+      });
+      (capturedOptions.onMessageEdited as (d: unknown) => void)({
+        ...otherRoot,
+        replyCount: 2,
+        lastReplyAt: '2026-07-06T10:00:00Z',
+        recentReplyAuthorIDs: ['u-me', 'u-other'],
+      });
+    });
+
+    const cached = qc.getQueryData<Array<{ id: string; attachmentIDs?: string[]; reactions?: unknown }>>(threadKey);
+    expect(cached?.map((m) => m.id)).toEqual(['root-1', 'reply-1', 'reply-2']);
+    expect(cached?.[0].attachmentIDs).toEqual(['att-1', 'att-2']);
+    expect(cached?.[0].reactions).toEqual({ thumbsup: ['u-me'] });
+    expect(cached?.[1].attachmentIDs).toEqual(['att-3']);
+  });
+
   it('onForceLogout signs the user out and routes to /login', async () => {
     // Server-side deactivation publishes auth.force_logout to the user's
     // personal channel; the client must drop credentials and bounce to

@@ -204,7 +204,7 @@ func (s *MessageService) CanAccessMessageAttachment(ctx context.Context, userID,
 				}
 			}
 		}
-		return errors.New("message: attachment is not referenced by parent")
+		return fmt.Errorf("message: attachment is not referenced by parent: %w", ErrForbidden)
 	}
 	msg, err := s.messages.GetMessage(ctx, parentID, messageID)
 	if err != nil {
@@ -215,7 +215,7 @@ func (s *MessageService) CanAccessMessageAttachment(ctx context.Context, userID,
 			return nil
 		}
 	}
-	return errors.New("message: attachment is not referenced by message")
+	return fmt.Errorf("message: attachment is not referenced by message: %w", ErrForbidden)
 }
 
 // detachedTimeout bounds best-effort work that runs off the request path with a
@@ -1520,12 +1520,16 @@ func (s *MessageService) SetNoUnfurl(ctx context.Context, userID, parentID, pare
 // checkAccess verifies the user is a member of the channel or a participant
 // in the conversation.
 func (s *MessageService) checkAccess(ctx context.Context, userID, parentID, parentType string) error {
+	// Denials wrap ErrForbidden so callers can tell "you are not allowed"
+	// (definitive — safe to filter/reject) apart from "the check could not
+	// run" (transient store failure — must fail the request, never be
+	// treated as a verdict).
 	switch parentType {
 	case ParentChannel:
 		_, err := s.memberships.GetMembership(ctx, parentID, userID)
 		if err != nil {
 			if errors.Is(err, store.ErrNotFound) {
-				return errors.New("message: not a channel member")
+				return fmt.Errorf("message: not a channel member: %w", ErrForbidden)
 			}
 			return fmt.Errorf("message: check channel membership: %w", err)
 		}
@@ -1542,10 +1546,10 @@ func (s *MessageService) checkAccess(ctx context.Context, userID, parentID, pare
 			}
 		}
 		if !found {
-			return errors.New("message: not a conversation participant")
+			return fmt.Errorf("message: not a conversation participant: %w", ErrForbidden)
 		}
 	default:
-		return fmt.Errorf("message: unknown parent type %q", parentType)
+		return fmt.Errorf("message: unknown parent type %q: %w", parentType, ErrForbidden)
 	}
 	return nil
 }

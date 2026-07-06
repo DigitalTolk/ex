@@ -123,7 +123,7 @@ describe('apiFetch - tryRefreshToken edge cases', () => {
     globalThis.fetch = originalFetch;
   });
 
-  it('handles refresh endpoint throwing an error', async () => {
+  it('propagates a network-level refresh failure without invalidating the session', async () => {
     setAccessToken('expired-token');
 
     vi.mocked(globalThis.fetch)
@@ -134,15 +134,20 @@ describe('apiFetch - tryRefreshToken edge cases', () => {
       } as Response)
       .mockRejectedValueOnce(new Error('Network error'));
 
-    await expect(apiFetch('/api/v1/test')).rejects.toThrow(ApiError);
-    expect(getAccessToken()).toBeNull();
+    // The server never answered the refresh, so this is a connectivity
+    // failure — not a 401 session rejection. The raw network error (not an
+    // ApiError) surfaces and the in-memory token survives for the retry.
+    await expect(apiFetch('/api/v1/test')).rejects.toThrow('Network error');
+    expect(getAccessToken()).toBe('expired-token');
   });
 
   it('keeps the in-memory token when refresh hits a transient network error', async () => {
     setAccessToken('still-possibly-valid-token');
     vi.mocked(globalThis.fetch).mockRejectedValueOnce(new Error('server restarting'));
 
-    await expect(refreshAccessToken()).resolves.toBeNull();
+    // Network failures reject (callers back off and retry) instead of
+    // resolving null, which callers treat as a definitive session rejection.
+    await expect(refreshAccessToken()).rejects.toThrow('server restarting');
     expect(getAccessToken()).toBe('still-possibly-valid-token');
   });
 
@@ -182,6 +187,7 @@ describe('apiFetch - tryRefreshToken edge cases', () => {
     expect(globalThis.fetch).toHaveBeenCalledWith('/auth/token/refresh', {
       method: 'POST',
       credentials: 'include',
+      signal: expect.any(AbortSignal),
     });
   });
 });

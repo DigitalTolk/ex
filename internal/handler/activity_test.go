@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -156,7 +157,7 @@ func TestActivityHandler_CreateReminderErrorMapping(t *testing.T) {
 		{"invalid time", service.ErrReminderTimeInvalid, http.StatusBadRequest},
 		{"not found", store.ErrNotFound, http.StatusNotFound},
 		{"validation", errors.New("reminder: invalid parent type"), http.StatusBadRequest},
-		{"access", errors.New("message: not a channel member"), http.StatusForbidden},
+		{"access", fmt.Errorf("message: not a channel member: %w", service.ErrForbidden), http.StatusForbidden},
 		{"generic", errors.New("kaboom"), http.StatusInternalServerError},
 	}
 	for _, c := range cases {

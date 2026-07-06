@@ -500,14 +500,23 @@ describe('MessageInput coverage flows (browser)', () => {
     const editor = screen.getByLabelText('Message input');
     await editor.click();
     // Type three characters back-to-back. The first emits one typing frame;
-    // the next two stay within TYPING_PING_INTERVAL_MS, so emitTyping returns at
-    // its `now - last < INTERVAL` guard (no new frame). Keeping the keystrokes
-    // consecutive (no slow waitFor between them) keeps the whole burst well
-    // inside the 3s window even under heavy full-suite CPU load — otherwise the
-    // gap could drift past the interval and legitimately emit a second frame.
-    await editor.fill('a');
-    await editor.fill('ab');
-    await editor.fill('abc');
+    // the next two stay within TYPING_PING_INTERVAL_MS, so emitTyping returns
+    // at its `now - last < INTERVAL` guard (no new frame). Freeze Date.now
+    // (the clock that guard reads) across the burst: under full-suite CPU
+    // saturation the fill() round-trips can genuinely drift past the 3s
+    // window, which used to emit a legitimate second frame and flake this
+    // test — frozen time keeps the "within the window" premise true by
+    // construction while still exercising the real guard.
+    const realNow = Date.now;
+    try {
+      const frozen = realNow();
+      Date.now = () => frozen;
+      await editor.fill('a');
+      await editor.fill('ab');
+      await editor.fill('abc');
+    } finally {
+      Date.now = realNow;
+    }
     await vi.waitFor(() => expect(frames.length).toBe(1));
     await new Promise((r) => setTimeout(r, 50));
     expect(frames.length).toBe(1);
