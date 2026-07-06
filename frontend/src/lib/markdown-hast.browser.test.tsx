@@ -430,3 +430,41 @@ describe('renderHastTree — every custom-tag branch', () => {
     expect(tds[2].className).toContain('text-right');
   });
 });
+
+describe('renderHastTree — long-URL wrapping inside block containers', () => {
+  // Regression: only the <p> renderer carried `break-words`, so an unbroken
+  // URL pasted inside a list item (or blockquote/heading) widened the whole
+  // chat column into horizontal overflow. `.prose-message` now sets an
+  // inherited overflow-wrap on the body root — assert against real layout.
+  const longUrl =
+    'https://gitlab.digitaltolk.net/dtolk/dope/pipelines/-/merge_requests/123/diffs?commit_id=ce25b3f0d49d748e3e336e70d76aec03fcc6af4d#e5e89bb2ace7245530415c350f90ad30c4ae6e8f_58_59';
+
+  function renderInProse(tree: HastNode) {
+    return render(
+      wrap(
+        <div className="text-sm prose-message" style={{ width: 320 }} data-testid="prose-root">
+          {renderHastTree(tree)}
+        </div>,
+      ),
+    );
+  }
+
+  it('wraps an unbroken link inside an ordered-list item instead of overflowing the column', async () => {
+    const tree = root([
+      elem('ol', {}, [elem('li', {}, [elem('a', { href: longUrl }, [text(longUrl)])])]),
+    ]);
+    await renderInProse(tree);
+    const prose = document.querySelector('[data-testid="prose-root"]') as HTMLElement;
+    expect(getComputedStyle(prose.querySelector('li')!).overflowWrap).toBe('break-word');
+    expect(prose.scrollWidth).toBeLessThanOrEqual(prose.clientWidth);
+  });
+
+  it('wraps an unbroken link inside a blockquote instead of overflowing the column', async () => {
+    const tree = root([
+      elem('blockquote', {}, [elem('a', { href: longUrl }, [text(longUrl)])]),
+    ]);
+    await renderInProse(tree);
+    const prose = document.querySelector('[data-testid="prose-root"]') as HTMLElement;
+    expect(prose.scrollWidth).toBeLessThanOrEqual(prose.clientWidth);
+  });
+});
