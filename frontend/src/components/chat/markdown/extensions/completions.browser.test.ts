@@ -104,4 +104,27 @@ describe('composerAutocomplete', () => {
     view.destroy();
     host.remove();
   });
+
+  it('keeps natural placement: opens below the caret when there is visible room below', async () => {
+    // Placement must stay space-driven on every viewport — an inline edit of
+    // a scrolled-up message (caret high on screen) opens DOWNWARD into the
+    // visible area. The iOS-keyboard problem is solved by bounding and
+    // reactively re-measuring the available space (tooltipSpace.ts), never by
+    // forcing a direction.
+    const host = document.createElement('div');
+    host.style.cssText = 'position:fixed;top:50%;left:0;right:0;';
+    document.body.appendChild(host);
+    const view = new EditorView({
+      parent: host,
+      state: EditorState.create({ doc: '@Al', selection: { anchor: 3 }, extensions: [composerAutocomplete(providers)] }),
+    });
+    startCompletion(view);
+    await vi.waitFor(() => {
+      const tip = view.dom.querySelector('.cm-tooltip-autocomplete');
+      expect(tip).not.toBeNull();
+      expect(tip!.classList.contains('cm-tooltip-below')).toBe(true);
+    });
+    view.destroy();
+    host.remove();
+  });
 });
