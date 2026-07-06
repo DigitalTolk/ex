@@ -7,10 +7,11 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 )
 
 // badURLClient builds a client whose baseURL contains an invalid control
@@ -47,6 +48,97 @@ func TestClient_NewRequestErrors(t *testing.T) {
 	}
 	if _, err := c.ClusterHealth(ctx); err == nil {
 		t.Error("ClusterHealth(do): expected request-build error")
+	}
+	if err := c.deleteIndex(ctx, "idx"); err == nil {
+		t.Error("deleteIndex: expected request-build error")
+	}
+	if _, _, err := c.IndexSchemaVersion(ctx, "idx"); err == nil {
+		t.Error("IndexSchemaVersion: expected request-build error")
+	}
+}
+
+// NewClientFromConfig is the single constructor the server and the
+// migrate CLI share; it must pick SigV4 signing when a region is set and
+// a plain client otherwise, degrading to nil on an empty URL.
+func TestNewClientFromConfig(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("plain when no region", func(t *testing.T) {
+		c, err := NewClientFromConfig(ctx, ClientConfig{URL: "http://opensearch:9200/"})
+		if err != nil {
+			t.Fatalf("NewClientFromConfig: %v", err)
+		}
+		if c == nil {
+			t.Fatal("expected a client for a configured URL")
+		}
+		if c.baseURL != "http://opensearch:9200" {
+			t.Errorf("baseURL = %q, want trailing slash trimmed", c.baseURL)
+		}
+		if c.http.Transport != nil {
+			t.Error("plain client must not install a signing transport")
+		}
+	})
+
+	t.Run("nil when no URL", func(t *testing.T) {
+		c, err := NewClientFromConfig(ctx, ClientConfig{})
+		if err != nil || c != nil {
+			t.Fatalf("got (%v, %v), want (nil, nil) so callers degrade to no-ops", c, err)
+		}
+	})
+
+	t.Run("sigv4 when region set", func(t *testing.T) {
+		orig := loadAWSConfig
+		t.Cleanup(func() { loadAWSConfig = orig })
+		loadAWSConfig = func(context.Context, ...func(*awsconfig.LoadOptions) error) (aws.Config, error) {
+			return aws.Config{Credentials: staticCreds{}}, nil
+		}
+		c, err := NewClientFromConfig(ctx, ClientConfig{
+			URL: "https://es.example.test", AWSRegion: "eu-west-1", AWSService: "aoss",
+		})
+		if err != nil {
+			t.Fatalf("NewClientFromConfig: %v", err)
+		}
+		tr, ok := c.http.Transport.(*sigV4Transport)
+		if !ok {
+			t.Fatalf("transport = %T, want *sigV4Transport", c.http.Transport)
+		}
+		if tr.region != "eu-west-1" || tr.service != "aoss" {
+			t.Errorf("transport = %s/%s, want eu-west-1/aoss", tr.region, tr.service)
+		}
+	})
+
+	t.Run("aws config load error propagates", func(t *testing.T) {
+		orig := loadAWSConfig
+		t.Cleanup(func() { loadAWSConfig = orig })
+		loadAWSConfig = func(context.Context, ...func(*awsconfig.LoadOptions) error) (aws.Config, error) {
+			return aws.Config{}, errors.New("config boom")
+		}
+		if _, err := NewClientFromConfig(ctx, ClientConfig{URL: "https://es.example.test", AWSRegion: "eu-west-1"}); err == nil {
+			t.Fatal("expected config-load error")
+		}
+	})
+}
+
+// failingSigner errors on SignHTTP — the real v4 signer cannot, so the
+// sign-error guard in RoundTrip is only reachable through this seam.
+type failingSigner struct{}
+
+func (failingSigner) SignHTTP(context.Context, aws.Credentials, *http.Request, string, string, string, time.Time, ...func(*v4.SignerOptions)) error {
+	return errors.New("sign boom")
+}
+
+func TestSigV4Transport_SignError(t *testing.T) {
+	tr := &sigV4Transport{
+		inner:   http.DefaultTransport,
+		signer:  failingSigner{},
+		creds:   staticCreds{},
+		region:  "us-east-1",
+		service: "es",
+	}
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, "https://example.test/_search", strings.NewReader(`{"q":1}`))
+	_, err := tr.RoundTrip(req)
+	if err == nil || !strings.Contains(err.Error(), "sigv4 sign") {
+		t.Fatalf("RoundTrip error = %v, want wrapped sign error", err)
 	}
 }
 
@@ -139,4 +231,3 @@ func TestHashAndResetBody_Reset(t *testing.T) {
 		t.Errorf("reseated body = %q, want %q", b, "payload")
 	}
 }
-

@@ -1,8 +1,11 @@
 package auth
 
 import (
+	"crypto/rand"
+	"crypto/rsa"
 	"crypto/sha256"
 	"encoding/base64"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -172,6 +175,61 @@ func TestGenerateRefreshToken(t *testing.T) {
 	}
 	if hash == hash2 {
 		t.Error("two consecutive hashes should differ")
+	}
+}
+
+// GenerateRefreshToken must surface an entropy failure rather than hand out a
+// predictable token. crypto/rand can't be made to fail for real, so the test
+// swaps the randRead seam.
+func TestGenerateRefreshToken_RandFailure(t *testing.T) {
+	orig := randRead
+	defer func() { randRead = orig }()
+	randRead = func([]byte) (int, error) { return 0, errors.New("entropy exhausted") }
+
+	mgr := NewJWTManager("test-secret", 15*time.Minute, 720*time.Hour)
+	raw, hash, err := mgr.GenerateRefreshToken()
+	if err == nil {
+		t.Fatal("expected error when rand.Read fails, got nil")
+	}
+	if !strings.Contains(err.Error(), "generate refresh token") {
+		t.Errorf("error = %v, want it wrapped as 'generate refresh token'", err)
+	}
+	if raw != "" || hash != "" {
+		t.Errorf("raw = %q, hash = %q; both must be empty on failure", raw, hash)
+	}
+}
+
+// An RS256-signed token (a registered, otherwise-valid asymmetric alg) must be
+// rejected by the WithValidMethods HS256 pin — the classic alg-confusion
+// attack where the HMAC secret would be (ab)used as an RSA public key.
+func TestValidateToken_RejectsRS256Token(t *testing.T) {
+	mgr := NewJWTManager("test-secret", 15*time.Minute, 720*time.Hour)
+
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("rsa key: %v", err)
+	}
+	tok := jwt.NewWithClaims(jwt.SigningMethodRS256, model.TokenClaims{
+		RegisteredClaims: jwt.RegisteredClaims{
+			Subject:   "user-123",
+			Issuer:    "ex",
+			Audience:  jwt.ClaimStrings{"ex"},
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour)),
+		},
+		UserID: "user-123",
+	})
+	signed, err := tok.SignedString(key)
+	if err != nil {
+		t.Fatalf("sign RS256 token: %v", err)
+	}
+
+	_, err = mgr.ValidateToken(signed)
+	if err == nil {
+		t.Fatal("expected RS256 token to be rejected")
+	}
+	if !strings.Contains(err.Error(), "signing method") {
+		t.Fatalf("error = %v, want a signing-method rejection", err)
 	}
 }
 

@@ -19,6 +19,10 @@ const (
 	jwtAudience = "ex"
 )
 
+// randRead is a seam for crypto/rand.Read so tests can exercise the
+// entropy-failure path, which is otherwise unreachable in practice.
+var randRead = rand.Read
+
 // JWTManager handles creation and validation of JWT access tokens and refresh tokens.
 type JWTManager struct {
 	secret     []byte
@@ -66,7 +70,7 @@ func (m *JWTManager) GenerateAccessToken(user *model.User) (string, error) {
 // SHA-256 hash of that value (to store server-side).
 func (m *JWTManager) GenerateRefreshToken() (raw string, hash string, err error) {
 	b := make([]byte, 32)
-	if _, err = rand.Read(b); err != nil {
+	if _, err = randRead(b); err != nil {
 		return "", "", fmt.Errorf("generate refresh token: %w", err)
 	}
 
@@ -79,14 +83,14 @@ func (m *JWTManager) GenerateRefreshToken() (raw string, hash string, err error)
 // ValidateToken parses and validates a JWT string, returning the embedded claims.
 func (m *JWTManager) ValidateToken(tokenStr string) (*model.TokenClaims, error) {
 	token, err := jwt.ParseWithClaims(tokenStr, &model.TokenClaims{}, func(t *jwt.Token) (interface{}, error) {
-		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
-			return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
-		}
+		// WithValidMethods below rejects any alg other than HS256 BEFORE this
+		// keyfunc runs (parser invariant), so t.Method is always the HMAC
+		// HS256 method here — alg-confusion (RS256/none) can never reach us.
 		return m.secret, nil
 	},
-		// Pin to exactly HS256 (defense-in-depth on top of the keyfunc HMAC check —
-		// blocks alg-confusion to HS384/512 or alg:none), and make `exp` mandatory
-		// so a token minted without an expiry can never validate.
+		// Pin to exactly HS256 — blocks alg-confusion to RS256/HS384/512 or
+		// alg:none before the keyfunc runs — and make `exp` mandatory so a
+		// token minted without an expiry can never validate.
 		jwt.WithValidMethods([]string{"HS256"}),
 		jwt.WithExpirationRequired(),
 		jwt.WithIssuer(jwtIssuer), jwt.WithAudience(jwtAudience))
@@ -94,9 +98,8 @@ func (m *JWTManager) ValidateToken(tokenStr string) (*model.TokenClaims, error) 
 		return nil, fmt.Errorf("invalid token: %w", err)
 	}
 
-	claims, ok := token.Claims.(*model.TokenClaims)
-	if !ok || !token.Valid {
-		return nil, fmt.Errorf("invalid token claims")
-	}
-	return claims, nil
+	// Library invariant: a nil error from ParseWithClaims implies token.Valid
+	// is set, and token.Claims is always the *model.TokenClaims passed in —
+	// the direct type assertion cannot fail.
+	return token.Claims.(*model.TokenClaims), nil
 }

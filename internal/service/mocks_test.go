@@ -115,10 +115,12 @@ func (m *mockUserStore) NotificationSettingsFor(_ context.Context, userIDs []str
 // --- Mock TokenStore ---
 
 type mockTokenStore struct {
-	tokens    map[string]*model.RefreshToken
-	storeErr  error
-	getErr    error
-	deleteErr error
+	tokens     map[string]*model.RefreshToken
+	storeErr   error
+	getErr     error
+	getErrHash map[string]error // per-hash Get failures
+	deleteErr  error
+	rotateErr  error
 }
 
 func newMockTokenStore() *mockTokenStore {
@@ -137,11 +139,28 @@ func (m *mockTokenStore) GetRefreshToken(_ context.Context, hash string) (*model
 	if m.getErr != nil {
 		return nil, m.getErr
 	}
+	if err, ok := m.getErrHash[hash]; ok {
+		return nil, err
+	}
 	rt, ok := m.tokens[hash]
 	if !ok {
 		return nil, store.ErrNotFound
 	}
 	return rt, nil
+}
+
+func (m *mockTokenStore) MarkRefreshTokenRotated(_ context.Context, hash string, rotatedAt time.Time, supersededBy string) error {
+	if m.rotateErr != nil {
+		return m.rotateErr
+	}
+	rt, ok := m.tokens[hash]
+	if !ok {
+		return store.ErrNotFound
+	}
+	t := rotatedAt
+	rt.RotatedAt = &t
+	rt.SupersededBy = supersededBy
+	return nil
 }
 
 func (m *mockTokenStore) DeleteRefreshToken(_ context.Context, hash string) error {
@@ -207,18 +226,20 @@ func (m *mockInviteStore) DeleteInvite(_ context.Context, token string) error {
 // --- Mock MembershipStore ---
 
 type mockMembershipStore struct {
-	memberships     map[string]*model.ChannelMembership // key: channelID + "#" + userID
-	mutes           map[string]bool                     // key: channelID + "#" + userID
-	userChannels    []*model.UserChannel                // override for ListUserChannels
-	addErr          error
-	removeErr       error
-	getErr          error
-	updateRoleErr   error
-	listMembersErr  error
-	listChannelsErr error
-	setMuteErr      error
-	setNotifErr     error
-	lastReadSeqs      map[string]int64               // key: channelID + "#" + userID
+	memberships       map[string]*model.ChannelMembership // key: channelID + "#" + userID
+	mutes             map[string]bool                     // key: channelID + "#" + userID
+	userChannels      []*model.UserChannel                // override for ListUserChannels
+	addErr            error
+	removeErr         error
+	getErr            error
+	getErrForUser     string // per-user GetMembership failure
+	getErrForUserSkip int    // matching calls to let through before failing
+	updateRoleErr     error
+	listMembersErr    error
+	listChannelsErr   error
+	setMuteErr        error
+	setNotifErr       error
+	lastReadSeqs      map[string]int64 // key: channelID + "#" + userID
 	setLastReadErr    error
 	addedUserChannels map[string]*model.UserChannel // key: channelID + "#" + userID
 }
@@ -343,6 +364,13 @@ func (m *mockMembershipStore) RemoveMember(_ context.Context, channelID, userID 
 func (m *mockMembershipStore) GetMembership(_ context.Context, channelID, userID string) (*model.ChannelMembership, error) {
 	if m.getErr != nil {
 		return nil, m.getErr
+	}
+	if m.getErrForUser != "" && m.getErrForUser == userID {
+		if m.getErrForUserSkip > 0 {
+			m.getErrForUserSkip--
+		} else {
+			return nil, errors.New("injected membership get failure")
+		}
 	}
 	mem, ok := m.memberships[channelID+"#"+userID]
 	if !ok {
@@ -853,6 +881,7 @@ type mockMessageStore struct {
 	updateErrForID error  // error returned for updateErrID (defaults to a generic error)
 	deleteErr      error
 	listErr        error
+	listAfterErr   error
 	listHasMore    bool  // when true, ListMessages always reports more pages
 	threadReplyErr error // when set, ListThreadReplies returns this error
 	noThreadIndex  bool  // when true, ListThreadReplies returns nothing (simulates an un-backfilled thread → scan fallback)
@@ -937,6 +966,9 @@ func (m *mockMessageStore) ListThreadReplies(_ context.Context, threadRootID str
 }
 
 func (m *mockMessageStore) ListMessagesAfter(ctx context.Context, parentID, _ string, limit int) ([]*model.Message, bool, error) {
+	if m.listAfterErr != nil {
+		return nil, false, m.listAfterErr
+	}
 	return m.ListMessages(ctx, parentID, "", limit)
 }
 
@@ -1047,8 +1079,9 @@ func (m *mockThreadFollowStore) ListThreadFollows(_ context.Context, parentID, t
 // --- Mock ParentPinFileIndexStore ---
 
 type mockParentIndex struct {
-	pins  map[string]map[string]PinIndexEntry  // parentID -> msgID -> entry
-	files map[string]map[string]FileIndexEntry // parentID -> attachmentID -> entry
+	pins          map[string]map[string]PinIndexEntry  // parentID -> msgID -> entry
+	files         map[string]map[string]FileIndexEntry // parentID -> attachmentID -> entry
+	deleteFileErr error
 }
 
 func newMockParentIndex() *mockParentIndex {
@@ -1093,6 +1126,9 @@ func (m *mockParentIndex) SetFileIndex(_ context.Context, parentID, attachmentID
 }
 
 func (m *mockParentIndex) DeleteFileIndex(_ context.Context, parentID, attachmentID string) error {
+	if m.deleteFileErr != nil {
+		return m.deleteFileErr
+	}
 	if m.files[parentID] != nil {
 		delete(m.files[parentID], attachmentID)
 	}

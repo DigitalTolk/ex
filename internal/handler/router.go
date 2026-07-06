@@ -2,9 +2,11 @@ package handler
 
 import (
 	"bytes"
+	"html"
 	"io"
 	"io/fs"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -258,7 +260,7 @@ func NewRouter(d *Deps) http.Handler {
 
 	// ------------------------------------------------------------------ SPA
 	if frontendFS != nil {
-		spa := newSPAHandler(frontendFS, appVersion)
+		spa := newSPAHandler(frontendFS, appVersion, d.SentryFrontend)
 		mux.Handle("/", spa)
 	}
 
@@ -298,7 +300,7 @@ type spaHandler struct {
 	indexHTML  []byte
 }
 
-func newSPAHandler(frontendFS fs.FS, version string) *spaHandler {
+func newSPAHandler(frontendFS fs.FS, version string, sentry SentryFrontendConfig) *spaHandler {
 	httpFS := http.FS(frontendFS)
 	h := &spaHandler{fs: httpFS, fileServer: http.FileServer(httpFS)}
 
@@ -307,6 +309,25 @@ func newSPAHandler(frontendFS fs.FS, version string) *spaHandler {
 		if raw, err := io.ReadAll(f); err == nil {
 			meta := []byte(`<meta name="` + AppVersionMetaName + `" content="` + version + `">` +
 				`<meta name="` + BuildVersionMetaName + `" content="` + DisplayVersion(version) + `">`)
+			if sentry.DSN != "" {
+				// html.EscapeString defends the attribute even though the DSN
+				// comes from trusted server config.
+				meta = append(meta, []byte(`<meta name="`+SentryDSNMetaName+`" content="`+html.EscapeString(sentry.DSN)+`">`)...)
+				// Sample rates ride along only when non-zero — absent means
+				// off, and none of them mean anything without a DSN.
+				for _, rate := range []struct {
+					name  string
+					value float64
+				}{
+					{SentryTracesSampleRateMetaName, sentry.TracesSampleRate},
+					{SentryReplaySessionSampleRateMetaName, sentry.ReplaySessionSampleRate},
+					{SentryReplayErrorSampleRateMetaName, sentry.ReplayErrorSampleRate},
+				} {
+					if rate.value > 0 {
+						meta = append(meta, []byte(`<meta name="`+rate.name+`" content="`+strconv.FormatFloat(rate.value, 'g', -1, 64)+`">`)...)
+					}
+				}
+			}
 			// Insert just before </head>; if the marker isn't present
 			// (extremely unlikely with Vite output) fall back to the
 			// untouched bytes — the API endpoint still reports the

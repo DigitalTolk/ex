@@ -164,9 +164,12 @@ describe('MessageItem browser behavior', () => {
     expect(row).not.toBeNull();
     row!.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerType: 'touch' }));
 
+    // 2s, not 1s: the sheet opens only after the 420ms long-press timer,
+    // and webkit under full-suite CPU load can eat the rest of a 1s window
+    // (same rationale as the entrance-animation wait above).
     await vi.waitFor(() => {
       expect(document.querySelector('[data-testid="mobile-message-actions"]')).not.toBeNull();
-    }, { timeout: 1000 });
+    }, { timeout: 2000 });
     await screen.getByText('Edit').click();
 
     await vi.waitFor(() => {

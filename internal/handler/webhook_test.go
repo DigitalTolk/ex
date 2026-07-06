@@ -519,3 +519,33 @@ func (s *handlerWebhookMessageStore) IncrementReplyMetadata(_ context.Context, p
 	msg.RecentReplyAuthorIDs = []string{replyAuthorID}
 	return msg, nil
 }
+
+func TestWebhookHandlerExecuteGenericErrorIs400(t *testing.T) {
+	general := &model.Channel{ID: "ch-general", Name: "General", Slug: "general"}
+	channels := handlerWebhookChannels{
+		byID:   map[string]*model.Channel{general.ID: general},
+		bySlug: map[string]*model.Channel{general.Slug: general},
+	}
+	webhooks := &handlerWebhookStore{items: map[string]*model.IncomingWebhook{
+		"wh": {ID: "wh", Title: "CI", ChannelID: general.ID, ChannelName: general.Name, ChannelSlug: general.Slug, Username: "ci-bot"},
+	}}
+	messages := &handlerWebhookMessageStore{messages: map[string]*model.Message{}}
+	msgSvc := service.NewMessageService(messages, nil, nil, nil, nil)
+	h := NewWebhookHandler(service.NewIncomingWebhookService(webhooks, channels, msgSvc, nil, ""))
+
+	// An oversized body passes ingress limits (< 1 MiB) but fails message
+	// validation — neither a DM-target nor a not-found error, so it must
+	// land in the generic webhook_error 400 arm.
+	payload := `{"text":"` + strings.Repeat("a", 100_001) + `"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/webhooks/wh", strings.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+	req.SetPathValue("id", "wh")
+	res := httptest.NewRecorder()
+	h.Execute(res, req)
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("Execute oversized status = %d, want 400", res.Code)
+	}
+	if !strings.Contains(res.Body.String(), "webhook_error") {
+		t.Fatalf("body = %s, want webhook_error code", res.Body.String())
+	}
+}

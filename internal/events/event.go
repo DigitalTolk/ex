@@ -55,14 +55,14 @@ const (
 	// their account-level notification settings (levels, keywords, etc.)
 	// change, so every open tab/device stays in sync.
 	EventNotificationSettingsUpdated = "notification.settings_updated"
-	EventDraftUpdated       = "draft.updated"
-	EventForceLogout        = "auth.force_logout" // sent to a user's personal channel when their session must end (e.g. deactivation)
-	EventServerVersion      = "server.version"    // sent once on connect so clients can detect deploys without polling
-	EventTyping             = "typing"            // ephemeral typing indicator — published when a user starts typing in a parent
-	EventPing               = "ping"
-	EventReplayDone         = "replay.done"      // server → client marker frame after a reconnect replay completes
-	EventReplayExhausted    = "replay.exhausted" // cursor too old / unknown; client must do a full refetch
-	EventWebhookChanged     = "webhook.changed"  // admin incoming-webhook list changed (created/deleted); data-less nudge to refetch
+	EventDraftUpdated                = "draft.updated"
+	EventForceLogout                 = "auth.force_logout" // sent to a user's personal channel when their session must end (e.g. deactivation)
+	EventServerVersion               = "server.version"    // sent once on connect so clients can detect deploys without polling
+	EventTyping                      = "typing"            // ephemeral typing indicator — published when a user starts typing in a parent
+	EventPing                        = "ping"
+	EventReplayDone                  = "replay.done"      // server → client marker frame after a reconnect replay completes
+	EventReplayExhausted             = "replay.exhausted" // cursor too old / unknown; client must do a full refetch
+	EventWebhookChanged              = "webhook.changed"  // admin incoming-webhook list changed (created/deleted); data-less nudge to refetch
 	// EventActivityNew nudges a user's own clients that their activity stream
 	// (reaction hints + fired reminders) changed. Data-less: the durable Redis
 	// activity store is the source of truth, so the client just refetches the

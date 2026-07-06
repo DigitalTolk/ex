@@ -66,6 +66,31 @@ func TestClient_BeginIndexRebuild_NilClient(t *testing.T) {
 	c.AbortIndexRebuild(context.Background(), "x") // must not panic
 }
 
+// A versioned logical index whose mapping body carries no "mappings"
+// object cannot be stamped with a schema version; the error must abort
+// the rebuild before any staging index is created. The broken mapping is
+// injected via temporary entries in the package maps (tests in this
+// package never run in parallel) — the real constants are validated
+// well-formed by TestIndexMappings_RawBodiesAreUnstamped.
+func TestClient_BeginIndexRebuild_StampErrorPropagates(t *testing.T) {
+	const name = "ex_badmap"
+	indexMappings[name] = `{"settings": {}}`
+	desiredSchemaVersion[name] = 1
+	t.Cleanup(func() {
+		delete(indexMappings, name)
+		delete(desiredSchemaVersion, name)
+	})
+	// Closed port: proves the failure happens before any HTTP call.
+	c := NewClient("http://127.0.0.1:1")
+	staging, err := c.BeginIndexRebuild(context.Background(), name)
+	if err == nil || !strings.Contains(err.Error(), "mappings") {
+		t.Fatalf("BeginIndexRebuild error = %v, want unstampable-mapping error", err)
+	}
+	if staging != "" {
+		t.Errorf("staging = %q, want empty on stamp failure", staging)
+	}
+}
+
 func TestClient_BeginIndexRebuild_CreateErrorPropagates(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
@@ -263,6 +288,23 @@ func TestClient_PromoteIndex_ErrorBranches(t *testing.T) {
 			t.Fatal("expected transport error from aliasBacking")
 		}
 	})
+}
+
+// A 200 alias response whose body is an empty object (no physical index
+// entries) must read as "no alias", same as a 404 — not as an error.
+func TestClient_AliasBacking_EmptyAliasMap(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+	c := NewClient(srv.URL)
+	got, err := c.aliasBacking(context.Background(), IndexUsers)
+	if err != nil {
+		t.Fatalf("aliasBacking: %v", err)
+	}
+	if got != "" {
+		t.Errorf("aliasBacking = %q, want empty backing for an empty alias map", got)
+	}
 }
 
 func TestClient_AbortIndexRebuild(t *testing.T) {

@@ -215,12 +215,12 @@ func (l *LiveIndexer) DeleteMessage(ctx context.Context, id string) error {
 // NewIndexer when the ES client is nil and used directly in tests.
 type NoopIndexer struct{}
 
-func (NoopIndexer) IndexUser(context.Context, *model.User) error      { return nil }
-func (NoopIndexer) DeleteUser(context.Context, string) error          { return nil }
-func (NoopIndexer) IndexChannel(context.Context, *model.Channel) error { return nil }
-func (NoopIndexer) DeleteChannel(context.Context, string) error        { return nil }
+func (NoopIndexer) IndexUser(context.Context, *model.User) error               { return nil }
+func (NoopIndexer) DeleteUser(context.Context, string) error                   { return nil }
+func (NoopIndexer) IndexChannel(context.Context, *model.Channel) error         { return nil }
+func (NoopIndexer) DeleteChannel(context.Context, string) error                { return nil }
 func (NoopIndexer) IndexMessage(context.Context, *model.Message, string) error { return nil }
-func (NoopIndexer) DeleteMessage(context.Context, string) error        { return nil }
+func (NoopIndexer) DeleteMessage(context.Context, string) error                { return nil }
 
 // Document shapes — kept as private map builders so the wire format
 // is local to this package and not leaked through the model types.

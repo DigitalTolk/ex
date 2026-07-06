@@ -169,7 +169,7 @@ func (s *Stream) BackfillTTL(ctx context.Context, apply bool) (BackfillResult, e
 		for _, key := range keys {
 			res.Scanned++
 			ttl, err := s.client.TTL(ctx, key).Result()
-			if err != nil { // coverage-ignore: TTL on a key SCAN just returned only fails on a Redis transport error, which the closed-client SCAN above already exercises
+			if err != nil {
 				return res, fmt.Errorf("eventlog: backfill ttl %q: %w", key, err)
 			}
 			// -1 = key exists with no expiry; -2 = key gone (raced); >0 = set.
@@ -180,7 +180,7 @@ func (s *Stream) BackfillTTL(ctx context.Context, apply bool) (BackfillResult, e
 			if !apply {
 				continue
 			}
-			if err := s.client.Expire(ctx, key, streamTTL).Err(); err != nil { // coverage-ignore: same transport-only failure as the SCAN/TTL above
+			if err := s.client.Expire(ctx, key, streamTTL).Err(); err != nil {
 				return res, fmt.Errorf("eventlog: backfill expire %q: %w", key, err)
 			}
 			res.Updated++
@@ -241,33 +241,17 @@ func (s *Stream) Replay(ctx context.Context, userID string, since string) (Repla
 	// Collect candidates strictly newer than `since`, oldest-first.
 	out := make([]Entry, 0, len(entries))
 	for _, e := range entries {
-		payloadAny, ok := e.Values[payloadField]
+		entry, ok := parseStreamEntry(e.Values)
 		if !ok {
 			continue
 		}
-		payloadStr, ok := payloadAny.(string)
-		if !ok { // coverage-ignore: Redis stream values are always bulk strings; this guards a type the client can't actually return
-			continue
-		}
-		// Each stream entry stores the full event envelope; pull the
-		// embedded ULID out so we can compare against `since` without
-		// trusting the (Redis-assigned) stream entry ID.
-		var env struct {
-			ID string `json:"id"`
-		}
-		if err := json.Unmarshal([]byte(payloadStr), &env); err != nil {
-			continue
-		}
-		if env.ID == "" {
-			continue
-		}
-		if env.ID <= since {
+		if entry.ID <= since {
 			// We hit the cursor — everything older is already seen.
 			// Reverse the buffer so callers receive oldest-first.
 			reverse(out)
 			return ReplayResult{Entries: out}, nil
 		}
-		out = append(out, Entry{ID: env.ID, Payload: []byte(payloadStr)})
+		out = append(out, entry)
 	}
 	// If we got here without seeing `since`, the cursor predates the
 	// oldest retained entry — the stream has been trimmed past it.
@@ -275,6 +259,35 @@ func (s *Stream) Replay(ctx context.Context, userID string, since string) (Repla
 	// believing a partial replay is complete.
 	reverse(out)
 	return ReplayResult{Entries: out, Exhausted: true}, nil
+}
+
+// parseStreamEntry turns one XREVRANGE entry's values map into an Entry.
+// Each stream entry stores the full event envelope under payloadField; the
+// embedded ULID is pulled out so Replay can compare against its cursor
+// without trusting the (Redis-assigned) stream entry ID. Returns ok=false
+// for entries Replay must skip: no payload field, a payload that is not a
+// string (the map is typed any; go-redis always delivers bulk strings, but
+// the shape alone doesn't guarantee it), malformed envelope JSON, or an
+// envelope with no ID.
+func parseStreamEntry(values map[string]any) (Entry, bool) {
+	payloadAny, ok := values[payloadField]
+	if !ok {
+		return Entry{}, false
+	}
+	payloadStr, ok := payloadAny.(string)
+	if !ok {
+		return Entry{}, false
+	}
+	var env struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal([]byte(payloadStr), &env); err != nil {
+		return Entry{}, false
+	}
+	if env.ID == "" {
+		return Entry{}, false
+	}
+	return Entry{ID: env.ID, Payload: []byte(payloadStr)}, true
 }
 
 func reverse(a []Entry) {

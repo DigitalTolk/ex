@@ -4,12 +4,12 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/expression"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
-	"github.com/DigitalTolk/ex/internal/model"
 )
 
 // EmojiStore defines persistence operations for custom emojis.
@@ -38,8 +38,8 @@ type emojiItem struct {
 	model.CustomEmoji
 }
 
-func emojiPK() string             { return "EMOJI" }
-func emojiSK(name string) string  { return "NAME#" + name }
+func emojiPK() string            { return "EMOJI" }
+func emojiSK(name string) string { return "NAME#" + name }
 
 func (s *EmojiStoreImpl) Create(ctx context.Context, e *model.CustomEmoji) error {
 	item := emojiItem{
@@ -47,11 +47,8 @@ func (s *EmojiStoreImpl) Create(ctx context.Context, e *model.CustomEmoji) error
 		SK:          emojiSK(e.Name),
 		CustomEmoji: *e,
 	}
-	av, err := attributevalue.MarshalMap(item)
-	if err != nil { // coverage-ignore: emojiItem has only scalar/string/time fields; MarshalMap cannot fail
-		return fmt.Errorf("store: marshal emoji: %w", err)
-	}
-	_, err = s.Client.PutItem(ctx, &dynamodb.PutItemInput{
+	av := mustAttrs(attributevalue.MarshalMap(item))
+	_, err := s.Client.PutItem(ctx, &dynamodb.PutItemInput{
 		TableName:           aws.String(s.Table),
 		Item:                av,
 		ConditionExpression: aws.String("attribute_not_exists(PK)"),
@@ -77,7 +74,7 @@ func (s *EmojiStoreImpl) GetByName(ctx context.Context, name string) (*model.Cus
 		return nil, ErrNotFound
 	}
 	var item emojiItem
-	if err := attributevalue.UnmarshalMap(out.Item, &item); err != nil { // coverage-ignore: round-trip of an item this store wrote; cannot fail
+	if err := attributevalue.UnmarshalMap(out.Item, &item); err != nil {
 		return nil, fmt.Errorf("store: unmarshal emoji: %w", err)
 	}
 	return &item.CustomEmoji, nil
@@ -88,10 +85,7 @@ func (s *EmojiStoreImpl) List(ctx context.Context) ([]*model.CustomEmoji, error)
 		expression.Key("PK").Equal(expression.Value(emojiPK())),
 		expression.Key("SK").BeginsWith("NAME#"),
 	)
-	expr, err := expression.NewBuilder().WithKeyCondition(keyCond).Build()
-	if err != nil { // coverage-ignore: static key-condition built from constants; Build cannot fail
-		return nil, fmt.Errorf("store: build expression: %w", err)
-	}
+	expr := mustExpr(expression.NewBuilder().WithKeyCondition(keyCond).Build())
 	// Page through every Query response. DynamoDB caps each Query at
 	// ~1MB or a default item count regardless of how many records
 	// exist; without LastEvaluatedKey iteration the catalog silently
@@ -113,7 +107,7 @@ func (s *EmojiStoreImpl) List(ctx context.Context) ([]*model.CustomEmoji, error)
 		}
 		for _, item := range out.Items {
 			var ei emojiItem
-			if err := attributevalue.UnmarshalMap(item, &ei); err != nil { // coverage-ignore: round-trip of items this store wrote; cannot fail
+			if err := attributevalue.UnmarshalMap(item, &ei); err != nil {
 				return nil, fmt.Errorf("store: unmarshal emoji: %w", err)
 			}
 			ec := ei.CustomEmoji

@@ -176,8 +176,6 @@ func emitNode(node ast.Node, src []byte, parent *HastNode) {
 			val += "\n"
 		}
 		appendTextChild(parent, val)
-	case *ast.String: // coverage-ignore: goldmark configured with only the Strikethrough extension never emits *ast.String nodes (verified by walking the parse tree for escaped chars, entities, and inline HTML — all yield *ast.Text); this arm is defensive against a future extension that introduces String nodes.
-		appendTextChild(parent, string(n.Value))
 	case *ast.Emphasis:
 		tag := "em"
 		if n.Level == 2 {
@@ -295,11 +293,8 @@ func element(tag string, properties map[string]interface{}) *HastNode {
 // alignment.
 func emitTableRow(row ast.Node, src []byte, tr *HastNode, cellTag string) {
 	for cell := row.FirstChild(); cell != nil; cell = cell.NextSibling() {
-		c, ok := cell.(*extast.TableCell)
-		/* v8 ignore next -- goldmark only ever nests TableCell under a header/row; the type-guard's false arm is defensive */
-		if !ok {
-			continue
-		}
+		// goldmark only ever nests TableCell nodes under a header/body row.
+		c := cell.(*extast.TableCell)
 		el := element(cellTag, tableCellProps(c.Alignment))
 		emitChildren(c, src, el)
 		tr.Children = append(tr.Children, el)

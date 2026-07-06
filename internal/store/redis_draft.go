@@ -110,10 +110,7 @@ func replaceCutoff(script, argv string) string {
 }
 
 func (s *RedisDraftStore) Upsert(ctx context.Context, draft *model.MessageDraft) error {
-	payload, err := json.Marshal(draft)
-	if err != nil { // coverage-ignore: MessageDraft is scalar fields + slices; Marshal cannot fail
-		return fmt.Errorf("store: marshal draft: %w", err)
-	}
+	payload := mustJSON(json.Marshal(draft))
 	if err := draftUpsertScript.Run(ctx, s.client,
 		[]string{draftHashKey(draft.UserID), draftTSKey(draft.UserID)},
 		draft.ID, payload, draft.Ts, draftHashTTLSeconds, s.tombstoneCutoffMs(),
@@ -132,7 +129,7 @@ func (s *RedisDraftStore) Get(ctx context.Context, userID, id string) (*model.Me
 		return nil, fmt.Errorf("store: get draft: %w", err)
 	}
 	var draft model.MessageDraft
-	if err := json.Unmarshal([]byte(raw), &draft); err != nil { // coverage-ignore: round-trip of a value this store wrote
+	if err := json.Unmarshal([]byte(raw), &draft); err != nil {
 		return nil, fmt.Errorf("store: unmarshal draft: %w", err)
 	}
 	return &draft, nil
@@ -146,7 +143,7 @@ func (s *RedisDraftStore) List(ctx context.Context, userID string) ([]*model.Mes
 	drafts := make([]*model.MessageDraft, 0, len(all))
 	for _, raw := range all {
 		var draft model.MessageDraft
-		if err := json.Unmarshal([]byte(raw), &draft); err != nil { // coverage-ignore: round-trip of values this store wrote
+		if err := json.Unmarshal([]byte(raw), &draft); err != nil {
 			return nil, fmt.Errorf("store: unmarshal draft: %w", err)
 		}
 		drafts = append(drafts, &draft)

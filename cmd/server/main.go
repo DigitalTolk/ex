@@ -64,6 +64,12 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Structured JSON logs everywhere except local dev, so the deployment's
+	// log pipeline can parse level/msg/fields instead of scraping text lines.
+	if !cfg.IsDev() {
+		slog.SetDefault(productionLogger(os.Stderr))
+	}
+
 	// Wire the deployment's reverse-proxy depth into the rate-limit IP derivation
 	// (must match topology or the per-IP limit keys off a spoofable/wrong hop).
 	middleware.SetTrustedProxyCount(cfg.TrustedProxyCount)
@@ -439,6 +445,13 @@ func main() {
 		JWT:          jwtMgr,
 		FrontendFS:   frontendDist,
 		AppVersion:   appVersion,
+		// Frontend-only Sentry opt-in — served to every UI surface via meta tags.
+		SentryFrontend: handler.SentryFrontendConfig{
+			DSN:                     cfg.SentryFrontendDSN,
+			TracesSampleRate:        cfg.SentryFrontendTracesSampleRate,
+			ReplaySessionSampleRate: cfg.SentryFrontendReplaySessionSampleRate,
+			ReplayErrorSampleRate:   cfg.SentryFrontendReplayErrorSampleRate,
+		},
 		AllowOrigins: allowOrigins,
 		RateLimiter:  redisCache,
 	})

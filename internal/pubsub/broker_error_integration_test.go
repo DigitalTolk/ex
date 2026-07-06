@@ -1,17 +1,18 @@
+//go:build integration
+
 package pubsub
 
 import (
 	"testing"
 	"time"
 
-	"github.com/alicebob/miniredis/v2"
 	"github.com/redis/go-redis/v9"
 )
 
 // Unsubscribing a user's only channel empties its userSubs map, taking
 // the len(subs)==0 branch that deletes the user entry entirely.
 func TestBrokerUnsubscribeLastChannelDeletesUser(t *testing.T) {
-	b, _, _ := setupTestBroker(t)
+	b, _ := setupTestBroker(t)
 
 	b.RegisterClient("u-solo")
 	b.Subscribe("u-solo", []string{"chan:only"})
@@ -28,7 +29,7 @@ func TestBrokerUnsubscribeLastChannelDeletesUser(t *testing.T) {
 // dispatch for a redis channel with no local subscribers takes the
 // early return — no panic, no delivery.
 func TestBrokerDispatchUnknownChannel(t *testing.T) {
-	b, _, _ := setupTestBroker(t)
+	b, _ := setupTestBroker(t)
 	// No subscriptions registered for this channel.
 	b.dispatch(&redis.Message{Channel: "chan:nobody", Payload: "x"})
 }
@@ -38,11 +39,7 @@ func TestBrokerDispatchUnknownChannel(t *testing.T) {
 // call return "client is closed" deterministically (independent of
 // network timing or cover mode), exercising the error branch.
 func TestBrokerSubscribeRedisError(t *testing.T) {
-	mr := miniredis.RunT(t)
-	ps, err := NewRedisPubSub("redis://" + mr.Addr())
-	if err != nil {
-		t.Fatalf("NewRedisPubSub: %v", err)
-	}
+	ps := setupTestPubSub(t)
 	b := NewBroker(ps)
 	defer func() { _ = b.Close() }()
 
@@ -56,11 +53,7 @@ func TestBrokerSubscribeRedisError(t *testing.T) {
 // subscriber Unsubscribe fails. Subscribe first (while live), then close
 // the subscriber so the Unsubscribe command errors deterministically.
 func TestBrokerUnsubscribeRedisError(t *testing.T) {
-	mr := miniredis.RunT(t)
-	ps, err := NewRedisPubSub("redis://" + mr.Addr())
-	if err != nil {
-		t.Fatalf("NewRedisPubSub: %v", err)
-	}
+	ps := setupTestPubSub(t)
 	b := NewBroker(ps)
 	defer func() { _ = b.Close() }()
 
@@ -75,11 +68,7 @@ func TestBrokerUnsubscribeRedisError(t *testing.T) {
 // driving the `msg, ok := <-ch; !ok { return }` branch — the path the
 // graceful Close() doesn't take because it cancels ctx first.
 func TestBrokerListenChannelClosed(t *testing.T) {
-	mr := miniredis.RunT(t)
-	ps, err := NewRedisPubSub("redis://" + mr.Addr())
-	if err != nil {
-		t.Fatalf("NewRedisPubSub: %v", err)
-	}
+	ps := setupTestPubSub(t)
 	b := NewBroker(ps)
 
 	// Close the subscriber directly. go-redis's Channel() consumer
@@ -92,17 +81,12 @@ func TestBrokerListenChannelClosed(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	b.cancel()
-	mr.Close()
 }
 
 // UnregisterClient logs (and swallows) a redis error when tearing down a
 // departing user's last subscription against a dead server.
 func TestBrokerUnregisterRedisError(t *testing.T) {
-	mr := miniredis.RunT(t)
-	ps, err := NewRedisPubSub("redis://" + mr.Addr())
-	if err != nil {
-		t.Fatalf("NewRedisPubSub: %v", err)
-	}
+	ps := setupTestPubSub(t)
 	b := NewBroker(ps)
 	defer func() { _ = b.Close() }()
 

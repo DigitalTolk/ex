@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"crypto/rand"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -433,10 +432,9 @@ func (s *IncomingWebhookService) translateMattermostMarkup(ctx context.Context, 
 	text = strings.ReplaceAll(text, "<!all>", "@all")
 	text = strings.ReplaceAll(text, "<!here>", "@here")
 	text = slackLinkPattern.ReplaceAllStringFunc(text, func(match string) string {
+		// FindStringSubmatch of a string the SAME pattern just matched
+		// always yields the full group set — no guard needed.
 		parts := slackLinkPattern.FindStringSubmatch(match)
-		if len(parts) < 2 {
-			return match
-		}
 		href := parts[1]
 		label := parts[2]
 		if strings.HasPrefix(href, "#") {
@@ -459,9 +457,6 @@ func (s *IncomingWebhookService) translateMattermostMarkup(ctx context.Context, 
 	})
 	text = mattermostChannelToken.ReplaceAllStringFunc(text, func(match string) string {
 		parts := mattermostChannelToken.FindStringSubmatch(match)
-		if len(parts) < 3 {
-			return match
-		}
 		if mention, ok := s.channelMention(ctx, parts[2]); ok {
 			return parts[1] + mention
 		}
@@ -469,9 +464,6 @@ func (s *IncomingWebhookService) translateMattermostMarkup(ctx context.Context, 
 	})
 	return mattermostUserPattern.ReplaceAllStringFunc(text, func(match string) string {
 		parts := mattermostUserPattern.FindStringSubmatch(match)
-		if len(parts) < 3 {
-			return match
-		}
 		name := strings.ToLower(parts[2])
 		switch name {
 		case "all":
@@ -550,7 +542,7 @@ func (s *IncomingWebhookService) proxyImageWithSize(ctx context.Context, raw str
 
 func randomWebhookID() (string, error) {
 	var b [32]byte
-	if _, err := rand.Read(b[:]); err != nil {
+	if _, err := randRead(b[:]); err != nil {
 		return "", fmt.Errorf("webhook: random id: %w", err)
 	}
 	return base64.RawURLEncoding.EncodeToString(b[:]), nil

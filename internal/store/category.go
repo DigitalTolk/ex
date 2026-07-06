@@ -59,19 +59,13 @@ func (s *CategoryStoreImpl) Create(ctx context.Context, c *model.UserChannelCate
 		SK:                  categorySK(c.ID),
 		UserChannelCategory: *c,
 	}
-	av, err := attributevalue.MarshalMap(item)
-	if err != nil { // coverage-ignore: categoryItem has only scalar/string/time fields; MarshalMap cannot fail
-		return fmt.Errorf("store: marshal category: %w", err)
-	}
-	nameAV, err := attributevalue.MarshalMap(categoryNameItem{
+	av := mustAttrs(attributevalue.MarshalMap(item))
+	nameAV := mustAttrs(attributevalue.MarshalMap(categoryNameItem{
 		PK:         userPK(c.UserID),
 		SK:         categoryNameSK(c.Name),
 		CategoryID: c.ID,
-	})
-	if err != nil { // coverage-ignore: categoryNameItem has only string fields; MarshalMap cannot fail
-		return fmt.Errorf("store: marshal category name: %w", err)
-	}
-	_, err = s.Client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
+	}))
+	_, err := s.Client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
 		TransactItems: []types.TransactWriteItem{
 			{
 				Put: &types.Put{
@@ -110,7 +104,7 @@ func (s *CategoryStoreImpl) Get(ctx context.Context, userID, categoryID string) 
 		return nil, ErrNotFound
 	}
 	var item categoryItem
-	if err := attributevalue.UnmarshalMap(out.Item, &item); err != nil { // coverage-ignore: round-trip of an item this store wrote; cannot fail
+	if err := attributevalue.UnmarshalMap(out.Item, &item); err != nil {
 		return nil, fmt.Errorf("store: unmarshal category: %w", err)
 	}
 	return &item.UserChannelCategory, nil
@@ -121,10 +115,7 @@ func (s *CategoryStoreImpl) List(ctx context.Context, userID string) ([]*model.U
 		expression.Key("PK").Equal(expression.Value(userPK(userID))),
 		expression.Key("SK").BeginsWith("CATEGORY#"),
 	)
-	expr, err := expression.NewBuilder().WithKeyCondition(keyCond).Build()
-	if err != nil { // coverage-ignore: static key-condition built from constants; Build cannot fail
-		return nil, fmt.Errorf("store: build categories expression: %w", err)
-	}
+	expr := mustExpr(expression.NewBuilder().WithKeyCondition(keyCond).Build())
 	out, err := s.Client.Query(ctx, &dynamodb.QueryInput{
 		TableName:                 aws.String(s.Table),
 		KeyConditionExpression:    expr.KeyCondition(),
@@ -137,7 +128,7 @@ func (s *CategoryStoreImpl) List(ctx context.Context, userID string) ([]*model.U
 	cats := make([]*model.UserChannelCategory, 0, len(out.Items))
 	for _, raw := range out.Items {
 		var item categoryItem
-		if err := attributevalue.UnmarshalMap(raw, &item); err != nil { // coverage-ignore: round-trip of items this store wrote; cannot fail
+		if err := attributevalue.UnmarshalMap(raw, &item); err != nil {
 			continue
 		}
 		c := item.UserChannelCategory
@@ -165,10 +156,7 @@ func (s *CategoryStoreImpl) Update(ctx context.Context, c *model.UserChannelCate
 	upd := expression.
 		Set(expression.Name("name"), expression.Value(c.Name)).
 		Set(expression.Name("position"), expression.Value(c.Position))
-	expr, err := expression.NewBuilder().WithUpdate(upd).Build()
-	if err != nil { // coverage-ignore: static update expression built from constants; Build cannot fail
-		return fmt.Errorf("store: build category update: %w", err)
-	}
+	expr := mustExpr(expression.NewBuilder().WithUpdate(upd).Build())
 	if normalizeCategoryName(existing.Name) == normalizeCategoryName(c.Name) {
 		_, err = s.Client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
 			TableName:                 aws.String(s.Table),
@@ -187,14 +175,11 @@ func (s *CategoryStoreImpl) Update(ctx context.Context, c *model.UserChannelCate
 		return nil
 	}
 
-	nameAV, err := attributevalue.MarshalMap(categoryNameItem{
+	nameAV := mustAttrs(attributevalue.MarshalMap(categoryNameItem{
 		PK:         userPK(c.UserID),
 		SK:         categoryNameSK(c.Name),
 		CategoryID: c.ID,
-	})
-	if err != nil { // coverage-ignore: categoryNameItem has only string fields; MarshalMap cannot fail
-		return fmt.Errorf("store: marshal category name: %w", err)
-	}
+	}))
 	_, err = s.Client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
 		TransactItems: []types.TransactWriteItem{
 			{

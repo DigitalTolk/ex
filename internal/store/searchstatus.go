@@ -53,7 +53,7 @@ func (s *SearchStatusStoreImpl) GetSearchStatus(ctx context.Context, job string,
 	if out.Item == nil {
 		return false, nil
 	}
-	if err := attributevalue.UnmarshalMap(out.Item, dest); err != nil { // coverage-ignore: round-trip of an item this store wrote into a matching status struct; cannot fail.
+	if err := attributevalue.UnmarshalMap(out.Item, dest); err != nil {
 		return false, fmt.Errorf("store: unmarshal search status %q: %w", job, err)
 	}
 	return true, nil
@@ -64,10 +64,7 @@ func (s *SearchStatusStoreImpl) GetSearchStatus(ctx context.Context, job string,
 // serialized by its coordination (Redis lock for mapping-rebuild, in-process
 // mutex for reindex), and the last write is the freshest.
 func (s *SearchStatusStoreImpl) PutSearchStatus(ctx context.Context, job string, val any) error {
-	av, err := attributevalue.MarshalMap(val)
-	if err != nil { // coverage-ignore: the status values are flat scalar structs; MarshalMap cannot fail.
-		return fmt.Errorf("store: marshal search status %q: %w", job, err)
-	}
+	av := mustAttrs(attributevalue.MarshalMap(val))
 	av["PK"] = &types.AttributeValueMemberS{Value: searchStatusPK()}
 	av["SK"] = &types.AttributeValueMemberS{Value: job}
 	if _, err := s.Client.PutItem(ctx, &dynamodb.PutItemInput{

@@ -9,6 +9,7 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -168,6 +169,24 @@ func TestOIDCProvider_Exchange_RejectsWrongAudience(t *testing.T) {
 
 	if _, err := p.Exchange(context.Background(), "code", "the-nonce"); err == nil {
 		t.Fatal("an id_token minted for a different audience must be rejected")
+	}
+}
+
+func TestOIDCProvider_Exchange_RejectsUnparsableClaims(t *testing.T) {
+	iss := newOIDCIssuer(t)
+	p := newProvider(t, iss)
+	// The token itself verifies (signature, iss, aud, exp, nonce all good) but
+	// its claims JSON can't unmarshal into the app's claims struct: "email" is
+	// a concrete Go string there, and here it's a JSON object.
+	iss.idToken = iss.mint(t, jwt.MapClaims{"email": map[string]any{"unexpected": "object"}}, nil)
+
+	_, err := p.Exchange(context.Background(), "code", "the-nonce")
+	if err == nil {
+		t.Fatal("claims JSON that cannot unmarshal into the claims struct must be rejected")
+	}
+	// Pin the failure to the claims-parse arm, not an earlier verification step.
+	if want := "parse id_token claims"; !strings.Contains(err.Error(), want) {
+		t.Fatalf("error = %v, want it to contain %q", err, want)
 	}
 }
 

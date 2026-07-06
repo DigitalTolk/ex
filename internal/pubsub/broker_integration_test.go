@@ -1,3 +1,5 @@
+//go:build integration
+
 package pubsub
 
 import (
@@ -6,26 +8,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alicebob/miniredis/v2"
 	"github.com/DigitalTolk/ex/internal/events"
 )
 
-func setupTestBroker(t *testing.T) (*Broker, *RedisPubSub, *miniredis.Miniredis) {
-	t.Helper()
-	mr := miniredis.RunT(t)
-	ps, err := NewRedisPubSub("redis://" + mr.Addr())
-	if err != nil {
-		t.Fatalf("NewRedisPubSub: %v", err)
-	}
-	broker := NewBroker(ps)
-	t.Cleanup(func() {
-		_ = broker.Close()
-	})
-	return broker, ps, mr
-}
-
 func TestBrokerRegisterUnregister(t *testing.T) {
-	b, _, _ := setupTestBroker(t)
+	b, _ := setupTestBroker(t)
 
 	client := b.RegisterClient("user1")
 	if client == nil {
@@ -57,7 +44,7 @@ func TestBrokerRegisterUnregister(t *testing.T) {
 // flap presence offline. Both legs of this guarantee live in the
 // broker; the WS handler relies on it for OnConnect/OnDisconnect order.
 func TestBrokerMultipleClientsPerUser(t *testing.T) {
-	b, _, _ := setupTestBroker(t)
+	b, _ := setupTestBroker(t)
 
 	a := b.RegisterClient("user1")
 	c := b.RegisterClient("user1")
@@ -93,7 +80,7 @@ func TestBrokerMultipleClientsPerUser(t *testing.T) {
 }
 
 func TestBrokerSubscribe(t *testing.T) {
-	b, _, _ := setupTestBroker(t)
+	b, _ := setupTestBroker(t)
 
 	b.RegisterClient("user1")
 	b.Subscribe("user1", []string{"chan:c1", "chan:c2"})
@@ -120,7 +107,7 @@ func TestBrokerSubscribe(t *testing.T) {
 }
 
 func TestBrokerUnsubscribe(t *testing.T) {
-	b, _, _ := setupTestBroker(t)
+	b, _ := setupTestBroker(t)
 
 	b.RegisterClient("user1")
 	b.Subscribe("user1", []string{"chan:c1", "chan:c2"})
@@ -144,7 +131,7 @@ func TestBrokerUnsubscribe(t *testing.T) {
 }
 
 func TestBrokerDispatch(t *testing.T) {
-	b, ps, _ := setupTestBroker(t)
+	b, ps := setupTestBroker(t)
 
 	client := b.RegisterClient("user1")
 	b.Subscribe("user1", []string{"chan:dispatch-test"})
@@ -180,11 +167,7 @@ func TestBrokerDispatch(t *testing.T) {
 }
 
 func TestBrokerClose(t *testing.T) {
-	mr := miniredis.RunT(t)
-	ps, err := NewRedisPubSub("redis://" + mr.Addr())
-	if err != nil {
-		t.Fatalf("NewRedisPubSub: %v", err)
-	}
+	ps := setupTestPubSub(t)
 
 	broker := NewBroker(ps)
 	broker.RegisterClient("user1")
@@ -199,7 +182,7 @@ func TestBrokerClose(t *testing.T) {
 // Verify that dispatched data is valid JSON with correct content,
 // ensuring the full publish-subscribe-dispatch pipeline works.
 func TestBrokerDispatchContent(t *testing.T) {
-	b, ps, _ := setupTestBroker(t)
+	b, ps := setupTestBroker(t)
 
 	client := b.RegisterClient("userX")
 	b.Subscribe("userX", []string{"chan:content"})
@@ -240,17 +223,11 @@ func TestBrokerDispatchContent(t *testing.T) {
 	}
 }
 
-
 // TestBroker_UnregisterCleansUpSubscriptions covers the branch where a
 // disconnected user's last subscription is removed and the Redis channel is
 // unsubscribed.
 func TestBroker_UnregisterCleansUpSubscriptions(t *testing.T) {
-	mr, _ := miniredis.RunT(t), (*Broker)(nil)
-	defer mr.Close()
-	ps, err := NewRedisPubSub("redis://" + mr.Addr())
-	if err != nil {
-		t.Fatalf("NewRedisPubSub: %v", err)
-	}
+	ps := setupTestPubSub(t)
 	b := NewBroker(ps)
 	defer func() { _ = b.Close() }()
 
@@ -264,12 +241,7 @@ func TestBroker_UnregisterCleansUpSubscriptions(t *testing.T) {
 }
 
 func TestBroker_UnregisterMissing(t *testing.T) {
-	mr, _ := miniredis.RunT(t), (*Broker)(nil)
-	defer mr.Close()
-	ps, err := NewRedisPubSub("redis://" + mr.Addr())
-	if err != nil {
-		t.Fatalf("NewRedisPubSub: %v", err)
-	}
+	ps := setupTestPubSub(t)
 	b := NewBroker(ps)
 	defer func() { _ = b.Close() }()
 	// no-op: should not panic.
@@ -280,12 +252,7 @@ func TestBroker_UnregisterMissing(t *testing.T) {
 // — multi-tab presence and a fast tab refresh both rely on the old
 // connection living until its own defer fires.
 func TestBroker_RegisterPreservesExisting(t *testing.T) {
-	mr, _ := miniredis.RunT(t), (*Broker)(nil)
-	defer mr.Close()
-	ps, err := NewRedisPubSub("redis://" + mr.Addr())
-	if err != nil {
-		t.Fatalf("NewRedisPubSub: %v", err)
-	}
+	ps := setupTestPubSub(t)
 	b := NewBroker(ps)
 	defer func() { _ = b.Close() }()
 
@@ -303,12 +270,7 @@ func TestBroker_RegisterPreservesExisting(t *testing.T) {
 }
 
 func TestBroker_UnsubscribeUnknownUser(t *testing.T) {
-	mr, _ := miniredis.RunT(t), (*Broker)(nil)
-	defer mr.Close()
-	ps, err := NewRedisPubSub("redis://" + mr.Addr())
-	if err != nil {
-		t.Fatalf("NewRedisPubSub: %v", err)
-	}
+	ps := setupTestPubSub(t)
 	b := NewBroker(ps)
 	defer func() { _ = b.Close() }()
 	b.Unsubscribe("never-subscribed", []string{"chan:x"})

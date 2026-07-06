@@ -210,15 +210,135 @@ func TestRefreshAccessToken_Valid(t *testing.T) {
 	if accessToken == "" {
 		t.Error("expected non-empty accessToken")
 	}
-	// Rotation: a fresh refresh token is issued and the presented one is revoked.
+	// Rotation: a fresh refresh token is issued; the presented one is KEPT
+	// but stamped rotated+superseded, so a client whose response was lost can
+	// retry with it (deleting it here forced daily re-logins on flaky
+	// networks — see the lost-response tests below).
 	if newRefresh == "" || newRefresh == rawToken {
 		t.Errorf("expected a rotated refresh token, got %q", newRefresh)
 	}
-	if _, ok := env.tokens.tokens[hash]; ok {
-		t.Error("expected the old refresh token hash to be deleted after rotation")
+	old, ok := env.tokens.tokens[hash]
+	if !ok {
+		t.Fatal("expected the presented refresh token to be kept (stamped, not deleted) after rotation")
+	}
+	if old.RotatedAt == nil {
+		t.Error("expected the presented refresh token to be stamped RotatedAt")
+	}
+	if old.SupersededBy != env.jwt.refreshHash {
+		t.Errorf("SupersededBy = %q, want %q", old.SupersededBy, env.jwt.refreshHash)
 	}
 	if _, ok := env.tokens.tokens[env.jwt.refreshHash]; !ok {
 		t.Error("expected the new refresh token hash to be stored")
+	}
+}
+
+// seedRefreshToken stores a live refresh token for `raw` and returns its hash.
+func seedRefreshToken(env *authTestEnv, userID, raw string) string {
+	h := hashToken(raw)
+	env.tokens.tokens[h] = &model.RefreshToken{
+		TokenHash: h,
+		UserID:    userID,
+		ExpiresAt: time.Now().Add(720 * time.Hour),
+		CreatedAt: time.Now(),
+	}
+	return h
+}
+
+// pointJWTAt makes the fake JWT provider mint `raw` as the next refresh token,
+// stored under the same hash the service computes when `raw` is presented —
+// so rotation chains can be exercised end to end.
+func pointJWTAt(env *authTestEnv, raw string) string {
+	env.jwt.refreshRaw = raw
+	env.jwt.refreshHash = hashToken(raw)
+	return env.jwt.refreshHash
+}
+
+func TestRefreshAccessToken_LostResponseRetrySucceeds(t *testing.T) {
+	// THE desktop/iOS "re-login several times a day" regression: the response
+	// carrying the rotated cookie is lost (radio drop, client timeout, app
+	// backgrounded), the client retries with the only token it ever held.
+	// That retry must succeed — the successor was never used and its raw
+	// value died with the lost response, so nobody else can ever present it.
+	env := setupAuthService()
+	ctx := context.Background()
+	user := &model.User{ID: "user-lost", Email: "l@x.io", DisplayName: "L", SystemRole: model.SystemRoleMember, Status: "active"}
+	env.users.users[user.ID] = user
+	hashA := seedRefreshToken(env, user.ID, "raw-A")
+
+	hashB := pointJWTAt(env, "raw-B")
+	if _, _, err := env.svc.RefreshAccessToken(ctx, "raw-A"); err != nil {
+		t.Fatalf("first refresh: %v", err)
+	}
+	// …the response with raw-B never reaches the client…
+
+	hashC := pointJWTAt(env, "raw-C")
+	access, newRefresh, err := env.svc.RefreshAccessToken(ctx, "raw-A")
+	if err != nil {
+		t.Fatalf("lost-response retry with the old token must succeed, got: %v", err)
+	}
+	if access == "" || newRefresh != "raw-C" {
+		t.Fatalf("retry: access=%q newRefresh=%q, want fresh successor raw-C", access, newRefresh)
+	}
+	// The unreachable orphan successor is revoked…
+	if _, ok := env.tokens.tokens[hashB]; ok {
+		t.Error("expected the orphaned successor to be revoked on reuse")
+	}
+	// …and the presented token now chains to the new successor.
+	if got := env.tokens.tokens[hashA].SupersededBy; got != hashC {
+		t.Errorf("SupersededBy = %q, want %q", got, hashC)
+	}
+	// The delivered successor keeps working.
+	pointJWTAt(env, "raw-D")
+	if _, _, err := env.svc.RefreshAccessToken(ctx, "raw-C"); err != nil {
+		t.Fatalf("refresh with delivered successor: %v", err)
+	}
+}
+
+func TestRefreshAccessToken_ReplayAfterSuccessorUsedIsRejected(t *testing.T) {
+	// Rotation's replay protection stays intact: once the successor chain is
+	// alive (the real client moved on), presenting the old token means two
+	// parties hold live tokens — reject and revoke it.
+	env := setupAuthService()
+	ctx := context.Background()
+	user := &model.User{ID: "user-replay", Email: "r@x.io", DisplayName: "R", SystemRole: model.SystemRoleMember, Status: "active"}
+	env.users.users[user.ID] = user
+	hashA := seedRefreshToken(env, user.ID, "raw-A")
+
+	pointJWTAt(env, "raw-B")
+	if _, _, err := env.svc.RefreshAccessToken(ctx, "raw-A"); err != nil {
+		t.Fatalf("first refresh: %v", err)
+	}
+	pointJWTAt(env, "raw-C")
+	if _, _, err := env.svc.RefreshAccessToken(ctx, "raw-B"); err != nil {
+		t.Fatalf("successor refresh: %v", err)
+	}
+
+	pointJWTAt(env, "raw-D")
+	if _, _, err := env.svc.RefreshAccessToken(ctx, "raw-A"); err == nil {
+		t.Fatal("replaying a token whose successor was already used must be rejected")
+	}
+	if _, ok := env.tokens.tokens[hashA]; ok {
+		t.Error("expected the replayed token to be revoked")
+	}
+}
+
+func TestRefreshAccessToken_MarkRotatedFailureFallsBackToDelete(t *testing.T) {
+	// If the rotated-stamp write fails, the presented token must not stay
+	// reusable with no successor linkage (unlimited replay) — fall back to
+	// the hard delete.
+	env := setupAuthService()
+	ctx := context.Background()
+	user := &model.User{ID: "user-fb", Email: "f@x.io", DisplayName: "F", SystemRole: model.SystemRoleMember, Status: "active"}
+	env.users.users[user.ID] = user
+	hashA := seedRefreshToken(env, user.ID, "raw-A")
+	env.tokens.rotateErr = errors.New("dynamo down")
+
+	pointJWTAt(env, "raw-B")
+	if _, _, err := env.svc.RefreshAccessToken(ctx, "raw-A"); err != nil {
+		t.Fatalf("refresh should still succeed when the stamp fails: %v", err)
+	}
+	if _, ok := env.tokens.tokens[hashA]; ok {
+		t.Error("expected fallback deletion of the presented token when the rotated-stamp write fails")
 	}
 }
 

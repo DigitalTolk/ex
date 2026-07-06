@@ -177,9 +177,21 @@ func TestReindexer_StartIsIdempotentWhileRunning(t *testing.T) {
 }
 
 func TestNewReindexer_LiveDeps(t *testing.T) {
-	r := NewReindexer(NewClient("http://example.test"), &fakeSources{}, newFakeStore())
+	store := newFakeStore()
+	// A "running" record with an epoch-old heartbeat: reading it back
+	// through Status drives the default wall clock the constructor
+	// installs, which must report the run as interrupted.
+	_ = store.PutSearchStatus(context.Background(), searchJobReindex, ReindexProgress{Running: true, UpdatedAt: 1})
+	r := NewReindexer(NewClient("http://example.test"), &fakeSources{}, store)
 	if r == nil {
 		t.Fatal("expected non-nil reindexer")
+	}
+	st, err := r.Status(context.Background())
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if st.Running || st.LastError == "" {
+		t.Errorf("Status = %+v, want stale heartbeat reported interrupted via the real clock", st)
 	}
 }
 

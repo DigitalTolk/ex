@@ -49,6 +49,23 @@ func TestMessageService_WriteUnreadSeq(t *testing.T) {
 	}
 }
 
+// The webhook sentinel author has no membership row — the seq still bumps
+// (recipients' unread counts must advance) but the author last-read mark is
+// skipped. Regression: attempting it WARNed "store: item not found" on every
+// single webhook post.
+func TestMessageService_WriteUnreadSeq_WebhookSentinelSkipsLastRead(t *testing.T) {
+	svc, _, _, _, _ := setupMessageService()
+	seqStore := &mockUnreadSeqStore{}
+
+	svc.writeUnreadSeq(context.Background(), seqStore, "ch1", WebhookAuthorID)
+	if seqStore.count("ch1") != 1 {
+		t.Errorf("MessageSeq = %d, want 1 (recipients must still see unread)", seqStore.count("ch1"))
+	}
+	if _, ok := seqStore.lastRead("ch1", WebhookAuthorID); ok {
+		t.Error("webhook sentinel must not get a last-read mark (it has no membership row)")
+	}
+}
+
 // IncrementMessageSeq failing must not set the author's last-read (and must not
 // panic) — unread tracking is best-effort, message delivery is not.
 func TestMessageService_WriteUnreadSeq_IncrementErrorIsNonFatal(t *testing.T) {

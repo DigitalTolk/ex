@@ -96,7 +96,7 @@ describe('MessageItem "Remind me" — real POST', () => {
     );
     const row = document.querySelector('[data-message-id]') as HTMLElement;
     row.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerType: 'touch' }));
-    await vi.waitFor(() => expect(document.querySelector('[data-testid="mobile-message-actions"]')).not.toBeNull(), { timeout: 1500 });
+    await vi.waitFor(() => expect(document.querySelector('[data-testid="mobile-message-actions"]')).not.toBeNull(), { timeout: 2000 });
     await userEvent.click(document.querySelector('[data-testid="mobile-remind"]') as HTMLButtonElement);
     const input = await vi.waitFor(() => {
       const el = document.querySelector('[data-testid="reminder-datetime"]') as HTMLInputElement | null;

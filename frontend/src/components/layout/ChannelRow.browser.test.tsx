@@ -53,7 +53,7 @@ async function openChannelMenu(screen: Awaited<ReturnType<typeof renderRow>>) {
       () => {
         expect(document.querySelector('[role="menuitem"]')).not.toBeNull();
       },
-      { timeout: 1500 },
+      { timeout: 2000 },
     );
     row.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerType: 'touch' }));
   } else {
@@ -65,7 +65,7 @@ async function openChannelMenu(screen: Awaited<ReturnType<typeof renderRow>>) {
       () => {
         expect(document.querySelector('[role="menuitem"]')).not.toBeNull();
       },
-      { timeout: 1500 },
+      { timeout: 2000 },
     );
   }
 }

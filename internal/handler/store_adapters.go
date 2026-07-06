@@ -191,7 +191,7 @@ func (a *ConversationStoreAdapter) ListAllConversations(ctx context.Context) ([]
 // on the channel store, last-read on the membership store) and conversations
 // (both on the conversation store) share the same MessageService unread path.
 type UnreadSeqAdapter struct {
-	incr    func(ctx context.Context, parentID string) (int64, error)
+	incr     func(ctx context.Context, parentID string) (int64, error)
 	lastRead func(ctx context.Context, parentID, userID string, seq int64) error
 }
 
@@ -354,6 +354,9 @@ func (a *TokenStoreAdapter) GetRefreshToken(ctx context.Context, tokenHash strin
 func (a *TokenStoreAdapter) DeleteRefreshToken(ctx context.Context, tokenHash string) error {
 	return a.s.Delete(ctx, tokenHash)
 }
+func (a *TokenStoreAdapter) MarkRefreshTokenRotated(ctx context.Context, tokenHash string, rotatedAt time.Time, supersededBy string) error {
+	return a.s.MarkRotated(ctx, tokenHash, rotatedAt, supersededBy)
+}
 func (a *TokenStoreAdapter) DeleteAllRefreshTokensForUser(ctx context.Context, userID string) error {
 	return a.s.DeleteAllForUser(ctx, userID)
 }
@@ -439,4 +442,3 @@ func (a *ParentIndexAdapter) ListFileIndex(ctx context.Context, parentID string)
 	}
 	return out, nil
 }
-

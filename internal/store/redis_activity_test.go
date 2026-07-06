@@ -1,3 +1,5 @@
+//go:build integration
+
 package store
 
 import (
@@ -7,16 +9,13 @@ import (
 	"time"
 
 	"github.com/DigitalTolk/ex/internal/model"
-	"github.com/alicebob/miniredis/v2"
 	"github.com/redis/go-redis/v9"
 )
 
-func setupActivityStore(t *testing.T) (*RedisActivityStore, *miniredis.Miniredis) {
+func setupActivityStore(t *testing.T) (*RedisActivityStore, *redis.Client) {
 	t.Helper()
-	mr := miniredis.RunT(t)
-	client := redis.NewClient(&redis.Options{Addr: mr.Addr(), MaxRetries: -1, DialTimeout: 150 * time.Millisecond})
-	t.Cleanup(func() { _ = client.Close() })
-	return NewRedisActivityStore(client), mr
+	client := storeRedisClient(t)
+	return NewRedisActivityStore(client), client
 }
 
 func activityAt(id string, at time.Time) *model.ActivityItem {
@@ -161,9 +160,9 @@ func TestRedisActivityStore_UnreadCountError(t *testing.T) {
 }
 
 func TestRedisActivityStore_ClientErrors(t *testing.T) {
-	s, mr := setupActivityStore(t)
+	s, mrClient := setupActivityStore(t)
 	ctx := context.Background()
-	mr.Close() // every command now errors
+	_ = mrClient.Close() // closed client: every command now errors
 	if err := s.AddActivity(ctx, "u-1", activityAt("a", time.Now())); err == nil {
 		t.Error("AddActivity on closed redis should error")
 	}

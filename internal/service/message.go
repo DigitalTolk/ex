@@ -63,6 +63,11 @@ type MessageNotifier interface {
 	NotifyForMessage(ctx context.Context, msg *model.Message, parentType string, threadRoot *model.Message)
 }
 
+// WebhookAuthorID is the sentinel author stamped on incoming-webhook posts.
+// It is not a real user: it has no membership rows and no read state, so
+// per-user bookkeeping (e.g. the author last-read mark) must skip it.
+const WebhookAuthorID = "webhook"
+
 type MessageIndexer interface {
 	IndexMessage(ctx context.Context, msg *model.Message, parentType string) error
 	DeleteMessage(ctx context.Context, id string) error
@@ -290,6 +295,12 @@ func (s *MessageService) writeUnreadSeq(ctx context.Context, store UnreadSeqStor
 		slog.Warn("unread seq increment failed", "parentID", parentID, "error", err)
 		return
 	}
+	// The webhook sentinel is not a member and keeps no read state — marking
+	// it read can only fail ("store: item not found" WARN on every webhook
+	// post). Recipients' unread still bumps via the seq increment above.
+	if authorID == WebhookAuthorID {
+		return
+	}
 	if err := store.SetLastRead(ctx, parentID, authorID, seq); err != nil {
 		slog.Warn("author last-read mark failed", "parentID", parentID, "userID", authorID, "error", err)
 	}
@@ -459,7 +470,6 @@ func (s *MessageService) Send(ctx context.Context, userID, parentID, parentType,
 
 	s.indexMessage(ctx, msg, parentType)
 
-
 	// Thread reply: republish the authoritative parent so subscribers see
 	// the new replyCount / avatar stack without a re-fetch. The metadata
 	// itself was already persisted before message.new to keep /threads
@@ -497,7 +507,7 @@ func (s *MessageService) SendWebhook(ctx context.Context, in WebhookMessageInput
 	}
 	authorID := in.AuthorID
 	if authorID == "" {
-		authorID = "webhook"
+		authorID = WebhookAuthorID
 	}
 	if parentID == "" {
 		return nil, errors.New("message: parent required")
@@ -559,9 +569,7 @@ func (s *MessageService) followMentionedThreadUsers(ctx context.Context, msg *mo
 		if mention.UserID == "" || mention.UserID == msg.AuthorID {
 			continue
 		}
-		if _, dup := seen[mention.UserID]; dup {
-			continue
-		}
+		// ParseMentions already de-duplicates users, so no dup-check here.
 		if err := s.checkAccess(ctx, mention.UserID, msg.ParentID, parentType); err != nil {
 			continue
 		}

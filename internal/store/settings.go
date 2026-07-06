@@ -50,7 +50,7 @@ func (s *SettingsStoreImpl) GetSettings(ctx context.Context) (*model.WorkspaceSe
 		return nil, ErrNotFound
 	}
 	var item settingsItem
-	if err := attributevalue.UnmarshalMap(out.Item, &item); err != nil { // coverage-ignore: round-trip of an item this store wrote; cannot fail
+	if err := attributevalue.UnmarshalMap(out.Item, &item); err != nil {
 		return nil, fmt.Errorf("store: unmarshal settings: %w", err)
 	}
 	return &item.WorkspaceSettings, nil
@@ -67,11 +67,8 @@ func (s *SettingsStoreImpl) PutSettings(ctx context.Context, ws *model.Workspace
 		SK:                settingsSK(),
 		WorkspaceSettings: *ws,
 	}
-	av, err := attributevalue.MarshalMap(item)
-	if err != nil { // coverage-ignore: settingsItem has only scalar/string/slice fields; MarshalMap cannot fail
-		return fmt.Errorf("store: marshal settings: %w", err)
-	}
-	_, err = s.Client.PutItem(ctx, &dynamodb.PutItemInput{
+	av := mustAttrs(attributevalue.MarshalMap(item))
+	_, err := s.Client.PutItem(ctx, &dynamodb.PutItemInput{
 		TableName: aws.String(s.Table),
 		Item:      av,
 	})

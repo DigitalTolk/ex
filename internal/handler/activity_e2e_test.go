@@ -1,3 +1,5 @@
+//go:build integration
+
 package handler
 
 import (
@@ -12,7 +14,6 @@ import (
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/DigitalTolk/ex/internal/service"
 	"github.com/DigitalTolk/ex/internal/store"
-	"github.com/alicebob/miniredis/v2"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -35,8 +36,7 @@ func (e2eNotifier) NotifyDirect(context.Context, string, service.Notification) {
 // REAL handler → ReminderService → Redis store, then reads it back — catching
 // JSON-decode / validation / round-trip breaks the mocked handler tests can't.
 func TestActivityHandler_CreateReminder_EndToEnd(t *testing.T) {
-	mr := miniredis.RunT(t)
-	client := redis.NewClient(&redis.Options{Addr: mr.Addr(), MaxRetries: -1, DialTimeout: 150 * time.Millisecond})
+	client := redis.NewClient(&redis.Options{Addr: redisAddrForTest(t)})
 	t.Cleanup(func() { _ = client.Close() })
 
 	activitySvc := service.NewActivityService(store.NewRedisActivityStore(client), &stubPublisher{})

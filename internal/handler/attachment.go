@@ -132,9 +132,6 @@ func (h *AttachmentHandler) List(w http.ResponseWriter, r *http.Request) {
 		writeInternalError(w, r, "list_error", err)
 		return
 	}
-	if atts == nil { // coverage-ignore: GetManyForUser returns a make()-initialized slice that is never nil; coercion is defensive against a future contract change.
-		atts = []*model.Attachment{}
-	}
 	writeJSON(w, http.StatusOK, atts)
 }
 

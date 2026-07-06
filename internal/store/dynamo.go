@@ -63,7 +63,7 @@ func New(ctx context.Context, cfg DBConfig) (*DB, error) {
 	}
 
 	awsCfg, err := awsconfig.LoadDefaultConfig(ctx, opts...)
-	if err != nil { // coverage-ignore: LoadDefaultConfig with only a region fails only on a malformed on-disk AWS config; not reachable in tests
+	if err != nil {
 		return nil, fmt.Errorf("store: load aws config: %w", err)
 	}
 
@@ -177,7 +177,7 @@ func (db *DB) EnsureTable(ctx context.Context) error {
 	waiter := dynamodb.NewTableExistsWaiter(db.Client)
 	if err := waiter.Wait(ctx, &dynamodb.DescribeTableInput{
 		TableName: aws.String(db.Table),
-	}, 2*time.Minute); err != nil { // coverage-ignore: dev-only table bootstrap; table-never-active is an infra timeout, not reachable against a healthy local instance
+	}, 2*time.Minute); err != nil {
 		return fmt.Errorf("store: wait for table: %w", err)
 	}
 
@@ -260,7 +260,7 @@ func threadFollowGSI1PK(parentID, threadRootID string) string {
 // fetched with one Query instead of scanning the parent's message partition.
 // threadRootID is a globally-unique message ULID, so it alone identifies the
 // thread. Only reply rows (ParentMessageID != "") carry this key.
-func threadGSI1PK(threadRootID string) string { return "THREAD#" + threadRootID }
+func threadGSI1PK(threadRootID string) string  { return "THREAD#" + threadRootID }
 func userStateSK(kind, targetID string) string { return "STATE#" + kind + "#" + targetID }
 func webhookPK(id string) string               { return "WEBHOOK#" + id }
 func webhookSK() string                        { return "META" }

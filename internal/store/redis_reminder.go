@@ -12,9 +12,9 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-func reminderDueKey() string                { return "reminders:due" }
-func reminderUserKey(userID string) string  { return "reminders:user:" + userID }
-func reminderPayloadKey(id string) string   { return "reminder:" + id }
+func reminderDueKey() string               { return "reminders:due" }
+func reminderUserKey(userID string) string { return "reminders:user:" + userID }
+func reminderPayloadKey(id string) string  { return "reminder:" + id }
 
 // reminderPayloadBuffer is how long a reminder's payload outlives its fire time
 // before Redis reclaims it, covering a poller that is briefly down. The due-queue
@@ -43,10 +43,7 @@ func NewRedisReminderStore(client *redis.Client) *RedisReminderStore {
 // ScheduleReminder persists a reminder and indexes it in the global due queue
 // and the owner's index.
 func (s *RedisReminderStore) ScheduleReminder(ctx context.Context, r *model.Reminder) error {
-	payload, err := json.Marshal(r)
-	if err != nil { // coverage-ignore: Reminder is scalar fields; Marshal cannot fail
-		return fmt.Errorf("store: marshal reminder: %w", err)
-	}
+	payload := mustJSON(json.Marshal(r))
 	ttl := max(time.Until(r.RemindAt)+reminderPayloadBuffer, reminderPayloadBuffer)
 	score := float64(r.RemindAt.UnixMilli())
 	pipe := s.client.Pipeline()
@@ -69,7 +66,7 @@ func (s *RedisReminderStore) getReminder(ctx context.Context, id string) (*model
 		return nil, fmt.Errorf("store: get reminder: %w", err)
 	}
 	r, ok := decodeReminder(raw)
-	if !ok { // coverage-ignore: round-trip of a value this store wrote
+	if !ok {
 		return nil, fmt.Errorf("store: unmarshal reminder %q", id)
 	}
 	return r, nil
@@ -111,7 +108,7 @@ func (s *RedisReminderStore) ListPendingReminders(ctx context.Context, userID st
 		return nil, nil
 	}
 	vals, err := s.client.MGet(ctx, payloadKeysFor(ids)...).Result()
-	if err != nil { // coverage-ignore: same transport failure as the ZRANGE above, which the closed-client test exercises
+	if err != nil {
 		return nil, fmt.Errorf("store: list reminders mget: %w", err)
 	}
 	now := s.now()
@@ -197,7 +194,7 @@ func (s *RedisReminderStore) ClaimDueReminders(ctx context.Context, limit int) (
 	// One MGET for all claimed payloads, then one pipeline for the per-id cleanup
 	// — instead of a GET + ZREM + DEL round-trip per reminder.
 	vals, err := s.client.MGet(ctx, payloadKeysFor(ids)...).Result()
-	if err != nil { // coverage-ignore: same transport failure as the claim script above, which the closed-client test exercises
+	if err != nil {
 		return nil, fmt.Errorf("store: claim due reminders mget: %w", err)
 	}
 	claimed := make([]*model.Reminder, 0, len(vals))
@@ -221,7 +218,7 @@ func (s *RedisReminderStore) ClaimDueReminders(ctx context.Context, limit int) (
 		// Cleanup is best-effort: the reminders are already claimed and will fire
 		// regardless. A failure leaves a payload+index entry behind, but the
 		// past-due sweep in ListPendingReminders keeps it out of the pending list.
-		if _, err := pipe.Exec(ctx); err != nil { // coverage-ignore: transport failure exercised by the closed-client claim test
+		if _, err := pipe.Exec(ctx); err != nil {
 			slog.Warn("reminder post-claim cleanup failed; entries swept on next list", "error", err)
 		}
 	}

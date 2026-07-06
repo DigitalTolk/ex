@@ -22,6 +22,9 @@ export default defineConfig({
       'react-dom/client',
       'react-virtuoso',
       'zod',
+      // Pulled in via ErrorBoundary → @/lib/sentry; pre-bundle it or Vite
+      // discovers it mid-run and the dep-reload fails in-flight test files.
+      '@sentry/react',
     ],
   },
   test: {
@@ -101,6 +104,16 @@ export default defineConfig({
         // localStorage never exercises. Pulled into the browser graph via
         // NotificationContext; graded in jsdom, not here.
         'src/lib/notification-dedup.ts',
+        // Sentry init/report shim — DSN-gated singleton exhaustively
+        // unit-tested in jsdom (sentry.test.ts). Pulled into the browser
+        // graph via ErrorBoundary; graded in jsdom, not here.
+        'src/lib/sentry.ts',
+        // Input-recency tracker for the notification ack gate — a pure
+        // event/clock helper exhaustively unit-tested in jsdom
+        // (user-activity.test.ts). Pulled into the browser graph via
+        // NotificationContext (whose ack-gating branches ARE exercised in
+        // the browser suite); graded in jsdom, not here.
+        'src/lib/user-activity.ts',
         // Activity stream + reminders — pure date math, a React-Query hook
         // module, the activity page, and the custom-time dialog are all
         // exhaustively unit-tested in jsdom (reminder-times.test, useActivity.test,

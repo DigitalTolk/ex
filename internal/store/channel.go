@@ -5,12 +5,12 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/expression"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
-	"github.com/DigitalTolk/ex/internal/model"
 )
 
 // ChannelStore defines operations on Channel entities.
@@ -62,10 +62,7 @@ func (s *ChannelStoreImpl) Create(ctx context.Context, ch *model.Channel) error 
 		item.GSI2SK = ch.CreatedAt.Format(time.RFC3339Nano) + "#" + ch.ID
 	}
 
-	av, err := attributevalue.MarshalMap(item)
-	if err != nil { // coverage-ignore: channelItem has only scalar/string/time fields; MarshalMap cannot fail
-		return fmt.Errorf("store: marshal channel: %w", err)
-	}
+	av := mustAttrs(attributevalue.MarshalMap(item))
 
 	// Slug-lock item: a separate key derived from the slug. Both
 	// the channel item and the slug-lock are written in one
@@ -75,17 +72,14 @@ func (s *ChannelStoreImpl) Create(ctx context.Context, ch *model.Channel) error 
 	// service-layer GetBySlug pre-check is the fast path for the
 	// common case but isn't load-bearing for correctness — this
 	// transaction is.
-	lockAV, err := attributevalue.MarshalMap(map[string]any{
+	lockAV := mustAttrs(attributevalue.MarshalMap(map[string]any{
 		"PK":        chanSlugGSI1PK(ch.Slug),
 		"SK":        metaSK(),
 		"ChannelID": ch.ID,
 		"CreatedAt": ch.CreatedAt.Format(time.RFC3339Nano),
-	})
-	if err != nil { // coverage-ignore: slug-lock map has only string fields; MarshalMap cannot fail
-		return fmt.Errorf("store: marshal channel slug lock: %w", err)
-	}
+	}))
 
-	_, err = s.Client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
+	_, err := s.Client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
 		TransactItems: []types.TransactWriteItem{
 			{
 				Put: &types.Put{
@@ -125,7 +119,7 @@ func (s *ChannelStoreImpl) GetByID(ctx context.Context, id string) (*model.Chann
 	}
 
 	var item channelItem
-	if err := attributevalue.UnmarshalMap(out.Item, &item); err != nil { // coverage-ignore: round-trip of an item this store wrote; cannot fail
+	if err := attributevalue.UnmarshalMap(out.Item, &item); err != nil {
 		return nil, fmt.Errorf("store: unmarshal channel: %w", err)
 	}
 	return &item.Channel, nil
@@ -136,10 +130,7 @@ func (s *ChannelStoreImpl) GetBySlug(ctx context.Context, slug string) (*model.C
 		expression.Key("GSI1PK").Equal(expression.Value(chanSlugGSI1PK(slug))),
 		expression.Key("GSI1SK").BeginsWith("CHAN#"),
 	)
-	expr, err := expression.NewBuilder().WithKeyCondition(keyCond).Build()
-	if err != nil { // coverage-ignore: static key-condition built from constants; Build cannot fail
-		return nil, fmt.Errorf("store: build expression: %w", err)
-	}
+	expr := mustExpr(expression.NewBuilder().WithKeyCondition(keyCond).Build())
 
 	out, err := s.Client.Query(ctx, &dynamodb.QueryInput{
 		TableName:                 aws.String(s.Table),
@@ -157,7 +148,7 @@ func (s *ChannelStoreImpl) GetBySlug(ctx context.Context, slug string) (*model.C
 	}
 
 	var item channelItem
-	if err := attributevalue.UnmarshalMap(out.Items[0], &item); err != nil { // coverage-ignore: round-trip of an item this store wrote; cannot fail
+	if err := attributevalue.UnmarshalMap(out.Items[0], &item); err != nil {
 		return nil, fmt.Errorf("store: unmarshal channel: %w", err)
 	}
 	return &item.Channel, nil
@@ -168,10 +159,7 @@ func (s *ChannelStoreImpl) GetByName(ctx context.Context, name string) (*model.C
 		expression.Key("GSI1PK").Equal(expression.Value(chanNameGSI1PK(name))),
 		expression.Key("GSI1SK").BeginsWith("CHAN#"),
 	)
-	expr, err := expression.NewBuilder().WithKeyCondition(keyCond).Build()
-	if err != nil { // coverage-ignore: static key-condition built from constants; Build cannot fail
-		return nil, fmt.Errorf("store: build expression: %w", err)
-	}
+	expr := mustExpr(expression.NewBuilder().WithKeyCondition(keyCond).Build())
 
 	out, err := s.Client.Query(ctx, &dynamodb.QueryInput{
 		TableName:                 aws.String(s.Table),
@@ -189,7 +177,7 @@ func (s *ChannelStoreImpl) GetByName(ctx context.Context, name string) (*model.C
 	}
 
 	var item channelItem
-	if err := attributevalue.UnmarshalMap(out.Items[0], &item); err != nil { // coverage-ignore: round-trip of an item this store wrote; cannot fail
+	if err := attributevalue.UnmarshalMap(out.Items[0], &item); err != nil {
 		return nil, fmt.Errorf("store: unmarshal channel: %w", err)
 	}
 	return &item.Channel, nil
@@ -209,12 +197,9 @@ func (s *ChannelStoreImpl) Update(ctx context.Context, ch *model.Channel) error 
 		item.GSI2SK = ch.CreatedAt.Format(time.RFC3339Nano) + "#" + ch.ID
 	}
 
-	av, err := attributevalue.MarshalMap(item)
-	if err != nil { // coverage-ignore: channelItem has only scalar/string/time fields; MarshalMap cannot fail
-		return fmt.Errorf("store: marshal channel: %w", err)
-	}
+	av := mustAttrs(attributevalue.MarshalMap(item))
 
-	_, err = s.Client.PutItem(ctx, &dynamodb.PutItemInput{
+	_, err := s.Client.PutItem(ctx, &dynamodb.PutItemInput{
 		TableName:           aws.String(s.Table),
 		Item:                av,
 		ConditionExpression: aws.String("attribute_exists(PK)"),
@@ -233,10 +218,7 @@ func (s *ChannelStoreImpl) Update(ctx context.Context, ch *model.Channel) error 
 // first message returns 1 — no initialization needed.
 func (s *ChannelStoreImpl) IncrementMessageSeq(ctx context.Context, channelID string) (int64, error) {
 	upd := expression.Add(expression.Name("messageSeq"), expression.Value(1))
-	expr, err := expression.NewBuilder().WithUpdate(upd).Build()
-	if err != nil { // coverage-ignore: static single-attribute ADD; Build cannot fail
-		return 0, fmt.Errorf("store: build message seq expression: %w", err)
-	}
+	expr := mustExpr(expression.NewBuilder().WithUpdate(upd).Build())
 
 	out, err := s.Client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
 		TableName:                 aws.String(s.Table),
@@ -257,7 +239,7 @@ func (s *ChannelStoreImpl) IncrementMessageSeq(ctx context.Context, channelID st
 	var attrs struct {
 		MessageSeq int64 `dynamodbav:"messageSeq"`
 	}
-	if err := attributevalue.UnmarshalMap(out.Attributes, &attrs); err != nil { // coverage-ignore: DynamoDB returns a numeric attribute we just wrote; cannot fail
+	if err := attributevalue.UnmarshalMap(out.Attributes, &attrs); err != nil {
 		return 0, fmt.Errorf("store: unmarshal message seq: %w", err)
 	}
 	return attrs.MessageSeq, nil
@@ -271,10 +253,7 @@ func (s *ChannelStoreImpl) ListPublic(ctx context.Context, limit int, lastKey st
 	filt := expression.Name("archived").Equal(expression.Value(false))
 	builder = builder.WithFilter(filt)
 
-	expr, err := builder.Build()
-	if err != nil { // coverage-ignore: static key-condition + filter built from constants; Build cannot fail
-		return nil, "", fmt.Errorf("store: build expression: %w", err)
-	}
+	expr := mustExpr(builder.Build())
 
 	input := &dynamodb.QueryInput{
 		TableName:                 aws.String(s.Table),
@@ -304,7 +283,7 @@ func (s *ChannelStoreImpl) ListPublic(ctx context.Context, limit int, lastKey st
 	channels := make([]*model.Channel, 0, len(out.Items))
 	for _, item := range out.Items {
 		var ci channelItem
-		if err := attributevalue.UnmarshalMap(item, &ci); err != nil { // coverage-ignore: round-trip of items this store wrote; cannot fail
+		if err := attributevalue.UnmarshalMap(item, &ci); err != nil {
 			return nil, "", fmt.Errorf("store: unmarshal channel: %w", err)
 		}
 		channels = append(channels, &ci.Channel)
@@ -330,14 +309,11 @@ func (s *ChannelStoreImpl) ListPublic(ctx context.Context, limit int, lastKey st
 // channels are included regardless of cluster size.
 func (s *ChannelStoreImpl) ListAll(ctx context.Context) ([]*model.Channel, error) {
 	channels := make([]*model.Channel, 0)
-	expr, err := expression.NewBuilder().WithFilter(
+	expr := mustExpr(expression.NewBuilder().WithFilter(
 		expression.Name("PK").BeginsWith("CHAN#").And(
 			expression.Name("SK").Equal(expression.Value("META")),
 		),
-	).Build()
-	if err != nil { // coverage-ignore: static filter built from constants; Build cannot fail
-		return nil, fmt.Errorf("store: build channels-scan expression: %w", err)
-	}
+	).Build())
 	var startKey map[string]types.AttributeValue
 	for {
 		out, err := s.Client.Scan(ctx, &dynamodb.ScanInput{
@@ -352,7 +328,7 @@ func (s *ChannelStoreImpl) ListAll(ctx context.Context) ([]*model.Channel, error
 		}
 		for _, item := range out.Items {
 			var ci channelItem
-			if err := attributevalue.UnmarshalMap(item, &ci); err != nil { // coverage-ignore: round-trip of items this store wrote; cannot fail
+			if err := attributevalue.UnmarshalMap(item, &ci); err != nil {
 				return nil, fmt.Errorf("store: unmarshal channel: %w", err)
 			}
 			channels = append(channels, &ci.Channel)

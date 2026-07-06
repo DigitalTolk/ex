@@ -210,14 +210,9 @@ func (h *UserHandler) BatchGetUsers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	users, err := h.userSvc.GetBatch(r.Context(), body.IDs)
-	if err != nil { // coverage-ignore: UserService.GetBatch swallows per-user errors (continue) and always returns a nil error — no request can drive this branch; the guard is defensive against a future contract change.
-		writeInternalError(w, r, "batch_error", err)
-		return
-	}
-	if users == nil { // coverage-ignore: GetBatch returns a make()-initialized slice that is never nil; coercion is defensive against a future contract change.
-		users = []*model.User{}
-	}
+	// GetBatch is best-effort by design: per-user failures drop the row and
+	// it always returns a make()-initialized slice with a nil error.
+	users, _ := h.userSvc.GetBatch(r.Context(), body.IDs)
 
 	// Return the same limited public projection as GetUser / ListUsers.
 	writeJSON(w, http.StatusOK, publicUserList(users))

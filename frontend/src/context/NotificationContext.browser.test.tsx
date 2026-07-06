@@ -8,6 +8,13 @@ import {
 } from './NotificationContext';
 import * as storageModule from '@/lib/storage';
 import { resetNotificationDedup } from '@/lib/notification-dedup';
+import { markUserActivity } from '@/lib/user-activity';
+
+const sendWSMock = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/ws-sender', () => ({
+  sendWS: (...args: unknown[]) => sendWSMock(...args),
+  setWSSender: vi.fn(),
+}));
 
 // Browser coverage for NotificationContext — exercises dispatch
 // suppression rules, sound/browser prefs, and the noop fallback when
@@ -198,6 +205,59 @@ describe('NotificationContext browser', () => {
       restore();
       // Restore focus so later tests see an active window.
       window.dispatchEvent(new Event('focus'));
+    }
+  });
+
+  it('withholds the desktop ack while the user is idle so the mobile fallback fires', async () => {
+    // Slack behavior: an open-but-abandoned laptop still shows the popup but
+    // must NOT claim the alert — no ack → the backend's deferred mobile push
+    // reaches the phone.
+    const instances: FakeNote[] = [];
+    const restore = installFakeNotification(instances);
+    try {
+      await render(<NotificationProvider><Capture /></NotificationProvider>);
+      await vi.waitFor(() => expect(captured).not.toBeNull());
+      sendWSMock.mockClear();
+
+      markUserActivity(Date.now() - 10 * 60_000); // last input 10 minutes ago
+      captured!.dispatch(basePayload({ messageID: 'm-idle' }));
+      await vi.waitFor(() => expect(instances.length).toBe(1)); // popup still surfaced
+      expect(sendWSMock).not.toHaveBeenCalled();
+
+      markUserActivity(); // user is back at the keyboard
+      captured!.dispatch(basePayload({ messageID: 'm-active' }));
+      await vi.waitFor(() => {
+        expect(sendWSMock).toHaveBeenCalledWith(
+          { type: 'notification.ack', messageID: 'm-active' },
+          expect.objectContaining({ buffer: true }),
+        );
+      });
+    } finally {
+      restore();
+      markUserActivity();
+    }
+  });
+
+  it('an idle viewer of the active conversation is NOT treated as seeing it: popup fires, no ack', async () => {
+    // “Actively viewing this parent” requires recent input — a focused window
+    // on an empty desk suppressing the popup AND acking would silently kill
+    // both the desktop banner and the mobile push.
+    const instances: FakeNote[] = [];
+    const restore = installFakeNotification(instances);
+    try {
+      await render(<NotificationProvider><Capture /></NotificationProvider>);
+      await vi.waitFor(() => expect(captured).not.toBeNull());
+      sendWSMock.mockClear();
+      markUserActivity(Date.now() - 10 * 60_000);
+      captured!.setActiveParent('conv-idle');
+      captured!.dispatch(
+        basePayload({ kind: 'message', parentType: 'conversation', parentID: 'conv-idle', authorID: 'u-other', messageID: 'm-conv-idle' }),
+      );
+      await vi.waitFor(() => expect(instances.length).toBe(1));
+      expect(sendWSMock).not.toHaveBeenCalled();
+    } finally {
+      restore();
+      markUserActivity();
     }
   });
 

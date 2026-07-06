@@ -100,10 +100,7 @@ func (s *ParentIndexStoreImpl) SetPinIndex(ctx context.Context, parentID, msgID,
 		PinnedBy:  pinnedBy,
 		PinnedAt:  pinnedAt,
 	}
-	av, err := attributevalue.MarshalMap(row)
-	if err != nil { // coverage-ignore: PinIndexRow has only string/time fields; MarshalMap cannot fail
-		return fmt.Errorf("store: marshal pin index: %w", err)
-	}
+	av := mustAttrs(attributevalue.MarshalMap(row))
 	if _, err := s.Client.PutItem(ctx, &dynamodb.PutItemInput{
 		TableName: aws.String(s.Table),
 		Item:      av,
@@ -128,10 +125,7 @@ func (s *ParentIndexStoreImpl) ListPinIndex(ctx context.Context, parentID string
 		expression.Key("PK").Equal(expression.Value(parentPK(parentID))),
 		expression.Key("SK").BeginsWith(pinSKPrefix),
 	)
-	expr, err := expression.NewBuilder().WithKeyCondition(keyCond).Build()
-	if err != nil { // coverage-ignore: static key-condition built from constants; Build cannot fail
-		return nil, fmt.Errorf("store: build pin index expression: %w", err)
-	}
+	expr := mustExpr(expression.NewBuilder().WithKeyCondition(keyCond).Build())
 	out := make([]*PinIndexRow, 0)
 	var startKey map[string]types.AttributeValue
 	for {
@@ -148,7 +142,7 @@ func (s *ParentIndexStoreImpl) ListPinIndex(ctx context.Context, parentID string
 		}
 		for _, raw := range page.Items {
 			var row PinIndexRow
-			if err := attributevalue.UnmarshalMap(raw, &row); err != nil { // coverage-ignore: round-trip of items this store wrote; cannot fail
+			if err := attributevalue.UnmarshalMap(raw, &row); err != nil {
 				return nil, fmt.Errorf("store: unmarshal pin index: %w", err)
 			}
 			out = append(out, &row)
@@ -174,10 +168,7 @@ func (s *ParentIndexStoreImpl) SetFileIndex(ctx context.Context, parentID, attac
 		AuthorID:     authorID,
 		CreatedAt:    createdAt,
 	}
-	av, err := attributevalue.MarshalMap(row)
-	if err != nil { // coverage-ignore: FileIndexRow has only string/time fields; MarshalMap cannot fail
-		return fmt.Errorf("store: marshal file index: %w", err)
-	}
+	av := mustAttrs(attributevalue.MarshalMap(row))
 	if _, err := s.Client.PutItem(ctx, &dynamodb.PutItemInput{
 		TableName: aws.String(s.Table),
 		Item:      av,
@@ -202,10 +193,7 @@ func (s *ParentIndexStoreImpl) ListFileIndex(ctx context.Context, parentID strin
 		expression.Key("PK").Equal(expression.Value(parentPK(parentID))),
 		expression.Key("SK").BeginsWith(fileSKPrefix),
 	)
-	expr, err := expression.NewBuilder().WithKeyCondition(keyCond).Build()
-	if err != nil { // coverage-ignore: static key-condition built from constants; Build cannot fail
-		return nil, fmt.Errorf("store: build file index expression: %w", err)
-	}
+	expr := mustExpr(expression.NewBuilder().WithKeyCondition(keyCond).Build())
 	out := make([]*FileIndexRow, 0)
 	var startKey map[string]types.AttributeValue
 	for {
@@ -221,7 +209,7 @@ func (s *ParentIndexStoreImpl) ListFileIndex(ctx context.Context, parentID strin
 		}
 		for _, raw := range page.Items {
 			var row FileIndexRow
-			if err := attributevalue.UnmarshalMap(raw, &row); err != nil { // coverage-ignore: round-trip of items this store wrote; cannot fail
+			if err := attributevalue.UnmarshalMap(raw, &row); err != nil {
 				return nil, fmt.Errorf("store: unmarshal file index: %w", err)
 			}
 			out = append(out, &row)
@@ -233,4 +221,3 @@ func (s *ParentIndexStoreImpl) ListFileIndex(ctx context.Context, parentID strin
 	}
 	return out, nil
 }
-

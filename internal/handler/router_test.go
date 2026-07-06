@@ -26,7 +26,7 @@ func TestNewRouterDoesNotPanic(t *testing.T) {
 	wsH := &WSHandler{}
 
 	// This is the call that panics if routes conflict.
-	router := NewRouter(&Deps{Auth: authH, User: userH, Channel: channelH, Conversation: convH, WS: wsH, JWT: jwtMgr, AppVersion: "test", AllowOrigins: []string{"*"}})
+	router := NewRouter(&Deps{Auth: authH, User: userH, Channel: channelH, Conversation: convH, WS: wsH, Activity: NewActivityHandler(nil, nil), JWT: jwtMgr, AppVersion: "test", AllowOrigins: []string{"*"}})
 
 	if router == nil {
 		t.Fatal("expected non-nil router")

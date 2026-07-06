@@ -12,14 +12,14 @@ import (
 
 // fakeActivityStore is an in-memory ActivityStore for service tests.
 type fakeActivityStore struct {
-	mu       sync.Mutex
-	items    map[string][]*model.ActivityItem
-	unread   int
-	addErr   error
-	listErr  error
-	unrErr   error
-	seenErr  error
-	seenCnt  int
+	mu      sync.Mutex
+	items   map[string][]*model.ActivityItem
+	unread  int
+	addErr  error
+	listErr error
+	unrErr  error
+	seenErr error
+	seenCnt int
 }
 
 func newFakeActivityStore() *fakeActivityStore {

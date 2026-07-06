@@ -16,6 +16,8 @@ func clearEnv(t *testing.T) {
 		"JWT_SECRET", "JWT_ACCESS_TTL", "JWT_REFRESH_TTL",
 		"SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASS", "SMTP_FROM",
 		"BASE_URL", "ONESIGNAL_APP_ID", "ONESIGNAL_REST_API_KEY",
+		"SENTRY_FRONTEND_DSN", "SENTRY_FRONTEND_TRACES_SAMPLE_RATE",
+		"SENTRY_FRONTEND_REPLAY_SESSION_SAMPLE_RATE", "SENTRY_FRONTEND_REPLAY_ERROR_SAMPLE_RATE",
 	}
 
 	saved := make(map[string]string)
@@ -94,6 +96,81 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if cfg.TrustedProxyCount != 1 {
 		t.Errorf("TrustedProxyCount = %d, want default 1", cfg.TrustedProxyCount)
+	}
+}
+
+func TestLoadSentryFrontendDSN(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("ENV", "development")
+	t.Setenv("SENTRY_FRONTEND_DSN", "https://key@o0.ingest.sentry.io/42")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.SentryFrontendDSN != "https://key@o0.ingest.sentry.io/42" {
+		t.Errorf("SentryFrontendDSN = %q", cfg.SentryFrontendDSN)
+	}
+}
+
+func TestLoadSentrySampleRates(t *testing.T) {
+	t.Run("valid rates parse", func(t *testing.T) {
+		clearEnv(t)
+		t.Setenv("ENV", "development")
+		t.Setenv("SENTRY_FRONTEND_TRACES_SAMPLE_RATE", "0.2")
+		t.Setenv("SENTRY_FRONTEND_REPLAY_SESSION_SAMPLE_RATE", "0.1")
+		t.Setenv("SENTRY_FRONTEND_REPLAY_ERROR_SAMPLE_RATE", "1")
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if cfg.SentryFrontendTracesSampleRate != 0.2 ||
+			cfg.SentryFrontendReplaySessionSampleRate != 0.1 ||
+			cfg.SentryFrontendReplayErrorSampleRate != 1 {
+			t.Errorf("rates = %v/%v/%v", cfg.SentryFrontendTracesSampleRate, cfg.SentryFrontendReplaySessionSampleRate, cfg.SentryFrontendReplayErrorSampleRate)
+		}
+	})
+
+	t.Run("unset means off", func(t *testing.T) {
+		clearEnv(t)
+		t.Setenv("ENV", "development")
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if cfg.SentryFrontendTracesSampleRate != 0 {
+			t.Errorf("TracesSampleRate = %v, want 0", cfg.SentryFrontendTracesSampleRate)
+		}
+	})
+
+	// A typo must fail Load rather than silently disable (or full-throttle)
+	// telemetry.
+	for _, bad := range []string{"abc", "-0.1", "1.5"} {
+		t.Run("rejects "+bad, func(t *testing.T) {
+			clearEnv(t)
+			t.Setenv("ENV", "development")
+			t.Setenv("SENTRY_FRONTEND_TRACES_SAMPLE_RATE", bad)
+			if _, err := Load(); err == nil {
+				t.Fatalf("Load with rate %q should fail", bad)
+			}
+		})
+	}
+
+	// Each of the three rate vars has its own error arm in Load — exercise the
+	// replay-session and replay-error arms too, not just traces.
+	for _, envVar := range []string{
+		"SENTRY_FRONTEND_REPLAY_SESSION_SAMPLE_RATE",
+		"SENTRY_FRONTEND_REPLAY_ERROR_SAMPLE_RATE",
+	} {
+		for _, bad := range []string{"abc", "2.5"} {
+			t.Run("rejects "+envVar+"="+bad, func(t *testing.T) {
+				clearEnv(t)
+				t.Setenv("ENV", "development")
+				t.Setenv(envVar, bad)
+				if _, err := Load(); err == nil {
+					t.Fatalf("Load with %s=%q should fail", envVar, bad)
+				}
+			})
+		}
 	}
 }
 

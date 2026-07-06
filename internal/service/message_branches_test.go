@@ -278,4 +278,3 @@ func TestMessage_ListAfter_TrimsToLimitAndReportsHasMore(t *testing.T) {
 		t.Error("expected hasMore=true when more than limit exist")
 	}
 }
-

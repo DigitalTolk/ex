@@ -80,6 +80,17 @@ func TestPublishManyFansOut(t *testing.T) {
 	}
 }
 
+func TestPublishManySwallowsPublishErrors(t *testing.T) {
+	p := &capturePublisher{err: errors.New("redis down")}
+	channels := []string{"a", "b", "c"}
+	// Errors are logged per channel, never propagated — every channel must
+	// still be attempted and the call must return normally.
+	PublishMany(context.Background(), p, channels, EventPing, nil)
+	if got := p.calls.Load(); got != uint64(len(channels)) {
+		t.Fatalf("calls = %d, want %d (a failing channel must not stop the fan-out)", got, len(channels))
+	}
+}
+
 func TestPublishManyMarshalError(t *testing.T) {
 	p := &capturePublisher{}
 	PublishMany(context.Background(), p, []string{"a"}, "test", make(chan int))

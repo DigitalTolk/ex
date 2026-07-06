@@ -24,7 +24,11 @@ func TestSpaHandler_ServesIndexHTML(t *testing.T) {
 		"assets/main.js": &fstest.MapFile{Data: []byte("console.log('ok')")},
 	}
 
-	spa := newSPAHandler(memFS, "abc123")
+	spa := newSPAHandler(memFS, "abc123", SentryFrontendConfig{
+		DSN:                     "https://k3y@o0.ingest.sentry.io/42",
+		TracesSampleRate:        0.25,
+		ReplaySessionSampleRate: 0.1,
+	})
 
 	tests := []struct {
 		name       string
@@ -34,6 +38,9 @@ func TestSpaHandler_ServesIndexHTML(t *testing.T) {
 	}{
 		{"root serves index with injected app meta", "/", http.StatusOK, `<meta name="app-version" content="abc123">`},
 		{"root serves index with injected build meta", "/", http.StatusOK, `<meta name="build-version" content="release-1">`},
+		{"root serves index with injected sentry meta", "/", http.StatusOK, `<meta name="sentry-dsn" content="https://k3y@o0.ingest.sentry.io/42">`},
+		{"root serves index with injected traces rate", "/", http.StatusOK, `<meta name="sentry-traces-sample-rate" content="0.25">`},
+		{"root serves index with injected replay session rate", "/", http.StatusOK, `<meta name="sentry-replay-session-sample-rate" content="0.1">`},
 		{"static file served directly", "/assets/main.js", http.StatusOK, "console.log('ok')"},
 		{"unknown path falls back to index", "/some/route", http.StatusOK, `<meta name="app-version" content="abc123">`},
 	}
@@ -54,6 +61,32 @@ func TestSpaHandler_ServesIndexHTML(t *testing.T) {
 	}
 }
 
+// Without a configured DSN, no sentry-dsn meta tag is emitted — the SPA then
+// leaves error reporting entirely uninitialized.
+func TestSpaHandler_NoSentryMetaWithoutDSN(t *testing.T) {
+	memFS := fstest.MapFS{
+		"index.html": &fstest.MapFile{Data: []byte("<html><head><title>app</title></head></html>")},
+	}
+	// Rates without a DSN are meaningless — nothing sentry-related is served.
+	spa := newSPAHandler(memFS, "abc123", SentryFrontendConfig{TracesSampleRate: 0.5})
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	spa.ServeHTTP(rec, req)
+	if strings.Contains(rec.Body.String(), "sentry-") {
+		t.Errorf("body must not contain sentry metas when no DSN is configured: %q", rec.Body.String())
+	}
+	// A DSN with zero rates serves the DSN but no rate metas (all off).
+	spa = newSPAHandler(memFS, "abc123", SentryFrontendConfig{DSN: "https://k@o0.ingest.sentry.io/1"})
+	rec = httptest.NewRecorder()
+	spa.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	if !strings.Contains(rec.Body.String(), "sentry-dsn") {
+		t.Errorf("expected the sentry-dsn meta: %q", rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "sample-rate") {
+		t.Errorf("zero rates must not emit rate metas: %q", rec.Body.String())
+	}
+}
+
 // TestSpaHandler_APIRoutesReturn404 verifies that /api/ and /auth/ paths are
 // not handled by the SPA handler.
 func TestSpaHandler_APIRoutesReturn404(t *testing.T) {
@@ -61,7 +94,7 @@ func TestSpaHandler_APIRoutesReturn404(t *testing.T) {
 		"index.html": &fstest.MapFile{Data: []byte("<html>app</html>")},
 	}
 
-	spa := newSPAHandler(memFS, "v1")
+	spa := newSPAHandler(memFS, "v1", SentryFrontendConfig{})
 
 	paths := []string{"/api/v1/users", "/api/v1/channels", "/auth/login"}
 	for _, path := range paths {

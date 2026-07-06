@@ -2,55 +2,81 @@ package pubsub
 
 import (
 	"context"
-	"encoding/json"
+	"net"
 	"testing"
 
-	"github.com/alicebob/miniredis/v2"
 	"github.com/DigitalTolk/ex/internal/events"
 )
 
+// deadRedisAddr returns an address that refuses connections (a listener bound
+// and immediately closed) — a Redis that is already gone before the first op.
+// No server is involved, so this test can run untagged.
+func deadRedisAddr(t *testing.T) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	addr := ln.Addr().String()
+	_ = ln.Close()
+	return addr
+}
+
 // NewRedisPubSub parses fine but the Ping fails when the server is gone.
-// Closing miniredis before connecting makes the dial refuse immediately,
+// Dialing an address whose listener has already closed refuses immediately,
 // exercising the ping-error wrap-and-return branch.
 func TestNewRedisPubSubPingError(t *testing.T) {
-	mr := miniredis.RunT(t)
-	addr := mr.Addr()
-	mr.Close()
-
-	if _, err := NewRedisPubSub("redis://" + addr); err == nil {
+	if _, err := NewRedisPubSub("redis://" + deadRedisAddr(t)); err == nil {
 		t.Fatal("expected ping error after server closed")
 	}
 }
 
-// Publish marshals the event before publishing; an Event whose Data is an
-// invalid json.RawMessage makes json.Marshal fail, hitting the marshal
-// error branch before any Redis call.
-func TestPublishMarshalError(t *testing.T) {
-	ps, _ := setupTestPubSub(t)
+// appendToInboxes defends itself even when reached directly: without full
+// durability wiring, or with a nil/ephemeral event, it must return without
+// touching the resolver or inbox (Publish pre-filters these today, but the
+// guards keep the fan-out safe if a future caller doesn't).
+func TestAppendToInboxesGuards(t *testing.T) {
+	ctx := context.Background()
+	evt, err := events.NewEvent(events.EventMessageNew, map[string]string{"text": "hi"})
+	if err != nil {
+		t.Fatalf("NewEvent: %v", err)
+	}
 
-	bad := &events.Event{
-		Type: events.EventMessageNew,
-		Data: json.RawMessage("not valid json"),
-	}
-	if err := ps.Publish(context.Background(), "ch", bad); err == nil {
-		t.Fatal("expected marshal error for invalid RawMessage payload")
-	}
-}
+	t.Run("no durability wiring", func(t *testing.T) {
+		ps := &RedisPubSub{}                         // neither resolver nor inbox configured
+		ps.appendToInboxes(ctx, "chan:c1", evt, nil) // must be a no-op, not a panic
+	})
 
-// A persistent event whose topic resolves to zero recipients takes the
-// early len(recipients)==0 return in appendToInboxes — no inbox writes,
-// publish still succeeds.
-func TestPublishNoRecipients(t *testing.T) {
-	ps, _ := setupDurable(t)
-	resolver := &fakeResolver{m: map[string][]string{}} // topic resolves to nil/empty
-	inbox := &captureInbox{}
-	ps.SetDurability(resolver, inbox)
+	t.Run("resolver without inbox", func(t *testing.T) {
+		ps := &RedisPubSub{resolver: &fakeResolver{m: map[string][]string{"chan:c1": {"u1"}}}}
+		ps.appendToInboxes(ctx, "chan:c1", evt, nil)
+	})
 
-	evt, _ := events.NewEvent(events.EventMessageNew, map[string]string{"text": "hi"})
-	if err := ps.Publish(context.Background(), "chan:none", evt); err != nil {
-		t.Fatalf("Publish: %v", err)
-	}
-	if got := len(inbox.seen()); got != 0 {
-		t.Errorf("inbox saw %d appends with no recipients, want 0", got)
-	}
+	t.Run("nil event", func(t *testing.T) {
+		inbox := &captureInbox{}
+		ps := &RedisPubSub{
+			resolver: &fakeResolver{m: map[string][]string{"chan:c1": {"u1"}}},
+			inbox:    inbox,
+		}
+		ps.appendToInboxes(ctx, "chan:c1", nil, nil)
+		if got := len(inbox.seen()); got != 0 {
+			t.Errorf("inbox saw %d appends for a nil event, want 0", got)
+		}
+	})
+
+	t.Run("ephemeral event", func(t *testing.T) {
+		inbox := &captureInbox{}
+		ps := &RedisPubSub{
+			resolver: &fakeResolver{m: map[string][]string{"chan:c1": {"u1"}}},
+			inbox:    inbox,
+		}
+		eph, err := events.NewEvent(events.EventNotificationNew, map[string]string{"x": "y"})
+		if err != nil {
+			t.Fatalf("NewEvent: %v", err)
+		}
+		ps.appendToInboxes(ctx, "chan:c1", eph, nil)
+		if got := len(inbox.seen()); got != 0 {
+			t.Errorf("inbox saw %d appends for an ephemeral event, want 0", got)
+		}
+	})
 }

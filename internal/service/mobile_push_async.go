@@ -74,19 +74,18 @@ func (s *AsyncMobilePushSender) Send(ctx context.Context, recipientUserID string
 		return nil
 	}
 	job := mobilePushJob{recipientUserID: recipientUserID, notification: n}
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-s.ctx.Done():
+	// Deterministic precedence: caller cancellation, then sender shutdown,
+	// then a non-blocking enqueue. (An all-in-one select picks randomly when
+	// several cases are ready — e.g. cancelled ctx + full queue — which made
+	// the outcome, and the individual arms, nondeterministic.)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if s.ctx.Err() != nil {
 		return nil
-	default:
 	}
 	select {
 	case s.queue <- job:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-s.ctx.Done():
 		return nil
 	default:
 		return errMobilePushQueueFull

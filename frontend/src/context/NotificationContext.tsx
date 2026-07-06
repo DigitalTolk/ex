@@ -5,6 +5,14 @@ import { readJSON, writeJSON } from '@/lib/storage';
 import { useLatestRef } from '@/hooks/useLatestRef';
 import { sendWS } from '@/lib/ws-sender';
 import { hasSeenNotification, recordNotification } from '@/lib/notification-dedup';
+import { isUserActive, startUserActivityTracking } from '@/lib/user-activity';
+
+// How recently the user must have interacted with a VISIBLE page for the
+// desktop to claim the alert (ack → the deferred mobile push stands down).
+// Beyond this the laptop may be open but the user is gone — withhold the ack
+// and let the mobile fallback fire, Slack-style. Duplicates (desktop popup +
+// phone buzz) are the deliberate failure direction; a lost alert is not.
+const desktopActiveWindowMs = 2 * 60_000;
 
 // ackDesktopDelivery tells the backend the desktop made the user aware of this
 // message (we surfaced it, or they were already looking at the channel), so the
@@ -134,6 +142,10 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   // another app. Window focus/blur is what actually tracks "is the app
   // active". Assume focused at start (the app launches in the foreground).
   const appFocusedRef = useRef(true);
+  // Input-recency tracking for the ack gate — idempotent, lives for the page.
+  useEffect(() => {
+    startUserActivityTracking();
+  }, []);
   useEffect(() => {
     const onFocus = () => { appFocusedRef.current = true; };
     const onBlur = () => { appFocusedRef.current = false; };
@@ -223,7 +235,11 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       activeParentRef.current &&
       activeParentRef.current === n.parentID &&
       document.visibilityState === 'visible' &&
-      appFocusedRef.current
+      appFocusedRef.current &&
+      // "Looking right at it" also requires recent input: a focused window on
+      // an abandoned desk is not a person seeing the message. When idle, fall
+      // through to a normal surface (popup, no ack) so mobile gets it too.
+      isUserActive(desktopActiveWindowMs)
     ) {
       // Suppressed because the user is looking right at it on desktop — they're
       // aware, so ack to stand the mobile fallback down (no redundant push).
@@ -299,7 +315,13 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     // fallback is then the only way the alert reaches the user.
     if (n.messageID && delivered) {
       recordNotification(n.messageID, now);
-      ackDesktopDelivery(n.messageID);
+      // Ack ONLY when someone is demonstrably at this device (visible page +
+      // recent input). A popup surfaced on an abandoned-but-open laptop must
+      // not stand the mobile push down — no ack means the backend's deferred
+      // fallback delivers to the phone, Slack-style.
+      if (isUserActive(desktopActiveWindowMs)) {
+        ackDesktopDelivery(n.messageID);
+      }
     }
   }, [permissionRef, prefsRef]);
 

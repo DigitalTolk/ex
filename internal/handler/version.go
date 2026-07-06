@@ -13,6 +13,22 @@ import (
 // frontend (lib/version-meta.ts) — keep them in sync.
 const AppVersionMetaName = "app-version"
 
+// SentryDSNMetaName is the HTML meta-tag name the SPA reads to (optionally)
+// initialize Sentry error reporting. Injected by spaHandler only when the
+// server is configured with SENTRY_FRONTEND_DSN — delivery via the served
+// HTML means the browser, the Electron shell and the Capacitor webview all
+// pick it up without any client rebuild.
+const SentryDSNMetaName = "sentry-dsn"
+
+// Sentry sample-rate meta-tag names. Injected alongside the DSN (and only
+// with one) so ops can tune performance tracing and session replay per
+// deployment without any client rebuild. Zero/absent means off.
+const (
+	SentryTracesSampleRateMetaName        = "sentry-traces-sample-rate"
+	SentryReplaySessionSampleRateMetaName = "sentry-replay-session-sample-rate"
+	SentryReplayErrorSampleRateMetaName   = "sentry-replay-error-sample-rate"
+)
+
 // BuildVersionMetaName is the HTML meta-tag name the SPA reads for display-only
 // release metadata. It must not be used for reload detection: a Git tag/SHA can
 // stay the same across frontend artifact rebuilds in local and CI workflows.

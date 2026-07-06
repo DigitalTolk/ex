@@ -31,12 +31,19 @@ COPY go.mod go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod go mod download
 COPY . .
 COPY --from=frontend /app/frontend/dist ./frontend/dist
+# The binary is compiled through Datadog Orchestrion, which weaves APM
+# instrumentation (HTTP server/client, go-redis, AWS SDK v2 — see
+# orchestrion.tool.go) into the build at compile time. This costs build time
+# only: whether traces are actually produced is a RUNTIME decision via
+# DD_TRACE_ENABLED (defaults to false in the runtime stage below), so the
+# shipped image runs untraced unless a deployment opts in. Orchestrion's
+# version is pinned through go.mod (`go run` resolves the module's version).
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     VERSION="${GIT_TAG:-${GIT_SHA}}" && \
     VERSION="${VERSION:-dev}" && \
     VERSION="$(printf '%s' "$VERSION" | cut -c1-12)" && \
-    CGO_ENABLED=0 GOOS=linux go build \
+    CGO_ENABLED=0 GOOS=linux go run github.com/DataDog/orchestrion go build \
       -ldflags="-X github.com/DigitalTolk/ex/internal/handler.BuildVersion=${VERSION}" \
       -o /ex ./cmd/server
 
@@ -51,6 +58,14 @@ FROM gcr.io/distroless/static-debian13:nonroot
 # bare command names against PATH (execvp), so `ex` below needs no path.
 COPY --from=backend /ex /usr/local/bin/ex
 EXPOSE 8080
+
+# Datadog APM is compiled in (Orchestrion, see the build stage) but OFF by
+# default — without this the injected tracer would start on boot and try to
+# reach a local agent that usually isn't there. A deployment opts in by
+# overriding: DD_TRACE_ENABLED=true, DD_AGENT_HOST=<agent>, DD_ENV=<env>
+# (plus optionals like DD_VERSION / DD_TRACE_SAMPLE_RATE).
+ENV DD_TRACE_ENABLED=false \
+    DD_SERVICE=ex
 
 # The runtime has no shell or wget, so Docker can't probe /healthz with a
 # CLI. The binary probes itself instead: `ex healthcheck` GETs the local

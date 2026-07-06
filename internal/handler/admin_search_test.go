@@ -33,7 +33,8 @@ func (s *stubReporter) IndexStats(_ context.Context) ([]search.IndexStat, error)
 // memStatusStore is an in-memory search.StatusStore (DynamoDB stand-in) so the
 // admin tests can drive a real Reindexer without a real table.
 type memStatusStore struct {
-	m map[string][]byte
+	m      map[string][]byte
+	getErr error // injected GetSearchStatus failure
 }
 
 func newMemStatusStore() *memStatusStore { return &memStatusStore{m: map[string][]byte{}} }
@@ -48,6 +49,9 @@ func (s *memStatusStore) PutSearchStatus(_ context.Context, job string, val any)
 }
 
 func (s *memStatusStore) GetSearchStatus(_ context.Context, job string, dest any) (bool, error) {
+	if s.getErr != nil {
+		return false, s.getErr
+	}
 	b, ok := s.m[job]
 	if !ok {
 		return false, nil
@@ -99,6 +103,22 @@ func makeAdminWithSearch(t *testing.T, reporter SearchStatusReporter) (*AdminHan
 	}, newMemStatusStore())
 	h.SetSearch(reporter, rx)
 	return h, srv
+}
+
+// makeAdminWithFailingStatus wires a real Reindexer whose durable status
+// store errors on every read, to exercise the status read-back arms.
+func makeAdminWithFailingStatus(t *testing.T) (*AdminHandler, *auth.JWTManager) {
+	t.Helper()
+	h, jwtMgr := setupAdminHandler(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	t.Cleanup(srv.Close)
+	status := newMemStatusStore()
+	status.getErr = errors.New("status store down")
+	rx := search.NewReindexer(search.NewClient(srv.URL), &stubReindexSources{}, status)
+	h.SetSearch(&stubReporter{}, rx)
+	return h, jwtMgr
 }
 
 func TestAdminHandler_SearchStatus_NotConfigured(t *testing.T) {
@@ -465,5 +485,49 @@ func TestAdminHandler_SearchStatus_MappingRebuildError(t *testing.T) {
 	_ = json.NewDecoder(rec.Body).Decode(&got)
 	if _, ok := got["mappingRebuildError"]; !ok {
 		t.Errorf("expected mappingRebuildError in status, got %v", got)
+	}
+}
+
+func TestAdminHandler_SearchStatus_ReindexStatusError(t *testing.T) {
+	h, jwtMgr := makeAdminWithFailingStatus(t)
+	admin := &model.User{ID: "u-adm", SystemRole: model.SystemRoleAdmin}
+	token := makeTokenForUser(jwtMgr, admin)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/search/status", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	middleware.Auth(jwtMgr)(http.HandlerFunc(h.SearchStatus)).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var resp map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if _, ok := resp["reindexError"]; !ok {
+		t.Fatalf("resp = %v, want reindexError reported", resp)
+	}
+}
+
+func TestAdminHandler_StartSearchReindex_StatusReadbackFailureStillAccepted(t *testing.T) {
+	h, jwtMgr := makeAdminWithFailingStatus(t)
+	admin := &model.User{ID: "u-adm", SystemRole: model.SystemRoleAdmin}
+	token := makeTokenForUser(jwtMgr, admin)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/search/reindex", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	middleware.Auth(jwtMgr)(http.HandlerFunc(h.StartSearchReindex)).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202 (run started; read-back failure is non-fatal)", rec.Code)
+	}
+	var prog search.ReindexProgress
+	if err := json.Unmarshal(rec.Body.Bytes(), &prog); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !prog.Running {
+		t.Fatal("fallback snapshot must report running=true")
 	}
 }
