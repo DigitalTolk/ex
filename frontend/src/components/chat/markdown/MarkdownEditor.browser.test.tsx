@@ -337,6 +337,106 @@ describe('MarkdownEditor handle + keymap branches', () => {
     expect(getComputedStyle(tooltip).zIndex).toBe('1000');
   });
 
+  it('installs the visualViewport repositioner for the lifetime of the editor', async () => {
+    // Regression (trigger half): CodeMirror never re-measures tooltip
+    // placement on visualViewport changes by itself, and iOS reports the
+    // on-screen keyboard late — without this subscription a typeahead that
+    // opened downward stays behind the keyboard for good.
+    const vv = window.visualViewport;
+    if (!vv) return; // environment without visualViewport — nothing to wire
+    const add = vi.spyOn(vv, 'addEventListener');
+    const remove = vi.spyOn(vv, 'removeEventListener');
+    try {
+      const { screen } = await mount();
+      expect(add).toHaveBeenCalledWith('resize', expect.any(Function));
+      expect(add).toHaveBeenCalledWith('scroll', expect.any(Function));
+      screen.unmount();
+      expect(remove).toHaveBeenCalledWith('resize', expect.any(Function));
+      expect(remove).toHaveBeenCalledWith('scroll', expect.any(Function));
+    } finally {
+      add.mockRestore();
+      remove.mockRestore();
+    }
+  });
+
+  it('re-places the open typeahead above the caret when the visual viewport shrinks (late iOS keyboard)', async () => {
+    // Regression (space half): placement must be computed against the VISUAL
+    // viewport — the area the keyboard leaves — not window.innerHeight. When
+    // the visual viewport ends just below the caret, the next measure pass
+    // must move the popup above. (The harness re-measures on its own cadence;
+    // in the app the repositioner above is what forces that re-measure.)
+    const vv = window.visualViewport;
+    if (!vv) return; // environment without visualViewport — nothing to drive
+    const completionProviders: CompletionProviders = {
+      users: () => [{ id: 'u1', displayName: 'Alice' }],
+      online: () => new Set(),
+      memberIds: () => null,
+      channels: () => [],
+      customEmojis: () => [],
+      skinTone: () => '',
+    };
+    const { ref } = await mount({ completionProviders });
+    // Push the editor down like a real composer (content above it) so that
+    // when the "keyboard" removes the space below, there IS room above to
+    // flip into — at the page top CM would hide the popup instead.
+    ref.current!.getElement()!.style.marginTop = '300px';
+    const view = viewOf(ref);
+    trigger(view, '@Al');
+    await waitForLabel(view, 'Alice');
+    const tooltip = await vi.waitFor(() => {
+      const el = document.querySelector('.cm-tooltip-autocomplete') as HTMLElement | null;
+      expect(el).not.toBeNull();
+      return el!;
+    });
+    // Plenty of space below → the popup opens downward (natural placement).
+    await vi.waitFor(() => expect(tooltip.classList.contains('cm-tooltip-below')).toBe(true));
+
+    // The "keyboard" arrives late: the visual viewport now ends just below
+    // the caret, leaving no room underneath.
+    const caretBottom = view.coordsAtPos(view.state.selection.main.head)?.bottom ?? 340;
+    try {
+      Object.defineProperty(vv, 'height', { value: caretBottom + 8, configurable: true });
+      vv.dispatchEvent(new Event('resize'));
+      await vi.waitFor(() => {
+        expect(tooltip.classList.contains('cm-tooltip-above')).toBe(true);
+      });
+    } finally {
+      delete (vv as unknown as Record<string, unknown>).height; // restore prototype getter
+      vv.dispatchEvent(new Event('resize'));
+    }
+  });
+
+  it('caps the typeahead list height on mobile so it fits above the on-screen keyboard', async () => {
+    // Mobile opens the popup upward into the sliver the keyboard leaves —
+    // the desktop 20rem list would swallow it. ~4 rows scroll instead.
+    const completionProviders: CompletionProviders = {
+      users: () => [{ id: 'u1', displayName: 'Alice' }],
+      online: () => new Set(),
+      memberIds: () => null,
+      channels: () => [],
+      customEmojis: () => [],
+      skinTone: () => '',
+    };
+    const { ref } = await mount({ completionProviders });
+    const view = viewOf(ref);
+    trigger(view, '@Al');
+    await waitForLabel(view, 'Alice');
+    const tooltip = await vi.waitFor(() => {
+      const el = document.querySelector('.cm-tooltip-autocomplete') as HTMLElement | null;
+      expect(el).not.toBeNull();
+      return el!;
+    });
+    const list = tooltip.querySelector('ul')!;
+    if (window.innerWidth <= 767) {
+      expect(getComputedStyle(list).maxHeight).toBe('200px'); // 12.5rem
+      // The popup may shrink below the desktop min-width on narrow screens.
+      expect(getComputedStyle(tooltip).minWidth).toBe('0px');
+    } else {
+      expect(getComputedStyle(list).maxHeight).toBe('320px'); // 20rem
+      expect(getComputedStyle(tooltip).minWidth).toBe('320px'); // 20rem
+    }
+  });
+
   it('shows no mention/channel completions without providers, but built-in emoji still resolve', async () => {
     const { ref } = await mount();
     const view = viewOf(ref);

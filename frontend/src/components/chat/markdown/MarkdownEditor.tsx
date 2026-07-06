@@ -11,7 +11,7 @@ import { mentionPills } from './extensions/mentionPills';
 import { emojiGlyphs } from './extensions/emojiGlyphs';
 import { composerAutocomplete, type CompletionProviders } from './extensions/completions';
 import { applyMark, applyBlock, getActiveFormats } from './extensions/commands';
-import { composerTooltipSpace } from './tooltipSpace';
+import { composerTooltipSpace, visualViewportRepositioner } from './tooltipSpace';
 
 export type { WysiwygEditorHandle, ActiveFormat };
 
@@ -159,6 +159,10 @@ export const MarkdownEditor = forwardRef<WysiwygEditorHandle, Props>(function Ma
           // typeahead behind the keyboard. Constraining `bottom` to the keyboard
           // top makes CM flip it ABOVE the cursor when needed.
           tooltips({ parent: document.body, position: 'fixed', tooltipSpace: composerTooltipSpace }),
+          // …and re-run that placement whenever the visual viewport changes:
+          // iOS reports the keyboard late, so the initial measurement can race
+          // it and land the popup behind the keyboard (see tooltipSpace.ts).
+          visualViewportRepositioner,
           EditorView.lineWrapping,
           EditorView.contentAttributes.of({
             'aria-label': ariaLabel,

@@ -133,6 +133,20 @@ export const composerTheme = EditorView.theme({
     // Rows never scroll internally — only the <ul> does.
     overflow: 'hidden',
   },
+  // Mobile: the popup opens ABOVE the composer (aboveCursor in
+  // completions.ts) into the sliver of screen the on-screen keyboard leaves.
+  // The desktop 20rem list would swallow most of it, so cap the list to
+  // ~4 visible rows (the rest scroll), and let the popup shrink below the
+  // desktop min-width so it never overflows a narrow viewport.
+  '@media (max-width: 767px)': {
+    '.cm-tooltip.cm-tooltip-autocomplete': {
+      minWidth: '0',
+      maxWidth: 'calc(100vw - 1rem)',
+    },
+    '.cm-tooltip.cm-tooltip-autocomplete > ul': {
+      maxHeight: '12.5rem',
+    },
+  },
   // Exactly one row is highlighted: the selected one. Hovering a row makes it
   // the selected row (see hoverSelect in completions.ts), so the mouse and the
   // keyboard drive the same single highlight — pointing at the list never hides

@@ -1,3 +1,5 @@
+import { ViewPlugin, repositionTooltips, type EditorView } from '@codemirror/view';
+
 // composerTooltipSpace bounds the CodeMirror autocomplete placement to the
 // VISUAL viewport — the area above the on-screen keyboard. CM otherwise measures
 // against window.innerHeight, which does NOT shrink when the mobile keyboard
@@ -20,3 +22,30 @@ export function composerTooltipSpace(): { top: number; left: number; bottom: num
     right: vv.offsetLeft + vv.width,
   };
 }
+
+// visualViewportRepositioner makes the space bound above REACTIVE. CodeMirror
+// re-measures tooltip placement on window resize / transactions — but NOT on
+// visualViewport changes, and iOS reports the on-screen keyboard late (often
+// after the typeahead already opened). A popup positioned against the stale
+// viewport lands BEHIND the keyboard and nothing ever re-places it. Nudging
+// repositionTooltips on every visualViewport resize/scroll re-runs placement
+// against the fresh bound the moment the keyboard geometry lands — flipping
+// the popup above the keyboard when needed while keeping CodeMirror's natural
+// above/below choice (an inline edit high on the screen still opens downward
+// into the visible space below the caret).
+export const visualViewportRepositioner = ViewPlugin.fromClass(
+  class {
+    private readonly view: EditorView;
+    private readonly reposition: () => void;
+    constructor(view: EditorView) {
+      this.view = view;
+      this.reposition = () => repositionTooltips(this.view);
+      window.visualViewport?.addEventListener('resize', this.reposition);
+      window.visualViewport?.addEventListener('scroll', this.reposition);
+    }
+    destroy() {
+      window.visualViewport?.removeEventListener('resize', this.reposition);
+      window.visualViewport?.removeEventListener('scroll', this.reposition);
+    }
+  },
+);
