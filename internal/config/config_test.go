@@ -154,6 +154,24 @@ func TestLoadSentrySampleRates(t *testing.T) {
 			}
 		})
 	}
+
+	// Each of the three rate vars has its own error arm in Load — exercise the
+	// replay-session and replay-error arms too, not just traces.
+	for _, envVar := range []string{
+		"SENTRY_FRONTEND_REPLAY_SESSION_SAMPLE_RATE",
+		"SENTRY_FRONTEND_REPLAY_ERROR_SAMPLE_RATE",
+	} {
+		for _, bad := range []string{"abc", "2.5"} {
+			t.Run("rejects "+envVar+"="+bad, func(t *testing.T) {
+				clearEnv(t)
+				t.Setenv("ENV", "development")
+				t.Setenv(envVar, bad)
+				if _, err := Load(); err == nil {
+					t.Fatalf("Load with %s=%q should fail", envVar, bad)
+				}
+			})
+		}
+	}
 }
 
 func TestLoadTrustedProxyCount(t *testing.T) {

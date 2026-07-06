@@ -4,12 +4,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/DigitalTolk/ex/internal/model"
+	"github.com/golang-jwt/jwt/v5"
 )
 
-// A token signed with a non-HMAC method must be rejected by the keyfunc's
-// signing-method guard.
+// A token signed with a non-HMAC method must be rejected by the
+// WithValidMethods HS256 pin (which runs before the keyfunc).
 func TestValidateToken_UnexpectedSigningMethod(t *testing.T) {
 	mgr := NewJWTManager("test-secret", 15*time.Minute, 720*time.Hour)
 	tok := jwt.NewWithClaims(jwt.SigningMethodNone, &model.TokenClaims{

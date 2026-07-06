@@ -1,3 +1,5 @@
+//go:build integration
+
 package store
 
 import (
@@ -6,16 +8,13 @@ import (
 	"time"
 
 	"github.com/DigitalTolk/ex/internal/model"
-	"github.com/alicebob/miniredis/v2"
 	"github.com/redis/go-redis/v9"
 )
 
-func setupReminderStore(t *testing.T) (*RedisReminderStore, *miniredis.Miniredis) {
+func setupReminderStore(t *testing.T) (*RedisReminderStore, *redis.Client) {
 	t.Helper()
-	mr := miniredis.RunT(t)
-	client := redis.NewClient(&redis.Options{Addr: mr.Addr(), MaxRetries: -1, DialTimeout: 150 * time.Millisecond})
-	t.Cleanup(func() { _ = client.Close() })
-	return NewRedisReminderStore(client), mr
+	client := storeRedisClient(t)
+	return NewRedisReminderStore(client), client
 }
 
 func reminderAt(id, user string, at time.Time) *model.Reminder {
@@ -241,9 +240,9 @@ func TestRedisReminderStore_CancelPipelineError(t *testing.T) {
 }
 
 func TestRedisReminderStore_ClientErrors(t *testing.T) {
-	s, mr := setupReminderStore(t)
+	s, mrClient := setupReminderStore(t)
 	ctx := context.Background()
-	mr.Close()
+	_ = mrClient.Close() // closed client: every command now errors
 	if err := s.ScheduleReminder(ctx, reminderAt("r", "u-1", time.Now().Add(time.Hour))); err == nil {
 		t.Error("Schedule on closed redis should error")
 	}

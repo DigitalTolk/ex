@@ -2326,3 +2326,48 @@ func TestParentIndexAdapter_Delegates(t *testing.T) {
 		t.Errorf("after deletes, expected empty; pins=%v files=%v", pins, files)
 	}
 }
+
+// typelessSigner serves objects with no Content-Type, like a legacy S3 object
+// PUT without one.
+type typelessSigner struct{ fakeSigner }
+
+func (s *typelessSigner) GetObject(_ context.Context, _ string) (io.ReadCloser, string, int64, time.Time, error) {
+	return io.NopCloser(strings.NewReader("body")), "", 4, time.Date(2026, 5, 2, 12, 0, 0, 0, time.UTC), nil
+}
+
+func TestAttachmentHandler_Media_EmptyContentTypeServesOctetStream(t *testing.T) {
+	st := newFakeAttachmentStore()
+	svc := service.NewAttachmentService(st, &typelessSigner{}, nil)
+	svc.SetMediaURLCache(newFakeMediaCacheH())
+	h := NewAttachmentHandler(svc)
+	att := &model.Attachment{
+		ID:        "a-notype",
+		SHA256:    "sha-notype",
+		S3Key:     "attachments/a-notype",
+		Filename:  "blob.bin",
+		Size:      4,
+		CreatedBy: "u1",
+		// No ContentType anywhere: neither the row nor the object store
+		// knows one, so the handler must default to octet-stream.
+	}
+	if err := st.Create(context.Background(), att); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	resolved, err := svc.Get(context.Background(), att.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	parts := strings.Split(resolved.URL, "/")
+	token := parts[len(parts)-2]
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/media/"+token+"/blob.bin", nil)
+	req.SetPathValue("token", token)
+	rec := httptest.NewRecorder()
+	h.Media(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Content-Type"); got != "application/octet-stream" {
+		t.Fatalf("Content-Type = %q, want application/octet-stream", got)
+	}
+}

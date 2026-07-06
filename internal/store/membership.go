@@ -56,22 +56,16 @@ func (s *MembershipStoreImpl) AddChannelMember(ctx context.Context, channel *mod
 		SK:                memberSK(member.UserID),
 		ChannelMembership: *member,
 	}
-	memberAV, err := attributevalue.MarshalMap(memberItem)
-	if err != nil { // coverage-ignore: channelMemberItem has only scalar/string/time fields; MarshalMap cannot fail
-		return fmt.Errorf("store: marshal channel member: %w", err)
-	}
+	memberAV := mustAttrs(attributevalue.MarshalMap(memberItem))
 
 	ucItem := userChannelItem{
 		PK:          userPK(member.UserID),
 		SK:          chanSK(channel.ID),
 		UserChannel: *userChan,
 	}
-	ucAV, err := attributevalue.MarshalMap(ucItem)
-	if err != nil { // coverage-ignore: userChannelItem has only scalar/string/time fields; MarshalMap cannot fail
-		return fmt.Errorf("store: marshal user channel: %w", err)
-	}
+	ucAV := mustAttrs(attributevalue.MarshalMap(ucItem))
 
-	_, err = s.Client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
+	_, err := s.Client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
 		TransactItems: []types.TransactWriteItem{
 			{
 				Put: &types.Put{
@@ -137,7 +131,7 @@ func (s *MembershipStoreImpl) GetChannelMembership(ctx context.Context, channelI
 	}
 
 	var item channelMemberItem
-	if err := attributevalue.UnmarshalMap(out.Item, &item); err != nil { // coverage-ignore: round-trip of an item this store wrote; cannot fail
+	if err := attributevalue.UnmarshalMap(out.Item, &item); err != nil {
 		return nil, fmt.Errorf("store: unmarshal channel membership: %w", err)
 	}
 	return &item.ChannelMembership, nil
@@ -148,10 +142,7 @@ func (s *MembershipStoreImpl) ListChannelMembers(ctx context.Context, channelID 
 		expression.Key("PK").Equal(expression.Value(channelPK(channelID))),
 		expression.Key("SK").BeginsWith("MEMBER#"),
 	)
-	expr, err := expression.NewBuilder().WithKeyCondition(keyCond).Build()
-	if err != nil { // coverage-ignore: static key-condition built from constants; Build cannot fail
-		return nil, fmt.Errorf("store: build expression: %w", err)
-	}
+	expr := mustExpr(expression.NewBuilder().WithKeyCondition(keyCond).Build())
 
 	// Drain every page: this is the notification audience for a channel, so a
 	// 1MB Query cap that silently truncated a large incident channel would drop
@@ -168,7 +159,7 @@ func (s *MembershipStoreImpl) ListChannelMembers(ctx context.Context, channelID 
 	members := make([]*model.ChannelMembership, 0, len(items))
 	for _, item := range items {
 		var mi channelMemberItem
-		if err := attributevalue.UnmarshalMap(item, &mi); err != nil { // coverage-ignore: round-trip of items this store wrote; cannot fail
+		if err := attributevalue.UnmarshalMap(item, &mi); err != nil {
 			return nil, fmt.Errorf("store: unmarshal channel member: %w", err)
 		}
 		members = append(members, &mi.ChannelMembership)
@@ -181,10 +172,7 @@ func (s *MembershipStoreImpl) ListUserChannels(ctx context.Context, userID strin
 		expression.Key("PK").Equal(expression.Value(userPK(userID))),
 		expression.Key("SK").BeginsWith("CHAN#"),
 	)
-	expr, err := expression.NewBuilder().WithKeyCondition(keyCond).Build()
-	if err != nil { // coverage-ignore: static key-condition built from constants; Build cannot fail
-		return nil, fmt.Errorf("store: build expression: %w", err)
-	}
+	expr := mustExpr(expression.NewBuilder().WithKeyCondition(keyCond).Build())
 
 	items, err := s.queryAll(ctx, &dynamodb.QueryInput{
 		TableName:                 aws.String(s.Table),
@@ -198,7 +186,7 @@ func (s *MembershipStoreImpl) ListUserChannels(ctx context.Context, userID strin
 	channels := make([]*model.UserChannel, 0, len(items))
 	for _, item := range items {
 		var uci userChannelItem
-		if err := attributevalue.UnmarshalMap(item, &uci); err != nil { // coverage-ignore: round-trip of items this store wrote; cannot fail
+		if err := attributevalue.UnmarshalMap(item, &uci); err != nil {
 			return nil, fmt.Errorf("store: unmarshal user channel: %w", err)
 		}
 		channels = append(channels, &uci.UserChannel)
@@ -250,7 +238,7 @@ func (s *MembershipStoreImpl) UserChannelNotifPrefs(ctx context.Context, channel
 			}
 			for _, item := range out.Responses[s.Table] {
 				var uc model.UserChannel
-				if err := attributevalue.UnmarshalMap(item, &uc); err != nil { // coverage-ignore: round-trip of rows this store wrote; cannot fail
+				if err := attributevalue.UnmarshalMap(item, &uc); err != nil {
 					return nil, fmt.Errorf("store: unmarshal notif pref row: %w", err)
 				}
 				if uc.UserID != "" {
@@ -306,18 +294,12 @@ func (s *MembershipStoreImpl) SetUserChannelNotifPrefs(ctx context.Context, chan
 func (s *MembershipStoreImpl) UpdateChannelRole(ctx context.Context, channelID, userID string, role model.ChannelRole) error {
 	// Update both the channel-side membership and user-side channel items.
 	memberUpdate := expression.Set(expression.Name("role"), expression.Value(role))
-	memberExpr, err := expression.NewBuilder().WithUpdate(memberUpdate).Build()
-	if err != nil { // coverage-ignore: static update expression built from constants; Build cannot fail
-		return fmt.Errorf("store: build member update expression: %w", err)
-	}
+	memberExpr := mustExpr(expression.NewBuilder().WithUpdate(memberUpdate).Build())
 
 	userUpdate := expression.Set(expression.Name("role"), expression.Value(role))
-	userExpr, err := expression.NewBuilder().WithUpdate(userUpdate).Build()
-	if err != nil { // coverage-ignore: static update expression built from constants; Build cannot fail
-		return fmt.Errorf("store: build user channel update expression: %w", err)
-	}
+	userExpr := mustExpr(expression.NewBuilder().WithUpdate(userUpdate).Build())
 
-	_, err = s.Client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
+	_, err := s.Client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
 		TransactItems: []types.TransactWriteItem{
 			{
 				Update: &types.Update{
@@ -390,12 +372,9 @@ func (s *MembershipStoreImpl) setUserChannelAttribute(ctx context.Context, chann
 }
 
 func (s *MembershipStoreImpl) updateUserChannel(ctx context.Context, channelID, userID string, upd expression.UpdateBuilder, label string) error {
-	expr, err := expression.NewBuilder().WithUpdate(upd).Build()
-	if err != nil { // coverage-ignore: update expression built from a single attribute name/value; Build cannot fail
-		return fmt.Errorf("store: build user channel %s expression: %w", label, err)
-	}
+	expr := mustExpr(expression.NewBuilder().WithUpdate(upd).Build())
 
-	_, err = s.Client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+	_, err := s.Client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
 		TableName:                 aws.String(s.Table),
 		Key:                       compositeKey(userPK(userID), chanSK(channelID)),
 		UpdateExpression:          expr.Update(),

@@ -429,3 +429,36 @@ func TestStream_BackfillTTLScanError(t *testing.T) {
 		t.Error("BackfillTTL on a closed client should return the scan error")
 	}
 }
+
+// parseStreamEntry is the per-entry decode Replay runs on each stream record.
+// The non-string-payload arm cannot be reached through go-redis (stream values
+// always arrive as bulk strings), so the helper is exercised directly with the
+// full matrix of skippable shapes plus the happy path.
+func TestParseStreamEntry(t *testing.T) {
+	cases := []struct {
+		name   string
+		values map[string]any
+		wantID string
+		wantOK bool
+	}{
+		{"missing payload field", map[string]any{"other": "x"}, "", false},
+		{"non-string payload", map[string]any{payloadField: 42}, "", false},
+		{"malformed JSON", map[string]any{payloadField: "not-json"}, "", false},
+		{"empty ID", map[string]any{payloadField: `{"type":"x"}`}, "", false},
+		{"well-formed", map[string]any{payloadField: `{"id":"01OK","type":"x"}`}, "01OK", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			e, ok := parseStreamEntry(tc.values)
+			if ok != tc.wantOK {
+				t.Fatalf("ok = %v, want %v", ok, tc.wantOK)
+			}
+			if e.ID != tc.wantID {
+				t.Errorf("ID = %q, want %q", e.ID, tc.wantID)
+			}
+			if raw, isStr := tc.values[payloadField].(string); ok && isStr && string(e.Payload) != raw {
+				t.Errorf("Payload = %q, want the raw payload string %q", e.Payload, raw)
+			}
+		})
+	}
+}

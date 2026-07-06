@@ -470,7 +470,6 @@ func (s *MessageService) Send(ctx context.Context, userID, parentID, parentType,
 
 	s.indexMessage(ctx, msg, parentType)
 
-
 	// Thread reply: republish the authoritative parent so subscribers see
 	// the new replyCount / avatar stack without a re-fetch. The metadata
 	// itself was already persisted before message.new to keep /threads
@@ -570,9 +569,7 @@ func (s *MessageService) followMentionedThreadUsers(ctx context.Context, msg *mo
 		if mention.UserID == "" || mention.UserID == msg.AuthorID {
 			continue
 		}
-		if _, dup := seen[mention.UserID]; dup {
-			continue
-		}
+		// ParseMentions already de-duplicates users, so no dup-check here.
 		if err := s.checkAccess(ctx, mention.UserID, msg.ParentID, parentType); err != nil {
 			continue
 		}

@@ -50,12 +50,9 @@ func (s *TokenStoreImpl) Create(ctx context.Context, token *model.RefreshToken) 
 		RefreshToken: *token,
 	}
 
-	av, err := attributevalue.MarshalMap(item)
-	if err != nil { // coverage-ignore: refreshTokenItem has only scalar/string/time fields; MarshalMap cannot fail
-		return fmt.Errorf("store: marshal refresh token: %w", err)
-	}
+	av := mustAttrs(attributevalue.MarshalMap(item))
 
-	_, err = s.Client.PutItem(ctx, &dynamodb.PutItemInput{
+	_, err := s.Client.PutItem(ctx, &dynamodb.PutItemInput{
 		TableName:           aws.String(s.Table),
 		Item:                av,
 		ConditionExpression: aws.String("attribute_not_exists(PK)"),
@@ -82,7 +79,7 @@ func (s *TokenStoreImpl) GetByHash(ctx context.Context, hash string) (*model.Ref
 	}
 
 	var item refreshTokenItem
-	if err := attributevalue.UnmarshalMap(out.Item, &item); err != nil { // coverage-ignore: round-trip of an item this store wrote; cannot fail
+	if err := attributevalue.UnmarshalMap(out.Item, &item); err != nil {
 		return nil, fmt.Errorf("store: unmarshal refresh token: %w", err)
 	}
 	return &item.RefreshToken, nil
@@ -96,11 +93,8 @@ func (s *TokenStoreImpl) MarkRotated(ctx context.Context, hash string, rotatedAt
 		Set(expression.Name("rotatedAt"), expression.Value(rotatedAt)).
 		Set(expression.Name("supersededBy"), expression.Value(supersededBy))
 	cond := expression.Name("PK").AttributeExists()
-	expr, err := expression.NewBuilder().WithUpdate(upd).WithCondition(cond).Build()
-	if err != nil { // coverage-ignore: static update+condition built from constants; Build cannot fail
-		return fmt.Errorf("store: build mark-rotated expression: %w", err)
-	}
-	_, err = s.Client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+	expr := mustExpr(expression.NewBuilder().WithUpdate(upd).WithCondition(cond).Build())
+	_, err := s.Client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
 		TableName:                 aws.String(s.Table),
 		Key:                       compositeKey(rtokenPK(hash), metaSK()),
 		UpdateExpression:          expr.Update(),
@@ -135,10 +129,7 @@ func (s *TokenStoreImpl) DeleteAllForUser(ctx context.Context, userID string) er
 
 	proj := expression.NamesList(expression.Name("PK"), expression.Name("SK"))
 
-	expr, err := expression.NewBuilder().WithFilter(filt).WithProjection(proj).Build()
-	if err != nil { // coverage-ignore: static filter+projection built from constants; Build cannot fail
-		return fmt.Errorf("store: build expression: %w", err)
-	}
+	expr := mustExpr(expression.NewBuilder().WithFilter(filt).WithProjection(proj).Build())
 
 	input := &dynamodb.ScanInput{
 		TableName:                 aws.String(s.Table),

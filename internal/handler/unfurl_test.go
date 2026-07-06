@@ -102,3 +102,14 @@ func TestUnfurlHandler_NonInternalLinkFallsThroughToWeb(t *testing.T) {
 		t.Errorf("expected web fall-through 200, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
+
+func TestUnfurlHandler_SetMessageLinksWiresResolver(t *testing.T) {
+	h := &UnfurlHandler{svc: fakeUnfurlSvc{err: errors.New("should not be called")}}
+	h.SetMessageLinks(fakeMsgLinks{preview: &service.UnfurlPreview{Kind: "message"}, internal: true})
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/unfurl?url=https://ex.test/channel/general%23msg-m1", nil)
+	rec := httptest.NewRecorder()
+	h.Get(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 via the wired resolver", rec.Code)
+	}
+}

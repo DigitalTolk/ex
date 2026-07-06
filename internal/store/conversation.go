@@ -79,10 +79,7 @@ func (s *ConversationStoreImpl) Create(ctx context.Context, conv *model.Conversa
 		SK:           metaSK(),
 		Conversation: *conv,
 	}
-	convAV, err := attributevalue.MarshalMap(convItem)
-	if err != nil { // coverage-ignore: conversationItem has only scalar/string/slice/time fields; MarshalMap cannot fail
-		return fmt.Errorf("store: marshal conversation: %w", err)
-	}
+	convAV := mustAttrs(attributevalue.MarshalMap(convItem))
 	txItems = append(txItems, types.TransactWriteItem{
 		Put: &types.Put{
 			TableName:           aws.String(s.Table),
@@ -98,10 +95,7 @@ func (s *ConversationStoreImpl) Create(ctx context.Context, conv *model.Conversa
 			SK:     memberSK(uid),
 			UserID: uid,
 		}
-		miAV, err := attributevalue.MarshalMap(mi)
-		if err != nil { // coverage-ignore: convMemberItem has only string fields; MarshalMap cannot fail
-			return fmt.Errorf("store: marshal conv member: %w", err)
-		}
+		miAV := mustAttrs(attributevalue.MarshalMap(mi))
 		txItems = append(txItems, types.TransactWriteItem{
 			Put: &types.Put{
 				TableName: aws.String(s.Table),
@@ -117,10 +111,7 @@ func (s *ConversationStoreImpl) Create(ctx context.Context, conv *model.Conversa
 			SK:               convSK(conv.ID),
 			UserConversation: *uc,
 		}
-		ucAV, err := attributevalue.MarshalMap(ucItem)
-		if err != nil { // coverage-ignore: userConversationItem has only scalar/string/time fields; MarshalMap cannot fail
-			return fmt.Errorf("store: marshal user conversation: %w", err)
-		}
+		ucAV := mustAttrs(attributevalue.MarshalMap(ucItem))
 		txItems = append(txItems, types.TransactWriteItem{
 			Put: &types.Put{
 				TableName: aws.String(s.Table),
@@ -134,7 +125,7 @@ func (s *ConversationStoreImpl) Create(ctx context.Context, conv *model.Conversa
 		return fmt.Errorf("store: conversation with %d participants exceeds transaction limit", len(conv.ParticipantIDs))
 	}
 
-	_, err = s.Client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
+	_, err := s.Client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
 		TransactItems: txItems,
 	})
 	if err != nil {
@@ -159,7 +150,7 @@ func (s *ConversationStoreImpl) GetByID(ctx context.Context, id string) (*model.
 	}
 
 	var item conversationItem
-	if err := attributevalue.UnmarshalMap(out.Item, &item); err != nil { // coverage-ignore: round-trip of an item this store wrote; cannot fail
+	if err := attributevalue.UnmarshalMap(out.Item, &item); err != nil {
 		return nil, fmt.Errorf("store: unmarshal conversation: %w", err)
 	}
 	return &item.Conversation, nil
@@ -170,10 +161,7 @@ func (s *ConversationStoreImpl) ListUserConversations(ctx context.Context, userI
 		expression.Key("PK").Equal(expression.Value(userPK(userID))),
 		expression.Key("SK").BeginsWith("CONV#"),
 	)
-	expr, err := expression.NewBuilder().WithKeyCondition(keyCond).Build()
-	if err != nil { // coverage-ignore: static key-condition built from constants; Build cannot fail
-		return nil, fmt.Errorf("store: build expression: %w", err)
-	}
+	expr := mustExpr(expression.NewBuilder().WithKeyCondition(keyCond).Build())
 
 	items, err := s.queryAll(ctx, &dynamodb.QueryInput{
 		TableName:                 aws.String(s.Table),
@@ -187,7 +175,7 @@ func (s *ConversationStoreImpl) ListUserConversations(ctx context.Context, userI
 	convs := make([]*model.UserConversation, 0, len(items))
 	for _, item := range items {
 		var uci userConversationItem
-		if err := attributevalue.UnmarshalMap(item, &uci); err != nil { // coverage-ignore: round-trip of items this store wrote; cannot fail
+		if err := attributevalue.UnmarshalMap(item, &uci); err != nil {
 			return nil, fmt.Errorf("store: unmarshal user conversation: %w", err)
 		}
 		convs = append(convs, &uci.UserConversation)
@@ -199,12 +187,9 @@ func (s *ConversationStoreImpl) ListUserConversations(ctx context.Context, userI
 // as Activated=true. Used by MessageService when the first message is sent so
 // non-creator participants can see the conversation in their sidebars.
 func (s *ConversationStoreImpl) Activate(ctx context.Context, convID string, participantIDs []string) error {
-	expr, err := expression.NewBuilder().
+	expr := mustExpr(expression.NewBuilder().
 		WithUpdate(expression.Set(expression.Name("activated"), expression.Value(true))).
-		Build()
-	if err != nil { // coverage-ignore: static update expression built from constants; Build cannot fail
-		return fmt.Errorf("store: build activate expression: %w", err)
-	}
+		Build())
 
 	txItems := make([]types.TransactWriteItem, 0, 1+len(participantIDs))
 	txItems = append(txItems, types.TransactWriteItem{
@@ -239,12 +224,9 @@ func (s *ConversationStoreImpl) Activate(ctx context.Context, convID string, par
 // Touch updates the conversation activity timestamp on both the canonical
 // conversation row and each participant's user-side sidebar row.
 func (s *ConversationStoreImpl) Touch(ctx context.Context, convID string, participantIDs []string, at time.Time) error {
-	expr, err := expression.NewBuilder().
+	expr := mustExpr(expression.NewBuilder().
 		WithUpdate(expression.Set(expression.Name("updatedAt"), expression.Value(at))).
-		Build()
-	if err != nil { // coverage-ignore: static update expression built from a time value; Build cannot fail
-		return fmt.Errorf("store: build touch conversation expression: %w", err)
-	}
+		Build())
 
 	// One TransactWriteItems instead of a sequential UpdateItem per row: a
 	// group-conversation send previously cost 1+N serial round-trips (META +
@@ -290,10 +272,7 @@ func (s *ConversationStoreImpl) Touch(ctx context.Context, convID string, partic
 // ChannelStore.IncrementMessageSeq — the shared per-parent unread counter.
 func (s *ConversationStoreImpl) IncrementMessageSeq(ctx context.Context, convID string) (int64, error) {
 	upd := expression.Add(expression.Name("messageSeq"), expression.Value(1))
-	expr, err := expression.NewBuilder().WithUpdate(upd).Build()
-	if err != nil { // coverage-ignore: static single-attribute ADD; Build cannot fail
-		return 0, fmt.Errorf("store: build conversation message seq expression: %w", err)
-	}
+	expr := mustExpr(expression.NewBuilder().WithUpdate(upd).Build())
 
 	out, err := s.Client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
 		TableName:                 aws.String(s.Table),
@@ -314,7 +293,7 @@ func (s *ConversationStoreImpl) IncrementMessageSeq(ctx context.Context, convID 
 	var attrs struct {
 		MessageSeq int64 `dynamodbav:"messageSeq"`
 	}
-	if err := attributevalue.UnmarshalMap(out.Attributes, &attrs); err != nil { // coverage-ignore: round-trip of a numeric attribute we just wrote; cannot fail
+	if err := attributevalue.UnmarshalMap(out.Attributes, &attrs); err != nil {
 		return 0, fmt.Errorf("store: unmarshal conversation message seq: %w", err)
 	}
 	return attrs.MessageSeq, nil
@@ -353,11 +332,8 @@ func (s *ConversationStoreImpl) setUserConversationAttribute(ctx context.Context
 }
 
 func (s *ConversationStoreImpl) updateUserConversation(ctx context.Context, convID, userID string, upd expression.UpdateBuilder, label string) error {
-	expr, err := expression.NewBuilder().WithUpdate(upd).Build()
-	if err != nil { // coverage-ignore: update expression built from a single attribute name/value; Build cannot fail
-		return fmt.Errorf("store: build user conv %s expression: %w", label, err)
-	}
-	_, err = s.Client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+	expr := mustExpr(expression.NewBuilder().WithUpdate(upd).Build())
+	_, err := s.Client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
 		TableName:                 aws.String(s.Table),
 		Key:                       compositeKey(userPK(userID), convSK(convID)),
 		UpdateExpression:          expr.Update(),
@@ -390,14 +366,11 @@ func (s *ConversationStoreImpl) IsMember(ctx context.Context, convID, userID str
 // (search reindex). Pages through Scan's LastEvaluatedKey.
 func (s *ConversationStoreImpl) ListAll(ctx context.Context) ([]*model.Conversation, error) {
 	convs := make([]*model.Conversation, 0)
-	expr, err := expression.NewBuilder().WithFilter(
+	expr := mustExpr(expression.NewBuilder().WithFilter(
 		expression.Name("PK").BeginsWith("CONV#").And(
 			expression.Name("SK").Equal(expression.Value("META")),
 		),
-	).Build()
-	if err != nil { // coverage-ignore: static filter built from constants; Build cannot fail
-		return nil, fmt.Errorf("store: build conversations-scan expression: %w", err)
-	}
+	).Build())
 	var startKey map[string]types.AttributeValue
 	for {
 		out, err := s.Client.Scan(ctx, &dynamodb.ScanInput{
@@ -412,7 +385,7 @@ func (s *ConversationStoreImpl) ListAll(ctx context.Context) ([]*model.Conversat
 		}
 		for _, item := range out.Items {
 			var ci conversationItem
-			if err := attributevalue.UnmarshalMap(item, &ci); err != nil { // coverage-ignore: round-trip of items this store wrote; cannot fail
+			if err := attributevalue.UnmarshalMap(item, &ci); err != nil {
 				return nil, fmt.Errorf("store: unmarshal conversation: %w", err)
 			}
 			convs = append(convs, &ci.Conversation)

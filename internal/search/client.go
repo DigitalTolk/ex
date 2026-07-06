@@ -23,8 +23,8 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 )
 
 // Client talks to Elasticsearch. Construction is intentionally
@@ -95,13 +95,22 @@ func NewAWSClient(ctx context.Context, baseURL string, signing AWSSigning) (*Cli
 	}, nil
 }
 
+// sigV4Signer is the one-method slice of *v4.Signer the transport
+// calls. Seaming it behind an interface lets tests inject a failing
+// implementation to exercise the sign-error guard in RoundTrip — the
+// real signer's only error source is an HMAC-SHA256 over arbitrary
+// bytes, which cannot fail, so the guard is otherwise unreachable.
+type sigV4Signer interface {
+	SignHTTP(ctx context.Context, credentials aws.Credentials, r *http.Request, payloadHash, service, region string, signingTime time.Time, optFns ...func(*v4.SignerOptions)) error
+}
+
 // sigV4Transport signs each outbound request with AWS SigV4 before
 // delegating to inner. Signing requires the SHA256 of the body, so we
 // drain it once, hash, and reseat a Reader of the same bytes for the
 // downstream RoundTripper to send.
 type sigV4Transport struct {
 	inner   http.RoundTripper
-	signer  *v4.Signer
+	signer  sigV4Signer
 	creds   aws.CredentialsProvider
 	region  string
 	service string
@@ -121,7 +130,7 @@ func (t *sigV4Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if err != nil {
 		return nil, fmt.Errorf("search: sigv4 retrieve credentials: %w", err)
 	}
-	if err := t.signer.SignHTTP(req.Context(), creds, req, payloadHash, t.service, t.region, time.Now()); err != nil { // coverage-ignore: v4.Signer.SignHTTP only surfaces an error from buildSignature (an HMAC-SHA256 of arbitrary bytes), which cannot fail for any input — this guard is defensive against a future SDK change.
+	if err := t.signer.SignHTTP(req.Context(), creds, req, payloadHash, t.service, t.region, time.Now()); err != nil {
 		return nil, fmt.Errorf("search: sigv4 sign: %w", err)
 	}
 	return t.inner.RoundTrip(req)
@@ -288,10 +297,7 @@ func (c *Client) PromoteIndex(ctx context.Context, name, staging string) error {
 			actions = []map[string]any{add}
 		}
 	}
-	payload, err := json.Marshal(map[string]any{"actions": actions})
-	if err != nil { // coverage-ignore: a map of string-keyed literals cannot fail to marshal.
-		return fmt.Errorf("search: marshal alias actions: %w", err)
-	}
+	payload := mustJSON(json.Marshal(map[string]any{"actions": actions}))
 	if err := c.do(ctx, http.MethodPost, "/_aliases", bytes.NewReader(payload), nil); err != nil {
 		return fmt.Errorf("search: swap alias %s -> %s: %w", name, staging, err)
 	}
@@ -455,9 +461,10 @@ func (c *Client) Bulk(ctx context.Context, index string, entries []BulkEntry) er
 		header := map[string]map[string]string{
 			"index": {"_index": index, "_id": e.ID},
 		}
-		if err := json.NewEncoder(&buf).Encode(header); err != nil { // coverage-ignore: header is a fixed map[string]map[string]string of in-function string literals; json encoding of scalar string maps cannot fail.
-			return fmt.Errorf("search: bulk header: %w", err)
-		}
+		// NDJSON action line: json.Marshal (unlike Encoder.Encode) adds no
+		// trailing newline, so append the one the bulk protocol requires.
+		buf.Write(mustJSON(json.Marshal(header)))
+		buf.WriteByte('\n')
 		if err := json.NewEncoder(&buf).Encode(e.Doc); err != nil {
 			return fmt.Errorf("search: bulk doc: %w", err)
 		}

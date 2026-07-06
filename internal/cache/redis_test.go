@@ -107,6 +107,17 @@ func TestNewRedisCache(t *testing.T) {
 			t.Fatal("expected error for bad URL")
 		}
 	})
+
+	// The constructor verifies connectivity with a PING; pointing it at a
+	// just-closed server makes the dial fail and surfaces the ping error.
+	t.Run("ping error", func(t *testing.T) {
+		mr := miniredis.RunT(t)
+		addr := mr.Addr()
+		mr.Close()
+		if _, err := NewRedisCache("redis://" + addr); err == nil {
+			t.Fatal("expected ping error against a closed server")
+		}
+	})
 }
 
 func TestGetSet(t *testing.T) {

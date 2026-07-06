@@ -1,24 +1,34 @@
 # Coverage policy
 
-All three suites gate at **≥99%** (`make check` + CI). This document explains how
-we reach a *real* 99% — including what to do with the small slice of code that
-genuinely cannot be reached by a test — without faking it.
+The backend gates at **100%** statement coverage; the two frontend suites gate
+at **≥99%** branch coverage (`make check` + CI). This document explains how we
+reach a *real* 100% on the backend — including what to do with code that at
+first sight "cannot" be reached by a test — without faking it.
 
 The order of preference is always: **(1) write a real test → (2) make the code
-testable → (3) delete dead code → (4) annotate as ignored with a justification.**
-Lowering a threshold is never an option.
+testable → (3) delete dead code.** There is **no annotation escape hatch on the
+backend anymore** — the last `// coverage-ignore` was removed when the gate
+moved to 100%. Lowering a threshold is never an option.
 
 ## 1. Write a real test
 
 Most "uncovered" code is reachable; it just needs a test that drives the
-specific condition. Two patterns cover the bulk of the backend gap:
+specific condition. The patterns that cover the bulk of the backend:
 
 - **SDK / I/O error branches** (`if err != nil { return ... }` after a DynamoDB,
-  Redis, S3, or HTTP call). Inject a fake that returns an error. For the store,
-  `DB.Client` is the `store.DynamoAPI` interface; `withFault(db, ...)` (see
-  `internal/store/fault_test.go`) routes a single operation through a wrapper
-  that returns `errInjected`, so the real error branch executes. Service- and
-  handler-layer fakes do the same for their dependencies.
+  Redis, S3, or HTTP call). Inject the failure through the real client:
+  - DynamoDB: `DB.Client` is the `store.DynamoAPI` interface; `withFault(db, ...)`
+    (see `internal/store/fault_test.go`) wraps the real testcontainer-backed
+    client and fails or *transforms* a single operation (corrupt rows for
+    unmarshal arms, truncated pages for pagination arms, unprocessed-key
+    continuations for batch arms).
+  - Redis: a `cmdFailHook` (go-redis `Hook`) attached to a real container client
+    fails exactly the named commands (`"expire"`, `"mget"`, `"ttl"`, …), so the
+    surrounding code path is genuinely executed. Races (e.g. a key deleted
+    between SCAN and MGET) are *reproduced*, not simulated — a hook deletes the
+    key through a second client at the moment the follow-up command is issued.
+  - HTTP: httptest servers that return errors/5xx, or clients pointed at closed
+    ports.
 - **Not-found / conflict branches** (conditional-check-failed, empty `GetItem`).
   Drive them with real data: create then re-create for a conflict, read a
   missing key for not-found.
@@ -29,52 +39,55 @@ races) — they belong under test.
 ## 2. Make the code testable (seams)
 
 If a branch is only unreachable because a collaborator is hard-coded, introduce
-a seam (a package-level `var fn = realFn`) and override it in a test. Prefer this
-over an ignore whenever the override test asserts something meaningful.
+a seam and override it in a test:
 
-## 3. Delete dead code
+- **Seam variable** — `var randRead = rand.Read` (internal/auth, internal/service),
+  `var webpEncode = nativewebp.Encode` (internal/service). The test swaps the
+  var, asserts the error/panic behavior, and restores it with `defer`.
+- **Narrow interface** — retype a struct field from a concrete SDK type to a
+  package-private interface with exactly the method the code calls (e.g. the
+  SigV4 `SignHTTP` seam in internal/search), so a failing fake can be injected
+  while production construction stays unchanged.
+- **Extract a pure helper** — when a guard protects against inputs the client
+  library can't produce but the *type* allows (e.g. a non-string value in a
+  Redis stream reply), extract the parsing into a package-level function and
+  unit-test both arms directly (`parseStreamEntry` in internal/eventlog).
+
+## 3. Delete dead code — including dead guards
 
 If code cannot be reached because nothing calls it, remove it. Use `staticcheck`
 / `go vet` (Go) and `knip` / `ts-prune` (frontend) to find it.
 
-## 4. Annotate as ignored — last resort, always justified
+This explicitly includes **tautological defensive guards**: a nil-coercion for
+a slice the callee provably `make()`s, an error check on a call that returns
+only nil by construction, a type assertion the library contract guarantees.
+Delete the guard, restructure to a direct assertion where appropriate, and
+leave a one-line comment stating the invariant. A guard nobody can reach is not
+safety — it is untestable noise that hides real gaps.
 
-A genuinely irreducible slice remains: defensive guards against states that the
-type system or a prior round-trip already guarantee cannot occur. Faking a test
-for these is tautological (it asserts "the guard returns an error" by forcing the
-guard to error). For these we annotate, and the gate **requires a written
-justification** for every annotation (`force-annotation-comment: true`).
+For error arms that are impossible *and must stay fatal if the impossible ever
+happens* (marshal of a fixed scalar struct, `expression.Build()` of a static
+expression, encode of a freshly allocated image), wrap the call in a `must*`
+helper that panics (`internal/store/must.go`, `internal/service/must.go`,
+`internal/handler/must.go`, `internal/search/must.go`) and unit-test the panic
+arm of the helper directly. `template.Must` is the precedent.
 
-### Backend (Go) — `// coverage-ignore:<reason>`
+## Backend gate
 
 Gate: [`github.com/vladopajic/go-test-coverage`](https://github.com/vladopajic/go-test-coverage),
-configured in `.testcoverage.yml`, run from the `Makefile` and CI. It supports
-block-level `// coverage-ignore` annotations and fails if one lacks an
-explanation.
+configured in `.testcoverage.yml` (threshold **100**), run from the `Makefile`
+and CI over `go test -tags=integration -coverprofile=coverage.out ./internal/...`.
+Only `cmd/server/main.go` (process entrypoint / DI wiring) is excluded.
 
-Allowed only for these classes:
-
-- **Marshal of a fixed struct** — `attributevalue.MarshalMap(item)` where `item`
-  has only string/number/bool/time fields can't fail. The `if err != nil` is
-  defensive.
-- **`expression.Build()` of a static expression** — a key-condition built from
-  constants in the same function never returns a build error.
-- **Round-trip unmarshal** — `UnmarshalMap` of an item this code just wrote via
-  the matching `MarshalMap`. (Unmarshal of *foreign*/legacy data is NOT in this
-  class — test it with a fault that returns a malformed item.)
-
-Example:
-
-```go
-av, err := attributevalue.MarshalMap(item)
-if err != nil { // coverage-ignore: item has only scalar fields; MarshalMap cannot fail
-    return fmt.Errorf("store: marshal: %w", err)
-}
-```
+There are **zero `// coverage-ignore` annotations** in the tree, and new ones
+are not accepted: if you believe a statement is unreachable, that belief is
+exactly the review claim that sections 2 and 3 resolve — seam it, extract it,
+or delete it.
 
 ### Frontend (TS) — `/* v8 ignore next -- <reason> */` / `/* istanbul ignore */`
 
-Allowed only for:
+The frontend suites (jsdom + browser, both ≥99% branch) still allow annotated
+ignores, only for:
 
 - **SSR / environment guards** in a browser-only app (`typeof window ===
   'undefined'`, `typeof document === 'undefined'`). Reachable only under a Node
@@ -88,6 +101,7 @@ Every frontend ignore must carry a `-- reason` after the pragma.
 
 ## Review rule
 
-An ignore annotation is a claim that code is unreachable. Treat it like any other
-claim in review: if a reviewer can describe an input that reaches it, it is not
-irreducible — remove the annotation and write the test.
+An ignore annotation (frontend) or an "unreachable" claim (backend) is a claim
+about inputs. Treat it like any other claim in review: if a reviewer can
+describe an input that reaches the code, it is not irreducible — write the
+test. If nobody can, it is dead or impossible — delete it or `must*` it.

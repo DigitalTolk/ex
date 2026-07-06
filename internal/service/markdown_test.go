@@ -515,12 +515,12 @@ func TestIsSafeURL(t *testing.T) {
 		"http://example.com":      true,
 		"HTTPS://EXAMPLE.COM":     true,
 		"mailto:x@example.com":    true,
-		"/relative/path":          true, // slash before any colon
-		"#anchor":                 true, // fragment first
-		"?q=1":                    true, // query first
-		"//cdn.example.com":       true, // scheme-relative
-		"relative":                true, // no colon at all
-		"  https://example.com  ": true, // surrounding whitespace stripped
+		"/relative/path":          true,  // slash before any colon
+		"#anchor":                 true,  // fragment first
+		"?q=1":                    true,  // query first
+		"//cdn.example.com":       true,  // scheme-relative
+		"relative":                true,  // no colon at all
+		"  https://example.com  ": true,  // surrounding whitespace stripped
 		"a b:c":                   false, // space stripped → "ab:c", unknown scheme
 		"javascript:alert(1)":     false,
 		"JavaScript:alert(1)":     false,

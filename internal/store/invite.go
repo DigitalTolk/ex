@@ -54,12 +54,9 @@ func (s *InviteStoreImpl) Create(ctx context.Context, invite *model.Invite) erro
 		Invite: stored,
 	}
 
-	av, err := attributevalue.MarshalMap(item)
-	if err != nil { // coverage-ignore: inviteItem has only scalar/string/time fields; MarshalMap cannot fail
-		return fmt.Errorf("store: marshal invite: %w", err)
-	}
+	av := mustAttrs(attributevalue.MarshalMap(item))
 
-	_, err = s.Client.PutItem(ctx, &dynamodb.PutItemInput{
+	_, err := s.Client.PutItem(ctx, &dynamodb.PutItemInput{
 		TableName:           aws.String(s.Table),
 		Item:                av,
 		ConditionExpression: aws.String("attribute_not_exists(PK)"),
@@ -86,7 +83,7 @@ func (s *InviteStoreImpl) GetByToken(ctx context.Context, token string) (*model.
 	}
 
 	var item inviteItem
-	if err := attributevalue.UnmarshalMap(out.Item, &item); err != nil { // coverage-ignore: round-trip of an item this store wrote; cannot fail
+	if err := attributevalue.UnmarshalMap(out.Item, &item); err != nil {
 		return nil, fmt.Errorf("store: unmarshal invite: %w", err)
 	}
 	return &item.Invite, nil

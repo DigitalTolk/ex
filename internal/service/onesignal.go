@@ -120,15 +120,12 @@ func (s *OneSignalPushSender) Send(ctx context.Context, recipientUserID string, 
 			"parent_message_id": n.ParentMessageID,
 		},
 	}
-	body, err := json.Marshal(payload)
-	if err != nil { // coverage-ignore: oneSignalNotificationRequest is composed solely of strings and string maps/slices; json.Marshal of such scalar data cannot fail.
-		return fmt.Errorf("onesignal: marshal request: %w", err)
-	}
+	body := mustJSONBody(json.Marshal(payload))
 	// Retry transient failures (network error / 5xx); 4xx is permanent. A push
 	// that loses to a momentary blip would otherwise just disappear.
 	attempt := func() error {
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.apiURL, bytes.NewReader(body))
-		if err != nil { // coverage-ignore: a POST to a pre-validated apiURL with a non-nil body cannot fail to construct.
+		if err != nil {
 			return backoff.Permanent(fmt.Errorf("onesignal: create request: %w", err))
 		}
 		req.Header.Set("Content-Type", "application/json")

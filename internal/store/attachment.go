@@ -58,11 +58,8 @@ func (s *AttachmentStoreImpl) Create(ctx context.Context, a *model.Attachment) e
 		GSI1SK:     attachmentPK(a.ID),
 		Attachment: *a,
 	}
-	av, err := attributevalue.MarshalMap(item)
-	if err != nil { // coverage-ignore: attachmentItem has only scalar/string/time fields; MarshalMap cannot fail
-		return fmt.Errorf("store: marshal attachment: %w", err)
-	}
-	_, err = s.Client.PutItem(ctx, &dynamodb.PutItemInput{
+	av := mustAttrs(attributevalue.MarshalMap(item))
+	_, err := s.Client.PutItem(ctx, &dynamodb.PutItemInput{
 		TableName:           aws.String(s.Table),
 		Item:                av,
 		ConditionExpression: aws.String("attribute_not_exists(PK)"),
@@ -81,14 +78,11 @@ func (s *AttachmentStoreImpl) Create(ctx context.Context, a *model.Attachment) e
 // repairs links severed by the historical edit bug) — the hot request
 // paths look attachments up by ID or hash and must never scan.
 func (s *AttachmentStoreImpl) ListAll(ctx context.Context) ([]*model.Attachment, error) {
-	expr, err := expression.NewBuilder().WithFilter(
+	expr := mustExpr(expression.NewBuilder().WithFilter(
 		expression.Name("PK").BeginsWith("ATT#").And(
 			expression.Name("SK").Equal(expression.Value(metaSK())),
 		),
-	).Build()
-	if err != nil { // coverage-ignore: static filter built from constants; Build cannot fail
-		return nil, fmt.Errorf("store: build attachments-scan expression: %w", err)
-	}
+	).Build())
 	attachments := make([]*model.Attachment, 0)
 	var startKey map[string]types.AttributeValue
 	for {
@@ -104,7 +98,7 @@ func (s *AttachmentStoreImpl) ListAll(ctx context.Context) ([]*model.Attachment,
 		}
 		for _, item := range out.Items {
 			var ai attachmentItem
-			if err := attributevalue.UnmarshalMap(item, &ai); err != nil { // coverage-ignore: round-trip of items this store wrote; cannot fail
+			if err := attributevalue.UnmarshalMap(item, &ai); err != nil {
 				return nil, fmt.Errorf("store: unmarshal attachment: %w", err)
 			}
 			a := ai.Attachment
@@ -130,7 +124,7 @@ func (s *AttachmentStoreImpl) GetByID(ctx context.Context, id string) (*model.At
 		return nil, ErrNotFound
 	}
 	var item attachmentItem
-	if err := attributevalue.UnmarshalMap(out.Item, &item); err != nil { // coverage-ignore: round-trip of an item this store wrote; cannot fail
+	if err := attributevalue.UnmarshalMap(out.Item, &item); err != nil {
 		return nil, fmt.Errorf("store: unmarshal attachment: %w", err)
 	}
 	a := item.Attachment
@@ -144,10 +138,7 @@ func (s *AttachmentStoreImpl) GetByHash(ctx context.Context, sha256 string) (*mo
 		expression.Key("GSI1PK").Equal(expression.Value(attHashGSI1PK(sha256))),
 		expression.Key("GSI1SK").BeginsWith("ATT#"),
 	)
-	expr, err := expression.NewBuilder().WithKeyCondition(keyCond).Build()
-	if err != nil { // coverage-ignore: static key-condition built from constants; Build cannot fail
-		return nil, fmt.Errorf("store: build attachment hash query: %w", err)
-	}
+	expr := mustExpr(expression.NewBuilder().WithKeyCondition(keyCond).Build())
 	out, err := s.Client.Query(ctx, &dynamodb.QueryInput{
 		TableName:                 aws.String(s.Table),
 		IndexName:                 aws.String("GSI1"),
@@ -163,7 +154,7 @@ func (s *AttachmentStoreImpl) GetByHash(ctx context.Context, sha256 string) (*mo
 		return nil, ErrNotFound
 	}
 	var item attachmentItem
-	if err := attributevalue.UnmarshalMap(out.Items[0], &item); err != nil { // coverage-ignore: round-trip of an item this store wrote; cannot fail
+	if err := attributevalue.UnmarshalMap(out.Items[0], &item); err != nil {
 		return nil, fmt.Errorf("store: unmarshal attachment: %w", err)
 	}
 	a := item.Attachment
@@ -205,7 +196,7 @@ func (s *AttachmentStoreImpl) RemoveRef(ctx context.Context, attachmentID, messa
 		return nil, fmt.Errorf("store: attachment remove ref: %w", err)
 	}
 	var item attachmentItem
-	if err := attributevalue.UnmarshalMap(out.Attributes, &item); err != nil { // coverage-ignore: round-trip of returned attributes this store wrote; cannot fail
+	if err := attributevalue.UnmarshalMap(out.Attributes, &item); err != nil {
 		return nil, fmt.Errorf("store: unmarshal attachment: %w", err)
 	}
 	a := item.Attachment

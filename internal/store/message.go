@@ -94,12 +94,9 @@ func parentPK(parentID string) string {
 func (s *MessageStoreImpl) Create(ctx context.Context, msg *model.Message) error {
 	item := newMessageItem(msg.ParentID, msg)
 
-	av, err := attributevalue.MarshalMap(item)
-	if err != nil { // coverage-ignore: messageItem has only scalar/string/slice/time fields; MarshalMap cannot fail
-		return fmt.Errorf("store: marshal message: %w", err)
-	}
+	av := mustAttrs(attributevalue.MarshalMap(item))
 
-	_, err = s.Client.PutItem(ctx, &dynamodb.PutItemInput{
+	_, err := s.Client.PutItem(ctx, &dynamodb.PutItemInput{
 		TableName:           aws.String(s.Table),
 		Item:                av,
 		ConditionExpression: aws.String("attribute_not_exists(PK) AND attribute_not_exists(SK)"),
@@ -126,7 +123,7 @@ func (s *MessageStoreImpl) GetByID(ctx context.Context, parentID, msgID string) 
 	}
 
 	var item messageItem
-	if err := attributevalue.UnmarshalMap(out.Item, &item); err != nil { // coverage-ignore: round-trip of an item this store wrote; cannot fail
+	if err := attributevalue.UnmarshalMap(out.Item, &item); err != nil {
 		return nil, fmt.Errorf("store: unmarshal message: %w", err)
 	}
 	return &item.Message, nil
@@ -154,10 +151,7 @@ func (s *MessageStoreImpl) List(ctx context.Context, parentID string, before str
 		)
 	}
 
-	expr, err := expression.NewBuilder().WithKeyCondition(keyCond).Build()
-	if err != nil { // coverage-ignore: static key-condition built from constants; Build cannot fail
-		return nil, false, fmt.Errorf("store: build expression: %w", err)
-	}
+	expr := mustExpr(expression.NewBuilder().WithKeyCondition(keyCond).Build())
 
 	// Fetch one extra to detect "has more"; one more than that when
 	// paginating because the inclusive cursor item gets stripped below.
@@ -181,7 +175,7 @@ func (s *MessageStoreImpl) List(ctx context.Context, parentID string, before str
 	messages := make([]*model.Message, 0, len(out.Items))
 	for _, item := range out.Items {
 		var mi messageItem
-		if err := attributevalue.UnmarshalMap(item, &mi); err != nil { // coverage-ignore: round-trip of items this store wrote; cannot fail
+		if err := attributevalue.UnmarshalMap(item, &mi); err != nil {
 			return nil, false, fmt.Errorf("store: unmarshal message: %w", err)
 		}
 		messages = append(messages, &mi.Message)
@@ -212,10 +206,7 @@ func (s *MessageStoreImpl) List(ctx context.Context, parentID string, before str
 // their key (Update re-stamps), so deleted replies still appear as placeholders.
 func (s *MessageStoreImpl) ListThreadReplies(ctx context.Context, threadRootID string) ([]*model.Message, error) {
 	keyCond := expression.Key("GSI1PK").Equal(expression.Value(threadGSI1PK(threadRootID)))
-	expr, err := expression.NewBuilder().WithKeyCondition(keyCond).Build()
-	if err != nil { // coverage-ignore: static key-condition built from constants; Build cannot fail
-		return nil, fmt.Errorf("store: build thread query: %w", err)
-	}
+	expr := mustExpr(expression.NewBuilder().WithKeyCondition(keyCond).Build())
 	var replies []*model.Message
 	var startKey map[string]types.AttributeValue
 	for {
@@ -232,7 +223,7 @@ func (s *MessageStoreImpl) ListThreadReplies(ctx context.Context, threadRootID s
 		}
 		for _, av := range out.Items {
 			var mi messageItem
-			if err := attributevalue.UnmarshalMap(av, &mi); err != nil { // coverage-ignore: round-trip of rows this store wrote; cannot fail
+			if err := attributevalue.UnmarshalMap(av, &mi); err != nil {
 				return nil, fmt.Errorf("store: unmarshal thread reply: %w", err)
 			}
 			m := mi.Message
@@ -254,11 +245,8 @@ func (s *MessageStoreImpl) StampThreadIndex(ctx context.Context, parentID, msgID
 	upd := expression.
 		Set(expression.Name("GSI1PK"), expression.Value(threadGSI1PK(threadRootID))).
 		Set(expression.Name("GSI1SK"), expression.Value(msgSK(msgID)))
-	expr, err := expression.NewBuilder().WithUpdate(upd).Build()
-	if err != nil { // coverage-ignore: static update expression; Build cannot fail
-		return fmt.Errorf("store: build thread-index update: %w", err)
-	}
-	_, err = s.Client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+	expr := mustExpr(expression.NewBuilder().WithUpdate(upd).Build())
+	_, err := s.Client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
 		TableName:                 aws.String(s.Table),
 		Key:                       compositeKey(parentPK(parentID), msgSK(msgID)),
 		UpdateExpression:          expr.Update(),
@@ -291,10 +279,7 @@ func (s *MessageStoreImpl) ListAfter(ctx context.Context, parentID, after string
 			expression.Value("MSG#~"), // upper bound past any ULID
 		),
 	)
-	expr, err := expression.NewBuilder().WithKeyCondition(keyCond).Build()
-	if err != nil { // coverage-ignore: static key-condition built from constants; Build cannot fail
-		return nil, false, fmt.Errorf("store: build expression: %w", err)
-	}
+	expr := mustExpr(expression.NewBuilder().WithKeyCondition(keyCond).Build())
 	// `after` is exclusive but BETWEEN is inclusive; fetch one extra to
 	// strip the cursor below, plus one more for has-more detection.
 	fetchLimit := int32(limit + 2)
@@ -312,7 +297,7 @@ func (s *MessageStoreImpl) ListAfter(ctx context.Context, parentID, after string
 	messages := make([]*model.Message, 0, len(out.Items))
 	for _, item := range out.Items {
 		var mi messageItem
-		if err := attributevalue.UnmarshalMap(item, &mi); err != nil { // coverage-ignore: round-trip of items this store wrote; cannot fail
+		if err := attributevalue.UnmarshalMap(item, &mi); err != nil {
 			return nil, false, fmt.Errorf("store: unmarshal message: %w", err)
 		}
 		messages = append(messages, &mi.Message)
@@ -379,12 +364,9 @@ func (s *MessageStoreImpl) ListAround(ctx context.Context, parentID, msgID strin
 func (s *MessageStoreImpl) Update(ctx context.Context, parentID string, msg *model.Message) error {
 	item := newMessageItem(parentID, msg)
 
-	av, err := attributevalue.MarshalMap(item)
-	if err != nil { // coverage-ignore: messageItem has only scalar/string/slice/time fields; MarshalMap cannot fail
-		return fmt.Errorf("store: marshal message: %w", err)
-	}
+	av := mustAttrs(attributevalue.MarshalMap(item))
 
-	_, err = s.Client.PutItem(ctx, &dynamodb.PutItemInput{
+	_, err := s.Client.PutItem(ctx, &dynamodb.PutItemInput{
 		TableName:           aws.String(s.Table),
 		Item:                av,
 		ConditionExpression: aws.String("attribute_exists(PK) AND attribute_exists(SK)"),
@@ -441,10 +423,7 @@ func (s *MessageStoreImpl) IncrementReplyMetadata(ctx context.Context, parentID,
 		Set(expression.Name("lastReplyAt"), expression.Value(replyTime)).
 		Set(expression.Name("recentReplyAuthorIDs"), expression.Value(authors))
 	cond := expression.Name("PK").AttributeExists()
-	expr, err := expression.NewBuilder().WithUpdate(upd).WithCondition(cond).Build()
-	if err != nil { // coverage-ignore: static update+condition built from constants; Build cannot fail
-		return nil, fmt.Errorf("store: build reply-metadata expression: %w", err)
-	}
+	expr := mustExpr(expression.NewBuilder().WithUpdate(upd).WithCondition(cond).Build())
 	out, err := s.Client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
 		TableName:                 aws.String(s.Table),
 		Key:                       compositeKey(parentPK(parentID), msgSK(msgID)),
@@ -461,7 +440,7 @@ func (s *MessageStoreImpl) IncrementReplyMetadata(ctx context.Context, parentID,
 		return nil, fmt.Errorf("store: increment reply metadata: %w", err)
 	}
 	var item messageItem
-	if err := attributevalue.UnmarshalMap(out.Attributes, &item); err != nil { // coverage-ignore: round-trip of returned attributes this store wrote; cannot fail
+	if err := attributevalue.UnmarshalMap(out.Attributes, &item); err != nil {
 		return nil, fmt.Errorf("store: unmarshal updated message: %w", err)
 	}
 	return &item.Message, nil

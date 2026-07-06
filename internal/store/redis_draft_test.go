@@ -1,3 +1,5 @@
+//go:build integration
+
 package store
 
 import (
@@ -7,18 +9,13 @@ import (
 	"time"
 
 	"github.com/DigitalTolk/ex/internal/model"
-	"github.com/alicebob/miniredis/v2"
 	"github.com/redis/go-redis/v9"
 )
 
-func setupRedisDraftStore(t *testing.T) (*RedisDraftStore, *miniredis.Miniredis) {
+func setupRedisDraftStore(t *testing.T) (*RedisDraftStore, *redis.Client) {
 	t.Helper()
-	mr := miniredis.RunT(t)
-	// Fail fast when the test closes miniredis (the ClientErrors case) instead of
-	// burning seconds on dial retries.
-	client := redis.NewClient(&redis.Options{Addr: mr.Addr(), MaxRetries: -1, DialTimeout: 150 * time.Millisecond})
-	t.Cleanup(func() { _ = client.Close() })
-	return NewRedisDraftStore(client), mr
+	client := storeRedisClient(t)
+	return NewRedisDraftStore(client), client
 }
 
 func draftAt(id, user, body string, ts int64) *model.MessageDraft {
@@ -135,9 +132,9 @@ func TestRedisDraftStore_DeleteOlderThanStoredIsNoop(t *testing.T) {
 }
 
 func TestRedisDraftStore_ClientErrors(t *testing.T) {
-	s, mr := setupRedisDraftStore(t)
+	s, mrClient := setupRedisDraftStore(t)
 	ctx := context.Background()
-	mr.Close()
+	_ = mrClient.Close() // closed client: every command now errors
 	if err := s.Upsert(ctx, draftAt("d-1", "u-1", "x", 1)); err == nil {
 		t.Error("Upsert should error when Redis is down")
 	}
@@ -158,7 +155,7 @@ func TestRedisDraftStore_ClientErrors(t *testing.T) {
 // hash TTL, so it never expired). Aged pure tombstones must be swept by
 // the next write; fresh tombstones and live drafts must survive.
 func TestRedisDraftStore_SweepsAgedTombstones(t *testing.T) {
-	s, mr := setupRedisDraftStore(t)
+	s, mrClient := setupRedisDraftStore(t)
 	ctx := context.Background()
 	base := time.Now()
 	s.now = func() time.Time { return base }
@@ -174,7 +171,7 @@ func TestRedisDraftStore_SweepsAgedTombstones(t *testing.T) {
 	if err := s.Delete(ctx, "u1", "scope-fresh", base.Add(time.Hour).UnixMilli()); err != nil {
 		t.Fatalf("Delete fresh: %v", err)
 	}
-	if got := mr.HGet("draftts:u1", "scope-old"); got == "" {
+	if got := mrClient.HGet(context.Background(), "draftts:u1", "scope-old").Val(); got == "" {
 		t.Fatal("precondition: tombstone for scope-old must exist")
 	}
 
@@ -183,21 +180,21 @@ func TestRedisDraftStore_SweepsAgedTombstones(t *testing.T) {
 	if err := s.Delete(ctx, "u1", "scope-new", base.Add(8*24*time.Hour).UnixMilli()); err != nil {
 		t.Fatalf("Delete new: %v", err)
 	}
-	if got := mr.HGet("draftts:u1", "scope-old"); got != "" {
+	if got := mrClient.HGet(context.Background(), "draftts:u1", "scope-old").Val(); got != "" {
 		t.Fatalf("aged tombstone must be swept, still present: %q", got)
 	}
-	if got := mr.HGet("draftts:u1", "scope-fresh"); got != "" {
+	if got := mrClient.HGet(context.Background(), "draftts:u1", "scope-fresh").Val(); got != "" {
 		t.Fatalf("aged tombstone scope-fresh must be swept too, still present: %q", got)
 	}
 	// The live draft keeps BOTH its content and its ts (it is not a tombstone)…
-	if got := mr.HGet("draft:u1", "scope-live"); got == "" {
+	if got := mrClient.HGet(context.Background(), "draft:u1", "scope-live").Val(); got == "" {
 		t.Fatal("live draft content must never be swept")
 	}
-	if got := mr.HGet("draftts:u1", "scope-live"); got == "" {
+	if got := mrClient.HGet(context.Background(), "draftts:u1", "scope-live").Val(); got == "" {
 		t.Fatal("live draft ts must never be swept")
 	}
 	// …and the just-written tombstone survives (it is inside the window).
-	if got := mr.HGet("draftts:u1", "scope-new"); got == "" {
+	if got := mrClient.HGet(context.Background(), "draftts:u1", "scope-new").Val(); got == "" {
 		t.Fatal("fresh tombstone must survive the sweep")
 	}
 
@@ -206,7 +203,7 @@ func TestRedisDraftStore_SweepsAgedTombstones(t *testing.T) {
 	if err := s.Upsert(ctx, &model.MessageDraft{ID: "scope-new", UserID: "u1", Body: "stale", Ts: base.UnixMilli()}); err != nil {
 		t.Fatalf("Upsert stale: %v", err)
 	}
-	if got := mr.HGet("draft:u1", "scope-new"); got != "" {
+	if got := mrClient.HGet(context.Background(), "draft:u1", "scope-new").Val(); got != "" {
 		t.Fatalf("delayed save must not resurrect a sent draft, got %q", got)
 	}
 }

@@ -79,9 +79,6 @@ func (h *EmojiHandler) ListFrequent(w http.ResponseWriter, r *http.Request) {
 		writeInternalError(w, r, "list_error", err)
 		return
 	}
-	if emojis == nil {
-		emojis = []string{}
-	}
 	writeJSON(w, http.StatusOK, emojis)
 }
 

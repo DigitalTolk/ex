@@ -8,8 +8,8 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/alicebob/miniredis/v2"
 	"github.com/DigitalTolk/ex/internal/events"
+	"github.com/alicebob/miniredis/v2"
 )
 
 // fakeResolver lets each test wire a topic → recipients map without

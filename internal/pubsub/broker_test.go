@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alicebob/miniredis/v2"
 	"github.com/DigitalTolk/ex/internal/events"
+	"github.com/alicebob/miniredis/v2"
 )
 
 func setupTestBroker(t *testing.T) (*Broker, *RedisPubSub, *miniredis.Miniredis) {
@@ -239,7 +239,6 @@ func TestBrokerDispatchContent(t *testing.T) {
 		t.Fatal("expected an event on the client's Events channel")
 	}
 }
-
 
 // TestBroker_UnregisterCleansUpSubscriptions covers the branch where a
 // disconnected user's last subscription is removed and the Redis channel is

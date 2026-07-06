@@ -404,14 +404,8 @@ func (h *WSHandler) runReplay(ctx context.Context, conn *websocket.Conn, userID,
 // frame, returning false on socket write failure (signals the caller
 // to abandon the connection without bubbling up the specific error).
 func writeControlFrame(ctx context.Context, conn *websocket.Conn, eventType string, payload any) bool {
-	evt, err := events.NewEvent(eventType, payload)
-	if err != nil { // coverage-ignore: callers pass only scalar map payloads (map[string]string / map[string]int); json.Marshal of those cannot fail, so NewEvent never errors here.
-		return true
-	}
-	data, err := json.Marshal(evt)
-	if err != nil { // coverage-ignore: evt is an *events.Event of scalar fields plus a pre-validated json.RawMessage; re-marshaling it cannot fail.
-		return true
-	}
+	evt := mustEvent(events.NewEvent(eventType, payload))
+	data := mustJSON(json.Marshal(evt))
 	return conn.Write(ctx, websocket.MessageText, data) == nil
 }
 
@@ -480,9 +474,6 @@ func (h *WSHandler) publishTyping(ctx context.Context, userID string, msg inboun
 	if msg.ParentMessageID != "" {
 		payload["parentMessageID"] = msg.ParentMessageID
 	}
-	evt, err := events.NewEvent(events.EventTyping, payload)
-	if err != nil { // coverage-ignore: payload is a map of string values (plus an optional string parentMessageID); json.Marshal cannot fail, so NewEvent never errors here.
-		return
-	}
+	evt := mustEvent(events.NewEvent(events.EventTyping, payload))
 	_ = h.publisher.Publish(ctx, topic, evt)
 }

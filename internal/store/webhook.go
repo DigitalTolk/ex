@@ -39,11 +39,8 @@ type webhookItem struct {
 
 func (s *IncomingWebhookStoreImpl) Create(ctx context.Context, wh *model.IncomingWebhook) error {
 	item := webhookItem{PK: webhookPK(wh.ID), SK: webhookSK(), IncomingWebhook: *wh}
-	av, err := attributevalue.MarshalMap(item)
-	if err != nil {
-		return fmt.Errorf("store: marshal webhook: %w", err)
-	}
-	_, err = s.Client.PutItem(ctx, &dynamodb.PutItemInput{
+	av := mustAttrs(attributevalue.MarshalMap(item))
+	_, err := s.Client.PutItem(ctx, &dynamodb.PutItemInput{
 		TableName:           aws.String(s.Table),
 		Item:                av,
 		ConditionExpression: aws.String("attribute_not_exists(PK)"),
@@ -78,10 +75,7 @@ func (s *IncomingWebhookStoreImpl) Get(ctx context.Context, id string) (*model.I
 func (s *IncomingWebhookStoreImpl) List(ctx context.Context) ([]*model.IncomingWebhook, error) {
 	filter := expression.Name("SK").Equal(expression.Value(webhookSK())).
 		And(expression.Name("PK").BeginsWith("WEBHOOK#"))
-	expr, err := expression.NewBuilder().WithFilter(filter).Build()
-	if err != nil {
-		return nil, fmt.Errorf("store: build webhook scan: %w", err)
-	}
+	expr := mustExpr(expression.NewBuilder().WithFilter(filter).Build())
 	// Page through LastEvaluatedKey. DynamoDB applies the 1MB read limit to the
 	// raw items scanned *before* the filter runs, so a single Scan over a
 	// non-trivial table returns only the webhooks that happened to fall in the
@@ -126,11 +120,8 @@ func (s *IncomingWebhookStoreImpl) List(ctx context.Context) ([]*model.IncomingW
 
 func (s *IncomingWebhookStoreImpl) Update(ctx context.Context, wh *model.IncomingWebhook) error {
 	item := webhookItem{PK: webhookPK(wh.ID), SK: webhookSK(), IncomingWebhook: *wh}
-	av, err := attributevalue.MarshalMap(item)
-	if err != nil {
-		return fmt.Errorf("store: marshal webhook: %w", err)
-	}
-	_, err = s.Client.PutItem(ctx, &dynamodb.PutItemInput{
+	av := mustAttrs(attributevalue.MarshalMap(item))
+	_, err := s.Client.PutItem(ctx, &dynamodb.PutItemInput{
 		TableName:           aws.String(s.Table),
 		Item:                av,
 		ConditionExpression: aws.String("attribute_exists(PK)"),

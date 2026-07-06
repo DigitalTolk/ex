@@ -126,6 +126,15 @@ func TestUserStoreAdapter(t *testing.T) {
 	// Brief pause for DynamoDB Local GSI propagation.
 	time.Sleep(500 * time.Millisecond)
 
+	// GetUsersByIDs (batch read used by UserService.GetBatch)
+	batch, err := adapter.GetUsersByIDs(ctx, []string{"u-adapt-1", "u-missing"})
+	if err != nil {
+		t.Fatalf("GetUsersByIDs: %v", err)
+	}
+	if len(batch) != 1 || batch[0].ID != "u-adapt-1" {
+		t.Fatalf("GetUsersByIDs = %v, want the one existing user", batch)
+	}
+
 	// GetUser
 	got, err := adapter.GetUser(ctx, "u-adapt-1")
 	if err != nil {
@@ -543,6 +552,19 @@ func TestTokenStoreAdapter(t *testing.T) {
 	}
 	if got.UserID != "u-rt" {
 		t.Errorf("UserID = %q, want %q", got.UserID, "u-rt")
+	}
+
+	// MarkRefreshTokenRotated (rotation-grace bookkeeping)
+	rotatedAt := now.Add(time.Minute)
+	if err := adapter.MarkRefreshTokenRotated(ctx, "rt-adapt-1", rotatedAt, "rt-adapt-2"); err != nil {
+		t.Fatalf("MarkRefreshTokenRotated: %v", err)
+	}
+	got, err = adapter.GetRefreshToken(ctx, "rt-adapt-1")
+	if err != nil {
+		t.Fatalf("GetRefreshToken after rotate: %v", err)
+	}
+	if got.RotatedAt == nil || got.SupersededBy != "rt-adapt-2" {
+		t.Errorf("rotation not persisted: rotatedAt=%v supersededBy=%q", got.RotatedAt, got.SupersededBy)
 	}
 
 	if err := adapter.DeleteRefreshToken(ctx, "rt-adapt-1"); err != nil {

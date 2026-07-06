@@ -45,10 +45,7 @@ func NewRedisActivityStore(client *redis.Client) *RedisActivityStore {
 // activityMaxItems, drops anything older than the TTL window, and refreshes the
 // key's expiry — all in one pipelined round-trip.
 func (s *RedisActivityStore) AddActivity(ctx context.Context, userID string, item *model.ActivityItem) error {
-	payload, err := json.Marshal(item)
-	if err != nil { // coverage-ignore: ActivityItem is scalar fields; Marshal cannot fail
-		return fmt.Errorf("store: marshal activity: %w", err)
-	}
+	payload := mustJSON(json.Marshal(item))
 	key := activityKey(userID)
 	cutoff := s.now().Add(-activityTTL).UnixMilli()
 	pipe := s.client.Pipeline()
@@ -85,7 +82,7 @@ func (s *RedisActivityStore) ListActivity(ctx context.Context, userID string) ([
 	items := make([]*model.ActivityItem, 0, len(raw))
 	for _, r := range raw {
 		var item model.ActivityItem
-		if err := json.Unmarshal([]byte(r), &item); err != nil { // coverage-ignore: round-trip of a value this store wrote
+		if err := json.Unmarshal([]byte(r), &item); err != nil {
 			return nil, fmt.Errorf("store: unmarshal activity: %w", err)
 		}
 		items = append(items, &item)

@@ -17,6 +17,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/redis/go-redis/v9"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 
@@ -36,8 +37,35 @@ var (
 	tableCounter    atomic.Uint64
 )
 
+var (
+	sharedRedisAddr  string
+	sharedRedisReady bool
+)
+
 func TestMain(m *testing.M) {
 	ctx := context.Background()
+
+	// Real Redis for the redis-backed stores (drafts, reminders, activity) —
+	// the same engine production talks to, not an in-process fake.
+	redisReq := testcontainers.ContainerRequest{
+		Image:        "redis:7-alpine",
+		ExposedPorts: []string{"6379/tcp"},
+		WaitingFor:   wait.ForListeningPort("6379/tcp").WithStartupTimeout(60 * time.Second),
+	}
+	redisC, redisErr := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+		ContainerRequest: redisReq,
+		Started:          true,
+	})
+	if redisErr == nil {
+		if host, herr := redisC.Host(ctx); herr == nil {
+			if port, perr := redisC.MappedPort(ctx, "6379"); perr == nil {
+				sharedRedisAddr = fmt.Sprintf("%s:%s", host, port.Port())
+				sharedRedisReady = true
+			}
+		}
+	} else {
+		log.Printf("redis-backed store tests will skip: docker/redis unavailable: %v", redisErr)
+	}
 
 	req := testcontainers.ContainerRequest{
 		Image:        "amazon/dynamodb-local:latest",
@@ -66,6 +94,9 @@ func TestMain(m *testing.M) {
 
 	code := m.Run()
 	_ = container.Terminate(ctx)
+	if redisC != nil {
+		_ = redisC.Terminate(ctx)
+	}
 	os.Exit(code)
 }
 
@@ -1852,4 +1883,64 @@ func TestMessageStore_ConversationParent(t *testing.T) {
 	if got2.Body != "Group message" {
 		t.Errorf("Body = %q, want %q", got2.Body, "Group message")
 	}
+}
+
+// storeRedisClient returns a client on the shared Redis container with a clean
+// database per test (a FlushDB, since store tests run sequentially).
+func storeRedisClient(t *testing.T) *redis.Client {
+	t.Helper()
+	if !sharedRedisReady {
+		t.Skip("skipping: Docker / Redis not available")
+	}
+	client := redis.NewClient(&redis.Options{Addr: sharedRedisAddr})
+	if err := client.FlushDB(context.Background()).Err(); err != nil {
+		t.Fatalf("flush redis: %v", err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	return client
+}
+
+// cmdFailHook fails exactly the named Redis commands at the go-redis client
+// boundary — the seam for exercising Redis error arms against the real
+// container (a healthy Redis never errors on these commands). Everything else
+// passes through to the wire.
+type cmdFailHook struct{ fail map[string]bool }
+
+func (h cmdFailHook) DialHook(next redis.DialHook) redis.DialHook { return next }
+
+func (h cmdFailHook) ProcessHook(next redis.ProcessHook) redis.ProcessHook {
+	return func(ctx context.Context, cmd redis.Cmder) error {
+		if h.fail[cmd.Name()] {
+			return errInjected
+		}
+		return next(ctx, cmd)
+	}
+}
+
+func (h cmdFailHook) ProcessPipelineHook(next redis.ProcessPipelineHook) redis.ProcessPipelineHook {
+	return func(ctx context.Context, cmds []redis.Cmder) error {
+		for _, cmd := range cmds {
+			if h.fail[cmd.Name()] {
+				return errInjected
+			}
+		}
+		return next(ctx, cmds)
+	}
+}
+
+// storeRedisClientFailingOn returns a real-container client for which the
+// named commands fail with errInjected.
+func storeRedisClientFailingOn(t *testing.T, cmds ...string) *redis.Client {
+	t.Helper()
+	if !sharedRedisReady {
+		t.Skip("skipping: Docker / Redis not available")
+	}
+	client := redis.NewClient(&redis.Options{Addr: sharedRedisAddr})
+	fail := make(map[string]bool, len(cmds))
+	for _, c := range cmds {
+		fail[c] = true
+	}
+	client.AddHook(cmdFailHook{fail: fail})
+	t.Cleanup(func() { _ = client.Close() })
+	return client
 }

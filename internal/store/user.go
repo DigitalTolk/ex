@@ -72,24 +72,18 @@ func (s *UserStoreImpl) Create(ctx context.Context, user *model.User) error {
 		GSI2SK: user.CreatedAt.Format(time.RFC3339Nano) + "#" + user.ID,
 		User:   *user,
 	}
-	userAV, err := attributevalue.MarshalMap(item)
-	if err != nil { // coverage-ignore: userItem has only scalar/time fields; MarshalMap cannot fail
-		return fmt.Errorf("store: marshal user: %w", err)
-	}
+	userAV := mustAttrs(attributevalue.MarshalMap(item))
 
 	emailItem := userEmailItem{
 		PK:     userEmailPK(user.Email),
 		SK:     profileSK(),
 		UserID: user.ID,
 	}
-	emailAV, err := attributevalue.MarshalMap(emailItem)
-	if err != nil { // coverage-ignore: userEmailItem has only string fields; MarshalMap cannot fail
-		return fmt.Errorf("store: marshal user email: %w", err)
-	}
+	emailAV := mustAttrs(attributevalue.MarshalMap(emailItem))
 
 	// Use a transaction to ensure both items are written atomically and
 	// that neither the user ID nor the email already exist.
-	_, err = s.Client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
+	_, err := s.Client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
 		TransactItems: []types.TransactWriteItem{
 			{
 				Put: &types.Put{
@@ -130,7 +124,7 @@ func (s *UserStoreImpl) GetByID(ctx context.Context, id string) (*model.User, er
 	}
 
 	var item userItem
-	if err := attributevalue.UnmarshalMap(out.Item, &item); err != nil { // coverage-ignore: round-trip of an item this store wrote via MarshalMap; cannot fail
+	if err := attributevalue.UnmarshalMap(out.Item, &item); err != nil {
 		return nil, fmt.Errorf("store: unmarshal user: %w", err)
 	}
 	return &item.User, nil
@@ -156,7 +150,7 @@ func (s *UserStoreImpl) GetUsersByIDs(ctx context.Context, ids []string) ([]*mod
 			}
 			for _, raw := range res.Responses[s.Table] {
 				var ui userItem
-				if err := attributevalue.UnmarshalMap(raw, &ui); err != nil { // coverage-ignore: round-trip of items this store wrote; cannot fail
+				if err := attributevalue.UnmarshalMap(raw, &ui); err != nil {
 					return nil, fmt.Errorf("store: unmarshal user: %w", err)
 				}
 				u := ui.User
@@ -190,7 +184,7 @@ func (s *UserStoreImpl) GetByEmail(ctx context.Context, email string) (*model.Us
 	}
 
 	var emailEntry userEmailItem
-	if err := attributevalue.UnmarshalMap(out.Item, &emailEntry); err != nil { // coverage-ignore: round-trip of an item this store wrote; cannot fail
+	if err := attributevalue.UnmarshalMap(out.Item, &emailEntry); err != nil {
 		return nil, fmt.Errorf("store: unmarshal user email: %w", err)
 	}
 
@@ -203,10 +197,7 @@ func (s *UserStoreImpl) findByEmailScan(ctx context.Context, email string) (*mod
 		return nil, ErrNotFound
 	}
 	keyCond := expression.Key("GSI2PK").Equal(expression.Value(allUsersGSI2PK()))
-	expr, err := expression.NewBuilder().WithKeyCondition(keyCond).Build()
-	if err != nil { // coverage-ignore: static key-condition built from constants; Build cannot fail
-		return nil, fmt.Errorf("store: build users by email fallback expression: %w", err)
-	}
+	expr := mustExpr(expression.NewBuilder().WithKeyCondition(keyCond).Build())
 	input := &dynamodb.QueryInput{
 		TableName:                 aws.String(s.Table),
 		IndexName:                 aws.String("GSI2"),
@@ -221,7 +212,7 @@ func (s *UserStoreImpl) findByEmailScan(ctx context.Context, email string) (*mod
 		}
 		for _, raw := range out.Items {
 			var item userItem
-			if err := attributevalue.UnmarshalMap(raw, &item); err != nil { // coverage-ignore: round-trip of items this store wrote; cannot fail
+			if err := attributevalue.UnmarshalMap(raw, &item); err != nil {
 				return nil, fmt.Errorf("store: unmarshal user by email fallback: %w", err)
 			}
 			if strings.ToLower(strings.TrimSpace(item.Email)) == normalized {
@@ -238,15 +229,12 @@ func (s *UserStoreImpl) findByEmailScan(ctx context.Context, email string) (*mod
 }
 
 func (s *UserStoreImpl) ensureEmailIndex(ctx context.Context, email, userID string) error {
-	emailAV, err := attributevalue.MarshalMap(userEmailItem{
+	emailAV := mustAttrs(attributevalue.MarshalMap(userEmailItem{
 		PK:     userEmailPK(email),
 		SK:     profileSK(),
 		UserID: userID,
-	})
-	if err != nil { // coverage-ignore: userEmailItem has only string fields; MarshalMap cannot fail
-		return fmt.Errorf("store: marshal user email: %w", err)
-	}
-	_, err = s.Client.PutItem(ctx, &dynamodb.PutItemInput{
+	}))
+	_, err := s.Client.PutItem(ctx, &dynamodb.PutItemInput{
 		TableName:           aws.String(s.Table),
 		Item:                emailAV,
 		ConditionExpression: aws.String("attribute_not_exists(PK)"),
@@ -269,12 +257,9 @@ func (s *UserStoreImpl) Update(ctx context.Context, user *model.User) error {
 		GSI2SK: user.CreatedAt.Format(time.RFC3339Nano) + "#" + user.ID,
 		User:   *user,
 	}
-	av, err := attributevalue.MarshalMap(item)
-	if err != nil { // coverage-ignore: userItem has only scalar/time fields; MarshalMap cannot fail
-		return fmt.Errorf("store: marshal user: %w", err)
-	}
+	av := mustAttrs(attributevalue.MarshalMap(item))
 
-	_, err = s.Client.PutItem(ctx, &dynamodb.PutItemInput{
+	_, err := s.Client.PutItem(ctx, &dynamodb.PutItemInput{
 		TableName:           aws.String(s.Table),
 		Item:                av,
 		ConditionExpression: aws.String("attribute_exists(PK)"),
@@ -290,10 +275,7 @@ func (s *UserStoreImpl) Update(ctx context.Context, user *model.User) error {
 
 func (s *UserStoreImpl) List(ctx context.Context, limit int, lastKey string) ([]*model.User, string, error) {
 	keyCond := expression.Key("GSI2PK").Equal(expression.Value(allUsersGSI2PK()))
-	expr, err := expression.NewBuilder().WithKeyCondition(keyCond).Build()
-	if err != nil { // coverage-ignore: static key-condition built from constants; Build cannot fail
-		return nil, "", fmt.Errorf("store: build expression: %w", err)
-	}
+	expr := mustExpr(expression.NewBuilder().WithKeyCondition(keyCond).Build())
 
 	input := &dynamodb.QueryInput{
 		TableName:                 aws.String(s.Table),
@@ -321,7 +303,7 @@ func (s *UserStoreImpl) List(ctx context.Context, limit int, lastKey string) ([]
 	users := make([]*model.User, 0, len(out.Items))
 	for _, item := range out.Items {
 		var ui userItem
-		if err := attributevalue.UnmarshalMap(item, &ui); err != nil { // coverage-ignore: round-trip of items this store wrote; cannot fail
+		if err := attributevalue.UnmarshalMap(item, &ui); err != nil {
 			return nil, "", fmt.Errorf("store: unmarshal user: %w", err)
 		}
 		users = append(users, &ui.User)
@@ -342,10 +324,7 @@ func (s *UserStoreImpl) List(ctx context.Context, limit int, lastKey string) ([]
 
 func (s *UserStoreImpl) HasUsers(ctx context.Context) (bool, error) {
 	keyCond := expression.Key("GSI2PK").Equal(expression.Value(allUsersGSI2PK()))
-	expr, err := expression.NewBuilder().WithKeyCondition(keyCond).Build()
-	if err != nil { // coverage-ignore: static key-condition built from constants; Build cannot fail
-		return false, fmt.Errorf("store: build expression: %w", err)
-	}
+	expr := mustExpr(expression.NewBuilder().WithKeyCondition(keyCond).Build())
 
 	out, err := s.Client.Query(ctx, &dynamodb.QueryInput{
 		TableName:                 aws.String(s.Table),
@@ -392,7 +371,7 @@ func (s *UserStoreImpl) NotificationSettingsFor(ctx context.Context, userIDs []s
 					ID       string                      `dynamodbav:"id"`
 					Settings *model.NotificationSettings `dynamodbav:"notificationSettings"`
 				}
-				if err := attributevalue.UnmarshalMap(item, &row); err != nil { // coverage-ignore: round-trip of rows this store wrote; cannot fail
+				if err := attributevalue.UnmarshalMap(item, &row); err != nil {
 					return nil, fmt.Errorf("store: unmarshal notification settings row: %w", err)
 				}
 				if row.ID == "" {

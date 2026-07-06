@@ -382,9 +382,6 @@ func (h *ChannelHandler) ListMembers(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "list_error", err.Error())
 		return
 	}
-	if members == nil {
-		members = []*model.ChannelMembership{}
-	}
 
 	writeJSON(w, http.StatusOK, members)
 }
@@ -528,9 +525,6 @@ func (h *ChannelHandler) GetThread(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "thread_error", err.Error())
 		return
 	}
-	if msgs == nil { // coverage-ignore: MessageService.ListThreadMessages returns a make()-initialized (non-nil) slice; this nil-coercion is defensive against a future contract change.
-		msgs = []*model.Message{}
-	}
 
 	writeJSON(w, http.StatusOK, msgs)
 }
@@ -561,9 +555,6 @@ func (h *ChannelHandler) EditMessage(w http.ResponseWriter, r *http.Request) {
 	var attIDs []string
 	if body.AttachmentIDs != nil {
 		attIDs = *body.AttachmentIDs
-		if attIDs == nil { // coverage-ignore: no JSON value decodes to a non-nil *[]string pointing at a nil slice (null→nil ptr, []→non-nil empty); this nil-coercion is defensive and unreachable from a request body.
-			attIDs = []string{}
-		}
 	}
 	msg, err := h.messageSvc.Edit(r.Context(), userID, id, service.ParentChannel, msgID, body.Body, attIDs)
 	if err != nil {
@@ -682,9 +673,6 @@ func (h *ChannelHandler) ListFiles(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, http.StatusForbidden, "list_files_error", err.Error())
 		return
-	}
-	if files == nil { // coverage-ignore: MessageService.ListFiles returns a make()-initialized (non-nil) slice; this nil-coercion is defensive against a future contract change.
-		files = []*service.FileEntry{}
 	}
 	writeJSON(w, http.StatusOK, files)
 }

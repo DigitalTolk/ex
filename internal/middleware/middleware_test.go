@@ -621,3 +621,24 @@ func TestRateLimit_ClientIPSources(t *testing.T) {
 		t.Errorf("fallback key = %q, want %q", c.gotKey, want)
 	}
 }
+
+// A negative trusted-proxy count is nonsense topology; SetTrustedProxyCount
+// must clamp it to 0 (ignore X-Forwarded-For entirely) rather than store it —
+// a negative count would index past the left end of the XFF list.
+func TestSetTrustedProxyCountClampsNegative(t *testing.T) {
+	t.Cleanup(func() { SetTrustedProxyCount(1) }) // restore the package default
+
+	SetTrustedProxyCount(-1)
+	if trustedProxyCount != 0 {
+		t.Fatalf("trustedProxyCount = %d, want 0 (negative input must clamp)", trustedProxyCount)
+	}
+
+	// Effective behavior: with the clamped count, XFF is ignored and the
+	// client IP comes from RemoteAddr.
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("X-Forwarded-For", "1.2.3.4")
+	req.RemoteAddr = "203.0.113.9:443"
+	if got := clientIP(req); got != "203.0.113.9" {
+		t.Errorf("clientIP = %q, want %q (XFF must be ignored at count 0)", got, "203.0.113.9")
+	}
+}
