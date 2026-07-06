@@ -105,6 +105,43 @@ describe('composerAutocomplete', () => {
     host.remove();
   });
 
+  it('Tab accepts the highlighted option; without an open typeahead Tab falls through', async () => {
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = new EditorView({
+      parent: host,
+      state: EditorState.create({ doc: '@Al', selection: { anchor: 3 }, extensions: [composerAutocomplete(providers)] }),
+    });
+    startCompletion(view);
+    await vi.waitFor(() => {
+      expect(currentCompletions(view.state).some((c) => c.label === 'Alice')).toBe(true);
+    });
+    // acceptCompletion deliberately ignores accepts within interactionDelay
+    // (75ms) of the popup opening — outwait it like a human would.
+    await new Promise((r) => setTimeout(r, 120));
+
+    const tab = () => {
+      const ev = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true });
+      view.contentDOM.dispatchEvent(ev);
+      return ev;
+    };
+    // Accepts the selected option: the mention lands in the doc and the
+    // typeahead closes.
+    expect(tab().defaultPrevented).toBe(true);
+    await vi.waitFor(() => {
+      expect(view.state.doc.toString()).toBe('@[u1|Alice] ');
+      expect(currentCompletions(view.state).length).toBe(0);
+    });
+
+    // No open typeahead → Tab is NOT consumed (focus navigation keeps
+    // working); the doc stays put.
+    expect(tab().defaultPrevented).toBe(false);
+    expect(view.state.doc.toString()).toBe('@[u1|Alice] ');
+
+    view.destroy();
+    host.remove();
+  });
+
   it('keeps natural placement: opens below the caret when there is visible room below', async () => {
     // Placement must stay space-driven on every viewport — an inline edit of
     // a scrolled-up message (caret high on screen) opens DOWNWARD into the
