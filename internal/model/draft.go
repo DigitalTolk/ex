@@ -12,10 +12,11 @@ type MessageDraft struct {
 	AttachmentIDs   []string  `json:"attachmentIDs,omitempty" dynamodbav:"attachmentIDs,omitempty"`
 	UpdatedAt       time.Time `json:"updatedAt" dynamodbav:"updatedAt"`
 	CreatedAt       time.Time `json:"createdAt" dynamodbav:"createdAt"`
-	// Ts is the CLIENT edit-time (epoch ms) used for last-write-wins ordering
-	// in the Redis store: a save applies only if its Ts is newer than the
-	// stored value's (and any delete tombstone's). It is the time the content
-	// was captured on the client — NOT when the request was sent — so a delayed
-	// keystroke save can't supersede a later send. Omitted from JSON when zero.
-	Ts int64 `json:"ts,omitempty" dynamodbav:"ts,omitempty"`
+	// Gen is the SERVER-assigned generation token for optimistic concurrency:
+	// every accepted write mints a new one, and a save or clear is accepted
+	// only when the client presents the generation it acted on (empty = "no
+	// draft exists"). Ordering is decided entirely server-side — client
+	// clocks play no part — so a delayed, stale, or hostile client write can
+	// never supersede a later clear or send. Pre-gen rows report "legacy".
+	Gen string `json:"gen"`
 }

@@ -47,14 +47,15 @@ import { ApiError } from '@/lib/api';
 
 const TYPING_PING_INTERVAL_MS = 3000;
 
+// How long a composer must have been hidden before, on waking, it drops its
+// "the user edited this" claim and defers to the server's draft state. Long
+// enough that a quick alt-tab never clobbers live typing; short enough that a
+// laptop reopened after a meeting shows the truth, not a stale buffer.
+const WAKE_DEFERS_TO_SERVER_MS = 60_000;
+
 export interface MessageInputValue {
   body: string;
   attachmentIDs: string[];
-  // ts is the moment this content was last edited (epoch ms). It rides with the
-  // (debounced) draft save so the backend can order saves vs the send by client
-  // edit time — a delayed keystroke save carries its OLD edit time, so it can't
-  // supersede a later send (last-write-wins). Optional for older callers.
-  ts?: number;
 }
 
 // Imperative API exposed via forwardRef so the surrounding chat view can
@@ -73,7 +74,9 @@ interface MessageInputProps {
   initialDrafts?: DraftAttachment[];
   // `notify` distinguishes a focus-loss flush (true → surface the draft in
   // the sidebar) from a keystroke save (omitted/false → persist silently).
-  onDraftChange?: (value: MessageInputValue, options?: { notify?: boolean }) => void;
+  // `keepalive` marks a teardown flush (pagehide): the save should ride a
+  // keepalive fetch so it survives the page dying.
+  onDraftChange?: (value: MessageInputValue, options?: { notify?: boolean; keepalive?: boolean }) => void;
   cancelOnOutsidePointer?: boolean;
   hideCodeButton?: boolean;
   submitLabel?: string;
@@ -149,7 +152,6 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
   const locallyEditedDraftRef = useRef(false);
   const applyingServerDraftRef = useRef(false);
   const focusKeyMountedRef = useRef(false);
-  const allowServerDraftHydrationRef = useRef(true);
   const latestDraftValueRef = useRef<MessageInputValue>({
     body: initialBody,
     attachmentIDs: initialDrafts.map((d) => d.id),
@@ -157,8 +159,6 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
   const hasInitialDraftValueRef = useRef(false);
   const scopedDraftChangeRef = useRef(onDraftChange);
   const activeDraftFocusKeyRef = useRef(focusKey);
-  const initialDraftKey = `${initialBody}\u0000${initialDrafts.map((d) => d.id).join('\u0000')}`;
-  const appliedInitialDraftRef = useRef(initialDraftKey);
   // Toolbar pressed-state tracking. Driven by Lexical's
   // registerUpdateListener so a toolbar click flips the pressed state
   // immediately — selectionchange only fires when the caret moves and
@@ -190,9 +190,10 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
   const showToolbarSend = showToolbar && !isEditingMode && (!isMobile || variant === 'composer');
 
   useEffect(() => {
-    // Stamp the edit time here (on content change), NOT when the debounced save
-    // fires — so a delayed save carries its OLD edit time for last-write-wins.
-    latestDraftValueRef.current = { body, attachmentIDs: drafts.map((d) => d.id), ts: Date.now() };
+    // No client timestamp rides along anymore: the server orders saves vs
+    // sends by generation tokens, so a delayed flush can never out-rank a
+    // later clear no matter what clock it carries.
+    latestDraftValueRef.current = { body, attachmentIDs: drafts.map((d) => d.id) };
   }, [body, drafts]);
 
   useEffect(() => {
@@ -217,7 +218,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
     scopedDraftChangeRef.current = onDraftChange;
   }, [focusKey, onDraftChange]);
 
-  const flushDraft = useCallback(() => {
+  const flushDraft = useCallback((options?: { keepalive?: boolean }) => {
     if (variant !== 'composer') return;
     const value = latestDraftValueRef.current;
     const shouldFlush =
@@ -228,7 +229,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
     if (!shouldFlush) return;
     // A flush means the composer lost focus / is going away — this is the
     // moment the draft should surface in the sidebar, so notify.
-    scopedDraftChangeRef.current?.(value, { notify: true });
+    scopedDraftChangeRef.current?.(value, { notify: true, keepalive: options?.keepalive });
   }, [variant]);
 
   // Link dialog state. Opening the dialog calls editor.beginLinkEdit
@@ -318,9 +319,8 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
     onSend({ body: normalized, attachmentIDs: drafts.map((d) => d.id) });
     if (variant === 'inline') return; // parent unmounts the inline edit
     drafts.forEach((d) => d.localURL && URL.revokeObjectURL(d.localURL));
-    // Prevent the just-sent server draft props from rehydrating while the
-    // debounced empty-draft save/delete catches up.
-    appliedInitialDraftRef.current = initialDraftKey;
+    // The local-edit claim blocks the mirror from rehydrating the just-sent
+    // server draft props while the send's cache patch catches up.
     locallyEditedDraftRef.current = true;
     setBody('');
     setDrafts([]);
@@ -330,14 +330,13 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
       return;
     }
     queueMicrotask(() => editorRef.current?.focus());
-  }, [canSend, body, drafts, onSend, variant, initialDraftKey, isMobile, submitLabel, collapseMobileComposer]);
+  }, [canSend, body, drafts, onSend, variant, isMobile, submitLabel, collapseMobileComposer]);
 
   useEffect(() => {
     if (variant !== 'composer') return;
     if (focusKey === undefined) return;
     if (focusKeyMountedRef.current) {
       flushDraft();
-      allowServerDraftHydrationRef.current = true;
     } else {
       focusKeyMountedRef.current = true;
     }
@@ -354,38 +353,47 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
       }
     });
     setDrafts(initialDrafts);
-    appliedInitialDraftRef.current = initialDraftKey;
     locallyEditedDraftRef.current = false;
     mountedDraftChangeRef.current = false;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusKey, flushDraft]);
 
+  // Mirror the scope's server draft into the buffer whenever they disagree
+  // and the user isn't editing — the server owns draft state; the composer
+  // merely displays it until the user takes over (typing sets the local-edit
+  // claim, which a scope switch or a long sleep resets). Crucially this
+  // INCLUDES emptiness: a draft cleared or sent on another device empties
+  // this composer too, instead of leaving a zombie buffer that re-offers
+  // long-deleted content and re-saves it on its next flush.
   useEffect(() => {
     if (variant !== 'composer') return;
-    if (!allowServerDraftHydrationRef.current) return;
-    if (!initialBody && initialDrafts.length === 0) return;
-    if (initialDraftKey === appliedInitialDraftRef.current) return;
     if (locallyEditedDraftRef.current) return;
-    /* istanbul ignore next -- reaching this guard requires a server-draft hydration on an un-applied key with a non-empty body but no prior local edit; the only way body becomes non-empty is a local edit (which sets locallyEditedDraftRef and returns above), so this guard's true arm is not reachable. */
-    if (body !== '') return;
-    /* istanbul ignore next -- as above, drafts only grow via local edits (which set locallyEditedDraftRef and return above), so reaching this guard with drafts present is not reachable. */
-    if (drafts.length > 0) return;
+    // Already in sync (the common case: our own flush round-tripped through
+    // the cache) — leave the editor alone; rewriting content moves the caret.
+    if (
+      initialBody === body &&
+      initialDrafts.length === drafts.length &&
+      initialDrafts.every((d, i) => d.id === drafts[i].id)
+    ) {
+      return;
+    }
+    // Focus only for the classic late-hydration case (a draft arriving into
+    // an EMPTY composer right after opening the scope) — a background
+    // refresh replacing existing content must never steal focus.
+    const bufferWasEmpty = body === '' && drafts.length === 0;
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setBody(initialBody);
     applyingServerDraftRef.current = true;
     editorRef.current?.setMarkdown(initialBody);
     queueMicrotask(() => {
       applyingServerDraftRef.current = false;
-      if (!suppressAutoFocus && focusKey !== undefined) {
+      if (!suppressAutoFocus && focusKey !== undefined && bufferWasEmpty && (initialBody !== '' || initialDrafts.length > 0)) {
         editorRef.current?.focusEnd?.();
       }
     });
     setDrafts(initialDrafts);
-    appliedInitialDraftRef.current = initialDraftKey;
-    allowServerDraftHydrationRef.current = false;
-    locallyEditedDraftRef.current = false;
     mountedDraftChangeRef.current = false;
-  }, [initialBody, initialDraftKey, initialDrafts, body, drafts.length, focusKey, variant, suppressAutoFocus]);
+  }, [initialBody, initialDrafts, body, drafts, focusKey, variant, suppressAutoFocus]);
 
   useEffect(() => {
     if (!scopedDraftChangeRef.current || variant !== 'composer') return;
@@ -414,6 +422,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
     editorFocusedRef.current = editorFocused;
   }, [editorFocused]);
   const wasFocusedOnHideRef = useRef(false);
+  const hiddenAtRef = useRef(0);
 
   useEffect(() => {
     if (variant !== 'composer') return;
@@ -425,20 +434,37 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
     const handleVisibility = () => {
       if (document.visibilityState === 'hidden') {
         wasFocusedOnHideRef.current = editorFocusedRef.current;
+        hiddenAtRef.current = Date.now();
         flushDraft();
         return;
       }
-      if (document.visibilityState === 'visible' && wasFocusedOnHideRef.current) {
+      // Anything else is a wake — browsers only report hidden/visible here.
+      // A composer waking from a LONG sleep (suspended tab, pocketed phone)
+      // defers to the server: whatever it was showing may have been edited,
+      // sent, or cleared elsewhere days ago, so its "the user edited this"
+      // claim has expired — let the mirror effect re-apply the server truth
+      // (its content was already flushed at hide-time). Short blurs
+      // (alt-tab) keep the claim so live typing is never clobbered by a
+      // stale refetch racing the hide-flush.
+      if (hiddenAtRef.current !== 0 && Date.now() - hiddenAtRef.current >= WAKE_DEFERS_TO_SERVER_MS) {
+        locallyEditedDraftRef.current = false;
+      }
+      hiddenAtRef.current = 0;
+      if (wasFocusedOnHideRef.current) {
         wasFocusedOnHideRef.current = false;
         queueMicrotask(() => editorRef.current?.focus());
       }
     };
-    window.addEventListener('blur', flushDraft);
-    window.addEventListener('pagehide', flushDraft);
+    const handleWindowBlur = () => flushDraft();
+    // The page is being torn down: the flush must ride a keepalive fetch or
+    // it dies with the tab.
+    const handlePageHide = () => flushDraft({ keepalive: true });
+    window.addEventListener('blur', handleWindowBlur);
+    window.addEventListener('pagehide', handlePageHide);
     document.addEventListener('visibilitychange', handleVisibility);
     return () => {
-      window.removeEventListener('blur', flushDraft);
-      window.removeEventListener('pagehide', flushDraft);
+      window.removeEventListener('blur', handleWindowBlur);
+      window.removeEventListener('pagehide', handlePageHide);
       document.removeEventListener('visibilitychange', handleVisibility);
     };
   }, [flushDraft, variant]);
@@ -847,7 +873,6 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
               latestDraftValueRef.current = {
                 body: md,
                 attachmentIDs: drafts.map((d) => d.id),
-                ts: Date.now(),
               };
               setBody(md);
               emitTyping();

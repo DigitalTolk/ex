@@ -6,6 +6,7 @@ import (
 
 	"github.com/DigitalTolk/ex/internal/events"
 	"github.com/DigitalTolk/ex/internal/model"
+	"github.com/DigitalTolk/ex/internal/store"
 )
 
 // UserStore defines persistence operations for users.
@@ -142,15 +143,17 @@ type UserStateStore interface {
 }
 
 // DraftStore defines persistence operations for server-side message drafts.
+// Writes are server-owned compare-and-set: they apply only when basisGen
+// matches the stored generation (empty = the scope must have no draft), and
+// report the current row on rejection so callers can hand clients the truth.
 type DraftStore interface {
-	// Upsert applies the draft using last-write-wins on draft.Ts (client edit
-	// time, epoch ms): stale writes are silently dropped by the store.
-	Upsert(ctx context.Context, draft *model.MessageDraft) error
+	Upsert(ctx context.Context, draft *model.MessageDraft, basisGen string) (*store.DraftWriteResult, error)
 	Get(ctx context.Context, userID, id string) (*model.MessageDraft, error)
 	List(ctx context.Context, userID string) ([]*model.MessageDraft, error)
-	// Delete tombstones the draft at client ts (epoch ms). A delete older than
-	// the stored write is a no-op, so it can't remove a newer draft.
-	Delete(ctx context.Context, userID, id string, ts int64) error
+	Delete(ctx context.Context, userID, id, basisGen string) (*store.DraftWriteResult, error)
+	// DeleteUnconditional removes the draft regardless of generation —
+	// reserved for the message-send fold, the authoritative event for a scope.
+	DeleteUnconditional(ctx context.Context, userID, id string) error
 }
 
 // InviteStore defines persistence operations for invitations.

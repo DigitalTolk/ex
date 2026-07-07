@@ -27,7 +27,8 @@ import { queryKeys } from '@/lib/query-keys';
 import type { Message } from '@/types';
 
 const apiFetchMock = vi.hoisted(() => vi.fn());
-vi.mock('@/lib/api', () => ({
+vi.mock('@/lib/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/api')>()),
   apiFetch: (...args: unknown[]) => apiFetchMock(...args),
 }));
 
@@ -242,8 +243,9 @@ describe('useMessages — REST mutations', () => {
     expect(apiFetchMock.mock.calls[0][0]).toBe('/api/v1/channels/ch-1/messages');
     const body = JSON.parse((apiFetchMock.mock.calls[0][1] as { body: string }).body);
     expect(body).toMatchObject({ body: 'hi', parentMessageID: '', attachmentIDs: [] });
-    // The send carries clientTs so the server folds the draft-clear into it.
-    expect(body.clientTs).toBeGreaterThan(0);
+    // No client clock rides the send: the server-side draft-clear fold is
+    // unconditional (sending is the authoritative event for the scope).
+    expect(body.clientTs).toBeUndefined();
   });
 
   it('useSendMessage routes to /conversations/:id/messages when conversationId is set', async () => {

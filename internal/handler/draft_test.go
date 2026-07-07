@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	"github.com/DigitalTolk/ex/internal/store"
 )
 
+// handlerDraftStore mirrors the real store's compare-and-set contract.
 type handlerDraftStore struct {
 	rows      map[string]*model.MessageDraft
 	deleteErr error
@@ -29,11 +31,29 @@ func newHandlerDraftStore() *handlerDraftStore {
 }
 
 func (s *handlerDraftStore) key(userID, id string) string { return userID + "#" + id }
-func (s *handlerDraftStore) Upsert(_ context.Context, d *model.MessageDraft) error {
+
+func (s *handlerDraftStore) storedGen(userID, id string) (string, *model.MessageDraft) {
+	if row, ok := s.rows[s.key(userID, id)]; ok {
+		return row.Gen, row
+	}
+	return "", nil
+}
+
+func (s *handlerDraftStore) Upsert(_ context.Context, d *model.MessageDraft, basisGen string) (*store.DraftWriteResult, error) {
+	gen, current := s.storedGen(d.UserID, d.ID)
+	if basisGen != gen {
+		res := &store.DraftWriteResult{}
+		if current != nil {
+			cp := *current
+			res.Current = &cp
+		}
+		return res, nil
+	}
 	cp := *d
 	s.rows[s.key(d.UserID, d.ID)] = &cp
-	return nil
+	return &store.DraftWriteResult{OK: true}, nil
 }
+
 func (s *handlerDraftStore) Get(_ context.Context, userID, id string) (*model.MessageDraft, error) {
 	d, ok := s.rows[s.key(userID, id)]
 	if !ok {
@@ -42,6 +62,7 @@ func (s *handlerDraftStore) Get(_ context.Context, userID, id string) (*model.Me
 	cp := *d
 	return &cp, nil
 }
+
 func (s *handlerDraftStore) List(_ context.Context, userID string) ([]*model.MessageDraft, error) {
 	if s.listErr != nil {
 		return nil, s.listErr
@@ -58,10 +79,25 @@ func (s *handlerDraftStore) List(_ context.Context, userID string) ([]*model.Mes
 	}
 	return out, nil
 }
-func (s *handlerDraftStore) Delete(_ context.Context, userID, id string, _ int64) error {
+
+func (s *handlerDraftStore) Delete(_ context.Context, userID, id, basisGen string) (*store.DraftWriteResult, error) {
 	if s.deleteErr != nil {
-		return s.deleteErr
+		return nil, s.deleteErr
 	}
+	gen, current := s.storedGen(userID, id)
+	if basisGen != gen {
+		res := &store.DraftWriteResult{}
+		if current != nil {
+			cp := *current
+			res.Current = &cp
+		}
+		return res, nil
+	}
+	delete(s.rows, s.key(userID, id))
+	return &store.DraftWriteResult{OK: true}, nil
+}
+
+func (s *handlerDraftStore) DeleteUnconditional(_ context.Context, userID, id string) error {
 	delete(s.rows, s.key(userID, id))
 	return nil
 }
@@ -93,7 +129,7 @@ func (handlerMembershipStore) UserChannelNotifPrefs(context.Context, string, []s
 func (handlerMembershipStore) SetNotifPrefs(context.Context, string, string, model.ChannelNotificationOverride) error {
 	return nil
 }
-func (handlerMembershipStore) SetMute(context.Context, string, string, bool) error     { return nil }
+func (handlerMembershipStore) SetMute(context.Context, string, string, bool) error { return nil }
 func (handlerMembershipStore) SetChannelLastRead(context.Context, string, string, int64) error {
 	return nil
 }
@@ -167,6 +203,16 @@ func setupDraftHandler(t *testing.T) (*DraftHandler, *handlerDraftStore, *auth.J
 	return NewDraftHandler(svc), drafts, auth.NewJWTManager("draft-secret", 15*time.Minute, 24*time.Hour)
 }
 
+func draftPut(t *testing.T, h *DraftHandler, jwtMgr *auth.JWTManager, userID, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	tok := makeTokenForUser(jwtMgr, &model.User{ID: userID, Email: userID + "@example.com"})
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/drafts", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+tok)
+	rec := httptest.NewRecorder()
+	middleware.Auth(jwtMgr)(http.HandlerFunc(h.Upsert)).ServeHTTP(rec, req)
+	return rec
+}
+
 func TestDraftHandler_List_ServiceError(t *testing.T) {
 	h, store, jwtMgr := setupDraftHandler(t)
 	store.listErr = errors.New("boom")
@@ -200,6 +246,23 @@ func TestDraftHandler_List_NilCoercedToEmpty(t *testing.T) {
 	}
 }
 
+func TestDraftHandler_Upsert_MissingBasisGenRejected(t *testing.T) {
+	h, store, jwtMgr := setupDraftHandler(t)
+	// A pre-gen client (stale tab) sends the legacy shape — no basisGen. It
+	// must be rejected outright: guessing a basis would reopen the stale-
+	// writer resurrection hole the gen protocol exists to close.
+	rec := draftPut(t, h, jwtMgr, "u-1", `{"parentID":"ch-1","parentType":"channel","body":"zombie","ts":123}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d, want 400; body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "missing_basis") {
+		t.Fatalf("body=%s, want missing_basis code", rec.Body.String())
+	}
+	if len(store.rows) != 0 {
+		t.Fatal("a basis-less write must not persist anything")
+	}
+}
+
 func TestDraftHandler_Upsert_EmptyClearsAndReturns204(t *testing.T) {
 	h, _, jwtMgr := setupDraftHandler(t)
 	u := &model.User{ID: "u-1", SystemRole: model.SystemRoleMember}
@@ -208,7 +271,7 @@ func TestDraftHandler_Upsert_EmptyClearsAndReturns204(t *testing.T) {
 	// Empty body + no attachments for a channel the user belongs to → the
 	// service clears the draft and returns nil, so the handler answers 204.
 	req := httptest.NewRequest(http.MethodPut, "/api/v1/drafts",
-		strings.NewReader(`{"parentID":"ch-1","parentType":"channel","body":""}`))
+		strings.NewReader(`{"parentID":"ch-1","parentType":"channel","body":"","basisGen":""}`))
 	req.Header.Set("Authorization", "Bearer "+tok)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -223,9 +286,10 @@ func TestDraftHandler_Upsert_SilentStillSaves(t *testing.T) {
 	tok, _ := jwtMgr.GenerateAccessToken(u)
 	handler := middleware.Auth(jwtMgr)(http.HandlerFunc(h.Upsert))
 	// notify:false → keystroke save; the draft is persisted (200 + body)
-	// while the broadcast is suppressed at the service layer.
+	// while the broadcast is suppressed at the service layer. The legacy ts
+	// field is tolerated and ignored.
 	req := httptest.NewRequest(http.MethodPut, "/api/v1/drafts",
-		strings.NewReader(`{"parentID":"ch-1","parentType":"channel","body":"typing","notify":false}`))
+		strings.NewReader(`{"parentID":"ch-1","parentType":"channel","body":"typing","notify":false,"basisGen":"","ts":42}`))
 	req.Header.Set("Authorization", "Bearer "+tok)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -243,15 +307,52 @@ func TestDraftHandler_Upsert_SilentStillSaves(t *testing.T) {
 	}
 }
 
+func TestDraftHandler_Upsert_StaleBasisConflict(t *testing.T) {
+	h, _, jwtMgr := setupDraftHandler(t)
+
+	rec := draftPut(t, h, jwtMgr, "u-1", `{"parentID":"ch-1","parentType":"channel","body":"v1","basisGen":""}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("seed status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var v1 model.MessageDraft
+	if err := json.NewDecoder(rec.Body).Decode(&v1); err != nil || v1.Gen == "" {
+		t.Fatalf("decode v1: %v (gen=%q)", err, v1.Gen)
+	}
+	rec = draftPut(t, h, jwtMgr, "u-1", `{"parentID":"ch-1","parentType":"channel","body":"v2","basisGen":"`+v1.Gen+`"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("update status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	// A write acting on the superseded generation → 409 carrying the stored
+	// draft, so the stale client can reconcile instead of clobbering.
+	rec = draftPut(t, h, jwtMgr, "u-1", `{"parentID":"ch-1","parentType":"channel","body":"zombie","basisGen":"`+v1.Gen+`"}`)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("stale status=%d, want 409; body=%s", rec.Code, rec.Body.String())
+	}
+	var conflict struct {
+		Error   struct{ Code string }
+		Current *model.MessageDraft
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&conflict); err != nil {
+		t.Fatalf("decode conflict: %v", err)
+	}
+	if conflict.Error.Code != "draft_conflict" || conflict.Current == nil || conflict.Current.Body != "v2" {
+		t.Fatalf("conflict = %+v, want draft_conflict with current v2", conflict)
+	}
+
+	// A stale clear against an emptied scope reports a null current.
+	rec = draftPut(t, h, jwtMgr, "u-2", `{"parentID":"dm-1","parentType":"conversation","body":"","basisGen":"gone-gen"}`)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("stale clear status=%d, want 409; body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"current":null`) {
+		t.Fatalf("stale clear body=%s, want null current", rec.Body.String())
+	}
+}
+
 func TestDraftHandler_Upsert_BadJSON(t *testing.T) {
 	h, _, jwtMgr := setupDraftHandler(t)
-	u := &model.User{ID: "u-1", SystemRole: model.SystemRoleMember}
-	tok, _ := jwtMgr.GenerateAccessToken(u)
-	handler := middleware.Auth(jwtMgr)(http.HandlerFunc(h.Upsert))
-	req := httptest.NewRequest(http.MethodPut, "/api/v1/drafts", strings.NewReader(`{bad`))
-	req.Header.Set("Authorization", "Bearer "+tok)
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
+	rec := draftPut(t, h, jwtMgr, "u-1", `{bad`)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status=%d, want 400; body=%s", rec.Code, rec.Body.String())
 	}
@@ -259,15 +360,8 @@ func TestDraftHandler_Upsert_BadJSON(t *testing.T) {
 
 func TestDraftHandler_Upsert_ServiceError(t *testing.T) {
 	h, _, jwtMgr := setupDraftHandler(t)
-	u := &model.User{ID: "u-1", SystemRole: model.SystemRoleMember}
-	tok, _ := jwtMgr.GenerateAccessToken(u)
-	handler := middleware.Auth(jwtMgr)(http.HandlerFunc(h.Upsert))
 	// Channel the user is not a member of → service rejects the draft.
-	req := httptest.NewRequest(http.MethodPut, "/api/v1/drafts",
-		strings.NewReader(`{"parentID":"ch-nope","parentType":"channel","body":"hi"}`))
-	req.Header.Set("Authorization", "Bearer "+tok)
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
+	rec := draftPut(t, h, jwtMgr, "u-1", `{"parentID":"ch-nope","parentType":"channel","body":"hi","basisGen":""}`)
 	if rec.Code == http.StatusOK || rec.Code == http.StatusNoContent {
 		t.Fatalf("expected error status, got %d; body=%s", rec.Code, rec.Body.String())
 	}
@@ -281,7 +375,7 @@ func TestDraftHandler_UpsertListDelete(t *testing.T) {
 	mux.Handle("PUT /api/v1/drafts", middleware.Auth(jwtMgr)(http.HandlerFunc(h.Upsert)))
 	mux.Handle("DELETE /api/v1/drafts/{id}", middleware.Auth(jwtMgr)(http.HandlerFunc(h.Delete)))
 
-	body := `{"parentID":"ch-1","parentType":"channel","parentMessageID":"root-1","body":"draft body"}`
+	body := `{"parentID":"ch-1","parentType":"channel","parentMessageID":"root-1","body":"draft body","basisGen":""}`
 	req := httptest.NewRequest(http.MethodPut, "/api/v1/drafts", strings.NewReader(body))
 	req.Header.Set("Authorization", "Bearer "+token)
 	rec := httptest.NewRecorder()
@@ -293,7 +387,7 @@ func TestDraftHandler_UpsertListDelete(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&draft); err != nil {
 		t.Fatalf("decode draft: %v", err)
 	}
-	if draft.Body != "draft body" || draft.ParentMessageID != "root-1" {
+	if draft.Body != "draft body" || draft.ParentMessageID != "root-1" || draft.Gen == "" {
 		t.Fatalf("draft = %+v", draft)
 	}
 
@@ -305,7 +399,25 @@ func TestDraftHandler_UpsertListDelete(t *testing.T) {
 		t.Fatalf("list status=%d body=%s", rec.Code, rec.Body.String())
 	}
 
+	// Deleting without the generation it displayed → 400 (stale pre-gen tab).
 	req = httptest.NewRequest(http.MethodDelete, "/api/v1/drafts/"+draft.ID, nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("genless delete status = %d, want 400; body=%s", rec.Code, rec.Body.String())
+	}
+
+	// Deleting with a superseded generation → 409 with the truth.
+	req = httptest.NewRequest(http.MethodDelete, "/api/v1/drafts/"+draft.ID+"?gen=stale-gen", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("stale delete status = %d, want 409; body=%s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodDelete, "/api/v1/drafts/"+draft.ID+"?gen="+draft.Gen, nil)
 	req.Header.Set("Authorization", "Bearer "+token)
 	rec = httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
@@ -316,12 +428,7 @@ func TestDraftHandler_UpsertListDelete(t *testing.T) {
 
 func TestDraftHandler_RejectsUnauthorizedParent(t *testing.T) {
 	h, _, jwtMgr := setupDraftHandler(t)
-	token := makeTokenForUser(jwtMgr, &model.User{ID: "u-3", Email: "u3@example.com"})
-
-	req := httptest.NewRequest(http.MethodPut, "/api/v1/drafts", strings.NewReader(`{"parentID":"ch-1","parentType":"channel","body":"no"}`))
-	req.Header.Set("Authorization", "Bearer "+token)
-	rec := httptest.NewRecorder()
-	middleware.Auth(jwtMgr)(http.HandlerFunc(h.Upsert)).ServeHTTP(rec, req)
+	rec := draftPut(t, h, jwtMgr, "u-3", `{"parentID":"ch-1","parentType":"channel","body":"no","basisGen":""}`)
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body.String())
 	}
@@ -337,18 +444,12 @@ func TestDraftHandler_ErrorBranches(t *testing.T) {
 		t.Fatalf("unauth list status = %d, want 401", rec.Code)
 	}
 
-	req := httptest.NewRequest(http.MethodPut, "/api/v1/drafts", strings.NewReader(`{bad`))
-	req.Header.Set("Authorization", "Bearer "+token)
-	rec = httptest.NewRecorder()
-	middleware.Auth(jwtMgr)(http.HandlerFunc(h.Upsert)).ServeHTTP(rec, req)
+	rec = draftPut(t, h, jwtMgr, "u-1", `{bad`)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("invalid json status = %d, want 400", rec.Code)
 	}
 
-	req = httptest.NewRequest(http.MethodPut, "/api/v1/drafts", strings.NewReader(`{"parentID":"ch-1","parentType":"channel","parentMessageID":"missing","body":"x"}`))
-	req.Header.Set("Authorization", "Bearer "+token)
-	rec = httptest.NewRecorder()
-	middleware.Auth(jwtMgr)(http.HandlerFunc(h.Upsert)).ServeHTTP(rec, req)
+	rec = draftPut(t, h, jwtMgr, "u-1", `{"parentID":"ch-1","parentType":"channel","parentMessageID":"missing","body":"x","basisGen":""}`)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("missing thread status = %d, want 404; body=%s", rec.Code, rec.Body.String())
 	}
@@ -359,18 +460,8 @@ func TestDraftHandler_ErrorBranches(t *testing.T) {
 		t.Fatalf("unauth delete status = %d, want 401", rec.Code)
 	}
 
-	drafts.deleteErr = store.ErrNotFound
-	req = httptest.NewRequest(http.MethodDelete, "/api/v1/drafts/draft-missing", nil)
-	req.SetPathValue("id", "draft-missing")
-	req.Header.Set("Authorization", "Bearer "+token)
-	rec = httptest.NewRecorder()
-	middleware.Auth(jwtMgr)(http.HandlerFunc(h.Delete)).ServeHTTP(rec, req)
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("missing delete status = %d, want 404; body=%s", rec.Code, rec.Body.String())
-	}
-
 	drafts.deleteErr = errors.New("delete failed")
-	req = httptest.NewRequest(http.MethodDelete, "/api/v1/drafts/draft-error", nil)
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/drafts/draft-error?gen=g1", nil)
 	req.SetPathValue("id", "draft-error")
 	req.Header.Set("Authorization", "Bearer "+token)
 	rec = httptest.NewRecorder()
@@ -378,4 +469,69 @@ func TestDraftHandler_ErrorBranches(t *testing.T) {
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("failed delete status = %d, want 500; body=%s", rec.Code, rec.Body.String())
 	}
+}
+
+// syncDraftClearer drives clearSentDraft's retry loop deterministically: it
+// signals done on every attempt and fails until failures is exhausted.
+type syncDraftClearer struct {
+	mu       sync.Mutex
+	failures int
+	calls    int
+	done     chan struct{}
+}
+
+func (c *syncDraftClearer) DeleteForScope(context.Context, string, string, string, string) error {
+	c.mu.Lock()
+	c.calls++
+	fail := c.failures > 0
+	if fail {
+		c.failures--
+	}
+	c.mu.Unlock()
+	c.done <- struct{}{}
+	if fail {
+		return errors.New("draft store down")
+	}
+	return nil
+}
+
+func (c *syncDraftClearer) waitForCalls(t *testing.T, n int) {
+	t.Helper()
+	for i := range n {
+		select {
+		case <-c.done:
+		case <-time.After(2 * time.Second):
+			t.Fatalf("timed out waiting for clear attempt %d/%d", i+1, n)
+		}
+	}
+}
+
+func TestClearSentDraft_NilClearerIsNoop(t *testing.T) {
+	// Must not panic or spawn anything.
+	clearSentDraft(context.Background(), nil, "u-1", "ch-1", service.ParentChannel, "")
+}
+
+func TestClearSentDraft_RetriesTransientFailure(t *testing.T) {
+	stubClearSentDraftRetries(t, []time.Duration{time.Millisecond}, time.Second)
+	c := &syncDraftClearer{failures: 1, done: make(chan struct{}, 4)}
+	clearSentDraft(context.Background(), c, "u-1", "ch-1", service.ParentChannel, "")
+	// First attempt fails, the retry succeeds — the invariant self-heals.
+	c.waitForCalls(t, 2)
+}
+
+func TestClearSentDraft_ExhaustedRetriesAreLoud(t *testing.T) {
+	stubClearSentDraftRetries(t, []time.Duration{time.Millisecond}, time.Second)
+	c := &syncDraftClearer{failures: 10, done: make(chan struct{}, 4)}
+	clearSentDraft(context.Background(), c, "u-1", "ch-1", service.ParentChannel, "")
+	// Initial attempt + one retry, then gives up (logged at ERROR).
+	c.waitForCalls(t, 2)
+}
+
+func TestClearSentDraft_DeadlineAbandons(t *testing.T) {
+	// Zero timeout: the context is already done when the retry wait starts,
+	// so the worker abandons instead of sleeping out the schedule.
+	stubClearSentDraftRetries(t, []time.Duration{time.Hour}, 0)
+	c := &syncDraftClearer{failures: 10, done: make(chan struct{}, 4)}
+	clearSentDraft(context.Background(), c, "u-1", "ch-1", service.ParentChannel, "")
+	c.waitForCalls(t, 1)
 }

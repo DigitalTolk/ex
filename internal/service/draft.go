@@ -34,22 +34,23 @@ func NewDraftService(drafts DraftStore, messages MessageStore, memberships Membe
 	}
 }
 
+// DraftConflictError reports a write whose basis generation no longer matches
+// the stored draft — the client acted on stale state. Current is the stored
+// draft at decision time (nil when the scope has no draft), so callers can
+// hand the client the truth to reconcile against. Nothing was written.
+type DraftConflictError struct {
+	Current *model.MessageDraft
+}
+
+func (e *DraftConflictError) Error() string { return "draft: generation conflict" }
+
 // upsertConfig tunes a single Upsert call.
 type upsertConfig struct {
 	silent bool
-	ts     int64 // client edit time (epoch ms) for LWW; 0 → server now
 }
 
 // UpsertOption configures Upsert behavior.
 type UpsertOption func(*upsertConfig)
-
-// WithClientTs sets the client edit time (epoch ms) used for last-write-wins
-// ordering. The store keeps a save only if its ts is newer than the stored
-// value's, so a delayed keystroke can't supersede a later send. Defaults to
-// server time when unset (0).
-func WithClientTs(ts int64) UpsertOption {
-	return func(c *upsertConfig) { c.ts = ts }
-}
 
 // WithSilent suppresses the draft.updated broadcast for this upsert when
 // silent is true. The draft is still persisted — only the cross-device
@@ -60,9 +61,12 @@ func WithSilent(silent bool) UpsertOption {
 	return func(c *upsertConfig) { c.silent = silent }
 }
 
-// Upsert creates or replaces the draft for a single composer scope. Empty
-// content deletes that scope's draft and returns nil.
-func (s *DraftService) Upsert(ctx context.Context, userID, parentID, parentType, parentMessageID, body string, attachmentIDs []string, opts ...UpsertOption) (*model.MessageDraft, error) {
+// Upsert creates or replaces the draft for a single composer scope; empty
+// content clears it (returning a nil draft). basisGen is the generation the
+// client acted on ("" = it believes no draft exists): a mismatch means the
+// client is stale, nothing is written, and a *DraftConflictError carrying
+// the current state is returned — the server decides, the client reconciles.
+func (s *DraftService) Upsert(ctx context.Context, userID, parentID, parentType, parentMessageID, body string, attachmentIDs []string, basisGen string, opts ...UpsertOption) (*model.MessageDraft, error) {
 	var cfg upsertConfig
 	for _, opt := range opts {
 		opt(&cfg)
@@ -93,12 +97,18 @@ func (s *DraftService) Upsert(ctx context.Context, userID, parentID, parentType,
 	}
 
 	now := time.Now()
-	ts := tsOrNow(cfg.ts)
 
 	id := draftID(userID, parentType, parentID, parentMessageID)
 	if body == "" && len(attachmentIDs) == 0 {
-		if err := s.drafts.Delete(ctx, userID, id, ts); err != nil && !errors.Is(err, store.ErrNotFound) {
+		// The composer reports "I'm empty now" unconditionally; whether that
+		// clears anything is the store's CAS decision. Clearing an absent
+		// draft with the empty basis is an accepted no-op.
+		res, err := s.drafts.Delete(ctx, userID, id, basisGen)
+		if err != nil {
 			return nil, fmt.Errorf("draft: delete empty: %w", err)
+		}
+		if !res.OK {
+			return nil, &DraftConflictError{Current: res.Current}
 		}
 		if !cfg.silent {
 			s.publishUpdated(ctx, userID, id)
@@ -123,10 +133,14 @@ func (s *DraftService) Upsert(ctx context.Context, userID, parentID, parentType,
 		AttachmentIDs:   attachmentIDs,
 		CreatedAt:       createdAt,
 		UpdatedAt:       now,
-		Ts:              ts,
+		Gen:             store.NewID(),
 	}
-	if err := s.drafts.Upsert(ctx, draft); err != nil {
+	res, err := s.drafts.Upsert(ctx, draft, basisGen)
+	if err != nil {
 		return nil, fmt.Errorf("draft: upsert: %w", err)
+	}
+	if !res.OK {
+		return nil, &DraftConflictError{Current: res.Current}
 	}
 	if !cfg.silent {
 		s.publishUpdated(ctx, userID, id)
@@ -146,26 +160,32 @@ func (s *DraftService) List(ctx context.Context, userID string) ([]*model.Messag
 	return drafts, nil
 }
 
-// Delete removes a draft by ID at client ts (epoch ms; 0 → server now).
-func (s *DraftService) Delete(ctx context.Context, userID, id string, ts int64) error {
+// Delete removes a draft by ID iff basisGen matches the stored generation —
+// an explicit delete (Drafts page) still only applies to the state the user
+// was looking at; a mismatch returns *DraftConflictError with the truth.
+func (s *DraftService) Delete(ctx context.Context, userID, id, basisGen string) error {
 	id = strings.TrimSpace(id)
 	if id == "" {
 		return errors.New("draft: id required")
 	}
-	if err := s.drafts.Delete(ctx, userID, id, tsOrNow(ts)); err != nil {
+	res, err := s.drafts.Delete(ctx, userID, id, basisGen)
+	if err != nil {
 		return fmt.Errorf("draft: delete: %w", err)
+	}
+	if !res.OK {
+		return &DraftConflictError{Current: res.Current}
 	}
 	s.publishUpdated(ctx, userID, id)
 	return nil
 }
 
-// DeleteForScope removes the draft for a composer scope at client ts (epoch ms;
-// 0 → server now). Used by the message-send path to clear the scope's draft as
-// the message is created — the id is derived from the scope, so it works without
-// the caller knowing the draft id.
-func (s *DraftService) DeleteForScope(ctx context.Context, userID, parentID, parentType, parentMessageID string, ts int64) error {
+// DeleteForScope removes the draft for a composer scope unconditionally. Used
+// only by the message-send fold: sending is the authoritative user event for
+// the scope, so it always wins — no generation check, no client clock. The id
+// is derived from the scope, so the caller never needs the draft id.
+func (s *DraftService) DeleteForScope(ctx context.Context, userID, parentID, parentType, parentMessageID string) error {
 	id := draftID(userID, parentType, parentID, parentMessageID)
-	if err := s.drafts.Delete(ctx, userID, id, tsOrNow(ts)); err != nil {
+	if err := s.drafts.DeleteUnconditional(ctx, userID, id); err != nil {
 		return fmt.Errorf("draft: delete for scope: %w", err)
 	}
 	s.publishUpdated(ctx, userID, id)
@@ -214,15 +234,6 @@ func (s *DraftService) publishUpdated(ctx context.Context, userID, draftID strin
 	events.Publish(ctx, s.publisher, pubsub.UserChannel(userID), events.EventDraftUpdated, map[string]string{
 		"id": draftID,
 	})
-}
-
-// tsOrNow defaults a missing client timestamp (0) to server time, in epoch ms.
-// It's the single home for the last-write-wins clock fallback.
-func tsOrNow(ts int64) int64 {
-	if ts == 0 {
-		return time.Now().UnixMilli()
-	}
-	return ts
 }
 
 func draftID(userID, parentType, parentID, parentMessageID string) string {

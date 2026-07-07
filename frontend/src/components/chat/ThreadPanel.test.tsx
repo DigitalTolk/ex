@@ -345,7 +345,6 @@ describe('ThreadPanel', () => {
           attachmentIDs: [],
           parentMessageID: 'm-1',
         },
-        expect.objectContaining({ onError: expect.any(Function) }),
       );
     });
   });

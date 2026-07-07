@@ -139,6 +139,11 @@ export interface MessageDraft {
   attachmentIDs?: string[];
   createdAt: string;
   updatedAt: string;
+  // Server-assigned generation token: every accepted write mints a new one,
+  // and a save/clear must present the generation it acted on (basisGen) or
+  // the server rejects it with 409 + the current state. The client never
+  // decides ordering — it only reports events and reconciles.
+  gen: string;
 }
 
 export interface Attachment {

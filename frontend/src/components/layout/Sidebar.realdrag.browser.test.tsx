@@ -101,7 +101,9 @@ vi.mock('@/hooks/useUserState', () => ({
   }),
 }));
 vi.mock('@/hooks/useDrafts', () => ({
-  markLocalDraftClearForSend: vi.fn(), useDrafts: () => ({ data: [] }) }));
+  condemnDraftForSend: vi.fn(() => vi.fn()),
+  removeDraftScopeFromCache: vi.fn(),
+  useDrafts: () => ({ data: [] }) }));
 vi.mock('@/hooks/useUsersBatch', () => ({ useUsersBatch: () => ({ map: new Map() }) }));
 vi.mock('@/hooks/useSidebar', () => ({
   useCategories: () => ({ data: makeCategories() }),

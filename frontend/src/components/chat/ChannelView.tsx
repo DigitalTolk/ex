@@ -39,10 +39,6 @@ import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { useDeepLinkAnchor } from '@/hooks/useDeepLinkAnchor';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import {
-  restoreDraftScope,
-  restoreDraftScopeForContent,
-  suppressSentDraft,
-  useClearDraftForScope,
   useDraftAttachmentChips,
   useDraftForScope,
   useSaveDraft,
@@ -171,12 +167,10 @@ export function ChannelView() {
   // invite them in one click (see NonMemberInvitePrompt).
   const { pendingInvites, checkMentions, clearInvites } = useNonMemberInvite(channel?.id, user?.id);
   const saveDraft = useSaveDraft();
-  const clearDraftMutate = useClearDraftForScope();
   const saveDraftMutate = saveDraft.mutate;
   const handleDraftChange = useCallback(
-    (value: MessageInputValue, options?: { notify?: boolean }) => {
+    (value: MessageInputValue, options?: { notify?: boolean; keepalive?: boolean }) => {
       if (!channelID) return;
-      restoreDraftScopeForContent(draftScope, value);
       saveDraftMutate({
         parentID: channelID,
         parentType: 'channel',
@@ -185,26 +179,22 @@ export function ChannelView() {
         // Keystroke saves persist silently; the focus-loss flush (notify)
         // is what surfaces the draft in the sidebar.
         silent: !options?.notify,
-        ts: value.ts,
+        keepalive: options?.keepalive,
       });
     },
-    [channelID, draftScope, saveDraftMutate],
+    [channelID, saveDraftMutate],
   );
   const handleSendMessage = useCallback(
     (value: { body: string; attachmentIDs: string[] }) => {
       // Surface an invite prompt for any mentioned non-members (supersedes a
       // previous prompt; empty result clears it).
       checkMentions(value.body);
-      suppressSentDraft(draftScope);
-      sendMessage.mutate(value, {
-        // Clear the scope's server draft once the message is confirmed sent —
-        // by SCOPE, so a draft saved silently this session (whose id was never
-        // cached) is cleared too. onError restores the scope so it returns.
-        onSuccess: () => clearDraftMutate(draftScope),
-        onError: () => restoreDraftScope(draftScope),
-      });
+      // Draft lifecycle (condemn at mutate, cache patch-out on success,
+      // rollback on error) is owned by useSendMessage — the send IS the
+      // draft-clearing event; nothing draft-specific to do here.
+      sendMessage.mutate(value);
     },
-    [sendMessage, draftScope, clearDraftMutate, checkMentions],
+    [sendMessage, checkMentions],
   );
   const handleEditMessage = useCallback(
     (value: { body: string; attachmentIDs: string[] }) => {

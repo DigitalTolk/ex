@@ -14,110 +14,149 @@ import (
 
 // draftHashTTL ages out a user's whole draft set after this long with no draft
 // activity. Drafts are ephemeral by nature; 180 days is generous. Refreshed on
-// every write so an actively-used composer never lapses.
+// every accepted write so an actively-used composer never lapses.
 const draftHashTTL = 180 * 24 * time.Hour
-
-// draftTombstoneTTL bounds how long a delete tombstone (the LWW client-ts a
-// cleared draft leaves behind in draftts:{u}) is kept. Tombstones only need to
-// outlive the race they guard — a delayed keystroke save arriving after the
-// send that cleared the draft, a matter of seconds — so a week is extravagant
-// margin. Without this horizon every scope a user EVER sent a message in kept a
-// permanent hash field (draft IDs are deterministic per scope), and since every
-// send also refreshes the hash TTL, an active user's draftts hash grew
-// monotonically forever — the "Redis memory only ever goes up" leak. Expired
-// tombstones are swept inside the write scripts, so every user's next draft
-// write or send self-heals their hash.
-const draftTombstoneTTL = 7 * 24 * time.Hour
 
 // draftHashTTLSeconds is the TTL the Lua scripts EXPIRE with — computed once.
 var draftHashTTLSeconds = int(draftHashTTL.Seconds())
 
+// legacyDraftGen is the generation reported for rows written before the gen
+// protocol (raw JSON, no "g:" prefix). A client can only present it after
+// reading the draft back, and the first accepted write rewrites the row in
+// the new format — so legacy rows migrate lazily, one write at a time.
+const legacyDraftGen = "legacy"
+
 func draftHashKey(userID string) string { return "draft:" + userID }
-func draftTSKey(userID string) string   { return "draftts:" + userID }
+
+// draftTSKey is the retired client-ts / tombstone hash from the pre-gen LWW
+// protocol. It is no longer read or written; every accepted write DELs it so
+// active users clean up their own leftovers (idle users' keys lapse via the
+// TTL the old code set).
+func draftTSKey(userID string) string { return "draftts:" + userID }
 
 // RedisDraftStore stores composer drafts in Redis.
 //
-//   - draft:{userID}   HASH  field=draftID → JSON(MessageDraft)   (content)
-//   - draftts:{userID} HASH  field=draftID → client ts (epoch ms) (LWW clock)
+//	draft:{userID} HASH field=draftID → "g:<gen>|" + JSON(MessageDraft)
 //
-// The timestamp hash is the last-write-wins register AND the delete tombstone in
-// one: a save or delete only takes effect when its client ts is strictly newer
-// (save) / not older (delete) than the recorded ts. After a delete the ts stays
-// behind as a tombstone, so a delayed keystroke save (ts ≤ the send's ts) can't
-// resurrect a draft the user already sent, while a genuinely newer edit
-// (ts > the send's ts) still wins. Both hashes share the 180-day TTL.
+// Ordering is server-owned optimistic concurrency, not client clocks: every
+// accepted write stores a server-minted generation token, and a write (save
+// or clear) is applied only when the caller's basis generation equals the
+// stored one — the empty basis means "the scope has no draft". A client
+// acting on stale state is rejected with the current row, never merged. A
+// cleared draft is actually deleted; absence rejects every non-empty basis,
+// so a stale writer can never resurrect it and no tombstones are needed.
 type RedisDraftStore struct {
 	client *redis.Client
-	now    func() time.Time
 }
 
 // NewRedisDraftStore builds a RedisDraftStore over the given client.
 func NewRedisDraftStore(client *redis.Client) *RedisDraftStore {
-	return &RedisDraftStore{client: client, now: time.Now}
+	return &RedisDraftStore{client: client}
 }
 
-// tombstoneCutoffMs is the epoch-ms below which a pure tombstone (ts field
-// with no surviving content field) is eligible for sweeping.
-func (s *RedisDraftStore) tombstoneCutoffMs() int64 {
-	return s.now().Add(-draftTombstoneTTL).UnixMilli()
+// DraftWriteResult reports the outcome of a compare-and-set draft write.
+type DraftWriteResult struct {
+	// OK reports whether the write was applied.
+	OK bool
+	// Current is the stored draft at decision time when the write was
+	// rejected (nil when the scope has no draft). Always nil when OK.
+	Current *model.MessageDraft
 }
 
-// sweepTombstones drops aged-out pure tombstones: ts fields older than the
-// cutoff whose content field is gone. Runs inside both write scripts so the
-// hash prunes itself on every write instead of growing with every scope the
-// user has ever sent in. The field the surrounding script just touched
-// (ARGV[1]) is explicitly skipped so the op's own tombstone always survives
-// its own write — client timestamps are client-supplied and may be
-// arbitrarily skewed, and the LWW guard for THIS send must hold regardless.
-const sweepTombstones = `
-local cutoff = tonumber(ARGV_CUTOFF)
-local ts = redis.call('HGETALL', KEYS[2])
-for i = 1, #ts, 2 do
-  local fts = tonumber(ts[i + 1]) or 0
-  if ts[i] ~= ARGV[1] and fts < cutoff and redis.call('HEXISTS', KEYS[1], ts[i]) == 0 then
-    redis.call('HDEL', KEYS[2], ts[i])
+// storedGen extracts the generation of a stored hash value: "g:<gen>|…" for
+// gen-protocol rows, the legacy sentinel for anything else (pre-gen raw JSON).
+const luaStoredGen = `
+local function stored_gen(v)
+  if not v then return '' end
+  if string.sub(v, 1, 2) == 'g:' then
+    local sep = string.find(v, '|', 3, true)
+    return string.sub(v, 3, sep - 1)
   end
+  return 'legacy'
 end
 `
 
-// KEYS[1]=draft:{u} KEYS[2]=draftts:{u}; ARGV: id, json, ts, ttlSeconds, tombstoneCutoffMs.
-var draftUpsertScript = redis.NewScript(`
-local ets = tonumber(redis.call('HGET', KEYS[2], ARGV[1])) or 0
-if tonumber(ARGV[3]) <= ets then return 0 end
-redis.call('HSET', KEYS[1], ARGV[1], ARGV[2])
-redis.call('HSET', KEYS[2], ARGV[1], ARGV[3])
+// KEYS[1]=draft:{u} KEYS[2]=draftts:{u}; ARGV: id, basisGen, encodedValue, ttlSeconds.
+var draftUpsertScript = redis.NewScript(luaStoredGen + `
+local stored = redis.call('HGET', KEYS[1], ARGV[1])
+if stored_gen(stored) ~= ARGV[2] then
+  if stored then return {0, stored} end
+  return {0}
+end
+redis.call('HSET', KEYS[1], ARGV[1], ARGV[3])
 redis.call('EXPIRE', KEYS[1], ARGV[4])
-redis.call('EXPIRE', KEYS[2], ARGV[4])
-` + replaceCutoff(sweepTombstones, "ARGV[5]") + `
-return 1
+redis.call('DEL', KEYS[2])
+return {1}
 `)
 
-// KEYS[1]=draft:{u} KEYS[2]=draftts:{u}; ARGV: id, ts, ttlSeconds, tombstoneCutoffMs.
-var draftDeleteScript = redis.NewScript(`
-local ets = tonumber(redis.call('HGET', KEYS[2], ARGV[1])) or 0
-if tonumber(ARGV[2]) < ets then return 0 end
-redis.call('HDEL', KEYS[1], ARGV[1])
-redis.call('HSET', KEYS[2], ARGV[1], ARGV[2])
-redis.call('EXPIRE', KEYS[2], ARGV[3])
-` + replaceCutoff(sweepTombstones, "ARGV[4]") + `
-return 1
+// KEYS[1]=draft:{u} KEYS[2]=draftts:{u}; ARGV: id, basisGen.
+// Clearing an absent draft with the empty basis is an accepted no-op, so
+// clients can always report "the composer is empty now" without first
+// knowing whether the server has anything — the server decides.
+var draftDeleteScript = redis.NewScript(luaStoredGen + `
+local stored = redis.call('HGET', KEYS[1], ARGV[1])
+if stored_gen(stored) ~= ARGV[2] then
+  if stored then return {0, stored} end
+  return {0}
+end
+if stored then redis.call('HDEL', KEYS[1], ARGV[1]) end
+redis.call('DEL', KEYS[2])
+return {1}
 `)
 
-// replaceCutoff binds the sweep snippet's cutoff placeholder to the calling
-// script's ARGV slot (the two scripts pass it at different positions).
-func replaceCutoff(script, argv string) string {
-	return strings.ReplaceAll(script, "ARGV_CUTOFF", argv)
+// encodeDraft renders the stored hash value. The generation is kept in the
+// prefix — outside the JSON — so the Lua scripts can compare it without
+// decoding the payload. ULID generations never contain '|'.
+func encodeDraft(draft *model.MessageDraft) string {
+	return "g:" + draft.Gen + "|" + string(mustJSON(json.Marshal(draft)))
 }
 
-func (s *RedisDraftStore) Upsert(ctx context.Context, draft *model.MessageDraft) error {
-	payload := mustJSON(json.Marshal(draft))
-	if err := draftUpsertScript.Run(ctx, s.client,
-		[]string{draftHashKey(draft.UserID), draftTSKey(draft.UserID)},
-		draft.ID, payload, draft.Ts, draftHashTTLSeconds, s.tombstoneCutoffMs(),
-	).Err(); err != nil {
-		return fmt.Errorf("store: upsert draft: %w", err)
+// decodeDraft parses a stored hash value, tolerating pre-gen rows (raw JSON,
+// reported as the legacy generation).
+func decodeDraft(raw string) (*model.MessageDraft, error) {
+	gen := legacyDraftGen
+	if strings.HasPrefix(raw, "g:") {
+		sep := strings.Index(raw, "|")
+		gen = raw[2:sep]
+		raw = raw[sep+1:]
 	}
-	return nil
+	var draft model.MessageDraft
+	if err := json.Unmarshal([]byte(raw), &draft); err != nil {
+		return nil, fmt.Errorf("store: unmarshal draft: %w", err)
+	}
+	draft.Gen = gen
+	return &draft, nil
+}
+
+// casResult converts a CAS script reply ({1} accepted; {0[, stored]} rejected
+// with the current row when one exists) into a DraftWriteResult.
+func casResult(reply []any) (*DraftWriteResult, error) {
+	if reply[0].(int64) == 1 {
+		return &DraftWriteResult{OK: true}, nil
+	}
+	res := &DraftWriteResult{}
+	if len(reply) > 1 {
+		current, err := decodeDraft(reply[1].(string))
+		if err != nil {
+			return nil, err
+		}
+		res.Current = current
+	}
+	return res, nil
+}
+
+// Upsert applies the draft iff basisGen matches the stored generation (empty
+// basis = the scope must have no draft). draft.Gen must carry the freshly
+// minted generation to store.
+func (s *RedisDraftStore) Upsert(ctx context.Context, draft *model.MessageDraft, basisGen string) (*DraftWriteResult, error) {
+	reply, err := draftUpsertScript.Run(ctx, s.client,
+		[]string{draftHashKey(draft.UserID), draftTSKey(draft.UserID)},
+		draft.ID, basisGen, encodeDraft(draft), draftHashTTLSeconds,
+	).Slice()
+	if err != nil {
+		return nil, fmt.Errorf("store: upsert draft: %w", err)
+	}
+	return casResult(reply)
 }
 
 func (s *RedisDraftStore) Get(ctx context.Context, userID, id string) (*model.MessageDraft, error) {
@@ -128,11 +167,7 @@ func (s *RedisDraftStore) Get(ctx context.Context, userID, id string) (*model.Me
 	if err != nil {
 		return nil, fmt.Errorf("store: get draft: %w", err)
 	}
-	var draft model.MessageDraft
-	if err := json.Unmarshal([]byte(raw), &draft); err != nil {
-		return nil, fmt.Errorf("store: unmarshal draft: %w", err)
-	}
-	return &draft, nil
+	return decodeDraft(raw)
 }
 
 func (s *RedisDraftStore) List(ctx context.Context, userID string) ([]*model.MessageDraft, error) {
@@ -142,23 +177,37 @@ func (s *RedisDraftStore) List(ctx context.Context, userID string) ([]*model.Mes
 	}
 	drafts := make([]*model.MessageDraft, 0, len(all))
 	for _, raw := range all {
-		var draft model.MessageDraft
-		if err := json.Unmarshal([]byte(raw), &draft); err != nil {
-			return nil, fmt.Errorf("store: unmarshal draft: %w", err)
+		draft, err := decodeDraft(raw)
+		if err != nil {
+			return nil, err
 		}
-		drafts = append(drafts, &draft)
+		drafts = append(drafts, draft)
 	}
 	return drafts, nil
 }
 
-// Delete tombstones the scope's draft at the given client ts (epoch ms). A
-// delete older than the recorded ts is a no-op (a newer draft exists).
-func (s *RedisDraftStore) Delete(ctx context.Context, userID, id string, ts int64) error {
-	if err := draftDeleteScript.Run(ctx, s.client,
+// Delete removes the draft iff basisGen matches the stored generation. A
+// clear of an absent draft with the empty basis is an accepted no-op.
+func (s *RedisDraftStore) Delete(ctx context.Context, userID, id, basisGen string) (*DraftWriteResult, error) {
+	reply, err := draftDeleteScript.Run(ctx, s.client,
 		[]string{draftHashKey(userID), draftTSKey(userID)},
-		id, ts, draftHashTTLSeconds, s.tombstoneCutoffMs(),
-	).Err(); err != nil {
-		return fmt.Errorf("store: delete draft: %w", err)
+		id, basisGen,
+	).Slice()
+	if err != nil {
+		return nil, fmt.Errorf("store: delete draft: %w", err)
+	}
+	return casResult(reply)
+}
+
+// DeleteUnconditional removes the draft regardless of generation. Reserved
+// for the message-send fold: sending IS the authoritative user event for the
+// scope, so it always wins.
+func (s *RedisDraftStore) DeleteUnconditional(ctx context.Context, userID, id string) error {
+	pipe := s.client.Pipeline()
+	pipe.HDel(ctx, draftHashKey(userID), id)
+	pipe.Del(ctx, draftTSKey(userID))
+	if _, err := pipe.Exec(ctx); err != nil {
+		return fmt.Errorf("store: delete draft unconditional: %w", err)
 	}
 	return nil
 }

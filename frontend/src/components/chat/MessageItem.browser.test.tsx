@@ -193,6 +193,23 @@ describe('MessageItem browser behavior', () => {
       expect(badge).not.toBeNull();
       expect(badge!.textContent).toContain('2');
     });
+    // Mobile chips get a little more padding with a smaller glyph; desktop
+    // stays compact with the md glyph. In BOTH cases the chip must not
+    // outgrow the add-reaction button beside it (the user-visible rule).
+    const badge = document.querySelector('[data-testid="reaction-badge"]') as HTMLElement;
+    const style = getComputedStyle(badge);
+    if (window.innerWidth <= 767) {
+      expect(parseFloat(style.paddingTop)).toBeGreaterThanOrEqual(2);
+      expect(parseFloat(style.paddingLeft)).toBeGreaterThanOrEqual(8);
+    } else {
+      expect(parseFloat(style.paddingTop)).toBe(0);
+      expect(parseFloat(style.paddingLeft)).toBe(6);
+    }
+    const addButton = document.querySelector('[aria-label="Add another reaction"]') as HTMLElement;
+    expect(addButton).not.toBeNull();
+    expect(badge.getBoundingClientRect().height).toBeLessThanOrEqual(
+      addButton.getBoundingClientRect().height,
+    );
   });
 
   it('mobile: long-pressing a reaction chip lists who reacted without toggling', async () => {

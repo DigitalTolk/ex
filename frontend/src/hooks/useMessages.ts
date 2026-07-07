@@ -8,7 +8,7 @@ import {
 } from '@tanstack/react-query';
 import { apiFetch } from '@/lib/api';
 import { queryKeys, parentPath } from '@/lib/query-keys';
-import { markLocalDraftClearForSend } from '@/hooks/useDrafts';
+import { condemnDraftForSend, removeDraftScopeFromCache } from '@/hooks/useDrafts';
 import { markLocalUserStateWrite } from '@/hooks/useUserState';
 import type { Message } from '@/types';
 
@@ -382,25 +382,37 @@ export function useSendMessage(scope: SendMessageScope) {
           body: input.body,
           parentMessageID: input.parentMessageID ?? '',
           attachmentIDs: input.attachmentIDs ?? [],
-          // The server folds the draft-clear into this send and orders it
-          // against in-flight keystroke saves by client time (last-write-wins),
-          // so a delayed save can't resurrect the just-sent draft. Stamped here
-          // at send time — the same clock the draft saves use.
-          clientTs: Date.now(),
         }),
       }),
-    // The server folds the draft-clear for this scope into the send and
-    // publishes a draft.updated echo while the POST is still in flight —
-    // arm the ignore window NOW so that echo doesn't refetch /drafts on
-    // every message sent (other tabs still refetch and clear their composer).
-    // A THREAD reply additionally triggers the server-side author-seen mark
-    // ("posting reads the thread for you"), whose userState echo must not
-    // refetch /user-state in this tab either.
+    // The server folds an UNCONDITIONAL draft-clear for this scope into the
+    // send — sending is the authoritative event, no client clock involved.
+    // Condemn the scope's draft NOW (at mutate): the current generation is
+    // filtered from racing refetches, the session basis resets, in-flight
+    // keystroke saves are outdated, and the fold's draft.updated echo is
+    // ignored (other tabs still refetch and clear their composer). A THREAD
+    // reply additionally triggers the server-side author-seen mark ("posting
+    // reads the thread for you"), whose userState echo must not refetch
+    // /user-state in this tab either.
     onMutate: (input) => {
-      markLocalDraftClearForSend();
+      const rollbackDraft = condemnDraftForSend({
+        parentID: channelId ?? conversationId,
+        parentType: channelId ? 'channel' : 'conversation',
+        parentMessageID: input.parentMessageID || undefined,
+      });
       if (input.parentMessageID) markLocalUserStateWrite();
+      return { rollbackDraft };
     },
+    // The send never happened server-side, so neither did its fold — restore
+    // the draft protocol state (basis + condemned gen) it had condemned.
+    onError: (_error, _input, ctx) => ctx?.rollbackDraft(),
     onSuccess: (data, input) => {
+      // The scope's draft is dead (the fold clears it server-side): drop it
+      // from the local cache so sidebar/Drafts update without waiting.
+      removeDraftScopeFromCache(queryClient, {
+        parentID: channelId ?? conversationId,
+        parentType: channelId ? 'channel' : 'conversation',
+        parentMessageID: input.parentMessageID || undefined,
+      });
       const parentID = channelId ?? conversationId;
       // Sender sees their post immediately. Top-level posts append to the
       // main list; thread replies append to the thread cache so the reply

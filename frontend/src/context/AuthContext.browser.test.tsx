@@ -10,7 +10,8 @@ const fetchMock = vi.hoisted(() => vi.fn());
 const identifyMock = vi.hoisted(() => vi.fn());
 const clearMock = vi.hoisted(() => vi.fn());
 
-vi.mock('@/lib/api', () => ({
+vi.mock('@/lib/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/api')>()),
   setAccessToken: setAccessTokenMock,
   clearAccessToken: clearAccessTokenMock,
   apiFetch: (...args: unknown[]) => apiFetchMock(...args),

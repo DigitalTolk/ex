@@ -18,7 +18,8 @@ import type { Message } from '@/types';
 // catchUpTail's `!old` guard, and the third `?? head.newestID` fallback.
 
 const apiFetchMock = vi.hoisted(() => vi.fn());
-vi.mock('@/lib/api', () => ({
+vi.mock('@/lib/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/api')>()),
   apiFetch: (...args: unknown[]) => apiFetchMock(...args),
 }));
 

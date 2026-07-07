@@ -1,7 +1,7 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useCallback, useMemo } from 'react';
+import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
+import { useEffect, useMemo } from 'react';
 import type { DraftAttachment } from '@/components/chat/AttachmentChip';
-import { apiFetch } from '@/lib/api';
+import { ApiError, apiFetch } from '@/lib/api';
 import { queryKeys } from '@/lib/query-keys';
 import type { MessageDraft } from '@/types';
 import { useAttachmentsBatch } from './useAttachments';
@@ -23,13 +23,29 @@ export interface SaveDraftInput {
   // sends a non-silent save when it loses focus so the indicator appears
   // only then.
   silent?: boolean;
-  // ts is the client edit time (epoch ms). The backend orders saves vs the
-  // send-fold delete by this, last-write-wins, so a delayed keystroke can't
-  // resurrect a sent draft. Omitted → the server uses its own clock.
-  ts?: number;
+  // Teardown flush (pagehide): send with fetch keepalive so the request
+  // survives the tab closing instead of dying with the page.
+  keepalive?: boolean;
 }
 
-const suppressedSentDraftScopes = new Set<string>();
+// ---------------------------------------------------------------------------
+// Session protocol state.
+//
+// The SERVER owns draft ordering: every stored draft carries a server-minted
+// generation, and a save or clear is accepted only when it presents the
+// generation it acted on (its basis; "" = "no draft exists"). A stale writer
+// gets a 409 with the current state and reconciles. The maps below are the
+// client's half of that protocol — protocol state, not heuristics:
+//
+//   draftBasisGens      scopeKey → the generation this session is acting on
+//   condemnedDraftGens  generations killed by a send (its server-side fold is
+//                       async, so a racing refetch can briefly resurface them)
+//   draftMutationVersions  per-scope guard so an out-of-order save response or
+//                          conflict can't regress newer state
+// ---------------------------------------------------------------------------
+
+const draftBasisGens = new Map<string, string>();
+const condemnedDraftGens = new Set<string>();
 const draftMutationVersions = new Map<string, number>();
 const LOCAL_DRAFT_EVENT_IGNORE_MS = 1500;
 let ignoreDraftEventsUntil = 0;
@@ -38,21 +54,28 @@ function draftScopeKey(scope: DraftScope): string {
   return `${scope.parentType}:${scope.parentID ?? ''}:${scope.parentMessageID ?? ''}`;
 }
 
-// resetDraftSessionState clears the process-wide draft bookkeeping (sent-scope
-// suppression + per-scope mutation versions). Called on logout so a different
-// user signing in within the same document can't inherit the prior session's
-// draft state, and so the maps don't grow unbounded across long sessions.
+// resetDraftSessionState clears the process-wide draft protocol state. Called
+// on logout so a different user signing in within the same document can't
+// inherit the prior session's bases, and so the maps don't grow unbounded
+// across long sessions.
 export function resetDraftSessionState() {
-  suppressedSentDraftScopes.clear();
+  draftBasisGens.clear();
+  condemnedDraftGens.clear();
   draftMutationVersions.clear();
   ignoreDraftEventsUntil = 0;
 }
 
-// isScopeSuppressed reports whether a scope was just sent (so any draft for it
-// should be cleared, not surfaced). Restored when the user types new content.
-// A MessageDraft is a valid DraftScope (shares parentID/parentType/parentMessageID).
-function isScopeSuppressed(scope: DraftScope): boolean {
-  return suppressedSentDraftScopes.has(draftScopeKey(scope));
+// draftBasisFor returns the generation this session is acting on for a scope
+// ("" = it believes no draft exists). Saves and clears present it to the
+// server, which decides whether the write applies.
+export function draftBasisFor(scope: DraftScope): string {
+  return draftBasisGens.get(draftScopeKey(scope)) ?? '';
+}
+
+// adoptDraftBasis records the generation this session now acts on for a scope
+// — from cache hydration, a save response, or a 409's current state.
+export function adoptDraftBasis(scope: DraftScope, gen: string | undefined) {
+  draftBasisGens.set(draftScopeKey(scope), gen ?? '');
 }
 
 function nextDraftMutationVersion(scope: DraftScope): { key: string; version: number } {
@@ -65,16 +88,6 @@ function nextDraftMutationVersion(scope: DraftScope): { key: string; version: nu
 
 function markLocalDraftDelete() {
   ignoreDraftEventsUntil = Date.now() + LOCAL_DRAFT_EVENT_IGNORE_MS;
-}
-
-// markLocalDraftClearForSend arms the same "ignore our own draft.updated
-// echo" window the draft mutations use. Called by useSendMessage at MUTATE
-// time: the server folds the draft-clear into message creation and
-// publishes the echo while the POST is still in flight, so arming the
-// window in the views' onSuccess clearDraftMutate was too late — the echo
-// raced it and triggered a full /drafts refetch on every send.
-export function markLocalDraftClearForSend() {
-  markLocalDraftDelete();
 }
 
 export function shouldRefetchDraftsForRemoteUpdate(): boolean {
@@ -100,8 +113,39 @@ function patchDraftListByScope(
 ): MessageDraft[] | undefined {
   if (!drafts) return drafts;
   const withoutScope = drafts.filter((item) => !sameDraftScope(item, scope));
-  if (!draft || isScopeSuppressed(draft)) return withoutScope;
+  if (!draft) return withoutScope;
   return [draft, ...withoutScope];
+}
+
+// removeDraftScopeFromCache drops a scope's draft from the local cache for an
+// instant UI update. Used by the message-send path: the SERVER-side clear is
+// folded into the send itself (unconditional), so this is a plain cache
+// patch, not a request.
+export function removeDraftScopeFromCache(qc: QueryClient, scope: DraftScope) {
+  qc.setQueryData<MessageDraft[]>(
+    queryKeys.drafts(),
+    (old) => old?.filter((d) => !sameDraftScope(d, scope)),
+  );
+}
+
+// condemnDraftForSend marks a scope's draft as killed by a message send. The
+// send folds an UNCONDITIONAL server-side clear (sending is the authoritative
+// event for the scope), but that fold is async — so the current generation is
+// condemned (a racing /drafts refetch briefly returning it is filtered), the
+// session basis resets to "no draft", and in-flight save mutations are
+// outdated so their late responses or conflicts can't resurrect anything.
+// Returns a rollback for failed sends (the fold never ran).
+export function condemnDraftForSend(scope: DraftScope): () => void {
+  const key = draftScopeKey(scope);
+  const gen = draftBasisGens.get(key) ?? '';
+  nextDraftMutationVersion(scope);
+  markLocalDraftDelete();
+  if (gen !== '') condemnedDraftGens.add(gen);
+  draftBasisGens.set(key, '');
+  return () => {
+    if (gen !== '') condemnedDraftGens.delete(gen);
+    draftBasisGens.set(key, gen);
+  };
 }
 
 function sortedAttachmentIDs(ids: string[] | undefined): string[] {
@@ -118,18 +162,15 @@ function findDraftByScope(drafts: MessageDraft[] | undefined, scope: DraftScope)
   return drafts?.find((draft) => sameDraftScope(draft, scope));
 }
 
-export function suppressSentDraft(scope: DraftScope) {
-  suppressedSentDraftScopes.add(draftScopeKey(scope));
-}
-
-export function restoreDraftScope(scope: DraftScope) {
-  suppressedSentDraftScopes.delete(draftScopeKey(scope));
-}
-
-export function restoreDraftScopeForContent(scope: DraftScope, value: { body: string; attachmentIDs?: string[] }) {
-  if (value.body !== '' || (value.attachmentIDs?.length ?? 0) > 0) {
-    restoreDraftScope(scope);
-  }
+// draftConflictCurrent returns the server's current draft (null = the scope
+// has no draft) when the error is a draft-conflict 409, undefined otherwise.
+function draftConflictCurrent(error: unknown): MessageDraft | null | undefined {
+  if (!(error instanceof ApiError) || error.status !== 409) return undefined;
+  const payload = error.payload as
+    | { error?: { code?: string }; current?: MessageDraft | null }
+    | undefined;
+  if (payload?.error?.code !== 'draft_conflict') return undefined;
+  return payload.current ?? null;
 }
 
 export function useDrafts(options?: { enabled?: boolean }) {
@@ -137,7 +178,11 @@ export function useDrafts(options?: { enabled?: boolean }) {
     queryKey: queryKeys.drafts(),
     queryFn: async () => {
       const res = await apiFetch<MessageDraft[]>('/api/v1/drafts');
-      return Array.isArray(res) ? res.filter((draft) => !isScopeSuppressed(draft)) : [];
+      // Drop rows whose generation a send has condemned: the send's
+      // server-side fold is async, so a refetch racing it can briefly return
+      // the just-sent draft. Keyed by GENERATION — a new draft in the same
+      // scope carries a fresh gen and is never filtered.
+      return Array.isArray(res) ? res.filter((draft) => !condemnedDraftGens.has(draft.gen)) : [];
     },
     enabled: options?.enabled ?? true,
     staleTime: 15_000,
@@ -146,20 +191,41 @@ export function useDrafts(options?: { enabled?: boolean }) {
 
 export function useDraftForScope(scope: DraftScope) {
   const drafts = useDrafts();
-  return { ...drafts, data: findDraftByScope(drafts.data, scope) };
+  const draft = findDraftByScope(drafts.data, scope);
+  const key = draftScopeKey(scope);
+  const gen = draft?.gen ?? '';
+  const loaded = drafts.data !== undefined;
+  // The composer displaying this scope acts on what the cache (server truth)
+  // shows it — keep the session basis in lockstep. Before the first fetch
+  // resolves the cache says nothing, so the basis is left alone.
+  useEffect(() => {
+    if (!loaded) return;
+    draftBasisGens.set(key, gen);
+  }, [key, gen, loaded]);
+  return { ...drafts, data: draft };
 }
 
 export function useSaveDraft() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (input: SaveDraftInput) => {
-      const existing = findDraftByScope(qc.getQueryData<MessageDraft[]>(queryKeys.drafts()), input);
       const attachmentIDs = input.attachmentIDs ?? [];
-      if (input.body === '' && attachmentIDs.length === 0 && !existing) {
+      const basisGen = draftBasisFor(input);
+      const existing = findDraftByScope(qc.getQueryData<MessageDraft[]>(queryKeys.drafts()), input);
+      const isEmpty = input.body === '' && attachmentIDs.length === 0;
+      // A clean session flushing an empty composer over a scope it believes
+      // (and the cache agrees) has no draft: nothing to report. Every OTHER
+      // empty save IS sent — whether it clears anything is the server's
+      // decision. (Deciding from the local cache alone used to strand
+      // silently-saved drafts server-side, resurrecting them later.)
+      if (isEmpty && basisGen === '' && !existing) {
         return Promise.resolve(undefined);
       }
+      // Identical content on the exact generation we're acting on: no-op
+      // (channel-switch flushes of an untouched hydrated draft).
       if (
         existing &&
+        existing.gen === basisGen &&
         existing.body === input.body &&
         sameAttachmentIDs(existing.attachmentIDs, attachmentIDs)
       ) {
@@ -167,6 +233,7 @@ export function useSaveDraft() {
       }
       return apiFetch<MessageDraft | void>('/api/v1/drafts', {
         method: 'PUT',
+        keepalive: input.keepalive,
         body: JSON.stringify({
           parentID: input.parentID,
           parentType: input.parentType,
@@ -174,7 +241,7 @@ export function useSaveDraft() {
           body: input.body,
           attachmentIDs,
           notify: !input.silent,
-          ts: input.ts,
+          basisGen,
         }),
       });
     },
@@ -183,17 +250,15 @@ export function useSaveDraft() {
       /* istanbul ignore next -- ctx is always set: onMutate unconditionally returns the version object */
       if (!ctx) return;
       if (!isLatestDraftMutation(ctx.key, ctx.version)) return;
-      // The scope was just sent: the server's send-fold already cleared it
-      // (last-write-wins drops this stale save), so don't re-surface it in the
-      // cache. Restored when the user types new content (un-suppresses).
-      if (isScopeSuppressed(input)) return;
+      // The write was accepted: this session now acts on the generation the
+      // server minted for it ("" when the save was a clear/no-op).
+      adoptDraftBasis(input, draft?.gen);
       // Silent (keystroke) saves persist server-side but must not surface the
       // draft in the sidebar yet — leave the local list untouched so the
       // indicator stays hidden until the non-silent focus-loss save patches it.
       // EXCEPTION: a silent save that empties the draft is a *removal*, never a
       // surface — patch it through immediately so clearing the composer drops
-      // the sidebar badge at once, instead of lingering until focus loss /
-      // channel switch (the server already deleted it, returning a nil draft).
+      // the sidebar badge at once (the server already deleted it).
       const isEmptyDraft = input.body === '' && (input.attachmentIDs?.length ?? 0) === 0;
       if (input.silent && !isEmptyDraft) return;
       qc.setQueryData<MessageDraft[]>(
@@ -201,43 +266,51 @@ export function useSaveDraft() {
         (old) => patchDraftListByScope(old, input, draft ?? null),
       );
     },
-  });
-}
-
-// useClearDraftForScope returns a function that drops a sent scope's draft from
-// the LOCAL cache for an instant UI update. The SERVER-side delete is folded
-// into the message-send call (the backend clears the draft as it creates the
-// message, ordered by client ts last-write-wins), so this makes NO network
-// request — it's a plain cache patch, not a mutation.
-export function useClearDraftForScope() {
-  const qc = useQueryClient();
-  return useCallback(
-    (scope: DraftScope) => {
-      // Ignore the server's resulting draft.updated echo, then optimistically
-      // remove the scope so the sidebar / Drafts page update without waiting.
-      markLocalDraftDelete();
+    onError: (error, input, ctx) => {
+      /* istanbul ignore next -- ctx is always set: onMutate unconditionally returns the version object */
+      if (!ctx) return;
+      // A newer local action (edit, send) has already superseded this write —
+      // its conflict is history; reconciling would resurrect stale state.
+      if (!isLatestDraftMutation(ctx.key, ctx.version)) return;
+      const current = draftConflictCurrent(error);
+      if (current === undefined) return; // network/server error: next flush retries
+      // The server refused: this session acted on stale state. Adopt the
+      // truth — basis and cache. The composer mirrors the cache while the
+      // user isn't actively editing, so the surviving draft (or its absence)
+      // surfaces; if the user IS typing, their very next save/flush presents
+      // the adopted basis and wins as a deliberate overwrite.
+      adoptDraftBasis(input, current?.gen);
       qc.setQueryData<MessageDraft[]>(
         queryKeys.drafts(),
-        (old) => old?.filter((d) => !sameDraftScope(d, scope)),
+        (old) => patchDraftListByScope(old, input, current),
       );
     },
-    [qc],
-  );
+  });
 }
 
 export function useDeleteDraft() {
   const qc = useQueryClient();
   return useMutation({
     onMutate: markLocalDraftDelete,
-    mutationFn: (id: string) =>
-      apiFetch<void>(`/api/v1/drafts/${id}`, {
+    // The Drafts page deletes the exact row it displayed — the generation
+    // rides along so a stale page can't remove a draft that changed since
+    // it rendered (the server answers 409 instead).
+    mutationFn: (draft: Pick<MessageDraft, 'id' | 'gen'>) =>
+      apiFetch<void>(`/api/v1/drafts/${draft.id}?gen=${encodeURIComponent(draft.gen)}`, {
         method: 'DELETE',
       }),
-    onSuccess: (_data, id) => {
+    onSuccess: (_data, draft) => {
       qc.setQueryData<MessageDraft[]>(
         queryKeys.drafts(),
-        (old) => old?.filter((draft) => draft.id !== id),
+        (old) => old?.filter((item) => item.id !== draft.id),
       );
+    },
+    onError: (error) => {
+      // Conflict: the draft changed under the page — refetch the truth so
+      // the list re-renders with the current row.
+      if (draftConflictCurrent(error) !== undefined) {
+        void qc.invalidateQueries({ queryKey: queryKeys.drafts() });
+      }
     },
   });
 }

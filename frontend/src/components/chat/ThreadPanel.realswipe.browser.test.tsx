@@ -58,14 +58,11 @@ vi.mock('@/hooks/useThreads', () => ({
   markThreadSeen: vi.fn(),
 }));
 vi.mock('@/hooks/useDrafts', () => ({
-  markLocalDraftClearForSend: vi.fn(),
   useDraftForScope: () => ({ data: undefined }),
   useDraftAttachmentChips: () => [],
   useSaveDraft: () => ({ mutate: vi.fn() }),
-  useClearDraftForScope: () => vi.fn(),
-  restoreDraftScope: vi.fn(),
-  restoreDraftScopeForContent: vi.fn(),
-  suppressSentDraft: vi.fn(),
+  condemnDraftForSend: vi.fn(() => vi.fn()),
+  removeDraftScopeFromCache: vi.fn(),
 }));
 vi.mock('@/hooks/useNonMemberInvite', () => ({
   useNonMemberInvite: () => ({ pendingInvites: [], channelSlug: 'general', checkMentions: vi.fn(), clearInvites: vi.fn() }),

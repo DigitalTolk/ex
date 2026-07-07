@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/DigitalTolk/ex/internal/model"
@@ -19,6 +18,15 @@ var ErrCacheMiss = errors.New("cache miss")
 const userKeyPrefix = "user:"
 const userCacheTTL = 15 * time.Minute
 const presenceKeyPrefix = "presence:online:"
+
+// presenceIndexKey is a sorted set of every online userID, scored by the unix
+// millisecond at which that user's presence marker expires. It exists so the
+// online snapshot is O(online users) (ZRANGEBYSCORE) instead of a full
+// keyspace SCAN — the scan walked EVERY key in the database (drafts, unread
+// watermarks, streams, …) and outgrew the 500ms presence budget in
+// production. Every write that extends the per-user marker also re-scores the
+// index entry, so index freshness always matches the marker TTL.
+const presenceIndexKey = "presence:index"
 
 // notifAckKeyPrefix / notifAckTTL back the desktop-delivery acknowledgement
 // marker. When a client receives a `notification.new` it acks over its
@@ -170,6 +178,16 @@ func (c *RedisCache) AllowRequest(ctx context.Context, key string, limit int, wi
 	return count <= int64(limit), nil
 }
 
+// touchPresenceIndex (re-)scores userID in the online index to expire when
+// the freshly-extended per-user marker does.
+func (c *RedisCache) touchPresenceIndex(ctx context.Context, userID string) error {
+	score := float64(time.Now().Add(presenceTTL).UnixMilli())
+	if err := c.client.ZAdd(ctx, presenceIndexKey, redis.Z{Score: score, Member: userID}).Err(); err != nil {
+		return fmt.Errorf("presence index %q: %w", userID, err)
+	}
+	return nil
+}
+
 // IncrementPresence records one active websocket connection for a user. It
 // returns true when this connection transitions the user from offline to online.
 func (c *RedisCache) IncrementPresence(ctx context.Context, userID string) (bool, error) {
@@ -180,6 +198,9 @@ func (c *RedisCache) IncrementPresence(ctx context.Context, userID string) (bool
 	}
 	if err := c.client.Expire(ctx, key, presenceTTL).Err(); err != nil {
 		return false, fmt.Errorf("presence expire %q: %w", userID, err)
+	}
+	if err := c.touchPresenceIndex(ctx, userID); err != nil {
+		return false, err
 	}
 	return count == 1, nil
 }
@@ -196,10 +217,16 @@ func (c *RedisCache) DecrementPresence(ctx context.Context, userID string) (bool
 		if err := c.client.Del(ctx, key).Err(); err != nil {
 			return false, fmt.Errorf("presence cleanup %q: %w", userID, err)
 		}
+		if err := c.client.ZRem(ctx, presenceIndexKey, userID).Err(); err != nil {
+			return false, fmt.Errorf("presence index cleanup %q: %w", userID, err)
+		}
 		return true, nil
 	}
 	if err := c.client.Expire(ctx, key, presenceTTL).Err(); err != nil {
 		return false, fmt.Errorf("presence expire %q: %w", userID, err)
+	}
+	if err := c.touchPresenceIndex(ctx, userID); err != nil {
+		return false, err
 	}
 	return false, nil
 }
@@ -215,7 +242,10 @@ func (c *RedisCache) RefreshPresence(ctx context.Context, userID string) error {
 	if !ok {
 		return ErrCacheMiss
 	}
-	return nil
+	// Re-score the index alongside the marker. This is also the self-heal
+	// path: a session whose index entry is missing (pre-index deploys, a
+	// crashed cleanup) is re-listed within one keep-alive interval.
+	return c.touchPresenceIndex(ctx, userID)
 }
 
 // IsPresenceOnline reports whether any process has an active websocket
@@ -284,36 +314,44 @@ func (c *RedisCache) SetName(ctx context.Context, key, val string) {
 }
 
 func (c *RedisCache) OnlinePresenceUserIDs(ctx context.Context) ([]string, error) {
-	var keys []string
-	var cursor uint64
-	for {
-		batch, next, err := c.client.Scan(ctx, cursor, presenceKeyPrefix+"*", 100).Result()
-		if err != nil {
-			return nil, fmt.Errorf("presence list: %w", err)
-		}
-		keys = append(keys, batch...)
-		if next == 0 {
-			break
-		}
-		cursor = next
+	// Reads come from the online index, NOT a keyspace SCAN: SCAN's cost is
+	// proportional to EVERY key in the database and blew the presence budget
+	// once the durable key families (unread watermarks, drafts, streams)
+	// grew. The index is O(online users).
+	now := strconv.FormatInt(time.Now().UnixMilli(), 10)
+	// Prune members whose marker has expired so the index stays bounded even
+	// for sessions that never decrement (killed instance, dead socket).
+	if err := c.client.ZRemRangeByScore(ctx, presenceIndexKey, "-inf", now).Err(); err != nil {
+		return nil, fmt.Errorf("presence index prune: %w", err)
 	}
-	if len(keys) == 0 {
+	members, err := c.client.ZRangeArgs(ctx, redis.ZRangeArgs{
+		Key: presenceIndexKey, ByScore: true, Start: "(" + now, Stop: "+inf",
+	}).Result()
+	if err != nil {
+		return nil, fmt.Errorf("presence index range: %w", err)
+	}
+	if len(members) == 0 {
 		return nil, nil
 	}
-	// One MGET instead of a GET per key — turns the previous O(online) Redis
-	// round-trips into a single one.
+	// Verify against the authoritative per-user markers in one MGET: an index
+	// entry can outlive its marker by up to presenceTTL (crash between DEL
+	// and ZREM), and only a live marker with count > 0 means online.
+	keys := make([]string, len(members))
+	for i, id := range members {
+		keys[i] = presenceKeyPrefix + id
+	}
 	vals, err := c.client.MGet(ctx, keys...).Result()
 	if err != nil {
 		return nil, fmt.Errorf("presence list mget: %w", err)
 	}
-	ids := make([]string, 0, len(keys))
+	ids := make([]string, 0, len(members))
 	for i, v := range vals {
 		s, ok := v.(string)
 		if !ok {
-			continue // expired between scan and mget (nil), or unexpected type
+			continue // marker expired/deleted since the index was written (nil)
 		}
 		if n, err := strconv.Atoi(s); err == nil && n > 0 {
-			ids = append(ids, strings.TrimPrefix(keys[i], presenceKeyPrefix))
+			ids = append(ids, members[i])
 		}
 	}
 	return ids, nil

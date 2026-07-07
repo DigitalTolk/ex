@@ -71,7 +71,7 @@ func TestDraft_Upsert_BodyTooLong(t *testing.T) {
 	svc, _, _, memberships, _ := newDraftSvcFull()
 	memberships.memberships["ch1#u1"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u1"}
 	body := strings.Repeat("x", MaxMessageBodyChars+1)
-	if _, err := svc.Upsert(context.Background(), "u1", "ch1", ParentChannel, "", body, nil); err == nil {
+	if _, err := svc.Upsert(context.Background(), "u1", "ch1", ParentChannel, "", body, nil, ""); err == nil {
 		t.Fatal("expected body-too-long error")
 	}
 }
@@ -83,7 +83,7 @@ func TestDraft_Upsert_TooManyAttachments(t *testing.T) {
 	for i := range ids {
 		ids[i] = "a" + strconv.Itoa(i)
 	}
-	if _, err := svc.Upsert(context.Background(), "u1", "ch1", ParentChannel, "", "hi", ids); err == nil {
+	if _, err := svc.Upsert(context.Background(), "u1", "ch1", ParentChannel, "", "hi", ids, ""); err == nil {
 		t.Fatal("expected too-many-attachments error")
 	}
 }
@@ -91,7 +91,7 @@ func TestDraft_Upsert_TooManyAttachments(t *testing.T) {
 func TestDraft_Upsert_PreservesCreatedAtOnUpdate(t *testing.T) {
 	svc, drafts, _, memberships, _ := newDraftSvcFull()
 	memberships.memberships["ch1#u1"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u1"}
-	first, err := svc.Upsert(context.Background(), "u1", "ch1", ParentChannel, "", "hello", nil)
+	first, err := svc.Upsert(context.Background(), "u1", "ch1", ParentChannel, "", "hello", nil, "")
 	if err != nil {
 		t.Fatalf("first upsert: %v", err)
 	}
@@ -99,7 +99,7 @@ func TestDraft_Upsert_PreservesCreatedAtOnUpdate(t *testing.T) {
 		t.Fatal("expected draft")
 	}
 	// Second upsert finds the existing row and keeps its CreatedAt.
-	second, err := svc.Upsert(context.Background(), "u1", "ch1", ParentChannel, "", "hello again", nil)
+	second, err := svc.Upsert(context.Background(), "u1", "ch1", ParentChannel, "", "hello again", nil, first.Gen)
 	if err != nil {
 		t.Fatalf("second upsert: %v", err)
 	}
@@ -113,7 +113,7 @@ func TestDraft_Upsert_GetExistingError(t *testing.T) {
 	svc, drafts, _, memberships, _ := newDraftSvcFull()
 	memberships.memberships["ch1#u1"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u1"}
 	drafts.getErr = errors.New("boom") // non-NotFound on Get existing
-	if _, err := svc.Upsert(context.Background(), "u1", "ch1", ParentChannel, "", "hi", nil); err == nil {
+	if _, err := svc.Upsert(context.Background(), "u1", "ch1", ParentChannel, "", "hi", nil, ""); err == nil {
 		t.Fatal("expected get-existing error")
 	}
 }

@@ -15,6 +15,11 @@ export interface ToastDetail {
   // When set, the toast is tappable and runs this (e.g. deep-link into the
   // channel a notification came from) before dismissing.
   onActivate?: () => void;
+  // 'notification' renders as a banner at the TOP of the screen with inverted
+  // (high-contrast) colors — the in-app popup surface for webviews without a
+  // Notification API. Default toasts stay bottom-center near the action that
+  // produced them.
+  kind?: 'notification';
 }
 
 // showToast surfaces a transient message. Defaults to the error variant since the
@@ -22,7 +27,7 @@ export interface ToastDetail {
 export function showToast(
   message: string,
   variant: ToastVariant = 'error',
-  opts?: Pick<ToastDetail, 'title' | 'onActivate'>,
+  opts?: Pick<ToastDetail, 'title' | 'onActivate' | 'kind'>,
 ): void {
   window.dispatchEvent(
     new CustomEvent<ToastDetail>(TOAST_EVENT, { detail: { message, variant, ...opts } }),

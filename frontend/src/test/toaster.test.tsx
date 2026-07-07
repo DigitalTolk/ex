@@ -58,4 +58,36 @@ describe('Toaster', () => {
     // Dismissed on tap — no waiting for the auto-dismiss timer.
     expect(screen.queryByTestId('toast')).toBeNull();
   });
+  it('a notification-kind toast renders as an inverted TOP banner', () => {
+    render(<Toaster />);
+    act(() =>
+      showToast('New message body', 'success', {
+        title: 'Alice in ~general',
+        kind: 'notification',
+        onActivate: () => undefined,
+      }),
+    );
+    const toast = screen.getByTestId('toast');
+    expect(toast).toHaveAttribute('data-kind', 'notification');
+    // Inverted, maximum-contrast surface — must never blend into the app.
+    expect(toast.className).toContain('bg-foreground');
+    expect(toast.className).toContain('text-background');
+    // Positioned in the top banner container, not the bottom toast stack.
+    expect((toast.parentElement as HTMLElement).className).toContain('top-[calc(env(safe-area-inset-top)');
+  });
+
+  it('notification banners and plain toasts render in separate stacks', () => {
+    render(<Toaster />);
+    act(() => {
+      showToast('banner', 'success', { kind: 'notification', onActivate: () => undefined });
+      showToast('plain error');
+    });
+    const all = screen.getAllByTestId('toast');
+    expect(all).toHaveLength(2);
+    const banner = all.find((t) => t.getAttribute('data-kind') === 'notification')!;
+    const plain = all.find((t) => t.getAttribute('data-kind') !== 'notification')!;
+    expect((banner.parentElement as HTMLElement).className).toContain('top-');
+    expect((plain.parentElement as HTMLElement).className).toContain('bottom-');
+    expect(plain.className).toContain('bg-card');
+  });
 });

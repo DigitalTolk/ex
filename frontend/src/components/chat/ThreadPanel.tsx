@@ -20,10 +20,6 @@ import { markThreadSeen, useFollowThread, useThreadMessages, useUnfollowThread, 
 import { useUsersBatch } from '@/hooks/useUsersBatch';
 import { collectMessageUserIDs, isOwnMessage } from '@/lib/message-users';
 import {
-  restoreDraftScope,
-  restoreDraftScopeForContent,
-  suppressSentDraft,
-  useClearDraftForScope,
   useDraftAttachmentChips,
   useDraftForScope,
   useSaveDraft,
@@ -127,7 +123,6 @@ export function ThreadPanel({
   const { data: draft } = useDraftForScope(draftScope);
   const draftAttachments = useDraftAttachmentChips(draft?.attachmentIDs);
   const saveDraft = useSaveDraft();
-  const clearDraftMutate = useClearDraftForScope();
   const saveDraftMutate = saveDraft.mutate;
   const editMessage = useEditMessage();
   const editAttachmentIDs = activeEditingMessage?.attachmentIDs ?? [];
@@ -381,10 +376,9 @@ export function ThreadPanel({
   }, [anchorMsgId, wasAtBottomRef]);
 
   const handleDraftChange = useCallback(
-    (value: MessageInputValue, options?: { notify?: boolean }) => {
+    (value: MessageInputValue, options?: { notify?: boolean; keepalive?: boolean }) => {
       /* istanbul ignore next -- ThreadPanel always renders inside a channel or conversation, so parentID (channelId ?? conversationId) is always set; defensive. */
       if (!parentID) return;
-      restoreDraftScopeForContent(draftScope, value);
       saveDraftMutate({
         parentID,
         parentType,
@@ -394,10 +388,10 @@ export function ThreadPanel({
         // Keystroke saves persist silently; the focus-loss flush (notify)
         // is what surfaces the draft in the sidebar.
         silent: !options?.notify,
-        ts: value.ts,
+        keepalive: options?.keepalive,
       });
     },
-    [parentID, parentType, threadRootID, draftScope, saveDraftMutate],
+    [parentID, parentType, threadRootID, saveDraftMutate],
   );
 
   const handleReply = useCallback(
@@ -405,15 +399,11 @@ export function ThreadPanel({
       // Offer to add any @mentioned non-members to the channel (no-op for DMs).
       checkMentions(input.body);
       const payload = { ...input, parentMessageID: threadRootID };
-      suppressSentDraft(draftScope);
-      send.mutate(payload, {
-        // Clear by SCOPE on confirmed send so a silently-saved thread draft
-        // (id never cached) is cleared too.
-        onSuccess: () => clearDraftMutate(draftScope),
-        onError: () => restoreDraftScope(draftScope),
-      });
+      // Draft lifecycle (condemn at mutate, cache patch-out on success,
+      // rollback on error) is owned by useSendMessage.
+      send.mutate(payload);
     },
-    [send, threadRootID, draftScope, clearDraftMutate, checkMentions],
+    [send, threadRootID, checkMentions],
   );
 
   const handleEditMessage = useCallback(

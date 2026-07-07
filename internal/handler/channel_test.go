@@ -1361,17 +1361,29 @@ type fakeDraftClearer struct {
 
 type draftClearCall struct {
 	userID, parentID, parentType, parentMessageID string
-	ts                                            int64
 }
 
-func (f *fakeDraftClearer) DeleteForScope(_ context.Context, userID, parentID, parentType, parentMessageID string, ts int64) error {
+func (f *fakeDraftClearer) DeleteForScope(_ context.Context, userID, parentID, parentType, parentMessageID string) error {
 	f.mu.Lock()
-	f.calls = append(f.calls, draftClearCall{userID, parentID, parentType, parentMessageID, ts})
+	f.calls = append(f.calls, draftClearCall{userID, parentID, parentType, parentMessageID})
 	f.mu.Unlock()
 	if f.done != nil {
 		f.done <- struct{}{}
 	}
 	return f.err
+}
+
+// stubClearSentDraftRetries compresses the async send-fold's retry schedule
+// for tests. The worker snapshots the config when it starts, so callers must
+// synchronize on the fake's done channel before the test (and this cleanup)
+// ends.
+func stubClearSentDraftRetries(t *testing.T, delays []time.Duration, timeout time.Duration) {
+	t.Helper()
+	prevDelays, prevTimeout := clearSentDraftRetryDelays, clearSentDraftTimeout
+	clearSentDraftRetryDelays, clearSentDraftTimeout = delays, timeout
+	t.Cleanup(func() {
+		clearSentDraftRetryDelays, clearSentDraftTimeout = prevDelays, prevTimeout
+	})
 }
 
 // waitForCall blocks until the (async) draft clear has run once.
@@ -1409,7 +1421,9 @@ func TestChannelHandlerFull_SendMessage_ClearsDraftByScope(t *testing.T) {
 		t.Fatalf("draft clear calls = %d, want 1", len(fake.calls))
 	}
 	got := fake.calls[0]
-	if got != (draftClearCall{"u-sender", "ch-msg", service.ParentChannel, "", 1234}) {
+	// The legacy clientTs field in the request body is tolerated (stale tabs
+	// still send it) but plays no part: the fold is unconditional.
+	if got != (draftClearCall{"u-sender", "ch-msg", service.ParentChannel, ""}) {
 		t.Fatalf("clear call = %+v", got)
 	}
 }
@@ -1419,7 +1433,9 @@ func TestChannelHandlerFull_SendMessage_DraftClearErrorDoesNotFailSend(t *testin
 	env.memberships.memberships["ch-msg#u-sender"] = &model.ChannelMembership{
 		ChannelID: "ch-msg", UserID: "u-sender", Role: model.ChannelRoleMember,
 	}
-	env.handler.SetDraftClearer(&fakeDraftClearer{err: errors.New("redis down")})
+	stubClearSentDraftRetries(t, nil, time.Second) // fail fast, no retry waits
+	fake := &fakeDraftClearer{err: errors.New("redis down"), done: make(chan struct{}, 1)}
+	env.handler.SetDraftClearer(fake)
 	user := &model.User{ID: "u-sender", Email: "sender@test.com", SystemRole: model.SystemRoleMember}
 	token := makeTokenForUser(env.jwtMgr, user)
 	h := middleware.Auth(env.jwtMgr)(http.HandlerFunc(env.handler.SendMessage))
@@ -1434,6 +1450,7 @@ func TestChannelHandlerFull_SendMessage_DraftClearErrorDoesNotFailSend(t *testin
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want 201 (clear error must not fail send): %s", rec.Code, rec.Body.String())
 	}
+	fake.waitForCall(t)
 }
 
 func TestChannelHandlerFull_SendMessage_EmptyBody(t *testing.T) {

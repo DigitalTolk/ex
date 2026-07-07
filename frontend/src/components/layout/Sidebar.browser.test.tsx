@@ -177,7 +177,8 @@ vi.mock('@/hooks/useUserState', () => ({
 
 let mockDrafts: Array<{ parentID: string; parentType: string }> = [];
 vi.mock('@/hooks/useDrafts', () => ({
-  markLocalDraftClearForSend: vi.fn(),
+  condemnDraftForSend: vi.fn(() => vi.fn()),
+  removeDraftScopeFromCache: vi.fn(),
   useDrafts: () => ({ data: mockDrafts }),
 }));
 

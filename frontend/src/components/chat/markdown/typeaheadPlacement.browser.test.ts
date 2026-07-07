@@ -5,7 +5,10 @@ import { startCompletion } from '@codemirror/autocomplete';
 import { composerAutocomplete, type CompletionProviders } from './extensions/completions';
 import {
   composerTooltips,
+  composerTooltipSpace,
+  keyboardOverlap,
   overrideComposerTooltipSpaceForTests,
+  readKeyboardHeight,
   visualViewportRepositioner,
 } from './tooltipSpace';
 
@@ -108,5 +111,64 @@ describe('composer typeahead placement', () => {
       expect(tip.getBoundingClientRect().top).toBeGreaterThanOrEqual(caret.bottom - 1);
     });
     view.destroy();
+  });
+});
+
+describe('native (Capacitor) keyboard geometry', () => {
+  // WKWebView's visualViewport does NOT shrink for the on-screen keyboard —
+  // the Capacitor shell reports it via keyboardWillShow/Hide window events.
+  // These pin that the reported geometry constrains the space bound and that
+  // the events re-run tooltip placement.
+
+  function fireKeyboard(name: string, init?: { direct?: number; detail?: number }) {
+    const ev = new CustomEvent(name, init?.detail !== undefined ? { detail: { keyboardHeight: init.detail } } : undefined);
+    if (init?.direct !== undefined) {
+      Object.assign(ev, { keyboardHeight: init.direct });
+    }
+    window.dispatchEvent(ev);
+  }
+
+  it('keyboardOverlap subtracts however much the window already shrank', () => {
+    // Overlay mode (resize: none): window kept its height → full overlap.
+    expect(keyboardOverlap(300, 800, 800)).toBe(300);
+    // Native resize mode: window already shrank by the keyboard → no overlap.
+    expect(keyboardOverlap(300, 800, 500)).toBe(0);
+    // Partial resize (accessory bar): only the remainder overlaps.
+    expect(keyboardOverlap(300, 800, 600)).toBe(100);
+  });
+
+  it('readKeyboardHeight accepts both Capacitor event shapes', () => {
+    const direct = new CustomEvent('keyboardWillShow');
+    Object.assign(direct, { keyboardHeight: 216 });
+    expect(readKeyboardHeight(direct)).toBe(216);
+    expect(readKeyboardHeight(new CustomEvent('keyboardWillShow', { detail: { keyboardHeight: 250 } }))).toBe(250);
+    expect(readKeyboardHeight(new CustomEvent('keyboardWillShow'))).toBe(0);
+  });
+
+  it('constrains the space bound while the native keyboard is up, and restores on hide', async () => {
+    const view = mountComposerLike('@al');
+    startCompletion(view);
+    await vi.waitFor(() => expect(tooltipEl()).not.toBeNull());
+    try {
+      const fullBottom = composerTooltipSpace().bottom;
+
+      fireKeyboard('keyboardWillShow', { direct: 320 });
+      expect(composerTooltipSpace().bottom).toBe(fullBottom - 320);
+
+      // The flip actually happens against the native bound: with the caret
+      // below the keyboard line, the popup must sit above the caret.
+      const caret = view.coordsAtPos(view.state.selection.main.head)!;
+      if (caret.bottom > window.innerHeight - 320) {
+        await vi.waitFor(() => {
+          expect(tooltipEl()!.classList.contains('cm-tooltip-above')).toBe(true);
+        });
+      }
+
+      fireKeyboard('keyboardWillHide');
+      expect(composerTooltipSpace().bottom).toBe(fullBottom);
+    } finally {
+      fireKeyboard('keyboardWillHide');
+      view.destroy();
+    }
   });
 });

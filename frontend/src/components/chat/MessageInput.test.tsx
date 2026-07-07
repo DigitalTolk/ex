@@ -545,6 +545,150 @@ describe('MessageInput', () => {
     });
 
     expect(document.activeElement).not.toBe(editor);
+    // …but the refreshed server content IS mirrored into the un-edited
+    // buffer — the composer displays server state until the user takes over.
+    await waitFor(() => {
+      expect(editor.textContent ?? '').toContain('draft body refreshed');
+    });
+  });
+
+  it('mirrors a REMOTE CLEAR into an un-edited composer (no zombie buffer)', async () => {
+    // A draft cleared or sent on another device must empty this composer too
+    // — a stale buffer re-offering long-deleted content was the resurrection
+    // bug's client half.
+    const { rerender } = render(
+      <MessageInput onSend={vi.fn()} focusKey="ch-1" initialBody="deleted elsewhere" />,
+    );
+    const editor = await screen.findByLabelText('Message input');
+    expect(editor.textContent ?? '').toContain('deleted elsewhere');
+
+    await act(async () => {
+      rerender(
+        <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+          <MessageInput onSend={vi.fn()} focusKey="ch-1" initialBody="" />
+        </QueryClientProvider>,
+      );
+      await flushMicrotasks();
+    });
+
+    await waitFor(() => {
+      expect((editor.textContent ?? '').trim()).toBe('');
+    });
+  });
+
+  it('a remote clear does NOT clobber a locally-edited composer', async () => {
+    const user = userEvent.setup();
+    const { rerender } = render(
+      <MessageInput onSend={vi.fn()} focusKey="ch-1" initialBody="" />,
+    );
+    const editor = await screen.findByLabelText('Message input');
+    editor.focus();
+    await user.type(editor, 'live typing');
+
+    await act(async () => {
+      rerender(
+        <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+          <MessageInput onSend={vi.fn()} focusKey="ch-1" initialBody="" />
+        </QueryClientProvider>,
+      );
+      await flushMicrotasks();
+    });
+
+    expect(editor.textContent ?? '').toContain('live typing');
+  });
+
+  it('a composer waking from a LONG sleep defers to the server draft state', async () => {
+    // The zombie-tab case: the user typed here days ago, the draft was since
+    // handled elsewhere. On waking, the stale "user edited this" claim has
+    // expired, so the next server-state change mirrors in (here: a clear).
+    const user = userEvent.setup();
+    const { rerender } = render(
+      <MessageInput onSend={vi.fn()} focusKey="ch-1" initialBody="" />,
+    );
+    const editor = await screen.findByLabelText('Message input');
+    editor.focus();
+    await user.type(editor, 'typed days ago');
+
+    const base = Date.now();
+    const dateNow = vi.spyOn(Date, 'now');
+    try {
+      dateNow.mockReturnValue(base);
+      act(() => {
+        Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' });
+        document.dispatchEvent(new Event('visibilitychange'));
+      });
+      // …a week passes with the tab asleep…
+      dateNow.mockReturnValue(base + 7 * 24 * 60 * 60 * 1000);
+      act(() => {
+        Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+        document.dispatchEvent(new Event('visibilitychange'));
+      });
+    } finally {
+      dateNow.mockRestore();
+      Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+    }
+
+    // The scope's draft was cleared elsewhere while this tab slept.
+    await act(async () => {
+      rerender(
+        <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+          <MessageInput onSend={vi.fn()} focusKey="ch-1" initialBody="" />
+        </QueryClientProvider>,
+      );
+      await flushMicrotasks();
+    });
+    await waitFor(() => {
+      expect((editor.textContent ?? '').trim()).toBe('');
+    });
+  });
+
+  it('a SHORT hide (alt-tab) keeps the local-edit claim so live typing survives', async () => {
+    const user = userEvent.setup();
+    const { rerender } = render(
+      <MessageInput onSend={vi.fn()} focusKey="ch-1" initialBody="" />,
+    );
+    const editor = await screen.findByLabelText('Message input');
+    editor.focus();
+    await user.type(editor, 'still typing');
+
+    act(() => {
+      Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' });
+      document.dispatchEvent(new Event('visibilitychange'));
+      Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+
+    await act(async () => {
+      rerender(
+        <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+          <MessageInput onSend={vi.fn()} focusKey="ch-1" initialBody="" />
+        </QueryClientProvider>,
+      );
+      await flushMicrotasks();
+    });
+    expect(editor.textContent ?? '').toContain('still typing');
+  });
+
+  it('flushes with keepalive on pagehide so the save survives the page dying', async () => {
+    const onDraftChange = vi.fn();
+    render(
+      <MessageInput
+        onSend={vi.fn()}
+        focusKey="ch-1"
+        initialBody="about to close"
+        onDraftChange={onDraftChange}
+      />,
+    );
+    await screen.findByLabelText('Message input');
+
+    act(() => {
+      window.dispatchEvent(new Event('pagehide'));
+    });
+
+    expect(onDraftChange).toHaveBeenCalledWith(
+      expect.objectContaining({ body: 'about to close' }),
+      { notify: true, keepalive: true },
+    );
   });
 
   it('hydrates an asynchronously loaded draft when no focusKey is provided', async () => {

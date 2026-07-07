@@ -487,8 +487,10 @@ func (h *ChannelHandler) SendMessage(w http.ResponseWriter, r *http.Request) {
 		Body            string   `json:"body"`
 		ParentMessageID string   `json:"parentMessageID"`
 		AttachmentIDs   []string `json:"attachmentIDs"`
-		// ClientTs is the client's send time (epoch ms), used to clear this
-		// scope's draft with last-write-wins ordering — see clearSentDraft.
+		// ClientTs is the retired client-clock field, once used to LWW-order
+		// the send-fold draft clear. Parsed only so pre-gen clients' sends
+		// still decode (readJSON rejects unknown fields); ignored — the fold
+		// is unconditional now.
 		ClientTs int64 `json:"clientTs"`
 	}
 	if err := readJSON(r, &body); err != nil {
@@ -505,7 +507,7 @@ func (h *ChannelHandler) SendMessage(w http.ResponseWriter, r *http.Request) {
 		writeServiceError(w, err, http.StatusForbidden, "send_error")
 		return
 	}
-	clearSentDraft(r.Context(), h.draftClearer, userID, id, service.ParentChannel, body.ParentMessageID, body.ClientTs)
+	clearSentDraft(r.Context(), h.draftClearer, userID, id, service.ParentChannel, body.ParentMessageID)
 
 	writeJSON(w, http.StatusCreated, msg)
 }

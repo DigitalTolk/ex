@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"image"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -182,6 +183,21 @@ func (s *UnfurlService) fetchAndScrape(ctx context.Context, urlStr string) (*Unf
 		var cached UnfurlPreview
 		if err := s.cache.Get(ctx, cacheKey, &cached); err == nil && cached.URL != "" {
 			return &cached, nil
+		}
+	}
+
+	// Pre-flight the target BEFORE any HTTP request: users routinely paste
+	// links to internal hosts (intranet tools resolving to 10.x), and those
+	// are POLICY blocks, not faults. Failing here means no outbound request
+	// ever starts, so no APM client span exists to be error-tagged — the
+	// event is a WARN log instead of a recurring APM error. Runs after the
+	// cache check (a cached preview shouldn't pay a DNS lookup) and is
+	// skipped by the loopback test harness alongside validateURL.
+	// safeDialContext stays as the security boundary underneath (it re-checks
+	// at dial time, covering redirects and DNS rebinding).
+	if !s.skipURLValidation {
+		if err := preflightPublicTarget(ctx, urlStr); err != nil {
+			return nil, err
 		}
 	}
 
@@ -487,6 +503,30 @@ func validateURL(u *url.URL) error {
 	if ip := net.ParseIP(host); ip != nil {
 		if !isPublicIP(ip) {
 			return fmt.Errorf("unfurl: host %q is private", host)
+		}
+	}
+	return nil
+}
+
+// preflightPublicTarget resolves a URL's host once, before any request is
+// made, and rejects targets that resolve to a non-public address. This is
+// noise control, not the security boundary: the same rule is enforced again
+// by safeDialContext at dial time.
+func preflightPublicTarget(ctx context.Context, urlStr string) error {
+	parsed, err := url.Parse(urlStr)
+	if err != nil {
+		return fmt.Errorf("unfurl: invalid url: %w", err)
+	}
+	host := parsed.Hostname()
+	ips, err := net.DefaultResolver.LookupIP(ctx, "ip", host)
+	if err != nil {
+		return fmt.Errorf("unfurl: resolve %s: %w", host, err)
+	}
+	for _, ip := range ips {
+		if !isPublicIP(ip) {
+			slog.Warn("unfurl: link target resolves to a private address; preview skipped",
+				"host", host, "ip", ip.String())
+			return fmt.Errorf("unfurl: blocked private IP %s", ip)
 		}
 	}
 	return nil
