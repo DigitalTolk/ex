@@ -83,6 +83,20 @@ func (s *stubSidebarCategoryStore) Delete(_ context.Context, userID, id string) 
 	return nil
 }
 
+// stubSidebarOrderStore records server-computed order writes.
+type stubSidebarOrderStore struct {
+	applied [][]store.SidebarRowUpdate
+	err     error
+}
+
+func (s *stubSidebarOrderStore) ApplyOrder(_ context.Context, _ string, updates []store.SidebarRowUpdate) error {
+	if s.err != nil {
+		return s.err
+	}
+	s.applied = append(s.applied, updates)
+	return nil
+}
+
 // sidebarEnv bundles together the wired-up handler plus the underlying
 // stores so individual tests can pre-load fixtures.
 type sidebarEnv struct {
@@ -92,6 +106,7 @@ type sidebarEnv struct {
 	channels      *dataChannelStore
 	conversations *dataConversationStore
 	categories    *stubSidebarCategoryStore
+	order         *stubSidebarOrderStore
 }
 
 func setupSidebarHandler(t *testing.T) *sidebarEnv {
@@ -108,6 +123,8 @@ func setupSidebarHandler(t *testing.T) *sidebarEnv {
 	catSvc := service.NewCategoryService(cats, nil)
 
 	h := NewSidebarHandler(chanSvc, convSvc, catSvc)
+	order := &stubSidebarOrderStore{}
+	h.SetSidebarService(service.NewSidebarService(memberships, conversations, cats, order, nil))
 	jwtMgr := auth.NewJWTManager("test-sidebar-handler-secret", 15*time.Minute, 720*time.Hour)
 	return &sidebarEnv{
 		handler:       h,
@@ -116,6 +133,7 @@ func setupSidebarHandler(t *testing.T) *sidebarEnv {
 		channels:      channels,
 		conversations: conversations,
 		categories:    cats,
+		order:         order,
 	}
 }
 
@@ -690,5 +708,162 @@ func TestSidebarHandler_SetConversationCategory_NoServiceWired(t *testing.T) {
 	mw(http.HandlerFunc(env.handler.SetConversationCategory)).ServeHTTP(rec, req)
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Errorf("status = %d, want %d", rec.Code, http.StatusServiceUnavailable)
+	}
+}
+
+
+func (s *stubSidebarCategoryStore) SetPositions(_ context.Context, userID string, positions map[string]int) error {
+	for id, pos := range positions {
+		if row, ok := s.rows[userID+"#"+id]; ok {
+			row.Position = pos
+		}
+	}
+	return nil
+}
+
+func TestSidebarHandler_Move(t *testing.T) {
+	env := setupSidebarHandler(t)
+	user := &model.User{ID: "u-1", Email: "u1@test.com", SystemRole: model.SystemRoleMember}
+	env.memberships.userChannels = []*model.UserChannel{
+		{UserID: "u-1", ChannelID: "ch-a", ChannelName: "alpha", SidebarPosition: 1024},
+		{UserID: "u-1", ChannelID: "ch-b", ChannelName: "beta", SidebarPosition: 2048},
+	}
+
+	rec, req, mw := authedRequest(t, env, user, http.MethodPut, "/api/v1/sidebar/move",
+		`{"itemType":"channel","itemID":"ch-b","section":"channels","afterType":"","afterID":""}`, "", "")
+	mw(http.HandlerFunc(env.handler.Move)).ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var res struct {
+		Updates []store.SidebarRowUpdate `json:"updates"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&res); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	// Server-computed: ch-b lands at the top slot, midpoint below 1024.
+	if len(res.Updates) != 1 || res.Updates[0].ItemID != "ch-b" || res.Updates[0].Position != 512 {
+		t.Fatalf("updates = %+v", res.Updates)
+	}
+	if len(env.order.applied) != 1 {
+		t.Fatalf("order writes = %d, want 1", len(env.order.applied))
+	}
+}
+
+func TestSidebarHandler_MoveErrors(t *testing.T) {
+	env := setupSidebarHandler(t)
+	user := &model.User{ID: "u-1", Email: "u1@test.com", SystemRole: model.SystemRoleMember}
+	env.memberships.userChannels = []*model.UserChannel{
+		{UserID: "u-1", ChannelID: "ch-a", ChannelName: "alpha", SidebarPosition: 1024},
+	}
+
+	// Unauthenticated.
+	rec := httptest.NewRecorder()
+	env.handler.Move(rec, httptest.NewRequest(http.MethodPut, "/api/v1/sidebar/move", nil))
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("unauth status = %d", rec.Code)
+	}
+
+	// Malformed JSON.
+	rec, req, mw := authedRequest(t, env, user, http.MethodPut, "/api/v1/sidebar/move", `{bad`, "", "")
+	mw(http.HandlerFunc(env.handler.Move)).ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("bad json status = %d", rec.Code)
+	}
+
+	// Validation failure → 400 invalid_move.
+	rec, req, mw = authedRequest(t, env, user, http.MethodPut, "/api/v1/sidebar/move",
+		`{"itemType":"bogus","itemID":"x","section":"channels"}`, "", "")
+	mw(http.HandlerFunc(env.handler.Move)).ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "invalid_move") {
+		t.Fatalf("invalid move status = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	// Unknown item → 404.
+	rec, req, mw = authedRequest(t, env, user, http.MethodPut, "/api/v1/sidebar/move",
+		`{"itemType":"channel","itemID":"ch-missing","section":"channels"}`, "", "")
+	mw(http.HandlerFunc(env.handler.Move)).ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("missing item status = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	// Stale anchor → 409 sidebar_conflict (client refetches and retries).
+	rec, req, mw = authedRequest(t, env, user, http.MethodPut, "/api/v1/sidebar/move",
+		`{"itemType":"channel","itemID":"ch-a","section":"channels","afterType":"channel","afterID":"ch-gone"}`, "", "")
+	mw(http.HandlerFunc(env.handler.Move)).ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "sidebar_conflict") {
+		t.Fatalf("conflict status = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	// Store failure → generic 500.
+	env.memberships.userChannels = append(env.memberships.userChannels,
+		&model.UserChannel{UserID: "u-1", ChannelID: "ch-b", ChannelName: "beta", SidebarPosition: 2048})
+	env.order.err = errors.New("transact down")
+	rec, req, mw = authedRequest(t, env, user, http.MethodPut, "/api/v1/sidebar/move",
+		`{"itemType":"channel","itemID":"ch-b","section":"channels"}`, "", "")
+	mw(http.HandlerFunc(env.handler.Move)).ServeHTTP(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("store failure status = %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestSidebarHandler_MoveCategory(t *testing.T) {
+	env := setupSidebarHandler(t)
+	user := &model.User{ID: "u-1", Email: "u1@test.com", SystemRole: model.SystemRoleMember}
+	env.categories.rows["u-1#cat-a"] = &model.UserChannelCategory{UserID: "u-1", ID: "cat-a", Name: "A", Position: 1}
+	env.categories.rows["u-1#cat-b"] = &model.UserChannelCategory{UserID: "u-1", ID: "cat-b", Name: "B", Position: 2}
+
+	rec, req, mw := authedRequest(t, env, user, http.MethodPut, "/api/v1/sidebar/categories/cat-b/move",
+		`{"afterID":""}`, "id", "cat-b")
+	mw(http.HandlerFunc(env.handler.MoveCategory)).ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var res struct {
+		Categories []model.UserChannelCategory `json:"categories"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&res); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(res.Categories) != 2 || res.Categories[0].ID != "cat-b" || res.Categories[0].Position != 1024 {
+		t.Fatalf("categories = %+v", res.Categories)
+	}
+}
+
+func TestSidebarHandler_MoveCategoryErrors(t *testing.T) {
+	env := setupSidebarHandler(t)
+	user := &model.User{ID: "u-1", Email: "u1@test.com", SystemRole: model.SystemRoleMember}
+	env.categories.rows["u-1#cat-a"] = &model.UserChannelCategory{UserID: "u-1", ID: "cat-a", Name: "A", Position: 1}
+
+	rec := httptest.NewRecorder()
+	env.handler.MoveCategory(rec, httptest.NewRequest(http.MethodPut, "/api/v1/sidebar/categories/cat-a/move", nil))
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("unauth status = %d", rec.Code)
+	}
+
+	rec, req, mw := authedRequest(t, env, user, http.MethodPut, "/api/v1/sidebar/categories//move", `{"afterID":""}`, "id", "")
+	mw(http.HandlerFunc(env.handler.MoveCategory)).ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("missing id status = %d", rec.Code)
+	}
+
+	rec, req, mw = authedRequest(t, env, user, http.MethodPut, "/api/v1/sidebar/categories/cat-a/move", `{bad`, "id", "cat-a")
+	mw(http.HandlerFunc(env.handler.MoveCategory)).ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("bad json status = %d", rec.Code)
+	}
+
+	// Stale anchor → 409.
+	rec, req, mw = authedRequest(t, env, user, http.MethodPut, "/api/v1/sidebar/categories/cat-a/move", `{"afterID":"cat-gone"}`, "id", "cat-a")
+	mw(http.HandlerFunc(env.handler.MoveCategory)).ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("conflict status = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	// Unknown category → 404.
+	rec, req, mw = authedRequest(t, env, user, http.MethodPut, "/api/v1/sidebar/categories/cat-x/move", `{"afterID":""}`, "id", "cat-x")
+	mw(http.HandlerFunc(env.handler.MoveCategory)).ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("missing category status = %d body=%s", rec.Code, rec.Body.String())
 	}
 }

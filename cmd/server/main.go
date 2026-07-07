@@ -318,6 +318,10 @@ func main() {
 
 	categorySvc := service.NewCategoryService(store.NewCategoryStore(db), redisPubSub)
 	sidebarH := handler.NewSidebarHandler(channelSvc, convSvc, categorySvc)
+	// Server-owned reordering: drag-drops arrive as events (item + anchor);
+	// the service computes every position and commits transactionally.
+	sidebarSvc := service.NewSidebarService(membershipStore, conversationStore, store.NewCategoryStore(db), store.NewSidebarOrderStore(db), redisPubSub)
+	sidebarH.SetSidebarService(sidebarSvc)
 
 	// ------------------------------------------------------------------ Search
 	// NewClientFromConfig returns nil for an empty URL; downstream wiring

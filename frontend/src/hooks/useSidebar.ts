@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { apiFetch } from '@/lib/api';
+import { ApiError, apiFetch } from '@/lib/api';
 import { queryKeys } from '@/lib/query-keys';
 import type { SidebarReorderUpdate } from '@/lib/sidebar-reorder';
 import type { SidebarCategory, UserChannel, UserConversation } from '@/types';
@@ -142,23 +142,16 @@ export function useReorderCategories() {
   const qc = useQueryClient();
   const queryKey = queryKeys.sidebarCategories();
   return useMutation({
-    mutationFn: async (vars: { categories: SidebarCategory[] }) => {
-      const changed = vars.categories.map((category, index) => ({
-        ...category,
-        position: (index + 1) * 1000,
-      }));
-      sidebarDndDebug('category-api reorder start', {
-        order: changed.map((category) => ({ id: category.id, position: category.position })),
-      });
-      await Promise.all(
-        changed.map((category) =>
-          apiFetch<SidebarCategory>(`/api/v1/sidebar/categories/${category.id}`, {
-            method: 'PATCH',
-            body: JSON.stringify({ name: undefined, position: category.position }),
-          }),
-        ),
+    // The category drop is reported as an EVENT ("X lands after A"); the
+    // server renumbers every category itself and returns the canonical
+    // order. `vars.categories` is only the optimistic preview.
+    mutationFn: async (vars: { categories: SidebarCategory[]; movedID: string; afterID: string }) => {
+      sidebarDndDebug('category-api move start', { movedID: vars.movedID, afterID: vars.afterID });
+      const res = await apiFetch<{ categories: SidebarCategory[] }>(
+        `/api/v1/sidebar/categories/${vars.movedID}/move`,
+        { method: 'PUT', body: JSON.stringify({ afterID: vars.afterID }) },
       );
-      return changed;
+      return res.categories ?? [];
     },
     onMutate: async (vars) => {
       // Initiate cancellation synchronously, then patch SYNCHRONOUSLY (before the
@@ -178,25 +171,36 @@ export function useReorderCategories() {
       await cancelled;
       return { previous };
     },
-    onError: (_err, _vars, context) => {
+    onError: (err, _vars, context) => {
       sidebarDndDebug('category-cache reorder rollback', {
-        error: sidebarDndDebugError(_err),
+        error: sidebarDndDebugError(err),
         previous: context?.previous,
       });
       qc.setQueryData(queryKey, context?.previous);
+      // Stale layout (409): the anchor moved under us. Nothing was written —
+      // fetch the truth so the next drop anchors against current state.
+      if (isSidebarConflict(err)) void qc.invalidateQueries({ queryKey });
     },
-    onSuccess: (data) => {
-      sidebarDndDebug('category-api reorder success', {
-        order: data.map((category) => ({ id: category.id, position: category.position })),
+    onSuccess: (categories) => {
+      sidebarDndDebug('category-api move success', {
+        order: categories.map((category) => ({ id: category.id, position: category.position })),
       });
+      // The response IS the order the server just committed — apply it as the
+      // truth. Deliberately NO post-write invalidate: the category list read
+      // is eventually consistent, so a read-after-write refetch can return
+      // the OLD order and revert the drop (the historical snap-back).
+      qc.setQueryData<SidebarCategory[]>(queryKey, categories);
     },
-    // Deliberately NO post-write invalidate. The category list read is eventually
-    // consistent (no ConsistentRead), so a read-after-write refetch here races
-    // the write and can momentarily return the OLD order — reverting the drop
-    // (a snap-back). The optimistic order already equals what we persisted; the
-    // next natural refetch (staleTime/focus/remount) reconciles. Mirrors
-    // useReorderSidebar, which dropped its post-write invalidate for the same reason.
   });
+}
+
+// isSidebarConflict detects the server's "layout changed since it was read"
+// rejection (409 sidebar_conflict). Nothing was written; the client refetches
+// and the user drops again against current state.
+function isSidebarConflict(error: unknown): boolean {
+  if (!(error instanceof ApiError) || error.status !== 409) return false;
+  const payload = error.payload as { error?: { code?: string } } | undefined;
+  return payload?.error?.code === 'sidebar_conflict';
 }
 
 export function useDeleteCategory() {
@@ -340,30 +344,25 @@ function applyReorderOptimistic(
 export function useReorderSidebar() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (vars: { updates: SidebarReorderUpdate[]; favoriteChanged: Set<string> }) => {
-      await Promise.all(
-        vars.updates.map((u) => {
-          const prefix = URL_PREFIX[u.kind];
-          const writes: Promise<unknown>[] = [
-            apiFetch(`${prefix}/${u.id}/category`, {
-              method: 'PUT',
-              body: JSON.stringify({ categoryID: u.categoryID, sidebarPosition: u.sidebarPosition }),
-            }),
-          ];
-          // Favorite lives on a separate endpoint; only touch it for the row
-          // whose favorite actually flipped (a cross-section move in/out of
-          // Favorites), never for the untouched neighbors being re-spaced.
-          if (vars.favoriteChanged.has(u.id)) {
-            writes.push(
-              apiFetch(`${prefix}/${u.id}/favorite`, {
-                method: 'PUT',
-                body: JSON.stringify({ favorite: u.favorite }),
-              }),
-            );
-          }
-          return Promise.all(writes);
+    // ONE request, event-shaped: "item X dropped into section S after item A".
+    // The server resolves it against the canonical layout, computes every
+    // position itself, and commits atomically — the client never sends
+    // position numbers (client-computed positions written from a stale local
+    // view were exactly how drops landed one slot off or didn't stick).
+    // `vars.updates` is only the optimistic preview for instant paint.
+    mutationFn: async (vars: { move: SidebarMoveRequest; updates: SidebarReorderUpdate[] }) => {
+      const res = await apiFetch<{ updates: ServerSidebarRowUpdate[] }>('/api/v1/sidebar/move', {
+        method: 'PUT',
+        body: JSON.stringify({
+          itemType: vars.move.itemType,
+          itemID: vars.move.itemID,
+          section: vars.move.section,
+          categoryID: vars.move.categoryID ?? '',
+          afterType: vars.move.afterType ?? '',
+          afterID: vars.move.afterID ?? '',
         }),
-      );
+      });
+      return res.updates ?? [];
     },
     onMutate: async (vars) => {
       markLocalSidebarReorder();
@@ -390,10 +389,67 @@ export function useReorderSidebar() {
       await cancelled;
       return { previousChannels, previousConversations };
     },
-    onError: (_err, _vars, context) => {
-      sidebarDndDebug('reorder rollback', { error: sidebarDndDebugError(_err) });
+    onSuccess: (serverUpdates) => {
+      // The response carries the rows the server actually wrote — apply them
+      // as the truth (they can differ from the optimistic preview when the
+      // server renumbered the section). No read-after-write refetch: the
+      // lists are eventually consistent and could return the pre-move order.
+      sidebarDndDebug('reorder server-applied', { serverUpdates });
+      qc.setQueryData<SidebarAttrRow[]>(queryKeys.userChannels(), (rows) =>
+        applyServerOrder(rows, 'channel', serverUpdates));
+      qc.setQueryData<SidebarAttrRow[]>(queryKeys.userConversations(), (rows) =>
+        applyServerOrder(rows, 'conversation', serverUpdates));
+    },
+    onError: (err, _vars, context) => {
+      sidebarDndDebug('reorder rollback', { error: sidebarDndDebugError(err) });
       if (context?.previousChannels) qc.setQueryData(queryKeys.userChannels(), context.previousChannels);
       if (context?.previousConversations) qc.setQueryData(queryKeys.userConversations(), context.previousConversations);
+      // Stale layout (409): fetch the truth so the next drop anchors right.
+      if (isSidebarConflict(err)) {
+        void qc.invalidateQueries({ queryKey: queryKeys.userChannels() });
+        void qc.invalidateQueries({ queryKey: queryKeys.userConversations() });
+      }
     },
+  });
+}
+
+// Wire shape of PUT /api/v1/sidebar/move — the drop event. afterID empty =
+// the top of the section.
+export interface SidebarMoveRequest {
+  itemType: SidebarItemKind;
+  itemID: string;
+  section: 'favorites' | 'category' | 'channels';
+  categoryID?: string;
+  afterType?: SidebarItemKind | '';
+  afterID?: string;
+}
+
+// ServerSidebarRowUpdate mirrors the backend's store.SidebarRowUpdate: the
+// rows the move actually rewrote. categoryID/favorite ride only on the moved
+// row; absent means the attribute was left untouched.
+interface ServerSidebarRowUpdate {
+  itemType: SidebarItemKind;
+  itemID: string;
+  position: number;
+  categoryID?: string;
+  favorite?: boolean;
+}
+
+function applyServerOrder(
+  rows: SidebarAttrRow[] | undefined,
+  kind: SidebarItemKind,
+  updates: ServerSidebarRowUpdate[],
+): SidebarAttrRow[] | undefined {
+  if (!rows) return rows;
+  const byID = new Map(updates.filter((u) => u.itemType === kind).map((u) => [u.itemID, u] as const));
+  return rows.map((row) => {
+    const upd = byID.get(sidebarAttrRowID(kind, row));
+    if (!upd) return row;
+    return {
+      ...row,
+      sidebarPosition: upd.position,
+      ...(upd.categoryID !== undefined ? { categoryID: upd.categoryID } : {}),
+      ...(upd.favorite !== undefined ? { favorite: upd.favorite } : {}),
+    };
   });
 }

@@ -148,9 +148,13 @@ function positionOf(id: string): number | undefined {
 function favoriteOf(id: string): boolean | undefined {
   return lastReorderUpdates().find((u) => u.id === id)?.favorite;
 }
-function lastFavoriteChanged(): Set<string> {
-  const call = reorderSidebarMutate.mock.calls.at(-1)?.[0] as { favoriteChanged?: Set<string> } | undefined;
-  return call?.favoriteChanged ?? new Set();
+// The wire EVENT the drop reported — item, target section, and the anchor it
+// landed after. The server owns every resulting position.
+function lastMove(): { itemType: string; itemID: string; section: string; categoryID?: string; afterType?: string; afterID?: string } | undefined {
+  const call = reorderSidebarMutate.mock.calls.at(-1)?.[0] as
+    | { move: { itemType: string; itemID: string; section: string; categoryID?: string; afterType?: string; afterID?: string } }
+    | undefined;
+  return call?.move;
 }
 
 vi.mock('@/hooks/useChannels', () => ({
@@ -372,7 +376,9 @@ describe('Sidebar drag-and-drop monitor callbacks', () => {
     // instead of a separate favorite mutation.
     expect(reorderSidebarMutate).toHaveBeenCalled();
     expect(favoriteOf('ch-other')).toBe(true);
-    expect(lastFavoriteChanged().has('ch-other')).toBe(true);
+    // The reported EVENT targets the Favorites section — the server flips
+    // the flag itself; no separate favorite mutation, no client-sent flag.
+    expect(lastMove()).toMatchObject({ itemType: 'channel', itemID: 'ch-other', section: 'favorites' });
   });
 
   it('drops a category before another category — reorderCategories fires', async () => {
@@ -557,9 +563,10 @@ describe('Sidebar drag-and-drop monitor callbacks', () => {
     monitorCallbacks.onDragStart?.(dragSource({ type: 'channel', channel: chan('ch-favorite') }));
     monitorCallbacks.onDropTargetChange?.(dropLocation([channelTarget('__channels__', 0)]));
     monitorCallbacks.onDrop?.(dropLocation([channelTarget('__channels__', 0)]));
-    // Un-favoriting rides the batch reorder: the row's favorite flips to false.
+    // Un-favoriting is the server's decision: the event targets the default
+    // channels section; the optimistic preview mirrors the flip.
     expect(favoriteOf('ch-favorite')).toBe(false);
-    expect(lastFavoriteChanged().has('ch-favorite')).toBe(true);
+    expect(lastMove()).toMatchObject({ itemID: 'ch-favorite', section: 'channels' });
   });
 
   it('does not re-favorite an already-favorited channel dropped onto Favorites', async () => {
@@ -569,8 +576,9 @@ describe('Sidebar drag-and-drop monitor callbacks', () => {
     monitorCallbacks.onDragStart?.(dragSource({ type: 'channel', channel: chan('ch-favorite') }));
     monitorCallbacks.onDropTargetChange?.(dropLocation([sectionTarget('__favorites__')]));
     monitorCallbacks.onDrop?.(dropLocation([sectionTarget('__favorites__')]));
-    // Already favorited → no favorite flip; only the position re-spaces.
-    expect(lastFavoriteChanged().has('ch-favorite')).toBe(false);
+    // A within-Favorites reorder reports the same favorites-targeted event;
+    // whether any flag actually flips is the server's call, not the client's.
+    expect(lastMove()).toMatchObject({ itemID: 'ch-favorite', section: 'favorites' });
     expect(reorderSidebarMutate).toHaveBeenCalled();
   });
 

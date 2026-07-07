@@ -19,11 +19,12 @@ import {
 } from './useSidebar';
 import type { SidebarReorderUpdate } from '@/lib/sidebar-reorder';
 
-vi.mock('@/lib/api', () => ({
+vi.mock('@/lib/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/api')>()),
   apiFetch: vi.fn(),
 }));
 
-import { apiFetch } from '@/lib/api';
+import { ApiError, apiFetch } from '@/lib/api';
 
 function createWrapperWithClient() {
   const queryClient = new QueryClient({
@@ -120,8 +121,14 @@ describe('useUpdateCategory', () => {
 describe('useReorderCategories', () => {
   beforeEach(() => vi.mocked(apiFetch).mockReset());
 
-  it('optimistically applies the full normalized category order and PATCHes every category', async () => {
-    vi.mocked(apiFetch).mockResolvedValue({});
+  it('reports the drop event, paints optimistically, and applies the server order as truth', async () => {
+    // The server owns positions: ONE move request goes out, and its response
+    // (the canonical order) replaces the optimistic preview.
+    const serverOrder = [
+      { id: 'c-2', name: 'Operations', position: 1024 },
+      { id: 'c-1', name: 'Engineering', position: 2048 },
+    ];
+    vi.mocked(apiFetch).mockResolvedValue({ categories: serverOrder });
 
     const { wrapper, queryClient, invalidateSpy } = createWrapperWithClient();
     queryClient.setQueryData(['sidebarCategories'], [
@@ -135,6 +142,8 @@ describe('useReorderCategories', () => {
         { id: 'c-2', name: 'Operations', position: 2000 },
         { id: 'c-1', name: 'Engineering', position: 1000 },
       ],
+      movedID: 'c-2',
+      afterID: '',
     });
 
     // Synchronous — same snap-back guard as the channel/DM reorder: the new
@@ -145,18 +154,38 @@ describe('useReorderCategories', () => {
     ]);
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
-    expect(apiFetch).toHaveBeenCalledWith('/api/v1/sidebar/categories/c-2', {
-      method: 'PATCH',
-      body: JSON.stringify({ name: undefined, position: 1000 }),
+    // ONE event-shaped request; no client-computed positions on the wire.
+    expect(apiFetch).toHaveBeenCalledTimes(1);
+    expect(apiFetch).toHaveBeenCalledWith('/api/v1/sidebar/categories/c-2/move', {
+      method: 'PUT',
+      body: JSON.stringify({ afterID: '' }),
     });
-    expect(apiFetch).toHaveBeenCalledWith('/api/v1/sidebar/categories/c-1', {
-      method: 'PATCH',
-      body: JSON.stringify({ name: undefined, position: 2000 }),
-    });
+    // The server's canonical order replaced the optimistic preview.
+    expect(queryClient.getQueryData(['sidebarCategories'])).toEqual(serverOrder);
     // Deliberately NO post-write invalidate: the eventually-consistent category
-    // list read would race the write and could revert the optimistic order (a
-    // snap-back). The optimistic cache already holds the persisted order.
+    // list read would race the write and could revert the committed order.
     expect(invalidateSpy).not.toHaveBeenCalledWith({ queryKey: ['sidebarCategories'] });
+  });
+
+  it('rolls back and refetches the truth on a 409 layout conflict', async () => {
+    const conflict = new ApiError(409, 'sidebar: layout changed since it was read', {
+      error: { code: 'sidebar_conflict', message: 'sidebar: layout changed since it was read' },
+    });
+    vi.mocked(apiFetch).mockRejectedValueOnce(conflict).mockResolvedValue({ categories: [] });
+    const { wrapper, queryClient } = createWrapperWithClient();
+    const before = [
+      { id: 'c-1', name: 'Engineering', position: 1000 },
+      { id: 'c-2', name: 'Operations', position: 2000 },
+    ];
+    queryClient.setQueryData(['sidebarCategories'], before);
+    const { result } = renderHook(() => useReorderCategories(), { wrapper });
+
+    result.current.mutate({ categories: [before[1], before[0]], movedID: 'c-2', afterID: '' });
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    // Rolled back to what the user had…
+    expect(queryClient.getQueryData(['sidebarCategories'])).toEqual(before);
+    // …and marked stale so the next render refetches the server's layout.
+    expect(queryClient.getQueryState(['sidebarCategories'])?.isInvalidated).toBe(true);
   });
 });
 
@@ -440,8 +469,20 @@ describe('useReorderSidebar', () => {
     { id: 'ch-2', kind: 'channel', categoryID: '', favorite: false, sidebarPosition: 2000 },
   ];
 
-  it('optimistically re-sorts the cache and writes each row through the per-item endpoint', async () => {
-    vi.mocked(apiFetch).mockResolvedValue(undefined);
+  const move = {
+    itemType: 'channel' as const,
+    itemID: 'ch-1',
+    section: 'channels' as const,
+    afterType: '' as const,
+    afterID: '',
+  };
+
+  it('paints optimistically, sends ONE move event, and applies the server order as truth', async () => {
+    // The server answers with what it actually wrote — here a different
+    // position than the optimistic preview (it slotted into a gap).
+    vi.mocked(apiFetch).mockResolvedValue({
+      updates: [{ itemType: 'channel', itemID: 'ch-1', position: 512 }],
+    });
     const { wrapper, queryClient } = createWrapperWithClient();
     queryClient.setQueryData(['userChannels'], [
       { channelID: 'ch-1', channelName: 'a', sidebarPosition: 5000 },
@@ -449,7 +490,7 @@ describe('useReorderSidebar', () => {
     ]);
     const { result } = renderHook(() => useReorderSidebar(), { wrapper });
 
-    result.current.mutate({ updates, favoriteChanged: new Set() });
+    result.current.mutate({ move, updates });
 
     // SYNCHRONOUS optimistic patch: onMutate applies it BEFORE it awaits the
     // query cancellation, so the cache already holds the new order on the very
@@ -461,10 +502,24 @@ describe('useReorderSidebar', () => {
     expect(rows.find((r) => r.channelID === 'ch-2')?.sidebarPosition).toBe(2000);
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(apiFetch).toHaveBeenCalledWith('/api/v1/channels/ch-1/category', expect.objectContaining({ method: 'PUT' }));
-    expect(apiFetch).toHaveBeenCalledWith('/api/v1/channels/ch-2/category', expect.objectContaining({ method: 'PUT' }));
-    // No favorite endpoint hit when nothing flipped.
-    expect(apiFetch).not.toHaveBeenCalledWith(expect.stringContaining('/favorite'), expect.anything());
+    // ONE event-shaped request — no client-computed positions on the wire.
+    expect(apiFetch).toHaveBeenCalledTimes(1);
+    expect(apiFetch).toHaveBeenCalledWith('/api/v1/sidebar/move', {
+      method: 'PUT',
+      body: JSON.stringify({
+        itemType: 'channel',
+        itemID: 'ch-1',
+        section: 'channels',
+        categoryID: '',
+        afterType: '',
+        afterID: '',
+      }),
+    });
+    // The server's committed position replaced the optimistic one.
+    const after = queryClient.getQueryData(['userChannels']) as Array<{ channelID: string; sidebarPosition: number }>;
+    expect(after.find((r) => r.channelID === 'ch-1')?.sidebarPosition).toBe(512);
+    // Untouched rows keep their optimistic state (the server didn't rewrite them).
+    expect(after.find((r) => r.channelID === 'ch-2')?.sidebarPosition).toBe(2000);
   });
 
   it('arms the self-echo ignore window on mutate', () => {
@@ -472,24 +527,32 @@ describe('useReorderSidebar', () => {
     const { wrapper } = createWrapperWithClient();
     const { result } = renderHook(() => useReorderSidebar(), { wrapper });
     expect(shouldRefetchSidebarForRemoteUpdate()).toBe(true);
-    result.current.mutate({ updates, favoriteChanged: new Set() });
+    result.current.mutate({ move, updates });
     expect(shouldRefetchSidebarForRemoteUpdate()).toBe(false); // suppressed
     resetSidebarReorderSessionState();
   });
 
-  it('hits the favorite endpoint only for the row whose favorite flipped', async () => {
-    vi.mocked(apiFetch).mockResolvedValue(undefined);
+  it('applies server-confirmed favorite/category attributes on the moved row', async () => {
+    // A move into Favorites: the server sets the flag itself and reports it
+    // back — no separate favorite endpoint call.
+    vi.mocked(apiFetch).mockResolvedValue({
+      updates: [{ itemType: 'channel', itemID: 'ch-1', position: 1024, favorite: true, categoryID: 'work' }],
+    });
     const { wrapper, queryClient } = createWrapperWithClient();
     queryClient.setQueryData(['userChannels'], [{ channelID: 'ch-1', channelName: 'a' }]);
     const { result } = renderHook(() => useReorderSidebar(), { wrapper });
     const favUpdates: SidebarReorderUpdate[] = [
       { id: 'ch-1', kind: 'channel', categoryID: 'work', favorite: true, sidebarPosition: 1000 },
     ];
-    result.current.mutate({ updates: favUpdates, favoriteChanged: new Set(['ch-1']) });
+    result.current.mutate({
+      move: { itemType: 'channel', itemID: 'ch-1', section: 'favorites', afterType: '', afterID: '' },
+      updates: favUpdates,
+    });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(apiFetch).toHaveBeenCalledWith('/api/v1/channels/ch-1/favorite', expect.objectContaining({
-      method: 'PUT', body: JSON.stringify({ favorite: true }),
-    }));
+    // Single move request; the server's response carried the attributes.
+    expect(apiFetch).toHaveBeenCalledTimes(1);
+    const row = (queryClient.getQueryData(['userChannels']) as Array<{ channelID: string; favorite?: boolean; categoryID?: string; sidebarPosition?: number }>)[0];
+    expect(row).toMatchObject({ channelID: 'ch-1', favorite: true, categoryID: 'work', sidebarPosition: 1024 });
   });
 
   it('rolls the cache back to the pre-drop order when a write fails', async () => {
@@ -502,12 +565,28 @@ describe('useReorderSidebar', () => {
     queryClient.setQueryData(['userChannels'], original);
     const { result } = renderHook(() => useReorderSidebar(), { wrapper });
 
-    result.current.mutate({ updates, favoriteChanged: new Set() });
+    result.current.mutate({ move, updates });
     await waitFor(() => expect(result.current.isError).toBe(true));
 
     const rows = queryClient.getQueryData(['userChannels']) as Array<{ channelID: string; sidebarPosition: number }>;
     expect(rows.find((r) => r.channelID === 'ch-1')?.sidebarPosition).toBe(5000);
     expect(rows.find((r) => r.channelID === 'ch-2')?.sidebarPosition).toBe(1000);
+  });
+
+  it('a 409 layout conflict rolls back AND marks both lists stale for a truth refetch', async () => {
+    const conflict = new ApiError(409, 'sidebar: layout changed since it was read', {
+      error: { code: 'sidebar_conflict', message: 'sidebar: layout changed since it was read' },
+    });
+    vi.mocked(apiFetch).mockRejectedValue(conflict);
+    const { wrapper, queryClient } = createWrapperWithClient();
+    queryClient.setQueryData(['userChannels'], [{ channelID: 'ch-1', channelName: 'a', sidebarPosition: 5000 }]);
+    queryClient.setQueryData(['userConversations'], [{ conversationID: 'cv-1', sidebarPosition: 1000 }]);
+    const { result } = renderHook(() => useReorderSidebar(), { wrapper });
+
+    result.current.mutate({ move, updates });
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect(queryClient.getQueryState(['userChannels'])?.isInvalidated).toBe(true);
+    expect(queryClient.getQueryState(['userConversations'])?.isInvalidated).toBe(true);
   });
 
   it('markLocalSidebarReorder + reset toggle the window', () => {

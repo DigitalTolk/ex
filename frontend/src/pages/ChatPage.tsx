@@ -439,6 +439,15 @@ export default function ChatPage() {
       }
       blanketRefresh();
     },
+    onSidebarUpdated: () => {
+      // A server-side sidebar reorder committed (the move endpoint). The
+      // ACTING tab already holds the truth from the move response and armed
+      // the echo-ignore window — other tabs/devices refetch both lists so
+      // their order converges on what the server computed.
+      if (!shouldRefetchSidebarForRemoteUpdate()) return;
+      queryClient.invalidateQueries({ queryKey: queryKeys.userChannels() });
+      queryClient.invalidateQueries({ queryKey: queryKeys.userConversations() });
+    },
     onAttachmentDeleted: (data: unknown) => {
       const evt = parseAttachmentDeleted(data);
       if (!evt) return;

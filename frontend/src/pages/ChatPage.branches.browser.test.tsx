@@ -126,7 +126,8 @@ vi.mock('@/hooks/useDrafts', () => ({
 }));
 
 const mockApiFetch = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
-vi.mock('@/lib/api', () => ({
+vi.mock('@/lib/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/api')>()),
   apiFetch: (...args: unknown[]) => mockApiFetch(...args),
 }));
 

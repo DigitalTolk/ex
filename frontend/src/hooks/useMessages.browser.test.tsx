@@ -232,6 +232,39 @@ describe('useMessages — REST mutations', () => {
     await vi.waitFor(() => expect(resetSpy).toHaveBeenCalled());
   });
 
+  it('a thread reply to a root missing from the cached /threads list refetches it (participation may have begun)', async () => {
+    apiFetchMock.mockResolvedValue(msg({ id: 'r-1', parentMessageID: 'root-9' }));
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    // The /threads list is cached but does NOT contain this root yet — the
+    // reply may have just made the sender a participant, so it refetches.
+    qc.setQueryData(['userThreads'], [{ threadRootID: 'root-other' }]);
+    const screen = await render(
+      <QueryClientProvider client={qc}>
+        <Trigger hook={() => useSendMessage({ channelId: 'ch-1' })} vars={{ body: 'r', parentMessageID: 'root-9' }} />
+      </QueryClientProvider>,
+    );
+    (screen.getByTestId('trigger').element() as HTMLButtonElement).click();
+    await vi.waitFor(() => {
+      expect(qc.getQueryState(['userThreads'])?.isInvalidated).toBe(true);
+    });
+  });
+
+  it('a thread reply whose root IS already listed leaves the /threads cache alone', async () => {
+    // The thread.updated event patches the listed row live; a refetch here
+    // could clobber the fresher patch with an eventually-consistent read.
+    apiFetchMock.mockResolvedValue(msg({ id: 'r-2', parentMessageID: 'root-9' }));
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    qc.setQueryData(['userThreads'], [{ threadRootID: 'root-9' }]);
+    const screen = await render(
+      <QueryClientProvider client={qc}>
+        <Trigger hook={() => useSendMessage({ channelId: 'ch-1' })} vars={{ body: 'r2', parentMessageID: 'root-9' }} />
+      </QueryClientProvider>,
+    );
+    (screen.getByTestId('trigger').element() as HTMLButtonElement).click();
+    await new Promise((r) => setTimeout(r, 250));
+    expect(qc.getQueryState(['userThreads'])?.isInvalidated).toBe(false);
+  });
+
   it('useSendMessage POSTs to /channels/:id/messages with body+parent+attachments defaults', async () => {
     apiFetchMock.mockResolvedValue(msg({ id: 'new' }));
     const { screen } = await renderMutation(

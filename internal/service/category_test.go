@@ -12,12 +12,14 @@ import (
 
 // stubCategoryStore is a small in-memory CategoryStore for tests.
 type stubCategoryStore struct {
-	rows      map[string]*model.UserChannelCategory // key: userID + "#" + id
-	createErr error
-	listErr   error
-	listNil   bool // when true, List returns a nil slice (no error)
-	updateErr error
-	deleteErr error
+	rows            map[string]*model.UserChannelCategory // key: userID + "#" + id
+	createErr       error
+	listErr         error
+	listNil         bool // when true, List returns a nil slice (no error)
+	updateErr       error
+	deleteErr       error
+	setPositionsErr error
+	lastPositions   map[string]int
 }
 
 func newStubCategoryStore() *stubCategoryStore {
@@ -284,5 +286,105 @@ func TestCategoryService_Delete_StoreErrorPropagates(t *testing.T) {
 	svc := NewCategoryService(cs, newMockPublisher())
 	if err := svc.Delete(context.Background(), "u-1", "x"); err == nil {
 		t.Fatal("expected wrapped error")
+	}
+}
+
+
+func (s *stubCategoryStore) SetPositions(_ context.Context, userID string, positions map[string]int) error {
+	if s.setPositionsErr != nil {
+		return s.setPositionsErr
+	}
+	s.lastPositions = positions
+	for id, pos := range positions {
+		if row, ok := s.rows[userID+"#"+id]; ok {
+			row.Position = pos
+		}
+	}
+	return nil
+}
+
+func TestCategoryService_Move(t *testing.T) {
+	ctx := context.Background()
+	cs := newStubCategoryStore()
+	pub := newMockPublisher()
+	svc := NewCategoryService(cs, pub)
+	cs.rows["u1#cat-a"] = &model.UserChannelCategory{UserID: "u1", ID: "cat-a", Name: "A", Position: 1}
+	cs.rows["u1#cat-b"] = &model.UserChannelCategory{UserID: "u1", ID: "cat-b", Name: "B", Position: 2}
+	cs.rows["u1#cat-c"] = &model.UserChannelCategory{UserID: "u1", ID: "cat-c", Name: "C", Position: 3}
+
+	// Drop C after A: server renumbers densely — A, C, B.
+	got, err := svc.Move(ctx, "u1", "cat-c", "cat-a")
+	if err != nil {
+		t.Fatalf("Move: %v", err)
+	}
+	order := []string{}
+	for _, c := range got {
+		order = append(order, c.ID)
+	}
+	if len(order) != 3 || order[0] != "cat-a" || order[1] != "cat-c" || order[2] != "cat-b" {
+		t.Fatalf("order = %v, want [cat-a cat-c cat-b]", order)
+	}
+	if got[0].Position != 1024 || got[1].Position != 2048 || got[2].Position != 3072 {
+		t.Fatalf("positions = %d,%d,%d, want dense 1024-step", got[0].Position, got[1].Position, got[2].Position)
+	}
+	// Only rows whose position changed are written.
+	if len(cs.lastPositions) != 3 {
+		t.Fatalf("written positions = %v (all changed from 1,2,3)", cs.lastPositions)
+	}
+	if len(pub.published) != 1 {
+		t.Fatalf("published = %+v, want one categories update", pub.published)
+	}
+
+	// Move to the very top (empty anchor).
+	got, err = svc.Move(ctx, "u1", "cat-b", "")
+	if err != nil {
+		t.Fatalf("Move top: %v", err)
+	}
+	if got[0].ID != "cat-b" {
+		t.Fatalf("order after top move = %v", got)
+	}
+
+	// A drop that reproduces the current layout writes nothing: every row
+	// already sits at its dense slot.
+	cs.lastPositions = nil
+	if _, err := svc.Move(ctx, "u1", "cat-c", "cat-a"); err != nil {
+		t.Fatalf("no-op Move: %v", err)
+	}
+	if len(cs.lastPositions) != 0 {
+		t.Fatalf("no-op move must write nothing, wrote %v", cs.lastPositions)
+	}
+}
+
+func TestCategoryService_MoveErrors(t *testing.T) {
+	ctx := context.Background()
+	cs := newStubCategoryStore()
+	svc := NewCategoryService(cs, newMockPublisher())
+	cs.rows["u1#cat-a"] = &model.UserChannelCategory{UserID: "u1", ID: "cat-a", Name: "A", Position: 1}
+	cs.rows["u1#cat-b"] = &model.UserChannelCategory{UserID: "u1", ID: "cat-b", Name: "B", Position: 2}
+
+	if _, err := svc.Move(ctx, "u1", "", "cat-a"); !errors.Is(err, ErrSidebarInvalid) {
+		t.Fatalf("empty id err = %v, want ErrSidebarInvalid", err)
+	}
+	// Anchoring on itself means the client saw a layout that cannot exist.
+	if _, err := svc.Move(ctx, "u1", "cat-a", "cat-a"); !errors.Is(err, ErrSidebarConflict) {
+		t.Fatalf("self anchor err = %v, want ErrSidebarConflict", err)
+	}
+	if _, err := svc.Move(ctx, "u1", "cat-missing", ""); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("missing category err = %v, want ErrNotFound", err)
+	}
+	// A deleted anchor = stale layout → conflict, so the client refetches.
+	if _, err := svc.Move(ctx, "u1", "cat-a", "cat-deleted"); !errors.Is(err, ErrSidebarConflict) {
+		t.Fatalf("stale anchor err = %v, want ErrSidebarConflict", err)
+	}
+
+	cs.listErr = errors.New("dynamo down")
+	if _, err := svc.Move(ctx, "u1", "cat-a", ""); err == nil {
+		t.Fatal("expected list error")
+	}
+	cs.listErr = nil
+
+	cs.setPositionsErr = errors.New("transact failed")
+	if _, err := svc.Move(ctx, "u1", "cat-b", ""); err == nil {
+		t.Fatal("expected set positions error")
 	}
 }

@@ -116,6 +116,12 @@ const AttachmentURLTTL = 24 * time.Hour
 
 const MaxAttachmentBatchIDs = 50
 
+// maxAttachmentDimensionPx bounds client-declared intrinsic dimensions at
+// registration. For decodable images the bytes overrule the claim anyway
+// (syncImageDimensions); for types the server can't decode (SVG, video) this
+// cap keeps a hostile claim from distorting other viewers' chat layout.
+const maxAttachmentDimensionPx = 65535
+
 const (
 	messageThumbnailMaxWidth  = 640
 	messageThumbnailMaxHeight = 576
@@ -165,7 +171,7 @@ func (s *AttachmentService) CreateUploadURL(ctx context.Context, p CreateUploadP
 	if !validSHA256Hex(p.SHA256) {
 		return nil, errors.New("attachment: invalid sha256")
 	}
-	if p.Width < 0 || p.Height < 0 {
+	if p.Width < 0 || p.Height < 0 || p.Width > maxAttachmentDimensionPx || p.Height > maxAttachmentDimensionPx {
 		return nil, errors.New("attachment: invalid dimensions")
 	}
 	if s.signer == nil {
@@ -561,9 +567,33 @@ func (s *AttachmentService) ValidateForUse(ctx context.Context, attachmentID str
 	if err != nil {
 		return err
 	}
+	// Persist the decoded (trusted) dimensions here too, not only in
+	// ProcessUpload: a client that skips the process endpoint must not get a
+	// message posted whose renderable dimensions the server never confirmed.
+	// For decodable images the register-time client values are only a hint;
+	// the bytes are the truth.
+	if err := s.syncImageDimensions(ctx, a, cfg); err != nil {
+		return err
+	}
 	if err := s.generateThumbnails(ctx, a, data, cfg, false); err != nil {
 		return err
 	}
+	return nil
+}
+
+// syncImageDimensions overwrites the stored width/height with the decoded
+// image config when they disagree (covers register-time zero dims and any
+// row that predates dimension collection). Non-image uploads decode to a
+// zero config and are left untouched.
+func (s *AttachmentService) syncImageDimensions(ctx context.Context, a *model.Attachment, cfg image.Config) error {
+	if cfg.Width <= 0 || cfg.Height <= 0 || (a.Width == cfg.Width && a.Height == cfg.Height) {
+		return nil
+	}
+	if err := s.attachments.SetDimensions(ctx, a.ID, cfg.Width, cfg.Height); err != nil {
+		return fmt.Errorf("attachment: set dimensions: %w", err)
+	}
+	a.Width = cfg.Width
+	a.Height = cfg.Height
 	return nil
 }
 
@@ -593,12 +623,8 @@ func (s *AttachmentService) ProcessUpload(ctx context.Context, userID, attachmen
 	if err != nil {
 		return nil, err
 	}
-	if cfg.Width > 0 && cfg.Height > 0 && (a.Width != cfg.Width || a.Height != cfg.Height) {
-		if err := s.attachments.SetDimensions(ctx, a.ID, cfg.Width, cfg.Height); err != nil {
-			return nil, fmt.Errorf("attachment: set dimensions: %w", err)
-		}
-		a.Width = cfg.Width
-		a.Height = cfg.Height
+	if err := s.syncImageDimensions(ctx, a, cfg); err != nil {
+		return nil, err
 	}
 	if err := s.generateThumbnails(ctx, a, data, cfg, true); err != nil {
 		return nil, err

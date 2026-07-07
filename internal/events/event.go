@@ -50,6 +50,7 @@ const (
 	EventAttachmentDeleted  = "attachment.deleted"
 	EventChannelMuted       = "channel.muted"
 	EventUserChannelUpdated = "userchannel.updated" // per-user user-side state changed (favorite/category/notification prefs)
+	EventSidebarUpdated     = "sidebar.updated"     // server-side sidebar reorder committed — other devices refetch their lists
 	EventNotificationNew    = "notification.new"
 	// EventNotificationSettingsUpdated is sent to a user's own clients when
 	// their account-level notification settings (levels, keywords, etc.)

@@ -459,6 +459,29 @@ describe('useDrafts', () => {
     expect(queryClient.getQueryData<MessageDraft[]>(['drafts'])).toEqual([]);
   });
 
+  it('treats a draft-conflict payload with no current field as an empty scope', async () => {
+    // The 409 body omits `current` when serializers drop nulls — the client
+    // must read that as "no draft" (?? null), not choke or keep stale state.
+    const queryClient = makeQC();
+    queryClient.setQueryData<MessageDraft[]>(['drafts'], [
+      makeDraft({ id: 'draft-1', body: 'ghost', gen: 'g-ghost' }),
+    ]);
+    const scope = { parentID: 'dm-1', parentType: 'conversation' as const };
+    adoptDraftBasis(scope, 'g-ghost');
+    vi.mocked(apiFetch).mockRejectedValueOnce(
+      new ApiError(409, 'draft changed since it was read', {
+        error: { code: 'draft_conflict', message: 'draft changed since it was read' },
+      }),
+    );
+
+    const { result } = renderHook(() => useSaveDraft(), { wrapper: wrapperFor(queryClient) });
+    act(() => result.current.mutate({ parentID: 'dm-1', parentType: 'conversation', body: 'mine' }));
+    await waitFor(() => expect(result.current.isError).toBe(true));
+
+    expect(draftBasisFor(scope)).toBe('');
+    expect(queryClient.getQueryData<MessageDraft[]>(['drafts'])).toEqual([]);
+  });
+
   it('leaves state untouched on non-conflict save errors (next flush retries)', async () => {
     const queryClient = makeQC();
     queryClient.setQueryData<MessageDraft[]>(['drafts'], []);

@@ -194,6 +194,10 @@ func NewRouter(d *Deps) http.Handler {
 		mux.Handle("POST /api/v1/sidebar/categories", middleware.WrapFunc(sidebarH.CreateCategory, authMW))
 		mux.Handle("PATCH /api/v1/sidebar/categories/{id}", middleware.WrapFunc(sidebarH.UpdateCategory, authMW))
 		mux.Handle("DELETE /api/v1/sidebar/categories/{id}", middleware.WrapFunc(sidebarH.DeleteCategory, authMW))
+		// Event-shaped reorders: the client reports the drop ("X after A");
+		// the server owns every resulting position.
+		mux.Handle("PUT /api/v1/sidebar/move", middleware.WrapFunc(sidebarH.Move, authMW))
+		mux.Handle("PUT /api/v1/sidebar/categories/{id}/move", middleware.WrapFunc(sidebarH.MoveCategory, authMW))
 	}
 
 	// ------------------------------------------------------------------ Uploads
