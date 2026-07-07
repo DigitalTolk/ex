@@ -1,6 +1,6 @@
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef } from 'react';
 import { EditorState, EditorSelection, Compartment } from '@codemirror/state';
-import { EditorView, keymap, tooltips } from '@codemirror/view';
+import { EditorView, keymap } from '@codemirror/view';
 import { history, historyKeymap, defaultKeymap, insertNewlineAndIndent } from '@codemirror/commands';
 import { markdown } from '@codemirror/lang-markdown';
 import { Strikethrough, Autolink } from '@lezer/markdown';
@@ -11,7 +11,7 @@ import { mentionPills } from './extensions/mentionPills';
 import { emojiGlyphs } from './extensions/emojiGlyphs';
 import { composerAutocomplete, type CompletionProviders } from './extensions/completions';
 import { applyMark, applyBlock, getActiveFormats } from './extensions/commands';
-import { composerTooltipSpace, visualViewportRepositioner } from './tooltipSpace';
+import { composerTooltips, visualViewportRepositioner } from './tooltipSpace';
 
 export type { WysiwygEditorHandle, ActiveFormat };
 
@@ -139,26 +139,15 @@ export const MarkdownEditor = forwardRef<WysiwygEditorHandle, Props>(function Ma
             skinTone: () => (cbRef.current.completionProviders ?? EMPTY_PROVIDERS).skinTone(),
           }),
           composerTheme,
-          // Render the autocomplete popup into <body> with `fixed` positioning
-          // so it escapes EVERY clipping/stacking ancestor of the composer. A
-          // `position:fixed` element is still clipped and re-based by any
-          // ancestor that is a containing block for fixed — a `transform`
-          // (Motion's swipe-offset on the /threads ThreadPanel, the ThreadCard
-          // list), `contain`, `filter`, etc. — not just `overflow`. Keeping the
-          // tooltip under the editor meant those ancestors clipped the
-          // mention/emoji typeahead on mobile and in /threads. `parent:
-          // document.body` lifts it out of all of them; CM wraps it in a
-          // container carrying the editor's theme classes, so our composerTheme
-          // still applies (and it stays queryable at document level in tests).
-          // The theme pins its z-index above the app's top layer (see theme.ts).
-          //
-          // tooltipSpace bounds the placement to the VISUAL viewport (the area
-          // above the on-screen keyboard). Without it CM measures against
-          // window.innerHeight — which does NOT shrink when the mobile keyboard
-          // opens — so it thinks there's room below the cursor and renders the
-          // typeahead behind the keyboard. Constraining `bottom` to the keyboard
-          // top makes CM flip it ABOVE the cursor when needed.
-          tooltips({ parent: document.body, position: 'fixed', tooltipSpace: composerTooltipSpace }),
+          // Autocomplete popup placement: rendered into <body> (escapes every
+          // clipping/transformed ancestor — Motion swipe offsets in /threads,
+          // overflow containers), positioned ABSOLUTE in layout space (immune
+          // to iOS re-basing fixed elements against the panned visual viewport
+          // — the "typeahead under the keyboard" bug), and bounded to the
+          // VISUAL viewport so the popup flips above the caret when the
+          // on-screen keyboard eats the space below. Full rationale + the
+          // placement regression tests live with the config in tooltipSpace.ts.
+          composerTooltips(),
           // …and re-run that placement whenever the visual viewport changes:
           // iOS reports the keyboard late, so the initial measurement can race
           // it and land the popup behind the keyboard (see tooltipSpace.ts).

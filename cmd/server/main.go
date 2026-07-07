@@ -454,6 +454,8 @@ func main() {
 		},
 		AllowOrigins: allowOrigins,
 		RateLimiter:  redisCache,
+		// ACCESS_LOG_ENABLED=false → only 5xx requests reach the log.
+		DisableAccessLog: !cfg.AccessLogEnabled,
 	})
 
 	// ------------------------------------------------------------------ Server

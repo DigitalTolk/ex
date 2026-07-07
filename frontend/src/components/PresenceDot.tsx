@@ -1,4 +1,5 @@
 import { cn } from '@/lib/utils';
+import { PRESENCE_DOT_DEFAULT_SIZE, presenceDotBorderWidth } from '@/lib/presence';
 
 // The one presence indicator implementation (pair it with
 // presenceNotchStyle on the avatar it sits on). State is encoded by SHAPE
@@ -8,7 +9,7 @@ import { cn } from '@/lib/utils';
 // numeric rather than a Tailwind class.
 export function PresenceDot({
   online,
-  size = 8,
+  size = PRESENCE_DOT_DEFAULT_SIZE,
   inset = 0,
   className,
   testId,
@@ -36,7 +37,7 @@ export function PresenceDot({
         // Explicit inline border so every engine (WebKit included) resolves
         // the hollow ring identically regardless of utility-class cascade.
         borderStyle: online ? 'none' : 'solid',
-        borderWidth: online ? 0 : Math.max(1.5, size / 4.5),
+        borderWidth: online ? 0 : presenceDotBorderWidth(size),
       }}
       aria-label={online ? 'Online' : 'Offline'}
     />

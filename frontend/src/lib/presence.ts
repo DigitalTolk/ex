@@ -17,3 +17,18 @@ export function presenceNotchStyle(dotSize: number, inset = 0): CSSProperties {
   const mask = `radial-gradient(circle ${r}px at calc(100% - ${c}px) calc(100% - ${c}px), transparent ${r - 0.5}px, #000 ${r}px)`;
   return { WebkitMaskImage: mask, maskImage: mask };
 }
+
+// ---- Shared dot geometry ----
+// The React <PresenceDot> and the composer typeahead's plain-DOM renderer
+// (CodeMirror option rows can't host React components) must stay visually
+// identical. Both derive from these values; presenceDotParity.browser.test.tsx
+// pins the computed styles against each other so they can't drift again.
+
+// Default dot diameter in px, used wherever a caller doesn't size explicitly.
+export const PRESENCE_DOT_DEFAULT_SIZE = 8;
+
+// Hollow-ring stroke width for the offline state: proportional to the dot,
+// but never thinner than 1.5px so the ring stays legible at small sizes.
+export function presenceDotBorderWidth(size: number): number {
+  return Math.max(1.5, size / 4.5);
+}

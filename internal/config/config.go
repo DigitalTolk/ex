@@ -12,6 +12,10 @@ type Config struct {
 	Port string
 	Env  string // "development" or "production"
 
+	// AccessLogEnabled controls per-request logging. When false, only 5xx
+	// responses are recorded (ACCESS_LOG_ENABLED, default true).
+	AccessLogEnabled bool
+
 	// DynamoDB
 	AWSRegion        string
 	DynamoDBTable    string
@@ -155,6 +159,17 @@ func Load() (*Config, error) {
 	}
 	if c.SentryFrontendReplayErrorSampleRate, err = sampleRateEnv("SENTRY_FRONTEND_REPLAY_ERROR_SAMPLE_RATE"); err != nil {
 		return nil, err
+	}
+
+	// Access-log switch. Default ON; ACCESS_LOG_ENABLED=false keeps the access
+	// log quiet except for 5xx responses (server faults must never go dark).
+	c.AccessLogEnabled = true
+	if v := os.Getenv("ACCESS_LOG_ENABLED"); v != "" {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			return nil, fmt.Errorf("invalid ACCESS_LOG_ENABLED %q: must be a boolean", v)
+		}
+		c.AccessLogEnabled = b
 	}
 
 	proxyCount := envOr("TRUSTED_PROXY_COUNT", "1")

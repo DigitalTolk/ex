@@ -62,6 +62,10 @@ type Deps struct {
 	// as the canonical primary origin in the middleware.
 	AllowOrigins []string
 
+	// DisableAccessLog silences per-request logging except 5xx responses
+	// (ACCESS_LOG_ENABLED=false). Zero value keeps full access logging.
+	DisableAccessLog bool
+
 	// RateLimiter throttles unauthenticated auth + webhook endpoints per client
 	// IP. Nil disables rate limiting (e.g. in tests).
 	RateLimiter middleware.RateLimitCounter

@@ -103,6 +103,7 @@ When SMTP is not configured, invite links are logged to the server console.
 | `DYNAMODB_TABLE`     | `ex`                              | DynamoDB table name (single-table design — see below)   |
 | `DYNAMODB_ENDPOINT`  | -                                 | DynamoDB endpoint (set for local dev)                   |
 | `REDIS_URL`          | `redis://localhost:6379`          | Redis connection URL                                    |
+| `ACCESS_LOG_ENABLED` | `true`                            | Set `false` to silence per-request logs except 5xx responses |
 | `SMTP_HOST`          | -                                 | SMTP server hostname                                    |
 | `SMTP_PORT`          | `587`                             | SMTP server port                                        |
 | `SMTP_USER`          | -                                 | SMTP username                                           |
