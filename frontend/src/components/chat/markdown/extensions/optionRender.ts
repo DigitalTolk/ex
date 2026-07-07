@@ -39,7 +39,12 @@ function textCol(title: string, sub?: string): HTMLElement {
 }
 
 function avatarEl(m: { displayName: string; avatarURL?: string; online: boolean }): HTMLElement {
-  const a = el('span', 'cm-option-avatar');
+  // Mirrors UserAvatar's structure: a relative wrapper holds the notch-masked
+  // avatar circle with the presence dot as a SIBLING (a child would be clipped
+  // by the mask), so the typeahead shows the same Slack-style presence as every
+  // other avatar surface — solid green when online, hollow ring when offline.
+  const wrap = el('span', 'cm-option-avatarwrap');
+  const a = el('span', 'cm-option-avatar cm-option-avatar--notched');
   if (m.avatarURL) {
     const img = document.createElement('img');
     img.src = m.avatarURL;
@@ -48,8 +53,11 @@ function avatarEl(m: { displayName: string; avatarURL?: string; online: boolean 
   } else {
     a.textContent = (m.displayName.trim()[0] ?? '?').toUpperCase();
   }
-  if (m.online) a.appendChild(el('span', 'cm-option-dot'));
-  return a;
+  wrap.appendChild(a);
+  const dot = el('span', 'cm-option-dot');
+  dot.dataset.presence = m.online ? 'online' : 'offline';
+  wrap.appendChild(dot);
+  return wrap;
 }
 
 function svgIcon(svg: string): HTMLElement {

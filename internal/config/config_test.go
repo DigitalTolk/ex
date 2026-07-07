@@ -18,6 +18,7 @@ func clearEnv(t *testing.T) {
 		"BASE_URL", "ONESIGNAL_APP_ID", "ONESIGNAL_REST_API_KEY",
 		"SENTRY_FRONTEND_DSN", "SENTRY_FRONTEND_TRACES_SAMPLE_RATE",
 		"SENTRY_FRONTEND_REPLAY_SESSION_SAMPLE_RATE", "SENTRY_FRONTEND_REPLAY_ERROR_SAMPLE_RATE",
+		"ACCESS_LOG_ENABLED",
 	}
 
 	saved := make(map[string]string)
@@ -324,4 +325,40 @@ func TestOIDCRedirectURL(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestLoadAccessLogEnabled(t *testing.T) {
+	t.Run("defaults to enabled", func(t *testing.T) {
+		clearEnv(t)
+		t.Setenv("ENV", "development")
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if !cfg.AccessLogEnabled {
+			t.Fatal("AccessLogEnabled should default to true")
+		}
+	})
+
+	t.Run("disabled via env", func(t *testing.T) {
+		clearEnv(t)
+		t.Setenv("ENV", "development")
+		t.Setenv("ACCESS_LOG_ENABLED", "false")
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if cfg.AccessLogEnabled {
+			t.Fatal("ACCESS_LOG_ENABLED=false must disable the access log")
+		}
+	})
+
+	t.Run("invalid value fails closed", func(t *testing.T) {
+		clearEnv(t)
+		t.Setenv("ENV", "development")
+		t.Setenv("ACCESS_LOG_ENABLED", "yes-please")
+		if _, err := Load(); err == nil {
+			t.Fatal("invalid ACCESS_LOG_ENABLED must fail Load")
+		}
+	})
 }

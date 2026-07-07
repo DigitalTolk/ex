@@ -276,7 +276,7 @@ func NewRouter(d *Deps) http.Handler {
 		middleware.SecurityHeaders,
 		middleware.CORS(allowOrigins...),
 		middleware.RequestID,
-		middleware.Logging,
+		middleware.Logging(!d.DisableAccessLog),
 		middleware.RequestTimeout(30*time.Second),
 	)
 

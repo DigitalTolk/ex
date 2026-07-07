@@ -160,30 +160,41 @@ func (rw *responseWriter) WriteHeader(code int) {
 	rw.ResponseWriter.WriteHeader(code)
 }
 
-// Logging is middleware that logs every request with method, path,
-// status, and duration. /healthz is suppressed when it returns 2xx —
-// orchestrators (Docker, k8s) hit it every few seconds and the noise
-// drowns out signal in the access log. Non-2xx still logs so a flapping
-// healthcheck stays visible.
-func Logging(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		start := time.Now()
-		rw := &responseWriter{ResponseWriter: w, statusCode: http.StatusOK}
+// Logging returns access-log middleware that records method, path, status,
+// and duration for each request.
+//
+// logAll=true logs every request, except /healthz when it returns 2xx —
+// orchestrators (Docker, k8s) hit it every few seconds and the noise drowns
+// out signal in the access log; a non-2xx healthcheck still logs so a
+// flapping probe stays visible.
+//
+// logAll=false (ACCESS_LOG_ENABLED=false) silences the access log EXCEPT for
+// 5xx responses: server faults must stay visible even with access logging
+// switched off.
+func Logging(logAll bool) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			start := time.Now()
+			rw := &responseWriter{ResponseWriter: w, statusCode: http.StatusOK}
 
-		next.ServeHTTP(rw, r)
+			next.ServeHTTP(rw, r)
 
-		if r.URL.Path == "/healthz" && rw.statusCode >= 200 && rw.statusCode < 300 {
-			return
-		}
+			if !logAll && rw.statusCode < 500 {
+				return
+			}
+			if r.URL.Path == "/healthz" && rw.statusCode >= 200 && rw.statusCode < 300 {
+				return
+			}
 
-		slog.Info("request",
-			"method", r.Method,
-			"path", r.URL.Path,
-			"status", rw.statusCode,
-			"duration", time.Since(start).String(),
-			"requestID", RequestIDFromContext(r.Context()),
-		)
-	})
+			slog.Info("request",
+				"method", r.Method,
+				"path", r.URL.Path,
+				"status", rw.statusCode,
+				"duration", time.Since(start).String(),
+				"requestID", RequestIDFromContext(r.Context()),
+			)
+		})
+	}
 }
 
 // RequestID is middleware that generates a unique request ID, stores it in context,

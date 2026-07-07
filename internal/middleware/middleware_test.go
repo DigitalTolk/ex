@@ -1,7 +1,9 @@
 package middleware
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -300,7 +302,7 @@ func TestLoggingHealthzSuppressed(t *testing.T) {
 	// A 2xx /healthz response is suppressed from the access log; the
 	// middleware must still pass the request through to the handler.
 	called := false
-	handler := Logging(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	handler := Logging(true)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		called = true
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -321,7 +323,7 @@ func TestLoggingHealthzSuppressed(t *testing.T) {
 func TestLoggingHealthzNon2xxLogged(t *testing.T) {
 	// A non-2xx /healthz still flows through (and is logged) — exercises the
 	// branch where the suppression condition is false because of the status.
-	handler := Logging(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	handler := Logging(true)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusServiceUnavailable)
 	}))
 
@@ -377,7 +379,7 @@ func TestRequestIDFromContext(t *testing.T) {
 
 func TestLogging(t *testing.T) {
 	// Logging middleware should not panic and should pass through.
-	handler := Logging(okHandler())
+	handler := Logging(true)(okHandler())
 
 	req := httptest.NewRequest(http.MethodGet, "/test", nil)
 	rec := httptest.NewRecorder()
@@ -640,5 +642,58 @@ func TestSetTrustedProxyCountClampsNegative(t *testing.T) {
 	req.RemoteAddr = "203.0.113.9:443"
 	if got := clientIP(req); got != "203.0.113.9" {
 		t.Errorf("clientIP = %q, want %q (XFF must be ignored at count 0)", got, "203.0.113.9")
+	}
+}
+
+// captureLogs routes slog output into a buffer for the duration of the test.
+func captureLogs(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	return &buf
+}
+
+func TestLoggingLogsRequestsWhenEnabled(t *testing.T) {
+	buf := captureLogs(t)
+	handler := Logging(true)(okHandler())
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/channels", nil)
+	handler.ServeHTTP(httptest.NewRecorder(), req)
+	if !strings.Contains(buf.String(), "msg=request") || !strings.Contains(buf.String(), "path=/api/v1/channels") {
+		t.Fatalf("expected an access-log line, got: %q", buf.String())
+	}
+}
+
+func TestLoggingDisabledSuppressesBelow5xx(t *testing.T) {
+	buf := captureLogs(t)
+	called := false
+	handler := Logging(false)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/v1/missing", nil))
+	// A 2xx as well — the implicit-200 path (no WriteHeader call).
+	Logging(false)(okHandler()).ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/v1/ok", nil))
+
+	if !called {
+		t.Error("inner handler not called")
+	}
+	if got := buf.String(); strings.Contains(got, "msg=request") {
+		t.Fatalf("access log must stay silent below 5xx when disabled, got: %q", got)
+	}
+}
+
+func TestLoggingDisabledStillRecords5xx(t *testing.T) {
+	// The reliability floor: with access logging off, server faults must
+	// still be recorded.
+	buf := captureLogs(t)
+	handler := Logging(false)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/v1/boom", nil))
+	got := buf.String()
+	if !strings.Contains(got, "msg=request") || !strings.Contains(got, "status=500") {
+		t.Fatalf("5xx must be logged even when access logging is disabled, got: %q", got)
 	}
 }

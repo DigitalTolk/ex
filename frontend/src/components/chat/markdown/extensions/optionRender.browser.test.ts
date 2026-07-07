@@ -15,15 +15,22 @@ describe('renderMentionOption', () => {
     expect(row.querySelector('.cm-option-avatar img')?.getAttribute('src')).toBe('https://x/a.png');
     expect(row.querySelector('.cm-option-title')?.textContent).toBe('Alice');
     expect(row.querySelector('.cm-option-sub')?.textContent).toBe('a@x.test');
-    expect(row.querySelector('.cm-option-dot')).not.toBeNull(); // online
+    expect(row.querySelector('.cm-option-dot')?.getAttribute('data-presence')).toBe('online');
+    // The dot is a SIBLING of the notch-masked avatar, never a child — a
+    // masked parent would clip it (mirrors UserAvatar's structure).
+    expect(row.querySelector('.cm-option-avatar .cm-option-dot')).toBeNull();
+    expect(row.querySelector('.cm-option-avatarwrap > .cm-option-dot')).not.toBeNull();
+    expect(row.querySelector('.cm-option-avatar')?.classList.contains('cm-option-avatar--notched')).toBe(true);
   });
 
-  it('renders a user without an avatar as an initial, no dot when offline, no email/status row', () => {
+  it('renders a user without an avatar as an initial, hollow offline dot, no email/status row', () => {
     const row = render({ kind: 'user', displayName: 'bob', online: false })!;
     const avatar = row.querySelector('.cm-option-avatar')!;
     expect(avatar.querySelector('img')).toBeNull();
     expect(avatar.textContent).toBe('B'); // uppercased initial
-    expect(row.querySelector('.cm-option-dot')).toBeNull();
+    // Offline renders the hollow-ring state (shape-coded like PresenceDot),
+    // not "no indicator at all".
+    expect(row.querySelector('.cm-option-dot')?.getAttribute('data-presence')).toBe('offline');
     expect(row.querySelector('.cm-option-sub')).toBeNull();
     expect(row.querySelector('.cm-option-status')).toBeNull();
   });

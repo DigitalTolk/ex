@@ -1,6 +1,11 @@
 import { EditorView } from '@codemirror/view';
 import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
 import { tags } from '@lezer/highlight';
+import {
+  PRESENCE_DOT_DEFAULT_SIZE,
+  presenceDotBorderWidth,
+  presenceNotchStyle,
+} from '@/lib/presence';
 
 // CodeMirror theme for the message composer. The editor's document IS the
 // stored markdown — there is no second representation — so everything here is
@@ -186,7 +191,14 @@ export const composerTheme = EditorView.theme({
     overflow: 'hidden',
     textOverflow: 'ellipsis',
   },
-  // Avatar (image or initial) + online dot.
+  // Avatar (image or initial) + presence dot. The wrapper/visual/dot split
+  // mirrors UserAvatar: the notch mask must sit on the avatar circle while the
+  // dot lives OUTSIDE it (a masked parent would clip the dot away).
+  '.cm-option-avatarwrap': {
+    position: 'relative',
+    flex: '0 0 auto',
+    display: 'inline-flex',
+  },
   '.cm-option-avatar': {
     position: 'relative',
     flex: '0 0 auto',
@@ -202,21 +214,35 @@ export const composerTheme = EditorView.theme({
     fontWeight: '600',
     overflow: 'visible',
   },
+  // Slack-style notch carved out of the avatar for the presence dot — the
+  // exact geometry every other avatar surface gets from presenceNotchStyle.
+  '.cm-option-avatar--notched': {
+    ...(presenceNotchStyle(PRESENCE_DOT_DEFAULT_SIZE) as Record<string, string>),
+  },
   '.cm-option-avatar img': {
     width: '100%',
     height: '100%',
     borderRadius: '9999px',
     objectFit: 'cover',
   },
+  // The canonical presence design (see components/PresenceDot.tsx): state is
+  // encoded by shape as well as color — online is a solid dot in the presence
+  // green, offline a hollow muted ring. Sizes/stroke derive from the same
+  // shared constants; presenceDotParity.browser.test.tsx pins the parity.
   '.cm-option-dot': {
     position: 'absolute',
-    right: '-1px',
-    bottom: '-1px',
-    width: '0.5rem',
-    height: '0.5rem',
+    right: '0',
+    bottom: '0',
+    width: `${PRESENCE_DOT_DEFAULT_SIZE}px`,
+    height: `${PRESENCE_DOT_DEFAULT_SIZE}px`,
     borderRadius: '9999px',
-    backgroundColor: 'var(--color-brand)',
-    border: '1.5px solid var(--color-card)',
+  },
+  '.cm-option-dot[data-presence="online"]': {
+    backgroundColor: 'var(--color-online)',
+  },
+  '.cm-option-dot[data-presence="offline"]': {
+    backgroundColor: 'transparent',
+    border: `${presenceDotBorderWidth(PRESENCE_DOT_DEFAULT_SIZE)}px solid var(--color-muted-foreground)`,
   },
   // Channel / group icon.
   '.cm-option-icon': {
