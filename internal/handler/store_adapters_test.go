@@ -314,6 +314,9 @@ func (b *adapterConversationBacking) SetUserConversationCategory(context.Context
 func (b *adapterConversationBacking) ListAll(context.Context) ([]*model.Conversation, error) {
 	return nil, nil
 }
+func (b *adapterConversationBacking) GetConversationsByIDs(context.Context, []string) ([]*model.Conversation, error) {
+	return []*model.Conversation{{ID: "conv-batch"}}, nil
+}
 
 type adapterMessageBacking struct{}
 

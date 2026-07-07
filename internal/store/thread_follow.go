@@ -187,3 +187,59 @@ func (s *ThreadFollowStoreImpl) ListUser(ctx context.Context, userID string) ([]
 	}
 	return follows, nil
 }
+
+// threadSeedSK marks that a user's implicit thread participation has been
+// backfilled into follow rows (the lazy /threads index migration). Deliberately
+// NOT under the THREADFOLLOW# prefix so ListUser's begins_with never sees it.
+const threadSeedSK = "THREADSEED"
+
+// SetIfAbsent writes a follow row ONLY when the user has no explicit record
+// for that thread yet — the write-time participation index must never clobber
+// a deliberate unfollow (Following=false) with an implicit re-follow.
+func (s *ThreadFollowStoreImpl) SetIfAbsent(ctx context.Context, follow *model.ThreadFollow) error {
+	item := threadFollowItem{
+		PK:           userPK(follow.UserID),
+		SK:           threadFollowSK(follow.ParentID, follow.ThreadRootID),
+		GSI1PK:       threadFollowGSI1PK(follow.ParentID, follow.ThreadRootID),
+		GSI1SK:       userPK(follow.UserID),
+		ThreadFollow: *follow,
+	}
+	av := mustAttrs(attributevalue.MarshalMap(item))
+	_, err := s.Client.PutItem(ctx, &dynamodb.PutItemInput{
+		TableName:           aws.String(s.Table),
+		Item:                av,
+		ConditionExpression: aws.String("attribute_not_exists(PK)"),
+	})
+	if err != nil {
+		if isConditionCheckFailed(err) {
+			return nil // an explicit record exists — leave it be
+		}
+		return fmt.Errorf("store: set thread follow if absent: %w", err)
+	}
+	return nil
+}
+
+// IsThreadIndexSeeded reports whether this user's historic thread
+// participation has been backfilled into follow rows.
+func (s *ThreadFollowStoreImpl) IsThreadIndexSeeded(ctx context.Context, userID string) (bool, error) {
+	out, err := s.Client.GetItem(ctx, &dynamodb.GetItemInput{
+		TableName: aws.String(s.Table),
+		Key:       compositeKey(userPK(userID), threadSeedSK),
+	})
+	if err != nil {
+		return false, fmt.Errorf("store: get thread seed marker: %w", err)
+	}
+	return out.Item != nil, nil
+}
+
+// MarkThreadIndexSeeded records that the backfill ran for this user.
+func (s *ThreadFollowStoreImpl) MarkThreadIndexSeeded(ctx context.Context, userID string) error {
+	item := map[string]types.AttributeValue{
+		"PK": &types.AttributeValueMemberS{Value: userPK(userID)},
+		"SK": &types.AttributeValueMemberS{Value: threadSeedSK},
+	}
+	if _, err := s.Client.PutItem(ctx, &dynamodb.PutItemInput{TableName: aws.String(s.Table), Item: item}); err != nil {
+		return fmt.Errorf("store: mark thread seed: %w", err)
+	}
+	return nil
+}

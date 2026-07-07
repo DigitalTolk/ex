@@ -303,7 +303,53 @@ func (s *ConversationService) ListUserConversations(ctx context.Context, userID 
 	return out, nil
 }
 
+// batchProfileResolver is the optional batched capability of the profile
+// resolver (UserService.GetBatch: one cache MGET + one store BatchGet + two
+// avatar round trips for the whole list).
+type batchProfileResolver interface {
+	GetBatch(ctx context.Context, ids []string) ([]*model.User, error)
+}
+
 func (s *ConversationService) enrichDMProfiles(ctx context.Context, userID string, rows []*model.UserConversation) {
+	// Batched path: resolve every DM counterpart in one GetBatch — the old
+	// per-row goroutines each cost 1-3 Redis round trips (profile GET +
+	// avatar record GET), which is where the 2N GETs on
+	// /api/v1/conversations came from.
+	if br, ok := s.userProfiles.(batchProfileResolver); ok {
+		ids := make([]string, 0, len(rows))
+		need := make([]*model.UserConversation, 0, len(rows))
+		for _, row := range rows {
+			if row == nil || row.Type != model.ConversationTypeDM {
+				continue
+			}
+			if other := dmCounterpart(userID, row); other != "" {
+				ids = append(ids, other)
+				need = append(need, row)
+			}
+		}
+		if len(ids) == 0 {
+			return
+		}
+		users, _ := br.GetBatch(ctx, ids) // best-effort by contract
+		byID := make(map[string]*model.User, len(users))
+		for _, u := range users {
+			byID[u.ID] = u
+		}
+		for i, row := range need {
+			u := byID[ids[i]]
+			if u == nil {
+				continue
+			}
+			row.ProfileResolved = true
+			row.UserStatus = u.UserStatus
+			// GetBatch already resolved the avatar URL (media cache or
+			// presigned fallback) — no per-row cache reads needed here.
+			if u.AvatarURL != "" {
+				row.AvatarURL = u.AvatarURL
+			}
+		}
+		return
+	}
 	var wg sync.WaitGroup
 	for _, row := range rows {
 		if row == nil || row.Type != model.ConversationTypeDM {
@@ -319,20 +365,25 @@ func (s *ConversationService) enrichDMProfiles(ctx context.Context, userID strin
 	wg.Wait()
 }
 
+// dmCounterpart returns the other participant of a DM from the caller's
+// perspective (self for the self-DM).
+func dmCounterpart(userID string, c *model.UserConversation) string {
+	for _, id := range c.ParticipantIDs {
+		if id != userID {
+			return id
+		}
+	}
+	if len(c.ParticipantIDs) > 0 {
+		return c.ParticipantIDs[0]
+	}
+	return ""
+}
+
 func (s *ConversationService) enrichDMProfile(ctx context.Context, userID string, c *model.UserConversation) {
 	if (s.users == nil && s.userProfiles == nil) || c == nil || c.Type != model.ConversationTypeDM {
 		return
 	}
-	otherID := ""
-	for _, id := range c.ParticipantIDs {
-		if id != userID {
-			otherID = id
-			break
-		}
-	}
-	if otherID == "" && len(c.ParticipantIDs) > 0 {
-		otherID = c.ParticipantIDs[0]
-	}
+	otherID := dmCounterpart(userID, c)
 	if otherID == "" {
 		return
 	}
@@ -364,11 +415,43 @@ func (s *ConversationService) getUserProfile(ctx context.Context, id string) (*m
 	return s.users.GetUser(ctx, id)
 }
 
+// batchConversationStore is the optional batched-META-read capability of the
+// conversation store (the DynamoDB impl has it). Asserted with a per-row
+// fallback so plain test stores keep working.
+type batchConversationStore interface {
+	GetConversationsByIDs(ctx context.Context, ids []string) ([]*model.Conversation, error)
+}
+
 // enrichUnread fills each row's Unread/UnreadCount from the seq pair
-// (Conversation.MessageSeq - UserConversation.LastReadSeq), concurrently —
-// mirrors ChannelService.ListUserChannels. Conversations are small-N (a DM is
-// two people), so a GetConversation per row is cheap.
+// (Conversation.MessageSeq - UserConversation.LastReadSeq). ONE BatchGetItem
+// for all META rows when the store supports it — the old per-row
+// GetConversation made every /api/v1/conversations request cost a DynamoDB
+// read per conversation. Best-effort either way: a failed read leaves the
+// row un-enriched, never fails the list.
 func (s *ConversationService) enrichUnread(ctx context.Context, rows []*model.UserConversation) {
+	if len(rows) == 0 {
+		return
+	}
+	if bs, ok := s.conversations.(batchConversationStore); ok {
+		ids := make([]string, len(rows))
+		for i, row := range rows {
+			ids[i] = row.ConversationID
+		}
+		if convs, err := bs.GetConversationsByIDs(ctx, ids); err == nil {
+			seq := make(map[string]int64, len(convs))
+			for _, conv := range convs {
+				seq[conv.ID] = conv.MessageSeq
+			}
+			for _, row := range rows {
+				if n := seq[row.ConversationID] - row.LastReadSeq; n > 0 {
+					row.UnreadCount = int(n)
+					row.Unread = true
+				}
+			}
+			return
+		}
+		// Batch failed → the per-row fallback below still serves the list.
+	}
 	var wg sync.WaitGroup
 	for _, row := range rows {
 		wg.Add(1)

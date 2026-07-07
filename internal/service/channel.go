@@ -697,10 +697,17 @@ func (s *ChannelService) ListMembers(ctx context.Context, actorID, channelID str
 	return members, nil
 }
 
+// batchChannelStore is the optional batched-META-read capability of the
+// channel store (the DynamoDB impl has it). Asserted with a per-channel
+// fallback so plain test stores keep working.
+type batchChannelStore interface {
+	GetChannelsByIDs(ctx context.Context, ids []string) ([]*model.Channel, error)
+}
+
 // ListUserChannels returns all non-archived channels a user belongs to,
 // plus any archived channels where the user is the owner. The per-channel
-// archive flag isn't denormalized onto UserChannel, so we fan out the lookups
-// concurrently — this runs on every WebSocket connect.
+// archive flag isn't denormalized onto UserChannel, so the META rows are
+// batch-read (one BatchGetItem) — this runs on every WebSocket connect.
 func (s *ChannelService) ListUserChannels(ctx context.Context, userID string) ([]*model.UserChannel, error) {
 	channels, err := s.memberships.ListUserChannels(ctx, userID)
 	if err != nil {
@@ -708,6 +715,42 @@ func (s *ChannelService) ListUserChannels(ctx context.Context, userID string) ([
 	}
 	if len(channels) == 0 {
 		return channels, nil
+	}
+
+	// Batched path: ONE BatchGetItem for every channel META row — the old
+	// per-channel GetChannel fan-out cost a DynamoDB read per membership,
+	// on the sidebar list AND on every WebSocket connect (reconnect storms
+	// multiplied it).
+	if bs, ok := s.channels.(batchChannelStore); ok {
+		ids := make([]string, len(channels))
+		for i, uc := range channels {
+			ids[i] = uc.ChannelID
+		}
+		if fetched, err := bs.GetChannelsByIDs(ctx, ids); err == nil {
+			byID := make(map[string]*model.Channel, len(fetched))
+			for _, ch := range fetched {
+				byID[ch.ID] = ch
+			}
+			out := make([]*model.UserChannel, 0, len(channels))
+			for _, uc := range channels {
+				ch := byID[uc.ChannelID]
+				if ch == nil {
+					continue // channel row missing: drop like the fan-out did
+				}
+				if ch.Archived && uc.Role != model.ChannelRoleOwner {
+					continue
+				}
+				// Exact unread: messages added since this user last read.
+				// O(1) from the seq pair; survives reload and reconnect.
+				if n := ch.MessageSeq - uc.LastReadSeq; n > 0 {
+					uc.UnreadCount = int(n)
+					uc.Unread = true
+				}
+				out = append(out, uc)
+			}
+			return out, nil
+		}
+		// Batch failed → the per-channel fallback below still serves the list.
 	}
 
 	keep := make([]bool, len(channels))

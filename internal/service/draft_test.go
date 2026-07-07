@@ -202,6 +202,9 @@ func TestDraftService_ConflictsCarryCurrentState(t *testing.T) {
 	if conflict.Current == nil || conflict.Current.Body != "v2" {
 		t.Fatalf("conflict.Current = %#v, want the stored v2 draft", conflict.Current)
 	}
+	if conflict.Error() != "draft: generation conflict" {
+		t.Fatalf("conflict.Error() = %q", conflict.Error())
+	}
 	if len(publisher.published) != publishedBefore {
 		t.Fatal("a rejected write must not publish draft.updated")
 	}

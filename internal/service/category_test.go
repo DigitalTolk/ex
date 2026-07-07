@@ -353,6 +353,19 @@ func TestCategoryService_Move(t *testing.T) {
 	if len(cs.lastPositions) != 0 {
 		t.Fatalf("no-op move must write nothing, wrote %v", cs.lastPositions)
 	}
+
+	// Equal positions (e.g. two legacy zero rows) fall back to the ID
+	// tiebreak, matching the client's sort so the anchor stays stable.
+	cs.rows["u1#cat-z1"] = &model.UserChannelCategory{UserID: "u1", ID: "cat-z1", Name: "Z1", Position: 9000}
+	cs.rows["u1#cat-z2"] = &model.UserChannelCategory{UserID: "u1", ID: "cat-z2", Name: "Z2", Position: 9000}
+	got, err = svc.Move(ctx, "u1", "cat-a", "")
+	if err != nil {
+		t.Fatalf("Move with tied positions: %v", err)
+	}
+	last := got[len(got)-2].ID + ">" + got[len(got)-1].ID
+	if last != "cat-z1>cat-z2" {
+		t.Fatalf("tied rows ordered %q, want ID-ascending cat-z1>cat-z2", last)
+	}
 }
 
 func TestCategoryService_MoveErrors(t *testing.T) {

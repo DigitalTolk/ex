@@ -420,3 +420,93 @@ func (c *RedisCache) FrequentEmojis(ctx context.Context, userID string, limit in
 func (c *RedisCache) Client() *redis.Client {
 	return c.client
 }
+
+// GetUsers retrieves many cached users in ONE MGET round trip instead of a
+// GET per ID (the pattern that made /users/batch cost 2N sequential Redis
+// calls). Misses and undecodable records are simply absent from the result;
+// callers resolve them from the store.
+func (c *RedisCache) GetUsers(ctx context.Context, userIDs []string) (map[string]*model.User, error) {
+	if len(userIDs) == 0 {
+		return map[string]*model.User{}, nil
+	}
+	keys := make([]string, len(userIDs))
+	for i, id := range userIDs {
+		keys[i] = userKeyPrefix + id
+	}
+	vals, err := c.client.MGet(ctx, keys...).Result()
+	if err != nil {
+		return nil, fmt.Errorf("cache mget users: %w", err)
+	}
+	out := make(map[string]*model.User, len(vals))
+	for i, v := range vals {
+		s, ok := v.(string)
+		if !ok {
+			continue // miss
+		}
+		var rec userCacheRecord
+		if err := json.Unmarshal([]byte(s), &rec); err != nil {
+			continue // stale/corrupt entry: treat as a miss, the store heals it
+		}
+		rec.User.AvatarKey = rec.AvatarKey
+		u := rec.User
+		out[userIDs[i]] = &u
+	}
+	return out, nil
+}
+
+// SetUsers caches many users in one pipelined write (misses filled after a
+// batched store read shouldn't cost a round trip each).
+func (c *RedisCache) SetUsers(ctx context.Context, users []*model.User) error {
+	if len(users) == 0 {
+		return nil
+	}
+	pipe := c.client.Pipeline()
+	for _, u := range users {
+		rec := userCacheRecord{User: *u, AvatarKey: u.AvatarKey}
+		pipe.Set(ctx, userKeyPrefix+u.ID, mustJSON(json.Marshal(rec)), userCacheTTL)
+	}
+	if _, err := pipe.Exec(ctx); err != nil {
+		return fmt.Errorf("cache pipeline set users: %w", err)
+	}
+	return nil
+}
+
+// GetManyJSON MGETs raw JSON values for the given keys in one round trip.
+// The result is key-aligned; a nil slot is a miss.
+func (c *RedisCache) GetManyJSON(ctx context.Context, keys []string) ([][]byte, error) {
+	if len(keys) == 0 {
+		return nil, nil
+	}
+	vals, err := c.client.MGet(ctx, keys...).Result()
+	if err != nil {
+		return nil, fmt.Errorf("cache mget: %w", err)
+	}
+	out := make([][]byte, len(vals))
+	for i, v := range vals {
+		if s, ok := v.(string); ok {
+			out[i] = []byte(s)
+		}
+	}
+	return out, nil
+}
+
+// SetManyJSON writes many JSON values (key-aligned with values, one shared
+// TTL) in one pipelined round trip. Signature stays primitive-typed so
+// service-layer capability assertions don't need a shared struct type.
+func (c *RedisCache) SetManyJSON(ctx context.Context, keys []string, values []any, ttl time.Duration) error {
+	if len(keys) == 0 {
+		return nil
+	}
+	pipe := c.client.Pipeline()
+	for i, key := range keys {
+		data, err := json.Marshal(values[i])
+		if err != nil {
+			return fmt.Errorf("cache marshal %q: %w", key, err)
+		}
+		pipe.Set(ctx, key, data, ttl)
+	}
+	if _, err := pipe.Exec(ctx); err != nil {
+		return fmt.Errorf("cache pipeline set: %w", err)
+	}
+	return nil
+}

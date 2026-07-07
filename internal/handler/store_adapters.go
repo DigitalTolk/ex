@@ -58,6 +58,12 @@ func (a *ChannelStoreAdapter) CreateChannel(ctx context.Context, ch *model.Chann
 func (a *ChannelStoreAdapter) GetChannel(ctx context.Context, id string) (*model.Channel, error) {
 	return a.s.GetByID(ctx, id)
 }
+
+// GetChannelsByIDs exposes the batched META read so the sidebar list (and
+// every WebSocket connect) enriches all memberships in one DynamoDB call.
+func (a *ChannelStoreAdapter) GetChannelsByIDs(ctx context.Context, ids []string) ([]*model.Channel, error) {
+	return a.s.GetChannelsByIDs(ctx, ids)
+}
 func (a *ChannelStoreAdapter) GetChannelBySlug(ctx context.Context, slug string) (*model.Channel, error) {
 	return a.s.GetBySlug(ctx, slug)
 }
@@ -144,6 +150,7 @@ type conversationBacking interface {
 	SetConversationLastRead(ctx context.Context, convID, userID string, seq int64) error
 	SetUserConversationFavorite(ctx context.Context, convID, userID string, favorite bool) error
 	SetUserConversationCategory(ctx context.Context, convID, userID, categoryID string, sidebarPosition *int) error
+	GetConversationsByIDs(ctx context.Context, ids []string) ([]*model.Conversation, error)
 	ListAll(ctx context.Context) ([]*model.Conversation, error)
 }
 
@@ -177,6 +184,12 @@ func (a *ConversationStoreAdapter) SetFavorite(ctx context.Context, convID, user
 }
 func (a *ConversationStoreAdapter) SetCategory(ctx context.Context, convID, userID, categoryID string, sidebarPosition *int) error {
 	return a.s.SetUserConversationCategory(ctx, convID, userID, categoryID, sidebarPosition)
+}
+
+// GetConversationsByIDs exposes the batched META read so the service can
+// enrich a whole conversation list in one DynamoDB call.
+func (a *ConversationStoreAdapter) GetConversationsByIDs(ctx context.Context, ids []string) ([]*model.Conversation, error) {
+	return a.s.GetConversationsByIDs(ctx, ids)
 }
 
 // ListAllConversations exposes the full conversation Scan to admin
@@ -236,6 +249,25 @@ func (a *MessageStoreAdapter) CreateMessage(ctx context.Context, msg *model.Mess
 func (a *MessageStoreAdapter) GetMessage(ctx context.Context, parentID, msgID string) (*model.Message, error) {
 	return a.s.GetByID(ctx, parentID, msgID)
 }
+
+// GetMessagesByIDs batch-reads messages of one parent when the backing store
+// supports it (the DynamoDB impl does); test backings fall back to per-ID
+// gets with the same skip-missing semantics.
+func (a *MessageStoreAdapter) GetMessagesByIDs(ctx context.Context, parentID string, ids []string) ([]*model.Message, error) {
+	type batcher interface {
+		GetMessagesByIDs(ctx context.Context, parentID string, ids []string) ([]*model.Message, error)
+	}
+	if b, ok := a.s.(batcher); ok {
+		return b.GetMessagesByIDs(ctx, parentID, ids)
+	}
+	out := make([]*model.Message, 0, len(ids))
+	for _, id := range ids {
+		if m, err := a.s.GetByID(ctx, parentID, id); err == nil && m != nil {
+			out = append(out, m)
+		}
+	}
+	return out, nil
+}
 func (a *MessageStoreAdapter) UpdateMessage(ctx context.Context, msg *model.Message) error {
 	return a.s.Update(ctx, msg.ParentID, msg)
 }
@@ -283,6 +315,46 @@ func (a *ThreadFollowStoreAdapter) SetThreadFollowMany(ctx context.Context, foll
 }
 func (a *ThreadFollowStoreAdapter) GetThreadFollow(ctx context.Context, userID, parentID, threadRootID string) (*model.ThreadFollow, error) {
 	return a.s.Get(ctx, userID, parentID, threadRootID)
+}
+
+// threadParticipationBacking is the optional write-time /threads index
+// capability of the follow backing (the DynamoDB impl has it).
+type threadParticipationBacking interface {
+	SetIfAbsent(ctx context.Context, follow *model.ThreadFollow) error
+	IsThreadIndexSeeded(ctx context.Context, userID string) (bool, error)
+	MarkThreadIndexSeeded(ctx context.Context, userID string) error
+}
+
+// SetThreadFollowIfAbsent records implicit participation without clobbering a
+// deliberate unfollow. Backings without the conditional write fall back to a
+// read-then-write with the same keep-existing semantics.
+func (a *ThreadFollowStoreAdapter) SetThreadFollowIfAbsent(ctx context.Context, follow *model.ThreadFollow) error {
+	if b, ok := a.s.(threadParticipationBacking); ok {
+		return b.SetIfAbsent(ctx, follow)
+	}
+	if _, err := a.s.Get(ctx, follow.UserID, follow.ParentID, follow.ThreadRootID); err == nil {
+		return nil // an explicit record exists — leave it be
+	}
+	return a.s.Set(ctx, follow)
+}
+
+// IsThreadIndexSeeded reports whether the user's historic participation was
+// backfilled; a backing without the marker reports false so the caller keeps
+// using the legacy scan (safe, just slower).
+func (a *ThreadFollowStoreAdapter) IsThreadIndexSeeded(ctx context.Context, userID string) (bool, error) {
+	if b, ok := a.s.(threadParticipationBacking); ok {
+		return b.IsThreadIndexSeeded(ctx, userID)
+	}
+	return false, nil
+}
+
+// MarkThreadIndexSeeded records the backfill; a no-op for backings without
+// the marker (they always take the legacy path anyway).
+func (a *ThreadFollowStoreAdapter) MarkThreadIndexSeeded(ctx context.Context, userID string) error {
+	if b, ok := a.s.(threadParticipationBacking); ok {
+		return b.MarkThreadIndexSeeded(ctx, userID)
+	}
+	return nil
 }
 func (a *ThreadFollowStoreAdapter) ListUserThreadFollows(ctx context.Context, userID string) ([]*model.ThreadFollow, error) {
 	return a.s.ListUser(ctx, userID)
