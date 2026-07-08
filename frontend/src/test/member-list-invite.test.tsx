@@ -90,9 +90,9 @@ describe('MemberList - inline invite', () => {
       expect(screen.getByText('Bob')).toBeInTheDocument();
     });
 
-    // Bob is not a member -> Add button visible
-    const addBtn = screen.getByLabelText('Add Bob');
-    fireEvent.click(addBtn);
+    // Bob is not a member → his row is clickable and adds him (the whole
+    // canonical people-row is the control now, matching every other picker).
+    fireEvent.click(screen.getByTestId('member-add-user-u-2'));
 
     await waitFor(() => {
       expect(mockApiFetch).toHaveBeenCalledWith(
@@ -104,7 +104,7 @@ describe('MemberList - inline invite', () => {
       );
     });
 
-    // Existing admin shows "Already a member" indicator
-    expect(screen.getByLabelText('Already a member')).toBeInTheDocument();
+    // The existing admin's row carries the standard Added badge.
+    expect(screen.getByTestId('member-add-user-admin-1-added')).toHaveTextContent('Added');
   });
 });

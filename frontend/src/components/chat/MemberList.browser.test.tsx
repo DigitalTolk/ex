@@ -164,11 +164,13 @@ describe('MemberList browser behaviour', () => {
       />,
     );
     await screen.getByLabelText('Add member').fill('ne');
-    // After the 300ms debounce the results render.
-    await expect.element(screen.getByLabelText('Already a member')).toBeVisible();
-    const addBtn = screen.getByRole('button', { name: 'Add Newbie' });
-    await expect.element(addBtn).toBeVisible();
-    await addBtn.click();
+    // After the 300ms debounce the canonical people-rows render: the
+    // existing member carries the standard Added badge; the non-member's
+    // row itself is the add control.
+    await expect.element(screen.getByTestId('member-add-user-u-1-added')).toBeVisible();
+    const row = screen.getByTestId('member-add-user-u-9');
+    await expect.element(row).toBeVisible();
+    await row.click();
     await vi.waitFor(() => {
       const call = vi.mocked(apiFetch).mock.calls.find(
         (c: unknown[]) => typeof c[0] === 'string' && c[0].includes('/channels/ch-1/members')
@@ -201,7 +203,7 @@ describe('MemberList browser behaviour', () => {
       <MemberList members={[makeMember()]} channelId="ch-1" currentUserId="u-me" currentUserRole={4} />,
     );
     await screen.getByLabelText('Add member').fill('ne');
-    await screen.getByRole('button', { name: 'Add Newbie' }).click();
+    await screen.getByTestId('member-add-user-u-9').click();
     await expect.element(screen.getByRole('alert')).toHaveTextContent('already pending invite');
   });
 
@@ -235,7 +237,7 @@ describe('MemberList browser behaviour', () => {
       <MemberList members={[makeMember()]} channelId="ch-1" currentUserId="u-me" currentUserRole={4} />,
     );
     await screen.getByLabelText('Add member').fill('ne');
-    await screen.getByRole('button', { name: 'Add Newbie' }).click();
+    await screen.getByTestId('member-add-user-u-9').click();
     await expect.element(screen.getByRole('alert')).toHaveTextContent('Failed to add member');
   });
 

@@ -86,7 +86,7 @@ describe('MemberList - invite & remove', () => {
     vi.advanceTimersByTime(500);
 
     await screen.findByText('New One');
-    fireEvent.click(screen.getByRole('button', { name: /Add New One/i }));
+    fireEvent.click(screen.getByTestId('member-add-user-u-99'));
 
     expect(await screen.findByRole('alert')).toHaveTextContent('add failed');
   });
@@ -104,7 +104,7 @@ describe('MemberList - invite & remove', () => {
     });
   });
 
-  it('shows Check icon for already-member when searching', async () => {
+  it('marks an already-member row with the standard Added badge (inert)', async () => {
     mockApiFetch.mockResolvedValueOnce([
       { id: 'u-2', displayName: 'Bob', email: 'bob@x.com' },
     ]);
@@ -114,7 +114,12 @@ describe('MemberList - invite & remove', () => {
     await user.type(screen.getByLabelText('Add member'), 'bo');
     vi.advanceTimersByTime(500);
 
-    expect(await screen.findByLabelText('Already a member')).toBeInTheDocument();
+    expect(await screen.findByTestId('member-add-user-u-2-added')).toHaveTextContent('Added');
+    const row = screen.getByTestId('member-add-user-u-2');
+    expect(row).toBeDisabled();
+    fireEvent.click(row);
+    // No membership POST for an existing member.
+    expect(mockApiFetch.mock.calls.map((c) => String(c[1]?.method ?? ''))).not.toContain('POST');
   });
 
   it('inline invite input is always visible for admins', () => {

@@ -6,6 +6,8 @@ import { MessageInput, type MessageInputValue } from '@/components/chat/MessageI
 import { useCreateConversation, useSearchUsers } from '@/hooks/useConversations';
 import { apiFetch } from '@/lib/api';
 import { useAuth } from '@/context/AuthContext';
+import { usePresence } from '@/context/PresenceContext';
+import { UserPickerRow } from '@/components/UserPickerRow';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import type { Message } from '@/types';
@@ -26,6 +28,7 @@ export default function NewConversationPage() {
   const { user } = useAuth();
   const isMobile = useIsMobile();
   const { data: searchResults } = useSearchUsers(query);
+  const { online } = usePresence();
   const createConversation = useCreateConversation();
 
   // Filter out already-picked users from the suggestion list.
@@ -198,31 +201,22 @@ export default function NewConversationPage() {
                   aria-selected={isActive}
                   data-testid={`recipient-option-${u.id}`}
                 >
-                  <button
-                    type="button"
-                    onMouseDown={(e) => {
-                      // mousedown so we beat the input blur — picking
-                      // shouldn't depend on whether the user clicks
-                      // before or after the input loses focus.
-                      e.preventDefault();
-                      pick({ id: u.id, displayName: u.displayName });
-                    }}
-                    // Touch fallback: a tap that a webview interprets as a
-                    // scroll-start can suppress the emulated mousedown; pick()
-                    // is idempotent so the follow-up click is a safe no-op
-                    // when mousedown already handled it.
-                    onClick={() => pick({ id: u.id, displayName: u.displayName })}
-                    onMouseEnter={() => setActiveIndex(i)}
-                    className={`flex w-full items-center gap-2 px-3 py-2 text-left text-sm mobile:py-3 mobile:text-base ${
-                      isActive ? 'bg-muted' : 'hover:bg-muted/50'
-                    }`}
-                  >
-                    <span className="font-medium">{u.displayName}</span>
-                    {u.id === user?.id && (
-                      <span className="text-xs text-muted-foreground">(you)</span>
-                    )}
-                    <span className="text-muted-foreground">{u.email}</span>
-                  </button>
+                  {/* Canonical people-row (avatar + presence + status),
+                      shared with global search and add-member. mousedown pick
+                      beats the input blur; the click stays as the touch
+                      fallback (pick() is idempotent). */}
+                  <UserPickerRow
+                    displayName={u.displayName}
+                    email={u.email}
+                    avatarURL={u.avatarURL}
+                    online={online.has(u.id)}
+                    userStatus={u.userStatus}
+                    you={u.id === user?.id}
+                    highlighted={isActive}
+                    pickOnMouseDown
+                    onHover={() => setActiveIndex(i)}
+                    onSelect={() => pick({ id: u.id, displayName: u.displayName })}
+                  />
                 </li>
               );
             })}

@@ -4,7 +4,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiFetch } from '@/lib/api';
 import { queryKeys } from '@/lib/query-keys';
 import { showToast } from '@/lib/toast';
-import type { UserConversation, Conversation, User } from '@/types';
+import type { UserConversation, Conversation, User, UserStatus } from '@/types';
 
 export function useUserConversations(options?: { enabled?: boolean }) {
   return useQuery({
@@ -78,9 +78,9 @@ export function useSearchUsers(query: string) {
   return useQuery({
     queryKey: queryKeys.searchUsers(query),
     queryFn: async () => {
-      const res = await apiFetch<{ id: string; email: string; displayName: string }[]>(
-        `/api/v1/users?q=${encodeURIComponent(query)}`,
-      );
+      const res = await apiFetch<
+        { id: string; email: string; displayName: string; avatarURL?: string; userStatus?: UserStatus | null }[]
+      >(`/api/v1/users?q=${encodeURIComponent(query)}`);
       return Array.isArray(res) ? res : [];
     },
     enabled: query.length >= 2,

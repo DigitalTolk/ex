@@ -1,22 +1,22 @@
 import { useState, useEffect, useMemo } from 'react';
-import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { X, Check, UserPlus, ArrowRight } from 'lucide-react';
+import { X, UserPlus, ArrowRight } from 'lucide-react';
 import { motion } from 'motion/react';
 import { apiFetch } from '@/lib/api';
 import { queryKeys } from '@/lib/query-keys';
-import { getInitials } from '@/lib/format';
 import { useQueryClient } from '@tanstack/react-query';
 import { UserHoverCard } from '@/components/UserHoverCard';
 import { UserAvatar } from '@/components/UserAvatar';
+import { UserPickerRow } from '@/components/UserPickerRow';
+import { usePresence } from '@/context/PresenceContext';
 import { UserStatusIndicator } from '@/components/UserStatusIndicator';
 import { canAddMembers, canRemoveMember, roleNumber, ChannelRole } from '@/lib/roles';
 import { useSwipeDismiss } from '@/hooks/useSwipeDismiss';
 import { useMobileBackClose } from '@/hooks/useMobileBackClose';
-import type { ChannelMembership } from '@/types';
+import type { ChannelMembership, UserStatus } from '@/types';
 import type { UserMapEntry } from './MessageList';
 
 interface MemberListProps {
@@ -33,6 +33,7 @@ interface SearchUser {
   displayName: string;
   email: string;
   avatarURL?: string;
+  userStatus?: UserStatus | null;
 }
 
 function roleBadge(role: string | number) {
@@ -46,6 +47,7 @@ export function MemberList({ members, channelId, currentUserId, currentUserRole,
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<SearchUser[]>([]);
   const [pendingId, setPendingId] = useState<string | null>(null);
+  const { online } = usePresence();
   const [error, setError] = useState('');
   const queryClient = useQueryClient();
 
@@ -79,8 +81,11 @@ export function MemberList({ members, channelId, currentUserId, currentUserRole,
   }
 
   async function handleAdd(user: SearchUser) {
-    /* istanbul ignore next -- the Add button is only rendered when canManage is true, which requires a defined channelId, so handleAdd is never invoked without one; this guard is defensive. */
+    /* istanbul ignore next -- the picker rows are only rendered when canManage is true, which requires a defined channelId, so handleAdd is never invoked without one; this guard is defensive. */
     if (!channelId) return;
+    // The whole row is the add control now — swallow double-clicks while a
+    // membership POST is in flight.
+    if (pendingId) return;
     setError('');
     setPendingId(user.id);
     try {
@@ -151,45 +156,23 @@ export function MemberList({ members, channelId, currentUserId, currentUserRole,
           )}
           {results.length > 0 && (
             <div className="border rounded-md max-h-60 overflow-y-auto">
-              {results.map((u) => {
-                const alreadyMember = memberIds.has(u.id);
-                return (
-                  <div
-                    key={u.id}
-                    className="flex items-center gap-2 px-2 py-1.5 text-sm border-b last:border-b-0"
-                  >
-                    <Avatar className="h-6 w-6 shrink-0">
-                      {u.avatarURL && <AvatarImage src={u.avatarURL} alt="" />}
-                      <AvatarFallback className="bg-primary/10 text-[10px]">
-                        {getInitials(u.displayName || '??')}
-                      </AvatarFallback>
-                    </Avatar>
-                    <div className="flex-1 min-w-0">
-                      <p className="truncate">{u.displayName}</p>
-                      <p className="text-xs text-muted-foreground truncate">{u.email}</p>
-                    </div>
-                    {alreadyMember ? (
-                      <span
-                        className="flex h-7 w-7 items-center justify-center text-online"
-                        aria-label="Already a member"
-                        title="Already a member"
-                      >
-                        <Check className="h-4 w-4" />
-                      </span>
-                    ) : (
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => handleAdd(u)}
-                        disabled={pendingId === u.id}
-                        aria-label={`Add ${u.displayName}`}
-                      >
-                        {pendingId === u.id ? 'Adding...' : 'Add'}
-                      </Button>
-                    )}
-                  </div>
-                );
-              })}
+              {/* Canonical people-row (avatar + presence + status), shared
+                  with global search, add-member and new-conversation.
+                  Clicking a row adds the person; existing members show the
+                  standard "Added" badge and stay inert. */}
+              {results.map((u) => (
+                <UserPickerRow
+                  key={u.id}
+                  testID={`member-add-user-${u.id}`}
+                  displayName={u.displayName}
+                  email={u.email}
+                  avatarURL={u.avatarURL}
+                  online={online.has(u.id)}
+                  userStatus={u.userStatus}
+                  added={memberIds.has(u.id)}
+                  onSelect={() => void handleAdd(u)}
+                />
+              ))}
             </div>
           )}
           {query.length >= 2 && results.length === 0 && (

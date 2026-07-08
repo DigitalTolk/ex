@@ -9,8 +9,7 @@ import { useUsersBatch } from '@/hooks/useUsersBatch';
 import { usePresence } from '@/context/PresenceContext';
 import { Badge } from '@/components/ui/badge';
 import { ChannelIcon } from '@/components/ChannelIcon';
-import { UserAvatar } from '@/components/UserAvatar';
-import { UserStatusIndicator } from '@/components/UserStatusIndicator';
+import { UserPickerRow } from '@/components/UserPickerRow';
 import { isApplePlatform, searchShortcutLabel } from '@/lib/platform';
 import type { UserStatus } from '@/types';
 
@@ -535,26 +534,19 @@ function UserRow({
 }) {
   const name = String(hit._source.displayName || hit.id);
   const email = String(hit._source.email ?? '');
+  // Shared canonical people-row — the same element the add-member and
+  // new-conversation pickers render, so the design can't drift.
   return (
-    <button
-      type="button"
-      data-testid={`searchbar-user-${hit.id}`}
-      onMouseEnter={onHover}
-      onClick={onSelect}
-      aria-selected={highlighted}
-      className={`flex w-full items-center gap-2 px-3 py-2 text-left text-sm mobile:py-3 mobile:text-base ${
-        highlighted ? 'bg-muted' : ''
-      }`}
-    >
-      <UserAvatar displayName={name} avatarURL={avatarURL} online={online} className="h-6 w-6 shrink-0" dotSize={8} />
-      <span className="flex min-w-0 flex-1 items-center gap-1.5">
-        <span className="truncate font-medium">{name}</span>
-        {/* Custom-status emoji — self-hides when the person has no active
-            status, so rows stay clean. tooltip=false: nesting a TooltipTrigger
-            inside this row button would nest interactive elements. */}
-        <UserStatusIndicator status={userStatus} tooltip={false} className="h-4 w-4" />
-        {email && <span className="truncate text-muted-foreground">{email}</span>}
-      </span>
-    </button>
+    <UserPickerRow
+      testID={`searchbar-user-${hit.id}`}
+      displayName={name}
+      email={email}
+      avatarURL={avatarURL}
+      online={online}
+      userStatus={userStatus}
+      highlighted={highlighted}
+      onHover={onHover}
+      onSelect={onSelect}
+    />
   );
 }
