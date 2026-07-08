@@ -35,7 +35,7 @@ func TestWSHandler_HandleInbound_NotificationAckRecorded(t *testing.T) {
 	h := &WSHandler{}
 	h.SetNotificationAckRecorder(rec)
 	raw, _ := json.Marshal(map[string]string{"type": "notification.ack", "messageID": "m-42"})
-	h.handleInbound(context.Background(), "u-1", raw)
+	h.handleInbound(context.Background(), "u-1", raw, newTypingGate())
 	if rec.calls["u-1"] != "m-42" {
 		t.Fatalf("ack recorded = %q, want m-42", rec.calls["u-1"])
 	}
@@ -45,13 +45,13 @@ func TestWSHandler_HandleInbound_NotificationAckNoRecorderOrEmptyID(t *testing.T
 	// No recorder wired → no-op, no panic.
 	h := &WSHandler{}
 	raw, _ := json.Marshal(map[string]string{"type": "notification.ack", "messageID": "m-1"})
-	h.handleInbound(context.Background(), "u-1", raw)
+	h.handleInbound(context.Background(), "u-1", raw, newTypingGate())
 
 	// Recorder wired but an empty messageID is skipped.
 	rec := &fakeAckRecorder{}
 	h.SetNotificationAckRecorder(rec)
 	raw2, _ := json.Marshal(map[string]string{"type": "notification.ack"})
-	h.handleInbound(context.Background(), "u-1", raw2)
+	h.handleInbound(context.Background(), "u-1", raw2, newTypingGate())
 	if len(rec.calls) != 0 {
 		t.Fatalf("empty messageID must not record an ack; got %v", rec.calls)
 	}
@@ -63,7 +63,7 @@ func TestWSHandler_HandleInbound_NotificationAckRecorderErrorLogged(t *testing.T
 	h := &WSHandler{}
 	h.SetNotificationAckRecorder(rec)
 	raw, _ := json.Marshal(map[string]string{"type": "notification.ack", "messageID": "m-1"})
-	h.handleInbound(context.Background(), "u-1", raw) // must not panic
+	h.handleInbound(context.Background(), "u-1", raw, newTypingGate()) // must not panic
 	if rec.calls["u-1"] != "m-1" {
 		t.Fatal("recorder should still have been invoked")
 	}
@@ -142,7 +142,7 @@ func TestWSHandler_HandleInbound_TypingChannel(t *testing.T) {
 		"parentID":   "ch-1",
 		"parentType": "channel",
 	})
-	h.handleInbound(context.Background(), "u-1", raw)
+	h.handleInbound(context.Background(), "u-1", raw, newTypingGate())
 
 	if len(pub.hits) != 1 {
 		t.Fatalf("expected 1 publish; got %d", len(pub.hits))
@@ -172,7 +172,7 @@ func TestWSHandler_HandleInbound_TypingChannelInThread(t *testing.T) {
 		"parentType":      "channel",
 		"parentMessageID": "m-thread-root",
 	})
-	h.handleInbound(context.Background(), "u-1", raw)
+	h.handleInbound(context.Background(), "u-1", raw, newTypingGate())
 
 	if len(pub.hits) != 1 {
 		t.Fatalf("expected 1 publish; got %d", len(pub.hits))
@@ -200,7 +200,7 @@ func TestWSHandler_HandleInbound_TypingChannelOmitsParentMessageIDWhenAbsent(t *
 		"parentID":   "ch-1",
 		"parentType": "channel",
 	})
-	h.handleInbound(context.Background(), "u-1", raw)
+	h.handleInbound(context.Background(), "u-1", raw, newTypingGate())
 	if len(pub.hits) != 1 {
 		t.Fatalf("expected 1 publish; got %d", len(pub.hits))
 	}
@@ -217,7 +217,7 @@ func TestWSHandler_HandleInbound_TypingConversation(t *testing.T) {
 		"parentID":   "c-1",
 		"parentType": "conversation",
 	})
-	h.handleInbound(context.Background(), "u-2", raw)
+	h.handleInbound(context.Background(), "u-2", raw, newTypingGate())
 
 	if len(pub.hits) != 1 {
 		t.Fatalf("expected 1 publish; got %d", len(pub.hits))
@@ -234,7 +234,7 @@ func TestWSHandler_HandleInbound_TypingNonMemberDropped(t *testing.T) {
 		"parentID":   "ch-1",
 		"parentType": "channel",
 	})
-	h.handleInbound(context.Background(), "u-stranger", raw)
+	h.handleInbound(context.Background(), "u-stranger", raw, newTypingGate())
 	if len(pub.hits) != 0 {
 		t.Errorf("non-member typing must not be published; got %d", len(pub.hits))
 	}
@@ -247,7 +247,7 @@ func TestWSHandler_HandleInbound_TypingNonParticipantDropped(t *testing.T) {
 		"parentID":   "c-1",
 		"parentType": "conversation",
 	})
-	h.handleInbound(context.Background(), "u-stranger", raw)
+	h.handleInbound(context.Background(), "u-stranger", raw, newTypingGate())
 	if len(pub.hits) != 0 {
 		t.Errorf("non-participant typing must not be published; got %d", len(pub.hits))
 	}
@@ -256,7 +256,7 @@ func TestWSHandler_HandleInbound_TypingNonParticipantDropped(t *testing.T) {
 func TestWSHandler_HandleInbound_UnknownTypeIgnored(t *testing.T) {
 	h, pub := buildHandlerWithChannel(t)
 	raw, _ := json.Marshal(map[string]string{"type": "definitely-not-a-thing"})
-	h.handleInbound(context.Background(), "u-1", raw)
+	h.handleInbound(context.Background(), "u-1", raw, newTypingGate())
 	if len(pub.hits) != 0 {
 		t.Errorf("unknown frame types must be silently dropped; got %d publishes", len(pub.hits))
 	}
@@ -279,7 +279,7 @@ func TestWSHandler_HandleInbound_TimeZoneUpdatePatchesUser(t *testing.T) {
 		"type":     "timezone.update",
 		"timeZone": "Europe/Stockholm",
 	})
-	h.handleInbound(context.Background(), "u-1", raw)
+	h.handleInbound(context.Background(), "u-1", raw, newTypingGate())
 
 	if users.users["u-1"].TimeZone != "Europe/Stockholm" {
 		t.Fatalf("timezone = %q, want Europe/Stockholm", users.users["u-1"].TimeZone)
@@ -288,7 +288,7 @@ func TestWSHandler_HandleInbound_TimeZoneUpdatePatchesUser(t *testing.T) {
 
 func TestWSHandler_HandleInbound_MalformedJSONIgnored(t *testing.T) {
 	h, pub := buildHandlerWithChannel(t)
-	h.handleInbound(context.Background(), "u-1", []byte("{not json"))
+	h.handleInbound(context.Background(), "u-1", []byte("{not json"), newTypingGate())
 	if len(pub.hits) != 0 {
 		t.Errorf("malformed frame must not crash or publish; got %d", len(pub.hits))
 	}
@@ -303,13 +303,13 @@ func TestWSHandler_HandleInbound_NoPublisherWired_NoOp(t *testing.T) {
 		"parentID":   "ch-1",
 		"parentType": "channel",
 	})
-	h.handleInbound(context.Background(), "u-1", raw)
+	h.handleInbound(context.Background(), "u-1", raw, newTypingGate())
 }
 
 func TestWSHandler_HandleInbound_TypingMissingParentIDIgnored(t *testing.T) {
 	h, pub := buildHandlerWithChannel(t)
 	raw, _ := json.Marshal(map[string]string{"type": "typing", "parentType": "channel"})
-	h.handleInbound(context.Background(), "u-1", raw)
+	h.handleInbound(context.Background(), "u-1", raw, newTypingGate())
 	if len(pub.hits) != 0 {
 		t.Errorf("blank parentID must short-circuit; got %d", len(pub.hits))
 	}
@@ -321,7 +321,7 @@ func TestWSHandler_HandleInbound_TypingChannelNoChanSvcIgnored(t *testing.T) {
 	pub := &stubPublisher{}
 	h.SetPublisher(pub)
 	raw, _ := json.Marshal(map[string]string{"type": "typing", "parentID": "ch-1", "parentType": "channel"})
-	h.handleInbound(context.Background(), "u-1", raw)
+	h.handleInbound(context.Background(), "u-1", raw, newTypingGate())
 	if len(pub.hits) != 0 {
 		t.Errorf("channel typing without chanSvc must short-circuit; got %d", len(pub.hits))
 	}
@@ -335,7 +335,7 @@ func TestWSHandler_HandleInbound_TypingConversationNoConvSvcIgnored(t *testing.T
 	pub := &stubPublisher{}
 	h.SetPublisher(pub)
 	raw, _ := json.Marshal(map[string]string{"type": "typing", "parentID": "c-1", "parentType": "conversation"})
-	h.handleInbound(context.Background(), "u-1", raw)
+	h.handleInbound(context.Background(), "u-1", raw, newTypingGate())
 	if len(pub.hits) != 0 {
 		t.Errorf("conversation typing without convSvc must short-circuit; got %d", len(pub.hits))
 	}
@@ -348,7 +348,7 @@ func TestWSHandler_HandleInbound_TypingUnknownParentTypeIgnored(t *testing.T) {
 		"parentID":   "ch-1",
 		"parentType": "thread", // not a recognised parent kind
 	})
-	h.handleInbound(context.Background(), "u-1", raw)
+	h.handleInbound(context.Background(), "u-1", raw, newTypingGate())
 	if len(pub.hits) != 0 {
 		t.Errorf("unknown parentType must short-circuit; got %d", len(pub.hits))
 	}

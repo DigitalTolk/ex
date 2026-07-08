@@ -704,10 +704,29 @@ type batchChannelStore interface {
 	GetChannelsByIDs(ctx context.Context, ids []string) ([]*model.Channel, error)
 }
 
+// ListUserChannelIDs returns just the channel IDs of the user's memberships:
+// one membership Query, no META BatchGet, no unread math. The WebSocket
+// connect path and the presence audience resolver only need topic names, and
+// paying the full sidebar enrichment there doubled every connect's DynamoDB
+// cost. Unlike ListUserChannels this does NOT filter archived channels — a
+// subscription to an archived channel's topic is harmless (nothing posts
+// there) and delivers the unarchive event live.
+func (s *ChannelService) ListUserChannelIDs(ctx context.Context, userID string) ([]string, error) {
+	channels, err := s.memberships.ListUserChannels(ctx, userID)
+	if err != nil {
+		return nil, fmt.Errorf("channel: list user channel ids: %w", err)
+	}
+	ids := make([]string, 0, len(channels))
+	for _, uc := range channels {
+		ids = append(ids, uc.ChannelID)
+	}
+	return ids, nil
+}
+
 // ListUserChannels returns all non-archived channels a user belongs to,
 // plus any archived channels where the user is the owner. The per-channel
 // archive flag isn't denormalized onto UserChannel, so the META rows are
-// batch-read (one BatchGetItem) — this runs on every WebSocket connect.
+// batch-read (one BatchGetItem) — this runs on the sidebar list.
 func (s *ChannelService) ListUserChannels(ctx context.Context, userID string) ([]*model.UserChannel, error) {
 	channels, err := s.memberships.ListUserChannels(ctx, userID)
 	if err != nil {
@@ -816,24 +835,57 @@ func (s *ChannelService) SearchPublic(ctx context.Context, userID, q string, lim
 	if err != nil {
 		return nil, err
 	}
-	out := make([]*model.Channel, 0, len(ids))
 	guestOnly := s.isGuest(ctx, userID)
+	// Guests are scoped to channels they belong to — ONE membership list
+	// instead of a GetMembership read per search hit.
+	var guestChannels map[string]bool
+	if guestOnly {
+		mine, err := s.memberships.ListUserChannels(ctx, userID)
+		if err != nil {
+			return nil, fmt.Errorf("channel: search guest scope: %w", err)
+		}
+		guestChannels = make(map[string]bool, len(mine))
+		for _, uc := range mine {
+			guestChannels[uc.ChannelID] = true
+		}
+	}
+	// Resolve every hit in one BatchGetItem instead of a GetChannel per hit;
+	// on batch failure (or a store without the capability) fall back to the
+	// per-ID loop to keep search best-effort.
+	byID := s.channelsByID(ctx, ids)
+	out := make([]*model.Channel, 0, len(ids))
 	for _, id := range ids {
-		ch, err := s.channels.GetChannel(ctx, id)
-		if err != nil || ch == nil {
+		ch := byID[id]
+		if ch == nil || ch.Archived || ch.Type != model.ChannelTypePublic {
 			continue
 		}
-		if ch.Archived || ch.Type != model.ChannelTypePublic {
+		if guestOnly && !guestChannels[ch.ID] {
 			continue
-		}
-		if guestOnly {
-			if _, err := s.memberships.GetMembership(ctx, ch.ID, userID); err != nil {
-				continue
-			}
 		}
 		out = append(out, ch)
 	}
 	return out, nil
+}
+
+// channelsByID resolves many channels preferring the batched store read, with
+// a per-ID fallback. Unresolvable IDs are simply absent (stale search hits,
+// deleted channels).
+func (s *ChannelService) channelsByID(ctx context.Context, ids []string) map[string]*model.Channel {
+	byID := make(map[string]*model.Channel, len(ids))
+	if bs, ok := s.channels.(batchChannelStore); ok {
+		if chans, err := bs.GetChannelsByIDs(ctx, ids); err == nil {
+			for _, ch := range chans {
+				byID[ch.ID] = ch
+			}
+			return byID
+		}
+	}
+	for _, id := range ids {
+		if ch, err := s.channels.GetChannel(ctx, id); err == nil && ch != nil {
+			byID[id] = ch
+		}
+	}
+	return byID
 }
 
 func (s *ChannelService) isGuest(ctx context.Context, userID string) bool {
@@ -874,10 +926,17 @@ func (s *ChannelService) guestBrowse(ctx context.Context, userID string) ([]*mod
 	if err != nil {
 		return nil, "", fmt.Errorf("channel: browse public guest: %w", err)
 	}
+	// One batched read for all the guest's channels (per-ID fallback inside);
+	// iteration order follows the membership list so the result stays stable.
+	ids := make([]string, 0, len(mine))
+	for _, uc := range mine {
+		ids = append(ids, uc.ChannelID)
+	}
+	byID := s.channelsByID(ctx, ids)
 	out := make([]*model.Channel, 0, len(mine))
 	for _, uc := range mine {
-		ch, err := s.channels.GetChannel(ctx, uc.ChannelID)
-		if err != nil || ch == nil || ch.Type != model.ChannelTypePublic {
+		ch := byID[uc.ChannelID]
+		if ch == nil || ch.Type != model.ChannelTypePublic {
 			continue
 		}
 		out = append(out, ch)

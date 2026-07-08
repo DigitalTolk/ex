@@ -98,8 +98,11 @@ type statusUserStore struct {
 	err  error
 }
 
-func (s statusUserStore) GetByID(context.Context, string) (*model.User, error) {
-	return s.user, s.err
+func (s statusUserStore) UserStatus(context.Context, string) (string, error) {
+	if s.err != nil || s.user == nil {
+		return "", s.err
+	}
+	return s.user.Status, s.err
 }
 
 func TestAuthWithUserStatusRejectsDeactivatedUser(t *testing.T) {

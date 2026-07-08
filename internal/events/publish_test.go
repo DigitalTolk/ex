@@ -98,3 +98,50 @@ func TestPublishManyMarshalError(t *testing.T) {
 		t.Fatalf("calls = %d, want 0 on marshal error", got)
 	}
 }
+
+// manyCapturePublisher adds the pipelined ManyPublisher capability.
+type manyCapturePublisher struct {
+	capturePublisher
+	manyCalls    atomic.Uint64
+	manyChannels int
+	manyErr      error
+}
+
+func (p *manyCapturePublisher) PublishMany(_ context.Context, channels []string, e *Event) error {
+	p.manyCalls.Add(1)
+	p.manyChannels = len(channels)
+	p.mu.Lock()
+	p.last = e
+	p.mu.Unlock()
+	return p.manyErr
+}
+
+// A capable publisher gets ONE pipelined PublishMany call, never the
+// per-channel Publish loop.
+func TestPublishManyUsesManyPublisherCapability(t *testing.T) {
+	p := &manyCapturePublisher{}
+	channels := []string{"a", "b", "c", "d"}
+	PublishMany(context.Background(), p, channels, EventPing, map[string]int{"n": 1})
+	if got := p.manyCalls.Load(); got != 1 {
+		t.Fatalf("PublishMany calls = %d, want 1", got)
+	}
+	if p.manyChannels != len(channels) {
+		t.Fatalf("channels forwarded = %d, want %d", p.manyChannels, len(channels))
+	}
+	if got := p.calls.Load(); got != 0 {
+		t.Fatalf("per-channel Publish calls = %d, want 0 (must not double-publish)", got)
+	}
+	if p.last.Type != EventPing {
+		t.Fatalf("event type = %q, want %q", p.last.Type, EventPing)
+	}
+}
+
+// A pipelined fan-out failure is logged and swallowed, matching the
+// per-channel arm's never-propagate contract.
+func TestPublishManyCapabilityErrorSwallowed(t *testing.T) {
+	p := &manyCapturePublisher{manyErr: errors.New("redis down")}
+	PublishMany(context.Background(), p, []string{"a", "b"}, EventPing, nil)
+	if got := p.manyCalls.Load(); got != 1 {
+		t.Fatalf("PublishMany calls = %d, want 1", got)
+	}
+}

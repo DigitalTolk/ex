@@ -36,16 +36,31 @@ func NewTokenStore(db *DB) *TokenStoreImpl {
 
 // refreshTokenItem is the DynamoDB representation of a RefreshToken.
 type refreshTokenItem struct {
-	PK  string `dynamodbav:"PK"`
-	SK  string `dynamodbav:"SK"`
-	TTL int64  `dynamodbav:"ttl"`
+	PK string `dynamodbav:"PK"`
+	SK string `dynamodbav:"SK"`
+	// GSI1 groups a user's tokens into one partition so account deactivation
+	// revokes them with a Query instead of a full-table Scan.
+	GSI1PK string `dynamodbav:"GSI1PK,omitempty"`
+	GSI1SK string `dynamodbav:"GSI1SK,omitempty"`
+	TTL    int64  `dynamodbav:"ttl"`
 	model.RefreshToken
 }
+
+// userTokenGSI1PK is the per-user token partition on GSI1.
+func userTokenGSI1PK(userID string) string { return "USERTOKEN#" + userID }
+
+// tokenIndexSeededPK marks that every live legacy token row has been
+// backfilled with GSI attributes (EnsureUserTokenIndex ran to completion), so
+// DeleteAllForUser can trust the GSI Query alone. Absent → the legacy Scan
+// fallback keeps revocation complete.
+const tokenIndexSeededPK = "TOKENIDXSEEDED"
 
 func (s *TokenStoreImpl) Create(ctx context.Context, token *model.RefreshToken) error {
 	item := refreshTokenItem{
 		PK:           rtokenPK(token.TokenHash),
 		SK:           metaSK(),
+		GSI1PK:       userTokenGSI1PK(token.UserID),
+		GSI1SK:       rtokenPK(token.TokenHash),
 		TTL:          token.ExpiresAt.Unix(),
 		RefreshToken: *token,
 	}
@@ -123,7 +138,62 @@ func (s *TokenStoreImpl) Delete(ctx context.Context, hash string) error {
 }
 
 func (s *TokenStoreImpl) DeleteAllForUser(ctx context.Context, userID string) error {
-	// Scan for all RTOKEN# items belonging to this user, then batch delete.
+	// Fast path: the user's tokens live in one GSI partition — a Query bounded
+	// by the user's own session count instead of a Scan of the entire table.
+	// The GSI is trustworthy alone only once the legacy backfill has run
+	// (rows written before the index existed have no GSI attributes and are
+	// invisible to the Query); before that the Scan below keeps revocation
+	// COMPLETE — this is account deactivation, a missed row is a live
+	// credential.
+	seeded, err := s.isTokenIndexSeeded(ctx)
+	if err != nil {
+		return err
+	}
+	if seeded {
+		return s.deleteAllForUserByIndex(ctx, userID)
+	}
+	return s.deleteAllForUserByScan(ctx, userID)
+}
+
+func (s *TokenStoreImpl) isTokenIndexSeeded(ctx context.Context) (bool, error) {
+	out, err := s.Client.GetItem(ctx, &dynamodb.GetItemInput{
+		TableName: aws.String(s.Table),
+		Key:       compositeKey(tokenIndexSeededPK, metaSK()),
+	})
+	if err != nil {
+		return false, fmt.Errorf("store: get token index marker: %w", err)
+	}
+	return out.Item != nil, nil
+}
+
+func (s *TokenStoreImpl) deleteAllForUserByIndex(ctx context.Context, userID string) error {
+	keyCond := expression.Key("GSI1PK").Equal(expression.Value(userTokenGSI1PK(userID)))
+	proj := expression.NamesList(expression.Name("PK"), expression.Name("SK"))
+	expr := mustExpr(expression.NewBuilder().WithKeyCondition(keyCond).WithProjection(proj).Build())
+	paginator := dynamodb.NewQueryPaginator(s.Client, &dynamodb.QueryInput{
+		TableName:                 aws.String(s.Table),
+		IndexName:                 aws.String("GSI1"),
+		KeyConditionExpression:    expr.KeyCondition(),
+		ProjectionExpression:      expr.Projection(),
+		ExpressionAttributeNames:  expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
+	})
+	for paginator.HasMorePages() {
+		page, err := paginator.NextPage(ctx)
+		if err != nil {
+			return fmt.Errorf("store: query refresh tokens: %w", err)
+		}
+		if err := s.batchDeleteTokenKeys(ctx, page.Items); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *TokenStoreImpl) deleteAllForUserByScan(ctx context.Context, userID string) error {
+	// Legacy path: scan for all RTOKEN# items belonging to this user, then
+	// batch delete. Retired per deployment once EnsureUserTokenIndex marks the
+	// GSI backfill complete.
 	filt := expression.Name("PK").BeginsWith("RTOKEN#").
 		And(expression.Name("userID").Equal(expression.Value(userID)))
 
@@ -146,53 +216,113 @@ func (s *TokenStoreImpl) DeleteAllForUser(ctx context.Context, userID string) er
 		if err != nil {
 			return fmt.Errorf("store: scan refresh tokens: %w", err)
 		}
-
-		if len(page.Items) == 0 {
-			continue
-		}
-
-		// BatchWriteItem supports up to 25 items per call.
-		for i := 0; i < len(page.Items); i += 25 {
-			end := i + 25
-			if end > len(page.Items) {
-				end = len(page.Items)
-			}
-
-			batch := make([]types.WriteRequest, 0, end-i)
-			for _, item := range page.Items[i:end] {
-				batch = append(batch, types.WriteRequest{
-					DeleteRequest: &types.DeleteRequest{
-						Key: map[string]types.AttributeValue{
-							"PK": item["PK"],
-							"SK": item["SK"],
-						},
-					},
-				})
-			}
-
-			// Drain UnprocessedItems with a bounded retry: under throttling a
-			// hot partition returns deletes that were silently NOT applied. This
-			// is the account-deactivation revocation path, so a dropped delete
-			// leaves a live refresh token the deactivated user can keep redeeming
-			// — failing to drain here is a security gap, not a UX nicety.
-			input := &dynamodb.BatchWriteItemInput{
-				RequestItems: map[string][]types.WriteRequest{s.Table: batch},
-			}
-			for attempt := 0; attempt < 3; attempt++ {
-				out, err := s.Client.BatchWriteItem(ctx, input)
-				if err != nil {
-					return fmt.Errorf("store: batch delete refresh tokens: %w", err)
-				}
-				if len(out.UnprocessedItems[s.Table]) == 0 {
-					break
-				}
-				if attempt == 2 {
-					return fmt.Errorf("store: batch delete refresh tokens: %d unprocessed after retries", len(out.UnprocessedItems[s.Table]))
-				}
-				input.RequestItems = out.UnprocessedItems
-			}
+		if err := s.batchDeleteTokenKeys(ctx, page.Items); err != nil {
+			return err
 		}
 	}
 
+	return nil
+}
+
+// batchDeleteTokenKeys deletes the given PK/SK projections in 25-item
+// BatchWriteItem chunks, draining UnprocessedItems with a bounded retry:
+// under throttling a hot partition returns deletes that were silently NOT
+// applied. This is the account-deactivation revocation path, so a dropped
+// delete leaves a live refresh token the deactivated user can keep redeeming
+// — failing to drain here is a security gap, not a UX nicety.
+func (s *TokenStoreImpl) batchDeleteTokenKeys(ctx context.Context, items []map[string]types.AttributeValue) error {
+	for i := 0; i < len(items); i += 25 {
+		end := min(i+25, len(items))
+		batch := make([]types.WriteRequest, 0, end-i)
+		for _, item := range items[i:end] {
+			batch = append(batch, types.WriteRequest{
+				DeleteRequest: &types.DeleteRequest{
+					Key: map[string]types.AttributeValue{
+						"PK": item["PK"],
+						"SK": item["SK"],
+					},
+				},
+			})
+		}
+		input := &dynamodb.BatchWriteItemInput{
+			RequestItems: map[string][]types.WriteRequest{s.Table: batch},
+		}
+		for attempt := 0; attempt < 3; attempt++ {
+			out, err := s.Client.BatchWriteItem(ctx, input)
+			if err != nil {
+				return fmt.Errorf("store: batch delete refresh tokens: %w", err)
+			}
+			if len(out.UnprocessedItems[s.Table]) == 0 {
+				break
+			}
+			if attempt == 2 {
+				return fmt.Errorf("store: batch delete refresh tokens: %d unprocessed after retries", len(out.UnprocessedItems[s.Table]))
+			}
+			input.RequestItems = out.UnprocessedItems
+		}
+	}
+	return nil
+}
+
+// EnsureUserTokenIndex backfills GSI attributes onto legacy refresh-token
+// rows (written before the per-user token partition existed) and writes the
+// seeded marker so DeleteAllForUser switches from the full-table Scan to the
+// per-user Query. Idempotent and concurrency-safe: re-running rewrites the
+// same attributes, so every instance may call it at startup. A no-op once the
+// marker exists.
+func (s *TokenStoreImpl) EnsureUserTokenIndex(ctx context.Context) error {
+	seeded, err := s.isTokenIndexSeeded(ctx)
+	if err != nil || seeded {
+		return err
+	}
+	filt := expression.Name("PK").BeginsWith("RTOKEN#").
+		And(expression.Name("GSI1PK").AttributeNotExists())
+	proj := expression.NamesList(expression.Name("PK"), expression.Name("SK"), expression.Name("userID"))
+	expr := mustExpr(expression.NewBuilder().WithFilter(filt).WithProjection(proj).Build())
+	paginator := dynamodb.NewScanPaginator(s.Client, &dynamodb.ScanInput{
+		TableName:                 aws.String(s.Table),
+		FilterExpression:          expr.Filter(),
+		ProjectionExpression:      expr.Projection(),
+		ExpressionAttributeNames:  expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
+	})
+	for paginator.HasMorePages() {
+		page, err := paginator.NextPage(ctx)
+		if err != nil {
+			return fmt.Errorf("store: scan legacy refresh tokens: %w", err)
+		}
+		for _, item := range page.Items {
+			var row struct {
+				PK     string `dynamodbav:"PK"`
+				SK     string `dynamodbav:"SK"`
+				UserID string `dynamodbav:"userID"`
+			}
+			if err := attributevalue.UnmarshalMap(item, &row); err != nil {
+				return fmt.Errorf("store: unmarshal legacy refresh token: %w", err)
+			}
+			if row.UserID == "" {
+				continue // unrevocable garbage row; expires via TTL
+			}
+			update := expression.Set(expression.Name("GSI1PK"), expression.Value(userTokenGSI1PK(row.UserID))).
+				Set(expression.Name("GSI1SK"), expression.Value(row.PK))
+			uexpr := mustExpr(expression.NewBuilder().WithUpdate(update).Build())
+			if _, err := s.Client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+				TableName:                 aws.String(s.Table),
+				Key:                       compositeKey(row.PK, row.SK),
+				UpdateExpression:          uexpr.Update(),
+				ExpressionAttributeNames:  uexpr.Names(),
+				ExpressionAttributeValues: uexpr.Values(),
+			}); err != nil {
+				return fmt.Errorf("store: backfill refresh token index: %w", err)
+			}
+		}
+	}
+	marker := map[string]types.AttributeValue{
+		"PK": &types.AttributeValueMemberS{Value: tokenIndexSeededPK},
+		"SK": &types.AttributeValueMemberS{Value: metaSK()},
+	}
+	if _, err := s.Client.PutItem(ctx, &dynamodb.PutItemInput{TableName: aws.String(s.Table), Item: marker}); err != nil {
+		return fmt.Errorf("store: mark token index seeded: %w", err)
+	}
 	return nil
 }

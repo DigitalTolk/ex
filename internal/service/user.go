@@ -312,6 +312,29 @@ func (s *UserService) GetByID(ctx context.Context, id string) (*model.User, erro
 	return user, nil
 }
 
+// UserStatus returns just the account status — the auth middleware's
+// deactivation check runs on EVERY authenticated request and discards
+// everything but Status, so this path deliberately skips the avatar-URL
+// resolution GetByID performs (1-3 extra Redis round trips per request for a
+// presigned URL nobody read). Cache-first with a store fill on miss, same as
+// GetByID, so steady state is one Redis GET per request.
+func (s *UserService) UserStatus(ctx context.Context, id string) (string, error) {
+	if s.cache != nil {
+		if user, err := s.cache.GetUser(ctx, id); err == nil {
+			return user.Status, nil
+		}
+	}
+	user, err := s.users.GetUser(ctx, id)
+	if err != nil {
+		return "", fmt.Errorf("user: get status: %w", err)
+	}
+	normalizeUserProfile(user)
+	if s.cache != nil {
+		_ = s.cache.SetUser(ctx, user)
+	}
+	return user.Status, nil
+}
+
 // GetByEmail returns a user by email address.
 func (s *UserService) GetByEmail(ctx context.Context, email string) (*model.User, error) {
 	user, err := s.users.GetUserByEmail(ctx, email)
@@ -467,18 +490,12 @@ func (s *UserService) ClearExpiredStatuses(ctx context.Context, now time.Time, l
 				continue
 			}
 
-			user, err := s.users.GetUser(ctx, listedUser.ID)
+			user, ok, err := s.clearExpiredStatus(ctx, listedUser, now)
 			if err != nil {
-				return cleared, fmt.Errorf("user: get expired status user: %w", err)
+				return cleared, err
 			}
-			if user == nil || user.UserStatus == nil || user.UserStatus.ClearAt == nil || user.UserStatus.ClearAt.After(now) {
+			if !ok {
 				continue
-			}
-
-			user.UserStatus = nil
-			user.UpdatedAt = now
-			if err := s.users.UpdateUser(ctx, user); err != nil {
-				return cleared, fmt.Errorf("user: clear expired status: %w", err)
 			}
 			if s.cache != nil {
 				_ = s.cache.Delete(ctx, "user:"+user.ID)
@@ -496,6 +513,46 @@ func (s *UserService) ClearExpiredStatuses(ctx context.Context, now time.Time, l
 		}
 		cursor = nextCursor
 	}
+}
+
+// conditionalStatusClearer is the optional atomic form of the status clear
+// (the DynamoDB store has it): remove the status only while it still carries
+// the clearAt the sweep observed — one surgical write, no read, and a user
+// who just set a NEW status keeps it.
+type conditionalStatusClearer interface {
+	ClearUserStatusIfExpired(ctx context.Context, userID string, seenClearAt time.Time, now time.Time) (bool, error)
+}
+
+// clearExpiredStatus clears one user's expired status, returning the user to
+// publish for and whether anything was cleared. Prefers the conditional
+// single-write path; plain stores keep the legacy re-read + full update.
+func (s *UserService) clearExpiredStatus(ctx context.Context, listedUser *model.User, now time.Time) (*model.User, bool, error) {
+	if cc, ok := s.users.(conditionalStatusClearer); ok {
+		cleared, err := cc.ClearUserStatusIfExpired(ctx, listedUser.ID, *listedUser.UserStatus.ClearAt, now)
+		if err != nil {
+			return nil, false, fmt.Errorf("user: clear expired status: %w", err)
+		}
+		if !cleared {
+			return nil, false, nil
+		}
+		u := *listedUser
+		u.UserStatus = nil
+		u.UpdatedAt = now
+		return &u, true, nil
+	}
+	user, err := s.users.GetUser(ctx, listedUser.ID)
+	if err != nil {
+		return nil, false, fmt.Errorf("user: get expired status user: %w", err)
+	}
+	if user == nil || user.UserStatus == nil || user.UserStatus.ClearAt == nil || user.UserStatus.ClearAt.After(now) {
+		return nil, false, nil
+	}
+	user.UserStatus = nil
+	user.UpdatedAt = now
+	if err := s.users.UpdateUser(ctx, user); err != nil {
+		return nil, false, fmt.Errorf("user: clear expired status: %w", err)
+	}
+	return user, true, nil
 }
 
 // RunExpiredStatusSweeper periodically clears expired statuses from the

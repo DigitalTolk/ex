@@ -271,3 +271,46 @@ func TestThreadFollowStore_SeedMarker(t *testing.T) {
 		t.Fatalf("MarkThreadIndexSeeded fault: want errInjected, got %v", err)
 	}
 }
+
+func TestAttachmentStore_GetAttachmentsByIDs(t *testing.T) {
+	db := setupDynamoDB(t)
+	ctx := context.Background()
+	s := NewAttachmentStore(db)
+
+	a1 := &model.Attachment{ID: "att-bg-1", Filename: "one.txt", SHA256: "h1", CreatedBy: "u-1", CreatedAt: time.Now()}
+	a2 := &model.Attachment{ID: "att-bg-2", Filename: "two.txt", SHA256: "h2", CreatedBy: "u-1", CreatedAt: time.Now()}
+	for _, a := range []*model.Attachment{a1, a2} {
+		if err := s.Create(ctx, a); err != nil {
+			t.Fatalf("Create %s: %v", a.ID, err)
+		}
+	}
+
+	got, err := s.GetAttachmentsByIDs(ctx, []string{a1.ID, "att-bg-missing", a2.ID})
+	if err != nil {
+		t.Fatalf("GetAttachmentsByIDs: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("got %d attachments, want 2", len(got))
+	}
+
+	if empty, err := s.GetAttachmentsByIDs(ctx, nil); err != nil || len(empty) != 0 {
+		t.Fatalf("empty ids = %v (err=%v), want empty success", empty, err)
+	}
+
+	errStore := NewAttachmentStore(withFault(db, func(f *faultClient) { f.failBatchGetItem = true }))
+	if _, err := errStore.GetAttachmentsByIDs(ctx, []string{a1.ID}); !errors.Is(err, errInjected) {
+		t.Fatalf("BatchGetItem fault: want errInjected, got %v", err)
+	}
+
+	corruptStore := NewAttachmentStore(withFault(db, func(f *faultClient) { f.transformBatchGetItem = corruptBatchGetOut(db) }))
+	_, err = corruptStore.GetAttachmentsByIDs(ctx, []string{a1.ID})
+	assertUnmarshalErr(t, err, "attachment GetAttachmentsByIDs")
+
+	drained := NewAttachmentStore(withFault(db, func(f *faultClient) {
+		f.transformBatchGetItem = unprocessedOnce(db, compositeKey(attachmentPK(a1.ID), metaSK()))
+	}))
+	got, err = drained.GetAttachmentsByIDs(ctx, []string{a1.ID})
+	if err != nil || len(got) != 1 || got[0].ID != a1.ID {
+		t.Fatalf("unprocessed drain = %v (err=%v), want the seeded attachment", got, err)
+	}
+}

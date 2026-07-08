@@ -133,3 +133,40 @@ func TestCacheMustJSONPanicsOnImpossibleFailure(t *testing.T) {
 	}()
 	_ = mustJSON(json.Marshal(make(chan int)))
 }
+
+func TestArePresenceOnline_RealRedis(t *testing.T) {
+	c, plain := setupRealTestCache(t)
+	ctx := context.Background()
+
+	// Empty input short-circuits.
+	if got, err := c.ArePresenceOnline(ctx, nil); err != nil || len(got) != 0 {
+		t.Fatalf("ArePresenceOnline(nil) = %v (err=%v), want empty success", got, err)
+	}
+
+	// One online (count>0), one zero-count marker, one corrupt marker, one absent
+	// — all resolved in a single MGET.
+	if _, err := c.IncrementPresence(ctx, "u-on"); err != nil {
+		t.Fatalf("IncrementPresence: %v", err)
+	}
+	if err := plain.Set(ctx, presenceKeyPrefix+"u-zero", "0", time.Minute).Err(); err != nil {
+		t.Fatalf("seed zero: %v", err)
+	}
+	if err := plain.Set(ctx, presenceKeyPrefix+"u-corrupt", "not-a-number", time.Minute).Err(); err != nil {
+		t.Fatalf("seed corrupt: %v", err)
+	}
+	got, err := c.ArePresenceOnline(ctx, []string{"u-on", "u-zero", "u-corrupt", "u-missing"})
+	if err != nil {
+		t.Fatalf("ArePresenceOnline: %v", err)
+	}
+	want := map[string]bool{"u-on": true, "u-zero": false, "u-corrupt": false, "u-missing": false}
+	for id, w := range want {
+		if got[id] != w {
+			t.Fatalf("online[%s] = %v, want %v (full: %v)", id, got[id], w, got)
+		}
+	}
+
+	// MGET failure surfaces so the caller can pick its fail-safe direction.
+	if _, err := cacheFailingOn(t, "mget").ArePresenceOnline(ctx, []string{"u-on"}); !errors.Is(err, errInjected) {
+		t.Fatalf("ArePresenceOnline mget failure = %v, want errInjected", err)
+	}
+}

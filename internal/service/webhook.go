@@ -355,12 +355,50 @@ func (s *IncomingWebhookService) targetDM(ctx context.Context, wh *model.Incomin
 	return s.dms.GetOrCreateDM(ctx, wh.CreatedBy, target.ID)
 }
 
-// findWebhookTargetUser resolves a @name / id / email to a user, paging
-// through the full directory (not just the first page) so DMs and
-// in-text @mentions resolve in orgs larger than one page. The page cap
-// is a safety bound against an unterminated cursor.
+// webhookDirectUserResolver is the optional point-read capability of the
+// user resolver (UserService has it) — an exact ID or email resolves in one
+// indexed read instead of paging the directory.
+type webhookDirectUserResolver interface {
+	GetByID(ctx context.Context, id string) (*model.User, error)
+	GetByEmail(ctx context.Context, email string) (*model.User, error)
+}
+
+// webhookUserSearcher is the optional search capability (UserService.Search
+// over the in-process users index): display-name targets resolve from the
+// index instead of a serial walk of the whole directory.
+type webhookUserSearcher interface {
+	Search(ctx context.Context, query string, limit int) ([]*model.User, error)
+}
+
+// findWebhookTargetUser resolves a @name / id / email to a user. Exact email
+// and ID targets resolve with one indexed read; display names go through the
+// user search index. The full-directory paging walk remains the LAST resort
+// (index unavailable or stale, email local-part forms the index doesn't
+// tokenize) — it is O(directory/200) serial reads, which is why it no longer
+// runs first.
 func (s *IncomingWebhookService) findWebhookTargetUser(ctx context.Context, targetName string) (*model.User, error) {
 	needle := strings.ToLower(strings.TrimSpace(targetName))
+	if direct, ok := s.users.(webhookDirectUserResolver); ok {
+		if strings.Contains(needle, "@") {
+			if user, err := direct.GetByEmail(ctx, needle); err == nil && user != nil {
+				return user, nil
+			}
+		}
+		// ULID target (webhook configs may carry raw user IDs). A miss is
+		// one cheap point read.
+		if user, err := direct.GetByID(ctx, targetName); err == nil && user != nil {
+			if user.ID == targetName {
+				return user, nil
+			}
+		}
+	}
+	if searcher, ok := s.users.(webhookUserSearcher); ok {
+		if candidates, err := searcher.Search(ctx, needle, 50); err == nil {
+			if user := matchWebhookUser(candidates, targetName, needle); user != nil {
+				return user, nil
+			}
+		}
+	}
 	cursor := ""
 	for page := 0; page < 100; page++ {
 		users, next, err := s.users.List(ctx, 200, cursor)

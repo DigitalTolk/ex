@@ -117,7 +117,19 @@ func main() {
 	parentIndexStore := handler.NewParentIndexAdapter(store.NewParentIndexStore(db))
 	userStateStore := handler.NewUserStateStoreAdapter(store.NewUserStateStore(db))
 	inviteStore := handler.NewInviteStoreAdapter(store.NewInviteStore(db))
-	tokenStore := handler.NewTokenStoreAdapter(store.NewTokenStore(db))
+	rawTokenStore := store.NewTokenStore(db)
+	tokenStore := handler.NewTokenStoreAdapter(rawTokenStore)
+	// One-time background backfill of the per-user token partition (GSI1):
+	// once the seeded marker lands, account deactivation revokes tokens with
+	// a Query instead of a full-table Scan. Idempotent and concurrency-safe,
+	// so every instance may attempt it; failures just retry on next boot.
+	safe.Go(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+		if err := rawTokenStore.EnsureUserTokenIndex(ctx); err != nil {
+			slog.Warn("token index backfill failed (deactivation falls back to the scan path)", "error", err)
+		}
+	})
 	emojiStore := store.NewEmojiStore(db)
 	attachmentStore := store.NewAttachmentStore(db)
 
@@ -218,15 +230,18 @@ func main() {
 	presenceSvc.SetPresenceAudienceResolver(func(_ context.Context, userID string) []string {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
+		// ID-only lists: topic names need no channel META, unread math or DM
+		// profile resolution — the full sidebar lists made every presence
+		// transition cost two enriched reads.
 		var topics []string
-		if ucs, err := channelSvc.ListUserChannels(ctx, userID); err == nil {
-			for _, c := range ucs {
-				topics = append(topics, pubsub.ChannelName(c.ChannelID))
+		if ids, err := channelSvc.ListUserChannelIDs(ctx, userID); err == nil {
+			for _, id := range ids {
+				topics = append(topics, pubsub.ChannelName(id))
 			}
 		}
-		if convs, err := convSvc.ListUserConversations(ctx, userID); err == nil {
-			for _, c := range convs {
-				topics = append(topics, pubsub.ConversationName(c.ConversationID))
+		if ids, err := convSvc.ListUserConversationIDs(ctx, userID); err == nil {
+			for _, id := range ids {
+				topics = append(topics, pubsub.ConversationName(id))
 			}
 		}
 		return topics

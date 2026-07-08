@@ -79,6 +79,14 @@ type PresenceLookup interface {
 	IsOnline(userID string) bool
 }
 
+// PresenceBatchLookup is the optional batched sibling of PresenceLookup
+// (PresenceService implements it): one Redis round trip for a whole recipient
+// set instead of a GET per recipient. Asserted where fan-outs need presence
+// for many users; plain single-user lookups keep working via the fallback.
+type PresenceBatchLookup interface {
+	OnlineMany(userIDs []string) map[string]bool
+}
+
 type MobilePushSender interface {
 	Send(ctx context.Context, recipientUserID string, n Notification) error
 }
@@ -378,8 +386,14 @@ func (s *NotificationService) NotifyForMessage(ctx context.Context, msg *model.M
 	}
 	groupSet := make(map[string]bool)
 	if mentions.All || mentions.Here {
+		// @here needs presence for the WHOLE member list — resolve it in one
+		// batched read instead of a Redis GET per member.
+		var hereOnline map[string]bool
+		if mentions.Here {
+			hereOnline = s.onlineSet(snap.memberIDs)
+		}
 		for _, uid := range snap.memberIDs {
-			if mentions.Here && (s.presence == nil || !s.presence.IsOnline(uid)) {
+			if mentions.Here && !hereOnline[uid] {
 				continue
 			}
 			groupSet[uid] = true
@@ -442,6 +456,14 @@ func (s *NotificationService) NotifyForMessage(ctx context.Context, msg *model.M
 	}
 
 	bodyLower := strings.ToLower(msg.Body)
+
+	// Mobile pushes collected during the loop; their presence checks resolve
+	// in one batched read afterwards.
+	type pendingPush struct {
+		uid   string
+		notif Notification
+	}
+	var mobilePending []pendingPush
 
 	for _, uid := range snap.memberIDs {
 		eff := snap.prefs[uid]
@@ -510,7 +532,21 @@ func (s *NotificationService) NotifyForMessage(ctx context.Context, msg *model.M
 			events.Publish(ctx, s.publisher, pubsub.UserChannel(uid), events.EventNotificationNew, notif)
 		}
 		if mobile {
-			s.sendMobilePush(ctx, uid, notif)
+			// Defer the push decision: presence for every mobile recipient
+			// resolves in ONE batched read after the loop instead of a
+			// Redis GET per recipient here.
+			mobilePending = append(mobilePending, pendingPush{uid: uid, notif: notif})
+		}
+	}
+
+	if len(mobilePending) > 0 {
+		ids := make([]string, len(mobilePending))
+		for i, p := range mobilePending {
+			ids[i] = p.uid
+		}
+		online := s.onlineSet(ids)
+		for _, p := range mobilePending {
+			s.sendMobilePush(ctx, p.uid, p.notif, online[p.uid])
 		}
 	}
 
@@ -616,17 +652,36 @@ func (s *NotificationService) NotifyDirect(ctx context.Context, userID string, n
 		return
 	}
 	events.Publish(ctx, s.publisher, pubsub.UserChannel(userID), events.EventNotificationNew, notif)
-	s.sendMobilePush(ctx, userID, notif)
+	online := s.presence != nil && s.presence.IsOnline(userID)
+	s.sendMobilePush(ctx, userID, notif, online)
 }
 
-func (s *NotificationService) sendMobilePush(ctx context.Context, recipientUserID string, notif Notification) {
+// onlineSet resolves presence for many recipients at once: one batched Redis
+// read when the lookup supports it (PresenceService does), a per-user check
+// otherwise. A nil presence lookup reads as everyone-offline — the fail-safe
+// direction (offline → immediate push; duplicates beat silence).
+func (s *NotificationService) onlineSet(userIDs []string) map[string]bool {
+	if s.presence == nil {
+		return map[string]bool{}
+	}
+	if batch, ok := s.presence.(PresenceBatchLookup); ok {
+		return batch.OnlineMany(userIDs)
+	}
+	out := make(map[string]bool, len(userIDs))
+	for _, uid := range userIDs {
+		out[uid] = s.presence.IsOnline(uid)
+	}
+	return out
+}
+
+func (s *NotificationService) sendMobilePush(ctx context.Context, recipientUserID string, notif Notification, online bool) {
 	if s.push == nil {
 		return
 	}
 	// Offline (no live WebSocket): nothing can ack, so the desktop can't be
-	// delivering this — push immediately. IsOnline is Redis-backed so the check
+	// delivering this — push immediately. The verdict is Redis-backed so it
 	// holds across every backend instance and device.
-	if s.presence == nil || !s.presence.IsOnline(recipientUserID) {
+	if !online {
 		s.deliverPush(ctx, recipientUserID, notif)
 		return
 	}

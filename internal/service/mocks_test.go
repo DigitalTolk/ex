@@ -750,6 +750,7 @@ type mockConversationStore struct {
 	userConvs     map[string][]*model.UserConversation // userID -> conversations
 	createErr     error
 	getErr        error
+	getCalls      int // GetConversation invocations (send-path dedupe tests)
 	listErr       error
 	touchErr      error
 	activateErr   error
@@ -777,6 +778,7 @@ func (m *mockConversationStore) CreateConversation(_ context.Context, conv *mode
 }
 
 func (m *mockConversationStore) GetConversation(_ context.Context, id string) (*model.Conversation, error) {
+	m.getCalls++
 	if m.getErr != nil {
 		return nil, m.getErr
 	}

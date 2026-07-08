@@ -194,33 +194,39 @@ func (s *MessageService) CheckAccess(ctx context.Context, userID, parentID, pare
 }
 
 func (s *MessageService) CanAccessMessageAttachment(ctx context.Context, userID, parentID, parentType, messageID, attachmentID string) error {
-	if err := s.checkAccess(ctx, userID, parentID, parentType); err != nil {
+	ids, err := s.MessageAttachmentIDs(ctx, userID, parentID, parentType, messageID)
+	if err != nil {
 		return err
 	}
+	if !ids[attachmentID] {
+		return fmt.Errorf("message: attachment is not referenced by message: %w", ErrForbidden)
+	}
+	return nil
+}
+
+// MessageAttachmentIDs returns the attachment-ID set referenced by messageID
+// after verifying the caller's access to the parent — the batch form of
+// CanAccessMessageAttachment: one membership read + one message read cover a
+// whole attachment batch instead of repeating both per attachment. An empty
+// messageID is a definitive denial (attachment reads are always anchored to a
+// message; the old un-anchored fallback scanned up to 1000 messages and was
+// unreachable from any caller).
+func (s *MessageService) MessageAttachmentIDs(ctx context.Context, userID, parentID, parentType, messageID string) (map[string]bool, error) {
+	if err := s.checkAccess(ctx, userID, parentID, parentType); err != nil {
+		return nil, err
+	}
 	if messageID == "" {
-		msgs, _, err := s.messages.ListMessages(ctx, parentID, "", 1000)
-		if err != nil {
-			return fmt.Errorf("message: list attachment parent messages: %w", err)
-		}
-		for _, msg := range msgs {
-			for _, id := range msg.AttachmentIDs {
-				if id == attachmentID {
-					return nil
-				}
-			}
-		}
-		return fmt.Errorf("message: attachment is not referenced by parent: %w", ErrForbidden)
+		return nil, fmt.Errorf("message: attachment access requires a message: %w", ErrForbidden)
 	}
 	msg, err := s.messages.GetMessage(ctx, parentID, messageID)
 	if err != nil {
-		return fmt.Errorf("message: get attachment owner message: %w", err)
+		return nil, fmt.Errorf("message: get attachment owner message: %w", err)
 	}
+	out := make(map[string]bool, len(msg.AttachmentIDs))
 	for _, id := range msg.AttachmentIDs {
-		if id == attachmentID {
-			return nil
-		}
+		out[id] = true
 	}
-	return fmt.Errorf("message: attachment is not referenced by message: %w", ErrForbidden)
+	return out, nil
 }
 
 // detachedTimeout bounds best-effort work that runs off the request path with a
@@ -327,7 +333,16 @@ func (s *MessageService) deleteFromIndex(ctx context.Context, id string) {
 // Attachments are bound by ID after the message row is persisted so dangling
 // refs are impossible.
 func (s *MessageService) Send(ctx context.Context, userID, parentID, parentType, body, parentMessageID string, attachmentIDs ...string) (*model.Message, error) {
-	if err := s.checkAccess(ctx, userID, parentID, parentType); err != nil {
+	// For conversations the access check already loads the conversation row —
+	// keep it so the activity block below doesn't re-read the same entity.
+	var sendConv *model.Conversation
+	if parentType == ParentConversation {
+		conv, err := s.conversationAccess(ctx, userID, parentID)
+		if err != nil {
+			return nil, err
+		}
+		sendConv = conv
+	} else if err := s.checkAccess(ctx, userID, parentID, parentType); err != nil {
 		return nil, err
 	}
 
@@ -406,7 +421,7 @@ func (s *MessageService) Send(ctx context.Context, userID, parentID, parentType,
 	// (conversation topic) and notification.new (thread participants). This
 	// mirrors the channel rule below and the frontend gate in onMessageNew.
 	if parentType == ParentConversation && parentMessageID == "" {
-		if conv, err := s.conversations.GetConversation(ctx, parentID); err == nil && conv != nil {
+		if conv := sendConv; conv != nil {
 			// Unread is tracked with the same per-parent seq counter channels use
 			// — one increment + the author's last-read, instead of a Redis write
 			// per recipient. The author is marked caught up so their own message
@@ -1735,6 +1750,22 @@ func (s *MessageService) SetNoUnfurl(ctx context.Context, userID, parentID, pare
 
 // checkAccess verifies the user is a member of the channel or a participant
 // in the conversation.
+// conversationAccess loads the conversation and verifies userID participates.
+// Returned so callers that need the row (Send's activity block) reuse it
+// instead of a second GetConversation for the same request.
+func (s *MessageService) conversationAccess(ctx context.Context, userID, parentID string) (*model.Conversation, error) {
+	conv, err := s.conversations.GetConversation(ctx, parentID)
+	if err != nil {
+		return nil, fmt.Errorf("message: get conversation: %w", err)
+	}
+	for _, id := range conv.ParticipantIDs {
+		if id == userID {
+			return conv, nil
+		}
+	}
+	return nil, fmt.Errorf("message: not a conversation participant: %w", ErrForbidden)
+}
+
 func (s *MessageService) checkAccess(ctx context.Context, userID, parentID, parentType string) error {
 	// Denials wrap ErrForbidden so callers can tell "you are not allowed"
 	// (definitive — safe to filter/reject) apart from "the check could not
@@ -1750,19 +1781,8 @@ func (s *MessageService) checkAccess(ctx context.Context, userID, parentID, pare
 			return fmt.Errorf("message: check channel membership: %w", err)
 		}
 	case ParentConversation:
-		conv, err := s.conversations.GetConversation(ctx, parentID)
-		if err != nil {
-			return fmt.Errorf("message: get conversation: %w", err)
-		}
-		found := false
-		for _, id := range conv.ParticipantIDs {
-			if id == userID {
-				found = true
-				break
-			}
-		}
-		if !found {
-			return fmt.Errorf("message: not a conversation participant: %w", ErrForbidden)
+		if _, err := s.conversationAccess(ctx, userID, parentID); err != nil {
+			return err
 		}
 	default:
 		return fmt.Errorf("message: unknown parent type %q: %w", parentType, ErrForbidden)

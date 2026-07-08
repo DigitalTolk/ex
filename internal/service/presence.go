@@ -54,8 +54,11 @@ func NewPresenceService(store PresenceStore, publisher Publisher) *PresenceServi
 
 // OnConnect records a new connection for a user. Returns true if this is the
 // user's first connection (transition from offline to online), so callers can
-// publish a presence event exactly once per state transition.
-func (s *PresenceService) OnConnect(ctx context.Context, userID string) bool {
+// publish a presence event exactly once per state transition. When the caller
+// already knows the user's audience topics (the WS handler just built them
+// for its broker subscription) it passes them in so the transition does not
+// re-read the user's memberships through the audience resolver.
+func (s *PresenceService) OnConnect(ctx context.Context, userID string, topics ...string) bool {
 	s.mu.Lock()
 	prev := s.online[userID]
 	s.online[userID] = prev + 1
@@ -67,15 +70,17 @@ func (s *PresenceService) OnConnect(ctx context.Context, userID string) bool {
 				return false
 			}
 		}
-		s.publish(ctx, userID, true)
+		s.publish(ctx, userID, true, topics)
 		return true
 	}
 	return false
 }
 
 // OnDisconnect decrements a connection. Returns true if this transitioned the
-// user from online to offline, so we publish exactly once.
-func (s *PresenceService) OnDisconnect(ctx context.Context, userID string) bool {
+// user from online to offline, so we publish exactly once. Topics work as in
+// OnConnect; disconnect callers usually omit them so the audience resolves
+// fresh (memberships may have changed over the connection's lifetime).
+func (s *PresenceService) OnDisconnect(ctx context.Context, userID string, topics ...string) bool {
 	s.mu.Lock()
 	count := s.online[userID]
 	if count <= 1 {
@@ -92,7 +97,7 @@ func (s *PresenceService) OnDisconnect(ctx context.Context, userID string) bool 
 				return false
 			}
 		}
-		s.publish(ctx, userID, false)
+		s.publish(ctx, userID, false, topics)
 		return true
 	}
 	return false
@@ -138,6 +143,52 @@ func (s *PresenceService) IsOnline(userID string) bool {
 	return err == nil && online
 }
 
+// batchPresenceStore is the optional one-MGET capability of the presence
+// store (RedisCache has it). Asserted with a per-user fallback so plain test
+// stores keep working.
+type batchPresenceStore interface {
+	ArePresenceOnline(ctx context.Context, userIDs []string) (map[string]bool, error)
+}
+
+// OnlineMany reports online status for many users at once: the local
+// connection map answers for sessions on THIS instance, everyone else
+// resolves through one batched Redis read instead of a GET per user — the
+// notification fan-out calls this once per message rather than once per
+// recipient. A store failure leaves the unresolved users offline, which is
+// the fail-safe direction for the mobile-push fallback: an offline verdict
+// pushes immediately, and a duplicate alert beats a silently lost one.
+func (s *PresenceService) OnlineMany(userIDs []string) map[string]bool {
+	out := make(map[string]bool, len(userIDs))
+	remote := make([]string, 0, len(userIDs))
+	s.mu.RLock()
+	for _, id := range userIDs {
+		if s.online[id] > 0 {
+			out[id] = true
+		} else {
+			remote = append(remote, id)
+		}
+	}
+	s.mu.RUnlock()
+	if len(remote) == 0 || s.store == nil {
+		return out
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), presenceLookupTimeout)
+	defer cancel()
+	if bs, ok := s.store.(batchPresenceStore); ok {
+		if m, err := bs.ArePresenceOnline(ctx, remote); err == nil {
+			for id, on := range m {
+				out[id] = on
+			}
+		}
+		return out
+	}
+	for _, id := range remote {
+		on, err := s.store.IsPresenceOnline(ctx, id)
+		out[id] = err == nil && on
+	}
+	return out
+}
+
 // OnlineUserIDs returns all currently online user IDs (sorted not guaranteed).
 func (s *PresenceService) OnlineUserIDs() []string {
 	if s.store != nil {
@@ -157,13 +208,16 @@ func (s *PresenceService) OnlineUserIDs() []string {
 	return out
 }
 
-func (s *PresenceService) publish(ctx context.Context, userID string, online bool) {
+func (s *PresenceService) publish(ctx context.Context, userID string, online bool, topics []string) {
 	data := map[string]any{"userID": userID, "online": online}
 	// Scoped fan-out: only people who share a channel or DM with the subject need
-	// to know. A subject in no shared context reaches no one.
-	topics := []string{pubsub.PresenceEvents()}
-	if s.audience != nil {
-		topics = s.audience(ctx, userID)
+	// to know. A subject in no shared context reaches no one. Caller-supplied
+	// topics win (no membership re-read); otherwise resolve the audience here.
+	if len(topics) == 0 {
+		topics = []string{pubsub.PresenceEvents()}
+		if s.audience != nil {
+			topics = s.audience(ctx, userID)
+		}
 	}
 	if len(topics) == 0 {
 		return

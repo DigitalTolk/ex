@@ -476,3 +476,39 @@ func TestStream_ReplayEmptyUserAndMalformed(t *testing.T) {
 		t.Fatalf("malformed entries should be skipped, got %+v", res.Entries)
 	}
 }
+
+// Entries appended before the dedicated id field existed carry only the JSON
+// envelope; replay must fall back to extracting the embedded ULID so a
+// pre-deploy backlog still replays correctly next to modern entries.
+func TestStream_ReplayMixedLegacyAndModernEntries(t *testing.T) {
+	s, client := newSharedStream(t, 0)
+	// Legacy shape: payload only, no id field (raw XADD bypasses Append).
+	if err := client.XAdd(context.Background(), &redis.XAddArgs{
+		Stream: streamKey("u-mixed"), ID: "*",
+		Values: map[string]any{payloadField: `{"id":"01ID0000000000000000000001"}`},
+	}).Err(); err != nil {
+		t.Fatalf("seed legacy entry: %v", err)
+	}
+	// A legacy entry with an EMPTY id field must use the envelope fallback too.
+	if err := client.XAdd(context.Background(), &redis.XAddArgs{
+		Stream: streamKey("u-mixed"), ID: "*",
+		Values: map[string]any{payloadField: `{"id":"01ID0000000000000000000002"}`, idField: ""},
+	}).Err(); err != nil {
+		t.Fatalf("seed empty-id entry: %v", err)
+	}
+	appendEvent(t, s, "u-mixed", "01ID0000000000000000000003")
+
+	res, err := s.Replay(context.Background(), "u-mixed", "01ID0000000000000000000001")
+	if err != nil {
+		t.Fatalf("Replay: %v", err)
+	}
+	if len(res.Entries) != 2 {
+		t.Fatalf("entries = %d, want 2 (legacy-envelope + modern)", len(res.Entries))
+	}
+	if res.Entries[0].ID != "01ID0000000000000000000002" || res.Entries[1].ID != "01ID0000000000000000000003" {
+		t.Fatalf("ids = [%s %s]", res.Entries[0].ID, res.Entries[1].ID)
+	}
+	if res.Exhausted {
+		t.Error("cursor was found — must not report exhausted")
+	}
+}

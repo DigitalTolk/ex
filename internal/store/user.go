@@ -197,11 +197,16 @@ func (s *UserStoreImpl) findByEmailScan(ctx context.Context, email string) (*mod
 		return nil, ErrNotFound
 	}
 	keyCond := expression.Key("GSI2PK").Equal(expression.Value(allUsersGSI2PK()))
-	expr := mustExpr(expression.NewBuilder().WithKeyCondition(keyCond).Build())
+	// Project only id + email while walking the all-users partition: GSI2
+	// projects ALL, so an unprojected fallback hydrated every full profile
+	// just to keep one. The match resolves through GetByID afterwards.
+	proj := expression.NamesList(expression.Name("id"), expression.Name("email"))
+	expr := mustExpr(expression.NewBuilder().WithKeyCondition(keyCond).WithProjection(proj).Build())
 	input := &dynamodb.QueryInput{
 		TableName:                 aws.String(s.Table),
 		IndexName:                 aws.String("GSI2"),
 		KeyConditionExpression:    expr.KeyCondition(),
+		ProjectionExpression:      expr.Projection(),
 		ExpressionAttributeNames:  expr.Names(),
 		ExpressionAttributeValues: expr.Values(),
 	}
@@ -211,13 +216,15 @@ func (s *UserStoreImpl) findByEmailScan(ctx context.Context, email string) (*mod
 			return nil, fmt.Errorf("store: scan users by email fallback: %w", err)
 		}
 		for _, raw := range out.Items {
-			var item userItem
+			var item struct {
+				ID    string `dynamodbav:"id"`
+				Email string `dynamodbav:"email"`
+			}
 			if err := attributevalue.UnmarshalMap(raw, &item); err != nil {
 				return nil, fmt.Errorf("store: unmarshal user by email fallback: %w", err)
 			}
 			if strings.ToLower(strings.TrimSpace(item.Email)) == normalized {
-				u := item.User
-				return &u, nil
+				return s.GetByID(ctx, item.ID)
 			}
 		}
 		if len(out.LastEvaluatedKey) == 0 {
@@ -322,6 +329,33 @@ func (s *UserStoreImpl) List(ctx context.Context, limit int, lastKey string) ([]
 	return users, nextKey, nil
 }
 
+// ClearUserStatusIfExpired atomically removes a user's status ONLY while it
+// still carries the clearAt the sweeper observed — a user who set a fresh
+// status between the sweep's list read and this write keeps it (conditional
+// failure returns false). Replaces the sweeper's read-then-full-Put pair with
+// one surgical write.
+func (s *UserStoreImpl) ClearUserStatusIfExpired(ctx context.Context, userID string, seenClearAt time.Time, now time.Time) (bool, error) {
+	update := expression.Remove(expression.Name("userStatus")).
+		Set(expression.Name("updatedAt"), expression.Value(now))
+	cond := expression.Name("userStatus.clearAt").Equal(expression.Value(seenClearAt))
+	expr := mustExpr(expression.NewBuilder().WithUpdate(update).WithCondition(cond).Build())
+	_, err := s.Client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName:                 aws.String(s.Table),
+		Key:                       compositeKey(userPK(userID), profileSK()),
+		UpdateExpression:          expr.Update(),
+		ConditionExpression:       expr.Condition(),
+		ExpressionAttributeNames:  expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
+	})
+	if err != nil {
+		if isConditionCheckFailed(err) {
+			return false, nil // status changed since the sweep observed it
+		}
+		return false, fmt.Errorf("store: clear expired user status: %w", err)
+	}
+	return true, nil
+}
+
 func (s *UserStoreImpl) HasUsers(ctx context.Context) (bool, error) {
 	keyCond := expression.Key("GSI2PK").Equal(expression.Value(allUsersGSI2PK()))
 	expr := mustExpr(expression.NewBuilder().WithKeyCondition(keyCond).Build())
@@ -333,11 +367,14 @@ func (s *UserStoreImpl) HasUsers(ctx context.Context) (bool, error) {
 		ExpressionAttributeNames:  expr.Names(),
 		ExpressionAttributeValues: expr.Values(),
 		Limit:                     aws.Int32(1),
+		// Existence only — COUNT skips hydrating a full profile item off the
+		// ALL-projected GSI.
+		Select: types.SelectCount,
 	})
 	if err != nil {
 		return false, fmt.Errorf("store: has users: %w", err)
 	}
-	return len(out.Items) > 0, nil
+	return out.Count > 0, nil
 }
 
 // NotificationSettingsFor batch-reads the account-level notification settings

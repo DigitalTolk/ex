@@ -164,88 +164,95 @@ func (c *RedisCache) LockHeld(ctx context.Context, key string) (bool, error) {
 // counter and, on the first hit of a window, sets the window TTL. It reports
 // whether the request is within `limit` for the current window. Used by the
 // middleware.RateLimit middleware to throttle auth and webhook endpoints.
+// allowRequestScript increments the window counter and, atomically with the
+// first hit, sets the window TTL. One round trip instead of INCR+EXPIRE, and
+// it closes the partial-failure hole where a successful INCR followed by a
+// failed EXPIRE left a ratelimit: key that never expired.
+var allowRequestScript = redis.NewScript(`
+local c = redis.call('INCR', KEYS[1])
+if c == 1 then redis.call('PEXPIRE', KEYS[1], ARGV[1]) end
+return c
+`)
+
 func (c *RedisCache) AllowRequest(ctx context.Context, key string, limit int, window time.Duration) (bool, error) {
 	fullKey := "ratelimit:" + key
-	count, err := c.client.Incr(ctx, fullKey).Result()
+	count, err := allowRequestScript.Run(ctx, c.client, []string{fullKey}, window.Milliseconds()).Int64()
 	if err != nil {
 		return false, fmt.Errorf("rate limit increment %q: %w", key, err)
-	}
-	if count == 1 {
-		if err := c.client.Expire(ctx, fullKey, window).Err(); err != nil {
-			return false, fmt.Errorf("rate limit expire %q: %w", key, err)
-		}
 	}
 	return count <= int64(limit), nil
 }
 
-// touchPresenceIndex (re-)scores userID in the online index to expire when
-// the freshly-extended per-user marker does.
-func (c *RedisCache) touchPresenceIndex(ctx context.Context, userID string) error {
-	score := float64(time.Now().Add(presenceTTL).UnixMilli())
-	if err := c.client.ZAdd(ctx, presenceIndexKey, redis.Z{Score: score, Member: userID}).Err(); err != nil {
-		return fmt.Errorf("presence index %q: %w", userID, err)
-	}
-	return nil
+// presenceIndexScore is the online-index expiry score matching a marker
+// extended right now.
+func presenceIndexScore() float64 {
+	return float64(time.Now().Add(presenceTTL).UnixMilli())
 }
 
 // IncrementPresence records one active websocket connection for a user. It
 // returns true when this connection transitions the user from offline to online.
+// Marker INCR, marker TTL and index re-score ride one pipeline — this runs on
+// every WS connect, and reconnect storms multiply any extra round trip.
 func (c *RedisCache) IncrementPresence(ctx context.Context, userID string) (bool, error) {
 	key := presenceKeyPrefix + userID
-	count, err := c.client.Incr(ctx, key).Result()
-	if err != nil {
+	pipe := c.client.Pipeline()
+	incr := pipe.Incr(ctx, key)
+	pipe.Expire(ctx, key, presenceTTL)
+	pipe.ZAdd(ctx, presenceIndexKey, redis.Z{Score: presenceIndexScore(), Member: userID})
+	if _, err := pipe.Exec(ctx); err != nil {
 		return false, fmt.Errorf("presence increment %q: %w", userID, err)
 	}
-	if err := c.client.Expire(ctx, key, presenceTTL).Err(); err != nil {
-		return false, fmt.Errorf("presence expire %q: %w", userID, err)
-	}
-	if err := c.touchPresenceIndex(ctx, userID); err != nil {
-		return false, err
-	}
-	return count == 1, nil
+	return incr.Val() == 1, nil
 }
 
 // DecrementPresence removes one active websocket connection for a user. It
 // returns true when this disconnect transitions the user from online to offline.
+// The follow-up pair (cleanup vs. keep-alive) branches on the DECR result, so
+// this is two round trips: the DECR, then one pipelined pair.
 func (c *RedisCache) DecrementPresence(ctx context.Context, userID string) (bool, error) {
 	key := presenceKeyPrefix + userID
 	count, err := c.client.Decr(ctx, key).Result()
 	if err != nil {
 		return false, fmt.Errorf("presence decrement %q: %w", userID, err)
 	}
+	pipe := c.client.Pipeline()
 	if count <= 0 {
-		if err := c.client.Del(ctx, key).Err(); err != nil {
+		pipe.Del(ctx, key)
+		pipe.ZRem(ctx, presenceIndexKey, userID)
+		if _, err := pipe.Exec(ctx); err != nil {
 			return false, fmt.Errorf("presence cleanup %q: %w", userID, err)
-		}
-		if err := c.client.ZRem(ctx, presenceIndexKey, userID).Err(); err != nil {
-			return false, fmt.Errorf("presence index cleanup %q: %w", userID, err)
 		}
 		return true, nil
 	}
-	if err := c.client.Expire(ctx, key, presenceTTL).Err(); err != nil {
+	pipe.Expire(ctx, key, presenceTTL)
+	pipe.ZAdd(ctx, presenceIndexKey, redis.Z{Score: presenceIndexScore(), Member: userID})
+	if _, err := pipe.Exec(ctx); err != nil {
 		return false, fmt.Errorf("presence expire %q: %w", userID, err)
-	}
-	if err := c.touchPresenceIndex(ctx, userID); err != nil {
-		return false, err
 	}
 	return false, nil
 }
 
 // RefreshPresence extends the online marker for a user that still has a live
-// websocket connection.
+// websocket connection. This is the single most frequent Redis operation in
+// the backend (every connection, every keep-alive interval), so the marker
+// EXPIRE and the index re-score share one pipeline. The re-score is also the
+// self-heal path: a session whose index entry is missing (pre-index deploys,
+// a crashed cleanup) is re-listed within one keep-alive interval. When the
+// marker is already gone the unconditional ZADD leaves an index entry with no
+// marker — harmless, the snapshot MGET-verify filters it and the score prune
+// expires it.
 func (c *RedisCache) RefreshPresence(ctx context.Context, userID string) error {
 	key := presenceKeyPrefix + userID
-	ok, err := c.client.Expire(ctx, key, presenceTTL).Result()
-	if err != nil {
+	pipe := c.client.Pipeline()
+	expire := pipe.Expire(ctx, key, presenceTTL)
+	pipe.ZAdd(ctx, presenceIndexKey, redis.Z{Score: presenceIndexScore(), Member: userID})
+	if _, err := pipe.Exec(ctx); err != nil {
 		return fmt.Errorf("presence refresh %q: %w", userID, err)
 	}
-	if !ok {
+	if !expire.Val() {
 		return ErrCacheMiss
 	}
-	// Re-score the index alongside the marker. This is also the self-heal
-	// path: a session whose index entry is missing (pre-index deploys, a
-	// crashed cleanup) is re-listed within one keep-alive interval.
-	return c.touchPresenceIndex(ctx, userID)
+	return nil
 }
 
 // IsPresenceOnline reports whether any process has an active websocket
@@ -259,6 +266,35 @@ func (c *RedisCache) IsPresenceOnline(ctx context.Context, userID string) (bool,
 		return false, fmt.Errorf("presence get %q: %w", userID, err)
 	}
 	return count > 0, nil
+}
+
+// ArePresenceOnline reports online status for many users in ONE MGET round
+// trip — the notification fan-out needs the whole recipient set at once, and
+// a GET per recipient made every message cost O(members) Redis calls. Missing
+// or unparsable markers read as offline (same as IsPresenceOnline's nil arm).
+func (c *RedisCache) ArePresenceOnline(ctx context.Context, userIDs []string) (map[string]bool, error) {
+	out := make(map[string]bool, len(userIDs))
+	if len(userIDs) == 0 {
+		return out, nil
+	}
+	keys := make([]string, len(userIDs))
+	for i, id := range userIDs {
+		keys[i] = presenceKeyPrefix + id
+	}
+	vals, err := c.client.MGet(ctx, keys...).Result()
+	if err != nil {
+		return nil, fmt.Errorf("presence mget: %w", err)
+	}
+	for i, v := range vals {
+		s, ok := v.(string)
+		if !ok {
+			out[userIDs[i]] = false
+			continue
+		}
+		n, err := strconv.Atoi(s)
+		out[userIDs[i]] = err == nil && n > 0
+	}
+	return out, nil
 }
 
 // MarkNotificationAcked records that the user's client confirmed receipt of the
@@ -388,11 +424,11 @@ func (c *RedisCache) SetUser(ctx context.Context, user *model.User) error {
 // key's TTL.
 func (c *RedisCache) IncrementEmojiFrequency(ctx context.Context, userID, shortcode string) error {
 	key := emojiFreqKeyPrefix + userID
-	if err := c.client.ZIncrBy(ctx, key, 1, shortcode).Err(); err != nil {
+	pipe := c.client.Pipeline()
+	pipe.ZIncrBy(ctx, key, 1, shortcode)
+	pipe.Expire(ctx, key, emojiFreqTTL)
+	if _, err := pipe.Exec(ctx); err != nil {
 		return fmt.Errorf("emoji freq increment %q: %w", userID, err)
-	}
-	if err := c.client.Expire(ctx, key, emojiFreqTTL).Err(); err != nil {
-		return fmt.Errorf("emoji freq expire %q: %w", userID, err)
 	}
 	return nil
 }

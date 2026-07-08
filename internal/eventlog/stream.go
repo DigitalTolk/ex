@@ -52,6 +52,11 @@ func streamKey(userID string) string {
 // stream is a simple log of opaque bytes.
 const payloadField = "e"
 
+// idField carries the event's ULID alongside the payload so replay reads the
+// cursor without unmarshaling the whole envelope. Entries older than this
+// field fall back to the envelope JSON.
+const idField = "i"
+
 // Stream wraps a Redis client for per-user inbox operations.
 type Stream struct {
 	client *redis.Client
@@ -92,6 +97,9 @@ func (s *Stream) Append(ctx context.Context, userID string, eventID string, payl
 		ID: "*",
 		Values: map[string]any{
 			payloadField: payload,
+			// The cursor ULID rides as its own field so replay can read it
+			// without JSON-scanning the (potentially large) envelope.
+			idField: eventID,
 		},
 	})
 	pipe.Expire(ctx, streamKey(userID), streamTTL)
@@ -125,7 +133,7 @@ func (s *Stream) AppendMany(ctx context.Context, userIDs []string, eventID strin
 			MaxLen: s.maxLen,
 			Approx: true,
 			ID:     "*",
-			Values: map[string]any{payloadField: payload},
+			Values: map[string]any{payloadField: payload, idField: eventID},
 		})
 		// Refresh the idle TTL on every recipient's stream too, so a user who
 		// only ever receives (never authors) still keeps a live buffer.
@@ -166,24 +174,39 @@ func (s *Stream) BackfillTTL(ctx context.Context, apply bool) (BackfillResult, e
 		if err != nil {
 			return res, fmt.Errorf("eventlog: backfill scan: %w", err)
 		}
-		for _, key := range keys {
-			res.Scanned++
-			ttl, err := s.client.TTL(ctx, key).Result()
-			if err != nil {
-				return res, fmt.Errorf("eventlog: backfill ttl %q: %w", key, err)
+		if len(keys) > 0 {
+			// One pipelined TTL sweep per SCAN batch instead of a round trip
+			// per key, then one pipelined EXPIRE batch for the fixes.
+			ttlPipe := s.client.Pipeline()
+			ttlCmds := make([]*redis.DurationCmd, len(keys))
+			for i, key := range keys {
+				ttlCmds[i] = ttlPipe.TTL(ctx, key)
 			}
-			// -1 = key exists with no expiry; -2 = key gone (raced); >0 = set.
-			if ttl != -1*time.Nanosecond {
-				continue
+			if _, err := ttlPipe.Exec(ctx); err != nil {
+				return res, fmt.Errorf("eventlog: backfill ttl: %w", err)
 			}
-			res.Missing++
-			if !apply {
-				continue
+			var fix []string
+			for i := range keys {
+				res.Scanned++
+				// -1 = key exists with no expiry; -2 = gone (raced); >0 = set.
+				if ttlCmds[i].Val() != -1*time.Nanosecond {
+					continue
+				}
+				res.Missing++
+				if apply {
+					fix = append(fix, keys[i])
+				}
 			}
-			if err := s.client.Expire(ctx, key, streamTTL).Err(); err != nil {
-				return res, fmt.Errorf("eventlog: backfill expire %q: %w", key, err)
+			if len(fix) > 0 {
+				expPipe := s.client.Pipeline()
+				for _, key := range fix {
+					expPipe.Expire(ctx, key, streamTTL)
+				}
+				if _, err := expPipe.Exec(ctx); err != nil {
+					return res, fmt.Errorf("eventlog: backfill expire: %w", err)
+				}
+				res.Updated += len(fix)
 			}
-			res.Updated++
 		}
 		cursor = next
 		if cursor == 0 {
@@ -262,13 +285,14 @@ func (s *Stream) Replay(ctx context.Context, userID string, since string) (Repla
 }
 
 // parseStreamEntry turns one XREVRANGE entry's values map into an Entry.
-// Each stream entry stores the full event envelope under payloadField; the
-// embedded ULID is pulled out so Replay can compare against its cursor
-// without trusting the (Redis-assigned) stream entry ID. Returns ok=false
-// for entries Replay must skip: no payload field, a payload that is not a
-// string (the map is typed any; go-redis always delivers bulk strings, but
-// the shape alone doesn't guarantee it), malformed envelope JSON, or an
-// envelope with no ID.
+// Each stream entry stores the full event envelope under payloadField and —
+// since the perf pass — the cursor ULID as its own idField, so replay avoids
+// JSON-scanning every (potentially large) envelope per reconnect. Entries
+// appended before the idField existed fall back to extracting the embedded
+// ID from the envelope. Returns ok=false for entries Replay must skip: no
+// payload field, a payload that is not a string (the map is typed any;
+// go-redis always delivers bulk strings, but the shape alone doesn't
+// guarantee it), malformed envelope JSON, or an envelope with no ID.
 func parseStreamEntry(values map[string]any) (Entry, bool) {
 	payloadAny, ok := values[payloadField]
 	if !ok {
@@ -277,6 +301,11 @@ func parseStreamEntry(values map[string]any) (Entry, bool) {
 	payloadStr, ok := payloadAny.(string)
 	if !ok {
 		return Entry{}, false
+	}
+	if idAny, ok := values[idField]; ok {
+		if id, ok := idAny.(string); ok && id != "" {
+			return Entry{ID: id, Payload: []byte(payloadStr)}, true
+		}
 	}
 	var env struct {
 		ID string `json:"id"`

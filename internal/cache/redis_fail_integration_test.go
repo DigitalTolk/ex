@@ -77,11 +77,12 @@ func cacheFailingOn(t *testing.T, cmds ...string) *RedisCache {
 	return &RedisCache{client: client}
 }
 
-// AllowRequest's first hit of a window INCRs then EXPIREs; a failing EXPIRE
-// must surface — a window key that never expires would rate-limit the caller
-// forever, so the limiter cannot pretend that write succeeded.
+// AllowRequest runs as one atomic Lua script (INCR + first-hit PEXPIRE); a
+// failing script call must surface — the limiter cannot pretend the increment
+// happened. (The old INCR-then-EXPIRE pair could also leak a TTL-less key on
+// partial failure; the script closes that by construction.)
 func TestAllowRequest_ExpireError_RealRedis(t *testing.T) {
-	c := cacheFailingOn(t, "expire")
+	c := cacheFailingOn(t, "evalsha", "eval")
 	if _, err := c.AllowRequest(context.Background(), "expire-fail", 5, time.Minute); !errors.Is(err, errInjected) {
 		t.Fatalf("AllowRequest error = %v, want errInjected", err)
 	}

@@ -26,7 +26,8 @@ func webhookForFault(id string) *model.IncomingWebhook {
 func TestIncomingWebhookStore_Create_PutItemError(t *testing.T) {
 	db := setupDynamoDB(t)
 	ctx := context.Background()
-	s := NewIncomingWebhookStore(withFault(db, func(f *faultClient) { f.failPutItem = true }))
+	// Create commits the META row + directory entry in one transaction.
+	s := NewIncomingWebhookStore(withFault(db, func(f *faultClient) { f.failTransactWriteItems = true }))
 	err := s.Create(ctx, webhookForFault("wh-fault-create"))
 	if !errors.Is(err, errInjected) {
 		t.Fatalf("Create: want errInjected, got %v", err)
@@ -73,7 +74,8 @@ func TestIncomingWebhookStore_Update_PutItemError(t *testing.T) {
 func TestIncomingWebhookStore_Delete_DeleteItemError(t *testing.T) {
 	db := setupDynamoDB(t)
 	ctx := context.Background()
-	s := NewIncomingWebhookStore(withFault(db, func(f *faultClient) { f.failDeleteItem = true }))
+	// Delete removes the META row + directory entry in one transaction.
+	s := NewIncomingWebhookStore(withFault(db, func(f *faultClient) { f.failTransactWriteItems = true }))
 	err := s.Delete(ctx, "wh-anything")
 	if !errors.Is(err, errInjected) {
 		t.Fatalf("Delete: want errInjected, got %v", err)

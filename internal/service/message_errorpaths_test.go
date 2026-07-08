@@ -17,36 +17,19 @@ func grantChannelMember(memberships *mockMembershipStore, channelID, userID stri
 	}
 }
 
-func TestCanAccessMessageAttachment_ListError(t *testing.T) {
-	svc, messages, memberships, _, _ := setupMessageService()
-	grantChannelMember(memberships, "ch1", "u1")
-	messages.listErr = errors.New("boom")
-
-	err := svc.CanAccessMessageAttachment(context.Background(), "u1", "ch1", ParentChannel, "", "att-1")
-	if err == nil {
-		t.Fatal("expected error from ListMessages failure")
-	}
-}
-
-func TestCanAccessMessageAttachment_NoMessageID_NotReferenced(t *testing.T) {
-	svc, messages, memberships, _, _ := setupMessageService()
-	grantChannelMember(memberships, "ch1", "u1")
-	// A message exists but does not reference the attachment.
-	messages.messages["ch1#m1"] = &model.Message{ID: "m1", ParentID: "ch1", AttachmentIDs: []string{"other"}}
-
-	err := svc.CanAccessMessageAttachment(context.Background(), "u1", "ch1", ParentChannel, "", "att-1")
-	if err == nil {
-		t.Fatal("expected not-referenced error")
-	}
-}
-
-func TestCanAccessMessageAttachment_NoMessageID_Referenced(t *testing.T) {
+// Attachment access is always anchored to a message. The old un-anchored
+// fallback (scan up to 1000 parent messages for a referencing one) was
+// unreachable from every caller — the service guard at attachment.go rejects
+// an empty messageID before this check runs — and was deleted; an empty
+// messageID is now a definitive denial.
+func TestCanAccessMessageAttachment_NoMessageID_Denied(t *testing.T) {
 	svc, messages, memberships, _, _ := setupMessageService()
 	grantChannelMember(memberships, "ch1", "u1")
 	messages.messages["ch1#m1"] = &model.Message{ID: "m1", ParentID: "ch1", AttachmentIDs: []string{"att-1"}}
 
-	if err := svc.CanAccessMessageAttachment(context.Background(), "u1", "ch1", ParentChannel, "", "att-1"); err != nil {
-		t.Fatalf("expected access granted, got %v", err)
+	err := svc.CanAccessMessageAttachment(context.Background(), "u1", "ch1", ParentChannel, "", "att-1")
+	if !errors.Is(err, ErrForbidden) {
+		t.Fatalf("expected ErrForbidden for message-less access, got %v", err)
 	}
 }
 
