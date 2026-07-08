@@ -10,6 +10,8 @@ import {
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
+import { hasCustomPanelWidths, resetPanelWidths } from '@/lib/panel-width';
+import { showToast } from '@/lib/toast';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { useAuth } from '@/context/AuthContext';
 import { useTheme } from '@/context/ThemeContext';
@@ -31,7 +33,7 @@ export function EditProfileDialog({ open, onOpenChange }: EditProfileDialogProps
   if (!user) return null;
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent size="lg" className="max-md:grid-rows-[auto_1fr]" finalFocus={false} mobileCloseLabel="Cancel">
+      <DialogContent size="lg" className="mobile:grid-rows-[auto_1fr]" finalFocus={false} mobileCloseLabel="Cancel">
         <DialogHeader>
           <DialogTitle>Edit profile</DialogTitle>
         </DialogHeader>
@@ -42,6 +44,16 @@ export function EditProfileDialog({ open, onOpenChange }: EditProfileDialogProps
 }
 
 function EditProfileBody({ onOpenChange }: { onOpenChange: (open: boolean) => void }) {
+  // The body remounts on every dialog open, so reading the persisted widths
+  // in the initializer is always fresh.
+  const [layoutCustomized, setLayoutCustomized] = useState(() => hasCustomPanelWidths());
+
+  function handleResetLayout() {
+    resetPanelWidths();
+    setLayoutCustomized(false);
+    showToast('Sidebar widths reset', 'success');
+  }
+
   const { user, setAuth } = useAuth();
   const { theme, setTheme } = useTheme();
   const isMobile = useIsMobile();
@@ -238,6 +250,26 @@ function EditProfileBody({ onOpenChange }: { onOpenChange: (open: boolean) => vo
             aria-label="System theme"
           >
             System
+          </Button>
+        </div>
+      </div>
+
+      <div className="space-y-2 mobile:hidden">
+        <Label>Layout</Label>
+        {/* Sidebar/panel widths are a desktop affordance (mobile panels are
+            full-width sheets), so the reset row hides on mobile. The button
+            disables once everything is at defaults so its state doubles as
+            "have I customized anything?" feedback. */}
+        <div>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={handleResetLayout}
+            disabled={!layoutCustomized}
+            data-testid="reset-panel-widths"
+          >
+            Reset sidebar widths
           </Button>
         </div>
       </div>

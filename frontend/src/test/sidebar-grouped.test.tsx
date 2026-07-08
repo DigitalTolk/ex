@@ -190,9 +190,9 @@ describe('Sidebar grouped rendering', () => {
     renderSidebar();
     const scrollArea = screen.getByTestId('sidebar-scroll-area');
     expect(scrollArea.parentElement).toHaveClass(
-      'max-md:select-none',
-      'max-md:[-webkit-touch-callout:none]',
-      'max-md:[-webkit-user-select:none]',
+      'mobile:select-none',
+      'mobile:[-webkit-touch-callout:none]',
+      'mobile:[-webkit-user-select:none]',
     );
     expect(scrollArea).toHaveClass('min-h-0', 'flex-1');
     expect(scrollArea.querySelector('[data-slot="scroll-area-scrollbar"]')).toHaveClass(
@@ -226,7 +226,7 @@ describe('Sidebar grouped rendering', () => {
     renderSidebar();
 
     const menu = screen.getByTestId('sidebar-category-menu-cat-work');
-    expect(menu).toHaveClass('opacity-0', 'group-hover/sec:opacity-100', 'max-md:opacity-100');
+    expect(menu).toHaveClass('opacity-0', 'group-hover/sec:opacity-100', 'mobile:opacity-100');
   });
 
   it('renders default Channels group with uncategorised channels', () => {

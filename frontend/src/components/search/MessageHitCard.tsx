@@ -55,13 +55,13 @@ export function MessageHitCard({ hit, onAuthorClick }: MessageHitCardProps) {
                 e.stopPropagation();
                 if (authorId) onAuthorClick(authorId);
               }}
-              className="font-semibold transition-colors hover:text-link"
+              className="min-w-0 truncate font-semibold transition-colors hover:text-link"
               title="Filter results from this person"
             >
               {name}
             </button>
           ) : (
-            <span className="font-semibold">{name}</span>
+            <span className="min-w-0 truncate font-semibold">{name}</span>
           )}
           {parent && (
             <span className="truncate text-muted-foreground">

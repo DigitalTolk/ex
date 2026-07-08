@@ -70,11 +70,11 @@ describe('SidePanel browser behaviour', () => {
     expect(aside.getAttribute('data-swipe-dismissing')).toBe('true');
   });
 
-  it('drops the left border on mobile once fully settled (md:border-l only)', async () => {
+  it('drops the left border on mobile once fully settled (not-mobile:border-l only)', async () => {
     swipeState.settled = true;
     await renderPanel();
     const aside = document.querySelector('aside[aria-label="My panel"]') as HTMLElement;
-    expect(aside.className).toContain('md:border-l');
+    expect(aside.className).toContain('not-mobile:border-l');
     expect(aside.className).not.toMatch(/(^|\s)border-l(\s|$)/);
   });
 

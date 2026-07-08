@@ -320,7 +320,7 @@ describe('MessageAttachments', () => {
       'href',
       att.downloadURL,
     );
-    expect(screen.getByTestId('image-lightbox-toolbar')).toHaveClass('top-11', 'max-md:top-0');
+    expect(screen.getByTestId('image-lightbox-toolbar')).toHaveClass('top-11', 'mobile:top-0');
     expect(screen.getByTestId('image-lightbox')).toHaveClass('pt-[calc(2.75rem+1.5rem)]');
   });
 
@@ -377,7 +377,7 @@ describe('MessageAttachments', () => {
     fireEvent.click(screen.getByLabelText('Open image pic.png'));
     const lightbox = screen.getByTestId('image-lightbox');
     expect(lightbox).toBeInTheDocument();
-    expect(lightbox).toHaveClass('max-md:pt-[calc(env(safe-area-inset-top)+4.5rem)]');
+    expect(lightbox).toHaveClass('mobile:pt-[calc(env(safe-area-inset-top)+4.5rem)]');
     expect(lightbox.textContent).toContain('Alice');
     expect(lightbox.textContent).toContain('~general');
     const image = screen.getByTestId('image-lightbox-image');

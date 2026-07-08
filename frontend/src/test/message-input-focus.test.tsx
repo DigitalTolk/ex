@@ -103,10 +103,10 @@ describe('MessageInput focusKey', () => {
     render(<MessageInput onSend={vi.fn()} focusKey="ch-1" />);
     const editor = screen.getByLabelText('Message input');
 
-    expect(editor).toHaveClass('max-md:!min-h-9', 'max-md:!max-h-9');
+    expect(editor).toHaveClass('mobile:!min-h-9', 'mobile:!max-h-9');
     fireEvent.focus(editor);
-    expect(editor).not.toHaveClass('max-md:!min-h-9');
-    expect(editor).not.toHaveClass('max-md:!max-h-9');
+    expect(editor).not.toHaveClass('mobile:!min-h-9');
+    expect(editor).not.toHaveClass('mobile:!max-h-9');
   });
 
   it('refocuses the mobile composer when the page returns to the foreground with the keyboard up', async () => {
@@ -168,10 +168,10 @@ describe('MessageInput focusKey', () => {
     const toolbar = screen.getByRole('toolbar', { name: 'Formatting' });
     const attach = screen.getByLabelText('Attach file');
 
-    expect(toolbar).not.toHaveClass('overflow-x-auto', 'max-md:touch-pan-x');
-    expect(screen.getByLabelText('Bold (Ctrl+B)')).toHaveClass('max-md:h-9', 'max-md:w-9');
+    expect(toolbar).not.toHaveClass('overflow-x-auto', 'mobile:touch-pan-x');
+    expect(screen.getByLabelText('Bold (Ctrl+B)')).toHaveClass('mobile:h-9', 'mobile:w-9');
     expect(screen.getAllByLabelText('Attach file')).toHaveLength(1);
-    expect(attach).toHaveClass('text-muted-foreground', 'hover:text-foreground', 'max-md:h-9', 'max-md:w-9', 'shrink-0');
+    expect(attach).toHaveClass('text-muted-foreground', 'hover:text-foreground', 'mobile:h-9', 'mobile:w-9', 'shrink-0');
     expect(screen.queryByLabelText('Quote')).not.toBeInTheDocument();
     expect(screen.queryByLabelText('List')).not.toBeInTheDocument();
   });

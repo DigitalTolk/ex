@@ -149,7 +149,7 @@ describe('MessageInput', () => {
 
     expect(onSend).toHaveBeenCalled();
     expect(document.activeElement).not.toBe(editor);
-    expect(editor).toHaveClass('max-md:!min-h-9', 'max-md:!max-h-9');
+    expect(editor).toHaveClass('mobile:!min-h-9', 'mobile:!max-h-9');
     setMobileMatch(false);
   });
 
@@ -182,7 +182,7 @@ describe('MessageInput', () => {
     const send = within(toolbar).getByLabelText('Send message');
     expect(toolbar).toHaveAttribute('data-toolbar-placement', 'bottom');
     expect(editor.compareDocumentPosition(toolbar) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(send).toHaveClass('h-7', 'w-7', 'rounded-md', 'max-md:h-9', 'max-md:w-9', 'max-md:rounded-full');
+    expect(send).toHaveClass('h-7', 'w-7', 'rounded-md', 'mobile:h-9', 'mobile:w-9', 'mobile:rounded-full');
     expect(send.closest('[data-message-composer]')).toBeInTheDocument();
     expect(screen.getAllByLabelText('Send message')).toHaveLength(1);
     setMobileMatch(false);
@@ -234,7 +234,7 @@ describe('MessageInput', () => {
 
     const editor = await screen.findByLabelText('Message input');
     expect(document.activeElement).not.toBe(editor);
-    expect(editor).not.toHaveClass('max-md:min-h-[1.5rem]', 'max-md:max-h-[1.5rem]');
+    expect(editor).not.toHaveClass('mobile:min-h-[1.5rem]', 'mobile:max-h-[1.5rem]');
 
     const toolbar = screen.getByRole('toolbar', { name: 'Formatting' });
     expect(toolbar).toBeInTheDocument();
@@ -251,9 +251,9 @@ describe('MessageInput', () => {
 
     const editor = await screen.findByLabelText('Message input');
     const composerShell = editor.closest('[data-composer-focused]')!;
-    expect(composerShell).toHaveClass('max-md:pb-[max(0.25rem,env(safe-area-inset-bottom))]');
-    expect(composerShell).toHaveClass('max-md:px-4');
-    expect(composerShell).not.toHaveClass('max-md:pb-[calc(0.75rem+env(safe-area-inset-bottom))]');
+    expect(composerShell).toHaveClass('mobile:pb-[max(0.25rem,env(safe-area-inset-bottom))]');
+    expect(composerShell).toHaveClass('mobile:px-4');
+    expect(composerShell).not.toHaveClass('mobile:pb-[calc(0.75rem+env(safe-area-inset-bottom))]');
 
     act(() => {
       editor.focus();
@@ -262,14 +262,14 @@ describe('MessageInput', () => {
     await waitFor(() => expect(composerShell).toHaveAttribute('data-composer-focused', 'true'));
     // Once the keyboard is up, drop the safe-area inset — env(safe-area-inset-bottom)
     // does not zero out under iOS keyboards and would leave a wasted gap.
-    expect(composerShell).toHaveClass('max-md:pb-1');
-    expect(composerShell).not.toHaveClass('max-md:pb-[max(0.25rem,env(safe-area-inset-bottom))]');
-    expect(composerShell).toHaveClass('max-md:px-2');
+    expect(composerShell).toHaveClass('mobile:pb-1');
+    expect(composerShell).not.toHaveClass('mobile:pb-[max(0.25rem,env(safe-area-inset-bottom))]');
+    expect(composerShell).toHaveClass('mobile:px-2');
 
     // Inner row gets extra top padding on mobile so the editor text
     // doesn't crowd the rounded composer corners.
     const editorRow = editor.closest('.flex.gap-2')!;
-    expect(editorRow).toHaveClass('max-md:pt-3');
+    expect(editorRow).toHaveClass('mobile:pt-3');
     setMobileMatch(false);
   });
 
@@ -308,7 +308,7 @@ describe('MessageInput', () => {
 
     expect(onSend).toHaveBeenCalledWith({ body: 'Edited text', attachmentIDs: [] });
     expect(document.activeElement).not.toBe(editor);
-    expect(editor).toHaveClass('max-md:!min-h-9', 'max-md:!max-h-9');
+    expect(editor).toHaveClass('mobile:!min-h-9', 'mobile:!max-h-9');
     setMobileMatch(false);
   });
 
@@ -332,7 +332,7 @@ describe('MessageInput', () => {
     expect(toolbar).toContainElement(screen.getByLabelText('Cancel'));
     const save = screen.getByLabelText('Save');
     expect(toolbar).toContainElement(save);
-    expect(save).toHaveClass('h-7', 'w-7', 'rounded-md', 'max-md:h-9', 'max-md:w-9', 'max-md:rounded-full');
+    expect(save).toHaveClass('h-7', 'w-7', 'rounded-md', 'mobile:h-9', 'mobile:w-9', 'mobile:rounded-full');
     expect(save).toHaveTextContent('');
     setMobileMatch(false);
   });

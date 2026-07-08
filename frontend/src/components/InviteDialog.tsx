@@ -63,7 +63,7 @@ export function InviteDialog({ open, onOpenChange }: InviteDialogProps) {
   return (
     <Dialog open={open} onOpenChange={handleClose}>
       <DialogContent
-        className="max-w-lg min-h-[300px] max-md:overflow-hidden"
+        className="max-w-lg min-h-[300px] mobile:overflow-hidden"
         finalFocus={false}
         mobileCloseLabel="Cancel"
         mobileAction={

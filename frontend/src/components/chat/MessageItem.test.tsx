@@ -521,7 +521,7 @@ describe('MessageItem', () => {
       );
       const row = screen.getByTestId('message-actions-trigger').closest('[data-message-id]')!;
 
-      expect(row).toHaveClass('max-md:touch-pan-y', 'max-md:[-webkit-touch-callout:none]');
+      expect(row).toHaveClass('mobile:touch-pan-y', 'mobile:[-webkit-touch-callout:none]');
       const contextMenu = new MouseEvent('contextmenu', { bubbles: true, cancelable: true });
       row.dispatchEvent(contextMenu);
       expect(contextMenu.defaultPrevented).toBe(true);

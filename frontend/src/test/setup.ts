@@ -155,6 +155,14 @@ if (typeof document !== 'undefined' && typeof document.elementFromPoint !== 'fun
   (document as Document & { elementFromPoint: (x: number, y: number) => Element | null }).elementFromPoint = () => null;
 }
 
+// Historical test compatibility: "mobile" used to be width-only. The device
+// split (touch vs desktop, lib/device.ts) defaults tests to a TOUCH device so
+// every width-driven mobile test keeps its meaning; compact-tier tests
+// override this to 'desktop' explicitly.
+if (typeof window !== 'undefined') {
+  window.__EX_FORCE_DEVICE__ = 'touch';
+}
+
 // jsdom doesn't ship matchMedia, but Sonner (and other libs that adapt to
 // the user's color-scheme preference) read it during render. A null-safe
 // polyfill keeps test renders from blowing up; tests that care about

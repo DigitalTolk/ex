@@ -96,14 +96,14 @@ describe('ChannelRow', () => {
     const link = screen.getByText('general').closest('a')!;
     const star = screen.getByTestId('fav-toggle-ch-1');
     const menu = screen.getByTestId('row-menu-ch-1');
-    expect(link).toHaveClass('max-md:pr-20');
+    expect(link).toHaveClass('mobile:pr-20');
     // Star stays a visible tap target on mobile.
-    expect(star).toHaveClass('max-md:h-9', 'max-md:w-9', 'max-md:opacity-100');
+    expect(star).toHaveClass('mobile:h-9', 'mobile:w-9', 'mobile:opacity-100');
     // The management kebab is NOT an always-visible tap target on mobile — it's
     // kept mounted only so Radix can anchor the menu, and opened by long-pressing
     // the row instead.
-    expect(menu).toHaveClass('max-md:pointer-events-none', 'max-md:opacity-0');
-    expect(menu).not.toHaveClass('max-md:opacity-100');
+    expect(menu).toHaveClass('mobile:pointer-events-none', 'mobile:opacity-0');
+    expect(menu).not.toHaveClass('mobile:opacity-100');
   });
 
   it('toggles favorite via the star button', () => {

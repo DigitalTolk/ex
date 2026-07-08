@@ -104,7 +104,7 @@ export function MemberList({ members, channelId, currentUserId, currentUserRole,
 
   return (
     <motion.div
-      className={`flex h-full min-h-0 w-80 flex-col bg-background md:border-l max-md:fixed max-md:inset-x-0 max-md:bottom-0 max-md:top-[var(--mobile-right-panel-top,6rem)] max-md:z-40 max-md:w-auto max-md:touch-pan-y ${settled ? '' : 'border-l'}`}
+      className={`flex h-full min-h-0 w-80 flex-col bg-background not-mobile:border-l mobile:fixed mobile:inset-x-0 mobile:bottom-0 mobile:top-[var(--mobile-right-panel-top,6rem)] mobile:z-40 mobile:w-auto mobile:touch-pan-y ${settled ? '' : 'border-l'}`}
       data-mobile-right-sidebar="true"
       data-swipe-dismissing={String(dismissing)}
       {...motionProps}
@@ -138,10 +138,10 @@ export function MemberList({ members, channelId, currentUserId, currentUserRole,
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Add a member by name or email..."
               aria-label="Add member"
-              // The Input base applies max-md:px-4, which would otherwise win
+              // The Input base applies mobile:px-4, which would otherwise win
               // over pl-8 at mobile and let the placeholder slide under the
               // UserPlus icon — restate the left padding at the same variant.
-              className="pl-8 max-md:pl-10 h-9"
+              className="pl-8 mobile:pl-10 h-9"
             />
           </div>
           {error && (
@@ -205,7 +205,7 @@ export function MemberList({ members, channelId, currentUserId, currentUserRole,
       >
         {/* Bottom inset: fixed to the screen bottom on mobile, so the last
             member row must clear the home indicator. */}
-        <div className="p-2 space-y-0.5 max-md:pb-[calc(env(safe-area-inset-bottom)+0.5rem)]">
+        <div className="p-2 space-y-0.5 mobile:pb-[calc(env(safe-area-inset-bottom)+0.5rem)]">
           {members.map((m) => {
             const entry = userMap?.[m.userID];
             const avatarURL = entry?.avatarURL;

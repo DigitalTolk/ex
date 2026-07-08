@@ -217,7 +217,7 @@ describe('ThreadPanel', () => {
       />,
     );
 
-    expect(screen.getByLabelText('Close thread').parentElement).toHaveClass('gap-1', 'max-md:gap-3');
+    expect(screen.getByLabelText('Close thread').parentElement).toHaveClass('gap-1', 'mobile:gap-3');
   });
 
   it('aligns the mobile thread panel directly under the app header without a safe-area gap', () => {
@@ -233,7 +233,7 @@ describe('ThreadPanel', () => {
     );
 
     const panel = screen.getByLabelText('Thread');
-    expect(panel).toHaveClass('max-md:top-[var(--mobile-right-panel-top,6rem)]');
+    expect(panel).toHaveClass('mobile:top-[var(--mobile-right-panel-top,6rem)]');
     expect(panel.className).not.toContain('safe-area-inset-top');
   });
 
@@ -252,7 +252,7 @@ describe('ThreadPanel', () => {
     );
 
     const panel = screen.getByLabelText('Thread');
-    expect(panel).toHaveClass('md:border-l');
+    expect(panel).toHaveClass('not-mobile:border-l');
     expect(panel.className).not.toMatch(/(^|\s)border-l(\s|$)/);
     fireEvent.click(screen.getByLabelText('Close thread'));
     expect(onClose).toHaveBeenCalledTimes(1);

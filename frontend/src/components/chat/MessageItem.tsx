@@ -155,7 +155,7 @@ function ReactionChip({
             onPointerUp={longPress.handlers.onPointerUp}
             onPointerLeave={longPress.handlers.onPointerLeave}
             onPointerCancel={longPress.handlers.onPointerCancel}
-            className={`flex items-center gap-1 rounded-full border px-1.5 py-0 text-sm hover:bg-muted max-md:px-2 max-md:py-0.5 ${
+            className={`flex items-center gap-1 rounded-full border px-1.5 py-0 text-sm hover:bg-muted mobile:px-2 mobile:py-0.5 ${
               reactedByMe ? 'border-primary bg-primary/10' : 'bg-background'
             }`}
             aria-label={ariaLabel}
@@ -592,7 +592,7 @@ function MessageItemImpl({
         {!inThread && (
           <Button
             type="button"
-            className="mb-2 h-12 w-full justify-start gap-3 text-base max-md:h-14"
+            className="mb-2 h-12 w-full justify-start gap-3 text-base mobile:h-14"
             onClick={handleMobileReply}
             aria-label="Reply in thread"
           >
@@ -617,7 +617,7 @@ function MessageItemImpl({
           trigger={
             <button
               type="button"
-              className="mb-2 flex h-12 w-full items-center gap-3 rounded-lg border px-3 text-left max-md:h-14"
+              className="mb-2 flex h-12 w-full items-center gap-3 rounded-lg border px-3 text-left mobile:h-14"
               aria-label="Add reaction"
             >
               <SmilePlus className="h-4 w-4" />
@@ -713,7 +713,7 @@ function MessageItemImpl({
       }}
       className={`relative flex items-start gap-3 rounded-md px-2 ${firstInGroup ? 'py-1.5' : 'py-0.5'} hover:bg-chat-hover ${
         message.pinned ? 'border-l-2 border-pinned pl-2' : ''
-      } ${highlighted ? 'ring-1 ring-inset ring-amber-400/50 rounded-md' : ''} max-md:select-none max-md:touch-pan-y max-md:[-webkit-touch-callout:none] max-md:[-webkit-user-select:none]`}
+      } ${highlighted ? 'ring-1 ring-inset ring-amber-400/50 rounded-md' : ''} mobile:select-none mobile:touch-pan-y mobile:[-webkit-touch-callout:none] mobile:[-webkit-user-select:none]`}
     >
       {firstInGroup ? (
         <UserHoverCard
@@ -780,8 +780,13 @@ function MessageItemImpl({
             online={authorOnline}
             currentUserId={currentUserId}
             integrationOwnerName={integrationOwnerName}
+            // min-w-0 lets the trigger shrink inside the header row so the
+            // name truncates; the default inline-flex trigger has
+            // min-width:auto and would push timestamp/badges off-screen on a
+            // long (webhook) author name.
+            triggerClassName="flex min-w-0 cursor-pointer items-center gap-1"
           >
-            <span className="cursor-pointer text-sm font-semibold">{displayAuthorName}</span>
+            <span className="min-w-0 cursor-pointer truncate text-sm font-semibold">{displayAuthorName}</span>
           </UserHoverCard>
           {message.webhookUsername && (
             <span
@@ -954,7 +959,7 @@ function MessageItemImpl({
 
       {!isEditing && !message.deleted && (
         <div
-          className="absolute right-2 -top-3 flex items-center gap-0.5 rounded-md border bg-background shadow-sm transition-opacity max-md:hidden"
+          className="absolute right-2 -top-3 flex items-center gap-0.5 rounded-md border bg-background shadow-sm transition-opacity mobile:hidden"
           style={{ opacity: toolbarVisible ? 1 : 0 }}
           data-actions-pinned={actionsMenuOpen ? 'true' : 'false'}
           data-actions-visible={toolbarVisible ? 'true' : 'false'}

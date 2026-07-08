@@ -672,7 +672,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
     // by an hr/border.
     return (
     <div
-      className="flex items-center gap-0.5 px-2 py-1"
+      className="flex items-center gap-0.5 overflow-x-auto px-2 py-1 [scrollbar-width:none]"
       role="toolbar"
       aria-label="Formatting"
       data-toolbar-placement={placement}
@@ -728,7 +728,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
         type="button"
         onClick={() => fileInputRef.current?.click()}
         disabled={isUploading}
-        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50 max-md:h-9 max-md:w-9"
+        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50 mobile:h-9 mobile:w-9"
         aria-label="Attach file"
       >
         <Paperclip className="h-3.5 w-3.5" />
@@ -740,7 +740,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
             onClick={handleSend}
             disabled={!canSend}
             size="icon"
-            className="h-7 w-7 rounded-md bg-foreground text-background hover:bg-foreground/85 dark:bg-brand dark:text-brand-foreground dark:hover:bg-brand-hover dark:disabled:bg-brand-disabled dark:disabled:text-brand-foreground max-md:h-9 max-md:w-9 max-md:rounded-full"
+            className="h-7 w-7 rounded-md bg-foreground text-background hover:bg-foreground/85 dark:bg-brand dark:text-brand-foreground dark:hover:bg-brand-hover dark:disabled:bg-brand-disabled dark:disabled:text-brand-foreground mobile:h-9 mobile:w-9 mobile:rounded-full"
             aria-label="Send message"
           >
             <Send className="h-4 w-4" />
@@ -756,7 +756,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
               onClick={onCancel}
               variant="ghost"
               size="icon"
-              className="h-7 w-7 rounded-md max-md:h-9 max-md:w-9"
+              className="h-7 w-7 rounded-md mobile:h-9 mobile:w-9"
               aria-label="Cancel"
             >
               <X className="h-4 w-4" />
@@ -766,7 +766,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
             onClick={handleSend}
             disabled={!canSend}
             size="icon"
-            className="h-7 w-7 rounded-md bg-foreground text-background hover:bg-foreground/85 dark:bg-brand dark:text-brand-foreground dark:hover:bg-brand-hover max-md:h-9 max-md:w-9 max-md:rounded-full"
+            className="h-7 w-7 rounded-md bg-foreground text-background hover:bg-foreground/85 dark:bg-brand dark:text-brand-foreground dark:hover:bg-brand-hover mobile:h-9 mobile:w-9 mobile:rounded-full"
             aria-label={submitLabel ?? 'Send message'}
           >
             <Save className="h-4 w-4" />
@@ -783,16 +783,16 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
       className={
         variant === 'inline'
           ? 'p-0'
-          : `relative bg-background p-3 max-md:pt-1.5 ${
+          : `relative bg-background p-3 mobile:pt-1.5 ${
               // env(safe-area-inset-bottom) on iOS does not reset to 0 when
               // the keyboard is up, leaving a wasted ~34px gap between the
               // composer and the keyboard. Drop the inset while focused
               // (keyboard up) and only reserve the home-indicator space
               // when the composer is idle.
               editorFocused || !bottomInset
-                ? 'max-md:pb-1'
-                : 'max-md:pb-[max(0.25rem,env(safe-area-inset-bottom))]'
-            } ${compactMobileComposer && !editorFocused ? 'max-md:px-4' : 'max-md:px-2'}`
+                ? 'mobile:pb-1'
+                : 'mobile:pb-[max(0.25rem,env(safe-area-inset-bottom))]'
+            } ${compactMobileComposer && !editorFocused ? 'mobile:px-4' : 'mobile:px-2'}`
       }
       data-composer-focused={editorFocused ? 'true' : 'false'}
     >
@@ -839,7 +839,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
             {aboveInput}
           </div>
         )}
-        <div className="rounded-2xl border md:border-2 border-border bg-typing-field max-md:overflow-hidden max-md:rounded-[1.75rem]" data-message-composer>
+        <div className="rounded-2xl border md:border-2 border-border bg-typing-field mobile:overflow-hidden mobile:rounded-[1.75rem]" data-message-composer>
         {drafts.length > 0 && (
           <div className="flex flex-wrap gap-1.5 border-b p-2" aria-label="Draft attachments">
             {drafts.map((d) => (
@@ -859,8 +859,8 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
               // padding stays at `py-0.5` (2px) so the total height
               // (36 + 4 = 40px) fits inside the iPhone-composer
               // ≤42px contract the browser test locks down.
-              ? 'items-center max-md:py-0.5 max-md:pl-4 max-md:pr-1.5'
-              : 'items-end max-md:pt-3'
+              ? 'items-center mobile:py-0.5 mobile:pl-4 mobile:pr-1.5'
+              : 'items-end mobile:pt-3'
           }`}
         >
           <MarkdownComposer
@@ -895,21 +895,21 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
                 // `leading-9` (36px) so the single line of text /
                 // placeholder vertically centers against the round
                 // send button on the right.
-                ? 'max-md:!min-h-9 max-md:!max-h-9 max-md:overflow-hidden max-md:leading-9'
+                ? 'mobile:!min-h-9 mobile:!max-h-9 mobile:overflow-hidden mobile:leading-9'
                 : ''
             }
             onFocusChange={isMobile && variant === 'composer' ? setEditorFocused : undefined}
           />
           {!isEditingMode && !showToolbarSend && (() => {
             /* istanbul ignore next -- this standalone send button only renders when showToolbarSend is false, which on mobile coincides with the compact idle composer, so compactMobileComposer is always true here; the non-compact size arm is unreachable. */
-            const sendSize = compactMobileComposer ? 'max-md:h-9 max-md:w-9' : 'max-md:h-11 max-md:w-11';
+            const sendSize = compactMobileComposer ? 'mobile:h-9 mobile:w-9' : 'mobile:h-11 mobile:w-11';
             return (
             <div className="flex shrink-0 self-end items-center gap-1">
               <Button
                 onClick={handleSend}
                 disabled={!canSend}
                 size="icon"
-                className={`h-8 w-8 rounded-md bg-foreground text-background hover:bg-foreground/85 dark:bg-brand dark:text-brand-foreground dark:hover:bg-brand-hover max-md:rounded-full ${sendSize}`}
+                className={`h-8 w-8 rounded-md bg-foreground text-background hover:bg-foreground/85 dark:bg-brand dark:text-brand-foreground dark:hover:bg-brand-hover mobile:rounded-full ${sendSize}`}
                 aria-label="Send message"
               >
                 <Send className="h-4 w-4" />
@@ -1007,7 +1007,7 @@ function ToolbarBtn({
       title={label}
       aria-label={label}
       aria-pressed={active ? 'true' : undefined}
-      className={`flex h-7 w-7 items-center justify-center rounded-md hover:bg-muted max-md:h-9 max-md:w-9 max-md:shrink-0 ${
+      className={`flex h-7 w-7 items-center justify-center rounded-md hover:bg-muted mobile:h-9 mobile:w-9 mobile:shrink-0 ${
         active ? 'bg-muted text-foreground' : 'text-muted-foreground'
       }`}
     >

@@ -69,10 +69,10 @@ describe('MemberList', () => {
     const panel = scrollArea.parentElement!;
     expect(panel).toHaveClass(
       'w-80',
-      'max-md:fixed',
-      'max-md:inset-x-0',
-      'max-md:top-[var(--mobile-right-panel-top,6rem)]',
-      'max-md:w-auto',
+      'mobile:fixed',
+      'mobile:inset-x-0',
+      'mobile:top-[var(--mobile-right-panel-top,6rem)]',
+      'mobile:w-auto',
     );
     expect(panel.className).not.toContain('safe-area-inset-top');
     expect(scrollArea).toHaveClass('min-h-0', 'flex-1');
@@ -101,7 +101,7 @@ describe('MemberList', () => {
     renderWithProviders(<MemberList members={[makeMember()]} onClose={onClose} />);
 
     const panel = screen.getByTestId('member-list-scroll-area').parentElement!;
-    expect(panel).toHaveClass('md:border-l');
+    expect(panel).toHaveClass('not-mobile:border-l');
     expect(panel.className).not.toMatch(/(^|\s)border-l(\s|$)/);
     fireEvent.click(screen.getByLabelText('Close member list'));
     expect(onClose).toHaveBeenCalledTimes(1);
@@ -218,8 +218,8 @@ describe('MemberList', () => {
       <MemberList channelId="ch-1" currentUserId="owner" currentUserRole={3} members={[makeMember()]} />,
     );
     // Restated left padding at the mobile (max-md) variant so the Input base's
-    // max-md:px-4 can't slide the placeholder under the UserPlus icon.
-    expect(screen.getByLabelText('Add member')).toHaveClass('pl-8', 'max-md:pl-10');
+    // mobile:px-4 can't slide the placeholder under the UserPlus icon.
+    expect(screen.getByLabelText('Add member')).toHaveClass('pl-8', 'mobile:pl-10');
   });
 
   it('lets a plain member invite people (add input shown) but not remove anyone', () => {

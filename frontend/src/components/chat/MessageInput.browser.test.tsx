@@ -157,7 +157,7 @@ describe('MessageInput browser behavior', () => {
     const focusedStyles = getComputedStyle(composerShell!);
     expect(Number.parseFloat(focusedStyles.paddingBottom)).toBeLessThanOrEqual(6);
 
-    // The inner editor row has an extra max-md:pt-3 so the text
+    // The inner editor row has an extra mobile:pt-3 so the text
     // doesn't hug the rounded composer's top edge.
     const editor = screen.getByLabelText('Message input').element() as HTMLElement;
     const editorRow = editor.closest('.flex.gap-2') as HTMLElement | null;

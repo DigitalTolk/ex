@@ -112,10 +112,10 @@ describe('UserHoverCard — click-to-open + DM action', () => {
     const dialog = await screen.findByRole('tooltip');
 
     expect(dialog).toHaveClass(
-      'max-md:border-b-0',
-      'max-md:pb-[calc(env(safe-area-inset-bottom)+0.75rem)]',
-      'max-md:pl-[max(0.75rem,env(safe-area-inset-left))]',
-      'max-md:pr-[max(0.75rem,env(safe-area-inset-right))]',
+      'mobile:border-b-0',
+      'mobile:pb-[calc(env(safe-area-inset-bottom)+0.75rem)]',
+      'mobile:pl-[max(0.75rem,env(safe-area-inset-left))]',
+      'mobile:pr-[max(0.75rem,env(safe-area-inset-right))]',
     );
   });
 

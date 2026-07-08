@@ -48,7 +48,7 @@ export function NotificationPreferencesDialog({
 }: NotificationPreferencesDialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent size="2xl" className="max-md:grid-rows-[auto_1fr]" finalFocus={false} mobileCloseLabel="Cancel">
+      <DialogContent size="2xl" className="mobile:grid-rows-[auto_1fr]" finalFocus={false} mobileCloseLabel="Cancel">
         <DialogHeader>
           <DialogTitle>Notification preferences</DialogTitle>
         </DialogHeader>

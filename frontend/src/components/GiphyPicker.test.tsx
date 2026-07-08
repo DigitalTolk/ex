@@ -226,7 +226,7 @@ describe('GiphyPicker', () => {
 
     const dialog = await screen.findByRole('dialog');
     expect(dialog).toHaveAttribute('data-mobile-sheet', 'true');
-    expect(dialog.className).toContain('max-md:h-[50dvh]');
+    expect(dialog.className).toContain('mobile:h-[50dvh]');
     expect(dialog).toHaveStyle({ maxHeight: '50dvh', overscrollBehaviorY: 'contain' });
   });
 

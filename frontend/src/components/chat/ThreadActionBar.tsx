@@ -66,7 +66,7 @@ export function ThreadActionBar({
           );
         })}
       </span>
-      <span className="font-semibold text-primary">
+      <span className="shrink-0 whitespace-nowrap font-semibold text-primary">
         {replyCount} {replyCount === 1 ? 'reply' : 'replies'}
       </span>
       {lastReplyAt && (

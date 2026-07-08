@@ -91,6 +91,29 @@ describe('MessageItem browser behavior', () => {
     expect(toggleReactionMutate).toHaveBeenCalledWith(expect.objectContaining({ emoji: ':tada:' }));
   });
 
+  it('truncates a marathon author name to one line at mobile width (no overflow)', async () => {
+    useAttachmentsBatchMock.mockReturnValue({ map: new Map(), isLoading: false });
+    const screen = await renderWithProviders(
+      <div data-testid="msg-frame" style={{ width: 360 }}>
+        <MessageItem
+          message={makeMessage()}
+          authorName="Extraordinarily Long Webhook Author Name That Goes On And On Forever"
+          isOwn={false}
+          channelId="channel-1"
+          currentUserId="user-2"
+        />
+      </div>,
+    );
+    const frame = screen.getByTestId('msg-frame').element() as HTMLElement;
+    // The header row (name + timestamp) must not push the message wider than
+    // its container…
+    expect(frame.scrollWidth).toBeLessThanOrEqual(frame.clientWidth);
+    // …and the name itself truncates to a single line instead of wrapping.
+    const name = frame.querySelector('span.truncate.font-semibold') as HTMLElement;
+    expect(name).not.toBeNull();
+    expect(name.getClientRects().length).toBe(1);
+  });
+
   it('keeps the mobile long-press action sheet above the bottom composer', async () => {
     if (window.innerWidth > 767) return;
 

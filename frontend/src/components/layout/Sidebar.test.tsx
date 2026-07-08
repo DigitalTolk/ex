@@ -293,7 +293,7 @@ describe('Sidebar', () => {
     const scrollArea = screen.getByTestId('sidebar-scroll-area');
     const channelRow = screen.getByTestId('channel-row-ch-1') as HTMLElement;
 
-    expect(scrollArea).toHaveClass('min-h-0', 'flex-1', 'max-md:touch-pan-y');
+    expect(scrollArea).toHaveClass('min-h-0', 'flex-1', 'mobile:touch-pan-y');
     expect(scrollArea.querySelector('[data-slot="scroll-area-viewport"]')).toHaveClass('overflow-y-auto');
     expect(channelRow).not.toHaveClass('cursor-grab');
     await waitFor(() => {
@@ -332,10 +332,10 @@ describe('Sidebar', () => {
   it('uses the same mobile row sizing across top links, section headers, channels, and DMs', () => {
     renderSidebar();
 
-    expect(screen.getByText('Directory').closest('a')).toHaveClass('max-md:h-12', 'max-md:px-3', 'max-md:text-base');
-    expect(screen.getByText('Channels').closest('[role="button"]')).toHaveClass('max-md:h-12', 'max-md:px-3', 'max-md:text-base');
-    expect(screen.getByText('general').closest('a')).toHaveClass('max-md:h-12', 'max-md:pl-3', 'max-md:text-base');
-    expect(screen.getByText('Bob Jones').closest('a')).toHaveClass('max-md:h-12', 'max-md:pl-3', 'max-md:text-base');
+    expect(screen.getByText('Directory').closest('a')).toHaveClass('mobile:h-12', 'mobile:px-3', 'mobile:text-base');
+    expect(screen.getByText('Channels').closest('[role="button"]')).toHaveClass('mobile:h-12', 'mobile:px-3', 'mobile:text-base');
+    expect(screen.getByText('general').closest('a')).toHaveClass('mobile:h-12', 'mobile:pl-3', 'mobile:text-base');
+    expect(screen.getByText('Bob Jones').closest('a')).toHaveClass('mobile:h-12', 'mobile:pl-3', 'mobile:text-base');
   });
 
   it('does not render a "Browse" header above the channel groups', () => {
@@ -1568,7 +1568,7 @@ describe('Sidebar', () => {
     // 20px slot pushed that "+" out of line with the Channels "+". hidden
     // removes it from both hit-testing and layout.
     const trigger = screen.getByTestId('sidebar-dm-sort-menu');
-    expect(trigger).toHaveClass('opacity-0', 'max-md:hidden');
+    expect(trigger).toHaveClass('opacity-0', 'mobile:hidden');
   });
 
   it('stores and applies the Direct Messages A-Z sort preference', async () => {

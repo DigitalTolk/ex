@@ -134,10 +134,10 @@ function DialogContent({
           // internally, so a tall dialog on a short window stays fully reachable
           // instead of overflowing off-screen. Mobile resets to full-screen
           // (max-h-none + inset-0) and scrolls the whole sheet.
-          "fixed top-1/2 left-1/2 z-50 grid w-full max-w-[calc(100%-2rem)] max-h-[calc(100dvh-2rem)] -translate-x-1/2 -translate-y-1/2 gap-4 overflow-y-auto rounded-xl bg-popover p-4 text-sm text-popover-foreground ring-1 ring-foreground/10 duration-100 outline-none max-md:inset-0 max-md:max-h-none max-md:max-w-none max-md:translate-x-0 max-md:translate-y-0 max-md:overflow-y-auto max-md:rounded-none max-md:p-[calc(env(safe-area-inset-top)+1rem)_1rem_calc(env(safe-area-inset-bottom)+1rem)] data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+          "fixed top-1/2 left-1/2 z-50 grid w-full max-w-[calc(100%-2rem)] max-h-[calc(100dvh-2rem)] -translate-x-1/2 -translate-y-1/2 gap-4 overflow-y-auto rounded-xl bg-popover p-4 text-sm text-popover-foreground ring-1 ring-foreground/10 duration-100 outline-none mobile:inset-0 mobile:max-h-none mobile:max-w-none mobile:translate-x-0 mobile:translate-y-0 mobile:overflow-y-auto mobile:rounded-none mobile:p-[calc(env(safe-area-inset-top)+1rem)_1rem_calc(env(safe-area-inset-bottom)+1rem)] data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
           DIALOG_SIZE[size],
-          hasMobileBar && "max-md:[&_[data-slot=dialog-header]]:pr-20",
-          mobileCloseLabel && effectiveAction && "max-md:[&_[data-slot=dialog-header]]:pr-40",
+          hasMobileBar && "mobile:[&_[data-slot=dialog-header]]:pr-20",
+          mobileCloseLabel && effectiveAction && "mobile:[&_[data-slot=dialog-header]]:pr-40",
           className
         )}
         {...props}
@@ -150,7 +150,7 @@ function DialogContent({
             {hasMobileBar && (
               <div
                 data-slot="dialog-mobile-actions"
-                className="absolute right-3 top-[calc(env(safe-area-inset-top)+0.5rem)] z-10 hidden items-center gap-1 max-md:flex"
+                className="absolute right-3 top-[calc(env(safe-area-inset-top)+0.5rem)] z-10 hidden items-center gap-1 mobile:flex"
               >
                 {mobileCloseLabel && (
                   <DialogPrimitive.Close
@@ -188,8 +188,8 @@ function DialogContent({
                   // On the mobile full-screen sheet the X must clear the notch /
                   // status bar; without the inset it sat under the system chrome.
                   className={cn(
-                    "absolute top-2 right-2 max-md:top-[calc(env(safe-area-inset-top)+0.5rem)] max-md:right-3",
-                    hasMobileBar && "max-md:hidden"
+                    "absolute top-2 right-2 mobile:top-[calc(env(safe-area-inset-top)+0.5rem)] mobile:right-3",
+                    hasMobileBar && "mobile:hidden"
                   )}
                   size="icon-sm"
                 />

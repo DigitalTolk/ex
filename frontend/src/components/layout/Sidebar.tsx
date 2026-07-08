@@ -460,8 +460,8 @@ function SidebarSectionsSkeleton() {
       {['w-20', 'w-24', 'w-32'].map((widthClass) => (
         <div key={widthClass} className="space-y-2">
           <div className={`h-4 rounded bg-white/10 ${widthClass}`} />
-          <div className="h-8 rounded-md bg-white/5 max-md:h-12" />
-          <div className="h-8 rounded-md bg-white/5 max-md:h-12" />
+          <div className="h-8 rounded-md bg-white/5 mobile:h-12" />
+          <div className="h-8 rounded-md bg-white/5 mobile:h-12" />
         </div>
       ))}
     </div>
@@ -1288,21 +1288,21 @@ export function Sidebar({ onClose }: SidebarProps) {
   }, []);
 
   return (
-    <div className="flex h-full w-full min-w-0 flex-col text-gray-300 max-md:select-none max-md:touch-pan-y max-md:[-webkit-touch-callout:none] max-md:[-webkit-user-select:none]">
+    <div className="flex h-full w-full min-w-0 flex-col text-gray-300 mobile:select-none mobile:touch-pan-y mobile:[-webkit-touch-callout:none] mobile:[-webkit-user-select:none]">
       <ScrollArea
-        className="min-h-0 w-full flex-1 max-md:touch-pan-y"
+        className="min-h-0 w-full flex-1 mobile:touch-pan-y"
         scrollbarClassName="opacity-0 transition-opacity data-[scrolling]:opacity-100"
         data-testid="sidebar-scroll-area"
       >
         {/* Bottom padding clears the home indicator on notched phones (the
             drawer is a full-height mobile surface with no bottom chrome). */}
-        <div className="w-full min-w-0 space-y-1 p-2 max-md:pb-[calc(env(safe-area-inset-bottom)+0.5rem)]">
+        <div className="w-full min-w-0 space-y-1 p-2 mobile:pb-[calc(env(safe-area-inset-bottom)+0.5rem)]">
           {/* Activity sits at the very top — reaction hints + fired reminders. */}
           <NavLink
             to="/activity"
             onClick={onClose}
             className={({ isActive }) =>
-              `relative flex items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors max-md:h-12 max-md:px-3 max-md:py-0 max-md:text-base ${
+              `relative flex items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors mobile:h-12 mobile:px-3 mobile:py-0 mobile:text-base ${
                 isActive
                   ? 'bg-background text-white font-semibold before:absolute before:inset-y-1 before:left-0 before:w-[3px] before:rounded-full before:bg-sidebar-foreground before:content-[""]'
                   : 'text-gray-300 hover:bg-white/10 hover:text-white'
@@ -1329,7 +1329,7 @@ export function Sidebar({ onClose }: SidebarProps) {
             to="/threads"
             onClick={onClose}
             className={({ isActive }) =>
-              `relative flex items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors max-md:h-12 max-md:px-3 max-md:py-0 max-md:text-base ${
+              `relative flex items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors mobile:h-12 mobile:px-3 mobile:py-0 mobile:text-base ${
                 isActive
                   ? 'bg-background text-white font-semibold before:absolute before:inset-y-1 before:left-0 before:w-[3px] before:rounded-full before:bg-sidebar-foreground before:content-[""]'
                   : 'text-gray-300 hover:bg-white/10 hover:text-white'
@@ -1353,7 +1353,7 @@ export function Sidebar({ onClose }: SidebarProps) {
             to="/directory/channels"
             onClick={onClose}
             className={() =>
-              `relative flex items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors max-md:h-12 max-md:px-3 max-md:py-0 max-md:text-base ${
+              `relative flex items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors mobile:h-12 mobile:px-3 mobile:py-0 mobile:text-base ${
                 directoryActive
                   ? 'bg-background text-white font-semibold before:absolute before:inset-y-1 before:left-0 before:w-[3px] before:rounded-full before:bg-sidebar-foreground before:content-[""]'
                   : 'text-gray-300 hover:bg-white/10 hover:text-white'
@@ -1368,7 +1368,7 @@ export function Sidebar({ onClose }: SidebarProps) {
             to="/drafts"
             onClick={onClose}
             className={({ isActive }) =>
-              `relative flex items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors max-md:h-12 max-md:px-3 max-md:py-0 max-md:text-base ${
+              `relative flex items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors mobile:h-12 mobile:px-3 mobile:py-0 mobile:text-base ${
                 isActive
                   ? 'bg-background text-white font-semibold before:absolute before:inset-y-1 before:left-0 before:w-[3px] before:rounded-full before:bg-sidebar-foreground before:content-[""]'
                   : 'text-gray-300 hover:bg-white/10 hover:text-white'
@@ -1424,7 +1424,7 @@ export function Sidebar({ onClose }: SidebarProps) {
                 }}
                 placeholder="Category name…"
                 data-testid="sidebar-new-category-input"
-                className="w-full rounded-md bg-white/10 px-2 py-1 text-sm text-white placeholder:text-gray-400 focus:outline-none focus:ring-1 focus:ring-white/40 max-md:h-12 max-md:px-3 max-md:py-0 max-md:text-base"
+                className="w-full rounded-md bg-white/10 px-2 py-1 text-sm text-white placeholder:text-gray-400 focus:outline-none focus:ring-1 focus:ring-white/40 mobile:h-12 mobile:px-3 mobile:py-0 mobile:text-base"
               />
               {categoryCreateError && (
                 <p className="mt-1 text-xs text-red-300" role="alert">
@@ -1439,7 +1439,7 @@ export function Sidebar({ onClose }: SidebarProps) {
                 setCreatingCategory(true);
               }}
               data-testid="sidebar-add-category"
-              className="mb-1 w-full rounded-md px-2 py-1 text-left text-sm text-gray-500 hover:bg-white/5 hover:text-gray-300 max-md:h-12 max-md:px-3 max-md:py-0 max-md:text-base"
+              className="mb-1 w-full rounded-md px-2 py-1 text-left text-sm text-gray-500 hover:bg-white/5 hover:text-gray-300 mobile:h-12 mobile:px-3 mobile:py-0 mobile:text-base"
             >
               + Add category
             </button>
@@ -1537,7 +1537,7 @@ export function Sidebar({ onClose }: SidebarProps) {
                       }}
                       aria-expanded={!collapsed}
                       data-testid={`sidebar-group-toggle-${section.key}`}
-                      className="flex flex-1 items-center gap-1 rounded-md px-2 py-1 text-sm font-semibold text-gray-400 hover:bg-white/5 max-md:h-12 max-md:px-3 max-md:py-0 max-md:text-base"
+                      className="flex flex-1 items-center gap-1 rounded-md px-2 py-1 text-sm font-semibold text-gray-400 hover:bg-white/5 mobile:h-12 mobile:px-3 mobile:py-0 mobile:text-base"
                     >
                       <ChevronDown
                         className={`h-3 w-3 transition-transform ${collapsed ? '-rotate-90' : ''}`}
@@ -1551,7 +1551,7 @@ export function Sidebar({ onClose }: SidebarProps) {
                         aria-label="Create channel"
                         title="Create channel"
                         data-testid="sidebar-create-channel"
-                        className="absolute right-1 top-1/2 -translate-y-1/2 h-5 w-5 flex items-center justify-center rounded text-gray-400 opacity-0 group-hover/sec:opacity-100 hover:bg-white/20 hover:text-white max-md:h-10 max-md:w-10 max-md:opacity-100"
+                        className="absolute right-1 top-1/2 -translate-y-1/2 h-5 w-5 flex items-center justify-center rounded text-gray-400 opacity-0 group-hover/sec:opacity-100 hover:bg-white/20 hover:text-white mobile:h-10 mobile:w-10 mobile:opacity-100"
                       >
                         <Plus className="h-3.5 w-3.5" />
                       </button>
@@ -1572,12 +1572,12 @@ export function Sidebar({ onClose }: SidebarProps) {
                           aria-label="New direct message"
                           title="New direct message"
                           data-testid="sidebar-new-dm"
-                          className="h-5 w-5 flex items-center justify-center rounded text-gray-400 opacity-0 group-hover/sec:opacity-100 hover:bg-white/20 hover:text-white max-md:h-10 max-md:w-10 max-md:opacity-100"
+                          className="h-5 w-5 flex items-center justify-center rounded text-gray-400 opacity-0 group-hover/sec:opacity-100 hover:bg-white/20 hover:text-white mobile:h-10 mobile:w-10 mobile:opacity-100"
                         >
                           <Plus className="h-3.5 w-3.5" />
                         </button>
                         {/* Sort menu stays desktop hover-only (hidden on mobile);
-                            the header shows only the "+" on touch. max-md:hidden
+                            the header shows only the "+" on touch. mobile:hidden
                             (not just opacity/pointer-events) so it also leaves
                             the flex layout — an invisible 20px slot here pushed
                             the "+" left, out of line with the Channels "+". */}
@@ -1585,7 +1585,7 @@ export function Sidebar({ onClose }: SidebarProps) {
                           <DropdownMenuTrigger
                             aria-label="Sort direct messages"
                             data-testid="sidebar-dm-sort-menu"
-                            className="h-5 w-5 flex items-center justify-center rounded text-gray-400 opacity-0 group-hover/sec:opacity-100 hover:bg-white/20 hover:text-white max-md:hidden"
+                            className="h-5 w-5 flex items-center justify-center rounded text-gray-400 opacity-0 group-hover/sec:opacity-100 hover:bg-white/20 hover:text-white mobile:hidden"
                           >
                             <MoreVertical className="h-3.5 w-3.5" />
                           </DropdownMenuTrigger>
@@ -1607,7 +1607,7 @@ export function Sidebar({ onClose }: SidebarProps) {
                         <DropdownMenuTrigger
                           aria-label={`Manage ${section.title} category`}
                           data-testid={`sidebar-category-menu-${section.key}`}
-                          className="absolute right-1 top-1/2 -translate-y-1/2 h-5 w-5 flex items-center justify-center rounded text-gray-400 opacity-0 group-hover/sec:opacity-100 hover:bg-white/20 hover:text-white max-md:h-10 max-md:w-10 max-md:opacity-100"
+                          className="absolute right-1 top-1/2 -translate-y-1/2 h-5 w-5 flex items-center justify-center rounded text-gray-400 opacity-0 group-hover/sec:opacity-100 hover:bg-white/20 hover:text-white mobile:h-10 mobile:w-10 mobile:opacity-100"
                         >
                           <MoreVertical className="h-3.5 w-3.5" />
                         </DropdownMenuTrigger>

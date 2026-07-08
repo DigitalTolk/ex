@@ -14,10 +14,10 @@ describe('DialogContent', () => {
 
     const content = await screen.findByRole('dialog');
     expect(content).toHaveClass(
-      'max-md:inset-0',
-      'max-md:max-h-none',
-      'max-md:rounded-none',
-      'max-md:overflow-y-auto',
+      'mobile:inset-0',
+      'mobile:max-h-none',
+      'mobile:rounded-none',
+      'mobile:overflow-y-auto',
     );
   });
 
@@ -33,8 +33,8 @@ describe('DialogContent', () => {
     const mobileClose = await screen.findByRole('button', { name: 'Cancel' });
     expect(mobileClose).toHaveAttribute('data-slot', 'dialog-mobile-close');
     expect(mobileClose).toHaveClass('after:content-[var(--mobile-close-label)]');
-    expect(screen.getByRole('dialog')).toHaveClass('max-md:[&_[data-slot=dialog-header]]:pr-20');
-    expect(screen.getByRole('button', { name: 'Close' })).toHaveClass('max-md:hidden');
+    expect(screen.getByRole('dialog')).toHaveClass('mobile:[&_[data-slot=dialog-header]]:pr-20');
+    expect(screen.getByRole('button', { name: 'Close' })).toHaveClass('mobile:hidden');
   });
 
   it('renders a top-right mobile action button from the mobileAction prop and fires it', () => {
@@ -51,7 +51,7 @@ describe('DialogContent', () => {
     expect(action).toHaveAttribute('data-slot', 'dialog-mobile-action');
     // Both controls share the top-right cluster; with both present the header
     // reserves extra right padding.
-    expect(screen.getByRole('dialog')).toHaveClass('max-md:[&_[data-slot=dialog-header]]:pr-40');
+    expect(screen.getByRole('dialog')).toHaveClass('mobile:[&_[data-slot=dialog-header]]:pr-40');
     fireEvent.click(action);
     expect(onClick).toHaveBeenCalledTimes(1);
   });

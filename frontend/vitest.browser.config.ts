@@ -56,6 +56,14 @@ export default defineConfig({
         // Pure URL-scheme guard — exhaustively unit-tested in the jsdom suite
         // (url-safety.test.ts); graded there, not here.
         'src/lib/url-safety.ts',
+        // Layout-tier + panel-width logic: pure modules exhaustively
+        // unit-tested in the jsdom suite (device.test.ts, panel-width.test.ts,
+        // usePanelWidth.test.tsx — drag, clamp, keyboard, reset arms); the
+        // browser gate proves the WIRING via compact-tier.browser.test.tsx
+        // and layout-resize.browser.test.tsx.
+        'src/lib/device.ts',
+        'src/lib/panel-width.ts',
+        'src/hooks/usePanelWidth.ts',
         // Webhook rich-attachment renderer — exhaustively unit-tested in the
         // jsdom suite (MessageRichAttachments.test.tsx). It is pulled into the
         // browser run transitively via MessageItem, but its webhook-attachment

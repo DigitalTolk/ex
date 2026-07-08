@@ -162,7 +162,7 @@ export function GiphyPicker({ apiKey, onSelect, trigger, ariaLabel = 'Giphy pick
         preferredAlign="end"
         ariaLabel={ariaLabel}
         mobileSheet
-        className="flex h-[460px] max-w-[calc(100vw-16px)] flex-col rounded-md border bg-popover p-2 shadow-md max-md:h-[50dvh] max-md:w-screen max-md:max-w-none max-md:rounded-b-none max-md:rounded-t-xl max-md:border-x-0 max-md:border-b-0 max-md:pb-[calc(env(safe-area-inset-bottom)+0.5rem)]"
+        className="flex h-[460px] max-w-[calc(100vw-16px)] flex-col rounded-md border bg-popover p-2 shadow-md mobile:h-[50dvh] mobile:w-screen mobile:max-w-none mobile:rounded-b-none mobile:rounded-t-xl mobile:border-x-0 mobile:border-b-0 mobile:pb-[calc(env(safe-area-inset-bottom)+0.5rem)]"
       >
         <Input
           ref={inputRef}
@@ -171,7 +171,7 @@ export function GiphyPicker({ apiKey, onSelect, trigger, ariaLabel = 'Giphy pick
           placeholder="Search GIFs..."
           aria-label="Search GIFs"
           // No text-sm override — keep 16px on mobile (iOS zoom-on-focus).
-          className="mb-2 h-9 max-md:h-11 shrink-0"
+          className="mb-2 h-9 mobile:h-11 shrink-0"
           data-testid="giphy-search"
         />
         <div

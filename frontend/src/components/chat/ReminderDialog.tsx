@@ -72,7 +72,7 @@ export function ReminderDialog({ open, onOpenChange, initialValue, onConfirm }: 
             type="datetime-local"
             aria-label="Reminder time"
             data-testid="reminder-datetime"
-            className="w-full rounded-md border border-border bg-background px-3 py-2 text-base md:text-sm max-md:h-11"
+            className="w-full rounded-md border border-border bg-background px-3 py-2 text-base md:text-sm mobile:h-11"
             value={value}
             onChange={(e) => {
               setValue(e.target.value);

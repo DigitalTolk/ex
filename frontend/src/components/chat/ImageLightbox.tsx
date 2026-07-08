@@ -342,11 +342,11 @@ export function ImageLightbox({
       aria-modal="true"
       aria-label={`Attachment preview: ${current.filename}`}
       data-testid="image-lightbox"
-      className="fixed inset-0 isolate z-[100] flex items-center justify-center bg-black/80 p-6 pt-[calc(2.75rem+1.5rem)] max-md:px-3 max-md:pb-[calc(env(safe-area-inset-bottom)+0.75rem)] max-md:pt-[calc(env(safe-area-inset-top)+4.5rem)]"
+      className="fixed inset-0 isolate z-[100] flex items-center justify-center bg-black/80 p-6 pt-[calc(2.75rem+1.5rem)] mobile:px-3 mobile:pb-[calc(env(safe-area-inset-bottom)+0.75rem)] mobile:pt-[calc(env(safe-area-inset-top)+4.5rem)]"
       onClick={handleClose}
     >
       <div
-        className="fixed inset-x-0 top-11 flex items-center gap-3 bg-gradient-to-b from-black/70 to-transparent px-4 pb-3 pt-3 text-white max-md:top-0 max-md:pt-[calc(env(safe-area-inset-top)+0.75rem)]"
+        className="fixed inset-x-0 top-11 flex items-center gap-3 bg-gradient-to-b from-black/70 to-transparent px-4 pb-3 pt-3 text-white mobile:top-0 mobile:pt-[calc(env(safe-area-inset-top)+0.75rem)]"
         style={{ zIndex: 130 }}
         data-testid="image-lightbox-toolbar"
         onClick={(e) => e.stopPropagation()}

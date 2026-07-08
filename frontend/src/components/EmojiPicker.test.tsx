@@ -216,7 +216,7 @@ describe('EmojiPicker', () => {
     const dialog = screen.getByRole('dialog');
     expect(dialog.className).toContain('w-[336px]');
     expect(dialog.className).toContain('h-[460px]');
-    expect(dialog.className).toContain('max-md:h-[50dvh]');
+    expect(dialog.className).toContain('mobile:h-[50dvh]');
 
     const tabs = screen.getAllByTestId('emoji-category-tab');
     expect(tabs).toHaveLength(10);
@@ -239,9 +239,9 @@ describe('EmojiPicker', () => {
     const list = screen.getByRole('list', { name: /standard emojis/i });
     const tile = screen.getAllByTestId('emoji-picker-tile')[0];
 
-    expect(list.className).toContain('max-md:grid-cols-[repeat(7,2.75rem)]');
-    expect(tile.className).toContain('max-md:h-11');
-    expect(tile.className).toContain('max-md:w-11');
+    expect(list.className).toContain('mobile:grid-cols-[repeat(7,2.75rem)]');
+    expect(tile.className).toContain('mobile:h-11');
+    expect(tile.className).toContain('mobile:w-11');
     Object.defineProperty(window, 'matchMedia', { configurable: true, value: originalMatchMedia });
   });
 
@@ -254,7 +254,7 @@ describe('EmojiPicker', () => {
 
     const dialog = screen.getByRole('dialog');
     expect(dialog).toHaveAttribute('data-mobile-sheet', 'true');
-    expect(dialog.className).toContain('max-md:h-[50dvh]');
+    expect(dialog.className).toContain('mobile:h-[50dvh]');
     expect(dialog).toHaveStyle({ maxHeight: '50dvh', overscrollBehaviorY: 'contain' });
     Object.defineProperty(window, 'matchMedia', { configurable: true, value: originalMatchMedia });
   });

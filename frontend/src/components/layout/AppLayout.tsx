@@ -2,6 +2,10 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, 
 import { useLocation } from 'react-router-dom';
 import { motion, type PanInfo } from 'motion/react';
 import { Sidebar } from './Sidebar';
+import { PanelResizeHandle } from './PanelResizeHandle';
+import { usePanelWidth } from '@/hooks/usePanelWidth';
+import { useLayoutTier } from '@/hooks/useLayoutTier';
+import { SIDEBAR_WIDTH } from '@/lib/panel-width';
 import { AppTopBar } from './AppTopBar';
 import { TagSearchProvider } from '@/context/TagSearchContext';
 import { useIsMobile } from '@/hooks/useIsMobile';
@@ -192,6 +196,35 @@ export function AppLayout({ children }: AppLayoutProps) {
     return channelDragOffset !== 0 ? { transform, transition: 'none' } : { transform };
   }, [channelDragOffset, isMobile, mobileChannelsOpen]);
 
+  // Compact tier (narrow desktop window / tablet band): the persistent
+  // sidebar doesn't fit, so the top-bar toggle opens a desktop-styled overlay
+  // sidebar instead of the mobile drawer — no gestures, no sheets, Escape and
+  // backdrop-click dismiss it. Before this tier existed the 768-1023 band
+  // rendered a hamburger that opened NOTHING (the drawer was isMobile-gated)
+  // and <768 desktop windows fell into the touch UI.
+  const tier = useLayoutTier();
+  // Derived visibility: the overlay only ever EXISTS on the compact tier, so
+  // growing to full (or shrinking to mobile) closes it by derivation — no
+  // tier-watching effect needed.
+  const [compactSidebarToggled, setCompactSidebarToggled] = useState(false);
+  const compactSidebarOpen = compactSidebarToggled && tier === 'compact';
+  useEffect(() => {
+    if (!compactSidebarOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setCompactSidebarToggled(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [compactSidebarOpen]);
+
+  // Resizable persistent sidebar (desktop): dragged width persists across
+  // sessions; profile settings offers the reset.
+  const { width: sidebarWidth, handleProps: sidebarHandleProps } = usePanelWidth(
+    SIDEBAR_WIDTH,
+    'right',
+    'Resize channel sidebar',
+  );
+
   return (
     <TagSearchProvider>
       <div className="flex h-full flex-col overflow-hidden bg-sidebar">
@@ -202,7 +235,10 @@ export function AppLayout({ children }: AppLayoutProps) {
           ref={appHeaderRef}
           onWheel={forwardHeaderWheel}
         >
-          <AppTopBar onOpenChannels={openChannelsWithAnimation} channelsButtonHidden={isHome || mobileChannelsOpen} />
+          <AppTopBar
+            onOpenChannels={tier === 'compact' ? () => setCompactSidebarToggled((v) => !v) : openChannelsWithAnimation}
+            channelsButtonHidden={tier === 'compact' ? false : isHome || mobileChannelsOpen}
+          />
         </div>
         <div
           className="relative z-20 shrink-0 bg-sidebar"
@@ -215,12 +251,35 @@ export function AppLayout({ children }: AppLayoutProps) {
 
         <div className="relative flex min-h-0 flex-1 overflow-hidden bg-background">
           <aside
-            className="hidden w-72 shrink-0 bg-sidebar text-sidebar-foreground lg:block"
+            className="relative hidden shrink-0 bg-sidebar text-sidebar-foreground lg:block"
+            style={{ width: sidebarWidth }}
             data-app-chrome="true"
             data-keyboard-surface="sidebar"
+            data-testid="app-sidebar"
           >
             <Sidebar onClose={() => undefined} />
+            <PanelResizeHandle edge="right" testID="sidebar-resize-handle" {...sidebarHandleProps} />
           </aside>
+          {tier === 'compact' && compactSidebarOpen && (
+            <>
+              {/* Desktop-styled overlay: click-away backdrop + a bordered
+                  panel. Deliberately NOT the mobile drawer — no swipe, no
+                  inert page underneath, desktop row chrome. */}
+              <div
+                className="absolute inset-0 z-30 bg-black/30"
+                data-testid="compact-sidebar-backdrop"
+                onClick={() => setCompactSidebarToggled(false)}
+              />
+              <aside
+                className="absolute inset-y-0 left-0 z-40 w-72 border-r border-border bg-sidebar text-sidebar-foreground shadow-xl"
+                data-testid="compact-sidebar"
+                data-app-chrome="true"
+                data-keyboard-surface="sidebar"
+              >
+                <Sidebar onClose={() => setCompactSidebarToggled(false)} />
+              </aside>
+            </>
+          )}
           {isMobile && (
             <aside
               className="absolute inset-0 z-0 bg-sidebar text-sidebar-foreground lg:hidden"
@@ -234,7 +293,7 @@ export function AppLayout({ children }: AppLayoutProps) {
           )}
           <motion.main
             ref={setMainNode}
-            className="flex min-h-0 flex-1 flex-col overflow-hidden bg-background max-md:relative max-md:z-10 max-md:touch-pan-y max-md:transform-gpu max-md:transition-transform max-md:duration-200 max-md:ease-out"
+            className="flex min-h-0 flex-1 flex-col overflow-hidden bg-background mobile:relative mobile:z-10 mobile:touch-pan-y mobile:transform-gpu mobile:transition-transform mobile:duration-200 mobile:ease-out"
             data-app-main="true"
             style={mainDragStyle}
             data-channel-dragging={mobileShellActive ? 'true' : 'false'}

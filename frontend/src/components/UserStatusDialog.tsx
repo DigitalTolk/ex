@@ -196,7 +196,7 @@ function UserStatusDialogContent({
 
   return (
     <DialogContent
-      className="max-w-lg max-md:grid-rows-[auto_1fr]"
+      className="max-w-lg mobile:grid-rows-[auto_1fr]"
       finalFocus={false}
       mobileCloseLabel="Cancel"
       mobileAction={isMobile ? { label: 'Save status', onClick: saveStatus, disabled: saving } : undefined}
@@ -204,7 +204,7 @@ function UserStatusDialogContent({
       <DialogHeader>
         <DialogTitle>Set status</DialogTitle>
       </DialogHeader>
-      <div className="flex min-h-0 flex-1 flex-col gap-4 max-md:pb-16 md:min-h-[340px]" data-testid="user-status-dialog-body">
+      <div className="flex min-h-0 flex-1 flex-col gap-4 mobile:pb-16 md:min-h-[340px]" data-testid="user-status-dialog-body">
         {error && (
           <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive" role="alert">
             {error}
@@ -225,7 +225,7 @@ function UserStatusDialogContent({
                 setText(selected.text);
                 setClearAfter(selected.clearAfter);
               }}
-              className="h-9 w-full appearance-none rounded-md border border-input bg-background px-3 pr-9 text-base md:text-sm max-md:h-11 max-md:px-4 max-md:pr-10"
+              className="h-9 w-full appearance-none rounded-md border border-input bg-background px-3 pr-9 text-base md:text-sm mobile:h-11 mobile:px-4 mobile:pr-10"
             >
               <option value={CUSTOM_PRESET}>Custom status</option>
               {PRESETS.map((p) => (
@@ -276,7 +276,7 @@ function UserStatusDialogContent({
                 setClearAfter(e.target.value as ClearAfter);
                 setPreset(CUSTOM_PRESET);
               }}
-              className="h-9 w-full appearance-none rounded-md border border-input bg-background px-3 pr-9 text-base md:text-sm max-md:h-11 max-md:px-4 max-md:pr-10"
+              className="h-9 w-full appearance-none rounded-md border border-input bg-background px-3 pr-9 text-base md:text-sm mobile:h-11 mobile:px-4 mobile:pr-10"
             >
               <option value="never">Don't clear</option>
               <option value="today">Today</option>
@@ -310,7 +310,7 @@ function UserStatusDialogContent({
         </div>
 
         <div className="flex justify-between gap-2 pt-2">
-          <Button type="button" variant="ghost" onClick={clearStatus} disabled={saving || !user.userStatus} className="max-md:h-11 max-md:flex-1">
+          <Button type="button" variant="ghost" onClick={clearStatus} disabled={saving || !user.userStatus} className="mobile:h-11 mobile:flex-1">
             <X className="mr-2 h-4 w-4" />
             Clear status
           </Button>

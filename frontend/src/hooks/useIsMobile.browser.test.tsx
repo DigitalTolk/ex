@@ -23,6 +23,11 @@ describe('useIsMobile legacy matchMedia API (browser)', () => {
     };
     const original = window.matchMedia;
     window.matchMedia = (() => mq) as unknown as typeof window.matchMedia;
+    // Mobile now also requires a TOUCH device; this test runs in the desktop
+    // project (device pinned 'desktop'), so pin touch for its scope — the
+    // subject here is the legacy addListener subscription, not the device split.
+    const originalDevice = window.__EX_FORCE_DEVICE__;
+    window.__EX_FORCE_DEVICE__ = 'touch';
     try {
       const screen = await render(<Probe />);
       expect(screen.getByTestId('mobile').element().getAttribute('data-v')).toBe('true');
@@ -34,6 +39,7 @@ describe('useIsMobile legacy matchMedia API (browser)', () => {
       });
     } finally {
       window.matchMedia = original;
+      window.__EX_FORCE_DEVICE__ = originalDevice;
     }
   });
 

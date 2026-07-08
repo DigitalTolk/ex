@@ -97,7 +97,7 @@ export function ChannelRow({
         }}
         draggable={false}
         className={({ isActive }) =>
-          `relative flex flex-1 min-w-0 items-center gap-2 rounded-md py-1.5 pl-2 pr-12 text-sm transition-colors max-md:h-12 max-md:py-0 max-md:pl-3 max-md:pr-20 max-md:text-base ${
+          `relative flex flex-1 min-w-0 items-center gap-2 rounded-md py-1.5 pl-2 pr-12 text-sm transition-colors mobile:h-12 mobile:py-0 mobile:pl-3 mobile:pr-20 mobile:text-base ${
             isActive
               ? 'bg-background text-white font-semibold before:absolute before:inset-y-1 before:left-0 before:w-[3px] before:rounded-full before:bg-sidebar-foreground before:content-[""]'
               : hasUnread
@@ -124,7 +124,7 @@ export function ChannelRow({
             menu — so it never overlaps the persistent star (right-10, 36px
             wide). pointer-events-none keeps the row clickable. */}
         {hasUnread || notifyCount > 0 ? (
-          <span className="pointer-events-none absolute right-2 top-1/2 flex -translate-y-1/2 items-center transition-opacity group-hover/row:opacity-0 max-md:opacity-100">
+          <span className="pointer-events-none absolute right-2 top-1/2 flex -translate-y-1/2 items-center transition-opacity group-hover/row:opacity-0 mobile:opacity-100">
             {notifyCount > 0 ? (
               <Badge variant="brand" className="text-[11px]" data-testid={`channel-unread-badge-${channel.channelID}`}>
                 {notifyCount > 99 ? '99+' : notifyCount}
@@ -139,7 +139,7 @@ export function ChannelRow({
           </span>
         ) : channel.muted ? (
           <BellOff
-            className="pointer-events-none absolute right-2 top-1/2 h-3 w-3 -translate-y-1/2 text-gray-500 transition-opacity group-hover/row:opacity-0 max-md:opacity-100"
+            className="pointer-events-none absolute right-2 top-1/2 h-3 w-3 -translate-y-1/2 text-gray-500 transition-opacity group-hover/row:opacity-0 mobile:opacity-100"
             aria-label="Muted"
           />
         ) : null}
@@ -149,8 +149,8 @@ export function ChannelRow({
         onClick={toggleFavorite}
         aria-label={isFav ? `Unfavorite ${channel.channelName}` : `Favorite ${channel.channelName}`}
         data-testid={`fav-toggle-${channel.channelID}`}
-        className={`absolute right-7 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded transition-opacity max-md:right-10 max-md:h-9 max-md:w-9 ${
-          isFav ? 'opacity-100 text-amber-300' : 'opacity-0 text-gray-400 hover:text-white group-hover/row:opacity-100 max-md:opacity-100'
+        className={`absolute right-7 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded transition-opacity mobile:right-10 mobile:h-9 mobile:w-9 ${
+          isFav ? 'opacity-100 text-amber-300' : 'opacity-0 text-gray-400 hover:text-white group-hover/row:opacity-100 mobile:opacity-100'
         }`}
       >
         <Star className="h-3.5 w-3.5" fill={isFav ? 'currentColor' : 'none'} />
@@ -162,7 +162,7 @@ export function ChannelRow({
         <DropdownMenuTrigger
           aria-label={`Manage ${channel.channelName} sidebar placement`}
           data-testid={`row-menu-${channel.channelID}`}
-          className="absolute right-1 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded text-gray-400 opacity-0 hover:bg-white/20 hover:text-white group-hover/row:opacity-100 max-md:pointer-events-none max-md:opacity-0"
+          className="absolute right-1 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded text-gray-400 opacity-0 hover:bg-white/20 hover:text-white group-hover/row:opacity-100 mobile:pointer-events-none mobile:opacity-0"
         >
           <MoreVertical className="h-3.5 w-3.5" />
         </DropdownMenuTrigger>

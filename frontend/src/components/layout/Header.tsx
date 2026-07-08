@@ -179,7 +179,7 @@ export function Header({
                 <h1 className="min-w-0 truncate text-lg font-semibold">{displayTitle}</h1>
                 <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="start" className="w-56 max-md:hidden">
+              <DropdownMenuContent align="start" className="w-56 mobile:hidden">
                 {canEdit && (
                   <DropdownMenuItem
                     onClick={editDescription}
@@ -316,7 +316,7 @@ export function Header({
               dialog pattern): the textarea autofocuses, so bottom-row buttons
               sat hidden behind the keyboard. */}
           <DialogContent
-            className="max-w-none max-md:grid-rows-[auto_1fr]"
+            className="max-w-none mobile:grid-rows-[auto_1fr]"
             data-testid="mobile-description-editor"
             mobileCloseLabel="Cancel"
             mobileAction={{ label: 'Save', onClick: saveDescription }}
@@ -385,7 +385,7 @@ export function Header({
     </header>
 
       {channel && mobileChannelMenuOpen && (
-        <div id="mobile-channel-menu" className="border-t px-2 py-2 text-base md:hidden" data-testid="mobile-channel-menu">
+        <div id="mobile-channel-menu" className="border-t px-2 py-2 text-base not-mobile:hidden" data-testid="mobile-channel-menu">
           {canEdit && (
             <button
               type="button"

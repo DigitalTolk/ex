@@ -315,7 +315,7 @@ describe('Header', () => {
 
     await user.click(screen.getByText('general').closest('button')!);
 
-    expect(screen.getByTestId('mobile-channel-menu')).toHaveClass('md:hidden');
+    expect(screen.getByTestId('mobile-channel-menu')).toHaveClass('not-mobile:hidden');
     expect(screen.getByText('general').closest('button')).toHaveAttribute('aria-controls', 'mobile-channel-menu');
   });
 
@@ -545,7 +545,7 @@ describe('Header', () => {
     );
     await user.click(screen.getByText('general').closest('button')!);
     // Scope to the inline mobile menu (the desktop dropdown also renders
-    // these labels but is CSS-hidden via max-md:hidden).
+    // these labels but is CSS-hidden via mobile:hidden).
     const menu = within(document.getElementById('mobile-channel-menu')!);
     expect(menu.getByText('Edit description')).toBeTruthy();
     // muted → 'Unmute channel' label in the mobile menu.

@@ -9,6 +9,23 @@
 @import "tw-animate-css";
 
 @custom-variant dark (&:is(.dark *));
+
+/* Layout tiers (lib/device.ts stamps these on <html>): `mobile:` styles the
+   mobile-NATIVE tier (touch device, <768px), `compact:` the squeezed desktop
+   tier (<1024px on a fine-pointer device, or 768-1023 on touch), and
+   `not-mobile:` everything that isn't mobile-native. They exist so behavioral
+   CSS and the JS hooks share ONE predicate — width-only `max-md:` remains for
+   purely space-adaptive styling that narrow desktop windows should keep. */
+@custom-variant mobile (&:where(.tier-mobile, .tier-mobile *));
+@custom-variant compact (&:where(.tier-compact, .tier-compact *));
+@custom-variant not-mobile (&:where(:not(.tier-mobile):not(.tier-mobile *)));
+
+/* macOS Electron (titleBarStyle: hiddenInset) overlays the traffic lights on
+   the web content's top-left; the top bar's left column pads past them so the
+   compact-tier sidebar toggle is never buried underneath. */
+.electron-mac [data-topbar-left='true'] {
+  padding-left: 4.5rem;
+}
 @custom-variant data-open {
   &:where([data-state="open"]),
   &:where([data-open]:not([data-open="false"])) {

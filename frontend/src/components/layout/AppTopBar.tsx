@@ -211,14 +211,14 @@ export function AppTopBar({ onOpenChannels, channelsButtonHidden }: AppTopBarPro
         // Equal 1fr side columns keep the search field centred in the
         // viewport regardless of how wide the left (channels) or right
         // (account) controls are.
-        className="grid h-12 max-md:h-14 w-full shrink-0 grid-cols-[1fr_minmax(0,36rem)_1fr] items-center gap-2 border-b border-border bg-sidebar px-2 max-md:px-3 text-sidebar-foreground [-webkit-app-region:drag] [&_button,&_a,&_input]:[-webkit-app-region:no-drag]"
+        className="grid h-12 mobile:h-14 w-full shrink-0 grid-cols-[1fr_minmax(0,36rem)_1fr] items-center gap-2 border-b border-border bg-sidebar px-2 mobile:px-3 text-sidebar-foreground [-webkit-app-region:drag] [&_button,&_a,&_input]:[-webkit-app-region:no-drag]"
         data-testid="app-shell-header"
         data-app-chrome="true"
         // The global search field lives on this sidebar-coloured strip, so the
         // mobile keyboard background must match the sidebar, not the chat.
         data-keyboard-surface="sidebar"
       >
-        <div className="flex items-center">
+        <div className="flex items-center" data-topbar-left="true">
           {/* The hamburger shows whenever the channel sidebar isn't already
               open (mobile drawer closed, or tablet md–lg which has no
               permanent sidebar). When it should be hidden — drawer open, or
@@ -246,7 +246,7 @@ export function AppTopBar({ onOpenChannels, channelsButtonHidden }: AppTopBarPro
           <SearchBar />
         </div>
 
-        <div className="flex items-center justify-end md:pr-2">
+        <div className="flex items-center justify-end not-mobile:pr-2">
           {isMobile ? (
             // Mobile: tapping the avatar opens a full-screen sheet
             // dialog rather than a cramped dropdown — easier to hit
@@ -306,7 +306,7 @@ export function AppTopBar({ onOpenChannels, channelsButtonHidden }: AppTopBarPro
           above + this sheet below means no behaviour duplication —
           both surfaces dispatch the same `menuActions` list. */}
       <Dialog open={mobileMenuOpen} onOpenChange={setMobileMenuOpen}>
-        <DialogContent className="md:hidden" mobileCloseLabel="Close" data-testid="mobile-account-sheet">
+        <DialogContent className="not-mobile:hidden" mobileCloseLabel="Close" data-testid="mobile-account-sheet">
           <DialogHeader>
             <DialogTitle>Account</DialogTitle>
           </DialogHeader>

@@ -18,3 +18,26 @@ if (typeof document !== 'undefined') {
     document.head.appendChild(meta);
   }
 }
+
+// Device pinning for the browser projects: the mobile-viewport projects are
+// "touch" devices, the desktop project is a "desktop" device — mirroring what
+// each project's tests have always meant. Compact-tier tests resize the
+// viewport within the desktop project; the tier classes track live.
+//
+// Deliberately INLINED instead of importing lib/device: a setup-time import
+// would load the real @/lib/capacitor into the module graph before test
+// files' vi.mock('@/lib/capacitor') can substitute it (this broke the
+// haptics + AppTopBar native mocks). The logic mirrors lib/device.ts
+// layoutTierFor(), which device.test.ts pins.
+window.__EX_FORCE_DEVICE__ = window.innerWidth < 768 ? 'touch' : 'desktop';
+function stampTierClasses() {
+  const touch = window.__EX_FORCE_DEVICE__ === 'touch';
+  const w = window.innerWidth;
+  const tier = w >= 1024 ? 'tier-full' : w < 768 && touch ? 'tier-mobile' : 'tier-compact';
+  const root = document.documentElement;
+  root.classList.remove('tier-mobile', 'tier-compact', 'tier-full');
+  root.classList.add(tier);
+  root.classList.toggle('device-touch', touch);
+}
+stampTierClasses();
+window.addEventListener('resize', stampTierClasses);

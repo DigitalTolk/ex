@@ -11,6 +11,9 @@ import { Bell, BellOff, ArrowRight } from 'lucide-react';
 import { useAtBottomRef } from '@/hooks/useAtBottomRef';
 import { motion } from 'motion/react';
 import { useSwipeDismiss } from '@/hooks/useSwipeDismiss';
+import { usePanelWidth } from '@/hooks/usePanelWidth';
+import { SIDE_PANEL_WIDTH } from '@/lib/panel-width';
+import { PanelResizeHandle } from '@/components/layout/PanelResizeHandle';
 import { useMobileBackClose } from '@/hooks/useMobileBackClose';
 import { useAttachmentsBatch } from '@/hooks/useAttachments';
 import { useFrequentEmojis } from '@/hooks/useEmoji';
@@ -59,6 +62,13 @@ export function ThreadPanel({
 }: ThreadPanelProps) {
   const { data, isLoading } = useThreadMessages({ channelId, conversationId, threadRootID });
   const { dismissing, settled, motionProps } = useSwipeDismiss('right', onClose);
+  // Shares the persisted "right panel" width with SidePanel; resizable from
+  // the left edge on desktop, resettable from profile settings.
+  const { width: panelWidth, handleProps: panelHandleProps } = usePanelWidth(
+    SIDE_PANEL_WIDTH,
+    'left',
+    'Resize thread panel',
+  );
   // Mounted-while-open panel: Back on mobile closes it instead of navigating.
   useMobileBackClose(true, onClose);
   const isMobile = useIsMobile();
@@ -436,15 +446,17 @@ export function ThreadPanel({
 
   return (
     <motion.aside
-      className={`flex w-[28rem] flex-col bg-background md:border-l max-md:fixed max-md:inset-x-0 max-md:bottom-0 max-md:top-[var(--mobile-right-panel-top,6rem)] max-md:z-40 max-md:w-auto max-md:touch-pan-y ${settled ? '' : 'border-l'}`}
+      className={`relative flex w-[var(--side-panel-width,28rem)] flex-col bg-background not-mobile:border-l mobile:fixed mobile:inset-x-0 mobile:bottom-0 mobile:top-[var(--mobile-right-panel-top,6rem)] mobile:z-40 mobile:w-auto mobile:touch-pan-y ${settled ? '' : 'border-l'}`}
+      style={{ '--side-panel-width': `${panelWidth}px` } as React.CSSProperties}
       aria-label="Thread"
       data-mobile-right-sidebar="true"
       data-swipe-dismissing={String(dismissing)}
       {...motionProps}
     >
+      <PanelResizeHandle edge="left" testID="thread-panel-resize-handle" {...panelHandleProps} />
       <div className="flex items-center justify-between border-b px-4 py-3">
         <h2 className="text-sm font-semibold">Thread</h2>
-        <div className="flex items-center gap-1 max-md:gap-3">
+        <div className="flex items-center gap-1 mobile:gap-3">
           {parentID && (
             <Button
               variant="ghost"
