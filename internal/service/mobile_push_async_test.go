@@ -280,33 +280,34 @@ func TestAsyncMobilePushSender_SendRacesSenderShutdownWithFullQueue(t *testing.T
 	push.Close()
 }
 
-func TestAsyncMobilePushSender_WorkerSkipsRecipientWhoCameOnline(t *testing.T) {
+// REGRESSION (2026-07-08, "zero mobile notifications despite hours idle"):
+// the worker used to re-check presence at delivery time and skip "online"
+// recipients. An idle-but-open desktop keeps its socket (and presence)
+// alive for hours, so every deferred ack-fallback push — enqueued precisely
+// BECAUSE the desktop never acked — was silently dropped. The queue's jobs
+// already carry their delivery verdict; the worker must deliver them all.
+func TestAsyncMobilePushSender_DeliversToOnlineRecipient(t *testing.T) {
 	inner := &immediateMobilePush{called: make(chan string, 2)}
 	push := NewAsyncMobilePushSender(inner, 2, 1)
 	defer push.Close()
-	push.SetPresence(&stubPresence{online: map[string]bool{"u-online": true}})
 
-	// Online recipient: the worker re-checks presence and suppresses the push.
+	// "u-online" models the idle-but-open desktop: presence would report
+	// online, the desktop did not ack, the fallback enqueued the push.
 	if err := push.Send(context.Background(), "u-online", Notification{MessageID: "m1"}); err != nil {
 		t.Fatalf("Send online: %v", err)
 	}
-	// Offline recipient: delivered. Processed after the online one (FIFO, 1 worker),
-	// so its delivery proves the online job was reached and skipped.
 	if err := push.Send(context.Background(), "u-offline", Notification{MessageID: "m2"}); err != nil {
 		t.Fatalf("Send offline: %v", err)
 	}
-	select {
-	case got := <-inner.called:
-		if got != "u-offline" {
-			t.Fatalf("delivered to %q, want only u-offline", got)
+	for _, want := range []string{"u-online", "u-offline"} {
+		select {
+		case got := <-inner.called:
+			if got != want {
+				t.Fatalf("delivered to %q, want %q (FIFO, nothing skipped)", got, want)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("push to %q was not delivered", want)
 		}
-	case <-time.After(time.Second):
-		t.Fatal("offline recipient push not delivered")
-	}
-	select {
-	case got := <-inner.called:
-		t.Fatalf("online recipient must be skipped, but got delivery to %q", got)
-	case <-time.After(50 * time.Millisecond):
 	}
 }
 
@@ -341,5 +342,42 @@ func TestNotificationService_AsyncMobilePushDoesNotBlockMessageDelivery(t *testi
 
 	if got := len(pub.published); got != 5 {
 		t.Fatalf("websocket publish count = %d, want 5", got)
+	}
+}
+
+// End-to-end regression for the "hours idle on desktop, zero mobile pushes"
+// incident: the ONLINE recipient's deferred ack-fallback must reach the
+// provider THROUGH the async worker. The service-level tests alone missed
+// this — they wired a recording sender directly, while production routed
+// through AsyncMobilePushSender, whose delivery-time presence re-check
+// swallowed every fallback push for an idle-but-open desktop.
+func TestNotificationService_DeferredFallbackReachesProviderWhileOnline(t *testing.T) {
+	orig := ackFallbackDelay
+	ackFallbackDelay = 10 * time.Millisecond
+	t.Cleanup(func() { ackFallbackDelay = orig })
+
+	svc, _, _, conv, _, users := setupNotifier(t)
+	users.users["u-author"] = &model.User{ID: "u-author", DisplayName: "Alice"}
+	conv.conversations["dm1"] = &model.Conversation{ID: "dm1", Type: model.ConversationTypeDM, ParticipantIDs: []string{"u-author", "u-idle"}}
+
+	// The recipient's desktop is OPEN and idle: presence online the whole
+	// time, and no ack ever arrives (the user-activity gate refuses).
+	svc.SetPresence(&stubPresence{online: map[string]bool{"u-idle": true}})
+	svc.SetAckStore(&stubAckStore{acked: map[string]bool{}})
+
+	inner := &immediateMobilePush{called: make(chan string, 1)}
+	async := NewAsyncMobilePushSender(inner, 4, 1)
+	defer async.Close()
+	svc.SetMobilePushSender(async)
+
+	svc.NotifyForMessage(context.Background(), &model.Message{ID: "m1", ParentID: "dm1", AuthorID: "u-author", Body: "urgent"}, ParentConversation, nil)
+
+	select {
+	case got := <-inner.called:
+		if got != "u-idle" {
+			t.Fatalf("provider delivery for %q, want u-idle", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("deferred fallback push never reached the provider — the idle-desktop alert was lost")
 	}
 }
