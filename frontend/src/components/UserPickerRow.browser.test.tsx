@@ -12,7 +12,7 @@ function render(ui: ReactElement) {
 
 // Browser-gate coverage for the shared people-row's variant arms (the
 // added/you/mousedown branches the SearchBar browser tests never reach) plus
-// a geometry check that the Added badge never wraps the row.
+// a geometry check that the added checkmark never wraps the row.
 
 let active: { unmount: () => Promise<void> } | null = null;
 afterEach(async () => {
@@ -38,12 +38,14 @@ describe('UserPickerRow (browser)', () => {
     );
     active = result;
     const row = document.querySelector('[data-testid="row"]') as HTMLButtonElement;
-    const badge = document.querySelector('[data-testid="row-added"]') as HTMLElement;
-    expect(badge.textContent).toContain('Added');
+    const check = document.querySelector('[data-testid="row-added"]') as HTMLElement;
+    // A simple checkmark (icon-only, no text badge).
+    expect(check.getAttribute('aria-label')).toBe('Already added');
+    expect(check.textContent).toBe('');
     expect(row.disabled).toBe(true);
-    // Geometry: badge inline with the name (single row), no overflow.
+    // Geometry: checkmark inline with the name (single row), no overflow.
     expect(row.scrollWidth).toBeLessThanOrEqual(row.clientWidth);
-    expect(badge.getClientRects().length).toBe(1);
+    expect(check.getClientRects().length).toBe(1);
     row.click();
     expect(onSelect).not.toHaveBeenCalled();
   });

@@ -1,7 +1,6 @@
 import { Check } from 'lucide-react';
 import { UserAvatar } from '@/components/UserAvatar';
 import { UserStatusIndicator } from '@/components/UserStatusIndicator';
-import { Badge } from '@/components/ui/badge';
 import type { UserStatus } from '@/types';
 
 export interface UserPickerRowProps {
@@ -15,7 +14,7 @@ export interface UserPickerRowProps {
   // Keyboard/hover highlight (aria-selected).
   highlighted?: boolean;
   // The person is already a member of the target (channel add-member): show
-  // the indicator and make the row inert instead of hiding them — seeing
+  // a checkmark and make the row inert instead of hiding them — seeing
   // "already added" answers the question a hidden row leaves open.
   added?: boolean;
   // Appends "(you)" after the name (new-conversation picker).
@@ -78,10 +77,14 @@ export function UserPickerRow({
         {email && <span className="truncate text-muted-foreground">{email}</span>}
       </span>
       {added && (
-        <Badge variant="outline" className="shrink-0 gap-1" data-testid={testID ? `${testID}-added` : undefined}>
-          <Check className="h-3 w-3" aria-hidden="true" />
-          Added
-        </Badge>
+        <span
+          className="flex h-6 w-6 shrink-0 items-center justify-center text-online"
+          aria-label="Already added"
+          title="Already added"
+          data-testid={testID ? `${testID}-added` : undefined}
+        >
+          <Check className="h-4 w-4" />
+        </span>
       )}
     </button>
   );

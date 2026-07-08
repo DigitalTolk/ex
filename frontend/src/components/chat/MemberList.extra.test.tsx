@@ -104,7 +104,7 @@ describe('MemberList - invite & remove', () => {
     });
   });
 
-  it('marks an already-member row with the standard Added badge (inert)', async () => {
+  it('marks an already-member row with the added checkmark (inert)', async () => {
     mockApiFetch.mockResolvedValueOnce([
       { id: 'u-2', displayName: 'Bob', email: 'bob@x.com' },
     ]);
@@ -114,7 +114,7 @@ describe('MemberList - invite & remove', () => {
     await user.type(screen.getByLabelText('Add member'), 'bo');
     vi.advanceTimersByTime(500);
 
-    expect(await screen.findByTestId('member-add-user-u-2-added')).toHaveTextContent('Added');
+    expect(await screen.findByTestId('member-add-user-u-2-added')).toHaveAccessibleName('Already added');
     const row = screen.getByTestId('member-add-user-u-2');
     expect(row).toBeDisabled();
     fireEvent.click(row);

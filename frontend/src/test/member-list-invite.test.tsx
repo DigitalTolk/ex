@@ -104,7 +104,7 @@ describe('MemberList - inline invite', () => {
       );
     });
 
-    // The existing admin's row carries the standard Added badge.
-    expect(screen.getByTestId('member-add-user-admin-1-added')).toHaveTextContent('Added');
+    // The existing admin's row carries the added checkmark.
+    expect(screen.getByTestId('member-add-user-admin-1-added')).toHaveAccessibleName('Already added');
   });
 });

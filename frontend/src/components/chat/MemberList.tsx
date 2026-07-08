@@ -16,12 +16,17 @@ import { UserStatusIndicator } from '@/components/UserStatusIndicator';
 import { canAddMembers, canRemoveMember, roleNumber, ChannelRole } from '@/lib/roles';
 import { useSwipeDismiss } from '@/hooks/useSwipeDismiss';
 import { useMobileBackClose } from '@/hooks/useMobileBackClose';
+import { usePanelWidth } from '@/hooks/usePanelWidth';
+import { MEMBER_LIST_WIDTH } from '@/lib/panel-width';
+import { PanelResizeHandle } from '@/components/layout/PanelResizeHandle';
 import type { ChannelMembership, UserStatus } from '@/types';
 import type { UserMapEntry } from './MessageList';
 
 interface MemberListProps {
   members: ChannelMembership[];
   channelId?: string;
+  /** Slug of the channel — gates the remove affordance (#general never offers it). */
+  channelSlug?: string;
   currentUserId?: string;
   currentUserRole?: number;
   userMap?: Record<string, UserMapEntry>;
@@ -43,7 +48,7 @@ function roleBadge(role: string | number) {
   return null;
 }
 
-export function MemberList({ members, channelId, currentUserId, currentUserRole, userMap, onClose }: MemberListProps) {
+export function MemberList({ members, channelId, channelSlug, currentUserId, currentUserRole, userMap, onClose }: MemberListProps) {
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<SearchUser[]>([]);
   const [pendingId, setPendingId] = useState<string | null>(null);
@@ -76,8 +81,14 @@ export function MemberList({ members, channelId, currentUserId, currentUserRole,
 
   async function handleRemove(userId: string) {
     if (!channelId) return;
-    await apiFetch(`/api/v1/channels/${channelId}/members/${userId}`, { method: 'DELETE' });
-    queryClient.invalidateQueries({ queryKey: queryKeys.channelMembers(channelId) });
+    setError('');
+    try {
+      await apiFetch(`/api/v1/channels/${channelId}/members/${userId}`, { method: 'DELETE' });
+      queryClient.invalidateQueries({ queryKey: queryKeys.channelMembers(channelId) });
+    } catch (err) {
+      // A silently-failed removal reads as "the button does nothing" — say why.
+      setError(err instanceof Error ? err.message : 'Failed to remove member');
+    }
   }
 
   async function handleAdd(user: SearchUser) {
@@ -106,14 +117,23 @@ export function MemberList({ members, channelId, currentUserId, currentUserRole,
   // Mounted-while-open panel: Back on mobile closes it instead of navigating
   // (no-op when the caller renders it without a close handler).
   useMobileBackClose(true, onClose);
+  // Desktop rail is resizable from its left edge, like the side/thread
+  // panels; the width persists and resets from profile settings.
+  const { width: panelWidth, handleProps: panelHandleProps } = usePanelWidth(
+    MEMBER_LIST_WIDTH,
+    'left',
+    'Resize member list',
+  );
 
   return (
     <motion.div
-      className={`flex h-full min-h-0 w-80 flex-col bg-background not-mobile:border-l mobile:fixed mobile:inset-x-0 mobile:bottom-0 mobile:top-[var(--mobile-right-panel-top,6rem)] mobile:z-40 mobile:w-auto mobile:touch-pan-y ${settled ? '' : 'border-l'}`}
+      className={`relative flex h-full min-h-0 w-[var(--member-list-width,20rem)] flex-col bg-background not-mobile:border-l mobile:fixed mobile:inset-x-0 mobile:bottom-0 mobile:top-[var(--mobile-right-panel-top,6rem)] mobile:z-40 mobile:w-auto mobile:touch-pan-y ${settled ? '' : 'border-l'}`}
+      style={{ '--member-list-width': `${panelWidth}px` } as React.CSSProperties}
       data-mobile-right-sidebar="true"
       data-swipe-dismissing={String(dismissing)}
       {...motionProps}
     >
+      <PanelResizeHandle edge="left" testID="member-list-resize-handle" {...panelHandleProps} />
       <div className="px-4 py-3 border-b flex items-center justify-between gap-2">
         <div className="min-w-0">
           <h2 className="text-sm font-semibold">Members</h2>
@@ -217,8 +237,12 @@ export function MemberList({ members, channelId, currentUserId, currentUserRole,
                   <UserStatusIndicator status={entry?.userStatus} />
                 </span>
                 {roleBadge(m.role)}
-                {m.userID !== currentUserId && canRemoveMember(currentUserRole, m.role) && (
-                  <Button variant="ghost" size="icon" className="h-9 w-9 shrink-0 opacity-100 md:h-6 md:w-6 md:opacity-0 md:group-hover:opacity-100" onClick={() => handleRemove(m.userID)} aria-label={`Remove ${m.displayName}`}>
+                {/* Remove X: visible at rest (muted) on desktop, emphasized on
+                    row hover — a hover-only reveal reads as "removal is gone".
+                    Hidden entirely in #general, where the backend rejects
+                    removal (everyone must stay a member). */}
+                {m.userID !== currentUserId && canRemoveMember(currentUserRole, m.role, channelSlug) && (
+                  <Button variant="ghost" size="icon" className="h-9 w-9 shrink-0 opacity-100 md:h-6 md:w-6 md:opacity-60 md:group-hover:opacity-100" onClick={() => handleRemove(m.userID)} aria-label={`Remove ${m.displayName}`}>
                     <X className="h-3 w-3" />
                   </Button>
                 )}

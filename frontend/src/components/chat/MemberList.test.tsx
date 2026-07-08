@@ -68,7 +68,7 @@ describe('MemberList', () => {
     const scrollArea = screen.getByTestId('member-list-scroll-area');
     const panel = scrollArea.parentElement!;
     expect(panel).toHaveClass(
-      'w-80',
+      'w-[var(--member-list-width,20rem)]',
       'mobile:fixed',
       'mobile:inset-x-0',
       'mobile:top-[var(--mobile-right-panel-top,6rem)]',
@@ -195,7 +195,7 @@ describe('MemberList', () => {
     expect(initials.closest('.relative')).not.toContainElement(status);
   });
 
-  it('keeps member remove controls available on touch devices', () => {
+  it('keeps member remove controls visible on every tier (muted, not hidden, on desktop)', () => {
     renderWithProviders(
       <MemberList
         channelId="ch-1"
@@ -205,12 +205,29 @@ describe('MemberList', () => {
       />,
     );
 
-    expect(screen.getByLabelText('Remove Alice Johnson')).toHaveClass(
-      'h-9',
-      'w-9',
-      'opacity-100',
-      'md:opacity-0',
+    // Visible at rest everywhere: full-strength on touch, muted (NOT
+    // opacity-0) on desktop until the row is hovered — a hover-only reveal
+    // reads as "removal is gone".
+    const removeBtn = screen.getByLabelText('Remove Alice Johnson');
+    expect(removeBtn).toHaveClass('h-9', 'w-9', 'opacity-100', 'md:opacity-60', 'md:group-hover:opacity-100');
+    expect(removeBtn.className).not.toContain('md:opacity-0');
+  });
+
+  it('never offers remove in ~general — the backend rejects removal there', () => {
+    renderWithProviders(
+      <MemberList
+        channelId="ch-general"
+        channelSlug="general"
+        currentUserId="owner"
+        currentUserRole={3}
+        members={[makeMember({ userID: 'u1', role: 'member', displayName: 'Alice Johnson' })]}
+      />,
     );
+
+    // Even the owner gets no X: a button that can only fail is worse than
+    // no button.
+    expect(screen.getByText('Alice Johnson')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Remove Alice Johnson')).toBeNull();
   });
 
   it('keeps the add-member input clear of the leading icon on mobile', () => {

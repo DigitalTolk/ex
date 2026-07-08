@@ -28,6 +28,15 @@ export const SIDE_PANEL_WIDTH: PanelWidthConfig = {
   max: 600,
 };
 
+// The channel members rail is narrower than the content panels: rows are a
+// single avatar+name line, so it tolerates a smaller minimum.
+export const MEMBER_LIST_WIDTH: PanelWidthConfig = {
+  key: 'ex.layout.memberListWidth',
+  defaultWidth: 320, // Tailwind w-80 — the historical fixed width
+  min: 256,
+  max: 480,
+};
+
 // Fired on window whenever the widths are reset (profile settings button),
 // so live panels snap back without a reload.
 export const PANEL_WIDTHS_RESET_EVENT = 'ex:panel-widths-reset';
@@ -63,6 +72,7 @@ export function resetPanelWidths(): void {
   try {
     window.localStorage.removeItem(SIDEBAR_WIDTH.key);
     window.localStorage.removeItem(SIDE_PANEL_WIDTH.key);
+    window.localStorage.removeItem(MEMBER_LIST_WIDTH.key);
   } catch {
     // Nothing stored anywhere reachable — the event alone resets live state.
   }
@@ -73,6 +83,7 @@ export function resetPanelWidths(): void {
 export function hasCustomPanelWidths(): boolean {
   return (
     loadPanelWidth(SIDEBAR_WIDTH) !== SIDEBAR_WIDTH.defaultWidth ||
-    loadPanelWidth(SIDE_PANEL_WIDTH) !== SIDE_PANEL_WIDTH.defaultWidth
+    loadPanelWidth(SIDE_PANEL_WIDTH) !== SIDE_PANEL_WIDTH.defaultWidth ||
+    loadPanelWidth(MEMBER_LIST_WIDTH) !== MEMBER_LIST_WIDTH.defaultWidth
   );
 }

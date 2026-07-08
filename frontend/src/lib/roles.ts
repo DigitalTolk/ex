@@ -87,6 +87,13 @@ export function canManageMembers(role: ChannelRoleLike): boolean {
 }
 
 // Owners cannot be removed by anyone except themselves (via leave protections).
-export function canRemoveMember(actorRole: ChannelRoleLike, targetRole: ChannelRoleLike): boolean {
+// Nobody can be removed from #general — the backend rejects it (the channel
+// must contain every active user), so don't offer a button that can't work.
+export function canRemoveMember(
+  actorRole: ChannelRoleLike,
+  targetRole: ChannelRoleLike,
+  channelSlug?: string,
+): boolean {
+  if (channelSlug === GENERAL_CHANNEL_SLUG) return false;
   return canManageMembers(actorRole) && !isOwner(targetRole);
 }

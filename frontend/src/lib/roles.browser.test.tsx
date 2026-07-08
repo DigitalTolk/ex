@@ -65,6 +65,9 @@ describe('roles — capability gates', () => {
     expect(canRemoveMember('owner', 'owner')).toBe(false);
     expect(canRemoveMember('owner', 'member')).toBe(true);
     expect(canRemoveMember('member', 'member')).toBe(false);
+    // #general never offers removal — the backend rejects it.
+    expect(canRemoveMember('owner', 'member', 'general')).toBe(false);
+    expect(canRemoveMember('owner', 'member', 'random')).toBe(true);
   });
 });
 

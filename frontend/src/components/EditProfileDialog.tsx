@@ -269,7 +269,7 @@ function EditProfileBody({ onOpenChange }: { onOpenChange: (open: boolean) => vo
             disabled={!layoutCustomized}
             data-testid="reset-panel-widths"
           >
-            Reset sidebar widths
+            Reset panel widths
           </Button>
         </div>
       </div>

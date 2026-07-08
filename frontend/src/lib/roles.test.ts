@@ -72,6 +72,13 @@ describe('channel role predicates', () => {
     expect(canRemoveMember('admin', 'owner')).toBe(false);
     expect(canRemoveMember('member', 'member')).toBe(false);
   });
+
+  it('canRemoveMember: nobody can be removed from #general (backend rejects it)', () => {
+    expect(canRemoveMember('owner', 'member', 'general')).toBe(false);
+    expect(canRemoveMember('admin', 'member', 'general')).toBe(false);
+    // Any other slug leaves the role rules in charge.
+    expect(canRemoveMember('admin', 'member', 'random')).toBe(true);
+  });
 });
 
 describe('system role predicates', () => {

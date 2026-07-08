@@ -38,11 +38,13 @@ describe('UserPickerRow', () => {
     expect(onSelect).toHaveBeenCalledTimes(1);
   });
 
-  it('added rows show the indicator and are inert (the channel add-member exception)', () => {
+  it('added rows show the checkmark and are inert (the channel add-member exception)', () => {
     const onSelect = vi.fn();
     render(<UserPickerRow testID="row" displayName="Carol" added onSelect={onSelect} />);
     const row = screen.getByTestId('row');
-    expect(screen.getByTestId('row-added')).toHaveTextContent('Added');
+    // A simple checkmark, not a text badge.
+    expect(screen.getByTestId('row-added')).toHaveAccessibleName('Already added');
+    expect(screen.getByTestId('row-added')).not.toHaveTextContent('Added');
     expect(row).toBeDisabled();
     fireEvent.click(row);
     fireEvent.mouseDown(row);
@@ -63,9 +65,9 @@ describe('UserPickerRow', () => {
 });
 
 describe('UserPickerRow without a testID', () => {
-  it('renders the added badge without a derived testid', () => {
+  it('renders the added checkmark without a derived testid', () => {
     render(<UserPickerRow displayName="Eve" added onSelect={() => undefined} />);
-    expect(screen.getByText('Added')).toBeInTheDocument();
+    expect(screen.getByLabelText('Already added')).toBeInTheDocument();
     expect(screen.queryByTestId('row-added')).toBeNull();
   });
 });

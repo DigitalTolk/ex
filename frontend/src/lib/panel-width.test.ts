@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
+  MEMBER_LIST_WIDTH,
   PANEL_WIDTHS_RESET_EVENT,
   SIDEBAR_WIDTH,
   SIDE_PANEL_WIDTH,
@@ -33,6 +34,8 @@ describe('panel-width', () => {
     expect(loadPanelWidth(SIDEBAR_WIDTH)).toBe(SIDEBAR_WIDTH.max);
     savePanelWidth(SIDE_PANEL_WIDTH, 500);
     expect(loadPanelWidth(SIDE_PANEL_WIDTH)).toBe(500);
+    savePanelWidth(MEMBER_LIST_WIDTH, 400);
+    expect(loadPanelWidth(MEMBER_LIST_WIDTH)).toBe(400);
   });
 
   it('load clamps a stale out-of-bounds stored value', () => {
@@ -40,15 +43,17 @@ describe('panel-width', () => {
     expect(loadPanelWidth(SIDEBAR_WIDTH)).toBe(SIDEBAR_WIDTH.min);
   });
 
-  it('reset clears both keys and broadcasts the reset event', () => {
+  it('reset clears every key and broadcasts the reset event', () => {
     savePanelWidth(SIDEBAR_WIDTH, 350);
     savePanelWidth(SIDE_PANEL_WIDTH, 500);
+    savePanelWidth(MEMBER_LIST_WIDTH, 400);
     const heard = vi.fn();
     window.addEventListener(PANEL_WIDTHS_RESET_EVENT, heard);
     resetPanelWidths();
     window.removeEventListener(PANEL_WIDTHS_RESET_EVENT, heard);
     expect(localStorage.getItem(SIDEBAR_WIDTH.key)).toBeNull();
     expect(localStorage.getItem(SIDE_PANEL_WIDTH.key)).toBeNull();
+    expect(localStorage.getItem(MEMBER_LIST_WIDTH.key)).toBeNull();
     expect(heard).toHaveBeenCalledTimes(1);
   });
 
@@ -59,6 +64,9 @@ describe('panel-width', () => {
     resetPanelWidths();
     expect(hasCustomPanelWidths()).toBe(false);
     savePanelWidth(SIDE_PANEL_WIDTH, 500);
+    expect(hasCustomPanelWidths()).toBe(true);
+    resetPanelWidths();
+    savePanelWidth(MEMBER_LIST_WIDTH, 400);
     expect(hasCustomPanelWidths()).toBe(true);
   });
 

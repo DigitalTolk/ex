@@ -524,6 +524,7 @@ export function ChannelView() {
         <MemberList
           members={members}
           channelId={channel?.id}
+          channelSlug={channel?.slug}
           currentUserId={user?.id}
           currentUserRole={roleNumber(currentUserRole)}
           userMap={userMap}
