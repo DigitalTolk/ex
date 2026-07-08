@@ -8,6 +8,8 @@ import {
   bumpConversationUnread,
   clearConversationUnreadInCache,
   touchConversationActivityInCache,
+  setChannelNotifyCountInCache,
+  setConversationNotifyCountInCache,
 } from './unread-cache';
 
 function makeQC() {
@@ -102,5 +104,70 @@ describe('touchConversationActivityInCache', () => {
     const qc = makeQC();
     expect(touchConversationActivityInCache(qc, 'conv-1', '2026-07-02T10:00:00Z')).toBe(false);
     expect(qc.getQueryData(queryKeys.userConversations())).toBeUndefined();
+  });
+});
+
+describe('unread-cache: alerted-unread (notify) counts', () => {
+  it('setChannelNotifyCountInCache SETs the alerted badge and lights the indicator', () => {
+    const qc = makeQC();
+    qc.setQueryData<UserChannel[]>(queryKeys.userChannels(), [
+      { channelID: 'ch-1', channelName: 'general', channelType: 'public', role: 1 },
+      { channelID: 'ch-2', channelName: 'other', channelType: 'public', role: 1 },
+    ]);
+
+    // The value is SET (authoritative from the server), never incremented —
+    // replaying the same event is idempotent.
+    setChannelNotifyCountInCache(qc, 'ch-1', 3);
+    setChannelNotifyCountInCache(qc, 'ch-1', 3);
+    const data = qc.getQueryData<UserChannel[]>(queryKeys.userChannels())!;
+    expect(data.find((c) => c.channelID === 'ch-1')).toMatchObject({
+      unread: true,
+      unreadCount: 1, // the alert implies at least one unread message
+      unreadNotifyCount: 3,
+    });
+    expect(data.find((c) => c.channelID === 'ch-2')?.unreadNotifyCount).toBeUndefined();
+  });
+
+  it('setChannelNotifyCountInCache never lowers an already-known unread count', () => {
+    const qc = makeQC();
+    qc.setQueryData<UserChannel[]>(queryKeys.userChannels(), [
+      { channelID: 'ch-1', channelName: 'general', channelType: 'public', role: 1, unread: true, unreadCount: 5 },
+    ]);
+    setChannelNotifyCountInCache(qc, 'ch-1', 2);
+    expect(qc.getQueryData<UserChannel[]>(queryKeys.userChannels())![0]).toMatchObject({
+      unreadCount: 5,
+      unreadNotifyCount: 2,
+    });
+  });
+
+  it('clearChannelUnreadInCache zeroes the alerted badge with the unread state', () => {
+    const qc = makeQC();
+    qc.setQueryData<UserChannel[]>(queryKeys.userChannels(), [
+      { channelID: 'ch-1', channelName: 'general', channelType: 'public', role: 1, unread: true, unreadCount: 5, unreadNotifyCount: 2 },
+    ]);
+    clearChannelUnreadInCache(qc, 'ch-1');
+    expect(qc.getQueryData<UserChannel[]>(queryKeys.userChannels())![0]).toMatchObject({
+      unread: false,
+      unreadCount: 0,
+      unreadNotifyCount: 0,
+    });
+  });
+
+  it('setConversationNotifyCountInCache SETs the badge; clear zeroes it', () => {
+    const qc = makeQC();
+    qc.setQueryData<UserConversation[]>(queryKeys.userConversations(), [
+      { conversationID: 'conv-1', type: 'dm', displayName: 'Bob', participantIDs: ['a', 'b'] },
+    ]);
+    setConversationNotifyCountInCache(qc, 'conv-1', 4);
+    expect(qc.getQueryData<UserConversation[]>(queryKeys.userConversations())![0]).toMatchObject({
+      unread: true,
+      unreadCount: 1,
+      unreadNotifyCount: 4,
+    });
+    clearConversationUnreadInCache(qc, 'conv-1');
+    expect(qc.getQueryData<UserConversation[]>(queryKeys.userConversations())![0]).toMatchObject({
+      unread: false,
+      unreadNotifyCount: 0,
+    });
   });
 });

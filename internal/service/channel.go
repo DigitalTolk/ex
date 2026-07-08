@@ -697,6 +697,17 @@ func (s *ChannelService) ListMembers(ctx context.Context, actorID, channelID str
 	return members, nil
 }
 
+// clampNotifyCount bounds the alerted-unread badge by the plain unread count
+// at read time. The two counters are written by different detached paths
+// (seq bump vs. notifier), so a narrow race can leave a badge value with no
+// unread messages behind it — the next read must never SHOW a numeric badge
+// on a caught-up channel. The persisted value still resets on mark-read.
+func clampNotifyCount(notify *int64, unread int) {
+	if *notify > int64(unread) {
+		*notify = int64(unread)
+	}
+}
+
 // batchChannelStore is the optional batched-META-read capability of the
 // channel store (the DynamoDB impl has it). Asserted with a per-channel
 // fallback so plain test stores keep working.
@@ -765,6 +776,7 @@ func (s *ChannelService) ListUserChannels(ctx context.Context, userID string) ([
 					uc.UnreadCount = int(n)
 					uc.Unread = true
 				}
+				clampNotifyCount(&uc.UnreadNotifyCount, uc.UnreadCount)
 				out = append(out, uc)
 			}
 			return out, nil
@@ -793,6 +805,7 @@ func (s *ChannelService) ListUserChannels(ctx context.Context, userID string) ([
 				uc.UnreadCount = int(n)
 				uc.Unread = true
 			}
+			clampNotifyCount(&uc.UnreadNotifyCount, uc.UnreadCount)
 		}(i, uc)
 	}
 	wg.Wait()

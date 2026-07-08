@@ -221,6 +221,12 @@ export interface UserChannel {
   // reconnect; live message.new events layer a session delta on top.
   unread?: boolean;
   unreadCount?: number;
+  // Unread messages that actually ALERTED this user per their notification
+  // rules (mentions/keywords/"all messages"; mute suppresses, mention
+  // overrides mute). Drives the NUMERIC sidebar badge; plain unread shows
+  // only the availability dot. Server-maintained; notification.new events
+  // carry the authoritative new value.
+  unreadNotifyCount?: number;
   muted?: boolean;
   favorite?: boolean;
   categoryID?: string;
@@ -254,6 +260,9 @@ export interface UserConversation {
   // UserConversation.LastReadSeq) — same seq model as channels. The sidebar
   // layers the live session delta on top.
   unreadCount?: number;
+  // Alerted-unread badge, mirroring UserChannel.unreadNotifyCount (DM
+  // messages always alert unless muted).
+  unreadNotifyCount?: number;
   favorite?: boolean;
   categoryID?: string;
   sidebarPosition?: number;

@@ -251,19 +251,20 @@ describe('ConversationRow', () => {
     expect(screen.queryByTestId('conversation-unread-badge-c-1')).toBeNull();
   });
 
-  it('floors the badge to 1 when unread but no live count is known', () => {
-    // A DM is never muted, so any unread DM shows a NUMBER box (floored to 1),
-    // never a bare dot.
-    renderRow(sampleConv, { hasUnread: true, unreadCount: 0 });
-    expect(screen.getByTestId('conversation-unread-badge-c-1')).toHaveTextContent('1');
-    expect(screen.queryByTestId('conversation-unread-dot-c-1')).toBeNull();
+  it('shows the availability dot for unread without alerts', () => {
+    // Two-tier unread: DM messages normally alert (so DMs usually show the
+    // number), but a muted DM's quiet unread — or a not-yet-synced alerted
+    // count — reads as the availability dot, never a phantom number.
+    renderRow(sampleConv, { hasUnread: true, notifyCount: 0 });
+    expect(screen.queryByTestId('conversation-unread-badge-c-1')).toBeNull();
+    expect(screen.getByTestId('conversation-unread-dot-c-1')).toBeInTheDocument();
   });
 
-  it('shows a numeric count badge when a live count is known (capped at 99+)', () => {
-    renderRow(sampleConv, { hasUnread: true, unreadCount: 4 });
+  it('shows a numeric badge counting the alerting messages (capped at 99+)', () => {
+    renderRow(sampleConv, { hasUnread: true, notifyCount: 4 });
     expect(screen.getByTestId('conversation-unread-badge-c-1')).toHaveTextContent('4');
 
-    renderRow({ ...sampleConv, conversationID: 'c-2' }, { hasUnread: true, unreadCount: 200 });
+    renderRow({ ...sampleConv, conversationID: 'c-2' }, { hasUnread: true, notifyCount: 200 });
     expect(screen.getByTestId('conversation-unread-badge-c-2')).toHaveTextContent('99+');
   });
 

@@ -343,7 +343,44 @@ func (s *MembershipStoreImpl) SetUserChannelMute(ctx context.Context, channelID,
 // stamping the channel's current MessageSeq onto their user-side row. unread
 // then derives as Channel.MessageSeq - LastReadSeq.
 func (s *MembershipStoreImpl) SetChannelLastRead(ctx context.Context, channelID, userID string, seq int64) error {
-	return s.setUserChannelAttribute(ctx, channelID, userID, "lastReadSeq", seq)
+	// Catching up on the channel also clears the alerted-message badge — the
+	// two travel together in ONE write so the sidebar can never show a stale
+	// numeric badge on a channel the user just read.
+	upd := expression.Set(expression.Name("lastReadSeq"), expression.Value(seq)).
+		Set(expression.Name("unreadNotifyCount"), expression.Value(0))
+	return s.updateUserChannel(ctx, channelID, userID, upd, "lastReadSeq")
+}
+
+// IncrementNotifyCount bumps the user's alerted-unread badge for the channel
+// by one and returns the new value — the notifier calls this once per
+// recipient it actually alerted, and the returned count rides the
+// notification event so clients patch to the authoritative number instead of
+// counting on their own.
+func (s *MembershipStoreImpl) IncrementNotifyCount(ctx context.Context, channelID, userID string) (int64, error) {
+	upd := expression.Add(expression.Name("unreadNotifyCount"), expression.Value(1))
+	expr := mustExpr(expression.NewBuilder().WithUpdate(upd).Build())
+	out, err := s.Client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName:                 aws.String(s.Table),
+		Key:                       compositeKey(userPK(userID), chanSK(channelID)),
+		UpdateExpression:          expr.Update(),
+		ExpressionAttributeNames:  expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
+		ConditionExpression:       aws.String("attribute_exists(PK)"),
+		ReturnValues:              types.ReturnValueUpdatedNew,
+	})
+	if err != nil {
+		if isConditionCheckFailed(err) {
+			return 0, ErrNotFound
+		}
+		return 0, fmt.Errorf("store: increment notify count: %w", err)
+	}
+	var row struct {
+		UnreadNotifyCount int64 `dynamodbav:"unreadNotifyCount"`
+	}
+	if err := attributevalue.UnmarshalMap(out.Attributes, &row); err != nil {
+		return 0, fmt.Errorf("store: unmarshal notify count: %w", err)
+	}
+	return row.UnreadNotifyCount, nil
 }
 
 // SetUserChannelFavorite flips the favorite flag on the user-side

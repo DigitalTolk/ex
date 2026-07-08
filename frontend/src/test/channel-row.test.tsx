@@ -229,32 +229,41 @@ describe('ChannelRow', () => {
     expect(screen.queryByTestId('channel-unread-badge-ch-1')).toBeNull();
   });
 
-  it('floors the badge to 1 when unread but no live count is known', () => {
-    // Any unread non-muted channel shows a NUMBER box (never a bare dot) —
-    // even a cold load where the exact count isn't seeded yet reads as "1".
-    renderRow(makeChannel({ channelID: 'ch-1' }), true, { unreadCount: 0 });
-    expect(screen.getByTestId('channel-unread-badge-ch-1')).toHaveTextContent('1');
-    expect(screen.queryByTestId('channel-unread-dot-ch-1')).toBeNull();
+  it('shows the availability dot (not a number) for unread without alerts', () => {
+    // Two-tier unread, aligned with the notification rules: plain unread
+    // activity that never alerted this user is a subtle "messages
+    // available" dot — the number is reserved for alerts.
+    renderRow(makeChannel({ channelID: 'ch-1' }), true, { notifyCount: 0 });
+    expect(screen.queryByTestId('channel-unread-badge-ch-1')).toBeNull();
+    expect(screen.getByTestId('channel-unread-dot-ch-1')).toBeInTheDocument();
   });
 
-  it('shows a numeric count badge when a live count is known', () => {
-    renderRow(makeChannel({ channelID: 'ch-1' }), true, { unreadCount: 3 });
+  it('shows a numeric badge counting only alerting messages', () => {
+    renderRow(makeChannel({ channelID: 'ch-1' }), true, { notifyCount: 3 });
     const badge = screen.getByTestId('channel-unread-badge-ch-1');
     expect(badge).toHaveTextContent('3');
     expect(screen.queryByTestId('channel-unread-dot-ch-1')).toBeNull();
   });
 
   it('caps the count badge at 99+', () => {
-    renderRow(makeChannel({ channelID: 'ch-1' }), true, { unreadCount: 150 });
+    renderRow(makeChannel({ channelID: 'ch-1' }), true, { notifyCount: 150 });
     expect(screen.getByTestId('channel-unread-badge-ch-1')).toHaveTextContent('99+');
   });
 
-  it('shows a subtle dot (not a count badge) for muted channels with unread', () => {
-    // Muted is the ONLY case that gets a dot instead of a number, so the
-    // channel's activity is still visible without the loud count.
-    renderRow(makeChannel({ channelID: 'ch-1', muted: true }), true, { unreadCount: 5 });
+  it('shows a subtle dot (not a count badge) for muted channels with quiet unread', () => {
+    // Muted chatter never alerts (server-side), so no number — the dot keeps
+    // the activity visible without the loud count.
+    renderRow(makeChannel({ channelID: 'ch-1', muted: true }), true, { notifyCount: 0 });
     expect(screen.queryByTestId('channel-unread-badge-ch-1')).toBeNull();
     expect(screen.getByTestId('channel-unread-dot-ch-1')).toBeInTheDocument();
+  });
+
+  it('shows the numeric badge in a muted channel when a mention alerted', () => {
+    // A mention overrides mute server-side — that alert must be as loud in a
+    // muted channel as anywhere else.
+    renderRow(makeChannel({ channelID: 'ch-1', muted: true }), true, { notifyCount: 2 });
+    expect(screen.getByTestId('channel-unread-badge-ch-1')).toHaveTextContent('2');
+    expect(screen.queryByTestId('channel-unread-dot-ch-1')).toBeNull();
   });
 
   it('shows no unread indicator for a muted channel with nothing unread', () => {

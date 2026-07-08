@@ -125,6 +125,12 @@ func (a *MembershipStoreAdapter) SetMute(ctx context.Context, channelID, userID 
 func (a *MembershipStoreAdapter) SetChannelLastRead(ctx context.Context, channelID, userID string, seq int64) error {
 	return a.s.SetChannelLastRead(ctx, channelID, userID, seq)
 }
+
+// IncrementNotifyCount exposes the alerted-unread badge bump the notifier
+// performs per alerted recipient (service asserts this as a capability).
+func (a *MembershipStoreAdapter) IncrementNotifyCount(ctx context.Context, channelID, userID string) (int64, error) {
+	return a.s.IncrementNotifyCount(ctx, channelID, userID)
+}
 func (a *MembershipStoreAdapter) SetNotifPrefs(ctx context.Context, channelID, userID string, override model.ChannelNotificationOverride) error {
 	return a.s.SetUserChannelNotifPrefs(ctx, channelID, userID, override)
 }
@@ -178,6 +184,16 @@ func (a *ConversationStoreAdapter) IncrementMessageSeq(ctx context.Context, conv
 }
 func (a *ConversationStoreAdapter) SetConversationLastRead(ctx context.Context, convID, userID string, seq int64) error {
 	return a.s.SetConversationLastRead(ctx, convID, userID, seq)
+}
+
+// IncrementNotifyCount mirrors the membership adapter for DM/group rows.
+func (a *ConversationStoreAdapter) IncrementNotifyCount(ctx context.Context, convID, userID string) (int64, error) {
+	if b, ok := a.s.(interface {
+		IncrementNotifyCount(ctx context.Context, convID, userID string) (int64, error)
+	}); ok {
+		return b.IncrementNotifyCount(ctx, convID, userID)
+	}
+	return 0, store.ErrNotFound
 }
 func (a *ConversationStoreAdapter) SetFavorite(ctx context.Context, convID, userID string, favorite bool) error {
 	return a.s.SetUserConversationFavorite(ctx, convID, userID, favorite)

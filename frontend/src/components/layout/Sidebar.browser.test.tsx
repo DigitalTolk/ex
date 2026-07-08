@@ -838,23 +838,24 @@ describe('Sidebar browser render — rich fixtures', () => {
     expect(row).toBeTruthy();
   });
 
-  it('floors the badge to 1 when a channel is unread but carries no count', async () => {
-    // A channel the server flags unread but with an unknown/zero count still
-    // shows a NUMBER box floored to "1", never a dot. (The single source is the
-    // server seq flag on the list row — no session set.)
+  it('shows the availability dot when a channel is unread without alerts', async () => {
+    // Two-tier unread: a channel the server flags unread but whose messages
+    // never alerted this user shows the subtle "messages available" dot —
+    // the NUMBER box is reserved for alerting messages.
     mockChannels = makeChannels().map((c) => (c.channelID === 'ch-general' ? { ...c, unread: true } : c));
     mockUserState = { hiddenConversations: [], channelNotifications: [], threadNotifications: [], threadSeen: {} };
     await render(<Frame />);
-    expect(document.querySelector('[data-testid="channel-unread-badge-ch-general"]')?.textContent).toBe('1');
-    expect(document.querySelector('[data-testid="channel-unread-dot-ch-general"]')).toBeNull();
+    expect(document.querySelector('[data-testid="channel-unread-badge-ch-general"]')).toBeNull();
+    expect(document.querySelector('[data-testid="channel-unread-dot-ch-general"]')).not.toBeNull();
   });
 
-  it('shows the server-computed unread count on cold load (no live events)', async () => {
+  it('shows the server-computed alerted count on cold load (no live events)', async () => {
     // Channel carries server-side unread state from /api/v1/channels — the
     // authoritative source after a reload, with empty session maps. The badge
-    // must render the exact count without any message.new having arrived.
+    // must render the exact ALERTED count without any live event having
+    // arrived; the plain unreadCount alone would only light the dot.
     mockChannels = [
-      { channelID: 'ch-cold', channelName: 'ops', channelType: 'public', role: 1, sidebarPosition: 1000, unread: true, unreadCount: 7 },
+      { channelID: 'ch-cold', channelName: 'ops', channelType: 'public', role: 1, sidebarPosition: 1000, unread: true, unreadCount: 9, unreadNotifyCount: 7 },
     ];
     mockUserState = { hiddenConversations: [], channelNotifications: [], threadNotifications: [], threadSeen: {} };
     await render(<Frame />);
@@ -862,11 +863,12 @@ describe('Sidebar browser render — rich fixtures', () => {
     expect(badge?.textContent).toBe('7');
   });
 
-  it('shows the server-computed conversation unread count on cold load', async () => {
-    // Conversations now carry the same server-side seq-based unread as channels.
+  it('shows the server-computed conversation alerted count on cold load', async () => {
+    // Conversations carry the same server-side counters as channels; DM
+    // messages alert, so the badge shows the alerted count.
     mockChannels = [];
     mockConversations = makeConversations().map((c) =>
-      c.conversationID === 'conv-dm' ? { ...c, unread: true, unreadCount: 4 } : c,
+      c.conversationID === 'conv-dm' ? { ...c, unread: true, unreadCount: 4, unreadNotifyCount: 4 } : c,
     );
     mockConversationsState = { data: mockConversations, isError: false };
     mockUserState = { hiddenConversations: [], channelNotifications: [], threadNotifications: [], threadSeen: {} };
@@ -877,11 +879,11 @@ describe('Sidebar browser render — rich fixtures', () => {
 
   it('does NOT double-count a non-favorite DM when the session map is seeded from the server', async () => {
     // Regression: UnreadServerCountSync seeds conversationUnreadCounts from the
-    // SAME server unreadCount the row also reads. The non-favorite DM row must
-    // use the map as the single source (== 4), not sum map+server (== 8).
+    // SAME server count the row also reads. The non-favorite DM row must
+    // use a single source (== 4), never sum map+server (== 8).
     mockChannels = [];
     mockConversations = makeConversations().map((c) =>
-      c.conversationID === 'conv-dm' ? { ...c, unread: true, unreadCount: 4 } : c,
+      c.conversationID === 'conv-dm' ? { ...c, unread: true, unreadCount: 4, unreadNotifyCount: 4 } : c,
     );
     mockConversationsState = { data: mockConversations, isError: false };
     mockUnread = {

@@ -1653,7 +1653,7 @@ export function Sidebar({ onClose }: SidebarProps) {
                                 <ChannelRow
                                   channel={item.channel}
                                   hasUnread={!!item.channel.unread}
-                                  unreadCount={item.channel.unreadCount ?? 0}
+                                  notifyCount={Number(item.channel.unreadNotifyCount ?? 0)}
                                   onClose={onClose}
                                   draggable={!isMobile}
                                   suppressNavigation={suppressChannelNavigationID === item.channel.channelID}
@@ -1697,7 +1697,7 @@ export function Sidebar({ onClose }: SidebarProps) {
                                 <ConversationRow
                                   conversation={conv}
                                   hasUnread={!!conv.unread}
-                                  unreadCount={conv.unreadCount ?? 0}
+                                  notifyCount={Number(conv.unreadNotifyCount ?? 0)}
                                   dmAvatarURL={resolvedDMAvatarURL}
                                   dmUserStatus={resolvedDMUserStatus}
                                   dmOnline={dmOnline}
@@ -1714,7 +1714,7 @@ export function Sidebar({ onClose }: SidebarProps) {
                             <ConversationRow
                               conversation={conv}
                               hasUnread={!!conv.unread}
-                              unreadCount={conv.unreadCount ?? 0}
+                              notifyCount={Number(conv.unreadNotifyCount ?? 0)}
                               dmAvatarURL={resolvedDMAvatarURL}
                               dmUserStatus={resolvedDMUserStatus}
                               dmOnline={dmOnline}

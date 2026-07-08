@@ -45,6 +45,8 @@ import {
   clearChannelUnreadInCache,
   clearConversationUnreadInCache,
   touchConversationActivityInCache,
+  setChannelNotifyCountInCache,
+  setConversationNotifyCountInCache,
 } from '@/lib/unread-cache';
 import { shouldRefetchDraftsForRemoteUpdate, useDrafts } from '@/hooks/useDrafts';
 import { useUserChannels } from '@/hooks/useChannels';
@@ -488,10 +490,18 @@ export default function ChatPage() {
         }
         queryClient.invalidateQueries({ queryKey: queryKeys.userState() });
       }
-      // A top-level channel/DM notification.new is the ALERT (popup/sound, handled
-      // by NotificationContext). The sidebar badge for it rides the separate
-      // message.new event, which patches the list cache (and replays from the
-      // durable inbox on reconnect) — so there's nothing to mark here.
+      // A top-level channel/DM notification.new is the ALERT (popup/sound,
+      // handled by NotificationContext) AND it carries the recipient's
+      // authoritative alerted-unread badge — SET the sidebar row to it (the
+      // plain availability indicator still rides message.new). Thread
+      // notifications never touch parent badges (the Threads nav owns them).
+      if (!n.parentMessageID && typeof n.parentUnreadNotifyCount === 'number' && n.parentUnreadNotifyCount > 0) {
+        if (n.parentType === 'conversation') {
+          setConversationNotifyCountInCache(queryClient, n.parentID, n.parentUnreadNotifyCount);
+        } else {
+          setChannelNotifyCountInCache(queryClient, n.parentID, n.parentUnreadNotifyCount);
+        }
+      }
       dispatchNotification(n);
     },
     onDraftUpdated: () => {

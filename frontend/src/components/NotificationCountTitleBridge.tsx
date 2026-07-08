@@ -30,20 +30,20 @@ export function NotificationCountTitleBridge() {
     return unreadThreadIDs(threads, userState?.threadNotifications ?? [], unreadThreadNotifications, seenMap).size;
   }, [isAuthenticated, localSeenMap, threads, unreadThreadNotifications, userState]);
 
-  // Sum the server-computed unread MESSAGE counts straight from the channel /
-  // conversation list cache (the single source the sidebar badges also read), so
-  // the tab title climbs as more messages arrive in a parent. MUTED channels are
-  // excluded (muted = quiet): the sidebar shows them as a dot with no count, so
-  // their chatter must not inflate the tab title either. Conversations can't be
-  // muted, so all of their counts contribute.
+  // Sum the ALERTED-unread counts straight from the channel / conversation
+  // list cache (the single source the sidebar badges also read) — the tab
+  // title mirrors the numeric badges, so it climbs only for messages that
+  // actually notified this user per their rules. Merely-unread chatter shows
+  // as the sidebar availability dot and never inflates the title. No mute
+  // filter needed: mute suppresses the alert server-side (a mention
+  // overrides it, deliberately — those DO count).
   const messageTotal = useMemo(() => {
     let total = 0;
     for (const c of channels) {
-      if (c.muted) continue;
-      total += c.unreadCount ?? 0;
+      total += Number(c.unreadNotifyCount ?? 0);
     }
     for (const c of conversations) {
-      total += c.unreadCount ?? 0;
+      total += Number(c.unreadNotifyCount ?? 0);
     }
     return total;
   }, [channels, conversations]);

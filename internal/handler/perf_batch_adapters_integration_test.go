@@ -92,3 +92,20 @@ func TestThreadFollowStoreAdapter_ParticipationCapabilityArm(t *testing.T) {
 		t.Fatalf("IsThreadIndexSeeded after mark = %v (err=%v), want true", seeded, err)
 	}
 }
+
+func TestMembershipStoreAdapter_IncrementNotifyCount(t *testing.T) {
+	db := setupDynamoForAdapters(t)
+	ctx := context.Background()
+	storeImpl := store.NewMembershipStore(db)
+	adapter := NewMembershipStoreAdapter(storeImpl)
+
+	ch := &model.Channel{ID: "ch-nc", Name: "nc", Slug: "nc", Type: model.ChannelTypePublic, CreatedAt: time.Now()}
+	mem := &model.ChannelMembership{ChannelID: "ch-nc", UserID: "u-1", Role: model.ChannelRoleMember, JoinedAt: time.Now()}
+	uc := &model.UserChannel{UserID: "u-1", ChannelID: "ch-nc", ChannelName: "nc", JoinedAt: time.Now()}
+	if err := storeImpl.AddChannelMember(ctx, ch, mem, uc); err != nil {
+		t.Fatalf("AddChannelMember: %v", err)
+	}
+	if n, err := adapter.IncrementNotifyCount(ctx, "ch-nc", "u-1"); err != nil || n != 1 {
+		t.Fatalf("IncrementNotifyCount = %d (err=%v), want 1", n, err)
+	}
+}

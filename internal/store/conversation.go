@@ -302,7 +302,40 @@ func (s *ConversationStoreImpl) IncrementMessageSeq(ctx context.Context, convID 
 // SetConversationLastRead stamps the conversation's current MessageSeq onto the
 // user-side row; unread then derives as MessageSeq - LastReadSeq.
 func (s *ConversationStoreImpl) SetConversationLastRead(ctx context.Context, convID, userID string, seq int64) error {
-	return s.setUserConversationAttribute(ctx, convID, userID, "lastReadSeq", seq)
+	// Same one-write pairing as the channel side: reading the conversation
+	// clears the alerted-message badge with the watermark.
+	upd := expression.Set(expression.Name("lastReadSeq"), expression.Value(seq)).
+		Set(expression.Name("unreadNotifyCount"), expression.Value(0))
+	return s.updateUserConversation(ctx, convID, userID, upd, "lastReadSeq")
+}
+
+// IncrementNotifyCount mirrors the channel-side method for DM/group rows:
+// one alerted recipient, one +1, authoritative new value returned.
+func (s *ConversationStoreImpl) IncrementNotifyCount(ctx context.Context, convID, userID string) (int64, error) {
+	upd := expression.Add(expression.Name("unreadNotifyCount"), expression.Value(1))
+	expr := mustExpr(expression.NewBuilder().WithUpdate(upd).Build())
+	out, err := s.Client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName:                 aws.String(s.Table),
+		Key:                       compositeKey(userPK(userID), convSK(convID)),
+		UpdateExpression:          expr.Update(),
+		ExpressionAttributeNames:  expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
+		ConditionExpression:       aws.String("attribute_exists(PK)"),
+		ReturnValues:              types.ReturnValueUpdatedNew,
+	})
+	if err != nil {
+		if isConditionCheckFailed(err) {
+			return 0, ErrNotFound
+		}
+		return 0, fmt.Errorf("store: increment conversation notify count: %w", err)
+	}
+	var row struct {
+		UnreadNotifyCount int64 `dynamodbav:"unreadNotifyCount"`
+	}
+	if err := attributevalue.UnmarshalMap(out.Attributes, &row); err != nil {
+		return 0, fmt.Errorf("store: unmarshal conversation notify count: %w", err)
+	}
+	return row.UnreadNotifyCount, nil
 }
 
 // SetUserConversationFavorite flips the favorite flag on the user-side

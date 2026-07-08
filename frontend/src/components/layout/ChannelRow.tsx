@@ -17,11 +17,10 @@ import { type CSSProperties } from 'react';
 interface Props {
   channel: UserChannel;
   hasUnread: boolean;
-  // Live count of unread messages observed this session (incremented
-  // per WebSocket message.new while the channel isn't active). 0 when
-  // unknown — e.g. on a cold load, where unread is only known as a
-  // boolean — in which case the row falls back to the unread dot.
-  unreadCount?: number;
+  // Unread messages that actually ALERTED this user (mentions, keywords,
+  // "all messages" level — the server's notification decision). Only this
+  // drives the numeric badge; plain unread shows the availability dot.
+  notifyCount?: number;
   onClose: () => void;
   draggable?: boolean;
   dragRef?: (node: HTMLElement | null) => void;
@@ -37,7 +36,7 @@ interface Props {
 export function ChannelRow({
   channel,
   hasUnread,
-  unreadCount = 0,
+  notifyCount = 0,
   onClose,
   draggable,
   dragRef,
@@ -114,27 +113,28 @@ export function ChannelRow({
           {channel.channelName}
         </span>
         {/* Right-edge status, absolutely positioned so it sits flush to the edge
-            and NEVER reflows: an unread channel shows a brand-pink NUMBERED count
-            box (floored to 1 — a cold load where the exact count isn't seeded yet
-            reads as "1", per the design), a muted+unread channel a subtle dot
-            instead of the loud count, and a muted+read channel the bell. It
-            fades out on desktop hover so the row actions (star/kebab) take the
-            space, and stays visible on touch at the VERY right edge — the kebab
-            slot, unused on mobile where a long-press opens that menu — so it
-            never overlaps the persistent star (right-10, 36px wide).
-            pointer-events-none keeps the row clickable. */}
-        {hasUnread ? (
+            and NEVER reflows. Two-tier unread, aligned with the notification
+            rules: the brand-pink NUMBERED badge counts only messages that
+            actually ALERTED this user (so it shows even in a muted channel —
+            a mention overrides mute server-side); merely-unread activity is a
+            subtle "messages available" dot; a muted+read channel shows the
+            bell. It fades out on desktop hover so the row actions (star/kebab)
+            take the space, and stays visible on touch at the VERY right edge —
+            the kebab slot, unused on mobile where a long-press opens that
+            menu — so it never overlaps the persistent star (right-10, 36px
+            wide). pointer-events-none keeps the row clickable. */}
+        {hasUnread || notifyCount > 0 ? (
           <span className="pointer-events-none absolute right-2 top-1/2 flex -translate-y-1/2 items-center transition-opacity group-hover/row:opacity-0 max-md:opacity-100">
-            {channel.muted ? (
+            {notifyCount > 0 ? (
+              <Badge variant="brand" className="text-[11px]" data-testid={`channel-unread-badge-${channel.channelID}`}>
+                {notifyCount > 99 ? '99+' : notifyCount}
+              </Badge>
+            ) : (
               <span
                 aria-label="Unread"
                 data-testid={`channel-unread-dot-${channel.channelID}`}
                 className="h-2 w-2 rounded-full bg-brand"
               />
-            ) : (
-              <Badge variant="brand" className="text-[11px]" data-testid={`channel-unread-badge-${channel.channelID}`}>
-                {unreadCount > 99 ? '99+' : Math.max(1, unreadCount)}
-              </Badge>
             )}
           </span>
         ) : channel.muted ? (

@@ -21,9 +21,10 @@ import { type CSSProperties } from 'react';
 interface Props {
   conversation: UserConversation;
   hasUnread: boolean;
-  // Live count of unread messages observed this session (see ChannelRow).
-  // 0 when unknown (cold load) — the row falls back to the unread dot.
-  unreadCount?: number;
+  // Alerted-unread count (see ChannelRow) — the numeric badge. DM messages
+  // always alert unless the conversation is muted, so this usually tracks
+  // the plain unread count; merely-unread shows the availability dot.
+  notifyCount?: number;
   dmAvatarURL?: string;
   dmUserStatus?: UserStatus;
   dmOnline?: boolean;
@@ -44,7 +45,7 @@ interface Props {
 export function ConversationRow({
   conversation,
   hasUnread,
-  unreadCount = 0,
+  notifyCount = 0,
   dmAvatarURL,
   dmUserStatus,
   dmOnline,
@@ -140,16 +141,26 @@ export function ConversationRow({
             <UserStatusIndicator status={dmUserStatus} className="h-4 w-4" />
           </>
         )}
-        {/* Brand-pink unread count, floored to 1 so even a not-yet-seeded count
-            reads as "1". Absolutely positioned (flush to the edge, never
-            reflows); fades on desktop hover so the row actions take its place,
-            stays on touch at the VERY right edge (the kebab slot, unused on
-            mobile) clear of the persistent star. Mirrors ChannelRow. */}
-        {hasUnread && (
+        {/* Two-tier unread, mirroring ChannelRow: the brand-pink NUMBER counts
+            only messages that alerted this user (DMs alert on every message
+            unless muted); merely-unread activity is the availability dot.
+            Absolutely positioned (flush to the edge, never reflows); fades on
+            desktop hover so the row actions take its place, stays on touch at
+            the VERY right edge (the kebab slot, unused on mobile) clear of
+            the persistent star. */}
+        {(hasUnread || notifyCount > 0) && (
           <span className="pointer-events-none absolute right-2 top-1/2 flex -translate-y-1/2 items-center transition-opacity group-hover/row:opacity-0 max-md:opacity-100">
-            <Badge variant="brand" className="text-[11px]" data-testid={`conversation-unread-badge-${conversation.conversationID}`}>
-              {unreadCount > 99 ? '99+' : Math.max(1, unreadCount)}
-            </Badge>
+            {notifyCount > 0 ? (
+              <Badge variant="brand" className="text-[11px]" data-testid={`conversation-unread-badge-${conversation.conversationID}`}>
+                {notifyCount > 99 ? '99+' : notifyCount}
+              </Badge>
+            ) : (
+              <span
+                aria-label="Unread"
+                data-testid={`conversation-unread-dot-${conversation.conversationID}`}
+                className="h-2 w-2 rounded-full bg-brand"
+              />
+            )}
           </span>
         )}
       </NavLink>
