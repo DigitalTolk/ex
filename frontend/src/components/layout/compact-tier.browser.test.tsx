@@ -1,10 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render } from 'vitest-browser-react';
-import { page } from '@vitest/browser/context';
+import { page } from 'vitest/browser';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AppLayout } from './AppLayout';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 
 // Pixel tests for the compact tier: a REAL 700px-wide desktop window (the
@@ -142,12 +143,22 @@ describe('compact tier at a real 700px desktop viewport', () => {
 
   it('keeps desktop-sized controls (no touch inflation) at 700px', async () => {
     if (!isDesktopProject) return;
-    const result = await render(<Button size="sm">Act</Button>);
+    const result = await render(
+      <div>
+        <Button size="sm">Act</Button>
+        <Input placeholder="type" />
+      </div>,
+    );
     active = result;
     const btn = document.querySelector('button') as HTMLElement;
     // mobile:h-11 (44px) must not fire on a fine-pointer window; the sm
     // button keeps its 32px desktop height.
     expect(btn.getBoundingClientRect().height).toBeLessThanOrEqual(36);
+    // Inputs keep the 14px design font and 32px height too — 16px is only
+    // the iOS zoom guard on touch devices.
+    const input = document.querySelector('input') as HTMLElement;
+    expect(input.getBoundingClientRect().height).toBeLessThanOrEqual(36);
+    expect(getComputedStyle(input).fontSize).toBe('14px');
   });
 
   it('insets the top-bar left column past macOS traffic lights in Electron', async () => {

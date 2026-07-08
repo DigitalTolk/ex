@@ -265,7 +265,7 @@ export function SearchBar() {
           so the centred grid column stays centred, and it's gated to
           md+ so mobile layout is untouched. */}
       <div className="rounded-md transition-all duration-150 focus-within:shadow-lg md:focus-within:-mx-2">
-        <div className="flex h-8 items-center gap-2 rounded-md border border-border bg-background dark:bg-muted px-3 text-foreground transition-colors focus-within:border-ring hover:border-border-strong max-md:h-11">
+        <div className="flex h-8 items-center gap-2 rounded-md border border-border bg-background dark:bg-muted px-3 text-foreground transition-colors focus-within:border-ring hover:border-border-strong mobile:h-11">
           <Search className="h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />
           <input
             ref={inputRef}
@@ -314,7 +314,7 @@ export function SearchBar() {
             data-1p-ignore
             data-lpignore="true"
             data-form-type="other"
-            className="flex-1 bg-transparent text-sm text-foreground placeholder:text-muted-foreground focus:outline-none max-md:text-base"
+            className="flex-1 bg-transparent text-sm text-foreground placeholder:text-muted-foreground focus:outline-none mobile:text-base"
             data-testid="searchbar-input"
           />
           <kbd className="hidden items-center gap-0.5 rounded border border-border-strong px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground md:inline-flex">
@@ -432,7 +432,7 @@ export function SearchBar() {
                   }
                   data-scope-kind={s.kind === 'in-scope' ? s.scopeKind : undefined}
                   aria-selected={isHighlighted}
-                  className={`flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-sm max-md:py-3 max-md:text-base ${
+                  className={`flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-sm mobile:py-3 mobile:text-base ${
                     isHighlighted ? 'bg-muted' : ''
                   }`}
                 >
@@ -497,7 +497,7 @@ function ChannelRow({
       onMouseEnter={onHover}
       onClick={onSelect}
       aria-selected={highlighted}
-      className={`flex w-full items-center gap-2 px-3 py-2 text-left text-sm max-md:py-3 max-md:text-base ${
+      className={`flex w-full items-center gap-2 px-3 py-2 text-left text-sm mobile:py-3 mobile:text-base ${
         highlighted ? 'bg-muted' : ''
       }`}
     >
@@ -542,7 +542,7 @@ function UserRow({
       onMouseEnter={onHover}
       onClick={onSelect}
       aria-selected={highlighted}
-      className={`flex w-full items-center gap-2 px-3 py-2 text-left text-sm max-md:py-3 max-md:text-base ${
+      className={`flex w-full items-center gap-2 px-3 py-2 text-left text-sm mobile:py-3 mobile:text-base ${
         highlighted ? 'bg-muted' : ''
       }`}
     >

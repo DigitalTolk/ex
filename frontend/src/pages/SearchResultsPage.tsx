@@ -38,7 +38,7 @@ const SORT_LABELS: Record<Sort, string> = {
   newest: 'Newest first',
   oldest: 'Oldest first',
 };
-const MOBILE_FILTER_CONTROL_CLASS = 'max-md:h-9 max-md:px-3 max-md:text-sm';
+const MOBILE_FILTER_CONTROL_CLASS = 'mobile:h-9 mobile:px-3 mobile:text-sm';
 
 // SearchResultsPage drives every filter from the URL so back/forward
 // and external deep-links are first-class.

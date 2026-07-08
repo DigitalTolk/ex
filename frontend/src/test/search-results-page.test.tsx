@@ -320,8 +320,8 @@ describe('SearchResultsPage', () => {
     });
     wrap(['/search?q=hello&type=messages']);
     await waitFor(() => screen.getByTestId('bucket-picker-users'));
-    expect(screen.getByTestId('results-sort')).toHaveClass('max-md:h-9', 'max-md:px-3', 'max-md:text-sm');
-    expect(screen.getByTestId('bucket-picker-users')).toHaveClass('max-md:h-9', 'max-md:px-3', 'max-md:text-sm');
+    expect(screen.getByTestId('results-sort')).toHaveClass('mobile:h-9', 'mobile:px-3', 'mobile:text-sm');
+    expect(screen.getByTestId('bucket-picker-users')).toHaveClass('mobile:h-9', 'mobile:px-3', 'mobile:text-sm');
     fireEvent.click(screen.getByTestId('bucket-picker-users'));
     await waitFor(() => screen.getByText('Alice'));
     expect(screen.getByText('7')).toBeInTheDocument();

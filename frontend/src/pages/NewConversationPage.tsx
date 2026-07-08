@@ -175,7 +175,7 @@ export default function NewConversationPage() {
               // an autofocused input pops the keyboard mid page-transition and
               // forces focus-scroll inside the overflow-hidden app shell.
               autoFocus={!isMobile}
-              className="min-w-[8rem] flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground max-md:text-base"
+              className="min-w-[8rem] flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground mobile:text-base"
             />
           </div>
         </div>
@@ -213,7 +213,7 @@ export default function NewConversationPage() {
                     // when mousedown already handled it.
                     onClick={() => pick({ id: u.id, displayName: u.displayName })}
                     onMouseEnter={() => setActiveIndex(i)}
-                    className={`flex w-full items-center gap-2 px-3 py-2 text-left text-sm max-md:py-3 max-md:text-base ${
+                    className={`flex w-full items-center gap-2 px-3 py-2 text-left text-sm mobile:py-3 mobile:text-base ${
                       isActive ? 'bg-muted' : 'hover:bg-muted/50'
                     }`}
                   >

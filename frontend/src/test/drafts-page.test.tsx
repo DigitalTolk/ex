@@ -67,7 +67,7 @@ describe('DraftsPage', () => {
       'href',
       '/channel/team-room?thread=root-1#msg-root-1',
     );
-    expect(screen.getByLabelText('Delete draft')).toHaveClass('h-8', 'w-8', 'max-md:h-9', 'max-md:w-9');
+    expect(screen.getByLabelText('Delete draft')).toHaveClass('h-8', 'w-8', 'mobile:h-9', 'mobile:w-9');
 
     fireEvent.click(screen.getByLabelText('Delete draft'));
     expect(await screen.findByTestId('delete-draft-dialog')).toBeInTheDocument();

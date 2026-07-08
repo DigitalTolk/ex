@@ -44,14 +44,14 @@ describe('SearchBar', () => {
 
     const input = screen.getByTestId('searchbar-input');
     const shell = input.parentElement!;
-    expect(shell).toHaveClass('h-8', 'max-md:h-11');
+    expect(shell).toHaveClass('h-8', 'mobile:h-11');
     // The shell carries the design-token border/bg pair (base bg + 1px border
     // in light, the level3 muted surface in dark — solid tokens, no glassy
     // white wash) and rounded-md (6px) corners per the design spec — not a pill.
     expect(shell).toHaveClass('rounded-md', 'border', 'border-border', 'bg-background', 'text-foreground');
     expect(shell).toHaveClass('dark:bg-muted');
     expect(shell).not.toHaveClass('dark:bg-white/5');
-    expect(input).toHaveClass('text-sm', 'max-md:text-base');
+    expect(input).toHaveClass('text-sm', 'mobile:text-base');
     expect(input).toHaveClass('text-foreground');
   });
 
@@ -61,7 +61,7 @@ describe('SearchBar', () => {
     expect(screen.getByTestId('searchbar-dropdown')).toBeInTheDocument();
     expect(screen.getByTestId('searchbar-show-results')).toHaveTextContent(/Search messages for/i);
     expect(screen.getByTestId('searchbar-show-results')).toHaveTextContent('claude');
-    expect(screen.getByTestId('searchbar-show-results')).toHaveClass('py-2', 'text-sm', 'max-md:py-3', 'max-md:text-base');
+    expect(screen.getByTestId('searchbar-show-results')).toHaveClass('py-2', 'text-sm', 'mobile:py-3', 'mobile:text-base');
   });
 
   it('navigates to /search?q=... when the suggestion is clicked', () => {
