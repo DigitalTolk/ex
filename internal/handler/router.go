@@ -359,8 +359,7 @@ func (h *spaHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// SPA navigations (root or unknown route) get the version-augmented
-	// index.html. Static assets pass through to http.FileServer so its
-	// caching headers and range support stay intact.
+	// index.html. Static assets pass through to http.FileServer.
 	if path == "/index.html" || isUnknown(h.fs, path) {
 		if h.indexHTML != nil {
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -368,6 +367,21 @@ func (h *spaHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			_, _ = w.Write(h.indexHTML)
 			return
 		}
+	}
+
+	// The embedded FS has no mod times, so http.FileServer emits neither
+	// validators nor freshness info — meaning every client re-downloaded the
+	// multi-MB bundle on every app open. On a mobile webview waking its radio
+	// that re-fetch regularly stalled, leaving the app blank (nothing cached
+	// to fall back on). Vite content-hashes everything under /assets/, so
+	// those files are immutable by construction: cache them for a year.
+	// A new deploy ships a new hash via the (no-store) index.html above.
+	// Other static files (favicon, manifest) are mutable-in-place — give them
+	// a short TTL so updates propagate within the hour.
+	if strings.HasPrefix(path, "/assets/") {
+		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	} else {
+		w.Header().Set("Cache-Control", "public, max-age=3600")
 	}
 
 	h.fileServer.ServeHTTP(w, r)

@@ -29,6 +29,99 @@
     </script>
   </head>
   <body>
+    <!-- Boot splash: rendered by this HTML alone, zero network dependencies.
+         Between "index.html committed" and "the JS bundle executed" there
+         used to be literally nothing on screen — on a mobile webview with a
+         just-woken radio, a stalled or failed bundle fetch meant a permanent
+         blank page (the in-app loading/retry UI lives INSIDE the bundle and
+         can't help when the bundle itself doesn't arrive). The splash gives
+         immediate feedback and the watchdog script below adds recovery.
+         React removes this node on first commit (see lib/boot-splash.ts).
+         Colors mirror the design tokens in src/index.css (bg-sidebar /
+         text-muted-foreground); literals are unavoidable here because the
+         stylesheet is part of the bundle this splash must not depend on. -->
+    <style>
+      #boot-splash {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 12px;
+        background: #f5f5f5;
+        font-family: system-ui, -apple-system, sans-serif;
+        z-index: 9999;
+      }
+      html.dark #boot-splash { background: #2c2829; }
+      #boot-splash .boot-spinner {
+        width: 20px;
+        height: 20px;
+        border-radius: 9999px;
+        border: 2px solid #e9e9e9;
+        border-top-color: #7b7979;
+        animation: boot-spin 0.8s linear infinite;
+      }
+      html.dark #boot-splash .boot-spinner {
+        border-color: #4a4a4a;
+        border-top-color: #a7a5a6;
+      }
+      #boot-splash p { margin: 0; font-size: 14px; color: #7b7979; }
+      html.dark #boot-splash p { color: #a7a5a6; }
+      #boot-splash button {
+        margin-top: 4px;
+        padding: 6px 16px;
+        font-size: 14px;
+        font-weight: 500;
+        color: #231f20;
+        background: transparent;
+        border: 1px solid #bdbcbc;
+        border-radius: 6px;
+      }
+      html.dark #boot-splash button { color: #ffffff; border-color: #a7a5a6; }
+      @keyframes boot-spin { to { transform: rotate(360deg); } }
+    </style>
+    <div id="boot-splash" role="status" aria-label="Loading chat">
+      <div class="boot-spinner" aria-hidden="true"></div>
+      <p id="boot-splash-hint" hidden>Still loading…</p>
+      <button id="boot-splash-retry" type="button" hidden>Retry</button>
+    </div>
+    <script>
+      // Boot watchdog: the splash above only helps if a stalled boot offers a
+      // way out. Two triggers surface the Retry button:
+      //  - the bundle has not executed within 12s (hung asset fetch), or
+      //  - a script element failed to load (mid-deploy hash rotation, radio
+      //    drop) — that never recovers on its own, so surface it immediately.
+      // React removing #boot-splash on first commit makes both no-ops.
+      (function () {
+        function showRecovery() {
+          var splash = document.getElementById('boot-splash');
+          if (!splash) return;
+          var hint = document.getElementById('boot-splash-hint');
+          var retry = document.getElementById('boot-splash-retry');
+          if (hint) hint.hidden = false;
+          if (retry) retry.hidden = false;
+        }
+        var slowTimer = setTimeout(showRecovery, 12000);
+        window.addEventListener(
+          'error',
+          function (e) {
+            var t = e.target;
+            if (t && t.tagName === 'SCRIPT') {
+              clearTimeout(slowTimer);
+              showRecovery();
+            }
+          },
+          true
+        );
+        var retry = document.getElementById('boot-splash-retry');
+        if (retry) {
+          retry.addEventListener('click', function () {
+            window.location.reload();
+          });
+        }
+      })();
+    </script>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
