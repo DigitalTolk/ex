@@ -206,7 +206,6 @@ describe('ChannelView - actions', () => {
 
     expect(mockSendMutate).toHaveBeenCalledWith(
       { body: 'hello world', attachmentIDs: [] },
-      expect.objectContaining({ onError: expect.any(Function) }),
     );
   });
 

@@ -125,19 +125,13 @@ vi.mock('@/hooks/useThreads', () => ({
 
 let draftState: { data: { id?: string; body?: string; attachmentIDs?: string[] } | undefined } = { data: undefined };
 const saveDraftMutate = vi.fn();
-const clearDraftMutate = vi.fn();
-const restoreDraftScopeForContentMock = vi.fn();
-const suppressSentDraftMock = vi.fn();
-const restoreDraftScopeMock = vi.fn();
 vi.mock('@/hooks/useDrafts', () => ({
-  markLocalDraftClearForSend: vi.fn(),
   useDraftForScope: () => draftState,
   useDraftAttachmentChips: () => [],
   useSaveDraft: () => ({ mutate: saveDraftMutate }),
-  useClearDraftForScope: () => clearDraftMutate,
-  restoreDraftScope: (...a: unknown[]) => restoreDraftScopeMock(...a),
-  restoreDraftScopeForContent: (...a: unknown[]) => restoreDraftScopeForContentMock(...a),
-  suppressSentDraft: (...a: unknown[]) => suppressSentDraftMock(...a),
+  // useSendMessage owns the send-side draft lifecycle now.
+  condemnDraftForSend: vi.fn(() => vi.fn()),
+  removeDraftScopeFromCache: vi.fn(),
 }));
 
 vi.mock('./TypingIndicator', () => ({
@@ -222,10 +216,6 @@ beforeEach(() => {
   followThreadMutate.mockReset();
   unfollowThreadMutate.mockReset();
   saveDraftMutate.mockReset();
-  clearDraftMutate.mockReset();
-  restoreDraftScopeForContentMock.mockReset();
-  suppressSentDraftMock.mockReset();
-  restoreDraftScopeMock.mockReset();
 });
 
 describe('ThreadPanel coverage — follow / unfollow', () => {
@@ -265,44 +255,17 @@ describe('ThreadPanel coverage — merged user map', () => {
 });
 
 describe('ThreadPanel coverage — reply send', () => {
-  it('sends a reply even when no draft is cached (still clears by scope)', async () => {
+  it('sends the reply as a plain event; the draft lifecycle lives in useSendMessage', async () => {
     draftState = { data: undefined };
     const screen = await mount();
     await screen.getByTestId('mi-send').click();
-    expect(suppressSentDraftMock).toHaveBeenCalled();
     expect(sendMutate).toHaveBeenCalled();
     const call = sendMutate.mock.calls[0];
     expect(call[0].parentMessageID).toBe('ROOT');
-    // onSuccess clears by scope regardless of whether a draft id was cached —
-    // the fix for drafts left behind after sending on a slow connection.
-    (call[1] as { onSuccess?: () => void }).onSuccess?.();
-    expect(clearDraftMutate).toHaveBeenCalledWith(
-      expect.objectContaining({ parentType: 'channel', parentMessageID: 'ROOT' }),
-    );
-  });
-
-  it('clears the draft scope on a successful reply, restores it on error', async () => {
-    draftState = { data: { id: 'draft-9', body: 'saved' } };
-    const screen = await mount();
-    await screen.getByTestId('mi-send').click();
-    expect(sendMutate).toHaveBeenCalled();
-    const options = sendMutate.mock.calls[0][1] as { onSuccess?: () => void; onError?: () => void };
-    options.onSuccess?.();
-    expect(clearDraftMutate).toHaveBeenCalledWith(
-      expect.objectContaining({ parentType: 'channel', parentMessageID: 'ROOT' }),
-    );
-    // The onError path restores the suppressed draft scope.
-    options.onError?.();
-    expect(restoreDraftScopeMock).toHaveBeenCalled();
-  });
-
-  it('restores the draft scope when a no-draft reply errors', async () => {
-    draftState = { data: undefined };
-    const screen = await mount();
-    await screen.getByTestId('mi-send').click();
-    const options = sendMutate.mock.calls[0][1] as { onError?: () => void };
-    options.onError?.();
-    expect(restoreDraftScopeMock).toHaveBeenCalled();
+    // No view-side draft bookkeeping rides the mutate call anymore —
+    // condemnation/rollback/cache patching are owned by useSendMessage
+    // (covered in the useMessages suites).
+    expect(call[1]).toBeUndefined();
   });
 });
 
@@ -310,7 +273,6 @@ describe('ThreadPanel coverage — draft change', () => {
   it('persists a keystroke draft change SILENTLY so the indicator stays hidden', async () => {
     const screen = await mount();
     await screen.getByTestId('mi-draft').click();
-    expect(restoreDraftScopeForContentMock).toHaveBeenCalled();
     expect(saveDraftMutate).toHaveBeenCalledWith({
       parentID: 'ch-1',
       parentType: 'channel',

@@ -249,3 +249,42 @@ func (s *CategoryStoreImpl) Delete(ctx context.Context, userID, categoryID strin
 func normalizeCategoryName(name string) string {
 	return strings.ToLower(strings.TrimSpace(name))
 }
+
+// SetPositions writes server-computed positions for a user's categories in
+// one transaction — the whole reorder commits or none of it does. Ordering is
+// server-owned: clients report move events, never position numbers.
+func (s *CategoryStoreImpl) SetPositions(ctx context.Context, userID string, positions map[string]int) error {
+	if len(positions) == 0 {
+		return nil
+	}
+	if len(positions) > dynamoTransactLimit {
+		return fmt.Errorf("store: too many categories to reorder atomically (%d)", len(positions))
+	}
+	ids := make([]string, 0, len(positions))
+	for id := range positions {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids) // deterministic transaction shape
+	items := make([]types.TransactWriteItem, 0, len(ids))
+	for _, id := range ids {
+		upd := expression.Set(expression.Name("position"), expression.Value(positions[id]))
+		expr := mustExpr(expression.NewBuilder().WithUpdate(upd).Build())
+		items = append(items, types.TransactWriteItem{
+			Update: &types.Update{
+				TableName:                 aws.String(s.Table),
+				Key:                       compositeKey(userPK(userID), categorySK(id)),
+				UpdateExpression:          expr.Update(),
+				ExpressionAttributeNames:  expr.Names(),
+				ExpressionAttributeValues: expr.Values(),
+				ConditionExpression:       aws.String("attribute_exists(PK)"),
+			},
+		})
+	}
+	if _, err := s.Client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items}); err != nil {
+		if isConditionCheckFailed(err) || isTransactionCancelledWithCondition(err) {
+			return ErrNotFound
+		}
+		return fmt.Errorf("store: set category positions: %w", err)
+	}
+	return nil
+}

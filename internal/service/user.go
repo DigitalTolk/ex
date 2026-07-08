@@ -122,6 +122,65 @@ func (s *UserService) resolveAvatar(ctx context.Context, user *model.User) {
 	}
 }
 
+// resolveAvatars resolves avatar URLs for MANY users in two Redis round trips
+// (one MGET for the media records, one pipelined write for misses) instead of
+// the serial per-user GETs that made avatar resolution dominate /users/batch
+// and the directory list. Users the batch can't serve (no media cache, mint
+// failure) fall back to the per-user path, which also covers the presigned-URL
+// route.
+func (s *UserService) resolveAvatars(ctx context.Context, users []*model.User) {
+	if s.avatars == nil {
+		return
+	}
+	if s.mediaCache == nil {
+		for _, u := range users {
+			s.resolveAvatar(ctx, u)
+		}
+		return
+	}
+	reqs := make([]MediaURLRequest, 0, len(users))
+	for _, u := range users {
+		if u == nil || u.AvatarKey == "" {
+			continue
+		}
+		reqs = append(reqs, MediaURLRequest{ID: u.ID + ":" + u.AvatarKey, S3Key: u.AvatarKey, Filename: "avatar"})
+	}
+	urls := StableMediaURLs(ctx, s.mediaCache, "avatar", reqs)
+	for _, u := range users {
+		if u == nil || u.AvatarKey == "" {
+			continue
+		}
+		if mediaURL, ok := urls[u.ID+":"+u.AvatarKey]; ok {
+			u.AvatarURL = mediaURL
+			continue
+		}
+		s.resolveAvatar(ctx, u)
+	}
+}
+
+// batchUserCache is the optional MGET/pipeline capability of the user cache
+// (implemented by the Redis cache). Asserted at call sites with a per-ID
+// fallback, mirroring batchUserStore.
+type batchUserCache interface {
+	GetUsers(ctx context.Context, ids []string) (map[string]*model.User, error)
+	SetUsers(ctx context.Context, users []*model.User) error
+}
+
+// cacheUsers fills the cache for many users — one pipelined write when the
+// cache batches, per-user Sets otherwise. Best-effort like SetUser callers.
+func (s *UserService) cacheUsers(ctx context.Context, users []*model.User) {
+	if s.cache == nil || len(users) == 0 {
+		return
+	}
+	if bc, ok := s.cache.(batchUserCache); ok {
+		_ = bc.SetUsers(ctx, users)
+		return
+	}
+	for _, u := range users {
+		_ = s.cache.SetUser(ctx, u)
+	}
+}
+
 // backfillAuthProvider derives the auth provider for users created before the
 // field was introduced. The rule mirrors how new users are created: any user
 // with a stored password came in via invite acceptance (guest); everyone
@@ -251,6 +310,29 @@ func (s *UserService) GetByID(ctx context.Context, id string) (*model.User, erro
 	}
 	s.resolveAvatar(ctx, user)
 	return user, nil
+}
+
+// UserStatus returns just the account status — the auth middleware's
+// deactivation check runs on EVERY authenticated request and discards
+// everything but Status, so this path deliberately skips the avatar-URL
+// resolution GetByID performs (1-3 extra Redis round trips per request for a
+// presigned URL nobody read). Cache-first with a store fill on miss, same as
+// GetByID, so steady state is one Redis GET per request.
+func (s *UserService) UserStatus(ctx context.Context, id string) (string, error) {
+	if s.cache != nil {
+		if user, err := s.cache.GetUser(ctx, id); err == nil {
+			return user.Status, nil
+		}
+	}
+	user, err := s.users.GetUser(ctx, id)
+	if err != nil {
+		return "", fmt.Errorf("user: get status: %w", err)
+	}
+	normalizeUserProfile(user)
+	if s.cache != nil {
+		_ = s.cache.SetUser(ctx, user)
+	}
+	return user.Status, nil
 }
 
 // GetByEmail returns a user by email address.
@@ -408,18 +490,12 @@ func (s *UserService) ClearExpiredStatuses(ctx context.Context, now time.Time, l
 				continue
 			}
 
-			user, err := s.users.GetUser(ctx, listedUser.ID)
+			user, ok, err := s.clearExpiredStatus(ctx, listedUser, now)
 			if err != nil {
-				return cleared, fmt.Errorf("user: get expired status user: %w", err)
+				return cleared, err
 			}
-			if user == nil || user.UserStatus == nil || user.UserStatus.ClearAt == nil || user.UserStatus.ClearAt.After(now) {
+			if !ok {
 				continue
-			}
-
-			user.UserStatus = nil
-			user.UpdatedAt = now
-			if err := s.users.UpdateUser(ctx, user); err != nil {
-				return cleared, fmt.Errorf("user: clear expired status: %w", err)
 			}
 			if s.cache != nil {
 				_ = s.cache.Delete(ctx, "user:"+user.ID)
@@ -437,6 +513,46 @@ func (s *UserService) ClearExpiredStatuses(ctx context.Context, now time.Time, l
 		}
 		cursor = nextCursor
 	}
+}
+
+// conditionalStatusClearer is the optional atomic form of the status clear
+// (the DynamoDB store has it): remove the status only while it still carries
+// the clearAt the sweep observed — one surgical write, no read, and a user
+// who just set a NEW status keeps it.
+type conditionalStatusClearer interface {
+	ClearUserStatusIfExpired(ctx context.Context, userID string, seenClearAt time.Time, now time.Time) (bool, error)
+}
+
+// clearExpiredStatus clears one user's expired status, returning the user to
+// publish for and whether anything was cleared. Prefers the conditional
+// single-write path; plain stores keep the legacy re-read + full update.
+func (s *UserService) clearExpiredStatus(ctx context.Context, listedUser *model.User, now time.Time) (*model.User, bool, error) {
+	if cc, ok := s.users.(conditionalStatusClearer); ok {
+		cleared, err := cc.ClearUserStatusIfExpired(ctx, listedUser.ID, *listedUser.UserStatus.ClearAt, now)
+		if err != nil {
+			return nil, false, fmt.Errorf("user: clear expired status: %w", err)
+		}
+		if !cleared {
+			return nil, false, nil
+		}
+		u := *listedUser
+		u.UserStatus = nil
+		u.UpdatedAt = now
+		return &u, true, nil
+	}
+	user, err := s.users.GetUser(ctx, listedUser.ID)
+	if err != nil {
+		return nil, false, fmt.Errorf("user: get expired status user: %w", err)
+	}
+	if user == nil || user.UserStatus == nil || user.UserStatus.ClearAt == nil || user.UserStatus.ClearAt.After(now) {
+		return nil, false, nil
+	}
+	user.UserStatus = nil
+	user.UpdatedAt = now
+	if err := s.users.UpdateUser(ctx, user); err != nil {
+		return nil, false, fmt.Errorf("user: clear expired status: %w", err)
+	}
+	return user, true, nil
 }
 
 // RunExpiredStatusSweeper periodically clears expired statuses from the
@@ -526,29 +642,44 @@ type batchUserStore interface {
 func (s *UserService) GetBatch(ctx context.Context, ids []string) ([]*model.User, error) {
 	byID := make(map[string]*model.User, len(ids))
 	misses := make([]string, 0, len(ids))
-	for _, id := range ids {
-		if s.cache != nil {
-			if u, err := s.cache.GetUser(ctx, id); err == nil {
-				normalizeUserProfile(u)
-				s.resolveAvatar(ctx, u)
-				byID[id] = u
-				continue
+	// One MGET for the whole ID list when the cache batches — the old per-ID
+	// loop cost a sequential Redis round trip per user (2N with avatars).
+	if bc, ok := s.cache.(batchUserCache); ok {
+		if cached, err := bc.GetUsers(ctx, ids); err == nil {
+			for _, id := range ids {
+				if u, ok := cached[id]; ok {
+					normalizeUserProfile(u)
+					byID[id] = u
+					continue
+				}
+				misses = append(misses, id)
 			}
+		} else {
+			misses = append(misses, ids...)
 		}
-		misses = append(misses, id)
+	} else {
+		for _, id := range ids {
+			if s.cache != nil {
+				if u, err := s.cache.GetUser(ctx, id); err == nil {
+					normalizeUserProfile(u)
+					byID[id] = u
+					continue
+				}
+			}
+			misses = append(misses, id)
+		}
 	}
 
 	bs, batchable := s.users.(batchUserStore)
 	if batchable && len(misses) > 0 {
 		if fetched, err := bs.GetUsersByIDs(ctx, misses); err == nil {
+			toCache := make([]*model.User, 0, len(fetched))
 			for _, u := range fetched {
 				normalizeUserProfile(u)
-				if s.cache != nil {
-					_ = s.cache.SetUser(ctx, u)
-				}
-				s.resolveAvatar(ctx, u)
 				byID[u.ID] = u
+				toCache = append(toCache, u)
 			}
+			s.cacheUsers(ctx, toCache)
 			misses = nil // resolved via the batch
 		}
 		// On a batch error, fall through to the per-id resolution below.
@@ -567,6 +698,9 @@ func (s *UserService) GetBatch(ctx context.Context, ids []string) ([]*model.User
 			seen[id] = true
 		}
 	}
+	// ONE batched avatar resolution for the whole result — two Redis round
+	// trips total instead of one (or three) per user.
+	s.resolveAvatars(ctx, out)
 	return out, nil
 }
 
@@ -711,7 +845,8 @@ func (s *UserService) List(ctx context.Context, limit int, cursor string) ([]*mo
 	}
 	for _, u := range users {
 		normalizeUserProfile(u)
-		s.resolveAvatar(ctx, u)
 	}
+	// Batched: the old per-user resolveAvatar cost a serial Redis GET each.
+	s.resolveAvatars(ctx, users)
 	return users, nextCursor, nil
 }

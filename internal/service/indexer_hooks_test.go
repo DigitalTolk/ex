@@ -377,6 +377,9 @@ func TestChannelService_SearchPublic_GuestScopedToMemberships(t *testing.T) {
 	channels.channels["c-joined"] = &model.Channel{ID: "c-joined", Name: "joined", Type: model.ChannelTypePublic}
 	channels.channels["c-other"] = &model.Channel{ID: "c-other", Name: "other", Type: model.ChannelTypePublic}
 	memberships.memberships["c-joined#guest-1"] = &model.ChannelMembership{ChannelID: "c-joined", UserID: "guest-1", Role: model.ChannelRoleMember}
+	// The guest scope now comes from ONE ListUserChannels read instead of a
+	// GetMembership per hit, so the membership must exist in list form too.
+	memberships.userChannels = []*model.UserChannel{{UserID: "guest-1", ChannelID: "c-joined"}}
 	svc.SetSearcher(&stubChannelSearcher{ids: []string{"c-joined", "c-other"}})
 
 	got, err := svc.SearchPublic(context.Background(), "guest-1", "x", 10)

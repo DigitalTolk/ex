@@ -155,7 +155,7 @@ function ReactionChip({
             onPointerUp={longPress.handlers.onPointerUp}
             onPointerLeave={longPress.handlers.onPointerLeave}
             onPointerCancel={longPress.handlers.onPointerCancel}
-            className={`flex items-center gap-1 rounded-full border px-1.5 py-0 text-sm hover:bg-muted ${
+            className={`flex items-center gap-1 rounded-full border px-1.5 py-0 text-sm hover:bg-muted max-md:px-2 max-md:py-0.5 ${
               reactedByMe ? 'border-primary bg-primary/10' : 'bg-background'
             }`}
             aria-label={ariaLabel}
@@ -544,7 +544,10 @@ function MessageItemImpl({
   }
 
   function renderReactionVisual(emoji: string) {
-    return <EmojiGlyph emoji={emoji} customMap={emojiMap} size="md" />;
+    // Mobile uses the smaller glyph so the chip (with its touch padding)
+    // stays no taller than the add-reaction button — same proportions the
+    // desktop chip keeps with the md glyph and zero vertical padding.
+    return <EmojiGlyph emoji={emoji} customMap={emojiMap} size={isMobile ? 'sm' : 'md'} />;
   }
 
   const REACTOR_LIST_MAX = 20;

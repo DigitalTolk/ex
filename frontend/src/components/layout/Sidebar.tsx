@@ -45,7 +45,7 @@ import { useUserState } from '@/hooks/useUserState';
 import { useDrafts } from '@/hooks/useDrafts';
 import { useActivity } from '@/hooks/useActivity';
 import { useIsMobile } from '@/hooks/useIsMobile';
-import { useCategories, useCreateCategory, useDeleteCategory, useReorderCategories, useReorderSidebar } from '@/hooks/useSidebar';
+import { useCategories, useCreateCategory, useDeleteCategory, useReorderCategories, useReorderSidebar, type SidebarMoveRequest } from '@/hooks/useSidebar';
 import { groupSidebarItems, SidebarSectionKeys, type SidebarItem, type ConversationSidebarSort } from '@/lib/sidebar-groups';
 import { computeSidebarReorder, type SidebarSectionTarget } from '@/lib/sidebar-reorder';
 import type { SidebarCategory, UserChannel, UserConversation } from '@/types';
@@ -593,13 +593,13 @@ export function Sidebar({ onClose }: SidebarProps) {
     return { categoryID: sectionCategoryID(sectionKey), favorite: false };
   }
 
-  // persistReorder densifies the target section and writes the changed rows in
-  // one batch (see computeSidebarReorder + useReorderSidebar). The dropped item
-  // lands exactly where released because the whole section is renumbered to
-  // evenly-spaced positions — no fractional gaps to run out of, no 0/unset
-  // ambiguity. favoriteChanged names the single row whose favorite flag flipped
-  // (a cross-section move in/out of Favorites) so only it hits the favorite
-  // endpoint.
+  // persistReorder reports the drop as an EVENT: "dragged X into this section,
+  // right after item A" (the item rendered directly above the release slot).
+  // The SERVER resolves the anchor against the canonical layout and computes
+  // every resulting position itself — this client never sends position numbers
+  // (positions computed from a stale local list were exactly how drops landed
+  // one slot off). computeSidebarReorder still runs, but only to paint the
+  // optimistic preview; the server's response replaces it as the truth.
   function persistReorder(
     items: SidebarItem[],
     dragged: { id: string; kind: 'channel' | 'conversation'; favorite: boolean },
@@ -613,15 +613,34 @@ export function Sidebar({ onClose }: SidebarProps) {
       clearDropTarget();
       return;
     }
-    const favoriteChanged = new Set<string>();
-    if (dragged.favorite !== target.favorite) favoriteChanged.add(dragged.id);
+    // Resolve the anchor from the RENDERED list — the same index math the
+    // optimistic preview uses, so the reported event is exactly what the
+    // user saw themselves do.
+    const rowID = (it: SidebarItem) => (it.kind === 'channel' ? it.channel.channelID : it.conversation.conversationID);
+    const currentIndex = items.findIndex((it) => rowID(it) === dragged.id);
+    const withoutDragged = items.filter((it) => rowID(it) !== dragged.id);
+    const rawIndex = currentIndex >= 0 && currentIndex < targetIndex ? targetIndex - 1 : targetIndex;
+    const clampedIndex = Math.max(0, Math.min(rawIndex, withoutDragged.length));
+    const anchor = clampedIndex > 0 ? withoutDragged[clampedIndex - 1] : null;
+    const move: SidebarMoveRequest = {
+      itemType: dragged.kind,
+      itemID: dragged.id,
+      ...(target.favorite
+        ? { section: 'favorites' as const }
+        : target.categoryID
+          ? { section: 'category' as const, categoryID: target.categoryID }
+          : { section: 'channels' as const }),
+      afterType: anchor?.kind ?? '',
+      afterID: anchor ? rowID(anchor) : '',
+    };
     sidebarDndDebug('reorder scheduled', {
       sequence: channelDropSequenceRef.current,
       draggedID: dragged.id,
+      move,
       updates,
       order: channelOrderDebugSnapshot(),
     });
-    reorderSidebar.mutate({ updates, favoriteChanged });
+    reorderSidebar.mutate({ move, updates });
     clearDropTarget();
   }
 
@@ -807,20 +826,20 @@ export function Sidebar({ onClose }: SidebarProps) {
     /* v8 ignore stop */
 
     const nextOrder = orderedCategoriesAfterDrop(draggedCategoryID, normalizedBeforeCategoryID);
+    // The event the server needs: which category the dragged one lands AFTER
+    // in the order the user just previewed ("" = the very top). The server
+    // renumbers everything itself; nextOrder only paints the optimistic state.
+    const draggedIndex = nextOrder.findIndex((category) => category.id === draggedCategoryID);
+    const afterID = draggedIndex > 0 ? nextOrder[draggedIndex - 1].id : '';
     sidebarDndDebug('category-reorder scheduled', {
       sequence,
       draggedCategoryID,
       beforeCategoryID: normalizedBeforeCategoryID,
-      order: nextOrder.map((category, index) => ({ id: category.id, position: (index + 1) * 1000 })),
+      afterID,
+      order: nextOrder.map((category) => category.id),
       previousOrder: categoryOrderDebugSnapshot(),
     });
-    sidebarDndDebug('category-reorder firing', {
-      sequence,
-      draggedCategoryID,
-      beforeCategoryID: normalizedBeforeCategoryID,
-      order: categoryOrderDebugSnapshot(),
-    });
-    reorderCategories.mutate({ categories: nextOrder });
+    reorderCategories.mutate({ categories: nextOrder, movedID: draggedCategoryID, afterID });
     setDropIndicator(null);
   }
 

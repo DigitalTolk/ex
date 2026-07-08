@@ -157,7 +157,6 @@ describe('ConversationView - extra coverage', () => {
     await user.type(inputs[0], 'hi all{enter}');
     expect(mockSendMutate).toHaveBeenCalledWith(
       { body: 'hi all', attachmentIDs: [] },
-      expect.objectContaining({ onError: expect.any(Function) }),
     );
   });
 

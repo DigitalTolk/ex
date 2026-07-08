@@ -27,8 +27,12 @@ func Auth(jwtMgr *auth.JWTManager) func(http.Handler) http.Handler {
 	return AuthWithUserStatus(jwtMgr, nil)
 }
 
+// authUserStore is deliberately status-only: the deactivation check runs on
+// every authenticated request, and a full user fetch (GetByID) drags avatar
+// URL resolution — extra Redis round trips for fields this middleware
+// discards.
 type authUserStore interface {
-	GetByID(ctx context.Context, id string) (*model.User, error)
+	UserStatus(ctx context.Context, id string) (string, error)
 }
 
 // AuthWithUserStatus validates a JWT and, when a user store is supplied,
@@ -48,8 +52,8 @@ func AuthWithUserStatus(jwtMgr *auth.JWTManager, users authUserStore) func(http.
 				return
 			}
 			if users != nil {
-				user, err := users.GetByID(r.Context(), claims.UserID)
-				if err != nil || user == nil || user.Status == "deactivated" {
+				status, err := users.UserStatus(r.Context(), claims.UserID)
+				if err != nil || status == "deactivated" {
 					http.Error(w, "account deactivated", http.StatusUnauthorized)
 					return
 				}

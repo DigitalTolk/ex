@@ -116,6 +116,12 @@ const AttachmentURLTTL = 24 * time.Hour
 
 const MaxAttachmentBatchIDs = 50
 
+// maxAttachmentDimensionPx bounds client-declared intrinsic dimensions at
+// registration. For decodable images the bytes overrule the claim anyway
+// (syncImageDimensions); for types the server can't decode (SVG, video) this
+// cap keeps a hostile claim from distorting other viewers' chat layout.
+const maxAttachmentDimensionPx = 65535
+
 const (
 	messageThumbnailMaxWidth  = 640
 	messageThumbnailMaxHeight = 576
@@ -165,7 +171,7 @@ func (s *AttachmentService) CreateUploadURL(ctx context.Context, p CreateUploadP
 	if !validSHA256Hex(p.SHA256) {
 		return nil, errors.New("attachment: invalid sha256")
 	}
-	if p.Width < 0 || p.Height < 0 {
+	if p.Width < 0 || p.Height < 0 || p.Width > maxAttachmentDimensionPx || p.Height > maxAttachmentDimensionPx {
 		return nil, errors.New("attachment: invalid dimensions")
 	}
 	if s.signer == nil {
@@ -243,6 +249,13 @@ func (s *AttachmentService) Get(ctx context.Context, id string) (*model.Attachme
 	if err != nil {
 		return nil, fmt.Errorf("attachment: get: %w", err)
 	}
+	s.finishRead(ctx, a)
+	return a, nil
+}
+
+// finishRead applies the shared read-side enrichment: thumbnail assurance,
+// presigned/media URLs and the legacy image-dimension backfill.
+func (s *AttachmentService) finishRead(ctx context.Context, a *model.Attachment) {
 	s.ensureThumbnailsForRead(ctx, a)
 	if s.signer != nil && a.S3Key != "" {
 		s.resolveAttachmentURLs(ctx, a)
@@ -250,7 +263,48 @@ func (s *AttachmentService) Get(ctx context.Context, id string) (*model.Attachme
 	if a.IsImage() && a.Width == 0 && a.Height == 0 && a.S3Key != "" && s.signer != nil {
 		s.scheduleDimensionsBackfill(a.ID, a.S3Key)
 	}
-	return a, nil
+}
+
+// batchAttachmentStore is the optional batched-read capability of the
+// attachment store (the DynamoDB impl has it).
+type batchAttachmentStore interface {
+	GetAttachmentsByIDs(ctx context.Context, ids []string) ([]*model.Attachment, error)
+}
+
+// LoadForPreview resolves many attachments with ONE batched row read (per-ID
+// fallback) plus the usual read-side enrichment, in input order. Missing or
+// failed IDs are skipped — previews are best-effort. Access gating is the
+// CALLER's job (message-link unfurl checks message access before calling).
+func (s *AttachmentService) LoadForPreview(ctx context.Context, ids []string) []*model.Attachment {
+	if len(ids) == 0 {
+		return nil
+	}
+	byID := make(map[string]*model.Attachment, len(ids))
+	if bs, ok := s.attachments.(batchAttachmentStore); ok {
+		if atts, err := bs.GetAttachmentsByIDs(ctx, ids); err == nil {
+			for _, a := range atts {
+				byID[a.ID] = a
+			}
+		}
+		// A batch failure degrades to "nothing resolved" — same skip-on-error
+		// contract the per-ID loop below has for individual reads.
+	} else {
+		for _, id := range ids {
+			if a, err := s.attachments.GetByID(ctx, id); err == nil && a != nil {
+				byID[id] = a
+			}
+		}
+	}
+	out := make([]*model.Attachment, 0, len(ids))
+	for _, id := range ids {
+		a := byID[id]
+		if a == nil {
+			continue
+		}
+		s.finishRead(ctx, a)
+		out = append(out, a)
+	}
+	return out
 }
 
 func (s *AttachmentService) GetForUser(ctx context.Context, userID, id, parentID, parentType, messageID string) (*model.Attachment, error) {
@@ -268,13 +322,7 @@ func (s *AttachmentService) GetForUser(ctx context.Context, userID, id, parentID
 	if !allowed {
 		return nil, store.ErrNotFound
 	}
-	s.ensureThumbnailsForRead(ctx, a)
-	if s.signer != nil && a.S3Key != "" {
-		s.resolveAttachmentURLs(ctx, a)
-	}
-	if a.IsImage() && a.Width == 0 && a.Height == 0 && a.S3Key != "" && s.signer != nil {
-		s.scheduleDimensionsBackfill(a.ID, a.S3Key)
-	}
+	s.finishRead(ctx, a)
 	return a, nil
 }
 
@@ -483,12 +531,38 @@ func (s *AttachmentService) GetMany(ctx context.Context, ids []string) ([]*model
 	return out, nil
 }
 
+// batchAccessChecker is the optional batch form of AttachmentAccessChecker
+// (MessageService has it): every attachment in a request shares the same
+// (parent, message), so ONE membership read + ONE message read answer the
+// whole batch instead of repeating both per attachment.
+type batchAccessChecker interface {
+	MessageAttachmentIDs(ctx context.Context, userID, parentID, parentType, messageID string) (map[string]bool, error)
+}
+
 func (s *AttachmentService) GetManyForUser(ctx context.Context, userID string, ids []string, parentID, parentType, messageID string) ([]*model.Attachment, error) {
 	if len(ids) == 0 {
 		return nil, nil
 	}
 	if len(ids) > MaxAttachmentBatchIDs {
 		return nil, fmt.Errorf("attachment: too many IDs")
+	}
+	// Resolve the message's referenced-attachment set once for the whole
+	// batch. nil = capability unavailable → per-item checks below.
+	var allowedIDs map[string]bool
+	if bc, ok := s.accessChecker.(batchAccessChecker); ok && userID != "" && parentID != "" && parentType != "" && messageID != "" {
+		set, err := bc.MessageAttachmentIDs(ctx, userID, parentID, parentType, messageID)
+		switch {
+		case err == nil:
+			allowedIDs = set
+		case errors.Is(err, ErrForbidden) || errors.Is(err, store.ErrNotFound):
+			// Definitive denial (not a member, message gone): only the
+			// owner-of-unattached rule below can still allow an item.
+			allowedIDs = map[string]bool{}
+		default:
+			// The check could not run — fail the batch rather than shrink it
+			// (same contract as the per-item arm below).
+			return nil, err
+		}
 	}
 	results := make([]*model.Attachment, len(ids))
 	errs := make([]error, len(ids))
@@ -501,6 +575,24 @@ func (s *AttachmentService) GetManyForUser(ctx context.Context, userID string, i
 		go func(i int, id string) {
 			defer wg.Done()
 			defer safe.Recover()
+			if allowedIDs != nil {
+				a, err := s.attachments.GetByID(ctx, id)
+				if err != nil {
+					errs[i] = fmt.Errorf("attachment: get: %w", err)
+					return
+				}
+				// Same rules as canAccessAttachment, minus the per-item
+				// message read: referenced by the checked message, or the
+				// caller's own not-yet-attached upload.
+				ownUnattached := a.CreatedBy == userID && len(a.MessageIDs) == 0
+				if !allowedIDs[a.ID] && !ownUnattached {
+					errs[i] = store.ErrNotFound
+					return
+				}
+				s.finishRead(ctx, a)
+				results[i] = a
+				return
+			}
 			a, err := s.GetForUser(ctx, userID, id, parentID, parentType, messageID)
 			if err != nil {
 				errs[i] = err
@@ -561,9 +653,33 @@ func (s *AttachmentService) ValidateForUse(ctx context.Context, attachmentID str
 	if err != nil {
 		return err
 	}
+	// Persist the decoded (trusted) dimensions here too, not only in
+	// ProcessUpload: a client that skips the process endpoint must not get a
+	// message posted whose renderable dimensions the server never confirmed.
+	// For decodable images the register-time client values are only a hint;
+	// the bytes are the truth.
+	if err := s.syncImageDimensions(ctx, a, cfg); err != nil {
+		return err
+	}
 	if err := s.generateThumbnails(ctx, a, data, cfg, false); err != nil {
 		return err
 	}
+	return nil
+}
+
+// syncImageDimensions overwrites the stored width/height with the decoded
+// image config when they disagree (covers register-time zero dims and any
+// row that predates dimension collection). Non-image uploads decode to a
+// zero config and are left untouched.
+func (s *AttachmentService) syncImageDimensions(ctx context.Context, a *model.Attachment, cfg image.Config) error {
+	if cfg.Width <= 0 || cfg.Height <= 0 || (a.Width == cfg.Width && a.Height == cfg.Height) {
+		return nil
+	}
+	if err := s.attachments.SetDimensions(ctx, a.ID, cfg.Width, cfg.Height); err != nil {
+		return fmt.Errorf("attachment: set dimensions: %w", err)
+	}
+	a.Width = cfg.Width
+	a.Height = cfg.Height
 	return nil
 }
 
@@ -593,12 +709,8 @@ func (s *AttachmentService) ProcessUpload(ctx context.Context, userID, attachmen
 	if err != nil {
 		return nil, err
 	}
-	if cfg.Width > 0 && cfg.Height > 0 && (a.Width != cfg.Width || a.Height != cfg.Height) {
-		if err := s.attachments.SetDimensions(ctx, a.ID, cfg.Width, cfg.Height); err != nil {
-			return nil, fmt.Errorf("attachment: set dimensions: %w", err)
-		}
-		a.Width = cfg.Width
-		a.Height = cfg.Height
+	if err := s.syncImageDimensions(ctx, a, cfg); err != nil {
+		return nil, err
 	}
 	if err := s.generateThumbnails(ctx, a, data, cfg, true); err != nil {
 		return nil, err

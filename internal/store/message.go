@@ -456,3 +456,39 @@ func (s *MessageStoreImpl) Delete(ctx context.Context, parentID, msgID string) e
 	}
 	return nil
 }
+
+// GetMessagesByIDs fetches many messages of ONE parent in chunked
+// BatchGetItem calls instead of a GetItem per ID (pin resolution, thread-root
+// hydration). Missing IDs are absent from the result; order not guaranteed.
+func (s *MessageStoreImpl) GetMessagesByIDs(ctx context.Context, parentID string, ids []string) ([]*model.Message, error) {
+	out := make([]*model.Message, 0, len(ids))
+	const batchSize = 100
+	for start := 0; start < len(ids); start += batchSize {
+		end := min(start+batchSize, len(ids))
+		keys := make([]map[string]types.AttributeValue, 0, end-start)
+		for _, id := range ids[start:end] {
+			keys = append(keys, compositeKey(parentPK(parentID), msgSK(id)))
+		}
+		req := map[string]types.KeysAndAttributes{s.Table: {Keys: keys}}
+		for {
+			res, err := s.Client.BatchGetItem(ctx, &dynamodb.BatchGetItemInput{RequestItems: req})
+			if err != nil {
+				return nil, fmt.Errorf("store: batch get messages: %w", err)
+			}
+			for _, item := range res.Responses[s.Table] {
+				var rec messageItem
+				if err := attributevalue.UnmarshalMap(item, &rec); err != nil {
+					return nil, fmt.Errorf("store: unmarshal message: %w", err)
+				}
+				msg := rec.Message
+				out = append(out, &msg)
+			}
+			// DynamoDB may return unprocessed keys under throttling — drain them.
+			if len(res.UnprocessedKeys) == 0 {
+				break
+			}
+			req = res.UnprocessedKeys
+		}
+	}
+	return out, nil
+}

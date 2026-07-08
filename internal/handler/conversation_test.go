@@ -962,7 +962,9 @@ func TestConvHandlerFull_SendMessage_ClearsDraftByScope(t *testing.T) {
 		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
 	}
 	fake.waitForCall(t)
-	if len(fake.calls) != 1 || fake.calls[0] != (draftClearCall{"u-sender", "conv-msg", service.ParentConversation, "", 99}) {
+	// The legacy clientTs field in the request body is tolerated (stale tabs
+	// still send it) but plays no part: the fold is unconditional.
+	if len(fake.calls) != 1 || fake.calls[0] != (draftClearCall{"u-sender", "conv-msg", service.ParentConversation, ""}) {
 		t.Fatalf("clear call = %+v", fake.calls)
 	}
 }

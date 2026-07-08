@@ -28,14 +28,19 @@ describe('InviteDialog browser behavior', () => {
     await expect.element(input).toBeVisible();
     await expect.element(button).toBeVisible();
 
-    const inputHeight = input.getBoundingClientRect().height;
-    const buttonHeight = button.getBoundingClientRect().height;
-    if (window.innerWidth <= 767) {
+    // Measure SETTLED layout: a snapshot taken while the dialog's entrance
+    // animation (scale transform) or font loading is still in flight reads
+    // fractional mid-animation heights on WebKit and flakes by ~2px.
+    // Retrying until the alignment holds asserts the same contract against
+    // the final layout.
+    await vi.waitFor(() => {
+      const inputHeight = input.getBoundingClientRect().height;
+      const buttonHeight = button.getBoundingClientRect().height;
       expect(Math.abs(inputHeight - buttonHeight)).toBeLessThanOrEqual(1);
-      expect(inputHeight).toBeGreaterThanOrEqual(40);
-    } else {
-      expect(Math.abs(inputHeight - buttonHeight)).toBeLessThanOrEqual(1);
-    }
+      if (window.innerWidth <= 767) {
+        expect(inputHeight).toBeGreaterThanOrEqual(40);
+      }
+    });
   });
 
   it('does not make the mobile page scroll when the invite email input is focused', async () => {

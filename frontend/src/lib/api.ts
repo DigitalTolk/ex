@@ -19,29 +19,39 @@ export function clearAccessToken() {
 
 export class ApiError extends Error {
   status: number;
+  // Parsed JSON body of the error response, when there was one. Lets
+  // protocol-aware callers (e.g. the drafts 409 reconcile) read structured
+  // fields like `current` without a second request.
+  payload?: unknown;
 
-  constructor(status: number, message: string) {
+  constructor(status: number, message: string, payload?: unknown) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
+    this.payload = payload;
   }
 }
 
-async function errorMessageFromResponse(res: Response): Promise<string> {
+async function apiErrorFromResponse(res: Response): Promise<ApiError> {
   const text = await res.text();
-  if (!text) return res.statusText || `Request failed (${res.status})`;
+  if (!text) {
+    return new ApiError(res.status, res.statusText || `Request failed (${res.status})`);
+  }
+  let message = text;
+  let payload: unknown;
   try {
-    const data = JSON.parse(text) as {
+    payload = JSON.parse(text);
+    const data = payload as {
       error?: string | { message?: string; code?: string };
       message?: string;
     };
-    if (typeof data.error === 'string') return data.error;
-    if (data.error?.message) return data.error.message;
-    if (data.message) return data.message;
+    if (typeof data.error === 'string') message = data.error;
+    else if (data.error?.message) message = data.error.message;
+    else if (data.message) message = data.message;
   } catch {
     // Plain-text error response.
   }
-  return text;
+  return new ApiError(res.status, message, payload);
 }
 
 export function captureServerVersion(res: Response): void {
@@ -137,7 +147,7 @@ export async function apiFetch<T>(
       });
       captureServerVersion(retry);
       if (!retry.ok) {
-        throw new ApiError(retry.status, await errorMessageFromResponse(retry));
+        throw await apiErrorFromResponse(retry);
       }
       return retry.json();
     }
@@ -154,7 +164,7 @@ export async function apiFetch<T>(
     if (res.status === 401) {
       clearAccessToken();
     }
-    throw new ApiError(res.status, await errorMessageFromResponse(res));
+    throw await apiErrorFromResponse(res);
   }
 
   if (res.status === 204) {

@@ -189,6 +189,14 @@ func (s *MessageLinkService) loadAttachments(ctx context.Context, msg *model.Mes
 	if s.attachments == nil || len(msg.AttachmentIDs) == 0 {
 		return nil
 	}
+	// One batched row read for the whole preview when the resolver supports
+	// it (AttachmentService.LoadForPreview); the message-access gate already
+	// ran before unfurling.
+	if batch, ok := s.attachments.(interface {
+		LoadForPreview(ctx context.Context, ids []string) []*model.Attachment
+	}); ok {
+		return batch.LoadForPreview(ctx, msg.AttachmentIDs)
+	}
 	out := make([]*model.Attachment, 0, len(msg.AttachmentIDs))
 	for _, id := range msg.AttachmentIDs {
 		att, err := s.attachments.Get(ctx, id)

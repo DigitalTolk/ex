@@ -113,6 +113,68 @@ describe('MessageInput coverage flows (browser)', () => {
     expect(onCancel).toHaveBeenCalledTimes(1);
   });
 
+  it('a composer waking from a LONG sleep drops the local-edit claim and mirrors the server clear', async () => {
+    const screen = await renderWithProviders(
+      <MessageInput onSend={vi.fn()} focusKey="conv-sleep" initialBody="" onDraftChange={vi.fn()} />,
+    );
+    // A stray wake with no prior hide is a no-op (hiddenAt === 0 arm).
+    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+    document.dispatchEvent(new Event('visibilitychange'));
+
+    const editor = screen.getByLabelText('Message input');
+    await editor.click();
+    await editor.fill('typed days ago');
+    await settle();
+
+    const base = Date.now();
+    const dateNow = vi.spyOn(Date, 'now');
+    try {
+      dateNow.mockReturnValue(base);
+      Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true });
+      document.dispatchEvent(new Event('visibilitychange'));
+      // …a week passes with the tab asleep…
+      dateNow.mockReturnValue(base + 7 * 24 * 60 * 60 * 1000);
+      Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+      document.dispatchEvent(new Event('visibilitychange'));
+    } finally {
+      dateNow.mockRestore();
+      Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+    }
+
+    // The scope's draft was cleared elsewhere while this tab slept: the
+    // expired claim lets the mirror empty the zombie buffer.
+    screen.rerenderWithProviders(
+      <MessageInput onSend={vi.fn()} focusKey="conv-sleep" initialBody="" onDraftChange={vi.fn()} />,
+    );
+    await vi.waitFor(() => {
+      expect((screen.getByLabelText('Message input').element().textContent ?? '').trim()).toBe('');
+    });
+    await settle();
+  });
+
+  it('mirrors an attachments-only server draft (empty body) into an empty composer', async () => {
+    const screen = await renderWithProviders(
+      <MessageInput onSend={vi.fn()} focusKey="conv-att" initialBody="" onDraftChange={vi.fn()} />,
+    );
+    await settle();
+    const chip = {
+      id: 'att-1',
+      filename: 'spec.pdf',
+      contentType: 'application/pdf',
+      size: 10,
+      progress: 1,
+    };
+    // Same focusKey, empty body, one attachment — the mirror applies it and
+    // the focus rule evaluates its attachments-only arm.
+    screen.rerenderWithProviders(
+      <MessageInput onSend={vi.fn()} focusKey="conv-att" initialBody="" initialDrafts={[chip]} onDraftChange={vi.fn()} />,
+    );
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain('spec.pdf');
+    });
+    await settle();
+  });
+
   it('restores composer focus on visibilitychange back to visible after a focused hide', async () => {
     if (window.innerWidth > 767) return; // visibility focus restore is the mobile path
     const screen = await renderWithProviders(<MessageInput onSend={vi.fn()} />);

@@ -19,6 +19,7 @@ export const EventType = {
   PresenceChanged: 'presence.changed',
   UserUpdated: 'user.updated',
   UserChannelUpdated: 'userchannel.updated',
+  SidebarUpdated: 'sidebar.updated',
   AttachmentDeleted: 'attachment.deleted',
   ChannelMuted: 'channel.muted',
   NotificationNew: 'notification.new',

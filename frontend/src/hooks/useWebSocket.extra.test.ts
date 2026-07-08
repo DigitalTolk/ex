@@ -154,6 +154,7 @@ describe('useWebSocket - extra coverage', () => {
     ['emoji.removed', 'onEmojiRemoved', { name: ':party:' }],
     ['user.updated', 'onUserUpdated', { id: 'u-1', displayName: 'New' }],
     ['userchannel.updated', 'onUserChannelUpdated', { channelID: 'ch-1', sidebarPosition: 1000 }],
+    ['sidebar.updated', 'onSidebarUpdated', { userID: 'u-1' }],
     ['attachment.deleted', 'onAttachmentDeleted', { attachmentID: 'a-1' }],
     ['channel.muted', 'onChannelMuted', { channelID: 'ch-1', muted: true }],
     ['notification.new', 'onNotification', { id: 'n-1' }],

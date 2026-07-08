@@ -201,8 +201,20 @@ func TestCorruptRows_QueryArms(t *testing.T) {
 	})
 	t.Run("user findByEmailScan fallback", func(t *testing.T) {
 		// The email pointer row misses (real GetItem), so GetByEmail falls
-		// back to the fallback query — which returns the corrupt row.
-		_, err := NewUserStore(faulted).GetByEmail(ctx, "missing@x.io")
+		// back to the fallback query — which returns a corrupt row. The
+		// fallback projects only id+email, so the corruption must hit a
+		// projected field to reach its unmarshal arm.
+		emailCorrupt := withFault(db, func(f *faultClient) {
+			f.transformQuery = func(out *dynamodb.QueryOutput) *dynamodb.QueryOutput {
+				out.Items = []map[string]types.AttributeValue{{
+					"email": &types.AttributeValueMemberM{Value: map[string]types.AttributeValue{}},
+				}}
+				out.Count = 1
+				out.LastEvaluatedKey = nil
+				return out
+			}
+		})
+		_, err := NewUserStore(emailCorrupt).GetByEmail(ctx, "missing@x.io")
 		assertUnmarshalErr(t, err, "user findByEmailScan")
 	})
 }

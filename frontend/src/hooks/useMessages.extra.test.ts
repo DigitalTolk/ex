@@ -10,12 +10,18 @@ import {
   useDeleteMessage,
 } from './useMessages';
 
-vi.mock('@/lib/api', () => ({
+vi.mock('@/lib/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/api')>()),
   apiFetch: vi.fn(),
 }));
 
 import { apiFetch } from '@/lib/api';
-import { resetDraftSessionState, shouldRefetchDraftsForRemoteUpdate } from './useDrafts';
+import {
+  adoptDraftBasis,
+  draftBasisFor,
+  resetDraftSessionState,
+  shouldRefetchDraftsForRemoteUpdate,
+} from './useDrafts';
 import { resetUserStateSessionState, shouldRefetchUserStateForRemoteUpdate } from './useUserState';
 
 function createWrapper() {
@@ -60,8 +66,9 @@ describe('useSendChannelMessage', () => {
     expect(call?.[1]?.method).toBe('POST');
     const sent = JSON.parse(String(call?.[1]?.body));
     expect(sent).toMatchObject({ body: 'hello', parentMessageID: '', attachmentIDs: [] });
-    // The send carries clientTs so the server folds the draft-clear into it.
-    expect(sent.clientTs).toBeGreaterThan(0);
+    // No client clock rides the send: the server-side draft-clear fold is
+    // unconditional (sending is the authoritative event for the scope).
+    expect(sent.clientTs).toBeUndefined();
   });
 
   it('posting a thread reply optimistically appends to the open thread without any /threads refetch', async () => {
@@ -226,6 +233,65 @@ describe('useSendMessage user-state echo window', () => {
   });
 });
 
+describe('useSendChannelMessage draft lifecycle', () => {
+  beforeEach(() => {
+    vi.mocked(apiFetch).mockReset();
+    resetDraftSessionState();
+  });
+
+  it('condemns the scope draft at send: basis resets and the cache row is dropped on success', async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    const scope = { parentID: 'ch-1', parentType: 'channel' as const };
+    qc.setQueryData(['drafts'], [
+      { id: 'd-1', userID: 'u-1', parentID: 'ch-1', parentType: 'channel', parentMessageID: '', body: 'wip', attachmentIDs: [], updatedAt: '', createdAt: '', gen: 'g-1' },
+    ]);
+    adoptDraftBasis(scope, 'g-1');
+    vi.mocked(apiFetch).mockResolvedValue({ id: 'msg-new', parentID: 'ch-1', authorID: 'u-1', body: 'hello', createdAt: '' });
+
+    const wrapper = ({ children }: { children: ReactNode }) =>
+      createElement(QueryClientProvider, { client: qc }, children);
+    const { result } = renderHook(() => useSendChannelMessage('ch-1'), { wrapper });
+    result.current.mutate({ body: 'hello', attachmentIDs: [] });
+
+    // Condemned at MUTATE time — before the server answers.
+    expect(draftBasisFor(scope)).toBe('');
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    // On success the scope's row leaves the local cache immediately.
+    expect((qc.getQueryData(['drafts']) as Array<{ id: string }>).map((d) => d.id)).toEqual([]);
+  });
+
+  it('rolls the draft protocol state back when the send fails (the fold never ran)', async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    const scope = { parentID: 'ch-1', parentType: 'channel' as const };
+    adoptDraftBasis(scope, 'g-live');
+    vi.mocked(apiFetch).mockRejectedValue(new Error('network down'));
+
+    const wrapper = ({ children }: { children: ReactNode }) =>
+      createElement(QueryClientProvider, { client: qc }, children);
+    const { result } = renderHook(() => useSendChannelMessage('ch-1'), { wrapper });
+    result.current.mutate({ body: 'hello', attachmentIDs: [] });
+    expect(draftBasisFor(scope)).toBe('');
+
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    // The draft still exists server-side; the session acts on it again.
+    expect(draftBasisFor(scope)).toBe('g-live');
+  });
+
+  it('a thread reply condemns the THREAD scope, not the channel scope', async () => {
+    const channelScope = { parentID: 'ch-1', parentType: 'channel' as const };
+    const threadScope = { parentID: 'ch-1', parentType: 'channel' as const, parentMessageID: 'root-1' };
+    adoptDraftBasis(channelScope, 'g-main');
+    adoptDraftBasis(threadScope, 'g-thread');
+    vi.mocked(apiFetch).mockResolvedValue({ id: 'r-1', parentID: 'ch-1', parentMessageID: 'root-1', authorID: 'u-1', body: 'r', createdAt: '' });
+
+    const { result } = renderHook(() => useSendChannelMessage('ch-1'), { wrapper: createWrapper() });
+    result.current.mutate({ body: 'r', attachmentIDs: [], parentMessageID: 'root-1' });
+    expect(draftBasisFor(threadScope)).toBe('');
+    expect(draftBasisFor(channelScope)).toBe('g-main');
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+  });
+});
+
 describe('useSendConversationMessage', () => {
   beforeEach(() => vi.mocked(apiFetch).mockReset());
 
@@ -241,7 +307,7 @@ describe('useSendConversationMessage', () => {
     expect(call?.[1]?.method).toBe('POST');
     const sent = JSON.parse(String(call?.[1]?.body));
     expect(sent).toMatchObject({ body: 'hi there', parentMessageID: '', attachmentIDs: [] });
-    expect(sent.clientTs).toBeGreaterThan(0);
+    expect(sent.clientTs).toBeUndefined();
   });
 });
 

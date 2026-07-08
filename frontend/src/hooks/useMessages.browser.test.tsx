@@ -27,7 +27,8 @@ import { queryKeys } from '@/lib/query-keys';
 import type { Message } from '@/types';
 
 const apiFetchMock = vi.hoisted(() => vi.fn());
-vi.mock('@/lib/api', () => ({
+vi.mock('@/lib/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/api')>()),
   apiFetch: (...args: unknown[]) => apiFetchMock(...args),
 }));
 
@@ -231,6 +232,39 @@ describe('useMessages — REST mutations', () => {
     await vi.waitFor(() => expect(resetSpy).toHaveBeenCalled());
   });
 
+  it('a thread reply to a root missing from the cached /threads list refetches it (participation may have begun)', async () => {
+    apiFetchMock.mockResolvedValue(msg({ id: 'r-1', parentMessageID: 'root-9' }));
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    // The /threads list is cached but does NOT contain this root yet — the
+    // reply may have just made the sender a participant, so it refetches.
+    qc.setQueryData(['userThreads'], [{ threadRootID: 'root-other' }]);
+    const screen = await render(
+      <QueryClientProvider client={qc}>
+        <Trigger hook={() => useSendMessage({ channelId: 'ch-1' })} vars={{ body: 'r', parentMessageID: 'root-9' }} />
+      </QueryClientProvider>,
+    );
+    (screen.getByTestId('trigger').element() as HTMLButtonElement).click();
+    await vi.waitFor(() => {
+      expect(qc.getQueryState(['userThreads'])?.isInvalidated).toBe(true);
+    });
+  });
+
+  it('a thread reply whose root IS already listed leaves the /threads cache alone', async () => {
+    // The thread.updated event patches the listed row live; a refetch here
+    // could clobber the fresher patch with an eventually-consistent read.
+    apiFetchMock.mockResolvedValue(msg({ id: 'r-2', parentMessageID: 'root-9' }));
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    qc.setQueryData(['userThreads'], [{ threadRootID: 'root-9' }]);
+    const screen = await render(
+      <QueryClientProvider client={qc}>
+        <Trigger hook={() => useSendMessage({ channelId: 'ch-1' })} vars={{ body: 'r2', parentMessageID: 'root-9' }} />
+      </QueryClientProvider>,
+    );
+    (screen.getByTestId('trigger').element() as HTMLButtonElement).click();
+    await new Promise((r) => setTimeout(r, 250));
+    expect(qc.getQueryState(['userThreads'])?.isInvalidated).toBe(false);
+  });
+
   it('useSendMessage POSTs to /channels/:id/messages with body+parent+attachments defaults', async () => {
     apiFetchMock.mockResolvedValue(msg({ id: 'new' }));
     const { screen } = await renderMutation(
@@ -242,8 +276,9 @@ describe('useMessages — REST mutations', () => {
     expect(apiFetchMock.mock.calls[0][0]).toBe('/api/v1/channels/ch-1/messages');
     const body = JSON.parse((apiFetchMock.mock.calls[0][1] as { body: string }).body);
     expect(body).toMatchObject({ body: 'hi', parentMessageID: '', attachmentIDs: [] });
-    // The send carries clientTs so the server folds the draft-clear into it.
-    expect(body.clientTs).toBeGreaterThan(0);
+    // No client clock rides the send: the server-side draft-clear fold is
+    // unconditional (sending is the authoritative event for the scope).
+    expect(body.clientTs).toBeUndefined();
   });
 
   it('useSendMessage routes to /conversations/:id/messages when conversationId is set', async () => {

@@ -1576,3 +1576,75 @@ func TestAttachmentThumbnailHelpers(t *testing.T) {
 		t.Fatalf("squareThumbnailFilename = %q", got)
 	}
 }
+
+func TestAttachmentService_CreateUploadURL_RejectsAbsurdDimensions(t *testing.T) {
+	// Client-declared dimensions are only a pre-upload hint, but for types
+	// the server can't decode (SVG, video) they reach every viewer's layout —
+	// bound them so a hostile client can't distort the chat for others.
+	storeM := newMockAttachmentStore()
+	signer := &fakeAttachmentSigner{objects: map[string][]byte{}, putContentTypes: map[string]string{}}
+	svc := NewAttachmentService(storeM, signer, newMockPublisher())
+	object := makePNG(4, 4)
+
+	for _, tc := range []struct{ w, h int }{
+		{maxAttachmentDimensionPx + 1, 10},
+		{10, maxAttachmentDimensionPx + 1},
+	} {
+		_, err := svc.CreateUploadURL(context.Background(), CreateUploadParams{
+			UserID: "u1", Filename: "huge.svg", ContentType: "image/svg+xml",
+			SHA256: sha256Hex(object), Size: int64(len(object)), Width: tc.w, Height: tc.h,
+		})
+		if err == nil {
+			t.Fatalf("dimensions %dx%d must be rejected", tc.w, tc.h)
+		}
+	}
+}
+
+func TestAttachmentService_ValidateForUse_PersistsDecodedDimensions(t *testing.T) {
+	// A client that skips the process endpoint must not get a message posted
+	// with dimensions the server never confirmed: the send-path guard
+	// (ValidateForUse) persists the decoded truth exactly like ProcessUpload.
+	storeM := newMockAttachmentStore()
+	object := makePNG(40, 20)
+	signer := &fakeAttachmentSigner{objects: map[string][]byte{}, putContentTypes: map[string]string{}}
+	svc := NewAttachmentService(storeM, signer, newMockPublisher())
+
+	// Registered WITHOUT dimensions (the zero hint skips the mismatch check).
+	res, err := svc.CreateUploadURL(context.Background(), CreateUploadParams{
+		UserID: "u1", Filename: "pic.png", ContentType: "image/png", SHA256: sha256Hex(object), Size: int64(len(object)),
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	signer.objects[res.Attachment.S3Key] = object
+
+	// Client "forgets" ProcessUpload and goes straight to sending.
+	if err := svc.ValidateForUse(context.Background(), res.Attachment.ID); err != nil {
+		t.Fatalf("ValidateForUse: %v", err)
+	}
+	stored, err := storeM.GetByID(context.Background(), res.Attachment.ID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if stored.Width != 40 || stored.Height != 20 {
+		t.Fatalf("stored dimensions = %dx%d, want the decoded 40x20", stored.Width, stored.Height)
+	}
+}
+
+func TestAttachmentService_ValidateForUse_SetDimensionsError(t *testing.T) {
+	storeM := newMockAttachmentStore()
+	object := makePNG(8, 8)
+	signer := &fakeAttachmentSigner{objects: map[string][]byte{}, putContentTypes: map[string]string{}}
+	svc := NewAttachmentService(storeM, signer, newMockPublisher())
+	res, err := svc.CreateUploadURL(context.Background(), CreateUploadParams{
+		UserID: "u1", Filename: "pic.png", ContentType: "image/png", SHA256: sha256Hex(object), Size: int64(len(object)),
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	signer.objects[res.Attachment.S3Key] = object
+	storeM.setDimErr = errors.New("dynamo down")
+	if err := svc.ValidateForUse(context.Background(), res.Attachment.ID); err == nil {
+		t.Fatal("expected set-dimensions error to surface")
+	}
+}

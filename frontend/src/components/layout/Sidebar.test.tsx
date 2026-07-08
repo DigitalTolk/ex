@@ -14,15 +14,27 @@ const mockApiFetch = vi.hoisted(() => vi.fn());
 // /{kind}/{id}/category. Assert the dragged row's PUT went to the right section
 // at a POSITIVE dense position (the exact integer is unit-tested in
 // sidebar-reorder.test.ts) — crucially, never a negative/collision value again.
-function lastCategoryPut(kind: 'channels' | 'conversations', id: string): { categoryID: string; sidebarPosition: number } | undefined {
-  const call = [...mockApiFetch.mock.calls].reverse().find(
-    ([url]) => url === `/api/v1/${kind}/${id}/category`,
-  );
+function lastMoveBody(): { itemType: string; itemID: string; section: string; categoryID: string; afterType: string; afterID: string } | undefined {
+  const call = [...mockApiFetch.mock.calls].reverse().find(([url]) => url === '/api/v1/sidebar/move');
+  return call ? JSON.parse((call[1] as { body: string }).body) : undefined;
+}
+function lastCategoryMoveBody(id: string): { afterID: string } | undefined {
+  const call = [...mockApiFetch.mock.calls].reverse().find(([url]) => url === `/api/v1/sidebar/categories/${id}/move`);
   return call ? JSON.parse((call[1] as { body: string }).body) : undefined;
 }
 
 vi.mock('@/lib/api', () => ({
-  apiFetch: mockApiFetch,
+  // Answer the server-owned move endpoints with their (empty) response
+  // shapes whenever a test's mockImplementation doesn't — the hooks read
+  // `res.updates` / `res.categories` from real responses.
+  apiFetch: async (...args: unknown[]) => {
+    const res = await mockApiFetch(...args);
+    if (res !== undefined) return res;
+    const url = String(args[0]);
+    if (url === '/api/v1/sidebar/move') return { updates: [] };
+    if (/\/sidebar\/categories\/[^/]+\/move$/.test(url)) return { categories: [] };
+    return undefined;
+  },
 }));
 
 vi.mock('@atlaskit/pragmatic-drag-and-drop/element/adapter', () => {
@@ -445,10 +457,9 @@ describe('Sidebar', () => {
     fireEvent.drop(screen.getByTestId('channel-row-ch-1'), { dataTransfer });
 
     await waitFor(() => {
-      expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/channels/ch-2/category', {
-        method: 'PUT',
-        body: JSON.stringify({ categoryID: '', sidebarPosition: 1000 }),
-      });
+      // The drop is reported as an event — item, section, anchor — never a
+      // client-computed position. Landing before ch-1 = the top (no anchor).
+      expect(lastMoveBody()).toMatchObject({ itemType: 'channel', itemID: 'ch-2', section: 'channels', afterID: '' });
     });
   });
 
@@ -470,10 +481,9 @@ describe('Sidebar', () => {
     fireDrop(header, dataTransfer, 19);
 
     await waitFor(() => {
-      expect(mockApiFetch).toHaveBeenCalledWith(
-        '/api/v1/channels/ch-2/favorite',
-        expect.objectContaining({ method: 'PUT' }),
-      );
+      // The favorite flip is the SERVER's decision — the event just targets
+      // the Favorites section.
+      expect(lastMoveBody()).toMatchObject({ itemID: 'ch-2', section: 'favorites' });
     });
   });
 
@@ -494,10 +504,8 @@ describe('Sidebar', () => {
     fireEvent.drop(screen.getByTestId('channel-row-ch-1'), { dataTransfer });
 
     await waitFor(() => {
-      expect(mockApiFetch).toHaveBeenCalledWith(
-        '/api/v1/channels/ch-2/favorite',
-        expect.objectContaining({ method: 'PUT' }),
-      );
+      // Landing in a regular section un-favorites server-side.
+      expect(lastMoveBody()).toMatchObject({ itemID: 'ch-2', section: 'channels' });
     });
   });
 
@@ -512,12 +520,9 @@ describe('Sidebar', () => {
     fireDragOver(dmHeader, dataTransfer, 19);
     fireDrop(dmHeader, dataTransfer, 19);
 
-    // A channel cannot be filed under Direct Messages → no category mutation.
+    // A channel cannot be filed under Direct Messages → no move event.
     await new Promise((r) => setTimeout(r, 0));
-    expect(mockApiFetch).not.toHaveBeenCalledWith(
-      '/api/v1/channels/ch-1/category',
-      expect.anything(),
-    );
+    expect(mockApiFetch).not.toHaveBeenCalledWith('/api/v1/sidebar/move', expect.anything());
   });
 
   it('drops a channel into a position gap and lands on the midpoint', async () => {
@@ -529,17 +534,15 @@ describe('Sidebar', () => {
     const dataTransfer = { effectAllowed: '', dropEffect: '', setData: vi.fn(), getData: vi.fn() };
     renderSidebar();
 
-    // Drag ch-3 between ch-1 (1000) and ch-2 (3000) → midpoint 2000.
+    // Drag ch-3 between ch-1 and ch-2 → the event anchors after ch-1; the
+    // server decides what number that slot becomes.
     fireEvent.pointerDown(screen.getByTestId('channel-row-ch-3'));
     fireEvent.dragStart(screen.getByTestId('channel-row-ch-3'), { dataTransfer });
     fireEvent.dragOver(screen.getByTestId('channel-row-ch-2'), { dataTransfer });
     fireEvent.drop(screen.getByTestId('channel-row-ch-2'), { dataTransfer });
 
     await waitFor(() => {
-      expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/channels/ch-3/category', {
-        method: 'PUT',
-        body: JSON.stringify({ categoryID: '', sidebarPosition: 2000 }),
-      });
+      expect(lastMoveBody()).toMatchObject({ itemID: 'ch-3', section: 'channels', afterType: 'channel', afterID: 'ch-1' });
     });
   });
 
@@ -560,10 +563,7 @@ describe('Sidebar', () => {
     fireDrop(header, dataTransfer, 19);
 
     await waitFor(() => {
-      expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/channels/ch-1/category', {
-        method: 'PUT',
-        body: JSON.stringify({ categoryID: 'cat-eng', sidebarPosition: 1000 }),
-      });
+      expect(lastMoveBody()).toMatchObject({ itemID: 'ch-1', section: 'category', categoryID: 'cat-eng', afterID: '' });
     });
   });
 
@@ -589,9 +589,7 @@ describe('Sidebar', () => {
     fireDrop(header, dataTransfer, 19);
 
     await waitFor(() => {
-      const body = lastCategoryPut('channels', 'ch-3');
-      expect(body?.categoryID).toBe('cat-eng');
-      expect(body!.sidebarPosition).toBeGreaterThan(0);
+      expect(lastMoveBody()).toMatchObject({ itemID: 'ch-3', section: 'category', categoryID: 'cat-eng', afterID: '' });
     });
   });
 
@@ -622,10 +620,8 @@ describe('Sidebar', () => {
     fireDrop(header, dataTransfer, 1);
 
     await waitFor(() => {
-      expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/channels/ch-3/category', {
-        method: 'PUT',
-        body: JSON.stringify({ categoryID: 'cat-eng', sidebarPosition: 2000 }),
-      });
+      // End of cat-eng = after its last row (ch-1).
+      expect(lastMoveBody()).toMatchObject({ itemID: 'ch-3', section: 'category', categoryID: 'cat-eng', afterType: 'channel', afterID: 'ch-1' });
     });
   });
 
@@ -654,10 +650,7 @@ describe('Sidebar', () => {
     fireEvent.drop(screen.getByTestId('sidebar-section-tail-drop-cat-eng'), { dataTransfer });
 
     await waitFor(() => {
-      expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/channels/ch-3/category', {
-        method: 'PUT',
-        body: JSON.stringify({ categoryID: 'cat-eng', sidebarPosition: 2000 }),
-      });
+      expect(lastMoveBody()).toMatchObject({ itemID: 'ch-3', section: 'category', categoryID: 'cat-eng', afterType: 'channel', afterID: 'ch-1' });
     });
   });
 
@@ -680,9 +673,7 @@ describe('Sidebar', () => {
     fireEvent.dragEnd(screen.getByTestId('channel-row-ch-2'), { dataTransfer });
 
     await waitFor(() => {
-      const body = lastCategoryPut('channels', 'ch-2');
-      expect(body?.categoryID).toBe('cat-eng');
-      expect(body!.sidebarPosition).toBeGreaterThan(0);
+      expect(lastMoveBody()).toMatchObject({ itemID: 'ch-2', section: 'category', categoryID: 'cat-eng' });
     });
   });
 
@@ -1003,10 +994,7 @@ describe('Sidebar', () => {
     fireEvent.drop(screen.getByTestId('sidebar-group-header-__favorites__'), { dataTransfer });
 
     await waitFor(() => {
-      expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/channels/ch-2/favorite', {
-        method: 'PUT',
-        body: JSON.stringify({ favorite: true }),
-      });
+      expect(lastMoveBody()).toMatchObject({ itemID: 'ch-2', section: 'favorites' });
     });
     mockApiFetch.mockClear();
 
@@ -1065,9 +1053,7 @@ describe('Sidebar', () => {
     fireDrop(secondRow, dataTransfer, 19);
 
     await waitFor(() => {
-      const body = lastCategoryPut('channels', 'ch-3');
-      expect(body?.categoryID).toBe('cat-eng');
-      expect(body!.sidebarPosition).toBeGreaterThan(0);
+      expect(lastMoveBody()).toMatchObject({ itemID: 'ch-3', section: 'category', categoryID: 'cat-eng' });
     });
   });
 
@@ -1089,10 +1075,7 @@ describe('Sidebar', () => {
 
     // A conversation can only be favorited via drop, never categorized.
     await new Promise((r) => setTimeout(r, 0));
-    expect(mockApiFetch).not.toHaveBeenCalledWith(
-      '/api/v1/conversations/conv-1/category',
-      expect.anything(),
-    );
+    expect(mockApiFetch).not.toHaveBeenCalledWith('/api/v1/sidebar/move', expect.anything());
   });
 
   it('ignores a favorited conversation dragged over a channel row outside Favorites', async () => {
@@ -1112,10 +1095,7 @@ describe('Sidebar', () => {
     fireDrop(target, dataTransfer, 5);
 
     await new Promise((r) => setTimeout(r, 0));
-    expect(mockApiFetch).not.toHaveBeenCalledWith(
-      '/api/v1/conversations/conv-1/category',
-      expect.anything(),
-    );
+    expect(mockApiFetch).not.toHaveBeenCalledWith('/api/v1/sidebar/move', expect.anything());
   });
 
   it('repositions a favorited conversation dragged onto the Favorites section header', async () => {
@@ -1135,11 +1115,7 @@ describe('Sidebar', () => {
     fireDrop(header, dataTransfer, 5);
 
     await waitFor(() => {
-      const call = mockApiFetch.mock.calls.find(
-        (c: unknown[]) => c[0] === '/api/v1/conversations/conv-1/category',
-      );
-      expect(call).toBeDefined();
-      expect((call![1] as { method: string }).method).toBe('PUT');
+      expect(lastMoveBody()).toMatchObject({ itemType: 'conversation', itemID: 'conv-1', section: 'favorites' });
     });
   });
 
@@ -1163,11 +1139,9 @@ describe('Sidebar', () => {
     fireDrop(first, dataTransfer, 2);
 
     await waitFor(() => {
-      const body = lastCategoryPut('channels', 'ch-3');
-      expect(body?.categoryID).toBe('');
-      // The whole point of the rewrite: dropping before a position-1 row no
-      // longer yields a NEGATIVE position — it densifies to a positive value.
-      expect(body!.sidebarPosition).toBeGreaterThan(0);
+      // No client position at all anymore: the event just says "top of
+      // Favorites"; the server renumbers however it needs to.
+      expect(lastMoveBody()).toMatchObject({ itemID: 'ch-3', section: 'favorites', afterID: '' });
     });
   });
 
@@ -1191,11 +1165,7 @@ describe('Sidebar', () => {
     fireDrop(first, dataTransfer, 2);
 
     await waitFor(() => {
-      const body = lastCategoryPut('channels', 'ch-3');
-      expect(body?.categoryID).toBe('');
-      // The whole point of the rewrite: dropping before a position-1 row no
-      // longer yields a NEGATIVE position — it densifies to a positive value.
-      expect(body!.sidebarPosition).toBeGreaterThan(0);
+      expect(lastMoveBody()).toMatchObject({ itemID: 'ch-3', section: 'channels', afterID: '' });
     });
   });
 
@@ -1218,9 +1188,8 @@ describe('Sidebar', () => {
     fireDrop(last, dataTransfer, 18);
 
     await waitFor(() => {
-      const body = lastCategoryPut('channels', 'ch-1');
-      expect(body?.categoryID).toBe('');
-      expect(body!.sidebarPosition).toBeGreaterThan(0);
+      // Past the last favorite (ch-2) → anchored after it.
+      expect(lastMoveBody()).toMatchObject({ itemID: 'ch-1', section: 'favorites', afterType: 'channel', afterID: 'ch-2' });
     });
   });
 
@@ -1244,10 +1213,9 @@ describe('Sidebar', () => {
     fireEvent.drop(screen.getByTestId('conversation-row-conv-1'), { dataTransfer });
 
     await waitFor(() => {
-      expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/channels/ch-2/category', {
-        method: 'PUT',
-        body: JSON.stringify({ categoryID: '', sidebarPosition: 2000 }),
-      });
+      // Landing before the favorited conversation = after ch-1, mixing the
+      // two row kinds in one anchor namespace.
+      expect(lastMoveBody()).toMatchObject({ itemID: 'ch-2', section: 'favorites', afterType: 'channel', afterID: 'ch-1' });
     });
   });
 
@@ -1269,10 +1237,7 @@ describe('Sidebar', () => {
     fireEvent.drop(screen.getByTestId('channel-row-ch-2'), { dataTransfer });
 
     await waitFor(() => {
-      expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/conversations/conv-1/category', {
-        method: 'PUT',
-        body: JSON.stringify({ categoryID: '', sidebarPosition: 2000 }),
-      });
+      expect(lastMoveBody()).toMatchObject({ itemType: 'conversation', itemID: 'conv-1', section: 'favorites', afterType: 'channel', afterID: 'ch-1' });
     });
   });
 
@@ -1301,9 +1266,7 @@ describe('Sidebar', () => {
     fireEvent.drop(screen.getByTestId('channel-row-ch-1'), { dataTransfer });
 
     await waitFor(() => {
-      const body = lastCategoryPut('conversations', 'conv-1');
-      expect(body?.categoryID).toBe('');
-      expect(body!.sidebarPosition).toBeGreaterThan(0);
+      expect(lastMoveBody()).toMatchObject({ itemType: 'conversation', itemID: 'conv-1', section: 'favorites' });
     });
   });
 
@@ -1329,9 +1292,7 @@ describe('Sidebar', () => {
     fireEvent.dragEnd(draggedRow, { dataTransfer });
 
     await waitFor(() => {
-      const body = lastCategoryPut('channels', 'ch-2');
-      expect(body?.categoryID).toBe('cat-eng');
-      expect(body!.sidebarPosition).toBeGreaterThan(0);
+      expect(lastMoveBody()).toMatchObject({ itemID: 'ch-2', section: 'category', categoryID: 'cat-eng' });
     });
   });
 
@@ -1356,14 +1317,8 @@ describe('Sidebar', () => {
     fireEvent.drop(screen.getByTestId('sidebar-group-header-cat-eng'), { dataTransfer });
 
     await waitFor(() => {
-      expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/sidebar/categories/cat-ops', {
-        method: 'PATCH',
-        body: JSON.stringify({ name: undefined, position: 1000 }),
-      });
-      expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/sidebar/categories/cat-eng', {
-        method: 'PATCH',
-        body: JSON.stringify({ name: undefined, position: 2000 }),
-      });
+      // One event: "cat-ops lands at the top" — the server renumbers all.
+      expect(lastCategoryMoveBody('cat-ops')).toEqual({ afterID: '' });
     });
   });
 
@@ -1388,14 +1343,7 @@ describe('Sidebar', () => {
     fireEvent.drop(screen.getByTestId('sidebar-group-header-cat-eng'), { dataTransfer });
 
     await waitFor(() => {
-      expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/sidebar/categories/cat-ops', {
-        method: 'PATCH',
-        body: JSON.stringify({ name: undefined, position: 1000 }),
-      });
-      expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/sidebar/categories/cat-eng', {
-        method: 'PATCH',
-        body: JSON.stringify({ name: undefined, position: 2000 }),
-      });
+      expect(lastCategoryMoveBody('cat-ops')).toEqual({ afterID: '' });
     });
   });
 
@@ -1423,18 +1371,8 @@ describe('Sidebar', () => {
     fireDrop(targetHeader, dataTransfer, 19);
 
     await waitFor(() => {
-      expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/sidebar/categories/cat-eng', {
-        method: 'PATCH',
-        body: JSON.stringify({ name: undefined, position: 1000 }),
-      });
-      expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/sidebar/categories/cat-design', {
-        method: 'PATCH',
-        body: JSON.stringify({ name: undefined, position: 2000 }),
-      });
-      expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/sidebar/categories/cat-ops', {
-        method: 'PATCH',
-        body: JSON.stringify({ name: undefined, position: 3000 }),
-      });
+      // Design landed after Engineering (the painted line's slot).
+      expect(lastCategoryMoveBody('cat-design')).toEqual({ afterID: 'cat-eng' });
     });
   });
 
@@ -1518,14 +1456,7 @@ describe('Sidebar', () => {
     fireEvent.drop(screen.getByTestId('sidebar-category-boundary-drop-cat-eng'), { dataTransfer });
 
     await waitFor(() => {
-      expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/sidebar/categories/cat-ops', {
-        method: 'PATCH',
-        body: JSON.stringify({ name: undefined, position: 1000 }),
-      });
-      expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/sidebar/categories/cat-eng', {
-        method: 'PATCH',
-        body: JSON.stringify({ name: undefined, position: 2000 }),
-      });
+      expect(lastCategoryMoveBody('cat-ops')).toEqual({ afterID: '' });
     });
   });
 
@@ -1553,14 +1484,7 @@ describe('Sidebar', () => {
     fireEvent.drop(screen.getByTestId('sidebar-section-tail-drop-cat-eng'), { dataTransfer });
 
     await waitFor(() => {
-      expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/sidebar/categories/cat-ops', {
-        method: 'PATCH',
-        body: JSON.stringify({ name: undefined, position: 1000 }),
-      });
-      expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/sidebar/categories/cat-eng', {
-        method: 'PATCH',
-        body: JSON.stringify({ name: undefined, position: 2000 }),
-      });
+      expect(lastCategoryMoveBody('cat-ops')).toEqual({ afterID: '' });
     });
   });
 
@@ -1587,25 +1511,10 @@ describe('Sidebar', () => {
     fireDrop(previousHeader, dataTransfer, 19);
 
     await waitFor(() => {
-      expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/sidebar/categories/cat-eng', {
-        method: 'PATCH',
-        body: JSON.stringify({ name: undefined, position: 1000 }),
-      });
-      expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/sidebar/categories/cat-ops', {
-        method: 'PATCH',
-        body: JSON.stringify({ name: undefined, position: 2000 }),
-      });
-      expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/sidebar/categories/cat-design', {
-        method: 'PATCH',
-        body: JSON.stringify({ name: undefined, position: 3000 }),
-      });
+      // The dragged category can't anchor on its own old slot: normalized to
+      // "after Engineering", never "before itself".
+      expect(lastCategoryMoveBody('cat-ops')).toEqual({ afterID: 'cat-eng' });
     });
-    expect(mockApiFetch).not.toHaveBeenCalledWith(
-      '/api/v1/sidebar/categories/cat-ops',
-      expect.objectContaining({
-        body: JSON.stringify({ name: undefined, position: 1000 }),
-      }),
-    );
   });
 
   it('commits the visible category placement on drag end when the browser misses drop', async () => {
@@ -1628,14 +1537,7 @@ describe('Sidebar', () => {
     fireEvent.dragEnd(screen.getByTestId('sidebar-group-header-cat-ops'), { dataTransfer });
 
     await waitFor(() => {
-      expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/sidebar/categories/cat-ops', {
-        method: 'PATCH',
-        body: JSON.stringify({ name: undefined, position: 1000 }),
-      });
-      expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/sidebar/categories/cat-eng', {
-        method: 'PATCH',
-        body: JSON.stringify({ name: undefined, position: 2000 }),
-      });
+      expect(lastCategoryMoveBody('cat-ops')).toEqual({ afterID: '' });
     });
   });
 
@@ -1653,10 +1555,9 @@ describe('Sidebar', () => {
     fireEvent.drop(screen.getByTestId('channel-row-ch-2'), { dataTransfer });
 
     await waitFor(() => {
-      expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/channels/ch-3/category', {
-        method: 'PUT',
-        body: JSON.stringify({ categoryID: '', sidebarPosition: 2000 }),
-      });
+      // Between ch-1 and ch-2 = anchored after ch-1; the gap arithmetic is
+      // the server's job now.
+      expect(lastMoveBody()).toMatchObject({ itemID: 'ch-3', section: 'channels', afterType: 'channel', afterID: 'ch-1' });
     });
   });
 

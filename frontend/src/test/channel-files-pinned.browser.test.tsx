@@ -926,10 +926,10 @@ describe('channel → header toggles → files + pinned panels (full route)', ()
     }, { timeout: 15000 });
   });
 
-  it('sends the draft with a clientTs and makes no separate clear request (server folds the clear into the send)', async () => {
+  it('sends the draft without any client clock and makes no separate clear request (server folds the clear into the send)', async () => {
     // Use a DISTINCT channel id/slug so this test's draft scope key does not
-    // collide with the module-level suppressed-scope set that the plain
-    // send-message test populates for CHANNEL_ID/general.
+    // collide with the module-level draft protocol state (bases/condemned
+    // gens) that the plain send-message test populates for CHANNEL_ID/general.
     const DRAFT_CH = '01J0000000000000000000CHDR';
     const original = globalThis.fetch;
     const inner = installFetchStub({ files: [], pinned: [], attachments: {} });
@@ -955,7 +955,7 @@ describe('channel → header toggles → files + pinned panels (full route)', ()
         // A saved draft for THIS channel scope → on send, the server folds the
         // clear into the message-create call; the client makes no clear request.
         return apiJSON([
-          { id: 'draft-ch-1', parentID: DRAFT_CH, parentType: 'channel', parentMessageID: '', body: 'half-written', attachmentIDs: [], updatedAt: '2026-05-01T11:00:00Z' },
+          { id: 'draft-ch-1', parentID: DRAFT_CH, parentType: 'channel', parentMessageID: '', body: 'half-written', attachmentIDs: [], updatedAt: '2026-05-01T11:00:00Z', gen: 'g-draft-ch-1' },
         ]);
       }
       if (url.endsWith('/api/v1/drafts') && init?.method === 'PUT') {
@@ -978,13 +978,14 @@ describe('channel → header toggles → files + pinned panels (full route)', ()
     await screen.getByRole('button', { name: 'Send message' }).click();
     await vi.waitFor(() => {
       const calls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls;
-      // The send POST carries clientTs so the server folds the draft-clear into
-      // message creation (last-write-wins against any in-flight save).
+      // The send POST carries NO client clock: the server folds an
+      // unconditional draft-clear into message creation, ordered by
+      // generation tokens, not client time.
       const sendPost = calls.find(
         (c) => (c[1]?.method) === 'POST' && String(c[0]).includes(`/channels/${DRAFT_CH}/messages`),
       );
       expect(sendPost).toBeTruthy();
-      expect(JSON.parse(String(sendPost?.[1]?.body ?? '{}')).clientTs).toBeGreaterThan(0);
+      expect(JSON.parse(String(sendPost?.[1]?.body ?? '{}')).clientTs).toBeUndefined();
     }, { timeout: 15000 });
     // The client issues NO separate clear request: neither an empty-body PUT nor
     // a DELETE to /drafts — the server-side send-fold owns the clear now.

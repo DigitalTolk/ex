@@ -44,6 +44,7 @@ describe('DraftsPage', () => {
             body: 'finish\nthis thought',
             updatedAt: '2026-05-03T12:00:00Z',
             createdAt: '2026-05-03T11:00:00Z',
+            gen: 'g-1',
           },
         ];
       }
@@ -70,10 +71,12 @@ describe('DraftsPage', () => {
 
     fireEvent.click(screen.getByLabelText('Delete draft'));
     expect(await screen.findByTestId('delete-draft-dialog')).toBeInTheDocument();
-    expect(apiFetch).not.toHaveBeenCalledWith('/api/v1/drafts/draft-1', { method: 'DELETE' });
+    expect(apiFetch).not.toHaveBeenCalledWith('/api/v1/drafts/draft-1?gen=g-1', { method: 'DELETE' });
     fireEvent.click(screen.getByTestId('delete-draft-dialog-confirm'));
     await waitFor(() => {
-      expect(apiFetch).toHaveBeenCalledWith('/api/v1/drafts/draft-1', { method: 'DELETE' });
+      // The delete rides the generation the page displayed, so a stale page
+      // can't remove a draft that changed since it rendered.
+      expect(apiFetch).toHaveBeenCalledWith('/api/v1/drafts/draft-1?gen=g-1', { method: 'DELETE' });
     });
   });
 
@@ -257,6 +260,6 @@ describe('DraftsPage', () => {
     await waitFor(() => {
       expect(screen.queryByTestId('delete-draft-dialog')).not.toBeInTheDocument();
     });
-    expect(apiFetch).not.toHaveBeenCalledWith('/api/v1/drafts/draft-4', { method: 'DELETE' });
+    expect(vi.mocked(apiFetch).mock.calls.some(([p]) => String(p).startsWith('/api/v1/drafts/draft-4'))).toBe(false);
   });
 });

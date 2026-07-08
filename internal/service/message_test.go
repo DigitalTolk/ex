@@ -265,8 +265,11 @@ func TestMessageService_CanAccessMessageAttachment(t *testing.T) {
 	if err := svc.CanAccessMessageAttachment(ctx, "u-outsider", "ch-access", ParentChannel, "m1", "att-1"); err == nil {
 		t.Fatal("expected non-member to fail")
 	}
-	if err := svc.CanAccessMessageAttachment(ctx, "u1", "ch-access", ParentChannel, "", "att-1"); err != nil {
-		t.Fatalf("parent-scoped CanAccessMessageAttachment: %v", err)
+	// Attachment access is anchored to a message; the old parent-scoped
+	// fallback (scan the parent for any referencing message) was unreachable
+	// from callers and was removed — empty messageID is a definitive denial.
+	if err := svc.CanAccessMessageAttachment(ctx, "u1", "ch-access", ParentChannel, "", "att-1"); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("message-less access = %v, want ErrForbidden", err)
 	}
 }
 

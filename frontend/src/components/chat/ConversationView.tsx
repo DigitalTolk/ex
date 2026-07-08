@@ -34,10 +34,6 @@ import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { useDeepLinkAnchor } from '@/hooks/useDeepLinkAnchor';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import {
-  restoreDraftScope,
-  restoreDraftScopeForContent,
-  suppressSentDraft,
-  useClearDraftForScope,
   useDraftAttachmentChips,
   useDraftForScope,
   useSaveDraft,
@@ -152,12 +148,10 @@ export function ConversationView() {
     !editingMessage || editAttachmentIDs.length === 0 || !editAttachmentsLoading;
   const editMessage = useEditMessage();
   const saveDraft = useSaveDraft();
-  const clearDraftMutate = useClearDraftForScope();
   const saveDraftMutate = saveDraft.mutate;
   const handleDraftChange = useCallback(
-    (value: MessageInputValue, options?: { notify?: boolean }) => {
+    (value: MessageInputValue, options?: { notify?: boolean; keepalive?: boolean }) => {
       if (!id) return;
-      restoreDraftScopeForContent(draftScope, value);
       saveDraftMutate({
         parentID: id,
         parentType: 'conversation',
@@ -166,22 +160,18 @@ export function ConversationView() {
         // Keystroke saves persist silently; the focus-loss flush (notify)
         // is what surfaces the draft in the sidebar.
         silent: !options?.notify,
-        ts: value.ts,
+        keepalive: options?.keepalive,
       });
     },
-    [id, draftScope, saveDraftMutate],
+    [id, saveDraftMutate],
   );
   const handleSendMessage = useCallback(
     (value: { body: string; attachmentIDs: string[] }) => {
-      suppressSentDraft(draftScope);
-      sendMessage.mutate(value, {
-        // Clear the scope's server draft on confirmed send — by SCOPE so a
-        // silently-saved draft (id never cached) is cleared too.
-        onSuccess: () => clearDraftMutate(draftScope),
-        onError: () => restoreDraftScope(draftScope),
-      });
+      // Draft lifecycle (condemn at mutate, cache patch-out on success,
+      // rollback on error) is owned by useSendMessage.
+      sendMessage.mutate(value);
     },
-    [sendMessage, draftScope, clearDraftMutate],
+    [sendMessage],
   );
   const handleEditMessage = useCallback(
     (value: { body: string; attachmentIDs: string[] }) => {

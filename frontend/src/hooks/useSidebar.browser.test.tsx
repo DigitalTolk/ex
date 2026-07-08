@@ -17,7 +17,8 @@ import type { SidebarReorderUpdate } from '@/lib/sidebar-reorder';
 import { queryKeys } from '@/lib/query-keys';
 
 const apiFetchMock = vi.hoisted(() => vi.fn());
-vi.mock('@/lib/api', () => ({
+vi.mock('@/lib/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/api')>()),
   apiFetch: (...args: unknown[]) => apiFetchMock(...args),
 }));
 
@@ -114,20 +115,66 @@ describe('useSidebar — categories', () => {
     expect((apiFetchMock.mock.calls[0][1] as { method: string }).method).toBe('PATCH');
   });
 
-  it('useReorderCategories PATCHes once per category with multiplied positions', async () => {
-    apiFetchMock.mockResolvedValue({});
-    const { screen } = await renderMutation(useReorderCategories as never, {
-      categories: [
-        { id: 'c-1', name: 'a', position: 999 },
-        { id: 'c-2', name: 'b', position: 999 },
-      ],
+  it('useReorderCategories 409 conflict rolls back and marks the list stale', async () => {
+    const { ApiError: RealApiError } = await import('@/lib/api');
+    apiFetchMock.mockRejectedValueOnce(new RealApiError(409, 'sidebar: layout changed since it was read', {
+      error: { code: 'sidebar_conflict', message: 'sidebar: layout changed since it was read' },
+    }));
+    const before = [
+      { id: 'c-1', name: 'a', position: 1024 },
+      { id: 'c-2', name: 'b', position: 2048 },
+    ];
+    const { qc, screen } = await renderMutation(
+      useReorderCategories as never,
+      { categories: [before[1], before[0]], movedID: 'c-2', afterID: '' },
+      { key: queryKeys.sidebarCategories(), data: before },
+    );
+    (screen.getByTestId('trigger').element() as HTMLButtonElement).click();
+    await vi.waitFor(() => {
+      expect(qc.getQueryState(queryKeys.sidebarCategories())?.isInvalidated).toBe(true);
     });
+    expect(qc.getQueryData(queryKeys.sidebarCategories())).toEqual(before);
+  });
+
+  it('useReorderCategories tolerates a bodyless move response (categories ?? [])', async () => {
+    apiFetchMock.mockResolvedValueOnce({});
+    const { qc, screen } = await renderMutation(
+      useReorderCategories as never,
+      { categories: [{ id: 'c-1', name: 'a', position: 1000 }], movedID: 'c-1', afterID: '' },
+      { key: queryKeys.sidebarCategories(), data: [{ id: 'c-1', name: 'a', position: 1000 }] },
+    );
+    (screen.getByTestId('trigger').element() as HTMLButtonElement).click();
+    await vi.waitFor(() => {
+      expect(qc.getQueryData(queryKeys.sidebarCategories())).toEqual([]);
+    });
+  });
+
+  it('useReorderCategories reports ONE move event and applies the server order as truth', async () => {
+    const serverOrder = [
+      { id: 'c-2', name: 'b', position: 1024 },
+      { id: 'c-1', name: 'a', position: 2048 },
+    ];
+    apiFetchMock.mockResolvedValue({ categories: serverOrder });
+    const { qc, screen } = await renderMutation(
+      useReorderCategories as never,
+      {
+        categories: [
+          { id: 'c-2', name: 'b', position: 999 },
+          { id: 'c-1', name: 'a', position: 999 },
+        ],
+        movedID: 'c-2',
+        afterID: '',
+      },
+      { key: queryKeys.sidebarCategories(), data: [] },
+    );
     (screen.getByTestId('trigger').element() as HTMLButtonElement).click();
     await new Promise((r) => setTimeout(r, 200));
-    expect(apiFetchMock).toHaveBeenCalledTimes(2);
-    const bodies = apiFetchMock.mock.calls.map((c) => JSON.parse((c[1] as { body: string }).body));
-    expect(bodies[0].position).toBe(1000);
-    expect(bodies[1].position).toBe(2000);
+    // One event-shaped request; no client-computed positions on the wire.
+    expect(apiFetchMock).toHaveBeenCalledTimes(1);
+    expect(apiFetchMock.mock.calls[0][0]).toBe('/api/v1/sidebar/categories/c-2/move');
+    expect(JSON.parse((apiFetchMock.mock.calls[0][1] as { body: string }).body)).toEqual({ afterID: '' });
+    // The server's canonical order replaced the optimistic preview.
+    expect(qc.getQueryData(queryKeys.sidebarCategories())).toEqual(serverOrder);
   });
 
   it('useDeleteCategory DELETEs the category', async () => {
@@ -339,7 +386,7 @@ describe('useSidebar — DnD debug-instrumented category mutations', () => {
     apiFetchMock.mockRejectedValue('reorder boom');
     const { qc, screen } = await renderMutation(
       useReorderCategories as never,
-      { categories: [{ id: 'c-1', name: 'a', position: 1000 }, { id: 'c-2', name: 'b', position: 2000 }] },
+      { categories: [{ id: 'c-1', name: 'a', position: 1000 }, { id: 'c-2', name: 'b', position: 2000 }], movedID: 'c-1', afterID: '' },
       {
         key: queryKeys.sidebarCategories(),
         data: [{ id: 'c-1', name: 'a', position: 1000 }, { id: 'c-2', name: 'b', position: 2000 }],
@@ -356,8 +403,16 @@ describe('useSidebar — DnD debug-instrumented category mutations', () => {
 describe('useSidebar — useReorderSidebar (batch drop persistence)', () => {
   // Seeds BOTH list caches independently (renderMutation takes one), so the
   // channel/conversation optimistic patches and each rollback arm are driven.
+  const reorderMove = {
+    itemType: 'channel' as const,
+    itemID: 'ch-1',
+    section: 'favorites' as const,
+    afterType: '' as const,
+    afterID: '',
+  };
+
   async function renderReorder(
-    vars: { updates: SidebarReorderUpdate[]; favoriteChanged: Set<string> },
+    vars: { move: typeof reorderMove; updates: SidebarReorderUpdate[] },
     seeds: { channels?: unknown[]; conversations?: unknown[] },
   ) {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -371,17 +426,22 @@ describe('useSidebar — useReorderSidebar (batch drop persistence)', () => {
     return { qc, screen };
   }
 
-  it('patches both caches, writes the favorite endpoint only for the flipped row, and leaves untouched rows intact', async () => {
-    apiFetchMock.mockResolvedValue(undefined);
+  it('sends ONE move event, paints both caches optimistically, and applies the server truth', async () => {
+    // The server answers with the rows it actually wrote — including the
+    // attributes it decided (favorite flip) and a renumbered neighbor.
+    apiFetchMock.mockResolvedValue({
+      updates: [
+        { itemType: 'channel', itemID: 'ch-1', position: 1024, favorite: true, categoryID: 'work' },
+        { itemType: 'conversation', itemID: 'cv-1', position: 2048 },
+      ],
+    });
     const { qc, screen } = await renderReorder(
       {
-        // ch-1 flips into Favorites (favorite endpoint fires); a conversation is
-        // re-spaced with no favorite flip.
+        move: { ...reorderMove, section: 'category' as const, categoryID: 'work' },
         updates: [
           { id: 'ch-1', kind: 'channel', categoryID: 'work', favorite: true, sidebarPosition: 1000 },
           { id: 'cv-1', kind: 'conversation', categoryID: '', favorite: false, sidebarPosition: 2000 },
         ],
-        favoriteChanged: new Set(['ch-1']),
       },
       {
         channels: [
@@ -394,27 +454,28 @@ describe('useSidebar — useReorderSidebar (batch drop persistence)', () => {
     (screen.getByTestId('trigger').element() as HTMLButtonElement).click();
     await new Promise((r) => setTimeout(r, 200));
 
-    const urls = apiFetchMock.mock.calls.map((c) => c[0]);
-    expect(urls).toContain('/api/v1/channels/ch-1/category');
-    expect(urls).toContain('/api/v1/channels/ch-1/favorite'); // favoriteChanged.has(ch-1) → true arm
-    expect(urls).toContain('/api/v1/conversations/cv-1/category');
-    expect(urls).not.toContain('/api/v1/conversations/cv-1/favorite'); // not flipped → false arm
+    // ONE event-shaped request; the old per-row category/favorite endpoints
+    // are never called for a drop.
+    expect(apiFetchMock).toHaveBeenCalledTimes(1);
+    expect(apiFetchMock.mock.calls[0][0]).toBe('/api/v1/sidebar/move');
 
     const chans = qc.getQueryData<{ channelID: string; sidebarPosition: number; favorite: boolean }[]>(queryKeys.userChannels());
-    expect(chans?.find((c) => c.channelID === 'ch-1')).toMatchObject({ sidebarPosition: 1000, favorite: true, categoryID: 'work' });
+    // ch-1 carries the SERVER-committed position (1024) and flag, not the
+    // optimistic preview's 1000.
+    expect(chans?.find((c) => c.channelID === 'ch-1')).toMatchObject({ sidebarPosition: 1024, favorite: true, categoryID: 'work' });
     expect(chans?.find((c) => c.channelID === 'ch-2')).toMatchObject({ sidebarPosition: 0 }); // untouched
     const convs = qc.getQueryData<{ conversationID: string; sidebarPosition: number }[]>(queryKeys.userConversations());
-    expect(convs?.find((c) => c.conversationID === 'cv-1')?.sidebarPosition).toBe(2000);
+    expect(convs?.find((c) => c.conversationID === 'cv-1')?.sidebarPosition).toBe(2048);
   });
 
   it('optimistic patch is a no-op on an unseeded cache (rows undefined → early return)', async () => {
-    apiFetchMock.mockResolvedValue(undefined);
+    apiFetchMock.mockResolvedValue({ updates: [] });
     // Only the conversations cache is seeded — the channels cache is undefined,
     // so applyReorderOptimistic hits `if (!rows) return rows`.
     const { qc, screen } = await renderReorder(
       {
+        move: { ...reorderMove, itemType: 'conversation' as const, itemID: 'cv-1' },
         updates: [{ id: 'cv-1', kind: 'conversation', categoryID: 'c-2', favorite: false, sidebarPosition: 3000 }],
-        favoriteChanged: new Set(),
       },
       { conversations: [{ conversationID: 'cv-1', categoryID: '', favorite: false, sidebarPosition: 0, displayName: 'Bob' }] },
     );
@@ -431,8 +492,8 @@ describe('useSidebar — useReorderSidebar (batch drop persistence)', () => {
     // unseeded (previousConversations falsy → skip arm).
     const { qc, screen } = await renderReorder(
       {
+        move: reorderMove,
         updates: [{ id: 'ch-1', kind: 'channel', categoryID: 'work', favorite: true, sidebarPosition: 1000 }],
-        favoriteChanged: new Set(['ch-1']),
       },
       { channels: [{ channelID: 'ch-1', categoryID: '', favorite: false, sidebarPosition: 500, channelName: 'general' }] },
     );
@@ -443,14 +504,54 @@ describe('useSidebar — useReorderSidebar (batch drop persistence)', () => {
     expect(qc.getQueryData(queryKeys.userConversations())).toBeUndefined();
   });
 
+  it('a 409 layout conflict on an item move rolls back and marks both lists stale', async () => {
+    const { ApiError: RealApiError } = await import('@/lib/api');
+    apiFetchMock.mockRejectedValue(new RealApiError(409, 'sidebar: layout changed since it was read', {
+      error: { code: 'sidebar_conflict', message: 'sidebar: layout changed since it was read' },
+    }));
+    const { qc, screen } = await renderReorder(
+      {
+        move: reorderMove,
+        updates: [{ id: 'ch-1', kind: 'channel', categoryID: '', favorite: true, sidebarPosition: 1000 }],
+      },
+      {
+        channels: [{ channelID: 'ch-1', categoryID: '', favorite: false, sidebarPosition: 500, channelName: 'general' }],
+        conversations: [{ conversationID: 'cv-1', categoryID: '', favorite: false, sidebarPosition: 100, displayName: 'Bob' }],
+      },
+    );
+    (screen.getByTestId('trigger').element() as HTMLButtonElement).click();
+    await vi.waitFor(() => {
+      expect(qc.getQueryState(queryKeys.userChannels())?.isInvalidated).toBe(true);
+    });
+    expect(qc.getQueryState(queryKeys.userConversations())?.isInvalidated).toBe(true);
+    // Rolled back to the pre-drop order.
+    const chans = qc.getQueryData<{ channelID: string; sidebarPosition: number }[]>(queryKeys.userChannels());
+    expect(chans?.[0].sidebarPosition).toBe(500);
+  });
+
+  it('a non-409 ApiError does not invalidate (plain rollback, no conflict handling)', async () => {
+    const { ApiError: RealApiError } = await import('@/lib/api');
+    apiFetchMock.mockRejectedValue(new RealApiError(500, 'boom'));
+    const { qc, screen } = await renderReorder(
+      {
+        move: reorderMove,
+        updates: [{ id: 'ch-1', kind: 'channel', categoryID: '', favorite: true, sidebarPosition: 1000 }],
+      },
+      { channels: [{ channelID: 'ch-1', categoryID: '', favorite: false, sidebarPosition: 500, channelName: 'general' }] },
+    );
+    (screen.getByTestId('trigger').element() as HTMLButtonElement).click();
+    await new Promise((r) => setTimeout(r, 250));
+    expect(qc.getQueryState(queryKeys.userChannels())?.isInvalidated).toBe(false);
+  });
+
   it('rolls back the conversations cache on error and skips the absent channels cache', async () => {
     apiFetchMock.mockRejectedValue(new Error('write failed'));
     // Conversations seeded (previousConversations truthy → rolled back),
     // channels unseeded (previousChannels falsy → skip arm).
     const { qc, screen } = await renderReorder(
       {
+        move: { ...reorderMove, itemType: 'conversation' as const, itemID: 'cv-1' },
         updates: [{ id: 'cv-1', kind: 'conversation', categoryID: 'c-2', favorite: false, sidebarPosition: 2000 }],
-        favoriteChanged: new Set(),
       },
       { conversations: [{ conversationID: 'cv-1', categoryID: '', favorite: false, sidebarPosition: 700, displayName: 'Bob' }] },
     );

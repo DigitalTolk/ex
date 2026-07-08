@@ -110,7 +110,7 @@ export default function DraftsPage() {
         destructive
         testIDPrefix="delete-draft-dialog"
         onConfirm={() => {
-          deleteDraft.mutate(draftToDelete!.id);
+          deleteDraft.mutate(draftToDelete!);
         }}
       />
     </PageContainer>

@@ -30,16 +30,13 @@ vi.mock('@/hooks/useIsMobile', () => ({ useIsMobile: () => isMobileRef.value }))
 // draft-save path triggered by onDraftChange.
 let mockDraft: { id: string; body: string; attachmentIDs?: string[] } | undefined;
 const saveDraftMutate = vi.fn();
-const clearDraftMutate = vi.fn();
 vi.mock('@/hooks/useDrafts', () => ({
-  markLocalDraftClearForSend: vi.fn(),
   useDraftForScope: () => ({ data: mockDraft }),
   useDraftAttachmentChips: () => [],
   useSaveDraft: () => ({ mutate: saveDraftMutate }),
-  useClearDraftForScope: () => clearDraftMutate,
-  restoreDraftScope: vi.fn(),
-  restoreDraftScopeForContent: vi.fn(),
-  suppressSentDraft: vi.fn(),
+  // useSendMessage owns the send-side draft lifecycle now.
+  condemnDraftForSend: vi.fn(() => vi.fn()),
+  removeDraftScopeFromCache: vi.fn(),
 }));
 
 vi.mock('@/context/PresenceContext', () => ({
@@ -160,7 +157,6 @@ describe('ThreadCard', () => {
     editMutate.mockClear();
     isMobileRef.value = false;
     saveDraftMutate.mockReset();
-    clearDraftMutate.mockReset();
     mockDraft = undefined;
     localStorage.clear();
     resetSeenCache();
@@ -271,7 +267,6 @@ describe('ThreadCard', () => {
         body: 'a quick reply',
         parentMessageID: 'msg-root',
       }),
-      expect.objectContaining({ onError: expect.any(Function) }),
     );
   });
 
@@ -311,7 +306,7 @@ describe('ThreadCard', () => {
     );
   });
 
-  it('clears the draft scope after a successful reply', async () => {
+  it('replies without any view-side draft bookkeeping (useSendMessage owns the lifecycle)', async () => {
     apiFetchMock.mockImplementation((url: string) => {
       if (url.includes('/messages/msg-root/thread')) return Promise.resolve([makeMessage('msg-root')]);
       return Promise.resolve([]);
@@ -319,16 +314,10 @@ describe('ThreadCard', () => {
     renderCard(makeSummary());
     fireEvent.change(await screen.findByTestId('reply-body'), { target: { value: 'reply' } });
     fireEvent.click(screen.getByLabelText('Send reply'));
-    // send.mutate gets an onSuccess that clears the draft by SCOPE (so a
-    // silently-saved draft whose id was never cached is cleared too).
+    // The card only reports the send event; draft condemnation/cache patching
+    // happens inside useSendMessage (covered by the useMessages suites).
     expect(sendMutate).toHaveBeenCalledWith(
       expect.objectContaining({ body: 'reply', parentMessageID: 'msg-root' }),
-      expect.objectContaining({ onSuccess: expect.any(Function), onError: expect.any(Function) }),
-    );
-    const opts = sendMutate.mock.calls[0][1] as { onSuccess: () => void };
-    act(() => opts.onSuccess());
-    expect(clearDraftMutate).toHaveBeenCalledWith(
-      expect.objectContaining({ parentType: 'channel', parentMessageID: 'msg-root' }),
     );
   });
 

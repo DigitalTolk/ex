@@ -13,7 +13,8 @@ import { queryKeys } from '@/lib/query-keys';
 import type { Message } from '@/types';
 
 const apiFetchMock = vi.hoisted(() => vi.fn());
-vi.mock('@/lib/api', () => ({
+vi.mock('@/lib/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/api')>()),
   apiFetch: (...args: unknown[]) => apiFetchMock(...args),
 }));
 

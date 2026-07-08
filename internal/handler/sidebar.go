@@ -16,10 +16,103 @@ type SidebarHandler struct {
 	channelSvc  *service.ChannelService
 	convSvc     *service.ConversationService
 	categorySvc *service.CategoryService
+	sidebarSvc  *service.SidebarService
 }
 
 func NewSidebarHandler(channelSvc *service.ChannelService, convSvc *service.ConversationService, categorySvc *service.CategoryService) *SidebarHandler {
 	return &SidebarHandler{channelSvc: channelSvc, convSvc: convSvc, categorySvc: categorySvc}
+}
+
+// SetSidebarService wires the server-owned reorder service (optional in
+// tests that only exercise the legacy per-row endpoints).
+func (h *SidebarHandler) SetSidebarService(s *service.SidebarService) { h.sidebarSvc = s }
+
+// Move applies a drag-and-drop reorder as an EVENT: "item X dropped into
+// section S directly after item A". The server resolves it against the
+// canonical layout and computes every resulting position itself — clients
+// never send position numbers (a stale client used to write ordering math
+// computed against a layout that had already moved on, which is exactly how
+// drops landed one slot off). A stale anchor yields 409; the client
+// refetches the truth and the user drops again against current state.
+func (h *SidebarHandler) Move(w http.ResponseWriter, r *http.Request) {
+	userID := middleware.UserIDFromContext(r.Context())
+	if userID == "" {
+		writeError(w, http.StatusUnauthorized, "unauthorized", "authentication required")
+		return
+	}
+	var body struct {
+		ItemType   string `json:"itemType"`
+		ItemID     string `json:"itemID"`
+		Section    string `json:"section"`
+		CategoryID string `json:"categoryID"`
+		AfterType  string `json:"afterType"`
+		AfterID    string `json:"afterID"`
+	}
+	if err := readJSON(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", err.Error())
+		return
+	}
+	updates, err := h.sidebarSvc.Move(r.Context(), userID, service.SidebarMove{
+		ItemType:   body.ItemType,
+		ItemID:     body.ItemID,
+		Section:    body.Section,
+		CategoryID: body.CategoryID,
+		AfterType:  body.AfterType,
+		AfterID:    body.AfterID,
+	})
+	if err != nil {
+		writeSidebarMoveError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, JSON{"updates": updates})
+}
+
+// MoveCategory reorders a sidebar category the same event-shaped way:
+// "category X dropped directly after category A" (empty = first). Returns
+// the categories in their new canonical order.
+func (h *SidebarHandler) MoveCategory(w http.ResponseWriter, r *http.Request) {
+	userID := middleware.UserIDFromContext(r.Context())
+	if userID == "" {
+		writeError(w, http.StatusUnauthorized, "unauthorized", "authentication required")
+		return
+	}
+	id := pathParam(r, "id")
+	if id == "" {
+		writeError(w, http.StatusBadRequest, "missing_id", "category ID is required")
+		return
+	}
+	var body struct {
+		AfterID string `json:"afterID"`
+	}
+	if err := readJSON(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", err.Error())
+		return
+	}
+	cats, err := h.categorySvc.Move(r.Context(), userID, id, body.AfterID)
+	if err != nil {
+		writeSidebarMoveError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, JSON{"categories": cats})
+}
+
+func writeSidebarMoveError(w http.ResponseWriter, r *http.Request, err error) {
+	if errors.Is(err, service.ErrSidebarConflict) {
+		// Stale layout: nothing was written. The client refetches and the
+		// user drops again against the truth.
+		writeError(w, http.StatusConflict, "sidebar_conflict", err.Error())
+		return
+	}
+	if errors.Is(err, store.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "not_found", "sidebar item not found")
+		return
+	}
+	if errors.Is(err, service.ErrSidebarInvalid) {
+		// Validation failures from the service are user-actionable.
+		writeError(w, http.StatusBadRequest, "invalid_move", err.Error())
+		return
+	}
+	writeInternalError(w, r, "sidebar_move_error", err)
 }
 
 // SetFavorite toggles the favorite flag on a channel for the calling user.

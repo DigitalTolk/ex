@@ -29,6 +29,7 @@ import ActivityPage from '@/pages/ActivityPage';
 import SearchResultsPage from '@/pages/SearchResultsPage';
 import { NotFoundPage } from '@/pages/NotFoundPage';
 import { GENERAL_CHANNEL_SLUG } from '@/lib/roles';
+import { removeBootSplash } from '@/lib/boot-splash';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { useServerVersion } from '@/hooks/useServerVersion';
 import { useEffect, useState, type ReactNode } from 'react';
@@ -144,6 +145,12 @@ function AppRoutes() {
 }
 
 export default function App() {
+  // First React commit: dismiss the pre-bundle boot splash from index.html.
+  // From here on the in-app loading states (AuthLoadingScreen) own the screen.
+  useEffect(() => {
+    removeBootSplash();
+  }, []);
+
   return (
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>

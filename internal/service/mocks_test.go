@@ -750,6 +750,7 @@ type mockConversationStore struct {
 	userConvs     map[string][]*model.UserConversation // userID -> conversations
 	createErr     error
 	getErr        error
+	getCalls      int // GetConversation invocations (send-path dedupe tests)
 	listErr       error
 	touchErr      error
 	activateErr   error
@@ -777,6 +778,7 @@ func (m *mockConversationStore) CreateConversation(_ context.Context, conv *mode
 }
 
 func (m *mockConversationStore) GetConversation(_ context.Context, id string) (*model.Conversation, error) {
+	m.getCalls++
 	if m.getErr != nil {
 		return nil, m.getErr
 	}
@@ -882,6 +884,7 @@ type mockMessageStore struct {
 	deleteErr      error
 	listErr        error
 	listAfterErr   error
+	listCalls      int   // ListMessages invocations (thread-index tests assert the fast path skips scans)
 	listHasMore    bool  // when true, ListMessages always reports more pages
 	threadReplyErr error // when set, ListThreadReplies returns this error
 	noThreadIndex  bool  // when true, ListThreadReplies returns nothing (simulates an un-backfilled thread → scan fallback)
@@ -937,6 +940,7 @@ func (m *mockMessageStore) DeleteMessage(_ context.Context, parentID, msgID stri
 }
 
 func (m *mockMessageStore) ListMessages(_ context.Context, parentID string, _ string, _ int) ([]*model.Message, bool, error) {
+	m.listCalls++
 	if m.listErr != nil {
 		return nil, false, m.listErr
 	}

@@ -358,6 +358,17 @@ describe('ChatPage WS router (browser)', () => {
   // conversation send cost four refetches (the backend fans an activity
   // touch to all participants, including the author).
   describe('onUserChannelUpdated payload dispatch', () => {
+    it('an unparseable payload falls back to the blanket refresh (safe floor)', async () => {
+      const { qc } = await renderChatPage();
+      const spy = vi.spyOn(qc, 'invalidateQueries');
+      lastHandlers().onUserChannelUpdated?.('not an object');
+      const keys = spy.mock.calls.map((c) => (c[0] as { queryKey?: unknown[] }).queryKey);
+      expect(keys).toContainEqual(['userChannels']);
+      expect(keys).toContainEqual(['userConversations']);
+      expect(keys).toContainEqual(['sidebarCategories']);
+      expect(keys).toContainEqual(['userState']);
+    });
+
     it('conversation activity patches updatedAt in place — no refetches', async () => {
       const { qc } = await renderChatPage();
       const spy = vi.spyOn(qc, 'invalidateQueries');
@@ -423,6 +434,30 @@ describe('ChatPage WS router (browser)', () => {
       lastHandlers().onUserChannelUpdated?.({ channelID: 'ch-99', userID: 'u-1', favorite: true });
       const keys = spy.mock.calls.map((c) => (c[0] as { queryKey?: unknown[] }).queryKey);
       expect(keys).toEqual([['userChannels']]);
+    });
+
+    it('sidebar.updated from ANOTHER device refetches both lists (server-owned reorder committed)', async () => {
+      const { resetSidebarReorderSessionState } = await import('@/hooks/useSidebar');
+      resetSidebarReorderSessionState();
+      const { qc } = await renderChatPage();
+      const spy = vi.spyOn(qc, 'invalidateQueries');
+      lastHandlers().onSidebarUpdated?.({ userID: 'u-1' });
+      const keys = spy.mock.calls.map((c) => (c[0] as { queryKey?: unknown[] }).queryKey);
+      expect(keys).toContainEqual(['userChannels']);
+      expect(keys).toContainEqual(['userConversations']);
+    });
+
+    it("suppresses THIS tab's own sidebar.updated echo (the move response already holds the truth)", async () => {
+      const { markLocalSidebarReorder, resetSidebarReorderSessionState } = await import('@/hooks/useSidebar');
+      const { qc } = await renderChatPage();
+      const spy = vi.spyOn(qc, 'invalidateQueries');
+      try {
+        markLocalSidebarReorder(); // the move mutation armed the window
+        lastHandlers().onSidebarUpdated?.({ userID: 'u-1' });
+        expect(spy).not.toHaveBeenCalled();
+      } finally {
+        resetSidebarReorderSessionState();
+      }
     });
 
     it("suppresses THIS tab's own drag-reorder echo (no refetch that could snap the row back)", async () => {

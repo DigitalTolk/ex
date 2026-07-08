@@ -46,10 +46,12 @@ func Publish(ctx context.Context, p Publisher, channel, eventType string, data a
 	}
 }
 
-// PublishMany fans the same event out to many channels concurrently. The event
-// is marshaled once and reused. Use this for member-list propagation
-// (archive, remove-member, group-create, etc.) where one event must reach
-// every member's personal channel without serializing N Redis round-trips.
+// PublishMany fans the same event out to many channels. The event is marshaled
+// once and reused. Use this for member-list propagation (archive,
+// remove-member, group-create, etc.) where one event must reach every member's
+// personal channel without serializing N Redis round-trips. When the publisher
+// supports it (RedisPubSub does) the fan-out is ONE pipelined round trip;
+// otherwise it falls back to a concurrent per-channel publish.
 func PublishMany(ctx context.Context, p Publisher, channels []string, eventType string, data any) {
 	if p == nil || len(channels) == 0 {
 		return
@@ -57,6 +59,12 @@ func PublishMany(ctx context.Context, p Publisher, channels []string, eventType 
 	evt, err := NewEvent(eventType, data)
 	if err != nil {
 		slog.Error("events: marshal", "type", eventType, "error", err)
+		return
+	}
+	if mp, ok := p.(ManyPublisher); ok {
+		if err := mp.PublishMany(ctx, channels, evt); err != nil {
+			slog.Error("events: publish many", "channels", len(channels), "type", eventType, "error", err)
+		}
 		return
 	}
 	var wg sync.WaitGroup

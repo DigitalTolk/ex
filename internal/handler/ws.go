@@ -36,6 +36,40 @@ type inboundMessage struct {
 	MessageID       string `json:"messageID"`       // optional — set on a "notification.ack" frame
 }
 
+
+// typingGate caches per-connection membership verdicts for typing frames.
+// Typing is the chattiest inbound event (keystroke bursts) and each frame
+// paid a DynamoDB membership read; a verdict is stable enough to reuse for
+// typingMembershipTTL. Entries expire so a member removed mid-connection
+// stops broadcasting within seconds, and a freshly added member starts
+// within the same window. Owned by the connection's single read goroutine —
+// no locking.
+type typingGate struct {
+	verdicts map[string]typingVerdict
+}
+
+type typingVerdict struct {
+	member  bool
+	expires time.Time
+}
+
+// typingMembershipTTL bounds verdict staleness. A var so tests can shrink it.
+var typingMembershipTTL = 30 * time.Second
+
+func newTypingGate() *typingGate {
+	return &typingGate{verdicts: make(map[string]typingVerdict)}
+}
+
+// check returns the cached verdict for key, or computes and caches one.
+func (g *typingGate) check(key string, lookup func() bool) bool {
+	if v, ok := g.verdicts[key]; ok && time.Now().Before(v.expires) {
+		return v.member
+	}
+	member := lookup()
+	g.verdicts[key] = typingVerdict{member: member, expires: time.Now().Add(typingMembershipTTL)}
+	return member
+}
+
 // NotificationAckRecorder records a client's acknowledgement that it received
 // (and surfaced) the desktop notification for a message. The deferred
 // mobile-push fallback reads these to avoid double-notifying a desktop that
@@ -207,10 +241,11 @@ func (h *WSHandler) Connect(w http.ResponseWriter, r *http.Request) {
 		// itself is already logged by safe.Recover.
 		defer func() { chanCh <- subResult{chs, err} }()
 		defer safe.Recover()
-		uc, e := h.chanSvc.ListUserChannels(r.Context(), userID)
+		// ID-only list: topic names need no channel META or unread math.
+		ids, e := h.chanSvc.ListUserChannelIDs(r.Context(), userID)
 		err = e
-		for _, c := range uc {
-			chs = append(chs, pubsub.ChannelName(c.ChannelID))
+		for _, id := range ids {
+			chs = append(chs, pubsub.ChannelName(id))
 		}
 	}()
 	go func() {
@@ -218,18 +253,25 @@ func (h *WSHandler) Connect(w http.ResponseWriter, r *http.Request) {
 		var err error
 		defer func() { convCh <- subResult{chs, err} }()
 		defer safe.Recover()
-		uc, e := h.convSvc.ListUserConversations(r.Context(), userID)
+		ids, e := h.convSvc.ListUserConversationIDs(r.Context(), userID)
 		err = e
-		for _, c := range uc {
-			chs = append(chs, pubsub.ConversationName(c.ConversationID))
+		for _, id := range ids {
+			chs = append(chs, pubsub.ConversationName(id))
 		}
 	}()
+
+	// presenceTopics is the channel+conversation subset of the subscription
+	// list — exactly the audience a presence transition should reach. Handing
+	// it to OnConnect below saves the audience resolver a second, redundant
+	// read of the memberships this handshake just fetched.
+	var presenceTopics []string
 
 	cr := <-chanCh
 	if cr.err != nil {
 		slog.Error("ws: list channels", "error", cr.err, "userID", userID)
 	} else {
 		channels = append(channels, cr.channels...)
+		presenceTopics = append(presenceTopics, cr.channels...)
 	}
 
 	cvr := <-convCh
@@ -237,6 +279,7 @@ func (h *WSHandler) Connect(w http.ResponseWriter, r *http.Request) {
 		slog.Error("ws: list conversations", "error", cvr.err, "userID", userID)
 	} else {
 		channels = append(channels, cvr.channels...)
+		presenceTopics = append(presenceTopics, cvr.channels...)
 	}
 
 	// Subscribe to the user's personal channel for direct notifications
@@ -258,8 +301,12 @@ func (h *WSHandler) Connect(w http.ResponseWriter, r *http.Request) {
 
 	// Must come after Subscribe so the presence event reaches the
 	// user's own browser. PresenceService dedupes by connection count.
+	// The just-built topics ride along so the transition publish does not
+	// re-read this user's memberships. OnDisconnect (deferred above) stays
+	// resolver-based: memberships may change over the connection's lifetime,
+	// so the offline audience is resolved fresh.
 	if h.presenceSvc != nil {
-		h.presenceSvc.OnConnect(r.Context(), userID)
+		h.presenceSvc.OnConnect(r.Context(), userID, presenceTopics...)
 	}
 
 	ctx, cancel := context.WithCancel(r.Context())
@@ -301,12 +348,13 @@ func (h *WSHandler) Connect(w http.ResponseWriter, r *http.Request) {
 	go func() {
 		defer cancel()
 		defer safe.Recover()
+		gate := newTypingGate()
 		for {
 			_, data, err := conn.Read(ctx)
 			if err != nil {
 				return
 			}
-			h.handleInbound(ctx, userID, data)
+			h.handleInbound(ctx, userID, data, gate)
 		}
 	}()
 
@@ -411,14 +459,14 @@ func writeControlFrame(ctx context.Context, conn *websocket.Conn, eventType stri
 
 // handleInbound dispatches a single client → server frame. Currently
 // only the "typing" event is recognised; everything else is ignored.
-func (h *WSHandler) handleInbound(ctx context.Context, userID string, raw []byte) {
+func (h *WSHandler) handleInbound(ctx context.Context, userID string, raw []byte, gate *typingGate) {
 	var msg inboundMessage
 	if err := json.Unmarshal(raw, &msg); err != nil {
 		return
 	}
 	switch msg.Type {
 	case "typing":
-		h.publishTyping(ctx, userID, msg)
+		h.publishTyping(ctx, userID, msg, gate)
 	case "timezone.update":
 		if h.userSvc != nil {
 			_, _ = h.userSvc.PatchTimeZoneIfChanged(ctx, userID, msg.TimeZone)
@@ -437,7 +485,7 @@ func (h *WSHandler) handleInbound(ctx context.Context, userID string, raw []byte
 // publishTyping broadcasts a typing event to the parent's pubsub topic
 // after verifying the sender is a member. Membership check prevents a
 // stranger from spamming a channel they can't read.
-func (h *WSHandler) publishTyping(ctx context.Context, userID string, msg inboundMessage) {
+func (h *WSHandler) publishTyping(ctx context.Context, userID string, msg inboundMessage, gate *typingGate) {
 	if h.publisher == nil || msg.ParentID == "" {
 		return
 	}
@@ -447,9 +495,10 @@ func (h *WSHandler) publishTyping(ctx context.Context, userID string, msg inboun
 		if h.chanSvc == nil {
 			return
 		}
-		// CheckAccess silently no-ops if the membership exists; an error
-		// means the user isn't allowed in this channel — drop the event.
-		if !h.chanSvc.IsMember(ctx, userID, msg.ParentID) {
+		// Membership gate prevents a stranger from spamming a channel they
+		// can't read; the verdict is cached per connection so a keystroke
+		// burst costs one DynamoDB read, not one per frame.
+		if !gate.check("c#"+msg.ParentID, func() bool { return h.chanSvc.IsMember(ctx, userID, msg.ParentID) }) {
 			return
 		}
 		topic = pubsub.ChannelName(msg.ParentID)
@@ -457,7 +506,7 @@ func (h *WSHandler) publishTyping(ctx context.Context, userID string, msg inboun
 		if h.convSvc == nil {
 			return
 		}
-		if !h.convSvc.IsParticipant(ctx, userID, msg.ParentID) {
+		if !gate.check("v#"+msg.ParentID, func() bool { return h.convSvc.IsParticipant(ctx, userID, msg.ParentID) }) {
 			return
 		}
 		topic = pubsub.ConversationName(msg.ParentID)

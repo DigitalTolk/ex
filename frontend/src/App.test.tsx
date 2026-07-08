@@ -32,6 +32,21 @@ describe('App', () => {
     });
   });
 
+  it('dismisses the index.html boot splash on first commit', async () => {
+    // index.html paints this splash before the bundle executes; React must
+    // remove it as soon as the app renders so the in-app loading states
+    // (AuthLoadingScreen) own the screen from there on.
+    const splash = document.createElement('div');
+    splash.id = 'boot-splash';
+    document.body.appendChild(splash);
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(document.getElementById('boot-splash')).toBeNull();
+    });
+  });
+
   it('redirects unauthenticated user to login page', async () => {
     render(<App />);
     await waitFor(() => {

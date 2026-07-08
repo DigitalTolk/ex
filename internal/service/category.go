@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -21,6 +22,9 @@ type CategoryStore interface {
 	List(ctx context.Context, userID string) ([]*model.UserChannelCategory, error)
 	Update(ctx context.Context, c *model.UserChannelCategory) error
 	Delete(ctx context.Context, userID, categoryID string) error
+	// SetPositions commits server-computed positions for the user's
+	// categories in one transaction.
+	SetPositions(ctx context.Context, userID string, positions map[string]int) error
 }
 
 // CategoryService manages a user's sidebar categories. The categories
@@ -129,6 +133,79 @@ func (s *CategoryService) Update(ctx context.Context, userID, categoryID string,
 
 func sameCategoryName(a, b string) bool {
 	return strings.EqualFold(strings.TrimSpace(a), strings.TrimSpace(b))
+}
+
+// Move places the category directly after afterID ("" = first) and renumbers
+// the user's categories densely in one transaction. The client reports the
+// drop EVENT; the server owns the resulting positions — a stale client can
+// no longer write a position computed against a layout that has moved on.
+// Returns the categories in their new canonical order.
+func (s *CategoryService) Move(ctx context.Context, userID, categoryID, afterID string) ([]*model.UserChannelCategory, error) {
+	if strings.TrimSpace(categoryID) == "" {
+		return nil, fmt.Errorf("%w: category id required", ErrSidebarInvalid)
+	}
+	if categoryID == afterID {
+		return nil, ErrSidebarConflict
+	}
+	cats, err := s.store.List(ctx, userID)
+	if err != nil {
+		return nil, fmt.Errorf("category: list: %w", err)
+	}
+	// Canonical order — position ascending, ID tiebreak (the client sorts
+	// identically, so the anchor resolves to the slot the user saw).
+	sort.SliceStable(cats, func(i, j int) bool {
+		if cats[i].Position != cats[j].Position {
+			return cats[i].Position < cats[j].Position
+		}
+		return cats[i].ID < cats[j].ID
+	})
+
+	var moved *model.UserChannelCategory
+	rest := make([]*model.UserChannelCategory, 0, len(cats))
+	for _, c := range cats {
+		if c.ID == categoryID {
+			moved = c
+			continue
+		}
+		rest = append(rest, c)
+	}
+	if moved == nil {
+		return nil, store.ErrNotFound
+	}
+	insertAt := 0
+	if afterID != "" {
+		idx := -1
+		for i, c := range rest {
+			if c.ID == afterID {
+				idx = i
+				break
+			}
+		}
+		if idx < 0 {
+			// The anchor vanished (deleted or never existed): the client
+			// acted on a stale layout — refuse rather than guess.
+			return nil, ErrSidebarConflict
+		}
+		insertAt = idx + 1
+	}
+
+	final := make([]*model.UserChannelCategory, 0, len(cats))
+	final = append(final, rest[:insertAt]...)
+	final = append(final, moved)
+	final = append(final, rest[insertAt:]...)
+	positions := make(map[string]int)
+	for i, c := range final {
+		pos := (i + 1) * sidebarPositionStep
+		if c.Position != pos {
+			positions[c.ID] = pos
+		}
+		c.Position = pos
+	}
+	if err := s.store.SetPositions(ctx, userID, positions); err != nil {
+		return nil, fmt.Errorf("category: set positions: %w", err)
+	}
+	s.publishUpdated(ctx, userID)
+	return final, nil
 }
 
 // Delete removes a category. Channels assigned to it become uncategorised

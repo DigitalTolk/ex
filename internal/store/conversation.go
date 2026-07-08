@@ -397,3 +397,40 @@ func (s *ConversationStoreImpl) ListAll(ctx context.Context) ([]*model.Conversat
 	}
 	return convs, nil
 }
+
+// GetConversationsByIDs fetches many conversation META rows in chunked
+// BatchGetItem calls (100 per chunk) instead of one GetItem per conversation
+// — the pattern that made /api/v1/conversations issue a DynamoDB read per
+// row just for its MessageSeq. Missing IDs are absent from the result.
+func (s *ConversationStoreImpl) GetConversationsByIDs(ctx context.Context, ids []string) ([]*model.Conversation, error) {
+	out := make([]*model.Conversation, 0, len(ids))
+	const batchSize = 100
+	for start := 0; start < len(ids); start += batchSize {
+		end := min(start+batchSize, len(ids))
+		keys := make([]map[string]types.AttributeValue, 0, end-start)
+		for _, id := range ids[start:end] {
+			keys = append(keys, compositeKey(convPK(id), metaSK()))
+		}
+		req := map[string]types.KeysAndAttributes{s.Table: {Keys: keys}}
+		for {
+			res, err := s.Client.BatchGetItem(ctx, &dynamodb.BatchGetItemInput{RequestItems: req})
+			if err != nil {
+				return nil, fmt.Errorf("store: batch get conversations: %w", err)
+			}
+			for _, item := range res.Responses[s.Table] {
+				var rec conversationItem
+				if err := attributevalue.UnmarshalMap(item, &rec); err != nil {
+					return nil, fmt.Errorf("store: unmarshal conversation: %w", err)
+				}
+				conv := rec.Conversation
+				out = append(out, &conv)
+			}
+			// DynamoDB may return unprocessed keys under throttling — drain them.
+			if len(res.UnprocessedKeys) == 0 {
+				break
+			}
+			req = res.UnprocessedKeys
+		}
+	}
+	return out, nil
+}

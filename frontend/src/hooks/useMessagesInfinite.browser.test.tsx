@@ -9,7 +9,8 @@ import { useChannelMessages } from './useMessages';
 // switch + page-param getters only count when driven in the browser gate.
 
 const apiFetchMock = vi.hoisted(() => vi.fn());
-vi.mock('@/lib/api', () => ({
+vi.mock('@/lib/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/api')>()),
   apiFetch: (...args: unknown[]) => apiFetchMock(...args),
 }));
 

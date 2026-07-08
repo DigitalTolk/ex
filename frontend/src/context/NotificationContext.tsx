@@ -300,6 +300,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       // the message like a popup click would.
       showToast(n.body || n.title, 'success', {
         title: n.body ? n.title : undefined,
+        kind: 'notification',
         onActivate: () => {
           if (n.deepLink) navigateInApp(n.deepLink);
         },

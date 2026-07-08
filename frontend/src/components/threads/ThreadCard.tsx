@@ -16,10 +16,6 @@ import { useIsMobile } from '@/hooks/useIsMobile';
 import type { Message } from '@/types';
 import { useInView } from '@/hooks/useInView';
 import {
-  restoreDraftScope,
-  restoreDraftScopeForContent,
-  suppressSentDraft,
-  useClearDraftForScope,
   useDraftAttachmentChips,
   useDraftForScope,
   useSaveDraft,
@@ -139,14 +135,12 @@ export function ThreadCard({ summary, title, deepLink, currentUserId, unread = f
   const { data: draft } = useDraftForScope(draftScope);
   const draftAttachments = useDraftAttachmentChips(draft?.attachmentIDs);
   const saveDraft = useSaveDraft();
-  const clearDraftMutate = useClearDraftForScope();
   const saveDraftMutate = saveDraft.mutate;
 
   const handleDraftChange = useCallback(
-    (input: MessageInputValue, options?: { notify?: boolean }) => {
+    (input: MessageInputValue, options?: { notify?: boolean; keepalive?: boolean }) => {
       /* istanbul ignore next -- parentID is channelId ?? conversationId and parentType is always 'channel' | 'conversation', so one is always set; this guard is unreachable defensive code. */
       if (!parentID) return;
-      restoreDraftScopeForContent(draftScope, input);
       saveDraftMutate({
         parentID,
         parentType,
@@ -156,10 +150,10 @@ export function ThreadCard({ summary, title, deepLink, currentUserId, unread = f
         // Keystroke saves persist silently; the focus-loss flush (notify)
         // is what surfaces the draft in the sidebar.
         silent: !options?.notify,
-        ts: input.ts,
+        keepalive: options?.keepalive,
       });
     },
-    [parentID, parentType, summary.threadRootID, draftScope, saveDraftMutate],
+    [parentID, parentType, summary.threadRootID, saveDraftMutate],
   );
 
   const handleReply = useCallback(
@@ -167,18 +161,14 @@ export function ThreadCard({ summary, title, deepLink, currentUserId, unread = f
       // Offer to add any @mentioned non-members to the channel (no-op for DMs).
       checkMentions(input.body);
       const payload = { ...input, parentMessageID: summary.threadRootID };
-      suppressSentDraft(draftScope);
-      send.mutate(payload, {
-        // Clear by SCOPE on confirmed send so a silently-saved thread draft
-        // (id never cached) is cleared too.
-        onSuccess: () => clearDraftMutate(draftScope),
-        onError: () => restoreDraftScope(draftScope),
-      });
+      // Draft lifecycle (condemn at mutate, cache patch-out on success,
+      // rollback on error) is owned by useSendMessage.
+      send.mutate(payload);
       // Treat sending as "seeing" — drops the unread dot in the sidebar
       // since the user is clearly engaged with this thread.
       markSummaryThreadSeen(summary);
     },
-    [send, summary, draftScope, clearDraftMutate, checkMentions],
+    [send, summary, checkMentions],
   );
 
   // Mobile edit submit — the bottom composer doubles as the edit field while
