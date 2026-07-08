@@ -65,6 +65,15 @@ describe('NonMemberInvitePrompt', () => {
     expect(onDismiss).not.toHaveBeenCalled();
   });
 
+  it('falls back to generic copy when the add rejects with a non-Error', async () => {
+    mockApiFetch.mockRejectedValueOnce('nope');
+    renderPrompt();
+    fireEvent.click(screen.getByRole('button', { name: 'Add to channel' }));
+    await waitFor(() =>
+      expect(screen.getByRole('alert')).toHaveTextContent('Failed to add to the channel'),
+    );
+  });
+
   it('dismisses without adding', () => {
     const { onDismiss } = renderPrompt();
     fireEvent.click(screen.getByLabelText('Dismiss invite suggestion'));

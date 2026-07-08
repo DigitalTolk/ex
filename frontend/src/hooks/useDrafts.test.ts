@@ -413,6 +413,25 @@ describe('useDrafts', () => {
     expect(queryClient.getQueryData<MessageDraft[]>(['drafts'])?.map((d) => d.id)).toEqual(['draft-1']);
   });
 
+  it('does not reconcile a 409 whose payload is not a draft_conflict', async () => {
+    const queryClient = makeQC();
+    queryClient.setQueryData<MessageDraft[]>(['drafts'], []);
+    const scope = { parentID: 'dm-1', parentType: 'conversation' as const };
+    adoptDraftBasis(scope, 'g-stale');
+    vi.mocked(apiFetch).mockRejectedValueOnce(
+      new ApiError(409, 'some other conflict', { error: { code: 'not_a_draft_conflict' } }),
+    );
+
+    const { result } = renderHook(() => useSaveDraft(), { wrapper: wrapperFor(queryClient) });
+    act(() => result.current.mutate({ parentID: 'dm-1', parentType: 'conversation', body: 'mine' }));
+    await waitFor(() => expect(result.current.isError).toBe(true));
+
+    // Foreign 409s must not touch the basis or cache — only the draft
+    // protocol's own conflicts reconcile.
+    expect(draftBasisFor(scope)).toBe('g-stale');
+    expect(queryClient.getQueryData<MessageDraft[]>(['drafts'])).toEqual([]);
+  });
+
   it('reconciles a 409 with a null current (the scope was cleared elsewhere)', async () => {
     const queryClient = makeQC();
     queryClient.setQueryData<MessageDraft[]>(['drafts'], [

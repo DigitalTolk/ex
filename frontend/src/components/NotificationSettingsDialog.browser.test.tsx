@@ -220,6 +220,21 @@ describe('NotificationSettingsDialog browser', () => {
     expect(notif.requestPermission).toHaveBeenCalled();
   });
 
+  it('explains when the permission prompt was dismissed without granting', async () => {
+    notif.permission = 'default';
+    notif.requestPermission.mockResolvedValue('default'); // user dismissed the prompt
+    const screen = await render(<NotificationSettingsDialog open onOpenChange={vi.fn()} />);
+    await screen.getByTestId('send-test-notification').click();
+    await expect.element(screen.getByTestId('test-notification-status')).toHaveTextContent(/not granted/i);
+  });
+
+  it('toggling browser popups off never re-requests permission', async () => {
+    const screen = await render(<NotificationSettingsDialog open onOpenChange={vi.fn()} />);
+    await screen.getByLabelText(/Browser popups/i).click();
+    expect(notif.setBrowserEnabled).toHaveBeenCalledWith(false);
+    expect(notif.requestPermission).not.toHaveBeenCalled();
+  });
+
   it('explains when browser permission is blocked', async () => {
     notif.permission = 'denied';
     const screen = await render(<NotificationSettingsDialog open onOpenChange={vi.fn()} />);

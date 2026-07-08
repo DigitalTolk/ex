@@ -59,6 +59,14 @@ describe('composerAutocomplete', () => {
     view.dom.dispatchEvent(new PointerEvent('pointermove', { bubbles: true }));
     expect(selectedCompletionIndex(view.state)).toBe(1);
 
+    // An option row whose id doesn't end in `-<index>` (CM's shape) is
+    // ignored rather than parsed into NaN.
+    const rogue = document.createElement('li');
+    rogue.id = 'no-trailing-index';
+    items[1].parentElement!.appendChild(rogue);
+    rogue.dispatchEvent(new PointerEvent('pointermove', { bubbles: true }));
+    expect(selectedCompletionIndex(view.state)).toBe(1);
+
     view.destroy();
   });
 

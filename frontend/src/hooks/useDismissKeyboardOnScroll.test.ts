@@ -76,4 +76,19 @@ describe('useDismissKeyboardOnScroll', () => {
     fireTouchMove(elsewhere);
     expect(document.activeElement).toBe(input);
   });
+
+  it('ignores moves while focus sits on a non-HTML element (SVG)', () => {
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    document.body.appendChild(svg);
+    renderHook(() => useDismissKeyboardOnScroll());
+    const blurSpy = vi.spyOn(HTMLElement.prototype, 'blur');
+    Object.defineProperty(document, 'activeElement', { configurable: true, get: () => svg });
+    try {
+      fireTouchMove(document.body);
+      expect(blurSpy).not.toHaveBeenCalled();
+    } finally {
+      blurSpy.mockRestore();
+      delete (document as { activeElement?: unknown }).activeElement;
+    }
+  });
 });

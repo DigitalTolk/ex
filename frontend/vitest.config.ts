@@ -94,13 +94,13 @@ export default defineConfig({
         'src/pages/SearchResultsPage.tsx',
         'src/pages/ThreadsPage.tsx',
       ],
-      // Branch-coverage gate. Held at 99% to match the backend
-      // (statement) and browser (branch) gates — CI fails any drop
-      // below it. vitest enforces this itself (non-zero exit), so both
-      // `make check` and the CI "Run vitest with coverage" step gate on
-      // it without extra scripting.
+      // Branch-coverage gate at 100% — every branch arm in the graded
+      // files must be exercised, matching the backend's 100% statement
+      // gate. CI fails any drop below it. vitest enforces this itself
+      // (non-zero exit), so both `make check` and the CI "Run vitest
+      // with coverage" step gate on it without extra scripting.
       thresholds: {
-        branches: 99,
+        branches: 100,
       },
     },
   },

@@ -103,11 +103,10 @@ describe('UnfurlCard browser behaviour', () => {
         url: 'https://ex.test/channel/incidents#msg-att',
         kind: 'message',
         siteName: 'ex.test',
-        authorName: 'Günter Grodotzki',
         channelLabel: '~Incidents',
-        // No body/image — the card stands on the attachment rows alone,
-        // exercising hasContent()'s attachments branch too. One entry has
-        // no contentType to cover the `?? ''` icon fallback.
+        // No author/body/image — the card stands on the attachment rows
+        // ALONE, so hasContent() reaches its final attachments arm. One entry
+        // has no contentType to cover the `?? ''` icon fallback.
         attachments: [
           { filename: 'report.pdf', contentType: 'application/pdf' },
           { filename: 'notes.txt' },

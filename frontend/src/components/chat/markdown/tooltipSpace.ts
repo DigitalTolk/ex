@@ -73,7 +73,7 @@ export function composerTooltipSpace(): TooltipSpace {
     (nativeKeyboardHeight > 0
       ? keyboardOverlap(nativeKeyboardHeight, innerHeightAtKeyboardShow, window.innerHeight)
       : 0);
-  const vv = typeof window !== 'undefined' ? window.visualViewport : null;
+  const vv = window.visualViewport ?? null;
   if (!vv) {
     return { top: 0, left: 0, bottom: nativeBottom, right: window.innerWidth };
   }

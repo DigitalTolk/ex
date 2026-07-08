@@ -52,6 +52,12 @@ describe('useFrequentEmojis', () => {
     });
     await waitFor(() => expect(result.current).toEqual([':rocket:', ':fire:']));
   });
+
+  it('returns the full shelf when no limit is given', async () => {
+    vi.mocked(apiFetch).mockResolvedValue([':tada:', ':smile:', ':wave:']);
+    const { result } = renderHook(() => useFrequentEmojis(), { wrapper: createWrapper() });
+    await waitFor(() => expect(result.current).toEqual([':tada:', ':smile:', ':wave:']));
+  });
 });
 
 describe('useEmojiMap', () => {

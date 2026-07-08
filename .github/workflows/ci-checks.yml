@@ -67,7 +67,7 @@ jobs:
           go test -tags=integration -coverprofile=coverage.out -covermode=atomic ./internal/...
           go tool cover -func=coverage.out | tail -1
 
-      - name: Enforce backend coverage gate (>= 99% statements)
+      - name: Enforce backend coverage gate (= 100% statements)
         # Uses go-test-coverage so the gate honors the `// coverage-ignore`
         # annotations on irreducible defensive code (see COVERAGE.md). The raw
         # `go tool cover` total does NOT honor them, so it must not gate here —

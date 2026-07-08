@@ -317,6 +317,8 @@ export function useWebSocket(options: UseWebSocketOptions) {
     // frame for staleFrameMs despite the server's 15s app-ping) so the
     // normal onclose → reconnect → replay path takes over.
     function wakeProbe() {
+      /* v8 ignore next 2 -- defensive: the wake listeners are removed at dispose and the whole effect tears down when `enabled` flips, so a live probe can only observe disposed=false && enabled=true; kept as belt-and-braces on the notification-critical reconnect path */
+      /* istanbul ignore next -- see v8 note above */
       if (disposed || !enabledRef.current) return;
       if (document.visibilityState === 'hidden') return;
       const ws = wsRef.current;

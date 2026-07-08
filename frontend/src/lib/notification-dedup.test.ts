@@ -69,6 +69,14 @@ describe('notification-dedup', () => {
     recordNotification('m-mem', T0);
     expect(setItem).toHaveBeenCalled();
     expect(hasSeenNotification('m-mem', T0)).toBe(true);
+
+    // Once broken is latched, later writes skip localStorage entirely (the
+    // early-return arm) and keep working from memory — even after the
+    // underlying storage recovers.
+    setItem.mockRestore();
+    recordNotification('m-mem-2', T0);
+    expect(localStorage.getItem('ex.notif.seen.v1')).toBeNull();
+    expect(hasSeenNotification('m-mem-2', T0)).toBe(true);
   });
 
   it('falls back to memory when localStorage reads throw', () => {

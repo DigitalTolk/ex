@@ -25,8 +25,11 @@ import type { RenderOpts } from './markdown';
 
 // Flattens a (already-hydrated) React subtree back to its plain text — used
 // to recover a code block's literal source from the rendered <code> child so
-// CodeBlock can re-highlight it.
-function reactNodeText(node: ReactNode): string {
+// CodeBlock can re-highlight it. Exported for direct unit tests: the
+// hydrator only ever feeds it strings/elements/arrays, so the remaining
+// ReactNode shapes (numbers, booleans, portals) are unreachable through
+// rendering alone.
+export function reactNodeText(node: ReactNode): string {
   if (node == null || node === false || node === true) return '';
   if (typeof node === 'string') return node;
   if (typeof node === 'number') return String(node);

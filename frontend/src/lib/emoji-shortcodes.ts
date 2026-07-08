@@ -111,11 +111,13 @@ export function shortcodeToUnicode(shortcode: string): string {
 }
 
 // Inverse map for normalizing user-typed unicode emoji back to the
-// generated `:shortcode:` form the API stores.
-const UNICODE_TO_NAME: Record<string, string> = (() => {
+// generated `:shortcode:` form the API stores. The builder is exported for
+// tests: base entries always win over generated toned variants, which only
+// matters if the catalog ever ships a pre-toned emoji as its own entry.
+export function buildUnicodeToName(list: ReadonlyArray<{ unicode: string; name: string }>): Record<string, string> {
   const map: Record<string, string> = {};
-  for (const e of ALL_EMOJI) map[e.unicode] = e.name;
-  for (const e of ALL_EMOJI) {
+  for (const e of list) map[e.unicode] = e.name;
+  for (const e of list) {
     if (!supportsEmojiSkinTone(e.unicode)) continue;
     for (const tone of EMOJI_SKIN_TONES) {
       if (!tone.value) continue;
@@ -124,7 +126,8 @@ const UNICODE_TO_NAME: Record<string, string> = (() => {
     }
   }
   return map;
-})();
+}
+const UNICODE_TO_NAME: Record<string, string> = buildUnicodeToName(ALL_EMOJI);
 
 const ASCII_EMOJI_TO_SHORTCODE = new Map<string, string>([
   [':)', ':slightly_smile_face:'],

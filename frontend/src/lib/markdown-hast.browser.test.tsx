@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { render } from 'vitest-browser-react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { renderHastTree } from './markdown-hast';
+import { reactNodeText, renderHastTree } from './markdown-hast';
 import type { HastNode } from '@/types';
 
 vi.mock('@/hooks/useSettings', () => ({
@@ -466,5 +466,19 @@ describe('renderHastTree — long-URL wrapping inside block containers', () => {
     await renderInProse(tree);
     const prose = document.querySelector('[data-testid="prose-root"]') as HTMLElement;
     expect(prose.scrollWidth).toBeLessThanOrEqual(prose.clientWidth);
+  });
+});
+
+describe('reactNodeText (browser)', () => {
+  it('flattens every ReactNode shape to its literal text', () => {
+    expect(reactNodeText(null)).toBe('');
+    expect(reactNodeText(undefined)).toBe('');
+    expect(reactNodeText(true)).toBe('');
+    expect(reactNodeText(false)).toBe('');
+    expect(reactNodeText('a')).toBe('a');
+    expect(reactNodeText(7)).toBe('7');
+    expect(reactNodeText(['a', 7, null, ['b']])).toBe('a7b');
+    expect(reactNodeText(<span>{'x'}</span>)).toBe('x');
+    expect(reactNodeText({} as unknown as React.ReactNode)).toBe('');
   });
 });

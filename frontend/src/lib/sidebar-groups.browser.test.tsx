@@ -135,6 +135,16 @@ describe('groupSidebarItems', () => {
     expect(ids.indexOf('cv-new')).toBeLessThan(ids.indexOf('cv-old'));
   });
 
+  it('falls through to the next tiebreak when two DMs share the same updatedAt', () => {
+    const same = '2026-06-01T00:00:00Z';
+    const a = conversation({ conversationID: 'cv-a', displayName: 'Alpha', updatedAt: same });
+    const b = conversation({ conversationID: 'cv-b', displayName: 'Beta', updatedAt: same });
+    // Equal timestamps: neither time comparison decides — the sort is stable,
+    // so each input order is preserved as-is.
+    expect(dmIds(groupSidebarItems([], [a, b], []))).toEqual(['cv-a', 'cv-b']);
+    expect(dmIds(groupSidebarItems([], [b, a], []))).toEqual(['cv-b', 'cv-a']);
+  });
+
   it('places timestamped DMs ahead of ones missing updatedAt (both orderings)', () => {
     const withTime = conversation({ conversationID: 'cv-t', displayName: 'T', updatedAt: '2026-06-01T00:00:00Z' });
     const noTime = conversation({ conversationID: 'cv-n', displayName: 'N', updatedAt: undefined });

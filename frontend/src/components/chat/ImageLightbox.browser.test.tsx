@@ -221,6 +221,24 @@ describe('ImageLightbox browser behavior', () => {
     expect(onIndexChange).not.toHaveBeenCalled();
   });
 
+  it('a double tap on a non-image attachment never triggers the zoom toggle (mobile)', async () => {
+    if (window.innerWidth > 767) return;
+    await render(lightbox({
+      images: [{ url: imageURL, filename: 'archive.zip', contentType: 'application/zip', size: 4096 }],
+    }));
+    const stage = document.querySelector('[data-testid="image-lightbox-attachment-stage"]') as HTMLElement | null;
+    expect(stage).not.toBeNull();
+
+    // Two quick taps: handleMobileTap bails for non-images (nothing to zoom),
+    // so the overlay stays put and no zoomed image ever appears.
+    dispatchPointerTap(stage!, { x: window.innerWidth / 2, y: window.innerHeight / 2 }, 31);
+    dispatchPointerTap(stage!, { x: window.innerWidth / 2 + 10, y: window.innerHeight / 2 + 4 }, 32);
+    await new Promise((r) => setTimeout(r, 60));
+    expect(document.querySelector('[data-testid="image-lightbox"]')).not.toBeNull();
+    const img = document.querySelector('[data-testid="image-lightbox-image"]') as HTMLImageElement | null;
+    expect(Number(img?.dataset.zoom ?? '1')).toBe(1);
+  });
+
   it('toggles mobile image zoom and pan reset on double tap', async () => {
     if (window.innerWidth > 767) return;
 

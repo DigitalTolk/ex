@@ -1242,6 +1242,14 @@ describe('Sidebar browser render — rich fixtures', () => {
     expect(draftsLink.className).toContain('font-semibold');
   });
 
+  it('renders the Activity nav link in its active state on the /activity route', async () => {
+    await render(<RouteFrame path="/activity" />);
+    const activityLink = document.querySelector('a[href="/activity"]') as HTMLAnchorElement;
+    expect(activityLink).not.toBeNull();
+    expect(activityLink.className).toContain('font-semibold');
+    expect(activityLink.className).toContain('bg-background');
+  });
+
   it('shows an error message when category creation fails with a non-Error rejection', async () => {
     createCategoryMutate.mockImplementationOnce((_name: string, opts?: { onError?: (e: unknown) => void }) => {
       opts?.onError?.('plain string failure');

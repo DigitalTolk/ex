@@ -546,6 +546,29 @@ describe('Sidebar', () => {
     });
   });
 
+  it('dropping on the bottom half of a MIDDLE row resolves to a row slot (not the section end)', async () => {
+    mockChannels = [
+      { ...baseMockChannels[0], sidebarPosition: 1000 },
+      { ...baseMockChannels[1], sidebarPosition: 3000 },
+      { ...baseMockChannels[2], sidebarPosition: 5000 },
+    ];
+    const dataTransfer = { effectAllowed: '', dropEffect: '', setData: vi.fn(), getData: vi.fn() };
+    renderSidebar();
+
+    // Bottom half of ch-1 (a middle row): index bumps past ch-1 but stays
+    // below the section's drop count → channelDropAreaForIndex returns 'row'.
+    const target = screen.getByTestId('channel-row-ch-1');
+    mockRect(target, { top: 0, bottom: 20 });
+    fireEvent.pointerDown(screen.getByTestId('channel-row-ch-3'));
+    fireEvent.dragStart(screen.getByTestId('channel-row-ch-3'), { dataTransfer });
+    fireDragOver(target, dataTransfer, 19);
+    fireDrop(target, dataTransfer, 19);
+
+    await waitFor(() => {
+      expect(lastMoveBody()).toMatchObject({ itemID: 'ch-3', section: 'channels', afterType: 'channel', afterID: 'ch-1' });
+    });
+  });
+
   it('drops a channel onto a category header and stores that category', async () => {
     mockApiFetch.mockImplementation(async (url: string) => {
       if (url === '/api/v1/sidebar/categories') return [{ id: 'cat-eng', name: 'Engineering', position: 0 }];

@@ -165,6 +165,11 @@ describe('SearchBar browser behavior', () => {
     await expect.element(screen.getByTestId('searchbar-dropdown')).toBeVisible();
     await expect.element(screen.getByTestId('searchbar-show-results')).toBeVisible();
     expect(document.querySelector('[data-testid="searchbar-show-in-scope"]')).toBeNull();
+
+    // Hovering the all-messages row moves the shared keyboard/mouse highlight
+    // onto it (the un-scoped arm of the hover key).
+    await screen.getByTestId('searchbar-show-results').hover();
+    await expect.element(screen.getByTestId('searchbar-show-results')).toHaveAttribute('aria-selected', 'true');
   });
 
   it('adds a channel-scoped message row when the route is /channel/:slug', async () => {
@@ -307,6 +312,30 @@ describe('SearchBar browser behavior', () => {
     await vi.waitFor(() => {
       expect(document.activeElement).toBe(input);
     });
+  });
+
+  it('honours Ctrl+K on a non-Apple platform (UA-driven chord)', async () => {
+    // The projects all run on Apple UAs here — force the Windows arm so both
+    // sides of the platform chord stay pinned.
+    Object.defineProperty(navigator, 'userAgent', {
+      configurable: true,
+      get: () => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+    });
+    try {
+      const screen = await renderWithLocation();
+      const input = screen.getByTestId('searchbar-input').element() as HTMLInputElement;
+      // The Apple chord (meta) must NOT fire on Windows…
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true, bubbles: true }));
+      await new Promise((r) => setTimeout(r, 30));
+      expect(document.activeElement).not.toBe(input);
+      // …the Windows chord (ctrl) must.
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true, bubbles: true }));
+      await vi.waitFor(() => {
+        expect(document.activeElement).toBe(input);
+      });
+    } finally {
+      delete (navigator as { userAgent?: unknown }).userAgent;
+    }
   });
 
   it('the platform chord wins even while the user is typing in an editable field', async () => {

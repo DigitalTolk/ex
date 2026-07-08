@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { ReactNode } from 'react';
 import { renderHook, waitFor, act } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { useDeleteIncomingWebhook } from './useWebhooks';
+import { useDeleteIncomingWebhook, useIncomingWebhooks } from './useWebhooks';
 import { queryKeys } from '@/lib/query-keys';
 
 const mockApiFetch = vi.hoisted(() => vi.fn());
@@ -72,5 +72,15 @@ describe('useDeleteIncomingWebhook — optimistic removal', () => {
     await waitFor(() => expect(result.current.isError).toBe(true));
     // Optimistic write coerced the empty cache to [] and there was nothing to roll back.
     expect(qc.getQueryData(queryKeys.incomingWebhooks())).toEqual([]);
+  });
+});
+
+describe('useIncomingWebhooks', () => {
+  it('coerces a non-array response to an empty list (queryFn never returns undefined)', async () => {
+    mockApiFetch.mockResolvedValue(undefined);
+    const qc = newClient();
+    const { result } = renderHook(() => useIncomingWebhooks(), { wrapper: makeWrapper(qc) });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data).toEqual([]);
   });
 });

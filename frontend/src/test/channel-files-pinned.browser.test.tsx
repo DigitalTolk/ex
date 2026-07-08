@@ -86,6 +86,9 @@ interface FetchPlan {
   // Channel slug/name (defaults to 'general'). A non-'general' slug lets the
   // Leave action surface, since canLeaveChannel blocks the general channel.
   slug?: string;
+  // When true the attachment-batch GET never resolves — pins the
+  // "Loading message editor…" placeholder while edit attachments resolve.
+  hangAttachmentBatch?: boolean;
   // Existing drafts payload (defaults to []). A draft for this channel scope
   // exercises the send-with-existing-draft path.
   drafts?: unknown[];
@@ -195,6 +198,7 @@ function installFetchStub(plan: FetchPlan): () => void {
     }
     // Batch attachment metadata (useAttachmentsBatch → GET /attachments?ids=…)
     if (url.includes('/api/v1/attachments?') && method === 'GET') {
+      if (plan.hangAttachmentBatch) return new Promise<Response>(() => undefined);
       const ids = (new URL(url, 'http://x').searchParams.get('ids') ?? '').split(',').filter(Boolean);
       return apiJSON(ids.map((id) => plan.attachments[id]).filter(Boolean));
     }
@@ -602,6 +606,68 @@ describe('channel → header toggles → files + pinned panels (full route)', ()
     const screen = await renderNoSlug();
     // The `if (!slug)` arm renders the "Select a channel" placeholder.
     await expect.element(screen.getByText(/Select a channel to start chatting/i)).toBeVisible();
+  });
+
+  it('surfaces the non-member invite prompt after sending a message that @mentions one', async () => {
+    teardown = installFetchStub({ files: [], pinned: [], attachments: {} });
+    const screen = await renderRoute('/channel/general');
+    await expect.element(
+      screen.getByTestId('channel-title-stack').getByRole('heading', { name: 'general' }),
+    ).toBeVisible();
+    const editor = screen.getByLabelText('Message input');
+    await editor.click();
+    // Bob is not in the default member list (Me + Alice) — the literal
+    // mention syntax IS the composer buffer, so fill it directly.
+    await editor.fill('@[u-bob|Bob] can you take a look?');
+    await screen.getByRole('button', { name: 'Send message' }).click();
+
+    // channel && !editing && pendingInvites.length > 0 → the prompt mounts.
+    await expect.element(screen.getByRole('button', { name: 'Add to channel' })).toBeVisible();
+    await screen.getByLabelText('Dismiss invite suggestion').click();
+    await vi.waitFor(() => {
+      expect(document.querySelector('[aria-label="Dismiss invite suggestion"]')).toBeNull();
+    });
+  });
+
+  it('shows "Loading message editor…" while edit attachments are still resolving (mobile)', async () => {
+    if (window.innerWidth > 767) return;
+    teardown = installFetchStub({
+      files: [],
+      pinned: [],
+      attachments: {},
+      hangAttachmentBatch: true,
+      messages: [
+        { id: 'own-loading', parentID: CHANNEL_ID, parentType: 'channel', authorID: ME_ID, body: 'own with file', createdAt: '2026-05-01T11:00:00Z', attachmentIDs: [ATTACHMENT_ID] },
+      ],
+    });
+    const screen = await renderRoute('/channel/general');
+    await expect.element(screen.getByText('own with file')).toBeVisible();
+    dispatchEditMessage({ messageId: 'own-loading' });
+    // editReady stays false (attachments still loading) → the composer is
+    // held back and the loading placeholder renders instead.
+    await expect.element(screen.getByText('Loading message editor…')).toBeVisible();
+  });
+
+  it('drops an edit attachment that no longer resolves instead of rendering a ghost chip (mobile)', async () => {
+    if (window.innerWidth > 767) return;
+    teardown = installFetchStub({
+      files: [],
+      pinned: [],
+      attachments: {
+        [ATTACHMENT_ID]: { id: ATTACHMENT_ID, filename: 'still-here.png', contentType: 'image/png', size: 512 },
+      },
+      messages: [
+        // One resolvable attachment, one deleted/unresolvable id.
+        { id: 'own-ghost', parentID: CHANNEL_ID, parentType: 'channel', authorID: ME_ID, body: 'partial attachments', createdAt: '2026-05-01T11:00:00Z', attachmentIDs: [ATTACHMENT_ID, 'att-gone'] },
+      ],
+    });
+    const screen = await renderRoute('/channel/general');
+    await expect.element(screen.getByText('partial attachments')).toBeVisible();
+    dispatchEditMessage({ messageId: 'own-ghost' });
+    await expect.element(screen.getByRole('button', { name: 'Save' })).toBeVisible();
+    // The resolvable chip is in the composer; the missing one was filtered.
+    await expect.element(screen.getByTestId('attachment-chip').getByText('still-here.png')).toBeVisible();
+    expect(document.body.textContent).not.toContain('att-gone');
   });
 
   it('sends a new channel message via the composer (no existing draft path)', async () => {

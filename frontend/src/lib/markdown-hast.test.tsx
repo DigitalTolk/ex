@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render } from '@testing-library/react';
-import { renderHastTree } from './markdown-hast';
+import { reactNodeText, renderHastTree } from './markdown-hast';
 import type { HastNode } from '@/types';
 
 // Stub GiphyEmbed so the test can read the resolved id prop without pulling in
@@ -97,5 +97,40 @@ describe('renderHastTree', () => {
     const tds = container.querySelectorAll('tbody td');
     expect(tds[0].textContent).toBe('a');
     expect(tds[2].className).toContain('text-right');
+  });
+});
+
+describe('reactNodeText', () => {
+  it('flattens every ReactNode shape to its literal text', () => {
+    expect(reactNodeText(null)).toBe('');
+    expect(reactNodeText(undefined)).toBe('');
+    expect(reactNodeText(true)).toBe('');
+    expect(reactNodeText(false)).toBe('');
+    expect(reactNodeText('a')).toBe('a');
+    expect(reactNodeText(7)).toBe('7');
+    expect(reactNodeText(['a', 7, null, ['b']])).toBe('a7b');
+    expect(reactNodeText(<span>{'x'}</span>)).toBe('x');
+    // Unrenderable shapes (plain objects) flatten to nothing.
+    expect(reactNodeText({} as unknown as React.ReactNode)).toBe('');
+  });
+});
+
+describe('code className passthrough', () => {
+  it('keeps the language className on code elements that carry one', () => {
+    const tree: HastNode = {
+      type: 'root',
+      children: [
+        {
+          type: 'element',
+          tagName: 'code',
+          properties: { className: ['language-go'] },
+          children: [{ type: 'text', value: 'x := 1' }],
+        },
+      ],
+    };
+    const { container } = render(<>{renderHastTree(tree)}</>);
+    const code = container.querySelector('code.language-go');
+    expect(code).toBeInTheDocument();
+    expect(code!.textContent).toBe('x := 1');
   });
 });

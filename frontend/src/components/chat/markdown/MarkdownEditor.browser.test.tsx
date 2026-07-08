@@ -199,6 +199,47 @@ describe('MarkdownEditor handle + keymap branches', () => {
     expect(onPasteFiles).toHaveBeenCalled();
   });
 
+  it('recovers pasted files from clipboard ITEMS when the files list is empty (screenshot paste)', async () => {
+    const onPasteFiles = vi.fn();
+    const { ref } = await mount({ onPasteFiles });
+    const el = ref.current!.getElement()!.querySelector('[contenteditable]') as HTMLElement;
+    // Some sources (screenshot paste) expose the file only through
+    // clipboardData.items — dt.files stays empty. A real DataTransfer can't
+    // model that, so fake the shape: one resolvable file item, one item whose
+    // getAsFile() returns null, and one non-file item.
+    const shot = new File(['x'], 'shot.png', { type: 'image/png' });
+    const evt = new ClipboardEvent('paste', { bubbles: true, cancelable: true });
+    Object.defineProperty(evt, 'clipboardData', {
+      value: {
+        files: [],
+        items: [
+          { kind: 'file', getAsFile: () => shot },
+          { kind: 'file', getAsFile: () => null },
+          { kind: 'string', getAsFile: () => null },
+        ],
+      },
+    });
+    el.dispatchEvent(evt);
+    expect(onPasteFiles).toHaveBeenCalledWith([shot]);
+  });
+
+  it('renders a custom-emoji shortcode as an image glyph via customEmojiMap', async () => {
+    const { ref } = await mount({
+      initialBody: 'hi :party_parrot: there',
+      customEmojiMap: () => ({ party_parrot: 'https://cdn.test/parrot.gif' }),
+    });
+    expect(ref.current).not.toBeNull();
+    await expect.poll(() => document.querySelector('img.cm-emoji-img')?.getAttribute('src')).toBe(
+      'https://cdn.test/parrot.gif',
+    );
+  });
+
+  it('leaves an unknown shortcode as plain text when no customEmojiMap is wired', async () => {
+    await mount({ initialBody: 'hi :party_parrot: there' });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(document.querySelector('img.cm-emoji-img')).toBeNull();
+  });
+
   it('a text-only paste is left to the editor (no file callback)', async () => {
     const onPasteFiles = vi.fn();
     const { ref } = await mount({ onPasteFiles });

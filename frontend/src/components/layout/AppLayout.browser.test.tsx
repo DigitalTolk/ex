@@ -173,6 +173,35 @@ describe('AppLayout browser behavior', () => {
     panEnd([92, 226]);
   });
 
+  it('never opens the channel drawer from a swipe that starts on a right panel', async () => {
+    if (window.innerWidth > 767) return;
+
+    await render(
+      <LayoutHarness>
+        {/* Stands in for MemberList/SidePanel: the mobile right-panel marker. */}
+        <div data-mobile-right-sidebar="true" style={{ position: 'fixed', inset: 0 }}>
+          <div data-testid="panel-body" style={{ height: 300 }} />
+        </div>
+      </LayoutHarness>,
+    );
+
+    const main = document.querySelector('[data-app-main="true"]') as HTMLElement | null;
+    const panelBody = document.querySelector('[data-testid="panel-body"]') as HTMLElement | null;
+    expect(main).not.toBeNull();
+    expect(panelBody).not.toBeNull();
+
+    // The edge swipe starts ON the panel: the gesture guard must refuse to
+    // arm the drawer (a pan inside a right panel is that panel's gesture).
+    // Moves are dispatched on the panel itself (not window) so the pan-start
+    // event's target is the panel element, as it is under a real finger.
+    pointer(panelBody!, 'pointerdown', 12, 220);
+    pointer(panelBody!, 'pointermove', 60, 224);
+    pointer(panelBody!, 'pointermove', 92, 226);
+    await new Promise((r) => setTimeout(r, 80));
+    expect(main!.dataset.channelDragging).not.toBe('true');
+    panEnd([92, 226]);
+  });
+
   it('allows vertical scrolling gestures on the mobile main content', async () => {
     if (window.innerWidth > 767) return;
 

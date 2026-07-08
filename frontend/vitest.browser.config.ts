@@ -146,13 +146,13 @@ export default defineConfig({
         // in jsdom (useWebhooks.test.tsx, incoming-webhooks-page.test.tsx).
         'src/hooks/useWebhooks.ts',
       ],
-      // 99% branch gate over the merged desktop + mobile browser run.
+      // 100% branch gate over the merged desktop + mobile browser run.
       // vitest enforces it (non-zero exit), so `npm run
       // test:browser:coverage` fails on its own in both `make check`
       // and the CI "Run browser tests" step. The Makefile's explicit
       // summary-json check is a redundant backstop at the same bar.
       thresholds: {
-        branches: 99,
+        branches: 100,
       },
     },
     browser: {

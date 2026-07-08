@@ -62,3 +62,22 @@ describe('MessageAttachments content-height callback', () => {
     expect(container.firstChild).toBeNull();
   });
 });
+
+describe('GIF thumbnail source', () => {
+  beforeEach(() => batchMock.mockReset());
+
+  it('a GIF missing its original URL falls back to the static thumbnail', () => {
+    const gif = makeAttachment('g1', {
+      filename: 'party.gif',
+      contentType: 'image/gif',
+      url: undefined,
+      thumbnailURL: 'https://files.test/g1-thumb.png',
+      width: 200,
+      height: 100,
+    });
+    batchMock.mockReturnValue({ map: new Map([['g1', gif]]), isLoading: false });
+    const { container } = render(<MessageAttachments ids={['g1']} {...baseProps} />);
+    const img = container.querySelector('img')!;
+    expect(img.getAttribute('src')).toBe('https://files.test/g1-thumb.png');
+  });
+});

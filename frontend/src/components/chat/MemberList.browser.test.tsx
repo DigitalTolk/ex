@@ -207,6 +207,27 @@ describe('MemberList browser behaviour', () => {
     await expect.element(screen.getByRole('alert')).toHaveTextContent('already pending invite');
   });
 
+  it('swallows a second row click while the membership POST is still in flight', async () => {
+    let posts = 0;
+    vi.mocked(apiFetch).mockImplementation(async (url: unknown, init?: unknown) => {
+      if (typeof url === 'string' && url.includes('/users?q=')) {
+        return [{ id: 'u-9', displayName: 'Newbie', email: 'new@x.test' }];
+      }
+      if ((init as { method?: string } | undefined)?.method === 'POST') {
+        posts += 1;
+        return new Promise(() => undefined); // stays pending forever
+      }
+      return undefined;
+    });
+    const screen = await renderWithProviders(
+      <MemberList members={[makeMember()]} channelId="ch-1" currentUserId="u-me" currentUserRole={4} />,
+    );
+    await screen.getByLabelText('Add member').fill('ne');
+    await screen.getByTestId('member-add-user-u-9').click();
+    await screen.getByTestId('member-add-user-u-9').click();
+    expect(posts).toBe(1);
+  });
+
   it('falls back to "Unknown" for a member with no display name', async () => {
     const screen = await renderWithProviders(
       <MemberList

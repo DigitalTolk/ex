@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
+  buildUnicodeToName,
   shortcodeToUnicode,
   shortcodeWithSkinTone,
   applySkinToneSuffix,
   applyEmojiSkinTone,
   supportsEmojiSkinTone,
   EMOJI_SKIN_TONES,
+  type EmojiSkinTone,
 } from './emoji-shortcodes';
 
 // Browser-gate coverage for the emoji skin-tone helpers' edge branches.
@@ -27,6 +29,22 @@ describe('emoji-shortcodes skin-tone helpers (browser)', () => {
   it('shortcodeWithSkinTone returns the plain shortcode for a non-tonable emoji or no tone', () => {
     expect(shortcodeWithSkinTone('smile', '😄', realTone)).toBe(':smile:');
     expect(shortcodeWithSkinTone('wave', WAVE, '')).toBe(':wave:');
+  });
+
+  it('shortcodeWithSkinTone falls back to the plain shortcode for an unknown tone value', () => {
+    expect(shortcodeWithSkinTone('wave', WAVE, 'not-a-tone' as unknown as EmojiSkinTone)).toBe(':wave:');
+  });
+
+  it('buildUnicodeToName keeps the base entry when a generated toned variant collides', () => {
+    const toned = applyEmojiSkinTone(WAVE, realTone);
+    // The catalog ships the toned form as its own named entry — the base
+    // mapping must win over the generated `wave::<suffix>` variant.
+    const map = buildUnicodeToName([
+      { unicode: toned, name: 'wave_pretoned' },
+      { unicode: WAVE, name: 'wave' },
+    ]);
+    expect(map[toned]).toBe('wave_pretoned');
+    expect(map[WAVE]).toBe('wave');
   });
 
   it('applySkinToneSuffix applies a known suffix and passes through an unknown one', () => {

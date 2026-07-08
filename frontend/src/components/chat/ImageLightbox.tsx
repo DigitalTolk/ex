@@ -111,6 +111,8 @@ export function ImageLightbox({
   }
 
   function handleMobileTap(x: number, y: number) {
+    /* v8 ignore next 3 -- unreachable double-check: lightbox-gestures' onPointerDown only issues a tapStart when isImage && isMobile (tapEligible), and isTapRelease is false without one, so this call never sees the other combinations; kept because the invariant lives in a separate module and could drift */
+    /* istanbul ignore next -- see v8 note above */
     if (!isMobile || !isImage) return false;
     const now = Date.now();
     if (classifyDoubleTap(lastTapRef.current, { time: now, x, y })) {

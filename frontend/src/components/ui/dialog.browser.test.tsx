@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { render } from 'vitest-browser-react';
+import { useDialogMobileAction } from './dialog';
 import {
   Dialog,
   DialogContent,
@@ -72,5 +73,19 @@ describe('Dialog primitive browser', () => {
     // The footer's own Close ("Close" label) is absent; only the corner X close exists.
     const footer = document.querySelector('[data-slot="dialog-footer"]');
     expect(footer?.textContent).not.toContain('Close');
+  });
+});
+
+describe('useDialogMobileAction outside a dialog', () => {
+  function Orphan() {
+    // No DialogContent above us — the registration context is absent and the
+    // hook must be a silent no-op rather than crash.
+    useDialogMobileAction({ label: 'Save', onClick: () => undefined });
+    return <div data-testid="orphan">ok</div>;
+  }
+
+  it('is a no-op when no dialog provides the action slot', async () => {
+    await render(<Orphan />);
+    expect(document.querySelector('[data-testid="orphan"]')).not.toBeNull();
   });
 });

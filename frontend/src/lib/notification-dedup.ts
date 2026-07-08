@@ -88,7 +88,7 @@ export function resetNotificationDedup(): void {
   memoryMap = {};
   lsBroken = false;
   try {
-    if (typeof window !== 'undefined') window.localStorage.removeItem(STORAGE_KEY);
+    window.localStorage.removeItem(STORAGE_KEY);
   } catch {
     /* ignore */
   }

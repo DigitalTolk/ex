@@ -59,7 +59,13 @@ describe('useSwipeDismiss', () => {
 
     act(() => props.onDragEnd?.(new Event('pointerup') as PointerEvent, pan(120, 0)));
     expect(result.current.dismissing).toBe(true);
+
+    // A drag-end landing while the exit animation is still running is
+    // swallowed (the dismissingRef latch) — onDismiss fires exactly once.
+    act(() => props.onDragEnd?.(new Event('pointerup') as PointerEvent, pan(120, 0)));
     await waitFor(() => expect(onDismiss).toHaveBeenCalledTimes(1));
+    await new Promise((r) => setTimeout(r, 60));
+    expect(onDismiss).toHaveBeenCalledTimes(1);
   });
 
   it('springs back and does not dismiss below the threshold', () => {

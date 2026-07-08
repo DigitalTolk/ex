@@ -270,6 +270,23 @@ describe('NotificationContext browser', () => {
     captured!.dispatch(basePayload({ kind: 'mention' }));
   });
 
+  it('requestPermission reports unsupported when the Notification API is missing', async () => {
+    const orig = window.Notification;
+    // Simulate an environment without web notifications (older webviews).
+    delete (window as { Notification?: unknown }).Notification;
+    try {
+      await render(
+        <NotificationProvider>
+          <Capture />
+        </NotificationProvider>,
+      );
+      await vi.waitFor(() => expect(captured).not.toBeNull());
+      expect(await captured!.requestPermission()).toBe('unsupported');
+    } finally {
+      (window as { Notification?: unknown }).Notification = orig;
+    }
+  });
+
   it('requestPermission resolves to current permission value', async () => {
     await render(
       <NotificationProvider>

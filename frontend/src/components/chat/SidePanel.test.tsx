@@ -4,8 +4,9 @@ import { SidePanel } from './SidePanel';
 
 // The drag physics live in useSwipeDismiss (Motion, pointer-based) and are
 // unit-tested there; here we mock it so the panel chrome is deterministic.
+const swipeState = vi.hoisted(() => ({ settled: true }));
 vi.mock('@/hooks/useSwipeDismiss', () => ({
-  useSwipeDismiss: () => ({ dismissing: false, settled: true, motionProps: {} }),
+  useSwipeDismiss: () => ({ dismissing: false, settled: swipeState.settled, motionProps: {} }),
 }));
 
 describe('SidePanel', () => {
@@ -34,5 +35,19 @@ describe('SidePanel', () => {
     expect(panel.className).not.toMatch(/(^|\s)border-l(\s|$)/);
     expect(panel).toHaveClass('mobile:top-[var(--mobile-right-panel-top,6rem)]');
     expect(panel.className).not.toContain('safe-area-inset-top');
+  });
+
+  it('keeps an unconditional border while the mount animation has not settled', () => {
+    swipeState.settled = false;
+    try {
+      render(
+        <SidePanel title="Files" ariaLabel="Files" closeLabel="Close files" onClose={vi.fn()}>
+          <p>body</p>
+        </SidePanel>,
+      );
+      expect(screen.getByLabelText('Files').className).toMatch(/(^|\s)border-l(\s|$)/);
+    } finally {
+      swipeState.settled = true;
+    }
   });
 });

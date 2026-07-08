@@ -50,6 +50,13 @@ describe('UserPickerRow (browser)', () => {
     expect(onSelect).not.toHaveBeenCalled();
   });
 
+  it('renders the added checkmark without a derived testid when no testID is given', async () => {
+    const result = await render(<UserPickerRow displayName="Eve" added onSelect={() => undefined} />);
+    active = result;
+    expect(document.querySelector('[aria-label="Already added"]')).not.toBeNull();
+    expect(document.querySelector('[data-testid$="-added"]')).toBeNull();
+  });
+
   it('mousedown-pick fires for selectable rows and (you) renders', async () => {
     const onSelect = vi.fn();
     const result = await render(

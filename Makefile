@@ -96,4 +96,4 @@ check:
 			exit 1; \
 		fi; \
 		echo "browser branch coverage: $$coverage%"; \
-		awk -v coverage="$$coverage" 'BEGIN { if (coverage + 0 < 99) { printf "browser branch coverage %.2f%% is below 99%%\n", coverage; exit 1 } }'
+		awk -v coverage="$$coverage" 'BEGIN { if (coverage + 0 < 100) { printf "browser branch coverage %.2f%% is below 100%%\n", coverage; exit 1 } }'

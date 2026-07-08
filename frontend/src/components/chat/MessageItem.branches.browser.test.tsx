@@ -259,6 +259,29 @@ describe('MessageItem desktop toolbar + menu branches', () => {
     expect(document.querySelector('[data-testid="inline-edit"]')).toBeNull();
   });
 
+  it('scopes edit-attachment resolution to the conversation when editing a DM message', async () => {
+    if (window.innerWidth <= 767) return;
+    useAttachmentsBatchMock.mockReturnValue({ map: new Map(), isLoading: true });
+    await renderWithProviders(
+      <MessageItem
+        message={makeMessage({ body: 'dm with files', attachmentIDs: ['a-1'] })}
+        authorName="Alice"
+        isOwn
+        conversationId="conv-1"
+        currentUserId="user-1"
+      />,
+    );
+    dispatchEditMessage({ messageId: 'msg-1' });
+    // Edit engages with the batch still loading → the editor-loading
+    // placeholder proves the editing render ran, and with no channelId the
+    // batch context resolved through the conversation arm.
+    await vi.waitFor(() => {
+      const loaders = Array.from(document.querySelectorAll('p.mt-1.text-xs.text-muted-foreground'))
+        .filter((el) => el.textContent?.trim() === 'Loading…');
+      expect(loaders.length).toBeGreaterThan(0);
+    }, { timeout: 3000 });
+  });
+
   it('submits a changed body from the inline editor (mutate path)', async () => {
     if (window.innerWidth <= 767) return;
     const screen = await renderWithProviders(

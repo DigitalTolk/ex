@@ -19,6 +19,8 @@ describe('format helpers (browser)', () => {
     expect(formatRelative(new Date('2026-06-15T11:59:00Z'), now)).toMatch(/1 minute ago/);
     expect(formatRelative(new Date('2026-06-10T12:00:00Z'), now)).toMatch(/5 days ago/);
     expect(formatRelative(new Date('2026-06-14T12:00:00Z'), now)).toMatch(/1 day ago/);
+    expect(formatRelative(new Date('2026-03-15T12:00:00Z'), now)).toMatch(/3 months ago/);
+    expect(formatRelative(new Date('2026-05-11T12:00:00Z'), now)).toMatch(/1 month ago/);
     expect(formatRelative(new Date('2023-06-15T12:00:00Z'), now)).toMatch(/3 years ago/);
     expect(formatRelative(new Date('2025-06-15T12:00:00Z'), now)).toMatch(/1 year ago/);
   });

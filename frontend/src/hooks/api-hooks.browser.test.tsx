@@ -12,7 +12,7 @@ import {
   useMuteChannel,
   useSetChannelNotificationPrefs,
 } from './useChannels';
-import { useEmojis, useEmojiMap } from './useEmoji';
+import { useEmojis, useEmojiMap, useFrequentEmojis } from './useEmoji';
 import { useUserState } from './useUserState';
 
 const apiFetchMock = vi.hoisted(() => vi.fn());
@@ -118,6 +118,12 @@ describe('useChannels — queries', () => {
     expect(apiFetchMock.mock.calls[0][0]).toBe('/api/v1/channels/ch-1/members');
   });
 
+  it('useBrowseChannels coerces a non-array response to []', async () => {
+    apiFetchMock.mockResolvedValue(undefined);
+    const screen = await renderHook(() => useBrowseChannels());
+    await expect.element(screen.getByTestId('probe')).toHaveAttribute('data-data', '[]');
+  });
+
   it('useBrowseChannels appends q= only when a non-empty query is supplied', async () => {
     apiFetchMock.mockResolvedValue([]);
     await renderHook(() => useBrowseChannels());
@@ -128,6 +134,20 @@ describe('useChannels — queries', () => {
     await renderHook(() => useBrowseChannels(' general '));
     await new Promise((r) => setTimeout(r, 100));
     expect(apiFetchMock.mock.calls[0][0]).toContain('q=general');
+  });
+});
+
+describe('useFrequentEmojis — limit arms', () => {
+  it('returns the full shelf when no limit is given, sliced when one is', async () => {
+    apiFetchMock.mockResolvedValue([':a:', ':b:', ':c:']);
+    const all = await renderHook(() => ({ data: useFrequentEmojis(), status: 'success' }));
+    await expect.element(all.getByTestId('probe')).toHaveAttribute('data-data', JSON.stringify([':a:', ':b:', ':c:']));
+    await all.unmount();
+
+    apiFetchMock.mockReset();
+    apiFetchMock.mockResolvedValue([':a:', ':b:', ':c:']);
+    const limited = await renderHook(() => ({ data: useFrequentEmojis(2), status: 'success' }));
+    await expect.element(limited.getByTestId('probe')).toHaveAttribute('data-data', JSON.stringify([':a:', ':b:']));
   });
 });
 
