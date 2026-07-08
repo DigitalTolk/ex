@@ -11,6 +11,7 @@ import (
 
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/DigitalTolk/ex/internal/service"
+	"github.com/DigitalTolk/ex/internal/store"
 )
 
 // Fallback arms of the batch/participation adapter methods: backings without
@@ -135,5 +136,29 @@ func TestSpaHandler_CacheHeaders(t *testing.T) {
 		if got := rec.Header().Get("Cache-Control"); got != tt.wantCache {
 			t.Errorf("%s: Cache-Control = %q, want %q", tt.path, got, tt.wantCache)
 		}
+	}
+}
+
+// ConversationStoreAdapter.IncrementNotifyCount: capability arm forwards,
+// non-capable backing reports ErrNotFound (notifier logs and skips the badge).
+type notifyCountConvBacking struct {
+	adapterConversationBacking
+	bumped int64
+}
+
+func (b *notifyCountConvBacking) IncrementNotifyCount(context.Context, string, string) (int64, error) {
+	b.bumped++
+	return b.bumped, nil
+}
+
+func TestConversationStoreAdapter_IncrementNotifyCount(t *testing.T) {
+	ctx := context.Background()
+	capable := NewConversationStoreAdapter(&notifyCountConvBacking{})
+	if n, err := capable.IncrementNotifyCount(ctx, "conv-1", "u-1"); err != nil || n != 1 {
+		t.Fatalf("capable arm = %d (err=%v), want 1", n, err)
+	}
+	plain := NewConversationStoreAdapter(&adapterConversationBacking{})
+	if _, err := plain.IncrementNotifyCount(ctx, "conv-1", "u-1"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("fallback arm = %v, want ErrNotFound", err)
 	}
 }

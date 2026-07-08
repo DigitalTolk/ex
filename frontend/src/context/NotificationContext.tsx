@@ -48,6 +48,10 @@ export interface NotificationPayload {
   // backend's level-gated decision, same as any other message.
   webhook?: boolean;
   createdAt: string;
+  // Authoritative alerted-unread badge for the parent AFTER this alert
+  // (top-level messages only). Clients SET the sidebar row to this value —
+  // never increment locally — so duplicate/replayed events can't drift it.
+  parentUnreadNotifyCount?: number;
 }
 
 type Permission = NotificationPermission | 'unsupported';

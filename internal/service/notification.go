@@ -70,6 +70,12 @@ type Notification struct {
 	// the recipient's notification level, exactly like a regular message.
 	Webhook   bool      `json:"webhook,omitempty"`
 	CreatedAt time.Time `json:"createdAt"`
+	// ParentUnreadNotifyCount is the recipient's authoritative alerted-unread
+	// badge for the parent AFTER this notification (top-level messages only;
+	// thread replies never touch parent counters). Clients SET their sidebar
+	// badge to this value — never increment locally — so replayed or
+	// duplicated events can't drift the count.
+	ParentUnreadNotifyCount int64 `json:"parentUnreadNotifyCount,omitempty"`
 }
 
 // PresenceLookup is the slice of PresenceService NotificationService cares
@@ -85,6 +91,16 @@ type PresenceLookup interface {
 // for many users; plain single-user lookups keep working via the fallback.
 type PresenceBatchLookup interface {
 	OnlineMany(userIDs []string) map[string]bool
+}
+
+// notifyCountBumper is the optional per-recipient alerted-unread counter
+// capability of the membership/conversation stores (the DynamoDB adapters
+// have it). The badge is maintained HERE — at the moment the notification
+// decision fires — because that decision (level + mute + keywords + mentions)
+// is made exactly once, server-side; recomputing it at read time would mean
+// re-running the notifier over history.
+type notifyCountBumper interface {
+	IncrementNotifyCount(ctx context.Context, parentID, userID string) (int64, error)
 }
 
 type MobilePushSender interface {
@@ -517,6 +533,18 @@ func (s *NotificationService) NotifyForMessage(ctx context.Context, msg *model.M
 			notif = mentionNotif
 		}
 
+		// This recipient IS being alerted (the loop continued past the
+		// level/mute gate above), so their sidebar badge advances. Thread
+		// replies stay off parent counters — the Threads nav owns those via
+		// markThreadNotification below. Best-effort: a failed bump must
+		// never block the alert itself; the badge self-heals on the next
+		// sidebar list fetch.
+		if !isThreadReply {
+			if n, ok := s.bumpNotifyCount(ctx, parentType, msg.ParentID, uid); ok {
+				notif.ParentUnreadNotifyCount = n
+			}
+		}
+
 		// Thread replies persist a thread-notification marker so the Threads nav
 		// lights up on a cold reload — thread replies do NOT bump the parent's
 		// unread seq, so this marker is the only durable thread-unread signal.
@@ -672,6 +700,28 @@ func (s *NotificationService) onlineSet(userIDs []string) map[string]bool {
 		out[uid] = s.presence.IsOnline(uid)
 	}
 	return out
+}
+
+// bumpNotifyCount advances the recipient's alerted-unread badge for the
+// parent, returning the authoritative new value. False when the store lacks
+// the capability (plain test stores) or the write fails.
+func (s *NotificationService) bumpNotifyCount(ctx context.Context, parentType, parentID, userID string) (int64, bool) {
+	var backing any
+	if parentType == ParentChannel {
+		backing = s.members
+	} else {
+		backing = s.conv
+	}
+	bumper, ok := backing.(notifyCountBumper)
+	if !ok {
+		return 0, false
+	}
+	n, err := bumper.IncrementNotifyCount(ctx, parentID, userID)
+	if err != nil {
+		slog.Warn("notify count bump failed", "parentID", parentID, "userID", userID, "error", err)
+		return 0, false
+	}
+	return n, true
 }
 
 func (s *NotificationService) sendMobilePush(ctx context.Context, recipientUserID string, notif Notification, online bool) {

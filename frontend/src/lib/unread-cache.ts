@@ -27,7 +27,23 @@ export function bumpChannelUnread(qc: QueryClient, channelID: string) {
 
 /** The user opened/read this channel — reset the badge immediately (the PUT /read refetch confirms). */
 export function clearChannelUnreadInCache(qc: QueryClient, channelID: string) {
-  patchChannel(qc, channelID, (c) => ({ ...c, unread: false, unreadCount: 0 }));
+  patchChannel(qc, channelID, (c) => ({ ...c, unread: false, unreadCount: 0, unreadNotifyCount: 0 }));
+}
+
+/**
+ * A notification.new for a top-level message carried the recipient's
+ * authoritative alerted-unread badge — SET it (never increment locally; the
+ * server counted once, at the moment the alert decision fired). The alert
+ * implies an unread message, so the availability indicator lights up too,
+ * independent of message.new ordering.
+ */
+export function setChannelNotifyCountInCache(qc: QueryClient, channelID: string, count: number) {
+  patchChannel(qc, channelID, (c) => ({
+    ...c,
+    unread: true,
+    unreadCount: Math.max(c.unreadCount ?? 0, 1),
+    unreadNotifyCount: count,
+  }));
 }
 
 /** A new top-level message bumped this conversation's unread count by one. */
@@ -37,7 +53,17 @@ export function bumpConversationUnread(qc: QueryClient, conversationID: string) 
 
 /** The user opened/read this conversation — reset the badge immediately. */
 export function clearConversationUnreadInCache(qc: QueryClient, conversationID: string) {
-  patchConversation(qc, conversationID, (c) => ({ ...c, unread: false, unreadCount: 0 }));
+  patchConversation(qc, conversationID, (c) => ({ ...c, unread: false, unreadCount: 0, unreadNotifyCount: 0 }));
+}
+
+/** Conversation twin of setChannelNotifyCountInCache. */
+export function setConversationNotifyCountInCache(qc: QueryClient, conversationID: string, count: number) {
+  patchConversation(qc, conversationID, (c) => ({
+    ...c,
+    unread: true,
+    unreadCount: Math.max(c.unreadCount ?? 0, 1),
+    unreadNotifyCount: count,
+  }));
 }
 
 /**

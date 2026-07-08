@@ -151,8 +151,8 @@ describe('ConversationRow browser behaviour', () => {
     expect(trigger.getAttribute('aria-label')).toBe('Manage Bob sidebar placement');
   });
 
-  it('renders a numeric unread badge capping at 99+', async () => {
-    const screen = await renderRow(dm, { hasUnread: true, unreadCount: 200 });
+  it('renders a numeric alerted badge capping at 99+', async () => {
+    const screen = await renderRow(dm, { hasUnread: true, notifyCount: 200 });
     await expect.element(screen.getByTestId('conversation-unread-badge-cv-1')).toHaveTextContent('99+');
   });
 
@@ -176,15 +176,16 @@ describe('ConversationRow browser behaviour', () => {
     await expect.element(screen.getByTestId('conversation-row-cv-2')).toBeVisible();
   });
 
-  it('floors the unread badge to 1 when hasUnread but no live count', async () => {
-    // DMs are never muted, so any unread DM shows a NUMBER box (floored to 1).
-    const screen = await renderRow(dm, { hasUnread: true, unreadCount: 0 });
-    await expect.element(screen.getByTestId('conversation-unread-badge-cv-1')).toHaveTextContent('1');
-    expect(document.querySelector('[data-testid="conversation-unread-dot-cv-1"]')).toBeNull();
+  it('shows the availability dot for unread without alerts', async () => {
+    // Two-tier unread: quiet unread (e.g. a muted DM's chatter, or an
+    // alerted count that hasn't synced) is the dot — numbers are alerts.
+    const screen = await renderRow(dm, { hasUnread: true, notifyCount: 0 });
+    await expect.element(screen.getByTestId('conversation-unread-dot-cv-1')).toBeVisible();
+    expect(document.querySelector('[data-testid="conversation-unread-badge-cv-1"]')).toBeNull();
   });
 
-  it('renders the exact unread count when under 100', async () => {
-    const screen = await renderRow(dm, { hasUnread: true, unreadCount: 5 });
+  it('renders the exact alerted count when under 100', async () => {
+    const screen = await renderRow(dm, { hasUnread: true, notifyCount: 5 });
     await expect.element(screen.getByTestId('conversation-unread-badge-cv-1')).toHaveTextContent('5');
   });
 
@@ -285,7 +286,7 @@ describe('ConversationRow browser behaviour', () => {
   it('mobile: the unread badge sits flush right in the kebab slot, clear of the star', async () => {
     if (window.innerWidth > 767) return;
     // Widest badge ("99+") so the geometry check covers the worst case.
-    await renderRow(dm, { hasUnread: true, unreadCount: 150 });
+    await renderRow(dm, { hasUnread: true, notifyCount: 150 });
     const badge = document.querySelector('[data-testid="conversation-unread-badge-cv-1"]') as HTMLElement;
     const star = document.querySelector('[data-testid="conv-fav-toggle-cv-1"]') as HTMLElement;
     const row = document.querySelector('[data-testid="conversation-row-cv-1"]') as HTMLElement;

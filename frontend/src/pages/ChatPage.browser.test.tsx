@@ -30,14 +30,22 @@ const {
   clearChannelUnreadInCache: mockClearChannelUnreadInCache,
   clearConversationUnreadInCache: mockClearConversationUnreadInCache,
   touchConversationActivityInCache: mockTouchConversationActivity,
+  setChannelNotifyCountInCache: mockSetChannelNotifyCount,
+  setConversationNotifyCountInCache: mockSetConversationNotifyCount,
 } = vi.hoisted(() => ({
   bumpChannelUnread: vi.fn(),
   bumpConversationUnread: vi.fn(),
   clearChannelUnreadInCache: vi.fn(),
   clearConversationUnreadInCache: vi.fn(),
   touchConversationActivityInCache: vi.fn(() => true),
+  setChannelNotifyCountInCache: vi.fn(),
+  setConversationNotifyCountInCache: vi.fn(),
 }));
 vi.mock('@/lib/unread-cache', () => ({
+  // Strict-ESM browser suite: EVERY export ChatPage imports must exist on the
+  // mock or the whole file fails to load.
+  setChannelNotifyCountInCache: mockSetChannelNotifyCount,
+  setConversationNotifyCountInCache: mockSetConversationNotifyCount,
   bumpChannelUnread: mockBumpChannelUnread,
   bumpConversationUnread: mockBumpConversationUnread,
   clearChannelUnreadInCache: mockClearChannelUnreadInCache,
@@ -185,6 +193,8 @@ describe('ChatPage WS router (browser)', () => {
     mockClearConversationUnreadInCache.mockClear();
     mockTouchConversationActivity.mockClear();
     mockTouchConversationActivity.mockImplementation(() => true);
+    mockSetChannelNotifyCount.mockClear();
+    mockSetConversationNotifyCount.mockClear();
     mockUnhideConversation.mockClear();
     mockDispatchNotification.mockClear();
     mockRecordTyping.mockClear();
@@ -537,6 +547,51 @@ describe('ChatPage WS router (browser)', () => {
       createdAt: '2026-04-30T10:00:00Z',
     });
     expect(mockDispatchNotification).toHaveBeenCalled();
+  });
+
+  it('onNotification SETs the channel alerted badge from the payload count', async () => {
+    await renderChatPage();
+    lastHandlers().onNotification?.({
+      kind: 'mention',
+      parentID: 'ch-99',
+      parentType: 'channel',
+      title: 'You were mentioned',
+      body: 'hello',
+      messageID: 'm-1',
+      createdAt: '2026-04-30T10:00:00Z',
+      parentUnreadNotifyCount: 2,
+    });
+    expect(mockSetChannelNotifyCount).toHaveBeenCalledWith(expect.anything(), 'ch-99', 2);
+    expect(mockSetConversationNotifyCount).not.toHaveBeenCalled();
+  });
+
+  it('onNotification SETs the conversation alerted badge for DM alerts', async () => {
+    await renderChatPage();
+    lastHandlers().onNotification?.({
+      kind: 'message',
+      parentID: 'conv-1',
+      parentType: 'conversation',
+      title: 'Bob',
+      body: 'hi',
+      messageID: 'm-2',
+      createdAt: '2026-04-30T10:00:00Z',
+      parentUnreadNotifyCount: 1,
+    });
+    expect(mockSetConversationNotifyCount).toHaveBeenCalledWith(expect.anything(), 'conv-1', 1);
+  });
+
+  it('onNotification without a payload count leaves the badges alone', async () => {
+    await renderChatPage();
+    lastHandlers().onNotification?.({
+      kind: 'mention',
+      parentID: 'ch-99',
+      parentType: 'channel',
+      title: 't',
+      body: 'b',
+      createdAt: '2026-04-30T10:00:00Z',
+    });
+    expect(mockSetChannelNotifyCount).not.toHaveBeenCalled();
+    expect(mockSetConversationNotifyCount).not.toHaveBeenCalled();
   });
 
   it('onNotification silently drops a malformed payload', async () => {

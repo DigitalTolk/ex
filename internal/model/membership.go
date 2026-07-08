@@ -31,6 +31,14 @@ type UserChannel struct {
 	// UserConversation.Unread).
 	Unread      bool `json:"unread,omitempty" dynamodbav:"-"`
 	UnreadCount int  `json:"unreadCount,omitempty" dynamodbav:"-"`
+	// UnreadNotifyCount counts unread messages that actually ALERTED this
+	// user per their notification rules (mentions, keywords, "all messages"
+	// level; mute suppresses) — the sidebar's numeric badge. Plain unread
+	// messages only set the Unread indicator. Persisted (incremented by the
+	// notifier for each alerted recipient, reset alongside LastReadSeq)
+	// because the notification decision is made once, server-side, at send
+	// time and can't be recomputed cheaply at read time.
+	UnreadNotifyCount int64 `json:"unreadNotifyCount,omitempty" dynamodbav:"unreadNotifyCount,omitempty"`
 	// Muted suppresses notifications (sound + browser popup) for this
 	// channel without unsubscribing the user. Real-time event delivery is
 	// unaffected; only the notifier respects this flag.
@@ -89,6 +97,10 @@ type UserConversation struct {
 	// ListUserConversations from the seq pair — never persisted.
 	Unread      bool `json:"unread,omitempty" dynamodbav:"-"`
 	UnreadCount int  `json:"unreadCount,omitempty" dynamodbav:"-"`
+	// UnreadNotifyCount mirrors UserChannel.UnreadNotifyCount: unread
+	// messages that actually alerted this user (DM messages always do unless
+	// muted), maintained by the notifier and reset alongside LastReadSeq.
+	UnreadNotifyCount int64 `json:"unreadNotifyCount,omitempty" dynamodbav:"unreadNotifyCount,omitempty"`
 	// AvatarURL and UserStatus are read-time enrichments for DM sidebar rows.
 	// They are intentionally not persisted so profile changes stay single
 	// sourced from the User record.

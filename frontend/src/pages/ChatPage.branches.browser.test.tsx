@@ -30,6 +30,10 @@ const {
   clearConversationUnreadInCache: vi.fn(),
 }));
 vi.mock('@/lib/unread-cache', () => ({
+  // Strict-ESM browser suite: EVERY export ChatPage imports must exist on the
+  // mock or the whole file fails to load.
+  setChannelNotifyCountInCache: vi.fn(),
+  setConversationNotifyCountInCache: vi.fn(),
   bumpChannelUnread: mockBumpChannelUnread,
   bumpConversationUnread: mockBumpConversationUnread,
   clearChannelUnreadInCache: vi.fn(),

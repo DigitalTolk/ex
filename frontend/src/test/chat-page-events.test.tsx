@@ -51,7 +51,10 @@ const { bumpChannelUnread, bumpConversationUnread, clearConversationUnreadInCach
   bumpConversationUnread: vi.fn(),
   clearConversationUnreadInCache: vi.fn(),
 }));
-vi.mock('@/lib/unread-cache', () => ({
+vi.mock('@/lib/unread-cache', async (importOriginal) => ({
+  // Real module for the notify-count SET helpers (their tests assert the
+  // query-cache state), stubs for the bump/clear calls other tests count.
+  ...(await importOriginal<typeof import('@/lib/unread-cache')>()),
   bumpChannelUnread,
   bumpConversationUnread,
   clearConversationUnreadInCache,
@@ -418,6 +421,81 @@ describe('ChatPage WebSocket handlers', () => {
     });
 
     expect(apiFetch).toHaveBeenCalledWith('/api/v1/user-state/threads/channels/ch-1/msg-root/seen', { method: 'PUT' });
+  });
+
+  it('onNotification for a top-level channel alert SETs the sidebar alerted badge', () => {
+    const { qc } = renderAt('/', (client) => {
+      client.setQueryData(['userChannels'], [
+        { channelID: 'ch-1', channelName: 'general', channelType: 'public', role: 1 },
+      ]);
+    });
+
+    act(() => {
+      (capturedOptions.onNotification as (d: unknown) => void)({
+        kind: 'mention',
+        parentID: 'ch-1',
+        parentType: 'channel',
+        messageID: 'msg-9',
+        title: 'Alice mentioned you',
+        body: '@you hello',
+        createdAt: '2026-04-30T10:10:00Z',
+        parentUnreadNotifyCount: 3,
+      });
+    });
+
+    // The payload's authoritative count is SET on the row (never incremented
+    // locally), and the availability indicator lights alongside it.
+    const rows = qc.getQueryData<{ channelID: string; unreadNotifyCount?: number; unread?: boolean }[]>(['userChannels'])!;
+    expect(rows[0]).toMatchObject({ unread: true, unreadNotifyCount: 3 });
+    expect(dispatchNotification).toHaveBeenCalled();
+  });
+
+  it('onNotification for a DM alert SETs the conversation alerted badge', () => {
+    const { qc } = renderAt('/', (client) => {
+      client.setQueryData(['userConversations'], [
+        { conversationID: 'conv-1', type: 'dm', displayName: 'Bob' },
+      ]);
+    });
+
+    act(() => {
+      (capturedOptions.onNotification as (d: unknown) => void)({
+        kind: 'message',
+        parentID: 'conv-1',
+        parentType: 'conversation',
+        messageID: 'msg-10',
+        title: 'Bob',
+        body: 'hi',
+        createdAt: '2026-04-30T10:10:00Z',
+        parentUnreadNotifyCount: 2,
+      });
+    });
+
+    const rows = qc.getQueryData<{ conversationID: string; unreadNotifyCount?: number }[]>(['userConversations'])!;
+    expect(rows[0]).toMatchObject({ unread: true, unreadNotifyCount: 2 });
+  });
+
+  it('onNotification for a thread reply does NOT touch the parent alerted badge', () => {
+    const { qc } = renderAt('/', (client) => {
+      client.setQueryData(['userChannels'], [
+        { channelID: 'ch-1', channelName: 'general', channelType: 'public', role: 1 },
+      ]);
+    });
+
+    act(() => {
+      (capturedOptions.onNotification as (d: unknown) => void)({
+        kind: 'thread_reply',
+        parentID: 'ch-1',
+        parentType: 'channel',
+        parentMessageID: 'msg-root',
+        createdAt: '2026-04-30T10:10:00Z',
+        // Defensive: even if a count somehow rides a thread notification,
+        // the Threads nav owns thread unreads — the parent row stays put.
+        parentUnreadNotifyCount: 5,
+      });
+    });
+
+    const rows = qc.getQueryData<{ channelID: string; unreadNotifyCount?: number }[]>(['userChannels'])!;
+    expect(rows[0].unreadNotifyCount).toBeUndefined();
   });
 
   it('onNotification for a thread reply refreshes /threads immediately', () => {

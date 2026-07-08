@@ -466,6 +466,7 @@ func (s *ConversationService) enrichUnread(ctx context.Context, rows []*model.Us
 					row.UnreadCount = int(n)
 					row.Unread = true
 				}
+				clampNotifyCount(&row.UnreadNotifyCount, row.UnreadCount)
 			}
 			return
 		}
@@ -485,6 +486,7 @@ func (s *ConversationService) enrichUnread(ctx context.Context, rows []*model.Us
 				row.UnreadCount = int(n)
 				row.Unread = true
 			}
+			clampNotifyCount(&row.UnreadNotifyCount, row.UnreadCount)
 		}(row)
 	}
 	wg.Wait()

@@ -5,18 +5,19 @@ import { setDocumentNotificationCount } from '@/lib/document-title';
 import { resetSeenCache, type ThreadSummary } from '@/hooks/useThreads';
 import { NotificationCountTitleBridge } from './NotificationCountTitleBridge';
 
-// The title bridge sums the server-computed per-target unread MESSAGE counts
-// straight from the channel/conversation list cache (the same single source the
-// sidebar badges read) plus the unread-thread count — so multiple messages in
-// one parent climb the tab title instead of being collapsed to a single "(1)".
+// The title bridge sums the server-computed per-target ALERTED-unread counts
+// (messages that actually notified this user per their rules) straight from
+// the channel/conversation list cache (the same single source the sidebar's
+// numeric badges read) plus the unread-thread count. Merely-unread chatter
+// (availability dot) never inflates the title.
 const mockState = vi.hoisted(() => ({
   isAuthenticated: true,
   unreadThreadNotifications: new Set<string>(),
   threads: [] as ThreadSummary[],
   threadNotifications: [] as string[],
   threadSeen: {} as Record<string, string>,
-  channels: [] as { channelID: string; muted?: boolean; unreadCount?: number }[],
-  conversations: [] as { conversationID: string; unreadCount?: number }[],
+  channels: [] as { channelID: string; muted?: boolean; unreadCount?: number; unreadNotifyCount?: number }[],
+  conversations: [] as { conversationID: string; unreadCount?: number; unreadNotifyCount?: number }[],
 }));
 
 vi.mock('@/context/AuthContext', () => ({
@@ -87,12 +88,12 @@ describe('NotificationCountTitleBridge', () => {
     });
   });
 
-  it('sums channel + DM message counts and the thread count into the title', async () => {
+  it('sums channel + DM alerted counts and the thread count into the title', async () => {
     mockState.channels = [
-      { channelID: 'ch-1', unreadCount: 2 },
-      { channelID: 'ch-2', unreadCount: 1 },
+      { channelID: 'ch-1', unreadCount: 9, unreadNotifyCount: 2 },
+      { channelID: 'ch-2', unreadCount: 1, unreadNotifyCount: 1 },
     ];
-    mockState.conversations = [{ conversationID: 'conv-1', unreadCount: 3 }];
+    mockState.conversations = [{ conversationID: 'conv-1', unreadCount: 3, unreadNotifyCount: 3 }];
     mockState.threads = [
       makeThread({ threadRootID: 'root-unread', latestActivityAt: '2026-05-04T08:00:00.000Z' }),
       makeThread({ threadRootID: 'root-seen', latestActivityAt: '2026-05-04T08:00:00.000Z' }),
@@ -118,8 +119,8 @@ describe('NotificationCountTitleBridge', () => {
     });
   });
 
-  it('climbs as more messages arrive in a single channel (was stuck at 1)', async () => {
-    mockState.channels = [{ channelID: 'ch-1', unreadCount: 1 }];
+  it('climbs as more alerting messages arrive in a single channel', async () => {
+    mockState.channels = [{ channelID: 'ch-1', unreadCount: 1, unreadNotifyCount: 1 }];
     const { rerender } = render(
       <>
         <NotificationCountTitleBridge />
@@ -128,7 +129,7 @@ describe('NotificationCountTitleBridge', () => {
     );
     await waitFor(() => expect(document.title).toBe('(1) Threads · ex'));
 
-    mockState.channels = [{ channelID: 'ch-1', unreadCount: 4 }];
+    mockState.channels = [{ channelID: 'ch-1', unreadCount: 4, unreadNotifyCount: 4 }];
     rerender(
       <>
         <NotificationCountTitleBridge />
@@ -138,10 +139,15 @@ describe('NotificationCountTitleBridge', () => {
     await waitFor(() => expect(document.title).toBe('(4) Threads · ex'));
   });
 
-  it('excludes muted channels from the title count (muted = quiet)', async () => {
+  it('counts only alerting messages: quiet chatter never inflates the title', async () => {
     mockState.channels = [
-      { channelID: 'ch-loud', unreadCount: 3 },
+      // 3 alerts among 10 unread — only the alerts count.
+      { channelID: 'ch-loud', unreadCount: 10, unreadNotifyCount: 3 },
+      // Muted channel chatter never alerts (server-side), so no count…
       { channelID: 'ch-muted', muted: true, unreadCount: 50 },
+      // …but a mention in a muted channel DOES alert (mention overrides
+      // mute) and counts.
+      { channelID: 'ch-muted-mention', muted: true, unreadCount: 5, unreadNotifyCount: 1 },
     ];
     render(
       <>
@@ -149,8 +155,7 @@ describe('NotificationCountTitleBridge', () => {
         <TitleConsumer />
       </>,
     );
-    // Only the non-muted channel's 3 counts; the muted channel's 50 are ignored.
-    await waitFor(() => expect(document.title).toBe('(3) Threads · ex'));
+    await waitFor(() => expect(document.title).toBe('(4) Threads · ex'));
   });
 
   it('drops thread unread count when a thread is marked seen', async () => {
@@ -190,7 +195,7 @@ describe('NotificationCountTitleBridge', () => {
     );
     await waitFor(() => expect(document.title).toBe('Threads · ex'));
 
-    mockState.conversations = [{ conversationID: 'conv-1', unreadCount: 1 }];
+    mockState.conversations = [{ conversationID: 'conv-1', unreadCount: 1, unreadNotifyCount: 1 }];
     rerender(
       <>
         <NotificationCountTitleBridge />
@@ -210,7 +215,7 @@ describe('NotificationCountTitleBridge', () => {
   });
 
   it('counts a server-seeded unread conversation', async () => {
-    mockState.conversations = [{ conversationID: 'conv-1', unreadCount: 1 }];
+    mockState.conversations = [{ conversationID: 'conv-1', unreadCount: 1, unreadNotifyCount: 1 }];
 
     render(
       <>
@@ -225,7 +230,7 @@ describe('NotificationCountTitleBridge', () => {
   it('counts a DM as exactly its single source count (no double-count)', async () => {
     // The list cache is the single source — there is no separate live set to
     // sum against, so one unread DM message is exactly "(1)", never "(2)".
-    mockState.conversations = [{ conversationID: 'conv-1', unreadCount: 1 }];
+    mockState.conversations = [{ conversationID: 'conv-1', unreadCount: 1, unreadNotifyCount: 1 }];
 
     render(
       <>
@@ -238,7 +243,7 @@ describe('NotificationCountTitleBridge', () => {
   });
 
   it('counts thread notifications in addition to the unread DM parent', async () => {
-    mockState.conversations = [{ conversationID: 'conv-1', unreadCount: 1 }];
+    mockState.conversations = [{ conversationID: 'conv-1', unreadCount: 1, unreadNotifyCount: 1 }];
     mockState.unreadThreadNotifications = new Set(['root-in-dm']);
     mockState.threads = [
       makeThread({

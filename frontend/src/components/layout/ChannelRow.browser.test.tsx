@@ -105,19 +105,19 @@ describe('ChannelRow browser behaviour', () => {
     expect(document.querySelector('[aria-label="Unfavorite general"]')).not.toBeNull();
   });
 
-  it('renders a numeric unread badge, capping at 99+', async () => {
+  it('renders a numeric alerted badge, capping at 99+', async () => {
     const screen = await render(
       <MemoryRouter>
-        <ChannelRow channel={baseChannel} hasUnread unreadCount={150} onClose={() => {}} />
+        <ChannelRow channel={baseChannel} hasUnread notifyCount={150} onClose={() => {}} />
       </MemoryRouter>,
     );
     await expect.element(screen.getByTestId('channel-unread-badge-ch-1')).toHaveTextContent('99+');
   });
 
-  it('renders the exact unread count when it is under 100', async () => {
+  it('renders the exact alerted count when it is under 100', async () => {
     const screen = await render(
       <MemoryRouter>
-        <ChannelRow channel={baseChannel} hasUnread unreadCount={7} onClose={() => {}} />
+        <ChannelRow channel={baseChannel} hasUnread notifyCount={7} onClose={() => {}} />
       </MemoryRouter>,
     );
     await expect.element(screen.getByTestId('channel-unread-badge-ch-1')).toHaveTextContent('7');
@@ -136,25 +136,36 @@ describe('ChannelRow browser behaviour', () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
-  it('floors the unread badge to 1 when hasUnread but no live count is known', async () => {
+  it('shows the availability dot when unread carries no alerts', async () => {
     const screen = await render(
       <MemoryRouter>
-        <ChannelRow channel={baseChannel} hasUnread unreadCount={0} onClose={() => {}} />
+        <ChannelRow channel={baseChannel} hasUnread notifyCount={0} onClose={() => {}} />
       </MemoryRouter>,
     );
-    // Any unread non-muted channel shows a NUMBER box (floored to 1) — no dot.
-    await expect.element(screen.getByTestId('channel-unread-badge-ch-1')).toHaveTextContent('1');
-    expect(document.querySelector('[data-testid="channel-unread-dot-ch-1"]')).toBeNull();
+    // Two-tier unread: plain activity is the dot; numbers are alerts only.
+    await expect.element(screen.getByTestId('channel-unread-dot-ch-1')).toBeVisible();
+    expect(document.querySelector('[data-testid="channel-unread-badge-ch-1"]')).toBeNull();
   });
 
-  it('shows a subtle dot (not a badge) for a muted channel with unread', async () => {
+  it('shows a subtle dot (not a badge) for a muted channel with quiet unread', async () => {
     const screen = await render(
       <MemoryRouter>
-        <ChannelRow channel={{ ...baseChannel, muted: true }} hasUnread unreadCount={5} onClose={() => {}} />
+        <ChannelRow channel={{ ...baseChannel, muted: true }} hasUnread notifyCount={0} onClose={() => {}} />
       </MemoryRouter>,
     );
     await expect.element(screen.getByTestId('channel-unread-dot-ch-1')).toBeVisible();
     expect(document.querySelector('[data-testid="channel-unread-badge-ch-1"]')).toBeNull();
+  });
+
+  it('shows the numeric badge in a muted channel when a mention alerted', async () => {
+    const screen = await render(
+      <MemoryRouter>
+        <ChannelRow channel={{ ...baseChannel, muted: true }} hasUnread notifyCount={2} onClose={() => {}} />
+      </MemoryRouter>,
+    );
+    // A mention overrides mute server-side; the alert stays loud here too.
+    await expect.element(screen.getByTestId('channel-unread-badge-ch-1')).toHaveTextContent('2');
+    expect(document.querySelector('[data-testid="channel-unread-dot-ch-1"]')).toBeNull();
   });
 
   it('moving a favorited channel into a category first removes the favorite', async () => {
@@ -284,7 +295,7 @@ describe('ChannelRow browser behaviour', () => {
     // Widest badge ("99+") so the geometry check covers the worst case.
     await render(
       <MemoryRouter>
-        <ChannelRow channel={baseChannel} hasUnread unreadCount={150} onClose={() => {}} />
+        <ChannelRow channel={baseChannel} hasUnread notifyCount={150} onClose={() => {}} />
       </MemoryRouter>,
     );
     const badge = document.querySelector('[data-testid="channel-unread-badge-ch-1"]') as HTMLElement;
