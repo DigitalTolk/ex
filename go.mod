@@ -17,15 +17,15 @@ require (
 	github.com/aws/smithy-go v1.27.3
 	github.com/cenkalti/backoff/v4 v4.3.0
 	github.com/coder/websocket v1.8.15
-	github.com/coreos/go-oidc/v3 v3.19.0
+	github.com/coreos/go-oidc/v3 v3.20.0
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/uuid v1.6.0
 	github.com/oklog/ulid/v2 v2.1.1
 	github.com/redis/go-redis/v9 v9.21.0
 	github.com/testcontainers/testcontainers-go v0.43.0
 	github.com/yuin/goldmark v1.8.2
-	golang.org/x/crypto v0.53.0
-	golang.org/x/image v0.43.0
+	golang.org/x/crypto v0.54.0
+	golang.org/x/image v0.44.0
 	golang.org/x/oauth2 v0.36.0
 )
 
@@ -189,8 +189,8 @@ require (
 	golang.org/x/exp v0.0.0-20260508232706-74f9aab9d74a // indirect
 	golang.org/x/mod v0.36.0 // indirect
 	golang.org/x/sync v0.21.0 // indirect
-	golang.org/x/sys v0.46.0 // indirect
-	golang.org/x/term v0.44.0 // indirect
+	golang.org/x/sys v0.47.0 // indirect
+	golang.org/x/term v0.45.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
 	golang.org/x/tools v0.45.0 // indirect
 	golang.org/x/xerrors v0.0.0-20240903120638-7835f813f4da // indirect
