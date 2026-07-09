@@ -39,12 +39,21 @@ export function currentLayoutTier(): LayoutTier {
 }
 
 // isElectronMac reports the one chrome-collision case the web app must
-// compensate for: macOS Electron uses titleBarStyle:hiddenInset, so the
-// traffic lights overlay the top-left of the web content and the compact
-// tier's sidebar toggle must be inset past them.
+// compensate for: a FRAMELESS macOS window draws the traffic lights over the
+// top-left of the web content, so the compact tier's sidebar toggle must be
+// inset past them. This is NOT Electron-specific — it happens for the Electron
+// shell (titleBarStyle:hiddenInset, which sets __EX_DESKTOP__), a Window-
+// Controls-Overlay window, AND an installed standalone PWA (dock/Launchpad),
+// none of which the old __EX_DESKTOP__-only check caught. A normal browser TAB
+// is framed — the traffic lights belong to the browser, not the content — so it
+// hits none of these signals and stays un-padded.
 export function isElectronMac(): boolean {
-  if (!window.__EX_DESKTOP__) return false;
-  return /Mac/i.test(window.navigator.platform) || /Macintosh/i.test(window.navigator.userAgent);
+  const isMac =
+    /Mac/i.test(window.navigator.platform) || /Macintosh/i.test(window.navigator.userAgent);
+  if (!isMac) return false;
+  if (window.__EX_DESKTOP__) return true;
+  if (window.navigator.windowControlsOverlay?.visible) return true;
+  return window.matchMedia?.('(display-mode: standalone)').matches ?? false;
 }
 
 const TIER_CLASSES: Record<LayoutTier, string> = {

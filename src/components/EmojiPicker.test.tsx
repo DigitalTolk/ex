@@ -3,6 +3,7 @@ import { act, render as rtlRender, screen, fireEvent, waitFor, within } from '@t
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { EmojiPicker } from './EmojiPicker';
+import { getFrequentEmojis } from '@/lib/emoji-frequency';
 
 // EmojiPicker renders inside PopoverPortal, whose Motion swipe hook runs a
 // mount animation that hangs jsdom; stub it and capture the swipe-down
@@ -28,8 +29,13 @@ const authMock = vi.hoisted(() => ({
   setAuth: vi.fn(),
 }));
 
+// Custom-emoji catalog (drives the "Getting Work Done" shelf). Seedable per
+// test so the work-pack dedup and landing-page gating can be exercised.
+const emojisRef = vi.hoisted(() => ({
+  value: [] as Array<{ name: string; imageURL: string; gettingWorkDone?: boolean }>,
+}));
 vi.mock('@/hooks/useEmoji', () => ({
-  useEmojis: () => ({ data: [] }),
+  useEmojis: () => ({ data: emojisRef.value }),
   useEmojiMap: () => ({ data: {} }),
 }));
 
@@ -80,8 +86,17 @@ function seedFrequency(shortcodes: string[]) {
 describe('EmojiPicker', () => {
   beforeEach(() => {
     freqRef.value = [];
+    emojisRef.value = [];
     recordMock.mockClear();
   });
+
+  function seedWorkPack(entries: Array<{ name: string; gettingWorkDone?: boolean }>) {
+    emojisRef.value = entries.map((e) => ({
+      imageURL: `https://cdn.example/${e.name}.png`,
+      gettingWorkDone: true,
+      ...e,
+    }));
+  }
 
   it('renders trigger and is closed by default', () => {
     render(<EmojiPicker onSelect={vi.fn()} />);
@@ -357,6 +372,56 @@ describe('EmojiPicker', () => {
     expect(await screen.findByRole('list', { name: /frequently used emojis/i })).toBeInTheDocument();
     await user.type(screen.getByLabelText('Search emojis'), 'thumbsup');
     expect(screen.queryByRole('list', { name: /frequently used emojis/i })).not.toBeInTheDocument();
+  });
+
+  it('over-fetches so the shelf still fills two full rows after work-pack dedup', async () => {
+    // Regression for the "15 not 18" report: three of the user's most-used
+    // emojis are ALSO pinned in "Getting Work Done". They're deduped out of the
+    // frequent shelf (rendering a tile twice wastes a slot) — but because the
+    // frequent list is over-fetched past the two visible rows, the slice still
+    // yields a full 18 rather than 18-minus-the-pinned.
+    seedWorkPack([{ name: 'wp0' }, { name: 'wp1' }, { name: 'wp2' }]);
+    seedFrequency([
+      ':wp0:',
+      ':wp1:',
+      ':wp2:',
+      ...Array.from({ length: 18 }, (_, i) => `:freq${i}:`),
+    ]);
+    const user = userEvent.setup();
+    render(<EmojiPicker onSelect={vi.fn()} />);
+    await user.click(screen.getByRole('button', { name: /open emoji picker/i }));
+
+    // The over-fetch limit (well past two rows) is what gives dedup room to fill.
+    expect(getFrequentEmojis).toHaveBeenCalledWith(50);
+    const shelf = await screen.findByRole('list', { name: /frequently used emojis/i });
+    expect(within(shelf).getAllByTestId('emoji-frequent-tile')).toHaveLength(18);
+    // The pinned work-pack emojis do NOT also appear in the frequent shelf.
+    expect(within(shelf).queryByLabelText('React with :wp0:')).not.toBeInTheDocument();
+    // They live in the work-pack shelf instead.
+    const work = screen.getByRole('list', { name: /getting work done emojis/i });
+    expect(within(work).getAllByTestId('emoji-workpack-tile')).toHaveLength(3);
+  });
+
+  it('shows the frequent + work-pack shelves only on the landing tab', async () => {
+    seedWorkPack([{ name: 'wp0' }]);
+    seedFrequency([':tada:', ':smile:']);
+    const user = userEvent.setup();
+    render(<EmojiPicker onSelect={vi.fn()} />);
+    await user.click(screen.getByRole('button', { name: /open emoji picker/i }));
+
+    // Landing (first category tab): both shelves present.
+    expect(await screen.findByRole('list', { name: /frequently used emojis/i })).toBeInTheDocument();
+    expect(screen.getByRole('list', { name: /getting work done emojis/i })).toBeInTheDocument();
+
+    // Switch to another category — the shelves belong to the landing view only.
+    const tabs = screen.getAllByTestId('emoji-category-tab');
+    const other = tabs.find((t) => t.getAttribute('data-category') !== tabs[0].getAttribute('data-category'))!;
+    await user.click(other);
+
+    expect(screen.queryByRole('list', { name: /frequently used emojis/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('list', { name: /getting work done emojis/i })).not.toBeInTheDocument();
+    // The picked category's own grid is still shown.
+    expect(screen.getByRole('list', { name: /standard emojis/i })).toBeInTheDocument();
   });
 
   it('records each picked emoji to the server-backed shelf', async () => {

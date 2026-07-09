@@ -83,6 +83,11 @@ const PICKER_HEIGHT = 380;
 const FREQUENT_ROWS = 2;
 const DESKTOP_COLS = 9;
 const MOBILE_COLS = 7;
+// Over-fetch the frequent list well past the two visible rows so that after
+// the "Getting Work Done" emojis are deduped out, there are still enough left
+// to FILL both rows (fetching exactly two rows left the shelf short by however
+// many were pinned). 50 is the server-side cap on this list.
+const FREQUENT_SHELF_FETCH = 50;
 
 function sameShortcodeList(a: string[], b: string[]) {
   return a.length === b.length && a.every((v, i) => v === b[i]);
@@ -166,12 +171,14 @@ export function EmojiPicker({ onSelect, onClose, onOpenChange, trigger, triggerC
     [customEmojis, frequentLimit],
   );
   const [frequent, setFrequent] = useState<string[]>([]);
-  // The frequent shelf hides anything already pinned in "Getting Work Done" —
-  // the two shelves render together and duplicating a tile wastes a slot.
+  // The frequent shelf hides anything already pinned in "Getting Work Done"
+  // (the two shelves render together, so duplicating a tile wastes a slot),
+  // THEN caps to the two visible rows. Because `frequent` is over-fetched, the
+  // slice still yields a full two rows even after the pinned ones are removed.
   const visibleFrequent = useMemo(() => {
     const pinned = new Set(workPack.map((e) => `:${e.name}:`));
-    return frequent.filter((shortcode) => !pinned.has(shortcode));
-  }, [frequent, workPack]);
+    return frequent.filter((shortcode) => !pinned.has(shortcode)).slice(0, frequentLimit);
+  }, [frequent, workPack, frequentLimit]);
   // Mirrors `frequent` so the open handler can skip the state update entirely
   // when the fetched list is unchanged — avoids a late, act-less re-render in
   // consumers that mount the picker but never display a shelf.
@@ -245,6 +252,12 @@ export function EmojiPicker({ onSelect, onClose, onOpenChange, trigger, triggerC
   /* istanbul ignore next -- activeCategory is always a real EMOJI_CATEGORIES slug at this point, so find() resolves and the ?.label / ?? 'Standard' fallbacks are dead */
   const standardCategoryLabel = EMOJI_CATEGORIES.find((c) => c.slug === activeCategory)?.label ?? 'Standard';
 
+  // The Frequently-used and Getting-Work-Done shelves belong to the picker's
+  // landing view only (the first category tab). Switching to another category
+  // shows just that category's grid, so the shelves don't repeat on every page.
+  /* istanbul ignore next -- EMOJI_CATEGORIES is a non-empty compile-time constant, so the ?.slug / ?? '' fallbacks are dead defensive arms */
+  const onLandingPage = !query.trim() && activeCategory === (EMOJI_CATEGORIES[0]?.slug ?? '');
+
   return (
     <>
       <span
@@ -253,7 +266,7 @@ export function EmojiPicker({ onSelect, onClose, onOpenChange, trigger, triggerC
         onClick={() => {
           const next = !open;
           if (next) {
-            void getFrequentEmojis(frequentLimit).then((list) => {
+            void getFrequentEmojis(FREQUENT_SHELF_FETCH).then((list) => {
               if (sameShortcodeList(frequentRef.current, list)) return;
               frequentRef.current = list;
               setFrequent(list);
@@ -323,7 +336,7 @@ export function EmojiPicker({ onSelect, onClose, onOpenChange, trigger, triggerC
           </div>
         )}
         <div className="flex min-h-0 flex-1 flex-col">
-          {!query.trim() && visibleFrequent.length > 0 && (
+          {onLandingPage && visibleFrequent.length > 0 && (
             <div className="mb-1.5 shrink-0 border-b pb-1.5">
               <div className="mb-1 text-center text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                 Frequently used
@@ -356,7 +369,7 @@ export function EmojiPicker({ onSelect, onClose, onOpenChange, trigger, triggerC
               </div>
             </div>
           )}
-          {!query.trim() && workPack.length > 0 && (
+          {onLandingPage && workPack.length > 0 && (
             <div className="mb-1.5 shrink-0 border-b pb-1.5">
               <div className="mb-1 text-center text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                 Getting Work Done

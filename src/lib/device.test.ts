@@ -86,6 +86,24 @@ describe('applyLayoutTierClasses / startLayoutTierTracking', () => {
     expect(root.classList.contains('device-touch')).toBe(true);
   });
 
+  it('stamps electron-mac on a frameless macOS surface so the topbar clears the traffic lights', () => {
+    // The regression: a frameless macOS window (here the Electron flag; the
+    // standalone-PWA / WCO paths are unit-tested on isElectronMac) draws the
+    // traffic lights over the content, so the root MUST get `electron-mac` for
+    // the [data-topbar-left] padding to inset the hamburger past them.
+    const platformSpy = vi.spyOn(window.navigator, 'platform', 'get').mockReturnValue('MacIntel');
+    window.__EX_DESKTOP__ = true;
+    try {
+      applyLayoutTierClasses();
+      expect(root.classList.contains('electron-mac')).toBe(true);
+    } finally {
+      delete window.__EX_DESKTOP__;
+      platformSpy.mockRestore();
+      applyLayoutTierClasses();
+      expect(root.classList.contains('electron-mac')).toBe(false);
+    }
+  });
+
   it('tracks resizes and can be stopped', () => {
     const stop = startLayoutTierTracking();
     const originalWidth = window.innerWidth;
@@ -112,8 +130,32 @@ describe('applyLayoutTierClasses / startLayoutTierTracking', () => {
 });
 
 describe('isElectronMac', () => {
+  function setOverlay(visible: boolean) {
+    Object.defineProperty(window.navigator, 'windowControlsOverlay', {
+      configurable: true,
+      value: { visible },
+    });
+  }
+  function clearOverlay() {
+    // Return the Navigator to its default (no WCO) between frameless-signal tests.
+    Reflect.deleteProperty(window.navigator, 'windowControlsOverlay');
+  }
+  function stubDisplayMode(standalone: boolean) {
+    const original = window.matchMedia;
+    window.matchMedia = ((query: string) => ({
+      matches: standalone && query === '(display-mode: standalone)',
+      media: query,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+    })) as unknown as typeof window.matchMedia;
+    return () => {
+      window.matchMedia = original;
+    };
+  }
+
   afterEach(() => {
     delete window.__EX_DESKTOP__;
+    clearOverlay();
     vi.restoreAllMocks();
   });
 
@@ -132,6 +174,49 @@ describe('isElectronMac', () => {
     vi.spyOn(window.navigator, 'platform', 'get').mockReturnValue('Win32');
     vi.spyOn(window.navigator, 'userAgent', 'get').mockReturnValue('Mozilla/5.0 (Windows NT 10.0)');
     expect(isElectronMac()).toBe(false);
+  });
+
+  // The traffic lights also overlay content WITHOUT the Electron flag: a Window-
+  // Controls-Overlay window or an installed standalone PWA. Those are the cases
+  // the old __EX_DESKTOP__-only check missed (the hamburger tucked under the
+  // traffic lights in the dock-installed app).
+  it('is true for a Window-Controls-Overlay window on Mac (no Electron flag)', () => {
+    vi.spyOn(window.navigator, 'platform', 'get').mockReturnValue('MacIntel');
+    setOverlay(true);
+    expect(isElectronMac()).toBe(true);
+  });
+
+  it('is true for an installed standalone PWA on Mac (no Electron flag, no WCO)', () => {
+    vi.spyOn(window.navigator, 'platform', 'get').mockReturnValue('MacIntel');
+    const restore = stubDisplayMode(true);
+    try {
+      expect(isElectronMac()).toBe(true);
+    } finally {
+      restore();
+    }
+  });
+
+  it('is false for a framed browser tab on Mac (WCO hidden, not standalone)', () => {
+    vi.spyOn(window.navigator, 'platform', 'get').mockReturnValue('MacIntel');
+    setOverlay(false);
+    const restore = stubDisplayMode(false);
+    try {
+      expect(isElectronMac()).toBe(false);
+    } finally {
+      restore();
+    }
+  });
+
+  it('is false on Mac when matchMedia is unavailable (guards the ?? fallback)', () => {
+    vi.spyOn(window.navigator, 'platform', 'get').mockReturnValue('MacIntel');
+    const original = window.matchMedia;
+    // @ts-expect-error intentionally removing matchMedia to hit the ?? false arm
+    delete window.matchMedia;
+    try {
+      expect(isElectronMac()).toBe(false);
+    } finally {
+      window.matchMedia = original;
+    }
   });
 });
 
