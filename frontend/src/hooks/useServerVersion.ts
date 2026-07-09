@@ -37,8 +37,16 @@ export function resetServerVersionForTests(): void {
   pollerCleanup?.();
   pollerCleanup = null;
   pollerStarted = false;
+  retryAfterFailureMs = RETRY_AFTER_FAILURE_MS;
   if (subscribers.size === 0) return;
   for (const cb of subscribers) cb();
+}
+
+// Test seam: the failure-retry delay is 5s in production, far past any test
+// deadline — tests shrink it so the retry tick can be awaited deterministically
+// instead of relying on timing luck for coverage of the retry callback.
+export function setServerVersionRetryDelayForTests(ms: number): void {
+  retryAfterFailureMs = ms;
 }
 
 function subscribe(cb: () => void): () => void {
@@ -57,6 +65,7 @@ function getSnapshot(): string | null {
 // deploy and large enough that the check is invisible at scale.
 const POLL_INTERVAL_MS = 60_000;
 const RETRY_AFTER_FAILURE_MS = 5_000;
+let retryAfterFailureMs = RETRY_AFTER_FAILURE_MS;
 
 // Cached ETag from the previous /api/v1/version response. Sending it
 // back as If-None-Match makes the server resolve the steady-state poll
@@ -81,7 +90,7 @@ function startPoller(): void {
     retryTimeoutID = window.setTimeout(() => {
       retryTimeoutID = null;
       void tick();
-    }, RETRY_AFTER_FAILURE_MS);
+    }, retryAfterFailureMs);
   };
   const tick = async () => {
     try {

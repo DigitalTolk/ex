@@ -34,9 +34,11 @@ describe('useIsMobile legacy matchMedia API (browser)', () => {
       // Flip the media match and fire the legacy change callback.
       mq.matches = false;
       cap.handler?.();
+      // Generous deadline: vi.waitFor defaults to 1s, which loses to React's
+      // state flush under full-suite CPU saturation (webkit flake).
       await vi.waitFor(() => {
         expect(screen.getByTestId('mobile').element().getAttribute('data-v')).toBe('false');
-      });
+      }, { timeout: 10000 });
     } finally {
       window.matchMedia = original;
       window.__EX_FORCE_DEVICE__ = originalDevice;

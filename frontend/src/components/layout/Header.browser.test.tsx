@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { render } from 'vitest-browser-react';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -17,6 +17,22 @@ const channel = {
 };
 
 describe('Header browser behavior', () => {
+  // Kill CSS animations/transitions so base-ui dialog exits resolve
+  // synchronously — without this, WebKit races the exit animation and the
+  // dismissed dialog is still in the DOM (data-closed/data-ending-style)
+  // when assertions poll for its removal. Same pattern as
+  // ui/dialog.browser.test.tsx.
+  let killAnims: HTMLStyleElement | null = null;
+  beforeEach(() => {
+    killAnims = document.createElement('style');
+    killAnims.textContent = '*,*::before,*::after{animation:none!important;transition:none!important}';
+    document.head.appendChild(killAnims);
+  });
+  afterEach(() => {
+    killAnims?.remove();
+    killAnims = null;
+  });
+
   it('hides channel descriptions on mobile and leaves a short channel name untruncated', async () => {
     if (window.innerWidth > 767) return;
 

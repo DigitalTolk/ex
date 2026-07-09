@@ -1,7 +1,7 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { render } from 'vitest-browser-react';
 import { renderToString } from 'react-dom/server';
-import { useServerVersion, resetServerVersionForTests } from './useServerVersion';
+import { useServerVersion, resetServerVersionForTests, setServerVersionRetryDelayForTests } from './useServerVersion';
 
 // Browser coverage for the /api/v1/version poller. The poller is a module
 // singleton lazily started by the first consumer; resetServerVersionForTests
@@ -65,11 +65,18 @@ describe('useServerVersion poller', () => {
     expect(screen.getByTestId('sv').element().getAttribute('data-version')).toBe('');
   });
 
-  it('schedules a retry on a non-ok response', async () => {
-    const fetchMock = vi.fn().mockResolvedValue({ status: 503, ok: false, headers: new Headers(), json: async () => ({}) } as unknown as Response);
+  it('schedules a retry on a non-ok response and the retry actually re-polls', async () => {
+    // Shrink the 5s production retry delay so the retry TICK itself (the
+    // timeout callback) runs inside the test deterministically.
+    setServerVersionRetryDelayForTests(20);
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({ status: 503, ok: false, headers: new Headers(), json: async () => ({}) } as unknown as Response)
+      .mockResolvedValue({ status: 304, ok: false, headers: new Headers(), json: async () => ({}) } as unknown as Response);
     globalThis.fetch = fetchMock as unknown as typeof fetch;
     await mount();
-    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    // First poll fails → retry fires after the shrunk delay → second poll.
+    await vi.waitFor(() => expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(2), { timeout: 10000 });
   });
 
   it('schedules a retry when the fetch throws (offline)', async () => {

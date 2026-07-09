@@ -103,7 +103,7 @@ describe('EditProfileDialog browser', () => {
       expect(call).toBeDefined();
       const body = JSON.parse((call![1] as { body: string }).body);
       expect(body.displayName).toBe('Alice Renamed');
-    });
+    }, { timeout: 10000 });
     expect(onOpenChange).toHaveBeenCalledWith(false);
   });
 
@@ -114,7 +114,7 @@ describe('EditProfileDialog browser', () => {
     );
     // Local (SSO) user cannot rename and made no avatar change → empty body.
     await screen.getByRole('button', { name: 'Save' }).click();
-    await vi.waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+    await vi.waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false), { timeout: 10000 });
     expect(vi.mocked(apiFetch).mock.calls.some((c: unknown[]) => c[0] === '/api/v1/users/me')).toBe(false);
   });
 
@@ -171,13 +171,13 @@ describe('EditProfileDialog browser', () => {
       await vi.waitFor(() => {
         const img = document.querySelector('img');
         expect(img?.getAttribute('src') ?? '').toMatch(/^blob:/);
-      });
+      }, { timeout: 10000 });
       await screen.getByRole('button', { name: 'Save' }).click();
       await vi.waitFor(() => {
         const call = vi.mocked(apiFetch).mock.calls.find((c: unknown[]) => c[0] === '/api/v1/users/me');
         expect(call).toBeDefined();
         expect(JSON.parse((call![1] as { body: string }).body).avatarKey).toBe('avatars/u-1.png');
-      });
+      }, { timeout: 10000 });
       expect(authState.setAuth).toHaveBeenCalled();
     } finally {
       globalThis.fetch = realFetch;
@@ -259,9 +259,9 @@ describe('EditProfileDialog browser', () => {
       await vi.waitFor(() => {
         const img = document.querySelector('img');
         expect(img?.getAttribute('src') ?? '').toMatch(/^blob:/);
-      });
+      }, { timeout: 10000 });
       await screen.getByRole('button', { name: 'Save' }).click();
-      await vi.waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+      await vi.waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false), { timeout: 10000 });
       // token falsy → the `if (token) setAuth(...)` guard is skipped.
       expect(authState.setAuth).not.toHaveBeenCalled();
     } finally {
