@@ -77,13 +77,20 @@ func cacheFailingOn(t *testing.T, cmds ...string) *RedisCache {
 	return &RedisCache{client: client}
 }
 
-// AllowRequest runs as one atomic Lua script (INCR + first-hit PEXPIRE); a
-// failing script call must surface — the limiter cannot pretend the increment
-// happened. (The old INCR-then-EXPIRE pair could also leak a TTL-less key on
-// partial failure; the script closes that by construction.)
+// AllowRequest runs as one atomic MULTI/EXEC transaction (INCR + PEXPIRE NX);
+// a failing transaction must surface — the limiter cannot pretend the
+// increment happened or leak a TTL-less counter on a half-applied window.
 func TestAllowRequest_ExpireError_RealRedis(t *testing.T) {
-	c := cacheFailingOn(t, "evalsha", "eval")
+	c := cacheFailingOn(t, "pexpire")
 	if _, err := c.AllowRequest(context.Background(), "expire-fail", 5, time.Minute); !errors.Is(err, errInjected) {
+		t.Fatalf("AllowRequest error = %v, want errInjected", err)
+	}
+}
+
+// The INCR half of the transaction failing must surface identically.
+func TestAllowRequest_IncrError_RealRedis(t *testing.T) {
+	c := cacheFailingOn(t, "incr")
+	if _, err := c.AllowRequest(context.Background(), "incr-fail", 5, time.Minute); !errors.Is(err, errInjected) {
 		t.Fatalf("AllowRequest error = %v, want errInjected", err)
 	}
 }

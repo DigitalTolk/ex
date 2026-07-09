@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/DigitalTolk/ex/internal/model"
+	"github.com/DigitalTolk/ex/internal/redisx"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -97,9 +98,9 @@ type RedisCache struct {
 // NewRedisCache parses the given Redis URL, creates a client, and verifies
 // connectivity with a PING.
 func NewRedisCache(redisURL string) (*RedisCache, error) {
-	opts, err := redis.ParseURL(redisURL)
+	opts, err := redisx.Options(redisURL)
 	if err != nil {
-		return nil, fmt.Errorf("parse redis url: %w", err)
+		return nil, err
 	}
 
 	client := redis.NewClient(opts)
@@ -195,23 +196,21 @@ func (c *RedisCache) LockHeld(ctx context.Context, key string) (bool, error) {
 // counter and, on the first hit of a window, sets the window TTL. It reports
 // whether the request is within `limit` for the current window. Used by the
 // middleware.RateLimit middleware to throttle auth and webhook endpoints.
-// allowRequestScript increments the window counter and, atomically with the
-// first hit, sets the window TTL. One round trip instead of INCR+EXPIRE, and
-// it closes the partial-failure hole where a successful INCR followed by a
-// failed EXPIRE left a ratelimit: key that never expired.
-var allowRequestScript = redis.NewScript(`
-local c = redis.call('INCR', KEYS[1])
-if c == 1 then redis.call('PEXPIRE', KEYS[1], ARGV[1]) end
-return c
-`)
-
 func (c *RedisCache) AllowRequest(ctx context.Context, key string, limit int, window time.Duration) (bool, error) {
 	fullKey := "ratelimit:" + key
-	count, err := allowRequestScript.Run(ctx, c.client, []string{fullKey}, window.Milliseconds()).Int64()
-	if err != nil {
+	// One atomic MULTI/EXEC round trip: INCR the window counter and ensure it
+	// carries the window TTL. PEXPIRE NX sets the TTL only when the key has
+	// none — the first hit of a window, plus healing any legacy TTL-less key —
+	// so this closes the partial-failure hole (a successful INCR whose EXPIRE
+	// never ran leaving an immortal counter) without a Lua script. The NX flag
+	// needs Redis >= 7.0; the deployment floor is 7.1.
+	pipe := c.client.TxPipeline()
+	incr := pipe.Incr(ctx, fullKey)
+	pipe.Do(ctx, "pexpire", fullKey, window.Milliseconds(), "NX")
+	if _, err := pipe.Exec(ctx); err != nil {
 		return false, fmt.Errorf("rate limit increment %q: %w", key, err)
 	}
-	return count <= int64(limit), nil
+	return incr.Val() <= int64(limit), nil
 }
 
 // presenceIndexScore is the online-index expiry score matching a marker
@@ -459,9 +458,10 @@ func (c *RedisCache) SetUser(ctx context.Context, user *model.User) error {
 // composer :shortcode: typeahead — the typeahead not recording was the original
 // "shelf never updates" bug).
 func (c *RedisCache) IncrementEmojiFrequency(ctx context.Context, userID, shortcode string) error {
-	err := emojiFreqIncrScript.Run(
+	err := redisx.RunScript(
 		ctx,
 		c.client,
+		emojiFreqIncrScript,
 		[]string{emojiFreqKeyPrefix + userID},
 		shortcode,
 		emojiFreqDecay,

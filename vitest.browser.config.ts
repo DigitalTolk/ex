@@ -167,6 +167,12 @@ export default defineConfig({
         // NotificationContext (whose ack-gating branches ARE exercised in
         // the browser suite); graded in jsdom, not here.
         'src/lib/user-activity.ts',
+        // Desktop-shell DnD/Focus bridge — a pure window-global wrapper
+        // exhaustively unit-tested in jsdom (dnd.test.ts), including the
+        // throwing/rejecting-bridge arms. Pulled into the browser graph via
+        // NotificationContext (whose DnD-gated ping branches ARE exercised
+        // in the browser suite); graded in jsdom, not here.
+        'src/lib/dnd.ts',
         // Activity stream + reminders — pure date math, a React-Query hook
         // module, the activity page, and the custom-time dialog are all
         // exhaustively unit-tested in jsdom (reminder-times.test, useActivity.test,

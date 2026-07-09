@@ -86,6 +86,23 @@ function installFakeNotification(instances: Array<{ title: string; options: Noti
 
 type FakeNote = { title: string; options: NotificationOptions; onclick: (() => void) | null; onclose: (() => void) | null; close: () => void };
 
+// Granted-permission Notification whose constructor throws — the embedded-
+// webview failure mode the dispatch catch-fallback exists for.
+function installThrowingNotification() {
+  class ThrowingNotification {
+    static permission = 'granted';
+    static requestPermission = vi.fn().mockResolvedValue('granted');
+    constructor() {
+      throw new Error('Notification not allowed in this context');
+    }
+  }
+  const original = Object.getOwnPropertyDescriptor(globalThis, 'Notification');
+  Object.defineProperty(globalThis, 'Notification', { configurable: true, writable: true, value: ThrowingNotification });
+  return () => {
+    if (original) Object.defineProperty(globalThis, 'Notification', original);
+  };
+}
+
 function basePayload(over: Partial<NotificationPayload> = {}): NotificationPayload {
   return {
     kind: 'mention',
@@ -368,6 +385,112 @@ describe('NotificationContext browser', () => {
       // soundEnabled=false → no ping, and the banner is marked silent.
       expect(playNotificationPing).not.toHaveBeenCalled();
       expect(instances[0].options.silent).toBe(true);
+    } finally {
+      restore();
+    }
+  });
+
+  it('shell DnD bridge, Focus off: the banner is silent and the custom ping plays', async () => {
+    // With a native bridge the APP owns the sound (Slack/Mattermost parity):
+    // the OS banner is forced silent so banner + custom ping never
+    // double-sound, and the ping plays because Focus is off.
+    const instances: FakeNote[] = [];
+    const restore = installFakeNotification(instances);
+    window.__EX_DND__ = () => Promise.resolve(false);
+    const { playNotificationPing } = await import('@/lib/notification-sound');
+    try {
+      await render(<NotificationProvider><Capture /></NotificationProvider>);
+      await vi.waitFor(() => expect(captured).not.toBeNull());
+      (playNotificationPing as ReturnType<typeof vi.fn>).mockClear();
+      captured!.dispatch(basePayload({ kind: 'mention', parentType: 'conversation', parentID: 'conv-9', authorID: 'u-other', messageID: 'm-dnd-off' }));
+      await vi.waitFor(() => expect(instances.length).toBe(1));
+      expect(instances[0].options.silent).toBe(true);
+      await vi.waitFor(() => expect(playNotificationPing).toHaveBeenCalledTimes(1));
+    } finally {
+      restore();
+      delete window.__EX_DND__;
+    }
+  });
+
+  it('shell DnD bridge, Focus ON: no custom ping (the alert still counts as delivered)', async () => {
+    const instances: FakeNote[] = [];
+    const restore = installFakeNotification(instances);
+    window.__EX_DND__ = () => Promise.resolve(true);
+    const { playNotificationPing } = await import('@/lib/notification-sound');
+    try {
+      await render(<NotificationProvider><Capture /></NotificationProvider>);
+      await vi.waitFor(() => expect(captured).not.toBeNull());
+      (playNotificationPing as ReturnType<typeof vi.fn>).mockClear();
+      captured!.dispatch(basePayload({ kind: 'mention', parentType: 'conversation', parentID: 'conv-9', authorID: 'u-other', messageID: 'm-dnd-on' }));
+      // The (OS-suppressed) banner is still created; the ping must stay quiet.
+      await vi.waitFor(() => expect(instances.length).toBe(1));
+      await new Promise((r) => setTimeout(r, 30));
+      expect(playNotificationPing).not.toHaveBeenCalled();
+    } finally {
+      restore();
+      delete window.__EX_DND__;
+    }
+  });
+
+  it('shell DnD bridge with popups disabled: the standalone ping obeys Focus too', async () => {
+    // The residual case the OS can never cover — sound on, popups off — goes
+    // quiet under Focus once the shell bridge exists.
+    window.__EX_DND__ = () => Promise.resolve(true);
+    const { playNotificationPing } = await import('@/lib/notification-sound');
+    try {
+      await render(<NotificationProvider><Capture /></NotificationProvider>);
+      await vi.waitFor(() => expect(captured).not.toBeNull());
+      captured!.setBrowserEnabled(false);
+      await vi.waitFor(() => expect(captured!.prefs.browserEnabled).toBe(false));
+      (playNotificationPing as ReturnType<typeof vi.fn>).mockClear();
+      captured!.dispatch(basePayload({ kind: 'mention', parentType: 'conversation', parentID: 'conv-9', authorID: 'u-other', messageID: 'm-dnd-noPopup' }));
+      await new Promise((r) => setTimeout(r, 30));
+      expect(playNotificationPing).not.toHaveBeenCalled();
+      // Focus lifts → the same path pings again.
+      window.__EX_DND__ = () => Promise.resolve(false);
+      captured!.dispatch(basePayload({ kind: 'mention', parentType: 'conversation', parentID: 'conv-9', authorID: 'u-other', messageID: 'm-dnd-noPopup-2' }));
+      await vi.waitFor(() => expect(playNotificationPing).toHaveBeenCalledTimes(1));
+    } finally {
+      delete window.__EX_DND__;
+    }
+  });
+
+  it('falls back to the in-page ping when the Notification constructor throws (sound on)', async () => {
+    // Some embedded webviews throw on `new Notification` even with permission
+    // granted. The OS-delegated sound (the DnD-correct default) never fired,
+    // so the in-page ping is the fallback alert.
+    const restore = installThrowingNotification();
+    const { playNotificationPing } = await import('@/lib/notification-sound');
+    try {
+      await render(<NotificationProvider><Capture /></NotificationProvider>);
+      await vi.waitFor(() => expect(captured).not.toBeNull());
+      (playNotificationPing as ReturnType<typeof vi.fn>).mockClear();
+      captured!.dispatch(basePayload({ kind: 'mention', parentType: 'conversation', parentID: 'conv-9', authorID: 'u-other', messageID: 'm-throw-ping' }));
+      await vi.waitFor(() => expect(playNotificationPing).toHaveBeenCalledTimes(1));
+    } finally {
+      restore();
+    }
+  });
+
+  it('a throwing constructor with sound off surfaces nothing (no ping, no ack)', async () => {
+    const restore = installThrowingNotification();
+    const { playNotificationPing } = await import('@/lib/notification-sound');
+    try {
+      await render(<NotificationProvider><Capture /></NotificationProvider>);
+      await vi.waitFor(() => expect(captured).not.toBeNull());
+      (playNotificationPing as ReturnType<typeof vi.fn>).mockClear();
+      captured!.setSoundEnabled(false);
+      await vi.waitFor(() => expect(captured!.prefs.soundEnabled).toBe(false));
+      captured!.dispatch(basePayload({ kind: 'mention', parentType: 'conversation', parentID: 'conv-9', authorID: 'u-other', messageID: 'm-throw-quiet' }));
+      await new Promise((r) => setTimeout(r, 30));
+      // Nothing surfaced → no ping, and no ack either (the mobile fallback
+      // must remain the delivery path). sendWSMock is not cleared per test,
+      // so check for THIS message's ack specifically.
+      expect(playNotificationPing).not.toHaveBeenCalled();
+      const acked = sendWSMock.mock.calls.some(
+        (c) => (c[0] as { messageID?: string } | undefined)?.messageID === 'm-throw-quiet',
+      );
+      expect(acked).toBe(false);
     } finally {
       restore();
     }

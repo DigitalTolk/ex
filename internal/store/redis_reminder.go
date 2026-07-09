@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/DigitalTolk/ex/internal/model"
+	"github.com/DigitalTolk/ex/internal/redisx"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -177,7 +178,7 @@ return ids
 // and per-user index entry are cleaned up for every claimed id.
 func (s *RedisReminderStore) ClaimDueReminders(ctx context.Context, limit int) ([]*model.Reminder, error) {
 	nowMs := s.now().UnixMilli()
-	res, err := claimDueScript.Run(ctx, s.client, []string{reminderDueKey()}, nowMs, limit).Result()
+	res, err := redisx.RunScript(ctx, s.client, claimDueScript, []string{reminderDueKey()}, nowMs, limit).Result()
 	if err != nil {
 		return nil, fmt.Errorf("store: claim due reminders: %w", err)
 	}

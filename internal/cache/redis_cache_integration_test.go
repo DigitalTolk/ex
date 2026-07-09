@@ -4,14 +4,17 @@ package cache
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/redis/go-redis/v9"
+	"github.com/redis/go-redis/v9/maintnotifications"
 )
 
 // setupRealTestCache returns a RedisCache over the shared container plus a
@@ -574,6 +577,67 @@ func TestSetUser(t *testing.T) {
 	// Verify the key uses the correct prefix.
 	if n, err := plain.Exists(ctx, "user:u456").Result(); err != nil || n != 1 {
 		t.Fatalf("Exists(user:u456) = %d, %v; want key to exist in Redis", n, err)
+	}
+}
+
+// stripRedisErrorHook re-creates every EVALSHA NOSCRIPT failure as a plain
+// error, mimicking an instrumentation layer that loses the redis.Error
+// interface — the production shape (2026-07-09, Datadog-instrumented build)
+// that escaped go-redis's own NOSCRIPT handling and made
+// IncrementEmojiFrequency fail persistently after a Redis restart. The
+// redisx.RunScript message-text fallback must absorb it.
+type stripRedisErrorHook struct{}
+
+func (stripRedisErrorHook) DialHook(next redis.DialHook) redis.DialHook { return next }
+func (stripRedisErrorHook) ProcessPipelineHook(next redis.ProcessPipelineHook) redis.ProcessPipelineHook {
+	return next
+}
+func (stripRedisErrorHook) ProcessHook(next redis.ProcessHook) redis.ProcessHook {
+	return func(ctx context.Context, cmd redis.Cmder) error {
+		err := next(ctx, cmd)
+		if cmd.Name() == "evalsha" && err != nil && strings.Contains(err.Error(), "NOSCRIPT") {
+			stripped := errors.New(err.Error())
+			cmd.SetErr(stripped)
+			return stripped
+		}
+		return err
+	}
+}
+
+func TestIncrementEmojiFrequency_SurvivesFlushedScripts(t *testing.T) {
+	c, plain := setupRealTestCache(t)
+	ctx := context.Background()
+
+	// Cache the script server-side, then simulate a restarted/failed-over
+	// server (empty script cache) behind instrumentation that strips the
+	// redis.Error interface from the NOSCRIPT reply.
+	if err := c.IncrementEmojiFrequency(ctx, "u-flush", ":tada:"); err != nil {
+		t.Fatalf("seed increment: %v", err)
+	}
+	if err := plain.ScriptFlush(ctx).Err(); err != nil {
+		t.Fatalf("script flush: %v", err)
+	}
+	c.Client().AddHook(stripRedisErrorHook{})
+
+	if err := c.IncrementEmojiFrequency(ctx, "u-flush", ":tada:"); err != nil {
+		t.Fatalf("increment must survive a flushed script cache: %v", err)
+	}
+	got, err := c.FrequentEmojis(ctx, "u-flush", 5)
+	if err != nil || len(got) != 1 || got[0] != ":tada:" {
+		t.Fatalf("FrequentEmojis after flush = %v, %v; want [:tada:]", got, err)
+	}
+}
+
+func TestNewRedisCache_DisablesMaintNotificationsHandshake(t *testing.T) {
+	// Regression (2026-07-09): go-redis's default "auto" mode sends CLIENT
+	// MAINT_NOTIFICATIONS during the handshake; a server that rejects the
+	// subcommand aborted boot via the constructor PING. The built client must
+	// carry the disabled mode so the handshake is never attempted.
+	c := newRealCache(t)
+	t.Cleanup(func() { _ = c.Client().Close() })
+	cfg := c.Client().Options().MaintNotificationsConfig
+	if cfg == nil || cfg.Mode != maintnotifications.ModeDisabled {
+		t.Fatalf("maint notifications must be disabled, got %+v", cfg)
 	}
 }
 

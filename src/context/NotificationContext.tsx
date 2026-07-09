@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { playNotificationPing } from '@/lib/notification-sound';
+import { hasDndBridge, isDndActive } from '@/lib/dnd';
 import { showToast } from '@/lib/toast';
 import { readJSON, writeJSON } from '@/lib/storage';
 import { useLatestRef } from '@/hooks/useLatestRef';
@@ -119,6 +120,21 @@ function navigateInApp(href: string) {
     /* istanbul ignore next -- URL() with a valid base does not throw for the same-origin links the app produces; the catch is a defensive fallback */
     window.location.href = href;
   }
+}
+
+// playPingRespectingDnd plays the in-app custom ping, gated on the desktop
+// shell's native Focus/DnD state when the bridge exists (async IPC — the
+// ping lags the banner by a few ms, which is imperceptible). Without a
+// bridge the ping plays immediately: this path is only reached for surfaces
+// the OS does not deliver, where no DnD signal exists.
+function playPingRespectingDnd(): void {
+  if (hasDndBridge()) {
+    void isDndActive().then((dnd) => {
+      if (!dnd) playNotificationPing();
+    });
+    return;
+  }
+  playNotificationPing();
 }
 
 const NotificationContext = createContext<NotificationContextValue | undefined>(undefined);
@@ -259,10 +275,15 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     // permitted, and sound off; or the popup constructor threw) leaves the
     // door open for a retry/redelivery to still alert.
     let delivered = false;
-    if (soundEnabled) {
-      playNotificationPing();
-      delivered = true;
-    }
+    // When the desktop shell exposes a native Focus/DnD bridge, the app owns
+    // the notification sound: the custom ping plays (gated on the bridge) and
+    // the OS banner is forced silent so the two never double-sound. Without a
+    // bridge the OS owns the sound (silent: !soundEnabled) — macOS Focus /
+    // Windows Do-Not-Disturb silence the system banner and its sound
+    // together, and a page-played Audio ping would bypass that (the web
+    // platform exposes no way to query Focus state, so delegating the
+    // audible ping to the OS is the only DnD-correct option there).
+    const appOwnsSound = hasDndBridge();
     if (browserEnabled && permissionRef.current === 'granted' && notificationsSupported()) {
       try {
         // No `tag`: Chrome treats tag-collisions as silent thread updates
@@ -271,7 +292,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
         // origin at the OS level so per-message banners don't spam.
         const notificationOptions: NotificationOptions = {
           body: n.body,
-          silent: !soundEnabled,
+          silent: appOwnsSound || !soundEnabled,
         };
         if (!window.__EX_DESKTOP__) {
           notificationOptions.icon = '/logo.svg';
@@ -291,27 +312,46 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
           note.onclose = null;
         };
         delivered = true;
+        if (soundEnabled && appOwnsSound) {
+          // Custom ping alongside the (silent) banner, suppressed when the
+          // shell reports Focus/DnD — Slack/Mattermost parity. Under DnD the
+          // OS hides the banner too, so the alert still counts as delivered:
+          // the user chose quiet, and their phone (usually sharing the same
+          // Focus) should not buzz as a "fallback".
+          playPingRespectingDnd();
+        }
       } catch {
-        // Some embedded webviews throw on the Notification constructor
-        // even after the permission check passes. Leave `delivered` false
-        // (if sound also didn't fire) so a retry isn't deduped away.
+        // Some embedded webviews throw on the Notification constructor even
+        // after the permission check passes. Fall back to the in-page ping
+        // so the alert still surfaces audibly; if sound is off too,
+        // `delivered` stays false so a retry isn't deduped away.
+        if (soundEnabled) {
+          playPingRespectingDnd();
+          delivered = true;
+        }
       }
-    } else if (browserEnabled && !notificationsSupported()) {
-      // Webview fallback (Capacitor/WKWebView has no Notification API): an
-      // in-app toast IS the popup surface. Without it, a foregrounded native
-      // user with sound off got no in-app alert at all — the deferred OS push
-      // (the no-ack fallback) arrived seconds late for an app they were
-      // actively looking at. Surfacing the toast is a real delivery, so it
-      // acks below and stands the mobile push down; tapping it deep-links to
-      // the message like a popup click would.
-      showToast(n.body || n.title, 'success', {
-        title: n.body ? n.title : undefined,
-        kind: 'notification',
-        onActivate: () => {
-          if (n.deepLink) navigateInApp(n.deepLink);
-        },
-      });
-      delivered = true;
+    } else {
+      if (soundEnabled) {
+        playPingRespectingDnd();
+        delivered = true;
+      }
+      if (browserEnabled && !notificationsSupported()) {
+        // Webview fallback (Capacitor/WKWebView has no Notification API): an
+        // in-app toast IS the popup surface. Without it, a foregrounded native
+        // user with sound off got no in-app alert at all — the deferred OS push
+        // (the no-ack fallback) arrived seconds late for an app they were
+        // actively looking at. Surfacing the toast is a real delivery, so it
+        // acks below and stands the mobile push down; tapping it deep-links to
+        // the message like a popup click would.
+        showToast(n.body || n.title, 'success', {
+          title: n.body ? n.title : undefined,
+          kind: 'notification',
+          onActivate: () => {
+            if (n.deepLink) navigateInApp(n.deepLink);
+          },
+        });
+        delivered = true;
+      }
     }
     // Record as alerted (shared across tabs) only after we actually surfaced
     // something, so a duplicate delivery doesn't double-ping/double-banner,

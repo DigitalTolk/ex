@@ -11,6 +11,15 @@ declare global {
   }
   interface Window {
     __EX_DESKTOP__?: boolean;
+    // Desktop-shell bridge reporting the OS Do-Not-Disturb / Focus state
+    // (macOS Focus, Windows Focus Assist). The Electron wrapper's preload
+    // exposes it (main process answers via macos-notification-state /
+    // windows-notification-state, Slack/Mattermost-style). When present, the
+    // app plays its own custom notification ping gated on this state instead
+    // of delegating the sound to the OS notification. Absent in browser
+    // tabs/PWA, where the OS notification owns the sound (the only
+    // DnD-correct option without a native bridge).
+    __EX_DND__?: () => boolean | Promise<boolean>;
     // Test-only override for lib/device.ts deviceKind(): the jsdom and
     // browser setups pin it so width-driven tests keep their historical
     // meaning; production never sets it.

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/DigitalTolk/ex/internal/events"
+	"github.com/DigitalTolk/ex/internal/redisx"
 	"github.com/DigitalTolk/ex/internal/safe"
 	"github.com/redis/go-redis/v9"
 )
@@ -51,9 +52,9 @@ func (ps *RedisPubSub) SetDurability(resolver RecipientResolver, inbox InboxAppe
 
 // NewRedisPubSub parses the Redis URL, creates a client, and verifies connectivity.
 func NewRedisPubSub(redisURL string) (*RedisPubSub, error) {
-	opts, err := redis.ParseURL(redisURL)
+	opts, err := redisx.Options(redisURL)
 	if err != nil {
-		return nil, fmt.Errorf("parse redis url: %w", err)
+		return nil, err
 	}
 
 	client := redis.NewClient(opts)

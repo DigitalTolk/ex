@@ -22,7 +22,9 @@ vi.mock('./Sidebar', () => ({
     </nav>
   ),
 }));
-vi.mock('@/components/SearchBar', () => ({ SearchBar: () => <input aria-label="Search" /> }));
+// w-full mirrors the real SearchBar root so geometry assertions measure the
+// field the user actually sees filling the centre grid column.
+vi.mock('@/components/SearchBar', () => ({ SearchBar: () => <input aria-label="Search" className="w-full" /> }));
 vi.mock('@/context/AuthContext', () => ({
   useAuth: () => ({
     user: { id: 'u-1', displayName: 'Tess', email: 't@x.io', systemRole: 2 },
@@ -161,7 +163,33 @@ describe('compact tier at a real 700px desktop viewport', () => {
     expect(getComputedStyle(input).fontSize).toBe('14px');
   });
 
-  it('insets the top-bar left column past macOS traffic lights and docks the hamburger beside a smaller search', async () => {
+  it('centres the search field and docks the hamburger against its left edge, clear of the window corner', async () => {
+    if (!isDesktopProject) return;
+    await renderLayout();
+    const toggle = document.querySelector('[aria-label="Open channels"]') as HTMLElement;
+    const search = document.querySelector('input[aria-label="Search"]') as HTMLElement;
+    const toggleRect = toggle.getBoundingClientRect();
+    const searchRect = search.getBoundingClientRect();
+    // The field is centred in the viewport (equal 1fr side columns) — the
+    // regression was a compact `auto` first column that left it hugging the
+    // hamburger at the window's left edge.
+    const searchCentre = (searchRect.left + searchRect.right) / 2;
+    expect(Math.abs(searchCentre - window.innerWidth / 2)).toBeLessThanOrEqual(1);
+    // Capped well below the roomy full-desktop 36rem so the hamburger fits
+    // in the side column to its LEFT.
+    expect(searchRect.width).toBeLessThan(320);
+    // The hamburger docks against the field (justify-end + the 8px grid
+    // gap), NOT at the window's left edge — so a frameless window's traffic
+    // lights can never cover it even when .electron-mac detection misses.
+    const gapToSearch = searchRect.left - toggleRect.right;
+    expect(gapToSearch).toBeGreaterThanOrEqual(0);
+    expect(gapToSearch).toBeLessThanOrEqual(16);
+    // Structurally clear of the traffic-light cluster (~80px) with no
+    // electron-mac class applied at all.
+    expect(toggleRect.left).toBeGreaterThanOrEqual(88);
+  });
+
+  it('insets the top-bar left column past macOS traffic lights while the search stays centred', async () => {
     if (!isDesktopProject) return;
     document.documentElement.classList.add('electron-mac');
     try {
@@ -176,11 +204,15 @@ describe('compact tier at a real 700px desktop viewport', () => {
       const searchRect = search.getBoundingClientRect();
       // The hamburger clears the traffic lights…
       expect(toggleRect.left).toBeGreaterThanOrEqual(88);
-      // …and sits immediately LEFT of the search (compact grid docks them
-      // together) instead of a far-away centred column, so the toggle can
-      // never end up buried under the window controls.
-      expect(toggleRect.right).toBeLessThanOrEqual(searchRect.left);
-      // And the search is much smaller than the roomy full-desktop 36rem field.
+      // …stays docked against the search field's left edge…
+      const gapToSearch = searchRect.left - toggleRect.right;
+      expect(gapToSearch).toBeGreaterThanOrEqual(0);
+      expect(gapToSearch).toBeLessThanOrEqual(16);
+      // …and the field keeps its centred position (at 700px the padded side
+      // column has room to spare, so the traffic-light inset must not shove
+      // the field off-centre or bury the toggle).
+      const searchCentre = (searchRect.left + searchRect.right) / 2;
+      expect(Math.abs(searchCentre - window.innerWidth / 2)).toBeLessThanOrEqual(1);
       expect(searchRect.width).toBeLessThan(320);
     } finally {
       document.documentElement.classList.remove('electron-mac');
