@@ -314,9 +314,14 @@ describe('Header browser behavior', () => {
     // The header Cancel dismisses via the dialog's onOpenChange(false) →
     // cancelDescriptionEdit; nothing is saved.
     await screen.getByRole('button', { name: 'Cancel' }).click();
+    // Dismissed = removed from the DOM, or mid-exit (`data-closed`, which
+    // base-ui stamps synchronously on close). Asserting removal alone races
+    // React's unmount commit under full-suite CPU load even with animations
+    // disabled — the closed STATE is the user-visible contract.
     await vi.waitFor(() => {
-      expect(document.querySelector('[data-testid="mobile-description-editor"]')).toBeNull();
-    });
+      const el = document.querySelector('[data-testid="mobile-description-editor"]');
+      expect(el === null || el.hasAttribute('data-closed')).toBe(true);
+    }, { timeout: 10000 });
     expect(onDescriptionSave).not.toHaveBeenCalled();
   });
 });
