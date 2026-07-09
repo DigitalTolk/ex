@@ -69,6 +69,14 @@ export function usePanelWidth(cfg: PanelWidthConfig, grow: 'right' | 'left', lab
       // in the same frame as the last move must not persist a stale width.
       let liveWidth = startWidth;
       const handle = e.currentTarget;
+      // AbortController is the whole drag lifetime: one abort() detaches every
+      // listener at once, so there's no forward-referential teardown to thread
+      // through the move/up handlers.
+      const drag = new AbortController();
+      const stop = () => {
+        savePanelWidth(cfg, liveWidth);
+        drag.abort();
+      };
       try {
         handle.setPointerCapture?.(e.pointerId);
       } catch {
@@ -78,19 +86,27 @@ export function usePanelWidth(cfg: PanelWidthConfig, grow: 'right' | 'left', lab
       }
 
       const onMove = (ev: PointerEvent) => {
+        // Resize ONLY while the primary button is genuinely held. If a
+        // pointerup was missed (released off-window, or the OS reclaimed the
+        // pointer without firing pointercancel) the listeners stay attached;
+        // the next buttonless move — i.e. a plain hover over the handle —
+        // would otherwise resize the panel with no click at all. Treat that
+        // move as the end of the drag instead. (bit 1 = primary button.)
+        if ((ev.buttons & 1) === 0) {
+          stop();
+          return;
+        }
         const delta = grow === 'right' ? ev.clientX - startX : startX - ev.clientX;
         liveWidth = clampPanelWidth(cfg, startWidth + delta);
         setWidth(liveWidth);
       };
-      const onUp = () => {
-        savePanelWidth(cfg, liveWidth);
-        handle.removeEventListener('pointermove', onMove);
-        handle.removeEventListener('pointerup', onUp);
-        handle.removeEventListener('pointercancel', onUp);
-      };
-      handle.addEventListener('pointermove', onMove);
-      handle.addEventListener('pointerup', onUp);
-      handle.addEventListener('pointercancel', onUp);
+      const opts = { signal: drag.signal };
+      handle.addEventListener('pointermove', onMove, opts);
+      handle.addEventListener('pointerup', stop, opts);
+      handle.addEventListener('pointercancel', stop, opts);
+      // A lost capture (window blur, OS gesture) never fires pointerup — end
+      // the drag so no stray listener survives to hover-resize later.
+      handle.addEventListener('lostpointercapture', stop, opts);
       e.preventDefault();
     },
     [cfg, grow],

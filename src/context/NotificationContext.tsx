@@ -12,7 +12,9 @@ import { isUserActive, startUserActivityTracking } from '@/lib/user-activity';
 // Beyond this the laptop may be open but the user is gone — withhold the ack
 // and let the mobile fallback fire, Slack-style. Duplicates (desktop popup +
 // phone buzz) are the deliberate failure direction; a lost alert is not.
-const desktopActiveWindowMs = 2 * 60_000;
+// 20min keeps a briefly-idle-but-present user on desktop delivery before
+// handing off to the OneSignal mobile fallback (2min was too eager).
+const desktopActiveWindowMs = 20 * 60_000;
 
 // ackDesktopDelivery tells the backend the desktop made the user aware of this
 // message (we surfaced it, or they were already looking at the channel), so the

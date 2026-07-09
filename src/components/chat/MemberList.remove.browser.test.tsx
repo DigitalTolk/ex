@@ -114,8 +114,10 @@ describe('MemberList remove (real hover)', () => {
 });
 
 describe('MemberList resize (desktop)', () => {
-  function pointer(type: string, clientX: number) {
-    return new PointerEvent(type, { bubbles: true, clientX, pointerId: 1, button: 0 });
+  function pointer(type: string, clientX: number, buttons = 1) {
+    // buttons:1 = primary held (drag); the resize handler ignores buttonless
+    // moves so a plain hover can't resize.
+    return new PointerEvent(type, { bubbles: true, clientX, pointerId: 1, button: 0, buttons });
   }
   function panelRect() {
     return document.querySelector('[data-mobile-right-sidebar]')!.getBoundingClientRect();

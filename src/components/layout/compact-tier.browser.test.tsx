@@ -161,16 +161,30 @@ describe('compact tier at a real 700px desktop viewport', () => {
     expect(getComputedStyle(input).fontSize).toBe('14px');
   });
 
-  it('insets the top-bar left column past macOS traffic lights in Electron', async () => {
+  it('insets the top-bar left column past macOS traffic lights and docks the hamburger beside a smaller search', async () => {
     if (!isDesktopProject) return;
     document.documentElement.classList.add('electron-mac');
-    await renderLayout();
-    const left = document.querySelector('[data-topbar-left="true"]') as HTMLElement;
-    expect(left).not.toBeNull();
-    // 4.5rem = 72px clears the hiddenInset traffic-light cluster.
-    expect(getComputedStyle(left).paddingLeft).toBe('72px');
-    const toggle = document.querySelector('[aria-label="Open channels"]') as HTMLElement;
-    expect(toggle.getBoundingClientRect().left).toBeGreaterThanOrEqual(72);
+    try {
+      await renderLayout();
+      const left = document.querySelector('[data-topbar-left="true"]') as HTMLElement;
+      expect(left).not.toBeNull();
+      // 5.5rem = 88px clears the hiddenInset traffic-light cluster with margin.
+      expect(getComputedStyle(left).paddingLeft).toBe('88px');
+      const toggle = document.querySelector('[aria-label="Open channels"]') as HTMLElement;
+      const search = document.querySelector('input[aria-label="Search"]') as HTMLElement;
+      const toggleRect = toggle.getBoundingClientRect();
+      const searchRect = search.getBoundingClientRect();
+      // The hamburger clears the traffic lights…
+      expect(toggleRect.left).toBeGreaterThanOrEqual(88);
+      // …and sits immediately LEFT of the search (compact grid docks them
+      // together) instead of a far-away centred column, so the toggle can
+      // never end up buried under the window controls.
+      expect(toggleRect.right).toBeLessThanOrEqual(searchRect.left);
+      // And the search is much smaller than the roomy full-desktop 36rem field.
+      expect(searchRect.width).toBeLessThan(320);
+    } finally {
+      document.documentElement.classList.remove('electron-mac');
+    }
   });
 });
 

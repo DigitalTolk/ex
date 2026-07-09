@@ -69,9 +69,15 @@ describe('Toaster', () => {
     );
     const toast = screen.getByTestId('toast');
     expect(toast).toHaveAttribute('data-kind', 'notification');
-    // Inverted, maximum-contrast surface — must never blend into the app.
-    expect(toast.className).toContain('bg-foreground');
-    expect(toast.className).toContain('text-background');
+    // Distinct notification palette (faint yellow / near-black per theme) —
+    // must never blend into the app, and is NOT the plain card surface.
+    expect(toast.className).toContain('bg-notification-toast');
+    expect(toast.className).toContain('text-notification-toast-foreground');
+    expect(toast.className).not.toContain('bg-card');
+    // Always a fixed WIDE box, not sized to the message content.
+    expect(toast.className).toContain('w-full');
+    expect(toast.className).toContain('max-w-md');
+    expect(toast.className).not.toContain('max-w-sm');
     // Positioned in the top banner container, not the bottom toast stack.
     expect((toast.parentElement as HTMLElement).className).toContain('top-[calc(env(safe-area-inset-top)');
   });

@@ -24,7 +24,9 @@
    the web content's top-left; the top bar's left column pads past them so the
    compact-tier sidebar toggle is never buried underneath. */
 .electron-mac [data-topbar-left='true'] {
-  padding-left: 4.5rem;
+  /* Clear the macOS traffic-light cluster with margin — 4.5rem tucked the
+     compact-tier hamburger partly under the rightmost button. */
+  padding-left: 5.5rem;
 }
 @custom-variant data-open {
   &:where([data-state="open"]),
@@ -139,6 +141,14 @@
      the amber the pinned-message affordance already uses. */
   --color-caution: #FEF3C7;
   --color-caution-foreground: #92400E;
+  /* In-app notification banner (Toaster kind="notification"). It must never
+   * blend into the surface it covers, so it gets its own distinct palette per
+   * theme: LIGHT is a faint warm yellow with a bright amber edge; DARK (below)
+   * is a warm near-black card — NOT white — that floats above the app's own
+   * near-black background, ringed in amber so it always reads as an alert. */
+  --color-notification-toast: #FEF3C7;
+  --color-notification-toast-foreground: #231F20;
+  --color-notification-toast-border: #FBBF24;
   --color-chart-1: #DE5D83;
   --color-chart-2: #4F4C4D;
   --color-chart-3: #7B7979;
@@ -339,6 +349,12 @@
     /* Caution accent (amber), tuned for the dark surface. */
     --color-caution: #3B2F12;
     --color-caution-foreground: #FCD34D;
+    /* Dark notification banner: a warm near-black distinct from the app's
+     * #231F20 base (so it reads as a floating card, never white, never blended)
+     * with warm amber text + edge to keep the "alert" identity. */
+    --color-notification-toast: #17120F;
+    --color-notification-toast-foreground: #FDE68A;
+    --color-notification-toast-border: #B45309;
     --color-chart-1: #DE5D83;
     --color-chart-2: #A7A5A6;
     --color-chart-3: #D3D2D2;
