@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math"
 	"strconv"
 	"time"
 
@@ -56,7 +55,10 @@ const presenceTTL = 40 * time.Second
 const emojiFreqKeyPrefix = "emoji:freq:"
 
 // emojiFreqTTL ages out a user's emoji-usage history so a long-dormant
-// account doesn't keep stale favourites forever; every use refreshes it.
+// account doesn't keep stale favourites forever. Both reads AND writes refresh
+// it (see FrequentEmojis), so any active user — one who so much as opens the
+// picker within a year — keeps their favourites; only a truly gone account
+// expires.
 const emojiFreqTTL = 365 * 24 * time.Hour
 
 // RedisCache wraps a Redis client to provide typed caching operations.
@@ -420,32 +422,19 @@ func (c *RedisCache) SetUser(ctx context.Context, user *model.User) error {
 	return c.Set(ctx, userKeyPrefix+user.ID, rec, userCacheTTL)
 }
 
-// Emoji frequency scores use FORWARD exponential decay: each use adds
-// e^((now-epoch)/tau) instead of a flat 1, so recent picks dominate the
-// ranking without ever rewriting old scores. With tau = 7 days, one pick
-// today outweighs ~2.7 picks from a week ago and hundreds from months ago —
-// the popular shelf keeps reordering with the user's CURRENT habits instead
-// of freezing once early favorites accumulate unbeatable all-time counts
-// (plain counters were exactly that bug). The fixed epoch keeps weights
-// comparable across processes and restarts; float64 only overflows ~13 years
-// past the epoch (e^709), far beyond the 90-day key TTL. Legacy plain-count
-// scores (1..n) rank below any post-deploy weight, so history resets to
-// recency once and then decays smoothly.
-const emojiFreqTau = 7 * 24 * time.Hour
-
-var emojiFreqEpoch = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-
-func emojiFreqWeight(now time.Time) float64 {
-	return math.Exp(now.Sub(emojiFreqEpoch).Seconds() / emojiFreqTau.Seconds())
-}
-
-// IncrementEmojiFrequency bumps the per-user usage weight for a picked emoji
-// shortcode, stored in a sorted set scored by recency-decayed frequency, and
-// refreshes the key's TTL.
+// IncrementEmojiFrequency bumps the per-user usage COUNT for a picked emoji
+// shortcode (a plain +1 in a sorted set scored by total usage — "most used
+// wins") and refreshes the key's TTL. Plain counts are deliberate: a favourite
+// the user relies on stays at the top instead of being demoted by a single
+// recent pick of something else, so favourites never silently vanish. The
+// ranking still tracks habits because every pick path records a use (picker,
+// quick-reaction bar, and the composer :shortcode: typeahead — the last one
+// was the real bug: it wasn't recording, so heavy typeahead users' counts
+// never moved and their TTL quietly drained).
 func (c *RedisCache) IncrementEmojiFrequency(ctx context.Context, userID, shortcode string) error {
 	key := emojiFreqKeyPrefix + userID
 	pipe := c.client.Pipeline()
-	pipe.ZIncrBy(ctx, key, emojiFreqWeight(time.Now()), shortcode)
+	pipe.ZIncrBy(ctx, key, 1, shortcode)
 	pipe.Expire(ctx, key, emojiFreqTTL)
 	if _, err := pipe.Exec(ctx); err != nil {
 		return fmt.Errorf("emoji freq increment %q: %w", userID, err)
@@ -454,22 +443,29 @@ func (c *RedisCache) IncrementEmojiFrequency(ctx context.Context, userID, shortc
 }
 
 // FrequentEmojis returns up to limit of the user's most-used emoji shortcodes,
-// highest count first.
+// highest count first. Reading ALSO refreshes the TTL: merely opening the
+// emoji picker (or rendering the quick-reaction bar, which reads this list)
+// keeps a user's favourites alive, so an active user never loses them to the
+// inactivity TTL — only a user who is gone for the whole TTL window ages out.
 func (c *RedisCache) FrequentEmojis(ctx context.Context, userID string, limit int) ([]string, error) {
 	if limit <= 0 {
 		return []string{}, nil
 	}
 	key := emojiFreqKeyPrefix + userID
-	res, err := c.client.ZRangeArgs(ctx, redis.ZRangeArgs{
+	pipe := c.client.Pipeline()
+	rangeCmd := pipe.ZRangeArgs(ctx, redis.ZRangeArgs{
 		Key:   key,
 		Start: 0,
 		Stop:  limit - 1,
 		Rev:   true,
-	}).Result()
-	if err != nil {
+	})
+	// Refresh TTL only when the set exists — Expire on a missing key is a
+	// harmless no-op, but keeping the read a single round trip is the point.
+	pipe.Expire(ctx, key, emojiFreqTTL)
+	if _, err := pipe.Exec(ctx); err != nil {
 		return nil, fmt.Errorf("emoji freq list %q: %w", userID, err)
 	}
-	return res, nil
+	return rangeCmd.Result()
 }
 
 // Client returns the underlying Redis client for advanced operations.

@@ -74,9 +74,14 @@ describe('useFrequentEmojis', () => {
   }
 
   it('re-fetches the shelf the moment the emoji-frequency changed event fires', async () => {
-    apiFetchMock
-      .mockResolvedValueOnce([':tada:', ':+1:'])
-      .mockResolvedValueOnce([':fire:']);
+    // Route by URL: the hook also reads the shared custom-emoji cache, so a
+    // positional mock sequence would be consumed by the wrong query.
+    let frequent = [':tada:', ':+1:'];
+    apiFetchMock.mockImplementation(async (url: string) => {
+      if (String(url).startsWith('/api/v1/emojis/frequent')) return frequent;
+      if (url === '/api/v1/emojis') return [];
+      return [];
+    });
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const screen = await render(
       <QueryClientProvider client={qc}>
@@ -88,6 +93,7 @@ describe('useFrequentEmojis', () => {
     });
     // A pick anywhere in the app dispatches this window event — the hook must
     // invalidate and reorder live instead of waiting out staleTime.
+    frequent = [':fire:'];
     window.dispatchEvent(new Event(EMOJI_FREQUENCY_CHANGED_EVENT));
     await vi.waitFor(() => {
       expect(screen.getByTestId('freq').element().textContent).toBe(':fire:');
