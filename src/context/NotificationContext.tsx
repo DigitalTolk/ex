@@ -275,15 +275,6 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     // permitted, and sound off; or the popup constructor threw) leaves the
     // door open for a retry/redelivery to still alert.
     let delivered = false;
-    // When the desktop shell exposes a native Focus/DnD bridge, the app owns
-    // the notification sound: the custom ping plays (gated on the bridge) and
-    // the OS banner is forced silent so the two never double-sound. Without a
-    // bridge the OS owns the sound (silent: !soundEnabled) — macOS Focus /
-    // Windows Do-Not-Disturb silence the system banner and its sound
-    // together, and a page-played Audio ping would bypass that (the web
-    // platform exposes no way to query Focus state, so delegating the
-    // audible ping to the OS is the only DnD-correct option there).
-    const appOwnsSound = hasDndBridge();
     if (browserEnabled && permissionRef.current === 'granted' && notificationsSupported()) {
       try {
         // No `tag`: Chrome treats tag-collisions as silent thread updates
@@ -292,7 +283,14 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
         // origin at the OS level so per-message banners don't spam.
         const notificationOptions: NotificationOptions = {
           body: n.body,
-          silent: appOwnsSound || !soundEnabled,
+          // The app owns the notification sound everywhere: the custom ping
+          // plays below, so the OS banner is ALWAYS silent — banner + ping
+          // must never double-sound. Inside the desktop shell the ping is
+          // gated on the native Focus/DnD bridge; in a plain browser there
+          // is no way to query Focus, and the deliberate trade-off
+          // (2026-07-10) is to keep the custom ping there even though it
+          // bypasses DnD. Only the shell gets DnD-correct pings.
+          silent: true,
         };
         if (!window.__EX_DESKTOP__) {
           notificationOptions.icon = '/logo.svg';
@@ -312,12 +310,13 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
           note.onclose = null;
         };
         delivered = true;
-        if (soundEnabled && appOwnsSound) {
-          // Custom ping alongside the (silent) banner, suppressed when the
-          // shell reports Focus/DnD — Slack/Mattermost parity. Under DnD the
-          // OS hides the banner too, so the alert still counts as delivered:
-          // the user chose quiet, and their phone (usually sharing the same
-          // Focus) should not buzz as a "fallback".
+        if (soundEnabled) {
+          // Custom ping alongside the (silent) banner. In the shell it is
+          // suppressed when the bridge reports Focus/DnD — Slack/Mattermost
+          // parity; under DnD the OS hides the banner too, and the alert
+          // still counts as delivered: the user chose quiet, and their phone
+          // (usually sharing the same Focus) should not buzz as a
+          // "fallback". In a plain browser the ping just plays.
           playPingRespectingDnd();
         }
       } catch {

@@ -390,6 +390,27 @@ describe('NotificationContext browser', () => {
     }
   });
 
+  it('plain browser: the custom ping plays and the banner is always silent (DnD trade-off)', async () => {
+    // Without a shell bridge there is no way to query OS Focus — the
+    // deliberate 2026-07-10 trade-off keeps the brand ping in browsers even
+    // though it bypasses DnD. The banner stays silent so ping + OS sound
+    // never double up.
+    const instances: FakeNote[] = [];
+    const restore = installFakeNotification(instances);
+    const { playNotificationPing } = await import('@/lib/notification-sound');
+    try {
+      await render(<NotificationProvider><Capture /></NotificationProvider>);
+      await vi.waitFor(() => expect(captured).not.toBeNull());
+      (playNotificationPing as ReturnType<typeof vi.fn>).mockClear();
+      captured!.dispatch(basePayload({ kind: 'mention', parentType: 'conversation', parentID: 'conv-9', authorID: 'u-other', messageID: 'm-browser-ping' }));
+      await vi.waitFor(() => expect(instances.length).toBe(1));
+      expect(instances[0].options.silent).toBe(true);
+      await vi.waitFor(() => expect(playNotificationPing).toHaveBeenCalledTimes(1));
+    } finally {
+      restore();
+    }
+  });
+
   it('shell DnD bridge, Focus off: the banner is silent and the custom ping plays', async () => {
     // With a native bridge the APP owns the sound (Slack/Mattermost parity):
     // the OS banner is forced silent so banner + custom ping never

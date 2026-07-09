@@ -119,19 +119,19 @@ describe('NotificationProvider', () => {
     }
   });
 
-  it('creates a native browser notification and delegates the audible ping to the OS (DnD-correct)', () => {
-    // Regression: dispatch used to play the in-page Audio ping ALONGSIDE the
-    // OS notification. macOS Focus / Windows Do-Not-Disturb suppress the OS
-    // banner and its sound, but a page-played Audio ping bypasses DnD — the
-    // user heard pings while explicitly on Do Not Disturb. When the alert is
-    // OS-delivered, the OS owns the sound (silent: false below) and the
-    // in-page ping must stay quiet.
+  it('plays the custom ping alongside an always-silent browser notification', () => {
+    // The app owns the notification sound everywhere: the custom ping plays
+    // and the OS banner is ALWAYS silent so the two never double-sound. In a
+    // plain browser (no shell DnD bridge) the ping deliberately ignores OS
+    // Focus/DnD — the 2026-07-10 trade-off in favor of the brand sound;
+    // DnD-correct gating happens only in the desktop shell via the bridge
+    // (see the shell-bridge tests below).
     renderProbe();
     act(() => {
       dispatchSpy!(samplePayload);
     });
     expect(notificationCtor).toHaveBeenCalledTimes(1);
-    expect(playMock).not.toHaveBeenCalled();
+    expect(playMock).toHaveBeenCalledTimes(1);
     expect(notificationCtor.mock.calls[0][0]).toBe('Alice');
     const opts = notificationCtor.mock.calls[0][1] as NotificationOptions;
     expect(opts.body).toBe('hello there');
@@ -141,7 +141,8 @@ describe('NotificationProvider', () => {
     expect(opts.tag).toBeUndefined();
     // App logo, not Chrome's default.
     expect(opts.icon).toBe('/logo.svg');
-    expect(opts.silent).toBe(false);
+    // The custom ping is the sound source — the banner never doubles it.
+    expect(opts.silent).toBe(true);
   });
 
   it('omits the web notification icon inside the desktop shell', () => {
@@ -204,9 +205,7 @@ describe('NotificationProvider', () => {
       dispatchSpy!(samplePayload);
     });
     expect(notificationCtor).toHaveBeenCalledTimes(1);
-    // OS-delivered → the OS notification carries the sound; the in-page
-    // ping must not also play (it would bypass macOS Focus / Windows DnD).
-    expect(playMock).not.toHaveBeenCalled();
+    expect(playMock).toHaveBeenCalledTimes(1);
   });
 
   const dmPayload: NotificationPayload = { ...samplePayload, parentType: 'conversation', parentID: 'dm-1' };
@@ -235,9 +234,7 @@ describe('NotificationProvider', () => {
       dispatchSpy!(dmPayload);
     });
     expect(notificationCtor).toHaveBeenCalledTimes(1);
-    // OS-delivered → the OS notification carries the sound; the in-page
-    // ping must not also play (it would bypass macOS Focus / Windows DnD).
-    expect(playMock).not.toHaveBeenCalled();
+    expect(playMock).toHaveBeenCalledTimes(1);
   });
 
   it('refocusing the window re-enables on-screen DM suppression', () => {
@@ -264,9 +261,7 @@ describe('NotificationProvider', () => {
       dispatchSpy!(samplePayload);
     });
     expect(notificationCtor).toHaveBeenCalledTimes(1);
-    // OS-delivered → the OS notification carries the sound; the in-page
-    // ping must not also play (it would bypass macOS Focus / Windows DnD).
-    expect(playMock).not.toHaveBeenCalled();
+    expect(playMock).toHaveBeenCalledTimes(1);
   });
 
   it('reports permission=granted when Notification.permission is granted', () => {
@@ -292,9 +287,7 @@ describe('NotificationProvider', () => {
       dispatchSpy!({ ...samplePayload, authorID: 'u-other' });
     });
     expect(notificationCtor).toHaveBeenCalledTimes(1);
-    // OS-delivered → the OS notification carries the sound; the in-page
-    // ping must not also play (it would bypass macOS Focus / Windows DnD).
-    expect(playMock).not.toHaveBeenCalled();
+    expect(playMock).toHaveBeenCalledTimes(1);
   });
 
   it('still fires popups for mentions even when on the active parent', () => {
@@ -307,9 +300,7 @@ describe('NotificationProvider', () => {
       dispatchSpy!({ ...channelMessagePayload, kind: 'mention' });
     });
     expect(notificationCtor).toHaveBeenCalledTimes(1);
-    // OS-delivered → the OS notification carries the sound; the in-page
-    // ping must not also play (it would bypass macOS Focus / Windows DnD).
-    expect(playMock).not.toHaveBeenCalled();
+    expect(playMock).toHaveBeenCalledTimes(1);
   });
 
   it('still fires popups for thread replies even when on the active parent', () => {
@@ -322,9 +313,7 @@ describe('NotificationProvider', () => {
       dispatchSpy!({ ...channelMessagePayload, kind: 'thread_reply' });
     });
     expect(notificationCtor).toHaveBeenCalledTimes(1);
-    // OS-delivered → the OS notification carries the sound; the in-page
-    // ping must not also play (it would bypass macOS Focus / Windows DnD).
-    expect(playMock).not.toHaveBeenCalled();
+    expect(playMock).toHaveBeenCalledTimes(1);
   });
 
   it('fires a regular channel message when the backend published it (e.g. channel set to "all messages")', () => {
@@ -339,9 +328,7 @@ describe('NotificationProvider', () => {
       dispatchSpy!(channelMessagePayload);
     });
     expect(notificationCtor).toHaveBeenCalledTimes(1);
-    // OS-delivered → the OS notification carries the sound; the in-page
-    // ping must not also play (it would bypass macOS Focus / Windows DnD).
-    expect(playMock).not.toHaveBeenCalled();
+    expect(playMock).toHaveBeenCalledTimes(1);
   });
 
   it('suppresses a channel message only while that channel is the active on-screen parent', () => {
@@ -363,9 +350,7 @@ describe('NotificationProvider', () => {
       dispatchSpy!({ ...channelMessagePayload, kind: 'mention' });
     });
     expect(notificationCtor).toHaveBeenCalledTimes(1);
-    // OS-delivered → the OS notification carries the sound; the in-page
-    // ping must not also play (it would bypass macOS Focus / Windows DnD).
-    expect(playMock).not.toHaveBeenCalled();
+    expect(playMock).toHaveBeenCalledTimes(1);
   });
 
   it('still fires for channel thread replies (you are already a participant)', () => {
@@ -376,9 +361,7 @@ describe('NotificationProvider', () => {
       dispatchSpy!({ ...channelMessagePayload, kind: 'thread_reply' });
     });
     expect(notificationCtor).toHaveBeenCalledTimes(1);
-    // OS-delivered → the OS notification carries the sound; the in-page
-    // ping must not also play (it would bypass macOS Focus / Windows DnD).
-    expect(playMock).not.toHaveBeenCalled();
+    expect(playMock).toHaveBeenCalledTimes(1);
   });
 
   it('navigates to the deep link via SPA history (no full page reload) when clicked', () => {
@@ -593,9 +576,7 @@ describe('NotificationProvider', () => {
       dispatchSpy!(samplePayload);
     });
     expect(notificationCtor).toHaveBeenCalledTimes(1);
-    // OS-delivered → the OS notification carries the sound; the in-page
-    // ping must not also play (it would bypass macOS Focus / Windows DnD).
-    expect(playMock).not.toHaveBeenCalled();
+    expect(playMock).toHaveBeenCalledTimes(1);
   });
 
   it('fires separately for distinct messages', () => {
@@ -605,7 +586,7 @@ describe('NotificationProvider', () => {
       dispatchSpy!({ ...samplePayload, messageID: 'm-2' });
     });
     expect(notificationCtor).toHaveBeenCalledTimes(2);
-    expect(playMock).not.toHaveBeenCalled();
+    expect(playMock).toHaveBeenCalledTimes(2);
   });
 
   it('does not dedup notifications that carry no messageID', () => {
@@ -690,9 +671,7 @@ describe('NotificationProvider', () => {
       dispatchSpy!(payload);
     });
     expect(notificationCtor).toHaveBeenCalledTimes(1);
-    // OS-delivered → the OS notification carries the sound; the in-page
-    // ping must not also play (it would bypass macOS Focus / Windows DnD).
-    expect(playMock).not.toHaveBeenCalled();
+    expect(playMock).toHaveBeenCalledTimes(1);
   });
 
   it('a copy that surfaces nothing (sound+browser off) is not deduped, so a retry still alerts', () => {
