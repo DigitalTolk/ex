@@ -32,6 +32,24 @@ vi.mock('@/lib/api', async (importOriginal) => ({
   apiFetch: (...args: unknown[]) => apiFetchMock(...args),
 }));
 
+// Pass-through wrap of condemnDraftForSend: keeps the real draft-protocol
+// behavior for every test while counting rollback invocations, so the
+// send-failure test can assert onError restored the condemned draft state.
+const draftRollbacks = vi.hoisted(() => ({ count: 0 }));
+vi.mock('@/hooks/useDrafts', async (importOriginal) => {
+  const orig = await importOriginal<typeof import('@/hooks/useDrafts')>();
+  return {
+    ...orig,
+    condemnDraftForSend: (scope: Parameters<typeof orig.condemnDraftForSend>[0]) => {
+      const rollback = orig.condemnDraftForSend(scope);
+      return () => {
+        draftRollbacks.count += 1;
+        rollback();
+      };
+    },
+  };
+});
+
 beforeEach(() => {
   apiFetchMock.mockReset();
 });
@@ -279,6 +297,19 @@ describe('useMessages — REST mutations', () => {
     // No client clock rides the send: the server-side draft-clear fold is
     // unconditional (sending is the authoritative event for the scope).
     expect(body.clientTs).toBeUndefined();
+  });
+
+  it('useSendMessage restores the condemned draft state when the send fails', async () => {
+    // The onMutate fold condemned the scope's draft; the send never happened
+    // server-side, so onError must run the rollback it returned.
+    apiFetchMock.mockRejectedValue(new Error('send failed'));
+    const before = draftRollbacks.count;
+    const { screen } = await renderMutation(
+      () => useSendMessage({ channelId: 'ch-1' }),
+      { body: 'doomed' },
+    );
+    (screen.getByTestId('trigger').element() as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(draftRollbacks.count).toBe(before + 1));
   });
 
   it('useSendMessage routes to /conversations/:id/messages when conversationId is set', async () => {

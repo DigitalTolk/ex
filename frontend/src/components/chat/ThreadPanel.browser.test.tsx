@@ -258,4 +258,44 @@ describe('ThreadPanel browser behaviour', () => {
     // The panel header still renders while the body is loading.
     await expect.element(screen.getByRole('heading', { name: 'Thread' })).toBeVisible();
   });
+
+  it('resolves reactor names for a reply reaction through the merged user lookup', async () => {
+    // A reply reacted to by ANOTHER user: rendering the reaction chip
+    // computes its reactors text via the panel's userLookup adapter
+    // (userMap.get → mergedUserMap[id]).
+    const reacted: Message = { ...reply(), reactions: { ':tada:': ['u-2'] } };
+    const screen = await renderPanel([rootMsg(), reacted], vi.fn(), {
+      'u-1': { displayName: 'Alice' },
+      'u-2': { displayName: 'Bob' },
+    });
+    await expect.element(screen.getByText('a reply')).toBeVisible();
+    await vi.waitFor(() => {
+      const badge = document.querySelector('[data-testid="reaction-badge"]');
+      expect(badge).not.toBeNull();
+      expect(badge!.textContent).toContain('1');
+    });
+  });
+
+  it('routes files dropped on the thread panel into the reply composer', async () => {
+    const screen = await renderPanel();
+    await expect.element(screen.getByText('a reply')).toBeVisible();
+    const target = document.getElementById('msg-01J0000000000000000000REP1') as HTMLElement;
+    const file = new File(['x'], 'thread-drop.png', { type: 'image/png' });
+    const drag = (type: string) => {
+      const event = new Event(type, { bubbles: true, cancelable: true }) as DragEvent;
+      Object.defineProperty(event, 'dataTransfer', {
+        value: { types: ['Files'], files: [file], items: [{ kind: 'file' }], dropEffect: '' },
+      });
+      return event;
+    };
+    target.dispatchEvent(drag('dragenter'));
+    await expect.element(screen.getByTestId('message-drop-overlay')).toBeVisible();
+    // The drop routes through the panel's onFiles → inputRef.uploadFiles →
+    // the optimistic draft chip mounts in the reply composer.
+    target.dispatchEvent(drag('drop'));
+    await expect.element(screen.getByLabelText('Draft attachments')).toBeVisible();
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain('thread-drop.png');
+    });
+  });
 });

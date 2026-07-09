@@ -151,6 +151,7 @@ export function ConversationView() {
   const saveDraftMutate = saveDraft.mutate;
   const handleDraftChange = useCallback(
     (value: MessageInputValue, options?: { notify?: boolean; keepalive?: boolean }) => {
+      /* istanbul ignore next -- the composer (this callback's only caller) is rendered only after the `if (!id)` early-return, so the guard can never fire; defensive. */
       if (!id) return;
       saveDraftMutate({
         parentID: id,
@@ -175,6 +176,7 @@ export function ConversationView() {
   );
   const handleEditMessage = useCallback(
     (value: { body: string; attachmentIDs: string[] }) => {
+      /* istanbul ignore next -- handleEditMessage is only wired as the composer's onSend while activeEditingMessage (hence editingMessage) is set, so it is never invoked with a null editingMessage. */
       if (!editingMessage) return;
       const currentAttachmentIDs = editingMessage.attachmentIDs ?? [];
       const same =

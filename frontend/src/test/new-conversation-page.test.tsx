@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { act, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import NewConversationPage from '@/pages/NewConversationPage';
@@ -10,13 +10,15 @@ const apiFetchMock = vi.fn();
 vi.mock('@/hooks/useConversations', () => ({
   useOpenDM: () => ({ openDM: vi.fn(), isPending: false }),
   useSearchUsers: (q: string) => ({
+    // Mirror the real hook: `data` is undefined (not []) while the query is
+    // disabled/unresolved — the page must coerce it.
     data:
       q.trim().length >= 2
         ? [
             { id: 'u-1', displayName: 'Alice', email: 'a@x.com' },
             { id: 'u-2', displayName: 'Bob', email: 'b@x.com' },
           ]
-        : [],
+        : undefined,
   }),
   useCreateConversation: () => ({
     mutateAsync: (input: { type: string; participantIDs: string[] }) => {
@@ -43,7 +45,9 @@ vi.mock('@/hooks/useIsMobile', () => ({ useIsMobile: () => mockIsMobile }));
 // real composer is exercised in MessageInput's own tests; here we only
 // care that this page wires onSend correctly. The body lives on the DOM
 // node so the test can drive it with fireEvent.change without needing
-// React state inside the mock.
+// React state inside the mock. The extra "Force send" button bypasses the
+// disabled gate so tests can exercise the page's own no-recipient guard
+// (its inline error), which the disabled composer normally shadows.
 vi.mock('@/components/chat/MessageInput', () => ({
   MessageInput: ({
     onSend,
@@ -73,6 +77,18 @@ vi.mock('@/components/chat/MessageInput', () => ({
         }}
       >
         Send
+      </button>
+      <button
+        type="button"
+        data-testid="force-send"
+        onClick={() => {
+          const ta = document.querySelector(
+            '[data-testid="msg-body"]',
+          ) as HTMLTextAreaElement | null;
+          onSend({ body: ta?.value ?? '', attachmentIDs: [] });
+        }}
+      >
+        Force send
       </button>
     </div>
   ),
@@ -272,6 +288,58 @@ describe('NewConversationPage', () => {
     fireEvent.click(screen.getByLabelText('Send'));
     await Promise.resolve();
     expect(mockCreate).not.toHaveBeenCalled();
+  });
+
+  it('shows an inline error when a send fires with no recipients picked', async () => {
+    // The composer normally disables itself, but the page owns the final
+    // guard: an onSend with zero recipients must produce the inline error,
+    // not a conversation.
+    renderPage();
+    fireEvent.click(screen.getByTestId('force-send'));
+    expect(await screen.findByTestId('new-conversation-error')).toHaveTextContent(
+      'Pick at least one recipient.',
+    );
+    expect(mockCreate).not.toHaveBeenCalled();
+    expect(apiFetchMock).not.toHaveBeenCalled();
+  });
+
+  it('adds a recipient exactly once when mousedown and click both fire from one gesture', () => {
+    // UserPickerRow picks on mousedown AND keeps click as the touch
+    // fallback, so one tap can invoke pick() twice in the same batch. The
+    // second call must dedup against the first inside the state updater —
+    // the render-scope `picked` is stale for it.
+    renderPage();
+    const input = screen.getByTestId('recipients-input');
+    fireEvent.change(input, { target: { value: 'al' } });
+    const option = screen.getByTestId('recipient-option-u-1').querySelector('button')!;
+    act(() => {
+      option.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+      option.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    expect(screen.getAllByTestId(/^recipient-pill-/)).toHaveLength(1);
+    expect(screen.getByTestId('recipient-pill-u-1')).toHaveTextContent('Alice');
+  });
+
+  it('ignores navigation keys while there are no suggestions', () => {
+    renderPage();
+    const input = screen.getByTestId('recipients-input');
+    // No query → no suggestions: ArrowDown/Enter must be inert (and not
+    // crash on an empty list).
+    fireEvent.keyDown(input, { key: 'ArrowDown' });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(screen.queryByTestId(/^recipient-pill-/)).toBeNull();
+    expect(screen.queryByTestId('recipients-suggestions')).toBeNull();
+  });
+
+  it('leaves the suggestion list untouched for non-navigation keys', () => {
+    renderPage();
+    const input = screen.getByTestId('recipients-input');
+    fireEvent.change(input, { target: { value: 'al' } });
+    // A key the handler doesn't own (e.g. Escape) falls through all the
+    // navigation branches: highlight and list stay as they were.
+    fireEvent.keyDown(input, { key: 'Escape' });
+    expect(screen.getByTestId('recipients-suggestions')).toBeInTheDocument();
+    expect(screen.getByTestId('recipient-option-u-1').getAttribute('aria-selected')).toBe('true');
   });
 
   it('shows an error when the API rejects on send', async () => {

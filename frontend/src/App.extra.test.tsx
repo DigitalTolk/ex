@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, waitFor } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import App from './App';
 
 const originalFetch = globalThis.fetch;
@@ -65,5 +65,31 @@ describe('App - authenticated route', () => {
     await waitFor(() => {
       expect(window.location.pathname).toBe('/channel/general');
     });
+  });
+
+  it('keeps "/" as the sidebar-first mobile home instead of redirecting', async () => {
+    // On the mobile tier the sidebar IS the home screen — auto-forwarding to
+    // ~general would yank the user into a channel on every app open. The
+    // test env already pins the device kind to 'touch' (setup.ts); narrow
+    // the viewport media query to enter the mobile tier.
+    const originalMatchMedia = window.matchMedia;
+    window.matchMedia = ((query: string) => ({
+      matches: query === '(max-width: 767px)',
+      media: query,
+      onchange: null,
+      addListener: () => undefined,
+      removeListener: () => undefined,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+      dispatchEvent: () => false,
+    })) as typeof window.matchMedia;
+    window.history.replaceState({}, '', '/');
+    try {
+      render(<App />);
+      expect(await screen.findByTestId('mobile-channel-home')).toBeInTheDocument();
+      expect(window.location.pathname).toBe('/');
+    } finally {
+      window.matchMedia = originalMatchMedia;
+    }
   });
 });

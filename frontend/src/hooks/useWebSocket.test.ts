@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act, renderHook } from '@testing-library/react';
 import { useWebSocket } from './useWebSocket';
+import { sendWS } from '@/lib/ws-sender';
 
 const refreshAccessTokenMock = vi.hoisted(() => vi.fn());
 
@@ -22,10 +23,15 @@ class MockWebSocket {
   onclose: WSHandler = null;
   onerror: WSHandler = null;
   closeCalled = false;
+  sent: string[] = [];
 
   constructor(url: string) {
     this.url = url;
     MockWebSocket.instances.push(this);
+  }
+
+  send(frame: string) {
+    this.sent.push(frame);
   }
 
   close() {
@@ -92,6 +98,19 @@ describe('useWebSocket', () => {
     } finally {
       Object.defineProperty(window, 'location', { configurable: true, value: original });
     }
+  });
+
+  it('installs the shared ws-sender on open so components can send frames', () => {
+    // onopen exposes the live socket's send via setWSSender — typing pings
+    // and notification acks route through this without prop-drilling. The
+    // installed sender must write to the socket that just opened.
+    renderHook(() => useWebSocket({ enabled: true }));
+
+    const ws = MockWebSocket.instances[0];
+    ws.simulateOpen();
+    sendWS({ type: 'typing', channelID: 'ch-1' });
+
+    expect(ws.sent).toEqual([JSON.stringify({ type: 'typing', channelID: 'ch-1' })]);
   });
 
   it('calls onMessageNew when receiving a message.new event', () => {

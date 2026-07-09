@@ -14,6 +14,20 @@ vi.mock('react-router-dom', async () => {
   return { ...actual, useNavigate: () => navigateMock };
 });
 
+// Base-ui menus need real pointer/focus plumbing jsdom doesn't provide —
+// swap for the same pass-through stubs the sidebar/row tests use so the
+// sort menu's items are directly clickable.
+vi.mock('@/components/ui/dropdown-menu', () => ({
+  DropdownMenu: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  DropdownMenuTrigger: ({ children, ...props }: { children: React.ReactNode; [k: string]: unknown }) => (
+    <button {...props}>{children}</button>
+  ),
+  DropdownMenuContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  DropdownMenuItem: ({ children, onClick }: { children: React.ReactNode; onClick?: () => void }) => (
+    <button onClick={onClick}>{children}</button>
+  ),
+}));
+
 import SearchResultsPage from '@/pages/SearchResultsPage';
 
 function wrap(initialEntries: string[] = ['/search?q=engineering']) {
@@ -334,6 +348,144 @@ describe('SearchResultsPage', () => {
     expect(screen.getByText('4')).toBeInTheDocument();
     fireEvent.click(screen.getByText('~engineering'));
     await waitFor(() => screen.getByText(/In: ~engineering/i));
+  });
+
+  it('returns to the All tab (clearing the type param) when All is clicked', async () => {
+    apiFetchMock.mockImplementation((url: string) => {
+      if (url.startsWith('/api/v1/search')) return Promise.resolve({ total: 0, hits: [] });
+      return Promise.resolve([]);
+    });
+    wrap(['/search?q=design&type=people']);
+    const peopleTab = screen.getByRole('tab', { name: /people/i });
+    await waitFor(() => expect(peopleTab).toHaveAttribute('aria-selected', 'true'));
+    fireEvent.click(screen.getByRole('tab', { name: /all/i }));
+    await waitFor(() =>
+      expect(screen.getByRole('tab', { name: /all/i })).toHaveAttribute('aria-selected', 'true'),
+    );
+    expect(peopleTab).toHaveAttribute('aria-selected', 'false');
+  });
+
+  it('changes the sort order from the sort menu and resets it via Most relevant', async () => {
+    apiFetchMock.mockImplementation((url: string) => {
+      if (url.startsWith('/api/v1/search')) return Promise.resolve({ total: 0, hits: [] });
+      return Promise.resolve([]);
+    });
+    wrap(['/search?q=hello&type=messages']);
+    await waitFor(() =>
+      expect(screen.getByTestId('results-sort')).toHaveTextContent('Sort: Most relevant'),
+    );
+
+    fireEvent.click(screen.getByText('Newest first'));
+    await waitFor(() =>
+      expect(screen.getByTestId('results-sort')).toHaveTextContent('Sort: Newest first'),
+    );
+    await waitFor(() => {
+      const calls = apiFetchMock.mock.calls.map((c) => String(c[0]));
+      expect(
+        calls.some((u) => u.startsWith('/api/v1/search/messages') && u.includes('sort=newest')),
+      ).toBe(true);
+    });
+
+    // "Most relevant" is the empty sort — it must DELETE the param (the
+    // trigger label reads the URL, so it flips back). No new fetch happens:
+    // the unsorted result is still in the React Query cache from mount.
+    fireEvent.click(screen.getByText('Most relevant'));
+    await waitFor(() =>
+      expect(screen.getByTestId('results-sort')).toHaveTextContent('Sort: Most relevant'),
+    );
+  });
+
+  it('resolves a conversation In-filter to its DM name and clears it from the chip', async () => {
+    apiFetchMock.mockImplementation((url: string) => {
+      if (url === '/api/v1/conversations') {
+        return Promise.resolve([{ conversationID: 'conv-1', type: 'dm', displayName: 'Bob' }]);
+      }
+      if (url.startsWith('/api/v1/search')) return Promise.resolve({ total: 0, hits: [] });
+      return Promise.resolve([]);
+    });
+    wrap(['/search?q=hello&in=conv-1']);
+    await screen.findByText('In: Bob');
+    fireEvent.click(screen.getByLabelText('Clear In: Bob'));
+    await waitFor(() => expect(screen.queryByText('In: Bob')).toBeNull());
+    // With the filter gone the bucket picker takes the chip's place.
+    expect(screen.getByTestId('bucket-picker-channels')).toBeInTheDocument();
+  });
+
+  it('clicking a message hit author filters the results by that person', async () => {
+    apiFetchMock.mockImplementation((url: string) => {
+      if (url.startsWith('/api/v1/search/messages')) {
+        return Promise.resolve({
+          total: 1,
+          hits: [
+            {
+              id: 'm-1',
+              score: 1,
+              _source: { body: 'hello world', parentId: 'c-1', authorId: 'u-1' },
+            },
+          ],
+        });
+      }
+      if (url.startsWith('/api/v1/search')) return Promise.resolve({ total: 0, hits: [] });
+      if (url.startsWith('/api/v1/users/batch')) {
+        return Promise.resolve([{ id: 'u-1', displayName: 'Alice' }]);
+      }
+      return Promise.resolve([]);
+    });
+    wrap(['/search?q=hello&type=messages']);
+    const authorButton = await screen.findByTitle('Filter results from this person');
+    fireEvent.click(authorButton);
+    await screen.findByText(/From: Alice/);
+  });
+
+  it('renders resilient fallbacks for hits with sparse sources', async () => {
+    apiFetchMock.mockImplementation((url: string) => {
+      if (url.startsWith('/api/v1/search/users')) {
+        return Promise.resolve({ total: 1, hits: [{ id: 'u-9', score: 1, _source: {} }] });
+      }
+      if (url.startsWith('/api/v1/search/channels')) {
+        return Promise.resolve({ total: 1, hits: [{ id: 'c-9', score: 1, _source: {} }] });
+      }
+      if (url.startsWith('/api/v1/search/files')) {
+        return Promise.resolve({ total: 1, hits: [{ id: 'a-9', score: 1, _source: {} }] });
+      }
+      if (url.startsWith('/api/v1/search')) return Promise.resolve({ total: 0, hits: [] });
+      return Promise.resolve([]);
+    });
+    wrap(['/search?q=zz']);
+    // File hit without a filename, parent, or date: unnamed and unlinked.
+    const unnamed = await screen.findByText('(unnamed)');
+    expect(unnamed.closest('a')).toBeNull();
+    // Channel hit without name/slug: the id stands in for both.
+    const channel = screen.getByText('~c-9');
+    expect(channel.closest('a')).toHaveAttribute('href', '/channel/c-9');
+    // User hit without displayName/email/role: the id is the visible name.
+    expect(screen.getByText('u-9')).toBeInTheDocument();
+  });
+
+  it('renders file hits un-highlighted on a filter-only search (empty query)', async () => {
+    apiFetchMock.mockImplementation((url: string) => {
+      if (url.startsWith('/api/v1/users/batch')) {
+        return Promise.resolve([{ id: 'u-99', displayName: 'Alice' }]);
+      }
+      if (url.startsWith('/api/v1/search/files')) {
+        return Promise.resolve({
+          total: 1,
+          hits: [
+            {
+              id: 'a-1',
+              score: 1,
+              _source: { filename: 'quarterly-report.pdf', sharedBy: 'u-99' },
+            },
+          ],
+        });
+      }
+      if (url.startsWith('/api/v1/search')) return Promise.resolve({ total: 0, hits: [] });
+      return Promise.resolve([]);
+    });
+    wrap(['/search?from=u-99&type=files']);
+    // With no query there is nothing to highlight — the filename renders as
+    // one intact text node instead of <mark> fragments.
+    expect(await screen.findByText('quarterly-report.pdf')).toBeInTheDocument();
   });
 
   it('clears the From filter when its chip X is clicked', async () => {

@@ -45,8 +45,12 @@ export default function NewConversationPage() {
   }, [suggestions.length]);
 
   function pick(u: PickedUser) {
-    if (picked.some((p) => p.id === u.id)) return;
-    setPicked((prev) => [...prev, u]);
+    // Dedup inside the updater, not against the render-scope `picked`: the
+    // option row fires onSelect on BOTH mousedown and click (touch fallback,
+    // see UserPickerRow), and when the two land in one batch the second call
+    // still sees the stale pre-pick `picked` — only the chained updater sees
+    // the first pick.
+    setPicked((prev) => (prev.some((p) => p.id === u.id) ? prev : [...prev, u]));
     setQuery('');
     inputRef.current?.focus();
   }
@@ -77,6 +81,12 @@ export default function NewConversationPage() {
     if (e.key === 'Enter') {
       e.preventDefault();
       const u = suggestions[activeIndex];
+      // Defensive: activeIndex is reset by an effect whenever the suggestion
+      // list length changes, and React flushes passive effects before the
+      // next discrete event, so `u` can only be undefined in a render→effect
+      // gap that user events cannot land in.
+      /* istanbul ignore else -- see v8 note */
+      /* v8 ignore next -- unreachable defensive guard, see comment above */
       if (u) pick({ id: u.id, displayName: u.displayName });
     }
   }
@@ -108,7 +118,9 @@ export default function NewConversationPage() {
         body: JSON.stringify({
           body: value.body,
           parentMessageID: '',
-          attachmentIDs: value.attachmentIDs ?? [],
+          // MessageInputValue guarantees attachmentIDs (this handler already
+          // dereferences it in the empty-message guard above).
+          attachmentIDs: value.attachmentIDs,
         }),
       });
       navigate(`/conversation/${conv.id}`, { replace: true });

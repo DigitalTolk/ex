@@ -17,9 +17,12 @@ const mockUserChannels: UserChannel[] = [
 
 const mockJoinMutate = vi.fn();
 
+// undefined = the user's channel list hasn't loaded yet.
+let mockUserChannelsData: UserChannel[] | undefined = mockUserChannels;
+
 vi.mock('@/hooks/useChannels', () => ({
   useBrowseChannels: () => ({ data: mockAllChannels, isLoading: false }),
-  useUserChannels: () => ({ data: mockUserChannels }),
+  useUserChannels: () => ({ data: mockUserChannelsData }),
   useJoinChannel: () => ({ mutate: mockJoinMutate, isPending: false }),
 }));
 
@@ -37,6 +40,7 @@ function renderBrowser(open = true, onOpenChange = vi.fn()) {
 describe('ChannelBrowser', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockUserChannelsData = mockUserChannels;
   });
 
   it('renders dialog title when open', () => {
@@ -68,6 +72,16 @@ describe('ChannelBrowser', () => {
   it('shows "Join" for not-yet-joined channels', () => {
     renderBrowser(true);
     expect(screen.getByText('Join')).toBeInTheDocument();
+  });
+
+  it('treats every channel as joinable while the user channel list has not loaded', () => {
+    // useUserChannels().data is undefined until the query resolves — the
+    // joined-set must fall back to empty instead of crashing, so every
+    // channel shows "Join" and none claims "Open".
+    mockUserChannelsData = undefined;
+    renderBrowser(true);
+    expect(screen.getAllByText('Join')).toHaveLength(2);
+    expect(screen.queryByText('Open')).toBeNull();
   });
 
   it('calls joinChannel.mutate when Join is clicked', async () => {

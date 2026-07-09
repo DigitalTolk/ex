@@ -15,6 +15,7 @@ import type { Message } from '@/types';
 const mutateEdit = vi.hoisted(() => vi.fn());
 const mutatePin = vi.hoisted(() => vi.fn());
 const mutateReact = vi.hoisted(() => vi.fn());
+const mutateDelete = vi.hoisted(() => vi.fn());
 const useAttachmentsBatchMock = vi.hoisted(() => vi.fn(() => ({ map: new Map(), isLoading: false })));
 // The action sheet's swipe-to-dismiss is Motion-driven (unit-tested in
 // useSwipeDismiss.test). Mock it so the sheet's data-swipe-dismissing arms
@@ -26,7 +27,7 @@ vi.mock('@/hooks/useSwipeDismiss', () => ({
 
 vi.mock('@/hooks/useMessages', () => ({
   useEditMessage: () => ({ mutate: mutateEdit, isPending: false }),
-  useDeleteMessage: () => ({ mutate: vi.fn(), isPending: false }),
+  useDeleteMessage: () => ({ mutate: mutateDelete, isPending: false }),
   useToggleReaction: () => ({ mutate: mutateReact, isPending: false }),
   useSetPinned: () => ({ mutate: mutatePin, isPending: false }),
   useSetNoUnfurl: () => ({ mutate: vi.fn(), isPending: false }),
@@ -73,6 +74,7 @@ beforeEach(() => {
   mutateEdit.mockClear();
   mutatePin.mockClear();
   mutateReact.mockClear();
+  mutateDelete.mockClear();
   swipe.dismissing = false;
   useAttachmentsBatchMock.mockReturnValue({ map: new Map(), isLoading: false });
 });
@@ -692,6 +694,156 @@ describe('MessageItem misc branches', () => {
     } finally {
       Object.defineProperty(navigator, 'clipboard', { value: original, configurable: true });
     }
+  });
+});
+
+describe('MessageItem action handlers (mobile sheet + desktop menu)', () => {
+  async function openMobileSheet() {
+    const row = document.querySelector('[data-message-id]') as HTMLElement;
+    row.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerType: 'touch' }));
+    return vi.waitFor(() => {
+      const s = document.querySelector('[data-testid="mobile-message-actions"]') as HTMLElement | null;
+      expect(s).not.toBeNull();
+      return s!;
+    }, { timeout: 2000 });
+  }
+
+  it('replies in thread from the mobile action sheet', async () => {
+    if (window.innerWidth > 767) return;
+    const onReplyInThread = vi.fn();
+    const screen = await renderWithProviders(
+      <MessageItem
+        message={makeMessage()}
+        authorName="Alice"
+        isOwn
+        channelId="channel-1"
+        currentUserId="user-1"
+        onReplyInThread={onReplyInThread}
+      />,
+    );
+    await openMobileSheet();
+    // handleMobileReply closes the sheet and forwards the message id.
+    await screen.getByRole('button', { name: 'Reply in thread' }).click();
+    expect(onReplyInThread).toHaveBeenCalledWith('msg-1');
+    await vi.waitFor(() => {
+      expect(document.querySelector('[data-testid="mobile-message-actions"]')).toBeNull();
+    });
+  });
+
+  it('pins the message from the mobile action sheet', async () => {
+    if (window.innerWidth > 767) return;
+    const screen = await renderWithProviders(
+      <MessageItem message={makeMessage()} authorName="Alice" isOwn channelId="channel-1" currentUserId="user-1" />,
+    );
+    await openMobileSheet();
+    // handleMobileTogglePin closes the sheet then delegates to handleTogglePin.
+    await screen.getByRole('button', { name: 'Pin message' }).click();
+    expect(mutatePin).toHaveBeenCalledWith(expect.objectContaining({ messageId: 'msg-1', pinned: true }));
+    await vi.waitFor(() => {
+      expect(document.querySelector('[data-testid="mobile-message-actions"]')).toBeNull();
+    });
+  });
+
+  it('opens the delete confirmation from the mobile sheet and deletes on confirm', async () => {
+    if (window.innerWidth > 767) return;
+    const screen = await renderWithProviders(
+      <MessageItem message={makeMessage()} authorName="Alice" isOwn channelId="channel-1" currentUserId="user-1" />,
+    );
+    await openMobileSheet();
+    // handleMobileDelete closes the sheet and opens the confirm dialog.
+    await screen.getByRole('button', { name: 'Delete' }).click();
+    await expect.element(screen.getByTestId('message-delete-confirm')).toBeVisible();
+    expect(document.querySelector('[data-testid="mobile-message-actions"]')).toBeNull();
+    expect(mutateDelete).not.toHaveBeenCalled();
+    // Confirming runs confirmDelete → deleteMessage.mutate.
+    await screen.getByTestId('message-delete-confirm-confirm').click();
+    expect(mutateDelete).toHaveBeenCalledWith(
+      expect.objectContaining({ messageId: 'msg-1', channelId: 'channel-1' }),
+    );
+  });
+
+  it('suppresses the native context menu on the mobile actions overlay', async () => {
+    if (window.innerWidth > 767) return;
+    await renderWithProviders(
+      <MessageItem message={makeMessage()} authorName="Alice" isOwn channelId="channel-1" currentUserId="user-1" />,
+    );
+    const sheet = await openMobileSheet();
+    // The overlay root (portaled to body) carries its own onContextMenu
+    // preventDefault so a long-press finishing over the backdrop doesn't
+    // pop the browser menu.
+    const overlay = sheet.parentElement as HTMLElement;
+    const ev = new MouseEvent('contextmenu', { bubbles: true, cancelable: true });
+    overlay.dispatchEvent(ev);
+    expect(ev.defaultPrevented).toBe(true);
+  });
+
+  it('reacts from the mobile sheet reaction picker and closes the sheet', async () => {
+    if (window.innerWidth > 767) return;
+    const screen = await renderWithProviders(
+      <MessageItem message={makeMessage()} authorName="Alice" isOwn channelId="channel-1" currentUserId="user-1" />,
+    );
+    await openMobileSheet();
+    // Open the in-sheet reaction picker (suppresses the sheet), then pick the
+    // first emoji tile → the picker's onSelect arm reacts and closes the sheet.
+    await screen.getByRole('button', { name: 'Add reaction' }).click();
+    const tile = await vi.waitFor(() => {
+      const t = document.querySelector('[data-testid="emoji-picker-tile"]') as HTMLElement | null;
+      expect(t).not.toBeNull();
+      return t!;
+    }, { timeout: 3000 });
+    tile.click();
+    await vi.waitFor(() => {
+      expect(mutateReact).toHaveBeenCalledWith(expect.objectContaining({ messageId: 'msg-1' }));
+      expect(document.querySelector('[data-testid="mobile-message-actions"]')).toBeNull();
+    });
+  });
+
+  it('opens the delete confirmation from the desktop kebab menu and deletes on confirm', async () => {
+    if (window.innerWidth <= 767) return;
+    const screen = await renderWithProviders(
+      <MessageItem message={makeMessage()} authorName="Alice" isOwn channelId="channel-1" currentUserId="user-1" />,
+    );
+    const row = document.querySelector('[data-message-id]') as HTMLElement;
+    await userEvent.hover(row);
+    await userEvent.click(row.querySelector('[data-testid="message-actions-trigger"]') as HTMLButtonElement);
+    await userEvent.click(await screen.getByRole('menuitem', { name: 'Delete' }));
+    await expect.element(screen.getByTestId('message-delete-confirm')).toBeVisible();
+    expect(mutateDelete).not.toHaveBeenCalled();
+    await screen.getByTestId('message-delete-confirm-confirm').click();
+    expect(mutateDelete).toHaveBeenCalledWith(
+      expect.objectContaining({ messageId: 'msg-1', channelId: 'channel-1' }),
+    );
+  });
+
+  it('short-circuits an unchanged inline edit that carries attachments (attachment-identity arm)', async () => {
+    if (window.innerWidth <= 767) return;
+    useAttachmentsBatchMock.mockReturnValue({
+      map: new Map([
+        ['att-1', { id: 'att-1', filename: 'keep.pdf', contentType: 'application/pdf', size: 5, url: 'https://cdn.test/keep.pdf' }],
+      ]),
+      isLoading: false,
+    });
+    const screen = await renderWithProviders(
+      <MessageItem
+        message={makeMessage({ body: 'unchanged with file', attachmentIDs: ['att-1'] })}
+        authorName="Alice"
+        isOwn
+        channelId="channel-1"
+        currentUserId="user-1"
+      />,
+    );
+    dispatchEditMessage({ messageId: 'msg-1' });
+    await expect.element(screen.getByTestId('inline-edit')).toBeVisible();
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain('keep.pdf');
+    });
+    // Same body + the identical attachment list → the per-id identity
+    // comparison confirms nothing changed → close without a mutate.
+    await screen.getByRole('button', { name: 'Save' }).click();
+    await vi.waitFor(() => {
+      expect(document.querySelector('[data-testid="inline-edit"]')).toBeNull();
+    });
+    expect(mutateEdit).not.toHaveBeenCalled();
   });
 });
 

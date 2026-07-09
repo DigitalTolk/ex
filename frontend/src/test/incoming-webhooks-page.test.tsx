@@ -91,6 +91,49 @@ describe('IncomingWebhooksPage', () => {
     });
   });
 
+  it('creates a webhook with a chosen channel, description, username and unlocked channel', async () => {
+    mockApiFetch.mockImplementation((path: string, init?: { method?: string; body?: string }) => {
+      if (path === '/api/v1/channels') {
+        return Promise.resolve([
+          { channelID: 'ch-1', channelName: 'general', channelType: 'public', role: 3 },
+          { channelID: 'ch-2', channelName: 'ops-alerts', channelType: 'private', role: 3 },
+        ]);
+      }
+      if (path === '/api/v1/admin/webhooks' && init?.method === 'POST') {
+        return Promise.resolve({ id: 'wh-2', url: 'https://chat.example/hooks/wh-2', ...JSON.parse(init.body ?? '{}') });
+      }
+      if (path === '/api/v1/admin/webhooks') {
+        return Promise.resolve([]);
+      }
+      return Promise.resolve({});
+    });
+    renderPage();
+
+    fireEvent.change(await screen.findByLabelText(/^Title$/i), { target: { value: 'Alerts hook' } });
+    fireEvent.change(screen.getByLabelText(/^Description$/i), { target: { value: 'On-call feed' } });
+    fireEvent.change(screen.getByLabelText(/^Username$/i), { target: { value: 'alertbot' } });
+    // Pick the non-default channel once the options have loaded.
+    await screen.findByRole('option', { name: 'ops-alerts' });
+    fireEvent.change(screen.getByLabelText(/^Channel$/i), { target: { value: 'ch-2' } });
+    fireEvent.click(screen.getByLabelText(/Lock to this channel/i));
+    fireEvent.click(screen.getByRole('button', { name: /Create webhook/i }));
+
+    await waitFor(() => {
+      const postCall = mockApiFetch.mock.calls.find(
+        (c) => c[0] === '/api/v1/admin/webhooks' && c[1]?.method === 'POST',
+      );
+      expect(postCall).toBeDefined();
+      const body = JSON.parse(postCall![1].body) as Record<string, unknown>;
+      expect(body).toMatchObject({
+        title: 'Alerts hook',
+        description: 'On-call feed',
+        username: 'alertbot',
+        channelID: 'ch-2',
+        lockToChannel: false,
+      });
+    });
+  });
+
   it('shows existing incoming webhooks and deletes them', async () => {
     mockApiFetch.mockImplementation((path: string, init?: { method?: string }) => {
       if (path === '/api/v1/channels') {

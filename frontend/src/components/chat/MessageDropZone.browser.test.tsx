@@ -185,6 +185,29 @@ describe('MessageDropZone browser', () => {
     return event;
   }
 
+  // A drag advertising only non-file types: hasFiles() scans the whole list,
+  // never matches 'Files', and falls through to its final `return false`.
+  function textOnlyDragEvent(type: string) {
+    const event = new Event(type, { bubbles: true, cancelable: true }) as DragEvent;
+    Object.defineProperty(event, 'dataTransfer', {
+      value: { types: ['text/plain', 'text/uri-list'], files: [], dropEffect: '' },
+    });
+    return event;
+  }
+
+  it('ignores a text-only drag (types present but no Files entry) — no overlay', async () => {
+    const onFiles = vi.fn();
+    await render(
+      <MessageDropZone onFiles={onFiles}>
+        <div data-testid="dropzone-child">drop here</div>
+      </MessageDropZone>,
+    );
+    const wrapper = (document.querySelector('[data-testid="dropzone-child"]') as HTMLElement).parentElement as HTMLElement;
+    wrapper.dispatchEvent(textOnlyDragEvent('dragenter'));
+    await new Promise((r) => setTimeout(r, 30));
+    expect(document.querySelector('[data-testid="message-drop-overlay"]')).toBeNull();
+  });
+
   it('matches Files even when another mime type is advertised first', async () => {
     const onFiles = vi.fn();
     await render(

@@ -103,6 +103,8 @@ describe('query-keys', () => {
     expect(queryKeys.channelMessages('ch-1', 'anchor-1')[2]).toBe('anchor-1');
     expect(queryKeys.channelMessagesAll('ch-1')).toEqual(['channelMessages', 'ch-1']);
     expect(queryKeys.conversationMessagesAll('cv-1')).toEqual(['conversationMessages', 'cv-1']);
+    expect(queryKeys.adminSearchStatus()).toEqual(['admin-search-status']);
+    expect(queryKeys.incomingWebhooks()).toEqual(['incoming-webhooks']);
   });
 
   it('parentPath prefers channelId when set', () => {
@@ -125,6 +127,9 @@ describe('utils.cn / isHttpUrl', () => {
     expect(isHttpUrl('not a url')).toBe(false);
     expect(isHttpUrl('')).toBe(false);
     expect(isHttpUrl('https://example.org with spaces')).toBe(false);
+    // Scheme-less: passes the whitespace gate but throws in `new URL` → the
+    // catch arm rejects it.
+    expect(isHttpUrl('example.org')).toBe(false);
   });
 });
 

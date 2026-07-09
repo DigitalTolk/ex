@@ -245,6 +245,43 @@ describe('ChatPage WS router — divergent-mock branch arms (browser)', () => {
     });
   });
 
+  it('onMessageNew swallows a failed read PUT for the ACTIVE channel (catch arm)', async () => {
+    isActiveChannelMock.mockReturnValue(true);
+    // Only the read-marker PUT rejects; everything else keeps resolving.
+    mockApiFetch.mockImplementation((url: unknown) =>
+      String(url).includes('/read') ? Promise.reject(new Error('read failed')) : Promise.resolve(undefined));
+    try {
+      await renderChatPage();
+      lastHandlers().onMessageNew?.(msg({ parentID: 'ch-99', parentType: 'channel', authorID: 'other-user' }));
+      await vi.waitFor(() => {
+        const call = mockApiFetch.mock.calls.find((c) => String(c[0]).includes('/channels/ch-99/read'));
+        expect(call).toBeDefined();
+      });
+      // The rejection is swallowed (.catch → undefined): no unread bump, no throw.
+      expect(mockBumpChannelUnread).not.toHaveBeenCalled();
+    } finally {
+      mockApiFetch.mockImplementation(() => Promise.resolve(undefined));
+    }
+  });
+
+  it('onMessageNew swallows a failed read PUT for the ACTIVE conversation (catch arm)', async () => {
+    mockApiFetch.mockImplementation((url: unknown) =>
+      String(url).includes('/read') ? Promise.reject(new Error('read failed')) : Promise.resolve(undefined));
+    try {
+      await renderChatPage();
+      lastHandlers().onMessageNew?.(msg({ parentID: 'conv-1', parentType: 'conversation' }));
+      expect(mockClearConversationUnreadInCache).toHaveBeenCalledWith(expect.anything(), 'conv-1');
+      await vi.waitFor(() => {
+        const call = mockApiFetch.mock.calls.find((c) => String(c[0]).includes('/conversations/conv-1/read'));
+        expect(call).toBeDefined();
+      });
+      // The rejection is swallowed; the cache clear above already happened.
+      expect(mockBumpConversationUnread).not.toHaveBeenCalled();
+    } finally {
+      mockApiFetch.mockImplementation(() => Promise.resolve(undefined));
+    }
+  });
+
   it('onMessageNew for a conversation THREAD reply does not mark or clear DM unread', async () => {
     // The new conversation gate mirrors channels: a thread-only reply is not
     // new DM activity, so neither markConversationUnread nor the active-read

@@ -12,6 +12,8 @@ import { NotificationCountTitleBridge } from './NotificationCountTitleBridge';
 // (availability dot) never inflates the title.
 const mockState = vi.hoisted(() => ({
   isAuthenticated: true,
+  // false = user-state query still loading: useUserState().data is undefined.
+  hasUserState: true,
   unreadThreadNotifications: new Set<string>(),
   threads: [] as ThreadSummary[],
   threadNotifications: [] as string[],
@@ -43,11 +45,13 @@ vi.mock('@/hooks/useUserState', () => ({
   shouldRefetchUserStateForRemoteUpdate: vi.fn(() => true),
   resetUserStateSessionState: vi.fn(),
   useUserState: () => ({
-    data: {
-      threadNotifications: mockState.threadNotifications,
-      threadSeen: { ...mockState.threadSeen, ...JSON.parse(localStorage.getItem('ex.threads.seen.v1') ?? '{}') },
-      hiddenConversations: [],
-    },
+    data: mockState.hasUserState
+      ? {
+          threadNotifications: mockState.threadNotifications,
+          threadSeen: { ...mockState.threadSeen, ...JSON.parse(localStorage.getItem('ex.threads.seen.v1') ?? '{}') },
+          hiddenConversations: [],
+        }
+      : undefined,
   }),
 }));
 
@@ -74,6 +78,7 @@ describe('NotificationCountTitleBridge', () => {
     });
     document.title = 'ex';
     mockState.isAuthenticated = true;
+    mockState.hasUserState = true;
     mockState.unreadThreadNotifications = new Set();
     mockState.threads = [];
     mockState.threadNotifications = [];
@@ -316,6 +321,31 @@ describe('NotificationCountTitleBridge', () => {
     );
 
     await waitFor(() => expect(document.title).toBe('Threads · ex'));
+  });
+
+  it('still counts local seen state and message alerts while user state is loading', async () => {
+    // useUserState().data is undefined until the server responds — the
+    // bridge must fall back to empty server maps and keep counting from the
+    // local seen map + list caches instead of crashing or zeroing out.
+    mockState.hasUserState = false;
+    mockState.channels = [{ channelID: 'ch-1', unreadCount: 2, unreadNotifyCount: 1 }];
+    mockState.threads = [
+      makeThread({ threadRootID: 'root-unread', latestActivityAt: '2026-05-04T08:00:00.000Z' }),
+    ];
+    localStorage.setItem(
+      'ex.threads.seen.v1',
+      JSON.stringify({ 'root-unread': '2026-05-04T07:59:00.000Z' }),
+    );
+
+    render(
+      <>
+        <NotificationCountTitleBridge />
+        <TitleConsumer />
+      </>,
+    );
+
+    // 1 channel alert + 1 unread thread (from the LOCAL seen map only).
+    await waitFor(() => expect(document.title).toBe('(2) Threads · ex'));
   });
 
   it('does not count unread notifications while signed out', async () => {

@@ -24,7 +24,6 @@ export default defineConfig({
         // shapes that V8 counts poorly in jsdom. Keep them explicit so the
         // 95% branch gate below is stable and the excluded surface is easy
         // to audit instead of hidden in a broad glob.
-        'src/App.tsx',
         'src/components/AboutDialog.tsx',
         'src/components/Banner.tsx',
         'src/components/EditProfileDialog.tsx',
@@ -32,7 +31,6 @@ export default defineConfig({
         'src/components/GiphyEmbed.tsx',
         'src/components/GiphyPicker.tsx',
         'src/components/InviteDialog.tsx',
-        'src/components/NotificationCountTitleBridge.tsx',
         // Notification dialogs + their shared control — real-DOM form flows
         // (segmented controls, switches, keyword chips), graded by the browser
         // suite's 99% gate alongside the other dialogs above.
@@ -40,9 +38,11 @@ export default defineConfig({
         'src/components/channels/NotificationPreferencesDialog.tsx',
         'src/components/notifications/NotificationOptionGroup.tsx',
         'src/components/admin/SearchAdminPanel.tsx',
-        'src/components/channels/ChannelBrowser.tsx',
         'src/components/chat/ChannelView.tsx',
         'src/components/chat/ConversationIntro.tsx',
+        // ConversationView is graded by the BROWSER gate via the
+        // conversation-route harness (conversation-view.browser.test.tsx),
+        // mirroring ChannelView's channel-files-pinned harness.
         'src/components/chat/ConversationView.tsx',
         'src/components/chat/ImageLightbox.tsx',
         'src/components/chat/MemberList.tsx',
@@ -55,7 +55,6 @@ export default defineConfig({
         // CodeMirror markdown composer — exercised by the browser suite
         // (real DOM / contenteditable), graded by its 99% branch gate there.
         'src/components/chat/markdown/**',
-        'src/components/search/BucketPicker.tsx',
         'src/components/search/MessageHitCard.tsx',
         'src/context/AuthContext.tsx',
         'src/context/NotificationContext.tsx',
@@ -66,7 +65,6 @@ export default defineConfig({
         'src/hooks/useAttachments.ts',
         'src/hooks/useAttachmentLightbox.tsx',
         'src/hooks/useChannels.ts',
-        'src/hooks/useInView.ts',
         'src/hooks/useMessageParent.ts',
         'src/hooks/useMessages.ts',
         'src/hooks/usePopoverPosition.ts',
@@ -79,28 +77,28 @@ export default defineConfig({
         'src/lib/emoji-shortcodes.ts',
         'src/lib/format.ts',
         'src/lib/fuzzy.ts',
-        'src/lib/highlight.tsx',
         'src/lib/markdown.tsx',
         'src/lib/notification-sound.ts',
         'src/lib/storage.ts',
         'src/lib/user-time.ts',
         'src/lib/window-events.ts',
-        'src/pages/AdminPage.tsx',
         'src/pages/ChatPage.tsx',
         'src/pages/CustomEmojiPage.tsx',
         'src/pages/LoginPage.tsx',
-        'src/pages/NewConversationPage.tsx',
         'src/pages/NotFoundPage.tsx',
-        'src/pages/SearchResultsPage.tsx',
-        'src/pages/ThreadsPage.tsx',
       ],
-      // Branch-coverage gate at 100% — every branch arm in the graded
-      // files must be exercised, matching the backend's 100% statement
-      // gate. CI fails any drop below it. vitest enforces this itself
-      // (non-zero exit), so both `make check` and the CI "Run vitest
-      // with coverage" step gate on it without extra scripting.
+      // Full 100% gate on every metric — statements, branches, functions
+      // AND lines — matching the backend's 100% statement gate. CI fails
+      // any drop below it. vitest enforces this itself (non-zero exit), so
+      // both `make check` and the CI "Run vitest with coverage" step gate
+      // on it without extra scripting. scripts/check-coverage-partition.mjs
+      // additionally guarantees every src file is graded by at least one
+      // suite, so a file can never silently fall out of both gates.
       thresholds: {
+        statements: 100,
         branches: 100,
+        functions: 100,
+        lines: 100,
       },
     },
   },

@@ -154,6 +154,29 @@ describe('FilesPanel browser behaviour', () => {
     expect(thumb!.src).toContain('cat-thumb.png');
   });
 
+  it('opens the image lightbox when an openable row is clicked', async () => {
+    setupRoutes({
+      files: [
+        { attachmentID: 'a-img', messageID: 'm-1', authorID: 'u-1', createdAt: '2026-05-01T12:00:00Z' },
+      ],
+      attachments: {
+        'a-img': {
+          id: 'a-img', filename: 'cat.png', contentType: 'image/png', size: 5000,
+          url: 'https://cdn/cat.png', squareThumbnailURL: 'https://cdn/cat-thumb.png',
+        },
+      },
+    });
+    await renderPanel();
+    const openBtn = await waitFor(() => {
+      const btn = document.querySelector('[data-testid="files-row-open"]') as HTMLButtonElement | null;
+      return btn && !btn.disabled ? btn : null;
+    });
+    expect(openBtn).not.toBeNull();
+    openBtn!.click();
+    await waitFor(() => document.querySelector('[data-testid="image-lightbox"]'));
+    expect(document.querySelector('[data-testid="image-lightbox"]')).not.toBeNull();
+  });
+
   it('falls back to the generic file icon when no thumbnail / non-image', async () => {
     setupRoutes({
       files: [

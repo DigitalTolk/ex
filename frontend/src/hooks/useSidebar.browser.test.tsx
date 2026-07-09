@@ -338,6 +338,29 @@ describe('useSidebar — DnD debug-instrumented category mutations', () => {
     expect(apiFetchMock.mock.calls[0][0]).toBe('/api/v1/sidebar/categories/c-1');
   });
 
+  it('treats a throwing localStorage as debug-disabled (blocked storage)', async () => {
+    // Privacy modes/embedded webviews can make localStorage.getItem throw —
+    // the debug probe's catch must report "disabled" and the mutation must
+    // proceed untouched.
+    const original = Storage.prototype.getItem;
+    const spy = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(function (this: Storage, key: string) {
+      if (key === 'ex.sidebarDndDebug') throw new Error('storage blocked');
+      return original.call(this, key);
+    });
+    try {
+      apiFetchMock.mockResolvedValue({ id: 'c-1', name: 'renamed', position: 1 });
+      const { screen } = await renderMutation(
+        useUpdateCategory as never,
+        { id: 'c-1', name: 'renamed' },
+        { key: queryKeys.sidebarCategories(), data: [{ id: 'c-1', name: 'old', position: 1 }] },
+      );
+      (screen.getByTestId('trigger').element() as HTMLButtonElement).click();
+      await vi.waitFor(() => expect(apiFetchMock.mock.calls[0]?.[0]).toBe('/api/v1/sidebar/categories/c-1'));
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it('useUpdateCategory with debug enabled optimistically patches position only and leaves other categories intact', async () => {
     try { localStorage.setItem('ex.sidebarDndDebug', '1'); } catch { /* noop */ }
     apiFetchMock.mockResolvedValue({ id: 'c-1', name: 'old', position: 2500 });

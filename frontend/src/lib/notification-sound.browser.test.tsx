@@ -26,7 +26,7 @@ interface Live {
 }
 
 let live: Live | null = null;
-let resumeMode: 'sync' | 'deferred' = 'sync';
+let resumeMode: 'sync' | 'deferred' | 'reject' = 'sync';
 
 class ControllableAudioContext {
   state = 'running';
@@ -45,6 +45,9 @@ class ControllableAudioContext {
   createGain() { return makeNode(); }
   resume() {
     this.resumeCalls++;
+    if (resumeMode === 'reject') {
+      return Promise.reject(new Error('autoplay policy refused the resume'));
+    }
     if (resumeMode === 'sync') {
       this.state = 'running';
       return Promise.resolve();
@@ -96,6 +99,24 @@ describe('notification-sound', () => {
     // scheduling the queued tone.
     live.settleResume?.();
     await vi.waitFor(() => expect(live?.state).toBe('running'));
+  });
+
+  it('swallows a rejected resume() and lets a later ping start a fresh one', async () => {
+    // Browsers reject resume() outside a user gesture (autoplay policy). The
+    // rejection handler must swallow it — losing the tone, never throwing —
+    // and the .finally must clear resumeInFlight so the next gesture retries.
+    resumeMode = 'reject';
+    if (!live) throw new Error('no live context');
+    live.state = 'suspended';
+    live.resumeCalls = 0;
+    mod.playNotificationPing();
+    expect(live.resumeCalls).toBe(1);
+    // Let the rejection settle through the handler + finally.
+    await new Promise((r) => setTimeout(r, 0));
+    // resumeInFlight was cleared → a later ping starts a fresh resume attempt.
+    mod.playNotificationPing();
+    expect(live.resumeCalls).toBe(2);
+    await new Promise((r) => setTimeout(r, 0));
   });
 
   it('recreates the context when the live one is closed', () => {

@@ -130,6 +130,21 @@ describe('CustomEmojiPage browser', () => {
     });
   });
 
+  it('the picker tile forwards its click to the hidden file input', async () => {
+    const screen = await mount(<Wrap><CustomEmojiPage /></Wrap>);
+    const inputs = document.querySelectorAll('input[type="file"]');
+    const input = inputs[inputs.length - 1] as HTMLInputElement;
+    const forwarded = vi.fn();
+    // The native file dialog can't open headless — intercept the input's
+    // click to prove the tile forwards to it.
+    input.addEventListener('click', (e) => {
+      forwarded();
+      e.preventDefault();
+    });
+    await screen.getByRole('button', { name: 'Choose image' }).click();
+    expect(forwarded).toHaveBeenCalledTimes(1);
+  });
+
   it('rejects an invalid shortcode with a validation error', async () => {
     mockEmojis = [];
     const screen = await mount(<Wrap><CustomEmojiPage /></Wrap>);

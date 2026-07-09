@@ -192,6 +192,53 @@ describe('ThreadCard', () => {
     expect(link).not.toHaveClass('text-link');
   });
 
+  it('marks the thread seen when the title link is clicked', async () => {
+    apiFetchMock.mockImplementation((url: string) => {
+      if (url.includes('/messages/msg-root/thread')) {
+        return Promise.resolve([makeMessage('msg-root', 'root')]);
+      }
+      return Promise.resolve([]);
+    });
+    renderCard(makeSummary());
+    const link = await screen.findByTestId('thread-card-title');
+
+    fireEvent.click(link);
+
+    // markThreadSeen persists the seen watermark server-side for the parent.
+    await waitFor(() => {
+      expect(apiFetchMock).toHaveBeenCalledWith(
+        '/api/v1/user-state/threads/channels/ch-1/msg-root/seen',
+        { method: 'PUT' },
+      );
+    });
+  });
+
+  it('routes files dropped on the card into the reply composer upload pipeline', async () => {
+    apiFetchMock.mockImplementation((url: string) => {
+      if (url.includes('/messages/msg-root/thread')) {
+        return Promise.resolve([makeMessage('msg-root', 'root')]);
+      }
+      return Promise.resolve([]);
+    });
+    renderCard(makeSummary());
+    await screen.findByTestId('thread-card-msg');
+
+    // The card wires MessageDropZone.onFiles to inputRef.current.uploadFiles.
+    // The MessageInput stub receives the card's ref as a prop (React 19
+    // refs-as-props); install an upload spy on it like the real composer's
+    // imperative handle would.
+    const uploadFiles = vi.fn();
+    const composerRef = lastMessageInputProps.current!.ref as { current: unknown };
+    composerRef.current = { uploadFiles };
+
+    const file = new File(['x'], 'diagram.png', { type: 'image/png' });
+    fireEvent.drop(screen.getByTestId('thread-card-msg'), {
+      dataTransfer: { types: ['Files'], files: [file] },
+    });
+
+    expect(uploadFiles).toHaveBeenCalledWith([file]);
+  });
+
   it('renders root + all replies when the thread is below the collapse threshold', async () => {
     // 1 root + 5 replies = 6 messages, well under the 10-cap.
     const messages = [

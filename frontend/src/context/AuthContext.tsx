@@ -87,9 +87,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  const login = useCallback(() => {
-    window.location.href = '/auth/oidc/login';
-  }, []);
+  const login = useCallback(
+    /* v8 ignore next 4 -- kept symmetric with the istanbul ignore below so both gates treat login identically; the jsdom suite still exercises it via its configurable window.location stub (AuthContext.test.tsx). */
+    /* istanbul ignore next -- top-level browsing-context redirect: window.location is [LegacyUnforgeable] in real browsers (no way to stub the href setter), and assigning it would navigate the vitest browser iframe away and kill the runner mid-test. Covered by the jsdom suite, where location IS configurable. */
+    () => {
+      window.location.href = '/auth/oidc/login';
+    },
+    [],
+  );
 
   // resetLocalSession drops all in-memory + cached session state (token, user,
   // every cached query, process-wide draft state) so a subsequent (different)

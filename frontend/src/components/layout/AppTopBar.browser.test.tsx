@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render } from 'vitest-browser-react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, useLocation } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AppTopBar } from './AppTopBar';
 
@@ -36,13 +36,24 @@ vi.mock('@/components/InviteDialog', () => ({ InviteDialog: ({ open }: { open: b
 vi.mock('@/lib/capacitor', () => ({ getCapacitorPlugin: () => null, isNativePlatform: () => false }));
 vi.mock('@/hooks/useIsMobile', () => ({ useIsMobile: () => false }));
 
+// Surfaces the router location so the navigate()-based menu actions
+// (Custom emojis / Incoming webhooks / Admin) can be asserted without
+// mounting the real destination routes.
+function LocationProbe() {
+  const location = useLocation();
+  return <div data-testid="location-probe">{location.pathname}</div>;
+}
+
 function renderTopBar(ui = <AppTopBar />) {
   // The account avatar's UserStatusIndicator resolves custom emoji through a
   // react-query hook, so the tree needs a provider.
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={qc}>
-      <MemoryRouter>{ui}</MemoryRouter>
+      <MemoryRouter>
+        {ui}
+        <LocationProbe />
+      </MemoryRouter>
     </QueryClientProvider>,
   );
 }
@@ -109,6 +120,63 @@ describe('AppTopBar (browser)', () => {
     expect(button).not.toBeNull();
     expect(button!.classList.contains('invisible')).toBe(true);
     expect(button!.getAttribute('aria-hidden')).toBe('true');
+  });
+
+  it('opens the Edit profile dialog from the account menu', async () => {
+    const screen = await renderTopBar();
+    await screen.getByTestId('topbar-account').click();
+    await screen.getByText('Edit profile').click();
+    await vi.waitFor(() => {
+      expect(document.querySelector('[data-testid="edit-profile-open"]')).not.toBeNull();
+    });
+  });
+
+  it('opens the Set status dialog from the account menu', async () => {
+    const screen = await renderTopBar();
+    await screen.getByTestId('topbar-account').click();
+    await screen.getByText('Set status').click();
+    await vi.waitFor(() => {
+      expect(document.querySelector('[data-testid="status-open"]')).not.toBeNull();
+    });
+  });
+
+  it('opens the Notification settings dialog from the account menu', async () => {
+    const screen = await renderTopBar();
+    await screen.getByTestId('topbar-account').click();
+    await screen.getByTestId('user-menu-notifications').click();
+    await vi.waitFor(() => {
+      expect(document.querySelector('[data-testid="notifications-open"]')).not.toBeNull();
+    });
+  });
+
+  it('opens the Invite dialog from the account menu (admin)', async () => {
+    const screen = await renderTopBar();
+    await screen.getByTestId('topbar-account').click();
+    await screen.getByTestId('user-menu-invite').click();
+    await vi.waitFor(() => {
+      expect(document.querySelector('[data-testid="invite-open"]')).not.toBeNull();
+    });
+  });
+
+  it('navigates to the custom-emoji manager from the account menu', async () => {
+    const screen = await renderTopBar();
+    await screen.getByTestId('topbar-account').click();
+    await screen.getByTestId('user-menu-emojis').click();
+    await expect.element(screen.getByTestId('location-probe')).toHaveTextContent('/emojis');
+  });
+
+  it('navigates to the incoming-webhooks admin page from the account menu', async () => {
+    const screen = await renderTopBar();
+    await screen.getByTestId('topbar-account').click();
+    await screen.getByTestId('user-menu-webhooks').click();
+    await expect.element(screen.getByTestId('location-probe')).toHaveTextContent('/webhooks');
+  });
+
+  it('navigates to the admin page from the account menu', async () => {
+    const screen = await renderTopBar();
+    await screen.getByTestId('topbar-account').click();
+    await screen.getByTestId('user-menu-admin').click();
+    await expect.element(screen.getByTestId('location-probe')).toHaveTextContent('/admin');
   });
 
   it('renders the account chip with an active user status', async () => {

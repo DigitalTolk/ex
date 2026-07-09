@@ -108,6 +108,26 @@ describe('sentry error reporting', () => {
     await vi.waitFor(() => expect(addIntegrationMock).toHaveBeenCalled());
   });
 
+  it('stays initialized when the lazy replay integration fails to load', async () => {
+    // The replay chunk is best-effort: if constructing it throws (e.g. the
+    // async chunk fails), the .catch swallows the failure — error reporting
+    // itself must stay active with no unhandled rejection.
+    setMeta(SENTRY_DSN_META, 'https://key@o0.ingest.sentry.io/42');
+    setMeta(SENTRY_REPLAY_ERROR_SAMPLE_RATE_META, '0.5');
+    replayMock.mockImplementationOnce(() => {
+      throw new Error('replay chunk failed');
+    });
+    expect(initErrorReporting()).toBe(true);
+    await vi.waitFor(() => expect(replayMock).toHaveBeenCalled());
+    // Give the rejected promise chain a macrotask to settle through the catch.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(addIntegrationMock).not.toHaveBeenCalled();
+    // Reporting is still active despite the failed replay load.
+    const err = new Error('boom');
+    reportError(err);
+    expect(captureMock).toHaveBeenCalledWith(err, undefined);
+  });
+
   it('clamps and sanitizes served rates (tampered document fails safe)', () => {
     setMeta(SENTRY_DSN_META, 'https://key@o0.ingest.sentry.io/42');
     setMeta(SENTRY_TRACES_SAMPLE_RATE_META, '7');

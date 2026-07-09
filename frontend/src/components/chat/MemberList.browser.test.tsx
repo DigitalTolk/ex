@@ -189,6 +189,35 @@ describe('MemberList browser behaviour', () => {
     await expect.element(screen.getByText('No users found')).toBeVisible();
   });
 
+  it('clears the search results when the user search request fails', async () => {
+    // Drop earlier tests' recorded calls so the wait below observes THIS
+    // test's debounced search, not a stale /users?q= entry.
+    vi.mocked(apiFetch).mockClear();
+    vi.mocked(apiFetch).mockImplementation(async (url: unknown) => {
+      if (typeof url === 'string' && url.includes('/users?q=')) {
+        throw new Error('search backend down');
+      }
+      return undefined;
+    });
+    const screen = await renderWithProviders(
+      <MemberList members={[makeMember()]} channelId="ch-1" currentUserId="u-me" currentUserRole={4} />,
+    );
+    await screen.getByLabelText('Add member').fill('ne');
+    // Wait out the 300ms debounce until the search actually fired…
+    await vi.waitFor(() => {
+      expect(
+        vi.mocked(apiFetch).mock.calls.some(
+          (c: unknown[]) => typeof c[0] === 'string' && (c[0] as string).includes('/users?q='),
+        ),
+      ).toBe(true);
+    });
+    // …and let its rejection settle through the catch arm, which resets the
+    // results to [] — the panel reads as "no matches" instead of crashing or
+    // keeping stale rows.
+    await new Promise((r) => setTimeout(r, 30));
+    await expect.element(screen.getByText('No users found')).toBeVisible();
+  });
+
   it('surfaces an error message when adding a member fails', async () => {
     vi.mocked(apiFetch).mockImplementation(async (url: unknown, init?: unknown) => {
       if (typeof url === 'string' && url.includes('/users?q=')) {

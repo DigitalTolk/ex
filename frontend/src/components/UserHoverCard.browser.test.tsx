@@ -122,6 +122,31 @@ describe('UserHoverCard browser', () => {
     expect(document.body.textContent).toMatch(/Tokyo/);
   });
 
+  it('dismisses the open card with Escape (PopoverPortal onDismiss closes it)', async () => {
+    apiFetchMock.mockResolvedValue({
+      id: 'u-1',
+      displayName: 'Alice',
+      email: 'alice@example.com',
+      status: 'active',
+      userStatus: undefined,
+    });
+    await render(
+      <Wrap>
+        <UserHoverCard userId="u-1" displayName="Alice">
+          <span data-testid="dismiss-trigger">Alice</span>
+        </UserHoverCard>
+      </Wrap>,
+    );
+    (document.querySelector('[data-testid="dismiss-trigger"]') as HTMLElement).click();
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain('alice@example.com');
+    });
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await vi.waitFor(() => {
+      expect(document.body.textContent).not.toContain('alice@example.com');
+    });
+  });
+
   it('shows an Inactive badge when the fetched user is deactivated', async () => {
     apiFetchMock.mockResolvedValue({
       id: 'u-1',

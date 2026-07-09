@@ -56,6 +56,33 @@ vi.mock('@/hooks/useAttachments', () => ({
   useAttachmentsBatch: () => ({ map: new Map(), isLoading: false }),
 }));
 
+// Same GIPHY doubles as GiphyPicker.browser.test: the fetch client resolves
+// empty pages and the Grid exposes a deterministic pick button, so the REAL
+// GiphyPicker → onSelect → insertGiphyGIF wiring runs without network.
+vi.mock('@giphy/js-fetch-api', () => ({
+  GiphyFetch: class GiphyFetch {
+    trending() {
+      return Promise.resolve({ data: [], pagination: { total_count: 0, count: 0, offset: 0 }, meta: { status: 200, msg: 'OK', response_id: '' } });
+    }
+
+    search() {
+      return Promise.resolve({ data: [], pagination: { total_count: 0, count: 0, offset: 0 }, meta: { status: 200, msg: 'OK', response_id: '' } });
+    }
+  },
+}));
+
+vi.mock('@giphy/react-components', () => ({
+  Grid: ({ onGifClick }: { onGifClick: (gif: unknown, event: Event) => void }) => (
+    <button
+      type="button"
+      data-testid="pick-gif"
+      onClick={() => onGifClick({ id: 'gif-77', title: 'Test GIF', images: { original: { width: '320', height: '180' } } }, new Event('click'))}
+    >
+      Pick GIF
+    </button>
+  ),
+}));
+
 async function renderWithProviders(ui: React.ReactElement) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const result = await render(<QueryClientProvider client={qc}>{ui}</QueryClientProvider>);
@@ -303,20 +330,111 @@ describe('MessageInput coverage flows (browser)', () => {
     await settle();
   });
 
-  it('inserts a GIPHY reference without dimensions when the GIF has no width/height', async () => {
+  it('inserts a GIPHY reference into the composer when a GIF is picked', async () => {
     settingsState.current = { maxUploadBytes: 0, allowedExtensions: [], giphyEnabled: true, giphyAPIKey: 'gk' };
-    const onDraftChange = vi.fn();
-    const screen = await renderWithProviders(
-      <MessageInput onSend={vi.fn()} focusKey="ch-gif" onDraftChange={onDraftChange} />,
-    );
+    const screen = await renderWithProviders(<MessageInput onSend={vi.fn()} />);
     if (window.innerWidth <= 767) {
       await screen.getByLabelText('Message input').click();
     }
-    // The GiphyPicker is mocked indirectly; instead drive insertGiphyGIF by
-    // simulating its onSelect via the imperative editor is not exposed, so we
-    // assert the GIF trigger renders (giphyEnabled path) — the no-dimension
-    // branch is covered by the picker's own onSelect wiring in integration.
     await expect.element(screen.getByLabelText('GIF')).toBeVisible();
+    // Open the (real) GiphyPicker — its mocked Grid exposes a pick button —
+    // and pick a GIF: insertGiphyGIF writes the stable content-ID reference
+    // (with layout dimensions) into the buffer and refocuses the editor.
+    await screen.getByLabelText('GIF').click();
+    await screen.getByTestId('pick-gif').click();
+    await vi.waitFor(() => {
+      const view = EditorView.findFromDOM(screen.getByLabelText('Message input').element() as HTMLElement)!;
+      expect(view.state.doc.toString()).toContain('![GIPHY](giphy:gif-77 =320x180)');
+    });
+    await settle();
+  });
+
+  it('flushes the draft with keepalive when the page is torn down (pagehide)', async () => {
+    const onDraftChange = vi.fn();
+    await renderWithProviders(
+      <MessageInput onSend={vi.fn()} initialBody="teardown draft" onDraftChange={onDraftChange} />,
+    );
+    await settle();
+    onDraftChange.mockClear();
+    // pagehide → flushDraft({ keepalive: true }): the save must ride a
+    // keepalive fetch because the page is dying.
+    window.dispatchEvent(new Event('pagehide'));
+    expect(onDraftChange).toHaveBeenCalledWith(
+      expect.objectContaining({ body: 'teardown draft' }),
+      { notify: true, keepalive: true },
+    );
+  });
+
+  it('applies italic, strikethrough, and code marks from the toolbar', async () => {
+    if (window.innerWidth <= 767) return;
+    const screen = await renderWithProviders(<MessageInput onSend={vi.fn()} initialBody="fmt me" />);
+    const editor = screen.getByLabelText('Message input');
+    await editor.click();
+    const view = EditorView.findFromDOM(editor.element() as HTMLElement)!;
+    // Select all, then wrap with each inline mark in turn. applyMark keeps the
+    // inner text selected, so each subsequent mark nests inside the previous.
+    view.dispatch({ selection: { anchor: 0, head: view.state.doc.length } });
+    await screen.getByLabelText('Italic (Ctrl+I)').click();
+    await vi.waitFor(() => expect(view.state.doc.toString()).toContain('*fmt me*'));
+    await screen.getByLabelText('Strikethrough').click();
+    await vi.waitFor(() => expect(view.state.doc.toString()).toContain('~~fmt me~~'));
+    await screen.getByLabelText('Code (Ctrl+E)').click();
+    await vi.waitFor(() => expect(view.state.doc.toString()).toContain('`fmt me`'));
+    await settle();
+  });
+
+  it('applies quote, bullet-list, and numbered-list blocks from the toolbar', async () => {
+    if (window.innerWidth <= 767) return; // block buttons are desktop-only
+    const screen = await renderWithProviders(<MessageInput onSend={vi.fn()} initialBody="block line" />);
+    const editor = screen.getByLabelText('Message input');
+    await editor.click();
+    const view = EditorView.findFromDOM(editor.element() as HTMLElement)!;
+    const resetDoc = (text: string) =>
+      view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: text }, selection: { anchor: 0 } });
+    await screen.getByLabelText('Quote').click();
+    await vi.waitFor(() => expect(view.state.doc.toString()).toContain('> '));
+    resetDoc('bullet line');
+    // 'List' is a prefix of 'Numbered list' — exact-match to satisfy strict mode.
+    await screen.getByRole('button', { name: 'List', exact: true }).click();
+    await vi.waitFor(() => expect(view.state.doc.toString()).toContain('- '));
+    resetDoc('numbered line');
+    await screen.getByLabelText('Numbered list').click();
+    await vi.waitFor(() => expect(view.state.doc.toString()).toContain('1. '));
+    await settle();
+  });
+
+  it('opens the hidden file input from the toolbar attach button', async () => {
+    const screen = await renderWithProviders(<MessageInput onSend={vi.fn()} />);
+    if (window.innerWidth <= 767) {
+      await screen.getByLabelText('Message input').click();
+    }
+    const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+    // preventDefault stops the native file chooser from actually opening in
+    // the test browser while still proving the button forwarded the click.
+    const clickSpy = vi.fn((e: Event) => e.preventDefault());
+    fileInput.addEventListener('click', clickSpy);
+    try {
+      await screen.getByLabelText('Attach file').click();
+      expect(clickSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      fileInput.removeEventListener('click', clickSpy);
+    }
+  });
+
+  it('inserts a link using custom text typed into the dialog Text field', async () => {
+    if (window.innerWidth <= 767) return; // the Link button is desktop-only
+    const screen = await renderWithProviders(<MessageInput onSend={vi.fn()} />);
+    await screen.getByLabelText('Link').click();
+    await expect.element(screen.getByLabelText('Insert link')).toBeVisible();
+    // Typing into the Text field drives the controlled setLinkText onChange.
+    await screen.getByLabelText('Text').fill('Docs');
+    await screen.getByLabelText('URL').fill('https://example.com/docs');
+    await screen.getByRole('button', { name: 'Insert' }).click();
+    await vi.waitFor(() => {
+      const view = EditorView.findFromDOM(screen.getByLabelText('Message input').element() as HTMLElement)!;
+      expect(view.state.doc.toString()).toContain('[Docs](https://example.com/docs)');
+    });
+    await settle();
   });
 
   it('uploads via the imperative handle and jumps progress to complete when the server already has the bytes', async () => {

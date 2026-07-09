@@ -76,6 +76,12 @@ vi.mock('./MessageInput', () => ({
         >
           send-no-att
         </button>
+        <button
+          data-testid="mi-send-same-att"
+          onClick={() => props.onSend({ body: props.initialBody ?? '', attachmentIDs: ['a-1'] })}
+        >
+          send-same-att
+        </button>
         <button data-testid="mi-cancel" onClick={() => props.onCancel?.()}>
           cancel
         </button>
@@ -380,6 +386,30 @@ describe('ThreadPanel coverage — mobile edit mode', () => {
     });
   });
 
+  it('closes edit mode without mutating when body and attachments are both unchanged', async () => {
+    isMobileValue = true;
+    editAttachmentsState = {
+      map: new Map([['a-1', { id: 'a-1', filename: 'pic.png', contentType: 'image/png', size: 10 }]]),
+      isLoading: false,
+    };
+    threadMessagesState = {
+      data: [rootMsg(), reply('R1', 'keep body', { attachmentIDs: ['a-1'] })],
+      isLoading: false,
+    };
+    const screen = await mount();
+    await screen.getByTestId('edit-R1').click();
+    await vi.waitFor(() => {
+      expect(lastInputProps?.submitLabel).toBe('Save');
+    });
+    // Same body + the identical attachment list → the per-id identity
+    // comparison (the .every arm) confirms `same` → close without a mutate.
+    await screen.getByTestId('mi-send-same-att').click();
+    expect(editMessageMutate).not.toHaveBeenCalled();
+    await vi.waitFor(() => {
+      expect(lastInputProps?.submitLabel).toBeUndefined();
+    });
+  });
+
   it('closes edit mode without mutating when the edited body is blank', async () => {
     isMobileValue = true;
     threadMessagesState = {
@@ -468,6 +498,12 @@ describe('ThreadPanel coverage — deep-link anchor', () => {
       const el = document.getElementById('msg-R-anchor');
       expect(el?.classList.contains('ring-1')).toBe(true);
     }, { timeout: 3000 });
+    // …and the ANCHOR_HIGHLIGHT_MS timer de-highlights it again while the
+    // panel stays mounted (the timeout arm, not the effect cleanup).
+    await vi.waitFor(() => {
+      const el = document.getElementById('msg-R-anchor');
+      expect(el?.classList.contains('ring-1')).toBe(false);
+    }, { timeout: 5000 });
   });
 
   it('scrolls to the anchor when no anchorRevision is supplied', async () => {

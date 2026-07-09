@@ -20,6 +20,10 @@ export default defineConfig({
       '@lezer/highlight',
       '@lezer/common',
       'react-dom/client',
+      // useServerVersion.browser.test drives a real SSR pass (getServerSnapshot
+      // is only consulted by server renders); pre-bundle so Vite doesn't
+      // discover it mid-run and reload deps under in-flight test files.
+      'react-dom/server',
       'react-virtuoso',
       'zod',
       // Pulled in via ErrorBoundary → @/lib/sentry; pre-bundle it or Vite
@@ -47,8 +51,49 @@ export default defineConfig({
       // wasn't emitted" behind a coverage=0 false negative.
       reporter: ['text', 'lcov', 'json-summary'],
       reportsDirectory: './coverage-browser',
+      // NOTE deliberately NO `include` here: vitest-4's include-universe
+      // statically instruments never-loaded files, which double-instruments
+      // modules also loaded through vi.mock(importOriginal) and corrupts the
+      // merged report (bloated totals, phantom uncovered halves — seen on
+      // lib/api.ts). The graded-universe guarantee comes from
+      // scripts/check-browser-universe.mjs instead, which runs right after
+      // the suite in `make check` and fails if any non-excluded src file is
+      // missing from the produced lcov. scripts/check-coverage-partition.mjs
+      // separately guarantees nothing is excluded from BOTH suites.
       exclude: [
         'src/main.tsx',
+        // Type-only modules — emit no runtime code to instrument.
+        'src/components/chat/markdown/types.ts',
+        'src/types/index.ts',
+        // Route/page shells + pure helpers graded by the jsdom gate (each
+        // has a dedicated jsdom suite; nothing in the browser run mounts
+        // them).
+        'src/App.tsx',
+        'src/components/NotificationCountTitleBridge.tsx',
+        'src/components/channels/ChannelBrowser.tsx',
+        'src/components/search/BucketPicker.tsx',
+        'src/hooks/useInView.ts',
+        'src/lib/highlight.tsx',
+        'src/pages/AdminPage.tsx',
+        'src/pages/NewConversationPage.tsx',
+        'src/pages/SearchResultsPage.tsx',
+        'src/pages/ThreadsPage.tsx',
+        // Also graded by the jsdom gate; no browser flow loads them (the
+        // browser-universe check keeps this list honest — a file listed here
+        // while jsdom-excluded fails the partition check instead).
+        'src/components/ErrorBoundary.tsx',
+        'src/components/NotificationPermissionBanner.tsx',
+        'src/components/admin/IncomingWebhooksPanel.tsx',
+        'src/components/threads/ThreadCard.tsx',
+        'src/hooks/useSearchAdmin.ts',
+        'src/hooks/useWebSocket.ts',
+        'src/lib/boot-splash.ts',
+        'src/lib/event-types.ts',
+        'src/lib/message-preview.ts',
+        'src/pages/DirectoriesPage.tsx',
+        'src/pages/DraftsPage.tsx',
+        'src/pages/IncomingWebhooksPage.tsx',
+        'src/pages/OIDCCallbackPage.tsx',
         'src/test/**',
         'src/**/__mocks__/**',
         'src/**/*.test.{ts,tsx}',
@@ -146,13 +191,17 @@ export default defineConfig({
         // in jsdom (useWebhooks.test.tsx, incoming-webhooks-page.test.tsx).
         'src/hooks/useWebhooks.ts',
       ],
-      // 100% branch gate over the merged desktop + mobile browser run.
+      // Full 100% gate (statements/branches/functions/lines) over the
+      // merged desktop + mobile browser run.
       // vitest enforces it (non-zero exit), so `npm run
       // test:browser:coverage` fails on its own in both `make check`
       // and the CI "Run browser tests" step. The Makefile's explicit
       // summary-json check is a redundant backstop at the same bar.
       thresholds: {
+        statements: 100,
         branches: 100,
+        functions: 100,
+        lines: 100,
       },
     },
     browser: {

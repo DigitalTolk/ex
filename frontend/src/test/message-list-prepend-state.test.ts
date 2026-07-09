@@ -139,6 +139,23 @@ describe('nextVirtuosoState (Virtuoso prepend bridge)', () => {
     expect(s.firstItemIndex).toBe(before);
   });
 
+  it('treats growth without any identifiable first message as an append (no shift)', () => {
+    // Degenerate row lists (dividers only, no message rows) can't anchor the
+    // prepend detection — firstMessageId finds nothing on either side, the
+    // ids compare equal (undefined === undefined), and the transition must
+    // fall through to the append branch without moving firstItemIndex.
+    const day = (key: string, date: string) => ({ kind: 'day' as const, key, date });
+    const prev: VirtuosoStateTransition = {
+      rows: [day('day-2026-04-24', '2026-04-24T10:30:00Z')],
+      firstItemIndex: START,
+    };
+    const next = nextVirtuosoState(prev, [
+      day('day-2026-04-24', '2026-04-24T10:30:00Z'),
+      day('day-2026-04-25', '2026-04-25T10:30:00Z'),
+    ]);
+    expect(next.firstItemIndex).toBe(START);
+  });
+
   it('returns the same prev reference when rows are identity-equal (skips needless setState)', () => {
     const rows = buildMessageListRows([msg({ id: 'm-1' })]);
     const prev: VirtuosoStateTransition = { rows, firstItemIndex: START };

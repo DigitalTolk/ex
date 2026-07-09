@@ -63,6 +63,11 @@ export default function ThreadsPage() {
   useEffect(() => {
     if (!hasMore) return;
     const node = loadMoreRef.current;
+    // Defensive: hasMore implies threads data arrived, which implies
+    // isLoading is false (React Query has no data while pending), so the
+    // sentinel div is always mounted — and refs attach before effects run.
+    /* istanbul ignore next -- see v8 note */
+    /* v8 ignore next -- unreachable defensive guard, see comment above */
     if (!node) return;
     const observer = new IntersectionObserver(
       (entries) => {

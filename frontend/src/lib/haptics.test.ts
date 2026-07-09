@@ -51,4 +51,19 @@ describe('triggerMessageActionHaptic', () => {
     setVibrate(undefined);
     expect(() => triggerMessageActionHaptic()).not.toThrow();
   });
+
+  it('swallows a native impact rejection — haptics are best-effort', async () => {
+    mockNative = true;
+    const impact = vi.fn().mockRejectedValue(new Error('no haptic engine'));
+    mockPlugin = { impact };
+    const vibrate = vi.fn();
+    setVibrate(vibrate);
+    triggerMessageActionHaptic();
+    expect(impact).toHaveBeenCalledWith({ style: 'MEDIUM' });
+    // Flush the rejection through the fire-and-forget .catch(() => {}) — the
+    // failure must neither surface as an unhandled rejection nor fall back to
+    // vibrate (the native path already returned).
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(vibrate).not.toHaveBeenCalled();
+  });
 });

@@ -265,4 +265,42 @@ describe('Header browser behavior', () => {
     await screen.getByRole('button', { name: 'Save' }).click();
     await vi.waitFor(() => expect(onDescriptionSave).toHaveBeenCalled());
   });
+
+  it('mobile description editor: typing updates the draft and Save persists the edited text', async () => {
+    if (window.innerWidth > 767) return;
+    const onDescriptionSave = vi.fn();
+    const screen = await render(
+      <div style={{ width: 390 }}>
+        <Header channel={channel} memberCount={3} canEdit onDescriptionSave={onDescriptionSave} />
+      </div>,
+    );
+    await screen.getByRole('button', { name: /general/ }).click();
+    const menu = document.querySelector('[data-testid="mobile-channel-menu"]') as HTMLElement;
+    (Array.from(menu.querySelectorAll('button')).find((b) => b.textContent?.includes('Edit description')) as HTMLButtonElement).click();
+    await expect.element(screen.getByTestId('mobile-description-editor')).toBeVisible();
+    await screen.getByRole('textbox', { name: 'Description' }).fill('rewritten on mobile');
+    await screen.getByRole('button', { name: 'Save' }).click();
+    await vi.waitFor(() => expect(onDescriptionSave).toHaveBeenCalledWith('rewritten on mobile'));
+  });
+
+  it('mobile description editor: Cancel dismisses the dialog without saving', async () => {
+    if (window.innerWidth > 767) return;
+    const onDescriptionSave = vi.fn();
+    const screen = await render(
+      <div style={{ width: 390 }}>
+        <Header channel={channel} memberCount={3} canEdit onDescriptionSave={onDescriptionSave} />
+      </div>,
+    );
+    await screen.getByRole('button', { name: /general/ }).click();
+    const menu = document.querySelector('[data-testid="mobile-channel-menu"]') as HTMLElement;
+    (Array.from(menu.querySelectorAll('button')).find((b) => b.textContent?.includes('Edit description')) as HTMLButtonElement).click();
+    await expect.element(screen.getByTestId('mobile-description-editor')).toBeVisible();
+    // The header Cancel dismisses via the dialog's onOpenChange(false) →
+    // cancelDescriptionEdit; nothing is saved.
+    await screen.getByRole('button', { name: 'Cancel' }).click();
+    await vi.waitFor(() => {
+      expect(document.querySelector('[data-testid="mobile-description-editor"]')).toBeNull();
+    });
+    expect(onDescriptionSave).not.toHaveBeenCalled();
+  });
 });

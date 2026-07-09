@@ -67,6 +67,8 @@ check:
 	cd frontend && npx tsc -b --noEmit
 	@echo "=== Frontend lint ==="
 	cd frontend && npx eslint src/
+	@echo "=== Frontend coverage partition ==="
+	cd frontend && node scripts/check-coverage-partition.mjs
 	@echo "=== Frontend test ==="
 	@tmp=$$(mktemp); \
 		cd frontend && npx vitest run --coverage > "$$tmp" 2>&1; \
@@ -85,15 +87,10 @@ check:
 		rm -f "$$tmp"
 	@echo "=== Frontend browser test ==="
 	cd frontend && npm run test:browser:coverage
+	@cd frontend && node scripts/check-browser-universe.mjs
 	@summary=frontend/coverage-browser/coverage-summary.json; \
 		if [ ! -f "$$summary" ]; then \
 			echo "$$summary not produced by vitest — coverage gate cannot run" >&2; \
 			exit 1; \
 		fi; \
-		coverage=$$(node -e "const s=require('./$$summary'); process.stdout.write(String(s.total.branches.pct))"); \
-		if [ -z "$$coverage" ]; then \
-			echo "$$summary did not contain total.branches.pct" >&2; \
-			exit 1; \
-		fi; \
-		echo "browser branch coverage: $$coverage%"; \
-		awk -v coverage="$$coverage" 'BEGIN { if (coverage + 0 < 100) { printf "browser branch coverage %.2f%% is below 100%%\n", coverage; exit 1 } }'
+		node -e "const s=require('./$$summary').total; const bad=['statements','branches','functions','lines'].filter(m=>s[m].pct<100); for (const m of ['statements','branches','functions','lines']) console.log('browser '+m+' coverage: '+s[m].pct+'%'); if (bad.length) { console.error('browser coverage below 100% for: '+bad.join(', ')); process.exit(1); }" 

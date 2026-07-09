@@ -205,6 +205,24 @@ describe('EditProfileDialog browser', () => {
     await expect.element(screen.getByRole('button', { name: 'Save' })).toBeVisible();
   });
 
+  it('opens the file chooser when the camera (Change avatar) button is clicked', async () => {
+    const screen = await render(<Wrap><EditProfileDialog open onOpenChange={vi.fn()} /></Wrap>);
+    const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+    // Stub the native click so no real OS file chooser opens; the camera
+    // button's handler forwards to the hidden input via fileInputRef.
+    const clickSpy = vi.spyOn(fileInput, 'click').mockImplementation(() => {});
+    await screen.getByRole('button', { name: 'Change avatar' }).click();
+    expect(clickSpy).toHaveBeenCalledTimes(1);
+    clickSpy.mockRestore();
+  });
+
+  it('selects the System theme via the theme picker', async () => {
+    themeRef.value = 'light';
+    const screen = await render(<Wrap><EditProfileDialog open onOpenChange={vi.fn()} /></Wrap>);
+    await screen.getByRole('button', { name: 'System theme' }).click();
+    expect(setThemeMock).toHaveBeenCalledWith('system');
+  });
+
   it('marks the Dark theme button active when the current theme is dark', async () => {
     themeRef.value = 'dark';
     const screen = await render(<Wrap><EditProfileDialog open onOpenChange={vi.fn()} /></Wrap>);

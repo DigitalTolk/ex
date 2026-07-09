@@ -94,6 +94,18 @@ describe('PinnedPanel browser behaviour', () => {
     await expect.element(screen.getByText('remember to do the thing')).toBeVisible();
   });
 
+  it('resolves reactor names through the userMap.get accessor on a pinned message with reactions', async () => {
+    // The panel adapts its Record userMap into the `{ get }` accessor
+    // MessageItem expects; a reaction from a mapped user must surface the
+    // display name (not "Unknown") in the chip's reactor line.
+    await renderPanel([{ ...pinned(), reactions: { ':+1:': ['u-1'] } }]);
+    await vi.waitFor(() => {
+      expect(document.querySelector('[data-testid="reaction-badge"]')).not.toBeNull();
+    });
+    // formatReactors ran during render and looked u-1 up via the accessor.
+    expect(document.body.textContent).not.toContain('Unknown');
+  });
+
   it('renders an empty list cleanly when no messages are pinned', async () => {
     const screen = await renderPanel([]);
     await expect.element(screen.getByText('Pinned messages')).toBeVisible();

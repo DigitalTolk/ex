@@ -1,5 +1,6 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { render } from 'vitest-browser-react';
+import { renderToString } from 'react-dom/server';
 import { useServerVersion, resetServerVersionForTests } from './useServerVersion';
 
 // Browser coverage for the /api/v1/version poller. The poller is a module
@@ -124,6 +125,23 @@ describe('useServerVersion poller', () => {
     await new Promise((r) => requestAnimationFrame(() => r(null)));
     expect(fetchMock.mock.calls.length).toBe(afterEvents);
     if (original) Object.defineProperty(document, 'visibilityState', original);
+  });
+
+  it('a server render reads the null server snapshot (SSR shell never has a server version)', async () => {
+    // useSyncExternalStore's third argument (getServerSnapshot, `() => null`)
+    // is only consulted by server renders — drive a real one with
+    // renderToString. Effects don't run there, so the poller never starts and
+    // the emitted markup must carry the null (empty) version.
+    globalThis.fetch = vi.fn(() => new Promise<Response>(() => {})) as unknown as typeof fetch;
+    function SSRProbe() {
+      const { serverVersion, outdated } = useServerVersion();
+      return <div data-testid="sv-ssr" data-version={serverVersion ?? ''} data-outdated={String(outdated)} />;
+    }
+    const html = renderToString(<SSRProbe />);
+    expect(html).toContain('data-version=""');
+    expect(html).toContain('data-outdated="false"');
+    // No consumer effect ran → the poller never polled.
+    expect(globalThis.fetch).not.toHaveBeenCalled();
   });
 
   it('the poller starts only once even when a second consumer mounts (pollerStarted early-out)', async () => {

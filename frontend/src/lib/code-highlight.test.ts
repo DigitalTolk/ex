@@ -50,6 +50,12 @@ describe('highlightToHast', () => {
     expect(highlightToHast('whatever', 'no-such-language')).toBeNull();
   });
 
+  it('returns null when the highlighter itself throws (defensive catch)', () => {
+    // lowlight rejects a non-string value outright; the catch converts that
+    // into the plain-block fallback instead of crashing message rendering.
+    expect(highlightToHast(123 as unknown as string, 'php')).toBeNull();
+  });
+
   it('returns a hast tree for a registered language', () => {
     const tree = highlightToHast('<?php echo "hi"; ?>', 'php');
     expect(tree).not.toBeNull();

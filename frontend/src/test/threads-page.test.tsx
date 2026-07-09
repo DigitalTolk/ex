@@ -3,7 +3,7 @@ import { act, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import ThreadsPage from '@/pages/ThreadsPage';
-import { sortThreadsByUnreadThenActivity, unreadThreadIDs, type ThreadSummary } from '@/hooks/useThreads';
+import { markThreadSeen, resetSeenCache, sortThreadsByUnreadThenActivity, unreadThreadIDs, type ThreadSummary } from '@/hooks/useThreads';
 
 const apiFetchMock = vi.fn();
 const unreadThreadNotifications = new Set<string>();
@@ -32,18 +32,20 @@ vi.mock('@/context/UnreadContext', () => ({
   useUnread: () => ({ unreadThreadNotifications }),
 }));
 
+const defaultUserState = {
+  channelNotifications: [],
+  threadNotifications: ['msg-root-1'],
+  threadSeen: {},
+  hiddenConversations: [],
+};
+// undefined = the user-state query hasn't resolved yet.
+let mockUserStateData: typeof defaultUserState | undefined = defaultUserState;
+
 vi.mock('@/hooks/useUserState', () => ({
   markLocalUserStateWrite: vi.fn(),
   shouldRefetchUserStateForRemoteUpdate: vi.fn(() => true),
   resetUserStateSessionState: vi.fn(),
-  useUserState: () => ({
-    data: {
-      channelNotifications: [],
-      threadNotifications: ['msg-root-1'],
-      threadSeen: {},
-      hiddenConversations: [],
-    },
-  }),
+  useUserState: () => ({ data: mockUserStateData }),
 }));
 
 // Stub ThreadCard so this test focuses on the page-level orchestration:
@@ -116,6 +118,8 @@ describe('ThreadsPage', () => {
     apiFetchMock.mockReset();
     unreadThreadNotifications.clear();
     localStorage.clear();
+    resetSeenCache();
+    mockUserStateData = defaultUserState;
   });
 
   it('renders one ThreadCard per summary with the channel/conversation label as title', async () => {
@@ -194,12 +198,57 @@ describe('ThreadsPage', () => {
       // First page only — not all 30 cards mount up front.
       await waitFor(() => expect(screen.getAllByTestId('thread-card')).toHaveLength(12));
       expect(screen.getByTestId('threads-load-more')).toBeInTheDocument();
+      // A non-intersecting report (sentinel still below the viewport) must
+      // NOT grow the window.
+      act(() => callbacks[callbacks.length - 1]([{ isIntersecting: false }]));
+      expect(screen.getAllByTestId('thread-card')).toHaveLength(12);
       // Sentinel enters the viewport → the next page mounts.
       act(() => callbacks[callbacks.length - 1]([{ isIntersecting: true }]));
       await waitFor(() => expect(screen.getAllByTestId('thread-card')).toHaveLength(24));
     } finally {
       globalThis.IntersectionObserver = prev;
     }
+  });
+
+  it('falls back to generic titles when a thread parent is no longer in the sidebar', async () => {
+    apiFetchMock.mockResolvedValueOnce([
+      { ...sample[0], parentID: 'ch-gone', threadRootID: 'msg-root-3' },
+      { ...sample[1], parentID: 'conv-gone', threadRootID: 'msg-root-4' },
+    ]);
+    renderPage();
+    const titles = (await screen.findAllByTestId('thread-card-title')).map((el) => el.textContent);
+    expect(titles).toContain('~channel');
+    expect(titles).toContain('Conversation');
+  });
+
+  it('renders with no unread threads while the user-state query is still loading', async () => {
+    // useUserState().data is undefined until the server responds — the page
+    // must fall back to empty persisted notification/seen maps rather than
+    // crash or mark anything unread.
+    mockUserStateData = undefined;
+    apiFetchMock.mockResolvedValueOnce(sample);
+    renderPage();
+    const cards = await screen.findAllByTestId('thread-card');
+    expect(cards).toHaveLength(2);
+    for (const card of cards) {
+      expect(card).toHaveAttribute('data-unread', 'false');
+    }
+  });
+
+  it('clears a thread unread state live when the thread is marked seen', async () => {
+    apiFetchMock.mockResolvedValueOnce(sample);
+    renderPage();
+    const cards = await screen.findAllByTestId('thread-card');
+    // Persisted notification for msg-root-1 marks it unread…
+    expect(cards[0]).toHaveAttribute('data-unread', 'true');
+    // …until the seen event fires (e.g. the thread panel was opened in
+    // another surface) — the page listens and re-reads the seen map.
+    act(() => {
+      markThreadSeen('msg-root-1', '2026-04-26T12:00:00Z');
+    });
+    await waitFor(() => {
+      expect(screen.getAllByTestId('thread-card')[0]).toHaveAttribute('data-unread', 'false');
+    });
   });
 
   it('shows an empty state when no threads exist', async () => {

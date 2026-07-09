@@ -1,7 +1,8 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { render } from 'vitest-browser-react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { useUploadEmoji, useDeleteEmoji } from './useEmoji';
+import { useUploadEmoji, useDeleteEmoji, useFrequentEmojis } from './useEmoji';
+import { EMOJI_FREQUENCY_CHANGED_EVENT } from '@/lib/emoji-frequency';
 
 // Browser-gate coverage for the emoji mutation hooks (upload + delete). The
 // query hooks are covered in api-hooks.browser.test.tsx; the mutations — which
@@ -62,6 +63,34 @@ describe('useUploadEmoji', () => {
     (screen.getByTestId('trigger').element() as HTMLButtonElement).click();
     await vi.waitFor(() => {
       expect(screen.getByTestId('trigger').element().getAttribute('data-status')).toBe('error');
+    });
+  });
+});
+
+describe('useFrequentEmojis', () => {
+  function FrequentProbe() {
+    const list = useFrequentEmojis();
+    return <div data-testid="freq">{list.join(',')}</div>;
+  }
+
+  it('re-fetches the shelf the moment the emoji-frequency changed event fires', async () => {
+    apiFetchMock
+      .mockResolvedValueOnce([':tada:', ':+1:'])
+      .mockResolvedValueOnce([':fire:']);
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const screen = await render(
+      <QueryClientProvider client={qc}>
+        <FrequentProbe />
+      </QueryClientProvider>,
+    );
+    await vi.waitFor(() => {
+      expect(screen.getByTestId('freq').element().textContent).toBe(':tada:,:+1:');
+    });
+    // A pick anywhere in the app dispatches this window event — the hook must
+    // invalidate and reorder live instead of waiting out staleTime.
+    window.dispatchEvent(new Event(EMOJI_FREQUENCY_CHANGED_EVENT));
+    await vi.waitFor(() => {
+      expect(screen.getByTestId('freq').element().textContent).toBe(':fire:');
     });
   });
 });

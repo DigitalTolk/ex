@@ -16,16 +16,19 @@ vi.mock('@giphy/js-fetch-api', () => ({
 type GridProps = {
   columns?: number;
   fetchGifs?: (offset: number) => Promise<unknown>;
+  loader?: () => React.ReactNode;
   onGifClick: (gif: { id: string; title?: string; images: { original: { width: string; height: string } } }, event: Event) => void;
 };
 vi.mock('@giphy/react-components', () => ({
   // The real Grid drives the infinite scroller by calling fetchGifs; the mock
   // calls it once on mount so the search/trending fetch branches run, and
-  // exposes the resolved column count for assertions.
-  Grid: ({ onGifClick, fetchGifs, columns }: GridProps) => {
+  // exposes the resolved column count for assertions. It also renders the
+  // `loader` render-prop the way the real Grid does while a page is fetching.
+  Grid: ({ onGifClick, fetchGifs, columns, loader }: GridProps) => {
     void fetchGifs?.(0);
     return (
       <div style={{ height: 900 }} data-testid="mock-giphy-results" data-columns={columns}>
+        {loader?.()}
         <button
           type="button"
           onClick={() => onGifClick({ id: 'gif-1', title: 'Test GIF', images: { original: { width: '320', height: '180' } } }, new Event('click'))}
@@ -113,6 +116,14 @@ describe('GiphyPicker browser behavior', () => {
     await new Promise((r) => setTimeout(r, 400));
     expect((input.element() as HTMLInputElement).value).toBe('cats');
     void searchSpy;
+  });
+
+  it('shows the loading line through the Grid loader render-prop while a page fetches', async () => {
+    const screen = await render(
+      <GiphyPicker apiKey="real-key" onSelect={vi.fn()} trigger={<button type="button">Open GIFs</button>} />,
+    );
+    await screen.getByText('Open GIFs').click();
+    await expect.element(screen.getByText('Loading…')).toBeInTheDocument();
   });
 
   it('uses a single grid column when the available width is narrow', async () => {

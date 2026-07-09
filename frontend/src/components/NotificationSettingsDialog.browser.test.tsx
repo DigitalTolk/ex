@@ -106,6 +106,25 @@ describe('NotificationSettingsDialog browser', () => {
     expect(onOpenChange).toHaveBeenCalledWith(false);
   });
 
+  it('changes the mobile notification level independently of desktop', async () => {
+    const screen = await render(<NotificationSettingsDialog open onOpenChange={vi.fn()} />);
+    await expect.element(screen.getByText('Notification settings')).toBeVisible();
+
+    // The mobile group offers "Same as desktop" plus the desktop levels; pick
+    // "Same as desktop" is the saved value, so switch mobile to its own
+    // "All messages" (the second radio with that label — first is desktop's).
+    await screen.getByRole('radio', { name: 'All messages' }).nth(1).click();
+    await screen.getByRole('button', { name: 'Save' }).click();
+    await vi.waitFor(() => {
+      const call = vi.mocked(apiFetch).mock.calls.find((c: unknown[]) => c[0] === '/api/v1/users/me/notification-settings');
+      expect(call).toBeDefined();
+      const body = JSON.parse((call![1] as { body: string }).body);
+      expect(body.mobileLevel).toBe('all');
+      // Desktop stays on its saved level — the two groups are independent.
+      expect(body.desktopLevel).toBe('mentions');
+    });
+  });
+
   it('adds a keyword via the Add button and removes one via its chip', async () => {
     const screen = await render(<NotificationSettingsDialog open onOpenChange={vi.fn()} />);
     await screen.getByLabelText('Keywords').fill('release');

@@ -184,4 +184,59 @@ describe('AuthContext', () => {
     await new Promise((r) => setTimeout(r, 100));
     expect(clearAccessTokenMock).toHaveBeenCalled();
   });
+
+  it('a failed mobile-push identify never blocks the boot restore', async () => {
+    // The identity handoff is fire-and-forget: its rejection is swallowed by
+    // the .catch(() => undefined) arm and the session still restores.
+    refreshAccessTokenMock.mockResolvedValue('t-1');
+    apiFetchMock.mockResolvedValue({
+      id: 'u-1', email: 'a@x.io', displayName: 'Alice', systemRole: 'member', status: 'active',
+    });
+    identifyMock.mockRejectedValue(new Error('no native bridge'));
+    const screen = await render(
+      <AuthProvider><Probe /></AuthProvider>,
+    );
+    await vi.waitFor(() => {
+      expect(screen.getByTestId('state').element().textContent).toBe('Alice');
+      expect(screen.getByTestId('state').element().getAttribute('data-loading')).toBe('false');
+    });
+    expect(identifyMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('setAuth tolerates a failed mobile-push identify', async () => {
+    refreshAccessTokenMock.mockResolvedValue(null);
+    identifyMock.mockRejectedValue(new Error('no native bridge'));
+    const screen = await render(
+      <AuthProvider><Probe /></AuthProvider>,
+    );
+    await new Promise((r) => setTimeout(r, 200));
+    (screen.getByTestId('set-auth').element() as HTMLButtonElement).click();
+    await new Promise((r) => setTimeout(r, 100));
+    // The rejection was swallowed; the sign-in landed regardless.
+    expect(screen.getByTestId('state').element().textContent).toBe('Bob');
+    expect(identifyMock).toHaveBeenCalled();
+  });
+
+  it('logout tolerates a failed mobile-push clear', async () => {
+    refreshAccessTokenMock.mockResolvedValue('t-1');
+    apiFetchMock.mockResolvedValue({
+      id: 'u-1', email: 'a@x.io', displayName: 'Alice', systemRole: 'member', status: 'active',
+    });
+    globalThis.fetch = fetchMock as never;
+    fetchMock.mockResolvedValue(new Response(null, { status: 204 }));
+    clearMock.mockRejectedValue(new Error('no native bridge'));
+    const screen = await render(
+      <AuthProvider><Probe /></AuthProvider>,
+    );
+    await vi.waitFor(() => {
+      expect(screen.getByTestId('state').element().textContent).toBe('Alice');
+    });
+    (screen.getByTestId('logout').element() as HTMLButtonElement).click();
+    await vi.waitFor(() => {
+      expect(screen.getByTestId('state').element().textContent).toBe('(none)');
+    });
+    expect(clearMock).toHaveBeenCalled();
+    // Let the swallowed rejection settle through its catch arm.
+    await new Promise((r) => setTimeout(r, 50));
+  });
 });

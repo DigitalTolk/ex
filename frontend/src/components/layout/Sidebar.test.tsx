@@ -58,18 +58,25 @@ vi.mock('@atlaskit/pragmatic-drag-and-drop/element/adapter', () => {
     draggable: ({
       dragHandle,
       element,
+      canDrag,
       getInitialData,
       onDragStart,
       onDrop,
     }: {
       dragHandle?: Element | null;
       element: HTMLElement;
+      canDrag?: (args: { input: { button: number } }) => boolean;
       getInitialData?: () => Record<string, unknown>;
       onDragStart?: () => void;
       onDrop?: () => void;
     }) => {
       const handle = (dragHandle ?? element) as HTMLElement;
       handle.ondragstart = (event) => {
+        // The real adapter consults canDrag with the initiating input before
+        // starting a drag — a false return means the drag never begins. jsdom
+        // drag events carry no button unless a test sets one; default to the
+        // primary button like a real left-button drag.
+        if (canDrag && !canDrag({ input: { button: event.button ?? 0 } })) return;
         activeInput = { clientX: event.clientX, clientY: event.clientY };
         activeSource = { data: getInitialData?.() ?? {} };
         onDragStart?.();
@@ -89,19 +96,28 @@ vi.mock('@atlaskit/pragmatic-drag-and-drop/element/adapter', () => {
     dropTargetForElements: ({
       element,
       getData,
+      getIsSticky,
     }: {
       element: Element;
       getData?: (args: { input: { clientX: number; clientY: number }; element: Element }) => Record<string | symbol, unknown>;
+      getIsSticky?: () => boolean;
     }) => {
       const target = element as HTMLElement;
-      const readData = (event: DragEvent) =>
-        getData?.({
+      const readData = (event: DragEvent) => {
+        // The real adapter re-evaluates getIsSticky on every drag pass to
+        // decide whether a previous target survives leaving its box. The mock
+        // consults it the same way but keeps its single-target model — a
+        // dragleave still models "pointer over a gap, no target", so the
+        // Sidebar's visible-indicator drop fallback stays exercised.
+        getIsSticky?.();
+        return getData?.({
           input: {
             clientX: event.clientX,
             clientY: event.clientY,
           },
           element,
         }) ?? {};
+      };
       target.ondragover = (event) => {
         event.preventDefault();
         event.stopPropagation();
@@ -1317,6 +1333,64 @@ describe('Sidebar', () => {
     await waitFor(() => {
       expect(lastMoveBody()).toMatchObject({ itemID: 'ch-2', section: 'category', categoryID: 'cat-eng' });
     });
+  });
+
+  it('refuses to start a row drag from a non-primary mouse button', async () => {
+    // canDrag gates drags on the primary button — a right-button (context
+    // menu) press must never lift the row or commit a reorder.
+    const dataTransfer = { effectAllowed: '', dropEffect: '', setData: vi.fn(), getData: vi.fn() };
+    renderSidebar();
+
+    const row = await screen.findByTestId('channel-row-ch-1');
+    // fireEvent.dragStart can't carry a button (jsdom has no DragEvent and the
+    // Event constructor drops MouseEvent init keys) — dispatch a real
+    // MouseEvent so the adapter's canDrag sees button 2.
+    act(() => {
+      row.dispatchEvent(
+        new MouseEvent('dragstart', { bubbles: true, cancelable: true, button: 2 }),
+      );
+    });
+
+    // The drag never started: the row is not collapsed out of its slot…
+    expect(row.style.opacity).not.toBe('0');
+
+    // …and dropping on another row commits no server move.
+    fireEvent.drop(screen.getByTestId('channel-row-ch-2'), { dataTransfer });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    expect(lastMoveBody()).toBeUndefined();
+  });
+
+  it('collapses a dragged favorite conversation row and restores it when the drag ends', async () => {
+    mockConversations = [{ ...baseMockConversations[0], favorite: true, sidebarPosition: 1000 }];
+    const dataTransfer = { effectAllowed: '', dropEffect: '', setData: vi.fn(), getData: vi.fn() };
+    renderSidebar();
+
+    await screen.findByText('Favorites');
+    const row = screen.getByTestId('conversation-row-conv-1');
+    fireEvent.pointerDown(row);
+    fireEvent.dragStart(row, { dataTransfer });
+    // While in flight the original slot collapses (Slack-style lift-out).
+    expect(row.style.opacity).toBe('0');
+
+    // A cancelled/finished native drag (dragend) restores the row.
+    fireEvent.dragEnd(row, { dataTransfer });
+    expect(row.style.opacity).toBe('');
+  });
+
+  it('renders normally when localStorage is unavailable for the DnD debug flag (private mode)', async () => {
+    const original = Storage.prototype.getItem;
+    const spy = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(function (this: Storage, key: string) {
+      if (key === 'ex.sidebarDndDebug') throw new Error('storage denied');
+      return original.call(this, key);
+    });
+    try {
+      renderSidebar();
+      expect(await screen.findByTestId('channel-row-ch-1')).toBeInTheDocument();
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it('drags categories before each other and renumbers their positions', async () => {

@@ -46,6 +46,17 @@ describe('triggerMessageActionHaptic (browser)', () => {
     });
   });
 
+  it('swallows a rejected native impact (haptics are best-effort)', async () => {
+    native.value = true;
+    const impact = vi.fn().mockRejectedValue(new Error('bridge gone'));
+    plugin.value = { impact };
+    triggerMessageActionHaptic();
+    expect(impact).toHaveBeenCalledWith({ style: 'MEDIUM' });
+    // Flush the rejection through the .catch(() => {}) arm — an unhandled
+    // rejection here would fail the run.
+    await new Promise((r) => setTimeout(r, 0));
+  });
+
   it('on native but with no Haptics plugin, falls through to vibrate', () => {
     native.value = true;
     plugin.value = null;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildMessageListRows, isGroupedWithPrevious, nextVirtuosoState } from './MessageListRows';
+import { buildMessageListRows, isGroupedWithPrevious, nextVirtuosoState, type MessageListRow } from './MessageListRows';
 import type { Message } from '@/types';
 
 function msg(id: string, createdAt: string, parentMessageID?: string): Message {
@@ -134,5 +134,21 @@ describe('nextVirtuosoState (browser)', () => {
     const prev = { rows: rowsPrepended, firstItemIndex: 1000 };
     const next = nextVirtuosoState(prev, rowsA);
     expect(next.firstItemIndex).toBe(1000);
+  });
+
+  it('treats a growth with no message rows on either side as an append (no first message to compare)', () => {
+    // Divider-only row lists: firstMessageId finds no message row and returns
+    // undefined for both sides — equal → append path, index stays put.
+    const dayOnly: MessageListRow[] = [
+      { kind: 'day', key: 'day-2026-05-01', date: '2026-05-01T00:00:00Z' },
+    ];
+    const dayOnlyGrown: MessageListRow[] = [
+      ...dayOnly,
+      { kind: 'day', key: 'day-2026-05-02', date: '2026-05-02T00:00:00Z' },
+    ];
+    const prev = { rows: dayOnly, firstItemIndex: 1000 };
+    const next = nextVirtuosoState(prev, dayOnlyGrown);
+    expect(next.firstItemIndex).toBe(1000);
+    expect(next.rows).toBe(dayOnlyGrown);
   });
 });

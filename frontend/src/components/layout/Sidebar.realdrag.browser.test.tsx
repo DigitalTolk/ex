@@ -450,6 +450,156 @@ describe('Sidebar real drag-and-drop (no library mock)', () => {
     expect(moved, 'the dragged favorited DM must be in the updates').toBeTruthy();
   });
 
+  // The section-tail drop zone (below the last row of a section) is its own
+  // real drop target; hovering it must resolve through ITS getData to "end of
+  // section" and the drop must land there.
+  it('accepts a real drop on the section-tail drop zone (end-of-section target)', async () => {
+    await render(<Frame />);
+    await nextFrame();
+
+    const source = document.querySelector('[data-testid="channel-row-ch-a"]');
+    const tail = document.querySelector('[data-testid="sidebar-section-tail-drop-__channels__"]');
+    expect(source, 'draggable channel ch-a should be in the DOM').toBeTruthy();
+    expect(tail, 'the default section should render its tail drop zone').toBeTruthy();
+
+    const dt = new DataTransfer();
+    const fire = (type: string, el: Element, extra: DragEventInit = {}) => {
+      const e = new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer: dt, ...extra });
+      el.dispatchEvent(e);
+      return e;
+    };
+    const center = (el: Element) => {
+      const r = el.getBoundingClientRect();
+      return { clientX: r.left + r.width / 2, clientY: r.top + r.height / 2 };
+    };
+
+    fire('dragstart', source!, { button: 0 });
+    await nextFrame();
+    fire('dragenter', tail!, center(tail!));
+    fire('dragover', tail!, center(tail!));
+    await nextFrame();
+    // The end-of-section push-aside gap opened; sliding onto it leaves the
+    // tail target's hit area, so pragmatic asks the tail zone's getIsSticky
+    // to retain it (same dead-zone contract as the row targets).
+    const gap = document.querySelector('[data-testid="sidebar-drop-gap-__channels__"]');
+    expect(gap, 'the end-of-section gap should have opened').toBeTruthy();
+    const overGap = fire('dragover', gap!, center(gap!));
+    expect(overGap.defaultPrevented, 'sticky must keep the tail drop acceptable over the gap').toBe(true);
+    fire('drop', gap!, center(gap!));
+    fire('dragend', source!);
+    await nextFrame();
+
+    expect(reorderSidebarMutate).toHaveBeenCalled();
+    const updates = reorderSidebarMutate.mock.calls[0]?.[0]?.updates as Array<{ id: string; sidebarPosition: number }>;
+    const posOf = (id: string) => updates.find((u) => u.id === id)?.sidebarPosition ?? -1;
+    // ch-a landed at the END of the default section — after both ch-b and
+    // ch-other.
+    expect(posOf('ch-a')).toBeGreaterThan(posOf('ch-other'));
+  });
+
+  // The category boundary hitbox (the invisible strip above each section
+  // header) is a real drop target for CATEGORY drags; hovering it must resolve
+  // through ITS getData and land the category reorder.
+  it('accepts a real CATEGORY drop on the boundary hitbox above a section header', async () => {
+    // Desktop-only: the boundary hitbox geometry needs the full-height rail;
+    // on the narrow webkit viewport the gap never opens. The drop-resolution
+    // logic is engine-agnostic and graded from the chromium runs.
+    if (window.innerWidth < 768) return;
+    await render(<Frame />);
+    await nextFrame();
+
+    const source = document.querySelector('[data-testid="sidebar-group-header-cat-other"]');
+    const hitbox = document.querySelector('[data-testid="sidebar-category-boundary-drop-cat-work"]');
+    expect(source, 'draggable category header cat-other should be in the DOM').toBeTruthy();
+    expect(hitbox, 'cat-work should render its boundary drop hitbox').toBeTruthy();
+
+    const dt = new DataTransfer();
+    const fire = (type: string, el: Element, extra: DragEventInit = {}) => {
+      const e = new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer: dt, ...extra });
+      el.dispatchEvent(e);
+      return e;
+    };
+    const center = (el: Element) => {
+      const r = el.getBoundingClientRect();
+      return { clientX: r.left + r.width / 2, clientY: r.top + r.height / 2 };
+    };
+
+    fire('dragstart', source!, { button: 0 });
+    await nextFrame();
+    fire('dragenter', hitbox!, center(hitbox!));
+    fire('dragover', hitbox!, center(hitbox!));
+    await nextFrame();
+    // The category push-aside gap opened above cat-work; sliding onto it
+    // leaves the hitbox, so pragmatic asks the hitbox's getIsSticky to retain
+    // it — the same no-dead-zone contract as the channel targets.
+    const gap = document.querySelector('[data-testid="sidebar-drop-gap-cat-cat-work"]');
+    expect(gap, 'the category gap should have opened above cat-work').toBeTruthy();
+    const overGap = fire('dragover', gap!, center(gap!));
+    expect(overGap.defaultPrevented, 'sticky must keep the boundary hitbox acceptable over the gap').toBe(true);
+    fire('drop', gap!, center(gap!));
+    fire('dragend', source!);
+    await nextFrame();
+
+    // cat-other dropped "before cat-work" — a real move that resolves through
+    // the hitbox's getData to the category reorder mutation.
+    expect(reorderCategoriesMutate).toHaveBeenCalled();
+  });
+
+  // After a drop, the click that the browser synthesizes on the dragged row
+  // must NOT navigate; consuming it clears the suppression so the NEXT click
+  // navigates normally.
+  it('suppresses the post-drop click on the dragged row and re-arms navigation after consuming it', async () => {
+    // Desktop-only for the same geometry reason as the boundary-hitbox test.
+    if (window.innerWidth < 768) return;
+    window.history.replaceState(null, '', '/');
+    await render(<Frame />);
+    await nextFrame();
+
+    const source = document.querySelector('[data-testid="channel-row-ch-a"]');
+    // Target a row two slots away so either resolved edge is a REAL move.
+    const overRow = document.querySelector('[data-testid="channel-row-ch-other"]');
+    expect(source).toBeTruthy();
+    expect(overRow).toBeTruthy();
+
+    await fireRealDrag(source!, overRow!);
+    expect(reorderSidebarMutate).toHaveBeenCalled();
+
+    const link = source!.querySelector('a') as HTMLAnchorElement;
+    expect(link).toBeTruthy();
+    // First click right after the drop: swallowed (suppressed navigation) and
+    // consumed via clearSuppressedChannelNavigation.
+    link.click();
+    expect(window.location.pathname).toBe('/');
+    // Let React commit the cleared-suppression state before the next click.
+    await nextFrame();
+    await nextFrame();
+    // Second click: suppression was cleared → the row navigates normally.
+    link.click();
+    await vi.waitFor(() => expect(window.location.pathname).toBe('/channel/alpha'));
+    window.history.replaceState(null, '', '/');
+  });
+
+  // Privacy modes can make localStorage.getItem throw; the DnD debug probe's
+  // catch must treat that as "debug off" and the sidebar must render + mount
+  // its drag wiring untouched.
+  it('renders and registers drag wiring even when localStorage access throws (debug probe catch)', async () => {
+    const original = Storage.prototype.getItem;
+    const spy = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(function (this: Storage, key: string) {
+      if (key === 'ex.sidebarDndDebug') throw new Error('storage blocked');
+      return original.call(this, key);
+    });
+    try {
+      await render(<Frame />);
+      await nextFrame();
+      // Mounting registered the category headers (which log through the
+      // debug probe) — the throwing storage was swallowed.
+      expect(document.querySelector('[data-testid="channel-row-ch-a"]')).toBeTruthy();
+      expect(spy).toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   // Regression for "drag out of the preview's range, let go → orders one slot
   // too high": the drop must land at the LATEST resolved slot, even when the
   // last move is released before React commits the layoutEffect that syncs the

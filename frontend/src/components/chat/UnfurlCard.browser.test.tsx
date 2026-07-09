@@ -97,6 +97,29 @@ describe('UnfurlCard browser behaviour', () => {
     expect(document.querySelector('[data-testid="unfurl-card-image"]')).not.toBeNull();
   });
 
+  it('drops a broken image from the message card (no placeholder in the compact layout)', async () => {
+    useUnfurlMock.mockReturnValue({
+      data: {
+        url: 'https://ex.test/channel/incidents#msg-1',
+        kind: 'message',
+        siteName: 'ex.test',
+        authorName: 'Günter Grodotzki',
+        channelLabel: '~Incidents',
+        body: 'please do proper RCA',
+        createdAt: '2026-06-15T10:00:00Z',
+        image: 'https://img/missing.png',
+      },
+      isLoading: false,
+    });
+    await render(<UnfurlCard url="https://ex.test/channel/incidents#msg-1" messageId="m-1" isAuthor={false} />);
+    const img = document.querySelector('[data-testid="unfurl-card-image"]') as HTMLImageElement;
+    expect(img).not.toBeNull();
+    img.dispatchEvent(new Event('error'));
+    await vi.waitFor(() => {
+      expect(document.querySelector('[data-testid="unfurl-card-image"]')).toBeNull();
+    });
+  });
+
   it('renders file-type icon rows for non-image attachments (no paperclip emoji)', async () => {
     useUnfurlMock.mockReturnValue({
       data: {

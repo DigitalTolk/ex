@@ -13,7 +13,14 @@ vi.mock('@/components/SearchBar', () => ({
 }));
 
 vi.mock('./Sidebar', () => ({
-  Sidebar: () => <div>Sidebar</div>,
+  Sidebar: ({ onClose }: { onClose?: () => void }) => (
+    <div>
+      Sidebar
+      <button type="button" data-testid="sidebar-close-stub" onClick={onClose}>
+        close
+      </button>
+    </div>
+  ),
 }));
 
 vi.mock('./AppTopBar', () => ({
@@ -171,6 +178,32 @@ describe('AppLayout browser behavior', () => {
       expect(main!.dataset.channelDragging).toBe('true');
     });
     panEnd([92, 226]);
+  });
+
+  it('closes a manually-opened channel drawer via the sidebar close callback', async () => {
+    if (window.innerWidth > 767) return;
+
+    await render(
+      <LayoutHarness>
+        <div>content</div>
+      </LayoutHarness>,
+    );
+
+    const main = document.querySelector('[data-app-main="true"]') as HTMLElement | null;
+    expect(main).not.toBeNull();
+
+    // Open the drawer via the top-bar hamburger, then close it through the
+    // Sidebar's onClose (the closeChannels callback).
+    (document.querySelector('[aria-label="Open channels"]') as HTMLElement).click();
+    await vi.waitFor(() => {
+      expect(main!.dataset.mobileChannelsOpen).toBe('true');
+    });
+    (
+      document.querySelector('[data-testid="mobile-channel-sidebar"] [data-testid="sidebar-close-stub"]') as HTMLElement
+    ).click();
+    await vi.waitFor(() => {
+      expect(main!.dataset.mobileChannelsOpen).not.toBe('true');
+    });
   });
 
   it('never opens the channel drawer from a swipe that starts on a right panel', async () => {

@@ -97,6 +97,26 @@ describe('UserHoverCard — presence fallback for mentions', () => {
     });
   });
 
+  it('dismisses the open card on Escape (PopoverPortal onDismiss)', async () => {
+    apiFetchMock.mockImplementation((url: string) => {
+      if (url === '/api/v1/presence') return Promise.resolve({ online: [] });
+      if (url === '/api/v1/users/u-bob')
+        return Promise.resolve({ id: 'u-bob', displayName: 'Bob', status: 'active' });
+      return Promise.resolve({});
+    });
+    renderCard({ userId: 'u-bob' });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    fireEvent.click(screen.getByText('trigger'));
+    await screen.findByTestId('hover-card-header');
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+    await waitFor(() => {
+      expect(screen.queryByTestId('hover-card-header')).not.toBeInTheDocument();
+    });
+  });
+
   it('always renders the presence dot — no "missing presence = no dot" gate', async () => {
     apiFetchMock.mockImplementation((url: string) => {
       if (url === '/api/v1/presence') return Promise.resolve({ online: [] });

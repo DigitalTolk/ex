@@ -1,5 +1,5 @@
 import { beforeEach, describe, it, expect, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { BrowserRouter } from 'react-router-dom';
@@ -341,6 +341,53 @@ describe('DirectoriesPage', () => {
 
     expect(screen.getByText('Open')).toBeInTheDocument();
     expect(screen.queryByText('Join')).not.toBeInTheDocument();
+  });
+
+  it('navigates to the channel when "Open" is clicked on a joined channel', async () => {
+    const channels: Channel[] = [
+      {
+        id: 'ch-1',
+        name: 'general',
+        slug: 'general',
+        type: 'public',
+        createdBy: 'user-1',
+        archived: false,
+        createdAt: '2026-01-01T00:00:00Z',
+      },
+    ];
+    const userChannels: UserChannel[] = [
+      { channelID: 'ch-1', channelName: 'general', channelType: 'public', role: 1 },
+    ];
+    mockBrowseChannels.mockReturnValue({ data: channels, isLoading: false });
+    mockUserChannels.mockReturnValue({ data: userChannels });
+
+    renderWithProviders(<DirectoriesPage />);
+    fireEvent.click(screen.getByRole('button', { name: 'Open' }));
+
+    // Routes are keyed by slug — Open must land on /channel/<slug>.
+    await waitFor(() => expect(window.location.pathname).toBe('/channel/general'));
+  });
+
+  it('refreshes the member directory when the user.updated bridge event fires', async () => {
+    mockBrowseChannels.mockReturnValue({ data: [], isLoading: false });
+    mockUserChannels.mockReturnValue({ data: [] });
+    let displayName = 'Bob';
+    mockApiFetch.mockImplementation(() =>
+      Promise.resolve([
+        { id: 'u-2', email: 'b@b.c', displayName, systemRole: 'member', status: 'active' },
+      ]),
+    );
+    window.history.pushState({}, '', '/directory/users');
+    renderWithProviders(<DirectoriesPage />);
+    expect(await screen.findByText('Bob')).toBeInTheDocument();
+
+    // The WS user.updated bridge dispatches ex:user-updated; the directory
+    // must invalidate and refetch so the rename shows up without a reload.
+    displayName = 'Bobby';
+    act(() => {
+      window.dispatchEvent(new CustomEvent('ex:user-updated'));
+    });
+    expect(await screen.findByText('Bobby')).toBeInTheDocument();
   });
 
   it('shows "Join" button for channels not yet joined', () => {

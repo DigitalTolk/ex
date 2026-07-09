@@ -22,6 +22,12 @@ export function BucketPicker({ kind, buttonLabel, buckets, onPick }: BucketPicke
   useEffect(() => {
     if (!open) return;
     function onDoc(e: MouseEvent) {
+      // Defensive: the listener is added only while the component (and its
+      // always-rendered container div) is mounted, and removed in this
+      // effect's cleanup — so the ref cannot be null when a real document
+      // mousedown arrives.
+      /* istanbul ignore next -- see v8 note */
+      /* v8 ignore next -- unreachable defensive guard, see comment above */
       if (!containerRef.current) return;
       if (!containerRef.current.contains(e.target as Node)) setOpen(false);
     }

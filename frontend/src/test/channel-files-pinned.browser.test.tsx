@@ -1065,6 +1065,113 @@ describe('channel → header toggles → files + pinned panels (full route)', ()
     )).toBe(false);
   });
 
+  it('closes the mobile editor without a PATCH when an attachment-bearing edit is unchanged', async () => {
+    if (window.innerWidth > 767) return;
+    teardown = installFetchStub({
+      files: [],
+      pinned: [],
+      attachments: {
+        [ATTACHMENT_ID]: { id: ATTACHMENT_ID, filename: 'same.png', contentType: 'image/png', size: 64, url: 'https://cdn.test/same.png' },
+      },
+      messages: [
+        { id: 'own-samefile', parentID: CHANNEL_ID, parentType: 'channel', authorID: ME_ID, body: 'unchanged with file', createdAt: '2026-05-01T11:00:00Z', attachmentIDs: [ATTACHMENT_ID] },
+      ],
+    });
+    const screen = await renderRoute('/channel/general');
+    await expect.element(screen.getByText('unchanged with file')).toBeVisible();
+    dispatchEditMessage({ messageId: 'own-samefile' });
+    await expect.element(screen.getByRole('button', { name: 'Save' })).toBeVisible();
+    // Wait for the attachment chip to hydrate into the composer so the save
+    // submits the identical attachment list alongside the identical body.
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain('same.png');
+    }, { timeout: 15000 });
+    // handleEditMessage's per-id identity comparison confirms nothing changed
+    // → the editor closes without a PATCH.
+    await screen.getByRole('button', { name: 'Save' }).click();
+    await expect.element(screen.getByRole('button', { name: 'Send message' })).toBeVisible();
+    const patched = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls
+      .some((c) => (c[1]?.method ?? 'GET') === 'PATCH' && String(c[0]).includes('/messages/own-samefile'));
+    expect(patched).toBe(false);
+  });
+
+  it('keeps rendering the channel when the open-channel read PUT fails (catch arm)', async () => {
+    const original = globalThis.fetch;
+    const inner = installFetchStub({ files: [], pinned: [], attachments: {} });
+    const base = globalThis.fetch;
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith(`/api/v1/channels/${CHANNEL_ID}/read`) && init?.method === 'PUT') {
+        return new Response(JSON.stringify({ error: 'boom' }), { status: 500, headers: { 'Content-Type': 'application/json' } });
+      }
+      return base(input, init);
+    }) as typeof fetch;
+    teardown = () => { globalThis.fetch = original; inner(); };
+
+    const screen = await renderRoute('/channel/general');
+    await expect.element(
+      screen.getByTestId('channel-title-stack').getByRole('heading', { name: 'general' }),
+    ).toBeVisible();
+    // The failed read-marker PUT is swallowed (catch → undefined) and the
+    // channel keeps rendering; the finally still refreshes the sidebar list.
+    await vi.waitFor(() => {
+      const calls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls
+        .map((c) => `${c[1]?.method ?? 'GET'} ${String(c[0])}`);
+      expect(calls.some((u) => u.startsWith('PUT') && u.includes(`/channels/${CHANNEL_ID}/read`))).toBe(true);
+    }, { timeout: 15000 });
+    await expect.element(
+      screen.getByTestId('channel-title-stack').getByRole('heading', { name: 'general' }),
+    ).toBeVisible();
+  });
+
+  it('opens the notification preferences dialog from the header menu', async () => {
+    if (window.innerWidth <= 767) return;
+    teardown = installFetchStub({ files: [], pinned: [], attachments: {} });
+    const screen = await renderRoute('/channel/general');
+    await expect.element(
+      screen.getByTestId('channel-title-stack').getByRole('heading', { name: 'general' }),
+    ).toBeVisible();
+    await screen.getByTestId('channel-title-stack').getByRole('button').first().click();
+    // ChannelView's onNotificationPrefsClick flips notifPrefsOpen → the
+    // per-channel NotificationPreferencesDialog mounts.
+    await screen.getByRole('menuitem', { name: 'Notification preferences' }).click();
+    await expect.element(screen.getByRole('heading', { name: 'Notification preferences' })).toBeVisible();
+  });
+
+  it('routes files dropped on the channel surface into the composer upload pipeline', async () => {
+    const original = globalThis.fetch;
+    const inner = installFetchStub({ files: [], pinned: [], attachments: {} });
+    const base = globalThis.fetch;
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      // Hold the upload-init open so the optimistic chip stays visible.
+      if (url.includes('/api/v1/attachments/url')) return new Promise<Response>(() => undefined);
+      return base(input, init);
+    }) as typeof fetch;
+    teardown = () => { globalThis.fetch = original; inner(); };
+
+    const screen = await renderRoute('/channel/general');
+    await expect.element(screen.getByText('see attached')).toBeVisible();
+    const row = document.querySelector('[data-message-id]') as HTMLElement;
+    const file = new File(['x'], 'dropped.png', { type: 'image/png' });
+    const drag = (type: string) => {
+      const event = new Event(type, { bubbles: true, cancelable: true }) as DragEvent;
+      Object.defineProperty(event, 'dataTransfer', {
+        value: { types: ['Files'], files: [file], items: [{ kind: 'file' }], dropEffect: '' },
+      });
+      return event;
+    };
+    row.dispatchEvent(drag('dragenter'));
+    await expect.element(screen.getByTestId('message-drop-overlay')).toBeVisible();
+    // The drop routes through ChannelView's onFiles → inputRef.uploadFiles →
+    // the optimistic draft chip mounts in the composer.
+    row.dispatchEvent(drag('drop'));
+    await expect.element(screen.getByLabelText('Draft attachments')).toBeVisible();
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain('dropped.png');
+    }, { timeout: 15000 });
+  });
+
   it('falls back to "Unknown" for a batch user with a blank display name (userMap arm)', async () => {
     teardown = installFetchStub({
       files: [],

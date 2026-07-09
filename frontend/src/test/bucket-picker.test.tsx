@@ -60,6 +60,62 @@ describe('BucketPicker', () => {
     expect(onPick).toHaveBeenCalledWith('u-1');
   });
 
+  it('closes on an outside mousedown but stays open for clicks inside', async () => {
+    apiFetchMock.mockImplementation((url: string) => {
+      if (url.startsWith('/api/v1/users/batch')) {
+        return Promise.resolve([{ id: 'u-1', displayName: 'Alice' }]);
+      }
+      return Promise.resolve([]);
+    });
+    wrap(
+      <BucketPicker
+        kind="users"
+        buttonLabel="From ▾"
+        buckets={[{ key: 'u-1', count: 12 }]}
+        onPick={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByTestId('bucket-picker-users'));
+    await waitFor(() => screen.getByText('Alice'));
+
+    // A mousedown INSIDE the dropdown must not dismiss it (the row's own
+    // click handler is what commits a pick).
+    fireEvent.mouseDown(screen.getByText('Alice'));
+    expect(screen.getByRole('listbox')).toBeInTheDocument();
+
+    // A mousedown anywhere OUTSIDE dismisses without picking.
+    fireEvent.mouseDown(document.body);
+    await waitFor(() => expect(screen.queryByRole('listbox')).toBeNull());
+  });
+
+  it('resolves conversation names for channel-kind buckets that are DMs', async () => {
+    apiFetchMock.mockImplementation((url: string) => {
+      if (url === '/api/v1/conversations') {
+        return Promise.resolve([{ conversationID: 'conv-1', type: 'dm', displayName: 'Bob' }]);
+      }
+      return Promise.resolve([]);
+    });
+    const onPick = vi.fn();
+    wrap(
+      <BucketPicker
+        kind="channels"
+        buttonLabel="In ▾"
+        buckets={[
+          { key: 'conv-1', count: 2 },
+          // Unknown parent: neither a channel nor a conversation — the raw
+          // id is the label of last resort.
+          { key: 'x-unknown', count: 1 },
+        ]}
+        onPick={onPick}
+      />,
+    );
+    fireEvent.click(screen.getByTestId('bucket-picker-channels'));
+    await waitFor(() => screen.getByText('Bob'));
+    expect(screen.getByText('x-unknown')).toBeInTheDocument();
+    fireEvent.click(screen.getByText('Bob'));
+    expect(onPick).toHaveBeenCalledWith('conv-1');
+  });
+
   it('renders ~slug for channels', async () => {
     apiFetchMock.mockImplementation((url: string) => {
       if (url === '/api/v1/channels') {

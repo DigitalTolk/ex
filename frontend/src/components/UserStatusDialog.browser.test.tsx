@@ -184,6 +184,36 @@ describe('UserStatusDialog browser', () => {
     await expect.element(screen.getByRole('alert')).toHaveTextContent('status service down');
   });
 
+  it('picking an emoji from the picker sets it and flips the preset to custom', async () => {
+    const screen = await mount(
+      <Wrap><UserStatusDialog open onOpenChange={vi.fn()} /></Wrap>,
+    );
+    await vi.waitFor(() => expect(document.getElementById('status-preset')).not.toBeNull());
+    // Open the real EmojiPicker via the dialog's emoji trigger.
+    await screen.getByRole('button', { name: 'Choose status emoji' }).click();
+    const tile = await vi.waitFor(() => {
+      const t = document.querySelector('[data-testid="emoji-picker-tile"]') as HTMLButtonElement | null;
+      expect(t).not.toBeNull();
+      return t!;
+    });
+    const picked = tile.title; // ':shortcode:'
+    tile.click();
+    // The pick flips the preset select to the synthetic custom value…
+    await vi.waitFor(() => {
+      expect((document.getElementById('status-preset') as HTMLSelectElement).value).toBe('__custom__');
+    });
+    // …and the picked emoji rides the save payload.
+    await screen.getByLabelText('Status text').fill('Picked one');
+    await screen.getByRole('button', { name: 'Save status' }).click();
+    await vi.waitFor(() => {
+      const call = patchCall('PATCH');
+      expect(call).toBeDefined();
+      const body = JSON.parse((call![1] as { body: string }).body);
+      expect(body.emoji).toBe(picked);
+      expect(body.text).toBe('Picked one');
+    });
+  });
+
   it('selecting "Custom status" preset is a no-op for the preset fields', async () => {
     const screen = await mount(
       <Wrap><UserStatusDialog open onOpenChange={vi.fn()} /></Wrap>,

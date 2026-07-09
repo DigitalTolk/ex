@@ -113,6 +113,17 @@ describe('MessageAttachments browser', () => {
     expect((downloads[0] as HTMLAnchorElement).getAttribute('href')).toContain('download=1');
   });
 
+  it('clicking a compact row opens the lightbox at that attachment', async () => {
+    const image = att({ id: 'img3', filename: 'photo.jpg', contentType: 'image/jpeg', squareThumbnailURL: 'https://files/photo-sq.jpg' });
+    const pdf = att({ id: 'doc', filename: 'report.pdf', contentType: 'application/pdf' });
+    batch = { map: mapOf(image, pdf), isLoading: false };
+    await mount(<MessageAttachments ids={['img3', 'doc']} {...base()} />);
+    const boxes = document.querySelectorAll('[data-testid="message-attachment-box"]');
+    expect(boxes.length).toBe(2);
+    (boxes[1] as HTMLElement).click();
+    expect(openSpy).toHaveBeenCalledWith('doc');
+  });
+
   it('shows a loading skeleton while attachment metadata is still fetching', async () => {
     batch = { map: new Map(), isLoading: true };
     const screen = await mount(<MessageAttachments ids={['pending']} {...base()} />);

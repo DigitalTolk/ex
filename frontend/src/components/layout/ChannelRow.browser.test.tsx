@@ -184,6 +184,20 @@ describe('ChannelRow browser behaviour', () => {
     expect(setCategoryMutate).toHaveBeenCalledWith({ channelID: 'ch-1', categoryID: 'cat-1' });
   });
 
+  it('"Move to Channels" clears the category on a categorized channel', async () => {
+    categoriesData.data = [{ id: 'cat-1', name: 'Work' }];
+    const screen = await render(
+      <MemoryRouter>
+        <ChannelRow channel={{ ...baseChannel, categoryID: 'cat-1' }} hasUnread={false} onClose={() => {}} />
+      </MemoryRouter>,
+    );
+    await openChannelMenu(screen);
+    (screen.getByText('Move to Channels').element() as HTMLElement).click();
+    // Not favorited → no favorite mutation, just the category reset to ''.
+    await vi.waitFor(() => expect(setCategoryMutate).toHaveBeenCalledWith({ channelID: 'ch-1', categoryID: '' }));
+    expect(favoriteMutate).not.toHaveBeenCalled();
+  });
+
   it('applies the grab cursor styling when draggable', async () => {
     const dragRef = vi.fn();
     const screen = await render(

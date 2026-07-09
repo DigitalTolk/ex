@@ -80,6 +80,27 @@ describe('EmojiPicker browser', () => {
     expect(onSelect).toHaveBeenCalledTimes(1);
   });
 
+  it('skips the shelf re-render when a reopen fetches an unchanged frequent list', async () => {
+    seedFrequency([':tada:', ':smile:']);
+    const onSelect = vi.fn();
+    const screen = await render(<Wrap><EmojiPicker onSelect={onSelect} /></Wrap>);
+    const trigger = screen.getByLabelText('Open emoji picker');
+    // First open: ref [] vs fetched [tada, smile] → lengths differ, shelf set.
+    await trigger.click();
+    await vi.waitFor(() => {
+      expect(document.querySelector('[data-testid="emoji-frequent-tile"]')).not.toBeNull();
+    });
+    // Picking closes the picker (no backdrop in the way on any viewport).
+    (document.querySelector('[data-testid="emoji-frequent-tile"]') as HTMLElement).click();
+    expect(onSelect).toHaveBeenCalledTimes(1);
+    // Reopen: the fetched list matches element-for-element, so
+    // sameShortcodeList's every() comparator runs and the update is skipped.
+    await trigger.click();
+    await vi.waitFor(() => {
+      expect(document.querySelector('[data-testid="emoji-frequent-tile"]')).not.toBeNull();
+    });
+  });
+
   it('renders the default trigger button', async () => {
     const onSelect = vi.fn();
     const screen = await render(
@@ -187,6 +208,23 @@ describe('EmojiPicker browser', () => {
     } finally {
       tokenRef.value = null;
     }
+  });
+
+  it('rolls the skin tone back when the profile PATCH fails', async () => {
+    apiFetchMock.mockClear();
+    setAuthMock.mockClear();
+    apiFetchMock.mockRejectedValueOnce(new Error('offline'));
+    const { screen } = await openPicker();
+    const group = screen.getByRole('radiogroup', { name: 'Emoji skin tone' }).element();
+    const radios = within(group).querySelectorAll('[role="radio"]');
+    (radios[2] as HTMLElement).click();
+    // The optimistic tone applies, the PATCH rejects, and the catch arm
+    // restores the previous ('' default) tone.
+    await vi.waitFor(() => {
+      const checked = within(group).querySelectorAll('[role="radio"][aria-checked="true"]');
+      expect(checked[0]).toBe(radios[0]);
+    });
+    expect(setAuthMock).not.toHaveBeenCalled();
   });
 
   it('does not PATCH when the chosen skin tone equals the current one', async () => {
@@ -317,6 +355,20 @@ describe('EmojiPicker browser', () => {
     await vi.waitFor(() => {
       expect(document.querySelector('[data-testid="emoji-picker-tile"]')).not.toBeNull();
     });
+  });
+
+  it('selects a custom emoji tile and emits its :name: shortcode', async () => {
+    const { screen, onSelect } = await openPicker();
+    const customTab = Array.from(document.querySelectorAll('[data-testid="emoji-category-tab"]'))
+      .find((t) => (t as HTMLElement).getAttribute('data-category') === 'custom') as HTMLElement;
+    expect(customTab).toBeDefined();
+    customTab.click();
+    const tile = screen.getByLabelText('React with :partyparrot:');
+    await expect.element(tile).toBeVisible();
+    await tile.click();
+    // handlePick records the use and hands the shortcode to the consumer.
+    expect(onSelect).toHaveBeenCalledWith(':partyparrot:');
+    expect(recordMock).toHaveBeenCalledWith(':partyparrot:');
   });
 });
 

@@ -218,6 +218,19 @@ describe('CreateChannelDialog browser', () => {
     });
   });
 
+  it('desktop: the footer Cancel button closes the dialog', async () => {
+    if (isMobileViewport()) return;
+    const onOpenChange = vi.fn();
+    const screen = await render(
+      <Wrap>
+        <CreateChannelDialog open onOpenChange={onOpenChange} />
+      </Wrap>,
+    );
+    await expect.element(screen.getByRole('button', { name: 'Cancel' })).toBeVisible();
+    await screen.getByRole('button', { name: 'Cancel' }).click();
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
   it('desktop: autofocuses the name field on open', async () => {
     // Mobile deliberately drops the input autoFocus (keyboard pop); that arm
     // is asserted in the jsdom suite (CreateChannelDialog.mobile.test.tsx) —

@@ -451,4 +451,57 @@ describe('ImageLightbox browser behavior', () => {
     await screen.getByRole('button', { name: 'Close attachment preview' }).click();
     expect(onClose).toHaveBeenCalledTimes(1);
   });
+
+  it('keeps the lightbox open when the download control or the zoom stage is clicked', async () => {
+    const onClose = vi.fn();
+    await render(lightbox({ onClose }));
+    // The root backdrop closes on click; the download anchor and the zoom
+    // stage each stop propagation so interacting with them must NOT close.
+    // Block the anchor's default download navigation in the capture phase —
+    // the React stopPropagation handler still runs on the bubble path.
+    const prevent = (e: Event) => e.preventDefault();
+    document.addEventListener('click', prevent, true);
+    try {
+      (document.querySelector('[data-testid="image-lightbox-download"]') as HTMLElement).click();
+    } finally {
+      document.removeEventListener('click', prevent, true);
+    }
+    expect(onClose).not.toHaveBeenCalled();
+    (document.querySelector('[data-testid="image-lightbox-zoom-stage"]') as HTMLElement).click();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('contains clicks and pointer events inside the non-image file card', async () => {
+    const onClose = vi.fn();
+    await render(
+      lightbox({
+        onClose,
+        images: [{ url: 'https://cdn.test/spec.pdf', filename: 'spec.pdf', contentType: 'application/pdf', size: 4096 }],
+      }),
+    );
+    const stage = document.querySelector('[data-testid="image-lightbox-attachment-stage"]') as HTMLElement;
+    const info = document.querySelector('[data-testid="image-lightbox-fileinfo"]') as HTMLElement;
+    expect(stage).not.toBeNull();
+    expect(info).not.toBeNull();
+    // Clicking the attachment stage or the file-info card never bubbles to
+    // the backdrop close.
+    stage.click();
+    info.click();
+    expect(onClose).not.toHaveBeenCalled();
+    // The card swallows pointer events so a drag that starts on it never
+    // feeds the swipe-dismiss stage: nothing propagates past the React root,
+    // so document-level listeners see none of them.
+    const seen: string[] = [];
+    const record = (e: Event) => seen.push(e.type);
+    document.addEventListener('pointermove', record);
+    document.addEventListener('pointercancel', record);
+    try {
+      info.dispatchEvent(new PointerEvent('pointermove', { pointerId: 21, pointerType: 'touch', clientX: 200, clientY: 300, bubbles: true, cancelable: true }));
+      info.dispatchEvent(new PointerEvent('pointercancel', { pointerId: 21, pointerType: 'touch', bubbles: true, cancelable: true }));
+    } finally {
+      document.removeEventListener('pointermove', record);
+      document.removeEventListener('pointercancel', record);
+    }
+    expect(seen).toEqual([]);
+  });
 });

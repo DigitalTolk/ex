@@ -151,10 +151,11 @@ export function AppLayout({ children }: AppLayoutProps) {
     const scroller = root.querySelector<HTMLElement>('[data-page-scroll="true"], [data-testid="page-container"]');
     if (!scroller) return;
     const canScroll = scroller.scrollHeight > scroller.clientHeight;
-    /* istanbul ignore next -- a scrollable scroller is always preventDefaulted first by the native capture listener below, so forwardHeaderWheel only ever sees a non-scrollable scroller (canScroll false) */
-    if (!canScroll) return;
-    scroller.scrollTop += event.deltaY;
-    event.preventDefault();
+    /* istanbul ignore next -- the native capture listener below preventDefaults every scrollable case before this React-prop fallback runs (the defaultPrevented bail above), so canScroll is always false here; the block stays as belt-and-braces should the native listener ever be detached */
+    if (canScroll) {
+      scroller.scrollTop += event.deltaY;
+      event.preventDefault();
+    }
   }, [isMobile]);
   /* v8 ignore stop */
   /* v8 ignore start -- real wheel propagation is covered by browser interaction tests/manual browser behavior, not jsdom. */

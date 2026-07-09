@@ -357,6 +357,22 @@ describe('ChatPage WS router (browser)', () => {
     expect(() => lastHandlers().onEmojiRemoved?.({ name: 'partyparrot' })).not.toThrow();
   });
 
+  it('onWebhookChanged refetches the incoming-webhooks admin list', async () => {
+    const { qc } = await renderChatPage();
+    const spy = vi.spyOn(qc, 'invalidateQueries');
+    lastHandlers().onWebhookChanged?.();
+    const keys = spy.mock.calls.map((c) => (c[0] as { queryKey?: unknown[] }).queryKey);
+    expect(keys).toContainEqual(['incoming-webhooks']);
+  });
+
+  it('onActivityNew refetches the durable activity stream', async () => {
+    const { qc } = await renderChatPage();
+    const spy = vi.spyOn(qc, 'invalidateQueries');
+    lastHandlers().onActivityNew?.();
+    const keys = spy.mock.calls.map((c) => (c[0] as { queryKey?: unknown[] }).queryKey);
+    expect(keys).toContainEqual(['activity']);
+  });
+
   it('onUserUpdated / onUserChannelUpdated never throw', async () => {
     await renderChatPage();
     expect(() => lastHandlers().onUserUpdated?.({ id: 'u-2', displayName: 'Carol' })).not.toThrow();

@@ -225,7 +225,9 @@ export default function SearchResultsPage() {
                   <li key={h.id}>
                     <MessageHitCard
                       hit={h}
-                      onAuthorClick={(id) => id && updateParams({ from: id })}
+                      // MessageHitCard only invokes this with a non-empty
+                      // authorId (it guards internally), so no re-check here.
+                      onAuthorClick={(id) => updateParams({ from: id })}
                     />
                   </li>
                 ))}

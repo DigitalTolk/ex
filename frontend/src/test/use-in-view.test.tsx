@@ -38,6 +38,14 @@ function Probe(props: { onState: (inView: boolean) => void }) {
   return <div ref={ref} data-testid="probe" />;
 }
 
+// Calls the hook but never attaches the ref — the effect must bail out
+// without constructing an observer.
+function DetachedProbe(props: { onState: (inView: boolean) => void }) {
+  const { inView } = useInView<HTMLDivElement>();
+  props.onState(inView);
+  return <div data-testid="detached-probe" />;
+}
+
 describe('useInView', () => {
   let originalIO: typeof IntersectionObserver | undefined;
 
@@ -82,6 +90,25 @@ describe('useInView', () => {
     // future rewrite that keeps observing.
     act(() => FakeObserver.instances[0].fire(false));
     expect(states.at(-1)).toBe(true);
+  });
+
+  it('stays out of view while entries report non-intersecting, then flips on the first hit', () => {
+    const states: boolean[] = [];
+    render(<Probe onState={(v) => states.push(v)} />);
+    // Element starts off-screen: the observer fires with
+    // isIntersecting=false and the hook must NOT flip.
+    act(() => FakeObserver.instances[0].fire(false));
+    expect(states.at(-1)).toBe(false);
+    // Still observing — scrolling it in flips the flag.
+    act(() => FakeObserver.instances[0].fire(true));
+    expect(states.at(-1)).toBe(true);
+  });
+
+  it('does not observe when the ref is never attached to an element', () => {
+    const states: boolean[] = [];
+    render(<DetachedProbe onState={(v) => states.push(v)} />);
+    expect(FakeObserver.instances).toHaveLength(0);
+    expect(states.at(-1)).toBe(false);
   });
 
   it('falls back to inView=true when IntersectionObserver is unavailable', () => {
