@@ -407,7 +407,7 @@ func main() {
 
 	// ------------------------------------------------------------------ Frontend FS
 	var frontendDist fs.FS
-	frontendDist, err = fs.Sub(ex.FrontendFS, "frontend/dist")
+	frontendDist, err = fs.Sub(ex.FrontendFS, "dist")
 	if err != nil {
 		slog.Warn("frontend assets not embedded, SPA disabled", "error", err)
 		frontendDist = nil

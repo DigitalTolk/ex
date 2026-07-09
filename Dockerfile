@@ -17,9 +17,11 @@
 # Stage 1: Build frontend
 FROM node:24-trixie AS frontend
 WORKDIR /app/frontend
-COPY frontend/package.json frontend/package-lock.json ./
+COPY package.json package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm npm ci
-COPY frontend/ ./
+COPY index.html vite.config.ts tsconfig.json tsconfig.app.json tsconfig.node.json components.json ./
+COPY public/ ./public/
+COPY src/ ./src/
 RUN npm run build
 
 # Stage 2: Build Go binary
@@ -30,7 +32,7 @@ WORKDIR /app
 COPY go.mod go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod go mod download
 COPY . .
-COPY --from=frontend /app/frontend/dist ./frontend/dist
+COPY --from=frontend /app/frontend/dist ./dist
 # The binary is compiled through Datadog Orchestrion, which weaves APM
 # instrumentation (HTTP server/client, go-redis, AWS SDK v2 — see
 # orchestrion.tool.go) into the build at compile time. This costs build time

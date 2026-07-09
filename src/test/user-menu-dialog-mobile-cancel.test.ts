@@ -3,10 +3,10 @@ import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 function readComponent(path: string) {
-  const frontendRoot = process.cwd().endsWith('/frontend')
-    ? process.cwd()
-    : resolve(process.cwd(), 'frontend');
-  return readFileSync(resolve(frontendRoot, path), 'utf8');
+  // The frontend root IS the repo root (package.json, index.html and src/
+  // all live there since the 2026-07 consolidation), which is also vitest's
+  // cwd for every run.
+  return readFileSync(resolve(process.cwd(), path), 'utf8');
 }
 
 describe('user menu dialog mobile close controls', () => {

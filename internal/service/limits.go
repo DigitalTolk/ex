@@ -7,7 +7,7 @@ import (
 )
 
 // Hard ceilings the API enforces. Mirrored on the frontend in
-// frontend/src/lib/limits.ts — keep them in sync.
+// src/lib/limits.ts — keep them in sync.
 const (
 	// MaxMessageBodyChars caps the message body in user-perceived
 	// characters (Unicode codepoints). UTF-8 is variable-width, so a
