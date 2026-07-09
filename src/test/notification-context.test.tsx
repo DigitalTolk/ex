@@ -524,7 +524,7 @@ describe('NotificationProvider', () => {
 
   it('does NOT ack a surfaced alert while the user is idle (mobile fallback must fire)', () => {
     Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
-    markUserActivity(Date.now() - 10 * 60_000); // user left the desk 10 min ago
+    markUserActivity(Date.now() - 25 * 60_000); // user left the desk 25 min ago (past the 20min active window)
     renderProbe();
     act(() => {
       dispatchSpy!({ ...samplePayload, messageID: 'm-idle-jsdom' });

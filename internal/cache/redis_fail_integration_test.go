@@ -381,11 +381,21 @@ func TestOnlinePresenceUserIDs_KeyGoneBetweenIndexAndMGet_RealRedis(t *testing.T
 	}
 }
 
-// IncrementEmojiFrequency ZINCRBYs then refreshes the key's TTL; the EXPIRE
-// failure arm must surface.
-func TestIncrementEmojiFrequency_ExpireError_RealRedis(t *testing.T) {
-	c := cacheFailingOn(t, "expire")
-	if err := c.IncrementEmojiFrequency(context.Background(), "emoji-expire-fail", "wave"); !errors.Is(err, errInjected) {
+// IncrementEmojiFrequency runs as one atomic Lua script (recency decay +
+// ZINCRBY + TTL refresh), so the whole increment fails as an EVAL/EVALSHA
+// error — the failure must surface.
+func TestIncrementEmojiFrequency_ScriptError_RealRedis(t *testing.T) {
+	c := cacheFailingOn(t, "evalsha", "eval")
+	if err := c.IncrementEmojiFrequency(context.Background(), "emoji-script-fail", "wave"); !errors.Is(err, errInjected) {
 		t.Fatalf("IncrementEmojiFrequency error = %v, want errInjected", err)
+	}
+}
+
+// FrequentEmojis reads then refreshes both keys' TTL in one pipeline; the
+// EXPIRE failure arm must surface.
+func TestFrequentEmojis_ExpireError_RealRedis(t *testing.T) {
+	c := cacheFailingOn(t, "expire")
+	if _, err := c.FrequentEmojis(context.Background(), "emoji-read-expire-fail", 5); !errors.Is(err, errInjected) {
+		t.Fatalf("FrequentEmojis error = %v, want errInjected", err)
 	}
 }

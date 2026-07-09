@@ -219,7 +219,7 @@ describe('NotificationContext browser', () => {
       await vi.waitFor(() => expect(captured).not.toBeNull());
       sendWSMock.mockClear();
 
-      markUserActivity(Date.now() - 10 * 60_000); // last input 10 minutes ago
+      markUserActivity(Date.now() - 25 * 60_000); // last input 25 minutes ago (past the 20min active window)
       captured!.dispatch(basePayload({ messageID: 'm-idle' }));
       await vi.waitFor(() => expect(instances.length).toBe(1)); // popup still surfaced
       expect(sendWSMock).not.toHaveBeenCalled();
@@ -248,7 +248,7 @@ describe('NotificationContext browser', () => {
       await render(<NotificationProvider><Capture /></NotificationProvider>);
       await vi.waitFor(() => expect(captured).not.toBeNull());
       sendWSMock.mockClear();
-      markUserActivity(Date.now() - 10 * 60_000);
+      markUserActivity(Date.now() - 25 * 60_000);
       captured!.setActiveParent('conv-idle');
       captured!.dispatch(
         basePayload({ kind: 'message', parentType: 'conversation', parentID: 'conv-idle', authorID: 'u-other', messageID: 'm-conv-idle' }),

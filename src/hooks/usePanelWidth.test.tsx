@@ -19,10 +19,18 @@ function widthValue() {
 }
 
 // jsdom has no PointerEvent constructor; MouseEvent carries the same
-// clientX/button fields the hook reads, and the listeners are registered for
-// pointer* event TYPES, so dispatching works identically.
-function pointer(type: string, opts: { clientX?: number; button?: number } = {}) {
-  return new MouseEvent(type, { bubbles: true, clientX: opts.clientX ?? 0, button: opts.button ?? 0 });
+// clientX/button/buttons fields the hook reads, and the listeners are
+// registered for pointer* event TYPES, so dispatching works identically.
+// `buttons` defaults to 1 (primary button held) to model a real drag — the
+// move guard now ignores buttonless moves, so this must be set to exercise a
+// genuine resize; pass buttons:0 to simulate a hover / released button.
+function pointer(type: string, opts: { clientX?: number; button?: number; buttons?: number } = {}) {
+  return new MouseEvent(type, {
+    bubbles: true,
+    clientX: opts.clientX ?? 0,
+    button: opts.button ?? 0,
+    buttons: opts.buttons ?? 1,
+  });
 }
 
 describe('usePanelWidth', () => {
@@ -165,5 +173,46 @@ describe('usePanelWidth drag edge cases', () => {
     });
     expect(widthValue()).toBe(SIDEBAR_WIDTH.defaultWidth + 50);
     expect(localStorage.getItem(SIDEBAR_WIDTH.key)).toBe(String(SIDEBAR_WIDTH.defaultWidth + 50));
+  });
+
+  it('a buttonless move ends the drag WITHOUT resizing (no hover-resize after a missed pointerup)', () => {
+    render(<Probe grow="right" />);
+    const handle = screen.getByTestId('handle');
+    act(() => {
+      handle.dispatchEvent(pointer('pointerdown', { clientX: 100 }));
+      handle.dispatchEvent(pointer('pointermove', { clientX: 160, buttons: 1 })); // real drag
+    });
+    expect(widthValue()).toBe(SIDEBAR_WIDTH.defaultWidth + 60);
+    // The pointerup was MISSED (released off-window / OS reclaimed the pointer)
+    // so the listeners are still attached. A later plain HOVER fires a move
+    // with no button held — it must NOT resize; it tears the drag down.
+    act(() => {
+      handle.dispatchEvent(pointer('pointermove', { clientX: 400, buttons: 0 }));
+    });
+    expect(widthValue()).toBe(SIDEBAR_WIDTH.defaultWidth + 60); // unchanged by the hover
+    // Torn down: even a subsequent button-held move over the handle is inert
+    // until a fresh pointerdown starts a new drag.
+    act(() => {
+      handle.dispatchEvent(pointer('pointermove', { clientX: 700, buttons: 1 }));
+    });
+    expect(widthValue()).toBe(SIDEBAR_WIDTH.defaultWidth + 60);
+    // The width at the moment the drag ended was persisted.
+    expect(localStorage.getItem(SIDEBAR_WIDTH.key)).toBe(String(SIDEBAR_WIDTH.defaultWidth + 60));
+  });
+
+  it('ends the drag on lost pointer capture (window blur / OS gesture) so no listener survives', () => {
+    render(<Probe grow="right" />);
+    const handle = screen.getByTestId('handle');
+    act(() => {
+      handle.dispatchEvent(pointer('pointerdown', { clientX: 100 }));
+      handle.dispatchEvent(pointer('pointermove', { clientX: 140, buttons: 1 }));
+      // lostpointercapture never fires a pointerup — the hook must still end.
+      handle.dispatchEvent(new Event('lostpointercapture'));
+    });
+    expect(localStorage.getItem(SIDEBAR_WIDTH.key)).toBe(String(SIDEBAR_WIDTH.defaultWidth + 40));
+    act(() => {
+      handle.dispatchEvent(pointer('pointermove', { clientX: 400, buttons: 1 }));
+    });
+    expect(widthValue()).toBe(SIDEBAR_WIDTH.defaultWidth + 40);
   });
 });

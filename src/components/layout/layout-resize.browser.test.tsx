@@ -36,14 +36,17 @@ vi.mock('@/hooks/useServerVersion', () => ({
   useServerVersion: () => ({ outdated: false }),
 }));
 
-function pointer(type: string, clientX: number) {
-  return new PointerEvent(type, { bubbles: true, clientX, pointerId: 1, button: 0 });
+// buttons:1 = primary held, as a real pointer drag carries it. The resize
+// move handler now ignores buttonless moves (so a plain hover can't resize),
+// so the drag events must carry the held-button state.
+function pointer(type: string, clientX: number, buttons = 1) {
+  return new PointerEvent(type, { bubbles: true, clientX, pointerId: 1, button: 0, buttons });
 }
 
 function dragHandle(handle: Element, fromX: number, toX: number) {
   handle.dispatchEvent(pointer('pointerdown', fromX));
   handle.dispatchEvent(pointer('pointermove', toX));
-  handle.dispatchEvent(pointer('pointerup', toX));
+  handle.dispatchEvent(pointer('pointerup', toX, 0));
 }
 
 let active: { unmount: () => Promise<void> } | null = null;

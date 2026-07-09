@@ -149,6 +149,19 @@ describe('useFrequentEmojis — limit arms', () => {
     const limited = await renderHook(() => ({ data: useFrequentEmojis(2), status: 'success' }));
     await expect.element(limited.getByTestId('probe')).toHaveAttribute('data-data', JSON.stringify([':a:', ':b:']));
   });
+
+  it('drops "Getting Work Done" emojis from the quick-reaction shelf', async () => {
+    apiFetchMock.mockImplementation(async (url: string) => {
+      if (url.startsWith('/api/v1/emojis/frequent')) return [':shipit:', ':a:', ':b:'];
+      if (url === '/api/v1/emojis') {
+        return [{ name: 'shipit', imageURL: 'x', createdBy: 'u', createdAt: '', gettingWorkDone: true }];
+      }
+      return [];
+    });
+    const screen = await renderHook(() => ({ data: useFrequentEmojis(2), status: 'success' }));
+    // :shipit: is work-pack → filtered before the slice, leaving the genuine two.
+    await expect.element(screen.getByTestId('probe')).toHaveAttribute('data-data', JSON.stringify([':a:', ':b:']));
+  });
 });
 
 describe('useChannels — mutations', () => {

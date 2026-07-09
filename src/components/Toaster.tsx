@@ -37,17 +37,18 @@ export function Toaster() {
         {t.message}
       </>
     );
-    // Notification banners invert the theme (near-black on white app, white
-    // on near-black app) so they can NEVER blend into the surface they cover
-    // — the standing complaint against the old bg-card styling, which in dark
-    // mode was literally the app background. Plain toasts keep the subtle
-    // card look next to the action that produced them.
-    const boxClass = `pointer-events-auto max-w-sm rounded-lg border px-4 py-2 text-sm ${
+    // Notification banners use their own distinct palette (faint amber-yellow
+    // in light, warm near-black in dark — see the --color-notification-toast
+    // tokens) so they NEVER blend into the surface they cover, and are always
+    // a fixed WIDE box (w-full up to max-w-md) so the banner doesn't jump
+    // around sizing itself to each message's length. Plain toasts keep the
+    // subtle card look and hug their content next to the action that raised them.
+    const boxClass = `pointer-events-auto rounded-lg border px-4 py-2 text-sm ${
       t.kind === 'notification'
-        ? 'border-transparent bg-foreground text-background shadow-xl'
+        ? 'w-full max-w-md border-notification-toast-border bg-notification-toast text-notification-toast-foreground shadow-xl'
         : t.variant === 'error'
-          ? 'border-destructive/40 bg-card text-destructive shadow-lg'
-          : 'border-border bg-card text-foreground shadow-lg'
+          ? 'max-w-sm border-destructive/40 bg-card text-destructive shadow-lg'
+          : 'max-w-sm border-border bg-card text-foreground shadow-lg'
     }`;
     // A toast with an action (e.g. a notification deep-link) is a real
     // button: tapping it runs the action and dismisses immediately.

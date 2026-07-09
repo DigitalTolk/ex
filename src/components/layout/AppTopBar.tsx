@@ -210,8 +210,13 @@ export function AppTopBar({ onOpenChannels, channelsButtonHidden }: AppTopBarPro
         // (carve-outs cover the interactive children).
         // Equal 1fr side columns keep the search field centred in the
         // viewport regardless of how wide the left (channels) or right
-        // (account) controls are.
-        className="grid h-12 mobile:h-14 w-full shrink-0 grid-cols-[1fr_minmax(0,36rem)_1fr] items-center gap-2 border-b border-border bg-sidebar px-2 mobile:px-3 text-sidebar-foreground [-webkit-app-region:drag] [&_button,&_a,&_input]:[-webkit-app-region:no-drag]"
+        // (account) controls are. On the COMPACT tier (narrow desktop window)
+        // the centred field would sit far from the hamburger and, on macOS,
+        // the hamburger could tuck under the window traffic lights — so there
+        // the first column collapses to `auto` (just the hamburger, cleared
+        // past the traffic lights by the .electron-mac padding) and the search
+        // shrinks and hugs its right edge, keeping the toggle reachable.
+        className="grid h-12 mobile:h-14 w-full shrink-0 grid-cols-[1fr_minmax(0,36rem)_1fr] compact:grid-cols-[auto_minmax(0,17rem)_1fr] items-center gap-2 border-b border-border bg-sidebar px-2 mobile:px-3 text-sidebar-foreground [-webkit-app-region:drag] [&_button,&_a,&_input]:[-webkit-app-region:no-drag]"
         data-testid="app-shell-header"
         data-app-chrome="true"
         // The global search field lives on this sidebar-coloured strip, so the

@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiFetch } from '@/lib/api';
 import { queryKeys } from '@/lib/query-keys';
@@ -47,6 +47,14 @@ export function useFrequentEmojis(limit?: number) {
     queryFn: () => getFrequentEmojis(FREQUENT_REACTIONS_FETCH),
     staleTime: 60 * 1000,
   });
+  // The custom-emoji list (shared cache with useEmojiMap) tells us which
+  // emojis are pinned to the "Getting Work Done" shelf — those get their own
+  // home in the picker and must NOT crowd the quick-reaction bar's top-N.
+  const { data: customEmojis } = useEmojis();
+  const workPackShortcodes = useMemo(
+    () => new Set((customEmojis ?? []).filter((e) => e.gettingWorkDone).map((e) => `:${e.name}:`)),
+    [customEmojis],
+  );
   // Refresh the moment any emoji is used anywhere (picker pick or quick
   // reaction) so the action bar's popular shelf reorders live instead of
   // waiting out staleTime.
@@ -57,7 +65,9 @@ export function useFrequentEmojis(limit?: number) {
     window.addEventListener(EMOJI_FREQUENCY_CHANGED_EVENT, onChanged);
     return () => window.removeEventListener(EMOJI_FREQUENCY_CHANGED_EVENT, onChanged);
   }, [qc]);
-  const list = data ?? [];
+  // Exclude work-pack emojis BEFORE the limit so the top-N still fills with N
+  // genuine everyday reactions.
+  const list = (data ?? []).filter((shortcode) => !workPackShortcodes.has(shortcode));
   return limit ? list.slice(0, limit) : list;
 }
 

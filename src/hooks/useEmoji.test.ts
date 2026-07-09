@@ -44,7 +44,12 @@ describe('useFrequentEmojis', () => {
     vi.mocked(apiFetch).mockResolvedValue([':tada:', ':smile:', ':wave:']);
     const { result } = renderHook(() => useFrequentEmojis(2), { wrapper: createWrapper() });
     await waitFor(() => expect(result.current).toEqual([':tada:', ':smile:']));
-    expect(apiFetch).toHaveBeenCalledTimes(1);
+    // The frequent shelf fetched exactly once (the hook also reads the shared
+    // custom-emoji cache, so count only the frequent endpoint here).
+    const frequentCalls = vi
+      .mocked(apiFetch)
+      .mock.calls.filter((c: unknown[]) => String(c[0]).startsWith('/api/v1/emojis/frequent'));
+    expect(frequentCalls).toHaveLength(1);
 
     vi.mocked(apiFetch).mockResolvedValue([':rocket:', ':fire:']);
     act(() => {
@@ -57,6 +62,22 @@ describe('useFrequentEmojis', () => {
     vi.mocked(apiFetch).mockResolvedValue([':tada:', ':smile:', ':wave:']);
     const { result } = renderHook(() => useFrequentEmojis(), { wrapper: createWrapper() });
     await waitFor(() => expect(result.current).toEqual([':tada:', ':smile:', ':wave:']));
+  });
+
+  it('excludes "Getting Work Done" emojis from the quick-reaction list before the limit', async () => {
+    vi.mocked(apiFetch).mockImplementation(async (url: unknown) => {
+      if (String(url).startsWith('/api/v1/emojis/frequent')) {
+        // :shipit: is the user's most-frequent, but it's a work-pack emoji.
+        return [':shipit:', ':tada:', ':smile:', ':wave:'];
+      }
+      if (url === '/api/v1/emojis') {
+        return [{ name: 'shipit', imageURL: 'x', createdBy: 'u', createdAt: '', gettingWorkDone: true }];
+      }
+      return [];
+    });
+    const { result } = renderHook(() => useFrequentEmojis(2), { wrapper: createWrapper() });
+    // :shipit: is filtered out, so the top-2 are the next genuine reactions.
+    await waitFor(() => expect(result.current).toEqual([':tada:', ':smile:']));
   });
 });
 
