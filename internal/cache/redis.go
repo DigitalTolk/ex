@@ -61,70 +61,38 @@ const emojiFreqKeyPrefix = "emoji:freq:"
 // expires.
 const emojiFreqTTL = 365 * 24 * time.Hour
 
-// emojiFreqHalfLife tunes the recency decay of the popular shelf: an emoji
-// unused for this long is worth HALF what it was, so the ranking gently
-// follows current habits without a single recent pick ever burying an
-// established favourite (that was the old aggressive 7-day scheme's bug). 45
-// days is deliberately gentle — a favourite used even every few weeks stays
-// strong; only a genuinely abandoned emoji fades over months. Tune here.
-const emojiFreqHalfLife = 45 * 24 * time.Hour
+// emojiFreqDecay is the PER-EVENT decay factor: on every pick, all existing
+// scores are multiplied by this before the picked emoji gains +1. Decay is
+// keyed to USE, not to wall-clock time — so using OTHER emojis is what pushes a
+// stale one down, and it does so immediately (a time-based decay left an
+// entrenched count "stuck" during a session because almost no time passes).
+// 0.9 means ~7 picks of other emojis halve a score and dislodge even a
+// maxed-out favourite; scores converge to 1/(1-0.9)=10, so nothing runs away.
+// Lower = more aggressively recency-driven; higher = stickier. Tune here.
+const emojiFreqDecay = 0.9
 
-// emojiFreqTimePrefix keys the per-user "last decay applied" timestamp that
-// makes the decay LAZY: scores are decayed only when a new use arrives (all by
-// the same factor, so the ranking between writes is unchanged and reads never
-// need to decay). Existing plain-count keys have no timestamp yet, so the
-// first post-deploy pick just starts the clock — no migration, no burying.
-const emojiFreqTimePrefix = "emoji:freq:t:"
-
-// emojiFreqIncrScript atomically: (1) decays every member of the user's set by
-// 0.5^(elapsed/halflife) since the last write — RESCALING only, never removing,
-// so an old emoji merely sinks in the ranking and nothing is ever purged over
-// time (the shelf stays full from history); (2) adds 1 to the picked emoji;
-// (3) stamps the decay time; (4) refreshes both keys' TTL. `now` is passed in
-// (not read from Redis) so the script stays deterministic and replication-safe.
+// emojiFreqIncrScript atomically, per pick: (1) multiplies every member's score
+// by emojiFreqDecay — RESCALING only, never removing, so a stale emoji merely
+// sinks in the ranking and nothing is ever purged (the shelf stays full from
+// history); (2) adds 1 to the picked emoji; (3) refreshes the key's TTL.
+// Deterministic (no clock), so it's replication-safe and easy to reason about.
 var emojiFreqIncrScript = redis.NewScript(`
-local now = tonumber(ARGV[1])
-local halflife = tonumber(ARGV[2])
-local member = ARGV[3]
-local ttl = tonumber(ARGV[4])
-local last = redis.call('GET', KEYS[2])
-if last then
-  local elapsed = now - tonumber(last)
-  if elapsed > 0 then
-    local decay = math.pow(0.5, elapsed / halflife)
-    local flat = redis.call('ZRANGE', KEYS[1], 0, -1, 'WITHSCORES')
-    for i = 1, #flat, 2 do
-      redis.call('ZADD', KEYS[1], tonumber(flat[i + 1]) * decay, flat[i])
-    end
-  end
+local member = ARGV[1]
+local decay = tonumber(ARGV[2])
+local ttl = tonumber(ARGV[3])
+local flat = redis.call('ZRANGE', KEYS[1], 0, -1, 'WITHSCORES')
+for i = 1, #flat, 2 do
+  redis.call('ZADD', KEYS[1], tonumber(flat[i + 1]) * decay, flat[i])
 end
 redis.call('ZINCRBY', KEYS[1], 1, member)
-redis.call('SET', KEYS[2], now)
 redis.call('EXPIRE', KEYS[1], ttl)
-redis.call('EXPIRE', KEYS[2], ttl)
 return 1
 `)
 
 // RedisCache wraps a Redis client to provide typed caching operations.
 type RedisCache struct {
 	client *redis.Client
-	// now is the clock used for emoji-frequency recency decay; nil means the
-	// real wall clock. Tests override it to drive decay deterministically.
-	now func() time.Time
 }
-
-// nowTime is the cache clock (emoji-frequency decay), defaulting to the real
-// wall clock when no test override is installed.
-func (c *RedisCache) nowTime() time.Time {
-	if c.now != nil {
-		return c.now()
-	}
-	return time.Now()
-}
-
-// SetClockForTests overrides the cache clock so decay-over-time can be tested
-// without waiting real days. Test-only.
-func (c *RedisCache) SetClockForTests(now func() time.Time) { c.now = now }
 
 // NewRedisCache parses the given Redis URL, creates a client, and verifies
 // connectivity with a PING.
@@ -483,23 +451,20 @@ func (c *RedisCache) SetUser(ctx context.Context, user *model.User) error {
 }
 
 // IncrementEmojiFrequency records one use of a picked emoji shortcode as a
-// RECENCY-DECAYED count: existing scores decay toward zero by half-life since
-// the user's last use, then the picked emoji gets +1 (see emojiFreqIncrScript).
-// So the shelf tracks current habits — a newly-frequent emoji climbs, a
-// long-unused one fades — while a favourite the user still reaches for stays on
-// top (the decay is gentle; a single recent pick never buries it). Every pick
-// path records a use (picker, quick-reaction bar, and the composer :shortcode:
-// typeahead — the typeahead not recording was the original "shelf never
-// updates" bug).
+// PER-EVENT recency-decayed count: every existing score is multiplied by
+// emojiFreqDecay, then the picked emoji gets +1 (see emojiFreqIncrScript). So
+// the shelf tracks current habits — using OTHER emojis pushes a stale one down
+// right away — while nothing is ever removed (a favourite only sinks, never
+// vanishes). Every pick path records a use (picker, quick-reaction bar, and the
+// composer :shortcode: typeahead — the typeahead not recording was the original
+// "shelf never updates" bug).
 func (c *RedisCache) IncrementEmojiFrequency(ctx context.Context, userID, shortcode string) error {
-	now := c.nowTime().Unix()
 	err := emojiFreqIncrScript.Run(
 		ctx,
 		c.client,
-		[]string{emojiFreqKeyPrefix + userID, emojiFreqTimePrefix + userID},
-		now,
-		emojiFreqHalfLife.Seconds(),
+		[]string{emojiFreqKeyPrefix + userID},
 		shortcode,
+		emojiFreqDecay,
 		int(emojiFreqTTL.Seconds()),
 	).Err()
 	if err != nil {
@@ -525,13 +490,10 @@ func (c *RedisCache) FrequentEmojis(ctx context.Context, userID string, limit in
 		Stop:  limit - 1,
 		Rev:   true,
 	})
-	// Refresh BOTH keys' TTL (the scores and the decay timestamp) so opening
-	// the picker keeps a favourite alive; Expire on a missing key is a harmless
-	// no-op. The read does NOT decay: between writes every score would decay by
-	// the same factor, so the ranking is unchanged — decay is applied lazily at
-	// write time only.
+	// Refresh the TTL on read so opening the picker keeps a favourite alive;
+	// Expire on a missing key is a harmless no-op. The read does NOT decay:
+	// decay is per-pick only, so reads never change the ranking.
 	pipe.Expire(ctx, key, emojiFreqTTL)
-	pipe.Expire(ctx, emojiFreqTimePrefix+userID, emojiFreqTTL)
 	if _, err := pipe.Exec(ctx); err != nil {
 		return nil, fmt.Errorf("emoji freq list %q: %w", userID, err)
 	}
