@@ -149,7 +149,7 @@ func ValidateEmojiName(name string) error {
 // clients can refresh their emoji catalog. The client supplies only the
 // server-issued upload key; the URL is derived server-side so arbitrary or
 // expired client URLs are never persisted.
-func (s *EmojiService) Create(ctx context.Context, userID, name, imageKey string) (*model.CustomEmoji, error) {
+func (s *EmojiService) Create(ctx context.Context, userID, name, imageKey string, gettingWorkDone bool) (*model.CustomEmoji, error) {
 	if err := ValidateEmojiName(name); err != nil {
 		return nil, err
 	}
@@ -170,17 +170,23 @@ func (s *EmojiService) Create(ctx context.Context, userID, name, imageKey string
 	if u.SystemRole == model.SystemRoleGuest {
 		return nil, errors.New("emoji: guests cannot upload emojis")
 	}
+	// The "Getting Work Done" shelf is workspace-curated: only admins may
+	// pin emojis into it. Members can still upload unpinned emojis.
+	if gettingWorkDone && u.SystemRole != model.SystemRoleAdmin {
+		return nil, errors.New("emoji: only admins can pin emojis to the Getting Work Done shelf")
+	}
 	imageURL, err := s.resolveCreateImageURL(ctx, name, imageKey)
 	if err != nil {
 		return nil, err
 	}
 
 	e := &model.CustomEmoji{
-		Name:      name,
-		ImageURL:  imageURL,
-		ImageKey:  imageKey,
-		CreatedBy: userID,
-		CreatedAt: time.Now(),
+		Name:            name,
+		ImageURL:        imageURL,
+		ImageKey:        imageKey,
+		CreatedBy:       userID,
+		CreatedAt:       time.Now(),
+		GettingWorkDone: gettingWorkDone,
 	}
 	if err := s.emojis.Create(ctx, e); err != nil {
 		if errors.Is(err, store.ErrAlreadyExists) {

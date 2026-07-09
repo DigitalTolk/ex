@@ -238,15 +238,30 @@ const securityHeaderCSP = "default-src 'self'; " +
 // rides in a URL can't leak via Referer), and HSTS (ignored by browsers over
 // plain HTTP, so safe to always send).
 func SecurityHeaders(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		h := w.Header()
-		h.Set("Content-Security-Policy", securityHeaderCSP)
-		h.Set("X-Frame-Options", "DENY")
-		h.Set("X-Content-Type-Options", "nosniff")
-		h.Set("Referrer-Policy", "no-referrer")
-		h.Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
-		next.ServeHTTP(w, r)
-	})
+	return SecurityHeadersWith()(next)
+}
+
+// SecurityHeadersWith is SecurityHeaders with extra connect-src origins
+// appended to the CSP. Direct-to-storage browser uploads PUT presigned URLs
+// straight at the S3 endpoint; the base policy's `https:` covers production
+// object stores, but a plain-http endpoint (local MinIO) must be allow-listed
+// explicitly or the browser refuses the upload with a CSP violation.
+func SecurityHeadersWith(extraConnectSrc ...string) func(http.Handler) http.Handler {
+	csp := securityHeaderCSP
+	if len(extraConnectSrc) > 0 {
+		csp = strings.Replace(csp, "connect-src 'self'", "connect-src 'self' "+strings.Join(extraConnectSrc, " "), 1)
+	}
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			h := w.Header()
+			h.Set("Content-Security-Policy", csp)
+			h.Set("X-Frame-Options", "DENY")
+			h.Set("X-Content-Type-Options", "nosniff")
+			h.Set("Referrer-Policy", "no-referrer")
+			h.Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+			next.ServeHTTP(w, r)
+		})
+	}
 }
 
 // RequestIDFromContext returns the request ID stored in context.

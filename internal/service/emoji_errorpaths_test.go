@@ -54,7 +54,7 @@ func TestEmoji_Create_GetUserError(t *testing.T) {
 	svc, _, users, _ := setupEmojiSvc()
 	svc.SetSigner(&fakeEmojiSigner{urls: map[string]string{}})
 	users.getUserErr = errors.New("boom") // valid image, but user lookup fails
-	if _, err := svc.Create(context.Background(), "u1", "fire", "uploads/u1/fire.png"); err == nil {
+	if _, err := svc.Create(context.Background(), "u1", "fire", "uploads/u1/fire.png", false); err == nil {
 		t.Fatal("expected get-user error")
 	}
 }
@@ -63,7 +63,7 @@ func TestEmoji_Create_GuestRejected(t *testing.T) {
 	svc, _, users, _ := setupEmojiSvc()
 	svc.SetSigner(&fakeEmojiSigner{urls: map[string]string{}})
 	users.users["g1"] = &model.User{ID: "g1", SystemRole: model.SystemRoleGuest}
-	if _, err := svc.Create(context.Background(), "g1", "fire", "uploads/g1/fire.png"); err == nil {
+	if _, err := svc.Create(context.Background(), "g1", "fire", "uploads/g1/fire.png", false); err == nil {
 		t.Fatal("expected guest rejection")
 	}
 }
@@ -75,7 +75,7 @@ func TestEmoji_Create_StoreError(t *testing.T) {
 	}})
 	users.users["u1"] = &model.User{ID: "u1", SystemRole: model.SystemRoleMember}
 	emojis.createErr = errors.New("boom") // generic, non-AlreadyExists
-	if _, err := svc.Create(context.Background(), "u1", "fire", "uploads/u1/fire.png"); err == nil {
+	if _, err := svc.Create(context.Background(), "u1", "fire", "uploads/u1/fire.png", false); err == nil {
 		t.Fatal("expected create error")
 	}
 }
@@ -84,7 +84,7 @@ func TestEmoji_ValidateImageObject_ReadError(t *testing.T) {
 	svc, _, users, _ := setupEmojiSvc()
 	users.users["u1"] = &model.User{ID: "u1", SystemRole: model.SystemRoleMember}
 	svc.SetSigner(&fakeEmojiSigner{readErr: errors.New("read fail")})
-	if _, err := svc.Create(context.Background(), "u1", "fire", "uploads/u1/fire.png"); err == nil {
+	if _, err := svc.Create(context.Background(), "u1", "fire", "uploads/u1/fire.png", false); err == nil {
 		t.Fatal("expected read error")
 	}
 }
@@ -93,7 +93,7 @@ func TestEmoji_ValidateImageObject_EmptyData(t *testing.T) {
 	svc, _, users, _ := setupEmojiSvc()
 	users.users["u1"] = &model.User{ID: "u1", SystemRole: model.SystemRoleMember}
 	svc.SetSigner(&fakeEmojiSigner{emptyBody: true})
-	if _, err := svc.Create(context.Background(), "u1", "fire", "uploads/u1/fire.png"); err == nil {
+	if _, err := svc.Create(context.Background(), "u1", "fire", "uploads/u1/fire.png", false); err == nil {
 		t.Fatal("expected empty-image rejection")
 	}
 }
@@ -107,7 +107,7 @@ func TestEmoji_ValidateImageObject_InvalidDecode(t *testing.T) {
 		contentType: "image/png",
 		objectData:  "\x89PNG\r\n\x1a\n\x00\x00\x00\x00truncated",
 	})
-	if _, err := svc.Create(context.Background(), "u1", "fire", "uploads/u1/fire.png"); err == nil {
+	if _, err := svc.Create(context.Background(), "u1", "fire", "uploads/u1/fire.png", false); err == nil {
 		t.Fatal("expected invalid-image (decode) rejection")
 	}
 }

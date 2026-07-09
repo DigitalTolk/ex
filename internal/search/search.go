@@ -435,7 +435,7 @@ func fieldMust(q string, fields ...string) any {
 // this gives the searcher both elongation tolerance and 1–2 edit
 // typo tolerance.
 //
-// Mirror in frontend/src/lib/fuzzy.ts — keep both implementations
+// Mirror in src/lib/fuzzy.ts — keep both implementations
 // behaviourally identical so client- and server-side filters agree.
 func normalizeFuzzy(s string) string {
 	if s == "" {

@@ -1,0 +1,262 @@
+import { beforeEach, describe, it, expect, vi } from 'vitest';
+import { fireEvent, render, screen } from '@testing-library/react';
+import { BrowserRouter } from 'react-router-dom';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { MemberList } from './MemberList';
+import type { ChannelMembership } from '@/types';
+
+vi.mock('@/hooks/useEmoji', () => ({
+  useEmojiMap: () => ({ data: {} }),
+}));
+
+function makeMember(overrides: Partial<ChannelMembership> = {}): ChannelMembership {
+  return {
+    channelID: 'ch-1',
+    userID: 'user-1',
+    role: 'member',
+    displayName: 'Alice Johnson',
+    joinedAt: '2026-01-01T00:00:00Z',
+    ...overrides,
+  };
+}
+
+function renderWithProviders(ui: React.ReactElement) {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <BrowserRouter>{ui}</BrowserRouter>
+    </QueryClientProvider>,
+  );
+}
+
+// Motion drag physics are unit-tested in useSwipeDismiss.test; mock the
+// hook so the panel chrome is deterministic here.
+vi.mock('@/hooks/useSwipeDismiss', () => ({
+  useSwipeDismiss: () => ({ dismissing: false, settled: true, motionProps: {} }),
+}));
+
+function setMobileMatch(matches: boolean) {
+  Object.defineProperty(window, 'matchMedia', {
+    configurable: true,
+    value: vi.fn(() => ({
+      matches,
+      media: '(max-width: 767px)',
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+    })),
+  });
+}
+
+describe('MemberList', () => {
+  beforeEach(() => {
+    setMobileMatch(true);
+  });
+
+  it('renders all members', () => {
+    const members = [
+      makeMember({ userID: 'u1', displayName: 'Alice' }),
+      makeMember({ userID: 'u2', displayName: 'Bob' }),
+      makeMember({ userID: 'u3', displayName: 'Charlie' }),
+    ];
+
+    renderWithProviders(<MemberList members={members} />);
+
+    const scrollArea = screen.getByTestId('member-list-scroll-area');
+    const panel = scrollArea.parentElement!;
+    expect(panel).toHaveClass(
+      'w-[var(--member-list-width,20rem)]',
+      'mobile:fixed',
+      'mobile:inset-x-0',
+      'mobile:top-[var(--mobile-right-panel-top,6rem)]',
+      'mobile:w-auto',
+    );
+    expect(panel.className).not.toContain('safe-area-inset-top');
+    expect(scrollArea).toHaveClass('min-h-0', 'flex-1');
+    expect(scrollArea.querySelector('[data-slot="scroll-area-scrollbar"]')).toHaveClass(
+      'opacity-0',
+      'data-[scrolling]:opacity-100',
+    );
+    expect(screen.getByText('Alice')).toBeInTheDocument();
+    expect(screen.getByText('Bob')).toBeInTheDocument();
+    expect(screen.getByText('Charlie')).toBeInTheDocument();
+  });
+
+  it('shows member count', () => {
+    const members = [
+      makeMember({ userID: 'u1', displayName: 'Alice' }),
+      makeMember({ userID: 'u2', displayName: 'Bob' }),
+    ];
+
+    renderWithProviders(<MemberList members={members} />);
+
+    expect(screen.getByText('2 members')).toBeInTheDocument();
+  });
+
+  it('closes from the arrow close button and has no left border on mobile', () => {
+    const onClose = vi.fn();
+    renderWithProviders(<MemberList members={[makeMember()]} onClose={onClose} />);
+
+    const panel = screen.getByTestId('member-list-scroll-area').parentElement!;
+    expect(panel).toHaveClass('not-mobile:border-l');
+    expect(panel.className).not.toMatch(/(^|\s)border-l(\s|$)/);
+    fireEvent.click(screen.getByLabelText('Close member list'));
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows singular "member" for count of 1', () => {
+    renderWithProviders(<MemberList members={[makeMember()]} />);
+
+    expect(screen.getByText('1 member')).toBeInTheDocument();
+  });
+
+  it('shows Owner badge for owner role string', () => {
+    renderWithProviders(
+      <MemberList
+        members={[makeMember({ role: 'owner', displayName: 'Admin User' })]}
+      />,
+    );
+
+    expect(screen.getByText('Owner')).toBeInTheDocument();
+  });
+
+  it('shows Admin badge for admin role string', () => {
+    renderWithProviders(
+      <MemberList
+        members={[makeMember({ role: 'admin', displayName: 'Mod User' })]}
+      />,
+    );
+
+    expect(screen.getByText('Admin')).toBeInTheDocument();
+  });
+
+  it('handles numeric role 3 as Owner', () => {
+    renderWithProviders(
+      <MemberList
+        members={[makeMember({ role: 3 as unknown as ChannelMembership['role'], displayName: 'Owner User' })]}
+      />,
+    );
+
+    expect(screen.getByText('Owner')).toBeInTheDocument();
+  });
+
+  it('handles numeric role 2 as Admin', () => {
+    renderWithProviders(
+      <MemberList
+        members={[makeMember({ role: 2 as unknown as ChannelMembership['role'], displayName: 'Admin User' })]}
+      />,
+    );
+
+    expect(screen.getByText('Admin')).toBeInTheDocument();
+  });
+
+  it('does not show badge for regular member role', () => {
+    renderWithProviders(
+      <MemberList
+        members={[makeMember({ role: 'member', displayName: 'Regular User' })]}
+      />,
+    );
+
+    expect(screen.queryByText('Owner')).not.toBeInTheDocument();
+    expect(screen.queryByText('Admin')).not.toBeInTheDocument();
+  });
+
+  it('shows initials in avatar', () => {
+    renderWithProviders(
+      <MemberList
+        members={[makeMember({ displayName: 'Alice Johnson' })]}
+      />,
+    );
+
+    expect(screen.getByText('AJ')).toBeInTheDocument();
+  });
+
+  it('renders user status after the username instead of with the avatar', () => {
+    renderWithProviders(
+      <MemberList
+        members={[makeMember({ userID: 'u1', displayName: 'Alice Johnson' })]}
+        userMap={{
+          u1: {
+            displayName: 'Alice Johnson',
+            userStatus: { emoji: '☕', text: 'Coffee break' },
+          },
+        }}
+      />,
+    );
+
+    const status = screen.getByLabelText(/Coffee break/);
+    const nameStatus = screen.getByTestId('member-name-status-u1');
+    const initials = screen.getByText('AJ');
+
+    expect(nameStatus).toContainElement(status);
+    expect(initials.closest('.relative')).not.toContainElement(status);
+  });
+
+  it('keeps member remove controls visible on every tier (muted, not hidden, on desktop)', () => {
+    renderWithProviders(
+      <MemberList
+        channelId="ch-1"
+        currentUserId="owner"
+        currentUserRole={3}
+        members={[makeMember({ userID: 'u1', role: 'member', displayName: 'Alice Johnson' })]}
+      />,
+    );
+
+    // Visible at rest everywhere: full-strength on touch, muted (NOT
+    // opacity-0) on desktop until the row is hovered — a hover-only reveal
+    // reads as "removal is gone".
+    const removeBtn = screen.getByLabelText('Remove Alice Johnson');
+    expect(removeBtn).toHaveClass('h-9', 'w-9', 'opacity-100', 'md:opacity-60', 'md:group-hover:opacity-100');
+    expect(removeBtn.className).not.toContain('md:opacity-0');
+  });
+
+  it('never offers remove in ~general — the backend rejects removal there', () => {
+    renderWithProviders(
+      <MemberList
+        channelId="ch-general"
+        channelSlug="general"
+        currentUserId="owner"
+        currentUserRole={3}
+        members={[makeMember({ userID: 'u1', role: 'member', displayName: 'Alice Johnson' })]}
+      />,
+    );
+
+    // Even the owner gets no X: a button that can only fail is worse than
+    // no button.
+    expect(screen.getByText('Alice Johnson')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Remove Alice Johnson')).toBeNull();
+  });
+
+  it('keeps the add-member input clear of the leading icon on mobile', () => {
+    renderWithProviders(
+      <MemberList channelId="ch-1" currentUserId="owner" currentUserRole={3} members={[makeMember()]} />,
+    );
+    // Restated left padding at the mobile (max-md) variant so the Input base's
+    // mobile:px-4 can't slide the placeholder under the UserPlus icon.
+    expect(screen.getByLabelText('Add member')).toHaveClass('pl-8', 'mobile:pl-10');
+  });
+
+  it('lets a plain member invite people (add input shown) but not remove anyone', () => {
+    renderWithProviders(
+      <MemberList
+        channelId="ch-1"
+        currentUserId="me"
+        currentUserRole={1}
+        members={[makeMember({ userID: 'other', role: 'member', displayName: 'Other Person' })]}
+      />,
+    );
+    // Any member can invite → the add-member input is present.
+    expect(screen.getByLabelText('Add member')).toBeInTheDocument();
+    // …but removal stays admin-only.
+    expect(screen.queryByLabelText('Remove Other Person')).not.toBeInTheDocument();
+  });
+
+  it('shows "Members" heading', () => {
+    renderWithProviders(<MemberList members={[makeMember()]} />);
+
+    expect(screen.getByText('Members')).toBeInTheDocument();
+  });
+});

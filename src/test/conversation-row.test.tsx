@@ -1,0 +1,278 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { BrowserRouter } from 'react-router-dom';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { ConversationRow } from '@/components/layout/ConversationRow';
+import type { ComponentProps } from 'react';
+import type { UserConversation } from '@/types';
+
+const apiFetchMock = vi.fn();
+vi.mock('@/lib/api', () => ({
+  apiFetch: (...args: unknown[]) => apiFetchMock(...args),
+}));
+
+vi.mock('@/hooks/useEmoji', () => ({
+  useEmojiMap: () => ({ data: {} }),
+}));
+
+vi.mock('@/components/ui/dropdown-menu', () => ({
+  DropdownMenu: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  DropdownMenuTrigger: (props: {
+    children: React.ReactNode;
+    'data-testid'?: string;
+    'aria-label'?: string;
+    className?: string;
+  }) => (
+    <button data-testid={props['data-testid']} aria-label={props['aria-label']} className={props.className}>{props.children}</button>
+  ),
+  DropdownMenuContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  DropdownMenuItem: (props: {
+    children: React.ReactNode;
+    onClick?: () => void;
+    disabled?: boolean;
+    'data-testid'?: string;
+  }) => (
+    <button onClick={props.onClick} disabled={props.disabled} data-testid={props['data-testid']}>
+      {props.children}
+    </button>
+  ),
+}));
+
+function renderRow(conv: UserConversation, props: Partial<ComponentProps<typeof ConversationRow>> = {}) {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(
+    <QueryClientProvider client={qc}>
+      <BrowserRouter>
+        <ConversationRow
+          conversation={conv}
+          hasUnread={false}
+          onClose={vi.fn()}
+          onHide={vi.fn()}
+          {...props}
+        />
+      </BrowserRouter>
+    </QueryClientProvider>,
+  );
+}
+
+const sampleConv: UserConversation = {
+  conversationID: 'c-1',
+  type: 'dm',
+  displayName: 'Bob',
+  participantIDs: ['u-me', 'u-bob'],
+};
+
+describe('ConversationRow', () => {
+  beforeEach(() => {
+    apiFetchMock.mockReset();
+    // useCategories needs an array; everything else can be {} (default).
+    apiFetchMock.mockImplementation((url: string) => {
+      if (typeof url === 'string' && url.includes('/sidebar/categories')) {
+        return Promise.resolve([]);
+      }
+      return Promise.resolve({});
+    });
+  });
+
+  it('renders the conversation displayName', () => {
+    renderRow(sampleConv);
+    expect(screen.getByText('Bob')).toBeInTheDocument();
+  });
+
+  it('keeps the star tappable but hides the kebab on mobile (opened via long-press)', () => {
+    renderRow(sampleConv);
+
+    const link = screen.getByText('Bob').closest('a')!;
+    const star = screen.getByTestId(`conv-fav-toggle-${sampleConv.conversationID}`);
+    const menu = screen.getByTestId(`conv-row-menu-${sampleConv.conversationID}`);
+    expect(link).toHaveClass('mobile:pr-20');
+    // Star stays a visible tap target on mobile.
+    expect(star).toHaveClass('mobile:h-9', 'mobile:w-9', 'mobile:opacity-100');
+    // The management kebab is NOT an always-visible tap target on mobile — it's
+    // kept mounted only so Radix can anchor the menu, and opened by long-pressing
+    // the row instead.
+    expect(menu).toHaveClass('mobile:pointer-events-none', 'mobile:opacity-0');
+    expect(menu).not.toHaveClass('mobile:opacity-100');
+  });
+
+  it('renders DM status on the row', () => {
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <BrowserRouter>
+          <ConversationRow
+            conversation={sampleConv}
+            hasUnread={false}
+            dmUserStatus={{ emoji: ':house:', text: 'Working from home' }}
+            onClose={vi.fn()}
+            onHide={vi.fn()}
+          />
+        </BrowserRouter>
+      </QueryClientProvider>,
+    );
+    expect(screen.getAllByLabelText(/Working from home/).length).toBeGreaterThan(0);
+  });
+
+  it('renders the online indicator on the DM avatar', () => {
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <BrowserRouter>
+          <ConversationRow
+            conversation={sampleConv}
+            hasUnread={false}
+            dmOnline
+            onClose={vi.fn()}
+            onHide={vi.fn()}
+          />
+        </BrowserRouter>
+      </QueryClientProvider>,
+    );
+
+    expect(screen.getByLabelText('Online')).toBeInTheDocument();
+  });
+
+  it('clicking the star toggles favorite via the conversation favorite endpoint', async () => {
+    renderRow(sampleConv);
+    fireEvent.click(screen.getByTestId(`conv-fav-toggle-${sampleConv.conversationID}`));
+    await waitFor(() => {
+      expect(apiFetchMock).toHaveBeenCalledWith(
+        `/api/v1/conversations/${sampleConv.conversationID}/favorite`,
+        expect.objectContaining({ method: 'PUT', body: JSON.stringify({ favorite: true }) }),
+      );
+    });
+  });
+
+  it('clicking unfavorite on a favorited row clears the old favorite position', async () => {
+    renderRow({ ...sampleConv, favorite: true, sidebarPosition: 2000 });
+    fireEvent.click(screen.getByTestId(`conv-fav-toggle-${sampleConv.conversationID}`));
+    await waitFor(() => {
+      expect(apiFetchMock).toHaveBeenCalledWith(
+        `/api/v1/conversations/${sampleConv.conversationID}/category`,
+        expect.objectContaining({
+          method: 'PUT',
+          body: JSON.stringify({ categoryID: '', sidebarPosition: 0 }),
+        }),
+      );
+      expect(apiFetchMock).toHaveBeenCalledWith(
+        `/api/v1/conversations/${sampleConv.conversationID}/favorite`,
+        expect.objectContaining({ method: 'PUT', body: JSON.stringify({ favorite: false }) }),
+      );
+    });
+  });
+
+  it('does not attach the user hover card in the sidebar row', () => {
+    renderRow(sampleConv);
+    fireEvent.click(screen.getByText('Bob'));
+    expect(screen.queryByRole('link', { name: /@/ })).not.toBeInTheDocument();
+  });
+
+  it('renders the participant-count badge for groups', () => {
+    renderRow({
+      ...sampleConv,
+      type: 'group',
+      participantIDs: ['u-1', 'u-2', 'u-3'],
+    });
+    expect(screen.getByLabelText('3 participants')).toBeInTheDocument();
+  });
+
+  it('exposes "Close conversation" inside the kebab menu (no standalone X)', () => {
+    // The dedicated X button was removed so DM rows match channel-row
+    // geometry exactly: star + kebab. Closing now lives inside the
+    // kebab; the X with aria-label="Close conversation" must be gone.
+    renderRow(sampleConv);
+    expect(screen.queryByLabelText('Close conversation')).not.toBeInTheDocument();
+    expect(screen.getByTestId(`conv-close-${sampleConv.conversationID}`)).toBeInTheDocument();
+  });
+
+  it('"Close conversation" menu item calls onHide with the conversation ID', () => {
+    const onHide = vi.fn();
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={qc}>
+        <BrowserRouter>
+          <ConversationRow
+            conversation={sampleConv}
+            hasUnread={false}
+            onClose={vi.fn()}
+            onHide={onHide}
+          />
+        </BrowserRouter>
+      </QueryClientProvider>,
+    );
+    fireEvent.click(screen.getByTestId(`conv-close-${sampleConv.conversationID}`));
+    expect(onHide).toHaveBeenCalledWith(sampleConv.conversationID);
+  });
+
+  it('does not offer category movement in the conversation row menu', () => {
+    renderRow(sampleConv);
+    expect(screen.queryByText('Move to Direct Messages')).not.toBeInTheDocument();
+    expect(screen.queryByText(/^Move to /)).not.toBeInTheDocument();
+  });
+
+  it('does not offer a "New category" option in the row menu', () => {
+    // Creating categories lives in the sidebar header; the per-row menu
+    // only moves between existing buckets.
+    renderRow(sampleConv);
+    expect(screen.queryByText(/New category/)).not.toBeInTheDocument();
+  });
+
+  it('truncates long DM names with `truncate` and reserves room for the kebab', () => {
+    const longConv: UserConversation = {
+      ...sampleConv,
+      displayName: 'Bartholomew Christopherson III von Habsburg',
+    };
+    renderRow(longConv);
+    // Full text is in the DOM (not clipped server-side); CSS truncate
+    // adds the ellipsis at render time.
+    const span = screen.getByText(longConv.displayName);
+    expect(span.className).toContain('truncate');
+    // The link reserves space for the absolute-positioned star + kebab
+    // so the text never runs underneath them.
+    const link = span.closest('a');
+    expect(link?.className).toContain('pr-12');
+    expect(link?.className).toContain('min-w-0');
+  });
+
+  it('groups collapse a comma-joined list to first names; custom group names stay intact', () => {
+    const groupConv: UserConversation = {
+      conversationID: 'g-1',
+      type: 'group',
+      displayName: 'Alice Smith, Bob Jones, Charlie Brown',
+      participantIDs: ['u-me', 'a', 'b', 'c'],
+    };
+    renderRow(groupConv);
+    expect(screen.getByText('Alice, Bob, Charlie')).toBeInTheDocument();
+  });
+
+  // --- unread indicator --------------------------------------------------
+
+  it('shows no unread indicator when nothing is unread', () => {
+    renderRow(sampleConv);
+    expect(screen.queryByTestId('conversation-unread-dot-c-1')).toBeNull();
+    expect(screen.queryByTestId('conversation-unread-badge-c-1')).toBeNull();
+  });
+
+  it('shows the availability dot for unread without alerts', () => {
+    // Two-tier unread: DM messages normally alert (so DMs usually show the
+    // number), but a muted DM's quiet unread — or a not-yet-synced alerted
+    // count — reads as the availability dot, never a phantom number.
+    renderRow(sampleConv, { hasUnread: true, notifyCount: 0 });
+    expect(screen.queryByTestId('conversation-unread-badge-c-1')).toBeNull();
+    expect(screen.getByTestId('conversation-unread-dot-c-1')).toBeInTheDocument();
+  });
+
+  it('shows a numeric badge counting the alerting messages (capped at 99+)', () => {
+    renderRow(sampleConv, { hasUnread: true, notifyCount: 4 });
+    expect(screen.getByTestId('conversation-unread-badge-c-1')).toHaveTextContent('4');
+
+    renderRow({ ...sampleConv, conversationID: 'c-2' }, { hasUnread: true, notifyCount: 200 });
+    expect(screen.getByTestId('conversation-unread-badge-c-2')).toHaveTextContent('99+');
+  });
+
+  it('marks the active row with an accent bar', () => {
+    window.history.pushState({}, '', '/conversation/c-1');
+    renderRow(sampleConv);
+    const link = screen.getByText('Bob').closest('a')!;
+    expect(link.className).toContain('before:bg-sidebar-foreground');
+    window.history.pushState({}, '', '/');
+  });
+});

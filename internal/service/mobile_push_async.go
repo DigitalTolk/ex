@@ -26,23 +26,13 @@ type mobilePushJob struct {
 // notification; this wrapper only bounds provider work and drops excess jobs
 // instead of letting OneSignal latency stall message delivery.
 type AsyncMobilePushSender struct {
-	inner    MobilePushSender
-	queue    chan mobilePushJob
-	presence PresenceLookup
-	ctx      context.Context
-	cancel   context.CancelFunc
+	inner  MobilePushSender
+	queue  chan mobilePushJob
+	ctx    context.Context
+	cancel context.CancelFunc
 
 	closeOnce sync.Once
 	wg        sync.WaitGroup
-}
-
-// SetPresence wires a presence lookup so the worker can re-check, right before
-// delivery, whether the recipient came online during the queue-latency window —
-// avoiding a push that lands alongside their live in-app notification.
-func (s *AsyncMobilePushSender) SetPresence(p PresenceLookup) {
-	if s != nil {
-		s.presence = p
-	}
 }
 
 func NewAsyncMobilePushSender(inner MobilePushSender, queueSize, workers int) *AsyncMobilePushSender {
@@ -112,12 +102,16 @@ func (s *AsyncMobilePushSender) worker() {
 		case <-s.ctx.Done():
 			return
 		case job := <-s.queue:
-			// Re-check presence at delivery time: if the recipient reconnected
-			// while the job sat in the queue, suppress the push — they'll get the
-			// live in-app notification instead.
-			if s.presence != nil && s.presence.IsOnline(job.recipientUserID) {
-				continue
-			}
+			// NO presence re-check here — deliberately. Every job in this queue
+			// already carries its delivery verdict: the offline-immediate path
+			// enqueued because nothing could ack, and the deferred ack-fallback
+			// path enqueued because the desktop did NOT ack within the window —
+			// which is precisely the "socket alive but user absent" case the
+			// fallback exists for. A delivery-time IsOnline skip silently
+			// swallowed every alert for an idle-but-open desktop (presence
+			// online for hours, zero pushes): the exact class of loss the
+			// notification contract forbids. Duplicates (rare reconnect during
+			// queue latency) are the accepted failure direction.
 			if err := s.inner.Send(s.ctx, job.recipientUserID, job.notification); err != nil {
 				if errors.Is(err, context.Canceled) && s.ctx.Err() != nil {
 					return

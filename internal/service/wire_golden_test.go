@@ -22,15 +22,15 @@ import (
 // possible.
 //
 // Frontend mirrors these snapshots in
-//   frontend/src/test/wire-fixtures.browser.test.tsx
+//   src/test/wire-fixtures.browser.test.tsx
 // to assert that the same JSON parses + renders cleanly. The golden
-// files live INSIDE the frontend test tree (not at project root)
+// files live INSIDE the frontend test tree (src/test)
 // so the frontend can `import` them directly — single source of
 // truth, no copy step needed. A backend wire-format change
 // regenerates the snapshot; the frontend test then fails on the
 // next CI run until its expectations are updated to match.
 
-const goldenDir = "../../frontend/src/test/wire-fixtures"
+const goldenDir = "../../src/test/wire-fixtures"
 
 func TestWireGolden_Message_FullyPopulated(t *testing.T) {
 	r := NewMarkdownRenderer()

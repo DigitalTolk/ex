@@ -28,25 +28,26 @@ Thumbs.db
 /.gocache/
 /vendor/
 
-# Frontend
-/frontend/node_modules/
+# Frontend (lives at the repo root)
 # Ignore dist *contents* (build artifacts) but keep the directory
 # itself tracked so frontend.go's //go:embed has something to match
 # on a fresh checkout. The dist/.gitignore file is the placeholder.
-/frontend/dist/*
-!/frontend/dist/.gitignore
-/frontend/.vite/
+/dist/*
+!/dist/.gitignore
+/.vite/
+*.local
 
 # Build
 /ex
 /migrate
 /bin/
 /tmp/
-/node_modules/
+node_modules/
 
 # Coverage
-/frontend/coverage*
+/coverage/
+/coverage-browser/
 coverage.out
 coverage.html
-/frontend/.vitest-attachments/
+/.vitest-attachments/
 __screenshots__/

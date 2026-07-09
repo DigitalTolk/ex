@@ -37,7 +37,7 @@ updates:
           - "*"
 
   - package-ecosystem: "npm"
-    directory: "/frontend"
+    directory: "/"
     schedule:
       interval: "daily"
     ignore:

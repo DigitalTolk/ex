@@ -30,9 +30,10 @@ docker-compose.*.yml
 
 # Frontend build artefacts and dependencies — both stages reinstall and
 # rebuild from source.
-frontend/node_modules
-frontend/dist
-frontend/coverage
+node_modules
+dist
+coverage
+coverage-browser
 
 # Top-level node_modules from any tooling installed at repo root.
 node_modules

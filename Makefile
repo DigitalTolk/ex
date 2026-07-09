@@ -25,7 +25,7 @@ build: frontend
 
 # Build frontend assets
 frontend:
-	cd frontend && npm ci && npm run build
+	npm ci && npm run build
 
 # Run Go server directly (requires DynamoDB + Redis already running)
 run:
@@ -38,7 +38,7 @@ docker:
 # Clean build artifacts
 clean:
 	rm -rf bin/ coverage.out
-	find frontend/dist -mindepth 1 ! -name .gitignore -exec rm -rf {} +
+	find dist -mindepth 1 ! -name .gitignore -exec rm -rf {} +
 
 # Install Go dependencies
 deps:
@@ -46,7 +46,7 @@ deps:
 
 # Lint + test everything (backend and frontend)
 check-dist-placeholder:
-	@test -f frontend/dist/.gitignore || (echo "frontend/dist/.gitignore is required so frontend.go's //go:embed matches on fresh checkouts" >&2; exit 1)
+	@test -f dist/.gitignore || (echo "dist/.gitignore is required so frontend.go's //go:embed matches on fresh checkouts" >&2; exit 1)
 
 check:
 	@echo "=== Dist placeholder ==="
@@ -64,12 +64,14 @@ check:
 	# — it ignores `references` unless --build is set. The production
 	# build (`npm run build`) uses `tsc -b`, so use the same here so
 	# `make check` actually catches the same errors prod does.
-	cd frontend && npx tsc -b --noEmit
+	npx tsc -b --noEmit
 	@echo "=== Frontend lint ==="
-	cd frontend && npx eslint src/
+	npx eslint src/
+	@echo "=== Frontend coverage partition ==="
+	node scripts/check-coverage-partition.mjs
 	@echo "=== Frontend test ==="
 	@tmp=$$(mktemp); \
-		cd frontend && npx vitest run --coverage > "$$tmp" 2>&1; \
+		npx vitest run --coverage > "$$tmp" 2>&1; \
 		status=$$?; \
 		cat "$$tmp"; \
 		if [ $$status -ne 0 ]; then \
@@ -84,16 +86,11 @@ check:
 		fi; \
 		rm -f "$$tmp"
 	@echo "=== Frontend browser test ==="
-	cd frontend && npm run test:browser:coverage
-	@summary=frontend/coverage-browser/coverage-summary.json; \
+	npm run test:browser:coverage
+	@node scripts/check-browser-universe.mjs
+	@summary=coverage-browser/coverage-summary.json; \
 		if [ ! -f "$$summary" ]; then \
 			echo "$$summary not produced by vitest — coverage gate cannot run" >&2; \
 			exit 1; \
 		fi; \
-		coverage=$$(node -e "const s=require('./$$summary'); process.stdout.write(String(s.total.branches.pct))"); \
-		if [ -z "$$coverage" ]; then \
-			echo "$$summary did not contain total.branches.pct" >&2; \
-			exit 1; \
-		fi; \
-		echo "browser branch coverage: $$coverage%"; \
-		awk -v coverage="$$coverage" 'BEGIN { if (coverage + 0 < 99) { printf "browser branch coverage %.2f%% is below 99%%\n", coverage; exit 1 } }'
+		node -e "const s=require('./$$summary').total; const bad=['statements','branches','functions','lines'].filter(m=>s[m].pct<100); for (const m of ['statements','branches','functions','lines']) console.log('browser '+m+' coverage: '+s[m].pct+'%'); if (bad.length) { console.error('browser coverage below 100% for: '+bad.join(', ')); process.exit(1); }" 

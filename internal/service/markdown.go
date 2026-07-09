@@ -343,7 +343,7 @@ func isSchemeChar(c byte) bool {
 func isSafeURL(raw string) bool {
 	// Browsers strip ASCII control characters and spaces from a URL before
 	// navigating, so "java\tscript:alert(1)" would still execute. Strip them
-	// first (matching frontend/src/lib/url-safety.ts) so the scheme scan below
+	// first (matching src/lib/url-safety.ts) so the scheme scan below
 	// evaluates what the browser will act on instead of being fooled into
 	// treating a split scheme as a relative reference.
 	s := stripURLControlBytes(raw)

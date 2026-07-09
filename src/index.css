@@ -1,0 +1,649 @@
+/* Figtree is the primary UI face; Futura is reserved for display
+ * headlines. Futura ships with macOS/iOS; the Google web-font
+ * fallback for other platforms is loaded from the stylesheet to
+ * keep the design consistent. PostCSS requires every @import to
+ * precede all other statements (incl. @custom-variant), so this
+ * stays at the very top of the file. */
+@import url("https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;600;700&display=swap");
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+/* Layout tiers (lib/device.ts stamps these on <html>): `mobile:` styles the
+   mobile-NATIVE tier (touch device, <768px), `compact:` the squeezed desktop
+   tier (<1024px on a fine-pointer device, or 768-1023 on touch), and
+   `not-mobile:` everything that isn't mobile-native. They exist so behavioral
+   CSS and the JS hooks share ONE predicate — width-only `max-md:` remains for
+   purely space-adaptive styling that narrow desktop windows should keep. */
+@custom-variant mobile (&:where(.tier-mobile, .tier-mobile *));
+@custom-variant compact (&:where(.tier-compact, .tier-compact *));
+@custom-variant not-mobile (&:where(:not(.tier-mobile):not(.tier-mobile *)));
+
+/* macOS Electron (titleBarStyle: hiddenInset) overlays the traffic lights on
+   the web content's top-left; the top bar's left column pads past them so the
+   compact-tier sidebar toggle is never buried underneath. */
+.electron-mac [data-topbar-left='true'] {
+  padding-left: 4.5rem;
+}
+@custom-variant data-open {
+  &:where([data-state="open"]),
+  &:where([data-open]:not([data-open="false"])) {
+    @slot;
+  }
+}
+@custom-variant data-closed {
+  &:where([data-state="closed"]),
+  &:where([data-closed]:not([data-closed="false"])) {
+    @slot;
+  }
+}
+@custom-variant data-checked {
+  &:where([data-state="checked"]),
+  &:where([data-checked]:not([data-checked="false"])) {
+    @slot;
+  }
+}
+@custom-variant data-unchecked {
+  &:where([data-state="unchecked"]),
+  &:where([data-unchecked]:not([data-unchecked="false"])) {
+    @slot;
+  }
+}
+@custom-variant data-selected {
+  &:where([data-selected="true"]) {
+    @slot;
+  }
+}
+@custom-variant data-disabled {
+  &:where([data-disabled="true"]),
+  &:where([data-disabled]:not([data-disabled="false"])) {
+    @slot;
+  }
+}
+@custom-variant data-active {
+  &:where([data-state="active"]),
+  &:where([data-active]:not([data-active="false"])) {
+    @slot;
+  }
+}
+@custom-variant data-horizontal {
+  &:where([data-orientation="horizontal"]) {
+    @slot;
+  }
+}
+@custom-variant data-vertical {
+  &:where([data-orientation="vertical"]) {
+    @slot;
+  }
+}
+
+@theme {
+  --animate-accordion-down: accordion-down 0.2s ease-out;
+  --animate-accordion-up: accordion-up 0.2s ease-out;
+
+  /* Light theme — design system tokens
+   * bg/base #FFFFFF · bg/level1 (sidebar, chat hover) #F5F5F5
+   * bg/level2 (chat top bar) #FFFFFF · bg/level3 (typing field) #FBFBFB
+   * text/primary #231F20 · text/secondary #4F4C4D · text/muted #7B7979 · text/disabled #A7A5A6
+   * borders/default #BDBCBC · borders/level1 #E9E9E9
+   * primary/CTA #231F20 (neutral) · badges/highlights #DE5D83
+   *
+   * `primary` is the NEUTRAL action colour, NOT pink. Pink (#DE5D83)
+   * lives only in the `brand` token (unread counts, mention/status
+   * dots, send-button CTA). See the dark block below for the full
+   * rationale — keep the two themes symmetric.
+   */
+  --color-background: #FFFFFF;
+  --color-foreground: #231F20;
+  --color-card: #FFFFFF;
+  --color-card-foreground: #231F20;
+  --color-popover: #FFFFFF;
+  --color-popover-foreground: #231F20;
+  --color-primary: #231F20;
+  --color-primary-foreground: #FFFFFF;
+  --color-primary-hover: #4F4C4D;
+  --color-link: #2563EB;
+  --color-secondary: #F5F5F5;
+  --color-secondary-foreground: #231F20;
+  --color-muted: #F5F5F5;
+  --color-muted-foreground: #7B7979;
+  --color-accent: #F5F5F5;
+  --color-accent-foreground: #231F20;
+  --color-destructive: #DC2626;
+  --color-destructive-foreground: #FFFFFF;
+  --color-border: #E9E9E9;
+  --color-border-strong: #BDBCBC;
+  --color-input: #E9E9E9;
+  --color-ring: #BDBCBC;
+  /* Brand / highlight pink — used for unread counts, mention badges,
+   * and the dark-mode CTA send button. Stays the same in both themes
+   * so it never disappears on hover or selection. */
+  --color-brand: #DE5D83;
+  --color-brand-hover: #C94E71;
+  --color-brand-foreground: #FFFFFF;
+  /* Disabled state of the dark-mode pink CTA button (spec: #EB9EB5). Applied
+   * only to the message send button (via `dark:disabled:bg-brand-disabled` on
+   * its className); every other dark-mode disabled button uses the neutral
+   * muted-chip treatment from the base Button variant, and light-mode disabled
+   * keeps the neutral opacity-50 convention. */
+  --color-brand-disabled: #EB9EB5;
+  /* Online / presence green — the one non-monochrome, non-pink accent in the
+   * palette. Tokenised so presence dots/labels don't sprinkle raw
+   * `emerald-*` palette classes through the components. */
+  --color-online: #10B981;
+  /* Pinned-message affordance (amber accent bar + "Pinned" label). Tokenised
+   * so the pin marker stops using raw `amber-*` palette classes. */
+  --color-pinned: #D97706;
+  /* Caution accent (amber) — for "notify everyone" group mentions etc. Matches
+     the amber the pinned-message affordance already uses. */
+  --color-caution: #FEF3C7;
+  --color-caution-foreground: #92400E;
+  --color-chart-1: #DE5D83;
+  --color-chart-2: #4F4C4D;
+  --color-chart-3: #7B7979;
+  --color-chart-4: #BDBCBC;
+  --color-chart-5: #231F20;
+  --color-sidebar: #F5F5F5;
+  --color-sidebar-foreground: #231F20;
+  --color-sidebar-primary: #231F20;
+  --color-sidebar-primary-foreground: #FFFFFF;
+  --color-sidebar-accent: #E9E9E9;
+  --color-sidebar-accent-foreground: #231F20;
+  --color-sidebar-border: #E9E9E9;
+  --color-sidebar-ring: #BDBCBC;
+  --color-chat-top: #FFFFFF;
+  --color-chat-hover: #F5F5F5;
+  --color-typing-field: #FBFBFB;
+
+  /* Radius scale — radius-* utilities expand to these values
+   * (radius-none 0, xs 2, sm 4, md 6, lg 8, 2xl 16, capsule 999). */
+  --radius: 0.5rem;
+  --radius-sm: 0.25rem;
+  --radius-md: 0.375rem;
+  --radius-lg: 0.5rem;
+  --radius-xl: 0.75rem;
+  --radius-2xl: 1rem;
+  --radius-3xl: 1.25rem;
+  --radius-4xl: 1.5rem;
+  --animate-duration: 150ms;
+
+  /* Type stack — Figtree is the workhorse, Futura the display face.
+   * Both fall back to the host's system UI stack so the app keeps
+   * rendering before the webfont resolves. */
+  --font-sans: "Figtree", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
+  --font-heading: var(--font-sans);
+  --font-display: "Futura", "Figtree", -apple-system, BlinkMacSystemFont,
+    "Segoe UI", Roboto, sans-serif;
+}
+
+@utility no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+/*
+ * Safe-area insets are exposed as CSS custom properties so consumers
+ * can compose them with arbitrary offsets (e.g.
+ * `pt-[calc(var(--safe-top)+1rem)]`) without having to retype
+ * `env(safe-area-inset-*)` at each call site. The bare insets (no
+ * additive offset) are also covered by `pt-safe-top` / `pb-safe-bottom`
+ * / `pl-safe-left` / `pr-safe-right` utilities below.
+ *
+ * Note: env(safe-area-inset-bottom) on iOS does NOT reset to 0 when
+ * the on-screen keyboard is up. Components that anchor against the
+ * keyboard (only the chat composer today) suppress the inset locally
+ * via a `data-keyboard-up` flag rather than via this token, since
+ * other components want to keep reserving space for the home
+ * indicator regardless of keyboard state.
+ */
+/* Typed registration so the var() chain resolves at computed-value
+ * time and the property can animate. Ignored by older browsers
+ * (Safari < 16.4 / Firefox < 128); ex-mobile's probe resolver works
+ * either way. */
+@property --ex-keyboard-background {
+  syntax: '<color>';
+  inherits: true;
+  initial-value: #ffffff;
+}
+
+:root {
+  --safe-top: env(safe-area-inset-top);
+  --safe-bottom: env(safe-area-inset-bottom);
+  --safe-left: env(safe-area-inset-left);
+  --safe-right: env(safe-area-inset-right);
+  /* Read by ex-mobile to paint the strip between the composer and
+   * the OS keyboard. Aliased to --color-background so light/dark
+   * track automatically. The token inherits, so surfaces that host a
+   * focused field above the keyboard (dialogs, the sidebar) override it
+   * below so the strip matches that surface, not the chat background. */
+  --ex-keyboard-background: var(--color-background);
+}
+
+/* Full-screen mobile dialogs (set status, edit profile, …) sit on the
+ * popover surface, which differs from the chat background in dark mode —
+ * keep the keyboard strip matching the dialog. */
+[data-slot='dialog-content'] {
+  --ex-keyboard-background: var(--color-popover);
+}
+
+/* The sidebar (incl. its search field) is the sidebar surface. */
+[data-keyboard-surface='sidebar'] {
+  --ex-keyboard-background: var(--color-sidebar);
+}
+
+/* Mobile bottom-sheet popovers (emoji / GIPHY pickers) sit on the popover
+ * surface — keep the keyboard strip matching while their search field is
+ * focused. */
+[data-mobile-sheet='true'] {
+  --ex-keyboard-background: var(--color-popover);
+}
+
+@utility pt-safe-top {
+  padding-top: env(safe-area-inset-top);
+}
+
+@utility pb-safe-bottom {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+@utility pl-safe-left {
+  padding-left: env(safe-area-inset-left);
+}
+
+@utility pr-safe-right {
+  padding-right: env(safe-area-inset-right);
+}
+
+@keyframes accordion-down {
+  from {
+    height: 0;
+  }
+  to {
+    height: var(--radix-accordion-content-height, var(--accordion-panel-height, auto));
+  }
+}
+
+@keyframes accordion-up {
+  from {
+    height: var(--radix-accordion-content-height, var(--accordion-panel-height, auto));
+  }
+  to {
+    height: 0;
+  }
+}
+
+@layer base {
+  html.dark {
+    /* Dark theme — design system tokens
+     * bg/base #231F20 · bg/level1 (sidebar) #2C2829
+     * bg/level2 (chat top bar) #353132 · bg/level3 #3F3A3B
+     * text/primary #FFFFFF · text/secondary #D3D2D2 · text/muted #A7A5A6 · text/disabled #7B7979
+     * borders/default #A7A5A6 · borders/subtle #4A4A4A
+     * primary/CTA #FFFFFF (neutral, inverted) · badges/highlights #DE5D83
+     *
+     * IMPORTANT: `primary` is the NEUTRAL action colour (near-black in
+     * light, white in dark) — it is NOT pink. Pink (#DE5D83) lives
+     * ONLY in the `brand` token and is reserved for unread counts,
+     * mention/status dots, and the one send-button CTA (which opts in
+     * explicitly via `dark:bg-brand`). Do not point `primary` at pink:
+     * `primary` drives every default button, focus accent, avatar
+     * fallback and mention pill, so making it pink floods the whole UI.
+     */
+    --color-background: #231F20;
+    --color-foreground: #FFFFFF;
+    /* Cards = bg/base in dark. The previous level2 #353132 made every
+     * card-backed surface (thread cards + their messages, admin/drafts/
+     * directory/search panels) read noticeably LIGHTER than the chat, so a
+     * message inside a thread card looked brighter than the same message in
+     * its channel. Anchoring `card` to base makes those surfaces match the
+     * chat; their borders still delineate them. This is the single
+     * fundamental knob — fix it here, not per component. */
+    --color-card: #231F20;
+    --color-card-foreground: #FFFFFF;
+    /* Floating surfaces (menus, dialogs, hover cards, tooltips) keep a
+     * subtle one-step elevation above base — but level1 #2C2829, not the
+     * glaring level2 #353132 they used before. */
+    --color-popover: #2C2829;
+    --color-popover-foreground: #FFFFFF;
+    --color-primary: #FFFFFF;
+    --color-primary-foreground: #231F20;
+    --color-primary-hover: #D3D2D2;
+    --color-link: #93C5FD;
+    --color-secondary: #3F3A3B;
+    /* text/secondary per spec sheet (lower-emphasis body text) — #D3D2D2,
+       not pure white, so secondary text reads a step below primary. */
+    --color-secondary-foreground: #D3D2D2;
+    --color-muted: #3F3A3B;
+    --color-muted-foreground: #A7A5A6;
+    --color-accent: #3F3A3B;
+    --color-accent-foreground: #FFFFFF;
+    --color-destructive: #F87171;
+    --color-destructive-foreground: #FFFFFF;
+    --color-border: #4A4A4A;
+    --color-border-strong: #A7A5A6;
+    --color-input: #4A4A4A;
+    --color-ring: #A7A5A6;
+    --color-brand: #DE5D83;
+    --color-brand-hover: #C94E71;
+    --color-brand-foreground: #FFFFFF;
+    /* Presence green, slightly brighter so it reads on the dark surfaces. */
+    --color-online: #34D399;
+    /* Pinned amber, brighter gold for the dark surface. */
+    --color-pinned: #FBBF24;
+    /* Caution accent (amber), tuned for the dark surface. */
+    --color-caution: #3B2F12;
+    --color-caution-foreground: #FCD34D;
+    --color-chart-1: #DE5D83;
+    --color-chart-2: #A7A5A6;
+    --color-chart-3: #D3D2D2;
+    --color-chart-4: #7B7979;
+    --color-chart-5: #FFFFFF;
+    --color-sidebar: #2C2829;
+    --color-sidebar-foreground: #FFFFFF;
+    --color-sidebar-primary: #FFFFFF;
+    --color-sidebar-primary-foreground: #231F20;
+    --color-sidebar-accent: #3F3A3B;
+    --color-sidebar-accent-foreground: #FFFFFF;
+    --color-sidebar-border: #4A4A4A;
+    --color-sidebar-ring: #A7A5A6;
+    --color-chat-top: #353132;
+    /* Chat message-row hover = bg/level1, mirroring the light spec (where
+       "chat hover" is level1 #F5F5F5). Was #353132 (level2), a step too
+       light vs the reference screenshots. */
+    --color-chat-hover: #2C2829;
+    /* Composer / typing field. The reference dark screenshot shows it at
+       bg/base #231F20 (not the lighter level3 #3F3A3B the token sheet
+       labels) — a #3F3A3B field read as a washed-out light box in dark. */
+    --color-typing-field: #231F20;
+  }
+}
+
+@layer base {
+  html {
+    font-size: 16px;
+    background-color: var(--color-background);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    @apply bg-background text-foreground font-sans;
+    font-size: 0.875rem;
+    line-height: 1.5;
+    margin: 0;
+  }
+
+  html,
+  body,
+  #root {
+    min-height: 100%;
+    background-color: var(--color-background);
+  }
+
+  @media (max-width: 767px) {
+    input,
+    textarea,
+    select,
+    [contenteditable="true"],
+    [role="textbox"] {
+      font-size: 16px;
+    }
+  }
+
+  * {
+    @apply border-border outline-ring/50;
+    box-sizing: border-box;
+  }
+
+  :focus-visible {
+    @apply outline-ring outline-2 outline-offset-2;
+  }
+
+  /* Every clickable/action shows a pointer cursor. Tailwind v4's preflight no
+   * longer sets this on buttons, so anything interactive (buttons, links,
+   * role-based widgets, menu/option items, the select control, labels with a
+   * target) gets it here. Disabled controls keep the default arrow. */
+  button:not(:disabled),
+  [role="button"]:not([aria-disabled="true"]),
+  [role="menuitem"],
+  [role="menuitemcheckbox"],
+  [role="menuitemradio"],
+  [role="option"],
+  [role="tab"],
+  [role="switch"],
+  a[href],
+  label[for],
+  summary,
+  select:not(:disabled) {
+    cursor: pointer;
+  }
+
+}
+
+/* Sidebar / app-chrome light-mode color remap.
+ *
+ * The sidebar markup uses Tailwind dark-palette utilities
+ * (text-white, bg-white/10, …) which look correct in dark mode but
+ * blow out in light mode. Rather than threading two parallel
+ * palettes through every sidebar component, we remap the dark-only
+ * utilities to the sidebar token colors when the document is in
+ * light mode.
+ *
+ * These rules live in `@layer utilities` (alongside Tailwind's own
+ * utility output) so the higher selector specificity wins without
+ * `!important`. Putting them in `@layer base` would lose to
+ * Tailwind's later utility layer, which is why the previous
+ * implementation needed `!important` to fight the cascade.
+ *
+ * Browser tests in test/sidebar-chrome-colors.browser.test.tsx lock
+ * the computed colors so a future cascade change can't silently
+ * regress to white-on-white text.
+ */
+@layer utilities {
+  html:not(.dark) [data-app-chrome="true"] .text-white,
+  html:not(.dark) [data-app-chrome="true"] .text-gray-200,
+  html:not(.dark) [data-app-chrome="true"] .text-gray-300 {
+    color: var(--color-sidebar-foreground);
+  }
+
+  html:not(.dark) [data-app-chrome="true"] .text-gray-400 {
+    color: var(--color-muted-foreground);
+  }
+
+  html:not(.dark) [data-app-chrome="true"] .text-gray-500 {
+    color: #7B7979;
+  }
+
+  html:not(.dark) [data-app-chrome="true"] .bg-white\/15,
+  html:not(.dark) [data-app-chrome="true"] .bg-white\/20 {
+    background-color: #E9E9E9;
+  }
+
+  html:not(.dark) [data-app-chrome="true"] .hover\:bg-white\/10:hover,
+  html:not(.dark) [data-app-chrome="true"] .hover\:bg-white\/5:hover,
+  html:not(.dark) [data-app-chrome="true"] .hover\:bg-white\/20:hover {
+    background-color: var(--color-sidebar-accent);
+  }
+
+  html:not(.dark) [data-app-chrome="true"] .hover\:text-white:hover,
+  html:not(.dark) [data-app-chrome="true"] .hover\:text-gray-300:hover {
+    color: var(--color-sidebar-foreground);
+  }
+
+  html:not(.dark) [data-app-chrome="true"] .bg-white\/10 {
+    background-color: #EEEEEE;
+  }
+}
+
+@layer components {
+  /* Rendered chat message body. Tailwind's preflight zeroes <p>
+   * margins, so consecutive paragraphs would otherwise stick to each
+   * other with no visible separation — that swallows the gap a user
+   * sees in the composer when they press Shift+Enter twice. The
+   * sibling-margin rule restores breathing room between every pair
+   * of adjacent block children, and the `[data-blank]` paragraphs
+   * emitted by the markdown renderer get an explicit height so the
+   * visual gap matches the composer's `<p>` rhythm.
+   */
+  .prose-message > * + * {
+    margin-top: 0.25rem;
+  }
+  /* Long unbroken tokens (a pasted URL in a list item, blockquote, heading,
+   * or table cell) must wrap exactly like they do in paragraphs. The <p>
+   * renderer carries Tailwind's `break-words`, but every other block the
+   * markdown renderer emits does not — a long link inside e.g. an ordered
+   * list forced the whole chat column into horizontal overflow.
+   * overflow-wrap inherits, so one declaration on the body root covers
+   * every present and future block type. Code blocks are unaffected
+   * (white-space: pre never soft-wraps) and tables keep their own
+   * overflow-x-auto scroll wrapper.
+   */
+  .prose-message {
+    overflow-wrap: break-word;
+  }
+  .prose-message p[data-blank="true"] {
+    min-height: 1.25rem;
+    margin: 0;
+  }
+
+  /* Syntax highlighting for rendered code blocks (highlight.js token
+     classes, emitted by lowlight — see lib/code-highlight.ts). A compact
+     GitHub-style palette with a dark-mode override; hex lives here in the
+     stylesheet per the design-system rule, not in components. */
+  .hljs-comment,
+  .hljs-quote {
+    color: #6a737d;
+    font-style: italic;
+  }
+  .hljs-keyword,
+  .hljs-selector-tag,
+  .hljs-built_in,
+  .hljs-name,
+  .hljs-tag {
+    color: #d73a49;
+  }
+  .hljs-string,
+  .hljs-attr,
+  .hljs-template-tag,
+  .hljs-addition,
+  .hljs-meta-string {
+    color: #032f62;
+  }
+  .hljs-number,
+  .hljs-literal,
+  .hljs-symbol,
+  .hljs-bullet {
+    color: #005cc5;
+  }
+  .hljs-title,
+  .hljs-section,
+  .hljs-title.function_,
+  .hljs-title.class_ {
+    color: #6f42c1;
+  }
+  .hljs-type,
+  .hljs-attribute,
+  .hljs-selector-attr,
+  .hljs-selector-pseudo {
+    color: #e36209;
+  }
+  .hljs-variable,
+  .hljs-template-variable,
+  .hljs-meta {
+    color: #24292e;
+  }
+  .hljs-deletion {
+    color: #b31d28;
+  }
+
+  html.dark .hljs-comment,
+  html.dark .hljs-quote {
+    color: #8b949e;
+  }
+  html.dark .hljs-keyword,
+  html.dark .hljs-selector-tag,
+  html.dark .hljs-built_in,
+  html.dark .hljs-name,
+  html.dark .hljs-tag {
+    color: #ff7b72;
+  }
+  html.dark .hljs-string,
+  html.dark .hljs-attr,
+  html.dark .hljs-template-tag,
+  html.dark .hljs-addition,
+  html.dark .hljs-meta-string {
+    color: #a5d6ff;
+  }
+  html.dark .hljs-number,
+  html.dark .hljs-literal,
+  html.dark .hljs-symbol,
+  html.dark .hljs-bullet {
+    color: #79c0ff;
+  }
+  html.dark .hljs-title,
+  html.dark .hljs-section,
+  html.dark .hljs-title.function_,
+  html.dark .hljs-title.class_ {
+    color: #d2a8ff;
+  }
+  html.dark .hljs-type,
+  html.dark .hljs-attribute,
+  html.dark .hljs-selector-attr,
+  html.dark .hljs-selector-pseudo {
+    color: #ffa657;
+  }
+  html.dark .hljs-variable,
+  html.dark .hljs-template-variable,
+  html.dark .hljs-meta {
+    color: #c9d1d9;
+  }
+
+  /* Placeholder rendering. Tiptap's @tiptap/extension-placeholder marks
+     the first empty paragraph with `is-editor-empty` and writes the
+     supplied text to `data-placeholder`. We surface it via a ::before
+     pseudo so the contenteditable's native cursor still draws on top. */
+  .wysiwyg-editor p.is-editor-empty:first-child::before {
+    content: attr(data-placeholder);
+    color: var(--color-muted-foreground);
+    pointer-events: none;
+    float: left;
+    height: 0;
+  }
+
+  /* Tailwind's preflight zeroes list-style and padding on ul/ol globally.
+     Inside the editor we want the user to actually see the bullet/number
+     they just inserted, plus the conventional left indent. The output to
+     markdown is unaffected — these are presentation-only rules scoped to
+     the contentEditable region. */
+  .wysiwyg-editor ul {
+    list-style: disc;
+    padding-left: 1.5rem;
+    margin: 0.25rem 0;
+  }
+  .wysiwyg-editor ol {
+    list-style: decimal;
+    padding-left: 1.5rem;
+    margin: 0.25rem 0;
+  }
+  .wysiwyg-editor blockquote {
+    border-left: 3px solid var(--color-border);
+    padding-left: 0.75rem;
+    margin: 0.25rem 0;
+    color: var(--color-muted-foreground);
+  }
+  /* Inline code styling that matches the rendered-message look so what
+     the user types in the composer is what they see in the feed. */
+  .wysiwyg-editor code {
+    background: var(--color-muted);
+    padding: 0.125rem 0.375rem;
+    border-radius: 0.25rem;
+    font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+    font-size: 0.875rem;
+  }
+}

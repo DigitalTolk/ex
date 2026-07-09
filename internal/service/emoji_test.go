@@ -90,17 +90,21 @@ func setupEmojiSvc() (*EmojiService, *mockEmojiStore, *mockUserStore, *mockPubli
 
 func TestEmojiService_Create_Member(t *testing.T) {
 	svc, _, users, pub := setupEmojiSvc()
-	users.users["u1"] = &model.User{ID: "u1", SystemRole: model.SystemRoleMember}
+	// Admin: the pinned-shelf flag below is admin-only.
+	users.users["u1"] = &model.User{ID: "u1", SystemRole: model.SystemRoleAdmin}
 	svc.SetSigner(&fakeEmojiSigner{urls: map[string]string{
 		"uploads/u1/fire.png": "https://fresh.example/fire.png?sig=new",
 	}})
 
-	e, err := svc.Create(context.Background(), "u1", "fire", "uploads/u1/fire.png")
+	e, err := svc.Create(context.Background(), "u1", "fire", "uploads/u1/fire.png", true)
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
 	if e.Name != "fire" {
 		t.Errorf("name=%q want fire", e.Name)
+	}
+	if !e.GettingWorkDone {
+		t.Error("gettingWorkDone flag must be carried onto the created record")
 	}
 	if e.CreatedBy != "u1" {
 		t.Errorf("createdBy=%q want u1", e.CreatedBy)
@@ -128,7 +132,7 @@ func TestEmojiService_Create_UsesStableMediaURL(t *testing.T) {
 	}})
 	svc.SetMediaURLCache(newFakeMediaCache())
 
-	e, err := svc.Create(context.Background(), "u1", "fire", "uploads/u1/fire.png")
+	e, err := svc.Create(context.Background(), "u1", "fire", "uploads/u1/fire.png", false)
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -145,7 +149,7 @@ func TestEmojiService_Create_PresignError(t *testing.T) {
 	// PresignedGetURL fails — exercise resolveCreateImageURL's sign-error path.
 	svc.SetSigner(&fakeEmojiSigner{err: errors.New("sign failed")})
 
-	if _, err := svc.Create(context.Background(), "u1", "fire", "uploads/u1/fire.png"); err == nil {
+	if _, err := svc.Create(context.Background(), "u1", "fire", "uploads/u1/fire.png", false); err == nil {
 		t.Fatal("expected presign error")
 	}
 }
@@ -154,7 +158,7 @@ func TestEmojiService_Create_GuestForbidden(t *testing.T) {
 	svc, _, users, _ := setupEmojiSvc()
 	users.users["g1"] = &model.User{ID: "g1", SystemRole: model.SystemRoleGuest}
 
-	if _, err := svc.Create(context.Background(), "g1", "fire", "uploads/g1/fire.png"); err == nil {
+	if _, err := svc.Create(context.Background(), "g1", "fire", "uploads/g1/fire.png", false); err == nil {
 		t.Fatal("expected guest error")
 	}
 }
@@ -163,7 +167,7 @@ func TestEmojiService_Create_InvalidName(t *testing.T) {
 	svc, _, users, _ := setupEmojiSvc()
 	users.users["u1"] = &model.User{ID: "u1", SystemRole: model.SystemRoleMember}
 
-	if _, err := svc.Create(context.Background(), "u1", "BAD NAME", "uploads/u1/fire.png"); err == nil {
+	if _, err := svc.Create(context.Background(), "u1", "BAD NAME", "uploads/u1/fire.png", false); err == nil {
 		t.Fatal("expected invalid name error")
 	}
 }
@@ -176,7 +180,7 @@ func TestEmojiService_Create_DuplicateName(t *testing.T) {
 		"uploads/u1/fire.png": "https://fresh.example/fire.png?sig=new",
 	}})
 
-	if _, err := svc.Create(context.Background(), "u1", "dupe", "uploads/u1/fire.png"); err == nil {
+	if _, err := svc.Create(context.Background(), "u1", "dupe", "uploads/u1/fire.png", false); err == nil {
 		t.Fatal("expected duplicate error")
 	}
 }
@@ -186,7 +190,7 @@ func TestEmojiService_Create_RejectsMissingOrUnownedImageKey(t *testing.T) {
 	users.users["u1"] = &model.User{ID: "u1", SystemRole: model.SystemRoleMember}
 
 	for _, key := range []string{"", "uploads/u2/fire.png"} {
-		if _, err := svc.Create(context.Background(), "u1", "fire", key); err == nil {
+		if _, err := svc.Create(context.Background(), "u1", "fire", key, false); err == nil {
 			t.Fatalf("key %q accepted, want error", key)
 		}
 	}
@@ -196,7 +200,7 @@ func TestEmojiService_Create_RequiresServerSigner(t *testing.T) {
 	svc, _, users, _ := setupEmojiSvc()
 	users.users["u1"] = &model.User{ID: "u1", SystemRole: model.SystemRoleMember}
 
-	if _, err := svc.Create(context.Background(), "u1", "fire", "uploads/u1/fire.png"); err == nil {
+	if _, err := svc.Create(context.Background(), "u1", "fire", "uploads/u1/fire.png", false); err == nil {
 		t.Fatal("expected signer error")
 	}
 }
@@ -216,7 +220,7 @@ func TestEmojiService_Create_RejectsInvalidImageObjects(t *testing.T) {
 			svc, _, users, _ := setupEmojiSvc()
 			users.users["u1"] = &model.User{ID: "u1", SystemRole: model.SystemRoleMember}
 			svc.SetSigner(tt.signer)
-			if _, err := svc.Create(context.Background(), "u1", "fire", "uploads/u1/fire.png"); err == nil {
+			if _, err := svc.Create(context.Background(), "u1", "fire", "uploads/u1/fire.png", false); err == nil {
 				t.Fatal("expected invalid image object to be rejected")
 			}
 		})
@@ -561,4 +565,20 @@ func TestEmojiService_FrequentEmojis(t *testing.T) {
 			t.Fatal("expected wrapped store error")
 		}
 	})
+}
+
+func TestEmojiService_Create_GettingWorkDoneRequiresAdmin(t *testing.T) {
+	svc, _, users, _ := setupEmojiSvc()
+	users.users["m1"] = &model.User{ID: "m1", SystemRole: model.SystemRoleMember}
+	svc.SetSigner(&fakeEmojiSigner{urls: map[string]string{
+		"uploads/m1/fire.png": "https://fresh.example/fire.png?sig=new",
+	}})
+	_, err := svc.Create(context.Background(), "m1", "fire", "uploads/m1/fire.png", true)
+	if err == nil || !strings.Contains(err.Error(), "only admins") {
+		t.Fatalf("member pinning to the shelf must be rejected; err=%v", err)
+	}
+	// The same member CAN upload without the flag.
+	if _, err := svc.Create(context.Background(), "m1", "fire", "uploads/m1/fire.png", false); err != nil {
+		t.Fatalf("unpinned member upload must succeed: %v", err)
+	}
 }
