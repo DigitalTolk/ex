@@ -90,7 +90,8 @@ func setupEmojiSvc() (*EmojiService, *mockEmojiStore, *mockUserStore, *mockPubli
 
 func TestEmojiService_Create_Member(t *testing.T) {
 	svc, _, users, pub := setupEmojiSvc()
-	users.users["u1"] = &model.User{ID: "u1", SystemRole: model.SystemRoleMember}
+	// Admin: the pinned-shelf flag below is admin-only.
+	users.users["u1"] = &model.User{ID: "u1", SystemRole: model.SystemRoleAdmin}
 	svc.SetSigner(&fakeEmojiSigner{urls: map[string]string{
 		"uploads/u1/fire.png": "https://fresh.example/fire.png?sig=new",
 	}})
@@ -564,4 +565,20 @@ func TestEmojiService_FrequentEmojis(t *testing.T) {
 			t.Fatal("expected wrapped store error")
 		}
 	})
+}
+
+func TestEmojiService_Create_GettingWorkDoneRequiresAdmin(t *testing.T) {
+	svc, _, users, _ := setupEmojiSvc()
+	users.users["m1"] = &model.User{ID: "m1", SystemRole: model.SystemRoleMember}
+	svc.SetSigner(&fakeEmojiSigner{urls: map[string]string{
+		"uploads/m1/fire.png": "https://fresh.example/fire.png?sig=new",
+	}})
+	_, err := svc.Create(context.Background(), "m1", "fire", "uploads/m1/fire.png", true)
+	if err == nil || !strings.Contains(err.Error(), "only admins") {
+		t.Fatalf("member pinning to the shelf must be rejected; err=%v", err)
+	}
+	// The same member CAN upload without the flag.
+	if _, err := svc.Create(context.Background(), "m1", "fire", "uploads/m1/fire.png", false); err != nil {
+		t.Fatalf("unpinned member upload must succeed: %v", err)
+	}
 }

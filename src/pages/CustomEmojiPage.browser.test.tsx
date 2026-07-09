@@ -149,6 +149,13 @@ describe('CustomEmojiPage browser', () => {
     });
   });
 
+  it('hides the shelf checkbox from non-admins (pinning is admin-only)', async () => {
+    authUserRef.value = { id: 'u-2', email: 'b@x.com', displayName: 'Bob', systemRole: 'member', status: 'active' };
+    mockEmojis = [];
+    await mount(<Wrap><CustomEmojiPage /></Wrap>);
+    expect(document.querySelector('[data-testid="emoji-getting-work-done"]')).toBeNull();
+  });
+
   it('marks flagged emojis in the list with the shelf label', async () => {
     mockEmojis = [
       { name: 'shipit', imageURL: 'https://cdn/s.png', createdBy: 'u-1', createdAt: '2026-05-01T10:00:00Z', gettingWorkDone: true },

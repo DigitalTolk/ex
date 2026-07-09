@@ -159,13 +159,19 @@ export function EmojiPicker({ onSelect, onClose, onOpenChange, trigger, triggerC
   // up next time. Stored per-user in Redis, not on this device.
   const frequentLimit = (isMobile ? MOBILE_COLS : DESKTOP_COLS) * FREQUENT_ROWS;
   // Curated "Getting Work Done" shelf: custom emojis flagged on the upload
-  // page, pinned to the front of the picker (capped to the same two rows as
-  // the frequent shelf).
+  // page, rendered right below "Frequently used" (capped to the same two
+  // rows).
   const workPack = useMemo(
     () => (customEmojis ?? []).filter((e) => e.gettingWorkDone).slice(0, frequentLimit),
     [customEmojis, frequentLimit],
   );
   const [frequent, setFrequent] = useState<string[]>([]);
+  // The frequent shelf hides anything already pinned in "Getting Work Done" —
+  // the two shelves render together and duplicating a tile wastes a slot.
+  const visibleFrequent = useMemo(() => {
+    const pinned = new Set(workPack.map((e) => `:${e.name}:`));
+    return frequent.filter((shortcode) => !pinned.has(shortcode));
+  }, [frequent, workPack]);
   // Mirrors `frequent` so the open handler can skip the state update entirely
   // when the fetched list is unchanged — avoids a late, act-less re-render in
   // consumers that mount the picker but never display a shelf.
@@ -317,6 +323,39 @@ export function EmojiPicker({ onSelect, onClose, onOpenChange, trigger, triggerC
           </div>
         )}
         <div className="flex min-h-0 flex-1 flex-col">
+          {!query.trim() && visibleFrequent.length > 0 && (
+            <div className="mb-1.5 shrink-0 border-b pb-1.5">
+              <div className="mb-1 text-center text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                Frequently used
+              </div>
+              <div
+                className="grid grid-cols-[repeat(9,2rem)] content-start justify-center gap-0.5 mobile:grid-cols-[repeat(7,2.75rem)]"
+                role="list"
+                aria-label="Frequently used emojis"
+                data-testid="emoji-frequent-grid"
+              >
+                {visibleFrequent.map((shortcode) => (
+                  <button
+                    key={`frequent-${shortcode}`}
+                    type="button"
+                    role="listitem"
+                    data-testid="emoji-frequent-tile"
+                    onClick={() => handlePick(shortcode)}
+                    className="flex h-8 w-8 items-center justify-center rounded hover:bg-muted mobile:h-11 mobile:w-11"
+                    aria-label={`React with ${shortcode}`}
+                    title={shortcode}
+                  >
+                    <EmojiGlyph
+                      emoji={shortcode}
+                      customMap={customMap}
+                      size="lg"
+                      className="mobile:h-[30px] mobile:w-[30px] mobile:text-[30px]"
+                    />
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
           {!query.trim() && workPack.length > 0 && (
             <div className="mb-1.5 shrink-0 border-b pb-1.5">
               <div className="mb-1 text-center text-xs font-semibold uppercase tracking-wider text-muted-foreground">
@@ -341,39 +380,6 @@ export function EmojiPicker({ onSelect, onClose, onOpenChange, trigger, triggerC
                   >
                     <EmojiGlyph
                       emoji={`:${e.name}:`}
-                      customMap={customMap}
-                      size="lg"
-                      className="mobile:h-[30px] mobile:w-[30px] mobile:text-[30px]"
-                    />
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-          {!query.trim() && frequent.length > 0 && (
-            <div className="mb-1.5 shrink-0 border-b pb-1.5">
-              <div className="mb-1 text-center text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                Frequently used
-              </div>
-              <div
-                className="grid grid-cols-[repeat(9,2rem)] content-start justify-center gap-0.5 mobile:grid-cols-[repeat(7,2.75rem)]"
-                role="list"
-                aria-label="Frequently used emojis"
-                data-testid="emoji-frequent-grid"
-              >
-                {frequent.map((shortcode) => (
-                  <button
-                    key={`frequent-${shortcode}`}
-                    type="button"
-                    role="listitem"
-                    data-testid="emoji-frequent-tile"
-                    onClick={() => handlePick(shortcode)}
-                    className="flex h-8 w-8 items-center justify-center rounded hover:bg-muted mobile:h-11 mobile:w-11"
-                    aria-label={`React with ${shortcode}`}
-                    title={shortcode}
-                  >
-                    <EmojiGlyph
-                      emoji={shortcode}
                       customMap={customMap}
                       size="lg"
                       className="mobile:h-[30px] mobile:w-[30px] mobile:text-[30px]"

@@ -183,16 +183,20 @@ export default function CustomEmojiPage() {
                 <code>-</code>. Max 32 chars.
               </p>
             </div>
-            <label className="flex items-center gap-2 text-xs mobile:py-1.5">
-              <input
-                type="checkbox"
-                checked={gettingWorkDone}
-                onChange={(e) => setGettingWorkDone(e.target.checked)}
-                className="mobile:h-5 mobile:w-5"
-                data-testid="emoji-getting-work-done"
-              />
-              Show in the picker&apos;s &ldquo;Getting Work Done&rdquo; shelf
-            </label>
+            {/* The shelf is workspace-curated: pinning is admin-only (the
+                backend rejects the flag from non-admins). */}
+            {user?.systemRole === 'admin' && (
+              <label className="flex items-center gap-2 text-xs mobile:py-1.5">
+                <input
+                  type="checkbox"
+                  checked={gettingWorkDone}
+                  onChange={(e) => setGettingWorkDone(e.target.checked)}
+                  className="mobile:h-5 mobile:w-5"
+                  data-testid="emoji-getting-work-done"
+                />
+                Show in the picker&apos;s &ldquo;Getting Work Done&rdquo; shelf
+              </label>
+            )}
             {file && (
               <p className="truncate text-xs text-muted-foreground">
                 {file.name} · {formatBytes(file.size)}

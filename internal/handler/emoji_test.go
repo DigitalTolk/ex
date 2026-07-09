@@ -122,7 +122,8 @@ func TestEmojiHandler_Create_Success(t *testing.T) {
 
 func TestEmojiHandler_Create_GettingWorkDoneFlag(t *testing.T) {
 	h, store, users, jwtMgr := setupEmojiHandler(t)
-	u := &model.User{ID: "u1", Email: "u@x", SystemRole: model.SystemRoleMember}
+	// Pinning to the shelf is admin-only.
+	u := &model.User{ID: "u1", Email: "u@x", SystemRole: model.SystemRoleAdmin}
 	users.users[u.ID] = u
 	users.emailIndex[u.Email] = u
 
@@ -142,6 +143,28 @@ func TestEmojiHandler_Create_GettingWorkDoneFlag(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), `"gettingWorkDone":true`) {
 		t.Fatalf("response must echo the flag; body=%s", rec.Body.String())
+	}
+}
+
+func TestEmojiHandler_Create_GettingWorkDoneRejectsNonAdmin(t *testing.T) {
+	h, store, users, jwtMgr := setupEmojiHandler(t)
+	u := &model.User{ID: "u1", Email: "u@x", SystemRole: model.SystemRoleMember}
+	users.users[u.ID] = u
+	users.emailIndex[u.Email] = u
+
+	handler := middleware.Auth(jwtMgr)(http.HandlerFunc(h.Create))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/emojis",
+		strings.NewReader(`{"name":"shipit","imageKey":"uploads/u1/shipit.png","gettingWorkDone":true}`))
+	req.Header.Set("Authorization", "Bearer "+tokenFor(t, jwtMgr, u))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d, want 400 (member cannot pin to the shelf); body=%s", rec.Code, rec.Body.String())
+	}
+	if _, exists := store.items["shipit"]; exists {
+		t.Error("rejected upload must not be stored")
 	}
 }
 

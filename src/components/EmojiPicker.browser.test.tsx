@@ -87,6 +87,37 @@ describe('EmojiPicker browser', () => {
     expect(onSelect).toHaveBeenCalledWith(':work0:');
   });
 
+  it('renders "Getting Work Done" BELOW "Frequently used" and dedups its emojis out of the frequent shelf', async () => {
+    customEmojiData.value = [
+      { name: 'shipit', imageURL: 'https://emoji.test/s.png', createdBy: 'u-1', createdAt: '2026-05-01T10:00:00Z', gettingWorkDone: true },
+      { name: 'partyparrot', imageURL: 'https://emoji.test/parrot.gif', createdBy: 'u-1', createdAt: '2026-05-01T10:00:00Z' },
+    ];
+    // The user's frequent list contains the pinned emoji AND a regular one.
+    seedFrequency([':shipit:', ':tada:']);
+    await openPicker();
+
+    const freq = document.querySelector('[data-testid="emoji-frequent-grid"]') as HTMLElement;
+    const work = document.querySelector('[data-testid="emoji-workpack-grid"]') as HTMLElement;
+    expect(freq).not.toBeNull();
+    expect(work).not.toBeNull();
+    // Order: frequent first, the work pack right below it.
+    expect(freq.compareDocumentPosition(work) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // Dedup: the pinned emoji lives ONLY in the work pack.
+    expect(freq.querySelector('[aria-label="React with :shipit:"]')).toBeNull();
+    expect(freq.querySelector('[aria-label="React with :tada:"]')).not.toBeNull();
+    expect(work.querySelector('[aria-label="React with :shipit:"]')).not.toBeNull();
+  });
+
+  it('hides the frequent shelf entirely when every frequent emoji is pinned in the work pack', async () => {
+    customEmojiData.value = [
+      { name: 'shipit', imageURL: 'https://emoji.test/s.png', createdBy: 'u-1', createdAt: '2026-05-01T10:00:00Z', gettingWorkDone: true },
+    ];
+    seedFrequency([':shipit:']);
+    await openPicker();
+    expect(document.querySelector('[data-testid="emoji-frequent-grid"]')).toBeNull();
+    expect(document.querySelector('[data-testid="emoji-workpack-grid"]')).not.toBeNull();
+  });
+
   it('hides the "Getting Work Done" shelf while searching and when nothing is flagged', async () => {
     customEmojiData.value = [
       { name: 'work0', imageURL: 'https://emoji.test/w0.png', createdBy: 'u-1', createdAt: '2026-05-01T10:00:00Z', gettingWorkDone: true },

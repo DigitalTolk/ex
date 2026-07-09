@@ -170,6 +170,11 @@ func (s *EmojiService) Create(ctx context.Context, userID, name, imageKey string
 	if u.SystemRole == model.SystemRoleGuest {
 		return nil, errors.New("emoji: guests cannot upload emojis")
 	}
+	// The "Getting Work Done" shelf is workspace-curated: only admins may
+	// pin emojis into it. Members can still upload unpinned emojis.
+	if gettingWorkDone && u.SystemRole != model.SystemRoleAdmin {
+		return nil, errors.New("emoji: only admins can pin emojis to the Getting Work Done shelf")
+	}
 	imageURL, err := s.resolveCreateImageURL(ctx, name, imageKey)
 	if err != nil {
 		return nil, err
