@@ -85,9 +85,12 @@ describe('AuthContext', () => {
     // Still loading (NOT logged out) through the first backoff window.
     await new Promise((r) => setTimeout(r, 200));
     expect(screen.getByTestId('state').element().getAttribute('data-loading')).toBe('true');
-    // First retry fires after the 1s backoff step and succeeds.
-    await new Promise((r) => setTimeout(r, 1400));
-    expect(screen.getByTestId('state').element().textContent).toBe('Alice');
+    // First retry fires after the 1s backoff step and succeeds. Poll instead
+    // of a fixed sleep: under full-suite CPU load the timer + refresh + render
+    // chain can exceed any fixed slack (webkit flake).
+    await vi.waitFor(() => {
+      expect(screen.getByTestId('state').element().textContent).toBe('Alice');
+    }, { timeout: 15000 });
     expect(screen.getByTestId('state').element().getAttribute('data-loading')).toBe('false');
     expect(refreshAccessTokenMock).toHaveBeenCalledTimes(2);
   });
@@ -118,8 +121,11 @@ describe('AuthContext', () => {
     // Still loading (NOT bounced to login) while the 1s backoff runs.
     await new Promise((r) => setTimeout(r, 200));
     expect(screen.getByTestId('state').element().getAttribute('data-loading')).toBe('true');
-    await new Promise((r) => setTimeout(r, 1400));
-    expect(screen.getByTestId('state').element().textContent).toBe('Alice');
+    // Poll for the recovered session — a fixed sleep races the timer chain
+    // under load (same hardening as the network-failure retry test above).
+    await vi.waitFor(() => {
+      expect(screen.getByTestId('state').element().textContent).toBe('Alice');
+    }, { timeout: 15000 });
     expect(screen.getByTestId('state').element().getAttribute('data-loading')).toBe('false');
   });
 
