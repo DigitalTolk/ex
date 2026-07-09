@@ -650,10 +650,9 @@ func TestEmojiFrequencyFavoriteStaysDurable(t *testing.T) {
 	c, _ := setupRealTestCache(t)
 	ctx := context.Background()
 
-	// "Losing favourites" regression: a heavily-used favourite must NOT be
-	// demoted by a single recent pick of something else. With plain counts a
-	// count-8 favourite stays above a count-1 newcomer — the shelf is stable,
-	// not thrashed by recency.
+	// Same-session accumulation (no time passes → no decay): eight uses of one
+	// emoji sit far above a single use of another. The recency-over-time
+	// behaviour is covered by TestEmojiFrequencyRecencyDecay.
 	for i := 0; i < 8; i++ {
 		if err := c.IncrementEmojiFrequency(ctx, "u9", ":favorite:"); err != nil {
 			t.Fatalf("IncrementEmojiFrequency(:favorite:): %v", err)
@@ -694,6 +693,84 @@ func TestEmojiFrequencyReadRefreshesTTL(t *testing.T) {
 	}
 	if ttl <= time.Hour {
 		t.Fatalf("read must refresh the TTL back toward %v, got %v", emojiFreqTTL, ttl)
+	}
+}
+
+func TestEmojiFrequencyRecencyDecay(t *testing.T) {
+	c, _ := setupRealTestCache(t)
+	ctx := context.Background()
+	base := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+
+	// An established favourite: 8 uses.
+	c.SetClockForTests(func() time.Time { return base })
+	for i := 0; i < 8; i++ {
+		if err := c.IncrementEmojiFrequency(ctx, "u1", ":favorite:"); err != nil {
+			t.Fatalf("increment favorite: %v", err)
+		}
+	}
+
+	// GENTLE: a single fresh pick 10 days later must NOT bury the favourite —
+	// it's worth ~8*0.5^(10/45)≈6.9 vs the newcomer's 1. This is the exact
+	// "losing favourites" guard the old 7-day scheme failed.
+	c.SetClockForTests(func() time.Time { return base.Add(10 * 24 * time.Hour) })
+	if err := c.IncrementEmojiFrequency(ctx, "u1", ":newcomer:"); err != nil {
+		t.Fatalf("increment newcomer: %v", err)
+	}
+	got, err := c.FrequentEmojis(ctx, "u1", 10)
+	if err != nil {
+		t.Fatalf("FrequentEmojis: %v", err)
+	}
+	if len(got) != 2 || got[0] != ":favorite:" {
+		t.Fatalf("one recent pick must not bury an established favourite; got %v", got)
+	}
+
+	// RECENCY STILL WINS: hammering the newcomer for three weeks climbs it past
+	// the now-decaying old favourite — the shelf follows current habits.
+	for day := 11; day <= 31; day++ {
+		c.SetClockForTests(func() time.Time { return base.Add(time.Duration(day) * 24 * time.Hour) })
+		if err := c.IncrementEmojiFrequency(ctx, "u1", ":newcomer:"); err != nil {
+			t.Fatalf("increment newcomer day %d: %v", day, err)
+		}
+	}
+	got, err = c.FrequentEmojis(ctx, "u1", 10)
+	if err != nil {
+		t.Fatalf("FrequentEmojis after burst: %v", err)
+	}
+	if len(got) == 0 || got[0] != ":newcomer:" {
+		t.Fatalf("sustained recent use must climb to the top; got %v", got)
+	}
+}
+
+func TestEmojiFrequencyNeverPurges(t *testing.T) {
+	c, plain := setupRealTestCache(t)
+	ctx := context.Background()
+	base := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+
+	c.SetClockForTests(func() time.Time { return base })
+	if err := c.IncrementEmojiFrequency(ctx, "u2", ":old:"); err != nil {
+		t.Fatalf("increment old: %v", err)
+	}
+	// A year on (many half-lives), a new pick heavily decays :old: — but it is
+	// NEVER removed, only ranked below the newcomer. The shelf stays full from
+	// history; nothing the user ever used is purged over time.
+	c.SetClockForTests(func() time.Time { return base.Add(365 * 24 * time.Hour) })
+	if err := c.IncrementEmojiFrequency(ctx, "u2", ":new:"); err != nil {
+		t.Fatalf("increment new: %v", err)
+	}
+	got, err := c.FrequentEmojis(ctx, "u2", 10)
+	if err != nil {
+		t.Fatalf("FrequentEmojis: %v", err)
+	}
+	if len(got) != 2 || got[0] != ":new:" || got[1] != ":old:" {
+		t.Fatalf("the old emoji must survive (ranked below the newcomer); got %v", got)
+	}
+	// Both members remain in the set — decay rescales, it never deletes.
+	n, err := plain.ZCard(ctx, emojiFreqKeyPrefix+"u2").Result()
+	if err != nil {
+		t.Fatalf("ZCard: %v", err)
+	}
+	if n != 2 {
+		t.Fatalf("decay must not purge members, set size = %d, want 2", n)
 	}
 }
 
