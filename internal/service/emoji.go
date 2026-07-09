@@ -149,7 +149,7 @@ func ValidateEmojiName(name string) error {
 // clients can refresh their emoji catalog. The client supplies only the
 // server-issued upload key; the URL is derived server-side so arbitrary or
 // expired client URLs are never persisted.
-func (s *EmojiService) Create(ctx context.Context, userID, name, imageKey string) (*model.CustomEmoji, error) {
+func (s *EmojiService) Create(ctx context.Context, userID, name, imageKey string, gettingWorkDone bool) (*model.CustomEmoji, error) {
 	if err := ValidateEmojiName(name); err != nil {
 		return nil, err
 	}
@@ -176,11 +176,12 @@ func (s *EmojiService) Create(ctx context.Context, userID, name, imageKey string
 	}
 
 	e := &model.CustomEmoji{
-		Name:      name,
-		ImageURL:  imageURL,
-		ImageKey:  imageKey,
-		CreatedBy: userID,
-		CreatedAt: time.Now(),
+		Name:            name,
+		ImageURL:        imageURL,
+		ImageKey:        imageKey,
+		CreatedBy:       userID,
+		CreatedAt:       time.Now(),
+		GettingWorkDone: gettingWorkDone,
 	}
 	if err := s.emojis.Create(ctx, e); err != nil {
 		if errors.Is(err, store.ErrAlreadyExists) {

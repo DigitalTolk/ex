@@ -168,7 +168,7 @@ describe('CustomEmojiPage', () => {
     expect(screen.getByText('x.png', { exact: false })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
     await waitFor(() => {
-      expect(uploadMutateAsync).toHaveBeenCalledWith({ name: 'ok', file });
+      expect(uploadMutateAsync).toHaveBeenCalledWith({ name: 'ok', gettingWorkDone: false, file });
     });
     await waitFor(() => {
       expect((screen.getByLabelText('Emoji shortcode') as HTMLInputElement).value).toBe('');

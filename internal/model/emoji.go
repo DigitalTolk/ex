@@ -15,4 +15,7 @@ type CustomEmoji struct {
 	ImageKey  string    `json:"-" dynamodbav:"imageKey,omitempty"`
 	CreatedBy string    `json:"createdBy" dynamodbav:"createdBy"`
 	CreatedAt time.Time `json:"createdAt" dynamodbav:"createdAt"`
+	// GettingWorkDone pins the emoji into the picker's themed
+	// "Getting Work Done" shelf; set on the custom-emoji upload page.
+	GettingWorkDone bool `json:"gettingWorkDone" dynamodbav:"gettingWorkDone,omitempty"`
 }

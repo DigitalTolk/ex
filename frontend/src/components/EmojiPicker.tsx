@@ -158,6 +158,13 @@ export function EmojiPicker({ onSelect, onClose, onOpenChange, trigger, triggerC
   // time the picker opens (see the trigger's onClick) so a fresh pick shows
   // up next time. Stored per-user in Redis, not on this device.
   const frequentLimit = (isMobile ? MOBILE_COLS : DESKTOP_COLS) * FREQUENT_ROWS;
+  // Curated "Getting Work Done" shelf: custom emojis flagged on the upload
+  // page, pinned to the front of the picker (capped to the same two rows as
+  // the frequent shelf).
+  const workPack = useMemo(
+    () => (customEmojis ?? []).filter((e) => e.gettingWorkDone).slice(0, frequentLimit),
+    [customEmojis, frequentLimit],
+  );
   const [frequent, setFrequent] = useState<string[]>([]);
   // Mirrors `frequent` so the open handler can skip the state update entirely
   // when the fetched list is unchanged — avoids a late, act-less re-render in
@@ -310,9 +317,42 @@ export function EmojiPicker({ onSelect, onClose, onOpenChange, trigger, triggerC
           </div>
         )}
         <div className="flex min-h-0 flex-1 flex-col">
+          {!query.trim() && workPack.length > 0 && (
+            <div className="mb-1.5 shrink-0 border-b pb-1.5">
+              <div className="mb-1 text-center text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                Getting Work Done
+              </div>
+              <div
+                className="grid grid-cols-[repeat(9,2rem)] content-start justify-center gap-0.5 mobile:grid-cols-[repeat(7,2.75rem)]"
+                role="list"
+                aria-label="Getting Work Done emojis"
+                data-testid="emoji-workpack-grid"
+              >
+                {workPack.map((e) => (
+                  <button
+                    key={`workpack-${e.name}`}
+                    type="button"
+                    role="listitem"
+                    data-testid="emoji-workpack-tile"
+                    onClick={() => handlePick(`:${e.name}:`)}
+                    className="flex h-8 w-8 items-center justify-center rounded hover:bg-muted mobile:h-11 mobile:w-11"
+                    aria-label={`React with :${e.name}:`}
+                    title={`:${e.name}:`}
+                  >
+                    <EmojiGlyph
+                      emoji={`:${e.name}:`}
+                      customMap={customMap}
+                      size="lg"
+                      className="mobile:h-[30px] mobile:w-[30px] mobile:text-[30px]"
+                    />
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
           {!query.trim() && frequent.length > 0 && (
             <div className="mb-1.5 shrink-0 border-b pb-1.5">
-              <div className="mb-1 text-center text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+              <div className="mb-1 text-center text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                 Frequently used
               </div>
               <div
@@ -343,7 +383,7 @@ export function EmojiPicker({ onSelect, onClose, onOpenChange, trigger, triggerC
               </div>
             </div>
           )}
-          <div className="mb-1 text-center text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+          <div className="mb-1 text-center text-xs font-semibold uppercase tracking-wider text-muted-foreground">
             {query.trim()
               ? 'Results'
               : activeCategory === CUSTOM_CATEGORY_SLUG

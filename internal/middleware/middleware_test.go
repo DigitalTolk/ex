@@ -37,6 +37,30 @@ func TestSecurityHeaders(t *testing.T) {
 	if rec.Header().Get("Strict-Transport-Security") == "" {
 		t.Error("missing Strict-Transport-Security header")
 	}
+	// The base policy must NOT carry stray upload origins.
+	if csp := rec.Header().Get("Content-Security-Policy"); strings.Contains(csp, "localhost:29000") {
+		t.Errorf("base CSP unexpectedly carries an upload origin: %q", csp)
+	}
+}
+
+func TestSecurityHeadersWithUploadOrigin(t *testing.T) {
+	// Direct-to-storage presigned uploads: a plain-http endpoint (local
+	// MinIO) must be appended to connect-src or the browser refuses the PUT
+	// with a CSP violation ("Failed to fetch").
+	h := SecurityHeadersWith("http://localhost:29000")(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+
+	csp := rec.Header().Get("Content-Security-Policy")
+	if !strings.Contains(csp, "connect-src 'self' http://localhost:29000 https: wss:") {
+		t.Errorf("connect-src missing the upload origin: %q", csp)
+	}
+	// The rest of the policy is untouched.
+	if !strings.Contains(csp, "frame-ancestors 'none'") {
+		t.Errorf("CSP lost its lockdown directives: %q", csp)
+	}
 }
 
 func newTestJWTManager() *auth.JWTManager {

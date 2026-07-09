@@ -277,7 +277,7 @@ func NewRouter(d *Deps) http.Handler {
 	// 30s per-request timeout (skips the WebSocket upgrade) so a hung dependency
 	// can't pin a request goroutine forever.
 	handler := middleware.Wrap(base,
-		middleware.SecurityHeaders,
+		middleware.SecurityHeadersWith(d.UploadConnectSrc...),
 		middleware.CORS(allowOrigins...),
 		middleware.RequestID,
 		middleware.Logging(!d.DisableAccessLog),

@@ -5,6 +5,7 @@ package cache
 import (
 	"context"
 	"io"
+	"math"
 	"net"
 	"sync"
 	"testing"
@@ -628,6 +629,59 @@ func TestEmojiFrequency(t *testing.T) {
 	// Recording refreshes the TTL window.
 	if ttl, err := plain.TTL(ctx, emojiFreqKeyPrefix+"u1").Result(); err != nil || ttl <= 0 {
 		t.Fatalf("expected a positive TTL, got %v (err=%v)", ttl, err)
+	}
+
+	// CONTINUOUS reordering (regression: the shelf must never freeze): using
+	// the currently-lowest emoji more flips it to the top of the list.
+	for i := 0; i < 4; i++ {
+		if err := c.IncrementEmojiFrequency(ctx, "u1", ":wave:"); err != nil {
+			t.Fatalf("IncrementEmojiFrequency(:wave:): %v", err)
+		}
+	}
+	got, err = c.FrequentEmojis(ctx, "u1", 10)
+	if err != nil {
+		t.Fatalf("FrequentEmojis after reorder: %v", err)
+	}
+	if len(got) == 0 || got[0] != ":wave:" {
+		t.Fatalf("continued use must reorder the shelf; got %v, want :wave: first", got)
+	}
+}
+
+func TestEmojiFrequencyRecencyBeatsLegacyCounts(t *testing.T) {
+	c, plain := setupRealTestCache(t)
+	ctx := context.Background()
+
+	// Regression for the frozen popular shelf: an emoji with a huge PLAIN
+	// legacy count (the pre-decay scoring, or simply months of history) must
+	// not be unbeatable. One fresh pick carries a forward-decay weight that
+	// outranks any legacy count, so the shelf tracks current habits.
+	if err := plain.ZAdd(ctx, emojiFreqKeyPrefix+"u9", redis.Z{Score: 100000, Member: ":entrenched:"}).Err(); err != nil {
+		t.Fatalf("seed legacy score: %v", err)
+	}
+	if err := c.IncrementEmojiFrequency(ctx, "u9", ":newcomer:"); err != nil {
+		t.Fatalf("IncrementEmojiFrequency: %v", err)
+	}
+	got, err := c.FrequentEmojis(ctx, "u9", 10)
+	if err != nil {
+		t.Fatalf("FrequentEmojis: %v", err)
+	}
+	if len(got) != 2 || got[0] != ":newcomer:" {
+		t.Fatalf("one fresh use must outrank a legacy count: got %v", got)
+	}
+}
+
+func TestEmojiFreqWeightDecayShape(t *testing.T) {
+	// The forward-decay invariant: a use one tau later carries e times the
+	// weight, i.e. recency compounds exponentially. This is what guarantees
+	// a handful of recent picks outrank any pile of old ones.
+	t0 := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	ratio := emojiFreqWeight(t0.Add(emojiFreqTau)) / emojiFreqWeight(t0)
+	if math.Abs(ratio-math.E) > 1e-9 {
+		t.Fatalf("weight ratio across one tau = %v, want e", ratio)
+	}
+	// Weights stay finite far past the deploy horizon (no float64 overflow).
+	if w := emojiFreqWeight(t0.AddDate(10, 0, 0)); math.IsInf(w, 1) || math.IsNaN(w) {
+		t.Fatalf("weight overflowed a decade out: %v", w)
 	}
 }
 

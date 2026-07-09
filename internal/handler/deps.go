@@ -62,6 +62,12 @@ type Deps struct {
 	// as the canonical primary origin in the middleware.
 	AllowOrigins []string
 
+	// UploadConnectSrc lists extra CSP connect-src origins for the
+	// direct-to-storage browser uploads (the presigned-PUT endpoint). Only
+	// needed when that endpoint is plain http (local MinIO) — production
+	// https stores are covered by the base policy.
+	UploadConnectSrc []string
+
 	// DisableAccessLog silences per-request logging except 5xx responses
 	// (ACCESS_LOG_ENABLED=false). Zero value keeps full access logging.
 	DisableAccessLog bool

@@ -60,10 +60,53 @@ function seedFrequency(shortcodes: string[]) {
 }
 
 describe('EmojiPicker browser', () => {
-  // Keep the frequently-used shelf deterministic across tests.
+  it('pins flagged customs into the front "Getting Work Done" shelf, capped to two rows', async () => {
+    const flagged = Array.from({ length: 20 }, (_, i) => ({
+      name: `work${i}`,
+      imageURL: `https://emoji.test/w${i}.png`,
+      createdBy: 'u-1',
+      createdAt: '2026-05-01T10:00:00Z',
+      gettingWorkDone: true,
+    }));
+    customEmojiData.value = [
+      ...flagged,
+      { name: 'plain', imageURL: 'https://emoji.test/plain.png', createdBy: 'u-1', createdAt: '2026-05-01T10:00:00Z' },
+    ];
+    const { onSelect } = await openPicker();
+
+    const grid = document.querySelector('[data-testid="emoji-workpack-grid"]') as HTMLElement;
+    expect(grid).not.toBeNull();
+    const tiles = grid.querySelectorAll('[data-testid="emoji-workpack-tile"]');
+    // Two rows: 9 columns on desktop, 7 on mobile — never all 20.
+    expect(tiles.length).toBe(window.innerWidth > 767 ? 18 : 14);
+    // Unflagged customs stay out of the shelf.
+    expect(grid.textContent ?? '').not.toContain('plain');
+
+    // Picking from the shelf selects like any other tile.
+    (tiles[0] as HTMLElement).click();
+    expect(onSelect).toHaveBeenCalledWith(':work0:');
+  });
+
+  it('hides the "Getting Work Done" shelf while searching and when nothing is flagged', async () => {
+    customEmojiData.value = [
+      { name: 'work0', imageURL: 'https://emoji.test/w0.png', createdBy: 'u-1', createdAt: '2026-05-01T10:00:00Z', gettingWorkDone: true },
+    ];
+    const { screen } = await openPicker();
+    expect(document.querySelector('[data-testid="emoji-workpack-grid"]')).not.toBeNull();
+    await screen.getByLabelText('Search emojis').fill('smile');
+    await vi.waitFor(() => {
+      expect(document.querySelector('[data-testid="emoji-workpack-grid"]')).toBeNull();
+    });
+  });
+
+  // Keep the frequently-used shelf deterministic across tests, and reset the
+  // custom-emoji roster my work-pack tests mutate.
   beforeEach(() => {
     freqRef.value = [];
     recordMock.mockClear();
+    customEmojiData.value = [
+      { name: 'partyparrot', imageURL: 'https://emoji.test/parrot.gif', createdBy: 'u-1', createdAt: '2026-05-01T10:00:00Z' },
+    ];
   });
 
   it('renders the frequently-used shelf and selects from it', async () => {

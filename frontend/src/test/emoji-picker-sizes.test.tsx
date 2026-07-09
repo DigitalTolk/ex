@@ -38,13 +38,13 @@ function renderPicker() {
 }
 
 describe('EmojiPicker — readable sizes', () => {
-  it('Section labels use text-sm (14px) and tiles render large glyphs', async () => {
+  it('Section labels use text-xs (12px) and tiles render large glyphs', async () => {
     renderPicker();
     fireEvent.click(screen.getByLabelText('Open emoji picker'));
 
     // Default category label — picker opens on the first CLDR group.
     const standardLabel = await screen.findByText('Smileys & Emotion');
-    expect(standardLabel.className).toContain('text-sm');
+    expect(standardLabel.className).toContain('text-xs');
     expect(standardLabel.className).not.toContain('text-[10px]');
 
     const tile = (await screen.findAllByTestId('emoji-picker-tile'))[0];

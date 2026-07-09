@@ -280,6 +280,8 @@ export interface CustomEmoji {
   imageURL: string;
   createdBy: string;
   createdAt: string;
+  // Pinned into the picker's "Getting Work Done" shelf (set at upload).
+  gettingWorkDone?: boolean;
 }
 
 export interface PresenceEvent {

@@ -471,7 +471,11 @@ func main() {
 			ReplayErrorSampleRate:   cfg.SentryFrontendReplayErrorSampleRate,
 		},
 		AllowOrigins: allowOrigins,
-		RateLimiter:  redisCache,
+		// The browser PUTs presigned uploads straight at the storage
+		// endpoint; a plain-http endpoint (local MinIO) must be CSP
+		// allow-listed or every upload dies with "Failed to fetch".
+		UploadConnectSrc: uploadConnectSrcOrigins(cfg.S3PublicEndpoint, cfg.S3Endpoint),
+		RateLimiter:      redisCache,
 		// ACCESS_LOG_ENABLED=false → only 5xx requests reach the log.
 		DisableAccessLog: !cfg.AccessLogEnabled,
 	})
@@ -574,4 +578,23 @@ func runReminderPoller(ctx context.Context, svc *service.ReminderService, interv
 			}
 		}
 	}
+}
+
+// uploadConnectSrcOrigins derives the CSP connect-src allow-list entry for
+// browser-bound presigned uploads. The public endpoint wins (it is what the
+// presigned URLs carry); only http origins are returned since the base CSP
+// already permits https:.
+func uploadConnectSrcOrigins(publicEndpoint, endpoint string) []string {
+	raw := publicEndpoint
+	if raw == "" {
+		raw = endpoint
+	}
+	if raw == "" {
+		return nil
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "http" || u.Host == "" {
+		return nil
+	}
+	return []string{u.Scheme + "://" + u.Host}
 }

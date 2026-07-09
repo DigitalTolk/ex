@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 	"time"
 
@@ -56,7 +57,7 @@ const emojiFreqKeyPrefix = "emoji:freq:"
 
 // emojiFreqTTL ages out a user's emoji-usage history so a long-dormant
 // account doesn't keep stale favourites forever; every use refreshes it.
-const emojiFreqTTL = 90 * 24 * time.Hour
+const emojiFreqTTL = 365 * 24 * time.Hour
 
 // RedisCache wraps a Redis client to provide typed caching operations.
 type RedisCache struct {
@@ -419,13 +420,32 @@ func (c *RedisCache) SetUser(ctx context.Context, user *model.User) error {
 	return c.Set(ctx, userKeyPrefix+user.ID, rec, userCacheTTL)
 }
 
-// IncrementEmojiFrequency bumps the per-user usage count for a picked emoji
-// shortcode, stored in a sorted set scored by frequency, and refreshes the
-// key's TTL.
+// Emoji frequency scores use FORWARD exponential decay: each use adds
+// e^((now-epoch)/tau) instead of a flat 1, so recent picks dominate the
+// ranking without ever rewriting old scores. With tau = 7 days, one pick
+// today outweighs ~2.7 picks from a week ago and hundreds from months ago —
+// the popular shelf keeps reordering with the user's CURRENT habits instead
+// of freezing once early favorites accumulate unbeatable all-time counts
+// (plain counters were exactly that bug). The fixed epoch keeps weights
+// comparable across processes and restarts; float64 only overflows ~13 years
+// past the epoch (e^709), far beyond the 90-day key TTL. Legacy plain-count
+// scores (1..n) rank below any post-deploy weight, so history resets to
+// recency once and then decays smoothly.
+const emojiFreqTau = 7 * 24 * time.Hour
+
+var emojiFreqEpoch = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+func emojiFreqWeight(now time.Time) float64 {
+	return math.Exp(now.Sub(emojiFreqEpoch).Seconds() / emojiFreqTau.Seconds())
+}
+
+// IncrementEmojiFrequency bumps the per-user usage weight for a picked emoji
+// shortcode, stored in a sorted set scored by recency-decayed frequency, and
+// refreshes the key's TTL.
 func (c *RedisCache) IncrementEmojiFrequency(ctx context.Context, userID, shortcode string) error {
 	key := emojiFreqKeyPrefix + userID
 	pipe := c.client.Pipeline()
-	pipe.ZIncrBy(ctx, key, 1, shortcode)
+	pipe.ZIncrBy(ctx, key, emojiFreqWeight(time.Now()), shortcode)
 	pipe.Expire(ctx, key, emojiFreqTTL)
 	if _, err := pipe.Exec(ctx); err != nil {
 		return fmt.Errorf("emoji freq increment %q: %w", userID, err)

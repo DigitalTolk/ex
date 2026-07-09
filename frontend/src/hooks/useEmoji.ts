@@ -64,7 +64,7 @@ export function useFrequentEmojis(limit?: number) {
 export function useUploadEmoji() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async ({ name, file }: { name: string; file: File }) => {
+    mutationFn: async ({ name, file, gettingWorkDone }: { name: string; file: File; gettingWorkDone: boolean }) => {
       const { uploadURL, key } = await apiFetch<{
         uploadURL: string;
         key: string;
@@ -82,7 +82,7 @@ export function useUploadEmoji() {
       // persist the client-held presigned URL.
       return apiFetch<CustomEmoji>('/api/v1/emojis', {
         method: 'POST',
-        body: JSON.stringify({ name, imageKey: key }),
+        body: JSON.stringify({ name, imageKey: key, gettingWorkDone }),
       });
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.emojis() }),

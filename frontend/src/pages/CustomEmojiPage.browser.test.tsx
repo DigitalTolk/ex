@@ -10,7 +10,7 @@ import CustomEmojiPage from './CustomEmojiPage';
 
 const uploadMutate = vi.fn().mockResolvedValue(undefined);
 const deleteMutate = vi.fn().mockResolvedValue(undefined);
-let mockEmojis: Array<{ name: string; imageURL: string; createdBy: string; createdAt: string }> | undefined = [];
+let mockEmojis: Array<{ name: string; imageURL: string; createdBy: string; createdAt: string; gettingWorkDone?: boolean }> | undefined = [];
 const uploadPendingRef = { value: false };
 
 vi.mock('@/hooks/useEmoji', () => ({
@@ -123,11 +123,41 @@ describe('CustomEmojiPage browser', () => {
     await nameInput.fill('party_parrot');
     await screen.getByRole('button', { name: 'Save' }).click();
     await vi.waitFor(() => {
-      expect(uploadMutate).toHaveBeenCalledWith(expect.objectContaining({ name: 'party_parrot' }));
+      // The shelf flag defaults OFF and rides the mutation explicitly.
+      expect(uploadMutate).toHaveBeenCalledWith(
+        expect.objectContaining({ name: 'party_parrot', gettingWorkDone: false }),
+      );
     });
     await vi.waitFor(() => {
       expect((nameInput.element() as HTMLInputElement).value).toBe('');
     });
+    // The checkbox also resets with the rest of the form.
+    expect((document.querySelector('[data-testid="emoji-getting-work-done"]') as HTMLInputElement).checked).toBe(false);
+  });
+
+  it('uploads with the "Getting Work Done" shelf flag when the checkbox is ticked', async () => {
+    mockEmojis = [];
+    const screen = await mount(<Wrap><CustomEmojiPage /></Wrap>);
+    await pickFile('shipit.png');
+    await screen.getByLabelText('Emoji shortcode').fill('shipit');
+    (document.querySelector('[data-testid="emoji-getting-work-done"]') as HTMLInputElement).click();
+    await screen.getByRole('button', { name: 'Save' }).click();
+    await vi.waitFor(() => {
+      expect(uploadMutate).toHaveBeenCalledWith(
+        expect.objectContaining({ name: 'shipit', gettingWorkDone: true }),
+      );
+    });
+  });
+
+  it('marks flagged emojis in the list with the shelf label', async () => {
+    mockEmojis = [
+      { name: 'shipit', imageURL: 'https://cdn/s.png', createdBy: 'u-1', createdAt: '2026-05-01T10:00:00Z', gettingWorkDone: true },
+      { name: 'plain', imageURL: 'https://cdn/p.png', createdBy: 'u-1', createdAt: '2026-05-01T10:00:00Z' },
+    ];
+    await mount(<Wrap><CustomEmojiPage /></Wrap>);
+    const rows = Array.from(document.querySelectorAll('.font-mono')).map((el) => el.closest('div')?.parentElement?.textContent ?? '');
+    expect(rows.find((r) => r.includes(':shipit:'))).toContain('Getting Work Done');
+    expect(rows.find((r) => r.includes(':plain:'))).not.toContain('Getting Work Done');
   });
 
   it('the picker tile forwards its click to the hidden file input', async () => {

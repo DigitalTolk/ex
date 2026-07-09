@@ -11,6 +11,7 @@ import {
   shortcodeWithSkinTone,
   type EmojiSkinTone,
 } from '@/lib/emoji-shortcodes';
+import { recordEmojiUse } from '@/lib/emoji-frequency';
 import { fuzzyMatch } from '@/lib/fuzzy';
 import type { CustomEmoji } from '@/types';
 import type { MentionCompletion } from './optionRender';
@@ -62,8 +63,12 @@ export interface EmojiProviders {
   skinTone: () => EmojiSkinTone;
 }
 
-function applyInsert(text: string) {
+function applyInsert(text: string, recordAs: string) {
   return (view: EditorView, _completion: Completion, from: number, to: number) => {
+    // Picking from the :-typeahead IS an emoji use — without this, composer
+    // picks (the most common way emojis are inserted) never fed the popular
+    // shelf and it drifted static. Best-effort, same as the picker.
+    void recordEmojiUse(recordAs);
     view.dispatch({ changes: { from, to, insert: text }, selection: { anchor: from + text.length } });
   };
 }
@@ -87,7 +92,7 @@ function hitToCompletion(hit: EmojiHit, skinTone: EmojiSkinTone): MentionComplet
       detail: 'custom',
       type: 'text',
       section: EMOJI_SECTION,
-      apply: applyInsert(`:${hit.name}: `),
+      apply: applyInsert(`:${hit.name}: `, `:${hit.name}:`),
       meta: { kind: 'emoji', name: hit.name, imageURL: hit.imageURL },
     };
   }
@@ -97,7 +102,7 @@ function hitToCompletion(hit: EmojiHit, skinTone: EmojiSkinTone): MentionComplet
     detail: hit.unicode,
     type: 'text',
     section: EMOJI_SECTION,
-    apply: applyInsert(`${shortcode} `),
+    apply: applyInsert(`${shortcode} `, shortcode),
     meta: { kind: 'emoji', name: hit.name, glyph: hit.unicode },
   };
 }

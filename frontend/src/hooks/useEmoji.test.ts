@@ -94,7 +94,7 @@ describe('useUploadEmoji', () => {
 
     const { result } = renderHook(() => useUploadEmoji(), { wrapper: createWrapper() });
     const file = new File(['x'], 'x.png', { type: 'image/png' });
-    await result.current.mutateAsync({ name: 'new', file });
+    await result.current.mutateAsync({ name: 'new', file, gettingWorkDone: true });
 
     // First call: get signed URL
     expect(apiFetch).toHaveBeenNthCalledWith(
@@ -109,7 +109,7 @@ describe('useUploadEmoji', () => {
       expect.objectContaining({ method: 'POST' }),
     );
     const body = JSON.parse(vi.mocked(apiFetch).mock.calls[1][1]?.body as string);
-    expect(body).toEqual({ name: 'new', imageKey: 'uploads/u-1/x.png' });
+    expect(body).toEqual({ name: 'new', imageKey: 'uploads/u-1/x.png', gettingWorkDone: true });
     // PUT to the signed URL with the file
     expect(globalThis.fetch).toHaveBeenCalledWith(
       'https://upload.test/u',
@@ -127,7 +127,7 @@ describe('useUploadEmoji', () => {
     const { result } = renderHook(() => useUploadEmoji(), { wrapper: createWrapper() });
     const file = new File(['x'], 'x.png', { type: 'image/png' });
     await expect(
-      result.current.mutateAsync({ name: 'new', file }),
+      result.current.mutateAsync({ name: 'new', file, gettingWorkDone: false }),
     ).rejects.toThrow(/Upload failed: 500/);
   });
 });

@@ -26,6 +26,7 @@ export default function CustomEmojiPage() {
   const upload = useUploadEmoji();
   const remove = useDeleteEmoji();
   const [name, setName] = useState('');
+  const [gettingWorkDone, setGettingWorkDone] = useState(false);
   const [file, setFile] = useState<File | null>(null);
   const [previewURL, setPreviewURL] = useState<string | null>(null);
   const [error, setError] = useState('');
@@ -35,6 +36,7 @@ export default function CustomEmojiPage() {
 
   function reset() {
     setName('');
+    setGettingWorkDone(false);
     setFile(null);
     if (previewURL) URL.revokeObjectURL(previewURL);
     setPreviewURL(null);
@@ -76,7 +78,7 @@ export default function CustomEmojiPage() {
       return;
     }
     try {
-      await upload.mutateAsync({ name, file });
+      await upload.mutateAsync({ name, file, gettingWorkDone });
       reset();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Save failed');
@@ -181,6 +183,16 @@ export default function CustomEmojiPage() {
                 <code>-</code>. Max 32 chars.
               </p>
             </div>
+            <label className="flex items-center gap-2 text-xs mobile:py-1.5">
+              <input
+                type="checkbox"
+                checked={gettingWorkDone}
+                onChange={(e) => setGettingWorkDone(e.target.checked)}
+                className="mobile:h-5 mobile:w-5"
+                data-testid="emoji-getting-work-done"
+              />
+              Show in the picker&apos;s &ldquo;Getting Work Done&rdquo; shelf
+            </label>
             {file && (
               <p className="truncate text-xs text-muted-foreground">
                 {file.name} · {formatBytes(file.size)}
@@ -248,6 +260,7 @@ export default function CustomEmojiPage() {
                 <span className="block truncate font-mono text-sm">:{e.name}:</span>
                 <span className="block truncate text-xs text-muted-foreground">
                   by {creatorMap.get(e.createdBy)?.displayName ?? 'unknown'}
+                  {e.gettingWorkDone && ' · Getting Work Done'}
                 </span>
               </div>
               {canDelete(e.createdBy) && (

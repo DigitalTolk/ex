@@ -1,9 +1,27 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EditorState } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import { CompletionContext, type CompletionResult } from '@codemirror/autocomplete';
 import type { CustomEmoji } from '@/types';
 import { rankEmoji, emojiSource, type EmojiProviders } from './emojiAutocomplete';
+import { apiFetch } from '@/lib/api';
+
+// Applying a completion records an emoji "use" (feeds the popular shelf) —
+// mock the api layer so each apply's POST can be asserted.
+vi.mock('@/lib/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/api')>()),
+  apiFetch: vi.fn(async () => undefined),
+}));
+
+beforeEach(() => {
+  vi.mocked(apiFetch).mockClear();
+});
+
+function lastRecordedEmoji(): string | undefined {
+  const call = vi.mocked(apiFetch).mock.calls.find(([url]) => url === '/api/v1/emojis/frequent');
+  if (!call) return undefined;
+  return (JSON.parse((call[1] as { body: string }).body) as { emoji: string }).emoji;
+}
 
 const customEmojis: CustomEmoji[] = [
   { name: 'parrot', imageURL: 'https://x.test/parrot.gif' } as CustomEmoji,
@@ -87,6 +105,8 @@ describe('emojiSource', () => {
     const opt = res.options[0];
     (opt.apply as (v: EditorView, c: typeof opt, f: number, t: number) => void)(view, opt, res.from, res.to);
     expect(view.state.doc.toString()).toBe('hi :smile: ');
+    // The pick was recorded as a use so the popular shelf keeps reordering.
+    expect(lastRecordedEmoji()).toBe(':smile:');
     view.destroy();
   });
 
@@ -98,6 +118,8 @@ describe('emojiSource', () => {
     (opt.apply as (v: EditorView, c: typeof opt, f: number, t: number) => void)(view, opt, res.from, res.to);
     // wave supports skin tone → a `::skin-tone:` suffix is appended.
     expect(view.state.doc.toString()).toMatch(/^:wave::skin-tone-\d: $/);
+    // The recorded use carries the SAME toned shortcode the picker records.
+    expect(lastRecordedEmoji()).toMatch(/^:wave::skin-tone-\d:$/);
     view.destroy();
   });
 
@@ -108,6 +130,7 @@ describe('emojiSource', () => {
     expect(opt.detail).toBe('custom');
     (opt.apply as (v: EditorView, c: typeof opt, f: number, t: number) => void)(view, opt, res.from, res.to);
     expect(view.state.doc.toString()).toBe(':parrot: ');
+    expect(lastRecordedEmoji()).toBe(':parrot:');
     view.destroy();
   });
 });
