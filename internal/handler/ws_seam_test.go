@@ -27,7 +27,7 @@ import (
 // container and returns its dial URL plus the broker pubsub (for publishing
 // events). The caller is expected to have overridden wsConnWrite to drive
 // write failures.
-func newSeamConnectServer(t *testing.T) (string, string, *pubsub.RedisPubSub) {
+func newSeamConnectServer(t *testing.T) (string, string, string, *pubsub.RedisPubSub) {
 	t.Helper()
 	ps, err := pubsub.NewRedisPubSub("redis://" + redisAddrForTest(t))
 	if err != nil {
@@ -49,7 +49,7 @@ func newSeamConnectServer(t *testing.T) (string, string, *pubsub.RedisPubSub) {
 	token := makeTokenForUser(jwtMgr, user)
 	srv := httptest.NewServer(middleware.Auth(jwtMgr)(http.HandlerFunc(h.Connect)))
 	t.Cleanup(srv.Close)
-	return "ws" + strings.TrimPrefix(srv.URL, "http") + "/?token=" + token, user.ID, ps
+	return "ws" + strings.TrimPrefix(srv.URL, "http") + "/", token, user.ID, ps
 }
 
 // TestWSHandler_Connect_InitialPingWriteFails forces wsConnWrite to fail so the
@@ -62,10 +62,10 @@ func TestWSHandler_Connect_InitialPingWriteFails(t *testing.T) {
 	}
 	t.Cleanup(func() { wsConnWrite = orig })
 
-	wsURL, _, _ := newSeamConnectServer(t)
+	wsURL, token, _, _ := newSeamConnectServer(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	conn, _, err := websocket.Dial(ctx, wsURL, nil)
+	conn, _, err := dialWS(ctx, wsURL, token)
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
@@ -99,10 +99,10 @@ func TestWSHandler_Connect_EventWriteFails(t *testing.T) {
 	}
 	t.Cleanup(func() { wsConnWrite = orig })
 
-	wsURL, userID, ps := newSeamConnectServer(t)
+	wsURL, token, userID, ps := newSeamConnectServer(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	conn, _, err := websocket.Dial(ctx, wsURL, nil)
+	conn, _, err := dialWS(ctx, wsURL, token)
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
@@ -153,10 +153,10 @@ func TestWSHandler_Connect_KeepAlivePingWriteFails(t *testing.T) {
 	}
 	t.Cleanup(func() { wsConnWrite = orig })
 
-	wsURL, _, _ := newSeamConnectServer(t)
+	wsURL, token, _, _ := newSeamConnectServer(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	conn, _, err := websocket.Dial(ctx, wsURL, nil)
+	conn, _, err := dialWS(ctx, wsURL, token)
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}

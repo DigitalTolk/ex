@@ -220,7 +220,7 @@ func TestNotifyForMessage_PerChannelOverrideBeatsAccount(t *testing.T) {
 func TestNotifyForMessage_MobileAll_DesktopMentions(t *testing.T) {
 	svc, pub, members, _, chans, users := setupNotifier(t)
 	push := &recordingMobilePush{}
-	svc.SetMobilePushSender(push)
+	svc.SetMobilePushScheduler(push)
 	ctx := context.Background()
 	chans.channels["ch1"] = &model.Channel{ID: "ch1", Name: "general", Slug: "general"}
 	users.users["u-author"] = &model.User{ID: "u-author", DisplayName: "Alice"}
@@ -244,7 +244,7 @@ func TestNotifyForMessage_MobileAll_DesktopMentions(t *testing.T) {
 func TestNotifyForMessage_MobileMentions_DesktopAll(t *testing.T) {
 	svc, pub, members, _, chans, users := setupNotifier(t)
 	push := &recordingMobilePush{}
-	svc.SetMobilePushSender(push)
+	svc.SetMobilePushScheduler(push)
 	ctx := context.Background()
 	chans.channels["ch1"] = &model.Channel{ID: "ch1", Name: "general", Slug: "general"}
 	users.users["u-author"] = &model.User{ID: "u-author", DisplayName: "Alice"}

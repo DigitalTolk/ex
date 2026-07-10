@@ -75,6 +75,7 @@ vi.mock('@/context/PresenceContext', () => ({
     online: new Set<string>(),
     isOnline: () => false,
     setUserOnline: vi.fn(),
+    refreshPresence: vi.fn(),
   }),
   PresenceProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));

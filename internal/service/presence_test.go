@@ -10,42 +10,50 @@ import (
 	"github.com/DigitalTolk/ex/internal/pubsub"
 )
 
+// fakePresenceStore mirrors the real per-connection semantics: each
+// (userID, connID) is an independent entry; the transition verdicts come
+// from the live-entry count, and a refresh re-creates a lost entry.
 type fakePresenceStore struct {
-	counts map[string]int
-	err    error
+	conns map[string]map[string]bool // userID → live connIDs
+	err   error
 }
 
 func newFakePresenceStore() *fakePresenceStore {
-	return &fakePresenceStore{counts: make(map[string]int)}
+	return &fakePresenceStore{conns: make(map[string]map[string]bool)}
 }
 
-func (s *fakePresenceStore) IncrementPresence(_ context.Context, userID string) (bool, error) {
+func (s *fakePresenceStore) IncrementPresence(_ context.Context, userID, connID string) (bool, error) {
 	if s.err != nil {
 		return false, s.err
 	}
-	s.counts[userID]++
-	return s.counts[userID] == 1, nil
+	if s.conns[userID] == nil {
+		s.conns[userID] = map[string]bool{}
+	}
+	s.conns[userID][connID] = true
+	return len(s.conns[userID]) == 1, nil
 }
 
-func (s *fakePresenceStore) DecrementPresence(_ context.Context, userID string) (bool, error) {
+func (s *fakePresenceStore) DecrementPresence(_ context.Context, userID, connID string) (bool, error) {
 	if s.err != nil {
 		return false, s.err
 	}
-	if s.counts[userID] <= 1 {
-		delete(s.counts, userID)
+	delete(s.conns[userID], connID)
+	if len(s.conns[userID]) == 0 {
+		delete(s.conns, userID)
 		return true, nil
 	}
-	s.counts[userID]--
 	return false, nil
 }
 
-func (s *fakePresenceStore) RefreshPresence(_ context.Context, userID string) error {
+func (s *fakePresenceStore) RefreshPresence(_ context.Context, userID, connID string) error {
 	if s.err != nil {
 		return s.err
 	}
-	if s.counts[userID] == 0 {
-		return errors.New("missing")
+	// Self-heal: like the real ZADD, a refresh re-creates a lost entry.
+	if s.conns[userID] == nil {
+		s.conns[userID] = map[string]bool{}
 	}
+	s.conns[userID][connID] = true
 	return nil
 }
 
@@ -53,15 +61,15 @@ func (s *fakePresenceStore) IsPresenceOnline(_ context.Context, userID string) (
 	if s.err != nil {
 		return false, s.err
 	}
-	return s.counts[userID] > 0, nil
+	return len(s.conns[userID]) > 0, nil
 }
 
 func (s *fakePresenceStore) OnlinePresenceUserIDs(_ context.Context) ([]string, error) {
 	if s.err != nil {
 		return nil, s.err
 	}
-	ids := make([]string, 0, len(s.counts))
-	for id := range s.counts {
+	ids := make([]string, 0, len(s.conns))
+	for id := range s.conns {
 		ids = append(ids, id)
 	}
 	return ids, nil
@@ -71,7 +79,7 @@ func TestPresenceService_Connect_FirstReturnsTrue(t *testing.T) {
 	pub := newMockPublisher()
 	svc := NewPresenceService(nil, pub)
 
-	if !svc.OnConnect(context.Background(), "u1") {
+	if !svc.OnConnect(context.Background(), "u1", "c1") {
 		t.Error("first connect should return true")
 	}
 	if !svc.IsOnline("u1") {
@@ -95,7 +103,7 @@ func TestPresenceService_Connect_ScopedToAudienceTopics(t *testing.T) {
 		return []string{pubsub.ChannelName("c1"), pubsub.ConversationName("d1")}
 	})
 
-	if !svc.OnConnect(context.Background(), "u1") {
+	if !svc.OnConnect(context.Background(), "u1", "c1") {
 		t.Fatal("first connect should report the transition")
 	}
 	if len(pub.published) != 2 {
@@ -140,7 +148,7 @@ func TestPresenceService_Connect_PipelinesViaPublishMany(t *testing.T) {
 		return []string{pubsub.ChannelName("c1"), pubsub.ConversationName("d1")}
 	})
 
-	if !svc.OnConnect(context.Background(), "u1") {
+	if !svc.OnConnect(context.Background(), "u1", "c1") {
 		t.Fatal("first connect should report the transition")
 	}
 	if len(pub.manyCalls) != 1 || len(pub.manyCalls[0]) != 2 {
@@ -155,7 +163,7 @@ func TestPresenceService_Connect_NoSharedContextPublishesNothing(t *testing.T) {
 	pub := newMockPublisher()
 	svc := NewPresenceService(nil, pub)
 	svc.SetPresenceAudienceResolver(func(context.Context, string) []string { return nil })
-	if !svc.OnConnect(context.Background(), "loner") {
+	if !svc.OnConnect(context.Background(), "loner", "c1") {
 		t.Fatal("first connect should report the transition")
 	}
 	if len(pub.published) != 0 {
@@ -167,8 +175,8 @@ func TestPresenceService_Connect_SecondReturnsFalse(t *testing.T) {
 	pub := newMockPublisher()
 	svc := NewPresenceService(nil, pub)
 
-	svc.OnConnect(context.Background(), "u1")
-	if svc.OnConnect(context.Background(), "u1") {
+	svc.OnConnect(context.Background(), "u1", "c1")
+	if svc.OnConnect(context.Background(), "u1", "c2") {
 		t.Error("second connect should return false (still online)")
 	}
 	if len(pub.published) != 1 {
@@ -180,8 +188,8 @@ func TestPresenceService_Disconnect_LastReturnsTrue(t *testing.T) {
 	pub := newMockPublisher()
 	svc := NewPresenceService(nil, pub)
 
-	svc.OnConnect(context.Background(), "u1")
-	if !svc.OnDisconnect(context.Background(), "u1") {
+	svc.OnConnect(context.Background(), "u1", "c1")
+	if !svc.OnDisconnect(context.Background(), "u1", "c1") {
 		t.Error("only-connection disconnect should return true")
 	}
 	if svc.IsOnline("u1") {
@@ -196,9 +204,9 @@ func TestPresenceService_Disconnect_OneOfManyReturnsFalse(t *testing.T) {
 	pub := newMockPublisher()
 	svc := NewPresenceService(nil, pub)
 
-	svc.OnConnect(context.Background(), "u1")
-	svc.OnConnect(context.Background(), "u1")
-	if svc.OnDisconnect(context.Background(), "u1") {
+	svc.OnConnect(context.Background(), "u1", "c1")
+	svc.OnConnect(context.Background(), "u1", "c2")
+	if svc.OnDisconnect(context.Background(), "u1", "c2") {
 		t.Error("disconnect with remaining connections should return false")
 	}
 	if !svc.IsOnline("u1") {
@@ -211,8 +219,29 @@ func TestPresenceService_Disconnect_OneOfManyReturnsFalse(t *testing.T) {
 
 func TestPresenceService_Disconnect_NeverConnectedReturnsFalse(t *testing.T) {
 	svc := NewPresenceService(nil, newMockPublisher())
-	if svc.OnDisconnect(context.Background(), "ghost") {
+	if svc.OnDisconnect(context.Background(), "ghost", "c1") {
 		t.Error("disconnect of never-connected user should return false")
+	}
+}
+
+// The instance-crash class of bug: a disconnect for a connID the store never
+// saw (or that already lapsed) must be a no-op that cannot knock a live user
+// offline — under the old counter design this DECR drove the count negative
+// and published a false offline while another connection was still live.
+func TestPresenceService_Disconnect_UnknownConnIDIsNoOp(t *testing.T) {
+	store := newFakePresenceStore()
+	pub := newMockPublisher()
+	svc := NewPresenceService(store, pub)
+
+	svc.OnConnect(context.Background(), "u1", "c-live")
+	if svc.OnDisconnect(context.Background(), "u1", "c-ghost") {
+		t.Fatal("unknown connID disconnect must not report an offline transition")
+	}
+	if !svc.IsOnline("u1") {
+		t.Fatal("live connection must survive an unknown connID disconnect")
+	}
+	if len(pub.published) != 1 {
+		t.Fatalf("no offline may be published, got %d publishes", len(pub.published))
 	}
 }
 
@@ -223,8 +252,8 @@ func TestPresenceService_OnlineUserIDs(t *testing.T) {
 		t.Errorf("empty initial online list, got %v", got)
 	}
 
-	svc.OnConnect(context.Background(), "u1")
-	svc.OnConnect(context.Background(), "u2")
+	svc.OnConnect(context.Background(), "u1", "c1")
+	svc.OnConnect(context.Background(), "u2", "c2")
 
 	got := svc.OnlineUserIDs()
 	if len(got) != 2 {
@@ -237,7 +266,7 @@ func TestPresenceService_SharedStoreMakesRemoteConnectionsVisible(t *testing.T) 
 	svcA := NewPresenceService(store, newMockPublisher())
 	svcB := NewPresenceService(store, newMockPublisher())
 
-	svcA.OnConnect(context.Background(), "u1")
+	svcA.OnConnect(context.Background(), "u1", "c-a1")
 
 	if !svcB.IsOnline("u1") {
 		t.Fatal("second service should see user online through shared presence store")
@@ -255,20 +284,20 @@ func TestPresenceService_SharedStorePublishesOnlyOnGlobalTransitions(t *testing.
 	svcA := NewPresenceService(store, pubA)
 	svcB := NewPresenceService(store, pubB)
 
-	if !svcA.OnConnect(context.Background(), "u1") {
+	if !svcA.OnConnect(context.Background(), "u1", "c-a1") {
 		t.Fatal("first process should publish online transition")
 	}
-	if svcB.OnConnect(context.Background(), "u1") {
+	if svcB.OnConnect(context.Background(), "u1", "c-b1") {
 		t.Fatal("second process connection should not publish duplicate online transition")
 	}
 	if len(pubA.published) != 1 || len(pubB.published) != 0 {
 		t.Fatalf("online publishes: pubA=%d pubB=%d", len(pubA.published), len(pubB.published))
 	}
 
-	if svcB.OnDisconnect(context.Background(), "u1") {
+	if svcB.OnDisconnect(context.Background(), "u1", "c-b1") {
 		t.Fatal("disconnect while another process is still connected should not publish offline")
 	}
-	if !svcA.OnDisconnect(context.Background(), "u1") {
+	if !svcA.OnDisconnect(context.Background(), "u1", "c-a1") {
 		t.Fatal("last global disconnect should publish offline")
 	}
 	if len(pubA.published) != 2 || len(pubB.published) != 0 {
@@ -281,7 +310,7 @@ func TestPresenceService_FallsBackToLocalPresenceOnStoreError(t *testing.T) {
 	store.err = errors.New("redis down")
 	svc := NewPresenceService(store, newMockPublisher())
 
-	svc.OnConnect(context.Background(), "u1")
+	svc.OnConnect(context.Background(), "u1", "c1")
 
 	if !svc.IsOnline("u1") {
 		t.Fatal("local presence should remain usable when the shared store errors")
@@ -292,24 +321,70 @@ func TestPresenceService_FallsBackToLocalPresenceOnStoreError(t *testing.T) {
 	}
 }
 
+// With a broken store, the LOCAL transitions still publish — a user's own
+// instance keeps announcing them (fail toward visible), and the second local
+// connection stays deduped.
+func TestPresenceService_StoreErrorFallsBackToLocalTransitions(t *testing.T) {
+	store := newFakePresenceStore()
+	store.err = errors.New("redis down")
+	pub := newMockPublisher()
+	svc := NewPresenceService(store, pub)
+
+	if !svc.OnConnect(context.Background(), "u1", "c1") {
+		t.Fatal("first local connect must publish online despite store error")
+	}
+	if svc.OnConnect(context.Background(), "u1", "c2") {
+		t.Fatal("second local connect must stay deduped despite store error")
+	}
+	if svc.OnDisconnect(context.Background(), "u1", "c2") {
+		t.Fatal("non-last local disconnect must not publish offline")
+	}
+	if !svc.OnDisconnect(context.Background(), "u1", "c1") {
+		t.Fatal("last local disconnect must publish offline despite store error")
+	}
+	if len(pub.published) != 2 {
+		t.Fatalf("expected 2 publishes (online+offline), got %d", len(pub.published))
+	}
+}
+
 func TestPresenceService_RefreshOnlyTouchesLocalConnections(t *testing.T) {
 	store := newFakePresenceStore()
 	svc := NewPresenceService(store, newMockPublisher())
 
-	svc.Refresh(context.Background(), "u1")
-	svc.OnConnect(context.Background(), "u1")
-	svc.Refresh(context.Background(), "u1")
-	if store.counts["u1"] != 1 {
-		t.Fatalf("refresh should not change connection count, got %d", store.counts["u1"])
+	svc.Refresh(context.Background(), "u1", "c1") // not locally connected → no store touch
+	if len(store.conns["u1"]) != 0 {
+		t.Fatalf("refresh before connect must not touch the store, got %v", store.conns["u1"])
+	}
+	svc.OnConnect(context.Background(), "u1", "c1")
+	svc.Refresh(context.Background(), "u1", "c1")
+	if len(store.conns["u1"]) != 1 {
+		t.Fatalf("refresh should re-score the same connection, got %v", store.conns["u1"])
+	}
+}
+
+// The self-heal contract: a distributed entry lost to a Redis blip is
+// re-created by the next keep-alive refresh, so a live user cannot stay
+// offline in the fleet view until they reconnect.
+func TestPresenceService_RefreshHealsLostStoreEntry(t *testing.T) {
+	store := newFakePresenceStore()
+	svc := NewPresenceService(store, newMockPublisher())
+
+	svc.OnConnect(context.Background(), "u1", "c1")
+	delete(store.conns, "u1") // the blip: distributed entry vanishes
+
+	svc.Refresh(context.Background(), "u1", "c1")
+	on, err := store.IsPresenceOnline(context.Background(), "u1")
+	if err != nil || !on {
+		t.Fatalf("refresh must re-create the lost entry (on=%v err=%v)", on, err)
 	}
 }
 
 func TestPresenceService_NilPublisher(t *testing.T) {
 	// Should not panic.
 	svc := NewPresenceService(nil, nil)
-	svc.OnConnect(context.Background(), "u1")
-	svc.OnDisconnect(context.Background(), "u1")
-	svc.Refresh(context.Background(), "u1") // nil store → early return, no panic
+	svc.OnConnect(context.Background(), "u1", "c1")
+	svc.OnDisconnect(context.Background(), "u1", "c1")
+	svc.Refresh(context.Background(), "u1", "c1") // nil store → early return, no panic
 }
 
 // slowPresenceStore blocks IsPresenceOnline / OnlinePresenceUserIDs
@@ -350,7 +425,7 @@ func TestPresenceService_IsOnline_TimesOutOnWedgedStore(t *testing.T) {
 func TestPresenceService_OnlineUserIDs_TimesOutOnWedgedStore(t *testing.T) {
 	store := &slowPresenceStore{fakePresenceStore: newFakePresenceStore()}
 	svc := NewPresenceService(store, newMockPublisher())
-	svc.OnConnect(context.Background(), "u-local")
+	svc.OnConnect(context.Background(), "u-local", "c1")
 
 	start := time.Now()
 	ids := svc.OnlineUserIDs()

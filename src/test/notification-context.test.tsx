@@ -708,3 +708,46 @@ describe('NotificationProvider', () => {
     expect(playMock).not.toHaveBeenCalled();
   });
 });
+
+// ————— C1 multi-tab regression (real tab-leader module, inert = single-tab) —————
+describe('duplicate-copy ack gating', () => {
+  let notificationCtor: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    playMock.mockReset();
+    sendWSMock.mockReset();
+    resetNotificationDedup();
+    localStorage.clear();
+    notificationCtor = installNotification('granted');
+  });
+
+  it('a duplicate while the user is away must NOT ack — the mobile fallback stays armed', () => {
+    // Two tabs, user away: tab A surfaces (idle → no ack); tab B's copy hits
+    // the cross-tab dedup. That dedup-hit used to ack UNCONDITIONALLY,
+    // deterministically cancelling the deferred mobile push for anyone with
+    // two tabs open. Away = hidden page (and/or stale input).
+    Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true });
+    markUserActivity(Date.now() - 25 * 60_000);
+    renderProbe();
+    const payload = { ...samplePayload, messageID: 'm-away-dup' };
+    act(() => {
+      dispatchSpy!(payload); // surfaces (hidden tabs may banner), idle → no ack
+      dispatchSpy!(payload); // duplicate → dedup-hit, still away → no ack
+    });
+    expect(notificationCtor).toHaveBeenCalledTimes(1);
+    expect(sendWSMock).not.toHaveBeenCalled();
+    markUserActivity();
+  });
+
+  it('a duplicate while the user IS at the device acks (desktop truly delivered)', () => {
+    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+    markUserActivity();
+    renderProbe();
+    const payload = { ...samplePayload, messageID: 'm-present-dup' };
+    act(() => {
+      dispatchSpy!(payload);
+      dispatchSpy!(payload);
+    });
+    expect(sendWSMock).toHaveBeenCalledWith({ type: 'notification.ack', messageID: 'm-present-dup' });
+  });
+});

@@ -222,18 +222,6 @@ func TestSafeDialContextDialsPublicIPs(t *testing.T) {
 	}
 }
 
-func TestAsyncMobilePushEnqueueAfterClose(t *testing.T) {
-	sender := NewAsyncMobilePushSender(recordingPushSender{}, 1, 1)
-	sender.Close()
-	if err := sender.Send(context.Background(), "u-1", Notification{Title: "t"}); err != nil {
-		t.Fatalf("enqueue after close must be a silent no-op, got %v", err)
-	}
-}
-
-type recordingPushSender struct{}
-
-func (recordingPushSender) Send(context.Context, string, Notification) error { return nil }
-
 func TestMustHelpersPanic(t *testing.T) {
 	t.Run("mustThumb", func(t *testing.T) {
 		defer func() {

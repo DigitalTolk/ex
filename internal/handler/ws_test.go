@@ -5,12 +5,14 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/DigitalTolk/ex/internal/eventlog"
 )
 
 // Redis-free WSHandler tests live here; everything that needs a live broker
 // (and therefore the shared Redis container) is in ws_integration_test.go.
+
 
 func TestWSHandler_Connect_Unauthenticated(t *testing.T) {
 	h := &WSHandler{}
@@ -49,5 +51,32 @@ func TestWSHandler_SetReplayer(t *testing.T) {
 	h.SetReplayer(rep)
 	if h.replayer != rep {
 		t.Error("SetReplayer did not assign field")
+	}
+}
+
+// Drain returns immediately when no connections are in flight, waits for an
+// in-flight handler's teardown when one is, and reports false on timeout —
+// the graceful-shutdown contract that lets deploys publish offline
+// transitions instead of leaving presence to lapse by TTL.
+func TestWSHandler_Drain(t *testing.T) {
+	h := &WSHandler{}
+
+	if !h.Drain(time.Second) {
+		t.Fatal("Drain with no connections must return true immediately")
+	}
+
+	// Simulate an in-flight connection handler.
+	h.drain.Add(1)
+	if h.Drain(50 * time.Millisecond) {
+		t.Fatal("Drain must time out while a handler is still in flight")
+	}
+	release := make(chan struct{})
+	go func() {
+		<-release
+		h.drain.Done()
+	}()
+	close(release)
+	if !h.Drain(5 * time.Second) {
+		t.Fatal("Drain must return true once the handler finishes")
 	}
 }

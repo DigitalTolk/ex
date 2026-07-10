@@ -42,6 +42,16 @@ func TestNewWSHandler(t *testing.T) {
 	}
 }
 
+// dialWS opens a test WebSocket authenticated via the Authorization header —
+// the query-token fallback is gone (it leaked JWTs into URL logs), so tests
+// authenticate the way non-browser clients do. Browser-style ticket auth has
+// its own dedicated tests.
+func dialWS(ctx context.Context, wsURL, token string) (*websocket.Conn, *http.Response, error) {
+	return websocket.Dial(ctx, wsURL, &websocket.DialOptions{
+		HTTPHeader: http.Header{"Authorization": {"Bearer " + token}},
+	})
+}
+
 // TestWSHandler_Connect_FullFlow exercises the full Connect path: auth check,
 // broker registration, list-channels/conversations, initial ping write,
 // keepalive ping, then graceful disconnect. Also covers writePing.
@@ -71,11 +81,11 @@ func TestWSHandler_Connect_FullFlow(t *testing.T) {
 	srv := httptest.NewServer(middleware.Auth(jwtMgr)(http.HandlerFunc(h.Connect)))
 	defer srv.Close()
 
-	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/?token=" + token
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/"
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	conn, _, err := websocket.Dial(ctx, wsURL, nil)
+	conn, _, err := dialWS(ctx, wsURL, token)
 	if err != nil {
 		t.Fatalf("ws dial: %v", err)
 	}
@@ -148,11 +158,11 @@ func TestWSHandler_Connect_SendsServerVersionOnHandshake(t *testing.T) {
 	srv := httptest.NewServer(middleware.Auth(jwtMgr)(http.HandlerFunc(h.Connect)))
 	defer srv.Close()
 
-	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/?token=" + token
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/"
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	conn, _, err := websocket.Dial(ctx, wsURL, nil)
+	conn, _, err := dialWS(ctx, wsURL, token)
 	if err != nil {
 		t.Fatalf("ws dial: %v", err)
 	}
@@ -216,11 +226,11 @@ func TestWSHandler_Connect_DefaultsServerVersionToDevWhenUnset(t *testing.T) {
 	srv := httptest.NewServer(middleware.Auth(jwtMgr)(http.HandlerFunc(h.Connect)))
 	defer srv.Close()
 
-	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/?token=" + token
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/"
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	conn, _, err := websocket.Dial(ctx, wsURL, nil)
+	conn, _, err := dialWS(ctx, wsURL, token)
 	if err != nil {
 		t.Fatalf("ws dial: %v", err)
 	}
@@ -257,7 +267,7 @@ func TestWSHandler_Connect_DefaultsServerVersionToDevWhenUnset(t *testing.T) {
 // requests (not websocket.Dial) so the Origin header can be controlled.
 func newOriginUpgradeRequest(t *testing.T, target, origin, token string) *http.Request {
 	t.Helper()
-	req, err := http.NewRequest(http.MethodGet, target+"?token="+token, nil)
+	req, err := http.NewRequest(http.MethodGet, target, nil)
 	if err != nil {
 		t.Fatalf("build upgrade request: %v", err)
 	}
@@ -265,6 +275,7 @@ func newOriginUpgradeRequest(t *testing.T, target, origin, token string) *http.R
 	req.Header.Set("Upgrade", "websocket")
 	req.Header.Set("Sec-WebSocket-Version", "13")
 	req.Header.Set("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
+	req.Header.Set("Authorization", "Bearer "+token)
 	if origin != "" {
 		req.Header.Set("Origin", origin)
 	}
@@ -456,8 +467,8 @@ func TestWSHandler_Connect_ReplaysMissedEvents(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	wsURL := "ws" + strings.TrimPrefix(base, "http") + "/?token=" + token + "&since=01ID0000000000000000000005"
-	conn, _, err := websocket.Dial(ctx, wsURL, nil)
+	wsURL := "ws" + strings.TrimPrefix(base, "http") + "/?since=01ID0000000000000000000005"
+	conn, _, err := dialWS(ctx, wsURL, token)
 	if err != nil {
 		t.Fatalf("ws dial: %v", err)
 	}
@@ -516,8 +527,8 @@ func TestWSHandler_Connect_ReplayExhaustedFrame(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	wsURL := "ws" + strings.TrimPrefix(base, "http") + "/?token=" + token + "&since=00OLD000000000000000000000"
-	conn, _, err := websocket.Dial(ctx, wsURL, nil)
+	wsURL := "ws" + strings.TrimPrefix(base, "http") + "/?since=00OLD000000000000000000000"
+	conn, _, err := dialWS(ctx, wsURL, token)
 	if err != nil {
 		t.Fatalf("ws dial: %v", err)
 	}
@@ -540,8 +551,8 @@ func TestWSHandler_Connect_ReplayErrorBecomesExhausted(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	wsURL := "ws" + strings.TrimPrefix(base, "http") + "/?token=" + token + "&since=01ID0000000000000000000005"
-	conn, _, err := websocket.Dial(ctx, wsURL, nil)
+	wsURL := "ws" + strings.TrimPrefix(base, "http") + "/?since=01ID0000000000000000000005"
+	conn, _, err := dialWS(ctx, wsURL, token)
 	if err != nil {
 		t.Fatalf("ws dial: %v", err)
 	}
@@ -565,8 +576,8 @@ func TestWSHandler_Connect_NoSinceSkipsReplay(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	wsURL := "ws" + strings.TrimPrefix(base, "http") + "/?token=" + token // no since
-	conn, _, err := websocket.Dial(ctx, wsURL, nil)
+	wsURL := "ws" + strings.TrimPrefix(base, "http") + "/" // no since
+	conn, _, err := dialWS(ctx, wsURL, token)
 	if err != nil {
 		t.Fatalf("ws dial: %v", err)
 	}
@@ -602,8 +613,8 @@ func TestWSHandler_Connect_SinceWithoutReplayerIsNoop(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	wsURL := "ws" + strings.TrimPrefix(base, "http") + "/?token=" + token + "&since=01ID0000000000000000000005"
-	conn, _, err := websocket.Dial(ctx, wsURL, nil)
+	wsURL := "ws" + strings.TrimPrefix(base, "http") + "/?since=01ID0000000000000000000005"
+	conn, _, err := dialWS(ctx, wsURL, token)
 	if err != nil {
 		t.Fatalf("ws dial: %v", err)
 	}
@@ -658,7 +669,7 @@ func TestWSHandler_Connect_KeepAliveTickerFires(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	conn, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(srv.URL, "http")+"/?token="+token, nil)
+	conn, _, err := dialWS(ctx, "ws"+strings.TrimPrefix(srv.URL, "http")+"/", token)
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
@@ -685,4 +696,69 @@ func TestWSHandler_Connect_KeepAliveTickerFires(t *testing.T) {
 		}
 	}
 	t.Fatalf("expected >=2 ping frames from the keep-alive ticker, saw %d", pings)
+}
+
+// The socket's lifetime is capped at the auth context's expiry (+grace): a
+// connection whose session deadline passes is force-closed by the server, so
+// a deactivated/revoked session cannot hold a live socket past its token —
+// even when the ephemeral force-logout event is lost. The client reconnects
+// with a freshly-authenticated ticket, re-validating the session.
+func TestWSHandler_Connect_SessionDeadlineClosesSocket(t *testing.T) {
+	ps, err := pubsub.NewRedisPubSub("redis://" + redisAddrForTest(t))
+	if err != nil {
+		t.Fatalf("pubsub: %v", err)
+	}
+	broker := pubsub.NewBroker(ps)
+	t.Cleanup(func() { _ = broker.Close() })
+
+	channels := newDataChannelStore()
+	members := newDataMembershipStore()
+	convs := newDataConversationStore()
+	users := newDataUserStoreForConv()
+	bAdapter := NewBrokerAdapter(broker)
+	chanSvc := service.NewChannelService(channels, members, users, nil, nil, bAdapter, nil)
+	convSvc := service.NewConversationService(convs, users, nil, bAdapter, nil)
+	presenceSvc := service.NewPresenceService(nil, nil)
+	h := NewWSHandler(broker, chanSvc, convSvc, presenceSvc)
+
+	tickets := newFakeTicketStore()
+	h.SetTicketStore(tickets)
+	// Zero grace so the deadline below is the exact close time.
+	origGrace := wsSessionGrace
+	wsSessionGrace = 0
+	t.Cleanup(func() { wsSessionGrace = origGrace })
+	// The ticket carries a nearly-expired session: the socket must be closed
+	// by the server shortly after connecting.
+	if err := tickets.MintWSTicket(context.Background(), "tick-short", "u-exp", time.Now().Add(400*time.Millisecond)); err != nil {
+		t.Fatalf("mint: %v", err)
+	}
+
+	headerAuth := func(next http.Handler) http.Handler { return next } // unused: ticket path
+	srv := httptest.NewServer(h.UpgradeAuth(headerAuth)(http.HandlerFunc(h.Connect)))
+	defer srv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	conn, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(srv.URL, "http")+"/?ticket=tick-short", nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer func() { _ = conn.Close(websocket.StatusNormalClosure, "") }()
+
+	// Drain frames until the server closes the connection. The session
+	// deadline is 400ms out; requiring the close within 5s distinguishes a
+	// genuine server-side close from this test's own 10s ctx timing out (a
+	// ctx timeout would also error the read — but only at 10s).
+	start := time.Now()
+	for {
+		if _, _, err := conn.Read(ctx); err != nil {
+			if elapsed := time.Since(start); elapsed > 5*time.Second {
+				t.Fatalf("read errored only after %v — that is the test ctx, not the server enforcing the session deadline", elapsed)
+			}
+			return // server closed the session — contract holds
+		}
+		if time.Since(start) > 8*time.Second {
+			t.Fatal("socket outlived its session deadline — expired auth must close the connection")
+		}
+	}
 }

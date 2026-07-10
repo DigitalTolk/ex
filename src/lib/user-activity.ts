@@ -13,14 +13,26 @@ const ACTIVITY_EVENTS = ['pointerdown', 'pointermove', 'keydown', 'wheel', 'touc
 let lastActivityAt = Date.now();
 let tracking = false;
 
+// activityBroadcast forwards each activity stamp to the cross-tab
+// coordinator (tab-leader), which throttles and shares it so OTHER tabs can
+// factor this tab's activity into whole-device away decisions. Nullable seam
+// — nothing is forwarded until the coordinator registers.
+let activityBroadcast: ((at: number) => void) | null = null;
+
+export function setActivityBroadcast(cb: ((at: number) => void) | null): void {
+  activityBroadcast = cb;
+}
+
 // markUserActivity stamps the activity clock directly — exported for tests
 // and for native-shell bridges that can observe input the page can't.
 export function markUserActivity(at: number = Date.now()): void {
   lastActivityAt = at;
+  activityBroadcast?.(at);
 }
 
 function stamp(): void {
   lastActivityAt = Date.now();
+  activityBroadcast?.(lastActivityAt);
 }
 
 function onVisibilityChange(): void {

@@ -24,6 +24,27 @@ vi.mock('@/lib/notification-sound', () => ({
   playNotificationPing: vi.fn(),
 }));
 
+// Controllable tab-leader mock: defaults mirror the module's inert
+// (uninitialized / single-tab) baseline so every pre-existing test keeps its
+// meaning; the multi-tab suite below flips the knobs per scenario. The real
+// module (election, channels, state sharing) is jsdom-graded in
+// tab-leader.test.ts.
+const tabLeaderMock = vi.hoisted(() => ({
+  leader: true,
+  others: false,
+  viewing: false,
+  atDevice: false,
+}));
+vi.mock('@/lib/tab-leader', () => ({
+  isLeaderTab: () => tabLeaderMock.leader,
+  hasOtherTabs: () => tabLeaderMock.others,
+  remoteTabViewing: () => tabLeaderMock.viewing,
+  remoteUserAtDevice: () => tabLeaderMock.atDevice,
+  setTabActiveParent: vi.fn(),
+  initTabCoordinator: vi.fn(),
+  nonLeaderHoldMs: 40,
+}));
+
 vi.mock('@/lib/storage', () => {
   let stored: Record<string, unknown> = {};
   return {
@@ -48,6 +69,10 @@ function Capture() {
 
 beforeEach(() => {
   captured = null;
+  tabLeaderMock.leader = true;
+  tabLeaderMock.others = false;
+  tabLeaderMock.viewing = false;
+  tabLeaderMock.atDevice = false;
   // The storage mock persists across tests; reset it so one test's pref
   // changes don't leak into the next (e.g. a disabled browserEnabled).
   (storageModule as unknown as { __reset: () => void }).__reset();
@@ -655,5 +680,165 @@ describe('NotificationContext browser', () => {
     api!.setCurrentUserID('y');
     const r = await api!.requestPermission();
     expect(r).toBe('unsupported');
+  });
+});
+
+// ————— Multi-tab coordination (leader election + whole-device state) —————
+describe('multi-tab coordination', () => {
+  it('C1 regression: a dedup-hit while the user is away must NOT ack (mobile fallback stays armed)', async () => {
+    // The deterministic multi-tab hole: tab A surfaces the popup (idle → no
+    // ack), tab B's copy hits the cross-tab dedup — and used to ack
+    // UNCONDITIONALLY, cancelling the deferred mobile push while the user
+    // was away from every tab.
+    const instances: FakeNote[] = [];
+    const restore = installFakeNotification(instances);
+    try {
+      await render(<NotificationProvider><Capture /></NotificationProvider>);
+      await vi.waitFor(() => expect(captured).not.toBeNull());
+      markUserActivity(Date.now() - 25 * 60_000); // away from THIS tab
+      sendWSMock.mockClear();
+
+      const payload = basePayload({ kind: 'mention', parentType: 'conversation', parentID: 'conv-1', authorID: 'u-other', messageID: 'm-c1' });
+      captured!.dispatch(payload); // first copy: surfaces, idle → no ack
+      await vi.waitFor(() => expect(instances.length).toBe(1));
+      captured!.dispatch(payload); // duplicate: dedup-hit
+      await new Promise((r) => setTimeout(r, 30));
+      const acked = sendWSMock.mock.calls.some(
+        (c) => (c[0] as { messageID?: string } | undefined)?.messageID === 'm-c1',
+      );
+      expect(acked).toBe(false);
+    } finally {
+      restore();
+      markUserActivity();
+    }
+  });
+
+  it('a dedup-hit acks when the user is active in ANOTHER tab (remote at-device)', async () => {
+    const instances: FakeNote[] = [];
+    const restore = installFakeNotification(instances);
+    try {
+      await render(<NotificationProvider><Capture /></NotificationProvider>);
+      await vi.waitFor(() => expect(captured).not.toBeNull());
+      markUserActivity(Date.now() - 25 * 60_000); // idle locally…
+      tabLeaderMock.atDevice = true; // …but at the device in another tab
+      sendWSMock.mockClear();
+
+      const payload = basePayload({ kind: 'mention', parentType: 'conversation', parentID: 'conv-1', authorID: 'u-other', messageID: 'm-c1-remote' });
+      captured!.dispatch(payload);
+      await vi.waitFor(() => expect(instances.length).toBe(1));
+      captured!.dispatch(payload); // duplicate with remote activity → ack
+      await vi.waitFor(() => {
+        expect(sendWSMock.mock.calls.some(
+          (c) => (c[0] as { messageID?: string } | undefined)?.messageID === 'm-c1-remote',
+        )).toBe(true);
+      });
+    } finally {
+      restore();
+      markUserActivity();
+    }
+  });
+
+  it('a non-leader tab with known siblings holds and drops when it never becomes leader', async () => {
+    const instances: FakeNote[] = [];
+    const restore = installFakeNotification(instances);
+    try {
+      await render(<NotificationProvider><Capture /></NotificationProvider>);
+      await vi.waitFor(() => expect(captured).not.toBeNull());
+      tabLeaderMock.leader = false;
+      tabLeaderMock.others = true;
+
+      captured!.dispatch(basePayload({ kind: 'mention', parentType: 'conversation', parentID: 'conv-2', authorID: 'u-other', messageID: 'm-held' }));
+      // Held past the (mocked 40ms) hold window and never promoted → the
+      // leader tab owns this alert; nothing surfaces here.
+      await new Promise((r) => setTimeout(r, 120));
+      expect(instances.length).toBe(0);
+    } finally {
+      restore();
+    }
+  });
+
+  it('failover: a held notification surfaces after this tab is promoted (leader closed mid-flight)', async () => {
+    const instances: FakeNote[] = [];
+    const restore = installFakeNotification(instances);
+    try {
+      await render(<NotificationProvider><Capture /></NotificationProvider>);
+      await vi.waitFor(() => expect(captured).not.toBeNull());
+      markUserActivity(); // active so the eventual surface also acks (sanity)
+      tabLeaderMock.leader = false;
+      tabLeaderMock.others = true;
+
+      captured!.dispatch(basePayload({ kind: 'mention', parentType: 'conversation', parentID: 'conv-3', authorID: 'u-other', messageID: 'm-promoted' }));
+      expect(instances.length).toBe(0); // held
+      tabLeaderMock.leader = true; // the old leader died; election promoted us
+      await vi.waitFor(() => expect(instances.length).toBe(1));
+    } finally {
+      restore();
+    }
+  });
+
+  it('a held notification the (old) leader already surfaced is NOT re-surfaced after promotion', async () => {
+    const instances: FakeNote[] = [];
+    const restore = installFakeNotification(instances);
+    try {
+      await render(<NotificationProvider><Capture /></NotificationProvider>);
+      await vi.waitFor(() => expect(captured).not.toBeNull());
+      tabLeaderMock.leader = false;
+      tabLeaderMock.others = true;
+
+      const payload = basePayload({ kind: 'mention', parentType: 'conversation', parentID: 'conv-4', authorID: 'u-other', messageID: 'm-seen-elsewhere' });
+      captured!.dispatch(payload); // held
+      // The old leader surfaces it (records the cross-tab dedup) just before dying.
+      const { recordNotification } = await import('@/lib/notification-dedup');
+      recordNotification('m-seen-elsewhere', Date.now());
+      tabLeaderMock.leader = true;
+      await new Promise((r) => setTimeout(r, 120));
+      expect(instances.length).toBe(0);
+    } finally {
+      restore();
+    }
+  });
+
+  it('suppresses (and acks) a channel message the user is actively viewing in ANOTHER tab', async () => {
+    const instances: FakeNote[] = [];
+    const restore = installFakeNotification(instances);
+    try {
+      await render(<NotificationProvider><Capture /></NotificationProvider>);
+      await vi.waitFor(() => expect(captured).not.toBeNull());
+      tabLeaderMock.viewing = true; // another tab: visible + active + on ch-1
+      sendWSMock.mockClear();
+
+      captured!.dispatch(basePayload({ kind: 'message', parentType: 'channel', parentID: 'ch-1', authorID: 'u-other', messageID: 'm-remote-view' }));
+      await vi.waitFor(() => {
+        expect(sendWSMock.mock.calls.some(
+          (c) => (c[0] as { messageID?: string } | undefined)?.messageID === 'm-remote-view',
+        )).toBe(true);
+      });
+      expect(instances.length).toBe(0); // no popup over the user's head
+    } finally {
+      restore();
+    }
+  });
+
+  it('acks a surfaced alert when the user is at the device only via ANOTHER tab', async () => {
+    const instances: FakeNote[] = [];
+    const restore = installFakeNotification(instances);
+    try {
+      await render(<NotificationProvider><Capture /></NotificationProvider>);
+      await vi.waitFor(() => expect(captured).not.toBeNull());
+      markUserActivity(Date.now() - 25 * 60_000); // idle locally
+      tabLeaderMock.atDevice = true; // active in a sibling tab
+      sendWSMock.mockClear();
+
+      captured!.dispatch(basePayload({ kind: 'mention', parentType: 'conversation', parentID: 'conv-5', authorID: 'u-other', messageID: 'm-remote-ack' }));
+      await vi.waitFor(() => expect(instances.length).toBe(1));
+      await vi.waitFor(() => {
+        expect(sendWSMock.mock.calls.some(
+          (c) => (c[0] as { messageID?: string } | undefined)?.messageID === 'm-remote-ack',
+        )).toBe(true);
+      });
+    } finally {
+      restore();
+      markUserActivity();
+    }
   });
 });

@@ -65,8 +65,8 @@ func newWSDisconnectEnv(t *testing.T, rep InboxReplayer) *wsDisconnectEnv {
 func (e *wsDisconnectEnv) dial(t *testing.T, query string) (*websocket.Conn, context.Context, context.CancelFunc) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	wsURL := "ws" + strings.TrimPrefix(e.srv.URL, "http") + "/?token=" + e.token + query
-	conn, _, err := websocket.Dial(ctx, wsURL, nil)
+	wsURL := "ws" + strings.TrimPrefix(e.srv.URL, "http") + "/" + query
+	conn, _, err := dialWS(ctx, wsURL, e.token)
 	if err != nil {
 		cancel()
 		t.Fatalf("dial: %v", err)
@@ -131,7 +131,7 @@ func TestWSHandler_Connect_ReplayWriteFailureReturns(t *testing.T) {
 	rep := &stubReplayer{res: eventlog.ReplayResult{Entries: entries}}
 	env := newWSDisconnectEnv(t, rep)
 
-	conn, _, cancel := env.dial(t, "&since=01ID0000000000000000000001")
+	conn, _, cancel := env.dial(t, "?since=01ID0000000000000000000001")
 	// Drop the client immediately so the server's replay writes fail partway
 	// through, forcing runReplay to return false and Connect to bail.
 	_ = conn.CloseNow()

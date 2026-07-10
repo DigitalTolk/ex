@@ -1,6 +1,7 @@
 package service
 
 import (
+	"sync"
 	"context"
 	"testing"
 	"time"
@@ -8,7 +9,10 @@ import (
 	"github.com/DigitalTolk/ex/internal/model"
 )
 
+// mockUserStateStore is mutex-guarded: the notify path persists thread
+// markers for many recipients in bounded-parallel goroutines.
 type mockUserStateStore struct {
+	mu        sync.Mutex
 	rows      map[string]*model.UserStateItem
 	setErr    error
 	deleteErr error
@@ -24,6 +28,8 @@ func (m *mockUserStateStore) key(userID string, kind model.UserStateKind, target
 }
 
 func (m *mockUserStateStore) SetUserState(_ context.Context, item *model.UserStateItem) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.setErr != nil {
 		return m.setErr
 	}
@@ -33,6 +39,8 @@ func (m *mockUserStateStore) SetUserState(_ context.Context, item *model.UserSta
 }
 
 func (m *mockUserStateStore) DeleteUserState(_ context.Context, userID string, kind model.UserStateKind, targetID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.deleteErr != nil {
 		return m.deleteErr
 	}
@@ -41,6 +49,8 @@ func (m *mockUserStateStore) DeleteUserState(_ context.Context, userID string, k
 }
 
 func (m *mockUserStateStore) ListUserState(_ context.Context, userID string) ([]*model.UserStateItem, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.listErr != nil {
 		return nil, m.listErr
 	}

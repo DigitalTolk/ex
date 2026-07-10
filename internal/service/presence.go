@@ -33,10 +33,17 @@ func (s *PresenceService) SetPresenceAudienceResolver(fn func(ctx context.Contex
 	s.audience = fn
 }
 
+// PresenceStore is the distributed (Redis-backed) presence view. Connections
+// are tracked INDIVIDUALLY by connID (a per-socket ULID): each one carries
+// its own expiry, so a crashed instance's connections age out on their own,
+// a disconnect of an unknown/lapsed connID is a no-op, and the keep-alive
+// refresh recreates a blip-lost entry — the failure modes of the old
+// per-instance counter (leaked increments, negative-count offline flaps,
+// unhealable lost markers) are structurally gone.
 type PresenceStore interface {
-	IncrementPresence(ctx context.Context, userID string) (bool, error)
-	DecrementPresence(ctx context.Context, userID string) (bool, error)
-	RefreshPresence(ctx context.Context, userID string) error
+	IncrementPresence(ctx context.Context, userID, connID string) (bool, error)
+	DecrementPresence(ctx context.Context, userID, connID string) (bool, error)
+	RefreshPresence(ctx context.Context, userID, connID string) error
 	IsPresenceOnline(ctx context.Context, userID string) (bool, error)
 	OnlinePresenceUserIDs(ctx context.Context) ([]string, error)
 }
@@ -52,35 +59,45 @@ func NewPresenceService(store PresenceStore, publisher Publisher) *PresenceServi
 	}
 }
 
-// OnConnect records a new connection for a user. Returns true if this is the
-// user's first connection (transition from offline to online), so callers can
-// publish a presence event exactly once per state transition. When the caller
-// already knows the user's audience topics (the WS handler just built them
-// for its broker subscription) it passes them in so the transition does not
-// re-read the user's memberships through the audience resolver.
-func (s *PresenceService) OnConnect(ctx context.Context, userID string, topics ...string) bool {
+// OnConnect records a new connection (identified by its per-socket connID)
+// for a user. Returns true if this made the user online (no other live
+// connection anywhere in the fleet), so callers can publish a presence event
+// exactly once per state transition. Every connection registers its own
+// distributed entry — the store's live-member count is the transition
+// authority; the local map only dedupes same-instance lookups. When the
+// caller already knows the user's audience topics (the WS handler just built
+// them for its broker subscription) it passes them in so the transition does
+// not re-read the user's memberships through the audience resolver.
+func (s *PresenceService) OnConnect(ctx context.Context, userID, connID string, topics ...string) bool {
 	s.mu.Lock()
 	prev := s.online[userID]
 	s.online[userID] = prev + 1
 	s.mu.Unlock()
-	if prev == 0 {
-		if s.store != nil {
-			first, err := s.store.IncrementPresence(ctx, userID)
-			if err == nil && !first {
+	if s.store != nil {
+		first, err := s.store.IncrementPresence(ctx, userID, connID)
+		if err == nil {
+			if !first {
 				return false
 			}
+			s.publish(ctx, userID, true, topics)
+			return true
 		}
+		// Store unavailable: fall back to the local transition so a user's
+		// own instance still announces them (fail toward visible).
+	}
+	if prev == 0 {
 		s.publish(ctx, userID, true, topics)
 		return true
 	}
 	return false
 }
 
-// OnDisconnect decrements a connection. Returns true if this transitioned the
-// user from online to offline, so we publish exactly once. Topics work as in
-// OnConnect; disconnect callers usually omit them so the audience resolves
-// fresh (memberships may have changed over the connection's lifetime).
-func (s *PresenceService) OnDisconnect(ctx context.Context, userID string, topics ...string) bool {
+// OnDisconnect removes a connection. Returns true if this transitioned the
+// user from online to offline (no live connections remain fleet-wide), so we
+// publish exactly once. Topics work as in OnConnect; disconnect callers
+// usually omit them so the audience resolves fresh (memberships may have
+// changed over the connection's lifetime).
+func (s *PresenceService) OnDisconnect(ctx context.Context, userID, connID string, topics ...string) bool {
 	s.mu.Lock()
 	count := s.online[userID]
 	if count <= 1 {
@@ -90,21 +107,29 @@ func (s *PresenceService) OnDisconnect(ctx context.Context, userID string, topic
 	}
 	remaining := s.online[userID]
 	s.mu.Unlock()
-	if count > 0 && remaining == 0 {
-		if s.store != nil {
-			last, err := s.store.DecrementPresence(ctx, userID)
-			if err == nil && !last {
+	if s.store != nil {
+		last, err := s.store.DecrementPresence(ctx, userID, connID)
+		if err == nil {
+			if !last {
 				return false
 			}
+			s.publish(ctx, userID, false, topics)
+			return true
 		}
+		// Store unavailable: fall back to the local view. The distributed
+		// entry it failed to remove lapses by score within presenceTTL.
+	}
+	if count > 0 && remaining == 0 {
 		s.publish(ctx, userID, false, topics)
 		return true
 	}
 	return false
 }
 
-// Refresh extends the distributed presence marker for a locally connected user.
-func (s *PresenceService) Refresh(ctx context.Context, userID string) {
+// Refresh re-scores the distributed presence entry for a locally connected
+// user's connection. The plain ZADD underneath doubles as the self-heal: an
+// entry lost to a Redis blip is recreated within one keep-alive interval.
+func (s *PresenceService) Refresh(ctx context.Context, userID, connID string) {
 	if s.store == nil {
 		return
 	}
@@ -114,7 +139,7 @@ func (s *PresenceService) Refresh(ctx context.Context, userID string) {
 	if !local {
 		return
 	}
-	_ = s.store.RefreshPresence(ctx, userID)
+	_ = s.store.RefreshPresence(ctx, userID, connID)
 }
 
 // presenceLookupTimeout caps how long a presence lookup can block on

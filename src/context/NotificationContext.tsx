@@ -7,6 +7,14 @@ import { useLatestRef } from '@/hooks/useLatestRef';
 import { sendWS } from '@/lib/ws-sender';
 import { hasSeenNotification, recordNotification } from '@/lib/notification-dedup';
 import { isUserActive, startUserActivityTracking } from '@/lib/user-activity';
+import {
+  isLeaderTab,
+  hasOtherTabs,
+  setTabActiveParent,
+  remoteTabViewing,
+  remoteUserAtDevice,
+  nonLeaderHoldMs,
+} from '@/lib/tab-leader';
 
 // How recently the user must have interacted with a VISIBLE page for the
 // desktop to claim the alert (ack → the deferred mobile push stands down).
@@ -155,6 +163,10 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   // callback — recreating it on every prefs/permission change would
   // invalidate the memoized context value and re-render every consumer.
   const prefsRef = useLatestRef(prefs);
+  // Self-reference for the non-leader hold-retry: a held notification is
+  // re-dispatched through the LATEST dispatch closure after the hold.
+  // Declared before dispatch (which reads it) and synced after via effect.
+  const dispatchRef = useRef<((n: NotificationPayload) => void) | null>(null);
   const permissionRef = useLatestRef(permission);
   const initialMountRef = useRef(true);
   // Whether the app window currently has OS focus. `visibilityState` alone
@@ -206,6 +218,9 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
 
   const setActiveParent = useCallback((id: string | null) => {
     activeParentRef.current = id;
+    // Share the viewing state so the LEADER tab can suppress popups for a
+    // parent the user is actively reading in this (possibly non-leader) tab.
+    setTabActiveParent(id);
   }, []);
 
   const setCurrentUserID = useCallback((id: string | null) => {
@@ -226,7 +241,15 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     // dedup entirely. A duplicate still acks: it proves the desktop is alive and
     // already aware, so the mobile-push fallback should stand down.
     if (n.messageID && hasSeenNotification(n.messageID, now)) {
-      ackDesktopDelivery(n.messageID);
+      // Ack ONLY when the user is demonstrably at the device (any tab). A
+      // hidden second tab hitting this path used to ack UNCONDITIONALLY —
+      // with two tabs open and the user away, the second tab's dedup-hit
+      // always cancelled the deferred mobile push, deterministically
+      // breaking the away → phone handoff. "Another session received the
+      // fan-out" is not "a human saw it".
+      if (isUserActive(desktopActiveWindowMs) || remoteUserAtDevice(desktopActiveWindowMs)) {
+        ackDesktopDelivery(n.messageID);
+      }
       return;
     }
     // Server-side recipient filtering already excludes the author, but
@@ -234,6 +257,25 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     // exempt: their authorID is the webhook's creator, who explicitly
     // wants the alert, so we never self-suppress them.
     if (!n.webhook && n.authorID && currentUserIDRef.current && n.authorID === currentUserIDRef.current) {
+      return;
+    }
+    // LEADER GATE: with several tabs open, every socket receives this event
+    // but only the elected leader surfaces/acks it (it decides with
+    // whole-device knowledge). A non-leader holds the payload briefly and
+    // surfaces only if it got promoted meanwhile (leader tab closed between
+    // fan-out and dispatch) and nobody else recorded it — the cross-tab
+    // dedup stays the failover belt. A tab that knows of no other tabs
+    // dispatches immediately, so single-tab sessions (and an election still
+    // settling on a lone tab) never wait.
+    if (!isLeaderTab() && hasOtherTabs()) {
+      window.setTimeout(() => {
+        if (
+          isLeaderTab() &&
+          !(n.messageID && hasSeenNotification(n.messageID, Date.now()))
+        ) {
+          dispatchRef.current?.(n);
+        }
+      }, nonLeaderHoldMs);
       return;
     }
     // The backend is the single source of truth for *whether* a message
@@ -254,14 +296,17 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     // active conversation still gets the alert.
     if (
       n.kind === 'message' &&
-      activeParentRef.current &&
-      activeParentRef.current === n.parentID &&
-      document.visibilityState === 'visible' &&
-      appFocusedRef.current &&
-      // "Looking right at it" also requires recent input: a focused window on
-      // an abandoned desk is not a person seeing the message. When idle, fall
-      // through to a normal surface (popup, no ack) so mobile gets it too.
-      isUserActive(desktopActiveWindowMs)
+      ((activeParentRef.current === n.parentID &&
+        document.visibilityState === 'visible' &&
+        appFocusedRef.current &&
+        // "Looking right at it" also requires recent input: a focused window
+        // on an abandoned desk is not a person seeing the message. When idle,
+        // fall through to a normal surface (popup, no ack) so mobile gets it.
+        isUserActive(desktopActiveWindowMs)) ||
+        // Whole-device view: the user may be actively reading this parent in
+        // ANOTHER tab — surfacing a popup from this (leader) tab over their
+        // head was the multi-tab "popup for the channel I'm looking at" bug.
+        remoteTabViewing(n.parentID, desktopActiveWindowMs))
     ) {
       // Suppressed because the user is looking right at it on desktop — they're
       // aware, so ack to stand the mobile fallback down (no redundant push).
@@ -362,14 +407,19 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     if (n.messageID && delivered) {
       recordNotification(n.messageID, now);
       // Ack ONLY when someone is demonstrably at this device (visible page +
-      // recent input). A popup surfaced on an abandoned-but-open laptop must
-      // not stand the mobile push down — no ack means the backend's deferred
-      // fallback delivers to the phone, Slack-style.
-      if (isUserActive(desktopActiveWindowMs)) {
+      // recent input — in ANY tab; the leader may be a background tab while
+      // the user works in another). A popup surfaced on an abandoned-but-open
+      // laptop must not stand the mobile push down — no ack means the
+      // backend's deferred fallback delivers to the phone, Slack-style.
+      if (isUserActive(desktopActiveWindowMs) || remoteUserAtDevice(desktopActiveWindowMs)) {
         ackDesktopDelivery(n.messageID);
       }
     }
-  }, [permissionRef, prefsRef]);
+  }, [permissionRef, prefsRef, dispatchRef]);
+
+  useEffect(() => {
+    dispatchRef.current = dispatch;
+  });
 
   const value = useMemo(
     () => ({

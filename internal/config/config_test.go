@@ -362,3 +362,29 @@ func TestLoadAccessLogEnabled(t *testing.T) {
 		}
 	})
 }
+
+func TestLoadPushWorkerConcurrency(t *testing.T) {
+	t.Run("custom value", func(t *testing.T) {
+		clearEnv(t)
+		t.Setenv("ENV", "development")
+		t.Setenv("PUSH_WORKER_CONCURRENCY", "16")
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if cfg.PushWorkerConcurrency != 16 {
+			t.Errorf("PushWorkerConcurrency = %d, want 16", cfg.PushWorkerConcurrency)
+		}
+	})
+
+	for _, bad := range []string{"abc", "-1"} {
+		t.Run("rejects "+bad, func(t *testing.T) {
+			clearEnv(t)
+			t.Setenv("ENV", "development")
+			t.Setenv("PUSH_WORKER_CONCURRENCY", bad)
+			if _, err := Load(); err == nil {
+				t.Fatalf("Load with PUSH_WORKER_CONCURRENCY=%q should fail", bad)
+			}
+		})
+	}
+}

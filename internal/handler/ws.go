@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/coder/websocket"
@@ -15,6 +16,7 @@ import (
 	"github.com/DigitalTolk/ex/internal/pubsub"
 	"github.com/DigitalTolk/ex/internal/safe"
 	"github.com/DigitalTolk/ex/internal/service"
+	"github.com/DigitalTolk/ex/internal/store"
 )
 
 // InboxReplayer is the subset of the durable event log used by the
@@ -46,7 +48,16 @@ type inboundMessage struct {
 // no locking.
 type typingGate struct {
 	verdicts map[string]typingVerdict
+	// lastTyping throttles inbound typing frames per connection: each frame
+	// fans out a Redis PUBLISH to every subscriber, and the read loop would
+	// otherwise relay them as fast as a client can send — an amplification
+	// lever. One frame per typingMinInterval is plenty for a UI indicator.
+	lastTyping time.Time
 }
+
+// typingMinInterval is the per-connection floor between relayed typing
+// frames. A var so tests can exercise the throttle without sleeping.
+var typingMinInterval = 300 * time.Millisecond
 
 type typingVerdict struct {
 	member  bool
@@ -119,6 +130,14 @@ type WSHandler struct {
 	version        string
 	originPatterns []string
 	allowAllOrigin bool
+	tickets        WSTicketStore
+
+	// drain tracks in-flight Connect handlers so a graceful shutdown can wait
+	// for their teardown (presence cleanup + offline publish) to finish. The
+	// HTTP server's Shutdown does not track hijacked connections, so without
+	// this every deploy left presence markers to lapse by TTL and offline
+	// transitions unpublished.
+	drain sync.WaitGroup
 }
 
 // NewWSHandler creates a WSHandler.
@@ -175,6 +194,25 @@ func (h *WSHandler) SetReplayer(r InboxReplayer) { h.replayer = r }
 // and the deferred mobile-push fallback degrades to presence-only behaviour.
 func (h *WSHandler) SetNotificationAckRecorder(r NotificationAckRecorder) { h.notifAck = r }
 
+// Drain blocks until every in-flight Connect handler has finished its
+// teardown (presence cleanup + offline publish), or the timeout lapses.
+// Called during graceful shutdown AFTER the broker closes its clients (which
+// unblocks each connection loop). Returns false on timeout — teardown then
+// finishes on the distributed side by per-connection expiry.
+func (h *WSHandler) Drain(timeout time.Duration) bool {
+	done := make(chan struct{})
+	go func() {
+		h.drain.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return true
+	case <-time.After(timeout):
+		return false
+	}
+}
+
 // Connect upgrades the HTTP connection to a WebSocket for the authenticated
 // user. Authentication is handled via the "token" query parameter by the auth
 // middleware.
@@ -184,6 +222,12 @@ func (h *WSHandler) Connect(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "unauthorized", "authentication required")
 		return
 	}
+	h.drain.Add(1)
+	defer h.drain.Done()
+	// Per-connection identity for distributed presence: each socket owns its
+	// own expiring entry, so crashes/deploys can never leak or corrupt a
+	// shared per-user counter.
+	connID := store.NewID()
 
 	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 		// Same-origin is always permitted by the library. OriginPatterns
@@ -217,7 +261,7 @@ func (h *WSHandler) Connect(w http.ResponseWriter, r *http.Request) {
 			// leak goroutines until each Redis call timed out itself.
 			disconnectCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			h.presenceSvc.OnDisconnect(disconnectCtx, userID)
+			h.presenceSvc.OnDisconnect(disconnectCtx, userID, connID)
 		}
 	}()
 
@@ -306,10 +350,20 @@ func (h *WSHandler) Connect(w http.ResponseWriter, r *http.Request) {
 	// resolver-based: memberships may change over the connection's lifetime,
 	// so the offline audience is resolved fresh.
 	if h.presenceSvc != nil {
-		h.presenceSvc.OnConnect(r.Context(), userID, presenceTopics...)
+		h.presenceSvc.OnConnect(r.Context(), userID, connID, presenceTopics...)
 	}
 
-	ctx, cancel := context.WithCancel(r.Context())
+	// Cap the socket's lifetime at the auth context's expiry (+grace): auth
+	// is otherwise verified only at upgrade time, so a deactivated user's
+	// socket used to live indefinitely if the ephemeral force-logout event
+	// was lost. At the deadline the loop exits, the connection closes, and a
+	// healthy client transparently reconnects with a freshly-authenticated
+	// ticket/token — re-validating the session at least every token lifetime.
+	sessionDeadline := time.Now().Add(wsMaxSessionLifetime)
+	if claims := middleware.ClaimsFromContext(r.Context()); claims != nil && claims.ExpiresAt != nil {
+		sessionDeadline = claims.ExpiresAt.Add(wsSessionGrace)
+	}
+	ctx, cancel := context.WithDeadline(r.Context(), sessionDeadline)
 	defer cancel()
 
 	// Always emit a version frame on connect. A missing version (CI
@@ -377,7 +431,7 @@ func (h *WSHandler) Connect(w http.ResponseWriter, r *http.Request) {
 			}
 		case <-ticker.C:
 			if h.presenceSvc != nil {
-				h.presenceSvc.Refresh(ctx, userID)
+				h.presenceSvc.Refresh(ctx, userID, connID)
 			}
 			if err := writePing(ctx, conn); err != nil {
 				return
@@ -489,6 +543,14 @@ func (h *WSHandler) publishTyping(ctx context.Context, userID string, msg inboun
 	if h.publisher == nil || msg.ParentID == "" {
 		return
 	}
+	// Per-connection throttle BEFORE any lookup or publish: typing is pure
+	// UI garnish, and an unthrottled read loop let one client turn keystroke
+	// frames into a fan-out PUBLISH each.
+	now := time.Now()
+	if now.Sub(gate.lastTyping) < typingMinInterval {
+		return
+	}
+	gate.lastTyping = now
 	var topic string
 	switch msg.ParentType {
 	case service.ParentChannel:

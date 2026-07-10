@@ -77,6 +77,61 @@ func cacheFailingOn(t *testing.T, cmds ...string) *RedisCache {
 	return &RedisCache{client: client}
 }
 
+// keyedFailHook fails a named command only when one of its arguments contains
+// keyPart — for pipelines where the same command name appears against
+// different keys (e.g. the conns-key ZREM vs. the index ZREM).
+type keyedFailHook struct {
+	cmd     string
+	keyPart string
+}
+
+func (h keyedFailHook) matches(cmd redis.Cmder) bool {
+	if cmd.Name() != h.cmd {
+		return false
+	}
+	for _, arg := range cmd.Args() {
+		if s, ok := arg.(string); ok && s == h.keyPart {
+			return true
+		}
+	}
+	return false
+}
+
+func (h keyedFailHook) DialHook(next redis.DialHook) redis.DialHook { return next }
+
+func (h keyedFailHook) ProcessHook(next redis.ProcessHook) redis.ProcessHook {
+	return func(ctx context.Context, cmd redis.Cmder) error {
+		if h.matches(cmd) {
+			return errInjected
+		}
+		return next(ctx, cmd)
+	}
+}
+
+func (h keyedFailHook) ProcessPipelineHook(next redis.ProcessPipelineHook) redis.ProcessPipelineHook {
+	return func(ctx context.Context, cmds []redis.Cmder) error {
+		for _, cmd := range cmds {
+			if h.matches(cmd) {
+				return errInjected
+			}
+		}
+		return next(ctx, cmds)
+	}
+}
+
+// cacheFailingOnKey returns a RedisCache where `cmd` fails only when it
+// targets a key equal to keyPart.
+func cacheFailingOnKey(t *testing.T, cmd, keyPart string) *RedisCache {
+	t.Helper()
+	if !cacheRedisReady {
+		t.Skip("skipping: Docker / Redis not available")
+	}
+	client := redis.NewClient(&redis.Options{Addr: cacheRedisAddr})
+	client.AddHook(keyedFailHook{cmd: cmd, keyPart: keyPart})
+	t.Cleanup(func() { _ = client.Close() })
+	return &RedisCache{client: client}
+}
+
 // AllowRequest runs as one atomic MULTI/EXEC transaction (INCR + PEXPIRE NX);
 // a failing transaction must surface — the limiter cannot pretend the
 // increment happened or leak a TTL-less counter on a half-applied window.
@@ -95,31 +150,40 @@ func TestAllowRequest_IncrError_RealRedis(t *testing.T) {
 	}
 }
 
-// IncrementPresence INCRs then refreshes the presence TTL; the EXPIRE failure
-// arm must surface rather than report a healthy online transition.
-func TestIncrementPresence_ExpireError_RealRedis(t *testing.T) {
-	c := cacheFailingOn(t, "expire")
-	if _, err := c.IncrementPresence(context.Background(), "presence-expire-fail"); !errors.Is(err, errInjected) {
+// IncrementPresence runs prune+ZADD+ZCARD+EXPIRE+index in one pipeline; a
+// failing pipeline must surface rather than report a healthy online transition.
+func TestIncrementPresence_PipelineError_RealRedis(t *testing.T) {
+	c := cacheFailingOn(t, "zcard")
+	if _, err := c.IncrementPresence(context.Background(), "presence-pipe-fail", "c1"); !errors.Is(err, errInjected) {
 		t.Fatalf("IncrementPresence error = %v, want errInjected", err)
 	}
 }
 
-// When the last connection drops, DecrementPresence deletes the counter key;
-// a failing DEL surfaces instead of claiming a clean offline transition.
-func TestDecrementPresence_DelError_RealRedis(t *testing.T) {
-	c := cacheFailingOn(t, "del")
-	ctx := context.Background()
-	// Seed exactly one live connection through the same hooked cache — only
-	// DEL is rigged to fail, so the INCR + EXPIRE seed path is real.
-	if _, err := c.IncrementPresence(ctx, "presence-del-fail"); err != nil {
-		t.Fatalf("seed IncrementPresence: %v", err)
-	}
-	if _, err := c.DecrementPresence(ctx, "presence-del-fail"); !errors.Is(err, errInjected) {
+// The removal pipeline (ZREM + prune + ZCARD) failing must surface instead of
+// claiming a clean offline transition.
+func TestDecrementPresence_RemoveError_RealRedis(t *testing.T) {
+	c := cacheFailingOn(t, "zrem")
+	if _, err := c.DecrementPresence(context.Background(), "presence-del-fail", "c1"); !errors.Is(err, errInjected) {
 		t.Fatalf("DecrementPresence error = %v, want errInjected", err)
 	}
 }
 
-// With more than one live connection, DecrementPresence keeps the key and
+// The zero-connections cleanup pipeline (index ZREM) failing must surface.
+// Key-filtered so the first pipeline's conns-key ZREM still succeeds.
+func TestDecrementPresence_CleanupError_RealRedis(t *testing.T) {
+	plain := realRedisClient(t)
+	ctx := context.Background()
+	future := float64(time.Now().Add(time.Minute).UnixMilli())
+	if err := plain.ZAdd(ctx, presenceKeyPrefix+"presence-cleanup-fail", redis.Z{Score: future, Member: "c1"}).Err(); err != nil {
+		t.Fatalf("seed conn: %v", err)
+	}
+	c := cacheFailingOnKey(t, "zrem", presenceIndexKey)
+	if _, err := c.DecrementPresence(ctx, "presence-cleanup-fail", "c1"); !errors.Is(err, errInjected) {
+		t.Fatalf("DecrementPresence error = %v, want errInjected", err)
+	}
+}
+
+// With more than one live connection, DecrementPresence keeps the set and
 // refreshes its TTL; the EXPIRE failure on that non-zero path must surface.
 func TestDecrementPresence_ExpireError_RealRedis(t *testing.T) {
 	c := cacheFailingOn(t, "expire")
@@ -127,10 +191,12 @@ func TestDecrementPresence_ExpireError_RealRedis(t *testing.T) {
 	ctx := context.Background()
 	// Seed two connections via the plain client — the hooked cache's own
 	// IncrementPresence would trip on its EXPIRE before we got here.
-	if err := plain.Set(ctx, presenceKeyPrefix+"presence-expire2", 2, time.Minute).Err(); err != nil {
-		t.Fatalf("seed presence count: %v", err)
+	future := float64(time.Now().Add(time.Minute).UnixMilli())
+	if err := plain.ZAdd(ctx, presenceKeyPrefix+"presence-expire2",
+		redis.Z{Score: future, Member: "c1"}, redis.Z{Score: future, Member: "c2"}).Err(); err != nil {
+		t.Fatalf("seed presence conns: %v", err)
 	}
-	if _, err := c.DecrementPresence(ctx, "presence-expire2"); !errors.Is(err, errInjected) {
+	if _, err := c.DecrementPresence(ctx, "presence-expire2", "c1"); !errors.Is(err, errInjected) {
 		t.Fatalf("DecrementPresence error = %v, want errInjected", err)
 	}
 }
@@ -169,7 +235,7 @@ func TestOnlinePresenceUserIDs_IndexScale_RealRedis(t *testing.T) {
 	pipe := plain.Pipeline()
 	for i := 0; i < n; i++ {
 		id := fmt.Sprintf("user-%04d", i)
-		pipe.Set(ctx, presenceKeyPrefix+id, 1, time.Minute)
+		pipe.ZAdd(ctx, presenceKeyPrefix+id, redis.Z{Score: future, Member: "c1"})
 		pipe.ZAdd(ctx, presenceIndexKey, redis.Z{Score: future, Member: id})
 	}
 	// Unrelated key families the snapshot must never depend on.
@@ -223,8 +289,8 @@ func TestOnlinePresenceUserIDs_PrunesExpiredIndexEntries_RealRedis(t *testing.T)
 	}
 }
 
-// A live index entry whose per-user marker holds a non-positive or garbage
-// count must not be reported online (the MGET verification arm).
+// A live index entry whose per-user set holds no LIVE member (absent set, or
+// only lapsed connections) must not be reported online (the verify arm).
 func TestOnlinePresenceUserIDs_FiltersDeadMarkers_RealRedis(t *testing.T) {
 	c := newRealCache(t)
 	plain := realRedisClient(t)
@@ -233,13 +299,17 @@ func TestOnlinePresenceUserIDs_FiltersDeadMarkers_RealRedis(t *testing.T) {
 		t.Fatalf("flush: %v", err)
 	}
 	future := float64(time.Now().Add(time.Minute).UnixMilli())
-	for id, val := range map[string]string{"u-zero": "0", "u-junk": "not-a-number", "u-live": "2"} {
+	past := float64(time.Now().Add(-time.Second).UnixMilli())
+	for _, id := range []string{"u-empty", "u-lapsed", "u-live"} {
 		if err := plain.ZAdd(ctx, presenceIndexKey, redis.Z{Score: future, Member: id}).Err(); err != nil {
 			t.Fatalf("seed index: %v", err)
 		}
-		if err := plain.Set(ctx, presenceKeyPrefix+id, val, time.Minute).Err(); err != nil {
-			t.Fatalf("seed marker: %v", err)
-		}
+	}
+	if err := plain.ZAdd(ctx, presenceKeyPrefix+"u-lapsed", redis.Z{Score: past, Member: "c-dead"}).Err(); err != nil {
+		t.Fatalf("seed lapsed: %v", err)
+	}
+	if err := plain.ZAdd(ctx, presenceKeyPrefix+"u-live", redis.Z{Score: future, Member: "c-live"}).Err(); err != nil {
+		t.Fatalf("seed live: %v", err)
 	}
 	ids, err := c.OnlinePresenceUserIDs(ctx)
 	if err != nil {
@@ -273,91 +343,77 @@ func TestPresenceIndexWriteErrors_RealRedis(t *testing.T) {
 	ctx := context.Background()
 	t.Run("increment index add fails", func(t *testing.T) {
 		c := cacheFailingOn(t, "zadd")
-		if _, err := c.IncrementPresence(ctx, "u-zadd"); !errors.Is(err, errInjected) {
+		if _, err := c.IncrementPresence(ctx, "u-zadd", "c1"); !errors.Is(err, errInjected) {
 			t.Fatalf("IncrementPresence error = %v, want errInjected", err)
 		}
 	})
-	t.Run("refresh index add fails", func(t *testing.T) {
-		plain := realRedisClient(t)
-		if err := plain.Set(ctx, presenceKeyPrefix+"u-refresh-zadd", 1, time.Minute).Err(); err != nil {
-			t.Fatalf("seed marker: %v", err)
-		}
+	t.Run("refresh add fails", func(t *testing.T) {
 		c := cacheFailingOn(t, "zadd")
-		if err := c.RefreshPresence(ctx, "u-refresh-zadd"); !errors.Is(err, errInjected) {
+		if err := c.RefreshPresence(ctx, "u-refresh-zadd", "c1"); !errors.Is(err, errInjected) {
 			t.Fatalf("RefreshPresence error = %v, want errInjected", err)
 		}
 	})
 	t.Run("decrement keepalive index add fails", func(t *testing.T) {
 		plain := realRedisClient(t)
-		if err := plain.Set(ctx, presenceKeyPrefix+"u-dec-zadd", 2, time.Minute).Err(); err != nil {
-			t.Fatalf("seed marker: %v", err)
+		future := float64(time.Now().Add(time.Minute).UnixMilli())
+		if err := plain.ZAdd(ctx, presenceKeyPrefix+"u-dec-zadd",
+			redis.Z{Score: future, Member: "c1"}, redis.Z{Score: future, Member: "c2"}).Err(); err != nil {
+			t.Fatalf("seed conns: %v", err)
 		}
-		c := cacheFailingOn(t, "zadd")
-		if _, err := c.DecrementPresence(ctx, "u-dec-zadd"); !errors.Is(err, errInjected) {
-			t.Fatalf("DecrementPresence error = %v, want errInjected", err)
-		}
-	})
-	t.Run("offline transition index removal fails", func(t *testing.T) {
-		plain := realRedisClient(t)
-		if err := plain.Set(ctx, presenceKeyPrefix+"u-dec-zrem", 1, time.Minute).Err(); err != nil {
-			t.Fatalf("seed marker: %v", err)
-		}
-		c := cacheFailingOn(t, "zrem")
-		if _, err := c.DecrementPresence(ctx, "u-dec-zrem"); !errors.Is(err, errInjected) {
+		c := cacheFailingOnKey(t, "zadd", presenceIndexKey)
+		if _, err := c.DecrementPresence(ctx, "u-dec-zadd", "c1"); !errors.Is(err, errInjected) {
 			t.Fatalf("DecrementPresence error = %v, want errInjected", err)
 		}
 	})
 }
 
-// An MGET failure after a successful SCAN surfaces as an error.
-func TestOnlinePresenceUserIDs_MGetError_RealRedis(t *testing.T) {
-	c := cacheFailingOn(t, "mget")
+// A verify (ZCOUNT) failure after a successful index read surfaces as an error.
+func TestOnlinePresenceUserIDs_VerifyError_RealRedis(t *testing.T) {
+	c := cacheFailingOn(t, "zcount")
 	plain := realRedisClient(t)
 	ctx := context.Background()
-	// A live index entry + marker so the code reaches the MGET.
+	// A live index entry so the code reaches the verify pipeline.
 	if err := plain.ZAdd(ctx, presenceIndexKey, redis.Z{
-		Score: float64(time.Now().Add(time.Minute).UnixMilli()), Member: "mget-fail",
+		Score: float64(time.Now().Add(time.Minute).UnixMilli()), Member: "verify-fail",
 	}).Err(); err != nil {
 		t.Fatalf("seed index: %v", err)
-	}
-	if err := plain.Set(ctx, presenceKeyPrefix+"mget-fail", 1, time.Minute).Err(); err != nil {
-		t.Fatalf("seed presence key: %v", err)
 	}
 	if _, err := c.OnlinePresenceUserIDs(ctx); !errors.Is(err, errInjected) {
 		t.Fatalf("OnlinePresenceUserIDs error = %v, want errInjected", err)
 	}
 }
 
-// mgetRaceHook reproduces the real index→MGET race: the moment the MGET is
-// about to be sent, one of the markers the index just listed is deleted
-// through a separate, un-hooked client. That slot of the MGET reply comes
-// back nil and OnlinePresenceUserIDs must skip it rather than fabricate an
-// online user.
-type mgetRaceHook struct {
+// verifyRaceHook reproduces the real index→verify race: the moment the verify
+// pipeline (ZCOUNTs) is about to be sent, one of the sets the index just
+// listed is deleted through a separate, un-hooked client. That user counts
+// zero live members and OnlinePresenceUserIDs must skip them rather than
+// fabricate an online user.
+type verifyRaceHook struct {
 	plain *redis.Client
 	key   string
 }
 
-func (h mgetRaceHook) DialHook(next redis.DialHook) redis.DialHook { return next }
+func (h verifyRaceHook) DialHook(next redis.DialHook) redis.DialHook { return next }
 
-func (h mgetRaceHook) ProcessHook(next redis.ProcessHook) redis.ProcessHook {
-	return func(ctx context.Context, cmd redis.Cmder) error {
-		if cmd.Name() == "mget" {
-			if err := h.plain.Del(ctx, h.key).Err(); err != nil {
-				return fmt.Errorf("race-delete %q: %w", h.key, err)
+func (h verifyRaceHook) ProcessHook(next redis.ProcessHook) redis.ProcessHook { return next }
+
+func (h verifyRaceHook) ProcessPipelineHook(next redis.ProcessPipelineHook) redis.ProcessPipelineHook {
+	return func(ctx context.Context, cmds []redis.Cmder) error {
+		for _, cmd := range cmds {
+			if cmd.Name() == "zcount" {
+				if err := h.plain.Del(ctx, h.key).Err(); err != nil {
+					return fmt.Errorf("race-delete %q: %w", h.key, err)
+				}
+				break
 			}
 		}
-		return next(ctx, cmd)
+		return next(ctx, cmds)
 	}
 }
 
-func (h mgetRaceHook) ProcessPipelineHook(next redis.ProcessPipelineHook) redis.ProcessPipelineHook {
-	return next
-}
-
-// A presence marker that expires (or is deleted) between the index read and
-// the MGET yields a nil slot in the MGET reply; that user must be dropped
-// from the result, not returned with a bogus count.
+// A presence set that expires (or is deleted) between the index read and
+// the verify pipeline counts zero live members; that user must be dropped
+// from the result, not returned as a fabricated online user.
 func TestOnlinePresenceUserIDs_KeyGoneBetweenIndexAndMGet_RealRedis(t *testing.T) {
 	plain := realRedisClient(t)
 	ctx := context.Background()
@@ -369,13 +425,13 @@ func TestOnlinePresenceUserIDs_KeyGoneBetweenIndexAndMGet_RealRedis(t *testing.T
 		if err := plain.ZAdd(ctx, presenceIndexKey, redis.Z{Score: future, Member: id}).Err(); err != nil {
 			t.Fatalf("seed index %s: %v", id, err)
 		}
-		if err := plain.Set(ctx, presenceKeyPrefix+id, 1, time.Minute).Err(); err != nil {
+		if err := plain.ZAdd(ctx, presenceKeyPrefix+id, redis.Z{Score: future, Member: "c1"}).Err(); err != nil {
 			t.Fatalf("seed %s: %v", id, err)
 		}
 	}
 
 	hooked := redis.NewClient(&redis.Options{Addr: cacheRedisAddr})
-	hooked.AddHook(mgetRaceHook{plain: plain, key: presenceKeyPrefix + "race-gone"})
+	hooked.AddHook(verifyRaceHook{plain: plain, key: presenceKeyPrefix + "race-gone"})
 	t.Cleanup(func() { _ = hooked.Close() })
 	c := &RedisCache{client: hooked}
 

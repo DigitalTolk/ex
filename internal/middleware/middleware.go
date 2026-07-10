@@ -65,13 +65,19 @@ func AuthWithUserStatus(jwtMgr *auth.JWTManager, users authUserStore) func(http.
 	}
 }
 
+// extractToken reads the bearer token from the Authorization header ONLY.
+// The old `?token=` query fallback (added for the WebSocket upgrade, where
+// browsers can't set headers) leaked the full access JWT into LB/proxy logs,
+// browser history, and APM URL capture — the WS upgrade now authenticates
+// with a single-use opaque ticket instead (handler.WSHandler.UpgradeAuth),
+// so no URL ever carries a credential.
 func extractToken(r *http.Request) string {
 	if ah := r.Header.Get("Authorization"); ah != "" {
 		if strings.HasPrefix(ah, "Bearer ") {
 			return strings.TrimPrefix(ah, "Bearer ")
 		}
 	}
-	return r.URL.Query().Get("token")
+	return ""
 }
 
 // RequireSystemRole returns middleware that checks whether the authenticated

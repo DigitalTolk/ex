@@ -114,7 +114,18 @@ describe('conversation unhide on message', () => {
   });
 });
 
-describe('useWebSocket auth refresh', () => {
+// connect() awaits the ticket mint before constructing the socket, so socket
+// creation is asynchronous — flush the microtask chain (mint → ticket →
+// new WebSocket) before asserting on MockWebSocket.instances.
+async function flushConnect() {
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+}
+
+describe('useWebSocket ticket mint', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     clearAccessToken();
@@ -122,7 +133,7 @@ describe('useWebSocket auth refresh', () => {
     globalThis.WebSocket = MockWebSocket as unknown as typeof WebSocket;
     globalThis.fetch = vi.fn().mockResolvedValue({
       ok: true,
-      json: () => Promise.resolve({ accessToken: 'fresh-token' }),
+      json: () => Promise.resolve({ ticket: 'minted-ticket' }),
     } as Response);
   });
 
@@ -133,29 +144,34 @@ describe('useWebSocket auth refresh', () => {
     globalThis.WebSocket = originalWebSocket;
   });
 
-  it('refreshes the access token before reconnecting after a socket close', async () => {
-    setAccessToken('expired-token');
+  it('mints a fresh one-time ticket before connecting and again on reconnect', async () => {
+    setAccessToken('secret-jwt');
 
     const { unmount } = renderHook(() => useWebSocket({ enabled: true }));
+    await flushConnect();
     expect(MockWebSocket.instances).toHaveLength(1);
-    expect(MockWebSocket.instances[0].url).toContain('token=expired-token');
+    expect(MockWebSocket.instances[0].url).toContain('ticket=minted-ticket');
+    // The access JWT itself must never ride the WS URL — it used to leak
+    // into LB/proxy logs and browser history.
+    expect(MockWebSocket.instances[0].url).not.toContain('secret-jwt');
 
     act(() => {
       MockWebSocket.instances[0].onclose?.();
     });
     await act(async () => {
-      vi.advanceTimersByTime(1000);
-      await Promise.resolve();
+      // The reconnect delay is jittered (capped at 30s) — a 31s sweep fires
+      // it regardless of the draw.
+      vi.advanceTimersByTime(31_000);
       await Promise.resolve();
     });
+    await flushConnect();
 
-    expect(globalThis.fetch).toHaveBeenCalledWith('/auth/token/refresh', {
-      method: 'POST',
-      credentials: 'include',
-      signal: expect.any(AbortSignal),
-    });
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      '/api/v1/ws/ticket',
+      expect.objectContaining({ method: 'POST', credentials: 'include' }),
+    );
     expect(MockWebSocket.instances).toHaveLength(2);
-    expect(MockWebSocket.instances[1].url).toContain('token=fresh-token');
+    expect(MockWebSocket.instances[1].url).toContain('ticket=minted-ticket');
 
     unmount();
   });

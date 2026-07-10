@@ -48,9 +48,13 @@ func TestEmojiHandler_Delete_Unauthenticated(t *testing.T) {
 // handler's nil → [] coercion runs.
 type nilPresenceStore struct{}
 
-func (nilPresenceStore) IncrementPresence(context.Context, string) (bool, error) { return false, nil }
-func (nilPresenceStore) DecrementPresence(context.Context, string) (bool, error) { return false, nil }
-func (nilPresenceStore) RefreshPresence(context.Context, string) error           { return nil }
+func (nilPresenceStore) IncrementPresence(context.Context, string, string) (bool, error) {
+	return false, nil
+}
+func (nilPresenceStore) DecrementPresence(context.Context, string, string) (bool, error) {
+	return false, nil
+}
+func (nilPresenceStore) RefreshPresence(context.Context, string, string) error { return nil }
 func (nilPresenceStore) IsPresenceOnline(context.Context, string) (bool, error)  { return false, nil }
 func (nilPresenceStore) OnlinePresenceUserIDs(context.Context) ([]string, error) { return nil, nil }
 

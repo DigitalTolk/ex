@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { setWSSender, sendWS } from '@/lib/ws-sender';
+import { setWSSender, sendWS, clearWSPending } from '@/lib/ws-sender';
 
 // Browser-project coverage for the ack buffer-and-flush path (the jsdom suite
 // covers the same logic; this keeps the browser branch gate honest since
@@ -44,5 +44,14 @@ describe('ws-sender (browser) — ack buffering', () => {
     expect(send).toHaveBeenCalledTimes(64); // 6 oldest dropped past the cap
     expect(send).toHaveBeenNthCalledWith(1, JSON.stringify({ type: 'notification.ack', messageID: 'm-6' }));
     setWSSender(null);
+  });
+
+  it('clearWSPending drops buffered frames so they cannot leak into a later session', () => {
+    setWSSender(null);
+    sendWS({ type: 'notification.ack', messageID: 'm-old-session' }, { buffer: true });
+    clearWSPending(); // logout/user-switch teardown
+    const sent: string[] = [];
+    setWSSender((frame) => sent.push(frame)); // next session's socket
+    expect(sent).toEqual([]);
   });
 });

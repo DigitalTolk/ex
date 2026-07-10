@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render } from 'vitest-browser-react';
-import { PresenceProvider, usePresence } from './PresenceContext';
+import { ConstantBackoff, handleAll, retry } from 'cockatiel';
+import { PresenceProvider, usePresence, presenceRetry } from './PresenceContext';
 import { useEffect } from 'react';
 
 // Browser-coverage tests for PresenceContext. The provider hits the
@@ -32,6 +33,7 @@ function Probe({ onState }: { onState: (s: ReturnType<typeof usePresence>) => vo
 }
 
 beforeEach(() => {
+  presenceRetry.policy = retry(handleAll, { maxAttempts: 3, backoff: new ConstantBackoff(0) });
   apiFetchMock.mockReset();
   mockAuth = {
     user: { id: 'u-self', displayName: 'Me', email: 'm@m.com', systemRole: 'member', status: 'active' },
@@ -61,7 +63,9 @@ describe('PresenceContext (browser)', () => {
   });
 
   it('still seeds self if /presence fetch fails', async () => {
-    apiFetchMock.mockRejectedValueOnce(new Error('network down'));
+    // Persistent rejection: with the retry policy, a single -Once rejection
+    // would let attempt #2 "succeed" with undefined and dodge the catch arm.
+    apiFetchMock.mockRejectedValue(new Error('network down'));
     let captured: ReturnType<typeof usePresence> | null = null;
     await render(
       <PresenceProvider>
@@ -180,8 +184,9 @@ describe('PresenceContext (browser)', () => {
     await vi.waitFor(() => expect(captured).not.toBeNull());
     expect(captured!.isOnline('anyone')).toBe(false);
     expect(captured!.online.size).toBe(0);
-    // The noop mutator must not throw.
+    // The noop mutator and refresher must not throw.
     expect(() => captured!.setUserOnline('x', true)).not.toThrow();
+    captured!.refreshPresence(); // noop — must not throw or fetch
   });
 
   it('coerces a backfill payload with no `online` field to an empty set (?? [])', async () => {
@@ -251,5 +256,149 @@ describe('PresenceContext (browser)', () => {
     // throw or warn about state-update-on-unmounted (the cancelled
     // flag handles it). Sanity-check captured stayed defined.
     expect(captured).not.toBeNull();
+  });
+});
+
+describe('backfill retry + reconnect refresh', () => {
+  it('recovers the backfill after transient failures (retry policy)', async () => {
+    apiFetchMock
+      .mockRejectedValueOnce(new Error('boot blip'))
+      .mockRejectedValueOnce(new Error('boot blip'))
+      .mockResolvedValueOnce({ online: ['u-1'] });
+    let captured: ReturnType<typeof usePresence> | null = null;
+    function Grab() {
+      const s = usePresence();
+      useEffect(() => { captured = s; });
+      return null;
+    }
+    render(
+      <PresenceProvider>
+        <Grab />
+      </PresenceProvider>,
+    );
+    await vi.waitFor(() => {
+      expect(captured?.isOnline('u-1')).toBe(true);
+    });
+    expect(apiFetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it('refreshPresence refetches the authoritative online set (reconnect reconciliation)', async () => {
+    apiFetchMock.mockResolvedValueOnce({ online: [] });
+    let captured: ReturnType<typeof usePresence> | null = null;
+    function Grab() {
+      const s = usePresence();
+      useEffect(() => { captured = s; });
+      return null;
+    }
+    render(
+      <PresenceProvider>
+        <Grab />
+      </PresenceProvider>,
+    );
+    await vi.waitFor(() => expect(apiFetchMock).toHaveBeenCalledTimes(1));
+    // u-1 came online during a disconnect — the ephemeral presence.changed
+    // was lost, so the reconnect refresh reconciles the set.
+    apiFetchMock.mockResolvedValueOnce({ online: ['u-1'] });
+    captured!.refreshPresence();
+    await vi.waitFor(() => {
+      expect(captured?.isOnline('u-1')).toBe(true);
+    });
+  });
+
+  it('a stale in-flight backfill cannot clobber a newer refresh (success seq guard)', async () => {
+    let resolveBoot: (v: { online: string[] }) => void = () => undefined;
+    apiFetchMock
+      .mockImplementationOnce(() => new Promise((r) => { resolveBoot = r; }))
+      .mockResolvedValueOnce({ online: ['u-1'] });
+    let captured: ReturnType<typeof usePresence> | null = null;
+    function Grab() {
+      const s = usePresence();
+      useEffect(() => { captured = s; });
+      return null;
+    }
+    render(
+      <PresenceProvider>
+        <Grab />
+      </PresenceProvider>,
+    );
+    await vi.waitFor(() => expect(apiFetchMock).toHaveBeenCalledTimes(1));
+    captured!.refreshPresence();
+    await vi.waitFor(() => {
+      expect(captured?.isOnline('u-1')).toBe(true);
+    });
+    // The slow boot response lands late with an EMPTY set — stale, dropped.
+    resolveBoot({ online: [] });
+    await new Promise((r) => setTimeout(r, 30));
+    expect(captured?.isOnline('u-1')).toBe(true);
+  });
+
+  it('a stale in-flight failure cannot re-seed over a newer refresh (catch seq guard)', async () => {
+    presenceRetry.policy = retry(handleAll, { maxAttempts: 1, backoff: new ConstantBackoff(0) });
+    let rejectBoot: (e: Error) => void = () => undefined;
+    apiFetchMock
+      .mockImplementationOnce(() => new Promise((_, rej) => { rejectBoot = rej; }))
+      .mockResolvedValueOnce({ online: ['u-1'] })
+      // Any FURTHER boot-retry attempts must also fail, or a stray retry
+      // "succeeds" with undefined and takes the success path instead of the
+      // stale-catch arm this test exists for.
+      .mockRejectedValue(new Error('still failing'));
+    let captured: ReturnType<typeof usePresence> | null = null;
+    function Grab() {
+      const s = usePresence();
+      useEffect(() => { captured = s; });
+      return null;
+    }
+    render(
+      <PresenceProvider>
+        <Grab />
+      </PresenceProvider>,
+    );
+    await vi.waitFor(() => expect(apiFetchMock).toHaveBeenCalledTimes(1));
+    captured!.refreshPresence();
+    await vi.waitFor(() => {
+      expect(captured?.isOnline('u-1')).toBe(true);
+    });
+    rejectBoot(new Error('late failure'));
+    await new Promise((r) => setTimeout(r, 30));
+    expect(captured?.isOnline('u-1')).toBe(true);
+  });
+});
+
+describe('catch-arm edges', () => {
+  it('a second failing refresh keeps the already-seeded self entry stable (no set churn)', async () => {
+    apiFetchMock.mockRejectedValue(new Error('still down'));
+    let captured: ReturnType<typeof usePresence> | null = null;
+    await render(
+      <PresenceProvider>
+        <Probe onState={(s) => { captured = s; }} />
+      </PresenceProvider>,
+    );
+    await vi.waitFor(() => {
+      expect(captured?.online.has('u-self')).toBe(true);
+    });
+    const before = captured!.online;
+    captured!.refreshPresence(); // fails again → self ALREADY seeded → same set
+    await new Promise((r) => setTimeout(r, 60));
+    expect(captured!.online).toBe(before); // ref-stable: the ? prev arm
+  });
+
+  it('an authenticated session without a user id neither crashes nor seeds anyone', async () => {
+    mockAuth = { isAuthenticated: true, user: null };
+    let captured: ReturnType<typeof usePresence> | null = null;
+    // Success arm first (no self to add) …
+    apiFetchMock.mockResolvedValueOnce({ online: [] });
+    await render(
+      <PresenceProvider>
+        <Probe onState={(s) => { captured = s; }} />
+      </PresenceProvider>,
+    );
+    await vi.waitFor(() => expect(apiFetchMock).toHaveBeenCalled());
+    await new Promise((r) => setTimeout(r, 30));
+    expect(captured!.online.size).toBe(0);
+    // …then the catch arm (no self to seed).
+    apiFetchMock.mockRejectedValue(new Error('down'));
+    captured!.refreshPresence();
+    await new Promise((r) => setTimeout(r, 60));
+    expect(captured!.online.size).toBe(0);
   });
 });

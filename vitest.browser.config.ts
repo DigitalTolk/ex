@@ -173,6 +173,13 @@ export default defineConfig({
         // NotificationContext (whose DnD-gated ping branches ARE exercised
         // in the browser suite); graded in jsdom, not here.
         'src/lib/dnd.ts',
+        // Cross-tab leader election + state sharing — exhaustively
+        // unit-tested in jsdom (tab-leader.test.ts) against real
+        // broadcast-channel 'simulate' channels, incl. election failover.
+        // Pulled into the browser graph via NotificationContext (whose
+        // leader-gated dispatch branches ARE exercised in the browser suite
+        // through a controllable mock); graded in jsdom, not here.
+        'src/lib/tab-leader.ts',
         // Activity stream + reminders — pure date math, a React-Query hook
         // module, the activity page, and the custom-time dialog are all
         // exhaustively unit-tested in jsdom (reminder-times.test, useActivity.test,

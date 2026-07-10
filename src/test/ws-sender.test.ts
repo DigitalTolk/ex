@@ -91,3 +91,15 @@ describe('ws-sender', () => {
     setWSSender(null);
   });
 });
+
+describe('clearWSPending', () => {
+  it('drops buffered frames so they cannot flush into a later session', async () => {
+    const { sendWS, setWSSender, clearWSPending } = await import('@/lib/ws-sender');
+    setWSSender(null);
+    sendWS({ type: 'notification.ack', messageID: 'm-old-session' }, { buffer: true });
+    clearWSPending(); // logout/user-switch teardown
+    const sent: string[] = [];
+    setWSSender((frame) => sent.push(frame)); // next session's socket
+    expect(sent).toEqual([]);
+  });
+});

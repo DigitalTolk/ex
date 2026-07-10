@@ -128,3 +128,70 @@ func TestStream_ReplayExhaustedAfterTrim_RealRedis(t *testing.T) {
 		t.Fatalf("entries = %d, want 4 (the newest maxLen+1 read window)", len(res.Entries))
 	}
 }
+
+// A client WITH a cursor whose stream is entirely gone (24h idle TTL, MAXLEN
+// trim of everything, or a fan-out-failure Drop) cannot have its continuity
+// verified — replay must report Exhausted so the client full-refetches
+// instead of treating the empty replay as "nothing happened". (The old
+// behaviour returned a clean empty result here: a silent gap.)
+func TestStream_ReplayEmptyStreamWithCursorExhausted_RealRedis(t *testing.T) {
+	s := newRealStream(t, 0)
+	ctx := context.Background()
+
+	res, err := s.Replay(ctx, "u-empty", ulid(1))
+	if err != nil {
+		t.Fatalf("Replay on empty stream: %v", err)
+	}
+	if !res.Exhausted {
+		t.Fatal("empty stream + cursor must be Exhausted (continuity unverifiable)")
+	}
+	if len(res.Entries) != 0 {
+		t.Fatalf("entries = %d, want 0", len(res.Entries))
+	}
+
+	// A FRESH connect (no cursor) over the same empty stream stays clean —
+	// nothing to verify, nothing exhausted.
+	res, err = s.Replay(ctx, "u-empty", "")
+	if err != nil {
+		t.Fatalf("Replay without cursor: %v", err)
+	}
+	if res.Exhausted || len(res.Entries) != 0 {
+		t.Fatalf("fresh connect: entries=%d exhausted=%v, want 0/false", len(res.Entries), res.Exhausted)
+	}
+}
+
+// Drop removes recipients' streams so their next replay takes the exhausted
+// path — the poison step after a persistent fan-out failure.
+func TestStream_Drop_RealRedis(t *testing.T) {
+	s := newRealStream(t, 0)
+	ctx := context.Background()
+
+	for _, uid := range []string{"u-a", "u-b"} {
+		payload := fmt.Sprintf(`{"id":%q,"type":"message.new"}`, ulid(1))
+		if err := s.Append(ctx, uid, ulid(1), []byte(payload)); err != nil {
+			t.Fatalf("Append %s: %v", uid, err)
+		}
+	}
+	if err := s.Drop(ctx, []string{"u-a", "", "u-b"}); err != nil {
+		t.Fatalf("Drop: %v", err)
+	}
+	res, err := s.Replay(ctx, "u-a", ulid(1))
+	if err != nil {
+		t.Fatalf("Replay after drop: %v", err)
+	}
+	if !res.Exhausted {
+		t.Fatal("dropped stream + cursor must replay as Exhausted")
+	}
+
+	// No-op arms: nil receiver/client, empty and all-empty ID lists.
+	var nilStream *Stream
+	if err := nilStream.Drop(ctx, []string{"u-a"}); err != nil {
+		t.Fatalf("nil stream Drop: %v", err)
+	}
+	if err := s.Drop(ctx, nil); err != nil {
+		t.Fatalf("empty Drop: %v", err)
+	}
+	if err := s.Drop(ctx, []string{""}); err != nil {
+		t.Fatalf("all-empty Drop: %v", err)
+	}
+}

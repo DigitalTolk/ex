@@ -1,6 +1,7 @@
 package service
 
 import (
+	"sync"
 	"context"
 	"encoding/json"
 	"errors"
@@ -14,9 +15,11 @@ import (
 // recipient (the notification decision), not every unread message. These
 // tests pin the bump rules end to end through NotifyForMessage.
 
-// bumpMockMembershipStore adds the notifyCountBumper capability.
+// bumpMockMembershipStore adds the notifyCountBumper capability. Mutex-
+// guarded: the notify path bumps recipients in bounded-parallel goroutines.
 type bumpMockMembershipStore struct {
 	*mockMembershipStore
+	mu      sync.Mutex
 	counts  map[string]int64 // parentID + "#" + userID
 	bumpErr error
 }
@@ -25,6 +28,8 @@ func (m *bumpMockMembershipStore) IncrementNotifyCount(_ context.Context, parent
 	if m.bumpErr != nil {
 		return 0, m.bumpErr
 	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.counts == nil {
 		m.counts = map[string]int64{}
 	}
@@ -34,10 +39,13 @@ func (m *bumpMockMembershipStore) IncrementNotifyCount(_ context.Context, parent
 
 type bumpMockConversationStore struct {
 	*mockConversationStore
+	mu     sync.Mutex
 	counts map[string]int64
 }
 
 func (m *bumpMockConversationStore) IncrementNotifyCount(_ context.Context, parentID, userID string) (int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.counts == nil {
 		m.counts = map[string]int64{}
 	}
